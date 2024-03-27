@@ -1,0 +1,22 @@
+[package]
+name = "quikia-eaxmple"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+quikia = { path = "../quikia" }
+
+#winit = {version = "0.29.3",features = ["android-native-activity"]}
+
+[build-dependencies]
+gl_generator = "0.14"
+cfg_aliases = "0.2.0"
+
+[patch.crates-io]
+
+[lib]
+crate_type=["cdylib"]
+path= "src/main.rs"
+
