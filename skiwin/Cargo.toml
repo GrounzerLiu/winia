@@ -1,0 +1,17 @@
+[package]
+name = "skiwin"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+vulkan = ["ash", "vulkano", "skia-safe/vulkan", "skia-safe/gpu"]
+gl = ["skia-safe/gl", "skia-safe/gpu", "glutin"]
+
+[dependencies]
+bytemuck = "1.18.0"
+winit = { version = "0.30.5", features = ["rwh_06"] }
+softbuffer = "0.4.6"
+skia-safe = "0.78.1"
+ash = { version = "0.37.3+1.3.251", optional = true }
+vulkano = {version = "0.34.1", optional = true}
+glutin = { version = "0.32.1", optional = true }

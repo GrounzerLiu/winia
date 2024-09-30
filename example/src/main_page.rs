@@ -1,15 +1,15 @@
 /*use std::thread;
 use std::time::Duration;
-use quikia::animation::{Animation, AnimationExt};
-use quikia::app::{Page, SharedApp, ThemeColor};
-use quikia::{Color, flex_layout, stack};
-use quikia::component::Button;
-//use quikia::{clonify, Color, row, scroller, text_block};
-use quikia::ui::{Gravity, Image, Item, LayoutDirection, Rectangle, RectangleExt, Ripple, TextBlock};
-use quikia::ui::additional_property::{ShadowBlur, ShadowColor, ShadowOffsetY};
-use quikia::layout::FlexLayout;
-use quikia::property::{BoolProperty, ColorProperty, FloatProperty, Gettable, GravityProperty, SizeProperty};
-use quikia::property::Size::{Fill, Fixed};
+use winia::animation::{Animation, AnimationExt};
+use winia::app::{Page, SharedApp, ThemeColor};
+use winia::{Color, flex_layout, stack};
+use winia::component::Button;
+//use winia::{clonify, Color, row, scroller, text_block};
+use winia::uib::{Gravity, Image, Item, LayoutDirection, Rectangle, RectangleExt, Ripple, TextBlock};
+use winia::uib::additional_property::{ShadowBlur, ShadowColor, ShadowOffsetY};
+use winia::layout::FlexLayout;
+use winia::property::{BoolProperty, ColorProperty, FloatProperty, Gettable, GravityProperty, SizeProperty};
+use winia::property::Size::{Fill, Fixed};
 
 // macro_rules! repeat {
 //     ($item:expr; 0) => {};

@@ -1,0 +1,33 @@
+[package]
+name = "winia"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+default = ["vulkan"]
+vulkan = ["skiwin/vulkan"]
+gl = ["skiwin/gl"]
+
+[dependencies]
+skiwin = {path = "../skiwin", optional = true}
+lazy_static = "1.5.0"
+winit = {version = "0.30.5",features = ["android-native-activity","rwh_06"]}
+gl = "0.14.0"
+raw-window-handle = "0.6.2"
+env_logger = "0.11.5"
+icu = "1.5.0"
+bitflags = "2.6.0"
+reqwest = {version = "0.12.7",features = ["blocking"]}
+material_color_utilities = {path = "material_color_utilities"}
+skia-safe = {version = "0.78.1",features = ["textlayout","embed-icudtl","svg"]}
+[target.'cfg(target_os = "windows")'.dependencies]
+winapi = {version = "0.3.9", features = ["winreg", "dwmapi", "windef", "winuser"] }
+
+#[target.'cfg(target_os = "linux")'.dependencies]
+#skia-safe = {version = "0.78.0",features = ["textlayout","embed-icudtl","svg", "x11", "wayland"]}
+
+
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.14.1"
