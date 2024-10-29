@@ -1,6 +1,8 @@
-
-mod parameter_option;
 mod animation;
+mod target;
+mod interpolator;
+
 pub use animation::* ;
-pub use parameter_option::* ;
+pub use target::* ;
+pub use interpolator::* ;
 

@@ -1,15 +1,30 @@
+use std::ops::Not;
+use crate::app::Theme;
 use crate::property::Gettable;
 use crate::ui::item::InnerPosition;
 use crate::ui::Item;
 use crate::OptionalInvoke;
-use skia_safe::{Canvas, Point};
+use skia_bindings::SkTileMode;
+use skia_safe::image_filters::CropRect;
+use skia_safe::{image_filters, Canvas, Paint, Point, Rect, Surface};
 use std::sync::{Arc, Mutex};
-use winit::event::{DeviceId, Force, MouseButton, TouchPhase};
+use winit::event::{DeviceId, Force, KeyEvent, MouseButton, TouchPhase};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Orientation {
-    Vertical,
     Horizontal,
+    Vertical,
+}
+
+impl Not for Orientation {
+    type Output = Self;
+
+    fn not(self) -> Self::Output {
+        match self {
+            Self::Vertical => Self::Horizontal,
+            Self::Horizontal => Self::Vertical,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -56,6 +71,16 @@ pub struct TouchEvent {
     pub y: f32,
     pub pointer_state: PointerState,
     pub force: Option<Force>,
+}
+
+#[derive(Clone, Debug)]
+pub enum ImeAction {
+    Enabled,
+    Enter,
+    Delete,
+    PreEdit(String, Option<(usize, usize)>),
+    Commit(String),
+    Disabled,
 }
 
 // #[derive(Clone, Copy, Debug, PartialEq)]
@@ -116,65 +141,114 @@ impl MeasureMode {
     }
 }
 
+#[derive(Clone)]
 pub struct ItemEvent {
-    pub(crate) dispatch_draw: Arc<Mutex<dyn FnMut(&mut Item, &Canvas, f32, f32)>>,
+    pub(crate) dispatch_draw: Arc<Mutex<dyn FnMut(&mut Item, &mut Surface, f32, f32)>>,
     pub(crate) draw: Arc<Mutex<dyn FnMut(&mut Item, &Canvas)>>,
     pub(crate) dispatch_layout: Arc<Mutex<dyn FnMut(&mut Item, f32, f32, f32, f32)>>,
-    pub(crate) layout: Arc<Mutex<dyn FnMut(&mut Item, f32, f32, f32, f32)>>,
-    pub(crate) measure: Arc<Mutex<dyn FnMut(&mut Item, Orientation, MeasureMode)>>,
+    pub(crate) layout: Arc<Mutex<dyn FnMut(&mut Item, f32, f32)>>,
+    pub(crate) measure: Arc<Mutex<dyn FnMut(&mut Item, MeasureMode, MeasureMode)>>,
+    pub(crate) dispatch_apply_theme: Arc<Mutex<dyn FnMut(&mut Item, &Theme)>>,
+    pub(crate) apply_theme: Arc<Mutex<dyn FnMut(&mut Item, &Theme)>>,
     pub(crate) dispatch_mouse_input: Arc<Mutex<dyn FnMut(&mut Item, MouseEvent)>>,
     pub(crate) mouse_input: Arc<Mutex<dyn FnMut(&mut Item, MouseEvent)>>,
     pub(crate) dispatch_touch_input: Arc<Mutex<dyn FnMut(&mut Item, TouchEvent)>>,
     pub(crate) touch_input: Arc<Mutex<dyn FnMut(&mut Item, TouchEvent)>>,
+    pub(crate) on_click: Arc<Mutex<dyn FnMut(&mut Item, ClickSource)>>,
+    pub(crate) ime_input: Arc<Mutex<dyn FnMut(&mut Item, ImeAction)>>,
+    pub(crate) keyboard_input: Arc<Mutex<dyn FnMut(&mut Item, DeviceId, KeyEvent, bool)>>,
+    pub(crate) on_focus: Arc<Mutex<dyn FnMut(&mut Item, bool)>>,
 }
 
 impl ItemEvent {
     pub fn new() -> Self {
         Self {
-            dispatch_draw: Arc::new(Mutex::new(|item: &mut Item, canvas: &Canvas, parent_x: f32, parent_y: f32| {
-                item.get_display_parameter().set_parent_position(parent_x, parent_y);
+            dispatch_draw: Arc::new(Mutex::new(|item: &mut Item, surface: &mut Surface, parent_x: f32, parent_y: f32| {
+                {
+                    let target_parameter = item.get_target_parameter();
+                    target_parameter.set_parent_position(parent_x, parent_y);
+                }
 
                 let display_parameter = item.get_display_parameter().clone();
 
+                {
+                    if item.get_enable_background_blur().get() {
+                        let image = surface.image_snapshot();
+                        let (width, height) = {
+                            let image_info = image.image_info();
+                            (image_info.width(), image_info.height())
+                        };
+                        let canvas = surface.canvas();
+                        let mut paint = Paint::default();
+                        paint.set_image_filter(image_filters::blur((35.0, 35.0), SkTileMode::Clamp, None, CropRect::from(
+                            Rect::from_wh(
+                                width as f32,
+                                height as f32,
+                            )
+                        )));
+                        canvas.save();
+                        let scale_factor = 1.0 /item.get_app_context().scale_factor();
+                        
+                        canvas.clip_rect(
+                            Rect::from_xywh(display_parameter.x(), display_parameter.y(), display_parameter.width, display_parameter.height),
+                            None,
+                            None,
+                        );
+                        canvas.scale((scale_factor, scale_factor));
+                        canvas.draw_image(image, (0.0, 0.0), Some(&paint));
+                        canvas.restore();
+                    }
+                }
+
                 let x = display_parameter.x();
                 let y = display_parameter.y();
-                let rotation = display_parameter.rotation();
+                let rotation = display_parameter.rotation;
 
-                canvas.save();
-                canvas.rotate(rotation, Some(
-                    Point::new(
-                        display_parameter.rotation_center_x(), display_parameter.rotation_center_y(),
-                    )
-                ));
+
+                let skew_x = display_parameter.skew_x;
+                let skew_y = display_parameter.skew_y;
+                let skew_center_x = display_parameter.skew_center_x;
+                let skew_center_y = display_parameter.skew_center_y;
+                let scale_center_x = display_parameter.scale_center_x;
+                let scale_center_y = display_parameter.scale_center_y;
                 
-                let skew_x = display_parameter.skew_x();
-                let skew_y = display_parameter.skew_y();
-                let skew_center_x = display_parameter.skew_center_x();
-                let skew_center_y = display_parameter.skew_center_y();
-                canvas.translate((skew_center_x, skew_center_y));
-                canvas.skew((skew_x, skew_y));
-                canvas.translate((-skew_center_x, -skew_center_y));
-                
-                let scale_center_x = display_parameter.scale_center_x();
-                let scale_center_y = display_parameter.scale_center_y();
-                canvas.translate((scale_center_x, scale_center_y));
-                canvas.scale((display_parameter.scale_x(), display_parameter.scale_y()));
-                canvas.translate((-scale_center_x, -scale_center_y));
-                
-                
+                {
+                    let canvas = surface.canvas();
+                    canvas.save();
+                    canvas.rotate(rotation, Some(
+                        Point::new(
+                            display_parameter.rotation_center_x, display_parameter.rotation_center_y,
+                        )
+                    ));
+                    
+                    canvas.translate((skew_center_x, skew_center_y));
+                    canvas.skew((skew_x, skew_y));
+                    canvas.translate((-skew_center_x, -skew_center_y));
+
+                    canvas.translate((scale_center_x, scale_center_y));
+                    canvas.scale((display_parameter.scale_x, display_parameter.scale_y));
+                    canvas.translate((-scale_center_x, -scale_center_y));
+                }
+
                 item.get_background().value().if_mut_some(|background| {
-                    background.dispatch_draw(canvas, x, y);
+                    background.dispatch_draw(surface, x, y);
                 });
-                item.draw(canvas);
+                {
+                    let canvas = surface.canvas();
+                    item.draw(canvas);
+                }
                 item.get_children().items().iter_mut().for_each(|child| {
-                    child.dispatch_draw(canvas, x, y);
+                    child.dispatch_draw(surface, x, y);
                 });
                 item.get_foreground().value().if_mut_some(|foreground| {
-                    foreground.dispatch_draw(canvas, x, y);
+                    foreground.dispatch_draw(surface, x, y);
                 });
-                
-                
-                canvas.restore();
+
+
+                {
+                    let canvas = surface.canvas();
+                    canvas.restore();
+                }
             })),
             draw: Arc::new(Mutex::new(|_item: &mut Item, _canvas: &Canvas| {})),
             dispatch_layout: Arc::new(Mutex::new(|item: &mut Item, relative_x: f32, relative_y: f32, width: f32, height: f32| {
@@ -196,7 +270,7 @@ impl ItemEvent {
                         InnerPosition::Absolute(offset) => offset,
                     }
                 }
-                
+
                 {
                     let rotation_center_x = center(item.get_rotation_center_x().get(), width);
                     let rotation_center_y = center(item.get_rotation_center_y().get(), height);
@@ -205,40 +279,58 @@ impl ItemEvent {
                     let skew_center_x = center(item.get_skew_center_x().get(), width);
                     let skew_center_y = center(item.get_skew_center_y().get(), height);
 
-
-                    let display_parameter = item.get_display_parameter();
-                    display_parameter.set_relative_position(relative_x, relative_y);
-                    display_parameter.set_width(width);
-                    display_parameter.set_height(height);
-                    display_parameter.set_opacity(opacity);
-                    display_parameter.set_rotation(rotation);
-                    display_parameter.set_rotation_center_x(rotation_center_x);
-                    display_parameter.set_rotation_center_y(rotation_center_y);
-                    display_parameter.set_scale_x(scale_x);
-                    display_parameter.set_scale_y(scale_y);
-                    display_parameter.set_scale_center_x(scale_center_x);
-                    display_parameter.set_scale_center_y(scale_center_y);
-                    display_parameter.set_offset_x(offset_x);
-                    display_parameter.set_offset_y(offset_y);
-                    display_parameter.set_skew_x(skew_x);
-                    display_parameter.set_skew_y(skew_y);
-                    display_parameter.set_skew_center_x(skew_center_x);
-                    display_parameter.set_skew_center_y(skew_center_y);
+                    {
+                        let mut target_parameter = item.get_target_parameter();
+                        target_parameter.set_relative_position(relative_x, relative_y);
+                        target_parameter.width = width;
+                        target_parameter.height = height;
+                        target_parameter.opacity = opacity;
+                        target_parameter.rotation = rotation;
+                        target_parameter.set_rotation_center(rotation_center_x, rotation_center_y);
+                        target_parameter.set_scale(scale_x, scale_y);
+                        target_parameter.set_scale_center(scale_center_x, scale_center_y);
+                        target_parameter.set_offset(offset_x, offset_y);
+                        target_parameter.set_skew(skew_x, skew_y);
+                        target_parameter.set_skew_center(skew_center_x, skew_center_y);
+                        // item.set_target_parameter(target_parameter);
+                    }
                 }
 
-                item.layout(relative_x, relative_y, width, height);
+                item.layout(width, height);
             })),
-            layout: Arc::new(Mutex::new(|_item: &mut Item, _relative_x: f32, _relative_y: f32, _width: f32, _height: f32| {})),
-            measure: Arc::new(Mutex::new(|_item: &mut Item, _orientation: Orientation, _mode: MeasureMode| {})),
+            layout: Arc::new(Mutex::new(|_item: &mut Item, _width: f32, _height: f32| {})),
+            measure: Arc::new(Mutex::new(|item: &mut Item, width_mode, height_mode| {
+                item.measure_children(width_mode, height_mode);
+                fn get_size(measure_mode: MeasureMode) -> f32 {
+                    match measure_mode {
+                        MeasureMode::Specified(value) => value,
+                        MeasureMode::Unspecified(max_size) => max_size,
+                    }
+                }
+                
+                let max_width = item.get_max_width().get();
+                let max_height = item.get_max_height().get();
+                let min_width = item.get_min_width().get();
+                let min_height = item.get_min_height().get();
+                let measure_parameter = item.get_measure_parameter();
+                measure_parameter.width = get_size(width_mode).clamp(min_width, max_width);
+                measure_parameter.height = get_size(height_mode).clamp(min_height, max_height);
+            })),
+            dispatch_apply_theme: Arc::new(Mutex::new(|_item: &mut Item, _theme: &Theme| {})),
+            apply_theme: Arc::new(Mutex::new(|_item: &mut Item, _theme: &Theme| {})),
             dispatch_mouse_input: Arc::new(Mutex::new(|_item: &mut Item, _event: MouseEvent| {})),
             mouse_input: Arc::new(Mutex::new(|_item: &mut Item, _event: MouseEvent| {})),
             dispatch_touch_input: Arc::new(Mutex::new(|_item: &mut Item, _event: TouchEvent| {})),
             touch_input: Arc::new(Mutex::new(|_item: &mut Item, _event: TouchEvent| {})),
+            on_click: Arc::new(Mutex::new(|_item: &mut Item, _source: ClickSource| {})),
+            ime_input: Arc::new(Mutex::new(|_item: &mut Item, _action: ImeAction| {})),
+            keyboard_input: Arc::new(Mutex::new(|_item: &mut Item, _device_id: DeviceId, _event: KeyEvent, _is_synthetic: bool| {})),
+            on_focus: Arc::new(Mutex::new(|_item: &mut Item, _focused: bool| {})),
         }
     }
 
     /// item, canvas, parent_x, parent_y
-    pub fn dispatch_draw(mut self, dispatch_draw: impl FnMut(&mut Item, &Canvas, f32, f32) + 'static) -> Self {
+    pub fn dispatch_draw(mut self, dispatch_draw: impl FnMut(&mut Item, &mut Surface, f32, f32) + 'static) -> Self {
         self.dispatch_draw = Arc::new(Mutex::new(dispatch_draw));
         self
     }
@@ -255,15 +347,45 @@ impl ItemEvent {
         self
     }
 
-    /// item, relative_x, relative_y, width, height
-    pub fn layout(mut self, layout: impl FnMut(&mut Item, f32, f32, f32, f32) + 'static) -> Self {
+    /// item, width, height
+    pub fn layout(mut self, layout: impl FnMut(&mut Item, f32, f32) + 'static) -> Self {
         self.layout = Arc::new(Mutex::new(layout));
         self
     }
 
-    /// item, orientation, mode
-    pub fn measure(mut self, measure: impl FnMut(&mut Item, Orientation, MeasureMode) + 'static) -> Self {
+    /// Closure parameters: item, width_mode, height_mode
+    /// 
+    /// Do not retain any state in this closure, except for the `measure_parameter`.
+    /// Because this closure is used to calculate the recommended size of the item,
+    /// the `layout` closure is actually responsible for setting the actual size of the item.
+    pub fn measure(mut self, measure: impl FnMut(&mut Item, MeasureMode, MeasureMode) + 'static) -> Self {
         self.measure = Arc::new(Mutex::new(measure));
+        self
+    }
+
+    /// item, theme
+    pub fn apply_theme(mut self, apply_theme: impl FnMut(&mut Item, &Theme) + 'static) -> Self {
+        self.apply_theme = Arc::new(Mutex::new(apply_theme));
+        self
+    }
+    
+    pub fn on_click(mut self, on_click: impl FnMut(&mut Item, ClickSource) + 'static) -> Self {
+        self.on_click = Arc::new(Mutex::new(on_click));
+        self
+    }
+    
+    pub fn ime_input(mut self, ime_input: impl FnMut(&mut Item, ImeAction) + 'static) -> Self {
+        self.ime_input = Arc::new(Mutex::new(ime_input));
+        self
+    }
+    
+    pub fn keyboard_input(mut self, keyboard_input: impl FnMut(&mut Item, DeviceId, KeyEvent, bool) + 'static) -> Self {
+        self.keyboard_input = Arc::new(Mutex::new(keyboard_input));
+        self
+    }
+    
+    pub fn on_focus(mut self, on_focus: impl FnMut(&mut Item, bool) + 'static) -> Self {
+        self.on_focus = Arc::new(Mutex::new(on_focus));
         self
     }
 }

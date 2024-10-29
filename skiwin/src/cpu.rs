@@ -3,20 +3,20 @@ use skia_safe::{ISize, ImageInfo, Surface};
 use softbuffer::SoftBufferError;
 use std::num::NonZeroU32;
 use std::ops::Deref;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
 pub struct SoftSkiaWindow {
-    skia_surface: Surface,
+    skia_surface: Arc<Mutex<Surface>>,
     soft_buffer_surface: softbuffer::Surface<Arc<Window>, Arc<Window>>,
 }
 
-fn create_surface(size: impl Into<PhysicalSize<u32>>) -> Surface {
+fn create_surface(size: impl Into<PhysicalSize<u32>>) -> Arc<Mutex<Surface>> {
     let size = size.into();
     let width = size.width;
     let height = size.height;
-    skia_safe::surfaces::raster_n32_premul(ISize::new(width as i32, height as i32)).unwrap()
+    Arc::new(Mutex::new(skia_safe::surfaces::raster_n32_premul(ISize::new(width as i32, height as i32)).unwrap()))
 }
 
 impl SoftSkiaWindow {
@@ -51,8 +51,8 @@ impl SkiaWindow for SoftSkiaWindow {
         }
     }
 
-    fn surface(&mut self) -> &mut Surface {
-        &mut self.skia_surface
+    fn surface(&self) -> Arc<Mutex<Surface>> {
+        self.skia_surface.clone()
     }
 
     fn present(&mut self) {
@@ -60,7 +60,7 @@ impl SkiaWindow for SoftSkiaWindow {
         let mut soft_buffer = self.soft_buffer_surface.buffer_mut().unwrap();
         let u8_slice = bytemuck::cast_slice_mut::<u32, u8>(&mut soft_buffer);
         let image_info = ImageInfo::new_n32_premul((size.width as i32, size.height as i32), None);
-        self.skia_surface.read_pixels(
+        self.skia_surface.lock().unwrap().read_pixels(
             &image_info,
             u8_slice,
             size.width as usize * 4,

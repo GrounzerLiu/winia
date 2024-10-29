@@ -19,6 +19,9 @@ pub fn generate_id()->usize{
 }
 
 pub fn bind_str_to_id(s: &str, id: usize) {
+    if s.is_empty() {
+        panic!("The string used to bind to an id cannot be empty");
+    }
     let mut str_to_id = STR_TO_ID.lock().unwrap();
     if str_to_id.contains_key(s) {
         panic!("The string has already been bound to an id");
@@ -26,7 +29,7 @@ pub fn bind_str_to_id(s: &str, id: usize) {
     str_to_id.insert(s.to_string(), id);
 }
 
-pub fn get_id_with_str(s: &str)->Option<usize>{
+pub fn get_id_by_str(s: &str) ->Option<usize>{
     let str_to_id = STR_TO_ID.lock().unwrap();
     str_to_id.get(s).map(|id| *id)
 }

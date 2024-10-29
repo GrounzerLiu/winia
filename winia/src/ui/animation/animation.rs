@@ -1,40 +1,43 @@
-use crate::core::{get_id_with_str, RefClone};
+use crate::core::{get_id_by_str, RefClone};
 use material_color_utilities::blend_cam16ucs;
 use material_color_utilities::utils::argb_from_rgb;
 use skia_safe::Color;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use crate::ui::animation::ParameterOption;
+use crate::ui::animation::{EaseOutCirc, Interpolator, Target};
+use crate::ui::app::AppContext;
 
 pub(crate) struct InnerAnimation {
+    pub app_context: AppContext,
     pub duration: Duration,
     pub start_time: Instant,
-    pub interpolator: Box<dyn Fn(f32) -> f32>,
-    pub targets: Vec<(usize, Option<ParameterOption>, bool)>,
+    pub interpolator: Box<dyn Interpolator>,
+    pub target: Target,
     pub transformation: Box<dyn FnMut()>,
 }
 
 impl InnerAnimation {
-    pub fn new() -> Self {
+    pub fn new(app_context: AppContext,target: Target) -> Self {
         Self {
+            app_context,
             duration: Duration::from_millis(500),
             start_time: Instant::now(),
-            interpolator: Box::new(|t| t),
-            targets: vec![],
+            interpolator: Box::new(EaseOutCirc::new()),
+            target,
             transformation: Box::new(|| {}),
         }
     }
 
     pub fn interpolate_f32(&self, start: f32, end: f32) -> f32 {
         let time_elapsed = self.start_time.elapsed().as_millis() as f32;
-        let progress = time_elapsed / self.duration.as_millis() as f32;
-        let interpolated = (self.interpolator)(progress);
+        let progress = (time_elapsed / self.duration.as_millis() as f32).clamp(0.0, 1.0);
+        let interpolated = self.interpolator.interpolate(progress);
         start + (end - start) * interpolated
     }
 
     pub fn interpolate_color(&self, start: Color, end: Color) -> Color {
         let time_elapsed = self.start_time.elapsed().as_millis() as f64;
-        let progress = time_elapsed / self.duration.as_millis() as f64;
+        let progress = (time_elapsed / self.duration.as_millis() as f64).clamp(0.0, 1.0);
         let start_a = start.a() as f64;
         let start_u32 = argb_from_rgb(start.r(), start.g(), start.b());
         let end_a = end.a() as f64;
@@ -47,6 +50,17 @@ impl InnerAnimation {
         let b = blend_u32 as u8;
         Color::from_argb(a, r, g, b)
     }
+    
+    pub fn is_target(&self, id: usize) -> bool {
+        match &self.target {
+            Target::Exclusion(targets) => !targets.contains(&id),
+            Target::Inclusion(targets) => targets.contains(&id),
+        }
+    }
+    
+    pub fn is_finished(&self) -> bool {
+        self.start_time.elapsed() >= self.duration
+    }
 }
 
 pub struct Animation {
@@ -54,26 +68,12 @@ pub struct Animation {
 }
 
 impl Animation {
-    pub fn new() -> Self {
+    pub fn new(app_context: AppContext,target: Target) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(InnerAnimation::new())),
+            inner: Arc::new(Mutex::new(InnerAnimation::new(app_context,target))),
         }
     }
-
-    /// Add a target to the animation.
-    /// ``name``: The name of the [`Item`](crate::ui::item::Item) to animate.
-    /// ``apply_to_children``: Whether to apply the animation to the children that not included in the target.
-    pub fn add_target(self, name: &str, custom_transformation: Option<ParameterOption>, apply_to_children: bool) -> Self {
-        {
-            let mut inner = self.inner.lock().unwrap();
-            inner.targets.push((
-                get_id_with_str(name).expect(format!("Invalid name: {}", name).as_str()),
-                custom_transformation,
-                apply_to_children
-            ));
-        }
-        self
-    }
+    
 
     pub fn duration(self, duration: Duration) -> Self {
         {
@@ -84,7 +84,7 @@ impl Animation {
     }
 
     /// Set the interpolator function.
-    pub fn interpolator(self, interpolator: Box<dyn Fn(f32) -> f32>) -> Self {
+    pub fn interpolator(self, interpolator: Box<dyn Interpolator>) -> Self {
         {
             let mut inner = self.inner.lock().unwrap();
             inner.interpolator = interpolator;
@@ -101,13 +101,28 @@ impl Animation {
         }
         self
     }
+    
+    pub fn start(self) {
+        let mut app_context = self.inner.lock().unwrap().app_context.ref_clone();
+        app_context.starting_animations.lock().unwrap().push_back(self);
+    }
 
-    pub fn interpolate_f32(self, start: f32, end: f32) -> f32 {
+    pub fn is_finished(&self) -> bool {
+        let inner = self.inner.lock().unwrap();
+        inner.is_finished()
+    }
+    
+    pub fn is_target(&self, id: usize) -> bool {
+        let inner = self.inner.lock().unwrap();
+        inner.is_target(id)
+    }
+    
+    pub fn interpolate_f32(&self, start: f32, end: f32) -> f32 {
         let inner = self.inner.lock().unwrap();
         inner.interpolate_f32(start, end)
     }
 
-    pub fn interpolate_color(self, start: Color, end: Color) -> Color {
+    pub fn interpolate_color(&self, start: Color, end: Color) -> Color {
         let inner = self.inner.lock().unwrap();
         inner.interpolate_color(start, end)
     }
@@ -118,5 +133,15 @@ impl RefClone for Animation {
         Self {
             inner: self.inner.clone(),
         }
+    }
+}
+
+pub trait AnimationExt {
+    fn animate(&self, target: Target) -> Animation;
+}
+
+impl AnimationExt for AppContext {
+    fn animate(&self, target: Target) -> Animation {
+        Animation::new(self.ref_clone(), target)
     }
 }

@@ -8,72 +8,70 @@ use crate::ui::Item;
 use crate::ui::item::Orientation;
 
 pub struct DisplayParameter {
-    parent_x: f32,
-    parent_y: f32,
-    width: f32,
-    height: f32,
-    relative_x: f32,
-    relative_y: f32,
-    offset_x: f32,
-    offset_y: f32,
-    opacity: f32,
-    rotation: f32,
-    rotation_center_x: f32,
-    rotation_center_y: f32,
-    scale_x: f32,
-    scale_y: f32,
-    scale_center_x: f32,
-    scale_center_y: f32,
-    skew_x: f32,
-    skew_y: f32,
-    skew_center_x: f32,
-    skew_center_y: f32,
-    float_params: HashMap<String, f32>,
-    color_params: HashMap<String, Color>,
+    pub parent_x: f32,
+    pub parent_y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub relative_x: f32,
+    pub relative_y: f32,
+    pub offset_x: f32,
+    pub offset_y: f32,
+    pub opacity: f32,
+    pub rotation: f32,
+    pub rotation_center_x: f32,
+    pub rotation_center_y: f32,
+    pub scale_x: f32,
+    pub scale_y: f32,
+    pub scale_center_x: f32,
+    pub scale_center_y: f32,
+    pub skew_x: f32,
+    pub skew_y: f32,
+    pub skew_center_x: f32,
+    pub skew_center_y: f32,
+    pub float_params: HashMap<String, f32>,
+    pub color_params: HashMap<String, Color>,
 }
 
 impl DisplayParameter {
-    pub fn set_parent_position(&mut self, x: f32, y: f32) {
-        self.parent_x = x;
-        self.parent_y = y;
-    }
     
-    pub fn set_parent_x(&mut self, x: f32) {
-        self.parent_x = x;
-    }
-    
-    pub fn set_parent_y(&mut self, y: f32) {
-        self.parent_y = y;
+    pub fn copy_from(&mut self, other: &DisplayParameter) {
+        self.parent_x = other.parent_x;
+        self.parent_y = other.parent_y;
+        self.width = other.width;
+        self.height = other.height;
+        self.relative_x = other.relative_x;
+        self.relative_y = other.relative_y;
+        self.offset_x = other.offset_x;
+        self.offset_y = other.offset_y;
+        self.opacity = other.opacity;
+        self.rotation = other.rotation;
+        self.rotation_center_x = other.rotation_center_x;
+        self.rotation_center_y = other.rotation_center_y;
+        self.scale_x = other.scale_x;
+        self.scale_y = other.scale_y;
+        self.scale_center_x = other.scale_center_x;
+        self.scale_center_y = other.scale_center_y;
+        self.skew_x = other.skew_x;
+        self.skew_y = other.skew_y;
+        self.skew_center_x = other.skew_center_x;
+        self.skew_center_y = other.skew_center_y;
+        self.float_params = other.float_params.clone();
+        self.color_params = other.color_params.clone();
     }
 
+
     pub fn x(&self) -> f32 {
-        self.parent_x() + self.relative_x
+        self.parent_x + self.relative_x + self.offset_x
     }
 
     pub fn y(&self) -> f32 {
-        self.parent_y() + self.relative_y
+        self.parent_y + self.relative_y + self.offset_y
     }
     
-    pub fn offset_x(&self) -> f32 {
-        self.offset_x
+    pub fn is_inside(&self, x: f32, y: f32) -> bool {
+        x >= self.x() && x <= self.x() + self.width && y >= self.y() && y <= self.y() + self.height
     }
-    
-    pub fn set_offset_x(&mut self, offset_x: f32) {
-        self.offset_x = offset_x;
-    }
-    
-    pub fn offset_y(&self) -> f32 {
-        self.offset_y
-    }
-    
-    pub fn set_offset_y(&mut self, offset_y: f32) {
-        self.offset_y = offset_y;
-    }
-    
-    pub fn set_offset(&mut self, offset_x: f32, offset_y: f32) {
-        self.offset_x = offset_x;
-        self.offset_y = offset_y;
-    }
+
 
     pub fn size(&self, orientation: Orientation) -> f32 {
         match orientation {
@@ -88,197 +86,46 @@ impl DisplayParameter {
             Orientation::Vertical => self.height = size,
         }
     }
-
-    pub fn parent_x(&self) -> f32 {
-        self.parent_x
+    
+    pub fn set_parent_position(&mut self, x: f32, y: f32) {
+        self.parent_x = x;
+        self.parent_y = y;
     }
     
-    pub fn parent_y(&self) -> f32 {
-        self.parent_y
+    pub fn set_relative_position(&mut self, x: f32, y: f32) {
+        self.relative_x = x;
+        self.relative_y = y;
     }
     
-    pub fn relative_x(&self) -> f32 {
-        self.relative_x
+    pub fn set_offset(&mut self, x: f32, y: f32) {
+        self.offset_x = x;
+        self.offset_y = y;
     }
     
-    pub fn set_relative_x(&mut self, relative_x: f32) {
-        self.relative_x = relative_x;
+    
+    pub fn set_rotation_center(&mut self, x: f32, y: f32) {
+        self.rotation_center_x = x;
+        self.rotation_center_y = y;
     }
     
-    pub fn relative_y(&self) -> f32 {
-        self.relative_y
+    pub fn set_scale(&mut self, x: f32, y: f32){
+        self.scale_x = x;
+        self.scale_y = y;
     }
     
-    pub fn set_relative_position(&mut self, relative_x: f32, relative_y: f32) {
-        self.relative_x = relative_x;
-        self.relative_y = relative_y;
+    pub fn set_scale_center(&mut self, x: f32, y: f32) {
+        self.scale_center_x = x;
+        self.scale_center_y = y;
     }
     
-    pub fn width(&self) -> f32 {
-        self.width
+    pub fn set_skew(&mut self, x: f32, y: f32) {
+        self.skew_x = x;
+        self.skew_y = y;
     }
     
-    pub fn set_width(&mut self, width: f32) {
-        self.width = width;
-    }
-    
-    pub fn height(&self) -> f32 {
-        self.height
-    }
-    
-    pub fn set_height(&mut self, height: f32) {
-        self.height = height;
-    }
-    
-    pub fn set_relative_y(&mut self, relative_y: f32) {
-        self.relative_y = relative_y;
-    }
-    
-    pub fn opacity(&self) -> f32 {
-        self.opacity
-    }
-    
-    pub fn set_opacity(&mut self, opacity: f32) {
-        self.opacity = opacity;
-    }
-    
-    pub fn rotation(&self) -> f32 {
-        self.rotation
-    }
-    
-    pub fn set_rotation(&mut self, rotation: f32) {
-        self.rotation = rotation;
-    }
-    
-    pub fn rotation_center_x(&self) -> f32 {
-        self.parent_x + self.rotation_center_x
-    }
-    
-    pub fn set_rotation_center_x(&mut self, rotation_center_x: f32) {
-        self.rotation_center_x = rotation_center_x;
-    }
-    
-    pub fn rotation_center_y(&self) -> f32 {
-        self.parent_y + self.rotation_center_y
-    }
-    
-    pub fn set_rotation_center_y(&mut self, rotation_center_y: f32) {
-        self.rotation_center_y = rotation_center_y;
-    }
-    
-    pub fn scale_x(&self) -> f32 {
-        self.scale_x
-    }
-    
-    pub fn set_scale_x(&mut self, scale_x: f32) {
-        self.scale_x = scale_x;
-    }
-    
-    pub fn scale_y(&self) -> f32 {
-        self.scale_y
-    }
-    
-    pub fn set_scale_y(&mut self, scale_y: f32) {
-        self.scale_y = scale_y;
-    }
-    
-    pub fn scale_center_x(&self) -> f32 {
-        self.parent_x + self.scale_center_x
-    }
-    
-    pub fn set_scale_center_x(&mut self, scale_center_x: f32) {
-        self.scale_center_x = scale_center_x;
-    }
-    
-    pub fn scale_center_y(&self) -> f32 {
-        self.parent_y + self.scale_center_y
-    }
-    
-    pub fn set_scale_center_y(&mut self, scale_center_y: f32) { 
-        self.scale_center_y = scale_center_y;
-    }
-    
-    pub fn set_scale(&mut self, scale_x: f32, scale_y: f32) {
-        self.scale_x = scale_x;
-        self.scale_y = scale_y;
-    }
-    
-    pub fn skew_x(&self) -> f32 {
-        self.skew_x
-    }
-    
-    pub fn set_skew_x(&mut self, skew_x: f32) {
-        self.skew_x = skew_x;
-    }
-    
-    pub fn skew_y(&self) -> f32 {
-        self.skew_y
-    }
-    
-    pub fn set_skew_y(&mut self, skew_y: f32) {
-        self.skew_y = skew_y;
-    }
-    
-    pub fn set_skew(&mut self, skew_x: f32, skew_y: f32) {
-        self.skew_x = skew_x;
-        self.skew_y = skew_y;
-    }
-    
-    pub fn skew_center_x(&self) -> f32 {
-        self.parent_x + self.skew_center_x
-    }
-    
-    pub fn set_skew_center_x(&mut self, skew_center_x: f32) {
-        self.skew_center_x = skew_center_x;
-    }
-    
-    pub fn skew_center_y(&self) -> f32 {
-        self.parent_y + self.skew_center_y
-    }
-    
-    pub fn set_skew_center_y(&mut self, skew_center_y: f32) {
-        self.skew_center_y = skew_center_y;
-    }
-    
-    pub fn set_skew_center(&mut self, skew_center_x: f32, skew_center_y: f32) {
-        self.skew_center_x = skew_center_x;
-        self.skew_center_y = skew_center_y;
-    }
-
-    
-    pub fn is_inside(&self, x: f32, y: f32) -> bool {
-        x >= self.x() && x <= self.x() + self.width && y >= self.y() && y <= self.y() + self.height
-    }
-
-    pub fn set_float_param(&mut self, key: impl Into<String>, value: f32) {
-        self.float_params.insert(key.into(), value);
-    }
-
-    pub fn get_float_param(&self, key: impl Into<String>) -> Option<&f32> {
-        self.float_params.get(&key.into())
-    }
-
-    pub fn set_color_param(&mut self, key: impl Into<String>, value: Color) {
-        self.color_params.insert(key.into(), value);
-    }
-
-    pub fn get_color_param(&self, key: impl Into<String>) -> Option<&Color> {
-        self.color_params.get(&key.into())
-    }
-
-    // pub fn interpolate(&self, other: &DisplayParameter, progress: f32) -> DisplayParameter {
-    //     parameter_interpolate(self, other, progress)
-    // }
-
-    pub fn copy_from(&mut self, other: &DisplayParameter) {
-        self.width = other.width;
-        self.height = other.height;
-        self.relative_x = other.relative_x;
-        self.relative_y = other.relative_y;
-        self.opacity = other.opacity;
-        self.rotation = other.rotation;
-        self.float_params = other.float_params.clone();
-        self.color_params = other.color_params.clone();
+    pub fn set_skew_center(&mut self, x: f32, y: f32) {
+        self.skew_center_x = x;
+        self.skew_center_y = y;
     }
 }
 

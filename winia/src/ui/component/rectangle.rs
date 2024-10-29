@@ -27,21 +27,8 @@ impl Rectangle {
             color: Color::TRANSPARENT.into(),
         }));
         let item_event = ItemEvent::new()
-            .measure(|item, orientation, mode| {
-                let min_size = item.get_min_size(orientation);
-                let max_size = item.get_max_size(orientation);
-                let measure_parameter = item.get_measure_parameter();
-                match mode {
-                    MeasureMode::Specified(size) => {
-                        measure_parameter.set_size(orientation, size.clamp(min_size, max_size));
-                    }
-                    MeasureMode::Unspecified(_) => {
-                        measure_parameter.set_size(orientation, min_size);
-                    }
-                }
-            })
             .layout({
-                move |item, relative_x, relative_y, width, height| {
+                move |item, width, height| {
                     let horizontal_padding = item.get_padding(Orientation::Horizontal);
                     let vertical_padding = item.get_padding(Orientation::Vertical);
                     item.layout_layers(width - horizontal_padding, height - vertical_padding);
@@ -62,8 +49,8 @@ impl Rectangle {
                     let rect = Rect::from_xywh(
                         display_parameter.x() + padding_left,
                         display_parameter.y() + padding_top,
-                        display_parameter.width() - padding_left - padding_right,
-                        display_parameter.height() - padding_top - padding_bottom,
+                        display_parameter.width - padding_left - padding_right,
+                        display_parameter.height - padding_top - padding_bottom,
                     );
                     let mut paint = skia_safe::Paint::default();
                     paint.set_anti_alias(true);

@@ -1,22 +1,23 @@
 mod app_context;
-pub use app_context::*;
-
-use std::sync::{Arc, Mutex};
 
 use crate::core::RefClone;
 use crate::dpi::LogicalSize;
 use crate::property::{BoolProperty, Gettable, Property};
+use crate::ui::item::{ImeAction, MeasureMode, MouseEvent, PointerState, TouchEvent};
+use crate::ui::Item;
+use crate::LockUnwrap;
+pub use app_context::*;
 use skia_safe::Color;
-use skiwin::vulkan::{VulkanContext, VulkanSkiaWindow};
+use skiwin::vulkan::VulkanSkiaWindow;
 use skiwin::SkiaWindow;
+use std::ops::DerefMut;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use winit::application::ApplicationHandler;
 use winit::dpi::Size;
-use winit::event::{ElementState, MouseButton, Touch, WindowEvent};
+use winit::event::{ElementState, Ime, MouseButton, Touch, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::window::{WindowAttributes, WindowId};
-use crate::LockUnwrap;
-use crate::ui::Item;
-use crate::ui::item::{MeasureMode, MouseEvent, Orientation, PointerState, TouchEvent};
 
 macro_rules! ref_clone {
     ($t:ty, $( $x:ident ),+) => {
@@ -106,6 +107,7 @@ pub struct App {
     event_loop_proxy: Option<EventLoopProxy<UserEvent>>,
     item_generator: Option<Box<dyn FnOnce(AppContext, AppProperty) -> Item>>,
     item: Option<Item>,
+    request_re_layout: bool,
     window_attributes: WindowAttributes,
     cursor_x: f32,
     cursor_y: f32,
@@ -131,6 +133,7 @@ impl App {
             cursor_y: 0.0,
             pressed_mouse_buttons: Vec::new(),
             window_attributes: WindowAttributes::default().with_transparent(true),
+            request_re_layout: false,
         }.title(title)
             .min_width(min_width)
             .min_height(min_height)
@@ -165,8 +168,7 @@ impl App {
         });
         if let Some(size) = window_size {
             if let Some(item) = &mut self.item {
-                item.measure(Orientation::Horizontal, MeasureMode::Specified(size.0));
-                item.measure(Orientation::Vertical, MeasureMode::Specified(size.1));
+                item.measure(MeasureMode::Specified(size.0), MeasureMode::Specified(size.1));
                 item.dispatch_layout(0.0, 0.0, size.0, size.1)
             }
         }
@@ -330,6 +332,10 @@ impl ApplicationHandler<UserEvent> for App {
             app_property.lock().unwrap().apply_to_window_attributes(&mut self.window_attributes.clone().with_transparent(true));
             let window = event_loop.create_window(self.window_attributes.clone()).unwrap();
             self.app_context.window.lock().unwrap().replace(Box::new(VulkanSkiaWindow::new(window, None)));
+            let event_loop_proxy = self.event_loop_proxy.take();
+            if let Some(event_loop_proxy) = event_loop_proxy {
+                self.app_context.event_loop_proxy.lock().unwrap().replace(event_loop_proxy);
+            }
             if let Some(item_generator) = self.item_generator.take() {
                 self.item = Some(
                     item_generator(
@@ -341,10 +347,11 @@ impl ApplicationHandler<UserEvent> for App {
         }
     }
 
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
             UserEvent::ReLayout => {
-                self.re_layout();
+                // self.re_layout();
+                self.request_re_layout = true;
                 self.window(|window| {
                     window.request_redraw();
                 });
@@ -353,6 +360,76 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, window_id: WindowId, event: WindowEvent) {
+        {
+            let mut f = self.app_context.focused_item.lock().unwrap();
+            if let Some((id, focused)) = f.0{
+                if focused {
+                    if let Some(item) = &mut self.item {
+                        if let Some(focused_id) = f.1 {
+                            let mut fun = |item: &mut Item| {
+                                {
+                                    let mut on_focus = item.on_focus.lock().unwrap();
+                                    for f in on_focus.iter_mut() {
+                                        f(false);
+                                    }
+                                }
+                                {
+                                    let on_focus_clone = item.item_event.on_focus.clone();
+                                    let mut on_focus = on_focus_clone.lock().unwrap();
+                                    on_focus(item, false)
+                                }
+                            };
+                            item.find_item_mut(focused_id, &mut fun);
+                        }
+                        let mut fun = |item: &mut Item| {
+                            {
+                                let mut on_focus = item.on_focus.lock().unwrap();
+                                for f in on_focus.iter_mut() {
+                                    f(true);
+                                }
+                            }
+                            {
+                                let on_focus_clone = item.item_event.on_focus.clone();
+                                let mut on_focus = on_focus_clone.lock().unwrap();
+                                on_focus(item, true)
+                            }
+                        };
+                        item.find_item_mut(id, &mut fun);
+                        f.1 = Some(id);
+                    }
+                }else { 
+                    if let Some(focused_id) = f.1 {
+                        if id == focused_id {
+                            if let Some(item) = &mut self.item {
+                                if let Some(focused_id) = f.1 {
+                                    let mut fun = |item: &mut Item| {
+                                        {
+                                            let mut on_focus = item.on_focus.lock().unwrap();
+                                            for f in on_focus.iter_mut() {
+                                                f(false);
+                                            }
+                                        }
+                                        {
+                                            let on_focus_clone = item.item_event.on_focus.clone();
+                                            let mut on_focus = on_focus_clone.lock().unwrap();
+                                            on_focus(item, false)
+                                        }
+                                    };
+                                    item.find_item_mut(focused_id, &mut fun);
+                                }
+                                f.1 = None;
+                            }
+                        }
+                    }
+                }
+                f.0 = None;
+            }
+        }
+
+        if self.request_re_layout {
+            self.re_layout();
+            self.request_re_layout = false;
+        }
         match event {
             WindowEvent::CloseRequested => {
                 event_loop.exit();
@@ -367,14 +444,13 @@ impl ApplicationHandler<UserEvent> for App {
                 });
 
                 if let Some(item) = &mut self.item {
-                    item.measure(Orientation::Horizontal, MeasureMode::Specified(width));
-                    item.measure(Orientation::Vertical, MeasureMode::Specified(height));
+                    item.measure(MeasureMode::Specified(width), MeasureMode::Specified(height));
                     item.dispatch_layout(0.0, 0.0, width, height)
                 }
             }
+
             WindowEvent::KeyboardInput { device_id, event, is_synthetic } => {}
             WindowEvent::MouseInput { device_id, state, button } => {
-                self.window(|window| {});
                 if let Some(item) = &mut self.item {
                     let event = MouseEvent {
                         device_id,
@@ -454,38 +530,92 @@ impl ApplicationHandler<UserEvent> for App {
                     }
                 }
             }
+            WindowEvent::Ime(ime) => {
+                let ime_action = match ime {
+                    Ime::Enabled => ImeAction::Enabled,
+                    Ime::Preedit(preedit, range) => ImeAction::PreEdit(preedit, range),
+                    Ime::Commit(commit) => ImeAction::Commit(commit),
+                    Ime::Disabled => ImeAction::Disabled,
+                };
+                let f = self.app_context.focused_item.lock().unwrap();
+                if let Some(focused_id) = f.1 {
+                    if let Some(item) = &mut self.item {
+                        item.find_item_mut(focused_id, &mut |item: &mut Item| {
+                            item.ime_input(ime_action.clone());
+                        });
+                    }
+                }
+            }
             WindowEvent::RedrawRequested => {
-                self.app_context.ref_clone().window(|window| {
-                    let scale_factor = window.scale_factor() as f32;
-                    let surface = window.surface();
-                    let canvas = surface.canvas();
-                    // canvas.clear(Color::BLACK);
-                    canvas.save();
-                    canvas.scale((scale_factor, scale_factor));
+                // self.app_context.ref_clone().window(|window| {
+                let (surface_ref, scale_factor) = {
+                    let window_option = self.app_context.window.lock().unwrap();
+                    let window = window_option.as_ref().unwrap();
+                    (window.surface(), window.scale_factor() as f32)
+                };
+
+                {
+                    let mut surface = surface_ref.lock().unwrap();
+
+                    {
+                        let canvas = surface.canvas();
+                        canvas.clear(Color::BLACK);
+                        canvas.save();
+                        canvas.scale((scale_factor, scale_factor));
+                    }
 
                     if let Some(item) = &mut self.item {
-                        item.dispatch_draw(canvas, 0.0, 0.0);
+                        item.dispatch_draw(surface.deref_mut(), 0.0, 0.0);
                     }
+
+                    let canvas = surface.canvas();
                     canvas.restore();
-                    window.present();
-                });
+                }
+
+                {
+                    self.window(|window| {
+                        window.present();
+                    });
+                }
+                // });
             }
             _ => {}
         }
-
         {
-            let animations = self.app_context.animations.clone();
-            let mut animations = animations.lock().unwrap();
-            for animation in animations.iter_mut() {
-                (animation.inner.lock().unwrap().transformation)();
-                {
-                    self.app_context.current_animation.lock().unwrap().replace(animation.ref_clone());
-                }
-                self.re_layout();
-                {
-                    self.app_context.current_animation.lock().unwrap().take();
+            let starting_animations = self.app_context.starting_animations.clone();
+            {
+                let (width, height) = {
+                    let mut width = 0.0;
+                    let mut height = 0.0;
+                    let window = self.app_context.window.lock().unwrap();
+                    if let Some(window) = window.as_ref() {
+                        let size = window.inner_size();
+                        width = size.width as f32 / window.scale_factor() as f32;
+                        height = size.height as f32 / window.scale_factor() as f32;
+                    }
+                    (width, height)
+                };
+                let mut starting_animations = starting_animations.lock().unwrap();
+                while let Some(animation) = starting_animations.pop_front() {
+                    if let Some(item) = &mut self.item {
+                        item.record_display_parameter();
+                        (animation.inner.lock().unwrap().transformation)();
+                        item.measure(MeasureMode::Specified(width), MeasureMode::Specified(height));
+                        item.dispatch_layout(0.0, 0.0, width, height);
+                        animation.inner.lock().unwrap().start_time = Instant::now();
+                        item.dispatch_animation(animation.ref_clone());
+                    }
+                    self.app_context.running_animations.lock().unwrap().push(animation);
                 }
             }
+            let running_animations = self.app_context.running_animations.clone();
+            if !running_animations.lock().unwrap().is_empty() {
+                self.window(|window| {
+                    window.request_redraw();
+                    // println!("redraw {}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis());
+                });
+            }
+            running_animations.lock().unwrap().retain(|animation| { !animation.is_finished() });
         }
     }
 }
@@ -505,4 +635,10 @@ fn run_app_with_event_loop(mut app: App, event_loop: EventLoop<UserEvent>) {
 pub fn run_app(app: App) {
     let event_loop = EventLoop::<UserEvent>::with_user_event().build().unwrap();
     run_app_with_event_loop(app, event_loop);
+}
+
+#[cfg(target_os = "android")]
+pub fn run_app(app: App, android_app: AndroidApp) {
+    let event_loop = EventLoop::<UserEvent>::with_user_event().with_android_app(android_app).build().unwrap();
+    run_app_with_event_loop(app.into(), event_loop);
 }

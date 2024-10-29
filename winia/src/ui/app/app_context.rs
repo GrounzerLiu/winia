@@ -1,19 +1,21 @@
 use crate::core::RefClone;
-use crate::property::{Property, PropertyWeak};
-use std::collections::{HashMap, LinkedList};
+use crate::property::{Property, PropertyWeak, Settable};
+use crate::ui::app::UserEvent;
+use crate::ui::{Animation, Item};
+use skiwin::SkiaWindow;
+use std::collections::LinkedList;
 use std::ops::DerefMut;
 use std::sync::{Arc, Mutex, Weak};
 use winit::event_loop::EventLoopProxy;
-use skiwin::SkiaWindow;
-use crate::ui::Animation;
-use crate::ui::app::UserEvent;
-use crate::ui::item::DisplayParameter;
+use crate::ui::item::ItemEvent;
 
 pub struct AppContext {
     pub(crate) window: Arc<Mutex<Option<Box<dyn SkiaWindow>>>>,
     pub(crate) event_loop_proxy: Arc<Mutex<Option<EventLoopProxy<UserEvent>>>>,
-    pub(crate) animations: Arc<Mutex<LinkedList<Animation>>>,
-    pub(crate) current_animation: Arc<Mutex<Option<Animation>>>,
+    pub(crate) starting_animations: Arc<Mutex<LinkedList<Animation>>>,
+    pub(crate) running_animations: Arc<Mutex<Vec<Animation>>>,
+    /// (focused_id, waiting_for_focus_id)
+    pub(crate) focused_item: Arc<Mutex<(Option<(usize,bool)>, Option<usize>)>>,
     pub(crate) title: Property<String>,
     pub(crate) min_width: Property<f32>,
     pub(crate) min_height: Property<f32>,
@@ -32,8 +34,9 @@ impl AppContext {
         Self {
             window: Arc::new(Mutex::new(None)),
             event_loop_proxy: Arc::new(Mutex::new(None)),
-            animations: Arc::new(Mutex::new(LinkedList::new())),
-            current_animation: Arc::new(Mutex::new(None)),
+            starting_animations: Arc::new(Mutex::new(LinkedList::new())),
+            running_animations: Arc::new(Mutex::new(Vec::new())),
+            focused_item: Arc::new(Mutex::new((None, None))),
             title: "Title".to_string().into(),
             min_width: 0.0.into(),
             min_height: 0.0.into(),
@@ -68,7 +71,7 @@ impl AppContext {
         });
         id as usize
     }
-    
+
     pub fn title(&self) -> Property<String> {
         self.title.ref_clone()
     }
@@ -84,13 +87,13 @@ impl AppContext {
     pub fn max_width(&self) -> Property<f32> {
         self.max_width.ref_clone()
     }
-    
+
     pub fn max_height(&self) -> Property<f32> {
         self.max_height.ref_clone()
     }
 
     pub fn start_animation(&mut self, animation: Animation) {
-        self.animations.lock().unwrap().push_back(animation);
+        self.starting_animations.lock().unwrap().push_back(animation);
     }
 }
 
@@ -119,15 +122,36 @@ impl AppContext {
             }
         });
     }
+    
+    pub fn request_focus(&self, id: usize, focused: bool) {
+        self.focused_item.lock().unwrap().0 = Some((id, focused));
+    }
 }
 
-impl AppContext{
-    pub(crate) fn ref_clone(&self) -> Self {
+// impl AppContext{
+//     pub(crate) fn ref_clone(&self) -> Self {
+//         Self {
+//             window: self.window.clone(),
+//             event_loop_proxy: self.event_loop_proxy.clone(),
+//             starting_animations: self.starting_animations.clone(),
+//             running_animations: self.running_animations.clone(),
+//             title: self.title.ref_clone(),
+//             min_width: self.min_width.ref_clone(),
+//             min_height: self.min_height.ref_clone(),
+//             max_width: self.max_width.ref_clone(),
+//             max_height: self.max_height.ref_clone(),
+//         }
+//     }
+// }
+
+impl RefClone for AppContext {
+    fn ref_clone(&self) -> Self {
         Self {
             window: self.window.clone(),
             event_loop_proxy: self.event_loop_proxy.clone(),
-            animations: self.animations.clone(),
-            current_animation: self.current_animation.clone(),
+            starting_animations: self.starting_animations.clone(),
+            running_animations: self.running_animations.clone(),
+            focused_item: self.focused_item.clone(),
             title: self.title.ref_clone(),
             min_width: self.min_width.ref_clone(),
             min_height: self.min_height.ref_clone(),
@@ -137,11 +161,12 @@ impl AppContext{
     }
 }
 
-pub struct AppContextWeak{
+pub struct AppContextWeak {
     window: Weak<Mutex<Option<Box<dyn SkiaWindow>>>>,
     event_loop_proxy: Weak<Mutex<Option<EventLoopProxy<UserEvent>>>>,
-    animations: Weak<Mutex<LinkedList<Animation>>>,
-    current_animation: Weak<Mutex<Option<Animation>>>,
+    starting_animations: Weak<Mutex<LinkedList<Animation>>>,
+    running_animations: Weak<Mutex<Vec<Animation>>>,
+    focused_item: Weak<Mutex<(Option<(usize,bool)>, Option<usize>)>>,
     title: PropertyWeak<String>,
     min_width: PropertyWeak<f32>,
     min_height: PropertyWeak<f32>,
@@ -149,13 +174,14 @@ pub struct AppContextWeak{
     max_height: PropertyWeak<f32>,
 }
 
-impl AppContext{
-    pub fn weak_ref(&self) -> AppContextWeak{
+impl AppContext {
+    pub fn weak_ref(&self) -> AppContextWeak {
         AppContextWeak {
             window: Arc::downgrade(&self.window),
             event_loop_proxy: Arc::downgrade(&self.event_loop_proxy),
-            animations: Arc::downgrade(&self.animations),
-            current_animation: Arc::downgrade(&self.current_animation),
+            starting_animations: Arc::downgrade(&self.starting_animations),
+            running_animations: Arc::downgrade(&self.running_animations),
+            focused_item: Arc::downgrade(&self.focused_item),
             title: self.title.weak(),
             min_width: self.min_width.weak(),
             min_height: self.min_height.weak(),
@@ -165,13 +191,14 @@ impl AppContext{
     }
 }
 
-impl AppContextWeak{
-    pub fn upgrade(&self) -> Option<AppContext>{
+impl AppContextWeak {
+    pub fn upgrade(&self) -> Option<AppContext> {
         Some(AppContext {
             window: self.window.upgrade()?,
             event_loop_proxy: self.event_loop_proxy.upgrade()?,
-            animations: self.animations.upgrade()?,
-            current_animation: self.current_animation.upgrade()?,
+            starting_animations: self.starting_animations.upgrade()?,
+            running_animations: self.running_animations.upgrade()?,
+            focused_item: self.focused_item.upgrade()?,
             title: self.title.upgrade()?,
             min_width: self.min_width.upgrade()?,
             min_height: self.min_height.upgrade()?,

@@ -139,7 +139,7 @@ impl<T: 'static> Property<T> {
         }
     }
 
-    pub fn add_specific_observer(&mut self, id: usize, observer: impl Fn(&mut T) + 'static) {
+    pub fn add_specific_observer(&mut self, id: usize, observer: impl FnMut(&mut T) + 'static) {
         self.specific_observers.lock().unwrap().push((id, Box::new(observer)));
     }
 

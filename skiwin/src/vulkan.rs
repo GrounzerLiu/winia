@@ -8,7 +8,7 @@ use softbuffer::SoftBufferError;
 use std::num::NonZeroU32;
 use std::ops::Deref;
 use std::ptr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use vulkano::device::physical::PhysicalDevice;
 use vulkano::device::{Device, DeviceCreateInfo, Queue, QueueCreateInfo, QueueFlags};
 use vulkano::instance::{Instance, InstanceCreateFlags, InstanceCreateInfo, InstanceExtensions};
@@ -18,7 +18,7 @@ use winit::window::Window;
 
 pub struct VulkanSkiaWindow {
     skia_context: DirectContext,
-    skia_surface: Surface,
+    skia_surface: Arc<Mutex<Surface>>,
     _vulkan_context: VulkanContext,
     soft_buffer_surface: softbuffer::Surface<Arc<Window>, Arc<Window>>,
 }
@@ -69,12 +69,12 @@ impl VulkanSkiaWindow {
 }
 
 
-fn create_surface(skia_context: &mut DirectContext, size: impl Into<PhysicalSize<u32>>) -> Surface {
+fn create_surface(skia_context: &mut DirectContext, size: impl Into<PhysicalSize<u32>>) -> Arc<Mutex<Surface>> {
     let size = size.into();
     let width = size.width;
     let height = size.height;
     let image_info = ImageInfo::new_n32_premul((width as i32, height as i32), None);
-    skia_safe::gpu::surfaces::render_target(
+    Arc::new(Mutex::new(skia_safe::gpu::surfaces::render_target(
         skia_context,
         Budgeted::Yes,
         &image_info,
@@ -83,8 +83,7 @@ fn create_surface(skia_context: &mut DirectContext, size: impl Into<PhysicalSize
         None,
         false,
         None,
-    )
-        .unwrap()
+    ).unwrap()))
 }
 
 impl_skia_window!(VulkanSkiaWindow);

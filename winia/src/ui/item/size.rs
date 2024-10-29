@@ -3,7 +3,6 @@ pub enum Size {
     #[default]
     Compact,
     Expanded,
-    Stretch,
     Fixed(f32),
     Relative(f32),
 }
@@ -16,9 +15,6 @@ impl PartialEq for Size {
             }
             Size::Expanded => {
                 matches!(other, Size::Expanded)
-            }
-            Size::Stretch => {
-                matches!(other, Size::Stretch)
             }
             Size::Fixed(f) => {
                 match other {

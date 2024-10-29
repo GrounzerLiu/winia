@@ -25,6 +25,7 @@ unsafe impl Send for ParagraphWrapper {}
 
 impl ParagraphWrapper {
     pub fn new(text: &StyledText, range: Range<usize>, max_width: f32, text_align: TextAlign) -> ParagraphWrapper {
+
         let mut text_style = TextStyle::default();
         text_style.set_font_size(30.0);
         text_style.set_color(Color::BLACK);
@@ -37,7 +38,7 @@ impl ParagraphWrapper {
 
         let mut paragraph_builder = ParagraphBuilder::new(&paragraph_style, font_collection);
 
-        if text.len() == 0 {
+        if text.is_empty() {
             let mut text = text.clone();
             text.push(' ');
             create_segments(&text, &range, text_style).iter().for_each(|style_segment| {
@@ -54,8 +55,10 @@ impl ParagraphWrapper {
         // });
 
         let mut paragraph = paragraph_builder.build();
+        // let instant = std::time::Instant::now();
         paragraph.layout(max_width);
 
+        // println!("Paragraph layout time: {}ms", instant.elapsed().as_millis());
 
         let mut byte_to_utf16_indices = HashMap::new();
         byte_to_utf16_indices.insert(0, 0);
@@ -81,7 +84,7 @@ impl ParagraphWrapper {
         let mut glyph_length = 0;
         let mut utf16_length = 0;
 
-        while let Some(index) = iter.next() {
+        for index in iter {
             let range = last_index.unwrap()..index;
             let str = &text[range.clone()];
 
@@ -117,6 +120,10 @@ impl ParagraphWrapper {
             byte_length: text.len(),
         }
     }
+    
+    pub fn re_layout(&mut self, max_width: f32) {
+        self.paragraph.layout(max_width);
+    }
 
 
     pub fn draw(&self, canvas: &Canvas, x: f32, y: f32) {
@@ -151,7 +158,7 @@ impl ParagraphWrapper {
 
         let utf16_index = *self.byte_to_utf16_indices.get(&index).expect(format!("index:{} is not a grapheme cluster boundary", index).as_str());
         let glyph_index = *self.byte_to_glyph_indices.get(&index).unwrap();
-        return if is_start {
+        if is_start {
             let next_byte_index = *self.glyph_to_byte_indices.get(&(glyph_index + 1)).unwrap();
             let next_utf16_index = *self.byte_to_utf16_indices.get(&next_byte_index).unwrap();
             let boxes = self.paragraph.get_rects_for_range(utf16_index..next_utf16_index, RectHeightStyle::Max, RectWidthStyle::Tight);
@@ -180,7 +187,7 @@ impl ParagraphWrapper {
                     (box0.rect.left, box0.rect.top, box0.rect.height())
                 }
             }
-        };
+        }
     }
 
     pub fn get_rects_for_range(&self, range: Range<usize>) -> Vec<TextBox> {
@@ -231,12 +238,10 @@ impl ParagraphWrapper {
                 } else {
                     glyph_info.text_range.end
                 }
+            } else if glyph_info.position == TextDirection::LTR {
+                glyph_info.text_range.end
             } else {
-                if glyph_info.position == TextDirection::LTR {
-                    glyph_info.text_range.end
-                } else {
-                    glyph_info.text_range.start
-                }
+                glyph_info.text_range.start
             };
         }
         0
@@ -378,7 +383,7 @@ trait AddStyleSegment {
 impl AddStyleSegment for ParagraphBuilder {
     fn add_style_segment(&mut self, style_segment: &StyleSegment) {
         self.push_style(&style_segment.text_style);
-        self.add_text(&style_segment.text);
+        self.add_text(style_segment.text);
         self.pop();
     }
 }

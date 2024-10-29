@@ -22,30 +22,40 @@ impl Stack {
             vertical_gravity: Gravity::Start.into(),
         }));
         let item_event = ItemEvent::default()
-            .measure(|item, orientation, mode| {
-                item.measure_children(orientation, mode);
-                let child_max_size = {
-                    let mut max_size = 0.0_f32;
-                    for child in item.get_children().items().iter_mut() {
-                        let child_size = child.get_measure_parameter().size(orientation);
-                        let margin = child.get_margin(orientation);
-                        max_size = max_size.max(child_size + margin);
+            .measure(|item, width_mode, height_mode| {
+                item.measure_children(width_mode, height_mode);
+                let mut child_max_width = 0.0_f32;
+                let mut child_max_height = 0.0_f32;
+                for child in item.get_children().items().iter(){
+                    let child_measure_parameter = child.clone_measure_parameter();
+                    let child_margin_horizontal = child.get_margin(Orientation::Horizontal);
+                    let child_margin_vertical = child.get_margin(Orientation::Vertical);
+                    child_max_width = child_max_width.max(child_measure_parameter.width + child_margin_horizontal);
+                    child_max_height = child_max_height.max(child_measure_parameter.height + child_margin_vertical);
+                }
+                let width = match width_mode {
+                    MeasureMode::Specified(width) => {
+                        item.clamp_width(width)
                     }
-                    max_size
-                };
-                let size = match mode {
-                    MeasureMode::Specified(size) => size.clamp(item.get_min_size(orientation), item.get_max_size(orientation)),
-                    MeasureMode::Unspecified(size) => {
-                        let max_size = size.min(item.get_max_size(orientation));
-                        let stack_size = child_max_size + item.get_padding(orientation);
-                        stack_size.clamp(item.get_min_size(orientation), max_size)
+                    MeasureMode::Unspecified(_) => {
+                        item.clamp_width(child_max_width)
                     }
                 };
-                item.get_measure_parameter().set_size(orientation, size);
+                let height = match height_mode {
+                    MeasureMode::Specified(height) => {
+                        item.clamp_height(height)
+                    }
+                    MeasureMode::Unspecified(_) => {
+                        item.clamp_height(child_max_height)
+                    }
+                };
+                let measure_parameter = item.get_measure_parameter();
+                measure_parameter.width = width;
+                measure_parameter.height = height;
             })
             .layout({
                 let property = property.clone();
-                move|item, relative_x, relative_y, width, height| {
+                move|item, width, height| {
                     
                     
                     let x = LogicalX::new(item.get_layout_direction().get(), 0.0, width);
@@ -59,40 +69,19 @@ impl Stack {
                     let padding_top = item.get_padding_top().get();
                     let padding_bottom = item.get_padding_bottom().get();
                     item.for_each_child_mut(|child| {
-                        let width_property = child.get_width();
-                        let height_property = child.get_height();
-                        match width_property.get() {
-                            Size::Stretch => {
-                                child.measure(Orientation::Horizontal, MeasureMode::Specified(width - horizontal_padding));
-                            }
-                            Size::Relative(factor) => {
-                                let factor = factor.clamp(0.0, 1.0);
-                                let child_width = (width - horizontal_padding) * factor;
-                                child.measure(Orientation::Horizontal, MeasureMode::Specified(child_width));
-                            }
-                            _ => {}
-                        }
-                        match height_property.get() {
-                            Size::Stretch => {
-                                child.measure(Orientation::Vertical, MeasureMode::Unspecified(height - vertical_padding));
-                            }
-                            Size::Relative(factor) => {
-                                let child_height = (height - vertical_padding) * factor;
-                                child.measure(Orientation::Vertical, MeasureMode::Specified(child_height));
-                            }
-                            _ => {}
-                        }
+
                         let child_margin_start = child.get_margin_start().get();
                         let child_margin_end = child.get_margin_end().get();
                         let child_margin_top = child.get_margin_top().get();
                         let child_margin_bottom = child.get_margin_bottom().get();
-                        let child_width = child.get_measure_parameter().width();
-                        let child_height = child.get_measure_parameter().height();
+                        let child_width = child.get_measure_parameter().width;
+                        let child_height = child.get_measure_parameter().height;
 
                         let (horizontal_gravity, vertical_gravity) = {
-                            let mut property = property.lock().unwrap();
+                            let property = property.lock().unwrap();
                             (property.horizontal_gravity.get(), property.vertical_gravity.get())
                         };
+                        
                         let child_x = match horizontal_gravity {
                             Gravity::Start => {
                                 x + child_margin_start + padding_start

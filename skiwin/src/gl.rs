@@ -3,7 +3,7 @@ use std::ops::Deref;
 use glutin::config::{ConfigSurfaceTypes, ConfigTemplate, ConfigTemplateBuilder, GlConfig};
 use skia_safe::gpu::DirectContext;
 use skia_safe::{ImageInfo, Surface};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use winit::window::Window;
 use glutin::display::{GetGlDisplay, GlDisplay};
 
@@ -19,7 +19,7 @@ use crate::{create_surface, impl_skia_window, SkiaWindow};
 
 pub struct GlWindow {
     skia_context: DirectContext,
-    skia_surface: Surface,
+    skia_surface: Arc<Mutex<Surface>>,
     soft_buffer_surface: softbuffer::Surface<Arc<Window>, Arc<Window>>,
 }
 
