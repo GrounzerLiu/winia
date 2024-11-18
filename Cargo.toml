@@ -2,4 +2,6 @@
 members = [
     "example",
     "winia",
-    "skiwin"]
+    "skiwin",
+    "material_color_utilities"
+]

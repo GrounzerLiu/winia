@@ -1,6 +1,5 @@
 use crate::{impl_skia_window, SkiaWindow};
 use ash::vk;
-use ash::vk::Handle;
 use skia_safe::gpu::vk::{BackendContext, GetProcOf};
 use skia_safe::gpu::{Budgeted, DirectContext, SurfaceOrigin};
 use skia_safe::{ImageInfo, Surface};
@@ -12,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use vulkano::device::physical::PhysicalDevice;
 use vulkano::device::{Device, DeviceCreateInfo, Queue, QueueCreateInfo, QueueFlags};
 use vulkano::instance::{Instance, InstanceCreateFlags, InstanceCreateInfo, InstanceExtensions};
-use vulkano::{VulkanLibrary, VulkanObject};
+use vulkano::{Handle, VulkanLibrary, VulkanObject};
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
@@ -184,6 +183,7 @@ impl VulkanContext {
     }
 
     pub unsafe fn get_proc(&self, of: GetProcOf) -> Option<unsafe extern "system" fn()> {
+        use ash::vk::Handle;
         match of {
             GetProcOf::Instance(instance, name) => {
                 let ash_instance = vk::Instance::from_raw(instance as _);

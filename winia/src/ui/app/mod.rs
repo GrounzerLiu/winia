@@ -631,7 +631,7 @@ fn run_app_with_event_loop(mut app: App, event_loop: EventLoop<UserEvent>) {
     event_loop.run_app(&mut app).unwrap();
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(not(target_os = "android"))]
 pub fn run_app(app: App) {
     let event_loop = EventLoop::<UserEvent>::with_user_event().build().unwrap();
     run_app_with_event_loop(app, event_loop);

@@ -11,7 +11,7 @@ use crate::property::{BoolProperty, Children, ColorProperty, F32Property, Gettab
 use crate::text::{EdgeBehavior, ParagraphWrapper, Style, StyledText};
 use crate::ui::app::{AppContext, UserEvent};
 use crate::ui::Item;
-use crate::ui::item::{ClickSource, DisplayParameter, Gravity, ItemEvent, LogicalX, MeasureMode, Orientation};
+use crate::ui::item::{ClickSource, DisplayParameter, Gravity, ItemEvent, LayoutDirection, LogicalX, MeasureMode, Orientation};
 
 /// This component has a serious problem:
 ///
@@ -57,7 +57,6 @@ pub struct TextBlock {
 
 impl TextBlock {
     pub fn new(app_context: AppContext) -> Self {
-        let app_context_clone = app_context.ref_clone();
         let property = Arc::new(Mutex::new(TextBlockProperty {
             text: TextProperty::from_static(StyledText::from("")),
             editable: BoolProperty::from_static(false),
@@ -77,72 +76,69 @@ impl TextBlock {
             .measure({
                 let property = property.clone();
                 let context = context.clone();
-                let app_proxy = app_context.event_loop_proxy.clone();
                 move |item, width_mode, height_mode| {
-                    let property_clone = property.clone();
                     let property = property.lock().unwrap();
 
                     if *property.is_text_updated.lock().unwrap() || context.paragraph.lock().unwrap().is_none() {
                         *property.is_text_updated.lock().unwrap() = false;
                         let paragraph = context.paragraph.clone();
-                        let app_proxy = app_proxy.clone();
-                        thread::spawn(move || {
-                            let property_clone = property_clone.lock().unwrap();
-                            let new_paragraph = create_paragraph(&property_clone, TextAlign::Start, 1000.0);
-                            *paragraph.lock().unwrap() = Some(new_paragraph);
-                            let app_proxy = app_proxy.lock().unwrap();
-                            if let Some(app_proxy) = app_proxy.as_ref() {
-                                app_proxy.send_event(UserEvent::ReLayout);
-                            }
+                        paragraph.lock().unwrap().replace({
+                            let text_align = match item.get_layout_direction().get() {
+                                LayoutDirection::LTR => TextAlign::Left,
+                                LayoutDirection::RTL => TextAlign::Right,
+                            };
+                            let max_width = match width_mode {
+                                MeasureMode::Specified(width) => item.clamp_width(width),
+                                MeasureMode::Unspecified(width) => item.clamp_width(width),
+                            };
+                            create_paragraph(&property, text_align, max_width)
                         });
-                    } else {
-                        let mut paragraph_lock = context.paragraph.lock().unwrap();
-                        let paragraph = paragraph_lock.as_mut().unwrap();
-
-                        let padding_horizontal = item.get_padding(Orientation::Horizontal);
-                        let padding_vertical = item.get_padding(Orientation::Vertical);
-
-                        let (width, height) = match width_mode {
-                            MeasureMode::Specified(width) => {
-                                let width = item.clamp_width(width);
-                                paragraph.re_layout(width - padding_horizontal);
-                                match height_mode {
-                                    MeasureMode::Specified(height) => {
-                                        let height = item.clamp_height(height);
-                                        (width, height)
-                                    }
-                                    MeasureMode::Unspecified(_) => {
-                                        let height = paragraph.layout_height() + padding_vertical;
-                                        (width, height)
-                                    }
-                                }
-                            }
-                            MeasureMode::Unspecified(_) => {
-                                paragraph.re_layout(item.get_max_width().get() - padding_horizontal);
-                                let paragraph_width = paragraph.layout_width();
-                                let paragraph_height = paragraph.layout_height();
-                                match height_mode {
-                                    MeasureMode::Specified(height) => {
-                                        let height = item.clamp_height(height);
-                                        (item.clamp_width(paragraph_width + padding_horizontal + 1.0), height)
-                                    }
-                                    MeasureMode::Unspecified(_) => {
-                                        (item.clamp_width(paragraph_width + padding_horizontal + 1.0), item.clamp_height(paragraph_height + padding_vertical))
-                                    }
-                                }
-                            }
-                        };
-                        let measure_parameter = item.get_measure_parameter();
-                        measure_parameter.width = width;
-                        measure_parameter.height = height;
                     }
+                    let mut paragraph_lock = context.paragraph.lock().unwrap();
+                    let paragraph = paragraph_lock.as_mut().unwrap();
+
+                    let padding_horizontal = item.get_padding(Orientation::Horizontal);
+                    let padding_vertical = item.get_padding(Orientation::Vertical);
+
+                    let (width, height) = match width_mode {
+                        MeasureMode::Specified(width) => {
+                            let width = item.clamp_width(width);
+                            paragraph.re_layout(width - padding_horizontal);
+                            match height_mode {
+                                MeasureMode::Specified(height) => {
+                                    let height = item.clamp_height(height);
+                                    (width, height)
+                                }
+                                MeasureMode::Unspecified(_) => {
+                                    let height = paragraph.layout_height() + padding_vertical;
+                                    (width, height)
+                                }
+                            }
+                        }
+                        MeasureMode::Unspecified(_) => {
+                            paragraph.re_layout(item.get_max_width().get() - padding_horizontal);
+                            let paragraph_width = paragraph.layout_width();
+                            let paragraph_height = paragraph.layout_height();
+                            match height_mode {
+                                MeasureMode::Specified(height) => {
+                                    let height = item.clamp_height(height);
+                                    (item.clamp_width(paragraph_width + padding_horizontal + 1.0), height)
+                                }
+                                MeasureMode::Unspecified(_) => {
+                                    (item.clamp_width(paragraph_width + padding_horizontal + 1.0), item.clamp_height(paragraph_height + padding_vertical))
+                                }
+                            }
+                        }
+                    };
+                    let measure_parameter = item.get_measure_parameter();
+                    measure_parameter.width = width;
+                    measure_parameter.height = height;
                 }
             })
             .layout({
                 let property = property.clone();
                 let context = context.clone();
                 move |item, width, _height| {
-                    let property = property.lock().unwrap();
                     let mut paragraph = context.paragraph.lock().unwrap();
                     if let Some(paragraph) = paragraph.as_mut() {
                         paragraph.re_layout(width - item.get_padding(Orientation::Horizontal));
@@ -150,7 +146,7 @@ impl TextBlock {
                 }
             })
             .ime_input({
-                move |item, ime_action|{
+                move |item, ime_action| {
                     println!("IME input: {:?}", ime_action);
                 }
             })
@@ -239,8 +235,8 @@ impl TextBlock {
                     }
                 }
             })
-            .on_click(|item, click_source|{
-                if click_source==ClickSource::Mouse(MouseButton::Left) || click_source==ClickSource::Touch {
+            .on_click(|item, click_source| {
+                if click_source == ClickSource::Mouse(MouseButton::Left) || click_source == ClickSource::Touch {
                     item.get_focused().set(true);
                 }
             })

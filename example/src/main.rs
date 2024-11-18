@@ -184,10 +184,12 @@ fn main_ui(app: AppContext, property: AppProperty) -> Item {
     let margin_top = F32Property::from(50.0);
     let vertical_gravity = Property::from(Gravity::End);
     let horizontal_gravity = Property::from(Gravity::End);
-    
+
     // let txt_file = "/home/grounzer/Downloads/long.txt";
     // let long_text = std::fs::read_to_string(txt_file).unwrap();
-    // 
+    //
+
+    let text = "Hello, world!";
     app.stack(Children::new() +
         app.stack(Children::new() +
             app.rectangle()
@@ -202,30 +204,85 @@ fn main_ui(app: AppContext, property: AppProperty) -> Item {
                     property.title().set("Blue rectangle clicked".to_string());
                     property.maximized().set(property.maximized().get().not())
                 })) +
-            // app.text_block(long_text)
-            //     .color(Color::RED)
-            //     .font_size(14.0)
-            //     .item() +
-            // app.text_block(long_text)
-            //     .color(Color::RED)
-            //     .font_size(14.0)
-            //     .item() +
-            // app.text_block(long_text)
-            //     .color(Color::RED)
-            //     .font_size(14.0)
-            //     .item() +
-            // app.text_block(long_text)
-            //     .color(Color::RED)
-            //     .font_size(14.0)
-            //     .item() +
-            // app.text_block(long_text)
-            //     .color(Color::RED)
-            //     .font_size(14.0)
-            //     .item() +
-            // app.text_block(long_text)
-            //     .color(Color::RED)
-            //     .font_size(14.0)
-            //     .item() +
+
+            app.flex(Children::new() +
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()+
+                app.text_block(text).item()
+            )
+                .direction(FlexDirection::Horizontal)
+                .wrap(FlexWrap::Wrap).item()
+                .width(Size::Fixed(400.0))+
+
             app.rectangle()
                 .color(Color::WHITE).item()
                 .width(&size).height(&size)
@@ -255,7 +312,8 @@ fn main_ui(app: AppContext, property: AppProperty) -> Item {
                         }
                     })).duration(Duration::from_secs(5)).start();
                 }))
-        ).item()
+        )
+            .item()
             .width(Size::Fixed(400.0))
             .height(Size::Fixed(400.0))
             .horizontal_gravity(&horizontal_gravity)

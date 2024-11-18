@@ -20,10 +20,10 @@ env_logger = "0.11.5"
 icu = "1.5.0"
 bitflags = "2.6.0"
 bezier-rs = "0.4.0"
-reqwest = {version = "0.12.8",features = ["blocking"]}
-material_color_utilities = {path = "material_color_utilities"}
-skia-safe = {version = "0.78.2",features = ["textlayout","embed-icudtl","svg"]}
-skia-bindings = "0.78.2"
+reqwest = {version = "0.12.9",features = ["blocking"]}
+material_color_utilities = {path = "../material_color_utilities" }
+skia-safe = {version = "0.80.1",features = ["textlayout","embed-icudtl","svg","d3d","gl"]}
+skia-bindings = "0.80.0"
 [target.'cfg(target_os = "windows")'.dependencies]
 winapi = {version = "0.3.9", features = ["winreg", "dwmapi", "windef", "winuser"] }
 
