@@ -1,7 +1,12 @@
 [workspace]
+resolver = "2"
 members = [
     "example",
     "winia",
     "skiwin",
     "material_color_utilities"
 ]
+
+[workspace.dependencies]
+winit = "0.30"
+skia-safe = "0.80.1"

@@ -13,7 +13,7 @@ use winia::ui::component::{RectangleExt, TextBlockExt};
 use winia::ui::{App, Item};
 use winia::ui::animation::{AnimationExt, Target};
 
-#[cfg(not(target_os = "android"))]
+// #[cfg(not(target_os = "android"))]
 fn main() {
     run_app(
         App::new(main_ui)

@@ -150,7 +150,7 @@ impl VulkanContext {
             {
                 let (physical_device, _) = &result;
                 let device_properties = physical_device.properties();
-                println!("Using device: {} ", device_properties.device_name);
+                // println!("Using device: {} ", device_properties.device_name);
             }
             
             result

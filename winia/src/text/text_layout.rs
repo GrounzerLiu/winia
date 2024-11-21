@@ -1,20 +1,10 @@
-use std::collections::{HashMap, HashSet};
-use std::ops::Range;
-use std::sync::{Arc, Mutex};
-use icu::segmenter::GraphemeClusterSegmenter;
-use lazy_static::lazy_static;
-use skia_safe::{Canvas, Color, FontMgr, FontStyle, Paint, Point};
+use crate::text::{Style, StyledText};
+use bimap::BiBTreeMap;
 use skia_safe::textlayout::{FontCollection, Paragraph, ParagraphBuilder, ParagraphStyle, RectHeightStyle, RectWidthStyle, TextAlign, TextBox, TextDecoration, TextDirection, TextRange, TextStyle};
-
-use crate::text::{Style,    StyledText};
-
-/*lazy_static!(
-    static ref FONT_COLLECTION: Arc<Mutex<FontCollection>> = {
-        let mut font_collection = FontCollection::new();
-        font_collection.set_default_font_manager(FontMgr::default(), None);
-        Arc::new(Mutex::new(font_collection))
-    };
-);*/
+use skia_safe::{Canvas, Color, FontMgr, FontStyle, Paint, Point};
+use std::collections::{BTreeMap, HashSet};
+use std::ops::Range;
+use unicode_segmentation::UnicodeSegmentation;
 
 thread_local! {
     static FONT_COLLECTION: FontCollection = {
@@ -32,21 +22,19 @@ pub struct ParagraphWrapper {
     //text:String,
     paragraph: Paragraph,
     range: Range<usize>,
-    byte_to_utf16_indices: HashMap<usize, usize>,
-    utf16_to_byte_indices: HashMap<usize, usize>,
-    glyph_to_byte_indices: HashMap<usize, usize>,
-    byte_to_glyph_indices: HashMap<usize, usize>,
+    byte_to_utf16_indices: BiBTreeMap<usize, usize>,
+    byte_to_grapheme_indices: BiBTreeMap<usize, usize>,
     line_breaks: HashSet<TextRange>,
-    glyph_length: usize,
-    utf16_length: usize,
-    byte_length: usize,
+    // grapheme_length: usize,
+    // utf16_length: usize,
+    // byte_length: usize,
+    length: usize,
 }
 
 impl ParagraphWrapper {
     pub fn new(text: &StyledText, range: Range<usize>, max_width: f32, text_align: TextAlign) -> ParagraphWrapper {
-
         let mut text_style = TextStyle::default();
-        text_style.set_font_size(30.0);
+        text_style.set_font_size(16.0);
         text_style.set_color(Color::BLACK);
 
         let mut paragraph_style = ParagraphStyle::default();
@@ -66,77 +54,52 @@ impl ParagraphWrapper {
             });
         };
 
-        // style_segments.iter().for_each(|style_segment| {
-        //     paragraph_builder.add_style_segment(style_segment);
-        // });
-
         let mut paragraph = paragraph_builder.build();
-        // let instant = std::time::Instant::now();
         paragraph.layout(max_width);
 
-        // println!("Paragraph layout time: {}ms", instant.elapsed().as_millis());
 
-        let mut byte_to_utf16_indices = HashMap::new();
-        byte_to_utf16_indices.insert(0, 0);
+        let mut byte_to_utf16_indices = BiBTreeMap::new();
+        // byte_to_utf16_indices.insert(0, 0);
 
-        let mut utf16_to_byte_indices = HashMap::new();
-        utf16_to_byte_indices.insert(0, 0);
-
-        let mut glyph_to_byte_indices = HashMap::new();
-        glyph_to_byte_indices.insert(0, 0);
-
-        let mut byte_to_glyph_indices = HashMap::new();
-        byte_to_glyph_indices.insert(0, 0);
+        let mut byte_to_grapheme_indices = BiBTreeMap::new();
+        // byte_to_grapheme_indices.insert(0, 0);
 
         let mut line_breaks = HashSet::new();
 
-        let mut glyph_index = 1;
-
-        let segmenter = GraphemeClusterSegmenter::new();
-        let mut iter = segmenter.segment_str(text.as_str());
+        let mut last_byte_index = 0;
         let mut last_utf16_index = 0;
-        let mut last_index = iter.next();
+        let mut last_grapheme_index = 0;
 
-        let mut glyph_length = 0;
-        let mut utf16_length = 0;
+        text.as_str()[range.clone()].graphemes(true).for_each(|grapheme| {
+            byte_to_utf16_indices.insert(last_byte_index, last_utf16_index);
+            byte_to_grapheme_indices.insert(last_byte_index, last_grapheme_index);
 
-        for index in iter {
-            let range = last_index.unwrap()..index;
-            let str = &text[range.clone()];
+            let byte_length = grapheme.len();
+            let utf16_length = grapheme.encode_utf16().count();
+            let grapheme_length = 1;
+            last_byte_index += byte_length;
+            last_utf16_index += utf16_length;
+            last_grapheme_index += grapheme_length;
 
-            if str == "\r\n" || str == "\n" {
-                line_breaks.insert(range);
+            if grapheme == "\r\n" || grapheme == "\n" || grapheme == "\r" {
+                line_breaks.insert(last_byte_index..last_byte_index + byte_length);
             }
-
-            let count = str.encode_utf16().count();
-            let utf16_index = last_utf16_index + count;
-            byte_to_utf16_indices.insert(index, utf16_index);
-            utf16_to_byte_indices.insert(utf16_index, index);
-            utf16_length = utf16_index;
-            last_utf16_index += count;
-            last_index = Some(index);
-
-            glyph_to_byte_indices.insert(glyph_index, index);
-            byte_to_glyph_indices.insert(index, glyph_index);
-            glyph_length = glyph_index;
-            glyph_index += 1;
-        }
+        });
 
         ParagraphWrapper {
             //text,
             paragraph,
             range,
             byte_to_utf16_indices,
-            utf16_to_byte_indices,
-            glyph_to_byte_indices,
-            byte_to_glyph_indices,
+            byte_to_grapheme_indices,
             line_breaks,
-            glyph_length,
-            utf16_length,
-            byte_length: text.len(),
+            length: text.len(),
+            // grapheme_length,
+            // utf16_length,
+            // byte_length: text.len(),
         }
     }
-    
+
     pub fn re_layout(&mut self, max_width: f32) {
         self.paragraph.layout(max_width);
     }
@@ -165,18 +128,18 @@ impl ParagraphWrapper {
     /// get the cursor position and height of the line at the index
     /// * return (x,y,height)
     pub fn get_cursor_position(&self, index: usize) -> (f32, f32, f32) {
-        if self.byte_length == 0 {
+        if self.length == 0 {
             let boxes = self.paragraph.get_rects_for_range(0..1, RectHeightStyle::Max, RectWidthStyle::Tight);
             let box0 = boxes[0];
             return (box0.rect.left, box0.rect.top, box0.rect.height());
         }
         let is_start = index == 0;
 
-        let utf16_index = *self.byte_to_utf16_indices.get(&index).expect(format!("index:{} is not a grapheme cluster boundary", index).as_str());
-        let glyph_index = *self.byte_to_glyph_indices.get(&index).unwrap();
+        let utf16_index = *self.byte_to_utf16_indices.get_by_left(&index).expect(format!("index:{} is not a grapheme cluster boundary", index).as_str());
+        let glyph_index = *self.byte_to_grapheme_indices.get_by_left(&index).unwrap();
         if is_start {
-            let next_byte_index = *self.glyph_to_byte_indices.get(&(glyph_index + 1)).unwrap();
-            let next_utf16_index = *self.byte_to_utf16_indices.get(&next_byte_index).unwrap();
+            let next_byte_index = *self.byte_to_utf16_indices.get_by_right(&(glyph_index + 1)).unwrap();
+            let next_utf16_index = *self.byte_to_utf16_indices.get_by_left(&next_byte_index).unwrap();
             let boxes = self.paragraph.get_rects_for_range(utf16_index..next_utf16_index, RectHeightStyle::Max, RectWidthStyle::Tight);
             let box0 = boxes[0];
             if box0.direct == TextDirection::LTR {
@@ -185,12 +148,12 @@ impl ParagraphWrapper {
                 (box0.rect.right, box0.rect.top, box0.rect.height())
             }
         } else {
-            let prev_byte_index = *self.glyph_to_byte_indices.get(&(glyph_index - 1)).unwrap();
-            let prev_utf16_index = *self.byte_to_utf16_indices.get(&prev_byte_index).unwrap();
+            let prev_byte_index = *self.byte_to_utf16_indices.get_by_right(&(glyph_index - 1)).unwrap();
+            let prev_utf16_index = *self.byte_to_utf16_indices.get_by_left(&prev_byte_index).unwrap();
 
             if self.line_breaks.contains(&(prev_byte_index..index)) {
-                let next_byte_index = *self.glyph_to_byte_indices.get(&(glyph_index + 1)).unwrap();
-                let next_utf16_index = *self.byte_to_utf16_indices.get(&next_byte_index).unwrap();
+                let next_byte_index = *self.byte_to_utf16_indices.get_by_right(&(glyph_index + 1)).unwrap();
+                let next_utf16_index = *self.byte_to_utf16_indices.get_by_left(&next_byte_index).unwrap();
                 let boxes = self.paragraph.get_rects_for_range(utf16_index..next_utf16_index, RectHeightStyle::Max, RectWidthStyle::Tight);
                 let box0 = boxes[0];
                 (box0.rect.left, box0.rect.top, box0.rect.height())
@@ -207,13 +170,13 @@ impl ParagraphWrapper {
     }
 
     pub fn get_rects_for_range(&self, range: Range<usize>) -> Vec<TextBox> {
-        let utf16_start_index = *self.byte_to_utf16_indices.get(&range.start).unwrap();
-        let utf16_end_index = *self.byte_to_utf16_indices.get(&range.end).unwrap();
+        let utf16_start_index = *self.byte_to_utf16_indices.get_by_left(&range.start).unwrap();
+        let utf16_end_index = *self.byte_to_utf16_indices.get_by_left(&range.end).unwrap();
         self.paragraph.get_rects_for_range(utf16_start_index..utf16_end_index, RectHeightStyle::Max, RectWidthStyle::Tight)
     }
 
     pub fn glyph_index_to_byte_index(&self, glyph_index: usize) -> usize {
-        if let Some(byte_index) = self.glyph_to_byte_indices.get(&glyph_index) {
+        if let Some(byte_index) = self.byte_to_utf16_indices.get_by_right(&glyph_index) {
             *byte_index
         } else {
             panic!("glyph_index_to_byte_index: glyph_index not found");
@@ -221,7 +184,7 @@ impl ParagraphWrapper {
     }
 
     pub fn byte_index_to_glyph_index(&self, byte_index: usize) -> usize {
-        if let Some(glyph_index) = self.byte_to_glyph_indices.get(&byte_index) {
+        if let Some(glyph_index) = self.byte_to_grapheme_indices.get_by_left(&byte_index) {
             *glyph_index
         } else {
             panic!("the index of {} is not a grapheme cluster boundary", byte_index);
@@ -229,7 +192,7 @@ impl ParagraphWrapper {
     }
 
     pub fn utf16_index_to_byte_index(&self, utf16_index: usize) -> usize {
-        if let Some(byte_index) = self.utf16_to_byte_indices.get(&utf16_index) {
+        if let Some(byte_index) = self.byte_to_utf16_indices.get_by_right(&utf16_index) {
             *byte_index
         } else {
             panic!("the index of {} is not a grapheme cluster boundary", utf16_index);
@@ -263,17 +226,17 @@ impl ParagraphWrapper {
         0
     }
 
-    pub fn glyph_length(&self) -> usize {
-        self.glyph_length
-    }
-
-    pub fn utf16_length(&self) -> usize {
-        self.utf16_length
-    }
-
-    pub fn byte_length(&self) -> usize {
-        self.byte_length
-    }
+    // pub fn grapheme_length(&self) -> usize {
+    //     self.grapheme_length
+    // }
+    //
+    // pub fn utf16_length(&self) -> usize {
+    //     self.utf16_length
+    // }
+    //
+    // pub fn char_length(&self) -> usize {
+    //     self.byte_length
+    // }
 
     pub fn inner_paragraph(&self) -> &Paragraph {
         &self.paragraph
@@ -343,7 +306,7 @@ struct StyleSegment<'text> {
 impl<'text> StyleSegment<'text> {
     pub fn new(text: &'text StyledText, range: &Range<usize>, def_text_style: &TextStyle) -> StyleSegment<'text> {
         StyleSegment {
-            text: &text[range.clone()],
+            text: text.as_str(),
             range: range.clone(),
             text_style: def_text_style.clone(),
         }
@@ -399,7 +362,7 @@ trait AddStyleSegment {
 impl AddStyleSegment for ParagraphBuilder {
     fn add_style_segment(&mut self, style_segment: &StyleSegment) {
         self.push_style(&style_segment.text_style);
-        self.add_text(style_segment.text);
+        self.add_text(&style_segment.text[style_segment.range.clone()]);
         self.pop();
     }
 }

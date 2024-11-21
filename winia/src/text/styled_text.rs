@@ -4,7 +4,7 @@ use std::ops::{Add, Index, Range};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
-use icu::segmenter::GraphemeClusterSegmenter;
+// use icu::segmenter::GraphemeClusterSegmenter;
 use crate::core::generate_id;
 use crate::property::{Observable, Removal};
 use crate::text::EdgeBehavior;
@@ -340,22 +340,22 @@ impl <T:AsRef<StyledText> +'static> Add<T> for StyledText {
 
 
 
-pub(crate) fn foreach_grapheme_cluster(text: &str, mut f: impl FnMut(Range<usize>)->Option<Range<usize>>)->Option<Range<usize>>{
-    let segmenter = GraphemeClusterSegmenter::new();
-    let mut iter = segmenter.segment_str(text);
-    let mut last_index = iter.next();
-    while let Some(next_index) = iter.next() {
-        if let Some(last_index) = last_index {
-            if let Some(range)=f(last_index..next_index) {
-                return Some(range);
-            }
-        }
-        else{
-            break;
-        }
-        last_index = Some(next_index);
-    }
-    None
-}
+// pub(crate) fn foreach_grapheme_cluster(text: &str, mut f: impl FnMut(Range<usize>)->Option<Range<usize>>)->Option<Range<usize>>{
+//     let segmenter = GraphemeClusterSegmenter::new();
+//     let mut iter = segmenter.segment_str(text);
+//     let mut last_index = iter.next();
+//     while let Some(next_index) = iter.next() {
+//         if let Some(last_index) = last_index {
+//             if let Some(range)=f(last_index..next_index) {
+//                 return Some(range);
+//             }
+//         }
+//         else{
+//             break;
+//         }
+//         last_index = Some(next_index);
+//     }
+//     None
+// }
 
 
