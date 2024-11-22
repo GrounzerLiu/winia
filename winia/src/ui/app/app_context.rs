@@ -125,6 +125,7 @@ impl AppContext {
     
     pub fn request_focus(&self, id: usize, focused: bool) {
         self.focused_item.lock().unwrap().0 = Some((id, focused));
+        self.request_redraw();
     }
 }
 

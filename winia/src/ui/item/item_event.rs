@@ -4,9 +4,9 @@ use crate::property::Gettable;
 use crate::ui::item::InnerPosition;
 use crate::ui::Item;
 use crate::OptionalInvoke;
-use skia_bindings::SkTileMode;
+// use skia_bindings::SkTileMode;
 use skia_safe::image_filters::CropRect;
-use skia_safe::{image_filters, Canvas, Paint, Point, Rect, Surface};
+use skia_safe::{image_filters, Canvas, Paint, Point, Rect, Surface, TileMode};
 use std::sync::{Arc, Mutex};
 use winit::event::{DeviceId, Force, KeyEvent, MouseButton, TouchPhase};
 
@@ -180,7 +180,7 @@ impl ItemEvent {
                         };
                         let canvas = surface.canvas();
                         let mut paint = Paint::default();
-                        paint.set_image_filter(image_filters::blur((35.0, 35.0), SkTileMode::Clamp, None, CropRect::from(
+                        paint.set_image_filter(image_filters::blur((35.0, 35.0), TileMode::Clamp, None, CropRect::from(
                             Rect::from_wh(
                                 width as f32,
                                 height as f32,

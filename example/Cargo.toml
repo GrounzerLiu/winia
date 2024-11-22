@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 winia = { path = "../winia" }
 env_logger = "0.11.5"
-log = "0.4.21"
+log = "0.4.22"
 
 #winit = {version = "0.29.3",features = ["android-native-activity"]}
 
@@ -19,6 +19,6 @@ cfg_aliases = "0.2.1"
 [patch.crates-io]
 
 [lib]
-crate_type=["cdylib"]
+crate-type=["cdylib"]
 path= "src/main.rs"
 

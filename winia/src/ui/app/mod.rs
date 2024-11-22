@@ -638,6 +638,10 @@ pub fn run_app(app: App) {
 }
 
 #[cfg(target_os = "android")]
+use winit::platform::android::activity::AndroidApp;
+#[cfg(target_os = "android")]
+use winit::platform::android::EventLoopBuilderExtAndroid;
+#[cfg(target_os = "android")]
 pub fn run_app(app: App, android_app: AndroidApp) {
     let event_loop = EventLoop::<UserEvent>::with_user_event().with_android_app(android_app).build().unwrap();
     run_app_with_event_loop(app.into(), event_loop);

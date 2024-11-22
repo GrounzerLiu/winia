@@ -46,64 +46,6 @@ pub enum LayoutDirection {
     RTL,
 }
 
-/*#[derive(Clone, Copy, Debug, PartialEq, Default)]
-pub struct Padding {
-    pub start: f32,
-    pub top: f32,
-    pub end: f32,
-    pub bottom: f32,
-}
-
-impl Padding {
-    pub fn new(start: f32, top: f32, end: f32, bottom: f32) -> Self {
-        Self { start, top, end, bottom }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Default)]
-pub struct Margin {
-    pub start: f32,
-    pub top: f32,
-    pub end: f32,
-    pub bottom: f32,
-}
-
-impl Margin {
-    pub fn new(start: f32, top: f32, end: f32, bottom: f32) -> Self {
-        Self { start, top, end, bottom }
-    }
-}*/
-
-/*
-pub struct DisplayParameter {
-    parent_x: f32,
-    parent_y: f32,
-    width: f32,
-    height: f32,
-    relative_x: f32,
-    relative_y: f32,
-    offset_x: f32,
-    offset_y: f32,
-    opacity: f32,
-    rotation: f32,
-    rotation_center_x: f32,
-    rotation_center_y: f32,
-    scale_x: f32,
-    scale_y: f32,
-    scale_center_x: f32,
-    scale_center_y: f32,
-    skew_x: f32,
-    skew_y: f32,
-    skew_center_x: f32,
-    skew_center_y: f32,
-    float_params: HashMap<String, f32>,
-    color_params: HashMap<String, Color>,
-}*/
-
-/*        if let Some((start, animation)) = &self.animations.parent_x{
-            display_parameter.set_parent_x(animation.interpolate_f32(*start, self.display_parameter.parent_x()))
-        }*/
-
 macro_rules! calculate_animation_value {
     ($name:ident, $s:ident, $display_parameter:ident) => {
         let p = {
@@ -427,16 +369,23 @@ impl Item {
         self.focused.remove_observer(id);
         let mut app_context = self.app_context.ref_clone();
         self.focused = focused.into();
-        let on_focus = self.on_focus.clone();
-        let focused_property = self.focused.ref_clone();
         self.focused.add_specific_observer(
             id,
             move|focused| {
                 app_context.request_focus(id, *focused);
-                app_context.request_re_layout();
             }
         );
         self
+    }
+
+    pub(crate) fn focus(&mut self, focused: bool) {
+        let on_focus = self.on_focus.clone();
+        on_focus.lock().unwrap().iter_mut().for_each(|f| f(focused));
+        let on_focus = self.item_event.on_focus.clone();
+        {
+            let mut on_focus = on_focus.lock().unwrap();
+            on_focus(self, focused)
+        }
     }
     
     pub fn get_focused(&self) -> Property<bool> {
