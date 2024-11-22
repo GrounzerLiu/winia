@@ -4,7 +4,9 @@ members = [
     "example",
     "winia",
     "skiwin",
-    "material_color_utilities"
+    "material_color_utilities",
+    "exmaple2",
+    "softbuffer"
 ]
 
 [workspace.dependencies]
