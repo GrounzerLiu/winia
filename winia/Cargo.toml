@@ -25,11 +25,11 @@ material_color_utilities = {path = "../material_color_utilities" }
 unicode-segmentation = "1.12.0"
 bimap = "0.6.3"
 
-#[target.'cfg(unix)'.dependencies]
+[target.'cfg(target_os = "linux")'.dependencies]
 skia-safe = {workspace = true, features = ["textlayout","embed-icudtl","svg"]}
 
-#[target.'cfg(windows)'.dependencies]
-#skia-safe = {version = "0.80.1", features = ["textlayout","embed-icudtl","svg","d3d","gl"]}
+[target.'cfg(target_os = "windows")'.dependencies]
+skia-safe = {workspace = true, features = ["textlayout","embed-icudtl","svg","d3d","gl"]}
 ##winapi = {version = "0.3.9", features = ["winreg", "dwmapi", "windef", "winuser"] }
 
 
