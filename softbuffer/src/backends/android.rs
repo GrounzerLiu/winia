@@ -141,7 +141,7 @@ impl<'a, D: HasDisplayHandle, W: HasWindowHandle> BufferInterface for BufferImpl
         for (output, input) in self
             .native_window_buffer
             .lines()
-            // Unreachable as we checked before that this is a valid, mappable format
+            // Unreachable as we checked before that this is a valid, mappable format2
             .unwrap()
             .zip(input_lines)
         {

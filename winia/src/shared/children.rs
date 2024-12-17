@@ -3,7 +3,7 @@ use std::ops::Add;
 use std::sync::{Arc, LockResult, Mutex, MutexGuard, Weak};
 use crate::core::generate_id;
 use crate::{LockUnwrap, OptionalInvoke};
-use crate::property::{Observable, Removal};
+use crate::shared::{Observable, Removal};
 use crate::ui::Item;
 use crate::ui::item::DisplayParameter;
 

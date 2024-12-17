@@ -7,7 +7,7 @@ use skia_safe::{BlendMode, Canvas, Color, Data, FilterMode, FontMgr, Image as Sk
 use skia_safe::canvas::SaveLayerRec;
 use skia_safe::svg::Dom;
 use skia_safe::wrapper::PointerWrapper;
-use crate::property::{BoolProperty, Gettable, Property};
+use crate::shared::{BoolProperty, Gettable, Property};
 use crate::ui::app::{AppContext, UserEvent};
 use crate::ui::Item;
 use crate::ui::item::{DisplayParameter, ItemEvent, MeasureMode, Orientation};

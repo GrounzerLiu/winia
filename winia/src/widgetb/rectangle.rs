@@ -7,7 +7,7 @@ use crate::app::{SharedApp, ThemeColor};
 use crate::uib::Item;
 use crate::uib::{ItemEvent, LayoutDirection, MeasureMode};
 use crate::uib::additional_property::{ShadowBlur, ShadowColor, ShadowOffsetX, ShadowOffsetY};
-use crate::property::{BoolProperty, ColorProperty, FloatProperty, Gettable, Observable, Observer};
+use crate::shared::{BoolProperty, ColorProperty, FloatProperty, Gettable, Observable, Observer};
 
 struct RectangleProperties {
     color: ColorProperty,

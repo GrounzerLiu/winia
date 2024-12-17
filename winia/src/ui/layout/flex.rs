@@ -1,7 +1,7 @@
 use std::ops::Not;
 use std::sync::{Arc, Mutex};
 use crate::core::RefClone;
-use crate::property::{Children, Gettable, Observable, Property, UsizeProperty};
+use crate::shared::{Children, Gettable, Observable, Shared, SharedUsize};
 use crate::ui::app::AppContext;
 use crate::ui::item::{CustomProperty, ItemEvent, LogicalX, MeasureMode, Orientation};
 use crate::ui::Item;
@@ -61,19 +61,19 @@ pub enum AlignContent {
 }
 
 pub trait FlexGrow {
-    fn flex_grow(self, value: impl Into<UsizeProperty>) -> Self;
-    fn get_flex_grow(&self) -> Option<UsizeProperty>;
+    fn flex_grow(self, value: impl Into<SharedUsize>) -> Self;
+    fn get_flex_grow(&self) -> Option<SharedUsize>;
 }
 
 impl FlexGrow for Item {
-    /// Set the flex-grow property of the item.
+    /// Set the flex-grow shared of the item.
     ///
     /// It only works when the parent of the item is Flex.
     ///
     /// If the value is 0, the item will not grow.
     ///
     /// The items with value greater than 0 will be resized proportionally to the remaining space.
-    fn flex_grow(self, flex_grow: impl Into<UsizeProperty>) -> Self {
+    fn flex_grow(self, flex_grow: impl Into<SharedUsize>) -> Self {
         if let Some(mut flex_grow) = self.get_flex_grow() {
             flex_grow.remove_observer(self.get_id());
         }
@@ -85,7 +85,7 @@ impl FlexGrow for Item {
         self.custom_property("flex_grow", CustomProperty::Usize(flex_grow))
     }
 
-    fn get_flex_grow(&self) -> Option<UsizeProperty> {
+    fn get_flex_grow(&self) -> Option<SharedUsize> {
         match self.get_custom_property("flex_grow") {
             None => { None }
             Some(p) => {
@@ -99,13 +99,13 @@ impl FlexGrow for Item {
 }
 
 struct FlexProperties {
-    pub direction: Property<FlexDirection>,
-    pub wrap: Property<FlexWrap>,
-    pub justify_content: Property<JustifyContent>,
-    pub align_items: Property<AlignItems>,
-    pub align_content: Property<AlignContent>,
-    pub main_axis_gap: Property<f32>,
-    pub cross_axis_gap: Property<f32>,
+    pub direction: Shared<FlexDirection>,
+    pub wrap: Shared<FlexWrap>,
+    pub justify_content: Shared<JustifyContent>,
+    pub align_items: Shared<AlignItems>,
+    pub align_content: Shared<AlignContent>,
+    pub main_axis_gap: Shared<f32>,
+    pub cross_axis_gap: Shared<f32>,
 }
 
 
@@ -381,12 +381,12 @@ fn calculate_size(
 
 pub struct Flex {
     item: Item,
-    properties: Arc<Mutex<FlexProperties>>,
+    properties: Shared<FlexProperties>,
 }
 
 impl Flex {
     pub fn new(app_context: AppContext, children: Children) -> Self {
-        let properties = Arc::new(Mutex::new(FlexProperties {
+        let properties =Shared::new(FlexProperties {
             direction: FlexDirection::Horizontal.into(),
             wrap: FlexWrap::NoWrap.into(),
             justify_content: JustifyContent::Start.into(),
@@ -394,13 +394,13 @@ impl Flex {
             align_content: AlignContent::Start.into(),
             main_axis_gap: 0.0.into(),
             cross_axis_gap: 0.0.into(),
-        }));
+        });
 
         let item_event = ItemEvent::new()
             .measure({
-                let properties = properties.clone();
+                let properties = properties.ref_clone();
                 move |item, width_mode, height_mode| {
-                    let properties = properties.lock().unwrap();
+                    let properties = properties.value();
                     item.measure_children(width_mode, height_mode);
                     let direction = properties.direction.get();
                     let wrap = properties.wrap.get();
@@ -469,7 +469,7 @@ impl Flex {
                         return;
                     }
 
-                    let properties = properties.lock().unwrap();
+                    let properties = properties.value();
                     let direction = properties.direction.get();
                     let wrap = properties.wrap.get();
                     let justify_content = properties.justify_content.get();
@@ -1104,11 +1104,11 @@ impl Flex {
         }
     }
 
-    pub fn direction(self, direction: impl Into<Property<FlexDirection>>) -> Self {
+    pub fn direction(self, direction: impl Into<Shared<FlexDirection>>) -> Self {
         {
             let id = self.item.get_id();
             let app_context = self.item.get_app_context();
-            let mut properties = self.properties.lock().unwrap();
+            let mut properties = self.properties.value();
             properties.direction.remove_observer(id);
             properties.direction = direction.into();
             properties.direction.add_observer(
@@ -1121,11 +1121,11 @@ impl Flex {
         self
     }
 
-    pub fn wrap(self, wrap: impl Into<Property<FlexWrap>>) -> Self {
+    pub fn wrap(self, wrap: impl Into<Shared<FlexWrap>>) -> Self {
         {
             let id = self.item.get_id();
             let app_context = self.item.get_app_context();
-            let mut properties = self.properties.lock().unwrap();
+            let mut properties = self.properties.value();
             properties.wrap.remove_observer(id);
             properties.wrap = wrap.into();
             properties.wrap.add_observer(
@@ -1138,11 +1138,11 @@ impl Flex {
         self
     }
 
-    pub fn justify_content(self, justify_content: impl Into<Property<JustifyContent>>) -> Self {
+    pub fn justify_content(self, justify_content: impl Into<Shared<JustifyContent>>) -> Self {
         {
             let id = self.item.get_id();
             let app_context = self.item.get_app_context();
-            let mut properties = self.properties.lock().unwrap();
+            let mut properties = self.properties.value();
             properties.justify_content.remove_observer(id);
             properties.justify_content = justify_content.into();
             properties.justify_content.add_observer(
@@ -1155,11 +1155,11 @@ impl Flex {
         self
     }
 
-    pub fn align_items(self, align_items: impl Into<Property<AlignItems>>) -> Self {
+    pub fn align_items(self, align_items: impl Into<Shared<AlignItems>>) -> Self {
         {
             let id = self.item.get_id();
             let app_context = self.item.get_app_context();
-            let mut properties = self.properties.lock().unwrap();
+            let mut properties = self.properties.value();
             properties.align_items.remove_observer(id);
             properties.align_items = align_items.into();
             properties.align_items.add_observer(
@@ -1172,11 +1172,11 @@ impl Flex {
         self
     }
 
-    pub fn align_content(self, align_content: impl Into<Property<AlignContent>>) -> Self {
+    pub fn align_content(self, align_content: impl Into<Shared<AlignContent>>) -> Self {
         {
             let id = self.item.get_id();
             let app_context = self.item.get_app_context();
-            let mut properties = self.properties.lock().unwrap();
+            let mut properties = self.properties.value();
             properties.align_content.remove_observer(id);
             properties.align_content = align_content.into();
             properties.align_content.add_observer(
@@ -1189,11 +1189,11 @@ impl Flex {
         self
     }
 
-    pub fn main_axis_gap(self, main_axis_gap: impl Into<Property<f32>>) -> Self {
+    pub fn main_axis_gap(self, main_axis_gap: impl Into<Shared<f32>>) -> Self {
         {
             let id = self.item.get_id();
             let app_context = self.item.get_app_context();
-            let mut properties = self.properties.lock().unwrap();
+            let mut properties = self.properties.value();
             properties.main_axis_gap.remove_observer(id);
             properties.main_axis_gap = main_axis_gap.into();
             properties.main_axis_gap.add_observer(
@@ -1206,11 +1206,11 @@ impl Flex {
         self
     }
 
-    pub fn cross_axis_gap(self, cross_axis_gap: impl Into<Property<f32>>) -> Self {
+    pub fn cross_axis_gap(self, cross_axis_gap: impl Into<Shared<f32>>) -> Self {
         {
             let id = self.item.get_id();
             let app_context = self.item.get_app_context();
-            let mut properties = self.properties.lock().unwrap();
+            let mut properties = self.properties.value();
             properties.cross_axis_gap.remove_observer(id);
             properties.cross_axis_gap = cross_axis_gap.into();
             properties.cross_axis_gap.add_observer(

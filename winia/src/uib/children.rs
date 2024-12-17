@@ -1,7 +1,7 @@
 /*use std::rc::Rc;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use crate::property::{Observable, Observer, Observers};
+use crate::shared::{Observable, Observer, Observers};
 use crate::uib::Item;
 
 #[derive(Clone)]

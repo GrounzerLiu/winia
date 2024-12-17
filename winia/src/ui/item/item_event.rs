@@ -1,6 +1,6 @@
 use std::ops::Not;
 use crate::app::Theme;
-use crate::property::Gettable;
+use crate::shared::Gettable;
 use crate::ui::item::InnerPosition;
 use crate::ui::Item;
 use crate::OptionalInvoke;
@@ -35,7 +35,7 @@ pub enum MeasureMode {
     Unspecified(f32),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PointerState {
     Started,
     Moved,
@@ -88,7 +88,7 @@ pub enum ImeAction {
 //     Mouse(MouseButton),
 //     Touch(u64),
 // }
-// 
+//
 // #[derive(Clone, Copy, Debug)]
 // pub struct PointerEvent {
 //     pub device_id: DeviceId,
@@ -98,7 +98,7 @@ pub enum ImeAction {
 //     pub pointer_state: PointerState,
 //     pub force: Option<Force>,
 // }
-// 
+//
 // impl From<TouchEvent> for PointerEvent {
 //     fn from(value: TouchEvent) -> Self {
 //         Self {
@@ -111,7 +111,7 @@ pub enum ImeAction {
 //         }
 //     }
 // }
-// 
+//
 // impl From<MouseEvent> for PointerEvent {
 //     fn from(value: MouseEvent) -> Self {
 //         Self {
@@ -156,8 +156,12 @@ pub struct ItemEvent {
     pub(crate) touch_input: Arc<Mutex<dyn FnMut(&mut Item, TouchEvent)>>,
     pub(crate) on_click: Arc<Mutex<dyn FnMut(&mut Item, ClickSource)>>,
     pub(crate) ime_input: Arc<Mutex<dyn FnMut(&mut Item, ImeAction)>>,
-    pub(crate) keyboard_input: Arc<Mutex<dyn FnMut(&mut Item, DeviceId, KeyEvent, bool)>>,
+    pub(crate) dispatch_keyboard_input: Arc<Mutex<dyn FnMut(&mut Item, DeviceId, KeyEvent, bool) -> bool>>,
+    pub(crate) keyboard_input: Arc<Mutex<dyn FnMut(&mut Item, DeviceId, KeyEvent, bool) -> bool>>,
+    pub(crate) dispatch_focus: Arc<Mutex<dyn FnMut(&mut Item)>>,
     pub(crate) on_focus: Arc<Mutex<dyn FnMut(&mut Item, bool)>>,
+    pub(crate) dispatch_timer: Arc<Mutex<dyn FnMut(&mut Item, usize) -> bool>>,
+    pub(crate) timer: Arc<Mutex<dyn FnMut(&mut Item, usize) -> bool>>,
 }
 
 impl ItemEvent {
@@ -188,7 +192,7 @@ impl ItemEvent {
                         )));
                         canvas.save();
                         let scale_factor = 1.0 /item.get_app_context().scale_factor();
-                        
+
                         canvas.clip_rect(
                             Rect::from_xywh(display_parameter.x(), display_parameter.y(), display_parameter.width, display_parameter.height),
                             None,
@@ -211,7 +215,7 @@ impl ItemEvent {
                 let skew_center_y = display_parameter.skew_center_y;
                 let scale_center_x = display_parameter.scale_center_x;
                 let scale_center_y = display_parameter.scale_center_y;
-                
+
                 {
                     let canvas = surface.canvas();
                     canvas.save();
@@ -220,7 +224,7 @@ impl ItemEvent {
                             display_parameter.rotation_center_x, display_parameter.rotation_center_y,
                         )
                     ));
-                    
+
                     canvas.translate((skew_center_x, skew_center_y));
                     canvas.skew((skew_x, skew_y));
                     canvas.translate((-skew_center_x, -skew_center_y));
@@ -230,8 +234,10 @@ impl ItemEvent {
                     canvas.translate((-scale_center_x, -scale_center_y));
                 }
 
-                item.get_background().value().if_mut_some(|background| {
-                    background.dispatch_draw(surface, x, y);
+                item.get_background().write(|background| {
+                    if let Some(background) = background {
+                        background.dispatch_draw(surface, x, y);
+                    }
                 });
                 {
                     let canvas = surface.canvas();
@@ -240,10 +246,11 @@ impl ItemEvent {
                 item.get_children().items().iter_mut().for_each(|child| {
                     child.dispatch_draw(surface, x, y);
                 });
-                item.get_foreground().value().if_mut_some(|foreground| {
-                    foreground.dispatch_draw(surface, x, y);
+                item.get_foreground().write(|foreground| {
+                    if let Some(foreground) = foreground {
+                        foreground.dispatch_draw(surface, x, y);
+                    }
                 });
-
 
                 {
                     let canvas = surface.canvas();
@@ -307,7 +314,7 @@ impl ItemEvent {
                         MeasureMode::Unspecified(max_size) => max_size,
                     }
                 }
-                
+
                 let max_width = item.get_max_width().get();
                 let max_height = item.get_max_height().get();
                 let min_width = item.get_min_width().get();
@@ -324,8 +331,46 @@ impl ItemEvent {
             touch_input: Arc::new(Mutex::new(|_item: &mut Item, _event: TouchEvent| {})),
             on_click: Arc::new(Mutex::new(|_item: &mut Item, _source: ClickSource| {})),
             ime_input: Arc::new(Mutex::new(|_item: &mut Item, _action: ImeAction| {})),
-            keyboard_input: Arc::new(Mutex::new(|_item: &mut Item, _device_id: DeviceId, _event: KeyEvent, _is_synthetic: bool| {})),
+            dispatch_keyboard_input: Arc::new(Mutex::new(|item: &mut Item, device_id: DeviceId, event: KeyEvent, is_synthetic: bool| {
+                let keyboard_input = item.item_event.keyboard_input.clone();
+                if keyboard_input.lock().unwrap()(item, device_id, event.clone(), is_synthetic){
+                    return true;
+                }
+                item.get_children().items().iter_mut().any(|child| {
+                    let dispatch_keyboard_input = child.item_event.dispatch_keyboard_input.clone();
+                    let r = dispatch_keyboard_input.lock().unwrap()(child, device_id, event.clone(), is_synthetic);
+                    r
+                })
+            })),
+            keyboard_input: Arc::new(Mutex::new(|_item: &mut Item, _device_id: DeviceId, _event: KeyEvent, _is_synthetic: bool| false)),
+            dispatch_focus: Arc::new(Mutex::new(|item: &mut Item| {
+                let focus_changed_items = item.get_app_context().focus_changed_items;
+                let focused = item.get_focused().get();
+                {
+                    let focus_changed_items = focus_changed_items.value();
+                    if focus_changed_items.contains(&item.get_id()){
+                        item.focus(focused)
+                    }
+                }
+                item.get_children().items().iter_mut().for_each(|child| {
+                    child.dispatch_focus();
+                });
+            })),
             on_focus: Arc::new(Mutex::new(|_item: &mut Item, _focused: bool| {})),
+            dispatch_timer: Arc::new(Mutex::new(
+                |item: &mut Item, id: usize|{
+                    let timer = item.item_event.timer.clone();
+                    if timer.lock().unwrap()(item, id){
+                        return true;
+                    }
+                    item.get_children().items().iter_mut().any(|child| {
+                        let dispatch_timer = child.item_event.dispatch_timer.clone();
+                        let r = dispatch_timer.lock().unwrap()(child, id);
+                        r
+                    })
+                }
+            )),
+            timer: Arc::new(Mutex::new(|_item: &mut Item, _id: usize| false)),
         }
     }
 
@@ -354,7 +399,7 @@ impl ItemEvent {
     }
 
     /// Closure parameters: item, width_mode, height_mode
-    /// 
+    ///
     /// Do not retain any state in this closure, except for the `measure_parameter`.
     /// Because this closure is used to calculate the recommended size of the item,
     /// the `layout` closure is actually responsible for setting the actual size of the item.
@@ -368,24 +413,34 @@ impl ItemEvent {
         self.apply_theme = Arc::new(Mutex::new(apply_theme));
         self
     }
-    
+
+    pub fn on_mouse_input(mut self, on_mouse_input: impl FnMut(&mut Item, MouseEvent) + 'static) -> Self {
+        self.mouse_input = Arc::new(Mutex::new(on_mouse_input));
+        self
+    }
+
     pub fn on_click(mut self, on_click: impl FnMut(&mut Item, ClickSource) + 'static) -> Self {
         self.on_click = Arc::new(Mutex::new(on_click));
         self
     }
-    
+
     pub fn ime_input(mut self, ime_input: impl FnMut(&mut Item, ImeAction) + 'static) -> Self {
         self.ime_input = Arc::new(Mutex::new(ime_input));
         self
     }
-    
-    pub fn keyboard_input(mut self, keyboard_input: impl FnMut(&mut Item, DeviceId, KeyEvent, bool) + 'static) -> Self {
+
+    pub fn keyboard_input(mut self, keyboard_input: impl FnMut(&mut Item, DeviceId, KeyEvent, bool) -> bool + 'static) -> Self {
         self.keyboard_input = Arc::new(Mutex::new(keyboard_input));
         self
     }
-    
+
     pub fn on_focus(mut self, on_focus: impl FnMut(&mut Item, bool) + 'static) -> Self {
         self.on_focus = Arc::new(Mutex::new(on_focus));
+        self
+    }
+
+    pub fn timer(mut self, timer: impl FnMut(&mut Item, usize) -> bool + 'static) -> Self {
+        self.timer = Arc::new(Mutex::new(timer));
         self
     }
 }

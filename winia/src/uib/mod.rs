@@ -9,7 +9,7 @@
 // pub use item_event::*;
 // pub use logical_x::*;
 // 
-// use crate::property::{Gettable, ObservableProperty, Size};
+// use crate::shared::{Gettable, ObservableProperty, Size};
 // 
 // mod item;
 // // mod rectangle;

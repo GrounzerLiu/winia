@@ -1,13 +1,13 @@
 use std::sync::{Arc, Mutex};
 use crate::core::{generate_id, RefClone};
-use crate::property::{Children, Gettable, GravityProperty, Observable};
+use crate::shared::{Children, Gettable, SharedGravity, Observable};
 use crate::ui::app::AppContext;
 use crate::ui::Item;
 use crate::ui::item::{Gravity, ItemEvent, LogicalX, MeasureMode, Orientation, Size};
 
 struct StackProperty{
-    horizontal_gravity: GravityProperty,
-    vertical_gravity: GravityProperty,
+    horizontal_gravity: SharedGravity,
+    vertical_gravity: SharedGravity,
 }
 
 pub struct Stack {
@@ -118,20 +118,20 @@ impl Stack {
     }
     
     // pub fn gravity(mut self, gravity: impl Into<GravityProperty>) -> Self {
-    //     let mut property = self.property.lock().unwrap();
-    //     property.gravity = gravity.into();
+    //     let mut shared = self.shared.lock().unwrap();
+    //     shared.gravity = gravity.into();
     //     let app_context = self.item.get_app_context();
-    //     property.gravity.add_observer(
+    //     shared.gravity.add_observer(
     //         generate_id(),
     //         Box::new(move || {
     //             app_context.request_redraw();
     //         }),
     //     );
-    //     drop(property);
+    //     drop(shared);
     //     self
     // }
     
-    pub fn horizontal_gravity(mut self, gravity: impl Into<GravityProperty>) -> Self {
+    pub fn horizontal_gravity(mut self, gravity: impl Into<SharedGravity>) -> Self {
         let mut property = self.property.lock().unwrap();
         property.horizontal_gravity = gravity.into();
         let app_context = self.item.get_app_context();
@@ -145,7 +145,7 @@ impl Stack {
         self
     }
     
-    pub fn vertical_gravity(mut self, gravity: impl Into<GravityProperty>) -> Self {
+    pub fn vertical_gravity(mut self, gravity: impl Into<SharedGravity>) -> Self {
         let mut property = self.property.lock().unwrap();
         property.vertical_gravity = gravity.into();
         let app_context = self.item.get_app_context();

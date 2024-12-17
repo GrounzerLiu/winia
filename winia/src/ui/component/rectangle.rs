@@ -1,13 +1,13 @@
 use std::sync::{Arc, Mutex};
 use skia_safe::{Color, Rect};
 use crate::core::RefClone;
-use crate::property::{Children, ColorProperty, Gettable};
+use crate::shared::{Children, SharedColor, Gettable};
 use crate::ui::app::AppContext;
 use crate::ui::Item;
 use crate::ui::item::{InnerPosition, ItemEvent, MeasureMode, Orientation};
 
 struct RectangleProperty {
-    color: ColorProperty,
+    color: SharedColor,
 }
 impl RefClone for RectangleProperty {
     fn ref_clone(&self) -> Self {
@@ -65,7 +65,7 @@ impl Rectangle {
         }
     }
 
-    pub fn color(self, color: impl Into<ColorProperty>) -> Self {
+    pub fn color(self, color: impl Into<SharedColor>) -> Self {
         let mut rectangle_property = self.rectangle_property.lock().unwrap();
         rectangle_property.color = color.into();
         drop(rectangle_property);

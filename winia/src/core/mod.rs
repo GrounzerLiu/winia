@@ -1,6 +1,7 @@
 mod ref_clone;
 
 pub use ref_clone::*;
+
 use std::collections::HashMap;
 
 use lazy_static::lazy_static;
@@ -42,10 +43,4 @@ macro_rules! func{
             $body
         }
     };
-}
-
-impl<T> RefClone for Arc<T> {
-    fn ref_clone(&self) -> Self {
-        self.clone()
-    }
 }

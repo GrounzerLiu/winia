@@ -57,7 +57,7 @@ impl VulkanSkiaWindow {
         let skia_surface = create_surface(&mut skia_context, size);
         let soft_buffer_context = softbuffer::Context::new(window.clone()).unwrap();
         let soft_buffer_surface = softbuffer::Surface::new(&soft_buffer_context, window).unwrap();
-
+        // soft_buffer_surface.buffer_mut().unwrap().present()
         Self {
             skia_context,
             skia_surface,
@@ -102,7 +102,7 @@ impl VulkanContext {
         let instance: Arc<Instance> = {
             let instance_extensions = InstanceExtensions {
                 khr_get_physical_device_properties2: true,
-                khr_portability_enumeration: true,
+                // khr_portability_enumeration: true,
                 ..Default::default()
             };
 

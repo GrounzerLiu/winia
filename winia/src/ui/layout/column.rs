@@ -1,5 +1,5 @@
 use crate::core::RefClone;
-use crate::property::Children;
+use crate::shared::Children;
 use crate::ui::app::AppContext;
 use crate::ui::Item;
 use crate::ui::layout::{Flex, FlexDirection, FlexWrap};

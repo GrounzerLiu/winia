@@ -6,8 +6,7 @@ members = [
     "skiwin",
     "material_color_utilities",
     "exmaple2",
-    "softbuffer"
-]
+    "softbuffer", "winia/proc-macro"]
 
 [workspace.dependencies]
 winit = "0.30"

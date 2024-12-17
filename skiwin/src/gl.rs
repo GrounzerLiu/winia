@@ -17,13 +17,13 @@ use glutin::context::{ContextApi, ContextAttributesBuilder, PossiblyCurrentGlCon
 use softbuffer::SoftBufferError;
 use crate::{create_surface, impl_skia_window, SkiaWindow};
 
-pub struct GlWindow {
+pub struct GlSkiaWindow {
     skia_context: DirectContext,
     skia_surface: Arc<Mutex<Surface>>,
     soft_buffer_surface: softbuffer::Surface<Arc<Window>, Arc<Window>>,
 }
 
-impl GlWindow {
+impl GlSkiaWindow {
     pub fn new(window: Window, device_selector: Option<Box<dyn Fn(&Device) -> bool>>) -> Self {
         let devices = Device::query_devices().expect("Failed to query devices").collect::<Vec<_>>();
 
@@ -103,7 +103,7 @@ impl GlWindow {
     }
 }
 
-impl_skia_window!(GlWindow);
+impl_skia_window!(GlSkiaWindow);
 
 fn config_template() -> ConfigTemplate {
     ConfigTemplateBuilder::default()

@@ -1,11 +1,11 @@
 use crate::core::{get_id_by_str, RefClone};
+use crate::ui::animation::{EaseOutCirc, Interpolator, Target};
+use crate::ui::app::AppContext;
 use material_color_utilities::blend_cam16ucs;
 use material_color_utilities::utils::argb_from_rgb;
 use skia_safe::Color;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use crate::ui::animation::{EaseOutCirc, Interpolator, Target};
-use crate::ui::app::AppContext;
 
 pub(crate) struct InnerAnimation {
     pub app_context: AppContext,
@@ -17,7 +17,7 @@ pub(crate) struct InnerAnimation {
 }
 
 impl InnerAnimation {
-    pub fn new(app_context: AppContext,target: Target) -> Self {
+    pub fn new(app_context: AppContext, target: Target) -> Self {
         Self {
             app_context,
             duration: Duration::from_millis(500),
@@ -50,14 +50,14 @@ impl InnerAnimation {
         let b = blend_u32 as u8;
         Color::from_argb(a, r, g, b)
     }
-    
+
     pub fn is_target(&self, id: usize) -> bool {
         match &self.target {
             Target::Exclusion(targets) => !targets.contains(&id),
             Target::Inclusion(targets) => targets.contains(&id),
         }
     }
-    
+
     pub fn is_finished(&self) -> bool {
         self.start_time.elapsed() >= self.duration
     }
@@ -68,12 +68,11 @@ pub struct Animation {
 }
 
 impl Animation {
-    pub fn new(app_context: AppContext,target: Target) -> Self {
+    pub fn new(app_context: AppContext, target: Target) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(InnerAnimation::new(app_context,target))),
+            inner: Arc::new(Mutex::new(InnerAnimation::new(app_context, target))),
         }
     }
-    
 
     pub fn duration(self, duration: Duration) -> Self {
         {
@@ -92,7 +91,7 @@ impl Animation {
         self
     }
 
-    /// What you should in the `transformation` closure is 
+    /// What you should in the `transformation` closure is
     /// setting the properties of the [`Item`](crate::ui::item::Item) that you want to animate.
     pub fn transformation(self, transformation: impl FnMut() + 'static) -> Self {
         {
@@ -101,22 +100,24 @@ impl Animation {
         }
         self
     }
-    
+
     pub fn start(self) {
         let mut app_context = self.inner.lock().unwrap().app_context.ref_clone();
-        app_context.starting_animations.lock().unwrap().push_back(self);
+        app_context
+            .starting_animations
+            .write(|starting_animations| starting_animations.push_back(self.ref_clone()));
     }
 
     pub fn is_finished(&self) -> bool {
         let inner = self.inner.lock().unwrap();
         inner.is_finished()
     }
-    
+
     pub fn is_target(&self, id: usize) -> bool {
         let inner = self.inner.lock().unwrap();
         inner.is_target(id)
     }
-    
+
     pub fn interpolate_f32(&self, start: f32, end: f32) -> f32 {
         let inner = self.inner.lock().unwrap();
         inner.interpolate_f32(start, end)

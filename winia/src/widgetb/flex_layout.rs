@@ -79,7 +79,7 @@ struct FlexLayoutProperties {
     justify_content: ObservableProperty<FlexAlign>,
     /// The alignment of the child elements along the cross axis in the
     align_items: ObservableProperty<ItemAlign>,
-    /// When a flex container has multiple flex lines, this property defines how flex items are aligned on the cross axis.
+    /// When a flex container has multiple flex lines, this shared defines how flex items are aligned on the cross axis.
     align_content: ObservableProperty<FlexAlign>,
     /// The minimum space between items on the main axis.
     /// Note: This space refers to the distance between items and does not include the margins of the items.

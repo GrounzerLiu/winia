@@ -1,5 +1,5 @@
 use std::ops::Add;
-use crate::property::{Gettable, Property};
+use crate::shared::{Gettable, Shared};
 use crate::core::RefClone;
 
 macro_rules! p_op_v {
@@ -10,7 +10,7 @@ macro_rules! p_op_v {
             fn $op_fn(self, rhs: $r) -> Self::Output {
                 let lhs = self.ref_clone();
                 let rhs = rhs.clone();
-                let mut output = Property::from_dynamic(Box::new(move || {
+                let mut output = Shared::from_dynamic(Box::new(move || {
                     lhs.get().$op_fn(rhs)
                 }));
                 output.observe(self);
@@ -28,7 +28,7 @@ macro_rules! v_op_p {
             fn $op_fn(self, rhs: $r) -> Self::Output {
                 let lhs = self.clone();
                 let rhs_clone = rhs.ref_clone();
-                let mut output = Property::from_dynamic(Box::new(move || {
+                let mut output = Shared::from_dynamic(Box::new(move || {
                     lhs.$op_fn(rhs_clone.get())
                 }));
                 output.observe(rhs);
@@ -46,7 +46,7 @@ macro_rules! p_op_p {
             fn $op_fn(self, rhs: $r) -> Self::Output {
                 let lhs = self.ref_clone();
                 let rhs_clone = rhs.ref_clone();
-                let mut output = Property::from_dynamic(Box::new(move || {
+                let mut output = Shared::from_dynamic(Box::new(move || {
                     lhs.get().$op_fn(rhs_clone.get())
                 }));
                 output.observe(self);
@@ -57,20 +57,20 @@ macro_rules! p_op_p {
     };
 }
 
-pub type I8Property = Property<i8>;
-pub type I16Property = Property<i16>;
-pub type I32Property = Property<i32>;
-pub type I64Property = Property<i64>;
-pub type I128Property = Property<i128>;
-pub type IsizeProperty = Property<isize>;
-pub type U8Property = Property<u8>;
-pub type U16Property = Property<u16>;
-pub type U32Property = Property<u32>;
-pub type U64Property = Property<u64>;
-pub type U128Property = Property<u128>;
-pub type UsizeProperty = Property<usize>;
-pub type F32Property = Property<f32>;
-pub type F64Property = Property<f64>;
+pub type SharedI8 = Shared<i8>;
+pub type SharedI16 = Shared<i16>;
+pub type SharedI32 = Shared<i32>;
+pub type SharedI64 = Shared<i64>;
+pub type SharedI128 = Shared<i128>;
+pub type SharedIsize = Shared<isize>;
+pub type SharedU8 = Shared<u8>;
+pub type SharedU16 = Shared<u16>;
+pub type SharedU32 = Shared<u32>;
+pub type SharedU64 = Shared<u64>;
+pub type SharedU128 = Shared<u128>;
+pub type SharedUsize = Shared<usize>;
+pub type SharedF32 = Shared<f32>;
+pub type SharedF64 = Shared<f64>;
 
 
 macro_rules! impl_p_op_v {
@@ -125,27 +125,27 @@ macro_rules! impl_property {
     }
 }
 
-impl_property!(I8Property, i8);
-impl_property!(I16Property, i16);
-impl_property!(I32Property, i32);
-impl_property!(I64Property, i64);
-impl_property!(I128Property, i128);
-impl_property!(IsizeProperty, isize);
-impl_property!(U8Property, u8);
-impl_property!(U16Property, u16);
-impl_property!(U32Property, u32);
-impl_property!(U64Property, u64);
-impl_property!(U128Property, u128);
-impl_property!(UsizeProperty, usize);
-impl_property!(F32Property, f32);
-impl_property!(F64Property, f64);
+impl_property!(SharedI8, i8);
+impl_property!(SharedI16, i16);
+impl_property!(SharedI32, i32);
+impl_property!(SharedI64, i64);
+impl_property!(SharedI128, i128);
+impl_property!(SharedIsize, isize);
+impl_property!(SharedU8, u8);
+impl_property!(SharedU16, u16);
+impl_property!(SharedU32, u32);
+impl_property!(SharedU64, u64);
+impl_property!(SharedU128, u128);
+impl_property!(SharedUsize, usize);
+impl_property!(SharedF32, f32);
+impl_property!(SharedF64, f64);
 
 macro_rules! into_type {
     ($from: ty, $to: ident) =>{
-        impl Property<$from> {
-            pub fn $to(&self) -> Property<$to> {
+        impl Shared<$from> {
+            pub fn $to(&self) -> Shared<$to> {
                 let self_clone = self.ref_clone();
-                let mut output = Property::from_dynamic(Box::new(move || {
+                let mut output = Shared::from_dynamic(Box::new(move || {
                     self_clone.get() as $to
                 }));
                 output.observe(self.ref_clone());

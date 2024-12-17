@@ -10,10 +10,12 @@ pub mod gl;
 #[cfg(feature = "gl")]
 pub use glutin;
 
-use skia_safe::Surface;
+use skia_safe::{ImageInfo, Surface};
 use softbuffer::SoftBufferError;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
+use skia_safe::gpu::{Budgeted, DirectContext, SurfaceOrigin};
+use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
 pub trait SkiaWindow: Deref<Target = Window> {
@@ -23,22 +25,22 @@ pub trait SkiaWindow: Deref<Target = Window> {
     fn present(&mut self);
 }
 
-// pub(crate) fn create_surface(skia_context: &mut DirectContext, size: impl Into<PhysicalSize<u32>>) -> Arc<Mutex<Surface>> {
-//     let size = size.into();
-//     let width = size.width;
-//     let height = size.height;
-//     let image_info = ImageInfo::new_n32_premul((width as i32, height as i32), None);
-//     Arc::new(Mutex::new(skia_safe::gpu::surfaces::render_target(
-//         skia_context,
-//         Budgeted::Yes,
-//         &image_info,
-//         None,
-//         SurfaceOrigin::TopLeft,
-//         None,
-//         false,
-//         None,
-//     ).unwrap()))
-// }
+pub(crate) fn create_surface(skia_context: &mut DirectContext, size: impl Into<PhysicalSize<u32>>) -> Arc<Mutex<Surface>> {
+    let size = size.into();
+    let width = size.width;
+    let height = size.height;
+    let image_info = ImageInfo::new_n32_premul((width as i32, height as i32), None);
+    Arc::new(Mutex::new(skia_safe::gpu::surfaces::render_target(
+        skia_context,
+        Budgeted::Yes,
+        &image_info,
+        None,
+        SurfaceOrigin::TopLeft,
+        None,
+        false,
+        None,
+    ).unwrap()))
+}
 
 #[macro_export]
 macro_rules! impl_skia_window {

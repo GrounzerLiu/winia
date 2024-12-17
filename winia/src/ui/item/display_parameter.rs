@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use skia_safe::Color;
 use material_color_utilities::blend_cam16ucs;
 use crate::core::RefClone;
-use crate::property::{Gettable, Property};
+use crate::shared::{Gettable, Shared};
 use crate::ui::Item;
 use crate::ui::item::Orientation;
 

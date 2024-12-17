@@ -5,13 +5,14 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[features]
-default = ["vulkan"]
-vulkan = ["skiwin/vulkan"]
-gl = ["skiwin/gl"]
+#[features]
+#default = ["vulkan"]
+#vulkan = ["skiwin/vulkan"]
+#gl = ["skiwin/gl"]
 
 [dependencies]
-skiwin = {path = "../skiwin"}
+proc-macro = { path = "proc-macro" }
+skiwin = {path = "../skiwin", features = ["vulkan","gl"]}
 lazy_static = "1.5.0"
 raw-window-handle = "0.6.2"
 env_logger = "0.11.5"

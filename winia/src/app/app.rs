@@ -8,7 +8,7 @@ use winit::window::Window;
 
 use crate::app::AppProxy;
 use crate::app::Theme;
-use crate::property::BoolProperty;
+use crate::shared::BoolProperty;
 use crate::uib::{Item, LayoutDirection, Pointer};
 
 #[derive(Clone, Debug)]

@@ -1,5 +1,5 @@
 pub mod app;
-pub mod property;
+pub mod shared;
 pub mod text;
 pub mod ui;
 pub mod theme;
@@ -10,6 +10,13 @@ pub mod core;
 use std::ops::{Deref, DerefMut};
 pub use winit::*;
 pub use skia_safe;
+
+mod test{
+    #[test]
+    fn test(){
+
+    }
+}
 
 pub trait OptionalInvoke<T> {
     fn if_some(self, invoke: impl FnOnce(T));

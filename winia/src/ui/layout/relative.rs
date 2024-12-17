@@ -1,7 +1,7 @@
 /*use std::any::{Any, TypeId};
 use std::sync::{Arc, Mutex};
 use crate::core::{get_id_by_str, RefClone};
-use crate::property::{Children, Gettable, Observable, Property};
+use crate::shared::{Children, Gettable, Observable, Property};
 use crate::ui::app::AppContext;
 use crate::ui::Item;
 use crate::ui::item::{CustomProperty, ItemEvent};
@@ -196,12 +196,12 @@ struct RelativeProperty {}
 
 pub struct Relative {
     item: Item,
-    property: Arc<Mutex<RelativeProperty>>,
+    shared: Arc<Mutex<RelativeProperty>>,
 }
 
 impl Relative {
     pub fn new(app_context: AppContext, children: Children) -> Self {
-        let property = Arc::new(Mutex::new(RelativeProperty {}));
+        let shared = Arc::new(Mutex::new(RelativeProperty {}));
         let item_event = ItemEvent::new()
             .measure({
                 move |item, width_mode, height_mode| {}
