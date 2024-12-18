@@ -1,5 +1,5 @@
 use crate::text::style::Style;
-use crate::text::{create_segments, font_collection, AddStyleSegment, EdgeBehavior, StyleType, TextLayout};
+use crate::text::{create_segments, font_collection, AddStyleSegment, StyleType, TextLayout};
 use bimap::BiBTreeMap;
 use skia_safe::textlayout::{Paragraph, ParagraphBuilder, ParagraphStyle, TextAlign, TextRange, TextStyle};
 use std::collections::{HashMap, HashSet};
@@ -11,7 +11,10 @@ use unicode_segmentation::UnicodeSegmentation;
 
 pub struct StyledText {
     string: String,
-    styles: Vec<(Style, Range<usize>, EdgeBehavior)>,
+    /// Style,
+    /// The range of the style,
+    /// Should the range expand to include the text inserted at the end of the range or not
+    styles: Vec<(Style, Range<usize>, bool)>,
     line_breaks: HashSet<Range<usize>>,
     byte_to_utf16_indices: BiBTreeMap<usize, usize>,
     byte_to_glyph_indices: BiBTreeMap<usize, usize>,
@@ -92,13 +95,6 @@ impl StyledText {
         if self.string.is_empty() {
             let mut text = self.clone();
             text.push(' ');
-            // for (style, range, _) in self.styles.iter() {
-            //     if range.start == 0 && range.end == 0 {
-            //         if let Style::FontSize(size) = style {
-            //             text.set_style(style.clone(), 0..1, EdgeBehavior::ExcludeAndExclude);
-            //         }
-            //     }
-            // }
             create_segments(&text, &(0..text.len()), text_style)
                 .iter()
                 .for_each(|style_segment| {
@@ -147,22 +143,25 @@ impl StyledText {
     pub fn substring(&self, range: Range<usize>) -> StyledText {
         self.assert_in_range(&range);
         let string = self.string[range.clone()].to_string();
-        let mut styles: Vec<(Style, Range<usize>, EdgeBehavior)> = Vec::new();
+        let mut styles: Vec<(Style, Range<usize>, bool)> = Vec::new();
         for (style, style_range, edge_behavior) in self.styles.iter() {
-            if style_range.start < range.start {
-                if style_range.end > range.start {
-                    styles.push((
-                        style.clone(),
-                        style_range.start - range.start..style_range.end - range.start,
-                        edge_behavior.clone(),
-                    ));
-                }
-            } else if style_range.start >= range.start && style_range.end < range.end {
-                styles.push((
-                    style.clone(),
-                    style_range.start - range.start..style_range.end - range.start,
-                    edge_behavior.clone(),
-                ));
+            // The start of the style range is in the substring
+            if style_range.start >= range.start && style_range.start <= range.end {
+                let new_start = style_range.start - range.start;
+                let new_end = if style_range.end > range.end { // The end of the style range is outside the substring
+                    range.end - range.start
+                } else {
+                    style_range.end - range.start
+                };
+                styles.push((style.clone(), new_start..new_end, edge_behavior.clone()));
+            } else if style_range.end >= range.start && style_range.end <= range.end {
+                let new_start = if style_range.start < range.start { // The start of the style range is outside the substring
+                    0
+                } else {
+                    style_range.start - range.start
+                };
+                let new_end = style_range.end - range.start;
+                styles.push((style.clone(), new_start..new_end, edge_behavior.clone()));
             }
         }
         let mut styled_text = StyledText{
@@ -187,16 +186,16 @@ impl StyledText {
 
     pub fn insert(&mut self, index: usize, string: &str) {
         self.string.insert_str(index, string);
-        self.styles.iter_mut().for_each(|(_, range, _)| {
-            if range.start == range.end && range.start == index {
-                range.end += string.len();
-            } else {
-                if range.start >= index {
-                    range.start += string.len();
-                }
-                if range.end >= index {
+        self.styles.iter_mut().for_each(|(_, range, expanded)| {
+            if index == range.end { // Inserted at the end of the range
+                if *expanded {
                     range.end += string.len();
                 }
+            } else if index > range.start && index < range.end { // Inserted in the range
+                range.end += string.len();
+            } else if index <= range.start { // Inserted before the range
+                range.start += string.len();
+                range.end += string.len();
             }
         });
         self.update();
@@ -204,6 +203,13 @@ impl StyledText {
 
     pub fn remove(&mut self, range: Range<usize>) {
         self.string.drain(range.clone());
+        self.styles.retain(|(_, style_range, _)| {
+            // Remove the style if the range is inside the style range
+            if style_range.start > range.start && style_range.end <= range.end {
+                return false
+            }
+            true
+        });
         self.styles.iter_mut().for_each(|(_, style_range, _)| {
             if style_range.start >= range.end {
                 style_range.start -= range.end - range.start;
@@ -239,58 +245,56 @@ impl StyledText {
         }
     }
 
-    pub fn set_style(&mut self, style: Style, range: Range<usize>, boundary_type: EdgeBehavior) {
+    pub fn set_style(&mut self, style: Style, range: Range<usize>, expanded: bool) {
         self.assert_in_range(&range);
 
-        let style_clone = style.clone();
-
-        self.remove_style(style, range.clone());
-        self.styles.push((style_clone, range, boundary_type));
+        self.remove_style(style.style_type(), range.clone());
+        self.styles.push((style, range, expanded));
         self.paragraph.take();
     }
 
-    pub fn get_styles(&self, range: Range<usize>) -> Vec<(Style, Range<usize>, EdgeBehavior)> {
+    pub fn get_styles(&self, range: Range<usize>) -> Vec<(Style, Range<usize>, bool)> {
         self.assert_in_range(&range);
-        let mut styles: Vec<(Style, Range<usize>, EdgeBehavior)> = Vec::new();
-        for (style, style_range, edge_behavior) in self.styles.iter() {
+        let mut styles: Vec<(Style, Range<usize>, bool)> = Vec::new();
+        for (style, style_range, expanded) in self.styles.iter() {
             if style_range.start >= range.start && style_range.end <= range.end {
-                styles.push((*style, style_range.clone(), *edge_behavior));
+                styles.push((*style, style_range.clone(), *expanded));
             }
         }
         styles
     }
 
-    pub fn retain_styles(&mut self, f: impl Fn(&Style, &Range<usize>, &EdgeBehavior) -> bool) {
-        self.styles.retain(|(style, range, edge_behavior)| f(style, range, edge_behavior));
+    pub fn retain_styles(&mut self, f: impl Fn(&Style, &Range<usize>, &bool) -> bool) {
+        self.styles.retain(|(style, range, expanded)| f(style, range, expanded));
         self.paragraph.take();
     }
 
-    pub fn remove_style(&mut self, style: Style, range: Range<usize>) {
+    pub fn remove_style(&mut self, style_type: StyleType, range: Range<usize>) {
         self.assert_in_range(&range);
 
-        let mut segmented_styles: Vec<(Style, Range<usize>, EdgeBehavior)> = Vec::new();
+        let mut segmented_styles: Vec<(Style, Range<usize>, bool)> = Vec::new();
 
-        self.styles.retain(|(s, style_range, boundary_type)| {
-            if s.name() == style.name() {
+        self.styles.retain(|(style, style_range, expanded)| {
+            if style.style_type() == style_type {
                 if range.start <= style_range.start {
-                    if range.end > style_range.start {
+                    return if range.end > style_range.start {
                         if range.end < style_range.end {
                             segmented_styles.push((
-                                *s,
+                                *style,
                                 range.end..style_range.end,
-                                boundary_type.clone(),
+                                *expanded,
                             ));
                         }
-                        return false;
+                        false
                     } else {
-                        return true;
+                        true
                     }
                 } else if range.start == style_range.start {
                     if range.end < style_range.end {
                         segmented_styles.push((
-                            *s,
+                            *style,
                             range.end..style_range.end,
-                            boundary_type.clone(),
+                            *expanded,
                         ));
                         return false;
                     } else if range.end >= style_range.end {
@@ -299,21 +303,21 @@ impl StyledText {
                 } else if range.start > style_range.start {
                     if range.end < style_range.end {
                         segmented_styles.push((
-                            *s,
+                            *style,
                             style_range.start..range.start,
-                            boundary_type.clone(),
+                            expanded.clone(),
                         ));
                         segmented_styles.push((
-                            *s,
+                            *style,
                             range.end..style_range.end,
-                            boundary_type.clone(),
+                            expanded.clone(),
                         ));
                         return false;
                     } else if range.end >= style_range.end {
                         segmented_styles.push((
-                            *s,
+                            *style,
                             style_range.start..range.start,
-                            boundary_type.clone(),
+                            expanded.clone(),
                         ));
                         return false;
                     }

@@ -25,6 +25,7 @@ impl Display for StyleType {
     }
 }
 
+/// The style of the text.
 #[derive(Copy, Clone, Debug)]
 pub enum Style{
     Bold,
@@ -60,12 +61,4 @@ impl Style{
             Style::TextColor(_) => StyleType::TextColor,
         }
     }
-}
-
-#[derive(Copy, Clone, Debug)]
-pub enum EdgeBehavior{
-    IncludeAndInclude,
-    IncludeAndExclude,
-    ExcludeAndInclude,
-    ExcludeAndExclude,
 }
