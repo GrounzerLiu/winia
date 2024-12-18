@@ -1,27 +1,25 @@
-use crate::core::{RefClone};
+use crate::core::RefClone;
 use crate::dpi::{LogicalPosition, LogicalSize, Position};
 use crate::shared::{
-    SharedBool, Children, SharedColor, SharedF32, Gettable, Observable, Shared, Settable,
+    Children, Gettable, Observable, Settable, Shared, SharedBool, SharedColor, SharedF32,
     SharedText,
 };
-use crate::text::{EdgeBehavior, Style, StyleType, StyledText, TextLayout};
-use crate::ui::app::{AppContext, UserEvent};
+use crate::text::StyledText;
+use crate::ui::app::AppContext;
 use crate::ui::item::{
-    ClickSource, DisplayParameter, Gravity, ImeAction, ItemEvent, LayoutDirection, LogicalX,
+    ClickSource, Gravity, ImeAction, ItemEvent, LayoutDirection, LogicalX,
     MeasureMode, Orientation, PointerState,
 };
 use crate::ui::Item;
-use skia_safe::textlayout::{paragraph, TextAlign};
+use proc_macro::RefClone;
+use skia_safe::textlayout::{TextAlign, TextStyle};
 use skia_safe::{Color, Paint, Rect};
-use std::ops::{Not, Range};
-use std::slice::SliceIndex;
+use std::ops::{Deref, Not, Range};
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::Duration;
 use winit::dpi::Size;
 use winit::event::{ElementState, MouseButton};
 use winit::keyboard::{Key, NamedKey};
-use proc_macro::RefClone;
 
 /// This component has a serious problem:
 ///
@@ -44,33 +42,11 @@ struct TextContext {
 
 fn create_text_layout(
     text: &mut StyledText,
-    color: Color,
-    size: f32,
+    text_style: TextStyle,
     text_align: TextAlign,
     max_width: f32,
 ) {
-    let len = text.len();
-    text.retain_styles(|style, range, _| {
-        if range.start == 0 && range.end == len {
-            if style.style_type() == StyleType::FontSize
-                || style.style_type() == StyleType::TextColor
-            {
-                return false;
-            }
-        }
-        true
-    });
-    text.set_style(
-        Style::TextColor(color),
-        0..text.len(),
-        EdgeBehavior::IncludeAndInclude,
-    );
-    text.set_style(
-        Style::FontSize(size),
-        0..text.len(),
-        EdgeBehavior::IncludeAndInclude,
-    );
-    text.create_text_layout(max_width, text_align);
+    text.create_text_layout(text_style, max_width, text_align);
 }
 
 pub struct Text {
@@ -99,8 +75,8 @@ impl Text {
                 let context = context.ref_clone();
                 move |item, width_mode, height_mode| {
                     let property = property.lock().unwrap();
-                    let color = property.color.get();
-                    let font_size = property.font_size.get();
+                    let text_style = get_text_style(&property);
+
 
                     let padding_horizontal = item.get_padding(Orientation::Horizontal);
                     let padding_vertical = item.get_padding(Orientation::Vertical);
@@ -120,7 +96,7 @@ impl Text {
                                         item.clamp_width(width) - padding_horizontal
                                     }
                                 };
-                                create_text_layout(text, color, font_size, text_align, max_width);
+                                create_text_layout(text, text_style.clone(), text_align, max_width);
                             } else {
                                 text.reset_text_layout_width(match width_mode {
                                     MeasureMode::Specified(width) => {
@@ -174,15 +150,13 @@ impl Text {
                 let properties = properties.clone();
                 move |item, width, _height| {
                     let properties = properties.lock().unwrap();
-                    let color = properties.color.get();
-                    let font_size = properties.font_size.get();
+                    let text_style = get_text_style(&properties);
                     let max_width = width - item.get_padding(Orientation::Horizontal);
                     properties.text.write(|text| {
                         if !text.has_text_layout() {
                             create_text_layout(
                                 text,
-                                color,
-                                font_size,
+                                text_style.clone(),
                                 TextAlign::Justify,
                                 max_width,
                             );
@@ -576,13 +550,6 @@ impl Text {
 
             let app_context = self.item.get_app_context();
             property.text = text.into();
-            // shared.text.add_observer(
-            //     id,
-            //     Box::new(move || {
-            //         *is_text_updated.lock().unwrap() = true;
-            //         app_context.request_re_layout();
-            //     }),
-            // );
             property.text.add_specific_observer(
                 id,
                 Box::new(move |text: &mut StyledText| {
@@ -627,6 +594,15 @@ impl Text {
         }
         self
     }
+}
+
+fn get_text_style(properties: &TextProperties) -> TextStyle {
+    let color = properties.color.get();
+    let font_size = properties.font_size.get();
+    let mut text_style = TextStyle::new();
+    text_style.set_font_size(font_size);
+    text_style.set_color(color);
+    text_style
 }
 
 impl Into<Item> for Text {

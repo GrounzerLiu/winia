@@ -82,11 +82,7 @@ impl StyledText {
     }
 
 
-    pub fn create_text_layout(&mut self, max_width: f32, text_align: TextAlign) {
-        let mut text_style = TextStyle::default();
-        text_style.set_font_size(16.0);
-        text_style.set_color(Color::BLACK);
-
+    pub fn create_text_layout(&mut self, default_text_style:TextStyle, max_width: f32, text_align: TextAlign) {
         let mut paragraph_style = ParagraphStyle::default();
         paragraph_style.set_text_align(text_align);
 
@@ -95,13 +91,13 @@ impl StyledText {
         if self.string.is_empty() {
             let mut text = self.clone();
             text.push(' ');
-            create_segments(&text, &(0..text.len()), text_style)
+            create_segments(&text, &(0..text.len()), default_text_style)
                 .iter()
                 .for_each(|style_segment| {
                     paragraph_builder.add_style_segment(style_segment);
                 });
         } else {
-            create_segments(self, &(0..self.len()), text_style)
+            create_segments(self, &(0..self.len()), default_text_style)
                 .iter()
                 .for_each(|style_segment| {
                     paragraph_builder.add_style_segment(style_segment);
