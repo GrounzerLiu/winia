@@ -6,7 +6,7 @@ use crate::ui::Item;
 use crate::OptionalInvoke;
 // use skia_bindings::SkTileMode;
 use skia_safe::image_filters::CropRect;
-use skia_safe::{image_filters, Canvas, Paint, Point, Rect, Surface, TileMode};
+use skia_safe::{image_filters, Canvas, IRect, Paint, Point, Rect, Surface, TileMode, Vector};
 use std::sync::{Arc, Mutex};
 use winit::event::{DeviceId, Force, KeyEvent, MouseButton, TouchPhase};
 
@@ -176,8 +176,10 @@ impl ItemEvent {
                 let display_parameter = item.get_display_parameter().clone();
 
                 {
+                    let blur = 35.0;
+                    let margin = blur * 2.0;
                     if item.get_enable_background_blur().get() {
-                        let image = surface.image_snapshot();
+/*                        let image = surface.image_snapshot();
                         let (width, height) = {
                             let image_info = image.image_info();
                             (image_info.width(), image_info.height())
@@ -200,6 +202,61 @@ impl ItemEvent {
                         );
                         canvas.scale((scale_factor, scale_factor));
                         canvas.draw_image(image, (0.0, 0.0), Some(&paint));
+                        canvas.restore();*/
+                        let scale_factor = item.get_app_context().scale_factor();
+                        let left = (display_parameter.x() * scale_factor - margin) as i32;
+                        let top = (display_parameter.y() * scale_factor - margin) as i32;
+                        let right = ((display_parameter.x() + display_parameter.width) * scale_factor + margin) as i32;
+                        let bottom = ((display_parameter.y() + display_parameter.height) * scale_factor + margin) as i32;
+
+                        let background = surface.image_snapshot_with_bounds(
+                            IRect::from_ltrb(
+                                left,
+                                top,
+                                right,
+                                bottom,
+                            )
+                        ).unwrap();
+
+                        let (width, height) = {
+                            let image_info = background.image_info();
+                            (image_info.width(), image_info.height())
+                        };
+
+                        let canvas = surface.canvas();
+                        let mut paint = Paint::default();
+                        paint.set_image_filter(image_filters::blur((blur, blur), TileMode::Clamp, None, CropRect::from(
+                            Rect::from_wh(
+                                width as f32,
+                                height as f32,
+                            )
+                        )));
+
+                        let d = margin / scale_factor;
+                        let mut x = display_parameter.x() - d;
+                        let mut y = display_parameter.y() - d;
+                        if x < 0.0 {
+                            x = 0.0;
+                        }
+                        if y < 0.0 {
+                            y = 0.0;
+                        }
+
+                        canvas.save();
+
+                        canvas.clip_rect(
+                            Rect::from_xywh(
+                                display_parameter.x(),
+                                display_parameter.y(),
+                                display_parameter.width,
+                                display_parameter.height,
+                            ),
+                            None,
+                            None,
+                        );
+                        canvas.translate(Vector::new(x, y));
+                        canvas.scale((1.0 / scale_factor, 1.0 / scale_factor));
+                        canvas.draw_image(background, Point::new(0.0, 0.0), Some(&paint));
                         canvas.restore();
                     }
                 }
