@@ -870,9 +870,9 @@ impl Item {
         self.measure_parameter.clone()
     }
 
-    pub fn set_measure_parameter(&mut self, parameter: DisplayParameter) {
-        self.measure_parameter = parameter;
-    }
+    // pub fn set_measure_parameter(&mut self, parameter: DisplayParameter) {
+    //     self.measure_parameter = parameter;
+    // }
 
     pub fn get_size(&self, orientation: Orientation) -> Size {
         match orientation {
@@ -976,15 +976,13 @@ impl Item {
     }
 
     fn layout_layer(mut layer: SharedItem, width: f32, height: f32) {
-        layer.write(|item| {
-            if let Some(item) = item {
-                item.measure(
-                    MeasureMode::Specified(width),
-                    MeasureMode::Specified(height),
-                );
-                item.dispatch_layout(0.0, 0.0, width, height);
-            }
-        });
+        if let Some(item) = layer.value().as_mut(){
+            item.measure(
+                MeasureMode::Specified(width),
+                MeasureMode::Specified(height),
+            );
+            item.dispatch_layout(0.0, 0.0, width, height);
+        }
     }
 
     pub fn layout_layers(&self, width: f32, height: f32) {
@@ -1191,16 +1189,15 @@ impl Item {
         let x = event.x;
         let y = event.y;
 
-        self.get_foreground().write(|foreground| {
-            if let Some(foreground) = foreground {
-                foreground.mouse_input(event);
-            }
-        });
-        self.get_background().write(|background| {
-            if let Some(background) = background {
-                background.mouse_input(event);
-            }
-        });
+        let foreground = self.get_foreground();
+        if let Some(foreground) = foreground.value().as_mut() {
+            foreground.mouse_input(event);
+        }
+
+        let background = self.get_background();
+        if let Some(background) = background.value().as_mut() {
+            background.mouse_input(event);
+        }
 
         if let Some(on_mouse_input) = &mut self.on_mouse_input {
             on_mouse_input(event);
@@ -1272,16 +1269,14 @@ impl Item {
         let x = event.x;
         let y = event.y;
 
-        self.get_foreground().write(|foreground| {
-            if let Some(foreground) = foreground {
-                foreground.touch_input(event);
-            }
-        });
-        self.get_background().write(|background| {
-            if let Some(background) = background {
-                background.touch_input(event);
-            }
-        });
+        let foreground = self.get_foreground();
+        if let Some(foreground) = foreground.value().as_mut() {
+            foreground.touch_input(event);
+        }
+        let background = self.get_background();
+        if let Some(background) = background.value().as_mut() {
+            background.touch_input(event);
+        }
 
         if let Some(on_touch) = &mut self.on_touch {
             on_touch(event);

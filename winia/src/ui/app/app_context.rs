@@ -157,7 +157,7 @@ impl AppContext {
     pub fn request_redraw(&self) {
         self.window(|window| {
             window.request_redraw();
-        })
+        });
     }
 
     pub fn request_re_layout(&self) {

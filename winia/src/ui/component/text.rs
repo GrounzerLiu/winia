@@ -1,3 +1,4 @@
+use std::collections::LinkedList;
 use crate::core::RefClone;
 use crate::dpi::{LogicalPosition, LogicalSize, Position};
 use crate::shared::{
@@ -13,8 +14,9 @@ use crate::ui::item::{
 use crate::ui::Item;
 use proc_macro::RefClone;
 use skia_safe::textlayout::{TextAlign, TextStyle};
-use skia_safe::{Color, Paint, Rect};
+use skia_safe::{BBHFactory, Color, Drawable, Paint, Picture, PictureRecorder, Rect, Vector};
 use std::ops::{Deref, Not, Range};
+use std::string::ToString;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use winit::dpi::Size;
@@ -26,15 +28,37 @@ use winit::keyboard::{Key, NamedKey};
 /// The Paragraph from skia costs a lot of time when the "layout" method is first called.
 /// So it may be better to create Paragraph in the sub-thread
 
-pub struct TextProperties {
+pub struct TextProperty {
     text: SharedText,
     editable: SharedBool,
     color: SharedColor,
     font_size: SharedF32,
 }
 
+struct DrawCache {
+    pub bottom: (String, Option<Drawable>),
+    pub top: (String, Option<Drawable>),
+}
+
+impl DrawCache {
+    pub fn new() -> Self {
+        Self {
+            bottom: ("alpha_0".to_string(), None),
+            top: ("alpha_1".to_string(), None),
+        }
+    }
+
+    pub fn swap(&mut self) {
+        std::mem::swap(&mut self.bottom, &mut self.top);
+    }
+}
+
+
 #[derive(RefClone)]
 struct TextContext {
+    is_text_changed: Shared<bool>,
+    draw_caches: Shared<DrawCache>,
+    cursor: Shared<Option<(f32, f32, f32)>>,
     show_cursor: Shared<bool>,
     composing: Shared<Option<(Range<usize>, Range<usize>)>>,
     selection: Shared<Range<usize>>,
@@ -51,27 +75,31 @@ fn create_text_layout(
 
 pub struct Text {
     item: Item,
-    property: Arc<Mutex<TextProperties>>,
+    property: Arc<Mutex<TextProperty>>,
+    text_context: TextContext
 }
 
 impl Text {
     pub fn new(app_context: AppContext) -> Self {
-        let properties = Arc::new(Mutex::new(TextProperties {
-            text: SharedText::from_static(StyledText::from("")),
-            editable: SharedBool::from_static(true),
-            color: SharedColor::from_static(Color::BLACK),
-            font_size: SharedF32::from_static(24.0),
+        let property = Arc::new(Mutex::new(TextProperty {
+            text: "".into(),
+            editable: true.into(),
+            color: Color::BLACK.into(),
+            font_size: 24.0.into(),
         }));
 
         let context = TextContext {
-            show_cursor: Shared::new(false),
-            composing: Shared::new(None),
-            selection: Shared::new(0..0),
+            is_text_changed: true.into(),
+            draw_caches: DrawCache::new().into(),
+            cursor: None.into(),
+            show_cursor: false.into(),
+            composing: None.into(),
+            selection: (0..0).into(),
         };
 
         let item_event = ItemEvent::new()
             .measure({
-                let property = properties.clone();
+                let property = property.clone();
                 let context = context.ref_clone();
                 move |item, width_mode, height_mode| {
                     let property = property.lock().unwrap();
@@ -147,12 +175,26 @@ impl Text {
                 }
             })
             .layout({
-                let properties = properties.clone();
+                let mut context = context.ref_clone();
+                let property = property.clone();
                 move |item, width, _height| {
-                    let properties = properties.lock().unwrap();
-                    let text_style = get_text_style(&properties);
+                    let property = property.lock().unwrap();
+                    let text_style = get_text_style(&property);
                     let max_width = width - item.get_padding(Orientation::Horizontal);
-                    properties.text.write(|text| {
+
+                    let layout_direction = item.get_layout_direction().get();
+                    let horizontal_gravity = item.get_horizontal_gravity().get();
+                    let vertical_gravity = item.get_vertical_gravity().get();
+                    let padding_start = item.get_padding_start().get();
+                    let padding_end = item.get_padding_end().get();
+                    let padding_top = item.get_padding_top().get();
+                    let padding_bottom = item.get_padding_bottom().get();
+
+                    let display_parameter = item.get_display_parameter();
+                    let width = display_parameter.width;
+                    let height = display_parameter.height;
+
+                    property.text.write(|text| {
                         if !text.has_text_layout() {
                             create_text_layout(
                                 text,
@@ -163,17 +205,62 @@ impl Text {
                         } else {
                             text.reset_text_layout_width(max_width);
                         }
+
+                        let text_layout = text.get_text_layout().unwrap();
+
+                        let text_layout_width = text_layout.width();
+                        let text_layout_height = text_layout.height();
+
+                        let paragraph_x = LogicalX::new(
+                            layout_direction,
+                            match horizontal_gravity {
+                                Gravity::Start => padding_start,
+                                Gravity::Center => (width - text_layout_width) / 2.0,
+                                Gravity::End => width - text_layout_width - padding_end,
+                            },
+                            width,
+                        );
+
+                        let paragraph_y = match vertical_gravity {
+                            Gravity::Start => padding_top,
+                            Gravity::Center => (height - text_layout_height) / 2.0,
+                            Gravity::End => height - text_layout_height - padding_bottom,
+                        };
+
+                        let mut recorder = PictureRecorder::new();
+                        let canvas = recorder.begin_recording(Rect::from_wh(width, height), None);
+                        text_layout.draw(
+                            canvas,
+                            paragraph_x.logical_value(),
+                            paragraph_y,
+                        );
+                        let drawable = recorder.finish_recording_as_drawable().unwrap();
+                        let mut draw_caches = context.draw_caches.value();
+                        draw_caches.bottom.1 = Some(drawable);
+                        let top_alpha = *display_parameter.float_params.get(&draw_caches.top.0).unwrap_or(&0.0);
+                        if context.is_text_changed.get() && (top_alpha == 0.0|| top_alpha == 1.0) {
+                            let mut target_parameter = item.get_target_parameter();
+                            target_parameter.float_params.insert(
+                                draw_caches.bottom.0.clone(),
+                                1.0
+                            );
+                            target_parameter.float_params.insert(
+                                draw_caches.top.0.clone(),
+                                0.0
+                            );
+                            context.is_text_changed.set(false);
+                        }
                     });
                 }
             })
             .ime_input({
                 let context = context.ref_clone();
-                let properties = properties.clone();
+                let property = property.clone();
                 move |item, ime_action| {
-                    let mut properties = properties.lock().unwrap();
+                    let mut property = property.lock().unwrap();
                     let mut selection = context.selection.value();
                     let mut composing = context.composing.value();
-                    let mut text = &mut properties.text;
+                    let mut text = &mut property.text;
                     match ime_action {
                         ImeAction::Enabled => {}
                         ImeAction::Enter => {
@@ -250,11 +337,11 @@ impl Text {
                 }
             })
             .draw({
-                let properties = properties.clone();
+                let property = property.clone();
                 let context = context.ref_clone();
                 move |item, canvas| {
-                    let properties = properties.lock().unwrap();
-                    let text = properties.text.value();
+                    let property = property.lock().unwrap();
+                    let text = property.text.value();
                     if !text.has_text_layout() {
                         return;
                     }
@@ -340,13 +427,64 @@ impl Text {
                             });
                     }
 
-                    text_layout.draw(
-                        canvas,
-                        paragraph_x.logical_value() + display_parameter.x(),
-                        paragraph_y + display_parameter.y(),
+                    // text_layout.draw(
+                    //     canvas,
+                    //     paragraph_x.logical_value() + display_parameter.x(),
+                    //     paragraph_y + display_parameter.y(),
+                    // );
+                    let mut draw_caches = context.draw_caches.value();
+                    let rect = Rect::from_xywh(
+                        display_parameter.x(),
+                        display_parameter.y(),
+                        display_parameter.width,
+                        display_parameter.height,
                     );
 
-                    if properties.editable.get() && selection.start == selection.end {
+                    let bottom_alpha = *display_parameter.float_params.get(&draw_caches.bottom.0).unwrap();
+                    let top_alpha = *display_parameter.float_params.get(&draw_caches.top.0).unwrap();
+                    if let Some(drawable) = draw_caches.bottom.1.as_mut() {
+                        canvas.save_layer_alpha_f(
+                            rect,
+                            bottom_alpha
+                        );
+                        canvas.translate(Vector::new(
+                            display_parameter.x() + paragraph_x.logical_value(),
+                            display_parameter.y() + paragraph_y
+                        ));
+                        drawable.draw(canvas, None);
+                        canvas.restore();
+                        // println!("bottom_alpha: {}", bottom_alpha);
+                    }
+
+                    if let Some(drawable) = draw_caches.top.1.as_mut() {
+                        canvas.save_layer_alpha_f(
+                            rect,
+                            top_alpha
+                        );
+                        canvas.translate(Vector::new(
+                            display_parameter.x() + paragraph_x.logical_value(),
+                            display_parameter.y() + paragraph_y
+                        ));
+                        drawable.draw(canvas, None);
+                        canvas.restore();
+                        // println!("top_alpha: {}", top_alpha);
+                    }
+
+                    if top_alpha == 0.0 {
+                        let mut target_parameter = item.get_target_parameter();
+                        target_parameter.float_params.insert(
+                            draw_caches.bottom.0.clone(),
+                            1.0
+                        );
+                        target_parameter.float_params.insert(
+                            draw_caches.top.0.clone(),
+                            0.0
+                        );
+                        draw_caches.swap();
+                    }
+
+
+                    if property.editable.get() && selection.start == selection.end {
                         if show_cursor {
                             if let Some((x, y, h)) =
                                 text_layout.get_cursor_position(selection.start)
@@ -382,9 +520,9 @@ impl Text {
             })
             .keyboard_input({
                 let context = context.ref_clone();
-                let properties = properties.clone();
+                let property = property.clone();
                 move |item, device_id, event, is_synthetic| {
-                    if !properties.lock().unwrap().editable.get() || !item.get_focused().get() {
+                    if !property.lock().unwrap().editable.get() || !item.get_focused().get() {
                         return false;
                     }
 
@@ -402,8 +540,8 @@ impl Text {
                                 NamedKey::ArrowLeft => {
                                     let mut selection = context.selection.value();
                                     if selection.start > 0 {
-                                        let properties = properties.lock().unwrap();
-                                        properties.text.read(move |text| {
+                                        let property = property.lock().unwrap();
+                                        property.text.read(move |text| {
                                             let glyph_index =
                                                 text.byte_index_to_glyph_index(selection.start);
                                             let prev_glyph_index =
@@ -417,8 +555,8 @@ impl Text {
                                 }
                                 NamedKey::ArrowRight => {
                                     let mut selection = context.selection.value();
-                                    let properties = properties.lock().unwrap();
-                                    properties.text.read(move |text| {
+                                    let property = property.lock().unwrap();
+                                    property.text.read(move |text| {
                                         if selection.start < text.len() {
                                             let glyph_index =
                                                 text.byte_index_to_glyph_index(selection.start);
@@ -450,13 +588,13 @@ impl Text {
             })
             .on_mouse_input({
                 let context = context.ref_clone();
-                let properties = properties.clone();
+                let property = property.clone();
                 move |item, event| {
-                    let properties = properties.lock().unwrap();
-                    if !properties.editable.get() || !properties.text.value().has_text_layout() {
+                    let property = property.lock().unwrap();
+                    if !property.editable.get() || !property.text.value().has_text_layout() {
                         return;
                     }
-                    let text = properties.text.value();
+                    let text = property.text.value();
                     let text_layout = text.get_text_layout().unwrap();
 
                     let display_parameter = item.get_display_parameter();
@@ -534,7 +672,8 @@ impl Text {
 
         Self {
             item: Item::new(app_context, Children::new(), item_event),
-            property: properties,
+            property,
+            text_context: context
         }
     }
 
@@ -548,11 +687,13 @@ impl Text {
             let mut property = self.property.lock().unwrap();
             property.text.remove_observer(id);
 
+            let mut text_context = self.text_context.ref_clone();
             let app_context = self.item.get_app_context();
             property.text = text.into();
             property.text.add_specific_observer(
                 id,
                 Box::new(move |text: &mut StyledText| {
+                    text_context.is_text_changed.set(true);
                     app_context.request_re_layout();
                 }),
             );
@@ -596,9 +737,9 @@ impl Text {
     }
 }
 
-fn get_text_style(properties: &TextProperties) -> TextStyle {
-    let color = properties.color.get();
-    let font_size = properties.font_size.get();
+fn get_text_style(property: &TextProperty) -> TextStyle {
+    let color = property.color.get();
+    let font_size = property.font_size.get();
     let mut text_style = TextStyle::new();
     text_style.set_font_size(font_size);
     text_style.set_color(color);

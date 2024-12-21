@@ -3,11 +3,12 @@ use std::time::Duration;
 use winia::core::RefClone;
 use winia::event_loop::EventLoop;
 use winia::func;
-use winia::shared::{SharedBool, Children, SharedF32, Gettable, Shared, Settable, SharedSize};
+use winia::shared::{SharedBool, Children, SharedF32, Gettable, Shared, Settable, SharedSize, SharedText};
 use winia::skia_safe::textlayout::{
     FontCollection, ParagraphBuilder, ParagraphStyle, TextAlign, TextStyle,
 };
 use winia::skia_safe::{Color, FontMgr};
+use winia::text::StyledText;
 use winia::ui::animation::{AnimationExt, Target};
 use winia::ui::app::{run_app, AppContext, AppProperty, UserEvent};
 use winia::ui::component::{RectangleExt, TextBlockExt};
@@ -192,12 +193,17 @@ Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor i
 Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore veritatis et quasi architecto beatae vitae dicta sunt explicabo. Nemo enim ipsam voluptatem quia voluptas sit aspernatur aut odit aut fugit, sed quia consequuntur magni dolores eos qui ratione voluptatem sequi nesciunt. Neque porro quisquam est, qui dolorem ipsum quia dolor sit amet, consectetur, adipisci velit, sed quia non numquam eius modi tempora incidunt ut labore et dolore magnam aliquam quaerat voluptatem. Ut enim ad minima veniam, quis nostrum exercitationem ullam corporis suscipit laboriosam, nisi ut aliquid ex ea commodi consequatur? Quis autem vel eum iure reprehenderit qui in ea voluptate velit esse quam nihil molestiae consequatur, vel illum qui dolorem eum fugiat quo voluptas nulla pariatur?
 ";
     app.stack(
-        Children::new()
-            + app
-                .text(text)
-                .color(Color::WHITE)
+        Children::new()+
+            app.rectangle()
+                .color(Color::RED)
                 .item()
-                .width(Size::Expanded),
+                .width(Size::Fixed(100.0))
+                .height(Size::Fixed(100.0))
+            // + app
+            //     .text(text)
+            //     .color(Color::WHITE)
+            //     .item()
+            //     .width(Size::Expanded),
     )
     .item()
 }
@@ -217,7 +223,9 @@ fn main_ui(app: AppContext, property: AppProperty) -> Item {
     let a = SharedBool::from(false);
     let b = SharedBool::from(false);
 
-    let text = "Hello, world!";
+    let c = SharedBool::from(false);
+
+    let text = SharedText::from("Hello, world!");
     app.stack(Children::new() +
         app.stack(Children::new() +
             app.rectangle()
@@ -227,10 +235,21 @@ fn main_ui(app: AppContext, property: AppProperty) -> Item {
                 // .rotation(45.0)
                 // .opacity(0.5)
                 .name("blue_rect")
-                .on_click(func!(|property|, move|_|{
+                .on_click(func!(|app, property, c, text|, move|_|{
                     println!("Blue rectangle clicked");
-                    property.title().set("Blue rectangle clicked".to_string());
-                    property.maximized().set(property.maximized().get().not())
+                    // property.title().set("Blue rectangle clicked".to_string());
+                    // property.maximized().set(property.maximized().get().not())
+                    app.animate(Target::Exclusion(Vec::new()))
+                    .transformation(func!(|c, text|,move|| {
+                        println!("c = {}", c.get());
+                        if c.get() {
+                            text.set(StyledText::from("Hello, world!"));
+                            c.set(false);
+                        } else {
+                            text.set(StyledText::from("This is a new text,This is a "));
+                            c.set(true);
+                        }
+            })).duration(Duration::from_millis(500)).start();
                 })) +
 
             app.flex(Children::new() +
@@ -240,10 +259,25 @@ fn main_ui(app: AppContext, property: AppProperty) -> Item {
                     .focused(&a)
                     .on_focus(|focused| {
                         println!("Red rectangle focused: {}", focused);
-                    })
-                    .on_click(func!(|a|, move|_|{
-                        a.set(true);
-                    })) +
+                    })                .on_click(func!(|app, property, c, text|, move|_|{
+                    println!("Blue rectangle clicked");
+                    // property.title().set("Blue rectangle clicked".to_string());
+                    // property.maximized().set(property.maximized().get().not())
+                    app.animate(Target::Exclusion(Vec::new()))
+                    .transformation(func!(|c, text|,move|| {
+                        println!("c = {}", c.get());
+                        if c.get() {
+                            text.set(StyledText::from("Hello, world!"));
+                            c.set(false);
+                        } else {
+                            text.set(StyledText::from("This is a new text,This is a "));
+                            c.set(true);
+                        }
+            })).duration(Duration::from_millis(500)).start();
+                }))+
+                    // .on_click(func!(|a|, move|_|{
+                    //     a.set(true);
+                    // })) +
                 app.rectangle()
                     .color(Color::YELLOW)
                     .item().width(Size::Fixed(50.0)).height(Size::Fixed(50.0))
@@ -254,7 +288,7 @@ fn main_ui(app: AppContext, property: AppProperty) -> Item {
                     .on_click(func!(|b|, move|_|{
                         b.set(true);
                     }))+
-                app.text("abc🤗 مرحبًا، عالم abc").item().max_width(300.0)
+                app.text(&text).color(Color::RED).item()
             )
                 .direction(FlexDirection::Horizontal)
                 .wrap(FlexWrap::Wrap).item()

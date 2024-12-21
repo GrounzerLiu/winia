@@ -291,11 +291,13 @@ impl ItemEvent {
                     canvas.translate((-scale_center_x, -scale_center_y));
                 }
 
-                item.get_background().write(|background| {
-                    if let Some(background) = background {
+                {
+                    let shared_background = item.get_background();
+                    let mut background = shared_background.value();
+                    if let Some(background) = background.as_mut() {
                         background.dispatch_draw(surface, x, y);
                     }
-                });
+                }
                 {
                     let canvas = surface.canvas();
                     item.draw(canvas);
@@ -303,12 +305,14 @@ impl ItemEvent {
                 item.get_children().items().iter_mut().for_each(|child| {
                     child.dispatch_draw(surface, x, y);
                 });
-                item.get_foreground().write(|foreground| {
-                    if let Some(foreground) = foreground {
+
+                {
+                    let shared_foreground = item.get_foreground();
+                    let mut foreground = shared_foreground.value();
+                    if let Some(foreground) = foreground.as_mut() {
                         foreground.dispatch_draw(surface, x, y);
                     }
-                });
-
+                }
                 {
                     let canvas = surface.canvas();
                     canvas.restore();

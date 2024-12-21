@@ -607,8 +607,6 @@ impl ApplicationHandler<UserEvent> for App {
                     running_animations.retain(|animation| !animation.is_finished());
                 });
         }
-
-        event_loop.set_control_flow(ControlFlow::Wait);
     }
 
     fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
