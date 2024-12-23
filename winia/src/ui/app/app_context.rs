@@ -9,8 +9,10 @@ use std::collections::{BTreeSet, LinkedList};
 use std::ops::DerefMut;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
+use skia_safe::Color;
 use winit::dpi::PhysicalSize;
 use winit::event_loop::EventLoopProxy;
+use crate::ui::theme::Style;
 
 #[derive(Clone, Debug)]
 pub(crate) struct Timer {
@@ -20,6 +22,7 @@ pub(crate) struct Timer {
 }
 
 pub struct AppContext {
+    pub(crate) theme: Shared<Style>,
     pub(crate) window: Shared<Option<Box<dyn SkiaWindow>>>,
     pub(crate) event_loop_proxy: Shared<Option<EventLoopProxy<UserEvent>>>,
     pub(crate) request_re_layout: Shared<bool>,
@@ -44,6 +47,7 @@ impl Default for AppContext {
 impl AppContext {
     pub fn new() -> Self {
         Self {
+            theme: Style::new(Color::RED, true).into(),
             window: None.into(),
             event_loop_proxy: None.into(),
             request_re_layout: false.into(),
@@ -192,6 +196,7 @@ impl AppContext {
 impl RefClone for AppContext {
     fn ref_clone(&self) -> Self {
         Self {
+            theme: self.theme.ref_clone(),
             window: self.window.ref_clone(),
             event_loop_proxy: self.event_loop_proxy.ref_clone(),
             request_re_layout: self.request_re_layout.ref_clone(),
@@ -210,6 +215,7 @@ impl RefClone for AppContext {
 }
 
 pub struct AppContextWeak {
+    theme: WeakShared<Style>,
     window: WeakShared<Option<Box<dyn SkiaWindow>>>,
     event_loop_proxy: WeakShared<Option<EventLoopProxy<UserEvent>>>,
     request_re_layout: WeakShared<bool>,
@@ -228,6 +234,7 @@ pub struct AppContextWeak {
 impl AppContext {
     pub fn weak_ref(&self) -> AppContextWeak {
         AppContextWeak {
+            theme: self.theme.weak(),
             window: self.window.weak(),
             event_loop_proxy: self.event_loop_proxy.weak(),
             request_re_layout: self.request_re_layout.weak(),
@@ -248,6 +255,7 @@ impl AppContext {
 impl AppContextWeak {
     pub fn upgrade(&self) -> Option<AppContext> {
         Some(AppContext {
+            theme: self.theme.upgrade()?,
             window: self.window.upgrade()?,
             event_loop_proxy: self.event_loop_proxy.upgrade()?,
             request_re_layout: self.request_re_layout.upgrade()?,

@@ -4,7 +4,7 @@ use crate::core::RefClone;
 use crate::dpi::LogicalSize;
 use crate::shared::{Gettable, Shared, SharedBool};
 use crate::ui::item::{ImeAction, MeasureMode, MouseEvent, PointerState, TouchEvent};
-use crate::ui::Item;
+use crate::ui::{theme, Item};
 use crate::LockUnwrap;
 pub use app_context::*;
 use skia_safe::{Color, Font, TextBlob};
@@ -528,6 +528,7 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                let background_color = self.app_context.theme.read(|theme| theme.get_color(theme::WINDOW_BACKGROUND_COLOR)).unwrap_or(Color::WHITE);
                 // self.app_context.ref_clone().window(|window| {
                 if let Some((surface_ref, scale_factor)) = {
                     self.app_context.window.read(|window_option| {
@@ -540,7 +541,7 @@ impl ApplicationHandler<UserEvent> for App {
 
                         {
                             let canvas = surface.canvas();
-                            canvas.clear(Color::BLACK);
+                            canvas.clear(background_color);
                             canvas.save();
                             canvas.scale((scale_factor, scale_factor));
                         }
