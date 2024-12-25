@@ -1,10 +1,6 @@
-pub mod app;
 pub mod shared;
 pub mod text;
 pub mod ui;
-pub mod theme;
-pub mod component;
-pub mod layout;
 pub mod core;
 
 use std::ops::{Deref, DerefMut};
@@ -12,8 +8,19 @@ pub use winit::*;
 pub use skia_safe;
 
 mod test{
+    use skia_safe::Color;
+    use crate::ui::theme;
+    use crate::ui::theme::Style;
+
     #[test]
     fn test(){
+        let theme = Style::new(Color::RED, false);
+        let color = theme.get_color(theme::colors::SHADOW).unwrap();
+        let a = color.a();
+        let r = color.r();
+        let g = color.g();
+        let b = color.b();
+        println!("a: {}, r: {}, g: {}, b: {}", a, r, g, b);
 
     }
 }

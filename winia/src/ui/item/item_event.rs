@@ -1,5 +1,4 @@
 use std::ops::Not;
-use crate::app::Theme;
 use crate::shared::Gettable;
 use crate::ui::item::InnerPosition;
 use crate::ui::Item;
@@ -148,8 +147,8 @@ pub struct ItemEvent {
     pub(crate) dispatch_layout: Arc<Mutex<dyn FnMut(&mut Item, f32, f32, f32, f32)>>,
     pub(crate) layout: Arc<Mutex<dyn FnMut(&mut Item, f32, f32)>>,
     pub(crate) measure: Arc<Mutex<dyn FnMut(&mut Item, MeasureMode, MeasureMode)>>,
-    pub(crate) dispatch_apply_theme: Arc<Mutex<dyn FnMut(&mut Item, &Theme)>>,
-    pub(crate) apply_theme: Arc<Mutex<dyn FnMut(&mut Item, &Theme)>>,
+    // pub(crate) dispatch_apply_theme: Arc<Mutex<dyn FnMut(&mut Item, &Theme)>>,
+    // pub(crate) apply_theme: Arc<Mutex<dyn FnMut(&mut Item, &Theme)>>,
     pub(crate) dispatch_mouse_input: Arc<Mutex<dyn FnMut(&mut Item, MouseEvent)>>,
     pub(crate) mouse_input: Arc<Mutex<dyn FnMut(&mut Item, MouseEvent)>>,
     pub(crate) dispatch_touch_input: Arc<Mutex<dyn FnMut(&mut Item, TouchEvent)>>,
@@ -384,8 +383,8 @@ impl ItemEvent {
                 measure_parameter.width = get_size(width_mode).clamp(min_width, max_width);
                 measure_parameter.height = get_size(height_mode).clamp(min_height, max_height);
             })),
-            dispatch_apply_theme: Arc::new(Mutex::new(|_item: &mut Item, _theme: &Theme| {})),
-            apply_theme: Arc::new(Mutex::new(|_item: &mut Item, _theme: &Theme| {})),
+            // dispatch_apply_theme: Arc::new(Mutex::new(|_item: &mut Item, _theme: &Theme| {})),
+            // apply_theme: Arc::new(Mutex::new(|_item: &mut Item, _theme: &Theme| {})),
             dispatch_mouse_input: Arc::new(Mutex::new(|_item: &mut Item, _event: MouseEvent| {})),
             mouse_input: Arc::new(Mutex::new(|_item: &mut Item, _event: MouseEvent| {})),
             dispatch_touch_input: Arc::new(Mutex::new(|_item: &mut Item, _event: TouchEvent| {})),
@@ -470,10 +469,10 @@ impl ItemEvent {
     }
 
     /// item, theme
-    pub fn apply_theme(mut self, apply_theme: impl FnMut(&mut Item, &Theme) + 'static) -> Self {
-        self.apply_theme = Arc::new(Mutex::new(apply_theme));
-        self
-    }
+    // pub fn apply_theme(mut self, apply_theme: impl FnMut(&mut Item, &Theme) + 'static) -> Self {
+    //     self.apply_theme = Arc::new(Mutex::new(apply_theme));
+    //     self
+    // }
 
     pub fn on_mouse_input(mut self, on_mouse_input: impl FnMut(&mut Item, MouseEvent) + 'static) -> Self {
         self.mouse_input = Arc::new(Mutex::new(on_mouse_input));

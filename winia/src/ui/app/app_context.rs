@@ -1,6 +1,6 @@
 use crate::core::RefClone;
 use crate::dpi::LogicalSize;
-use crate::shared::{Settable, Shared, SharedBool, WeakShared};
+use crate::shared::{Settable, Shared, SharedAnimation, SharedBool, WeakShared};
 use crate::ui::app::UserEvent;
 use crate::ui::item::ItemEvent;
 use crate::ui::{Animation, Item};
@@ -28,6 +28,7 @@ pub struct AppContext {
     pub(crate) request_re_layout: Shared<bool>,
     pub(crate) starting_animations: Shared<LinkedList<Animation>>,
     pub(crate) running_animations: Shared<Vec<Animation>>,
+    pub(crate) shared_animations: Shared<Vec<Box<dyn SharedAnimation>>>,
     pub(crate) focused_property: Shared<Option<(SharedBool, usize)>>,
     pub(crate) focus_changed_items: Shared<BTreeSet<usize>>,
     pub(crate) timers: Shared<Vec<Timer>>,
@@ -53,6 +54,7 @@ impl AppContext {
             request_re_layout: false.into(),
             starting_animations: LinkedList::new().into(),
             running_animations: Vec::new().into(),
+            shared_animations: Vec::new().into(),
             focused_property: None.into(),
             focus_changed_items: BTreeSet::new().into(),
             timers: Vec::new().into(),
@@ -202,6 +204,7 @@ impl RefClone for AppContext {
             request_re_layout: self.request_re_layout.ref_clone(),
             starting_animations: self.starting_animations.ref_clone(),
             running_animations: self.running_animations.ref_clone(),
+            shared_animations: self.shared_animations.ref_clone(),
             focused_property: self.focused_property.ref_clone(),
             focus_changed_items: self.focus_changed_items.ref_clone(),
             timers: self.timers.ref_clone(),
@@ -221,6 +224,7 @@ pub struct AppContextWeak {
     request_re_layout: WeakShared<bool>,
     starting_animations: WeakShared<LinkedList<Animation>>,
     running_animations: WeakShared<Vec<Animation>>,
+    shared_animations: WeakShared<Vec<Box<dyn SharedAnimation>>>,
     focused_property: WeakShared<Option<(SharedBool, usize)>>,
     focus_changed_items: WeakShared<BTreeSet<usize>>,
     timer: WeakShared<Vec<Timer>>,
@@ -240,6 +244,7 @@ impl AppContext {
             request_re_layout: self.request_re_layout.weak(),
             starting_animations: self.starting_animations.weak(),
             running_animations: self.running_animations.weak(),
+            shared_animations: self.shared_animations.weak(),
             focused_property: self.focused_property.weak(),
             focus_changed_items: self.focus_changed_items.weak(),
             timer: self.timers.weak(),
@@ -261,6 +266,7 @@ impl AppContextWeak {
             request_re_layout: self.request_re_layout.upgrade()?,
             starting_animations: self.starting_animations.upgrade()?,
             running_animations: self.running_animations.upgrade()?,
+            shared_animations: self.shared_animations.upgrade()?,
             focused_property: self.focused_property.upgrade()?,
             focus_changed_items: self.focus_changed_items.upgrade()?,
             timers: self.timer.upgrade()?,

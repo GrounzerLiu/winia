@@ -2817,6 +2817,7 @@ dependencies = [
  "material_color_utilities",
  "proc-macro",
  "raw-window-handle 0.6.2",
+ "rayon",
  "skia-safe",
  "skiwin",
  "unicode-segmentation",

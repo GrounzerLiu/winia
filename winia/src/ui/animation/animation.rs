@@ -1,11 +1,12 @@
 use crate::core::{get_id_by_str, RefClone};
-use crate::ui::animation::{EaseOutCirc, Interpolator, Target};
+use crate::ui::animation::interpolator::{EaseOutCirc, Interpolator};
 use crate::ui::app::AppContext;
 use material_color_utilities::blend_cam16ucs;
 use material_color_utilities::utils::argb_from_rgb;
 use skia_safe::Color;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use crate::ui::animation::Target;
 
 pub(crate) struct InnerAnimation {
     pub app_context: AppContext,

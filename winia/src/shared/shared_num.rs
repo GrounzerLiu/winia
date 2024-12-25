@@ -1,6 +1,10 @@
 use std::ops::Add;
-use crate::shared::{Gettable, Shared};
+use std::time::{Duration, Instant};
+use crate::shared::{Gettable, Settable, Shared, SharedAnimation};
 use crate::core::RefClone;
+use crate::ui::animation::interpolator::Interpolator;
+use crate::ui::animation::interpolator::Linear;
+use crate::ui::app::AppContext;
 
 macro_rules! p_op_v {
     ($op:ident, $op_fn:ident, $l:ty, $r:ty, $out:ty) => {
@@ -178,3 +182,66 @@ impl_into_type!(f64, i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, us
 
 
 
+pub struct F32Animation{
+    f32: SharedF32,
+    from: f32,
+    to: f32,
+    duration: Duration,
+    start_time: Instant,
+    interpolator: Box<dyn Interpolator>,
+}
+
+impl F32Animation {
+    pub(crate) fn new(f32: SharedF32, from: f32, to: f32, duration: Duration, interpolator: Box<dyn Interpolator>) -> Self {
+        Self {
+            f32,
+            from,
+            to,
+            duration,
+            start_time: Instant::now(),
+            interpolator,
+        }
+    }
+
+    pub fn duration(mut self, duration: Duration) -> Self {
+        self.duration = duration;
+        self
+    }
+
+    pub fn interpolator(mut self, interpolator: impl Interpolator + 'static) -> Self {
+        self.interpolator = Box::new(interpolator);
+        self
+    }
+}
+
+impl SharedAnimation for F32Animation{
+    fn start(mut self, app_context: &AppContext){
+        self.start_time = Instant::now();
+        app_context.shared_animations.value().push(Box::new(self));
+        app_context.request_redraw();
+    }
+    fn is_finished(&self) -> bool{
+        self.start_time.elapsed() >= self.duration
+    }
+    fn update(&mut self){
+        if self.is_finished(){
+            return;
+        }
+        let time_elapsed = self.start_time.elapsed().as_millis() as f32;
+        let progress = (time_elapsed / self.duration.as_millis() as f32).clamp(0.0, 1.0);
+        let interpolated = self.interpolator.interpolate(progress);
+        self.f32.set(self.from + (self.to - self.from) * interpolated);
+    }
+}
+
+impl SharedF32{
+    pub fn animation_to_f32(&self, to: impl Into<f32>) -> F32Animation{
+        F32Animation::new(
+            self.ref_clone(),
+            self.get(),
+            to.into(),
+            Duration::from_millis(1000),
+            Box::new(Linear::new()),
+        )
+    }
+}

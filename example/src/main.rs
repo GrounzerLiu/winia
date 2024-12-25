@@ -2,8 +2,8 @@ use std::ops::Not;
 use std::time::Duration;
 use winia::core::RefClone;
 use winia::event_loop::EventLoop;
-use winia::func;
-use winia::shared::{SharedBool, Children, SharedF32, Gettable, Shared, Settable, SharedSize, SharedText};
+use winia::{func, include_target};
+use winia::shared::{SharedBool, Children, SharedF32, Gettable, Shared, Settable, SharedSize, SharedText, SharedAnimation};
 use winia::skia_safe::textlayout::{
     FontCollection, ParagraphBuilder, ParagraphStyle, TextAlign, TextStyle,
 };
@@ -225,6 +225,15 @@ fn main_ui(app: AppContext, property: AppProperty) -> Item {
 
     let c = SharedBool::from(false);
 
+    let mut f32 = SharedF32::new(100.0);
+    let mut size = SharedSize::from_static(Size::Fixed(100.0));
+    f32.add_specific_observer(0,{
+        let mut size = size.ref_clone();
+        move |value| {
+            size.set(Size::Fixed(*value));
+        }
+    });
+
     let text = SharedText::from("Hello, world!");
     app.stack(Children::new() +
         app.stack(Children::new() +
@@ -252,50 +261,48 @@ fn main_ui(app: AppContext, property: AppProperty) -> Item {
             })).duration(Duration::from_millis(500)).start();
                 })) +
 
-            app.flex(Children::new() +
-                app.rectangle()
-                    .color(Color::RED)
-                    .item().width(Size::Fixed(50.0)).height(Size::Fixed(50.0))
-                    .focused(&a)
-                    .on_focus(|focused| {
-                        println!("Red rectangle focused: {}", focused);
-                    })                .on_click(func!(|app, property, c, text|, move|_|{
-                    println!("Blue rectangle clicked");
-                    // property.title().set("Blue rectangle clicked".to_string());
-                    // property.maximized().set(property.maximized().get().not())
-                    app.animate(Target::Exclusion(Vec::new()))
-                    .transformation(func!(|c, text|,move|| {
-                        println!("c = {}", c.get());
-                        if c.get() {
-                            text.set(StyledText::from("Hello, world!"));
-                            c.set(false);
-                        } else {
-                            text.set(StyledText::from("This is a new text,This is a "));
-                            c.set(true);
-                        }
-            })).duration(Duration::from_millis(500)).start();
-                }))+
-                    // .on_click(func!(|a|, move|_|{
-                    //     a.set(true);
-                    // })) +
-                app.rectangle()
-                    .color(Color::YELLOW)
-                    .item().width(Size::Fixed(50.0)).height(Size::Fixed(50.0))
-                    .focused(&b)
-                    .on_focus(|focused| {
-                        println!("Yellow rectangle focused: {}", focused);
-                    })
-                    .on_click(func!(|b|, move|_|{
-                        b.set(true);
-                    }))+
-                app.text(&text).color(Color::RED).item()
-            )
-                .direction(FlexDirection::Horizontal)
-                .wrap(FlexWrap::Wrap).item()
-                .width(Size::Fixed(400.0))+
+            // app.flex(Children::new() +
+            //     app.rectangle()
+            //         .color(Color::RED)
+            //         .item().width(&size).height(&size)
+            //         .focused(&a)
+            //         .on_focus(|focused| {
+            //             println!("Red rectangle focused: {}", focused);
+            //         })
+            //         .on_click(func!(|app,f32,a|, move|_|{
+            //             if a.get() {
+            //                 f32.animation_to_f32(100.0)
+            //                 .duration(Duration::from_secs(5))
+            //                 .interpolator(winia::ui::animation::interpolator::EaseOutCirc::new())
+            //                 .start(&app);
+            //                 a.set(false);
+            //             } else {
+            //                 f32.animation_to_f32(200.0)
+            //                 .duration(Duration::from_secs(5))
+            //                 .interpolator(winia::ui::animation::interpolator::EaseOutCirc::new())
+            //                 .start(&app);
+            //                 a.set(true);
+            //             }
+            //         })) +
+            //     app.rectangle()
+            //         .color(Color::YELLOW)
+            //         .item().width(Size::Fixed(50.0)).height(Size::Fixed(50.0))
+            //         .focused(&b)
+            //         .on_focus(|focused| {
+            //             println!("Yellow rectangle focused: {}", focused);
+            //         })
+            //         .on_click(func!(|b|, move|_|{
+            //             b.set(true);
+            //         }))+
+            //     app.text(&text).color(Color::RED).item()
+            // )
+            //     .direction(FlexDirection::Horizontal)
+            //     .wrap(FlexWrap::Wrap).item()
+            //     .width(Size::Fixed(400.0))+
 
             app.rectangle()
                 .color(Color::WHITE).item()
+                .name("white_rect")
                 .width(&size).height(&size)
                 .offset_x(&offset)
                 .offset_y(&offset)
@@ -308,7 +315,7 @@ fn main_ui(app: AppContext, property: AppProperty) -> Item {
                 // .rotation_center_x(InnerPosition::End(0.0))
                 // .rotation_center_y(InnerPosition::End(0.0))
                 .on_click(func!(|app, size, margin_start, margin_top, offset|, move|_|{
-                    app.animate(Target::Exclusion(Vec::new()))
+                    app.animate(include_target!("include_target"))
                     .transformation(func!(|size, margin_start, margin_top, offset|,move|| {
                         if let Size::Expanded = size.get() {
                             size.set(Size::Fixed(100.0));

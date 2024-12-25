@@ -22,7 +22,9 @@ macro_rules! include_target {
         Target::Inclusion(vec![])
     };
      ($($target:expr),+ $(,)?) => {
-         use $crate:core::get_id_by_str;
-         Target::Inclusion(vec![$(get_id_by_str($target)),+])
+         {
+            use $crate::core::get_id_by_str;
+            Target::Inclusion(vec![$(get_id_by_str($target).unwrap()),+])
+        }
      }
 }

@@ -1,8 +1,8 @@
+use crate::core::{generate_id, RefClone};
+use crate::ui::app::AppContext;
 use std::fmt::Display;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
-
-use crate::core::{generate_id, RefClone};
 
 /// A trait for getting the value of a shared.
 /// This function will return a specific value instead of `PropertyValue` which needs to be unwrapped.
@@ -364,4 +364,11 @@ impl<T> RefClone for WeakShared<T> {
             specific_observers: self.specific_observers.clone(),
         }
     }
+}
+
+
+pub trait SharedAnimation{
+    fn start(self, app_context: &AppContext);
+    fn is_finished(&self) -> bool;
+    fn update(&mut self);
 }

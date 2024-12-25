@@ -608,6 +608,21 @@ impl ApplicationHandler<UserEvent> for App {
                     running_animations.retain(|animation| !animation.is_finished());
                 });
         }
+
+
+        {
+            self.app_context.shared_animations.write(|shared_animations| {
+                shared_animations.iter_mut().for_each(|animation| {
+                    animation.update();
+                });
+                shared_animations.retain(|animation| !animation.is_finished());
+                if !shared_animations.is_empty() {
+                    self.window(|window| {
+                        window.request_redraw();
+                    });
+                }
+            });
+        }
     }
 
     fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
