@@ -1,6 +1,5 @@
 use std::ops::{BitAnd, BitOr};
 use crate::shared::{Gettable, Shared};
-use crate::core::RefClone;
 pub type SharedBool = Shared<bool>;
 
 macro_rules! p_op_p{
@@ -9,14 +8,14 @@ macro_rules! p_op_p{
             type Output = SharedBool;
 
             fn $op_fn(self, rhs: $rhs) -> Self::Output {
-                let lhs = self.ref_clone();
-                let rhs_clone = rhs.ref_clone();
-                let mut output = SharedBool::from_dynamic(Box::new(move || {
-                    lhs.get().$op_fn(rhs_clone.get())
-                }));
-                output.observe(self);
-                output.observe(rhs);
-                output
+                let lhs = self.clone();
+                let rhs_clone = rhs.clone();
+                SharedBool::from_dynamic(
+                    &[self.clone(), rhs.clone()],
+                    move || {
+                        lhs.get().$op_fn(rhs_clone.get())
+                    }
+                )
             }
         }
     };
@@ -28,12 +27,13 @@ macro_rules! p_op_v{
             type Output = SharedBool;
 
             fn $op_fn(self, rhs: bool) -> Self::Output {
-                let lhs = self.ref_clone();
-                let mut output = SharedBool::from_dynamic(Box::new(move || {
-                    lhs.get().$op_fn(rhs)
-                }));
-                output.observe(self);
-                output
+                let lhs = self.clone();
+                SharedBool::from_dynamic(
+                    &[self.clone()],
+                    move || {
+                        lhs.get().$op_fn(rhs)
+                    }
+                )
             }
         }
     };
@@ -45,12 +45,13 @@ macro_rules! v_op_p{
             type Output = SharedBool;
 
             fn $op_fn(self, rhs: &SharedBool) -> Self::Output {
-                let rhs_clone = rhs.ref_clone();
-                let mut output = SharedBool::from_dynamic(Box::new(move || {
-                    self.$op_fn(rhs_clone.get())
-                }));
-                output.observe(rhs);
-                output
+                let rhs_clone = rhs.clone();
+                SharedBool::from_dynamic(
+                    &[rhs.clone()],
+                    move || {
+                        self.$op_fn(rhs_clone.get())
+                    }
+                )
             }
         }
     };

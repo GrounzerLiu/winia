@@ -1,6 +1,5 @@
 use std::ops::Add;
 use std::str::FromStr;
-use crate::core::RefClone;
 use crate::shared::{Gettable, Shared};
 use crate::text::StyledText;
 
@@ -72,14 +71,12 @@ impl Add<SharedText> for SharedText {
     type Output = SharedText;
 
     fn add(self, rhs: SharedText) -> Self::Output {
-        let lhs_clone = self.ref_clone();
-        let rhs_clone = rhs.ref_clone();
-        let mut output = SharedText::from_dynamic(Box::new(move || {
-            lhs_clone.get() + rhs_clone.get()
-        }));
-        output.observe(self);
-        output.observe(rhs);
-        output
+        SharedText::from_dynamic(
+            &[self.clone(), rhs.clone()],
+            move || {
+                self.get() + rhs.get()
+            }
+        )
     }
 }
 
@@ -87,14 +84,14 @@ impl Add<&SharedText> for SharedText {
     type Output = SharedText;
 
     fn add(self, rhs: &SharedText) -> Self::Output {
-        let lhs_clone = self.ref_clone();
-        let rhs_clone = rhs.ref_clone();
-        let mut output = SharedText::from_dynamic(Box::new(move || {
-            lhs_clone.get() + rhs_clone.get()
-        }));
-        output.observe(self);
-        output.observe(rhs);
-        output
+        let lhs = self.clone();
+        let rhs = rhs.clone();
+        SharedText::from_dynamic(
+            &[self.clone(), rhs.clone()],
+            move || {
+                lhs.get() + rhs.get()
+            }
+        )
     }
 }
 
@@ -102,14 +99,13 @@ impl Add<SharedText> for &SharedText {
     type Output = SharedText;
 
     fn add(self, rhs: SharedText) -> Self::Output {
-        let lhs_clone = self.ref_clone();
-        let rhs_clone = rhs.ref_clone();
-        let mut output = SharedText::from_dynamic(Box::new(move || {
-            lhs_clone.get() + rhs_clone.get()
-        }));
-        output.observe(self);
-        output.observe(rhs);
-        output
+        let lhs = self.clone();
+        SharedText::from_dynamic(
+            &[self.clone(), rhs.clone()],
+            move || {
+                lhs.get() + rhs.get()
+            }
+        )
     }
 }
 
@@ -117,14 +113,14 @@ impl Add<&SharedText> for &SharedText {
     type Output = SharedText;
 
     fn add(self, rhs: &SharedText) -> Self::Output {
-        let lhs_clone = self.ref_clone();
-        let rhs_clone = rhs.ref_clone();
-        let mut output = SharedText::from_dynamic(Box::new(move || {
-            lhs_clone.get() + rhs_clone.get()
-        }));
-        output.observe(self);
-        output.observe(rhs);
-        output
+        let lhs = self.clone();
+        let rhs = rhs.clone();
+        SharedText::from_dynamic(
+            &[self.clone(), rhs.clone()],
+            move || {
+                lhs.get() + rhs.get()
+            }
+        )
     }
 }
 
@@ -134,7 +130,7 @@ impl Add<&SharedText> for &SharedText {
 //     type Output = SharedText;
 //
 //     fn add(self, rhs: T) -> Self::Output {
-//         let lhs = self.ref_clone();
+//         let lhs = self.clone();
 //         let mut output = SharedText::from_dynamic(Box::new(move || {
 //             StyledText::from(lhs.get().to_string() + &rhs.to_string())
 //         }));

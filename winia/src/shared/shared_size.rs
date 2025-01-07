@@ -1,4 +1,3 @@
-use crate::core::RefClone;
 use crate::shared::{Gettable, Shared};
 use crate::ui::item::Size;
 
@@ -44,24 +43,19 @@ impl std::ops::Add<&SharedSize> for &SharedSize {
     type Output = SharedSize;
 
     fn add(self, rhs: &SharedSize) -> Self::Output {
-        let lhs_clone = self.ref_clone();
-        let rhs_clone = rhs.ref_clone();
-        SharedSize::from_dynamic(move || {
-            if let Size::Fixed(lhs) = lhs_clone.get() {
-                if let Size::Fixed(rhs) = rhs_clone.get() {
-                    Size::Fixed(lhs + rhs)
-                } else {
-                    panic!("Cannot add fixed size with non-fixed size.")
+        let lhs = self.clone();
+        let rhs = rhs.clone();
+        SharedSize::from_dynamic(
+            &[self.clone(), rhs.clone()],
+            move || {
+                let lhs = lhs.get();
+                let rhs = rhs.get();
+                match (lhs, rhs) {
+                    (Size::Fixed(lhs), Size::Fixed(rhs)) => Size::Fixed(lhs + rhs),
+                    (Size::Relative(lhs), Size::Relative(rhs)) => Size::Relative(lhs + rhs),
+                    _ => { panic!("Addition of different size types") }
                 }
-            } else if let Size::Relative(lhs) = lhs_clone.get() {
-                if let Size::Relative(rhs) = rhs_clone.get() {
-                    Size::Relative(lhs + rhs)
-                } else {
-                    panic!("Cannot add relative size with non-relative size.")
-                }
-            } else {
-                panic!("\"Add\" operation is not supported for \"Compact\" or \"Expanded\" size.")
             }
-        })
+        )
     }
 }

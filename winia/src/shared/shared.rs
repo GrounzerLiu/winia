@@ -1,8 +1,8 @@
-use crate::core::{generate_id, RefClone};
 use crate::ui::app::AppContext;
 use std::fmt::Display;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
+use crate::core::generate_id;
 
 /// A trait for getting the value of a shared.
 /// This function will return a specific value instead of `PropertyValue` which needs to be unwrapped.
@@ -37,7 +37,17 @@ impl Removal {
     }
 }
 
-pub struct Shared<T> {
+#[macro_export]
+macro_rules! shared {
+    (|$($observable:ident),*| $value_generator:block) => {
+        {
+            let observable = [$($observable.clone()),*];
+            Shared::from_dynamic(&observable, move || $value_generator)
+        }
+    }
+}
+
+pub struct Shared<T:?Sized> {
     id: usize,
     /// The value of the shared.
     value: Arc<Mutex<T>>,
@@ -75,11 +85,15 @@ impl<T: 'static> Shared<T> {
         Self::inner_new(value, None)
     }
 
-    pub fn from_dynamic(value_generator: impl Fn() -> T + 'static) -> Self {
+    pub fn from_dynamic<O:Observable+Clone+'static>(o:&[O],value_generator: impl Fn() -> T + 'static) -> Self {
         let value_generator: Box<dyn Fn() -> T> = Box::new(value_generator);
         let value = value_generator();
         let value_generator = Some(value_generator);
-        Self::inner_new(value, value_generator)
+        let mut shared = Self::inner_new(value, value_generator);
+        for observable in o {
+            shared.observe(observable.clone());
+        }
+        shared
     }
 
     pub fn value(&self) -> MutexGuard<T> {
@@ -92,9 +106,11 @@ impl<T: 'static> Shared<T> {
     }
 
     pub fn write<R>(&self, mut operation: impl FnMut(&mut T) -> R) -> R {
-        let mut value = self.value.lock().unwrap();
-        let r = operation(value.deref_mut());
-        self.notify_with_value(value.deref_mut());
+        let r = {
+            let mut value = self.value.lock().unwrap();
+            operation(value.deref_mut())
+        };
+        self.notify();
         r
     }
 
@@ -135,13 +151,9 @@ impl<T: 'static> Shared<T> {
     }
 
     pub fn notify(&self) {
-        let mut value = self.value.lock().unwrap();
-        self.notify_with_value(value.deref_mut());
-    }
-
-    pub fn notify_with_value(&self, value: &mut T) {
         if self.can_generate() {
             let value_generator = self.value_generator.lock().unwrap();
+            let mut value = self.value.lock().unwrap();
             *value = (&value_generator.as_ref().unwrap())();
         }
 
@@ -149,8 +161,9 @@ impl<T: 'static> Shared<T> {
             observer();
         }
 
+        let mut value = self.value.lock().unwrap();
         for (_, observer) in self.specific_observers.lock().unwrap().iter_mut() {
-            observer(value);
+            observer(&mut *value);
         }
     }
 
@@ -164,8 +177,8 @@ impl<T: 'static> Shared<T> {
         self.specific_observers.lock().unwrap().push((id, Box::new(observer)));
     }
 
-    pub fn observe<O: Observable + RefClone + 'static>(&mut self, observable: impl AsRef<O>) {
-        let mut observable = Box::new(observable.as_ref().ref_clone());
+    fn observe<O: Observable + Clone + 'static>(&mut self, observable: O) {
+        let mut observable = Box::new(observable);
         let self_weak = self.weak();
         let removal = observable.add_observer(self.id(), Box::new(move || {
             if let Some(mut property) = self_weak.upgrade() {
@@ -188,6 +201,19 @@ impl<T: 'static> Shared<T> {
             observed_objects: Arc::downgrade(&self.observed_objects),
             simple_observers: Arc::downgrade(&self.simple_observers),
             specific_observers: Arc::downgrade(&self.specific_observers),
+        }
+    }
+}
+
+impl<T:?Sized> Clone for Shared<T> {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            value: self.value.clone(),
+            value_generator: self.value_generator.clone(),
+            observed_objects: self.observed_objects.clone(),
+            simple_observers: self.simple_observers.clone(),
+            specific_observers: self.specific_observers.clone(),
         }
     }
 }
@@ -237,12 +263,6 @@ impl<T: 'static> From<T> for Shared<T> {
     }
 }
 
-impl<T: 'static> From<Box<dyn Fn() -> T>> for Shared<T> {
-    fn from(value_generator: Box<dyn Fn() -> T>) -> Self {
-        Self::from_dynamic(value_generator)
-    }
-}
-
 impl<T: 'static> Settable<T> for Shared<T> {
     fn set(&mut self, value: T) {
         self.set_static(value);
@@ -273,22 +293,9 @@ impl<T: 'static> AsRef<Shared<T>> for Shared<T> {
     }
 }
 
-impl<T: 'static> RefClone for Shared<T> {
-    fn ref_clone(&self) -> Self {
-        Self {
-            id: self.id,
-            value: self.value.clone(),
-            value_generator: self.value_generator.clone(),
-            observed_objects: self.observed_objects.clone(),
-            simple_observers: self.simple_observers.clone(),
-            specific_observers: self.specific_observers.clone(),
-        }
-    }
-}
-
 impl<T: 'static> From<&Shared<T>> for Shared<T> {
     fn from(value: &Shared<T>) -> Self {
-        value.ref_clone()
+        value.clone()
     }
 }
 
@@ -310,6 +317,7 @@ impl<T: 'static + Default> Default for Shared<T> {
     }
 }
 
+#[derive(Clone)]
 pub struct WeakShared<T> {
     id: usize,
     value: Weak<Mutex<T>>,
@@ -350,19 +358,6 @@ impl<T: 'static> WeakShared<T> {
 
     pub fn write<R>(&self, operation: impl Fn(&mut T) -> R) -> Option<R> {
         Some(self.upgrade()?.write(operation))
-    }
-}
-
-impl<T> RefClone for WeakShared<T> {
-    fn ref_clone(&self) -> Self {
-        Self {
-            id: self.id,
-            value: self.value.clone(),
-            value_generator: self.value_generator.clone(),
-            observed_objects: self.observed_objects.clone(),
-            simple_observers: self.simple_observers.clone(),
-            specific_observers: self.specific_observers.clone(),
-        }
     }
 }
 

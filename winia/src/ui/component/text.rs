@@ -1,5 +1,3 @@
-use std::collections::LinkedList;
-use crate::core::RefClone;
 use crate::dpi::{LogicalPosition, LogicalSize, Position};
 use crate::shared::{
     Children, Gettable, Observable, Settable, Shared, SharedBool, SharedColor, SharedF32,
@@ -14,8 +12,8 @@ use crate::ui::item::{
 use crate::ui::Item;
 use proc_macro::RefClone;
 use skia_safe::textlayout::{TextAlign, TextStyle};
-use skia_safe::{BBHFactory, Color, Drawable, Paint, Picture, PictureRecorder, Rect, Vector};
-use std::ops::{Deref, Not, Range};
+use skia_safe::{Color, Drawable, Paint, PictureRecorder, Rect, Vector};
+use std::ops::{Not, Range};
 use std::string::ToString;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -54,7 +52,7 @@ impl DrawCache {
 }
 
 
-#[derive(RefClone)]
+#[derive(Clone)]
 struct TextContext {
     is_text_changed: Shared<bool>,
     draw_caches: Shared<DrawCache>,
@@ -100,7 +98,7 @@ impl Text {
         let item_event = ItemEvent::new()
             .measure({
                 let property = property.clone();
-                let context = context.ref_clone();
+                let context = context.clone();
                 move |item, width_mode, height_mode| {
                     let property = property.lock().unwrap();
                     let text_style = get_text_style(&property);
@@ -175,7 +173,7 @@ impl Text {
                 }
             })
             .layout({
-                let mut context = context.ref_clone();
+                let mut context = context.clone();
                 let property = property.clone();
                 move |item, width, _height| {
                     let property = property.lock().unwrap();
@@ -254,7 +252,7 @@ impl Text {
                 }
             })
             .ime_input({
-                let context = context.ref_clone();
+                let context = context.clone();
                 let property = property.clone();
                 move |item, ime_action| {
                     let mut property = property.lock().unwrap();
@@ -338,7 +336,7 @@ impl Text {
             })
             .draw({
                 let property = property.clone();
-                let context = context.ref_clone();
+                let context = context.clone();
                 move |item, canvas| {
                     let property = property.lock().unwrap();
                     let text = property.text.value();
@@ -519,7 +517,7 @@ impl Text {
                 }
             })
             .keyboard_input({
-                let context = context.ref_clone();
+                let context = context.clone();
                 let property = property.clone();
                 move |item, device_id, event, is_synthetic| {
                     if !property.lock().unwrap().editable.get() || !item.get_focused().get() {
@@ -587,7 +585,7 @@ impl Text {
                 }
             })
             .on_mouse_input({
-                let context = context.ref_clone();
+                let context = context.clone();
                 let property = property.clone();
                 move |item, event| {
                     let property = property.lock().unwrap();
@@ -635,7 +633,7 @@ impl Text {
                 }
             })
             .on_focus({
-                let app_context = app_context.ref_clone();
+                let app_context = app_context.clone();
                 move |item, focused| {
                     let display_parameter = item.get_display_parameter();
                     let x = display_parameter.x() as f64;
@@ -656,7 +654,7 @@ impl Text {
                 }
             })
             .timer({
-                let context = context.ref_clone();
+                let context = context.clone();
                 move |item, id| {
                     if id == item.get_id() {
                         context.show_cursor.write(|show_cursor|*show_cursor = show_cursor.not());
@@ -687,7 +685,7 @@ impl Text {
             let mut property = self.property.lock().unwrap();
             property.text.remove_observer(id);
 
-            let mut text_context = self.text_context.ref_clone();
+            let mut text_context = self.text_context.clone();
             let app_context = self.item.get_app_context();
             property.text = text.into();
             property.text.add_specific_observer(
@@ -758,6 +756,6 @@ pub trait TextBlockExt {
 
 impl TextBlockExt for AppContext {
     fn text(&self, text: impl Into<SharedText>) -> Text {
-        Text::new(self.ref_clone()).text(text)
+        Text::new(self.clone()).text(text)
     }
 }

@@ -1,31 +1,30 @@
 mod app_context;
 
-use crate::core::RefClone;
 use crate::dpi::LogicalSize;
 use crate::shared::{Gettable, Shared, SharedBool};
 use crate::ui::item::{ImeAction, MeasureMode, MouseEvent, PointerState, TouchEvent};
 use crate::ui::{theme, Item};
 use crate::LockUnwrap;
 pub use app_context::*;
-use skia_safe::{Color, Font, TextBlob};
+use skia_safe::Color;
 use skiwin::vulkan::VulkanSkiaWindow;
 use skiwin::SkiaWindow;
 use std::ops::DerefMut;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use winit::application::ApplicationHandler;
 use winit::dpi::Size;
 use winit::event::{ElementState, Ime, MouseButton, StartCause, Touch, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::window::{WindowAttributes, WindowId};
 
-macro_rules! ref_clone {
+macro_rules! clone {
     ($t:ty, $( $x:ident ),+) => {
-        impl RefClone for $t {
-            fn ref_clone(&self) -> Self {
+        impl Clone for $t {
+            fn clone(&self) -> Self {
                 Self{
                     $(
-                        $x: self.$x.ref_clone(),
+                        $x: self.$x.clone(),
                     )*
                 }
             }
@@ -38,7 +37,7 @@ macro_rules! property_get {
         impl $st{
             $(
                 pub fn $name(&self) -> $ty {
-                    self.$name.ref_clone()
+                    self.$name.clone()
                 }
             )*
         }
@@ -82,7 +81,7 @@ impl AppProperty {
     }
 }
 
-ref_clone!(
+clone!(
     AppProperty,
     title,
     min_width,
@@ -123,12 +122,12 @@ pub struct App {
 impl App {
     pub fn new(item_generator: impl FnOnce(AppContext, AppProperty) -> Item + 'static) -> Self {
         let app_property = AppProperty::default();
-        let title = app_property.title.ref_clone();
-        let min_width = app_property.min_width.ref_clone();
-        let min_height = app_property.min_height.ref_clone();
-        let max_width = app_property.max_width.ref_clone();
-        let max_height = app_property.max_height.ref_clone();
-        let maximized = app_property.maximized.ref_clone();
+        let title = app_property.title.clone();
+        let min_width = app_property.min_width.clone();
+        let min_height = app_property.min_height.clone();
+        let max_width = app_property.max_width.clone();
+        let max_height = app_property.max_height.clone();
+        let maximized = app_property.maximized.clone();
         Self {
             app_context: AppContext::new(),
             app_property: Arc::new(Mutex::new(app_property)),
@@ -195,9 +194,9 @@ impl App {
     pub fn title(self, title: impl Into<Shared<String>>) -> Self {
         let mut title = title.into();
         self.app_property.lock_unwrap_mut(|app_property| {
-            app_property.title = title.ref_clone();
+            app_property.title = title.clone();
         });
-        let app_context = self.app_context.ref_clone();
+        let app_context = self.app_context.clone();
         title.add_specific_observer(self.id(), move |title| {
             app_context.window(|window| {
                 window.set_title(title.as_str());
@@ -209,9 +208,9 @@ impl App {
     pub fn min_width(self, min_width: impl Into<Shared<f32>>) -> Self {
         let mut min_width = min_width.into();
         self.app_property.lock_unwrap_mut(|app_property| {
-            app_property.min_width = min_width.ref_clone();
+            app_property.min_width = min_width.clone();
         });
-        let app_context = self.app_context.ref_clone();
+        let app_context = self.app_context.clone();
         let app_property = Arc::downgrade(&self.app_property);
         min_width.add_specific_observer(self.id(), move |min_width| {
             app_context.window(|window| {
@@ -230,9 +229,9 @@ impl App {
     pub fn min_height(self, min_height: impl Into<Shared<f32>>) -> Self {
         let mut min_height = min_height.into();
         self.app_property.lock_unwrap_mut(|app_property| {
-            app_property.min_height = min_height.ref_clone();
+            app_property.min_height = min_height.clone();
         });
-        let app_context = self.app_context.ref_clone();
+        let app_context = self.app_context.clone();
         let app_property = Arc::downgrade(&self.app_property);
         min_height.add_specific_observer(self.id(), move |min_height| {
             app_context.window(|window| {
@@ -251,9 +250,9 @@ impl App {
     pub fn max_width(self, max_width: impl Into<Shared<f32>>) -> Self {
         let mut max_width = max_width.into();
         self.app_property.lock_unwrap_mut(|app_property| {
-            app_property.max_width = max_width.ref_clone();
+            app_property.max_width = max_width.clone();
         });
-        let app_context = self.app_context.ref_clone();
+        let app_context = self.app_context.clone();
         let app_property = Arc::downgrade(&self.app_property);
         max_width.add_specific_observer(self.id(), move |max_width| {
             app_context.window(|window| {
@@ -272,9 +271,9 @@ impl App {
     pub fn max_height(self, max_height: impl Into<Shared<f32>>) -> Self {
         let mut max_height = max_height.into();
         self.app_property.lock_unwrap_mut(|app_property| {
-            app_property.max_height = max_height.ref_clone();
+            app_property.max_height = max_height.clone();
         });
-        let app_context = self.app_context.ref_clone();
+        let app_context = self.app_context.clone();
         let app_property = Arc::downgrade(&self.app_property);
         max_height.add_specific_observer(self.id(), move |max_height| {
             app_context.window(|window| {
@@ -293,9 +292,9 @@ impl App {
     pub fn maximized(self, maximized: impl Into<SharedBool>) -> Self {
         let mut maximized = maximized.into();
         self.app_property.lock_unwrap_mut(|app_property| {
-            app_property.maximized = maximized.ref_clone();
+            app_property.maximized = maximized.clone();
         });
-        let app_context = self.app_context.ref_clone();
+        let app_context = self.app_context.clone();
         maximized.add_specific_observer(self.id(), move |maximized| {
             app_context.window(|window| {
                 window.set_maximized(*maximized);
@@ -328,8 +327,8 @@ impl ApplicationHandler<UserEvent> for App {
             }
             if let Some(item_generator) = self.item_generator.take() {
                 self.item = Some(item_generator(
-                    self.app_context.ref_clone(),
-                    self.app_property.lock().unwrap().ref_clone(),
+                    self.app_context.clone(),
+                    self.app_property.lock().unwrap().clone(),
                 ));
             }
         }
@@ -529,7 +528,7 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::RedrawRequested => {
                 let background_color = self.app_context.theme.read(|theme| theme.get_color(theme::WINDOW_BACKGROUND_COLOR)).unwrap_or(Color::WHITE);
-                // self.app_context.ref_clone().window(|window| {
+                // self.app_context.clone().window(|window| {
                 if let Some((surface_ref, scale_factor)) = {
                     self.app_context.window.read(|window_option| {
                         let window = window_option.as_ref()?;
@@ -585,12 +584,12 @@ impl ApplicationHandler<UserEvent> for App {
                                 );
                                 item.dispatch_layout(0.0, 0.0, size.width, size.height);
                                 animation.inner.lock().unwrap().start_time = Instant::now();
-                                item.dispatch_animation(animation.ref_clone());
+                                item.dispatch_animation(animation.clone());
                             }
                             self.app_context
                                 .running_animations
                                 .write(|running_animations| {
-                                    running_animations.push(animation.ref_clone());
+                                    running_animations.push(animation.clone());
                                 });
                         }
                     });
@@ -675,8 +674,6 @@ pub fn run_app(app: App) {
     run_app_with_event_loop(app, event_loop);
 }
 
-use skiwin::cpu::SoftSkiaWindow;
-use skiwin::gl::GlSkiaWindow;
 #[cfg(target_os = "android")]
 use winit::platform::android::activity::AndroidApp;
 #[cfg(target_os = "android")]

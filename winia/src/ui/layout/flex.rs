@@ -1,10 +1,8 @@
-use std::ops::Not;
-use std::sync::{Arc, Mutex};
-use crate::core::RefClone;
 use crate::shared::{Children, Gettable, Observable, Shared, SharedUsize};
 use crate::ui::app::AppContext;
 use crate::ui::item::{CustomProperty, ItemEvent, LogicalX, MeasureMode, Orientation};
 use crate::ui::Item;
+use std::ops::Not;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlexDirection {
@@ -90,7 +88,7 @@ impl FlexGrow for Item {
             None => { None }
             Some(p) => {
                 match p {
-                    CustomProperty::Usize(f) => { Some(f.ref_clone()) }
+                    CustomProperty::Usize(f) => { Some(f.clone()) }
                     _ => { None }
                 }
             }
@@ -98,6 +96,7 @@ impl FlexGrow for Item {
     }
 }
 
+#[derive(Clone)]
 struct FlexProperties {
     pub direction: Shared<FlexDirection>,
     pub wrap: Shared<FlexWrap>,
@@ -398,7 +397,7 @@ impl Flex {
 
         let item_event = ItemEvent::new()
             .measure({
-                let properties = properties.ref_clone();
+                let properties = properties.clone();
                 move |item, width_mode, height_mode| {
                     let properties = properties.value();
                     item.measure_children(width_mode, height_mode);
@@ -463,7 +462,7 @@ impl Flex {
                 }
             })
             .layout({
-                let properties = properties.ref_clone();
+                let properties = properties.clone();
                 move |item, width, height| {
                     if item.get_children().len() == 0 {
                         return;
@@ -1240,6 +1239,6 @@ pub trait FlexExt {
 
 impl FlexExt for AppContext {
     fn flex(&self, children: Children) -> Flex {
-        Flex::new(self.ref_clone(), children)
+        Flex::new(self.clone(), children)
     }
 }

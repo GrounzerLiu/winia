@@ -1,12 +1,11 @@
-use crate::core::{get_id_by_str, RefClone};
 use crate::ui::animation::interpolator::{EaseOutCirc, Interpolator};
+use crate::ui::animation::Target;
 use crate::ui::app::AppContext;
 use material_color_utilities::blend_cam16ucs;
 use material_color_utilities::utils::argb_from_rgb;
 use skia_safe::Color;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use crate::ui::animation::Target;
 
 pub(crate) struct InnerAnimation {
     pub app_context: AppContext,
@@ -64,6 +63,7 @@ impl InnerAnimation {
     }
 }
 
+#[derive(Clone)]
 pub struct Animation {
     pub(crate) inner: Arc<Mutex<InnerAnimation>>,
 }
@@ -103,10 +103,10 @@ impl Animation {
     }
 
     pub fn start(self) {
-        let mut app_context = self.inner.lock().unwrap().app_context.ref_clone();
+        let mut app_context = self.inner.lock().unwrap().app_context.clone();
         app_context
             .starting_animations
-            .write(|starting_animations| starting_animations.push_back(self.ref_clone()));
+            .write(|starting_animations| starting_animations.push_back(self.clone()));
     }
 
     pub fn is_finished(&self) -> bool {
@@ -130,20 +130,12 @@ impl Animation {
     }
 }
 
-impl RefClone for Animation {
-    fn ref_clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-        }
-    }
-}
-
 pub trait AnimationExt {
     fn animate(&self, target: Target) -> Animation;
 }
 
 impl AnimationExt for AppContext {
     fn animate(&self, target: Target) -> Animation {
-        Animation::new(self.ref_clone(), target)
+        Animation::new(self.clone(), target)
     }
 }

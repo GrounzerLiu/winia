@@ -1,4 +1,4 @@
-use crate::core::{bind_str_to_id, generate_id, RefClone};
+use crate::core::{bind_str_to_id, generate_id};
 use crate::shared::{
     Children, Gettable, Observable, Settable, Shared, SharedBool, SharedColor, SharedF32,
     SharedInnerPosition, SharedItem, SharedSize, SharedUsize,
@@ -9,7 +9,6 @@ use crate::ui::item::{
     Orientation, PointerState, Size, TouchEvent,
 };
 use crate::ui::Animation;
-use crate::OptionalInvoke;
 use skia_safe::{Canvas, Color, Surface};
 use std::any::Any;
 use std::collections::{HashMap, LinkedList};
@@ -45,13 +44,13 @@ macro_rules! impl_property_re_layout {
             #[doc=$doc]
             pub fn $property_name(mut self, $property_name: impl Into<$property_type>) -> Self {
                 self.$property_name.remove_observer(self.id);
-                // let app_context = self.app_context.ref_clone();
+                // let app_context = self.app_context.clone();
                 self.$property_name = $property_name.into();
                 // self.$property_name.add_observer(self.id, Box::new(move || {
                 //     app_context.request_re_layout();
                 // })).drop();
                 init_property_re_layout(
-                    self.app_context.ref_clone(),
+                    self.app_context.clone(),
                     &mut self.$property_name,
                     self.id,
                 );
@@ -59,7 +58,7 @@ macro_rules! impl_property_re_layout {
             }
 
             pub fn $get_property_name(&self) -> $property_type {
-                self.$property_name.ref_clone()
+                self.$property_name.clone()
             }
         }
     };
@@ -71,13 +70,13 @@ macro_rules! impl_property_redraw {
             #[doc=$doc]
             pub fn $property_name(mut self, $property_name: impl Into<$property_type>) -> Self {
                 self.$property_name.remove_observer(self.id);
-                // let app_context = self.app_context.ref_clone();
+                // let app_context = self.app_context.clone();
                 self.$property_name = $property_name.into();
                 // self.$property_name.add_observer(self.id, Box::new(move || {
                 //     app_context.request_redraw();
                 // })).drop();
                 init_property_redraw(
-                    self.app_context.ref_clone(),
+                    self.app_context.clone(),
                     &mut self.$property_name,
                     self.id,
                 );
@@ -85,7 +84,7 @@ macro_rules! impl_property_redraw {
             }
 
             pub fn $get_property_name(&self) -> $property_type {
-                self.$property_name.ref_clone()
+                self.$property_name.clone()
             }
         }
     };
@@ -108,7 +107,7 @@ macro_rules! calculate_animation_value {
     ($name:ident, $s:ident, $display_parameter:ident) => {
         let p = {
             if let Some((start, animation)) = &$s.animations.$name {
-                Some((start, animation.ref_clone()))
+                Some((start, animation.clone()))
             } else {
                 None
             }
@@ -507,94 +506,94 @@ impl Item {
             horizontal_gravity: Gravity::Start.into(),
             vertical_gravity: Gravity::Start.into(),
         };
-        init_property_re_layout(item.app_context.ref_clone(), &mut item.active, item.id);
+        init_property_re_layout(item.app_context.clone(), &mut item.active, item.id);
         init_property_re_layout(
-            item.app_context.ref_clone(),
+            item.app_context.clone(),
             &mut item.layout_direction,
             item.id,
         );
-        init_property_re_layout(item.app_context.ref_clone(), &mut item.width, item.id);
-        init_property_re_layout(item.app_context.ref_clone(), &mut item.min_width, item.id);
-        init_property_re_layout(item.app_context.ref_clone(), &mut item.max_width, item.id);
-        init_property_re_layout(item.app_context.ref_clone(), &mut item.height, item.id);
-        init_property_re_layout(item.app_context.ref_clone(), &mut item.min_height, item.id);
-        init_property_re_layout(item.app_context.ref_clone(), &mut item.max_height, item.id);
+        init_property_re_layout(item.app_context.clone(), &mut item.width, item.id);
+        init_property_re_layout(item.app_context.clone(), &mut item.min_width, item.id);
+        init_property_re_layout(item.app_context.clone(), &mut item.max_width, item.id);
+        init_property_re_layout(item.app_context.clone(), &mut item.height, item.id);
+        init_property_re_layout(item.app_context.clone(), &mut item.min_height, item.id);
+        init_property_re_layout(item.app_context.clone(), &mut item.max_height, item.id);
         init_property_re_layout(
-            item.app_context.ref_clone(),
+            item.app_context.clone(),
             &mut item.padding_start,
             item.id,
         );
-        init_property_re_layout(item.app_context.ref_clone(), &mut item.padding_top, item.id);
-        init_property_re_layout(item.app_context.ref_clone(), &mut item.padding_end, item.id);
+        init_property_re_layout(item.app_context.clone(), &mut item.padding_top, item.id);
+        init_property_re_layout(item.app_context.clone(), &mut item.padding_end, item.id);
         init_property_re_layout(
-            item.app_context.ref_clone(),
+            item.app_context.clone(),
             &mut item.padding_bottom,
             item.id,
         );
         init_property_re_layout(
-            item.app_context.ref_clone(),
+            item.app_context.clone(),
             &mut item.margin_start,
             item.id,
         );
-        init_property_re_layout(item.app_context.ref_clone(), &mut item.margin_top, item.id);
-        init_property_re_layout(item.app_context.ref_clone(), &mut item.margin_end, item.id);
+        init_property_re_layout(item.app_context.clone(), &mut item.margin_top, item.id);
+        init_property_re_layout(item.app_context.clone(), &mut item.margin_end, item.id);
         init_property_re_layout(
-            item.app_context.ref_clone(),
+            item.app_context.clone(),
             &mut item.margin_bottom,
             item.id,
         );
-        init_property_re_layout(item.app_context.ref_clone(), &mut item.scale_x, item.id);
-        init_property_re_layout(item.app_context.ref_clone(), &mut item.scale_y, item.id);
+        init_property_re_layout(item.app_context.clone(), &mut item.scale_x, item.id);
+        init_property_re_layout(item.app_context.clone(), &mut item.scale_y, item.id);
         init_property_re_layout(
-            item.app_context.ref_clone(),
+            item.app_context.clone(),
             &mut item.scale_center_x,
             item.id,
         );
         init_property_re_layout(
-            item.app_context.ref_clone(),
+            item.app_context.clone(),
             &mut item.scale_center_y,
             item.id,
         );
-        init_property_re_layout(item.app_context.ref_clone(), &mut item.offset_x, item.id);
-        init_property_re_layout(item.app_context.ref_clone(), &mut item.offset_y, item.id);
-        init_property_re_layout(item.app_context.ref_clone(), &mut item.opacity, item.id);
-        init_property_re_layout(item.app_context.ref_clone(), &mut item.rotation, item.id);
+        init_property_re_layout(item.app_context.clone(), &mut item.offset_x, item.id);
+        init_property_re_layout(item.app_context.clone(), &mut item.offset_y, item.id);
+        init_property_re_layout(item.app_context.clone(), &mut item.opacity, item.id);
+        init_property_re_layout(item.app_context.clone(), &mut item.rotation, item.id);
         init_property_re_layout(
-            item.app_context.ref_clone(),
+            item.app_context.clone(),
             &mut item.rotation_center_x,
             item.id,
         );
         init_property_re_layout(
-            item.app_context.ref_clone(),
+            item.app_context.clone(),
             &mut item.rotation_center_y,
             item.id,
         );
-        init_property_re_layout(item.app_context.ref_clone(), &mut item.skew_x, item.id);
-        init_property_re_layout(item.app_context.ref_clone(), &mut item.skew_y, item.id);
+        init_property_re_layout(item.app_context.clone(), &mut item.skew_x, item.id);
+        init_property_re_layout(item.app_context.clone(), &mut item.skew_y, item.id);
         init_property_re_layout(
-            item.app_context.ref_clone(),
+            item.app_context.clone(),
             &mut item.skew_center_x,
             item.id,
         );
         init_property_re_layout(
-            item.app_context.ref_clone(),
+            item.app_context.clone(),
             &mut item.skew_center_y,
             item.id,
         );
-        init_property_re_layout(item.app_context.ref_clone(), &mut item.background, item.id);
-        init_property_re_layout(item.app_context.ref_clone(), &mut item.foreground, item.id);
+        init_property_re_layout(item.app_context.clone(), &mut item.background, item.id);
+        init_property_re_layout(item.app_context.clone(), &mut item.foreground, item.id);
         init_property_re_layout(
-            item.app_context.ref_clone(),
+            item.app_context.clone(),
             &mut item.enable_background_blur,
             item.id,
         );
         init_property_re_layout(
-            item.app_context.ref_clone(),
+            item.app_context.clone(),
             &mut item.horizontal_gravity,
             item.id,
         );
         init_property_re_layout(
-            item.app_context.ref_clone(),
+            item.app_context.clone(),
             &mut item.vertical_gravity,
             item.id,
         );
@@ -602,7 +601,7 @@ impl Item {
     }
 
     pub fn get_app_context(&self) -> AppContext {
-        self.app_context.ref_clone()
+        self.app_context.clone()
     }
 
     pub fn get_id(&self) -> usize {
@@ -640,11 +639,11 @@ impl Item {
         let self_item_id = self.id;
         self.focused.remove_observer(self_item_id);
 
-        let mut app_context = self.app_context.ref_clone();
+        let mut app_context = self.app_context.clone();
 
         self.focused = focused.into();
         let self_item_id = self.id;
-        let focused_property_clone = self.focused.ref_clone();
+        let focused_property_clone = self.focused.clone();
         self.focused
             .add_specific_observer(self_item_id, move |focused| {
                 enum Action {
@@ -696,14 +695,14 @@ impl Item {
                             .write(|focus_changed_items| focus_changed_items.insert(self_item_id));
                         app_context.focused_property.write(|focused_property| {
                             focused_property
-                                .replace((focused_property_clone.ref_clone(), self_item_id))
+                                .replace((focused_property_clone.clone(), self_item_id))
                         });
                         app_context.send_user_event(UserEvent::RequestFocus);
                     }
                     Action::Nothing => {
                         if let Some(v) = focused_property_value {
                             app_context.focused_property.write(move |focused_property| {
-                                focused_property.replace((v.0.ref_clone(),v.1))
+                                focused_property.replace((v.0.clone(),v.1))
                             });
                         }
                     }
@@ -724,7 +723,7 @@ impl Item {
     }
 
     pub fn get_focused(&self) -> Shared<bool> {
-        self.focused.ref_clone()
+        self.focused.clone()
     }
 
     pub fn is_animating(&self) -> bool {
@@ -1005,94 +1004,94 @@ impl Item {
             let target_parameter = self.target_parameter.clone();
             if !f32_eq(recorded_parameter.width, target_parameter.width) {
                 self.animations.parent_x =
-                    Some((recorded_parameter.parent_x, animation.ref_clone()));
+                    Some((recorded_parameter.parent_x, animation.clone()));
             }
             if !f32_eq(recorded_parameter.height, target_parameter.height) {
                 self.animations.parent_y =
-                    Some((recorded_parameter.parent_y, animation.ref_clone()));
+                    Some((recorded_parameter.parent_y, animation.clone()));
             }
             if !f32_eq(recorded_parameter.relative_x, target_parameter.relative_x) {
                 self.animations.relative_x =
-                    Some((recorded_parameter.relative_x, animation.ref_clone()));
+                    Some((recorded_parameter.relative_x, animation.clone()));
             }
             if !f32_eq(recorded_parameter.relative_y, target_parameter.relative_y) {
                 self.animations.relative_y =
-                    Some((recorded_parameter.relative_y, animation.ref_clone()));
+                    Some((recorded_parameter.relative_y, animation.clone()));
             }
             if !f32_eq(recorded_parameter.offset_x, target_parameter.offset_x) {
                 self.animations.offset_x =
-                    Some((recorded_parameter.offset_x, animation.ref_clone()));
+                    Some((recorded_parameter.offset_x, animation.clone()));
             }
             if !f32_eq(recorded_parameter.offset_y, target_parameter.offset_y) {
                 self.animations.offset_y =
-                    Some((recorded_parameter.offset_y, animation.ref_clone()));
+                    Some((recorded_parameter.offset_y, animation.clone()));
             }
             if !f32_eq(recorded_parameter.opacity, target_parameter.opacity) {
-                self.animations.opacity = Some((recorded_parameter.opacity, animation.ref_clone()));
+                self.animations.opacity = Some((recorded_parameter.opacity, animation.clone()));
             }
             if !f32_eq(recorded_parameter.rotation, target_parameter.rotation) {
                 self.animations.rotation =
-                    Some((recorded_parameter.rotation, animation.ref_clone()));
+                    Some((recorded_parameter.rotation, animation.clone()));
             }
             if !f32_eq(
                 recorded_parameter.rotation_center_x,
                 target_parameter.rotation_center_x,
             ) {
                 self.animations.rotation_center_x =
-                    Some((recorded_parameter.rotation_center_x, animation.ref_clone()));
+                    Some((recorded_parameter.rotation_center_x, animation.clone()));
             }
             if !f32_eq(
                 recorded_parameter.rotation_center_y,
                 target_parameter.rotation_center_y,
             ) {
                 self.animations.rotation_center_y =
-                    Some((recorded_parameter.rotation_center_y, animation.ref_clone()));
+                    Some((recorded_parameter.rotation_center_y, animation.clone()));
             }
             if !f32_eq(recorded_parameter.scale_x, target_parameter.scale_x) {
-                self.animations.scale_x = Some((recorded_parameter.scale_x, animation.ref_clone()));
+                self.animations.scale_x = Some((recorded_parameter.scale_x, animation.clone()));
             }
             if !f32_eq(recorded_parameter.scale_y, target_parameter.scale_y) {
-                self.animations.scale_y = Some((recorded_parameter.scale_y, animation.ref_clone()));
+                self.animations.scale_y = Some((recorded_parameter.scale_y, animation.clone()));
             }
             if !f32_eq(
                 recorded_parameter.scale_center_x,
                 target_parameter.scale_center_x,
             ) {
                 self.animations.scale_center_x =
-                    Some((recorded_parameter.scale_center_x, animation.ref_clone()));
+                    Some((recorded_parameter.scale_center_x, animation.clone()));
             }
             if !f32_eq(
                 recorded_parameter.scale_center_y,
                 target_parameter.scale_center_y,
             ) {
                 self.animations.scale_center_y =
-                    Some((recorded_parameter.scale_center_y, animation.ref_clone()));
+                    Some((recorded_parameter.scale_center_y, animation.clone()));
             }
             if !f32_eq(recorded_parameter.skew_x, target_parameter.skew_x) {
-                self.animations.skew_x = Some((recorded_parameter.skew_x, animation.ref_clone()));
+                self.animations.skew_x = Some((recorded_parameter.skew_x, animation.clone()));
             }
             if !f32_eq(recorded_parameter.skew_y, target_parameter.skew_y) {
-                self.animations.skew_y = Some((recorded_parameter.skew_y, animation.ref_clone()));
+                self.animations.skew_y = Some((recorded_parameter.skew_y, animation.clone()));
             }
             if !f32_eq(
                 recorded_parameter.skew_center_x,
                 target_parameter.skew_center_x,
             ) {
                 self.animations.skew_center_x =
-                    Some((recorded_parameter.skew_center_x, animation.ref_clone()));
+                    Some((recorded_parameter.skew_center_x, animation.clone()));
             }
             if !f32_eq(
                 recorded_parameter.skew_center_y,
                 target_parameter.skew_center_y,
             ) {
                 self.animations.skew_center_y =
-                    Some((recorded_parameter.skew_center_y, animation.ref_clone()));
+                    Some((recorded_parameter.skew_center_y, animation.clone()));
             }
             if !f32_eq(recorded_parameter.width, target_parameter.width) {
-                self.animations.width = Some((recorded_parameter.width, animation.ref_clone()));
+                self.animations.width = Some((recorded_parameter.width, animation.clone()));
             }
             if !f32_eq(recorded_parameter.height, target_parameter.height) {
-                self.animations.height = Some((recorded_parameter.height, animation.ref_clone()));
+                self.animations.height = Some((recorded_parameter.height, animation.clone()));
             }
 
             {
@@ -1104,7 +1103,7 @@ impl Item {
                             if !f32_eq(*start, *end) {
                                 self.animations
                                     .float_params
-                                    .insert(key.clone(), (start.clone(), animation.ref_clone()));
+                                    .insert(key.clone(), (start.clone(), animation.clone()));
                             }
                         }
                     });
@@ -1119,7 +1118,7 @@ impl Item {
                             if start != end {
                                 self.animations
                                     .color_params
-                                    .insert(key.clone(), (start.clone(), animation.ref_clone()));
+                                    .insert(key.clone(), (start.clone(), animation.clone()));
                             }
                         }
                     });
@@ -1127,7 +1126,7 @@ impl Item {
         }
 
         self.children.items().iter_mut().for_each(|child| {
-            child.dispatch_animation(animation.ref_clone());
+            child.dispatch_animation(animation.clone());
         });
     }
 

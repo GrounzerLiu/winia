@@ -1,7 +1,6 @@
 use std::ops::Add;
 use std::time::{Duration, Instant};
 use crate::shared::{Gettable, Settable, Shared, SharedAnimation};
-use crate::core::RefClone;
 use crate::ui::animation::interpolator::Interpolator;
 use crate::ui::animation::interpolator::Linear;
 use crate::ui::app::AppContext;
@@ -12,13 +11,14 @@ macro_rules! p_op_v {
             type Output = $out;
 
             fn $op_fn(self, rhs: $r) -> Self::Output {
-                let lhs = self.ref_clone();
+                let lhs = self.clone();
                 let rhs = rhs.clone();
-                let mut output = Shared::from_dynamic(Box::new(move || {
-                    lhs.get().$op_fn(rhs)
-                }));
-                output.observe(self);
-                output
+                Shared::from_dynamic(
+                    &[lhs.clone()],
+                    move || {
+                        lhs.get().$op_fn(rhs)
+                    }
+                )
             }
         }
     };
@@ -31,12 +31,13 @@ macro_rules! v_op_p {
 
             fn $op_fn(self, rhs: $r) -> Self::Output {
                 let lhs = self.clone();
-                let rhs_clone = rhs.ref_clone();
-                let mut output = Shared::from_dynamic(Box::new(move || {
-                    lhs.$op_fn(rhs_clone.get())
-                }));
-                output.observe(rhs);
-                output
+                let rhs_clone = rhs.clone();
+                Shared::from_dynamic(
+                    &[rhs_clone.clone()],
+                    move || {
+                        lhs.$op_fn(rhs_clone.get())
+                    }
+                )
             }
         }
     };
@@ -48,14 +49,14 @@ macro_rules! p_op_p {
             type Output = $out;
 
             fn $op_fn(self, rhs: $r) -> Self::Output {
-                let lhs = self.ref_clone();
-                let rhs_clone = rhs.ref_clone();
-                let mut output = Shared::from_dynamic(Box::new(move || {
-                    lhs.get().$op_fn(rhs_clone.get())
-                }));
-                output.observe(self);
-                output.observe(rhs);
-                output
+                let lhs = self.clone();
+                let rhs_clone = rhs.clone();
+                Shared::from_dynamic(
+                    &[lhs.clone(), rhs_clone.clone()],
+                    move || {
+                        lhs.get().$op_fn(rhs_clone.get())
+                    }
+                )
             }
         }
     };
@@ -148,12 +149,13 @@ macro_rules! into_type {
     ($from: ty, $to: ident) =>{
         impl Shared<$from> {
             pub fn $to(&self) -> Shared<$to> {
-                let self_clone = self.ref_clone();
-                let mut output = Shared::from_dynamic(Box::new(move || {
-                    self_clone.get() as $to
-                }));
-                output.observe(self.ref_clone());
-                output
+                let self_clone = self.clone();
+                Shared::from_dynamic(
+                    &[self.clone()],
+                    move || {
+                        self_clone.get() as $to
+                    }
+                )
             }
         }
     }
@@ -237,7 +239,7 @@ impl SharedAnimation for F32Animation{
 impl SharedF32{
     pub fn animation_to_f32(&self, to: impl Into<f32>) -> F32Animation{
         F32Animation::new(
-            self.ref_clone(),
+            self.clone(),
             self.get(),
             to.into(),
             Duration::from_millis(1000),

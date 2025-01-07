@@ -1,9 +1,9 @@
-use std::sync::{Arc, Mutex};
-use crate::core::{generate_id, RefClone};
-use crate::shared::{Children, Gettable, SharedGravity, Observable};
+use crate::core::generate_id;
+use crate::shared::{Children, Gettable, Observable, SharedGravity};
 use crate::ui::app::AppContext;
+use crate::ui::item::{Gravity, ItemEvent, LogicalX, MeasureMode, Orientation};
 use crate::ui::Item;
-use crate::ui::item::{Gravity, ItemEvent, LogicalX, MeasureMode, Orientation, Size};
+use std::sync::{Arc, Mutex};
 
 struct StackProperty{
     horizontal_gravity: SharedGravity,
@@ -178,6 +178,6 @@ pub trait StackExt {
 impl StackExt for AppContext {
     
     fn stack(&self, children: Children) -> Stack {
-        Stack::new(self.ref_clone(), children)
+        Stack::new(self.clone(), children)
     }
 }

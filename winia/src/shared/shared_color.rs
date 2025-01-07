@@ -2,7 +2,6 @@ use std::time::{Duration, Instant};
 use skia_safe::{Color, Color4f};
 use material_color_utilities::blend_cam16ucs;
 use material_color_utilities::utils::argb_from_rgb;
-use crate::core::RefClone;
 use crate::ui::animation::interpolator::Interpolator;
 use crate::ui::animation::interpolator::Linear;
 use crate::ui::app::AppContext;
@@ -152,7 +151,7 @@ impl SharedAnimation for ColorAnimation{
 impl SharedColor{
     pub fn animation_to_color(&self, to: impl Into<Color>) -> ColorAnimation{
         ColorAnimation::new(
-            self.ref_clone(),
+            self.clone(),
             self.get(),
             to.into(),
             Duration::from_millis(1000),

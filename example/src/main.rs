@@ -1,23 +1,17 @@
-use std::ops::Not;
 use std::time::Duration;
-use winia::core::RefClone;
-use winia::event_loop::EventLoop;
-use winia::{func, include_target};
-use winia::shared::{SharedBool, Children, SharedF32, Gettable, Shared, Settable, SharedSize, SharedText, SharedAnimation};
-use winia::skia_safe::textlayout::{
-    FontCollection, ParagraphBuilder, ParagraphStyle, TextAlign, TextStyle,
-};
-use winia::skia_safe::{Color, FontMgr};
+use winia::shared::{Children, Gettable, Settable, Shared, SharedAnimation, SharedBool, SharedF32, SharedSize, SharedText};
+use winia::skia_safe::Color;
 use winia::text::StyledText;
 use winia::ui::animation::{AnimationExt, Target};
-use winia::ui::app::{run_app, AppContext, AppProperty, UserEvent};
+use winia::ui::app::{run_app, AppContext, AppProperty};
 use winia::ui::component::{RectangleExt, TextBlockExt};
-use winia::ui::item::{Gravity, InnerPosition, Size};
+use winia::ui::item::{Gravity, Size};
 use winia::ui::layout::{
-    AlignContent, AlignItems, ColumnExt, FlexDirection, FlexExt, FlexGrow, FlexWrap,
+    AlignContent, AlignItems, ColumnExt, FlexDirection, FlexExt, FlexWrap,
     JustifyContent, StackExt,
 };
 use winia::ui::{App, Item};
+use winia::{func, include_target, shared};
 
 // #[cfg(not(target_os = "android"))]
 fn main() {
@@ -226,12 +220,8 @@ fn main_ui(app: AppContext, property: AppProperty) -> Item {
     let c = SharedBool::from(false);
 
     let mut f32 = SharedF32::new(100.0);
-    let mut size = SharedSize::from_static(Size::Fixed(100.0));
-    f32.add_specific_observer(0,{
-        let mut size = size.ref_clone();
-        move |value| {
-            size.set(Size::Fixed(*value));
-        }
+    let mut size = shared!(|f32| {
+        Size::Fixed(f32.get())
     });
 
     let text = SharedText::from("Hello, world!");
@@ -244,12 +234,12 @@ fn main_ui(app: AppContext, property: AppProperty) -> Item {
                 // .rotation(45.0)
                 // .opacity(0.5)
                 .name("blue_rect")
-                .on_click(func!(|app, property, c, text|, move|_|{
+                .on_click(func!([app, property, c, text], move|_|{
                     println!("Blue rectangle clicked");
                     // property.title().set("Blue rectangle clicked".to_string());
                     // property.maximized().set(property.maximized().get().not())
                     app.animate(Target::Exclusion(Vec::new()))
-                    .transformation(func!(|c, text|,move|| {
+                    .transformation(func!([c, text],move|| {
                         println!("c = {}", c.get());
                         if c.get() {
                             text.set(StyledText::from("Hello, world!"));
@@ -258,7 +248,8 @@ fn main_ui(app: AppContext, property: AppProperty) -> Item {
                             text.set(StyledText::from("This is a new text,This is a "));
                             c.set(true);
                         }
-            })).duration(Duration::from_millis(500)).start();
+            }))
+                    .duration(Duration::from_millis(500)).start();
                 })) +
 
             // app.flex(Children::new() +
@@ -315,7 +306,7 @@ fn main_ui(app: AppContext, property: AppProperty) -> Item {
                 // .rotation_center_x(InnerPosition::End(0.0))
                 // .rotation_center_y(InnerPosition::End(0.0))
                 .on_click(func!(|app, size, margin_start, margin_top, offset|, move|_|{
-                    app.animate(include_target!("include_target"))
+                    app.animate(include_target!("white_rect"))
                     .transformation(func!(|size, margin_start, margin_top, offset|,move|| {
                         if let Size::Expanded = size.get() {
                             size.set(Size::Fixed(100.0));

@@ -1,4 +1,3 @@
-use crate::core::RefClone;
 use crate::shared::Children;
 use crate::ui::app::AppContext;
 use crate::ui::Item;
@@ -10,7 +9,7 @@ pub trait RowExt {
 
 impl RowExt for AppContext {
     fn row(&self, children: Children) -> Item {
-        Flex::new(self.ref_clone(), children)
+        Flex::new(self.clone(), children)
             .direction(FlexDirection::Horizontal)
             .wrap(FlexWrap::NoWrap)
             .item()

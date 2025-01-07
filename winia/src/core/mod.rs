@@ -1,11 +1,7 @@
-mod ref_clone;
-
-pub use ref_clone::*;
-
 use std::collections::HashMap;
 
 use lazy_static::lazy_static;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 lazy_static!(
     static ref PRE_ID: Mutex<usize> = Mutex::new(0);
@@ -37,9 +33,9 @@ pub fn get_id_by_str(s: &str) ->Option<usize>{
 
 #[macro_export]
 macro_rules! func{
-    (|$($arg:ident),*|, $body:expr) => {
+    ([$($arg:ident),*], $body:expr) => {
         {
-            $(let mut $arg = $arg.ref_clone();)*
+            $(let mut $arg = $arg.clone();)*
             $body
         }
     };

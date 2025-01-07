@@ -1,18 +1,14 @@
-use crate::core::RefClone;
 use crate::dpi::LogicalSize;
-use crate::shared::{Settable, Shared, SharedAnimation, SharedBool, WeakShared};
+use crate::shared::{Shared, SharedAnimation, SharedBool, WeakShared};
 use crate::ui::app::UserEvent;
-use crate::ui::item::ItemEvent;
-use crate::ui::{Animation, Item};
+use crate::ui::theme::Style;
+use crate::ui::Animation;
+use skia_safe::Color;
 use skiwin::SkiaWindow;
 use std::collections::{BTreeSet, LinkedList};
 use std::ops::DerefMut;
-use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
-use skia_safe::Color;
-use winit::dpi::PhysicalSize;
 use winit::event_loop::EventLoopProxy;
-use crate::ui::theme::Style;
 
 #[derive(Clone, Debug)]
 pub(crate) struct Timer {
@@ -21,6 +17,7 @@ pub(crate) struct Timer {
     pub duration: Duration,
 }
 
+#[derive(Clone)]
 pub struct AppContext {
     pub(crate) theme: Shared<Style>,
     pub(crate) window: Shared<Option<Box<dyn SkiaWindow>>>,
@@ -106,28 +103,28 @@ impl AppContext {
     }
 
     pub fn title(&self) -> Shared<String> {
-        self.title.ref_clone()
+        self.title.clone()
     }
 
     pub fn min_width(&self) -> Shared<f32> {
-        self.min_width.ref_clone()
+        self.min_width.clone()
     }
 
     pub fn min_height(&self) -> Shared<f32> {
-        self.min_height.ref_clone()
+        self.min_height.clone()
     }
 
     pub fn max_width(&self) -> Shared<f32> {
-        self.max_width.ref_clone()
+        self.max_width.clone()
     }
 
     pub fn max_height(&self) -> Shared<f32> {
-        self.max_height.ref_clone()
+        self.max_height.clone()
     }
 
     pub fn start_animation(&mut self, animation: Animation) {
         self.starting_animations
-            .write(|starting_animations| starting_animations.push_back(animation.ref_clone()));
+            .write(|starting_animations| starting_animations.push_back(animation.clone()));
     }
 
     pub fn create_timer(&self, id: usize, duration: impl Into<Duration>) {
@@ -180,42 +177,20 @@ impl AppContext {
 }
 
 // impl AppContext{
-//     pub(crate) fn ref_clone(&self) -> Self {
+//     pub(crate) fn clone(&self) -> Self {
 //         Self {
 //             window: self.window.clone(),
 //             event_loop_proxy: self.event_loop_proxy.clone(),
 //             starting_animations: self.starting_animations.clone(),
 //             running_animations: self.running_animations.clone(),
-//             title: self.title.ref_clone(),
-//             min_width: self.min_width.ref_clone(),
-//             min_height: self.min_height.ref_clone(),
-//             max_width: self.max_width.ref_clone(),
-//             max_height: self.max_height.ref_clone(),
+//             title: self.title.clone(),
+//             min_width: self.min_width.clone(),
+//             min_height: self.min_height.clone(),
+//             max_width: self.max_width.clone(),
+//             max_height: self.max_height.clone(),
 //         }
 //     }
 // }
-
-impl RefClone for AppContext {
-    fn ref_clone(&self) -> Self {
-        Self {
-            theme: self.theme.ref_clone(),
-            window: self.window.ref_clone(),
-            event_loop_proxy: self.event_loop_proxy.ref_clone(),
-            request_re_layout: self.request_re_layout.ref_clone(),
-            starting_animations: self.starting_animations.ref_clone(),
-            running_animations: self.running_animations.ref_clone(),
-            shared_animations: self.shared_animations.ref_clone(),
-            focused_property: self.focused_property.ref_clone(),
-            focus_changed_items: self.focus_changed_items.ref_clone(),
-            timers: self.timers.ref_clone(),
-            title: self.title.ref_clone(),
-            min_width: self.min_width.ref_clone(),
-            min_height: self.min_height.ref_clone(),
-            max_width: self.max_width.ref_clone(),
-            max_height: self.max_height.ref_clone(),
-        }
-    }
-}
 
 pub struct AppContextWeak {
     theme: WeakShared<Style>,
