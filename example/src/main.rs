@@ -234,12 +234,12 @@ fn main_ui(app: AppContext, property: AppProperty) -> Item {
                 // .rotation(45.0)
                 // .opacity(0.5)
                 .name("blue_rect")
-                .on_click(func!([app, property, c, text], move|_|{
+                .on_click(func!(|app, property, c, text|, move|_|{
                     println!("Blue rectangle clicked");
                     // property.title().set("Blue rectangle clicked".to_string());
                     // property.maximized().set(property.maximized().get().not())
                     app.animate(Target::Exclusion(Vec::new()))
-                    .transformation(func!([c, text],move|| {
+                    .transformation(func!(|c, text|,move|| {
                         println!("c = {}", c.get());
                         if c.get() {
                             text.set(StyledText::from("Hello, world!"));
@@ -248,8 +248,7 @@ fn main_ui(app: AppContext, property: AppProperty) -> Item {
                             text.set(StyledText::from("This is a new text,This is a "));
                             c.set(true);
                         }
-            }))
-                    .duration(Duration::from_millis(500)).start();
+            })).duration(Duration::from_millis(500)).start();
                 })) +
 
             // app.flex(Children::new() +

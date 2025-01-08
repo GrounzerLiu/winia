@@ -33,7 +33,7 @@ pub fn get_id_by_str(s: &str) ->Option<usize>{
 
 #[macro_export]
 macro_rules! func{
-    ([$($arg:ident),*], $body:expr) => {
+    (|$($arg:ident),*|, $body:expr) => {
         {
             $(let mut $arg = $arg.clone();)*
             $body

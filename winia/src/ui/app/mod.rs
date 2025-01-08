@@ -376,6 +376,8 @@ impl ApplicationHandler<UserEvent> for App {
             }
         }
 
+        // println!("{:?}", event.clone());
+
         match event {
             WindowEvent::CloseRequested => {
                 event_loop.exit();

@@ -6,8 +6,8 @@ members = [
     "skiwin",
     "material_color_utilities",
     "exmaple2",
-    "softbuffer", "winia/proc-macro"]
+    "winia/proc-macro"]
 
 [workspace.dependencies]
-winit = "0.30"
+winit = "0.30.8"
 skia-safe = "0.80.1"

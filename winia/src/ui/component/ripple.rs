@@ -1,9 +1,8 @@
-/*use skia_safe::Color;
-use proc_macro::RefClone;
+use skia_safe::Color;
 use crate::shared::{Shared, SharedColor};
 use crate::ui::app::AppContext;
 
-#[derive(RefClone)]
+#[derive(Clone)]
 struct RippleProperty {
     color: SharedColor
 }
@@ -20,4 +19,3 @@ impl Ripple{
 
     }
 }
-*/
