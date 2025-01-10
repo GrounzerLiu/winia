@@ -17,7 +17,7 @@ pub struct DynamicScheme {
     pub error_palette: TonalPalette,
 }
 
-impl DynamicScheme{
+impl DynamicScheme {
     pub fn new(
         source_color_hct: Hct,
         variant: Variant,
@@ -28,6 +28,7 @@ impl DynamicScheme{
         tertiary_palette: TonalPalette,
         neutral_palette: TonalPalette,
         neutral_variant_palette: TonalPalette,
+        error_palette: Option<TonalPalette>,
     ) -> Self {
         Self {
             source_color_hct,
@@ -39,7 +40,7 @@ impl DynamicScheme{
             tertiary_palette,
             neutral_palette,
             neutral_variant_palette,
-            error_palette: TonalPalette::from_hue_and_chroma(25.0, 84.0),
+            error_palette: error_palette.unwrap_or(TonalPalette::from_hue_and_chroma(25.0, 84.0)),
         }
     }
 
@@ -83,11 +84,7 @@ impl DynamicScheme{
         self.error_palette
     }
 
-    pub fn get_rotated_hue(
-        source_color: Hct,
-        hues: &[f64],
-        rotations: &[f64],
-    ) -> f64 {
+    pub fn get_rotated_hue(source_color: Hct, hues: &[f64], rotations: &[f64]) -> f64 {
         let source_hue = source_color.get_hue();
         if rotations.len() == 1 {
             return sanitize_degrees_double(source_color.get_hue() + rotations[0]);

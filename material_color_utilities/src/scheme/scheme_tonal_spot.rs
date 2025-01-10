@@ -26,5 +26,6 @@ pub fn scheme_tonal_spot_with_contrast(
         TonalPalette::from_hue_and_chroma(set_source_color_hct.get_hue(), 6.0),
         /*neutral_variant_palette:*/
         TonalPalette::from_hue_and_chroma(set_source_color_hct.get_hue(), 8.0),
+        None
     )
 }
