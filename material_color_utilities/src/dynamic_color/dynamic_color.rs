@@ -191,8 +191,8 @@ impl DynamicColor {
             let expansion_dir = if scheme.is_dark() { 1.0 } else { -1.0 };
 
             // 1st round: solve to min, each
-            let n_contrast = nearer.contrast_curve.unwrap().get_contrast(scheme.contrast_level());
-            let f_contrast = farther.contrast_curve.unwrap().get_contrast(scheme.contrast_level());
+            let n_contrast = nearer.contrast_curve.unwrap().get(scheme.contrast_level());
+            let f_contrast = farther.contrast_curve.unwrap().get(scheme.contrast_level());
 
             // If a color is good enough, it is not adjusted.
             // Initial and adjusted tones for `nearer`
@@ -267,7 +267,7 @@ impl DynamicColor {
 
             let bg_tone = self.background.as_ref().unwrap()(scheme).get_tone(scheme);
 
-            let desired_ratio = self.contrast_curve.as_ref().unwrap().get_contrast(scheme.contrast_level());
+            let desired_ratio = self.contrast_curve.as_ref().unwrap().get(scheme.contrast_level());
 
             if ratio_of_tones(bg_tone, answer) >= desired_ratio {
                 // Don't "improve" what's good enough.

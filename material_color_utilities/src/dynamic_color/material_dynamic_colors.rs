@@ -199,7 +199,11 @@ pub fn surface_dim() -> DynamicColor {
     DynamicColor::new(
         "surface_dim",
         |s: &DynamicScheme| s.neutral_palette(),
-        |s: &DynamicScheme| if s.is_dark() { 6.0 } else { 87.0 },
+        |s: &DynamicScheme| if s.is_dark() {
+            6.0
+        } else {
+            ContrastCurve::new(87.0, 87.0, 80.0, 75.0).get(s.contrast_level())
+        },
         true,
         None,
         None,
@@ -213,7 +217,11 @@ pub fn surface_bright() -> DynamicColor {
     DynamicColor::new(
         "surface_bright",
         |s: &DynamicScheme| s.neutral_palette(),
-        |s: &DynamicScheme| if s.is_dark() { 24.0 } else { 98.0 },
+        |s: &DynamicScheme| if s.is_dark() {
+            ContrastCurve::new(24.0, 24.0, 29.0, 34.0).get(s.contrast_level())
+        } else {
+            98.0
+        },
         true,
         None,
         None,
@@ -226,7 +234,11 @@ pub fn surface_container_lowest() -> DynamicColor {
     DynamicColor::new(
         "surface_container_lowest",
         |s: &DynamicScheme| s.neutral_palette(),
-        |s: &DynamicScheme| if s.is_dark() { 4.0 } else { 100.0 },
+        |s: &DynamicScheme| if s.is_dark() {
+            ContrastCurve::new(4.0, 4.0, 2.0, 0.0).get(s.contrast_level())
+        } else {
+            100.0
+        },
         true,
         None,
         None,
@@ -239,7 +251,11 @@ pub fn surface_container_low() -> DynamicColor {
     DynamicColor::new(
         "surface_container_low",
         |s: &DynamicScheme| s.neutral_palette(),
-        |s: &DynamicScheme| if s.is_dark() { 10.0 } else { 96.0 },
+        |s: &DynamicScheme| if s.is_dark() {
+            ContrastCurve::new(10.0, 10.0, 11.0, 12.0).get(s.contrast_level())
+        } else {
+            ContrastCurve::new(96.0, 96.0, 96.0, 95.0).get(s.contrast_level())
+        },
         true,
         None,
         None,
@@ -252,7 +268,11 @@ pub fn surface_container() -> DynamicColor {
     DynamicColor::new(
         "surface_container",
         |s: &DynamicScheme| s.neutral_palette(),
-        |s: &DynamicScheme| if s.is_dark() { 12.0 } else { 94.0 },
+        |s: &DynamicScheme| if s.is_dark() {
+            ContrastCurve::new(12.0, 12.0, 16.0, 20.0).get(s.contrast_level())
+        } else {
+            ContrastCurve::new(94.0, 94.0, 92.0, 90.0).get(s.contrast_level())
+        },
         true,
         None,
         None,
@@ -265,7 +285,11 @@ pub fn surface_container_high() -> DynamicColor {
     DynamicColor::new(
         "surface_container_high",
         |s: &DynamicScheme| s.neutral_palette(),
-        |s: &DynamicScheme| if s.is_dark() { 17.0 } else { 92.0 },
+        |s: &DynamicScheme| if s.is_dark() {
+            ContrastCurve::new(17.0, 17.0, 21.0, 25.0).get(s.contrast_level())
+        } else {
+            ContrastCurve::new(92.0, 92.0, 88.0, 85.0).get(s.contrast_level())
+        },
         true,
         None,
         None,
@@ -278,7 +302,11 @@ pub fn surface_container_highest() -> DynamicColor {
     DynamicColor::new(
         "surface_container_highest",
         |s: &DynamicScheme| s.neutral_palette(),
-        |s: &DynamicScheme| if s.is_dark() { 22.0 } else { 90.0 },
+        |s: &DynamicScheme| if s.is_dark() {
+            ContrastCurve::new(22.0, 22.0, 26.0, 30.0).get(s.contrast_level())
+        } else {
+            ContrastCurve::new(90.0, 90.0, 84.0, 80.0).get(s.contrast_level())
+        },
         true,
         None,
         None,
@@ -373,7 +401,7 @@ pub fn outline_variant() -> DynamicColor {
         false,
         Some(Box::new(|s: &DynamicScheme| highest_surface(s))),
         None,
-        Some(ContrastCurve::new(1.0, 1.0, 3.0, 7.0)),
+        Some(ContrastCurve::new(1.0, 1.0, 3.0, 4.5)),
         None,
     )
 }
@@ -428,12 +456,12 @@ pub fn primary() -> DynamicColor {
         true,
         Some(Box::new(|s: &DynamicScheme| highest_surface(s))),
         None,
-        Some(ContrastCurve::new(3.0, 4.5, 7.0, 11.0)),
+        Some(ContrastCurve::new(3.0, 4.5, 7.0, 7.0)),
         Some(Box::new(|_| {
             ToneDeltaPair::new(
                 primary_container(),
                 primary(),
-                15.0,
+                10.0,
                 TonePolarity::Nearer,
                 false,
             )
@@ -469,12 +497,12 @@ pub fn primary_container() -> DynamicColor {
         true,
         Some(Box::new(|s: &DynamicScheme| highest_surface(s))),
         None,
-        Some(ContrastCurve::new(1.0, 1.0, 3.0, 7.0)),
+        Some(ContrastCurve::new(1.0, 1.0, 3.0, 4.5)),
         Some(Box::new(|_| {
             ToneDeltaPair::new(
                 primary_container(),
                 primary(),
-                15.0,
+                10.0,
                 TonePolarity::Nearer,
                 false,
             )
@@ -505,7 +533,7 @@ pub fn inverse_primary() -> DynamicColor {
         false,
         Some(Box::new(|_| inverse_surface())),
         None,
-        Some(ContrastCurve::new(3.0, 4.5, 7.0, 11.0)),
+        Some(ContrastCurve::new(3.0, 4.5, 7.0, 7.0)),
         None,
     )
 }
@@ -518,12 +546,12 @@ pub fn secondary() -> DynamicColor {
         true,
         Some(Box::new(|s: &DynamicScheme| highest_surface(s))),
         None,
-        Some(ContrastCurve::new(3.0, 4.5, 7.0, 11.0)),
+        Some(ContrastCurve::new(3.0, 4.5, 7.0, 7.0)),
         Some(Box::new(|_| {
             ToneDeltaPair::new(
                 secondary_container(),
                 secondary(),
-                15.0,
+                10.0,
                 TonePolarity::Nearer,
                 false,
             )
@@ -566,12 +594,12 @@ pub fn secondary_container() -> DynamicColor {
         true,
         Some(Box::new(|s: &DynamicScheme| highest_surface(s))),
         None,
-        Some(ContrastCurve::new(1.0, 1.0, 3.0, 7.0)),
+        Some(ContrastCurve::new(1.0, 1.0, 3.0, 4.5)),
         Some(Box::new(|_| {
             ToneDeltaPair::new(
                 secondary_container(),
                 secondary(),
-                15.0,
+                10.0,
                 TonePolarity::Nearer,
                 false,
             )
@@ -608,12 +636,12 @@ pub fn tertiary() -> DynamicColor {
         true,
         Some(Box::new(|s: &DynamicScheme| highest_surface(s))),
         None,
-        Some(ContrastCurve::new(3.0, 4.5, 7.0, 11.0)),
+        Some(ContrastCurve::new(3.0, 4.5, 7.0, 7.0)),
         Some(Box::new(|_| {
             ToneDeltaPair::new(
                 tertiary_container(),
                 tertiary(),
-                15.0,
+                10.0,
                 TonePolarity::Nearer,
                 false,
             )
@@ -653,12 +681,12 @@ pub fn tertiary_container() -> DynamicColor {
         true,
         Some(Box::new(|s: &DynamicScheme| highest_surface(s))),
         None,
-        Some(ContrastCurve::new(1.0, 1.0, 3.0, 7.0)),
+        Some(ContrastCurve::new(1.0, 1.0, 3.0, 4.5)),
         Some(Box::new(|_| {
             ToneDeltaPair::new(
                 tertiary_container(),
                 tertiary(),
-                15.0,
+                10.0,
                 TonePolarity::Nearer,
                 false,
             )
@@ -694,12 +722,12 @@ pub fn error() -> DynamicColor {
         true,
         Some(Box::new(|s: &DynamicScheme| highest_surface(s))),
         None,
-        Some(ContrastCurve::new(3.0, 4.5, 7.0, 11.0)),
+        Some(ContrastCurve::new(3.0, 4.5, 7.0, 7.0)),
         Some(Box::new(|_| {
             ToneDeltaPair::new(
                 error_container(),
                 error(),
-                15.0,
+                10.0,
                 TonePolarity::Nearer,
                 false,
             )
@@ -728,12 +756,12 @@ pub fn error_container() -> DynamicColor {
         true,
         Some(Box::new(|s: &DynamicScheme| highest_surface(s))),
         None,
-        Some(ContrastCurve::new(1.0, 1.0, 3.0, 7.0)),
+        Some(ContrastCurve::new(1.0, 1.0, 3.0, 4.5)),
         Some(Box::new(|_| {
             ToneDeltaPair::new(
                 error_container(),
                 error(),
-                15.0,
+                10.0,
                 TonePolarity::Nearer,
                 false,
             )
@@ -762,7 +790,7 @@ pub fn primary_fixed() -> DynamicColor {
         true,
         Some(Box::new(|s: &DynamicScheme| highest_surface(s))),
         None,
-        Some(ContrastCurve::new(1.0, 1.0, 3.0, 7.0)),
+        Some(ContrastCurve::new(1.0, 1.0, 3.0, 4.5)),
         Some(Box::new(|_| {
             ToneDeltaPair::new(
                 primary_fixed(),
@@ -783,7 +811,7 @@ pub fn primary_fixed_dim() -> DynamicColor {
         true,
         Some(Box::new(|s: &DynamicScheme| highest_surface(s))),
         None,
-        Some(ContrastCurve::new(1.0, 1.0, 3.0, 7.0)),
+        Some(ContrastCurve::new(1.0, 1.0, 3.0, 4.5)),
         Some(Box::new(|_| {
             ToneDeltaPair::new(
                 primary_fixed(),
@@ -830,7 +858,7 @@ pub fn secondary_fixed() -> DynamicColor {
         true,
         Some(Box::new(|s: &DynamicScheme| highest_surface(s))),
         None,
-        Some(ContrastCurve::new(1.0, 1.0, 3.0, 7.0)),
+        Some(ContrastCurve::new(1.0, 1.0, 3.0, 4.5)),
         Some(Box::new(|_| {
             ToneDeltaPair::new(
                 secondary_fixed(),
@@ -851,7 +879,7 @@ pub fn secondary_fixed_dim() -> DynamicColor {
         true,
         Some(Box::new(|s: &DynamicScheme| highest_surface(s))),
         None,
-        Some(ContrastCurve::new(1.0, 1.0, 3.0, 7.0)),
+        Some(ContrastCurve::new(1.0, 1.0, 3.0, 4.5)),
         Some(Box::new(|_| {
             ToneDeltaPair::new(
                 secondary_fixed(),
@@ -898,7 +926,7 @@ pub fn tertiary_fixed() -> DynamicColor {
         true,
         Some(Box::new(|s: &DynamicScheme| highest_surface(s))),
         None,
-        Some(ContrastCurve::new(1.0, 1.0, 3.0, 7.0)),
+        Some(ContrastCurve::new(1.0, 1.0, 3.0, 4.5)),
         Some(Box::new(|_| {
             ToneDeltaPair::new(
                 tertiary_fixed(),
@@ -919,7 +947,7 @@ pub fn tertiary_fixed_dim() -> DynamicColor {
         true,
         Some(Box::new(|s: &DynamicScheme| highest_surface(s))),
         None,
-        Some(ContrastCurve::new(1.0, 1.0, 3.0, 7.0)),
+        Some(ContrastCurve::new(1.0, 1.0, 3.0, 4.5)),
         Some(Box::new(|_| {
             ToneDeltaPair::new(
                 tertiary_fixed(),

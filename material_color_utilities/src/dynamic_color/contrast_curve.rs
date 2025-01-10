@@ -1,8 +1,11 @@
 use crate::utils::lerp;
 
 /**
- * Documents a constraint between two DynamicColors, in which their tones must
- * have a certain distance from each other.
+ * A class containing a value that changes with the contrast level.
+ *
+ * Usually represents the contrast requirements for a dynamic color on its
+ * background. The four values correspond to values for contrast levels -1.0,
+ * 0.0, 0.5, and 1.0, respectively.
  */
 #[derive(Debug, Copy, Clone)]
 pub struct ContrastCurve {
@@ -16,10 +19,10 @@ impl ContrastCurve{
     /**
      * Creates a `ContrastCurve` object.
      *
-     * @param low Contrast requirement for contrast level -1.0
-     * @param normal Contrast requirement for contrast level 0.0
-     * @param medium Contrast requirement for contrast level 0.5
-     * @param high Contrast requirement for contrast level 1.0
+     * @param low Value for contrast level -1.0
+     * @param normal Value for contrast level 0.0
+     * @param medium Value for contrast level 0.5
+     * @param high Value for contrast level 1.0
      */
     pub fn new(low: f64, normal: f64, medium: f64, high: f64) -> Self {
         Self {
@@ -30,13 +33,13 @@ impl ContrastCurve{
         }
     }
     /**
-     * Returns the contrast ratio at a given contrast level.
+     * Returns the value at a given contrast level.
      *
-     * @param contrastLevel The contrast level. 0.0 is the default (normal);
-     * -1.0 is the lowest; 1.0 is the highest.
-     * @return The contrast ratio, a number between 1.0 and 21.0.
+     * @param contrastLevel The contrast level. 0.0 is the default (normal); -1.0
+     *     is the lowest; 1.0 is the highest.
+     * @return The value. For contrast ratios, a number between 1.0 and 21.0.
      */
-    pub fn get_contrast(&self, contrast_level: f64) -> f64 {
+    pub fn get(&self, contrast_level: f64) -> f64 {
         if contrast_level <= -1.0 {
             self.low
         } else if contrast_level < 0.0 {
