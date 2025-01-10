@@ -1,7 +1,7 @@
 use crate::contrast::{darker, darker_unsafe, lighter, lighter_unsafe, ratio_of_tones};
-use crate::dynamic_color::{ContrastCurve, ToneDeltaPair, TonePolarity};
+use crate::dynamic_color::{ContrastCurve, DynamicScheme, ToneDeltaPair, TonePolarity};
 use crate::palettes::TonalPalette;
-use crate::scheme::DynamicScheme;
+use crate::utils::Argb;
 
 type DoubleFunction = Box<dyn Fn(&DynamicScheme) -> f64>;
 
@@ -158,7 +158,7 @@ impl DynamicColor {
         )
     }
 
-    pub fn get_argb(&self, scheme: &DynamicScheme) -> u32 {
+    pub fn get_argb(&self, scheme: &DynamicScheme) -> Argb {
         self.palette.as_ref()(scheme).get(self.get_tone(scheme))
     }
 
@@ -167,7 +167,7 @@ impl DynamicColor {
     }
 
     pub fn get_tone(&self, scheme: &DynamicScheme) -> f64 {
-        let decreasing_contrast = scheme.contrast_level() < 0.0;
+        let decreasing_contrast = scheme.contrast_level < 0.0;
 
         // Case 1: dual foreground, pair of colors with delta constraint.
         return if let Some(tone_delta_pair) = &self.tone_delta_pair {
@@ -183,16 +183,16 @@ impl DynamicColor {
 
             let a_is_nearer =
                 polarity == TonePolarity::Nearer ||
-                    (polarity == TonePolarity::Lighter && !scheme.is_dark()) ||
-                    (polarity == TonePolarity::Darker && scheme.is_dark());
+                    (polarity == TonePolarity::Lighter && !scheme.is_dark) ||
+                    (polarity == TonePolarity::Darker && scheme.is_dark);
             let nearer = if a_is_nearer { &role_a } else { &role_b };
             let farther = if a_is_nearer { &role_b } else { &role_a };
             let am_nearer = self.name == nearer.name;
-            let expansion_dir = if scheme.is_dark() { 1.0 } else { -1.0 };
+            let expansion_dir = if scheme.is_dark { 1.0 } else { -1.0 };
 
             // 1st round: solve to min, each
-            let n_contrast = nearer.contrast_curve.unwrap().get(scheme.contrast_level());
-            let f_contrast = farther.contrast_curve.unwrap().get(scheme.contrast_level());
+            let n_contrast = nearer.contrast_curve.unwrap().get(scheme.contrast_level);
+            let f_contrast = farther.contrast_curve.unwrap().get(scheme.contrast_level);
 
             // If a color is good enough, it is not adjusted.
             // Initial and adjusted tones for `nearer`
@@ -267,7 +267,7 @@ impl DynamicColor {
 
             let bg_tone = self.background.as_ref().unwrap()(scheme).get_tone(scheme);
 
-            let desired_ratio = self.contrast_curve.as_ref().unwrap().get(scheme.contrast_level());
+            let desired_ratio = self.contrast_curve.as_ref().unwrap().get(scheme.contrast_level);
 
             if ratio_of_tones(bg_tone, answer) >= desired_ratio {
                 // Don't "improve" what's good enough.

@@ -5,22 +5,23 @@ pub use dynamic_color::*;
 mod tone_delta_pair;
 pub use tone_delta_pair::*;
 pub mod material_dynamic_colors;
-
+mod variant;
+pub use variant::*;
+pub mod dynamic_scheme;
+pub use dynamic_scheme::*;
 
 #[cfg(test)]
 mod dynamic_color_test {
     use crate::hct::Hct;
-    use crate::scheme::{DynamicScheme, DynamicSchemeOptions, scheme_vibrant};
-    use crate::dynamic_color::material_dynamic_colors;
+    use crate::dynamic_color::{material_dynamic_colors, DynamicScheme};
+    use crate::scheme::scheme_vibrant;
 
     #[test]
     fn test() {
-        let s = DynamicScheme::new(
-            DynamicSchemeOptions {
+        let s = DynamicScheme {
                 contrast_level: 0.5,
                 ..scheme_vibrant(Hct::from_argb(0xFFFF0000), false)
-            }
-        );
+            };
         assert_eq!(material_dynamic_colors::primary_palette_key_color().get_argb(&s), 0xfffe0000);
         assert_eq!(material_dynamic_colors::secondary_palette_key_color().get_argb(&s), 0xff9c6c54);
         assert_eq!(material_dynamic_colors::tertiary_palette_key_color().get_argb(&s), 0xff9f6c39);

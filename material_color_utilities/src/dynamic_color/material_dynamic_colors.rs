@@ -2,8 +2,7 @@ use crate::hct::Cam;
 use crate::hct::Hct;
 use crate::hct::viewing_conditions::{DEFAULT_VIEWING_CONDITIONS, ViewingConditions};
 use crate::dislike::fix_if_disliked;
-use crate::dynamic_color::{ContrastCurve, DynamicColor, foreground_tone, ToneDeltaPair, TonePolarity};
-use crate::scheme::{DynamicScheme, Variant};
+use crate::dynamic_color::{ContrastCurve, DynamicColor, foreground_tone, ToneDeltaPair, TonePolarity, DynamicScheme, Variant};
 use crate::utils::{lstar_from_y, signum, Vec3};
 
 fn is_fidelity(scheme: &DynamicScheme) -> bool {
