@@ -38,6 +38,10 @@ pub mod tests {
                 $epsilon
             );
         };
+
+        ($left:expr, $right:expr) => {
+            assert_near!($left, $right, 0.001);
+        };
     }
 
     #[test]
