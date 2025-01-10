@@ -10,7 +10,7 @@ pub fn scheme_content_with_contrast(
     set_contrast_level: f64,
 ) -> DynamicScheme {
     DynamicScheme::new(
-        /*source_color_argb:*/ set_source_color_hct.to_argb(),
+        /*source_color_argb:*/ set_source_color_hct,
         /*variant:*/ Variant::Content,
         /*contrast_level:*/ set_contrast_level,
         /*is_dark:*/ set_is_dark,

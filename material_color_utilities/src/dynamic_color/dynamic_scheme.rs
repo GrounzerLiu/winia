@@ -19,7 +19,7 @@ pub struct DynamicScheme {
 
 impl DynamicScheme{
     pub fn new(
-        source_color_argb: Argb,
+        source_color_hct: Hct,
         variant: Variant,
         contrast_level: f64,
         is_dark: bool,
@@ -30,7 +30,7 @@ impl DynamicScheme{
         neutral_variant_palette: TonalPalette,
     ) -> Self {
         Self {
-            source_color_hct: Hct::from_argb(source_color_argb),
+            source_color_hct,
             variant,
             is_dark,
             contrast_level,
