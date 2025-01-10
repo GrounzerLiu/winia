@@ -47,15 +47,15 @@ impl Hct{
         }
     }
 
-    pub fn hue(&self)->f64{
+    pub fn get_hue(&self) ->f64{
         self.hue
     }
 
-    pub fn chroma(&self)->f64{
+    pub fn get_chroma(&self) ->f64{
         self.chroma
     }
 
-    pub fn tone(&self)->f64{
+    pub fn get_tone(&self) ->f64{
         self.tone
     }
 

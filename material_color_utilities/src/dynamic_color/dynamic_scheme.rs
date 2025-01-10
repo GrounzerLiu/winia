@@ -88,9 +88,9 @@ impl DynamicScheme{
         hues: &[f64],
         rotations: &[f64],
     ) -> f64 {
-        let source_hue = source_color.hue();
+        let source_hue = source_color.get_hue();
         if rotations.len() == 1 {
-            return sanitize_degrees_double(source_color.hue() + rotations[0]);
+            return sanitize_degrees_double(source_color.get_hue() + rotations[0]);
         }
         let size = hues.len();
         for i in 0..=(size - 2) {

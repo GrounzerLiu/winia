@@ -13,15 +13,15 @@ pub fn scheme_neutral_with_contrast(
         /*contrast_level:*/ set_contrast_level,
         /*is_dark:*/ set_is_dark,
         /*primary_palette:*/
-        TonalPalette::from_hue_and_chroma(set_source_color_hct.hue(), 12.0),
+        TonalPalette::from_hue_and_chroma(set_source_color_hct.get_hue(), 12.0),
         /*secondary_palette:*/
-        TonalPalette::from_hue_and_chroma(set_source_color_hct.hue(), 8.0),
+        TonalPalette::from_hue_and_chroma(set_source_color_hct.get_hue(), 8.0),
         /*tertiary_palette:*/
-        TonalPalette::from_hue_and_chroma(set_source_color_hct.hue(), 16.0),
+        TonalPalette::from_hue_and_chroma(set_source_color_hct.get_hue(), 16.0),
         /*neutral_palette:*/
-        TonalPalette::from_hue_and_chroma(set_source_color_hct.hue(), 2.0),
+        TonalPalette::from_hue_and_chroma(set_source_color_hct.get_hue(), 2.0),
         /*neutral_variant_palette:*/
-        TonalPalette::from_hue_and_chroma(set_source_color_hct.hue(), 2.0),
+        TonalPalette::from_hue_and_chroma(set_source_color_hct.get_hue(), 2.0),
     )
 }
 

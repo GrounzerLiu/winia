@@ -16,13 +16,13 @@ pub fn scheme_fidelity_with_contrast(
         /*is_dark:*/ set_is_dark,
         /*primary_palette:*/
         TonalPalette::from_hue_and_chroma(
-            set_source_color_hct.hue(),
-            set_source_color_hct.chroma(),
+            set_source_color_hct.get_hue(),
+            set_source_color_hct.get_chroma(),
         ),
         /*secondary_palette:*/
         TonalPalette::from_hue_and_chroma(
-            set_source_color_hct.hue(),
-            (set_source_color_hct.chroma() - 32.0).max(set_source_color_hct.chroma() * 0.5),
+            set_source_color_hct.get_hue(),
+            (set_source_color_hct.get_chroma() - 32.0).max(set_source_color_hct.get_chroma() * 0.5),
         ),
         /*tertiary_palette:*/
         TonalPalette::from_hct(fix_if_disliked(
@@ -30,13 +30,13 @@ pub fn scheme_fidelity_with_contrast(
         )),
         /*neutral_palette:*/
         TonalPalette::from_hue_and_chroma(
-            set_source_color_hct.hue(),
-            set_source_color_hct.chroma() / 8.0,
+            set_source_color_hct.get_hue(),
+            set_source_color_hct.get_chroma() / 8.0,
         ),
         /*neutral_variant_palette:*/
         TonalPalette::from_hue_and_chroma(
-            set_source_color_hct.hue(),
-            set_source_color_hct.chroma() / 8.0 + 4.0,
+            set_source_color_hct.get_hue(),
+            set_source_color_hct.get_chroma() / 8.0 + 4.0,
         ),
     )
 }

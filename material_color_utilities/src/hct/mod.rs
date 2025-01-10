@@ -112,19 +112,19 @@ mod hct_test {
         let hct = Hct::from_hct(120.0, 200.0, 50.0);
         let argb = hct.to_argb();
 
-        assert_eq!(Cam::from_argb(argb).hue, hct.hue());
-        assert_eq!(Cam::from_argb(argb).chroma, hct.chroma());
-        assert_eq!(lstar_from_argb(argb), hct.tone());
+        assert_eq!(Cam::from_argb(argb).hue, hct.get_hue());
+        assert_eq!(Cam::from_argb(argb).chroma, hct.get_chroma());
+        assert_eq!(lstar_from_argb(argb), hct.get_tone());
     }
 
     #[test]
     fn test_truncates_colors() {
         let mut hct = Hct::from_hct(120.0, 60.0, 50.0);
-        let chroma = hct.chroma();
+        let chroma = hct.get_chroma();
         assert!(chroma < 60.0);
 
         hct.set_tone(180.0);
-        assert!(hct.chroma() < chroma);
+        assert!(hct.get_chroma() < chroma);
     }
 }
 

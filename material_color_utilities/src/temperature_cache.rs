@@ -49,18 +49,18 @@ impl TemperatureCache {
             return complement;
         }
 
-        let coldest_hue = self.get_coldest().hue();
+        let coldest_hue = self.get_coldest().get_hue();
         let coldest_temp = *self.get_temps_by_hct().get(&self.get_coldest()).unwrap();
 
-        let warmest_hue = self.get_warmest().hue();
+        let warmest_hue = self.get_warmest().get_hue();
         let warmest_temp = *self.get_temps_by_hct().get(&self.get_warmest()).unwrap();
         let range = warmest_temp - coldest_temp;
-        let start_hue_is_coldest_to_warmest = is_between(self.input.hue(), coldest_hue, warmest_hue);
+        let start_hue_is_coldest_to_warmest = is_between(self.input.get_hue(), coldest_hue, warmest_hue);
         let start_hue = if start_hue_is_coldest_to_warmest { warmest_hue } else { coldest_hue };
         let end_hue = if start_hue_is_coldest_to_warmest { coldest_hue } else { warmest_hue };
         let direction_of_rotation = 1.0;
         let mut smallest_error = 1000.0;
-        let mut answer = *self.get_hcts_by_hue().get(self.input.hue().round() as usize).unwrap();
+        let mut answer = *self.get_hcts_by_hue().get(self.input.get_hue().round() as usize).unwrap();
 
         let complement_relative_temp = 1.0 - self.get_relative_temperature(self.input);
         // Find the color in the other section, closest to the inverse percentile
@@ -108,7 +108,7 @@ impl TemperatureCache {
      */
     pub fn get_analogous_colors_by_divisions(&mut self, count: usize, divisions: usize) -> Vec<Hct> {
         // The starting hue is the hue of the input color.
-        let start_hue = self.input.hue().round() as usize;
+        let start_hue = self.input.get_hue().round() as usize;
         let start_hct = self.get_hcts_by_hue()[start_hue];
         let mut last_temp = self.get_relative_temperature(start_hct);
 
@@ -240,7 +240,7 @@ impl TemperatureCache {
 
         let mut hcts = Vec::new();
         for hue in 0..=360 {
-            let color_at_hue = Hct::from_hct(hue as f64, self.input.chroma(), self.input.tone());
+            let color_at_hue = Hct::from_hct(hue as f64, self.input.get_chroma(), self.input.get_tone());
             hcts.push(color_at_hue);
         }
         self.precomputed_hcts_by_hue = Some(hcts.clone());

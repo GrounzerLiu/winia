@@ -20,7 +20,7 @@ pub fn scheme_expressive_with_contrast(
         /*contrast_level:*/ set_contrast_level,
         /*is_dark:*/ set_is_dark,
         /*primary_palette:*/
-        TonalPalette::from_hue_and_chroma(set_source_color_hct.hue() + 240.0, 40.0),
+        TonalPalette::from_hue_and_chroma(set_source_color_hct.get_hue() + 240.0, 40.0),
         /*secondary_palette:*/
         TonalPalette::from_hue_and_chroma(
             DynamicScheme::get_rotated_hue(set_source_color_hct, &HUES, &SECONDARY_ROTATIONS),
@@ -32,9 +32,9 @@ pub fn scheme_expressive_with_contrast(
             32.0,
         ),
         /*neutral_palette:*/
-        TonalPalette::from_hue_and_chroma(set_source_color_hct.hue() + 15.0, 8.0),
+        TonalPalette::from_hue_and_chroma(set_source_color_hct.get_hue() + 15.0, 8.0),
         /*neutral_variant_palette:*/
-        TonalPalette::from_hue_and_chroma(set_source_color_hct.hue() + 15.0, 12.0),
+        TonalPalette::from_hue_and_chroma(set_source_color_hct.get_hue() + 15.0, 12.0),
     )
 }
 

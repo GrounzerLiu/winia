@@ -80,24 +80,24 @@ fn find_desired_chroma_by_tone(hue: f64, chroma: f64, tone: f64,
     let mut answer = tone;
 
     let mut closest_to_chroma = Hct::from_hct(hue, chroma, tone);
-    if closest_to_chroma.chroma() < chroma {
-        let mut chroma_peak = closest_to_chroma.chroma();
-        while closest_to_chroma.chroma() < chroma {
+    if closest_to_chroma.get_chroma() < chroma {
+        let mut chroma_peak = closest_to_chroma.get_chroma();
+        while closest_to_chroma.get_chroma() < chroma {
             answer += if by_decreasing_tone { -1.0 } else { 1.0 };
             let potential_solution = Hct::from_hct(hue, chroma, answer);
-            if chroma_peak > potential_solution.chroma() {
+            if chroma_peak > potential_solution.get_chroma() {
                 break;
             }
-            if (potential_solution.chroma() - chroma).abs() < 0.4 {
+            if (potential_solution.get_chroma() - chroma).abs() < 0.4 {
                 break;
             }
 
-            let potential_delta = (potential_solution.chroma() - chroma).abs();
-            let current_delta = (closest_to_chroma.chroma() - chroma).abs();
+            let potential_delta = (potential_solution.get_chroma() - chroma).abs();
+            let current_delta = (closest_to_chroma.get_chroma() - chroma).abs();
             if potential_delta < current_delta {
                 closest_to_chroma = potential_solution;
             }
-            chroma_peak = chroma_peak.max(potential_solution.chroma());
+            chroma_peak = chroma_peak.max(potential_solution.get_chroma());
         }
     }
 
@@ -119,7 +119,7 @@ pub fn primary_palette_key_color() -> DynamicColor {
     DynamicColor::from_palette(
         "primary_palette_key_color",
         |s: &DynamicScheme| s.primary_palette(),
-        |s: &DynamicScheme| s.primary_palette().key_color().tone(),
+        |s: &DynamicScheme| s.primary_palette().key_color().get_tone(),
     )
 }
 
@@ -127,7 +127,7 @@ pub fn secondary_palette_key_color() -> DynamicColor {
     DynamicColor::from_palette(
         "secondary_palette_key_color",
         |s: &DynamicScheme| s.secondary_palette(),
-        |s: &DynamicScheme| s.secondary_palette().key_color().tone(),
+        |s: &DynamicScheme| s.secondary_palette().key_color().get_tone(),
     )
 }
 
@@ -135,7 +135,7 @@ pub fn tertiary_palette_key_color() -> DynamicColor {
     DynamicColor::from_palette(
         "tertiary_palette_key_color",
         |s: &DynamicScheme| s.tertiary_palette(),
-        |s: &DynamicScheme| s.tertiary_palette().key_color().tone(),
+        |s: &DynamicScheme| s.tertiary_palette().key_color().get_tone(),
     )
 }
 
@@ -143,7 +143,7 @@ pub fn neutral_palette_key_color() -> DynamicColor {
     DynamicColor::from_palette(
         "neutral_palette_key_color",
         |s: &DynamicScheme| s.neutral_palette(),
-        |s: &DynamicScheme| s.neutral_palette().key_color().tone(),
+        |s: &DynamicScheme| s.neutral_palette().key_color().get_tone(),
     )
 }
 
@@ -151,7 +151,7 @@ pub fn neutral_variant_palette_key_color() -> DynamicColor {
     DynamicColor::from_palette(
         "neutral_variant_palette_key_color",
         |s: &DynamicScheme| s.neutral_variant_palette(),
-        |s: &DynamicScheme| s.neutral_variant_palette().key_color().tone(),
+        |s: &DynamicScheme| s.neutral_variant_palette().key_color().get_tone(),
     )
 }
 
@@ -489,7 +489,7 @@ pub fn primary_container() -> DynamicColor {
         |s: &DynamicScheme| s.primary_palette(),
         |s: &DynamicScheme|
             if is_fidelity(s) {
-                s.source_color_hct().tone()
+                s.source_color_hct().get_tone()
             }else if is_monochrome(s) {
                 if s.is_dark() { 85.0 } else { 25.0 }
             }else if s.is_dark() { 30.0 } else { 90.0 },
@@ -674,8 +674,8 @@ pub fn tertiary_container() -> DynamicColor {
                 if s.is_dark() { 30.0 } else { 90.0 }
             } else {
                 let proposed_hct =
-                    Hct::from_argb(s.tertiary_palette().get(s.source_color_hct().tone()));
-                fix_if_disliked(proposed_hct).tone()
+                    Hct::from_argb(s.tertiary_palette().get(s.source_color_hct().get_tone()));
+                fix_if_disliked(proposed_hct).get_tone()
             },
         true,
         Some(Box::new(|s: &DynamicScheme| highest_surface(s))),

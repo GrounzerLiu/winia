@@ -67,7 +67,7 @@ pub fn ranked_suggestions<I: Iterator<Item = (Argb, u32)>>(
     for (argb, population) in argb_to_population {
         let hct = Hct::from_argb(argb);
         color_hct.push(hct);
-        let hue = hct.hue().floor() as usize;
+        let hue = hct.get_hue().floor() as usize;
         hue_population[hue] += population as i32;
         population_sum += population as f64;
     }
@@ -83,21 +83,21 @@ pub fn ranked_suggestions<I: Iterator<Item = (Argb, u32)>>(
 
     let mut scored_hct:Vec<(Hct,f64)>=Vec::new();
     for hct in color_hct{
-        let hue=sanitize_degrees_int(hct.hue().round() as i32);
+        let hue=sanitize_degrees_int(hct.get_hue().round() as i32);
         let proportion=hue_excited_proportions[hue as usize];
-        if options.filter&&(hct.chroma()<K_CUTOFF_CHROMA||proportion<K_CUTOFF_EXCITED_PROPORTION) {
+        if options.filter&&(hct.get_chroma()<K_CUTOFF_CHROMA||proportion<K_CUTOFF_EXCITED_PROPORTION) {
             continue;
         }
 
         let proportion_score = proportion * 100.0 * K_WEIGHT_PROPORTION;
-        let chroma_weight = if hct.chroma() < K_TARGET_CHROMA{
+        let chroma_weight = if hct.get_chroma() < K_TARGET_CHROMA{
             K_WEIGHT_CHROMA_BELOW
         }
         else{
             K_WEIGHT_CHROMA_ABOVE
         };
 
-        let chroma_score = (hct.chroma()- K_TARGET_CHROMA) * chroma_weight;
+        let chroma_score = (hct.get_chroma()- K_TARGET_CHROMA) * chroma_weight;
         let score = proportion_score + chroma_score;
         scored_hct.push((hct,score));
     }
@@ -109,7 +109,7 @@ pub fn ranked_suggestions<I: Iterator<Item = (Argb, u32)>>(
         chosen_colors.clear();
         for (hct,_) in &scored_hct{
 
-            if !chosen_colors.iter().any(|chosen_hct| diff_degrees(hct.hue(), chosen_hct.hue()) < difference_degrees as f64) {
+            if !chosen_colors.iter().any(|chosen_hct| diff_degrees(hct.get_hue(), chosen_hct.get_hue()) < difference_degrees as f64) {
                 chosen_colors.push(*hct);
             }
 
