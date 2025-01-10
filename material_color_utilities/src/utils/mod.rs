@@ -10,6 +10,24 @@ mod tests {
     const K_MATRIX: [[f64; 3]; 3] = [[1.0, 2.0, 3.0], [-4.0, 5.0, -6.0], [-7.0, -8.0, -9.0]];
 
     #[test]
+    fn test_returns_correct_value_for_black() {
+        assert_eq!(argb_from_rgb(0, 0, 0), 0xff000000);
+        assert_eq!(argb_from_rgb(0, 0, 0), 4278190080);
+    }
+
+    #[test]
+    fn test_returns_correct_value_for_white() {
+        assert_eq!(argb_from_rgb(255, 255, 255), 0xffffffff);
+        assert_eq!(argb_from_rgb(255, 255, 255), 4294967295);
+    }
+
+    #[test]
+    fn test_returns_correct_value_for_red() {
+        assert_eq!(argb_from_rgb(255, 0, 0), 0xffff0000);
+        assert_eq!(argb_from_rgb(255, 0, 0), 4294901760);
+    }
+
+    #[test]
     fn test_signum() {
         assert_eq!(signum(0.001), 1);
         assert_eq!(signum(3.0), 1);
