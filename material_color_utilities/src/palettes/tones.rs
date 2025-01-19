@@ -77,20 +77,6 @@ impl PartialEq for F64Key{
     }
 }
 
-impl Eq for F64Key{}
-
-impl Hash for F64Key{
-    fn hash<H: Hasher>(&self, state: &mut H){
-        self.0.to_bits().hash(state);
-    }
-}
-
-impl PartialOrd for F64Key{
-    fn partial_cmp(&self, other: &Self)->Option<Ordering>{
-        self.0.partial_cmp(&other.0)
-    }
-}
-
 #[derive(Clone)]
 pub struct KeyColor{
     max_chroma_value: f64,
@@ -121,13 +107,12 @@ impl KeyColor{
         // to the requested chroma.
         let mut lower_tone = 0;
         let mut upper_tone = 100;
-        while (lower_tone < upper_tone) {
+        while lower_tone < upper_tone {
             let mid_tone = (lower_tone + upper_tone) / 2;
             let is_ascending =
                 self.max_chroma(mid_tone) < self.max_chroma(mid_tone + tone_step_size);
             let sufficient_chroma =
                 self.max_chroma(mid_tone) >= self.requested_chroma - epsilon;
-            let max = self.max_chroma(mid_tone);
             if sufficient_chroma {
                 // Either range [lower_tone, mid_tone] or [mid_tone, upper_tone] has
                 // the answer, so search in the range that is closer the pivot tone.

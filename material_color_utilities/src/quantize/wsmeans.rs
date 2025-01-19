@@ -103,20 +103,20 @@ pub fn quantize_wsmeans(input_pixels: &[Argb], starting_clusters: &[Argb], max_c
         clusters.push(Lab::from(*argb));
     }
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let additional_clusters_needed = cluster_count - clusters.len();
     if starting_clusters.is_empty() && additional_clusters_needed > 0 {
         for _i in 0..additional_clusters_needed {
-            let l = rng.gen::<f64>() * 100.0;
-            let a = rng.gen::<f64>() * 200.0 - 100.0;
-            let b = rng.gen::<f64>() * 200.0 - 100.0;
+            let l = rng.random::<f64>() * 100.0;
+            let a = rng.random::<f64>() * 200.0 - 100.0;
+            let b = rng.random::<f64>() * 200.0 - 100.0;
             clusters.push(Lab::new(l, a, b));
         }
     }
 
     let mut cluster_indices: Vec<usize> = Vec::with_capacity(points.len());
     for _i in 0..points.len() {
-        cluster_indices.push(rng.gen_range(0..cluster_count));
+        cluster_indices.push(rng.random_range(0..cluster_count));
     }
 
     let mut index_matrix: Vec<Vec<usize>> = vec![vec![0; cluster_count]; cluster_count];
