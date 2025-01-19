@@ -29,3 +29,7 @@ pub fn scheme_tonal_spot_with_contrast(
         None
     )
 }
+
+pub fn scheme_tonal_spot(set_source_color_hct: Hct, set_is_dark: bool) -> DynamicScheme {
+    scheme_tonal_spot_with_contrast(set_source_color_hct, set_is_dark, 0.0)
+}
