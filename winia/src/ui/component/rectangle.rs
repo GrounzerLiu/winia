@@ -38,7 +38,7 @@ impl Rectangle {
                     let padding_bottom = item.get_padding_bottom().get();
 
                     let color = rectangle_property.color.get();
-                    let opacity = item.get_opacity().get();
+                    let opacity = item.get_opacity().get().clamp(0.0, 1.0);
                     let rect = Rect::from_xywh(
                         display_parameter.x() + padding_left,
                         display_parameter.y() + padding_top,
@@ -47,7 +47,10 @@ impl Rectangle {
                     );
                     let mut paint = skia_safe::Paint::default();
                     paint.set_anti_alias(true);
-                    paint.set_color(color.with_a((opacity.clamp(0.0, 1.0) * 255.0) as u8));
+                    let alpha = color.a();
+                    let new_alpha = (alpha as f32 * opacity) as u8;
+                    let new_color = Color::from_argb(new_alpha, color.r(), color.g(), color.b());
+                    paint.set_color(new_color);
                     canvas.draw_rect(rect, &paint);
                 }
             });
