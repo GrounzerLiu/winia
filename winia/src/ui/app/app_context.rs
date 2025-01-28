@@ -1,5 +1,5 @@
 use crate::dpi::LogicalSize;
-use crate::shared::{Shared, SharedAnimation, SharedBool, WeakShared};
+use crate::shared::{Shared, SharedAnimation, SharedAnimationTrait, SharedBool, WeakShared};
 use crate::ui::app::UserEvent;
 use crate::ui::theme::Style;
 use crate::ui::Animation;
@@ -25,7 +25,7 @@ pub struct AppContext {
     pub(crate) request_re_layout: Shared<bool>,
     pub(crate) starting_animations: Shared<LinkedList<Animation>>,
     pub(crate) running_animations: Shared<Vec<Animation>>,
-    pub(crate) shared_animations: Shared<Vec<Box<dyn SharedAnimation>>>,
+    pub(crate) shared_animations: Shared<Vec<Box<dyn SharedAnimationTrait>>>,
     pub(crate) focused_property: Shared<Option<(SharedBool, usize)>>,
     pub(crate) focus_changed_items: Shared<BTreeSet<usize>>,
     pub(crate) timers: Shared<Vec<Timer>>,
@@ -199,7 +199,7 @@ pub struct AppContextWeak {
     request_re_layout: WeakShared<bool>,
     starting_animations: WeakShared<LinkedList<Animation>>,
     running_animations: WeakShared<Vec<Animation>>,
-    shared_animations: WeakShared<Vec<Box<dyn SharedAnimation>>>,
+    shared_animations: WeakShared<Vec<Box<dyn SharedAnimationTrait>>>,
     focused_property: WeakShared<Option<(SharedBool, usize)>>,
     focus_changed_items: WeakShared<BTreeSet<usize>>,
     timer: WeakShared<Vec<Timer>>,

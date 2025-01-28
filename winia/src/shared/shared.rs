@@ -2,7 +2,10 @@ use crate::ui::app::AppContext;
 use std::fmt::Display;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
+use std::time::{Duration, Instant};
 use crate::core::generate_id;
+use crate::shared::SharedF32;
+use crate::ui::animation::interpolator::{Interpolator, Linear};
 
 /// A trait for getting the value of a shared.
 /// This function will return a specific value instead of `PropertyValue` which needs to be unwrapped.
@@ -47,7 +50,7 @@ macro_rules! shared {
     }
 }
 
-pub struct Shared<T:?Sized> {
+pub struct Shared<T> {
     id: usize,
     /// The value of the shared.
     value: Arc<Mutex<T>>,
@@ -61,6 +64,7 @@ pub struct Shared<T:?Sized> {
     /// A list of specific observers. The key is the id of the observer. The value is the observer function.
     /// The observer function takes a mutable reference to the shared value.
     specific_observers: Arc<Mutex<Vec<(usize, Box<dyn FnMut(&mut T)>)>>>,
+    animation: Arc<Mutex<Option<SharedAnimation<T>>>>,
 }
 
 impl<T: 'static> Shared<T> {
@@ -78,6 +82,7 @@ impl<T: 'static> Shared<T> {
             observed_objects: Arc::new(Mutex::new(Vec::with_capacity(0))),
             simple_observers: Arc::new(Mutex::new(Vec::with_capacity(0))),
             specific_observers: Arc::new(Mutex::new(Vec::with_capacity(0))),
+            animation: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -85,7 +90,7 @@ impl<T: 'static> Shared<T> {
         Self::inner_new(value, None)
     }
 
-    pub fn from_dynamic<O:Observable+Clone+'static>(o:&[O],value_generator: impl Fn() -> T + 'static) -> Self {
+    pub fn from_dynamic<O: Observable + Clone + 'static>(o: &[O], value_generator: impl Fn() -> T + 'static) -> Self {
         let value_generator: Box<dyn Fn() -> T> = Box::new(value_generator);
         let value = value_generator();
         let value_generator = Some(value_generator);
@@ -193,6 +198,10 @@ impl<T: 'static> Shared<T> {
         self.specific_observers.lock().unwrap().retain(|(i, _)| *i != id);
     }
 
+    pub fn get_animation(&self) -> Option<SharedAnimation<T>> {
+        self.animation.lock().unwrap().as_ref().cloned()
+    }
+
     pub fn weak(&self) -> WeakShared<T> {
         WeakShared {
             id: self.id,
@@ -201,11 +210,12 @@ impl<T: 'static> Shared<T> {
             observed_objects: Arc::downgrade(&self.observed_objects),
             simple_observers: Arc::downgrade(&self.simple_observers),
             specific_observers: Arc::downgrade(&self.specific_observers),
+            animation: Arc::downgrade(&self.animation),
         }
     }
 }
 
-impl<T:?Sized> Clone for Shared<T> {
+impl<T> Clone for Shared<T> {
     fn clone(&self) -> Self {
         Self {
             id: self.id,
@@ -214,6 +224,7 @@ impl<T:?Sized> Clone for Shared<T> {
             observed_objects: self.observed_objects.clone(),
             simple_observers: self.simple_observers.clone(),
             specific_observers: self.specific_observers.clone(),
+            animation: self.animation.clone(),
         }
     }
 }
@@ -325,6 +336,7 @@ pub struct WeakShared<T> {
     observed_objects: Weak<Mutex<Vec<(Option<Box<dyn Observable>>, Box<dyn FnOnce()>)>>>,
     simple_observers: Weak<Mutex<Vec<(usize, Box<dyn FnMut()>)>>>,
     specific_observers: Weak<Mutex<Vec<(usize, Box<dyn FnMut(&mut T)>)>>>,
+    animation: Weak<Mutex<Option<SharedAnimation<T>>>>,
 }
 
 impl<T: 'static> WeakShared<T> {
@@ -334,6 +346,7 @@ impl<T: 'static> WeakShared<T> {
         let observed_objects = self.observed_objects.upgrade()?;
         let simple_observers = self.simple_observers.upgrade()?;
         let specific_observers = self.specific_observers.upgrade()?;
+        let animation = self.animation.upgrade()?;
         Some(Shared {
             id: self.id,
             value,
@@ -341,6 +354,7 @@ impl<T: 'static> WeakShared<T> {
             observed_objects,
             simple_observers,
             specific_observers,
+            animation,
         })
     }
 
@@ -362,8 +376,182 @@ impl<T: 'static> WeakShared<T> {
 }
 
 
-pub trait SharedAnimation{
-    fn start(self, app_context: &AppContext);
+struct InnerSharedAnimation<T> {
+    id: usize,
+    is_finished: bool,
+    shared: WeakShared<T>,
+    from: T,
+    to: T,
+    value_generator: Box<dyn Fn(&T, &T, f32) -> T>,
+    duration: Duration,
+    start_time: Instant,
+    interpolator: Box<dyn Interpolator>,
+    on_start: Option<Box<dyn FnMut()>>,
+    on_finish: Option<Box<dyn FnMut()>>,
+}
+
+impl<T: 'static> InnerSharedAnimation<T> {
+    pub fn new(f32: Shared<T>, from: T, to: T, value_generator: impl Fn(&T, &T, f32) -> T + 'static) -> Self {
+        Self {
+            id: generate_id(),
+            is_finished: false,
+            shared: f32.weak(),
+            from,
+            to,
+            value_generator: Box::new(value_generator),
+            duration: Duration::from_secs(500),
+            start_time: Instant::now(),
+            interpolator: Box::new(Linear::new()),
+            on_start: None,
+            on_finish: None,
+        }
+    }
+
+    pub fn duration(&mut self, duration: Duration) {
+        self.duration = duration;
+    }
+
+    pub fn interpolator(&mut self, interpolator: impl Interpolator + 'static) {
+        self.interpolator = Box::new(interpolator);
+    }
+
+    pub fn on_start(&mut self, on_start: impl FnMut() + 'static) {
+        self.on_start = Some(Box::new(on_start));
+    }
+
+    /// Set the function to be called when the animation is finished or stopped.
+    pub fn on_finish(&mut self, on_finish: impl FnMut() + 'static) {
+        self.on_finish = Some(Box::new(on_finish));
+    }
+
+    // pub fn start(mut self, app_context: &AppContext){
+    //     self.start_time = Instant::now();
+    //     app_context.shared_animations.value().push(Box::new(self));
+    //     app_context.request_redraw();
+    //     if let Some(on_start) = self.on_start.take(){
+    //         on_start();
+    //     }
+    // }
+
+    pub fn stop(&mut self) {
+        self.is_finished = true;
+        // if let Some(on_finish) = self.on_finish.as_mut(){
+        //     on_finish();
+        // }
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.is_finished || self.start_time.elapsed() >= self.duration
+    }
+
+    pub fn update(&mut self) {
+        if self.is_finished() {
+            if let Some(on_finish) = self.on_finish.as_mut() {
+                on_finish();
+            }
+            return;
+        }
+        let time_elapsed = self.start_time.elapsed().as_millis() as f32;
+        let progress = (time_elapsed / self.duration.as_millis() as f32).clamp(0.0, 1.0);
+        let interpolated = self.interpolator.interpolate(progress);
+        let new_value = (self.value_generator)(&self.from, &self.to, interpolated);
+        self.shared.upgrade().map(move |mut shared| {
+            shared.set(new_value);
+        });
+    }
+}
+
+pub struct SharedAnimation<T> {
+    inner: Arc<Mutex<InnerSharedAnimation<T>>>,
+}
+
+impl<T: 'static> SharedAnimation<T> {
+    pub fn new(f32: Shared<T>, from: T, to: T, value_generator: impl Fn(&T, &T, f32) -> T + 'static) -> Self {
+        let inner = InnerSharedAnimation::new(f32, from, to, value_generator);
+        Self {
+            inner: Arc::new(Mutex::new(inner)),
+        }
+    }
+
+    pub fn duration(self, duration: Duration) -> Self {
+        self.inner.lock().unwrap().duration = duration;
+        self
+    }
+
+    pub fn interpolator(self, interpolator: impl Interpolator + 'static) -> Self {
+        self.inner.lock().unwrap().interpolator(interpolator);
+        self
+    }
+
+    pub fn on_start(self, on_start: impl FnMut() + 'static) -> Self {
+        self.inner.lock().unwrap().on_start(on_start);
+        self
+    }
+
+    pub fn on_finish(self, on_finish: impl FnMut() + 'static) -> Self {
+        self.inner.lock().unwrap().on_finish(on_finish);
+        self
+    }
+
+    pub fn start(self, app_context: &AppContext) -> Self {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            inner.start_time = Instant::now();
+            app_context.shared_animations.write(|shared_animations| {
+                shared_animations.push(Box::new(self.clone()));
+            });
+            let cloned = self.clone();
+            // inner.shared.animation.lock().unwrap().replace(cloned);
+            inner.shared.upgrade().map(move |mut shared| {
+                shared.animation.lock().unwrap().replace(cloned);
+            });
+            app_context.request_redraw();
+            if let Some(mut on_start) = inner.on_start.take() {
+                on_start();
+            }
+        }
+        self
+    }
+
+    pub fn stop(self) -> Self {
+        self.inner.lock().unwrap().stop();
+        self
+    }
+
+    // pub fn is_finished(&self) -> bool {
+    //     self.inner.read(|inner| inner.is_finished())
+    // }
+    //
+    // pub fn update(self, app_context: &AppContext) -> Self {
+    //     self.inner.write(|inner| inner.update());
+    //     app_context.request_redraw();
+    //     self
+    // }
+
+    pub fn id(&self) -> usize {
+        self.inner.lock().unwrap().id
+    }
+}
+
+impl<T> Clone for SharedAnimation<T> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+pub(crate) trait SharedAnimationTrait {
     fn is_finished(&self) -> bool;
-    fn update(&mut self);
+    fn update(&self);
+}
+
+impl<T: 'static> SharedAnimationTrait for SharedAnimation<T> {
+    fn is_finished(&self) -> bool {
+        self.inner.lock().unwrap().is_finished()
+    }
+
+    fn update(&self) {
+        self.inner.lock().unwrap().update();
+    }
 }

@@ -55,7 +55,7 @@ impl Children {
         let mut item = self.items.lock().unwrap().remove(index);
         let action = Action::Remove(&mut item);
         self.notify(action);
-        item.on_detach.iter_mut().for_each(|f| f());
+        item.get_on_detach().iter_mut().for_each(|f| f());
     }
 
     pub fn remove_by_id(&mut self, id: usize) {
@@ -73,7 +73,7 @@ impl Children {
 
     pub fn clear(&mut self) {
         while let Some(mut item) = self.items.lock().unwrap().pop() {
-            item.on_detach.iter_mut().for_each(|f| f());
+            item.get_on_detach().iter_mut().for_each(|f| f());
         }
     }
 
@@ -123,7 +123,7 @@ impl Add<Item> for Children {
         self.notify(action);
         self.items.lock_unwrap_mut(|items| {
             items.push(rhs);
-            items.last_mut().unwrap().on_attach.iter_mut().for_each(|f| f());
+            items.last_mut().unwrap().get_on_attach().iter_mut().for_each(|f| f());
         });
         self
     }

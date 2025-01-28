@@ -4,10 +4,7 @@ use crate::shared::{
     SharedInnerPosition, SharedItem, SharedSize, SharedUsize,
 };
 use crate::ui::app::{AppContext, UserEvent};
-use crate::ui::item::{
-    ClickSource, DisplayParameter, ImeAction, InnerPosition, ItemEvent, MeasureMode, MouseEvent,
-    Orientation, PointerState, Size, TouchEvent,
-};
+use crate::ui::item::{ClickSource, DisplayParameter, ImeAction, InnerPosition, ItemEvent, MeasureMode, MouseEvent, Orientation, PointerEvent, PointerState, Size, TouchEvent};
 use crate::ui::Animation;
 use skia_safe::{Canvas, Color, Surface};
 use std::any::Any;
@@ -187,64 +184,62 @@ impl Animations {
 /// An item is a basic building block of the UI system. It can be used to display text, images, or other content.
 /// It can also be used to arrange other items in a layout.
 pub struct Item {
-    id: usize,
-    name: String,
-    app_context: AppContext,
-    children: Children,
-    pub(crate) item_event: ItemEvent,
-    animations: Animations,
-    pub(crate) captured_mouse_button: Vec<MouseButton>,
-    pub(crate) captured_touch_id: Vec<(DeviceId, u64)>,
-    pub(crate) on_attach: LinkedList<Box<dyn FnMut()>>,
-    pub(crate) on_detach: LinkedList<Box<dyn FnMut()>>,
-    click_source: Option<ClickSource>,
-    on_click: Option<Box<dyn FnMut(ClickSource)>>,
-    focused: Shared<bool>,
-    pub(crate) on_focus: Arc<Mutex<Vec<Box<dyn FnMut(bool) + 'static>>>>,
-    on_mouse_input: Option<Box<dyn FnMut(MouseEvent)>>,
-    on_touch: Option<Box<dyn FnMut(TouchEvent)>>,
-    touch_start_time: Instant,
-    recorded_parameter: Option<DisplayParameter>,
-    target_parameter: DisplayParameter,
-    display_parameter_out: Shared<DisplayParameter>,
-    measure_parameter: DisplayParameter,
-    custom_properties: HashMap<String, CustomProperty>,
-    baseline: Option<f32>,
     active: SharedBool,
-    layout_direction: Shared<LayoutDirection>,
-    width: SharedSize,
-    min_width: SharedF32,
-    max_width: SharedF32,
+    animations: Animations,
+    app_context: AppContext,
+    background: SharedItem,
+    baseline: Option<f32>,
+    children: Children,
+    custom_properties: HashMap<String, CustomProperty>,
+    display_parameter_out: Shared<DisplayParameter>,
+    enable_background_blur: SharedBool,
+    focused: Shared<bool>,
+    foreground: SharedItem,
     height: SharedSize,
-    min_height: SharedF32,
-    max_height: SharedF32,
-    padding_start: SharedF32,
-    padding_top: SharedF32,
-    padding_end: SharedF32,
-    padding_bottom: SharedF32,
+    horizontal_gravity: Shared<Gravity>,
+    id: usize,
+    item_event: ItemEvent,
+    layout_direction: Shared<LayoutDirection>,
+    margin_bottom: SharedF32,
+    margin_end: SharedF32,
     margin_start: SharedF32,
     margin_top: SharedF32,
-    margin_end: SharedF32,
-    margin_bottom: SharedF32,
-    scale_x: SharedF32,
-    scale_y: SharedF32,
-    scale_center_x: SharedInnerPosition,
-    scale_center_y: SharedInnerPosition,
+    max_height: SharedF32,
+    max_width: SharedF32,
+    measure_parameter: DisplayParameter,
+    min_height: SharedF32,
+    min_width: SharedF32,
+    name: String,
     offset_x: SharedF32,
     offset_y: SharedF32,
+    on_attach: LinkedList<Box<dyn FnMut()>>,
+    on_click: Option<Box<dyn FnMut(ClickSource)>>,
+    on_detach: LinkedList<Box<dyn FnMut()>>,
+    on_focus: Arc<Mutex<Vec<Box<dyn FnMut(bool) + 'static>>>>,
+    on_mouse_input: Option<Box<dyn FnMut(MouseEvent)>>,
+    on_pointer_input: Option<Box<dyn FnMut(PointerEvent)>>,
+    on_touch_input: Option<Box<dyn FnMut(TouchEvent)>>,
     opacity: SharedF32,
+    padding_bottom: SharedF32,
+    padding_end: SharedF32,
+    padding_start: SharedF32,
+    padding_top: SharedF32,
+    recorded_parameter: Option<DisplayParameter>,
     rotation: SharedF32,
     rotation_center_x: SharedInnerPosition,
     rotation_center_y: SharedInnerPosition,
-    skew_x: SharedF32,
-    skew_y: SharedF32,
+    scale_center_x: SharedInnerPosition,
+    scale_center_y: SharedInnerPosition,
+    scale_x: SharedF32,
+    scale_y: SharedF32,
     skew_center_x: SharedInnerPosition,
     skew_center_y: SharedInnerPosition,
-    background: SharedItem,
-    foreground: SharedItem,
-    enable_background_blur: SharedBool,
-    horizontal_gravity: Shared<Gravity>,
+    skew_x: SharedF32,
+    skew_y: SharedF32,
+    target_parameter: DisplayParameter,
+    touch_start_time: Instant,
     vertical_gravity: Shared<Gravity>,
+    width: SharedSize
 }
 
 impl_property_re_layout!(
@@ -447,64 +442,62 @@ impl Item {
         let id = generate_id();
 
         let mut item = Self {
-            id,
-            name: format!("Item {}", id),
-            app_context,
-            children,
-            item_event,
-            animations: Default::default(),
-            captured_mouse_button: vec![],
-            captured_touch_id: vec![],
-            on_attach: LinkedList::new(),
-            on_detach: LinkedList::new(),
-            click_source: None,
-            on_click: None,
-            focused: false.into(),
-            on_focus: Arc::new(Mutex::new(vec![])),
-            on_mouse_input: None,
-            on_touch: None,
-            touch_start_time: Instant::now(),
-            recorded_parameter: None,
-            target_parameter: Default::default(),
-            display_parameter_out: Shared::from_static(Default::default()),
-            measure_parameter: Default::default(),
-            custom_properties: HashMap::new(),
-            baseline: None,
             active: true.into(),
-            layout_direction: LayoutDirection::LTR.into(),
-            width: Size::Compact.into(),
-            min_width: 0.0.into(),
-            max_width: f32::INFINITY.into(),
+            animations: Default::default(),
+            app_context,
+            background: SharedItem::none(),
+            baseline: None,
+            children,
+            custom_properties: HashMap::new(),
+            display_parameter_out: Shared::from_static(Default::default()),
+            enable_background_blur: false.into(),
+            focused: false.into(),
+            foreground: SharedItem::none(),
             height: Size::Compact.into(),
-            min_height: 0.0.into(),
-            max_height: f32::INFINITY.into(),
-            padding_start: 0.0.into(),
-            padding_top: 0.0.into(),
-            padding_end: 0.0.into(),
-            padding_bottom: 0.0.into(),
+            horizontal_gravity: Gravity::Start.into(),
+            id,
+            item_event,
+            layout_direction: LayoutDirection::LTR.into(),
+            margin_bottom: 0.0.into(),
+            margin_end: 0.0.into(),
             margin_start: 0.0.into(),
             margin_top: 0.0.into(),
-            margin_end: 0.0.into(),
-            margin_bottom: 0.0.into(),
-            scale_x: 1.0.into(),
-            scale_y: 1.0.into(),
-            scale_center_x: InnerPosition::default().into(),
-            scale_center_y: InnerPosition::default().into(),
+            max_height: f32::INFINITY.into(),
+            max_width: f32::INFINITY.into(),
+            measure_parameter: Default::default(),
+            min_height: 0.0.into(),
+            min_width: 0.0.into(),
+            name: format!("Item {}", id),
             offset_x: 0.0.into(),
             offset_y: 0.0.into(),
+            on_attach: LinkedList::new(),
+            on_click: None,
+            on_detach: LinkedList::new(),
+            on_focus: Arc::new(Mutex::new(vec![])),
+            on_mouse_input: None,
+            on_pointer_input: None,
+            on_touch_input: None,
             opacity: 1.0.into(),
+            padding_bottom: 0.0.into(),
+            padding_end: 0.0.into(),
+            padding_start: 0.0.into(),
+            padding_top: 0.0.into(),
+            recorded_parameter: None,
             rotation: 0.0.into(),
             rotation_center_x: InnerPosition::default().into(),
             rotation_center_y: InnerPosition::default().into(),
-            skew_x: 0.0.into(),
-            skew_y: 0.0.into(),
+            scale_center_x: InnerPosition::default().into(),
+            scale_center_y: InnerPosition::default().into(),
+            scale_x: 1.0.into(),
+            scale_y: 1.0.into(),
             skew_center_x: InnerPosition::default().into(),
             skew_center_y: InnerPosition::default().into(),
-            background: SharedItem::none(),
-            foreground: SharedItem::none(),
-            enable_background_blur: false.into(),
-            horizontal_gravity: Gravity::Start.into(),
+            skew_x: 0.0.into(),
+            skew_y: 0.0.into(),
+            target_parameter: Default::default(),
+            touch_start_time: Instant::now(),
             vertical_gravity: Gravity::Start.into(),
+            width: Size::Compact.into()
         };
         init_property_re_layout(item.app_context.clone(), &mut item.active, item.id);
         init_property_re_layout(
@@ -600,22 +593,20 @@ impl Item {
         item.focused(false)
     }
 
-    pub fn get_app_context(&self) -> AppContext {
-        self.app_context.clone()
-    }
-
-    pub fn get_id(&self) -> usize {
-        self.id
-    }
-
-    pub fn name(mut self, name: impl Into<String>) -> Self {
-        self.name = name.into();
-        bind_str_to_id(&self.name, self.id);
+    pub fn add_on_attach<F>(mut self, f: F) -> Self
+    where
+        F: FnMut() + 'static,
+    {
+        self.on_attach.push_back(Box::new(f));
         self
     }
 
-    pub fn get_name(&self) -> &str {
-        &self.name
+    pub fn add_on_detach<F>(mut self, f: F) -> Self
+    where
+        F: FnMut() + 'static,
+    {
+        self.on_detach.push_back(Box::new(f));
+        self
     }
 
     pub fn custom_property(mut self, name: impl Into<String>, property: CustomProperty) -> Self {
@@ -623,18 +614,25 @@ impl Item {
         self
     }
 
-    pub fn get_custom_property(&self, name: &str) -> Option<&CustomProperty> {
-        self.custom_properties.get(name)
+    pub fn display_parameter_out(
+        mut self,
+        display_parameter_out: Shared<DisplayParameter>,
+    ) -> Self {
+        self.display_parameter_out.remove_observer(self.id);
+        self.display_parameter_out = display_parameter_out;
+        self.get_display_parameter();
+        self
     }
 
-    pub fn set_base_line(&mut self, base_line: f32) {
-        self.baseline = Some(base_line);
+    pub(crate) fn focus(&mut self, focused: bool) {
+        let on_focus = self.on_focus.clone();
+        on_focus.lock().unwrap().iter_mut().for_each(|f| f(focused));
+        let on_focus = self.item_event.get_on_focus();
+        {
+            let mut on_focus = on_focus.lock().unwrap();
+            on_focus(self, focused)
+        }
     }
-
-    pub fn get_baseline(&self) -> Option<f32> {
-        self.baseline
-    }
-
     pub fn focused(mut self, focused: impl Into<Shared<bool>>) -> Self {
         let self_item_id = self.id;
         self.focused.remove_observer(self_item_id);
@@ -712,37 +710,9 @@ impl Item {
         self
     }
 
-    pub(crate) fn focus(&mut self, focused: bool) {
-        let on_focus = self.on_focus.clone();
-        on_focus.lock().unwrap().iter_mut().for_each(|f| f(focused));
-        let on_focus = self.item_event.on_focus.clone();
-        {
-            let mut on_focus = on_focus.lock().unwrap();
-            on_focus(self, focused)
-        }
-    }
-
-    pub fn get_focused(&self) -> Shared<bool> {
-        self.focused.clone()
-    }
-
-    pub fn is_animating(&self) -> bool {
-        self.animations.is_animating()
-    }
-
-    pub fn add_on_attach<F>(mut self, f: F) -> Self
-    where
-        F: FnMut() + 'static,
-    {
-        self.on_attach.push_back(Box::new(f));
-        self
-    }
-
-    pub fn add_on_detach<F>(mut self, f: F) -> Self
-    where
-        F: FnMut() + 'static,
-    {
-        self.on_detach.push_back(Box::new(f));
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        bind_str_to_id(&self.name, self.id);
         self
     }
 
@@ -770,34 +740,40 @@ impl Item {
         self
     }
 
-    pub fn find_item(&self, id: usize, f: &mut impl FnMut(&Item)) {
-        if self.id == id {
-            f(self);
-        } else {
-            for child in self.children.items().iter() {
-                child.find_item(id, f);
-            }
-        }
-    }
-
-    pub fn find_item_mut(&mut self, id: usize, f: &mut impl FnMut(&mut Item)) {
-        if self.id == id {
-            f(self);
-        } else {
-            for child in self.children.items().iter_mut() {
-                child.find_item_mut(id, f);
-            }
-        }
-    }
-
-    pub fn display_parameter_out(
-        mut self,
-        display_parameter_out: Shared<DisplayParameter>,
-    ) -> Self {
-        self.display_parameter_out.remove_observer(self.id);
-        self.display_parameter_out = display_parameter_out;
-        self.get_display_parameter();
+    pub fn on_pointer_input<F>(mut self, f: F) -> Self
+    where
+        F: FnMut(PointerEvent) + 'static,
+    {
+        self.on_pointer_input = Some(Box::new(f));
         self
+    }
+
+    pub fn on_touch_input<F>(mut self, f: F) -> Self
+    where
+        F: FnMut(TouchEvent) + 'static,
+    {
+        self.on_touch_input = Some(Box::new(f));
+        self
+    }
+
+    pub fn get_app_context(&self) -> AppContext {
+        self.app_context.clone()
+    }
+
+    pub fn get_baseline(&self) -> Option<f32> {
+        self.baseline
+    }
+
+    pub fn get_children(&self) -> &Children {
+        &self.children
+    }
+
+    pub fn get_children_mut(&mut self) -> &mut Children {
+        &mut self.children
+    }
+
+    pub fn get_custom_property(&self, name: &str) -> Option<&CustomProperty> {
+        self.custom_properties.get(name)
     }
 
     pub fn get_display_parameter(&mut self) -> DisplayParameter {
@@ -853,31 +829,16 @@ impl Item {
         display_parameter
     }
 
-    pub fn set_target_parameter(&mut self, parameter: DisplayParameter) {
-        self.target_parameter.copy_from(&parameter)
+    pub fn get_focused(&self) -> Shared<bool> {
+        self.focused.clone()
     }
 
-    pub fn get_target_parameter(&mut self) -> &mut DisplayParameter {
-        &mut self.target_parameter
+    pub fn get_id(&self) -> usize {
+        self.id
     }
 
-    pub fn get_measure_parameter(&mut self) -> &mut DisplayParameter {
-        &mut self.measure_parameter
-    }
-
-    pub fn clone_measure_parameter(&self) -> DisplayParameter {
-        self.measure_parameter.clone()
-    }
-
-    // pub fn set_measure_parameter(&mut self, parameter: DisplayParameter) {
-    //     self.measure_parameter = parameter;
-    // }
-
-    pub fn get_size(&self, orientation: Orientation) -> Size {
-        match orientation {
-            Orientation::Horizontal => self.width.get(),
-            Orientation::Vertical => self.height.get(),
-        }
+    pub fn get_item_event(&self) -> &ItemEvent {
+        &self.item_event
     }
 
     pub fn get_max_size(&self, orientation: Orientation) -> f32 {
@@ -892,6 +853,59 @@ impl Item {
             Orientation::Horizontal => self.min_width.get(),
             Orientation::Vertical => self.min_height.get(),
         }
+    }
+
+    pub fn get_margin(&self, orientation: Orientation) -> f32 {
+        match orientation {
+            Orientation::Horizontal => self.margin_start.get() + self.margin_end.get(),
+            Orientation::Vertical => self.margin_top.get() + self.margin_bottom.get(),
+        }
+    }
+
+    pub fn get_margin_left(&self) -> f32 {
+        match self.layout_direction.get() {
+            LayoutDirection::LTR => self.margin_start.get(),
+            LayoutDirection::RTL => self.margin_end.get(),
+        }
+    }
+
+    pub fn get_margin_right(&self) -> f32 {
+        match self.layout_direction.get() {
+            LayoutDirection::LTR => self.margin_end.get(),
+            LayoutDirection::RTL => self.margin_start.get(),
+        }
+    }
+
+    pub fn get_measure_parameter(&mut self) -> &mut DisplayParameter {
+        &mut self.measure_parameter
+    }
+
+    pub fn get_name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn get_on_attach(&mut self) -> &mut LinkedList<Box<dyn FnMut()>> {
+        &mut self.on_attach
+    }
+
+    pub fn get_on_click(&mut self) -> Option<&mut Box<dyn FnMut(ClickSource)>> {
+        self.on_click.as_mut()
+    }
+
+    pub fn get_on_detach(&mut self) -> &mut LinkedList<Box<dyn FnMut()>> {
+        &mut self.on_detach
+    }
+
+    pub fn get_on_mouse_input(&mut self) -> Option<&mut Box<dyn FnMut(MouseEvent)>> {
+        self.on_mouse_input.as_mut()
+    }
+
+    pub fn get_on_pointer_input(&mut self) -> Option<&mut Box<dyn FnMut(PointerEvent)>> {
+        self.on_pointer_input.as_mut()
+    }
+
+    pub fn get_on_touch_input(&mut self) -> Option<&mut Box<dyn FnMut(TouchEvent)>> {
+        self.on_touch_input.as_mut()
     }
 
     pub fn get_padding(&self, orientation: Orientation) -> f32 {
@@ -915,31 +929,15 @@ impl Item {
         }
     }
 
-    pub fn get_margin_left(&self) -> f32 {
-        match self.layout_direction.get() {
-            LayoutDirection::LTR => self.margin_start.get(),
-            LayoutDirection::RTL => self.margin_end.get(),
-        }
-    }
-
-    pub fn get_margin_right(&self) -> f32 {
-        match self.layout_direction.get() {
-            LayoutDirection::LTR => self.margin_end.get(),
-            LayoutDirection::RTL => self.margin_start.get(),
-        }
-    }
-
-    pub fn get_margin(&self, orientation: Orientation) -> f32 {
+    pub fn get_size(&self, orientation: Orientation) -> Size {
         match orientation {
-            Orientation::Horizontal => self.margin_start.get() + self.margin_end.get(),
-            Orientation::Vertical => self.margin_top.get() + self.margin_bottom.get(),
+            Orientation::Horizontal => self.width.get(),
+            Orientation::Vertical => self.height.get(),
         }
     }
 
-    pub fn clamp_width(&self, width: f32) -> f32 {
-        let min_width = self.min_width.get();
-        let max_width = self.max_width.get();
-        width.clamp(min_width, max_width)
+    pub fn get_target_parameter(&mut self) -> &mut DisplayParameter {
+        &mut self.target_parameter
     }
 
     pub fn clamp_height(&self, height: f32) -> f32 {
@@ -948,52 +946,14 @@ impl Item {
         height.clamp(min_height, max_height)
     }
 
-    pub fn get_children(&self) -> &Children {
-        &self.children
+    pub fn clamp_width(&self, width: f32) -> f32 {
+        let min_width = self.min_width.get();
+        let max_width = self.max_width.get();
+        width.clamp(min_width, max_width)
     }
 
-    pub fn get_children_mut(&mut self) -> &mut Children {
-        &mut self.children
-    }
-
-    pub fn for_each_child<F>(&self, mut f: F)
-    where
-        F: FnMut(&Item),
-    {
-        for child in self.children.items().iter() {
-            f(child);
-        }
-    }
-
-    pub fn for_each_child_mut<F>(&mut self, mut f: F)
-    where
-        F: FnMut(&mut Item),
-    {
-        for child in self.children.items().iter_mut() {
-            f(child);
-        }
-    }
-
-    fn layout_layer(mut layer: SharedItem, width: f32, height: f32) {
-        if let Some(item) = layer.value().as_mut(){
-            item.measure(
-                MeasureMode::Specified(width),
-                MeasureMode::Specified(height),
-            );
-            item.dispatch_layout(0.0, 0.0, width, height);
-        }
-    }
-
-    pub fn layout_layers(&self, width: f32, height: f32) {
-        Self::layout_layer(self.get_background(), width, height);
-        Self::layout_layer(self.get_foreground(), width, height);
-    }
-
-    pub(crate) fn record_display_parameter(&mut self) {
-        self.recorded_parameter = Some(self.get_display_parameter());
-        self.children.items().iter_mut().for_each(|child| {
-            child.record_display_parameter();
-        });
+    pub fn clone_measure_parameter(&self) -> DisplayParameter {
+        self.measure_parameter.clone()
     }
 
     pub(crate) fn dispatch_animation(&mut self, animation: Animation) {
@@ -1131,17 +1091,121 @@ impl Item {
     }
 
     pub fn dispatch_draw(&mut self, surface: &mut Surface, parent_x: f32, parent_y: f32) {
-        let f = self.item_event.dispatch_draw.clone();
+        let f = self.item_event.get_dispatch_draw();
         f.lock().unwrap()(self, surface, parent_x, parent_y);
     }
 
+    pub fn dispatch_focus(&mut self) {
+        let f = self.item_event.get_dispatch_focus();
+        f.lock().unwrap()(self);
+    }
+
+    pub fn dispatch_keyboard_input(
+        &mut self,
+        device_id: DeviceId,
+        event: KeyEvent,
+        is_synthetic: bool,
+    ) -> bool {
+        let f = self.item_event.get_dispatch_keyboard_input();
+        let mut keyboard_input = f.lock().unwrap();
+        keyboard_input(self, device_id, event.clone(), is_synthetic)
+    }
+
+    pub fn dispatch_layout(&mut self, relative_x: f32, relative_y: f32, width: f32, height: f32) {
+        let f = self.item_event.get_dispatch_layout();
+        f.lock().unwrap()(self, relative_x, relative_y, width, height);
+    }
+
+    pub fn dispatch_mouse_input(&mut self, event: MouseEvent) {
+        let f = self.item_event.get_dispatch_mouse_input();
+        f.lock().unwrap()(self, event);
+    }
+
+    pub fn dispatch_timer(&mut self, timer_id: usize) {
+        let f = self.item_event.get_dispatch_timer();
+        f.lock().unwrap()(self, timer_id);
+    }
+
+    pub fn dispatch_touch_input(&mut self, event: TouchEvent) {
+        let f = self.item_event.get_dispatch_touch_input();
+        f.lock().unwrap()(self, event);
+    }
+
     pub fn draw(&mut self, canvas: &Canvas) {
-        let f = self.item_event.draw.clone();
+        let f = self.item_event.get_draw();
         f.lock().unwrap()(self, canvas);
     }
 
+    pub fn find_item(&self, id: usize, f: &mut impl FnMut(&Item)) {
+        if self.id == id {
+            f(self);
+        } else {
+            for child in self.children.items().iter() {
+                child.find_item(id, f);
+            }
+        }
+    }
+
+    pub fn find_item_mut(&mut self, id: usize, f: &mut impl FnMut(&mut Item)) {
+        if self.id == id {
+            f(self);
+        } else {
+            for child in self.children.items().iter_mut() {
+                child.find_item_mut(id, f);
+            }
+        }
+    }
+
+    pub fn for_each_child<F>(&self, mut f: F)
+    where
+        F: FnMut(&Item),
+    {
+        for child in self.children.items().iter() {
+            f(child);
+        }
+    }
+
+    pub fn for_each_child_mut<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&mut Item),
+    {
+        for child in self.children.items().iter_mut() {
+            f(child);
+        }
+    }
+
+    pub fn is_animating(&self) -> bool {
+        self.animations.is_animating()
+    }
+
+    pub fn ime_input(&mut self, event: ImeAction) {
+        let f = self.item_event.get_ime_input();
+        let mut ime_input = f.lock().unwrap();
+        ime_input(self, event.clone());
+    }
+
+    pub fn layout(&mut self, width: f32, height: f32) {
+        let f = self.item_event.get_layout();
+        f.lock().unwrap()(self, width, height);
+    }
+
+    fn layout_layer(mut layer: SharedItem, width: f32, height: f32) {
+        if let Some(item) = layer.value().as_mut(){
+            item.measure(
+                MeasureMode::Specified(width),
+                MeasureMode::Specified(height),
+            );
+            item.dispatch_layout(0.0, 0.0, width, height);
+        }
+    }
+
+    pub fn layout_layers(&self, width: f32, height: f32) {
+        Self::layout_layer(self.get_background(), width, height);
+        Self::layout_layer(self.get_foreground(), width, height);
+    }
+
     pub fn measure(&mut self, width_mode: MeasureMode, height_mode: MeasureMode) {
-        let f = self.item_event.measure.clone();
+        let f = self.item_event.get_measure();
         f.lock().unwrap()(self, width_mode, height_mode);
     }
 
@@ -1174,208 +1238,19 @@ impl Item {
         });
     }
 
-    pub fn dispatch_layout(&mut self, relative_x: f32, relative_y: f32, width: f32, height: f32) {
-        let f = self.item_event.dispatch_layout.clone();
-        f.lock().unwrap()(self, relative_x, relative_y, width, height);
+    pub(crate) fn record_display_parameter(&mut self) {
+        self.recorded_parameter = Some(self.get_display_parameter());
+        self.children.items().iter_mut().for_each(|child| {
+            child.record_display_parameter();
+        });
     }
 
-    pub fn layout(&mut self, width: f32, height: f32) {
-        let f = self.item_event.layout.clone();
-        f.lock().unwrap()(self, width, height);
+    pub fn set_base_line(&mut self, base_line: f32) {
+        self.baseline = Some(base_line);
     }
 
-    pub fn mouse_input(&mut self, event: MouseEvent) {
-        let x = event.x;
-        let y = event.y;
-
-        let foreground = self.get_foreground();
-        if let Some(foreground) = foreground.value().as_mut() {
-            foreground.mouse_input(event);
-        }
-
-        let background = self.get_background();
-        if let Some(background) = background.value().as_mut() {
-            background.mouse_input(event);
-        }
-
-        if let Some(on_mouse_input) = &mut self.on_mouse_input {
-            on_mouse_input(event);
-        }
-
-        {
-            let f = self.item_event.mouse_input.clone();
-            let mut mouse_input = f.lock().unwrap();
-            mouse_input(self, event);
-        }
-
-        {
-            let children = self.get_children();
-            for child in children.items().iter_mut().rev() {
-                let display_parameter = child.get_display_parameter();
-                match event.pointer_state {
-                    PointerState::Started => {
-                        if display_parameter.is_inside(x, y) {
-                            child.captured_mouse_button.push(event.button);
-                            child.mouse_input(event);
-                            return;
-                        }
-                    }
-                    PointerState::Moved => {
-                        if child.captured_mouse_button.contains(&event.button) {
-                            child.mouse_input(event);
-                            return;
-                        }
-                    }
-                    PointerState::Ended | PointerState::Canceled => {
-                        if child.captured_mouse_button.contains(&event.button) {
-                            child
-                                .captured_mouse_button
-                                .retain(|&button| button != event.button);
-                            child.mouse_input(event);
-                            return;
-                        }
-                    }
-                }
-            }
-        }
-
-        match event.pointer_state {
-            PointerState::Started => {
-                self.click_source = Some(ClickSource::Mouse(event.button));
-            }
-            PointerState::Ended => {
-                if self.get_display_parameter().is_inside(x, y) {
-                    if let Some(click_source) = self.click_source {
-                        if click_source == ClickSource::Mouse(event.button) {
-                            {
-                                let f = self.item_event.on_click.clone();
-                                let mut on_click = f.lock().unwrap();
-                                on_click(self, click_source);
-                            }
-                            if let Some(on_click) = &mut self.on_click {
-                                on_click(click_source);
-                            }
-                        }
-                    }
-                    self.click_source = None;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    pub fn touch_input(&mut self, event: TouchEvent) {
-        let x = event.x;
-        let y = event.y;
-
-        let foreground = self.get_foreground();
-        if let Some(foreground) = foreground.value().as_mut() {
-            foreground.touch_input(event);
-        }
-        let background = self.get_background();
-        if let Some(background) = background.value().as_mut() {
-            background.touch_input(event);
-        }
-
-        if let Some(on_touch) = &mut self.on_touch {
-            on_touch(event);
-        }
-
-        {
-            let children = self.get_children();
-            for child in children.items().iter_mut().rev() {
-                let display_parameter = child.get_display_parameter();
-                match event.pointer_state {
-                    PointerState::Started => {
-                        if display_parameter.is_inside(x, y) {
-                            child.captured_touch_id.push((event.device_id, event.id));
-                            child.touch_input(event);
-                            return;
-                        }
-                    }
-                    PointerState::Moved => {
-                        if child
-                            .captured_touch_id
-                            .contains(&(event.device_id, event.id))
-                        {
-                            child.touch_input(event);
-                            return;
-                        }
-                    }
-                    PointerState::Ended | PointerState::Canceled => {
-                        if child
-                            .captured_touch_id
-                            .contains(&(event.device_id, event.id))
-                        {
-                            child.captured_touch_id.retain(|&(device_id, id)| {
-                                device_id != event.device_id || id != event.id
-                            });
-                            child.touch_input(event);
-                            return;
-                        }
-                    }
-                }
-            }
-        }
-
-        match event.pointer_state {
-            PointerState::Started => {
-                self.click_source = Some(ClickSource::Touch);
-                self.touch_start_time = Instant::now();
-            }
-            PointerState::Ended => {
-                if let Some(click_source) = self.click_source {
-                    if click_source == ClickSource::Touch {
-                        let elapsed_time = self.touch_start_time.elapsed().as_millis();
-                        {
-                            let on_click = self.item_event.on_click.clone();
-                            let mut on_click = on_click.lock().unwrap();
-                            if elapsed_time < 300 {
-                                on_click(self, click_source);
-                            } else {
-                                on_click(self, ClickSource::LongTouch);
-                            }
-                        }
-                        if let Some(on_click) = &mut self.on_click {
-                            if elapsed_time < 300 {
-                                on_click(click_source);
-                            } else {
-                                on_click(ClickSource::LongTouch);
-                            }
-                        }
-                    }
-                }
-                self.click_source = None;
-            }
-            _ => {}
-        }
-    }
-
-    pub fn ime_input(&mut self, event: ImeAction) {
-        let f = self.item_event.ime_input.clone();
-        let mut ime_input = f.lock().unwrap();
-        ime_input(self, event.clone());
-    }
-
-    pub fn dispatch_keyboard_input(
-        &mut self,
-        device_id: DeviceId,
-        event: KeyEvent,
-        is_synthetic: bool,
-    ) -> bool {
-        let f = self.item_event.dispatch_keyboard_input.clone();
-        let mut keyboard_input = f.lock().unwrap();
-        keyboard_input(self, device_id, event.clone(), is_synthetic)
-    }
-
-    pub fn dispatch_focus(&mut self) {
-        let f = self.item_event.dispatch_focus.clone();
-        f.lock().unwrap()(self);
-    }
-
-    pub fn dispatch_timer(&mut self, timer_id: usize) {
-        let f = self.item_event.dispatch_timer.clone();
-        f.lock().unwrap()(self, timer_id);
+    pub fn set_target_parameter(&mut self, parameter: DisplayParameter) {
+        self.target_parameter.copy_from(&parameter)
     }
 }
 

@@ -1,8 +1,7 @@
 use crate::ui::theme::colors;
 use crate::ui::Item;
-use material_color_utilities::dynamic_color::material_dynamic_colors;
+use material_color_utilities::dynamic_color::{material_dynamic_colors, DynamicScheme};
 use material_color_utilities::hct::Hct;
-use material_color_utilities::scheme::DynamicScheme;
 use skia_safe::Color;
 use std::collections::HashMap;
 
@@ -28,9 +27,8 @@ impl Style {
         let g = color.g();
         let b = color.b();
         let argb = argb_to_u32(a, r, g, b);
-        let scheme_ops =
+        let scheme =
             material_color_utilities::scheme::scheme_tonal_spot(Hct::from_argb(argb), is_dark);
-        let scheme = DynamicScheme::new(scheme_ops);
         let primary_color = material_dynamic_colors::primary().get_argb(&scheme);
         let on_primary_color = material_dynamic_colors::on_primary().get_argb(&scheme);
         let primary_container_color =

@@ -10,4 +10,4 @@ members = [
 
 [workspace.dependencies]
 winit = "0.30.8"
-skia-safe = "0.80.1"
+skia-safe = "0.81.0"

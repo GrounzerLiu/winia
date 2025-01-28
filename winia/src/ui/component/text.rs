@@ -584,7 +584,7 @@ impl Text {
                     return false;
                 }
             })
-            .on_mouse_input({
+            .mouse_input({
                 let context = context.clone();
                 let property = property.clone();
                 move |item, event| {

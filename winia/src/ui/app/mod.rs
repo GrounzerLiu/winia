@@ -428,13 +428,11 @@ impl ApplicationHandler<UserEvent> for App {
                     match state {
                         ElementState::Pressed => {
                             self.pressed_mouse_buttons.push(button);
-                            item.captured_mouse_button.push(button);
-                            item.mouse_input(event);
+                            item.dispatch_mouse_input(event);
                         }
                         ElementState::Released => {
                             self.pressed_mouse_buttons.retain(|&b| b != button);
-                            item.captured_mouse_button.retain(|&b| b != button);
-                            item.mouse_input(event);
+                            item.dispatch_mouse_input(event);
                         }
                     }
                 }
@@ -457,7 +455,7 @@ impl ApplicationHandler<UserEvent> for App {
                             button: *button,
                             pointer_state: PointerState::Moved,
                         };
-                        item.mouse_input(event);
+                        item.dispatch_mouse_input(event);
                     });
                 }
             }
@@ -478,34 +476,7 @@ impl ApplicationHandler<UserEvent> for App {
                         pointer_state: phase.into(),
                         force,
                     };
-                    match event.pointer_state {
-                        PointerState::Started => {
-                            item.captured_touch_id.push((event.device_id, event.id));
-                            item.touch_input(event);
-                            return;
-                        }
-                        PointerState::Moved => {
-                            if item
-                                .captured_touch_id
-                                .contains(&(event.device_id, event.id))
-                            {
-                                item.touch_input(event);
-                                return;
-                            }
-                        }
-                        PointerState::Ended | PointerState::Canceled => {
-                            if item
-                                .captured_touch_id
-                                .contains(&(event.device_id, event.id))
-                            {
-                                item.captured_touch_id.retain(|&(device_id, id)| {
-                                    device_id != event.device_id || id != event.id
-                                });
-                                item.touch_input(event);
-                                return;
-                            }
-                        }
-                    }
+                    item.dispatch_touch_input(event);
                 }
             }
             WindowEvent::Ime(ime) => {
