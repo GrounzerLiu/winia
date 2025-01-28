@@ -4,7 +4,10 @@ use crate::shared::{
     SharedInnerPosition, SharedItem, SharedSize, SharedUsize,
 };
 use crate::ui::app::{AppContext, UserEvent};
-use crate::ui::item::{ClickSource, DisplayParameter, ImeAction, InnerPosition, ItemEvent, MeasureMode, MouseEvent, Orientation, PointerEvent, PointerState, Size, TouchEvent};
+use crate::ui::item::{
+    ClickSource, DisplayParameter, ImeAction, InnerPosition, ItemEvent, MeasureMode, MouseEvent,
+    Orientation, PointerEvent, PointerState, Size, TouchEvent,
+};
 use crate::ui::Animation;
 use skia_safe::{Canvas, Color, Surface};
 use std::any::Any;
@@ -72,11 +75,7 @@ macro_rules! impl_property_redraw {
                 // self.$property_name.add_observer(self.id, Box::new(move || {
                 //     app_context.request_redraw();
                 // })).drop();
-                init_property_redraw(
-                    self.app_context.clone(),
-                    &mut self.$property_name,
-                    self.id,
-                );
+                init_property_redraw(self.app_context.clone(), &mut self.$property_name, self.id);
                 self
             }
 
@@ -190,6 +189,7 @@ pub struct Item {
     background: SharedItem,
     baseline: Option<f32>,
     children: Children,
+    clip: Shared<bool>,
     custom_properties: HashMap<String, CustomProperty>,
     display_parameter_out: Shared<DisplayParameter>,
     enable_background_blur: SharedBool,
@@ -239,7 +239,7 @@ pub struct Item {
     target_parameter: DisplayParameter,
     touch_start_time: Instant,
     vertical_gravity: Shared<Gravity>,
-    width: SharedSize
+    width: SharedSize,
 }
 
 impl_property_re_layout!(
@@ -249,28 +249,20 @@ impl_property_re_layout!(
     "Whether the item is active and can receive input events."
 );
 impl_property_re_layout!(
-    layout_direction,
-    get_layout_direction,
-    Shared<LayoutDirection>,
-    "The layout direction of the item."
+    background,
+    get_background,
+    SharedItem,
+    "The background of the item. It will be drawn behind the content (including children)"
 );
+impl_property_redraw!(clip, get_clip, SharedBool,
+    "Whether to clip the content of the item to its bounds. If this is set to true, the content will not be drawn outside the bounds of the item.");
+impl_property_re_layout!(enable_background_blur, get_enable_background_blur, SharedBool,
+    "Whether to enable background blur. This will cause the background to be blurred when it is not fully opaque.");
 impl_property_re_layout!(
-    width,
-    get_width,
-    SharedSize,
-    "The width of the item. See [`Size`](crate::ui::item::Size) for more information."
-);
-impl_property_re_layout!(
-    min_width,
-    get_min_width,
-    SharedF32,
-    "The minimum width of the item."
-);
-impl_property_re_layout!(
-    max_width,
-    get_max_width,
-    SharedF32,
-    "The maximum width of the item."
+    foreground,
+    get_foreground,
+    SharedItem,
+    "The foreground of the item. It will be drawn in front of the content (including children)"
 );
 impl_property_re_layout!(
     height,
@@ -278,37 +270,25 @@ impl_property_re_layout!(
     SharedSize,
     "The height of the item. See [`Size`](crate::ui::item::Size) for more information."
 );
+impl_property_re_layout!(horizontal_gravity, get_horizontal_gravity, Shared<Gravity>,
+    "The horizontal gravity of the item. It determines how the item is positioned horizontally within its parent.");
 impl_property_re_layout!(
-    min_height,
-    get_min_height,
-    SharedF32,
-    "The minimum height of the item."
+    layout_direction,
+    get_layout_direction,
+    Shared<LayoutDirection>,
+    "The layout direction of the item."
 );
 impl_property_re_layout!(
-    max_height,
-    get_max_height,
+    margin_bottom,
+    get_margin_bottom,
     SharedF32,
-    "The maximum height of the item."
-);
-impl_property_re_layout!(padding_start, get_padding_start, SharedF32,
-    "The padding at the start of the item. The \"start\" direction depends on the layout direction.");
-impl_property_re_layout!(
-    padding_top,
-    get_padding_top,
-    SharedF32,
-    "The padding at the top of the item."
+    "The margin at the bottom of the item."
 );
 impl_property_re_layout!(
-    padding_end,
-    get_padding_end,
+    margin_end,
+    get_margin_end,
     SharedF32,
-    "The padding at the end of the item. The \"end\" direction depends on the layout direction."
-);
-impl_property_re_layout!(
-    padding_bottom,
-    get_padding_bottom,
-    SharedF32,
-    "The padding at the bottom of the item."
+    "The margin at the end of the item. The \"end\" direction depends on the layout direction."
 );
 impl_property_re_layout!(
     margin_start,
@@ -323,40 +303,28 @@ impl_property_re_layout!(
     "The margin at the top of the item."
 );
 impl_property_re_layout!(
-    margin_end,
-    get_margin_end,
+    max_height,
+    get_max_height,
     SharedF32,
-    "The margin at the end of the item. The \"end\" direction depends on the layout direction."
+    "The maximum height of the item."
 );
 impl_property_re_layout!(
-    margin_bottom,
-    get_margin_bottom,
+    max_width,
+    get_max_width,
     SharedF32,
-    "The margin at the bottom of the item."
+    "The maximum width of the item."
 );
 impl_property_re_layout!(
-    scale_x,
-    get_scale_x,
+    min_height,
+    get_min_height,
     SharedF32,
-    "The scale in the x direction."
+    "The minimum height of the item."
 );
 impl_property_re_layout!(
-    scale_y,
-    get_scale_y,
+    min_width,
+    get_min_width,
     SharedF32,
-    "The scale in the y direction."
-);
-impl_property_re_layout!(
-    scale_center_x,
-    get_scale_center_x,
-    SharedInnerPosition,
-    "The center of scaling in the x direction."
-);
-impl_property_re_layout!(
-    scale_center_y,
-    get_scale_center_y,
-    SharedInnerPosition,
-    "The center of scaling in the y direction."
+    "The minimum width of the item."
 );
 impl_property_re_layout!(
     offset_x,
@@ -377,6 +345,26 @@ impl_property_re_layout!(
     "The opacity of the item. It will also affect the opacity of its children."
 );
 impl_property_re_layout!(
+    padding_bottom,
+    get_padding_bottom,
+    SharedF32,
+    "The padding at the bottom of the item."
+);
+impl_property_re_layout!(
+    padding_end,
+    get_padding_end,
+    SharedF32,
+    "The padding at the end of the item. The \"end\" direction depends on the layout direction."
+);
+impl_property_re_layout!(padding_start, get_padding_start, SharedF32,
+    "The padding at the start of the item. The \"start\" direction depends on the layout direction.");
+impl_property_re_layout!(
+    padding_top,
+    get_padding_top,
+    SharedF32,
+    "The padding at the top of the item."
+);
+impl_property_re_layout!(
     rotation,
     get_rotation,
     SharedF32,
@@ -395,16 +383,28 @@ impl_property_re_layout!(
     "The center of rotation in the y direction."
 );
 impl_property_re_layout!(
-    skew_x,
-    get_skew_x,
-    SharedF32,
-    "The skew in the x direction in degrees."
+    scale_center_x,
+    get_scale_center_x,
+    SharedInnerPosition,
+    "The center of scaling in the x direction."
 );
 impl_property_re_layout!(
-    skew_y,
-    get_skew_y,
+    scale_center_y,
+    get_scale_center_y,
+    SharedInnerPosition,
+    "The center of scaling in the y direction."
+);
+impl_property_re_layout!(
+    scale_x,
+    get_scale_x,
     SharedF32,
-    "The skew in the y direction in degrees."
+    "The scale in the x direction."
+);
+impl_property_re_layout!(
+    scale_y,
+    get_scale_y,
+    SharedF32,
+    "The scale in the y direction."
 );
 impl_property_re_layout!(
     skew_center_x,
@@ -419,21 +419,23 @@ impl_property_re_layout!(
     "The center of skew in the y direction."
 );
 impl_property_re_layout!(
-    background,
-    get_background,
-    SharedItem,
-    "The background of the item. It will be drawn behind the content (including children)"
+    skew_x,
+    get_skew_x,
+    SharedF32,
+    "The skew in the x direction in degrees."
 );
 impl_property_re_layout!(
-    foreground,
-    get_foreground,
-    SharedItem,
-    "The foreground of the item. It will be drawn in front of the content (including children)"
+    skew_y,
+    get_skew_y,
+    SharedF32,
+    "The skew in the y direction in degrees."
 );
-impl_property_re_layout!(enable_background_blur, get_enable_background_blur, SharedBool,
-    "Whether to enable background blur. This will cause the background to be blurred when it is not fully opaque.");
-impl_property_re_layout!(horizontal_gravity, get_horizontal_gravity, Shared<Gravity>,
-    "The horizontal gravity of the item. It determines how the item is positioned horizontally within its parent.");
+impl_property_re_layout!(
+    width,
+    get_width,
+    SharedSize,
+    "The width of the item. See [`Size`](crate::ui::item::Size) for more information."
+);
 impl_property_re_layout!(vertical_gravity, get_vertical_gravity, Shared<Gravity>,
     "The vertical gravity of the item. It determines how the item is positioned vertically within its parent.");
 
@@ -448,6 +450,7 @@ impl Item {
             background: SharedItem::none(),
             baseline: None,
             children,
+            clip: false.into(),
             custom_properties: HashMap::new(),
             display_parameter_out: Shared::from_static(Default::default()),
             enable_background_blur: false.into(),
@@ -497,7 +500,7 @@ impl Item {
             target_parameter: Default::default(),
             touch_start_time: Instant::now(),
             vertical_gravity: Gravity::Start.into(),
-            width: Size::Compact.into()
+            width: Size::Compact.into(),
         };
         init_property_re_layout(item.app_context.clone(), &mut item.active, item.id);
         init_property_re_layout(
@@ -511,42 +514,18 @@ impl Item {
         init_property_re_layout(item.app_context.clone(), &mut item.height, item.id);
         init_property_re_layout(item.app_context.clone(), &mut item.min_height, item.id);
         init_property_re_layout(item.app_context.clone(), &mut item.max_height, item.id);
-        init_property_re_layout(
-            item.app_context.clone(),
-            &mut item.padding_start,
-            item.id,
-        );
+        init_property_re_layout(item.app_context.clone(), &mut item.padding_start, item.id);
         init_property_re_layout(item.app_context.clone(), &mut item.padding_top, item.id);
         init_property_re_layout(item.app_context.clone(), &mut item.padding_end, item.id);
-        init_property_re_layout(
-            item.app_context.clone(),
-            &mut item.padding_bottom,
-            item.id,
-        );
-        init_property_re_layout(
-            item.app_context.clone(),
-            &mut item.margin_start,
-            item.id,
-        );
+        init_property_re_layout(item.app_context.clone(), &mut item.padding_bottom, item.id);
+        init_property_re_layout(item.app_context.clone(), &mut item.margin_start, item.id);
         init_property_re_layout(item.app_context.clone(), &mut item.margin_top, item.id);
         init_property_re_layout(item.app_context.clone(), &mut item.margin_end, item.id);
-        init_property_re_layout(
-            item.app_context.clone(),
-            &mut item.margin_bottom,
-            item.id,
-        );
+        init_property_re_layout(item.app_context.clone(), &mut item.margin_bottom, item.id);
         init_property_re_layout(item.app_context.clone(), &mut item.scale_x, item.id);
         init_property_re_layout(item.app_context.clone(), &mut item.scale_y, item.id);
-        init_property_re_layout(
-            item.app_context.clone(),
-            &mut item.scale_center_x,
-            item.id,
-        );
-        init_property_re_layout(
-            item.app_context.clone(),
-            &mut item.scale_center_y,
-            item.id,
-        );
+        init_property_re_layout(item.app_context.clone(), &mut item.scale_center_x, item.id);
+        init_property_re_layout(item.app_context.clone(), &mut item.scale_center_y, item.id);
         init_property_re_layout(item.app_context.clone(), &mut item.offset_x, item.id);
         init_property_re_layout(item.app_context.clone(), &mut item.offset_y, item.id);
         init_property_re_layout(item.app_context.clone(), &mut item.opacity, item.id);
@@ -563,16 +542,8 @@ impl Item {
         );
         init_property_re_layout(item.app_context.clone(), &mut item.skew_x, item.id);
         init_property_re_layout(item.app_context.clone(), &mut item.skew_y, item.id);
-        init_property_re_layout(
-            item.app_context.clone(),
-            &mut item.skew_center_x,
-            item.id,
-        );
-        init_property_re_layout(
-            item.app_context.clone(),
-            &mut item.skew_center_y,
-            item.id,
-        );
+        init_property_re_layout(item.app_context.clone(), &mut item.skew_center_x, item.id);
+        init_property_re_layout(item.app_context.clone(), &mut item.skew_center_y, item.id);
         init_property_re_layout(item.app_context.clone(), &mut item.background, item.id);
         init_property_re_layout(item.app_context.clone(), &mut item.foreground, item.id);
         init_property_re_layout(
@@ -692,15 +663,14 @@ impl Item {
                             .focus_changed_items
                             .write(|focus_changed_items| focus_changed_items.insert(self_item_id));
                         app_context.focused_property.write(|focused_property| {
-                            focused_property
-                                .replace((focused_property_clone.clone(), self_item_id))
+                            focused_property.replace((focused_property_clone.clone(), self_item_id))
                         });
                         app_context.send_user_event(UserEvent::RequestFocus);
                     }
                     Action::Nothing => {
                         if let Some(v) = focused_property_value {
                             app_context.focused_property.write(move |focused_property| {
-                                focused_property.replace((v.0.clone(),v.1))
+                                focused_property.replace((v.0.clone(), v.1))
                             });
                         }
                     }
@@ -963,12 +933,10 @@ impl Item {
         if let Some(recorded_parameter) = self.recorded_parameter.clone() {
             let target_parameter = self.target_parameter.clone();
             if !f32_eq(recorded_parameter.width, target_parameter.width) {
-                self.animations.parent_x =
-                    Some((recorded_parameter.parent_x, animation.clone()));
+                self.animations.parent_x = Some((recorded_parameter.parent_x, animation.clone()));
             }
             if !f32_eq(recorded_parameter.height, target_parameter.height) {
-                self.animations.parent_y =
-                    Some((recorded_parameter.parent_y, animation.clone()));
+                self.animations.parent_y = Some((recorded_parameter.parent_y, animation.clone()));
             }
             if !f32_eq(recorded_parameter.relative_x, target_parameter.relative_x) {
                 self.animations.relative_x =
@@ -979,19 +947,16 @@ impl Item {
                     Some((recorded_parameter.relative_y, animation.clone()));
             }
             if !f32_eq(recorded_parameter.offset_x, target_parameter.offset_x) {
-                self.animations.offset_x =
-                    Some((recorded_parameter.offset_x, animation.clone()));
+                self.animations.offset_x = Some((recorded_parameter.offset_x, animation.clone()));
             }
             if !f32_eq(recorded_parameter.offset_y, target_parameter.offset_y) {
-                self.animations.offset_y =
-                    Some((recorded_parameter.offset_y, animation.clone()));
+                self.animations.offset_y = Some((recorded_parameter.offset_y, animation.clone()));
             }
             if !f32_eq(recorded_parameter.opacity, target_parameter.opacity) {
                 self.animations.opacity = Some((recorded_parameter.opacity, animation.clone()));
             }
             if !f32_eq(recorded_parameter.rotation, target_parameter.rotation) {
-                self.animations.rotation =
-                    Some((recorded_parameter.rotation, animation.clone()));
+                self.animations.rotation = Some((recorded_parameter.rotation, animation.clone()));
             }
             if !f32_eq(
                 recorded_parameter.rotation_center_x,
@@ -1190,7 +1155,7 @@ impl Item {
     }
 
     fn layout_layer(mut layer: SharedItem, width: f32, height: f32) {
-        if let Some(item) = layer.value().as_mut(){
+        if let Some(item) = layer.value().as_mut() {
             item.measure(
                 MeasureMode::Specified(width),
                 MeasureMode::Specified(height),
