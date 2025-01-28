@@ -214,8 +214,10 @@ pub struct Item {
     offset_y: SharedF32,
     on_attach: LinkedList<Box<dyn FnMut()>>,
     on_click: Option<Box<dyn FnMut(ClickSource)>>,
+    on_cursor_move: Option<Box<dyn FnMut(f32, f32)>>,
     on_detach: LinkedList<Box<dyn FnMut()>>,
     on_focus: Arc<Mutex<Vec<Box<dyn FnMut(bool) + 'static>>>>,
+    on_hover: Option<Box<dyn FnMut(bool)>>,
     on_mouse_input: Option<Box<dyn FnMut(MouseEvent)>>,
     on_pointer_input: Option<Box<dyn FnMut(PointerEvent)>>,
     on_touch_input: Option<Box<dyn FnMut(TouchEvent)>>,
@@ -475,8 +477,10 @@ impl Item {
             offset_y: 0.0.into(),
             on_attach: LinkedList::new(),
             on_click: None,
+            on_cursor_move: None,
             on_detach: LinkedList::new(),
             on_focus: Arc::new(Mutex::new(vec![])),
+            on_hover: None,
             on_mouse_input: None,
             on_pointer_input: None,
             on_touch_input: None,
@@ -694,11 +698,27 @@ impl Item {
         self
     }
 
+    pub fn on_cursor_move<F>(mut self, f: F) -> Self
+    where
+        F: FnMut(f32, f32) + 'static,
+    {
+        self.on_cursor_move = Some(Box::new(f));
+        self
+    }
+
     pub fn on_focus<F>(self, f: F) -> Self
     where
         F: FnMut(bool) + 'static,
     {
         self.on_focus.lock().unwrap().push(Box::new(f));
+        self
+    }
+
+    pub fn on_hover<F>(mut self, f: F) -> Self
+    where
+        F: FnMut(bool) + 'static,
+    {
+        self.on_hover = Some(Box::new(f));
         self
     }
 
@@ -862,8 +882,16 @@ impl Item {
         self.on_click.as_mut()
     }
 
+    pub fn get_on_cursor_move(&mut self) -> Option<&mut Box<dyn FnMut(f32, f32)>> {
+        self.on_cursor_move.as_mut()
+    }
+
     pub fn get_on_detach(&mut self) -> &mut LinkedList<Box<dyn FnMut()>> {
         &mut self.on_detach
+    }
+
+    pub fn get_on_hover(&mut self) -> Option<&mut Box<dyn FnMut(bool)>> {
+        self.on_hover.as_mut()
     }
 
     pub fn get_on_mouse_input(&mut self) -> Option<&mut Box<dyn FnMut(MouseEvent)>> {
@@ -1084,6 +1112,11 @@ impl Item {
     pub fn dispatch_mouse_input(&mut self, event: MouseEvent) {
         let f = self.item_event.get_dispatch_mouse_input();
         f.lock().unwrap()(self, event);
+    }
+
+    pub fn dispatch_cursor_move(&mut self, x: f32, y: f32) {
+        let f = self.item_event.get_dispatch_cursor_move();
+        f.lock().unwrap()(self, x, y);
     }
 
     pub fn dispatch_timer(&mut self, timer_id: usize) {

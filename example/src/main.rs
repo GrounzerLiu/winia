@@ -4,7 +4,7 @@ use winia::skia_safe::Color;
 use winia::text::StyledText;
 use winia::ui::animation::{AnimationExt, Target};
 use winia::ui::app::{run_app, AppContext, AppProperty};
-use winia::ui::component::{RectangleExt, TextBlockExt};
+use winia::ui::component::{RectangleExt, RippleExt, TextBlockExt};
 use winia::ui::item::{Gravity, Size};
 use winia::ui::layout::{
     AlignContent, AlignItems, ColumnExt, FlexDirection, FlexExt, FlexWrap,
@@ -15,7 +15,7 @@ use winia::{func, include_target, shared};
 
 // #[cfg(not(target_os = "android"))]
 fn main() {
-    run_app(App::new(main_ui).title("Example").preferred_size(800, 600));
+    run_app(App::new(ripple_test).title("Example").preferred_size(800, 600));
     // run_app(
     //     App::new(|app, shared| {
     //         app.flex(Children::new() +
@@ -25,6 +25,22 @@ fn main() {
     //         .title("Example")
     //         .preferred_size(800, 600)
     // );
+}
+
+fn ripple_test(app: AppContext, property: AppProperty) -> Item {
+    app.stack(Children::new()+
+        app.rectangle()
+            .color(Color::BLUE)
+            .item()
+            .width(Size::Fixed(100.0))
+            .height(Size::Fixed(100.0))
+            .foreground(app.ripple().item())
+            .on_hover(|is_hovered|{
+                println!("Rectangle hovered: {}", is_hovered);
+            })
+    )
+        .item()
+        .width(Size::Expanded).height(Size::Expanded)
 }
 
 fn flex_test_ui(app: AppContext, property: AppProperty) -> Item {
