@@ -224,6 +224,29 @@ pub struct ItemEvent {
     touch_input: Arc<Mutex<dyn FnMut(&mut Item, TouchEvent)>>,
 }
 
+fn draw_item(item: &mut Item, surface: &mut Surface, x:f32, y:f32){
+    let clip = item.get_clip().get();
+    if clip {
+        let display_parameter = item.get_display_parameter();
+        let x = display_parameter.x();
+        let y = display_parameter.y();
+        let width = display_parameter.width;
+        let height = display_parameter.height;
+        let canvas = surface.canvas();
+        canvas.save();
+        canvas.clip_rect(
+            Rect::from_xywh(x, y, width, height),
+            None,
+            None,
+        );
+    }
+    item.dispatch_draw(surface, x, y);
+    if clip {
+        let canvas = surface.canvas();
+        canvas.restore();
+    }
+}
+
 impl ItemEvent {
     pub fn new() -> Self {
         Self {
@@ -342,7 +365,7 @@ impl ItemEvent {
                         let shared_background = item.get_background();
                         let mut background = shared_background.value();
                         if let Some(background) = background.as_mut() {
-                            background.dispatch_draw(surface, x, y);
+                            draw_item(background, surface, x, y);
                         }
                     }
                     {
@@ -353,7 +376,7 @@ impl ItemEvent {
 
                     // Draw the children of the item.
                     item.get_children().items().iter_mut().for_each(|child| {
-                        child.dispatch_draw(surface, x, y);
+                        draw_item(child, surface, x, y);
                     });
 
                     {
@@ -361,7 +384,7 @@ impl ItemEvent {
                         let shared_foreground = item.get_foreground();
                         let mut foreground = shared_foreground.value();
                         if let Some(foreground) = foreground.as_mut() {
-                            foreground.dispatch_draw(surface, x, y);
+                            draw_item(foreground, surface, x, y);
                         }
                     }
                     {
