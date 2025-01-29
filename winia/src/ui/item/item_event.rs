@@ -233,13 +233,14 @@ fn draw_item(item: &mut Item, surface: &mut Surface, x: f32, y: f32) {
     let clip = item.get_clip().get();
     if clip {
         let display_parameter = item.get_display_parameter();
-        let x = display_parameter.x();
-        let y = display_parameter.y();
-        let width = display_parameter.width;
-        let height = display_parameter.height;
+        let clip_path = {
+            let clip_shape = item.get_clip_shape();
+            let path = clip_shape.value().as_ref()(display_parameter);
+            path
+        };
         let canvas = surface.canvas();
         canvas.save();
-        canvas.clip_rect(Rect::from_xywh(x, y, width, height), None, None);
+        canvas.clip_path(&clip_path, None, true);
     }
     item.dispatch_draw(surface, x, y);
     if clip {

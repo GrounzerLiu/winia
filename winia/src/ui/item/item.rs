@@ -9,7 +9,7 @@ use crate::ui::item::{
     Orientation, PointerEvent, PointerState, Size, TouchEvent,
 };
 use crate::ui::Animation;
-use skia_safe::{Canvas, Color, Surface};
+use skia_safe::{Canvas, Color, Path, Rect, Surface};
 use std::any::Any;
 use std::collections::{HashMap, LinkedList};
 use std::sync::{Arc, Mutex};
@@ -190,6 +190,7 @@ pub struct Item {
     baseline: Option<f32>,
     children: Children,
     clip: Shared<bool>,
+    clip_shape: Shared<Box<dyn Fn(DisplayParameter) -> Path>>,
     custom_properties: HashMap<String, CustomProperty>,
     display_parameter_out: Shared<DisplayParameter>,
     enable_background_blur: SharedBool,
@@ -258,6 +259,8 @@ impl_property_re_layout!(
 );
 impl_property_redraw!(clip, get_clip, SharedBool,
     "Whether to clip the content of the item to its bounds. If this is set to true, the content will not be drawn outside the bounds of the item.");
+impl_property_redraw!(clip_shape, get_clip_shape, Shared<Box<dyn Fn(DisplayParameter) -> Path>>,
+    "The shape used to clip the content of the item. If this is set, the content will be clipped to the shape.");
 impl_property_re_layout!(enable_background_blur, get_enable_background_blur, SharedBool,
     "Whether to enable background blur. This will cause the background to be blurred when it is not fully opaque.");
 impl_property_re_layout!(
@@ -453,6 +456,15 @@ impl Item {
             baseline: None,
             children,
             clip: false.into(),
+            clip_shape: Shared::from_static(Box::new(|display_parameter| {
+                let rect = Rect::from_xywh(
+                    display_parameter.x(),
+                    display_parameter.y(),
+                    display_parameter.width,
+                    display_parameter.height,
+                );
+                Path::rect(rect, None)
+            })),
             custom_properties: HashMap::new(),
             display_parameter_out: Shared::from_static(Default::default()),
             enable_background_blur: false.into(),
