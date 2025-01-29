@@ -29,6 +29,7 @@
     InverseOnSurface,
     InversePrimary,
 }*/
+use skia_safe::Color;
 
 pub static PRIMARY: &str = "primary";
 pub static ON_PRIMARY: &str = "on_primary";
@@ -59,3 +60,35 @@ pub static SCRIM: &str = "scrim";
 pub static INVERSE_SURFACE: &str = "inverse_surface";
 pub static INVERSE_ON_SURFACE: &str = "inverse_on_surface";
 pub static INVERSE_PRIMARY: &str = "inverse_primary";
+
+/// Parses a color from a string.
+/// Formats supported:
+/// - #RRGGBB
+/// - #AARRGGBB
+/// - 0xRRGGBB
+/// - 0xAARRGGBB
+pub fn parse_color(color: &str) -> Option<Color> {
+    let color = color.trim();
+    if color.starts_with("#") || color.starts_with("0x") {
+        let color = if color.starts_with("#") {
+            &color[1..]
+        } else {
+            &color[2..]
+        };
+        let u32_color = if let Ok(v) = u32::from_str_radix(color, 16) {
+            v
+        } else {
+            return None;
+        };
+        let len = color.len();
+        let color = Color::from(u32_color);
+        return if len == 6 {
+            Some(color.with_a(0xFF))
+        } else if len == 8 {
+            Some(color)
+        } else {
+            None
+        };
+    }
+    None
+}
