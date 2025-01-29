@@ -8,6 +8,8 @@ members = [
     "exmaple2",
     "winia/proc-macro"]
 
+exclude = ["winia"]
+
 [workspace.dependencies]
 winit = "0.30.8"
 skia-safe = "0.81.0"
