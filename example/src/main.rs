@@ -4,7 +4,7 @@ use winia::skia_safe::Color;
 use winia::text::StyledText;
 use winia::ui::animation::{AnimationExt, Target};
 use winia::ui::app::{run_app, AppContext, AppProperty};
-use winia::ui::component::{RectangleExt, RippleExt, TextBlockExt};
+use winia::ui::component::{RectangleExt, Ripple, RippleExt, TextBlockExt};
 use winia::ui::item::{Gravity, Size};
 use winia::ui::layout::{
     AlignContent, AlignItems, ColumnExt, FlexDirection, FlexExt, FlexWrap,
@@ -12,6 +12,7 @@ use winia::ui::layout::{
 };
 use winia::ui::{App, Item};
 use winia::{func, include_target, shared};
+use winia::ui::theme::colors;
 
 // #[cfg(not(target_os = "android"))]
 fn main() {
@@ -30,11 +31,11 @@ fn main() {
 fn ripple_test(app: AppContext, property: AppProperty) -> Item {
     app.stack(Children::new()+
         app.rectangle()
-            .color(Color::BLUE)
+            .color(Color::TRANSPARENT)
             .item()
             .width(Size::Fixed(100.0))
             .height(Size::Fixed(100.0))
-            .foreground(app.ripple().item())
+            .foreground(app.ripple().borderless(true).item())
             .on_hover(|is_hovered|{
                 println!("Rectangle hovered: {}", is_hovered);
             })
