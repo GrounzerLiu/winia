@@ -364,12 +364,12 @@ impl ApplicationHandler<UserEvent> for App {
         {
             let request_re_layout = self
                 .app_context
-                .request_re_layout
+                .request_layout
                 .read(|request_re_layout| *request_re_layout);
             if request_re_layout {
                 self.re_layout();
                 self.app_context
-                    .request_re_layout
+                    .request_layout
                     .write(|request_re_layout| {
                         *request_re_layout = false;
                     });

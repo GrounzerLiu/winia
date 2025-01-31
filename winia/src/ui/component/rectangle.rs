@@ -20,13 +20,6 @@ impl Rectangle {
             color: Color::TRANSPARENT.into(),
         }));
         let item_event = ItemEvent::new()
-            .layout({
-                move |item, width, height| {
-                    let horizontal_padding = item.get_padding(Orientation::Horizontal);
-                    let vertical_padding = item.get_padding(Orientation::Vertical);
-                    item.layout_layers(width - horizontal_padding, height - vertical_padding);
-                }
-            })
             .draw({
                 let rectangle_property = rectangle_property.clone();
                 move |item, canvas| {

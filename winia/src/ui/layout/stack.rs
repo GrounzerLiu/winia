@@ -56,8 +56,8 @@ impl Stack {
             .layout({
                 let property = property.clone();
                 move|item, width, height| {
-                    
-                    
+
+
                     let x = LogicalX::new(item.get_layout_direction().get(), 0.0, width);
                     let y = 0.0;
 
@@ -81,7 +81,7 @@ impl Stack {
                             let property = property.lock().unwrap();
                             (property.horizontal_gravity.get(), property.vertical_gravity.get())
                         };
-                        
+
                         let child_x = match horizontal_gravity {
                             Gravity::Start => {
                                 x + child_margin_start + padding_start
@@ -93,7 +93,7 @@ impl Stack {
                                 x + width - child_width - child_margin_end - padding_end
                             }
                         };
-                        
+
                         let child_y = match vertical_gravity {
                             Gravity::Start => {
                                 y + child_margin_top + padding_top
@@ -116,7 +116,7 @@ impl Stack {
             property,
         }
     }
-    
+
     // pub fn gravity(mut self, gravity: impl Into<GravityProperty>) -> Self {
     //     let mut shared = self.shared.lock().unwrap();
     //     shared.gravity = gravity.into();
@@ -130,7 +130,7 @@ impl Stack {
     //     drop(shared);
     //     self
     // }
-    
+
     pub fn horizontal_gravity(mut self, gravity: impl Into<SharedGravity>) -> Self {
         let mut property = self.property.lock().unwrap();
         property.horizontal_gravity = gravity.into();
@@ -144,7 +144,7 @@ impl Stack {
         drop(property);
         self
     }
-    
+
     pub fn vertical_gravity(mut self, gravity: impl Into<SharedGravity>) -> Self {
         let mut property = self.property.lock().unwrap();
         property.vertical_gravity = gravity.into();
@@ -158,7 +158,7 @@ impl Stack {
         drop(property);
         self
     }
-    
+
     pub fn item(self) -> Item {
         self.item
     }
@@ -176,7 +176,7 @@ pub trait StackExt {
 
 
 impl StackExt for AppContext {
-    
+
     fn stack(&self, children: Children) -> Stack {
         Stack::new(self.clone(), children)
     }

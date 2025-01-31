@@ -78,7 +78,7 @@ impl FlexGrow for Item {
         let app_context = self.get_app_context();
         let mut flex_grow = flex_grow.into();
         flex_grow.add_observer(self.get_id(), Box::new(move || {
-            app_context.request_re_layout();
+            app_context.request_layout();
         })).drop();
         self.custom_property("flex_grow", CustomProperty::Usize(flex_grow))
     }
@@ -1113,7 +1113,7 @@ impl Flex {
             properties.direction.add_observer(
                 id,
                 Box::new(move || {
-                    app_context.request_re_layout();
+                    app_context.request_layout();
                 }),
             );
         }
@@ -1130,7 +1130,7 @@ impl Flex {
             properties.wrap.add_observer(
                 id,
                 Box::new(move || {
-                    app_context.request_re_layout();
+                    app_context.request_layout();
                 }),
             );
         }
@@ -1147,7 +1147,7 @@ impl Flex {
             properties.justify_content.add_observer(
                 id,
                 Box::new(move || {
-                    app_context.request_re_layout();
+                    app_context.request_layout();
                 }),
             );
         }
@@ -1164,7 +1164,7 @@ impl Flex {
             properties.align_items.add_observer(
                 id,
                 Box::new(move || {
-                    app_context.request_re_layout();
+                    app_context.request_layout();
                 }),
             );
         }
@@ -1181,7 +1181,7 @@ impl Flex {
             properties.align_content.add_observer(
                 id,
                 Box::new(move || {
-                    app_context.request_re_layout();
+                    app_context.request_layout();
                 }),
             );
         }
@@ -1198,7 +1198,7 @@ impl Flex {
             properties.main_axis_gap.add_observer(
                 id,
                 Box::new(move || {
-                    app_context.request_re_layout();
+                    app_context.request_layout();
                 }),
             );
         }
@@ -1215,7 +1215,7 @@ impl Flex {
             properties.cross_axis_gap.add_observer(
                 id,
                 Box::new(move || {
-                    app_context.request_re_layout();
+                    app_context.request_layout();
                 }),
             );
         }

@@ -4,7 +4,7 @@ use winia::skia_safe::Color;
 use winia::text::StyledText;
 use winia::ui::animation::{AnimationExt, Target};
 use winia::ui::app::{run_app, AppContext, AppProperty};
-use winia::ui::component::{RectangleExt, Ripple, RippleExt, TextBlockExt};
+use winia::ui::component::{RectangleExt, Ripple, RippleExt, TextExt};
 use winia::ui::item::{Gravity, Size};
 use winia::ui::layout::{
     AlignContent, AlignItems, ColumnExt, FlexDirection, FlexExt, FlexWrap,
@@ -29,7 +29,7 @@ fn main() {
 }
 
 fn ripple_test(app: AppContext, property: AppProperty) -> Item {
-    app.stack(Children::new()+
+    app.column(Children::new()+
         app.rectangle()
             .color(Color::TRANSPARENT)
             .item()
@@ -38,9 +38,9 @@ fn ripple_test(app: AppContext, property: AppProperty) -> Item {
             .foreground(app.ripple().borderless(true).item())
             .on_hover(|is_hovered|{
                 println!("Rectangle hovered: {}", is_hovered);
-            })
+            }) +
+        app.text("text").color(Color::WHITE).item()
     )
-        .item()
         .width(Size::Expanded).height(Size::Expanded)
 }
 
