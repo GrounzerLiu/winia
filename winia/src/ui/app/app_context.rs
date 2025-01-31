@@ -1,7 +1,7 @@
 use crate::dpi::LogicalSize;
 use crate::shared::{Shared, SharedAnimation, SharedAnimationTrait, SharedBool, WeakShared};
 use crate::ui::app::UserEvent;
-use crate::ui::theme::Style;
+use crate::ui::theme::{material_style, Style};
 use crate::ui::Animation;
 use skia_safe::Color;
 use skiwin::SkiaWindow;
@@ -22,7 +22,7 @@ pub struct AppContext {
     pub(crate) theme: Shared<Style>,
     pub(crate) window: Shared<Option<Box<dyn SkiaWindow>>>,
     pub(crate) event_loop_proxy: Shared<Option<EventLoopProxy<UserEvent>>>,
-    pub(crate) request_re_layout: Shared<bool>,
+    pub(crate) request_layout: Shared<bool>,
     pub(crate) starting_animations: Shared<LinkedList<Animation>>,
     pub(crate) running_animations: Shared<Vec<Animation>>,
     pub(crate) shared_animations: Shared<Vec<Box<dyn SharedAnimationTrait>>>,
@@ -45,10 +45,10 @@ impl Default for AppContext {
 impl AppContext {
     pub fn new() -> Self {
         Self {
-            theme: Style::new(Color::RED, true).into(),
+            theme: material_style(Color::RED, true).into(),
             window: None.into(),
             event_loop_proxy: None.into(),
-            request_re_layout: false.into(),
+            request_layout: false.into(),
             starting_animations: LinkedList::new().into(),
             running_animations: Vec::new().into(),
             shared_animations: Vec::new().into(),
@@ -167,8 +167,8 @@ impl AppContext {
         });
     }
 
-    pub fn request_re_layout(&self) {
-        self.request_re_layout.write(|request_re_layout| *request_re_layout = true);
+    pub fn request_layout(&self) {
+        self.request_layout.write(|request_layout| *request_layout = true);
         self.window.value().as_ref().map(|window| {
             window.request_redraw();
         });
@@ -220,7 +220,7 @@ impl AppContext {
             theme: self.theme.weak(),
             window: self.window.weak(),
             event_loop_proxy: self.event_loop_proxy.weak(),
-            request_re_layout: self.request_re_layout.weak(),
+            request_re_layout: self.request_layout.weak(),
             starting_animations: self.starting_animations.weak(),
             running_animations: self.running_animations.weak(),
             shared_animations: self.shared_animations.weak(),
@@ -242,7 +242,7 @@ impl AppContextWeak {
             theme: self.theme.upgrade()?,
             window: self.window.upgrade()?,
             event_loop_proxy: self.event_loop_proxy.upgrade()?,
-            request_re_layout: self.request_re_layout.upgrade()?,
+            request_layout: self.request_re_layout.upgrade()?,
             starting_animations: self.starting_animations.upgrade()?,
             running_animations: self.running_animations.upgrade()?,
             shared_animations: self.shared_animations.upgrade()?,

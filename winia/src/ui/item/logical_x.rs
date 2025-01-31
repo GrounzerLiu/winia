@@ -1,4 +1,5 @@
-use std::ops::{Add, AddAssign, Deref, DerefMut, Div, DivAssign, Mul, MulAssign, Sub, SubAssign};
+use std::cmp::Ordering;
+use std::ops::{Add, AddAssign, Deref, DerefMut, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use crate::ui::item::LayoutDirection;
 
 /// LogicalX is a type that represents a logical x value in a layout.
@@ -169,6 +170,45 @@ impl MulAssign<f32> for LogicalX {
 impl DivAssign<f32> for LogicalX {
     fn div_assign(&mut self, rhs: f32) {
         self.logical_x /= rhs;
+    }
+}
+
+impl Neg for LogicalX {
+    type Output = Self;
+
+    fn neg(self) -> Self::Output {
+        Self {
+            logical_x: -self.logical_x,
+            ..self
+        }
+    }
+}
+
+impl PartialEq<Self> for LogicalX {
+    fn eq(&self, other: &Self) -> bool {
+        self.logical_x == other.logical_x && self.direction == other.direction && self.parent_width == other.parent_width
+    }
+}
+
+impl PartialOrd<Self> for LogicalX {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        if self.direction != other.direction || self.parent_width != other.parent_width {
+            None
+        } else {
+            self.logical_x.partial_cmp(&other.logical_x)
+        }
+    }
+}
+
+impl PartialEq<f32> for LogicalX {
+    fn eq(&self, other: &f32) -> bool {
+        self.logical_x == *other
+    }
+}
+
+impl PartialOrd<f32> for LogicalX {
+    fn partial_cmp(&self, other: &f32) -> Option<Ordering> {
+        self.logical_x.partial_cmp(other)
     }
 }
 

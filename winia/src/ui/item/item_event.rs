@@ -10,6 +10,7 @@ use skia_safe::{image_filters, Canvas, IRect, Paint, Point, Rect, Surface, TileM
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use winit::event::{DeviceId, Force, KeyEvent, MouseButton, TouchPhase};
+use crate::ui::theme::Style;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Orientation {
@@ -206,7 +207,9 @@ multicast_event!(OnClickEvent, source:ClickSource);
 
 #[derive(Clone)]
 pub struct ItemEvent {
+    apply_style: Arc<Mutex<dyn FnMut(&mut Item, &Style)>>,
     cursor_move: Arc<Mutex<dyn FnMut(&mut Item, f32, f32)>>,
+    dispatch_apply_style: Arc<Mutex<dyn FnMut(&mut Item, &Style)>>,
     dispatch_cursor_move: Arc<Mutex<dyn FnMut(&mut Item, f32, f32)>>,
     dispatch_draw: Arc<Mutex<dyn FnMut(&mut Item, &mut Surface, f32, f32)>>,
     dispatch_focus: Arc<Mutex<dyn FnMut(&mut Item)>>,
@@ -252,7 +255,14 @@ fn draw_item(item: &mut Item, surface: &mut Surface, x: f32, y: f32) {
 impl ItemEvent {
     pub fn new() -> Self {
         Self {
+            apply_style: Arc::new(Mutex::new(|_item: &mut Item, _style: &Style| {})),
             cursor_move: Arc::new(Mutex::new(|_item: &mut Item, _x: f32, _y: f32| {})),
+            dispatch_apply_style: Arc::new(Mutex::new(|item: &mut Item, style: &Style| {
+                item.get_children().items().iter_mut().for_each(|child| {
+                    child.get_item_event().get_dispatch_apply_style().lock().unwrap()(child, style);
+                });
+                item.get_item_event().get_apply_style().lock().unwrap()(item, style);
+            })),
             dispatch_cursor_move: Arc::new(Mutex::new({
                 let mut is_hovered = false;
                 move |item: &mut Item, x: f32, y: f32| {
@@ -763,6 +773,14 @@ impl ItemEvent {
 }
 
 impl_get_set!(
+    apply_style,
+    impl FnMut(&mut Item, &Style) + 'static,
+    "item, style",
+    get_apply_style,
+    dyn FnMut(&mut Item, &Style),
+    "item, style"
+);
+impl_get_set!(
     cursor_move,
     impl FnMut(&mut Item, f32, f32) + 'static,
     "item, x, y",
@@ -770,7 +788,14 @@ impl_get_set!(
     dyn FnMut(&mut Item, f32, f32),
     "item, x, y"
 );
-
+impl_get_set!(
+    dispatch_apply_style,
+    impl FnMut(&mut Item, &Style) + 'static,
+    "item, style",
+    get_dispatch_apply_style,
+    dyn FnMut(&mut Item, &Style),
+    "item, style"
+);
 impl_get_set!(
     dispatch_cursor_move,
     impl FnMut(&mut Item, f32, f32) + 'static,
@@ -779,7 +804,6 @@ impl_get_set!(
     dyn FnMut(&mut Item, f32, f32),
     "item, x, y"
 );
-
 impl_get_set!(
     dispatch_draw,
     impl FnMut(&mut Item, &mut Surface, f32, f32) + 'static,
@@ -788,7 +812,6 @@ impl_get_set!(
     dyn FnMut(&mut Item, &mut Surface, f32, f32),
     "item, surface, x, y"
 );
-
 impl_get_set!(
     dispatch_focus,
     impl FnMut(&mut Item) + 'static,
@@ -797,7 +820,6 @@ impl_get_set!(
     dyn FnMut(&mut Item),
     "item"
 );
-
 impl_get_set!(
     dispatch_keyboard_input,
     impl FnMut(&mut Item, DeviceId, KeyEvent, bool) -> bool + 'static,
@@ -806,7 +828,6 @@ impl_get_set!(
     dyn FnMut(&mut Item, DeviceId, KeyEvent, bool) -> bool,
     "item, device_id, event, is_synthetic"
 );
-
 impl_get_set!(
     dispatch_layout,
     impl FnMut(&mut Item, f32, f32, f32, f32) + 'static,
@@ -815,7 +836,6 @@ impl_get_set!(
     dyn FnMut(&mut Item, f32, f32, f32, f32),
     "item, relative_x, relative_y, width, height"
 );
-
 impl_get_set!(
     dispatch_mouse_input,
     impl FnMut(&mut Item, MouseEvent) + 'static,
@@ -824,7 +844,6 @@ impl_get_set!(
     dyn FnMut(&mut Item, MouseEvent),
     "item, event"
 );
-
 impl_get_set!(
     dispatch_timer,
     impl FnMut(&mut Item, usize) -> bool + 'static,
@@ -833,7 +852,6 @@ impl_get_set!(
     dyn FnMut(&mut Item, usize) -> bool,
     "item, id"
 );
-
 impl_get_set!(
     dispatch_touch_input,
     impl FnMut(&mut Item, TouchEvent) + 'static,
@@ -842,7 +860,6 @@ impl_get_set!(
     dyn FnMut(&mut Item, TouchEvent),
     "item, event"
 );
-
 impl_get_set!(
     draw,
     impl FnMut(&mut Item, &Canvas) + 'static,
@@ -851,7 +868,6 @@ impl_get_set!(
     dyn FnMut(&mut Item, &Canvas),
     "item, canvas"
 );
-
 impl_get_set!(
     ime_input,
     impl FnMut(&mut Item, ImeAction) + 'static,
@@ -860,7 +876,6 @@ impl_get_set!(
     dyn FnMut(&mut Item, ImeAction),
     "item, action"
 );
-
 impl_get_set!(
     keyboard_input,
     impl FnMut(&mut Item, DeviceId, KeyEvent, bool) -> bool + 'static,
@@ -869,7 +884,6 @@ impl_get_set!(
     dyn FnMut(&mut Item, DeviceId, KeyEvent, bool) -> bool,
     "item, device_id, event, is_synthetic"
 );
-
 impl_get_set!(
     layout,
     impl FnMut(&mut Item, f32, f32) + 'static,
@@ -878,7 +892,6 @@ impl_get_set!(
     dyn FnMut(&mut Item, f32, f32),
     "item, width, height"
 );
-
 impl_get_set!(
     measure,
     impl FnMut(&mut Item, MeasureMode, MeasureMode) + 'static,
@@ -891,7 +904,6 @@ the `layout` closure is actually responsible for setting the actual size of the 
     dyn FnMut(&mut Item, MeasureMode, MeasureMode) + 'static,
     "item, width_mode, height_mode"
 );
-
 impl_get_set!(
     mouse_input,
     impl FnMut(&mut Item, MouseEvent) + 'static,
@@ -900,7 +912,6 @@ impl_get_set!(
     dyn FnMut(&mut Item, MouseEvent),
     "item, event"
 );
-
 impl_get_set!(
     on_click,
     impl FnMut(&mut Item, ClickSource) + 'static,
@@ -909,7 +920,6 @@ impl_get_set!(
     dyn FnMut(&mut Item, ClickSource),
     "item, source"
 );
-
 impl_get_set!(
     on_focus,
     impl FnMut(&mut Item, bool) + 'static,
@@ -918,7 +928,6 @@ impl_get_set!(
     dyn FnMut(&mut Item, bool),
     "item, focused"
 );
-
 impl_get_set!(
     on_hover,
     impl FnMut(&mut Item, bool) + 'static,
@@ -927,7 +936,6 @@ impl_get_set!(
     dyn FnMut(&mut Item, bool),
     "item, hover_state"
 );
-
 impl_get_set!(
     pointer_input,
     impl FnMut(&mut Item, PointerEvent) + 'static,
@@ -936,7 +944,6 @@ impl_get_set!(
     dyn FnMut(&mut Item, PointerEvent),
     "item, event"
 );
-
 impl_get_set!(
     timer,
     impl FnMut(&mut Item, usize) -> bool + 'static,
@@ -945,7 +952,6 @@ impl_get_set!(
     dyn FnMut(&mut Item, usize) -> bool,
     "item, id"
 );
-
 impl_get_set!(
     touch_input,
     impl FnMut(&mut Item, TouchEvent) + 'static,
@@ -954,7 +960,6 @@ impl_get_set!(
     dyn FnMut(&mut Item, TouchEvent),
     "item, event"
 );
-
 impl Default for ItemEvent {
     fn default() -> Self {
         Self::new()

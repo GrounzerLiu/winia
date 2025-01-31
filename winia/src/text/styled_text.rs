@@ -1,12 +1,14 @@
 use crate::text::style::Style;
 use crate::text::{create_segments, font_collection, AddStyleSegment, StyleType, TextLayout};
 use bimap::BiBTreeMap;
-use skia_safe::textlayout::{Paragraph, ParagraphBuilder, ParagraphStyle, TextAlign, TextRange, TextStyle};
+use skia_safe::textlayout::{
+    Paragraph, ParagraphBuilder, ParagraphStyle, TextAlign, TextRange, TextStyle,
+};
+use skia_safe::Color;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::ops::{Add, Index, Range};
 use std::str::FromStr;
-use skia_safe::Color;
 use unicode_segmentation::UnicodeSegmentation;
 
 pub struct StyledText {
@@ -70,7 +72,10 @@ impl StyledText {
     }
 
     pub fn glyph_index_to_byte_index(&self, glyph_index: usize) -> usize {
-        *self.byte_to_glyph_indices.get_by_right(&glyph_index).unwrap()
+        *self
+            .byte_to_glyph_indices
+            .get_by_right(&glyph_index)
+            .unwrap()
     }
 
     pub fn byte_index_to_utf16_index(&self, byte_index: usize) -> usize {
@@ -78,11 +83,18 @@ impl StyledText {
     }
 
     pub fn utf16_index_to_byte_index(&self, utf16_index: usize) -> usize {
-        *self.byte_to_utf16_indices.get_by_right(&utf16_index).unwrap()
+        *self
+            .byte_to_utf16_indices
+            .get_by_right(&utf16_index)
+            .unwrap()
     }
 
-
-    pub fn create_text_layout(&mut self, default_text_style:TextStyle, max_width: f32, text_align: TextAlign) {
+    pub fn create_text_layout(
+        &mut self,
+        default_text_style: TextStyle,
+        max_width: f32,
+        text_align: TextAlign,
+    ) {
         let mut paragraph_style = ParagraphStyle::default();
         paragraph_style.set_text_align(text_align);
 
@@ -109,9 +121,15 @@ impl StyledText {
         self.paragraph = Some(paragraph);
     }
 
-    pub fn get_text_layout(&self) -> Option<TextLayout>{
+    pub fn get_text_layout(&self) -> Option<TextLayout> {
         if let Some(paragraph) = &self.paragraph {
-            Some(TextLayout::new(paragraph, &self.line_breaks, &self.byte_to_utf16_indices, &self.byte_to_glyph_indices, self.len()))
+            Some(TextLayout::new(
+                paragraph,
+                &self.line_breaks,
+                &self.byte_to_utf16_indices,
+                &self.byte_to_glyph_indices,
+                self.len(),
+            ))
         } else {
             None
         }
@@ -144,14 +162,16 @@ impl StyledText {
             // The start of the style range is in the substring
             if style_range.start >= range.start && style_range.start <= range.end {
                 let new_start = style_range.start - range.start;
-                let new_end = if style_range.end > range.end { // The end of the style range is outside the substring
+                let new_end = if style_range.end > range.end {
+                    // The end of the style range is outside the substring
                     range.end - range.start
                 } else {
                     style_range.end - range.start
                 };
                 styles.push((style.clone(), new_start..new_end, edge_behavior.clone()));
             } else if style_range.end >= range.start && style_range.end <= range.end {
-                let new_start = if style_range.start < range.start { // The start of the style range is outside the substring
+                let new_start = if style_range.start < range.start {
+                    // The start of the style range is outside the substring
                     0
                 } else {
                     style_range.start - range.start
@@ -160,7 +180,7 @@ impl StyledText {
                 styles.push((style.clone(), new_start..new_end, edge_behavior.clone()));
             }
         }
-        let mut styled_text = StyledText{
+        let mut styled_text = StyledText {
             string,
             styles,
             line_breaks: HashSet::new(),
@@ -183,13 +203,16 @@ impl StyledText {
     pub fn insert(&mut self, index: usize, string: &str) {
         self.string.insert_str(index, string);
         self.styles.iter_mut().for_each(|(_, range, expanded)| {
-            if index == range.end { // Inserted at the end of the range
+            if index == range.end {
+                // Inserted at the end of the range
                 if *expanded {
                     range.end += string.len();
                 }
-            } else if index > range.start && index < range.end { // Inserted in the range
+            } else if index > range.start && index < range.end {
+                // Inserted in the range
                 range.end += string.len();
-            } else if index <= range.start { // Inserted before the range
+            } else if index <= range.start {
+                // Inserted before the range
                 range.start += string.len();
                 range.end += string.len();
             }
@@ -202,7 +225,7 @@ impl StyledText {
         self.styles.retain(|(_, style_range, _)| {
             // Remove the style if the range is inside the style range
             if style_range.start > range.start && style_range.end <= range.end {
-                return false
+                return false;
             }
             true
         });
@@ -237,7 +260,11 @@ impl StyledText {
 
     fn assert_in_range(&self, range: &Range<usize>) {
         if range.start > self.string.len() || range.end > self.string.len() {
-            panic!("Range out of bounds. Range: {:?}, String length: {}", range, self.string.len());
+            panic!(
+                "Range out of bounds. Range: {:?}, String length: {}",
+                range,
+                self.string.len()
+            );
         }
     }
 
@@ -261,7 +288,8 @@ impl StyledText {
     }
 
     pub fn retain_styles(&mut self, f: impl Fn(&Style, &Range<usize>, &bool) -> bool) {
-        self.styles.retain(|(style, range, expanded)| f(style, range, expanded));
+        self.styles
+            .retain(|(style, range, expanded)| f(style, range, expanded));
         self.paragraph.take();
     }
 
@@ -275,23 +303,15 @@ impl StyledText {
                 if range.start <= style_range.start {
                     return if range.end > style_range.start {
                         if range.end < style_range.end {
-                            segmented_styles.push((
-                                *style,
-                                range.end..style_range.end,
-                                *expanded,
-                            ));
+                            segmented_styles.push((*style, range.end..style_range.end, *expanded));
                         }
                         false
                     } else {
                         true
-                    }
+                    };
                 } else if range.start == style_range.start {
                     if range.end < style_range.end {
-                        segmented_styles.push((
-                            *style,
-                            range.end..style_range.end,
-                            *expanded,
-                        ));
+                        segmented_styles.push((*style, range.end..style_range.end, *expanded));
                         return false;
                     } else if range.end >= style_range.end {
                         return false;

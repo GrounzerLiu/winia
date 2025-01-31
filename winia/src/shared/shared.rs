@@ -101,6 +101,8 @@ impl<T: 'static> Shared<T> {
         shared
     }
 
+    /// Modifications made through this function will not send notifications to observers.
+    /// If you want to notify observers after modifying the value, use the [`write`](Shared::write) method.
     pub fn value(&self) -> MutexGuard<T> {
         self.value.lock().unwrap()
     }
@@ -110,6 +112,8 @@ impl<T: 'static> Shared<T> {
         operation(value.deref())
     }
 
+    /// Modifications made through this function will send notifications to observers.
+    /// If you don't want to notify observers after modifying the value, use the [`value`](Shared::value) method.
     pub fn write<R>(&self, mut operation: impl FnMut(&mut T) -> R) -> R {
         let r = {
             let mut value = self.value.lock().unwrap();

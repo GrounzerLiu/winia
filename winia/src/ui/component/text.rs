@@ -6,14 +6,15 @@ use crate::shared::{
 use crate::text::StyledText;
 use crate::ui::app::AppContext;
 use crate::ui::item::{
-    ClickSource, Gravity, ImeAction, ItemEvent, LayoutDirection, LogicalX,
-    MeasureMode, Orientation, PointerState,
+    ClickSource, Gravity, ImeAction, ItemEvent, LayoutDirection, LogicalX, MeasureMode,
+    Orientation, PointerState,
 };
 use crate::ui::Item;
-use proc_macro::RefClone;
+use crate::{impl_property_layout, impl_property_redraw};
+use proc_macro::Item;
 use skia_safe::textlayout::{TextAlign, TextStyle};
 use skia_safe::{Color, Drawable, Paint, PictureRecorder, Rect, Vector};
-use std::ops::{Not, Range};
+use std::ops::{DerefMut, Not, Range};
 use std::string::ToString;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -21,14 +22,15 @@ use winit::dpi::Size;
 use winit::event::{ElementState, MouseButton};
 use winit::keyboard::{Key, NamedKey};
 
-/// This component has a serious problem:
-///
-/// The Paragraph from skia costs a lot of time when the "layout" method is first called.
-/// So it may be better to create Paragraph in the sub-thread
+pub mod text_style {
+    pub static FONT_SIZE: &str = "font_size";
+    pub static COLOR: &str = "color";
+}
 
 pub struct TextProperty {
     text: SharedText,
     editable: SharedBool,
+    selectable: SharedBool,
     color: SharedColor,
     font_size: SharedF32,
 }
@@ -51,7 +53,6 @@ impl DrawCache {
     }
 }
 
-
 #[derive(Clone)]
 struct TextContext {
     is_text_changed: Shared<bool>,
@@ -62,29 +63,21 @@ struct TextContext {
     selection: Shared<Range<usize>>,
 }
 
-fn create_text_layout(
-    text: &mut StyledText,
-    text_style: TextStyle,
-    text_align: TextAlign,
-    max_width: f32,
-) {
-    text.create_text_layout(text_style, max_width, text_align);
-}
-
 pub struct Text {
     item: Item,
-    property: Arc<Mutex<TextProperty>>,
-    text_context: TextContext
+    property: Shared<TextProperty>,
+    text_context: TextContext,
 }
 
 impl Text {
     pub fn new(app_context: AppContext) -> Self {
-        let property = Arc::new(Mutex::new(TextProperty {
+        let property = Shared::new(TextProperty {
             text: "".into(),
-            editable: true.into(),
+            editable: false.into(),
+            selectable: false.into(),
             color: Color::BLACK.into(),
             font_size: 24.0.into(),
-        }));
+        });
 
         let context = TextContext {
             is_text_changed: true.into(),
@@ -98,45 +91,44 @@ impl Text {
         let item_event = ItemEvent::new()
             .measure({
                 let property = property.clone();
-                let context = context.clone();
                 move |item, width_mode, height_mode| {
-                    let property = property.lock().unwrap();
+                    let property = property.value();
                     let text_style = get_text_style(&property);
-
 
                     let padding_horizontal = item.get_padding(Orientation::Horizontal);
                     let padding_vertical = item.get_padding(Orientation::Vertical);
 
-                    let (text_layout_width, text_layout_height) =
-                        property.text.write(|text| {
-                            if !text.has_text_layout() {
-                                let text_align = match item.get_layout_direction().get() {
-                                    LayoutDirection::LTR => TextAlign::Left,
-                                    LayoutDirection::RTL => TextAlign::Right,
-                                };
-                                let max_width = match width_mode {
-                                    MeasureMode::Specified(width) => {
-                                        item.clamp_width(width) - padding_horizontal
-                                    }
-                                    MeasureMode::Unspecified(width) => {
-                                        item.clamp_width(width) - padding_horizontal
-                                    }
-                                };
-                                create_text_layout(text, text_style.clone(), text_align, max_width);
-                            } else {
-                                text.reset_text_layout_width(match width_mode {
-                                    MeasureMode::Specified(width) => {
-                                        item.clamp_width(width) - padding_horizontal
-                                    }
-                                    MeasureMode::Unspecified(width) => {
-                                        item.get_max_width().get() - padding_horizontal
-                                    }
-                                });
-                            }
+                    // Get text layout width and height
+                    let (text_layout_width, text_layout_height) = {
+                        let mut text = property.text.value();
+                        if !text.has_text_layout() {
+                            let text_align = match item.get_layout_direction().get() {
+                                LayoutDirection::LTR => TextAlign::Left,
+                                LayoutDirection::RTL => TextAlign::Right,
+                            };
+                            let max_width = match width_mode {
+                                MeasureMode::Specified(width) => {
+                                    item.clamp_width(width) - padding_horizontal
+                                }
+                                MeasureMode::Unspecified(width) => {
+                                    item.clamp_width(width) - padding_horizontal
+                                }
+                            };
+                            text.create_text_layout(text_style.clone(), max_width, text_align);
+                        } else {
+                            text.reset_text_layout_width(match width_mode {
+                                MeasureMode::Specified(width) => {
+                                    item.clamp_width(width) - padding_horizontal
+                                }
+                                MeasureMode::Unspecified(width) => {
+                                    item.clamp_width(width) - padding_horizontal
+                                }
+                            });
+                        }
 
-                            let text_layout = text.get_text_layout().unwrap();
-                            (text_layout.width(), text_layout.height())
-                        });
+                        let text_layout = text.get_text_layout().unwrap();
+                        (text_layout.width(), text_layout.height())
+                    };
 
                     let (width, height) = match width_mode {
                         MeasureMode::Specified(width) => {
@@ -176,7 +168,7 @@ impl Text {
                 let mut context = context.clone();
                 let property = property.clone();
                 move |item, width, _height| {
-                    let property = property.lock().unwrap();
+                    let property = property.value();
                     let text_style = get_text_style(&property);
                     let max_width = width - item.get_padding(Orientation::Horizontal);
 
@@ -194,11 +186,10 @@ impl Text {
 
                     property.text.write(|text| {
                         if !text.has_text_layout() {
-                            create_text_layout(
-                                text,
+                            text.create_text_layout(
                                 text_style.clone(),
-                                TextAlign::Justify,
                                 max_width,
+                                TextAlign::Justify
                             );
                         } else {
                             text.reset_text_layout_width(max_width);
@@ -227,25 +218,22 @@ impl Text {
 
                         let mut recorder = PictureRecorder::new();
                         let canvas = recorder.begin_recording(Rect::from_wh(width, height), None);
-                        text_layout.draw(
-                            canvas,
-                            paragraph_x.logical_value(),
-                            paragraph_y,
-                        );
+                        text_layout.draw(canvas, paragraph_x.logical_value(), paragraph_y);
                         let drawable = recorder.finish_recording_as_drawable().unwrap();
                         let mut draw_caches = context.draw_caches.value();
                         draw_caches.bottom.1 = Some(drawable);
-                        let top_alpha = *display_parameter.float_params.get(&draw_caches.top.0).unwrap_or(&0.0);
-                        if context.is_text_changed.get() && (top_alpha == 0.0|| top_alpha == 1.0) {
+                        let top_alpha = *display_parameter
+                            .float_params
+                            .get(&draw_caches.top.0)
+                            .unwrap_or(&0.0);
+                        if context.is_text_changed.get() && (top_alpha == 0.0 || top_alpha == 1.0) {
                             let mut target_parameter = item.get_target_parameter();
-                            target_parameter.float_params.insert(
-                                draw_caches.bottom.0.clone(),
-                                1.0
-                            );
-                            target_parameter.float_params.insert(
-                                draw_caches.top.0.clone(),
-                                0.0
-                            );
+                            target_parameter
+                                .float_params
+                                .insert(draw_caches.bottom.0.clone(), 1.0);
+                            target_parameter
+                                .float_params
+                                .insert(draw_caches.top.0.clone(), 0.0);
                             context.is_text_changed.set(false);
                         }
                     });
@@ -255,7 +243,7 @@ impl Text {
                 let context = context.clone();
                 let property = property.clone();
                 move |item, ime_action| {
-                    let mut property = property.lock().unwrap();
+                    let mut property = property.value();
                     let mut selection = context.selection.value();
                     let mut composing = context.composing.value();
                     let mut text = &mut property.text;
@@ -331,14 +319,14 @@ impl Text {
                         }
                         ImeAction::Disabled => {}
                     }
-                    item.get_app_context().request_re_layout();
+                    item.get_app_context().request_layout();
                 }
             })
             .draw({
                 let property = property.clone();
                 let context = context.clone();
                 move |item, canvas| {
-                    let property = property.lock().unwrap();
+                    let property = property.value();
                     let text = property.text.value();
                     if !text.has_text_layout() {
                         return;
@@ -438,16 +426,19 @@ impl Text {
                         display_parameter.height,
                     );
 
-                    let bottom_alpha = *display_parameter.float_params.get(&draw_caches.bottom.0).unwrap();
-                    let top_alpha = *display_parameter.float_params.get(&draw_caches.top.0).unwrap();
+                    let bottom_alpha = *display_parameter
+                        .float_params
+                        .get(&draw_caches.bottom.0)
+                        .unwrap();
+                    let top_alpha = *display_parameter
+                        .float_params
+                        .get(&draw_caches.top.0)
+                        .unwrap();
                     if let Some(drawable) = draw_caches.bottom.1.as_mut() {
-                        canvas.save_layer_alpha_f(
-                            rect,
-                            bottom_alpha
-                        );
+                        canvas.save_layer_alpha_f(rect, bottom_alpha);
                         canvas.translate(Vector::new(
                             display_parameter.x() + paragraph_x.logical_value(),
-                            display_parameter.y() + paragraph_y
+                            display_parameter.y() + paragraph_y,
                         ));
                         drawable.draw(canvas, None);
                         canvas.restore();
@@ -455,13 +446,10 @@ impl Text {
                     }
 
                     if let Some(drawable) = draw_caches.top.1.as_mut() {
-                        canvas.save_layer_alpha_f(
-                            rect,
-                            top_alpha
-                        );
+                        canvas.save_layer_alpha_f(rect, top_alpha);
                         canvas.translate(Vector::new(
                             display_parameter.x() + paragraph_x.logical_value(),
-                            display_parameter.y() + paragraph_y
+                            display_parameter.y() + paragraph_y,
                         ));
                         drawable.draw(canvas, None);
                         canvas.restore();
@@ -470,17 +458,14 @@ impl Text {
 
                     if top_alpha == 0.0 {
                         let mut target_parameter = item.get_target_parameter();
-                        target_parameter.float_params.insert(
-                            draw_caches.bottom.0.clone(),
-                            1.0
-                        );
-                        target_parameter.float_params.insert(
-                            draw_caches.top.0.clone(),
-                            0.0
-                        );
+                        target_parameter
+                            .float_params
+                            .insert(draw_caches.bottom.0.clone(), 1.0);
+                        target_parameter
+                            .float_params
+                            .insert(draw_caches.top.0.clone(), 0.0);
                         draw_caches.swap();
                     }
-
 
                     if property.editable.get() && selection.start == selection.end {
                         if show_cursor {
@@ -520,7 +505,7 @@ impl Text {
                 let context = context.clone();
                 let property = property.clone();
                 move |item, device_id, event, is_synthetic| {
-                    if !property.lock().unwrap().editable.get() || !item.get_focused().get() {
+                    if !property.value().editable.get() || !item.get_focused().get() {
                         return false;
                     }
 
@@ -538,7 +523,7 @@ impl Text {
                                 NamedKey::ArrowLeft => {
                                     let mut selection = context.selection.value();
                                     if selection.start > 0 {
-                                        let property = property.lock().unwrap();
+                                        let property = property.value();
                                         property.text.read(move |text| {
                                             let glyph_index =
                                                 text.byte_index_to_glyph_index(selection.start);
@@ -548,12 +533,12 @@ impl Text {
                                             selection.end = prev_glyph_index;
                                         });
                                     }
-                                    item.get_app_context().request_re_layout();
+                                    item.get_app_context().request_layout();
                                     return true;
                                 }
                                 NamedKey::ArrowRight => {
                                     let mut selection = context.selection.value();
-                                    let property = property.lock().unwrap();
+                                    let property = property.value();
                                     property.text.read(move |text| {
                                         if selection.start < text.len() {
                                             let glyph_index =
@@ -588,7 +573,7 @@ impl Text {
                 let context = context.clone();
                 let property = property.clone();
                 move |item, event| {
-                    let property = property.lock().unwrap();
+                    let property = property.value();
                     if !property.editable.get() || !property.text.value().has_text_layout() {
                         return;
                     }
@@ -600,10 +585,12 @@ impl Text {
                     let padding_left = item.get_padding_start().get();
                     let x = event.x - display_parameter.x() - padding_left;
                     let y = event.y - display_parameter.y() - padding_top;
-                    let index = if let Some((index, _)) = text_layout.get_glyph_position_at_coordinate(x, y){
+                    let index = if let Some((index, _)) =
+                        text_layout.get_glyph_position_at_coordinate(x, y)
+                    {
                         index
                     } else {
-                        return
+                        return;
                     };
 
                     match event.pointer_state {
@@ -657,7 +644,9 @@ impl Text {
                 let context = context.clone();
                 move |item, id| {
                     if id == item.get_id() {
-                        context.show_cursor.write(|show_cursor|*show_cursor = show_cursor.not());
+                        context
+                            .show_cursor
+                            .write(|show_cursor| *show_cursor = show_cursor.not());
                         item.get_app_context().request_redraw();
                         if item.get_focused().get() {
                             item.get_app_context()
@@ -671,18 +660,14 @@ impl Text {
         Self {
             item: Item::new(app_context, Children::new(), item_event),
             property,
-            text_context: context
+            text_context: context,
         }
-    }
-
-    pub fn item(self) -> Item {
-        self.item
     }
 
     pub fn text(self, text: impl Into<SharedText>) -> Self {
         {
             let id = self.item.get_id();
-            let mut property = self.property.lock().unwrap();
+            let mut property = self.property.value();
             property.text.remove_observer(id);
 
             let mut text_context = self.text_context.clone();
@@ -692,48 +677,20 @@ impl Text {
                 id,
                 Box::new(move |text: &mut StyledText| {
                     text_context.is_text_changed.set(true);
-                    app_context.request_re_layout();
+                    app_context.request_layout();
                 }),
             );
         }
         self
     }
 
-    pub fn color(self, color: impl Into<SharedColor>) -> Self {
-        {
-            let id = self.item.get_id();
-            let mut property = self.property.lock().unwrap();
-            property.color.remove_observer(id);
-
-            let app_context = self.item.get_app_context();
-            property.color = color.into();
-            property.color.add_observer(
-                id,
-                Box::new(move || {
-                    app_context.request_re_layout();
-                }),
-            );
-        }
-        self
-    }
-
-    pub fn font_size(self, font_size: impl Into<SharedF32>) -> Self {
-        {
-            let id = self.item.get_id();
-            let mut property = self.property.lock().unwrap();
-            property.font_size.remove_observer(id);
-
-            let app_context = self.item.get_app_context();
-            property.font_size.add_observer(
-                id,
-                Box::new(move || {
-                    app_context.request_re_layout();
-                }),
-            );
-        }
-        self
+    pub fn item(self) -> Item {
+        self.item
     }
 }
+
+impl_property_redraw!(Text, color, SharedColor);
+impl_property_layout!(Text, font_size, SharedF32);
 
 fn get_text_style(property: &TextProperty) -> TextStyle {
     let color = property.color.get();
@@ -744,17 +701,11 @@ fn get_text_style(property: &TextProperty) -> TextStyle {
     text_style
 }
 
-impl Into<Item> for Text {
-    fn into(self) -> Item {
-        self.item
-    }
-}
-
-pub trait TextBlockExt {
+pub trait TextExt {
     fn text(&self, text: impl Into<SharedText>) -> Text;
 }
 
-impl TextBlockExt for AppContext {
+impl TextExt for AppContext {
     fn text(&self, text: impl Into<SharedText>) -> Text {
         Text::new(self.clone()).text(text)
     }
