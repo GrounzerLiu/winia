@@ -3,6 +3,7 @@ use crate::ui::app::AppContext;
 use crate::ui::item::{CustomProperty, ItemEvent, LogicalX, MeasureMode, Orientation};
 use crate::ui::Item;
 use std::ops::Not;
+use proc_macro::item;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlexDirection {
@@ -377,7 +378,7 @@ fn calculate_size(
     }
 }
 
-
+#[item(children: Children)]
 pub struct Flex {
     item: Item,
     properties: Shared<FlexProperties>,
@@ -1220,25 +1221,5 @@ impl Flex {
             );
         }
         self
-    }
-
-    pub fn item(self) -> Item {
-        self.item
-    }
-}
-
-impl Into<Item> for Flex {
-    fn into(self) -> Item {
-        self.item
-    }
-}
-
-pub trait FlexExt {
-    fn flex(&self, children: Children) -> Flex;
-}
-
-impl FlexExt for AppContext {
-    fn flex(&self, children: Children) -> Flex {
-        Flex::new(self.clone(), children)
     }
 }

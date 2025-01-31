@@ -30,8 +30,7 @@ fn main() {
 
 fn ripple_test(app: AppContext, property: AppProperty) -> Item {
     app.column(Children::new()+
-        app.rectangle()
-            .color(Color::TRANSPARENT)
+        app.rectangle(Color::TRANSPARENT)
             .item()
             .width(Size::Fixed(100.0))
             .height(Size::Fixed(100.0))
@@ -51,123 +50,103 @@ fn flex_test_ui(app: AppContext, property: AppProperty) -> Item {
             + app.column(
                 Children::new()
                     + app
-                        .rectangle()
-                        .color(Color::YELLOW)
+                        .rectangle(Color::YELLOW)
                         .item()
                         .width(Size::Fixed(50.0))
                         .height(Size::Fixed(50.0))
                     + app
-                        .rectangle()
-                        .color(Color::GREEN)
+                        .rectangle(Color::GREEN)
                         .item()
                         .width(Size::Fixed(50.0))
                         .height(Size::Fixed(50.0))
                     + app
-                        .rectangle()
-                        .color(Color::BLUE)
+                        .rectangle(Color::BLUE)
                         .item()
                         .width(Size::Fixed(50.0))
                         .height(Size::Fixed(50.0))
                     + app
-                        .rectangle()
-                        .color(Color::YELLOW)
+                        .rectangle(Color::YELLOW)
                         .item()
                         .width(Size::Fixed(50.0))
                         .height(Size::Fixed(50.0))
                     + app
-                        .rectangle()
-                        .color(Color::GREEN)
+                        .rectangle(Color::GREEN)
                         .item()
                         .width(Size::Fixed(50.0))
                         .height(Size::Fixed(50.0)),
             )
             + app
-                .rectangle()
-                .color(Color::RED)
+                .rectangle(Color::RED)
                 .item()
                 .height(&size)
                 .width(Size::Fixed(250.0))
             + app
-                .rectangle()
-                .color(Color::GREEN)
+                .rectangle(Color::GREEN)
                 .item()
                 .width(&size)
                 .height(&size)
             + app
-                .rectangle()
-                .color(Color::BLUE)
+                .rectangle(Color::BLUE)
                 .item()
                 .width(&size)
                 .height(&size)
             + app
-                .rectangle()
-                .color(Color::RED)
+                .rectangle(Color::RED)
                 .item()
                 .width(&size)
                 .height(&size)
             + app
-                .rectangle()
-                .color(Color::GREEN)
+                .rectangle(Color::GREEN)
                 .item()
                 .width(&size)
                 .height(&size)
             + app
-                .rectangle()
-                .color(Color::BLUE)
+                .rectangle(Color::BLUE)
                 .item()
                 .width(&size)
                 .height(&size)
             + app
-                .rectangle()
-                .color(Color::RED)
+                .rectangle(Color::RED)
                 .item()
                 .width(&size)
                 .height(&size)
             + app
-                .rectangle()
-                .color(Color::GREEN)
+                .rectangle(Color::GREEN)
                 .item()
                 .width(&size)
                 .height(&size)
             + app
-                .rectangle()
-                .color(Color::BLUE)
+                .rectangle(Color::BLUE)
                 .item()
                 .width(&size)
                 .height(&size)
             + app
-                .rectangle()
-                .color(Color::RED)
+                .rectangle(Color::RED)
                 .item()
                 .width(&size)
                 .height(&size)
             + app
-                .rectangle()
-                .color(Color::GREEN)
+                .rectangle(Color::GREEN)
                 .item()
                 .width(&size)
                 .height(&size)
             + app
-                .rectangle()
-                .color(Color::BLUE)
+                .rectangle(Color::BLUE)
                 .item()
                 .width(&size)
                 .height(&size)
             + app
-                .rectangle()
-                .color(Color::RED)
+                .rectangle(Color::RED)
                 .item()
                 .width(&size)
                 .height(&size)
             + app
-                .rectangle()
-                .color(Color::GREEN)
+                .rectangle(Color::GREEN)
                 .item()
                 .width(&size)
                 .height(&size)
             + app
-                .rectangle()
-                .color(Color::BLUE)
+                .rectangle(Color::BLUE)
                 .item()
                 .width(&size)
                 .height(&size),
@@ -205,8 +184,7 @@ Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor i
 ";
     app.stack(
         Children::new()+
-            app.rectangle()
-                .color(Color::RED)
+            app.rectangle(Color::RED)
                 .item()
                 .width(Size::Fixed(100.0))
                 .height(Size::Fixed(100.0))
@@ -244,8 +222,7 @@ fn main_ui(app: AppContext, property: AppProperty) -> Item {
     let text = SharedText::from("Hello, world!");
     app.stack(Children::new() +
         app.stack(Children::new() +
-            app.rectangle()
-                .color(Color::BLUE)
+            app.rectangle(Color::BLUE)
                 .item().width(Size::Fixed(100.0)).height(Size::Fixed(100.0))
                 // .skew_x(1.0)
                 // .rotation(45.0)
@@ -307,8 +284,7 @@ fn main_ui(app: AppContext, property: AppProperty) -> Item {
             //     .wrap(FlexWrap::Wrap).item()
             //     .width(Size::Fixed(400.0))+
 
-            app.rectangle()
-                .color(Color::WHITE).item()
+            app.rectangle(Color::WHITE).item()
                 .name("white_rect")
                 .width(&size).height(&size)
                 .offset_x(&offset)
@@ -344,9 +320,7 @@ fn main_ui(app: AppContext, property: AppProperty) -> Item {
             .horizontal_gravity(&horizontal_gravity)
             .vertical_gravity(&vertical_gravity)
             .background(
-                app.rectangle()
-                    .color(Color::GREEN)
-                    .item()
+                app.rectangle(Color::GREEN).item()
             )
             .on_click(func!(|app, horizontal_gravity, vertical_gravity|, move|_|{
                 app.animate(Target::Exclusion(Vec::new()))

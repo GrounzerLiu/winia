@@ -9,6 +9,7 @@ use skia_safe::{Color, Path, Rect};
 use std::time::Duration;
 use skia_safe::gradient_shader::GradientShaderColors;
 use toml::Value;
+use proc_macro::item;
 
 #[derive(Clone)]
 struct RippleProperty {
@@ -18,6 +19,7 @@ struct RippleProperty {
     background_opacity: SharedF32,
 }
 
+#[item]
 pub struct Ripple {
     item: Item,
     property: Shared<RippleProperty>,
@@ -261,26 +263,6 @@ impl Ripple {
         }
         self
     }
-
-    pub fn item(self) -> Item {
-        self.item
-    }
 }
 
 impl_property_redraw!(Ripple, color, SharedColor);
-
-impl Into<Item> for Ripple {
-    fn into(self) -> Item {
-        self.item
-    }
-}
-
-pub trait RippleExt {
-    fn ripple(&self) -> Ripple;
-}
-
-impl RippleExt for AppContext {
-    fn ripple(&self) -> Ripple {
-        Ripple::new(self.clone())
-    }
-}

@@ -11,7 +11,6 @@ use crate::ui::item::{
 };
 use crate::ui::Item;
 use crate::{impl_property_layout, impl_property_redraw};
-use proc_macro::Item;
 use skia_safe::textlayout::{TextAlign, TextStyle};
 use skia_safe::{Color, Drawable, Paint, PictureRecorder, Rect, Vector};
 use std::ops::{DerefMut, Not, Range};
@@ -21,6 +20,7 @@ use std::time::Duration;
 use winit::dpi::Size;
 use winit::event::{ElementState, MouseButton};
 use winit::keyboard::{Key, NamedKey};
+use proc_macro::item;
 
 pub mod text_style {
     pub static FONT_SIZE: &str = "font_size";
@@ -63,6 +63,7 @@ struct TextContext {
     selection: Shared<Range<usize>>,
 }
 
+#[item(text: impl Into<SharedText>)]
 pub struct Text {
     item: Item,
     property: Shared<TextProperty>,
@@ -70,9 +71,9 @@ pub struct Text {
 }
 
 impl Text {
-    pub fn new(app_context: AppContext) -> Self {
+    pub fn new(app_context: AppContext, text: impl Into<SharedText>) -> Self {
         let property = Shared::new(TextProperty {
-            text: "".into(),
+            text: text.into(),
             editable: false.into(),
             selectable: false.into(),
             color: Color::BLACK.into(),
@@ -683,10 +684,6 @@ impl Text {
         }
         self
     }
-
-    pub fn item(self) -> Item {
-        self.item
-    }
 }
 
 impl_property_redraw!(Text, color, SharedColor);
@@ -699,14 +696,4 @@ fn get_text_style(property: &TextProperty) -> TextStyle {
     text_style.set_font_size(font_size);
     text_style.set_color(color);
     text_style
-}
-
-pub trait TextExt {
-    fn text(&self, text: impl Into<SharedText>) -> Text;
-}
-
-impl TextExt for AppContext {
-    fn text(&self, text: impl Into<SharedText>) -> Text {
-        Text::new(self.clone()).text(text)
-    }
 }

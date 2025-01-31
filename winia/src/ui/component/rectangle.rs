@@ -1,29 +1,32 @@
-use crate::shared::{Children, Gettable, SharedColor};
+use crate::shared::{Children, Gettable, Shared, SharedColor};
 use crate::ui::app::AppContext;
 use crate::ui::item::{ItemEvent, Orientation};
 use crate::ui::Item;
 use skia_safe::{Color, Rect};
 use std::sync::{Arc, Mutex};
+use proc_macro::item;
 
 #[derive(Clone)]
 struct RectangleProperty {
     color: SharedColor,
 }
+
+#[item(color: impl Into<SharedColor>)]
 pub struct Rectangle {
     item: Item,
-    rectangle_property: Arc<Mutex<RectangleProperty>>,
+    property: Shared<RectangleProperty>,
 }
 
 impl Rectangle {
-    pub fn new(app_context: AppContext) -> Self {
-        let rectangle_property = Arc::new(Mutex::new(RectangleProperty {
-            color: Color::TRANSPARENT.into(),
-        }));
+    pub fn new(app_context: AppContext, color: impl Into<SharedColor>) -> Self {
+        let property = Shared::new(RectangleProperty {
+            color: color.into(),
+        });
         let item_event = ItemEvent::new()
             .draw({
-                let rectangle_property = rectangle_property.clone();
+                let property = property.clone();
                 move |item, canvas| {
-                    let rectangle_property = rectangle_property.lock().unwrap();
+                    let rectangle_property = property.value();
                     let display_parameter = item.get_display_parameter().clone();
                     let padding_left = item.get_padding_left();
                     let padding_top = item.get_padding_top().get();
@@ -50,28 +53,14 @@ impl Rectangle {
         let item = Item::new(app_context, Children::new(), item_event);
         Self {
             item,
-            rectangle_property,
+            property: property,
         }
     }
 
     pub fn color(self, color: impl Into<SharedColor>) -> Self {
-        let mut rectangle_property = self.rectangle_property.lock().unwrap();
+        let mut rectangle_property = self.property.value();
         rectangle_property.color = color.into();
         drop(rectangle_property);
         self
-    }
-
-    pub fn item(self) -> Item {
-        self.item
-    }
-}
-
-pub trait RectangleExt {
-    fn rectangle(&self) -> Rectangle;
-}
-
-impl RectangleExt for AppContext {
-    fn rectangle(&self) -> Rectangle {
-        Rectangle::new(self.clone())
     }
 }

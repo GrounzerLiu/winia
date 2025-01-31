@@ -1,5 +1,5 @@
+use proc_macro::item;
 use crate::ui::app::AppContext;
-use proc_macro::Item;
 use crate::shared::Children;
 use crate::ui::Item;
 use crate::ui::item::ItemEvent;
@@ -9,7 +9,7 @@ struct ButtonProperty {
 
 }
 
-#[derive(Item)]
+#[item]
 pub struct Button {
     item: Item,
     property: ButtonProperty,

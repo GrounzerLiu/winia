@@ -1,26 +1,29 @@
 use crate::core::generate_id;
-use crate::shared::{Children, Gettable, Observable, SharedGravity};
+use crate::shared::{Children, Gettable, Observable, Shared, SharedGravity};
 use crate::ui::app::AppContext;
 use crate::ui::item::{Gravity, ItemEvent, LogicalX, MeasureMode, Orientation};
 use crate::ui::Item;
 use std::sync::{Arc, Mutex};
+use proc_macro::item;
+use crate::impl_property_layout;
 
 struct StackProperty{
     horizontal_gravity: SharedGravity,
     vertical_gravity: SharedGravity,
 }
 
+#[item(children:Children)]
 pub struct Stack {
     item: Item,
-    property: Arc<Mutex<StackProperty>>
+    property: Shared<StackProperty>
 }
 
 impl Stack {
     pub fn new(app_context: AppContext, children: Children) -> Self {
-        let property = Arc::new(Mutex::new(StackProperty {
+        let property = Shared::new(StackProperty {
             horizontal_gravity: Gravity::Start.into(),
             vertical_gravity: Gravity::Start.into(),
-        }));
+        });
         let item_event = ItemEvent::default()
             .measure(|item, width_mode, height_mode| {
                 item.measure_children(width_mode, height_mode);
@@ -78,7 +81,7 @@ impl Stack {
                         let child_height = child.get_measure_parameter().height;
 
                         let (horizontal_gravity, vertical_gravity) = {
-                            let property = property.lock().unwrap();
+                            let property = property.value();
                             (property.horizontal_gravity.get(), property.vertical_gravity.get())
                         };
 
@@ -130,54 +133,7 @@ impl Stack {
     //     drop(shared);
     //     self
     // }
-
-    pub fn horizontal_gravity(mut self, gravity: impl Into<SharedGravity>) -> Self {
-        let mut property = self.property.lock().unwrap();
-        property.horizontal_gravity = gravity.into();
-        let app_context = self.item.get_app_context();
-        property.horizontal_gravity.add_observer(
-            generate_id(),
-            Box::new(move || {
-                app_context.request_redraw();
-            }),
-        );
-        drop(property);
-        self
-    }
-
-    pub fn vertical_gravity(mut self, gravity: impl Into<SharedGravity>) -> Self {
-        let mut property = self.property.lock().unwrap();
-        property.vertical_gravity = gravity.into();
-        let app_context = self.item.get_app_context();
-        property.vertical_gravity.add_observer(
-            generate_id(),
-            Box::new(move || {
-                app_context.request_redraw();
-            }),
-        );
-        drop(property);
-        self
-    }
-
-    pub fn item(self) -> Item {
-        self.item
-    }
 }
 
-impl Into<Item> for Stack {
-    fn into(self) -> Item {
-        self.item
-    }
-}
-
-pub trait StackExt {
-    fn stack(&self, children: Children) -> Stack;
-}
-
-
-impl StackExt for AppContext {
-
-    fn stack(&self, children: Children) -> Stack {
-        Stack::new(self.clone(), children)
-    }
-}
+impl_property_layout!(Stack, horizontal_gravity, SharedGravity);
+impl_property_layout!(Stack, vertical_gravity, SharedGravity);
