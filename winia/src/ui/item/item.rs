@@ -1241,6 +1241,8 @@ impl Item {
         self.for_each_child_mut(|child| {
             let child_width = child.get_width().get();
             let child_height = child.get_height().get();
+            let max_width = child.clamp_width(max_width);
+            let max_height = child.clamp_height(max_height);
             child.measure(
                 create_mode(child_width, max_width),
                 create_mode(child_height, max_height),
