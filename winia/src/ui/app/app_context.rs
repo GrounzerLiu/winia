@@ -146,6 +146,10 @@ impl AppContext {
             }
         });
     }
+
+    pub fn theme(&self) -> Shared<Style> {
+        self.theme.clone()
+    }
 }
 
 impl AppContext {

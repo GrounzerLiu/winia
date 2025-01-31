@@ -107,7 +107,9 @@ impl Into<PointerEvent> for MouseEvent {
     fn into(self) -> PointerEvent {
         PointerEvent {
             device_id: self.device_id,
-            pointer: Pointer::Mouse { button: self.button },
+            pointer: Pointer::Mouse {
+                button: self.button,
+            },
             x: self.x,
             y: self.y,
             pointer_state: self.pointer_state,
@@ -204,6 +206,8 @@ multicast_event!(OnClickEvent, source:ClickSource);
 
 #[derive(Clone)]
 pub struct ItemEvent {
+    cursor_move: Arc<Mutex<dyn FnMut(&mut Item, f32, f32)>>,
+    dispatch_cursor_move: Arc<Mutex<dyn FnMut(&mut Item, f32, f32)>>,
     dispatch_draw: Arc<Mutex<dyn FnMut(&mut Item, &mut Surface, f32, f32)>>,
     dispatch_focus: Arc<Mutex<dyn FnMut(&mut Item)>>,
     dispatch_keyboard_input: Arc<Mutex<dyn FnMut(&mut Item, DeviceId, KeyEvent, bool) -> bool>>,
@@ -219,26 +223,24 @@ pub struct ItemEvent {
     mouse_input: Arc<Mutex<dyn FnMut(&mut Item, MouseEvent)>>,
     on_click: Arc<Mutex<dyn FnMut(&mut Item, ClickSource)>>,
     on_focus: Arc<Mutex<dyn FnMut(&mut Item, bool)>>,
+    on_hover: Arc<Mutex<dyn FnMut(&mut Item, bool)>>,
     pointer_input: Arc<Mutex<dyn FnMut(&mut Item, PointerEvent)>>,
     timer: Arc<Mutex<dyn FnMut(&mut Item, usize) -> bool>>,
     touch_input: Arc<Mutex<dyn FnMut(&mut Item, TouchEvent)>>,
 }
 
-fn draw_item(item: &mut Item, surface: &mut Surface, x:f32, y:f32){
+fn draw_item(item: &mut Item, surface: &mut Surface, x: f32, y: f32) {
     let clip = item.get_clip().get();
     if clip {
         let display_parameter = item.get_display_parameter();
-        let x = display_parameter.x();
-        let y = display_parameter.y();
-        let width = display_parameter.width;
-        let height = display_parameter.height;
+        let clip_path = {
+            let clip_shape = item.get_clip_shape();
+            let path = clip_shape.value().as_ref()(display_parameter);
+            path
+        };
         let canvas = surface.canvas();
         canvas.save();
-        canvas.clip_rect(
-            Rect::from_xywh(x, y, width, height),
-            None,
-            None,
-        );
+        canvas.clip_path(&clip_path, None, true);
     }
     item.dispatch_draw(surface, x, y);
     if clip {
@@ -250,6 +252,48 @@ fn draw_item(item: &mut Item, surface: &mut Surface, x:f32, y:f32){
 impl ItemEvent {
     pub fn new() -> Self {
         Self {
+            cursor_move: Arc::new(Mutex::new(|_item: &mut Item, _x: f32, _y: f32| {})),
+            dispatch_cursor_move: Arc::new(Mutex::new({
+                let mut is_hovered = false;
+                move |item: &mut Item, x: f32, y: f32| {
+                    let foreground = item.get_foreground();
+                    if let Some(foreground) = foreground.value().as_mut() {
+                        foreground.dispatch_cursor_move(x, y);
+                    }
+                    let background = item.get_background();
+                    if let Some(background) = background.value().as_mut() {
+                        background.dispatch_cursor_move(x, y);
+                    }
+
+                    if let Some(on_cursor_move) = item.get_on_cursor_move() {
+                        on_cursor_move(x, y);
+                    }
+
+                    item.get_item_event().get_cursor_move().lock().unwrap()(item, x, y);
+
+                    if item.get_display_parameter().is_inside(x, y) {
+                        if !is_hovered {
+                            is_hovered = true;
+                            item.get_item_event().get_on_hover().lock().unwrap()(item, true);
+                            if let Some(on_hover) = item.get_on_hover() {
+                                on_hover(true);
+                            }
+                        }
+                    } else {
+                        if is_hovered {
+                            is_hovered = false;
+                            item.get_item_event().get_on_hover().lock().unwrap()(item, false);
+                            if let Some(on_hover) = item.get_on_hover() {
+                                on_hover(false);
+                            }
+                        }
+                    }
+
+                    item.get_children().items().iter_mut().for_each(|child| {
+                        child.dispatch_cursor_move(x, y);
+                    });
+                }
+            })),
             dispatch_draw: Arc::new(Mutex::new(
                 |item: &mut Item, surface: &mut Surface, parent_x: f32, parent_y: f32| {
                     {
@@ -710,12 +754,31 @@ impl ItemEvent {
             mouse_input: Arc::new(Mutex::new(|_item: &mut Item, _event: MouseEvent| {})),
             on_click: Arc::new(Mutex::new(|_item: &mut Item, _source: ClickSource| {})),
             on_focus: Arc::new(Mutex::new(|_item: &mut Item, _focused: bool| {})),
+            on_hover: Arc::new(Mutex::new(|_item: &mut Item, _hover: bool| {})),
             pointer_input: Arc::new(Mutex::new(|_item: &mut Item, _event: PointerEvent| {})),
             timer: Arc::new(Mutex::new(|_item: &mut Item, _id: usize| false)),
             touch_input: Arc::new(Mutex::new(|_item: &mut Item, _event: TouchEvent| {})),
         }
     }
 }
+
+impl_get_set!(
+    cursor_move,
+    impl FnMut(&mut Item, f32, f32) + 'static,
+    "item, x, y",
+    get_cursor_move,
+    dyn FnMut(&mut Item, f32, f32),
+    "item, x, y"
+);
+
+impl_get_set!(
+    dispatch_cursor_move,
+    impl FnMut(&mut Item, f32, f32) + 'static,
+    "item, x, y",
+    get_dispatch_cursor_move,
+    dyn FnMut(&mut Item, f32, f32),
+    "item, x, y"
+);
 
 impl_get_set!(
     dispatch_draw,
@@ -854,6 +917,15 @@ impl_get_set!(
     get_on_focus,
     dyn FnMut(&mut Item, bool),
     "item, focused"
+);
+
+impl_get_set!(
+    on_hover,
+    impl FnMut(&mut Item, bool) + 'static,
+    "item, hover_state",
+    get_on_hover,
+    dyn FnMut(&mut Item, bool),
+    "item, hover_state"
 );
 
 impl_get_set!(

@@ -447,6 +447,7 @@ impl ApplicationHandler<UserEvent> for App {
                 self.cursor_y = y as f32 / scale_factor;
                 let pressed_mouse_buttons = self.pressed_mouse_buttons.clone();
                 if let Some(item) = &mut self.item {
+                    item.dispatch_cursor_move(self.cursor_x, self.cursor_y);
                     pressed_mouse_buttons.iter().for_each(|button| {
                         let event = MouseEvent {
                             device_id,

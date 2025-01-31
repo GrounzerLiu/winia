@@ -493,7 +493,7 @@ impl<T: 'static> SharedAnimation<T> {
         self
     }
 
-    pub fn start(self, app_context: &AppContext) -> Self {
+    pub fn start(self, app_context: AppContext) -> Self {
         {
             let mut inner = self.inner.lock().unwrap();
             inner.start_time = Instant::now();

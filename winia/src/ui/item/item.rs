@@ -9,7 +9,7 @@ use crate::ui::item::{
     Orientation, PointerEvent, PointerState, Size, TouchEvent,
 };
 use crate::ui::Animation;
-use skia_safe::{Canvas, Color, Surface};
+use skia_safe::{Canvas, Color, Path, Rect, Surface};
 use std::any::Any;
 use std::collections::{HashMap, LinkedList};
 use std::sync::{Arc, Mutex};
@@ -190,6 +190,7 @@ pub struct Item {
     baseline: Option<f32>,
     children: Children,
     clip: Shared<bool>,
+    clip_shape: Shared<Box<dyn Fn(DisplayParameter) -> Path>>,
     custom_properties: HashMap<String, CustomProperty>,
     display_parameter_out: Shared<DisplayParameter>,
     enable_background_blur: SharedBool,
@@ -214,8 +215,10 @@ pub struct Item {
     offset_y: SharedF32,
     on_attach: LinkedList<Box<dyn FnMut()>>,
     on_click: Option<Box<dyn FnMut(ClickSource)>>,
+    on_cursor_move: Option<Box<dyn FnMut(f32, f32)>>,
     on_detach: LinkedList<Box<dyn FnMut()>>,
     on_focus: Arc<Mutex<Vec<Box<dyn FnMut(bool) + 'static>>>>,
+    on_hover: Option<Box<dyn FnMut(bool)>>,
     on_mouse_input: Option<Box<dyn FnMut(MouseEvent)>>,
     on_pointer_input: Option<Box<dyn FnMut(PointerEvent)>>,
     on_touch_input: Option<Box<dyn FnMut(TouchEvent)>>,
@@ -256,6 +259,8 @@ impl_property_re_layout!(
 );
 impl_property_redraw!(clip, get_clip, SharedBool,
     "Whether to clip the content of the item to its bounds. If this is set to true, the content will not be drawn outside the bounds of the item.");
+impl_property_redraw!(clip_shape, get_clip_shape, Shared<Box<dyn Fn(DisplayParameter) -> Path>>,
+    "The shape used to clip the content of the item. If this is set, the content will be clipped to the shape.");
 impl_property_re_layout!(enable_background_blur, get_enable_background_blur, SharedBool,
     "Whether to enable background blur. This will cause the background to be blurred when it is not fully opaque.");
 impl_property_re_layout!(
@@ -451,6 +456,15 @@ impl Item {
             baseline: None,
             children,
             clip: false.into(),
+            clip_shape: Shared::from_static(Box::new(|display_parameter| {
+                let rect = Rect::from_xywh(
+                    display_parameter.x(),
+                    display_parameter.y(),
+                    display_parameter.width,
+                    display_parameter.height,
+                );
+                Path::rect(rect, None)
+            })),
             custom_properties: HashMap::new(),
             display_parameter_out: Shared::from_static(Default::default()),
             enable_background_blur: false.into(),
@@ -475,8 +489,10 @@ impl Item {
             offset_y: 0.0.into(),
             on_attach: LinkedList::new(),
             on_click: None,
+            on_cursor_move: None,
             on_detach: LinkedList::new(),
             on_focus: Arc::new(Mutex::new(vec![])),
+            on_hover: None,
             on_mouse_input: None,
             on_pointer_input: None,
             on_touch_input: None,
@@ -694,11 +710,27 @@ impl Item {
         self
     }
 
+    pub fn on_cursor_move<F>(mut self, f: F) -> Self
+    where
+        F: FnMut(f32, f32) + 'static,
+    {
+        self.on_cursor_move = Some(Box::new(f));
+        self
+    }
+
     pub fn on_focus<F>(self, f: F) -> Self
     where
         F: FnMut(bool) + 'static,
     {
         self.on_focus.lock().unwrap().push(Box::new(f));
+        self
+    }
+
+    pub fn on_hover<F>(mut self, f: F) -> Self
+    where
+        F: FnMut(bool) + 'static,
+    {
+        self.on_hover = Some(Box::new(f));
         self
     }
 
@@ -862,8 +894,16 @@ impl Item {
         self.on_click.as_mut()
     }
 
+    pub fn get_on_cursor_move(&mut self) -> Option<&mut Box<dyn FnMut(f32, f32)>> {
+        self.on_cursor_move.as_mut()
+    }
+
     pub fn get_on_detach(&mut self) -> &mut LinkedList<Box<dyn FnMut()>> {
         &mut self.on_detach
+    }
+
+    pub fn get_on_hover(&mut self) -> Option<&mut Box<dyn FnMut(bool)>> {
+        self.on_hover.as_mut()
     }
 
     pub fn get_on_mouse_input(&mut self) -> Option<&mut Box<dyn FnMut(MouseEvent)>> {
@@ -1084,6 +1124,11 @@ impl Item {
     pub fn dispatch_mouse_input(&mut self, event: MouseEvent) {
         let f = self.item_event.get_dispatch_mouse_input();
         f.lock().unwrap()(self, event);
+    }
+
+    pub fn dispatch_cursor_move(&mut self, x: f32, y: f32) {
+        let f = self.item_event.get_dispatch_cursor_move();
+        f.lock().unwrap()(self, x, y);
     }
 
     pub fn dispatch_timer(&mut self, timer_id: usize) {
