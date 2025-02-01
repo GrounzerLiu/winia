@@ -1,15 +1,24 @@
+use std::collections::HashSet;
 use crate::impl_property_redraw;
-use crate::shared::{Children, Gettable, Observable, Settable, Shared, SharedColor, SharedF32};
+use crate::shared::{Children, Gettable, Observable, Settable, Shared, SharedAnimationTrait, SharedBool, SharedColor, SharedF32};
 use crate::ui::app::AppContext;
-use crate::ui::item::{DisplayParameter, ItemEvent, PointerState};
+use crate::ui::item::{DisplayParameter, ItemEvent, Pointer, PointerState};
 use crate::ui::theme::colors;
 use crate::ui::theme::colors::parse_color;
 use crate::ui::Item;
-use skia_safe::{Color, Path, Rect};
+use skia_safe::{Color, Paint, Path, Rect};
 use std::time::Duration;
 use skia_safe::gradient_shader::GradientShaderColors;
 use toml::Value;
 use proc_macro::item;
+
+struct Layer{
+    pub is_ended: bool,
+    pub is_finished: SharedBool,
+    pub center: (f32, f32),
+    pub degree: SharedF32,
+    pub opacity: SharedF32,
+}
 
 #[derive(Clone)]
 struct RippleProperty {
@@ -31,11 +40,6 @@ impl Ripple {
             .theme
             .value()
             .get_color(colors::PRIMARY)
-            .unwrap();
-        let on_primary_color = app_context
-            .theme
-            .value()
-            .get_color(colors::ON_PRIMARY)
             .unwrap();
         let property = Shared::new(RippleProperty {
             color: primary_color.clone().into(),
@@ -67,23 +71,11 @@ impl Ripple {
                 opacity
             },
         });
-
-        let ripple_position: Shared<(f32, f32)> = Shared::from_static((0.0, 0.0));
-        let mut ripple_radius: Shared<f32> = Shared::from_static(0.0);
-        ripple_radius.add_observer(
-            0,
-            Box::new({
-                let app_context = app_context.clone();
-                move || {
-                    app_context.request_redraw();
-                }
-            }),
-        );
+        let layers: Shared<Vec<Layer>> = Vec::new().into();
         let item_event = ItemEvent::new()
             .draw({
-                let ripple_position = ripple_position.clone();
-                let ripple_radius = ripple_radius.clone();
                 let property = property.clone();
+                let layers = layers.clone();
                 move |item, canvas| {
                     let property = property.value();
                     let mut paint = skia_safe::Paint::default();
@@ -98,76 +90,107 @@ impl Ripple {
                     let height = display_parameter.height;
                     let center_x = x + width / 2.0;
                     let center_y = y + height / 2.0;
-                    let radius = ((width.powi(2) + height.powi(2)).sqrt()) / 2.0;
-                    canvas.draw_circle((center_x, center_y), radius, &paint);
+                    let radius = ((width.powi(2) + height.powi(2)).sqrt());
+                    canvas.draw_circle((center_x, center_y), radius / 2.0, &paint);
 
                     let mut paint = skia_safe::Paint::default();
                     paint.set_anti_alias(true);
                     let foreground_color = property.color.get();
-                    let foreground_opacity = property.foreground_opacity.get();
-                    let ripple_position = ripple_position.get();
-                    let ripple_radius = ripple_radius.get();
-                    let colors = [
-                        foreground_color.with_a((foreground_opacity.clamp(0.0, 1.0) * 255.0) as u8),
-                        Color::TRANSPARENT,
-                    ];
-                    let pos = [(1.0 - (30.0 / ripple_radius)).clamp(0.0, 1.1), 1.0];
-                    let pos_ref: &[f32] = &pos;
-                    let gradient_colors = GradientShaderColors::Colors(&colors);
-                    let shader = skia_safe::Shader::radial_gradient(
-                        ripple_position,
-                        ripple_radius + 30.0,
-                        gradient_colors,
-                        pos_ref,
-                        skia_safe::TileMode::Clamp,
-                        None,
-                        None,
-                    );
-                    paint.set_shader(shader);
-                    canvas.draw_paint(&paint);
+                    let mut layers = layers.value();
+                    layers.retain(|layer| !layer.is_finished.get());
+                    for layer in layers.iter() {
+                        let opacity = layer.opacity.get();
+                        let degree = layer.degree.get();
+                        let mut paint = Paint::default();
+                        paint.set_anti_alias(true);
+                        let color = foreground_color.with_a((opacity.clamp(0.0, 1.0) * 255.0) as u8);
+                        let radius = radius * degree;
+                        paint.set_color(color);
+                        canvas.draw_circle(layer.center, radius, &paint);
+                    }
                 }
             })
             .pointer_input({
-                let property = property.clone();
-                let mut ripple_position = ripple_position.clone();
-                let mut ripple_radius = ripple_radius.clone();
+                let app_context = app_context.clone();
+                let mut down_pointers: HashSet<Pointer> = HashSet::new();
                 move |item, event| {
-                    let mut property = property.value();
                     match event.pointer_state {
                         PointerState::Started => {
-                            property
-                                .foreground_opacity
-                                .get_animation()
-                                .map(|animation| {
-                                    animation.stop();
-                                });
-                            property.foreground_opacity.set(0.1);
-                            ripple_radius.get_animation().map(|animation| {
-                                animation.stop();
-                            });
-                            ripple_position.set((event.x, event.y));
-                            let display_parameter = item.get_display_parameter();
-                            let width = display_parameter.width;
-                            let height = display_parameter.height;
-                            let radius = (width.powi(2) + height.powi(2)).sqrt();
-                            ripple_radius.set(0.0);
-                            ripple_radius
-                                .animation_to_f32(radius)
-                                .duration(Duration::from_millis(500))
-                                .start(item.get_app_context());
+                            fn add_observer(app_context: AppContext, shared: &mut SharedF32) {
+                                shared.add_observer(
+                                    0,
+                                    Box::new({
+                                        let app_context = app_context.clone();
+                                        move || {
+                                            app_context.request_redraw();
+                                        }
+                                    }),
+                                );
+                            }
+
+                            if !down_pointers.is_empty() {
+                                return;
+                            }
+
+                            down_pointers.insert(event.pointer);
+
+                            let mut degree = SharedF32::new(0.0);
+                            let mut opacity = SharedF32::new(0.1);
+                            add_observer(app_context.clone(), &mut degree);
+                            add_observer(app_context.clone(), &mut opacity);
+                            degree.animation_to_f32(1.0)
+                                .duration(Duration::from_millis(300))
+                                .start(app_context.clone());
+                            let layer = Layer {
+                                is_ended: false,
+                                is_finished: false.into(),
+                                center: (event.x, event.y),
+                                degree,
+                                opacity,
+                            };
+                            layers.value().push(layer);
                         }
                         PointerState::Ended => {
-                            property
-                                .foreground_opacity
-                                .get_animation()
-                                .map(|animation| {
-                                    animation.stop();
-                                });
-                            property
-                                .foreground_opacity
-                                .animation_to_f32(0.0)
-                                .duration(Duration::from_millis(500))
-                                .start(item.get_app_context());
+                            down_pointers.remove(&event.pointer);
+                            if !down_pointers.is_empty() {
+                                return;
+                            }
+                            let mut layers = layers.value();
+                            for layer in layers.iter_mut() {
+                                if layer.is_ended {
+                                    continue;
+                                }
+                                layer.is_ended = true;
+                                let mut is_finished = layer.is_finished.clone();
+                                if let Some(animation) = layer.degree.get_animation() {
+                                    if !animation.is_finished() {
+                                        let opacity = layer.opacity.clone();
+                                        let app_context = app_context.clone();
+                                        animation.on_finish(
+                                            move || {
+                                                let mut is_finished = is_finished.clone();
+                                                opacity.animation_to_f32(0.0)
+                                                    .duration(Duration::from_millis(300))
+                                                    .on_finish(
+                                                        move || {
+                                                            is_finished.set(true);
+                                                        },
+                                                    )
+                                                    .start(app_context.clone());
+                                            }
+                                        );
+                                    } else {
+                                        layer.opacity.animation_to_f32(0.0)
+                                            .duration(Duration::from_millis(300))
+                                            .on_finish(
+                                                move || {
+                                                    is_finished.set(true);
+                                                },
+                                            )
+                                            .start(app_context.clone());
+                                    }
+                                }
+                            }
                         }
                         _ => {}
                     }
@@ -180,7 +203,7 @@ impl Ripple {
                     property
                         .background_opacity
                         .get_animation()
-                        .map(|animation| {
+                        .map(|mut animation| {
                             animation.stop();
                         });
                     property

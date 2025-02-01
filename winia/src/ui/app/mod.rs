@@ -368,11 +368,9 @@ impl ApplicationHandler<UserEvent> for App {
                 .read(|request_re_layout| *request_re_layout);
             if request_re_layout {
                 self.re_layout();
-                self.app_context
-                    .request_layout
-                    .write(|request_re_layout| {
-                        *request_re_layout = false;
-                    });
+                self.app_context.request_layout.write(|request_re_layout| {
+                    *request_re_layout = false;
+                });
             }
         }
 
@@ -501,7 +499,11 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                let background_color = self.app_context.theme.read(|theme| theme.get_color(theme::WINDOW_BACKGROUND_COLOR)).unwrap_or(Color::WHITE);
+                let background_color = self
+                    .app_context
+                    .theme
+                    .read(|theme| theme.get_color(theme::WINDOW_BACKGROUND_COLOR))
+                    .unwrap_or(Color::WHITE);
                 // self.app_context.clone().window(|window| {
                 if let Some((surface_ref, scale_factor)) = {
                     self.app_context.window.read(|window_option| {
@@ -582,19 +584,28 @@ impl ApplicationHandler<UserEvent> for App {
                 });
         }
 
-
         {
-            self.app_context.shared_animations.write(|shared_animations| {
-                shared_animations.iter_mut().for_each(|animation| {
-                    animation.update();
+            self.app_context
+                .starting_shared_animation
+                .write(|starting_shared_animation| {
+                    while let Some(animation) = starting_shared_animation.pop_back() {
+                        let mut animations = self.app_context.running_shared_animations.value();
+                        animations.push(animation);
+                    }
                 });
-                shared_animations.retain(|animation| !animation.is_finished());
-                if !shared_animations.is_empty() {
-                    self.window(|window| {
-                        window.request_redraw();
+            self.app_context
+                .running_shared_animations
+                .write(|shared_animations| {
+                    shared_animations.iter_mut().for_each(|animation| {
+                        animation.update();
                     });
-                }
-            });
+                    shared_animations.retain(|animation| !animation.is_finished());
+                    if !shared_animations.is_empty() {
+                        self.window(|window| {
+                            window.request_redraw();
+                        });
+                    }
+                });
         }
     }
 

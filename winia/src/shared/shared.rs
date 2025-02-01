@@ -500,9 +500,8 @@ impl<T: 'static> SharedAnimation<T> {
     pub fn start(self, app_context: AppContext) -> Self {
         {
             let mut inner = self.inner.lock().unwrap();
-            inner.start_time = Instant::now();
-            app_context.shared_animations.write(|shared_animations| {
-                shared_animations.push(Box::new(self.clone()));
+            app_context.starting_shared_animation.write(|starting_shared_animation| {
+                starting_shared_animation.push_back(Box::new(self.clone()));
             });
             let cloned = self.clone();
             // inner.shared.animation.lock().unwrap().replace(cloned);
@@ -517,9 +516,13 @@ impl<T: 'static> SharedAnimation<T> {
         self
     }
 
-    pub fn stop(self) -> Self {
+    pub fn cancel(&mut self) {
+        self.inner.lock().unwrap().on_finish.take();
+        self.stop()
+    }
+
+    pub fn stop(&mut self) {
         self.inner.lock().unwrap().stop();
-        self
     }
 
     // pub fn is_finished(&self) -> bool {

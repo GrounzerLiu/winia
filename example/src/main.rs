@@ -38,6 +38,14 @@ fn ripple_test(app: AppContext, property: AppProperty) -> Item {
             .on_hover(|is_hovered|{
                 println!("Rectangle hovered: {}", is_hovered);
             }) +
+        app.rectangle(Color::TRANSPARENT)
+            .item()
+            .width(Size::Fixed(36.0))
+            .height(Size::Fixed(36.0))
+            .foreground(app.ripple().borderless(true).item())
+            .on_hover(|is_hovered|{
+                println!("Rectangle hovered: {}", is_hovered);
+            }) +
         app.text("text").color(Color::WHITE).item()
     )
         .width(Size::Expanded).height(Size::Expanded)
