@@ -1,18 +1,14 @@
 use std::time::Duration;
-use winia::shared::{Children, Gettable, Settable, Shared, SharedAnimation, SharedBool, SharedF32, SharedSize, SharedText};
+use winia::shared::{Children, Gettable, Settable, Shared, SharedBool, SharedF32, SharedSize, SharedText};
 use winia::skia_safe::Color;
 use winia::text::StyledText;
 use winia::ui::animation::{AnimationExt, Target};
 use winia::ui::app::{run_app, AppContext, AppProperty};
-use winia::ui::component::{RectangleExt, Ripple, RippleExt, TextExt};
-use winia::ui::item::{Gravity, Size};
-use winia::ui::layout::{
-    AlignContent, AlignItems, ColumnExt, FlexDirection, FlexExt, FlexWrap,
-    JustifyContent, StackExt,
-};
+use winia::ui::component::{RectangleExt, RippleExt, TextExt};
+use winia::ui::item::{Alignment, Size};
+use winia::ui::layout::{AlignContent, AlignItems, AlignSelf, ColumnExt, FlexDirection, FlexExt, FlexWrap, JustifyContent, StackExt};
 use winia::ui::{App, Item};
 use winia::{func, include_target, shared};
-use winia::ui::theme::colors;
 
 // #[cfg(not(target_os = "android"))]
 fn main() {
@@ -29,7 +25,7 @@ fn main() {
 }
 
 fn ripple_test(app: AppContext, property: AppProperty) -> Item {
-    app.column(Children::new()+
+    app.stack(Children::new()+
         app.rectangle(Color::TRANSPARENT)
             .item()
             .width(Size::Fixed(100.0))
@@ -42,12 +38,13 @@ fn ripple_test(app: AppContext, property: AppProperty) -> Item {
             .item()
             .width(Size::Fixed(36.0))
             .height(Size::Fixed(36.0))
+            .align_self(Alignment::Center)
             .foreground(app.ripple().borderless(true).item())
             .on_hover(|is_hovered|{
                 println!("Rectangle hovered: {}", is_hovered);
             }) +
-        app.text("text").color(Color::WHITE).item()
-    )
+        app.text("text").color(Color::WHITE).item().align_self(Alignment::BottomEnd)
+    ).item()
         .width(Size::Expanded).height(Size::Expanded)
 }
 
@@ -210,8 +207,6 @@ fn main_ui(app: AppContext, property: AppProperty) -> Item {
     let offset = SharedF32::from(0.0);
     let margin_start = SharedF32::from(150.0);
     let margin_top = SharedF32::from(50.0);
-    let vertical_gravity = Shared::from(Gravity::End);
-    let horizontal_gravity = Shared::from(Gravity::End);
 
     // let txt_file = "/home/grounzer/Downloads/long.txt";
     // let long_text = std::fs::read_to_string(txt_file).unwrap();
@@ -325,28 +320,10 @@ fn main_ui(app: AppContext, property: AppProperty) -> Item {
             .item()
             .width(Size::Fixed(400.0))
             .height(Size::Fixed(400.0))
-            .horizontal_gravity(&horizontal_gravity)
-            .vertical_gravity(&vertical_gravity)
             .background(
                 app.rectangle(Color::GREEN).item()
             )
-            .on_click(func!(|app, horizontal_gravity, vertical_gravity|, move|_|{
-                app.animate(Target::Exclusion(Vec::new()))
-                    .transformation(func!(|horizontal_gravity, vertical_gravity|,move|| {
-                    if horizontal_gravity.get() == Gravity::Start && vertical_gravity.get() == Gravity::Start {
-                        horizontal_gravity.set(Gravity::End);
-                    }else if horizontal_gravity.get() == Gravity::End && vertical_gravity.get() == Gravity::Start {
-                        vertical_gravity.set(Gravity::End);
-                    }else if horizontal_gravity.get() == Gravity::End && vertical_gravity.get() == Gravity::End {
-                        horizontal_gravity.set(Gravity::Start);
-                    }else {
-                        vertical_gravity.set(Gravity::Start);
-                    }
-            })).duration(Duration::from_secs(1)).start();
-        }))
     )
-        .horizontal_gravity(&horizontal_gravity)
-        .vertical_gravity(&vertical_gravity)
         .item()
         .width(Size::Expanded)
         .height(Size::Expanded)

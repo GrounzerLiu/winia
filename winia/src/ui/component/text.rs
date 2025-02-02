@@ -5,10 +5,7 @@ use crate::shared::{
 };
 use crate::text::StyledText;
 use crate::ui::app::AppContext;
-use crate::ui::item::{
-    ClickSource, Gravity, ImeAction, ItemEvent, LayoutDirection, LogicalX, MeasureMode,
-    Orientation, PointerState,
-};
+use crate::ui::item::{ClickSource, HorizontalAlignment, ImeAction, ItemEvent, LayoutDirection, LogicalX, MeasureMode, Orientation, PointerState, VerticalAlignment};
 use crate::ui::Item;
 use crate::{impl_property_layout, impl_property_redraw};
 use skia_safe::textlayout::{TextAlign, TextStyle};
@@ -174,8 +171,7 @@ impl Text {
                     let max_width = width - item.get_padding(Orientation::Horizontal);
 
                     let layout_direction = item.get_layout_direction().get();
-                    let horizontal_gravity = item.get_horizontal_gravity().get();
-                    let vertical_gravity = item.get_vertical_gravity().get();
+                    let align_content = item.get_align_content().get();
                     let padding_start = item.get_padding_start().get();
                     let padding_end = item.get_padding_end().get();
                     let padding_top = item.get_padding_top().get();
@@ -203,18 +199,18 @@ impl Text {
 
                         let paragraph_x = LogicalX::new(
                             layout_direction,
-                            match horizontal_gravity {
-                                Gravity::Start => padding_start,
-                                Gravity::Center => (width - text_layout_width) / 2.0,
-                                Gravity::End => width - text_layout_width - padding_end,
+                            match align_content.to_horizontal_alignment() {
+                                HorizontalAlignment::Start => padding_start,
+                                HorizontalAlignment::Center => (width - text_layout_width) / 2.0,
+                                HorizontalAlignment::End => width - text_layout_width - padding_end,
                             },
                             width,
                         );
 
-                        let paragraph_y = match vertical_gravity {
-                            Gravity::Start => padding_top,
-                            Gravity::Center => (height - text_layout_height) / 2.0,
-                            Gravity::End => height - text_layout_height - padding_bottom,
+                        let paragraph_y = match align_content.to_vertical_alignment() {
+                            VerticalAlignment::Top => padding_top,
+                            VerticalAlignment::Center => (height - text_layout_height) / 2.0,
+                            VerticalAlignment::Bottom => height - text_layout_height - padding_bottom,
                         };
 
                         let mut recorder = PictureRecorder::new();
@@ -335,8 +331,7 @@ impl Text {
                     let text_layout = text.get_text_layout().unwrap();
 
                     let layout_direction = item.get_layout_direction().get();
-                    let horizontal_gravity = item.get_horizontal_gravity().get();
-                    let vertical_gravity = item.get_vertical_gravity().get();
+                    let align_content = item.get_align_content().get();
                     let padding_start = item.get_padding_start().get();
                     let padding_end = item.get_padding_end().get();
                     let padding_top = item.get_padding_top().get();
@@ -354,18 +349,18 @@ impl Text {
 
                     let paragraph_x = LogicalX::new(
                         layout_direction,
-                        match horizontal_gravity {
-                            Gravity::Start => padding_start,
-                            Gravity::Center => (width - text_layout_width) / 2.0,
-                            Gravity::End => width - text_layout_width - padding_end,
+                        match align_content.to_horizontal_alignment() {
+                            HorizontalAlignment::Start => padding_start,
+                            HorizontalAlignment::Center => (width - text_layout_width) / 2.0,
+                            HorizontalAlignment::End => width - text_layout_width - padding_end,
                         },
                         width,
                     );
 
-                    let paragraph_y = match vertical_gravity {
-                        Gravity::Start => padding_top,
-                        Gravity::Center => (height - text_layout_height) / 2.0,
-                        Gravity::End => height - text_layout_height - padding_bottom,
+                    let paragraph_y = match align_content.to_vertical_alignment() {
+                        VerticalAlignment::Top => padding_top,
+                        VerticalAlignment::Center => (height - text_layout_height) / 2.0,
+                        VerticalAlignment::Bottom => height - text_layout_height - padding_bottom,
                     };
 
                     if selection.start != selection.end {

@@ -1,7 +1,7 @@
 use crate::core::{bind_str_to_id, generate_id};
 use crate::shared::{
-    Children, Gettable, Observable, Settable, Shared, SharedBool, SharedColor, SharedF32,
-    SharedInnerPosition, SharedItem, SharedSize, SharedUsize,
+    Children, Gettable, Observable, Settable, Shared, SharedAlignment, SharedBool, SharedColor,
+    SharedF32, SharedInnerPosition, SharedItem, SharedSize, SharedUsize,
 };
 use crate::ui::app::{AppContext, UserEvent};
 use crate::ui::item::{
@@ -49,11 +49,7 @@ macro_rules! impl_property_layout {
                 // self.$property_name.add_observer(self.id, Box::new(move || {
                 //     app_context.request_re_layout();
                 // })).drop();
-                init_property_layout(
-                    self.app_context.clone(),
-                    &mut self.$property_name,
-                    self.id,
-                );
+                init_property_layout(self.app_context.clone(), &mut self.$property_name, self.id);
                 self
             }
 
@@ -87,10 +83,60 @@ macro_rules! impl_property_redraw {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Gravity {
+pub enum Alignment {
+    TopStart,
+    TopCenter,
+    TopEnd,
+    CenterStart,
+    Center,
+    CenterEnd,
+    BottomStart,
+    BottomCenter,
+    BottomEnd,
+}
+
+impl Alignment {
+    pub fn to_horizontal_alignment(&self) -> HorizontalAlignment {
+        match self {
+            Alignment::TopStart | Alignment::CenterStart | Alignment::BottomStart => {
+                HorizontalAlignment::Start
+            }
+            Alignment::TopCenter | Alignment::Center | Alignment::BottomCenter => {
+                HorizontalAlignment::Center
+            }
+            Alignment::TopEnd | Alignment::CenterEnd | Alignment::BottomEnd => {
+                HorizontalAlignment::End
+            }
+        }
+    }
+
+    pub fn to_vertical_alignment(&self) -> VerticalAlignment {
+        match self {
+            Alignment::TopStart | Alignment::TopCenter | Alignment::TopEnd => {
+                VerticalAlignment::Top
+            }
+            Alignment::CenterStart | Alignment::Center | Alignment::CenterEnd => {
+                VerticalAlignment::Center
+            }
+            Alignment::BottomStart | Alignment::BottomCenter | Alignment::BottomEnd => {
+                VerticalAlignment::Bottom
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum HorizontalAlignment {
     Start,
     Center,
     End,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum VerticalAlignment {
+    Top,
+    Center,
+    Bottom,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -184,6 +230,7 @@ impl Animations {
 /// It can also be used to arrange other items in a layout.
 pub struct Item {
     active: SharedBool,
+    align_content: SharedAlignment,
     animations: Animations,
     app_context: AppContext,
     background: SharedItem,
@@ -197,7 +244,6 @@ pub struct Item {
     focused: Shared<bool>,
     foreground: SharedItem,
     height: SharedSize,
-    horizontal_gravity: Shared<Gravity>,
     id: usize,
     item_event: ItemEvent,
     layout_direction: Shared<LayoutDirection>,
@@ -241,7 +287,6 @@ pub struct Item {
     skew_y: SharedF32,
     target_parameter: DisplayParameter,
     touch_start_time: Instant,
-    vertical_gravity: Shared<Gravity>,
     width: SharedSize,
 }
 
@@ -250,6 +295,12 @@ impl_property_layout!(
     get_active,
     SharedBool,
     "Whether the item is active and can receive input events."
+);
+impl_property_layout!(
+    align_content,
+    get_align_content,
+    SharedAlignment,
+    "The alignment of the content of the item. Not all items support this property."
 );
 impl_property_layout!(
     background,
@@ -275,8 +326,6 @@ impl_property_layout!(
     SharedSize,
     "The height of the item. See [`Size`](crate::ui::item::Size) for more information."
 );
-impl_property_layout!(horizontal_gravity, get_horizontal_gravity, Shared<Gravity>,
-    "The horizontal gravity of the item. It determines how the item is positioned horizontally within its parent.");
 impl_property_layout!(
     layout_direction,
     get_layout_direction,
@@ -441,8 +490,6 @@ impl_property_layout!(
     SharedSize,
     "The width of the item. See [`Size`](crate::ui::item::Size) for more information."
 );
-impl_property_layout!(vertical_gravity, get_vertical_gravity, Shared<Gravity>,
-    "The vertical gravity of the item. It determines how the item is positioned vertically within its parent.");
 
 impl Item {
     pub fn new(app_context: AppContext, children: Children, item_event: ItemEvent) -> Self {
@@ -450,6 +497,7 @@ impl Item {
 
         let mut item = Self {
             active: true.into(),
+            align_content: Alignment::TopStart.into(),
             animations: Default::default(),
             app_context,
             background: SharedItem::none(),
@@ -471,7 +519,6 @@ impl Item {
             focused: false.into(),
             foreground: SharedItem::none(),
             height: Size::Compact.into(),
-            horizontal_gravity: Gravity::Start.into(),
             id,
             item_event,
             layout_direction: LayoutDirection::LTR.into(),
@@ -515,9 +562,9 @@ impl Item {
             skew_y: 0.0.into(),
             target_parameter: Default::default(),
             touch_start_time: Instant::now(),
-            vertical_gravity: Gravity::Start.into(),
             width: Size::Compact.into(),
         };
+        init_property_layout(item.app_context.clone(), &mut item.align_content, item.id);
         init_property_layout(item.app_context.clone(), &mut item.active, item.id);
         init_property_layout(
             item.app_context.clone(),
@@ -565,16 +612,6 @@ impl Item {
         init_property_layout(
             item.app_context.clone(),
             &mut item.enable_background_blur,
-            item.id,
-        );
-        init_property_layout(
-            item.app_context.clone(),
-            &mut item.horizontal_gravity,
-            item.id,
-        );
-        init_property_layout(
-            item.app_context.clone(),
-            &mut item.vertical_gravity,
             item.id,
         );
         item.focused(false)
@@ -776,6 +813,10 @@ impl Item {
 
     pub fn get_custom_property(&self, name: &str) -> Option<&CustomProperty> {
         self.custom_properties.get(name)
+    }
+
+    pub fn get_custom_property_mut(&mut self, name: &str) -> Option<&mut CustomProperty> {
+        self.custom_properties.get_mut(name)
     }
 
     pub fn get_display_parameter(&mut self) -> DisplayParameter {
