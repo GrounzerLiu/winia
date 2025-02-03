@@ -1,6 +1,6 @@
-use crate::shared::{Children, Gettable, Observable, Shared, SharedUsize};
+use crate::shared::{Children, Gettable, Observable, Shared, SharedAlignment, SharedUsize};
 use crate::ui::app::AppContext;
-use crate::ui::item::{CustomProperty, ItemEvent, LogicalX, MeasureMode, Orientation};
+use crate::ui::item::{CustomProperty, ItemData, LogicalX, MeasureMode, Orientation};
 use crate::ui::Item;
 use std::ops::Not;
 use proc_macro::item;
@@ -61,7 +61,24 @@ pub enum AlignContent {
 
 pub trait FlexGrow {
     fn flex_grow(self, value: impl Into<SharedUsize>) -> Self;
+}
+
+pub trait GetFlexGrow {
     fn get_flex_grow(&self) -> Option<SharedUsize>;
+}
+
+impl GetFlexGrow for ItemData {
+    fn get_flex_grow(&self) -> Option<SharedUsize> {
+        match self.get_custom_property("flex_grow") {
+            None => { None }
+            Some(p) => {
+                match p {
+                    CustomProperty::Usize(f) => { Some(f.clone()) }
+                    _ => { None }
+                }
+            }
+        }
+    }
 }
 
 impl FlexGrow for Item {
@@ -73,27 +90,23 @@ impl FlexGrow for Item {
     ///
     /// The items with value greater than 0 will be resized proportionally to the remaining space.
     fn flex_grow(self, flex_grow: impl Into<SharedUsize>) -> Self {
-        if let Some(mut flex_grow) = self.get_flex_grow() {
-            flex_grow.remove_observer(self.get_id());
-        }
-        let app_context = self.get_app_context();
-        let mut flex_grow = flex_grow.into();
-        flex_grow.add_observer(self.get_id(), Box::new(move || {
-            app_context.request_layout();
-        })).drop();
-        self.custom_property("flex_grow", CustomProperty::Usize(flex_grow))
-    }
-
-    fn get_flex_grow(&self) -> Option<SharedUsize> {
-        match self.get_custom_property("flex_grow") {
-            None => { None }
-            Some(p) => {
-                match p {
-                    CustomProperty::Usize(f) => { Some(f.clone()) }
-                    _ => { None }
-                }
+        let id = self.data().get_id();
+        if let Some(CustomProperty::Any(flex_grow)) = self.data().get_custom_property_mut("flex_grow") {
+            if let Some(flex_grow) = flex_grow.downcast_mut::<SharedAlignment>() {
+                flex_grow.remove_observer(id);
             }
         }
+
+        let app_context = self.data().get_app_context();
+        let mut flex_grow = flex_grow.into();
+        flex_grow.add_observer(
+            id,
+            Box::new(move || {
+                app_context.request_layout();
+            }),
+        );
+        self.data().custom_property("flex_grow", CustomProperty::Any(Box::new(flex_grow)));
+        self
     }
 }
 
@@ -199,11 +212,11 @@ impl Line {
     }
 
     pub fn add_item(&mut self, item: &Item) {
-        let child_param = item.clone_measure_parameter();
+        let child_param = item.data().clone_measure_parameter();
         let child_main_axis_size = child_param.size(self.orientation);
         let child_cross_axis_size = child_param.size(self.orientation.not());
-        let child_main_axis_margin = item.get_margin(self.orientation);
-        let child_cross_axis_margin = item.get_margin(self.orientation.not());
+        let child_main_axis_margin = item.data().get_margin(self.orientation);
+        let child_cross_axis_margin = item.data().get_margin(self.orientation.not());
 
         let child_main_axis_occupied_size = child_main_axis_size + child_main_axis_margin;
         let child_cross_axis_occupied_size = child_cross_axis_size + child_cross_axis_margin;
@@ -213,14 +226,14 @@ impl Line {
 
         if self.align_items == AlignItems::Baseline {
             let child_baseline = if self.orientation == Orientation::Horizontal {
-                item.get_baseline()
+                item.data().get_baseline()
             } else {
                 None
             };
 
             if let Some(child_baseline) = child_baseline {
-                let under_baseline = child_baseline + item.get_margin_top().get();
-                let over_baseline = child_cross_axis_size - child_baseline + item.get_margin_bottom().get();
+                let under_baseline = child_baseline + item.data().get_margin_top().get();
+                let over_baseline = child_cross_axis_size - child_baseline + item.data().get_margin_bottom().get();
                 self.under_baseline = self.under_baseline.max(under_baseline);
                 self.over_baseline = self.over_baseline.max(over_baseline);
             }
@@ -238,9 +251,9 @@ impl Line {
 
     /// Try to add an item to the line. Not really adding it, just calculating the size of the line.
     pub fn try_add_item(&mut self, item: &Item) -> bool {
-        let child_param = item.clone_measure_parameter();
+        let child_param = item.data().clone_measure_parameter();
         let child_main_axis_size = child_param.size(self.orientation);
-        let child_main_axis_margin = item.get_margin(self.orientation);
+        let child_main_axis_margin = item.data().get_margin(self.orientation);
 
         let child_main_axis_occupied_size = child_main_axis_size + child_main_axis_margin;
 
@@ -264,7 +277,7 @@ struct Lines {
 
 impl Lines {
     pub fn new(
-        item: &Item,
+        item: &ItemData,
         orientation: Orientation,
         align_items: AlignItems,
         main_axis_gap: f32,
@@ -330,7 +343,7 @@ impl Lines {
 
 
 fn calculate_size(
-    item: &Item,
+    item: &ItemData,
     orientation: Orientation,
     align_items: AlignItems,
     main_axis_gap: f32,
@@ -396,8 +409,9 @@ impl Flex {
             cross_axis_gap: 0.0.into(),
         });
 
-        let item_event = ItemEvent::new()
-            .measure({
+        let mut item = Item::new(app_context, children);
+        item.data()
+            .set_measure({
                 let properties = properties.clone();
                 move |item, width_mode, height_mode| {
                     let properties = properties.value();
@@ -462,7 +476,7 @@ impl Flex {
                     }
                 }
             })
-            .layout({
+            .set_layout({
                 let properties = properties.clone();
                 move |item, width, height| {
                     if item.get_children().len() == 0 {
@@ -584,8 +598,11 @@ impl Flex {
                                     for child in start_index..start_index + count {
                                         let child_items = item.get_children().items();
                                         let child = child_items.get(child).unwrap();
-                                        if let Some(grow) = child.get_flex_grow() {
-                                            total_grow += grow.get();
+                                        {
+                                            let child_data = child.data();
+                                            if let Some(grow) = child_data.get_flex_grow() {
+                                                total_grow += grow.get();
+                                            }
                                         }
                                     }
                                     total_grow
@@ -675,7 +692,7 @@ impl Flex {
                                 for index in start_index..start_index + count {
                                     let mut children_items = item.get_children().items();
                                     let child = children_items.get_mut(index).unwrap();
-                                    let child_param = child.clone_measure_parameter();
+                                    let child_param = child.data().clone_measure_parameter();
 
                                     let mut child_width = child_param.width;
                                     let mut child_height = if let Some(line_stretch) = line_stretch {
@@ -684,13 +701,13 @@ impl Flex {
                                         child_param.height
                                     };
 
-                                    let child_margin_start = child.get_margin_start().get();
-                                    let child_margin_end = child.get_margin_end().get();
-                                    let child_margin_top = child.get_margin_top().get();
-                                    let child_margin_bottom = child.get_margin_bottom().get();
+                                    let child_margin_start = child.data().get_margin_start().get();
+                                    let child_margin_end = child.data().get_margin_end().get();
+                                    let child_margin_top = child.data().get_margin_top().get();
+                                    let child_margin_bottom = child.data().get_margin_bottom().get();
 
                                     if remaining_space_between_items > 0.0 && total_grow > 0 {
-                                        let flex_grow = child.get_flex_grow().map(|v| v.get()).unwrap_or(0);
+                                        let flex_grow = child.data().get_flex_grow().map(|v| v.get()).unwrap_or(0);
                                         if flex_grow > 0 {
                                             child_width += remaining_space_between_items * (flex_grow as f32 / total_grow as f32);
                                         }
@@ -709,7 +726,7 @@ impl Flex {
                                                 AlignItems::End => line_height - child_margin_bottom - child_height,
                                                 AlignItems::Center => (line_height - child_height) / 2.0,
                                                 AlignItems::Baseline => {
-                                                    let child_baseline = child.get_baseline();
+                                                    let child_baseline = child.data().get_baseline();
                                                     match child_baseline {
                                                         None => child_margin_top,
                                                         Some(baseline) => line.under_baseline - baseline
@@ -728,7 +745,7 @@ impl Flex {
                                                 AlignItems::End => line_height - child_margin_top - child_height,
                                                 AlignItems::Center => (line_height - child_height) / 2.0,
                                                 AlignItems::Baseline => {
-                                                    let child_baseline = child.get_baseline();
+                                                    let child_baseline = child.data().get_baseline();
                                                     match child_baseline {
                                                         None => child_margin_bottom,
                                                         Some(baseline) => line.over_baseline - baseline
@@ -744,7 +761,7 @@ impl Flex {
 
                                     let x_factor = if direction == FlexDirection::Horizontal { 1.0 } else { -1.0 };
                                     x += child_margin_start * x_factor;
-                                    child.dispatch_layout(
+                                    child.data().dispatch_layout(
                                         if direction == FlexDirection::Horizontal { x.logical_value() } else { (x - child_width).logical_value() },
                                         if wrap != FlexWrap::WrapReverse { child_y } else { child_y - child_height },
                                         child_width,
@@ -865,8 +882,11 @@ impl Flex {
                                     for child in start_index..start_index + count {
                                         let child_items = item.get_children().items();
                                         let child = child_items.get(child).unwrap();
-                                        if let Some(grow) = child.get_flex_grow() {
-                                            total_grow += grow.get();
+                                        {
+                                            let child_data = child.data();
+                                            if let Some(grow) = child_data.get_flex_grow() {
+                                                total_grow += grow.get();
+                                            }
                                         }
                                     }
                                     total_grow
@@ -973,7 +993,7 @@ impl Flex {
                                 for index in start_index..start_index + count {
                                     let mut children_items = item.get_children().items();
                                     let child = children_items.get_mut(index).unwrap();
-                                    let child_param = child.clone_measure_parameter();
+                                    let child_param = child.data().clone_measure_parameter();
 
                                     // let mut child_width = child_param.width;
                                     // let mut child_height = if let Some(line_stretch) = line_stretch {
@@ -988,13 +1008,13 @@ impl Flex {
                                     };
                                     let mut child_height = child_param.height;
 
-                                    let child_margin_start = child.get_margin_start().get();
-                                    let child_margin_end = child.get_margin_end().get();
-                                    let child_margin_top = child.get_margin_top().get();
-                                    let child_margin_bottom = child.get_margin_bottom().get();
+                                    let child_margin_start = child.data().get_margin_start().get();
+                                    let child_margin_end = child.data().get_margin_end().get();
+                                    let child_margin_top = child.data().get_margin_top().get();
+                                    let child_margin_bottom = child.data().get_margin_bottom().get();
 
                                     if remaining_space_between_items > 0.0 && total_grow > 0 {
-                                        let flex_grow = child.get_flex_grow().map(|v| v.get()).unwrap_or(0);
+                                        let flex_grow = child.data().get_flex_grow().map(|v| v.get()).unwrap_or(0);
                                         if flex_grow > 0 {
                                             // child_width += remaining_space_between_items * (flex_grow as f32 / total_grow as f32);
                                             child_height += remaining_space_between_items * (flex_grow as f32 / total_grow as f32);
@@ -1067,7 +1087,7 @@ impl Flex {
                                     let y_factor = if direction == FlexDirection::Vertical { 1.0 } else { -1.0 };
                                     // x += child_margin_start * x_factor;
                                     y += child_margin_top * y_factor;
-                                    child.dispatch_layout(
+                                    child.data().dispatch_layout(
                                         // if direction == FlexDirection::Vertical { x.logical_value() } else { (x - child_width).logical_value() },
                                         // if wrap != FlexWrap::WrapReverse { child_y } else { child_y - child_height },
                                         if wrap != FlexWrap::WrapReverse { child_x.logical_value() } else { (child_x - child_width).logical_value() },
@@ -1099,15 +1119,15 @@ impl Flex {
             });
 
         Self {
-            item: Item::new(app_context, children, item_event),
+            item,
             properties,
         }
     }
 
     pub fn direction(self, direction: impl Into<Shared<FlexDirection>>) -> Self {
         {
-            let id = self.item.get_id();
-            let app_context = self.item.get_app_context();
+            let id = self.item.data().get_id();
+            let app_context = self.item.data().get_app_context();
             let mut properties = self.properties.value();
             properties.direction.remove_observer(id);
             properties.direction = direction.into();
@@ -1123,8 +1143,8 @@ impl Flex {
 
     pub fn wrap(self, wrap: impl Into<Shared<FlexWrap>>) -> Self {
         {
-            let id = self.item.get_id();
-            let app_context = self.item.get_app_context();
+            let id = self.item.data().get_id();
+            let app_context = self.item.data().get_app_context();
             let mut properties = self.properties.value();
             properties.wrap.remove_observer(id);
             properties.wrap = wrap.into();
@@ -1140,8 +1160,8 @@ impl Flex {
 
     pub fn justify_content(self, justify_content: impl Into<Shared<JustifyContent>>) -> Self {
         {
-            let id = self.item.get_id();
-            let app_context = self.item.get_app_context();
+            let id = self.item.data().get_id();
+            let app_context = self.item.data().get_app_context();
             let mut properties = self.properties.value();
             properties.justify_content.remove_observer(id);
             properties.justify_content = justify_content.into();
@@ -1157,8 +1177,8 @@ impl Flex {
 
     pub fn align_items(self, align_items: impl Into<Shared<AlignItems>>) -> Self {
         {
-            let id = self.item.get_id();
-            let app_context = self.item.get_app_context();
+            let id = self.item.data().get_id();
+            let app_context = self.item.data().get_app_context();
             let mut properties = self.properties.value();
             properties.align_items.remove_observer(id);
             properties.align_items = align_items.into();
@@ -1174,8 +1194,8 @@ impl Flex {
 
     pub fn align_content(self, align_content: impl Into<Shared<AlignContent>>) -> Self {
         {
-            let id = self.item.get_id();
-            let app_context = self.item.get_app_context();
+            let id = self.item.data().get_id();
+            let app_context = self.item.data().get_app_context();
             let mut properties = self.properties.value();
             properties.align_content.remove_observer(id);
             properties.align_content = align_content.into();
@@ -1191,8 +1211,8 @@ impl Flex {
 
     pub fn main_axis_gap(self, main_axis_gap: impl Into<Shared<f32>>) -> Self {
         {
-            let id = self.item.get_id();
-            let app_context = self.item.get_app_context();
+            let id = self.item.data().get_id();
+            let app_context = self.item.data().get_app_context();
             let mut properties = self.properties.value();
             properties.main_axis_gap.remove_observer(id);
             properties.main_axis_gap = main_axis_gap.into();
@@ -1208,8 +1228,8 @@ impl Flex {
 
     pub fn cross_axis_gap(self, cross_axis_gap: impl Into<Shared<f32>>) -> Self {
         {
-            let id = self.item.get_id();
-            let app_context = self.item.get_app_context();
+            let id = self.item.data().get_id();
+            let app_context = self.item.data().get_app_context();
             let mut properties = self.properties.value();
             properties.cross_axis_gap.remove_observer(id);
             properties.cross_axis_gap = cross_axis_gap.into();

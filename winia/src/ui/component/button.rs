@@ -2,7 +2,6 @@ use proc_macro::item;
 use crate::ui::app::AppContext;
 use crate::shared::Children;
 use crate::ui::Item;
-use crate::ui::item::ItemEvent;
 
 #[derive(Clone)]
 struct ButtonProperty {
@@ -20,7 +19,7 @@ impl Button {
         let property = ButtonProperty {
 
         };
-        let item = Item::new(app_context, Children::new(), ItemEvent::new());
+        let item = Item::new(app_context, Children::new());
         Self {
             item,
             property,

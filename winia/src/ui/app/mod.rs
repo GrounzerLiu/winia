@@ -2,7 +2,7 @@ mod app_context;
 
 use crate::dpi::LogicalSize;
 use crate::shared::{Gettable, Shared, SharedBool};
-use crate::ui::item::{ImeAction, MeasureMode, MouseEvent, PointerState, TouchEvent};
+use crate::ui::item::{ImeAction, ItemData, MeasureMode, MouseEvent, PointerState, TouchEvent};
 use crate::ui::{theme, Item};
 use crate::LockUnwrap;
 pub use app_context::*;
@@ -176,11 +176,11 @@ impl App {
         });
         if let Some(size) = window_size {
             if let Some(item) = &mut self.item {
-                item.measure(
+                item.data().measure(
                     MeasureMode::Specified(size.0),
                     MeasureMode::Specified(size.1),
                 );
-                item.dispatch_layout(0.0, 0.0, size.0, size.1)
+                item.data().dispatch_layout(0.0, 0.0, size.0, size.1)
             }
         }
     }
@@ -342,7 +342,7 @@ impl ApplicationHandler<UserEvent> for App {
                     .read(|focus_changed_items| focus_changed_items.is_empty());
                 if is_focus_changed {
                     if let Some(item) = &mut self.item {
-                        item.dispatch_focus();
+                        item.data().dispatch_focus();
                     }
                 }
                 self.app_context
@@ -390,11 +390,11 @@ impl ApplicationHandler<UserEvent> for App {
                 });
 
                 if let Some(item) = &mut self.item {
-                    item.measure(
+                    item.data().measure(
                         MeasureMode::Specified(width),
                         MeasureMode::Specified(height),
                     );
-                    item.dispatch_layout(0.0, 0.0, width, height)
+                    item.data().dispatch_layout(0.0, 0.0, width, height)
                 }
             }
 
@@ -404,7 +404,7 @@ impl ApplicationHandler<UserEvent> for App {
                 is_synthetic,
             } => {
                 if let Some(item) = &mut self.item {
-                    item.dispatch_keyboard_input(device_id, event, is_synthetic);
+                    item.data().dispatch_keyboard_input(device_id, event, is_synthetic);
                 }
             }
             WindowEvent::MouseInput {
@@ -426,11 +426,11 @@ impl ApplicationHandler<UserEvent> for App {
                     match state {
                         ElementState::Pressed => {
                             self.pressed_mouse_buttons.push(button);
-                            item.dispatch_mouse_input(event);
+                            item.data().dispatch_mouse_input(event);
                         }
                         ElementState::Released => {
                             self.pressed_mouse_buttons.retain(|&b| b != button);
-                            item.dispatch_mouse_input(event);
+                            item.data().dispatch_mouse_input(event);
                         }
                     }
                 }
@@ -445,7 +445,7 @@ impl ApplicationHandler<UserEvent> for App {
                 self.cursor_y = y as f32 / scale_factor;
                 let pressed_mouse_buttons = self.pressed_mouse_buttons.clone();
                 if let Some(item) = &mut self.item {
-                    item.dispatch_cursor_move(self.cursor_x, self.cursor_y);
+                    item.data().dispatch_cursor_move(self.cursor_x, self.cursor_y);
                     pressed_mouse_buttons.iter().for_each(|button| {
                         let event = MouseEvent {
                             device_id,
@@ -454,7 +454,7 @@ impl ApplicationHandler<UserEvent> for App {
                             button: *button,
                             pointer_state: PointerState::Moved,
                         };
-                        item.dispatch_mouse_input(event);
+                        item.data().dispatch_mouse_input(event);
                     });
                 }
             }
@@ -475,7 +475,7 @@ impl ApplicationHandler<UserEvent> for App {
                         pointer_state: phase.into(),
                         force,
                     };
-                    item.dispatch_touch_input(event);
+                    item.data().dispatch_touch_input(event);
                 }
             }
             WindowEvent::Ime(ime) => {
@@ -492,7 +492,7 @@ impl ApplicationHandler<UserEvent> for App {
                         Ime::Disabled => ImeAction::Disabled,
                     };
                     if let Some(item) = &mut self.item {
-                        item.find_item_mut(id, &mut |item: &mut Item| {
+                        item.data().find_item_mut(id, &mut |item: &mut ItemData| {
                             item.ime_input(ime_action.clone());
                         });
                     }
@@ -522,7 +522,7 @@ impl ApplicationHandler<UserEvent> for App {
                         }
 
                         if let Some(item) = &mut self.item {
-                            item.dispatch_draw(surface.deref_mut(), 0.0, 0.0);
+                            item.data().dispatch_draw(surface.deref_mut(), 0.0, 0.0);
                         }
 
                         let canvas = surface.canvas();
@@ -552,15 +552,15 @@ impl ApplicationHandler<UserEvent> for App {
                     .write(|starting_animations| {
                         while let Some(animation) = starting_animations.pop_front() {
                             if let Some(item) = &mut self.item {
-                                item.record_display_parameter();
+                                item.data().record_display_parameter();
                                 (animation.inner.lock().unwrap().transformation)();
-                                item.measure(
+                                item.data().measure(
                                     MeasureMode::Specified(size.width),
                                     MeasureMode::Specified(size.height),
                                 );
-                                item.dispatch_layout(0.0, 0.0, size.width, size.height);
+                                item.data().dispatch_layout(0.0, 0.0, size.width, size.height);
                                 animation.inner.lock().unwrap().start_time = Instant::now();
-                                item.dispatch_animation(animation.clone());
+                                item.data().dispatch_animation(animation.clone());
                             }
                             self.app_context
                                 .running_animations
@@ -626,7 +626,7 @@ impl ApplicationHandler<UserEvent> for App {
                             most_recent_timer = timer.start_time + timer.duration;
                         }
                         if now - timer.start_time >= timer.duration {
-                            item.dispatch_timer(timer.id);
+                            item.data().dispatch_timer(timer.id);
                         }
                     }
                 }

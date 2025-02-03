@@ -5,9 +5,13 @@ use crate::shared::{
 };
 use crate::text::StyledText;
 use crate::ui::app::AppContext;
-use crate::ui::item::{ClickSource, HorizontalAlignment, ImeAction, ItemEvent, LayoutDirection, LogicalX, MeasureMode, Orientation, PointerState, VerticalAlignment};
+use crate::ui::item::{
+    ClickSource, HorizontalAlignment, ImeAction, LayoutDirection, LogicalX, MeasureMode,
+    Orientation, PointerState, VerticalAlignment,
+};
 use crate::ui::Item;
 use crate::{impl_property_layout, impl_property_redraw};
+use proc_macro::item;
 use skia_safe::textlayout::{TextAlign, TextStyle};
 use skia_safe::{Color, Drawable, Paint, PictureRecorder, Rect, Vector};
 use std::ops::{DerefMut, Not, Range};
@@ -17,7 +21,6 @@ use std::time::Duration;
 use winit::dpi::Size;
 use winit::event::{ElementState, MouseButton};
 use winit::keyboard::{Key, NamedKey};
-use proc_macro::item;
 
 pub mod text_style {
     pub static FONT_SIZE: &str = "font_size";
@@ -86,8 +89,10 @@ impl Text {
             selection: (0..0).into(),
         };
 
-        let item_event = ItemEvent::new()
-            .measure({
+        let item = Item::new(app_context.clone(), Children::new());
+
+        item.data()
+            .set_measure({
                 let property = property.clone();
                 move |item, width_mode, height_mode| {
                     let property = property.value();
@@ -162,7 +167,7 @@ impl Text {
                     measure_parameter.height = height;
                 }
             })
-            .layout({
+            .set_layout({
                 let mut context = context.clone();
                 let property = property.clone();
                 move |item, width, _height| {
@@ -186,7 +191,7 @@ impl Text {
                             text.create_text_layout(
                                 text_style.clone(),
                                 max_width,
-                                TextAlign::Justify
+                                TextAlign::Justify,
                             );
                         } else {
                             text.reset_text_layout_width(max_width);
@@ -210,7 +215,9 @@ impl Text {
                         let paragraph_y = match align_content.to_vertical_alignment() {
                             VerticalAlignment::Top => padding_top,
                             VerticalAlignment::Center => (height - text_layout_height) / 2.0,
-                            VerticalAlignment::Bottom => height - text_layout_height - padding_bottom,
+                            VerticalAlignment::Bottom => {
+                                height - text_layout_height - padding_bottom
+                            }
                         };
 
                         let mut recorder = PictureRecorder::new();
@@ -236,7 +243,7 @@ impl Text {
                     });
                 }
             })
-            .ime_input({
+            .set_ime_input({
                 let context = context.clone();
                 let property = property.clone();
                 move |item, ime_action| {
@@ -319,7 +326,7 @@ impl Text {
                     item.get_app_context().request_layout();
                 }
             })
-            .draw({
+            .set_draw({
                 let property = property.clone();
                 let context = context.clone();
                 move |item, canvas| {
@@ -497,7 +504,7 @@ impl Text {
                     }
                 }
             })
-            .keyboard_input({
+            .set_keyboard_input({
                 let context = context.clone();
                 let property = property.clone();
                 move |item, device_id, event, is_synthetic| {
@@ -565,7 +572,7 @@ impl Text {
                     return false;
                 }
             })
-            .mouse_input({
+            .set_mouse_input({
                 let context = context.clone();
                 let property = property.clone();
                 move |item, event| {
@@ -608,14 +615,14 @@ impl Text {
                     }
                 }
             })
-            .on_click(|item, click_source| {
+            .set_click_event(|item, click_source| {
                 if click_source == ClickSource::Mouse(MouseButton::Left)
                     || click_source == ClickSource::Touch
                 {
                     item.get_focused().set(true);
                 }
             })
-            .on_focus({
+            .set_focus_event({
                 let app_context = app_context.clone();
                 move |item, focused| {
                     let display_parameter = item.get_display_parameter();
@@ -636,7 +643,7 @@ impl Text {
                         .create_timer(item.get_id(), Duration::from_millis(500));
                 }
             })
-            .timer({
+            .set_timer({
                 let context = context.clone();
                 move |item, id| {
                     if id == item.get_id() {
@@ -654,7 +661,7 @@ impl Text {
             });
 
         Self {
-            item: Item::new(app_context, Children::new(), item_event),
+            item,
             property,
             text_context: context,
         }
@@ -662,12 +669,12 @@ impl Text {
 
     pub fn text(self, text: impl Into<SharedText>) -> Self {
         {
-            let id = self.item.get_id();
+            let id = self.item.data().get_id();
             let mut property = self.property.value();
             property.text.remove_observer(id);
 
             let mut text_context = self.text_context.clone();
-            let app_context = self.item.get_app_context();
+            let app_context = self.item.data().get_app_context();
             property.text = text.into();
             property.text.add_specific_observer(
                 id,

@@ -1,10 +1,10 @@
 use crate::impl_property_layout;
 use crate::shared::{Children, Gettable, Observable, Shared, SharedAlignment, SharedBool};
 use crate::ui::app::AppContext;
-use crate::ui::item::{Alignment, HorizontalAlignment, ItemEvent, LogicalX, MeasureMode, Orientation, VerticalAlignment};
+use crate::ui::item::{Alignment, HorizontalAlignment, LogicalX, MeasureMode, Orientation, VerticalAlignment};
 use crate::ui::Item;
 use proc_macro::item;
-use crate::ui::layout::AlignSelf;
+use crate::ui::layout::{AlignSelf, GetAlignSelf};
 
 #[derive(Clone)]
 struct StackProperty{
@@ -22,15 +22,17 @@ impl Stack {
         let property = Shared::new(StackProperty {
             constrain_children: true.into(),
         });
-        let item_event = ItemEvent::default()
-            .measure(|item, width_mode, height_mode| {
+
+        let mut item = Item::new(app_context, children);
+        item.data()
+            .set_measure(|item, width_mode, height_mode| {
                 item.measure_children(width_mode, height_mode);
                 let mut child_max_width = 0.0_f32;
                 let mut child_max_height = 0.0_f32;
                 for child in item.get_children().items().iter(){
-                    let child_measure_parameter = child.clone_measure_parameter();
-                    let child_margin_horizontal = child.get_margin(Orientation::Horizontal);
-                    let child_margin_vertical = child.get_margin(Orientation::Vertical);
+                    let child_measure_parameter = child.data().clone_measure_parameter();
+                    let child_margin_horizontal = child.data().get_margin(Orientation::Horizontal);
+                    let child_margin_vertical = child.data().get_margin(Orientation::Vertical);
                     child_max_width = child_max_width.max(child_measure_parameter.width + child_margin_horizontal);
                     child_max_height = child_max_height.max(child_measure_parameter.height + child_margin_vertical);
                 }
@@ -54,7 +56,7 @@ impl Stack {
                 measure_parameter.width = width;
                 measure_parameter.height = height;
             })
-            .layout({
+            .set_layout({
                 let property = property.clone();
                 move|item, width, height| {
                     let x = LogicalX::new(item.get_layout_direction().get(), 0.0, width);
@@ -69,14 +71,14 @@ impl Stack {
                     let align_content = item.get_align_content().get();
 
                     item.for_each_child_mut(|child| {
-                        let child_margin_start = child.get_margin_start().get();
-                        let child_margin_end = child.get_margin_end().get();
-                        let child_margin_top = child.get_margin_top().get();
-                        let child_margin_bottom = child.get_margin_bottom().get();
-                        let child_width = child.get_measure_parameter().width;
-                        let child_height = child.get_measure_parameter().height;
+                        let child_margin_start = child.data().get_margin_start().get();
+                        let child_margin_end = child.data().get_margin_end().get();
+                        let child_margin_top = child.data().get_margin_top().get();
+                        let child_margin_bottom = child.data().get_margin_bottom().get();
+                        let child_width = child.data().get_measure_parameter().width;
+                        let child_height = child.data().get_measure_parameter().height;
 
-                        let alignment = child.get_align_self().map_or(align_content, |align_self| align_self.get());
+                        let alignment = child.data().get_align_self().map_or(align_content, |align_self| align_self.get());
 
                         let child_x = match alignment.to_horizontal_alignment() {
                             HorizontalAlignment::Start => {
@@ -102,11 +104,10 @@ impl Stack {
                             }
                         };
 
-                        child.dispatch_layout(child_x.physical_value(child_width), child_y, child_width, child_height);
+                        child.data().dispatch_layout(child_x.physical_value(child_width), child_y, child_width, child_height);
                     })
                 }
             });
-        let item = Item::new(app_context, children, item_event);
         Self {
             item,
             property,

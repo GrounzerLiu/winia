@@ -2624,6 +2624,7 @@ dependencies = [
  "env_logger",
  "lazy_static",
  "material_color_utilities",
+ "parking_lot",
  "proc-macro",
  "raw-window-handle 0.6.2",
  "rayon",

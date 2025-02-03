@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use crate::impl_property_redraw;
 use crate::shared::{Children, Gettable, Observable, Settable, Shared, SharedAnimationTrait, SharedBool, SharedColor, SharedF32};
 use crate::ui::app::AppContext;
-use crate::ui::item::{DisplayParameter, ItemEvent, Pointer, PointerState};
+use crate::ui::item::{DisplayParameter, Pointer, PointerState};
 use crate::ui::theme::colors;
 use crate::ui::theme::colors::parse_color;
 use crate::ui::Item;
@@ -72,8 +72,10 @@ impl Ripple {
             },
         });
         let layers: Shared<Vec<Layer>> = Vec::new().into();
-        let item_event = ItemEvent::new()
-            .draw({
+
+        let mut item = Item::new(app_context.clone(), Children::new()).clip(true);
+        item.data()
+            .set_draw({
                 let property = property.clone();
                 let layers = layers.clone();
                 move |item, canvas| {
@@ -110,7 +112,7 @@ impl Ripple {
                     }
                 }
             })
-            .pointer_input({
+            .set_pointer_input({
                 let app_context = app_context.clone();
                 let mut down_pointers: HashSet<Pointer> = HashSet::new();
                 move |item, event| {
@@ -196,7 +198,7 @@ impl Ripple {
                     }
                 }
             })
-            .on_hover({
+            .set_hover_event({
                 let property = property.clone();
                 move |item, is_hovered| {
                     let mut property = property.value();
@@ -215,7 +217,7 @@ impl Ripple {
             });
 
         Self {
-            item: Item::new(app_context, Children::new(), item_event).clip(true),
+            item,
             property,
         }
     }
@@ -237,7 +239,7 @@ impl Ripple {
                 if let Some(color) = parse_color(color.as_str()) {
                     ripple = ripple.color(color);
                 } else {
-                    let theme = ripple.item.get_app_context().theme();
+                    let theme = ripple.item.data().get_app_context().theme();
                     if let Some(color) = theme.value().get_color(color) {
                         ripple = ripple.color(color);
                     };
@@ -255,11 +257,11 @@ impl Ripple {
         {
             let mut property = self.property.value();
             property.borderless = borderless.into();
-            let app_context = self.item.get_app_context();
-            let mut clip_shape = self.item.get_clip_shape();
+            let app_context = self.item.data().get_app_context();
+            let mut clip_shape = self.item.data().get_clip_shape();
             property
                 .borderless
-                .add_specific_observer(self.item.get_id(), move |borderless| {
+                .add_specific_observer(self.item.data().get_id(), move |borderless| {
                     if *borderless {
                         clip_shape.set_static(Box::new(|display_parameter: DisplayParameter| {
                             let x = display_parameter.x();

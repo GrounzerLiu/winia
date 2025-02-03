@@ -1,8 +1,9 @@
 use crate::ui::app::AppContext;
 use std::fmt::Display;
 use std::ops::{Deref, DerefMut};
-use std::sync::{Arc, Mutex, MutexGuard, Weak};
+use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
+use parking_lot::{Mutex, MutexGuard};
 use crate::core::generate_id;
 use crate::shared::SharedF32;
 use crate::ui::animation::interpolator::{Interpolator, Linear};
@@ -104,11 +105,11 @@ impl<T: 'static> Shared<T> {
     /// Modifications made through this function will not send notifications to observers.
     /// If you want to notify observers after modifying the value, use the [`write`](Shared::write) method.
     pub fn value(&self) -> MutexGuard<T> {
-        self.value.lock().unwrap()
+        self.value.lock()
     }
 
     pub fn read<R>(&self, mut operation: impl FnMut(&T) -> R) -> R {
-        let value = self.value.lock().unwrap();
+        let value = self.value.lock();
         operation(value.deref())
     }
 
@@ -116,7 +117,7 @@ impl<T: 'static> Shared<T> {
     /// If you don't want to notify observers after modifying the value, use the [`value`](Shared::value) method.
     pub fn write<R>(&self, mut operation: impl FnMut(&mut T) -> R) -> R {
         let r = {
-            let mut value = self.value.lock().unwrap();
+            let mut value = self.value.lock();
             operation(value.deref_mut())
         };
         self.notify();
@@ -129,8 +130,8 @@ impl<T: 'static> Shared<T> {
 
     pub fn set_static(&mut self, value: T) {
         self.clear_observed_objects();
-        *self.value.lock().unwrap() = value;
-        *self.value_generator.lock().unwrap() = None;
+        *self.value.lock() = value;
+        *self.value_generator.lock() = None;
         self.notify();
     }
 
@@ -150,40 +151,40 @@ impl<T: 'static> Shared<T> {
         self.clear_observed_objects();
         let value_generator = Box::new(value_generator);
         let value = (&value_generator)();
-        *self.value.lock().unwrap() = value;
-        *self.value_generator.lock().unwrap() = Some(value_generator);
+        *self.value.lock() = value;
+        *self.value_generator.lock() = Some(value_generator);
         self.notify();
     }
 
     fn can_generate(&self) -> bool {
-        self.value_generator.lock().unwrap().is_some()
+        self.value_generator.lock().is_some()
     }
 
     pub fn notify(&self) {
         if self.can_generate() {
-            let value_generator = self.value_generator.lock().unwrap();
-            let mut value = self.value.lock().unwrap();
+            let value_generator = self.value_generator.lock();
+            let mut value = self.value.lock();
             *value = (&value_generator.as_ref().unwrap())();
         }
 
-        for (_, observer) in self.simple_observers.lock().unwrap().iter_mut() {
+        for (_, observer) in self.simple_observers.lock().iter_mut() {
             observer();
         }
 
-        let mut value = self.value.lock().unwrap();
-        for (_, observer) in self.specific_observers.lock().unwrap().iter_mut() {
+        let mut value = self.value.lock();
+        for (_, observer) in self.specific_observers.lock().iter_mut() {
             observer(&mut *value);
         }
     }
 
     fn clear_observed_objects(&mut self) {
-        for (_, removal) in self.observed_objects.lock().unwrap().drain(..) {
+        for (_, removal) in self.observed_objects.lock().drain(..) {
             removal();
         }
     }
 
     pub fn add_specific_observer(&mut self, id: usize, observer: impl FnMut(&mut T) + 'static) {
-        self.specific_observers.lock().unwrap().push((id, Box::new(observer)));
+        self.specific_observers.lock().push((id, Box::new(observer)));
     }
 
     fn observe<O: Observable + Clone + 'static>(&mut self, observable: O) {
@@ -194,16 +195,16 @@ impl<T: 'static> Shared<T> {
                 property.notify();
             }
         })).unwrap();
-        self.observed_objects.lock().unwrap().push((Some(observable), removal));
+        self.observed_objects.lock().push((Some(observable), removal));
     }
 
     pub fn remove_observer(&mut self, id: usize) {
-        self.simple_observers.lock().unwrap().retain(|(i, _)| *i != id);
-        self.specific_observers.lock().unwrap().retain(|(i, _)| *i != id);
+        self.simple_observers.lock().retain(|(i, _)| *i != id);
+        self.specific_observers.lock().retain(|(i, _)| *i != id);
     }
 
     pub fn get_animation(&self) -> Option<SharedAnimation<T>> {
-        self.animation.lock().unwrap().as_ref().cloned()
+        self.animation.lock().as_ref().cloned()
     }
 
     pub fn weak(&self) -> WeakShared<T> {
@@ -235,11 +236,11 @@ impl<T> Clone for Shared<T> {
 
 impl<T> Observable for Shared<T> {
     fn add_observer(&mut self, id: usize, observer: Box<dyn FnMut()>) -> Removal {
-        self.simple_observers.lock().unwrap().push((id, observer));
+        self.simple_observers.lock().push((id, observer));
         let simple_observers = self.simple_observers.clone();
         Removal {
             removal: Box::new(move || {
-                simple_observers.lock().unwrap().retain(|(i, _)| *i != id);
+                simple_observers.lock().retain(|(i, _)| *i != id);
             })
         }
     }
@@ -292,7 +293,7 @@ impl<T: 'static> Settable<Box<dyn Fn() -> T>> for Shared<T> {
 
 impl<T: Clone> Gettable<T> for Shared<T> {
     fn get(&self) -> T {
-        self.value.lock().unwrap().clone()
+        self.value.lock().clone()
     }
 }
 
@@ -478,35 +479,35 @@ impl<T: 'static> SharedAnimation<T> {
     }
 
     pub fn duration(self, duration: Duration) -> Self {
-        self.inner.lock().unwrap().duration = duration;
+        self.inner.lock().duration = duration;
         self
     }
 
     pub fn interpolator(self, interpolator: impl Interpolator + 'static) -> Self {
-        self.inner.lock().unwrap().interpolator(interpolator);
+        self.inner.lock().interpolator(interpolator);
         self
     }
 
     pub fn on_start(self, on_start: impl FnMut() + 'static) -> Self {
-        self.inner.lock().unwrap().on_start(on_start);
+        self.inner.lock().on_start(on_start);
         self
     }
 
     pub fn on_finish(self, on_finish: impl FnMut() + 'static) -> Self {
-        self.inner.lock().unwrap().on_finish(on_finish);
+        self.inner.lock().on_finish(on_finish);
         self
     }
 
     pub fn start(self, app_context: AppContext) -> Self {
         {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock();
             app_context.starting_shared_animation.write(|starting_shared_animation| {
                 starting_shared_animation.push_back(Box::new(self.clone()));
             });
             let cloned = self.clone();
             // inner.shared.animation.lock().unwrap().replace(cloned);
             inner.shared.upgrade().map(move |mut shared| {
-                shared.animation.lock().unwrap().replace(cloned);
+                shared.animation.lock().replace(cloned);
             });
             app_context.request_redraw();
             if let Some(mut on_start) = inner.on_start.take() {
@@ -517,12 +518,12 @@ impl<T: 'static> SharedAnimation<T> {
     }
 
     pub fn cancel(&mut self) {
-        self.inner.lock().unwrap().on_finish.take();
+        self.inner.lock().on_finish.take();
         self.stop()
     }
 
     pub fn stop(&mut self) {
-        self.inner.lock().unwrap().stop();
+        self.inner.lock().stop();
     }
 
     // pub fn is_finished(&self) -> bool {
@@ -536,7 +537,7 @@ impl<T: 'static> SharedAnimation<T> {
     // }
 
     pub fn id(&self) -> usize {
-        self.inner.lock().unwrap().id
+        self.inner.lock().id
     }
 }
 
@@ -555,10 +556,10 @@ pub(crate) trait SharedAnimationTrait {
 
 impl<T: 'static> SharedAnimationTrait for SharedAnimation<T> {
     fn is_finished(&self) -> bool {
-        self.inner.lock().unwrap().is_finished()
+        self.inner.lock().is_finished()
     }
 
     fn update(&self) {
-        self.inner.lock().unwrap().update();
+        self.inner.lock().update();
     }
 }

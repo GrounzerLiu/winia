@@ -12,32 +12,17 @@ pub use column::*;
 
 use crate::shared::{Observable, SharedAlignment};
 use crate::ui::Item;
-use crate::ui::item::CustomProperty;
+use crate::ui::item::{CustomProperty, ItemData};
 
 pub trait AlignSelf {
     fn align_self(self, align_self: impl Into<SharedAlignment>) -> Self;
+}
+
+pub trait GetAlignSelf {
     fn get_align_self(&self) -> Option<SharedAlignment>;
 }
 
-impl AlignSelf for Item {
-    fn align_self(mut self, align_self: impl Into<SharedAlignment>) -> Self {
-        let id = self.get_id();
-        if let Some(CustomProperty::Any(align_self)) = self.get_custom_property_mut("align_self") {
-            if let Some(align_self) = align_self.downcast_mut::<SharedAlignment>() {
-                align_self.remove_observer(id);
-            }
-        }
-
-        let app_context = self.get_app_context();
-        let mut align_self = align_self.into();
-        align_self.add_observer(
-            id,
-            Box::new(move || {
-                app_context.request_layout();
-            }),
-        );
-        self.custom_property("align_self", CustomProperty::Any(Box::new(align_self)))
-    }
+impl GetAlignSelf for ItemData {
 
     fn get_align_self(&self) -> Option<SharedAlignment> {
         if let Some(CustomProperty::Any(align_self)) = self.get_custom_property("align_self") {
@@ -46,5 +31,27 @@ impl AlignSelf for Item {
             }
         }
         None
+    }
+}
+
+impl AlignSelf for Item {
+    fn align_self(self, align_self: impl Into<SharedAlignment>) -> Self {
+        let id = self.data().get_id();
+        if let Some(CustomProperty::Any(align_self)) = self.data().get_custom_property_mut("align_self") {
+            if let Some(align_self) = align_self.downcast_mut::<SharedAlignment>() {
+                align_self.remove_observer(id);
+            }
+        }
+
+        let app_context = self.data().get_app_context();
+        let mut align_self = align_self.into();
+        align_self.add_observer(
+            id,
+            Box::new(move || {
+                app_context.request_layout();
+            }),
+        );
+        self.data().custom_property("align_self", CustomProperty::Any(Box::new(align_self)));
+        self
     }
 }
