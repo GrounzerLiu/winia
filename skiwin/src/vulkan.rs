@@ -7,7 +7,8 @@ use softbuffer::SoftBufferError;
 use std::num::NonZeroU32;
 use std::ops::Deref;
 use std::ptr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 use vulkano::device::physical::PhysicalDevice;
 use vulkano::device::{Device, DeviceCreateInfo, Queue, QueueCreateInfo, QueueFlags};
 use vulkano::instance::{Instance, InstanceCreateFlags, InstanceCreateInfo, InstanceExtensions};
@@ -18,7 +19,7 @@ use winit::window::Window;
 pub struct VulkanSkiaWindow {
     skia_context: DirectContext,
     skia_surface: Arc<Mutex<Surface>>,
-    _vulkan_context: VulkanContext,
+    vulkan_context: VulkanContext,
     soft_buffer_surface: softbuffer::Surface<Arc<Window>, Arc<Window>>,
 }
 
@@ -61,7 +62,7 @@ impl VulkanSkiaWindow {
         Self {
             skia_context,
             skia_surface,
-            _vulkan_context: vulkan_context,
+            vulkan_context,
             soft_buffer_surface,
         }
     }

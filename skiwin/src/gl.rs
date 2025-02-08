@@ -1,9 +1,9 @@
 use std::num::NonZeroU32;
 use std::ops::Deref;
+use std::sync::Arc;
 use glutin::config::{ConfigSurfaceTypes, ConfigTemplate, ConfigTemplateBuilder, GlConfig};
 use skia_safe::gpu::DirectContext;
 use skia_safe::{ImageInfo, Surface};
-use std::sync::{Arc, Mutex};
 use winit::window::Window;
 use glutin::display::{GetGlDisplay, GlDisplay};
 
@@ -12,8 +12,9 @@ use glutin::api::cgl::{device::Device, display::Display};
 #[cfg(any(target_os = "android", target_os = "linux"))]
 use glutin::api::egl::{device::Device, display::Display};
 #[cfg(target_os = "windows")]
-use glutin::api::wgl::{device::Device, display::Display};
+use glutin::api::egl::{device::Device, display::Display};
 use glutin::context::{ContextApi, ContextAttributesBuilder, PossiblyCurrentGlContext};
+use parking_lot::Mutex;
 use softbuffer::SoftBufferError;
 use crate::{create_surface, impl_skia_window, SkiaWindow};
 
@@ -26,12 +27,6 @@ pub struct GlSkiaWindow {
 impl GlSkiaWindow {
     pub fn new(window: Window, device_selector: Option<Box<dyn Fn(&Device) -> bool>>) -> Self {
         let devices = Device::query_devices().expect("Failed to query devices").collect::<Vec<_>>();
-
-        // for (index, device) in devices.iter().enumerate() {
-        //     device.extensions().iter().for_each(|ext| {
-        //         println!("Device {}: Extension: {}", index, ext);
-        //     });
-        // }
 
         let device = if let Some(selector) = device_selector {
             devices.into_iter().find(|device| selector(device))

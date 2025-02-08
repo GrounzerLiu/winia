@@ -3,7 +3,8 @@ use skia_safe::{ISize, ImageInfo, Surface};
 use softbuffer::SoftBufferError;
 use std::num::NonZeroU32;
 use std::ops::Deref;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
@@ -60,7 +61,7 @@ impl SkiaWindow for SoftSkiaWindow {
         let mut soft_buffer = self.soft_buffer_surface.buffer_mut().unwrap();
         let u8_slice = bytemuck::cast_slice_mut::<u32, u8>(&mut soft_buffer);
         let image_info = ImageInfo::new_n32_premul((size.width as i32, size.height as i32), None);
-        self.skia_surface.lock().unwrap().read_pixels(
+        self.skia_surface.lock().read_pixels(
             &image_info,
             u8_slice,
             size.width as usize * 4,
