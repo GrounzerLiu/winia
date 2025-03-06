@@ -4,8 +4,9 @@ use crate::shared::{
     SharedF32, SharedInnerPosition, SharedItem, SharedSize, SharedUsize,
 };
 use crate::ui::app::{AppContext, UserEvent};
+use crate::ui::item::{DisplayParameter, InnerPosition, Size};
 use crate::ui::theme::Style;
-use crate::ui::{layout, Animation};
+use crate::ui::Animation;
 use parking_lot::{Mutex, MutexGuard};
 use skia_safe::image_filters::CropRect;
 use skia_safe::{
@@ -17,7 +18,6 @@ use std::ops::{DerefMut, Not};
 use std::sync::Arc;
 use std::time::Instant;
 use winit::event::{DeviceId, Force, KeyEvent, MouseButton, TouchPhase};
-use crate::ui::item::{DisplayParameter, InnerPosition, Size};
 
 
 pub fn layout<T>(mut property: Shared<T>, id: usize, app_context: &AppContext) -> Shared<T> {
@@ -256,7 +256,7 @@ pub enum PointerState {
     Started,
     Moved,
     Ended,
-    Canceled,
+    Cancelled,
 }
 
 impl From<TouchPhase> for PointerState {
@@ -265,7 +265,7 @@ impl From<TouchPhase> for PointerState {
             TouchPhase::Started => PointerState::Started,
             TouchPhase::Moved => PointerState::Moved,
             TouchPhase::Ended => PointerState::Ended,
-            TouchPhase::Cancelled => PointerState::Canceled,
+            TouchPhase::Cancelled => PointerState::Cancelled,
         }
     }
 }
@@ -350,6 +350,38 @@ pub enum ClickSource {
     LongTouch,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MouseScrollDelta {
+    /// Amount in lines or rows to scroll in the horizontal
+    /// and vertical directions.
+    ///
+    /// Positive values indicate that the content that is being scrolled should move
+    /// right and down (revealing more content left and up).
+    LineDelta(f32, f32),
+
+    /// Amount in pixels to scroll in the horizontal and
+    /// vertical direction.
+    ///
+    /// Scroll events are expressed as a `PixelDelta` if
+    /// supported by the device (eg. a touchpad) and
+    /// platform.
+    ///
+    /// Positive values indicate that the content being scrolled should
+    /// move right/down.
+    ///
+    /// For a 'natural scrolling' touch pad (that acts like a touch screen)
+    /// this means moving your fingers right and down should give positive values,
+    /// and move the content right and down (to reveal more things left and up).
+    LogicalDelta(f32, f32),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MouseWheel {
+    pub device_id: DeviceId,
+    pub delta: MouseScrollDelta,
+    pub state: PointerState
+}
+
 impl MeasureMode {
     pub fn value(self) -> f32 {
         match self {
@@ -358,8 +390,6 @@ impl MeasureMode {
         }
     }
 }
-
-
 
 pub enum CustomProperty {
     Usize(SharedUsize),
@@ -493,6 +523,7 @@ pub struct ItemData {
     dispatch_keyboard_input: Arc<Mutex<dyn FnMut(&mut ItemData, DeviceId, KeyEvent, bool) -> bool>>,
     dispatch_layout: Arc<Mutex<dyn FnMut(&mut ItemData, f32, f32, f32, f32)>>,
     dispatch_mouse_input: Arc<Mutex<dyn FnMut(&mut ItemData, MouseEvent)>>,
+    dispatch_mouse_wheel: Arc<Mutex<dyn FnMut(&mut ItemData, MouseWheel) -> bool>>,
     dispatch_timer: Arc<Mutex<dyn FnMut(&mut ItemData, usize) -> bool>>,
     dispatch_touch_input: Arc<Mutex<dyn FnMut(&mut ItemData, TouchEvent)>>,
     draw: Arc<Mutex<dyn FnMut(&mut ItemData, &Canvas)>>,
@@ -501,6 +532,7 @@ pub struct ItemData {
     layout: Arc<Mutex<dyn FnMut(&mut ItemData, f32, f32)>>,
     measure: Arc<Mutex<dyn FnMut(&mut ItemData, MeasureMode, MeasureMode)>>,
     mouse_input: Arc<Mutex<dyn FnMut(&mut ItemData, MouseEvent)>>,
+    mouse_wheel: Arc<Mutex<dyn FnMut(&mut ItemData, MouseWheel) -> bool>>,
     click_event: Arc<Mutex<dyn FnMut(&mut ItemData, ClickSource)>>,
     focus_event: Arc<Mutex<dyn FnMut(&mut ItemData, bool)>>,
     hover_event: Arc<Mutex<dyn FnMut(&mut ItemData, bool)>>,
@@ -513,7 +545,7 @@ impl ItemData {
     pub fn new(app_context: AppContext, children: Children) -> Self {
         let id = generate_id();
 
-        let mut item = Self {
+        let item = Self {
             active: layout(true.into(), id, &app_context),
             align_content: layout(Alignment::TopStart.into(), id, &app_context),
             animations: Default::default(),
@@ -536,7 +568,7 @@ impl ItemData {
                 &app_context,
             ),
             custom_properties: HashMap::new(),
-            display_parameter_out: layout(DisplayParameter::default().into(), id, &app_context),
+            display_parameter_out: DisplayParameter::default().into(),
             enable_background_blur: redraw(false.into(), id, &app_context),
             focused: redraw(false.into(), id, &app_context),
             foreground: redraw(SharedItem::none(), id, &app_context),
@@ -631,7 +663,28 @@ impl ItemData {
                         }
                     }
 
-                    item.get_children().items().iter_mut().for_each(|child| {
+                    let window_size = {
+                        let window_size = item.get_app_context().window_size().unwrap();
+                        (window_size.width, window_size.height)
+                    };
+                    // item.get_children().items().iter_visible_item(window_size).for_each(|child| {
+                    //     child.data().dispatch_cursor_move(x, y);
+                    // });
+                    rayon::iter::ParallelIterator::for_each(
+                        rayon::iter::ParallelIterator::filter(
+                            item.get_children().items().par_iter_mut(),
+                            |item|{
+                                let display_parameter = item.data().get_display_parameter();
+                                let x = display_parameter.x();
+                                let y = display_parameter.y();
+                                let width = display_parameter.width;
+                                let height = display_parameter.height;
+                                let x_overlap = x < window_size.0 && x + width > 0.0;
+                                let y_overlap = y < window_size.1 && y + height > 0.0;
+                                x_overlap && y_overlap
+                            }
+                        ), 
+                        |child| {
                         child.data().dispatch_cursor_move(x, y);
                     });
                 }
@@ -728,7 +781,7 @@ impl ItemData {
                     {
                         // Apply the transformation matrix to the canvas.
                         let canvas = surface.canvas();
-                        canvas.save();
+                        canvas.save_layer_alpha_f(None, display_parameter.opacity);
                         canvas.rotate(
                             rotation,
                             Some(Point::new(
@@ -781,7 +834,11 @@ impl ItemData {
                     }
 
                     // Draw the children of the item.
-                    item.get_children().items().iter_mut().for_each(|child| {
+                    let window_size = {
+                        let window_size = item.get_app_context().window_size().unwrap();
+                        (window_size.width, window_size.height)
+                    };
+                    item.get_children().items().iter_visible_item(window_size).for_each(|child| {
                         draw_item(child, surface, x, y);
                     });
 
@@ -863,7 +920,7 @@ impl ItemData {
                         let skew_center_y = center(item.get_skew_center_y().get(), height);
 
                         {
-                            let mut target_parameter = item.get_target_parameter();
+                            let target_parameter = item.get_target_parameter();
                             target_parameter.set_relative_position(relative_x, relative_y);
                             target_parameter.width = width;
                             target_parameter.height = height;
@@ -948,7 +1005,7 @@ impl ItemData {
                                         return;
                                     }
                                 }
-                                PointerState::Ended | PointerState::Canceled => {
+                                PointerState::Ended | PointerState::Cancelled => {
                                     // If the child item captures the mouse button
                                     if captured_mouse_button
                                         .contains(&(child.data().get_id(), event.button))
@@ -996,6 +1053,22 @@ impl ItemData {
                         on_pointer_input(event.into())
                     }
                 }
+            })),
+            dispatch_mouse_wheel: Arc::new(Mutex::new(|item: &mut ItemData, mouse_wheel: MouseWheel|{
+                let children = item.get_children();
+                let (cursor_x, cursor_y) = item.get_app_context().get_cursor_position();
+                for child in children.items().iter_mut().rev() {
+                    let display_parameter = child.data().get_display_parameter();
+                    if !display_parameter.is_inside(cursor_x, cursor_y) {
+                        continue;
+                    }
+                    let dispatch_mouse_wheel = child.data().get_dispatch_mouse_wheel();
+                    let r = dispatch_mouse_wheel.lock()(child.data().deref_mut(), mouse_wheel.clone());
+                    if r {
+                        return true;
+                    }
+                }
+                item.get_mouse_wheel().lock()(item, mouse_wheel)
             })),
             dispatch_timer: Arc::new(Mutex::new(|item: &mut ItemData, id: usize| {
                 let timer = item.get_timer();
@@ -1048,12 +1121,12 @@ impl ItemData {
                                         return;
                                     }
                                 }
-                                PointerState::Ended | PointerState::Canceled => {
+                                PointerState::Ended | PointerState::Cancelled => {
                                     if captured_touch_pointer.contains(&(child.data().get_id(), event.id))
                                     {
                                         let child_id = child.data().get_id();
                                         captured_touch_pointer
-                                            .retain(|&(item_id, touch_id)| item_id != child_id);
+                                            .retain(|&(item_id, _touch_id)| item_id != child_id);
                                         child.data().dispatch_touch_input(event);
                                         return;
                                     }
@@ -1073,6 +1146,7 @@ impl ItemData {
                             } else {
                                 ClickSource::LongTouch
                             };
+                            item.get_click_event().lock()(item, click_source);
                             if let Some(on_click) = item.get_on_click() {
                                 on_click(click_source);
                             }
@@ -1112,6 +1186,7 @@ impl ItemData {
                 measure_parameter.height = get_size(height_mode).clamp(min_height, max_height);
             })),
             mouse_input: Arc::new(Mutex::new(|_item: &mut ItemData, _event: MouseEvent| {})),
+            mouse_wheel: Arc::new(Mutex::new(|_item: &mut ItemData, _mouse_wheel: MouseWheel| false)),
             click_event: Arc::new(Mutex::new(|_item: &mut ItemData, _source: ClickSource| {})),
             focus_event: Arc::new(Mutex::new(|_item: &mut ItemData, _focused: bool| {})),
             hover_event: Arc::new(Mutex::new(|_item: &mut ItemData, _hover: bool| {})),
@@ -1458,6 +1533,15 @@ impl_get_set!(
     "item, event"
 );
 impl_get_set!(
+    dispatch_mouse_wheel,
+    set_dispatch_mouse_wheel,
+    impl FnMut(&mut ItemData, MouseWheel) -> bool + 'static,
+    "item, mouse_wheel",
+    get_dispatch_mouse_wheel,
+    dyn FnMut(&mut ItemData, MouseWheel) -> bool,
+    "item, mouse_wheel"
+);
+impl_get_set!(
     dispatch_timer,
     set_dispatch_timer,
     impl FnMut(&mut ItemData, usize) -> bool + 'static,
@@ -1532,6 +1616,15 @@ impl_get_set!(
     get_mouse_input,
     dyn FnMut(&mut ItemData, MouseEvent),
     "item, event"
+);
+impl_get_set!(
+    mouse_wheel,
+    set_mouse_wheel,
+    impl FnMut(&mut ItemData, MouseWheel) -> bool + 'static,
+    "item, mouse_wheel",
+    get_mouse_wheel,
+    dyn FnMut(&mut ItemData, MouseWheel) -> bool,
+    "item, mouse_wheel"
 );
 impl_get_set!(
     click_event,
@@ -1633,7 +1726,7 @@ impl ItemData {
         let self_item_id = self.id;
         self.focused.remove_observer(self_item_id);
 
-        let mut app_context = self.app_context.clone();
+        let app_context = self.app_context.clone();
 
         self.focused = focused.into();
         let self_item_id = self.id;
@@ -2131,6 +2224,12 @@ impl ItemData {
         f.lock()(self, event);
     }
 
+    pub fn dispatch_mouse_wheel(&mut self, event:MouseWheel) ->bool {
+        let f = self.get_dispatch_mouse_wheel();
+        let r =f.lock()(self, event);
+        r
+    }
+
     pub fn dispatch_cursor_move(&mut self, x: f32, y: f32) {
         let f = self.get_dispatch_cursor_move();
         f.lock()(self, x, y);
@@ -2203,7 +2302,7 @@ impl ItemData {
         f.lock()(self, width, height);
     }
 
-    fn layout_layer(mut layer: SharedItem, width: f32, height: f32) {
+    fn layout_layer(layer: SharedItem, width: f32, height: f32) {
         if let Some(item) = layer.value().as_mut() {
             item.data().measure(
                 MeasureMode::Specified(width),
@@ -2290,12 +2389,12 @@ impl Item {
         self.data.lock()
     }
 
-    pub fn name(mut self, name: impl Into<String>) -> Self {
+    pub fn name(self, name: impl Into<String>) -> Self {
         self.data().set_name(name);
         self
     }
 
-    pub fn on_click<F>(mut self, f: F) -> Self
+    pub fn on_click<F>(self, f: F) -> Self
     where
         F: FnMut(ClickSource) + 'static,
     {
@@ -2303,7 +2402,7 @@ impl Item {
         self
     }
 
-    pub fn on_cursor_move<F>(mut self, f: F) -> Self
+    pub fn on_cursor_move<F>(self, f: F) -> Self
     where
         F: FnMut(f32, f32) + 'static,
     {
@@ -2311,7 +2410,7 @@ impl Item {
         self
     }
 
-    pub fn on_focus<F>(mut self, f: F) -> Self
+    pub fn on_focus<F>(self, f: F) -> Self
     where
         F: FnMut(bool) + 'static,
     {
@@ -2319,7 +2418,7 @@ impl Item {
         self
     }
 
-    pub fn on_hover<F>(mut self, f: F) -> Self
+    pub fn on_hover<F>(self, f: F) -> Self
     where
         F: FnMut(bool) + 'static,
     {
@@ -2327,7 +2426,7 @@ impl Item {
         self
     }
 
-    pub fn on_mouse_input<F>(mut self, f: F) -> Self
+    pub fn on_mouse_input<F>(self, f: F) -> Self
     where
         F: FnMut(MouseEvent) + 'static,
     {
@@ -2335,7 +2434,7 @@ impl Item {
         self
     }
 
-    pub fn on_pointer_input<F>(mut self, f: F) -> Self
+    pub fn on_pointer_input<F>(self, f: F) -> Self
     where
         F: FnMut(PointerEvent) + 'static,
     {
@@ -2343,7 +2442,7 @@ impl Item {
         self
     }
 
-    pub fn on_touch_input<F>(mut self, f: F) -> Self
+    pub fn on_touch_input<F>(self, f: F) -> Self
     where
         F: FnMut(TouchEvent) + 'static,
     {
@@ -2351,3 +2450,5 @@ impl Item {
         self
     }
 }
+
+unsafe impl Send for Item {}

@@ -1,13 +1,12 @@
 use crate::text::{Style, StyledText};
 use bimap::BiBTreeMap;
 use skia_safe::textlayout::{
-    Affinity, FontCollection, Paragraph, ParagraphBuilder, ParagraphStyle, RectHeightStyle,
-    RectWidthStyle, TextAlign, TextBox, TextDecoration, TextDirection, TextRange, TextStyle,
+    Affinity, FontCollection, Paragraph, ParagraphBuilder, RectHeightStyle,
+    RectWidthStyle, TextBox, TextDecoration, TextDirection, TextRange, TextStyle,
 };
-use skia_safe::{Canvas, Color, FontMgr, FontStyle, Paint, Point};
-use std::collections::{BTreeMap, HashSet};
+use skia_safe::{Canvas, FontMgr, FontStyle, Paint, Point};
+use std::collections::HashSet;
 use std::ops::Range;
-use unicode_segmentation::UnicodeSegmentation;
 
 thread_local! {
     static FONT_COLLECTION: FontCollection = {

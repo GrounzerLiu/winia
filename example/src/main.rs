@@ -1,3 +1,5 @@
+use std::ops::Add;
+use std::thread;
 use std::time::Duration;
 use winia::shared::{Children, Gettable, Settable, Shared, SharedBool, SharedF32, SharedSize, SharedText};
 use winia::skia_safe::Color;
@@ -6,7 +8,7 @@ use winia::ui::animation::{AnimationExt, Target};
 use winia::ui::app::{run_app, AppContext, AppProperty};
 use winia::ui::component::{RectangleExt, RippleExt, TextExt};
 use winia::ui::item::{Alignment, Size};
-use winia::ui::layout::{AlignContent, AlignItems, AlignSelf, ColumnExt, FlexDirection, FlexExt, FlexWrap, JustifyContent, StackExt};
+use winia::ui::layout::{AlignContent, AlignItems, AlignSelf, ColumnExt, FlexDirection, FlexExt, FlexWrap, JustifyContent, ScrollAreaExt, StackExt};
 use winia::ui::{App, Item};
 use winia::{func, include_target, shared};
 
@@ -25,27 +27,90 @@ fn main() {
 }
 
 fn ripple_test(app: AppContext, property: AppProperty) -> Item {
-    app.stack(Children::new()+
-        app.rectangle(Color::TRANSPARENT)
+
+    // let mut f32 = SharedF32::new(100.0);
+    //
+    // thread::spawn(move || {
+    //     loop {
+    //         thread::sleep(Duration::from_secs(1));
+    //         f32.set(f32.get() + 10.0);
+    //     }
+    // });
+    //
+    let mut children = Children::new();
+    for i in 0..100 {
+        children = children.add(
+            app.rectangle(Color::TRANSPARENT)
+                .item()
+                .width(Size::Fixed(30.0))
+                .height(Size::Fixed(30.0))
+                .foreground(app.ripple().borderless(true).item())
+        )
+    }
+    
+    app.scrollarea(Children::new()+
+        app.flex(children)
+            .wrap(FlexWrap::Wrap)
+            .main_axis_gap(0.0)
+            .cross_axis_gap(0.0)
             .item()
-            .width(Size::Fixed(100.0))
-            .height(Size::Fixed(100.0))
-            .foreground(app.ripple().borderless(true).item())
-            .on_hover(|is_hovered|{
-                println!("Rectangle hovered: {}", is_hovered);
-            }) +
-        app.rectangle(Color::TRANSPARENT)
-            .item()
-            .width(Size::Fixed(36.0))
-            .height(Size::Fixed(36.0))
-            .align_self(Alignment::Center)
-            .foreground(app.ripple().borderless(true).item())
-            .on_hover(|is_hovered|{
-                println!("Rectangle hovered: {}", is_hovered);
-            }) +
-        app.text("text").color(Color::WHITE).item().align_self(Alignment::BottomEnd)
+            .width(Size::Fixed(800.0))
     ).item()
-        .width(Size::Expanded).height(Size::Expanded)
+    
+    // app.stack(Children::new() +
+    //     app.rectangle(Color::TRANSPARENT)
+    //         .item()
+    //         .width(Size::Fixed(100.0))
+    //         .height(Size::Fixed(100.0))
+    //         .foreground(app.ripple().borderless(true).item())
+    //         .on_hover(|is_hovered| {
+    //             println!("Rectangle hovered: {}", is_hovered);
+    //         }) +
+    //     app.rectangle(Color::TRANSPARENT)
+    //         .item()
+    //         .width(Size::Fixed(36.0))
+    //         .height(Size::Fixed(36.0))
+    //         .align_self(Alignment::Center)
+    //         .foreground(app.ripple().borderless(true).item())
+    //         .on_hover(|is_hovered| {
+    //             println!("Rectangle hovered: {}", is_hovered);
+    //         }) +
+    //     app.text("text").color(Color::WHITE).item().align_self(Alignment::BottomEnd) +
+    //     app.text("text").color(Color::WHITE).item().align_self(Alignment::BottomCenter)
+    // ).item()
+    //     .width(Size::Expanded).height(Size::Expanded)
+
+    // app.scrollarea(Children::new()+
+    //     app.stack(Children::new()+
+    //         app.rectangle(Color::BLUE)
+    //             .item()
+    //             .width(Size::Fixed(100.0))
+    //             .height(Size::Fixed(100.0))
+    //             .foreground(app.ripple().borderless(true).item())
+    //             .on_hover(|is_hovered|{
+    //                 println!("Rectangle hovered: {}", is_hovered);
+    //             }) +
+    //         app.rectangle(Color::TRANSPARENT)
+    //             .item()
+    //             .width(Size::Fixed(36.0))
+    //             .height(Size::Fixed(36.0))
+    //             .align_self(Alignment::Center)
+    //             .foreground(app.ripple().borderless(true).item())
+    //             .on_hover(|is_hovered|{
+    //                 println!("Rectangle hovered: {}", is_hovered);
+    //             }) +
+    //         app.text("text").color(Color::WHITE).item().align_self(Alignment::BottomEnd) +
+    //         app.rectangle(Color::RED)
+    //             .item()
+    //             .width(Size::Fixed(100.0))
+    //             .height(Size::Fixed(100.0))
+    //             .foreground(app.ripple().borderless(true).item())
+    //             .on_hover(|is_hovered|{
+    //                 println!("Rectangle hovered: {}", is_hovered);
+    //             }).align_self(Alignment::BottomCenter)
+    //     ).item()
+    //         .width(Size::Fixed(800.0)).height(Size::Fixed(1000.0))
+    // ).item()
 }
 
 fn flex_test_ui(app: AppContext, property: AppProperty) -> Item {

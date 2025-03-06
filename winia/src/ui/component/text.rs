@@ -14,9 +14,8 @@ use crate::{impl_property_layout, impl_property_redraw};
 use proc_macro::item;
 use skia_safe::textlayout::{TextAlign, TextStyle};
 use skia_safe::{Color, Drawable, Paint, PictureRecorder, Rect, Vector};
-use std::ops::{DerefMut, Not, Range};
+use std::ops::{Not, Range};
 use std::string::ToString;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use winit::dpi::Size;
 use winit::event::{ElementState, MouseButton};
@@ -74,8 +73,8 @@ impl Text {
     pub fn new(app_context: AppContext, text: impl Into<SharedText>) -> Self {
         let property = Shared::new(TextProperty {
             text: text.into(),
-            editable: false.into(),
-            selectable: false.into(),
+            editable: true.into(),
+            selectable: true.into(),
             color: Color::BLACK.into(),
             font_size: 24.0.into(),
         });
@@ -186,61 +185,55 @@ impl Text {
                     let width = display_parameter.width;
                     let height = display_parameter.height;
 
-                    property.text.write(|text| {
-                        if !text.has_text_layout() {
-                            text.create_text_layout(
-                                text_style.clone(),
-                                max_width,
-                                TextAlign::Justify,
-                            );
-                        } else {
-                            text.reset_text_layout_width(max_width);
-                        }
+                    let mut text = property.text.value();
 
-                        let text_layout = text.get_text_layout().unwrap();
+                    if !text.has_text_layout() {
+                        text.create_text_layout(text_style.clone(), max_width, TextAlign::Justify);
+                    } else {
+                        text.reset_text_layout_width(max_width);
+                    }
 
-                        let text_layout_width = text_layout.width();
-                        let text_layout_height = text_layout.height();
+                    let text_layout = text.get_text_layout().unwrap();
 
-                        let paragraph_x = LogicalX::new(
-                            layout_direction,
-                            match align_content.to_horizontal_alignment() {
-                                HorizontalAlignment::Start => padding_start,
-                                HorizontalAlignment::Center => (width - text_layout_width) / 2.0,
-                                HorizontalAlignment::End => width - text_layout_width - padding_end,
-                            },
-                            width,
-                        );
+                    let text_layout_width = text_layout.width();
+                    let text_layout_height = text_layout.height();
 
-                        let paragraph_y = match align_content.to_vertical_alignment() {
-                            VerticalAlignment::Top => padding_top,
-                            VerticalAlignment::Center => (height - text_layout_height) / 2.0,
-                            VerticalAlignment::Bottom => {
-                                height - text_layout_height - padding_bottom
-                            }
-                        };
+                    let paragraph_x = LogicalX::new(
+                        layout_direction,
+                        match align_content.to_horizontal_alignment() {
+                            HorizontalAlignment::Start => padding_start,
+                            HorizontalAlignment::Center => (width - text_layout_width) / 2.0,
+                            HorizontalAlignment::End => width - text_layout_width - padding_end,
+                        },
+                        width,
+                    );
 
-                        let mut recorder = PictureRecorder::new();
-                        let canvas = recorder.begin_recording(Rect::from_wh(width, height), None);
-                        text_layout.draw(canvas, paragraph_x.logical_value(), paragraph_y);
-                        let drawable = recorder.finish_recording_as_drawable().unwrap();
-                        let mut draw_caches = context.draw_caches.value();
-                        draw_caches.bottom.1 = Some(drawable);
-                        let top_alpha = *display_parameter
+                    let paragraph_y = match align_content.to_vertical_alignment() {
+                        VerticalAlignment::Top => padding_top,
+                        VerticalAlignment::Center => (height - text_layout_height) / 2.0,
+                        VerticalAlignment::Bottom => height - text_layout_height - padding_bottom,
+                    };
+
+                    let mut recorder = PictureRecorder::new();
+                    let canvas = recorder.begin_recording(Rect::from_wh(width, height), None);
+                    text_layout.draw(canvas, paragraph_x.logical_value(), paragraph_y);
+                    let drawable = recorder.finish_recording_as_drawable().unwrap();
+                    let mut draw_caches = context.draw_caches.value();
+                    draw_caches.bottom.1 = Some(drawable);
+                    let top_alpha = *display_parameter
+                        .float_params
+                        .get(&draw_caches.top.0)
+                        .unwrap_or(&0.0);
+                    if context.is_text_changed.get() && (top_alpha == 0.0 || top_alpha == 1.0) {
+                        let target_parameter = item.get_target_parameter();
+                        target_parameter
                             .float_params
-                            .get(&draw_caches.top.0)
-                            .unwrap_or(&0.0);
-                        if context.is_text_changed.get() && (top_alpha == 0.0 || top_alpha == 1.0) {
-                            let mut target_parameter = item.get_target_parameter();
-                            target_parameter
-                                .float_params
-                                .insert(draw_caches.bottom.0.clone(), 1.0);
-                            target_parameter
-                                .float_params
-                                .insert(draw_caches.top.0.clone(), 0.0);
-                            context.is_text_changed.set(false);
-                        }
-                    });
+                            .insert(draw_caches.bottom.0.clone(), 1.0);
+                        target_parameter
+                            .float_params
+                            .insert(draw_caches.top.0.clone(), 0.0);
+                        context.is_text_changed.set(false);
+                    }
                 }
             })
             .set_ime_input({
@@ -250,22 +243,22 @@ impl Text {
                     let mut property = property.value();
                     let mut selection = context.selection.value();
                     let mut composing = context.composing.value();
-                    let mut text = &mut property.text;
+                    let text = &mut property.text;
                     match ime_action {
                         ImeAction::Enabled => {}
                         ImeAction::Enter => {
                             if selection.start != selection.end {
-                                text.write(|text| text.remove(selection.clone()));
+                                text.value().remove(selection.clone());
                                 selection.end = selection.start;
                             }
-                            text.write(|text| text.insert(selection.start, "\n"));
+                            text.value().insert(selection.start, "\n");
                             let new_index = selection.start + 1;
                             selection.start = new_index;
                             selection.end = new_index;
                         }
                         ImeAction::Delete => {
                             if selection.start != selection.end {
-                                text.write(|text| text.remove(selection.clone()));
+                                text.value().remove(selection.clone());
                                 selection.end = selection.start;
                                 return;
                             }
@@ -274,14 +267,14 @@ impl Text {
                                 return;
                             }
 
-                            text.write(move |text| {
-                                let glyph_index = text.byte_index_to_glyph_index(selection.start);
-                                let prev_glyph_index =
-                                    text.glyph_index_to_byte_index(glyph_index - 1);
-                                text.remove(prev_glyph_index..selection.start);
-                                selection.start = prev_glyph_index;
-                                selection.end = prev_glyph_index;
-                            });
+                            let mut text = property.text.value();
+
+                            let glyph_index = text.byte_index_to_glyph_index(selection.start);
+                            let prev_glyph_index =
+                                text.glyph_index_to_byte_index(glyph_index - 1);
+                            text.remove(prev_glyph_index..selection.start);
+                            selection.start = prev_glyph_index;
+                            selection.end = prev_glyph_index;
                         }
                         ImeAction::PreEdit(pr_text, range) => {
                             // if selection.start != selection.end {
@@ -291,14 +284,14 @@ impl Text {
 
                             if let Some((composing_range, old_selection_range)) = composing.as_ref()
                             {
-                                text.write(|text| text.remove(composing_range.clone()));
+                                text.value().remove(composing_range.clone());
                                 selection.start = old_selection_range.start;
                                 selection.end = old_selection_range.end;
                                 *composing = None;
                             }
 
                             if let Some((start, end)) = range {
-                                text.write(|text| text.insert(selection.start, &pr_text));
+                                text.value().insert(selection.start, &pr_text);
                                 *composing = Some((
                                     selection.start..(selection.start + pr_text.len()),
                                     selection.clone(),
@@ -332,6 +325,7 @@ impl Text {
                 move |item, canvas| {
                     let property = property.value();
                     let text = property.text.value();
+
                     if !text.has_text_layout() {
                         return;
                     }
@@ -460,7 +454,7 @@ impl Text {
                     }
 
                     if top_alpha == 0.0 {
-                        let mut target_parameter = item.get_target_parameter();
+                        let target_parameter = item.get_target_parameter();
                         target_parameter
                             .float_params
                             .insert(draw_caches.bottom.0.clone(), 1.0);
@@ -468,6 +462,7 @@ impl Text {
                             .float_params
                             .insert(draw_caches.top.0.clone(), 0.0);
                         draw_caches.swap();
+                        println!("swap");
                     }
 
                     if property.editable.get() && selection.start == selection.end {
@@ -558,6 +553,9 @@ impl Text {
                                     item.ime_input(ImeAction::Commit(" ".to_string()));
                                     return true;
                                 }
+                                NamedKey::Escape => {
+                                    item.focus(false);
+                                }
                                 _ => {}
                             },
                             Key::Character(str) => {
@@ -611,7 +609,7 @@ impl Text {
                             *context.show_cursor.value() = true;
                         }
                         PointerState::Ended => {}
-                        PointerState::Canceled => {}
+                        PointerState::Cancelled => {}
                     }
                 }
             })
@@ -647,9 +645,10 @@ impl Text {
                 let context = context.clone();
                 move |item, id| {
                     if id == item.get_id() {
-                        context
+                        let mut show_cursor = context
                             .show_cursor
-                            .write(|show_cursor| *show_cursor = show_cursor.not());
+                            .value();
+                        *show_cursor = show_cursor.not();
                         item.get_app_context().request_redraw();
                         if item.get_focused().get() {
                             item.get_app_context()
@@ -678,7 +677,7 @@ impl Text {
             property.text = text.into();
             property.text.add_specific_observer(
                 id,
-                Box::new(move |text: &mut StyledText| {
+                Box::new(move |_text: &mut StyledText| {
                     text_context.is_text_changed.set(true);
                     app_context.request_layout();
                 }),

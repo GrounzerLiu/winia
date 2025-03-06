@@ -1,9 +1,8 @@
-use std::collections::HashMap;
-use skia_safe::Color;
-use material_color_utilities::dynamic_color::material_dynamic_colors;
-use material_color_utilities::hct::Hct;
 use crate::ui::component::text_style;
 use crate::ui::theme::{colors, styles, Style, WINDOW_BACKGROUND_COLOR};
+use material_color_utilities::dynamic_color::material_dynamic_colors;
+use material_color_utilities::hct::Hct;
+use skia_safe::Color;
 
 fn argb_to_u32(a: u8, r: u8, g: u8, b: u8) -> u32 {
     (a as u32) << 24 | (r as u32) << 16 | (g as u32) << 8 | (b as u32)

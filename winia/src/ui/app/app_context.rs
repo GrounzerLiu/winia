@@ -1,5 +1,5 @@
 use crate::dpi::LogicalSize;
-use crate::shared::{Shared, SharedAnimation, SharedAnimationTrait, SharedBool, WeakShared};
+use crate::shared::{Shared, SharedAnimationTrait, SharedBool, WeakShared};
 use crate::ui::app::UserEvent;
 use crate::ui::theme::{material_style, Style};
 use crate::ui::Animation;
@@ -30,6 +30,7 @@ pub struct AppContext {
     pub(crate) focused_property: Shared<Option<(SharedBool, usize)>>,
     pub(crate) focus_changed_items: Shared<BTreeSet<usize>>,
     pub(crate) timers: Shared<Vec<Timer>>,
+    pub(crate) cursor_position: Shared<(f32, f32)>,
     pub(crate) title: Shared<String>,
     pub(crate) min_width: Shared<f32>,
     pub(crate) min_height: Shared<f32>,
@@ -57,6 +58,7 @@ impl AppContext {
             focused_property: None.into(),
             focus_changed_items: BTreeSet::new().into(),
             timers: Vec::new().into(),
+            cursor_position: (0.0, 0.0).into(),
             title: "Title".to_string().into(),
             min_width: 0.0.into(),
             min_height: 0.0.into(),
@@ -104,6 +106,10 @@ impl AppContext {
         id as usize
     }
 
+    pub fn get_cursor_position(&self) -> (f32, f32) {
+        self.cursor_position.value().clone()
+    }
+
     pub fn title(&self) -> Shared<String> {
         self.title.clone()
     }
@@ -142,7 +148,7 @@ impl AppContext {
         self.event_loop_proxy(|event_loop_proxy| {
             match event_loop_proxy.send_event(event) {
                 Ok(()) => {}
-                Err(e) => {
+                Err(_e) => {
                     // panic!("Failed to send user event: {}", e);
                 }
             }
@@ -170,7 +176,8 @@ impl AppContext {
     }
 
     pub fn request_layout(&self) {
-        self.request_layout.write(|request_layout| *request_layout = true);
+        self.request_layout
+            .write(|request_layout| *request_layout = true);
         self.window.value().as_ref().map(|window| {
             window.request_redraw();
         });
@@ -210,6 +217,7 @@ pub struct AppContextWeak {
     focused_property: WeakShared<Option<(SharedBool, usize)>>,
     focus_changed_items: WeakShared<BTreeSet<usize>>,
     timer: WeakShared<Vec<Timer>>,
+    cursor_position: WeakShared<(f32, f32)>,
     title: WeakShared<String>,
     min_width: WeakShared<f32>,
     min_height: WeakShared<f32>,
@@ -231,6 +239,7 @@ impl AppContext {
             focused_property: self.focused_property.weak(),
             focus_changed_items: self.focus_changed_items.weak(),
             timer: self.timers.weak(),
+            cursor_position: self.cursor_position.weak(),
             title: self.title.weak(),
             min_width: self.min_width.weak(),
             min_height: self.min_height.weak(),
@@ -254,6 +263,7 @@ impl AppContextWeak {
             focused_property: self.focused_property.upgrade()?,
             focus_changed_items: self.focus_changed_items.upgrade()?,
             timers: self.timer.upgrade()?,
+            cursor_position: self.cursor_position.upgrade()?,
             title: self.title.upgrade()?,
             min_width: self.min_width.upgrade()?,
             min_height: self.min_height.upgrade()?,

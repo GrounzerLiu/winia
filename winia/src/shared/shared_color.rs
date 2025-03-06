@@ -1,11 +1,7 @@
-use super::{Gettable, Settable, Shared, SharedAnimation};
-use crate::ui::animation::interpolator::Interpolator;
-use crate::ui::animation::interpolator::Linear;
-use crate::ui::app::AppContext;
+use super::{Gettable, Shared, SharedAnimation};
 use material_color_utilities::blend_cam16ucs;
 use material_color_utilities::utils::argb_from_rgb;
 use skia_safe::{Color, Color4f};
-use std::time::{Duration, Instant};
 
 pub type SharedColor = Shared<Color>;
 

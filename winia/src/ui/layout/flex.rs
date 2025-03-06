@@ -409,7 +409,7 @@ impl Flex {
             cross_axis_gap: 0.0.into(),
         });
 
-        let mut item = Item::new(app_context, children);
+        let item = Item::new(app_context, children);
         item.data()
             .set_measure({
                 let properties = properties.clone();

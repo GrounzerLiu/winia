@@ -103,7 +103,7 @@ impl Animation {
     }
 
     pub fn start(self) {
-        let mut app_context = self.inner.lock().unwrap().app_context.clone();
+        let app_context = self.inner.lock().unwrap().app_context.clone();
         app_context
             .starting_animations
             .write(|starting_animations| starting_animations.push_back(self.clone()));

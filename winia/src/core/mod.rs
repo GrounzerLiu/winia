@@ -15,6 +15,8 @@ pub fn generate_id()->usize{
     *id
 }
 
+/// Bind a string to an id
+/// Use [get_id_by_str] to get the id by the string
 pub fn bind_str_to_id(s: &str, id: usize) {
     if s.is_empty() {
         panic!("The string used to bind to an id cannot be empty");
@@ -26,6 +28,8 @@ pub fn bind_str_to_id(s: &str, id: usize) {
     str_to_id.insert(s.to_string(), id);
 }
 
+/// Get the id by the string
+/// Use [bind_str_to_id] to bind the string to an id
 pub fn get_id_by_str(s: &str) ->Option<usize>{
     let str_to_id = STR_TO_ID.lock().unwrap();
     str_to_id.get(s).map(|id| *id)

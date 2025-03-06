@@ -2,10 +2,9 @@ use crate::text::style::Style;
 use crate::text::{create_segments, font_collection, AddStyleSegment, StyleType, TextLayout};
 use bimap::BiBTreeMap;
 use skia_safe::textlayout::{
-    Paragraph, ParagraphBuilder, ParagraphStyle, TextAlign, TextRange, TextStyle,
+    Paragraph, ParagraphBuilder, ParagraphStyle, TextAlign, TextStyle,
 };
-use skia_safe::Color;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt::Display;
 use std::ops::{Add, Index, Range};
 use std::str::FromStr;

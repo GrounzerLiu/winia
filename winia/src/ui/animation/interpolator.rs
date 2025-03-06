@@ -1,37 +1,35 @@
-use std::cmp::Ordering;
-
-mod tests {
-    use bezier_rs::{Bezier, TValue};
-    use crate::ui::animation::interpolator::{EaseOutCirc, Interpolator};
-
-    #[test]
-    fn test_ease_out_circ() {
-        let ease_out_circ = EaseOutCirc::new();
-        for i in 0..=100 {
-            let t = i as f32 / 100.0;
-            let eased_t = ease_out_circ.interpolate(t);
-            println!("({}, {}),", t, eased_t);
-        }
-    }
-
-    #[test]
-    fn test_generate_interpolator() {
-        generate_interpolator(0.075, 0.82, 0.165, 1.0);
-        // generate_interpolator(0.47, 0.0, 0.745, 0.715);
-    }
-
-    fn generate_interpolator(x1: f32, y1: f32, x2: f32, y2: f32) {
-        let bezier = Bezier::from_cubic_coordinates(0.0, 0.0, x1 as f64, y1 as f64, x2 as f64, y2 as f64, 1.0, 1.0);
-        for i in 0..=100 {
-            let t = i as f64 / 100.0;
-            let point = bezier.evaluate(TValue::Parametric(t));
-            print!("({}, {}),", point.x as f32, point.y as f32);
-            if i % 4 == 3 {
-                println!("");
-            }
-        }
-    }
-}
+// mod tests {
+//     use crate::ui::animation::interpolator::{EaseOutCirc, Interpolator};
+//     use bezier_rs::{Bezier, TValue};
+//
+//     #[test]
+//     fn test_ease_out_circ() {
+//         let ease_out_circ = EaseOutCirc::new();
+//         for i in 0..=100 {
+//             let t = i as f32 / 100.0;
+//             let eased_t = ease_out_circ.interpolate(t);
+//             println!("({}, {}),", t, eased_t);
+//         }
+//     }
+//
+//     #[test]
+//     fn test_generate_interpolator() {
+//         generate_interpolator(0.075, 0.82, 0.165, 1.0);
+//         // generate_interpolator(0.47, 0.0, 0.745, 0.715);
+//     }
+//
+//     fn generate_interpolator(x1: f32, y1: f32, x2: f32, y2: f32) {
+//         let bezier = Bezier::from_cubic_coordinates(0.0, 0.0, x1 as f64, y1 as f64, x2 as f64, y2 as f64, 1.0, 1.0);
+//         for i in 0..=100 {
+//             let t = i as f64 / 100.0;
+//             let point = bezier.evaluate(TValue::Parametric(t));
+//             print!("({}, {}),", point.x as f32, point.y as f32);
+//             if i % 4 == 3 {
+//                 println!("");
+//             }
+//         }
+//     }
+// }
 
 pub trait Interpolator {
     fn interpolate(&self, x: f32) -> f32;

@@ -9,7 +9,7 @@ gl = ["skia-safe/gl", "skia-safe/gpu", "glutin"]
 #d3d = ["skia-safe/d3d", "windows"]
 
 [dependencies]
-bytemuck = "1.21.0"
+bytemuck = "1.22.0"
 winit = { workspace = true, features = ["rwh_06"] }
 skia-safe = {workspace = true}
 parking_lot = {workspace = true}

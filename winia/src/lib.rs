@@ -3,27 +3,8 @@ pub mod text;
 pub mod ui;
 pub mod core;
 
-use std::ops::{Deref, DerefMut};
 pub use winit::*;
 pub use skia_safe;
-
-mod test{
-    use skia_safe::Color;
-    use crate::ui::theme;
-    use crate::ui::theme::Style;
-
-    #[test]
-    fn test(){
-        let theme = Style::new(Color::RED, false);
-        let color = theme.get_color(theme::colors::SHADOW).unwrap();
-        let a = color.a();
-        let r = color.r();
-        let g = color.g();
-        let b = color.b();
-        println!("a: {}, r: {}, g: {}, b: {}", a, r, g, b);
-
-    }
-}
 
 pub trait OptionalInvoke<T> {
     fn if_some(self, invoke: impl FnOnce(T));
@@ -150,23 +131,3 @@ impl<T, E> ResultInvoke<T, E> for Result<T, E> {
         }
     }
 }
-
-pub trait LockUnwrap {
-    type Target;
-    fn lock_unwrap(&self, f: impl FnOnce(&Self::Target));
-    fn lock_unwrap_mut(&self, f: impl FnOnce(&mut Self::Target));
-}
-
-impl<T> LockUnwrap for std::sync::Mutex<T> {
-    type Target = T;
-    fn lock_unwrap(&self, f: impl FnOnce(&T)) {
-        let lock = self.lock().unwrap();
-        f(lock.deref())
-    }
-
-    fn lock_unwrap_mut(&self, f: impl FnOnce(&mut T)) {
-        let mut lock = self.lock().unwrap();
-        f(lock.deref_mut())
-    }
-}
-

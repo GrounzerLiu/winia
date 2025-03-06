@@ -1,9 +1,4 @@
-use std::ops::Add;
-use std::time::{Duration, Instant};
-use crate::shared::{Gettable, Settable, Shared, SharedAnimation};
-use crate::ui::animation::interpolator::Interpolator;
-use crate::ui::animation::interpolator::Linear;
-use crate::ui::app::AppContext;
+use crate::shared::{Gettable, Shared, SharedAnimation};
 
 macro_rules! p_op_v {
     ($op:ident, $op_fn:ident, $l:ty, $r:ty, $out:ty) => {

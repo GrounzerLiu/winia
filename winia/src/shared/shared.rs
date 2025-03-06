@@ -1,12 +1,11 @@
+use crate::core::generate_id;
+use crate::ui::animation::interpolator::{Interpolator, Linear};
 use crate::ui::app::AppContext;
+use parking_lot::{Mutex, MutexGuard};
 use std::fmt::Display;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
-use parking_lot::{Mutex, MutexGuard};
-use crate::core::generate_id;
-use crate::shared::SharedF32;
-use crate::ui::animation::interpolator::{Interpolator, Linear};
 
 /// A trait for getting the value of a shared.
 /// This function will return a specific value instead of `PropertyValue` which needs to be unwrapped.
@@ -191,7 +190,7 @@ impl<T: 'static> Shared<T> {
         let mut observable = Box::new(observable);
         let self_weak = self.weak();
         let removal = observable.add_observer(self.id(), Box::new(move || {
-            if let Some(mut property) = self_weak.upgrade() {
+            if let Some(property) = self_weak.upgrade() {
                 property.notify();
             }
         })).unwrap();
@@ -506,7 +505,7 @@ impl<T: 'static> SharedAnimation<T> {
             });
             let cloned = self.clone();
             // inner.shared.animation.lock().unwrap().replace(cloned);
-            inner.shared.upgrade().map(move |mut shared| {
+            inner.shared.upgrade().map(move |shared| {
                 shared.animation.lock().replace(cloned);
             });
             app_context.request_redraw();

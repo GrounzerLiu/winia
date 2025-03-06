@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use crate::impl_property_redraw;
 use crate::shared::{Children, Gettable, Observable, Settable, Shared, SharedAnimationTrait, SharedBool, SharedColor, SharedF32};
 use crate::ui::app::AppContext;
@@ -6,11 +5,11 @@ use crate::ui::item::{DisplayParameter, Pointer, PointerState};
 use crate::ui::theme::colors;
 use crate::ui::theme::colors::parse_color;
 use crate::ui::Item;
-use skia_safe::{Color, Paint, Path, Rect};
-use std::time::Duration;
-use skia_safe::gradient_shader::GradientShaderColors;
-use toml::Value;
 use proc_macro::item;
+use skia_safe::{Paint, Path, Rect};
+use std::collections::HashSet;
+use std::time::Duration;
+use toml::Value;
 
 struct Layer{
     pub is_ended: bool,
@@ -73,7 +72,7 @@ impl Ripple {
         });
         let layers: Shared<Vec<Layer>> = Vec::new().into();
 
-        let mut item = Item::new(app_context.clone(), Children::new()).clip(true);
+        let item = Item::new(app_context.clone(), Children::new()).clip(true);
         item.data()
             .set_draw({
                 let property = property.clone();
@@ -92,7 +91,7 @@ impl Ripple {
                     let height = display_parameter.height;
                     let center_x = x + width / 2.0;
                     let center_y = y + height / 2.0;
-                    let radius = ((width.powi(2) + height.powi(2)).sqrt());
+                    let radius = (width.powi(2) + height.powi(2)).sqrt();
                     canvas.draw_circle((center_x, center_y), radius / 2.0, &paint);
 
                     let mut paint = skia_safe::Paint::default();
@@ -115,7 +114,7 @@ impl Ripple {
             .set_pointer_input({
                 let app_context = app_context.clone();
                 let mut down_pointers: HashSet<Pointer> = HashSet::new();
-                move |item, event| {
+                move |_item, event| {
                     match event.pointer_state {
                         PointerState::Started => {
                             fn add_observer(app_context: AppContext, shared: &mut SharedF32) {
@@ -201,7 +200,7 @@ impl Ripple {
             .set_hover_event({
                 let property = property.clone();
                 move |item, is_hovered| {
-                    let mut property = property.value();
+                    let property = property.value();
                     property
                         .background_opacity
                         .get_animation()

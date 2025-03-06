@@ -11,6 +11,6 @@ members = [
 exclude = ["winia"]
 
 [workspace.dependencies]
-winit = "0.30.8"
-skia-safe = "0.81.0"
+winit = "0.30.9"
+skia-safe = "0.82.0"
 parking_lot = "0.12.3"

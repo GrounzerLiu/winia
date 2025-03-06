@@ -1,18 +1,17 @@
-/*use std::collections::HashMap;
-use std::fs;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+/*use crate::shared::{Shared, SharedBool};
+use crate::ui::app::AppContext;
 use lazy_static::lazy_static;
-use skia_safe::{BlendMode, Canvas, Color, Data, FilterMode, FontMgr, Image as SkiaImage, MipmapMode, Paint, Rect, SamplingOptions};
+use parking_lot::Mutex;
 use skia_safe::canvas::SaveLayerRec;
 use skia_safe::svg::Dom;
 use skia_safe::wrapper::PointerWrapper;
-use crate::shared::{BoolProperty, Gettable, Property};
-use crate::ui::app::{AppContext, UserEvent};
-use crate::ui::Item;
-use crate::ui::item::{DisplayParameter, ItemEvent, MeasureMode, Orientation};
+use skia_safe::{BlendMode, Canvas, Color, Data, FilterMode, FontMgr, Image as SkiaImage, MipmapMode, Paint, Rect, SamplingOptions};
+use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
+use std::sync::Arc;
 
-pub trait Drawable: Sync + Send {
+pub trait Drawable {
     fn draw(&self, canvas: &Canvas, x: f32, y: f32);
     fn get_intrinsic_width(&self) -> f32;
     fn get_intrinsic_height(&self) -> f32;
@@ -34,7 +33,7 @@ impl Svg {
         let path = path.into();
         let data = Data::new_copy(fs::read(&path).unwrap().as_slice());
         let font_mgr = FontMgr::new();
-        let dom = Dom::from_bytes(&data, &font_mgr).unwrap();
+        let dom = Dom::from_bytes(&data, font_mgr).unwrap();
         let width = dom.inner().fContainerSize.fWidth;
         let height = dom.inner().fContainerSize.fHeight;
         Self {
@@ -208,12 +207,12 @@ impl NetworkImage {
                 if let Ok(bytes) = bytes {
                     let bytes = bytes.as_ref();
                     let image = ImageDrawable::from_bytes(bytes);
-                    let mut image_guard = image_clone.lock().unwrap();
+                    let mut image_guard = image_clone.lock();
                     *image_guard = Some(image);
-                    let app_proxy = app_proxy.lock().unwrap();
-                    if let Some(app_proxy) = app_proxy.as_ref() {
-                        app_proxy.send_event(UserEvent::ReLayout);
-                    }
+                    let app_proxy = app_proxy.value();
+                    // if let Some(app_proxy) = app_proxy.as_ref() {
+                    //     //app_proxy.send_event(UserEvent::ReLayout);
+                    // }
                 }
             }
         });
@@ -225,13 +224,13 @@ impl NetworkImage {
 
 impl Drawable for NetworkImage {
     fn draw(&self, canvas: &Canvas, x: f32, y: f32) {
-        if let Some(image) = self.image.lock().unwrap().as_ref() {
+        if let Some(image) = self.image.lock().as_ref() {
             image.draw(canvas, x, y);
         }
     }
 
     fn get_intrinsic_width(&self) -> f32 {
-        if let Some(image) = self.image.lock().unwrap().as_ref() {
+        if let Some(image) = self.image.lock().as_ref() {
             image.get_intrinsic_width()
         } else {
             0.0
@@ -239,7 +238,7 @@ impl Drawable for NetworkImage {
     }
 
     fn get_intrinsic_height(&self) -> f32 {
-        if let Some(image) = self.image.lock().unwrap().as_ref() {
+        if let Some(image) = self.image.lock().as_ref() {
             image.get_intrinsic_height()
         } else {
             0.0
@@ -247,19 +246,19 @@ impl Drawable for NetworkImage {
     }
 
     fn set_width(&mut self, width: f32) {
-        if let Some(image) = self.image.lock().unwrap().as_mut() {
+        if let Some(image) = self.image.lock().as_mut() {
             image.set_width(width);
         }
     }
 
     fn set_height(&mut self, height: f32) {
-        if let Some(image) = self.image.lock().unwrap().as_mut() {
+        if let Some(image) = self.image.lock().as_mut() {
             image.set_height(height);
         }
     }
 
     fn width(&self) -> f32 {
-        if let Some(image) = self.image.lock().unwrap().as_ref() {
+        if let Some(image) = self.image.lock().as_ref() {
             image.width()
         } else {
             0.0
@@ -267,7 +266,7 @@ impl Drawable for NetworkImage {
     }
 
     fn height(&self) -> f32 {
-        if let Some(image) = self.image.lock().unwrap().as_ref() {
+        if let Some(image) = self.image.lock().as_ref() {
             image.height()
         } else {
             0.0
@@ -277,9 +276,13 @@ impl Drawable for NetworkImage {
 
 type DrawableImpl = Arc<Mutex<Box<dyn Drawable>>>;
 
-lazy_static!(
-    static ref DRAWABLES: Mutex<HashMap<PathBuf, DrawableImpl>> = Mutex::new(HashMap::new());
-);
+// lazy_static!(
+//     static ref DRAWABLES: Mutex<HashMap<PathBuf, DrawableImpl>> = Mutex::new(HashMap::new());
+// );
+
+thread_local! {
+    static DRAWABLES: Mutex<HashMap<PathBuf, DrawableImpl>> = Mutex::new(HashMap::new());
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ScaleMode {
@@ -289,17 +292,17 @@ pub enum ScaleMode {
     FitBothSides,
 }
 
-struct ImageProperties {
-    drawable: Property<Option<DrawableImpl>>,
+struct ImageProperty {
+    drawable: Shared<Option<DrawableImpl>>,
     /// whether the image should be scaled with the dpi when there is no specific size set
-    dpi_sensitive: BoolProperty,
+    dpi_sensitive: SharedBool,
     /// the scale mode when the image is larger than the item
-    oversize_scale_mode: Property<ScaleMode>,
+    oversize_scale_mode: Shared<ScaleMode>,
     /// the scale mode when the image is smaller than the item
-    undersize_scale_mode: Property<ScaleMode>,
+    undersize_scale_mode: Shared<ScaleMode>,
 }
 
-impl ImageProperties {
+impl ImageProperty {
     fn drawable(&self) -> DrawableImpl {
         let drawable = self.drawable.value().as_ref().unwrap().clone();
         drawable

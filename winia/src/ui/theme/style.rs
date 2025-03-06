@@ -1,7 +1,4 @@
-use crate::ui::theme::colors;
 use crate::ui::Item;
-use material_color_utilities::dynamic_color::{material_dynamic_colors, DynamicScheme};
-use material_color_utilities::hct::Hct;
 use skia_safe::Color;
 use std::collections::HashMap;
 
