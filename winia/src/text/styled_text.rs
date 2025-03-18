@@ -1,9 +1,7 @@
 use crate::text::style::Style;
 use crate::text::{create_segments, font_collection, AddStyleSegment, StyleType, TextLayout};
 use bimap::BiBTreeMap;
-use skia_safe::textlayout::{
-    Paragraph, ParagraphBuilder, ParagraphStyle, TextAlign, TextStyle,
-};
+use skia_safe::textlayout::{Paragraph, ParagraphBuilder, ParagraphStyle, TextAlign, TextStyle};
 use std::collections::HashSet;
 use std::fmt::Display;
 use std::ops::{Add, Index, Range};
@@ -19,7 +17,6 @@ pub struct StyledText {
     line_breaks: HashSet<Range<usize>>,
     byte_to_utf16_indices: BiBTreeMap<usize, usize>,
     byte_to_glyph_indices: BiBTreeMap<usize, usize>,
-    paragraph: Option<Paragraph>,
 }
 
 impl StyledText {
@@ -30,7 +27,6 @@ impl StyledText {
             line_breaks: HashSet::new(),
             byte_to_utf16_indices: BiBTreeMap::new(),
             byte_to_glyph_indices: BiBTreeMap::new(),
-            paragraph: None,
         };
         s.generate_indices();
         s
@@ -88,12 +84,12 @@ impl StyledText {
             .unwrap()
     }
 
-    pub fn create_text_layout(
+    pub fn create_paragraph(
         &mut self,
         default_text_style: TextStyle,
         max_width: f32,
         text_align: TextAlign,
-    ) {
+    ) -> Paragraph {
         let mut paragraph_style = ParagraphStyle::default();
         paragraph_style.set_text_align(text_align);
 
@@ -117,36 +113,21 @@ impl StyledText {
 
         let mut paragraph = paragraph_builder.build();
         paragraph.layout(max_width);
-        self.paragraph = Some(paragraph);
+        paragraph
     }
 
-    pub fn get_text_layout(&self) -> Option<TextLayout> {
-        if let Some(paragraph) = &self.paragraph {
-            Some(TextLayout::new(
-                paragraph,
-                &self.line_breaks,
-                &self.byte_to_utf16_indices,
-                &self.byte_to_glyph_indices,
-                self.len(),
-            ))
-        } else {
-            None
-        }
-    }
-
-    pub fn has_text_layout(&self) -> bool {
-        self.paragraph.is_some()
-    }
-
-    pub fn reset_text_layout_width(&mut self, max_width: f32) {
-        if let Some(paragraph) = &mut self.paragraph {
-            paragraph.layout(max_width);
-        }
+    pub fn get_text_layout<'a>(&'a self, paragraph: &'a Paragraph) -> TextLayout<'a> {
+        TextLayout::new(
+            paragraph,
+            &self.line_breaks,
+            &self.byte_to_utf16_indices,
+            &self.byte_to_glyph_indices,
+            self.len(),
+        )
     }
 
     fn update(&mut self) {
         self.generate_indices();
-        self.paragraph.take();
     }
 
     pub fn as_str(&self) -> &str {
@@ -185,7 +166,6 @@ impl StyledText {
             line_breaks: HashSet::new(),
             byte_to_utf16_indices: BiBTreeMap::new(),
             byte_to_glyph_indices: BiBTreeMap::new(),
-            paragraph: None,
         };
         styled_text.generate_indices();
         styled_text
@@ -272,7 +252,6 @@ impl StyledText {
 
         self.remove_style(style.style_type(), range.clone());
         self.styles.push((style, range, expanded));
-        self.paragraph.take();
     }
 
     pub fn get_styles(&self, range: Range<usize>) -> Vec<(Style, Range<usize>, bool)> {
@@ -289,7 +268,6 @@ impl StyledText {
     pub fn retain_styles(&mut self, f: impl Fn(&Style, &Range<usize>, &bool) -> bool) {
         self.styles
             .retain(|(style, range, expanded)| f(style, range, expanded));
-        self.paragraph.take();
     }
 
     pub fn remove_style(&mut self, style_type: StyleType, range: Range<usize>) {
@@ -343,12 +321,10 @@ impl StyledText {
         });
 
         self.styles.append(&mut segmented_styles);
-        self.paragraph.take();
     }
 
     pub fn clear_styles(&mut self) {
         self.styles.clear();
-        self.paragraph.take();
     }
 }
 
@@ -417,7 +393,6 @@ impl Clone for StyledText {
             line_breaks: self.line_breaks.clone(),
             byte_to_utf16_indices: self.byte_to_utf16_indices.clone(),
             byte_to_glyph_indices: self.byte_to_glyph_indices.clone(),
-            paragraph: None,
         }
     }
 }

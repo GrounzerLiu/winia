@@ -2,7 +2,7 @@ use parking_lot::Mutex;
 use skia_safe::Color;
 use skiwin::vulkan::VulkanSkiaWindow;
 use skiwin::SkiaWindow;
-use std::ops::DerefMut;
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
@@ -108,6 +108,7 @@ pub struct App {
     item_generator: Option<Box<dyn FnOnce(AppContext, AppProperty) -> Item>>,
     item: Option<Item>,
     window_attributes: WindowAttributes,
+    request_layout: bool,
     cursor_x: f32,
     cursor_y: f32,
     pressed_mouse_buttons: Vec<MouseButton>,
@@ -133,6 +134,7 @@ impl App {
             cursor_y: 0.0,
             pressed_mouse_buttons: Vec::new(),
             window_attributes: WindowAttributes::default().with_transparent(true),
+            request_layout: true,
             modifiers: None,
         }
         .title(title)
@@ -190,10 +192,13 @@ impl App {
     pub fn title(self, title: impl Into<Shared<String>>) -> Self {
         let mut title = title.into();
         self.app_property.lock().title = title.clone();
-        let app_context = self.app_context.clone();
+        let event_loop_proxy = self.app_context.event_loop_proxy.clone();
         title.add_specific_observer(self.id(), move |title| {
-            app_context.window(|window| {
-                window.set_title(title.as_str());
+            let title = title.clone();
+            event_loop_proxy.set_window_attribute(move |window|{
+                if let Some(window) = window {
+                    window.set_title(title.as_str());
+                }
             })
         });
         self
@@ -202,16 +207,20 @@ impl App {
     pub fn min_width(self, min_width: impl Into<Shared<f32>>) -> Self {
         let mut min_width = min_width.into();
         self.app_property.lock().min_width = min_width.clone();
-        let app_context = self.app_context.clone();
+        let event_loop_proxy = self.app_context.event_loop_proxy.clone();
         let app_property = Arc::downgrade(&self.app_property);
         min_width.add_specific_observer(self.id(), move |min_width| {
-            app_context.window(|window| {
+            let app_property = app_property.clone();
+            let min_width = min_width.clone();
+            event_loop_proxy.set_window_attribute(move |window|{
                 if let Some(app_property) = app_property.upgrade() {
                     let min_height = app_property.lock().min_height.get();
-                    window.set_min_inner_size(Some(Size::Logical(LogicalSize::new(
-                        *min_width as f64,
-                        min_height as f64,
-                    ))));
+                    if let Some(window) = window {
+                        window.set_min_inner_size(Some(Size::Logical(LogicalSize::new(
+                            min_width as f64,
+                            min_height as f64,
+                        ))));
+                    }
                 }
             })
         });
@@ -221,16 +230,20 @@ impl App {
     pub fn min_height(self, min_height: impl Into<Shared<f32>>) -> Self {
         let mut min_height = min_height.into();
         self.app_property.lock().min_height = min_height.clone();
-        let app_context = self.app_context.clone();
+        let event_loop_proxy = self.app_context.event_loop_proxy.clone();
         let app_property = Arc::downgrade(&self.app_property);
         min_height.add_specific_observer(self.id(), move |min_height| {
-            app_context.window(|window| {
+            let app_property = app_property.clone();
+            let min_height = min_height.clone();
+            event_loop_proxy.set_window_attribute(move |window|{
                 if let Some(app_property) = app_property.upgrade() {
                     let min_width = app_property.lock().min_width.get();
-                    window.set_min_inner_size(Some(Size::Logical(LogicalSize::new(
-                        min_width as f64,
-                        *min_height as f64,
-                    ))));
+                    if let Some(window) = window {
+                        window.set_min_inner_size(Some(Size::Logical(LogicalSize::new(
+                            min_width as f64,
+                            min_height as f64,
+                        ))));
+                    }
                 }
             })
         });
@@ -240,16 +253,20 @@ impl App {
     pub fn max_width(self, max_width: impl Into<Shared<f32>>) -> Self {
         let mut max_width = max_width.into();
         self.app_property.lock().max_width = max_width.clone();
-        let app_context = self.app_context.clone();
+        let event_loop_proxy = self.app_context.event_loop_proxy.clone();
         let app_property = Arc::downgrade(&self.app_property);
         max_width.add_specific_observer(self.id(), move |max_width| {
-            app_context.window(|window| {
+            let app_property = app_property.clone();
+            let max_width = max_width.clone();
+            event_loop_proxy.set_window_attribute(move |window|{
                 if let Some(app_property) = app_property.upgrade() {
                     let max_height = app_property.lock().max_height.get();
-                    window.set_max_inner_size(Some(Size::Logical(LogicalSize::new(
-                        *max_width as f64,
-                        max_height as f64,
-                    ))));
+                    if let Some(window) = window {
+                        window.set_max_inner_size(Some(Size::Logical(LogicalSize::new(
+                            max_width as f64,
+                            max_height as f64,
+                        ))));
+                    }
                 }
             })
         });
@@ -259,16 +276,20 @@ impl App {
     pub fn max_height(self, max_height: impl Into<Shared<f32>>) -> Self {
         let mut max_height = max_height.into();
         self.app_property.lock().max_height = max_height.clone();
-        let app_context = self.app_context.clone();
+        let event_loop_proxy = self.app_context.event_loop_proxy.clone();
         let app_property = Arc::downgrade(&self.app_property);
         max_height.add_specific_observer(self.id(), move |max_height| {
-            app_context.window(|window| {
+            let app_property = app_property.clone();
+            let max_height = max_height.clone();
+            event_loop_proxy.set_window_attribute(move |window|{
                 if let Some(app_property) = app_property.upgrade() {
                     let max_width = app_property.lock().max_width.get();
-                    window.set_max_inner_size(Some(Size::Logical(LogicalSize::new(
-                        max_width as f64,
-                        *max_height as f64,
-                    ))));
+                    if let Some(window) = window {
+                        window.set_max_inner_size(Some(Size::Logical(LogicalSize::new(
+                            max_width as f64,
+                            max_height as f64,
+                        ))));
+                    }
                 }
             })
         });
@@ -278,10 +299,13 @@ impl App {
     pub fn maximized(self, maximized: impl Into<SharedBool>) -> Self {
         let mut maximized = maximized.into();
         self.app_property.lock().maximized = maximized.clone();
-        let app_context = self.app_context.clone();
+        let event_loop_proxy = self.app_context.event_loop_proxy.clone();
         maximized.add_specific_observer(self.id(), move |maximized| {
-            app_context.window(|window| {
-                window.set_maximized(*maximized);
+            let maximized = maximized.clone();
+            event_loop_proxy.set_window_attribute(move |window|{
+                if let Some(window) = window {
+                    window.set_maximized(maximized);
+                }
             })
         });
         self
@@ -296,7 +320,7 @@ impl ApplicationHandler<UserEvent> for App {
         if !self.app_context.is_window_created() {
             let app_property = self.app_property.clone();
             app_property.lock().apply_to_window_attributes(
-                &mut self.window_attributes.clone().with_transparent(true),
+                &mut self.window_attributes,
             );
             let window = event_loop
                 .create_window(self.window_attributes.clone())
@@ -309,8 +333,7 @@ impl ApplicationHandler<UserEvent> for App {
             if let Some(event_loop_proxy) = event_loop_proxy {
                 self.app_context
                     .event_loop_proxy
-                    .value()
-                    .replace(event_loop_proxy);
+                    .set(event_loop_proxy)
             }
             if let Some(item_generator) = self.item_generator.take() {
                 self.item = Some(item_generator(
@@ -340,6 +363,23 @@ impl ApplicationHandler<UserEvent> for App {
                     });
             }
             UserEvent::Timer(_id) => {}
+            UserEvent::RequestLayout => {
+                self.request_layout = true;
+                self.app_context.request_redraw();
+            }
+            UserEvent::RequestRedraw => {
+                self.app_context.request_redraw();
+            }
+            UserEvent::SetWindowAttribute(set_window_attributes) => {
+                let window = self.app_context.window.value();
+                if let Some(window) = window.as_ref() {
+                    set_window_attributes(Some(window.deref()));
+                }
+            }
+            UserEvent::StartSharedAnimation(animation) => {
+                self.app_context.shared_animations.value().push(animation);
+                self.app_context.request_redraw();
+            }
         }
     }
 
@@ -350,15 +390,16 @@ impl ApplicationHandler<UserEvent> for App {
         event: WindowEvent,
     ) {
         {
-            let request_re_layout = self
+            let request_layout = self
                 .app_context
                 .request_layout
-                .read(|request_re_layout| *request_re_layout);
-            if request_re_layout {
+                .read(|request_layout| *request_layout) || self.request_layout;
+            if request_layout {
                 self.re_layout();
                 self.app_context.request_layout.write(|request_re_layout| {
                     *request_re_layout = false;
                 });
+                self.request_layout = false;
             }
         }
 
@@ -611,15 +652,7 @@ impl ApplicationHandler<UserEvent> for App {
 
         {
             self.app_context
-                .starting_shared_animation
-                .write(|starting_shared_animation| {
-                    while let Some(animation) = starting_shared_animation.pop_back() {
-                        let mut animations = self.app_context.running_shared_animations.value();
-                        animations.push(animation);
-                    }
-                });
-            self.app_context
-                .running_shared_animations
+                .shared_animations
                 .write(|shared_animations| {
                     shared_animations.iter_mut().for_each(|animation| {
                         animation.update();
@@ -662,11 +695,6 @@ impl ApplicationHandler<UserEvent> for App {
     }
 }
 
-pub enum UserEvent {
-    RequestFocus,
-    Timer(usize),
-}
-
 fn run_app_with_event_loop(mut app: App, event_loop: EventLoop<UserEvent>) {
     let event_loop_proxy = event_loop.create_proxy();
     app.set_event_loop_proxy(event_loop_proxy);
@@ -681,7 +709,7 @@ pub fn run_app(app: App) {
 }
 
 use crate::shared::{Gettable, Settable, Shared, SharedBool};
-use crate::ui::app::AppContext;
+use crate::ui::app::{AppContext, UserEvent};
 use crate::ui::item::{ImeAction, ItemData, MeasureMode, MouseEvent, MouseWheel, PointerState, TouchEvent};
 use crate::ui::{theme, Item};
 #[cfg(target_os = "android")]

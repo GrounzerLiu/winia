@@ -73,7 +73,7 @@ pub struct Style {
     colors: HashMap<String, Value<Color>>,
     dimensions: HashMap<String, Value<f32>>,
     bools: HashMap<String, Value<bool>>,
-    items: HashMap<String, Value<Box<dyn Fn() -> Item>>>,
+    items: HashMap<String, Value<Box<dyn Fn() -> Item + Send>>>,
     styles: HashMap<String, Value<Style>>,
 }
 
@@ -110,7 +110,7 @@ impl Style {
     pub fn set_item(
         mut self,
         key: impl Into<String>,
-        item: impl Into<Value<Box<dyn Fn() -> Item>>>,
+        item: impl Into<Value<Box<dyn Fn() -> Item + Send>>>,
     ) -> Self {
         self.items.insert(key.into(), item.into());
         self

@@ -1,11 +1,11 @@
+use crate::shared::shared_un_send::SharedUnSend;
+use crate::ui::Item;
 use std::rc::Rc;
 use std::sync::Mutex;
-use crate::shared::Shared;
-use crate::ui::Item;
 
 pub type ItemObject= Option<Rc<Mutex<Item>>>;
 
-pub type SharedItem = Shared<Option<Item>>;
+pub type SharedItem = SharedUnSend<Option<Item>>;
 
 impl SharedItem {
     pub fn none() -> Self{

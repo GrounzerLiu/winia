@@ -14,7 +14,7 @@ pub fn material_style(color: Color, is_dark: bool) -> Style {
     let b = color.b();
     let argb = argb_to_u32(a, r, g, b);
     let scheme =
-        material_color_utilities::scheme::scheme_tonal_spot(Hct::from_argb(argb), is_dark);
+        material_color_utilities::scheme::scheme_neutral(Hct::from_argb(argb), is_dark);
     let primary_color:Color = material_dynamic_colors::primary().get_argb(&scheme).into();
     let on_primary_color:Color = material_dynamic_colors::on_primary().get_argb(&scheme).into();
     let primary_container_color:Color =
@@ -103,4 +103,11 @@ pub fn material_style(color: Color, is_dark: bool) -> Style {
                 .set_color(text_style::COLOR, colors::ON_SURFACE_VARIANT)
                 .set_dimension(text_style::FONT_SIZE, 16.0),
         )
+        // .set_style(
+        //     styles::button::ELEVATED_BUTTON,
+        //     Style::new()
+        //         .set_dimension(styles::button::container::HEIGHT, 40.0)
+        //         .set_dimension(styles::button::container::ELEVATION, 1.0)
+        //         .set_color(styles::button::container::COLOR, colors::PRIMARY_CONTAINER)
+        // )
 }

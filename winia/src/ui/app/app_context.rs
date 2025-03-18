@@ -1,6 +1,5 @@
 use crate::dpi::LogicalSize;
-use crate::shared::{Shared, SharedAnimationTrait, SharedBool, WeakShared};
-use crate::ui::app::UserEvent;
+use crate::shared::{Shared, SharedAnimationTrait, SharedBool, SharedUnSend, WeakShared, WeakSharedUnSend};
 use crate::ui::theme::{material_style, Style};
 use crate::ui::Animation;
 use skia_safe::Color;
@@ -8,7 +7,8 @@ use skiwin::SkiaWindow;
 use std::collections::{BTreeSet, LinkedList};
 use std::ops::DerefMut;
 use std::time::{Duration, Instant};
-use winit::event_loop::EventLoopProxy;
+use winit::event_loop::EventLoopProxy as WinitEventLoopProxy;
+use winit::window::Window;
 
 #[derive(Clone, Debug)]
 pub(crate) struct Timer {
@@ -17,16 +17,96 @@ pub(crate) struct Timer {
     pub duration: Duration,
 }
 
+pub enum UserEvent {
+    RequestFocus,
+    RequestLayout,
+    RequestRedraw,
+    StartSharedAnimation(Box<dyn SharedAnimationTrait + Send>),
+    Timer(usize),
+    SetWindowAttribute(Box<dyn FnOnce(Option<&Window>) + Send>)
+}
+
+#[derive(Clone)]
+pub struct EventLoopProxy{
+    event_loop_proxy: Shared<Option<WinitEventLoopProxy<UserEvent>>>
+}
+
+impl EventLoopProxy {
+    pub fn none() -> Self {
+        Self {
+            event_loop_proxy: None.into()
+        }
+    }
+
+    pub fn new(event_loop_proxy: WinitEventLoopProxy<UserEvent>) -> Self {
+        Self {
+            event_loop_proxy: Some(event_loop_proxy).into()
+        }
+    }
+
+    pub fn set(&mut self, event_loop_proxy: WinitEventLoopProxy<UserEvent>) {
+        self.event_loop_proxy.set_static(Some(event_loop_proxy));
+    }
+
+    pub fn send_event(&self, event: UserEvent) {
+        let event_loop_proxy = self.event_loop_proxy.value();
+        if let Some(event_loop_proxy) = event_loop_proxy.as_ref() {
+            match event_loop_proxy.send_event(event) {
+                Ok(()) => {}
+                Err(_e) => {
+                    // panic!("Failed to send user event: {}", e);
+                }
+            }
+        }
+    }
+
+    pub fn request_redraw(&self) {
+        self.send_event(UserEvent::RequestRedraw);
+    }
+
+    pub fn request_layout(&self) {
+        self.send_event(UserEvent::RequestLayout);
+    }
+
+    pub fn set_window_attribute(&self, f: impl FnOnce(Option<&Window>) + Send + 'static) {
+        self.send_event(UserEvent::SetWindowAttribute(Box::new(f)));
+    }
+
+    pub fn start_shared_animation(&self, animation: Box<dyn SharedAnimationTrait + Send>) {
+        self.send_event(UserEvent::StartSharedAnimation(animation));
+    }
+}
+
+#[derive(Clone)]
+pub struct EventLoopProxyWeak {
+    event_loop_proxy: WeakShared<Option<WinitEventLoopProxy<UserEvent>>>
+}
+
+impl EventLoopProxyWeak {
+    pub fn upgrade(&self) -> Option<EventLoopProxy> {
+        Some(EventLoopProxy {
+            event_loop_proxy: self.event_loop_proxy.upgrade()?
+        })
+    }
+}
+
+impl EventLoopProxy {
+    pub fn weak(&self) -> EventLoopProxyWeak {
+        EventLoopProxyWeak {
+            event_loop_proxy: self.event_loop_proxy.weak()
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct AppContext {
     pub(crate) theme: Shared<Style>,
-    pub(crate) window: Shared<Option<Box<dyn SkiaWindow>>>,
-    pub(crate) event_loop_proxy: Shared<Option<EventLoopProxy<UserEvent>>>,
+    pub(crate) window: SharedUnSend<Option<Box<dyn SkiaWindow>>>,
+    pub(crate) event_loop_proxy: EventLoopProxy,
     pub(crate) request_layout: Shared<bool>,
-    pub(crate) starting_animations: Shared<LinkedList<Animation>>,
-    pub(crate) running_animations: Shared<Vec<Animation>>,
-    pub(crate) starting_shared_animation: Shared<LinkedList<Box<dyn SharedAnimationTrait>>>,
-    pub(crate) running_shared_animations: Shared<Vec<Box<dyn SharedAnimationTrait>>>,
+    pub(crate) starting_animations: SharedUnSend<LinkedList<Animation>>,
+    pub(crate) running_animations: SharedUnSend<Vec<Animation>>,
+    pub(crate) shared_animations: SharedUnSend<Vec<Box<dyn SharedAnimationTrait + Send>>>,
     pub(crate) focused_property: Shared<Option<(SharedBool, usize)>>,
     pub(crate) focus_changed_items: Shared<BTreeSet<usize>>,
     pub(crate) timers: Shared<Vec<Timer>>,
@@ -47,14 +127,13 @@ impl Default for AppContext {
 impl AppContext {
     pub fn new() -> Self {
         Self {
-            theme: material_style(Color::RED, true).into(),
+            theme: material_style(Color::from_rgb(255,0,255), true).into(),
             window: None.into(),
-            event_loop_proxy: None.into(),
+            event_loop_proxy: EventLoopProxy::none(),
             request_layout: false.into(),
             starting_animations: LinkedList::new().into(),
             running_animations: Vec::new().into(),
-            starting_shared_animation: LinkedList::new().into(),
-            running_shared_animations: Vec::new().into(),
+            shared_animations: Vec::new().into(),
             focused_property: None.into(),
             focus_changed_items: BTreeSet::new().into(),
             timers: Vec::new().into(),
@@ -89,13 +168,6 @@ impl AppContext {
                 )
             })
         })
-    }
-
-    pub(crate) fn event_loop_proxy(&self, f: impl FnOnce(&mut EventLoopProxy<UserEvent>)) {
-        let mut event_loop_proxy = self.event_loop_proxy.value();
-        if let Some(event_loop_proxy) = event_loop_proxy.deref_mut() {
-            f(event_loop_proxy);
-        }
     }
 
     pub fn id(&self) -> usize {
@@ -145,14 +217,11 @@ impl AppContext {
     }
 
     pub fn send_user_event(&self, event: UserEvent) {
-        self.event_loop_proxy(|event_loop_proxy| {
-            match event_loop_proxy.send_event(event) {
-                Ok(()) => {}
-                Err(_e) => {
-                    // panic!("Failed to send user event: {}", e);
-                }
-            }
-        });
+        self.event_loop_proxy.send_event(event);
+    }
+
+    pub fn event_loop_proxy(&self) -> EventLoopProxy {
+        self.event_loop_proxy.clone()
     }
 
     pub fn theme(&self) -> Shared<Style> {
@@ -207,13 +276,12 @@ impl AppContext {
 
 pub struct AppContextWeak {
     theme: WeakShared<Style>,
-    window: WeakShared<Option<Box<dyn SkiaWindow>>>,
-    event_loop_proxy: WeakShared<Option<EventLoopProxy<UserEvent>>>,
+    window: WeakSharedUnSend<Option<Box<dyn SkiaWindow>>>,
+    event_loop_proxy: EventLoopProxyWeak,
     request_re_layout: WeakShared<bool>,
-    starting_animations: WeakShared<LinkedList<Animation>>,
-    running_animations: WeakShared<Vec<Animation>>,
-    starting_shared_animations: WeakShared<LinkedList<Box<dyn SharedAnimationTrait>>>,
-    running_shared_animations: WeakShared<Vec<Box<dyn SharedAnimationTrait>>>,
+    starting_animations: WeakSharedUnSend<LinkedList<Animation>>,
+    running_animations: WeakSharedUnSend<Vec<Animation>>,
+    shared_animations: WeakSharedUnSend<Vec<Box<dyn SharedAnimationTrait + Send>>>,
     focused_property: WeakShared<Option<(SharedBool, usize)>>,
     focus_changed_items: WeakShared<BTreeSet<usize>>,
     timer: WeakShared<Vec<Timer>>,
@@ -234,8 +302,7 @@ impl AppContext {
             request_re_layout: self.request_layout.weak(),
             starting_animations: self.starting_animations.weak(),
             running_animations: self.running_animations.weak(),
-            starting_shared_animations: self.starting_shared_animation.weak(),
-            running_shared_animations: self.running_shared_animations.weak(),
+            shared_animations: self.shared_animations.weak(),
             focused_property: self.focused_property.weak(),
             focus_changed_items: self.focus_changed_items.weak(),
             timer: self.timers.weak(),
@@ -258,8 +325,7 @@ impl AppContextWeak {
             request_layout: self.request_re_layout.upgrade()?,
             starting_animations: self.starting_animations.upgrade()?,
             running_animations: self.running_animations.upgrade()?,
-            starting_shared_animation: self.starting_shared_animations.upgrade()?,
-            running_shared_animations: self.running_shared_animations.upgrade()?,
+            shared_animations: self.shared_animations.upgrade()?,
             focused_property: self.focused_property.upgrade()?,
             focus_changed_items: self.focus_changed_items.upgrade()?,
             timers: self.timer.upgrade()?,

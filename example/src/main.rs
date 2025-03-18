@@ -1,20 +1,26 @@
 use std::ops::Add;
 use std::thread;
 use std::time::Duration;
+use material_colors::color::Argb;
+use material_colors::dynamic_color::Variant;
+use material_colors::theme::ThemeBuilder;
 use winia::shared::{Children, Gettable, Settable, Shared, SharedBool, SharedF32, SharedSize, SharedText};
 use winia::skia_safe::Color;
 use winia::text::StyledText;
 use winia::ui::animation::{AnimationExt, Target};
 use winia::ui::app::{run_app, AppContext, AppProperty};
-use winia::ui::component::{RectangleExt, RippleExt, TextExt};
+use winia::ui::component::{ImageExt, RectangleExt, RippleExt, ScaleMode, TextExt};
 use winia::ui::item::{Alignment, Size};
-use winia::ui::layout::{AlignContent, AlignItems, AlignSelf, ColumnExt, FlexDirection, FlexExt, FlexWrap, JustifyContent, ScrollAreaExt, StackExt};
+use winia::ui::layout::{AlignContent, AlignItems, AlignSelf, ColumnExt, FlexDirection, FlexExt, FlexWrap, JustifyContent, RowExt, ScrollAreaExt, StackExt};
 use winia::ui::{App, Item};
-use winia::{func, include_target, shared};
+use winia::{exclude_target, func, include_target, shared};
+use winia::ui::animation::interpolator::Linear;
+use winia::ui::layout::FlexWrap::Wrap;
+use winia::ui::theme::colors;
 
 // #[cfg(not(target_os = "android"))]
 fn main() {
-    run_app(App::new(ripple_test).title("Example").preferred_size(800, 600));
+    run_app(App::new(rectangle_test).title("Example").preferred_size(800, 600));
     // run_app(
     //     App::new(|app, shared| {
     //         app.flex(Children::new() +
@@ -24,6 +30,267 @@ fn main() {
     //         .title("Example")
     //         .preferred_size(800, 600)
     // );
+}
+
+pub fn rectangle_test(app: AppContext, property: AppProperty) -> Item {
+    let color = Shared::from(Color::RED);
+    let radius = Shared::from(50.0);
+    let size = SharedSize::from(Size::Fixed(100.0));
+    let align = Shared::from(Alignment::TopStart);
+    app.stack(Children::new() +
+        app.rectangle(&color)
+            .radius(&radius)
+            .item().size(&size, &size)
+            .on_click({
+                let app = app.clone();
+                let mut size = size.clone();
+                let mut color = color.clone();
+                let mut radius = radius.clone();
+                let mut align = align.clone();
+                move |_|{
+                    app.animate(exclude_target!()).transformation({
+                        let mut size = size.clone();
+                        let mut color = color.clone();
+                        let mut radius = radius.clone();
+                        let mut align = align.clone();
+                        move ||{
+                            if color.get() == Color::RED {
+                                size.set(Size::Fixed(50.0));
+                                color.set(Color::BLUE);
+                                radius.set(0.0);
+                                align.set(Alignment::Center);
+                            }else {
+                                size.set(Size::Fixed(100.0));
+                                color.set(Color::RED);
+                                radius.set(50.0);
+                                align.set(Alignment::TopStart);
+                            }
+                        }
+                    }).interpolator(
+                        Box::new(Linear::new())
+                    ).duration(Duration::from_millis(5500)).start()
+                }
+            })
+    )
+        .item()
+        .align_content(&align)
+}
+
+
+trait ToColor {
+    fn to_color(&self) -> Color;
+}
+
+impl ToColor for Argb {
+    fn to_color(&self) -> Color {
+        Color::from_argb(self.alpha, self.red, self.green, self.blue)
+    }
+}
+
+fn colors_test(app: AppContext, property: AppProperty) -> Item {
+    let theme = ThemeBuilder::with_source(Argb::new(255, 255, 0, 0)).variant(Variant::Rainbow).build();
+    let scheme = theme.schemes.dark;
+    /*
+pub struct Scheme {
+    pub primary: Argb,
+    pub on_primary: Argb,
+    pub primary_container: Argb,
+    pub on_primary_container: Argb,
+    pub inverse_primary: Argb,
+    pub primary_fixed: Argb,
+    pub primary_fixed_dim: Argb,
+    pub on_primary_fixed: Argb,
+    pub on_primary_fixed_variant: Argb,
+    pub secondary: Argb,
+    pub on_secondary: Argb,
+    pub secondary_container: Argb,
+    pub on_secondary_container: Argb,
+    pub secondary_fixed: Argb,
+    pub secondary_fixed_dim: Argb,
+    pub on_secondary_fixed: Argb,
+    pub on_secondary_fixed_variant: Argb,
+    pub tertiary: Argb,
+    pub on_tertiary: Argb,
+    pub tertiary_container: Argb,
+    pub on_tertiary_container: Argb,
+    pub tertiary_fixed: Argb,
+    pub tertiary_fixed_dim: Argb,
+    pub on_tertiary_fixed: Argb,
+    pub on_tertiary_fixed_variant: Argb,
+    pub error: Argb,
+    pub on_error: Argb,
+    pub error_container: Argb,
+    pub on_error_container: Argb,
+    pub surface_dim: Argb,
+    pub surface: Argb,
+    pub surface_tint: Argb,
+    pub surface_bright: Argb,
+    pub surface_container_lowest: Argb,
+    pub surface_container_low: Argb,
+    pub surface_container: Argb,
+    pub surface_container_high: Argb,
+    pub surface_container_highest: Argb,
+    pub on_surface: Argb,
+    pub on_surface_variant: Argb,
+    pub outline: Argb,
+    pub outline_variant: Argb,
+    pub inverse_surface: Argb,
+    pub inverse_on_surface: Argb,
+    pub surface_variant: Argb,
+    pub background: Argb,
+    pub on_background: Argb,
+    pub shadow: Argb,
+    pub scrim: Argb,
+}
+*/
+    let primary = scheme.primary.to_color();
+    let on_primary = scheme.on_primary.to_color();
+    let primary_container = scheme.primary_container.to_color();
+    let on_primary_container = scheme.on_primary_container.to_color();
+    let inverse_primary = scheme.inverse_primary.to_color();
+    let primary_fixed = scheme.primary_fixed.to_color();
+    let primary_fixed_dim = scheme.primary_fixed_dim.to_color();
+    let on_primary_fixed = scheme.on_primary_fixed.to_color();
+    let on_primary_fixed_variant = scheme.on_primary_fixed_variant.to_color();
+    let secondary = scheme.secondary.to_color();
+    let on_secondary = scheme.on_secondary.to_color();
+    let secondary_container = scheme.secondary_container.to_color();
+    let on_secondary_container = scheme.on_secondary_container.to_color();
+    let secondary_fixed = scheme.secondary_fixed.to_color();
+    let secondary_fixed_dim = scheme.secondary_fixed_dim.to_color();
+    let on_secondary_fixed = scheme.on_secondary_fixed.to_color();
+    let on_secondary_fixed_variant = scheme.on_secondary_fixed_variant.to_color();
+    let tertiary = scheme.tertiary.to_color();
+    let on_tertiary = scheme.on_tertiary.to_color();
+    let tertiary_container = scheme.tertiary_container.to_color();
+    let on_tertiary_container = scheme.on_tertiary_container.to_color();
+    let tertiary_fixed = scheme.tertiary_fixed.to_color();
+    let tertiary_fixed_dim = scheme.tertiary_fixed_dim.to_color();
+    let on_tertiary_fixed = scheme.on_tertiary_fixed.to_color();
+    let on_tertiary_fixed_variant = scheme.on_tertiary_fixed_variant.to_color();
+    let error = scheme.error.to_color();
+    let on_error = scheme.on_error.to_color();
+    let error_container = scheme.error_container.to_color();
+    let on_error_container = scheme.on_error_container.to_color();
+    let surface_dim = scheme.surface_dim.to_color();
+    let surface = scheme.surface.to_color();
+    let surface_tint = scheme.surface_tint.to_color();
+    let surface_bright = scheme.surface_bright.to_color();
+    let surface_container_lowest = scheme.surface_container_lowest.to_color();
+    let surface_container_low = scheme.surface_container_low.to_color();
+    let surface_container = scheme.surface_container.to_color();
+    let surface_container_high = scheme.surface_container_high.to_color();
+    let surface_container_highest = scheme.surface_container_highest.to_color();
+    let on_surface = scheme.on_surface.to_color();
+    let on_surface_variant = scheme.on_surface_variant.to_color();
+    let outline = scheme.outline.to_color();
+    let outline_variant = scheme.outline_variant.to_color();
+    let inverse_surface = scheme.inverse_surface.to_color();
+    let inverse_on_surface = scheme.inverse_on_surface.to_color();
+    let surface_variant = scheme.surface_variant.to_color();
+    let background = scheme.background.to_color();
+    let on_background = scheme.on_background.to_color();
+    let shadow = scheme.shadow.to_color();
+    let scrim = scheme.scrim.to_color();
+
+    fn item(app: &AppContext, name: &str, color: Color) -> Item {
+        app.column(Children::new() +
+            app.text(name).color(Color::WHITE).item() +
+            app.rectangle(color).radius(25.0).item().size(200.0, 50.0)
+        )
+    }
+
+    app.flex(Children::new() +
+        item(&app, "primary", primary) +
+        item(&app, "on_primary", on_primary) +
+        item(&app, "primary_container", primary_container) +
+        item(&app, "on_primary_container", on_primary_container) +
+        item(&app, "inverse_primary", inverse_primary) +
+        item(&app, "primary_fixed", primary_fixed) +
+        item(&app, "primary_fixed_dim", primary_fixed_dim) +
+        item(&app, "on_primary_fixed", on_primary_fixed) +
+        item(&app, "on_primary_fixed_variant", on_primary_fixed_variant) +
+        item(&app, "secondary", secondary) +
+        item(&app, "on_secondary", on_secondary) +
+        item(&app, "secondary_container", secondary_container) +
+        item(&app, "on_secondary_container", on_secondary_container) +
+        item(&app, "secondary_fixed", secondary_fixed) +
+        item(&app, "secondary_fixed_dim", secondary_fixed_dim) +
+        item(&app, "on_secondary_fixed", on_secondary_fixed) +
+        item(&app, "on_secondary_fixed_variant", on_secondary_fixed_variant) +
+        item(&app, "tertiary", tertiary) +
+        item(&app, "on_tertiary", on_tertiary) +
+        item(&app, "tertiary_container", tertiary_container) +
+        item(&app, "on_tertiary_container", on_tertiary_container) +
+        item(&app, "tertiary_fixed", tertiary_fixed) +
+        item(&app, "tertiary_fixed_dim", tertiary_fixed_dim) +
+        item(&app, "on_tertiary_fixed", on_tertiary_fixed) +
+        item(&app, "on_tertiary_fixed_variant", on_tertiary_fixed_variant) +
+        item(&app, "error", error) +
+        item(&app, "on_error", on_error) +
+        item(&app, "error_container", error_container) +
+        item(&app, "on_error_container", on_error_container) +
+        item(&app, "surface_dim", surface_dim) +
+        item(&app, "surface", surface) +
+        item(&app, "surface_tint", surface_tint) +
+        item(&app, "surface_bright", surface_bright) +
+        item(&app, "surface_container_lowest", surface_container_lowest) +
+        item(&app, "surface_container_low", surface_container_low) +
+        item(&app, "surface_container", surface_container) +
+        item(&app, "surface_container_high", surface_container_high) +
+        item(&app, "surface_container_highest", surface_container_highest) +
+        item(&app, "on_surface", on_surface) +
+        item(&app, "on_surface_variant", on_surface_variant) +
+        item(&app, "outline", outline) +
+        item(&app, "outline_variant", outline_variant) +
+        item(&app, "inverse_surface", inverse_surface) +
+        item(&app, "inverse_on_surface", inverse_on_surface) +
+        item(&app, "surface_variant", surface_variant) +
+        item(&app, "background", background) +
+        item(&app, "on_background", on_background) +
+        item(&app, "shadow", shadow) +
+        item(&app, "scrim", scrim)
+    ).wrap(Wrap)
+        .cross_axis_gap(10.0)
+        .main_axis_gap(10.0)
+        .item()
+        .width(Size::Expanded)
+}
+
+fn multi_thread_test(app: AppContext, property: AppProperty) -> Item {
+    let color = Shared::from(Color::RED);
+    let text = Shared::from("Hello, world!");
+    app.column(Children::new()+
+        app.rectangle(Color::RED)
+            .color(&color)
+            .item()
+            .width(200.0)
+            .height(200.0)
+            .on_click({
+                let mut color = color.clone();
+                let mut text = text.clone();
+                move |_| {
+                    let mut color = color.clone();
+                    let mut text = text.clone();
+                    thread::spawn(move || {
+                        thread::sleep(Duration::from_secs(1));
+                        if color.get() == Color::RED {
+                            color.set(Color::BLUE);
+                            text.set_static("I love you!".into());
+                        } else {
+                            color.set(Color::RED);
+                            text.set_static("Hello, world!".into());
+                        }
+                    });
+                }
+            }) +
+        app.image("/home/grounzer/RustroverProjects/winia/example/unnamed.png")
+            .oversize_scale_mode(ScaleMode::Cover)
+            .item()
+            .align_content(Alignment::CenterEnd)
+            .size(400, 200) +
+        app.text("").text(&text).color(Color::WHITE).item()
+    )
 }
 
 fn ripple_test(app: AppContext, property: AppProperty) -> Item {
@@ -47,7 +314,7 @@ fn ripple_test(app: AppContext, property: AppProperty) -> Item {
                 .foreground(app.ripple().borderless(true).item())
         )
     }
-    
+
     app.scrollarea(Children::new()+
         app.flex(children)
             .wrap(FlexWrap::Wrap)
@@ -56,7 +323,7 @@ fn ripple_test(app: AppContext, property: AppProperty) -> Item {
             .item()
             .width(Size::Fixed(800.0))
     ).item()
-    
+
     // app.stack(Children::new() +
     //     app.rectangle(Color::TRANSPARENT)
     //         .item()

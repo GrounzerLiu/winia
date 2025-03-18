@@ -1,8 +1,5 @@
 use crate::dpi::{LogicalPosition, LogicalSize, Position};
-use crate::shared::{
-    Children, Gettable, Observable, Settable, Shared, SharedBool, SharedColor, SharedF32,
-    SharedText,
-};
+use crate::shared::{Children, Gettable, Observable, Settable, Shared, SharedBool, SharedColor, SharedF32, SharedText, SharedUnSend};
 use crate::text::StyledText;
 use crate::ui::app::AppContext;
 use crate::ui::item::{
@@ -12,7 +9,7 @@ use crate::ui::item::{
 use crate::ui::Item;
 use crate::{impl_property_layout, impl_property_redraw};
 use proc_macro::item;
-use skia_safe::textlayout::{TextAlign, TextStyle};
+use skia_safe::textlayout::{Paragraph, TextAlign, TextStyle};
 use skia_safe::{Color, Drawable, Paint, PictureRecorder, Rect, Vector};
 use std::ops::{Not, Range};
 use std::string::ToString;
@@ -55,11 +52,24 @@ impl DrawCache {
 #[derive(Clone)]
 struct TextContext {
     is_text_changed: Shared<bool>,
-    draw_caches: Shared<DrawCache>,
+    paragraph: SharedUnSend<Option<Paragraph>>,
     cursor: Shared<Option<(f32, f32, f32)>>,
     show_cursor: Shared<bool>,
     composing: Shared<Option<(Range<usize>, Range<usize>)>>,
     selection: Shared<Range<usize>>,
+}
+
+impl TextContext {
+    pub fn has_paragraph(&self) -> bool {
+        self.paragraph.value().is_some()
+    }
+
+    pub fn check_text_changed(&mut self) {
+        if self.is_text_changed.get() {
+            self.paragraph.set(None);
+            self.is_text_changed.set(false);
+        }
+    }
 }
 
 #[item(text: impl Into<SharedText>)]
@@ -81,7 +91,7 @@ impl Text {
 
         let context = TextContext {
             is_text_changed: true.into(),
-            draw_caches: DrawCache::new().into(),
+            paragraph: None.into(),
             cursor: None.into(),
             show_cursor: false.into(),
             composing: None.into(),
@@ -93,6 +103,7 @@ impl Text {
         item.data()
             .set_measure({
                 let property = property.clone();
+                let mut context = context.clone();
                 move |item, width_mode, height_mode| {
                     let property = property.value();
                     let text_style = get_text_style(&property);
@@ -101,9 +112,10 @@ impl Text {
                     let padding_vertical = item.get_padding(Orientation::Vertical);
 
                     // Get text layout width and height
+                    context.check_text_changed();
                     let (text_layout_width, text_layout_height) = {
                         let mut text = property.text.value();
-                        if !text.has_text_layout() {
+                        if !context.has_paragraph() {
                             let text_align = match item.get_layout_direction().get() {
                                 LayoutDirection::LTR => TextAlign::Left,
                                 LayoutDirection::RTL => TextAlign::Right,
@@ -116,19 +128,26 @@ impl Text {
                                     item.clamp_width(width) - padding_horizontal
                                 }
                             };
-                            text.create_text_layout(text_style.clone(), max_width, text_align);
+                            let paragraph = text.create_paragraph(text_style.clone(), max_width, text_align);
+                            context.paragraph.set(Some(paragraph));
                         } else {
-                            text.reset_text_layout_width(match width_mode {
+                            let shared_paragraph = context.paragraph.clone();
+                            let mut paragraph = shared_paragraph.value();
+                            let width = match width_mode {
                                 MeasureMode::Specified(width) => {
                                     item.clamp_width(width) - padding_horizontal
                                 }
                                 MeasureMode::Unspecified(width) => {
                                     item.clamp_width(width) - padding_horizontal
                                 }
-                            });
+                            };
+                            paragraph.as_mut().unwrap().layout(width);
                         }
 
-                        let text_layout = text.get_text_layout().unwrap();
+                        let shared_paragraph = context.paragraph.clone();
+                        let paragraph = shared_paragraph.value();
+                        let paragraph_ref = paragraph.as_ref().unwrap();
+                        let text_layout = text.get_text_layout(paragraph_ref);
                         (text_layout.width(), text_layout.height())
                     };
 
@@ -170,74 +189,24 @@ impl Text {
                 let mut context = context.clone();
                 let property = property.clone();
                 move |item, width, _height| {
+                    context.check_text_changed();
                     let property = property.value();
                     let text_style = get_text_style(&property);
                     let max_width = width - item.get_padding(Orientation::Horizontal);
 
-                    let layout_direction = item.get_layout_direction().get();
-                    let align_content = item.get_align_content().get();
-                    let padding_start = item.get_padding_start().get();
-                    let padding_end = item.get_padding_end().get();
-                    let padding_top = item.get_padding_top().get();
-                    let padding_bottom = item.get_padding_bottom().get();
-
-                    let display_parameter = item.get_display_parameter();
-                    let width = display_parameter.width;
-                    let height = display_parameter.height;
-
                     let mut text = property.text.value();
 
-                    if !text.has_text_layout() {
-                        text.create_text_layout(text_style.clone(), max_width, TextAlign::Justify);
+                    if !context.has_paragraph() {
+                        let paragraph = text.create_paragraph(text_style.clone(), max_width, TextAlign::Justify);
+                        context.paragraph.set(Some(paragraph));
                     } else {
-                        text.reset_text_layout_width(max_width);
-                    }
-
-                    let text_layout = text.get_text_layout().unwrap();
-
-                    let text_layout_width = text_layout.width();
-                    let text_layout_height = text_layout.height();
-
-                    let paragraph_x = LogicalX::new(
-                        layout_direction,
-                        match align_content.to_horizontal_alignment() {
-                            HorizontalAlignment::Start => padding_start,
-                            HorizontalAlignment::Center => (width - text_layout_width) / 2.0,
-                            HorizontalAlignment::End => width - text_layout_width - padding_end,
-                        },
-                        width,
-                    );
-
-                    let paragraph_y = match align_content.to_vertical_alignment() {
-                        VerticalAlignment::Top => padding_top,
-                        VerticalAlignment::Center => (height - text_layout_height) / 2.0,
-                        VerticalAlignment::Bottom => height - text_layout_height - padding_bottom,
-                    };
-
-                    let mut recorder = PictureRecorder::new();
-                    let canvas = recorder.begin_recording(Rect::from_wh(width, height), None);
-                    text_layout.draw(canvas, paragraph_x.logical_value(), paragraph_y);
-                    let drawable = recorder.finish_recording_as_drawable().unwrap();
-                    let mut draw_caches = context.draw_caches.value();
-                    draw_caches.bottom.1 = Some(drawable);
-                    let top_alpha = *display_parameter
-                        .float_params
-                        .get(&draw_caches.top.0)
-                        .unwrap_or(&0.0);
-                    if context.is_text_changed.get() && (top_alpha == 0.0 || top_alpha == 1.0) {
-                        let target_parameter = item.get_target_parameter();
-                        target_parameter
-                            .float_params
-                            .insert(draw_caches.bottom.0.clone(), 1.0);
-                        target_parameter
-                            .float_params
-                            .insert(draw_caches.top.0.clone(), 0.0);
-                        context.is_text_changed.set(false);
+                        let mut paragraph = context.paragraph.value();
+                        paragraph.as_mut().unwrap().layout(max_width);
                     }
                 }
             })
             .set_ime_input({
-                let context = context.clone();
+                let mut context = context.clone();
                 let property = property.clone();
                 move |item, ime_action| {
                     let mut property = property.value();
@@ -316,20 +285,24 @@ impl Text {
                         }
                         ImeAction::Disabled => {}
                     }
+                    context.is_text_changed.set(true);
                     item.get_app_context().request_layout();
                 }
             })
             .set_draw({
                 let property = property.clone();
-                let context = context.clone();
+                let mut context = context.clone();
                 move |item, canvas| {
+                    context.check_text_changed();
                     let property = property.value();
                     let text = property.text.value();
 
-                    if !text.has_text_layout() {
+                    if !context.has_paragraph() {
                         return;
                     }
-                    let text_layout = text.get_text_layout().unwrap();
+                    let shared_paragraph = context.paragraph.clone();                        let paragraph = shared_paragraph.value();
+                    let paragraph_ref = paragraph.as_ref().unwrap();
+                    let text_layout = text.get_text_layout(paragraph_ref);
 
                     let layout_direction = item.get_layout_direction().get();
                     let align_content = item.get_align_content().get();
@@ -410,60 +383,11 @@ impl Text {
                             });
                     }
 
-                    // text_layout.draw(
-                    //     canvas,
-                    //     paragraph_x.logical_value() + display_parameter.x(),
-                    //     paragraph_y + display_parameter.y(),
-                    // );
-                    let mut draw_caches = context.draw_caches.value();
-                    let rect = Rect::from_xywh(
-                        display_parameter.x(),
-                        display_parameter.y(),
-                        display_parameter.width,
-                        display_parameter.height,
+                    text_layout.draw(
+                        canvas,
+                        paragraph_x.logical_value() + display_parameter.x(),
+                        paragraph_y + display_parameter.y(),
                     );
-
-                    let bottom_alpha = *display_parameter
-                        .float_params
-                        .get(&draw_caches.bottom.0)
-                        .unwrap();
-                    let top_alpha = *display_parameter
-                        .float_params
-                        .get(&draw_caches.top.0)
-                        .unwrap();
-                    if let Some(drawable) = draw_caches.bottom.1.as_mut() {
-                        canvas.save_layer_alpha_f(rect, bottom_alpha);
-                        canvas.translate(Vector::new(
-                            display_parameter.x() + paragraph_x.logical_value(),
-                            display_parameter.y() + paragraph_y,
-                        ));
-                        drawable.draw(canvas, None);
-                        canvas.restore();
-                        // println!("bottom_alpha: {}", bottom_alpha);
-                    }
-
-                    if let Some(drawable) = draw_caches.top.1.as_mut() {
-                        canvas.save_layer_alpha_f(rect, top_alpha);
-                        canvas.translate(Vector::new(
-                            display_parameter.x() + paragraph_x.logical_value(),
-                            display_parameter.y() + paragraph_y,
-                        ));
-                        drawable.draw(canvas, None);
-                        canvas.restore();
-                        // println!("top_alpha: {}", top_alpha);
-                    }
-
-                    if top_alpha == 0.0 {
-                        let target_parameter = item.get_target_parameter();
-                        target_parameter
-                            .float_params
-                            .insert(draw_caches.bottom.0.clone(), 1.0);
-                        target_parameter
-                            .float_params
-                            .insert(draw_caches.top.0.clone(), 0.0);
-                        draw_caches.swap();
-                        println!("swap");
-                    }
 
                     if property.editable.get() && selection.start == selection.end {
                         if show_cursor {
@@ -575,11 +499,13 @@ impl Text {
                 let property = property.clone();
                 move |item, event| {
                     let property = property.value();
-                    if !property.editable.get() || !property.text.value().has_text_layout() {
+                    if !property.editable.get() || !context.has_paragraph() {
                         return;
                     }
                     let text = property.text.value();
-                    let text_layout = text.get_text_layout().unwrap();
+                    let shared_paragraph = context.paragraph.clone();                        let paragraph = shared_paragraph.value();
+                    let paragraph_ref = paragraph.as_ref().unwrap();
+                    let text_layout = text.get_text_layout(paragraph_ref);
 
                     let display_parameter = item.get_display_parameter();
                     let padding_top = item.get_padding_top().get();
@@ -673,13 +599,13 @@ impl Text {
             property.text.remove_observer(id);
 
             let mut text_context = self.text_context.clone();
-            let app_context = self.item.data().get_app_context();
+            let event_loop_proxy = self.item.data().get_app_context().event_loop_proxy();
             property.text = text.into();
             property.text.add_specific_observer(
                 id,
                 Box::new(move |_text: &mut StyledText| {
                     text_context.is_text_changed.set(true);
-                    app_context.request_layout();
+                    event_loop_proxy.request_layout();
                 }),
             );
         }

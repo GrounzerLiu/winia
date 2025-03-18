@@ -1,7 +1,11 @@
-use proc_macro::item;
+/*use proc_macro::item;
 use crate::ui::app::AppContext;
-use crate::shared::Children;
+use crate::shared::{Children, SharedText};
 use crate::ui::Item;
+
+pub enum ButtonType {
+
+}
 
 #[derive(Clone)]
 struct ButtonProperty {
@@ -15,7 +19,7 @@ pub struct Button {
 }
 
 impl Button {
-    pub fn new(app_context: AppContext) -> Self {
+    pub fn new(app_context: AppContext, text: impl Into<SharedText>) -> Self {
         let property = ButtonProperty {
 
         };
@@ -27,3 +31,4 @@ impl Button {
     }
 }
 
+*/

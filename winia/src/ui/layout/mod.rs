@@ -46,12 +46,12 @@ impl AlignSelf for Item {
             }
         }
 
-        let app_context = self.data().get_app_context();
+        let event_loop_proxy = self.data().get_app_context().event_loop_proxy();
         let mut align_self = align_self.into();
         align_self.add_observer(
             id,
             Box::new(move || {
-                app_context.request_layout();
+                event_loop_proxy.request_layout();
             }),
         );
         self.data().custom_property("align_self", CustomProperty::Any(Box::new(align_self)));

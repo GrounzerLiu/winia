@@ -35,6 +35,7 @@ pub struct Ripple {
 
 impl Ripple {
     pub fn new(app_context: AppContext) -> Self {
+        let event_loop_proxy = app_context.event_loop_proxy();
         let primary_color = app_context
             .theme
             .value()
@@ -48,9 +49,9 @@ impl Ripple {
                 opacity.add_observer(
                     0,
                     Box::new({
-                        let app_context = app_context.clone();
+                        let event_loop_proxy = event_loop_proxy.clone();
                         move || {
-                            app_context.request_redraw();
+                            event_loop_proxy.request_redraw();
                         }
                     }),
                 );
@@ -61,9 +62,9 @@ impl Ripple {
                 opacity.add_observer(
                     0,
                     Box::new({
-                        let app_context = app_context.clone();
+                        let event_loop_proxy = event_loop_proxy.clone();
                         move || {
-                            app_context.request_redraw();
+                            event_loop_proxy.request_redraw();
                         }
                     }),
                 );
@@ -121,9 +122,9 @@ impl Ripple {
                                 shared.add_observer(
                                     0,
                                     Box::new({
-                                        let app_context = app_context.clone();
+                                        let event_loop_proxy = app_context.event_loop_proxy();
                                         move || {
-                                            app_context.request_redraw();
+                                            event_loop_proxy.request_redraw();
                                         }
                                     }),
                                 );
@@ -141,7 +142,7 @@ impl Ripple {
                             add_observer(app_context.clone(), &mut opacity);
                             degree.animation_to_f32(1.0)
                                 .duration(Duration::from_millis(300))
-                                .start(app_context.clone());
+                                .start(app_context.event_loop_proxy());
                             let layer = Layer {
                                 is_ended: false,
                                 is_finished: false.into(),
@@ -166,7 +167,7 @@ impl Ripple {
                                 if let Some(animation) = layer.degree.get_animation() {
                                     if !animation.is_finished() {
                                         let opacity = layer.opacity.clone();
-                                        let app_context = app_context.clone();
+                                        let event_loop_proxy = app_context.event_loop_proxy();
                                         animation.on_finish(
                                             move || {
                                                 let mut is_finished = is_finished.clone();
@@ -177,7 +178,7 @@ impl Ripple {
                                                             is_finished.set(true);
                                                         },
                                                     )
-                                                    .start(app_context.clone());
+                                                    .start(event_loop_proxy.clone());
                                             }
                                         );
                                     } else {
@@ -188,7 +189,7 @@ impl Ripple {
                                                     is_finished.set(true);
                                                 },
                                             )
-                                            .start(app_context.clone());
+                                            .start(app_context.event_loop_proxy());
                                     }
                                 }
                             }
@@ -211,7 +212,7 @@ impl Ripple {
                         .background_opacity
                         .animation_to_f32(if is_hovered { 0.08 } else { 0.0 })
                         .duration(Duration::from_millis(300))
-                        .start(item.get_app_context());
+                        .start(item.get_app_context().event_loop_proxy());
                 }
             });
 
@@ -256,7 +257,7 @@ impl Ripple {
         {
             let mut property = self.property.value();
             property.borderless = borderless.into();
-            let app_context = self.item.data().get_app_context();
+            let event_loop_proxy = self.item.data().get_app_context().event_loop_proxy();
             let mut clip_shape = self.item.data().get_clip_shape();
             property
                 .borderless
@@ -281,7 +282,7 @@ impl Ripple {
                             Path::rect(Rect::from_xywh(x, y, width, height), None)
                         }));
                     }
-                    app_context.request_layout();
+                    event_loop_proxy.request_redraw();
                 });
             property.borderless.notify();
         }

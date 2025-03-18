@@ -1,4 +1,4 @@
-use crate::shared::{Children, Gettable, Shared};
+use crate::shared::{Children, Gettable, Shared, SharedUnSend};
 use crate::ui::app::AppContext;
 use crate::ui::item::{
     HorizontalAlignment, LogicalX, MeasureMode, Orientation, Scroller, Size, VerticalAlignment,
@@ -20,7 +20,7 @@ impl ScrollArea {
         let property = Shared::new(ScrollAreaProperty {});
 
         let item = Item::new(app_context.clone(), children);
-        let scroller = Shared::from(Scroller::new(app_context, (true, true), (0.0, 0.0),(0.0, 0.0), (0.0, 0.0)));
+        let scroller = SharedUnSend::from(Scroller::new(app_context, (true, true), (0.0, 0.0),(0.0, 0.0), (0.0, 0.0)));
         item.data()
             .set_measure(|item, width_mode, height_mode| {
                 if item.get_children().len() > 1 {

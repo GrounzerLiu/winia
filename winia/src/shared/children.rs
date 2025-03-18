@@ -60,8 +60,8 @@ impl DerefMut for Items {
 
 pub struct Children {
     items: Arc<Mutex<Items>>,
-    simple_observers: Arc<Mutex<Vec<(usize, Box<dyn FnMut()>)>>>,
-    specific_observers: Arc<Mutex<Vec<(usize, Box<dyn FnMut(&Action)>)>>>,
+    simple_observers: Arc<Mutex<Vec<(usize, Box<dyn FnMut() + Send>)>>>,
+    specific_observers: Arc<Mutex<Vec<(usize, Box<dyn FnMut(&Action) + Send>)>>>,
 }
 
 impl Children {
@@ -128,7 +128,7 @@ impl Children {
 
     pub fn add_specific_observer(
         &mut self,
-        observer: Box<dyn FnMut(&Action)>,
+        observer: Box<dyn FnMut(&Action) + Send>,
     ) -> Box<dyn FnOnce()> {
         let id = generate_id();
         self.specific_observers.lock().push((id, observer));
@@ -156,7 +156,7 @@ impl Children {
 }
 
 impl Observable for Children {
-    fn add_observer(&mut self, id: usize, observer: Box<dyn FnMut()>) -> Removal {
+    fn add_observer(&mut self, id: usize, observer: Box<dyn FnMut() + Send>) -> Removal {
         self.simple_observers.lock().push((id, observer));
         let simple_observers = self.simple_observers.clone();
         Removal::new(move || {
@@ -190,8 +190,8 @@ impl Add<Item> for Children {
 
 struct ChildrenWeak {
     items: Weak<Mutex<Items>>,
-    simple_observers: Weak<Mutex<Vec<(usize, Box<dyn FnMut()>)>>>,
-    specific_observers: Weak<Mutex<Vec<(usize, Box<dyn FnMut(&Action)>)>>>,
+    simple_observers: Weak<Mutex<Vec<(usize, Box<dyn FnMut() + Send>)>>>,
+    specific_observers: Weak<Mutex<Vec<(usize, Box<dyn FnMut(&Action) + Send>)>>>,
 }
 
 impl ChildrenWeak {

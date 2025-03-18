@@ -8,7 +8,7 @@ members = [
     "exmaple2",
     "winia/proc-macro"]
 
-exclude = ["winia"]
+default-members = ["winia"]
 
 [workspace.dependencies]
 winit = "0.30.9"

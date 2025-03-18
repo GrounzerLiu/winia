@@ -19,52 +19,59 @@ use std::sync::Arc;
 use std::time::Instant;
 use winit::event::{DeviceId, Force, KeyEvent, MouseButton, TouchPhase};
 
-
-pub fn layout<T>(mut property: Shared<T>, id: usize, app_context: &AppContext) -> Shared<T> {
-    let app_context = app_context.clone();
+pub fn layout<T: Send>(mut property: Shared<T>, id: usize, app_context: &AppContext) -> Shared<T> {
+    let event_loop_proxy = app_context.event_loop_proxy();
     property
         .add_observer(
             id,
             Box::new(move || {
-                app_context.request_layout();
+                event_loop_proxy.request_layout();
             }),
         )
         .drop();
     property
 }
 
-pub fn init_property_layout<T>(property: &mut Shared<T>, id: usize, app_context: &AppContext) {
-    let app_context = app_context.clone();
+pub fn init_property_layout<T: Send>(
+    property: &mut Shared<T>,
+    id: usize,
+    app_context: &AppContext,
+) {
+    let event_loop_proxy = app_context.event_loop_proxy();
     property
         .add_observer(
             id,
             Box::new(move || {
-                app_context.request_layout();
+                event_loop_proxy.request_layout();
             }),
         )
         .drop();
 }
 
-pub fn redraw<T>(mut property: Shared<T>, id: usize, app_context: &AppContext) -> Shared<T> {
-    let app_context = app_context.clone();
+pub fn redraw<T: Send>(mut property: Shared<T>, id: usize, app_context: &AppContext) -> Shared<T> {
+    let event_loop_proxy = app_context.event_loop_proxy();
     property
         .add_observer(
             id,
             Box::new(move || {
-                app_context.request_redraw();
+                event_loop_proxy.request_redraw();
             }),
         )
         .drop();
     property
 }
 
-pub fn init_property_redraw<T>(property: &mut Shared<T>, id: usize, app_context: &AppContext) {
-    let app_context = app_context.clone();
+pub fn init_property_redraw<T: Send>(
+    property: &mut Shared<T>,
+    id: usize,
+    app_context: &AppContext,
+) {
+    let event_loop_proxy = app_context.event_loop_proxy();
     property
         .add_observer(
             id,
             Box::new(move || {
-                app_context.request_redraw();
+                event_loop_proxy.request_redraw();
             }),
         )
         .drop();
@@ -224,8 +231,6 @@ macro_rules! calculate_animation_value {
     };
 }
 
-
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Orientation {
     Horizontal,
@@ -379,7 +384,7 @@ pub enum MouseScrollDelta {
 pub struct MouseWheel {
     pub device_id: DeviceId,
     pub delta: MouseScrollDelta,
-    pub state: PointerState
+    pub state: PointerState,
 }
 
 impl MeasureMode {
@@ -463,7 +468,7 @@ pub struct ItemData {
     baseline: Option<f32>,
     children: Children,
     clip: Shared<bool>,
-    clip_shape: Shared<Box<dyn Fn(DisplayParameter) -> Path>>,
+    clip_shape: Shared<Box<dyn Fn(DisplayParameter) -> Path + Send>>,
     custom_properties: HashMap<String, CustomProperty>,
     display_parameter_out: Shared<DisplayParameter>,
     enable_background_blur: SharedBool,
@@ -550,7 +555,19 @@ impl ItemData {
             align_content: layout(Alignment::TopStart.into(), id, &app_context),
             animations: Default::default(),
             app_context: app_context.clone(),
-            background: layout(SharedItem::none(), id, &app_context),
+            background: {
+                let mut item = SharedItem::none();
+                let event_loop_proxy = app_context.event_loop_proxy();
+                item
+                    .add_observer(
+                        id,
+                        Box::new(move || {
+                            event_loop_proxy.request_layout();
+                        }),
+                    )
+                    .drop();
+                item
+            },
             baseline: None,
             children,
             clip: redraw(false.into(), id, &app_context),
@@ -571,7 +588,19 @@ impl ItemData {
             display_parameter_out: DisplayParameter::default().into(),
             enable_background_blur: redraw(false.into(), id, &app_context),
             focused: redraw(false.into(), id, &app_context),
-            foreground: redraw(SharedItem::none(), id, &app_context),
+            foreground: {
+                let mut item = SharedItem::none();
+                let event_loop_proxy = app_context.event_loop_proxy();
+                item
+                    .add_observer(
+                        id,
+                        Box::new(move || {
+                            event_loop_proxy.request_layout();
+                        }),
+                    )
+                    .drop();
+                item
+            },
             height: redraw(Size::Compact.into(), id, &app_context),
             id,
             layout_direction: layout(LayoutDirection::LTR.into(), id, &app_context),
@@ -621,9 +650,7 @@ impl ItemData {
             cursor_move: Arc::new(Mutex::new(|_item: &mut ItemData, _x: f32, _y: f32| {})),
             dispatch_apply_style: Arc::new(Mutex::new(|item: &mut ItemData, style: &Style| {
                 item.get_children().items().iter_mut().for_each(|child| {
-                    child.data()
-                        .get_dispatch_apply_style()
-                        .lock()(child.data().deref_mut(), style);
+                    child.data().get_dispatch_apply_style().lock()(child.data().deref_mut(), style);
                 });
                 item.get_apply_style().lock()(item, style);
             })),
@@ -673,7 +700,7 @@ impl ItemData {
                     rayon::iter::ParallelIterator::for_each(
                         rayon::iter::ParallelIterator::filter(
                             item.get_children().items().par_iter_mut(),
-                            |item|{
+                            |item| {
                                 let display_parameter = item.data().get_display_parameter();
                                 let x = display_parameter.x();
                                 let y = display_parameter.y();
@@ -682,11 +709,12 @@ impl ItemData {
                                 let x_overlap = x < window_size.0 && x + width > 0.0;
                                 let y_overlap = y < window_size.1 && y + height > 0.0;
                                 x_overlap && y_overlap
-                            }
-                        ), 
+                            },
+                        ),
                         |child| {
-                        child.data().dispatch_cursor_move(x, y);
-                    });
+                            child.data().dispatch_cursor_move(x, y);
+                        },
+                    );
                 }
             })),
             dispatch_draw: Arc::new(Mutex::new(
@@ -838,9 +866,12 @@ impl ItemData {
                         let window_size = item.get_app_context().window_size().unwrap();
                         (window_size.width, window_size.height)
                     };
-                    item.get_children().items().iter_visible_item(window_size).for_each(|child| {
-                        draw_item(child, surface, x, y);
-                    });
+                    item.get_children()
+                        .items()
+                        .iter_visible_item(window_size)
+                        .for_each(|child| {
+                            draw_item(child, surface, x, y);
+                        });
 
                     {
                         // Draw the foreground
@@ -873,13 +904,11 @@ impl ItemData {
             dispatch_keyboard_input: Arc::new(Mutex::new(
                 |item: &mut ItemData, device_id: DeviceId, event: KeyEvent, is_synthetic: bool| {
                     let keyboard_input = item.get_keyboard_input();
-                    if keyboard_input.lock()(item, device_id, event.clone(), is_synthetic)
-                    {
+                    if keyboard_input.lock()(item, device_id, event.clone(), is_synthetic) {
                         return true;
                     }
                     item.get_children().items().iter_mut().any(|child| {
-                        let dispatch_keyboard_input =
-                            child.data().get_dispatch_keyboard_input();
+                        let dispatch_keyboard_input = child.data().get_dispatch_keyboard_input();
                         let r = dispatch_keyboard_input.lock()(
                             child.data().deref_mut(),
                             device_id,
@@ -1034,10 +1063,7 @@ impl ItemData {
                                     })
                                 };
                                 if is_clicked {
-                                    item.get_click_event().lock()(
-                                        item,
-                                        click_source.unwrap(),
-                                    );
+                                    item.get_click_event().lock()(item, click_source.unwrap());
                                     if let Some(on_click) = item.get_on_click() {
                                         on_click(click_source.unwrap());
                                     }
@@ -1054,22 +1080,27 @@ impl ItemData {
                     }
                 }
             })),
-            dispatch_mouse_wheel: Arc::new(Mutex::new(|item: &mut ItemData, mouse_wheel: MouseWheel|{
-                let children = item.get_children();
-                let (cursor_x, cursor_y) = item.get_app_context().get_cursor_position();
-                for child in children.items().iter_mut().rev() {
-                    let display_parameter = child.data().get_display_parameter();
-                    if !display_parameter.is_inside(cursor_x, cursor_y) {
-                        continue;
+            dispatch_mouse_wheel: Arc::new(Mutex::new(
+                |item: &mut ItemData, mouse_wheel: MouseWheel| {
+                    let children = item.get_children();
+                    let (cursor_x, cursor_y) = item.get_app_context().get_cursor_position();
+                    for child in children.items().iter_mut().rev() {
+                        let display_parameter = child.data().get_display_parameter();
+                        if !display_parameter.is_inside(cursor_x, cursor_y) {
+                            continue;
+                        }
+                        let dispatch_mouse_wheel = child.data().get_dispatch_mouse_wheel();
+                        let r = dispatch_mouse_wheel.lock()(
+                            child.data().deref_mut(),
+                            mouse_wheel.clone(),
+                        );
+                        if r {
+                            return true;
+                        }
                     }
-                    let dispatch_mouse_wheel = child.data().get_dispatch_mouse_wheel();
-                    let r = dispatch_mouse_wheel.lock()(child.data().deref_mut(), mouse_wheel.clone());
-                    if r {
-                        return true;
-                    }
-                }
-                item.get_mouse_wheel().lock()(item, mouse_wheel)
-            })),
+                    item.get_mouse_wheel().lock()(item, mouse_wheel)
+                },
+            )),
             dispatch_timer: Arc::new(Mutex::new(|item: &mut ItemData, id: usize| {
                 let timer = item.get_timer();
                 if timer.lock()(item, id) {
@@ -1109,20 +1140,23 @@ impl ItemData {
                             match event.pointer_state {
                                 PointerState::Started => {
                                     if display_parameter.is_inside(x, y) {
-                                        captured_touch_pointer.insert((child.data().get_id(), event.id));
+                                        captured_touch_pointer
+                                            .insert((child.data().get_id(), event.id));
                                         child.data().dispatch_touch_input(event);
                                         return;
                                     }
                                 }
                                 PointerState::Moved => {
-                                    if captured_touch_pointer.contains(&(child.data().get_id(), event.id))
+                                    if captured_touch_pointer
+                                        .contains(&(child.data().get_id(), event.id))
                                     {
                                         child.data().dispatch_touch_input(event);
                                         return;
                                     }
                                 }
                                 PointerState::Ended | PointerState::Cancelled => {
-                                    if captured_touch_pointer.contains(&(child.data().get_id(), event.id))
+                                    if captured_touch_pointer
+                                        .contains(&(child.data().get_id(), event.id))
                                     {
                                         let child_id = child.data().get_id();
                                         captured_touch_pointer
@@ -1163,30 +1197,37 @@ impl ItemData {
             draw: Arc::new(Mutex::new(|_item: &mut ItemData, _canvas: &Canvas| {})),
             ime_input: Arc::new(Mutex::new(|_item: &mut ItemData, _action: ImeAction| {})),
             keyboard_input: Arc::new(Mutex::new(
-                |_item: &mut ItemData, _device_id: DeviceId, _event: KeyEvent, _is_synthetic: bool| {
-                    false
+                |_item: &mut ItemData,
+                 _device_id: DeviceId,
+                 _event: KeyEvent,
+                 _is_synthetic: bool| { false },
+            )),
+            layout: Arc::new(Mutex::new(
+                |_item: &mut ItemData, _width: f32, _height: f32| {},
+            )),
+            measure: Arc::new(Mutex::new(
+                |item: &mut ItemData, width_mode, height_mode| {
+                    item.measure_children(width_mode, height_mode);
+                    fn get_size(measure_mode: MeasureMode) -> f32 {
+                        match measure_mode {
+                            MeasureMode::Specified(value) => value,
+                            MeasureMode::Unspecified(max_size) => max_size,
+                        }
+                    }
+
+                    let max_width = item.get_max_width().get();
+                    let max_height = item.get_max_height().get();
+                    let min_width = item.get_min_width().get();
+                    let min_height = item.get_min_height().get();
+                    let measure_parameter = item.get_measure_parameter();
+                    measure_parameter.width = get_size(width_mode).clamp(min_width, max_width);
+                    measure_parameter.height = get_size(height_mode).clamp(min_height, max_height);
                 },
             )),
-            layout: Arc::new(Mutex::new(|_item: &mut ItemData, _width: f32, _height: f32| {})),
-            measure: Arc::new(Mutex::new(|item: &mut ItemData, width_mode, height_mode| {
-                item.measure_children(width_mode, height_mode);
-                fn get_size(measure_mode: MeasureMode) -> f32 {
-                    match measure_mode {
-                        MeasureMode::Specified(value) => value,
-                        MeasureMode::Unspecified(max_size) => max_size,
-                    }
-                }
-
-                let max_width = item.get_max_width().get();
-                let max_height = item.get_max_height().get();
-                let min_width = item.get_min_width().get();
-                let min_height = item.get_min_height().get();
-                let measure_parameter = item.get_measure_parameter();
-                measure_parameter.width = get_size(width_mode).clamp(min_width, max_width);
-                measure_parameter.height = get_size(height_mode).clamp(min_height, max_height);
-            })),
             mouse_input: Arc::new(Mutex::new(|_item: &mut ItemData, _event: MouseEvent| {})),
-            mouse_wheel: Arc::new(Mutex::new(|_item: &mut ItemData, _mouse_wheel: MouseWheel| false)),
+            mouse_wheel: Arc::new(Mutex::new(
+                |_item: &mut ItemData, _mouse_wheel: MouseWheel| false,
+            )),
             click_event: Arc::new(Mutex::new(|_item: &mut ItemData, _source: ClickSource| {})),
             focus_event: Arc::new(Mutex::new(|_item: &mut ItemData, _focused: bool| {})),
             hover_event: Arc::new(Mutex::new(|_item: &mut ItemData, _hover: bool| {})),
@@ -1212,13 +1253,38 @@ impl_property_layout!(
     SharedAlignment,
     "The alignment of the content of the item. Not all items support this property."
 );
-impl_property_layout!(
-    background,
-    set_background,
-    get_background,
-    SharedItem,
-    "The background of the item. It will be drawn behind the content (including children)"
-);
+// impl_property_layout!(
+//     background,
+//     set_background,
+//     get_background,
+//     SharedItem,
+//     "The background of the item. It will be drawn behind the content (including children)"
+// );
+impl ItemData {
+    pub fn set_background(&mut self, background: impl Into<SharedItem>) {
+        self.background.remove_observer(self.id);
+        self.background = background.into();
+        let event_loop_proxy = self.app_context.event_loop_proxy();
+        self.background
+            .add_observer(
+                self.id,
+                Box::new(move || {
+                    event_loop_proxy.request_layout();
+                }),
+            )
+            .drop();
+    }
+
+    pub fn get_background(&self) -> SharedItem {
+        self.background.clone()
+    }
+}
+impl Item {
+    pub fn background(self, background: impl Into<SharedItem>) -> Self {
+        self.data().set_background(background);
+        self
+    }
+}
 impl_property_redraw!(
     clip,
     set_clip,
@@ -1230,7 +1296,7 @@ impl_property_redraw!(
     clip_shape,
     set_clip_shape,
     get_clip_shape,
-    Shared<Box<dyn Fn(DisplayParameter) -> Path>>,
+    Shared<Box<dyn Fn(DisplayParameter) -> Path + Send>>,
     "The shape used to clip the content of the item. If this is set, the content will be clipped to the shape."
 );
 impl_property_layout!(
@@ -1240,13 +1306,38 @@ impl_property_layout!(
     SharedBool,
     "Whether to enable background blur. This will cause the background to be blurred when it is not fully opaque."
 );
-impl_property_layout!(
-    foreground,
-    set_foreground,
-    get_foreground,
-    SharedItem,
-    "The foreground of the item. It will be drawn in front of the content (including children)"
-);
+// impl_property_layout!(
+//     foreground,
+//     set_foreground,
+//     get_foreground,
+//     SharedItem,
+//     "The foreground of the item. It will be drawn in front of the content (including children)"
+// );
+impl ItemData {
+    pub fn set_foreground(&mut self, foreground: impl Into<SharedItem>) {
+        self.foreground.remove_observer(self.id);
+        self.foreground = foreground.into();
+        let event_loop_proxy = self.app_context.event_loop_proxy();
+        self.foreground
+            .add_observer(
+                self.id,
+                Box::new(move || {
+                    event_loop_proxy.request_layout();
+                }),
+            )
+            .drop();
+    }
+
+    pub fn get_foreground(&self) -> SharedItem {
+        self.foreground.clone()
+    }
+}
+impl Item {
+    pub fn foreground(self, foreground: impl Into<SharedItem>) -> Self {
+        self.data().set_foreground(foreground);
+        self
+    }
+}
 impl_property_layout!(
     height,
     set_height,
@@ -1726,7 +1817,9 @@ impl ItemData {
         let self_item_id = self.id;
         self.focused.remove_observer(self_item_id);
 
-        let app_context = self.app_context.clone();
+        let event_loop_proxy = self.app_context.event_loop_proxy.clone();
+        let focused_property = self.app_context.focused_property.clone();
+        let focus_changed_items = self.app_context.focus_changed_items.clone();
 
         self.focused = focused.into();
         let self_item_id = self.id;
@@ -1738,8 +1831,7 @@ impl ItemData {
                     Clear,
                     Nothing,
                 }
-                let mut focused_property_value = app_context
-                    .focused_property
+                let mut focused_property_value = focused_property
                     .write(|focused_property| focused_property.take());
                 let action = {
                     // There is an item that is focused
@@ -1766,8 +1858,7 @@ impl ItemData {
                         if *focused {
                             Action::Replace
                         } else {
-                            app_context
-                                .focus_changed_items
+                            focus_changed_items
                                 .write(|focus_changed_items| {
                                     focus_changed_items.insert(self_item_id)
                                 });
@@ -1777,17 +1868,16 @@ impl ItemData {
                 };
                 match action {
                     Action::Replace => {
-                        app_context
-                            .focus_changed_items
+                        focus_changed_items
                             .write(|focus_changed_items| focus_changed_items.insert(self_item_id));
-                        app_context.focused_property.write(|focused_property| {
+                        focused_property.write(|focused_property| {
                             focused_property.replace((focused_property_clone.clone(), self_item_id))
                         });
-                        app_context.send_user_event(UserEvent::RequestFocus);
+                        event_loop_proxy.send_event(UserEvent::RequestFocus);
                     }
                     Action::Nothing => {
                         if let Some(v) = focused_property_value {
-                            app_context.focused_property.write(move |focused_property| {
+                            focused_property.write(move |focused_property| {
                                 focused_property.replace((v.0.clone(), v.1))
                             });
                         }
@@ -2224,9 +2314,9 @@ impl ItemData {
         f.lock()(self, event);
     }
 
-    pub fn dispatch_mouse_wheel(&mut self, event:MouseWheel) ->bool {
+    pub fn dispatch_mouse_wheel(&mut self, event: MouseWheel) -> bool {
         let f = self.get_dispatch_mouse_wheel();
-        let r =f.lock()(self, event);
+        let r = f.lock()(self, event);
         r
     }
 
@@ -2360,6 +2450,15 @@ impl ItemData {
         });
     }
 
+    pub fn set_size<T>(&mut self, width: T, height: T) -> &mut Self
+    where
+        T: Into<SharedSize>
+    {
+        self.set_width(width);
+        self.set_height(height);
+        self
+    }
+
     pub fn set_base_line(&mut self, base_line: f32) {
         self.baseline = Some(base_line);
     }
@@ -2447,6 +2546,14 @@ impl Item {
         F: FnMut(TouchEvent) + 'static,
     {
         self.data().set_on_touch_input(f);
+        self
+    }
+
+    pub fn size<T>(self, width: T, height: T) -> Self
+    where
+        T: Into<SharedSize>
+    {
+        self.data().set_size(width, height);
         self
     }
 }

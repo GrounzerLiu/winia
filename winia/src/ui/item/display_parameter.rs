@@ -123,6 +123,22 @@ impl DisplayParameter {
         self.skew_center_x = x;
         self.skew_center_y = y;
     }
+
+    pub fn set_float_param(&mut self, key: impl Into<String>, value: f32) {
+        self.float_params.insert(key.into(), value);
+    }
+
+    pub fn set_color_param(&mut self, key: impl Into<String>, value: Color) {
+        self.color_params.insert(key.into(), value);
+    }
+
+    pub fn get_float_param(&self, key: &str) -> Option<f32> {
+        self.float_params.get(key).copied()
+    }
+
+    pub fn get_color_param(&self, key: &str) -> Option<Color> {
+        self.color_params.get(key).copied()
+    }
 }
 
 impl Default for DisplayParameter {

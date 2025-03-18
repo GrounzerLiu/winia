@@ -97,12 +97,12 @@ impl FlexGrow for Item {
             }
         }
 
-        let app_context = self.data().get_app_context();
+        let event_loop_proxy = self.data().get_app_context().event_loop_proxy();
         let mut flex_grow = flex_grow.into();
         flex_grow.add_observer(
             id,
             Box::new(move || {
-                app_context.request_layout();
+                event_loop_proxy.request_layout();
             }),
         );
         self.data().custom_property("flex_grow", CustomProperty::Any(Box::new(flex_grow)));
@@ -1127,14 +1127,14 @@ impl Flex {
     pub fn direction(self, direction: impl Into<Shared<FlexDirection>>) -> Self {
         {
             let id = self.item.data().get_id();
-            let app_context = self.item.data().get_app_context();
+            let event_loop_proxy = self.item.data().get_app_context().event_loop_proxy();
             let mut properties = self.properties.value();
             properties.direction.remove_observer(id);
             properties.direction = direction.into();
             properties.direction.add_observer(
                 id,
                 Box::new(move || {
-                    app_context.request_layout();
+                    event_loop_proxy.request_layout();
                 }),
             );
         }
@@ -1144,14 +1144,14 @@ impl Flex {
     pub fn wrap(self, wrap: impl Into<Shared<FlexWrap>>) -> Self {
         {
             let id = self.item.data().get_id();
-            let app_context = self.item.data().get_app_context();
+            let event_loop_proxy = self.item.data().get_app_context().event_loop_proxy();
             let mut properties = self.properties.value();
             properties.wrap.remove_observer(id);
             properties.wrap = wrap.into();
             properties.wrap.add_observer(
                 id,
                 Box::new(move || {
-                    app_context.request_layout();
+                    event_loop_proxy.request_layout();
                 }),
             );
         }
@@ -1161,14 +1161,14 @@ impl Flex {
     pub fn justify_content(self, justify_content: impl Into<Shared<JustifyContent>>) -> Self {
         {
             let id = self.item.data().get_id();
-            let app_context = self.item.data().get_app_context();
+            let event_loop_proxy = self.item.data().get_app_context().event_loop_proxy();
             let mut properties = self.properties.value();
             properties.justify_content.remove_observer(id);
             properties.justify_content = justify_content.into();
             properties.justify_content.add_observer(
                 id,
                 Box::new(move || {
-                    app_context.request_layout();
+                    event_loop_proxy.request_layout();
                 }),
             );
         }
@@ -1178,14 +1178,14 @@ impl Flex {
     pub fn align_items(self, align_items: impl Into<Shared<AlignItems>>) -> Self {
         {
             let id = self.item.data().get_id();
-            let app_context = self.item.data().get_app_context();
+            let event_loop_proxy = self.item.data().get_app_context().event_loop_proxy();
             let mut properties = self.properties.value();
             properties.align_items.remove_observer(id);
             properties.align_items = align_items.into();
             properties.align_items.add_observer(
                 id,
                 Box::new(move || {
-                    app_context.request_layout();
+                    event_loop_proxy.request_layout();
                 }),
             );
         }
@@ -1195,14 +1195,14 @@ impl Flex {
     pub fn align_content(self, align_content: impl Into<Shared<AlignContent>>) -> Self {
         {
             let id = self.item.data().get_id();
-            let app_context = self.item.data().get_app_context();
+            let event_loop_proxy = self.item.data().get_app_context().event_loop_proxy();
             let mut properties = self.properties.value();
             properties.align_content.remove_observer(id);
             properties.align_content = align_content.into();
             properties.align_content.add_observer(
                 id,
                 Box::new(move || {
-                    app_context.request_layout();
+                    event_loop_proxy.request_layout();
                 }),
             );
         }
@@ -1212,14 +1212,14 @@ impl Flex {
     pub fn main_axis_gap(self, main_axis_gap: impl Into<Shared<f32>>) -> Self {
         {
             let id = self.item.data().get_id();
-            let app_context = self.item.data().get_app_context();
+            let event_loop_proxy = self.item.data().get_app_context().event_loop_proxy();
             let mut properties = self.properties.value();
             properties.main_axis_gap.remove_observer(id);
             properties.main_axis_gap = main_axis_gap.into();
             properties.main_axis_gap.add_observer(
                 id,
                 Box::new(move || {
-                    app_context.request_layout();
+                    event_loop_proxy.request_layout();
                 }),
             );
         }
@@ -1229,14 +1229,14 @@ impl Flex {
     pub fn cross_axis_gap(self, cross_axis_gap: impl Into<Shared<f32>>) -> Self {
         {
             let id = self.item.data().get_id();
-            let app_context = self.item.data().get_app_context();
+            let event_loop_proxy = self.item.data().get_app_context().event_loop_proxy();
             let mut properties = self.properties.value();
             properties.cross_axis_gap.remove_observer(id);
             properties.cross_axis_gap = cross_axis_gap.into();
             properties.cross_axis_gap.add_observer(
                 id,
                 Box::new(move || {
-                    app_context.request_layout();
+                    event_loop_proxy.request_layout();
                 }),
             );
         }
