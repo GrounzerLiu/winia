@@ -13,7 +13,7 @@ bytemuck = "1.22.0"
 winit = { workspace = true, features = ["rwh_06"] }
 skia-safe = {workspace = true}
 parking_lot = {workspace = true}
-softbuffer = {path = "/home/grounzer/RustroverProjects/softbuffer"}
+softbuffer = "0.4.6"
 ash = { version = "0.38", optional = true }
 vulkano = { git = "https://github.com/vulkano-rs/vulkano.git", optional = true }
 glutin = { version = "0.32.2", optional = true }
