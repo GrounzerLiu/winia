@@ -1,7 +1,7 @@
-use std::ops::Add;
-use std::str::FromStr;
 use crate::shared::{Gettable, Shared};
 use crate::text::StyledText;
+use std::ops::Add;
+use std::str::FromStr;
 
 pub type SharedText = Shared<StyledText>;
 
@@ -11,7 +11,6 @@ impl FromStr for SharedText {
         Ok(SharedText::from(StyledText::from_str(s)?))
     }
 }
-
 
 impl From<&str> for SharedText {
     fn from(text: &str) -> Self {
@@ -67,64 +66,15 @@ impl From<&SharedText> for String {
     }
 }
 
-impl Add<SharedText> for SharedText {
+impl<T: Into<SharedText>> Add<T> for SharedText {
     type Output = SharedText;
 
-    fn add(self, rhs: SharedText) -> Self::Output {
-        SharedText::from_dynamic(
-            &[self.clone(), rhs.clone()],
-            move || {
-                self.get() + rhs.get()
-            }
-        )
-    }
-}
-
-impl Add<&SharedText> for SharedText {
-    type Output = SharedText;
-
-    fn add(self, rhs: &SharedText) -> Self::Output {
+    fn add(self, rhs: T) -> Self::Output {
         let lhs = self.clone();
-        let rhs = rhs.clone();
-        SharedText::from_dynamic(
-            &[self.clone(), rhs.clone()],
-            move || {
-                lhs.get() + rhs.get()
-            }
-        )
+        let rhs = rhs.into();
+        SharedText::from_dynamic(&[lhs.clone(), rhs.clone()], move || lhs.get() + rhs.get())
     }
 }
-
-impl Add<SharedText> for &SharedText {
-    type Output = SharedText;
-
-    fn add(self, rhs: SharedText) -> Self::Output {
-        let lhs = self.clone();
-        SharedText::from_dynamic(
-            &[self.clone(), rhs.clone()],
-            move || {
-                lhs.get() + rhs.get()
-            }
-        )
-    }
-}
-
-impl Add<&SharedText> for &SharedText {
-    type Output = SharedText;
-
-    fn add(self, rhs: &SharedText) -> Self::Output {
-        let lhs = self.clone();
-        let rhs = rhs.clone();
-        SharedText::from_dynamic(
-            &[self.clone(), rhs.clone()],
-            move || {
-                lhs.get() + rhs.get()
-            }
-        )
-    }
-}
-
-
 
 // impl<T:ToString + 'static> Add<T> for SharedText {
 //     type Output = SharedText;

@@ -1,11 +1,12 @@
 use crate::ui::animation::interpolator::{EaseOutCirc, Interpolator};
 use crate::ui::animation::Target;
 use crate::ui::app::AppContext;
-use material_color_utilities::blend_cam16ucs;
-use material_color_utilities::utils::argb_from_rgb;
 use skia_safe::Color;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+use material_colors::blend::cam16_ucs;
+use material_colors::color::Argb;
+use parking_lot::Mutex;
 
 pub(crate) struct InnerAnimation {
     pub app_context: AppContext,
@@ -39,15 +40,15 @@ impl InnerAnimation {
         let time_elapsed = self.start_time.elapsed().as_millis() as f64;
         let progress = (time_elapsed / self.duration.as_millis() as f64).clamp(0.0, 1.0);
         let start_a = start.a() as f64;
-        let start_u32 = argb_from_rgb(start.r(), start.g(), start.b());
+        let start_argb = Argb::new(255, start.r(), start.g(), start.b());
         let end_a = end.a() as f64;
-        let end_u32 = argb_from_rgb(end.r(), end.g(), end.b());
+        let end_argb = Argb::new(255, end.r(), end.g(), end.b());
         let blend_a = start_a + (end_a - start_a) * progress;
-        let blend_u32 = blend_cam16ucs(start_u32, end_u32, progress);
+        let blend_argb = cam16_ucs(start_argb, end_argb, progress);
         let a = blend_a as u8;
-        let r = (blend_u32 >> 16) as u8;
-        let g = (blend_u32 >> 8) as u8;
-        let b = blend_u32 as u8;
+        let r = blend_argb.red;
+        let g = blend_argb.green;
+        let b = blend_argb.blue;
         Color::from_argb(a, r, g, b)
     }
 
@@ -77,7 +78,7 @@ impl Animation {
 
     pub fn duration(self, duration: Duration) -> Self {
         {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock();
             inner.duration = duration;
         }
         self
@@ -86,7 +87,7 @@ impl Animation {
     /// Set the interpolator function.
     pub fn interpolator(self, interpolator: Box<dyn Interpolator>) -> Self {
         {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock();
             inner.interpolator = interpolator;
         }
         self
@@ -96,36 +97,36 @@ impl Animation {
     /// setting the properties of the [`Item`](crate::ui::item::Item) that you want to animate.
     pub fn transformation(self, transformation: impl FnMut() + 'static) -> Self {
         {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock();
             inner.transformation = Box::new(transformation);
         }
         self
     }
 
     pub fn start(self) {
-        let app_context = self.inner.lock().unwrap().app_context.clone();
+        let app_context = self.inner.lock().app_context.clone();
         app_context
             .starting_animations
             .write(|starting_animations| starting_animations.push_back(self.clone()));
     }
 
     pub fn is_finished(&self) -> bool {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock();
         inner.is_finished()
     }
 
     pub fn is_target(&self, id: usize) -> bool {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock();
         inner.is_target(id)
     }
 
     pub fn interpolate_f32(&self, start: f32, end: f32) -> f32 {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock();
         inner.interpolate_f32(start, end)
     }
 
     pub fn interpolate_color(&self, start: Color, end: Color) -> Color {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock();
         inner.interpolate_color(start, end)
     }
 }

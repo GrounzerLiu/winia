@@ -10,12 +10,12 @@ pub mod gl;
 #[cfg(feature = "gl")]
 pub use glutin;
 
+use parking_lot::Mutex;
 use skia_safe::gpu::{Budgeted, DirectContext, SurfaceOrigin};
 use skia_safe::{ImageInfo, Surface};
 use softbuffer::SoftBufferError;
 use std::ops::Deref;
 use std::sync::Arc;
-use parking_lot::Mutex;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
@@ -26,28 +26,33 @@ pub trait SkiaWindow: Deref<Target = Window> {
     fn present(&mut self);
 }
 
-pub(crate) fn create_surface(skia_context: &mut DirectContext, size: impl Into<PhysicalSize<u32>>) -> Arc<Mutex<Surface>> {
+pub(crate) fn create_surface(
+    skia_context: &mut DirectContext,
+    size: impl Into<PhysicalSize<u32>>,
+) -> Arc<Mutex<Surface>> {
     let size = size.into();
     let width = size.width;
     let height = size.height;
     let image_info = ImageInfo::new_n32_premul((width as i32, height as i32), None);
-    Arc::new(Mutex::new(skia_safe::gpu::surfaces::render_target(
-        skia_context,
-        Budgeted::Yes,
-        &image_info,
-        None,
-        SurfaceOrigin::TopLeft,
-        None,
-        false,
-        None,
-    ).unwrap()))
+    Arc::new(Mutex::new(
+        skia_safe::gpu::surfaces::render_target(
+            skia_context,
+            Budgeted::Yes,
+            &image_info,
+            None,
+            SurfaceOrigin::TopLeft,
+            None,
+            false,
+            None,
+        )
+        .unwrap(),
+    ))
 }
 
 #[macro_export]
 macro_rules! impl_skia_window {
     ($ty:ty) => {
         impl SkiaWindow for $ty {
-    
             fn resize(&mut self) -> Result<(), SoftBufferError> {
                 let size = self.soft_buffer_surface.window().inner_size();
                 let width = NonZeroU32::new(size.width).unwrap();
@@ -58,9 +63,7 @@ macro_rules! impl_skia_window {
                         self.skia_surface = create_surface(&mut self.skia_context, size);
                         Ok(())
                     }
-                    Err(e) => {
-                        Err(e)
-                    }
+                    Err(e) => Err(e),
                 }
             }
 
@@ -72,7 +75,8 @@ macro_rules! impl_skia_window {
                 let size = self.soft_buffer_surface.window().inner_size();
                 let mut soft_buffer = self.soft_buffer_surface.buffer_mut().unwrap();
                 let u8_slice = bytemuck::cast_slice_mut::<u32, u8>(&mut soft_buffer);
-                let image_info = ImageInfo::new_n32_premul((size.width as i32, size.height as i32), None);
+                let image_info =
+                    ImageInfo::new_n32_premul((size.width as i32, size.height as i32), None);
                 self.skia_surface.lock().read_pixels(
                     &image_info,
                     u8_slice,
@@ -85,16 +89,16 @@ macro_rules! impl_skia_window {
 
         impl Deref for $ty {
             type Target = Window;
-        
+
             fn deref(&self) -> &Self::Target {
                 self.soft_buffer_surface.window()
             }
         }
-        
+
         impl AsRef<Window> for $ty {
             fn as_ref(&self) -> &Window {
                 self.soft_buffer_surface.window()
             }
         }
-    }
+    };
 }

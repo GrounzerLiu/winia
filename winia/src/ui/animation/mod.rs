@@ -1,7 +1,6 @@
 mod animation;
-mod target;
 pub mod interpolator;
+mod target;
 
-pub use animation::* ;
-pub use target::* ;
-
+pub use animation::*;
+pub use target::*;

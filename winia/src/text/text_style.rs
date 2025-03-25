@@ -1,5 +1,5 @@
-use std::fmt::Display;
 use skia_safe::Color;
+use std::fmt::Display;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum StyleType {
@@ -27,7 +27,7 @@ impl Display for StyleType {
 
 /// The style of the text.
 #[derive(Copy, Clone, Debug)]
-pub enum Style{
+pub enum TextStyle {
     Bold,
     Italic,
     Underline,
@@ -37,28 +37,28 @@ pub enum Style{
     TextColor(Color),
 }
 
-impl Style{
-    pub fn name(&self) -> &'static str{
+impl TextStyle {
+    pub fn name(&self) -> &'static str {
         match self {
-            Style::Bold => "Bold",
-            Style::Italic => "Italic",
-            Style::Underline => "Underline",
-            Style::Strikethrough => "Strikethrough",
-            Style::FontSize(_) => "FontSize",
-            Style::BackgroundColor(_) => "BackgroundColor",
-            Style::TextColor(_) => "TextColor"
+            TextStyle::Bold => "Bold",
+            TextStyle::Italic => "Italic",
+            TextStyle::Underline => "Underline",
+            TextStyle::Strikethrough => "Strikethrough",
+            TextStyle::FontSize(_) => "FontSize",
+            TextStyle::BackgroundColor(_) => "BackgroundColor",
+            TextStyle::TextColor(_) => "TextColor",
         }
     }
 
-    pub fn style_type(&self) -> StyleType{
+    pub fn style_type(&self) -> StyleType {
         match self {
-            Style::Bold => StyleType::Bold,
-            Style::Italic => StyleType::Italic,
-            Style::Underline => StyleType::Underline,
-            Style::Strikethrough => StyleType::Strikethrough,
-            Style::FontSize(_) => StyleType::FontSize,
-            Style::BackgroundColor(_) => StyleType::BackgroundColor,
-            Style::TextColor(_) => StyleType::TextColor,
+            TextStyle::Bold => StyleType::Bold,
+            TextStyle::Italic => StyleType::Italic,
+            TextStyle::Underline => StyleType::Underline,
+            TextStyle::Strikethrough => StyleType::Strikethrough,
+            TextStyle::FontSize(_) => StyleType::FontSize,
+            TextStyle::BackgroundColor(_) => StyleType::BackgroundColor,
+            TextStyle::TextColor(_) => StyleType::TextColor,
         }
     }
 }

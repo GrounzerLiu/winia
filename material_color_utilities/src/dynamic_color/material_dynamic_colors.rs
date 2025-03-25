@@ -900,17 +900,19 @@ pub fn on_error_container() -> DynamicColor {
     DynamicColor::new(
         "on_error_container",
         |s: &DynamicScheme| s.error_palette(),
-        |s: &DynamicScheme| if is_monochrome(s) {
-            if s.is_dark() {
-                90.0
+        |s: &DynamicScheme| {
+            if is_monochrome(s) {
+                if s.is_dark() {
+                    90.0
+                } else {
+                    10.0
+                }
             } else {
-                10.0
-            }
-        } else {
-            if s.is_dark() {
-                90.0
-            } else {
-                30.0
+                if s.is_dark() {
+                    90.0
+                } else {
+                    30.0
+                }
             }
         },
         false,

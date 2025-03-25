@@ -32,27 +32,32 @@ pub fn vec3(a: f64, b: f64, c: f64) -> Vec3 {
 /**
  * Returns the red component of a color in ARGB format.
  */
-pub fn red_from_int(argb: Argb) -> u8
-{ ((argb & 0x00ff0000) >> 16) as u8 }
+pub fn red_from_int(argb: Argb) -> u8 {
+    ((argb & 0x00ff0000) >> 16) as u8
+}
 
 /**
  * Returns the green component of a color in ARGB format.
  */
-pub fn green_from_int(argb: Argb) -> u8
-{ ((argb & 0x0000ff00) >> 8) as u8 }
+pub fn green_from_int(argb: Argb) -> u8 {
+    ((argb & 0x0000ff00) >> 8) as u8
+}
 
 /**
  * Returns the blue component of a color in ARGB format.
  */
-pub fn blue_from_int(argb: Argb) -> u8
-{ (argb & 0x000000ff) as u8 }
+pub fn blue_from_int(argb: Argb) -> u8 {
+    (argb & 0x000000ff) as u8
+}
 
 /**
  * Converts a color from RGB components to ARGB format.
  */
 pub fn argb_from_rgb(red: u8, green: u8, blue: u8) -> Argb {
-    0xFF000000 | (((red as u32) & 0x0ff) << 16) |
-        (((green as u32) & 0x0ff) << 8) | ((blue as u32) & 0x0ff)
+    0xFF000000
+        | (((red as u32) & 0x0ff) << 16)
+        | (((green as u32) & 0x0ff) << 8)
+        | ((blue as u32) & 0x0ff)
     // 0xFF000000 | ((red & 0xff) << 16) | ((green & 0xff) << 8) |
     //     (blue & 0xff)
 }
@@ -65,7 +70,7 @@ pub fn argb_from_linrgb(linrgb: Vec3) -> Argb {
     let g = delinearized(linrgb.b);
     let b = delinearized(linrgb.c);
 
-    0xFF000000 | (((r as u32)& 0x0ff) << 16) | (((g as u32) & 0x0ff) << 8) | ((b as u32)& 0x0ff)
+    0xFF000000 | (((r as u32) & 0x0ff) << 16) | (((g as u32) & 0x0ff) << 8) | ((b as u32) & 0x0ff)
 }
 
 /**
@@ -119,14 +124,16 @@ pub fn linearized(rgb_component: u32) -> f64 {
 /**
  * Returns the alpha component of a color in ARGB format.
  */
-pub fn alpha_from_int(argb: Argb) -> u32
-{ (argb & 0xff000000) >> 24 }
+pub fn alpha_from_int(argb: Argb) -> u32 {
+    (argb & 0xff000000) >> 24
+}
 
 /**
  * Returns whether a color in ARGB format is opaque.
  */
-pub fn is_opaque(argb: Argb) -> bool
-{ alpha_from_int(argb) == 255 }
+pub fn is_opaque(argb: Argb) -> bool {
+    alpha_from_int(argb) == 255
+}
 
 /**
  * Computes the L* value of a color in ARGB representation.
@@ -246,7 +253,11 @@ pub fn diff_degrees(a: f64, b: f64) -> f64 {
  */
 pub fn rotation_direction(from: f64, to: f64) -> f64 {
     let increasing_difference = sanitize_degrees_double(to - from);
-    if increasing_difference <= 180.0 { 1.0 } else { -1.0 }
+    if increasing_difference <= 180.0 {
+        1.0
+    } else {
+        -1.0
+    }
 }
 
 /**
@@ -268,7 +279,6 @@ pub fn int_from_lstar(lstar: f64) -> Argb {
     let component = delinearized(y);
     argb_from_rgb(component, component, component)
 }
-
 
 /**
  * The signum function.
@@ -298,11 +308,8 @@ pub fn lerp(start: f64, stop: f64, amount: f64) -> f64 {
  * Multiplies a 1x3 row vector with a 3x3 matrix, returning the product.
  */
 pub fn matrix_multiply(input: Vec3, matrix: [[f64; 3]; 3]) -> Vec3 {
-    let a =
-        input.a * matrix[0][0] + input.b * matrix[0][1] + input.c * matrix[0][2];
-    let b =
-        input.a * matrix[1][0] + input.b * matrix[1][1] + input.c * matrix[1][2];
-    let c =
-        input.a * matrix[2][0] + input.b * matrix[2][1] + input.c * matrix[2][2];
+    let a = input.a * matrix[0][0] + input.b * matrix[0][1] + input.c * matrix[0][2];
+    let b = input.a * matrix[1][0] + input.b * matrix[1][1] + input.c * matrix[1][2];
+    let c = input.a * matrix[2][0] + input.b * matrix[2][1] + input.c * matrix[2][2];
     Vec3 { a, b, c }
 }

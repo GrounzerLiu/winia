@@ -1,9 +1,9 @@
+use crate::hct::Hct;
+use crate::hct::{argb_from_hcl, Cam};
+use crate::utils::Argb;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use crate::hct::{argb_from_hcl, Cam};
-use crate::hct::Hct;
-use crate::utils::Argb;
 
 #[derive(Clone, Copy, Default, Debug, PartialEq)]
 pub struct TonalPalette {
@@ -30,19 +30,19 @@ impl TonalPalette {
         }
     }
 
-    pub fn from_hct(hct: Hct)->Self{
-        Self{
+    pub fn from_hct(hct: Hct) -> Self {
+        Self {
             hue: hct.get_hue(),
             chroma: hct.get_chroma(),
-            key_color: hct
+            key_color: hct,
         }
     }
 
-    pub fn from_hue_and_chroma(hue: f64, chroma: f64)->Self{
-        Self{
+    pub fn from_hue_and_chroma(hue: f64, chroma: f64) -> Self {
+        Self {
             hue,
             chroma,
-            key_color: KeyColor::new(hue, chroma).create()
+            key_color: KeyColor::new(hue, chroma).create(),
         }
     }
     /**
@@ -55,47 +55,46 @@ impl TonalPalette {
         argb_from_hcl(self.hue, self.chroma, tone)
     }
 
-    pub fn hue(&self)->f64{
+    pub fn hue(&self) -> f64 {
         self.hue
     }
 
-    pub fn chroma(&self)->f64{
+    pub fn chroma(&self) -> f64 {
         self.chroma
     }
 
-    pub fn key_color(&self)->Hct{
+    pub fn key_color(&self) -> Hct {
         self.key_color
     }
 }
 
-
 #[derive(Clone, Copy)]
 struct F64Key(f64);
-impl PartialEq for F64Key{
-    fn eq(&self, other: &Self)->bool{
+impl PartialEq for F64Key {
+    fn eq(&self, other: &Self) -> bool {
         self.0.to_bits() == other.0.to_bits()
     }
 }
 
 #[derive(Clone)]
-pub struct KeyColor{
+pub struct KeyColor {
     max_chroma_value: f64,
     hue: f64,
     requested_chroma: f64,
-    chroma_cache: HashMap<i32, f64>
+    chroma_cache: HashMap<i32, f64>,
 }
 
-impl KeyColor{
-    pub fn new(hue: f64, requested_chroma: f64)->Self{
-        Self{
+impl KeyColor {
+    pub fn new(hue: f64, requested_chroma: f64) -> Self {
+        Self {
             max_chroma_value: 200.0,
             hue,
             requested_chroma,
-            chroma_cache: HashMap::new()
+            chroma_cache: HashMap::new(),
         }
     }
 
-    pub fn create(&mut self) ->Hct{
+    pub fn create(&mut self) -> Hct {
         // Pivot around T50 because T50 has the most chroma available, on
         // average. Thus it is most likely to have a direct answer.
         let pivot_tone = 50;
@@ -111,8 +110,7 @@ impl KeyColor{
             let mid_tone = (lower_tone + upper_tone) / 2;
             let is_ascending =
                 self.max_chroma(mid_tone) < self.max_chroma(mid_tone + tone_step_size);
-            let sufficient_chroma =
-                self.max_chroma(mid_tone) >= self.requested_chroma - epsilon;
+            let sufficient_chroma = self.max_chroma(mid_tone) >= self.requested_chroma - epsilon;
             if sufficient_chroma {
                 // Either range [lower_tone, mid_tone] or [mid_tone, upper_tone] has
                 // the answer, so search in the range that is closer the pivot tone.

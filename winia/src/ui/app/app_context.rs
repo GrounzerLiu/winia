@@ -1,7 +1,9 @@
 use crate::dpi::LogicalSize;
-use crate::shared::{Shared, SharedAnimationTrait, SharedBool, SharedUnSend, WeakShared, WeakSharedUnSend};
-use crate::ui::theme::{material_style, Style};
-use crate::ui::Animation;
+use crate::shared::{
+    Shared, SharedAnimationTrait, SharedBool, SharedUnSend, WeakShared, WeakSharedUnSend,
+};
+use crate::ui::theme::material_theme;
+use crate::ui::{Animation, Theme};
 use skia_safe::Color;
 use skiwin::SkiaWindow;
 use std::collections::{BTreeSet, LinkedList};
@@ -23,24 +25,24 @@ pub enum UserEvent {
     RequestRedraw,
     StartSharedAnimation(Box<dyn SharedAnimationTrait + Send>),
     Timer(usize),
-    SetWindowAttribute(Box<dyn FnOnce(Option<&Window>) + Send>)
+    SetWindowAttribute(Box<dyn FnOnce(Option<&Window>) + Send>),
 }
 
 #[derive(Clone)]
-pub struct EventLoopProxy{
-    event_loop_proxy: Shared<Option<WinitEventLoopProxy<UserEvent>>>
+pub struct EventLoopProxy {
+    event_loop_proxy: Shared<Option<WinitEventLoopProxy<UserEvent>>>,
 }
 
 impl EventLoopProxy {
     pub fn none() -> Self {
         Self {
-            event_loop_proxy: None.into()
+            event_loop_proxy: None.into(),
         }
     }
 
     pub fn new(event_loop_proxy: WinitEventLoopProxy<UserEvent>) -> Self {
         Self {
-            event_loop_proxy: Some(event_loop_proxy).into()
+            event_loop_proxy: Some(event_loop_proxy).into(),
         }
     }
 
@@ -79,13 +81,13 @@ impl EventLoopProxy {
 
 #[derive(Clone)]
 pub struct EventLoopProxyWeak {
-    event_loop_proxy: WeakShared<Option<WinitEventLoopProxy<UserEvent>>>
+    event_loop_proxy: WeakShared<Option<WinitEventLoopProxy<UserEvent>>>,
 }
 
 impl EventLoopProxyWeak {
     pub fn upgrade(&self) -> Option<EventLoopProxy> {
         Some(EventLoopProxy {
-            event_loop_proxy: self.event_loop_proxy.upgrade()?
+            event_loop_proxy: self.event_loop_proxy.upgrade()?,
         })
     }
 }
@@ -93,14 +95,14 @@ impl EventLoopProxyWeak {
 impl EventLoopProxy {
     pub fn weak(&self) -> EventLoopProxyWeak {
         EventLoopProxyWeak {
-            event_loop_proxy: self.event_loop_proxy.weak()
+            event_loop_proxy: self.event_loop_proxy.weak(),
         }
     }
 }
 
 #[derive(Clone)]
 pub struct AppContext {
-    pub(crate) theme: Shared<Style>,
+    pub(crate) theme: Shared<Theme>,
     pub(crate) window: SharedUnSend<Option<Box<dyn SkiaWindow>>>,
     pub(crate) event_loop_proxy: EventLoopProxy,
     pub(crate) request_layout: Shared<bool>,
@@ -127,7 +129,7 @@ impl Default for AppContext {
 impl AppContext {
     pub fn new() -> Self {
         Self {
-            theme: material_style(Color::from_rgb(255,0,255), true).into(),
+            theme: material_theme(Color::from_rgb(255, 0, 255), false).into(),
             window: None.into(),
             event_loop_proxy: EventLoopProxy::none(),
             request_layout: false.into(),
@@ -224,7 +226,7 @@ impl AppContext {
         self.event_loop_proxy.clone()
     }
 
-    pub fn theme(&self) -> Shared<Style> {
+    pub fn theme(&self) -> Shared<Theme> {
         self.theme.clone()
     }
 }
@@ -275,7 +277,7 @@ impl AppContext {
 // }
 
 pub struct AppContextWeak {
-    theme: WeakShared<Style>,
+    theme: WeakShared<Theme>,
     window: WeakSharedUnSend<Option<Box<dyn SkiaWindow>>>,
     event_loop_proxy: EventLoopProxyWeak,
     request_re_layout: WeakShared<bool>,

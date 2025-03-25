@@ -1,6 +1,6 @@
-use crate::utils::{Argb, argb_from_rgb, blue_from_int, green_from_int, red_from_int};
+use crate::utils::{argb_from_rgb, blue_from_int, green_from_int, red_from_int, Argb};
 
-#[derive(Clone,Default)]
+#[derive(Clone, Default)]
 struct Box {
     r0: i32,
     r1: i32,
@@ -27,12 +27,18 @@ type IntArray = Vec<i64>;
 type DoubleArray = Vec<f64>;
 
 fn get_index(r: i32, g: i32, b: i32) -> usize {
-    ((r << (INDEX_BITS * 2)) + (r << (INDEX_BITS + 1)) + (g << INDEX_BITS) +
-        (r + g + b)) as usize
+    ((r << (INDEX_BITS * 2)) + (r << (INDEX_BITS + 1)) + (g << INDEX_BITS) + (r + g + b)) as usize
 }
 
-fn construct_histogram(pixels: &[Argb], weights: &mut IntArray, m_r: &mut IntArray, m_g: &mut IntArray, m_b: &mut IntArray, moments: &mut DoubleArray) {
-    pixels.iter().for_each(|pixel|{
+fn construct_histogram(
+    pixels: &[Argb],
+    weights: &mut IntArray,
+    m_r: &mut IntArray,
+    m_g: &mut IntArray,
+    m_b: &mut IntArray,
+    moments: &mut DoubleArray,
+) {
+    pixels.iter().for_each(|pixel| {
         let red = red_from_int(*pixel) as i32;
         let green = green_from_int(*pixel) as i32;
         let blue = blue_from_int(*pixel) as i32;
@@ -51,7 +57,13 @@ fn construct_histogram(pixels: &[Argb], weights: &mut IntArray, m_r: &mut IntArr
     });
 }
 
-fn compute_moments(weights: &mut IntArray, m_r: &mut IntArray, m_g: &mut IntArray, m_b: &mut IntArray, moments: &mut DoubleArray) {
+fn compute_moments(
+    weights: &mut IntArray,
+    m_r: &mut IntArray,
+    m_g: &mut IntArray,
+    m_b: &mut IntArray,
+    moments: &mut DoubleArray,
+) {
     for r in 1..INDEX_COUNT {
         let mut area: [i64; INDEX_COUNT] = [0; INDEX_COUNT];
         let mut area_r: [i64; INDEX_COUNT] = [0; INDEX_COUNT];
@@ -81,7 +93,6 @@ fn compute_moments(weights: &mut IntArray, m_r: &mut IntArray, m_g: &mut IntArra
                 area_b[b] += line_b;
                 area_2[b] += line_2;
 
-
                 let previous_index = get_index((r - 1) as i32, g as i32, b as i32);
                 weights[index] = weights[previous_index] + area[b];
                 m_r[index] = m_r[previous_index] + area_r[b];
@@ -95,76 +106,93 @@ fn compute_moments(weights: &mut IntArray, m_r: &mut IntArray, m_g: &mut IntArra
 
 fn top(cube: &Box, direction: Direction, position: i32, moment: &IntArray) -> i64 {
     if direction == Direction::Red {
-        moment[get_index(position, cube.g1, cube.b1)] -
-            moment[get_index(position, cube.g1, cube.b0)] -
-            moment[get_index(position, cube.g0, cube.b1)] +
-            moment[get_index(position, cube.g0, cube.b0)]
+        moment[get_index(position, cube.g1, cube.b1)]
+            - moment[get_index(position, cube.g1, cube.b0)]
+            - moment[get_index(position, cube.g0, cube.b1)]
+            + moment[get_index(position, cube.g0, cube.b0)]
     } else if direction == Direction::Green {
-        moment[get_index(cube.r1, position, cube.b1)] -
-            moment[get_index(cube.r1, position, cube.b0)] -
-            moment[get_index(cube.r0, position, cube.b1)] +
-            moment[get_index(cube.r0, position, cube.b0)]
+        moment[get_index(cube.r1, position, cube.b1)]
+            - moment[get_index(cube.r1, position, cube.b0)]
+            - moment[get_index(cube.r0, position, cube.b1)]
+            + moment[get_index(cube.r0, position, cube.b0)]
     } else {
-        moment[get_index(cube.r1, cube.g1, position)] -
-            moment[get_index(cube.r1, cube.g0, position)] -
-            moment[get_index(cube.r0, cube.g1, position)] +
-            moment[get_index(cube.r0, cube.g0, position)]
+        moment[get_index(cube.r1, cube.g1, position)]
+            - moment[get_index(cube.r1, cube.g0, position)]
+            - moment[get_index(cube.r0, cube.g1, position)]
+            + moment[get_index(cube.r0, cube.g0, position)]
     }
 }
 
 fn bottom(cube: &Box, direction: Direction, moment: &IntArray) -> i64 {
     if direction == Direction::Red {
-        -moment[get_index(cube.r0, cube.g1, cube.b1)] +
-            moment[get_index(cube.r0, cube.g1, cube.b0)] +
-            moment[get_index(cube.r0, cube.g0, cube.b1)] -
-            moment[get_index(cube.r0, cube.g0, cube.b0)]
+        -moment[get_index(cube.r0, cube.g1, cube.b1)]
+            + moment[get_index(cube.r0, cube.g1, cube.b0)]
+            + moment[get_index(cube.r0, cube.g0, cube.b1)]
+            - moment[get_index(cube.r0, cube.g0, cube.b0)]
     } else if direction == Direction::Green {
-        -moment[get_index(cube.r1, cube.g0, cube.b1)] +
-            moment[get_index(cube.r1, cube.g0, cube.b0)] +
-            moment[get_index(cube.r0, cube.g0, cube.b1)] -
-            moment[get_index(cube.r0, cube.g0, cube.b0)]
+        -moment[get_index(cube.r1, cube.g0, cube.b1)]
+            + moment[get_index(cube.r1, cube.g0, cube.b0)]
+            + moment[get_index(cube.r0, cube.g0, cube.b1)]
+            - moment[get_index(cube.r0, cube.g0, cube.b0)]
     } else {
-        -moment[get_index(cube.r1, cube.g1, cube.b0)] +
-            moment[get_index(cube.r1, cube.g0, cube.b0)] +
-            moment[get_index(cube.r0, cube.g1, cube.b0)] -
-            moment[get_index(cube.r0, cube.g0, cube.b0)]
+        -moment[get_index(cube.r1, cube.g1, cube.b0)]
+            + moment[get_index(cube.r1, cube.g0, cube.b0)]
+            + moment[get_index(cube.r0, cube.g1, cube.b0)]
+            - moment[get_index(cube.r0, cube.g0, cube.b0)]
     }
 }
 
 fn vol(cube: &Box, moment: &IntArray) -> i64 {
-    moment[get_index(cube.r1, cube.g1, cube.b1)] -
-        moment[get_index(cube.r1, cube.g1, cube.b0)] -
-        moment[get_index(cube.r1, cube.g0, cube.b1)] +
-        moment[get_index(cube.r1, cube.g0, cube.b0)] -
-        moment[get_index(cube.r0, cube.g1, cube.b1)] +
-        moment[get_index(cube.r0, cube.g1, cube.b0)] +
-        moment[get_index(cube.r0, cube.g0, cube.b1)] -
-        moment[get_index(cube.r0, cube.g0, cube.b0)]
+    moment[get_index(cube.r1, cube.g1, cube.b1)]
+        - moment[get_index(cube.r1, cube.g1, cube.b0)]
+        - moment[get_index(cube.r1, cube.g0, cube.b1)]
+        + moment[get_index(cube.r1, cube.g0, cube.b0)]
+        - moment[get_index(cube.r0, cube.g1, cube.b1)]
+        + moment[get_index(cube.r0, cube.g1, cube.b0)]
+        + moment[get_index(cube.r0, cube.g0, cube.b1)]
+        - moment[get_index(cube.r0, cube.g0, cube.b0)]
 }
 
-fn variance(cube: &Box, weights: &IntArray, m_r: &IntArray, m_g: &IntArray, m_b: &IntArray, moments: &DoubleArray) -> f64 {
+fn variance(
+    cube: &Box,
+    weights: &IntArray,
+    m_r: &IntArray,
+    m_g: &IntArray,
+    m_b: &IntArray,
+    moments: &DoubleArray,
+) -> f64 {
     let dr = vol(cube, m_r);
     let dg = vol(cube, m_g);
     let db = vol(cube, m_b);
-    let xx = moments[get_index(cube.r1, cube.g1, cube.b1)] -
-        moments[get_index(cube.r1, cube.g1, cube.b0)] -
-        moments[get_index(cube.r1, cube.g0, cube.b1)] +
-        moments[get_index(cube.r1, cube.g0, cube.b0)] -
-        moments[get_index(cube.r0, cube.g1, cube.b1)] +
-        moments[get_index(cube.r0, cube.g1, cube.b0)] +
-        moments[get_index(cube.r0, cube.g0, cube.b1)] -
-        moments[get_index(cube.r0, cube.g0, cube.b0)];
+    let xx = moments[get_index(cube.r1, cube.g1, cube.b1)]
+        - moments[get_index(cube.r1, cube.g1, cube.b0)]
+        - moments[get_index(cube.r1, cube.g0, cube.b1)]
+        + moments[get_index(cube.r1, cube.g0, cube.b0)]
+        - moments[get_index(cube.r0, cube.g1, cube.b1)]
+        + moments[get_index(cube.r0, cube.g1, cube.b0)]
+        + moments[get_index(cube.r0, cube.g0, cube.b1)]
+        - moments[get_index(cube.r0, cube.g0, cube.b0)];
     let hypotenuse = dr * dr + dg * dg + db * db;
     let volume = vol(cube, weights);
     xx - (hypotenuse as f64 / volume as f64)
 }
 
 #[allow(clippy::too_many_arguments)]
-fn maximize(cube: &Box, direction: Direction, first: i32,
-            last: i32, cut: &mut i32, whole_w: i64,
-            whole_r: i64, whole_g: i64,
-            whole_b: i64, weights: &IntArray,
-            m_r: &IntArray, m_g: &IntArray, m_b: &IntArray) -> f64 {
+fn maximize(
+    cube: &Box,
+    direction: Direction,
+    first: i32,
+    last: i32,
+    cut: &mut i32,
+    whole_w: i64,
+    whole_r: i64,
+    whole_g: i64,
+    whole_b: i64,
+    weights: &IntArray,
+    m_r: &IntArray,
+    m_g: &IntArray,
+    m_b: &IntArray,
+) -> f64 {
     let bottom_r = bottom(cube, direction, m_r);
     let bottom_g = bottom(cube, direction, m_g);
     let bottom_b = bottom(cube, direction, m_b);
@@ -186,10 +214,7 @@ fn maximize(cube: &Box, direction: Direction, first: i32,
             continue;
         }
 
-        let mut temp = ((half_r * half_r +
-            half_g * half_g +
-            half_b * half_b) /
-            half_w) as f64;
+        let mut temp = ((half_r * half_r + half_g * half_g + half_b * half_b) / half_w) as f64;
 
         half_r = whole_r - half_r;
         half_g = whole_g - half_g;
@@ -198,10 +223,7 @@ fn maximize(cube: &Box, direction: Direction, first: i32,
         if half_w == 0 {
             continue;
         }
-        temp += ((half_r * half_r +
-            half_g * half_g +
-            half_b * half_b) /
-            half_w) as f64;
+        temp += ((half_r * half_r + half_g * half_g + half_b * half_b) / half_w) as f64;
 
         if temp > max {
             max = temp;
@@ -222,9 +244,21 @@ pub fn quantize_wu(pixels: &Vec<Argb>, max_colors: u16) -> Vec<Argb> {
     let mut moments_blue = vec![0i64; TOTAL_SIZE];
     let mut moments = vec![0.0; TOTAL_SIZE];
 
-    construct_histogram(pixels, &mut weights, &mut moments_red, &mut moments_green, &mut moments_blue,
-                        &mut moments);
-    compute_moments(&mut weights, &mut moments_red, &mut moments_green, &mut moments_blue, &mut moments);
+    construct_histogram(
+        pixels,
+        &mut weights,
+        &mut moments_red,
+        &mut moments_green,
+        &mut moments_blue,
+        &mut moments,
+    );
+    compute_moments(
+        &mut weights,
+        &mut moments_red,
+        &mut moments_green,
+        &mut moments_blue,
+        &mut moments,
+    );
 
     let mut cubes = vec![Box::default(); MAX_COLORS];
     cubes[0].r1 = (INDEX_COUNT - 1) as i32;
@@ -247,15 +281,51 @@ pub fn quantize_wu(pixels: &Vec<Argb>, max_colors: u16) -> Vec<Argb> {
             let mut cut_g: i32 = 0;
             let mut cut_b: i32 = 0;
 
-            let max_r =
-                maximize(box1, Direction::Red, box1.r0 + 1, box1.r1, &mut cut_r, whole_w,
-                         whole_r, whole_g, whole_b, &weights, &moments_red, &moments_green, &moments_blue);
-            let max_g =
-                maximize(box1, Direction::Green, box1.g0 + 1, box1.g1, &mut cut_g, whole_w,
-                         whole_r, whole_g, whole_b, &weights, &moments_red, &moments_green, &moments_blue);
-            let max_b =
-                maximize(box1, Direction::Blue, box1.b0 + 1, box1.b1, &mut cut_b, whole_w,
-                         whole_r, whole_g, whole_b, &weights, &moments_red, &moments_green, &moments_blue);
+            let max_r = maximize(
+                box1,
+                Direction::Red,
+                box1.r0 + 1,
+                box1.r1,
+                &mut cut_r,
+                whole_w,
+                whole_r,
+                whole_g,
+                whole_b,
+                &weights,
+                &moments_red,
+                &moments_green,
+                &moments_blue,
+            );
+            let max_g = maximize(
+                box1,
+                Direction::Green,
+                box1.g0 + 1,
+                box1.g1,
+                &mut cut_g,
+                whole_w,
+                whole_r,
+                whole_g,
+                whole_b,
+                &weights,
+                &moments_red,
+                &moments_green,
+                &moments_blue,
+            );
+            let max_b = maximize(
+                box1,
+                Direction::Blue,
+                box1.b0 + 1,
+                box1.b1,
+                &mut cut_b,
+                whole_w,
+                whole_r,
+                whole_g,
+                whole_b,
+                &weights,
+                &moments_red,
+                &moments_green,
+                &moments_blue,
+            );
 
             let direction;
             if max_r >= max_g && max_r >= max_b {
@@ -268,7 +338,6 @@ pub fn quantize_wu(pixels: &Vec<Argb>, max_colors: u16) -> Vec<Argb> {
             } else {
                 direction = Direction::Blue;
             }
-
 
             if result {
                 let box1 = box1.clone();
@@ -286,7 +355,7 @@ pub fn quantize_wu(pixels: &Vec<Argb>, max_colors: u16) -> Vec<Argb> {
                         box2.b0 = box1.b0;
                         box2.r0 = cut_r;
                     }
-                    cubes[next].r1=cut_r;
+                    cubes[next].r1 = cut_r;
                 } else if direction == Direction::Green {
                     {
                         let box2 = &mut cubes[i];
@@ -294,7 +363,7 @@ pub fn quantize_wu(pixels: &Vec<Argb>, max_colors: u16) -> Vec<Argb> {
                         box2.b0 = box1.b0;
                         box2.g0 = cut_g;
                     }
-                    cubes[next].g1=cut_g;
+                    cubes[next].g1 = cut_g;
                 } else {
                     {
                         let box2 = &mut cubes[i];
@@ -302,7 +371,7 @@ pub fn quantize_wu(pixels: &Vec<Argb>, max_colors: u16) -> Vec<Argb> {
                         box2.g0 = box1.g0;
                         box2.b0 = cut_b;
                     }
-                    cubes[next].b1=cut_b;
+                    cubes[next].b1 = cut_b;
                 }
                 {
                     let box2 = &mut cubes[i];
@@ -313,24 +382,35 @@ pub fn quantize_wu(pixels: &Vec<Argb>, max_colors: u16) -> Vec<Argb> {
                     box1.vol = (box1.r1 - box1.r0) * (box1.g1 - box1.g0) * (box1.b1 - box1.b0);
                 }
                 true
-            }
-            else {
+            } else {
                 false
             }
-
         };
-        if res
-        {
-            volume_variance[next] =
-                if cubes[next].vol > 1 {
-                    variance(&cubes[next], &weights, &moments_red,
-                             &moments_green, &moments_blue, &moments)
-                } else { 0.0 };
-            volume_variance[i] = if cubes[i].vol > 1
-            {
-                variance(&cubes[i], &weights, &moments_red,
-                         &moments_green, &moments_blue, &moments)
-            } else { 0.0 };
+        if res {
+            volume_variance[next] = if cubes[next].vol > 1 {
+                variance(
+                    &cubes[next],
+                    &weights,
+                    &moments_red,
+                    &moments_green,
+                    &moments_blue,
+                    &moments,
+                )
+            } else {
+                0.0
+            };
+            volume_variance[i] = if cubes[i].vol > 1 {
+                variance(
+                    &cubes[i],
+                    &weights,
+                    &moments_red,
+                    &moments_green,
+                    &moments_blue,
+                    &moments,
+                )
+            } else {
+                0.0
+            };
         } else {
             volume_variance[next] = 0.0;
             i -= 1;
@@ -365,4 +445,3 @@ pub fn quantize_wu(pixels: &Vec<Argb>, max_colors: u16) -> Vec<Argb> {
 
     out_colors
 }
-

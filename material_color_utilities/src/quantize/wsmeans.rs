@@ -1,13 +1,13 @@
-use std::cmp::Ordering;
-use std::collections::HashMap;
-use rand::Rng;
 use crate::quantize::lab::Lab;
 use crate::utils::Argb;
+use rand::Rng;
+use std::cmp::Ordering;
+use std::collections::HashMap;
 
 const MAX_ITERATIONS: usize = 100;
 const MIN_DELTA_E: f64 = 3.0;
 
-#[derive(Clone, Default,Debug)]
+#[derive(Clone, Default, Debug)]
 pub struct QuantizerResult {
     pub color_to_count: HashMap<Argb, usize>,
     pub input_pixel_to_cluster_pixel: HashMap<Argb, Argb>,
@@ -65,7 +65,11 @@ impl Ord for DistanceToIndex {
     }
 }
 
-pub fn quantize_wsmeans(input_pixels: &[Argb], starting_clusters: &[Argb], max_colors: u16) -> QuantizerResult {
+pub fn quantize_wsmeans(
+    input_pixels: &[Argb],
+    starting_clusters: &[Argb],
+    max_colors: u16,
+) -> QuantizerResult {
     let mut max_colors = max_colors;
     if max_colors == 0 || input_pixels.is_empty() {
         return QuantizerResult::default();
@@ -121,7 +125,8 @@ pub fn quantize_wsmeans(input_pixels: &[Argb], starting_clusters: &[Argb], max_c
 
     let mut index_matrix: Vec<Vec<usize>> = vec![vec![0; cluster_count]; cluster_count];
 
-    let mut distance_to_index_matrix: Vec<Vec<DistanceToIndex>> = vec![vec![DistanceToIndex::default(); cluster_count]; cluster_count];
+    let mut distance_to_index_matrix: Vec<Vec<DistanceToIndex>> =
+        vec![vec![DistanceToIndex::default(); cluster_count]; cluster_count];
 
     for iteration in 0..MAX_ITERATIONS {
         // Calculate cluster distances
@@ -140,7 +145,7 @@ pub fn quantize_wsmeans(input_pixels: &[Argb], starting_clusters: &[Argb], max_c
             let row = &mut distance_to_index_matrix[i];
             row.sort();
 
-            (0..cluster_count).for_each(|j|{
+            (0..cluster_count).for_each(|j| {
                 index_matrix[i][j] = row[j].index;
             });
         }
@@ -157,7 +162,9 @@ pub fn quantize_wsmeans(input_pixels: &[Argb], starting_clusters: &[Argb], max_c
             let mut new_cluster_index = -1;
 
             for j in 0..cluster_count {
-                if distance_to_index_matrix[previous_cluster_index][j].distance >= 4.0 * previous_distance {
+                if distance_to_index_matrix[previous_cluster_index][j].distance
+                    >= 4.0 * previous_distance
+                {
                     continue;
                 }
                 let distance = point.delta_e(clusters[j]);
@@ -174,7 +181,6 @@ pub fn quantize_wsmeans(input_pixels: &[Argb], starting_clusters: &[Argb], max_c
                     cluster_indices[i] = new_cluster_index as usize;
                 }
             }
-
         }
 
         if !color_moved && (iteration != 0) {
@@ -236,11 +242,14 @@ pub fn quantize_wsmeans(input_pixels: &[Argb], starting_clusters: &[Argb], max_c
             continue;
         }
         cluster_argbs.push(possible_new_cluster);
-        swatches.push(Swatch { argb: possible_new_cluster, population: count });
+        swatches.push(Swatch {
+            argb: possible_new_cluster,
+            population: count,
+        });
     }
     swatches.sort();
 
-// Constructs the quantizer result to return.
+    // Constructs the quantizer result to return.
 
     let mut color_to_count: HashMap<Argb, usize> = HashMap::new();
     for i in 0..swatches.len() {

@@ -13,7 +13,7 @@ but that luminance may not meet the requested contrast ratio.
 0.04 selected because it ensures the resulting ratio rounds to the
 same tenth.*/
 
-const  CONTRAST_RATIO_EPSILON:f64 = 0.04;
+const CONTRAST_RATIO_EPSILON: f64 = 0.04;
 
 /**Color spaces that measure luminance, such as Y in XYZ, L* in L*a*b*,
 or T in HCT, are known as  perceptual accurate color spaces.
@@ -45,7 +45,7 @@ the desired contrast ratio will be reached even if inaccuracy is introduced.
 it provides a rough guarantee that as long as a percetual color space
 gamut maps lightness such that the resulting lightness rounds to the same
 as the requested, the desired contrast ratio will be reached.*/
-const LUMINANCE_GAMUT_MAP_TOLERANCE:f64 = 0.4;
+const LUMINANCE_GAMUT_MAP_TOLERANCE: f64 = 0.4;
 
 fn ratio_of_ys(y1: f64, y2: f64) -> f64 {
     let lighter = if y1 > y2 { y1 } else { y2 };
@@ -75,7 +75,7 @@ pub fn ratio_of_tones(tone_a: f64, tone_b: f64) -> f64 {
  * Range is 1 to 21, invalid values have undefined behavior.
  */
 //double Lighter(double tone, double ratio);
-pub fn lighter(tone: f64, ratio: f64) -> f64{
+pub fn lighter(tone: f64, ratio: f64) -> f64 {
     if !(0.0..=100.0).contains(&tone) {
         return -1.0;
     }
@@ -108,7 +108,7 @@ pub fn lighter(tone: f64, ratio: f64) -> f64{
  * Range is 1 to 21, invalid values have undefined behavior.
  */
 //double Darker(double tone, double ratio);
-pub fn darker(tone:f64,ratio:f64)->f64{
+pub fn darker(tone: f64, ratio: f64) -> f64 {
     if !(0.0..=100.0).contains(&tone) {
         return -1.0;
     }
@@ -146,9 +146,13 @@ pub fn darker(tone:f64,ratio:f64)->f64{
  * Range is 1 to 21, invalid values have undefined behavior.
  */
 // double LighterUnsafe(double tone, double ratio);
-pub fn lighter_unsafe(tone:f64,ratio:f64)->f64{
+pub fn lighter_unsafe(tone: f64, ratio: f64) -> f64 {
     let lighter_safe = lighter(tone, ratio);
-    if lighter_safe<0.0{100.0}else{lighter_safe}
+    if lighter_safe < 0.0 {
+        100.0
+    } else {
+        lighter_safe
+    }
 }
 
 /**
@@ -166,7 +170,11 @@ pub fn lighter_unsafe(tone:f64,ratio:f64)->f64{
  * Range is 1 to 21, invalid values have undefined behavior.
  */
 // double DarkerUnsafe(double tone, double ratio);
-pub fn darker_unsafe(tone:f64,ratio:f64)->f64{
+pub fn darker_unsafe(tone: f64, ratio: f64) -> f64 {
     let darker_safe = darker(tone, ratio);
-    if darker_safe<0.0{0.0}else{darker_safe}
+    if darker_safe < 0.0 {
+        0.0
+    } else {
+        darker_safe
+    }
 }

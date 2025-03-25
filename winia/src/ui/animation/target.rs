@@ -1,3 +1,4 @@
+#[derive(Debug, Clone)]
 pub enum Target {
     Exclusion(Vec<usize>),
     Inclusion(Vec<usize>),
@@ -8,10 +9,12 @@ macro_rules! exclude_target {
     () => {
         Target::Exclusion(vec![])
     };
-     ($($target:expr),+ $(,)?) => {
-         use $crate:core::get_id_by_str;
-         Target::Exclusion(vec![$(get_id_by_str($target)),+])
-     }
+    ($($target:expr),+ $(,)?) => {
+        {
+            use $crate::core::get_id_by_str;
+            Target::Exclusion(vec![$(get_id_by_str($target).unwrap()),+])
+        }
+    }
 }
 
 #[macro_export]
@@ -19,10 +22,10 @@ macro_rules! include_target {
     () => {
         Target::Inclusion(vec![])
     };
-     ($($target:expr),+ $(,)?) => {
-         {
-            use $crate::core::get_id_by_str;
-            Target::Inclusion(vec![$(get_id_by_str($target).unwrap()),+])
-        }
-     }
+    ($($target:expr),+ $(,)?) => {
+        {
+           use $crate::core::get_id_by_str;
+           Target::Inclusion(vec![$(get_id_by_str($target).unwrap()),+])
+       }
+    }
 }

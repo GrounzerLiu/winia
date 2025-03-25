@@ -1,17 +1,20 @@
 use crate::impl_property_redraw;
-use crate::shared::{Children, Gettable, Observable, Settable, Shared, SharedAnimationTrait, SharedBool, SharedColor, SharedF32};
+use crate::shared::{
+    Children, Gettable, Observable, Settable, Shared, SharedAnimationTrait, SharedBool,
+    SharedColor, SharedF32,
+};
 use crate::ui::app::AppContext;
 use crate::ui::item::{DisplayParameter, Pointer, PointerState};
 use crate::ui::theme::colors;
 use crate::ui::theme::colors::parse_color;
 use crate::ui::Item;
 use proc_macro::item;
-use skia_safe::{Paint, Path, Rect};
+use skia_safe::{Color, Paint, Path, Rect};
 use std::collections::HashSet;
 use std::time::Duration;
 use toml::Value;
 
-struct Layer{
+struct Layer {
     pub is_ended: bool,
     pub is_finished: SharedBool,
     pub center: (f32, f32),
@@ -42,7 +45,7 @@ impl Ripple {
             .get_color(colors::PRIMARY)
             .unwrap();
         let property = Shared::new(RippleProperty {
-            color: primary_color.clone().into(),
+            color: primary_color.into(),
             borderless: true.into(),
             foreground_opacity: {
                 let mut opacity: SharedF32 = 0.0.into();
@@ -84,7 +87,9 @@ impl Ripple {
                     paint.set_anti_alias(true);
                     let background_color = property.color.get();
                     let background_opacity = property.background_opacity.get();
-                    paint.set_color(background_color.with_a((background_opacity.clamp(0.0, 1.0) * 255.0) as u8));
+                    paint.set_color(
+                        background_color.with_a((background_opacity.clamp(0.0, 1.0) * 255.0) as u8),
+                    );
                     let display_parameter = item.get_display_parameter();
                     let x = display_parameter.x();
                     let y = display_parameter.y();
@@ -95,7 +100,7 @@ impl Ripple {
                     let radius = (width.powi(2) + height.powi(2)).sqrt();
                     canvas.draw_circle((center_x, center_y), radius / 2.0, &paint);
 
-                    let mut paint = skia_safe::Paint::default();
+                    let mut paint = Paint::default();
                     paint.set_anti_alias(true);
                     let foreground_color = property.color.get();
                     let mut layers = layers.value();
@@ -105,109 +110,109 @@ impl Ripple {
                         let degree = layer.degree.get();
                         let mut paint = Paint::default();
                         paint.set_anti_alias(true);
-                        let color = foreground_color.with_a((opacity.clamp(0.0, 1.0) * 255.0) as u8);
+                        let color =
+                            foreground_color.with_a((opacity.clamp(0.0, 1.0) * 255.0) as u8);
                         let radius = radius * degree;
                         paint.set_color(color);
-                        canvas.draw_circle(layer.center, radius, &paint);
+                        
+                        let display_parameter = item.get_display_parameter();
+                        let (center_x, center_y) = layer.center;
+                        let center = (center_x + display_parameter.x(), center_y + display_parameter.y());
+                        canvas.draw_circle(center, radius, &paint);
                     }
                 }
             })
             .set_pointer_input({
                 let app_context = app_context.clone();
                 let mut down_pointers: HashSet<Pointer> = HashSet::new();
-                move |_item, event| {
-                    match event.pointer_state {
-                        PointerState::Started => {
-                            fn add_observer(app_context: AppContext, shared: &mut SharedF32) {
-                                shared.add_observer(
-                                    0,
-                                    Box::new({
-                                        let event_loop_proxy = app_context.event_loop_proxy();
-                                        move || {
-                                            event_loop_proxy.request_redraw();
-                                        }
-                                    }),
-                                );
-                            }
-
-                            if !down_pointers.is_empty() {
-                                return;
-                            }
-
-                            down_pointers.insert(event.pointer);
-
-                            let mut degree = SharedF32::new(0.0);
-                            let mut opacity = SharedF32::new(0.1);
-                            add_observer(app_context.clone(), &mut degree);
-                            add_observer(app_context.clone(), &mut opacity);
-                            degree.animation_to_f32(1.0)
-                                .duration(Duration::from_millis(300))
-                                .start(app_context.event_loop_proxy());
-                            let layer = Layer {
-                                is_ended: false,
-                                is_finished: false.into(),
-                                center: (event.x, event.y),
-                                degree,
-                                opacity,
-                            };
-                            layers.value().push(layer);
-                        }
-                        PointerState::Ended => {
-                            down_pointers.remove(&event.pointer);
-                            if !down_pointers.is_empty() {
-                                return;
-                            }
-                            let mut layers = layers.value();
-                            for layer in layers.iter_mut() {
-                                if layer.is_ended {
-                                    continue;
-                                }
-                                layer.is_ended = true;
-                                let mut is_finished = layer.is_finished.clone();
-                                if let Some(animation) = layer.degree.get_animation() {
-                                    if !animation.is_finished() {
-                                        let opacity = layer.opacity.clone();
-                                        let event_loop_proxy = app_context.event_loop_proxy();
-                                        animation.on_finish(
-                                            move || {
-                                                let mut is_finished = is_finished.clone();
-                                                opacity.animation_to_f32(0.0)
-                                                    .duration(Duration::from_millis(300))
-                                                    .on_finish(
-                                                        move || {
-                                                            is_finished.set(true);
-                                                        },
-                                                    )
-                                                    .start(event_loop_proxy.clone());
-                                            }
-                                        );
-                                    } else {
-                                        layer.opacity.animation_to_f32(0.0)
-                                            .duration(Duration::from_millis(300))
-                                            .on_finish(
-                                                move || {
-                                                    is_finished.set(true);
-                                                },
-                                            )
-                                            .start(app_context.event_loop_proxy());
+                move |item, event| match event.pointer_state {
+                    PointerState::Started => {
+                        fn add_observer(app_context: AppContext, shared: &mut SharedF32) {
+                            shared.add_observer(
+                                0,
+                                Box::new({
+                                    let event_loop_proxy = app_context.event_loop_proxy();
+                                    move || {
+                                        event_loop_proxy.request_redraw();
                                     }
+                                }),
+                            );
+                        }
+
+                        if !down_pointers.is_empty() {
+                            return;
+                        }
+
+                        down_pointers.insert(event.pointer);
+
+                        let mut degree = SharedF32::new(0.0);
+                        let mut opacity = SharedF32::new(0.1);
+                        add_observer(app_context.clone(), &mut degree);
+                        add_observer(app_context.clone(), &mut opacity);
+                        degree
+                            .animation_to_f32(1.0)
+                            .duration(Duration::from_millis(300))
+                            .start(app_context.event_loop_proxy());
+                        let display_parameter = item.get_display_parameter();
+                        
+                        let layer = Layer {
+                            is_ended: false,
+                            is_finished: false.into(),
+                            center: (event.x - display_parameter.x(), event.y - display_parameter.y()),
+                            degree,
+                            opacity,
+                        };
+                        layers.value().push(layer);
+                    }
+                    PointerState::Ended => {
+                        down_pointers.remove(&event.pointer);
+                        if !down_pointers.is_empty() {
+                            return;
+                        }
+                        let mut layers = layers.value();
+                        for layer in layers.iter_mut() {
+                            if layer.is_ended {
+                                continue;
+                            }
+                            layer.is_ended = true;
+                            let mut is_finished = layer.is_finished.clone();
+                            if let Some(animation) = layer.degree.get_animation() {
+                                if !animation.is_finished() {
+                                    let opacity = layer.opacity.clone();
+                                    let event_loop_proxy = app_context.event_loop_proxy();
+                                    animation.on_finish(move || {
+                                        let mut is_finished = is_finished.clone();
+                                        opacity
+                                            .animation_to_f32(0.0)
+                                            .duration(Duration::from_millis(300))
+                                            .on_finish(move || {
+                                                is_finished.set(true);
+                                            })
+                                            .start(event_loop_proxy.clone());
+                                    });
+                                } else {
+                                    layer
+                                        .opacity
+                                        .animation_to_f32(0.0)
+                                        .duration(Duration::from_millis(300))
+                                        .on_finish(move || {
+                                            is_finished.set(true);
+                                        })
+                                        .start(app_context.event_loop_proxy());
                                 }
                             }
                         }
-                        _ => {}
                     }
+                    _ => {}
                 }
             })
             .set_hover_event({
                 let property = property.clone();
                 move |item, is_hovered| {
                     let property = property.value();
-                    property
+                    if let Some(mut animation) = property
                         .background_opacity
-                        .get_animation()
-                        .map(|mut animation| {
-                            animation.stop();
-                        });
+                        .get_animation() { animation.stop(); }
                     property
                         .background_opacity
                         .animation_to_f32(if is_hovered { 0.08 } else { 0.0 })
@@ -216,10 +221,7 @@ impl Ripple {
                 }
             });
 
-        Self {
-            item,
-            property,
-        }
+        Self { item, property }
     }
     ///```toml
     /// [ripple]
@@ -259,9 +261,9 @@ impl Ripple {
             property.borderless = borderless.into();
             let event_loop_proxy = self.item.data().get_app_context().event_loop_proxy();
             let mut clip_shape = self.item.data().get_clip_shape();
-            property
-                .borderless
-                .add_specific_observer(self.item.data().get_id(), move |borderless| {
+            property.borderless.add_specific_observer(
+                self.item.data().get_id(),
+                move |borderless| {
                     if *borderless {
                         clip_shape.set_static(Box::new(|display_parameter: DisplayParameter| {
                             let x = display_parameter.x();
@@ -283,7 +285,8 @@ impl Ripple {
                         }));
                     }
                     event_loop_proxy.request_redraw();
-                });
+                },
+            );
             property.borderless.notify();
         }
         self

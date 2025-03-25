@@ -15,7 +15,7 @@ pub struct ContrastCurve {
     high: f64,
 }
 
-impl ContrastCurve{
+impl ContrastCurve {
     /**
      * Creates a `ContrastCurve` object.
      *
@@ -53,4 +53,3 @@ impl ContrastCurve{
         }
     }
 }
-

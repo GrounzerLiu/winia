@@ -7,7 +7,10 @@ use std::sync::Arc;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, Size};
-use winit::event::{ElementState, Ime, Modifiers, MouseButton, MouseScrollDelta, StartCause, Touch, TouchPhase, WindowEvent};
+use winit::event::{
+    ElementState, Ime, Modifiers, MouseButton, MouseScrollDelta, StartCause, Touch, TouchPhase,
+    WindowEvent,
+};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::ModifiersState;
 use winit::window::{WindowAttributes, WindowId};
@@ -195,7 +198,7 @@ impl App {
         let event_loop_proxy = self.app_context.event_loop_proxy.clone();
         title.add_specific_observer(self.id(), move |title| {
             let title = title.clone();
-            event_loop_proxy.set_window_attribute(move |window|{
+            event_loop_proxy.set_window_attribute(move |window| {
                 if let Some(window) = window {
                     window.set_title(title.as_str());
                 }
@@ -211,8 +214,8 @@ impl App {
         let app_property = Arc::downgrade(&self.app_property);
         min_width.add_specific_observer(self.id(), move |min_width| {
             let app_property = app_property.clone();
-            let min_width = min_width.clone();
-            event_loop_proxy.set_window_attribute(move |window|{
+            let min_width = *min_width;
+            event_loop_proxy.set_window_attribute(move |window| {
                 if let Some(app_property) = app_property.upgrade() {
                     let min_height = app_property.lock().min_height.get();
                     if let Some(window) = window {
@@ -234,8 +237,8 @@ impl App {
         let app_property = Arc::downgrade(&self.app_property);
         min_height.add_specific_observer(self.id(), move |min_height| {
             let app_property = app_property.clone();
-            let min_height = min_height.clone();
-            event_loop_proxy.set_window_attribute(move |window|{
+            let min_height = *min_height;
+            event_loop_proxy.set_window_attribute(move |window| {
                 if let Some(app_property) = app_property.upgrade() {
                     let min_width = app_property.lock().min_width.get();
                     if let Some(window) = window {
@@ -257,8 +260,8 @@ impl App {
         let app_property = Arc::downgrade(&self.app_property);
         max_width.add_specific_observer(self.id(), move |max_width| {
             let app_property = app_property.clone();
-            let max_width = max_width.clone();
-            event_loop_proxy.set_window_attribute(move |window|{
+            let max_width = *max_width;
+            event_loop_proxy.set_window_attribute(move |window| {
                 if let Some(app_property) = app_property.upgrade() {
                     let max_height = app_property.lock().max_height.get();
                     if let Some(window) = window {
@@ -280,8 +283,8 @@ impl App {
         let app_property = Arc::downgrade(&self.app_property);
         max_height.add_specific_observer(self.id(), move |max_height| {
             let app_property = app_property.clone();
-            let max_height = max_height.clone();
-            event_loop_proxy.set_window_attribute(move |window|{
+            let max_height = *max_height;
+            event_loop_proxy.set_window_attribute(move |window| {
                 if let Some(app_property) = app_property.upgrade() {
                     let max_width = app_property.lock().max_width.get();
                     if let Some(window) = window {
@@ -301,8 +304,8 @@ impl App {
         self.app_property.lock().maximized = maximized.clone();
         let event_loop_proxy = self.app_context.event_loop_proxy.clone();
         maximized.add_specific_observer(self.id(), move |maximized| {
-            let maximized = maximized.clone();
-            event_loop_proxy.set_window_attribute(move |window|{
+            let maximized = *maximized;
+            event_loop_proxy.set_window_attribute(move |window| {
                 if let Some(window) = window {
                     window.set_maximized(maximized);
                 }
@@ -319,9 +322,9 @@ impl ApplicationHandler<UserEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if !self.app_context.is_window_created() {
             let app_property = self.app_property.clone();
-            app_property.lock().apply_to_window_attributes(
-                &mut self.window_attributes,
-            );
+            app_property
+                .lock()
+                .apply_to_window_attributes(&mut self.window_attributes);
             let window = event_loop
                 .create_window(self.window_attributes.clone())
                 .unwrap();
@@ -331,9 +334,7 @@ impl ApplicationHandler<UserEvent> for App {
                 .replace(Box::new(VulkanSkiaWindow::new(window, None)));
             let event_loop_proxy = self.event_loop_proxy.take();
             if let Some(event_loop_proxy) = event_loop_proxy {
-                self.app_context
-                    .event_loop_proxy
-                    .set(event_loop_proxy)
+                self.app_context.event_loop_proxy.set(event_loop_proxy)
             }
             if let Some(item_generator) = self.item_generator.take() {
                 self.item = Some(item_generator(
@@ -393,7 +394,8 @@ impl ApplicationHandler<UserEvent> for App {
             let request_layout = self
                 .app_context
                 .request_layout
-                .read(|request_layout| *request_layout) || self.request_layout;
+                .read(|request_layout| *request_layout)
+                || self.request_layout;
             if request_layout {
                 self.re_layout();
                 self.app_context.request_layout.write(|request_re_layout| {
@@ -433,7 +435,8 @@ impl ApplicationHandler<UserEvent> for App {
                 is_synthetic,
             } => {
                 if let Some(item) = &mut self.item {
-                    item.data().dispatch_keyboard_input(device_id, event, is_synthetic);
+                    item.data()
+                        .dispatch_keyboard_input(device_id, event, is_synthetic);
                 }
             }
             WindowEvent::MouseInput {
@@ -472,10 +475,13 @@ impl ApplicationHandler<UserEvent> for App {
                 let scale_factor = self.app_context.scale_factor();
                 self.cursor_x = x as f32 / scale_factor;
                 self.cursor_y = y as f32 / scale_factor;
-                self.app_context.cursor_position.set((self.cursor_x, self.cursor_y));
+                self.app_context
+                    .cursor_position
+                    .set((self.cursor_x, self.cursor_y));
                 let pressed_mouse_buttons = self.pressed_mouse_buttons.clone();
                 if let Some(item) = &mut self.item {
-                    item.data().dispatch_cursor_move(self.cursor_x, self.cursor_y);
+                    item.data()
+                        .dispatch_cursor_move(self.cursor_x, self.cursor_y);
                     pressed_mouse_buttons.iter().for_each(|button| {
                         let event = MouseEvent {
                             device_id,
@@ -533,7 +539,7 @@ impl ApplicationHandler<UserEvent> for App {
                 let background_color = self
                     .app_context
                     .theme
-                    .read(|theme| theme.get_color(theme::WINDOW_BACKGROUND_COLOR))
+                    .read(|theme| theme.get_color(colors::WINDOW_BACKGROUND_COLOR))
                     .unwrap_or(Color::WHITE);
                 // self.app_context.clone().window(|window| {
                 if let Some((surface_ref, scale_factor)) = {
@@ -570,15 +576,19 @@ impl ApplicationHandler<UserEvent> for App {
                     }
                 }
             }
-            WindowEvent::ModifiersChanged(modifiers) =>{
+            WindowEvent::ModifiersChanged(modifiers) => {
                 //println!("{:?}", modifiers);
                 // println!("{:?}", modifiers.lshift_state());
                 self.modifiers = Some(modifiers);
             }
-            WindowEvent::MouseWheel { device_id, delta, phase } =>{
+            WindowEvent::MouseWheel {
+                device_id,
+                delta,
+                phase,
+            } => {
                 let scale_factor = self.app_context.scale_factor();
                 if let Some(item) = &mut self.item {
-                    item.data().dispatch_mouse_wheel(MouseWheel{
+                    item.data().dispatch_mouse_wheel(MouseWheel {
                         device_id,
                         delta: match delta {
                             MouseScrollDelta::LineDelta(x, y) => {
@@ -592,8 +602,11 @@ impl ApplicationHandler<UserEvent> for App {
                                     crate::ui::item::MouseScrollDelta::LineDelta(x, y)
                                 }
                             }
-                            MouseScrollDelta::PixelDelta(PhysicalPosition{ x, y }) => {
-                                crate::ui::item::MouseScrollDelta::LogicalDelta(x as f32 / scale_factor, y as f32 / scale_factor)
+                            MouseScrollDelta::PixelDelta(PhysicalPosition { x, y }) => {
+                                crate::ui::item::MouseScrollDelta::LogicalDelta(
+                                    x as f32 / scale_factor,
+                                    y as f32 / scale_factor,
+                                )
                             }
                         },
                         state: match phase {
@@ -619,14 +632,15 @@ impl ApplicationHandler<UserEvent> for App {
                         while let Some(animation) = starting_animations.pop_front() {
                             if let Some(item) = &mut self.item {
                                 item.data().record_display_parameter();
-                                (animation.inner.lock().unwrap().transformation)();
+                                (animation.inner.lock().transformation)();
                                 item.data().measure(
                                     MeasureMode::Specified(size.width),
                                     MeasureMode::Specified(size.height),
                                 );
-                                item.data().dispatch_layout(0.0, 0.0, size.width, size.height);
-                                animation.inner.lock().unwrap().start_time = Instant::now();
-                                item.data().dispatch_animation(animation.clone());
+                                item.data()
+                                    .dispatch_layout(0.0, 0.0, size.width, size.height);
+                                animation.inner.lock().start_time = Instant::now();
+                                item.data().dispatch_animation(animation.clone(), false);
                             }
                             self.app_context
                                 .running_animations
@@ -710,12 +724,15 @@ pub fn run_app(app: App) {
 
 use crate::shared::{Gettable, Settable, Shared, SharedBool};
 use crate::ui::app::{AppContext, UserEvent};
-use crate::ui::item::{ImeAction, ItemData, MeasureMode, MouseEvent, MouseWheel, PointerState, TouchEvent};
+use crate::ui::item::{
+    ImeAction, ItemData, MeasureMode, MouseEvent, MouseWheel, PointerState, TouchEvent,
+};
 use crate::ui::{theme, Item};
 #[cfg(target_os = "android")]
 use winit::platform::android::activity::AndroidApp;
 #[cfg(target_os = "android")]
 use winit::platform::android::EventLoopBuilderExtAndroid;
+use crate::ui::theme::colors;
 
 #[cfg(target_os = "android")]
 pub fn run_app(app: App, android_app: AndroidApp) {

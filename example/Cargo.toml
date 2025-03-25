@@ -10,6 +10,7 @@ winia = { path = "../winia" }
 env_logger = "0.11.6"
 log = "0.4.25"
 material-colors = "0.4.2"
+clone-into-closure = { path = "/home/grounzer/RustroverProjects/clone-into-closure/clone-into-closure" }
 
 #winit = {version = "0.29.3",features = ["android-native-activity"]}
 

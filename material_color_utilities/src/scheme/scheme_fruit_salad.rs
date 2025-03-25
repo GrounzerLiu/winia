@@ -29,7 +29,7 @@ pub fn scheme_fruit_salad_with_contrast(
         TonalPalette::from_hue_and_chroma(set_source_color_hct.get_hue(), 10.0),
         /*neutral_variant_palette:*/
         TonalPalette::from_hue_and_chroma(set_source_color_hct.get_hue(), 16.0),
-        None
+        None,
     )
 }
 

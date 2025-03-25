@@ -38,7 +38,7 @@ pub fn scheme_fidelity_with_contrast(
             set_source_color_hct.get_hue(),
             set_source_color_hct.get_chroma() / 8.0 + 4.0,
         ),
-        None
+        None,
     )
 }
 

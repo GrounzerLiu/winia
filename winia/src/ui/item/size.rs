@@ -16,18 +16,14 @@ impl PartialEq for Size {
             Size::Expanded => {
                 matches!(other, Size::Expanded)
             }
-            Size::Fixed(f) => {
-                match other {
-                    Size::Fixed(f2) => f == f2,
-                    _ => false,
-                }
-            }
-            Size::Relative(f) => {
-                match other {
-                    Size::Relative(f2) => f == f2,
-                    _ => false,
-                }
-            }
+            Size::Fixed(f) => match other {
+                Size::Fixed(f2) => f == f2,
+                _ => false,
+            },
+            Size::Relative(f) => match other {
+                Size::Relative(f2) => f == f2,
+                _ => false,
+            },
         }
     }
 }

@@ -1,7 +1,7 @@
 use crate::shared::Children;
 use crate::ui::app::AppContext;
-use crate::ui::Item;
 use crate::ui::layout::{Flex, FlexDirection, FlexWrap};
+use crate::ui::Item;
 
 pub trait RowExt {
     fn row(&self, children: Children) -> Item;

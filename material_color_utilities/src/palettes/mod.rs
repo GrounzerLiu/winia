@@ -1,8 +1,8 @@
-mod tones;
 mod core;
+mod tones;
 
-pub use tones::*;
 pub use core::*;
+pub use tones::*;
 
 #[cfg(test)]
 mod tones_test {

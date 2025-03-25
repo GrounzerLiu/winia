@@ -1,6 +1,8 @@
-use std::cmp::Ordering;
-use std::ops::{Add, AddAssign, Deref, DerefMut, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use crate::ui::item::LayoutDirection;
+use std::cmp::Ordering;
+use std::ops::{
+    Add, AddAssign, Deref, DerefMut, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign,
+};
 
 /// LogicalX is a type that represents a logical x value in a layout.
 /// It can be used to represent the x value of an item in a layout.
@@ -10,7 +12,7 @@ use crate::ui::item::LayoutDirection;
 pub struct LogicalX {
     direction: LayoutDirection,
     parent_width: f32,
-    logical_x: f32
+    logical_x: f32,
 }
 
 impl LogicalX {
@@ -46,10 +48,7 @@ impl Add<f32> for LogicalX {
 
     fn add(self, rhs: f32) -> Self::Output {
         let logical_x = self.logical_x + rhs;
-        Self {
-            logical_x,
-            ..self
-        }
+        Self { logical_x, ..self }
     }
 }
 
@@ -58,10 +57,7 @@ impl Sub<f32> for LogicalX {
 
     fn sub(self, rhs: f32) -> Self::Output {
         let logical_x = self.logical_x - rhs;
-        Self {
-            logical_x,
-            ..self
-        }
+        Self { logical_x, ..self }
     }
 }
 
@@ -70,10 +66,7 @@ impl Mul<f32> for LogicalX {
 
     fn mul(self, rhs: f32) -> Self::Output {
         let logical_x = self.logical_x * rhs;
-        Self {
-            logical_x,
-            ..self
-        }
+        Self { logical_x, ..self }
     }
 }
 
@@ -82,10 +75,7 @@ impl Div<f32> for LogicalX {
 
     fn div(self, rhs: f32) -> Self::Output {
         let logical_x = self.logical_x / rhs;
-        Self {
-            logical_x,
-            ..self
-        }
+        Self { logical_x, ..self }
     }
 }
 
@@ -93,14 +83,11 @@ impl Add<LogicalX> for LogicalX {
     type Output = Self;
 
     fn add(self, rhs: LogicalX) -> Self::Output {
-        if self.direction != rhs.direction ||  self.parent_width != rhs.parent_width {
+        if self.direction != rhs.direction || self.parent_width != rhs.parent_width {
             panic!("LogicalX can't add LogicalX with different direction or start_x or width");
         }
         let logical_x = self.logical_x + rhs.logical_x;
-        Self {
-            logical_x,
-            ..self
-        }
+        Self { logical_x, ..self }
     }
 }
 
@@ -112,10 +99,7 @@ impl Sub<LogicalX> for LogicalX {
             panic!("LogicalX can't sub LogicalX with different direction or start_x or width");
         }
         let logical_x = self.logical_x - rhs.logical_x;
-        Self {
-            logical_x,
-            ..self
-        }
+        Self { logical_x, ..self }
     }
 }
 
@@ -127,10 +111,7 @@ impl Mul<LogicalX> for LogicalX {
             panic!("LogicalX can't mul LogicalX with different direction or start_x or width");
         }
         let logical_x = self.logical_x * rhs.logical_x;
-        Self {
-            logical_x,
-            ..self
-        }
+        Self { logical_x, ..self }
     }
 }
 
@@ -142,10 +123,7 @@ impl Div<LogicalX> for LogicalX {
             panic!("LogicalX can't div LogicalX with different direction or start_x or width");
         }
         let logical_x = self.logical_x / rhs.logical_x;
-        Self {
-            logical_x,
-            ..self
-        }
+        Self { logical_x, ..self }
     }
 }
 
@@ -186,7 +164,9 @@ impl Neg for LogicalX {
 
 impl PartialEq<Self> for LogicalX {
     fn eq(&self, other: &Self) -> bool {
-        self.logical_x == other.logical_x && self.direction == other.direction && self.parent_width == other.parent_width
+        self.logical_x == other.logical_x
+            && self.direction == other.direction
+            && self.parent_width == other.parent_width
     }
 }
 
@@ -225,8 +205,3 @@ impl DerefMut for LogicalX {
         &mut self.logical_x
     }
 }
-
-
-
-
-

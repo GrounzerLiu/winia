@@ -7,8 +7,6 @@ pub use wsmeans::*;
 mod celebi;
 pub use celebi::*;
 
-
-
 #[cfg(test)]
 mod wu_test {
     use crate::quantize::quantize_wu;
@@ -203,7 +201,7 @@ mod wsmeans_test {
 }
 
 #[cfg(test)]
-mod celebi_test{
+mod celebi_test {
     use crate::quantize::celebi::quantize_celebi;
     use crate::utils::Argb;
 

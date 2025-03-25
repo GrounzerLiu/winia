@@ -45,17 +45,16 @@ impl std::ops::Add<&SharedSize> for &SharedSize {
     fn add(self, rhs: &SharedSize) -> Self::Output {
         let lhs = self.clone();
         let rhs = rhs.clone();
-        SharedSize::from_dynamic(
-            &[self.clone(), rhs.clone()],
-            move || {
-                let lhs = lhs.get();
-                let rhs = rhs.get();
-                match (lhs, rhs) {
-                    (Size::Fixed(lhs), Size::Fixed(rhs)) => Size::Fixed(lhs + rhs),
-                    (Size::Relative(lhs), Size::Relative(rhs)) => Size::Relative(lhs + rhs),
-                    _ => { panic!("Addition of different size types") }
+        SharedSize::from_dynamic(&[self.clone(), rhs.clone()], move || {
+            let lhs = lhs.get();
+            let rhs = rhs.get();
+            match (lhs, rhs) {
+                (Size::Fixed(lhs), Size::Fixed(rhs)) => Size::Fixed(lhs + rhs),
+                (Size::Relative(lhs), Size::Relative(rhs)) => Size::Relative(lhs + rhs),
+                _ => {
+                    panic!("Addition of different size types")
                 }
             }
-        )
+        })
     }
 }

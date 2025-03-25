@@ -1,19 +1,206 @@
-use crate::text::style::Style;
-use crate::text::{create_segments, font_collection, AddStyleSegment, StyleType, TextLayout};
+use crate::text::text_style::TextStyle;
+use crate::text::{StyleType, TextLayout};
 use bimap::BiBTreeMap;
-use skia_safe::textlayout::{Paragraph, ParagraphBuilder, ParagraphStyle, TextAlign, TextStyle};
+use skia_safe::textlayout::{
+    FontCollection, Paragraph, ParagraphBuilder, ParagraphStyle, TextAlign, TextDecoration,
+    TextStyle as SkiaTextStyle,
+};
+use skia_safe::{FontMgr, FontStyle, Paint};
 use std::collections::HashSet;
 use std::fmt::Display;
 use std::ops::{Add, Index, Range};
 use std::str::FromStr;
 use unicode_segmentation::UnicodeSegmentation;
 
+thread_local! {
+    /// The font collection used to create paragraphs.
+    /// Creating a font collection is expensive so it is created once and shared across threads.
+    static FONT_COLLECTION: FontCollection = {
+        let mut font_collection = FontCollection::new();
+        font_collection.set_default_font_manager(FontMgr::default(), None);
+        font_collection
+    }
+}
+
+pub(crate) fn font_collection() -> FontCollection {
+    FONT_COLLECTION.with(|fc| fc.clone())
+}
+
+pub(crate) fn create_segments<'text>(
+    text: &'text StyledText,
+    range: &Range<usize>,
+    text_style: SkiaTextStyle,
+) -> Vec<StyleSegment<'text>> {
+    let mut text_segments = Vec::new();
+
+    let first_segment = StyleSegment::new(text, range, &text_style);
+    text_segments.push(first_segment);
+    text.get_styles(range.clone())
+        .iter()
+        .for_each(|(style, range, _)| {
+            let mut index = 0;
+            while index < text_segments.len() {
+                if let Some(text_segment) = text_segments.get_mut(index) {
+                    if text_segment.range.start >= range.end {
+                        break;
+                    }
+                    if range.start <= text_segment.range.start
+                        && range.end >= text_segment.range.end
+                    {
+                        text_segment.apply_style(*style);
+                        index += 1;
+                    } else if range.start > text_segment.range.start
+                        && range.start < text_segment.range.end
+                        && range.end > text_segment.range.start
+                        && range.end < text_segment.range.end
+                    {
+                        let left_segment = StyleSegment::new(
+                            text,
+                            &(text_segment.range.start..range.start),
+                            &text_segment.text_style,
+                        );
+                        let middle_segment = StyleSegment::new(
+                            text,
+                            &(range.start..range.end),
+                            &text_segment.text_style,
+                        );
+                        let right_segment = StyleSegment::new(
+                            text,
+                            &(range.end..text_segment.range.end),
+                            &text_segment.text_style,
+                        );
+                        text_segments.remove(index);
+                        text_segments.push(left_segment);
+                        text_segments.push(middle_segment);
+                        text_segments.push(right_segment);
+                    } else if range.start > text_segment.range.start
+                        && range.start < text_segment.range.end
+                    {
+                        let left_segment = StyleSegment::new(
+                            text,
+                            &(text_segment.range.start..range.start),
+                            &text_segment.text_style,
+                        );
+                        let right_segment = StyleSegment::new(
+                            text,
+                            &(range.start..text_segment.range.end),
+                            &text_segment.text_style,
+                        );
+                        text_segments.remove(index);
+                        text_segments.push(left_segment);
+                        text_segments.push(right_segment);
+                    } else if range.end > text_segment.range.start
+                        && range.end < text_segment.range.end
+                    {
+                        let left_segment = StyleSegment::new(
+                            text,
+                            &(text_segment.range.start..range.end),
+                            &text_segment.text_style,
+                        );
+                        let right_segment = StyleSegment::new(
+                            text,
+                            &(range.end..text_segment.range.end),
+                            &text_segment.text_style,
+                        );
+                        text_segments.remove(index);
+                        text_segments.push(left_segment);
+                        text_segments.push(right_segment);
+                    } else {
+                        index += 1;
+                    }
+                }
+            }
+        });
+
+    text_segments
+}
+
+/// A segment of text with a specific style.
+#[derive(Debug)]
+struct StyleSegment<'text> {
+    text: &'text str,
+    range: Range<usize>,
+    text_style: SkiaTextStyle,
+}
+
+impl<'text> StyleSegment<'text> {
+    pub fn new(
+        text: &'text StyledText,
+        range: &Range<usize>,
+        def_text_style: &SkiaTextStyle,
+    ) -> StyleSegment<'text> {
+        StyleSegment {
+            text: text.as_str(),
+            range: range.clone(),
+            text_style: def_text_style.clone(),
+        }
+    }
+
+    pub fn apply_style(&mut self, style: TextStyle) {
+        match style {
+            TextStyle::Bold => {
+                let font_style = self.text_style.font_style();
+
+                if font_style == FontStyle::italic() {
+                    self.text_style.set_font_style(FontStyle::bold_italic());
+                } else if font_style != FontStyle::bold() {
+                    self.text_style.set_font_style(FontStyle::bold());
+                }
+            }
+            TextStyle::Italic => {
+                let font_style = self.text_style.font_style();
+
+                if font_style == FontStyle::bold() {
+                    self.text_style.set_font_style(FontStyle::bold_italic());
+                } else if font_style != FontStyle::italic() {
+                    self.text_style.set_font_style(FontStyle::italic());
+                }
+            }
+            TextStyle::Underline => {
+                let mut decoration = self.text_style.decoration().clone();
+                decoration.ty.insert(TextDecoration::UNDERLINE);
+                self.text_style.set_decoration(&decoration);
+            }
+            TextStyle::Strikethrough => {
+                let mut decoration = self.text_style.decoration().clone();
+                decoration.ty.insert(TextDecoration::LINE_THROUGH);
+                self.text_style.set_decoration(&decoration);
+            }
+            TextStyle::FontSize(font_size) => {
+                self.text_style.set_font_size(font_size);
+            }
+            TextStyle::BackgroundColor(color) => {
+                self.text_style
+                    .set_background_paint(Paint::default().set_color(color));
+            }
+            TextStyle::TextColor(color) => {
+                self.text_style.set_color(color);
+            }
+        }
+    }
+}
+
+trait AddStyleSegment {
+    fn add_style_segment(&mut self, style_segment: &StyleSegment);
+}
+
+impl AddStyleSegment for ParagraphBuilder {
+    fn add_style_segment(&mut self, style_segment: &StyleSegment) {
+        // Apply the style to the paragraph
+        self.push_style(&style_segment.text_style);
+        self.add_text(&style_segment.text[style_segment.range.clone()]);
+        self.pop();
+    }
+}
+
 pub struct StyledText {
     string: String,
     /// Style,
     /// The range of the style,
     /// Should the range expand to include the text inserted at the end of the range or not
-    styles: Vec<(Style, Range<usize>, bool)>,
+    styles: Vec<(TextStyle, Range<usize>, bool)>,
+    /// Generating the indices is expensive so we only do it when using the indices.
+    changed: bool,
     line_breaks: HashSet<Range<usize>>,
     byte_to_utf16_indices: BiBTreeMap<usize, usize>,
     byte_to_glyph_indices: BiBTreeMap<usize, usize>,
@@ -21,15 +208,14 @@ pub struct StyledText {
 
 impl StyledText {
     fn new(string: String) -> Self {
-        let mut s = StyledText {
+        StyledText {
             string,
             styles: Vec::new(),
+            changed: true,
             line_breaks: HashSet::new(),
             byte_to_utf16_indices: BiBTreeMap::new(),
             byte_to_glyph_indices: BiBTreeMap::new(),
-        };
-        s.generate_indices();
-        s
+        }
     }
 
     fn generate_indices(&mut self) {
@@ -62,31 +248,9 @@ impl StyledText {
             .insert(self.string.len(), last_glyph_index);
     }
 
-    pub fn byte_index_to_glyph_index(&self, byte_index: usize) -> usize {
-        *self.byte_to_glyph_indices.get_by_left(&byte_index).unwrap()
-    }
-
-    pub fn glyph_index_to_byte_index(&self, glyph_index: usize) -> usize {
-        *self
-            .byte_to_glyph_indices
-            .get_by_right(&glyph_index)
-            .unwrap()
-    }
-
-    pub fn byte_index_to_utf16_index(&self, byte_index: usize) -> usize {
-        *self.byte_to_utf16_indices.get_by_left(&byte_index).unwrap()
-    }
-
-    pub fn utf16_index_to_byte_index(&self, utf16_index: usize) -> usize {
-        *self
-            .byte_to_utf16_indices
-            .get_by_right(&utf16_index)
-            .unwrap()
-    }
-
     pub fn create_paragraph(
         &mut self,
-        default_text_style: TextStyle,
+        default_text_style: skia_safe::textlayout::TextStyle,
         max_width: f32,
         text_align: TextAlign,
     ) -> Paragraph {
@@ -116,7 +280,11 @@ impl StyledText {
         paragraph
     }
 
-    pub fn get_text_layout<'a>(&'a self, paragraph: &'a Paragraph) -> TextLayout<'a> {
+    pub fn get_text_layout<'a>(&'a mut self, paragraph: &'a Paragraph) -> TextLayout<'a> {
+        if self.changed {
+            self.generate_indices();
+            self.changed = false;
+        }
         TextLayout::new(
             paragraph,
             &self.line_breaks,
@@ -126,10 +294,6 @@ impl StyledText {
         )
     }
 
-    fn update(&mut self) {
-        self.generate_indices();
-    }
-
     pub fn as_str(&self) -> &str {
         &self.string
     }
@@ -137,7 +301,7 @@ impl StyledText {
     pub fn substring(&self, range: Range<usize>) -> StyledText {
         self.assert_in_range(&range);
         let string = self.string[range.clone()].to_string();
-        let mut styles: Vec<(Style, Range<usize>, bool)> = Vec::new();
+        let mut styles: Vec<(TextStyle, Range<usize>, bool)> = Vec::new();
         for (style, style_range, edge_behavior) in self.styles.iter() {
             // The start of the style range is in the substring
             if style_range.start >= range.start && style_range.start <= range.end {
@@ -148,7 +312,7 @@ impl StyledText {
                 } else {
                     style_range.end - range.start
                 };
-                styles.push((style.clone(), new_start..new_end, edge_behavior.clone()));
+                styles.push((*style, new_start..new_end, edge_behavior.clone()));
             } else if style_range.end >= range.start && style_range.end <= range.end {
                 let new_start = if style_range.start < range.start {
                     // The start of the style range is outside the substring
@@ -157,18 +321,56 @@ impl StyledText {
                     style_range.start - range.start
                 };
                 let new_end = style_range.end - range.start;
-                styles.push((style.clone(), new_start..new_end, edge_behavior.clone()));
+                styles.push((*style, new_start..new_end, *edge_behavior));
             }
         }
-        let mut styled_text = StyledText {
+
+        StyledText {
             string,
             styles,
+            changed: true,
             line_breaks: HashSet::new(),
             byte_to_utf16_indices: BiBTreeMap::new(),
             byte_to_glyph_indices: BiBTreeMap::new(),
-        };
-        styled_text.generate_indices();
-        styled_text
+        }
+    }
+
+    pub fn byte_index_to_glyph_index(&mut self, byte_index: usize) -> usize {
+        if self.changed {
+            self.generate_indices();
+            self.changed = false;
+        }
+        *self.byte_to_glyph_indices.get_by_left(&byte_index).unwrap()
+    }
+
+    pub fn glyph_index_to_byte_index(&mut self, glyph_index: usize) -> usize {
+        if self.changed {
+            self.generate_indices();
+            self.changed = false;
+        }
+        *self
+            .byte_to_glyph_indices
+            .get_by_right(&glyph_index)
+            .unwrap()
+    }
+
+    pub fn byte_index_to_utf16_index(&mut self, byte_index: usize) -> usize {
+        if self.changed {
+            self.generate_indices();
+            self.changed = false;
+        }
+        *self.byte_to_utf16_indices.get_by_left(&byte_index).unwrap()
+    }
+
+    pub fn utf16_index_to_byte_index(&mut self, utf16_index: usize) -> usize {
+        if self.changed {
+            self.generate_indices();
+            self.changed = false;
+        }
+        *self
+            .byte_to_utf16_indices
+            .get_by_right(&utf16_index)
+            .unwrap()
     }
 
     pub fn len(&self) -> usize {
@@ -179,7 +381,7 @@ impl StyledText {
         self.string.is_empty()
     }
 
-    pub fn insert(&mut self, index: usize, string: &str) {
+    pub fn insert_str(&mut self, index: usize, string: &str) {
         self.string.insert_str(index, string);
         self.styles.iter_mut().for_each(|(_, range, expanded)| {
             if index == range.end {
@@ -196,14 +398,26 @@ impl StyledText {
                 range.end += string.len();
             }
         });
-        self.update();
+        self.changed = true;
+    }
+
+    pub fn insert(&mut self, index: usize, text: &StyledText) {
+        self.insert_str(index, &text.string);
+        text.styles.iter().for_each(|(style, range, expanded)| {
+            self.set_style(
+                style.clone(),
+                (range.start + index)..(range.end + index),
+                *expanded,
+            );
+        });
+        self.changed = true;
     }
 
     pub fn remove(&mut self, range: Range<usize>) {
         self.string.drain(range.clone());
         self.styles.retain(|(_, style_range, _)| {
             // Remove the style if the range is inside the style range
-            if style_range.start > range.start && style_range.end <= range.end {
+            if style_range.start >= range.start && style_range.end <= range.end {
                 return false;
             }
             true
@@ -220,21 +434,28 @@ impl StyledText {
                 style_range.end = range.start;
             }
         });
-        self.update();
+        self.changed = true;
     }
 
-    pub fn append(&mut self, string: &str) {
-        self.insert(self.string.len(), string);
+    pub fn append_str(&mut self, string: &str) {
+        self.insert_str(self.string.len(), string);
+        self.changed = true;
+    }
+
+    pub fn append(&mut self, text: &StyledText) {
+        self.insert(self.string.len(), text);
+        self.changed = true;
     }
 
     pub fn push(&mut self, c: char) {
-        self.insert(self.string.len(), &c.to_string());
+        self.insert_str(self.string.len(), &c.to_string());
+        self.changed = true;
     }
 
     pub fn clear(&mut self) {
         self.string.clear();
         self.styles.clear();
-        self.update();
+        self.changed = true;
     }
 
     fn assert_in_range(&self, range: &Range<usize>) {
@@ -247,16 +468,16 @@ impl StyledText {
         }
     }
 
-    pub fn set_style(&mut self, style: Style, range: Range<usize>, expanded: bool) {
+    pub fn set_style(&mut self, style: TextStyle, range: Range<usize>, expanded: bool) {
         self.assert_in_range(&range);
 
         self.remove_style(style.style_type(), range.clone());
         self.styles.push((style, range, expanded));
     }
 
-    pub fn get_styles(&self, range: Range<usize>) -> Vec<(Style, Range<usize>, bool)> {
+    pub fn get_styles(&self, range: Range<usize>) -> Vec<(TextStyle, Range<usize>, bool)> {
         self.assert_in_range(&range);
-        let mut styles: Vec<(Style, Range<usize>, bool)> = Vec::new();
+        let mut styles: Vec<(TextStyle, Range<usize>, bool)> = Vec::new();
         for (style, style_range, expanded) in self.styles.iter() {
             if style_range.start >= range.start && style_range.end <= range.end {
                 styles.push((*style, style_range.clone(), *expanded));
@@ -265,7 +486,7 @@ impl StyledText {
         styles
     }
 
-    pub fn retain_styles(&mut self, f: impl Fn(&Style, &Range<usize>, &bool) -> bool) {
+    pub fn retain_styles(&mut self, f: impl Fn(&TextStyle, &Range<usize>, &bool) -> bool) {
         self.styles
             .retain(|(style, range, expanded)| f(style, range, expanded));
     }
@@ -273,7 +494,7 @@ impl StyledText {
     pub fn remove_style(&mut self, style_type: StyleType, range: Range<usize>) {
         self.assert_in_range(&range);
 
-        let mut segmented_styles: Vec<(Style, Range<usize>, bool)> = Vec::new();
+        let mut segmented_styles: Vec<(TextStyle, Range<usize>, bool)> = Vec::new();
 
         self.styles.retain(|(style, style_range, expanded)| {
             if style.style_type() == style_type {
@@ -390,6 +611,7 @@ impl Clone for StyledText {
         StyledText {
             string: self.string.clone(),
             styles: self.styles.clone(),
+            changed: self.changed,
             line_breaks: self.line_breaks.clone(),
             byte_to_utf16_indices: self.byte_to_utf16_indices.clone(),
             byte_to_glyph_indices: self.byte_to_glyph_indices.clone(),
@@ -415,25 +637,98 @@ impl<T: AsRef<StyledText> + 'static> Add<T> for StyledText {
     type Output = StyledText;
 
     fn add(self, rhs: T) -> Self::Output {
-        let mut output = StyledText::new(self.string.clone() + &rhs.as_ref().string);
-        self.styles
-            .iter()
-            .for_each(|(style, range, edge_behavior)| {
-                output.set_style(style.clone(), range.clone(), *edge_behavior);
-            });
+        let mut output = self as StyledText;
+        output.append(rhs.as_ref());
+        output
+    }
+}
 
-        let self_len = self.string.len();
-        rhs.as_ref()
-            .styles
-            .iter()
-            .for_each(|(style, range, edge_behavior)| {
-                output.set_style(
-                    style.clone(),
-                    (range.start + self_len)..(range.end + self_len),
-                    *edge_behavior,
-                );
-            });
+impl<T: AsRef<StyledText> + 'static> Add<T> for &StyledText {
+    type Output = StyledText;
 
+    fn add(self, rhs: T) -> Self::Output {
+        let mut output = self.clone();
+        output.append(rhs.as_ref());
+        output
+    }
+}
+
+impl Add<&str> for StyledText {
+    type Output = StyledText;
+
+    fn add(self, rhs: &str) -> Self::Output {
+        let mut output = self.clone();
+        output.append_str(rhs);
+        output
+    }
+}
+
+impl Add<&str> for &StyledText {
+    type Output = StyledText;
+
+    fn add(self, rhs: &str) -> Self::Output {
+        let mut output = self.clone();
+        output.append_str(rhs);
+        output
+    }
+}
+
+impl Add<String> for StyledText {
+    type Output = StyledText;
+
+    fn add(self, rhs: String) -> Self::Output {
+        let mut output = self.clone();
+        output.append_str(&rhs);
+        output
+    }
+}
+
+impl Add<String> for &StyledText {
+    type Output = StyledText;
+
+    fn add(self, rhs: String) -> Self::Output {
+        let mut output = self.clone();
+        output.append_str(&rhs);
+        output
+    }
+}
+
+impl Add<&String> for StyledText {
+    type Output = StyledText;
+
+    fn add(self, rhs: &String) -> Self::Output {
+        let mut output = self.clone();
+        output.append_str(rhs);
+        output
+    }
+}
+
+impl Add<&String> for &StyledText {
+    type Output = StyledText;
+
+    fn add(self, rhs: &String) -> Self::Output {
+        let mut output = self.clone();
+        output.append_str(rhs);
+        output
+    }
+}
+
+impl Add<char> for StyledText {
+    type Output = StyledText;
+
+    fn add(self, rhs: char) -> Self::Output {
+        let mut output = self.clone();
+        output.push(rhs);
+        output
+    }
+}
+
+impl Add<char> for &StyledText {
+    type Output = StyledText;
+
+    fn add(self, rhs: char) -> Self::Output {
+        let mut output = self.clone();
+        output.push(rhs);
         output
     }
 }

@@ -2,8 +2,8 @@ use crate::shared::{Children, Gettable, Observable, Shared, SharedAlignment, Sha
 use crate::ui::app::AppContext;
 use crate::ui::item::{CustomProperty, ItemData, LogicalX, MeasureMode, Orientation};
 use crate::ui::Item;
-use std::ops::Not;
 use proc_macro::item;
+use std::ops::Not;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlexDirection {
@@ -70,13 +70,11 @@ pub trait GetFlexGrow {
 impl GetFlexGrow for ItemData {
     fn get_flex_grow(&self) -> Option<SharedUsize> {
         match self.get_custom_property("flex_grow") {
-            None => { None }
-            Some(p) => {
-                match p {
-                    CustomProperty::Usize(f) => { Some(f.clone()) }
-                    _ => { None }
-                }
-            }
+            None => None,
+            Some(p) => match p {
+                CustomProperty::Usize(f) => Some(f.clone()),
+                _ => None,
+            },
         }
     }
 }
@@ -91,7 +89,9 @@ impl FlexGrow for Item {
     /// The items with value greater than 0 will be resized proportionally to the remaining space.
     fn flex_grow(self, flex_grow: impl Into<SharedUsize>) -> Self {
         let id = self.data().get_id();
-        if let Some(CustomProperty::Any(flex_grow)) = self.data().get_custom_property_mut("flex_grow") {
+        if let Some(CustomProperty::Any(flex_grow)) =
+            self.data().get_custom_property_mut("flex_grow")
+        {
             if let Some(flex_grow) = flex_grow.downcast_mut::<SharedAlignment>() {
                 flex_grow.remove_observer(id);
             }
@@ -105,7 +105,8 @@ impl FlexGrow for Item {
                 event_loop_proxy.request_layout();
             }),
         );
-        self.data().custom_property("flex_grow", CustomProperty::Any(Box::new(flex_grow)));
+        self.data()
+            .custom_property("flex_grow", CustomProperty::Any(Box::new(flex_grow)));
         self
     }
 }
@@ -120,7 +121,6 @@ struct FlexProperties {
     pub main_axis_gap: Shared<f32>,
     pub cross_axis_gap: Shared<f32>,
 }
-
 
 struct Line {
     start_index: usize,
@@ -141,7 +141,13 @@ struct Line {
 }
 
 impl Line {
-    pub fn new(start_index: usize, orientation: Orientation, align_items: AlignItems, gap: f32, max_main_axis_size: impl Into<Option<f32>>) -> Self {
+    pub fn new(
+        start_index: usize,
+        orientation: Orientation,
+        align_items: AlignItems,
+        gap: f32,
+        max_main_axis_size: impl Into<Option<f32>>,
+    ) -> Self {
         Self {
             start_index,
             count: 0,
@@ -192,17 +198,33 @@ impl Line {
     }
 
     pub fn width(&self) -> f32 {
-        self.width + match self.orientation {
-            Orientation::Horizontal => self.gap * if self.count == 0 { 0.0 } else { (self.count - 1) as f32 },
-            Orientation::Vertical => 0.0,
-        }
+        self.width
+            + match self.orientation {
+                Orientation::Horizontal => {
+                    self.gap
+                        * if self.count == 0 {
+                            0.0
+                        } else {
+                            (self.count - 1) as f32
+                        }
+                }
+                Orientation::Vertical => 0.0,
+            }
     }
 
     pub fn height(&self) -> f32 {
-        self.height + match self.orientation {
-            Orientation::Horizontal => 0.0,
-            Orientation::Vertical => self.gap * if self.count == 0 { 0.0 } else { (self.count - 1) as f32 },
-        }
+        self.height
+            + match self.orientation {
+                Orientation::Horizontal => 0.0,
+                Orientation::Vertical => {
+                    self.gap
+                        * if self.count == 0 {
+                            0.0
+                        } else {
+                            (self.count - 1) as f32
+                        }
+                }
+            }
     }
 
     fn is_exceed(&self, size: f32) -> bool {
@@ -221,7 +243,6 @@ impl Line {
         let child_main_axis_occupied_size = child_main_axis_size + child_main_axis_margin;
         let child_cross_axis_occupied_size = child_cross_axis_size + child_cross_axis_margin;
 
-
         self.set_main_axis_size(self.main_axis_size() + child_main_axis_occupied_size);
 
         if self.align_items == AlignItems::Baseline {
@@ -233,7 +254,8 @@ impl Line {
 
             if let Some(child_baseline) = child_baseline {
                 let under_baseline = child_baseline + item.data().get_margin_top().get();
-                let over_baseline = child_cross_axis_size - child_baseline + item.data().get_margin_bottom().get();
+                let over_baseline =
+                    child_cross_axis_size - child_baseline + item.data().get_margin_bottom().get();
                 self.under_baseline = self.under_baseline.max(under_baseline);
                 self.over_baseline = self.over_baseline.max(over_baseline);
             }
@@ -266,7 +288,6 @@ impl Line {
     }
 }
 
-
 struct Lines {
     lines: Vec<Line>,
     orientation: Orientation,
@@ -285,11 +306,23 @@ impl Lines {
         max_main_axis_size: Option<f32>,
     ) -> Self {
         let mut lines = vec![];
-        let mut line = Line::new(0, orientation, align_items, main_axis_gap, max_main_axis_size);
+        let mut line = Line::new(
+            0,
+            orientation,
+            align_items,
+            main_axis_gap,
+            max_main_axis_size,
+        );
         for (index, child) in item.get_children().items().iter().enumerate() {
             if !line.try_add_item(child) {
                 lines.push(line);
-                line = Line::new(index, orientation, align_items, main_axis_gap, max_main_axis_size);
+                line = Line::new(
+                    index,
+                    orientation,
+                    align_items,
+                    main_axis_gap,
+                    max_main_axis_size,
+                );
                 line.add_item(child);
             }
         }
@@ -323,24 +356,39 @@ impl Lines {
     }
 
     pub fn width(&self) -> f32 {
-        self.width + match self.orientation {
-            Orientation::Horizontal => self.gap * if self.lines.is_empty() { 0.0 } else { (self.lines.len() - 1) as f32 },
-            Orientation::Vertical => 0.0,
-        }
+        self.width
+            + match self.orientation {
+                Orientation::Horizontal => {
+                    self.gap
+                        * if self.lines.is_empty() {
+                            0.0
+                        } else {
+                            (self.lines.len() - 1) as f32
+                        }
+                }
+                Orientation::Vertical => 0.0,
+            }
     }
 
     pub fn height(&self) -> f32 {
-        self.height + match self.orientation {
-            Orientation::Horizontal => 0.0,
-            Orientation::Vertical => self.gap * if self.lines.is_empty() { 0.0 } else { (self.lines.len() - 1) as f32 },
-        }
+        self.height
+            + match self.orientation {
+                Orientation::Horizontal => 0.0,
+                Orientation::Vertical => {
+                    self.gap
+                        * if self.lines.is_empty() {
+                            0.0
+                        } else {
+                            (self.lines.len() - 1) as f32
+                        }
+                }
+            }
     }
 
     pub fn lines(&self) -> &Vec<Line> {
         &self.lines
     }
 }
-
 
 fn calculate_size(
     item: &ItemData,
@@ -372,8 +420,18 @@ fn calculate_size(
                 height += line.height();
             }
             (
-                if lines.len() == 1 { width } else { max_main_axis_size },
-                height + cross_axis_gap * if lines.is_empty() { 0.0 } else { (lines.len() - 1) as f32 }
+                if lines.len() == 1 {
+                    width
+                } else {
+                    max_main_axis_size
+                },
+                height
+                    + cross_axis_gap
+                        * if lines.is_empty() {
+                            0.0
+                        } else {
+                            (lines.len() - 1) as f32
+                        },
             )
         }
         Orientation::Vertical => {
@@ -384,8 +442,18 @@ fn calculate_size(
                 width += line.width();
             }
             (
-                width + cross_axis_gap * if lines.is_empty() { 0.0 } else { (lines.len() - 1) as f32 },
-                if lines.len() == 1 { height } else { max_main_axis_size }
+                width
+                    + cross_axis_gap
+                        * if lines.is_empty() {
+                            0.0
+                        } else {
+                            (lines.len() - 1) as f32
+                        },
+                if lines.len() == 1 {
+                    height
+                } else {
+                    max_main_axis_size
+                },
             )
         }
     }
@@ -399,7 +467,7 @@ pub struct Flex {
 
 impl Flex {
     pub fn new(app_context: AppContext, children: Children) -> Self {
-        let properties =Shared::new(FlexProperties {
+        let properties = Shared::new(FlexProperties {
             direction: FlexDirection::Horizontal.into(),
             wrap: FlexWrap::NoWrap.into(),
             justify_content: JustifyContent::Start.into(),
@@ -421,13 +489,13 @@ impl Flex {
                     let align_items = properties.align_items.get();
 
                     let max_width = match width_mode {
-                        MeasureMode::Specified(width) => { item.clamp_width(width) }
-                        MeasureMode::Unspecified(_) => { item.get_max_width().get() }
+                        MeasureMode::Specified(width) => item.clamp_width(width),
+                        MeasureMode::Unspecified(_) => item.get_max_width().get(),
                     };
 
                     let max_height = match height_mode {
-                        MeasureMode::Specified(height) => { item.clamp_height(height) }
-                        MeasureMode::Unspecified(_) => { item.get_max_height().get() }
+                        MeasureMode::Specified(height) => item.clamp_height(height),
+                        MeasureMode::Unspecified(_) => item.get_max_height().get(),
                     };
 
                     let orientation = direction.orientation();
@@ -492,7 +560,6 @@ impl Flex {
                     let main_axis_gap = properties.main_axis_gap.get();
                     let cross_axis_gap = properties.cross_axis_gap.get();
 
-
                     let lines = Lines::new(
                         item,
                         direction.orientation(),
@@ -520,73 +587,81 @@ impl Flex {
 
                     match direction {
                         FlexDirection::Horizontal | FlexDirection::HorizontalReverse => {
-                            let remaining_space_between_lines = height - lines_height - padding_top - padding_bottom;
+                            let remaining_space_between_lines =
+                                height - lines_height - padding_top - padding_bottom;
                             let mut line_stretch = None;
                             let mut space_between_lines = 0.0;
 
-                            let mut y =
-                                if wrap != FlexWrap::WrapReverse {
-                                    match align_content {
-                                        AlignContent::Start => padding_top,
-                                        AlignContent::End => height - lines_height - padding_bottom,
-                                        AlignContent::Center => (height - lines_height) / 2.0,
-                                        AlignContent::SpaceBetween => {
-                                            if remaining_space_between_lines > 0.0 && line_count > 1 {
-                                                space_between_lines = remaining_space_between_lines / (line_count - 1) as f32;
-                                            }
-                                            padding_top
+                            let mut y = if wrap != FlexWrap::WrapReverse {
+                                match align_content {
+                                    AlignContent::Start => padding_top,
+                                    AlignContent::End => height - lines_height - padding_bottom,
+                                    AlignContent::Center => (height - lines_height) / 2.0,
+                                    AlignContent::SpaceBetween => {
+                                        if remaining_space_between_lines > 0.0 && line_count > 1 {
+                                            space_between_lines = remaining_space_between_lines
+                                                / (line_count - 1) as f32;
                                         }
-                                        AlignContent::SpaceAround => {
-                                            if remaining_space_between_lines > 0.0 && line_count > 0 {
-                                                space_between_lines = remaining_space_between_lines / line_count as f32;
-                                            }
-                                            padding_top + space_between_lines / 2.0
-                                        }
-                                        AlignContent::SpaceEvenly => {
-                                            if remaining_space_between_lines > 0.0 && line_count > 0 {
-                                                space_between_lines = remaining_space_between_lines / (line_count + 1) as f32;
-                                            }
-                                            padding_top + space_between_lines
-                                        }
-                                        AlignContent::Stretch => {
-                                            line_stretch = Some(
-                                                (height - padding_top - padding_bottom) / line_count as f32
-                                            );
-                                            padding_top
-                                        }
+                                        padding_top
                                     }
-                                } else {
-                                    let default_y = height - padding_bottom;
-                                    match align_content {
-                                        AlignContent::Start => default_y,
-                                        AlignContent::End => lines_height + padding_top,
-                                        AlignContent::Center => (height - lines_height) / 2.0,
-                                        AlignContent::SpaceBetween => {
-                                            if remaining_space_between_lines > 0.0 && line_count > 1 {
-                                                space_between_lines = remaining_space_between_lines / (line_count - 1) as f32;
-                                            }
-                                            default_y
+                                    AlignContent::SpaceAround => {
+                                        if remaining_space_between_lines > 0.0 && line_count > 0 {
+                                            space_between_lines =
+                                                remaining_space_between_lines / line_count as f32;
                                         }
-                                        AlignContent::SpaceAround => {
-                                            if remaining_space_between_lines > 0.0 && line_count > 0 {
-                                                space_between_lines = remaining_space_between_lines / line_count as f32;
-                                            }
-                                            default_y - space_between_lines / 2.0
-                                        }
-                                        AlignContent::SpaceEvenly => {
-                                            if remaining_space_between_lines > 0.0 && line_count > 0 {
-                                                space_between_lines = remaining_space_between_lines / (line_count + 1) as f32;
-                                            }
-                                            default_y - space_between_lines
-                                        }
-                                        AlignContent::Stretch => {
-                                            line_stretch = Some(
-                                                (height - padding_top - padding_bottom) / line_count as f32
-                                            );
-                                            default_y
-                                        }
+                                        padding_top + space_between_lines / 2.0
                                     }
-                                };
+                                    AlignContent::SpaceEvenly => {
+                                        if remaining_space_between_lines > 0.0 && line_count > 0 {
+                                            space_between_lines = remaining_space_between_lines
+                                                / (line_count + 1) as f32;
+                                        }
+                                        padding_top + space_between_lines
+                                    }
+                                    AlignContent::Stretch => {
+                                        line_stretch = Some(
+                                            (height - padding_top - padding_bottom)
+                                                / line_count as f32,
+                                        );
+                                        padding_top
+                                    }
+                                }
+                            } else {
+                                let default_y = height - padding_bottom;
+                                match align_content {
+                                    AlignContent::Start => default_y,
+                                    AlignContent::End => lines_height + padding_top,
+                                    AlignContent::Center => (height - lines_height) / 2.0,
+                                    AlignContent::SpaceBetween => {
+                                        if remaining_space_between_lines > 0.0 && line_count > 1 {
+                                            space_between_lines = remaining_space_between_lines
+                                                / (line_count - 1) as f32;
+                                        }
+                                        default_y
+                                    }
+                                    AlignContent::SpaceAround => {
+                                        if remaining_space_between_lines > 0.0 && line_count > 0 {
+                                            space_between_lines =
+                                                remaining_space_between_lines / line_count as f32;
+                                        }
+                                        default_y - space_between_lines / 2.0
+                                    }
+                                    AlignContent::SpaceEvenly => {
+                                        if remaining_space_between_lines > 0.0 && line_count > 0 {
+                                            space_between_lines = remaining_space_between_lines
+                                                / (line_count + 1) as f32;
+                                        }
+                                        default_y - space_between_lines
+                                    }
+                                    AlignContent::Stretch => {
+                                        line_stretch = Some(
+                                            (height - padding_top - padding_bottom)
+                                                / line_count as f32,
+                                        );
+                                        default_y
+                                    }
+                                }
+                            };
 
                             for line in lines.lines().iter() {
                                 let start_index = line.start_index;
@@ -608,7 +683,8 @@ impl Flex {
                                     total_grow
                                 };
 
-                                let remaining_space_between_items = width - line_width - padding_start - padding_end;
+                                let remaining_space_between_items =
+                                    width - line_width - padding_start - padding_end;
                                 let mut space_between_items = 0.0_f32;
                                 let raw_x = if direction == FlexDirection::Horizontal {
                                     match justify_content {
@@ -618,8 +694,12 @@ impl Flex {
                                         JustifyContent::SpaceBetween => {
                                             if total_grow == 0 {
                                                 let count = line.count as f32;
-                                                if count > 1.0 && remaining_space_between_items > 0.0 {
-                                                    space_between_items = remaining_space_between_items / (count - 1.0);
+                                                if count > 1.0
+                                                    && remaining_space_between_items > 0.0
+                                                {
+                                                    space_between_items =
+                                                        remaining_space_between_items
+                                                            / (count - 1.0);
                                                 }
                                             }
                                             padding_start
@@ -627,8 +707,11 @@ impl Flex {
                                         JustifyContent::SpaceAround => {
                                             if total_grow == 0 {
                                                 let count = line.count as f32;
-                                                if count > 0.0 && remaining_space_between_items > 0.0 {
-                                                    space_between_items = remaining_space_between_items / count;
+                                                if count > 0.0
+                                                    && remaining_space_between_items > 0.0
+                                                {
+                                                    space_between_items =
+                                                        remaining_space_between_items / count;
                                                 }
                                                 space_between_items / 2.0
                                             } else {
@@ -638,8 +721,12 @@ impl Flex {
                                         JustifyContent::SpaceEvenly => {
                                             if total_grow == 0 {
                                                 let count = line.count as f32;
-                                                if count > 0.0 && remaining_space_between_items > 0.0 {
-                                                    space_between_items = remaining_space_between_items / (count + 1.0);
+                                                if count > 0.0
+                                                    && remaining_space_between_items > 0.0
+                                                {
+                                                    space_between_items =
+                                                        remaining_space_between_items
+                                                            / (count + 1.0);
                                                 }
                                                 space_between_items
                                             } else {
@@ -656,8 +743,12 @@ impl Flex {
                                         JustifyContent::SpaceBetween => {
                                             if total_grow == 0 {
                                                 let count = line.count as f32;
-                                                if count > 1.0 && remaining_space_between_items > 0.0 {
-                                                    space_between_items = remaining_space_between_items / (count - 1.0);
+                                                if count > 1.0
+                                                    && remaining_space_between_items > 0.0
+                                                {
+                                                    space_between_items =
+                                                        remaining_space_between_items
+                                                            / (count - 1.0);
                                                 }
                                             }
                                             default_x
@@ -665,8 +756,11 @@ impl Flex {
                                         JustifyContent::SpaceAround => {
                                             if total_grow == 0 {
                                                 let count = line.count as f32;
-                                                if count > 0.0 && remaining_space_between_items > 0.0 {
-                                                    space_between_items = remaining_space_between_items / count;
+                                                if count > 0.0
+                                                    && remaining_space_between_items > 0.0
+                                                {
+                                                    space_between_items =
+                                                        remaining_space_between_items / count;
                                                 }
                                                 default_x - space_between_items / 2.0
                                             } else {
@@ -676,8 +770,12 @@ impl Flex {
                                         JustifyContent::SpaceEvenly => {
                                             if total_grow == 0 {
                                                 let count = line.count as f32;
-                                                if count > 0.0 && remaining_space_between_items > 0.0 {
-                                                    space_between_items = remaining_space_between_items / (count + 1.0);
+                                                if count > 0.0
+                                                    && remaining_space_between_items > 0.0
+                                                {
+                                                    space_between_items =
+                                                        remaining_space_between_items
+                                                            / (count + 1.0);
                                                 }
                                                 default_x - space_between_items
                                             } else {
@@ -687,7 +785,8 @@ impl Flex {
                                     }
                                 };
 
-                                let mut x = LogicalX::new(item.get_layout_direction().get(), raw_x, width);
+                                let mut x =
+                                    LogicalX::new(item.get_layout_direction().get(), raw_x, width);
 
                                 for index in start_index..start_index + count {
                                     let mut children_items = item.get_children().items();
@@ -695,7 +794,8 @@ impl Flex {
                                     let child_param = child.data().clone_measure_parameter();
 
                                     let mut child_width = child_param.width;
-                                    let mut child_height = if let Some(line_stretch) = line_stretch {
+                                    let mut child_height = if let Some(line_stretch) = line_stretch
+                                    {
                                         line_stretch
                                     } else {
                                         child_param.height
@@ -704,12 +804,18 @@ impl Flex {
                                     let child_margin_start = child.data().get_margin_start().get();
                                     let child_margin_end = child.data().get_margin_end().get();
                                     let child_margin_top = child.data().get_margin_top().get();
-                                    let child_margin_bottom = child.data().get_margin_bottom().get();
+                                    let child_margin_bottom =
+                                        child.data().get_margin_bottom().get();
 
                                     if remaining_space_between_items > 0.0 && total_grow > 0 {
-                                        let flex_grow = child.data().get_flex_grow().map(|v| v.get()).unwrap_or(0);
+                                        let flex_grow = child
+                                            .data()
+                                            .get_flex_grow()
+                                            .map(|v| v.get())
+                                            .unwrap_or(0);
                                         if flex_grow > 0 {
-                                            child_width += remaining_space_between_items * (flex_grow as f32 / total_grow as f32);
+                                            child_width += remaining_space_between_items
+                                                * (flex_grow as f32 / total_grow as f32);
                                         }
                                     }
 
@@ -723,152 +829,202 @@ impl Flex {
                                         y + if line_stretch.is_none() {
                                             match align_items {
                                                 AlignItems::Start => child_margin_top,
-                                                AlignItems::End => line_height - child_margin_bottom - child_height,
-                                                AlignItems::Center => (line_height - child_height) / 2.0,
+                                                AlignItems::End => {
+                                                    line_height - child_margin_bottom - child_height
+                                                }
+                                                AlignItems::Center => {
+                                                    (line_height - child_height) / 2.0
+                                                }
                                                 AlignItems::Baseline => {
-                                                    let child_baseline = child.data().get_baseline();
+                                                    let child_baseline =
+                                                        child.data().get_baseline();
                                                     match child_baseline {
                                                         None => child_margin_top,
-                                                        Some(baseline) => line.under_baseline - baseline
+                                                        Some(baseline) => {
+                                                            line.under_baseline - baseline
+                                                        }
                                                     }
                                                 }
                                                 AlignItems::Stretch => {
-                                                    child_height = line_height - child_margin_top - child_margin_bottom;
+                                                    child_height = line_height
+                                                        - child_margin_top
+                                                        - child_margin_bottom;
                                                     child_margin_top
                                                 }
                                             }
-                                        } else { 0.0 }
+                                        } else {
+                                            0.0
+                                        }
                                     } else {
                                         y - if line_stretch.is_none() {
                                             match align_items {
                                                 AlignItems::Start => child_margin_bottom,
-                                                AlignItems::End => line_height - child_margin_top - child_height,
-                                                AlignItems::Center => (line_height - child_height) / 2.0,
+                                                AlignItems::End => {
+                                                    line_height - child_margin_top - child_height
+                                                }
+                                                AlignItems::Center => {
+                                                    (line_height - child_height) / 2.0
+                                                }
                                                 AlignItems::Baseline => {
-                                                    let child_baseline = child.data().get_baseline();
+                                                    let child_baseline =
+                                                        child.data().get_baseline();
                                                     match child_baseline {
                                                         None => child_margin_bottom,
-                                                        Some(baseline) => line.over_baseline - baseline
+                                                        Some(baseline) => {
+                                                            line.over_baseline - baseline
+                                                        }
                                                     }
                                                 }
                                                 AlignItems::Stretch => {
-                                                    child_height = line_height - child_margin_top - child_margin_bottom;
+                                                    child_height = line_height
+                                                        - child_margin_top
+                                                        - child_margin_bottom;
                                                     child_margin_bottom
                                                 }
                                             }
-                                        } else { 0.0 }
+                                        } else {
+                                            0.0
+                                        }
                                     };
 
-                                    let x_factor = if direction == FlexDirection::Horizontal { 1.0 } else { -1.0 };
+                                    let x_factor = if direction == FlexDirection::Horizontal {
+                                        1.0
+                                    } else {
+                                        -1.0
+                                    };
                                     x += child_margin_start * x_factor;
                                     child.data().dispatch_layout(
-                                        if direction == FlexDirection::Horizontal { x.logical_value() } else { (x - child_width).logical_value() },
-                                        if wrap != FlexWrap::WrapReverse { child_y } else { child_y - child_height },
+                                        if direction == FlexDirection::Horizontal {
+                                            x.logical_value()
+                                        } else {
+                                            (x - child_width).logical_value()
+                                        },
+                                        if wrap != FlexWrap::WrapReverse {
+                                            child_y
+                                        } else {
+                                            child_y - child_height
+                                        },
                                         child_width,
                                         child_height,
                                     );
-                                    x += (child_width + child_margin_end + main_axis_gap + space_between_items) * x_factor;
+                                    x += (child_width
+                                        + child_margin_end
+                                        + main_axis_gap
+                                        + space_between_items)
+                                        * x_factor;
                                 }
-                                y += (
-                                    if let Some(line_stretch) = line_stretch {
-                                        line_stretch
+                                y += (if let Some(line_stretch) = line_stretch {
+                                    line_stretch
+                                } else {
+                                    line.height()
+                                } + space_between_lines
+                                    + cross_axis_gap)
+                                    * if wrap == FlexWrap::WrapReverse {
+                                        -1.0
                                     } else {
-                                        line.height()
-                                    } + space_between_lines + cross_axis_gap
-                                ) * if wrap == FlexWrap::WrapReverse { -1.0 } else { 1.0 };
+                                        1.0
+                                    };
                             }
                         }
                         FlexDirection::Vertical | FlexDirection::VerticalReverse => {
                             // let remaining_space_between_lines = height - lines_height - padding_top - padding_bottom;
-                            let remaining_space_between_lines = width - lines_width - padding_start - padding_end;
+                            let remaining_space_between_lines =
+                                width - lines_width - padding_start - padding_end;
                             let mut line_stretch = None;
                             let mut space_between_lines = 0.0;
 
-                            let x =
-                                if wrap != FlexWrap::WrapReverse {
-                                    match align_content {
-                                        // AlignContent::Start => padding_top,
-                                        AlignContent::Start => padding_start,
-                                        AlignContent::End => width - lines_width - padding_end,
-                                        AlignContent::Center => (width - lines_width) / 2.0,
-                                        // AlignContent::End => height - lines_height - padding_bottom,
-                                        // AlignContent::Center => (height - lines_height) / 2.0,
-                                        AlignContent::SpaceBetween => {
-                                            if remaining_space_between_lines > 0.0 && line_count > 1 {
-                                                space_between_lines = remaining_space_between_lines / (line_count - 1) as f32;
-                                            }
-                                            // padding_top
-                                            padding_start
+                            let x = if wrap != FlexWrap::WrapReverse {
+                                match align_content {
+                                    // AlignContent::Start => padding_top,
+                                    AlignContent::Start => padding_start,
+                                    AlignContent::End => width - lines_width - padding_end,
+                                    AlignContent::Center => (width - lines_width) / 2.0,
+                                    // AlignContent::End => height - lines_height - padding_bottom,
+                                    // AlignContent::Center => (height - lines_height) / 2.0,
+                                    AlignContent::SpaceBetween => {
+                                        if remaining_space_between_lines > 0.0 && line_count > 1 {
+                                            space_between_lines = remaining_space_between_lines
+                                                / (line_count - 1) as f32;
                                         }
-                                        AlignContent::SpaceAround => {
-                                            if remaining_space_between_lines > 0.0 && line_count > 0 {
-                                                space_between_lines = remaining_space_between_lines / line_count as f32;
-                                            }
-                                            // padding_top + space_between_lines / 2.0
-                                            padding_start + space_between_lines / 2.0
-                                        }
-                                        AlignContent::SpaceEvenly => {
-                                            if remaining_space_between_lines > 0.0 && line_count > 0 {
-                                                space_between_lines = remaining_space_between_lines / (line_count + 1) as f32;
-                                            }
-                                            // padding_top + space_between_lines
-                                            padding_start + space_between_lines
-                                        }
-                                        AlignContent::Stretch => {
-                                            // line_stretch = Some(
-                                            //     (height - padding_top - padding_bottom) / line_count as f32
-                                            // );
-                                            // padding_top
-                                            line_stretch = Some(
-                                                (width - padding_start - padding_end) / line_count as f32
-                                            );
-                                            padding_start
-                                        }
+                                        // padding_top
+                                        padding_start
                                     }
-                                } else {
-                                    // let default_y = height - padding_bottom;
-                                    let default_x = width - padding_end;
-                                    match align_content {
-                                        // AlignContent::Start => default_y,
-                                        // AlignContent::End => lines_height + padding_top,
-                                        // AlignContent::Center => (height - lines_height) / 2.0,
-                                        AlignContent::Start => default_x,
-                                        AlignContent::End => lines_width + padding_start,
-                                        AlignContent::Center => (width - lines_width) / 2.0,
-                                        AlignContent::SpaceBetween => {
-                                            if remaining_space_between_lines > 0.0 && line_count > 1 {
-                                                space_between_lines = remaining_space_between_lines / (line_count - 1) as f32;
-                                            }
-                                            // default_y
-                                            default_x
+                                    AlignContent::SpaceAround => {
+                                        if remaining_space_between_lines > 0.0 && line_count > 0 {
+                                            space_between_lines =
+                                                remaining_space_between_lines / line_count as f32;
                                         }
-                                        AlignContent::SpaceAround => {
-                                            if remaining_space_between_lines > 0.0 && line_count > 0 {
-                                                space_between_lines = remaining_space_between_lines / line_count as f32;
-                                            }
-                                            // default_y - space_between_lines / 2.0
-                                            default_x - space_between_lines / 2.0
-                                        }
-                                        AlignContent::SpaceEvenly => {
-                                            if remaining_space_between_lines > 0.0 && line_count > 0 {
-                                                space_between_lines = remaining_space_between_lines / (line_count + 1) as f32;
-                                            }
-                                            // default_y - space_between_lines
-                                            default_x - space_between_lines
-                                        }
-                                        AlignContent::Stretch => {
-                                            // line_stretch = Some(
-                                            //     (height - padding_top - padding_bottom) / line_count as f32
-                                            // );
-                                            // default_y
-                                            line_stretch = Some(
-                                                (width - padding_start - padding_end) / line_count as f32
-                                            );
-                                            default_x
-                                        }
+                                        // padding_top + space_between_lines / 2.0
+                                        padding_start + space_between_lines / 2.0
                                     }
-                                };
-                            
+                                    AlignContent::SpaceEvenly => {
+                                        if remaining_space_between_lines > 0.0 && line_count > 0 {
+                                            space_between_lines = remaining_space_between_lines
+                                                / (line_count + 1) as f32;
+                                        }
+                                        // padding_top + space_between_lines
+                                        padding_start + space_between_lines
+                                    }
+                                    AlignContent::Stretch => {
+                                        // line_stretch = Some(
+                                        //     (height - padding_top - padding_bottom) / line_count as f32
+                                        // );
+                                        // padding_top
+                                        line_stretch = Some(
+                                            (width - padding_start - padding_end)
+                                                / line_count as f32,
+                                        );
+                                        padding_start
+                                    }
+                                }
+                            } else {
+                                // let default_y = height - padding_bottom;
+                                let default_x = width - padding_end;
+                                match align_content {
+                                    // AlignContent::Start => default_y,
+                                    // AlignContent::End => lines_height + padding_top,
+                                    // AlignContent::Center => (height - lines_height) / 2.0,
+                                    AlignContent::Start => default_x,
+                                    AlignContent::End => lines_width + padding_start,
+                                    AlignContent::Center => (width - lines_width) / 2.0,
+                                    AlignContent::SpaceBetween => {
+                                        if remaining_space_between_lines > 0.0 && line_count > 1 {
+                                            space_between_lines = remaining_space_between_lines
+                                                / (line_count - 1) as f32;
+                                        }
+                                        // default_y
+                                        default_x
+                                    }
+                                    AlignContent::SpaceAround => {
+                                        if remaining_space_between_lines > 0.0 && line_count > 0 {
+                                            space_between_lines =
+                                                remaining_space_between_lines / line_count as f32;
+                                        }
+                                        // default_y - space_between_lines / 2.0
+                                        default_x - space_between_lines / 2.0
+                                    }
+                                    AlignContent::SpaceEvenly => {
+                                        if remaining_space_between_lines > 0.0 && line_count > 0 {
+                                            space_between_lines = remaining_space_between_lines
+                                                / (line_count + 1) as f32;
+                                        }
+                                        // default_y - space_between_lines
+                                        default_x - space_between_lines
+                                    }
+                                    AlignContent::Stretch => {
+                                        // line_stretch = Some(
+                                        //     (height - padding_top - padding_bottom) / line_count as f32
+                                        // );
+                                        // default_y
+                                        line_stretch = Some(
+                                            (width - padding_start - padding_end)
+                                                / line_count as f32,
+                                        );
+                                        default_x
+                                    }
+                                }
+                            };
+
                             let mut x = LogicalX::new(item.get_layout_direction().get(), x, width);
 
                             for line in lines.lines().iter() {
@@ -893,7 +1049,8 @@ impl Flex {
                                 };
 
                                 // let remaining_space_between_items = width - line_width - padding_start - padding_end;
-                                let remaining_space_between_items = height - line_height - padding_top - padding_bottom;
+                                let remaining_space_between_items =
+                                    height - line_height - padding_top - padding_bottom;
                                 let mut space_between_items = 0.0_f32;
                                 let raw_y = if direction == FlexDirection::Vertical {
                                     match justify_content {
@@ -901,13 +1058,19 @@ impl Flex {
                                         // JustifyContent::End => width - padding_end - line_width,
                                         // JustifyContent::Center => (width - line_width) / 2.0,
                                         JustifyContent::Start => padding_top,
-                                        JustifyContent::End => height - padding_bottom - line_height,
+                                        JustifyContent::End => {
+                                            height - padding_bottom - line_height
+                                        }
                                         JustifyContent::Center => (height - line_height) / 2.0,
                                         JustifyContent::SpaceBetween => {
                                             if total_grow == 0 {
                                                 let count = line.count as f32;
-                                                if count > 1.0 && remaining_space_between_items > 0.0 {
-                                                    space_between_items = remaining_space_between_items / (count - 1.0);
+                                                if count > 1.0
+                                                    && remaining_space_between_items > 0.0
+                                                {
+                                                    space_between_items =
+                                                        remaining_space_between_items
+                                                            / (count - 1.0);
                                                 }
                                             }
                                             // padding_start
@@ -916,8 +1079,11 @@ impl Flex {
                                         JustifyContent::SpaceAround => {
                                             if total_grow == 0 {
                                                 let count = line.count as f32;
-                                                if count > 0.0 && remaining_space_between_items > 0.0 {
-                                                    space_between_items = remaining_space_between_items / count;
+                                                if count > 0.0
+                                                    && remaining_space_between_items > 0.0
+                                                {
+                                                    space_between_items =
+                                                        remaining_space_between_items / count;
                                                 }
                                                 space_between_items / 2.0
                                             } else {
@@ -928,8 +1094,12 @@ impl Flex {
                                         JustifyContent::SpaceEvenly => {
                                             if total_grow == 0 {
                                                 let count = line.count as f32;
-                                                if count > 0.0 && remaining_space_between_items > 0.0 {
-                                                    space_between_items = remaining_space_between_items / (count + 1.0);
+                                                if count > 0.0
+                                                    && remaining_space_between_items > 0.0
+                                                {
+                                                    space_between_items =
+                                                        remaining_space_between_items
+                                                            / (count + 1.0);
                                                 }
                                                 space_between_items
                                             } else {
@@ -947,12 +1117,16 @@ impl Flex {
                                         // JustifyContent::Center => (width - line_width) / 2.0,
                                         JustifyContent::Start => default_y,
                                         JustifyContent::End => padding_top + line_height,
-                                         JustifyContent::Center => (height - line_height) / 2.0,
+                                        JustifyContent::Center => (height - line_height) / 2.0,
                                         JustifyContent::SpaceBetween => {
                                             if total_grow == 0 {
                                                 let count = line.count as f32;
-                                                if count > 1.0 && remaining_space_between_items > 0.0 {
-                                                    space_between_items = remaining_space_between_items / (count - 1.0);
+                                                if count > 1.0
+                                                    && remaining_space_between_items > 0.0
+                                                {
+                                                    space_between_items =
+                                                        remaining_space_between_items
+                                                            / (count - 1.0);
                                                 }
                                             }
                                             // default_x
@@ -961,8 +1135,11 @@ impl Flex {
                                         JustifyContent::SpaceAround => {
                                             if total_grow == 0 {
                                                 let count = line.count as f32;
-                                                if count > 0.0 && remaining_space_between_items > 0.0 {
-                                                    space_between_items = remaining_space_between_items / count;
+                                                if count > 0.0
+                                                    && remaining_space_between_items > 0.0
+                                                {
+                                                    space_between_items =
+                                                        remaining_space_between_items / count;
                                                 }
                                                 // default_x - space_between_items / 2.0
                                                 default_y - space_between_lines / 2.0
@@ -974,8 +1151,12 @@ impl Flex {
                                         JustifyContent::SpaceEvenly => {
                                             if total_grow == 0 {
                                                 let count = line.count as f32;
-                                                if count > 0.0 && remaining_space_between_items > 0.0 {
-                                                    space_between_items = remaining_space_between_items / (count + 1.0);
+                                                if count > 0.0
+                                                    && remaining_space_between_items > 0.0
+                                                {
+                                                    space_between_items =
+                                                        remaining_space_between_items
+                                                            / (count + 1.0);
                                                 }
                                                 // default_x - space_between_items
                                                 default_y - space_between_lines
@@ -1003,7 +1184,7 @@ impl Flex {
                                     // };
                                     let mut child_width = if let Some(line_stretch) = line_stretch {
                                         line_stretch
-                                    }else { 
+                                    } else {
                                         child_param.width
                                     };
                                     let mut child_height = child_param.height;
@@ -1011,13 +1192,19 @@ impl Flex {
                                     let child_margin_start = child.data().get_margin_start().get();
                                     let child_margin_end = child.data().get_margin_end().get();
                                     let child_margin_top = child.data().get_margin_top().get();
-                                    let child_margin_bottom = child.data().get_margin_bottom().get();
+                                    let child_margin_bottom =
+                                        child.data().get_margin_bottom().get();
 
                                     if remaining_space_between_items > 0.0 && total_grow > 0 {
-                                        let flex_grow = child.data().get_flex_grow().map(|v| v.get()).unwrap_or(0);
+                                        let flex_grow = child
+                                            .data()
+                                            .get_flex_grow()
+                                            .map(|v| v.get())
+                                            .unwrap_or(0);
                                         if flex_grow > 0 {
                                             // child_width += remaining_space_between_items * (flex_grow as f32 / total_grow as f32);
-                                            child_height += remaining_space_between_items * (flex_grow as f32 / total_grow as f32);
+                                            child_height += remaining_space_between_items
+                                                * (flex_grow as f32 / total_grow as f32);
                                         }
                                     }
 
@@ -1026,11 +1213,8 @@ impl Flex {
                                     // } else {
                                     //     line.height()
                                     // };
-                                    let line_width = if line_count == 1 {
-                                        width
-                                    }else { 
-                                        line.width()
-                                    };
+                                    let line_width =
+                                        if line_count == 1 { width } else { line.width() };
 
                                     let child_x = if wrap != FlexWrap::WrapReverse {
                                         x + if line_stretch.is_none() {
@@ -1039,8 +1223,12 @@ impl Flex {
                                                 // AlignItems::End => line_height - child_margin_bottom - child_height,
                                                 // AlignItems::Center => (line_height - child_height) / 2.0,
                                                 AlignItems::Start => child_margin_start,
-                                                AlignItems::End => line_width - child_margin_end - child_width,
-                                                AlignItems::Center => (line_width - child_width) / 2.0,
+                                                AlignItems::End => {
+                                                    line_width - child_margin_end - child_width
+                                                }
+                                                AlignItems::Center => {
+                                                    (line_width - child_width) / 2.0
+                                                }
                                                 AlignItems::Baseline => {
                                                     // let child_baseline = child.get_baseline();
                                                     // match child_baseline {
@@ -1052,11 +1240,15 @@ impl Flex {
                                                 AlignItems::Stretch => {
                                                     // child_height = line_height - child_margin_top - child_margin_bottom;
                                                     // child_margin_top
-                                                    child_width = line_width - child_margin_start - child_margin_end;
+                                                    child_width = line_width
+                                                        - child_margin_start
+                                                        - child_margin_end;
                                                     child_margin_start
                                                 }
                                             }
-                                        } else { 0.0 }
+                                        } else {
+                                            0.0
+                                        }
                                     } else {
                                         x - if line_stretch.is_none() {
                                             match align_items {
@@ -1064,8 +1256,12 @@ impl Flex {
                                                 // AlignItems::End => line_height - child_margin_top - child_height,
                                                 // AlignItems::Center => (line_height - child_height) / 2.0,
                                                 AlignItems::Start => child_margin_end,
-                                                AlignItems::End => line_width - child_margin_start - child_width,
-                                                AlignItems::Center => (line_width - child_width) / 2.0,
+                                                AlignItems::End => {
+                                                    line_width - child_margin_start - child_width
+                                                }
+                                                AlignItems::Center => {
+                                                    (line_width - child_width) / 2.0
+                                                }
                                                 AlignItems::Baseline => {
                                                     // let child_baseline = child.get_baseline();
                                                     // match child_baseline {
@@ -1077,26 +1273,46 @@ impl Flex {
                                                 AlignItems::Stretch => {
                                                     // child_height = line_height - child_margin_top - child_margin_bottom;
                                                     // child_margin_bottom
-                                                    child_width = line_width - child_margin_start - child_margin_end;
+                                                    child_width = line_width
+                                                        - child_margin_start
+                                                        - child_margin_end;
                                                     child_margin_end
                                                 }
                                             }
-                                        } else { 0.0 }
+                                        } else {
+                                            0.0
+                                        }
                                     };
 
-                                    let y_factor = if direction == FlexDirection::Vertical { 1.0 } else { -1.0 };
+                                    let y_factor = if direction == FlexDirection::Vertical {
+                                        1.0
+                                    } else {
+                                        -1.0
+                                    };
                                     // x += child_margin_start * x_factor;
                                     y += child_margin_top * y_factor;
                                     child.data().dispatch_layout(
                                         // if direction == FlexDirection::Vertical { x.logical_value() } else { (x - child_width).logical_value() },
                                         // if wrap != FlexWrap::WrapReverse { child_y } else { child_y - child_height },
-                                        if wrap != FlexWrap::WrapReverse { child_x.logical_value() } else { (child_x - child_width).logical_value() },
-                                        if direction == FlexDirection::Vertical { y } else { y - child_height },
+                                        if wrap != FlexWrap::WrapReverse {
+                                            child_x.logical_value()
+                                        } else {
+                                            (child_x - child_width).logical_value()
+                                        },
+                                        if direction == FlexDirection::Vertical {
+                                            y
+                                        } else {
+                                            y - child_height
+                                        },
                                         child_width,
                                         child_height,
                                     );
                                     // x += (child_width + child_margin_end + main_axis_gap + space_between_items) * x_factor;
-                                    y += (child_height + child_margin_bottom + main_axis_gap + space_between_items) * y_factor;
+                                    y += (child_height
+                                        + child_margin_bottom
+                                        + main_axis_gap
+                                        + space_between_items)
+                                        * y_factor;
                                 }
                                 // y += (
                                 //     if let Some(line_stretch) = line_stretch {
@@ -1105,23 +1321,24 @@ impl Flex {
                                 //         line.height()
                                 //     } + space_between_lines + cross_axis_gap
                                 // ) * if wrap == FlexWrap::WrapReverse { -1.0 } else { 1.0 };
-                                x += (
-                                    if let Some(line_stretch) = line_stretch {
-                                        line_stretch
+                                x += (if let Some(line_stretch) = line_stretch {
+                                    line_stretch
+                                } else {
+                                    line.width()
+                                } + space_between_lines
+                                    + cross_axis_gap)
+                                    * if wrap == FlexWrap::WrapReverse {
+                                        -1.0
                                     } else {
-                                        line.width()
-                                    } + space_between_lines + cross_axis_gap
-                                ) * if wrap == FlexWrap::WrapReverse { -1.0 } else { 1.0 };
+                                        1.0
+                                    };
                             }
                         }
                     }
                 }
             });
 
-        Self {
-            item,
-            properties,
-        }
+        Self { item, properties }
     }
 
     pub fn direction(self, direction: impl Into<Shared<FlexDirection>>) -> Self {

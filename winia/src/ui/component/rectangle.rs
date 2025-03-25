@@ -4,6 +4,7 @@ use crate::ui::app::AppContext;
 use crate::ui::Item;
 use proc_macro::item;
 use skia_safe::{Color, RRect, Rect, Vector};
+use skia_safe::paint::Style;
 
 #[derive(Clone)]
 struct RectangleProperty {
@@ -12,6 +13,8 @@ struct RectangleProperty {
     radius_top_right: SharedF32,
     radius_bottom_right: SharedF32,
     radius_bottom_left: SharedF32,
+    outline_width: SharedF32,
+    outline_color: SharedColor,
 }
 
 #[item(color: impl Into<SharedColor>)]
@@ -25,6 +28,8 @@ impl_property_redraw!(Rectangle, radius_top_left, SharedF32);
 impl_property_redraw!(Rectangle, radius_top_right, SharedF32);
 impl_property_redraw!(Rectangle, radius_bottom_right, SharedF32);
 impl_property_redraw!(Rectangle, radius_bottom_left, SharedF32);
+impl_property_redraw!(Rectangle, outline_width, SharedF32);
+impl_property_redraw!(Rectangle, outline_color, SharedColor);
 
 impl Rectangle {
     pub fn new(app_context: AppContext, color: impl Into<SharedColor>) -> Self {
@@ -32,16 +37,13 @@ impl Rectangle {
         let id = item.data().get_id();
         let event_loop_proxy = app_context.event_loop_proxy();
         let property = Shared::new(RectangleProperty {
-            color: color
-                .into()
-                .layout_when_changed(&event_loop_proxy, id),
-            radius_top_left: SharedF32::new(0.0)
-                .layout_when_changed(&event_loop_proxy, id),
-            radius_top_right: SharedF32::new(0.0)
-                .layout_when_changed(&event_loop_proxy, id),
-            radius_bottom_right: SharedF32::new(0.0)
-                .layout_when_changed(&event_loop_proxy, id),
-            radius_bottom_left: SharedF32::new(0.0)
+            color: color.into().layout_when_changed(&event_loop_proxy, id),
+            radius_top_left: SharedF32::new(0.0).layout_when_changed(&event_loop_proxy, id),
+            radius_top_right: SharedF32::new(0.0).layout_when_changed(&event_loop_proxy, id),
+            radius_bottom_right: SharedF32::new(0.0).layout_when_changed(&event_loop_proxy, id),
+            radius_bottom_left: SharedF32::new(0.0).layout_when_changed(&event_loop_proxy, id),
+            outline_width: SharedF32::new(0.0).layout_when_changed(&event_loop_proxy, id),
+            outline_color: SharedColor::new(Color::TRANSPARENT)
                 .layout_when_changed(&event_loop_proxy, id),
         });
 
@@ -55,12 +57,16 @@ impl Rectangle {
                     let radius_top_right = property.radius_top_right.get();
                     let radius_bottom_right = property.radius_bottom_right.get();
                     let radius_bottom_left = property.radius_bottom_left.get();
+                    let outline_width = property.outline_width.get();
+                    let outline_color = property.outline_color.get();
                     let target_parameter = item.get_target_parameter();
                     target_parameter.set_color_param("color", color);
                     target_parameter.set_float_param("radius_top_left", radius_top_left);
                     target_parameter.set_float_param("radius_top_right", radius_top_right);
                     target_parameter.set_float_param("radius_bottom_right", radius_bottom_right);
                     target_parameter.set_float_param("radius_bottom_left", radius_bottom_left);
+                    target_parameter.set_float_param("outline_width", outline_width);
+                    target_parameter.set_color_param("outline_color", outline_color);
                 }
             })
             .set_draw({
@@ -88,6 +94,12 @@ impl Rectangle {
                     let radius_bottom_left = display_parameter
                         .get_float_param("radius_bottom_left")
                         .unwrap_or(0.0);
+                    let outline_width = display_parameter
+                        .get_float_param("outline_width")
+                        .unwrap_or(0.0);
+                    let outline_color = display_parameter
+                        .get_color_param("outline_color")
+                        .unwrap_or(Color::TRANSPARENT);
                     let rect = Rect::from_xywh(
                         display_parameter.x() + padding_left,
                         display_parameter.y() + padding_top,
@@ -107,6 +119,13 @@ impl Rectangle {
                     paint.set_anti_alias(true);
                     paint.set_color(color);
                     canvas.draw_rrect(rrect, &paint);
+                    
+                    if outline_width > 0.0 {
+                        paint.set_color(outline_color);
+                        paint.set_style(Style::Stroke);
+                        paint.set_stroke_width(outline_width);
+                        canvas.draw_rrect(rrect, &paint);
+                    }
                 }
             });
         Self { item, property }

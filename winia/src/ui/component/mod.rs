@@ -1,11 +1,11 @@
-mod rectangle;
+pub mod button;
 mod image;
-mod text;
+mod rectangle;
 mod ripple;
-mod button;
+mod text;
 
-pub use rectangle::*;
-pub use image::*;
-pub use text::*;
-pub use ripple::*;
 pub use button::*;
+pub use image::*;
+pub use rectangle::*;
+pub use ripple::*;
+pub use text::*;

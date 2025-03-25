@@ -13,7 +13,7 @@ pub struct Scroller {
     scroll_speed: f32,
     scroll_position_updater: Box<dyn FnMut(f32, f32) -> (f32, f32)>,
     content_size: (f32, f32),
-    thumb_opacity: SharedF32
+    thumb_opacity: SharedF32,
 }
 
 impl Scroller {
@@ -36,7 +36,7 @@ impl Scroller {
             thumb_opacity: 1.0.into(),
         }
     }
-    
+
     fn sanitize(&mut self) {
         let x = self.scroll_position.0.get();
         let y = self.scroll_position.1.get();
@@ -45,7 +45,9 @@ impl Scroller {
         } else if self.scroll_extent.0 > self.scroll_range.0 {
             self.scroll_position.0.set(0.0);
         } else if x + self.scroll_extent.0 > self.scroll_range.0 {
-            self.scroll_position.0.set(self.scroll_range.0 - self.scroll_extent.0);
+            self.scroll_position
+                .0
+                .set(self.scroll_range.0 - self.scroll_extent.0);
         }
 
         if y < 0.0 {
@@ -53,7 +55,9 @@ impl Scroller {
         } else if self.scroll_extent.1 > self.scroll_range.1 {
             self.scroll_position.1.set(0.0);
         } else if y + self.scroll_extent.1 > self.scroll_range.1 {
-            self.scroll_position.1.set(self.scroll_range.1 - self.scroll_extent.1);
+            self.scroll_position
+                .1
+                .set(self.scroll_range.1 - self.scroll_extent.1);
         }
     }
 
@@ -107,20 +111,24 @@ impl Scroller {
                     (self.scroll_position_updater)(x * self.scroll_speed, y * self.scroll_speed);
                 let x = self.scroll_position.0.get() - x;
                 let y = self.scroll_position.1.get() - y;
-                
+
                 if x > 0.0 && x + self.scroll_extent.0 < self.scroll_range.0 {
                     self.scroll_position.0.set(x);
                 } else if x <= 0.0 {
                     self.scroll_position.0.set(0.0);
                 } else if x > 0.0 && x + self.scroll_extent.0 >= self.scroll_range.0 {
-                    self.scroll_position.0.set(self.scroll_range.0 - self.scroll_extent.0);
+                    self.scroll_position
+                        .0
+                        .set(self.scroll_range.0 - self.scroll_extent.0);
                 }
                 if y > 0.0 && y + self.scroll_extent.1 < self.scroll_range.1 {
                     self.scroll_position.1.set(y);
                 } else if y <= 0.0 {
                     self.scroll_position.1.set(0.0);
                 } else if y > 0.0 && y + self.scroll_extent.1 >= self.scroll_range.1 {
-                    self.scroll_position.1.set(self.scroll_range.1 - self.scroll_extent.1);
+                    self.scroll_position
+                        .1
+                        .set(self.scroll_range.1 - self.scroll_extent.1);
                 }
                 // self.scroll_position
                 //     .0
@@ -142,8 +150,10 @@ impl Scroller {
                 if let Some(mut animation) = self.scroll_position.1.get_animation() {
                     animation.cancel();
                 }
-                let (x, y) =
-                    (self.scroll_position_updater)(x /* self.scroll_speed*/, y /* self.scroll_speed*/);
+                let (x, y) = (self.scroll_position_updater)(
+                    x, /* self.scroll_speed*/
+                    y, /* self.scroll_speed*/
+                );
                 let x = self.scroll_position.0.get() - x;
                 let y = self.scroll_position.1.get() - y;
 
@@ -152,7 +162,9 @@ impl Scroller {
                 } else if x <= 0.0 {
                     self.scroll_position.0.set(0.0);
                 } else if x > 0.0 && x + self.scroll_extent.0 >= self.scroll_range.0 {
-                    self.scroll_position.0.set(self.scroll_range.0 - self.scroll_extent.0);
+                    self.scroll_position
+                        .0
+                        .set(self.scroll_range.0 - self.scroll_extent.0);
                 }
 
                 if y > 0.0 && y + self.scroll_extent.1 < self.scroll_range.1 {
@@ -160,7 +172,9 @@ impl Scroller {
                 } else if y <= 0.0 {
                     self.scroll_position.1.set(0.0);
                 } else if y > 0.0 && y + self.scroll_extent.1 >= self.scroll_range.1 {
-                    self.scroll_position.1.set(self.scroll_range.1 - self.scroll_extent.1);
+                    self.scroll_position
+                        .1
+                        .set(self.scroll_range.1 - self.scroll_extent.1);
                 }
 
                 // self.scroll_position
@@ -178,8 +192,13 @@ impl Scroller {
             }
         }
     }
-    
-    pub fn draw(&mut self, display_parameter: &DisplayParameter, content_size: (f32, f32), canvas: &Canvas){
+
+    pub fn draw(
+        &mut self,
+        display_parameter: &DisplayParameter,
+        content_size: (f32, f32),
+        canvas: &Canvas,
+    ) {
         self.content_size = content_size;
         let thumb_opacity = self.thumb_opacity.get();
         let thumb_color = {
@@ -187,12 +206,13 @@ impl Scroller {
             let thumb_color = theme.value().get_color(colors::ON_SURFACE).unwrap();
             thumb_color.with_a((thumb_opacity * 255.0) as u8)
         };
-        
+
         // Draw horizontal thumb
         if self.scroll_extent.0 < self.scroll_range.0 / 2.0 {
             let thumb_width = self.scroll_extent.0 / self.scroll_range.0 * display_parameter.width;
             let thumb_height = 10.0;
-            let thumb_x = display_parameter.x() + self.scroll_position.0.get() / self.scroll_range.0 * display_parameter.width;
+            let thumb_x = display_parameter.x()
+                + self.scroll_position.0.get() / self.scroll_range.0 * display_parameter.width;
             let thumb_y = display_parameter.y() + display_parameter.height - thumb_height;
             let thumb_rect = RRect::new_rect_xy(
                 Rect::from_xywh(thumb_x, thumb_y, thumb_width, thumb_height),
@@ -204,13 +224,15 @@ impl Scroller {
             paint.set_color(thumb_color);
             canvas.draw_rrect(thumb_rect, &paint);
         }
-        
+
         // Draw vertical thumb
         if self.scroll_extent.1 < self.scroll_range.1 / 2.0 {
             let thumb_width = 10.0;
-            let thumb_height = self.scroll_extent.1 / self.scroll_range.1 * display_parameter.height;
+            let thumb_height =
+                self.scroll_extent.1 / self.scroll_range.1 * display_parameter.height;
             let thumb_x = display_parameter.x() + display_parameter.width - thumb_width;
-            let thumb_y = display_parameter.y() + self.scroll_position.1.get() / self.scroll_range.1 * display_parameter.height;
+            let thumb_y = display_parameter.y()
+                + self.scroll_position.1.get() / self.scroll_range.1 * display_parameter.height;
             let thumb_rect = RRect::new_rect_xy(
                 Rect::from_xywh(thumb_x, thumb_y, thumb_width, thumb_height),
                 5.0,

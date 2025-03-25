@@ -1,20 +1,19 @@
+use crate::shared::Shared;
+use crate::ui::component::{Drawable, ImageDrawable};
+use lazy_static::lazy_static;
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use lazy_static::lazy_static;
-use parking_lot::Mutex;
-use crate::shared::Shared;
-use crate::ui::component::{Drawable, ImageDrawable};
-
 
 lazy_static! {
-    static ref DRAWABLES: Mutex<HashMap<PathBuf, Arc<Mutex<dyn Drawable>>>> = Mutex::new(HashMap::new());
+    static ref DRAWABLES: Mutex<HashMap<PathBuf, Arc<Mutex<dyn Drawable>>>> =
+        Mutex::new(HashMap::new());
 }
 
 pub type SharedDrawable = Shared<Arc<Mutex<dyn Drawable>>>;
 
 impl SharedDrawable {
-
     fn from_image_drawable(path: &PathBuf, drawable: Option<ImageDrawable>) -> Option<Self> {
         if let Some(drawable) = drawable {
             let drawable = Arc::new(Mutex::new(drawable));
@@ -78,6 +77,7 @@ impl From<&str> for SharedDrawable {
             SharedDrawable::from_url(url)
         } else {
             SharedDrawable::from_file(url)
-        }.unwrap()
+        }
+        .unwrap()
     }
 }

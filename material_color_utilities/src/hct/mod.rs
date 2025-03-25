@@ -6,7 +6,6 @@ mod cam;
 pub use cam::*;
 pub mod viewing_conditions;
 
-
 #[cfg(test)]
 mod cam_test {
     use crate::assert_near;

@@ -55,7 +55,7 @@ impl Alignment {
         ));
         self
     }
-    
+
     pub fn middle_align(mut self, id: &str, alignment: HorizontalAlignment) -> Self {
         self.middle = Some((
             if id.is_empty() {
@@ -166,7 +166,7 @@ impl ItemRelationManager {
     fn new(item: &Item) -> Self {
         let mut done:Vec<ItemRelation> = Vec::new();
         let mut be_aligned:Vec<ItemRelation> = Vec::new();
-        
+
         for (index, child) in item.get_children().items().iter().enumerate() {
             let alignment = child.get_alignment().expect("Relative alignment is not set");
             let relation = ItemRelation {
@@ -181,12 +181,12 @@ impl ItemRelationManager {
             };
             be_aligned.push(relation);
         }
-        
-        
-        
-        
+
+
+
+
         Self {
-            
+
         }
     }
 }

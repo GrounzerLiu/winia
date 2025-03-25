@@ -58,7 +58,8 @@ pub struct Shared<T> {
     /// A list of objects that observed by this shared.
     /// The first element of the tuple is the observable object, and the second element is the id of the observer.
     /// The id is used to remove the observer when the observable object is dropped.
-    observed_objects: Arc<Mutex<Vec<(Option<Box<dyn Observable + Send>>, Box<dyn FnOnce() + Send>)>>>,
+    observed_objects:
+        Arc<Mutex<Vec<(Option<Box<dyn Observable + Send>>, Box<dyn FnOnce() + Send>)>>>,
     /// A list of simple observers. The key is the id of the observer.
     simple_observers: Arc<Mutex<Vec<(usize, Box<dyn FnMut() + Send>)>>>,
     /// A list of specific observers. The key is the id of the observer. The value is the observer function.
@@ -90,7 +91,10 @@ impl<T: Send + 'static> Shared<T> {
         Self::inner_new(value, None)
     }
 
-    pub fn from_dynamic<O: Observable + Send + Clone + 'static>(o: &[O], value_generator: impl Fn() -> T + Send + 'static) -> Self {
+    pub fn from_dynamic<O: Observable + Send + Clone + 'static>(
+        o: &[O],
+        value_generator: impl Fn() -> T + Send + 'static,
+    ) -> Self {
         let value_generator: Box<dyn Fn() -> T + Send> = Box::new(value_generator);
         let value = value_generator();
         let value_generator = Some(value_generator);
@@ -133,7 +137,6 @@ impl<T: Send + 'static> Shared<T> {
         *self.value_generator.lock() = None;
         self.notify();
     }
-
 
     /// Sets a new dynamic value for this object and stores the value generator used to compute it.
     ///
@@ -182,19 +185,32 @@ impl<T: Send + 'static> Shared<T> {
         }
     }
 
-    pub fn add_specific_observer(&mut self, id: usize, observer: impl FnMut(&mut T) + Send + 'static) {
-        self.specific_observers.lock().push((id, Box::new(observer)));
+    pub fn add_specific_observer(
+        &mut self,
+        id: usize,
+        observer: impl FnMut(&mut T) + Send + 'static,
+    ) {
+        self.specific_observers
+            .lock()
+            .push((id, Box::new(observer)));
     }
 
     fn observe<O: Observable + Send + Clone + 'static>(&mut self, observable: O) {
         let mut observable = Box::new(observable);
         let self_weak = self.weak();
-        let removal = observable.add_observer(self.id(), Box::new(move || {
-            if let Some(property) = self_weak.upgrade() {
-                property.notify();
-            }
-        })).unwrap();
-        self.observed_objects.lock().push((Some(observable), removal));
+        let removal = observable
+            .add_observer(
+                self.id(),
+                Box::new(move || {
+                    if let Some(property) = self_weak.upgrade() {
+                        property.notify();
+                    }
+                }),
+            )
+            .unwrap();
+        self.observed_objects
+            .lock()
+            .push((Some(observable), removal));
     }
 
     pub fn remove_observer(&mut self, id: usize) {
@@ -220,17 +236,23 @@ impl<T: Send + 'static> Shared<T> {
 
     pub fn redraw_when_changed(mut self, event_loop_proxy: &EventLoopProxy, id: usize) -> Self {
         let event_loop_proxy = event_loop_proxy.clone();
-        self.add_observer(id, Box::new(move || {
-            event_loop_proxy.request_redraw();
-        }));
+        self.add_observer(
+            id,
+            Box::new(move || {
+                event_loop_proxy.request_redraw();
+            }),
+        );
         self
     }
 
     pub fn layout_when_changed(mut self, event_loop_proxy: &EventLoopProxy, id: usize) -> Self {
         let event_loop_proxy = event_loop_proxy.clone();
-        self.add_observer(id, Box::new(move || {
-            event_loop_proxy.request_layout();
-        }));
+        self.add_observer(
+            id,
+            Box::new(move || {
+                event_loop_proxy.request_layout();
+            }),
+        );
         self
     }
 }
@@ -256,7 +278,7 @@ impl<T: Send> Observable for Shared<T> {
         Removal {
             removal: Box::new(move || {
                 simple_observers.lock().retain(|(i, _)| *i != id);
-            })
+            }),
         }
     }
 }
@@ -286,7 +308,6 @@ impl<T: Send> Observable for Shared<T> {
 //         &mut self.value
 //     }
 // }
-
 
 impl<T: Send + 'static> From<T> for Shared<T> {
     fn from(value: T) -> Self {
@@ -353,7 +374,8 @@ pub struct WeakShared<T> {
     id: usize,
     value: Weak<Mutex<T>>,
     value_generator: Weak<Mutex<Option<Box<dyn Fn() -> T + Send>>>>,
-    observed_objects: Weak<Mutex<Vec<(Option<Box<dyn Observable + Send>>, Box<dyn FnOnce() + Send>)>>>,
+    observed_objects:
+        Weak<Mutex<Vec<(Option<Box<dyn Observable + Send>>, Box<dyn FnOnce() + Send>)>>>,
     simple_observers: Weak<Mutex<Vec<(usize, Box<dyn FnMut() + Send>)>>>,
     specific_observers: Weak<Mutex<Vec<(usize, Box<dyn FnMut(&mut T) + Send>)>>>,
     animation: Weak<Mutex<Option<SharedAnimation<T>>>>,
@@ -395,7 +417,6 @@ impl<T: Send + 'static> WeakShared<T> {
     }
 }
 
-
 struct InnerSharedAnimation<T> {
     id: usize,
     is_finished: bool,
@@ -411,7 +432,12 @@ struct InnerSharedAnimation<T> {
 }
 
 impl<T: Send + 'static> InnerSharedAnimation<T> {
-    pub fn new(f32: Shared<T>, from: T, to: T, value_generator: impl Fn(&T, &T, f32) -> T + Send + 'static) -> Self {
+    pub fn new(
+        f32: Shared<T>,
+        from: T,
+        to: T,
+        value_generator: impl Fn(&T, &T, f32) -> T + Send + 'static,
+    ) -> Self {
         Self {
             id: generate_id(),
             is_finished: false,
@@ -486,7 +512,12 @@ pub struct SharedAnimation<T> {
 }
 
 impl<T: Send + 'static> SharedAnimation<T> {
-    pub fn new(f32: Shared<T>, from: T, to: T, value_generator: impl Fn(&T, &T, f32) -> T + Send + 'static) -> Self {
+    pub fn new(
+        f32: Shared<T>,
+        from: T,
+        to: T,
+        value_generator: impl Fn(&T, &T, f32) -> T + Send + 'static,
+    ) -> Self {
         let inner = InnerSharedAnimation::new(f32, from, to, value_generator);
         Self {
             inner: Arc::new(Mutex::new(inner)),

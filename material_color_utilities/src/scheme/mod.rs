@@ -16,6 +16,3 @@ mod scheme_rainbow;
 pub use scheme_rainbow::*;
 mod scheme_tonal_spot;
 pub use scheme_tonal_spot::*;
-
-
-

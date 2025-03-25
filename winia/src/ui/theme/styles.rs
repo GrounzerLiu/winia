@@ -1,5 +1,4 @@
-pub static TEXT:&str = "text";
-
+pub static TEXT: &str = "text";
 
 pub mod button {
     pub static ELEVATED_BUTTON: &str = "elevated_button";

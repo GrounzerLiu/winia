@@ -1,9 +1,11 @@
+use crate::impl_property_layout;
 use crate::shared::{Children, Gettable, Shared, SharedBool, SharedDrawable};
 use crate::ui::app::AppContext;
 use crate::ui::item::{Alignment, LogicalX, MeasureMode, Orientation};
 use crate::ui::Item;
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
+use proc_macro::item;
 use skia_safe::canvas::SaveLayerRec;
 use skia_safe::svg::Dom;
 use skia_safe::wrapper::PointerWrapper;
@@ -15,8 +17,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
-use proc_macro::item;
-use crate::impl_property_layout;
 
 pub trait Drawable: Send {
     fn draw(&self, canvas: &Canvas, x: f32, y: f32);
@@ -287,10 +287,10 @@ impl Image {
                     let drawable_ = property.drawable.value();
                     let drawable = drawable_.lock();
                     let scale_factor = item.get_app_context().scale_factor();
-                    let drawable_width =
-                        drawable.get_intrinsic_width() / if dpi_sensitive { scale_factor } else { 1.0 };
-                    let drawable_height =
-                        drawable.get_intrinsic_height() / if dpi_sensitive { scale_factor } else { 1.0 };
+                    let drawable_width = drawable.get_intrinsic_width()
+                        / if dpi_sensitive { scale_factor } else { 1.0 };
+                    let drawable_height = drawable.get_intrinsic_height()
+                        / if dpi_sensitive { scale_factor } else { 1.0 };
 
                     let padding_horizontal = item.get_padding(Orientation::Horizontal);
                     let padding_vertical = item.get_padding(Orientation::Vertical);
@@ -721,7 +721,7 @@ impl Image {
             })
             .set_draw({
                 let property = property.clone();
-                move |item, canvas|{
+                move |item, canvas| {
                     let property = property.value();
                     let drawable_ = property.drawable.value();
                     let mut drawable = drawable_.lock();
@@ -730,7 +730,8 @@ impl Image {
                     let drawable_x = display_parameter.get_float_param(DRAWABLE_X).unwrap();
                     let drawable_y = display_parameter.get_float_param(DRAWABLE_Y).unwrap();
                     let drawable_width = display_parameter.get_float_param(DRAWABLE_WIDTH).unwrap();
-                    let drawable_height = display_parameter.get_float_param(DRAWABLE_HEIGHT).unwrap();
+                    let drawable_height =
+                        display_parameter.get_float_param(DRAWABLE_HEIGHT).unwrap();
                     let color = display_parameter.get_color_param(DRAWABLE_COLOR);
                     if let Some(color) = color {
                         drawable.set_color(Some(color));

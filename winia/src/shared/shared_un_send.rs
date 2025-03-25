@@ -28,7 +28,8 @@ pub struct SharedUnSend<T> {
     /// A list of objects that observed by this shared.
     /// The first element of the tuple is the observable object, and the second element is the id of the observer.
     /// The id is used to remove the observer when the observable object is dropped.
-    observed_objects: Arc<Mutex<Vec<(Option<Box<dyn UnSendObservable>>, Box<dyn FnOnce() + Send>)>>>,
+    observed_objects:
+        Arc<Mutex<Vec<(Option<Box<dyn UnSendObservable>>, Box<dyn FnOnce() + Send>)>>>,
     /// A list of simple observers. The key is the id of the observer.
     simple_observers: Arc<Mutex<Vec<(usize, Box<dyn FnMut() + Send>)>>>,
     /// A list of specific observers. The key is the id of the observer. The value is the observer function.
@@ -60,7 +61,10 @@ impl<T: 'static> SharedUnSend<T> {
         Self::inner_new(value, None)
     }
 
-    pub fn from_dynamic<O: UnSendObservable + Clone + 'static>(o: &[O], value_generator: impl Fn() -> T + 'static) -> Self {
+    pub fn from_dynamic<O: UnSendObservable + Clone + 'static>(
+        o: &[O],
+        value_generator: impl Fn() -> T + 'static,
+    ) -> Self {
         let value_generator: Box<dyn Fn() -> T> = Box::new(value_generator);
         let value = value_generator();
         let value_generator = Some(value_generator);
@@ -103,7 +107,6 @@ impl<T: 'static> SharedUnSend<T> {
         *self.value_generator.lock() = None;
         self.notify();
     }
-
 
     /// Sets a new dynamic value for this object and stores the value generator used to compute it.
     ///
@@ -152,19 +155,32 @@ impl<T: 'static> SharedUnSend<T> {
         }
     }
 
-    pub fn add_specific_observer(&mut self, id: usize, observer: impl FnMut(&mut T) + Send + 'static) {
-        self.specific_observers.lock().push((id, Box::new(observer)));
+    pub fn add_specific_observer(
+        &mut self,
+        id: usize,
+        observer: impl FnMut(&mut T) + Send + 'static,
+    ) {
+        self.specific_observers
+            .lock()
+            .push((id, Box::new(observer)));
     }
 
     fn observe<O: UnSendObservable + Clone + 'static>(&mut self, observable: O) {
         let mut observable = Box::new(observable);
         let self_weak = self.weak();
-        let removal = observable.add_observer(self.id(), Box::new(move || {
-            if let Some(property) = self_weak.upgrade() {
-                property.notify();
-            }
-        })).unwrap();
-        self.observed_objects.lock().push((Some(observable), removal));
+        let removal = observable
+            .add_observer(
+                self.id(),
+                Box::new(move || {
+                    if let Some(property) = self_weak.upgrade() {
+                        property.notify();
+                    }
+                }),
+            )
+            .unwrap();
+        self.observed_objects
+            .lock()
+            .push((Some(observable), removal));
     }
 
     pub fn remove_observer(&mut self, id: usize) {
@@ -207,11 +223,9 @@ impl<T> Observable for SharedUnSend<T> {
     fn add_observer(&mut self, id: usize, observer: Box<dyn FnMut() + Send>) -> Removal {
         self.simple_observers.lock().push((id, observer));
         let simple_observers = self.simple_observers.clone();
-        Removal::new(
-            move || {
-                simple_observers.lock().retain(|(i, _)| *i != id);
-            }
-        )
+        Removal::new(move || {
+            simple_observers.lock().retain(|(i, _)| *i != id);
+        })
     }
 }
 
@@ -240,7 +254,6 @@ impl<T> Observable for SharedUnSend<T> {
 //         &mut self.value
 //     }
 // }
-
 
 impl<T: 'static> From<T> for SharedUnSend<T> {
     fn from(value: T) -> Self {
@@ -307,7 +320,8 @@ pub struct WeakSharedUnSend<T> {
     id: usize,
     value: Weak<Mutex<T>>,
     value_generator: Weak<Mutex<Option<Box<dyn Fn() -> T>>>>,
-    observed_objects: Weak<Mutex<Vec<(Option<Box<dyn UnSendObservable>>, Box<dyn FnOnce() + Send>)>>>,
+    observed_objects:
+        Weak<Mutex<Vec<(Option<Box<dyn UnSendObservable>>, Box<dyn FnOnce() + Send>)>>>,
     simple_observers: Weak<Mutex<Vec<(usize, Box<dyn FnMut() + Send>)>>>,
     specific_observers: Weak<Mutex<Vec<(usize, Box<dyn FnMut(&mut T) + Send>)>>>,
     animation: Weak<Mutex<Option<SharedAnimation<T>>>>,

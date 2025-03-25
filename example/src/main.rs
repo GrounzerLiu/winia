@@ -1,9 +1,9 @@
-use std::ops::Add;
-use std::thread;
-use std::time::Duration;
 use material_colors::color::Argb;
 use material_colors::dynamic_color::Variant;
 use material_colors::theme::ThemeBuilder;
+use std::ops::Add;
+use std::thread;
+use std::time::Duration;
 use winia::shared::{Children, Gettable, Settable, Shared, SharedBool, SharedF32, SharedSize, SharedText};
 use winia::skia_safe::Color;
 use winia::text::StyledText;
@@ -11,16 +11,15 @@ use winia::ui::animation::{AnimationExt, Target};
 use winia::ui::app::{run_app, AppContext, AppProperty};
 use winia::ui::component::{ImageExt, RectangleExt, RippleExt, ScaleMode, TextExt};
 use winia::ui::item::{Alignment, Size};
-use winia::ui::layout::{AlignContent, AlignItems, AlignSelf, ColumnExt, FlexDirection, FlexExt, FlexWrap, JustifyContent, RowExt, ScrollAreaExt, StackExt};
+use winia::ui::layout::FlexWrap::Wrap;
+use winia::ui::layout::{AlignContent, AlignItems, ColumnExt, FlexDirection, FlexExt, FlexWrap, JustifyContent, RowExt, ScrollAreaExt, StackExt};
 use winia::ui::{App, Item};
 use winia::{exclude_target, func, include_target, shared};
 use winia::ui::animation::interpolator::Linear;
-use winia::ui::layout::FlexWrap::Wrap;
-use winia::ui::theme::colors;
 
 // #[cfg(not(target_os = "android"))]
 fn main() {
-    run_app(App::new(rectangle_test).title("Example").preferred_size(800, 600));
+    run_app(App::new(animation_test).title("Example").preferred_size(800, 600));
     // run_app(
     //     App::new(|app, shared| {
     //         app.flex(Children::new() +
@@ -32,23 +31,78 @@ fn main() {
     // );
 }
 
+pub fn animation_test(app: AppContext, property: AppProperty) -> Item {
+    let width = Shared::from(100.0);
+    app.row(Children::new() +
+        app.rectangle(Color::TRANSPARENT)
+            .radius(10.0)
+            .outline_width(5.0)
+            .outline_color(Color::BLACK)
+            .item()
+            .name("rectangle")
+            .width(&width)
+            .height(150.0)
+/*            .on_click(
+                |_| {
+                    let app = app.clone();
+                    let width = width.clone();
+                    // app.animate(exclude_target!("blue")).transformation({
+                    //     let mut width = width.clone();
+                    //     move || {
+                    //         if width.get() == Size::Fixed(100.0) {
+                    //             width.set(Size::Fixed(200.0));
+                    //         } else {
+                    //             width.set(Size::Fixed(100.0));
+                    //         }
+                    //     }
+                    // }).interpolator(Box::new(Linear::new())).duration(Duration::from_millis(1000)).start();
+                }
+            )*/ 
+            .on_click(
+                func!(|app, width|, move |_| {
+                    app.animate(exclude_target!("blue")).transformation(
+                        func!(|width|, move || {
+                            if width.get() == Size::Fixed(100.0) {
+                                width.set(Size::Fixed(200.0));
+                            } else {
+                                width.set(Size::Fixed(100.0));
+                            }
+                        })
+                    ).interpolator(Box::new(Linear::new())).duration(Duration::from_millis(1000)).start();
+                })
+            )+
+        app.rectangle(Color::BLUE)
+            .radius(50.0)
+            .item()
+            .name("blue")
+            .width(100.0)
+            .height(100.0)
+            .elevation(3.0)
+    ).name("row")
+        .padding_start(16.0)
+        .padding_top(16.0)
+}
+
 pub fn rectangle_test(app: AppContext, property: AppProperty) -> Item {
     let color = Shared::from(Color::RED);
     let radius = Shared::from(50.0);
     let size = SharedSize::from(Size::Fixed(100.0));
     let align = Shared::from(Alignment::TopStart);
+    
     app.stack(Children::new() +
         app.rectangle(&color)
             .radius(&radius)
             .item().size(&size, &size)
+            .name("rectangle")
+            .foreground(app.ripple().borderless(true).item().name("ripple"))
             .on_click({
                 let app = app.clone();
-                let mut size = size.clone();
-                let mut color = color.clone();
-                let mut radius = radius.clone();
-                let mut align = align.clone();
+                let size = size.clone();
+                let color = color.clone();
+                let radius = radius.clone();
+                let align = align.clone();
                 move |_|{
-                    app.animate(exclude_target!()).transformation({
+                    app.animate(include_target!("rectangle")).transformation({
                         let mut size = size.clone();
                         let mut color = color.clone();
                         let mut radius = radius.clone();
@@ -68,7 +122,7 @@ pub fn rectangle_test(app: AppContext, property: AppProperty) -> Item {
                         }
                     }).interpolator(
                         Box::new(Linear::new())
-                    ).duration(Duration::from_millis(5500)).start()
+                    ).duration(Duration::from_millis(5000)).start()
                 }
             })
     )
@@ -200,61 +254,63 @@ pub struct Scheme {
         )
     }
 
-    app.flex(Children::new() +
-        item(&app, "primary", primary) +
-        item(&app, "on_primary", on_primary) +
-        item(&app, "primary_container", primary_container) +
-        item(&app, "on_primary_container", on_primary_container) +
-        item(&app, "inverse_primary", inverse_primary) +
-        item(&app, "primary_fixed", primary_fixed) +
-        item(&app, "primary_fixed_dim", primary_fixed_dim) +
-        item(&app, "on_primary_fixed", on_primary_fixed) +
-        item(&app, "on_primary_fixed_variant", on_primary_fixed_variant) +
-        item(&app, "secondary", secondary) +
-        item(&app, "on_secondary", on_secondary) +
-        item(&app, "secondary_container", secondary_container) +
-        item(&app, "on_secondary_container", on_secondary_container) +
-        item(&app, "secondary_fixed", secondary_fixed) +
-        item(&app, "secondary_fixed_dim", secondary_fixed_dim) +
-        item(&app, "on_secondary_fixed", on_secondary_fixed) +
-        item(&app, "on_secondary_fixed_variant", on_secondary_fixed_variant) +
-        item(&app, "tertiary", tertiary) +
-        item(&app, "on_tertiary", on_tertiary) +
-        item(&app, "tertiary_container", tertiary_container) +
-        item(&app, "on_tertiary_container", on_tertiary_container) +
-        item(&app, "tertiary_fixed", tertiary_fixed) +
-        item(&app, "tertiary_fixed_dim", tertiary_fixed_dim) +
-        item(&app, "on_tertiary_fixed", on_tertiary_fixed) +
-        item(&app, "on_tertiary_fixed_variant", on_tertiary_fixed_variant) +
-        item(&app, "error", error) +
-        item(&app, "on_error", on_error) +
-        item(&app, "error_container", error_container) +
-        item(&app, "on_error_container", on_error_container) +
-        item(&app, "surface_dim", surface_dim) +
-        item(&app, "surface", surface) +
-        item(&app, "surface_tint", surface_tint) +
-        item(&app, "surface_bright", surface_bright) +
-        item(&app, "surface_container_lowest", surface_container_lowest) +
-        item(&app, "surface_container_low", surface_container_low) +
-        item(&app, "surface_container", surface_container) +
-        item(&app, "surface_container_high", surface_container_high) +
-        item(&app, "surface_container_highest", surface_container_highest) +
-        item(&app, "on_surface", on_surface) +
-        item(&app, "on_surface_variant", on_surface_variant) +
-        item(&app, "outline", outline) +
-        item(&app, "outline_variant", outline_variant) +
-        item(&app, "inverse_surface", inverse_surface) +
-        item(&app, "inverse_on_surface", inverse_on_surface) +
-        item(&app, "surface_variant", surface_variant) +
-        item(&app, "background", background) +
-        item(&app, "on_background", on_background) +
-        item(&app, "shadow", shadow) +
-        item(&app, "scrim", scrim)
-    ).wrap(Wrap)
-        .cross_axis_gap(10.0)
-        .main_axis_gap(10.0)
-        .item()
-        .width(Size::Expanded)
+    app.scrollarea(Children::new()+
+        app.flex(Children::new() +
+            item(&app, "primary", primary) +
+            item(&app, "on_primary", on_primary) +
+            item(&app, "primary_container", primary_container) +
+            item(&app, "on_primary_container", on_primary_container) +
+            item(&app, "inverse_primary", inverse_primary) +
+            item(&app, "primary_fixed", primary_fixed) +
+            item(&app, "primary_fixed_dim", primary_fixed_dim) +
+            item(&app, "on_primary_fixed", on_primary_fixed) +
+            item(&app, "on_primary_fixed_variant", on_primary_fixed_variant) +
+            item(&app, "secondary", secondary) +
+            item(&app, "on_secondary", on_secondary) +
+            item(&app, "secondary_container", secondary_container) +
+            item(&app, "on_secondary_container", on_secondary_container) +
+            item(&app, "secondary_fixed", secondary_fixed) +
+            item(&app, "secondary_fixed_dim", secondary_fixed_dim) +
+            item(&app, "on_secondary_fixed", on_secondary_fixed) +
+            item(&app, "on_secondary_fixed_variant", on_secondary_fixed_variant) +
+            item(&app, "tertiary", tertiary) +
+            item(&app, "on_tertiary", on_tertiary) +
+            item(&app, "tertiary_container", tertiary_container) +
+            item(&app, "on_tertiary_container", on_tertiary_container) +
+            item(&app, "tertiary_fixed", tertiary_fixed) +
+            item(&app, "tertiary_fixed_dim", tertiary_fixed_dim) +
+            item(&app, "on_tertiary_fixed", on_tertiary_fixed) +
+            item(&app, "on_tertiary_fixed_variant", on_tertiary_fixed_variant) +
+            item(&app, "error", error) +
+            item(&app, "on_error", on_error) +
+            item(&app, "error_container", error_container) +
+            item(&app, "on_error_container", on_error_container) +
+            item(&app, "surface_dim", surface_dim) +
+            item(&app, "surface", surface) +
+            item(&app, "surface_tint", surface_tint) +
+            item(&app, "surface_bright", surface_bright) +
+            item(&app, "surface_container_lowest", surface_container_lowest) +
+            item(&app, "surface_container_low", surface_container_low) +
+            item(&app, "surface_container", surface_container) +
+            item(&app, "surface_container_high", surface_container_high) +
+            item(&app, "surface_container_highest", surface_container_highest) +
+            item(&app, "on_surface", on_surface) +
+            item(&app, "on_surface_variant", on_surface_variant) +
+            item(&app, "outline", outline) +
+            item(&app, "outline_variant", outline_variant) +
+            item(&app, "inverse_surface", inverse_surface) +
+            item(&app, "inverse_on_surface", inverse_on_surface) +
+            item(&app, "surface_variant", surface_variant) +
+            item(&app, "background", background) +
+            item(&app, "on_background", on_background) +
+            item(&app, "shadow", shadow) +
+            item(&app, "scrim", scrim)
+        ).wrap(Wrap)
+            .cross_axis_gap(10.0)
+            .main_axis_gap(10.0)
+            .item()
+            .width(800)
+    ).item()
 }
 
 fn multi_thread_test(app: AppContext, property: AppProperty) -> Item {

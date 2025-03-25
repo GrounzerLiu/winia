@@ -1,6 +1,6 @@
+use material_colors::blend::cam16_ucs;
+use material_colors::color::Argb;
 use super::{Gettable, Shared, SharedAnimation};
-use material_color_utilities::blend_cam16ucs;
-use material_color_utilities::utils::argb_from_rgb;
 use skia_safe::{Color, Color4f};
 
 pub type SharedColor = Shared<Color>;
@@ -119,15 +119,15 @@ impl SharedColor {
             to.into(),
             Box::new(|from: &Color, to: &Color, progress: f32| {
                 let from_a = from.a() as f32;
-                let from_u32 = argb_from_rgb(from.r(), from.g(), from.b());
+                let from_argb = Argb::new(255, from.r(), from.g(), from.b());
                 let to_a = to.a() as f32;
-                let to_u32 = argb_from_rgb(to.r(), to.g(), to.b());
+                let to_argb = Argb::new(255, to.r(), to.g(), to.b());
                 let blend_a = from_a + (to_a - from_a) * progress;
-                let blend_u32 = blend_cam16ucs(from_u32, to_u32, progress as f64);
+                let blend_argb = cam16_ucs(from_argb, to_argb, progress as f64);
                 let a = blend_a as u8;
-                let r = (blend_u32 >> 16) as u8;
-                let g = (blend_u32 >> 8) as u8;
-                let b = blend_u32 as u8;
+                let r = blend_argb.red;
+                let g = blend_argb.green;
+                let b = blend_argb.blue;
                 Color::from_argb(a, r, g, b)
             }),
         )

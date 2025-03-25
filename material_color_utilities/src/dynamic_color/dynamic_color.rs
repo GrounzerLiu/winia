@@ -37,7 +37,9 @@ pub fn foreground_tone(bg_tone: f64, ratio: f64) -> f64 {
     let prefer_lighter = tone_prefers_light_foreground(bg_tone);
 
     if prefer_lighter {
-        let negligible_difference = (lighter_ratio - darker_ratio).abs() < 0.1 && lighter_ratio < ratio && darker_ratio < ratio;
+        let negligible_difference = (lighter_ratio - darker_ratio).abs() < 0.1
+            && lighter_ratio < ratio
+            && darker_ratio < ratio;
         if lighter_ratio >= ratio || lighter_ratio >= darker_ratio || negligible_difference {
             lighter_tone
         } else {
@@ -130,7 +132,7 @@ impl DynamicColor {
         tone_delta_pair: Option<Box<dyn Fn(&DynamicScheme) -> ToneDeltaPair>>,
     ) -> Self {
         Self {
-            name:name.into(),
+            name: name.into(),
             palette: Box::new(palette),
             tone: Box::new(tone),
             is_background,
@@ -143,19 +145,10 @@ impl DynamicColor {
 
     pub fn from_palette(
         name: impl Into<String>,
-        palette: impl  Fn(&DynamicScheme) -> TonalPalette + 'static,
+        palette: impl Fn(&DynamicScheme) -> TonalPalette + 'static,
         tone: impl Fn(&DynamicScheme) -> f64 + 'static,
     ) -> Self {
-        Self::new(
-            name,
-            palette,
-            tone,
-            false,
-            None,
-            None,
-            None,
-            None,
-        )
+        Self::new(name, palette, tone, false, None, None, None, None)
     }
 
     pub fn get_argb(&self, scheme: &DynamicScheme) -> Argb {
@@ -181,10 +174,9 @@ impl DynamicColor {
             let bg = self.background.as_ref().unwrap()(scheme);
             let bg_tone = bg.get_tone(scheme);
 
-            let a_is_nearer =
-                polarity == TonePolarity::Nearer ||
-                    (polarity == TonePolarity::Lighter && !scheme.is_dark) ||
-                    (polarity == TonePolarity::Darker && scheme.is_dark);
+            let a_is_nearer = polarity == TonePolarity::Nearer
+                || (polarity == TonePolarity::Lighter && !scheme.is_dark)
+                || (polarity == TonePolarity::Darker && scheme.is_dark);
             let nearer = if a_is_nearer { &role_a } else { &role_b };
             let farther = if a_is_nearer { &role_b } else { &role_a };
             let am_nearer = self.name == nearer.name;
@@ -197,11 +189,19 @@ impl DynamicColor {
             // If a color is good enough, it is not adjusted.
             // Initial and adjusted tones for `nearer`
             let n_initial_tone = nearer.tone.as_ref()(scheme);
-            let mut n_tone = if ratio_of_tones(bg_tone, n_initial_tone) >= n_contrast { n_initial_tone } else { foreground_tone(bg_tone, n_contrast) };
+            let mut n_tone = if ratio_of_tones(bg_tone, n_initial_tone) >= n_contrast {
+                n_initial_tone
+            } else {
+                foreground_tone(bg_tone, n_contrast)
+            };
 
             // Initial and adjusted tones for `farther`
             let f_initial_tone = farther.tone.as_ref()(scheme);
-            let mut f_tone = if ratio_of_tones(bg_tone, f_initial_tone) >= f_contrast { f_initial_tone } else { foreground_tone(bg_tone, f_contrast) };
+            let mut f_tone = if ratio_of_tones(bg_tone, f_initial_tone) >= f_contrast {
+                f_initial_tone
+            } else {
+                foreground_tone(bg_tone, f_contrast)
+            };
 
             if decreasing_contrast {
                 // If decreasing contrast, adjust color to the "bare minimum"
@@ -256,18 +256,26 @@ impl DynamicColor {
             }
 
             // Returns `n_tone` if this color is `nearer`, otherwise `f_tone`.
-            if am_nearer { n_tone } else { f_tone }
+            if am_nearer {
+                n_tone
+            } else {
+                f_tone
+            }
         } else {
             // Case 2: No contrast pair; just solve for itself.
             let mut answer = self.tone.as_ref()(scheme);
 
             if self.background.is_none() {
-                return answer;  // No adjustment for colors with no background.
+                return answer; // No adjustment for colors with no background.
             }
 
             let bg_tone = self.background.as_ref().unwrap()(scheme).get_tone(scheme);
 
-            let desired_ratio = self.contrast_curve.as_ref().unwrap().get(scheme.contrast_level);
+            let desired_ratio = self
+                .contrast_curve
+                .as_ref()
+                .unwrap()
+                .get(scheme.contrast_level);
 
             if ratio_of_tones(bg_tone, answer) >= desired_ratio {
                 // Don't "improve" what's good enough.
@@ -298,8 +306,9 @@ impl DynamicColor {
                 let upper = bg_tone_1.max(bg_tone_2);
                 let lower = bg_tone_1.min(bg_tone_2);
 
-                if ratio_of_tones(upper, answer) >= desired_ratio &&
-                    ratio_of_tones(lower, answer) >= desired_ratio {
+                if ratio_of_tones(upper, answer) >= desired_ratio
+                    && ratio_of_tones(lower, answer) >= desired_ratio
+                {
                     return answer;
                 }
 
@@ -320,15 +329,23 @@ impl DynamicColor {
                     availables.push(dark_option);
                 }
 
-                let prefers_light = tone_prefers_light_foreground(bg_tone_1) ||
-                    tone_prefers_light_foreground(bg_tone_2);
+                let prefers_light = tone_prefers_light_foreground(bg_tone_1)
+                    || tone_prefers_light_foreground(bg_tone_2);
                 if prefers_light {
-                    return if availables.is_empty() { 100.0 } else { light_option };
+                    return if availables.is_empty() {
+                        100.0
+                    } else {
+                        light_option
+                    };
                 }
                 if availables.len() == 1 {
                     return availables[0];
                 }
-                return if availables.is_empty() { 0.0 } else { dark_option };
+                return if availables.is_empty() {
+                    0.0
+                } else {
+                    dark_option
+                };
             }
 
             answer

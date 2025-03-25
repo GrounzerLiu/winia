@@ -4,10 +4,10 @@ use crate::ui::Item;
 use crate::OptionalInvoke;
 use parking_lot::lock_api::MutexGuard;
 use parking_lot::{Mutex, RawMutex};
-use std::ops::{Add, Deref, DerefMut};
-use std::sync::{Arc, Weak};
 use rayon::prelude::IntoParallelRefMutIterator;
 use rayon::slice::IterMut;
+use std::ops::{Add, Deref, DerefMut};
+use std::sync::{Arc, Weak};
 
 pub enum Action<'a> {
     Add(&'a mut Item),
@@ -27,7 +27,7 @@ impl Items {
         &mut self,
         window_size: (f32, f32),
     ) -> impl Iterator<Item = &mut Item> {
-        self.items.iter_mut().filter( move |item| {
+        self.items.iter_mut().filter(move |item| {
             let display_parameter = item.data().get_display_parameter();
             let x = display_parameter.x();
             let y = display_parameter.y();
@@ -39,7 +39,7 @@ impl Items {
             x_overlap && y_overlap
         })
     }
-    
+
     pub fn par_iter_mut(&mut self) -> IterMut<Item> {
         self.items.par_iter_mut()
     }

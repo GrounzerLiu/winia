@@ -1,18 +1,17 @@
 mod display_parameter;
-mod logical_x;
-mod item;
-mod size;
 mod inner_position;
+mod item;
+mod logical_x;
 mod scroller;
+mod size;
 
 pub use item::*;
 
 pub use display_parameter::*;
-pub use logical_x::*;
-pub use size::*;
 pub use inner_position::*;
+pub use logical_x::*;
 pub use scroller::*;
-
+pub use size::*;
 
 #[macro_export]
 macro_rules! impl_property_redraw {
@@ -34,7 +33,7 @@ macro_rules! impl_property_redraw {
                 self
             }
         }
-    }
+    };
 }
 
 #[macro_export]
@@ -58,5 +57,5 @@ macro_rules! impl_property_layout {
                 self
             }
         }
-    }
+    };
 }

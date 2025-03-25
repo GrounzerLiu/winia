@@ -3,21 +3,20 @@ use crate::shared::{
     Children, Gettable, Observable, Settable, Shared, SharedAlignment, SharedBool, SharedColor,
     SharedF32, SharedInnerPosition, SharedItem, SharedSize, SharedUsize,
 };
+use crate::ui::animation::Target;
 use crate::ui::app::{AppContext, UserEvent};
 use crate::ui::item::{DisplayParameter, InnerPosition, Size};
-use crate::ui::theme::Style;
-use crate::ui::Animation;
+use crate::ui::{Animation, Theme};
 use parking_lot::{Mutex, MutexGuard};
 use skia_safe::image_filters::CropRect;
-use skia_safe::{
-    image_filters, Canvas, Color, IRect, Paint, Path, Point, Rect, Surface, TileMode, Vector,
-};
+use skia_safe::{image_filters, surfaces, BlendMode, BlurStyle, Canvas, Color, IRect, MaskFilter, Paint, Path, Point, Rect, Surface, TileMode, Vector};
 use std::any::Any;
 use std::collections::{HashMap, HashSet, LinkedList};
 use std::ops::{DerefMut, Not};
 use std::sync::Arc;
 use std::time::Instant;
 use winit::event::{DeviceId, Force, KeyEvent, MouseButton, TouchPhase};
+use crate::ui::theme::colors;
 
 pub fn layout<T: Send>(mut property: Shared<T>, id: usize, app_context: &AppContext) -> Shared<T> {
     let event_loop_proxy = app_context.event_loop_proxy();
@@ -406,8 +405,6 @@ pub enum CustomProperty {
 
 #[derive(Default)]
 struct Animations {
-    parent_x: Option<(f32, Animation)>,
-    parent_y: Option<(f32, Animation)>,
     width: Option<(f32, Animation)>,
     height: Option<(f32, Animation)>,
     relative_x: Option<(f32, Animation)>,
@@ -432,9 +429,7 @@ struct Animations {
 
 impl Animations {
     fn is_animating(&self) -> bool {
-        self.parent_x.is_some()
-            || self.parent_y.is_some()
-            || self.width.is_some()
+        self.width.is_some()
             || self.height.is_some()
             || self.relative_x.is_some()
             || self.relative_y.is_some()
@@ -471,6 +466,7 @@ pub struct ItemData {
     clip_shape: Shared<Box<dyn Fn(DisplayParameter) -> Path + Send>>,
     custom_properties: HashMap<String, CustomProperty>,
     display_parameter_out: Shared<DisplayParameter>,
+    elevation: SharedF32,
     enable_background_blur: SharedBool,
     focused: Shared<bool>,
     foreground: SharedItem,
@@ -519,9 +515,9 @@ pub struct ItemData {
     touch_start_time: Instant,
     width: SharedSize,
 
-    apply_style: Arc<Mutex<dyn FnMut(&mut ItemData, &Style)>>,
+    apply_style: Arc<Mutex<dyn FnMut(&mut ItemData, &Theme)>>,
     cursor_move: Arc<Mutex<dyn FnMut(&mut ItemData, f32, f32)>>,
-    dispatch_apply_style: Arc<Mutex<dyn FnMut(&mut ItemData, &Style)>>,
+    dispatch_apply_style: Arc<Mutex<dyn FnMut(&mut ItemData, &Theme)>>,
     dispatch_cursor_move: Arc<Mutex<dyn FnMut(&mut ItemData, f32, f32)>>,
     dispatch_draw: Arc<Mutex<dyn FnMut(&mut ItemData, &mut Surface, f32, f32)>>,
     dispatch_focus: Arc<Mutex<dyn FnMut(&mut ItemData)>>,
@@ -558,14 +554,13 @@ impl ItemData {
             background: {
                 let mut item = SharedItem::none();
                 let event_loop_proxy = app_context.event_loop_proxy();
-                item
-                    .add_observer(
-                        id,
-                        Box::new(move || {
-                            event_loop_proxy.request_layout();
-                        }),
-                    )
-                    .drop();
+                item.add_observer(
+                    id,
+                    Box::new(move || {
+                        event_loop_proxy.request_layout();
+                    }),
+                )
+                .drop();
                 item
             },
             baseline: None,
@@ -586,19 +581,19 @@ impl ItemData {
             ),
             custom_properties: HashMap::new(),
             display_parameter_out: DisplayParameter::default().into(),
+            elevation: redraw(0.0.into(), id, &app_context),
             enable_background_blur: redraw(false.into(), id, &app_context),
             focused: redraw(false.into(), id, &app_context),
             foreground: {
                 let mut item = SharedItem::none();
                 let event_loop_proxy = app_context.event_loop_proxy();
-                item
-                    .add_observer(
-                        id,
-                        Box::new(move || {
-                            event_loop_proxy.request_layout();
-                        }),
-                    )
-                    .drop();
+                item.add_observer(
+                    id,
+                    Box::new(move || {
+                        event_loop_proxy.request_layout();
+                    }),
+                )
+                .drop();
                 item
             },
             height: redraw(Size::Compact.into(), id, &app_context),
@@ -646,9 +641,23 @@ impl ItemData {
             touch_start_time: Instant::now(),
             width: layout(Size::Compact.into(), id, &app_context),
 
-            apply_style: Arc::new(Mutex::new(|_item: &mut ItemData, _style: &Style| {})),
+            apply_style: Arc::new(Mutex::new(|_item: &mut ItemData, _style: &Theme| {})),
             cursor_move: Arc::new(Mutex::new(|_item: &mut ItemData, _x: f32, _y: f32| {})),
-            dispatch_apply_style: Arc::new(Mutex::new(|item: &mut ItemData, style: &Style| {
+            dispatch_apply_style: Arc::new(Mutex::new(|item: &mut ItemData, style: &Theme| {
+                let background = item.get_background();
+                if let Some(background) = background.value().as_mut() {
+                    background.data().get_dispatch_apply_style().lock()(
+                        background.data().deref_mut(),
+                        style,
+                    );
+                }
+                let foreground = item.get_foreground();
+                if let Some(foreground) = foreground.value().as_mut() {
+                    foreground.data().get_dispatch_apply_style().lock()(
+                        foreground.data().deref_mut(),
+                        style,
+                    );
+                }
                 item.get_children().items().iter_mut().for_each(|child| {
                     child.data().get_dispatch_apply_style().lock()(child.data().deref_mut(), style);
                 });
@@ -728,7 +737,7 @@ impl ItemData {
                         target_parameter.set_parent_position(parent_x, parent_y);
                     }
 
-                    let display_parameter = item.get_display_parameter().clone();
+                    let display_parameter = item.get_display_parameter();
 
                     {
                         // Draw the background blur effect.
@@ -848,6 +857,60 @@ impl ItemData {
                     }
 
                     {
+                        // Draw the shadow
+                        let elevation = item.get_elevation().get();
+                        if elevation > 0.0 {
+                            let theme = item.app_context.theme.value();
+                            let shadow_color = theme.get_color(colors::SHADOW).unwrap().with_a((0.5 * 255.0) as u8);
+                            drop(theme);
+                            let blur_sigma = elevation;
+                            let shadow_offset = elevation;
+
+                            let mut shadow_surface = surfaces::raster_n32_premul((
+                                display_parameter.width.ceil() as i32,
+                                display_parameter.height.ceil() as i32,
+                            )).unwrap();
+
+                            let shadow_canvas = shadow_surface.canvas();
+                            shadow_canvas.translate((-display_parameter.x(), -display_parameter.y()));
+                            item.draw(shadow_canvas);
+                            let mut paint = Paint::default();
+                            paint.set_anti_alias(true)
+                                .set_color(shadow_color)
+                                .set_blend_mode(BlendMode::SrcIn);
+                            shadow_canvas.draw_paint(&paint);
+
+                            let shadow_image = shadow_surface.image_snapshot();
+
+                            let mut paint = Paint::default();
+                            let rect = Rect::from_xywh(
+                                display_parameter.x() - elevation * 3.0,
+                                display_parameter.y() - elevation * 3.0,
+                                display_parameter.width + elevation * 6.0,
+                                display_parameter.height + elevation * 6.0,
+                            );
+                            paint.set_image_filter(
+                                image_filters::blur(
+                                    (blur_sigma, blur_sigma),
+                                    TileMode::Clamp,
+                                    None,
+                                    CropRect::from(rect),
+                                )
+                            );
+
+                            let canvas = surface.canvas();
+                            canvas.draw_image(
+                                shadow_image,
+                                Point::new(
+                                    display_parameter.x(),
+                                    display_parameter.y() + shadow_offset,
+                                ),
+                                Some(&paint),
+                            );
+                        }
+                    }
+
+                    {
                         // Draw the background
                         let shared_background = item.get_background();
                         let mut background = shared_background.value();
@@ -868,7 +931,8 @@ impl ItemData {
                     };
                     item.get_children()
                         .items()
-                        .iter_visible_item(window_size)
+                        .iter_mut()
+                        // .iter_visible_item(window_size)
                         .for_each(|child| {
                             draw_item(child, surface, x, y);
                         });
@@ -903,6 +967,7 @@ impl ItemData {
             })),
             dispatch_keyboard_input: Arc::new(Mutex::new(
                 |item: &mut ItemData, device_id: DeviceId, event: KeyEvent, is_synthetic: bool| {
+                    if let Some(id) = item.app_context.focused_property.get() {}
                     let keyboard_input = item.get_keyboard_input();
                     if keyboard_input.lock()(item, device_id, event.clone(), is_synthetic) {
                         return true;
@@ -1306,6 +1371,13 @@ impl_property_layout!(
     SharedBool,
     "Whether to enable background blur. This will cause the background to be blurred when it is not fully opaque."
 );
+impl_property_layout!(
+    elevation,
+    set_elevation,
+    get_elevation,
+    SharedF32,
+    "The elevation of the item. It will affect the shadow of the item."
+);
 // impl_property_layout!(
 //     foreground,
 //     set_foreground,
@@ -1545,10 +1617,10 @@ impl_property_layout!(
 impl_get_set!(
     apply_style,
     set_apply_style,
-    impl FnMut(&mut ItemData, &Style) + 'static,
+    impl FnMut(&mut ItemData, &Theme) + 'static,
     "item, style",
     get_apply_style,
-    dyn FnMut(&mut ItemData, &Style),
+    dyn FnMut(&mut ItemData, &Theme),
     "item, style"
 );
 impl_get_set!(
@@ -1563,10 +1635,10 @@ impl_get_set!(
 impl_get_set!(
     dispatch_apply_style,
     set_dispatch_apply_style,
-    impl FnMut(&mut ItemData, &Style) + 'static,
+    impl FnMut(&mut ItemData, &Theme) + 'static,
     "item, style",
     get_dispatch_apply_style,
-    dyn FnMut(&mut ItemData, &Style),
+    dyn FnMut(&mut ItemData, &Theme),
     "item, style"
 );
 impl_get_set!(
@@ -1831,8 +1903,8 @@ impl ItemData {
                     Clear,
                     Nothing,
                 }
-                let mut focused_property_value = focused_property
-                    .write(|focused_property| focused_property.take());
+                let mut focused_property_value =
+                    focused_property.write(|focused_property| focused_property.take());
                 let action = {
                     // There is an item that is focused
                     if let Some((property, item_id)) = focused_property_value.as_mut() {
@@ -1858,10 +1930,9 @@ impl ItemData {
                         if *focused {
                             Action::Replace
                         } else {
-                            focus_changed_items
-                                .write(|focus_changed_items| {
-                                    focus_changed_items.insert(self_item_id)
-                                });
+                            focus_changed_items.write(|focus_changed_items| {
+                                focus_changed_items.insert(self_item_id)
+                            });
                             Action::Nothing
                         }
                     }
@@ -1968,8 +2039,8 @@ impl ItemData {
 
     pub fn get_display_parameter(&mut self) -> DisplayParameter {
         let mut display_parameter = self.target_parameter.clone();
-        calculate_animation_value!(parent_x, self, display_parameter);
-        calculate_animation_value!(parent_y, self, display_parameter);
+        // calculate_animation_value!(parent_x, self, display_parameter);
+        // calculate_animation_value!(parent_y, self, display_parameter);
         calculate_animation_value!(width, self, display_parameter);
         calculate_animation_value!(height, self, display_parameter);
         calculate_animation_value!(relative_x, self, display_parameter);
@@ -2154,133 +2225,166 @@ impl ItemData {
         self.measure_parameter.clone()
     }
 
-    pub(crate) fn dispatch_animation(&mut self, animation: Animation) {
-        if !animation.is_target(self.id) {
-            return;
-        }
-        if let Some(recorded_parameter) = self.recorded_parameter.clone() {
-            let target_parameter = self.target_parameter.clone();
-            if !f32_eq(recorded_parameter.width, target_parameter.width) {
-                self.animations.parent_x = Some((recorded_parameter.parent_x, animation.clone()));
-            }
-            if !f32_eq(recorded_parameter.height, target_parameter.height) {
-                self.animations.parent_y = Some((recorded_parameter.parent_y, animation.clone()));
-            }
-            if !f32_eq(recorded_parameter.relative_x, target_parameter.relative_x) {
-                self.animations.relative_x =
-                    Some((recorded_parameter.relative_x, animation.clone()));
-            }
-            if !f32_eq(recorded_parameter.relative_y, target_parameter.relative_y) {
-                self.animations.relative_y =
-                    Some((recorded_parameter.relative_y, animation.clone()));
-            }
-            if !f32_eq(recorded_parameter.offset_x, target_parameter.offset_x) {
-                self.animations.offset_x = Some((recorded_parameter.offset_x, animation.clone()));
-            }
-            if !f32_eq(recorded_parameter.offset_y, target_parameter.offset_y) {
-                self.animations.offset_y = Some((recorded_parameter.offset_y, animation.clone()));
-            }
-            if !f32_eq(recorded_parameter.opacity, target_parameter.opacity) {
-                self.animations.opacity = Some((recorded_parameter.opacity, animation.clone()));
-            }
-            if !f32_eq(recorded_parameter.rotation, target_parameter.rotation) {
-                self.animations.rotation = Some((recorded_parameter.rotation, animation.clone()));
-            }
-            if !f32_eq(
-                recorded_parameter.rotation_center_x,
-                target_parameter.rotation_center_x,
-            ) {
-                self.animations.rotation_center_x =
-                    Some((recorded_parameter.rotation_center_x, animation.clone()));
-            }
-            if !f32_eq(
-                recorded_parameter.rotation_center_y,
-                target_parameter.rotation_center_y,
-            ) {
-                self.animations.rotation_center_y =
-                    Some((recorded_parameter.rotation_center_y, animation.clone()));
-            }
-            if !f32_eq(recorded_parameter.scale_x, target_parameter.scale_x) {
-                self.animations.scale_x = Some((recorded_parameter.scale_x, animation.clone()));
-            }
-            if !f32_eq(recorded_parameter.scale_y, target_parameter.scale_y) {
-                self.animations.scale_y = Some((recorded_parameter.scale_y, animation.clone()));
-            }
-            if !f32_eq(
-                recorded_parameter.scale_center_x,
-                target_parameter.scale_center_x,
-            ) {
-                self.animations.scale_center_x =
-                    Some((recorded_parameter.scale_center_x, animation.clone()));
-            }
-            if !f32_eq(
-                recorded_parameter.scale_center_y,
-                target_parameter.scale_center_y,
-            ) {
-                self.animations.scale_center_y =
-                    Some((recorded_parameter.scale_center_y, animation.clone()));
-            }
-            if !f32_eq(recorded_parameter.skew_x, target_parameter.skew_x) {
-                self.animations.skew_x = Some((recorded_parameter.skew_x, animation.clone()));
-            }
-            if !f32_eq(recorded_parameter.skew_y, target_parameter.skew_y) {
-                self.animations.skew_y = Some((recorded_parameter.skew_y, animation.clone()));
-            }
-            if !f32_eq(
-                recorded_parameter.skew_center_x,
-                target_parameter.skew_center_x,
-            ) {
-                self.animations.skew_center_x =
-                    Some((recorded_parameter.skew_center_x, animation.clone()));
-            }
-            if !f32_eq(
-                recorded_parameter.skew_center_y,
-                target_parameter.skew_center_y,
-            ) {
-                self.animations.skew_center_y =
-                    Some((recorded_parameter.skew_center_y, animation.clone()));
-            }
-            if !f32_eq(recorded_parameter.width, target_parameter.width) {
-                self.animations.width = Some((recorded_parameter.width, animation.clone()));
-            }
-            if !f32_eq(recorded_parameter.height, target_parameter.height) {
-                self.animations.height = Some((recorded_parameter.height, animation.clone()));
-            }
+    pub(crate) fn dispatch_animation(&mut self, animation: Animation, force: bool) {
+        // let is_target = animation.is_target(self.id);
+        // if self.get_name() == "blue" || self.get_name() == "row" {
+        //     println!("is_target: {}, force: {}", is_target, force);
+        // }
 
-            {
-                recorded_parameter
-                    .float_params
-                    .iter()
-                    .for_each(|(key, start)| {
-                        if let Some(end) = target_parameter.float_params.get(key).clone() {
-                            if !f32_eq(*start, *end) {
-                                self.animations
-                                    .float_params
-                                    .insert(key.clone(), (start.clone(), animation.clone()));
-                            }
-                        }
-                    });
+        let (animatable, children_force) = {
+            let animation_inner = animation.inner.lock();
+            match &animation_inner.target {
+                Target::Exclusion(targets) => {
+                    let is_excluded = targets.contains(&self.id);
+                    (!is_excluded && !force, is_excluded)
+                }
+                Target::Inclusion(targets) => {
+                    let is_included = targets.contains(&self.id);
+                    (is_included || force, is_included)
+                }
             }
+        };
 
-            {
-                recorded_parameter
-                    .color_params
-                    .iter()
-                    .for_each(|(key, start)| {
-                        if let Some(end) = target_parameter.color_params.get(key).clone() {
-                            if start != end {
-                                self.animations
-                                    .color_params
-                                    .insert(key.clone(), (start.clone(), animation.clone()));
+        if animatable {
+            if let Some(recorded_parameter) = self.recorded_parameter.clone() {
+                let target_parameter = self.target_parameter.clone();
+                if !f32_eq(recorded_parameter.relative_x, target_parameter.relative_x) {
+                    self.animations.relative_x =
+                        Some((recorded_parameter.relative_x, animation.clone()));
+                }
+                if !f32_eq(recorded_parameter.relative_y, target_parameter.relative_y) {
+                    self.animations.relative_y =
+                        Some((recorded_parameter.relative_y, animation.clone()));
+                }
+                if !f32_eq(recorded_parameter.offset_x, target_parameter.offset_x) {
+                    self.animations.offset_x =
+                        Some((recorded_parameter.offset_x, animation.clone()));
+                }
+                if !f32_eq(recorded_parameter.offset_y, target_parameter.offset_y) {
+                    self.animations.offset_y =
+                        Some((recorded_parameter.offset_y, animation.clone()));
+                }
+                if !f32_eq(recorded_parameter.opacity, target_parameter.opacity) {
+                    self.animations.opacity = Some((recorded_parameter.opacity, animation.clone()));
+                }
+                if !f32_eq(recorded_parameter.rotation, target_parameter.rotation) {
+                    self.animations.rotation =
+                        Some((recorded_parameter.rotation, animation.clone()));
+                }
+                if !f32_eq(
+                    recorded_parameter.rotation_center_x,
+                    target_parameter.rotation_center_x,
+                ) {
+                    self.animations.rotation_center_x =
+                        Some((recorded_parameter.rotation_center_x, animation.clone()));
+                }
+                if !f32_eq(
+                    recorded_parameter.rotation_center_y,
+                    target_parameter.rotation_center_y,
+                ) {
+                    self.animations.rotation_center_y =
+                        Some((recorded_parameter.rotation_center_y, animation.clone()));
+                }
+                if !f32_eq(recorded_parameter.scale_x, target_parameter.scale_x) {
+                    self.animations.scale_x = Some((recorded_parameter.scale_x, animation.clone()));
+                }
+                if !f32_eq(recorded_parameter.scale_y, target_parameter.scale_y) {
+                    self.animations.scale_y = Some((recorded_parameter.scale_y, animation.clone()));
+                }
+                if !f32_eq(
+                    recorded_parameter.scale_center_x,
+                    target_parameter.scale_center_x,
+                ) {
+                    self.animations.scale_center_x =
+                        Some((recorded_parameter.scale_center_x, animation.clone()));
+                }
+                if !f32_eq(
+                    recorded_parameter.scale_center_y,
+                    target_parameter.scale_center_y,
+                ) {
+                    self.animations.scale_center_y =
+                        Some((recorded_parameter.scale_center_y, animation.clone()));
+                }
+                if !f32_eq(recorded_parameter.skew_x, target_parameter.skew_x) {
+                    self.animations.skew_x = Some((recorded_parameter.skew_x, animation.clone()));
+                }
+                if !f32_eq(recorded_parameter.skew_y, target_parameter.skew_y) {
+                    self.animations.skew_y = Some((recorded_parameter.skew_y, animation.clone()));
+                }
+                if !f32_eq(
+                    recorded_parameter.skew_center_x,
+                    target_parameter.skew_center_x,
+                ) {
+                    self.animations.skew_center_x =
+                        Some((recorded_parameter.skew_center_x, animation.clone()));
+                }
+                if !f32_eq(
+                    recorded_parameter.skew_center_y,
+                    target_parameter.skew_center_y,
+                ) {
+                    self.animations.skew_center_y =
+                        Some((recorded_parameter.skew_center_y, animation.clone()));
+                }
+                if !f32_eq(recorded_parameter.width, target_parameter.width) {
+                    self.animations.width = Some((recorded_parameter.width, animation.clone()));
+                }
+                if !f32_eq(recorded_parameter.height, target_parameter.height) {
+                    self.animations.height = Some((recorded_parameter.height, animation.clone()));
+                }
+
+                {
+                    recorded_parameter
+                        .float_params
+                        .iter()
+                        .for_each(|(key, start)| {
+                            if let Some(end) = target_parameter.float_params.get(key).clone() {
+                                if !f32_eq(*start, *end) {
+                                    self.animations
+                                        .float_params
+                                        .insert(key.clone(), (start.clone(), animation.clone()));
+                                }
                             }
-                        }
-                    });
+                        });
+                }
+
+                {
+                    recorded_parameter
+                        .color_params
+                        .iter()
+                        .for_each(|(key, start)| {
+                            if let Some(end) = target_parameter.color_params.get(key).clone() {
+                                if start != end {
+                                    self.animations
+                                        .color_params
+                                        .insert(key.clone(), (start.clone(), animation.clone()));
+                                }
+                            }
+                        });
+                }
             }
         }
 
         self.children.items().iter_mut().for_each(|child| {
-            child.data().dispatch_animation(animation.clone());
+            child
+                .data()
+                .dispatch_animation(animation.clone(), children_force);
         });
+
+        let background = self.get_background();
+        let mut background_value = background.value();
+        if let Some(background) = background_value.as_mut() {
+            background
+                .data()
+                .dispatch_animation(animation.clone(), children_force);
+        }
+
+        let foreground = self.get_foreground();
+        let mut foreground_value = foreground.value();
+        if let Some(foreground) = foreground_value.as_mut() {
+            foreground
+                .data()
+                .dispatch_animation(animation.clone(), children_force);
+        }
     }
 
     pub fn dispatch_draw(&mut self, surface: &mut Surface, parent_x: f32, parent_y: f32) {
@@ -2448,11 +2552,23 @@ impl ItemData {
         self.children.items().iter_mut().for_each(|child| {
             child.data().record_display_parameter();
         });
+
+        let background = self.get_background();
+        let mut background_value = background.value();
+        if let Some(item) = background_value.as_mut() {
+            item.data().record_display_parameter();
+        }
+
+        let foreground = self.get_foreground();
+        let mut foreground_value = foreground.value();
+        if let Some(item) = foreground_value.as_mut() {
+            item.data().record_display_parameter()
+        }
     }
 
     pub fn set_size<T>(&mut self, width: T, height: T) -> &mut Self
     where
-        T: Into<SharedSize>
+        T: Into<SharedSize>,
     {
         self.set_width(width);
         self.set_height(height);
@@ -2551,7 +2667,7 @@ impl Item {
 
     pub fn size<T>(self, width: T, height: T) -> Self
     where
-        T: Into<SharedSize>
+        T: Into<SharedSize>,
     {
         self.data().set_size(width, height);
         self

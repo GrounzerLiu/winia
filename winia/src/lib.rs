@@ -1,10 +1,10 @@
+pub mod core;
 pub mod shared;
 pub mod text;
 pub mod ui;
-pub mod core;
 
-pub use winit::*;
 pub use skia_safe;
+pub use winit::*;
 
 pub trait OptionalInvoke<T> {
     fn if_some(self, invoke: impl FnOnce(T));

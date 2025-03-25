@@ -1,8 +1,8 @@
-use std::ops::{BitAnd, BitOr};
 use crate::shared::{Gettable, Shared};
+use std::ops::{BitAnd, BitOr};
 pub type SharedBool = Shared<bool>;
 
-macro_rules! p_op_p{
+macro_rules! p_op_p {
     ($op:ident, $op_fn:ident, $lhs:ty, $rhs:ty) => {
         impl $op<$rhs> for $lhs {
             type Output = SharedBool;
@@ -10,48 +10,35 @@ macro_rules! p_op_p{
             fn $op_fn(self, rhs: $rhs) -> Self::Output {
                 let lhs = self.clone();
                 let rhs_clone = rhs.clone();
-                SharedBool::from_dynamic(
-                    &[self.clone(), rhs.clone()],
-                    move || {
-                        lhs.get().$op_fn(rhs_clone.get())
-                    }
-                )
+                SharedBool::from_dynamic(&[self.clone(), rhs.clone()], move || {
+                    lhs.get().$op_fn(rhs_clone.get())
+                })
             }
         }
     };
 }
 
-macro_rules! p_op_v{
+macro_rules! p_op_v {
     ($op:ident, $op_fn:ident, $p:ty) => {
         impl $op<bool> for $p {
             type Output = SharedBool;
 
             fn $op_fn(self, rhs: bool) -> Self::Output {
                 let lhs = self.clone();
-                SharedBool::from_dynamic(
-                    &[self.clone()],
-                    move || {
-                        lhs.get().$op_fn(rhs)
-                    }
-                )
+                SharedBool::from_dynamic(&[self.clone()], move || lhs.get().$op_fn(rhs))
             }
         }
     };
 }
 
-macro_rules! v_op_p{
+macro_rules! v_op_p {
     ($op:ident, $op_fn:ident, $p:ty) => {
         impl $op<&SharedBool> for $p {
             type Output = SharedBool;
 
             fn $op_fn(self, rhs: &SharedBool) -> Self::Output {
                 let rhs_clone = rhs.clone();
-                SharedBool::from_dynamic(
-                    &[rhs.clone()],
-                    move || {
-                        self.$op_fn(rhs_clone.get())
-                    }
-                )
+                SharedBool::from_dynamic(&[rhs.clone()], move || self.$op_fn(rhs_clone.get()))
             }
         }
     };
@@ -76,7 +63,6 @@ p_op_p!(BitOr, bitor, &mut SharedBool, SharedBool);
 p_op_p!(BitOr, bitor, &mut SharedBool, &mut SharedBool);
 p_op_p!(BitOr, bitor, &mut SharedBool, &SharedBool);
 p_op_p!(BitOr, bitor, &SharedBool, &mut SharedBool);
-
 
 p_op_v!(BitAnd, bitand, SharedBool);
 p_op_v!(BitAnd, bitand, &SharedBool);

@@ -1,10 +1,10 @@
 use crate::SkiaWindow;
+use parking_lot::Mutex;
 use skia_safe::{ISize, ImageInfo, Surface};
 use softbuffer::SoftBufferError;
 use std::num::NonZeroU32;
 use std::ops::Deref;
 use std::sync::Arc;
-use parking_lot::Mutex;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
@@ -17,7 +17,9 @@ fn create_surface(size: impl Into<PhysicalSize<u32>>) -> Arc<Mutex<Surface>> {
     let size = size.into();
     let width = size.width;
     let height = size.height;
-    Arc::new(Mutex::new(skia_safe::surfaces::raster_n32_premul(ISize::new(width as i32, height as i32)).unwrap()))
+    Arc::new(Mutex::new(
+        skia_safe::surfaces::raster_n32_premul(ISize::new(width as i32, height as i32)).unwrap(),
+    ))
 }
 
 impl SoftSkiaWindow {
@@ -26,7 +28,8 @@ impl SoftSkiaWindow {
         let size = window.inner_size();
         let skia_surface = create_surface(size);
         let soft_buffer_context = softbuffer::Context::new(window.clone()).unwrap();
-        let soft_buffer_surface = softbuffer::Surface::new(&soft_buffer_context, window.clone()).unwrap();
+        let soft_buffer_surface =
+            softbuffer::Surface::new(&soft_buffer_context, window.clone()).unwrap();
         Self {
             skia_surface,
             soft_buffer_surface,
@@ -35,7 +38,6 @@ impl SoftSkiaWindow {
 }
 
 impl SkiaWindow for SoftSkiaWindow {
-
     fn resize(&mut self) -> Result<(), SoftBufferError> {
         let size = self.soft_buffer_surface.window().inner_size();
         let width = NonZeroU32::new(size.width).unwrap();
@@ -46,9 +48,7 @@ impl SkiaWindow for SoftSkiaWindow {
                 self.skia_surface = create_surface(size);
                 Ok(())
             }
-            Err(e) => {
-                Err(e)
-            }
+            Err(e) => Err(e),
         }
     }
 

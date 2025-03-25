@@ -20,7 +20,13 @@ impl ScrollArea {
         let property = Shared::new(ScrollAreaProperty {});
 
         let item = Item::new(app_context.clone(), children);
-        let scroller = SharedUnSend::from(Scroller::new(app_context, (true, true), (0.0, 0.0),(0.0, 0.0), (0.0, 0.0)));
+        let scroller = SharedUnSend::from(Scroller::new(
+            app_context,
+            (true, true),
+            (0.0, 0.0),
+            (0.0, 0.0),
+            (0.0, 0.0),
+        ));
         item.data()
             .set_measure(|item, width_mode, height_mode| {
                 if item.get_children().len() > 1 {
@@ -86,8 +92,9 @@ impl ScrollArea {
                     }
                     if let Some(child) = item.get_children().items().first() {
                         let mut scroller = scroller.value();
-                        let x = LogicalX::new(item.get_layout_direction().get(), 0.0, width) - scroller.scroll_position().0;
-                        let y = - scroller.scroll_position().1;
+                        let x = LogicalX::new(item.get_layout_direction().get(), 0.0, width)
+                            - scroller.scroll_position().0;
+                        let y = -scroller.scroll_position().1;
 
                         let padding_start = item.get_padding_start().get();
                         let padding_end = item.get_padding_end().get();
@@ -142,22 +149,26 @@ impl ScrollArea {
                     true
                 }
             });
-        
+
         let dispatch_draw = item.data().get_dispatch_draw();
         item.data().set_dispatch_draw({
             let scroller = scroller.clone();
             move |item, surface, x, y| {
                 dispatch_draw.lock()(item, surface, x, y);
                 let display_parameter = item.get_display_parameter().clone();
-                let child_display_parameter = if let Some(child) = item.get_children().items().first() {
-                    Some(child.data().get_display_parameter())
-                } else { 
-                    None
-                };
-                
+                let child_display_parameter =
+                    if let Some(child) = item.get_children().items().first() {
+                        Some(child.data().get_display_parameter())
+                    } else {
+                        None
+                    };
+
                 if let Some(child_display_parameter) = child_display_parameter {
                     let mut scroller = scroller.value();
-                    let content_size = (child_display_parameter.width, child_display_parameter.height);
+                    let content_size = (
+                        child_display_parameter.width,
+                        child_display_parameter.height,
+                    );
                     let canvas = surface.canvas();
                     scroller.draw(&display_parameter, content_size, canvas);
                 }

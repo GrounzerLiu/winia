@@ -1,5 +1,6 @@
 use crate::{impl_skia_window, SkiaWindow};
 use ash::vk;
+use parking_lot::Mutex;
 use skia_safe::gpu::vk::{BackendContext, GetProcOf};
 use skia_safe::gpu::{Budgeted, DirectContext, SurfaceOrigin};
 use skia_safe::{ImageInfo, Surface};
@@ -8,7 +9,6 @@ use std::num::NonZeroU32;
 use std::ops::Deref;
 use std::ptr;
 use std::sync::Arc;
-use parking_lot::Mutex;
 use vulkano::device::physical::PhysicalDevice;
 use vulkano::device::{Device, DeviceCreateInfo, Queue, QueueCreateInfo, QueueFlags};
 use vulkano::instance::{Instance, InstanceCreateFlags, InstanceCreateInfo, InstanceExtensions};
@@ -24,7 +24,10 @@ pub struct VulkanSkiaWindow {
 }
 
 impl VulkanSkiaWindow {
-    pub fn new(window: Window, device_selector: Option<Box<dyn Fn(&PhysicalDevice) -> bool>>) -> Self {
+    pub fn new(
+        window: Window,
+        device_selector: Option<Box<dyn Fn(&PhysicalDevice) -> bool>>,
+    ) -> Self {
         let vulkan_context = VulkanContext::new(window.title().as_str(), device_selector);
         let mut skia_context = {
             let get_proc = |of| unsafe {
@@ -68,22 +71,27 @@ impl VulkanSkiaWindow {
     }
 }
 
-
-fn create_surface(skia_context: &mut DirectContext, size: impl Into<PhysicalSize<u32>>) -> Arc<Mutex<Surface>> {
+fn create_surface(
+    skia_context: &mut DirectContext,
+    size: impl Into<PhysicalSize<u32>>,
+) -> Arc<Mutex<Surface>> {
     let size = size.into();
     let width = size.width;
     let height = size.height;
     let image_info = ImageInfo::new_n32_premul((width as i32, height as i32), None);
-    Arc::new(Mutex::new(skia_safe::gpu::surfaces::render_target(
-        skia_context,
-        Budgeted::Yes,
-        &image_info,
-        None,
-        SurfaceOrigin::TopLeft,
-        None,
-        false,
-        None,
-    ).unwrap()))
+    Arc::new(Mutex::new(
+        skia_safe::gpu::surfaces::render_target(
+            skia_context,
+            Budgeted::Yes,
+            &image_info,
+            None,
+            SurfaceOrigin::TopLeft,
+            None,
+            false,
+            None,
+        )
+        .unwrap(),
+    ))
 }
 
 impl_skia_window!(VulkanSkiaWindow);
@@ -97,7 +105,10 @@ pub struct VulkanContext {
 }
 
 impl VulkanContext {
-    pub fn new(app_name: &str, device_selector: Option<Box<dyn Fn(&PhysicalDevice) -> bool>>) -> Self {
+    pub fn new(
+        app_name: &str,
+        device_selector: Option<Box<dyn Fn(&PhysicalDevice) -> bool>>,
+    ) -> Self {
         let vulkan_library = VulkanLibrary::new().unwrap();
 
         let instance: Arc<Instance> = {
@@ -118,21 +129,20 @@ impl VulkanContext {
         };
 
         let (physical_device, queue_family_index) = {
-            let physical_devices = instance
-                .enumerate_physical_devices().unwrap();
+            let physical_devices = instance.enumerate_physical_devices().unwrap();
 
-            let mut d = physical_devices
-                .map(|physical_device| {
-                    physical_device.queue_family_properties()
-                        .iter()
-                        .enumerate()
-                        .find_map(|(index, info)| {
-                            let supports_graphic = info.queue_flags.contains(QueueFlags::GRAPHICS);
-                            supports_graphic.then_some((physical_device.clone(), index))
-                        })
-                });
-            
-            let result= if let Some(device_select) = device_selector {
+            let mut d = physical_devices.map(|physical_device| {
+                physical_device
+                    .queue_family_properties()
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, info)| {
+                        let supports_graphic = info.queue_flags.contains(QueueFlags::GRAPHICS);
+                        supports_graphic.then_some((physical_device.clone(), index))
+                    })
+            });
+
+            let result = if let Some(device_select) = device_selector {
                 d.find_map(|v| {
                     if let Some((physical_device, queue_family_index)) = &v {
                         if device_select(physical_device.deref()) {
@@ -140,20 +150,19 @@ impl VulkanContext {
                         }
                     }
                     None
-                }).expect("No suitable device found")
-            }else { 
-                d.find_map(|v| {
-                    v
-                }).expect("No suitable device found")
+                })
+                .expect("No suitable device found")
+            } else {
+                d.find_map(|v| v).expect("No suitable device found")
             };
-            
+
             #[cfg(debug_assertions)]
             {
                 let (physical_device, _) = &result;
                 let device_properties = physical_device.properties();
                 // println!("Using device: {} ", device_properties.device_name);
             }
-            
+
             result
         };
 
@@ -188,7 +197,8 @@ impl VulkanContext {
         match of {
             GetProcOf::Instance(instance, name) => {
                 let ash_instance = vk::Instance::from_raw(instance as _);
-                self.vulkan_library.get_instance_proc_addr(ash_instance, name)
+                self.vulkan_library
+                    .get_instance_proc_addr(ash_instance, name)
             }
             GetProcOf::Device(device, name) => {
                 let ash_device = vk::Device::from_raw(device as _);

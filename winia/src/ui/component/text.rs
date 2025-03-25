@@ -1,5 +1,8 @@
 use crate::dpi::{LogicalPosition, LogicalSize, Position};
-use crate::shared::{Children, Gettable, Observable, Settable, Shared, SharedBool, SharedColor, SharedF32, SharedText, SharedUnSend};
+use crate::shared::{
+    Children, Gettable, Observable, Settable, Shared, SharedBool, SharedColor, SharedF32,
+    SharedText, SharedUnSend,
+};
 use crate::text::StyledText;
 use crate::ui::app::AppContext;
 use crate::ui::item::{
@@ -128,7 +131,8 @@ impl Text {
                                     item.clamp_width(width) - padding_horizontal
                                 }
                             };
-                            let paragraph = text.create_paragraph(text_style.clone(), max_width, text_align);
+                            let paragraph =
+                                text.create_paragraph(text_style.clone(), max_width, text_align);
                             context.paragraph.set(Some(paragraph));
                         } else {
                             let shared_paragraph = context.paragraph.clone();
@@ -197,7 +201,11 @@ impl Text {
                     let mut text = property.text.value();
 
                     if !context.has_paragraph() {
-                        let paragraph = text.create_paragraph(text_style.clone(), max_width, TextAlign::Justify);
+                        let paragraph = text.create_paragraph(
+                            text_style.clone(),
+                            max_width,
+                            TextAlign::Justify,
+                        );
                         context.paragraph.set(Some(paragraph));
                     } else {
                         let mut paragraph = context.paragraph.value();
@@ -220,7 +228,7 @@ impl Text {
                                 text.value().remove(selection.clone());
                                 selection.end = selection.start;
                             }
-                            text.value().insert(selection.start, "\n");
+                            text.value().insert_str(selection.start, "\n");
                             let new_index = selection.start + 1;
                             selection.start = new_index;
                             selection.end = new_index;
@@ -239,8 +247,7 @@ impl Text {
                             let mut text = property.text.value();
 
                             let glyph_index = text.byte_index_to_glyph_index(selection.start);
-                            let prev_glyph_index =
-                                text.glyph_index_to_byte_index(glyph_index - 1);
+                            let prev_glyph_index = text.glyph_index_to_byte_index(glyph_index - 1);
                             text.remove(prev_glyph_index..selection.start);
                             selection.start = prev_glyph_index;
                             selection.end = prev_glyph_index;
@@ -260,7 +267,7 @@ impl Text {
                             }
 
                             if let Some((start, end)) = range {
-                                text.value().insert(selection.start, &pr_text);
+                                text.value().insert_str(selection.start, &pr_text);
                                 *composing = Some((
                                     selection.start..(selection.start + pr_text.len()),
                                     selection.clone(),
@@ -278,7 +285,7 @@ impl Text {
                                 text.value().remove(selection.clone());
                                 selection.end = selection.start;
                             }
-                            text.value().insert(selection.start, &commit_text);
+                            text.value().insert_str(selection.start, &commit_text);
                             let new_index = selection.start + commit_text_len;
                             selection.start = new_index;
                             selection.end = new_index;
@@ -295,12 +302,13 @@ impl Text {
                 move |item, canvas| {
                     context.check_text_changed();
                     let property = property.value();
-                    let text = property.text.value();
+                    let mut text = property.text.value();
 
                     if !context.has_paragraph() {
                         return;
                     }
-                    let shared_paragraph = context.paragraph.clone();                        let paragraph = shared_paragraph.value();
+                    let shared_paragraph = context.paragraph.clone();
+                    let paragraph = shared_paragraph.value();
                     let paragraph_ref = paragraph.as_ref().unwrap();
                     let text_layout = text.get_text_layout(paragraph_ref);
 
@@ -446,14 +454,13 @@ impl Text {
                                     let mut selection = context.selection.value();
                                     if selection.start > 0 {
                                         let property = property.value();
-                                        property.text.read(move |text| {
-                                            let glyph_index =
-                                                text.byte_index_to_glyph_index(selection.start);
-                                            let prev_glyph_index =
-                                                text.glyph_index_to_byte_index(glyph_index - 1);
-                                            selection.start = prev_glyph_index;
-                                            selection.end = prev_glyph_index;
-                                        });
+                                        let mut text = property.text.value();
+                                        let glyph_index =
+                                            text.byte_index_to_glyph_index(selection.start);
+                                        let prev_glyph_index =
+                                            text.glyph_index_to_byte_index(glyph_index - 1);
+                                        selection.start = prev_glyph_index;
+                                        selection.end = prev_glyph_index;
                                     }
                                     item.get_app_context().request_layout();
                                     return true;
@@ -461,16 +468,15 @@ impl Text {
                                 NamedKey::ArrowRight => {
                                     let mut selection = context.selection.value();
                                     let property = property.value();
-                                    property.text.read(move |text| {
-                                        if selection.start < text.len() {
-                                            let glyph_index =
-                                                text.byte_index_to_glyph_index(selection.start);
-                                            let prev_glyph_index =
-                                                text.glyph_index_to_byte_index(glyph_index + 1);
-                                            selection.start = prev_glyph_index;
-                                            selection.end = prev_glyph_index;
-                                        }
-                                    });
+                                    let mut text = property.text.value();
+                                    if selection.start < text.len() {
+                                        let glyph_index =
+                                            text.byte_index_to_glyph_index(selection.start);
+                                        let prev_glyph_index =
+                                            text.glyph_index_to_byte_index(glyph_index + 1);
+                                        selection.start = prev_glyph_index;
+                                        selection.end = prev_glyph_index;
+                                    }
                                     return true;
                                 }
                                 NamedKey::Space => {
@@ -502,8 +508,9 @@ impl Text {
                     if !property.editable.get() || !context.has_paragraph() {
                         return;
                     }
-                    let text = property.text.value();
-                    let shared_paragraph = context.paragraph.clone();                        let paragraph = shared_paragraph.value();
+                    let mut text = property.text.value();
+                    let shared_paragraph = context.paragraph.clone();
+                    let paragraph = shared_paragraph.value();
                     let paragraph_ref = paragraph.as_ref().unwrap();
                     let text_layout = text.get_text_layout(paragraph_ref);
 
@@ -571,9 +578,7 @@ impl Text {
                 let context = context.clone();
                 move |item, id| {
                     if id == item.get_id() {
-                        let mut show_cursor = context
-                            .show_cursor
-                            .value();
+                        let mut show_cursor = context.show_cursor.value();
                         *show_cursor = show_cursor.not();
                         item.get_app_context().request_redraw();
                         if item.get_focused().get() {

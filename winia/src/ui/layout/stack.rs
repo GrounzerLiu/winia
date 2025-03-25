@@ -93,8 +93,18 @@ impl Stack {
                         };
 
                         if constrain_children {
-                            let max_width = (width - padding_start - child_margin_start - padding_end - child_margin_end).max(0.0);
-                            let max_height = (height - padding_top - child_margin_top - padding_bottom - child_margin_bottom).max(0.0);
+                            let max_width = (width
+                                - padding_start
+                                - child_margin_start
+                                - padding_end
+                                - child_margin_end)
+                                .max(0.0);
+                            let max_height = (height
+                                - padding_top
+                                - child_margin_top
+                                - padding_bottom
+                                - child_margin_bottom)
+                                .max(0.0);
 
                             child_width = child_width.min(max_width);
                             child_height = child_height.min(max_height);
