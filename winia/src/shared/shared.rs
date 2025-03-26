@@ -15,8 +15,8 @@ pub trait Gettable<T: Clone> {
 
 /// A trait for setting the value of a shared.
 /// So we can use the same function to set the static value and the dynamic value.
-pub trait Settable<T: ?Sized> {
-    fn set(&mut self, value: T);
+pub trait Settable<T> {
+    fn set(&self, value: impl Into<T>);
 }
 
 /// A trait for observing changes in a shared.
@@ -131,9 +131,9 @@ impl<T: Send + 'static> Shared<T> {
         self.id
     }
 
-    pub fn set_static(&mut self, value: T) {
+    pub fn set_static(&self, value: T) {
         self.clear_observed_objects();
-        *self.value.lock() = value;
+        *self.value.lock() = value.into();
         *self.value_generator.lock() = None;
         self.notify();
     }
@@ -149,7 +149,7 @@ impl<T: Send + 'static> Shared<T> {
     /// The value generator is stored in `self.value_generator`.
     ///
     /// Finally, the `notify` method is called to notify any observers of the change in value.
-    pub fn set_dynamic(&mut self, value_generator: impl Fn() -> T + Send + 'static) {
+    pub fn set_dynamic(&self, value_generator: impl Fn() -> T + Send + 'static) {
         self.clear_observed_objects();
         let value_generator = Box::new(value_generator);
         let value = (&value_generator)();
@@ -179,7 +179,7 @@ impl<T: Send + 'static> Shared<T> {
         }
     }
 
-    fn clear_observed_objects(&mut self) {
+    fn clear_observed_objects(&self) {
         for (_, removal) in self.observed_objects.lock().drain(..) {
             removal();
         }
@@ -195,7 +195,7 @@ impl<T: Send + 'static> Shared<T> {
             .push((id, Box::new(observer)));
     }
 
-    fn observe<O: Observable + Send + Clone + 'static>(&mut self, observable: O) {
+    pub fn observe<O: Observable + Send + Clone + 'static>(&self, observable: O) {
         let mut observable = Box::new(observable);
         let self_weak = self.weak();
         let removal = observable
@@ -316,14 +316,8 @@ impl<T: Send + 'static> From<T> for Shared<T> {
 }
 
 impl<T: Send + 'static> Settable<T> for Shared<T> {
-    fn set(&mut self, value: T) {
-        self.set_static(value);
-    }
-}
-
-impl<T: Send + 'static> Settable<Box<dyn Fn() -> T + Send>> for Shared<T> {
-    fn set(&mut self, value: Box<dyn Fn() -> T + Send>) {
-        self.set_dynamic(value);
+    fn set(&self, value: impl Into<T>) {
+        self.set_static(value.into());
     }
 }
 

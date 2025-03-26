@@ -253,9 +253,18 @@ impl Line {
             };
 
             if let Some(child_baseline) = child_baseline {
-                let under_baseline = child_baseline + item.data().get_margin_top().get();
-                let over_baseline =
-                    child_cross_axis_size - child_baseline + item.data().get_margin_bottom().get();
+                let under_baseline = child_baseline
+                    + item
+                        .data()
+                        .get_margin_top()
+                        .get()
+                        .to_dp(item.data().get_app_context());
+                let over_baseline = child_cross_axis_size - child_baseline
+                    + item
+                        .data()
+                        .get_margin_bottom()
+                        .get()
+                        .to_dp(item.data().get_app_context());
                 self.under_baseline = self.under_baseline.max(under_baseline);
                 self.over_baseline = self.over_baseline.max(over_baseline);
             }
@@ -490,12 +499,16 @@ impl Flex {
 
                     let max_width = match width_mode {
                         MeasureMode::Specified(width) => item.clamp_width(width),
-                        MeasureMode::Unspecified(_) => item.get_max_width().get(),
+                        MeasureMode::Unspecified(_) => {
+                            item.get_max_width().get().to_dp(item.get_app_context())
+                        }
                     };
 
                     let max_height = match height_mode {
                         MeasureMode::Specified(height) => item.clamp_height(height),
-                        MeasureMode::Unspecified(_) => item.get_max_height().get(),
+                        MeasureMode::Unspecified(_) => {
+                            item.get_max_height().get().to_dp(item.get_app_context())
+                        }
                     };
 
                     let orientation = direction.orientation();
@@ -580,10 +593,14 @@ impl Flex {
                     let lines_width = lines.width();
                     let lines_height = lines.height();
 
-                    let padding_start = item.get_padding_start().get();
-                    let padding_end = item.get_padding_end().get();
-                    let padding_top = item.get_padding_top().get();
-                    let padding_bottom = item.get_padding_bottom().get();
+                    let padding_start =
+                        item.get_padding_start().get().to_dp(item.get_app_context());
+                    let padding_end = item.get_padding_end().get().to_dp(item.get_app_context());
+                    let padding_top = item.get_padding_top().get().to_dp(item.get_app_context());
+                    let padding_bottom = item
+                        .get_padding_bottom()
+                        .get()
+                        .to_dp(item.get_app_context());
 
                     match direction {
                         FlexDirection::Horizontal | FlexDirection::HorizontalReverse => {
@@ -801,11 +818,26 @@ impl Flex {
                                         child_param.height
                                     };
 
-                                    let child_margin_start = child.data().get_margin_start().get();
-                                    let child_margin_end = child.data().get_margin_end().get();
-                                    let child_margin_top = child.data().get_margin_top().get();
-                                    let child_margin_bottom =
-                                        child.data().get_margin_bottom().get();
+                                    let child_margin_start = child
+                                        .data()
+                                        .get_margin_start()
+                                        .get()
+                                        .to_dp(child.data().get_app_context());
+                                    let child_margin_end = child
+                                        .data()
+                                        .get_margin_end()
+                                        .get()
+                                        .to_dp(child.data().get_app_context());
+                                    let child_margin_top = child
+                                        .data()
+                                        .get_margin_top()
+                                        .get()
+                                        .to_dp(child.data().get_app_context());
+                                    let child_margin_bottom = child
+                                        .data()
+                                        .get_margin_bottom()
+                                        .get()
+                                        .to_dp(child.data().get_app_context());
 
                                     if remaining_space_between_items > 0.0 && total_grow > 0 {
                                         let flex_grow = child
@@ -1189,11 +1221,26 @@ impl Flex {
                                     };
                                     let mut child_height = child_param.height;
 
-                                    let child_margin_start = child.data().get_margin_start().get();
-                                    let child_margin_end = child.data().get_margin_end().get();
-                                    let child_margin_top = child.data().get_margin_top().get();
-                                    let child_margin_bottom =
-                                        child.data().get_margin_bottom().get();
+                                    let child_margin_start = child
+                                        .data()
+                                        .get_margin_start()
+                                        .get()
+                                        .to_dp(child.data().get_app_context());
+                                    let child_margin_end = child
+                                        .data()
+                                        .get_margin_end()
+                                        .get()
+                                        .to_dp(child.data().get_app_context());
+                                    let child_margin_top = child
+                                        .data()
+                                        .get_margin_top()
+                                        .get()
+                                        .to_dp(child.data().get_app_context());
+                                    let child_margin_bottom = child
+                                        .data()
+                                        .get_margin_bottom()
+                                        .get()
+                                        .to_dp(child.data().get_app_context());
 
                                     if remaining_space_between_items > 0.0 && total_grow > 0 {
                                         let flex_grow = child

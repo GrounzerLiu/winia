@@ -1,8 +1,5 @@
 use crate::core::{bind_str_to_id, generate_id};
-use crate::shared::{
-    Children, Gettable, Observable, Settable, Shared, SharedAlignment, SharedBool, SharedColor,
-    SharedF32, SharedInnerPosition, SharedItem, SharedSize, SharedUsize,
-};
+use crate::shared::{Children, Gettable, Observable, Settable, Shared, SharedAlignment, SharedBool, SharedColor, SharedF32, SharedInnerPosition, SharedItem, SharedSize, SharedUnit, SharedUsize};
 use crate::ui::animation::Target;
 use crate::ui::app::{AppContext, UserEvent};
 use crate::ui::item::{DisplayParameter, InnerPosition, Size};
@@ -17,6 +14,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use winit::event::{DeviceId, Force, KeyEvent, MouseButton, TouchPhase};
 use crate::ui::theme::colors;
+use crate::ui::unit::Dp;
 
 pub fn layout<T: Send>(mut property: Shared<T>, id: usize, app_context: &AppContext) -> Shared<T> {
     let event_loop_proxy = app_context.event_loop_proxy();
@@ -466,25 +464,25 @@ pub struct ItemData {
     clip_shape: Shared<Box<dyn Fn(DisplayParameter) -> Path + Send>>,
     custom_properties: HashMap<String, CustomProperty>,
     display_parameter_out: Shared<DisplayParameter>,
-    elevation: SharedF32,
+    elevation: SharedUnit,
     enable_background_blur: SharedBool,
     focused: Shared<bool>,
     foreground: SharedItem,
     height: SharedSize,
     id: usize,
     layout_direction: Shared<LayoutDirection>,
-    margin_bottom: SharedF32,
-    margin_end: SharedF32,
-    margin_start: SharedF32,
-    margin_top: SharedF32,
-    max_height: SharedF32,
-    max_width: SharedF32,
+    margin_bottom: SharedUnit,
+    margin_end: SharedUnit,
+    margin_start: SharedUnit,
+    margin_top: SharedUnit,
+    max_height: SharedUnit,
+    max_width: SharedUnit,
     measure_parameter: DisplayParameter,
-    min_height: SharedF32,
-    min_width: SharedF32,
+    min_height: SharedUnit,
+    min_width: SharedUnit,
     name: String,
-    offset_x: SharedF32,
-    offset_y: SharedF32,
+    offset_x: SharedUnit,
+    offset_y: SharedUnit,
     on_attach: LinkedList<Box<dyn FnMut()>>,
     on_click: Option<Box<dyn FnMut(ClickSource)>>,
     on_cursor_move: Option<Box<dyn FnMut(f32, f32)>>,
@@ -495,10 +493,10 @@ pub struct ItemData {
     on_pointer_input: Option<Box<dyn FnMut(PointerEvent)>>,
     on_touch_input: Option<Box<dyn FnMut(TouchEvent)>>,
     opacity: SharedF32,
-    padding_bottom: SharedF32,
-    padding_end: SharedF32,
-    padding_start: SharedF32,
-    padding_top: SharedF32,
+    padding_bottom: SharedUnit,
+    padding_end: SharedUnit,
+    padding_start: SharedUnit,
+    padding_top: SharedUnit,
     recorded_parameter: Option<DisplayParameter>,
     rotation: SharedF32,
     rotation_center_x: SharedInnerPosition,
@@ -581,7 +579,7 @@ impl ItemData {
             ),
             custom_properties: HashMap::new(),
             display_parameter_out: DisplayParameter::default().into(),
-            elevation: redraw(0.0.into(), id, &app_context),
+            elevation: redraw(0.0.dp().into(), id, &app_context),
             enable_background_blur: redraw(false.into(), id, &app_context),
             focused: redraw(false.into(), id, &app_context),
             foreground: {
@@ -599,18 +597,18 @@ impl ItemData {
             height: redraw(Size::Compact.into(), id, &app_context),
             id,
             layout_direction: layout(LayoutDirection::LTR.into(), id, &app_context),
-            margin_bottom: layout(0.0.into(), id, &app_context),
-            margin_end: layout(0.0.into(), id, &app_context),
-            margin_start: layout(0.0.into(), id, &app_context),
-            margin_top: layout(0.0.into(), id, &app_context),
-            max_height: layout(f32::INFINITY.into(), id, &app_context),
-            max_width: layout(f32::INFINITY.into(), id, &app_context),
+            margin_bottom: layout(0.0.dp().into(), id, &app_context),
+            margin_end: layout(0.0.dp().into(), id, &app_context),
+            margin_start: layout(0.0.dp().into(), id, &app_context),
+            margin_top: layout(0.0.dp().into(), id, &app_context),
+            max_height: layout(f32::INFINITY.dp().into(), id, &app_context),
+            max_width: layout(f32::INFINITY.dp().into(), id, &app_context),
             measure_parameter: Default::default(),
-            min_height: layout(0.0.into(), id, &app_context),
-            min_width: layout(0.0.into(), id, &app_context),
+            min_height: layout(0.0.dp().into(), id, &app_context),
+            min_width: layout(0.0.dp().into(), id, &app_context),
             name: format!("Item {}", id),
-            offset_x: layout(0.0.into(), id, &app_context),
-            offset_y: layout(0.0.into(), id, &app_context),
+            offset_x: layout(0.0.dp().into(), id, &app_context),
+            offset_y: layout(0.0.dp().into(), id, &app_context),
             on_attach: LinkedList::new(),
             on_click: None,
             on_cursor_move: None,
@@ -621,10 +619,10 @@ impl ItemData {
             on_pointer_input: None,
             on_touch_input: None,
             opacity: redraw(1.0.into(), id, &app_context),
-            padding_bottom: layout(0.0.into(), id, &app_context),
-            padding_end: layout(0.0.into(), id, &app_context),
-            padding_start: layout(0.0.into(), id, &app_context),
-            padding_top: layout(0.0.into(), id, &app_context),
+            padding_bottom: layout(0.0.dp().into(), id, &app_context),
+            padding_end: layout(0.0.dp().into(), id, &app_context),
+            padding_start: layout(0.0.dp().into(), id, &app_context),
+            padding_top: layout(0.0.dp().into(), id, &app_context),
             recorded_parameter: None,
             rotation: redraw(0.0.into(), id, &app_context),
             rotation_center_x: redraw(InnerPosition::default().into(), id, &app_context),
@@ -858,7 +856,7 @@ impl ItemData {
 
                     {
                         // Draw the shadow
-                        let elevation = item.get_elevation().get();
+                        let elevation = item.get_elevation().get().to_dp(&item.app_context);
                         if elevation > 0.0 {
                             let theme = item.app_context.theme.value();
                             let shadow_color = theme.get_color(colors::SHADOW).unwrap().with_a((0.5 * 255.0) as u8);
@@ -986,8 +984,8 @@ impl ItemData {
             )),
             dispatch_layout: Arc::new(Mutex::new(
                 |item: &mut ItemData, relative_x: f32, relative_y: f32, width: f32, height: f32| {
-                    let offset_x = item.get_offset_x().get();
-                    let offset_y = item.get_offset_y().get();
+                    let offset_x = item.get_offset_x().get().to_dp(&item.app_context);
+                    let offset_y = item.get_offset_y().get().to_dp(&item.app_context);
                     let opacity = item.get_opacity().get();
                     let rotation = item.get_rotation().get();
                     let scale_x = item.get_scale_x().get();
@@ -995,23 +993,23 @@ impl ItemData {
                     let skew_x = item.get_skew_x().get();
                     let skew_y = item.get_skew_y().get();
 
-                    fn center(inner_position: InnerPosition, size: f32) -> f32 {
+                    fn center(inner_position: InnerPosition, size: f32, app_context: &AppContext) -> f32 {
                         match inner_position {
-                            InnerPosition::Start(offset) => offset,
-                            InnerPosition::Middle(offset) => size / 2.0 + offset,
-                            InnerPosition::End(offset) => size + offset,
+                            InnerPosition::Start(offset) => offset.to_dp(app_context),
+                            InnerPosition::Middle(offset) => size / 2.0 + offset.to_dp(app_context),
+                            InnerPosition::End(offset) => size + offset.to_dp(app_context),
                             InnerPosition::Relative(fraction) => size * fraction,
-                            InnerPosition::Absolute(offset) => offset,
+                            InnerPosition::Absolute(offset) => offset.to_dp(app_context),
                         }
                     }
 
                     {
-                        let rotation_center_x = center(item.get_rotation_center_x().get(), width);
-                        let rotation_center_y = center(item.get_rotation_center_y().get(), height);
-                        let scale_center_x = center(item.get_scale_center_x().get(), width);
-                        let scale_center_y = center(item.get_scale_center_y().get(), height);
-                        let skew_center_x = center(item.get_skew_center_x().get(), width);
-                        let skew_center_y = center(item.get_skew_center_y().get(), height);
+                        let rotation_center_x = center(item.get_rotation_center_x().get(), width, &item.app_context);
+                        let rotation_center_y = center(item.get_rotation_center_y().get(), height, &item.app_context);
+                        let scale_center_x = center(item.get_scale_center_x().get(), width, &item.app_context);
+                        let scale_center_y = center(item.get_scale_center_y().get(), height, &item.app_context);
+                        let skew_center_x = center(item.get_skew_center_x().get(), width, &item.app_context);
+                        let skew_center_y = center(item.get_skew_center_y().get(), height, &item.app_context);
 
                         {
                             let target_parameter = item.get_target_parameter();
@@ -1280,10 +1278,10 @@ impl ItemData {
                         }
                     }
 
-                    let max_width = item.get_max_width().get();
-                    let max_height = item.get_max_height().get();
-                    let min_width = item.get_min_width().get();
-                    let min_height = item.get_min_height().get();
+                    let max_width = item.get_max_width().get().to_dp(&item.app_context);
+                    let max_height = item.get_max_height().get().to_dp(&item.app_context);
+                    let min_width = item.get_min_width().get().to_dp(&item.app_context);
+                    let min_height = item.get_min_height().get().to_dp(&item.app_context);
                     let measure_parameter = item.get_measure_parameter();
                     measure_parameter.width = get_size(width_mode).clamp(min_width, max_width);
                     measure_parameter.height = get_size(height_mode).clamp(min_height, max_height);
@@ -1375,7 +1373,7 @@ impl_property_layout!(
     elevation,
     set_elevation,
     get_elevation,
-    SharedF32,
+    SharedUnit,
     "The elevation of the item. It will affect the shadow of the item."
 );
 // impl_property_layout!(
@@ -1428,70 +1426,70 @@ impl_property_layout!(
     margin_bottom,
     set_margin_bottom,
     get_margin_bottom,
-    SharedF32,
+    SharedUnit,
     "The margin at the bottom of the item."
 );
 impl_property_layout!(
     margin_end,
     set_margin_end,
     get_margin_end,
-    SharedF32,
+    SharedUnit,
     "The margin at the end of the item. The \"end\" direction depends on the layout direction."
 );
 impl_property_layout!(
     margin_start,
     set_margin_start,
     get_margin_start,
-    SharedF32,
+    SharedUnit,
     "The margin at the start of the item. The \"start\" direction depends on the layout direction."
 );
 impl_property_layout!(
     margin_top,
     set_margin_top,
     get_margin_top,
-    SharedF32,
+    SharedUnit,
     "The margin at the top of the item."
 );
 impl_property_layout!(
     max_height,
     set_max_height,
     get_max_height,
-    SharedF32,
+    SharedUnit,
     "The maximum height of the item."
 );
 impl_property_layout!(
     max_width,
     set_max_width,
     get_max_width,
-    SharedF32,
+    SharedUnit,
     "The maximum width of the item."
 );
 impl_property_layout!(
     min_height,
     set_min_height,
     get_min_height,
-    SharedF32,
+    SharedUnit,
     "The minimum height of the item."
 );
 impl_property_layout!(
     min_width,
     set_min_width,
     get_min_width,
-    SharedF32,
+    SharedUnit,
     "The minimum width of the item."
 );
 impl_property_layout!(
     offset_x,
     set_offset_x,
     get_offset_x,
-    SharedF32,
+    SharedUnit,
     "The offset in the x direction relative to the original position."
 );
 impl_property_layout!(
     offset_y,
     set_offset_y,
     get_offset_y,
-    SharedF32,
+    SharedUnit,
     "The offset in the y direction relative to the original position."
 );
 impl_property_layout!(
@@ -1505,28 +1503,28 @@ impl_property_layout!(
     padding_bottom,
     set_padding_bottom,
     get_padding_bottom,
-    SharedF32,
+    SharedUnit,
     "The padding at the bottom of the item."
 );
 impl_property_layout!(
     padding_end,
     set_padding_end,
     get_padding_end,
-    SharedF32,
+    SharedUnit,
     "The padding at the end of the item. The \"end\" direction depends on the layout direction."
 );
 impl_property_layout!(
     padding_start,
     set_padding_start,
     get_padding_start,
-    SharedF32,
+    SharedUnit,
     "The padding at the start of the item. The \"start\" direction depends on the layout direction."
 );
 impl_property_layout!(
     padding_top,
     set_padding_top,
     get_padding_top,
-    SharedF32,
+    SharedUnit,
     "The padding at the top of the item."
 );
 impl_property_layout!(
@@ -2100,36 +2098,36 @@ impl ItemData {
 
     pub fn get_max_size(&self, orientation: Orientation) -> f32 {
         match orientation {
-            Orientation::Horizontal => self.max_width.get(),
-            Orientation::Vertical => self.max_height.get(),
+            Orientation::Horizontal => self.max_width.get().to_dp(&self.app_context),
+            Orientation::Vertical => self.max_height.get().to_dp(&self.app_context),
         }
     }
 
     pub fn get_min_size(&self, orientation: Orientation) -> f32 {
         match orientation {
-            Orientation::Horizontal => self.min_width.get(),
-            Orientation::Vertical => self.min_height.get(),
+            Orientation::Horizontal => self.min_width.get().to_dp(&self.app_context),
+            Orientation::Vertical => self.min_height.get().to_dp(&self.app_context),
         }
     }
 
     pub fn get_margin(&self, orientation: Orientation) -> f32 {
         match orientation {
-            Orientation::Horizontal => self.margin_start.get() + self.margin_end.get(),
-            Orientation::Vertical => self.margin_top.get() + self.margin_bottom.get(),
+            Orientation::Horizontal => (self.margin_start.get() + self.margin_end.get()).to_dp(&self.app_context),
+            Orientation::Vertical => (self.margin_top.get() + self.margin_bottom.get()).to_dp(&self.app_context),
         }
     }
 
     pub fn get_margin_left(&self) -> f32 {
         match self.layout_direction.get() {
-            LayoutDirection::LTR => self.margin_start.get(),
-            LayoutDirection::RTL => self.margin_end.get(),
+            LayoutDirection::LTR => self.margin_start.get().to_dp(&self.app_context),
+            LayoutDirection::RTL => self.margin_end.get().to_dp(&self.app_context),
         }
     }
 
     pub fn get_margin_right(&self) -> f32 {
         match self.layout_direction.get() {
-            LayoutDirection::LTR => self.margin_end.get(),
-            LayoutDirection::RTL => self.margin_start.get(),
+            LayoutDirection::LTR => self.margin_end.get().to_dp(&self.app_context),
+            LayoutDirection::RTL => self.margin_start.get().to_dp(&self.app_context),
         }
     }
 
@@ -2179,22 +2177,22 @@ impl ItemData {
 
     pub fn get_padding(&self, orientation: Orientation) -> f32 {
         match orientation {
-            Orientation::Horizontal => self.padding_start.get() + self.padding_end.get(),
-            Orientation::Vertical => self.padding_top.get() + self.padding_bottom.get(),
+            Orientation::Horizontal => (self.padding_start.get() + self.padding_end.get()).to_dp(&self.app_context),
+            Orientation::Vertical => (self.padding_top.get() + self.padding_bottom.get()).to_dp(&self.app_context),
         }
     }
 
     pub fn get_padding_left(&self) -> f32 {
         match self.layout_direction.get() {
-            LayoutDirection::LTR => self.padding_start.get(),
-            LayoutDirection::RTL => self.padding_end.get(),
+            LayoutDirection::LTR => self.padding_start.get().to_dp(&self.app_context),
+            LayoutDirection::RTL => self.padding_end.get().to_dp(&self.app_context),
         }
     }
 
     pub fn get_padding_right(&self) -> f32 {
         match self.layout_direction.get() {
-            LayoutDirection::LTR => self.padding_end.get(),
-            LayoutDirection::RTL => self.padding_start.get(),
+            LayoutDirection::LTR => self.padding_end.get().to_dp(&self.app_context),
+            LayoutDirection::RTL => self.padding_start.get().to_dp(&self.app_context),
         }
     }
 
@@ -2210,14 +2208,14 @@ impl ItemData {
     }
 
     pub fn clamp_height(&self, height: f32) -> f32 {
-        let min_height = self.min_height.get();
-        let max_height = self.max_height.get();
+        let min_height = self.min_height.get().to_dp(&self.app_context);
+        let max_height = self.max_height.get().to_dp(&self.app_context);
         height.clamp(min_height, max_height)
     }
 
     pub fn clamp_width(&self, width: f32) -> f32 {
-        let min_width = self.min_width.get();
-        let max_width = self.max_width.get();
+        let min_width = self.min_width.get().to_dp(&self.app_context);
+        let max_width = self.max_width.get().to_dp(&self.app_context);
         width.clamp(min_width, max_width)
     }
 
@@ -2526,23 +2524,24 @@ impl ItemData {
             MeasureMode::Unspecified(height) => height,
         };
 
-        fn create_mode(size: Size, max_size: f32) -> MeasureMode {
+        fn create_mode(size: Size, max_size: f32, app_context: &AppContext) -> MeasureMode {
             match size {
                 Size::Compact => MeasureMode::Unspecified(max_size),
                 Size::Expanded => MeasureMode::Specified(max_size),
-                Size::Fixed(size) => MeasureMode::Specified(size),
+                Size::Fixed(size) => MeasureMode::Specified(size.to_dp(app_context)),
                 Size::Relative(ratio) => MeasureMode::Specified(max_size * ratio),
             }
         }
 
         self.for_each_child_mut(|child| {
+            let app_context = child.data().get_app_context();
             let child_width = child.data().get_width().get();
             let child_height = child.data().get_height().get();
             let max_width = child.data().clamp_width(max_width);
             let max_height = child.data().clamp_height(max_height);
             child.data().measure(
-                create_mode(child_width, max_width),
-                create_mode(child_height, max_height),
+                create_mode(child_width, max_width, &app_context),
+                create_mode(child_height, max_height, &app_context),
             );
         });
     }

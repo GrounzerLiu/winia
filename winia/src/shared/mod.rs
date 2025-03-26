@@ -18,6 +18,7 @@ mod shared_drawable;
 mod shared_inner_position;
 mod shared_num;
 mod shared_un_send;
+mod shared_unit;
 
 pub use shared_inner_position::*;
 
@@ -30,6 +31,8 @@ pub use shared::*;
 pub use shared_un_send::*;
 
 pub use shared_drawable::*;
+
+pub use shared_unit::*;
 
 impl Into<Shared<String>> for &str {
     fn into(self) -> Shared<String> {

@@ -331,7 +331,7 @@ impl ApplicationHandler<UserEvent> for App {
             self.app_context
                 .window
                 .value()
-                .replace(Box::new(VulkanSkiaWindow::new(window, None)));
+                .replace(Box::new(VulkanSkiaWindow::new(window, None).set_window_icon()));
             let event_loop_proxy = self.event_loop_proxy.take();
             if let Some(event_loop_proxy) = event_loop_proxy {
                 self.app_context.event_loop_proxy.set(event_loop_proxy)

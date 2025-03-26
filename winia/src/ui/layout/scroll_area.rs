@@ -45,11 +45,11 @@ impl ScrollArea {
                         MeasureMode::Unspecified(height) => height,
                     };
 
-                    fn create_mode(size: Size, max_size: f32) -> MeasureMode {
+                    fn create_mode(size: Size, max_size: f32, app_context: AppContext) -> MeasureMode {
                         match size {
                             Size::Compact => MeasureMode::Unspecified(max_size),
                             Size::Expanded => MeasureMode::Unspecified(max_size),
-                            Size::Fixed(size) => MeasureMode::Specified(size),
+                            Size::Fixed(size) => MeasureMode::Specified(size.to_dp(app_context)),
                             Size::Relative(ratio) => MeasureMode::Specified(max_size * ratio),
                         }
                     }
@@ -59,8 +59,8 @@ impl ScrollArea {
                     let max_width = child.data().clamp_width(max_width);
                     let max_height = child.data().clamp_height(max_height);
                     child.data().measure(
-                        create_mode(child_width, max_width),
-                        create_mode(child_height, max_height),
+                        create_mode(child_width, max_width, child.data().get_app_context()),
+                        create_mode(child_height, max_height, child.data().get_app_context()),
                     );
 
                     let child_measure_parameter = child.data().clone_measure_parameter();
@@ -96,18 +96,18 @@ impl ScrollArea {
                             - scroller.scroll_position().0;
                         let y = -scroller.scroll_position().1;
 
-                        let padding_start = item.get_padding_start().get();
-                        let padding_end = item.get_padding_end().get();
-                        let padding_top = item.get_padding_top().get();
-                        let padding_bottom = item.get_padding_bottom().get();
+                        let padding_start = item.get_padding_start().get().to_dp(item.get_app_context());
+                        let padding_end = item.get_padding_end().get().to_dp(item.get_app_context());
+                        let padding_top = item.get_padding_top().get().to_dp(item.get_app_context());
+                        let padding_bottom = item.get_padding_bottom().get().to_dp(item.get_app_context());
 
                         let alignment = item.get_align_content().get();
 
                         let mut child_data = child.data();
-                        let child_margin_start = child_data.get_margin_start().get();
-                        let child_margin_end = child_data.get_margin_end().get();
-                        let child_margin_top = child_data.get_margin_top().get();
-                        let child_margin_bottom = child_data.get_margin_bottom().get();
+                        let child_margin_start = child_data.get_margin_start().get().to_dp(item.get_app_context());
+                        let child_margin_end = child_data.get_margin_end().get().to_dp(item.get_app_context());
+                        let child_margin_top = child_data.get_margin_top().get().to_dp(item.get_app_context());
+                        let child_margin_bottom = child_data.get_margin_bottom().get().to_dp(item.get_app_context());
                         let child_width = child_data.get_measure_parameter().width;
                         let child_height = child_data.get_measure_parameter().height;
                         drop(child_data);

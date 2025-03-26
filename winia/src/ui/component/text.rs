@@ -1,19 +1,17 @@
 use crate::dpi::{LogicalPosition, LogicalSize, Position};
-use crate::shared::{
-    Children, Gettable, Observable, Settable, Shared, SharedBool, SharedColor, SharedF32,
-    SharedText, SharedUnSend,
-};
+use crate::shared::{Children, Gettable, Observable, Settable, Shared, SharedBool, SharedColor, SharedText, SharedUnSend, SharedUnit};
 use crate::text::StyledText;
 use crate::ui::app::AppContext;
 use crate::ui::item::{
     ClickSource, HorizontalAlignment, ImeAction, LayoutDirection, LogicalX, MeasureMode,
     Orientation, PointerState, VerticalAlignment,
 };
+use crate::ui::unit::Sp;
 use crate::ui::Item;
 use crate::{impl_property_layout, impl_property_redraw};
 use proc_macro::item;
 use skia_safe::textlayout::{Paragraph, TextAlign, TextStyle};
-use skia_safe::{Color, Drawable, Paint, PictureRecorder, Rect, Vector};
+use skia_safe::{Color, Drawable, Paint, Rect};
 use std::ops::{Not, Range};
 use std::string::ToString;
 use std::time::Duration;
@@ -31,7 +29,7 @@ pub struct TextProperty {
     editable: SharedBool,
     selectable: SharedBool,
     color: SharedColor,
-    font_size: SharedF32,
+    font_size: SharedUnit,
 }
 
 struct DrawCache {
@@ -89,7 +87,7 @@ impl Text {
             editable: true.into(),
             selectable: true.into(),
             color: Color::BLACK.into(),
-            font_size: 24.0.into(),
+            font_size: 24.0.sp().into(),
         });
 
         let context = TextContext {
@@ -109,7 +107,7 @@ impl Text {
                 let mut context = context.clone();
                 move |item, width_mode, height_mode| {
                     let property = property.value();
-                    let text_style = get_text_style(&property);
+                    let text_style = get_text_style(&property, item.get_app_context());
 
                     let padding_horizontal = item.get_padding(Orientation::Horizontal);
                     let padding_vertical = item.get_padding(Orientation::Vertical);
@@ -195,7 +193,7 @@ impl Text {
                 move |item, width, _height| {
                     context.check_text_changed();
                     let property = property.value();
-                    let text_style = get_text_style(&property);
+                    let text_style = get_text_style(&property, item.get_app_context());
                     let max_width = width - item.get_padding(Orientation::Horizontal);
 
                     let mut text = property.text.value();
@@ -314,10 +312,10 @@ impl Text {
 
                     let layout_direction = item.get_layout_direction().get();
                     let align_content = item.get_align_content().get();
-                    let padding_start = item.get_padding_start().get();
-                    let padding_end = item.get_padding_end().get();
-                    let padding_top = item.get_padding_top().get();
-                    let padding_bottom = item.get_padding_bottom().get();
+                    let padding_start = item.get_padding_start().get().to_dp(item.get_app_context());
+                    let padding_end = item.get_padding_end().get().to_dp(item.get_app_context());
+                    let padding_top = item.get_padding_top().get().to_dp(item.get_app_context());
+                    let padding_bottom = item.get_padding_bottom().get().to_dp(item.get_app_context());
 
                     let display_parameter = item.get_display_parameter();
                     let width = display_parameter.width;
@@ -515,8 +513,8 @@ impl Text {
                     let text_layout = text.get_text_layout(paragraph_ref);
 
                     let display_parameter = item.get_display_parameter();
-                    let padding_top = item.get_padding_top().get();
-                    let padding_left = item.get_padding_start().get();
+                    let padding_top = item.get_padding_top().get().to_dp(item.get_app_context());
+                    let padding_left = item.get_padding_start().get().to_dp(item.get_app_context());
                     let x = event.x - display_parameter.x() - padding_left;
                     let y = event.y - display_parameter.y() - padding_top;
                     let index = if let Some((index, _)) =
@@ -561,8 +559,6 @@ impl Text {
                     let y = display_parameter.y() as f64;
                     let width = display_parameter.width as f64;
                     let height = display_parameter.height as f64;
-                    let padding_top = item.get_padding_top().get() as f64;
-                    let padding_left = item.get_padding_start().get() as f64;
                     app_context.window(|window| {
                         window.set_ime_allowed(focused);
                         window.set_ime_cursor_area(
@@ -619,11 +615,11 @@ impl Text {
 }
 
 impl_property_redraw!(Text, color, SharedColor);
-impl_property_layout!(Text, font_size, SharedF32);
+impl_property_layout!(Text, font_size, SharedUnit);
 
-fn get_text_style(property: &TextProperty) -> TextStyle {
+fn get_text_style(property: &TextProperty, app_context: AppContext) -> TextStyle {
     let color = property.color.get();
-    let font_size = property.font_size.get();
+    let font_size = property.font_size.get().to_dp(app_context);
     let mut text_style = TextStyle::new();
     text_style.set_font_size(font_size);
     text_style.set_color(color);

@@ -377,10 +377,10 @@ impl Image {
                     let drawable = drawable_.lock();
 
                     let align = item.get_align_content().get();
-                    let padding_start = item.get_padding_start().get();
-                    let padding_top = item.get_padding_top().get();
-                    let padding_end = item.get_padding_end().get();
-                    let padding_bottom = item.get_padding_bottom().get();
+                    let padding_start = item.get_padding_start().get().to_dp(item.get_app_context());
+                    let padding_top = item.get_padding_top().get().to_dp(item.get_app_context());
+                    let padding_end = item.get_padding_end().get().to_dp(item.get_app_context());
+                    let padding_bottom = item.get_padding_bottom().get().to_dp(item.get_app_context());
                     let padding_horizontal = padding_start + padding_end;
                     let padding_vertical = padding_top + padding_bottom;
 

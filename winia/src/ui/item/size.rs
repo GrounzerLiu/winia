@@ -1,10 +1,19 @@
+use crate::ui::Unit;
+use crate::ui::unit::Dp;
+
 #[derive(Debug, Default, Clone)]
 pub enum Size {
     #[default]
     Compact,
     Expanded,
-    Fixed(f32),
+    Fixed(Unit),
     Relative(f32),
+}
+
+impl From<Unit> for Size {
+    fn from(unit: Unit) -> Self {
+        Size::Fixed(unit)
+    }
 }
 
 impl PartialEq for Size {
@@ -28,47 +37,20 @@ impl PartialEq for Size {
     }
 }
 
-impl Into<Size> for u32 {
-    fn into(self) -> Size {
-        Size::Fixed(self as f32)
-    }
-}
-
-impl Into<Size> for f32 {
-    fn into(self) -> Size {
-        if self < 0.0 {
-            panic!("Size cannot be negative.")
-        }
-        Size::Fixed(self)
-    }
-}
-
-impl Into<Size> for f64 {
-    fn into(self) -> Size {
-        if self < 0.0 {
-            panic!("Size cannot be negative.")
-        }
-        Size::Fixed(self as f32)
-    }
-}
-
-impl Into<Size> for i32 {
-    fn into(self) -> Size {
-        if self < 0 {
-            panic!("Size cannot be negative.")
-        }
-        Size::Fixed(self as f32)
-    }
-}
-
 impl Into<Size> for &str {
     fn into(self) -> Size {
         if self.ends_with("%") {
             let size = self[..self.len() - 1].parse::<f32>().unwrap() / 100.0;
+            if size < 0.0 || size > 1.0 {
+                panic!("Relative size must be between 0 and 100");
+            }
             Size::Relative(size)
         } else {
             let size = self.parse::<f32>().unwrap();
-            Size::Fixed(size)
+            if size < 0.0 {
+                panic!("Fixed size must be greater than 0");
+            }
+            Size::Fixed(size.dp())
         }
     }
 }

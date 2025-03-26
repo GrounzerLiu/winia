@@ -55,20 +55,20 @@ impl Stack {
                     let x = LogicalX::new(item.get_layout_direction().get(), 0.0, width);
                     let y = 0.0;
 
-                    let padding_start = item.get_padding_start().get();
-                    let padding_end = item.get_padding_end().get();
-                    let padding_top = item.get_padding_top().get();
-                    let padding_bottom = item.get_padding_bottom().get();
+                    let padding_start = item.get_padding_start().get().to_dp(item.get_app_context());
+                    let padding_end = item.get_padding_end().get().to_dp(item.get_app_context());
+                    let padding_top = item.get_padding_top().get().to_dp(item.get_app_context());
+                    let padding_bottom = item.get_padding_bottom().get().to_dp(item.get_app_context());
 
                     let align_content = item.get_align_content().get();
                     let constrain_children = property.value().constrain_children.get();
 
                     item.for_each_child_mut(|child| {
                         let mut child_data = child.data();
-                        let child_margin_start = child_data.get_margin_start().get();
-                        let child_margin_end = child_data.get_margin_end().get();
-                        let child_margin_top = child_data.get_margin_top().get();
-                        let child_margin_bottom = child_data.get_margin_bottom().get();
+                        let child_margin_start = child_data.get_margin_start().get().to_dp(child.data().get_app_context());
+                        let child_margin_end = child_data.get_margin_end().get().to_dp(child.data().get_app_context());
+                        let child_margin_top = child_data.get_margin_top().get().to_dp(child.data().get_app_context());
+                        let child_margin_bottom = child_data.get_margin_bottom().get().to_dp(child.data().get_app_context());
                         let mut child_width = child_data.get_measure_parameter().width;
                         let mut child_height = child_data.get_measure_parameter().height;
                         let alignment = child_data

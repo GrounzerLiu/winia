@@ -1,19 +1,20 @@
 use crate::impl_property_redraw;
-use crate::shared::{Children, Gettable, Observable, Shared, SharedColor, SharedF32};
+use crate::shared::{Children, Gettable, Observable, Shared, SharedColor, SharedF32, SharedUnit};
 use crate::ui::app::AppContext;
 use crate::ui::Item;
 use proc_macro::item;
 use skia_safe::{Color, RRect, Rect, Vector};
 use skia_safe::paint::Style;
+use crate::ui::unit::Dp;
 
 #[derive(Clone)]
 struct RectangleProperty {
     color: SharedColor,
-    radius_top_left: SharedF32,
-    radius_top_right: SharedF32,
-    radius_bottom_right: SharedF32,
-    radius_bottom_left: SharedF32,
-    outline_width: SharedF32,
+    radius_top_left: SharedUnit,
+    radius_top_right: SharedUnit,
+    radius_bottom_right: SharedUnit,
+    radius_bottom_left: SharedUnit,
+    outline_width: SharedUnit,
     outline_color: SharedColor,
 }
 
@@ -24,11 +25,11 @@ pub struct Rectangle {
 }
 
 impl_property_redraw!(Rectangle, color, SharedColor);
-impl_property_redraw!(Rectangle, radius_top_left, SharedF32);
-impl_property_redraw!(Rectangle, radius_top_right, SharedF32);
-impl_property_redraw!(Rectangle, radius_bottom_right, SharedF32);
-impl_property_redraw!(Rectangle, radius_bottom_left, SharedF32);
-impl_property_redraw!(Rectangle, outline_width, SharedF32);
+impl_property_redraw!(Rectangle, radius_top_left, SharedUnit);
+impl_property_redraw!(Rectangle, radius_top_right, SharedUnit);
+impl_property_redraw!(Rectangle, radius_bottom_right, SharedUnit);
+impl_property_redraw!(Rectangle, radius_bottom_left, SharedUnit);
+impl_property_redraw!(Rectangle, outline_width, SharedUnit);
 impl_property_redraw!(Rectangle, outline_color, SharedColor);
 
 impl Rectangle {
@@ -38,11 +39,11 @@ impl Rectangle {
         let event_loop_proxy = app_context.event_loop_proxy();
         let property = Shared::new(RectangleProperty {
             color: color.into().layout_when_changed(&event_loop_proxy, id),
-            radius_top_left: SharedF32::new(0.0).layout_when_changed(&event_loop_proxy, id),
-            radius_top_right: SharedF32::new(0.0).layout_when_changed(&event_loop_proxy, id),
-            radius_bottom_right: SharedF32::new(0.0).layout_when_changed(&event_loop_proxy, id),
-            radius_bottom_left: SharedF32::new(0.0).layout_when_changed(&event_loop_proxy, id),
-            outline_width: SharedF32::new(0.0).layout_when_changed(&event_loop_proxy, id),
+            radius_top_left: SharedUnit::new(0.dp()).layout_when_changed(&event_loop_proxy, id),
+            radius_top_right: SharedUnit::new(0.dp()).layout_when_changed(&event_loop_proxy, id),
+            radius_bottom_right: SharedUnit::new(0.dp()).layout_when_changed(&event_loop_proxy, id),
+            radius_bottom_left: SharedUnit::new(0.dp()).layout_when_changed(&event_loop_proxy, id),
+            outline_width: SharedUnit::new(0.dp()).layout_when_changed(&event_loop_proxy, id),
             outline_color: SharedColor::new(Color::TRANSPARENT)
                 .layout_when_changed(&event_loop_proxy, id),
         });
@@ -53,11 +54,11 @@ impl Rectangle {
                 move |item, _, _| {
                     let property = property.value();
                     let color = property.color.get();
-                    let radius_top_left = property.radius_top_left.get();
-                    let radius_top_right = property.radius_top_right.get();
-                    let radius_bottom_right = property.radius_bottom_right.get();
-                    let radius_bottom_left = property.radius_bottom_left.get();
-                    let outline_width = property.outline_width.get();
+                    let radius_top_left = property.radius_top_left.get().to_dp(item.get_app_context());
+                    let radius_top_right = property.radius_top_right.get().to_dp(item.get_app_context());
+                    let radius_bottom_right = property.radius_bottom_right.get().to_dp(item.get_app_context());
+                    let radius_bottom_left = property.radius_bottom_left.get().to_dp(item.get_app_context());
+                    let outline_width = property.outline_width.get().to_dp(item.get_app_context());
                     let outline_color = property.outline_color.get();
                     let target_parameter = item.get_target_parameter();
                     target_parameter.set_color_param("color", color);
@@ -75,9 +76,9 @@ impl Rectangle {
                     let property = property.value();
                     let display_parameter = item.get_display_parameter().clone();
                     let padding_left = item.get_padding_left();
-                    let padding_top = item.get_padding_top().get();
+                    let padding_top = item.get_padding_top().get().to_dp(app_context.clone());
                     let padding_right = item.get_padding_right();
-                    let padding_bottom = item.get_padding_bottom().get();
+                    let padding_bottom = item.get_padding_bottom().get().to_dp(app_context.clone());
 
                     let color = display_parameter
                         .get_color_param("color")
@@ -131,7 +132,7 @@ impl Rectangle {
         Self { item, property }
     }
 
-    pub fn radius(self, radius: impl Into<SharedF32>) -> Self {
+    pub fn radius(self, radius: impl Into<SharedUnit>) -> Self {
         let radius = radius.into();
         self.radius_top_left(radius.clone())
             .radius_top_right(radius.clone())

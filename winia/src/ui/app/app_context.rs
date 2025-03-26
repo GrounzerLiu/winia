@@ -1,7 +1,5 @@
 use crate::dpi::LogicalSize;
-use crate::shared::{
-    Shared, SharedAnimationTrait, SharedBool, SharedUnSend, WeakShared, WeakSharedUnSend,
-};
+use crate::shared::{Settable, Shared, SharedAnimationTrait, SharedBool, SharedUnSend, WeakShared, WeakSharedUnSend};
 use crate::ui::theme::material_theme;
 use crate::ui::{Animation, Theme};
 use skia_safe::Color;
@@ -103,6 +101,7 @@ impl EventLoopProxy {
 #[derive(Clone)]
 pub struct AppContext {
     pub(crate) theme: Shared<Theme>,
+    pub(crate) font_scale: Shared<f32>,
     pub(crate) window: SharedUnSend<Option<Box<dyn SkiaWindow>>>,
     pub(crate) event_loop_proxy: EventLoopProxy,
     pub(crate) request_layout: Shared<bool>,
@@ -126,10 +125,17 @@ impl Default for AppContext {
     }
 }
 
+impl AsRef<AppContext> for AppContext {
+    fn as_ref(&self) -> &AppContext {
+        self
+    }
+}
+
 impl AppContext {
     pub fn new() -> Self {
         Self {
             theme: material_theme(Color::from_rgb(255, 0, 255), false).into(),
+            font_scale: 1.0.into(),
             window: None.into(),
             event_loop_proxy: EventLoopProxy::none(),
             request_layout: false.into(),
@@ -239,6 +245,15 @@ impl AppContext {
         });
         scale_factor as f32
     }
+    
+    pub fn font_scale(&self) -> f32 {
+        *self.font_scale.value()
+    }
+    
+    pub fn set_font_scale(&self, font_scale: f32) {
+        self.font_scale.set(font_scale);
+        self.request_layout();
+    }
 
     pub fn request_redraw(&self) {
         self.window(|window| {
@@ -249,9 +264,7 @@ impl AppContext {
     pub fn request_layout(&self) {
         self.request_layout
             .write(|request_layout| *request_layout = true);
-        self.window.value().as_ref().map(|window| {
-            window.request_redraw();
-        });
+        if let Some(window) = self.window.value().as_ref() { window.request_redraw(); }
     }
 
     // pub fn request_focus(&self, id: usize, focused: bool) {
@@ -278,6 +291,7 @@ impl AppContext {
 
 pub struct AppContextWeak {
     theme: WeakShared<Theme>,
+    font_scale: WeakShared<f32>,
     window: WeakSharedUnSend<Option<Box<dyn SkiaWindow>>>,
     event_loop_proxy: EventLoopProxyWeak,
     request_re_layout: WeakShared<bool>,
@@ -299,6 +313,7 @@ impl AppContext {
     pub fn weak_ref(&self) -> AppContextWeak {
         AppContextWeak {
             theme: self.theme.weak(),
+            font_scale: self.font_scale.weak(),
             window: self.window.weak(),
             event_loop_proxy: self.event_loop_proxy.weak(),
             request_re_layout: self.request_layout.weak(),
@@ -322,6 +337,7 @@ impl AppContextWeak {
     pub fn upgrade(&self) -> Option<AppContext> {
         Some(AppContext {
             theme: self.theme.upgrade()?,
+            font_scale: self.font_scale.upgrade()?,
             window: self.window.upgrade()?,
             event_loop_proxy: self.event_loop_proxy.upgrade()?,
             request_layout: self.request_re_layout.upgrade()?,
