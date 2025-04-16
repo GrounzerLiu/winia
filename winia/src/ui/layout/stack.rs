@@ -1,5 +1,5 @@
 use crate::shared::{Children, Gettable, Shared, SharedBool};
-use crate::ui::app::AppContext;
+use crate::ui::app::WindowContext;
 use crate::ui::item::{HorizontalAlignment, LogicalX, MeasureMode, Orientation, VerticalAlignment};
 use crate::ui::layout::GetAlignSelf;
 use crate::ui::Item;
@@ -10,41 +10,47 @@ struct StackProperty {
     constrain_children: SharedBool,
 }
 
-#[item(children:Children)]
+#[item(children:impl Into<Children>)]
 pub struct Stack {
     item: Item,
     property: Shared<StackProperty>,
 }
 
 impl Stack {
-    pub fn new(app_context: AppContext, children: Children) -> Self {
-        let property = Shared::new(StackProperty {
+    pub fn new(app_context: &WindowContext, children: impl Into<Children>) -> Self {
+        let property = Shared::from(StackProperty {
             constrain_children: true.into(),
         });
 
-        let item = Item::new(app_context, children);
+        let item = Item::new(app_context, children.into());
         item.data()
             .set_measure(|item, width_mode, height_mode| {
                 item.measure_children(width_mode, height_mode);
                 let mut child_max_width = 0.0_f32;
                 let mut child_max_height = 0.0_f32;
-                for child in item.get_children().items().iter() {
-                    let child_measure_parameter = child.data().clone_measure_parameter();
-                    let child_margin_horizontal = child.data().get_margin(Orientation::Horizontal);
-                    let child_margin_vertical = child.data().get_margin(Orientation::Vertical);
+                for child in item.get_children().lock().iter() {
+                    let mut child_data = child.data();
+                    let child_margin_horizontal = child_data.get_margin(Orientation::Horizontal);
+                    let child_margin_vertical = child_data.get_margin(Orientation::Vertical);
+                    let child_measure_parameter = child_data.get_measure_parameter();
                     child_max_width = child_max_width
                         .max(child_measure_parameter.width + child_margin_horizontal);
                     child_max_height = child_max_height
                         .max(child_measure_parameter.height + child_margin_vertical);
                 }
+                
+                let padding_horizontal = item.get_padding(Orientation::Horizontal);
+                let padding_vertical = item.get_padding(Orientation::Vertical);
+                
                 let width = match width_mode {
                     MeasureMode::Specified(width) => width,
-                    MeasureMode::Unspecified(width) => width.min(child_max_width),
+                    MeasureMode::Unspecified(width) => width.min(child_max_width + padding_horizontal),
                 };
                 let height = match height_mode {
                     MeasureMode::Specified(height) => height,
-                    MeasureMode::Unspecified(height) => height.min(child_max_height),
+                    MeasureMode::Unspecified(height) => height.min(child_max_height + padding_vertical),
                 };
+                
                 let measure_parameter = item.get_measure_parameter();
                 measure_parameter.width = width;
                 measure_parameter.height = height;
@@ -61,7 +67,7 @@ impl Stack {
                     let padding_bottom = item.get_padding_bottom().get();
 
                     let align_content = item.get_align_content().get();
-                    let constrain_children = property.value().constrain_children.get();
+                    let constrain_children = property.lock().constrain_children.get();
 
                     item.for_each_child_mut(|child| {
                         let mut child_data = child.data();

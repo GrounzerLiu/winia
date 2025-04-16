@@ -6,11 +6,11 @@ members = [
     "skiwin",
     "material_color_utilities",
     "exmaple2",
-    "winia/proc-macro"]
+    "winia/proc-macro", "winia_test"]
 
 default-members = ["winia"]
 
 [workspace.dependencies]
 winit = "0.30.9"
-skia-safe = "0.82.0"
+skia-safe = "0.84.0"
 parking_lot = "0.12.3"

@@ -1,4 +1,4 @@
-use crate::core::generate_id;
+/*use crate::core::generate_id;
 use crate::shared::{Observable, Removal};
 use crate::ui::Item;
 use crate::OptionalInvoke;
@@ -34,9 +34,14 @@ impl Items {
             let width = display_parameter.width;
             let height = display_parameter.height;
 
-            let x_overlap = x < window_size.0 && x + width > 0.0;
-            let y_overlap = y < window_size.1 && y + height > 0.0;
-            x_overlap && y_overlap
+            !(
+                x + width < 0.0
+                    || y + height < 0.0
+                    || x > window_size.0
+                    || y > window_size.1
+                    || width <= 0.0
+                    || height <= 0.0
+            )
         })
     }
 
@@ -271,4 +276,55 @@ macro_rules! children {
             children
         }
     );
+}
+*/
+use std::ops::Add;
+use crate::shared::{Shared, SharedUnSend};
+use crate::ui::Item;
+
+pub type Children = Shared<Vec<Item>>;
+
+impl Children {
+    pub fn new() -> Self {
+        Shared::from_static(Vec::new())
+    }
+    pub fn add(&mut self, item: Item) {
+        self.lock().push(item);
+        self.notify();
+    }
+
+    pub fn push(&mut self, item: Item) {
+        self.lock().push(item);
+        self.notify();
+    }
+
+    pub fn remove(&mut self, index: usize) {
+        self.lock().remove(index);
+        self.notify();
+    }
+
+    pub fn remove_by_id(&mut self, id: usize) {
+        {
+            let mut items = self.lock();
+            items.retain(|item| item.data().get_id() != id);
+        }
+        self.notify();
+    }
+}
+
+impl Add<Item> for Children {
+    type Output = Self;
+
+    fn add(self, rhs: Item) -> Self::Output {
+        self.lock().push(rhs);
+        self
+    }
+}
+
+impl From<Item> for Children {
+    fn from(item: Item) -> Self {
+        let mut children = Self::new();
+        children.push(item);
+        children
+    }
 }

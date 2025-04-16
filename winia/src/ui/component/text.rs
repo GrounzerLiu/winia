@@ -1,10 +1,11 @@
+use std::cmp::PartialEq;
 use crate::dpi::{LogicalPosition, LogicalSize, Position};
 use crate::shared::{
     Children, Gettable, Observable, Settable, Shared, SharedBool, SharedColor, SharedF32,
     SharedText, SharedUnSend,
 };
 use crate::text::StyledText;
-use crate::ui::app::AppContext;
+use crate::ui::app::WindowContext;
 use crate::ui::item::{
     ClickSource, HorizontalAlignment, ImeAction, LayoutDirection, LogicalX, MeasureMode,
     Orientation, PointerState, VerticalAlignment,
@@ -20,6 +21,7 @@ use std::time::Duration;
 use winit::dpi::Size;
 use winit::event::{ElementState, MouseButton};
 use winit::keyboard::{Key, NamedKey};
+use crate::ui::theme::color;
 
 pub mod text_style {
     pub static FONT_SIZE: &str = "font_size";
@@ -64,12 +66,12 @@ struct TextContext {
 
 impl TextContext {
     pub fn has_paragraph(&self) -> bool {
-        self.paragraph.value().is_some()
+        self.paragraph.lock().is_some()
     }
 
     pub fn check_text_changed(&mut self) {
         if self.is_text_changed.get() {
-            self.paragraph.set(None);
+            // self.paragraph.set(None);
             self.is_text_changed.set(false);
         }
     }
@@ -83,12 +85,12 @@ pub struct Text {
 }
 
 impl Text {
-    pub fn new(app_context: AppContext, text: impl Into<SharedText>) -> Self {
-        let property = Shared::new(TextProperty {
+    pub fn new(window_context: &WindowContext, text: impl Into<SharedText>) -> Self {
+        let property = Shared::from(TextProperty {
             text: text.into(),
             editable: true.into(),
             selectable: true.into(),
-            color: Color::BLACK.into(),
+            color: window_context.theme().lock().get_color(color::ON_SURFACE).unwrap_or(Color::BLACK).into(),
             font_size: 24.0.into(),
         });
 
@@ -101,24 +103,24 @@ impl Text {
             selection: (0..0).into(),
         };
 
-        let item = Item::new(app_context.clone(), Children::new());
+        let item = Item::new(window_context, Children::new());
 
         item.data()
             .set_measure({
                 let property = property.clone();
-                let mut context = context.clone();
+                let context = context.clone();
                 move |item, width_mode, height_mode| {
-                    let property = property.value();
+                    let property = property.lock();
                     let text_style = get_text_style(&property);
 
                     let padding_horizontal = item.get_padding(Orientation::Horizontal);
                     let padding_vertical = item.get_padding(Orientation::Vertical);
 
                     // Get text layout width and height
-                    context.check_text_changed();
+                    // context.check_text_changed();
                     let (text_layout_width, text_layout_height) = {
-                        let mut text = property.text.value();
-                        if !context.has_paragraph() {
+                        let mut text = property.text.lock();
+                        if context.is_text_changed.get() {
                             let text_align = match item.get_layout_direction().get() {
                                 LayoutDirection::LTR => TextAlign::Left,
                                 LayoutDirection::RTL => TextAlign::Right,
@@ -132,11 +134,11 @@ impl Text {
                                 }
                             };
                             let paragraph =
-                                text.create_paragraph(text_style.clone(), max_width, text_align);
+                                text.create_paragraph(&text_style, max_width, text_align);
                             context.paragraph.set(Some(paragraph));
                         } else {
                             let shared_paragraph = context.paragraph.clone();
-                            let mut paragraph = shared_paragraph.value();
+                            let mut paragraph = shared_paragraph.lock();
                             let width = match width_mode {
                                 MeasureMode::Specified(width) => {
                                     item.clamp_width(width) - padding_horizontal
@@ -148,8 +150,9 @@ impl Text {
                             paragraph.as_mut().unwrap().layout(width);
                         }
 
+                        context.is_text_changed.set(false);
                         let shared_paragraph = context.paragraph.clone();
-                        let paragraph = shared_paragraph.value();
+                        let paragraph = shared_paragraph.lock();
                         let paragraph_ref = paragraph.as_ref().unwrap();
                         let text_layout = text.get_text_layout(paragraph_ref);
                         (text_layout.width(), text_layout.height())
@@ -193,22 +196,23 @@ impl Text {
                 let mut context = context.clone();
                 let property = property.clone();
                 move |item, width, _height| {
-                    context.check_text_changed();
-                    let property = property.value();
+                    // context.check_text_changed();
+                    let property = property.lock();
                     let text_style = get_text_style(&property);
                     let max_width = width - item.get_padding(Orientation::Horizontal);
 
-                    let mut text = property.text.value();
+                    let mut text = property.text.lock();
 
-                    if !context.has_paragraph() {
+                    if context.is_text_changed.get() {
                         let paragraph = text.create_paragraph(
-                            text_style.clone(),
+                            &text_style,
                             max_width,
                             TextAlign::Justify,
                         );
+                        context.is_text_changed.set(false);
                         context.paragraph.set(Some(paragraph));
                     } else {
-                        let mut paragraph = context.paragraph.value();
+                        let mut paragraph = context.paragraph.lock();
                         paragraph.as_mut().unwrap().layout(max_width);
                     }
                 }
@@ -217,25 +221,25 @@ impl Text {
                 let mut context = context.clone();
                 let property = property.clone();
                 move |item, ime_action| {
-                    let mut property = property.value();
-                    let mut selection = context.selection.value();
-                    let mut composing = context.composing.value();
-                    let text = &mut property.text;
+                    let mut property = property.lock();
+                    let mut selection = context.selection.lock();
+                    let mut composing = context.composing.lock();
+                    let text = property.text.clone();
                     match ime_action {
                         ImeAction::Enabled => {}
                         ImeAction::Enter => {
                             if selection.start != selection.end {
-                                text.value().remove(selection.clone());
+                                text.lock().remove(selection.clone());
                                 selection.end = selection.start;
                             }
-                            text.value().insert_str(selection.start, "\n");
+                            text.lock().insert_str(selection.start, "\n");
                             let new_index = selection.start + 1;
                             selection.start = new_index;
                             selection.end = new_index;
                         }
                         ImeAction::Delete => {
                             if selection.start != selection.end {
-                                text.value().remove(selection.clone());
+                                text.lock().remove(selection.clone());
                                 selection.end = selection.start;
                                 return;
                             }
@@ -244,7 +248,7 @@ impl Text {
                                 return;
                             }
 
-                            let mut text = property.text.value();
+                            let mut text = property.text.lock();
 
                             let glyph_index = text.byte_index_to_glyph_index(selection.start);
                             let prev_glyph_index = text.glyph_index_to_byte_index(glyph_index - 1);
@@ -260,14 +264,14 @@ impl Text {
 
                             if let Some((composing_range, old_selection_range)) = composing.as_ref()
                             {
-                                text.value().remove(composing_range.clone());
+                                text.lock().remove(composing_range.clone());
                                 selection.start = old_selection_range.start;
                                 selection.end = old_selection_range.end;
                                 *composing = None;
                             }
 
                             if let Some((start, end)) = range {
-                                text.value().insert_str(selection.start, &pr_text);
+                                text.lock().insert_str(selection.start, &pr_text);
                                 *composing = Some((
                                     selection.start..(selection.start + pr_text.len()),
                                     selection.clone(),
@@ -282,33 +286,35 @@ impl Text {
                         ImeAction::Commit(commit_text) => {
                             let commit_text_len = commit_text.len();
                             if selection.start != selection.end {
-                                text.value().remove(selection.clone());
+                                text.lock().remove(selection.clone());
                                 selection.end = selection.start;
                             }
-                            text.value().insert_str(selection.start, &commit_text);
+                            text.lock().insert_str(selection.start, &commit_text);
                             let new_index = selection.start + commit_text_len;
                             selection.start = new_index;
                             selection.end = new_index;
                         }
                         ImeAction::Disabled => {}
                     }
-                    context.is_text_changed.set(true);
-                    item.get_app_context().request_layout();
+                    // context.is_text_changed.set(true);
+                    text.notify();
+                    // item.get_window_context().request_layout();
                 }
             })
             .set_draw({
                 let property = property.clone();
                 let mut context = context.clone();
                 move |item, canvas| {
-                    context.check_text_changed();
-                    let property = property.value();
-                    let mut text = property.text.value();
+                    // context.check_text_changed();
+                    let property = property.lock();
+                    let mut text = property.text.lock();
 
                     if !context.has_paragraph() {
                         return;
                     }
+                    
                     let shared_paragraph = context.paragraph.clone();
-                    let paragraph = shared_paragraph.value();
+                    let paragraph = shared_paragraph.lock();
                     let paragraph_ref = paragraph.as_ref().unwrap();
                     let text_layout = text.get_text_layout(paragraph_ref);
 
@@ -322,9 +328,9 @@ impl Text {
                     let display_parameter = item.get_display_parameter();
                     let width = display_parameter.width;
                     let height = display_parameter.height;
-                    let show_cursor = *context.show_cursor.value();
-                    let selection = context.selection.value().clone();
-                    let composing = context.composing.value().clone();
+                    let show_cursor = *context.show_cursor.lock();
+                    let selection = context.selection.lock().clone();
+                    let composing = context.composing.lock().clone();
 
                     let text_layout_width = text_layout.width();
                     let text_layout_height = text_layout.height();
@@ -344,88 +350,83 @@ impl Text {
                         VerticalAlignment::Center => (height - text_layout_height) / 2.0,
                         VerticalAlignment::Bottom => height - text_layout_height - padding_bottom,
                     };
+                    if !context.is_text_changed.get() {
+                        if selection.start != selection.end {
+                            text_layout
+                                .get_rects_for_range(selection.clone())
+                                .iter()
+                                .for_each(|text_box| {
+                                    let rect = text_box.rect;
+                                    let x = paragraph_x + rect.x();
+                                    let y = paragraph_y + rect.y();
+                                    let w = rect.width();
+                                    let h = rect.height();
+                                    let rect = Rect::from_xywh(
+                                        x.logical_value() + display_parameter.x(),
+                                        y + display_parameter.y(),
+                                        w,
+                                        h,
+                                    );
+                                    canvas.draw_rect(
+                                        rect,
+                                        Paint::default().set_anti_alias(true).set_color(Color::BLUE),
+                                    );
+                                });
+                        }
 
-                    if selection.start != selection.end {
-                        text_layout
-                            .get_rects_for_range(selection.clone())
-                            .iter()
-                            .for_each(|text_box| {
-                                let rect = text_box.rect;
-                                let x = paragraph_x + rect.x();
-                                let y = paragraph_y + rect.y();
-                                let w = rect.width();
-                                let h = rect.height();
-                                let rect = Rect::from_xywh(
-                                    x.logical_value() + display_parameter.x(),
-                                    y + display_parameter.y(),
-                                    w,
-                                    h,
-                                );
-                                canvas.draw_rect(
-                                    rect,
-                                    Paint::default().set_anti_alias(true).set_color(Color::BLUE),
-                                );
-                            });
+                        if let Some((composing_range, _)) = composing {
+                            text_layout
+                                .get_rects_for_range(composing_range.clone())
+                                .iter()
+                                .for_each(|text_box| {
+                                    let rect = text_box.rect;
+                                    let x = paragraph_x + rect.x();
+                                    let y = paragraph_y + rect.bottom;
+                                    let w = rect.width();
+                                    let h = 1.0;
+                                    let rect = Rect::from_xywh(
+                                        x.logical_value() + display_parameter.x(),
+                                        y + display_parameter.y(),
+                                        w,
+                                        h,
+                                    );
+                                    canvas.draw_rect(
+                                        rect,
+                                        Paint::default().set_anti_alias(true).set_color(Color::RED),
+                                    );
+                                });
+                        }
                     }
-
-                    if let Some((composing_range, _)) = composing {
-                        text_layout
-                            .get_rects_for_range(composing_range.clone())
-                            .iter()
-                            .for_each(|text_box| {
-                                let rect = text_box.rect;
-                                let x = paragraph_x + rect.x();
-                                let y = paragraph_y + rect.bottom;
-                                let w = rect.width();
-                                let h = 1.0;
-                                let rect = Rect::from_xywh(
-                                    x.logical_value() + display_parameter.x(),
-                                    y + display_parameter.y(),
-                                    w,
-                                    h,
-                                );
-                                canvas.draw_rect(
-                                    rect,
-                                    Paint::default().set_anti_alias(true).set_color(Color::RED),
-                                );
-                            });
-                    }
-
+                    
                     text_layout.draw(
                         canvas,
                         paragraph_x.logical_value() + display_parameter.x(),
                         paragraph_y + display_parameter.y(),
                     );
 
-                    if property.editable.get() && selection.start == selection.end {
-                        if show_cursor {
-                            if let Some((x, y, h)) =
-                                text_layout.get_cursor_position(selection.start)
-                            {
-                                let mut x = x + display_parameter.x();
-                                if x < display_parameter.x() {
-                                    x = display_parameter.x();
-                                }
+                    if !context.is_text_changed.get() && property.editable.get() && selection.start == selection.end && show_cursor {
+                        if let Some((x, y, h)) =
+                            text_layout.get_cursor_position(selection.start)
+                        {
+                            let mut x = x + display_parameter.x();
+                            if x < display_parameter.x() {
+                                x = display_parameter.x();
+                            }
 
-                                if x >= display_parameter.x() + display_parameter.width - 2.0 {
-                                    x = display_parameter.x() + display_parameter.width - 2.0;
-                                }
-                                let y = y + display_parameter.y();
-                                let rect = Rect::from_xywh(x, y, 2.0, h);
-                                canvas.draw_rect(
-                                    &rect,
-                                    Paint::default().set_anti_alias(true).set_color(0xffff0000),
-                                );
-                                if item.get_focused().get() {
-                                    item.get_app_context().window(|window| {
-                                        window.set_ime_cursor_area(
-                                            Position::Logical(LogicalPosition::new(
-                                                x as f64, y as f64,
-                                            )),
-                                            Size::Logical(LogicalSize::new(0.0, 0.0)),
-                                        )
-                                    });
-                                }
+                            if x >= display_parameter.x() + display_parameter.width - 2.0 {
+                                x = display_parameter.x() + display_parameter.width - 2.0;
+                            }
+                            let y = y + display_parameter.y();
+                            let rect = Rect::from_xywh(x, y, 2.0, h);
+                            canvas.draw_rect(
+                                &rect,
+                                Paint::default().set_anti_alias(true).set_color(0xffff0000),
+                            );
+                            if item.get_focused().get() {
+                                item.get_window_context().window.lock().set_ime_cursor_area(
+                                    Position::Logical(LogicalPosition::new(x as f64, y as f64)),
+                                    Size::Logical(LogicalSize::new(0.0, 0.0)),
+                                )
                             }
                         }
                     }
@@ -434,27 +435,27 @@ impl Text {
             .set_keyboard_input({
                 let context = context.clone();
                 let property = property.clone();
-                move |item, device_id, event, is_synthetic| {
-                    if !property.value().editable.get() || !item.get_focused().get() {
+                move |item, keyboard_input| {
+                    if !property.lock().editable.get() || !item.get_focused().get() {
                         return false;
                     }
-
+                    let event = &keyboard_input.key_event;
                     if event.state == ElementState::Pressed {
-                        match event.logical_key {
+                        match &event.logical_key {
                             Key::Named(key) => match key {
                                 NamedKey::Backspace => {
-                                    item.ime_input(ImeAction::Delete);
+                                    item.ime_input(&ImeAction::Delete);
                                     return true;
                                 }
                                 NamedKey::Enter => {
-                                    item.ime_input(ImeAction::Enter);
+                                    item.ime_input(&ImeAction::Enter);
                                     return true;
                                 }
                                 NamedKey::ArrowLeft => {
-                                    let mut selection = context.selection.value();
+                                    let mut selection = context.selection.lock();
                                     if selection.start > 0 {
-                                        let property = property.value();
-                                        let mut text = property.text.value();
+                                        let property = property.lock();
+                                        let mut text = property.text.lock();
                                         let glyph_index =
                                             text.byte_index_to_glyph_index(selection.start);
                                         let prev_glyph_index =
@@ -462,13 +463,13 @@ impl Text {
                                         selection.start = prev_glyph_index;
                                         selection.end = prev_glyph_index;
                                     }
-                                    item.get_app_context().request_layout();
+                                    item.get_window_context().request_layout();
                                     return true;
                                 }
                                 NamedKey::ArrowRight => {
-                                    let mut selection = context.selection.value();
-                                    let property = property.value();
-                                    let mut text = property.text.value();
+                                    let mut selection = context.selection.lock();
+                                    let property = property.lock();
+                                    let mut text = property.text.lock();
                                     if selection.start < text.len() {
                                         let glyph_index =
                                             text.byte_index_to_glyph_index(selection.start);
@@ -480,7 +481,7 @@ impl Text {
                                     return true;
                                 }
                                 NamedKey::Space => {
-                                    item.ime_input(ImeAction::Commit(" ".to_string()));
+                                    item.ime_input(&ImeAction::Commit(" ".to_string()));
                                     return true;
                                 }
                                 NamedKey::Escape => {
@@ -489,7 +490,7 @@ impl Text {
                                 _ => {}
                             },
                             Key::Character(str) => {
-                                item.ime_input(ImeAction::Commit(str.to_string()));
+                                item.ime_input(&ImeAction::Commit(str.to_string()));
                                 return true;
                             }
                             Key::Unidentified(_) => {}
@@ -504,13 +505,14 @@ impl Text {
                 let context = context.clone();
                 let property = property.clone();
                 move |item, event| {
-                    let property = property.value();
+                    let property = property.lock();
                     if !property.editable.get() || !context.has_paragraph() {
                         return;
                     }
-                    let mut text = property.text.value();
+                    item.get_focused().set(true);
+                    let mut text = property.text.lock();
                     let shared_paragraph = context.paragraph.clone();
-                    let paragraph = shared_paragraph.value();
+                    let paragraph = shared_paragraph.lock();
                     let paragraph_ref = paragraph.as_ref().unwrap();
                     let text_layout = text.get_text_layout(paragraph_ref);
 
@@ -529,17 +531,17 @@ impl Text {
 
                     match event.pointer_state {
                         PointerState::Started => {
-                            let mut selection = context.selection.value();
+                            let mut selection = context.selection.lock();
                             selection.start = index;
                             selection.end = index;
-                            item.get_app_context().request_redraw();
-                            *context.show_cursor.value() = true;
+                            item.get_window_context().request_redraw();
+                            *context.show_cursor.lock() = true;
                         }
                         PointerState::Moved => {
-                            let mut selection = context.selection.value();
+                            let mut selection = context.selection.lock();
                             selection.end = index;
-                            item.get_app_context().request_redraw();
-                            *context.show_cursor.value() = true;
+                            item.get_window_context().request_redraw();
+                            *context.show_cursor.lock() = true;
                         }
                         PointerState::Ended => {}
                         PointerState::Cancelled => {}
@@ -554,7 +556,7 @@ impl Text {
                 }
             })
             .set_focus_event({
-                let app_context = app_context.clone();
+                let app_context = window_context.clone();
                 move |item, focused| {
                     let display_parameter = item.get_display_parameter();
                     let x = display_parameter.x() as f64;
@@ -563,14 +565,12 @@ impl Text {
                     let height = display_parameter.height as f64;
                     let padding_top = item.get_padding_top().get() as f64;
                     let padding_left = item.get_padding_start().get() as f64;
-                    app_context.window(|window| {
-                        window.set_ime_allowed(focused);
-                        window.set_ime_cursor_area(
-                            Position::Logical(LogicalPosition::new(x - width, y)),
-                            Size::Logical(LogicalSize::new(0.0, 0.0)),
-                        );
-                    });
-                    item.get_app_context()
+                    app_context.window().set_ime_allowed(focused);
+                    app_context.window().set_ime_cursor_area(
+                        Position::Logical(LogicalPosition::new(x - width, y)),
+                        Size::Logical(LogicalSize::new(0.0, 0.0)),
+                    );
+                    item.get_window_context()
                         .create_timer(item.get_id(), Duration::from_millis(500));
                 }
             })
@@ -578,17 +578,33 @@ impl Text {
                 let context = context.clone();
                 move |item, id| {
                     if id == item.get_id() {
-                        let mut show_cursor = context.show_cursor.value();
+                        let mut show_cursor = context.show_cursor.lock();
                         *show_cursor = show_cursor.not();
-                        item.get_app_context().request_redraw();
+                        item.get_window_context().request_redraw();
                         if item.get_focused().get() {
-                            item.get_app_context()
+                            item.get_window_context()
                                 .create_timer(item.get_id(), Duration::from_millis(500));
                         }
                     }
                     id == item.get_id()
                 }
             });
+
+        {
+            let id = item.data().get_id();
+            let mut property = property.lock();
+
+            let text_context = context.clone();
+            let event_loop_proxy = item.data().get_window_context().event_loop_proxy().clone();
+            property.text.add_specific_observer(
+                id,
+                move |_text: &mut StyledText| {
+                    // println!("Text changed: {}", text);
+                    text_context.is_text_changed.set(true);
+                    event_loop_proxy.request_layout();
+                },
+            );
+        }
 
         Self {
             item,
@@ -600,11 +616,11 @@ impl Text {
     pub fn text(self, text: impl Into<SharedText>) -> Self {
         {
             let id = self.item.data().get_id();
-            let mut property = self.property.value();
+            let mut property = self.property.lock();
             property.text.remove_observer(id);
 
-            let mut text_context = self.text_context.clone();
-            let event_loop_proxy = self.item.data().get_app_context().event_loop_proxy();
+            let text_context = self.text_context.clone();
+            let event_loop_proxy = self.item.data().get_window_context().event_loop_proxy().clone();
             property.text = text.into();
             property.text.add_specific_observer(
                 id,
@@ -616,10 +632,54 @@ impl Text {
         }
         self
     }
+
+    pub fn color(self, color: impl Into<SharedColor>) -> Self {
+        {
+            let id = self.item.data().get_id();
+            let mut property = self.property.lock();
+            property.color.remove_observer(id);
+
+            let text_context = self.text_context.clone();
+            let event_loop_proxy = self.item.data().get_window_context().event_loop_proxy().clone();
+            property.color = color.into();
+            property.color.add_observer(
+                id,
+                Box::new(move || {
+                    event_loop_proxy.request_redraw();
+                    text_context.is_text_changed.set(true);
+                }),
+            );
+        }
+        self
+    }
+
+    pub fn font_size(self, font_size: impl Into<SharedF32>) -> Self {
+        {
+            let id = self.item.data().get_id();
+            let mut property = self.property.lock();
+            property.font_size.remove_observer(id);
+
+            let text_context = self.text_context.clone();
+            let event_loop_proxy = self.item.data().get_window_context().event_loop_proxy().clone();
+            property.font_size = font_size.into();
+            property.font_size.add_observer(
+                id,
+                Box::new(move || {
+                    event_loop_proxy.request_redraw();
+                    text_context.is_text_changed.set(true);
+                }),
+            );
+        }
+        self
+    }
 }
 
-impl_property_redraw!(Text, color, SharedColor);
-impl_property_layout!(Text, font_size, SharedF32);
+
+
+
+// impl_property_layout!(Text, color, SharedColor);
+// impl_property_layout!(Text, font_size, SharedF32);
+impl_property_redraw!(Text, editable, SharedBool);
 
 fn get_text_style(property: &TextProperty) -> TextStyle {
     let color = property.color.get();

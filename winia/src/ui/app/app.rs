@@ -2,11 +2,13 @@ use parking_lot::Mutex;
 use skia_safe::Color;
 use skiwin::vulkan::VulkanSkiaWindow;
 use skiwin::SkiaWindow;
+use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::Instant;
+use skia_safe::textlayout::{ParagraphBuilder, ParagraphStyle, TextAlign};
 use winit::application::ApplicationHandler;
-use winit::dpi::{LogicalSize, PhysicalPosition, Size};
+use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize, Size};
 use winit::event::{
     ElementState, Ime, Modifiers, MouseButton, MouseScrollDelta, StartCause, Touch, TouchPhase,
     WindowEvent,
@@ -15,25 +17,11 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy}
 use winit::keyboard::ModifiersState;
 use winit::window::{WindowAttributes, WindowId};
 
-macro_rules! clone {
-    ($t:ty, $( $x:ident ),+) => {
-        impl Clone for $t {
-            fn clone(&self) -> Self {
-                Self{
-                    $(
-                        $x: self.$x.clone(),
-                    )*
-                }
-            }
-        }
-    }
-}
-
 macro_rules! property_get {
-    ($st:ident, $($name:ident, $ty:ty),+) =>{
+    ($st:ident, $($name:ident, $fn_name:ident, $ty:ty),+) =>{
         impl $st{
             $(
-                pub fn $name(&self) -> $ty {
+                pub fn $fn_name(&self) -> $ty {
                     self.$name.clone()
                 }
             )*
@@ -41,8 +29,24 @@ macro_rules! property_get {
     }
 }
 
-pub struct AppProperty {
+macro_rules! property_set {
+    ($st:ident, $($name:ident: $ty:ty),+) =>{
+        impl $st{
+            $(
+                pub fn $name(mut self, value: impl Into<$ty>) -> Self {
+                    self.$name = value.into();
+                    self
+                }
+            )*
+        }
+    }
+}
+
+#[derive(Clone, AsRef)]
+pub struct 
+WindowAttr {
     title: Shared<String>,
+    preferred_size: Option<(f32, f32)>,
     min_width: Shared<f32>,
     min_height: Shared<f32>,
     max_width: Shared<f32>,
@@ -50,21 +54,36 @@ pub struct AppProperty {
     maximized: SharedBool,
 }
 
-impl Default for AppProperty {
+impl Into<WindowAttributes> for WindowAttr {
+    fn into(self) -> WindowAttributes {
+        let mut window_attributes = WindowAttributes::default();
+        self.apply_to_window_attributes(&mut window_attributes);
+        window_attributes
+    }
+}
+
+impl Default for WindowAttr {
     fn default() -> Self {
         Self {
             title: Shared::from_static("Winia".to_string()),
+            preferred_size: None,
             min_width: 0.0.into(),
             min_height: 0.0.into(),
-            max_width: f32::MAX.into(),
-            max_height: f32::MAX.into(),
+            max_width: (u16::MAX as f32).into(),
+            max_height: (u16::MAX as f32).into(),
             maximized: false.into(),
         }
     }
 }
 
-impl AppProperty {
-    pub(crate) fn apply_to_window_attributes(&self, window_attributes: &mut WindowAttributes) {
+impl WindowAttr {
+    fn apply_to_window_attributes(&self, window_attributes: &mut WindowAttributes) {
+        if let Some((width, height)) = self.preferred_size {
+            window_attributes.inner_size = Some(Size::Logical(LogicalSize::new(
+                width.clamp(0.0, u16::MAX as f32) as f64,
+                height.clamp(0.0, u16::MAX as f32) as f64,
+            )));
+        }
         window_attributes.title = self.title.get();
         window_attributes.min_inner_size = Some(Size::Logical(LogicalSize::new(
             self.min_width.get().clamp(0.0, u16::MAX as f32) as f64,
@@ -76,310 +95,242 @@ impl AppProperty {
         )));
         window_attributes.maximized = self.maximized.get();
     }
+
+    pub fn preferred_size(mut self, width: f32, height: f32) -> Self {
+        self.preferred_size = Some((width, height));
+        self
+    }
 }
 
-clone!(
-    AppProperty,
-    title,
-    min_width,
-    min_height,
-    max_width,
-    max_height,
-    maximized
-);
-
 property_get!(
-    AppProperty,
+    WindowAttr,
     title,
+    get_title,
     Shared<String>,
     min_width,
+    get_min_width,
     Shared<f32>,
     min_height,
+    get_min_height,
     Shared<f32>,
     max_width,
+    get_max_width,
     Shared<f32>,
     max_height,
+    get_max_height,
     Shared<f32>,
     maximized,
+    get_maximized,
     SharedBool
 );
 
-pub struct App {
-    app_context: AppContext,
-    app_property: Arc<Mutex<AppProperty>>,
-    event_loop_proxy: Option<EventLoopProxy<UserEvent>>,
-    item_generator: Option<Box<dyn FnOnce(AppContext, AppProperty) -> Item>>,
-    item: Option<Item>,
-    window_attributes: WindowAttributes,
-    request_layout: bool,
+property_set!(
+    WindowAttr,
+    title: Shared<String>,
+    min_width: Shared<f32>,
+    min_height: Shared<f32>,
+    max_width: Shared<f32>,
+    max_height: Shared<f32>,
+    maximized: SharedBool
+);
+
+pub struct WindowController {
+    window_context: WindowContext,
+    window_attr: Arc<Mutex<WindowAttr>>,
+    event_loop_proxy: EventLoopProxy<Event>,
+    // item_generator: Option<Box<dyn FnOnce(WindowContext, WindowAttr) -> Item>>,
+    item: Item,
+    children: Children,
+    // window_attributes: WindowAttributes,
     cursor_x: f32,
     cursor_y: f32,
     pressed_mouse_buttons: Vec<MouseButton>,
     modifiers: Option<Modifiers>,
 }
 
-impl App {
-    pub fn new(item_generator: impl FnOnce(AppContext, AppProperty) -> Item + 'static) -> Self {
-        let app_property = AppProperty::default();
-        let title = app_property.title.clone();
-        let min_width = app_property.min_width.clone();
-        let min_height = app_property.min_height.clone();
-        let max_width = app_property.max_width.clone();
-        let max_height = app_property.max_height.clone();
-        let maximized = app_property.maximized.clone();
-        Self {
-            app_context: AppContext::new(),
-            app_property: Arc::new(Mutex::new(app_property)),
-            event_loop_proxy: None,
-            item_generator: Some(Box::new(item_generator)),
-            item: None,
-            cursor_x: 0.0,
-            cursor_y: 0.0,
-            pressed_mouse_buttons: Vec::new(),
-            window_attributes: WindowAttributes::default().with_transparent(true),
-            request_layout: true,
-            modifiers: None,
-        }
-        .title(title)
-        .min_width(min_width)
-        .min_height(min_height)
-        .max_width(max_width)
-        .max_height(max_height)
-        .maximized(maximized)
-    }
-
-    fn id(&self) -> usize {
-        std::ptr::addr_of!(self) as usize
-    }
-
-    pub(crate) fn window(&self, f: impl FnOnce(&mut dyn SkiaWindow)) {
-        self.app_context.window(f);
-    }
-
-    pub(crate) fn set_event_loop_proxy(&mut self, event_loop_proxy: EventLoopProxy<UserEvent>) {
-        self.event_loop_proxy = Some(event_loop_proxy);
-    }
-
-    /*    pub(crate) fn app_context_weak(&self) -> AppContextWeak {
-        self.app_context().weak()
-    }*/
-
+impl WindowController {
     pub fn re_layout(&mut self) {
-        let mut window_size: Option<(f32, f32)> = None;
-        self.window(|window| {
-            let scale_factor = window.scale_factor() as f32;
-            let size = window.inner_size();
-            let size = (
-                size.width as f32 / scale_factor,
-                size.height as f32 / scale_factor,
-            );
-            window_size = Some(size);
-        });
-        if let Some(size) = window_size {
-            if let Some(item) = &mut self.item {
-                item.data().measure(
-                    MeasureMode::Specified(size.0),
-                    MeasureMode::Specified(size.1),
-                );
-                item.data().dispatch_layout(0.0, 0.0, size.0, size.1)
-            }
-        }
+        let (width, height) = self.window_context.window_size();
+        self.item.data().measure(
+            MeasureMode::Specified(width),
+            MeasureMode::Specified(height),
+        );
+        self.item.data().dispatch_layout(0.0, 0.0, width, height)
     }
 
-    pub fn preferred_size(mut self, width: usize, height: usize) -> Self {
-        self.window_attributes.inner_size =
-            Some(Size::Logical(LogicalSize::new(width as f64, height as f64)));
-        self
+    pub fn add_layer(&mut self, item: Item) {
+        self.children.add(item);
     }
 
-    pub fn title(self, title: impl Into<Shared<String>>) -> Self {
-        let mut title = title.into();
-        self.app_property.lock().title = title.clone();
-        let event_loop_proxy = self.app_context.event_loop_proxy.clone();
-        title.add_specific_observer(self.id(), move |title| {
-            let title = title.clone();
-            event_loop_proxy.set_window_attribute(move |window| {
-                if let Some(window) = window {
-                    window.set_title(title.as_str());
-                }
-            })
-        });
-        self
-    }
-
-    pub fn min_width(self, min_width: impl Into<Shared<f32>>) -> Self {
-        let mut min_width = min_width.into();
-        self.app_property.lock().min_width = min_width.clone();
-        let event_loop_proxy = self.app_context.event_loop_proxy.clone();
-        let app_property = Arc::downgrade(&self.app_property);
-        min_width.add_specific_observer(self.id(), move |min_width| {
-            let app_property = app_property.clone();
-            let min_width = *min_width;
-            event_loop_proxy.set_window_attribute(move |window| {
-                if let Some(app_property) = app_property.upgrade() {
-                    let min_height = app_property.lock().min_height.get();
-                    if let Some(window) = window {
-                        window.set_min_inner_size(Some(Size::Logical(LogicalSize::new(
-                            min_width as f64,
-                            min_height as f64,
-                        ))));
-                    }
-                }
-            })
-        });
-        self
-    }
-
-    pub fn min_height(self, min_height: impl Into<Shared<f32>>) -> Self {
-        let mut min_height = min_height.into();
-        self.app_property.lock().min_height = min_height.clone();
-        let event_loop_proxy = self.app_context.event_loop_proxy.clone();
-        let app_property = Arc::downgrade(&self.app_property);
-        min_height.add_specific_observer(self.id(), move |min_height| {
-            let app_property = app_property.clone();
-            let min_height = *min_height;
-            event_loop_proxy.set_window_attribute(move |window| {
-                if let Some(app_property) = app_property.upgrade() {
-                    let min_width = app_property.lock().min_width.get();
-                    if let Some(window) = window {
-                        window.set_min_inner_size(Some(Size::Logical(LogicalSize::new(
-                            min_width as f64,
-                            min_height as f64,
-                        ))));
-                    }
-                }
-            })
-        });
-        self
-    }
-
-    pub fn max_width(self, max_width: impl Into<Shared<f32>>) -> Self {
-        let mut max_width = max_width.into();
-        self.app_property.lock().max_width = max_width.clone();
-        let event_loop_proxy = self.app_context.event_loop_proxy.clone();
-        let app_property = Arc::downgrade(&self.app_property);
-        max_width.add_specific_observer(self.id(), move |max_width| {
-            let app_property = app_property.clone();
-            let max_width = *max_width;
-            event_loop_proxy.set_window_attribute(move |window| {
-                if let Some(app_property) = app_property.upgrade() {
-                    let max_height = app_property.lock().max_height.get();
-                    if let Some(window) = window {
-                        window.set_max_inner_size(Some(Size::Logical(LogicalSize::new(
-                            max_width as f64,
-                            max_height as f64,
-                        ))));
-                    }
-                }
-            })
-        });
-        self
-    }
-
-    pub fn max_height(self, max_height: impl Into<Shared<f32>>) -> Self {
-        let mut max_height = max_height.into();
-        self.app_property.lock().max_height = max_height.clone();
-        let event_loop_proxy = self.app_context.event_loop_proxy.clone();
-        let app_property = Arc::downgrade(&self.app_property);
-        max_height.add_specific_observer(self.id(), move |max_height| {
-            let app_property = app_property.clone();
-            let max_height = *max_height;
-            event_loop_proxy.set_window_attribute(move |window| {
-                if let Some(app_property) = app_property.upgrade() {
-                    let max_width = app_property.lock().max_width.get();
-                    if let Some(window) = window {
-                        window.set_max_inner_size(Some(Size::Logical(LogicalSize::new(
-                            max_width as f64,
-                            max_height as f64,
-                        ))));
-                    }
-                }
-            })
-        });
-        self
-    }
-
-    pub fn maximized(self, maximized: impl Into<SharedBool>) -> Self {
-        let mut maximized = maximized.into();
-        self.app_property.lock().maximized = maximized.clone();
-        let event_loop_proxy = self.app_context.event_loop_proxy.clone();
-        maximized.add_specific_observer(self.id(), move |maximized| {
-            let maximized = *maximized;
-            event_loop_proxy.set_window_attribute(move |window| {
-                if let Some(window) = window {
-                    window.set_maximized(maximized);
-                }
-            })
-        });
-        self
+    pub fn remove_layer(&mut self, id: usize) {
+        self.children.remove_by_id(id);
     }
 }
 
-impl ApplicationHandler<UserEvent> for App {
+pub struct App {
+    windows: HashMap<WindowId, WindowController>,
+    pending_windows: Option<(
+        Box<dyn FnOnce(&WindowContext, &WindowAttr) -> Item + 'static>,
+        WindowAttr,
+    )>,
+    pub(crate) event_loop_proxy: Option<EventLoopProxy<Event>>,
+    instant: Option<Instant>,
+    second_instant: Option<Instant>,
+    fps_in_one_second: Vec<f32>,
+    average_fps: f32,
+}
+
+impl App {
+    pub fn new(
+        item_generator: impl FnOnce(&WindowContext, &WindowAttr) -> Item + 'static,
+        window_attr: WindowAttr,
+    ) -> Self {
+        Self {
+            windows: HashMap::new(),
+            pending_windows: Some((Box::new(item_generator), window_attr)),
+            event_loop_proxy: None,
+            instant: None,
+            second_instant: None,
+            fps_in_one_second: vec![],
+            average_fps: 0.0,
+        }
+    }
+
+    fn create_window(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        item_generator: impl FnOnce(&WindowContext, &WindowAttr) -> Item + 'static,
+        window_attr: WindowAttr,
+    ) {
+        let window = event_loop
+            .create_window(window_attr.clone().into())
+            .unwrap();
+        let window_id = window.id();
+        let event_loop_proxy = self.event_loop_proxy.as_ref().unwrap().clone();
+        let window_context =
+            WindowContext::new(VulkanSkiaWindow::new(window, None), event_loop_proxy.clone());
+        window_context.window.lock().resize();
+        let item = item_generator(&window_context, &window_attr)
+            .size(crate::ui::item::Size::Fill, crate::ui::item::Size::Fill);
+
+        let children = Children::new();
+        let stack = window_context.stack(children.clone() + item).item();
+        {
+            let theme_ = window_context.theme();
+            let theme = theme_.lock();
+            stack.data().dispatch_apply_theme(theme.deref());
+        }
+        self.windows.insert(
+            window_id,
+            WindowController {
+                window_context,
+                window_attr: Arc::new(Mutex::new(window_attr)),
+                event_loop_proxy,
+                item: stack,
+                children,
+                cursor_x: 0.0,
+                cursor_y: 0.0,
+                pressed_mouse_buttons: Vec::new(),
+                modifiers: None,
+            },
+        );
+    }
+}
+
+impl ApplicationHandler<Event> for App {
     fn new_events(&mut self, event_loop: &ActiveEventLoop, _cause: StartCause) {
         event_loop.set_control_flow(ControlFlow::Wait);
     }
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if !self.app_context.is_window_created() {
-            let app_property = self.app_property.clone();
-            app_property
-                .lock()
-                .apply_to_window_attributes(&mut self.window_attributes);
-            let window = event_loop
-                .create_window(self.window_attributes.clone())
-                .unwrap();
-            self.app_context
-                .window
-                .value()
-                .replace(Box::new(VulkanSkiaWindow::new(window, None)));
-            let event_loop_proxy = self.event_loop_proxy.take();
-            if let Some(event_loop_proxy) = event_loop_proxy {
-                self.app_context.event_loop_proxy.set(event_loop_proxy)
-            }
-            if let Some(item_generator) = self.item_generator.take() {
-                self.item = Some(item_generator(
-                    self.app_context.clone(),
-                    self.app_property.lock().clone(),
-                ));
-            }
+        if self.windows.is_empty() {
+            let (item_generator, window_attr) = self.pending_windows.take().unwrap();
+            self.create_window(event_loop, item_generator, window_attr);
         }
     }
 
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
-        match event {
-            UserEvent::RequestFocus => {
-                let is_focus_changed = !self
-                    .app_context
-                    .focus_changed_items
-                    .read(|focus_changed_items| focus_changed_items.is_empty());
-                if is_focus_changed {
-                    if let Some(item) = &mut self.item {
-                        item.data().dispatch_focus();
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: Event) {
+        if let Some(window_controller) = self.windows.get_mut(&event.window_id) {
+            match event.event {
+                EventType::RequestFocus => {
+                    let is_focus_changed = window_controller
+                        .window_context
+                        .focus_changed_items
+                        .read(|focus_changed_items| focus_changed_items.is_empty());
+                    if is_focus_changed {
+                        window_controller.item.data().dispatch_focus();
                     }
+                    window_controller.window_context.focus_changed_items.write(
+                        |focus_changed_items| {
+                            focus_changed_items.clear();
+                        },
+                    );
                 }
-                self.app_context
-                    .focus_changed_items
-                    .write(|focus_changed_items| {
-                        focus_changed_items.clear();
-                    });
-            }
-            UserEvent::Timer(_id) => {}
-            UserEvent::RequestLayout => {
-                self.request_layout = true;
-                self.app_context.request_redraw();
-            }
-            UserEvent::RequestRedraw => {
-                self.app_context.request_redraw();
-            }
-            UserEvent::SetWindowAttribute(set_window_attributes) => {
-                let window = self.app_context.window.value();
-                if let Some(window) = window.as_ref() {
+                EventType::RequestLayout => {
+                    window_controller.window_context.request_layout();
+                }
+                EventType::RequestRedraw => {
+                    window_controller.window_context.request_redraw();
+                }
+                EventType::StartSharedAnimation(animation) => {
+                    window_controller
+                        .window_context
+                        .shared_animations
+                        .lock()
+                        .push(animation);
+                    window_controller.window_context.request_redraw();
+                }
+                EventType::Timer(_id) => {
+                    // let timers = window_controller.window_context.timers.value();
+                    // if let Some(timer) = timers.iter().find(|timer| timer.id == id) {
+                    //     window_controller.item.data().dispatch_timer(id);
+                    // }
+                    // window_controller.window_context
+                    //     .timers
+                    //     .write(|timers| timers.retain(|timer| timer.id != id));
+                }
+                EventType::SetWindowAttribute(set_window_attributes) => {
+                    let window = window_controller.window_context.window.lock();
                     set_window_attributes(Some(window.deref()));
                 }
-            }
-            UserEvent::StartSharedAnimation(animation) => {
-                self.app_context.shared_animations.value().push(animation);
-                self.app_context.request_redraw();
+                EventType::NewWindow {
+                    item_generator,
+                    window_attr,
+                } => {
+                    self.create_window(event_loop, item_generator, window_attr);
+                }
+                EventType::StartLayoutAnimation(animation) => {
+                    // Start animation
+                    let (width, height) = window_controller.window_context.window_size();
+                    // Get the animation that should be started
+
+                    let item = &mut window_controller.item;
+                    item.data().record_display_parameter();
+                    (animation.inner.lock().transformation)();
+                    item.data().measure(
+                        MeasureMode::Specified(width),
+                        MeasureMode::Specified(height),
+                    );
+                    item.data().dispatch_layout(0.0, 0.0, width, height);
+                    animation.inner.lock().start_time = Instant::now();
+                    item.data().dispatch_animation(&animation, false);
+                    window_controller
+                        .window_context
+                        .layout_animations
+                        .lock()
+                        .push(animation);
+                }
+                EventType::NewLayer(item_generator) => {
+                    let item = item_generator(
+                        &window_controller.window_context,
+                        window_controller.window_attr.lock().deref(),
+                    );
+                    window_controller.add_layer(item);
+                    window_controller.window_context.request_layout()
+                }
+                EventType::RemoveLayer(id) => {
+                    window_controller.remove_layer(id);
+                    window_controller.window_context.request_layout()
+                }
             }
         }
     }
@@ -387,46 +338,80 @@ impl ApplicationHandler<UserEvent> for App {
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
-        _window_id: WindowId,
+        window_id: WindowId,
         event: WindowEvent,
     ) {
+        let window_controller_ = self.windows.remove(&window_id);
+        if window_controller_.is_none() {
+            return;
+        }
+        let mut window_controller = window_controller_.unwrap();
+        let mut closed = false;
+
         {
-            let request_layout = self
-                .app_context
+            let request_layout = window_controller
+                .window_context
                 .request_layout
                 .read(|request_layout| *request_layout)
-                || self.request_layout;
+                || window_controller.window_context.request_layout.get();
             if request_layout {
-                self.re_layout();
-                self.app_context.request_layout.write(|request_re_layout| {
-                    *request_re_layout = false;
-                });
-                self.request_layout = false;
+                window_controller.re_layout();
+                window_controller.window_context.request_layout.set(false);
             }
         }
 
-        // println!("{:?}", event.clone());
+        // Animation
+        {
+            // Update running animations
+            window_controller
+                .window_context
+                .layout_animations
+                .write(|running_animations| {
+                    if !running_animations.is_empty() {
+                        window_controller.window_context.request_redraw()
+                    }
+                    running_animations.retain(|animation| !animation.is_finished());
+                });
+        }
+
+        {
+            window_controller
+                .window_context
+                .shared_animations
+                .write(|shared_animations| {
+                    shared_animations.iter_mut().for_each(|animation| {
+                        animation.update();
+                    });
+                    shared_animations.retain(|animation| !animation.is_finished());
+                    if !shared_animations.is_empty() {
+                        window_controller.window_context.request_redraw()
+                    }
+                });
+        }
 
         match event {
             WindowEvent::CloseRequested => {
-                event_loop.exit();
-            }
-            WindowEvent::Resized(size) => {
-                let (width, height): (u32, u32) = size.into();
-                let (mut width, mut height) = (width as f32, height as f32);
-                self.window(|window| {
-                    window.resize().unwrap();
-                    width /= window.scale_factor() as f32;
-                    height /= window.scale_factor() as f32;
-                });
-
-                if let Some(item) = &mut self.item {
-                    item.data().measure(
-                        MeasureMode::Specified(width),
-                        MeasureMode::Specified(height),
-                    );
-                    item.data().dispatch_layout(0.0, 0.0, width, height)
+                if self.windows.is_empty() {
+                    // if all windows are closed
+                    event_loop.exit();
+                } else {
+                    closed = true;
                 }
+            }
+            WindowEvent::Resized(_size) => {
+                window_controller
+                    .window_context
+                    .window
+                    .lock()
+                    .resize()
+                    .unwrap();
+                let (width, height) = window_controller.window_context.window_size();
+                let item = &mut window_controller.item;
+                item.data().measure(
+                    MeasureMode::Specified(width),
+                    MeasureMode::Specified(height),
+                );
+                item.data().dispatch_layout(0.0, 0.0, width, height)
             }
 
             WindowEvent::KeyboardInput {
@@ -434,36 +419,39 @@ impl ApplicationHandler<UserEvent> for App {
                 event,
                 is_synthetic,
             } => {
-                if let Some(item) = &mut self.item {
-                    item.data()
-                        .dispatch_keyboard_input(device_id, event, is_synthetic);
-                }
+                window_controller.item.data().dispatch_keyboard_input(
+                    &KeyboardInput {
+                        device_id,
+                        key_event: event,
+                        is_synthetic,
+                    }
+                );
             }
             WindowEvent::MouseInput {
                 device_id,
                 state,
                 button,
             } => {
-                if let Some(item) = &mut self.item {
-                    let event = MouseEvent {
-                        device_id,
-                        x: self.cursor_x,
-                        y: self.cursor_y,
-                        button,
-                        pointer_state: match state {
-                            ElementState::Pressed => PointerState::Started,
-                            ElementState::Released => PointerState::Ended,
-                        },
-                    };
-                    match state {
-                        ElementState::Pressed => {
-                            self.pressed_mouse_buttons.push(button);
-                            item.data().dispatch_mouse_input(event);
-                        }
-                        ElementState::Released => {
-                            self.pressed_mouse_buttons.retain(|&b| b != button);
-                            item.data().dispatch_mouse_input(event);
-                        }
+                let event = MouseInput {
+                    device_id,
+                    x: window_controller.cursor_x,
+                    y: window_controller.cursor_y,
+                    button,
+                    pointer_state: match state {
+                        ElementState::Pressed => PointerState::Started,
+                        ElementState::Released => PointerState::Ended,
+                    },
+                };
+                match state {
+                    ElementState::Pressed => {
+                        window_controller.pressed_mouse_buttons.push(button);
+                        window_controller.item.data().dispatch_mouse_input(&event);
+                    }
+                    ElementState::Released => {
+                        window_controller
+                            .pressed_mouse_buttons
+                            .retain(|&b| b != button);
+                        window_controller.item.data().dispatch_mouse_input(&event);
                     }
                 }
             }
@@ -472,52 +460,80 @@ impl ApplicationHandler<UserEvent> for App {
                 position,
             } => {
                 let (x, y): (f64, f64) = position.into();
-                let scale_factor = self.app_context.scale_factor();
-                self.cursor_x = x as f32 / scale_factor;
-                self.cursor_y = y as f32 / scale_factor;
-                self.app_context
+                let scale_factor = window_controller.window_context.scale_factor();
+                window_controller.cursor_x = x as f32 / scale_factor;
+                window_controller.cursor_y = y as f32 / scale_factor;
+                window_controller
+                    .window_context
                     .cursor_position
-                    .set((self.cursor_x, self.cursor_y));
-                let pressed_mouse_buttons = self.pressed_mouse_buttons.clone();
-                if let Some(item) = &mut self.item {
-                    item.data()
-                        .dispatch_cursor_move(self.cursor_x, self.cursor_y);
-                    pressed_mouse_buttons.iter().for_each(|button| {
-                        let event = MouseEvent {
+                    .set((window_controller.cursor_x, window_controller.cursor_y));
+                let pressed_mouse_buttons = window_controller.pressed_mouse_buttons.clone();
+                window_controller
+                    .item
+                    .data()
+                    .dispatch_cursor_move(
+                        &CursorMove {
                             device_id,
-                            x: self.cursor_x,
-                            y: self.cursor_y,
-                            button: *button,
-                            pointer_state: PointerState::Moved,
-                        };
-                        item.data().dispatch_mouse_input(event);
-                    });
-                }
+                            x: window_controller.cursor_x,
+                            y: window_controller.cursor_y,
+                            is_left_window: false,
+                        }
+                    );
+                pressed_mouse_buttons.iter().for_each(|button| {
+                    let event = MouseInput {
+                        device_id,
+                        x: window_controller.cursor_x,
+                        y: window_controller.cursor_y,
+                        button: *button,
+                        pointer_state: PointerState::Moved,
+                    };
+                    window_controller.item.data().dispatch_mouse_input(&event);
+                });
+            }
+            WindowEvent::CursorLeft {
+                device_id
+            } => {
+                // let event = MouseInput {
+                //     device_id,
+                //     x: window_controller.cursor_x,
+                //     y: window_controller.cursor_y,
+                //     button: MouseButton::Left,
+                //     pointer_state: PointerState::Cancelled,
+                // };
+                // window_controller.item.data().dispatch_mouse_input(event);
+                window_controller
+                    .item
+                    .data()
+                    .dispatch_cursor_move(
+                        &CursorMove {
+                            device_id,
+                            x: window_controller.cursor_x,
+                            y: window_controller.cursor_y,
+                            is_left_window: true,
+                        }
+                    );
             }
             WindowEvent::Touch(Touch {
-                device_id,
-                phase,
-                location,
-                force,
-                id,
-            }) => {
-                if let Some(item) = &mut self.item {
-                    let scale_factor = self.app_context.scale_factor();
-                    let event = TouchEvent {
-                        device_id,
-                        id,
-                        x: location.x as f32 / scale_factor,
-                        y: location.y as f32 / scale_factor,
-                        pointer_state: phase.into(),
-                        force,
-                    };
-                    item.data().dispatch_touch_input(event);
-                }
+                                   device_id,
+                                   phase,
+                                   location,
+                                   force,
+                                   id,
+                               }) => {
+                let scale_factor = window_controller.window_context.scale_factor();
+                let event = TouchInput {
+                    device_id,
+                    id,
+                    x: location.x as f32 / scale_factor,
+                    y: location.y as f32 / scale_factor,
+                    pointer_state: phase.into(),
+                    force,
+                };
+                window_controller.item.data().dispatch_touch_input(&event);
             }
             WindowEvent::Ime(ime) => {
-                // println!("ime {:?}", ime);
-                let id = self
-                    .app_context
+                let id = window_controller
+                    .window_context
                     .focused_property
                     .read(|f| f.as_ref().map(|(_, id)| *id));
                 if let Some(id) = id {
@@ -527,72 +543,122 @@ impl ApplicationHandler<UserEvent> for App {
                         Ime::Commit(commit) => ImeAction::Commit(commit),
                         Ime::Disabled => ImeAction::Disabled,
                     };
-                    if let Some(item) = &mut self.item {
-                        item.data().find_item_mut(id, &mut |item: &mut ItemData| {
-                            item.ime_input(ime_action.clone());
+                    window_controller
+                        .item
+                        .data()
+                        .find_item_mut(id, &mut |item: &mut ItemData| {
+                            item.ime_input(&ime_action.clone());
                         });
-                    }
                 }
             }
             WindowEvent::RedrawRequested => {
-                //println!("draw {:?}", Instant::now());
-                let background_color = self
-                    .app_context
+                window_controller.window_context.request_redraw.set(false);
+                if let Some(instant) = self.instant {
+                    let now = Instant::now();
+                    let fps = 1.0 / (now - instant).as_secs_f32();
+                    self.fps_in_one_second.push(fps);
+                    self.instant = Some(now);
+                } else {
+                    self.instant = Some(Instant::now());
+                };
+                let background_color = window_controller
+                    .window_context
                     .theme
-                    .read(|theme| theme.get_color(colors::WINDOW_BACKGROUND_COLOR))
+                    .read(|theme| theme.get_color(color::WINDOW_BACKGROUND_COLOR))
                     .unwrap_or(Color::WHITE);
-                // self.app_context.clone().window(|window| {
-                if let Some((surface_ref, scale_factor)) = {
-                    self.app_context.window.read(|window_option| {
-                        let window = window_option.as_ref()?;
-                        Some((window.surface(), window.scale_factor() as f32))
-                    })
-                } {
+                let scale_factor = window_controller.window_context.scale_factor();
+                let window = window_controller.window_context.window.lock();
+                let surface_ref = window.surface();
+                drop(window);
+                {
+                    let mut surface = surface_ref.lock();
+
                     {
-                        let mut surface = surface_ref.lock();
-
-                        {
-                            let canvas = surface.canvas();
-                            canvas.clear(background_color);
-                            canvas.save();
-                            canvas.scale((scale_factor, scale_factor));
-                        }
-
-                        if let Some(item) = &mut self.item {
-                            item.data().dispatch_draw(surface.deref_mut(), 0.0, 0.0);
-                        }
-
                         let canvas = surface.canvas();
-                        canvas.restore();
+                        canvas.clear(background_color);
+                        canvas.save();
+                        canvas.scale((scale_factor, scale_factor));
                     }
 
-                    // println!("redraw {} ms", instant.elapsed().as_millis());
-                    let _instant = Instant::now();
+                    window_controller
+                        .item
+                        .data()
+                        .dispatch_draw(surface.deref_mut(), 0.0, 0.0);
 
-                    {
-                        self.window(|window| {
-                            window.present();
+                    let canvas = surface.canvas();
+
+                    let text_color = window_controller
+                        .window_context
+                        .theme
+                        .read(|theme| theme.get_color(color::ON_SURFACE))
+                        .unwrap_or(Color::WHITE);
+                    
+                    if !self.fps_in_one_second.is_empty() {
+                        let fps = self.fps_in_one_second.iter().sum::<f32>() / self.fps_in_one_second.len() as f32;
+                        let now = Instant::now();
+                        if let Some(instant) = self.second_instant {
+                            if now - instant > std::time::Duration::from_secs(1) {
+                                self.fps_in_one_second.clear();
+                                self.second_instant = Some(now);
+                                self.average_fps = fps;
+                            }
+                        } else {
+                            self.second_instant = Some(now);
+                        }
+                    }
+
+                    let fps_text = format!("FPS: {:.2}", self.average_fps);
+                    let mut styled_text = StyledText::from(fps_text);
+                    styled_text.set_style(
+                        TextStyle::TextColor(text_color),
+                        0..styled_text.len(),
+                        false
+                    );
+                    styled_text.set_style(
+                        TextStyle::FontSize(12.0),
+                        0..styled_text.len(),
+                        false
+                    );
+
+                    let mut paragraph_style = ParagraphStyle::default();
+                    paragraph_style.set_text_align(TextAlign::Justify);
+
+                    let mut paragraph_builder = ParagraphBuilder::new(&paragraph_style, font_collection());
+
+                    create_segments(&styled_text, &(0..styled_text.len()), &skia_safe::textlayout::TextStyle::default())
+                        .iter()
+                        .for_each(|style_segment| {
+                            paragraph_builder.add_style_segment(style_segment);
                         });
-                    }
+
+                    let mut paragraph = paragraph_builder.build();
+                    paragraph.layout(100.0);
+                    paragraph.paint(canvas, (10.0, 10.0));
+
+                    canvas.restore();
                 }
+
+                window_controller.window_context.window.lock().present();
             }
             WindowEvent::ModifiersChanged(modifiers) => {
                 //println!("{:?}", modifiers);
                 // println!("{:?}", modifiers.lshift_state());
-                self.modifiers = Some(modifiers);
+                window_controller.modifiers = Some(modifiers);
             }
             WindowEvent::MouseWheel {
                 device_id,
                 delta,
                 phase,
             } => {
-                let scale_factor = self.app_context.scale_factor();
-                if let Some(item) = &mut self.item {
-                    item.data().dispatch_mouse_wheel(MouseWheel {
+                let scale_factor = window_controller.window_context.scale_factor();
+                window_controller
+                    .item
+                    .data()
+                    .dispatch_mouse_wheel(&MouseWheel {
                         device_id,
                         delta: match delta {
                             MouseScrollDelta::LineDelta(x, y) => {
-                                if let Some(modifiers) = self.modifiers {
+                                if let Some(modifiers) = window_controller.modifiers {
                                     if modifiers.state() == ModifiersState::SHIFT {
                                         crate::ui::item::MouseScrollDelta::LineDelta(y, 0.0)
                                     } else {
@@ -616,127 +682,98 @@ impl ApplicationHandler<UserEvent> for App {
                             TouchPhase::Cancelled => PointerState::Cancelled,
                         },
                     });
-                }
+                let cursor_x = window_controller.cursor_x;
+                let cursor_y = window_controller.cursor_y;
+                window_controller
+                    .item
+                    .data()
+                    .dispatch_cursor_move(
+                        &CursorMove {
+                            device_id,
+                            x: cursor_x,
+                            y: cursor_y,
+                            is_left_window: false,
+                        }
+                    );
             }
             _ => {}
         }
 
-        // Animation
-        {
-            // Start animation
-            if let Some(size) = self.app_context.window_size() {
-                // Get the animation that should be started
-                self.app_context
-                    .starting_animations
-                    .write(|starting_animations| {
-                        while let Some(animation) = starting_animations.pop_front() {
-                            if let Some(item) = &mut self.item {
-                                item.data().record_display_parameter();
-                                (animation.inner.lock().transformation)();
-                                item.data().measure(
-                                    MeasureMode::Specified(size.width),
-                                    MeasureMode::Specified(size.height),
-                                );
-                                item.data()
-                                    .dispatch_layout(0.0, 0.0, size.width, size.height);
-                                animation.inner.lock().start_time = Instant::now();
-                                item.data().dispatch_animation(animation.clone(), false);
-                            }
-                            self.app_context
-                                .running_animations
-                                .write(|running_animations| {
-                                    running_animations.push(animation.clone());
-                                });
-                        }
-                    });
-            }
-
-            // Update running animations
-            self.app_context
-                .running_animations
-                .write(|running_animations| {
-                    if !running_animations.is_empty() {
-                        self.window(|window| {
-                            window.request_redraw();
-                        });
-                    }
-                    running_animations.retain(|animation| !animation.is_finished());
-                });
-        }
-
-        {
-            self.app_context
-                .shared_animations
-                .write(|shared_animations| {
-                    shared_animations.iter_mut().for_each(|animation| {
-                        animation.update();
-                    });
-                    shared_animations.retain(|animation| !animation.is_finished());
-                    if !shared_animations.is_empty() {
-                        self.window(|window| {
-                            window.request_redraw();
-                        });
-                    }
-                });
+        if !closed {
+            self.windows.insert(window_id, window_controller);
         }
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         // Timer
-        {
-            let timers = self.app_context.timers.read(|timers| timers.clone());
-            if !timers.is_empty() {
-                let mut most_recent_timer = timers[0].start_time + timers[0].duration;
-                let now = Instant::now();
-                if let Some(item) = &mut self.item {
-                    for timer in timers.iter() {
-                        if timer.start_time + timer.duration < most_recent_timer {
-                            most_recent_timer = timer.start_time + timer.duration;
-                        }
-                        if now - timer.start_time >= timer.duration {
-                            item.data().dispatch_timer(timer.id);
-                        }
-                    }
-                }
-                if most_recent_timer > now {
-                    event_loop.set_control_flow(ControlFlow::WaitUntil(most_recent_timer));
-                }
-                self.app_context
-                    .timers
-                    .write(|timers| timers.retain(|timer| now - timer.start_time < timer.duration));
-            }
-        }
+        // {
+        //     let timers = self.window_context.timers.read(|timers| timers.clone());
+        //     if !timers.is_empty() {
+        //         let mut most_recent_timer = timers[0].start_time + timers[0].duration;
+        //         let now = Instant::now();
+        //         if let Some(item) = &mut self.item {
+        //             for timer in timers.iter() {
+        //                 if timer.start_time + timer.duration < most_recent_timer {
+        //                     most_recent_timer = timer.start_time + timer.duration;
+        //                 }
+        //                 if now - timer.start_time >= timer.duration {
+        //                     item.data().dispatch_timer(timer.id);
+        //                 }
+        //             }
+        //         }
+        //         if most_recent_timer > now {
+        //             event_loop.set_control_flow(ControlFlow::WaitUntil(most_recent_timer));
+        //         }
+        //         self.window_context
+        //             .timers
+        //             .write(|timers| timers.retain(|timer| now - timer.start_time < timer.duration));
+        //     }
+        // }
     }
 }
 
-fn run_app_with_event_loop(mut app: App, event_loop: EventLoop<UserEvent>) {
+fn run_app_with_event_loop(mut app: App, event_loop: EventLoop<Event>) {
     let event_loop_proxy = event_loop.create_proxy();
-    app.set_event_loop_proxy(event_loop_proxy);
+    app.event_loop_proxy = Some(event_loop_proxy);
     event_loop.set_control_flow(ControlFlow::Wait);
     event_loop.run_app(&mut app).unwrap();
 }
 
 #[cfg(not(target_os = "android"))]
 pub fn run_app(app: App) {
-    let event_loop = EventLoop::<UserEvent>::with_user_event().build().unwrap();
-    run_app_with_event_loop(app, event_loop);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+/*    let event_loop = EventLoop::<Event>::with_user_event()
+        .with_any_thread(true)
+        .build()
+        .unwrap();
+    run_app_with_event_loop(app, event_loop);*/
+    runtime.block_on(async {
+        let event_loop = EventLoop::<Event>::with_user_event()
+            .with_any_thread(true)
+            .build()
+            .unwrap();
+        run_app_with_event_loop(app, event_loop);
+    });
 }
 
-use crate::shared::{Gettable, Settable, Shared, SharedBool};
-use crate::ui::app::{AppContext, UserEvent};
-use crate::ui::item::{
-    ImeAction, ItemData, MeasureMode, MouseEvent, MouseWheel, PointerState, TouchEvent,
-};
+use crate::shared::{Children, Gettable, Settable, Shared, SharedBool};
+use crate::ui::app::{Event, EventType, WindowContext};
+use crate::ui::item::{CursorMove, ImeAction, ItemData, KeyboardInput, MeasureMode, MouseInput, MouseWheel, PointerState, TouchInput};
+use crate::ui::theme::color;
 use crate::ui::{theme, Item};
+use skiwin::cpu::SoftSkiaWindow;
 #[cfg(target_os = "android")]
 use winit::platform::android::activity::AndroidApp;
 #[cfg(target_os = "android")]
 use winit::platform::android::EventLoopBuilderExtAndroid;
-use crate::ui::theme::colors;
+use winit::platform::wayland::EventLoopBuilderExtWayland;
+use proc_macro::AsRef;
+use crate::text::{create_segments, font_collection, AddStyleSegment, StyledText, TextStyle};
+use crate::ui::layout::StackExt;
 
 #[cfg(target_os = "android")]
 pub fn run_app(app: App, android_app: AndroidApp) {
-    let event_loop = EventLoop::<UserEvent>::with_user_event()
+    let event_loop = EventLoop::<Event>::with_user_event()
         .with_android_app(android_app)
         .build()
         .unwrap();

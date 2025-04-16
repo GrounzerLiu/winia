@@ -4,6 +4,7 @@ mod relative;
 mod row;
 mod scroll_area;
 mod stack;
+mod list;
 
 pub use column::*;
 pub use flex::*;
@@ -11,6 +12,7 @@ pub use row::*;
 pub use stack::*;
 // pub use relative::*;
 pub use scroll_area::*;
+pub use list::*;
 
 use crate::shared::{Observable, SharedAlignment};
 use crate::ui::item::{CustomProperty, ItemData};
@@ -46,7 +48,7 @@ impl AlignSelf for Item {
             }
         }
 
-        let event_loop_proxy = self.data().get_app_context().event_loop_proxy();
+        let event_loop_proxy = self.data().get_window_context().event_loop_proxy().clone();
         let mut align_self = align_self.into();
         align_self.add_observer(
             id,

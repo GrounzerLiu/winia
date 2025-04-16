@@ -1,20 +1,24 @@
 #[derive(Debug, Default, Clone)]
 pub enum Size {
     #[default]
-    Compact,
-    Expanded,
+    /// Compute the size by the item itself.
+    Auto,
+    /// Fill the available space in the parent item.
+    Fill,
+    /// Fixed size.
     Fixed(f32),
+    /// Relative size. The value is a percentage of the parent item size.
     Relative(f32),
 }
 
 impl PartialEq for Size {
     fn eq(&self, other: &Self) -> bool {
         match self {
-            Size::Compact => {
-                matches!(other, Size::Compact)
+            Size::Auto => {
+                matches!(other, Size::Auto)
             }
-            Size::Expanded => {
-                matches!(other, Size::Expanded)
+            Size::Fill => {
+                matches!(other, Size::Fill)
             }
             Size::Fixed(f) => match other {
                 Size::Fixed(f2) => f == f2,

@@ -34,7 +34,7 @@ impl VulkanSkiaWindow {
                 match vulkan_context.get_proc(of) {
                     Some(f) => f as _,
                     None => {
-                        println!("resolve of {} failed", of.name().to_str().unwrap());
+                        // println!("resolve of {} failed", of.name().to_str().unwrap());
                         ptr::null()
                     }
                 }

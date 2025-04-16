@@ -39,10 +39,6 @@ pub struct SharedUnSend<T> {
 }
 
 impl<T: 'static> SharedUnSend<T> {
-    pub fn new(value: T) -> Self {
-        Self::from_static(value)
-    }
-
     fn inner_new(value: T, value_generator: Option<Box<dyn Fn() -> T>>) -> Self {
         let value = Arc::new(Mutex::new(value));
         let value_generator = Arc::new(Mutex::new(value_generator));
@@ -77,7 +73,7 @@ impl<T: 'static> SharedUnSend<T> {
 
     /// Modifications made through this function will not send notifications to observers.
     /// If you want to notify observers after modifying the value, use the [`write`](SharedUnSend::write) method.
-    pub fn value(&self) -> MutexGuard<T> {
+    pub fn lock(&self) -> MutexGuard<T> {
         self.value.lock()
     }
 
@@ -87,7 +83,7 @@ impl<T: 'static> SharedUnSend<T> {
     }
 
     /// Modifications made through this function will send notifications to observers.
-    /// If you don't want to notify observers after modifying the value, use the [`value`](SharedUnSend::value) method.
+    /// If you don't want to notify observers after modifying the value, use the [`value`](SharedUnSend::lock) method.
     pub fn write<R>(&self, mut operation: impl FnMut(&mut T) -> R) -> R {
         let r = {
             let mut value = self.value.lock();
@@ -101,7 +97,7 @@ impl<T: 'static> SharedUnSend<T> {
         self.id
     }
 
-    pub fn set_static(&mut self, value: T) {
+    pub fn set_static(&self, value: T) {
         self.clear_observed_objects();
         *self.value.lock() = value;
         *self.value_generator.lock() = None;
@@ -119,7 +115,7 @@ impl<T: 'static> SharedUnSend<T> {
     /// The value generator is stored in `self.value_generator`.
     ///
     /// Finally, the `notify` method is called to notify any observers of the change in value.
-    pub fn set_dynamic(&mut self, value_generator: impl Fn() -> T + 'static) {
+    pub fn set_dynamic(&self, value_generator: impl Fn() -> T + 'static) {
         self.clear_observed_objects();
         let value_generator = Box::new(value_generator);
         let value = (&value_generator)();
@@ -149,7 +145,7 @@ impl<T: 'static> SharedUnSend<T> {
         }
     }
 
-    fn clear_observed_objects(&mut self) {
+    fn clear_observed_objects(&self) {
         for (_, removal) in self.observed_objects.lock().drain(..) {
             removal();
         }
@@ -262,16 +258,16 @@ impl<T: 'static> From<T> for SharedUnSend<T> {
 }
 
 impl<T: 'static> Settable<T> for SharedUnSend<T> {
-    fn set(&mut self, value: T) {
-        self.set_static(value);
+    fn set(&self, value: impl Into<T>) {
+        self.set_static(value.into());
     }
 }
 
-impl<T: 'static> Settable<Box<dyn Fn() -> T + Send>> for SharedUnSend<T> {
-    fn set(&mut self, value: Box<dyn Fn() -> T + Send>) {
-        self.set_dynamic(value);
-    }
-}
+// impl<T: 'static> Settable<Box<dyn Fn() -> T + Send>> for SharedUnSend<T> {
+//     fn set(&self, value: Box<dyn Fn() -> T + Send>) {
+//         self.set_dynamic(value);
+//     }
+// }
 
 impl<T: Clone> Gettable<T> for SharedUnSend<T> {
     fn get(&self) -> T {

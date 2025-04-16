@@ -16,7 +16,7 @@ pub fn generate_id() -> usize {
 }
 
 /// Bind a string to an id
-/// Use [get_id_by_str] to get the id by the string
+/// Use [get_id_by_name] to get the id by the string
 pub fn bind_str_to_id(s: &str, id: usize) {
     if s.is_empty() {
         panic!("The string used to bind to an id cannot be empty");
@@ -30,9 +30,39 @@ pub fn bind_str_to_id(s: &str, id: usize) {
 
 /// Get the id by the string
 /// Use [bind_str_to_id] to bind the string to an id
-pub fn get_id_by_str(s: &str) -> Option<usize> {
+pub fn get_id_by_name(s: impl AsRef<str>) -> Option<usize> {
+    let s = s.as_ref();
     let str_to_id = STR_TO_ID.lock().unwrap();
     str_to_id.get(s).map(|id| *id)
+}
+
+pub fn get_name_by_id(id: usize) -> Option<String> {
+    let str_to_id = STR_TO_ID.lock().unwrap();
+    for (key, value) in str_to_id.iter() {
+        if *value == id {
+            return Some(key.clone());
+        }
+    }
+    None
+}
+
+pub fn unbind_str_to_id(s: impl AsRef<str>) {
+    let s = s.as_ref();
+    let mut str_to_id = STR_TO_ID.lock().unwrap();
+    str_to_id.remove(s);
+}
+
+pub fn unbind_id(id: usize) {
+    let mut str_to_id = STR_TO_ID.lock().unwrap();
+    let mut keys_to_remove = Vec::new();
+    for (key, value) in str_to_id.iter() {
+        if *value == id {
+            keys_to_remove.push(key.clone());
+        }
+    }
+    for key in keys_to_remove {
+        str_to_id.remove(&key);
+    }
 }
 
 #[macro_export]

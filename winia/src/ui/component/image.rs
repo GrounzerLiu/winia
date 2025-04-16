@@ -1,6 +1,6 @@
 use crate::impl_property_layout;
 use crate::shared::{Children, Gettable, Shared, SharedBool, SharedDrawable};
-use crate::ui::app::AppContext;
+use crate::ui::app::WindowContext;
 use crate::ui::item::{Alignment, LogicalX, MeasureMode, Orientation};
 use crate::ui::Item;
 use lazy_static::lazy_static;
@@ -15,6 +15,7 @@ use skia_safe::{
 };
 use std::collections::HashMap;
 use std::fs;
+use std::ops::Deref;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -28,6 +29,11 @@ pub trait Drawable: Send {
     fn height(&self) -> f32;
     fn set_color(&mut self, color: Option<Color>);
     fn get_color(&self) -> Option<Color>;
+    
+    fn clone_drawable(&self) -> Box<dyn Drawable>;
+    fn is_empty(&self) -> bool {
+        self.get_intrinsic_width() == 0.0 && self.get_intrinsic_height() == 0.0
+    }
 }
 
 enum ImageType {
@@ -39,8 +45,14 @@ enum ImageType {
 // But `Svg` is `Send` because it does not mutate `Dom`.
 unsafe impl Send for ImageType {}
 
+lazy_static! {
+    static ref DRAWABLES: Mutex<HashMap<PathBuf, ImageDrawable>> =
+        Mutex::new(HashMap::new());
+}
+
+#[derive(Clone)]
 pub struct ImageDrawable {
-    image_type: Option<ImageType>,
+    image_type: Arc<Mutex<Option<ImageType>>>,
     width: f32,
     height: f32,
     color: Option<Color>,
@@ -48,7 +60,8 @@ pub struct ImageDrawable {
 
 impl Drawable for ImageDrawable {
     fn draw(&self, canvas: &Canvas, x: f32, y: f32) {
-        if let Some(image_type) = &self.image_type {
+        let image_type = self.image_type.lock();
+        if let Some(image_type) = image_type.deref() {
             match image_type {
                 ImageType::Svg { dom } => {
                     if let Some(color) = self.color {
@@ -61,6 +74,7 @@ impl Drawable for ImageDrawable {
                         ));
                         dom.render(canvas);
                         let mut paint = Paint::default();
+                        paint.set_anti_alias(true);
                         paint.set_color(color);
                         paint.set_blend_mode(BlendMode::SrcIn);
                         canvas.draw_paint(&paint);
@@ -90,6 +104,7 @@ impl Drawable for ImageDrawable {
                             &Paint::default(),
                         );
                         let mut paint = Paint::default();
+                        paint.set_anti_alias(true);
                         paint.set_color(color);
                         paint.set_blend_mode(BlendMode::SrcIn);
                         canvas.draw_paint(&paint);
@@ -111,7 +126,8 @@ impl Drawable for ImageDrawable {
     }
 
     fn get_intrinsic_width(&self) -> f32 {
-        match &self.image_type {
+        let image_type = self.image_type.lock();
+        match image_type.deref() {
             Some(ImageType::Svg { dom, .. }) => dom.inner().fContainerSize.fWidth,
             Some(ImageType::Raster { image, .. }) => image.width() as f32,
             None => 0.0,
@@ -119,7 +135,8 @@ impl Drawable for ImageDrawable {
     }
 
     fn get_intrinsic_height(&self) -> f32 {
-        match &self.image_type {
+        let image_type = self.image_type.lock();
+        match image_type.deref() {
             Some(ImageType::Svg { dom, .. }) => dom.inner().fContainerSize.fHeight,
             Some(ImageType::Raster { image, .. }) => image.height() as f32,
             None => 0.0,
@@ -149,11 +166,32 @@ impl Drawable for ImageDrawable {
     fn get_color(&self) -> Option<Color> {
         self.color
     }
+
+    fn clone_drawable(&self) -> Box<dyn Drawable> {
+        Box::new(ImageDrawable {
+            image_type: self.image_type.clone(),
+            width: self.width,
+            height: self.height,
+            color: self.color,
+        })
+    }
 }
 
 impl ImageDrawable {
+    pub fn empty() -> Self {
+        Self {
+            image_type: Arc::new(Mutex::new(None)),
+            width: 0.0,
+            height: 0.0,
+            color: None,
+        }
+    }
+    
     pub fn from_file(path: impl Into<PathBuf>) -> Option<Self> {
         let path = path.into();
+        if DRAWABLES.lock().contains_key(&path) {
+            return DRAWABLES.lock().get(&path).cloned();
+        }
         let is_svg = if let Some(ext) = path.extension() {
             ext == "svg"
         } else {
@@ -164,7 +202,25 @@ impl ImageDrawable {
         Self::from_bytes(&bytes, is_svg)
     }
 
-    pub fn from_url(url: &PathBuf) -> Option<Self> {
+    pub async fn from_file_async(path: impl Into<PathBuf>) -> Option<Self> {
+        let path = path.into();
+        if DRAWABLES.lock().contains_key(&path) {
+            return DRAWABLES.lock().get(&path).cloned();
+        }
+        let is_svg = if let Some(ext) = path.extension() {
+            ext == "svg"
+        } else {
+            false
+        };
+        let bytes = tokio::fs::read(&path).await.ok()?;
+        Self::from_bytes(&bytes, is_svg)
+    }
+
+    pub fn from_url(url: impl Into<PathBuf>) -> Option<Self> {
+        let url = url.into();
+        if DRAWABLES.lock().contains_key(&url) {
+            return DRAWABLES.lock().get(&url).cloned();
+        }
         let response = reqwest::blocking::get(url.to_str()?).ok()?;
         let binding = response.bytes().ok()?;
         let bytes = binding.as_ref();
@@ -176,8 +232,19 @@ impl ImageDrawable {
         Self::from_bytes(bytes, is_svg)
     }
 
-    pub async fn from_url_async(url: &PathBuf) -> Option<Self> {
-        let response = reqwest::get(url.to_str()?).await.ok()?;
+    pub async fn from_url_async(url: impl Into<PathBuf>) -> Option<Self> {
+        let url = url.into();
+        if DRAWABLES.lock().contains_key(&url) {
+            return DRAWABLES.lock().get(&url).cloned();
+        }
+        let response = reqwest::get(url.to_str()?).await;
+        let response = match response {
+            Ok(response) => response,
+            Err(e) => {
+                println!("Error: {:?}", e);
+                return None;
+            },
+        };
         let bytes = response.bytes().await.ok()?;
         let is_svg = if let Some(ext) = url.extension() {
             ext == "svg"
@@ -209,7 +276,7 @@ impl ImageDrawable {
             ImageType::Raster { image, .. } => image.height() as f32,
         };
         Some(Self {
-            image_type: Some(image_type),
+            image_type: Arc::new(Mutex::new(Some(image_type))),
             width,
             height,
             color: None,
@@ -260,9 +327,9 @@ impl_property_layout!(Image, undersize_scale_mode, Shared<ScaleMode>);
 impl_property_layout!(Image, color, Shared<Option<Color>>);
 
 impl Image {
-    pub fn new(app_context: AppContext, drawable: impl Into<SharedDrawable>) -> Self {
+    pub fn new(app_context: &WindowContext, drawable: impl Into<SharedDrawable>) -> Self {
         let drawable = drawable.into();
-        let item = Item::new(app_context.clone(), Children::new()).clip(true);
+        let item = Item::new(app_context, Children::new()).clip(true);
         let id = item.data().get_id();
         let event_loop_proxy = app_context.event_loop_proxy();
         let property: Shared<ImageProperty> = ImageProperty {
@@ -280,13 +347,12 @@ impl Image {
             .set_measure({
                 let property = property.clone();
                 move |item, width_mode, height_mode| {
-                    let property = property.value();
+                    let property = property.lock();
                     let oversize_scale_mode = property.oversize_scale_mode.get();
                     let undersize_scale_mode = property.undersize_scale_mode.get();
                     let dpi_sensitive = property.dpi_sensitive.get();
-                    let drawable_ = property.drawable.value();
-                    let drawable = drawable_.lock();
-                    let scale_factor = item.get_app_context().scale_factor();
+                    let drawable = property.drawable.lock();
+                    let scale_factor = item.get_window_context().scale_factor();
                     let drawable_width = drawable.get_intrinsic_width()
                         / if dpi_sensitive { scale_factor } else { 1.0 };
                     let drawable_height = drawable.get_intrinsic_height()
@@ -372,9 +438,8 @@ impl Image {
             .set_layout({
                 let property = property.clone();
                 move |item, width, height| {
-                    let property = property.value();
-                    let drawable_ = property.drawable.value();
-                    let drawable = drawable_.lock();
+                    let property = property.lock();
+                    let drawable = property.drawable.lock();
 
                     let align = item.get_align_content().get();
                     let padding_start = item.get_padding_start().get();
@@ -387,7 +452,7 @@ impl Image {
                     let drawable_width = drawable.get_intrinsic_width();
                     let drawable_height = drawable.get_intrinsic_height();
 
-                    let scale_factor = item.get_app_context().scale_factor();
+                    let scale_factor = item.get_window_context().scale_factor();
                     let drawable_width = drawable_width
                         / if property.dpi_sensitive.get() {
                             scale_factor
@@ -722,9 +787,8 @@ impl Image {
             .set_draw({
                 let property = property.clone();
                 move |item, canvas| {
-                    let property = property.value();
-                    let drawable_ = property.drawable.value();
-                    let mut drawable = drawable_.lock();
+                    let property = property.lock();
+                    let mut drawable = property.drawable.lock();
 
                     let display_parameter = item.get_display_parameter();
                     let drawable_x = display_parameter.get_float_param(DRAWABLE_X).unwrap();

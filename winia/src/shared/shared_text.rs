@@ -72,7 +72,7 @@ impl<T: Into<SharedText>> Add<T> for SharedText {
     fn add(self, rhs: T) -> Self::Output {
         let lhs = self.clone();
         let rhs = rhs.into();
-        SharedText::from_dynamic(&[lhs.clone(), rhs.clone()], move || lhs.get() + rhs.get())
+        SharedText::from_dynamic([lhs.as_ref().into(), rhs.as_ref().into()].into(), move || lhs.get() + rhs.get())
     }
 }
 

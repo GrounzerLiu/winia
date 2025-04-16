@@ -53,7 +53,7 @@ impl GlSkiaWindow {
             })
             .expect("No available configs");
 
-        println!("Picked a config with {} samples", config.num_samples());
+        // println!("Picked a config with {} samples", config.num_samples());
 
         // Context creation.
         //
@@ -79,7 +79,7 @@ impl GlSkiaWindow {
 
         // Make the context current for rendering
         let context = not_current.make_current_surfaceless().unwrap();
-        println!("Context created: {:?}", context.is_current());
+        // println!("Context created: {:?}", context.is_current());
 
         let interface = skia_safe::gpu::gl::Interface::new_load_with_cstr(|name| {
             context.display().get_proc_address(name)

@@ -6,6 +6,6 @@ pub mod animation;
 pub mod component;
 pub mod layout;
 pub mod theme;
-pub use theme::theme::*;
+pub use theme::theme::Theme;
 
-pub use animation::Animation;
+pub use animation::LayoutAnimation;

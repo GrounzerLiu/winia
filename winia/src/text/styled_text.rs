@@ -29,7 +29,7 @@ pub(crate) fn font_collection() -> FontCollection {
 pub(crate) fn create_segments<'text>(
     text: &'text StyledText,
     range: &Range<usize>,
-    text_style: SkiaTextStyle,
+    text_style: &SkiaTextStyle,
 ) -> Vec<StyleSegment<'text>> {
     let mut text_segments = Vec::new();
 
@@ -47,7 +47,7 @@ pub(crate) fn create_segments<'text>(
                     if range.start <= text_segment.range.start
                         && range.end >= text_segment.range.end
                     {
-                        text_segment.apply_style(*style);
+                        text_segment.apply_style(style);
                         index += 1;
                     } else if range.start > text_segment.range.start
                         && range.start < text_segment.range.end
@@ -117,7 +117,7 @@ pub(crate) fn create_segments<'text>(
 
 /// A segment of text with a specific style.
 #[derive(Debug)]
-struct StyleSegment<'text> {
+pub(crate) struct StyleSegment<'text> {
     text: &'text str,
     range: Range<usize>,
     text_style: SkiaTextStyle,
@@ -136,7 +136,8 @@ impl<'text> StyleSegment<'text> {
         }
     }
 
-    pub fn apply_style(&mut self, style: TextStyle) {
+    pub fn apply_style(&mut self, style: impl AsRef<TextStyle>) {
+        let style = style.as_ref();
         match style {
             TextStyle::Bold => {
                 let font_style = self.text_style.font_style();
@@ -167,20 +168,33 @@ impl<'text> StyleSegment<'text> {
                 self.text_style.set_decoration(&decoration);
             }
             TextStyle::FontSize(font_size) => {
-                self.text_style.set_font_size(font_size);
+                self.text_style.set_font_size(*font_size);
             }
             TextStyle::BackgroundColor(color) => {
                 self.text_style
-                    .set_background_paint(Paint::default().set_color(color));
+                    .set_background_paint(Paint::default().set_color(*color));
             }
             TextStyle::TextColor(color) => {
-                self.text_style.set_color(color);
+                self.text_style.set_color(*color);
+            }
+            TextStyle::Weight(weight) => {
+                let font_style = self.text_style.font_style();
+                self.text_style.set_font_style(
+                    FontStyle::new(
+                        *weight,
+                        font_style.width(),
+                        font_style.slant(),
+                    )
+                );
+            }
+            TextStyle::Tracking(tracking) => {
+                self.text_style.set_letter_spacing(*tracking);
             }
         }
     }
 }
 
-trait AddStyleSegment {
+pub(crate) trait AddStyleSegment {
     fn add_style_segment(&mut self, style_segment: &StyleSegment);
 }
 
@@ -250,7 +264,7 @@ impl StyledText {
 
     pub fn create_paragraph(
         &mut self,
-        default_text_style: skia_safe::textlayout::TextStyle,
+        default_text_style: &skia_safe::textlayout::TextStyle,
         max_width: f32,
         text_align: TextAlign,
     ) -> Paragraph {

@@ -45,7 +45,7 @@ impl std::ops::Add<&SharedSize> for &SharedSize {
     fn add(self, rhs: &SharedSize) -> Self::Output {
         let lhs = self.clone();
         let rhs = rhs.clone();
-        SharedSize::from_dynamic(&[self.clone(), rhs.clone()], move || {
+        SharedSize::from_dynamic([self.as_ref().into(), rhs.as_ref().into()].into(), move || {
             let lhs = lhs.get();
             let rhs = rhs.get();
             match (lhs, rhs) {

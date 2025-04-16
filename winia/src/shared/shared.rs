@@ -3,6 +3,7 @@ use crate::ui::animation::interpolator::{Interpolator, Linear};
 use crate::ui::app::EventLoopProxy;
 use parking_lot::{Mutex, MutexGuard};
 use std::fmt::Display;
+use std::future::Future;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
@@ -15,8 +16,8 @@ pub trait Gettable<T: Clone> {
 
 /// A trait for setting the value of a shared.
 /// So we can use the same function to set the static value and the dynamic value.
-pub trait Settable<T: ?Sized> {
-    fn set(&mut self, value: T);
+pub trait Settable<T> {
+    fn set(&self, value: impl Into<T>);
 }
 
 /// A trait for observing changes in a shared.
@@ -55,6 +56,7 @@ pub struct Shared<T> {
     /// The value of the shared.
     value: Arc<Mutex<T>>,
     value_generator: Arc<Mutex<Option<Box<dyn Fn() -> T + Send>>>>,
+    filter: Arc<Mutex<Option<Box<dyn Fn(T) -> Option<T> + Send>>>>,
     /// A list of objects that observed by this shared.
     /// The first element of the tuple is the observable object, and the second element is the id of the observer.
     /// The id is used to remove the observer when the observable object is dropped.
@@ -69,10 +71,6 @@ pub struct Shared<T> {
 }
 
 impl<T: Send + 'static> Shared<T> {
-    pub fn new(value: T) -> Self {
-        Self::from_static(value)
-    }
-
     fn inner_new(value: T, value_generator: Option<Box<dyn Fn() -> T + Send>>) -> Self {
         let value = Arc::new(Mutex::new(value));
         let value_generator = Arc::new(Mutex::new(value_generator));
@@ -80,6 +78,7 @@ impl<T: Send + 'static> Shared<T> {
             id: generate_id(),
             value,
             value_generator,
+            filter: Arc::new(Mutex::new(None)),
             observed_objects: Arc::new(Mutex::new(Vec::with_capacity(0))),
             simple_observers: Arc::new(Mutex::new(Vec::with_capacity(0))),
             specific_observers: Arc::new(Mutex::new(Vec::with_capacity(0))),
@@ -91,23 +90,33 @@ impl<T: Send + 'static> Shared<T> {
         Self::inner_new(value, None)
     }
 
-    pub fn from_dynamic<O: Observable + Send + Clone + 'static>(
-        o: &[O],
+    pub fn from_dynamic(
+        o: Box<[Box<dyn Observable + Send + 'static>]>,
         value_generator: impl Fn() -> T + Send + 'static,
     ) -> Self {
         let value_generator: Box<dyn Fn() -> T + Send> = Box::new(value_generator);
         let value = value_generator();
         let value_generator = Some(value_generator);
-        let mut shared = Self::inner_new(value, value_generator);
+        let shared = Self::inner_new(value, value_generator);
         for observable in o {
-            shared.observe(observable.clone());
+            shared.observe(observable);
         }
+        shared
+    }
+
+    pub fn from_async(value: impl Future<Output = T> + Send + 'static, default_value: T) -> Self {
+        let shared = Self::from_static(default_value);
+        let shared_clone = shared.clone();
+        tokio::spawn(async move {
+            let value = value.await;
+            shared_clone.set_static(value);
+        });
         shared
     }
 
     /// Modifications made through this function will not send notifications to observers.
     /// If you want to notify observers after modifying the value, use the [`write`](Shared::write) method.
-    pub fn value(&self) -> MutexGuard<T> {
+    pub fn lock(&self) -> MutexGuard<T> {
         self.value.lock()
     }
 
@@ -117,7 +126,7 @@ impl<T: Send + 'static> Shared<T> {
     }
 
     /// Modifications made through this function will send notifications to observers.
-    /// If you don't want to notify observers after modifying the value, use the [`value`](Shared::value) method.
+    /// If you don't want to notify observers after modifying the value, use the [`value`](Shared::lock) method.
     pub fn write<R>(&self, mut operation: impl FnMut(&mut T) -> R) -> R {
         let r = {
             let mut value = self.value.lock();
@@ -131,11 +140,34 @@ impl<T: Send + 'static> Shared<T> {
         self.id
     }
 
-    pub fn set_static(&mut self, value: T) {
-        self.clear_observed_objects();
-        *self.value.lock() = value;
-        *self.value_generator.lock() = None;
+    pub fn set_static(&self, value: T) {
+        {
+            let filter = self.filter.lock();
+            let value = if let Some(filter) = filter.deref() {
+                if let Some(value) = filter(value) {
+                    value
+                } else {
+                    return;
+                }
+            } else {
+                value
+            };
+            self.clear_observed_objects();
+            *self.value.lock() = value;
+            *self.value_generator.lock() = None;
+        }
         self.notify();
+    }
+
+    pub fn try_set_static(&self, value: T) {
+        if self.value.is_locked() {
+            return;
+        }
+        self.set_static(value);
+    }
+
+    pub fn set_filter(&self, filter: impl Fn(T) -> Option<T> + Send + 'static) {
+        *self.filter.lock() = Some(Box::new(filter));
     }
 
     /// Sets a new dynamic value for this object and stores the value generator used to compute it.
@@ -149,13 +181,38 @@ impl<T: Send + 'static> Shared<T> {
     /// The value generator is stored in `self.value_generator`.
     ///
     /// Finally, the `notify` method is called to notify any observers of the change in value.
-    pub fn set_dynamic(&mut self, value_generator: impl Fn() -> T + Send + 'static) {
+    // pub fn set_dynamic(&self, value_generator: impl Fn() -> T + Send + 'static) {
+    //     self.clear_observed_objects();
+    //     let value_generator = Box::new(value_generator);
+    //     let value = (&value_generator)();
+    //     *self.value.lock() = value;
+    //     *self.value_generator.lock() = Some(value_generator);
+    //     self.notify();
+    // }
+    pub fn set_dynamic(
+        &self,
+        o: Box<[Box<dyn Observable + Send + 'static>]>,
+        value_generator: impl Fn() -> T + Send + 'static,
+    ) {
         self.clear_observed_objects();
-        let value_generator = Box::new(value_generator);
-        let value = (&value_generator)();
-        *self.value.lock() = value;
+        let value_generator: Box<dyn Fn() -> T + Send> = Box::new(value_generator);
         *self.value_generator.lock() = Some(value_generator);
         self.notify();
+
+        for observable in o {
+            self.observe(observable);
+        }
+    }
+    
+    pub fn try_set_dynamic(
+        &self,
+        o: Box<[Box<dyn Observable + Send + 'static>]>,
+        value_generator: impl Fn() -> T + Send + 'static,
+    ) {
+        if self.value.is_locked() {
+            return;
+        }
+        self.set_dynamic(o, value_generator);
     }
 
     fn can_generate(&self) -> bool {
@@ -166,7 +223,18 @@ impl<T: Send + 'static> Shared<T> {
         if self.can_generate() {
             let value_generator = self.value_generator.lock();
             let mut value = self.value.lock();
-            *value = (&value_generator.as_ref().unwrap())();
+            let generated_value = value_generator.as_ref().unwrap()();
+            let filter = self.filter.lock();
+            let new_value = if let Some(filter) = filter.deref() {
+                if let Some(value) = filter(generated_value){
+                    value
+                } else {
+                    return;
+                }
+            } else {
+                generated_value
+            };
+            *value = new_value;
         }
 
         for (_, observer) in self.simple_observers.lock().iter_mut() {
@@ -179,24 +247,20 @@ impl<T: Send + 'static> Shared<T> {
         }
     }
 
-    fn clear_observed_objects(&mut self) {
+    fn clear_observed_objects(&self) {
         for (_, removal) in self.observed_objects.lock().drain(..) {
             removal();
         }
     }
 
-    pub fn add_specific_observer(
-        &mut self,
-        id: usize,
-        observer: impl FnMut(&mut T) + Send + 'static,
-    ) {
+    pub fn add_specific_observer(&self, id: usize, observer: impl FnMut(&mut T) + Send + 'static) {
         self.specific_observers
             .lock()
             .push((id, Box::new(observer)));
     }
 
-    fn observe<O: Observable + Send + Clone + 'static>(&mut self, observable: O) {
-        let mut observable = Box::new(observable);
+    fn observe<O: Into<Box<dyn Observable + Send + 'static>>>(&self, observable: O) {
+        let mut observable: Box<dyn Observable + Send> = observable.into();
         let self_weak = self.weak();
         let removal = observable
             .add_observer(
@@ -213,7 +277,12 @@ impl<T: Send + 'static> Shared<T> {
             .push((Some(observable), removal));
     }
 
-    pub fn remove_observer(&mut self, id: usize) {
+    pub fn to_observable(&self) -> Box<dyn Observable + Send> {
+        let self_: Box<dyn Observable + Send> = Box::new(self.clone());
+        self_
+    }
+
+    pub fn remove_observer(&self, id: usize) {
         self.simple_observers.lock().retain(|(i, _)| *i != id);
         self.specific_observers.lock().retain(|(i, _)| *i != id);
     }
@@ -227,6 +296,7 @@ impl<T: Send + 'static> Shared<T> {
             id: self.id,
             value: Arc::downgrade(&self.value),
             value_generator: Arc::downgrade(&self.value_generator),
+            filter: Arc::downgrade(&self.filter),
             observed_objects: Arc::downgrade(&self.observed_objects),
             simple_observers: Arc::downgrade(&self.simple_observers),
             specific_observers: Arc::downgrade(&self.specific_observers),
@@ -257,12 +327,38 @@ impl<T: Send + 'static> Shared<T> {
     }
 }
 
+/*impl<T: Send + Observable + 'static> Shared<T> {
+    pub fn from_observable(
+        observable: T
+    ) -> Self {
+        let self_ = Self::new(observable);
+        {
+            let self_weak = self_.weak();
+            let mut observable = self_.lock();
+            let removal = observable
+                .add_observer(
+                    self_.id(),
+                    Box::new(move || {
+                        if let Some(property) = self_weak.upgrade() {
+                            property.notify();
+                        }
+                    }),
+                );
+            self_.observed_objects
+                .lock()
+                .push((None, removal.unwrap()));
+        }
+        self_
+    }
+}
+*/
 impl<T> Clone for Shared<T> {
     fn clone(&self) -> Self {
         Self {
             id: self.id,
             value: self.value.clone(),
             value_generator: self.value_generator.clone(),
+            filter: self.filter.clone(),
             observed_objects: self.observed_objects.clone(),
             simple_observers: self.simple_observers.clone(),
             specific_observers: self.specific_observers.clone(),
@@ -316,16 +412,16 @@ impl<T: Send + 'static> From<T> for Shared<T> {
 }
 
 impl<T: Send + 'static> Settable<T> for Shared<T> {
-    fn set(&mut self, value: T) {
-        self.set_static(value);
+    fn set(&self, value: impl Into<T>) {
+        self.set_static(value.into());
     }
 }
 
-impl<T: Send + 'static> Settable<Box<dyn Fn() -> T + Send>> for Shared<T> {
-    fn set(&mut self, value: Box<dyn Fn() -> T + Send>) {
-        self.set_dynamic(value);
-    }
-}
+// impl<T: Send + 'static> Settable<Box<dyn Fn() -> T + Send>> for Shared<T> {
+//     fn set(&self, value: Box<dyn Fn() -> T + Send>) {
+//         self.set_dynamic(value);
+//     }
+// }
 
 impl<T: Clone> Gettable<T> for Shared<T> {
     fn get(&self) -> T {
@@ -369,11 +465,26 @@ impl<T: Send + 'static + Default> Default for Shared<T> {
     }
 }
 
+impl<T: Send + 'static> Into<Box<dyn Observable + Send + 'static>> for Shared<T> {
+    fn into(self) -> Box<dyn Observable + Send + 'static> {
+        let self_: Box<dyn Observable + Send + 'static> = Box::new(self);
+        self_
+    }
+}
+
+impl<T: Send + 'static> Into<Box<dyn Observable + Send + 'static>> for &Shared<T> {
+    fn into(self) -> Box<dyn Observable + Send + 'static> {
+        let self_: Box<dyn Observable + Send + 'static> = Box::new(self.clone());
+        self_
+    }
+}
+
 #[derive(Clone)]
 pub struct WeakShared<T> {
     id: usize,
     value: Weak<Mutex<T>>,
     value_generator: Weak<Mutex<Option<Box<dyn Fn() -> T + Send>>>>,
+    filter: Weak<Mutex<Option<Box<dyn Fn(T) -> Option<T> + Send>>>>,
     observed_objects:
         Weak<Mutex<Vec<(Option<Box<dyn Observable + Send>>, Box<dyn FnOnce() + Send>)>>>,
     simple_observers: Weak<Mutex<Vec<(usize, Box<dyn FnMut() + Send>)>>>,
@@ -385,6 +496,7 @@ impl<T: Send + 'static> WeakShared<T> {
     pub fn upgrade(&self) -> Option<Shared<T>> {
         let value = self.value.upgrade()?;
         let value_generator = self.value_generator.upgrade()?;
+        let filter = self.filter.upgrade()?;
         let observed_objects = self.observed_objects.upgrade()?;
         let simple_observers = self.simple_observers.upgrade()?;
         let specific_observers = self.specific_observers.upgrade()?;
@@ -393,6 +505,7 @@ impl<T: Send + 'static> WeakShared<T> {
             id: self.id,
             value,
             value_generator,
+            filter,
             observed_objects,
             simple_observers,
             specific_observers,
@@ -492,6 +605,10 @@ impl<T: Send + 'static> InnerSharedAnimation<T> {
 
     pub fn update(&mut self) {
         if self.is_finished() {
+            let new_value = (self.value_generator)(&self.from, &self.to, 1.0);
+            self.shared.upgrade().map(move |shared| {
+                shared.set(new_value);
+            });
             if let Some(on_finish) = self.on_finish.as_mut() {
                 on_finish();
             }
@@ -501,7 +618,7 @@ impl<T: Send + 'static> InnerSharedAnimation<T> {
         let progress = (time_elapsed / self.duration.as_millis() as f32).clamp(0.0, 1.0);
         let interpolated = self.interpolator.interpolate(progress);
         let new_value = (self.value_generator)(&self.from, &self.to, interpolated);
-        self.shared.upgrade().map(move |mut shared| {
+        self.shared.upgrade().map(move |shared| {
             shared.set(new_value);
         });
     }
@@ -544,7 +661,7 @@ impl<T: Send + 'static> SharedAnimation<T> {
         self
     }
 
-    pub fn start(self, event_loop_proxy: EventLoopProxy) -> Self {
+    pub fn start(self, event_loop_proxy: &EventLoopProxy) -> Self {
         {
             let mut inner = self.inner.lock();
             event_loop_proxy.start_shared_animation(Box::new(self.clone()));
@@ -567,16 +684,6 @@ impl<T: Send + 'static> SharedAnimation<T> {
     pub fn stop(&mut self) {
         self.inner.lock().stop();
     }
-
-    // pub fn is_finished(&self) -> bool {
-    //     self.inner.read(|inner| inner.is_finished())
-    // }
-    //
-    // pub fn update(self, app_context: &AppContext) -> Self {
-    //     self.inner.write(|inner| inner.update());
-    //     app_context.request_redraw();
-    //     self
-    // }
 
     pub fn id(&self) -> usize {
         self.inner.lock().id

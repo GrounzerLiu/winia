@@ -8,7 +8,7 @@ macro_rules! p_op_v {
             fn $op_fn(self, rhs: $r) -> Self::Output {
                 let lhs = self.clone();
                 let rhs = rhs.clone();
-                Shared::from_dynamic(&[lhs.clone()], move || lhs.get().$op_fn(rhs))
+                Shared::from_dynamic([lhs.as_ref().into()].into(), move || lhs.get().$op_fn(rhs))
             }
         }
     };
@@ -22,7 +22,7 @@ macro_rules! v_op_p {
             fn $op_fn(self, rhs: $r) -> Self::Output {
                 let lhs = self.clone();
                 let rhs_clone = rhs.clone();
-                Shared::from_dynamic(&[rhs_clone.clone()], move || lhs.$op_fn(rhs_clone.get()))
+                Shared::from_dynamic([rhs.as_ref().into()].into(), move || lhs.$op_fn(rhs_clone.get()))
             }
         }
     };
@@ -36,7 +36,7 @@ macro_rules! p_op_p {
             fn $op_fn(self, rhs: $r) -> Self::Output {
                 let lhs = self.clone();
                 let rhs_clone = rhs.clone();
-                Shared::from_dynamic(&[lhs.clone(), rhs_clone.clone()], move || {
+                Shared::from_dynamic([lhs.as_ref().into(), rhs.as_ref().into()].into(), move || {
                     lhs.get().$op_fn(rhs_clone.get())
                 })
             }
@@ -131,7 +131,7 @@ macro_rules! into_type {
         impl Shared<$from> {
             pub fn $to(&self) -> Shared<$to> {
                 let self_clone = self.clone();
-                Shared::from_dynamic(&[self.clone()], move || self_clone.get() as $to)
+                Shared::from_dynamic([self.as_ref().into()].into(), move || self_clone.get() as $to)
             }
         }
     };
@@ -165,3 +165,18 @@ impl SharedF32 {
         })
     }
 }
+
+
+macro_rules! impl_from_num_to_shared_f32 {
+    ($($from:ty),*) => {
+        $(
+            impl From<$from> for SharedF32 {
+                fn from(value: $from) -> Self {
+                    SharedF32::from_static(value as f32)
+                }
+            }
+        )*
+    };
+}
+
+impl_from_num_to_shared_f32!(i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize);

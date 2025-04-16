@@ -1,4 +1,4 @@
 mod app;
-mod app_context;
+mod window_context;
 pub use app::*;
-pub use app_context::*;
+pub use window_context::*;

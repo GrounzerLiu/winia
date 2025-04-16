@@ -1,70 +1,102 @@
+use crate::ui::app::WindowContext;
 use crate::ui::Item;
+use parking_lot::Mutex;
 use skia_safe::Color;
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
-use parking_lot::Mutex;
-use crate::ui::app::AppContext;
 
 #[derive(Clone)]
 pub enum Value<T: Clone> {
-    Ref(String),
-    Value(T),
+    Reference(String),
+    Direct(T),
 }
 
 impl From<&str> for Value<Color> {
     fn from(s: &str) -> Self {
-        Value::Ref(s.to_string())
+        Value::Reference(s.to_string())
+    }
+}
+
+impl From<String> for Value<Color> {
+    fn from(s: String) -> Self {
+        Value::Reference(s)
     }
 }
 
 impl From<&str> for Value<f32> {
     fn from(s: &str) -> Self {
-        Value::Ref(s.to_string())
+        Value::Reference(s.to_string())
+    }
+}
+
+impl From<String> for Value<f32> {
+    fn from(s: String) -> Self {
+        Value::Reference(s)
     }
 }
 
 impl From<&str> for Value<bool> {
     fn from(s: &str) -> Self {
-        Value::Ref(s.to_string())
+        Value::Reference(s.to_string())
     }
 }
 
+impl From<String> for Value<bool> {
+    fn from(s: String) -> Self {
+        Value::Reference(s)
+    }
+}
+
+impl From<&str> for Value<String> {
+    fn from(s: &str) -> Self {
+        Value::Reference(s.to_string())
+    }
+}
 impl From<&str> for Value<Arc<Mutex<dyn Fn() -> Item>>> {
     fn from(s: &str) -> Self {
-        Value::Ref(s.to_string())
+        Value::Reference(s.to_string())
     }
 }
 
 impl From<Color> for Value<Color> {
     fn from(c: Color) -> Self {
-        Value::Value(c)
+        Value::Direct(c)
     }
 }
 
 impl From<f32> for Value<f32> {
     fn from(f: f32) -> Self {
-        Value::Value(f)
+        Value::Direct(f)
     }
 }
 
 impl From<bool> for Value<bool> {
     fn from(b: bool) -> Self {
-        Value::Value(b)
+        Value::Direct(b)
     }
 }
 
-impl From<Arc<Mutex<dyn Fn(AppContext) -> Item +Send>>> for Value<Arc<Mutex<dyn Fn(AppContext) -> Item + Send>>> {
-    fn from(f: Arc<Mutex<dyn Fn(AppContext) -> Item + Send>>) -> Self {
-        Value::Value(f)
+impl From<String> for Value<String> {
+    fn from(s: String) -> Self {
+        Value::Direct(s)
+    }
+}
+
+impl From<Arc<Mutex<dyn Fn(WindowContext) -> Item + Send>>>
+    for Value<Arc<Mutex<dyn Fn(WindowContext) -> Item + Send>>>
+{
+    fn from(f: Arc<Mutex<dyn Fn(WindowContext) -> Item + Send>>) -> Self {
+        Value::Direct(f)
     }
 }
 
 pub struct Theme {
     colors: HashMap<String, Value<Color>>,
-    dimensions: HashMap<String, Value<f32>>,
+    pub dimensions: HashMap<String, Value<f32>>,
     bools: HashMap<String, Value<bool>>,
-    items: HashMap<String, Value<Arc<Mutex<dyn Fn(AppContext) -> Item + Send>>>>,
+    strings: HashMap<String, Value<String>>,
+    items: HashMap<String, Value<Arc<Mutex<dyn Fn(WindowContext) -> Item + Send>>>>,
 }
 
 impl Default for Theme {
@@ -79,11 +111,16 @@ impl Theme {
             colors: HashMap::new(),
             dimensions: HashMap::new(),
             bools: HashMap::new(),
+            strings: HashMap::new(),
             items: HashMap::new(),
         }
     }
 
-    pub fn set_color(&mut self, key: impl Into<String>, color: impl Into<Value<Color>>) -> &mut Self {
+    pub fn set_color(
+        &mut self,
+        key: impl Into<String>,
+        color: impl Into<Value<Color>>,
+    ) -> &mut Self {
         self.colors.insert(key.into(), color.into());
         self
     }
@@ -97,15 +134,28 @@ impl Theme {
         self
     }
 
-    pub fn set_bool(&mut self, key: impl Into<String>, boolean: impl Into<Value<bool>>) -> &mut Self {
+    pub fn set_bool(
+        &mut self,
+        key: impl Into<String>,
+        boolean: impl Into<Value<bool>>,
+    ) -> &mut Self {
         self.bools.insert(key.into(), boolean.into());
+        self
+    }
+
+    pub fn set_string(
+        &mut self,
+        key: impl Into<String>,
+        string: impl Into<Value<String>>,
+    ) -> &mut Self {
+        self.strings.insert(key.into(), string.into());
         self
     }
 
     pub fn set_item(
         &mut self,
         key: impl Into<String>,
-        item: impl Into<Value<Arc<Mutex<dyn Fn(AppContext) -> Item +Send>>>>,
+        item: impl Into<Value<Arc<Mutex<dyn Fn(WindowContext) -> Item + Send>>>>,
     ) -> &mut Self {
         self.items.insert(key.into(), item.into());
         self
@@ -122,13 +172,13 @@ impl Theme {
             let key = keys.last().unwrap();
             if let Some(value) = map.get(key) {
                 match value {
-                    Value::Ref(key) => {
+                    Value::Reference(key) => {
                         if keys.contains(&key) {
                             return None;
                         }
                         keys.push(key.clone());
                     }
-                    Value::Value(value) => {
+                    Value::Direct(value) => {
                         return Some(f(value));
                     }
                 }
@@ -150,7 +200,11 @@ impl Theme {
         Self::get_value(&self.bools, key, |b| *b)
     }
 
-    pub fn get_item(&self, key: impl Into<String>, app: AppContext) -> Option<Item> {
+    pub fn get_string(&self, key: impl Into<String>) -> Option<String> {
+        Self::get_value(&self.strings, key, |s| s.clone())
+    }
+
+    pub fn get_item(&self, key: impl Into<String>, app: WindowContext) -> Option<Item> {
         Self::get_value(&self.items, key, move |f| {
             let f = f.lock();
             f.deref()(app.clone())

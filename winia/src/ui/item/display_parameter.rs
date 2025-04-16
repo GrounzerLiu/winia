@@ -135,6 +135,10 @@ impl DisplayParameter {
     pub fn get_color_param(&self, key: &str) -> Option<Color> {
         self.color_params.get(key).copied()
     }
+    
+    pub fn is_empty(&self) -> bool {
+        self.width <= 0.0 && self.height <= 0.0
+    }
 }
 
 impl Default for DisplayParameter {

@@ -11,8 +11,8 @@ macro_rules! exclude_target {
     };
     ($($target:expr),+ $(,)?) => {
         {
-            use $crate::core::get_id_by_str;
-            Target::Exclusion(vec![$(get_id_by_str($target).unwrap()),+])
+            use $crate::core::get_id_by_name;
+            $crate::ui::animation::Target::Exclusion(vec![$(get_id_by_name($target).unwrap()),+])
         }
     }
 }
@@ -24,8 +24,8 @@ macro_rules! include_target {
     };
     ($($target:expr),+ $(,)?) => {
         {
-           use $crate::core::get_id_by_str;
-           Target::Inclusion(vec![$(get_id_by_str($target).unwrap()),+])
+           use $crate::core::get_id_by_name;
+           $crate::ui::animation::Target::Inclusion(vec![$(get_id_by_name($target).unwrap()),+])
        }
     }
 }

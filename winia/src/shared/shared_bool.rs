@@ -10,7 +10,7 @@ macro_rules! p_op_p {
             fn $op_fn(self, rhs: $rhs) -> Self::Output {
                 let lhs = self.clone();
                 let rhs_clone = rhs.clone();
-                SharedBool::from_dynamic(&[self.clone(), rhs.clone()], move || {
+                SharedBool::from_dynamic([self.as_ref().into(), rhs.as_ref().into()].into(), move || {
                     lhs.get().$op_fn(rhs_clone.get())
                 })
             }
@@ -25,7 +25,7 @@ macro_rules! p_op_v {
 
             fn $op_fn(self, rhs: bool) -> Self::Output {
                 let lhs = self.clone();
-                SharedBool::from_dynamic(&[self.clone()], move || lhs.get().$op_fn(rhs))
+                SharedBool::from_dynamic([self.as_ref().into()].into(), move || lhs.get().$op_fn(rhs))
             }
         }
     };
@@ -38,7 +38,7 @@ macro_rules! v_op_p {
 
             fn $op_fn(self, rhs: &SharedBool) -> Self::Output {
                 let rhs_clone = rhs.clone();
-                SharedBool::from_dynamic(&[rhs.clone()], move || self.$op_fn(rhs_clone.get()))
+                SharedBool::from_dynamic([rhs.as_ref().into()].into(), move || self.$op_fn(rhs_clone.get()))
             }
         }
     };

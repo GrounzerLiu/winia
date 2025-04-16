@@ -1,7 +1,9 @@
 use skia_safe::Color;
 use std::fmt::Display;
+use skia_safe::font_style::Weight;
+use proc_macro::AsRef;
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, AsRef)]
 pub enum StyleType {
     Bold,
     Italic,
@@ -10,6 +12,8 @@ pub enum StyleType {
     FontSize,
     BackgroundColor,
     TextColor,
+    Weight,
+    Tracking,
 }
 impl Display for StyleType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -21,12 +25,14 @@ impl Display for StyleType {
             StyleType::FontSize => write!(f, "FontSize"),
             StyleType::BackgroundColor => write!(f, "BackgroundColor"),
             StyleType::TextColor => write!(f, "TextColor"),
+            StyleType::Weight => write!(f, "Weight"),
+            StyleType::Tracking => write!(f, "Tracking"),
         }
     }
 }
 
 /// The style of the text.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, AsRef)]
 pub enum TextStyle {
     Bold,
     Italic,
@@ -35,6 +41,8 @@ pub enum TextStyle {
     FontSize(f32),
     BackgroundColor(Color),
     TextColor(Color),
+    Weight(Weight),
+    Tracking(f32),
 }
 
 impl TextStyle {
@@ -47,6 +55,8 @@ impl TextStyle {
             TextStyle::FontSize(_) => "FontSize",
             TextStyle::BackgroundColor(_) => "BackgroundColor",
             TextStyle::TextColor(_) => "TextColor",
+            TextStyle::Weight(_) => "Weight",
+            TextStyle::Tracking(_) => "Tracking",
         }
     }
 
@@ -59,6 +69,8 @@ impl TextStyle {
             TextStyle::FontSize(_) => StyleType::FontSize,
             TextStyle::BackgroundColor(_) => StyleType::BackgroundColor,
             TextStyle::TextColor(_) => StyleType::TextColor,
+            TextStyle::Weight(_) => StyleType::Weight,
+            TextStyle::Tracking(_) => StyleType::Tracking,
         }
     }
 }

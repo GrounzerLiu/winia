@@ -2,24 +2,26 @@ use material_colors::color::Argb;
 use material_colors::dynamic_color::Variant;
 use material_colors::theme::ThemeBuilder;
 use std::ops::Add;
-use std::thread;
+use std::{fs, thread};
+use std::sync::Arc;
 use std::time::Duration;
-use winia::shared::{Children, Gettable, Settable, Shared, SharedBool, SharedF32, SharedSize, SharedText};
+use winia::shared::{Children, Gettable, Settable, Shared, SharedBool, SharedDrawable, SharedF32, SharedSize, SharedText};
 use winia::skia_safe::Color;
 use winia::text::StyledText;
 use winia::ui::animation::{AnimationExt, Target};
-use winia::ui::app::{run_app, AppContext, AppProperty};
-use winia::ui::component::{ImageExt, RectangleExt, RippleExt, ScaleMode, TextExt};
+use winia::ui::app::{run_app, WindowContext, WindowAttr};
+use winia::ui::component::{ButtonExt, ImageDrawable, ImageExt, RadioButtonExt, RectangleExt, RippleExt, ScaleMode, TextExt};
 use winia::ui::item::{Alignment, Size};
 use winia::ui::layout::FlexWrap::Wrap;
 use winia::ui::layout::{AlignContent, AlignItems, ColumnExt, FlexDirection, FlexExt, FlexWrap, JustifyContent, RowExt, ScrollAreaExt, StackExt};
 use winia::ui::{App, Item};
-use winia::{exclude_target, func, include_target, shared};
+use winia::{exclude_target, func, include_target, shared, Mutex};
 use winia::ui::animation::interpolator::Linear;
+use winia::ui::component::divider::DividerExt;
 
 // #[cfg(not(target_os = "android"))]
 fn main() {
-    run_app(App::new(animation_test).title("Example").preferred_size(800, 600));
+    run_app(App::new(animation_test, WindowAttr::default().title("Example")));
     // run_app(
     //     App::new(|app, shared| {
     //         app.flex(Children::new() +
@@ -31,10 +33,18 @@ fn main() {
     // );
 }
 
-pub fn animation_test(app: AppContext, property: AppProperty) -> Item {
+pub fn test(w: WindowContext, property: WindowAttr) -> Item {
+    w.stack(
+        w.rectangle(Color::RED).item().size(100,100)
+    ).item()
+}
+
+pub fn animation_test(w: WindowContext, property: WindowAttr) -> Item {
     let width = Shared::from(100.0);
-    app.row(Children::new() +
-        app.rectangle(Color::TRANSPARENT)
+    let image = SharedDrawable::from_file("./example/add.svg").unwrap();
+    let scale = SharedF32::from(1.0);
+    w.row(Children::new() +
+        w.rectangle(Color::TRANSPARENT)
             .radius(10.0)
             .outline_width(5.0)
             .outline_color(Color::BLACK)
@@ -59,8 +69,18 @@ pub fn animation_test(app: AppContext, property: AppProperty) -> Item {
                 }
             )*/ 
             .on_click(
-                func!(|app, width|, move |_| {
-                    app.animate(exclude_target!("blue")).transformation(
+                func!(|w, width|, move |_| {
+                    // w.event_loop_proxy().new_window(
+                    //     colors_test,
+                    //     WindowAttr::default().title("New Window")
+                    // );
+                        let path = "./example"; // 要列出的目录
+    for entry in fs::read_dir(path).unwrap() {
+        let entry = entry.unwrap();
+        println!("{}", entry.path().display());
+    }
+                    //run_app(App::new(animation_test).title("Example").preferred_size(800, 600));
+                    w.animate(exclude_target!("blue")).transformation(
                         func!(|width|, move || {
                             if width.get() == Size::Fixed(100.0) {
                                 width.set(Size::Fixed(200.0));
@@ -68,22 +88,62 @@ pub fn animation_test(app: AppContext, property: AppProperty) -> Item {
                                 width.set(Size::Fixed(100.0));
                             }
                         })
-                    ).interpolator(Box::new(Linear::new())).duration(Duration::from_millis(1000)).start();
+                    ).interpolator(Box::new(Linear::new())).duration(Duration::from_millis(3000)).start();
                 })
             )+
-        app.rectangle(Color::BLUE)
-            .radius(50.0)
+        w.rectangle(Color::BLUE)
+            // .radius(50.0)
             .item()
             .name("blue")
             .width(100.0)
             .height(100.0)
             .elevation(3.0)
+            .scale_x(&scale)
+            .scale_y(&scale)
+            .on_click({
+                let scale = scale.clone();
+                let w = w.clone();
+                move |_| {
+                    w.animate(exclude_target!()).transformation({
+                        let scale = scale.clone();
+                        move || {
+                            if scale.get() == 1.0 {
+                                scale.set(2.0);
+                            } else {
+                                scale.set(1.0);
+                            }
+                        }
+                    }).interpolator(Box::new(Linear::new())).duration(Duration::from_millis(1000)).start();
+                }
+            })+
+        w.button("Elevated Button").image(&image).item().name("button")
+            .on_click({
+                let image = image.clone();
+                let w = w.clone();
+                println!("click");
+                move |_|{
+                    // w.animate(exclude_target!()).transformation({
+                    //     let image = image.clone();
+                    //     move || {
+                    //         let image_ = image.lock();
+                    //         if image_.is_empty() {
+                    //             image.set_static(Box::new(ImageDrawable::from_file("./example/add.svg").unwrap()));
+                    //         } else {
+                    //             image.set_static(Box::new(ImageDrawable::empty()));
+                    //         }
+                    //     }
+                    // }).interpolator(Box::new(Linear::new())).duration(Duration::from_millis(300)).start();
+                }
+            }) +
+        // w.button("button").item()
+        w.divider().item().width(100.0).margin_top(16.0)+
+        w.radio_button().item() 
     ).name("row")
         .padding_start(16.0)
         .padding_top(16.0)
 }
 
-pub fn rectangle_test(app: AppContext, property: AppProperty) -> Item {
+pub fn rectangle_test(app: WindowContext, property: WindowAttr) -> Item {
     let color = Shared::from(Color::RED);
     let radius = Shared::from(50.0);
     let size = SharedSize::from(Size::Fixed(100.0));
@@ -141,7 +201,7 @@ impl ToColor for Argb {
     }
 }
 
-fn colors_test(app: AppContext, property: AppProperty) -> Item {
+fn colors_test(app: WindowContext, property: WindowAttr) -> Item {
     let theme = ThemeBuilder::with_source(Argb::new(255, 255, 0, 0)).variant(Variant::Rainbow).build();
     let scheme = theme.schemes.dark;
     /*
@@ -247,14 +307,14 @@ pub struct Scheme {
     let shadow = scheme.shadow.to_color();
     let scrim = scheme.scrim.to_color();
 
-    fn item(app: &AppContext, name: &str, color: Color) -> Item {
+    fn item(app: &WindowContext, name: &str, color: Color) -> Item {
         app.column(Children::new() +
             app.text(name).color(Color::WHITE).item() +
             app.rectangle(color).radius(25.0).item().size(200.0, 50.0)
         )
     }
 
-    app.scrollarea(Children::new()+
+    app.scroll_area(Children::new()+
         app.flex(Children::new() +
             item(&app, "primary", primary) +
             item(&app, "on_primary", on_primary) +
@@ -313,7 +373,7 @@ pub struct Scheme {
     ).item()
 }
 
-fn multi_thread_test(app: AppContext, property: AppProperty) -> Item {
+fn multi_thread_test(app: WindowContext, property: WindowAttr) -> Item {
     let color = Shared::from(Color::RED);
     let text = Shared::from("Hello, world!");
     app.column(Children::new()+
@@ -349,7 +409,7 @@ fn multi_thread_test(app: AppContext, property: AppProperty) -> Item {
     )
 }
 
-fn ripple_test(app: AppContext, property: AppProperty) -> Item {
+fn ripple_test(app: WindowContext, property: WindowAttr) -> Item {
 
     // let mut f32 = SharedF32::new(100.0);
     //
@@ -371,7 +431,7 @@ fn ripple_test(app: AppContext, property: AppProperty) -> Item {
         )
     }
 
-    app.scrollarea(Children::new()+
+    app.scroll_area(Children::new()+
         app.flex(children)
             .wrap(FlexWrap::Wrap)
             .main_axis_gap(0.0)
@@ -436,7 +496,7 @@ fn ripple_test(app: AppContext, property: AppProperty) -> Item {
     // ).item()
 }
 
-fn flex_test_ui(app: AppContext, property: AppProperty) -> Item {
+fn flex_test_ui(app: WindowContext, property: WindowAttr) -> Item {
     let size = SharedSize::from(Size::Fixed(150.0));
     app.flex(
         Children::new()
@@ -547,7 +607,6 @@ fn flex_test_ui(app: AppContext, property: AppProperty) -> Item {
     .direction(FlexDirection::Horizontal)
     .wrap(FlexWrap::Wrap)
     .justify_content(JustifyContent::Start)
-    .align_items(AlignItems::Start)
     .align_content(AlignContent::Start)
     // .main_axis_gap(10.0)
     // .cross_axis_gap(10.0)
@@ -569,7 +628,7 @@ fn flex_test_ui(app: AppContext, property: AppProperty) -> Item {
     }))
 }
 
-fn text_test_ui(app: AppContext, property: AppProperty) -> Item {
+fn text_test_ui(app: WindowContext, property: WindowAttr) -> Item {
     let text = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore veritatis et quasi architecto beatae vitae dicta sunt explicabo. Nemo enim ipsam voluptatem quia voluptas sit aspernatur aut odit aut fugit, sed quia consequuntur magni dolores eos qui ratione voluptatem sequi nesciunt. Neque porro quisquam est, qui dolorem ipsum quia dolor sit amet, consectetur, adipisci velit, sed quia non numquam eius modi tempora incidunt ut labore et dolore magnam aliquam quaerat voluptatem. Ut enim ad minima veniam, quis nostrum exercitationem ullam corporis suscipit laboriosam, nisi ut aliquid ex ea commodi consequatur? Quis autem vel eum iure reprehenderit qui in ea voluptate velit esse quam nihil molestiae consequatur, vel illum qui dolorem eum fugiat quo voluptas nulla pariatur?
 Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore veritatis et quasi architecto beatae vitae dicta sunt explicabo. Nemo enim ipsam voluptatem quia voluptas sit aspernatur aut odit aut fugit, sed quia consequuntur magni dolores eos qui ratione voluptatem sequi nesciunt. Neque porro quisquam est, qui dolorem ipsum quia dolor sit amet, consectetur, adipisci velit, sed quia non numquam eius modi tempora incidunt ut labore et dolore magnam aliquam quaerat voluptatem. Ut enim ad minima veniam, quis nostrum exercitationem ullam corporis suscipit laboriosam, nisi ut aliquid ex ea commodi consequatur? Quis autem vel eum iure reprehenderit qui in ea voluptate velit esse quam nihil molestiae consequatur, vel illum qui dolorem eum fugiat quo voluptas nulla pariatur?
 Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore veritatis et quasi architecto beatae vitae dicta sunt explicabo. Nemo enim ipsam voluptatem quia voluptas sit aspernatur aut odit aut fugit, sed quia consequuntur magni dolores eos qui ratione voluptatem sequi nesciunt. Neque porro quisquam est, qui dolorem ipsum quia dolor sit amet, consectetur, adipisci velit, sed quia non numquam eius modi tempora incidunt ut labore et dolore magnam aliquam quaerat voluptatem. Ut enim ad minima veniam, quis nostrum exercitationem ullam corporis suscipit laboriosam, nisi ut aliquid ex ea commodi consequatur? Quis autem vel eum iure reprehenderit qui in ea voluptate velit esse quam nihil molestiae consequatur, vel illum qui dolorem eum fugiat quo voluptas nulla pariatur?
@@ -590,7 +649,7 @@ Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor i
     .item()
 }
 
-fn main_ui(app: AppContext, property: AppProperty) -> Item {
+fn main_ui(app: WindowContext, property: WindowAttr) -> Item {
     let size = SharedSize::from(100.0);
     let offset = SharedF32::from(0.0);
     let margin_start = SharedF32::from(150.0);
@@ -605,7 +664,7 @@ fn main_ui(app: AppContext, property: AppProperty) -> Item {
 
     let c = SharedBool::from(false);
 
-    let mut f32 = SharedF32::new(100.0);
+    let mut f32 = SharedF32::from_static(100.0);
     let mut size = shared!(|f32| {
         Size::Fixed(f32.get())
     });
@@ -691,13 +750,13 @@ fn main_ui(app: AppContext, property: AppProperty) -> Item {
                 .on_click(func!(|app, size, margin_start, margin_top, offset|, move|_|{
                     app.animate(include_target!("white_rect"))
                     .transformation(func!(|size, margin_start, margin_top, offset|,move|| {
-                        if let Size::Expanded = size.get() {
+                        if let Size::Fill = size.get() {
                             size.set(Size::Fixed(100.0));
                             margin_start.set(150.0);
                             margin_top.set(50.0);
                             offset.set(0.0);
                         } else {
-                            size.set(Size::Expanded);
+                            size.set(Size::Fill);
                             margin_start.set(0.0);
                             margin_top.set(0.0);
                             offset.set(-50.0);
@@ -713,8 +772,8 @@ fn main_ui(app: AppContext, property: AppProperty) -> Item {
             )
     )
         .item()
-        .width(Size::Expanded)
-        .height(Size::Expanded)
+        .width(Size::Fill)
+        .height(Size::Fill)
         .padding_start(10.0)
         .padding_top(10.0)
         .name("root")
