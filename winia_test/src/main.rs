@@ -50,7 +50,7 @@ fn main() {
         WindowAttr::default(),
         Some(Box::new(
             |window| {
-                Box::new(GlSkiaWindow::new(window, None))
+                Box::new(SoftSkiaWindow::new(window))
             }
         )),
     ));
