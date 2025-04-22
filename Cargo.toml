@@ -5,8 +5,6 @@ members = [
     "skiwin",
     "winia/proc-macro", "winia_test", "interpolator_generator"]
 
-default-members = ["winia"]
-
 [workspace.dependencies]
 winit = "0.30.9"
 skia-safe = "0.84.0"
