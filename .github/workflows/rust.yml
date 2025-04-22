@@ -14,11 +14,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build
-        run: cargo build --package winia_test --verbose
+        run: cargo build --verbose
       - name: ls
         run: ls target/debug
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: example-windows
-          path: target/debug/winia-example.exe
+          path: target/debug/winia-test.exe
