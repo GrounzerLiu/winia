@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build
-        run: cargo build
+        run: cargo build --package winia_test
       - name: ls
         run: ls target/debug
       - name: Upload artifact
