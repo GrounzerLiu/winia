@@ -11,7 +11,7 @@ vulkan = ["skiwin/vulkan"]
 gl = ["skiwin/gl"]
 
 [dependencies]
-proc-macro = { path = "proc-macro" }
+proc-macro = { path = "../proc-macro" }
 skiwin = { path = "../skiwin", features = ["vulkan", "gl"] }
 lazy_static = "1.5.0"
 raw-window-handle = "0.6.2"

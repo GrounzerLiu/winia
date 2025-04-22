@@ -3,7 +3,7 @@ resolver = "2"
 members = [
     "winia",
     "skiwin",
-    "winia/proc-macro", "winia_test", "interpolator_generator"]
+    "proc-macro", "winia_test", "interpolator_generator"]
 
 [workspace.dependencies]
 winit = "0.30.9"
