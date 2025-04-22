@@ -114,7 +114,7 @@ impl Ripple {
                             foreground_color.with_a((opacity.clamp(0.0, 1.0) * 255.0) as u8);
                         let radius = radius * degree;
                         paint.set_color(color);
-                        
+
                         let display_parameter = item.get_display_parameter();
                         let (center_x, center_y) = layer.center;
                         let center = (center_x + display_parameter.x(), center_y + display_parameter.y());

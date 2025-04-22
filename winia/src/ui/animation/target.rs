@@ -7,7 +7,7 @@ pub enum Target {
 #[macro_export]
 macro_rules! exclude_target {
     () => {
-        Target::Exclusion(vec![])
+        $crate::ui::animation::Target::Exclusion(vec![])
     };
     ($($target:expr),+ $(,)?) => {
         {
@@ -20,7 +20,7 @@ macro_rules! exclude_target {
 #[macro_export]
 macro_rules! include_target {
     () => {
-        Target::Inclusion(vec![])
+        $crate::ui::animation::Target::Inclusion(vec![])
     };
     ($($target:expr),+ $(,)?) => {
         {

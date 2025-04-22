@@ -177,6 +177,18 @@ impl Drawable for ImageDrawable {
     }
 }
 
+impl From<&ImageDrawable> for Box<dyn Drawable> {
+    fn from(value: &ImageDrawable) -> Self {
+        value.clone_drawable()
+    }
+}
+
+impl From<ImageDrawable> for Box<dyn Drawable> {
+    fn from(value: ImageDrawable) -> Self {
+        value.clone_drawable()
+    }
+}
+
 impl ImageDrawable {
     pub fn empty() -> Self {
         Self {

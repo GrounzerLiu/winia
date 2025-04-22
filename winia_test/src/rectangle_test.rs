@@ -4,7 +4,7 @@ use winia::ui::app::{WindowAttr, WindowContext};
 use winia::ui::component::{RectangleExt, TextExt};
 use winia::ui::layout::{ColumnExt, ScrollAreaExt};
 
-pub fn rectangle_test(w: &WindowContext, _attr: &WindowAttr) -> Item {
+pub fn rectangle_test(w: &WindowContext) -> Item {
     w.scroll_area(
         w.column(
             w.text("Rectangle").font_size(16).item()
@@ -27,7 +27,7 @@ pub fn rectangle_test(w: &WindowContext, _attr: &WindowAttr) -> Item {
                 .item()
                 .size(100, 100)
                 .margin_bottom(16)
-        ).padding_start(16),
+        ).item().padding_start(16),
     )
     .item()
 }

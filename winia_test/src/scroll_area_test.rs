@@ -7,7 +7,7 @@ use winia::ui::component::RectangleExt;
 use winia::ui::item::Size;
 use winia::ui::layout::{ColumnExt, ScrollAreaExt, StackExt};
 
-pub fn scroll_area_test(w: &WindowContext, _: &WindowAttr) -> Item {
+pub fn scroll_area_test(w: &WindowContext) -> Item {
     w.scroll_area(
         Children::new()
             + w.column(
@@ -21,7 +21,7 @@ pub fn scroll_area_test(w: &WindowContext, _: &WindowAttr) -> Item {
                     + w.rectangle(Color::GRAY).item().size(Size::Fill, 100)
                     + w.rectangle(Color::CYAN).item().size(Size::Fill, 100)
                     + w.rectangle(Color::MAGENTA).item().size(Size::Fill, 100),
-            )
+            ).item()
             .size(2000, Size::Auto),
     )
         .horizontal_scrollable(true)

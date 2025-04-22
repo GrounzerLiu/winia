@@ -1,25 +1,18 @@
 use winia::shared::Children;
+use winia::skia_safe::Color;
 use winia::ui::app::{WindowAttr, WindowContext};
-use winia::ui::component::RippleExt;
+use winia::ui::component::{RectangleExt, RippleExt};
 use winia::ui::Item;
 use winia::ui::item::Size;
-use winia::ui::layout::{FlexExt, FlexWrap, ScrollAreaExt};
+use winia::ui::layout::{FlexExt, FlexWrap, RowExt, ScrollAreaExt};
 
-pub fn ripple_test(w: &WindowContext, _: &WindowAttr) -> Item {
-    w.scroll_area(
-        w.flex(
-            Children::from_static(
-                // Vec<Item>
-                (0..5000)
-                    .map(|i| {
-                        w.ripple().item().size(50, 50)
-                    })
-                    .collect::<Vec<Item>>(),
-            )
-        ).cross_axis_gap(10)
-            .main_axis_gap(10)
-            .wrap(FlexWrap::Wrap)
-            .item()
-            .size(Size::Fill, Size::Auto)
+pub fn ripple_test(w: &WindowContext) -> Item {
+    w.row(
+        w.rectangle(Color::BLUE).item().size(100, 100).foreground(
+            w.ripple().item()
+        ).margin_end(8)
+        + w.rectangle(Color::BLUE).item().size(100, 100).foreground(
+            w.ripple().borderless(true).item()
+        )
     ).item()
 }

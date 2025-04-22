@@ -8,7 +8,7 @@ use winia::ui::component::{ButtonExt, ButtonType, TextExt};
 use winia::ui::Item;
 use winia::ui::layout::{ColumnExt, RowExt};
 
-pub fn button_test(w: &WindowContext, _: &WindowAttr) -> Item {
+pub fn button_test(w: &WindowContext) -> Item {
     let text = SharedText::from("Button");
     let enabled = Shared::from(true);
     w.column(
@@ -51,7 +51,7 @@ pub fn button_test(w: &WindowContext, _: &WindowAttr) -> Item {
                 .button_type(ButtonType::Elevated)
                 .item()
                 .enabled(false)
-        ).margin_top(8)
+        ).item().margin_top(8)
         + w.row(
             w.button("Filled button")
                 .button_type(ButtonType::Filled)
@@ -61,7 +61,7 @@ pub fn button_test(w: &WindowContext, _: &WindowAttr) -> Item {
                 .button_type(ButtonType::Filled)
                 .item()
                 .enabled(false)
-        ).margin_top(8)
+        ).item().margin_top(8)
         + w.row(
             w.button("Filled tonal button")
                 .button_type(ButtonType::FilledTonal)
@@ -71,7 +71,7 @@ pub fn button_test(w: &WindowContext, _: &WindowAttr) -> Item {
                 .button_type(ButtonType::FilledTonal)
                 .item()
                 .enabled(false)
-        ).margin_top(8)
+        ).item().margin_top(8)
         + w.row(
             w.button("Outlined button")
                 .button_type(ButtonType::Outlined)
@@ -81,7 +81,7 @@ pub fn button_test(w: &WindowContext, _: &WindowAttr) -> Item {
                 .button_type(ButtonType::Outlined)
                 .item()
                 .enabled(false)
-        ).margin_top(8)
+        ).item().margin_top(8)
         + w.row(
             w.button("Text button")
                 .button_type(ButtonType::Text)
@@ -91,6 +91,6 @@ pub fn button_test(w: &WindowContext, _: &WindowAttr) -> Item {
                 .button_type(ButtonType::Text)
                 .item()
                 .enabled(false)
-        ).margin_top(8)
-    ).padding(16)
+        ).item().margin_top(8)
+    ).item().padding(16)
 }

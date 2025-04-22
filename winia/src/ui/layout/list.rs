@@ -118,9 +118,11 @@ impl<T: Send + 'static> List<T> {
                     let mut offset = property.offset.lock();
                     let mut scroller = scroller.lock();
 
-                    while let Some(delta) = scroller.y_deltas().pop_front() {
-                        *offset -= delta;
-                    }
+                    // while let Some(delta) = scroller.y_deltas().pop_front() {
+                    //     *offset -= delta;
+                    // }
+                    *offset += *scroller.y_deltas();
+                    *scroller.y_deltas() = 0.0;
 
                     if property.items.lock().is_empty() {
                         *offset = 0.0;

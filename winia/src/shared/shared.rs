@@ -120,6 +120,14 @@ impl<T: Send + 'static> Shared<T> {
         self.value.lock()
     }
 
+    pub fn try_lock(&self) -> Option<MutexGuard<T>> {
+        self.value.try_lock()
+    }
+
+    pub fn is_locked(&self) -> bool {
+        self.value.is_locked()
+    }
+
     pub fn read<R>(&self, mut operation: impl FnMut(&T) -> R) -> R {
         let value = self.value.lock();
         operation(value.deref())
@@ -203,7 +211,7 @@ impl<T: Send + 'static> Shared<T> {
             self.observe(observable);
         }
     }
-    
+
     pub fn try_set_dynamic(
         &self,
         o: Box<[Box<dyn Observable + Send + 'static>]>,
@@ -226,7 +234,7 @@ impl<T: Send + 'static> Shared<T> {
             let generated_value = value_generator.as_ref().unwrap()();
             let filter = self.filter.lock();
             let new_value = if let Some(filter) = filter.deref() {
-                if let Some(value) = filter(generated_value){
+                if let Some(value) = filter(generated_value) {
                     value
                 } else {
                     return;
@@ -533,6 +541,7 @@ impl<T: Send + 'static> WeakShared<T> {
 struct InnerSharedAnimation<T> {
     id: usize,
     is_finished: bool,
+    enable_repeat: bool,
     shared: WeakShared<T>,
     from: T,
     to: T,
@@ -554,6 +563,7 @@ impl<T: Send + 'static> InnerSharedAnimation<T> {
         Self {
             id: generate_id(),
             is_finished: false,
+            enable_repeat: false,
             shared: f32.weak(),
             from,
             to,
@@ -564,6 +574,10 @@ impl<T: Send + 'static> InnerSharedAnimation<T> {
             on_start: None,
             on_finish: None,
         }
+    }
+
+    pub fn enable_repeat(&mut self) {
+        self.enable_repeat = true;
     }
 
     pub fn duration(&mut self, duration: Duration) {
@@ -599,16 +613,27 @@ impl<T: Send + 'static> InnerSharedAnimation<T> {
         // }
     }
 
-    pub fn is_finished(&self) -> bool {
-        self.is_finished || self.start_time.elapsed() >= self.duration
+    pub fn is_finished(&mut self) -> bool {
+        if self.enable_repeat {
+            if self.is_finished {
+                true
+            } else if self.start_time.elapsed() >= self.duration {
+                self.start_time = Instant::now();
+                false
+            } else { 
+                false
+            }
+        } else {
+            self.is_finished || self.start_time.elapsed() >= self.duration
+        }
     }
 
     pub fn update(&mut self) {
         if self.is_finished() {
             let new_value = (self.value_generator)(&self.from, &self.to, 1.0);
-            self.shared.upgrade().map(move |shared| {
+            if let Some(shared) = self.shared.upgrade() {
                 shared.set(new_value);
-            });
+            }
             if let Some(on_finish) = self.on_finish.as_mut() {
                 on_finish();
             }
@@ -618,9 +643,9 @@ impl<T: Send + 'static> InnerSharedAnimation<T> {
         let progress = (time_elapsed / self.duration.as_millis() as f32).clamp(0.0, 1.0);
         let interpolated = self.interpolator.interpolate(progress);
         let new_value = (self.value_generator)(&self.from, &self.to, interpolated);
-        self.shared.upgrade().map(move |shared| {
+        if let Some(shared) = self.shared.upgrade() {
             shared.set(new_value);
-        });
+        }
     }
 }
 
@@ -639,6 +664,11 @@ impl<T: Send + 'static> SharedAnimation<T> {
         Self {
             inner: Arc::new(Mutex::new(inner)),
         }
+    }
+
+    pub fn enable_repeat(self) -> Self {
+        self.inner.lock().enable_repeat();
+        self
     }
 
     pub fn duration(self, duration: Duration) -> Self {
@@ -664,15 +694,28 @@ impl<T: Send + 'static> SharedAnimation<T> {
     pub fn start(self, event_loop_proxy: &EventLoopProxy) -> Self {
         {
             let mut inner = self.inner.lock();
+            inner.start_time = Instant::now();
             event_loop_proxy.start_shared_animation(Box::new(self.clone()));
             let cloned = self.clone();
-            inner.shared.upgrade().map(move |shared| {
+            if let Some(shared) = inner.shared.upgrade() {
                 shared.animation.lock().replace(cloned);
-            });
+            }
             if let Some(mut on_start) = inner.on_start.take() {
                 on_start();
             }
         }
+        self
+    }
+    
+    pub fn start_delayed(self, event_loop_proxy: &EventLoopProxy, delay: Duration) -> Self {
+        let event_loop_proxy = event_loop_proxy.clone();
+        let self_clone = self.clone();
+        tokio::spawn(
+            async move {
+                tokio::time::sleep(delay).await;
+                self_clone.start(&event_loop_proxy);
+            }
+        );
         self
     }
 

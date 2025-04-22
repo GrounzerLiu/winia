@@ -6,7 +6,7 @@ use winia::ui::Item;
 use winia::ui::item::Size;
 use winia::ui::layout::ListExt;
 
-pub fn list_test(w: &WindowContext, _: &WindowAttr) -> Item {
+pub fn list_test(w: &WindowContext) -> Item {
     let mut strings = Vec::new();
     for i in 0..100 {
         strings.push(format!("Item {}", i));

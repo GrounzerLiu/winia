@@ -146,16 +146,16 @@ impl Track {
         let radius = if self.active {
             [
                 Vector::new(radius, radius),
-                Vector::new(2.0, 2.0),
-                Vector::new(2.0, 2.0),
+                Vector::new(4.0, 4.0),
+                Vector::new(4.0, 4.0),
                 Vector::new(radius, radius),
             ]
         } else {
             [
-                Vector::new(2.0, 2.0),
+                Vector::new(4.0, 4.0),
                 Vector::new(radius, radius),
                 Vector::new(radius, radius),
-                Vector::new(2.0, 2.0),
+                Vector::new(4.0, 4.0),
             ]
         };
         let rect = RRect::new_rect_radii(
@@ -328,12 +328,16 @@ impl Slider {
                 move |item, canvas| {
                     let display_parameter = item.get_display_parameter();
                     let x = display_parameter.x();
+                    let y = display_parameter.y();
                     let mut active_track = Track::from_parameter(true, &display_parameter);
                     active_track.x += x;
+                    active_track.y += y;
                     let mut inactive_track = Track::from_parameter(false, &display_parameter);
                     inactive_track.x += x;
+                    inactive_track.y += y;
                     let mut handle = Handle::from_parameter(&display_parameter);
                     handle.x += x;
+                    handle.y += y;
 
                     active_track.draw(canvas, &mut paint);
                     inactive_track.draw(canvas, &mut paint);
@@ -364,19 +368,22 @@ impl Slider {
                 let property = property.clone();
                 move |item, input| {
                     let property = property.lock();
+                    let min = property.min.get();
+                    let max = property.max.get();
+                    let offset = (max - min) / 100.0;
                     let offset = match input.delta {
                         MouseScrollDelta::LineDelta(_, y) => { 
                             if y > 0.0 {
-                                1.0
+                                1.0 * offset
                             } else {
-                                -1.0
+                                -1.0 * offset
                             }
                         }
                         MouseScrollDelta::LogicalDelta(_, y) => {
                             if y > 0.0 {
-                                -1.0
+                                -1.0 * offset
                             } else {
-                                1.0
+                                1.0 * offset
                             }
                         }
                     };

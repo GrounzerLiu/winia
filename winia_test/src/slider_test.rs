@@ -4,7 +4,7 @@ use winia::ui::component::{SliderExt, TextExt};
 use winia::ui::Item;
 use winia::ui::layout::{ColumnExt, Flex, FlexExt, FlexGrow, FlexWrap, RowExt};
 
-pub fn slider_test(w: &WindowContext, _attr: &WindowAttr) -> Item {
+pub fn slider_test(w: &WindowContext) -> Item {
     let text = SharedText::from_static("0.0".into());
     let text_id = text.id();
     let value = SharedF32::from_static(0.0);
@@ -34,5 +34,5 @@ pub fn slider_test(w: &WindowContext, _attr: &WindowAttr) -> Item {
         w.text(text).item().padding_end(16).width(100)
         +w.slider(0.0, 100.0, &value)
             .item().width(400)
-    ).padding(16)
+    ).item().padding(16)
 }

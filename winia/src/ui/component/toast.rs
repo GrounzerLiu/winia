@@ -1,5 +1,6 @@
 use std::thread;
 use std::time::Duration;
+use clonelet::clone;
 use skia_safe::Color;
 use crate::core::{generate_id, get_id_by_name};
 use crate::include_target;
@@ -21,7 +22,7 @@ impl ToastExt for WindowContext {
     fn toast(&self, message: impl Into<String>) {
         let message = message.into();
         self.event_loop_proxy().new_layer(
-            |w, _|{
+            |w, controller|{
                 let (text_color, background_color) = {
                     let theme = w.theme();
                     let theme_lock = theme.lock();
@@ -36,11 +37,9 @@ impl ToastExt for WindowContext {
 
                 thread::spawn({
                     let event_loop_proxy = w.event_loop_proxy().clone();
-                    let opacity = opacity.clone();
-                    let name = name.clone();
+                    clone!(opacity, name, controller);
                     move || {
                         thread::sleep(Duration::from_secs(2));
-                        // event_loop_proxy.remove_layer(get_id_by_name(&name).unwrap());
                         event_loop_proxy.animate(Target::Inclusion(
                             get_id_by_name(&name).map_or(vec![], |id| vec![id])
                         )).transformation({
@@ -51,9 +50,9 @@ impl ToastExt for WindowContext {
                         }).duration(Duration::from_millis(500))
                             .interpolator(Box::new(EaseOutCirc::new()))
                             .on_finished({
-                                let event_loop_proxy = event_loop_proxy.clone();
+                                let controller = controller.clone();
                                 move || {
-                                    event_loop_proxy.remove_layer(get_id_by_name(&name).unwrap());
+                                    controller.remove();
                                 }
                             })
                             .start();

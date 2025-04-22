@@ -5,10 +5,10 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-#[features]
-#default = ["vulkan"]
-#vulkan = ["skiwin/vulkan"]
-#gl = ["skiwin/gl"]
+[features]
+default = ["vulkan"]
+vulkan = ["skiwin/vulkan"]
+gl = ["skiwin/gl"]
 
 [dependencies]
 proc-macro = { path = "proc-macro" }
@@ -17,7 +17,7 @@ lazy_static = "1.5.0"
 raw-window-handle = "0.6.2"
 env_logger = "0.11.8"
 bitflags = "2.9.0"
-bezier-rs = "0.4.0"
+#bezier-rs = "0.4.0"
 reqwest = { version = "0.12.15", features = ["blocking"] }
 #skia-bindings = "0.80"
 unicode-segmentation = "1.12.0"
@@ -29,6 +29,11 @@ material-colors = "0.4.2"
 dark-light = "2.0.0"
 tokio = {version = "1", features = ["rt-multi-thread", "fs"] }
 futures = "0.3"
+clonelet = "0.2.0"
+strum = "0.27"
+strum_macros = "0.27"
+
+skia-bindings = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 winit = { workspace = true, features = ["rwh_06"] }

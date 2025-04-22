@@ -1,4 +1,4 @@
-use crate::impl_property_redraw;
+use crate::{impl_property_layout, impl_property_redraw};
 use crate::shared::{Children, Gettable, Observable, Shared, SharedColor, SharedF32};
 use crate::ui::app::WindowContext;
 use crate::ui::Item;
@@ -17,6 +17,7 @@ struct RectangleProperty {
     radius_bottom_end: SharedF32,
     outline_width: SharedF32,
     outline_color: SharedColor,
+    outline_offset: SharedF32,
 }
 
 #[item(color: impl Into<SharedColor>)]
@@ -25,14 +26,15 @@ pub struct Rectangle {
     property: Shared<RectangleProperty>,
 }
 
-impl_property_redraw!(Rectangle, color, SharedColor);
-impl_property_redraw!(Rectangle, shader, Shared<Option<Shader>>);
-impl_property_redraw!(Rectangle, radius_top_start, SharedF32);
-impl_property_redraw!(Rectangle, radius_top_end, SharedF32);
-impl_property_redraw!(Rectangle, radius_bottom_start, SharedF32);
-impl_property_redraw!(Rectangle, radius_bottom_end, SharedF32);
-impl_property_redraw!(Rectangle, outline_width, SharedF32);
-impl_property_redraw!(Rectangle, outline_color, SharedColor);
+impl_property_layout!(Rectangle, color, SharedColor);
+impl_property_layout!(Rectangle, shader, Shared<Option<Shader>>);
+impl_property_layout!(Rectangle, radius_top_start, SharedF32);
+impl_property_layout!(Rectangle, radius_top_end, SharedF32);
+impl_property_layout!(Rectangle, radius_bottom_start, SharedF32);
+impl_property_layout!(Rectangle, radius_bottom_end, SharedF32);
+impl_property_layout!(Rectangle, outline_width, SharedF32);
+impl_property_layout!(Rectangle, outline_color, SharedColor);
+impl_property_layout!(Rectangle, outline_offset, SharedF32);
 
 impl Rectangle {
     pub fn new(app_context: &WindowContext, color: impl Into<SharedColor>) -> Self {
@@ -49,6 +51,7 @@ impl Rectangle {
             outline_width: SharedF32::from(0.0).layout_when_changed(&event_loop_proxy, id),
             outline_color: SharedColor::from(Color::TRANSPARENT)
                 .layout_when_changed(&event_loop_proxy, id),
+            outline_offset: SharedF32::from(0.0).layout_when_changed(&event_loop_proxy, id),
         });
 
         item.data()
@@ -59,6 +62,7 @@ impl Rectangle {
                     let color = property.color.get();
                     let outline_width = property.outline_width.get();
                     let outline_color = property.outline_color.get();
+                    let outline_offset = property.outline_offset.get();
                     
                     let padding_start = item.get_padding_start().get();
                     let padding_top = item.get_padding_top().get();
@@ -89,6 +93,8 @@ impl Rectangle {
                     target_parameter.set_float_param("radius_bottom_start", radius_bottom_start);
                     target_parameter.set_float_param("outline_width", outline_width);
                     target_parameter.set_color_param("outline_color", outline_color);
+                    target_parameter.set_float_param("outline_offset", outline_offset);
+                    
                 }
             })
             .set_draw({
@@ -102,6 +108,7 @@ impl Rectangle {
                         .unwrap_or(Color::TRANSPARENT);
                     let width = display_parameter.get_float_param("width").unwrap_or(0.0);
                     let height = display_parameter.get_float_param("height").unwrap_or(0.0);
+                    let max_radius = width.min(height) / 2.0;
                     let x = display_parameter.get_float_param("x").unwrap_or(0.0);
                     let y = display_parameter.get_float_param("y").unwrap_or(0.0);
                     let radius_top_start = display_parameter
@@ -122,6 +129,9 @@ impl Rectangle {
                     let outline_color = display_parameter
                         .get_color_param("outline_color")
                         .unwrap_or(Color::TRANSPARENT);
+                    let outline_offset = display_parameter
+                        .get_float_param("outline_offset")
+                        .unwrap_or(0.0);
                     let rect = Rect::from_xywh(
                         display_parameter.x() + x,
                         display_parameter.y() + y,
@@ -163,7 +173,40 @@ impl Rectangle {
                         paint.set_color(outline_color);
                         paint.set_style(Style::Stroke);
                         paint.set_stroke_width(outline_width);
-                        canvas.draw_rrect(rrect, &paint);
+                        canvas.draw_rrect(
+                            {
+                                let offset = outline_width / 2.0;
+                                let rect = Rect::from_xywh(
+                                    display_parameter.x() + x + offset - outline_offset,
+                                    display_parameter.y() + y + offset - outline_offset,
+                                    width - outline_width + outline_offset * 2.0,
+                                    height - outline_width + outline_offset * 2.0,
+                                );
+                                let offset = offset * 2.0;
+                                if layout_direction == LayoutDirection::LTR {
+                                    RRect::new_rect_radii(
+                                        &rect,
+                                        &[
+                                            Vector::new(radius_top_start + offset, radius_top_start + offset),
+                                            Vector::new(radius_top_end + offset, radius_top_end + offset),
+                                            Vector::new(radius_bottom_end + offset, radius_bottom_end + offset),
+                                            Vector::new(radius_bottom_start + offset, radius_bottom_start + offset),
+                                        ],
+                                    )
+                                } else {
+                                    RRect::new_rect_radii(
+                                        &rect,
+                                        &[
+                                            Vector::new(radius_top_end + offset, radius_top_end + offset),
+                                            Vector::new(radius_top_start + offset, radius_top_start + offset),
+                                            Vector::new(radius_bottom_start + offset, radius_bottom_start + offset),
+                                            Vector::new(radius_bottom_end + offset, radius_bottom_end + offset),
+                                        ],
+                                    )
+                                }
+                            }, 
+                            &paint
+                        );
                     }
                 }
             });

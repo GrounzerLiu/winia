@@ -93,13 +93,17 @@ impl ScrollArea {
                             let mut scroll_position = property.scroll_position.lock();
 
                             let mut scroller = scroller.lock();
-                            while let Some(delta) = scroller.x_deltas().pop_front() {
-                                scroll_position.0 += delta;
-                            }
+                            // while let Some(delta) = scroller.x_deltas().pop_front() {
+                            //     scroll_position.0 += delta;
+                            // }
+                            scroll_position.0 -= *scroller.x_deltas();
+                            *scroller.x_deltas() = 0.0;
                             
-                            while let Some(delta) = scroller.y_deltas().pop_front() {
-                                scroll_position.1 += delta;
-                            }
+                            // while let Some(delta) = scroller.y_deltas().pop_front() {
+                            //     scroll_position.1 += delta;
+                            // }
+                            scroll_position.1 -= *scroller.y_deltas();
+                            *scroller.y_deltas() = 0.0;
                             
                             let scroll_range = property.scroll_range.get();
                             let scroll_extent = property.scroll_extent.get();

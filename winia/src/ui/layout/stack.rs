@@ -38,19 +38,23 @@ impl Stack {
                     child_max_height = child_max_height
                         .max(child_measure_parameter.height + child_margin_vertical);
                 }
-                
+
                 let padding_horizontal = item.get_padding(Orientation::Horizontal);
                 let padding_vertical = item.get_padding(Orientation::Vertical);
-                
-                let width = match width_mode {
+
+                let width = item.clamp_width(match width_mode {
                     MeasureMode::Specified(width) => width,
-                    MeasureMode::Unspecified(width) => width.min(child_max_width + padding_horizontal),
-                };
-                let height = match height_mode {
+                    MeasureMode::Unspecified(width) => {
+                        width.min(child_max_width + padding_horizontal)
+                    }
+                });
+                let height = item.clamp_height(match height_mode {
                     MeasureMode::Specified(height) => height,
-                    MeasureMode::Unspecified(height) => height.min(child_max_height + padding_vertical),
-                };
-                
+                    MeasureMode::Unspecified(height) => {
+                        height.min(child_max_height + padding_vertical)
+                    }
+                });
+
                 let measure_parameter = item.get_measure_parameter();
                 measure_parameter.width = width;
                 measure_parameter.height = height;

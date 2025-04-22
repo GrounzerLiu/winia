@@ -1,4 +1,3 @@
-use std::cmp::PartialEq;
 use crate::dpi::{LogicalPosition, LogicalSize, Position};
 use crate::shared::{
     Children, Gettable, Observable, Settable, Shared, SharedBool, SharedColor, SharedF32,
@@ -7,26 +6,31 @@ use crate::shared::{
 use crate::text::StyledText;
 use crate::ui::app::WindowContext;
 use crate::ui::item::{
-    ClickSource, HorizontalAlignment, ImeAction, LayoutDirection, LogicalX, MeasureMode,
-    Orientation, PointerState, VerticalAlignment,
+    ClickSource, DisplayParameter, HorizontalAlignment, ImeAction, LayoutDirection, LogicalX,
+    MeasureMode, Orientation, PointerState, VerticalAlignment,
 };
+use crate::ui::theme::color;
 use crate::ui::Item;
 use crate::{impl_property_layout, impl_property_redraw};
 use proc_macro::item;
 use skia_safe::textlayout::{Paragraph, TextAlign, TextStyle};
-use skia_safe::{Color, Drawable, Paint, PictureRecorder, Rect, Vector};
+use skia_safe::{Canvas, Color, Drawable, Paint, PictureRecorder, Rect, Vector};
+use std::cmp::{Ordering, PartialEq};
 use std::ops::{Not, Range};
 use std::string::ToString;
 use std::time::Duration;
 use winit::dpi::Size;
 use winit::event::{ElementState, MouseButton};
 use winit::keyboard::{Key, NamedKey};
-use crate::ui::theme::color;
+use crate::core::generate_id;
 
 pub mod text_style {
     pub static FONT_SIZE: &str = "font_size";
     pub static COLOR: &str = "color";
 }
+
+static CONTEXT_X: &str = "context_x";
+static CONTEXT_Y: &str = "context_y";
 
 pub struct TextProperty {
     text: SharedText,
@@ -37,20 +41,56 @@ pub struct TextProperty {
 }
 
 struct DrawCache {
-    pub bottom: (String, Option<Drawable>),
-    pub top: (String, Option<Drawable>),
+    drawables: Vec<(usize, Drawable)>,
 }
 
 impl DrawCache {
     pub fn new() -> Self {
         Self {
-            bottom: ("alpha_0".to_string(), None),
-            top: ("alpha_1".to_string(), None),
+            drawables: Vec::new(),
         }
     }
 
-    pub fn swap(&mut self) {
-        std::mem::swap(&mut self.bottom, &mut self.top);
+    pub fn add(&mut self, mut drawable: Drawable, target_parameter: &mut DisplayParameter) {
+        for (id, _drawable) in &self.drawables {
+            target_parameter
+                .set_float_param(id.to_string().as_str(), 0.0);
+        }
+        let id = generate_id();
+        target_parameter
+            .set_float_param(id.to_string().as_str(), 1.0);
+        self.drawables.push((id, drawable));
+    }
+
+    pub fn draw(&mut self, canvas: &Canvas, display_parameter: &DisplayParameter) {
+        for (id, drawable) in &mut self.drawables {
+            let alpha = display_parameter
+                .get_float_param(id.to_string().as_str())
+                .unwrap_or(0.0).clamp(0.0, 1.0);
+            let width = display_parameter.width;
+            let height = display_parameter.height;
+            canvas.save_layer_alpha_f(Rect::from_xywh(
+                0.0,
+                0.0,
+                width,
+                height,
+            ), alpha);
+            drawable.draw(canvas, None);
+            canvas.restore();
+        }
+        let length = self.drawables.len();
+        let mut index = 0;
+        self.drawables.retain(|(id, drawable)| {
+            let mut r = true;
+            let alpha = display_parameter
+                .get_float_param(id.to_string().as_str())
+                .unwrap_or(0.0).clamp(0.0, 1.0);
+            if index != length - 1 && alpha == 0.0 {
+                r = false;
+            }
+            index += 1;
+            r
+        });
     }
 }
 
@@ -58,23 +98,11 @@ impl DrawCache {
 struct TextContext {
     is_text_changed: Shared<bool>,
     paragraph: SharedUnSend<Option<Paragraph>>,
+    draw_cache: SharedUnSend<DrawCache>,
     cursor: Shared<Option<(f32, f32, f32)>>,
     show_cursor: Shared<bool>,
     composing: Shared<Option<(Range<usize>, Range<usize>)>>,
     selection: Shared<Range<usize>>,
-}
-
-impl TextContext {
-    pub fn has_paragraph(&self) -> bool {
-        self.paragraph.lock().is_some()
-    }
-
-    pub fn check_text_changed(&mut self) {
-        if self.is_text_changed.get() {
-            // self.paragraph.set(None);
-            self.is_text_changed.set(false);
-        }
-    }
 }
 
 #[item(text: impl Into<SharedText>)]
@@ -88,15 +116,21 @@ impl Text {
     pub fn new(window_context: &WindowContext, text: impl Into<SharedText>) -> Self {
         let property = Shared::from(TextProperty {
             text: text.into(),
-            editable: true.into(),
+            editable: false.into(),
             selectable: true.into(),
-            color: window_context.theme().lock().get_color(color::ON_SURFACE).unwrap_or(Color::BLACK).into(),
+            color: window_context
+                .theme()
+                .lock()
+                .get_color(color::ON_SURFACE)
+                .unwrap_or(Color::BLACK)
+                .into(),
             font_size: 24.0.into(),
         });
 
         let context = TextContext {
             is_text_changed: true.into(),
             paragraph: None.into(),
+            draw_cache: DrawCache::new().into(),
             cursor: None.into(),
             show_cursor: false.into(),
             composing: None.into(),
@@ -150,7 +184,7 @@ impl Text {
                             paragraph.as_mut().unwrap().layout(width);
                         }
 
-                        context.is_text_changed.set(false);
+                        // context.is_text_changed.set(false);
                         let shared_paragraph = context.paragraph.clone();
                         let paragraph = shared_paragraph.lock();
                         let paragraph_ref = paragraph.as_ref().unwrap();
@@ -193,9 +227,10 @@ impl Text {
                 }
             })
             .set_layout({
-                let mut context = context.clone();
+                let context = context.clone();
                 let property = property.clone();
-                move |item, width, _height| {
+                let mut last_max_width = 0.0;
+                move |item, width, height| {
                     // context.check_text_changed();
                     let property = property.lock();
                     let text_style = get_text_style(&property);
@@ -203,44 +238,86 @@ impl Text {
 
                     let mut text = property.text.lock();
 
-                    if context.is_text_changed.get() {
-                        let paragraph = text.create_paragraph(
-                            &text_style,
-                            max_width,
-                            TextAlign::Justify,
-                        );
+                    let mut is_text_changed = context.is_text_changed.get();
+                    if is_text_changed {
+                        let paragraph =
+                            text.create_paragraph(&text_style, max_width, TextAlign::Start);
                         context.is_text_changed.set(false);
                         context.paragraph.set(Some(paragraph));
-                    } else {
+                    } else if last_max_width != max_width {
                         let mut paragraph = context.paragraph.lock();
                         paragraph.as_mut().unwrap().layout(max_width);
+                        is_text_changed = true;
+                        last_max_width = max_width;
+                    }
+
+                    if let Some(paragraph) = context.paragraph.lock().as_ref() {
+                        let text_layout = text.get_text_layout(paragraph);
+                        if is_text_changed {
+                            let mut recorder = PictureRecorder::new();
+                            let canvas = recorder.begin_recording(
+                                Rect::from_wh(text_layout.width(), text_layout.height()),
+                                None,
+                            );
+                            text_layout.draw(
+                                canvas,
+                                0.0,
+                                0.0,
+                            );
+                            let picture = recorder.finish_recording_as_drawable().unwrap();
+                            let mut draw_cache = context.draw_cache.lock();
+                            draw_cache.add(picture, item.get_target_parameter());
+                        }
+
+                        // let mut x = LogicalX::new(item.get_layout_direction().get(), 0.0, width);
+                        // let mut y = 0.0;
+                        let align_content = item.get_align_content().get();
+                        let x = match align_content.to_horizontal_alignment() {
+                            HorizontalAlignment::Start => item.get_padding_start().get(),
+                            HorizontalAlignment::Center => (width - text_layout.width()) / 2.0,
+                            HorizontalAlignment::End => width - text_layout.width() - item.get_padding_end().get(),
+                        };
+                        let y = match align_content.to_vertical_alignment() {
+                            VerticalAlignment::Top => item.get_padding_top().get(),
+                            VerticalAlignment::Center => (height - text_layout.height()) / 2.0,
+                            VerticalAlignment::Bottom => height - text_layout.height() - item.get_padding_bottom().get(),
+                        };
+                        let x = LogicalX::new(item.get_layout_direction().get(), x, width);
+                        let target_parameter = item.get_target_parameter();
+                        target_parameter.set_float_param(CONTEXT_X, x.physical_value(text_layout.width()));
+                        target_parameter.set_float_param(CONTEXT_Y, y);
+                        
+                        item.set_base_line(text_layout.base_line());
                     }
                 }
             })
             .set_ime_input({
-                let mut context = context.clone();
+                let context = context.clone();
                 let property = property.clone();
                 move |item, ime_action| {
-                    let mut property = property.lock();
+                    let property = property.lock();
                     let mut selection = context.selection.lock();
                     let mut composing = context.composing.lock();
-                    let text = property.text.clone();
+                    // let text = property.text.clone();
                     match ime_action {
                         ImeAction::Enabled => {}
                         ImeAction::Enter => {
                             if selection.start != selection.end {
-                                text.lock().remove(selection.clone());
+                                property.text.lock().remove(selection.clone());
                                 selection.end = selection.start;
                             }
-                            text.lock().insert_str(selection.start, "\n");
+                            property.text.lock().insert_str(selection.start, "\n");
                             let new_index = selection.start + 1;
                             selection.start = new_index;
                             selection.end = new_index;
+
+                            property.text.notify();
                         }
                         ImeAction::Delete => {
                             if selection.start != selection.end {
-                                text.lock().remove(selection.clone());
+                                property.text.lock().remove(selection.clone());
                                 selection.end = selection.start;
+                                property.text.notify();
                                 return;
                             }
 
@@ -255,6 +332,8 @@ impl Text {
                             text.remove(prev_glyph_index..selection.start);
                             selection.start = prev_glyph_index;
                             selection.end = prev_glyph_index;
+                            drop(text);
+                            property.text.notify();
                         }
                         ImeAction::PreEdit(pr_text, range) => {
                             // if selection.start != selection.end {
@@ -264,14 +343,14 @@ impl Text {
 
                             if let Some((composing_range, old_selection_range)) = composing.as_ref()
                             {
-                                text.lock().remove(composing_range.clone());
+                                property.text.lock().remove(composing_range.clone());
                                 selection.start = old_selection_range.start;
                                 selection.end = old_selection_range.end;
                                 *composing = None;
                             }
 
                             if let Some((start, end)) = range {
-                                text.lock().insert_str(selection.start, &pr_text);
+                                property.text.lock().insert_str(selection.start, pr_text);
                                 *composing = Some((
                                     selection.start..(selection.start + pr_text.len()),
                                     selection.clone(),
@@ -282,22 +361,24 @@ impl Text {
                                 selection.start = new_selection_start;
                                 selection.end = new_selection_start;
                             }
+                            property.text.notify();
                         }
                         ImeAction::Commit(commit_text) => {
                             let commit_text_len = commit_text.len();
                             if selection.start != selection.end {
-                                text.lock().remove(selection.clone());
+                                property.text.lock().remove(selection.clone());
                                 selection.end = selection.start;
                             }
-                            text.lock().insert_str(selection.start, &commit_text);
+                            property.text.lock().insert_str(selection.start, &commit_text);
                             let new_index = selection.start + commit_text_len;
                             selection.start = new_index;
                             selection.end = new_index;
+                            property.text.notify();
                         }
                         ImeAction::Disabled => {}
                     }
                     // context.is_text_changed.set(true);
-                    text.notify();
+                    // text.notify();
                     // item.get_window_context().request_layout();
                 }
             })
@@ -309,10 +390,10 @@ impl Text {
                     let property = property.lock();
                     let mut text = property.text.lock();
 
-                    if !context.has_paragraph() {
+                    if context.paragraph.lock().is_none() {
                         return;
                     }
-                    
+
                     let shared_paragraph = context.paragraph.clone();
                     let paragraph = shared_paragraph.lock();
                     let paragraph_ref = paragraph.as_ref().unwrap();
@@ -369,7 +450,9 @@ impl Text {
                                     );
                                     canvas.draw_rect(
                                         rect,
-                                        Paint::default().set_anti_alias(true).set_color(Color::BLUE),
+                                        Paint::default()
+                                            .set_anti_alias(true)
+                                            .set_color(Color::BLUE),
                                     );
                                 });
                         }
@@ -397,18 +480,43 @@ impl Text {
                                 });
                         }
                     }
-                    
-                    text_layout.draw(
-                        canvas,
-                        paragraph_x.logical_value() + display_parameter.x(),
-                        paragraph_y + display_parameter.y(),
-                    );
 
-                    if !context.is_text_changed.get() && property.editable.get() && selection.start == selection.end && show_cursor {
-                        if let Some((x, y, h)) =
-                            text_layout.get_cursor_position(selection.start)
-                        {
-                            let mut x = x + display_parameter.x();
+                    // text_layout.draw(
+                    //     canvas,
+                    //     paragraph_x.logical_value() + display_parameter.x(),
+                    //     paragraph_y + display_parameter.y(),
+                    // );
+                    {
+                        let x = display_parameter.x();
+                        let y = display_parameter.y();
+                        let context_x = display_parameter
+                            .get_float_param(CONTEXT_X)
+                            .unwrap_or(0.0) + x;
+                        let context_y = display_parameter
+                            .get_float_param(CONTEXT_Y)
+                            .unwrap_or(0.0) + y;
+                        canvas.save();
+                        canvas.translate((context_x, context_y));
+                        let mut draw_cache = context.draw_cache.lock();
+                        draw_cache.draw(canvas, display_parameter.as_ref());
+                        canvas.restore();
+                    }
+
+                    if !context.is_text_changed.get()
+                        && property.editable.get()
+                        && selection.start == selection.end
+                        && show_cursor
+                        && item.get_focused().get()
+                    {
+                        if let Some((x, y, h)) = text_layout.get_cursor_position(selection.start) {
+                            let context_x = display_parameter
+                                .get_float_param(CONTEXT_X)
+                                .unwrap_or(0.0);
+                            let context_y = display_parameter
+                                .get_float_param(CONTEXT_Y)
+                                .unwrap_or(0.0);
+                            let mut x = x + display_parameter.x() + context_x;
+
                             if x < display_parameter.x() {
                                 x = display_parameter.x();
                             }
@@ -416,10 +524,10 @@ impl Text {
                             if x >= display_parameter.x() + display_parameter.width - 2.0 {
                                 x = display_parameter.x() + display_parameter.width - 2.0;
                             }
-                            let y = y + display_parameter.y();
+                            let y = y + display_parameter.y() + context_y;
                             let rect = Rect::from_xywh(x, y, 2.0, h);
                             canvas.draw_rect(
-                                &rect,
+                                rect,
                                 Paint::default().set_anti_alias(true).set_color(0xffff0000),
                             );
                             if item.get_focused().get() {
@@ -455,15 +563,17 @@ impl Text {
                                     let mut selection = context.selection.lock();
                                     if selection.start > 0 {
                                         let property = property.lock();
-                                        let mut text = property.text.lock();
-                                        let glyph_index =
-                                            text.byte_index_to_glyph_index(selection.start);
-                                        let prev_glyph_index =
-                                            text.glyph_index_to_byte_index(glyph_index - 1);
-                                        selection.start = prev_glyph_index;
-                                        selection.end = prev_glyph_index;
+                                        {
+                                            let mut text = property.text.lock();
+                                            let glyph_index =
+                                                text.byte_index_to_glyph_index(selection.start);
+                                            let prev_glyph_index =
+                                                text.glyph_index_to_byte_index(glyph_index - 1);
+                                            selection.start = prev_glyph_index;
+                                            selection.end = prev_glyph_index;
+                                        }
+                                        property.text.notify();
                                     }
-                                    item.get_window_context().request_layout();
                                     return true;
                                 }
                                 NamedKey::ArrowRight => {
@@ -477,6 +587,8 @@ impl Text {
                                             text.glyph_index_to_byte_index(glyph_index + 1);
                                         selection.start = prev_glyph_index;
                                         selection.end = prev_glyph_index;
+                                        drop(text);
+                                        property.text.notify();
                                     }
                                     return true;
                                 }
@@ -498,15 +610,16 @@ impl Text {
                         }
                     }
 
-                    return false;
+                    false
                 }
             })
             .set_mouse_input({
                 let context = context.clone();
                 let property = property.clone();
+                let mut start_index = 0_usize;
                 move |item, event| {
                     let property = property.lock();
-                    if !property.editable.get() || !context.has_paragraph() {
+                    if !property.editable.get() || context.paragraph.lock().is_none() {
                         return;
                     }
                     item.get_focused().set(true);
@@ -517,10 +630,14 @@ impl Text {
                     let text_layout = text.get_text_layout(paragraph_ref);
 
                     let display_parameter = item.get_display_parameter();
-                    let padding_top = item.get_padding_top().get();
-                    let padding_left = item.get_padding_start().get();
-                    let x = event.x - display_parameter.x() - padding_left;
-                    let y = event.y - display_parameter.y() - padding_top;
+                    let context_x = display_parameter
+                        .get_float_param(CONTEXT_X)
+                        .unwrap_or(0.0);
+                    let context_y = display_parameter
+                        .get_float_param(CONTEXT_Y)
+                        .unwrap_or(0.0);
+                    let x = event.x - display_parameter.x() - context_x;
+                    let y = event.y - display_parameter.y() - context_y;
                     let index = if let Some((index, _)) =
                         text_layout.get_glyph_position_at_coordinate(x, y)
                     {
@@ -532,6 +649,7 @@ impl Text {
                     match event.pointer_state {
                         PointerState::Started => {
                             let mut selection = context.selection.lock();
+                            start_index = index;
                             selection.start = index;
                             selection.end = index;
                             item.get_window_context().request_redraw();
@@ -539,7 +657,19 @@ impl Text {
                         }
                         PointerState::Moved => {
                             let mut selection = context.selection.lock();
-                            selection.end = index;
+                            // selection.end = index;
+                            match index.cmp(&start_index) {
+                                Ordering::Less => {
+                                    selection.start = index;
+                                    selection.end = start_index;
+                                }
+                                Ordering::Greater => {
+                                    selection.start = start_index;
+                                    selection.end = index;
+                                }
+                                _=> {}
+                            }
+
                             item.get_window_context().request_redraw();
                             *context.show_cursor.lock() = true;
                         }
@@ -556,7 +686,7 @@ impl Text {
                 }
             })
             .set_focus_event({
-                let app_context = window_context.clone();
+                let window_context = window_context.clone();
                 move |item, focused| {
                     let display_parameter = item.get_display_parameter();
                     let x = display_parameter.x() as f64;
@@ -565,8 +695,8 @@ impl Text {
                     let height = display_parameter.height as f64;
                     let padding_top = item.get_padding_top().get() as f64;
                     let padding_left = item.get_padding_start().get() as f64;
-                    app_context.window().set_ime_allowed(focused);
-                    app_context.window().set_ime_cursor_area(
+                    window_context.set_ime_allowed(item.get_id(), focused);
+                    window_context.window().set_ime_cursor_area(
                         Position::Logical(LogicalPosition::new(x - width, y)),
                         Size::Logical(LogicalSize::new(0.0, 0.0)),
                     );
@@ -592,18 +722,17 @@ impl Text {
 
         {
             let id = item.data().get_id();
-            let mut property = property.lock();
+            let property = property.lock();
 
             let text_context = context.clone();
             let event_loop_proxy = item.data().get_window_context().event_loop_proxy().clone();
-            property.text.add_specific_observer(
-                id,
-                move |_text: &mut StyledText| {
+            property
+                .text
+                .add_specific_observer(id, move |_text: &mut StyledText| {
                     // println!("Text changed: {}", text);
                     text_context.is_text_changed.set(true);
                     event_loop_proxy.request_layout();
-                },
-            );
+                });
         }
 
         Self {
@@ -620,7 +749,12 @@ impl Text {
             property.text.remove_observer(id);
 
             let text_context = self.text_context.clone();
-            let event_loop_proxy = self.item.data().get_window_context().event_loop_proxy().clone();
+            let event_loop_proxy = self
+                .item
+                .data()
+                .get_window_context()
+                .event_loop_proxy()
+                .clone();
             property.text = text.into();
             property.text.add_specific_observer(
                 id,
@@ -640,7 +774,12 @@ impl Text {
             property.color.remove_observer(id);
 
             let text_context = self.text_context.clone();
-            let event_loop_proxy = self.item.data().get_window_context().event_loop_proxy().clone();
+            let event_loop_proxy = self
+                .item
+                .data()
+                .get_window_context()
+                .event_loop_proxy()
+                .clone();
             property.color = color.into();
             property.color.add_observer(
                 id,
@@ -660,7 +799,12 @@ impl Text {
             property.font_size.remove_observer(id);
 
             let text_context = self.text_context.clone();
-            let event_loop_proxy = self.item.data().get_window_context().event_loop_proxy().clone();
+            let event_loop_proxy = self
+                .item
+                .data()
+                .get_window_context()
+                .event_loop_proxy()
+                .clone();
             property.font_size = font_size.into();
             property.font_size.add_observer(
                 id,
@@ -673,9 +817,6 @@ impl Text {
         self
     }
 }
-
-
-
 
 // impl_property_layout!(Text, color, SharedColor);
 // impl_property_layout!(Text, font_size, SharedF32);

@@ -1,5 +1,5 @@
 use crate::dpi::LogicalSize;
-use crate::shared::{Gettable, Settable, Shared, SharedAnimationTrait, SharedBool, SharedUnSend, WeakShared, WeakSharedUnSend};
+use crate::shared::{Children, Gettable, Settable, Shared, SharedAnimationTrait, SharedBool, SharedUnSend, WeakShared, WeakSharedUnSend};
 use crate::ui::theme::material_theme;
 use crate::ui::{LayoutAnimation, Item, Theme};
 use parking_lot::MutexGuard;
@@ -25,6 +25,32 @@ pub struct Event {
     pub event: EventType,
 }
 
+#[derive(Clone)]
+pub struct LayerController {
+    id: Shared<Option<usize>>,
+    event_loop_proxy: EventLoopProxy
+}
+
+impl LayerController {
+    pub(crate) fn new(event_loop_proxy: EventLoopProxy) -> Self {
+        Self {
+            id: Shared::from(None),
+            event_loop_proxy
+        }
+    }
+    
+    pub(crate) fn set_id(&self, id: usize) {
+        self.id.set(Some(id));
+    }
+    
+    pub fn remove(&self) {
+        let id = self.id.get();
+        if let Some(id) = id {
+            self.event_loop_proxy.remove_layer(id);
+        }
+    }
+}
+
 pub enum EventType {
     RequestFocus,
     RequestLayout,
@@ -34,10 +60,10 @@ pub enum EventType {
     Timer(usize),
     SetWindowAttribute(Box<dyn FnOnce(Option<&Window>) + Send>),
     NewWindow{
-        item_generator: Box<dyn FnOnce(&WindowContext, &WindowAttr) -> Item + Send + 'static>,
+        item_generator: Box<dyn FnOnce(&WindowContext) -> Item + Send + 'static>,
         window_attr: WindowAttr,
     },
-    NewLayer(Box<dyn FnOnce(&WindowContext, &WindowAttr) -> Item + Send + 'static>),
+    NewLayer(Box<dyn FnOnce(&WindowContext, LayerController) -> Item + Send + 'static>),
     RemoveLayer(usize),
 }
 
@@ -106,7 +132,7 @@ impl EventLoopProxy {
         });
     }
     
-    pub fn new_window(&self, item_generator: impl FnOnce(&WindowContext, &WindowAttr) -> Item + Send + 'static, window_attr: WindowAttr) {
+    pub fn new_window(&self, item_generator: impl FnOnce(&WindowContext) -> Item + Send + 'static, window_attr: WindowAttr) {
         self.send_event(Event {
             window_id: self.window_id,
             event: EventType::NewWindow{
@@ -116,7 +142,7 @@ impl EventLoopProxy {
         });
     }
 
-    pub fn new_layer(&self, item_generator: impl FnOnce(&WindowContext, &WindowAttr) -> Item + Send + 'static) {
+    pub fn new_layer(&self, item_generator: impl FnOnce(&WindowContext, LayerController) -> Item + Send + 'static) {
         self.send_event(Event {
             window_id: self.window_id,
             event: EventType::NewLayer(Box::new(item_generator))
@@ -135,13 +161,15 @@ impl EventLoopProxy {
 pub struct WindowContext {
     pub(crate) theme: Shared<Theme>,
     pub(crate) window: SharedUnSend<Box<dyn SkiaWindow>>,
+    pub(crate) window_attr: Shared<WindowAttr>,
     pub(crate) event_loop_proxy: EventLoopProxy,
     pub(crate) request_layout: Shared<bool>,
     pub(crate) request_redraw: Shared<bool>,
     pub(crate) layout_animations: SharedUnSend<Vec<LayoutAnimation>>,
     pub(crate) shared_animations: SharedUnSend<Vec<Box<dyn SharedAnimationTrait + Send>>>,
-    pub(crate) focused_property: Shared<Option<(SharedBool, usize)>>,
-    pub(crate) focus_changed_items: Shared<BTreeSet<usize>>,
+    /// ((last focused item, id), (new focused item, id))
+    pub(crate) item_focused: Shared<(Option<(SharedBool, usize)>, Option<(SharedBool, usize)>)>,
+    ime_allowed: Shared<BTreeSet<usize>>,
     pub(crate) timers: Shared<Vec<Timer>>,
     pub(crate) cursor_position: Shared<(f32, f32)>,
     pub(crate) title: Shared<String>,
@@ -152,20 +180,21 @@ pub struct WindowContext {
 }
 
 impl WindowContext {
-    pub(crate) fn new(window: impl SkiaWindow + 'static, event_loop_proxy: winit::event_loop::EventLoopProxy<Event>) -> Self {
+    pub(crate) fn new(window: Box<dyn SkiaWindow + 'static>, window_attr: &Shared<WindowAttr>, event_loop_proxy: winit::event_loop::EventLoopProxy<Event>) -> Self {
         let window_id = window.id();
         Self {
             theme: material_theme(Color::from_rgb(255, 0, 0), dark_light::detect().map_or(false,|mode|{
                 mode == dark_light::Mode::Dark
             })).into(),
-            window: SharedUnSend::from_static(Box::new(window)),
+            window: SharedUnSend::from_static(window),
+            window_attr: window_attr.clone(),
             event_loop_proxy: EventLoopProxy::new(window_id, event_loop_proxy),
             request_layout: false.into(),
             request_redraw: false.into(),
             layout_animations: Vec::new().into(),
             shared_animations: Vec::new().into(),
-            focused_property: None.into(),
-            focus_changed_items: BTreeSet::new().into(),
+            item_focused: (None, None).into(),
+            ime_allowed: BTreeSet::new().into(),
             timers: Vec::new().into(),
             cursor_position: (0.0, 0.0).into(),
             title: "Title".to_string().into(),
@@ -178,6 +207,10 @@ impl WindowContext {
 
     pub(crate) fn window(&self) -> MutexGuard<'_, Box<dyn SkiaWindow>> {
         self.window.lock()
+    }
+    
+    pub fn window_attr(&self) -> &Shared<WindowAttr> {
+        &self.window_attr
     }
 
     pub fn window_size(&self) -> (f32, f32) {
@@ -192,6 +225,19 @@ impl WindowContext {
 
     pub fn window_id(&self) -> WindowId {
         self.window().id()
+    }
+    
+    pub fn set_ime_allowed(&self, id: usize, allowed: bool) {
+        if allowed {
+            self.ime_allowed.lock().insert(id);
+        } else {
+            self.ime_allowed.lock().remove(&id);
+        }
+        if self.ime_allowed.lock().is_empty() {
+            self.window().set_ime_allowed(false);
+        } else {
+            self.window().set_ime_allowed(true);
+        }
     }
 
     pub fn get_cursor_position(&self) -> (f32, f32) {

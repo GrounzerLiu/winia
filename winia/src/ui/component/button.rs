@@ -3,17 +3,19 @@ use crate::shared::{Gettable, Observable, Settable, Shared, SharedColor, SharedD
 use crate::skia_safe::Vector;
 use crate::ui::app::WindowContext;
 use crate::ui::component::style::{ButtonStyle, State};
-use crate::ui::component::{ImageExt, RectangleExt, RippleExt, TextExt};
+use crate::ui::component::{ImageExt, RectangleExt, RippleExt, ScaleMode, TextExt};
 use crate::ui::item::{Alignment, ItemData, ItemState, LayoutDirection, Size};
-use crate::ui::layout::{RowExt, StackExt};
-use crate::ui::theme::Access;
+use crate::ui::layout::{AlignItems, RowExt, StackExt};
+use crate::ui::theme::{color, Access};
 use crate::ui::{Item, Theme};
 use proc_macro::item;
 use skia_safe::{Color, Path, RRect, Rect};
 use std::fmt::Display;
 use std::ops::{Deref, DerefMut};
+use strum_macros::EnumString;
+use crate::core::generate_id;
 
-#[derive(Clone)]
+#[derive(Clone, EnumString, Debug)]
 pub enum ButtonType {
     Elevated,
     Filled,
@@ -129,6 +131,8 @@ impl Button {
 
         let layer_state_color = Shared::from(Color::TRANSPARENT);
 
+        let focus_indicator_color = Shared::from(Color::TRANSPARENT);
+
         let property_ = property.lock();
         // let image = property_.image.clone();
         let text = property_.text.clone();
@@ -140,6 +144,8 @@ impl Button {
                         window_context
                             .image(property.lock().icon.clone())
                             .color(&icon_color)
+                            .oversize_scale_mode(ScaleMode::Contain)
+                            .undersize_scale_mode(ScaleMode::Contain)
                             .item()
                             .size(Size::Fixed(18.0), Size::Fixed(18.0))
                             .align_content(Alignment::Center)
@@ -155,7 +161,7 @@ impl Button {
                         .font_size(&label_size)
                         .item()
                         .opacity(&label_opacity),
-                ),
+                ).align_items(AlignItems::Center).item(),
             )
             .item()
             .background(
@@ -221,11 +227,61 @@ impl Button {
                             })
                     )
             )
+            .foreground(
+                window_context
+                    .rectangle(Color::TRANSPARENT)
+                    .outline_width(3).outline_offset(5)
+                    .outline_color(&focus_indicator_color)
+                    .radius(f32::MAX)
+                    .item()
+            )
             .align_content(Alignment::CenterStart)
             .width(Size::Auto)
             .height(&container_height)
             .padding_start(16.0)
             .padding_end(24.0);
+
+        {
+            let state = item.data().get_state().clone();
+            let theme = theme.clone();
+            focus_indicator_color.set_dynamic(
+                [state.to_observable(), theme.to_observable()].into(),
+                move || {
+                    if state.get() == ItemState::Focused {
+                        theme.lock().get_color(color::SECONDARY).unwrap()
+                    } else {
+                        Color::TRANSPARENT
+                    }
+                },
+            );
+        }
+
+        item.data().set_focus_next(|item|{
+            if !item.get_enabled().get() {
+                return true;
+            }
+            let focused = item.get_focused();
+            if !focused.get() {
+                focused.set(true);
+                false
+            } else {
+                true
+            }
+        });
+
+        item.data().get_focused().add_specific_observer(
+            generate_id(),
+            {
+                let property = property.clone();
+                move |focused| {
+                    let property = property.lock();
+                    let button_type = property.button_type.get();
+                    if *focused {
+                        println!("{:?} button focused", button_type);
+                    }
+                }
+            }
+        );
 
         fn set_property_from_theme<T: Send + 'static>(shared: &Shared<T>, theme: &Shared<Theme>, state: &Shared<ItemState>, property: &Shared<ButtonProperty>, f: impl Fn(State) -> T + Send + 'static) {
             let theme = theme.clone();
@@ -381,7 +437,7 @@ impl Button {
             &property,
             |mut state| state.icon().color().get(),
         );
-        
+
         set_property_from_theme(
             &icon_opacity,
             &theme,

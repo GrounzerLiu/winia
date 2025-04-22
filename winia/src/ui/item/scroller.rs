@@ -11,8 +11,8 @@ pub struct Scroller {
     event_loop_proxy: EventLoopProxy,
     scroll_enabled: (bool, bool),
     mouse_scroll_speed: f32,
-    x_deltas: LinkedList<f32>,
-    y_deltas: LinkedList<f32>,
+    x_deltas: f32,
+    y_deltas: f32,
     thumb_opacity: SharedF32,
 }
 
@@ -26,8 +26,8 @@ impl Scroller {
             event_loop_proxy: event_loop_proxy.clone(),
             scroll_enabled,
             mouse_scroll_speed: 30.0,
-            x_deltas: LinkedList::new(),
-            y_deltas: LinkedList::new(),
+            x_deltas: 0.0,
+            y_deltas: 0.0,
             thumb_opacity: 1.0.into(),
         }
     }
@@ -39,11 +39,11 @@ impl Scroller {
         self.scroll_enabled = scroll_enabled;
     }
     
-    pub fn x_deltas(&mut self) -> &mut LinkedList<f32> {
+    pub fn x_deltas(&mut self) -> &mut f32 {
         &mut self.x_deltas
     }
     
-    pub fn y_deltas(&mut self) -> &mut LinkedList<f32> {
+    pub fn y_deltas(&mut self) -> &mut f32 {
         &mut self.y_deltas
     }
     
@@ -51,18 +51,18 @@ impl Scroller {
         match mouse_wheel.delta {
             MouseScrollDelta::LineDelta(x, y) => {
                 if self.scroll_enabled.0 {
-                    self.x_deltas.push_back(- x * self.mouse_scroll_speed);
+                    self.x_deltas += x * self.mouse_scroll_speed;
                 }
                 if self.scroll_enabled.1 {
-                    self.y_deltas.push_back(- y * self.mouse_scroll_speed);
+                    self.y_deltas += y * self.mouse_scroll_speed;
                 }
             }
             MouseScrollDelta::LogicalDelta(x, y) => {
                 if self.scroll_enabled.0 {
-                    self.x_deltas.push_back(-x);
+                    self.x_deltas += x;
                 }
                 if self.scroll_enabled.1 {
-                    self.y_deltas.push_back(-y);
+                    self.y_deltas += y;
                 }
             }
         }
@@ -106,10 +106,10 @@ impl Scroller {
         if scroll_extent.1 < scroll_range.1 / 2.0 {
             let thumb_width = 10.0;
             let thumb_height =
-                scroll_extent.1 / scroll_range.1 * display_parameter.height;
+                (scroll_extent.1 / scroll_range.1 * display_parameter.height).clamp(64.0, f32::MAX);
             let thumb_x = display_parameter.x() + display_parameter.width - thumb_width;
             let thumb_y = display_parameter.y()
-                + scroll_position.1 / scroll_range.1 * display_parameter.height;
+                + scroll_position.1 / scroll_range.1 * (display_parameter.height);
             let thumb_rect = RRect::new_rect_xy(
                 Rect::from_xywh(thumb_x, thumb_y, thumb_width, thumb_height),
                 5.0,

@@ -282,11 +282,11 @@ use std::ops::Add;
 use crate::shared::{Shared, SharedUnSend};
 use crate::ui::Item;
 
-pub type Children = Shared<Vec<Item>>;
+pub type Children = SharedUnSend<Vec<Item>>;
 
 impl Children {
     pub fn new() -> Self {
-        Shared::from_static(Vec::new())
+        SharedUnSend::from_static(Vec::new())
     }
     pub fn add(&mut self, item: Item) {
         self.lock().push(item);

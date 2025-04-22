@@ -604,7 +604,7 @@ fn flex_test_ui(app: WindowContext, property: WindowAttr) -> Item {
                 .width(&size)
                 .height(&size),
     )
-    .direction(FlexDirection::Horizontal)
+    .flex_direction(FlexDirection::Horizontal)
     .wrap(FlexWrap::Wrap)
     .justify_content(JustifyContent::Start)
     .align_content(AlignContent::Start)

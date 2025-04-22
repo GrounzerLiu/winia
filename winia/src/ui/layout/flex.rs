@@ -4,8 +4,9 @@ use crate::ui::item::{CustomProperty, ItemData, LogicalX, MeasureMode, Orientati
 use crate::ui::Item;
 use proc_macro::item;
 use std::ops::Not;
+use strum_macros::EnumString;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString)]
 pub enum FlexDirection {
     Horizontal,
     HorizontalReverse,
@@ -22,14 +23,14 @@ impl FlexDirection {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString)]
 pub enum FlexWrap {
     NoWrap,
     Wrap,
     WrapReverse,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString)]
 pub enum JustifyContent {
     Start,
     End,
@@ -39,7 +40,7 @@ pub enum JustifyContent {
     SpaceEvenly,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString)]
 pub enum AlignItems {
     Start,
     End,
@@ -48,7 +49,7 @@ pub enum AlignItems {
     Stretch,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString)]
 pub enum AlignContent {
     Start,
     End,
@@ -72,7 +73,7 @@ impl GetFlexGrow for ItemData {
         match self.get_custom_property("flex_grow") {
             None => None,
             Some(CustomProperty::Usize(f)) => Some(f.clone()),
-            _=> None
+            _ => None,
         }
     }
 }
@@ -87,12 +88,16 @@ impl FlexGrow for Item {
     /// The lock with value greater than 0 will be resized proportionally to the remaining space.
     fn flex_grow(self, flex_grow: impl Into<SharedUsize>) -> Self {
         let id = self.data().get_id();
-        if let Some(CustomProperty::Any(flex_grow)) =
-            self.data().get_custom_property_mut("flex_grow")
+        // if let Some(CustomProperty::Any(flex_grow)) =
+        //     self.data().get_custom_property_mut("flex_grow")
+        // {
+        //     if let Some(flex_grow) = flex_grow.downcast_mut::<SharedUsize>() {
+        //         flex_grow.remove_observer(id);
+        //     }
+        // }
+        if let Some(CustomProperty::Usize(flex_grow)) = self.data().get_custom_property("flex_grow")
         {
-            if let Some(flex_grow) = flex_grow.downcast_mut::<SharedAlignment>() {
-                flex_grow.remove_observer(id);
-            }
+            flex_grow.remove_observer(id);
         }
 
         let event_loop_proxy = self.data().get_window_context().event_loop_proxy().clone();
@@ -104,7 +109,7 @@ impl FlexGrow for Item {
             }),
         );
         self.data()
-            .custom_property("flex_grow", CustomProperty::Any(Box::new(flex_grow)));
+            .custom_property("flex_grow", CustomProperty::Usize(flex_grow));
         self
     }
 }
@@ -114,7 +119,7 @@ struct FlexProperties {
     pub direction: Shared<FlexDirection>,
     pub wrap: Shared<FlexWrap>,
     pub justify_content: Shared<JustifyContent>,
-    pub align_lock: Shared<AlignItems>,
+    pub align_items: Shared<AlignItems>,
     pub align_content: Shared<AlignContent>,
     pub main_axis_gap: Shared<f32>,
     pub cross_axis_gap: Shared<f32>,
@@ -126,7 +131,7 @@ struct Line {
     /// The orientation of the line.
     orientation: Orientation,
     /// The alignment of the lock in the line.
-    align_lock: AlignItems,
+    align_items: AlignItems,
     gap: f32,
     /// The maximum main axis size of the line.
     ///
@@ -142,7 +147,7 @@ impl Line {
     pub fn new(
         start_index: usize,
         orientation: Orientation,
-        align_lock: AlignItems,
+        align_items: AlignItems,
         gap: f32,
         max_main_axis_size: impl Into<Option<f32>>,
     ) -> Self {
@@ -150,7 +155,7 @@ impl Line {
             start_index,
             count: 0,
             orientation,
-            align_lock,
+            align_items,
             gap,
             max_main_axis_size: max_main_axis_size.into(),
             width: 0.0,
@@ -225,6 +230,7 @@ impl Line {
             }
     }
 
+    /// Check if the line exceeds the maximum main axis size when adding a new item.
     fn is_exceed(&self, size: f32) -> bool {
         let max_main_axis_size = self.max_main_axis_size.unwrap_or(f32::MAX);
         let count = self.count as f32;
@@ -244,7 +250,7 @@ impl Line {
 
         self.set_main_axis_size(self.main_axis_size() + child_main_axis_occupied_size);
 
-        if self.align_lock == AlignItems::Baseline {
+        if self.align_items == AlignItems::Baseline {
             let child_baseline = if self.orientation == Orientation::Horizontal {
                 data.get_baseline()
             } else {
@@ -301,7 +307,7 @@ impl Lines {
     pub fn new(
         item: &ItemData,
         orientation: Orientation,
-        align_lock: AlignItems,
+        align_items: AlignItems,
         main_axis_gap: f32,
         cross_axis_gap: f32,
         max_main_axis_size: Option<f32>,
@@ -310,26 +316,48 @@ impl Lines {
         let mut line = Line::new(
             0,
             orientation,
-            align_lock,
+            align_items,
             main_axis_gap,
             max_main_axis_size,
         );
+
+        // Iterate over the children of the item and add them to the line.
         for (index, child) in item.get_children().lock().iter().enumerate() {
+            // Try to add the child to the current line.
             if !line.try_add_item(child) {
-                lines.push(line);
-                line = Line::new(
-                    index,
-                    orientation,
-                    align_lock,
-                    main_axis_gap,
-                    max_main_axis_size,
-                );
-                line.add_item(child);
+                // Fail to add the child, so push the current line to the lines vector and create a new line.
+                if line.count == 0 {
+                    // If failed to add the child and the line is empty,
+                    // it means the child is too large to fit in the line.
+                    // So we need to force add the child to the line.
+                    line.add_item(child);
+                    lines.push(line);
+                    line = Line::new(
+                        index,
+                        orientation,
+                        align_items,
+                        main_axis_gap,
+                        max_main_axis_size,
+                    );
+                } else {
+                    lines.push(line);
+                    line = Line::new(
+                        index,
+                        orientation,
+                        align_items,
+                        main_axis_gap,
+                        max_main_axis_size,
+                    );
+                    // Add the child to the new line.
+                    line.add_item(child);
+                }
             }
         }
+
         if line.count > 0 {
             lines.push(line);
         }
+
         let mut width = 0.0_f32;
         let mut height = 0.0_f32;
         match orientation {
@@ -391,10 +419,11 @@ impl Lines {
     }
 }
 
+/// Calculate the size of the flex item.
 fn calculate_size(
     item: &ItemData,
     orientation: Orientation,
-    align_lock: AlignItems,
+    align_items: AlignItems,
     main_axis_gap: f32,
     cross_axis_gap: f32,
     max_main_axis_size: Option<f32>,
@@ -402,7 +431,7 @@ fn calculate_size(
     let l = Lines::new(
         item,
         orientation,
-        align_lock,
+        align_items,
         main_axis_gap,
         cross_axis_gap,
         max_main_axis_size,
@@ -412,7 +441,7 @@ fn calculate_size(
 
     let max_main_axis_size = max_main_axis_size.unwrap_or(f32::MAX);
 
-    match orientation {
+    /*    match orientation {
         Orientation::Horizontal => {
             let mut width = 0.0_f32;
             let mut height = 0.0_f32;
@@ -457,22 +486,24 @@ fn calculate_size(
                 },
             )
         }
-    }
+    }*/
+
+    (l.width(), l.height())
 }
 
 #[item(children: impl Into<Children>)]
 pub struct Flex {
     item: Item,
-    properties: Shared<FlexProperties>,
+    property: Shared<FlexProperties>,
 }
 
 impl Flex {
     pub fn new(app_context: &WindowContext, children: impl Into<Children>) -> Self {
-        let properties = Shared::from(FlexProperties {
+        let property = Shared::from(FlexProperties {
             direction: FlexDirection::Horizontal.into(),
             wrap: FlexWrap::NoWrap.into(),
             justify_content: JustifyContent::Start.into(),
-            align_lock: AlignItems::Start.into(),
+            align_items: AlignItems::Start.into(),
             align_content: AlignContent::Start.into(),
             main_axis_gap: 0.0.into(),
             cross_axis_gap: 0.0.into(),
@@ -481,13 +512,13 @@ impl Flex {
         let item = Item::new(app_context, children.into());
         item.data()
             .set_measure({
-                let properties = properties.clone();
+                let property = property.clone();
                 move |item, width_mode, height_mode| {
-                    let properties = properties.lock();
+                    let property = property.lock();
                     item.measure_children(width_mode, height_mode);
-                    let direction = properties.direction.get();
-                    let wrap = properties.wrap.get();
-                    let align_lock = properties.align_lock.get();
+                    let direction = property.direction.get();
+                    let wrap = property.wrap.get();
+                    let align_items = property.align_items.get();
 
                     let max_width = match width_mode {
                         MeasureMode::Specified(width) => item.clamp_width(width),
@@ -503,9 +534,9 @@ impl Flex {
                     let (children_width, children_height) = calculate_size(
                         item,
                         orientation,
-                        align_lock,
-                        properties.main_axis_gap.get(),
-                        properties.cross_axis_gap.get(),
+                        align_items,
+                        property.main_axis_gap.get(),
+                        property.cross_axis_gap.get(),
                         if wrap == FlexWrap::NoWrap {
                             None
                         } else if orientation == Orientation::Horizontal {
@@ -515,30 +546,36 @@ impl Flex {
                         },
                     );
 
+                    let min_width = item.get_min_width().get();
+                    let min_height = item.get_min_height().get();
+                    let max_width = max_width.max(min_width);
+                    let max_height = max_height.max(min_height);
                     let padding_horizontal = item.get_padding(Orientation::Horizontal);
                     let padding_vertical = item.get_padding(Orientation::Vertical);
-
                     let measure_parameter = item.get_measure_parameter();
                     match width_mode {
                         MeasureMode::Specified(width) => {
-                            measure_parameter.width = width;
+                            measure_parameter.width = width.clamp(min_width, max_width);
                             match height_mode {
                                 MeasureMode::Specified(height) => {
-                                    measure_parameter.height = height;
+                                    measure_parameter.height = height.clamp(min_height, max_height);
                                 }
                                 MeasureMode::Unspecified(_) => {
-                                    measure_parameter.height = children_height + padding_vertical;
+                                    measure_parameter.height = (children_height + padding_vertical)
+                                        .clamp(min_height, max_height);
                                 }
                             }
                         }
                         MeasureMode::Unspecified(_) => {
-                            measure_parameter.width = children_width + padding_horizontal;
+                            measure_parameter.width =
+                                (children_width + padding_horizontal).clamp(min_width, max_width);
                             match height_mode {
                                 MeasureMode::Specified(height) => {
-                                    measure_parameter.height = height;
+                                    measure_parameter.height = height.clamp(min_height, max_height);
                                 }
                                 MeasureMode::Unspecified(_) => {
-                                    measure_parameter.height = children_height + padding_vertical;
+                                    measure_parameter.height = (children_height + padding_vertical)
+                                        .clamp(min_height, max_height);
                                 }
                             }
                         }
@@ -546,32 +583,30 @@ impl Flex {
                 }
             })
             .set_layout({
-                let properties = properties.clone();
+                let property = property.clone();
                 move |item, width, height| {
                     if item.get_children().lock().is_empty() {
                         return;
                     }
-
-
 
                     let padding_start = item.get_padding_start().get();
                     let padding_end = item.get_padding_end().get();
                     let padding_top = item.get_padding_top().get();
                     let padding_bottom = item.get_padding_bottom().get();
 
-                    let properties = properties.lock();
-                    let direction = properties.direction.get();
-                    let wrap = properties.wrap.get();
-                    let justify_content = properties.justify_content.get();
-                    let align_lock = properties.align_lock.get();
-                    let align_content = properties.align_content.get();
-                    let main_axis_gap = properties.main_axis_gap.get();
-                    let cross_axis_gap = properties.cross_axis_gap.get();
+                    let property = property.lock();
+                    let direction = property.direction.get();
+                    let wrap = property.wrap.get();
+                    let justify_content = property.justify_content.get();
+                    let align_items = property.align_items.get();
+                    let align_content = property.align_content.get();
+                    let main_axis_gap = property.main_axis_gap.get();
+                    let cross_axis_gap = property.cross_axis_gap.get();
 
                     let lines = Lines::new(
                         item,
                         direction.orientation(),
-                        align_lock,
+                        align_items,
                         main_axis_gap,
                         cross_axis_gap,
                         if wrap == FlexWrap::NoWrap {
@@ -590,6 +625,11 @@ impl Flex {
 
                     match direction {
                         FlexDirection::Horizontal | FlexDirection::HorizontalReverse => {
+                            let lines_height = if wrap == FlexWrap::NoWrap {
+                                height - padding_top - padding_bottom
+                            } else {
+                                lines_height
+                            };
                             let remaining_space_between_lines =
                                 height - lines_height - padding_top - padding_bottom;
                             let mut line_stretch = None;
@@ -622,10 +662,12 @@ impl Flex {
                                         padding_top + space_between_lines
                                     }
                                     AlignContent::Stretch => {
-                                        line_stretch = Some(
-                                            (height - padding_top - padding_bottom)
-                                                / line_count as f32,
-                                        );
+                                        if wrap != FlexWrap::NoWrap {
+                                            line_stretch = Some(
+                                                (height - padding_top - padding_bottom)
+                                                    / line_count as f32,
+                                            );
+                                        }
                                         padding_top
                                     }
                                 }
@@ -634,7 +676,7 @@ impl Flex {
                                 match align_content {
                                     AlignContent::Start => default_y,
                                     AlignContent::End => lines_height + padding_top,
-                                    AlignContent::Center => (height - lines_height) / 2.0,
+                                    AlignContent::Center => default_y - (height - lines_height) / 2.0,
                                     AlignContent::SpaceBetween => {
                                         if remaining_space_between_lines > 0.0 && line_count > 1 {
                                             space_between_lines = remaining_space_between_lines
@@ -673,9 +715,9 @@ impl Flex {
 
                                 let total_grow = {
                                     let mut total_grow = 0_usize;
-                                    for child in start_index..start_index + count {
-                                        let child_lock = item.get_children().lock();
-                                        let child = child_lock.get(child).unwrap();
+                                    for index in start_index..start_index + count {
+                                        let children = item.get_children().lock();
+                                        let child = children.get(index).unwrap();
                                         {
                                             let child_data = child.data();
                                             if let Some(grow) = child_data.get_flex_grow() {
@@ -686,9 +728,9 @@ impl Flex {
                                     total_grow
                                 };
 
-                                let remaining_space_between_lock =
+                                let remaining_space_between_items =
                                     width - line_width - padding_start - padding_end;
-                                let mut space_between_lock = 0.0_f32;
+                                let mut space_between_items = 0.0_f32;
                                 let raw_x = if direction == FlexDirection::Horizontal {
                                     match justify_content {
                                         JustifyContent::Start => padding_start,
@@ -698,10 +740,10 @@ impl Flex {
                                             if total_grow == 0 {
                                                 let count = line.count as f32;
                                                 if count > 1.0
-                                                    && remaining_space_between_lock > 0.0
+                                                    && remaining_space_between_items > 0.0
                                                 {
-                                                    space_between_lock =
-                                                        remaining_space_between_lock
+                                                    space_between_items =
+                                                        remaining_space_between_items
                                                             / (count - 1.0);
                                                 }
                                             }
@@ -711,12 +753,12 @@ impl Flex {
                                             if total_grow == 0 {
                                                 let count = line.count as f32;
                                                 if count > 0.0
-                                                    && remaining_space_between_lock > 0.0
+                                                    && remaining_space_between_items > 0.0
                                                 {
-                                                    space_between_lock =
-                                                        remaining_space_between_lock / count;
+                                                    space_between_items =
+                                                        remaining_space_between_items / count;
                                                 }
-                                                space_between_lock / 2.0
+                                                space_between_items / 2.0
                                             } else {
                                                 padding_start
                                             }
@@ -725,13 +767,13 @@ impl Flex {
                                             if total_grow == 0 {
                                                 let count = line.count as f32;
                                                 if count > 0.0
-                                                    && remaining_space_between_lock > 0.0
+                                                    && remaining_space_between_items > 0.0
                                                 {
-                                                    space_between_lock =
-                                                        remaining_space_between_lock
+                                                    space_between_items =
+                                                        remaining_space_between_items
                                                             / (count + 1.0);
                                                 }
-                                                space_between_lock
+                                                space_between_items
                                             } else {
                                                 padding_start
                                             }
@@ -742,15 +784,15 @@ impl Flex {
                                     match justify_content {
                                         JustifyContent::Start => default_x,
                                         JustifyContent::End => padding_start + line_width,
-                                        JustifyContent::Center => (width - line_width) / 2.0,
+                                        JustifyContent::Center => default_x - (width - line_width) / 2.0,
                                         JustifyContent::SpaceBetween => {
                                             if total_grow == 0 {
                                                 let count = line.count as f32;
                                                 if count > 1.0
-                                                    && remaining_space_between_lock > 0.0
+                                                    && remaining_space_between_items > 0.0
                                                 {
-                                                    space_between_lock =
-                                                        remaining_space_between_lock
+                                                    space_between_items =
+                                                        remaining_space_between_items
                                                             / (count - 1.0);
                                                 }
                                             }
@@ -760,12 +802,12 @@ impl Flex {
                                             if total_grow == 0 {
                                                 let count = line.count as f32;
                                                 if count > 0.0
-                                                    && remaining_space_between_lock > 0.0
+                                                    && remaining_space_between_items > 0.0
                                                 {
-                                                    space_between_lock =
-                                                        remaining_space_between_lock / count;
+                                                    space_between_items =
+                                                        remaining_space_between_items / count;
                                                 }
-                                                default_x - space_between_lock / 2.0
+                                                default_x - space_between_items / 2.0
                                             } else {
                                                 default_x
                                             }
@@ -774,13 +816,13 @@ impl Flex {
                                             if total_grow == 0 {
                                                 let count = line.count as f32;
                                                 if count > 0.0
-                                                    && remaining_space_between_lock > 0.0
+                                                    && remaining_space_between_items > 0.0
                                                 {
-                                                    space_between_lock =
-                                                        remaining_space_between_lock
+                                                    space_between_items =
+                                                        remaining_space_between_items
                                                             / (count + 1.0);
                                                 }
-                                                default_x - space_between_lock
+                                                default_x - space_between_items
                                             } else {
                                                 default_x
                                             }
@@ -792,8 +834,8 @@ impl Flex {
                                     LogicalX::new(item.get_layout_direction().get(), raw_x, width);
 
                                 for index in start_index..start_index + count {
-                                    let mut children_lock = item.get_children().lock();
-                                    let child = children_lock.get_mut(index).unwrap();
+                                    let mut children = item.get_children().lock();
+                                    let child = children.get_mut(index).unwrap();
                                     let mut child_data = child.data();
                                     let child_param = child_data.get_measure_parameter();
 
@@ -808,30 +850,28 @@ impl Flex {
                                     let child_margin_start = child_data.get_margin_start().get();
                                     let child_margin_end = child_data.get_margin_end().get();
                                     let child_margin_top = child_data.get_margin_top().get();
-                                    let child_margin_bottom =
-                                        child_data.get_margin_bottom().get();
+                                    let child_margin_bottom = child_data.get_margin_bottom().get();
 
-                                    if remaining_space_between_lock > 0.0 && total_grow > 0 {
-                                        let flex_grow = child
-                                            .data()
+                                    if remaining_space_between_items > 0.0 && total_grow > 0 {
+                                        let flex_grow = child_data
                                             .get_flex_grow()
                                             .map(|v| v.get())
                                             .unwrap_or(0);
                                         if flex_grow > 0 {
-                                            child_width += remaining_space_between_lock
+                                            child_width += remaining_space_between_items
                                                 * (flex_grow as f32 / total_grow as f32);
                                         }
                                     }
 
-                                    let line_height = if line_count == 1 {
-                                        height
+                                    let line_height = if wrap == FlexWrap::NoWrap {
+                                        height - padding_top - padding_bottom
                                     } else {
                                         line.height()
                                     };
 
                                     let child_y = if wrap != FlexWrap::WrapReverse {
                                         y + if line_stretch.is_none() {
-                                            match align_lock {
+                                            match align_items {
                                                 AlignItems::Start => child_margin_top,
                                                 AlignItems::End => {
                                                     line_height - child_margin_bottom - child_height
@@ -840,8 +880,7 @@ impl Flex {
                                                     (line_height - child_height) / 2.0
                                                 }
                                                 AlignItems::Baseline => {
-                                                    let child_baseline =
-                                                        child_data.get_baseline();
+                                                    let child_baseline = child_data.get_baseline();
                                                     match child_baseline {
                                                         None => child_margin_top,
                                                         Some(baseline) => {
@@ -861,7 +900,7 @@ impl Flex {
                                         }
                                     } else {
                                         y - if line_stretch.is_none() {
-                                            match align_lock {
+                                            match align_items {
                                                 AlignItems::Start => child_margin_bottom,
                                                 AlignItems::End => {
                                                     line_height - child_margin_top - child_height
@@ -870,12 +909,11 @@ impl Flex {
                                                     (line_height - child_height) / 2.0
                                                 }
                                                 AlignItems::Baseline => {
-                                                    let child_baseline =
-                                                        child_data.get_baseline();
+                                                    let child_baseline = child_data.get_baseline();
                                                     match child_baseline {
                                                         None => child_margin_bottom,
                                                         Some(baseline) => {
-                                                            line.over_baseline - baseline
+                                                            line.over_baseline - (child_height - baseline)
                                                         }
                                                     }
                                                 }
@@ -914,7 +952,7 @@ impl Flex {
                                     x += (child_width
                                         + child_margin_end
                                         + main_axis_gap
-                                        + space_between_lock)
+                                        + space_between_items)
                                         * x_factor;
                                 }
                                 y += (if let Some(line_stretch) = line_stretch {
@@ -931,7 +969,11 @@ impl Flex {
                             }
                         }
                         FlexDirection::Vertical | FlexDirection::VerticalReverse => {
-                            // let remaining_space_between_lines = height - lines_height - padding_top - padding_bottom;
+                            let lines_width = if wrap == FlexWrap::NoWrap {
+                                width - padding_start - padding_end
+                            } else {
+                                lines_width
+                            };
                             let remaining_space_between_lines =
                                 width - lines_width - padding_start - padding_end;
                             let mut line_stretch = None;
@@ -974,10 +1016,12 @@ impl Flex {
                                         //     (height - padding_top - padding_bottom) / line_count as f32
                                         // );
                                         // padding_top
-                                        line_stretch = Some(
-                                            (width - padding_start - padding_end)
-                                                / line_count as f32,
-                                        );
+                                        if wrap != FlexWrap::NoWrap {
+                                            line_stretch = Some(
+                                                (width - padding_start - padding_end)
+                                                    / line_count as f32,
+                                            );
+                                        }
                                         padding_start
                                     }
                                 }
@@ -990,7 +1034,7 @@ impl Flex {
                                     // AlignContent::Center => (height - lines_height) / 2.0,
                                     AlignContent::Start => default_x,
                                     AlignContent::End => lines_width + padding_start,
-                                    AlignContent::Center => (width - lines_width) / 2.0,
+                                    AlignContent::Center => default_x - (width - lines_width) / 2.0,
                                     AlignContent::SpaceBetween => {
                                         if remaining_space_between_lines > 0.0 && line_count > 1 {
                                             space_between_lines = remaining_space_between_lines
@@ -1040,8 +1084,8 @@ impl Flex {
                                 let total_grow = {
                                     let mut total_grow = 0_usize;
                                     for child in start_index..start_index + count {
-                                        let child_lock = item.get_children().lock();
-                                        let child = child_lock.get(child).unwrap();
+                                        let children = item.get_children().lock();
+                                        let child = children.get(child).unwrap();
                                         {
                                             let child_data = child.data();
                                             if let Some(grow) = child_data.get_flex_grow() {
@@ -1053,9 +1097,9 @@ impl Flex {
                                 };
 
                                 // let remaining_space_between_lock = width - line_width - padding_start - padding_end;
-                                let remaining_space_between_lock =
+                                let remaining_space_between_items =
                                     height - line_height - padding_top - padding_bottom;
-                                let mut space_between_lock = 0.0_f32;
+                                let mut space_between_items = 0.0_f32;
                                 let raw_y = if direction == FlexDirection::Vertical {
                                     match justify_content {
                                         // JustifyContent::Start => padding_start,
@@ -1070,10 +1114,10 @@ impl Flex {
                                             if total_grow == 0 {
                                                 let count = line.count as f32;
                                                 if count > 1.0
-                                                    && remaining_space_between_lock > 0.0
+                                                    && remaining_space_between_items > 0.0
                                                 {
-                                                    space_between_lock =
-                                                        remaining_space_between_lock
+                                                    space_between_items =
+                                                        remaining_space_between_items
                                                             / (count - 1.0);
                                                 }
                                             }
@@ -1084,12 +1128,12 @@ impl Flex {
                                             if total_grow == 0 {
                                                 let count = line.count as f32;
                                                 if count > 0.0
-                                                    && remaining_space_between_lock > 0.0
+                                                    && remaining_space_between_items > 0.0
                                                 {
-                                                    space_between_lock =
-                                                        remaining_space_between_lock / count;
+                                                    space_between_items =
+                                                        remaining_space_between_items / count;
                                                 }
-                                                space_between_lock / 2.0
+                                                space_between_items / 2.0
                                             } else {
                                                 // padding_start
                                                 padding_top
@@ -1099,13 +1143,13 @@ impl Flex {
                                             if total_grow == 0 {
                                                 let count = line.count as f32;
                                                 if count > 0.0
-                                                    && remaining_space_between_lock > 0.0
+                                                    && remaining_space_between_items > 0.0
                                                 {
-                                                    space_between_lock =
-                                                        remaining_space_between_lock
+                                                    space_between_items =
+                                                        remaining_space_between_items
                                                             / (count + 1.0);
                                                 }
-                                                space_between_lock
+                                                space_between_items
                                             } else {
                                                 // padding_start
                                                 padding_top
@@ -1121,15 +1165,15 @@ impl Flex {
                                         // JustifyContent::Center => (width - line_width) / 2.0,
                                         JustifyContent::Start => default_y,
                                         JustifyContent::End => padding_top + line_height,
-                                        JustifyContent::Center => (height - line_height) / 2.0,
+                                        JustifyContent::Center => default_y - (height - line_height) / 2.0,
                                         JustifyContent::SpaceBetween => {
                                             if total_grow == 0 {
                                                 let count = line.count as f32;
                                                 if count > 1.0
-                                                    && remaining_space_between_lock > 0.0
+                                                    && remaining_space_between_items > 0.0
                                                 {
-                                                    space_between_lock =
-                                                        remaining_space_between_lock
+                                                    space_between_items =
+                                                        remaining_space_between_items
                                                             / (count - 1.0);
                                                 }
                                             }
@@ -1140,13 +1184,13 @@ impl Flex {
                                             if total_grow == 0 {
                                                 let count = line.count as f32;
                                                 if count > 0.0
-                                                    && remaining_space_between_lock > 0.0
+                                                    && remaining_space_between_items > 0.0
                                                 {
-                                                    space_between_lock =
-                                                        remaining_space_between_lock / count;
+                                                    space_between_items =
+                                                        remaining_space_between_items / count;
                                                 }
                                                 // default_x - space_between_lock / 2.0
-                                                default_y - space_between_lines / 2.0
+                                                default_y - space_between_items / 2.0
                                             } else {
                                                 // default_x
                                                 default_y
@@ -1156,14 +1200,14 @@ impl Flex {
                                             if total_grow == 0 {
                                                 let count = line.count as f32;
                                                 if count > 0.0
-                                                    && remaining_space_between_lock > 0.0
+                                                    && remaining_space_between_items > 0.0
                                                 {
-                                                    space_between_lock =
-                                                        remaining_space_between_lock
+                                                    space_between_items =
+                                                        remaining_space_between_items
                                                             / (count + 1.0);
                                                 }
                                                 // default_x - space_between_lock
-                                                default_y - space_between_lines
+                                                default_y - space_between_items
                                             } else {
                                                 // default_x
                                                 default_y
@@ -1176,8 +1220,8 @@ impl Flex {
                                 let mut y = raw_y;
 
                                 for index in start_index..start_index + count {
-                                    let mut children_lock = item.get_children().lock();
-                                    let child = children_lock.get_mut(index).unwrap();
+                                    let mut children = item.get_children().lock();
+                                    let child = children.get_mut(index).unwrap();
                                     let mut child_data = child.data();
                                     let child_param = child_data.get_measure_parameter();
 
@@ -1197,10 +1241,9 @@ impl Flex {
                                     let child_margin_start = child_data.get_margin_start().get();
                                     let child_margin_end = child_data.get_margin_end().get();
                                     let child_margin_top = child_data.get_margin_top().get();
-                                    let child_margin_bottom =
-                                        child_data.get_margin_bottom().get();
+                                    let child_margin_bottom = child_data.get_margin_bottom().get();
 
-                                    if remaining_space_between_lock > 0.0 && total_grow > 0 {
+                                    if remaining_space_between_items > 0.0 && total_grow > 0 {
                                         let flex_grow = child
                                             .data()
                                             .get_flex_grow()
@@ -1208,22 +1251,20 @@ impl Flex {
                                             .unwrap_or(0);
                                         if flex_grow > 0 {
                                             // child_width += remaining_space_between_lock * (flex_grow as f32 / total_grow as f32);
-                                            child_height += remaining_space_between_lock
+                                            child_height += remaining_space_between_items
                                                 * (flex_grow as f32 / total_grow as f32);
                                         }
                                     }
-
-                                    // let line_height = if line_count == 1 {
-                                    //     height
-                                    // } else {
-                                    //     line.height()
-                                    // };
-                                    let line_width =
-                                        if line_count == 1 { width } else { line.width() };
+                                    
+                                    let line_width = if wrap == FlexWrap::NoWrap {
+                                        width - padding_start - padding_end
+                                    } else {
+                                        line.width()
+                                    };
 
                                     let child_x = if wrap != FlexWrap::WrapReverse {
                                         x + if line_stretch.is_none() {
-                                            match align_lock {
+                                            match align_items {
                                                 // AlignItems::Start => child_margin_top,
                                                 // AlignItems::End => line_height - child_margin_bottom - child_height,
                                                 // AlignItems::Center => (line_height - child_height) / 2.0,
@@ -1256,7 +1297,7 @@ impl Flex {
                                         }
                                     } else {
                                         x - if line_stretch.is_none() {
-                                            match align_lock {
+                                            match align_items {
                                                 // AlignItems::Start => child_margin_bottom,
                                                 // AlignItems::End => line_height - child_margin_top - child_height,
                                                 // AlignItems::Center => (line_height - child_height) / 2.0,
@@ -1316,7 +1357,7 @@ impl Flex {
                                     y += (child_height
                                         + child_margin_bottom
                                         + main_axis_gap
-                                        + space_between_lock)
+                                        + space_between_items)
                                         * y_factor;
                                 }
                                 // y += (
@@ -1343,17 +1384,25 @@ impl Flex {
                 }
             });
 
-        Self { item, properties }
+        Self {
+            item,
+            property: property,
+        }
     }
 
-    pub fn direction(self, direction: impl Into<Shared<FlexDirection>>) -> Self {
+    pub fn flex_direction(self, direction: impl Into<Shared<FlexDirection>>) -> Self {
         {
             let id = self.item.data().get_id();
-            let event_loop_proxy = self.item.data().get_window_context().event_loop_proxy().clone();
-            let mut properties = self.properties.lock();
-            properties.direction.remove_observer(id);
-            properties.direction = direction.into();
-            properties.direction.add_observer(
+            let event_loop_proxy = self
+                .item
+                .data()
+                .get_window_context()
+                .event_loop_proxy()
+                .clone();
+            let mut property = self.property.lock();
+            property.direction.remove_observer(id);
+            property.direction = direction.into();
+            property.direction.add_observer(
                 id,
                 Box::new(move || {
                     event_loop_proxy.request_layout();
@@ -1366,11 +1415,16 @@ impl Flex {
     pub fn wrap(self, wrap: impl Into<Shared<FlexWrap>>) -> Self {
         {
             let id = self.item.data().get_id();
-            let event_loop_proxy = self.item.data().get_window_context().event_loop_proxy().clone();
-            let mut properties = self.properties.lock();
-            properties.wrap.remove_observer(id);
-            properties.wrap = wrap.into();
-            properties.wrap.add_observer(
+            let event_loop_proxy = self
+                .item
+                .data()
+                .get_window_context()
+                .event_loop_proxy()
+                .clone();
+            let mut property = self.property.lock();
+            property.wrap.remove_observer(id);
+            property.wrap = wrap.into();
+            property.wrap.add_observer(
                 id,
                 Box::new(move || {
                     event_loop_proxy.request_layout();
@@ -1383,11 +1437,16 @@ impl Flex {
     pub fn justify_content(self, justify_content: impl Into<Shared<JustifyContent>>) -> Self {
         {
             let id = self.item.data().get_id();
-            let event_loop_proxy = self.item.data().get_window_context().event_loop_proxy().clone();
-            let mut properties = self.properties.lock();
-            properties.justify_content.remove_observer(id);
-            properties.justify_content = justify_content.into();
-            properties.justify_content.add_observer(
+            let event_loop_proxy = self
+                .item
+                .data()
+                .get_window_context()
+                .event_loop_proxy()
+                .clone();
+            let mut property = self.property.lock();
+            property.justify_content.remove_observer(id);
+            property.justify_content = justify_content.into();
+            property.justify_content.add_observer(
                 id,
                 Box::new(move || {
                     event_loop_proxy.request_layout();
@@ -1397,14 +1456,19 @@ impl Flex {
         self
     }
 
-    pub fn align_lock(self, align_lock: impl Into<Shared<AlignItems>>) -> Self {
+    pub fn align_items(self, align_items: impl Into<Shared<AlignItems>>) -> Self {
         {
             let id = self.item.data().get_id();
-            let event_loop_proxy = self.item.data().get_window_context().event_loop_proxy().clone();
-            let mut properties = self.properties.lock();
-            properties.align_lock.remove_observer(id);
-            properties.align_lock = align_lock.into();
-            properties.align_lock.add_observer(
+            let event_loop_proxy = self
+                .item
+                .data()
+                .get_window_context()
+                .event_loop_proxy()
+                .clone();
+            let mut property = self.property.lock();
+            property.align_items.remove_observer(id);
+            property.align_items = align_items.into();
+            property.align_items.add_observer(
                 id,
                 Box::new(move || {
                     event_loop_proxy.request_layout();
@@ -1417,11 +1481,16 @@ impl Flex {
     pub fn align_content(self, align_content: impl Into<Shared<AlignContent>>) -> Self {
         {
             let id = self.item.data().get_id();
-            let event_loop_proxy = self.item.data().get_window_context().event_loop_proxy().clone();
-            let mut properties = self.properties.lock();
-            properties.align_content.remove_observer(id);
-            properties.align_content = align_content.into();
-            properties.align_content.add_observer(
+            let event_loop_proxy = self
+                .item
+                .data()
+                .get_window_context()
+                .event_loop_proxy()
+                .clone();
+            let mut property = self.property.lock();
+            property.align_content.remove_observer(id);
+            property.align_content = align_content.into();
+            property.align_content.add_observer(
                 id,
                 Box::new(move || {
                     event_loop_proxy.request_layout();
@@ -1434,11 +1503,16 @@ impl Flex {
     pub fn main_axis_gap(self, main_axis_gap: impl Into<Shared<f32>>) -> Self {
         {
             let id = self.item.data().get_id();
-            let event_loop_proxy = self.item.data().get_window_context().event_loop_proxy().clone();
-            let mut properties = self.properties.lock();
-            properties.main_axis_gap.remove_observer(id);
-            properties.main_axis_gap = main_axis_gap.into();
-            properties.main_axis_gap.add_observer(
+            let event_loop_proxy = self
+                .item
+                .data()
+                .get_window_context()
+                .event_loop_proxy()
+                .clone();
+            let mut property = self.property.lock();
+            property.main_axis_gap.remove_observer(id);
+            property.main_axis_gap = main_axis_gap.into();
+            property.main_axis_gap.add_observer(
                 id,
                 Box::new(move || {
                     event_loop_proxy.request_layout();
@@ -1451,11 +1525,16 @@ impl Flex {
     pub fn cross_axis_gap(self, cross_axis_gap: impl Into<Shared<f32>>) -> Self {
         {
             let id = self.item.data().get_id();
-            let event_loop_proxy = self.item.data().get_window_context().event_loop_proxy().clone();
-            let mut properties = self.properties.lock();
-            properties.cross_axis_gap.remove_observer(id);
-            properties.cross_axis_gap = cross_axis_gap.into();
-            properties.cross_axis_gap.add_observer(
+            let event_loop_proxy = self
+                .item
+                .data()
+                .get_window_context()
+                .event_loop_proxy()
+                .clone();
+            let mut property = self.property.lock();
+            property.cross_axis_gap.remove_observer(id);
+            property.cross_axis_gap = cross_axis_gap.into();
+            property.cross_axis_gap.add_observer(
                 id,
                 Box::new(move || {
                     event_loop_proxy.request_layout();
