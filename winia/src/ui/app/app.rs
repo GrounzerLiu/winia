@@ -814,7 +814,6 @@ pub fn run_app(app: App) {
     run_app_with_event_loop(app, event_loop);*/
     runtime.block_on(async {
         let event_loop = EventLoop::<Event>::with_user_event()
-            .with_any_thread(true)
             .build()
             .unwrap();
         run_app_with_event_loop(app, event_loop);
@@ -837,7 +836,6 @@ use skiwin::cpu::SoftSkiaWindow;
 use winit::platform::android::activity::AndroidApp;
 #[cfg(target_os = "android")]
 use winit::platform::android::EventLoopBuilderExtAndroid;
-use winit::platform::wayland::EventLoopBuilderExtWayland;
 
 #[cfg(target_os = "android")]
 pub fn run_app(app: App, android_app: AndroidApp) {
