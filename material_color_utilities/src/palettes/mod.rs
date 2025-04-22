@@ -1,8 +1,8 @@
-mod tones;
 mod core;
+mod tones;
 
-pub use tones::*;
 pub use core::*;
+pub use tones::*;
 
 #[cfg(test)]
 mod tones_test {
@@ -28,46 +28,50 @@ mod tones_test {
 }
 
 #[cfg(test)]
-mod core_test {
+mod key_color_test {
     use crate::assert_near;
-    use crate::hct::{argb_from_hcl, Cam};
-    use crate::palettes::CorePalette;
-    use crate::utils::diff_degrees;
+    use crate::palettes::TonalPalette;
 
     #[test]
-    fn test_hue_rotates_red() {
-        let color = 0xffff0000;
-        let core_palette = CorePalette::from_argb(color);
-        let delta_hue = diff_degrees(Cam::from_argb(core_palette.tertiary().get(50.0)).hue,
-                                     Cam::from_argb(core_palette.primary().get(50.0)).hue);
-        assert_near!(delta_hue, 60.0, 2.0);
+    fn exact_chroma_available() {
+        // Requested chroma is exactly achievable at a certain tone.
+        let palette = TonalPalette::from_hue_and_chroma(50.0, 60.0);
+        let result = palette.key_color();
+
+        assert_near!(result.get_hue(), 50.0, 10.0);
+        assert_near!(result.get_chroma(), 60.0, 0.5);
+        // Tone might vary, but should be within the range from 0 to 100.
+        assert!(result.get_tone() > 0.0);
+        assert!(result.get_tone() < 100.0);
     }
 
     #[test]
-    fn test_hue_rotates_green() {
-        let color = 0xff00ff00;
-        let core_palette = CorePalette::from_argb(color);
-        let delta_hue = diff_degrees(Cam::from_argb(core_palette.tertiary().get(50.0)).hue,
-                                     Cam::from_argb(core_palette.primary().get(50.0)).hue);
-        assert_near!(delta_hue, 60.0, 2.0);
+    fn unusually_high_chroma() {
+        // Requested chroma is above what is achievable. For Hue 149, chroma peak
+        // is 89.6 at Tone 87.9. The result key color's chroma should be close to the
+        // chroma peak.
+        let palette = TonalPalette::from_hue_and_chroma(149.0, 200.0);
+        let result = palette.key_color();
+
+        assert_near!(result.get_hue(), 149.0, 10.0);
+        assert!(result.get_chroma() > 89.0);
+        // Tone might vary, but should be within the range from 0 to 100.
+        assert!(result.get_tone() > 0.0);
+        assert!(result.get_tone() < 100.0);
     }
 
     #[test]
-    fn test_hue_rotates_blue() {
-        let color = 0xff0000ff;
-        let core_palette = CorePalette::from_argb(color);
-        let delta_hue = diff_degrees(Cam::from_argb(core_palette.tertiary().get(50.0)).hue,
-                                     Cam::from_argb(core_palette.primary().get(50.0)).hue);
-        assert_near!(delta_hue, 60.0, 1.0);
-    }
+    fn test_key_color() {
+        // By definition, the key color should be the first tone, starting from Tone
+        // 50, matching the given hue and chroma. When requesting a very low chroma,
+        // the result should be close to Tone 50, since most tones can produce a low
+        // chroma.
+        let palette = TonalPalette::from_hue_and_chroma(50.0, 3.0);
+        let result = palette.key_color();
 
-    #[test]
-    fn test_hue_wraps_when_rotating() {
-        let cam = Cam::from_argb(argb_from_hcl(350.0, 48.0, 50.0));
-        let core_palette = CorePalette::from_hue_and_chroma(cam.hue, cam.chroma);
-        let a1_hue = Cam::from_argb(core_palette.primary().get(50.0)).hue;
-        let a3_hue = Cam::from_argb(core_palette.tertiary().get(50.0)).hue;
-        assert_near!(diff_degrees(a1_hue, a3_hue), 60.0, 1.0);
-        assert_near!(a3_hue, 50.0, 1.0);
+        // Higher error tolerance for hue when the requested chroma is unusually low.
+        assert_near!(result.get_hue(), 50.0, 10.0);
+        assert_near!(result.get_chroma(), 3.0, 0.5);
+        assert_near!(result.get_tone(), 50.0, 0.5);
     }
 }

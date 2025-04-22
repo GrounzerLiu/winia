@@ -10,6 +10,24 @@ mod tests {
     const K_MATRIX: [[f64; 3]; 3] = [[1.0, 2.0, 3.0], [-4.0, 5.0, -6.0], [-7.0, -8.0, -9.0]];
 
     #[test]
+    fn test_returns_correct_value_for_black() {
+        assert_eq!(argb_from_rgb(0, 0, 0), 0xff000000);
+        assert_eq!(argb_from_rgb(0, 0, 0), 4278190080);
+    }
+
+    #[test]
+    fn test_returns_correct_value_for_white() {
+        assert_eq!(argb_from_rgb(255, 255, 255), 0xffffffff);
+        assert_eq!(argb_from_rgb(255, 255, 255), 4294967295);
+    }
+
+    #[test]
+    fn test_returns_correct_value_for_red() {
+        assert_eq!(argb_from_rgb(255, 0, 0), 0xffff0000);
+        assert_eq!(argb_from_rgb(255, 0, 0), 4294901760);
+    }
+
+    #[test]
     fn test_signum() {
         assert_eq!(signum(0.001), 1);
         assert_eq!(signum(3.0), 1);
@@ -29,9 +47,11 @@ mod tests {
         assert_eq!(rotation_direction(300.0, 30.0), 1.0);
         assert_eq!(rotation_direction(270.0, 60.0), 1.0);
         assert_eq!(rotation_direction(360.0 * 2.0, 15.0), 1.0);
-        assert_eq!(rotation_direction(360.0 * 3.0 + 15.0, -360.0 * 4.0 + 30.0), 1.0);
+        assert_eq!(
+            rotation_direction(360.0 * 3.0 + 15.0, -360.0 * 4.0 + 30.0),
+            1.0
+        );
     }
-
 
     #[test]
     fn test_rotation_is_negative_for_clockwise() {
@@ -42,7 +62,10 @@ mod tests {
         assert_eq!(rotation_direction(30.0, 300.0), -1.0);
         assert_eq!(rotation_direction(60.0, 270.0), -1.0);
         assert_eq!(rotation_direction(15.0, -360.0 * 2.0), -1.0);
-        assert_eq!(rotation_direction(-360.0 * 4.0 + 270.0, 360.0 * 5.0 + 180.0), -1.0);
+        assert_eq!(
+            rotation_direction(-360.0 * 4.0 + 270.0, 360.0 * 5.0 + 180.0),
+            -1.0
+        );
     }
 
     #[test]
@@ -83,12 +106,26 @@ mod tests {
 
     #[test]
     fn test_matrix_multiply() {
-        let vector_one = matrix_multiply(Vec3 { a: 1.0, b: 3.0, c: 5.0 }, K_MATRIX);
+        let vector_one = matrix_multiply(
+            Vec3 {
+                a: 1.0,
+                b: 3.0,
+                c: 5.0,
+            },
+            K_MATRIX,
+        );
         assert_eq!(vector_one.a, 22.0);
         assert_eq!(vector_one.b, -19.0);
         assert_eq!(vector_one.c, -76.0);
 
-        let vector_two = matrix_multiply(Vec3 { a: -11.1, b: 22.2, c: -33.3 }, K_MATRIX);
+        let vector_two = matrix_multiply(
+            Vec3 {
+                a: -11.1,
+                b: 22.2,
+                c: -33.3,
+            },
+            K_MATRIX,
+        );
         assert_eq!(vector_two.a, -66.6);
         assert_eq!(vector_two.b, 355.2);
         assert_eq!(vector_two.c, 199.8);
@@ -316,7 +353,7 @@ mod tests {
     }
 
     #[test]
-    fn test_y_lstar_roundtrip_property(){
+    fn test_y_lstar_roundtrip_property() {
         let mut y = 0.0;
         while y <= 100.0 {
             let lstar = lstar_from_y(y);
@@ -327,7 +364,7 @@ mod tests {
     }
 
     #[test]
-    fn test_lstar_y_roundtrip_property(){
+    fn test_lstar_y_roundtrip_property() {
         let mut lstar = 0.0;
         while lstar <= 100.0 {
             let y = y_from_lstar(lstar);
@@ -338,15 +375,14 @@ mod tests {
     }
 }
 
-
 #[cfg(test)]
-mod temperature_cache_test{
-    use crate::{assert_near, raw_temperature};
+mod temperature_cache_test {
     use crate::hct::Hct;
     use crate::TemperatureCache;
+    use crate::{assert_near, raw_temperature};
 
     #[test]
-    fn test_raw_temperature(){
+    fn test_raw_temperature() {
         let blue_hct = Hct::from_argb(0xff0000ff);
         let blue_temp = raw_temperature(blue_hct);
         assert_near!(blue_temp, -1.393, 0.001);
@@ -369,54 +405,69 @@ mod temperature_cache_test{
     }
 
     #[test]
-    fn test_complement(){
-        let blue_complement = TemperatureCache::new(Hct::from_argb(0xff0000ff)).get_complement().to_argb();
+    fn test_complement() {
+        let blue_complement = TemperatureCache::new(Hct::from_argb(0xff0000ff))
+            .get_complement()
+            .to_argb();
         assert_eq!(0xff9d0002, blue_complement);
 
-        let red_complement = TemperatureCache::new(Hct::from_argb(0xffff0000)).get_complement().to_argb();
+        let red_complement = TemperatureCache::new(Hct::from_argb(0xffff0000))
+            .get_complement()
+            .to_argb();
         assert_eq!(0xff007bfc, red_complement);
 
-        let green_complement = TemperatureCache::new(Hct::from_argb(0xff00ff00)).get_complement().to_argb();
+        let green_complement = TemperatureCache::new(Hct::from_argb(0xff00ff00))
+            .get_complement()
+            .to_argb();
         assert_eq!(0xffffd2c9, green_complement);
 
-        let white_complement = TemperatureCache::new(Hct::from_argb(0xffffffff)).get_complement().to_argb();
+        let white_complement = TemperatureCache::new(Hct::from_argb(0xffffffff))
+            .get_complement()
+            .to_argb();
         assert_eq!(0xffffffff, white_complement);
 
-        let black_complement = TemperatureCache::new(Hct::from_argb(0xff000000)).get_complement().to_argb();
+        let black_complement = TemperatureCache::new(Hct::from_argb(0xff000000))
+            .get_complement()
+            .to_argb();
         assert_eq!(0xff000000, black_complement);
     }
 
     #[test]
-    fn test_analogous(){
-        let blue_analogous = TemperatureCache::new(Hct::from_argb(0xff0000ff)).get_analogous_colors();
+    fn test_analogous() {
+        let blue_analogous =
+            TemperatureCache::new(Hct::from_argb(0xff0000ff)).get_analogous_colors();
         assert_eq!(0xff00590c, blue_analogous[0].to_argb());
         assert_eq!(0xff00564e, blue_analogous[1].to_argb());
         assert_eq!(0xff0000ff, blue_analogous[2].to_argb());
         assert_eq!(0xff6700cc, blue_analogous[3].to_argb());
         assert_eq!(0xff81009f, blue_analogous[4].to_argb());
 
-        let red_analogous = TemperatureCache::new(Hct::from_argb(0xffff0000)).get_analogous_colors();
+        let red_analogous =
+            TemperatureCache::new(Hct::from_argb(0xffff0000)).get_analogous_colors();
         assert_eq!(0xfff60082, red_analogous[0].to_argb());
         assert_eq!(0xfffc004c, red_analogous[1].to_argb());
         assert_eq!(0xffff0000, red_analogous[2].to_argb());
         assert_eq!(0xffd95500, red_analogous[3].to_argb());
         assert_eq!(0xffaf7200, red_analogous[4].to_argb());
 
-        let green_analogous = TemperatureCache::new(Hct::from_argb(0xff00ff00)).get_analogous_colors();
+        let green_analogous =
+            TemperatureCache::new(Hct::from_argb(0xff00ff00)).get_analogous_colors();
         assert_eq!(0xffcee900, green_analogous[0].to_argb());
         assert_eq!(0xff92f500, green_analogous[1].to_argb());
         assert_eq!(0xff00ff00, green_analogous[2].to_argb());
         assert_eq!(0xff00fd6f, green_analogous[3].to_argb());
         assert_eq!(0xff00fab3, green_analogous[4].to_argb());
 
-        let black_analogous = TemperatureCache::new(Hct::from_argb(0xff000000)).get_analogous_colors();
+        let black_analogous =
+            TemperatureCache::new(Hct::from_argb(0xff000000)).get_analogous_colors();
         assert_eq!(0xff000000, black_analogous[0].to_argb());
         assert_eq!(0xff000000, black_analogous[1].to_argb());
         assert_eq!(0xff000000, black_analogous[2].to_argb());
         assert_eq!(0xff000000, black_analogous[3].to_argb());
         assert_eq!(0xff000000, black_analogous[4].to_argb());
 
-        let white_analogous = TemperatureCache::new(Hct::from_argb(0xffffffff)).get_analogous_colors();
+        let white_analogous =
+            TemperatureCache::new(Hct::from_argb(0xffffffff)).get_analogous_colors();
         assert_eq!(0xffffffff, white_analogous[0].to_argb());
         assert_eq!(0xffffffff, white_analogous[1].to_argb());
         assert_eq!(0xffffffff, white_analogous[2].to_argb());

@@ -1,7 +1,7 @@
 /*use std::any::{Any, TypeId};
 use std::sync::{Arc, Mutex};
 use crate::core::{get_id_by_str, RefClone};
-use crate::property::{Children, Gettable, Observable, Property};
+use crate::shared::{Children, Gettable, Observable, Property};
 use crate::ui::app::AppContext;
 use crate::ui::Item;
 use crate::ui::item::{CustomProperty, ItemEvent};
@@ -55,7 +55,7 @@ impl Alignment {
         ));
         self
     }
-    
+
     pub fn middle_align(mut self, id: &str, alignment: HorizontalAlignment) -> Self {
         self.middle = Some((
             if id.is_empty() {
@@ -166,7 +166,7 @@ impl ItemRelationManager {
     fn new(item: &Item) -> Self {
         let mut done:Vec<ItemRelation> = Vec::new();
         let mut be_aligned:Vec<ItemRelation> = Vec::new();
-        
+
         for (index, child) in item.get_children().items().iter().enumerate() {
             let alignment = child.get_alignment().expect("Relative alignment is not set");
             let relation = ItemRelation {
@@ -181,12 +181,12 @@ impl ItemRelationManager {
             };
             be_aligned.push(relation);
         }
-        
-        
-        
-        
+
+
+
+
         Self {
-            
+
         }
     }
 }
@@ -196,12 +196,12 @@ struct RelativeProperty {}
 
 pub struct Relative {
     item: Item,
-    property: Arc<Mutex<RelativeProperty>>,
+    shared: Arc<Mutex<RelativeProperty>>,
 }
 
 impl Relative {
     pub fn new(app_context: AppContext, children: Children) -> Self {
-        let property = Arc::new(Mutex::new(RelativeProperty {}));
+        let shared = Arc::new(Mutex::new(RelativeProperty {}));
         let item_event = ItemEvent::new()
             .measure({
                 move |item, width_mode, height_mode| {}

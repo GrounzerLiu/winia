@@ -8,8 +8,8 @@ use winia::component::Button;
 use winia::uib::{Gravity, Image, Item, LayoutDirection, Rectangle, RectangleExt, Ripple, TextBlock};
 use winia::uib::additional_property::{ShadowBlur, ShadowColor, ShadowOffsetY};
 use winia::layout::FlexLayout;
-use winia::property::{BoolProperty, ColorProperty, FloatProperty, Gettable, GravityProperty, SizeProperty};
-use winia::property::Size::{Fill, Fixed};
+use winia::shared::{BoolProperty, ColorProperty, FloatProperty, Gettable, GravityProperty, SizeProperty};
+use winia::shared::Size::{Fill, Fixed};
 
 // macro_rules! repeat {
 //     ($item:expr; 0) => {};

@@ -1,18 +1,16 @@
-use crate::core::RefClone;
-use crate::property::Children;
-use crate::ui::app::AppContext;
+use crate::shared::Children;
+use crate::ui::app::WindowContext;
+use crate::ui::layout::{AlignItems, Flex, FlexDirection, FlexWrap};
 use crate::ui::Item;
-use crate::ui::layout::{Flex, FlexDirection, FlexWrap};
 
 pub trait RowExt {
-    fn row(&self, children: Children) -> Item;
+    fn row(&self, children: impl Into<Children>) -> Flex;
 }
 
-impl RowExt for AppContext {
-    fn row(&self, children: Children) -> Item {
-        Flex::new(self.ref_clone(), children)
-            .direction(FlexDirection::Horizontal)
+impl RowExt for WindowContext {
+    fn row(&self, children: impl Into<Children>) -> Flex {
+        Flex::new(self, children)
+            .flex_direction(FlexDirection::Horizontal)
             .wrap(FlexWrap::NoWrap)
-            .item()
     }
 }

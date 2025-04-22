@@ -1,12 +1,8 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
-use skia_safe::Color;
-use material_color_utilities::blend_cam16ucs;
-use crate::core::RefClone;
-use crate::property::{Gettable, Property};
-use crate::ui::Item;
 use crate::ui::item::Orientation;
+use skia_safe::Color;
+use std::collections::HashMap;
 
+#[derive(Debug)]
 pub struct DisplayParameter {
     pub parent_x: f32,
     pub parent_y: f32,
@@ -33,7 +29,6 @@ pub struct DisplayParameter {
 }
 
 impl DisplayParameter {
-    
     pub fn copy_from(&mut self, other: &DisplayParameter) {
         self.parent_x = other.parent_x;
         self.parent_y = other.parent_y;
@@ -59,7 +54,6 @@ impl DisplayParameter {
         self.color_params = other.color_params.clone();
     }
 
-
     pub fn x(&self) -> f32 {
         self.parent_x + self.relative_x + self.offset_x
     }
@@ -67,11 +61,10 @@ impl DisplayParameter {
     pub fn y(&self) -> f32 {
         self.parent_y + self.relative_y + self.offset_y
     }
-    
+
     pub fn is_inside(&self, x: f32, y: f32) -> bool {
         x >= self.x() && x <= self.x() + self.width && y >= self.y() && y <= self.y() + self.height
     }
-
 
     pub fn size(&self, orientation: Orientation) -> f32 {
         match orientation {
@@ -86,46 +79,65 @@ impl DisplayParameter {
             Orientation::Vertical => self.height = size,
         }
     }
-    
+
     pub fn set_parent_position(&mut self, x: f32, y: f32) {
         self.parent_x = x;
         self.parent_y = y;
     }
-    
+
     pub fn set_relative_position(&mut self, x: f32, y: f32) {
         self.relative_x = x;
         self.relative_y = y;
     }
-    
+
     pub fn set_offset(&mut self, x: f32, y: f32) {
         self.offset_x = x;
         self.offset_y = y;
     }
-    
-    
+
     pub fn set_rotation_center(&mut self, x: f32, y: f32) {
         self.rotation_center_x = x;
         self.rotation_center_y = y;
     }
-    
-    pub fn set_scale(&mut self, x: f32, y: f32){
+
+    pub fn set_scale(&mut self, x: f32, y: f32) {
         self.scale_x = x;
         self.scale_y = y;
     }
-    
+
     pub fn set_scale_center(&mut self, x: f32, y: f32) {
         self.scale_center_x = x;
         self.scale_center_y = y;
     }
-    
+
     pub fn set_skew(&mut self, x: f32, y: f32) {
         self.skew_x = x;
         self.skew_y = y;
     }
-    
+
     pub fn set_skew_center(&mut self, x: f32, y: f32) {
         self.skew_center_x = x;
         self.skew_center_y = y;
+    }
+
+    pub fn set_float_param(&mut self, key: impl Into<String>, value: f32) {
+        self.float_params.insert(key.into(), value);
+    }
+
+    pub fn set_color_param(&mut self, key: impl Into<String>, value: Color) {
+        self.color_params.insert(key.into(), value);
+    }
+
+    pub fn get_float_param(&self, key: &str) -> Option<f32> {
+        self.float_params.get(key).copied()
+    }
+
+    pub fn get_color_param(&self, key: &str) -> Option<Color> {
+        self.color_params.get(key).copied()
+    }
+    
+    pub fn is_empty(&self) -> bool {
+        self.width <= 0.0 && self.height <= 0.0
     }
 }
 

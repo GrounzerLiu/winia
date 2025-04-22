@@ -1,15 +1,12 @@
-pub mod app;
-pub mod property;
+pub mod core;
+pub mod shared;
 pub mod text;
 pub mod ui;
-pub mod theme;
-pub mod component;
-pub mod layout;
-pub mod core;
 
-use std::ops::{Deref, DerefMut};
-pub use winit::*;
 pub use skia_safe;
+pub use winit::*;
+pub use parking_lot::*;
+pub use skiwin::*;
 
 pub trait OptionalInvoke<T> {
     fn if_some(self, invoke: impl FnOnce(T));
@@ -136,23 +133,3 @@ impl<T, E> ResultInvoke<T, E> for Result<T, E> {
         }
     }
 }
-
-pub trait LockUnwrap {
-    type Target;
-    fn lock_unwrap(&self, f: impl FnOnce(&Self::Target));
-    fn lock_unwrap_mut(&self, f: impl FnOnce(&mut Self::Target));
-}
-
-impl<T> LockUnwrap for std::sync::Mutex<T> {
-    type Target = T;
-    fn lock_unwrap(&self, f: impl FnOnce(&T)) {
-        let lock = self.lock().unwrap();
-        f(lock.deref())
-    }
-
-    fn lock_unwrap_mut(&self, f: impl FnOnce(&mut T)) {
-        let mut lock = self.lock().unwrap();
-        f(lock.deref_mut())
-    }
-}
-

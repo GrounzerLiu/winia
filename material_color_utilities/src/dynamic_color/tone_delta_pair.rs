@@ -3,8 +3,13 @@ use crate::dynamic_color::DynamicColor;
 /**
  * Describes the different in tone between colors.
  */
-#[derive(Debug, Copy, Clone,PartialEq)]
-pub enum TonePolarity { Darker, Lighter, Nearer, Farther }
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum TonePolarity {
+    Darker,
+    Lighter,
+    Nearer,
+    Farther,
+}
 
 /**
  * Documents a constraint between two DynamicColors, in which their tones must
@@ -46,7 +51,13 @@ impl ToneDeltaPair {
      * the "awkward zone" (T50-59). This is necessary for certain cases where
      * one role has two backgrounds.
      */
-    pub fn new(role_a: DynamicColor, role_b: DynamicColor, delta: f64, polarity: TonePolarity, stay_together: bool) -> Self {
+    pub fn new(
+        role_a: DynamicColor,
+        role_b: DynamicColor,
+        delta: f64,
+        polarity: TonePolarity,
+        stay_together: bool,
+    ) -> Self {
         Self {
             role_a,
             role_b,

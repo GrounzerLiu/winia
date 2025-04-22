@@ -1,8 +1,10 @@
 #![allow(dead_code)]
 
 use crate::hct::hct_solver::solve_to_int;
-use crate::hct::viewing_conditions::{DEFAULT_VIEWING_CONDITIONS, ViewingConditions};
-use crate::utils::{Argb, argb_from_rgb, delinearized, K_PI, linearized, sanitize_degrees_double, signum};
+use crate::hct::viewing_conditions::{ViewingConditions, DEFAULT_VIEWING_CONDITIONS};
+use crate::utils::{
+    argb_from_rgb, delinearized, linearized, sanitize_degrees_double, signum, Argb, K_PI,
+};
 
 #[derive(Clone, Copy, Default, Debug)]
 pub struct Cam {
@@ -23,8 +25,12 @@ impl Cam {
         Self::from_int_and_viewing_conditions(argb, &DEFAULT_VIEWING_CONDITIONS)
     }
 
-    pub fn from_ucs_and_viewing_conditions(jstar: f64, astar: f64, bstar: f64,
-                                           viewing_conditions: ViewingConditions) -> Self {
+    pub fn from_ucs_and_viewing_conditions(
+        jstar: f64,
+        astar: f64,
+        bstar: f64,
+        viewing_conditions: ViewingConditions,
+    ) -> Self {
         let a = astar;
         let b = bstar;
         let m = (a * a + b * b).sqrt();
@@ -38,10 +44,13 @@ impl Cam {
         Self::from_jch_and_viewing_conditions(j, c, h, viewing_conditions)
     }
 
-    pub fn from_int_and_viewing_conditions(argb: Argb, viewing_conditions: &ViewingConditions) -> Self {
+    pub fn from_int_and_viewing_conditions(
+        argb: Argb,
+        viewing_conditions: &ViewingConditions,
+    ) -> Self {
         let red = (argb as i32 & 0x00ff0000) >> 16;
-        let green = (argb as i32  & 0x0000ff00) >> 8;
-        let blue = argb as i32  & 0x000000ff;
+        let green = (argb as i32 & 0x0000ff00) >> 8;
+        let blue = argb as i32 & 0x000000ff;
         let red_l = linearized(red as u32);
         let green_l = linearized(green as u32);
         let blue_l = linearized(blue as u32);
@@ -79,45 +88,75 @@ impl Cam {
         let hue_radians = hue * K_PI / 180.0;
         let ac = p2 * viewing_conditions.nbb;
 
-        let j = 100.0 * (ac / viewing_conditions.aw).powf(viewing_conditions.c * viewing_conditions.z);
-        let q = (4.0 / viewing_conditions.c) * (j / 100.0).sqrt() *
-            (viewing_conditions.aw + 4.0) * viewing_conditions.fl_root;
+        let j =
+            100.0 * (ac / viewing_conditions.aw).powf(viewing_conditions.c * viewing_conditions.z);
+        let q = (4.0 / viewing_conditions.c)
+            * (j / 100.0).sqrt()
+            * (viewing_conditions.aw + 4.0)
+            * viewing_conditions.fl_root;
         let hue_prime = if hue < 20.14 { hue + 360.0 } else { hue };
         let e_hue = 0.25 * ((hue_prime * K_PI / 180.0 + 2.0).cos() + 3.8);
-        let p1 =
-            50000.0 / 13.0 * e_hue * viewing_conditions.n_c * viewing_conditions.ncb;
+        let p1 = 50000.0 / 13.0 * e_hue * viewing_conditions.n_c * viewing_conditions.ncb;
         let t = p1 * (a * a + b * b).sqrt() / (u + 0.305);
-        let alpha =
-            t.powf(0.9) *
-                (1.64 - 0.29_f64.powf(viewing_conditions.background_y_to_white_point_y)).powf(0.73);
+        let alpha = t.powf(0.9)
+            * (1.64 - 0.29_f64.powf(viewing_conditions.background_y_to_white_point_y)).powf(0.73);
         let c = alpha * (j / 100.0).sqrt();
         let m = c * viewing_conditions.fl_root;
-        let s = 50.0 * ((alpha * viewing_conditions.c) /
-            (viewing_conditions.aw + 4.0)).sqrt();
+        let s = 50.0 * ((alpha * viewing_conditions.c) / (viewing_conditions.aw + 4.0)).sqrt();
         let jstar = (1.0 + 100.0 * 0.007) * j / (1.0 + 0.007 * j);
         let mstar = 1.0 / 0.0228 * (1.0 + 0.0228 * m).ln();
         let astar = mstar * hue_radians.cos();
         let bstar = mstar * hue_radians.sin();
-        Cam { hue, chroma: c, j, q, m, s, jstar, astar, bstar }
+        Cam {
+            hue,
+            chroma: c,
+            j,
+            q,
+            m,
+            s,
+            jstar,
+            astar,
+            bstar,
+        }
     }
 
-    pub fn from_jch_and_viewing_conditions(j: f64, c: f64, h: f64, viewing_conditions: ViewingConditions) -> Self {
-        let q = (4.0 / viewing_conditions.c) * (j / 100.0).sqrt() *
-            (viewing_conditions.aw + 4.0) * (viewing_conditions.fl_root);
+    pub fn from_jch_and_viewing_conditions(
+        j: f64,
+        c: f64,
+        h: f64,
+        viewing_conditions: ViewingConditions,
+    ) -> Self {
+        let q = (4.0 / viewing_conditions.c)
+            * (j / 100.0).sqrt()
+            * (viewing_conditions.aw + 4.0)
+            * (viewing_conditions.fl_root);
         let m = c * viewing_conditions.fl_root;
         let alpha = c / (j / 100.0).sqrt();
-        let s = 50.0 * ((alpha * viewing_conditions.c) /
-            (viewing_conditions.aw + 4.0)).sqrt();
+        let s = 50.0 * ((alpha * viewing_conditions.c) / (viewing_conditions.aw + 4.0)).sqrt();
         let hue_radians = h * K_PI / 180.0;
         let jstar = (1.0 + 100.0 * 0.007) * j / (1.0 + 0.007 * j);
         let mstar = 1.0 / 0.0228 * (1.0 + 0.0228 * m).ln();
         let astar = mstar * hue_radians.cos();
         let bstar = mstar * hue_radians.sin();
-        Cam { hue: h, chroma: c, j, q, m, s, jstar, astar, bstar }
+        Cam {
+            hue: h,
+            chroma: c,
+            j,
+            q,
+            m,
+            s,
+            jstar,
+            astar,
+            bstar,
+        }
     }
 
-
-    pub fn from_xyz_and_viewing_conditions(x: f64, y: f64, z: f64, viewing_conditions: &ViewingConditions) -> Cam {
+    pub fn from_xyz_and_viewing_conditions(
+        x: f64,
+        y: f64,
+        z: f64,
+        viewing_conditions: &ViewingConditions,
+    ) -> Cam {
         // Convert XYZ to 'cone'/'rgb' responses
         let r_c = 0.401288 * x + 0.650173 * y - 0.051461 * z;
         let g_c = -0.250268 * x + 1.204414 * y + 0.045854 * z;
@@ -148,29 +187,36 @@ impl Cam {
         let hue_radians = hue * K_PI / 180.0;
         let ac = p2 * viewing_conditions.nbb;
 
-        let j = 100.0 * (ac / viewing_conditions.aw).powf(
-            viewing_conditions.c * viewing_conditions.z);
-        let q = (4.0 / viewing_conditions.c) * (j / 100.0).sqrt() *
-            (viewing_conditions.aw + 4.0) * viewing_conditions.fl_root;
-        let hue_prime = if hue < 20.14
-        { hue + 360.0 } else { hue };
+        let j =
+            100.0 * (ac / viewing_conditions.aw).powf(viewing_conditions.c * viewing_conditions.z);
+        let q = (4.0 / viewing_conditions.c)
+            * (j / 100.0).sqrt()
+            * (viewing_conditions.aw + 4.0)
+            * viewing_conditions.fl_root;
+        let hue_prime = if hue < 20.14 { hue + 360.0 } else { hue };
         let e_hue = 0.25 * ((hue_prime * K_PI / 180.0 + 2.0).cos() + 3.8);
-        let p1 =
-            50000.0 / 13.0 * e_hue * viewing_conditions.n_c * viewing_conditions.ncb;
+        let p1 = 50000.0 / 13.0 * e_hue * viewing_conditions.n_c * viewing_conditions.ncb;
         let t = p1 * (a * a + b * b).sqrt() / (u + 0.305);
-        let alpha =
-            t.powf(0.9) *
-                (1.64 - 0.29_f64.powf(viewing_conditions.background_y_to_white_point_y)).powf(
-                    0.73);
+        let alpha = t.powf(0.9)
+            * (1.64 - 0.29_f64.powf(viewing_conditions.background_y_to_white_point_y)).powf(0.73);
         let c = alpha * (j / 100.0).sqrt();
         let m = c * viewing_conditions.fl_root;
-        let s = 50.0 * ((alpha * viewing_conditions.c) /
-            (viewing_conditions.aw + 4.0)).sqrt();
+        let s = 50.0 * ((alpha * viewing_conditions.c) / (viewing_conditions.aw + 4.0)).sqrt();
         let jstar = (1.0 + 100.0 * 0.007) * j / (1.0 + 0.007 * j);
         let mstar = 1.0 / 0.0228 * (1.0 + 0.0228 * m).ln();
         let astar = mstar * hue_radians.cos();
         let bstar = mstar * hue_radians.sin();
-        Cam { hue, chroma: c, j, q, m, s, jstar, astar, bstar }
+        Cam {
+            hue,
+            chroma: c,
+            j,
+            q,
+            m,
+            s,
+            jstar,
+            astar,
+            bstar,
+        }
     }
 
     pub fn distance_to(&self, other: Cam) -> f64 {
@@ -186,24 +232,24 @@ impl Cam {
     }
 }
 
-
-fn argb_from_cam_and_viewing_conditions(cam: Cam,
-                                        viewing_conditions: ViewingConditions) -> Argb {
-    let alpha = if cam.chroma == 0.0 || cam.j == 0.0
-    { 0.0 } else { cam.chroma / (cam.j / 100.0).sqrt() };
-    let t = (alpha / (1.64 - 0.29_f64.powf(viewing_conditions.background_y_to_white_point_y)).powf(0.73)).powf(1.0 / 0.9);
+fn argb_from_cam_and_viewing_conditions(cam: Cam, viewing_conditions: ViewingConditions) -> Argb {
+    let alpha = if cam.chroma == 0.0 || cam.j == 0.0 {
+        0.0
+    } else {
+        cam.chroma / (cam.j / 100.0).sqrt()
+    };
+    let t = (alpha
+        / (1.64 - 0.29_f64.powf(viewing_conditions.background_y_to_white_point_y)).powf(0.73))
+    .powf(1.0 / 0.9);
     let h_rad = cam.hue * K_PI / 180.0;
     let e_hue = 0.25 * ((h_rad + 2.0).cos() + 3.8);
-    let ac =
-        viewing_conditions.aw *
-            (cam.j / 100.0).powf(1.0 / viewing_conditions.c / viewing_conditions.z);
-    let p1 = e_hue * (50000.0 / 13.0) * viewing_conditions.n_c *
-        viewing_conditions.ncb;
+    let ac = viewing_conditions.aw
+        * (cam.j / 100.0).powf(1.0 / viewing_conditions.c / viewing_conditions.z);
+    let p1 = e_hue * (50000.0 / 13.0) * viewing_conditions.n_c * viewing_conditions.ncb;
     let p2 = ac / viewing_conditions.nbb;
     let h_sin = h_rad.sin();
     let h_cos = h_rad.cos();
-    let gamma = 23.0 * (p2 + 0.305) * t /
-        (23.0 * p1 + 11.0 * t * h_cos + 108.0 * t * h_sin);
+    let gamma = 23.0 * (p2 + 0.305) * t / (23.0 * p1 + 11.0 * t * h_cos + 108.0 * t * h_sin);
     let a = gamma * h_cos;
     let b = gamma * h_sin;
     let r_a = (460.0 * p2 + 451.0 * a + 288.0 * b) / 1403.0;
@@ -223,7 +269,7 @@ fn argb_from_cam_and_viewing_conditions(cam: Cam,
     let y = 0.38752654 * r_x + 0.62144744 * g_x - 0.00897398 * b_x;
     let z = -0.01584150 * r_x - 0.03412294 * g_x + 1.04996444 * b_x;
 
-// intFromXyz
+    // intFromXyz
     let r_l = 3.2406 * x - 1.5372 * y - 0.4986 * z;
     let g_l = -0.9689 * x + 1.8758 * y + 0.0415 * z;
     let b_l = 0.0557 * x - 0.2040 * y + 1.0570 * z;
@@ -259,8 +305,6 @@ impl From<Cam> for Argb {
 //     1.41 * d_e_prime.powf(0.63)
 // }
 
-
 pub fn argb_from_hcl(hue: f64, chroma: f64, lstar: f64) -> Argb {
     solve_to_int(hue, chroma, lstar)
 }
-
