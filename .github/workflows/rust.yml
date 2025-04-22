@@ -21,4 +21,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: example-windows
-          path: target/debug/winia-test.exe
+          path: target/debug/winia_test.exe
