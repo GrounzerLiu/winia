@@ -1,5 +1,4 @@
-pub mod theme;
-
+mod theme;
 pub use theme::*;
 pub mod color;
 mod material_theme;
