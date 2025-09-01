@@ -1,0 +1,13 @@
+[package]
+name = "winia-video"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+gstreamer = "0.24.0"
+gstreamer-video = "0.24.0"
+gstreamer-app = "0.24.0"
+skia-safe.workspace = true
+parking_lot.workspace = true
+winia = { path = "../winia"}
+proc-macro = { path = "../proc-macro" }

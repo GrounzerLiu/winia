@@ -1,22 +1,40 @@
 use clonelet::clone;
 use std::time::Duration;
-use winia::exclude_target;
-use winia::shared::{Gettable, Settable, Shared, SharedColor, SharedF32, SharedText};
+use winia::{exclude_target, skia_safe};
+use winia::shared::{Gettable, Settable, Shared, SharedColor, SharedDrawable, SharedF32, SharedText};
 use winia::skia_safe::Color;
-use winia::text::TextStyle;
+use winia::text::{TextStyle, Typeface};
 use winia::ui::Item;
 use winia::ui::animation::AnimationExt;
 use winia::ui::app::{WindowAttr, WindowContext};
 use winia::ui::component::{ButtonExt, FilledTextFieldExt, RectangleExt, TextExt};
 use winia::ui::item::{Alignment, Size};
-use winia::ui::layout::ColumnExt;
+use winia::ui::layout::{ColumnExt, RowExt};
 
 pub fn text_test(w: &WindowContext) -> Item {
-    let text = SharedText::from("A simple text");
-    text.lock().set_style(TextStyle::Bold, 2..8, true);
-    text.lock().set_style(TextStyle::Italic, 0..2, true);
-    text.lock().set_style(TextStyle::Underline, 0..2, true);
-    text.lock().set_style(TextStyle::TextColor(Color::from_rgb(255, 0, 0)), 0..2, true);
+    let text = SharedText::from("");
+    {
+        let mut text = text.lock();
+        text.append_str_with_style("Bold ", TextStyle::Bold, false);
+        text.append_str_with_style("Italic ", TextStyle::Italic, false);
+        text.append_str_with_style("Underline ", TextStyle::Underline, false);
+        text.append_str_with_style("Strikethrough ", TextStyle::Strikethrough, false);
+        text.append_str_with_style("FontSize ", TextStyle::FontSize(36.0), false);
+        text.append_str_with_style("BackgroundColor ", TextStyle::BackgroundColor(Color::from_rgb(255, 0, 0)), false);
+        text.append_str_with_style("TextColor ", TextStyle::TextColor(Color::from_rgb(0, 255, 0)), false);
+        text.append_str_with_style("Weight ", TextStyle::Weight(skia_safe::font_style::Weight::from(2000)), false);
+        text.append_str_with_style("Tracking ", TextStyle::Tracking(5.0), false);
+        text.append_str_with_style("Subscript ", TextStyle::Subscript, false);
+        text.append_str_with_style("Superscript ", TextStyle::Superscript, false);
+        text.append_str_with_style("Typeface ", TextStyle::Typeface(Typeface::Family("Courier New".to_string())), false);
+        text.append_str_with_style("Image ", TextStyle::Image(
+            {
+                let image = SharedDrawable::from_file("/home/grounzer/Downloads/check_box_selected.svg").unwrap();
+                image.lock().set_color(Some(Color::BLUE));
+                image
+            }
+        ), false);
+    }
     let state = Shared::from_static(false);
     let color: SharedColor = Color::WHITE.into();
     let size: SharedF32 = 16.0.into();
@@ -55,8 +73,11 @@ pub fn text_test(w: &WindowContext) -> Item {
             .size(300, Size::Auto)
             .background(w.rectangle(Color::TRANSPARENT).outline_color(Color::WHITE).outline_width(4).item())
         +*/
-        w.text(&text).item().margin_top(36)
-            + w.filled_text_field("").item().margin(16)
+        w.text(&text).item().margin_top(36).width(Size::Fill)
+        //     w.row(
+        //     w.text("Text with style Text with style").item()
+        // ).item()
+            + w.filled_text_field(&text).item().margin(16)
             + w.filled_text_field("").item().margin(16),
     )
     .item()

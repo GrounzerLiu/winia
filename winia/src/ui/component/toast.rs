@@ -2,7 +2,7 @@ use std::thread;
 use std::time::Duration;
 use clonelet::clone;
 use skia_safe::Color;
-use crate::core::{generate_id, get_id_by_name};
+use crate::core::{next_id, get_id_by_name};
 use crate::include_target;
 use crate::shared::{Settable, Shared};
 use crate::ui::animation::AnimationExt;
@@ -26,11 +26,11 @@ impl ToastExt for WindowContext {
                 let (text_color, background_color) = {
                     let theme = w.theme();
                     let theme_lock = theme.lock();
-                    let text_color = theme_lock.get_color(color::INVERSE_SURFACE).unwrap_or(Color::WHITE);
-                    let background_color = theme_lock.get_color(color::INVERSE_ON_SURFACE).unwrap_or(Color::BLACK);
-                    (text_color, background_color)
+                    let text_color = theme_lock.get_color(color::INVERSE_SURFACE).unwrap_or(&Color::WHITE);
+                    let background_color = theme_lock.get_color(color::INVERSE_ON_SURFACE).unwrap_or(&Color::BLACK);
+                    (*text_color, *background_color)
                 };
-                let id = generate_id();
+                let id = next_id();
                 let name = format!("Toast {}", id);
                 let margin_bottom = Shared::from_static(-64.0);
                 let opacity = Shared::from_static(1.0);
@@ -48,7 +48,7 @@ impl ToastExt for WindowContext {
                                 opacity.set(0.0);
                             }
                         }).duration(Duration::from_millis(500))
-                            .interpolator(Box::new(EaseOutCirc::new()))
+                            .interpolator(EaseOutCirc::new())
                             .on_finished({
                                 let controller = controller.clone();
                                 move || {
@@ -81,7 +81,7 @@ impl ToastExt for WindowContext {
                         margin_bottom.set(16.0);
                     }
                 }).duration(Duration::from_millis(500))
-                    .interpolator(Box::new(EaseOutCirc::new()))
+                    .interpolator(EaseOutCirc::new())
                     .start();
 
                 item

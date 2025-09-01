@@ -1,22 +1,21 @@
-use std::ops::Not;
-use std::time::{Duration, Instant};
-use clonelet::clone;
-use material_colors::blend::cam16_ucs;
-use material_colors::color::Argb;
-use skia_safe::Color;
-use winit::event::MouseButton;
-use winit::keyboard::{Key, NamedKey};
-use proc_macro::item;
-use crate::core::generate_id;
-use crate::{exclude_target, include_target};
+use crate::core::next_id;
 use crate::shared::{Gettable, Settable, Shared, SharedBool, SharedColor, SharedF32};
 use crate::ui::animation::{AnimationExt, Target};
 use crate::ui::app::WindowContext;
-use crate::ui::component::{Checkbox, RectangleExt};
-use crate::ui::Item;
+use crate::ui::component::RectangleExt;
 use crate::ui::item::{Alignment, ItemState, Pointer, PointerState, Size};
 use crate::ui::layout::StackExt;
 use crate::ui::theme::color;
+use crate::ui::Item;
+use clonelet::clone;
+use material_colors::blend::cam16_ucs;
+use material_colors::color::Argb;
+use proc_macro::item;
+use skia_safe::Color;
+use std::ops::Not;
+use std::time::{Duration, Instant};
+use winit::event::MouseButton;
+use winit::keyboard::{Key, NamedKey};
 
 #[item(selected: impl Into<Shared<bool>>)]
 pub struct Switch {
@@ -24,11 +23,11 @@ pub struct Switch {
     // property: Shared<CheckboxProperty<T>>,
 }
 
-pub fn interpolate_f32(start: f32, end: f32, progress: f32) -> f32 {
+fn interpolate_f32(start: f32, end: f32, progress: f32) -> f32 {
     start + (end - start) * progress
 }
 
-pub fn interpolate_color(start: &Color, end: &Color, progress: f32) -> Color {
+fn interpolate_color(start: &Color, end: &Color, progress: f32) -> Color {
     let progress = progress as f64;
     let start_a = start.a() as f64;
     let start_argb = Argb::new(255, start.r(), start.g(), start.b());
@@ -50,12 +49,12 @@ impl Switch {
         let w = window_context;
         let selected = selected.into();
         let theme = w.theme().clone();
-        let handle_start_color = theme.lock().get_color(color::OUTLINE).unwrap();
-        let handle_end_color = theme.lock().get_color(color::ON_PRIMARY).unwrap();
-        let track_start_color = theme.lock().get_color(color::SURFACE_CONTAINER_HIGHEST).unwrap();
-        let track_end_color = theme.lock().get_color(color::PRIMARY).unwrap();
-        let track_outline_start_color = theme.lock().get_color(color::OUTLINE).unwrap();
-        let track_outline_end_color = theme.lock().get_color(color::PRIMARY).unwrap();
+        let handle_start_color = *theme.lock().get_color(color::OUTLINE).unwrap();
+        let handle_end_color = *theme.lock().get_color(color::ON_PRIMARY).unwrap();
+        let track_start_color = *theme.lock().get_color(color::SURFACE_CONTAINER_HIGHEST).unwrap();
+        let track_end_color = *theme.lock().get_color(color::PRIMARY).unwrap();
+        let track_outline_start_color = *theme.lock().get_color(color::OUTLINE).unwrap();
+        let track_outline_end_color = *theme.lock().get_color(color::PRIMARY).unwrap();
         let handle_color = Shared::from_static(handle_start_color);
         let handle_size = Shared::from_static(Size::Fixed(16.0));
         let handle_pressed_size = 28.0;
@@ -70,7 +69,7 @@ impl Switch {
         let progress = SharedF32::from_static(0.0);
         let pressed = SharedBool::from_static(false);
         progress.add_specific_observer(
-            generate_id(),
+            next_id(),
             {
                 clone!(handle_color, handle_size, track_color, track_outline_color, handle_x, pressed);
                 move |v| {
@@ -243,7 +242,7 @@ impl Switch {
                 move |state| {
                     if let ItemState::Focused = state {
                         focus_indicator_color.set(
-                            theme.lock().get_color(color::SECONDARY).unwrap()
+                            *theme.lock().get_color(color::SECONDARY).unwrap()
                         );
                     } else {
                         focus_indicator_color.set(

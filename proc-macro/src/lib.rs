@@ -1,15 +1,11 @@
 use inflector::Inflector;
 use proc_macro::TokenStream;
+use std::fmt::format;
 use proc_macro2::{Ident, Span};
-use quote::quote;
+use quote::{quote, ToTokens};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
-use syn::token::Lt;
-use syn::{
-    parse_macro_input, AngleBracketedGenericArguments, DeriveInput, Field, FieldMutability, Fields,
-    GenericArgument, GenericParam, Generics, ItemStruct, Lifetime, LifetimeParam, Path,
-    PathArguments, PathSegment, Token, Type, TypePath, TypeReference, Visibility,
-};
+use syn::{parse_macro_input, AngleBracketedGenericArguments, DeriveInput, Expr, ExprMethodCall, Field, FieldMutability, Fields, GenericArgument, GenericParam, Generics, ItemStruct, Lifetime, Path, PathArguments, PathSegment, Stmt, Type, TypePath, TypeReference, Visibility};
 
 struct Args {
     names: Vec<Ident>,
@@ -636,7 +632,7 @@ pub fn derive_as_ref(input: TokenStream) -> TokenStream {
     output.into()
 }
 
-#[proc_macro_attribute]
+/*#[proc_macro_attribute]
 pub fn style(_attr: TokenStream, input: TokenStream) -> TokenStream {
     let mut input = parse_macro_input!(input as ItemStruct);
 
@@ -812,11 +808,11 @@ pub fn style(_attr: TokenStream, input: TokenStream) -> TokenStream {
                     theme,
                 }
             }
-            
+
             pub fn key(&self) -> String {
                 self.prefix.clone()
             }
-            
+
             #(
                 pub fn #field_names(&mut self) -> #field_types_with_generic {
                     #field_types::new(self.theme, self.prefix.clone() + #_field_names)
@@ -826,4 +822,148 @@ pub fn style(_attr: TokenStream, input: TokenStream) -> TokenStream {
     };
 
     output.into()
+}*/
+
+#[proc_macro_attribute]
+pub fn style(_attr: TokenStream, input: TokenStream) -> TokenStream {
+    let mut input = parse_macro_input!(input as ItemStruct);
+
+
+    let fields = match &mut input.fields {
+        Fields::Named(fields) => &mut fields.named,
+        _ => panic!("Only support named fields"),
+    };
+    // name, type, set_xxx, get_xxx, get_xxx (for theme)
+    let (field_names, field_types, new_types, get_field_names, get_theme_field_names) = {
+        let mut field_names = Vec::new();
+        let mut field_types = Vec::new();
+        let mut new_types = Vec::new();
+        let mut get_field_names = Vec::new();
+        let mut get_theme_field_names = Vec::new();
+        for field in fields.iter() {
+            let field_name = field.ident.as_ref().unwrap().to_string();
+            let field_type = field.ty.to_token_stream().to_string();
+            let new_type = format!("State<{}>", field_type);
+            let get_field_name = format!("get_{}", field_name);
+            //Some(theme.get_style(name)?.downcast_ref::<f32>()?)
+            let get_theme_field_name = match field_type.as_str() {
+                "f32" => "theme.get_dimension(name)".to_string(),
+                "Color" => "theme.get_color(name)".to_string(),
+                "bool" => "theme.get_bool(name)".to_string(),
+                _=> "theme.get_style(name)".to_string(),
+            };
+            field_names.push(field.ident.clone().unwrap());
+            field_types.push(field.ty.clone());
+            new_types.push(syn::parse_str::<Type>(&new_type).unwrap());
+            get_field_names.push(Ident::new(&get_field_name, Span::call_site()));
+            get_theme_field_names.push(
+                syn::parse_str::<Expr>(&get_theme_field_name).unwrap()
+            );
+        }
+        (
+            field_names,
+            field_types,
+            new_types,
+            get_field_names,
+            get_theme_field_names,
+        )
+    };
+
+    let struct_name = input.ident.clone();
+/*
+        pub fn get_thickness<'a>(&'a self, theme: &'a Theme, item_state: ItemState) -> Option<&'a f32> {
+            match item_state {
+                ItemState::Enabled => match self.thickness.get_enabled() {
+                    ThemeValue::Ref(name) => theme.get_dimension(name),
+                    ThemeValue::Direct(value) => Some(value),
+                }
+                ItemState::Disabled => match self.thickness.get_disabled() {
+                    ThemeValue::Ref(name) => theme.get_dimension(name),
+                    ThemeValue::Direct(value) => Some(value),
+                },
+                ItemState::Focused => match self.thickness.get_enabled() {
+                    ThemeValue::Ref(name) => theme.get_dimension(name),
+                    ThemeValue::Direct(value) => Some(value),
+                },
+                ItemState::Hovered => match self.thickness.get_enabled() {
+                    ThemeValue::Ref(name) => theme.get_dimension(name),
+                    ThemeValue::Direct(value) => Some(value),
+                },
+                ItemState::Pressed => match self.thickness.get_enabled() {
+                    ThemeValue::Ref(name) => Some(theme.get_style(name)?.downcast_ref::<f32>()?),
+                    ThemeValue::Direct(value) => Some(value),
+                },
+            }
+        }*/
+    let output = quote! {
+        pub struct #struct_name {
+            #(
+                pub #field_names: #new_types,
+            )*
+        }
+        
+        impl #struct_name {
+            #(
+                pub fn #get_field_names<'a>(&'a self, theme: &'a Theme, item_state: ItemState) -> Option<&'a #field_types> {
+                    match item_state {
+                        ItemState::Enabled => match self.#field_names.get_enabled() {
+                            ThemeValue::Ref(name) => #get_theme_field_names,
+                            ThemeValue::Direct(value) => Some(value),
+                        },
+                        ItemState::Disabled => match self.#field_names.get_disabled() {
+                            ThemeValue::Ref(name) => #get_theme_field_names,
+                            ThemeValue::Direct(value) => Some(value),
+                        },
+                        ItemState::Focused => match self.#field_names.get_focused() {
+                            ThemeValue::Ref(name) => #get_theme_field_names,
+                            ThemeValue::Direct(value) => Some(value),
+                        },
+                        ItemState::Hovered => match self.#field_names.get_hovered() {
+                            ThemeValue::Ref(name) => #get_theme_field_names,
+                            ThemeValue::Direct(value) => Some(value),
+                        },
+                        ItemState::Pressed => match self.#field_names.get_pressed() {
+                            ThemeValue::Ref(name) => #get_theme_field_names,
+                            ThemeValue::Direct(value) => Some(value),
+                        },
+                    }
+                }
+            )*
+        }
+    };
+    println!("Output: {}", output);
+    output.into()
 }
+
+/*
+impl ButtonStyle {
+    pub fn set_container_color(&mut self, item_state: ItemState, color: impl Into<StyleValue<Color>>) -> &mut Self {
+        match item_state {
+            ItemState::Enabled => self.container_color.enabled = Some(color.into()),
+            ItemState::Disabled => self.container_color.disabled = Some(color.into()),
+            ItemState::Focused => self.container_color.focused = Some(color.into()),
+            ItemState::Hovered => self.container_color.hovered = Some(color.into()),
+            ItemState::Pressed => self.container_color.pressed = Some(color.into()),
+        }
+        self
+    }
+
+    pub fn get_container_color(&self, theme: &Theme, item_state: ItemState) -> Option<&Color> {
+        match item_state {
+            ItemState::Enabled => match &self.container_color.enabled? {
+                StyleValue::Parent => {
+                    let parent_style = theme
+                        .get_style(self.parent.as_ref()?)?
+                        .downcast_ref::<ButtonStyle>()?;
+                    parent_style.get_container_color(theme, item_state)
+                }
+                StyleValue::Ref(name) => theme.get_color(name),
+                StyleValue::Direct(value) => Some(value),
+            },
+            ItemState::Disabled => {}
+            ItemState::Focused => {}
+            ItemState::Hovered => {}
+            ItemState::Pressed => {}
+        }
+    }
+}*/

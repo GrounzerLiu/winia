@@ -29,7 +29,7 @@ pub trait Drawable: Send {
     fn height(&self) -> f32;
     fn set_color(&mut self, color: Option<Color>);
     fn get_color(&self) -> Option<Color>;
-    
+
     fn clone_drawable(&self) -> Box<dyn Drawable>;
     fn is_empty(&self) -> bool {
         self.get_intrinsic_width() == 0.0 && self.get_intrinsic_height() == 0.0
@@ -46,8 +46,7 @@ enum ImageType {
 unsafe impl Send for ImageType {}
 
 lazy_static! {
-    static ref DRAWABLES: Mutex<HashMap<PathBuf, ImageDrawable>> =
-        Mutex::new(HashMap::new());
+    static ref DRAWABLES: Mutex<HashMap<PathBuf, ImageDrawable>> = Mutex::new(HashMap::new());
 }
 
 #[derive(Clone)]
@@ -198,7 +197,7 @@ impl ImageDrawable {
             color: None,
         }
     }
-    
+
     pub fn from_file(path: impl Into<PathBuf>) -> Option<Self> {
         let path = path.into();
         if DRAWABLES.lock().contains_key(&path) {
@@ -255,7 +254,7 @@ impl ImageDrawable {
             Err(e) => {
                 println!("Error: {:?}", e);
                 return None;
-            },
+            }
         };
         let bytes = response.bytes().await.ok()?;
         let is_svg = if let Some(ext) = url.extension() {
@@ -345,13 +344,13 @@ impl Image {
         let id = item.data().get_id();
         let event_loop_proxy = app_context.event_loop_proxy();
         let property: Shared<ImageProperty> = ImageProperty {
-            drawable: drawable.layout_when_changed(&event_loop_proxy, id),
-            dpi_sensitive: SharedBool::from_static(true).layout_when_changed(&event_loop_proxy, id),
+            drawable: drawable.layout_when_changed(event_loop_proxy, id),
+            dpi_sensitive: SharedBool::from_static(true).layout_when_changed(event_loop_proxy, id),
             oversize_scale_mode: Shared::from_static(ScaleMode::Contain)
-                .layout_when_changed(&event_loop_proxy, id),
+                .layout_when_changed(event_loop_proxy, id),
             undersize_scale_mode: Shared::from_static(ScaleMode::Contain)
-                .layout_when_changed(&event_loop_proxy, id),
-            color: Shared::from_static(None).redraw_when_changed(&event_loop_proxy, id),
+                .layout_when_changed(event_loop_proxy, id),
+            color: Shared::from_static(None).redraw_when_changed(event_loop_proxy, id),
         }
         .into();
 
@@ -377,7 +376,7 @@ impl Image {
                         (MeasureMode::Specified(width), MeasureMode::Specified(height)) => {
                             (width, height)
                         }
-                        (MeasureMode::Specified(width), MeasureMode::Unspecified(height)) => {
+                        (MeasureMode::Specified(width), MeasureMode::Unspecified(_)) => {
                             let scale_mode = if drawable_width > width {
                                 oversize_scale_mode
                             } else {
@@ -407,7 +406,7 @@ impl Image {
 
                             (width, height)
                         }
-                        (MeasureMode::Unspecified(width), MeasureMode::Specified(height)) => {
+                        (MeasureMode::Unspecified(_), MeasureMode::Specified(height)) => {
                             let scale_mode = if drawable_height > height {
                                 oversize_scale_mode
                             } else {
@@ -436,7 +435,7 @@ impl Image {
                             };
                             (width, height)
                         }
-                        (MeasureMode::Unspecified(width), MeasureMode::Unspecified(height)) => (
+                        (MeasureMode::Unspecified(_), MeasureMode::Unspecified(_)) => (
                             drawable_width + padding_horizontal,
                             drawable_height + padding_vertical,
                         ),

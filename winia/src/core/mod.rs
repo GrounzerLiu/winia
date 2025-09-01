@@ -9,7 +9,7 @@ lazy_static! {
 }
 
 /// Generate a unique id
-pub fn generate_id() -> usize {
+pub fn next_id() -> usize {
     let mut id = PRE_ID.lock().unwrap();
     *id += 1;
     *id

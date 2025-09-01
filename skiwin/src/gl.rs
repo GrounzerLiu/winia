@@ -14,7 +14,7 @@ use glutin::api::cgl::{device::Device, display::Display};
 use glutin::api::egl::{device::Device, display::Display};
 #[cfg(target_os = "windows")]
 use glutin::api::egl::{device::Device, display::Display};
-use glutin::context::{ContextApi, ContextAttributesBuilder, PossiblyCurrentGlContext};
+use glutin::context::{ContextApi, ContextAttributesBuilder};
 use parking_lot::Mutex;
 use softbuffer::SoftBufferError;
 

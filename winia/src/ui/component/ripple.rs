@@ -4,12 +4,12 @@ use crate::shared::{
     SharedColor, SharedF32,
 };
 use crate::ui::app::WindowContext;
-use crate::ui::item::{DisplayParameter, ItemData, Pointer, PointerState};
+use crate::ui::item::{ItemData, Pointer, PointerState};
 use crate::ui::theme::color;
 use crate::ui::theme::color::parse_color;
 use crate::ui::Item;
 use proc_macro::item;
-use skia_safe::{Color, Paint, Path, Rect};
+use skia_safe::{Paint, Path, Rect};
 use std::collections::HashSet;
 use std::time::Duration;
 use toml::Value;
@@ -39,7 +39,7 @@ pub struct Ripple {
 impl Ripple {
     pub fn new(app_context: &WindowContext) -> Self {
         let event_loop_proxy = app_context.event_loop_proxy();
-        let primary_color = app_context
+        let primary_color = *app_context
             .theme
             .lock()
             .get_color(color::PRIMARY)
@@ -175,13 +175,13 @@ impl Ripple {
                                 continue;
                             }
                             layer.is_ended = true;
-                            let mut is_finished = layer.is_finished.clone();
+                            let is_finished = layer.is_finished.clone();
                             if let Some(animation) = layer.degree.get_animation() {
                                 if !animation.is_finished() {
                                     let opacity = layer.opacity.clone();
                                     let event_loop_proxy = app_context.event_loop_proxy().clone();
                                     animation.on_finish(move || {
-                                        let mut is_finished = is_finished.clone();
+                                        let is_finished = is_finished.clone();
                                         opacity
                                             .animation_to_f32(0.0)
                                             .duration(Duration::from_millis(500))
@@ -243,7 +243,7 @@ impl Ripple {
                 } else {
                     let theme = window_context.theme();
                     if let Some(color) = theme.lock().get_color(color) {
-                        ripple = ripple.color(color);
+                        ripple = ripple.color(*color);
                     };
                 }
             }
@@ -260,7 +260,7 @@ impl Ripple {
             let mut property = self.property.lock();
             property.borderless = borderless.into();
             let event_loop_proxy = self.item.data().get_window_context().event_loop_proxy().clone();
-            let mut clip_shape = self.item.data().get_clip_shape().clone();
+            let clip_shape = self.item.data().get_clip_shape().clone();
             property.borderless.add_specific_observer(
                 self.item.data().get_id(),
                 move |borderless| {

@@ -4,6 +4,7 @@ mod item;
 mod logical_x;
 mod scroller;
 mod size;
+mod dimension;
 
 pub use item::*;
 

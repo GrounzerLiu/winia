@@ -1,7 +1,7 @@
-use crate::core::generate_id;
+use crate::core::next_id;
 use crate::ui::animation::interpolator::{Interpolator, Linear};
 use crate::ui::app::EventLoopProxy;
-use parking_lot::{Mutex, MutexGuard};
+use parking_lot::{ArcMutexGuard, Mutex, MutexGuard, RawMutex};
 use std::fmt::Display;
 use std::future::Future;
 use std::ops::{Deref, DerefMut};
@@ -51,12 +51,47 @@ macro_rules! shared {
     }
 }
 
+pub struct SharedGuard<'a, T> {
+    outer: MutexGuard<'a, Arc<Mutex<T>>>,
+    inner: ArcMutexGuard<RawMutex, T>
+}
+
+impl<'a, T> SharedGuard<'a, T> {
+    pub fn new(
+        outer: MutexGuard<'a, Arc<Mutex<T>>>,
+        inner: ArcMutexGuard<RawMutex, T>,
+    ) -> Self {
+        Self { outer, inner }
+    }
+}
+
+impl<'a, T> Deref for SharedGuard<'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.inner.deref()
+    }
+}
+
+impl<'a, T> DerefMut for SharedGuard<'a, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.inner.deref_mut()
+    }
+}
+
+impl<'a, T> AsRef<T> for SharedGuard<'a, T> {
+    fn as_ref(&self) -> &T {
+        self.inner.deref()
+    }
+}
+
 pub struct Shared<T> {
     id: usize,
     /// The value of the shared.
-    value: Arc<Mutex<T>>,
+    is_from_shared: Arc<Mutex<bool>>,
+    value: Arc<Mutex<Arc<Mutex<T>>>>,
     value_generator: Arc<Mutex<Option<Box<dyn Fn() -> T + Send>>>>,
-    filter: Arc<Mutex<Option<Box<dyn Fn(T) -> Option<T> + Send>>>>,
+    filter: Arc<Mutex<Vec<Box<dyn Fn(T) -> T + Send>>>>,
     /// A list of objects that observed by this shared.
     /// The first element of the tuple is the observable object, and the second element is the id of the observer.
     /// The id is used to remove the observer when the observable object is dropped.
@@ -72,13 +107,14 @@ pub struct Shared<T> {
 
 impl<T: Send + 'static> Shared<T> {
     fn inner_new(value: T, value_generator: Option<Box<dyn Fn() -> T + Send>>) -> Self {
-        let value = Arc::new(Mutex::new(value));
+        let value = Arc::new(Mutex::new(Arc::new(Mutex::new(value))));
         let value_generator = Arc::new(Mutex::new(value_generator));
         Self {
-            id: generate_id(),
+            id: next_id(),
+            is_from_shared: Arc::new(Mutex::new(false)),
             value,
             value_generator,
-            filter: Arc::new(Mutex::new(None)),
+            filter: Arc::new(Mutex::new(Vec::with_capacity(0))),
             observed_objects: Arc::new(Mutex::new(Vec::with_capacity(0))),
             simple_observers: Arc::new(Mutex::new(Vec::with_capacity(0))),
             specific_observers: Arc::new(Mutex::new(Vec::with_capacity(0))),
@@ -116,12 +152,19 @@ impl<T: Send + 'static> Shared<T> {
 
     /// Modifications made through this function will not send notifications to observers.
     /// If you want to notify observers after modifying the value, use the [`write`](Shared::write) method.
-    pub fn lock(&self) -> MutexGuard<T> {
-        self.value.lock()
+    pub fn lock(&self) -> SharedGuard<T> {
+        let outer = self.value.lock();
+        let inner = outer.lock_arc();
+        SharedGuard::new(outer, inner)
     }
 
-    pub fn try_lock(&self) -> Option<MutexGuard<T>> {
-        self.value.try_lock()
+    pub fn try_lock(&self) -> Option<SharedGuard<T>> {
+        if self.value.is_locked() {
+            return None;
+        }
+        let outer = self.value.try_lock()?;
+        let inner = outer.try_lock_arc()?;
+        Some(SharedGuard::new(outer, inner))
     }
 
     pub fn is_locked(&self) -> bool {
@@ -129,7 +172,7 @@ impl<T: Send + 'static> Shared<T> {
     }
 
     pub fn read<R>(&self, mut operation: impl FnMut(&T) -> R) -> R {
-        let value = self.value.lock();
+        let value = self.lock();
         operation(value.deref())
     }
 
@@ -137,7 +180,7 @@ impl<T: Send + 'static> Shared<T> {
     /// If you don't want to notify observers after modifying the value, use the [`value`](Shared::lock) method.
     pub fn write<R>(&self, mut operation: impl FnMut(&mut T) -> R) -> R {
         let r = {
-            let mut value = self.value.lock();
+            let mut value = self.lock();
             operation(value.deref_mut())
         };
         self.notify();
@@ -147,21 +190,27 @@ impl<T: Send + 'static> Shared<T> {
     pub fn id(&self) -> usize {
         self.id
     }
+    
+    fn filter(&self, value: T) -> T {
+        let filter = self.filter.lock();
+        let mut value = value;
+        for f in filter.iter() {
+            value = f(value);
+        }
+        value
+    }
 
     pub fn set_static(&self, value: T) {
         {
-            let filter = self.filter.lock();
-            let value = if let Some(filter) = filter.deref() {
-                if let Some(value) = filter(value) {
-                    value
-                } else {
-                    return;
-                }
-            } else {
-                value
-            };
             self.clear_observed_objects();
-            *self.value.lock() = value;
+            let filtered_value = self.filter(value);
+            if *self.is_from_shared.lock() {
+                let value = Arc::new(Mutex::new(filtered_value));
+                *self.value.lock() = value;
+                *self.is_from_shared.lock() = false;
+            } else {
+                *self.lock() = self.filter(filtered_value);
+            }
             *self.value_generator.lock() = None;
         }
         self.notify();
@@ -174,8 +223,12 @@ impl<T: Send + 'static> Shared<T> {
         self.set_static(value);
     }
 
-    pub fn set_filter(&self, filter: impl Fn(T) -> Option<T> + Send + 'static) {
-        *self.filter.lock() = Some(Box::new(filter));
+
+    pub fn add_filter<F>(&self, filter: F)
+    where
+        F: Fn(T) -> T + Send + 'static,
+    {
+        self.filter.lock().push(Box::new(filter));
     }
 
     /// Sets a new dynamic value for this object and stores the value generator used to compute it.
@@ -222,6 +275,16 @@ impl<T: Send + 'static> Shared<T> {
         }
         self.set_dynamic(o, value_generator);
     }
+    
+    pub fn set_shared(&self, shared: impl Into<Shared<T>>) {
+        *self.is_from_shared.lock() = true;
+        let shared = shared.into();
+        self.clear_observed_objects();
+        *self.value.lock() = shared.value.lock().clone();
+        *self.value_generator.lock() = None;
+        self.observe(shared);
+        self.notify();
+    }
 
     fn can_generate(&self) -> bool {
         self.value_generator.lock().is_some()
@@ -230,26 +293,22 @@ impl<T: Send + 'static> Shared<T> {
     pub fn notify(&self) {
         if self.can_generate() {
             let value_generator = self.value_generator.lock();
-            let mut value = self.value.lock();
             let generated_value = value_generator.as_ref().unwrap()();
-            let filter = self.filter.lock();
-            let new_value = if let Some(filter) = filter.deref() {
-                if let Some(value) = filter(generated_value) {
-                    value
-                } else {
-                    return;
-                }
+            let filtered_value = self.filter(generated_value);
+            if *self.is_from_shared.lock() {
+                let value = Arc::new(Mutex::new(filtered_value));
+                *self.value.lock() = value;
+                *self.is_from_shared.lock() = false;
             } else {
-                generated_value
-            };
-            *value = new_value;
+                *self.lock() = filtered_value;
+            }
         }
 
         for (_, observer) in self.simple_observers.lock().iter_mut() {
             observer();
         }
 
-        let mut value = self.value.lock();
+        let mut value = self.lock();
         for (_, observer) in self.specific_observers.lock().iter_mut() {
             observer(&mut *value);
         }
@@ -267,7 +326,7 @@ impl<T: Send + 'static> Shared<T> {
             .push((id, Box::new(observer)));
     }
 
-    fn observe<O: Into<Box<dyn Observable + Send + 'static>>>(&self, observable: O) {
+    pub fn observe<O: Into<Box<dyn Observable + Send + 'static>>>(&self, observable: O) {
         let mut observable: Box<dyn Observable + Send> = observable.into();
         let self_weak = self.weak();
         let removal = observable
@@ -302,6 +361,7 @@ impl<T: Send + 'static> Shared<T> {
     pub fn weak(&self) -> WeakShared<T> {
         WeakShared {
             id: self.id,
+            is_from_shared: Arc::downgrade(&self.is_from_shared),
             value: Arc::downgrade(&self.value),
             value_generator: Arc::downgrade(&self.value_generator),
             filter: Arc::downgrade(&self.filter),
@@ -364,6 +424,7 @@ impl<T> Clone for Shared<T> {
     fn clone(&self) -> Self {
         Self {
             id: self.id,
+            is_from_shared: self.is_from_shared.clone(),
             value: self.value.clone(),
             value_generator: self.value_generator.clone(),
             filter: self.filter.clone(),
@@ -431,13 +492,13 @@ impl<T: Send + 'static> Settable<T> for Shared<T> {
 //     }
 // }
 
-impl<T: Clone> Gettable<T> for Shared<T> {
+impl<T: Clone + Send + 'static> Gettable<T> for Shared<T> {
     fn get(&self) -> T {
-        self.value.lock().clone()
+        self.lock().clone()
     }
 }
 
-impl<T: Clone> Shared<T> {
+impl<T: Clone + Send + 'static> Shared<T> {
     fn into(self) -> T {
         self.get()
     }
@@ -490,9 +551,10 @@ impl<T: Send + 'static> Into<Box<dyn Observable + Send + 'static>> for &Shared<T
 #[derive(Clone)]
 pub struct WeakShared<T> {
     id: usize,
-    value: Weak<Mutex<T>>,
+    is_from_shared: Weak<Mutex<bool>>,
+    value: Weak<Mutex<Arc<Mutex<T>>>>,
     value_generator: Weak<Mutex<Option<Box<dyn Fn() -> T + Send>>>>,
-    filter: Weak<Mutex<Option<Box<dyn Fn(T) -> Option<T> + Send>>>>,
+    filter: Weak<Mutex<Vec<Box<dyn Fn(T) -> T + Send>>>>,
     observed_objects:
         Weak<Mutex<Vec<(Option<Box<dyn Observable + Send>>, Box<dyn FnOnce() + Send>)>>>,
     simple_observers: Weak<Mutex<Vec<(usize, Box<dyn FnMut() + Send>)>>>,
@@ -502,6 +564,7 @@ pub struct WeakShared<T> {
 
 impl<T: Send + 'static> WeakShared<T> {
     pub fn upgrade(&self) -> Option<Shared<T>> {
+        let is_from_shared = self.is_from_shared.upgrade()?;
         let value = self.value.upgrade()?;
         let value_generator = self.value_generator.upgrade()?;
         let filter = self.filter.upgrade()?;
@@ -511,6 +574,7 @@ impl<T: Send + 'static> WeakShared<T> {
         let animation = self.animation.upgrade()?;
         Some(Shared {
             id: self.id,
+            is_from_shared,
             value,
             value_generator,
             filter,
@@ -561,7 +625,7 @@ impl<T: Send + 'static> InnerSharedAnimation<T> {
         value_generator: impl Fn(&T, &T, f32) -> T + Send + 'static,
     ) -> Self {
         Self {
-            id: generate_id(),
+            id: next_id(),
             is_finished: false,
             enable_repeat: false,
             shared: f32.weak(),
@@ -620,7 +684,7 @@ impl<T: Send + 'static> InnerSharedAnimation<T> {
             } else if self.start_time.elapsed() >= self.duration {
                 self.start_time = Instant::now();
                 false
-            } else { 
+            } else {
                 false
             }
         } else {
@@ -706,7 +770,7 @@ impl<T: Send + 'static> SharedAnimation<T> {
         }
         self
     }
-    
+
     pub fn start_delayed(self, event_loop_proxy: &EventLoopProxy, delay: Duration) -> Self {
         let event_loop_proxy = event_loop_proxy.clone();
         let self_clone = self.clone();
@@ -754,4 +818,41 @@ impl<T: Send + 'static> SharedAnimationTrait for SharedAnimation<T> {
     fn update(&self) {
         self.inner.lock().update();
     }
+}
+
+#[macro_export]
+macro_rules! observables {
+    ($($observable:expr),* $(,)?) => {
+        [
+            $(
+                $observable.to_observable()
+            )*
+        ].into()
+    }
+}
+
+#[macro_export]
+macro_rules! bind {
+    ($a:ident, $b:ident, $a2b:expr, $b2a:expr) => {
+        {
+            let a_id = $a.id();
+            let b_id = $b.id();
+            $a.add_specific_observer(b_id, {
+                let b = $b.clone();
+                move |value| {
+                    if let Some(value) = $a2b(value) {
+                        b.try_set_static(value);
+                    }
+                }
+            });
+            $b.add_specific_observer(a_id, {
+                let a = $a.clone();
+                move |value| {
+                    if let Some(value) = $b2a(value) {
+                        a.try_set_static(value);
+                    }
+                }
+            });
+        }
+    };
 }

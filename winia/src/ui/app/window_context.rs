@@ -1,17 +1,16 @@
-use crate::dpi::LogicalSize;
-use crate::shared::{Children, Gettable, Settable, Shared, SharedAnimationTrait, SharedBool, SharedUnSend, WeakShared, WeakSharedUnSend};
+use crate::shared::{Gettable, LocalShared, Settable, Shared, SharedAnimationTrait, SharedBool};
+use crate::ui::app::WindowAttr;
 use crate::ui::theme::material_theme;
-use crate::ui::{LayoutAnimation, Item, Theme};
+use crate::ui::{Item, LayoutAnimation, Theme};
 use parking_lot::MutexGuard;
+use proc_macro::AsRef;
 use skia_safe::Color;
 use skiwin::SkiaWindow;
 use std::collections::{BTreeSet, LinkedList};
-use std::ops::DerefMut;
 use std::time::{Duration, Instant};
 use winit::event_loop::EventLoopProxy as WinitEventLoopProxy;
 use winit::window::{Window, WindowId};
-use proc_macro::AsRef;
-use crate::ui::app::WindowAttr;
+use crate::ui::animation::{Animation, LocalLayoutAnimation};
 
 #[derive(Clone, Debug)]
 pub(crate) struct Timer {
@@ -61,7 +60,7 @@ pub enum EventType {
     SetWindowAttribute(Box<dyn FnOnce(Option<&Window>) + Send>),
     NewWindow{
         item_generator: Box<dyn FnOnce(&WindowContext) -> Item + Send + 'static>,
-        window_attr: WindowAttr,
+        window_attr: Box<WindowAttr>,
     },
     NewLayer(Box<dyn FnOnce(&WindowContext, LayerController) -> Item + Send + 'static>),
     RemoveLayer(usize),
@@ -137,7 +136,7 @@ impl EventLoopProxy {
             window_id: self.window_id,
             event: EventType::NewWindow{
                 item_generator: Box::new(item_generator),
-                window_attr,
+                window_attr: Box::new(window_attr),
             },
         });
     }
@@ -160,13 +159,14 @@ impl EventLoopProxy {
 #[derive(Clone)]
 pub struct WindowContext {
     pub(crate) theme: Shared<Theme>,
-    pub(crate) window: SharedUnSend<Box<dyn SkiaWindow>>,
+    pub(crate) window: LocalShared<Box<dyn SkiaWindow>>,
     pub(crate) window_attr: Shared<WindowAttr>,
     pub(crate) event_loop_proxy: EventLoopProxy,
     pub(crate) request_layout: Shared<bool>,
     pub(crate) request_redraw: Shared<bool>,
-    pub(crate) layout_animations: SharedUnSend<Vec<LayoutAnimation>>,
-    pub(crate) shared_animations: SharedUnSend<Vec<Box<dyn SharedAnimationTrait + Send>>>,
+    pub(crate) layout_animations: LocalShared<Vec<Box<dyn Animation>>>,
+    pub(crate) starting_local_animations: LocalShared<LinkedList<LocalLayoutAnimation>>,
+    pub(crate) shared_animations: LocalShared<Vec<Box<dyn SharedAnimationTrait + Send>>>,
     /// ((last focused item, id), (new focused item, id))
     pub(crate) item_focused: Shared<(Option<(SharedBool, usize)>, Option<(SharedBool, usize)>)>,
     ime_allowed: Shared<BTreeSet<usize>>,
@@ -184,14 +184,15 @@ impl WindowContext {
         let window_id = window.id();
         Self {
             theme: material_theme(Color::from_rgb(255, 0, 0), dark_light::detect().map_or(false,|mode|{
-                mode == dark_light::Mode::Dark
+                mode != dark_light::Mode::Dark
             })).into(),
-            window: SharedUnSend::from_static(window),
+            window: LocalShared::from_static(window),
             window_attr: window_attr.clone(),
             event_loop_proxy: EventLoopProxy::new(window_id, event_loop_proxy),
             request_layout: false.into(),
             request_redraw: false.into(),
             layout_animations: Vec::new().into(),
+            starting_local_animations: LinkedList::new().into(),
             shared_animations: Vec::new().into(),
             item_focused: (None, None).into(),
             ime_allowed: BTreeSet::new().into(),
@@ -241,7 +242,7 @@ impl WindowContext {
     }
 
     pub fn get_cursor_position(&self) -> (f32, f32) {
-        self.cursor_position.lock().clone()
+        *self.cursor_position.lock()
     }
 
     pub fn title(&self) -> &Shared<String> {

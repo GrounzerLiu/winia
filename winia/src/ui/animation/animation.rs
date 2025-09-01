@@ -1,5 +1,6 @@
+use std::ops::Deref;
 use crate::ui::animation::interpolator::{EaseOutCirc, Interpolator};
-use crate::ui::animation::Target;
+use crate::ui::animation::{interpolate_color, interpolate_f32, Animation, Target};
 use crate::ui::app::{EventLoopProxy, WindowContext};
 use skia_safe::Color;
 use std::sync::Arc;
@@ -15,6 +16,7 @@ pub(crate) struct InnerAnimation {
     pub interpolator: Box<dyn Interpolator + Send>,
     pub target: Target,
     pub transformation: Box<dyn FnMut() + Send>,
+    pub is_finished: bool,
     pub on_start: Option<Box<dyn Fn() + Send>>,
     pub on_finish: Option<Box<dyn Fn() + Send>>,
 }
@@ -28,32 +30,32 @@ impl InnerAnimation {
             interpolator: Box::new(EaseOutCirc::new()),
             target,
             transformation: Box::new(|| {}),
+            is_finished: false,
             on_start: None,
             on_finish: None,
         }
     }
 
-    pub fn interpolate_f32(&self, start: f32, end: f32) -> f32 {
+    fn progress(&self) -> f32 {
         let time_elapsed = self.start_time.elapsed().as_millis() as f32;
-        let progress = (time_elapsed / self.duration.as_millis() as f32).clamp(0.0, 1.0);
-        let interpolated = self.interpolator.interpolate(progress);
-        start + (end - start) * interpolated
+        (time_elapsed / self.duration.as_millis() as f32).clamp(0.0, 1.0)
     }
 
-    pub fn interpolate_color(&self, start: &Color, end: &Color) -> Color {
-        let time_elapsed = self.start_time.elapsed().as_millis() as f64;
-        let progress = (time_elapsed / self.duration.as_millis() as f64).clamp(0.0, 1.0);
-        let start_a = start.a() as f64;
-        let start_argb = Argb::new(255, start.r(), start.g(), start.b());
-        let end_a = end.a() as f64;
-        let end_argb = Argb::new(255, end.r(), end.g(), end.b());
-        let blend_a = start_a + (end_a - start_a) * progress;
-        let blend_argb = cam16_ucs(start_argb, end_argb, progress);
-        let a = blend_a as u8;
-        let r = blend_argb.red;
-        let g = blend_argb.green;
-        let b = blend_argb.blue;
-        Color::from_argb(a, r, g, b)
+    fn interpolate_f32(&self, start: f32, end: f32) -> f32 {
+        interpolate_f32(
+            start,
+            end,
+            self.progress(),
+            self.interpolator.deref(),
+        )
+    }
+
+    fn interpolate_color(&self, start: &Color, end: &Color) -> Color {
+        interpolate_color(
+            start,
+            end,
+            self.progress(),
+        )
     }
 
     pub fn on_start(&mut self, on_start: impl Fn() + Send + 'static) {
@@ -72,7 +74,7 @@ impl InnerAnimation {
     }
 
     pub fn is_finished(&self) -> bool {
-        self.start_time.elapsed() >= self.duration
+        self.start_time.elapsed() >= self.duration || self.is_finished
     }
 }
 
@@ -97,10 +99,10 @@ impl LayoutAnimation {
     }
 
     /// Set the interpolator function.
-    pub fn interpolator(self, interpolator: Box<dyn Interpolator +Send>) -> Self {
+    pub fn interpolator(self, interpolator: impl Interpolator + Send + 'static) -> Self {
         {
             let mut inner = self.inner.lock();
-            inner.interpolator = interpolator;
+            inner.interpolator = Box::new(interpolator);
         }
         self
     }
@@ -134,30 +136,55 @@ impl LayoutAnimation {
         event_loop_proxy.start_layout_animation(self);
     }
 
-    pub fn is_finished(&self) -> bool {
-        let mut inner = self.inner.lock();
-        let is_finish = inner.is_finished();
-        if is_finish {
-            if let Some(on_finished) = inner.on_finish.take() {
-                on_finished();
-            }
-        }
-        is_finish
-    }
+
 
     pub fn is_target(&self, id: usize) -> bool {
         let inner = self.inner.lock();
         inner.is_target(id)
     }
+}
 
-    pub fn interpolate_f32(&self, start: f32, end: f32) -> f32 {
+impl Animation for LayoutAnimation {
+    fn interpolate_f32(&self, start: f32, end: f32) -> f32 {
         let inner = self.inner.lock();
         inner.interpolate_f32(start, end)
     }
 
-    pub fn interpolate_color(&self, start: &Color, end: &Color) -> Color {
+    fn interpolate_color(&self, start: &Color, end: &Color) -> Color {
         let inner = self.inner.lock();
         inner.interpolate_color(start, end)
+    }
+
+    fn is_finished(&self) -> bool {
+        let inner = self.inner.lock();
+        inner.is_finished()
+    }
+
+    fn finish(&mut self) {
+        let mut inner = self.inner.lock();
+        if let Some(on_finish) = inner.on_finish.take() {
+            on_finish();
+        }
+        inner.is_finished = true;
+    }
+
+    fn animatable(&self, id: usize, forced: bool) -> (bool, bool) {
+        let animation_inner = self.inner.lock();
+        match &animation_inner.target {
+            Target::Exclusion(targets) => {
+                let is_excluded = targets.contains(&id);
+                (!is_excluded && !forced, is_excluded)
+            }
+            Target::Inclusion(targets) => {
+                let is_included = targets.contains(&id);
+                (is_included || forced, is_included || forced)
+            }
+        }
+    }
+
+
+    fn clone_boxed(&self) -> Box<dyn Animation> {
+        Box::new(self.clone())
     }
 }
 

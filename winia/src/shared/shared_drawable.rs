@@ -1,10 +1,6 @@
 use crate::shared::Shared;
 use crate::ui::component::{Drawable, ImageDrawable};
-use lazy_static::lazy_static;
-use parking_lot::Mutex;
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 pub type SharedDrawable = Shared<Box<dyn Drawable>>;
 

@@ -14,6 +14,8 @@ mod radio_group;
 mod checkbox;
 mod switch;
 mod progress_indicator;
+mod icon;
+mod page;
 
 pub use radio::*;
 // pub use divider::DividerExt;
@@ -29,3 +31,5 @@ pub use radio_group::*;
 pub use checkbox::*;
 pub use switch::*;
 pub use progress_indicator::*;
+pub use icon::*;
+pub use page::*;

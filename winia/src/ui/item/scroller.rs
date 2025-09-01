@@ -1,6 +1,4 @@
-use std::collections::LinkedList;
-use parking_lot::MutexGuard;
-use crate::shared::{Gettable, Settable, Shared, SharedF32};
+use crate::shared::{Gettable, SharedF32};
 use crate::ui::app::{EventLoopProxy, WindowContext};
 use crate::ui::item::{DisplayParameter, MouseScrollDelta, MouseWheel};
 use crate::ui::theme::color;
@@ -47,20 +45,29 @@ impl Scroller {
         &mut self.y_deltas
     }
     
-    pub fn update_by_mouse_wheel(&mut self, mouse_wheel: &MouseWheel) {
+    pub fn update_by_mouse_wheel_x(&mut self, mouse_wheel: &MouseWheel) {
         match mouse_wheel.delta {
-            MouseScrollDelta::LineDelta(x, y) => {
+            MouseScrollDelta::LineDelta(x) => {
                 if self.scroll_enabled.0 {
                     self.x_deltas += x * self.mouse_scroll_speed;
                 }
+            }
+            MouseScrollDelta::LogicalDelta(x) => {
+                if self.scroll_enabled.0 {
+                    self.x_deltas += x;
+                }
+            }
+        }
+    }
+    
+    pub fn update_by_mouse_wheel_y(&mut self, mouse_wheel: &MouseWheel) {
+        match mouse_wheel.delta {
+            MouseScrollDelta::LineDelta(y) => {
                 if self.scroll_enabled.1 {
                     self.y_deltas += y * self.mouse_scroll_speed;
                 }
             }
-            MouseScrollDelta::LogicalDelta(x, y) => {
-                if self.scroll_enabled.0 {
-                    self.x_deltas += x;
-                }
+            MouseScrollDelta::LogicalDelta(y) => {
                 if self.scroll_enabled.1 {
                     self.y_deltas += y;
                 }
@@ -80,7 +87,7 @@ impl Scroller {
         let thumb_opacity = self.thumb_opacity.get();
         let thumb_color = {
             let theme = window_context.theme();
-            let thumb_color = theme.lock().get_color(color::ON_SURFACE).unwrap();
+            let thumb_color = *theme.lock().get_color(color::ON_SURFACE).unwrap();
             thumb_color.with_a((thumb_opacity * 255.0) as u8)
         };
 

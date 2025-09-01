@@ -109,9 +109,9 @@ impl ProgressIndicator {
                 clone!(progress, is_determinate, start_position, end_position);
                 move |item, width, height| {
                     let theme = item.get_window_context().theme().lock();
-                    let active_indicator_color = theme.get_color(color::PRIMARY).unwrap();
-                    let track_color = theme.get_color(color::SECONDARY_CONTAINER).unwrap();
-                    let stop_indicator_color = theme.get_color(color::PRIMARY).unwrap();
+                    let active_indicator_color = *theme.get_color(color::PRIMARY).unwrap();
+                    let track_color = *theme.get_color(color::SECONDARY_CONTAINER).unwrap();
+                    let stop_indicator_color = *theme.get_color(color::PRIMARY).unwrap();
                     drop(theme);
                     let padding_start = item.get_padding_start().get();
                     let padding_top = item.get_padding_top().get();

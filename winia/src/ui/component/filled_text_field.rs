@@ -1,4 +1,4 @@
-use crate::core::generate_id;
+use crate::core::next_id;
 use crate::exclude_target;
 use crate::shared::{
     Gettable, Settable, Shared, SharedBool, SharedColor, SharedF32, SharedSize, SharedText,
@@ -58,12 +58,12 @@ impl FilledTextField {
                 );
                 move || {
                     if input_text_focused.get() {
-                        theme
+                        *theme
                             .lock()
                             .get_color(color::PRIMARY)
                             .unwrap()
                     } else {
-                        theme
+                        *theme
                             .lock()
                             .get_color(color::ON_SURFACE_VARIANT)
                             .unwrap()
@@ -72,8 +72,18 @@ impl FilledTextField {
             }
         );
         
+        if !input_text.lock().is_empty() {
+            label_text_min_height.set(16.0);
+            label_text_font_size.set(12.0);
+            input_text_height.set(Size::Auto);
+        } else {
+            label_text_min_height.set(24.0);
+            label_text_font_size.set(16.0);
+            input_text_height.set(Size::Fixed(0.0));
+        }
+        
         let event_loop_proxy = w.event_loop_proxy();
-        input_text_focused.add_specific_observer(generate_id(), {
+        input_text_focused.add_specific_observer(next_id(), {
             clone!(
                 event_loop_proxy,
                 label_text_min_height,
@@ -164,7 +174,7 @@ impl FilledTextField {
                     w.rectangle(SharedColor::from_dynamic([w.theme().into()].into(), {
                         let theme = w.theme().clone();
                         move || {
-                            theme
+                            *theme
                                 .lock()
                                 .get_color(color::SURFACE_CONTAINER_HIGHEST)
                                 .unwrap()

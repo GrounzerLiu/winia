@@ -1,20 +1,31 @@
-use crate::shared::{Children, Gettable, Settable, Shared, SharedDrawable};
+use crate::shared::{Children, Settable, Shared, SharedDrawable};
 use crate::ui::app::{EventLoopProxy, WindowContext};
-use crate::ui::component::{ImageDrawable, ImageExt, RectangleExt, RippleExt, ScaleMode};
+use crate::ui::component::{ImageDrawable, ImageExt, RippleExt, ScaleMode};
 use crate::ui::item::{Alignment, ItemData};
 use crate::ui::layout::StackExt;
 use crate::ui::theme::color;
 use crate::ui::Item;
 use clonelet::clone;
-use parking_lot::Mutex;
 use proc_macro::item;
 use skia_safe::{Color, Path};
-use std::ops::Deref;
-use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use lazy_static::lazy_static;
 
 const RADIO_BUTTON_CHECKED_ICON: &[u8] = include_bytes!("assets/icon/radio_button_checked.svg");
 const RADIO_BUTTON_UNCHECKED_ICON: &[u8] = include_bytes!("assets/icon/radio_button_unchecked.svg");
+
+lazy_static!(
+    static ref RADIO_BUTTON_CHECKED_DRAWABLE: SharedDrawable = {
+        SharedDrawable::from_static(Box::new(
+            ImageDrawable::from_bytes(RADIO_BUTTON_CHECKED_ICON, true).unwrap(),
+        ))
+    };
+    static ref RADIO_BUTTON_UNCHECKED_DRAWABLE: SharedDrawable = {
+        SharedDrawable::from_static(Box::new(
+            ImageDrawable::from_bytes(RADIO_BUTTON_UNCHECKED_ICON, true).unwrap(),
+        ))
+    };
+);
 
 #[derive(Clone)]
 struct RadioProperty<T> {
@@ -56,17 +67,12 @@ impl<T: Clone + PartialEq + Send + 'static> Radio<T> {
                 Children::new()
                     + w.stack(
                         Children::new()
-                            + w.image({
-                                let image =
-                                    ImageDrawable::from_bytes(RADIO_BUTTON_UNCHECKED_ICON, true)
-                                        .unwrap();
-                                SharedDrawable::from_static(Box::new(image))
-                            })
+                            + w.image(RADIO_BUTTON_UNCHECKED_DRAWABLE.clone())
                             .color(Shared::<Option<Color>>::from_dynamic(
                                 [w.theme().into()].into(),
                                 {
                                     let theme = w.theme().clone();
-                                    move || theme.lock().get_color(color::ON_SURFACE_VARIANT)
+                                    move || theme.lock().get_color(color::ON_SURFACE_VARIANT).cloned()
                                 },
                             ))
                             .oversize_scale_mode(ScaleMode::Stretch)
@@ -76,17 +82,12 @@ impl<T: Clone + PartialEq + Send + 'static> Radio<T> {
                             .opacity(&unchecked_opacity)
                             .scale_x(&unchecked_scale)
                             .scale_y(&unchecked_scale)
-                            + w.image({
-                                let image =
-                                    ImageDrawable::from_bytes(RADIO_BUTTON_CHECKED_ICON, true)
-                                        .unwrap();
-                                SharedDrawable::from_static(Box::new(image))
-                            })
+                            + w.image(RADIO_BUTTON_CHECKED_DRAWABLE.clone())
                             .color(Shared::<Option<Color>>::from_dynamic(
                                 [w.theme().into()].into(),
                                 {
                                     let theme = w.theme().clone();
-                                    move || theme.lock().get_color(color::PRIMARY)
+                                    move || theme.lock().get_color(color::PRIMARY).cloned()
                                 },
                             ))
                             .oversize_scale_mode(ScaleMode::Stretch)

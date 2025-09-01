@@ -4,5 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-winia = { path = "../winia" }
+winia = { path = "../winia", features = ["material-symbols-outlined","material-symbols-rounded","material-symbols-sharp"] }
+winia-video = { path = "../winia-video" }
 clonelet = "0.2.0"
+rand = "0.9"

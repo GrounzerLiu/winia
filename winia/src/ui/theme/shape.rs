@@ -1,5 +1,4 @@
 pub mod corner {
-
     pub static NONE: &str = "shape_corner_none";
     pub static EXTRA_SMALL: &str = "shape_corner_extra_small";
     pub mod extra_small {
@@ -19,4 +18,12 @@ pub mod corner {
         pub static TOP: &str = "shape_corner_extra_large_top";
     }
     pub static FULL: &str = "shape_corner_full";
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Corner {
+    pub top_start: f32,
+    pub top_end: f32,
+    pub bottom_start: f32,
+    pub bottom_end: f32,
 }

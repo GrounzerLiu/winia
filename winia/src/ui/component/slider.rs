@@ -1,16 +1,16 @@
-use crate::shared::{Children, Gettable, Settable, Shared, SharedColor, SharedF32};
+use crate::shared::{Children, Gettable, Settable, Shared, SharedF32};
 use crate::ui::app::WindowContext;
 use crate::ui::item::{DisplayParameter, HorizontalAlignment, LogicalX, MouseScrollDelta, Size};
 use crate::ui::theme::color;
 use crate::ui::Item;
-use crate::{impl_property_layout, impl_property_redraw};
+use crate::impl_property_layout;
 use proc_macro::item;
-use skia_safe::{Canvas, Color, Paint, RRect, Rect, Shader, Vector};
-use std::ops::{Add, Div, Mul, Sub};
+use skia_safe::{Canvas, Color, Paint, RRect, Rect, Vector};
 
 #[derive(Clone)]
 struct SliderProperty {
     value: Shared<f32>,
+    on_value_changed: Shared<Box<dyn Fn(f32) + Send>>,
     max: Shared<f32>,
     min: Shared<f32>,
     division: Shared<f32>,
@@ -18,7 +18,8 @@ struct SliderProperty {
 
 #[item(min: impl Into<SharedF32>,
         max: impl Into<SharedF32>,
-        value: impl Into<SharedF32>)]
+        value: impl Into<SharedF32>,
+        on_value_changed: impl Fn(f32) + Send + 'static)]
 pub struct Slider {
     item: Item,
     property: Shared<SliderProperty>,
@@ -212,12 +213,14 @@ impl Slider {
         min: impl Into<SharedF32>,
         max: impl Into<SharedF32>,
         value: impl Into<SharedF32>,
+        on_value_changed: impl Fn(f32) + Send + 'static,
     ) -> Self {
         let (active_color, inactive_color) = {
-            let theme = window_context.theme().lock();
+            let theme_ = window_context.theme();
+            let theme = theme_.lock();
             (
-                theme.get_color(color::PRIMARY).unwrap(),
-                theme.get_color(color::SECONDARY_CONTAINER).unwrap(),
+                *theme.get_color(color::PRIMARY).unwrap(),
+                *theme.get_color(color::SECONDARY_CONTAINER).unwrap(),
             )
         };
         let item = Item::new(window_context, Children::new())
@@ -227,6 +230,7 @@ impl Slider {
         let event_loop_proxy = window_context.event_loop_proxy().clone();
         let property = Shared::from(SliderProperty {
             value: value.into().layout_when_changed(&event_loop_proxy, id),
+            on_value_changed: Shared::from_static(Box::new(on_value_changed)),
             max: max.into().layout_when_changed(&event_loop_proxy, id),
             min: min.into().layout_when_changed(&event_loop_proxy, id),
             division: Shared::from(1.0),
@@ -237,13 +241,13 @@ impl Slider {
             let value = property.value.clone();
             let max = property.max.clone();
             let min = property.min.clone();
-            value.set_filter({
+            value.add_filter({
                 let max = max.clone();
                 let min = min.clone();
                 move |value| {
                     let max = max.get();
                     let min = min.get();
-                    Some(value.clamp(min, max))
+                    value.clamp(min, max)
                 }
             });
         }
@@ -355,16 +359,19 @@ impl Slider {
                     let min = property.min.get();
                     let max = property.max.get();
                     let value = min + (max - min) * percent;
+                    let on_value_changed = property.on_value_changed.lock();
                     if value < min {
-                        property.value.set(min);
+                        // property.value.set(min);
+                        on_value_changed(value);
                     } else if value > max {
-                        property.value.set(max);
+                        // property.value.set(max);
+                        on_value_changed(max);
                     } else {
-                        property.value.set(value);
+                        // property.value.set(value);
+                        on_value_changed(value);
                     }
-                    property.value.notify();
                 }
-            }).set_mouse_wheel({
+            }).set_mouse_wheel_y({
                 let property = property.clone();
                 move |item, input| {
                     let property = property.lock();
@@ -372,14 +379,14 @@ impl Slider {
                     let max = property.max.get();
                     let offset = (max - min) / 100.0;
                     let offset = match input.delta {
-                        MouseScrollDelta::LineDelta(_, y) => { 
+                        MouseScrollDelta::LineDelta(y) => { 
                             if y > 0.0 {
                                 1.0 * offset
                             } else {
                                 -1.0 * offset
                             }
                         }
-                        MouseScrollDelta::LogicalDelta(_, y) => {
+                        MouseScrollDelta::LogicalDelta(y) => {
                             if y > 0.0 {
                                 -1.0 * offset
                             } else {

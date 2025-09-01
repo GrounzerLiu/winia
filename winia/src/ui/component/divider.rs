@@ -1,19 +1,13 @@
-use std::ops::DerefMut;
-use crate::core::generate_id;
-use crate::shared::Observable;
-use crate::shared::{Gettable, Removal, Settable, SharedSize};
-use crate::shared::{Shared, SharedColor, SharedF32};
+use crate::shared::{Gettable, SharedSize};
+use crate::shared::{Shared, SharedColor};
 use crate::ui::app::WindowContext;
-use crate::ui::component::RectangleExt;
-use crate::ui::item::Size;
-use crate::ui::Item;
-use crate::{impl_property_layout, impl_property_redraw};
-use parking_lot::Mutex;
-use proc_macro::{item, observable};
-use skia_safe::Color;
-use std::sync::Arc;
 use crate::ui::component::divider::style::DividerStyle;
-use crate::ui::theme::Access;
+use crate::ui::component::RectangleExt;
+use crate::ui::item::{ItemState, Size};
+use crate::ui::Item;
+use proc_macro::item;
+use skia_safe::Color;
+use std::ops::{Deref, DerefMut};
 
 struct DividerProperty {
     thickness: SharedSize,
@@ -34,10 +28,10 @@ impl Divider {
             {
                 let theme = theme.clone();
                 move||{
-                    let mut theme = theme.lock();
-                    let theme_mut = theme.deref_mut();
-                    let mut style = DividerStyle::new(theme_mut, style::DIVIDER);
-                    style.color().get().unwrap_or(Color::TRANSPARENT)
+                    let theme_lock = theme.lock();
+                    let theme = theme_lock.deref();
+                    let style: &DividerStyle = theme.get_style(style::DIVIDER).unwrap();
+                    style.get_color(theme, ItemState::Enabled).cloned().unwrap()
                 }
             }
         );
@@ -46,16 +40,17 @@ impl Divider {
             {
                 let theme = theme.clone();
                 move||{
-                    let mut theme = theme.lock();
-                    let theme_mut = theme.deref_mut();
-                    let mut style = DividerStyle::new(theme_mut, style::DIVIDER);
-                    style.thickness().get().map_or(Size::Auto, |thickness| {
-                        if thickness > 0.0 {
-                            Size::Fixed(thickness)
+                    let theme_lock = theme.lock();
+                    let theme_ref = theme_lock.deref();
+                    let style: &DividerStyle = theme_ref.get_style(style::DIVIDER).unwrap();
+                    style.get_thickness(theme_ref, ItemState::Enabled).map_or(Size::Auto, |thickness| {
+                        if *thickness > 0.0 {
+                            Size::Fixed(*thickness)
                         } else {
                             Size::Auto
                         }
                     })
+                    
                 }
             }
         );
@@ -75,22 +70,25 @@ impl Divider {
 }
 
 pub mod style {
-    use crate::ui::theme::{color, Access, StyleProperty};
     use crate::ui::Theme;
     use proc_macro::style;
     use skia_safe::Color;
+    use crate::ui::item::ItemState;
+    use crate::ui::theme::{color, State, ThemeValue};
 
     pub static DIVIDER: &str = "divider";
-
+    
     #[style]
     pub struct DividerStyle {
         thickness: f32,
         color: Color,
     }
-
-    pub fn add_divider_style(theme: &mut Theme) {
-        let mut style = DividerStyle::new(theme, DIVIDER);
-        style.color().set(color::OUTLINE_VARIANT);
-        style.thickness().set(1.0);
+    
+    pub fn divider_style(theme: &mut Theme) {
+        let style = DividerStyle {
+            thickness: State::new(1.0),
+            color: State::new(color::OUTLINE_VARIANT)
+        };
+        theme.set_style(DIVIDER, Box::new(style));
     }
 }

@@ -2,8 +2,17 @@ use crate::ui::item::Orientation;
 use skia_safe::Color;
 use std::collections::HashMap;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DisplayParameter {
+    pub visible: bool,
+    pub margin_start: f32,
+    pub margin_end: f32,
+    pub margin_top: f32,
+    pub margin_bottom: f32,
+    pub padding_start: f32,
+    pub padding_end: f32,
+    pub padding_top: f32,
+    pub padding_bottom: f32,
     pub parent_x: f32,
     pub parent_y: f32,
     pub width: f32,
@@ -30,6 +39,15 @@ pub struct DisplayParameter {
 
 impl DisplayParameter {
     pub fn copy_from(&mut self, other: &DisplayParameter) {
+        self.visible = other.visible;
+        self.margin_start = other.margin_start;
+        self.margin_end = other.margin_end;
+        self.margin_top = other.margin_top;
+        self.margin_bottom = other.margin_bottom;
+        self.padding_start = other.padding_start;
+        self.padding_end = other.padding_end;
+        self.padding_top = other.padding_top;
+        self.padding_bottom = other.padding_bottom;
         self.parent_x = other.parent_x;
         self.parent_y = other.parent_y;
         self.width = other.width;
@@ -77,6 +95,45 @@ impl DisplayParameter {
         match orientation {
             Orientation::Horizontal => self.width = size,
             Orientation::Vertical => self.height = size,
+        }
+    }
+    
+    pub fn margin_horizontal(&self) -> f32 {
+        self.margin_start + self.margin_end
+    }
+    
+    pub fn margin_vertical(&self) -> f32 {
+        self.margin_top + self.margin_bottom
+    }
+    
+    pub fn padding_horizontal(&self) -> f32 {
+        self.padding_start + self.padding_end
+    }
+    
+    pub fn padding_vertical(&self) -> f32 {
+        self.padding_top + self.padding_bottom
+    }
+    
+    pub fn outer_width(&self) -> f32 {
+        if self.visible {
+            self.width + self.margin_horizontal() + self.padding_horizontal()
+        } else {
+            0.0
+        }
+    }
+    
+    pub fn outer_height(&self) -> f32 {
+        if self.visible {
+            self.height + self.margin_vertical() + self.padding_vertical()
+        } else {
+            0.0
+        }
+    }
+    
+    pub fn outer_size(&self, orientation: Orientation) -> f32 {
+        match orientation {
+            Orientation::Horizontal => self.outer_width(),
+            Orientation::Vertical => self.outer_height(),
         }
     }
 
@@ -144,6 +201,15 @@ impl DisplayParameter {
 impl Default for DisplayParameter {
     fn default() -> Self {
         Self {
+            visible: true,
+            margin_start: 0.0,
+            margin_end: 0.0,
+            margin_top: 0.0,
+            margin_bottom: 0.0,
+            padding_start: 0.0,
+            padding_end: 0.0,
+            padding_top: 0.0,
+            padding_bottom: 0.0,
             parent_x: 0.0,
             parent_y: 0.0,
             width: 0.0,
@@ -170,35 +236,6 @@ impl Default for DisplayParameter {
     }
 }
 
-impl Clone for DisplayParameter {
-    fn clone(&self) -> Self {
-        Self {
-            parent_x: self.parent_x,
-            parent_y: self.parent_y,
-            width: self.width,
-            height: self.height,
-            relative_x: self.relative_x,
-            relative_y: self.relative_y,
-            offset_x: self.offset_x,
-            offset_y: self.offset_y,
-            opacity: self.opacity,
-            rotation: self.rotation,
-            rotation_center_x: self.rotation_center_x,
-            rotation_center_y: self.rotation_center_y,
-            scale_x: self.scale_x,
-            scale_y: self.scale_y,
-            scale_center_x: self.scale_center_x,
-            scale_center_y: self.scale_center_y,
-            skew_x: self.skew_x,
-            skew_y: self.skew_y,
-            skew_center_x: self.skew_center_x,
-            skew_center_y: self.skew_center_y,
-            float_params: self.float_params.clone(),
-            color_params: self.color_params.clone(),
-        }
-    }
-}
-
 impl From<&DisplayParameter> for DisplayParameter {
     fn from(display_parameter: &DisplayParameter) -> Self {
         display_parameter.clone()
@@ -212,7 +249,7 @@ impl AsRef<DisplayParameter> for DisplayParameter {
 }
 
 fn color_to_argb(color: &Color) -> u32 {
-    let color = color.clone();
+    let color = *color;
     let a = color.a();
     let r = color.r();
     let g = color.g();
@@ -223,33 +260,3 @@ fn color_to_argb(color: &Color) -> u32 {
 fn f32_near(a: f32, b: f32) -> bool {
     (a - b).abs() < 1.0
 }
-
-// pub fn parameter_interpolate(start: &DisplayParameter, end: &DisplayParameter, progress: f32) -> DisplayParameter {
-//     if progress <= 0.0 {
-//         return start.clone();
-//     } else if progress >= 1.0 {
-//         return end.clone();
-//     }
-//     let mut display_parameter = end.clone();
-//     display_parameter.width = start.width + (end.width - start.width) * progress;
-//     display_parameter.height = start.height + (end.height - start.height) * progress;
-//     display_parameter.relative_x = start.relative_x + (end.relative_x - start.relative_x) * progress;
-//     display_parameter.relative_y = start.relative_y + (end.relative_y - start.relative_y) * progress;
-//     for (key, value) in &start.float_params {
-//         let end_value = end.float_params.get(key);
-//         if let Some(end_value) = end_value {
-//             display_parameter.float_params.insert(key.clone(), value + (end_value - value) * progress);
-//         } else {
-//             display_parameter.float_params.insert(key.clone(), *value);
-//         }
-//     }
-//     for (key, value) in &start.color_params {
-//         let end_value = end.color_params.get(key);
-//         if let Some(end_value) = end_value {
-//             let interpolated_color = blend_cam16ucs(color_to_argb(value), color_to_argb(end_value), progress as f64);
-//             display_parameter.color_params.insert(key.clone(), Color::from(interpolated_color));
-//         } else {
-//             display_parameter.color_params.insert(key.clone(), *value);
-//         }
-//     }
-//     display_parameter

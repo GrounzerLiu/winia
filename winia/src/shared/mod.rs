@@ -17,8 +17,9 @@ mod shared;
 mod shared_drawable;
 mod shared_inner_position;
 mod shared_num;
-mod shared_un_send;
+mod local_shared;
 mod shared_list;
+mod shared_vec;
 
 pub use shared_inner_position::*;
 
@@ -28,7 +29,7 @@ pub use children::*;
 
 pub use shared::*;
 
-pub use shared_un_send::*;
+pub use local_shared::*;
 
 pub use shared_drawable::*;
 

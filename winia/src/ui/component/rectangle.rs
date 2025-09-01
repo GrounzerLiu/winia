@@ -1,11 +1,12 @@
-use crate::{impl_property_layout, impl_property_redraw};
+use std::ops::DerefMut;
 use crate::shared::{Children, Gettable, Observable, Shared, SharedColor, SharedF32};
 use crate::ui::app::WindowContext;
-use crate::ui::Item;
-use proc_macro::item;
-use skia_safe::{Color, Path, RRect, Rect, Shader, Vector};
-use skia_safe::paint::Style;
 use crate::ui::item::{ItemData, LayoutDirection, LogicalX};
+use crate::ui::Item;
+use crate::{impl_property_layout, impl_property_redraw};
+use proc_macro::item;
+use skia_safe::paint::Style;
+use skia_safe::{Color, Path, RRect, Rect, Shader, Vector};
 
 #[derive(Clone)]
 struct RectangleProperty {
@@ -26,15 +27,15 @@ pub struct Rectangle {
     property: Shared<RectangleProperty>,
 }
 
-impl_property_layout!(Rectangle, color, SharedColor);
-impl_property_layout!(Rectangle, shader, Shared<Option<Shader>>);
-impl_property_layout!(Rectangle, radius_top_start, SharedF32);
-impl_property_layout!(Rectangle, radius_top_end, SharedF32);
-impl_property_layout!(Rectangle, radius_bottom_start, SharedF32);
-impl_property_layout!(Rectangle, radius_bottom_end, SharedF32);
-impl_property_layout!(Rectangle, outline_width, SharedF32);
-impl_property_layout!(Rectangle, outline_color, SharedColor);
-impl_property_layout!(Rectangle, outline_offset, SharedF32);
+impl_property_redraw!(Rectangle, color, SharedColor);
+impl_property_redraw!(Rectangle, shader, Shared<Option<Shader>>);
+impl_property_redraw!(Rectangle, radius_top_start, SharedF32);
+impl_property_redraw!(Rectangle, radius_top_end, SharedF32);
+impl_property_redraw!(Rectangle, radius_bottom_start, SharedF32);
+impl_property_redraw!(Rectangle, radius_bottom_end, SharedF32);
+impl_property_redraw!(Rectangle, outline_width, SharedF32);
+impl_property_redraw!(Rectangle, outline_color, SharedColor);
+impl_property_redraw!(Rectangle, outline_offset, SharedF32);
 
 impl Rectangle {
     pub fn new(app_context: &WindowContext, color: impl Into<SharedColor>) -> Self {
@@ -42,16 +43,16 @@ impl Rectangle {
         let id = item.data().get_id();
         let event_loop_proxy = app_context.event_loop_proxy();
         let property = Shared::from(RectangleProperty {
-            color: color.into().layout_when_changed(&event_loop_proxy, id),
-            shader: Shared::from(None).layout_when_changed(&event_loop_proxy, id),
-            radius_top_start: SharedF32::from(0.0).layout_when_changed(&event_loop_proxy, id),
-            radius_top_end: SharedF32::from(0.0).layout_when_changed(&event_loop_proxy, id),
-            radius_bottom_start: SharedF32::from(0.0).layout_when_changed(&event_loop_proxy, id),
-            radius_bottom_end: SharedF32::from(0.0).layout_when_changed(&event_loop_proxy, id),
-            outline_width: SharedF32::from(0.0).layout_when_changed(&event_loop_proxy, id),
+            color: color.into().redraw_when_changed(&event_loop_proxy, id),
+            shader: Shared::from(None).redraw_when_changed(&event_loop_proxy, id),
+            radius_top_start: SharedF32::from(0.0).redraw_when_changed(&event_loop_proxy, id),
+            radius_top_end: SharedF32::from(0.0).redraw_when_changed(&event_loop_proxy, id),
+            radius_bottom_start: SharedF32::from(0.0).redraw_when_changed(&event_loop_proxy, id),
+            radius_bottom_end: SharedF32::from(0.0).redraw_when_changed(&event_loop_proxy, id),
+            outline_width: SharedF32::from(0.0).redraw_when_changed(&event_loop_proxy, id),
             outline_color: SharedColor::from(Color::TRANSPARENT)
-                .layout_when_changed(&event_loop_proxy, id),
-            outline_offset: SharedF32::from(0.0).layout_when_changed(&event_loop_proxy, id),
+                .redraw_when_changed(&event_loop_proxy, id),
+            outline_offset: SharedF32::from(0.0).redraw_when_changed(&event_loop_proxy, id),
         });
 
         item.data()
@@ -94,7 +95,6 @@ impl Rectangle {
                     target_parameter.set_float_param("outline_width", outline_width);
                     target_parameter.set_color_param("outline_color", outline_color);
                     target_parameter.set_float_param("outline_offset", outline_offset);
-                    
                 }
             })
             .set_draw({
@@ -160,6 +160,19 @@ impl Rectangle {
                             ],
                         )
                     };
+
+                    { 
+                        let mut clip_shape = item.get_clip_shape().lock();
+                        let new_clip_shape: Box<dyn Fn(&mut ItemData) -> Path + Send> = Box::new(
+                            move |_| {
+                                let mut path = Path::new();
+                                path.add_rrect(rrect, None);
+                                path
+                            }
+                        );
+                        *clip_shape = new_clip_shape;
+                    }
+                    
                     let shader = property.shader.get();
                     let mut paint = skia_safe::Paint::default();
                     paint.set_anti_alias(true);

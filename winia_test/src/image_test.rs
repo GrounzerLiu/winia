@@ -1,30 +1,28 @@
 use clonelet::clone;
-use winia::exclude_target;
+use winia::icon::Outlined;
 use winia::shared::{Children, Gettable, Settable, SharedBool, SharedDrawable};
 use winia::skia_safe::Color;
-use winia::ui::Item;
 use winia::ui::animation::AnimationExt;
-use winia::ui::app::{WindowAttr, WindowContext};
-use winia::ui::component::{Drawable, ImageDrawable, ImageExt, ScaleMode};
-use winia::ui::item::Size;
-use winia::ui::layout::{ColumnExt, ScrollAreaExt, StackExt};
+use winia::ui::app::WindowContext;
+use winia::ui::component::{Drawable, IconExt, ImageDrawable, ImageExt, ScaleMode};
+use winia::ui::layout::{ColumnExt, ScrollAreaExt};
+use winia::ui::Item;
+use winia::{children, exclude_target};
 
 pub fn image_test(w: &WindowContext) -> Item {
     let image = SharedDrawable::from("/home/grounzer/Pictures/Screenshot_20241104_163414.png");
     let b = SharedBool::from(true);
     w.scroll_area(
-        w.column(
+        w.column(children!(
             w.image("https://www.rust-lang.org/logos/rust-logo-512x512.png")
                 .item()
-                .size(200, 200)
-                + w.image("https://www.rust-lang.org/logos/rust-logo-512x512.png")
-                    .item()
-                    .size(200, 200)
-                + w.image("/home/grounzer/Pictures/Screenshot_20241104_163414.png")
+                .size(200, 200),
+            w.icon(Outlined::ALARM, Color::BLACK).item().size(96, 96),
+            w.image("/home/grounzer/Pictures/Screenshot_20241104_163414.png")
                     .oversize_scale_mode(ScaleMode::Stretch)
                     .item()
-                    .size(400, 400)
-                + w.image(&image)
+                    .size(400, 400), 
+            w.image(&image)
                     .undersize_scale_mode(ScaleMode::Stretch)
                 .oversize_scale_mode(ScaleMode::Stretch)
                     .item()
@@ -52,7 +50,8 @@ pub fn image_test(w: &WindowContext) -> Item {
                             .start();
                     }
                 }),
+            )
         ).item(),
     )
-    .item()
+     .item()
 }

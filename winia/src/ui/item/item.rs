@@ -1,9 +1,6 @@
-use crate::core::{bind_str_to_id, generate_id, unbind_id};
-use crate::shared::{
-    Children, Gettable, Observable, Settable, Shared, SharedAlignment, SharedBool, SharedColor,
-    SharedF32, SharedInnerPosition, SharedItem, SharedSize, SharedUsize,
-};
-use crate::ui::animation::Target;
+use crate::core::{bind_str_to_id, next_id, unbind_id};
+use crate::shared::{Children, Gettable, LocalObservable, Observable, Settable, Shared, SharedAlignment, SharedBool, SharedColor, SharedF32, SharedInnerPosition, SharedItem, SharedSize, SharedUsize};
+use crate::ui::animation::{Target, Animation};
 use crate::ui::app::WindowContext;
 use crate::ui::item::{DisplayParameter, InnerPosition, Size};
 use crate::ui::theme::color;
@@ -17,7 +14,7 @@ use skia_safe::{
 };
 use std::any::Any;
 use std::collections::{HashMap, HashSet, LinkedList};
-use std::ops::{Add, Deref, DerefMut, Not};
+use std::ops::{Add, DerefMut, Not};
 use std::sync::{Arc, Weak};
 use std::time::Instant;
 use winit::event::{DeviceId, Force, KeyEvent, Modifiers, MouseButton, TouchPhase};
@@ -253,7 +250,7 @@ macro_rules! override_animation {
                 .as_ref()
                 .map_or(true, |(_, end, _)| *end != target)
         {
-            $self_.animations.$name = Some((recorded, target, $animation.clone()));
+            $self_.animations.$name = Some((recorded, target, $animation.clone_boxed()));
         }
     }};
 }
@@ -272,6 +269,16 @@ pub enum Orientation {
     Vertical,
 }
 
+impl Orientation {
+    pub fn is_horizontal(&self) -> bool {
+        matches!(self, Self::Horizontal)
+    }
+
+    pub fn is_vertical(&self) -> bool {
+        matches!(self, Self::Vertical)
+    }
+}
+
 impl Not for Orientation {
     type Output = Self;
 
@@ -283,12 +290,32 @@ impl Not for Orientation {
     }
 }
 
-#[derive(Clone, Copy, Debug, AsRef)]
+#[derive(Clone, Copy, Debug, PartialEq, AsRef)]
 pub enum MeasureMode {
     /// Indicates that the parent has determined an exact size for the child.
     Specified(f32),
     /// Indicates that the child can determine its own size. The value of this enum is the maximum size the child can use.
     Unspecified(f32),
+}
+
+impl MeasureMode {
+    pub fn from_size(size:Size, max: f32) -> Self {
+        match size {
+            Size::Auto => MeasureMode::Unspecified(max),
+            Size::Fill => MeasureMode::Specified(max),
+            Size::Fixed(size) => MeasureMode::Specified(size),
+            Size::Relative(ratio) => MeasureMode::Specified(max * ratio.clamp(0.0, f32::MAX))
+        }
+    }
+}
+
+impl Into<f32> for MeasureMode {
+    fn into(self) -> f32 {
+        match self {
+            MeasureMode::Specified(v) => v,
+            MeasureMode::Unspecified(v) => v
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, AsRef)]
@@ -397,12 +424,12 @@ pub enum MouseScrollDelta {
     ///
     /// Positive values indicate that the content that is being scrolled should move
     /// right and down (revealing more content left and up).
-    LineDelta(f32, f32),
+    LineDelta(f32),
 
     /// Amount in pixels to scroll in the horizontal and
     /// vertical direction.
     ///
-    /// Scroll events are expressed as a `PixelDelta` if
+    /// Scroll events are expressed as a `LogicalDelta` if
     /// supported by the device (e.g. a touchpad) and
     /// platform.
     ///
@@ -412,7 +439,7 @@ pub enum MouseScrollDelta {
     /// For a 'natural scrolling' touchpad (that acts like a touch screen)
     /// this means moving your fingers right and down should give positive values,
     /// and move the content right and down (to reveal more things left and up).
-    LogicalDelta(f32, f32),
+    LogicalDelta(f32),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, AsRef)]
@@ -453,30 +480,30 @@ pub enum CustomProperty {
     Bool(SharedBool),
     Any(Box<dyn Any>),
 }
-
+type AnimationOption = Option<(f32, f32, Box<dyn Animation>)>;
 #[derive(Default)]
 struct Animations {
     // (start, end, animation)
-    width: Option<(f32, f32, LayoutAnimation)>,
-    height: Option<(f32, f32, LayoutAnimation)>,
-    relative_x: Option<(f32, f32, LayoutAnimation)>,
-    relative_y: Option<(f32, f32, LayoutAnimation)>,
-    offset_x: Option<(f32, f32, LayoutAnimation)>,
-    offset_y: Option<(f32, f32, LayoutAnimation)>,
-    opacity: Option<(f32, f32, LayoutAnimation)>,
-    rotation: Option<(f32, f32, LayoutAnimation)>,
-    rotation_center_x: Option<(f32, f32, LayoutAnimation)>,
-    rotation_center_y: Option<(f32, f32, LayoutAnimation)>,
-    scale_x: Option<(f32, f32, LayoutAnimation)>,
-    scale_y: Option<(f32, f32, LayoutAnimation)>,
-    scale_center_x: Option<(f32, f32, LayoutAnimation)>,
-    scale_center_y: Option<(f32, f32, LayoutAnimation)>,
-    skew_x: Option<(f32, f32, LayoutAnimation)>,
-    skew_y: Option<(f32, f32, LayoutAnimation)>,
-    skew_center_x: Option<(f32, f32, LayoutAnimation)>,
-    skew_center_y: Option<(f32, f32, LayoutAnimation)>,
-    float_params: HashMap<String, (f32, f32, LayoutAnimation)>,
-    color_params: HashMap<String, (Color, Color, LayoutAnimation)>,
+    width: AnimationOption,
+    height: AnimationOption,
+    relative_x: AnimationOption,
+    relative_y: AnimationOption,
+    offset_x: AnimationOption,
+    offset_y: AnimationOption,
+    opacity: AnimationOption,
+    rotation: AnimationOption,
+    rotation_center_x: AnimationOption,
+    rotation_center_y: AnimationOption,
+    scale_x: AnimationOption,
+    scale_y: AnimationOption,
+    scale_center_x: AnimationOption,
+    scale_center_y: AnimationOption,
+    skew_x: AnimationOption,
+    skew_y: AnimationOption,
+    skew_center_x: AnimationOption,
+    skew_center_y: AnimationOption,
+    float_params: HashMap<String, (f32, f32, Box<dyn Animation>)>,
+    color_params: HashMap<String, (Color, Color, Box<dyn Animation>)>,
 }
 
 impl Animations {
@@ -523,6 +550,7 @@ pub struct ItemData {
     window_context: WindowContext,
     background: SharedItem,
     baseline: Option<f32>,
+    blur: Shared<f32>,
     children: Children,
     clip: Shared<bool>,
     clip_shape: Shared<Box<dyn Fn(&mut ItemData) -> Path + Send>>,
@@ -556,6 +584,7 @@ pub struct ItemData {
     on_detach: LinkedList<Box<dyn FnMut()>>,
     on_focus: Vec<Box<dyn FnMut(bool)>>,
     on_hover: Option<Box<dyn FnMut(bool)>>,
+    on_keyboard_input: Option<Box<dyn FnMut(&KeyboardInput) -> bool>>,
     on_mouse_input: Option<Box<dyn FnMut(&MouseInput)>>,
     on_pointer_input: Option<Box<dyn FnMut(&PointerInput)>>,
     on_touch_input: Option<Box<dyn FnMut(&TouchInput)>>,
@@ -578,6 +607,7 @@ pub struct ItemData {
     skew_y: SharedF32,
     state: Shared<ItemState>,
     target_parameter: DisplayParameter,
+    visible: SharedBool,
     width: SharedSize,
 
     apply_theme: Arc<Mutex<dyn FnMut(&mut ItemData, &Theme)>>,
@@ -590,7 +620,8 @@ pub struct ItemData {
     dispatch_layout: Arc<Mutex<dyn FnMut(&mut ItemData, f32, f32, f32, f32)>>,
     dispatch_modifiers_changed: Arc<Mutex<dyn FnMut(&mut ItemData, &Modifiers)>>,
     dispatch_mouse_input: Arc<Mutex<dyn FnMut(&mut ItemData, &MouseInput)>>,
-    dispatch_mouse_wheel: Arc<Mutex<dyn FnMut(&mut ItemData, &MouseWheel) -> bool>>,
+    dispatch_mouse_wheel_x: Arc<Mutex<dyn FnMut(&mut ItemData, &MouseWheel) -> bool>>,
+    dispatch_mouse_wheel_y: Arc<Mutex<dyn FnMut(&mut ItemData, &MouseWheel) -> bool>>,
     dispatch_timer: Arc<Mutex<dyn FnMut(&mut ItemData, usize) -> bool>>,
     dispatch_touch_input: Arc<Mutex<dyn FnMut(&mut ItemData, &TouchInput)>>,
     draw: Arc<Mutex<dyn FnMut(&mut ItemData, &Canvas)>>,
@@ -601,7 +632,8 @@ pub struct ItemData {
     measure: Arc<Mutex<dyn FnMut(&mut ItemData, MeasureMode, MeasureMode)>>,
     modifiers_changed: Arc<Mutex<dyn FnMut(&mut ItemData, &Modifiers)>>,
     mouse_input: Arc<Mutex<dyn FnMut(&mut ItemData, &MouseInput)>>,
-    mouse_wheel: Arc<Mutex<dyn FnMut(&mut ItemData, &MouseWheel) -> bool>>,
+    mouse_wheel_x: Arc<Mutex<dyn FnMut(&mut ItemData, &MouseWheel) -> bool>>,
+    mouse_wheel_y: Arc<Mutex<dyn FnMut(&mut ItemData, &MouseWheel) -> bool>>,
     click_event: Arc<Mutex<dyn FnMut(&mut ItemData, ClickSource)>>,
     focus_event: Arc<Mutex<dyn FnMut(&mut ItemData, bool)>>,
     hover_event: Arc<Mutex<dyn FnMut(&mut ItemData, bool)>>,
@@ -614,7 +646,7 @@ pub struct ItemData {
 
 impl ItemData {
     pub fn new(window_context: &WindowContext, children: Children) -> Self {
-        let id = generate_id();
+        let id = next_id();
 
         let state: Shared<ItemState> = ItemState::Enabled.into();
         let mut item = Self {
@@ -635,7 +667,8 @@ impl ItemData {
                 item
             },
             baseline: None,
-            children,
+            blur: redraw(35.0.into(), id, window_context),
+            children: children.layout_when_changed(window_context.event_loop_proxy(), id),
             clip: redraw(false.into(), id, window_context),
             clip_shape: redraw(
                 Shared::from_static(Box::new(|item| {
@@ -716,6 +749,7 @@ impl ItemData {
             on_detach: LinkedList::new(),
             on_focus: Vec::new(),
             on_hover: None,
+            on_keyboard_input: None,
             on_mouse_input: None,
             on_pointer_input: None,
             on_touch_input: None,
@@ -738,6 +772,7 @@ impl ItemData {
             skew_y: redraw(0.0.into(), id, window_context),
             state,
             target_parameter: Default::default(),
+            visible: layout(true.into(), id, window_context),
             width: layout(Size::Auto.into(), id, window_context),
 
             apply_theme: Arc::new(Mutex::new(|_item: &mut ItemData, _theme: &Theme| {})),
@@ -862,6 +897,10 @@ impl ItemData {
                         target_parameter.set_parent_position(parent_x, parent_y);
                     }
 
+                    // if !item.get_visible().get() {
+                    //     return;
+                    // }
+
                     let display_parameter = item.get_display_parameter();
                     {
                         let (window_width, window_height) = item.get_window_context().window_size();
@@ -878,7 +917,7 @@ impl ItemData {
 
                     {
                         // Draw the background blur effect.
-                        let blur = 35.0;
+                        let blur = /*35.0*/item.get_blur().get();
                         let margin = blur * 2.0;
                         if item.get_enable_background_blur().get() && !display_parameter.is_empty()
                         {
@@ -947,11 +986,13 @@ impl ItemData {
                     let x = display_parameter.x();
                     let y = display_parameter.y();
                     let rotation = display_parameter.rotation;
+                    let rotation_center_x = display_parameter.rotation_center_x + x;
+                    let rotation_center_y = display_parameter.rotation_center_y + y;
 
                     let skew_x = display_parameter.skew_x;
                     let skew_y = display_parameter.skew_y;
-                    let skew_center_x = display_parameter.skew_center_x;
-                    let skew_center_y = display_parameter.skew_center_y;
+                    let skew_center_x = display_parameter.skew_center_x + x;
+                    let skew_center_y = display_parameter.skew_center_y + y;
                     let scale_x = display_parameter.scale_x;
                     let scale_y = display_parameter.scale_y;
                     let scale_center_x = display_parameter.scale_center_x + x;
@@ -977,17 +1018,18 @@ impl ItemData {
                         } else {
                             canvas.save();
                         }
+
                         canvas.rotate(
                             rotation,
                             Some(Point::new(
-                                display_parameter.rotation_center_x,
-                                display_parameter.rotation_center_y,
+                                rotation_center_x,
+                                rotation_center_y,
                             )),
                         );
 
-                        // canvas.translate((skew_center_x, skew_center_y));
-                        // canvas.skew((skew_x, skew_y));
-                        // canvas.translate((-skew_center_x, -skew_center_y));
+                        canvas.translate((skew_center_x, skew_center_y));
+                        canvas.skew((skew_x, skew_y));
+                        canvas.translate((-skew_center_x, -skew_center_y));
 
                         // canvas.translate((-scale_center_x, -scale_center_y));
                         canvas.scale((scale_x, scale_y));
@@ -1003,7 +1045,7 @@ impl ItemData {
 
                     {
                         // Draw the shadow
-                        let elevation = item.get_elevation().get();
+                        let elevation = item.get_elevation().get() / 2.0;
                         if elevation > 0.0
                             && (display_parameter.width > 0.0 && display_parameter.height > 0.0)
                         {
@@ -1014,7 +1056,7 @@ impl ItemData {
                                 .with_a((0.5 * 255.0) as u8);
                             shadow_paint.set_color(shadow_color);
                             drop(theme);
-                            let blur_sigma = elevation;
+                            let blur_sigma = elevation * 1.5;
                             let shadow_offset = elevation;
 
                             let mut shadow_surface = surfaces::raster_n32_premul((
@@ -1033,10 +1075,10 @@ impl ItemData {
                             let shadow_image = shadow_surface.image_snapshot();
 
                             let rect = Rect::from_xywh(
-                                display_parameter.x() - elevation * 3.0,
-                                display_parameter.y() - elevation * 3.0,
-                                display_parameter.width + elevation * 6.0,
-                                display_parameter.height + elevation * 6.0,
+                                display_parameter.x() - elevation * 6.0,
+                                display_parameter.y() - elevation * 6.0,
+                                display_parameter.width + elevation * 12.0,
+                                display_parameter.height + elevation * 12.0,
                             );
                             image_filter_paint.set_image_filter(image_filters::blur(
                                 (blur_sigma, blur_sigma),
@@ -1144,6 +1186,11 @@ impl ItemData {
                     if !item.get_enabled().get() {
                         return false;
                     }
+                    if let Some(on_keyboard_input) = item.get_on_keyboard_input() {
+                        if on_keyboard_input(keyboard_input) {
+                            return true;
+                        }
+                    }
                     if /*item.get_focused().get()
                         && */item.get_keyboard_input().lock()(item, keyboard_input)
                     {
@@ -1161,12 +1208,39 @@ impl ItemData {
             )),
             dispatch_layout: Arc::new(Mutex::new(
                 |item: &mut ItemData, relative_x: f32, relative_y: f32, width: f32, height: f32| {
+                    {
+                        let measure_parameter = item.get_measure_parameter();
+                        if width != measure_parameter.width
+                            || height != measure_parameter.height
+                        {
+                            item.measure(
+                                MeasureMode::Specified(width),
+                                MeasureMode::Specified(height),
+                            );
+                        }
+                    }
+                    let visible = item.get_visible().get();
                     let offset_x = item.get_offset_x().get();
                     let offset_y = item.get_offset_y().get();
-                    let opacity = item.get_opacity().get();
+                    // let opacity = item.get_opacity().get();
+                    let opacity = if visible {
+                        item.get_opacity().get()
+                    } else {
+                        0.0
+                    };
                     let rotation = item.get_rotation().get();
-                    let scale_x = item.get_scale_x().get();
-                    let scale_y = item.get_scale_y().get();
+                    // let scale_x = item.get_scale_x().get();
+                    // let scale_y = item.get_scale_y().get();
+                    let scale_x = if visible {
+                        item.get_scale_x().get()
+                    } else {
+                        0.0
+                    };
+                    let scale_y = if visible {
+                        item.get_scale_y().get()
+                    } else {
+                        0.0
+                    };
                     let skew_x = item.get_skew_x().get();
                     let skew_y = item.get_skew_y().get();
 
@@ -1247,6 +1321,20 @@ impl ItemData {
                     let background = item.get_background();
                     if let Some(background) = background.lock().as_mut() {
                         background.data().dispatch_mouse_input(mouse_input);
+                    }
+
+                    match mouse_input.pointer_state {
+                        PointerState::Started => {
+                            let item_state = item.get_state();
+                            item_state.set(ItemState::Pressed);
+                        }
+                        PointerState::Ended | PointerState::Cancelled => {
+                            let item_state = item.get_state();
+                            if item_state.get() == ItemState::Pressed && item.get_enabled().get() {
+                                item_state.set(ItemState::Enabled);
+                            }
+                        }
+                        _=> {}
                     }
 
                     // Call the on_mouse_input event of the item.
@@ -1341,7 +1429,7 @@ impl ItemData {
                     }
                 }
             })),
-            dispatch_mouse_wheel: Arc::new(Mutex::new(
+            dispatch_mouse_wheel_x: Arc::new(Mutex::new(
                 |item: &mut ItemData, mouse_wheel: &MouseWheel| {
                     if !item.get_enabled().get() {
                         return false;
@@ -1350,16 +1438,41 @@ impl ItemData {
                     let (cursor_x, cursor_y) = item.get_window_context().get_cursor_position();
                     for child in children.lock().iter_mut().rev() {
                         let display_parameter = child.data().get_display_parameter();
-                        if !display_parameter.is_inside(cursor_x, cursor_y) {
-                            continue;
-                        }
-                        let dispatch_mouse_wheel = child.data().get_dispatch_mouse_wheel();
-                        let r = dispatch_mouse_wheel.lock()(child.data().deref_mut(), mouse_wheel);
-                        if r {
-                            return true;
+                        if display_parameter.is_inside(cursor_x, cursor_y) {
+                            let dispatch_mouse_wheel = child.data().get_dispatch_mouse_wheel_x();
+                            let r = dispatch_mouse_wheel.lock()(child.data().deref_mut(), mouse_wheel);
+                            if r {
+                                return true;
+                            }
                         }
                     }
-                    item.get_mouse_wheel().lock()(item, mouse_wheel)
+                    if item.get_mouse_wheel_x().lock()(item, mouse_wheel) {
+                        return true;
+                    }
+                    false
+                },
+            )),
+            dispatch_mouse_wheel_y: Arc::new(Mutex::new(
+                |item: &mut ItemData, mouse_wheel: &MouseWheel| {
+                    if !item.get_enabled().get() {
+                        return false;
+                    }
+                    let children = item.get_children();
+                    let (cursor_x, cursor_y) = item.get_window_context().get_cursor_position();
+                    for child in children.lock().iter_mut().rev() {
+                        let display_parameter = child.data().get_display_parameter();
+                        if display_parameter.is_inside(cursor_x, cursor_y) {
+                            let dispatch_mouse_wheel = child.data().get_dispatch_mouse_wheel_y();
+                            let r = dispatch_mouse_wheel.lock()(child.data().deref_mut(), mouse_wheel);
+                            if r {
+                                return true;
+                            }
+                        }
+                    }
+                    if item.get_mouse_wheel_y().lock()(item, mouse_wheel) {
+                        return true;
+                    }
+                    false
                 },
             )),
             dispatch_timer: Arc::new(Mutex::new(|item: &mut ItemData, id: usize| {
@@ -1519,7 +1632,10 @@ impl ItemData {
             )),
             modifiers_changed: Arc::new(Mutex::new(|_item: &mut ItemData, _modifiers: &Modifiers| {})),
             mouse_input: Arc::new(Mutex::new(|_item: &mut ItemData, _event: &MouseInput| {})),
-            mouse_wheel: Arc::new(Mutex::new(
+            mouse_wheel_x: Arc::new(Mutex::new(
+                |_item: &mut ItemData, _mouse_wheel: &MouseWheel| false,
+            )),
+            mouse_wheel_y: Arc::new(Mutex::new(
                 |_item: &mut ItemData, _mouse_wheel: &MouseWheel| false,
             )),
             click_event: Arc::new(Mutex::new(|_item: &mut ItemData, _source: ClickSource| {})),
@@ -1611,6 +1727,13 @@ impl Item {
         self
     }
 }
+impl_property_redraw!(
+    blur,
+    set_blur,
+    get_blur,
+    SharedF32,
+    "The blur radius of the item. This will cause the item to be blurred when it is drawn."
+);
 impl_property_redraw!(
     clip,
     set_clip,
@@ -1931,6 +2054,13 @@ impl_property_layout!(
     "The skew in the y direction in degrees."
 );
 impl_property_layout!(
+    visible,
+    set_visible,
+    get_visible,
+    SharedBool,
+    "Whether the item is visible. If this is set to false, the item will not be drawn."
+);
+impl_property_layout!(
     width,
     set_width,
     get_width,
@@ -2029,11 +2159,20 @@ impl_get_set!(
     "item, event"
 );
 impl_get_set!(
-    dispatch_mouse_wheel,
-    set_dispatch_mouse_wheel,
+    dispatch_mouse_wheel_x,
+    set_dispatch_mouse_wheel_x,
     impl FnMut(&mut ItemData, &MouseWheel) -> bool + 'static,
     "item, mouse_wheel",
-    get_dispatch_mouse_wheel,
+    get_dispatch_mouse_wheel_x,
+    dyn FnMut(&mut ItemData, &MouseWheel) -> bool,
+    "item, mouse_wheel"
+);
+impl_get_set!(
+    dispatch_mouse_wheel_y,
+    set_dispatch_mouse_wheel_y,
+    impl FnMut(&mut ItemData, &MouseWheel) -> bool + 'static,
+    "item, mouse_wheel",
+    get_dispatch_mouse_wheel_y,
     dyn FnMut(&mut ItemData, &MouseWheel) -> bool,
     "item, mouse_wheel"
 );
@@ -2132,11 +2271,20 @@ impl_get_set!(
     "item, event"
 );
 impl_get_set!(
-    mouse_wheel,
-    set_mouse_wheel,
+    mouse_wheel_x,
+    set_mouse_wheel_x,
     impl FnMut(&mut ItemData, &MouseWheel) -> bool + 'static,
     "item, mouse_wheel",
-    get_mouse_wheel,
+    get_mouse_wheel_x,
+    dyn FnMut(&mut ItemData, &MouseWheel) -> bool,
+    "item, mouse_wheel"
+);
+impl_get_set!(
+    mouse_wheel_y,
+    set_mouse_wheel_y,
+    impl FnMut(&mut ItemData, &MouseWheel) -> bool + 'static,
+    "item, mouse_wheel",
+    get_mouse_wheel_y,
     dyn FnMut(&mut ItemData, &MouseWheel) -> bool,
     "item, mouse_wheel"
 );
@@ -2311,6 +2459,13 @@ impl ItemData {
     {
         self.on_hover = Some(Box::new(f));
     }
+    
+    pub fn set_on_keyboard_input<F>(&mut self, f: F)
+    where
+        F: FnMut(&KeyboardInput) -> bool + 'static,
+    {
+        self.on_keyboard_input = Some(Box::new(f));
+    }
 
     pub fn set_on_mouse_input<F>(&mut self, f: F)
     where
@@ -2338,7 +2493,11 @@ impl ItemData {
     }
 
     pub fn get_baseline(&self) -> Option<f32> {
-        self.baseline
+        if self.visible.get() {
+            self.baseline
+        } else {
+            None
+        }
     }
 
     pub fn get_children(&self) -> &Children {
@@ -2454,6 +2613,24 @@ impl ItemData {
     }
 
     pub fn get_measure_parameter(&mut self) -> &mut DisplayParameter {
+        let visible = self.visible.get();
+        let margin_start = self.margin_start.get();
+        let margin_end = self.margin_end.get();
+        let margin_top = self.margin_top.get();
+        let margin_bottom = self.margin_bottom.get();
+        let padding_start = self.padding_start.get();
+        let padding_end = self.padding_end.get();
+        let padding_top = self.padding_top.get();
+        let padding_bottom = self.padding_bottom.get();
+        self.measure_parameter.visible = visible;
+        self.measure_parameter.margin_start = margin_start;
+        self.measure_parameter.margin_end = margin_end;
+        self.measure_parameter.margin_top = margin_top;
+        self.measure_parameter.margin_bottom = margin_bottom;
+        self.measure_parameter.padding_start = padding_start;
+        self.measure_parameter.padding_end = padding_end;
+        self.measure_parameter.padding_top = padding_top;
+        self.measure_parameter.padding_bottom = padding_bottom;
         &mut self.measure_parameter
     }
 
@@ -2483,6 +2660,10 @@ impl ItemData {
 
     pub fn get_on_hover(&mut self) -> Option<&mut Box<dyn FnMut(bool)>> {
         self.on_hover.as_mut()
+    }
+    
+    pub fn get_on_keyboard_input(&mut self) -> Option<&mut Box<dyn FnMut(&KeyboardInput) -> bool>> {
+        self.on_keyboard_input.as_mut()
     }
 
     pub fn get_on_mouse_input(&mut self) -> Option<&mut Box<dyn FnMut(&MouseInput)>> {
@@ -2526,6 +2707,24 @@ impl ItemData {
     }
 
     pub fn get_target_parameter(&mut self) -> &mut DisplayParameter {
+        let visible = self.visible.get();
+        let margin_start = self.margin_start.get();
+        let margin_end = self.margin_end.get();
+        let margin_top = self.margin_top.get();
+        let margin_bottom = self.margin_bottom.get();
+        let padding_start = self.padding_start.get();
+        let padding_end = self.padding_end.get();
+        let padding_top = self.padding_top.get();
+        let padding_bottom = self.padding_bottom.get();
+        self.target_parameter.visible = visible;
+        self.target_parameter.margin_start = margin_start;
+        self.target_parameter.margin_end = margin_end;
+        self.target_parameter.margin_top = margin_top;
+        self.target_parameter.margin_bottom = margin_bottom;
+        self.target_parameter.padding_start = padding_start;
+        self.target_parameter.padding_end = padding_end;
+        self.target_parameter.padding_top = padding_top;
+        self.target_parameter.padding_bottom = padding_bottom;
         &mut self.target_parameter
     }
 
@@ -2545,25 +2744,9 @@ impl ItemData {
     //     self.measure_parameter.clone()
     // }
 
-    pub(crate) fn dispatch_animation(&mut self, animation: &LayoutAnimation, force: bool) {
-        // let is_target = animation.is_target(self.id);
-        // if self.get_name() == "blue" || self.get_name() == "row" {
-        //     println!("is_target: {}, force: {}", is_target, force);
-        // }
+    pub(crate) fn dispatch_animation(&mut self, animation: &dyn Animation, forced: bool) {
 
-        let (animatable, children_force) = {
-            let animation_inner = animation.inner.lock();
-            match &animation_inner.target {
-                Target::Exclusion(targets) => {
-                    let is_excluded = targets.contains(&self.id);
-                    (!is_excluded && !force, is_excluded)
-                }
-                Target::Inclusion(targets) => {
-                    let is_included = targets.contains(&self.id);
-                    (is_included || force, is_included || force)
-                }
-            }
-        };
+        let (animatable, children_force) = animation.animatable(self.id, forced);
 
         if animatable {
             if let Some(recorded_parameter) = self.recorded_parameter.clone() {
@@ -2613,13 +2796,13 @@ impl ItemData {
                                 if !f32_eq(*start, *end) && target_changed {
                                     self.animations.float_params.insert(
                                         key.clone(),
-                                        (*start, *end, animation.clone()),
+                                        (*start, *end, animation.clone_boxed()),
                                     );
                                 }
                             } else if target_changed {
                                 self.animations.float_params.insert(
                                     key.clone(),
-                                    (0.0, *end, animation.clone()),
+                                    (0.0, *end, animation.clone_boxed()),
                                 );
                             }
                         });
@@ -2645,13 +2828,13 @@ impl ItemData {
                                 if start!=end && target_changed {
                                     self.animations.color_params.insert(
                                         key.clone(),
-                                        (*start, *end, animation.clone()),
+                                        (*start, *end, animation.clone_boxed()),
                                     );
                                 }
                             } else if target_changed {
                                 self.animations.color_params.insert(
                                     key.clone(),
-                                    (Color::TRANSPARENT, *end, animation.clone()),
+                                    (Color::TRANSPARENT, *end, animation.clone_boxed()),
                                 );
                             }
                         });
@@ -2705,21 +2888,40 @@ impl ItemData {
         let f = self.get_dispatch_layout();
         f.lock()(self, relative_x, relative_y, width, height);
     }
+    
+    pub fn dispatch_modifiers(&mut self, modifiers: &Modifiers) {
+        let f = self.get_dispatch_modifiers_changed();
+        f.lock()(self, modifiers);
+    }
 
     pub fn dispatch_mouse_input(&mut self, event: &MouseInput) {
         let f = self.get_dispatch_mouse_input();
         f.lock()(self, event);
     }
 
-    pub fn dispatch_mouse_wheel(&mut self, event: &MouseWheel) -> bool {
-        let f = self.get_dispatch_mouse_wheel();
+    pub fn dispatch_mouse_wheel_x(&mut self, event: &MouseWheel) -> bool {
+        let f = self.get_dispatch_mouse_wheel_x();
         let r = f.lock()(self, event);
         r
     }
 
+    pub fn dispatch_mouse_wheel_y(&mut self, event: &MouseWheel) -> bool {
+        let f = self.get_dispatch_mouse_wheel_y();
+        let r = f.lock()(self, event);
+        r
+    }
+
+
     pub fn dispatch_cursor_move(&mut self, cursor_move: &CursorMove) {
         let f = self.get_dispatch_cursor_move();
         f.lock()(self, cursor_move);
+    }
+
+    pub fn dispatch_measure(&mut self, max_width: f32, max_height: f32) {
+        let width_mode = MeasureMode::from_size(self.get_width().get(), max_width);
+        let height_mode = MeasureMode::from_size(self.get_height().get(), max_height);
+        let f = self.get_measure();
+        f.lock()(self, width_mode, height_mode);
     }
 
     pub fn dispatch_timer(&mut self, timer_id: usize) {
@@ -2922,10 +3124,6 @@ impl ItemData {
     pub fn set_base_line(&mut self, base_line: f32) {
         self.baseline = Some(base_line);
     }
-
-    pub fn set_target_parameter(&mut self, parameter: DisplayParameter) {
-        self.target_parameter.copy_from(&parameter)
-    }
 }
 
 fn f32_eq(a: f32, b: f32) -> bool {
@@ -3002,6 +3200,14 @@ impl Item {
         self.data().set_on_hover(f);
         self
     }
+    
+    pub fn on_keyboard_input<F>(self, f: F) -> Self
+    where
+        F: FnMut(&KeyboardInput) -> bool + 'static,
+    {
+        self.data().set_on_keyboard_input(f);
+        self
+    }
 
     pub fn on_mouse_input<F>(self, f: F) -> Self
     where
@@ -3033,6 +3239,22 @@ impl Item {
         self.data().set_padding_end(padding.clone());
         self.data().set_padding_top(padding.clone());
         self.data().set_padding_bottom(padding);
+        self
+    }
+
+    pub fn rotation_center(
+        self,
+        center_x: impl Into<SharedInnerPosition>,
+        center_y: impl Into<SharedInnerPosition>,
+    ) -> Self {
+        self.data().set_rotation_center_x(center_x);
+        self.data().set_rotation_center_y(center_y);
+        self
+    }
+
+    pub fn scale(self, scale_x: impl Into<SharedF32>, scale_y: impl Into<SharedF32>) -> Self {
+        self.data().set_scale_x(scale_x);
+        self.data().set_scale_y(scale_y);
         self
     }
 

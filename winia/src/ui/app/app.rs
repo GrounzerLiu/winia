@@ -1,14 +1,12 @@
-use parking_lot::Mutex;
-use skia_safe::textlayout::{ParagraphBuilder, ParagraphStyle, TextAlign};
+use skia_safe::textlayout::{ParagraphStyle, TextAlign};
 use skia_safe::Color;
 use skiwin::vulkan::VulkanSkiaWindow;
 use skiwin::SkiaWindow;
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
-use std::sync::Arc;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
-use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize, Size};
+use winit::dpi::{LogicalSize, PhysicalPosition, Size};
 use winit::event::{
     ElementState, Ime, Modifiers, MouseButton, MouseScrollDelta, StartCause, Touch, TouchPhase,
     WindowEvent,
@@ -159,7 +157,7 @@ impl WindowController {
     }
 
     pub fn add_layer(&mut self, item: Item) {
-        self.children.add(item);
+        self.children.add_item(item);
     }
 
     pub fn remove_layer(&mut self, id: usize) {
@@ -222,7 +220,7 @@ impl App {
             &window_attr,
             event_loop_proxy.clone(),
         );
-        window_context.window.lock().resize();
+        window_context.window.lock().resize().unwrap();
         let item = item_generator(&window_context)
             .size(crate::ui::item::Size::Fill, crate::ui::item::Size::Fill);
 
@@ -318,7 +316,8 @@ impl ApplicationHandler<Event> for App {
                     item_generator,
                     window_attr,
                 } => {
-                    self.create_window(event_loop, item_generator, window_attr);
+                    self.create_window(event_loop, item_generator, window_attr.deref().clone());
+
                 }
                 EventType::StartLayoutAnimation(animation) => {
                     // Start animation
@@ -339,7 +338,7 @@ impl ApplicationHandler<Event> for App {
                         .window_context
                         .layout_animations
                         .lock()
-                        .push(animation);
+                        .push(Box::new(animation));
                 }
                 EventType::NewLayer(item_generator) => {
                     let layer_controller = LayerController::new(
@@ -388,7 +387,7 @@ impl ApplicationHandler<Event> for App {
         let mut window_controller = window_controller_.unwrap();
         let mut closed = false;
 
-        {
+        {// Request layout
             let request_layout = window_controller
                 .window_context
                 .request_layout
@@ -400,7 +399,7 @@ impl ApplicationHandler<Event> for App {
             }
         }
 
-        {
+        { // Update shared animations
             window_controller
                 .window_context
                 .shared_animations
@@ -413,6 +412,27 @@ impl ApplicationHandler<Event> for App {
                         window_controller.window_context.request_redraw()
                     }
                 });
+        }
+
+        if !window_controller.window_context.starting_local_animations.lock().is_empty(){
+            let mut starting_local_animations = window_controller
+                .window_context
+                .starting_local_animations
+                .clone();
+            window_controller.item.data().record_display_parameter();
+            for animation in starting_local_animations.lock().iter_mut() {
+                (animation.inner.lock().transformation)();
+            }
+            window_controller.re_layout();
+            while let Some(animation) = starting_local_animations.lock().pop_front() {
+                animation.inner.lock().start_time = Instant::now();
+                window_controller.item.data().dispatch_animation(&animation, false);
+                window_controller
+                    .window_context
+                    .layout_animations
+                    .lock()
+                    .push(Box::new(animation));
+            }
         }
 
         match event {
@@ -535,12 +555,12 @@ impl ApplicationHandler<Event> for App {
                     });
             }
             WindowEvent::Touch(Touch {
-                device_id,
-                phase,
-                location,
-                force,
-                id,
-            }) => {
+                                   device_id,
+                                   phase,
+                                   location,
+                                   force,
+                                   id,
+                               }) => {
                 let scale_factor = window_controller.window_context.scale_factor();
                 let event = TouchInput {
                     device_id,
@@ -596,8 +616,7 @@ impl ApplicationHandler<Event> for App {
                 let background_color = window_controller
                     .window_context
                     .theme
-                    .read(|theme| theme.get_color(color::WINDOW_BACKGROUND_COLOR))
-                    .unwrap_or(Color::WHITE);
+                    .read(|theme| *theme.get_color(color::WINDOW_BACKGROUND_COLOR).unwrap());
                 let scale_factor = window_controller.window_context.scale_factor();
                 let window = window_controller.window_context.window.lock();
                 let surface_ref = window.surface();
@@ -612,18 +631,21 @@ impl ApplicationHandler<Event> for App {
                         canvas.scale((scale_factor, scale_factor));
                     }
 
+                    let instant = Instant::now();
                     window_controller
                         .item
                         .data()
                         .dispatch_draw(surface.deref_mut(), 0.0, 0.0);
 
-                    let canvas = surface.canvas();
 
+
+                    println!("Redraw completed in {:?}", instant.elapsed());
+                    let canvas = surface.canvas();
+/*
                     let text_color = window_controller
                         .window_context
                         .theme
-                        .read(|theme| theme.get_color(color::ON_SURFACE))
-                        .unwrap_or(Color::WHITE);
+                        .read(|theme| *theme.get_color(color::ON_SURFACE).unwrap());
 
                     if !self.fps_in_one_second.is_empty() {
                         let fps = self.fps_in_one_second.iter().sum::<f32>()
@@ -660,24 +682,24 @@ impl ApplicationHandler<Event> for App {
                         &(0..styled_text.len()),
                         &skia_safe::textlayout::TextStyle::default(),
                     )
-                    .iter()
-                    .for_each(|style_segment| {
-                        paragraph_builder.add_style_segment(style_segment);
-                    });
+                        .iter()
+                        .for_each(|style_segment| {
+                            paragraph_builder.add_style_segment(style_segment);
+                        });
 
                     let mut paragraph = paragraph_builder.build();
                     paragraph.layout(100.0);
-                    paragraph.paint(canvas, (10.0, 10.0));
-
+                    paragraph.paint(canvas, 10.0, 10.0);
+*/
                     canvas.restore();
                 }
-
                 window_controller.window_context.window.lock().present();
             }
             WindowEvent::ModifiersChanged(modifiers) => {
-                //println!("{:?}", modifiers);
+                // println!("{:?}", modifiers);
                 // println!("{:?}", modifiers.lshift_state());
                 window_controller.modifiers = Some(modifiers);
+                window_controller.item.data().dispatch_modifiers(&modifiers);
             }
             WindowEvent::MouseWheel {
                 device_id,
@@ -685,37 +707,80 @@ impl ApplicationHandler<Event> for App {
                 phase,
             } => {
                 let scale_factor = window_controller.window_context.scale_factor();
-                window_controller
-                    .item
-                    .data()
-                    .dispatch_mouse_wheel(&MouseWheel {
-                        device_id,
-                        delta: match delta {
-                            MouseScrollDelta::LineDelta(x, y) => {
-                                if let Some(modifiers) = window_controller.modifiers {
-                                    if modifiers.state() == ModifiersState::SHIFT {
-                                        crate::ui::item::MouseScrollDelta::LineDelta(y, 0.0)
-                                    } else {
-                                        crate::ui::item::MouseScrollDelta::LineDelta(0.0, y)
-                                    }
-                                } else {
-                                    crate::ui::item::MouseScrollDelta::LineDelta(x, y)
-                                }
-                            }
-                            MouseScrollDelta::PixelDelta(PhysicalPosition { x, y }) => {
-                                crate::ui::item::MouseScrollDelta::LogicalDelta(
-                                    x as f32 / scale_factor,
-                                    y as f32 / scale_factor,
+                let state = match phase {
+                    TouchPhase::Started => PointerState::Started,
+                    TouchPhase::Moved => PointerState::Moved,
+                    TouchPhase::Ended => PointerState::Ended,
+                    TouchPhase::Cancelled => PointerState::Cancelled,
+                };
+                let (mouse_wheel_x, mouse_wheel_y) = match delta {
+                    MouseScrollDelta::LineDelta(x, y) => {
+                        if let Some(modifiers) = window_controller.modifiers {
+                            if modifiers.state() == ModifiersState::SHIFT {
+                                (
+                                    Some(MouseWheel {
+                                        device_id,
+                                        delta: crate::ui::item::MouseScrollDelta::LineDelta(y),
+                                        state,
+                                    }),
+                                    None,
+                                )
+                            } else {
+                                (
+                                    None,
+                                    Some(MouseWheel {
+                                        device_id,
+                                        delta: crate::ui::item::MouseScrollDelta::LineDelta(y),
+                                        state,
+                                    }),
                                 )
                             }
-                        },
-                        state: match phase {
-                            TouchPhase::Started => PointerState::Started,
-                            TouchPhase::Moved => PointerState::Moved,
-                            TouchPhase::Ended => PointerState::Ended,
-                            TouchPhase::Cancelled => PointerState::Cancelled,
-                        },
-                    });
+                        } else {
+                            (
+                                Some(MouseWheel {
+                                    device_id,
+                                    delta: crate::ui::item::MouseScrollDelta::LineDelta(x),
+                                    state,
+                                }),
+                                Some(MouseWheel {
+                                    device_id,
+                                    delta: crate::ui::item::MouseScrollDelta::LineDelta(y),
+                                    state,
+                                })
+                            )
+                        }
+                    }
+                    MouseScrollDelta::PixelDelta(PhysicalPosition { x, y }) => {
+                        (
+                            Some(MouseWheel {
+                                device_id,
+                                delta: crate::ui::item::MouseScrollDelta::LogicalDelta(
+                                    x as f32 / scale_factor,
+                                ),
+                                state,
+                            }),
+                            Some(MouseWheel {
+                                device_id,
+                                delta: crate::ui::item::MouseScrollDelta::LogicalDelta(
+                                    y as f32 / scale_factor,
+                                ),
+                                state,
+                            }),
+                        )
+                    }
+                };
+                if let Some(mouse_wheel_x) = mouse_wheel_x {
+                    window_controller
+                        .item
+                        .data()
+                        .dispatch_mouse_wheel_x(&mouse_wheel_x);
+                }
+                if let Some(mouse_wheel_y) = mouse_wheel_y {
+                    window_controller
+                        .item
+                        .data()
+                        .dispatch_mouse_wheel_y(&mouse_wheel_y);
+                }
                 let cursor_x = window_controller.cursor_x;
                 let cursor_y = window_controller.cursor_y;
                 window_controller
@@ -741,6 +806,11 @@ impl ApplicationHandler<Event> for App {
                     if !running_animations.is_empty() {
                         window_controller.window_context.request_redraw()
                     }
+                    running_animations.iter_mut().for_each(|animation| {
+                        if animation.is_finished() {
+                            animation.finish();
+                        }
+                    });
                     running_animations.retain(|animation| !animation.is_finished());
                 });
         }
@@ -813,15 +883,15 @@ pub fn run_app(app: App) {
         .unwrap();
     run_app_with_event_loop(app, event_loop);*/
     runtime.block_on(async {
-        let event_loop = EventLoop::<Event>::with_user_event()
-            .build()
-            .unwrap();
+        let event_loop = EventLoop::<Event>::with_user_event().build().unwrap();
         run_app_with_event_loop(app, event_loop);
     });
 }
 
 use crate::shared::{Children, Gettable, Settable, Shared, SharedBool};
-use crate::text::{create_segments, font_collection, AddStyleSegment, StyledText, TextStyle};
+use crate::text::{
+    create_segments, font_collection, AddStyleSegment, ParagraphBuilder, StyledText, TextStyle,
+};
 use crate::ui::app::{Event, EventType, LayerController, WindowContext};
 use crate::ui::item::{
     CursorMove, ImeAction, ItemData, KeyboardInput, MeasureMode, MouseInput, MouseWheel,
@@ -829,13 +899,13 @@ use crate::ui::item::{
 };
 use crate::ui::layout::StackExt;
 use crate::ui::theme::color;
-use crate::ui::{theme, Item};
+use crate::ui::Item;
 use proc_macro::AsRef;
-use skiwin::cpu::SoftSkiaWindow;
 #[cfg(target_os = "android")]
 use winit::platform::android::activity::AndroidApp;
 #[cfg(target_os = "android")]
 use winit::platform::android::EventLoopBuilderExtAndroid;
+use crate::ui::animation::Animation;
 
 #[cfg(target_os = "android")]
 pub fn run_app(app: App, android_app: AndroidApp) {

@@ -1,9 +1,7 @@
+use crate::core::next_id;
 use crate::dpi::{LogicalPosition, LogicalSize, Position};
-use crate::shared::{
-    Children, Gettable, Observable, Settable, Shared, SharedBool, SharedColor, SharedF32,
-    SharedText, SharedUnSend,
-};
-use crate::text::StyledText;
+use crate::shared::{Children, Gettable, LocalShared, Observable, Settable, Shared, SharedBool, SharedColor, SharedF32, SharedText};
+use crate::text::{Paragraph, StyledText};
 use crate::ui::app::WindowContext;
 use crate::ui::item::{
     ClickSource, DisplayParameter, HorizontalAlignment, ImeAction, LayoutDirection, LogicalX,
@@ -11,18 +9,19 @@ use crate::ui::item::{
 };
 use crate::ui::theme::color;
 use crate::ui::Item;
-use crate::{impl_property_layout, impl_property_redraw};
+use crate::impl_property_redraw;
 use proc_macro::item;
-use skia_safe::textlayout::{Paragraph, TextAlign, TextStyle};
-use skia_safe::{Canvas, Color, Drawable, Paint, PictureRecorder, Rect, Vector};
-use std::cmp::{Ordering, PartialEq};
+use skia_safe::textlayout::{TextAlign, TextStyle};
+use skia_safe::{Canvas, Color, Drawable, Paint, PictureRecorder, Rect};
+use std::cmp::{Ordering};
 use std::ops::{Not, Range};
 use std::string::ToString;
 use std::time::Duration;
+use arboard::Clipboard;
+use clonelet::clone;
 use winit::dpi::Size;
 use winit::event::{ElementState, MouseButton};
 use winit::keyboard::{Key, NamedKey};
-use crate::core::generate_id;
 
 pub mod text_style {
     pub static FONT_SIZE: &str = "font_size";
@@ -51,12 +50,12 @@ impl DrawCache {
         }
     }
 
-    pub fn add(&mut self, mut drawable: Drawable, target_parameter: &mut DisplayParameter) {
+    pub fn add(&mut self, drawable: Drawable, target_parameter: &mut DisplayParameter) {
         for (id, _drawable) in &self.drawables {
             target_parameter
                 .set_float_param(id.to_string().as_str(), 0.0);
         }
-        let id = generate_id();
+        let id = next_id();
         target_parameter
             .set_float_param(id.to_string().as_str(), 1.0);
         self.drawables.push((id, drawable));
@@ -97,8 +96,8 @@ impl DrawCache {
 #[derive(Clone)]
 struct TextContext {
     is_text_changed: Shared<bool>,
-    paragraph: SharedUnSend<Option<Paragraph>>,
-    draw_cache: SharedUnSend<DrawCache>,
+    paragraph: LocalShared<Option<Paragraph>>,
+    draw_cache: LocalShared<DrawCache>,
     cursor: Shared<Option<(f32, f32, f32)>>,
     show_cursor: Shared<bool>,
     composing: Shared<Option<(Range<usize>, Range<usize>)>>,
@@ -118,11 +117,11 @@ impl Text {
             text: text.into(),
             editable: false.into(),
             selectable: true.into(),
-            color: window_context
+            color: (*window_context
                 .theme()
                 .lock()
                 .get_color(color::ON_SURFACE)
-                .unwrap_or(Color::BLACK)
+                .unwrap_or(&Color::BLACK))
                 .into(),
             font_size: 24.0.into(),
         });
@@ -138,6 +137,7 @@ impl Text {
         };
 
         let item = Item::new(window_context, Children::new());
+        let ctrl_pressed = Shared::from_static(false);
 
         item.data()
             .set_measure({
@@ -230,6 +230,8 @@ impl Text {
                 let context = context.clone();
                 let property = property.clone();
                 let mut last_max_width = 0.0;
+                let mut last_width = 0.0;
+                let mut last_height = 0.0;
                 move |item, width, height| {
                     // context.check_text_changed();
                     let property = property.lock();
@@ -238,7 +240,9 @@ impl Text {
 
                     let mut text = property.text.lock();
 
-                    let mut is_text_changed = context.is_text_changed.get();
+                    let mut is_text_changed = context.is_text_changed.get() || last_width != width || last_height != height;
+                    last_width = width;
+                    last_height = height;
                     if is_text_changed {
                         let paragraph =
                             text.create_paragraph(&text_style, max_width, TextAlign::Start);
@@ -297,6 +301,11 @@ impl Text {
                 move |item, ime_action| {
                     let property = property.lock();
                     let mut selection = context.selection.lock();
+                    {
+                        let text_len = property.text.lock().len();
+                        selection.start = selection.start.clamp(0, text_len);
+                        selection.end = selection.end.clamp(0, text_len);
+                    }
                     let mut composing = context.composing.lock();
                     // let text = property.text.clone();
                     match ime_action {
@@ -326,14 +335,14 @@ impl Text {
                             }
 
                             let mut text = property.text.lock();
-
-                            let glyph_index = text.byte_index_to_glyph_index(selection.start);
-                            let prev_glyph_index = text.glyph_index_to_byte_index(glyph_index - 1);
-                            text.remove(prev_glyph_index..selection.start);
-                            selection.start = prev_glyph_index;
-                            selection.end = prev_glyph_index;
-                            drop(text);
-                            property.text.notify();
+                            
+                            if let Some(prev_glyph_index) = text.prev_glyph_index(selection.start) {
+                                text.remove(prev_glyph_index..selection.start);
+                                selection.start = prev_glyph_index;
+                                selection.end = prev_glyph_index;
+                                drop(text);
+                                property.text.notify();
+                            }
                         }
                         ImeAction::PreEdit(pr_text, range) => {
                             // if selection.start != selection.end {
@@ -541,72 +550,105 @@ impl Text {
                 }
             })
             .set_keyboard_input({
-                let context = context.clone();
-                let property = property.clone();
+                clone!(context, property, ctrl_pressed);
                 move |item, keyboard_input| {
                     if !property.lock().editable.get() || !item.get_focused().get() {
                         return false;
                     }
                     let event = &keyboard_input.key_event;
                     if event.state == ElementState::Pressed {
-                        match &event.logical_key {
-                            Key::Named(key) => match key {
-                                NamedKey::Backspace => {
-                                    item.ime_input(&ImeAction::Delete);
-                                    return true;
-                                }
-                                NamedKey::Enter => {
-                                    item.ime_input(&ImeAction::Enter);
-                                    return true;
-                                }
-                                NamedKey::ArrowLeft => {
-                                    let mut selection = context.selection.lock();
-                                    if selection.start > 0 {
-                                        let property = property.lock();
-                                        {
-                                            let mut text = property.text.lock();
-                                            let glyph_index =
-                                                text.byte_index_to_glyph_index(selection.start);
-                                            let prev_glyph_index =
-                                                text.glyph_index_to_byte_index(glyph_index - 1);
-                                            selection.start = prev_glyph_index;
-                                            selection.end = prev_glyph_index;
-                                        }
-                                        property.text.notify();
-                                    }
-                                    return true;
-                                }
-                                NamedKey::ArrowRight => {
-                                    let mut selection = context.selection.lock();
+                        if ctrl_pressed.get() {
+                            if let Key::Character(c) = &event.logical_key {
+                                if c.as_str() == "c" {
+                                    let mut clipboard = Clipboard::new().unwrap();
                                     let property = property.lock();
-                                    let mut text = property.text.lock();
-                                    if selection.start < text.len() {
-                                        let glyph_index =
-                                            text.byte_index_to_glyph_index(selection.start);
-                                        let prev_glyph_index =
-                                            text.glyph_index_to_byte_index(glyph_index + 1);
-                                        selection.start = prev_glyph_index;
-                                        selection.end = prev_glyph_index;
-                                        drop(text);
-                                        property.text.notify();
+                                    let selection = context.selection.lock();
+                                    if selection.start != selection.end {
+                                        let text = property.text.lock();
+                                        let selected_text = text.substring(selection.clone());
+                                        clipboard.set_text(selected_text.to_string()).unwrap();
                                     }
                                     return true;
-                                }
-                                NamedKey::Space => {
-                                    item.ime_input(&ImeAction::Commit(" ".to_string()));
+                                } else if c.as_str() == "v" {
+                                    let mut clipboard = Clipboard::new().unwrap();
+                                    if let Ok(text) = clipboard.get_text() {
+                                        item.ime_input(&ImeAction::Commit(text));
+                                        return true;
+                                    }
+                                } /*else if c.as_str() == "x" {
+                                    let mut clipboard = Clipboard::new().unwrap();
+                                    let property = property.lock();
+                                    let selection = context.selection.lock();
+                                    if selection.start != selection.end {
+                                        let text = property.text.lock();
+                                        let selected_text = text.substring(selection.clone());
+                                        clipboard.set_text(selected_text.to_string()).unwrap();
+                                        property.text.lock().remove(selection.clone());
+                                        property.text.notify();
+                                        return true;
+                                    }
+                                }*/
+                            }
+                        }else {
+                            match &event.logical_key {
+                                Key::Named(key) => match key {
+                                    NamedKey::Backspace => {
+                                        item.ime_input(&ImeAction::Delete);
+                                        return true;
+                                    }
+                                    NamedKey::Enter => {
+                                        item.ime_input(&ImeAction::Enter);
+                                        return true;
+                                    }
+                                    NamedKey::ArrowLeft => {
+                                        let mut selection = context.selection.lock();
+                                        if selection.start > 0 {
+                                            let property = property.lock();
+                                            {
+                                                let mut text = property.text.lock();
+                                                if let Some(prev_glyph_index) =
+                                                    text.prev_glyph_index(selection.start)
+                                                {
+                                                    selection.start = prev_glyph_index;
+                                                    selection.end = prev_glyph_index;
+                                                }
+                                            }
+                                            property.text.notify();
+                                        }
+                                        return true;
+                                    }
+                                    NamedKey::ArrowRight => {
+                                        let mut selection = context.selection.lock();
+                                        let property = property.lock();
+                                        let mut text = property.text.lock();
+                                        if selection.start < text.len() {
+                                            if let Some(next_glyph_index) =
+                                                text.next_glyph_index(selection.start)
+                                            {
+                                                selection.start = next_glyph_index;
+                                                selection.end = next_glyph_index;
+                                            }
+                                            drop(text);
+                                            property.text.notify();
+                                        }
+                                        return true;
+                                    }
+                                    NamedKey::Space => {
+                                        item.ime_input(&ImeAction::Commit(" ".to_string()));
+                                        return true;
+                                    }
+                                    NamedKey::Escape => {
+                                        item.focus(false);
+                                    }
+                                    _ => {}
+                                },
+                                Key::Character(str) => {
+                                    item.ime_input(&ImeAction::Commit(str.to_string()));
                                     return true;
                                 }
-                                NamedKey::Escape => {
-                                    item.focus(false);
-                                }
-                                _ => {}
-                            },
-                            Key::Character(str) => {
-                                item.ime_input(&ImeAction::Commit(str.to_string()));
-                                return true;
+                                Key::Unidentified(_) => {}
+                                Key::Dead(_) => {}
                             }
-                            Key::Unidentified(_) => {}
-                            Key::Dead(_) => {}
                         }
                     }
 
@@ -638,13 +680,8 @@ impl Text {
                         .unwrap_or(0.0);
                     let x = event.x - display_parameter.x() - context_x;
                     let y = event.y - display_parameter.y() - context_y;
-                    let index = if let Some((index, _)) =
-                        text_layout.get_glyph_position_at_coordinate(x, y)
-                    {
-                        index
-                    } else {
-                        return;
-                    };
+                    let (index, _) =
+                        text_layout.inner_paragraph().get_glyph_position_at_coordinate((x, y));
 
                     match event.pointer_state {
                         PointerState::Started => {
@@ -692,9 +729,9 @@ impl Text {
                     let x = display_parameter.x() as f64;
                     let y = display_parameter.y() as f64;
                     let width = display_parameter.width as f64;
-                    let height = display_parameter.height as f64;
-                    let padding_top = item.get_padding_top().get() as f64;
-                    let padding_left = item.get_padding_start().get() as f64;
+                    // let height = display_parameter.height as f64;
+                    // let padding_top = item.get_padding_top().get() as f64;
+                    // let padding_left = item.get_padding_start().get() as f64;
                     window_context.set_ime_allowed(item.get_id(), focused);
                     window_context.window().set_ime_cursor_area(
                         Position::Logical(LogicalPosition::new(x - width, y)),
@@ -718,7 +755,41 @@ impl Text {
                     }
                     id == item.get_id()
                 }
+            })
+            .set_modifiers_changed({
+                let ctrl_pressed = ctrl_pressed.clone();
+                move |item, modifiers| {
+                    if modifiers.state().control_key() {
+                        ctrl_pressed.set(true);
+                    } else {
+                        ctrl_pressed.set(false);
+                    }
+                }
             });
+            // .set_keyboard_input({
+            //     let context = context.clone();
+            //     let property = property.clone();
+            //     let ctrl_pressed = ctrl_pressed.clone();
+            //     move |_item, keyboard_input| {
+            //         if ctrl_pressed.get() && keyboard_input.key_event.state == ElementState::Pressed {
+            //             if let Key::Character(c) = &keyboard_input.key_event.logical_key {
+            //                 if c.as_str() == "c" {
+            //                     let mut clipboard = Clipboard::new().unwrap();
+            //                     let property = property.lock();
+            //                     let selection = context.selection.lock();
+            //                     println!("Selection: {:?}", context.selection.id());
+            //                     if selection.start != selection.end {
+            //                         let text = property.text.lock();
+            //                         let selected_text = text.substring(selection.clone());
+            //                         clipboard.set_text(selected_text.to_string()).unwrap();
+            //                     }
+            //                     return true;
+            //                 }
+            //             }
+            //         }
+            //         false
+            //     }
+            // });
 
         {
             let id = item.data().get_id();

@@ -1,3 +1,4 @@
+#![warn(clippy::type_complexity)]
 use crate::{impl_skia_window, SkiaWindow};
 use ash::vk;
 use parking_lot::Mutex;
@@ -155,13 +156,6 @@ impl VulkanContext {
             } else {
                 d.find_map(|v| v).expect("No suitable device found")
             };
-
-            #[cfg(debug_assertions)]
-            {
-                let (physical_device, _) = &result;
-                let device_properties = physical_device.properties();
-                // println!("Using device: {} ", device_properties.device_name);
-            }
 
             result
         };

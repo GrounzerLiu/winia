@@ -1,4 +1,5 @@
-use crate::shared::{Children, Settable, Shared};
+use tokio::time::Instant;
+use crate::shared::{Children, Shared};
 use crate::text::StyledText;
 use crate::ui::app::WindowContext;
 use crate::ui::component::{RadioExt, TextExt};
@@ -20,13 +21,13 @@ impl<T: Clone + PartialEq + Send + 'static> RadioGroupExt<T> for WindowContext {
         values: &[(T, StyledText)],
         on_selected: impl FnMut(&Shared<T>, T) + Clone + 'static,
     ) -> Children {
-        let mut children = Children::new();
+        let children = Children::new();
         for (value, label) in values {
             let radio = self.radio(value.clone(), selected_value, Some(Box::new(on_selected.clone())))
                 .item()
                 .margin_end(4);
             let mut on_click = radio.data().get_on_click().cloned();
-            children.add(
+            children.add_item(
                 self.row(
                     radio
                         + self.text(label).font_size(16).item().on_click({
