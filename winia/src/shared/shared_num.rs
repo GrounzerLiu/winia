@@ -1,182 +1,226 @@
-use crate::shared::{Gettable, Shared, SharedAnimation};
+use std::ops::Add;
+use std::ops::Sub;
+use std::ops::Mul;
+use std::ops::Div;
+use std::ops::Rem;
+use crate::depend;
+use crate::shared::{Derived, Readable, Shared, SharedDerived, SharedSource, Source};
 
-macro_rules! p_op_v {
-    ($op:ident, $op_fn:ident, $l:ty, $r:ty, $out:ty) => {
-        impl std::ops::$op<$r> for $l {
-            type Output = $out;
+pub type SharedI8 = SharedSource<i8>;
+pub type SharedI16 = SharedSource<i16>;
+pub type SharedI32 = SharedSource<i32>;
+pub type SharedI64 = SharedSource<i64>;
+pub type SharedI128 = SharedSource<i128>;
+pub type SharedIsize = SharedSource<isize>;
+pub type SharedU8 = SharedSource<u8>;
+pub type SharedU16 = SharedSource<u16>;
+pub type SharedU32 = SharedSource<u32>;
+pub type SharedU64 = SharedSource<u64>;
+pub type SharedU128 = SharedSource<u128>;
+pub type SharedUsize = SharedSource<usize>;
+pub type SharedF32 = SharedSource<f32>;
+pub type SharedF64 = SharedSource<f64>;
 
-            fn $op_fn(self, rhs: $r) -> Self::Output {
+pub type SharedDerivedI8 = SharedDerived<i8>;
+pub type SharedDerivedI16 = SharedDerived<i16>;
+pub type SharedDerivedI32 = SharedDerived<i32>;
+pub type SharedDerivedI64 = SharedDerived<i64>;
+pub type SharedDerivedI128 = SharedDerived<i128>;
+pub type SharedDerivedIsize = SharedDerived<isize>;
+pub type SharedDerivedU8 = SharedDerived<u8>;
+pub type SharedDerivedU16 = SharedDerived<u16>;
+pub type SharedDerivedU32 = SharedDerived<u32>;
+pub type SharedDerivedU64 = SharedDerived<u64>;
+pub type SharedDerivedU128 = SharedDerived<u128>;
+pub type SharedDerivedUsize = SharedDerived<usize>;
+pub type SharedDerivedF32 = SharedDerived<f32>;
+pub type SharedDerivedF64 = SharedDerived<f64>;
+
+macro_rules! impl_shared_num_op {
+    ($num_ty:ty, $Op:tt, $op:ident) => {
+        impl<A: Readable, B: Readable> $Op<Shared<$num_ty, B>> for Shared<$num_ty, A> {
+            type Output = SharedDerived<$num_ty>;
+
+            fn $op(self, rhs: Shared<$num_ty, B>) -> Self::Output {
                 let lhs = self.clone();
                 let rhs = rhs.clone();
-                Shared::from_dynamic([lhs.as_ref().into()].into(), move || lhs.get().$op_fn(rhs))
+                SharedDerived::from_fn(
+                    depend!(&lhs, &rhs),
+                    move || lhs.get().$op(rhs.get()),
+                )
             }
         }
-    };
-}
+        impl<A: Readable, B: Readable> $Op<&Shared<$num_ty, B>> for Shared<$num_ty, A> {
+            type Output = SharedDerived<$num_ty>;
 
-macro_rules! v_op_p {
-    ($op:ident, $op_fn:ident, $l:ty, $r:ty, $out:ty) => {
-        impl std::ops::$op<$r> for $l {
-            type Output = $out;
-
-            fn $op_fn(self, rhs: $r) -> Self::Output {
+            fn $op(self, rhs: &Shared<$num_ty, B>) -> Self::Output {
                 let lhs = self.clone();
-                let rhs_clone = rhs.clone();
-                Shared::from_dynamic([rhs.as_ref().into()].into(), move || lhs.$op_fn(rhs_clone.get()))
+                let rhs = rhs.clone();
+                SharedDerived::from_fn(
+                    depend!(&lhs, &rhs),
+                    move || lhs.get().$op(rhs.get()),
+                )
             }
         }
-    };
-}
 
-macro_rules! p_op_p {
-    ($op:ident, $op_fn:ident, $l:ty, $r:ty, $out:ty) => {
-        impl std::ops::$op<$r> for $l {
-            type Output = $out;
+        impl<A: Readable, B: Readable> $Op<Shared<$num_ty, B>> for &Shared<$num_ty, A> {
+            type Output = SharedDerived<$num_ty>;
 
-            fn $op_fn(self, rhs: $r) -> Self::Output {
+            fn $op(self, rhs: Shared<$num_ty, B>) -> Self::Output {
                 let lhs = self.clone();
-                let rhs_clone = rhs.clone();
-                Shared::from_dynamic([lhs.as_ref().into(), rhs.as_ref().into()].into(), move || {
-                    lhs.get().$op_fn(rhs_clone.get())
-                })
+                let rhs = rhs.clone();
+                SharedDerived::from_fn(
+                    depend!(&lhs, &rhs),
+                    move || lhs.get().$op(rhs.get())
+                )
+            }
+        }
+
+        impl<A: Readable, B: Readable> $Op<&Shared<$num_ty, B>> for &Shared<$num_ty, A> {
+            type Output = SharedDerived<$num_ty>;
+
+            fn $op(self, rhs: &Shared<$num_ty, B>) -> Self::Output {
+                let lhs = self.clone();
+                let rhs = rhs.clone();
+                SharedDerived::from_fn(
+                    depend!(&lhs, &rhs),
+                    move || lhs.get().$op(rhs.get())
+                )
+            }
+        }
+
+        impl<A: Readable> $Op<$num_ty> for &Shared<$num_ty, A> {
+            type Output = SharedDerived<$num_ty>;
+
+            fn $op(self, rhs: $num_ty) -> Self::Output {
+                let lhs = self.clone();
+                SharedDerived::from_fn(
+                    depend!(&lhs),
+                    move || lhs.get().$op(rhs)
+                )
+            }
+        }
+
+        impl<A: Readable> $Op<$num_ty> for Shared<$num_ty, A> {
+            type Output = SharedDerived<$num_ty>;
+
+            fn $op(self, rhs: $num_ty) -> Self::Output {
+                let lhs = self.clone();
+                SharedDerived::from_fn(
+                    depend!(&lhs),
+                    move || lhs.get().$op(rhs)
+                )
+            }
+        }
+
+        impl<A: Readable> $Op<Shared<$num_ty, A>> for $num_ty {
+            type Output = SharedDerived<$num_ty>;
+
+            fn $op(self, rhs: Shared<$num_ty, A>) -> Self::Output {
+                let rhs = rhs.clone();
+                SharedDerived::from_fn(
+                    depend!(&rhs),
+                    move || self.$op(rhs.get())
+                )
             }
         }
     };
 }
-
-pub type SharedI8 = Shared<i8>;
-pub type SharedI16 = Shared<i16>;
-pub type SharedI32 = Shared<i32>;
-pub type SharedI64 = Shared<i64>;
-pub type SharedI128 = Shared<i128>;
-pub type SharedIsize = Shared<isize>;
-pub type SharedU8 = Shared<u8>;
-pub type SharedU16 = Shared<u16>;
-pub type SharedU32 = Shared<u32>;
-pub type SharedU64 = Shared<u64>;
-pub type SharedU128 = Shared<u128>;
-pub type SharedUsize = Shared<usize>;
-pub type SharedF32 = Shared<f32>;
-pub type SharedF64 = Shared<f64>;
-
-macro_rules! impl_p_op_v {
-    ($l:ty, $r:ty, $out:ty) => {
-        p_op_v!(Add, add, $l, $r, $out);
-        p_op_v!(Sub, sub, $l, $r, $out);
-        p_op_v!(Mul, mul, $l, $r, $out);
-        p_op_v!(Div, div, $l, $r, $out);
-        p_op_v!(Rem, rem, $l, $r, $out);
-    };
-}
-
-macro_rules! impl_v_op_p {
-    ($l:ty, $r:ty, $out:ty) => {
-        v_op_p!(Add, add, $l, $r, $out);
-        v_op_p!(Sub, sub, $l, $r, $out);
-        v_op_p!(Mul, mul, $l, $r, $out);
-        v_op_p!(Div, div, $l, $r, $out);
-        v_op_p!(Rem, rem, $l, $r, $out);
-    };
-}
-
-macro_rules! impl_p_op_p {
-    ($l:ty, $r:ty, $out:ty) => {
-        p_op_p!(Add, add, $l, $r, $out);
-        p_op_p!(Sub, sub, $l, $r, $out);
-        p_op_p!(Mul, mul, $l, $r, $out);
-        p_op_p!(Div, div, $l, $r, $out);
-        p_op_p!(Rem, rem, $l, $r, $out);
-    };
-}
-
-macro_rules! impl_property {
-    ($property: ident, $generic: ty) => {
-        impl_p_op_v!($property, $generic, $property);
-        impl_p_op_v!(&$property, $generic, $property);
-        impl_p_op_v!(&mut $property, $generic, $property);
-
-        impl_v_op_p!($generic, $property, $property);
-        impl_v_op_p!($generic, &$property, $property);
-        impl_v_op_p!($generic, &mut $property, $property);
-
-        impl_p_op_p!($property, $property, $property);
-        impl_p_op_p!(&$property, $property, $property);
-        impl_p_op_p!($property, &$property, $property);
-        impl_p_op_p!(&$property, &$property, $property);
-        impl_p_op_p!(&mut $property, $property, $property);
-        impl_p_op_p!($property, &mut $property, $property);
-        impl_p_op_p!(&mut $property, &$property, $property);
-        impl_p_op_p!(&$property, &mut $property, $property);
-        impl_p_op_p!(&mut $property, &mut $property, $property);
-    };
-}
-
-impl_property!(SharedI8, i8);
-impl_property!(SharedI16, i16);
-impl_property!(SharedI32, i32);
-impl_property!(SharedI64, i64);
-impl_property!(SharedI128, i128);
-impl_property!(SharedIsize, isize);
-impl_property!(SharedU8, u8);
-impl_property!(SharedU16, u16);
-impl_property!(SharedU32, u32);
-impl_property!(SharedU64, u64);
-impl_property!(SharedU128, u128);
-impl_property!(SharedUsize, usize);
-impl_property!(SharedF32, f32);
-impl_property!(SharedF64, f64);
-
-macro_rules! into_type {
-    ($from: ty, $to: ident) => {
-        impl Shared<$from> {
-            pub fn $to(&self) -> Shared<$to> {
-                let self_clone = self.clone();
-                Shared::from_dynamic([self.as_ref().into()].into(), move || self_clone.get() as $to)
-            }
-        }
-    };
-}
-
-macro_rules! impl_into_type{
-    ($from: ty $(, $to: ident)*) => {
-        $(into_type!($from, $to);)*
+macro_rules! impl_all_op {
+    ($num_ty:ty) => {
+        impl_shared_num_op!($num_ty, Add, add);
+        impl_shared_num_op!($num_ty, Sub, sub);
+        impl_shared_num_op!($num_ty, Mul, mul);
+        impl_shared_num_op!($num_ty, Div, div);
+        impl_shared_num_op!($num_ty, Rem, rem);
     }
 }
 
-impl_into_type!(i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize, f32, f64);
-impl_into_type!(i16, i8, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize, f32, f64);
-impl_into_type!(i32, i8, i16, i64, i128, isize, u8, u16, u32, u64, u128, usize, f32, f64);
-impl_into_type!(i64, i8, i16, i32, i128, isize, u8, u16, u32, u64, u128, usize, f32, f64);
-impl_into_type!(i128, i8, i16, i32, i64, isize, u8, u16, u32, u64, u128, usize, f32, f64);
-impl_into_type!(isize, i8, i16, i32, i64, i128, u8, u16, u32, u64, u128, usize, f32, f64);
-impl_into_type!(u8, i8, i16, i32, i64, i128, isize, u16, u32, u64, u128, usize, f32, f64);
-impl_into_type!(u16, i8, i16, i32, i64, i128, isize, u8, u32, u64, u128, usize, f32, f64);
-impl_into_type!(u32, i8, i16, i32, i64, i128, isize, u8, u16, u64, u128, usize, f32, f64);
-impl_into_type!(u64, i8, i16, i32, i64, i128, isize, u8, u16, u32, u128, usize, f32, f64);
-impl_into_type!(u128, i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, usize, f32, f64);
-impl_into_type!(usize, i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, f32, f64);
-impl_into_type!(f32, i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize, f64);
-impl_into_type!(f64, i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize, f32);
+impl_all_op!(i8);
+impl_all_op!(i16);
+impl_all_op!(i32);
+impl_all_op!(i64);
+impl_all_op!(i128);
+impl_all_op!(isize);
+impl_all_op!(u8);
+impl_all_op!(u16);
+impl_all_op!(u32);
+impl_all_op!(u64);
+impl_all_op!(u128);
+impl_all_op!(usize);
+impl_all_op!(f32);
+impl_all_op!(f64);
 
-impl SharedF32 {
-    pub fn animation_to_f32(&self, to: impl Into<f32>) -> SharedAnimation<f32> {
-        SharedAnimation::new(self.clone(), self.get(), to.into(), |from, to, progress| {
-            from + (to - from) * progress
-        })
-    }
+macro_rules! impl_shared_to {
+    ($from:ty, $to:ty, $to_fn:ident) => {
+        impl<T: Readable> Shared<$from, T> {
+            pub fn $to_fn(&self) -> SharedDerived<$to> {
+                let this = self.clone();
+                SharedDerived::from_fn(depend!(this), move || this.get() as $to)
+            }
+        }
+    };
 }
 
-
-macro_rules! impl_from_num_to_shared_f32 {
-    ($($from:ty),*) => {
+macro_rules! impl_shared_to_all {
+    ($from:ty, $($to:ty|$to_fn:ident),*) => {
         $(
-            impl From<$from> for SharedF32 {
-                fn from(value: $from) -> Self {
-                    SharedF32::from_static(value as f32)
-                }
-            }
+            impl_shared_to!($from, $to, $to_fn);
         )*
     };
 }
+impl_shared_to_all!(i8, i16|to_i16, i32|to_i32, i64|to_i64, i128|to_i128, isize|to_isize, u8|to_u8, u16|to_u16, u32|to_u32, u64|to_u64, u128|to_u128, usize|to_usize, f32|to_f32, f64|to_f64);
+impl_shared_to_all!(i16, i8|to_i8, i32|to_i32, i64|to_i64, i128|to_i128, isize|to_isize, u8|to_u8, u16|to_u16, u32|to_u32, u64|to_u64, u128|to_u128, usize|to_usize, f32|to_f32, f64|to_f64);
+impl_shared_to_all!(i32, i8|to_i8, i16|to_i16, i64|to_i64, i128|to_i128, isize|to_isize, u8|to_u8, u16|to_u16, u32|to_u32, u64|to_u64, u128|to_u128, usize|to_usize, f32|to_f32, f64|to_f64);
+impl_shared_to_all!(i64, i8|to_i8, i16|to_i16, i32|to_i32, i128|to_i128, isize|to_isize, u8|to_u8, u16|to_u16, u32|to_u32, u64|to_u64, u128|to_u128, usize|to_usize, f32|to_f32, f64|to_f64);
+impl_shared_to_all!(i128, i8|to_i8, i16|to_i16, i32|to_i32, i64|to_i64, isize|to_isize, u8|to_u8, u16|to_u16, u32|to_u32, u64|to_u64, u128|to_u128, usize|to_usize, f32|to_f32, f64|to_f64);
+impl_shared_to_all!(isize, i8|to_i8, i16|to_i16, i32|to_i32, i64|to_i64, i128|to_i128, u8|to_u8, u16|to_u16, u32|to_u32, u64|to_u64, u128|to_u128, usize|to_usize, f32|to_f32, f64|to_f64);
+impl_shared_to_all!(u8, i8|to_i8, i16|to_i16, i32|to_i32, i64|to_i64, i128|to_i128, isize|to_isize, u16|to_u16, u32|to_u32, u64|to_u64, u128|to_u128, usize|to_usize, f32|to_f32, f64|to_f64);
+impl_shared_to_all!(u16, i8|to_i8, i16|to_i16, i32|to_i32, i64|to_i64, i128|to_i128, isize|to_isize, u8|to_u8, u32|to_u32, u64|to_u64, u128|to_u128, usize|to_usize, f32|to_f32, f64|to_f64);
+impl_shared_to_all!(u32, i8|to_i8, i16|to_i16, i32|to_i32, i64|to_i64, i128|to_i128, isize|to_isize, u8|to_u8, u16|to_u16, u64|to_u64, u128|to_u128, usize|to_usize, f32|to_f32, f64|to_f64);
+impl_shared_to_all!(u64, i8|to_i8, i16|to_i16, i32|to_i32, i64|to_i64, i128|to_i128, isize|to_isize, u8|to_u8, u16|to_u16, u32|to_u32, u128|to_u128, usize|to_usize, f32|to_f32, f64|to_f64);
+impl_shared_to_all!(u128, i8|to_i8, i16|to_i16, i32|to_i32, i64|to_i64, i128|to_i128, isize|to_isize, u8|to_u8, u16|to_u16, u32|to_u32, u64|to_u64, usize|to_usize, f32|to_f32, f64|to_f64);
+impl_shared_to_all!(usize, i8|to_i8, i16|to_i16, i32|to_i32, i64|to_i64, i128|to_i128, isize|to_isize, u8|to_u8, u16|to_u16, u32|to_u32, u64|to_u64, u128|to_u128, f32|to_f32, f64|to_f64);
+impl_shared_to_all!(f32, i8|to_i8, i16|to_i16, i32|to_i32, i64|to_i64, i128|to_i128, isize|to_isize, u8|to_u8, u16|to_u16, u32|to_u32, u64|to_u64, u128|to_u128, usize|to_usize, f64|to_f64);
+impl_shared_to_all!(f64, i8|to_i8, i16|to_i16, i32|to_i32, i64|to_i64, i128|to_i128, isize|to_isize, u8|to_u8, u16|to_u16, u32|to_u32, u64|to_u64, u128|to_u128, usize|to_usize, f32|to_f32);
 
-impl_from_num_to_shared_f32!(i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize);
+
+mod tests {
+    use crate::shared::Observable;
+use crate::depend;
+    use crate::shared::{SharedDerived, SharedF32, SharedIsize, SharedUsize};
+
+    #[test]
+    fn test_shared_static() {
+        let a: SharedUsize = 5.into();
+        let b: SharedUsize = 10.into();
+        let c = &a + &b;
+        assert_eq!(c.get(), 15);
+    }
+
+    #[test]
+    fn test_shared_dynamic() {
+        let a: SharedUsize = 5.into();
+        let b: SharedUsize = 10.into();
+        let c = &a + &b;
+        assert_eq!(c.get(), 15);
+        a.set(20);
+        assert_eq!(c.get(), 30);
+        b.set(5);
+        assert_eq!(c.get(), 25);
+    }
+
+    #[test]
+    fn test_shared_mixed() {
+        let a: SharedIsize = 5.into();
+        let b: SharedUsize = 10.into();
+        let d: SharedF32 = 2.5.into();
+        let c = a.to_usize() + &b;
+        let e = c.to_f32() * &d;
+        assert_eq!(c.get(), 15);
+        assert_eq!(e.get(), 37.5);
+        a.set(20);
+        assert_eq!(c.get(), 30);
+        assert_eq!(e.get(), 75.0);
+    }
+}

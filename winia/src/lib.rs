@@ -1,9 +1,5 @@
 pub mod core;
 pub mod shared;
-pub mod text;
-pub mod collection;
-pub mod icon;
-pub mod ui;
 
 pub use skia_safe;
 pub use winit::*;

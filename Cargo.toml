@@ -8,7 +8,7 @@ members = [
 default-members = ["winia"]
 
 [workspace.dependencies]
-winit = "0.30.11"
+winit = "0.30.12"
 skia-safe = "0.87.0"
 skia-bindings = "0.87.0"
 parking_lot = "0.12.4"
