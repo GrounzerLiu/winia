@@ -3,12 +3,17 @@ resolver = "2"
 members = [
     "winia",
     "skiwin",
-    "proc-macro", "winia_test", "interpolator_generator", "ai_chat", "winia-video"]
+    "proc-macro",
+    # "winia_test",
+    "interpolator_generator",
+    # "ai_chat",
+    "winia-video",
+    "winia_test2"]
 
 default-members = ["winia"]
 
 [workspace.dependencies]
 winit = "0.30.12"
-skia-safe = "0.87.0"
-skia-bindings = "0.87.0"
-parking_lot = "0.12.4"
+skia-safe = "0.89.1"
+skia-bindings = "0.89.1"
+parking_lot = "0.12.5"

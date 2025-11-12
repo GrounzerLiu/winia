@@ -1,10 +1,10 @@
-use std::ops::Add;
-use std::ops::Sub;
-use std::ops::Mul;
-use std::ops::Div;
-use std::ops::Rem;
 use crate::depend;
-use crate::shared::{Derived, Readable, Shared, SharedDerived, SharedSource, Source};
+use crate::shared::{Readable, Shared, SharedAnimation, SharedDerived, SharedSource};
+use std::ops::Add;
+use std::ops::Div;
+use std::ops::Mul;
+use std::ops::Rem;
+use std::ops::Sub;
 
 pub type SharedI8 = SharedSource<i8>;
 pub type SharedI16 = SharedSource<i16>;
@@ -44,10 +44,7 @@ macro_rules! impl_shared_num_op {
             fn $op(self, rhs: Shared<$num_ty, B>) -> Self::Output {
                 let lhs = self.clone();
                 let rhs = rhs.clone();
-                SharedDerived::from_fn(
-                    depend!(&lhs, &rhs),
-                    move || lhs.get().$op(rhs.get()),
-                )
+                SharedDerived::from_fn(depend!(&lhs, &rhs), move || lhs.get().$op(rhs.get()))
             }
         }
         impl<A: Readable, B: Readable> $Op<&Shared<$num_ty, B>> for Shared<$num_ty, A> {
@@ -56,10 +53,7 @@ macro_rules! impl_shared_num_op {
             fn $op(self, rhs: &Shared<$num_ty, B>) -> Self::Output {
                 let lhs = self.clone();
                 let rhs = rhs.clone();
-                SharedDerived::from_fn(
-                    depend!(&lhs, &rhs),
-                    move || lhs.get().$op(rhs.get()),
-                )
+                SharedDerived::from_fn(depend!(&lhs, &rhs), move || lhs.get().$op(rhs.get()))
             }
         }
 
@@ -69,10 +63,7 @@ macro_rules! impl_shared_num_op {
             fn $op(self, rhs: Shared<$num_ty, B>) -> Self::Output {
                 let lhs = self.clone();
                 let rhs = rhs.clone();
-                SharedDerived::from_fn(
-                    depend!(&lhs, &rhs),
-                    move || lhs.get().$op(rhs.get())
-                )
+                SharedDerived::from_fn(depend!(&lhs, &rhs), move || lhs.get().$op(rhs.get()))
             }
         }
 
@@ -82,10 +73,7 @@ macro_rules! impl_shared_num_op {
             fn $op(self, rhs: &Shared<$num_ty, B>) -> Self::Output {
                 let lhs = self.clone();
                 let rhs = rhs.clone();
-                SharedDerived::from_fn(
-                    depend!(&lhs, &rhs),
-                    move || lhs.get().$op(rhs.get())
-                )
+                SharedDerived::from_fn(depend!(&lhs, &rhs), move || lhs.get().$op(rhs.get()))
             }
         }
 
@@ -94,10 +82,7 @@ macro_rules! impl_shared_num_op {
 
             fn $op(self, rhs: $num_ty) -> Self::Output {
                 let lhs = self.clone();
-                SharedDerived::from_fn(
-                    depend!(&lhs),
-                    move || lhs.get().$op(rhs)
-                )
+                SharedDerived::from_fn(depend!(&lhs), move || lhs.get().$op(rhs))
             }
         }
 
@@ -106,10 +91,7 @@ macro_rules! impl_shared_num_op {
 
             fn $op(self, rhs: $num_ty) -> Self::Output {
                 let lhs = self.clone();
-                SharedDerived::from_fn(
-                    depend!(&lhs),
-                    move || lhs.get().$op(rhs)
-                )
+                SharedDerived::from_fn(depend!(&lhs), move || lhs.get().$op(rhs))
             }
         }
 
@@ -118,10 +100,7 @@ macro_rules! impl_shared_num_op {
 
             fn $op(self, rhs: Shared<$num_ty, A>) -> Self::Output {
                 let rhs = rhs.clone();
-                SharedDerived::from_fn(
-                    depend!(&rhs),
-                    move || self.$op(rhs.get())
-                )
+                SharedDerived::from_fn(depend!(&rhs), move || self.$op(rhs.get()))
             }
         }
     };
@@ -133,7 +112,7 @@ macro_rules! impl_all_op {
         impl_shared_num_op!($num_ty, Mul, mul);
         impl_shared_num_op!($num_ty, Div, div);
         impl_shared_num_op!($num_ty, Rem, rem);
-    }
+    };
 }
 
 impl_all_op!(i8);
@@ -169,26 +148,233 @@ macro_rules! impl_shared_to_all {
         )*
     };
 }
-impl_shared_to_all!(i8, i16|to_i16, i32|to_i32, i64|to_i64, i128|to_i128, isize|to_isize, u8|to_u8, u16|to_u16, u32|to_u32, u64|to_u64, u128|to_u128, usize|to_usize, f32|to_f32, f64|to_f64);
-impl_shared_to_all!(i16, i8|to_i8, i32|to_i32, i64|to_i64, i128|to_i128, isize|to_isize, u8|to_u8, u16|to_u16, u32|to_u32, u64|to_u64, u128|to_u128, usize|to_usize, f32|to_f32, f64|to_f64);
-impl_shared_to_all!(i32, i8|to_i8, i16|to_i16, i64|to_i64, i128|to_i128, isize|to_isize, u8|to_u8, u16|to_u16, u32|to_u32, u64|to_u64, u128|to_u128, usize|to_usize, f32|to_f32, f64|to_f64);
-impl_shared_to_all!(i64, i8|to_i8, i16|to_i16, i32|to_i32, i128|to_i128, isize|to_isize, u8|to_u8, u16|to_u16, u32|to_u32, u64|to_u64, u128|to_u128, usize|to_usize, f32|to_f32, f64|to_f64);
-impl_shared_to_all!(i128, i8|to_i8, i16|to_i16, i32|to_i32, i64|to_i64, isize|to_isize, u8|to_u8, u16|to_u16, u32|to_u32, u64|to_u64, u128|to_u128, usize|to_usize, f32|to_f32, f64|to_f64);
-impl_shared_to_all!(isize, i8|to_i8, i16|to_i16, i32|to_i32, i64|to_i64, i128|to_i128, u8|to_u8, u16|to_u16, u32|to_u32, u64|to_u64, u128|to_u128, usize|to_usize, f32|to_f32, f64|to_f64);
-impl_shared_to_all!(u8, i8|to_i8, i16|to_i16, i32|to_i32, i64|to_i64, i128|to_i128, isize|to_isize, u16|to_u16, u32|to_u32, u64|to_u64, u128|to_u128, usize|to_usize, f32|to_f32, f64|to_f64);
-impl_shared_to_all!(u16, i8|to_i8, i16|to_i16, i32|to_i32, i64|to_i64, i128|to_i128, isize|to_isize, u8|to_u8, u32|to_u32, u64|to_u64, u128|to_u128, usize|to_usize, f32|to_f32, f64|to_f64);
-impl_shared_to_all!(u32, i8|to_i8, i16|to_i16, i32|to_i32, i64|to_i64, i128|to_i128, isize|to_isize, u8|to_u8, u16|to_u16, u64|to_u64, u128|to_u128, usize|to_usize, f32|to_f32, f64|to_f64);
-impl_shared_to_all!(u64, i8|to_i8, i16|to_i16, i32|to_i32, i64|to_i64, i128|to_i128, isize|to_isize, u8|to_u8, u16|to_u16, u32|to_u32, u128|to_u128, usize|to_usize, f32|to_f32, f64|to_f64);
-impl_shared_to_all!(u128, i8|to_i8, i16|to_i16, i32|to_i32, i64|to_i64, i128|to_i128, isize|to_isize, u8|to_u8, u16|to_u16, u32|to_u32, u64|to_u64, usize|to_usize, f32|to_f32, f64|to_f64);
-impl_shared_to_all!(usize, i8|to_i8, i16|to_i16, i32|to_i32, i64|to_i64, i128|to_i128, isize|to_isize, u8|to_u8, u16|to_u16, u32|to_u32, u64|to_u64, u128|to_u128, f32|to_f32, f64|to_f64);
-impl_shared_to_all!(f32, i8|to_i8, i16|to_i16, i32|to_i32, i64|to_i64, i128|to_i128, isize|to_isize, u8|to_u8, u16|to_u16, u32|to_u32, u64|to_u64, u128|to_u128, usize|to_usize, f64|to_f64);
-impl_shared_to_all!(f64, i8|to_i8, i16|to_i16, i32|to_i32, i64|to_i64, i128|to_i128, isize|to_isize, u8|to_u8, u16|to_u16, u32|to_u32, u64|to_u64, u128|to_u128, usize|to_usize, f32|to_f32);
-
+impl_shared_to_all!(
+    i8,
+    i16 | to_i16,
+    i32 | to_i32,
+    i64 | to_i64,
+    i128 | to_i128,
+    isize | to_isize,
+    u8 | to_u8,
+    u16 | to_u16,
+    u32 | to_u32,
+    u64 | to_u64,
+    u128 | to_u128,
+    usize | to_usize,
+    f32 | to_f32,
+    f64 | to_f64
+);
+impl_shared_to_all!(
+    i16,
+    i8 | to_i8,
+    i32 | to_i32,
+    i64 | to_i64,
+    i128 | to_i128,
+    isize | to_isize,
+    u8 | to_u8,
+    u16 | to_u16,
+    u32 | to_u32,
+    u64 | to_u64,
+    u128 | to_u128,
+    usize | to_usize,
+    f32 | to_f32,
+    f64 | to_f64
+);
+impl_shared_to_all!(
+    i32,
+    i8 | to_i8,
+    i16 | to_i16,
+    i64 | to_i64,
+    i128 | to_i128,
+    isize | to_isize,
+    u8 | to_u8,
+    u16 | to_u16,
+    u32 | to_u32,
+    u64 | to_u64,
+    u128 | to_u128,
+    usize | to_usize,
+    f32 | to_f32,
+    f64 | to_f64
+);
+impl_shared_to_all!(
+    i64,
+    i8 | to_i8,
+    i16 | to_i16,
+    i32 | to_i32,
+    i128 | to_i128,
+    isize | to_isize,
+    u8 | to_u8,
+    u16 | to_u16,
+    u32 | to_u32,
+    u64 | to_u64,
+    u128 | to_u128,
+    usize | to_usize,
+    f32 | to_f32,
+    f64 | to_f64
+);
+impl_shared_to_all!(
+    i128,
+    i8 | to_i8,
+    i16 | to_i16,
+    i32 | to_i32,
+    i64 | to_i64,
+    isize | to_isize,
+    u8 | to_u8,
+    u16 | to_u16,
+    u32 | to_u32,
+    u64 | to_u64,
+    u128 | to_u128,
+    usize | to_usize,
+    f32 | to_f32,
+    f64 | to_f64
+);
+impl_shared_to_all!(
+    isize,
+    i8 | to_i8,
+    i16 | to_i16,
+    i32 | to_i32,
+    i64 | to_i64,
+    i128 | to_i128,
+    u8 | to_u8,
+    u16 | to_u16,
+    u32 | to_u32,
+    u64 | to_u64,
+    u128 | to_u128,
+    usize | to_usize,
+    f32 | to_f32,
+    f64 | to_f64
+);
+impl_shared_to_all!(
+    u8,
+    i8 | to_i8,
+    i16 | to_i16,
+    i32 | to_i32,
+    i64 | to_i64,
+    i128 | to_i128,
+    isize | to_isize,
+    u16 | to_u16,
+    u32 | to_u32,
+    u64 | to_u64,
+    u128 | to_u128,
+    usize | to_usize,
+    f32 | to_f32,
+    f64 | to_f64
+);
+impl_shared_to_all!(
+    u16,
+    i8 | to_i8,
+    i16 | to_i16,
+    i32 | to_i32,
+    i64 | to_i64,
+    i128 | to_i128,
+    isize | to_isize,
+    u8 | to_u8,
+    u32 | to_u32,
+    u64 | to_u64,
+    u128 | to_u128,
+    usize | to_usize,
+    f32 | to_f32,
+    f64 | to_f64
+);
+impl_shared_to_all!(
+    u32,
+    i8 | to_i8,
+    i16 | to_i16,
+    i32 | to_i32,
+    i64 | to_i64,
+    i128 | to_i128,
+    isize | to_isize,
+    u8 | to_u8,
+    u16 | to_u16,
+    u64 | to_u64,
+    u128 | to_u128,
+    usize | to_usize,
+    f32 | to_f32,
+    f64 | to_f64
+);
+impl_shared_to_all!(
+    u64,
+    i8 | to_i8,
+    i16 | to_i16,
+    i32 | to_i32,
+    i64 | to_i64,
+    i128 | to_i128,
+    isize | to_isize,
+    u8 | to_u8,
+    u16 | to_u16,
+    u32 | to_u32,
+    u128 | to_u128,
+    usize | to_usize,
+    f32 | to_f32,
+    f64 | to_f64
+);
+impl_shared_to_all!(
+    u128,
+    i8 | to_i8,
+    i16 | to_i16,
+    i32 | to_i32,
+    i64 | to_i64,
+    i128 | to_i128,
+    isize | to_isize,
+    u8 | to_u8,
+    u16 | to_u16,
+    u32 | to_u32,
+    u64 | to_u64,
+    usize | to_usize,
+    f32 | to_f32,
+    f64 | to_f64
+);
+impl_shared_to_all!(
+    usize,
+    i8 | to_i8,
+    i16 | to_i16,
+    i32 | to_i32,
+    i64 | to_i64,
+    i128 | to_i128,
+    isize | to_isize,
+    u8 | to_u8,
+    u16 | to_u16,
+    u32 | to_u32,
+    u64 | to_u64,
+    u128 | to_u128,
+    f32 | to_f32,
+    f64 | to_f64
+);
+impl_shared_to_all!(
+    f32,
+    i8 | to_i8,
+    i16 | to_i16,
+    i32 | to_i32,
+    i64 | to_i64,
+    i128 | to_i128,
+    isize | to_isize,
+    u8 | to_u8,
+    u16 | to_u16,
+    u32 | to_u32,
+    u64 | to_u64,
+    u128 | to_u128,
+    usize | to_usize,
+    f64 | to_f64
+);
+impl_shared_to_all!(
+    f64,
+    i8 | to_i8,
+    i16 | to_i16,
+    i32 | to_i32,
+    i64 | to_i64,
+    i128 | to_i128,
+    isize | to_isize,
+    u8 | to_u8,
+    u16 | to_u16,
+    u32 | to_u32,
+    u64 | to_u64,
+    u128 | to_u128,
+    usize | to_usize,
+    f32 | to_f32
+);
 
 mod tests {
-    use crate::shared::Observable;
-use crate::depend;
-    use crate::shared::{SharedDerived, SharedF32, SharedIsize, SharedUsize};
+    use crate::shared::{SharedF32, SharedIsize, SharedUsize};
 
     #[test]
     fn test_shared_static() {
@@ -204,9 +390,9 @@ use crate::depend;
         let b: SharedUsize = 10.into();
         let c = &a + &b;
         assert_eq!(c.get(), 15);
-        a.set(20);
+        a.set(20_usize);
         assert_eq!(c.get(), 30);
-        b.set(5);
+        b.set(5_usize);
         assert_eq!(c.get(), 25);
     }
 
@@ -219,8 +405,16 @@ use crate::depend;
         let e = c.to_f32() * &d;
         assert_eq!(c.get(), 15);
         assert_eq!(e.get(), 37.5);
-        a.set(20);
+        a.set(20_isize);
         assert_eq!(c.get(), 30);
         assert_eq!(e.get(), 75.0);
+    }
+}
+
+impl SharedF32 {
+    pub fn animation_to_f32(&self, to: impl Into<f32>) -> SharedAnimation<f32> {
+        SharedAnimation::new(self.clone(), self.get(), to.into(), |from, to, progress| {
+            from + (to - from) * progress
+        })
     }
 }

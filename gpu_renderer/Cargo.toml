@@ -1,0 +1,45 @@
+[package]
+name = "gpu_renderer"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = ["vulkan"]
+vulkan = ["vulkano", "ash"]
+opengl = ["glutin/egl", "skia-safe/gl"]
+
+[dependencies.skia-safe]
+workspace = true
+
+[dependencies.skia-bindings]
+workspace = true
+
+[dependencies.winit]
+workspace = true
+features = ["rwh_06"]
+
+[dependencies.raw-window-handle]
+version = "0.6"
+
+[dependencies.vulkano]
+version = "0.35.2"
+optional = true
+
+[dependencies.ash]
+version = "*"
+optional = true
+
+[dependencies.glutin]
+version = "0.32.3"
+optional = true
+features = ["egl"]
+
+[dependencies.glutin-winit]
+version = "0.5.0"
+
+[dependencies]
+thiserror = "2"
+
+[build-dependencies]
+cfg_aliases = "0.2.1"
+gl_generator = "0.14.0"

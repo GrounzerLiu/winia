@@ -1,0 +1,829 @@
+use crate::ui::item::{FocusState, ItemData, ItemState, Size};
+use skia_safe::image_filters::CropRect;
+use skia_safe::{
+    Canvas, IRect, Paint, PictureRecorder, Point, Rect, Surface, TileMode, Vector, image_filters,
+};
+use std::cell::RefCell;
+use std::collections::HashSet;
+use std::ops::{Deref, DerefMut};
+use std::rc::Rc;
+use winit::event::{DeviceId, Force, KeyEvent, Modifiers, MouseButton, TouchPhase};
+use crate::ui::InnerPosition;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MeasureMode {
+    /// Indicates that the parent has determined an exact size for the child.
+    Specified(f32),
+    /// Indicates that the child can determine its own size. The value of this enum is the maximum size the child can use.
+    Unspecified(f32),
+}
+
+impl MeasureMode {
+    pub fn from_size(size: Size, max: f32) -> Self {
+        match size {
+            Size::Auto => MeasureMode::Unspecified(max),
+            Size::Fill => MeasureMode::Specified(max),
+            Size::Fixed(size) => MeasureMode::Specified(size),
+            Size::Relative(ratio) => MeasureMode::Specified(max * ratio.clamp(0.0, f32::MAX)),
+        }
+    }
+}
+
+impl Into<f32> for MeasureMode {
+    fn into(self) -> f32 {
+        match self {
+            MeasureMode::Specified(v) => v,
+            MeasureMode::Unspecified(v) => v,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PointerState {
+    Started,
+    Moved,
+    Ended,
+    Cancelled,
+}
+
+impl From<TouchPhase> for PointerState {
+    fn from(value: TouchPhase) -> Self {
+        match value {
+            TouchPhase::Started => PointerState::Started,
+            TouchPhase::Moved => PointerState::Moved,
+            TouchPhase::Ended => PointerState::Ended,
+            TouchPhase::Cancelled => PointerState::Cancelled,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct MouseInput {
+    pub device_id: DeviceId,
+    pub x: f32,
+    pub y: f32,
+    pub button: MouseButton,
+    pub pointer_state: PointerState,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TouchInput {
+    pub device_id: DeviceId,
+    pub id: u64,
+    pub x: f32,
+    pub y: f32,
+    pub pointer_state: PointerState,
+    pub force: Option<Force>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum Pointer {
+    Touch { id: u64 },
+    Mouse { button: MouseButton },
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct PointerInput {
+    pub device_id: DeviceId,
+    pub pointer: Pointer,
+    pub x: f32,
+    pub y: f32,
+    pub pointer_state: PointerState,
+    pub force: Option<Force>,
+}
+
+impl From<&TouchInput> for PointerInput {
+    fn from(value: &TouchInput) -> Self {
+        PointerInput {
+            device_id: value.device_id,
+            pointer: Pointer::Touch { id: value.id },
+            x: value.x,
+            y: value.y,
+            pointer_state: value.pointer_state,
+            force: value.force,
+        }
+    }
+}
+
+impl From<&MouseInput> for PointerInput {
+    fn from(value: &MouseInput) -> Self {
+        PointerInput {
+            device_id: value.device_id,
+            pointer: Pointer::Mouse {
+                button: value.button,
+            },
+            x: value.x,
+            y: value.y,
+            pointer_state: value.pointer_state,
+            force: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum ImeAction {
+    Enabled,
+    Enter,
+    Delete,
+    PreEdit(String, Option<(usize, usize)>),
+    Commit(String),
+    Disabled,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ClickSource {
+    Mouse(MouseButton),
+    Touch,
+    LongTouch,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MouseScrollDelta {
+    /// Amount in lines or rows to scroll in the horizontal
+    /// and vertical directions.
+    ///
+    /// Positive values indicate that the content that is being scrolled should move
+    /// right and down (revealing more content left and up).
+    LineDelta(f32),
+
+    /// Amount in pixels to scroll in the horizontal and
+    /// vertical direction.
+    ///
+    /// Scroll events are expressed as a `LogicalDelta` if
+    /// supported by the device (e.g. a touchpad) and
+    /// platform.
+    ///
+    /// Positive values indicate that the content being scrolled should
+    /// move right/down.
+    ///
+    /// For a 'natural scrolling' touchpad (that acts like a touch screen)
+    /// this means moving your fingers right and down should give positive values,
+    /// and move the content right and down (to reveal more things left and up).
+    LogicalDelta(f32),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MouseWheel {
+    pub device_id: DeviceId,
+    pub delta: MouseScrollDelta,
+    pub state: PointerState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CursorMove {
+    pub device_id: DeviceId,
+    pub x: f32,
+    pub y: f32,
+    pub is_left_window: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeyboardInput {
+    pub device_id: DeviceId,
+    pub key_event: KeyEvent,
+    pub is_synthetic: bool,
+}
+
+impl MeasureMode {
+    pub fn value(self) -> f32 {
+        match self {
+            MeasureMode::Specified(value) => value,
+            MeasureMode::Unspecified(value) => value,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct Event<T: ?Sized> {
+    pub event: Rc<RefCell<T>>,
+}
+impl<T: ?Sized> Deref for Event<T> {
+    type Target = Rc<RefCell<T>>;
+    fn deref(&self) -> &Self::Target {
+        &self.event
+    }
+}
+impl<T: ?Sized> DerefMut for Event<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.event
+    }
+}
+
+macro_rules! event {
+    ($event:block) => {
+        Event {
+            event: Rc::new(RefCell::new(Box::new($event))),
+        }
+    };
+}
+
+pub struct ItemEvent {
+    pub cursor_move: Event<dyn FnMut(&mut ItemData, &CursorMove)>,
+    pub click_input: Event<dyn FnMut(&mut ItemData, &ClickSource)>,
+    pub dispatch_cursor_move: Event<dyn FnMut(&mut ItemData, &CursorMove)>,
+    pub dispatch_draw: Event<dyn FnMut(&mut ItemData, &mut Surface, f32, f32)>,
+    pub dispatch_focus: Event<dyn FnMut(&mut ItemData, u32, bool) -> bool>,
+    pub dispatch_keyboard_input: Event<dyn FnMut(&mut ItemData, &KeyboardInput) -> bool>,
+    pub dispatch_layout: Event<dyn FnMut(&mut ItemData, f32, f32, f32, f32)>,
+    pub dispatch_modifiers_change: Event<dyn FnMut(&mut ItemData, &Modifiers)>,
+    pub dispatch_mouse_input: Event<dyn FnMut(&mut ItemData, &MouseInput) -> bool>,
+    pub dispatch_mouse_wheel_x: Event<dyn FnMut(&mut ItemData, &MouseWheel) -> bool>,
+    pub dispatch_mouse_wheel_y: Event<dyn FnMut(&mut ItemData, &MouseWheel) -> bool>,
+    pub dispatch_touch_input: Event<dyn FnMut(&mut ItemData, &TouchInput) -> bool>,
+    pub draw: Event<dyn FnMut(&mut ItemData, &Canvas)>,
+    pub hover_changed: Event<dyn FnMut(&mut ItemData, bool)>,
+    pub focus_changed: Event<dyn FnMut(&mut ItemData, &FocusState)>,
+    pub ime_input: Event<dyn FnMut(&mut ItemData, &ImeAction)>,
+    pub keyboard_input: Event<dyn FnMut(&mut ItemData, &KeyboardInput)>,
+    pub layout: Event<dyn FnMut(&mut ItemData, f32, f32)>,
+    pub measure: Event<dyn FnMut(&mut ItemData, MeasureMode, MeasureMode)>,
+    pub modifiers_change: Event<dyn FnMut(&mut ItemData, &Modifiers)>,
+    pub mouse_input: Event<dyn FnMut(&mut ItemData, &MouseInput) -> bool>,
+    pub mouse_wheel_x: Event<dyn FnMut(&mut ItemData, &MouseWheel) -> bool>,
+    pub mouse_wheel_y: Event<dyn FnMut(&mut ItemData, &MouseWheel) -> bool>,
+    pub pointer_input: Event<dyn FnMut(&mut ItemData, &PointerInput) -> bool>,
+}
+
+impl Default for ItemEvent {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ItemEvent {
+    pub fn new() -> Self {
+        Self {
+            cursor_move: event!({ |_item: &mut ItemData, _cursor_move: &CursorMove| {} }),
+            click_input: event!({ |_item: &mut ItemData, _source: &ClickSource| {} }),
+            dispatch_cursor_move: event!({
+                let mut is_hovered = false;
+                move |item: &mut ItemData, cursor_move: &CursorMove| {
+                    if !item.props().enable.get() {
+                        return;
+                    }
+                    {
+                        let foreground = item.props().foreground.clone();
+                        let mut foreground_lock = foreground.lock();
+                        if let Some(fg) = foreground_lock.as_mut() {
+                            fg.data().dispatch_cursor_move(cursor_move);
+                        }
+                    }
+                    {
+                        let background = item.props().background.clone();
+                        let mut background_lock = background.lock();
+                        if let Some(bg) = background_lock.as_mut() {
+                            bg.data().dispatch_cursor_move(cursor_move);
+                        }
+                    }
+                    item.on_cursor_move(cursor_move);
+                    item.cursor_move(cursor_move);
+
+                    if item.current_frame().contains(cursor_move.x, cursor_move.y)
+                        && !cursor_move.is_left_window
+                    {
+                        if !is_hovered {
+                            is_hovered = true;
+                            item.hover_changed(true);
+                            item.on_hover_changed(true);
+                        }
+                    } else if is_hovered {
+                        is_hovered = false;
+                        item.hover_changed(false);
+                        item.on_hover_changed(false);
+                    }
+
+                    item.children.lock().iter_mut().for_each(|child| {
+                        child.data().dispatch_cursor_move(cursor_move);
+                    });
+                }
+            }),
+            dispatch_draw: event!({
+                let mut is_animating = false;
+                let mut image_filter_paint = Paint::default();
+                let mut shadow_paint = Paint::default();
+                let mut last_parent_x: f32 = 0.0;
+                let mut last_parent_y: f32 = 0.0;
+                move |item: &mut ItemData, surface: &mut Surface, parent_x: f32, parent_y: f32| {
+                    let current_frame = item.current_frame();
+                    item.target_frame.set_parent_position(parent_x, parent_y);
+
+                    let clipped = item.props.clipped.get();
+                    let clip_shape = {
+                        let current_frame = item.current_frame();
+                        let shape = item.props.clip_shape.lock();
+                        shape.as_ref().map(|shape| shape(&current_frame))
+                    };
+                    {
+                        // Draw the background blur effect.
+                        let blur = current_frame.get_float_param("blur").unwrap_or(35.0);
+                        // let blur = /*35.0*/item.props.blur.get();
+                        let margin = blur * 2.0;
+                        let current_frame = item.current_frame();
+                        if item.props().enable_background_blur.get()
+                            && !current_frame.is_empty()
+                            && blur > 0.0
+                        {
+                            let scale_factor = item.window_context().scale_factor();
+                            let left = (current_frame.x() * scale_factor - margin) as i32;
+                            let top = (current_frame.y() * scale_factor - margin) as i32;
+                            let right = ((current_frame.x() + current_frame.width) * scale_factor
+                                + margin) as i32;
+                            let bottom = ((current_frame.y() + current_frame.height) * scale_factor
+                                + margin) as i32;
+
+                            let background = surface
+                                .image_snapshot_with_bounds(IRect::from_ltrb(
+                                    left, top, right, bottom,
+                                ))
+                                .unwrap();
+
+                            let (width, height) = {
+                                let image_info = background.image_info();
+                                (image_info.width(), image_info.height())
+                            };
+
+                            let canvas = surface.canvas();
+                            image_filter_paint.set_image_filter(image_filters::blur(
+                                (blur, blur),
+                                TileMode::Clamp,
+                                None,
+                                CropRect::from(Rect::from_wh(width as f32, height as f32)),
+                            ));
+
+                            let d = margin / scale_factor;
+                            let mut x = current_frame.x() - d;
+                            let mut y = current_frame.y() - d;
+                            if x < 0.0 {
+                                x = 0.0;
+                            }
+                            if y < 0.0 {
+                                y = 0.0;
+                            }
+
+                            canvas.save();
+
+                            if let Some(clip_shape) = &clip_shape
+                                && clipped
+                            {
+                                canvas.save();
+                                canvas.clip_path(clip_shape, None, true);
+                            } else {
+                                canvas.clip_rect(
+                                    Rect::from_xywh(
+                                        current_frame.x(),
+                                        current_frame.y(),
+                                        current_frame.width,
+                                        current_frame.height,
+                                    ),
+                                    None,
+                                    None,
+                                );
+                            }
+                            canvas.translate(Vector::new(x, y));
+                            canvas.scale((1.0 / scale_factor, 1.0 / scale_factor));
+                            canvas.draw_image(
+                                background,
+                                Point::new(0.0, 0.0),
+                                Some(&image_filter_paint),
+                            );
+                            canvas.restore();
+                        }
+                    }
+
+                    let clipped = item.props.clipped.get();
+                    let clip_shape = {
+                        let current_frame = item.current_frame();
+                        let shape = item.props.clip_shape.lock();
+                        shape.as_ref().map(|shape| shape(&current_frame))
+                    };
+
+                    if is_animating != item.animations.is_animating() {
+                        item.props.need_redraw.lock().need_redraw = true;
+                        is_animating = item.animations.is_animating();
+                    }
+                    if (item.props.need_redraw.lock().need_redraw && !item.animations.is_animating())
+                    || (last_parent_x != parent_x || last_parent_y != parent_y)
+                    {
+                        let mut recorder = PictureRecorder::new();
+                        let canvas = recorder.begin_recording(
+                            Rect::from_wh(
+                                item.window_context().window_size().0,
+                                item.window_context().window_size().1,
+                            ),
+                            true,
+                        );
+                        if let Some(clip_shape) = &clip_shape
+                            && clipped
+                        {
+                            canvas.save();
+                            canvas.clip_path(clip_shape, None, true);
+                        }
+                        item.draw(canvas);
+                        let picture = recorder.finish_recording_as_picture(None);
+                        item.draw_cache = picture;
+                    }
+                    last_parent_x = parent_x;
+                    last_parent_y = parent_y;
+
+                    {
+                        if let Some(clip_shape) = &clip_shape
+                            && clipped
+                        {
+                            surface.canvas().save();
+                            surface.canvas().clip_path(clip_shape, None, true);
+                        }
+                    }
+                    {
+                        let background = item.props.background.clone();
+                        let mut background_lock = background.lock();
+                        if let Some(bg) = background_lock.as_mut() {
+                            bg.data().dispatch_draw(
+                                surface,
+                                item.target_frame.x(),
+                                item.target_frame.y(),
+                            );
+                        }
+                    }
+
+                    if item.animations.is_animating() {
+                        item.draw(surface.canvas());
+                    } else if let Some(picture) = &item.draw_cache {
+                        let canvas = surface.canvas();
+                        canvas.draw_picture(picture, None, None);
+                    }
+
+                    {
+                        let mut children_lock = item.children.lock();
+                        for child in children_lock.iter_mut() {
+                            child.data().dispatch_draw(
+                                surface,
+                                item.target_frame.x(),
+                                item.target_frame.y(),
+                            );
+                        }
+                    }
+                    {
+                        let foreground = item.props.foreground.clone();
+                        let mut foreground_lock = foreground.lock();
+                        if let Some(fg) = foreground_lock.as_mut() {
+                            fg.data().dispatch_draw(
+                                surface,
+                                item.target_frame.x(),
+                                item.target_frame.y(),
+                            );
+                        }
+                    }
+
+                    {
+                        if let Some(_clip_shape) = &clip_shape
+                            && clipped
+                        {
+                            surface.canvas().restore();
+                        }
+                    }
+
+                    item.props.need_redraw.lock().need_redraw = false;
+                }
+            }),
+            dispatch_focus: event!({
+                |item: &mut ItemData, item_id: u32, has_parent_focus: bool| {
+                    let mut is_focus_changed = false;
+                    if item.id == item_id && !item.focus_state.is_focused {
+                        item.focus_state.is_focused = true;
+                        item.focus_state.has_focus = true;
+                        is_focus_changed = true;
+                    } else if item.id != item_id && item.focus_state.is_focused {
+                        item.focus_state.is_focused = false;
+                        is_focus_changed = true;
+                    }
+                    if has_parent_focus && !item.focus_state.has_parent_focus {
+                        item.focus_state.has_parent_focus = true;
+                        is_focus_changed = true;
+                    } else if !has_parent_focus && item.focus_state.has_parent_focus {
+                        item.focus_state.has_parent_focus = false;
+                        is_focus_changed = true;
+                    }
+                    let mut has_focus = false;
+                    let mut children_lock = item.children.lock();
+                    let is_focused = item.focus_state.is_focused;
+                    for child in children_lock.iter_mut() {
+                        has_focus |= child
+                            .data()
+                            .dispatch_focus(item_id, has_parent_focus || is_focused);
+                    }
+                    drop(children_lock);
+                    if has_focus && !item.focus_state.has_focus {
+                        item.focus_state.has_focus = true;
+                        is_focus_changed = true;
+                    } else if !has_focus
+                        && item.focus_state.has_focus
+                        && !item.focus_state.is_focused
+                    {
+                        item.focus_state.has_focus = false;
+                        is_focus_changed = true;
+                    }
+                    if is_focus_changed {
+                        let focus_state = item.focus_state;
+                        item.focus_changed(&focus_state);
+                        item.on_focus_changed(&focus_state);
+                    }
+                    item.focus_state.has_focus
+                }
+            }),
+            dispatch_keyboard_input: event!({
+                |_item: &mut ItemData, _input: &KeyboardInput| false
+            }),
+            dispatch_layout: event!({
+                let mut last_width: f32 = 0.0;
+                let mut last_height: f32 = 0.0;
+                let mut last_x: f32 = 0.0;
+                let mut last_y: f32 = 0.0;
+                move |item: &mut ItemData,
+                      relative_x: f32,
+                      relative_y: f32,
+                      width: f32,
+                      height: f32| {
+                    if last_width != width
+                        || last_height != height
+                        || last_x != relative_x
+                        || last_y != relative_y
+                    {
+                        item.props.need_redraw.lock().need_redraw = true;
+                    }
+                    last_width = width;
+                    last_height = height;
+                    last_x = relative_x;
+                    last_y = relative_y;
+                    {
+                        let measure_frame = &item.measure_frame;
+                        if width != measure_frame.width || height != measure_frame.height {
+                            item.measure(
+                                MeasureMode::Specified(width),
+                                MeasureMode::Specified(height),
+                            );
+                        }
+                    }
+                    let visible = item.props().visible.get();
+                    let offset_x = item.props().offset_x.get();
+                    let offset_y = item.props().offset_y.get();
+                    let opacity = if visible {
+                        item.props().opacity.get()
+                    } else {
+                        0.0
+                    };
+                    let rotation = item.props().rotation.get();
+                    let scale_x = if visible {
+                        item.props().scale_x.get()
+                    } else {
+                        0.0
+                    };
+                    let scale_y = if visible {
+                        item.props().scale_y.get()
+                    } else {
+                        0.0
+                    };
+                    let skew_x = item.props().skew_x.get();
+                    let skew_y = item.props().skew_y.get();
+
+                    fn center(inner_position: InnerPosition, size: f32) -> f32 {
+                        match inner_position {
+                            InnerPosition::Start(offset) => offset,
+                            InnerPosition::Middle(offset) => size / 2.0 + offset,
+                            InnerPosition::End(offset) => size + offset,
+                            InnerPosition::Relative(fraction) => size * fraction,
+                            InnerPosition::Absolute(offset) => offset,
+                        }
+                    }
+
+                    {
+                        // let rotation_center_y = center(item.get_rotation_center_y().get(), height);
+                        // let scale_center_x = center(item.get_scale_center_x().get(), width);
+                        // let scale_center_y = center(item.get_scale_center_y().get(), height);
+                        // let skew_center_x = center(item.get_skew_center_x().get(), width);
+                        // let skew_center_y = center(item.get_skew_center_y().get(), height);
+                        let rotation_center_x = center(item.props().rotation_center_x.get(), width);
+                        let rotation_center_y = center(item.props().rotation_center_y.get(), height);
+                        let scale_center_x = center(item.props().scale_center_x.get(), width);
+                        let scale_center_y = center(item.props().scale_center_y.get(), height);
+                        let skew_center_x = center(item.props().skew_center_x.get(), width);
+                        let skew_center_y = center(item.props().skew_center_y.get(), height);
+
+                        {
+                            let target_frame = &mut item.target_frame;
+                            target_frame.set_relative_position(relative_x, relative_y);
+                            target_frame.width = width;
+                            target_frame.height = height;
+                            target_frame.opacity = opacity;
+                            target_frame.rotation = rotation;
+                            target_frame
+                                .set_rotation_center(rotation_center_x, rotation_center_y);
+                            target_frame.set_scale(scale_x, scale_y);
+                            target_frame.set_scale_center(scale_center_x, scale_center_y);
+                            target_frame.set_offset(offset_x, offset_y);
+                            target_frame.set_skew(skew_x, skew_y);
+                            target_frame.set_skew_center(skew_center_x, skew_center_y);
+                        }
+                    }
+
+                    // item.layout_layers(width, height);
+
+                    item.layout(width, height);
+
+                    {
+                        let target_frame = &mut item.target_frame;
+                        let blur = item.props.blur.get();
+                        target_frame.set_float_param("blur", blur);
+                    }
+
+                    {
+                        let background = item.props.background.clone();
+                        let mut background_lock = background.lock();
+                        if let Some(bg) = background_lock.as_mut() {
+                            bg.data().measure(
+                                MeasureMode::Specified(width),
+                                MeasureMode::Specified(height),
+                            );
+                            bg.data().dispatch_layout(0.0, 0.0, width, height);
+                        }
+                    }
+                    {
+                        let foreground = item.props.foreground.clone();
+                        let mut foreground_lock = foreground.lock();
+                        if let Some(fg) = foreground_lock.as_mut() {
+                            fg.data().measure(
+                                MeasureMode::Specified(width),
+                                MeasureMode::Specified(height),
+                            );
+                            fg.data().dispatch_layout(0.0, 0.0, width, height);
+                        }
+                    }
+                }
+            }),
+            dispatch_modifiers_change: event!({
+                |_item: &mut ItemData, _modifiers: &Modifiers| {}
+            }),
+            dispatch_mouse_input: event!({
+                // The mouse button that the item has captured.
+                // When the item captures a mouse button, the item can receive mouse input
+                // events even if the mouse pointer is outside the item.
+                let mut captured_mouse_button: HashSet<MouseButton> = HashSet::new();
+                // The source of the click event.
+                let mut click_source: Option<ClickSource> = None;
+                move |item: &mut ItemData, input: &MouseInput| {
+                    if !item.props.enable.get() {
+                        return false;
+                    }
+
+                    match input.pointer_state {
+                        PointerState::Started => {
+                            let item_state = item.props.item_state.clone();
+                            if item.props.enable.get() {
+                                item_state.set(ItemState::Pressed);
+                            }
+                        }
+                        PointerState::Ended | PointerState::Cancelled => {
+                            let item_state = item.props.item_state.clone();
+                            if item_state.get() == ItemState::Pressed && item.props.enable.get() {
+                                item_state.set(ItemState::Enabled);
+                            }
+                        }
+                        _ => {}
+                    }
+
+                    let mut children = item.children.lock();
+                    for child in children.iter_mut().rev() {
+                        if child.data().dispatch_mouse_input(input) {
+                            return true;
+                        }
+                    }
+                    drop(children);
+
+                    let frame = item.current_frame();
+                    if !captured_mouse_button.contains(&input.button)
+                        && !frame.contains(input.x, input.y)
+                    {
+                        return false;
+                    }
+
+                    let pointer_input = PointerInput::from(input);
+                    if item.on_pointer_input(&pointer_input) {
+                        return true;
+                    }
+                    if item.on_mouse_input(input) {
+                        return true;
+                    }
+                    if item.pointer_input(&pointer_input) {
+                        return true;
+                    }
+                    if item.mouse_input(input) {
+                        return true;
+                    }
+
+                    match input.pointer_state {
+                        PointerState::Started => {
+                            captured_mouse_button.insert(input.button);
+                            click_source = Some(ClickSource::Mouse(input.button));
+                            return true;
+                        }
+                        PointerState::Moved => {
+                            if captured_mouse_button.contains(&input.button) {
+                                return true;
+                            }
+                        }
+                        PointerState::Ended | PointerState::Cancelled => {
+                            captured_mouse_button.remove(&input.button);
+                            if frame.contains(input.x, input.y) {
+                                if let Some(click_source) = click_source.take() {
+                                    item.on_click(&click_source);
+                                    item.click_input(&click_source);
+                                }
+                            }
+                            return true;
+                        }
+                    }
+                    false
+                }
+            }),
+            dispatch_mouse_wheel_x: event!({ |_item: &mut ItemData, _input: &MouseWheel| false }),
+            dispatch_mouse_wheel_y: event!({ |_item: &mut ItemData, _input: &MouseWheel| false }),
+            dispatch_touch_input: event!({ |_item: &mut ItemData, _input: &TouchInput| { false } }),
+            draw: event!({ |_item: &mut ItemData, _canvas: &Canvas| {} }),
+            hover_changed: event!({ |_item: &mut ItemData, _is_hovered: bool| {} }),
+            focus_changed: event!({ |_item: &mut ItemData, _focus_state: &FocusState| {} }),
+            ime_input: event!({ |_item: &mut ItemData, _action: &ImeAction| {} }),
+            keyboard_input: event!({ |_item: &mut ItemData, _input: &KeyboardInput| {} }),
+            layout: event!({ |_item: &mut ItemData, _width: f32, _height: f32| {} }),
+            measure: event!({
+                |item: &mut ItemData, width_mode: MeasureMode, height_mode: MeasureMode| {
+                    item.measure_children(width_mode, height_mode);
+                    fn get_size(measure_mode: MeasureMode) -> f32 {
+                        match measure_mode {
+                            MeasureMode::Specified(value) => value,
+                            MeasureMode::Unspecified(_) => 0.0,
+                        }
+                    }
+                    let width = item.props.clamp_width(get_size(width_mode));
+                    let height = item.props.clamp_height(get_size(height_mode));
+                    let measure_frame = &mut item.measure_frame;
+                    measure_frame.width = width;
+                    measure_frame.height = height;
+                }
+            }),
+            modifiers_change: event!({ |_item: &mut ItemData, _modifiers: &Modifiers| {} }),
+            mouse_input: event!({ |_item: &mut ItemData, _input: &MouseInput| { false } }),
+            mouse_wheel_x: event!({ |_item: &mut ItemData, _input: &MouseWheel| { false } }),
+            mouse_wheel_y: event!({ |_item: &mut ItemData, _input: &MouseWheel| { false } }),
+            pointer_input: event!({ |_item: &mut ItemData, _input: &PointerInput| { false } }),
+        }
+    }
+}
+
+macro_rules! impl_noop {
+    ($($set:ident|$ty:ty|$invoke:ident|$ret:ty|$($arg_name:ident:$arg_type:ty);*),*) => {
+        $(
+            impl ItemEvent {
+                // pub fn $invoke(&self, item: &mut ItemData, $($arg_name: $arg_type),*) -> $ret {
+                //     self.$invoke.lock()(item, $($arg_name),*)
+                // }
+                pub fn $set(mut self, f: $ty) -> Self {
+                    self.$invoke = event!({f});
+                    self
+                }
+            }
+            impl ItemData {
+                pub fn $invoke(&mut self, $($arg_name: $arg_type),*) -> $ret {
+                    let event = self.event.$invoke.clone();
+                    let mut f = event.borrow_mut();
+                    f(self, $($arg_name),*)
+                }
+            }
+        )*
+    }
+}
+
+impl_noop!(
+    set_cursor_move|impl FnMut(&mut ItemData, &CursorMove) + 'static|cursor_move|()|cursor_move:&CursorMove,
+    set_click_input|impl FnMut(&mut ItemData, &ClickSource) + 'static|click_input|()|source:&ClickSource,
+    set_dispatch_cursor_move|impl FnMut(&mut ItemData, &CursorMove) + 'static|dispatch_cursor_move|()|cursor_move:&CursorMove,
+    set_dispatch_draw|impl FnMut(&mut ItemData, &mut Surface, f32, f32) + 'static|dispatch_draw|()|surface:&mut Surface;parent_x:f32;parent_y:f32,
+    set_dispatch_focus|impl FnMut(&mut ItemData, u32, bool) -> bool + 'static|dispatch_focus|bool|item_id:u32;has_parent_focus:bool,
+    set_dispatch_keyboard_input|impl FnMut(&mut ItemData, &KeyboardInput) -> bool + 'static|dispatch_keyboard_input|bool|input:&KeyboardInput,
+    set_dispatch_layout|impl FnMut(&mut ItemData, f32, f32, f32, f32) + 'static|dispatch_layout|()|x:f32;y:f32;width:f32;height:f32,
+    set_dispatch_modifiers_change|impl FnMut(&mut ItemData, &Modifiers) + 'static|dispatch_modifiers_change|()|modifiers:&Modifiers,
+    set_dispatch_mouse_input|impl FnMut(&mut ItemData, &MouseInput) -> bool + 'static|dispatch_mouse_input|bool|input:&MouseInput,
+    set_dispatch_mouse_wheel_x|impl FnMut(&mut ItemData, &MouseWheel) -> bool + 'static|dispatch_mouse_wheel_x|bool|input:&MouseWheel,
+    set_dispatch_mouse_wheel_y|impl FnMut(&mut ItemData, &MouseWheel) -> bool + 'static|dispatch_mouse_wheel_y|bool|input:&MouseWheel,
+    set_dispatch_touch_input|impl FnMut(&mut ItemData, &TouchInput) -> bool + 'static|dispatch_touch_input|bool|input:&TouchInput,
+    set_draw|impl FnMut(&mut ItemData, &Canvas) + 'static|draw|()|canvas:&Canvas,
+    set_focus_changed|impl FnMut(&mut ItemData, &FocusState) + 'static|focus_changed|()|focus_state:&FocusState,
+    set_hover_changed|impl FnMut(&mut ItemData, bool) + 'static|hover_changed|()|is_hovered:bool,
+    set_ime_input|impl FnMut(&mut ItemData, &ImeAction) + 'static|ime_input|()|action:&ImeAction,
+    set_keyboard_input|impl FnMut(&mut ItemData, &KeyboardInput) + 'static|keyboard_input|()|input:&KeyboardInput,
+    set_layout|impl FnMut(&mut ItemData, f32, f32) + 'static|layout|()|width:f32;height:f32,
+    set_measure|impl FnMut(&mut ItemData, MeasureMode, MeasureMode) + 'static|measure|()|width:MeasureMode;height:MeasureMode,
+    set_modifiers_change|impl FnMut(&mut ItemData, &Modifiers) + 'static|modifiers_change|()|modifiers:&Modifiers,
+    set_mouse_input|impl FnMut(&mut ItemData, &MouseInput) -> bool + 'static|mouse_input|bool|input:&MouseInput,
+    set_mouse_wheel_x|impl FnMut(&mut ItemData, &MouseWheel) -> bool + 'static|mouse_wheel_x|bool|input:&MouseWheel,
+    set_mouse_wheel_y|impl FnMut(&mut ItemData, &MouseWheel) -> bool + 'static|mouse_wheel_y|bool|input:&MouseWheel,
+    set_pointer_input|impl FnMut(&mut ItemData, &PointerInput) -> bool + 'static|pointer_input|bool|input:&PointerInput
+);

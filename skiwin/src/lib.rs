@@ -1,4 +1,4 @@
-pub mod cpu;
+// pub mod cpu;
 #[cfg(feature = "vulkan")]
 pub mod vulkan;
 #[cfg(feature = "vulkan")]
@@ -11,17 +11,18 @@ pub mod gl;
 pub use glutin;
 
 use parking_lot::Mutex;
+use pixels::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+use pixels::wgpu::WindowHandle;
 use skia_safe::gpu::{Budgeted, DirectContext, SurfaceOrigin};
 use skia_safe::{ImageInfo, Surface};
-use softbuffer::SoftBufferError;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
 pub trait SkiaWindow: Deref<Target = Window> {
     // fn resumed(&mut self);
-    fn resize(&mut self) -> Result<(), SoftBufferError>;
+    fn resize(&mut self);
     fn surface(&self) -> Arc<Mutex<Surface>>;
     fn present(&mut self);
 }
@@ -34,6 +35,7 @@ pub(crate) fn create_surface(
     let width = size.width;
     let height = size.height;
     let image_info = ImageInfo::new_n32_premul((width as i32, height as i32), None);
+        // .with_color_type(ColorType::RGBA8888);
     Arc::new(Mutex::new(
         skia_safe::gpu::surfaces::render_target(
             skia_context,
@@ -53,18 +55,11 @@ pub(crate) fn create_surface(
 macro_rules! impl_skia_window {
     ($ty:ty) => {
         impl SkiaWindow for $ty {
-            fn resize(&mut self) -> Result<(), SoftBufferError> {
+            fn resize(&mut self) {
                 let size = self.soft_buffer_surface.window().inner_size();
                 let width = NonZeroU32::new(size.width).unwrap();
                 let height = NonZeroU32::new(size.height).unwrap();
                 let result = self.soft_buffer_surface.resize(width, height);
-                match result {
-                    Ok(_) => {
-                        self.skia_surface = create_surface(&mut self.skia_context, size);
-                        Ok(())
-                    }
-                    Err(e) => Err(e),
-                }
             }
 
             fn surface(&self) -> Arc<Mutex<Surface>> {

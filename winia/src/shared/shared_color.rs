@@ -1,6 +1,5 @@
-use crate::shared::{SharedDerived, SharedSource};
-use skia_safe::{Color, Color4f};
-use crate::depend;
+use crate::shared::{SharedAnimation, SharedDerived, SharedSource};
+use crate::ui::Color;
 
 pub type SharedColor = SharedSource<Color>;
 pub type SharedDerivedColor = SharedDerived<Color>;
@@ -21,42 +20,23 @@ impl SharedColor {
     }
 
     pub fn from_argb_f(a: f32, r: f32, g: f32, b: f32) -> Self {
-        SharedSource::new(Color4f::new(r, g, b, a).to_color())
+        SharedSource::new(Color::from_argb_f(a, r, g, b))
     }
 
     pub fn from_rgb_f(r: f32, g: f32, b: f32) -> Self {
-        SharedSource::new(Color4f::new(r, g, b, 1.0).to_color())
+        SharedSource::new(Color::from_rgb_f(r, g, b))
     }
+}
 
-    pub fn set_a(&self, a: u8) -> SharedDerivedColor {
-        let this = self.clone();
-        SharedDerivedColor::from_fn(depend!(this), move || {
-            let color = this.get();
-            Color::from_argb(a, color.r(), color.g(), color.b())
-        })
-    }
-
-    pub fn set_r(&self, r: u8) -> SharedDerivedColor {
-        let this = self.clone();
-        SharedDerivedColor::from_fn(depend!(this), move || {
-            let color = this.get();
-            Color::from_argb(color.a(), r, color.g(), color.b())
-        })
-    }
-
-    pub fn set_g(&self, g: u8) -> SharedDerivedColor {
-        let this = self.clone();
-        SharedDerivedColor::from_fn(depend!(this), move || {
-            let color = this.get();
-            Color::from_argb(color.a(), color.r(), g, color.b())
-        })
-    }
-
-    pub fn set_b(&self, b: u8) -> SharedDerivedColor {
-        let this = self.clone();
-        SharedDerivedColor::from_fn(depend!(this), move || {
-            let color = this.get();
-            Color::from_argb(color.a(), color.r(), color.g(), b)
-        })
+impl SharedColor {
+    pub fn animation_to_color(&self, to: impl Into<Color>) -> SharedAnimation<Color> {
+        SharedAnimation::new(
+            self.clone(),
+            self.get(),
+            to.into(),
+            Box::new(|from: &Color, to: &Color, progress: f32| {
+                from.interpolate(to, progress)
+            }),
+        )
     }
 }
