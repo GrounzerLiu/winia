@@ -1,0 +1,8 @@
+[package]
+name = "winia_test2"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+winia = { path = "../winia" }
+gpu_renderer = { path = "../gpu_renderer" , features = ["vulkan", "opengl"] }
