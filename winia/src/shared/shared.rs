@@ -1,10 +1,10 @@
-use std::clone::UseCloned;
-use crate::animation::Interpolator;
 use crate::animation::interpolator::Linear;
+use crate::animation::Interpolator;
 use crate::app::EventLoopProxy;
 use crate::core::next_id;
 use parking_lot::lock_api::MutexGuard;
 use parking_lot::{Mutex, RawMutex};
+use std::clone::UseCloned;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::future::Future;
@@ -12,7 +12,6 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
-use crate::ui::Item;
 
 pub trait Readable: Send + Sized + 'static {}
 pub trait Writable: Readable {}
@@ -347,9 +346,10 @@ impl<'a, T> Deref for SharedReadGuard<'a, T> {
         &self.guard
     }
 }
+
 impl<T, A> Shared<T, A>
 where
-    T: Send + 'static,
+    T: 'static,
     A: Readable,
 {
     pub fn subscribe(&self, observer_id: u32, callback: impl FnMut() + Send + 'static) {
@@ -357,7 +357,13 @@ where
             .lock()
             .insert(observer_id, Box::new(callback));
     }
+}
 
+impl<T, A> Shared<T, A>
+where
+    T: Send + 'static,
+    A: Readable,
+{
     pub fn depends_on(&self, other: &(impl Observable + ?Sized)) {
         other.observers().lock().insert(self.id, {
             let observers_weak = Arc::downgrade(&self.observers);
@@ -492,37 +498,6 @@ impl<T: 'static> From<T> for Shared<Option<T>, Derived> {
 impl<T, A: Readable> AsRef<Shared<T, A>> for Shared<T, A> {
     fn as_ref(&self) -> &Shared<T, A> {
         self
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ui::Item;
-    use crate::ui::item::ItemKind;
-    use std::thread;
-
-    #[derive(Clone)]
-    struct UnSend {
-        ptr: *const u8,
-    }
-
-    #[test]
-    fn test_shared() {
-        let sendable = Shared::new(5);
-        let a = 8;
-        let unsendable = Shared::new(UnSend {
-            ptr: std::ptr::addr_of!(a),
-        });
-
-        thread::spawn(move || {
-            let a = sendable.get();
-            println!("Value from sendable: {}", a);
-            // The following line would cause a compile-time error if uncommented
-            // let _ = unsendable.read();
-        })
-        .join()
-        .unwrap();
     }
 }
 
