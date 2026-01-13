@@ -21,12 +21,12 @@ pub struct VulkanSkiaWindow {
     skia_surface: Arc<Mutex<Surface>>,
     // skia_context: DirectContext,
     vulkan_context: VulkanContext,
-    window: Arc<Window>,
+    window: Arc<Box<dyn Window>>,
 }
 
 impl VulkanSkiaWindow {
     pub fn new(
-        window: Arc<Window>,
+        window: Arc<Box<dyn Window>>,
         device_selector: Option<Box<dyn Fn(&PhysicalDevice) -> bool>>,
     ) -> Self {
         let vulkan_context = VulkanContext::new(window.title().as_str(), device_selector);
@@ -58,7 +58,7 @@ impl VulkanSkiaWindow {
         };
 
         // let window = Arc::new(window);
-        let size = window.inner_size();
+        let size = window.surface_size();
         let skia_surface = create_surface(&mut skia_context, size);
         let pixels = {
             let surface_texture = pixels::SurfaceTexture::new(size.width, size.height, window.clone());
@@ -106,7 +106,7 @@ fn create_surface(
 
 impl SkiaWindow for VulkanSkiaWindow {
     fn resize(&mut self) {
-        let size = self.window.inner_size();
+        let size = self.window.surface_size();
         self.pixels.resize_buffer(size.width, size.height).unwrap();
         self.pixels.resize_surface(size.width, size.height).unwrap();
 /*        self.skia_surface = Arc::new(Mutex::new(self.skia_surface.lock().new_surface_with_dimensions(
@@ -136,7 +136,7 @@ impl SkiaWindow for VulkanSkiaWindow {
         // );
         // soft_buffer.present().unwrap();
         let frame = self.pixels.frame_mut();
-        let size = self.window.inner_size();
+        let size = self.window.surface_size();
         let image_info =
             ImageInfo::new_n32_premul((size.width as i32, size.height as i32), None);
         self.skia_surface.lock().read_pixels(
@@ -149,15 +149,15 @@ impl SkiaWindow for VulkanSkiaWindow {
     }
 }
 impl Deref for VulkanSkiaWindow {
-    type Target = Window;
+    type Target = dyn Window;
 
     fn deref(&self) -> &Self::Target {
-        self.window.as_ref()
+        self.window.as_ref().as_ref()
     }
 }
-impl AsRef<Window> for VulkanSkiaWindow {
-    fn as_ref(&self) -> &Window {
-        self.window.as_ref()
+impl AsRef<dyn Window> for VulkanSkiaWindow {
+    fn as_ref(&self) -> &dyn Window {
+        self.window.as_ref().as_ref()
     }
 }
 

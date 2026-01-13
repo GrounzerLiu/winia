@@ -3,9 +3,10 @@ mod orientation;
 mod layout;
 mod size;
 mod alignment;
-mod widget;
+pub mod widget;
 mod color;
 mod inner_position;
+mod lazy_list_state;
 
 pub use item::Item;
 pub use orientation::*;
@@ -15,6 +16,7 @@ pub use layout::*;
 pub use widget::*;
 pub use color::*;
 pub use inner_position::*;
+pub use lazy_list_state::*;
 
 // fn bind_property() {
 //

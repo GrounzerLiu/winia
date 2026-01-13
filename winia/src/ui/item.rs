@@ -6,10 +6,11 @@ mod item_props;
 mod physical_x;
 mod item_state;
 mod focus_requester;
+mod item_updater;
 
 pub use crate::ui::alignment::*;
 pub use crate::ui::size::*;
-use crate::{calculate_animation_value, override_animation};
+use crate::{calculate_animation_value, depend, override_animation};
 pub use children::*;
 pub use focus_requester::*;
 pub use frame::*;
@@ -17,12 +18,13 @@ pub use item_event::*;
 pub use item_props::*;
 pub use item_state::*;
 pub use physical_x::*;
+pub use item_updater::*;
 
 use std::fmt::Debug;
-use std::ops::{Add, DerefMut};
+use std::ops::{Add, Deref, DerefMut};
 
 use crate::animation::LayoutAnimation;
-use crate::app::WindowContext;
+use crate::app::{EventLoopProxy, WindowContext};
 use crate::core::next_id;
 use crate::lock_api::MutexGuard;
 use crate::shared::{Derived, Shared, SharedDerived, SharedDerivedBool, SharedSource};
@@ -33,6 +35,8 @@ use parking_lot::{Mutex, RawMutex};
 use skia_safe::Picture;
 use std::rc::Rc;
 use std::sync::Arc;
+use getset::Getters;
+use winit::event::ButtonSource;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LayoutDirection {
@@ -57,35 +61,6 @@ impl ItemKind {
     }
 }
 
-#[derive(Clone)]
-pub struct NeedRedraw {
-    pub is_fixed_size: SharedDerivedBool,
-    pub need_redraw: bool,
-    pub parent: Option<std::sync::Weak<Mutex<NeedRedraw>>>,
-}
-
-impl NeedRedraw {
-    pub fn request(&mut self) {
-        // if self.need_layout {
-        //     return;
-        // }
-        self.need_redraw = true;
-        let mut parent = self.parent.clone();
-        while let Some(p) = &mut parent {
-            if let Some(p) = p.upgrade() {
-                let mut p = p.lock();
-                // p.need_layout = true;
-                p.need_redraw = true;
-                if p.is_fixed_size.get() {
-                    break;
-                }
-                parent = p.parent.clone();
-            } else {
-                break;
-            }
-        }
-    }
-}
 
 #[derive(Copy, Clone, Debug, Default)]
 pub struct FocusState {
@@ -95,6 +70,12 @@ pub struct FocusState {
     pub is_captured: bool,
 }
 
+pub trait ItemPropsTrait {
+    fn bind(&self, id: u32);
+    fn to_item_props(self) -> ItemProps;
+}
+
+#[derive(Getters)]
 pub struct ItemData {
     animations: Animations,
     children: SharedDerived<Vec<Item>>,
@@ -104,6 +85,8 @@ pub struct ItemData {
     pub focus_state: FocusState,
     kind: ItemKind,
     pub measure_frame: Frame,
+    pub last_measure_width_mode: Option<MeasureMode>,
+    pub last_measure_height_mode: Option<MeasureMode>,
     // pub needs_draw: Arc<Mutex<bool>>,
     props: ItemProps,
     recorded_frame: Option<Frame>,
@@ -113,26 +96,44 @@ pub struct ItemData {
 impl ItemData {
     pub fn new(
         kind: ItemKind,
-        props: ItemProps,
+        props: impl ItemPropsTrait,
         event: ItemEvent,
         children: impl Into<SharedDerived<Vec<Item>>>,
     ) -> Self {
+        let id = next_id();
+        props.bind(id);
         let children = children.into();
+        let props = props.to_item_props();
 
+        let width = props.width.clone();
+        let height = props.height.clone();
+        props.item_updater.lock().is_fixed_size = SharedDerivedBool::from_fn(
+            depend!(width, height),
+            move || {
+                let width = width.get();
+                let height = height.get();
+                matches!(
+                    (width, height),
+                    (Size::Fixed(_), Size::Fixed(_))
+                    | (Size::Fill, Size::Fill)
+                    | (Size::Fixed(_), Size::Fill)
+                    | (Size::Fill, Size::Fixed(_))
+                )
+            },
+        );
         {
             let children = children.lock();
             for child in children.iter() {
                 let child_data = child.data();
-                child_data.props.need_redraw.lock().parent = Some(Arc::downgrade(&props.need_redraw));
+                child_data.props.item_updater.lock().parent = Some(Arc::downgrade(&props.item_updater));
             }
         }
-        let id = next_id();
 
-        props.focus_requester.lock().set_event_loop_proxy(props.window_context.event_loop_proxy.clone());
+        props.focus_requester.lock().set_event_loop_proxy(props.window_context.event_loop_proxy().clone());
         props.focus_requester.lock().set_focusable(&props.focusable);
         props.focus_requester.lock().set_item_id(id);
 
-        props.bind(id, &props.need_redraw, &props.window_context);
+        // props.bind(id, &props.need_redraw, &props.window_context);
         Self {
             animations: Default::default(),
             children,
@@ -143,12 +144,14 @@ impl ItemData {
             kind,
             measure_frame: Frame::default(),
             // needs_draw,
+            last_measure_width_mode: None,
+            last_measure_height_mode: None,
             props,
             recorded_frame: None,
             target_frame: Frame::default(),
         }
     }
-    
+
     pub fn children(&self) -> &Shared<Vec<Item>, Derived> {
         &self.children
     }
@@ -213,91 +216,89 @@ impl ItemData {
             });
         frame
     }
-    
-    pub(crate) fn dispatch_animation(&mut self, animation: &LayoutAnimation, forced: bool) {
+
+    pub fn dispatch_animation(&mut self, animation: &LayoutAnimation, forced: bool) {
         let (animatable, children_force) = animation.animatable(self.id, forced);
 
-        if animatable {
-            if let Some(recorded_frame) = self.recorded_frame.clone() {
-                let target_frame = self.target_frame.clone();
-                override_animations!(
-                    animation,
-                    recorded_frame,
-                    target_frame,
-                    self,
-                    relative_x,
-                    relative_y,
-                    width,
-                    height,
-                    offset_x,
-                    offset_y,
-                    opacity,
-                    rotation,
-                    rotation_center_x,
-                    rotation_center_y,
-                    scale_x,
-                    scale_y,
-                    scale_center_x,
-                    scale_center_y,
-                    skew_x,
-                    skew_y,
-                    skew_center_x,
-                    skew_center_y
-                );
+        if animatable && let Some(recorded_frame) = self.recorded_frame.clone() {
+            let target_frame = self.target_frame.clone();
+            override_animations!(
+                animation,
+                recorded_frame,
+                target_frame,
+                self,
+                relative_x,
+                relative_y,
+                width,
+                height,
+                offset_x,
+                offset_y,
+                opacity,
+                rotation,
+                rotation_center_x,
+                rotation_center_y,
+                scale_x,
+                scale_y,
+                scale_center_x,
+                scale_center_y,
+                skew_x,
+                skew_y,
+                skew_center_x,
+                skew_center_y
+            );
 
-                {
-                    target_frame.float_params.iter().for_each(|(key, end)| {
-                        let target_changed =
-                            if let Some((_, end, _)) = self.animations.float_params.get(key) {
-                                if let Some(target) = target_frame.float_params.get(key) {
-                                    target != end
-                                } else {
-                                    true
-                                }
+            {
+                target_frame.float_params.iter().for_each(|(key, end)| {
+                    let target_changed =
+                        if let Some((_, end, _)) = self.animations.float_params.get(key) {
+                            if let Some(target) = target_frame.float_params.get(key) {
+                                target != end
                             } else {
                                 true
-                            };
-
-                        if let Some(start) = recorded_frame.float_params.get(key) {
-                            if (*start - *end).abs() > 0.1 && target_changed {
-                                self.animations
-                                    .float_params
-                                    .insert(key.clone(), (*start, *end, animation.clone()));
                             }
-                        } else if target_changed {
+                        } else {
+                            true
+                        };
+
+                    if let Some(start) = recorded_frame.float_params.get(key) {
+                        if (*start - *end).abs() > 0.1 && target_changed {
                             self.animations
                                 .float_params
-                                .insert(key.clone(), (0.0, *end, animation.clone()));
+                                .insert(key.clone(), (*start, *end, animation.clone()));
                         }
-                    });
-                }
+                    } else if target_changed {
+                        self.animations
+                            .float_params
+                            .insert(key.clone(), (0.0, *end, animation.clone()));
+                    }
+                });
+            }
 
-                {
-                    target_frame.color_params.iter().for_each(|(key, end)| {
-                        let target_changed =
-                            if let Some((_, end, _)) = self.animations.color_params.get(key) {
-                                if let Some(target) = target_frame.color_params.get(key) {
-                                    target != end
-                                } else {
-                                    true
-                                }
+            {
+                target_frame.color_params.iter().for_each(|(key, end)| {
+                    let target_changed =
+                        if let Some((_, end, _)) = self.animations.color_params.get(key) {
+                            if let Some(target) = target_frame.color_params.get(key) {
+                                target != end
                             } else {
                                 true
-                            };
-
-                        if let Some(start) = recorded_frame.color_params.get(key) {
-                            if start != end && target_changed {
-                                self.animations
-                                    .color_params
-                                    .insert(key.clone(), (*start, *end, animation.clone()));
                             }
-                        } else if target_changed {
+                        } else {
+                            true
+                        };
+
+                    if let Some(start) = recorded_frame.color_params.get(key) {
+                        if start != end && target_changed {
                             self.animations
                                 .color_params
-                                .insert(key.clone(), (Color::TRANSPARENT, *end, animation.clone()));
+                                .insert(key.clone(), (*start, *end, animation.clone()));
                         }
-                    });
-                }
+                    } else if target_changed {
+                        self.animations
+                            .color_params
+                            .insert(key.clone(), (Color::TRANSPARENT, *end, animation.clone()));
+                    }
+                });
             }
         }
 
@@ -356,50 +357,11 @@ impl ItemData {
     pub fn id(&self) -> u32 {
         self.id
     }
-    
-    pub fn on_cursor_move(&mut self, cursor_move: &CursorMove) {
-        if let Some(on_cursor_move) = &mut self.props.on_cursor_move {
-            on_cursor_move(cursor_move);
-        }
-    }
-
-    pub fn on_click(&mut self, click_source: &ClickSource) {
-        if let Some(on_click) = &mut self.props.on_click {
-            on_click(click_source);
-        }
-    }
-    
-    pub fn on_focus_changed(&mut self, focus_state: &FocusState) {
-        if let Some(on_focus_changed) = &mut self.props.on_focus_changed {
-            on_focus_changed(focus_state);
-        }
-    }
-    
-    pub fn on_hover_changed(&mut self, is_hovered: bool) {
-        if let Some(on_hover_changed) = &mut self.props.on_hover_changed {
-            on_hover_changed(is_hovered);
-        }
-    }
-
-    pub fn on_mouse_input(&mut self, input: &MouseInput) -> bool {
-        if let Some(on_mouse_input) = &mut self.props.on_mouse_input {
-            on_mouse_input(input)
-        } else {
-            false
-        }
-    }
-
-    pub fn on_pointer_input(&mut self, input: &PointerInput) -> bool {
-        if let Some(on_pointer_input) = &mut self.props.on_pointer_input {
-            on_pointer_input(input)
-        } else {
-            false
-        }
-    }
 
     pub fn item_event(&self) -> &ItemEvent {
         &self.event
     }
+
 
     pub fn measure_children(&mut self, width_mode: MeasureMode, height_mode: MeasureMode) {
         let padding_h = self.get_padding(Orientation::Horizontal);
@@ -410,12 +372,51 @@ impl ItemData {
             let mut child_data = child.data();
             let child_width = child_data.props.width.get();
             let child_height = child_data.props.height.get();
-            child_data.measure(
+            child_data.dispatch_measure(
                 child_width.create_measure_mode(max_width),
                 child_height.create_measure_mode(max_height),
             );
         });
     }
+
+    pub fn on_click(&mut self, button_source: &ButtonSource) {
+        if let Some(on_click) = &mut self.props.on_click {
+            on_click(button_source);
+        }
+    }
+
+    pub fn on_focus_changed(&mut self, focus_state: &FocusState) {
+        if let Some(on_focus_changed) = &mut self.props.on_focus_changed {
+            on_focus_changed(focus_state);
+        }
+    }
+
+    pub fn on_hover_changed(&mut self, is_hovered: bool) {
+        if let Some(on_hover_changed) = &mut self.props.on_hover_changed {
+            on_hover_changed(is_hovered);
+        }
+    }
+
+    pub fn on_pointer_button(&mut self, input: &PointerButton) -> bool {
+        if let Some(on_pointer_button) = &mut self.props.on_pointer_button {
+            on_pointer_button(input)
+        } else {
+            false
+        }
+    }
+    pub fn on_pointer_moved(&mut self, input: &PointerMoved) -> bool {
+        if let Some(on_pointer_moved) = &mut self.props.on_pointer_moved {
+            on_pointer_moved(input)
+        } else {
+            false
+        }
+    }
+
+    pub fn on_state_changed(&mut self, state: ItemState) {
+        let item_state = self.props.item_state.clone();
+        (self.props.on_state_changed)(item_state, state);
+    }
+
 
     pub fn props(&self) -> &ItemProps {
         &self.props
@@ -425,10 +426,43 @@ impl ItemData {
         self.children.lock().iter_mut().for_each(|child| {
             child.data().record_frame();
         });
+        if let Some(background) = self.props.background.lock().deref_mut() {
+            background.data().record_frame();
+        }
+        if let Some(foreground) = self.props.foreground.lock().deref_mut() {
+            foreground.data().record_frame();
+        }
+    }
+
+    pub fn re_layout(&mut self) {
+        let target_frame = &self.target_frame;
+        self.dispatch_layout(
+            target_frame.relative_x,
+            target_frame.relative_y,
+            target_frame.width,
+            target_frame.height,
+        );
+    }
+    pub fn re_measure(&mut self, max_width: f32, max_height: f32) {
+        let width = self.props.width.get();
+        let height = self.props.height.get();
+        let width_mode = self.last_measure_width_mode
+            .unwrap_or(width.create_measure_mode(max_width));
+        let height_mode = self.last_measure_height_mode
+            .unwrap_or(height.create_measure_mode(max_height));
+        self.dispatch_measure(width_mode, height_mode);
     }
 
     pub fn window_context(&self) -> &WindowContext {
         &self.props.window_context
+    }
+}
+
+impl Deref for ItemData {
+    type Target = ItemProps;
+
+    fn deref(&self) -> &Self::Target {
+        &self.props
     }
 }
 
@@ -440,7 +474,7 @@ impl Item {
     pub fn new(
         kind: ItemKind,
         event: ItemEvent,
-        props: ItemProps,
+        props: impl ItemPropsTrait,
         children: impl Into<SharedDerived<Vec<Item>>>,
     ) -> Self {
         let data = ItemData::new(kind, props, event, children);
@@ -448,7 +482,7 @@ impl Item {
             data: Rc::new(Mutex::new(data)),
         }
     }
-    
+
     pub fn data(&self) -> MutexGuard<'_, RawMutex, ItemData> {
         self.data.lock()
     }
@@ -462,9 +496,9 @@ impl Debug for Item {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let data = self.data();
         f.debug_struct("Item")
-            .field("id", &data.id)
-            .field("kind", &data.kind)
-            .finish()
+         .field("id", &data.id)
+         .field("kind", &data.kind)
+         .finish()
     }
 }
 

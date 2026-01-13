@@ -4,7 +4,9 @@ use crate::Theme;
 use crate::theme::{color, elevation, shape, typescale};
 use crate::theme::shape::Corner;
 use crate::theme::typescale::TypeScale;
+use crate::ui::button::button_style::{apply_elevated_button_style, apply_filled_button_style};
 use crate::ui::Color;
+use crate::ui::slider_style::apply_slider_style;
 // use crate::ui::component::divider::style::add_divider_style;
 
 fn argb_to_u32(a: u8, r: u8, g: u8, b: u8) -> u32 {
@@ -150,6 +152,9 @@ pub fn material_theme(color: Color, is_dark: bool) -> Theme {
     add_shape_corner(&mut theme);
     add_typescale(&mut theme);
 
+    apply_elevated_button_style(&mut theme);
+    apply_filled_button_style(&mut theme);
+    apply_slider_style(&mut theme);
     // divider_style(&mut theme);
 
     theme

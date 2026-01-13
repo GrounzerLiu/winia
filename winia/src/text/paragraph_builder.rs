@@ -1,10 +1,58 @@
 use crate::shared::SharedDrawable;
 use crate::text::paragraph::Paragraph;
-use bimap::BiBTreeMap;
 use skia_safe::textlayout::{FontCollection, ParagraphBuilder as SkParagraphBuilder, ParagraphStyle, PlaceholderAlignment, PlaceholderStyle, TextBaseline, TextStyle};
 use std::collections::HashSet;
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
+
+#[derive(Debug, Clone)]
+pub(crate) struct IndexBiMap {
+    left: Vec<usize>,
+    right: Vec<usize>,
+}
+
+impl IndexBiMap {
+    pub fn new() -> Self {
+        IndexBiMap {
+            left: Vec::new(),
+            right: Vec::new(),
+        }
+    }
+
+    pub fn insert(&mut self, left: usize, right: usize) {
+        self.left.push(left);
+        self.right.push(right);
+    }
+
+    pub fn get_by_left(&self, left: &usize) -> Option<&usize> {
+        if let Some(left_index) = self.left.binary_search(left).ok() {
+            self.right.get(left_index)
+        } else {
+            None
+        }
+    }
+
+    pub fn get_by_right(&self, right: &usize) -> Option<&usize> {
+        if let Some(right_index) = self.right.binary_search(right).ok() {
+            self.left.get(right_index)
+        } else {
+            None
+        }
+    }
+
+    pub fn contains_left(&self, left: &usize) -> bool {
+        self.left.binary_search(left).is_ok()
+    }
+
+    pub fn contains_right(&self, right: &usize) -> bool {
+        self.right.binary_search(right).is_ok()
+    }
+
+    pub fn clear(&mut self) {
+        self.left.clear();
+        self.right.clear();
+    }
+}
 
 pub struct ParagraphBuilder {
     paragraph_builder: SkParagraphBuilder,
@@ -12,11 +60,11 @@ pub struct ParagraphBuilder {
     last_byte_index: usize,
     last_real_index: usize,
     last_utf16_index: usize,
-    last_glyph_index: usize,
+    last_grapheme_cluster_index: usize,
     line_breaks: HashSet<Range<usize>>,
-    paragraph_byte_to_real_index: BiBTreeMap<usize, usize>,
-    byte_to_utf16_indices: BiBTreeMap<usize, usize>,
-    byte_to_glyph_indices: BiBTreeMap<usize, usize>,
+    paragraph_byte_to_real_indices: IndexBiMap,
+    byte_to_utf16_indices: IndexBiMap,
+    byte_to_grapheme_cluster_indices: IndexBiMap,
 }
 
 impl ParagraphBuilder {
@@ -26,12 +74,12 @@ impl ParagraphBuilder {
         let last_byte_index = 0;
         let last_real_index = 0;
         let last_utf16_index = 0;
-        let last_glyph_index = 0;
+        let last_grapheme_cluster_index = 0;
         
         let line_breaks = HashSet::new();
-        let paragraph_byte_to_real_index = BiBTreeMap::new();
-        let byte_to_utf16_indices = BiBTreeMap::new();
-        let byte_to_glyph_indices = BiBTreeMap::new();
+        let paragraph_byte_to_real_indices = IndexBiMap::new();
+        let byte_to_utf16_indices = IndexBiMap::new();
+        let byte_to_grapheme_cluster_indices = IndexBiMap::new();
 
         ParagraphBuilder {
             paragraph_builder,
@@ -39,11 +87,11 @@ impl ParagraphBuilder {
             last_byte_index,
             last_real_index,
             last_utf16_index,
-            last_glyph_index,
+            last_grapheme_cluster_index,
             line_breaks,
-            paragraph_byte_to_real_index,
+            paragraph_byte_to_real_indices,
             byte_to_utf16_indices,
-            byte_to_glyph_indices,
+            byte_to_grapheme_cluster_indices,
         }
     }
     
@@ -70,40 +118,47 @@ impl ParagraphBuilder {
         let mut last_real_index = 0;
         let mut last_byte_index = 0;
         let mut last_utf16_index = 0;
-        let mut last_glyph_index = 0;
+        let mut last_grapheme_cluster_index = 0;
 
-        str.grapheme_indices(false)
+        str.grapheme_indices(true)
             .enumerate()
-            .for_each(|(glyph_index, (byte_index, str))| {
-                let m_byte_index = self.last_byte_index + byte_index;
-                self.byte_to_utf16_indices
-                    .insert(
-                        m_byte_index,
-                        self.last_utf16_index + last_utf16_index
-                    );
-                self.byte_to_glyph_indices.insert(
-                    m_byte_index,
-                    self.last_glyph_index + glyph_index
-                );
-                self.paragraph_byte_to_real_index
-                    .insert(m_byte_index, self.last_real_index + byte_index);
-
-                let utf16_length = str.encode_utf16().count();
-                last_utf16_index += utf16_length;
-
+            .for_each(|(grapheme_cluster_index, (byte_index, str))| {
                 if str == "\r\n" || str == "\n" || str == "\r" {
                     let index = self.last_real_index + byte_index;
                     self.line_breaks.insert(index..index + str.len());
                 }
-                last_glyph_index = glyph_index + 1;
-                last_byte_index = m_byte_index + str.len();
-                last_real_index = byte_index + str.len();
+                let m_byte_index = self.last_byte_index + byte_index;
+                self.byte_to_grapheme_cluster_indices.insert(
+                    m_byte_index,
+                    self.last_grapheme_cluster_index + grapheme_cluster_index
+                );
+
+                str.char_indices().for_each(|(index, char)|{
+                    let m_byte_index = m_byte_index + index;
+                    self.byte_to_utf16_indices
+                        .insert(
+                            m_byte_index,
+                            self.last_utf16_index + last_utf16_index
+                        );
+                    self.paragraph_byte_to_real_indices
+                        .insert(m_byte_index, self.last_real_index + byte_index + index);
+
+
+                    let utf16_length = char.len_utf16();
+                    let uft8_length = char.len_utf8();
+                    last_utf16_index += utf16_length;
+                    last_byte_index = m_byte_index + uft8_length;
+                    last_real_index = byte_index + index + uft8_length;
+                    // println!("last_byte_index: {}, last_real_index: {}, last_utf16_index: {}", last_byte_index, last_real_index, last_utf16_index);
+                });
+                last_grapheme_cluster_index = grapheme_cluster_index + 1;
             });
         
         self.last_real_index += last_real_index;
         self.last_byte_index = last_byte_index;
         self.last_utf16_index += last_utf16_index;
-        self.last_glyph_index += last_glyph_index;
+        // println!("self.last_byte_index: {}, self.last_real_index: {}, self.last_utf16_index: {}", self.last_byte_index, self.last_real_index, self.last_utf16_index);
+        self.last_grapheme_cluster_index += last_grapheme_cluster_index;
 
         self.paragraph_builder.add_text(str);
     }
@@ -119,18 +174,18 @@ impl ParagraphBuilder {
             return;
         }
         
-        self.paragraph_byte_to_real_index.insert(self.last_byte_index, self.last_real_index);
+        self.paragraph_byte_to_real_indices.insert(self.last_byte_index, self.last_real_index);
         self.byte_to_utf16_indices.insert(self.last_byte_index, self.last_utf16_index);
-        self.byte_to_glyph_indices.insert(self.last_byte_index, self.last_glyph_index);
+        self.byte_to_grapheme_cluster_indices.insert(self.last_byte_index, self.last_grapheme_cluster_index);
 
         let placeholder_str = String::from_utf16(&[0xFFFC]).unwrap();
         let placeholder_byte_len = placeholder_str.len();
         let placeholder_utf16_len = placeholder_str.encode_utf16().count();
-        let placeholder_glyph_len = placeholder_str.graphemes(false).count();
+        let placeholder_grapheme_cluster_len = placeholder_str.graphemes(true).count();
         self.last_real_index += str.len();
         self.last_byte_index += placeholder_byte_len;
         self.last_utf16_index += placeholder_utf16_len;
-        self.last_glyph_index += placeholder_glyph_len;
+        self.last_grapheme_cluster_index += placeholder_grapheme_cluster_len;
         
         
         let width = placeholder.lock().width();
@@ -165,17 +220,20 @@ impl ParagraphBuilder {
     }
 
     pub fn build(&mut self) -> Paragraph {
-        self.paragraph_byte_to_real_index.insert(self.last_byte_index, self.last_real_index);
+        self.paragraph_byte_to_real_indices.insert(self.last_byte_index, self.last_real_index);
         self.byte_to_utf16_indices.insert(self.last_byte_index, self.last_utf16_index);
-        self.byte_to_glyph_indices.insert(self.last_byte_index, self.last_glyph_index);
+        self.byte_to_grapheme_cluster_indices.insert(self.last_byte_index, self.last_grapheme_cluster_index);
+        // println!("paragraph_byte_to_real_index: {:?}", self.paragraph_byte_to_real_index);
+        // println!("byte_to_utf16_indices: {:?}", self.byte_to_utf16_indices);
+        // println!("byte_to_grapheme_cluster_indices: {:?}", self.byte_to_grapheme_cluster_indices);
         let paragraph = self.paragraph_builder.build();
         Paragraph::new(
             paragraph,
             &self.placeholders,
             &self.line_breaks,
-            &self.paragraph_byte_to_real_index,
+            &self.paragraph_byte_to_real_indices,
             &self.byte_to_utf16_indices,
-            &self.byte_to_glyph_indices,
+            &self.byte_to_grapheme_cluster_indices,
         )
     }
     
@@ -189,11 +247,11 @@ impl ParagraphBuilder {
         self.last_byte_index = 0;
         self.last_real_index = 0;
         self.last_utf16_index = 0;
-        self.last_glyph_index = 0;
+        self.last_grapheme_cluster_index = 0;
         self.line_breaks.clear();
-        self.paragraph_byte_to_real_index.clear();
+        self.paragraph_byte_to_real_indices.clear();
         self.byte_to_utf16_indices.clear();
-        self.byte_to_glyph_indices.clear();
+        self.byte_to_grapheme_cluster_indices.clear();
     }
 }
 

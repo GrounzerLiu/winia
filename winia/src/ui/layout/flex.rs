@@ -1,6 +1,7 @@
 use std::ops::Not;
 use clonelet::clone;
 use strum_macros::EnumString;
+use proc_macro::ItemProps;
 use crate::{bind_properties, define_props};
 use crate::app::WindowContext;
 use crate::shared::{SharedDerived, SharedDerivedUsize};
@@ -82,7 +83,7 @@ impl GetFlexGrow for ItemProps {
     }
 }
 
-define_props!(
+/*define_props!(
     FlexPropsTrait;
     flex_props;
     FlexProps {
@@ -95,6 +96,19 @@ define_props!(
         cross_axis_gap: SharedDerived<f32>,
     }
 );
+*/
+
+#[derive(ItemProps)]
+pub struct FlexProps {
+    pub item_props: ItemProps,
+    pub direction: SharedDerived<FlexDirection>,
+    pub wrap: SharedDerived<FlexWrap>,
+    pub justify_content: SharedDerived<JustifyContent>,
+    pub align_items: SharedDerived<AlignItems>,
+    pub align_content: SharedDerived<AlignContent>,
+    pub main_axis_gap: SharedDerived<f32>,
+    pub cross_axis_gap: SharedDerived<f32>,
+}
 
 impl FlexProps {
     pub fn new(item_props: ItemProps) -> Self {
@@ -107,29 +121,17 @@ impl FlexProps {
             align_content: AlignContent::Start.into(),
             main_axis_gap: 0.0.into(),
             cross_axis_gap: 0.0.into(),
-        }
+        }.name("Flex")
     }
 }
 
 pub fn flex(props: FlexProps, children: impl Into<SharedDerived<Vec<Item>>>) -> Item {
-    let children = children.into();
-    let item = Item::new(
+    Item::new(
         ItemKind::Container,
         item_event(&props),
-        props.item_props,
-        children,
-    );
-    bind_properties!(
-        item,
-        props.direction,
-        props.wrap,
-        props.justify_content,
-        props.align_items,
-        props.align_content,
-        props.main_axis_gap,
-        props.cross_axis_gap
-    );
-    item
+        props,
+        children.into()
+    )
 }
 
 pub trait ColumnPropsTrait {
@@ -1213,19 +1215,7 @@ impl Lines {
                 let height: f32 = height_measure_mode.unwrap().value();
                 let w_mode = MeasureMode::from_size(child.data().props().width.get(), width - padding_horizontal);
                 let h_mode = MeasureMode::from_size(child.data().props().height.get(), height - padding_vertical);
-                // child.data().measure(
-                // if orientation.is_horizontal() {
-                //     child.data().measure(
-                //         width - padding_horizontal,
-                //         height - padding_vertical,
-                //     );
-                // } else {
-                //     child.dispatch_measure(
-                //         width - padding_horizontal,
-                //         height - padding_vertical,
-                //     );
-                // }
-                child.data().measure(w_mode, h_mode);
+                child.data().dispatch_measure(w_mode, h_mode);
             }
 
             // Try to add the child to the current line.

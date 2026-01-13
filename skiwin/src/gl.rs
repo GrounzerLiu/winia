@@ -24,11 +24,11 @@ pub struct GlSkiaWindow {
     pixels: Pixels<'static>,
     skia_surface: Arc<Mutex<Surface>>,
     skia_context: DirectContext,
-    window: Arc<Window>,
+    window: Arc<dyn Window>,
 }
 
 impl GlSkiaWindow {
-    pub fn new(window: Arc<Window>, device_selector: Option<Box<dyn Fn(&Device) -> bool>>) -> Self {
+    pub fn new(window: Arc<dyn Window>, device_selector: Option<Box<dyn Fn(&Device) -> bool>>) -> Self {
         let devices = Device::query_devices()
             .expect("Failed to query devices")
             .collect::<Vec<_>>();
@@ -100,7 +100,7 @@ impl GlSkiaWindow {
 
 
         let pixels = {
-            let window_size = window.inner_size();
+            let window_size = window.surface_size();
             let surface_texture =
                 SurfaceTexture::new(window_size.width, window_size.height, window.clone());
             // Pixels::new(window_size.width, window_size.height, surface_texture).unwrap()
@@ -116,7 +116,7 @@ impl GlSkiaWindow {
         //     skia_safe::gpu::direct_contexts::make_gl(interface, None).unwrap()
         // };
 
-        let skia_surface = create_surface(&mut skia_context.clone(), window.inner_size());
+        let skia_surface = create_surface(&mut skia_context.clone(), window.surface_size());
 
         Self {
             pixels,
@@ -130,7 +130,7 @@ impl GlSkiaWindow {
 // impl_skia_window!(GlSkiaWindow);
 impl SkiaWindow for GlSkiaWindow {
     fn resize(&mut self) {
-        let size = self.window.inner_size();
+        let size = self.window.surface_size();
         self.pixels.resize_buffer(size.width, size.height).unwrap();
         self.pixels.resize_surface(size.width, size.height).unwrap();
         self.skia_surface = create_surface(&mut self.skia_context, size);
@@ -156,7 +156,7 @@ impl SkiaWindow for GlSkiaWindow {
         // );
 
         let frame = self.pixels.frame_mut();
-        let size = self.window.inner_size();
+        let size = self.window.surface_size();
         let image_info = ImageInfo::new_n32_premul((size.width as i32, size.height as i32), None);
         self.skia_surface.lock().read_pixels(
             &image_info,
@@ -172,14 +172,14 @@ impl SkiaWindow for GlSkiaWindow {
     }
 }
 impl Deref for GlSkiaWindow {
-    type Target = Window;
+    type Target = dyn Window;
 
     fn deref(&self) -> &Self::Target {
         self.window.as_ref()
     }
 }
-impl AsRef<Window> for GlSkiaWindow {
-    fn as_ref(&self) -> &Window {
+impl AsRef<dyn Window> for GlSkiaWindow {
+    fn as_ref(&self) -> &dyn Window {
         self.window.as_ref()
     }
 }

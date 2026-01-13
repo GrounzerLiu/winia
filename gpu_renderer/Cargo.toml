@@ -16,7 +16,6 @@ workspace = true
 
 [dependencies.winit]
 workspace = true
-features = ["rwh_06"]
 
 [dependencies.raw-window-handle]
 version = "0.6"

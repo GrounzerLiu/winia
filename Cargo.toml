@@ -13,7 +13,10 @@ members = [
 default-members = ["winia"]
 
 [workspace.dependencies]
-winit = "0.30.12"
-skia-safe = "0.89.1"
-skia-bindings = "0.89.1"
+winit = "0.31.0-beta.2"
+skia-safe = "0.91.1"
+skia-bindings = "0.91.0"
 parking_lot = "0.12.5"
+getset = "0.1.6"
+tklog = "0.3.0"
+crossbeam-channel = "0.5.15"

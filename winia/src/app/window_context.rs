@@ -1,12 +1,18 @@
+use std::clone::UseCloned;
+use std::collections::BTreeSet;
+use std::ops::{Deref, DerefMut};
 use crate::animation::LayoutAnimation;
 use crate::app::WindowAttributes;
 use crate::shared::{Shared, SharedAnimationTrait, SharedBool, SharedDerived, SharedSource};
 use crate::theme::material_theme;
 use crate::ui::{Color, Item};
-use crate::Theme;
+use crate::{depend, Theme};
 use proc_macro::AsRef;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use clonelet::clone;
+use crossbeam_channel::{Receiver, Sender};
+use getset::Getters;
 use winit::event_loop::EventLoopProxy as WinitEventLoopProxy;
 use winit::window::{Window, WindowId};
 
@@ -50,58 +56,48 @@ impl LayerController {
 
 pub enum EventType {
     RequestFocus(u32),
-    RequestLayout,
-    RequestRedraw,
+    RequestUpdateLayout,
     StartSharedAnimation(Box<dyn SharedAnimationTrait + Send>),
     StartLayoutAnimation(LayoutAnimation),
     Timer(usize),
-    SetWindowAttribute(Box<dyn FnOnce(Option<&Window>) + Send>),
+    SetWindowAttribute(Box<dyn FnOnce(&Box<dyn Window>) + Send>),
     NewWindow {
         item_generator: Box<dyn FnOnce(&WindowContext) -> Item + Send + 'static>,
         window_attributes: WindowAttributes,
     },
-    NewLayer(Box<dyn FnOnce(&WindowContext, LayerController) -> Item + Send + 'static>),
+    AddLayer(Box<dyn FnOnce(&WindowContext, LayerController) -> Item + Send + 'static>),
     RemoveLayer(u32),
 }
 
 #[derive(Clone, AsRef)]
 pub struct EventLoopProxy {
     window_id: WindowId,
-    event_loop_proxy: WinitEventLoopProxy<Event>,
+    event_loop_proxy: WinitEventLoopProxy,
+    sender: Sender<Event>
 }
 
 impl EventLoopProxy {
-    pub fn new(window_id: WindowId, event_loop_proxy: WinitEventLoopProxy<Event>) -> Self {
+    pub fn new(window_id: WindowId, event_loop_proxy: WinitEventLoopProxy, sender: Sender<Event>) -> Self {
         Self {
             window_id,
             event_loop_proxy,
+            sender
         }
     }
 
     fn send_event(&self, event: Event) {
-        match self.event_loop_proxy.send_event(event) {
-            Ok(()) => {}
-            Err(_e) => {
-                // panic!("Failed to send user event: {}", e);
-            }
-        }
+        self.sender.send(event).unwrap();
+        self.event_loop_proxy.wake_up()
     }
 
-    pub fn request_redraw(&self) {
+    pub fn request_update_layout(&self) {
         self.send_event(Event {
             window_id: self.window_id,
-            event: EventType::RequestRedraw,
+            event: EventType::RequestUpdateLayout,
         });
     }
 
-    pub fn request_layout(&self) {
-        self.send_event(Event {
-            window_id: self.window_id,
-            event: EventType::RequestLayout,
-        });
-    }
-
-    pub fn set_window_attribute(&self, f: impl FnOnce(Option<&Window>) + Send + 'static) {
+    pub fn set_window_attribute(&self, f: impl FnOnce(&Box<dyn Window>) + Send + 'static) {
         self.send_event(Event {
             window_id: self.window_id,
             event: EventType::SetWindowAttribute(Box::new(f)),
@@ -143,13 +139,13 @@ impl EventLoopProxy {
         });
     }
 
-    pub fn new_layer(
+    pub fn add_layer(
         &self,
         item_generator: impl FnOnce(&WindowContext, LayerController) -> Item + Send + 'static,
     ) {
         self.send_event(Event {
             window_id: self.window_id,
-            event: EventType::NewLayer(Box::new(item_generator)),
+            event: EventType::AddLayer(Box::new(item_generator)),
         });
     }
 
@@ -161,58 +157,77 @@ impl EventLoopProxy {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Getters)]
 pub struct WindowContext {
-    pub(crate) window: Arc<Window>,
-    pub(crate) window_attributes: WindowAttributes,
+    #[get = "pub"]
+    window: Arc<Box<dyn Window>>,
+    #[get = "pub"]
+    window_attributes: WindowAttributes,
     theme: SharedSource<Theme>,
-    pub(crate) event_loop_proxy: EventLoopProxy,
-    pub(crate) request_layout: SharedBool,
-    pub(crate) request_redraw: SharedBool,
-    pub(crate) layout_animations: SharedSource<Vec<LayoutAnimation>>,
+    #[get = "pub"]
+    event_loop_proxy: EventLoopProxy,
+    #[get = "pub"]
+    need_layout: SharedBool,
+    #[get = "pub"]
+    layout_animations: SharedSource<Vec<LayoutAnimation>>,
     // pub(crate) starting_local_animations: LocalShared<LinkedList<LocalLayoutAnimation>>,
-    pub(crate) shared_animations: SharedSource<Vec<Box<dyn SharedAnimationTrait + Send>>>,
+    #[get = "pub(crate)"]
+    shared_animations: SharedSource<Vec<Box<dyn SharedAnimationTrait + Send>>>,
     /// ((last focused item, id), (new focused item, id))
     // pub(crate) item_focused: Shared<(Option<(SharedBool, usize)>, Option<(SharedBool, usize)>)>,
-    // ime_allowed: Shared<BTreeSet<usize>>,
+    ime_allowed: SharedSource<BTreeSet<u32>>,
     // pub(crate) timers: Shared<Vec<Timer>>,
-    pub(crate) cursor_position: SharedSource<(f32, f32)>,
-    pub(crate) title: SharedDerived<String>,
-    pub(crate) min_width: SharedDerived<f32>,
-    pub(crate) min_height: SharedDerived<f32>,
-    pub(crate) max_width: SharedDerived<f32>,
-    pub(crate) max_height: SharedDerived<f32>,
+    #[get = "pub"]
+    cursor_position: SharedSource<(f32, f32)>,
+    title: SharedDerived<String>,
+    min_width: SharedDerived<f32>,
+    min_height: SharedDerived<f32>,
+    max_width: SharedDerived<f32>,
+    max_height: SharedDerived<f32>,
+    #[get = "pub"]
+    background_color: SharedDerived<Color>,
 }
 
 impl WindowContext {
     pub(crate) fn new(
-        window: Arc<Window>,
+        window: Arc<Box<dyn Window>>,
         window_attributes: &WindowAttributes,
-        event_loop_proxy: winit::event_loop::EventLoopProxy<Event>,
+        event_loop_proxy: winit::event_loop::EventLoopProxy,
+        sender: Sender<Event>,
     ) -> Self {
         let window_id = window.id();
+        let theme = SharedSource::new(
+            material_theme(
+                Color::RED,
+                dark_light::detect().is_ok_and(|mode|{
+                    mode == dark_light::Mode::Dark
+                })
+            )
+        );
+        let background_color = SharedDerived::from_fn(
+            depend!(theme),
+            {
+                clone!(theme);
+                move || {
+                    let theme = theme.lock();
+                    theme.get_color("background").cloned().unwrap_or(Color::WHITE)
+                }
+            }
+        );
         Self {
             // theme: material_theme(Color::from_rgb(255, 0, 0), dark_light::detect().map_or(false,|mode|{
             //     mode != dark_light::Mode::Dark
             // })).into(),
             window: window.clone(),
             window_attributes: window_attributes.clone(),
-            theme: SharedSource::new(
-                material_theme(
-                    Color::RED,
-                    dark_light::detect().is_ok_and(|mode|{
-                        mode == dark_light::Mode::Dark
-                    })
-                )
-            ),
-            event_loop_proxy: EventLoopProxy::new(window_id, event_loop_proxy),
-            request_layout: false.into(),
-            request_redraw: false.into(),
+            theme,
+            event_loop_proxy: EventLoopProxy::new(window_id, event_loop_proxy, sender),
+            need_layout: SharedBool::new(false),
             layout_animations: Vec::new().into(),
             // starting_local_animations: LinkedList::new().into(),
             // shared_animations: Vec::new().into(),
             // item_focused: (None, None).into(),
-            // ime_allowed: BTreeSet::new().into(),
+            ime_allowed: BTreeSet::new().into(),
             // timers: Vec::new().into(),
             shared_animations: Vec::new().into(),
             cursor_position: (0.0, 0.0).into(),
@@ -221,16 +236,13 @@ impl WindowContext {
             min_height: 0.0.into(),
             max_width: f32::MAX.into(),
             max_height: f32::MAX.into(),
+            background_color,
         }
-    }
-    
-    pub fn event_loop_proxy(&self) -> &EventLoopProxy {
-        &self.event_loop_proxy
     }
     
     pub fn window_size(&self) -> (f32, f32) {
         let scale_factor = self.scale_factor();
-        let size = self.window.inner_size();
+        let size = self.window.surface_size();
         (
             size.width as f32 / scale_factor,
             size.height as f32 / scale_factor,
@@ -241,8 +253,8 @@ impl WindowContext {
         self.window.id()
     }
 
-    pub fn set_ime_allowed(&self, _id: usize, _allowed: bool) {
-        /*        if allowed {
+    pub fn set_ime_allowed(&self, id: u32, allowed: bool) {
+        if allowed {
             self.ime_allowed.lock().insert(id);
         } else {
             self.ime_allowed.lock().remove(&id);
@@ -251,7 +263,7 @@ impl WindowContext {
             self.window().set_ime_allowed(false);
         } else {
             self.window().set_ime_allowed(true);
-        }*/
+        }
     }
 
     pub fn get_cursor_position(&self) -> (f32, f32) {
@@ -302,19 +314,32 @@ impl WindowContext {
         // 1.0
     }
 
-    pub fn request_redraw(&self) {
-        if self.request_redraw.get() {
+    pub fn request_update_layout(&self) {
+        if self.need_layout.get() {
             return;
         }
-        self.request_redraw.set(true);
+        self.need_layout.set(true);
         self.window.request_redraw();
     }
+}
 
-    pub fn request_layout(&self) {
-        if self.request_layout.get() {
-            return;
-        }
-        self.request_layout.set(true);
-        self.request_redraw();
+/*impl Deref for WindowContext {
+    type Target = WindowContext;
+    fn deref(&self) -> &Self::Target {
+        self
     }
 }
+
+impl DerefMut for WindowContext {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self
+    }
+}*/
+
+impl AsRef<WindowContext> for WindowContext {
+    fn as_ref(&self) -> &WindowContext {
+        self
+    }
+}
+
+impl UseCloned for WindowContext {}

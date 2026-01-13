@@ -1,15 +1,17 @@
 use crate::app::WindowContext;
+use crate::core::bind_str_to_id;
 use crate::shared::{SharedDerived, SharedDerivedBool, SharedDerivedF32, SharedDerivedSize, SharedItem, SharedSource};
-use crate::ui::item::{ClickSource, CursorMove, FocusRequester, FocusState, Frame, ItemState, LayoutDirection, MouseInput, NeedRedraw, PointerInput, Size};
+use crate::ui::item::{FocusRequester, FocusState, Frame, ItemState, ItemUpdater, LayoutDirection, PointerButton, PointerMoved, Size};
+use crate::ui::InnerPosition;
+use crate::With;
 use parking_lot::Mutex;
+use skia_safe::{Path, Rect};
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
-use skia_safe::{Path, Rect};
-use crate::core::bind_str_to_id;
-use crate::{depend, With};
-use crate::ui::InnerPosition;
+use tokio::task::JoinHandle;
+use winit::event::ButtonSource;
 
 #[derive(Clone, Default)]
 pub struct Padding {
@@ -107,19 +109,19 @@ pub struct ItemProps {
     pub foreground: SharedItem,
     pub height: SharedDerivedSize,
     pub item_state: SharedSource<ItemState>,
+    pub item_updater: Arc<Mutex<ItemUpdater>>,
     pub layout_direction: SharedDerived<LayoutDirection>,
     pub max_height: SharedDerivedF32,
     pub min_height: SharedDerivedF32,
     pub min_width: SharedDerivedF32,
     pub max_width: SharedDerivedF32,
     pub name: SharedDerived<String>,
-    pub need_redraw: Arc<Mutex<NeedRedraw>>,
-    pub on_click: Option<Box<dyn FnMut(&ClickSource)>>,
-    pub on_cursor_move: Option<Box<dyn FnMut(&CursorMove)>>,
+    pub on_click: Option<Box<dyn FnMut(&ButtonSource)>>,
     pub on_focus_changed: Option<Box<dyn FnMut(&FocusState)>>,
     pub on_hover_changed: Option<Box<dyn FnMut(bool)>>,
-    pub on_mouse_input: Option<Box<dyn FnMut(&MouseInput) -> bool>>,
-    pub on_pointer_input: Option<Box<dyn FnMut(&PointerInput) -> bool>>,
+    pub on_pointer_button: Option<Box<dyn FnMut(&PointerButton) -> bool>>,
+    pub on_pointer_moved: Option<Box<dyn FnMut(&PointerMoved) -> bool>>,
+    pub on_state_changed: Box<dyn FnMut(SharedSource<ItemState>, ItemState)>,
     pub offset_x: SharedDerivedF32,
     pub offset_y: SharedDerivedF32,
     pub opacity: SharedDerivedF32,
@@ -135,38 +137,40 @@ pub struct ItemProps {
     pub skew_y: SharedDerivedF32,
     pub skew_center_x: SharedDerived<InnerPosition>,
     pub skew_center_y: SharedDerived<InnerPosition>,
+    tasks: SharedSource<Vec<JoinHandle<()>>>,
     pub visible: SharedDerivedBool,
     pub width: SharedDerivedSize,
 }
 macro_rules! bind_property {
-    ($id:ident, $need_redraw:ident, $wc:ident, $property:expr_2021) => {{
-        let need_redraw = $need_redraw.clone();
-        let e = $wc.event_loop_proxy.clone();
+    ($id:ident, $item_updater:ident, $e:ident, $property:expr_2021) => {{
+        let item_updater = $item_updater.clone();
+        let e = $e.clone();
         $property.subscribe($id, move || {
-            need_redraw.lock().request();
-            e.request_layout();
+            item_updater.lock().request_update();
         });
     }};
 }
 macro_rules! bind_properties {
-    ($id:ident, $need_redraw:ident, $wc:ident, $( $property:expr_2021 ),* ) => {
+    ($id:ident, $item_updater:ident, $e:ident, $( $property:expr_2021 ),* ) => {
         $(
-            bind_property!($id, $need_redraw, $wc, $property);
+            bind_property!($id, $item_updater, $e, $property);
         )*
     };
 }
 
 impl ItemProps {
-    pub fn bind(&self, id: u32, need_redraw: &Arc<Mutex<NeedRedraw>>, wc: &WindowContext) {
-        self.name.get().with_mut(|name| {
-            if !name.is_empty() {
-                bind_str_to_id(name.as_str(), id);
-            }
-        });
+    pub fn bind(&self, id: u32) {
+        // self.name.get().with_mut(|name| {
+        //     if !name.is_empty() {
+        //         bind_str_to_id(name.as_str(), id);
+        //     }
+        // });
+        let item_updater = self.item_updater.clone();
+        let e = self.window_context.event_loop_proxy().clone();
         bind_properties!(
             id,
-            need_redraw,
-            wc,
+            item_updater,
+            e,
             self.blur,
             self.clipped,
             self.enable,
@@ -198,22 +202,8 @@ impl ItemProps {
     pub fn new(window_context: &WindowContext) -> Self {
         let width = SharedDerivedSize::from(Size::Auto);
         let height = SharedDerivedSize::from(Size::Auto);
-        let need_redraw = Arc::new(Mutex::new(NeedRedraw {
-            is_fixed_size: SharedDerived::from_fn(depend!(width, height), {
-                let width = width.clone();
-                let height = height.clone();
-                move || {
-                    let width = width.get();
-                    let height = height.get();
-                    matches!(
-                        (width, height),
-                        (Size::Fixed(_), Size::Fixed(_))
-                            | (Size::Fill, Size::Fill)
-                            | (Size::Fixed(_), Size::Fill)
-                            | (Size::Fill, Size::Fixed(_))
-                    )
-                }
-            }),
+        let item_updater = Arc::new(Mutex::new(ItemUpdater {
+            is_fixed_size: SharedDerived::new_derived(false),
             need_redraw: true,
             parent: None,
         }));
@@ -225,8 +215,7 @@ impl ItemProps {
             clipped: true.into(),
             clip_shape: {
                 let shape: Box<dyn Fn(&Frame) -> Path> = Box::new(|frame: &Frame| {
-                    let mut path = Path::new();
-                    path.add_rect(
+                    Path::rect(
                         Rect::from_xywh(
                             frame.x(),
                             frame.y(),
@@ -234,8 +223,7 @@ impl ItemProps {
                             frame.height(),
                         ),
                         None,
-                    );
-                    path
+                    )
                 });
                 SharedDerived::from(Some(shape))
             },
@@ -247,19 +235,20 @@ impl ItemProps {
             foreground: SharedItem::none(),
             height,
             item_state: ItemState::Enabled.into(),
+            item_updater,
             layout_direction: LayoutDirection::LTR.into(),
             max_height: f32::INFINITY.into(),
             max_width: f32::INFINITY.into(),
             min_height: 0.0.into(),
             min_width: 0.0.into(),
             name: "".into(),
-            need_redraw,
             on_click: None,
-            on_cursor_move: None,
             on_focus_changed: None,
             on_hover_changed: None,
-            on_mouse_input: None,
-            on_pointer_input: None,
+            on_pointer_button: None,
+            on_state_changed: Box::new(|item_state, new_state| {
+                item_state.set(new_state);
+            }),
             offset_x: 0.0.into(),
             offset_y: 0.0.into(),
             opacity: 1.0.into(),
@@ -275,8 +264,26 @@ impl ItemProps {
             skew_y: 0.0.into(),
             skew_center_x: InnerPosition::Middle(0.0).into(),
             skew_center_y: InnerPosition::Middle(0.0).into(),
+            tasks: vec![].into(),
             visible: true.into(),
             width,
+            on_pointer_moved: None,
+        }
+    }
+
+    pub fn spawn_task<F>(&self, fut: F)
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let handle = tokio::spawn(fut);
+        self.tasks.lock().push(handle);
+    }
+}
+
+impl Drop for ItemProps {
+    fn drop(&mut self) {
+        for task in self.tasks.lock().drain(..) {
+            task.abort();
         }
     }
 }
@@ -600,6 +607,11 @@ macro_rules! base_impl_item_props {
             
             pub fn on_pointer_input<F: 'static + FnMut(&$crate::ui::item::PointerInput) -> bool>(mut self, f: F) -> Self {
                 self.item_props.on_pointer_input = Some(Box::new(f));
+                self
+            }
+            
+            pub fn on_state_changed<F: 'static + FnMut($crate::shared::SharedSource<$crate::ui::item::ItemState>, $crate::ui::item::ItemState)>(mut self, f: F) -> Self {
+                self.item_props.on_state_changed = Box::new(f);
                 self
             }
         }

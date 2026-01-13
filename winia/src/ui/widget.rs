@@ -1,15 +1,17 @@
 mod rectangle;
 mod label;
 mod ripple;
-mod button;
+pub mod button;
 mod divider;
 mod image;
-mod input_field;
+mod text_field;
+mod slider;
 
 pub use rectangle::*;
 pub use label::*;
 pub use ripple::*;
-pub use button::*;
+pub use button::button;
 pub use divider::*;
 pub use image::*;
-pub use input_field::*;
+pub use text_field::*;
+pub use slider::*;

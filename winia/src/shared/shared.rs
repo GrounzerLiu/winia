@@ -1,3 +1,4 @@
+use std::clone::UseCloned;
 use crate::animation::Interpolator;
 use crate::animation::interpolator::Linear;
 use crate::app::EventLoopProxy;
@@ -11,6 +12,7 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
+use crate::ui::Item;
 
 pub trait Readable: Send + Sized + 'static {}
 pub trait Writable: Readable {}
@@ -261,6 +263,52 @@ macro_rules! depend {
                     }
                 ),*
             ]
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! shared_derived {
+    ($($dep:ident),* $(,)?||$b:block) => {
+        {
+            use $crate::shared::Observable;
+            use $crate::shared::SharedDerived;
+            let d = vec![
+                $(
+                    {
+                        let o: Box<dyn Observable> = Box::new($dep.clone());
+                        o
+                    }
+                ),*
+            ];
+            $(
+                let $dep = $dep.clone();
+            )*
+            SharedDerived::from_fn(
+                d,
+                move|| $b
+            )
+        }
+    };
+    ($($scope:ident.$dep:ident),* $(,)?||$b:block) => {
+        {
+            use $crate::shared::Observable;
+            use $crate::shared::SharedDerived;
+            let d = vec![
+                $(
+                    {
+                        let o: Box<dyn Observable> = Box::new($scope.$dep.clone());
+                        o
+                    }
+                ),*
+            ];
+            $(
+                let $dep = $scope.$dep.clone();
+            )*
+            SharedDerived::from_fn(
+                d,
+                move|| $b
+            )
         }
     }
 }
@@ -756,3 +804,6 @@ impl<T: Send + 'static> SharedAnimationTrait for SharedAnimation<T> {
         self.inner.lock().update();
     }
 }
+
+impl<T> UseCloned for Shared<T, Source>{}
+impl<T> UseCloned for Shared<T, Derived>{}

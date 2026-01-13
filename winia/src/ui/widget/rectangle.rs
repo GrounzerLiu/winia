@@ -1,11 +1,12 @@
 use crate::define_props;
-use crate::shared::{Shared, SharedDerived, SharedSource};
+use crate::shared::{Shared, SharedDerived, SharedDerivedColor, SharedSource};
 use crate::ui::item::{Frame, ItemEvent, ItemKind, ItemProps, LayoutDirection};
 use crate::ui::{Color, Item, Orientation, SetColor};
 use crate::bind_properties;
 use clonelet::clone;
 use skia_safe::paint::Style;
 use skia_safe::{Path, RRect, Rect, Vector};
+use proc_macro::ItemProps;
 
 #[derive(Clone, Debug)]
 pub struct Radius {
@@ -85,18 +86,17 @@ impl Radius {
     }
 }
 
-define_props!(
-    RectanglePropsTrait;
-    rectangle_props;
-    RectangleProps {
-        color: SharedDerived<Color>,
-        border_color: SharedDerived<Color>,
-        border_width: SharedDerived<f32>,
-    }
-    {
-        radius: Radius,
-    }
-);
+
+#[derive(ItemProps)]
+pub struct RectangleProps {
+    pub item_props: ItemProps,
+    #[constructor]
+    pub color: SharedDerived<Color>,
+    pub border_color: SharedDerived<Color>,
+    pub border_width: SharedDerived<f32>,
+    #[not_shared]
+    pub radius: Radius,
+}
 
 impl RectangleProps {
     pub fn radius(mut self, radius: Radius) -> Self {
@@ -106,7 +106,7 @@ impl RectangleProps {
 }
 
 impl RectangleProps {
-    pub fn new(mut item_props: ItemProps) -> Self {
+    pub fn new(mut item_props: ItemProps, color: impl Into<SharedDerivedColor>) -> Self {
         item_props.clipped = true.into();
         item_props.clip_shape = {
             let shape: Box<dyn Fn(&Frame) -> Path> = Box::new(
@@ -125,19 +125,17 @@ impl RectangleProps {
                             Vector::new(24.0, 24.0)
                         ],
                     );
-                    let mut path = Path::new();
-                    path.add_rrect(
+                    Path::rrect(
                         rrect,
                         None,
-                    );
-                    path
+                    )
                 }
             );
             SharedDerived::new_derived(Some(shape))
         };
         Self {
             item_props,
-            color: Color::TRANSPARENT.into(),
+            color: color.into(),
             border_color: Color::TRANSPARENT.into(),
             border_width: 0.0.into(),
             radius: Radius::new(),
@@ -164,23 +162,12 @@ impl RectangleProps {
 // }
 
 pub fn rectangle(props: RectangleProps) -> Item {
-    let item = Item::new(
+    Item::new(
         ItemKind::Widget,
         item_event(&props),
-        props.item_props,
+        props,
         Shared::new_derived(vec![]),
-    );
-    bind_properties!(
-        item,
-        props.color,
-        props.border_color,
-        props.border_width,
-        props.radius.top_start,
-        props.radius.top_end,
-        props.radius.bottom_start,
-        props.radius.bottom_end
-    );
-    item
+    )
 }
 
 fn item_event(props: &RectangleProps) -> ItemEvent {

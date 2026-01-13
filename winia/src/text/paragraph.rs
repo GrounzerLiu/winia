@@ -1,18 +1,18 @@
 use crate::shared::SharedDrawable;
-use bimap::BiBTreeMap;
 use skia_safe::textlayout::paragraph::{ExtendedVisitorInfo, FontInfo, GlyphClusterInfo, GlyphInfo, Paragraph as SkParagraph, VisitorInfo};
 use skia_safe::textlayout::{Affinity, LineMetrics, RectHeightStyle, RectWidthStyle, TextBox, TextRange};
 use skia_safe::{scalar, Canvas, Font, Path, Point, TextBlob, Unichar};
 use std::collections::HashSet;
 use std::ops::Range;
+use crate::text::IndexBiMap;
 
 pub struct Paragraph {
     paragraph: SkParagraph,
     placeholders: Vec<SharedDrawable>,
     line_breaks: HashSet<Range<usize>>,
-    paragraph_byte_to_real_index: BiBTreeMap<usize, usize>,
-    byte_to_utf16_indices: BiBTreeMap<usize, usize>,
-    byte_to_glyph_indices: BiBTreeMap<usize, usize>,
+    pub(crate) paragraph_byte_to_real_indices: IndexBiMap,
+    pub(crate) byte_to_utf16_indices: IndexBiMap,
+    pub(crate) byte_to_glyph_indices: IndexBiMap,
 }
 
 impl Paragraph {
@@ -20,18 +20,22 @@ impl Paragraph {
         paragraph: SkParagraph,
         placeholders: &[SharedDrawable],
         line_breaks: &HashSet<Range<usize>>,
-        paragraph_byte_to_real_index: &BiBTreeMap<usize, usize>,
-        byte_to_utf16_indices: &BiBTreeMap<usize, usize>,
-        byte_to_glyph_indices: &BiBTreeMap<usize, usize>,
+        paragraph_byte_to_real_indices: &IndexBiMap,
+        byte_to_utf16_indices: &IndexBiMap,
+        byte_to_glyph_indices: &IndexBiMap,
     ) -> Self {
         Self {
             paragraph,
             placeholders: Vec::from(placeholders),
             line_breaks: line_breaks.clone(),
-            paragraph_byte_to_real_index: paragraph_byte_to_real_index.clone(),
+            paragraph_byte_to_real_indices: paragraph_byte_to_real_indices.clone(),
             byte_to_utf16_indices: byte_to_utf16_indices.clone(),
             byte_to_glyph_indices: byte_to_glyph_indices.clone(),
         }
+    }
+
+    pub fn inner_paragraph(&self) -> &SkParagraph {
+        &self.paragraph
     }
     
     pub fn is_line_break(&self, range: Range<usize>) -> bool {
@@ -40,7 +44,7 @@ impl Paragraph {
 
     fn get_utf16_index(&self, index: usize) -> Option<usize> {
         let paragraph_index = self
-            .paragraph_byte_to_real_index
+            .paragraph_byte_to_real_indices
             .get_by_right(&index)?;
         let utf16_index = self
             .byte_to_utf16_indices
@@ -50,7 +54,7 @@ impl Paragraph {
 
     pub fn get_glyph_index(&self, index: usize) -> Option<usize> {
         let paragraph_index = self
-            .paragraph_byte_to_real_index
+            .paragraph_byte_to_real_indices
             .get_by_right(&index)?;
         let glyph_index = self
             .byte_to_glyph_indices
@@ -60,7 +64,7 @@ impl Paragraph {
     
     pub fn prev_glyph_byte_index(&self, index: usize) -> Option<usize> {
         let paragraph_index = self
-            .paragraph_byte_to_real_index
+            .paragraph_byte_to_real_indices
             .get_by_right(&index)?;
         let glyph_index = self
             .byte_to_glyph_indices
@@ -70,14 +74,14 @@ impl Paragraph {
             .byte_to_glyph_indices
             .get_by_right(&prev_glyph_index)?;
         let prev_byte_index = self
-            .paragraph_byte_to_real_index
+            .paragraph_byte_to_real_indices
             .get_by_left(prev_byte_index)?;
         Some(*prev_byte_index)
     }
     
     pub fn next_glyph_byte_index(&self, index: usize) -> Option<usize> {
         let paragraph_index = self
-            .paragraph_byte_to_real_index
+            .paragraph_byte_to_real_indices
             .get_by_right(&index)?;
         let glyph_index = self
             .byte_to_glyph_indices
@@ -87,7 +91,7 @@ impl Paragraph {
             .byte_to_glyph_indices
             .get_by_right(&next_glyph_index)?;
         let next_byte_index = self
-            .paragraph_byte_to_real_index
+            .paragraph_byte_to_real_indices
             .get_by_left(next_byte_index)?;
         Some(*next_byte_index)
     }
@@ -98,7 +102,7 @@ impl Paragraph {
             .get_by_right(&utf16_index)
             .unwrap_or_else(|| panic!("index {} not found", utf16_index));
         let index = self
-            .paragraph_byte_to_real_index
+            .paragraph_byte_to_real_indices
             .get_by_left(paragraph_index)
             .unwrap_or_else(|| panic!("index {} not found", paragraph_index));
         *index
@@ -277,8 +281,8 @@ impl Paragraph {
         index: usize,
     ) -> Option<GlyphClusterInfo> {
         if let Some(mut glyph_cluster_info) = self.paragraph.get_glyph_cluster_at(index) {
-            glyph_cluster_info.text_range.start = *self.paragraph_byte_to_real_index.get_by_left(&glyph_cluster_info.text_range.start).unwrap();
-            glyph_cluster_info.text_range.end = *self.paragraph_byte_to_real_index.get_by_left(&glyph_cluster_info.text_range.end).unwrap();
+            glyph_cluster_info.text_range.start = *self.paragraph_byte_to_real_indices.get_by_left(&glyph_cluster_info.text_range.start).unwrap();
+            glyph_cluster_info.text_range.end = *self.paragraph_byte_to_real_indices.get_by_left(&glyph_cluster_info.text_range.end).unwrap();
             Some(glyph_cluster_info)
         } else {
             None
@@ -290,8 +294,21 @@ impl Paragraph {
         d: impl Into<Point>,
     ) -> Option<GlyphClusterInfo> {
         if let Some(mut glyph_info) = self.paragraph.get_closest_glyph_cluster_at(d) {
-            glyph_info.text_range.start = *self.paragraph_byte_to_real_index.get_by_left(&glyph_info.text_range.start).unwrap();
-            glyph_info.text_range.end = *self.paragraph_byte_to_real_index.get_by_left(&glyph_info.text_range.end).unwrap();
+            glyph_info.text_range.start = *self.paragraph_byte_to_real_indices.get_by_left(&glyph_info.text_range.start).expect(
+                format!("start index {} not found in paragraph_byte_to_real_index: {:?}, byte_to_utf16_indices: {:?}",
+                        glyph_info.text_range.start,
+                        self.paragraph_byte_to_real_indices,
+                        self.byte_to_utf16_indices
+                ).as_str(),
+            );
+            glyph_info.text_range.end = *self.paragraph_byte_to_real_indices.get_by_left(&glyph_info.text_range.end).expect(
+
+                format!("end index {} not found in paragraph_byte_to_real_index: {:?}, byte_to_utf16_indices: {:?}",
+                        glyph_info.text_range.end,
+                        self.paragraph_byte_to_real_indices,
+                        self.byte_to_utf16_indices
+                ).as_str(),
+            );
             Some(glyph_info)
         } else {
             None

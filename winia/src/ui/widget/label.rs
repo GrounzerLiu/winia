@@ -1,42 +1,35 @@
 use crate::core::next_id;
-use crate::shared::{
-    Shared, SharedBool, SharedDerived, SharedDerivedBool, SharedDerivedColor, SharedDerivedF32,
-    SharedDerivedString, SharedDerivedText, SharedDerivedUsize, SharedSource,
-};
-use crate::text::{Paragraph, StyledText};
+use crate::shared::{Shared, SharedBool, SharedDerived, SharedDerivedBool, SharedDerivedColor, SharedDerivedF32, SharedDerivedString, SharedDerivedText, SharedDerivedUsize, SharedSource};
+use crate::text::Paragraph;
 use crate::theme::color;
-use crate::ui::item::{
-    ItemEvent, ItemKind, ItemProps, LayoutDirection, MeasureMode, PhysicalX, PointerState,
-};
+use crate::ui::item::{ItemEvent, ItemKind, ItemProps, LayoutDirection, MeasureMode, PhysicalX, PointerButton, PointerMoved};
 use crate::ui::{Color, Item, Orientation, SetColor};
-use crate::{bind_properties, define_props};
 use clonelet::clone;
+use proc_macro::ItemProps;
 use skia_safe::paint::Style;
 use skia_safe::textlayout::{ParagraphStyle, TextAlign, TextStyle};
 use skia_safe::{Canvas, Paint, Rect};
 use std::ops::Range;
-use winit::event::MouseButton;
+use winit::event::ElementState;
 
-define_props!(
-    LabelPropsTrait;
-    label_props;
-    LabelProps {
-        text: SharedDerivedText,
-        selectable: SharedDerivedBool,
-        selection_range: SharedDerived<Range<usize>>,
-        color: SharedDerivedColor,
-        font_size: SharedDerivedF32,
-        max_lines: SharedDerivedUsize,
-        ellipsis: SharedDerivedString,
-        text_align: SharedDerived<Option<TextAlign>>
-    }
-    {
-        on_selection_change: SharedSource<Option<Box<dyn Fn(Range<usize>)>>>
-    }
-);
+#[derive(ItemProps)]
+pub struct LabelProps {
+    pub item_props: ItemProps,
+    #[constructor]
+    pub text: SharedDerivedText,
+    pub selectable: SharedDerivedBool,
+    pub selection_range: SharedDerived<Range<usize>>,
+    pub color: SharedDerivedColor,
+    pub font_size: SharedDerivedF32,
+    pub max_lines: SharedDerivedUsize,
+    pub ellipsis: SharedDerivedString,
+    pub text_align: SharedDerived<Option<TextAlign>>,
+    #[not_shared]
+    pub on_selection_change: SharedSource<Option<Box<dyn Fn(Range<usize>)>>>,
+}
 
 impl LabelProps {
-    pub fn new(item_props: ItemProps) -> Self {
+    pub fn new(item_props: ItemProps, text: impl Into<SharedDerivedText>) -> Self {
         let on_surface_color = item_props
             .window_context
             .theme()
@@ -45,7 +38,7 @@ impl LabelProps {
             .map_or(Color::BLACK, |c| *c);
         Self {
             item_props,
-            text: StyledText::from("").into(),
+            text: text.into(),
             selectable: false.into(),
             selection_range: (0..0).into(),
             color: on_surface_color.into(),
@@ -54,7 +47,7 @@ impl LabelProps {
             ellipsis: "".into(),
             text_align: None.into(),
             on_selection_change: None.into(),
-        }
+        }.name("Label")
     }
 
     pub fn on_selection_change<F>(self, callback: F) -> Self
@@ -68,48 +61,41 @@ impl LabelProps {
 }
 
 pub fn label(props: LabelProps) -> Item {
-    let item = Item::new(
+    Item::new(
         ItemKind::Widget,
         item_event(&props),
-        props.item_props,
+        props,
         Shared::new_derived(vec![]),
-    );
-    bind_properties!(
-        item,
-        props.text,
-        props.selectable,
-        props.selection_range,
-        props.color,
-        props.font_size,
-        props.max_lines,
-        props.ellipsis,
-        props.text_align
-    );
-    item
+    )
+}
+
+fn bind_is_text_changed<T>(
+    source: &SharedDerived<T>,
+    is_text_changed: &SharedBool,
+) where
+    T: Send + 'static,
+{
+    source.subscribe(next_id(), {
+        let is_text_changed = is_text_changed.clone();
+        move || {
+            is_text_changed.set(true);
+        }
+    });
 }
 
 fn item_event(props: &LabelProps) -> ItemEvent {
     let text_cache: SharedSource<TextCache> = TextCache::new().into();
     let is_text_changed = SharedBool::new(true);
     let animation_forward = SharedBool::new(true);
-    props.color.subscribe(next_id(), {
-        let is_text_changed = is_text_changed.clone();
-        move || {
-            is_text_changed.set(true);
-        }
-    });
-    props.text.subscribe(next_id(), {
-        let is_text_changed = is_text_changed.clone();
-        move || {
-            is_text_changed.set(true);
-        }
-    });
-    props.max_lines.subscribe(next_id(), {
-        let is_text_changed = is_text_changed.clone();
-        move || {
-            is_text_changed.set(true);
-        }
-    });
+    bind_is_text_changed(&props.color, &is_text_changed);
+    bind_is_text_changed(&props.text, &is_text_changed);
+    bind_is_text_changed(&props.max_lines, &is_text_changed);
+    bind_is_text_changed(&props.font_size, &is_text_changed);
+    bind_is_text_changed(&props.text_align, &is_text_changed);
+    bind_is_text_changed(&props.ellipsis, &is_text_changed);
+
+
+    let mut start_index: SharedSource<Option<usize>> = Shared::new(None);
 
     let item_props = &props.item_props;
     ItemEvent::new()
@@ -314,17 +300,17 @@ fn item_event(props: &LabelProps) -> ItemEvent {
                 }*/
             }
         })
-        .set_mouse_input({
+        .set_pointer_button({
             clone!(
                 props.selectable,
                 props.selection_range,
                 props.text,
                 props.on_selection_change,
-                text_cache
+                text_cache,
+                start_index
             );
-            let mut start_index: Option<usize> = None;
-            move |item, mouse_input| {
-                if mouse_input.button != MouseButton::Left || !selectable.get() {
+            move |item, pointer_button: &PointerButton| {
+                if !pointer_button.primary || !selectable.get() {
                     return false;
                 }
                 let mut text = text.lock();
@@ -333,39 +319,62 @@ fn item_event(props: &LabelProps) -> ItemEvent {
                     let current_frame = item.current_frame();
                     let content_x = current_frame.get_float_param("content_x").unwrap_or(0.0);
                     let content_y = current_frame.get_float_param("content_y").unwrap_or(0.0);
-                    let local_x = mouse_input.x - current_frame.x() - content_x;
-                    let local_y = mouse_input.y - current_frame.y() - content_y;
-                    let index = text_layout.get_closest_glyph_cluster_at((local_x, local_y));
-                    match mouse_input.pointer_state {
-                        PointerState::Started => {
-                            start_index = Some(index);
+                    let local_x = pointer_button.position.x - current_frame.x() - content_x;
+                    let local_y = pointer_button.position.y - current_frame.y() - content_y;
+                    let index = text_layout.get_closest_grapheme_cluster_cluster_at((local_x, local_y));
+                    match pointer_button.state {
+                        ElementState::Pressed => {
+                            start_index.lock().replace(index);
                             if let Some(callback) = on_selection_change.lock().as_mut() && selection_range.get() != (index..index) {
                                 callback(index..index);
                                 return true;
                             }
                             false
                         }
-                        PointerState::Moved => {
-                            if let Some(start) = start_index {
-                                let new_range = if index < start {
-                                    index..start
-                                } else {
-                                    start..index
-                                };
-                                if selection_range.get() != new_range && let Some(callback) = on_selection_change.lock().as_mut() {
-                                    callback(new_range);
-                                }
-                            }
-                            true
-                        }
-                        PointerState::Ended => {
-                            start_index = None;
+                        ElementState::Released => {
+                            start_index.lock().take();
                             true
                         }
                         _ => false,
                     }
                 } else {
                     false
+                }
+            }
+        })
+        .set_pointer_moved({
+            clone!(
+                props.selectable,
+                props.selection_range,
+                props.text,
+                props.on_selection_change,
+                text_cache,
+                start_index
+            );
+            move |item, pointer_moved: &PointerMoved| {
+                if !pointer_moved.primary || !selectable.get() || start_index.lock().is_none() {
+                    return;
+                }
+                let mut text = text.lock();
+                if let Some(paragraph) = &text_cache.lock().top {
+                    let text_layout = text.get_text_layout(paragraph);
+                    let current_frame = item.current_frame();
+                    let content_x = current_frame.get_float_param("content_x").unwrap_or(0.0);
+                    let content_y = current_frame.get_float_param("content_y").unwrap_or(0.0);
+                    let local_x = pointer_moved.position.x - current_frame.x() - content_x;
+                    let local_y = pointer_moved.position.y - current_frame.y() - content_y;
+                    let index = text_layout.get_closest_grapheme_cluster_cluster_at((local_x, local_y));
+
+                    if let Some(start) = start_index.read().clone() {
+                        let new_range = if index < start {
+                            index..start
+                        } else {
+                            start..index
+                        };
+                        if selection_range.get() != new_range && let Some(callback) = on_selection_change.lock().as_mut() {
+                            callback(new_range);
+                        }
+                    }
                 }
             }
         })

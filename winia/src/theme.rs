@@ -261,23 +261,23 @@ impl<T: Clone> StateStyles<T> {
         }
     }
     pub fn disabled(mut self, func: impl FnOnce(&mut T)) -> Self {
-        func(&mut self.enabled);
+        func(&mut self.disabled);
         self
     }
     pub fn hovered(mut self, func: impl FnOnce(&mut T)) -> Self {
-        func(&mut self.enabled);
+        func(&mut self.hovered);
         self
     }
     pub fn focused(mut self, func: impl FnOnce(&mut T)) -> Self {
-        func(&mut self.enabled);
+        func(&mut self.focused);
         self
     }
     pub fn pressed(mut self, func: impl FnOnce(&mut T)) -> Self {
-        func(&mut self.enabled);
+        func(&mut self.pressed);
         self
     }
     
-    pub fn get(&self, state: &ItemState) -> &T {
+    pub fn get(&self, state: ItemState) -> &T {
         match state {
             ItemState::Enabled => &self.enabled,
             ItemState::Disabled => &self.disabled,

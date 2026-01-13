@@ -461,7 +461,7 @@ impl StyledText {
         if index == 0 {
             return None;
         }
-        if let Some(str) = self.string[..index].graphemes(false).next_back() {
+        if let Some(str) = self.string[..index].graphemes(true).next_back() {
             index.checked_sub(str.len())
         }else {
             None
@@ -471,7 +471,7 @@ impl StyledText {
         if index >= self.string.len() {
             return None;
         }
-        if let Some(str) = self.string[index..].graphemes(false).next() {
+        if let Some(str) = self.string[index..].graphemes(true).next() {
             index.checked_add(str.len())
         } else {
             None
@@ -684,6 +684,9 @@ impl StyledText {
                 self.string.len()
             );
         }
+        if range.start > range.end {
+            panic!("Invalid range: start > end. Range: {:?}", range);
+        }
     }
 
     pub fn set_attr(&mut self, attr: TextAttribute, range: Range<usize>, expanded: bool) {
@@ -728,56 +731,49 @@ impl StyledText {
 
         let mut segmented_attrs: Vec<(TextAttribute, Range<usize>, bool)> = Vec::new();
 
+        let remove_range = range;
         self.attrs.retain(|(attr, attr_range, expanded)| {
             if attr.attr_type() == attr_type {
-                if range.start <= attr_range.start {
-                    return if range.end > attr_range.start { // attr 的 start 在 range 里面，可以删除一部分或者全部
-                        if range.end < attr_range.end { // attr 的 end 在 range 外面，分割 attr
-                            // 保留 range.end 到 attr_range.end 的部分
-                            segmented_attrs.push((
-                                attr.clone(),
-                                range.end..attr_range.end,
-                                *expanded,
-                            ));
-                        }
-                        false
-                    } else { // range 的 start 和 end 都小于 attr 的 start，attr 完全在 range 外面，保留 attr
-                        true
-                    };
-                } else if range.start == attr_range.start {
-                    if range.end < attr_range.end {
+                if remove_range.start <= attr_range.start {
+                    if remove_range.end <= attr_range.start {
+                        // attr 的范围在 remove_range 的后面，保留 attr
+                        return true;
+                    } else if remove_range.end > attr_range.start && remove_range.end < attr_range.end {
+                        // 保留 range.end 到 attr_range.end 的部分
                         segmented_attrs.push((
                             attr.clone(),
-                            range.end..attr_range.end,
+                            remove_range.end..attr_range.end,
                             *expanded,
                         ));
-                        return false;
-                    } else if range.end >= attr_range.end {
+                    } else if remove_range.end >= attr_range.end {
+                        // attr 完全在 remove_range 里面，删除 attr
                         return false;
                     }
-                } else if range.start > attr_range.start {
-                    if range.end < attr_range.end {
+                } else if remove_range.start > attr_range.start && remove_range.start < attr_range.end {
+                    if remove_range.end < attr_range.end {
+                        // 分割 attr
                         segmented_attrs.push((
                             attr.clone(),
-                            attr_range.start..range.start,
+                            attr_range.start..remove_range.start,
                             *expanded,
                         ));
                         segmented_attrs.push((
                             attr.clone(),
-                            range.end..attr_range.end,
+                            remove_range.end..attr_range.end,
                             *expanded,
                         ));
-                        return false;
-                    } else if range.end >= attr_range.end {
+                    } else if remove_range.end >= attr_range.end {
+                        // 保留 attr_range.start 到 remove_range.start 的部分
                         segmented_attrs.push((
                             attr.clone(),
-                            attr_range.start..range.start,
+                            attr_range.start..remove_range.start,
                             *expanded,
                         ));
-                        return false;
                     }
+                } else if remove_range.start >= attr_range.end {
+                    // attr 的范围在 remove_range 的前面，保留 attr
+                    return true;
                 }
-                return false;
             }
             true
         });

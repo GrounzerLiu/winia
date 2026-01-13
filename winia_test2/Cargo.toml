@@ -3,6 +3,15 @@ name = "winia_test2"
 version = "0.1.0"
 edition = "2024"
 
+[profile.release]
+opt-level = "z"     # 优化文件大小（也可以用 "s"）
+lto = true          # 启用链接时优化
+codegen-units = 1   # 减少并行代码生成单元，提高优化效果
+strip = true        # 自动剥离符号信息（Rust 1.59+）
+panic = "abort"     # panic 时直接终止，不展开堆栈
+
 [dependencies]
 winia = { path = "../winia" }
-gpu_renderer = { path = "../gpu_renderer" , features = ["vulkan", "opengl"] }
+log = "0.4.29"
+unicode-segmentation = "1.12.0"
+

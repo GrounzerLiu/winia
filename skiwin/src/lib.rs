@@ -20,7 +20,7 @@ use std::sync::Arc;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
-pub trait SkiaWindow: Deref<Target = Window> {
+pub trait SkiaWindow: Deref<Target =dyn Window> {
     // fn resumed(&mut self);
     fn resize(&mut self);
     fn surface(&self) -> Arc<Mutex<Surface>>;

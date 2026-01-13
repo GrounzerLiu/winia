@@ -215,7 +215,7 @@ pub trait AnimationExt {
 
 impl AnimationExt for WindowContext {
     fn animate(&self, target: Target) -> LayoutAnimation {
-        LayoutAnimation::new(&self.event_loop_proxy, target)
+        LayoutAnimation::new(self.event_loop_proxy(), target)
     }
 }
 

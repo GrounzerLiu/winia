@@ -3,13 +3,19 @@ use crate::ui::item::{ItemEvent, ItemKind, ItemProps, MeasureMode, PhysicalX, Se
 use crate::ui::{Alignment, HorizontalAlignment, Item, Orientation};
 use crate::define_props;
 use clonelet::clone;
-
-define_props! {
+use proc_macro::ItemProps;
+/*define_props! {
     StackPropsTrait;
     stack_props;
     StackProps {
         alignment: SharedDerived<Alignment>
     }
+}*/
+
+#[derive(ItemProps)]
+pub struct StackProps {
+    pub item_props: ItemProps,
+    pub alignment: SharedDerived<Alignment>,
 }
 
 impl StackProps {
@@ -17,35 +23,15 @@ impl StackProps {
         Self {
             item_props,
             alignment: Alignment::top_start().into(),
-        }
+        }.name("Stack")
     }
 }
-
-/*pub struct Stack {
-    props: StackProps,
-}
-
-impl Stack {
-    pub fn new(
-        window_context: WindowContext,
-        props: StackProps,
-        children: impl Into<SharedDerived<Vec<Item>>>
-    ) -> Item {
-        Item::new(
-            window_context,
-            ItemKind::Container,
-            item_event(&props),
-            props.item_props,
-            children
-        )
-    }
-}*/
 
 pub fn stack(props: StackProps, children: impl Into<SharedDerived<Vec<Item>>>) -> Item {
     Item::new(
         ItemKind::Container,
         item_event(&props),
-        props.item_props,
+        props,
         children,
     )
 }
@@ -63,7 +49,7 @@ fn item_event(props: &StackProps) -> ItemEvent {
                     let mut child_data = child.data();
                     let child_width = child_data.props().width.get();
                     let child_height = child_data.props().height.get();
-                    child_data.measure(
+                    child_data.dispatch_measure(
                         child_width.create_measure_mode(width_mode.value() - padding_h),
                         child_height.create_measure_mode(height_mode.value() - padding_v),
                     );

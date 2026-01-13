@@ -1,3 +1,5 @@
+#![feature(ergonomic_clones)]
+
 pub mod core;
 pub mod shared;
 pub mod ui;
@@ -6,6 +8,7 @@ pub mod animation;
 pub mod theme;
 pub mod text;
 mod drawable;
+pub mod collection;
 
 pub use theme::Theme;
 
@@ -63,18 +66,18 @@ impl<T> OptionalInvoke<T> for Option<T> {
     }
 }
 
-pub trait Let {
-    fn let_ref(&self, invoke: impl FnOnce(&Self));
-    fn let_mut(&mut self, invoke: impl FnOnce(&mut Self));
+pub trait Let<R> {
+    fn let_ref(&self, invoke: impl FnOnce(&Self) -> R) -> R;
+    fn let_mut(&mut self, invoke: impl FnOnce(&mut Self) -> R) -> R;
 }
 
-impl<T> Let for T {
-    fn let_ref(&self, invoke: impl FnOnce(&Self)) {
-        invoke(self);
+impl<T, R> Let<R> for T {
+    fn let_ref(&self, invoke: impl FnOnce(&Self) -> R) -> R {
+        invoke(self)
     }
 
-    fn let_mut(&mut self, invoke: impl FnOnce(&mut Self)) {
-        invoke(self);
+    fn let_mut(&mut self, invoke: impl FnOnce(&mut Self) -> R) -> R {
+        invoke(self)
     }
 }
 

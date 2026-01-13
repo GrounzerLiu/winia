@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use crate::shared::SharedDrawable;
 use crate::ui::{Color, SetColor};
 use proc_macro::AsRef;
@@ -173,6 +174,12 @@ impl TextAttribute {
             TextAttribute::TextBaseline(_) => AttributeType::TextBaseline,
             TextAttribute::WordSpacing(_) => AttributeType::WordSpacing,
         }
+    }
+}
+
+impl Debug for TextAttribute {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TextAttribute::{:?}", self.attr_type())
     }
 }
 

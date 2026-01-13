@@ -2,12 +2,13 @@ use std::ops::DerefMut;
 use std::sync::Arc;
 use clonelet::clone;
 use parking_lot::Mutex;
+use proc_macro::ItemProps;
 use crate::{bind_properties, define_props};
 use crate::app::EventLoopProxy;
 use crate::drawable::{Drawable, ImageDrawable};
 use crate::shared::{SharedDerived, SharedDerivedBool, SharedDerivedDrawable, SharedDrawable};
 use crate::ui::{Alignment, Color, HorizontalAlignment, Item, Orientation, VerticalAlignment};
-use crate::ui::item::{ItemEvent, ItemKind, ItemProps, MeasureMode, NeedRedraw, PhysicalX};
+use crate::ui::item::{ItemEvent, ItemKind, ItemProps, MeasureMode, ItemUpdater, PhysicalX};
 
 static DRAWABLE_X: &str = "drawable_x";
 static DRAWABLE_Y: &str = "drawable_y";
@@ -30,7 +31,7 @@ pub enum ScaleMode {
     Contain,
 }
 
-define_props!(
+/*define_props!(
     ImagePropsTrait;
     image_props;
     ImageProps {
@@ -41,13 +42,25 @@ define_props!(
         undersize_scale_mode: SharedDerived<ScaleMode>,
         color: SharedDerived<Option<Color>>,
     }
-);
+);*/
+
+#[derive(ItemProps)]
+pub struct ImageProps {
+    pub item_props: ItemProps,
+    #[constructor]
+    pub drawable: SharedDerivedDrawable,
+    pub align_content: SharedDerived<Alignment>,
+    pub dpi_sensitive: SharedDerivedBool,
+    pub oversize_scale_mode: SharedDerived<ScaleMode>,
+    pub undersize_scale_mode: SharedDerived<ScaleMode>,
+    pub color: SharedDerived<Option<Color>>,
+}
 
 impl ImageProps {
-    pub fn new(item_props: ItemProps) -> Self {
+    pub fn new(item_props: ItemProps, drawable: impl Into<SharedDerivedDrawable>) -> Self {
         Self {
             item_props,
-            drawable: SharedDrawable::empty().into(),
+            drawable: drawable.into(),
             align_content: Alignment::center().into(),
             dpi_sensitive: true.into(),
             oversize_scale_mode: ScaleMode::Contain.into(),
@@ -58,53 +71,45 @@ impl ImageProps {
 }
 
 pub fn image(image_props: ImageProps) -> Item {
-    let event_loop_proxy = image_props.item_props.window_context.event_loop_proxy.clone();
-    let need_redraw = image_props.item_props.need_redraw.clone();
+    let event_loop_proxy = image_props.item_props.window_context.event_loop_proxy().clone();
+    let item_updater = image_props.item_props.item_updater.clone();
+    let image_drawable = image_props.drawable.clone();
     let item = Item::new(
         ItemKind::Widget,
         item_event(&image_props),
-        image_props.item_props,
+        image_props,
         vec![]
-    );
-    bind_properties!(
-        item,
-        image_props.drawable,
-        image_props.align_content,
-        image_props.dpi_sensitive,
-        image_props.oversize_scale_mode,
-        image_props.undersize_scale_mode,
-        image_props.color
     );
     let id = item.id();
     fn add_redraw_requester(
         id: u32,
-        need_redraw: &Arc<Mutex<NeedRedraw>>,
+        item_updater: &Arc<Mutex<ItemUpdater>>,
         event_loop_proxy: &EventLoopProxy,
         drawable: &mut Box<dyn Drawable>,
     ) {
         drawable.add_redraw_requester(
             id,
             Box::new({
-                let need_redraw = need_redraw.clone();
+                let item_updater = item_updater.clone();
                 let event_loop_proxy = event_loop_proxy.clone();
                 move || {
-                    need_redraw.lock().request();
-                    event_loop_proxy.request_redraw();
+                    item_updater.lock().request_update();
+                    event_loop_proxy.request_update_layout();
                 }
             })
         );
     }
     add_redraw_requester(
         id,
-        &need_redraw,
+        &item_updater,
         &event_loop_proxy,
-        image_props.drawable.lock().deref_mut(),
+        image_drawable.lock().deref_mut(),
     );
-    image_props.drawable.add_interceptor(id, move|old, mut new|{
+    image_drawable.add_interceptor(id, move|old, mut new|{
         old.remove_redraw_requester(id);
         add_redraw_requester(
             id,
-            &need_redraw,
+            &item_updater,
             &event_loop_proxy,
             &mut new,
         );

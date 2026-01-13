@@ -10,6 +10,7 @@ mod shared_string;
 mod shared_drawable;
 mod shared_text;
 mod shared_item;
+mod shared_wvec;
 
 pub use shared_color::*;
 
@@ -19,3 +20,4 @@ pub use shared_string::*;
 pub use shared_drawable::*;
 pub use shared_text::*;
 pub use shared_item::*;
+pub use shared_wvec::*;

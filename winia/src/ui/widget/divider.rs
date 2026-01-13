@@ -6,15 +6,21 @@ use crate::ui::{Color, Size};
 use crate::{define_props, depend};
 use clonelet::clone;
 use std::ops::Deref;
-
-define_props!(
+use proc_macro::ItemProps;
+/*define_props!(
     DividerPropsTrait;
     divider_props;
     DividerProps {
         thickness: SharedDerived<Size>,
         color: SharedDerived<Color>,
     }
-);
+);*/
+#[derive(ItemProps)]
+pub struct DividerProps {
+    pub item_props: ItemProps,
+    pub thickness: SharedDerived<Size>,
+    pub color: SharedDerived<Color>,
+}
 
 impl DividerProps {
     pub fn new(item_props: ItemProps) -> Self {
@@ -28,7 +34,7 @@ impl DividerProps {
                 let style: &StateStyles<DividerStyle> =
                     theme_ref.get_style(style::DIVIDER).unwrap();
                 style
-                    .get(&item_state.get())
+                    .get(item_state.get())
                     .get_thickness(theme_ref)
                     .cloned()
                     .map(Size::from)
@@ -43,7 +49,7 @@ impl DividerProps {
                 let style: &StateStyles<DividerStyle> =
                     theme_ref.get_style(style::DIVIDER).unwrap();
                 style
-                    .get(&item_state.get())
+                    .get(item_state.get())
                     .get_color(theme_ref)
                     .cloned()
                     .unwrap()
@@ -72,7 +78,9 @@ macro_rules! color_from_theme {
 }
 
 pub mod style {
-    use crate::theme::ThemeValue;
+    use std::any::Any;
+use crate::ui::item::ItemState;
+use crate::theme::ThemeValue;
     use crate::theme::{color, StateStyles};
     use crate::ui::Color;
     use crate::Theme;
