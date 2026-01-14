@@ -41,7 +41,12 @@ impl Children {
 
     pub fn remove_by_id(&mut self, id: u32) {
         self.write(|children|{
-            children.retain(|i| i.id() != id);
+            // children.retain(|i| i.id() != id);
+            children.extract_if(.., |i| i.id() == id).for_each(|item| {
+                item.data().item_updater.lock().parent = None;
+                item.data().is_mounted = false;
+                item.data().on_unmounted();
+            })
         })
     }
 }

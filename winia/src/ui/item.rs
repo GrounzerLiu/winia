@@ -83,6 +83,7 @@ pub struct ItemData {
     draw_cache: Option<Picture>,
     event: ItemEvent,
     id: u32,
+    pub(crate) is_mounted: bool,
     pub focus_state: FocusState,
     kind: ItemKind,
     pub measure_frame: Frame,
@@ -145,6 +146,7 @@ impl ItemData {
             draw_cache: None,
             event,
             id,
+            is_mounted: false,
             focus_state: Default::default(),
             kind,
             measure_frame: Frame::default(),
@@ -385,6 +387,12 @@ impl ItemData {
             on_click(button_source);
         }
     }
+    
+    pub fn on_destroy(&mut self) {
+        if let Some(on_destroy) = &mut self.props.on_destroy {
+            on_destroy();
+        }
+    }
 
     pub fn on_focus_changed(&mut self, focus_state: &FocusState) {
         if let Some(on_focus_changed) = &mut self.props.on_focus_changed {
@@ -395,6 +403,12 @@ impl ItemData {
     pub fn on_hover_changed(&mut self, is_hovered: bool) {
         if let Some(on_hover_changed) = &mut self.props.on_hover_changed {
             on_hover_changed(is_hovered);
+        }
+    }
+    
+    pub fn on_mounted(&mut self) {
+        if let Some(on_mounted) = &mut self.props.on_mounted {
+            on_mounted();
         }
     }
 
@@ -416,6 +430,12 @@ impl ItemData {
     pub fn on_state_changed(&mut self, state: ItemState) {
         let item_state = self.props.item_state.clone();
         (self.props.on_state_changed)(item_state, state);
+    }
+    
+    pub fn on_unmounted(&mut self) {
+        if let Some(on_unmounted) = &mut self.props.on_unmounted {
+            on_unmounted();
+        }
     }
 
 
@@ -464,6 +484,12 @@ impl Deref for ItemData {
 
     fn deref(&self) -> &Self::Target {
         &self.props
+    }
+}
+
+impl Drop for ItemData {
+    fn drop(&mut self) {
+        self.on_destroy();
     }
 }
 

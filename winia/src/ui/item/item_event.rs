@@ -758,6 +758,10 @@ impl ItemEvent {
                             fg.data().dispatch_layout(0.0, 0.0, width, height);
                         }
                     }
+                    if !item.is_mounted {
+                        item.is_mounted = true;
+                        item.on_mounted();
+                    }
                 }
             }),
             dispatch_measure: event!({
