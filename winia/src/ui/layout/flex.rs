@@ -1128,7 +1128,7 @@ impl Line {
 
     pub fn add_item(&mut self, item: &Item) {
         let mut data = item.data();
-        let child_current_frame = data.current_frame();
+        let child_current_frame = &data.measure_frame;
         let child_main_axis_size = child_current_frame.size(self.orientation);
         let child_cross_axis_size = child_current_frame.size(self.orientation.not());
 
