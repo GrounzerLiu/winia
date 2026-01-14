@@ -1,7 +1,7 @@
 use std::ops::{Deref, DerefMut};
 use crate::shared::{SharedDerived, SharedDerivedF32, SharedDerivedUsize, SharedSource};
 use crate::theme::shape::Corner;
-use crate::ui::item::{Frame, ItemEvent, ItemKind, ItemProps, LayoutDirection, MeasureMode, PhysicalX};
+use crate::ui::item::{Children, Frame, ItemEvent, ItemKind, ItemProps, LayoutDirection, MeasureMode, PhysicalX};
 use crate::ui::widget::slider::slider_style::SliderStyleExt;
 use crate::ui::{rectangle, stack, Alignment, Color, Item, Orientation, Radius, RectanglePropsTrait, SetColor, Size, StackProps, StackPropsTrait};
 use crate::{depend, shared_derived};
@@ -428,7 +428,7 @@ pub fn slider(mut props: SliderProps) -> Item {
         ItemKind::Container,
         item_event,
         props,
-        SharedDerived::new_derived(vec![
+        Children::from(vec![
             handle,
             track,
         ]),
@@ -845,7 +845,7 @@ pub fn track(props: &SliderProps) -> Item {
         ItemKind::Widget,
         item_event,
         p,
-        SharedDerived::new_derived(vec![]),
+        Children::new(),
     )
 }
 

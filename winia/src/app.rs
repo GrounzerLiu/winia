@@ -4,7 +4,7 @@ mod window_controller;
 
 use crate::shared::{Shared, SharedSource};
 use crate::text::StyledText;
-use crate::ui::item::{ImeAction, KeyboardInput, MeasureMode, MouseWheel, PointerButton, PointerMoved};
+use crate::ui::item::{Children, ImeAction, KeyboardInput, MeasureMode, MouseWheel, PointerButton, PointerMoved};
 use crate::ui::{rectangle, stack, Color, Item, RectanglePropsTrait, StackPropsTrait};
 use skia_safe::textlayout::{ParagraphStyle, TextStyle};
 use skiwin::vulkan::VulkanSkiaWindow;
@@ -83,7 +83,7 @@ impl App {
         );
 
         let item = item_generator(&window_context);
-        let children: SharedSource<Vec<Item>> = Shared::from(vec![item]);
+        let children = Children::from(vec![item]);
         let stack = stack(
             window_context.stack_props()
                           .background(rectangle(
@@ -267,7 +267,6 @@ impl ApplicationHandler for App {
                             item_generator(&window_controller.window_context, layer_controller.clone());
                         layer_controller.set_id(item.id());
                         window_controller.add_layer(item);
-                        window_controller.item.data().item_updater.lock().request_update();
                     }
                     EventType::RemoveLayer(id) => {
                         window_controller.remove_layer(id);

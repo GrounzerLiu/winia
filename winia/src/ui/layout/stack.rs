@@ -1,5 +1,5 @@
 use crate::shared::SharedDerived;
-use crate::ui::item::{ItemEvent, ItemKind, ItemProps, MeasureMode, PhysicalX, SetCustomProp};
+use crate::ui::item::{Children, ItemEvent, ItemKind, ItemProps, MeasureMode, PhysicalX, SetCustomProp};
 use crate::ui::{Alignment, HorizontalAlignment, Item, Orientation};
 use crate::define_props;
 use clonelet::clone;
@@ -27,7 +27,7 @@ impl StackProps {
     }
 }
 
-pub fn stack(props: StackProps, children: impl Into<SharedDerived<Vec<Item>>>) -> Item {
+pub fn stack(props: StackProps, children: impl Into<Children>) -> Item {
     Item::new(
         ItemKind::Container,
         item_event(&props),

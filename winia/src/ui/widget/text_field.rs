@@ -2,7 +2,7 @@ use crate::core::next_id;
 use crate::shared::{Shared, SharedBool, SharedDerived, SharedDerivedBool, SharedDerivedColor, SharedDerivedF32, SharedDerivedString, SharedDerivedText, SharedDerivedUsize, SharedSource, SharedText};
 use crate::text::Paragraph;
 use crate::theme::color;
-use crate::ui::item::{ImeAction, ItemEvent, ItemKind, ItemProps, MeasureMode, PhysicalX, PointerButton, PointerMoved};
+use crate::ui::item::{Children, ImeAction, ItemEvent, ItemKind, ItemProps, MeasureMode, PhysicalX, PointerButton, PointerMoved};
 use crate::ui::widget::label::{create_paragraph_style, create_text_style};
 use crate::ui::{Color, Item, Orientation, SetColor};
 use clonelet::clone;
@@ -121,7 +121,7 @@ pub fn text_field(props: TextFieldProps) -> Item {
         ItemKind::Widget,
         item_event(&props),
         props,
-        Shared::new_derived(vec![]),
+        Children::new(),
     )
 }
 

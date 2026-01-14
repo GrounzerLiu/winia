@@ -1,6 +1,6 @@
 use crate::app::{Event, WindowAttributes, WindowContext};
 use crate::shared::SharedSource;
-use crate::ui::item::{ButtonSourceHashWrapper, MeasureMode};
+use crate::ui::item::{ButtonSourceHashWrapper, Children, MeasureMode};
 use crate::ui::Item;
 use skiwin::SkiaWindow;
 use winit::event::{Modifiers, MouseButton};
@@ -13,7 +13,7 @@ pub struct WindowController {
     pub skia_window: Box<dyn SkiaWindow>,
     pub item_generator: Option<Box<dyn FnOnce(WindowContext, WindowAttributes) -> Item>>,
     pub item: Item,
-    pub children: SharedSource<Vec<Item>>,
+    pub children: Children,
     pub cursor_x: f32,
     pub cursor_y: f32,
     pub modifiers: Option<Modifiers>,
@@ -27,7 +27,7 @@ impl WindowController {
         skia_window: impl SkiaWindow + 'static,
         item_generator: Option<Box<dyn FnOnce(WindowContext, WindowAttributes) -> Item>>,
         item: Item,
-        children: SharedSource<Vec<Item>>,
+        children: Children,
     ) -> Self {
         Self {
             window_context,

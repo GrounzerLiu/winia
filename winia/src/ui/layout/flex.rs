@@ -5,7 +5,7 @@ use proc_macro::ItemProps;
 use crate::{bind_properties, define_props};
 use crate::app::WindowContext;
 use crate::shared::{SharedDerived, SharedDerivedUsize};
-use crate::ui::item::{ItemData, ItemEvent, ItemKind, ItemProps, MeasureMode, PhysicalX, SetCustomProp};
+use crate::ui::item::{Children, ItemData, ItemEvent, ItemKind, ItemProps, MeasureMode, PhysicalX, SetCustomProp};
 use crate::ui::{Item, Orientation};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString)]
@@ -125,7 +125,7 @@ impl FlexProps {
     }
 }
 
-pub fn flex(props: FlexProps, children: impl Into<SharedDerived<Vec<Item>>>) -> Item {
+pub fn flex(props: FlexProps, children: impl Into<Children>) -> Item {
     Item::new(
         ItemKind::Container,
         item_event(&props),

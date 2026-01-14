@@ -4,7 +4,7 @@ use crate::shared::{
     SharedBool, SharedDerived, SharedDerivedColor, SharedDerivedF32, SharedF32, SharedSource
 };
 use crate::theme::color;
-use crate::ui::item::{ItemEvent, ItemKind, ItemProps, ItemUpdater, PointerButton};
+use crate::ui::item::{Children, ItemEvent, ItemKind, ItemProps, ItemUpdater, PointerButton};
 use crate::ui::{Color, Item, SetColor};
 use clonelet::clone;
 use parking_lot::Mutex;
@@ -44,7 +44,7 @@ pub fn ripple(props: RippleProps) -> Item {
         ItemKind::Widget,
         item_event(&props),
         props,
-        SharedDerived::new_derived(vec![])
+        Children::new()
     )
 }
 

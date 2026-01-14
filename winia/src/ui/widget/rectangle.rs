@@ -1,6 +1,6 @@
 use crate::define_props;
 use crate::shared::{Shared, SharedDerived, SharedDerivedColor, SharedSource};
-use crate::ui::item::{Frame, ItemEvent, ItemKind, ItemProps, LayoutDirection};
+use crate::ui::item::{Children, Frame, ItemEvent, ItemKind, ItemProps, LayoutDirection};
 use crate::ui::{Color, Item, Orientation, SetColor};
 use crate::bind_properties;
 use clonelet::clone;
@@ -166,7 +166,7 @@ pub fn rectangle(props: RectangleProps) -> Item {
         ItemKind::Widget,
         item_event(&props),
         props,
-        Shared::new_derived(vec![]),
+        Children::new(),
     )
 }
 

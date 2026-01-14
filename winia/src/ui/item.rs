@@ -78,7 +78,8 @@ pub trait ItemPropsTrait {
 #[derive(Getters)]
 pub struct ItemData {
     animations: Animations,
-    children: SharedDerived<Vec<Item>>,
+    #[get = "pub"]
+    children: Children,
     draw_cache: Option<Picture>,
     event: ItemEvent,
     id: u32,
@@ -98,12 +99,24 @@ impl ItemData {
         kind: ItemKind,
         props: impl ItemPropsTrait,
         event: ItemEvent,
-        children: impl Into<SharedDerived<Vec<Item>>>,
+        children: impl Into<Children>,
     ) -> Self {
         let id = next_id();
         props.bind(id);
-        let children = children.into();
         let props = props.to_item_props();
+        let mut children = children.into();
+        children.set_parent_updater(&props.item_updater);
+        children.subscribe(
+            next_id(),
+            {
+                let e = props.window_context.event_loop_proxy().clone();
+                let updater = props.item_updater.clone();
+                move || {
+                    updater.lock().request_update();
+                    e.request_update_layout();
+                }
+            }
+        );
 
         let width = props.width.clone();
         let height = props.height.clone();
@@ -121,19 +134,11 @@ impl ItemData {
                 )
             },
         );
-        {
-            let children = children.lock();
-            for child in children.iter() {
-                let child_data = child.data();
-                child_data.props.item_updater.lock().parent = Some(Arc::downgrade(&props.item_updater));
-            }
-        }
 
         props.focus_requester.lock().set_event_loop_proxy(props.window_context.event_loop_proxy().clone());
         props.focus_requester.lock().set_focusable(&props.focusable);
         props.focus_requester.lock().set_item_id(id);
 
-        // props.bind(id, &props.need_redraw, &props.window_context);
         Self {
             animations: Default::default(),
             children,
@@ -150,10 +155,6 @@ impl ItemData {
             recorded_frame: None,
             target_frame: Frame::default(),
         }
-    }
-
-    pub fn children(&self) -> &Shared<Vec<Item>, Derived> {
-        &self.children
     }
 
     pub fn clamp_height(&self, value: f32) -> f32 {
@@ -475,7 +476,7 @@ impl Item {
         kind: ItemKind,
         event: ItemEvent,
         props: impl ItemPropsTrait,
-        children: impl Into<SharedDerived<Vec<Item>>>,
+        children: impl Into<Children>,
     ) -> Self {
         let data = ItemData::new(kind, props, event, children);
         Self {
@@ -506,7 +507,7 @@ impl Add<Item> for Item {
     type Output = Children;
 
     fn add(self, rhs: Item) -> Self::Output {
-        let mut children = Children::empty();
+        let mut children = Children::new();
         children.add_item(self);
         children.add_item(rhs);
         children

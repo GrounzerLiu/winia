@@ -2,7 +2,7 @@ use crate::core::next_id;
 use crate::shared::{Shared, SharedBool, SharedDerived, SharedDerivedBool, SharedDerivedColor, SharedDerivedF32, SharedDerivedString, SharedDerivedText, SharedDerivedUsize, SharedSource};
 use crate::text::Paragraph;
 use crate::theme::color;
-use crate::ui::item::{ItemEvent, ItemKind, ItemProps, LayoutDirection, MeasureMode, PhysicalX, PointerButton, PointerMoved};
+use crate::ui::item::{Children, ItemEvent, ItemKind, ItemProps, LayoutDirection, MeasureMode, PhysicalX, PointerButton, PointerMoved};
 use crate::ui::{Color, Item, Orientation, SetColor};
 use clonelet::clone;
 use proc_macro::ItemProps;
@@ -65,7 +65,7 @@ pub fn label(props: LabelProps) -> Item {
         ItemKind::Widget,
         item_event(&props),
         props,
-        Shared::new_derived(vec![]),
+        Children::new(),
     )
 }
 
