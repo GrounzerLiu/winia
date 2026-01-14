@@ -385,6 +385,63 @@ impl ItemEvent {
                         }
                     }
 
+                    let x = current_frame.x();
+                    let y = current_frame.y();
+                    let rotation = current_frame.rotation;
+                    let rotation_center_x = current_frame.rotation_center_x + x;
+                    let rotation_center_y = current_frame.rotation_center_y + y;
+
+                    let skew_x = current_frame.skew_x;
+                    let skew_y = current_frame.skew_y;
+                    let skew_center_x = current_frame.skew_center_x + x;
+                    let skew_center_y = current_frame.skew_center_y + y;
+                    let scale_x = current_frame.scale_x;
+                    let scale_y = current_frame.scale_y;
+                    let scale_center_x = current_frame.scale_center_x + x;
+                    let scale_center_y = current_frame.scale_center_y + y;
+
+                    {
+                        // Apply the transformation matrix to the canvas.
+                        let canvas = surface.canvas();
+                        if current_frame.opacity < 1.0 {
+                            // canvas.save();
+                            canvas.save_layer_alpha_f(
+                                Rect::from_xywh(
+                                    current_frame.x(),
+                                    current_frame.y(),
+                                    current_frame.width,
+                                    current_frame.height,
+                                ),
+                                current_frame.opacity,
+                            );
+                        } else {
+                            canvas.save();
+                        }
+
+                        canvas.rotate(
+                            rotation,
+                            Some(Point::new(
+                                rotation_center_x,
+                                rotation_center_y,
+                            )),
+                        );
+
+                        canvas.translate((skew_center_x, skew_center_y));
+                        canvas.skew((skew_x, skew_y));
+                        canvas.translate((-skew_center_x, -skew_center_y));
+
+                        // canvas.translate((-scale_center_x, -scale_center_y));
+                        canvas.scale((scale_x, scale_y));
+                        canvas.translate((
+                            -(scale_x - 1.0) * scale_center_x / scale_x,
+                            -(scale_y - 1.0) * scale_center_y / scale_y,
+                        ));
+                        // if item.get_name() == "blue" {
+                        //     canvas.scale((scale_x, scale_y));
+                        //     canvas.translate((-(scale_x * 150.0 - 150.0) / scale_x, 0.0));
+                        // }
+                    }
+
                     let clipped = item.props.clipped.get();
                     let clip_shape = {
                         let current_frame = item.current_frame();
@@ -475,6 +532,12 @@ impl ItemEvent {
                         {
                             surface.canvas().restore();
                         }
+                    }
+
+                    {
+                        // Restore the transformation matrix of the canvas.
+                        let canvas = surface.canvas();
+                        canvas.restore();
                     }
 
                     item.props.item_updater.lock().need_redraw = false;
