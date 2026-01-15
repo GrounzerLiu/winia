@@ -84,7 +84,6 @@ impl TextFieldProps {
         let on_selection_change: Box<dyn FnMut(Range<usize>)> = Box::new({
             let selection_range = selection_range.clone();
             move |new_range: Range<usize>| {
-                println!("TextFieldProps on_selection_change: {:?}", new_range);
                 selection_range.set(new_range);
             }
         });
@@ -514,111 +513,87 @@ fn item_event(props: &TextFieldProps) -> ItemEvent {
                 props.text,
                 props.on_text_change,
                 props.selection_range,
+                props.on_selection_change,
                 show_cursor,
                 last_cursor_blink,
+                text_cache,
             );
             move |item, ime_input| {
-                let mut selection_range = selection_range.lock();
+                let mut on_selection_change = on_selection_change.lock();
                 let mut on_text_change = on_text_change.lock();
                 {
                     let text = text.lock();
                     let text_len = text.len();
-                    selection_range.start = selection_range.start.clamp(0, text_len);
-                    selection_range.end = selection_range.end.clamp(0, text_len);
+                    let mut selection_range = selection_range.get();
+                    on_selection_change(selection_range.start.clamp(0, text_len)..selection_range.end.clamp(0, text_len));
                 }
                 let mut composing = composing.lock();
                 match ime_input {
+                    ImeAction::Enter | ImeAction::Delete | ImeAction::Commit(_) => {
+                        if !selection_range.lock().is_empty() {
+                            on_text_change(TextChange::Deleted {
+                                range: selection_range.get(),
+                            });
+                            on_selection_change(selection_range.get().start..selection_range.get().start);
+                        }
+                    }
+                    _=> {}
+                }
+                match ime_input {
                     ImeAction::Enabled => {}
                     ImeAction::Enter => {
-                        if selection_range.start != selection_range.end {
-                            // property.text.lock().remove(selection.clone());
-                            on_text_change(TextChange::Deleted {
-                                range: selection_range.clone(),
-                            });
-                            selection_range.end = selection_range.start;
-                        }
-                        // property.text.lock().insert_str(selection.start, "\n");
                         on_text_change(TextChange::Inserted {
-                            index: selection_range.start,
+                            index: selection_range.get().start,
                             text: "\n".to_string(),
                         });
-                        let new_index = selection_range.start + 1;
-                        selection_range.start = new_index;
-                        selection_range.end = new_index;
+                        let new_index = selection_range.get().start + 1;
+                        on_selection_change(new_index..new_index);
                     }
                     ImeAction::Delete => {
-                        if selection_range.start != selection_range.end {
-                            // property.text.lock().remove(selection.clone());
-                            on_text_change(TextChange::Deleted {
-                                range: selection_range.clone(),
-                            });
-                            selection_range.end = selection_range.start;
-                            // property.text.notify();
+                        if selection_range.lock().start == 0 {
                             return;
                         }
 
-                        if selection_range.start == 0 {
-                            return;
-                        }
-
-                        // let mut text = property.text.lock();
-                        let prev_glyph_index = text.lock().prev_glyph_index(selection_range.start);
-
-                        if let Some(prev_glyph_index) = prev_glyph_index {
-                            // text.remove(prev_glyph_index..selection.start);
+                        if let Some(paragraph) = text_cache.lock().as_ref()
+                            && let Some(prev_glyph_index) = paragraph.prev_glyph_byte_index(selection_range.get().start){
                             on_text_change(TextChange::Deleted {
-                                range: prev_glyph_index..selection_range.start,
+                                range: prev_glyph_index..selection_range.get().start,
                             });
-                            selection_range.start = prev_glyph_index;
-                            selection_range.end = prev_glyph_index;
+                            on_selection_change(prev_glyph_index..prev_glyph_index);
                         }
                     }
                     ImeAction::PreEdit(pr_text, range) => {
                         if let Some((composing_range, old_selection_range)) = composing.as_ref()
                         {
-                            // property.text.lock().remove(composing_range.clone());
                             on_text_change(TextChange::Deleted {
                                 range: composing_range.clone(),
                             });
-                            selection_range.start = old_selection_range.start;
-                            selection_range.end = old_selection_range.end;
+                            on_selection_change(old_selection_range.start..old_selection_range.end);
                             *composing = None;
                         }
 
                         if let Some((start, end)) = range {
-                            // property.text.lock().insert_str(selection.start, pr_text);
                             on_text_change(TextChange::Inserted {
-                                index: selection_range.start,
+                                index: selection_range.get().start,
                                 text: pr_text.clone(),
                             });
                             *composing = Some((
-                                selection_range.start..(selection_range.start + pr_text.len()),
-                                selection_range.clone(),
+                                selection_range.get().start..(selection_range.get().start + pr_text.len()),
+                                selection_range.get().clone(),
                             ));
-                            //self.composing = Some((self.selection_range.start..(self.selection_range.start + pr_text.len()), self.selection_range.clone()));
-                            let new_selection_start = selection_range.start + start;
-                            let new_selection_end = selection_range.start + end;
-                            selection_range.start = new_selection_start;
-                            selection_range.end = new_selection_start;
+                            let new_selection_start = selection_range.get().start + start;
+                            let new_selection_end = selection_range.get().start + end;
+                            on_selection_change(new_selection_start..new_selection_end);
                         }
                     }
                     ImeAction::Commit(commit_text) => {
                         let commit_text_len = commit_text.len();
-                        if selection_range.start != selection_range.end {
-                            // property.text.lock().remove(selection.clone());
-                            on_text_change(TextChange::Deleted {
-                                range: selection_range.clone(),
-                            });
-                            selection_range.end = selection_range.start;
-                        }
-                        // property.text.lock().insert_str(selection.start, &commit_text);
                         on_text_change(TextChange::Inserted {
-                            index: selection_range.start,
+                            index: selection_range.get().start,
                             text: commit_text.clone(),
                         });
-                        let new_index = selection_range.start + commit_text_len;
-                        selection_range.start = new_index;
-                        selection_range.end = new_index;
+                        let new_index = selection_range.get().start + commit_text_len;
+                        on_selection_change(new_index..new_index);
                     }
                     ImeAction::Disabled => {}
                     _ => {}
@@ -684,17 +659,8 @@ fn item_event(props: &TextFieldProps) -> ItemEvent {
                                 NamedKey::ArrowLeft => {
                                     let mut selection_range = selection_range.get();
                                     if selection_range.start > 0 {
-/*                                        let mut text = text.lock();
-                                        if let Some(prev_glyph_index) =
-                                            text.prev_glyph_index(selection_range.start)
-                                        {
-                                            selection_range.start = prev_glyph_index;
-                                            selection_range.end = prev_glyph_index;
-                                        }*/
                                         if let Some(paragraph) = text_cache.lock().as_ref()
                                             && let Some(prev_glyph_index) = paragraph.prev_glyph_byte_index(selection_range.start){
-                                            // selection_range.start = prev_glyph_index;
-                                            // selection_range.end = prev_glyph_index;
                                             let mut on_selection_change = on_selection_change.lock();
                                             on_selection_change(prev_glyph_index..prev_glyph_index);
                                         }
@@ -704,18 +670,10 @@ fn item_event(props: &TextFieldProps) -> ItemEvent {
                                 }
                                 NamedKey::ArrowRight => {
                                     let mut selection_range = selection_range.get();
-                                    let mut text_len = text.lock().len();
+                                    let text_len = text.lock().len();
                                     if selection_range.start < text_len {
-                                        // if let Some(next_glyph_index) =
-                                        //     text.next_glyph_index(selection_range.start)
-                                        // {
-                                        //     selection_range.start = next_glyph_index;
-                                        //     selection_range.end = next_glyph_index;
-                                        // }
                                         if let Some(paragraph) = text_cache.lock().as_ref()
                                             && let Some(next_glyph_index) = paragraph.next_glyph_byte_index(selection_range.start){
-                                            // selection_range.start = next_glyph_index;
-                                            // selection_range.end = next_glyph_index;
                                             let mut on_selection_change = on_selection_change.lock();
                                             on_selection_change(next_glyph_index..next_glyph_index);
                                         }
