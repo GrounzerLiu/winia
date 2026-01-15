@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
+use std::time::Instant;
 use tklog::debug;
 use winit::dpi::LogicalPosition;
 use winit::event::{DeviceId, Force, KeyEvent, Modifiers, MouseButton, TouchPhase};
@@ -404,7 +405,6 @@ impl ItemEvent {
                         // Apply the transformation matrix to the canvas.
                         let canvas = surface.canvas();
                         if current_frame.opacity < 1.0 {
-                            // canvas.save();
                             canvas.save_layer_alpha_f(
                                 Rect::from_xywh(
                                     current_frame.x(),
@@ -430,24 +430,12 @@ impl ItemEvent {
                         canvas.skew((skew_x, skew_y));
                         canvas.translate((-skew_center_x, -skew_center_y));
 
-                        // canvas.translate((-scale_center_x, -scale_center_y));
                         canvas.scale((scale_x, scale_y));
                         canvas.translate((
                             -(scale_x - 1.0) * scale_center_x / scale_x,
                             -(scale_y - 1.0) * scale_center_y / scale_y,
                         ));
-                        // if item.get_name() == "blue" {
-                        //     canvas.scale((scale_x, scale_y));
-                        //     canvas.translate((-(scale_x * 150.0 - 150.0) / scale_x, 0.0));
-                        // }
                     }
-
-                    let clipped = item.props.clipped.get();
-                    let clip_shape = {
-                        let current_frame = item.current_frame();
-                        let shape = item.props.clip_shape.lock();
-                        shape.as_ref().map(|shape| shape(&current_frame))
-                    };
 
                     if is_animating != item.animations.is_animating() {
                         item.props.item_updater.lock().need_redraw = true;
@@ -481,7 +469,6 @@ impl ItemEvent {
                         if let Some(clip_shape) = &clip_shape
                             && clipped
                         {
-                            surface.canvas().save();
                             surface.canvas().clip_path(clip_shape, None, true);
                         }
                     }
@@ -491,8 +478,8 @@ impl ItemEvent {
                         if let Some(bg) = background_lock.as_mut() {
                             bg.data().dispatch_draw(
                                 surface,
-                                item.target_frame.x(),
-                                item.target_frame.y(),
+                                current_frame.x(),
+                                current_frame.y(),
                             );
                         }
                     }
@@ -509,8 +496,8 @@ impl ItemEvent {
                         for child in children_lock.iter_mut() {
                             child.data().dispatch_draw(
                                 surface,
-                                item.target_frame.x(),
-                                item.target_frame.y(),
+                                current_frame.x(),
+                                current_frame.y(),
                             );
                         }
                     }
@@ -520,17 +507,9 @@ impl ItemEvent {
                         if let Some(fg) = foreground_lock.as_mut() {
                             fg.data().dispatch_draw(
                                 surface,
-                                item.target_frame.x(),
-                                item.target_frame.y(),
+                                current_frame.x(),
+                                current_frame.y(),
                             );
-                        }
-                    }
-
-                    {
-                        if let Some(_clip_shape) = &clip_shape
-                            && clipped
-                        {
-                            surface.canvas().restore();
                         }
                     }
 
