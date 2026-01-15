@@ -468,7 +468,7 @@ impl ApplicationHandler for App {
             WindowEvent::ModifiersChanged(modifiers) => {
                 // println!("{:?}", modifiers);
                 // println!("{:?}", modifiers.lshift_state());
-                window_controller.modifiers = Some(modifiers);
+                window_controller.window_context.modifiers.set(modifiers);
                 // window_controller.item.data().dispatch_modifiers(&modifiers);
             }
             WindowEvent::MouseWheel {
@@ -479,7 +479,7 @@ impl ApplicationHandler for App {
                 let scale_factor = window_controller.window_context.scale_factor();
                 match delta {
                     MouseScrollDelta::LineDelta(x, y) => {
-                        if let Some(modifiers) = window_controller.modifiers {
+                        if let Some(modifiers) = window_controller.window_context.modifiers.lock().as_ref() {
                             if modifiers.state() == ModifiersState::SHIFT {
                                 window_controller
                                     .item

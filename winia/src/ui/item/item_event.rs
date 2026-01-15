@@ -209,7 +209,7 @@ pub struct ItemEvent {
     pub dispatch_keyboard_input: Event<dyn FnMut(&mut ItemData, &KeyboardInput) -> bool>,
     pub dispatch_layout: Event<dyn FnMut(&mut ItemData, f32, f32, f32, f32)>,
     pub dispatch_measure: Event<dyn FnMut(&mut ItemData, MeasureMode, MeasureMode)>,
-    pub dispatch_modifiers_change: Event<dyn FnMut(&mut ItemData, &Modifiers)>,
+    pub dispatch_modifiers_changed: Event<dyn FnMut(&mut ItemData, &Modifiers)>,
     // pub dispatch_mouse_input: Event<dyn FnMut(&mut ItemData, &MouseInput) -> bool>,
     pub dispatch_mouse_wheel: Event<dyn FnMut(&mut ItemData, Option<MouseWheel>, Option<MouseWheel>) -> (Option<MouseWheel>, Option<MouseWheel>)>,
     // pub dispatch_touch_input: Event<dyn FnMut(&mut ItemData, &TouchInput) -> bool>,
@@ -222,7 +222,7 @@ pub struct ItemEvent {
     pub keyboard_input: Event<dyn FnMut(&mut ItemData, &KeyboardInput)>,
     pub layout: Event<dyn FnMut(&mut ItemData, f32, f32)>,
     pub measure: Event<dyn FnMut(&mut ItemData, MeasureMode, MeasureMode)>,
-    pub modifiers_change: Event<dyn FnMut(&mut ItemData, &Modifiers)>,
+    pub modifiers_changed: Event<dyn FnMut(&mut ItemData, &Modifiers)>,
     // pub mouse_input: Event<dyn FnMut(&mut ItemData, &MouseInput) -> bool>,
     pub mouse_wheel: Event<dyn FnMut(&mut ItemData, Option<MouseWheel>, Option<MouseWheel>) -> (Option<MouseWheel>, Option<MouseWheel>)>,
     pub pointer_button: Event<dyn FnMut(&mut ItemData, &PointerButton) -> bool>,
@@ -771,8 +771,15 @@ impl ItemEvent {
                     item.measure(width_mode, height_mode);
                 }
             }),
-            dispatch_modifiers_change: event!({
-                |_item: &mut ItemData, _modifiers: &Modifiers| {}
+            dispatch_modifiers_changed: event!({
+                |item: &mut ItemData, modifiers: &Modifiers| {
+                    let children = item.children().lock();
+                    for child in children.iter() {
+                        child.data().dispatch_modifiers_changed(modifiers);
+                    }
+                    drop(children);
+                    item.modifiers_changed(modifiers);
+                }
             }),
             /*            dispatch_mouse_input: event!({
                             // The mouse button that the item has captured.
@@ -1059,7 +1066,7 @@ impl ItemEvent {
                     measure_frame.height = height;
                 }
             }),
-            modifiers_change: event!({ |_item: &mut ItemData, _modifiers: &Modifiers| {} }),
+            modifiers_changed: event!({ |_item: &mut ItemData, _modifiers: &Modifiers| {} }),
             // mouse_input: event!({ |_item: &mut ItemData, _input: &MouseInput| { false } }),
             mouse_wheel: event!({
                 |_item: &mut ItemData,
@@ -1108,7 +1115,7 @@ impl_noop!(
     set_dispatch_keyboard_input|impl FnMut(&mut ItemData, &KeyboardInput) -> bool + 'static|dispatch_keyboard_input|bool|input:&KeyboardInput,
     set_dispatch_layout|impl FnMut(&mut ItemData, f32, f32, f32, f32) + 'static|dispatch_layout|()|x:f32;y:f32;width:f32;height:f32,
     set_dispatch_measure|impl FnMut(&mut ItemData, MeasureMode, MeasureMode) + 'static|dispatch_measure|()|width:MeasureMode;height:MeasureMode,
-    set_dispatch_modifiers_change|impl FnMut(&mut ItemData, &Modifiers) + 'static|dispatch_modifiers_change|()|modifiers:&Modifiers,
+    set_dispatch_modifiers_changed|impl FnMut(&mut ItemData, &Modifiers) + 'static|dispatch_modifiers_changed|()|modifiers:&Modifiers,
     // set_dispatch_mouse_input|impl FnMut(&mut ItemData, &MouseInput) -> bool + 'static|dispatch_mouse_input|bool|input:&MouseInput,
     set_dispatch_mouse_wheel|impl FnMut(&mut ItemData, Option<MouseWheel>, Option<MouseWheel>) -> (Option<MouseWheel>, Option<MouseWheel>) + 'static|dispatch_mouse_wheel|(Option<MouseWheel>, Option<MouseWheel>)|mouse_wheel_x:Option<MouseWheel>;mouse_wheel_y:Option<MouseWheel>,
     // set_dispatch_touch_input|impl FnMut(&mut ItemData, &TouchInput) -> bool + 'static|dispatch_touch_input|bool|input:&TouchInput,
@@ -1121,7 +1128,7 @@ impl_noop!(
     set_keyboard_input|impl FnMut(&mut ItemData, &KeyboardInput) + 'static|keyboard_input|()|input:&KeyboardInput,
     set_layout|impl FnMut(&mut ItemData, f32, f32) + 'static|layout|()|width:f32;height:f32,
     set_measure|impl FnMut(&mut ItemData, MeasureMode, MeasureMode) + 'static|measure|()|width:MeasureMode;height:MeasureMode,
-    set_modifiers_change|impl FnMut(&mut ItemData, &Modifiers) + 'static|modifiers_change|()|modifiers:&Modifiers,
+    set_modifiers_changed|impl FnMut(&mut ItemData, &Modifiers) + 'static|modifiers_changed|()|modifiers:&Modifiers,
     // set_mouse_input|impl FnMut(&mut ItemData, &MouseInput) -> bool + 'static|mouse_input|bool|input:&MouseInput,
     set_mouse_wheel|impl FnMut(&mut ItemData, Option<MouseWheel>, Option<MouseWheel>) -> (Option<MouseWheel>, Option<MouseWheel>) + 'static|mouse_wheel|(Option<MouseWheel>, Option<MouseWheel>)|mouse_wheel_x:Option<MouseWheel>;mouse_wheel_y:Option<MouseWheel>,
     set_pointer_button|impl FnMut(&mut ItemData, &PointerButton) -> bool + 'static|pointer_button|bool|input:&PointerButton,

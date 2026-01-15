@@ -13,10 +13,7 @@ pub struct WindowController {
     pub skia_window: Box<dyn SkiaWindow>,
     pub item_generator: Option<Box<dyn FnOnce(WindowContext, WindowAttributes) -> Item>>,
     pub item: Item,
-    pub children: Children,
-    pub cursor_x: f32,
-    pub cursor_y: f32,
-    pub modifiers: Option<Modifiers>,
+    pub children: Children
 }
 
 impl WindowController {
@@ -36,10 +33,7 @@ impl WindowController {
             skia_window: Box::new(skia_window),
             item_generator,
             item,
-            children,
-            cursor_x: 0.0,
-            cursor_y: 0.0,
-            modifiers: None,
+            children
         }
     }
     pub fn re_layout(&mut self) {

@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use clonelet::clone;
 use crossbeam_channel::{Receiver, Sender};
 use getset::Getters;
+use winit::event::Modifiers;
 use winit::event_loop::EventLoopProxy as WinitEventLoopProxy;
 use winit::window::{Window, WindowId};
 
@@ -160,32 +161,32 @@ impl EventLoopProxy {
 #[derive(Clone, Getters)]
 pub struct WindowContext {
     #[get = "pub"]
+    cursor_position: SharedSource<(f32, f32)>,
+    #[get = "pub"]
+    event_loop_proxy: EventLoopProxy,
+    ime_allowed: SharedSource<BTreeSet<u32>>,
+    #[get = "pub"]
+    layout_animations: SharedSource<Vec<LayoutAnimation>>,
+    #[get = "pub"]
+    pub(crate) modifiers: SharedSource<Option<Modifiers>>,
+    #[get = "pub"]
+    need_layout: SharedBool,
+    #[get = "pub(crate)"]
+    shared_animations: SharedSource<Vec<Box<dyn SharedAnimationTrait + Send>>>,
+    theme: SharedSource<Theme>,
+    #[get = "pub"]
     window: Arc<Box<dyn Window>>,
     #[get = "pub"]
     window_attributes: WindowAttributes,
-    theme: SharedSource<Theme>,
-    #[get = "pub"]
-    event_loop_proxy: EventLoopProxy,
-    #[get = "pub"]
-    need_layout: SharedBool,
-    #[get = "pub"]
-    layout_animations: SharedSource<Vec<LayoutAnimation>>,
-    // pub(crate) starting_local_animations: LocalShared<LinkedList<LocalLayoutAnimation>>,
-    #[get = "pub(crate)"]
-    shared_animations: SharedSource<Vec<Box<dyn SharedAnimationTrait + Send>>>,
-    /// ((last focused item, id), (new focused item, id))
-    // pub(crate) item_focused: Shared<(Option<(SharedBool, usize)>, Option<(SharedBool, usize)>)>,
-    ime_allowed: SharedSource<BTreeSet<u32>>,
-    // pub(crate) timers: Shared<Vec<Timer>>,
-    #[get = "pub"]
-    cursor_position: SharedSource<(f32, f32)>,
-    title: SharedDerived<String>,
-    min_width: SharedDerived<f32>,
-    min_height: SharedDerived<f32>,
-    max_width: SharedDerived<f32>,
-    max_height: SharedDerived<f32>,
+
+
     #[get = "pub"]
     background_color: SharedDerived<Color>,
+    title: SharedDerived<String>,
+    max_height: SharedDerived<f32>,
+    max_width: SharedDerived<f32>,
+    min_height: SharedDerived<f32>,
+    min_width: SharedDerived<f32>,
 }
 
 impl WindowContext {
@@ -215,28 +216,22 @@ impl WindowContext {
             }
         );
         Self {
-            // theme: material_theme(Color::from_rgb(255, 0, 0), dark_light::detect().map_or(false,|mode|{
-            //     mode != dark_light::Mode::Dark
-            // })).into(),
-            window: window.clone(),
-            window_attributes: window_attributes.clone(),
-            theme,
-            event_loop_proxy: EventLoopProxy::new(window_id, event_loop_proxy, sender),
-            need_layout: SharedBool::new(false),
-            layout_animations: Vec::new().into(),
-            // starting_local_animations: LinkedList::new().into(),
-            // shared_animations: Vec::new().into(),
-            // item_focused: (None, None).into(),
-            ime_allowed: BTreeSet::new().into(),
-            // timers: Vec::new().into(),
-            shared_animations: Vec::new().into(),
             cursor_position: (0.0, 0.0).into(),
-            title: "Title".to_string().into(),
-            min_width: 0.0.into(),
-            min_height: 0.0.into(),
-            max_width: f32::MAX.into(),
-            max_height: f32::MAX.into(),
+            event_loop_proxy: EventLoopProxy::new(window_id, event_loop_proxy, sender),
+            ime_allowed: BTreeSet::new().into(),
+            layout_animations: vec![].into(),
+            modifiers: None.into(),
+            need_layout: SharedBool::new(true),
+            shared_animations: vec![].into(),
+            theme,
+            window,
+            window_attributes: window_attributes.clone(),
             background_color,
+            title: "Winia Application".to_string().into(),
+            max_height: f32::MAX.into(),
+            max_width: f32::MAX.into(),
+            min_height: 0.0.into(),
+            min_width: 0.0.into(),
         }
     }
     
