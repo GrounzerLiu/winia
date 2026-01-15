@@ -125,10 +125,10 @@ impl LayoutAnimation {
     }
 
     /// Set the interpolator function.
-    pub fn interpolator(self, interpolator: impl Interpolator + Send + 'static) -> Self {
+    pub fn interpolator(self, interpolator: Box<dyn Interpolator + Send>) -> Self {
         {
             let mut inner = self.inner.lock();
-            inner.interpolator = Box::new(interpolator);
+            inner.interpolator = interpolator;
         }
         self
     }
