@@ -10,12 +10,14 @@ use proc_macro::ItemProps;
 use skia_safe::paint::Style;
 use skia_safe::textlayout::TextAlign;
 use skia_safe::{Paint, Rect};
-use std::ops::Range;
+use std::ops::{Deref, Range};
 use std::time::{Duration, Instant};
+use arboard::Clipboard;
 use winit::dpi::{LogicalPosition, LogicalSize, Position, Size};
 use winit::event::{ElementState, MouseButton};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::ImeRequest;
+use crate::keyboard::ModifiersKeyState;
 use crate::window::ImeRequestData;
 
 pub enum TextChange {
@@ -414,9 +416,10 @@ fn item_event(props: &TextFieldProps) -> ItemEvent {
                                 item.window_context().window().request_ime_update(
                                     ImeRequest::Update(ImeRequestData::default().with_cursor_area(
                                         Position::Logical(LogicalPosition::new(x as f64, y as f64)),
-                                        Size::Logical(LogicalSize::new(0.0, 0.0))
+                                        Size::Logical(LogicalSize::new(0.0, 0.0)),
                                     ))
-                                ).map_err(|e| {;
+                                ).map_err(|e| {
+                                    ;
                                     println!("Failed to request ime update: {:?}", e);
                                 }).ok();
                             }
@@ -537,7 +540,7 @@ fn item_event(props: &TextFieldProps) -> ItemEvent {
                             on_selection_change(selection_range.get().start..selection_range.get().start);
                         }
                     }
-                    _=> {}
+                    _ => {}
                 }
                 match ime_input {
                     ImeAction::Enabled => {}
@@ -555,7 +558,7 @@ fn item_event(props: &TextFieldProps) -> ItemEvent {
                         }
 
                         if let Some(paragraph) = text_cache.lock().as_ref()
-                            && let Some(prev_glyph_index) = paragraph.prev_glyph_byte_index(selection_range.get().start){
+                            && let Some(prev_glyph_index) = paragraph.prev_glyph_byte_index(selection_range.get().start) {
                             on_text_change(TextChange::Deleted {
                                 range: prev_glyph_index..selection_range.get().start,
                             });
@@ -615,39 +618,37 @@ fn item_event(props: &TextFieldProps) -> ItemEvent {
             move |item, keyboard_input| {
                 let event = &keyboard_input.key_event;
                 if event.state == ElementState::Pressed {
-/*                    if ctrl_pressed.get() {
+                    let modifiers = item.window_context.modifiers.get();
+                    if let Some(modifiers) = modifiers
+                        && modifiers.state().control_key()
+                    {
                         if let Key::Character(c) = &event.logical_key {
-                            if c.as_str() == "c" {
+                            if c.as_str() == "c"|| c.as_str() == "x" {
                                 let mut clipboard = Clipboard::new().unwrap();
-                                let property = property.lock();
-                                let selection = context.selection.lock();
-                                if selection.start != selection.end {
-                                    let text = property.text.lock();
-                                    let selected_text = text.substring(selection.clone());
+
+                                let selection_range = selection_range.get();
+                                if selection_range.start != selection_range.end {
+                                    let text = text.lock();
+                                    let selected_text = text.substring(selection_range.clone());
                                     clipboard.set_text(selected_text.to_string()).unwrap();
+                                    drop(text);
+                                    if c.as_str() == "x" {
+                                        let mut on_text_change =  on_text_change.lock();
+                                        on_text_change(TextChange::Deleted {
+                                            range: selection_range.clone()
+                                        });
+                                        let mut on_selection_change = on_selection_change.lock();
+                                        on_selection_change(selection_range.start..selection_range.start);
+                                    }
                                 }
-                                return true;
                             } else if c.as_str() == "v" {
                                 let mut clipboard = Clipboard::new().unwrap();
                                 if let Ok(text) = clipboard.get_text() {
                                     item.ime_input(&ImeAction::Commit(text));
-                                    return true;
                                 }
-                            } /*else if c.as_str() == "x" {
-                                    let mut clipboard = Clipboard::new().unwrap();
-                                    let property = property.lock();
-                                    let selection = context.selection.lock();
-                                    if selection.start != selection.end {
-                                        let text = property.text.lock();
-                                        let selected_text = text.substring(selection.clone());
-                                        clipboard.set_text(selected_text.to_string()).unwrap();
-                                        property.text.lock().remove(selection.clone());
-                                        property.text.notify();
-                                        return true;
-                                    }
-                                }*/
+                            }
                         }
-                    }else {*/
+                    } else {
                         match &event.logical_key {
                             Key::Named(key) => match key {
                                 NamedKey::Backspace => {
@@ -660,7 +661,7 @@ fn item_event(props: &TextFieldProps) -> ItemEvent {
                                     let mut selection_range = selection_range.get();
                                     if selection_range.start > 0 {
                                         if let Some(paragraph) = text_cache.lock().as_ref()
-                                            && let Some(prev_glyph_index) = paragraph.prev_glyph_byte_index(selection_range.start){
+                                            && let Some(prev_glyph_index) = paragraph.prev_glyph_byte_index(selection_range.start) {
                                             let mut on_selection_change = on_selection_change.lock();
                                             on_selection_change(prev_glyph_index..prev_glyph_index);
                                         }
@@ -673,7 +674,7 @@ fn item_event(props: &TextFieldProps) -> ItemEvent {
                                     let text_len = text.lock().len();
                                     if selection_range.start < text_len {
                                         if let Some(paragraph) = text_cache.lock().as_ref()
-                                            && let Some(next_glyph_index) = paragraph.next_glyph_byte_index(selection_range.start){
+                                            && let Some(next_glyph_index) = paragraph.next_glyph_byte_index(selection_range.start) {
                                             let mut on_selection_change = on_selection_change.lock();
                                             on_selection_change(next_glyph_index..next_glyph_index);
                                         }
@@ -692,7 +693,7 @@ fn item_event(props: &TextFieldProps) -> ItemEvent {
                             Key::Unidentified(_) => {}
                             Key::Dead(_) => {}
                         }
-                    //}
+                    }
                 }
             }
         })
