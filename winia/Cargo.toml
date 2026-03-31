@@ -15,44 +15,48 @@ material-symbols-sharp = []
 
 [dependencies]
 proc-macro = { path = "../proc-macro" }
-skiwin = { path = "../skiwin", features = ["vulkan"] }
+skiwin = { path = "../skiwin", features = ["vulkan", "gl"] }
 lazy_static = "1.5"
 #raw-window-handle = "0.6.2"
 #env_logger = "0.11.8"
 #bitflags = "2.9.0"
 #bezier-rs = "0.4.0"
-reqwest = { version = "0.13.1", features = ["blocking"] }
+reqwest = { version = "0.13", features = ["blocking"] }
 #skia-bindings = "0.80"
-unicode-segmentation = "1.12"
+unicode-segmentation = "1.13"
 #bimap = "0.6.3"
 #rayon = "1.11.0"
 parking_lot = { workspace = true, features = ["arc_lock"] }
 material-colors = "0.4.2"
 dark-light = "2.0.0"
 tokio = {version = "1", features = ["rt-multi-thread", "fs"] }
-clonelet = "0.2.0"
-strum = "0.27"
-strum_macros = "0.27"
-arboard = { version = "3.6.1", features = ["wayland-data-control"] }
+strum = "0.28"
+strum_macros = "0.28"
+letclone = "0.3.0"
+#arboard = { version = "3.6.1", features = ["wayland-data-control"] }
 
 
-skia-bindings = { workspace = true }
+material-shapes = { path = "/home/grounzer/RustroverProjects/material-shape", features = ["shape_util"]}
+
 getset.workspace = true
 tklog = "0.3.0"
 winit = { workspace = true }
 crossbeam-channel = { workspace = true }
+futures = "0.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 winit = { workspace = true }
 skia-safe = { workspace = true, features = ["all-linux"] }
+skia-bindings = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 winit = { workspace = true }
-skia-safe = { workspace = true, features = ["d3d", "gl", "svg", "textlayout", "vulkan"] }
+skia-safe = { workspace = true, features = ["all-windows"] }
 ##winapi = {version = "0.3.9", features = ["winreg", "dwmapi", "windef", "winuser"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
-skia-safe = { workspace = true, features = ["all-linux"] }
+skia-safe = { workspace = true, features = ["gl", "pdf", "textlayout", "vulkan", "svg"] }
+skia-bindings = { workspace = true }
 winit = { workspace = true, features = ["android-native-activity"] }
 #android_logger = "0.14.1"
 getset = { workspace = true }

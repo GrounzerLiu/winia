@@ -4,8 +4,8 @@ use crate::ui::item::ItemProps;
 use crate::ui::widget::divider::style::DividerStyle;
 use crate::ui::{Color, Size};
 use crate::{define_props, depend};
-use clonelet::clone;
 use std::ops::Deref;
+use letclone::clone;
 use proc_macro::ItemProps;
 /*define_props!(
     DividerPropsTrait;

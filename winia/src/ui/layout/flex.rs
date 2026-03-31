@@ -1,5 +1,5 @@
 use std::ops::Not;
-use clonelet::clone;
+use letclone::clone;
 use strum_macros::EnumString;
 use proc_macro::ItemProps;
 use crate::{bind_properties, define_props};

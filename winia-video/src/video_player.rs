@@ -5,10 +5,12 @@ use gstreamer_app as gst_app;
 use gstreamer_video as gst_video;
 use parking_lot::Mutex;
 use skia_safe::{AlphaType, Canvas, ColorType, Data, ImageInfo};
-use winia::ui::app::EventLoopProxy;
+use winia::app::EventLoopProxy;
+use winia::ui::item::ItemUpdater;
 
 pub struct VideoPlayer {
     event_loop_proxy: EventLoopProxy,
+    item_updater: Arc<Mutex<ItemUpdater>>,
     pipeline: gst::Pipeline,
     app_sink: gst_app::AppSink,
     current_frame: Arc<Mutex<Option<Vec<u8>>>>,
@@ -17,7 +19,7 @@ pub struct VideoPlayer {
 }
 
 impl VideoPlayer {
-    pub fn new(event_loop_proxy: &EventLoopProxy) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(event_loop_proxy: &EventLoopProxy, item_updater: Arc<Mutex<ItemUpdater>>) -> Result<Self, Box<dyn std::error::Error>> {
         gst::init()?;
 
         let pipeline = gst::Pipeline::with_name("video-player");
@@ -40,6 +42,7 @@ impl VideoPlayer {
 
         Ok(VideoPlayer {
             event_loop_proxy: event_loop_proxy.clone(),
+            item_updater,
             pipeline,
             app_sink,
             current_frame,
@@ -133,6 +136,7 @@ impl VideoPlayer {
         let video_info = Arc::clone(&self.video_info);
 
         let event_loop_proxy = self.event_loop_proxy.clone();
+        let mut item_updater = self.item_updater.clone();
         self.app_sink.set_callbacks(
             gst_app::AppSinkCallbacks::builder()
                 .new_sample(move |appsink| {
@@ -148,8 +152,9 @@ impl VideoPlayer {
 
                     *current_frame.lock() = Some(data);
                     *video_info.lock() = Some(video_info_obj);
-                    
-                    event_loop_proxy.request_redraw();
+
+                    item_updater.lock().request_update();
+                    event_loop_proxy.request_update_layout();
 
                     Ok(gst::FlowSuccess::Ok)
                 })

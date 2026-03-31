@@ -4,8 +4,11 @@ use crate::Theme;
 use crate::theme::{color, elevation, shape, typescale};
 use crate::theme::shape::Corner;
 use crate::theme::typescale::TypeScale;
+use crate::ui::badge_style::apply_badge_style;
 use crate::ui::button::button_style::{apply_elevated_button_style, apply_filled_button_style};
 use crate::ui::Color;
+use crate::ui::icon_style::apply_icon_style;
+use crate::ui::loading_indicator_styles::apply_loading_indicator_style;
 use crate::ui::slider_style::apply_slider_style;
 // use crate::ui::component::divider::style::add_divider_style;
 
@@ -92,7 +95,7 @@ pub fn material_theme(color: Color, is_dark: bool) -> Theme {
     let shadow = scheme.shadow.convert();
     let scrim = scheme.scrim.convert();
 
-    let mut theme = Theme::new();
+    let mut theme = Theme::new(is_dark);
     theme
         .set_color(color::PRIMARY, primary)
         .set_color(color::ON_PRIMARY, on_primary)
@@ -155,6 +158,9 @@ pub fn material_theme(color: Color, is_dark: bool) -> Theme {
     apply_elevated_button_style(&mut theme);
     apply_filled_button_style(&mut theme);
     apply_slider_style(&mut theme);
+    apply_loading_indicator_style(&mut theme);
+    apply_badge_style(&mut theme);
+    apply_icon_style(&mut theme);
     // divider_style(&mut theme);
 
     theme

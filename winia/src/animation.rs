@@ -1,8 +1,13 @@
 pub mod interpolator;
 pub mod target;
+mod physical_animation;
+pub mod selector;
+
+pub use physical_animation::*;
 
 pub use interpolator::Interpolator;
 pub use target::Target;
+pub use selector::*;
 
 use crate::animation::interpolator::EaseOutCirc;
 use crate::app::{EventLoopProxy, WindowContext};
@@ -11,6 +16,7 @@ use parking_lot::Mutex;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use crate::ui::item::ItemData;
 
 pub fn interpolate_f32(start: f32, end: f32, progress: f32, interpolator: &dyn Interpolator) -> f32
 {
@@ -92,10 +98,10 @@ impl InnerAnimation {
         self.on_finish = Some(Box::new(on_finish));
     }
 
-    pub fn is_target(&self, id: u32) -> bool {
+    pub fn is_target(&self, item: &ItemData) -> bool {
         match &self.target {
-            Target::Exclusion(targets) => !targets.contains(&id),
-            Target::Inclusion(targets) => targets.contains(&id),
+            Target::Exclusion(targets) => !targets.iter().find(|selector| selector.is_match(item)).is_some(),
+            Target::Inclusion(targets) => targets.iter().find(|selector| selector.is_match(item)).is_some(),
         }
     }
 
@@ -164,9 +170,9 @@ impl LayoutAnimation {
 
 
 
-    pub fn is_target(&self, id: u32) -> bool {
+    pub fn is_target(&self, item: &ItemData) -> bool {
         let inner = self.inner.lock();
-        inner.is_target(id)
+        inner.is_target(item)
     }
 }
 
@@ -194,15 +200,15 @@ impl LayoutAnimation {
         inner.is_finished = true;
     }
 
-    pub fn animatable(&self, id: u32, forced: bool) -> (bool, bool) {
+    pub fn animatable(&self, item: &ItemData, forced: bool) -> (bool, bool) {
         let animation_inner = self.inner.lock();
         match &animation_inner.target {
             Target::Exclusion(targets) => {
-                let is_excluded = targets.contains(&id);
+                let is_excluded = targets.iter().find(|selector| selector.is_match(item)).is_some();
                 (!is_excluded && !forced, is_excluded)
             }
             Target::Inclusion(targets) => {
-                let is_included = targets.contains(&id);
+                let is_included = targets.iter().find(|selector| selector.is_match(item)).is_some();
                 (is_included || forced, is_included || forced)
             }
         }

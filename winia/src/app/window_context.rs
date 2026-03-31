@@ -1,18 +1,18 @@
-use std::clone::UseCloned;
+
 use std::collections::BTreeSet;
 use std::ops::{Deref, DerefMut};
 use crate::animation::LayoutAnimation;
 use crate::app::WindowAttributes;
-use crate::shared::{Shared, SharedAnimationTrait, SharedBool, SharedDerived, SharedSource};
+use crate::shared::{Shared, AnyAnimation, SharedBool, SharedDerived, SharedSource};
 use crate::theme::material_theme;
 use crate::ui::{Color, Item};
 use crate::{depend, Theme};
 use proc_macro::AsRef;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use clonelet::clone;
 use crossbeam_channel::{Receiver, Sender};
-use getset::Getters;
+use getset::{Getters, Setters};
+use letclone::clone;
 use winit::event::Modifiers;
 use winit::event_loop::EventLoopProxy as WinitEventLoopProxy;
 use winit::window::{Window, WindowId};
@@ -58,7 +58,7 @@ impl LayerController {
 pub enum EventType {
     RequestFocus(u32),
     RequestUpdateLayout,
-    StartSharedAnimation(Box<dyn SharedAnimationTrait + Send>),
+    StartSharedAnimation(Box<dyn AnyAnimation>),
     StartLayoutAnimation(LayoutAnimation),
     Timer(usize),
     SetWindowAttribute(Box<dyn FnOnce(&Box<dyn Window>) + Send>),
@@ -112,7 +112,7 @@ impl EventLoopProxy {
         });
     }
 
-    pub fn start_shared_animation(&self, animation: Box<dyn SharedAnimationTrait + Send>) {
+    pub fn start_shared_animation(&self, animation: Box<dyn AnyAnimation>) {
         self.send_event(Event {
             window_id: self.window_id,
             event: EventType::StartSharedAnimation(animation),
@@ -158,22 +158,28 @@ impl EventLoopProxy {
     }
 }
 
-#[derive(Clone, Getters)]
+#[derive(Clone, Getters, Setters)]
 pub struct WindowContext {
     #[get = "pub"]
     cursor_position: SharedSource<(f32, f32)>,
     #[get = "pub"]
     event_loop_proxy: EventLoopProxy,
+    #[get = "pub"]
+    focused_item_id: SharedSource<Option<u32>>,
     ime_allowed: SharedSource<BTreeSet<u32>>,
     #[get = "pub"]
-    layout_animations: SharedSource<Vec<LayoutAnimation>>,
+    pub(crate) layout_animations: SharedSource<Vec<LayoutAnimation>>,
     #[get = "pub"]
     pub(crate) modifiers: SharedSource<Option<Modifiers>>,
     #[get = "pub"]
     need_layout: SharedBool,
     #[get = "pub(crate)"]
-    shared_animations: SharedSource<Vec<Box<dyn SharedAnimationTrait + Send>>>,
+    shared_animations: SharedSource<Vec<Box<dyn AnyAnimation>>>,
     theme: SharedSource<Theme>,
+    #[cfg(target_os = "android")]
+    #[get = "pub"]
+    #[set = "pub"]
+    android_app: Option<winit::platform::android::activity::AndroidApp>,
     #[get = "pub"]
     window: Arc<Box<dyn Window>>,
     #[get = "pub"]
@@ -189,6 +195,19 @@ pub struct WindowContext {
     min_width: SharedDerived<f32>,
 }
 
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+fn is_dark_mode() -> bool {
+    dark_light::detect().is_ok_and(|mode|{
+        mode == dark_light::Mode::Dark
+    })
+}
+#[cfg(target_os = "android")]
+fn is_dark_mode() -> bool {
+    // On Android, dark mode detection can be more complex and may require platform-specific APIs.
+    // For simplicity, we'll return false here. You may want to implement actual detection logic.
+    true
+}
+
 impl WindowContext {
     pub(crate) fn new(
         window: Arc<Box<dyn Window>>,
@@ -200,9 +219,7 @@ impl WindowContext {
         let theme = SharedSource::new(
             material_theme(
                 Color::RED,
-                dark_light::detect().is_ok_and(|mode|{
-                    mode == dark_light::Mode::Dark
-                })
+                is_dark_mode()
             )
         );
         let background_color = SharedDerived::from_fn(
@@ -218,12 +235,15 @@ impl WindowContext {
         Self {
             cursor_position: (0.0, 0.0).into(),
             event_loop_proxy: EventLoopProxy::new(window_id, event_loop_proxy, sender),
+            focused_item_id: None.into(),
             ime_allowed: BTreeSet::new().into(),
             layout_animations: vec![].into(),
             modifiers: None.into(),
             need_layout: SharedBool::new(true),
             shared_animations: vec![].into(),
             theme,
+            #[cfg(target_os = "android")]
+            android_app: None,
             window,
             window_attributes: window_attributes.clone(),
             background_color,
@@ -336,5 +356,3 @@ impl AsRef<WindowContext> for WindowContext {
         self
     }
 }
-
-impl UseCloned for WindowContext {}

@@ -1,12 +1,11 @@
-use std::collections::HashMap;
-use std::sync::Arc;
+use crate::text::font_manager;
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
-use skia_safe::{Canvas, Color, Font, FontArguments, FourByteTag, Paint, TextBlob, Typeface};
 use skia_safe::font_arguments::variation_position::Coordinate;
 use skia_safe::font_arguments::VariationPosition;
-use crate::text::{font_manager, load_typeface_from_path};
-use crate::ui::component::Drawable;
+use skia_safe::{Canvas, Font, FontArguments, FourByteTag, Paint, TextBlob, Typeface};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 #[cfg(feature = "material-symbols-outlined")]
 mod outlined;
@@ -22,6 +21,9 @@ pub use rounded::*;
 mod sharp;
 #[cfg(feature = "material-symbols-sharp")]
 pub use sharp::*;
+
+use crate::drawable::Drawable;
+use crate::ui::{Color, SetColor};
 
 #[cfg(any(feature = "material-symbols-outlined", feature = "material-symbols-rounded",
     feature = "material-symbols-sharp"))]
@@ -147,7 +149,7 @@ fn generate_text_blob(
 }
 
 impl IconDrawable {
-    #[cfg(feature = "material-symbols-outlined")]
+/*    #[cfg(feature = "material-symbols-outlined")]
     pub fn outlined(symbol: MaterialSymbol, size: f32, color: Color) -> Self {
         let mut cache = ICON_CHACHE.lock();
         if let Some(icon) = cache.get(&symbol) {
@@ -178,11 +180,29 @@ impl IconDrawable {
         let icon = IconDrawable::new(symbol, TYPEFACE_SHARP.clone(), size, color);
         cache.insert(symbol, icon.clone());
         icon
+    }*/
+
+    pub fn new(symbol: MaterialSymbol) -> Self {
+        let mut cache = ICON_CHACHE.lock();
+        if let Some(icon) = cache.get(&symbol) {
+            return icon.clone();
+        }
+        let type_face = match symbol {
+            #[cfg(feature = "material-symbols-outlined")]
+            MaterialSymbol::Outlined(_) => TYPEFACE_OUTLINED.clone(),
+            #[cfg(feature = "material-symbols-rounded")]
+            MaterialSymbol::Rounded(_) => TYPEFACE_ROUNDED.clone(),
+            #[cfg(feature = "material-symbols-sharp")]
+            MaterialSymbol::Sharp(_) => TYPEFACE_SHARP.clone(),
+        };
+        let icon = IconDrawable::inner_new(symbol, type_face, 24.0, Color::BLACK);
+        cache.insert(symbol, icon.clone());
+        icon
     }
 
-    pub fn new(symbol: MaterialSymbol, type_face: Typeface, size: f32, color: Color) -> Self {
+    fn inner_new(symbol: MaterialSymbol, type_face: Typeface, size: f32, color: Color) -> Self {
         let mut paint = Paint::default();
-        paint.set_color(color);
+        paint.set_any_color(color);
         paint.set_anti_alias(true);
         let fill = 0.0;
         let weight = 400.0;
@@ -215,37 +235,84 @@ impl IconDrawable {
         IconDrawable { inner: Arc::new(Mutex::new(inner)) }
     }
 
-    pub fn fill(&self) -> f32 {
+    pub fn get_color(&self) -> Color {
+        self.inner.lock().color
+    }
+
+    pub fn set_color(&self, color: Color) {
+        let mut inner = self.inner.lock();
+        inner.color = color;
+        inner.text_blob_changed = true;
+    }
+
+    pub fn color(self, color: Color) -> Self {
+        self.set_color(color);
+        self
+    }
+
+    pub fn get_size(self) -> f32 {
+        self.inner.lock().size
+    }
+
+    pub fn set_size(&self, size: f32) {
+        let mut inner = self.inner.lock();
+        inner.size = size;
+        inner.text_blob_changed = true;
+    }
+
+    pub fn size(self, size: f32) -> Self {
+        self.set_size(size);
+        self
+    }
+
+    pub fn get_fill(&self) -> f32 {
         self.inner.lock().fill
     }
-    pub fn set_fill(&mut self, fill: f32) {
+    pub fn set_fill(&self, fill: f32) {
         let mut inner = self.inner.lock();
         inner.fill = fill;
         inner.text_blob_changed = true;
     }
-    pub fn weight(&self) -> f32 {
+    pub fn fill(self, fill: f32) -> Self {
+        self.set_fill(fill);
+        self
+    }
+
+    pub fn get_weight(&self) -> f32 {
         self.inner.lock().weight
     }
-    pub fn set_weight(&mut self, weight: f32) {
+    pub fn set_weight(&self, weight: f32) {
         let mut inner = self.inner.lock();
         inner.weight = weight;
         inner.text_blob_changed = true;
     }
-    pub fn grade(&self) -> f32 {
+    pub fn weight(self, weight: f32) -> Self {
+        self.set_weight(weight);
+        self
+    }
+    pub fn get_grade(&self) -> f32 {
         self.inner.lock().grade
     }
-    pub fn set_grade(&mut self, grade: f32) {
+    pub fn set_grade(&self, grade: f32) {
         let mut inner = self.inner.lock();
         inner.grade = grade;
         inner.text_blob_changed = true;
     }
-    pub fn optical_size(&self) -> f32 {
+    pub fn grade(self, grade: f32) -> Self {
+        self.set_grade(grade);
+        self
+    }
+    pub fn get_optical_size(&self) -> f32 {
         self.inner.lock().optical_size
     }
-    pub fn set_optical_size(&mut self, optical_size: f32) {
+    pub fn set_optical_size(&self, optical_size: f32) {
         let mut inner = self.inner.lock();
         inner.optical_size = optical_size;
         inner.text_blob_changed = true;
+    }
+    pub fn optical_size(self, optical_size: f32) -> Self {
+        self.set_optical_size(optical_size);
+        self
     }
 }
 
@@ -253,10 +320,7 @@ impl Drawable for IconDrawable {
     fn draw(&self, canvas: &Canvas, x: f32, y: f32) {
         let mut inner = self.inner.lock();
         let color = inner.color;
-        let r = color.r();
-        let g = color.g();
-        let b = color.b();
-        inner.paint.set_color(color);
+        inner.paint.set_any_color(color);
         let size = inner.width.min(inner.height);
         if inner.text_blob_changed {
             inner.text_blob = generate_text_blob(
@@ -309,6 +373,18 @@ impl Drawable for IconDrawable {
 
     fn get_color(&self) -> Option<Color> {
         self.inner.lock().color.into()
+    }
+
+    fn add_redraw_requester(&mut self, id: u32, redraw_requester: Box<dyn Fn() + Send>) {
+        // todo!()
+    }
+
+    fn remove_redraw_requester(&mut self, id: u32) {
+        // todo!()
+    }
+
+    fn request_redraw(&self) {
+        // todo!()
     }
 
     fn clone_drawable(&self) -> Box<dyn Drawable> {

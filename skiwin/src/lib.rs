@@ -1,4 +1,4 @@
-// pub mod cpu;
+pub mod cpu;
 #[cfg(feature = "vulkan")]
 pub mod vulkan;
 #[cfg(feature = "vulkan")]
@@ -10,90 +10,113 @@ pub mod gl;
 #[cfg(feature = "gl")]
 pub use glutin;
 
-use parking_lot::Mutex;
-use pixels::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-use pixels::wgpu::WindowHandle;
-use skia_safe::gpu::{Budgeted, DirectContext, SurfaceOrigin};
-use skia_safe::{ImageInfo, Surface};
-use std::ops::{Deref, DerefMut};
+use skia_safe::Surface;
+use std::ops::Deref;
 use std::sync::Arc;
-use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
-pub trait SkiaWindow: Deref<Target =dyn Window> {
-    // fn resumed(&mut self);
+pub type SoftBufferSurface = softbuffer::Surface<Arc<Box<dyn Window>>, Arc<Box<dyn Window>>>;
+
+pub trait SkiaWindowTrait: Deref<Target=dyn Window> + AsRef<dyn Window> {
+    fn destroy_surface(&mut self);
+    fn recreate_surface(&mut self);
     fn resize(&mut self);
-    fn surface(&self) -> Arc<Mutex<Surface>>;
-    fn present(&mut self);
+    fn draw(&mut self, draw_fn: impl FnOnce(&mut Surface));
 }
 
-pub(crate) fn create_surface(
-    skia_context: &mut DirectContext,
-    size: impl Into<PhysicalSize<u32>>,
-) -> Arc<Mutex<Surface>> {
-    let size = size.into();
-    let width = size.width;
-    let height = size.height;
-    let image_info = ImageInfo::new_n32_premul((width as i32, height as i32), None);
-        // .with_color_type(ColorType::RGBA8888);
-    Arc::new(Mutex::new(
-        skia_safe::gpu::surfaces::render_target(
-            skia_context,
-            Budgeted::Yes,
-            &image_info,
-            None,
-            SurfaceOrigin::TopLeft,
-            None,
-            false,
-            None,
-        )
-        .unwrap(),
-    ))
+pub enum SkiaWindow {
+    Cpu(cpu::SoftSkiaWindow),
+    #[cfg(feature = "gl")]
+    Gl(gl::GlSkiaWindow),
+    #[cfg(feature = "vulkan")]
+    Vulkan(vulkan::VulkanSkiaWindow),
 }
 
-#[macro_export]
-macro_rules! impl_skia_window {
-    ($ty:ty) => {
-        impl SkiaWindow for $ty {
-            fn resize(&mut self) {
-                let size = self.soft_buffer_surface.window().inner_size();
-                let width = NonZeroU32::new(size.width).unwrap();
-                let height = NonZeroU32::new(size.height).unwrap();
-                let result = self.soft_buffer_surface.resize(width, height);
-            }
+impl Deref for SkiaWindow {
+    type Target = dyn Window;
 
-            fn surface(&self) -> Arc<Mutex<Surface>> {
-                self.skia_surface.clone()
-            }
-
-            fn present(&mut self) {
-                let size = self.soft_buffer_surface.window().inner_size();
-                let mut soft_buffer = self.soft_buffer_surface.buffer_mut().unwrap();
-                let u8_slice = bytemuck::cast_slice_mut::<u32, u8>(&mut soft_buffer);
-                let image_info =
-                    ImageInfo::new_n32_premul((size.width as i32, size.height as i32), None);
-                self.skia_surface.lock().read_pixels(
-                    &image_info,
-                    u8_slice,
-                    size.width as usize * 4,
-                    (0, 0),
-                );
-                soft_buffer.present().unwrap();
-            }
+    fn deref(&self) -> &Self::Target {
+        match self {
+            SkiaWindow::Cpu(window) => window.deref(),
+            #[cfg(feature = "gl")]
+            SkiaWindow::Gl(window) => window.deref(),
+            #[cfg(feature = "vulkan")]
+            SkiaWindow::Vulkan(window) => window.deref(),
         }
-
-        impl Deref for $ty {
-            type Target = Window;
-
-            fn deref(&self) -> &Self::Target {
-                self.soft_buffer_surface.window()
-            }
-        }
-
-        impl AsRef<Window> for $ty {
-            fn as_ref(&self) -> &Window {
-                self.soft_buffer_surface.window()
-            }
-        }
-    };
+    }
 }
+
+impl AsRef<dyn Window> for SkiaWindow {
+    fn as_ref(&self) -> &dyn Window {
+        match self {
+            SkiaWindow::Cpu(window) => window.as_ref(),
+            #[cfg(feature = "gl")]
+            SkiaWindow::Gl(window) => window.as_ref(),
+            #[cfg(feature = "vulkan")]
+            SkiaWindow::Vulkan(window) => window.as_ref(),
+        }
+    }
+}
+
+impl SkiaWindowTrait for SkiaWindow {
+    fn destroy_surface(&mut self) {
+        match self {
+            SkiaWindow::Cpu(window) => window.destroy_surface(),
+            #[cfg(feature = "gl")]
+            SkiaWindow::Gl(window) => window.destroy_surface(),
+            #[cfg(feature = "vulkan")]
+            SkiaWindow::Vulkan(window) => window.destroy_surface(),
+        }
+    }
+
+    fn recreate_surface(&mut self) {
+        match self {
+            SkiaWindow::Cpu(window) => window.recreate_surface(),
+            #[cfg(feature = "gl")]
+            SkiaWindow::Gl(window) => window.recreate_surface(),
+            #[cfg(feature = "vulkan")]
+            SkiaWindow::Vulkan(window) => window.recreate_surface(),
+        }
+    }
+
+    fn resize(&mut self) {
+        match self {
+            SkiaWindow::Cpu(window) => window.resize(),
+            #[cfg(feature = "gl")]
+            SkiaWindow::Gl(window) => window.resize(),
+            #[cfg(feature = "vulkan")]
+            SkiaWindow::Vulkan(window) => window.resize(),
+        }
+    }
+
+    fn draw(&mut self, draw_fn: impl FnOnce(&mut Surface)) {
+        match self {
+            SkiaWindow::Cpu(window) => window.draw(draw_fn),
+            #[cfg(feature = "gl")]
+            SkiaWindow::Gl(window) => window.draw(draw_fn),
+            #[cfg(feature = "vulkan")]
+            SkiaWindow::Vulkan(window) => window.draw(draw_fn),
+        }
+    }
+}
+
+impl From<cpu::SoftSkiaWindow> for SkiaWindow {
+    fn from(window: cpu::SoftSkiaWindow) -> Self {
+        SkiaWindow::Cpu(window)
+    }
+}
+
+#[cfg(feature = "gl")]
+impl From<gl::GlSkiaWindow> for SkiaWindow {
+    fn from(window: gl::GlSkiaWindow) -> Self {
+        SkiaWindow::Gl(window)
+    }
+}
+
+#[cfg(feature = "vulkan")]
+impl From<vulkan::VulkanSkiaWindow> for SkiaWindow {
+    fn from(window: vulkan::VulkanSkiaWindow) -> Self {
+        SkiaWindow::Vulkan(window)
+    }
+}
+

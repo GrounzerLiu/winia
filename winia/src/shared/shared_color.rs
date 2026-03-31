@@ -28,7 +28,7 @@ impl SharedColor {
     }
 }
 
-impl SharedColor {
+/*impl SharedColor {
     pub fn animation_to_color(&self, to: impl Into<Color>) -> SharedAnimation<Color> {
         SharedAnimation::new(
             self.clone(),
@@ -39,4 +39,4 @@ impl SharedColor {
             }),
         )
     }
-}
+}*/

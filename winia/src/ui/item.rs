@@ -8,6 +8,8 @@ mod item_state;
 mod focus_requester;
 mod item_updater;
 
+use std::any::Any;
+use std::collections::HashMap;
 pub use crate::ui::alignment::*;
 pub use crate::ui::size::*;
 use crate::{calculate_animation_value, depend, override_animation};
@@ -19,22 +21,22 @@ pub use item_props::*;
 pub use item_state::*;
 pub use physical_x::*;
 pub use item_updater::*;
+pub use crate::animation::selector::*;
 
 use std::fmt::Debug;
 use std::ops::{Add, Deref, DerefMut};
 
 use crate::animation::LayoutAnimation;
-use crate::app::{EventLoopProxy, WindowContext};
+use crate::app::WindowContext;
 use crate::core::next_id;
 use crate::lock_api::MutexGuard;
-use crate::shared::{Derived, Shared, SharedDerived, SharedDerivedBool, SharedSource};
+use crate::shared::{SharedBool, SharedDerivedBool};
 use crate::ui::item::animations::Animations;
 use crate::ui::{Color, Orientation};
 use crate::override_animations;
 use parking_lot::{Mutex, RawMutex};
 use skia_safe::Picture;
 use std::rc::Rc;
-use std::sync::Arc;
 use getset::Getters;
 use winit::event::ButtonSource;
 
@@ -80,18 +82,25 @@ pub struct ItemData {
     animations: Animations,
     #[get = "pub"]
     children: Children,
+    pub(crate) entry_frame: Option<Box<dyn Fn(&Frame)-> Frame>>,
+    pub(crate) exit_frame: Option<Box<dyn Fn(&Frame)-> Frame>>,
     draw_cache: Option<Picture>,
     event: ItemEvent,
     id: u32,
+    pub(crate) is_entered: bool,
+    pub(crate) is_exited: bool,
     pub(crate) is_mounted: bool,
+    pub(crate) interaction_enabled: bool,
+    pub(crate) focus_enabled: bool,
+    pub(crate) transition_visible: SharedBool,
     pub focus_state: FocusState,
     kind: ItemKind,
     pub measure_frame: Frame,
     pub last_measure_width_mode: Option<MeasureMode>,
     pub last_measure_height_mode: Option<MeasureMode>,
-    // pub needs_draw: Arc<Mutex<bool>>,
     props: ItemProps,
-    recorded_frame: Option<Frame>,
+    pub(crate) recorded_frame: Option<Frame>,
+    tags: HashMap<String, Box<dyn Any>>,
     pub target_frame: Frame,
 }
 
@@ -107,6 +116,7 @@ impl ItemData {
         let props = props.to_item_props();
         let mut children = children.into();
         children.set_parent_updater(&props.item_updater);
+        children.set_event_loop_proxy(props.window_context.event_loop_proxy());
         children.subscribe(
             next_id(),
             {
@@ -143,10 +153,27 @@ impl ItemData {
         Self {
             animations: Default::default(),
             children,
+            entry_frame: Some(Box::new(|frame| {
+                let mut frame = frame.clone();
+                frame.scale_x = 0.0;
+                frame.scale_y = 0.0;
+                frame
+            })),
+            exit_frame: Some(Box::new(|frame| {
+                let mut frame = frame.clone();
+                frame.scale_x = 0.0;
+                frame.scale_y = 0.0;
+                frame
+            })),
             draw_cache: None,
             event,
             id,
+            is_entered: true,
+            is_exited: true,
             is_mounted: false,
+            interaction_enabled: true,
+            focus_enabled: true,
+            transition_visible: SharedBool::new(true),
             focus_state: Default::default(),
             kind,
             measure_frame: Frame::default(),
@@ -155,6 +182,7 @@ impl ItemData {
             last_measure_height_mode: None,
             props,
             recorded_frame: None,
+            tags: HashMap::new(),
             target_frame: Frame::default(),
         }
     }
@@ -193,38 +221,57 @@ impl ItemData {
         calculate_animation_value!(skew_center_y, self, frame);
         self.animations
             .float_params
-            .retain(|_, (_, _, animation)| !animation.is_finished());
-        self.animations
-            .float_params
-            .iter()
-            .for_each(|(key, (start, _, animation))| {
-                if let Some(end) = frame.float_params.get(key) {
-                    frame
-                        .float_params
-                        .insert(key.clone(), animation.interpolate_f32(*start, *end));
+            .retain(|key, (_, end, animation)| {
+                if animation.is_finished() {
+                    frame.float_params.insert(key.clone(), *end);
+                    false
+                } else {
+                    true
                 }
             });
+        self.animations.float_params.iter().for_each(|(key, (start, end, animation))| {
+            frame
+                .float_params
+                .insert(key.clone(), animation.interpolate_f32(*start, *end));
+        });
         self.animations
             .color_params
-            .retain(|_, (_, _, animation)| !animation.is_finished());
-        self.animations
-            .color_params
-            .iter()
-            .for_each(|(key, (start, _, animation))| {
-                if let Some(end) = frame.color_params.get(key) {
-                    frame
-                        .color_params
-                        .insert(key.clone(), animation.interpolate_color(start, end));
+            .retain(|key, (_, end, animation)| {
+                if animation.is_finished() {
+                    frame.color_params.insert(key.clone(), *end);
+                    false
+                } else {
+                    true
                 }
             });
+        self.animations.color_params.iter().for_each(|(key, (start, end, animation))| {
+            frame
+                .color_params
+                .insert(key.clone(), animation.interpolate_color(start, end));
+        });
         frame
     }
 
     pub fn dispatch_animation(&mut self, animation: &LayoutAnimation, forced: bool) {
-        let (animatable, children_force) = animation.animatable(self.id, forced);
+        let (animatable, children_force) = animation.animatable(self, forced);
+        let frame = if let Some(f) = &self.entry_frame && !self.is_entered {
+            Some(f(&self.target_frame))
+        } else {
+            None
+        };
+        if let Some(frame) = frame {
+            self.recorded_frame = Some(frame);
+        }
+        self.is_entered = true;
 
         if animatable && let Some(recorded_frame) = self.recorded_frame.clone() {
-            let target_frame = self.target_frame.clone();
+            // let target_frame = self.target_frame.clone();
+            let target_frame = if let Some(f) = &self.exit_frame && !self.is_exited {
+                f(&self.target_frame)
+            } else {
+                self.target_frame.clone()
+            };
+            self.is_exited = true;
             override_animations!(
                 animation,
                 recorded_frame,
@@ -356,6 +403,15 @@ impl ItemData {
         }
     }
 
+    pub fn get_tag<T>(&self, key: impl AsRef<str>) -> Option<&T>
+    where
+        T: Any
+    {
+        let value = self.tags.get(key.as_ref())?;
+        let value = value.downcast_ref::<T>()?;
+        Some(value)
+    }
+
 
     pub fn id(&self) -> u32 {
         self.id
@@ -407,8 +463,10 @@ impl ItemData {
     }
     
     pub fn on_mounted(&mut self) {
-        if let Some(on_mounted) = &mut self.props.on_mounted {
-            on_mounted();
+        let on_mounted = self.props.on_mounted.clone();
+        let mut on_mounted = on_mounted.lock();
+        for on_mounted in on_mounted.deref_mut().iter_mut() {
+            on_mounted(self);
         }
     }
 
@@ -433,6 +491,7 @@ impl ItemData {
     }
     
     pub fn on_unmounted(&mut self) {
+        self.recorded_frame = None;
         if let Some(on_unmounted) = &mut self.props.on_unmounted {
             on_unmounted();
         }
@@ -442,8 +501,126 @@ impl ItemData {
     pub fn props(&self) -> &ItemProps {
         &self.props
     }
+
+    pub fn can_focus(&self) -> bool {
+        self.is_mounted
+            && self.is_exited
+            && self.focus_enabled
+            && self.interaction_enabled
+            && self.transition_visible.get()
+            && self.props.enable.get()
+            && self.props.visible.get()
+            && self.props.focusable.get()
+    }
+
+    pub fn can_focus_item(&self, item_id: u32) -> bool {
+        if self.id == item_id {
+            return self.can_focus();
+        }
+        let children = self.children.lock();
+        for child in children.iter() {
+            if child.data().can_focus_item(item_id) {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn dispatch_focus_to(&mut self, item_id: Option<u32>, has_parent_focus: bool) -> bool {
+        let next_is_focused = item_id == Some(self.id) && self.can_focus();
+        let mut child_has_focus = false;
+        {
+            let mut children = self.children.lock();
+            for child in children.iter_mut() {
+                child_has_focus |= child
+                    .data()
+                    .dispatch_focus_to(item_id, has_parent_focus || next_is_focused);
+            }
+        }
+
+        let previous_focus_state = self.focus_state;
+        self.focus_state.is_focused = next_is_focused;
+        self.focus_state.has_parent_focus = has_parent_focus;
+        self.focus_state.has_focus = next_is_focused || child_has_focus;
+
+        if previous_focus_state.is_focused != self.focus_state.is_focused
+            || previous_focus_state.has_parent_focus != self.focus_state.has_parent_focus
+            || previous_focus_state.has_focus != self.focus_state.has_focus
+        {
+            let focus_state = self.focus_state;
+            self.focus_changed(&focus_state);
+            self.on_focus_changed(&focus_state);
+            if focus_state.is_focused {
+                self.on_state_changed(ItemState::Focused);
+            } else if self.props().item_state.get() == ItemState::Focused {
+                self.on_state_changed(ItemState::Enabled);
+            }
+        }
+
+        self.focus_state.has_focus
+    }
+
+    pub fn dispatch_ime_to_focused(
+        &mut self,
+        focused_item_id: u32,
+        action: &ImeAction,
+    ) -> bool {
+        if !self.interaction_enabled {
+            return false;
+        }
+        if self.id == focused_item_id {
+            if self.focus_state.is_focused {
+                self.ime_input(action);
+                return true;
+            }
+            return false;
+        }
+        let children = self.children.lock();
+        for child in children.iter() {
+            if child.data().dispatch_ime_to_focused(focused_item_id, action) {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn dispatch_keyboard_to_focused(
+        &mut self,
+        focused_item_id: u32,
+        input: &KeyboardInput,
+    ) -> bool {
+        if !self.interaction_enabled {
+            return false;
+        }
+        if self.id == focused_item_id {
+            if self.focus_state.is_focused {
+                self.keyboard_input(input);
+                return true;
+            }
+            return false;
+        }
+        let children = self.children.lock();
+        for child in children.iter() {
+            if child
+                .data()
+                .dispatch_keyboard_to_focused(focused_item_id, input)
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     pub(crate) fn record_frame(&mut self) {
+
         self.recorded_frame = Some(self.current_frame());
+        // let recorded_frame = if self.recorded_frame.is_none() && let Some(f) = &self.default_recorded_frame {
+        //     f(&self.target_frame)
+        // } else {
+        //     self.current_frame()
+        // };
+        // self.recorded_frame = Some(recorded_frame);
+
         self.children.lock().iter_mut().for_each(|child| {
             child.data().record_frame();
         });
@@ -474,6 +651,13 @@ impl ItemData {
         self.dispatch_measure(width_mode, height_mode);
     }
 
+    pub fn set_tag<T>(&mut self, key: impl Into<String>, value: T)
+    where
+        T: Any
+    {
+        self.tags.insert(key.into(), Box::new(value));
+    }
+
     pub fn window_context(&self) -> &WindowContext {
         &self.props.window_context
     }
@@ -493,6 +677,7 @@ impl Drop for ItemData {
     }
 }
 
+#[derive(Clone)]
 pub struct Item {
     data: Rc<Mutex<ItemData>>,
 }

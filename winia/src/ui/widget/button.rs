@@ -1,11 +1,11 @@
+use letclone::clone;
 use crate::animation::AnimationExt;
 use crate::shared::{SharedDerived, SharedDerivedBool, SharedDerivedColor, SharedDerivedF32, SharedDerivedSize, SharedF32, SharedSource};
 use crate::theme::{color, StateStyles};
 use crate::theme::shape::Corner;
 use crate::ui::item::{ItemProps, ItemState, Padding};
-use crate::ui::{rectangle, ripple, stack, Alignment, Color, Item, LabelProps, LabelPropsTrait, RectanglePropsTrait, RipplePropsTrait, StackProps, StackPropsTrait};
+use crate::ui::{rectangle, ripple, stack, Alignment, Color, Item, LabelProps, LabelPropsTrait, Radius, RectanglePropsTrait, RipplePropsTrait, StackProps, StackPropsTrait};
 use crate::{bind_properties, define_props, depend};
-use clonelet::clone;
 use proc_macro::ItemProps;
 use crate::ui::button::button_style::ButtonStyle;
 use crate::ui::widget::button::button_style::ButtonStyleExt;
@@ -252,6 +252,7 @@ pub fn button(props: ButtonProps, text: impl FnOnce(LabelProps, SharedSource<Ite
             .background(
                 rectangle(
                     w.rectangle_props(&props.container_color)
+                        .radius(Radius::fully_rounded())
                 )
             )
             .foreground(

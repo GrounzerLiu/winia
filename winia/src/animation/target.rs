@@ -1,7 +1,9 @@
+use crate::ui::item::Selector;
+
 #[derive(Debug, Clone)]
 pub enum Target {
-    Exclusion(Vec<u32>),
-    Inclusion(Vec<u32>),
+    Exclusion(Vec<Selector>),
+    Inclusion(Vec<Selector>),
 }
 
 #[macro_export]
@@ -11,8 +13,13 @@ macro_rules! exclude_target {
     };
     ($($target:expr),+ $(,)?) => {
         {
-            use $crate::core::get_id_by_name;
-            $crate::animation::Target::Exclusion(vec![$(get_id_by_name($target).unwrap()),+])
+            $crate::animation::Target::Exclusion(
+                vec![
+                    $(
+                    $crate::animation::Selector::from($target),
+                    )*
+                ]
+            )
         }
     }
 }
@@ -24,8 +31,13 @@ macro_rules! include_target {
     };
     ($($target:expr),+ $(,)?) => {
         {
-           use $crate::core::get_id_by_name;
-           $crate::ui::animation::Target::Inclusion(vec![$(get_id_by_name($target).unwrap()),+])
+            $crate::animation::Target::Inclusion(
+                vec![
+                    $(
+                    $crate::animation::Selector::from($target),
+                    )*
+                ]
+            )
        }
     }
 }

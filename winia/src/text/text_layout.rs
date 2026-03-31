@@ -61,16 +61,6 @@ impl<'a> TextLayout<'a> {
                 false
             }
         } {
-/*            let next_byte_index = self.paragraph.next_glyph_byte_index(index)?;
-            if let Some(gc) = self.paragraph.get_glyph_cluster_at(next_byte_index) {
-                if gc.position == TextDirection::LTR {
-                    Some((gc.bounds.left, gc.bounds.top, gc.bounds.height()))
-                } else {
-                    Some((gc.bounds.right, gc.bounds.top, gc.bounds.height()))
-                }
-            } else {
-                None
-            }*/
             if let Some(gc) = self.paragraph.inner_paragraph().get_glyph_cluster_at(*paragraph_index) {
                 if gc.position == TextDirection::LTR {
                     Some((gc.bounds.left, gc.bounds.top, gc.bounds.height()))
@@ -109,7 +99,6 @@ impl<'a> TextLayout<'a> {
         let point = point.into();
         let point_clone = point.clone();
         let glyph_info = self.paragraph.inner_paragraph().get_closest_glyph_cluster_at(point);
-        println!("1get_closest_grapheme_cluster_cluster_at: point=({},{}) -> glyph_info={:?}", point_clone.x, point_clone.y, glyph_info);
         if let Some(glyph_info) = glyph_info {
             let bounds = glyph_info.bounds;
             let center_x = (bounds.left + bounds.right) / 2.0;
@@ -151,10 +140,7 @@ impl<'a> TextLayout<'a> {
                 end
             } else {
                 start
-            }.with_ref(|index| {
-                println!("2get_closest_grapheme_cluster_cluster_at: point=({},{}) -> index={}", point_clone.x, point_clone.y, index);
-                println!("byte_to_glyph_indices: {:?}", self.paragraph.byte_to_glyph_indices);
-            });
+            };
         }
         0
     }

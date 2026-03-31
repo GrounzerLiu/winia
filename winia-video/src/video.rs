@@ -1,10 +1,11 @@
-use proc_macro::item;
-use winia::shared::{Children, Shared, SharedText};
-use winia::ui::app::WindowContext;
+use proc_macro::{item, ItemProps};
+use winia::app::WindowContext;
+use winia::shared::{Shared, SharedDerived, SharedSource, SharedText};
 use winia::ui::Item;
+use winia::ui::item::{ItemEvent, ItemKind, ItemProps};
 use crate::video_player::VideoPlayer;
 
-#[item(uri: impl Into<SharedText>)]
+/*#[item(uri: impl Into<SharedText>)]
 pub struct Video {
     item: Item
 }
@@ -28,4 +29,48 @@ impl Video {
             item
         }
     }
+}*/
+#[derive(ItemProps)]
+pub struct VideoProps {
+    pub item_props: ItemProps,
+    #[constructor]
+    pub uri: SharedDerived<String>,
 }
+
+impl VideoProps {
+    pub fn new(item_props: ItemProps, uri: impl Into<SharedDerived<String>>) -> Self {
+        Self {
+            item_props,
+            uri: uri.into(),
+        }
+    }
+}
+
+pub fn video(props: VideoProps) -> Item {
+    Item::new(
+        ItemKind::Widget,
+        item_event(&props),
+        props,
+        vec![]
+    )
+}
+
+fn item_event(props: &VideoProps) -> ItemEvent {
+    let video_player = SharedSource::new(
+        VideoPlayer::new(
+            props.window_context.event_loop_proxy(),
+            props.item_updater.clone(),
+        ).unwrap()
+    );
+    video_player.lock().load_video(props.uri.get().as_str()).unwrap();
+    video_player.lock().play().unwrap();
+    ItemEvent::new()
+        .set_draw({
+            let video_player = video_player.clone();
+            move |item, canvas| {
+                let current_frame = item.current_frame();
+                video_player.lock().draw_current_frame(canvas, current_frame.x(), current_frame.y()).unwrap();
+            }
+        })
+}
+

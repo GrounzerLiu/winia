@@ -1,4 +1,3 @@
-#![feature(ergonomic_clones)]
 
 pub mod core;
 pub mod shared;
@@ -9,6 +8,7 @@ pub mod theme;
 pub mod text;
 mod drawable;
 pub mod collection;
+pub mod icon;
 
 pub use theme::Theme;
 
@@ -16,7 +16,8 @@ pub use skia_safe;
 pub use winit::*;
 pub use parking_lot::*;
 pub use skiwin::*;
-pub use clonelet::*;
+pub use proc_macro::ItemProps;
+pub use proc_macro::closure_use;
 
 
 pub trait OptionalInvoke<T> {

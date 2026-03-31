@@ -1,11 +1,11 @@
 use std::ops::{Deref, DerefMut};
+use letclone::clone;
 use crate::shared::{SharedDerived, SharedDerivedF32, SharedDerivedUsize, SharedSource};
 use crate::theme::shape::Corner;
 use crate::ui::item::{Children, Frame, ItemEvent, ItemKind, ItemProps, LayoutDirection, MeasureMode, PhysicalX};
 use crate::ui::widget::slider::slider_style::SliderStyleExt;
 use crate::ui::{rectangle, stack, Alignment, Color, Item, Orientation, Radius, RectanglePropsTrait, SetColor, Size, StackProps, StackPropsTrait};
 use crate::{depend, shared_derived};
-use clonelet::clone;
 use skia_safe::{Paint, RRect};
 use proc_macro::ItemProps;
 use crate::core::next_id;
@@ -668,7 +668,6 @@ pub fn track(props: &SliderProps) -> Item {
             }
         })
         .set_draw({
-            clone!();
             move |item, canvas| {
                 let direction = item.layout_direction.get();
                 let current_frame = item.current_frame();

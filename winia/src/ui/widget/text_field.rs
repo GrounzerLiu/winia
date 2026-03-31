@@ -5,14 +5,14 @@ use crate::theme::color;
 use crate::ui::item::{Children, ImeAction, ItemEvent, ItemKind, ItemProps, MeasureMode, PhysicalX, PointerButton, PointerMoved};
 use crate::ui::widget::label::{create_paragraph_style, create_text_style};
 use crate::ui::{Color, Item, Orientation, SetColor};
-use clonelet::clone;
 use proc_macro::ItemProps;
 use skia_safe::paint::Style;
 use skia_safe::textlayout::TextAlign;
 use skia_safe::{Paint, Rect};
 use std::ops::{Deref, Range};
 use std::time::{Duration, Instant};
-use arboard::Clipboard;
+use letclone::clone;
+// use arboard::Clipboard;
 use winit::dpi::{LogicalPosition, LogicalSize, Position, Size};
 use winit::event::{ElementState, MouseButton};
 use winit::keyboard::{Key, NamedKey};
@@ -338,7 +338,7 @@ fn item_event(props: &TextFieldProps) -> ItemEvent {
 
                 let mut selection_range = selection_range.get();
                 if let Some(paragraph) = text_cache.lock().as_ref()
-                    && selectable.get()
+                    && selectable.get() && composing.lock().is_none()
                 {
                     let mut text = text.lock();
                     let text_length = text.len();
@@ -374,7 +374,7 @@ fn item_event(props: &TextFieldProps) -> ItemEvent {
                             .for_each(|text_box| {
                                 let rect = text_box.rect;
                                 let x = paragraph_x + rect.x();
-                                let y = paragraph_y + rect.bottom;
+                                let y = paragraph_y + rect.bottom - 1.0;
                                 let w = rect.width();
                                 let h = 1.0;
                                 let rect = Rect::from_xywh(
@@ -623,7 +623,7 @@ fn item_event(props: &TextFieldProps) -> ItemEvent {
                         && modifiers.state().control_key()
                     {
                         if let Key::Character(c) = &event.logical_key {
-                            if c.as_str() == "c"|| c.as_str() == "x" {
+/*                            if c.as_str() == "c"|| c.as_str() == "x" {
                                 let mut clipboard = Clipboard::new().unwrap();
 
                                 let selection_range = selection_range.get();
@@ -646,7 +646,7 @@ fn item_event(props: &TextFieldProps) -> ItemEvent {
                                 if let Ok(text) = clipboard.get_text() {
                                     item.ime_input(&ImeAction::Commit(text));
                                 }
-                            }
+                            }*/
                         }
                     } else {
                         match &event.logical_key {
@@ -700,6 +700,9 @@ fn item_event(props: &TextFieldProps) -> ItemEvent {
         .set_click_input({
             move |item, click_input| {
                 item.props().focus_requester.lock().request_focus();
+                // item.props().window_context.window().sof
+                #[cfg(target_os = "android")]
+                item.window_context().android_app().as_ref().unwrap().show_soft_input(true);
             }
         })
         .set_focus_changed({

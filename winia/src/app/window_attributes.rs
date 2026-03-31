@@ -1,6 +1,6 @@
 use std::sync::Arc;
-use clonelet::clone;
 use getset::Getters;
+use letclone::clone;
 use winit::{dpi::{LogicalSize, Size}, window::Window};
 use crate::core::next_id;
 use crate::shared::{SharedDerived, SharedDerivedBool, SharedDerivedString};

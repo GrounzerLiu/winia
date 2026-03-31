@@ -2,18 +2,16 @@ mod window_context;
 mod window_attributes;
 mod window_controller;
 
-use crate::shared::{Shared, SharedSource};
 use crate::text::StyledText;
 use crate::ui::item::{Children, ImeAction, KeyboardInput, MeasureMode, MouseWheel, PointerButton, PointerMoved};
 use crate::ui::{rectangle, stack, Color, Item, RectanglePropsTrait, StackPropsTrait};
+use crossbeam_channel::{Receiver, Sender};
 use skia_safe::textlayout::{ParagraphStyle, TextStyle};
-use skiwin::vulkan::VulkanSkiaWindow;
-use skiwin::SkiaWindow;
+use skiwin::SkiaWindowTrait;
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::Instant;
-use crossbeam_channel::{Receiver, Sender};
 pub use window_attributes::*;
 pub use window_context::*;
 pub use window_controller::*;
@@ -21,10 +19,14 @@ use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalPosition;
 use winit::event::{Ime, MouseScrollDelta, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::ModifiersState;
+use winit::keyboard::{Key, ModifiersState, NamedKey};
+
+use skiwin::gl::GlSkiaWindow;
 use winit::window::WindowId;
 
 pub struct App {
+    #[cfg(target_os = "android")]
+    android_app: Option<winit::platform::android::activity::AndroidApp>,
     windows: HashMap<WindowId, WindowController>,
     pending_windows: Option<(
         Box<dyn FnOnce(&WindowContext) -> Item + 'static>,
@@ -46,6 +48,8 @@ impl App {
     ) -> Self {
             let (sender, receiver) = crossbeam_channel::unbounded();
         Self {
+            #[cfg(target_os = "android")]
+            android_app: None,
             windows: HashMap::new(),
             pending_windows: Some((Box::new(item_generator), window_attributes)),
             event_loop_proxy: None,
@@ -71,16 +75,27 @@ impl App {
         let window_id = window.id();
         let window = Arc::new(window);
         window_attributes.bind_window(window.clone());
+/*        #[cfg(not(target_os = "android"))]
         let skia_window = VulkanSkiaWindow::new(window.clone(), Some(Box::new(|d| {
             d.properties().device_type == skiwin::vulkano::device::physical::PhysicalDeviceType::DiscreteGpu
         })));
+        #[cfg(target_os = "android")]
+        let skia_window = VulkanSkiaWindow::new(window.clone(), None);*/
+
+        // let skia_window = SoftSkiaWindow::new(window.clone());
+        let skia_window = skiwin::vulkan::VulkanSkiaWindow::new(event_loop, window.clone());
+        // let skia_window = GlSkiaWindow::new(event_loop, window.clone());
+
         let event_loop_proxy = self.event_loop_proxy.as_ref().unwrap().clone();
-        let window_context = WindowContext::new(
+        let mut window_context = WindowContext::new(
             window,
             window_attributes,
             event_loop_proxy.clone(),
             sender
         );
+
+        #[cfg(target_os = "android")]
+        window_context.set_android_app(self.android_app.clone());
 
         let item = item_generator(&window_context);
         let children = Children::from(vec![item]);
@@ -102,12 +117,17 @@ impl App {
                 window_context,
                 window_attributes,
                 event_loop_proxy,
-                skia_window,
+                skia_window.into(),
                 None,
                 stack,
                 children,
             ),
         );
+    }
+
+    #[cfg(target_os = "android")]
+    pub fn set_android_app(&mut self, android_app: winit::platform::android::activity::AndroidApp) {
+        self.android_app = Some(android_app);
     }
 }
 
@@ -117,95 +137,45 @@ impl ApplicationHandler for App {
     }
 
     fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
+        println!("Can create surfaces");
         if self.windows.is_empty() {
             let (item_generator, window_attributes) = self.pending_windows.take().unwrap();
             self.create_window(event_loop, item_generator, &window_attributes, self.sender.clone());
+        } else {
+            self.windows.iter_mut().for_each(|(_, window_controller)| {
+                window_controller.skia_window.destroy_surface();
+                window_controller.skia_window.recreate_surface();
+            });
         }
     }
 
     fn resumed(&mut self, _event_loop: &dyn ActiveEventLoop) {
+        println!("App resumed");
     }
-
-/*    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: Event) {
-        if let Some(window_controller) = self.windows.get_mut(&event.window_id) {
-            match event.event {
-                EventType::RequestFocus(item_id) => {
-                    window_controller.item.data().dispatch_focus(item_id, false);
-                }
-                EventType::RequestUpdateLayout => {
-                    window_controller.window_context.request_update_layout()
-                }
-                EventType::StartSharedAnimation(animation) => {
-                    window_controller
-                        .window_context
-                        .shared_animations()
-                        .lock()
-                        .push(animation);
-                    window_controller.window_context.request_update_layout()
-                }
-                EventType::Timer(_id) => {
-                    // let timers = window_controller.window_context.timers.value();
-                    // if let Some(timer) = timers.iter().find(|timer| timer.id == id) {
-                    //     window_controller.item.data().dispatch_timer(id);
-                    // }
-                    // window_controller.window_context
-                    //     .timers
-                    //     .write(|timers| timers.retain(|timer| timer.id != id));
-                }
-                EventType::SetWindowAttribute(set_window_attributes) => {
-                    let window = window_controller.window_context.window().deref();
-                    set_window_attributes(Some(window));
-                }
-                EventType::NewWindow {
-                    item_generator,
-                    window_attributes,
-                } => {
-                    self.create_window(event_loop, item_generator, &window_attributes);
-                }
-                EventType::StartLayoutAnimation(animation) => {
-                    // Start animation
-                    let (width, height) = window_controller.window_context.window_size();
-                    // Get the animation that should be started
-
-                    let item = &mut window_controller.item;
-                    item.data().record_frame();
-                    (animation.inner.lock().transformation)();
-                    item.data().measure(
-                        MeasureMode::Specified(width),
-                        MeasureMode::Specified(height),
-                    );
-                    item.data().dispatch_layout(0.0, 0.0, width, height);
-                    animation.inner.lock().start_time = Instant::now();
-                    item.data().dispatch_animation(&animation, false);
-                    window_controller
-                        .window_context
-                        .layout_animations()
-                        .lock()
-                        .push(animation);
-                    window_controller.window_context.request_update_layout()
-                }
-                EventType::NewLayer(item_generator) => {
-                    let layer_controller = LayerController::new(
-                        window_controller.window_context.event_loop_proxy().clone(),
-                    );
-                    let item =
-                        item_generator(&window_controller.window_context, layer_controller.clone());
-                    layer_controller.set_id(item.id());
-                    window_controller.add_layer(item);
-                }
-                EventType::RemoveLayer(id) => {
-                    window_controller.remove_layer(id);
-                }
-            }
-        }
-    }*/
 
     fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
         while let Ok(event) = self.receiver.try_recv() {
             if let Some(window_controller) = self.windows.get_mut(&event.window_id) {
                 match event.event {
                     EventType::RequestFocus(item_id) => {
-                        window_controller.item.data().dispatch_focus(item_id, false);
+                        let next_focus_id = if item_id == 0 {
+                            None
+                        } else {
+                            let root = window_controller.item.data();
+                            if root.can_focus_item(item_id) {
+                                Some(item_id)
+                            } else {
+                                window_controller.window_context.focused_item_id().get()
+                            }
+                        };
+                        window_controller
+                            .window_context
+                            .focused_item_id()
+                            .set(next_focus_id);
+                        window_controller
+                            .item
+                            .data()
+                            .dispatch_focus_to(next_focus_id, false);
                     }
                     EventType::RequestUpdateLayout => {
                         window_controller.window_context.request_update_layout();
@@ -315,14 +285,26 @@ impl ApplicationHandler for App {
                 event,
                 is_synthetic,
             } => {
-                window_controller
-                    .item
-                    .data()
-                    .dispatch_keyboard_input(&KeyboardInput {
-                        device_id,
-                        key_event: event,
-                        is_synthetic,
-                    });
+                let keyboard_input = KeyboardInput {
+                    device_id,
+                    key_event: event,
+                    is_synthetic,
+                };
+                let focused_item_id = window_controller.window_context.focused_item_id().get();
+                let handled = if let Some(focused_item_id) = focused_item_id {
+                    window_controller
+                        .item
+                        .data()
+                        .dispatch_keyboard_to_focused(focused_item_id, &keyboard_input)
+                } else {
+                    false
+                };
+                if !handled
+                    && keyboard_input.key_event.state.is_pressed()
+                    && matches!(keyboard_input.key_event.logical_key, Key::Named(NamedKey::Tab))
+                {
+                    window_controller.item.data().focus_next();
+                }
             }
             WindowEvent::PointerButton {
                 device_id,
@@ -388,7 +370,12 @@ impl ApplicationHandler for App {
                         after_bytes,
                     }
                 };
-                window_controller.item.data().dispatch_ime_input(&ime_action);
+                if let Some(focused_item_id) = window_controller.window_context.focused_item_id().get() {
+                    window_controller
+                        .item
+                        .data()
+                        .dispatch_ime_to_focused(focused_item_id, &ime_action);
+                }
             }
             WindowEvent::RedrawRequested => {
                 let need_layout = window_controller
@@ -396,8 +383,8 @@ impl ApplicationHandler for App {
                     .need_layout()
                     .get();
                 window_controller.window_context.need_layout().set(false);
+                let (width, height) = window_controller.window_context.window_size();
                 if need_layout {
-                    let (width, height) = window_controller.window_context.window_size();
                     window_controller
                         .item
                         .data().dispatch_measure(MeasureMode::Specified(width), MeasureMode::Specified(height));
@@ -416,54 +403,45 @@ impl ApplicationHandler for App {
                 } else {
                     self.instant = Some(Instant::now());
                 };
-                /*                let background_color = window_controller
-                                    .window_context
-                                    .theme
-                                    .read(|theme| *theme.get_color(color::WINDOW_BACKGROUND_COLOR).unwrap());*/
-                let scale_factor = window_controller.window_context.scale_factor();
-                // window_controller.renderer.draw(|surface| {
-                //     let canvas = surface.canvas();
-                //     canvas.clear(Color::WHITE);
-                //     canvas.save();
-                // })
-                let surface_arc = window_controller.skia_window.surface();
-                let mut surface = surface_arc.lock();
-                {
-                    let canvas = surface.canvas();
-                    canvas.clear(background_color.to_color4f());
-                    canvas.save();
-                    canvas.scale((scale_factor, scale_factor));
-                }
-                window_controller
-                    .item
-                    .data()
-                    .dispatch_draw(surface.deref_mut(), 0.0, 0.0);
-                let canvas = surface.canvas();
 
-                if let Some(second_instant) = self.second_instant {
-                    let now = Instant::now();
-                    if (now - second_instant).as_secs_f32() >= 1.0 {
-                        self.average_fps = self.fps_in_one_second.iter().sum::<f32>()
-                            / self.fps_in_one_second.len() as f32;
-                        self.fps_in_one_second.clear();
-                        self.second_instant = Some(now);
+                let scale_factor = window_controller.window_context.scale_factor();
+                window_controller.skia_window.draw(|surface| {
+                    {
+                        let canvas = surface.canvas();
+                        canvas.clear(background_color.to_color4f());
+                        canvas.save();
+                        canvas.scale((scale_factor, scale_factor));
                     }
-                } else {
-                    self.second_instant = Some(Instant::now());
-                };
-/*                let mut style_text = StyledText::from(self.average_fps.to_string());
-                let mut text_style = TextStyle::new();
-                text_style.set_font_size(16.0);
-                text_style.set_color(Color::WHITE.to_skia_color());
-                let para = style_text.create_paragraph(
-                    &ParagraphStyle::new(),
-                    &text_style,
-                    300.0,
-                );
-                style_text.get_text_layout(&para).draw(canvas, 16.0, 16.0);*/
-                canvas.restore();
-                drop(surface);
-                window_controller.skia_window.present();
+                    window_controller
+                        .item
+                        .data()
+                        .dispatch_draw(surface, 0.0, 0.0);
+                    let canvas = surface.canvas();
+
+                    if let Some(second_instant) = self.second_instant {
+                        let now = Instant::now();
+                        if (now - second_instant).as_secs_f32() >= 1.0 {
+                            self.average_fps = self.fps_in_one_second.iter().sum::<f32>()
+                                / self.fps_in_one_second.len() as f32;
+                            self.fps_in_one_second.clear();
+                            self.second_instant = Some(now);
+                        }
+                    } else {
+                        self.second_instant = Some(Instant::now());
+                    };
+                    let mut style_text = StyledText::from(self.average_fps.to_string());
+                    let mut text_style = TextStyle::new();
+                    text_style.set_font_size(16.0);
+                    text_style.set_color(Color::WHITE.to_skia_color());
+                    let para = style_text.create_paragraph(
+                        &ParagraphStyle::new(),
+                        &text_style,
+                        300.0,
+                    );
+                    style_text.get_text_layout(&para).draw(canvas, 16.0, height - 32.0);
+                    canvas.restore();
+                    window_controller.window_context.window().pre_present_notify();
+                });
             }
             WindowEvent::ModifiersChanged(modifiers) => {
                 // println!("{:?}", modifiers);
@@ -575,6 +553,7 @@ impl ApplicationHandler for App {
                     shared_animations.retain(|animation| !animation.is_finished());
                     if !shared_animations.is_empty() {
                         window_controller.window_context.window().request_redraw();
+                        // window_controller.window_context.request_update_layout()
                     }
                 });
         }
@@ -584,6 +563,13 @@ impl ApplicationHandler for App {
         if !closed {
             self.windows.insert(window_id, window_controller);
         }
+    }
+
+    fn destroy_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
+        println!("Destroy surfaces");
+        // self.windows.iter_mut().for_each(|(_, window_controller)| {
+        //     window_controller.skia_window.destroy_surface()
+        // });
     }
 
     fn about_to_wait(&mut self, _event_loop: &dyn ActiveEventLoop) {
@@ -630,12 +616,20 @@ pub fn run_app(app: App) {
     });
 }
 
+#[cfg(target_os = "android")]
+use winit::platform::android::EventLoopBuilderExtAndroid;
 
 #[cfg(target_os = "android")]
-pub fn run_app(app: App, android_app: AndroidApp) {
-    let event_loop = EventLoop::<Event>::with_user_event()
-        .with_android_app(android_app)
-        .build()
-        .unwrap();
-    run_app_with_event_loop(app.into(), event_loop);
+pub fn run_app(mut app: App, android_app: winit::platform::android::activity::AndroidApp) {
+    // let event_loop = EventLoop::<Event>::with_user_event()
+    //     .with_android_app(android_app)
+    //     .build()
+    //     .unwrap();
+    // run_app_with_event_loop(app.into(), event_loop);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let event_loop = EventLoop::builder().with_android_app(android_app.clone()).build().unwrap();
+        app.set_android_app(android_app);
+        run_app_with_event_loop(app, event_loop);
+    });
 }

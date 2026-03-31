@@ -4,6 +4,24 @@ use crate::ui::item::Size;
 pub type SharedSize = SharedSource<Size>;
 pub type SharedDerivedSize = SharedDerived<Size>;
 
+impl SharedSource<Size> {
+    pub fn auto() -> Self {
+        SharedSource::new(Size::Auto)
+    }
+
+    pub fn fixed(size: f32) -> Self {
+        SharedSource::new(Size::Fixed(size))
+    }
+
+    pub fn relative(size: f32) -> Self {
+        SharedSource::new(Size::Relative(size))
+    }
+
+    pub fn fill() -> Self {
+        SharedSource::new(Size::Fill)
+    }
+}
+
 
 macro_rules! impl_from {
     ($($ty:ty),*) => {

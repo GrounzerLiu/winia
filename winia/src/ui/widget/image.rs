@@ -1,9 +1,9 @@
 use std::ops::DerefMut;
 use std::sync::Arc;
-use clonelet::clone;
+use letclone::clone;
 use parking_lot::Mutex;
 use proc_macro::ItemProps;
-use crate::{bind_properties, define_props};
+use crate::{bind_properties, define_props, shared_derived};
 use crate::app::EventLoopProxy;
 use crate::drawable::{Drawable, ImageDrawable};
 use crate::shared::{SharedDerived, SharedDerivedBool, SharedDerivedDrawable, SharedDrawable};
@@ -681,4 +681,18 @@ fn item_event(props: &ImageProps) -> ItemEvent {
                 drawable.draw(canvas, x, y);
             }
         })
+}
+
+impl From<SharedDerived<Color>> for SharedDerived<Option<Color>> {
+    fn from(value: SharedDerived<Color>) -> Self {
+        shared_derived!(value => {
+            Some(value.get())
+        })
+    }
+}
+
+impl From<&SharedDerived<Color>> for SharedDerived<Option<Color>> {
+    fn from(value: &SharedDerived<Color>) -> Self {
+        Self::from(value.clone())
+    }
 }

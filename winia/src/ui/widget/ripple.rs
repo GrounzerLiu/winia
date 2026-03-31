@@ -1,18 +1,18 @@
+use std::ops::Deref;
 use crate::app::WindowContext;
 use crate::core::next_id;
-use crate::shared::{
-    SharedBool, SharedDerived, SharedDerivedColor, SharedDerivedF32, SharedF32, SharedSource
-};
+use crate::shared::{SharedBool, SharedDerived, SharedDerivedColor, SharedDerivedF32, SharedF32, SharedSource, TweenSpec};
 use crate::theme::color;
 use crate::ui::item::{Children, ItemEvent, ItemKind, ItemProps, ItemUpdater, PointerButton};
 use crate::ui::{Color, Item, SetColor};
-use clonelet::clone;
 use parking_lot::Mutex;
 use proc_macro::ItemProps;
 use skia_safe::{Paint, Path};
 use std::sync::Arc;
 use std::time::Duration;
+use letclone::clone;
 use winit::event::{ButtonSource, ElementState};
+use crate::OptionalInvoke;
 
 #[derive(ItemProps)]
 pub struct RippleProps {
@@ -44,7 +44,7 @@ pub fn ripple(props: RippleProps) -> Item {
         ItemKind::Widget,
         item_event(&props),
         props,
-        Children::new()
+        Children::new(),
     )
 }
 
@@ -139,13 +139,26 @@ fn item_event(props: &RippleProps) -> ItemEvent {
             clone!(background_opacity);
             let defual_background_opacity = props.background_opacity.clone();
             move |item, is_hovered| {
-                if let Some(mut animation) = background_opacity.get_animation() {
-                    animation.stop();
+                // background_opacity.get_animation().lock().deref().if_some(|animation| animation.stop());
+                {
+                    let animation = background_opacity.get_animation();
+                    if let Some(animation) = animation.lock().deref() {
+                        animation.stop();
+                    }
                 }
-                background_opacity
-                    .animation_to_f32(if is_hovered { defual_background_opacity.get() } else { 0.0 })
-                    .duration(Duration::from_millis(500))
-                    .start(&item.window_context().event_loop_proxy());
+                // background_opacity
+                //     .animation_to_f32(if is_hovered { defual_background_opacity.get() } else { 0.0 })
+                //     .duration(Duration::from_millis(500))
+                //     .start(&item.window_context().event_loop_proxy());
+                background_opacity.animate_to(
+                    if is_hovered {
+                        defual_background_opacity.get()
+                    } else {
+                        0.0
+                    },
+                    TweenSpec::new().duration(Duration::from_millis(500)),
+                    item.event_loop_proxy()
+                )
             }
         })
         .set_pointer_button({
@@ -157,10 +170,15 @@ fn item_event(props: &RippleProps) -> ItemEvent {
                         let opacity = SharedF32::new(ripple_opacity.get());
                         subscribe_redraw(&window_context, &item_updater, &progress);
                         subscribe_redraw(&window_context, &item_updater, &opacity);
-                        progress
-                            .animation_to_f32(1.0)
-                            .duration(Duration::from_millis(500))
-                            .start(&item.window_context().event_loop_proxy());
+                        // progress
+                        //     .animation_to_f32(1.0)
+                        //     .duration(Duration::from_millis(500))
+                        //     .start(&item.window_context().event_loop_proxy());
+                        progress.animate_to(
+                            1.0,
+                            TweenSpec::new().duration(Duration::from_millis(500)),
+                            &item.props().event_loop_proxy(),
+                        );
                         let current_frame = item.current_frame();
                         let layer = Layer {
                             pointer: pointer_button.button.clone(),
@@ -199,14 +217,22 @@ fn item_event(props: &RippleProps) -> ItemEvent {
                             //     });
                             //     continue;
                             // }
-                            layer
-                                .opacity
-                                .animation_to_f32(0.0)
-                                .duration(Duration::from_millis(300))
-                                .on_finish(move || {
-                                    is_finished.set(true);
-                                })
-                                .start(&item.props().window_context.event_loop_proxy());
+                            // layer
+                            //     .opacity
+                            //     .animation_to_f32(0.0)
+                            //     .duration(Duration::from_millis(300))
+                            //     .on_finish(move || {
+                            //         is_finished.set(true);
+                            //     })
+                            //     .start(&item.props().window_context.event_loop_proxy());
+                            layer.opacity.animate_to(
+                                0.0,
+                                TweenSpec::new().duration(Duration::from_millis(300))
+                                    .on_finish(move || {
+                                        is_finished.set(true);
+                                    }),
+                                &item.props().event_loop_proxy(),
+                            );
                         }
                         false
                     }

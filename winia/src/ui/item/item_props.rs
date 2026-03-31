@@ -1,7 +1,6 @@
-use crate::app::WindowContext;
-use crate::core::bind_str_to_id;
+use crate::app::{EventLoopProxy, WindowContext};
 use crate::shared::{SharedDerived, SharedDerivedBool, SharedDerivedF32, SharedDerivedSize, SharedItem, SharedSource};
-use crate::ui::item::{FocusRequester, FocusState, Frame, ItemState, ItemUpdater, LayoutDirection, PointerButton, PointerMoved, Size};
+use crate::ui::item::{FocusRequester, FocusState, Frame, ItemData, ItemState, ItemUpdater, LayoutDirection, PointerButton, PointerMoved, Size};
 use crate::ui::InnerPosition;
 use crate::With;
 use parking_lot::Mutex;
@@ -120,7 +119,7 @@ pub struct ItemProps {
     pub on_destroy: Option<Box<dyn FnMut()>>,
     pub on_focus_changed: Option<Box<dyn FnMut(&FocusState)>>,
     pub on_hover_changed: Option<Box<dyn FnMut(bool)>>,
-    pub on_mounted: Option<Box<dyn FnMut()>>,
+    pub on_mounted: SharedSource<Vec<Box<dyn FnMut(&mut ItemData)>>>,
     pub on_pointer_button: Option<Box<dyn FnMut(&PointerButton) -> bool>>,
     pub on_pointer_moved: Option<Box<dyn FnMut(&PointerMoved) -> bool>>,
     pub on_state_changed: Box<dyn FnMut(SharedSource<ItemState>, ItemState)>,
@@ -150,6 +149,7 @@ macro_rules! bind_property {
         let e = $e.clone();
         $property.subscribe($id, move || {
             item_updater.lock().request_update();
+            e.request_update_layout();
         });
     }};
 }
@@ -163,11 +163,6 @@ macro_rules! bind_properties {
 
 impl ItemProps {
     pub fn bind(&self, id: u32) {
-        // self.name.get().with_mut(|name| {
-        //     if !name.is_empty() {
-        //         bind_str_to_id(name.as_str(), id);
-        //     }
-        // });
         let item_updater = self.item_updater.clone();
         let e = self.window_context.event_loop_proxy().clone();
         bind_properties!(
@@ -249,7 +244,7 @@ impl ItemProps {
             on_destroy: None,
             on_focus_changed: None,
             on_hover_changed: None,
-            on_mounted: None,
+            on_mounted: vec![].into(),
             on_pointer_button: None,
             on_state_changed: Box::new(|item_state, new_state| {
                 item_state.set(new_state);
@@ -275,6 +270,10 @@ impl ItemProps {
             width,
             on_pointer_moved: None,
         }
+    }
+
+    pub fn event_loop_proxy(&self) -> &EventLoopProxy {
+        self.window_context.event_loop_proxy()
     }
 
     pub fn spawn_task<F>(&self, fut: F)

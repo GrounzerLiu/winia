@@ -87,11 +87,12 @@ macro_rules! calculate_animation_value {
                 None
             }
         };
-        if let Some((start, _, animation)) = p {
+        if let Some((start, end, animation)) = p {
             if !animation.is_finished() {
                 $display_parameter.$name =
-                    animation.interpolate_f32(*start, $display_parameter.$name);
+                    animation.interpolate_f32(*start, *end);
             } else {
+                $display_parameter.$name = *end;
                 $s.animations.$name = None;
             }
         }

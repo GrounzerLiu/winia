@@ -4,12 +4,12 @@ use crate::text::Paragraph;
 use crate::theme::color;
 use crate::ui::item::{Children, ItemEvent, ItemKind, ItemProps, LayoutDirection, MeasureMode, PhysicalX, PointerButton, PointerMoved};
 use crate::ui::{Color, Item, Orientation, SetColor};
-use clonelet::clone;
 use proc_macro::ItemProps;
 use skia_safe::paint::Style;
 use skia_safe::textlayout::{ParagraphStyle, TextAlign, TextStyle};
 use skia_safe::{Canvas, Paint, Rect};
 use std::ops::Range;
+use letclone::clone;
 use winit::event::ElementState;
 
 #[derive(ItemProps)]

@@ -1,9 +1,10 @@
-use crate::define_props;
+use letclone::clone;
+use crate::{define_props, With};
 use crate::shared::{Shared, SharedDerived, SharedDerivedColor, SharedSource};
 use crate::ui::item::{Children, Frame, ItemEvent, ItemKind, ItemProps, LayoutDirection};
 use crate::ui::{Color, Item, Orientation, SetColor};
 use crate::bind_properties;
-use clonelet::clone;
+use skia_bindings::{SkPaint_Cap, SkPaint_Join};
 use skia_safe::paint::Style;
 use skia_safe::{Path, RRect, Rect, Vector};
 use proc_macro::ItemProps;
@@ -86,14 +87,57 @@ impl Radius {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum BorderPosition {
+    Inside,
+    Center,
+    Outside
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum StrokeCap {
+    Butt,
+    Round,
+    Square,
+}
+
+impl Into<SkPaint_Cap> for StrokeCap {
+    fn into(self) -> SkPaint_Cap {
+        match self {
+            StrokeCap::Butt => SkPaint_Cap::Butt,
+            StrokeCap::Round => SkPaint_Cap::Round,
+            StrokeCap::Square => SkPaint_Cap::Square,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum StrokeJoin {
+    Miter,
+    Round,
+    Bevel,
+}
+
+impl Into<SkPaint_Join> for StrokeJoin {
+    fn into(self) -> SkPaint_Join {
+        match self {
+            StrokeJoin::Miter => SkPaint_Join::Miter,
+            StrokeJoin::Round => SkPaint_Join::Round,
+            StrokeJoin::Bevel => SkPaint_Join::Bevel,
+        }
+    }
+}
 
 #[derive(ItemProps)]
 pub struct RectangleProps {
     pub item_props: ItemProps,
+    pub border_width: SharedDerived<f32>,
+    pub border_position: SharedDerived<BorderPosition>,
+    pub border_stroke_cap: SharedDerived<StrokeCap>,
+    pub border_stroke_join: SharedDerived<StrokeJoin>,
     #[constructor]
     pub color: SharedDerived<Color>,
-    pub border_color: SharedDerived<Color>,
-    pub border_width: SharedDerived<f32>,
+    pub is_filled: SharedDerived<bool>,
     #[not_shared]
     pub radius: Radius,
 }
@@ -108,58 +152,18 @@ impl RectangleProps {
 impl RectangleProps {
     pub fn new(mut item_props: ItemProps, color: impl Into<SharedDerivedColor>) -> Self {
         item_props.clipped = true.into();
-        item_props.clip_shape = {
-            let shape: Box<dyn Fn(&Frame) -> Path> = Box::new(
-                |frame| {
-                    let rrect = RRect::new_rect_radii(
-                        Rect::from_xywh(
-                            frame.x(),
-                            frame.y(),
-                            frame.width(),
-                            frame.height(),
-                        ),
-                        &[
-                            Vector::new(24.0, 24.0),
-                            Vector::new(24.0, 24.0),
-                            Vector::new(24.0, 24.0),
-                            Vector::new(24.0, 24.0)
-                        ],
-                    );
-                    Path::rrect(
-                        rrect,
-                        None,
-                    )
-                }
-            );
-            SharedDerived::new_derived(Some(shape))
-        };
         Self {
             item_props,
-            color: color.into(),
-            border_color: Color::TRANSPARENT.into(),
             border_width: 0.0.into(),
-            radius: Radius::new(),
-        }
+            border_position: BorderPosition::Center.into(),
+            border_stroke_cap: StrokeCap::Butt.into(),
+            border_stroke_join: StrokeJoin::Miter.into(),
+            color: color.into(),
+            is_filled: true.into(),
+            radius: Radius::default(),
+        }.name("Rectangle")
     }
 }
-
-// pub struct Rectangle;
-//
-// impl Rectangle {
-//     pub fn new(
-//         window_context: WindowContext,
-//         props: RectangleProps,
-//     ) -> Item {
-//
-//         Item::new(
-//             window_context,
-//             ItemKind::Widget,
-//             item_event(&props),
-//             props.item_props,
-//             Shared::new_derived(vec![])
-//         )
-//     }
-// }
 
 pub fn rectangle(props: RectangleProps) -> Item {
     Item::new(
@@ -175,13 +179,11 @@ fn item_event(props: &RectangleProps) -> ItemEvent {
         .set_layout({
             clone!(
                 props.color,
-                props.border_color,
                 props.border_width,
                 props.radius
             );
             move |item, width, height| {
                 let color = color.get();
-                let border_color = border_color.get();
                 let border_width = border_width.get();
                 let layout_direction = item.props().layout_direction.get();
                 let radius_top_left = radius.top_left(&layout_direction);
@@ -208,7 +210,6 @@ fn item_event(props: &RectangleProps) -> ItemEvent {
 
                 let target_frame = &mut item.target_frame;
                 target_frame.set_color_param("color", color);
-                target_frame.set_color_param("border_color", border_color);
                 target_frame.set_float_param("border_width", border_width);
                 target_frame.set_float_param("radius_top_left", radius_top_left);
                 target_frame.set_float_param("radius_top_right", radius_top_right);
@@ -219,13 +220,15 @@ fn item_event(props: &RectangleProps) -> ItemEvent {
         .set_draw({
             let mut paint = skia_safe::Paint::default();
             paint.set_anti_alias(true);
+            clone!(
+                props.is_filled,
+                props.border_position
+            );
             move |item, canvas| {
                 let current_frame = item.current_frame();
+                let is_filled = is_filled.get();
                 let color = current_frame
                     .get_color_param("color")
-                    .unwrap_or(Color::TRANSPARENT);
-                let border_color = current_frame
-                    .get_color_param("border_color")
                     .unwrap_or(Color::TRANSPARENT);
                 let border_width = current_frame.get_float_param("border_width").unwrap_or(0.0);
                 let radius_top_left = current_frame
@@ -242,12 +245,37 @@ fn item_event(props: &RectangleProps) -> ItemEvent {
                     .unwrap_or(0.0);
                 let padding_horizontal = item.get_padding(Orientation::Horizontal);
                 let padding_vertical = item.get_padding(Orientation::Vertical);
-                let rect = Rect::from_xywh(
-                    current_frame.x(),
-                    current_frame.y(),
-                    current_frame.width() - padding_horizontal,
-                    current_frame.height() - padding_vertical,
-                );
+
+                let rect = if is_filled {
+                    Rect::from_xywh(
+                        current_frame.x(),
+                        current_frame.y(),
+                        current_frame.width() - padding_horizontal,
+                        current_frame.height() - padding_vertical,
+                    )
+                } else {
+                    match border_position.get() {
+                        BorderPosition::Inside => Rect::from_xywh(
+                            current_frame.x() + border_width / 2.0,
+                            current_frame.y() + border_width / 2.0,
+                            current_frame.width() - padding_horizontal - border_width,
+                            current_frame.height() - padding_vertical - border_width,
+                        ),
+                        BorderPosition::Center => Rect::from_xywh(
+                            current_frame.x(),
+                            current_frame.y(),
+                            current_frame.width() - padding_horizontal,
+                            current_frame.height() - padding_vertical,
+                        ),
+                        BorderPosition::Outside => Rect::from_xywh(
+                            current_frame.x() - border_width / 2.0,
+                            current_frame.y() - border_width / 2.0,
+                            current_frame.width() - padding_horizontal + border_width,
+                            current_frame.height() - padding_vertical + border_width,
+                        ),
+                    }
+                };
+
                 let rrect = RRect::new_rect_radii(
                     rect,
                     &[
@@ -257,17 +285,20 @@ fn item_event(props: &RectangleProps) -> ItemEvent {
                         Vector::new(radius_bottom_left, radius_bottom_left),
                     ],
                 );
-                if color != Color::TRANSPARENT {
-                    paint.set_any_color(color);
-                    paint.set_style(Style::Fill);
-                    canvas.draw_rrect(rrect, &paint);
+
+                if color == Color::TRANSPARENT
+                    || (!is_filled && border_width <= 0.0)
+                {
+                    return;
                 }
-                if border_color != Color::TRANSPARENT && border_width > 0.0 {
-                    paint.set_any_color(border_color);
+                paint.set_any_color(color);
+                if is_filled {
+                    paint.set_style(Style::Fill);
+                } else {
                     paint.set_style(Style::Stroke);
                     paint.set_stroke_width(border_width);
-                    canvas.draw_rrect(rrect, &paint);
                 }
+                canvas.draw_rrect(rrect, &paint);
             }
         })
 }

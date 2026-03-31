@@ -1,6 +1,7 @@
 use material_colors::blend::cam16_ucs;
 use material_colors::color::Argb;
-use skia_safe::{Color4f, ColorSpace as SkiaColorSpace};
+use skia_safe::{named_transfer_fn, Color4f, ColorSpace as SkiaColorSpace};
+use skia_safe::named_primaries::CicpId;
 
 #[derive(Copy, Debug, Clone, PartialEq)]
 pub enum ColorSpace {
@@ -276,7 +277,9 @@ impl SetColor for skia_safe::Paint {
             }
             Color::FloatARGB(a, r, g, b, color_space) => {
                 let color_space: Option<SkiaColorSpace> = color_space.map(|cs| cs.into());
+                // self.set_color4f(Color4f::new(r, g, b, a), &color_space);
                 self.set_color4f(Color4f::new(r, g, b, a), &color_space);
+
             }
         }
         self

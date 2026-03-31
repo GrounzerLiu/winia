@@ -104,6 +104,7 @@ impl From<Corner> for ThemeValue<Corner> {
 }
 
 pub struct Theme {
+    is_dark: bool,
     colors: HashMap<String, ThemeValue<Color>>,
     dimensions: HashMap<String, ThemeValue<f32>>,
     bools: HashMap<String, ThemeValue<bool>>,
@@ -112,15 +113,10 @@ pub struct Theme {
     items: HashMap<String, ThemeValue<Arc<Mutex<dyn Fn(WindowContext) -> Item + Send>>>>,
 }
 
-impl Default for Theme {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Theme {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(is_dark: bool) -> Self {
         Self {
+            is_dark,
             colors: HashMap::new(),
             dimensions: HashMap::new(),
             bools: HashMap::new(),
@@ -128,6 +124,10 @@ impl Theme {
             styles: HashMap::new(),
             items: HashMap::new(),
         }
+    }
+
+    pub fn is_dark(&self) -> bool {
+        self.is_dark
     }
 
     pub fn set_color(

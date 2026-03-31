@@ -1,4 +1,4 @@
-use crate::ui::item::{FocusState, ItemData, ItemState, Size};
+use crate::ui::item::{FocusState, Frame, ItemData, ItemKind, ItemState, Size};
 use skia_safe::image_filters::CropRect;
 use skia_safe::{
     Canvas, IRect, Paint, PictureRecorder, Point, Rect, Surface, TileMode, Vector, image_filters,
@@ -218,6 +218,7 @@ pub struct ItemEvent {
     pub draw: Event<dyn FnMut(&mut ItemData, &Canvas)>,
     pub hover_changed: Event<dyn FnMut(&mut ItemData, bool)>,
     pub focus_changed: Event<dyn FnMut(&mut ItemData, &FocusState)>,
+    pub focus_next: Event<dyn FnMut(&mut ItemData) -> bool>,
     pub ime_input: Event<dyn FnMut(&mut ItemData, &ImeAction)>,
     pub keyboard_input: Event<dyn FnMut(&mut ItemData, &KeyboardInput)>,
     pub layout: Event<dyn FnMut(&mut ItemData, f32, f32)>,
@@ -227,6 +228,7 @@ pub struct ItemEvent {
     pub mouse_wheel: Event<dyn FnMut(&mut ItemData, Option<MouseWheel>, Option<MouseWheel>) -> (Option<MouseWheel>, Option<MouseWheel>)>,
     pub pointer_button: Event<dyn FnMut(&mut ItemData, &PointerButton) -> bool>,
     pub pointer_moved: Event<dyn FnMut(&mut ItemData, &PointerMoved)>,
+    pub record_animation_value: Event<dyn FnMut(&mut ItemData)>,
 }
 
 impl Default for ItemEvent {
@@ -300,6 +302,9 @@ impl ItemEvent {
                 let mut last_parent_x: f32 = 0.0;
                 let mut last_parent_y: f32 = 0.0;
                 move |item: &mut ItemData, surface: &mut Surface, parent_x: f32, parent_y: f32| {
+                    if !item.transition_visible.get() {
+                        return;
+                    }
                     let current_frame = item.current_frame();
                     item.target_frame.set_parent_position(parent_x, parent_y);
 
@@ -524,56 +529,15 @@ impl ItemEvent {
             }),
             dispatch_focus: event!({
                 |item: &mut ItemData, item_id: u32, has_parent_focus: bool| {
-                    let mut is_focus_changed = false;
-                    if item.id == item_id && !item.focus_state.is_focused {
-                        item.focus_state.is_focused = true;
-                        item.focus_state.has_focus = true;
-                        is_focus_changed = true;
-                    } else if item.id != item_id && item.focus_state.is_focused {
-                        item.focus_state.is_focused = false;
-                        is_focus_changed = true;
-                    }
-                    if has_parent_focus && !item.focus_state.has_parent_focus {
-                        item.focus_state.has_parent_focus = true;
-                        is_focus_changed = true;
-                    } else if !has_parent_focus && item.focus_state.has_parent_focus {
-                        item.focus_state.has_parent_focus = false;
-                        is_focus_changed = true;
-                    }
-                    let mut has_focus = false;
-                    let mut children_lock = item.children.lock();
-                    let is_focused = item.focus_state.is_focused;
-                    for child in children_lock.iter_mut() {
-                        has_focus |= child
-                            .data()
-                            .dispatch_focus(item_id, has_parent_focus || is_focused);
-                    }
-                    drop(children_lock);
-                    if has_focus && !item.focus_state.has_focus {
-                        item.focus_state.has_focus = true;
-                        is_focus_changed = true;
-                    } else if !has_focus
-                        && item.focus_state.has_focus
-                        && !item.focus_state.is_focused
-                    {
-                        item.focus_state.has_focus = false;
-                        is_focus_changed = true;
-                    }
-                    if is_focus_changed {
-                        let focus_state = item.focus_state;
-                        item.focus_changed(&focus_state);
-                        item.on_focus_changed(&focus_state);
-                        if focus_state.is_focused {
-                            item.on_state_changed(ItemState::Focused);
-                        } else if item.props().item_state.get() == ItemState::Focused {
-                            item.on_state_changed(ItemState::Enabled);
-                        }
-                    }
-                    item.focus_state.has_focus
+                    let target_id = if item_id == 0 { None } else { Some(item_id) };
+                    item.dispatch_focus_to(target_id, has_parent_focus)
                 }
             }),
             dispatch_ime_input: event!({
                 |item: &mut ItemData, action: &ImeAction| {
+                    if !item.interaction_enabled {
+                        return false;
+                    }
                     if item.focus_state.is_focused {
                         item.ime_input(action);
                         return true;
@@ -589,6 +553,9 @@ impl ItemEvent {
             }),
             dispatch_keyboard_input: event!({
                 |item: &mut ItemData, input: &KeyboardInput| {
+                    if !item.interaction_enabled {
+                        return false;
+                    }
                     if item.focus_state.is_focused {
                         item.keyboard_input(input);
                         return true;
@@ -741,6 +708,16 @@ impl ItemEvent {
                         item.is_mounted = true;
                         item.on_mounted();
                     }
+                    
+                    item.record_animation_value();
+/*                    let frame = if let Some(f) = &item.default_recorded_frame && !item.is_entered {
+                        Some(f(&item.target_frame))
+                    } else {
+                        None
+                    };
+                    if let Some(frame) = frame {
+                        item.recorded_frame = Some(frame);
+                    }*/
                 }
             }),
             dispatch_measure: event!({
@@ -883,6 +860,9 @@ impl ItemEvent {
                 |item: &mut ItemData,
                  mouse_wheel_x: Option<MouseWheel>,
                  mouse_wheel_y: Option<MouseWheel>| {
+                    if !item.interaction_enabled {
+                        return (mouse_wheel_x, mouse_wheel_y);
+                    }
                     if mouse_wheel_x.is_none() && mouse_wheel_y.is_none() {
                         (None, None)
                     } else {
@@ -913,7 +893,7 @@ impl ItemEvent {
                 move |item: &mut ItemData, pointer_button: &PointerButton| {
                     let current_frame = item.current_frame();
                     let button_wrapper = ButtonSourceHashWrapper(pointer_button.button.clone());
-                    if !item.props.enable.get() {
+                    if !item.interaction_enabled || !item.props.enable.get() {
                         return false;
                     }
 
@@ -923,6 +903,13 @@ impl ItemEvent {
                             if !current_frame.contains(pointer_button.position.x, pointer_button.position.y) {
                                 return false;
                             }
+                            let mut children = item.children.lock();
+                            for child in children.iter_mut().rev() {
+                                if child.data().dispatch_pointer_button(pointer_button) {
+                                    return true;
+                                }
+                            }
+                            drop(children);
                             pressed_pointers.insert(button_wrapper.clone());
                             item.on_state_changed(ItemState::Pressed);
                             {
@@ -937,13 +924,6 @@ impl ItemEvent {
                                     bg.data().dispatch_pointer_button(pointer_button);
                                 }
                             }
-                            let mut children = item.children.lock();
-                            for child in children.iter_mut().rev() {
-                                if child.data().dispatch_pointer_button(pointer_button) {
-                                    return true;
-                                }
-                            }
-                            drop(children);
                             if item.on_pointer_button(pointer_button) {
                                 return true;
                             }
@@ -954,6 +934,12 @@ impl ItemEvent {
                         }
                         ElementState::Released => {
                             if !pressed_pointers.contains(&button_wrapper) {
+                                let mut children = item.children.lock();
+                                for child in children.iter_mut().rev() {
+                                    if child.data().dispatch_pointer_button(pointer_button) {
+                                        return true;
+                                    }
+                                }
                                 return false;
                             }
                             pressed_pointers.remove(&button_wrapper);
@@ -977,13 +963,6 @@ impl ItemEvent {
                                     bg.data().dispatch_pointer_button(pointer_button);
                                 }
                             }
-                            let mut children = item.children.lock();
-                            for child in children.iter_mut().rev() {
-                                if child.data().dispatch_pointer_button(pointer_button) {
-                                    return true;
-                                }
-                            }
-                            drop(children);
                             if item.on_pointer_button(pointer_button) {
                                 return true;
                             }
@@ -1003,28 +982,53 @@ impl ItemEvent {
             dispatch_pointer_moved: event!({
                 let mut is_hovered = false;
                 move |item: &mut ItemData, pointer_moved: &PointerMoved| {
-                    if !item.props().enable.get() {
+                    if !item.interaction_enabled || !item.props().enable.get() {
+                        if is_hovered {
+                            is_hovered = false;
+                            item.hover_changed(false);
+                            item.on_hover_changed(false);
+                        }
                         return;
                     }
+                    let mut child_hit = false;
                     {
-                        let foreground = item.props().foreground.clone();
-                        let mut foreground_lock = foreground.lock();
-                        if let Some(fg) = foreground_lock.as_mut() {
-                            fg.data().dispatch_pointer_moved(pointer_moved);
+                        let mut children = item.children.lock();
+                        for child in children.iter_mut().rev() {
+                            if !child_hit {
+                                let child_frame = child.data().current_frame();
+                                child_hit = child_frame.contains(
+                                    pointer_moved.position.x,
+                                    pointer_moved.position.y,
+                                );
+                            }
+                            child.data().dispatch_pointer_moved(pointer_moved);
                         }
                     }
-                    {
-                        let background = item.props().background.clone();
-                        let mut background_lock = background.lock();
-                        if let Some(bg) = background_lock.as_mut() {
-                            bg.data().dispatch_pointer_moved(pointer_moved);
-                        }
-                    }
-                    item.on_pointer_moved(pointer_moved);
-                    item.pointer_moved(pointer_moved);
 
-                    if item.current_frame().contains(pointer_moved.position.x, pointer_moved.position.y)
-                    {
+                    let self_hit = item.current_frame().contains(
+                        pointer_moved.position.x,
+                        pointer_moved.position.y,
+                    );
+                    let handle_self = self_hit && !child_hit;
+
+                    if handle_self {
+                        {
+                            let foreground = item.props().foreground.clone();
+                            let mut foreground_lock = foreground.lock();
+                            if let Some(fg) = foreground_lock.as_mut() {
+                                fg.data().dispatch_pointer_moved(pointer_moved);
+                            }
+                        }
+                        {
+                            let background = item.props().background.clone();
+                            let mut background_lock = background.lock();
+                            if let Some(bg) = background_lock.as_mut() {
+                                bg.data().dispatch_pointer_moved(pointer_moved);
+                            }
+                        }
+                        item.on_pointer_moved(pointer_moved);
+                        item.pointer_moved(pointer_moved);
+
                         if !is_hovered {
                             is_hovered = true;
                             item.hover_changed(true);
@@ -1038,15 +1042,57 @@ impl ItemEvent {
                         item.hover_changed(false);
                         item.on_hover_changed(false);
                     }
-
-                    item.children.lock().iter_mut().for_each(|child| {
-                        child.data().dispatch_pointer_moved(pointer_moved);
-                    });
                 }
             }),
             draw: event!({ |_item: &mut ItemData, _canvas: &Canvas| {} }),
             hover_changed: event!({ |_item: &mut ItemData, _is_hovered: bool| {} }),
             focus_changed: event!({ |_item: &mut ItemData, _focus_state: &FocusState| {} }),
+            focus_next: event!({
+                let mut current_focus_child_index: Option<usize> = None;
+                move |item: &mut ItemData| {
+                    if !item.is_mounted
+                        || !item.is_exited
+                        || !item.focus_enabled
+                        || !item.interaction_enabled
+                        || !item.transition_visible.get()
+                        || !item.props.enable.get()
+                        || !item.props.visible.get()
+                    {
+                        return false;
+                    }
+                    if item.kind == ItemKind::Widget {
+                        if !item.can_focus() {
+                            return false;
+                        }
+                        if !item.focus_state.is_focused {
+                            item.focus_requester.lock().request_focus();
+                            return true;
+                        } else {
+                            return false;
+                        }
+                    } else {
+                        let mut children = item.children.lock();
+                        let mut index = if let Some(current_focus_child_index) = current_focus_child_index {
+                            current_focus_child_index + 1
+                        } else {
+                            0
+                        };
+                        loop {
+                            if let Some(child) = children.get_mut(index) {
+                                if child.data().focus_next() {
+                                    current_focus_child_index = Some(index);
+                                    return true;
+                                } else {
+                                    index += 1;
+                                }
+                            } else {
+                                current_focus_child_index = None;
+                                return false;
+                            }
+                        }
+                    }
+                    false
+            }}),
             ime_input: event!({ |_item: &mut ItemData, _action: &ImeAction| {} }),
             keyboard_input: event!({ |_item: &mut ItemData, _input: &KeyboardInput| {} }),
             layout: event!({ |_item: &mut ItemData, _width: f32, _height: f32| {} }),
@@ -1078,6 +1124,9 @@ impl ItemEvent {
             pointer_button: event!({ |_item: &mut ItemData, _input: &PointerButton| { false } }),
             pointer_moved: event!({
                 |_item: &mut ItemData, _input: &PointerMoved| {}
+            }),
+            record_animation_value: event!({
+                |_item: &mut ItemData| {}
             }),
         }
     }
@@ -1123,6 +1172,7 @@ impl_noop!(
     set_dispatch_pointer_moved|impl FnMut(&mut ItemData, &PointerMoved) + 'static|dispatch_pointer_moved|()|input:&PointerMoved,
     set_draw|impl FnMut(&mut ItemData, &Canvas) + 'static|draw|()|canvas:&Canvas,
     set_focus_changed|impl FnMut(&mut ItemData, &FocusState) + 'static|focus_changed|()|focus_state:&FocusState,
+    set_focus_next|impl FnMut(&mut ItemData) -> bool + 'static|focus_next|bool|,
     set_hover_changed|impl FnMut(&mut ItemData, bool) + 'static|hover_changed|()|is_hovered:bool,
     set_ime_input|impl FnMut(&mut ItemData, &ImeAction) + 'static|ime_input|()|action:&ImeAction,
     set_keyboard_input|impl FnMut(&mut ItemData, &KeyboardInput) + 'static|keyboard_input|()|input:&KeyboardInput,
@@ -1132,5 +1182,6 @@ impl_noop!(
     // set_mouse_input|impl FnMut(&mut ItemData, &MouseInput) -> bool + 'static|mouse_input|bool|input:&MouseInput,
     set_mouse_wheel|impl FnMut(&mut ItemData, Option<MouseWheel>, Option<MouseWheel>) -> (Option<MouseWheel>, Option<MouseWheel>) + 'static|mouse_wheel|(Option<MouseWheel>, Option<MouseWheel>)|mouse_wheel_x:Option<MouseWheel>;mouse_wheel_y:Option<MouseWheel>,
     set_pointer_button|impl FnMut(&mut ItemData, &PointerButton) -> bool + 'static|pointer_button|bool|input:&PointerButton,
-    set_pointer_moved|impl FnMut(&mut ItemData, &PointerMoved) + 'static|pointer_moved|()|input:&PointerMoved
+    set_pointer_moved|impl FnMut(&mut ItemData, &PointerMoved) + 'static|pointer_moved|()|input:&PointerMoved,
+    set_record_animation_value|impl FnMut(&mut ItemData) + 'static|record_animation_value|()|
 );

@@ -3,9 +3,9 @@ use crate::core::next_id;
 use crate::shared::{SharedDerived, SharedDerivedBool, SharedF32, SharedSource};
 use crate::ui::item::{ItemEvent, ItemKind, ItemProps, MeasureMode, MouseScrollDelta, MouseWheel, PhysicalX};
 use crate::ui::{Item, Orientation};
-use clonelet::clone;
 use proc_macro::ItemProps;
 use std::time::Instant;
+use letclone::clone;
 use winit::event::TouchPhase;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -236,21 +236,21 @@ fn item_event(props: &ScrollAreaProps) -> ItemEvent {
             }
         })
         .set_layout({
-            // clone!(
-            //     // v_speed,
-            //     // h_speed,
-            //     // last_calculated_v_speed_time,
-            //     // last_calculated_h_speed_time,
-            //     props.padding,
-            //     props.layout_direction,
-            //     props.horizontal_scroll_state,
-            //     props.vertical_scroll_state,
-            //     props.horizontal_scrollable,
-            //     props.vertical_scrollable,
-            //     props.on_horizontal_scroll_state_change,
-            //     props.on_vertical_scroll_state_change
-            // );
-            use |item, width, height| {
+            clone!(
+                // v_speed,
+                // h_speed,
+                // last_calculated_v_speed_time,
+                // last_calculated_h_speed_time,
+                props.padding,
+                props.layout_direction,
+                props.horizontal_scroll_state,
+                props.vertical_scroll_state,
+                props.horizontal_scrollable,
+                props.vertical_scrollable,
+                props.on_horizontal_scroll_state_change,
+                props.on_vertical_scroll_state_change
+            );
+            move |item, width, height| {
                 let padding_start = padding.start.get();
                 let padding_end = padding.end.get();
                 let padding_top = padding.top.get();
@@ -314,23 +314,23 @@ fn item_event(props: &ScrollAreaProps) -> ItemEvent {
             }
         })
         .set_mouse_wheel({
-            // clone!(
-            //     props.horizontal_scrollable,
-            //     props.vertical_scrollable,
-            //     props.horizontal_scroll_state,
-            //     props.vertical_scroll_state,
-            //     props.on_horizontal_scroll_state_change,
-            //     props.on_vertical_scroll_state_change,
-            //     // v_speed,
-            //     // h_speed,
-            //     // last_calculated_v_speed_time,
-            //     // last_calculated_h_speed_time
-            // );
+            clone!(
+                props.horizontal_scrollable,
+                props.vertical_scrollable,
+                props.horizontal_scroll_state,
+                props.vertical_scroll_state,
+                props.on_horizontal_scroll_state_change,
+                props.on_vertical_scroll_state_change,
+                // v_speed,
+                // h_speed,
+                // last_calculated_v_speed_time,
+                // last_calculated_h_speed_time
+            );
             let mut current_v_speed = 0.0;
             let mut current_h_speed = 0.0;
             let mut last_x_offset = 0.0;
             let mut last_y_offset = 0.0;
-            use |item, x_wheel, y_wheel| {
+            move |item, x_wheel, y_wheel| {
                 let vertical_scrollable = vertical_scrollable.get();
                 let horizontal_scrollable = horizontal_scrollable.get();
                 let mut v_scroll_state = vertical_scroll_state.get();

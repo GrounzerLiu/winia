@@ -5,6 +5,7 @@ use std::ops::Div;
 use std::ops::Mul;
 use std::ops::Rem;
 use std::ops::Sub;
+use std::time::Instant;
 
 pub type SharedI8 = SharedSource<i8>;
 pub type SharedI16 = SharedSource<i16>;
@@ -373,6 +374,51 @@ impl_shared_to_all!(
     f32 | to_f32
 );
 
+// impl From<i32> for SharedDerived<f32> {
+//     fn from(value: i32) -> Self {
+//         SharedDerived::new_derived(value as f32)
+//     }
+// }
+
+macro_rules! impl_from_num {
+    ($from:ty, $to:ty) => {
+        impl From<$from> for SharedDerived<$to> {
+            fn from(value: $from) -> Self {
+                SharedDerived::new_derived(value as $to)
+            }
+        }
+
+        impl From<$from> for SharedSource<$to> {
+            fn from(value: $from) -> Self {
+                SharedSource::new(value as $to)
+            }
+        }
+    };
+}
+
+macro_rules! impl_from_num_all {
+    ($from:ty, $($to:ty),*) => {
+        $(
+            impl_from_num!($from, $to);
+        )*
+    };
+}
+
+impl_from_num_all!(i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize, f32, f64);
+impl_from_num_all!(i16, i8, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize, f32, f64);
+impl_from_num_all!(i32, i8, i16, i64, i128, isize, u8, u16, u32, u64, u128, usize, f32, f64);
+impl_from_num_all!(i64, i8, i16, i32, i128, isize, u8, u16, u32, u64, u128, usize, f32, f64);
+impl_from_num_all!(i128, i8, i16, i32, i64, isize, u8, u16, u32, u64, u128, usize, f32, f64);
+impl_from_num_all!(isize, i8, i16, i32, i64, i128, u8, u16, u32, u64, u128, usize, f32, f64);
+impl_from_num_all!(u8, i8, i16, i32, i64, i128, isize, u16, u32, u64, u128, usize, f32, f64);
+impl_from_num_all!(u16, i8, i16, i32, i64, i128, isize, u8, u32, u64, u128, usize, f32, f64);
+impl_from_num_all!(u32, i8, i16, i32, i64, i128, isize, u8, u16, u64, u128, usize, f32, f64);
+impl_from_num_all!(u64, i8, i16, i32, i64, i128, isize, u8, u16, u32, u128, usize, f32, f64);
+impl_from_num_all!(u128, i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, usize, f32, f64);
+impl_from_num_all!(usize, i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, f32, f64);
+impl_from_num_all!(f32, i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize, f64);
+impl_from_num_all!(f64, i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize, f32);
+
 mod tests {
     use crate::shared::{SharedF32, SharedIsize, SharedUsize};
 
@@ -411,10 +457,29 @@ mod tests {
     }
 }
 
-impl SharedF32 {
+/*impl SharedF32 {
     pub fn animation_to_f32(&self, to: impl Into<f32>) -> SharedAnimation<f32> {
         SharedAnimation::new(self.clone(), self.get(), to.into(), |from, to, progress| {
             from + (to - from) * progress
         })
     }
 }
+
+impl SharedF32 {
+    pub async fn physical_animation_to_f32(&self, to: impl Into<f32>, spring_spec: SpringSpec) {
+        let mut sping = Spring::new(spring_spec, self.get());
+        sping.animate_to(to.into());
+        let mut last_update = Instant::now();
+        loop {
+            let now = Instant::now();
+            let delta = now.duration_since(last_update);
+            last_update = now;
+            let pos = sping.update(delta.as_secs_f32());
+            self.set(pos);
+            if !sping.is_running() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(1000 / 60)).await;
+        }
+    }
+}*/

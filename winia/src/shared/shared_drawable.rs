@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 use crate::drawable::{Drawable, ImageDrawable};
+use crate::icon::{IconDrawable, MaterialSymbol};
 use crate::shared::{Shared, SharedDerived, SharedSource};
+use crate::ui::Color;
 
 pub type SharedDrawable = SharedSource<Box<dyn Drawable>>;
 pub type SharedDerivedDrawable = SharedDerived<Box<dyn Drawable>>;
@@ -75,5 +77,29 @@ impl From<&str> for SharedDrawable {
 impl From<&str> for SharedDerivedDrawable {
     fn from(url: &str) -> Self {
         SharedDrawable::from(url).into()
+    }
+}
+
+impl From<IconDrawable> for SharedDrawable {
+    fn from(drawable: IconDrawable) -> Self {
+        SharedSource::new(drawable.clone_drawable())
+    }
+}
+
+impl From<IconDrawable> for SharedDerivedDrawable {
+    fn from(drawable: IconDrawable) -> Self {
+        SharedDerived::new_derived(drawable.clone_drawable())
+    }
+}
+
+impl From<MaterialSymbol> for SharedDrawable {
+    fn from(symbol: MaterialSymbol) -> Self {
+        SharedDrawable::from(IconDrawable::new(symbol))
+    }
+}
+
+impl From<MaterialSymbol> for SharedDerivedDrawable {
+    fn from(symbol: MaterialSymbol) -> Self {
+        SharedDerivedDrawable::from(IconDrawable::new(symbol))
     }
 }

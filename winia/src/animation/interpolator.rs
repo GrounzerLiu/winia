@@ -1,7 +1,8 @@
-pub trait Interpolator {
+pub trait Interpolator : Sync + Send {
     fn interpolate(&self, x: f32) -> f32;
 }
 
+/// ![image](https://upload.wikimedia.org/wikipedia/commons/0/0e/Linear_interpolation.svg)
 pub struct Linear {}
 impl Default for Linear {
     fn default() -> Self {
@@ -13,6 +14,9 @@ impl Linear {
     pub fn new() -> Self {
         Self {}
     }
+	pub fn boxed() -> Box<dyn Interpolator> {
+		Box::new(Self::new())
+	}
 }
 
 impl Interpolator for Linear {
@@ -56,7 +60,7 @@ macro_rules! interpolator {
                 Self { points: $map }
             }
 
-			pub fn boxed() -> Box<dyn Interpolator + Send> {
+			pub fn boxed() -> Box<dyn Interpolator> {
 				Box::new(Self::new())
 			}
         }

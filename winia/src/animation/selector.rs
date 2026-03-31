@@ -9,7 +9,7 @@ pub enum Selector {
 impl Selector {
     pub fn is_match(&self, item_data: &ItemData) -> bool {
         match self {
-            Selector::Id(id) => item_data.id == *id,
+            Selector::Id(id) => item_data.id() == *id,
             Selector::Name(name) => item_data.name.lock().as_str() == name.as_str(),
         }
     }

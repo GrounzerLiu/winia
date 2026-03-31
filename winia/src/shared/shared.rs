@@ -1,17 +1,15 @@
-use crate::animation::interpolator::Linear;
-use crate::animation::Interpolator;
 use crate::app::EventLoopProxy;
 use crate::core::next_id;
+use crate::shared::{AnimatableValue, AnimationSpec, SharedAnimation, AnyAnimation};
 use parking_lot::lock_api::MutexGuard;
 use parking_lot::{Mutex, RawMutex};
-use std::clone::UseCloned;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::future::Future;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::{Arc, Weak};
-use std::time::{Duration, Instant};
+use tokio::time::Instant;
 
 pub trait Readable: Send + Sized + 'static {}
 pub trait Writable: Readable {}
@@ -221,8 +219,8 @@ where
         }
     }
 
-    pub fn get_animation(&self) -> Option<SharedAnimation<T>> {
-        self.animation.lock().clone()
+    pub fn get_animation(&self) -> &Arc<Mutex<Option<SharedAnimation<T>>>> {
+        &self.animation
     }
 
     fn intercept(&self, old_value: &mut T, new_value: T) -> Option<T> {
@@ -267,8 +265,61 @@ macro_rules! depend {
 }
 
 #[macro_export]
+macro_rules! shared_derived_clone {
+    ([$($acc:ident),*], $head:ident . $($tail:ident).+ ) => {
+        $crate::shared_derived_clone!([$($acc,)* $head], $($tail).+)
+    };
+
+    ([$($acc:ident),*], $last:ident) => {
+        let $last = $($acc.)* $last.clone();
+    };
+}
+
+#[macro_export]
 macro_rules! shared_derived {
-    ($($dep:ident),* $(,)?||$b:block) => {
+        ($($var_expr:expr_2021),* => $block:block) => {
+        {
+            use $crate::shared::Observable;
+            use $crate::shared::SharedDerived;
+            let d = vec![
+                $(
+                    {
+                        let o: Box<dyn Observable> = Box::new($var_expr.clone());
+                        o
+                    }
+                ),*
+            ];
+            letclone::clone!(
+                $($var_expr,)*
+            );
+            SharedDerived::from_fn(
+                d,
+                move || $block
+            )
+        }
+    };
+    ($($var_expr:expr_2021),* => $expr:expr_2021) => {
+        {
+            use $crate::shared::Observable;
+            use $crate::shared::SharedDerived;
+            let d = vec![
+                $(
+                    {
+                        let o: Box<dyn Observable> = Box::new($var_expr.clone());
+                        o
+                    }
+                ),*
+            ];
+            $(
+                proc_macro::shared_derived_clone!($var_expr);
+            )*
+            SharedDerived::from_fn(
+                d,
+                move|| $expr
+            )
+        }
+    };
+    ($($dep:ident),* $(,)?||$b:expr) => {
         {
             use $crate::shared::Observable;
             use $crate::shared::SharedDerived;
@@ -289,7 +340,7 @@ macro_rules! shared_derived {
             )
         }
     };
-    ($($scope:ident.$dep:ident),* $(,)?||$b:block) => {
+    ($($scope:ident.$dep:ident),* $(,)?||$b:expr) => {
         {
             use $crate::shared::Observable;
             use $crate::shared::SharedDerived;
@@ -403,9 +454,67 @@ where
     }
 }
 
+impl<T: AnimatableValue + 'static> Shared<T, Source> {
+    pub fn animate_to(
+        &self, target: T,
+        animation_spec: impl AnimationSpec<T>,
+        event_loop_proxy: &EventLoopProxy
+    ) {
+        {
+            let animation_lock = self.animation.lock();
+            if let Some(current_animation) = animation_lock.as_ref() {
+                current_animation.stop();
+            }
+        }
+        let shared_animation = SharedAnimation::new(animation_spec.build(self.get(), target), self.clone());
+        let shared_animation_box: Box<dyn AnyAnimation> = Box::new(shared_animation.clone());
+        event_loop_proxy.start_shared_animation(shared_animation_box);
+        self.animation.lock().replace(shared_animation);
+    }
+}
+
+impl<T> Shared<T, Source>
+where
+    T: AnimatableValue + Send + 'static,
+{
+/*    pub async fn animate_to_async(
+        &self,
+        target: T,
+        animation_spec: impl AnimationSpec<T> + Send + 'static,
+    ) {
+        let mut animation = animation_spec.build(self.get(), target);
+        loop {
+            if animation.check_finished() {
+                break;
+            }
+            let new_value = animation.update().unwrap();
+            self.set(new_value);
+            tokio::time::sleep(std::time::Duration::from_millis(16)).await;
+        }
+    }*/
+    pub async fn animate_to_async(
+        &self, target: T,
+        animation_spec: impl AnimationSpec<T>,
+        event_loop_proxy: &EventLoopProxy
+    ) {
+        {
+            let animation_lock = self.animation.lock();
+            if let Some(current_animation) = animation_lock.as_ref() {
+                current_animation.stop();
+            }
+        }
+        let shared_animation = SharedAnimation::new(animation_spec.build(self.get(), target), self.clone());
+        let shared_animation_box: Box<dyn AnyAnimation> = Box::new(shared_animation.clone());
+        event_loop_proxy.start_shared_animation(shared_animation_box);
+        self.animation.lock().replace(shared_animation.clone());
+        shared_animation.wait_finished().await
+    }
+}
+
+
 impl<T, A> Shared<T, A>
 where
-    T: Send + Clone + 'static,
+    T: Clone + 'static,
     A: Readable,
 {
     pub fn get(&self) -> T {
@@ -501,7 +610,6 @@ impl<T, A: Readable> AsRef<Shared<T, A>> for Shared<T, A> {
     }
 }
 
-#[derive(Clone)]
 pub struct SharedWeak<T, Access: Readable> {
     _access_marker: PhantomData<Access>,
     id: u32,
@@ -551,234 +659,33 @@ where
     }
 }
 
-struct InnerSharedAnimation<T> {
-    id: u32,
-    is_stopped: bool,
-    is_finished: bool,
-    enable_repeat: bool,
-    shared: SharedWeak<T, Source>,
-    from: T,
-    to: T,
-    value_generator: Box<dyn Fn(&T, &T, f32) -> T + Send>,
-    duration: Duration,
-    start_time: Instant,
-    interpolator: Box<dyn Interpolator + Send>,
-    on_start: Option<Box<dyn FnMut() + Send>>,
-    on_finish: Option<Box<dyn FnMut() + Send>>,
-}
-
-impl<T: Send + 'static> InnerSharedAnimation<T> {
-    pub fn new(
-        f32: SharedSource<T>,
-        from: T,
-        to: T,
-        value_generator: impl Fn(&T, &T, f32) -> T + Send + 'static,
-    ) -> Self {
-        Self {
-            id: next_id(),
-            is_stopped: false,
-            is_finished: false,
-            enable_repeat: false,
-            shared: f32.weak(),
-            from,
-            to,
-            value_generator: Box::new(value_generator),
-            duration: Duration::from_secs(500),
-            start_time: Instant::now(),
-            interpolator: Box::new(Linear::new()),
-            on_start: None,
-            on_finish: None,
-        }
-    }
-
-    pub fn enable_repeat(&mut self) {
-        self.enable_repeat = true;
-    }
-
-    pub fn duration(&mut self, duration: Duration) {
-        self.duration = duration;
-    }
-
-    pub fn interpolator(&mut self, interpolator: impl Interpolator + Send + 'static) {
-        self.interpolator = Box::new(interpolator);
-    }
-
-    pub fn on_start(&mut self, on_start: impl FnMut() + Send + 'static) {
-        self.on_start = Some(Box::new(on_start));
-    }
-
-    /// Set the function to be called when the animation is finished or stopped.
-    pub fn on_finish(&mut self, on_finish: impl FnMut() + Send + 'static) {
-        self.on_finish = Some(Box::new(on_finish));
-    }
-
-    // pub fn start(mut self, app_context: &AppContext){
-    //     self.start_time = Instant::now();
-    //     app_context.shared_animations.value().push(Box::new(self));
-    //     app_context.request_redraw();
-    //     if let Some(on_start) = self.on_start.take(){
-    //         on_start();
-    //     }
-    // }
-
-    pub fn stop(&mut self) {
-        self.is_stopped = true;
-        // if let Some(on_finish) = self.on_finish.as_mut(){
-        //     on_finish();
-        // }
-    }
-
-    pub fn get_finished(&mut self) -> bool {
-        if self.enable_repeat {
-            if self.is_stopped {
-                self.is_finished = true;
-                true
-            } else if self.start_time.elapsed() >= self.duration {
-                self.start_time = Instant::now();
-                self.is_finished = false;
-                false
-            } else {
-                self.is_finished = false;
-                false
-            }
-        } else {
-            let is_finished = self.is_stopped || self.start_time.elapsed() >= self.duration;
-            if !self.is_finished && is_finished {
-                if let Some(on_finish) = self.on_finish.as_mut() {
-                    on_finish();
-                }
-            }
-            self.is_finished = is_finished;
-            is_finished
-        }
-    }
-
-    pub fn update(&mut self) {
-        if self.get_finished() {
-            let new_value = (self.value_generator)(&self.from, &self.to, 1.0);
-            if let Some(shared) = self.shared.upgrade() {
-                shared.set(new_value);
-            }
-            return;
-        }
-        let time_elapsed = self.start_time.elapsed().as_millis() as f32;
-        let progress = (time_elapsed / self.duration.as_millis() as f32).clamp(0.0, 1.0);
-        let interpolated = self.interpolator.interpolate(progress);
-        let new_value = (self.value_generator)(&self.from, &self.to, interpolated);
-        if let Some(shared) = self.shared.upgrade() {
-            shared.set(new_value);
-        }
-    }
-}
-
-pub struct SharedAnimation<T> {
-    inner: Arc<Mutex<InnerSharedAnimation<T>>>,
-}
-
-impl<T: Send + 'static> SharedAnimation<T> {
-    pub fn new(
-        f32: SharedSource<T>,
-        from: T,
-        to: T,
-        value_generator: impl Fn(&T, &T, f32) -> T + Send + 'static,
-    ) -> Self {
-        let inner = InnerSharedAnimation::new(f32, from, to, value_generator);
-        Self {
-            inner: Arc::new(Mutex::new(inner)),
-        }
-    }
-
-    pub fn enable_repeat(self) -> Self {
-        self.inner.lock().enable_repeat();
-        self
-    }
-
-    pub fn duration(self, duration: Duration) -> Self {
-        self.inner.lock().duration = duration;
-        self
-    }
-
-    pub fn interpolator(self, interpolator: impl Interpolator + Send + 'static) -> Self {
-        self.inner.lock().interpolator(interpolator);
-        self
-    }
-
-    pub fn on_start(self, on_start: impl FnMut() + Send + 'static) -> Self {
-        self.inner.lock().on_start(on_start);
-        self
-    }
-
-    pub fn on_finish(self, on_finish: impl FnMut() + Send + 'static) -> Self {
-        self.inner.lock().on_finish(on_finish);
-        self
-    }
-
-    pub fn start(self, event_loop_proxy: &EventLoopProxy) -> Self {
-        {
-            let mut inner = self.inner.lock();
-            inner.start_time = Instant::now();
-            event_loop_proxy.start_shared_animation(Box::new(self.clone()));
-            let cloned = self.clone();
-            if let Some(shared) = inner.shared.upgrade() {
-                shared.animation.lock().replace(cloned);
-            }
-            if let Some(mut on_start) = inner.on_start.take() {
-                on_start();
-            }
-        }
-        self
-    }
-
-    pub fn start_delayed(self, event_loop_proxy: &EventLoopProxy, delay: Duration) -> Self {
-        let event_loop_proxy = event_loop_proxy.clone();
-        let self_clone = self.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(delay).await;
-            self_clone.start(&event_loop_proxy);
-        });
-        self
-    }
-
-    pub fn cancel(&mut self) {
-        self.inner.lock().on_finish.take();
-        self.stop()
-    }
-
-    pub fn stop(&mut self) {
-        self.inner.lock().stop();
-    }
-
-    pub fn is_finished(&self) -> bool {
-        self.inner.lock().get_finished()
-    }
-
-    pub fn id(&self) -> u32 {
-        self.inner.lock().id
-    }
-}
-
-impl<T> Clone for SharedAnimation<T> {
+pub type SharedSourceWeak<T> = SharedWeak<T, Source>;
+impl<T> Clone for SharedWeak<T, Source> {
     fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
+        SharedWeak {
+            _access_marker: Default::default(),
+            id: self.id,
+            value: self.value.clone(),
+            generator: self.generator.clone(),
+            interceptor: self.interceptor.clone(),
+            observers: self.observers.clone(),
+            dependencies: self.dependencies.clone(),
+            animation: self.animation.clone(),
         }
     }
 }
-
-pub(crate) trait SharedAnimationTrait {
-    fn is_finished(&self) -> bool;
-    fn update(&self);
-}
-
-impl<T: Send + 'static> SharedAnimationTrait for SharedAnimation<T> {
-    fn is_finished(&self) -> bool {
-        self.inner.lock().get_finished()
+pub type SharedDerivedWeak<T> = SharedWeak<T, Derived>;
+impl<T> Clone for SharedWeak<T, Derived> {
+    fn clone(&self) -> Self {
+        SharedWeak {
+            _access_marker: Default::default(),
+            id: self.id,
+            value: self.value.clone(),
+            generator: self.generator.clone(),
+            interceptor: self.interceptor.clone(),
+            observers: self.observers.clone(),
+            dependencies: self.dependencies.clone(),
+            animation: self.animation.clone(),
+        }
     }
-
-    fn update(&self) {
-        self.inner.lock().update();
-    }
 }
-
-impl<T> UseCloned for Shared<T, Source>{}
-impl<T> UseCloned for Shared<T, Derived>{}
