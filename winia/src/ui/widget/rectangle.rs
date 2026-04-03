@@ -1,13 +1,12 @@
-use letclone::clone;
-use crate::{define_props, With};
-use crate::shared::{Shared, SharedDerived, SharedDerivedColor, SharedSource};
-use crate::ui::item::{Children, Frame, ItemEvent, ItemKind, ItemProps, LayoutDirection};
+use crate::shared::{Shared, SharedDerived, SharedDerivedColor};
+use crate::ui::item::{Children, ItemKind, ItemProps, LayoutDirection};
 use crate::ui::{Color, Item, Orientation, SetColor};
-use crate::bind_properties;
+use letclone::clone;
+use proc_macro::ItemProps;
 use skia_bindings::{SkPaint_Cap, SkPaint_Join};
 use skia_safe::paint::Style;
-use skia_safe::{Path, RRect, Rect, Vector};
-use proc_macro::ItemProps;
+use skia_safe::{RRect, Rect, Vector};
+use crate::event::ItemEvent;
 
 #[derive(Clone, Debug)]
 pub struct Radius {

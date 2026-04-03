@@ -1,17 +1,18 @@
+use crate::app::WindowContext;
 use crate::core::next_id;
 use crate::shared::{RepeatCount, RepeatMode, RepeatSpec, SharedDerivedBool, SharedDerivedColor, SharedF32, SharedUsize, SpringSpec, TweenSpec};
-use crate::ui::item::{Children, ItemEvent, ItemKind, ItemProps, ItemState};
-use crate::ui::loading_indicator_styles::{LoadingIndicatorStyleExt, SharedLoadingIndicatorStyle, LOADING_INDICATOR_STYLE};
+use crate::shared_derived;
+use crate::ui::item::{Children, ItemKind, ItemProps};
+use crate::ui::loading_indicator_styles::{LoadingIndicatorStyleExt, SharedLoadingIndicatorStyle};
 use crate::ui::{rectangle, Color, Item, Radius, RectanglePropsTrait, SetColor, Size};
 use lazy_static::lazy_static;
+use letclone::clone;
 use material_shapes::{MaterialShapes, Morph, MorphToPath, RoundedPolygon};
 use proc_macro::ItemProps;
 use skia_safe::{Paint, Path};
 use std::ops::Deref;
 use std::time::Duration;
-use letclone::clone;
-use crate::app::WindowContext;
-use crate::shared_derived;
+use crate::event::ItemEvent;
 
 #[derive(ItemProps)]
 pub struct LoadingIndicatorProps {

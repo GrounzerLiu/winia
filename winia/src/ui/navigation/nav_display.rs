@@ -10,11 +10,12 @@ use crate::collection::CollectionOperation;
 use crate::core::next_id;
 use crate::shared::{SharedDerived, SharedSource, SharedWVec};
 use crate::ui::item::{
-    Children, ItemData, ItemEvent, ItemKind, ItemProps, MeasureMode, PhysicalX,
+    Children, ItemData, ItemKind, ItemProps, PhysicalX,
 };
 use crate::ui::navigation::NavKey;
 use crate::ui::{Alignment, HorizontalAlignment, Item, Orientation};
 use proc_macro::ItemProps;
+use crate::event::{ItemEvent, MeasureMode};
 
 #[derive(ItemProps)]
 pub struct NavDisplayProps {

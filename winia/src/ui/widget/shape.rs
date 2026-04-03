@@ -3,9 +3,10 @@ use material_shapes::{MaterialShapes, Morph, MorphToPath, PolygonToPath};
 use proc_macro::ItemProps;
 use crate::animation::interpolator::{EaseOutBack, EaseOutElastic};
 use crate::core::next_id;
+use crate::event::ItemEvent;
 use crate::shared::{SharedF32, SharedSource, SpringSpec, TweenSpec};
 use crate::ui::{Color, Item, SetColor};
-use crate::ui::item::{Children, ItemEvent, ItemKind, ItemProps};
+use crate::ui::item::{Children, ItemKind, ItemProps};
 
 #[derive(ItemProps)]
 pub struct ShapeProps {

@@ -1,12 +1,13 @@
 use crate::app::WindowContext;
 use crate::core::next_id;
 use crate::shared::{SharedDerived, SharedDerivedBool, SharedF32, SharedSource};
-use crate::ui::item::{ItemEvent, ItemKind, ItemProps, MeasureMode, MouseScrollDelta, MouseWheel, PhysicalX};
+use crate::ui::item::{ItemKind, ItemProps, PhysicalX};
 use crate::ui::{Item, Orientation};
 use proc_macro::ItemProps;
 use std::time::Instant;
 use letclone::clone;
 use winit::event::TouchPhase;
+use crate::event::{ItemEvent, MeasureMode, MouseScrollDelta};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ScrollMode {
@@ -32,7 +33,7 @@ impl ScrollState {
     }
 
     pub fn new_shared() -> SharedSource<ScrollState> {
-        SharedSource::new(ScrollState{
+        SharedSource::new(ScrollState {
             offset: 0.0,
             viewport_size: 0.0,
             content_size: 0.0,
@@ -118,7 +119,7 @@ fn item_event(props: &ScrollAreaProps) -> ItemEvent {
     v_speed.subscribe(next_id(), {
         let e = props.window_context.event_loop_proxy().clone();
         let updater = props.item_updater.clone();
-        move ||{
+        move || {
             e.request_update_layout();
             updater.lock().request_update();
         }
@@ -127,7 +128,7 @@ fn item_event(props: &ScrollAreaProps) -> ItemEvent {
     h_speed.subscribe(next_id(), {
         let e = props.window_context.event_loop_proxy().clone();
         let updater = props.item_updater.clone();
-        move ||{
+        move || {
             e.request_update_layout();
             updater.lock().request_update();
         }
@@ -208,7 +209,7 @@ fn item_event(props: &ScrollAreaProps) -> ItemEvent {
                 let h_scroll_state = horizontal_scroll_state.lock();
                 if horizontal_scrollable
                     && (h_scroll_state.viewport_size() != item.measure_frame.width - padding_h
-                        || h_scroll_state.content_size() != child_width)
+                    || h_scroll_state.content_size() != child_width)
                 {
                     let mut new_state = *h_scroll_state;
                     new_state.set_viewport_size(item.measure_frame.width - padding_h);
@@ -222,7 +223,7 @@ fn item_event(props: &ScrollAreaProps) -> ItemEvent {
                 let v_scroll_state = vertical_scroll_state.lock();
                 if vertical_scrollable
                     && (v_scroll_state.viewport_size() != item.measure_frame.height - padding_v
-                        || v_scroll_state.content_size() != child_height)
+                    || v_scroll_state.content_size() != child_height)
                 {
                     let mut new_state = *v_scroll_state;
                     new_state.set_viewport_size(item.measure_frame.height - padding_v);
@@ -276,41 +277,41 @@ fn item_event(props: &ScrollAreaProps) -> ItemEvent {
                     );
                 }
 
-/*                let h_scrollable = horizontal_scrollable.get();
-                let v_scrollable = vertical_scrollable.get();
-                if h_scrollable && h_speed.get().abs() > 0.0 {
-                    let now = Instant::now();
-                    let elapsed = now.duration_since(last_calculated_h_speed_time.get());
-                    let elapsed_secs = elapsed.as_secs_f32();
-                    if elapsed_secs > 0.0 {
-                        let speed = h_speed.get();
-                        let d = speed * elapsed_secs;
-                        let on_change = on_horizontal_scroll_state_change.lock();
-                        if let Some(callback) = &*on_change {
-                            let mut new_state = horizontal_scroll_state;
-                            new_state.set_offset(new_state.offset() + d);
-                            callback(new_state);
-                        }
-                        last_calculated_h_speed_time.set(now);
-                    }
-                }
-                if v_scrollable && v_speed.get().abs() > 0.0 {
-                    let now = Instant::now();
-                    let elapsed = now.duration_since(last_calculated_v_speed_time.get());
-                    let elapsed_secs = elapsed.as_secs_f32();
-                    if elapsed_secs > 0.0 {
-                        let speed = v_speed.get();
-                        let d = speed * elapsed_secs;
-                        let on_change = on_vertical_scroll_state_change.lock();
-                        if let Some(callback) = &*on_change {
-                            let mut new_state = vertical_scroll_state;
-                            new_state.set_offset(new_state.offset() + d);
-                            println!("Auto scroll v by {} to offset {}", d, new_state.offset());
-                            callback(new_state);
-                        }
-                        last_calculated_v_speed_time.set(now);
-                    }
-                }*/
+                /*                let h_scrollable = horizontal_scrollable.get();
+                                let v_scrollable = vertical_scrollable.get();
+                                if h_scrollable && h_speed.get().abs() > 0.0 {
+                                    let now = Instant::now();
+                                    let elapsed = now.duration_since(last_calculated_h_speed_time.get());
+                                    let elapsed_secs = elapsed.as_secs_f32();
+                                    if elapsed_secs > 0.0 {
+                                        let speed = h_speed.get();
+                                        let d = speed * elapsed_secs;
+                                        let on_change = on_horizontal_scroll_state_change.lock();
+                                        if let Some(callback) = &*on_change {
+                                            let mut new_state = horizontal_scroll_state;
+                                            new_state.set_offset(new_state.offset() + d);
+                                            callback(new_state);
+                                        }
+                                        last_calculated_h_speed_time.set(now);
+                                    }
+                                }
+                                if v_scrollable && v_speed.get().abs() > 0.0 {
+                                    let now = Instant::now();
+                                    let elapsed = now.duration_since(last_calculated_v_speed_time.get());
+                                    let elapsed_secs = elapsed.as_secs_f32();
+                                    if elapsed_secs > 0.0 {
+                                        let speed = v_speed.get();
+                                        let d = speed * elapsed_secs;
+                                        let on_change = on_vertical_scroll_state_change.lock();
+                                        if let Some(callback) = &*on_change {
+                                            let mut new_state = vertical_scroll_state;
+                                            new_state.set_offset(new_state.offset() + d);
+                                            println!("Auto scroll v by {} to offset {}", d, new_state.offset());
+                                            callback(new_state);
+                                        }
+                                        last_calculated_v_speed_time.set(now);
+                                    }
+                                }*/
             }
         })
         .set_mouse_wheel({
@@ -330,7 +331,7 @@ fn item_event(props: &ScrollAreaProps) -> ItemEvent {
             let mut current_h_speed = 0.0;
             let mut last_x_offset = 0.0;
             let mut last_y_offset = 0.0;
-            move |item, x_wheel, y_wheel| {
+            move |item, mouse_wheel| {
                 let vertical_scrollable = vertical_scrollable.get();
                 let horizontal_scrollable = horizontal_scrollable.get();
                 let mut v_scroll_state = vertical_scroll_state.get();
@@ -338,11 +339,13 @@ fn item_event(props: &ScrollAreaProps) -> ItemEvent {
                 let (cursor_x, cursor_y) = item.window_context().cursor_position().get();
                 let item_frame = item.current_frame();
                 if !item_frame.contains(cursor_x, cursor_y) {
-                    return (x_wheel, y_wheel);
+                    return mouse_wheel.delta;
                 }
 
-                if let Some(MouseWheel{delta: MouseScrollDelta::LogicalDelta(delta), phase,..}) = x_wheel {
-                    match phase {
+                let mut mouse_wheel_delta = mouse_wheel.delta;
+
+                if mouse_wheel.delta.is_x_scrollable() {
+                    match mouse_wheel.phase {
                         TouchPhase::Started => {
                             last_calculated_h_speed_time.set(Instant::now());
                         }
@@ -351,7 +354,10 @@ fn item_event(props: &ScrollAreaProps) -> ItemEvent {
                             let elapsed = now.duration_since(last_calculated_h_speed_time.get());
                             let elapsed_secs = elapsed.as_secs_f32();
                             if elapsed_secs > 0.0 {
-                                current_h_speed = delta / elapsed_secs;
+                                current_h_speed = match mouse_wheel.delta {
+                                    MouseScrollDelta::LineDelta(x, _) => x * 20.0,
+                                    MouseScrollDelta::Delta(x, _) => x,
+                                } / elapsed_secs;
                                 last_calculated_h_speed_time.set(now);
                             }
                         }
@@ -363,8 +369,8 @@ fn item_event(props: &ScrollAreaProps) -> ItemEvent {
                     }
                 }
 
-                if let Some(MouseWheel{delta: MouseScrollDelta::LogicalDelta(delta), phase,..}) = y_wheel {
-                    match phase {
+                if mouse_wheel.delta.is_y_scrollable() {
+                    match mouse_wheel.phase {
                         TouchPhase::Started => {
                             last_calculated_v_speed_time.set(Instant::now());
                             last_y_offset = v_scroll_state.offset();
@@ -384,61 +390,44 @@ fn item_event(props: &ScrollAreaProps) -> ItemEvent {
                         TouchPhase::Ended => {
                             last_calculated_v_speed_time.set(Instant::now());
                             v_speed.set(current_v_speed);
-                            println!("Set v_speed to {}", current_v_speed);
                         }
                         TouchPhase::Cancelled => {}
                     }
                 }
 
-                (
-                    if horizontal_scrollable {
-                        match x_wheel {
-                            Some(MouseWheel{delta,..}) => {
-                                let offset = match delta {
-                                    MouseScrollDelta::LineDelta(offset) => {
-                                        offset * 20.0
-                                    }
-                                    MouseScrollDelta::LogicalDelta(offset) => {
-                                        offset
-                                    }
-                                };
-                                h_scroll_state.set_offset(h_scroll_state.offset() + offset);
-                                let on_change = on_horizontal_scroll_state_change.lock();
-                                if let Some(callback) = &*on_change {
-                                    callback(h_scroll_state);
-                                }
-                                None
-                            }
-                            None => { None }
+                if horizontal_scrollable {
+                    let offset = match mouse_wheel.delta {
+                        MouseScrollDelta::LineDelta(offset, _) => {
+                            offset * 20.0
                         }
-                    } else {
-                        x_wheel
+                        MouseScrollDelta::Delta(offset, _) => {
+                            offset
+                        }
+                    };
+                    h_scroll_state.set_offset(h_scroll_state.offset() + offset);
+                    let on_change = on_horizontal_scroll_state_change.lock();
+                    if let Some(callback) = &*on_change {
+                        callback(h_scroll_state);
                     }
-                    ,
-                    if vertical_scrollable {
-                        match y_wheel {
-                            Some(MouseWheel{delta,..}) => {
-                                let offset = match delta {
-                                    MouseScrollDelta::LineDelta(offset) => {
-                                        offset * 20.0
-                                    }
-                                    MouseScrollDelta::LogicalDelta(offset) => {
-                                        offset
-                                    }
-                                };
-                                v_scroll_state.set_offset(v_scroll_state.offset() + offset);
-                                let on_change = on_vertical_scroll_state_change.lock();
-                                if let Some(callback) = &*on_change {
-                                    callback(v_scroll_state);
-                                }
-                                None
-                            }
-                            None => { None }
+                    mouse_wheel_delta.disable_x()
+                }
+                if vertical_scrollable {
+                    let offset = match mouse_wheel.delta {
+                        MouseScrollDelta::LineDelta(_, offset) => {
+                            offset * 20.0
                         }
-                    } else {
-                        y_wheel
-                    },
-                )
+                        MouseScrollDelta::Delta(_, offset) => {
+                            offset
+                        }
+                    };
+                    v_scroll_state.set_offset(v_scroll_state.offset() + offset);
+                    let on_change = on_vertical_scroll_state_change.lock();
+                    if let Some(callback) = &*on_change {
+                        callback(v_scroll_state);
+                    }
+                    mouse_wheel_delta.disable_y()
+                }
+                mouse_wheel_delta
             }
         })
 }

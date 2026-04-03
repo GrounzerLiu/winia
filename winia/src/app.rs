@@ -3,7 +3,7 @@ mod window_attributes;
 mod window_controller;
 
 use crate::text::StyledText;
-use crate::ui::item::{Children, ImeAction, KeyboardInput, MeasureMode, MouseWheel, PointerButton, PointerMoved};
+use crate::ui::item::Children;
 use crate::ui::{rectangle, stack, Color, Item, RectanglePropsTrait, StackPropsTrait};
 use crossbeam_channel::{Receiver, Sender};
 use skia_safe::textlayout::{ParagraphStyle, TextStyle};
@@ -16,12 +16,10 @@ pub use window_attributes::*;
 pub use window_context::*;
 pub use window_controller::*;
 use winit::application::ApplicationHandler;
-use winit::dpi::PhysicalPosition;
 use winit::event::{Ime, MouseScrollDelta, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
-use skiwin::gl::GlSkiaWindow;
 use winit::window::WindowId;
 
 pub struct App {
@@ -318,7 +316,8 @@ impl ApplicationHandler for App {
                 let input = PointerButton {
                     device_id,
                     state,
-                    position: logical_position,
+                    x: logical_position.x,
+                    y: logical_position.y,
                     primary,
                     button,
                 };
@@ -334,7 +333,8 @@ impl ApplicationHandler for App {
                 let logical_position = position.to_logical::<f32>(scale_factor as f64);
                 let input = PointerMoved {
                     device_id,
-                    position: logical_position,
+                    x: logical_position.x,
+                    y: logical_position.y,
                     primary,
                     source,
                 };
@@ -361,11 +361,11 @@ impl ApplicationHandler for App {
             }*/
             WindowEvent::Ime(ime) => {
                 let ime_action = match ime {
-                    Ime::Enabled => ImeAction::Enabled,
-                    Ime::Preedit(r1, r2) => ImeAction::PreEdit(r1, r2),
-                    Ime::Commit(text) => ImeAction::Commit(text),
-                    Ime::Disabled => ImeAction::Disabled,
-                    Ime::DeleteSurrounding { before_bytes, after_bytes } => ImeAction::DeleteSurrounding {
+                    Ime::Enabled => crate::event::Ime::Enabled,
+                    Ime::Preedit(r1, r2) => crate::event::Ime::PreEdit(r1, r2),
+                    Ime::Commit(text) => crate::event::Ime::Commit(text),
+                    Ime::Disabled => crate::event::Ime::Disabled,
+                    Ime::DeleteSurrounding { before_bytes, after_bytes } => crate::event::Ime::DeleteSurrounding {
                         before_bytes,
                         after_bytes,
                     }
@@ -462,60 +462,45 @@ impl ApplicationHandler for App {
                                 window_controller
                                     .item
                                     .data().dispatch_mouse_wheel(
-                                    Some(MouseWheel {
+                                    MouseWheel{
                                         device_id,
-                                        delta: crate::ui::item::MouseScrollDelta::LineDelta(y),
+                                        delta: crate::event::MouseScrollDelta::LineDelta(x, 0.0),
                                         phase,
-                                    }),
-                                    None,
+                                    }
                                 )
                             } else {
                                 window_controller
                                     .item
                                     .data().dispatch_mouse_wheel(
-                                    None,
-                                    Some(MouseWheel {
+                                    MouseWheel {
                                         device_id,
-                                        delta: crate::ui::item::MouseScrollDelta::LineDelta(y),
+                                        delta: crate::event::MouseScrollDelta::LineDelta(0.0, y),
                                         phase,
-                                    }),
+                                    }
                                 )
                             }
                         } else {
                             window_controller
                                 .item
                                 .data().dispatch_mouse_wheel(
-                                Some(MouseWheel {
+                                MouseWheel {
                                     device_id,
-                                    delta: crate::ui::item::MouseScrollDelta::LineDelta(x),
+                                    delta: crate::event::MouseScrollDelta::LineDelta(0.0, y),
                                     phase,
-                                }),
-                                Some(MouseWheel {
-                                    device_id,
-                                    delta: crate::ui::item::MouseScrollDelta::LineDelta(y),
-                                    phase,
-                                }),
+                                }
                             )
                         }
                     }
-                    MouseScrollDelta::PixelDelta(PhysicalPosition { x, y }) => {
+                    MouseScrollDelta::PixelDelta(pos) => {
+                        let pos = pos.to_logical(scale_factor as f64);
                         window_controller
                             .item
                             .data().dispatch_mouse_wheel(
-                            Some(MouseWheel {
+                            MouseWheel {
                                 device_id,
-                                delta: crate::ui::item::MouseScrollDelta::LogicalDelta(
-                                    x as f32 / scale_factor,
-                                ),
+                                delta: crate::event::MouseScrollDelta::Delta(pos.x, pos.y),
                                 phase,
-                            }),
-                            Some(MouseWheel {
-                                device_id,
-                                delta: crate::ui::item::MouseScrollDelta::LogicalDelta(
-                                    y as f32 / scale_factor,
-                                ),
-                                phase,
-                            }),
+                            }
                         )
                     }
                 };
@@ -616,6 +601,7 @@ pub fn run_app(app: App) {
     });
 }
 
+use crate::event::{KeyboardInput, MeasureMode, MouseWheel, PointerButton, PointerMoved};
 #[cfg(target_os = "android")]
 use winit::platform::android::EventLoopBuilderExtAndroid;
 

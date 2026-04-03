@@ -1,7 +1,7 @@
 mod animations;
 mod children;
 mod frame;
-mod item_event;
+// mod item_event;
 mod item_props;
 mod physical_x;
 mod item_state;
@@ -16,7 +16,7 @@ use crate::{calculate_animation_value, depend, override_animation};
 pub use children::*;
 pub use focus_requester::*;
 pub use frame::*;
-pub use item_event::*;
+// pub use item_event::*;
 pub use item_props::*;
 pub use item_state::*;
 pub use physical_x::*;
@@ -39,6 +39,7 @@ use skia_safe::Picture;
 use std::rc::Rc;
 use getset::Getters;
 use winit::event::ButtonSource;
+use crate::event::{Ime, ItemEvent, KeyboardInput, MeasureMode, PointerButton, PointerMoved};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LayoutDirection {
@@ -79,12 +80,12 @@ pub trait ItemPropsTrait {
 
 #[derive(Getters)]
 pub struct ItemData {
-    animations: Animations,
+    pub(crate) animations: Animations,
     #[get = "pub"]
     children: Children,
     pub(crate) entry_frame: Option<Box<dyn Fn(&Frame)-> Frame>>,
     pub(crate) exit_frame: Option<Box<dyn Fn(&Frame)-> Frame>>,
-    draw_cache: Option<Picture>,
+    pub(crate) draw_cache: Option<Picture>,
     event: ItemEvent,
     id: u32,
     pub(crate) is_entered: bool,
@@ -411,6 +412,10 @@ impl ItemData {
         let value = value.downcast_ref::<T>()?;
         Some(value)
     }
+    
+    pub fn kind(&self) -> ItemKind {
+        self.kind
+    }
 
 
     pub fn id(&self) -> u32 {
@@ -563,7 +568,7 @@ impl ItemData {
     pub fn dispatch_ime_to_focused(
         &mut self,
         focused_item_id: u32,
-        action: &ImeAction,
+        action: &Ime,
     ) -> bool {
         if !self.interaction_enabled {
             return false;

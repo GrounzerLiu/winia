@@ -2,7 +2,6 @@ use crate::core::next_id;
 use crate::shared::{Shared, SharedBool, SharedDerived, SharedDerivedBool, SharedDerivedColor, SharedDerivedF32, SharedDerivedString, SharedDerivedText, SharedDerivedUsize, SharedSource, SharedText};
 use crate::text::Paragraph;
 use crate::theme::color;
-use crate::ui::item::{Children, ImeAction, ItemEvent, ItemKind, ItemProps, MeasureMode, PhysicalX, PointerButton, PointerMoved};
 use crate::ui::widget::label::{create_paragraph_style, create_text_style};
 use crate::ui::{Color, Item, Orientation, SetColor};
 use proc_macro::ItemProps;
@@ -17,8 +16,9 @@ use winit::dpi::{LogicalPosition, LogicalSize, Position, Size};
 use winit::event::{ElementState, MouseButton};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::ImeRequest;
-use crate::keyboard::ModifiersKeyState;
-use crate::window::ImeRequestData;
+use winit::window::ImeRequestData;
+use crate::event::{Ime, ItemEvent, MeasureMode, PointerButton, PointerMoved};
+use crate::ui::item::{Children, ItemKind, ItemProps, PhysicalX};
 
 pub enum TextChange {
     Inserted { index: usize, text: String },
@@ -447,8 +447,8 @@ fn item_event(props: &TextFieldProps) -> ItemEvent {
                     let current_frame = item.current_frame();
                     let content_x = current_frame.get_float_param("content_x").unwrap_or(0.0);
                     let content_y = current_frame.get_float_param("content_y").unwrap_or(0.0);
-                    let local_x = pointer_button.position.x - current_frame.x() - content_x;
-                    let local_y = pointer_button.position.y - current_frame.y() - content_y;
+                    let local_x = pointer_button.x - current_frame.x() - content_x;
+                    let local_y = pointer_button.y - current_frame.y() - content_y;
                     let index = text_layout.get_closest_grapheme_cluster_cluster_at((local_x, local_y));
                     match pointer_button.state {
                         ElementState::Pressed => {
@@ -492,8 +492,8 @@ fn item_event(props: &TextFieldProps) -> ItemEvent {
                     let current_frame = item.current_frame();
                     let content_x = current_frame.get_float_param("content_x").unwrap_or(0.0);
                     let content_y = current_frame.get_float_param("content_y").unwrap_or(0.0);
-                    let local_x = pointer_moved.position.x - current_frame.x() - content_x;
-                    let local_y = pointer_moved.position.y - current_frame.y() - content_y;
+                    let local_x = pointer_moved.x - current_frame.x() - content_x;
+                    let local_y = pointer_moved.y - current_frame.y() - content_y;
                     let index = text_layout.get_closest_grapheme_cluster_cluster_at((local_x, local_y));
 
                     if let Some(start) = start_index.read().clone() {
@@ -532,7 +532,7 @@ fn item_event(props: &TextFieldProps) -> ItemEvent {
                 }
                 let mut composing = composing.lock();
                 match ime_input {
-                    ImeAction::Enter | ImeAction::Delete | ImeAction::Commit(_) => {
+                    Ime::Enter | Ime::Delete | Ime::Commit(_) => {
                         if !selection_range.lock().is_empty() {
                             on_text_change(TextChange::Deleted {
                                 range: selection_range.get(),
@@ -543,8 +543,8 @@ fn item_event(props: &TextFieldProps) -> ItemEvent {
                     _ => {}
                 }
                 match ime_input {
-                    ImeAction::Enabled => {}
-                    ImeAction::Enter => {
+                    Ime::Enabled => {}
+                    Ime::Enter => {
                         on_text_change(TextChange::Inserted {
                             index: selection_range.get().start,
                             text: "\n".to_string(),
@@ -552,7 +552,7 @@ fn item_event(props: &TextFieldProps) -> ItemEvent {
                         let new_index = selection_range.get().start + 1;
                         on_selection_change(new_index..new_index);
                     }
-                    ImeAction::Delete => {
+                    Ime::Delete => {
                         if selection_range.lock().start == 0 {
                             return;
                         }
@@ -565,7 +565,7 @@ fn item_event(props: &TextFieldProps) -> ItemEvent {
                             on_selection_change(prev_glyph_index..prev_glyph_index);
                         }
                     }
-                    ImeAction::PreEdit(pr_text, range) => {
+                    Ime::PreEdit(pr_text, range) => {
                         if let Some((composing_range, old_selection_range)) = composing.as_ref()
                         {
                             on_text_change(TextChange::Deleted {
@@ -589,7 +589,7 @@ fn item_event(props: &TextFieldProps) -> ItemEvent {
                             on_selection_change(new_selection_start..new_selection_end);
                         }
                     }
-                    ImeAction::Commit(commit_text) => {
+                    Ime::Commit(commit_text) => {
                         let commit_text_len = commit_text.len();
                         on_text_change(TextChange::Inserted {
                             index: selection_range.get().start,
@@ -598,7 +598,7 @@ fn item_event(props: &TextFieldProps) -> ItemEvent {
                         let new_index = selection_range.get().start + commit_text_len;
                         on_selection_change(new_index..new_index);
                     }
-                    ImeAction::Disabled => {}
+                    Ime::Disabled => {}
                     _ => {}
                 }
                 show_cursor.set(true);
@@ -652,10 +652,10 @@ fn item_event(props: &TextFieldProps) -> ItemEvent {
                         match &event.logical_key {
                             Key::Named(key) => match key {
                                 NamedKey::Backspace => {
-                                    item.ime_input(&ImeAction::Delete);
+                                    item.ime_input(&Ime::Delete);
                                 }
                                 NamedKey::Enter => {
-                                    item.ime_input(&ImeAction::Enter);
+                                    item.ime_input(&Ime::Enter);
                                 }
                                 NamedKey::ArrowLeft => {
                                     let mut selection_range = selection_range.get();
@@ -688,7 +688,7 @@ fn item_event(props: &TextFieldProps) -> ItemEvent {
                                 _ => {}
                             },
                             Key::Character(str) => {
-                                item.ime_input(&ImeAction::Commit(str.to_string()));
+                                item.ime_input(&Ime::Commit(str.to_string()));
                             }
                             Key::Unidentified(_) => {}
                             Key::Dead(_) => {}

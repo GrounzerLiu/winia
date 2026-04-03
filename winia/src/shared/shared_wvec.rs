@@ -3,7 +3,6 @@ use crate::animation::LayoutAnimation;
 use crate::collection::{CollectionOperation, Operable, OperableClone, WVec};
 use crate::depend;
 use crate::shared::{SharedDerived, SharedSource};
-use crate::ui::item::{Frame, MeasureMode};
 
 pub type SharedWVec<T> = SharedSource<WVec<T>>;
 pub type SharedDerivedWVec<T> = SharedDerived<WVec<T>>;

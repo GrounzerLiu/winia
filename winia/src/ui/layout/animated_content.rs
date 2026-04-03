@@ -2,10 +2,11 @@ use letclone::clone;
 use proc_macro::ItemProps;
 use crate::animation::AnimationExt;
 use crate::app::WindowContext;
+use crate::event::{ItemEvent, MeasureMode};
 use crate::exclude_target;
 use crate::shared::{SharedDerived, SharedSource};
 use crate::ui::{Alignment, HorizontalAlignment, Item, Orientation};
-use crate::ui::item::{ItemData, ItemEvent, ItemKind, ItemProps, MeasureMode, PhysicalX};
+use crate::ui::item::{ItemData, ItemKind, ItemProps, PhysicalX};
 
 #[derive(ItemProps)]
 pub struct AnimatedContentProps<T: PartialEq + Clone + 'static> {

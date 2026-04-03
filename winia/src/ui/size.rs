@@ -1,4 +1,4 @@
-use crate::ui::item::MeasureMode;
+use crate::event::MeasureMode;
 
 #[derive(Debug, Default, Clone)]
 pub enum Size {

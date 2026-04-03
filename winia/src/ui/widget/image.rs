@@ -1,14 +1,15 @@
-use std::ops::DerefMut;
-use std::sync::Arc;
+use crate::app::EventLoopProxy;
+use crate::drawable::Drawable;
+use crate::shared::{SharedDerived, SharedDerivedBool, SharedDerivedDrawable};
+use crate::ui::item::{ItemKind, ItemProps, ItemUpdater, PhysicalX};
+use crate::ui::{Alignment, Color, HorizontalAlignment, Item, Orientation, VerticalAlignment};
+use crate::shared_derived;
 use letclone::clone;
 use parking_lot::Mutex;
 use proc_macro::ItemProps;
-use crate::{bind_properties, define_props, shared_derived};
-use crate::app::EventLoopProxy;
-use crate::drawable::{Drawable, ImageDrawable};
-use crate::shared::{SharedDerived, SharedDerivedBool, SharedDerivedDrawable, SharedDrawable};
-use crate::ui::{Alignment, Color, HorizontalAlignment, Item, Orientation, VerticalAlignment};
-use crate::ui::item::{ItemEvent, ItemKind, ItemProps, MeasureMode, ItemUpdater, PhysicalX};
+use std::ops::DerefMut;
+use std::sync::Arc;
+use crate::event::{ItemEvent, MeasureMode};
 
 static DRAWABLE_X: &str = "drawable_x";
 static DRAWABLE_Y: &str = "drawable_y";

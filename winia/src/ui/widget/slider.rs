@@ -2,14 +2,14 @@ use std::ops::{Deref, DerefMut};
 use letclone::clone;
 use crate::shared::{SharedDerived, SharedDerivedF32, SharedDerivedUsize, SharedSource};
 use crate::theme::shape::Corner;
-use crate::ui::item::{Children, Frame, ItemEvent, ItemKind, ItemProps, LayoutDirection, MeasureMode, PhysicalX};
+use crate::ui::item::{Children, Frame, ItemKind, ItemProps, LayoutDirection, PhysicalX};
 use crate::ui::widget::slider::slider_style::SliderStyleExt;
 use crate::ui::{rectangle, stack, Alignment, Color, Item, Orientation, Radius, RectanglePropsTrait, SetColor, Size, StackProps, StackPropsTrait};
 use crate::{depend, shared_derived};
 use skia_safe::{Paint, RRect};
 use proc_macro::ItemProps;
 use crate::core::next_id;
-use crate::event::ElementState;
+use crate::event::{ElementState, ItemEvent, MeasureMode};
 
 #[derive(ItemProps)]
 pub struct SliderProps {
@@ -375,7 +375,7 @@ pub fn slider(mut props: SliderProps) -> Item {
                     let leading_space = current_frame.get_float_param("handle_leading_space").unwrap_or(active_handle_leading_space.get());
                     let trailing_space = current_frame.get_float_param("handle_trailing_space").unwrap_or(active_handle_trailing_space.get());
                     let available_width = width - padding_start - padding_end - handle_width - leading_space - trailing_space;
-                    let offset_x = pointer_button.position.x - current_frame.x() - padding_start - leading_space - (handle_width / 2.0);
+                    let offset_x = pointer_button.x - current_frame.x() - padding_start - leading_space - (handle_width / 2.0);
                     let progress = (offset_x / available_width).clamp(0.0, 1.0);
                     let new_value = min.get() + (max.get() - min.get()) * progress;
                     let mut on_value_change = on_value_change.lock();
@@ -417,7 +417,7 @@ pub fn slider(mut props: SliderProps) -> Item {
                 let leading_space = current_frame.get_float_param("handle_leading_space").unwrap_or(active_handle_leading_space.get());
                 let trailing_space = current_frame.get_float_param("handle_trailing_space").unwrap_or(active_handle_trailing_space.get());
                 let available_width = width - padding_start - padding_end - handle_width - leading_space - trailing_space;
-                let offset_x = pointer_moved.position.x - current_frame.x() - padding_start - leading_space - (handle_width / 2.0);
+                let offset_x = pointer_moved.x - current_frame.x() - padding_start - leading_space - (handle_width / 2.0);
                 let progress = (offset_x / available_width).clamp(0.0, 1.0);
                 let new_value = min.get() + (max.get() - min.get()) * progress;
                 let mut on_value_change = on_value_change.lock();

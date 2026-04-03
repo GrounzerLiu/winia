@@ -2,7 +2,7 @@ use crate::core::next_id;
 use crate::shared::{Shared, SharedBool, SharedDerived, SharedDerivedBool, SharedDerivedColor, SharedDerivedF32, SharedDerivedString, SharedDerivedText, SharedDerivedUsize, SharedSource};
 use crate::text::Paragraph;
 use crate::theme::color;
-use crate::ui::item::{Children, ItemEvent, ItemKind, ItemProps, LayoutDirection, MeasureMode, PhysicalX, PointerButton, PointerMoved};
+use crate::ui::item::{Children, ItemKind, ItemProps, LayoutDirection, PhysicalX};
 use crate::ui::{Color, Item, Orientation, SetColor};
 use proc_macro::ItemProps;
 use skia_safe::paint::Style;
@@ -11,6 +11,7 @@ use skia_safe::{Canvas, Paint, Rect};
 use std::ops::Range;
 use letclone::clone;
 use winit::event::ElementState;
+use crate::event::{ItemEvent, MeasureMode, PointerButton, PointerMoved};
 
 #[derive(ItemProps)]
 pub struct LabelProps {
@@ -319,8 +320,8 @@ fn item_event(props: &LabelProps) -> ItemEvent {
                     let current_frame = item.current_frame();
                     let content_x = current_frame.get_float_param("content_x").unwrap_or(0.0);
                     let content_y = current_frame.get_float_param("content_y").unwrap_or(0.0);
-                    let local_x = pointer_button.position.x - current_frame.x() - content_x;
-                    let local_y = pointer_button.position.y - current_frame.y() - content_y;
+                    let local_x = pointer_button.x - current_frame.x() - content_x;
+                    let local_y = pointer_button.y - current_frame.y() - content_y;
                     let index = text_layout.get_closest_grapheme_cluster_cluster_at((local_x, local_y));
                     match pointer_button.state {
                         ElementState::Pressed => {
@@ -361,8 +362,8 @@ fn item_event(props: &LabelProps) -> ItemEvent {
                     let current_frame = item.current_frame();
                     let content_x = current_frame.get_float_param("content_x").unwrap_or(0.0);
                     let content_y = current_frame.get_float_param("content_y").unwrap_or(0.0);
-                    let local_x = pointer_moved.position.x - current_frame.x() - content_x;
-                    let local_y = pointer_moved.position.y - current_frame.y() - content_y;
+                    let local_x = pointer_moved.x - current_frame.x() - content_x;
+                    let local_y = pointer_moved.y - current_frame.y() - content_y;
                     let index = text_layout.get_closest_grapheme_cluster_cluster_at((local_x, local_y));
 
                     if let Some(start) = start_index.read().clone() {

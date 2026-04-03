@@ -511,12 +511,12 @@ pub fn item_props(input: TokenStream) -> TokenStream {
                 self
             }
 
-            pub fn on_pointer_button<F: 'static + FnMut(&#crate_ident::ui::item::PointerButton) -> bool>(mut self, f: F) -> Self {
+            pub fn on_pointer_button<F: 'static + FnMut(&#crate_ident::event::PointerButton) -> bool>(mut self, f: F) -> Self {
                 self.item_props.on_pointer_button = Some(Box::new(f));
                 self
             }
 
-            pub fn on_pointer_moved<F: 'static + FnMut(&#crate_ident::ui::item::PointerMoved) -> bool>(mut self, f: F) -> Self {
+            pub fn on_pointer_moved<F: 'static + FnMut(&#crate_ident::event::PointerMoved) -> bool>(mut self, f: F) -> Self {
                 self.item_props.on_pointer_moved = Some(Box::new(f));
                 self
             }

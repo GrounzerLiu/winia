@@ -1,18 +1,18 @@
-use std::ops::Deref;
 use crate::app::WindowContext;
 use crate::core::next_id;
-use crate::shared::{SharedBool, SharedDerived, SharedDerivedColor, SharedDerivedF32, SharedF32, SharedSource, TweenSpec};
+use crate::shared::{SharedBool, SharedDerivedColor, SharedDerivedF32, SharedF32, SharedSource, TweenSpec};
 use crate::theme::color;
-use crate::ui::item::{Children, ItemEvent, ItemKind, ItemProps, ItemUpdater, PointerButton};
+use crate::ui::item::{Children, ItemKind, ItemProps, ItemUpdater};
 use crate::ui::{Color, Item, SetColor};
+use letclone::clone;
 use parking_lot::Mutex;
 use proc_macro::ItemProps;
 use skia_safe::{Paint, Path};
+use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
-use letclone::clone;
 use winit::event::{ButtonSource, ElementState};
-use crate::OptionalInvoke;
+use crate::event::{ItemEvent, PointerButton};
 
 #[derive(ItemProps)]
 pub struct RippleProps {
@@ -183,7 +183,7 @@ fn item_event(props: &RippleProps) -> ItemEvent {
                         let layer = Layer {
                             pointer: pointer_button.button.clone(),
                             is_finished: false.into(),
-                            center: (pointer_button.position.x - current_frame.x(), pointer_button.position.y - current_frame.y()),
+                            center: (pointer_button.x - current_frame.x(), pointer_button.y - current_frame.y()),
                             progress,
                             opacity,
                         };

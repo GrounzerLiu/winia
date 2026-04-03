@@ -1,9 +1,9 @@
-use proc_macro::{item, ItemProps};
-use winia::app::WindowContext;
-use winia::shared::{Shared, SharedDerived, SharedSource, SharedText};
-use winia::ui::Item;
-use winia::ui::item::{ItemEvent, ItemKind, ItemProps};
 use crate::video_player::VideoPlayer;
+use proc_macro::ItemProps;
+use winia::event::ItemEvent;
+use winia::shared::{SharedDerived, SharedSource};
+use winia::ui::item::{ItemKind, ItemProps};
+use winia::ui::Item;
 
 /*#[item(uri: impl Into<SharedText>)]
 pub struct Video {

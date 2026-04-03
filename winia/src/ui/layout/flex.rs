@@ -4,8 +4,9 @@ use strum_macros::EnumString;
 use proc_macro::ItemProps;
 use crate::{bind_properties, define_props};
 use crate::app::WindowContext;
+use crate::event::{ItemEvent, MeasureMode};
 use crate::shared::{SharedDerived, SharedDerivedUsize};
-use crate::ui::item::{Children, ItemData, ItemEvent, ItemKind, ItemProps, MeasureMode, PhysicalX, SetCustomProp};
+use crate::ui::item::{Children, ItemData, ItemKind, ItemProps, PhysicalX, SetCustomProp};
 use crate::ui::{Item, Orientation};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString)]
