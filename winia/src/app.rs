@@ -67,9 +67,15 @@ impl App {
         window_attributes: &WindowAttributes,
         sender: Sender<Event>,
     ) {
-        let window = event_loop
-            .create_window(window_attributes.clone().into())
-            .unwrap();
+        let window = match event_loop.create_window(window_attributes.clone().into()) {
+            Ok(w) => w,
+            Err(e) => {
+                log::error!("Failed to create window: {e}");
+                #[cfg(debug_assertions)]
+                panic!("Window creation failed: {e}");
+                return;
+            }
+        };
         let window_id = window.id();
         let window = Arc::new(window);
         window_attributes.bind_window(window.clone());
@@ -84,7 +90,15 @@ impl App {
         let skia_window = skiwin::vulkan::VulkanSkiaWindow::new(event_loop, window.clone());
         // let skia_window = GlSkiaWindow::new(event_loop, window.clone());
 
-        let event_loop_proxy = self.event_loop_proxy.as_ref().unwrap().clone();
+        let event_loop_proxy = match self.event_loop_proxy.as_ref() {
+            Some(proxy) => proxy.clone(),
+            None => {
+                log::error!("Event loop proxy not initialized");
+                #[cfg(debug_assertions)]
+                panic!("Event loop proxy not initialized — logic error");
+                return;
+            }
+        };
         let mut window_context = WindowContext::new(
             window,
             window_attributes,
@@ -594,9 +608,29 @@ fn run_app_with_event_loop(mut app: App, event_loop: EventLoop) {
 
 #[cfg(not(target_os = "android"))]
 pub fn run_app(app: App) {
-    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            let msg = format!("Failed to create Tokio runtime: {e}");
+            log::error!("{msg}");
+            #[cfg(debug_assertions)]
+            panic!("{msg}");
+            eprintln!("{msg}");
+            std::process::exit(1);
+        }
+    };
     runtime.block_on(async {
-        let event_loop = EventLoop::new().unwrap();
+        let event_loop = match EventLoop::new() {
+            Ok(el) => el,
+            Err(e) => {
+                let msg = format!("Failed to create event loop: {e}");
+                log::error!("{msg}");
+                #[cfg(debug_assertions)]
+                panic!("{msg}");
+                eprintln!("{msg}");
+                std::process::exit(1);
+            }
+        };
         run_app_with_event_loop(app, event_loop);
     });
 }
@@ -607,14 +641,29 @@ use winit::platform::android::EventLoopBuilderExtAndroid;
 
 #[cfg(target_os = "android")]
 pub fn run_app(mut app: App, android_app: winit::platform::android::activity::AndroidApp) {
-    // let event_loop = EventLoop::<Event>::with_user_event()
-    //     .with_android_app(android_app)
-    //     .build()
-    //     .unwrap();
-    // run_app_with_event_loop(app.into(), event_loop);
-    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            let msg = format!("Failed to create Tokio runtime: {e}");
+            log::error!("{msg}");
+            #[cfg(debug_assertions)]
+            panic!("{msg}");
+            eprintln!("{msg}");
+            std::process::exit(1);
+        }
+    };
     runtime.block_on(async {
-        let event_loop = EventLoop::builder().with_android_app(android_app.clone()).build().unwrap();
+        let event_loop = match EventLoop::builder().with_android_app(android_app.clone()).build() {
+            Ok(el) => el,
+            Err(e) => {
+                let msg = format!("Failed to create event loop: {e}");
+                log::error!("{msg}");
+                #[cfg(debug_assertions)]
+                panic!("{msg}");
+                eprintln!("{msg}");
+                std::process::exit(1);
+            }
+        };
         app.set_android_app(android_app);
         run_app_with_event_loop(app, event_loop);
     });

@@ -33,7 +33,9 @@ tokio = {version = "1", features = ["rt-multi-thread", "fs"] }
 strum = "0.28"
 strum_macros = "0.28"
 letclone = "0.3.0"
-#arboard = { version = "3.6.1", features = ["wayland-data-control"] }
+thiserror = "2"
+log = "0.4"
+#aboard = { version = "3.6.1", features = ["wayland-data-control"] }
 
 
 material-shapes = { path = "/home/grounzer/RustroverProjects/material-shape", features = ["shape_util"]}

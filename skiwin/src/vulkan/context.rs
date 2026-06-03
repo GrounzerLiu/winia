@@ -39,7 +39,7 @@ impl VulkanRenderContext {
             if shared.is_none() {
                 *shared = Some(Self::shared_queue(event_loop, window.clone()));
             }
-            shared.as_ref().unwrap().clone()
+            shared.as_ref().expect("shared_queue should be initialized").clone()
         };
 
         let skia_ctx = self
@@ -91,14 +91,27 @@ impl VulkanRenderContext {
                 ),
                 None,
             )
-            .unwrap();
+            .unwrap_or_else(|| {
+                let msg = "Failed to create Skia Vulkan context".to_string();
+                log::error!("{msg}");
+                #[cfg(debug_assertions)]
+                panic!("{msg}");
+                #[allow(unreachable_code)]
+                std::process::exit(1);
+            });
 
             Arc::new(Mutex::new(direct_context))
         }
     }
 
     fn shared_queue(event_loop: &dyn ActiveEventLoop, window: Arc<Box<dyn Window>>) -> Arc<Queue> {
-        let library = VulkanLibrary::new().expect("Vulkan libraries not found on system");
+        let library = VulkanLibrary::new().unwrap_or_else(|e| {
+            let msg = format!("Vulkan libraries not found on system: {e}");
+            log::error!("{msg}");
+            #[cfg(debug_assertions)]
+            panic!("{msg}");
+            std::process::exit(1);
+        });
 
         let display_handle = event_loop.display_handle().unwrap();
         let required_extensions = Surface::required_extensions(&display_handle).unwrap();
@@ -126,16 +139,17 @@ impl VulkanRenderContext {
             library,
             InstanceCreateInfo {
                 flags: InstanceCreateFlags::ENUMERATE_PORTABILITY,
-                enabled_extensions: required_extensions,
+                enabled_extensions: required_extensions.clone(),
                 enabled_layers,
                 ..Default::default()
             },
         )
-        .unwrap_or_else(|_| {
-            panic!(
-                "Could not create instance supporting: {:?}",
-                required_extensions
-            )
+        .unwrap_or_else(|e| {
+            let msg = format!("Could not create instance supporting: {required_extensions:?}: {e}");
+            log::error!("{msg}");
+            #[cfg(debug_assertions)]
+            panic!("{msg}");
+            std::process::exit(1);
         });
 
         let device_extensions = DeviceExtensions {
@@ -143,7 +157,13 @@ impl VulkanRenderContext {
             ..DeviceExtensions::empty()
         };
 
-        let surface = Surface::from_window(instance.clone(), window.clone()).unwrap();
+        let surface = Surface::from_window(instance.clone(), window.clone()).unwrap_or_else(|e| {
+            let msg = format!("Failed to create Vulkan surface: {e}");
+            log::error!("{msg}");
+            #[cfg(debug_assertions)]
+            panic!("{msg}");
+            std::process::exit(1);
+        });
 
         let (physical_device, queue_family_index) = instance
             .enumerate_physical_devices()
@@ -167,7 +187,13 @@ impl VulkanRenderContext {
                 PhysicalDeviceType::Other => 4,
                 _ => 5,
             })
-            .expect("No suitable physical device found");
+            .unwrap_or_else(|| {
+                let msg = "No suitable physical device found".to_string();
+                log::error!("{msg}");
+                #[cfg(debug_assertions)]
+                panic!("{msg}");
+                std::process::exit(1);
+            });
 
 
         let (_, mut queues) = Device::new(
@@ -181,9 +207,21 @@ impl VulkanRenderContext {
                 ..Default::default()
             },
         )
-        .expect("Device initialization failed");
+        .unwrap_or_else(|e| {
+            let msg = format!("Device initialization failed: {e}");
+            log::error!("{msg}");
+            #[cfg(debug_assertions)]
+            panic!("{msg}");
+            std::process::exit(1);
+        });
 
-        queues.next().unwrap()
+        queues.next().unwrap_or_else(|| {
+            let msg = "No queue returned from device".to_string();
+            log::error!("{msg}");
+            #[cfg(debug_assertions)]
+            panic!("{msg}");
+            std::process::exit(1);
+        })
     }
 }
 

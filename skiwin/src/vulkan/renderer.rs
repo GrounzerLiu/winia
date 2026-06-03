@@ -65,19 +65,37 @@ impl VulkanRenderer {
         let device = queue.device();
         let queue = queue.clone();
 
-        let surface = Surface::from_window(instance.clone(), window.clone()).unwrap();
+        let surface = Surface::from_window(instance.clone(), window.clone()).unwrap_or_else(|e| {
+            let msg = format!("Failed to create Vulkan surface in renderer: {e}");
+            log::error!("{msg}");
+            #[cfg(debug_assertions)]
+            panic!("{msg}");
+            std::process::exit(1);
+        });
         let window_size = window.surface_size();
 
         let (swapchain, _images) = {
             let surface_capabilities = device
                 .physical_device()
                 .surface_capabilities(&surface, Default::default())
-                .unwrap();
+                .unwrap_or_else(|e| {
+                    let msg = format!("Failed to get surface capabilities: {e}");
+                    log::error!("{msg}");
+                    #[cfg(debug_assertions)]
+                    panic!("{msg}");
+                    std::process::exit(1);
+                });
 
             let surface_formats = device
                 .physical_device()
                 .surface_formats(&surface, Default::default())
-                .unwrap();
+                .unwrap_or_else(|e| {
+                    let msg = format!("Failed to get surface formats: {e}");
+                    log::error!("{msg}");
+                    #[cfg(debug_assertions)]
+                    panic!("{msg}");
+                    std::process::exit(1);
+                });
 
 
             let (image_format, _) = surface_formats
@@ -87,7 +105,13 @@ impl VulkanRenderer {
                         || *format == vulkano::format::Format::R8G8B8A8_UNORM
                 })
                 .cloned()
-                .expect("couldn't find a supported format (B8G8R8A8_UNORM or R8G8B8A8_UNORM)");
+                .unwrap_or_else(|| {
+                    let msg = "No supported surface format found (need B8G8R8A8_UNORM or R8G8B8A8_UNORM)".to_string();
+                    log::error!("{msg}");
+                    #[cfg(debug_assertions)]
+                    panic!("{msg}");
+                    std::process::exit(1);
+                });
 
             Swapchain::new(
                 device.clone(),
@@ -109,11 +133,17 @@ impl VulkanRenderer {
                         .supported_composite_alpha
                         .into_iter()
                         .next()
-                        .unwrap(),
+                        .unwrap_or(vulkano::swapchain::CompositeAlpha::Opaque),
                     ..Default::default()
                 },
             )
-            .unwrap()
+            .unwrap_or_else(|e| {
+                let msg = format!("Failed to create swapchain: {e}");
+                log::error!("{msg}");
+                #[cfg(debug_assertions)]
+                panic!("{msg}");
+                std::process::exit(1);
+            })
         };
 
         let render_pass = vulkano::single_pass_renderpass!(
@@ -133,7 +163,13 @@ impl VulkanRenderer {
                 depth_stencil: {},
             },
         )
-        .unwrap();
+        .unwrap_or_else(|e| {
+            let msg = format!("Failed to create render pass: {e}");
+            log::error!("{msg}");
+            #[cfg(debug_assertions)]
+            panic!("{msg}");
+            std::process::exit(1);
+        });
 
         let framebuffers = vec![];
         let swapchain_is_valid = false;
@@ -176,28 +212,51 @@ impl VulkanRenderer {
                 let _ = unsafe { self.queue.device().wait_idle() };
             }
 
-            let (new_swapchain, new_images) = self
+            let (new_swapchain, new_images) = match self
                 .swapchain
                 .recreate(SwapchainCreateInfo {
                     image_extent: window_size.into(),
                     ..self.swapchain.create_info()
-                })
-                .expect("Failed to recreate swapchain");
+                }) {
+                Ok(result) => result,
+                Err(e) => {
+                    log::error!("Failed to recreate swapchain: {e}");
+                    #[cfg(debug_assertions)]
+                    panic!("Failed to recreate swapchain: {e}");
+                    // Release: 保持 swapchain_is_valid = false，下一帧重试
+                    return;
+                }
+            };
 
             self.swapchain = new_swapchain;
 
             self.framebuffers = new_images
                 .iter()
-                .map(|image| {
-                    let view = ImageView::new_default(image.clone()).unwrap();
-                    Framebuffer::new(
+                .filter_map(|image| {
+                    let view = match ImageView::new_default(image.clone()) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            log::error!("Failed to create image view: {e}");
+                            #[cfg(debug_assertions)]
+                            panic!("Failed to create image view: {e}");
+                            return None;
+                        }
+                    };
+                    match Framebuffer::new(
                         self.render_pass.clone(),
                         FramebufferCreateInfo {
                             attachments: vec![view],
                             ..Default::default()
                         },
-                    )
-                    .unwrap()
+                    ) {
+                        Ok(fb) => Some(fb),
+                        Err(e) => {
+                            log::error!("Failed to create framebuffer: {e}");
+                            #[cfg(debug_assertions)]
+                            panic!("Failed to create framebuffer: {e}");
+                            None
+                        }
+                    }
                 })
                 .collect::<Vec<_>>();
 
@@ -215,7 +274,20 @@ impl VulkanRenderer {
                     self.swapchain_is_valid = false;
                     return None;
                 }
-                Err(e) => panic!("failed to acquire next image: {e}"),
+                Err(VulkanError::DeviceLost) => {
+                    log::error!("GPU device lost!");
+                    #[cfg(debug_assertions)]
+                    panic!("GPU device lost — cannot recover");
+                    #[cfg(not(debug_assertions))]
+                    return None;
+                }
+                Err(e) => {
+                    log::error!("Failed to acquire next image: {e}");
+                    #[cfg(debug_assertions)]
+                    panic!("Render loop error: {e}");
+                    #[cfg(not(debug_assertions))]
+                    return None; // Release: 跳过此帧
+                }
             };
 
         if suboptimal {

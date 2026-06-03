@@ -1,13 +1,8 @@
-use lazy_static::lazy_static;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU32, Ordering};
 
-lazy_static! {
-    static ref PRE_ID: Mutex<u32> = Mutex::new(0);
-}
+static PRE_ID: AtomicU32 = AtomicU32::new(0);
 
-/// Generate a unique id
+/// Generate a unique id (lock-free, thread-safe)
 pub fn next_id() -> u32 {
-    let mut id = PRE_ID.lock().unwrap();
-    *id += 1;
-    *id
+    PRE_ID.fetch_add(1, Ordering::Relaxed)
 }

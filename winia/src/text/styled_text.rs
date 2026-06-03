@@ -676,17 +676,36 @@ impl StyledText {
         self.changed = true;
     }
 
-    fn assert_in_range(&self, range: &Range<usize>) {
+    fn validate_range(&self, range: &Range<usize>) -> Result<(), crate::error::WiniaError> {
         if range.start > self.string.len() || range.end > self.string.len() {
-            panic!(
-                "Range out of bounds. Range: {:?}, String length: {}",
-                range,
-                self.string.len()
-            );
+            let err = crate::error::WiniaError::InvalidTextRange {
+                start: range.start,
+                end: range.end,
+                length: self.string.len(),
+            };
+            log::error!("{err}");
+            #[cfg(debug_assertions)]
+            panic!("{err}");
+            return Err(err);
         }
         if range.start > range.end {
-            panic!("Invalid range: start > end. Range: {:?}", range);
+            let err = crate::error::WiniaError::InvalidTextRange {
+                start: range.start,
+                end: range.end,
+                length: self.string.len(),
+            };
+            log::error!("{err}");
+            #[cfg(debug_assertions)]
+            panic!("{err}");
+            return Err(err);
         }
+        Ok(())
+    }
+
+    fn assert_in_range(&self, range: &Range<usize>) {
+        // Keep backward-compatible wrapper; delegates to validate_range
+        // In debug mode, validate_range will panic on error
+        let _ = self.validate_range(range);
     }
 
     pub fn set_attr(&mut self, attr: TextAttribute, range: Range<usize>, expanded: bool) {

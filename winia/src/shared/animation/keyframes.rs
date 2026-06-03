@@ -34,18 +34,44 @@ pub struct Keyframes<T: AnimatableValue> {
 
 impl<T: AnimatableValue> Keyframes<T> {
     /// Creates a new Keyframes animation with the given keyframes.
-    /// Panics if less than two keyframes are provided.
-    pub fn new(mut keyframes: Vec<Keyframe<T>>) -> Self {
+    /// Returns an error if less than two keyframes are provided.
+    pub fn try_new(mut keyframes: Vec<Keyframe<T>>) -> Result<Self, crate::error::WiniaError> {
         if keyframes.len() < 2 {
-            panic!("Keyframes animation requires at least two keyframes.");
+            return Err(crate::error::WiniaError::InsufficientKeyframes(keyframes.len()));
         }
         keyframes.sort_by_key(|k| k.time);
-        Self {
+        Ok(Self {
             keyframes,
             start_time: None,
             is_finished: false,
             on_finish_callbacks: vec![],
             on_start_callbacks: vec![],
+        })
+    }
+
+    /// Creates a new Keyframes animation.
+    /// Panics in debug mode if less than two keyframes are provided.
+    pub fn new(mut keyframes: Vec<Keyframe<T>>) -> Self {
+        #[cfg(debug_assertions)]
+        {
+            Self::try_new(keyframes).expect("Keyframes animation requires at least two keyframes")
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            match Self::try_new(keyframes) {
+                Ok(anim) => anim,
+                Err(e) => {
+                    log::error!("{e}");
+                    // Return a minimal valid animation
+                    Self {
+                        keyframes: vec![],
+                        start_time: None,
+                        is_finished: true,
+                        on_finish_callbacks: vec![],
+                        on_start_callbacks: vec![],
+                    }
+                }
+            }
         }
     }
 

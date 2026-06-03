@@ -37,8 +37,8 @@ impl GlRenderContext {
             self.init_display(event_loop, window.clone());
         }
 
-        let display = self.display.as_ref().unwrap();
-        let config = self.config.as_ref().unwrap();
+        let display = self.display.as_ref().expect("GL display should be initialized");
+        let config = self.config.as_ref().expect("GL config should be initialized");
 
         let surface = Self::create_gl_surface(display, config, window.clone());
 
@@ -54,18 +54,46 @@ impl GlRenderContext {
                 .unwrap_or_else(|_| {
                     display
                         .create_context(config, &fallback_context_attributes)
-                        .expect("Failed to create GL context")
+                        .unwrap_or_else(|_| {
+                            let msg = "Failed to create GL context".to_string();
+                            log::error!("{msg}");
+                            #[cfg(debug_assertions)]
+                            panic!("{msg}");
+                            #[allow(unreachable_code)]
+                            std::process::exit(1);
+                        })
                 })
         };
 
-        let context = not_current_context.make_current(&surface).unwrap();
+        let context = not_current_context.make_current(&surface).unwrap_or_else(|_| {
+            let msg = "Failed to make GL context current".to_string();
+            log::error!("{msg}");
+            #[cfg(debug_assertions)]
+            panic!("{msg}");
+            #[allow(unreachable_code)]
+            std::process::exit(1);
+        });
 
         let skia_interface =
             gl::Interface::new_load_with_cstr(|name| display.get_proc_address(name))
-                .expect("Failed to create Skia GL interface");
+                .unwrap_or_else(|| {
+                    let msg = "Failed to create Skia GL interface".to_string();
+                    log::error!("{msg}");
+                    #[cfg(debug_assertions)]
+                    panic!("{msg}");
+                    #[allow(unreachable_code)]
+                    std::process::exit(1);
+                });
 
         let skia_ctx =
-            direct_contexts::make_gl(skia_interface, None).expect("Failed to create Skia context");
+            direct_contexts::make_gl(skia_interface, None).unwrap_or_else(|| {
+                let msg = "Failed to create Skia GL context".to_string();
+                log::error!("{msg}");
+                #[cfg(debug_assertions)]
+                panic!("{msg}");
+                #[allow(unreachable_code)]
+                std::process::exit(1);
+            });
 
         let _ = surface.set_swap_interval(&context, SwapInterval::Wait(NonZeroU32::new(1).unwrap()));
 
@@ -97,10 +125,22 @@ impl GlRenderContext {
                 display_api_preference,
             )
         }
-        .expect("Failed to create GL display");
+        .unwrap_or_else(|e| {
+            let msg = format!("Failed to create GL display: {e}");
+            log::error!("{msg}");
+            #[cfg(debug_assertions)]
+            panic!("{msg}");
+            std::process::exit(1);
+        });
 
         let config = unsafe { display.find_configs(template) }
-            .unwrap()
+            .unwrap_or_else(|e| {
+                let msg = format!("Failed to find GL configs: {e}");
+                log::error!("{msg}");
+                #[cfg(debug_assertions)]
+                panic!("{msg}");
+                std::process::exit(1);
+            })
             .reduce(|accum, config| {
                 if config.num_samples() > accum.num_samples() {
                     config
@@ -108,7 +148,13 @@ impl GlRenderContext {
                     accum
                 }
             })
-            .expect("No suitable GL config found");
+            .unwrap_or_else(|| {
+                let msg = "No suitable GL config found".to_string();
+                log::error!("{msg}");
+                #[cfg(debug_assertions)]
+                panic!("{msg}");
+                std::process::exit(1);
+            });
 
 
         self.display = Some(display);
@@ -129,7 +175,13 @@ impl GlRenderContext {
             SurfaceAttributesBuilder::<WindowSurface>::new().build(raw_window_handle, width, height);
 
         unsafe { display.create_window_surface(config, &surface_attrs) }
-            .expect("Failed to create GL window surface")
+            .unwrap_or_else(|e| {
+                let msg = format!("Failed to create GL window surface: {e}");
+                log::error!("{msg}");
+                #[cfg(debug_assertions)]
+                panic!("{msg}");
+                std::process::exit(1);
+            })
     }
 }
 

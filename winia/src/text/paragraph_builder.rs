@@ -48,6 +48,10 @@ impl IndexBiMap {
         self.right.binary_search(right).is_ok()
     }
 
+    pub fn len(&self) -> usize {
+        self.left.len()
+    }
+
     pub fn clear(&mut self) {
         self.left.clear();
         self.right.clear();

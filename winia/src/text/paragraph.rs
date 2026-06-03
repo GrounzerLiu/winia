@@ -97,15 +97,36 @@ impl Paragraph {
     }
 
     pub fn get_index(&self, utf16_index: usize) -> usize {
+        self.get_index_or_default(utf16_index)
+    }
+
+    /// Returns the real byte index for a given UTF-16 index, or 0 as fallback.
+    pub fn get_index_or_default(&self, utf16_index: usize) -> usize {
+        self.try_get_index(utf16_index).unwrap_or(0)
+    }
+
+    /// Try to get the real byte index for a given UTF-16 index.
+    pub fn try_get_index(&self, utf16_index: usize) -> Result<usize, crate::error::WiniaError> {
         let paragraph_index = self
             .byte_to_utf16_indices
             .get_by_right(&utf16_index)
-            .unwrap_or_else(|| panic!("index {} not found", utf16_index));
+            .ok_or_else(|| {
+                let err = crate::error::WiniaError::TextIndexOutOfBounds {
+                    index: utf16_index,
+                    length: self.byte_to_utf16_indices.len(),
+                };
+                log::error!("{err}");
+                #[cfg(debug_assertions)]
+                panic!("{err}");
+                err
+            })?;
         let index = self
             .paragraph_byte_to_real_indices
             .get_by_left(paragraph_index)
-            .unwrap_or_else(|| panic!("index {} not found", paragraph_index));
-        *index
+            .ok_or(crate::error::WiniaError::Internal(format!(
+                "paragraph_byte_to_real_indices lookup failed for index {paragraph_index}"
+            )))?;
+        Ok(*index)
     }
 
     pub fn max_width(&self) -> scalar {

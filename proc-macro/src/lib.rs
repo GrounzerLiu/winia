@@ -87,7 +87,14 @@ pub fn observable(_attr: TokenStream, input: TokenStream) -> TokenStream {
     let struct_name = input.ident.clone();
     let fields = match &input.fields {
         syn::Fields::Named(fields) => &fields.named,
-        _ => panic!("Only support named fields"),
+        _ => {
+            return syn::Error::new(
+                struct_name.span(),
+                "only named fields are supported; tuple structs and unit structs are not allowed",
+            )
+            .to_compile_error()
+            .into();
+        }
     };
 
     let field_names: Vec<_> = fields
@@ -225,16 +232,26 @@ pub fn style(_attr: TokenStream, input: TokenStream) -> TokenStream {
             }
         }
         Err(err) => {
-            panic!("{}", err);
+            return syn::Error::new(Span::call_site(), err.to_string())
+                .to_compile_error()
+                .into();
         }
     };
     let crate_ident = Ident::new(&crare_name, Span::call_site());
 
     let mut input = parse_macro_input!(input as ItemStruct);
+    let struct_name = input.ident.clone();
 
     let fields = match &mut input.fields {
         Fields::Named(fields) => &mut fields.named,
-        _ => panic!("Only support named fields"),
+        _ => {
+            return syn::Error::new(
+                struct_name.span(),
+                "only named fields are supported; tuple structs and unit structs are not allowed",
+            )
+            .to_compile_error()
+            .into();
+        }
     };
 
     // name, type, set_xxx, get_xxx, get_xxx (for theme)
@@ -338,7 +355,9 @@ pub fn item_props(input: TokenStream) -> TokenStream {
             }
         }
         Err(err) => {
-            panic!("{}", err);
+            return syn::Error::new(Span::call_site(), err.to_string())
+                .to_compile_error()
+                .into();
         }
     };
     let crate_ident = Ident::new(&crare_name, Span::call_site());
@@ -632,7 +651,14 @@ pub fn field_ref(input: TokenStream) -> TokenStream {
     let struct_name = input.ident.clone();
     let fields = match &input.fields {
         syn::Fields::Named(fields) => &fields.named,
-        _ => panic!("Only support named fields"),
+        _ => {
+            return syn::Error::new(
+                struct_name.span(),
+                "only named fields are supported; tuple structs and unit structs are not allowed",
+            )
+            .to_compile_error()
+            .into();
+        }
     };
 
     let field_names: Vec<_> = fields

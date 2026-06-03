@@ -1,4 +1,5 @@
 pub mod cpu;
+pub mod error;
 #[cfg(feature = "vulkan")]
 pub mod vulkan;
 #[cfg(feature = "vulkan")]

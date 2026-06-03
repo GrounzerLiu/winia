@@ -15,9 +15,23 @@ pub struct SoftSkiaWindow {
 
 impl SoftSkiaWindow {
     pub fn new(window: Arc<Box<dyn Window>>) -> Self {
-        let soft_buffer_context = softbuffer::Context::new(window.clone()).unwrap();
+        let soft_buffer_context = softbuffer::Context::new(window.clone()).unwrap_or_else(|e| {
+            let msg = format!("Failed to create softbuffer context: {e}");
+            log::error!("{msg}");
+            #[cfg(debug_assertions)]
+            panic!("{msg}");
+            #[allow(unreachable_code)]
+            std::process::exit(1);
+        });
         let soft_buffer_surface =
-            softbuffer::Surface::new(&soft_buffer_context, window.clone()).unwrap();
+            softbuffer::Surface::new(&soft_buffer_context, window.clone()).unwrap_or_else(|e| {
+                let msg = format!("Failed to create softbuffer surface: {e}");
+                log::error!("{msg}");
+                #[cfg(debug_assertions)]
+                panic!("{msg}");
+                #[allow(unreachable_code)]
+                std::process::exit(1);
+            });
         Self {
             soft_buffer_surface: Some(soft_buffer_surface),
             window,
@@ -32,9 +46,23 @@ impl SkiaWindowTrait for SoftSkiaWindow {
 
     fn recreate_surface(&mut self) {
         if self.soft_buffer_surface.is_none() {
-            let soft_buffer_context = softbuffer::Context::new(self.window.clone()).unwrap();
+            let soft_buffer_context = softbuffer::Context::new(self.window.clone()).unwrap_or_else(|e| {
+                let msg = format!("Failed to recreate softbuffer context: {e}");
+                log::error!("{msg}");
+                #[cfg(debug_assertions)]
+                panic!("{msg}");
+                #[allow(unreachable_code)]
+                std::process::exit(1);
+            });
             self.soft_buffer_surface = Some(
-                softbuffer::Surface::new(&soft_buffer_context, self.window.clone()).unwrap(),
+                softbuffer::Surface::new(&soft_buffer_context, self.window.clone()).unwrap_or_else(|e| {
+                    let msg = format!("Failed to recreate softbuffer surface: {e}");
+                    log::error!("{msg}");
+                    #[cfg(debug_assertions)]
+                    panic!("{msg}");
+                    #[allow(unreachable_code)]
+                    std::process::exit(1);
+                }),
             );
         }
     }
@@ -45,15 +73,28 @@ impl SkiaWindowTrait for SoftSkiaWindow {
         }
         let soft_buffer_surface = self.soft_buffer_surface.as_mut().unwrap();
         let size = self.window.surface_size();
-        let width = NonZeroU32::new(size.width).unwrap();
-        let height = NonZeroU32::new(size.height).unwrap();
-        soft_buffer_surface.resize(width, height).unwrap();
+        let width = NonZeroU32::new(size.width).unwrap_or(NonZeroU32::new(1).unwrap());
+        let height = NonZeroU32::new(size.height).unwrap_or(NonZeroU32::new(1).unwrap());
+        soft_buffer_surface.resize(width, height).unwrap_or_else(|e| {
+            log::error!("Failed to resize softbuffer surface: {e}");
+            #[cfg(debug_assertions)]
+            panic!("Failed to resize softbuffer surface: {e}");
+        });
         soft_buffer_surface.buffer_mut().unwrap().pixels().fill(Pixel::new_rgb(0, 0, 0));
     }
 
     fn draw(&mut self, draw_fn: impl FnOnce(&mut Surface)) {
         let soft_buffer_surface = self.soft_buffer_surface.as_mut().unwrap();
-        let mut buffer = soft_buffer_surface.buffer_mut().unwrap();
+        let buffer_result = soft_buffer_surface.buffer_mut();
+        if buffer_result.is_err() {
+            let e = buffer_result.unwrap_err();
+            log::error!("Failed to get softbuffer: {e}");
+            #[cfg(debug_assertions)]
+            panic!("Failed to get softbuffer: {e}");
+            #[allow(unreachable_code)]
+            return;
+        }
+        let mut buffer = buffer_result.unwrap();
         let pixels = buffer.pixels();
         let bytes: &mut [u8] = unsafe {
             std::slice::from_raw_parts_mut(
