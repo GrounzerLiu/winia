@@ -1,4 +1,5 @@
 use crate::collection::CollectionOperation;
+use std::ops::{Index, IndexMut};
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct WVec<T> {
@@ -96,6 +97,21 @@ impl<T> WVec<T> {
         self.items.iter_mut()
     }
 
+}
+
+impl<T> Index<usize> for WVec<T> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.items[index]
+    }
+}
+
+impl<T> IndexMut<usize> for WVec<T> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        self.operations.push(CollectionOperation::Update(index));
+        &mut self.items[index]
+    }
 }
 
 impl<T: Clone> Clone for WVec<T> {

@@ -7,7 +7,7 @@ edition = "2024"
 winia = { path = "../winia", features = ["material-symbols-rounded", "material-symbols-sharp", "material-symbols-outlined"] }
 log = "0.4.29"
 unicode-segmentation = "1.13"
-rand = "0.10.0"
+rand = "0.10"
 winia-video = { path = "../winia-video" }
 letclone = "0.3.0"
 

@@ -14,6 +14,7 @@ mod loading_indicator_test;
 mod badge_test;
 mod icon_test;
 mod navigation_test;
+mod lazy_list_test;
 
 use crate::button_test::button_test;
 use crate::label_test::label_test;
@@ -86,6 +87,7 @@ enum TestRoute {
     Slider,
     TextField,
     VideoPlayer,
+    LazyList,
 }
 
 impl NavKey for TestRoute {
@@ -108,6 +110,7 @@ impl NavKey for TestRoute {
             TestRoute::Slider => "slider",
             TestRoute::TextField => "text_field",
             TestRoute::VideoPlayer => "video_player",
+            TestRoute::LazyList => "lazy_list",
         }
     }
 }
@@ -141,6 +144,7 @@ fn build_test_route(
         TestRoute::Slider => test_page(w, back_stack, "Slider Test", slider_test),
         TestRoute::TextField => test_page(w, back_stack, "Text Field Test", text_field_test),
         TestRoute::VideoPlayer => test_page(w, back_stack, "Video Player Test", video_player_test),
+        TestRoute::LazyList => test_page(w, back_stack, "Lazy List Test", lazy_list_test::lazy_list_test),
     }
 }
 
@@ -166,6 +170,7 @@ fn test_list_page(w: &WindowContext, back_stack: &SharedWVec<Box<dyn NavKey>>) -
                 list_item("Slider Test", TestRoute::Slider, back_stack, w),
                 list_item("Text Field Test", TestRoute::TextField, back_stack, w),
                 list_item("Video Player Test", TestRoute::VideoPlayer, back_stack, w),
+                list_item("Lazy List Test", TestRoute::LazyList, back_stack, w)
             ],
         ),
     )
