@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = [
+    "winia",
+    "skiwin",
+    "proc-macro",
+    "material_color_utilities",
+]
+
+[workspace.dependencies]
+winit = "0.31.0-beta.2"
+skia-safe = "0.99.0"
+skia-bindings = "0.99.0"
+parking_lot = "0.12"
+log = "0.4"
+thiserror = "2"

@@ -1,0 +1,519 @@
+//! Modifier 系统 — 不可变链式修饰符
+//!
+//! 类似 Jetpack Compose 的 Modifier，用于解耦外观/行为/布局。
+//! - 链式 API: `Modifier::new().size(100, 100).padding(10).background(Color::RED)`
+//! - 左到右 = 外到内
+//! - 分为三类: LayoutModifier / DrawModifier / PointerInputModifier
+//!
+//! 当前阶段只定义 Modifier 的数据结构，后续 Layout 系统消费它。
+
+use std::sync::Arc;
+use std::fmt::{self, Debug};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+// ── Dimension ──
+
+/// 尺寸值，用于 Modifier 和 Layout
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Dimension {
+    /// 固定像素值
+    Fixed(f32),
+    /// 填满可用空间
+    Fill,
+    /// 自适应内容大小
+    Auto,
+}
+
+impl Dimension {
+    pub fn is_fixed(&self) -> bool {
+        matches!(self, Dimension::Fixed(_))
+    }
+
+    pub fn is_fill(&self) -> bool {
+        matches!(self, Dimension::Fill)
+    }
+}
+
+impl From<f32> for Dimension {
+    fn from(v: f32) -> Self {
+        Dimension::Fixed(v)
+    }
+}
+
+// ── Shape ──
+
+/// 形状描述（用于 background / border / clip）
+#[derive(Debug, Clone, PartialEq)]
+pub enum Shape {
+    /// 矩形（可带圆角）
+    RoundedRect { corner_radius: f32 },
+    /// 圆形
+    Circle,
+    /// 直角矩形
+    Rectangle,
+}
+
+impl Shape {
+    pub fn rounded(corner_radius: f32) -> Self {
+        Shape::RoundedRect { corner_radius }
+    }
+}
+
+// ── Color (占位) ──
+
+/// 颜色（占位，后续由 skia Color 或 material theme 替代）
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Color {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    pub a: u8,
+}
+
+impl Color {
+    pub const TRANSPARENT: Color = Color { r: 0, g: 0, b: 0, a: 0 };
+    pub const BLACK: Color = Color { r: 0, g: 0, b: 0, a: 255 };
+    pub const WHITE: Color = Color { r: 255, g: 255, b: 255, a: 255 };
+    pub const RED: Color = Color { r: 255, g: 0, b: 0, a: 255 };
+    pub const GREEN: Color = Color { r: 0, g: 255, b: 0, a: 255 };
+    pub const BLUE: Color = Color { r: 0, g: 0, b: 255, a: 255 };
+
+    pub fn from_argb(a: u8, r: u8, g: u8, b: u8) -> Self {
+        Color { r, g, b, a }
+    }
+}
+
+// ── ModifierElement ──
+
+/// Modifier 链中的单个元素。
+///
+/// 按类别分为 Layout / Draw / Input 三类。
+/// 用 enum 而非 trait object，便于后续 Layout 系统分类提取。
+#[derive(Clone)]
+pub(crate) enum ModifierElement {
+    // ── Layout 类 ──
+    /// 固定尺寸
+    Size { width: Dimension, height: Dimension },
+    /// 全方向 padding
+    Padding { all: f32 },
+    /// 水平 padding
+    PaddingHorizontal { value: f32 },
+    /// 垂直 padding
+    PaddingVertical { value: f32 },
+    /// 全方向 margin
+    Margin { all: f32 },
+    /// 填满最大宽度
+    FillMaxWidth,
+    /// 填满最大高度
+    FillMaxHeight,
+    /// 填满最大尺寸
+    FillMaxSize,
+
+    // ── Draw 类 ──
+    /// 背景色 + 形状
+    Background { color: Color, shape: Shape },
+    /// 边框
+    Border { width: f32, color: Color, shape: Shape },
+    /// 裁剪
+    Clip { shape: Shape },
+
+    // ── Content 类 ──
+    /// 文本内容（由 Text 组件设置，渲染阶段消费）
+    TextContent { content: String, font_size: f32, color: Color },
+
+    // ── Input 类 ──
+    /// 可点击
+    Clickable { on_click: Arc<dyn Fn() + Send + Sync> },
+    /// 可获得焦点
+    Focusable,
+    /// 焦点请求器 ID（与 FocusRequester 关联）
+    FocusRequesterId { id: u64 },
+    /// 可滚动
+    Scrollable { direction: ScrollDirection },
+}
+
+/// 滚动方向
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollDirection {
+    Vertical,
+    Horizontal,
+    Both,
+}
+
+// ── Modifier ──
+
+/// 不可变的 Modifier 链。
+///
+/// 每次调用修饰方法返回一个新的 Modifier（内部 elements 是 clone-on-write 式的追加）。
+/// Clone 是廉价操作。
+#[derive(Debug, Clone)]
+pub struct Modifier {
+    elements: Vec<ModifierElement>,
+}
+
+impl Modifier {
+    /// 创建空的 Modifier 链
+    pub fn new() -> Self {
+        Modifier {
+            elements: Vec::new(),
+        }
+    }
+
+    /// 内部方法：追加一个元素并返回新 Modifier
+    pub(crate) fn push(mut self, element: ModifierElement) -> Self {
+        self.elements.push(element);
+        self
+    }
+
+    /// 返回所有元素的只读引用
+    pub(crate) fn elements(&self) -> &[ModifierElement] {
+        &self.elements
+    }
+}
+
+impl Default for Modifier {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ── Layout Modifier 方法 ──
+
+impl Modifier {
+    /// 设置固定宽高
+    pub fn size(self, width: impl Into<Dimension>, height: impl Into<Dimension>) -> Self {
+        self.push(ModifierElement::Size {
+            width: width.into(),
+            height: height.into(),
+        })
+    }
+
+    /// 仅设置宽度
+    pub fn width(self, w: impl Into<Dimension>) -> Self {
+        // 使用 Auto 占位高度，表示不约束
+        self.push(ModifierElement::Size {
+            width: w.into(),
+            height: Dimension::Auto,
+        })
+    }
+
+    /// 仅设置高度
+    pub fn height(self, h: impl Into<Dimension>) -> Self {
+        self.push(ModifierElement::Size {
+            width: Dimension::Auto,
+            height: h.into(),
+        })
+    }
+
+    /// 四边等距 padding
+    pub fn padding(self, all: f32) -> Self {
+        self.push(ModifierElement::Padding { all })
+    }
+
+    /// 水平方向 padding
+    pub fn padding_horizontal(self, value: f32) -> Self {
+        self.push(ModifierElement::PaddingHorizontal { value })
+    }
+
+    /// 垂直方向 padding
+    pub fn padding_vertical(self, value: f32) -> Self {
+        self.push(ModifierElement::PaddingVertical { value })
+    }
+
+    /// 四边等距 margin
+    pub fn margin(self, all: f32) -> Self {
+        self.push(ModifierElement::Margin { all })
+    }
+
+    /// 宽度填满可用空间
+    pub fn fill_max_width(self) -> Self {
+        self.push(ModifierElement::FillMaxWidth)
+    }
+
+    /// 高度填满可用空间
+    pub fn fill_max_height(self) -> Self {
+        self.push(ModifierElement::FillMaxHeight)
+    }
+
+    /// 宽高填满可用空间
+    pub fn fill_max_size(self) -> Self {
+        self.push(ModifierElement::FillMaxSize)
+    }
+}
+
+// ── Draw Modifier 方法 ──
+
+impl Modifier {
+    /// 设置背景色和形状
+    pub fn background(self, color: Color, shape: impl Into<Shape>) -> Self {
+        self.push(ModifierElement::Background {
+            color,
+            shape: shape.into(),
+        })
+    }
+
+    /// 设置边框
+    pub fn border(self, width: f32, color: Color, shape: impl Into<Shape>) -> Self {
+        self.push(ModifierElement::Border {
+            width,
+            color,
+            shape: shape.into(),
+        })
+    }
+
+    /// 设置裁剪形状
+    pub fn clip(self, shape: impl Into<Shape>) -> Self {
+        self.push(ModifierElement::Clip {
+            shape: shape.into(),
+        })
+    }
+}
+
+// ── Input Modifier 方法 ──
+
+impl Modifier {
+    /// 添加点击行为
+    pub fn clickable(self, on_click: impl Fn() + Send + Sync + 'static) -> Self {
+        self.push(ModifierElement::Clickable {
+            on_click: Arc::new(on_click),
+        })
+    }
+
+    /// 标记为可获焦点
+    pub fn focusable(self) -> Self {
+        self.push(ModifierElement::Focusable)
+    }
+
+    /// 关联 FocusRequester（不消耗所有权）
+    pub fn focus_requester(self, fr: impl Into<FocusRequester>) -> Self {
+        let fr = fr.into();
+        self.push(ModifierElement::FocusRequesterId { id: fr.id })
+    }
+
+    /// 添加滚动行为
+    pub fn scrollable(self, direction: ScrollDirection) -> Self {
+        self.push(ModifierElement::Scrollable { direction })
+    }
+}
+
+// ── 辅助方法: 分类提取 ──
+
+impl Modifier {
+    /// 遍历所有 Layout 类元素
+    pub(crate) fn for_each_layout(&self, mut f: impl FnMut(&ModifierElement)) {
+        for el in &self.elements {
+            if el.is_layout() {
+                f(el);
+            }
+        }
+    }
+
+    /// 遍历所有 Draw 类元素
+    pub(crate) fn for_each_draw(&self, mut f: impl FnMut(&ModifierElement)) {
+        for el in &self.elements {
+            if el.is_draw() {
+                f(el);
+            }
+        }
+    }
+
+    /// 遍历所有 Input 类元素
+    pub(crate) fn for_each_input(&self, mut f: impl FnMut(&ModifierElement)) {
+        for el in &self.elements {
+            if el.is_input() {
+                f(el);
+            }
+        }
+    }
+}
+
+impl Debug for ModifierElement {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Size { width, height } => f.debug_struct("Size").field("width", width).field("height", height).finish(),
+            Self::Padding { all } => f.debug_struct("Padding").field("all", all).finish(),
+            Self::PaddingHorizontal { value } => f.debug_struct("PaddingHorizontal").field("value", value).finish(),
+            Self::PaddingVertical { value } => f.debug_struct("PaddingVertical").field("value", value).finish(),
+            Self::Margin { all } => f.debug_struct("Margin").field("all", all).finish(),
+            Self::FillMaxWidth => f.write_str("FillMaxWidth"),
+            Self::FillMaxHeight => f.write_str("FillMaxHeight"),
+            Self::FillMaxSize => f.write_str("FillMaxSize"),
+            Self::Background { color, shape } => f.debug_struct("Background").field("color", color).field("shape", shape).finish(),
+            Self::Border { width, color, shape } => f.debug_struct("Border").field("width", width).field("color", color).field("shape", shape).finish(),
+            Self::Clip { shape } => f.debug_struct("Clip").field("shape", shape).finish(),
+            Self::TextContent { content, font_size, .. } => f
+                .debug_struct("TextContent")
+                .field("content", content)
+                .field("font_size", font_size)
+                .finish(),
+            Self::Clickable { .. } => f.write_str("Clickable(<fn>)"),
+            Self::Focusable => f.write_str("Focusable"),
+            Self::FocusRequesterId { id } => f.debug_tuple("FocusRequesterId").field(id).finish(),
+            Self::Scrollable { direction } => f.debug_struct("Scrollable").field("direction", direction).finish(),
+        }
+    }
+}
+
+impl ModifierElement {
+    pub fn is_layout(&self) -> bool {
+        matches!(
+            self,
+            ModifierElement::Size { .. }
+                | ModifierElement::Padding { .. }
+                | ModifierElement::PaddingHorizontal { .. }
+                | ModifierElement::PaddingVertical { .. }
+                | ModifierElement::Margin { .. }
+                | ModifierElement::FillMaxWidth
+                | ModifierElement::FillMaxHeight
+                | ModifierElement::FillMaxSize
+        )
+    }
+
+    pub fn is_draw(&self) -> bool {
+        matches!(
+            self,
+            ModifierElement::Background { .. }
+                | ModifierElement::Border { .. }
+                | ModifierElement::Clip { .. }
+                | ModifierElement::TextContent { .. }
+        )
+    }
+
+    pub fn is_input(&self) -> bool {
+        matches!(
+            self,
+            ModifierElement::Clickable { .. }
+                | ModifierElement::Focusable
+                | ModifierElement::FocusRequesterId { .. }
+                | ModifierElement::Scrollable { .. }
+        )
+    }
+}
+
+// ── FocusRequester ──
+
+static NEXT_FOCUS_ID: AtomicU64 = AtomicU64::new(1);
+
+/// 焦点请求器——可在代码中调用 request_focus() 让关联组件获得焦点
+#[derive(Debug, Clone)]
+pub struct FocusRequester {
+    id: u64,
+}
+
+impl FocusRequester {
+    pub fn new() -> Self {
+        FocusRequester { id: NEXT_FOCUS_ID.fetch_add(1, Ordering::Relaxed) }
+    }
+
+    pub fn id(&self) -> u64 { self.id }
+
+    /// 请求焦点（通过全局注册表查找目标 LayoutNode 并设置焦点）
+    pub fn request_focus(&self) {
+        #[cfg(feature = "debug-server")]
+        crate::debug::queue_event(crate::debug::DebugEvent::RequestFocus { id: self.id });
+    }
+}
+
+impl Default for FocusRequester {
+    fn default() -> Self { Self::new() }
+}
+
+impl From<&FocusRequester> for FocusRequester {
+    fn from(fr: &FocusRequester) -> Self { fr.clone() }
+}
+
+// ── 测试 ──
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_empty_modifier() {
+        let m = Modifier::new();
+        assert_eq!(m.elements().len(), 0);
+    }
+
+    #[test]
+    fn test_chain_syntax() {
+        let m = Modifier::new()
+            .size(100.0, 50.0)
+            .padding(8.0)
+            .background(Color::RED, Shape::rounded(4.0))
+            .clickable(|| println!("clicked"));
+
+        assert_eq!(m.elements().len(), 4);
+    }
+
+    #[test]
+    fn test_dimension_conversions() {
+        let m = Modifier::new()
+            .size(100.0, Dimension::Fill) // f32 → Dimension::Fixed, Dimension::Fill
+            .width(Dimension::Auto)
+            .height(50.0);
+
+        let elements = m.elements();
+        assert_eq!(elements.len(), 3);
+        // 第一个是 Size { width: Fixed(100), height: Fill }
+        match &elements[0] {
+            ModifierElement::Size { width, height } => {
+                assert_eq!(*width, Dimension::Fixed(100.0));
+                assert_eq!(*height, Dimension::Fill);
+            }
+            _ => panic!("expected Size"),
+        }
+    }
+
+    #[test]
+    fn test_fill_max() {
+        let m = Modifier::new()
+            .fill_max_width()
+            .fill_max_height()
+            .fill_max_size();
+
+        assert_eq!(m.elements().len(), 3);
+    }
+
+    #[test]
+    fn test_category_filters() {
+        let m = Modifier::new()
+            .size(100.0, 50.0) // layout
+            .padding(8.0) // layout
+            .background(Color::RED, Shape::Rectangle) // draw
+            .clickable(|| {}) // input
+            .clip(Shape::Circle); // draw
+
+        let mut layout_count = 0;
+        m.for_each_layout(|_| layout_count += 1);
+        assert_eq!(layout_count, 2, "should have 2 layout elements");
+
+        let mut draw_count = 0;
+        m.for_each_draw(|_| draw_count += 1);
+        assert_eq!(draw_count, 2, "should have 2 draw elements");
+
+        let mut input_count = 0;
+        m.for_each_input(|_| input_count += 1);
+        assert_eq!(input_count, 1, "should have 1 input element");
+    }
+
+    #[test]
+    fn test_modifier_immutable() {
+        let a = Modifier::new().size(100.0, 50.0);
+        let b = a.clone().padding(8.0);
+
+        // a 不变
+        assert_eq!(a.elements().len(), 1);
+        // b 追加了
+        assert_eq!(b.elements().len(), 2);
+    }
+
+    #[test]
+    fn test_border_and_scrollable() {
+        let m = Modifier::new()
+            .border(2.0, Color::BLUE, Shape::rounded(8.0))
+            .scrollable(ScrollDirection::Vertical)
+            .focusable();
+
+        assert_eq!(m.elements().len(), 3);
+    }
+}

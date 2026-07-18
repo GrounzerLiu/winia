@@ -1,0 +1,23 @@
+[package]
+name = "winia"
+version = "0.2.0"
+edition = "2024"
+description = "A declarative UI framework powered by Skia — Compose-inspired, pure Rust"
+
+[features]
+default = ["vulkan"]
+vulkan = ["skiwin/vulkan"]
+gl = ["skiwin/gl"]
+debug-server = []
+
+[dependencies]
+proc-macro = { path = "../proc-macro" }
+skiwin = { path = "../skiwin" }
+winit = { workspace = true }
+parking_lot = { workspace = true }
+log = { workspace = true }
+thiserror = { workspace = true }
+skia-safe = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+skia-safe = { workspace = true, features = ["vulkan", "textlayout", "svg", "gl", "d3d"] }
