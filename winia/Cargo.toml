@@ -11,7 +11,6 @@ gl = ["skiwin/gl"]
 debug-server = []
 
 [dependencies]
-proc-macro = { path = "../proc-macro" }
 skiwin = { path = "../skiwin" }
 winit = { workspace = true }
 parking_lot = { workspace = true }
