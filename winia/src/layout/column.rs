@@ -217,6 +217,16 @@ pub(crate) fn measure_node(
         }
     }
 
+    // 检查是否包含 scroll 修饰符——给子节点无限约束
+    let node_is_scroll_v = node.modifier.elements().iter().any(|el| matches!(el, ModifierElement::VerticalScroll { .. }));
+    let node_is_scroll_h = node.modifier.elements().iter().any(|el| matches!(el, ModifierElement::HorizontalScroll { .. }));
+    if node_is_scroll_v {
+        inner_constraints.max_height = f32::MAX;
+    }
+    if node_is_scroll_h {
+        inner_constraints.max_width = f32::MAX;
+    }
+
     // 实际测量
     if let Some(ref policy) = node.measure_policy {
         let (size, placements) = {

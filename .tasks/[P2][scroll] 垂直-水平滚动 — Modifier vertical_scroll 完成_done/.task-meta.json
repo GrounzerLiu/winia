@@ -1,0 +1,50 @@
+{
+  "id": "298d2d8b126f",
+  "title": "[scroll] 垂直-水平滚动 — Modifier vertical_scroll 完成",
+  "importance": "P2",
+  "progressType": "sequential",
+  "status": "completed",
+  "tags": [],
+  "createdAt": "2026-07-19T17:02:36.083057+00:00",
+  "updatedAt": "2026-07-19T17:02:42.916654+00:00",
+  "_version": 3,
+  "subtasks": [
+    {
+      "index": 1,
+      "title": "Modifier 元素 + 方法",
+      "status": "completed",
+      "note": "VerticalScroll/HorizontalScroll 变体，vertical_scroll/horizontal_scroll 方法"
+    },
+    {
+      "index": 2,
+      "title": "Layout 无限约束",
+      "status": "completed",
+      "note": "measure_node 检测 scroll 设置 max_height/width = MAX"
+    },
+    {
+      "index": 3,
+      "title": "Render clip+translate",
+      "status": "completed",
+      "note": "clip_rect + translate，scroll_offset_v/h 处理"
+    },
+    {
+      "index": 4,
+      "title": "MouseWheel 事件",
+      "status": "completed",
+      "note": "app.rs WindowEvent::MouseWheel + apply_scroll_delta"
+    },
+    {
+      "index": 5,
+      "title": "Counter 示例",
+      "status": "completed",
+      "note": "30 行文字 + 200x150 滚动区域"
+    },
+    {
+      "index": 6,
+      "title": "编译测试",
+      "status": "completed",
+      "note": "cargo test 31-31 passed"
+    }
+  ],
+  "followups": []
+}

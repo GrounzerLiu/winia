@@ -1,0 +1,50 @@
+{
+  "id": "6ef679806baa",
+  "title": "[multi-window] 多窗口支持 — 对齐 Compose Window composable",
+  "importance": "P2",
+  "progressType": "sequential",
+  "status": "completed",
+  "tags": [],
+  "createdAt": "2026-07-19T17:36:24.934143+00:00",
+  "updatedAt": "2026-07-19T17:41:46.572994+00:00",
+  "_version": 4,
+  "subtasks": [
+    {
+      "index": 1,
+      "title": "设计文档 + Compose 对照",
+      "status": "completed",
+      "note": "task.md 开头写完整设计文档，对照 Compose Window() API\napp.rs 重构为多窗口架构 HashMap WindowId → PerWindow，Window composable + open_window 全局排队，can_create_surfaces 消费创建"
+    },
+    {
+      "index": 2,
+      "title": "AppState 支持多窗口",
+      "status": "completed",
+      "note": "windows: HashMap WindowId - (Composer, SkiaWindow)\napp.rs 重构为多窗口架构 HashMap WindowId → PerWindow，Window composable + open_window 全局排队，can_create_surfaces 消费创建"
+    },
+    {
+      "index": 3,
+      "title": "Window composable",
+      "status": "completed",
+      "note": "Window 组件：声明式创建-销毁窗口\napp.rs 重构为多窗口架构 HashMap WindowId → PerWindow，Window composable + open_window 全局排队，can_create_surfaces 消费创建"
+    },
+    {
+      "index": 4,
+      "title": "run_app 多窗口事件循环",
+      "status": "completed",
+      "note": "每个窗口独立 RedrawRequested\napp.rs 重构为多窗口架构 HashMap WindowId → PerWindow，Window composable + open_window 全局排队，can_create_surfaces 消费创建"
+    },
+    {
+      "index": 5,
+      "title": "Counter 多窗口示例",
+      "status": "completed",
+      "note": "按钮打开新窗口\napp.rs 重构为多窗口架构 HashMap WindowId → PerWindow，Window composable + open_window 全局排队，can_create_surfaces 消费创建"
+    },
+    {
+      "index": 6,
+      "title": "编译测试",
+      "status": "completed",
+      "note": "cargo test 全绿\napp.rs 重构为多窗口架构 HashMap WindowId → PerWindow，Window composable + open_window 全局排队，can_create_surfaces 消费创建"
+    }
+  ],
+  "followups": []
+}

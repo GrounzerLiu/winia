@@ -1,0 +1,9 @@
+{
+  "298d2d8b126f": "[P2][scroll] 垂直-水平滚动 — Modifier vertical_scroll 完成_done",
+  "5a3d3aaa8db6": "[P1][scroll] 对齐 Compose — ScrollState + layout偏移 + render只clip_in-progress",
+  "b10ff06f673b": "[P1][scroll] 对齐 Compose 架构 — ScrollState + layout place 偏移_done",
+  "2c10c0bc4c4e": "[P1][multi-window] 多窗口支持 — 对齐 Compose Desktop Window 架构_pending",
+  "000c3abb70d6": "[P2][multi-window] 多窗口支持 — Window composable + 每窗口独立 Composer_pending+3",
+  "6ef679806baa": "[P2][multi-window] 多窗口支持 — 对齐 Compose Window composable_done",
+  "c54a4586e03c": "[P1][multi-window] 每个窗口独立内容 + Counter 演示_in-progress"
+}

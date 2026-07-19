@@ -1,0 +1,44 @@
+{
+  "id": "2c10c0bc4c4e",
+  "title": "[multi-window] 多窗口支持 — 对齐 Compose Desktop Window 架构",
+  "importance": "P1",
+  "progressType": "sequential",
+  "status": "pending",
+  "tags": [],
+  "createdAt": "2026-07-19T17:31:58.245907+00:00",
+  "updatedAt": "2026-07-19T17:33:30.309562+00:00",
+  "_version": 3,
+  "subtasks": [
+    {
+      "index": 1,
+      "title": "写多窗口设计文档",
+      "status": "pending",
+      "note": "对齐 Compose Window composable，设计 WindowManager + 多 Composer"
+    },
+    {
+      "index": 2,
+      "title": "重构 run_app 为 application 入口",
+      "status": "pending",
+      "note": "类似 Compose application {} 作用域，管理多窗口生命周期"
+    },
+    {
+      "index": 3,
+      "title": "实现 Window composable",
+      "status": "pending",
+      "note": "声明式创建窗口，窗口内独立的 composable 树"
+    },
+    {
+      "index": 4,
+      "title": "实现窗口间通信",
+      "status": "pending",
+      "note": "跨窗口共享 State 或事件通道"
+    },
+    {
+      "index": 5,
+      "title": "编译测试 + Counter 多窗口示例",
+      "status": "pending",
+      "note": ""
+    }
+  ],
+  "followups": []
+}

@@ -116,6 +116,10 @@ pub(crate) enum ModifierElement {
     Border { width: f32, color: Color, shape: Shape },
     /// 裁剪
     Clip { shape: Shape },
+    /// 内容模糊（GPU 原生，零回读）
+    Blur { radius: f32 },
+    /// 背景模糊（毛玻璃，单 snapshot 多节点共享）
+    BackdropBlur { radius: f32 },
 
     // ── Content 类 ──
     /// 文本内容（由 Text 组件设置，渲染阶段消费）
@@ -130,6 +134,10 @@ pub(crate) enum ModifierElement {
     FocusRequesterId { id: u64 },
     /// 可滚动
     Scrollable { direction: ScrollDirection },
+    /// 垂直滚动（绑定偏移 State）
+    VerticalScroll { state: crate::core::state::State<f32> },
+    /// 水平滚动
+    HorizontalScroll { state: crate::core::state::State<f32> },
 }
 
 /// 滚动方向
@@ -267,6 +275,16 @@ impl Modifier {
             shape: shape.into(),
         })
     }
+
+    /// 内容模糊（GPU saveLayer，零回读）
+    pub fn blur(self, radius: f32) -> Self {
+        self.push(ModifierElement::Blur { radius })
+    }
+
+    /// 背景模糊（毛玻璃，单 snapshot 多节点共享）
+    pub fn backdrop_blur(self, radius: f32) -> Self {
+        self.push(ModifierElement::BackdropBlur { radius })
+    }
 }
 
 // ── Input Modifier 方法 ──
@@ -293,6 +311,16 @@ impl Modifier {
     /// 添加滚动行为
     pub fn scrollable(self, direction: ScrollDirection) -> Self {
         self.push(ModifierElement::Scrollable { direction })
+    }
+
+    /// 垂直滚动（绑定 ScrollState）
+    pub fn vertical_scroll(self, state: ScrollState) -> Self {
+        self.push(ModifierElement::VerticalScroll { state: state.offset })
+    }
+
+    /// 水平滚动
+    pub fn horizontal_scroll(self, state: ScrollState) -> Self {
+        self.push(ModifierElement::HorizontalScroll { state: state.offset })
     }
 }
 
@@ -350,6 +378,10 @@ impl Debug for ModifierElement {
             Self::Focusable => f.write_str("Focusable"),
             Self::FocusRequesterId { id } => f.debug_tuple("FocusRequesterId").field(id).finish(),
             Self::Scrollable { direction } => f.debug_struct("Scrollable").field("direction", direction).finish(),
+            Self::VerticalScroll { .. } => f.write_str("VerticalScroll(<state>)"),
+            Self::HorizontalScroll { .. } => f.write_str("HorizontalScroll(<state>)"),
+            Self::Blur { radius } => f.debug_struct("Blur").field("radius", radius).finish(),
+            Self::BackdropBlur { radius } => f.debug_struct("BackdropBlur").field("radius", radius).finish(),
         }
     }
 }
@@ -375,6 +407,8 @@ impl ModifierElement {
             ModifierElement::Background { .. }
                 | ModifierElement::Border { .. }
                 | ModifierElement::Clip { .. }
+                | ModifierElement::Blur { .. }
+                | ModifierElement::BackdropBlur { .. }
                 | ModifierElement::TextContent { .. }
         )
     }
@@ -386,8 +420,39 @@ impl ModifierElement {
                 | ModifierElement::Focusable
                 | ModifierElement::FocusRequesterId { .. }
                 | ModifierElement::Scrollable { .. }
+                | ModifierElement::VerticalScroll { .. }
+                | ModifierElement::HorizontalScroll { .. }
         )
     }
+}
+
+// ── ScrollState ──
+
+/// 滚动状态，对齐 Compose ScrollState
+#[derive(Debug, Clone)]
+pub struct ScrollState {
+    /// 当前偏移
+    pub offset: crate::core::state::State<f32>,
+    /// 是否正在滚动
+    pub is_scroll_in_progress: crate::core::state::State<bool>,
+}
+
+impl ScrollState {
+    pub fn new() -> Self {
+        ScrollState {
+            offset: crate::core::state::State::new(0.0),
+            is_scroll_in_progress: crate::core::state::State::new(false),
+        }
+    }
+
+    /// 立即滚动到指定位置
+    pub fn scroll_to(&self, value: f32, max_offset: f32) {
+        self.offset.set(value.clamp(0.0, max_offset));
+    }
+}
+
+impl Default for ScrollState {
+    fn default() -> Self { Self::new() }
 }
 
 // ── FocusRequester ──
