@@ -28,6 +28,7 @@ pub mod debug {
     pub fn update_tree(_json: &str) {}
     pub fn screenshot_requested() -> bool { false }
     pub fn screenshot_done() {}
+    pub fn wake() {}
     pub fn force_shutdown() {}
     pub fn is_shutdown() -> bool { false }
     pub fn update_pixels(_pixels: &[u8], _width: u32, _height: u32) {}

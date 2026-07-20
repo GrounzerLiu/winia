@@ -84,7 +84,7 @@ pub fn set_event_loop_proxy(proxy: winit::event_loop::EventLoopProxy) {
     *EVENT_LOOP_PROXY.lock().unwrap() = Some(proxy);
 }
 
-fn wake() {
+pub fn wake() {
     // 使用 static proxy 唤醒事件循环
     if let Some(ref proxy) = *EVENT_LOOP_PROXY.lock().unwrap() {
         let _ = proxy.wake_up();

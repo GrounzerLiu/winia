@@ -1,6 +1,6 @@
 //! 布局节点 — LayoutNode 及相关的尺寸/位置/排列/对齐类型
 
-use crate::modifier::Modifier;
+use crate::modifier::{Modifier, ModifierElement};
 use super::constraints::Constraints;
 
 // ── Size ──
@@ -193,15 +193,35 @@ fn hit_test_recursive<'a>(
 
     path.push(node);
 
+    // 计算 scroll 偏移（渲染时 canvas.translate(-offset)）
+    let (scroll_dx, scroll_dy) = scroll_offset_for_node(node);
+
+    // 子节点坐标 = 父节点坐标 + scroll 偏移
+    let child_px = nx - scroll_dx;
+    let child_py = ny - scroll_dy;
+
     // 深度优先：先检查子节点（子节点在父节点上方）
     for child in &node.children {
-        if hit_test_recursive(child, x, y, nx, ny, path) {
+        if hit_test_recursive(child, x, y, child_px, child_py, path) {
             return true;
         }
     }
 
     // 没有命中子节点，停在当前节点
     true
+}
+
+fn scroll_offset_for_node(node: &LayoutNode) -> (f32, f32) {
+    let mut dx = 0.0;
+    let mut dy = 0.0;
+    for el in node.modifier.elements() {
+        match el {
+            ModifierElement::VerticalScroll { state } => dy += state.get(),
+            ModifierElement::HorizontalScroll { state } => dx += state.get(),
+            _ => {}
+        }
+    }
+    (dx, dy)
 }
 
 #[cfg(test)]

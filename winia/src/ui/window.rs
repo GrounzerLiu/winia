@@ -49,7 +49,7 @@ impl Window {
     }
 
     /// 构建窗口。每次 compose 都检查 CREATED，确保 × 关闭后能重建。
-    pub fn build(mut self, _ctx: &mut ComposeCtx, content: impl Fn(&mut ComposeCtx) + Send + 'static) {
+    pub fn build(self, _ctx: &mut ComposeCtx, content: impl Fn(&mut ComposeCtx) + Send + 'static) {
         let window_id = _ctx.remember(|| 0u64);
         // 首次 compose 或窗口已被 × 关闭 → 分配新 id 并创建
         let wid = window_id.get();

@@ -181,6 +181,8 @@ pub(crate) fn measure_node(
 ) -> (Size, Vec<Placement>) {
     // 应用 modifier 中的 Layout 约束
     let mut inner_constraints = constraints;
+    let mut pad_x = 0.0;
+    let mut pad_y = 0.0;
 
     for el in node.modifier.elements() {
         match el {
@@ -195,12 +197,15 @@ pub(crate) fn measure_node(
             }
             ModifierElement::Padding { all } => {
                 let p = *all;
+                pad_x += p; pad_y += p;
                 inner_constraints = inner_constraints.offset(p * 2.0, p * 2.0);
             }
             ModifierElement::PaddingHorizontal { value } => {
+                pad_x += value;
                 inner_constraints = inner_constraints.offset(value * 2.0, 0.0);
             }
             ModifierElement::PaddingVertical { value } => {
+                pad_y += value;
                 inner_constraints = inner_constraints.offset(0.0, value * 2.0);
             }
             ModifierElement::FillMaxWidth => {
@@ -235,6 +240,13 @@ pub(crate) fn measure_node(
         };
         // apply positions
         policy.place(&mut node.children, &placements);
+        // apply padding offset
+        if pad_x != 0.0 || pad_y != 0.0 {
+            for child in &mut node.children {
+                child.position.x += pad_x;
+                child.position.y += pad_y;
+            }
+        }
         node.measured_size = size;
         (size, placements)
     } else {

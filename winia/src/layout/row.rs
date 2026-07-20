@@ -84,7 +84,7 @@ impl MeasurePolicy for RowLayout {
         );
 
         let mut x_offset = leading_space;
-        for (i, (child, child_size)) in children.iter_mut().zip(child_sizes.iter()).enumerate() {
+        for (i, (_child, child_size)) in children.iter_mut().zip(child_sizes.iter()).enumerate() {
             let width = if self.alignment == Alignment::Stretch {
                 final_widths[i]
             } else {

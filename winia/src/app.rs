@@ -63,7 +63,6 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
     fn resumed(&mut self, _event_loop: &dyn ActiveEventLoop) {}
 
     fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
-        eprintln!("[app] proxy_wake_up, shutdown={}", debug::is_shutdown());
         // 如果 debug server 请求关闭，退出事件循环
         if debug::is_shutdown() {
             event_loop.exit();
@@ -71,7 +70,7 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
         }
         AppState::process_pending_windows(self, event_loop);
         for pw in self.windows.values() {
-            if let Some(ref sw) = pw.skia_window { eprintln!("[app] proxy_wake_up: requesting redraw"); sw.request_redraw(); }
+            if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
         }
     }
 
@@ -284,20 +283,15 @@ impl<F> AppState<F> where F: Fn(&mut ComposeCtx) + Send + Sync + Clone {
 // ── 公共 API ──
 
 static GLOBAL_PENDING: std::sync::Mutex<Vec<PendingItem>> = std::sync::Mutex::new(Vec::new());
-static WAKE: std::sync::Mutex<Option<Box<dyn Fn() + Send>>> = std::sync::Mutex::new(None);
-
-pub fn set_wake(f: impl Fn() + Send + 'static) {
-    *WAKE.lock().unwrap() = Some(Box::new(f));
-}
 
 pub fn open_window(width: f32, height: f32, content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>) {
     GLOBAL_PENDING.lock().unwrap().push((width, height, content, None));
-    if let Some(ref w) = *WAKE.lock().unwrap() { w(); }
+    debug::wake();
 }
 
 pub fn open_window_with_close(width: f32, height: f32, content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>, on_close: Option<Box<dyn FnMut() + Send>>) {
     GLOBAL_PENDING.lock().unwrap().push((width, height, content, on_close));
-    if let Some(ref w) = *WAKE.lock().unwrap() { w(); }
+    debug::wake();
 }
 
 pub fn take_pending_windows() -> Vec<PendingItem> {
@@ -325,15 +319,10 @@ fn apply_scroll_delta(node: &mut LayoutNode, dy: f32) -> bool {
     false
 }
 
-pub fn run_app(content: impl Fn(&mut ComposeCtx) + Clone + Send + Sync + 'static, width: f32, height: f32) {
+pub fn run_app(content: impl Fn(&mut ComposeCtx) + Clone + Send + Sync + 'static, _width: f32, _height: f32) {
     let event_loop = EventLoop::new().expect("event loop");
     let proxy = event_loop.create_proxy();
-    debug::set_event_loop_proxy(proxy.clone());
-    debug::set_wake_callback(move || { let _ = proxy.wake_up(); });
-    set_wake({
-        let proxy = event_loop.create_proxy();
-        move || { let _ = proxy.wake_up(); }
-    });
+    debug::set_event_loop_proxy(proxy);
     debug::start_server();
     let state: &'static mut AppState<_> = Box::leak(Box::new(AppState {
         content,
