@@ -11,8 +11,7 @@ use skiwin::{SkiaWindowTrait, vulkan::VulkanSkiaWindow};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
-use winit::application::ApplicationHandler;
-use winit::event::{StartCause, WindowEvent};
+use winit::application::ApplicationHandler;use winit::event::{StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::WindowId;
@@ -35,6 +34,14 @@ impl PerWindow {
     }
 }
 
+/// 请求重绘 + 唤醒事件循环（确保 Wait 模式下 RedrawRequested 被调度）
+fn request_redraw(sw: &VulkanSkiaWindow) {
+    sw.request_redraw();
+    if let Some(ref proxy) = *APP_PROXY.lock().unwrap() {
+        let _ = proxy.wake_up();
+    }
+}
+
 // ── AppState ──
 
 struct AppState<F> where F: Fn(&mut ComposeCtx) + Send + Sync + 'static {
@@ -49,13 +56,7 @@ struct AppState<F> where F: Fn(&mut ComposeCtx) + Send + Sync + 'static {
 }
 
 impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send + Sync + Clone + 'static {
-    fn new_events(&mut self, event_loop: &dyn ActiveEventLoop, _cause: StartCause) {
-        if debug::has_pending() {
-            event_loop.set_control_flow(ControlFlow::Poll);
-        } else {
-            event_loop.set_control_flow(ControlFlow::Wait);
-        }
-    }
+    fn new_events(&mut self, _event_loop: &dyn ActiveEventLoop, _cause: StartCause) {}
 
     fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
         AppState::process_pending_windows(self, event_loop);
@@ -71,7 +72,7 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
         }
         AppState::process_pending_windows(self, event_loop);
         for pw in self.windows.values() {
-            if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+            if let Some(ref sw) = pw.skia_window { request_redraw(sw); }
         }
     }
 
@@ -93,7 +94,7 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
                 };
                 if dy != 0.0 {
                     if let Some(root) = pw.composer.layout_root_mut() { apply_scroll_delta(root, dy); }
-                    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                    if let Some(ref sw) = pw.skia_window { request_redraw(sw); }
                 }
             }
             WindowEvent::CloseRequested => {
@@ -101,7 +102,7 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
                 self.windows.remove(&window_id);
                 // 通知其他窗口重绘（状态可能已变化）
                 for pw in self.windows.values() {
-                    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                    if let Some(ref sw) = pw.skia_window { request_redraw(sw); }
                 }
                 if closing_last {
                     debug::force_shutdown();
@@ -111,7 +112,7 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
             WindowEvent::Destroyed => {
                 self.windows.remove(&window_id);
                 for pw in self.windows.values() {
-                    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                    if let Some(ref sw) = pw.skia_window { request_redraw(sw); }
                 }
                 if self.windows.is_empty() {
                     event_loop.exit();
@@ -119,7 +120,7 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 pw.scale_factor = scale_factor;
-                if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                if let Some(ref sw) = pw.skia_window { request_redraw(sw); }
             }
             WindowEvent::PointerButton { position, state, .. } if state.is_pressed() => {
                 let lp = position.to_logical::<f32>(pw.scale_factor);
@@ -132,7 +133,7 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
                         }
                     }
                 }
-                if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                if let Some(ref sw) = pw.skia_window { request_redraw(sw); }
             }
             WindowEvent::KeyboardInput { event, .. } if event.state.is_pressed() => {
                 if matches!(&event.logical_key, Key::Named(NamedKey::Tab)) {
@@ -140,7 +141,7 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
                         focus_next(root);
                         pw.focused_id = crate::layout::node::get_focus_id(root);
                     }
-                    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                    if let Some(ref sw) = pw.skia_window { request_redraw(sw); }
                     event_loop.set_control_flow(ControlFlow::Poll);
                 }
             }
@@ -219,9 +220,9 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
                         _ => {}
                     }
                 }
-                if handled { if let Some(ref sw) = pw.skia_window { sw.request_redraw(); } }
-                if crate::animation::tick() { if let Some(ref sw) = pw.skia_window { sw.request_redraw(); } }
-                if debug::has_pending() { if let Some(ref sw) = pw.skia_window { sw.request_redraw(); } }
+                if handled { if let Some(ref sw) = pw.skia_window { request_redraw(sw); } }
+                if crate::animation::tick() { if let Some(ref sw) = pw.skia_window { request_redraw(sw); } }
+                if debug::has_pending() { if let Some(ref sw) = pw.skia_window { request_redraw(sw); } }
             }
             _ => {}
         }
