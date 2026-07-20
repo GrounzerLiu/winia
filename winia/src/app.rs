@@ -10,6 +10,7 @@ pub(crate) type PendingItem = (f32, f32, Option<Box<dyn Fn(&mut ComposeCtx) + Se
 use skiwin::{SkiaWindowTrait, vulkan::VulkanSkiaWindow};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex;
 use winit::application::ApplicationHandler;
 use winit::event::{StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -283,14 +284,25 @@ impl<F> AppState<F> where F: Fn(&mut ComposeCtx) + Send + Sync + Clone {
 // ── 公共 API ──
 
 static GLOBAL_PENDING: std::sync::Mutex<Vec<PendingItem>> = std::sync::Mutex::new(Vec::new());
+static APP_PROXY: Mutex<Option<winit::event_loop::EventLoopProxy>> = Mutex::new(None);
 
 pub fn open_window(width: f32, height: f32, content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>) {
     GLOBAL_PENDING.lock().unwrap().push((width, height, content, None));
-    debug::wake();
+    wake_impl();
 }
 
 pub fn open_window_with_close(width: f32, height: f32, content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>, on_close: Option<Box<dyn FnMut() + Send>>) {
     GLOBAL_PENDING.lock().unwrap().push((width, height, content, on_close));
+    wake_impl();
+}
+
+fn wake_impl() {
+    // 优先使用 APP_PROXY（独立于 debug-server feature）
+    if let Some(ref proxy) = *APP_PROXY.lock().unwrap() {
+        let _ = proxy.wake_up();
+        return;
+    }
+    // 回退到 debug::wake()（当 debug-server 启用时）
     debug::wake();
 }
 
@@ -322,7 +334,8 @@ fn apply_scroll_delta(node: &mut LayoutNode, dy: f32) -> bool {
 pub fn run_app(content: impl Fn(&mut ComposeCtx) + Clone + Send + Sync + 'static, _width: f32, _height: f32) {
     let event_loop = EventLoop::new().expect("event loop");
     let proxy = event_loop.create_proxy();
-    debug::set_event_loop_proxy(proxy);
+    debug::set_event_loop_proxy(proxy.clone());
+    *APP_PROXY.lock().unwrap() = Some(proxy);
     debug::start_server();
     let state: &'static mut AppState<_> = Box::leak(Box::new(AppState {
         content,
