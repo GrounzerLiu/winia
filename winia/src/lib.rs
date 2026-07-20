@@ -33,7 +33,6 @@ pub mod debug {
     pub fn update_pixels(_pixels: &[u8], _width: u32, _height: u32) {}
     pub fn take_queued_events() -> Vec<DebugEvent> { Vec::new() }
     pub fn queue_event(_event: DebugEvent) {}
-    pub fn take_native_click() -> Option<(f32, f32)> { None }
     pub fn simulate_native_click(_x: f32, _y: f32) {}
     pub fn build_tree_json(_root: &crate::layout::node::LayoutNode) -> String { String::new() }
     pub fn set_event_result(_s: &str) {}

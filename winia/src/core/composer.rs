@@ -327,16 +327,17 @@ impl Composer {
         self.layout_nodes.clear();
         self.node_stack.clear();
         self.layout_root = None;
-        self.slot_deps.clear();
 
         // 消费 global dirty → 标记对应 slot 为脏
-        for state_id in crate::core::state::take_pending_states() {
-            if let Some(keys) = self.slot_deps.get(&state_id) {
+        let pending = crate::core::state::take_pending_states();
+        for state_id in &pending {
+            if let Some(keys) = self.slot_deps.get(state_id) {
                 for &k in keys {
                     self.slot_table.mark_dirty(k);
                 }
             }
         }
+        self.slot_deps.clear(); // 清空旧依赖，下面会重新收集
 
         crate::core::state::set_dependency_registrar(move |state_id, _| {
             let key = ACTIVE_SLOT_KEY.with(|c| c.get());

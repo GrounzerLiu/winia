@@ -49,7 +49,11 @@ struct AppState<F> where F: Fn(&mut ComposeCtx) + Send + Sync + 'static {
 
 impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send + Sync + Clone + 'static {
     fn new_events(&mut self, event_loop: &dyn ActiveEventLoop, _cause: StartCause) {
-        event_loop.set_control_flow(ControlFlow::Poll);
+        if debug::has_pending() {
+            event_loop.set_control_flow(ControlFlow::Poll);
+        } else {
+            event_loop.set_control_flow(ControlFlow::Wait);
+        }
     }
 
     fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
@@ -120,9 +124,11 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
             WindowEvent::PointerButton { position, state, .. } if state.is_pressed() => {
                 let lp = position.to_logical::<f32>(pw.scale_factor);
                 if let Some(root) = pw.composer.layout_root() {
+                    let mut handled = false;
                     for node in hit_test(root, lp.x, lp.y).iter().rev() {
+                        if handled { break; }
                         for el in node.modifier.elements() {
-                            if let ModifierElement::Clickable { on_click } = el { on_click(); }
+                            if let ModifierElement::Clickable { on_click } = el { on_click(); handled = true; break; }
                         }
                     }
                 }
@@ -179,9 +185,11 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
                                 eprintln!("[app] hit_test at (x={}, y={}, sf={})", x, y, sf);
                                 let nodes = hit_test(root, x / sf, y / sf);
                                 eprintln!("[app] hit_test found {} nodes", nodes.len());
+                                let mut click_handled = false;
                                 for node in nodes.iter().rev() {
+                                    if click_handled { break; }
                                     for el in node.modifier.elements() {
-                                        if let ModifierElement::Clickable { on_click } = el { on_click(); handled = true; eprintln!("[app] Clickable triggered!"); }
+                                        if let ModifierElement::Clickable { on_click } = el { on_click(); handled = true; click_handled = true; break; }
                                     }
                                 }
                             }
