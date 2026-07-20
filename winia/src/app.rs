@@ -65,9 +65,6 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
             return;
         }
         AppState::process_pending_windows(self, event_loop);
-        for pw in self.windows.values() {
-            if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
-        }
     }
 
     fn window_event(
