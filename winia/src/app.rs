@@ -296,7 +296,7 @@ pub fn open_window(width: f32, height: f32, content: Option<Box<dyn Fn(&mut Comp
 }
 
 pub fn open_window_with_close(width: f32, height: f32, content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>, on_close: Option<Box<dyn FnMut() + Send>>, _created_id: Option<u64>) {
-    GLOBAL_PENDING.lock().unwrap().push((width, height, content, on_close, None));
+    GLOBAL_PENDING.lock().unwrap().push((width, height, content, on_close, _created_id));
     wake_impl();
 }
 

@@ -14,7 +14,8 @@ static CLOSE_QUEUE: LazyLock<Mutex<Vec<u64>>> = LazyLock::new(|| Mutex::new(Vec:
 pub(crate) fn process_close_queue(windows: &mut std::collections::HashMap<winit::window::WindowId, crate::app::PerWindow>,
                                    event_loop: &dyn winit::event_loop::ActiveEventLoop,
                                    force_shutdown: &dyn Fn()) {
-    for cid in CLOSE_QUEUE.lock().unwrap().drain(..) {
+    let ids: Vec<u64> = CLOSE_QUEUE.lock().unwrap().drain(..).collect();
+    for cid in ids {
         // 移除 CREATED 记录
         CREATED.lock().unwrap().remove(&cid);
         // 查找对应的 WindowId
