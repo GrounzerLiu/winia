@@ -65,6 +65,12 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
             return;
         }
         AppState::process_pending_windows(self, event_loop);
+        // 调试工具有 pending 请求时唤醒窗口（截图/模拟事件需要 RedrawRequested）
+        if debug::has_pending() {
+            for pw in self.windows.values() {
+                if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+            }
+        }
     }
 
     fn window_event(
