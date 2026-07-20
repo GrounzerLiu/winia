@@ -18,20 +18,21 @@ use winit::window::WindowId;
 
 // ── PerWindow ──
 
-struct PerWindow {
-    composer: Composer,
-    skia_window: Option<VulkanSkiaWindow>,
+pub(crate) struct PerWindow {
+    pub(crate) composer: Composer,
+    pub(crate) skia_window: Option<VulkanSkiaWindow>,
     width: f32, height: f32,
-    scale_factor: f64,
-    focused_id: Option<u64>,
-    content: Box<dyn Fn(&mut ComposeCtx)>,
-    on_close: Option<Box<dyn FnMut() + Send>>,
+    pub(crate) scale_factor: f64,
+    pub(crate) focused_id: Option<u64>,
+    pub(crate) content: Box<dyn Fn(&mut ComposeCtx)>,
+    pub(crate) on_close: Option<Box<dyn FnMut() + Send>>,
 }
 
 impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32) -> Self {
         PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None }
     }
+    pub(crate) fn created_id(&self) -> Option<u64> { None }
 }
 
 // ── AppState ──
@@ -65,6 +66,8 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
             return;
         }
         AppState::process_pending_windows(self, event_loop);
+        // 处理 slot 回收触发的窗口关闭
+        crate::ui::window::process_close_queue(&mut self.windows, event_loop, &|| debug::force_shutdown());
         // 调试工具有 pending 请求时唤醒窗口（截图/模拟事件需要 RedrawRequested）
         if debug::has_pending() {
             for pw in self.windows.values() {
