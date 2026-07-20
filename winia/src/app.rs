@@ -6,7 +6,7 @@ use crate::layout::constraints::Constraints;
 use crate::layout::node::{hit_test, focus_next, LayoutNode};
 use crate::modifier::ModifierElement;
 use crate::render;
-pub(crate) type PendingItem = (f32, f32, Option<Box<dyn Fn(&mut ComposeCtx) + Send>>, Option<Box<dyn FnMut() + Send>>);
+pub(crate) type PendingItem = (f32, f32, Option<Box<dyn Fn(&mut ComposeCtx) + Send>>, Option<Box<dyn FnMut() + Send>>, Option<u64>);
 use skiwin::{SkiaWindowTrait, vulkan::VulkanSkiaWindow};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -26,13 +26,14 @@ pub(crate) struct PerWindow {
     pub(crate) focused_id: Option<u64>,
     pub(crate) content: Box<dyn Fn(&mut ComposeCtx)>,
     pub(crate) on_close: Option<Box<dyn FnMut() + Send>>,
+    pub(crate) created_id: Option<u64>,
 }
 
 impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32) -> Self {
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None }
     }
-    pub(crate) fn created_id(&self) -> Option<u64> { None }
+    pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 }
 
 // ── AppState ──
@@ -233,7 +234,7 @@ impl<F> AppState<F> where F: Fn(&mut ComposeCtx) + Send + Sync + Clone {
     /// 消费 `app::open_window` 排队的窗口请求 + 初始窗口创建
     fn process_pending_windows(&mut self, event_loop: &dyn ActiveEventLoop) {
         let initial: Option<PendingItem> = if self.windows.is_empty() {
-            Some((400.0, 300.0, Some(Box::new(self.content.clone()) as Box<dyn Fn(&mut ComposeCtx) + Send>), None))
+            Some((400.0, 300.0, Some(Box::new(self.content.clone()) as Box<dyn Fn(&mut ComposeCtx) + Send>), None, None))
         } else { None };
 
         for item in take_pending_windows() {
@@ -242,13 +243,13 @@ impl<F> AppState<F> where F: Fn(&mut ComposeCtx) + Send + Sync + Clone {
 
         if let Some(item) = initial { self.pending_content.insert(0, item); }
 
-        while let Some((w, h, c_opt, on_close)) = self.pending_content.pop() {
+        while let Some((w, h, c_opt, on_close, created_id)) = self.pending_content.pop() {
             let content = c_opt.unwrap_or_else(|| Box::new(|_| {}));
-            self.open_window(event_loop, w, h, content, on_close);
+            self.open_window(event_loop, w, h, content, on_close, created_id);
         }
     }
 
-    fn open_window(&mut self, event_loop: &dyn ActiveEventLoop, width: f32, height: f32, content: Box<dyn Fn(&mut ComposeCtx) + Send>, on_close: Option<Box<dyn FnMut() + Send>>) {
+    fn open_window(&mut self, event_loop: &dyn ActiveEventLoop, width: f32, height: f32, content: Box<dyn Fn(&mut ComposeCtx) + Send>, on_close: Option<Box<dyn FnMut() + Send>>, created_id: Option<u64>) {
         let mut a = winit::window::WindowAttributes::default();
         a.title = "Winia".into();
         a.surface_size = Some(winit::dpi::Size::Logical(winit::dpi::LogicalSize::new(width as f64, height as f64)));
@@ -260,6 +261,7 @@ impl<F> AppState<F> where F: Fn(&mut ComposeCtx) + Send + Sync + Clone {
         // 首次 compose+render
         let mut pw = PerWindow::new(content, width, height);
         pw.on_close = on_close;
+        pw.created_id = created_id;
         pw.scale_factor = sf;
         pw.skia_window = Some(skia_window);
         pw.composer.compose(|ctx| (pw.content)(ctx));
@@ -289,12 +291,12 @@ static GLOBAL_PENDING: std::sync::Mutex<Vec<PendingItem>> = std::sync::Mutex::ne
 static APP_PROXY: Mutex<Option<winit::event_loop::EventLoopProxy>> = Mutex::new(None);
 
 pub fn open_window(width: f32, height: f32, content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>) {
-    GLOBAL_PENDING.lock().unwrap().push((width, height, content, None));
+    GLOBAL_PENDING.lock().unwrap().push((width, height, content, None, None));
     wake_impl();
 }
 
-pub fn open_window_with_close(width: f32, height: f32, content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>, on_close: Option<Box<dyn FnMut() + Send>>) {
-    GLOBAL_PENDING.lock().unwrap().push((width, height, content, on_close));
+pub fn open_window_with_close(width: f32, height: f32, content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>, on_close: Option<Box<dyn FnMut() + Send>>, _created_id: Option<u64>) {
+    GLOBAL_PENDING.lock().unwrap().push((width, height, content, on_close, None));
     wake_impl();
 }
 

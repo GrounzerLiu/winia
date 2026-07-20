@@ -127,7 +127,7 @@ impl Window {
                 Column::new().modifier(Modifier::new().padding(8.0)).build(ctx, |ctx| {
                     content(ctx);
                 });
-            })), wrapped);
+            })), wrapped, Some(id));
         }
     }
 }
