@@ -93,11 +93,9 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
                 }
             }
             WindowEvent::CloseRequested => {
-                eprintln!("[app] CloseRequested closing_last={}", closing_last);
                 if let Some(ref mut cb) = pw.on_close { cb(); }
                 self.windows.remove(&window_id);
                 if closing_last {
-                    eprintln!("[app] All windows closed, force shutdown...");
                     debug::force_shutdown();
                     event_loop.exit();
                 }
@@ -163,7 +161,8 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
                         });
                     }
                 }
-                // DevTools 事件
+                // DevTools 事件（仅父窗口消费，防止多窗口抢）
+                if !is_parent { return; }
                 let mut handled = false;
                 for evt in debug::take_queued_events() {
                     match evt {
@@ -217,9 +216,8 @@ impl<F> AppState<F> where F: Fn(&mut ComposeCtx) + Send + Sync + Clone {
     /// 消费 `app::open_window` 排队的窗口请求 + 初始窗口创建
     fn process_pending_windows(&mut self, event_loop: &dyn ActiveEventLoop) {
         let initial: Option<PendingItem> = if self.windows.is_empty() {
-            eprintln!("[app] process_pending: initial window (empty)");
             Some((400.0, 300.0, Some(Box::new(self.content.clone()) as Box<dyn Fn(&mut ComposeCtx) + Send>), None))
-        } else { eprintln!("[app] process_pending: windows not empty, pending={}", self.pending_content.len()); None };
+        } else { None };
 
         for item in take_pending_windows() {
             self.pending_content.push(item);
@@ -234,7 +232,6 @@ impl<F> AppState<F> where F: Fn(&mut ComposeCtx) + Send + Sync + Clone {
     }
 
     fn open_window(&mut self, event_loop: &dyn ActiveEventLoop, width: f32, height: f32, content: Box<dyn Fn(&mut ComposeCtx) + Send>, on_close: Option<Box<dyn FnMut() + Send>>) {
-        eprintln!("[app] open_window: total before={}", self.windows.len());
         let mut a = winit::window::WindowAttributes::default();
         a.title = "Winia".into();
         a.surface_size = Some(winit::dpi::Size::Logical(winit::dpi::LogicalSize::new(width as f64, height as f64)));
@@ -261,7 +258,6 @@ impl<F> AppState<F> where F: Fn(&mut ComposeCtx) + Send + Sync + Clone {
             }
         }
         self.windows.insert(window_id, pw);
-        eprintln!("[app] open_window DONE: total={} id={:?}", self.windows.len(), window_id);
         if self.parent_window_id.is_none() {
             self.parent_window_id = Some(window_id);
         }
