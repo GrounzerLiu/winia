@@ -1,0 +1,47 @@
+{
+  "id": "22b06311de51",
+  "title": "实现 Window.on_close 回调",
+  "importance": "P1",
+  "progressType": "sequential",
+  "status": "completed",
+  "tags": [
+    "multi-window",
+    "window"
+  ],
+  "createdAt": "2026-07-20T03:07:09.600669+00:00",
+  "updatedAt": "2026-07-20T03:26:01.430464+00:00",
+  "_version": 3,
+  "subtasks": [
+    {
+      "index": 1,
+      "title": "PerWindow 加 on_close: Option<Box<dyn FnMut() + Send>>",
+      "status": "completed",
+      "note": ""
+    },
+    {
+      "index": 2,
+      "title": "GLOBAL_PENDING 传递 on_close 回调",
+      "status": "completed",
+      "note": ""
+    },
+    {
+      "index": 3,
+      "title": "Window::on_close(f) 存储回调",
+      "status": "completed",
+      "note": ""
+    },
+    {
+      "index": 4,
+      "title": "CloseRequested 事件调用 on_close",
+      "status": "completed",
+      "note": ""
+    },
+    {
+      "index": 5,
+      "title": "Counter 示例验证：关闭子窗口→按钮恢复",
+      "status": "completed",
+      "note": ""
+    }
+  ],
+  "followups": []
+}

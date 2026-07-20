@@ -6,6 +6,7 @@ use crate::layout::constraints::Constraints;
 use crate::layout::node::{hit_test, focus_next, LayoutNode};
 use crate::modifier::ModifierElement;
 use crate::render;
+pub(crate) type PendingItem = (f32, f32, Option<Box<dyn Fn(&mut ComposeCtx) + Send>>, Option<Box<dyn FnMut() + Send>>);
 use skiwin::{SkiaWindowTrait, vulkan::VulkanSkiaWindow};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -24,48 +25,49 @@ struct PerWindow {
     scale_factor: f64,
     focused_id: Option<u64>,
     content: Box<dyn Fn(&mut ComposeCtx)>,
+    on_close: Option<Box<dyn FnMut() + Send>>,
 }
 
 impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32) -> Self {
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None }
     }
 }
 
 // ── AppState ──
 
-struct AppState<F> where F: Fn(&mut ComposeCtx) {
+struct AppState<F> where F: Fn(&mut ComposeCtx) + Send + Sync + 'static {
     /// 根 composable（每个窗口独立执行）
     content: F,
     /// 已创建的窗口
     windows: HashMap<WindowId, PerWindow>,
     /// 待创建的窗口（由 Window composable 排队）
-    pending_content: Vec<(f32, f32, Option<Box<dyn Fn(&mut ComposeCtx) + Send>>)>,
+    pending_content: Vec<PendingItem>,
+    /// 父窗口 ID（用于 is_parent 判断，不依赖 HashMap 顺序）
+    parent_window_id: Option<WindowId>,
 }
 
-impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Sync {
+impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send + Sync + Clone + 'static {
     fn new_events(&mut self, event_loop: &dyn ActiveEventLoop, _cause: StartCause) {
-        event_loop.set_control_flow(if debug::has_pending() { ControlFlow::Poll } else { ControlFlow::Wait });
+        event_loop.set_control_flow(ControlFlow::Poll);
     }
 
     fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
-        if self.windows.is_empty() {
-            // 初始窗口，直接传 None，让 open_window 使用 PerWindow.content
-            self.open_window(event_loop, 400.0, 300.0, None);
-        }
-        for (w, h, c_opt) in take_pending_windows() {
-            self.pending_content.push((w, h, c_opt));
-        }
-        while let Some((w, h, c_opt)) = self.pending_content.pop() {
-            self.open_window(event_loop, w, h, c_opt);
-        }
+        AppState::process_pending_windows(self, event_loop);
     }
 
     fn resumed(&mut self, _event_loop: &dyn ActiveEventLoop) {}
 
-    fn proxy_wake_up(&mut self, _event_loop: &dyn ActiveEventLoop) {
+    fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
+        eprintln!("[app] proxy_wake_up, shutdown={}", debug::is_shutdown());
+        // 如果 debug server 请求关闭，退出事件循环
+        if debug::is_shutdown() {
+            event_loop.exit();
+            return;
+        }
+        AppState::process_pending_windows(self, event_loop);
         for pw in self.windows.values() {
-            if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+            if let Some(ref sw) = pw.skia_window { eprintln!("[app] proxy_wake_up: requesting redraw"); sw.request_redraw(); }
         }
     }
 
@@ -75,6 +77,8 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Sync {
         window_id: WindowId,
         event: WindowEvent,
     ) {
+        let is_parent = self.parent_window_id.map(|p| p == window_id).unwrap_or(false);
+        let closing_last = self.windows.len() == 1;
         let Some(pw) = self.windows.get_mut(&window_id) else { return };
 
         match event {
@@ -89,9 +93,20 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Sync {
                 }
             }
             WindowEvent::CloseRequested => {
+                eprintln!("[app] CloseRequested closing_last={}", closing_last);
+                if let Some(ref mut cb) = pw.on_close { cb(); }
                 self.windows.remove(&window_id);
-                // 主动态窗口已全部关闭
-                if self.windows.is_empty() { event_loop.exit(); }
+                if closing_last {
+                    eprintln!("[app] All windows closed, force shutdown...");
+                    debug::force_shutdown();
+                    event_loop.exit();
+                }
+            }
+            WindowEvent::Destroyed => {
+                self.windows.remove(&window_id);
+                if self.windows.is_empty() {
+                    event_loop.exit();
+                }
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 pw.scale_factor = scale_factor;
@@ -125,16 +140,6 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Sync {
                 if let Some(ref mut sw) = pw.skia_window { sw.resize(); }
             }
             WindowEvent::RedrawRequested => {
-                // 原生模拟点击
-                if let Some((cx, cy)) = debug::take_native_click() {
-                    if let Some(root) = pw.composer.layout_root() {
-                        for node in hit_test(root, cx, cy).iter().rev() {
-                            for el in node.modifier.elements() {
-                                if let ModifierElement::Clickable { on_click } = el { on_click(); }
-                            }
-                        }
-                    }
-                }
                 // compose → layout → render
                 pw.composer.compose(|ctx| (pw.content)(ctx));
                 if let Some(fid) = pw.focused_id {
@@ -165,9 +170,12 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Sync {
                         debug::DebugEvent::Click { x, y } => {
                             let sf = pw.scale_factor as f32;
                             if let Some(root) = pw.composer.layout_root() {
-                                for node in hit_test(root, x / sf, y / sf).iter().rev() {
+                                eprintln!("[app] hit_test at (x={}, y={}, sf={})", x, y, sf);
+                                let nodes = hit_test(root, x / sf, y / sf);
+                                eprintln!("[app] hit_test found {} nodes", nodes.len());
+                                for node in nodes.iter().rev() {
                                     for el in node.modifier.elements() {
-                                        if let ModifierElement::Clickable { on_click } = el { on_click(); handled = true; }
+                                        if let ModifierElement::Clickable { on_click } = el { on_click(); handled = true; eprintln!("[app] Clickable triggered!"); }
                                     }
                                 }
                             }
@@ -205,8 +213,28 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Sync {
     }
 }
 
-impl<F> AppState<F> where F: Fn(&mut ComposeCtx) {
-    fn open_window(&mut self, event_loop: &dyn ActiveEventLoop, width: f32, height: f32, content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>) {
+impl<F> AppState<F> where F: Fn(&mut ComposeCtx) + Send + Sync + Clone {
+    /// 消费 `app::open_window` 排队的窗口请求 + 初始窗口创建
+    fn process_pending_windows(&mut self, event_loop: &dyn ActiveEventLoop) {
+        let initial: Option<PendingItem> = if self.windows.is_empty() {
+            eprintln!("[app] process_pending: initial window (empty)");
+            Some((400.0, 300.0, Some(Box::new(self.content.clone()) as Box<dyn Fn(&mut ComposeCtx) + Send>), None))
+        } else { eprintln!("[app] process_pending: windows not empty, pending={}", self.pending_content.len()); None };
+
+        for item in take_pending_windows() {
+            self.pending_content.push(item);
+        }
+
+        if let Some(item) = initial { self.pending_content.insert(0, item); }
+
+        while let Some((w, h, c_opt, on_close)) = self.pending_content.pop() {
+            let content = c_opt.unwrap_or_else(|| Box::new(|_| {}));
+            self.open_window(event_loop, w, h, content, on_close);
+        }
+    }
+
+    fn open_window(&mut self, event_loop: &dyn ActiveEventLoop, width: f32, height: f32, content: Box<dyn Fn(&mut ComposeCtx) + Send>, on_close: Option<Box<dyn FnMut() + Send>>) {
+        eprintln!("[app] open_window: total before={}", self.windows.len());
         let mut a = winit::window::WindowAttributes::default();
         a.title = "Winia".into();
         a.surface_size = Some(winit::dpi::Size::Logical(winit::dpi::LogicalSize::new(width as f64, height as f64)));
@@ -216,8 +244,8 @@ impl<F> AppState<F> where F: Fn(&mut ComposeCtx) {
         let sf = w.scale_factor();
         let skia_window = VulkanSkiaWindow::new(event_loop, w);
         // 首次 compose+render
-        let content = content.unwrap_or_else(|| Box::new(|_| {}));
         let mut pw = PerWindow::new(content, width, height);
+        pw.on_close = on_close;
         pw.scale_factor = sf;
         pw.skia_window = Some(skia_window);
         pw.composer.compose(|ctx| (pw.content)(ctx));
@@ -233,6 +261,10 @@ impl<F> AppState<F> where F: Fn(&mut ComposeCtx) {
             }
         }
         self.windows.insert(window_id, pw);
+        eprintln!("[app] open_window DONE: total={} id={:?}", self.windows.len(), window_id);
+        if self.parent_window_id.is_none() {
+            self.parent_window_id = Some(window_id);
+        }
     }
 }
 
@@ -240,13 +272,24 @@ impl<F> AppState<F> where F: Fn(&mut ComposeCtx) {
 
 // ── 公共 API ──
 
-static GLOBAL_PENDING: std::sync::Mutex<Vec<(f32, f32, Option<Box<dyn Fn(&mut ComposeCtx) + Send>>)>> = std::sync::Mutex::new(Vec::new());
+static GLOBAL_PENDING: std::sync::Mutex<Vec<PendingItem>> = std::sync::Mutex::new(Vec::new());
+static WAKE: std::sync::Mutex<Option<Box<dyn Fn() + Send>>> = std::sync::Mutex::new(None);
 
-pub fn open_window(width: f32, height: f32, content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>) {
-    GLOBAL_PENDING.lock().unwrap().push((width, height, content));
+pub fn set_wake(f: impl Fn() + Send + 'static) {
+    *WAKE.lock().unwrap() = Some(Box::new(f));
 }
 
-pub fn take_pending_windows() -> Vec<(f32, f32, Option<Box<dyn Fn(&mut ComposeCtx) + Send>>)> {
+pub fn open_window(width: f32, height: f32, content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>) {
+    GLOBAL_PENDING.lock().unwrap().push((width, height, content, None));
+    if let Some(ref w) = *WAKE.lock().unwrap() { w(); }
+}
+
+pub fn open_window_with_close(width: f32, height: f32, content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>, on_close: Option<Box<dyn FnMut() + Send>>) {
+    GLOBAL_PENDING.lock().unwrap().push((width, height, content, on_close));
+    if let Some(ref w) = *WAKE.lock().unwrap() { w(); }
+}
+
+pub fn take_pending_windows() -> Vec<PendingItem> {
     std::mem::take(&mut *GLOBAL_PENDING.lock().unwrap())
 }
 use crate::modifier::Dimension;
@@ -271,15 +314,24 @@ fn apply_scroll_delta(node: &mut LayoutNode, dy: f32) -> bool {
     false
 }
 
-pub fn run_app(content: impl Fn(&mut ComposeCtx) + Send + Sync + 'static, width: f32, height: f32) {
+pub fn run_app(content: impl Fn(&mut ComposeCtx) + Clone + Send + Sync + 'static, width: f32, height: f32) {
     let event_loop = EventLoop::new().expect("event loop");
     let proxy = event_loop.create_proxy();
+    debug::set_event_loop_proxy(proxy.clone());
     debug::set_wake_callback(move || { let _ = proxy.wake_up(); });
+    set_wake({
+        let proxy = event_loop.create_proxy();
+        move || { let _ = proxy.wake_up(); }
+    });
     debug::start_server();
     let state: &'static mut AppState<_> = Box::leak(Box::new(AppState {
         content,
         windows: HashMap::new(),
-        pending_content: vec![(width, height, None)],
+        pending_content: Vec::new(),
+        parent_window_id: None,
     }));
     event_loop.run_app(state).expect("run_app");
+    // run_app 返回 = 事件循环已退出
+    // 停止 debug server 线程后进程自然退出
+    debug::force_shutdown();
 }

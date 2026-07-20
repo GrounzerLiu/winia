@@ -24,11 +24,15 @@ pub mod debug {
     pub fn start_server() {}
     pub fn has_pending() -> bool { false }
     pub fn set_wake_callback(_cb: impl Fn() + Send + Sync + 'static) {}
+    pub fn set_event_loop_proxy(_proxy: winit::event_loop::EventLoopProxy) {}
     pub fn update_tree(_json: &str) {}
     pub fn screenshot_requested() -> bool { false }
     pub fn screenshot_done() {}
+    pub fn force_shutdown() {}
+    pub fn is_shutdown() -> bool { false }
     pub fn update_pixels(_pixels: &[u8], _width: u32, _height: u32) {}
     pub fn take_queued_events() -> Vec<DebugEvent> { Vec::new() }
+    pub fn queue_event(_event: DebugEvent) {}
     pub fn take_native_click() -> Option<(f32, f32)> { None }
     pub fn simulate_native_click(_x: f32, _y: f32) {}
     pub fn build_tree_json(_root: &crate::layout::node::LayoutNode) -> String { String::new() }
@@ -48,7 +52,7 @@ pub mod prelude {
     pub use crate::core::composer::ComposeCtx;
     pub use crate::core::state::State;
     pub use crate::modifier::{Dimension, Modifier, Shape, Color, ScrollDirection, FocusRequester, ScrollState};
-    pub use crate::ui::{Text, TextAlign, TextOverflow, Button, ButtonStyle, Column, Row, Stack};
+    pub use crate::ui::{Text, TextAlign, TextOverflow, Button, ButtonStyle, Column, Row, Stack, Window};
     pub use crate::layout::{Arrangement, Alignment, Constraints};
     pub use crate::animation::{animate_as_state, animate_to, animate_to_cb, Easing};
     pub use std::time::Duration;

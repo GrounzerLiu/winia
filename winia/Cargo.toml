@@ -17,6 +17,7 @@ parking_lot = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }
 skia-safe = { workspace = true }
+tokio = { version = "1", features = ["rt-multi-thread"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 skia-safe = { workspace = true, features = ["vulkan", "textlayout", "svg", "gl", "d3d"] }

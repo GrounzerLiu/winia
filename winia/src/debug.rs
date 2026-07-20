@@ -42,14 +42,33 @@ pub fn has_pending() -> bool {
 
 /// 唤醒回调（由 app.rs 注册）
 static WAKE_CALLBACK: Mutex<Option<Box<dyn Fn() + Send + Sync>>> = Mutex::new(None);
+static EVENT_LOOP_PROXY: Mutex<Option<winit::event_loop::EventLoopProxy>> = Mutex::new(None);
 use crate::core::state::State;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+/// 优雅关闭标志
+static SHUTDOWN: AtomicBool = AtomicBool::new(false);
+
+/// 强制停止 debug 服务器线程
+pub fn force_shutdown() {
+    SHUTDOWN.store(true, Ordering::SeqCst);
+    // 自连一次，让 server 线程从 incoming() 中退出阻塞
+    let _ = TcpStream::connect("127.0.0.1:9999");
+    wake(); // 唤醒事件循环，让它在 proxy_wake_up 中调用 exit()
+}
+
+/// 检查是否已请求关闭
+pub fn is_shutdown() -> bool {
+    SHUTDOWN.load(Ordering::SeqCst)
+}
 
 /// 直接模拟原生点击（绕过 debug 队列）
 static NATIVE_CLICK: std::sync::Mutex<Option<(f32, f32)>> = std::sync::Mutex::new(None);
 
 pub fn simulate_native_click(x: f32, y: f32) {
-    *NATIVE_CLICK.lock().unwrap() = Some((x, y));
+    // 直接存入 QUEUED_EVENTS
+    QUEUED_EVENTS.lock().unwrap().push(DebugEvent::Click { x, y });
+    wake();
 }
 
 /// app.rs 在 RedrawRequested 中消费
@@ -61,7 +80,17 @@ pub fn set_wake_callback(cb: impl Fn() + Send + Sync + 'static) {
     *WAKE_CALLBACK.lock().unwrap() = Some(Box::new(cb));
 }
 
+pub fn set_event_loop_proxy(proxy: winit::event_loop::EventLoopProxy) {
+    *EVENT_LOOP_PROXY.lock().unwrap() = Some(proxy);
+}
+
 fn wake() {
+    // 使用 static proxy 唤醒事件循环
+    if let Some(ref proxy) = *EVENT_LOOP_PROXY.lock().unwrap() {
+        let _ = proxy.wake_up();
+        return;
+    }
+    // 回退：通过回调唤醒
     if let Some(ref cb) = *WAKE_CALLBACK.lock().unwrap() {
         cb();
     }
@@ -105,6 +134,7 @@ pub fn start_server() {
         println!("[DevTools] 服务器已启动 → http://localhost:9999");
 
         for stream in listener.incoming() {
+            if SHUTDOWN.load(Ordering::SeqCst) { break; }
             if let Ok(stream) = stream {
                 thread::spawn(|| handle_connection(stream));
             }
@@ -134,10 +164,9 @@ fn handle_connection(mut stream: TcpStream) {
             simulate_native_click(x, y); wake();
             respond(&mut stream, 200, "text/plain", "click queued");
         }
-        ("GET" | "POST", "/shutdown") => {
+        ("GET" | "POST", p) if p.starts_with("/close") || p.starts_with("/shutdown") => {
+            force_shutdown();
             respond(&mut stream, 200, "text/plain", "shutting down");
-            let _ = stream.flush();
-            std::process::exit(0);
         }
         ("GET" | "POST", p) if p.starts_with("/event") => serve_event(&mut stream, p),
         _ => serve_404(&mut stream),
@@ -340,13 +369,15 @@ pub enum DebugEvent {
 }
 
 /// 消费排队的模拟事件（app.rs 每帧调用）
+
+pub fn queue_event(event: DebugEvent) {
+    QUEUED_EVENTS.lock().unwrap().push(event);
+    wake();
+}
+
 pub fn take_queued_events() -> Vec<DebugEvent> {
     let mut events = QUEUED_EVENTS.lock().unwrap();
     std::mem::take(&mut *events)
-}
-
-pub(crate) fn queue_event(event: DebugEvent) {
-    QUEUED_EVENTS.lock().unwrap().push(event);
 }
 
 // ── 组件树 JSON ──
