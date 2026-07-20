@@ -95,6 +95,10 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
             WindowEvent::CloseRequested => {
                 if let Some(ref mut cb) = pw.on_close { cb(); }
                 self.windows.remove(&window_id);
+                // 通知其他窗口重绘（状态可能已变化）
+                for pw in self.windows.values() {
+                    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                }
                 if closing_last {
                     debug::force_shutdown();
                     event_loop.exit();
@@ -102,6 +106,9 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
             }
             WindowEvent::Destroyed => {
                 self.windows.remove(&window_id);
+                for pw in self.windows.values() {
+                    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                }
                 if self.windows.is_empty() {
                     event_loop.exit();
                 }
