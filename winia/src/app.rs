@@ -141,6 +141,7 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
                         pw.focused_id = crate::layout::node::get_focus_id(root);
                     }
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                    event_loop.set_control_flow(ControlFlow::Poll);
                 }
             }
             WindowEvent::SurfaceResized(s) => {
