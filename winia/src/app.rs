@@ -300,7 +300,7 @@ pub fn open_window_with_close(width: f32, height: f32, content: Option<Box<dyn F
     wake_impl();
 }
 
-fn wake_impl() {
+pub(crate) fn wake_impl() {
     // 优先使用 APP_PROXY（独立于 debug-server feature）
     if let Some(ref proxy) = *APP_PROXY.lock().unwrap() {
         let _ = proxy.wake_up();

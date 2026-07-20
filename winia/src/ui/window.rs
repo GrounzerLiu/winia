@@ -55,6 +55,7 @@ impl Drop for WindowLifeInner {
         if !self.done && self.created_id != 0 {
             self.done = true;
             CLOSE_QUEUE.lock().unwrap().push(self.created_id);
+            crate::app::wake_impl();
         }
     }
 }
