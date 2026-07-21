@@ -71,10 +71,6 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
         crate::ui::window::Window::process_detached(&mut self.windows, event_loop, &|| debug::force_shutdown());
         // 处理 close_window_by_id 请求（先 drain 再处理，避免持锁调用 cb）
         let queue = std::mem::take(&mut *CLOSE_QUEUED.lock().unwrap());
-        if !queue.is_empty() { eprintln!("[close_queue] processing {:?}", queue); }
-        if !queue.is_empty() {
-            eprintln!("[proxy_wake_up] processing {} close requests: {:?}", queue.len(), queue);
-        }
         for cid in queue {
             let to_close: Vec<WindowId> = self.windows.iter()
                 .filter(|(_, pw)| pw.created_id() == Some(cid))
@@ -182,6 +178,8 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
                     if let Some(r) = pw.composer.layout_root_mut() { crate::layout::node::focus_by_id(r, fid); }
                 }
                 pw.composer.layout(Constraints::new(0.0, pw.width, 0.0, pw.height));
+                // 检查 compose 后是否有待关闭窗口，有则唤醒 proxy 消费
+                if crate::ui::window::Window::has_pending_close() { debug::wake(); }
                 if let Some(ref mut sw) = pw.skia_window {
                     if let Some(root) = pw.composer.layout_root() {
                         let sf = pw.scale_factor as f32;
@@ -207,9 +205,7 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
                         debug::DebugEvent::Click { x, y } => {
                             let sf = pw.scale_factor as f32;
                             if let Some(root) = pw.composer.layout_root() {
-                                eprintln!("[app] hit_test at (x={}, y={}, sf={})", x, y, sf);
                                 let nodes = hit_test(root, x / sf, y / sf);
-                                eprintln!("[app] hit_test found {} nodes", nodes.len());
                                 let mut click_handled = false;
                                 for node in nodes.iter().rev() {
                                     if click_handled { break; }

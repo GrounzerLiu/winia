@@ -1,0 +1,25 @@
+[counter_ui] show_window=false
+[counter_ui] show_window=false
+[counter_ui] show_window=false
+[app] hit_test at (x=150, y=350, sf=1.5)
+[app] hit_test found 2 nodes
+[counter_ui] show_window=true
+[counter_ui] show_window=true
+[app] hit_test at (x=150, y=350, sf=1.5)
+[app] hit_test found 2 nodes
+[counter_ui] show_window=false
+[counter_ui] show_window=false
+[counter_ui] show_window=false
+[app] hit_test at (x=150, y=180, sf=1.5)
+[app] hit_test found 2 nodes
+[counter_ui] show_window=false
+[counter_ui] show_window=false
+[counter_ui] show_window=false
+[app] hit_test at (x=150, y=350, sf=1.5)
+[app] hit_test found 2 nodes
+[counter_ui] show_window=true
+[counter_ui] show_window=true
+[app] hit_test at (x=150, y=180, sf=1.5)
+[app] hit_test found 2 nodes
+[counter_ui] show_window=true
+[counter_ui] show_window=true
