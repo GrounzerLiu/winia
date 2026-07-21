@@ -91,7 +91,8 @@ impl Window {
     pub fn build(self, ctx: &mut ComposeCtx, content: impl Fn(&mut ComposeCtx) + Send + 'static) {
         let created_id = ctx.remember(|| 0u64);
 
-        // on_remove 设置待关闭 id，compose 末尾检测
+        // 创建仅用于 layout + on_remove 的 leaf slot
+        // on_remove 中读取 State 最新值（以应对已创建窗口的 id）
         let cid = created_id.clone();
         let key = ctx.next_key();
         ctx.start_leaf_with_remove(key, Modifier::new(), Box::new(move || {

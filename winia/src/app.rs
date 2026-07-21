@@ -71,6 +71,7 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
         crate::ui::window::Window::process_detached(&mut self.windows, event_loop, &|| debug::force_shutdown());
         // 处理 close_window_by_id 请求（先 drain 再处理，避免持锁调用 cb）
         let queue = std::mem::take(&mut *CLOSE_QUEUED.lock().unwrap());
+        if !queue.is_empty() { eprintln!("[close_queue] processing {:?}", queue); }
         if !queue.is_empty() {
             eprintln!("[proxy_wake_up] processing {} close requests: {:?}", queue.len(), queue);
         }
