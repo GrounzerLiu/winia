@@ -78,7 +78,6 @@ pub enum Alignment {
 ///
 /// 每个 LayoutNode 对应 UI 树中的一个可测量/可布局的单元。
 /// 包含 modifier 链和子节点。
-#[derive(Debug)]
 pub struct LayoutNode {
     pub modifier: Modifier,
     pub measured_size: Size,
@@ -87,6 +86,14 @@ pub struct LayoutNode {
     pub measure_policy: Option<Box<dyn MeasurePolicy>>,
     /// 是否获得焦点
     pub focused: bool,
+    /// 节点从布局树移除时调用（用于 Window 生命周期管理）
+    pub(crate) on_remove: Option<Box<dyn FnOnce() + Send>>,
+}
+
+impl Drop for LayoutNode {
+    fn drop(&mut self) {
+        if let Some(f) = self.on_remove.take() { f(); }
+    }
 }
 
 impl LayoutNode {
@@ -98,6 +105,7 @@ impl LayoutNode {
             children: Vec::new(),
             measure_policy,
             focused: false,
+            on_remove: None,
         }
     }
 
@@ -124,6 +132,7 @@ impl LayoutNode {
             children,
             measure_policy: Some(Box::new(measure_policy)),
             focused: false,
+            on_remove: None,
         }
     }
 
@@ -142,6 +151,7 @@ impl Default for LayoutNode {
             children: Vec::new(),
             measure_policy: None,
             focused: false,
+            on_remove: None,
         }
     }
 }

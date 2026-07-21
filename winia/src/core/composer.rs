@@ -88,7 +88,7 @@ impl<'a> ComposeCtx<'a> {
 
     /// 开始一个布局节点（叶子组件如 Text 使用）
     pub fn start_leaf(&mut self, key: u64, modifier: Modifier) {
-        self.composer.start_node(key, modifier, None);
+        self.composer.start_node(key, modifier, None, None);
     }
 
     /// 开始一个容器节点（布局组件如 Button/Column 使用）
@@ -99,7 +99,17 @@ impl<'a> ComposeCtx<'a> {
         policy: impl MeasurePolicy + 'static,
     ) {
         self.composer
-            .start_node(key, modifier, Some(Box::new(policy)));
+            .start_node(key, modifier, Some(Box::new(policy)), None);
+    }
+
+    /// 开始一个叶子节点并设置移除回调
+    pub fn start_leaf_with_remove(
+        &mut self,
+        key: u64,
+        modifier: Modifier,
+        on_remove: Box<dyn FnOnce() + Send>,
+    ) {
+        self.composer.start_node(key, modifier, None, Some(on_remove));
     }
 
     /// 结束当前节点
@@ -285,12 +295,13 @@ impl Composer {
     }
 
     /// 在组合树中开始一个节点（由组件的 build 方法调用）
-    pub fn start_node(&mut self, key: u64, modifier: Modifier, policy: Option<Box<dyn MeasurePolicy>>) {
+    pub fn start_node(&mut self, key: u64, modifier: Modifier, policy: Option<Box<dyn MeasurePolicy>>, on_remove: Option<Box<dyn FnOnce() + Send>>) {
         self.current_group_key = key as u32;
         self.slot_table.start_slot(key);
 
         // 创建对应的 LayoutNode
-        let node = LayoutNode::new(modifier, policy);
+        let mut node = LayoutNode::new(modifier, policy);
+        node.on_remove = on_remove;
         let index = self.layout_nodes.len();
         self.layout_nodes.push(node);
         self.node_stack.push(index);

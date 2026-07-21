@@ -49,15 +49,22 @@ impl Window {
     }
 
     pub fn build(self, ctx: &mut ComposeCtx, content: impl Fn(&mut ComposeCtx) + Send + 'static) {
-        // created_id 存储在父 slot 中（不受 if 分支 slot 回收影响）
+        // created_id 在父 slot 中持久化，不受 if 分支影响
         let created_id = ctx.remember(|| 0u64);
-        // 上次 compose 时窗口是否存活
-        let was_alive = ctx.remember(|| false);
+
+        // 创建自己的 slot+layout node，on_remove 在节点被清理时触发
+        let cid = created_id.clone();
+        let key = ctx.next_key();
+        ctx.start_leaf_with_remove(key, Modifier::new(), Box::new(move || {
+            let wid = cid.get();
+            if wid != 0 && CREATED.lock().unwrap().contains(&wid) {
+                // 窗口还在 CREATED 中但节点已被清理 → if 变为 false
+                app::close_window_by_id(wid);
+            }
+        }));
 
         let wid = created_id.get();
-        let is_alive = wid != 0 && CREATED.lock().unwrap().contains(&wid);
-
-        if !is_alive {
+        if wid == 0 || !CREATED.lock().unwrap().contains(&wid) {
             let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
             created_id.set(id);
             CREATED.lock().unwrap().insert(id);
@@ -77,12 +84,6 @@ impl Window {
             })), wrapped, Some(id));
         }
 
-        // 检测 alive → !alive 转换，关闭 OS 窗口
-        let was = was_alive.get();
-        if was && !is_alive && wid != 0 {
-            CREATED.lock().unwrap().remove(&wid);
-            app::close_window_by_id(wid);
-        }
-        was_alive.set(is_alive);
+        ctx.end_node();
     }
 }
