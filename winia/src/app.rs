@@ -322,6 +322,11 @@ pub fn close_window_by_id(created_id: u64) {
     wake_impl();
 }
 
+/// 取消关闭请求（Window::build 重建窗口时调用，抵消旧节点 on_remove 的推送）
+pub fn cancel_close(created_id: u64) {
+    CLOSE_QUEUED.lock().unwrap().retain(|&x| x != created_id);
+}
+
 static CLOSE_QUEUED: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
 
 pub(crate) fn wake_impl() {

@@ -64,6 +64,9 @@ impl Window {
         }));
 
         let wid = created_id.get();
+        // 每次 rebuild 都清除旧节点 on_remove 推入的 CLOSE_QUEUED
+        if wid != 0 { crate::app::cancel_close(wid); }
+
         if wid == 0 || !CREATED.lock().unwrap().contains(&wid) {
             let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
             created_id.set(id);
