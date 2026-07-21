@@ -67,8 +67,23 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
             return;
         }
         AppState::process_pending_windows(self, event_loop);
-        // 处理 slot 回收触发的窗口关闭
-        crate::ui::window::process_close_queue(&mut self.windows, event_loop, &|| debug::force_shutdown());
+        // 处理 close_window_by_id 请求
+        for cid in CLOSE_QUEUED.lock().unwrap().drain(..) {
+            crate::ui::window::CREATED.lock().unwrap().remove(&cid);
+            let to_close: Vec<WindowId> = self.windows.iter()
+                .filter(|(_, pw)| pw.created_id() == Some(cid))
+                .map(|(wid, _)| *wid)
+                .collect();
+            for wid in to_close {
+                if let Some(mut pw) = self.windows.remove(&wid) {
+                    if let Some(ref mut cb) = pw.on_close { cb(); }
+                    for pw2 in self.windows.values() {
+                        if let Some(ref sw) = pw2.skia_window { sw.request_redraw(); }
+                    }
+                    if self.windows.is_empty() { debug::force_shutdown(); event_loop.exit(); }
+                }
+            }
+        }
         // 调试工具有 pending 请求时唤醒窗口（截图/模拟事件需要 RedrawRequested）
         if debug::has_pending() {
             for pw in self.windows.values() {
@@ -299,6 +314,14 @@ pub fn open_window_with_close(width: f32, height: f32, content: Option<Box<dyn F
     GLOBAL_PENDING.lock().unwrap().push((width, height, content, on_close, _created_id));
     wake_impl();
 }
+
+/// 通过声明式 id 请求关闭窗口
+pub fn close_window_by_id(created_id: u64) {
+    CLOSE_QUEUED.lock().unwrap().push(created_id);
+    wake_impl();
+}
+
+static CLOSE_QUEUED: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
 
 pub(crate) fn wake_impl() {
     // 优先使用 APP_PROXY（独立于 debug-server feature）
