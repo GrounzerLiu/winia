@@ -1,0 +1,37 @@
+[counter_ui] compose show_window=false show_alt=false
+[counter_ui] compose show_window=false show_alt=false
+[counter_ui] compose show_window=false show_alt=false
+[app] DevTools click logical=(66.666664, 233.33333) sf=1.5
+[app] hit_test returned 2 nodes
+[app]   node at [16,212] size [200,32] mods: Size { width: Fixed(200.0), height: Fixed(32.0) }, Background { color: Color { r: 180, g: 100, b: 200, a: 255 }, shape: RoundedRect { corner_radius: 4.0 } }, Clickable(<fn>)
+[counter_ui] compose show_window=true show_alt=false
+[counter_ui] compose show_window=true show_alt=false
+[app] DevTools click logical=(66.666664, 120) sf=1.5
+[app] hit_test returned 2 nodes
+[app]   node at [16,84] size [200,36] mods: Size { width: Fixed(200.0), height: Fixed(36.0) }, Background { color: Color { r: 0, g: 150, b: 0, a: 255 }, shape: RoundedRect { corner_radius: 4.0 } }, Focusable, FocusRequesterId(2), Clickable(<fn>)
+[counter_ui] compose show_window=true show_alt=false
+[counter_ui] compose show_window=true show_alt=false
+[counter_ui] compose show_window=true show_alt=false
+[app] DevTools click logical=(66.666664, 121.333336) sf=1.5
+[app] hit_test returned 2 nodes
+[app]   node at [16,120] size [200,32] mods: Size { width: Fixed(200.0), height: Fixed(32.0) }, Background { color: Color { r: 0, g: 150, b: 0, a: 255 }, shape: RoundedRect { corner_radius: 4.0 } }, Clickable(<fn>)
+[counter_ui] compose show_window=true show_alt=true
+[counter_ui] compose show_window=true show_alt=true
+[app] DevTools click logical=(66.666664, 180) sf=1.5
+[app] hit_test returned 3 nodes
+[app]   node at [0,0] size [96,16] mods: TextContent { content: "Close sub window", font_size: 12.0 }
+[app]   node at [16,176] size [200,32] mods: Size { width: Fixed(200.0), height: Fixed(32.0) }, Background { color: Color { r: 180, g: 100, b: 200, a: 255 }, shape: RoundedRect { corner_radius: 4.0 } }, Clickable(<fn>)
+[counter_ui] compose show_window=false show_alt=true
+[counter_ui] compose show_window=false show_alt=true
+[counter_ui] compose show_window=false show_alt=true
+[app] DevTools click logical=(66.666664, 213.33333) sf=1.5
+[app] hit_test returned 3 nodes
+[app]   node at [0,0] size [200,24] mods: Size { width: Fixed(200.0), height: Fixed(24.0) }, Background { color: Color { r: 240, g: 240, b: 240, a: 255 }, shape: Rectangle }
+[app]   node at [16,208] size [200,720] mods: Size { width: Fixed(200.0), height: Fixed(150.0) }, VerticalScroll(<state>)
+[app]   node at [0,0] size [200,268] mods: Padding { all: 16.0 }
+[counter_ui] compose show_window=false show_alt=true
+[app] DevTools click logical=(66.666664, 192) sf=1.5
+[app] hit_test returned 3 nodes
+[app]   node at [0,0] size [96,16] mods: TextContent { content: "Open sub window", font_size: 12.0 }
+[app]   node at [16,176] size [200,32] mods: Size { width: Fixed(200.0), height: Fixed(32.0) }, Background { color: Color { r: 180, g: 100, b: 200, a: 255 }, shape: RoundedRect { corner_radius: 4.0 } }, Clickable(<fn>)
+[counter_ui] compose show_window=true show_alt=true

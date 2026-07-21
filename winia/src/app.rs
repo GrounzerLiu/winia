@@ -209,6 +209,7 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
                                 let mut click_handled = false;
                                 for node in nodes.iter().rev() {
                                     if click_handled { break; }
+                                    let mod_strs: Vec<String> = node.modifier.elements().iter().map(|el| format!("{:?}", el)).collect();
                                     for el in node.modifier.elements() {
                                         if let ModifierElement::Clickable { on_click } = el { on_click(); handled = true; click_handled = true; break; }
                                     }
