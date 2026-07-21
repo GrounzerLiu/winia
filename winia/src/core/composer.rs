@@ -53,17 +53,14 @@ impl<'a> ComposeCtx<'a> {
     }
 
     /// 在组合中记住一个状态。初次调用时执行 init 创建 State，后续重组时返回上次的同一个 State 实例。
-    ///
-    /// 类似 Compose 的 `remember { mutableStateOf(...) }`。
-    ///
-    /// # 参数
-    /// - `init`: 仅在首次组合时调用，创建初始值
-    ///
-    /// # 返回
-    /// - 始终返回同一个 `State<T>` 实例（重组时通过 Arc clone 返回）
     pub fn remember<T: Clone + 'static>(&mut self, init: impl FnOnce() -> T) -> State<T> {
         let slot_key = self.next_remember_key();
         self.composer.slot_table.remember(slot_key, || State::new(init()))
+    }
+
+    /// 使用固定 key 记住一个状态（不受 remember_counter 影响，适合跨分支持久化的值）
+    pub fn remember_at_key<T: Clone + 'static>(&mut self, key: u64, init: impl FnOnce() -> T) -> State<T> {
+        self.composer.slot_table.remember(key, || State::new(init()))
     }
 
     /// 生成下一个组合 key（公开 API，用于 start_node）

@@ -89,7 +89,8 @@ impl Window {
     }
 
     pub fn build(self, ctx: &mut ComposeCtx, content: impl Fn(&mut ComposeCtx) + Send + 'static) {
-        let created_id = ctx.remember(|| 0u64);
+        let created_id = ctx.remember_at_key(u64::MAX, || 0u64);
+        let wid = created_id.get();
 
         // 创建仅用于 layout + on_remove 的 leaf slot
         // on_remove 中读取 State 最新值（以应对已创建窗口的 id）
@@ -106,7 +107,7 @@ impl Window {
         let need_new = wid == 0 || !CREATED.lock().unwrap().contains(&wid);
 
         if need_new {
-            let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+                        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
             created_id.set(id);
             CREATED.lock().unwrap().insert(id);
 
