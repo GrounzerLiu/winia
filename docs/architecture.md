@@ -323,6 +323,101 @@ fn main() {
 | `@Composable` 函数 | 普通 Rust 函数，接收 `&mut ComposeCtx` | 无特殊标记 |
 | Snapshot 系统 | 简化版（单线程，无 MVCC） | 无需并发快照隔离 |
 
+### 3.8 ScrollState — 滚动控制
+
+**类比**: Compose 的 `ScrollState`
+
+`ScrollState` 是 Winia 中可滚动容器的状态句柄。它存储当前滚动偏移并提供编程滚动能力。
+
+```rust
+/// 创建 ScrollState（须在 composable 中用 remember 保持）
+let scroll_state = ctx.remember(|| ScrollState::new()).get();
+
+/// 应用于可滚动容器
+Column::new()
+    .modifier(Modifier::new()
+        .size(200.0, 150.0)
+        .vertical_scroll(scroll_state))  // ← 绑定 ScrollState
+    .build(ctx, |ctx| {
+        for i in 0..30 {
+            Text::new(format!("Line {}", i)).build(ctx);
+        }
+    });
+```
+
+**核心字段**:
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `offset` | `State<f32>` | 当前滚动偏移量（像素），可读写 |
+| `is_scroll_in_progress` | `State<bool>` | 是否正在滚动 |
+
+**方法**:
+- `ScrollState::new()` — 创建偏移为 0 的滚动状态
+- `scroll_to(value, max_offset)` — 立即跳到指定位置（自动 clamp 到 `[0, max_offset]`）
+
+**注意事项**:
+- `ScrollState` 不是 `State`，它是内部包含 `State<f32>` 的容器。需要 `ctx.remember().get()` 获得克隆（廉价 Arc clone）。
+- 滚动偏移由 `MouseWheel` 事件自动更新，不需要手动管理。
+- 渲染时自动应用 `canvas.translate(0, -offset)` 进行视口平移。
+- 命中测试 (`hit_test`) 自动加上 scroll offset，保证点击坐标正确映射。
+
+### 3.9 remember 与 remember_at_key — 状态持久化
+
+**类比**: Compose 的 `remember { mutableStateOf(...) }`
+
+`remember` 是 Winia 中跨组合（compose）持久化状态的核心原语。每次调用 `compose()` 时，slot 系统会匹配 key，返回上一次的同一个实例。
+
+```rust
+// 基本用法
+let count = ctx.remember(|| 0i32);
+
+// 状态管理
+let show_window = ctx.remember(|| false);
+let scroll_state = ctx.remember(|| ScrollState::new()).get();
+let focus_req = ctx.remember(|| FocusRequester::new()).get();
+```
+
+**内部机制**:
+1. `remember` 为每个调用分配递增的 `remember_counter` 作为 slot key
+2. 在 SlotTable 中查找 key → 存在则返回已有的 `State<T>`
+3. 不存在则执行 `init` 创建新 `State<T>` 并存入 slot
+4. slot 跨 compose 保持，直到对应的 composable 被移除
+
+**跨分支持久化陷阱**:
+
+`remember` 的 key 由 `remember_counter` 决定。如果同一个 composable 在不同分支中（如 `if`/`else`）的 `remember` 调用次数不同，后续 compose 中 key 会偏移，导致状态丢失。
+
+```rust
+// ❌ 问题代码：show_alt 分支改变 remember_counter
+let show_window = ctx.remember(|| false);
+if show_alt.get() {
+    ctx.remember(|| "alt");  // ← 消耗了一个 key
+} else {
+    // else 分支没有 remember，key 少了一个
+    Button::new()...build(ctx, |ctx| { ... });  // ← Button 内部有 remember
+}
+// 这里 ctx.remember(|| 0u64) 的 key 取决于 show_alt →
+// 结果：每次 show_alt 变化时，这个 remember 得到不同的 key，
+// 导致旧的 State 找不到，值重置为 0！
+```
+
+**解决方案：`remember_at_key`**
+
+```rust
+// ✅ 固定 key 存储，不受分支影响
+let created_id = ctx.remember_at_key(u64::MAX, || 0u64);
+```
+
+`remember_at_key(key, init)` 使用指定的固定 key 存储状态，而非自动递增的 `remember_counter`。适合需要跨分支稳定持久化的关键值，如窗口句柄、组件 ID 等。
+
+**何时使用**:
+| 场景 | 使用 |
+|------|------|
+| 普通状态（计数、开关） | `ctx.remember(|| ...)` |
+| 跨分支稳定持久化 | `ctx.remember_at_key(fixed_key, || ...)` |
+| 引用外部 State | 直接传入 `State::new(...)` |
+
+
 ---
 
 ## 四、模块目录结构

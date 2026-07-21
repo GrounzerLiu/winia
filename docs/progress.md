@@ -114,7 +114,7 @@
 | layout | 8 |
 | ui | 5 |
 | input/focus | 3 |
-| **总计** | **27** |
+| **总计** | **31** |
 
 ### 1.13 workspace 结构
 ```
@@ -161,7 +161,7 @@ D:\Projects\winia\
 | 问题 | 影响 |
 |------|------|
 | LazyColumn 未实现 | 长列表无法虚拟滚动 |
-| ScrollArea 未实现 | 内容超出窗口无法滚动 |
+| ~~ScrollArea~~ 已完成 | `vertical_scroll(ScrollState)` 修饰符 |
 | 没有 `Spacer` / `Divider` composable | — |
 
 ### 2.4 输入事件
@@ -176,7 +176,7 @@ D:\Projects\winia\
 | 问题 | 影响 |
 |------|------|
 | 无 Shift+Tab 反向遍历 | — |
-| `request_focus` 依赖 debug-server feature | 非 debug 模式不工作 |
+| ~~request_focus 依赖 debug~~ | 已修复：APP_PROXY 唤醒 + focused_id 同步 |
 | 焦点环样式不可配 | 硬编码蓝色 |
 | 无 `onFocusChanged` 回调 | — |
 
@@ -203,8 +203,8 @@ D:\Projects\winia\
 - [ ] `Image` / `Scaffold` / `Dialog`
 
 ### 3.2 布局
-- [ ] `LazyColumn` / `LazyRow` — 虚拟滚动
-- [ ] `ScrollArea` — 滚动容器
+- [ ] `LazyColumn` / `LazyRow` — 虚拟滚动（有 ScrollState 基础）
+- [x] `ScrollArea` — `vertical_scroll(ScrollState)` 修饰符
 
 ### 3.3 主题系统
 - [ ] 颜色方案（继承 `material_color_utilities`）
