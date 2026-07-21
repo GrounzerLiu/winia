@@ -153,6 +153,10 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
                     }
                 }
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                // PointerButton 可能通过 FocusRequester 改变了焦点，同步 focused_id
+                if let Some(root) = pw.composer.layout_root_mut() {
+                    pw.focused_id = crate::layout::node::get_focus_id(root);
+                }
             }
             WindowEvent::KeyboardInput { event, .. } if event.state.is_pressed() => {
                 if matches!(&event.logical_key, Key::Named(NamedKey::Tab)) {
