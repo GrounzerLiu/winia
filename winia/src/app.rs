@@ -153,7 +153,9 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
                     }
                 }
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
-                // PointerButton 可能通过 FocusRequester 改变了焦点，同步并唤醒
+                // 确保在 Wait 模式下 request_redraw 也能触发 RedrawRequested
+                event_loop.set_control_flow(ControlFlow::Poll);
+                // PointerButton 可能通过 FocusRequester 改变了焦点
                 if let Some(root) = pw.composer.layout_root_mut() {
                     pw.focused_id = crate::layout::node::get_focus_id(root);
                 }
