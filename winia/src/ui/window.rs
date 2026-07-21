@@ -1,11 +1,18 @@
 use crate::app;
 use crate::prelude::*;
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 
-/// 全局已创建窗口 ID 集合。每次 compose 检查：窗口被 × 关闭后，
-/// `CREATED` 中 id 被移除 → 下次 rebuild 时重新创建新窗。
+thread_local! {
+    /// Window::build 成功后设置，compose 末尾检测
+    static WINDOW_REBUILT: Cell<bool> = const { Cell::new(false) };
+    /// on_remove 推入的待关闭窗口 id
+    static PENDING_REMOVE_ID: Cell<u64> = const { Cell::new(0) };
+}
+
+/// 全局已创建窗口 ID 集合。
 pub(crate) static CREATED: LazyLock<Mutex<HashSet<u64>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -48,26 +55,52 @@ impl Window {
         self
     }
 
+    /// 在 compose 末尾调用，检测是否有关闭窗口需求
+    pub(crate) fn process_detached(windows: &mut std::collections::HashMap<winit::window::WindowId, crate::app::PerWindow>,
+                                   event_loop: &dyn winit::event_loop::ActiveEventLoop,
+                                   force_shutdown: &dyn Fn()) {
+        let wid = PENDING_REMOVE_ID.get();
+        if wid == 0 { return; }
+        PENDING_REMOVE_ID.set(0);
+        let rebuilt = WINDOW_REBUILT.get();
+        WINDOW_REBUILT.set(false);
+        if rebuilt { return; } // Window::build 被调用了 → 不关闭
+
+        // Window::build 没被调用 → 关闭
+        if !CREATED.lock().unwrap().contains(&wid) { return; }
+        CREATED.lock().unwrap().remove(&wid);
+        let to_close: Vec<winit::window::WindowId> = windows.iter()
+            .filter(|(_, pw)| pw.created_id() == Some(wid))
+            .map(|(wid2, _)| *wid2)
+            .collect();
+        for w in to_close {
+            if let Some(mut pw) = windows.remove(&w) {
+                if let Some(ref mut cb) = pw.on_close { cb(); }
+                for pw2 in windows.values() {
+                    if let Some(ref sw) = pw2.skia_window { sw.request_redraw(); }
+                }
+                if windows.is_empty() { force_shutdown(); event_loop.exit(); }
+            }
+        }
+    }
+
     pub fn build(self, ctx: &mut ComposeCtx, content: impl Fn(&mut ComposeCtx) + Send + 'static) {
-        // created_id 在父 slot 中持久化，不受 if 分支影响
         let created_id = ctx.remember(|| 0u64);
 
-        // 创建自己的 slot+layout node，on_remove 在节点被清理时触发
+        // on_remove 设置待关闭 id，compose 末尾检测
         let cid = created_id.clone();
         let key = ctx.next_key();
         ctx.start_leaf_with_remove(key, Modifier::new(), Box::new(move || {
             let wid = cid.get();
             if wid != 0 && CREATED.lock().unwrap().contains(&wid) {
-                // 窗口还在 CREATED 中但节点已被清理 → if 变为 false
-                app::close_window_by_id(wid);
+                PENDING_REMOVE_ID.with(|p| p.set(wid));
             }
         }));
 
         let wid = created_id.get();
-        // 每次 rebuild 都清除旧节点 on_remove 推入的 CLOSE_QUEUED
-        if wid != 0 { crate::app::cancel_close(wid); }
+        let need_new = wid == 0 || !CREATED.lock().unwrap().contains(&wid);
 
-        if wid == 0 || !CREATED.lock().unwrap().contains(&wid) {
+        if need_new {
             let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
             created_id.set(id);
             CREATED.lock().unwrap().insert(id);
@@ -88,5 +121,8 @@ impl Window {
         }
 
         ctx.end_node();
+
+        // end_node 后：标记 Window::build 已被调用
+        WINDOW_REBUILT.with(|r| r.set(true));
     }
 }
