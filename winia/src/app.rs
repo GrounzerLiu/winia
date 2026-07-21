@@ -178,8 +178,10 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
                     if let Some(r) = pw.composer.layout_root_mut() { crate::layout::node::focus_by_id(r, fid); }
                 }
                 pw.composer.layout(Constraints::new(0.0, pw.width, 0.0, pw.height));
-                // 检查 compose 后是否有待关闭窗口，有则唤醒 proxy 消费
-                if crate::ui::window::Window::has_pending_close() { debug::wake(); }
+                // 检查 compose 后是否有待关闭窗口，有则唤醒事件循环消费
+                if crate::ui::window::Window::has_pending_close() {
+                    if let Some(ref proxy) = *APP_PROXY.lock().unwrap() { let _ = proxy.wake_up(); }
+                }
                 if let Some(ref mut sw) = pw.skia_window {
                     if let Some(root) = pw.composer.layout_root() {
                         let sf = pw.scale_factor as f32;
