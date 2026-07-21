@@ -67,9 +67,9 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
             return;
         }
         AppState::process_pending_windows(self, event_loop);
-        // 处理 close_window_by_id 请求
-        for cid in CLOSE_QUEUED.lock().unwrap().drain(..) {
-            crate::ui::window::CREATED.lock().unwrap().remove(&cid);
+        // 处理 close_window_by_id 请求（先 drain 再处理，避免持锁调用 cb）
+        let queue = std::mem::take(&mut *CLOSE_QUEUED.lock().unwrap());
+        for cid in queue {
             let to_close: Vec<WindowId> = self.windows.iter()
                 .filter(|(_, pw)| pw.created_id() == Some(cid))
                 .map(|(wid, _)| *wid)
@@ -126,6 +126,7 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
                 }
             }
             WindowEvent::Destroyed => {
+                if let Some(cid) = pw.created_id { crate::ui::window::CREATED.lock().unwrap().remove(&cid); }
                 self.windows.remove(&window_id);
                 for pw in self.windows.values() {
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
