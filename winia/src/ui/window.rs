@@ -6,10 +6,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 
 thread_local! {
-    /// Window::build 成功后设置，compose 末尾检测
+    /// compose 末尾检测 Window::build 是否被调用
     static WINDOW_REBUILT: Cell<bool> = const { Cell::new(false) };
     /// on_remove 推入的待关闭窗口 id
     static PENDING_REMOVE_ID: Cell<u64> = const { Cell::new(0) };
+}
+
+/// 在 compose 开头调用，重置生命周期标志
+pub(crate) fn reset_lifecycle_flags() {
+    WINDOW_REBUILT.with(|r| r.set(false));
+    PENDING_REMOVE_ID.with(|p| p.set(0));
 }
 
 /// 全局已创建窗口 ID 集合。
@@ -61,9 +67,7 @@ impl Window {
                                    force_shutdown: &dyn Fn()) {
         let wid = PENDING_REMOVE_ID.get();
         if wid == 0 { return; }
-        PENDING_REMOVE_ID.set(0);
         let rebuilt = WINDOW_REBUILT.get();
-        WINDOW_REBUILT.set(false);
         if rebuilt { return; } // Window::build 被调用了 → 不关闭
 
         // Window::build 没被调用 → 关闭

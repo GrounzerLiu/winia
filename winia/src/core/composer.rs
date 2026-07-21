@@ -338,6 +338,8 @@ impl Composer {
         self.layout_nodes.clear();
         self.node_stack.clear();
         self.layout_root = None;
+        // 重置 Window 生命周期标志（compose 开头，确保 process_detached 只读）
+        crate::ui::window::reset_lifecycle_flags();
 
         // 消费 global dirty → 标记对应 slot 为脏
         let pending = crate::core::state::take_pending_states();
