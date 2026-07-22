@@ -188,6 +188,7 @@ impl ApplicationHandler for AppState {
                             if let ModifierElement::Clickable { on_click } = el { on_click(); handled = true; break; }
                         }
                     }
+                    eprintln!("[click] handled={} pos=({:.0},{:.0})", handled, lp.x, lp.y);
                 }
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 // 确保在 Wait 模式下 request_redraw 也能触发 RedrawRequested
