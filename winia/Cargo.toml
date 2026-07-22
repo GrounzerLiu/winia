@@ -17,7 +17,7 @@ parking_lot = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }
 skia-safe = { workspace = true }
-tokio = { version = "1", features = ["rt-multi-thread"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 material-colors = "0.4"
 dark-light = "2.0"
 

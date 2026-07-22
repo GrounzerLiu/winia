@@ -9,6 +9,7 @@
 use crate::core::composer::ComposeCtx;
 use std::sync::Arc;
 use std::sync::Mutex;
+use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 
 // ═══════════════════════════════════════════════════════════
@@ -18,16 +19,17 @@ use tokio::task::JoinHandle;
 /// 组合生命周期绑定的协程作用域——dispose 时自动取消所有未完成任务。
 pub struct CoroutineScope {
     handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    rt: Handle,
 }
 
 impl Clone for CoroutineScope {
-    fn clone(&self) -> Self { Self { handles: Arc::clone(&self.handles) } }
+    fn clone(&self) -> Self { Self { handles: Arc::clone(&self.handles), rt: self.rt.clone() } }
 }
 
 impl CoroutineScope {
     /// 启动一个协程。当此 composable 离开组合树时，任务会被自动 abort。
     pub fn spawn(&self, fut: impl std::future::Future<Output = ()> + Send + 'static) {
-        let handle = tokio::spawn(fut);
+        let handle = self.rt.spawn(fut);
         let mut h = self.handles.lock().unwrap();
         h.retain(|jh| !jh.is_finished());
         h.push(handle);
@@ -38,8 +40,9 @@ impl CoroutineScope {
 /// 在 composable 函数中调用，返回的 scope 可 clone 后传入异步回调。
 pub fn remember_coroutine_scope(ctx: &mut ComposeCtx) -> CoroutineScope {
     let scope: CoroutineScope = ctx.remember(|| {
+        let rt = Handle::try_current().expect("remember_coroutine_scope requires an active tokio runtime. Start one with `tokio::runtime::Runtime::new()` before calling `run_app`.");
         let handles = Arc::new(Mutex::new(Vec::new()));
-        CoroutineScope { handles }
+        CoroutineScope { handles, rt }
     }).get();
 
     let handles_clone = Arc::clone(&scope.handles);
@@ -76,7 +79,7 @@ impl<T: PartialEq + Clone + Send + 'static> LaunchedEffect<T> {
     pub fn build(
         self,
         ctx: &mut ComposeCtx,
-        block: impl Fn(CoroutineScope) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync + 'static,
+        block: impl FnOnce(CoroutineScope) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + 'static,
     ) {
         let scope = remember_coroutine_scope(ctx);
 
@@ -90,7 +93,6 @@ impl<T: PartialEq + Clone + Send + 'static> LaunchedEffect<T> {
         };
 
         if key_changed {
-            // 取消旧任务
             {
                 let mut s = state_clone.lock().unwrap();
                 if let Some(h) = s.abort_handle.take() {
@@ -98,9 +100,8 @@ impl<T: PartialEq + Clone + Send + 'static> LaunchedEffect<T> {
                 }
             }
 
-            // 启动新任务
             let fut = block(scope.clone());
-            let join_handle = tokio::spawn(fut);
+            let join_handle = scope.rt.spawn(fut);
             {
                 let mut s = state_clone.lock().unwrap();
                 s.abort_handle = Some(join_handle.abort_handle());
