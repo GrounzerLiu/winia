@@ -108,18 +108,19 @@ impl Button {
         let theme = crate::ui::theme::WiniaTheme::colors();
 
         // 根据 style 在最内层插入主题默认背景/边框
+        // fill_max_size 确保按钮填满用户指定的 size / 父容器空间
         let mut modifier = match self.style {
             ButtonStyle::Filled => {
-                Modifier::new().background(theme.primary, Shape::rounded(20.0))
+                Modifier::new().fill_max_size().background(theme.primary, Shape::rounded(20.0))
             }
             ButtonStyle::Tonal => {
-                Modifier::new().background(theme.secondary_container, Shape::rounded(20.0))
+                Modifier::new().fill_max_size().background(theme.secondary_container, Shape::rounded(20.0))
             }
             ButtonStyle::Outlined => {
-                Modifier::new().border(1.0, theme.outline, Shape::rounded(20.0))
+                Modifier::new().fill_max_size().border(1.0, theme.outline, Shape::rounded(20.0))
             }
             ButtonStyle::Text => {
-                Modifier::new() // 无背景、无边框
+                Modifier::new().fill_max_size()
             }
         };
 
