@@ -42,11 +42,11 @@ fn effect_demo_ui(ctx: &mut ComposeCtx) {
             // LaunchedEffect: count 变化时启动异步任务
             // ═══════════════════════════════════════
             let c1 = count.clone();
-            LaunchedEffect::new(count.get()).build(ctx, move |_scope| Box::pin(async move {
+            LaunchedEffect::new(count.get()).build(ctx, move |_scope| async move {
                 println!("[LaunchedEffect] count changed to: {}", c1.get());
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 println!("[LaunchedEffect] async work done for count={}", c1.get());
-            }));
+            });
 
             Text::new(format!("Count: {}", count.get()))
                 .font_size(28.0)
@@ -66,10 +66,10 @@ fn effect_demo_ui(ctx: &mut ComposeCtx) {
                         let s = scope.clone();
                         move || {
                             let c2 = c.clone();
-                            s.spawn(Box::pin(async move {
+                            s.spawn(async move {
                                 tokio::time::sleep(Duration::from_millis(500)).await;
                                 c2.update(|v| *v += 10);
-                            }));
+                            });
                         }
                     })
                     .style(ButtonStyle::Tonal)

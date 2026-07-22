@@ -79,10 +79,10 @@ impl<T: PartialEq + Clone + Send + 'static> LaunchedEffect<T> {
     /// 创建一个 key 为 `()` 的 LaunchedEffect——只在首次组合时执行一次。
     pub fn unit() -> LaunchedEffect<()> { LaunchedEffect { key: () } }
 
-    pub fn build(
+    pub fn build<F: std::future::Future<Output = ()> + Send + 'static>(
         self,
         ctx: &mut ComposeCtx,
-        block: impl FnOnce(CoroutineScope) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + 'static,
+        block: impl FnOnce(CoroutineScope) -> F + Send + 'static,
     ) {
         let scope = remember_coroutine_scope(ctx);
 
