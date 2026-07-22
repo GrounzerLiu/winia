@@ -4,7 +4,7 @@
 
 use super::constraints::Constraints;
 use super::node::*;
-use super::column::measure_node;
+use super::node::measure_node;
 
 /// Box 布局策略 — 子节点层叠排列
 ///

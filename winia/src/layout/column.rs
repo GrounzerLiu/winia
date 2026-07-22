@@ -4,7 +4,6 @@
 
 use super::constraints::Constraints;
 use super::node::*;
-use crate::modifier::ModifierElement;
 
 /// Column 布局策略
 #[derive(Debug, Clone)]
@@ -84,7 +83,6 @@ impl MeasurePolicy for ColumnLayout {
             self.arrangement,
             remaining_height,
             gap_count,
-            &final_heights,
         );
 
         // 第二次遍历：确定每个子节点的放置
@@ -134,180 +132,6 @@ impl MeasurePolicy for ColumnLayout {
     }
 }
 
-// ── 辅助函数 ──
-
-/// 计算布局方案中的 spacing 和 leading space
-fn compute_spacing(
-    arrangement: Arrangement,
-    remaining: f32,
-    gap_count: usize,
-    _sizes: &[f32],
-) -> (f32, f32) {
-    match arrangement {
-        Arrangement::Start => (0.0, 0.0),
-        Arrangement::End => (0.0, remaining),
-        Arrangement::Center => (0.0, remaining / 2.0),
-        Arrangement::SpaceBetween => {
-            if gap_count > 0 {
-                (remaining / gap_count as f32, 0.0)
-            } else {
-                (0.0, remaining / 2.0)
-            }
-        }
-        Arrangement::SpaceAround => {
-            if gap_count > 0 {
-                let space = remaining / (gap_count + 1) as f32;
-                (space, space)
-            } else {
-                (0.0, remaining / 2.0)
-            }
-        }
-        Arrangement::SpaceEvenly => {
-            let total_gaps = gap_count + 2; // 前后也有间距
-            if total_gaps > 0 {
-                let space = remaining / total_gaps as f32;
-                (space, space)
-            } else {
-                (0.0, remaining / 2.0)
-            }
-        }
-    }
-}
-
-/// 递归测量节点（处理 modifier 中的约束并调用子节点的 measure_policy）
-pub(crate) fn measure_node(
-    node: &mut LayoutNode,
-    constraints: Constraints,
-) -> (Size, Vec<Placement>) {
-    // 应用 modifier 中的 Layout 约束
-    let mut inner_constraints = constraints;
-    let mut pad_x = 0.0;
-    let mut pad_y = 0.0;
-
-    for el in node.modifier.elements() {
-        match el {
-            ModifierElement::Size { width, height } => {
-                use crate::modifier::Dimension;
-                if let Dimension::Fixed(w) = width {
-                    inner_constraints = inner_constraints.tighten_width(*w);
-                }
-                if let Dimension::Fixed(h) = height {
-                    inner_constraints = inner_constraints.tighten_height(*h);
-                }
-            }
-            ModifierElement::Padding { all } => {
-                let p = *all;
-                pad_x += p; pad_y += p;
-                inner_constraints = inner_constraints.offset(p * 2.0, p * 2.0);
-            }
-            ModifierElement::PaddingHorizontal { value } => {
-                pad_x += value;
-                inner_constraints = inner_constraints.offset(value * 2.0, 0.0);
-            }
-            ModifierElement::PaddingVertical { value } => {
-                pad_y += value;
-                inner_constraints = inner_constraints.offset(0.0, value * 2.0);
-            }
-            ModifierElement::FillMaxWidth => {
-                inner_constraints.min_width = inner_constraints.max_width;
-            }
-            ModifierElement::FillMaxHeight => {
-                inner_constraints.min_height = inner_constraints.max_height;
-            }
-            ModifierElement::FillMaxSize => {
-                inner_constraints.min_width = inner_constraints.max_width;
-                inner_constraints.min_height = inner_constraints.max_height;
-            }
-            _ => {}
-        }
-    }
-
-    // 检查是否包含 scroll 修饰符——给子节点无限约束
-    let node_is_scroll_v = node.modifier.elements().iter().any(|el| matches!(el, ModifierElement::VerticalScroll { .. }));
-    let node_is_scroll_h = node.modifier.elements().iter().any(|el| matches!(el, ModifierElement::HorizontalScroll { .. }));
-    if node_is_scroll_v {
-        inner_constraints.max_height = f32::MAX;
-    }
-    if node_is_scroll_h {
-        inner_constraints.max_width = f32::MAX;
-    }
-
-    // 实际测量
-    if let Some(ref policy) = node.measure_policy {
-        let (size, placements) = {
-            let children = &mut node.children;
-            policy.measure(children, inner_constraints)
-        };
-        // apply positions
-        policy.place(&mut node.children, &placements);
-        // apply padding offset
-        if pad_x != 0.0 || pad_y != 0.0 {
-            for child in &mut node.children {
-                child.position.x += pad_x;
-                child.position.y += pad_y;
-            }
-        }
-        node.measured_size = size;
-        (size, placements)
-    } else {
-        // 叶子节点
-        // 检查是否有 TextContent（文字节点需要根据字体测量尺寸）
-        let mut text_content: Option<(&str, f32)> = None;
-        for el in node.modifier.elements() {
-            if let ModifierElement::TextContent { content, font_size, .. } = el {
-                text_content = Some((content.as_str(), *font_size));
-                break;
-            }
-        }
-
-        let (width, height) = if let Some((content, font_size)) = text_content {
-            // 用 Skia Paragraph 测量文字尺寸
-            let max_w = if inner_constraints.has_fixed_width() {
-                inner_constraints.max_width
-            } else {
-                f32::MAX
-            };
-            measure_text_size(content, font_size, max_w)
-        } else {
-            // 普通叶子节点
-            let w = inner_constraints.constrain_width(
-                if inner_constraints.has_fixed_width() {
-                    inner_constraints.min_width
-                } else {
-                    0.0
-                },
-            );
-            let h = inner_constraints.constrain_height(
-                if inner_constraints.has_fixed_height() {
-                    inner_constraints.min_height
-                } else {
-                    0.0
-                },
-            );
-            (w, h)
-        };
-
-        node.measured_size = Size::new(width, height);
-        (node.measured_size, Vec::new())
-    }
-}
-
-/// 使用 Skia Paragraph 测量文本的尺寸
-fn measure_text_size(text: &str, font_size: f32, _max_width: f32) -> (f32, f32) {
-    use skia_safe::textlayout::{FontCollection, ParagraphBuilder, ParagraphStyle, TextStyle};
-    let para_style = ParagraphStyle::new();
-    let mut text_style = TextStyle::new();
-    text_style.set_font_size(font_size);
-    let mut fc = FontCollection::new();
-    fc.set_default_font_manager(skia_safe::FontMgr::default(), None);
-    let mut builder = ParagraphBuilder::new(&para_style, &fc);
-    builder.push_style(&text_style);
-    builder.add_text(text);
-    let mut para = builder.build();
-    // 先 layout 到很大宽度（避免换行），再用 intrinsic width 确定实际宽度
-    para.layout(10000.0);
-    (para.max_intrinsic_width().ceil(), para.height().ceil())
-}
 
 #[cfg(test)]
 mod tests {
@@ -371,7 +195,7 @@ mod tests {
             make_leaf(100.0, 20.0),
         ];
 
-        let (size, placements) = column.measure(
+        let (_size, placements) = column.measure(
             &mut children,
             Constraints::UNBOUNDED,
         );

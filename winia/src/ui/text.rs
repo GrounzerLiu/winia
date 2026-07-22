@@ -63,8 +63,8 @@ pub struct Text {
     modifier: Modifier,
     /// 字体大小（逻辑像素）
     font_size: f32,
-    /// 文本颜色
-    color: Color,
+    /// 文本颜色（None = 自动使用主题 on_surface）
+    color: Option<Color>,
     /// 最大行数（超出按 overflow 处理）
     max_lines: usize,
     /// 文本对齐
@@ -80,16 +80,16 @@ impl Text {
             content: content.into(),
             modifier: Modifier::new(),
             font_size: 14.0,
-            color: Color::BLACK,
+            color: None,
             max_lines: usize::MAX,
             text_align: TextAlign::default(),
             overflow: TextOverflow::default(),
         }
     }
 
-    /// 设置修饰符链
+    /// 设置修饰符链（追加到已有 modifier）
     pub fn modifier(mut self, modifier: Modifier) -> Self {
-        self.modifier = modifier;
+        self.modifier = self.modifier.then(modifier);
         self
     }
 
@@ -99,9 +99,9 @@ impl Text {
         self
     }
 
-    /// 设置文本颜色
+    /// 设置文本颜色（覆盖主题默认值）
     pub fn color(mut self, color: Color) -> Self {
-        self.color = color;
+        self.color = Some(color);
         self
     }
 
@@ -128,10 +128,17 @@ impl Text {
         let key = ctx.next_key();
 
         // 将文本内容附加到 modifier（每次组合都使用最新的 self.content）
+        let resolved_color = self.color.unwrap_or_else(|| {
+            crate::ui::theme::WiniaTheme::colors().on_surface
+        });
+
         let modifier = self.modifier.push(ModifierElement::TextContent {
             content: self.content,
             font_size: self.font_size,
-            color: self.color,
+            color: resolved_color,
+            max_lines: self.max_lines,
+            align: self.text_align,
+            overflow: self.overflow,
         });
 
         // 注册为叶子布局节点
@@ -146,7 +153,7 @@ impl Text {
     pub fn get_font_size(&self) -> f32 {
         self.font_size
     }
-    pub fn get_color(&self) -> Color {
+    pub fn get_color(&self) -> Option<Color> {
         self.color
     }
     pub fn get_text_align(&self) -> TextAlign {
@@ -172,7 +179,7 @@ mod tests {
         let text = Text::new("hello");
         assert_eq!(text.get_content(), "hello");
         assert_eq!(text.get_font_size(), 14.0);
-        assert_eq!(text.get_color(), Color::BLACK);
+        assert_eq!(text.get_color(), None);
         assert_eq!(text.get_text_align(), TextAlign::Left);
         assert_eq!(text.get_max_lines(), usize::MAX);
     }
@@ -189,7 +196,7 @@ mod tests {
 
         assert_eq!(text.get_content(), "hello world");
         assert_eq!(text.get_font_size(), 24.0);
-        assert_eq!(text.get_color(), Color::RED);
+        assert_eq!(text.get_color(), Some(Color::RED));
         assert_eq!(text.get_text_align(), TextAlign::Center);
         assert_eq!(text.get_overflow(), TextOverflow::Ellipsis);
         assert_eq!(text.get_max_lines(), 3);

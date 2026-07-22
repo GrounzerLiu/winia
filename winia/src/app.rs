@@ -6,7 +6,15 @@ use crate::layout::constraints::Constraints;
 use crate::layout::node::{hit_test, focus_next, LayoutNode};
 use crate::modifier::ModifierElement;
 use crate::render;
-pub(crate) type PendingItem = (f32, f32, Option<Box<dyn Fn(&mut ComposeCtx) + Send>>, Option<Box<dyn FnMut() + Send>>, Option<u64>);
+pub(crate) struct PendingWindow {
+    pub width: f32,
+    pub height: f32,
+    pub title: String,
+    pub content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>,
+    pub on_close: Option<Box<dyn FnMut() + Send>>,
+    pub created_id: Option<u64>,
+    pub theme: Option<crate::ui::theme::ThemeColors>,
+}
 use skiwin::{SkiaWindowTrait, vulkan::VulkanSkiaWindow};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -27,29 +35,58 @@ pub(crate) struct PerWindow {
     pub(crate) content: Box<dyn Fn(&mut ComposeCtx)>,
     pub(crate) on_close: Option<Box<dyn FnMut() + Send>>,
     pub(crate) created_id: Option<u64>,
+    theme: crate::ui::theme::ThemeColors,
 }
 
 impl PerWindow {
-    fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32) -> Self {
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None }
+    fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::ui::theme::ThemeColors) -> Self {
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
+
+    /// 增量重组 → 恢复焦点 → 布局 → 渲染（供 RedrawRequested 使用）
+    fn recompose_layout_render(&mut self, after_draw: impl FnOnce(&LayoutNode, &mut skia_safe::Surface)) {
+        self.composer.recompose(|ctx| (self.content)(ctx));
+        if let Some(fid) = self.focused_id {
+            if let Some(r) = self.composer.layout_root_mut() {
+                crate::layout::node::focus_by_id(r, fid);
+            }
+        }
+        self.composer.layout(Constraints::new(0.0, self.width, 0.0, self.height));
+
+        let bg = self.theme.background;
+
+        if let Some(ref mut sw) = self.skia_window {
+            if let Some(root) = self.composer.layout_root() {
+                let sf = self.scale_factor as f32;
+                sw.draw(|surface| {
+                    let canvas = surface.canvas();
+                    canvas.clear(skia_safe::Color::from_argb(bg.a, bg.r, bg.g, bg.b));
+                    canvas.save();
+                    canvas.scale((sf, sf));
+                    render::render(root, canvas);
+                    canvas.restore();
+                    after_draw(root, surface);
+                });
+            }
+        }
+    }
 }
 
 // ── AppState ──
 
-struct AppState<F> where F: Fn(&mut ComposeCtx) + Send + Sync + 'static {
-    /// 根 composable（每个窗口独立执行）
-    content: F,
+struct AppState {
     /// 已创建的窗口
     windows: HashMap<WindowId, PerWindow>,
     /// 待创建的窗口（由 Window composable 排队）
-    pending_content: Vec<PendingItem>,
+    pending_content: Vec<PendingWindow>,
     /// 父窗口 ID（用于 is_parent 判断，不依赖 HashMap 顺序）
     parent_window_id: Option<WindowId>,
+    /// 初始化回调（仅首次调用，用于声明式创建主窗口）
+    init: Option<Box<dyn FnOnce(&mut ComposeCtx)>>,
 }
 
-impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send + Sync + Clone + 'static {
+impl ApplicationHandler for AppState {
         fn new_events(&mut self, event_loop: &dyn ActiveEventLoop, _cause: StartCause) {
         event_loop.set_control_flow(ControlFlow::Wait);
     }
@@ -179,32 +216,34 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
                 if let Some(ref mut sw) = pw.skia_window { sw.resize(); }
             }
             WindowEvent::RedrawRequested => {
-                // compose → layout → render
-                pw.composer.compose(|ctx| (pw.content)(ctx));
-                if let Some(fid) = pw.focused_id {
-                    if let Some(r) = pw.composer.layout_root_mut() { crate::layout::node::focus_by_id(r, fid); }
+                // 消费焦点请求（在 compose 前处理，避免丢失）
+                for id in crate::modifier::take_focus_requests() {
+                    if let Some(root) = pw.composer.layout_root_mut() {
+                        if crate::layout::node::focus_by_id(root, id) {
+                            pw.focused_id = Some(id);
+                        }
+                    }
+                    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 }
-                pw.composer.layout(Constraints::new(0.0, pw.width, 0.0, pw.height));
-                // 检查 compose 后是否有待关闭窗口，有则唤醒事件循环消费
+                // 增量重组 → 布局 → 渲染
+                let w = pw.width;
+                let h = pw.height;
+                let sf = pw.scale_factor as f32;
+                pw.recompose_layout_render(|root, surface| {
+                    debug::update_tree(&debug::build_tree_json(root));
+                    if debug::screenshot_requested() {
+                        let (pw2, ph2) = ((w * sf) as i32, (h * sf) as i32);
+                        let info = skia_safe::ImageInfo::new((pw2, ph2), skia_safe::ColorType::RGBA8888, skia_safe::AlphaType::Premul, None);
+                        let mut pixels = vec![0u8; (pw2 * ph2 * 4) as usize];
+                        if surface.read_pixels(&info, &mut pixels, pw2 as usize * 4, (0, 0)) {
+                            debug::update_pixels(&pixels, pw2 as u32, ph2 as u32);
+                        }
+                        debug::screenshot_done();
+                    }
+                });
+                // 检查 compose 后是否有待关闭窗口
                 if crate::ui::window::Window::has_pending_close() {
                     if let Some(ref proxy) = *APP_PROXY.lock().unwrap() { let _ = proxy.wake_up(); }
-                }
-                if let Some(ref mut sw) = pw.skia_window {
-                    if let Some(root) = pw.composer.layout_root() {
-                        let sf = pw.scale_factor as f32;
-                        sw.draw(|surface| {
-                            let canvas = surface.canvas(); canvas.clear(skia_safe::Color::WHITE);
-                            canvas.save(); canvas.scale((sf, sf)); render::render(root, canvas); canvas.restore();
-                            debug::update_tree(&debug::build_tree_json(root));
-                            if debug::screenshot_requested() {
-                                let (pw2, ph2) = ((pw.width*sf) as i32, (pw.height*sf) as i32);
-                                let info = skia_safe::ImageInfo::new((pw2,ph2), skia_safe::ColorType::RGBA8888, skia_safe::AlphaType::Premul, None);
-                                let mut pixels = vec![0u8; (pw2*ph2*4) as usize];
-                                if surface.read_pixels(&info, &mut pixels, pw2 as usize * 4, (0,0)) { debug::update_pixels(&pixels, pw2 as u32, ph2 as u32); }
-                                debug::screenshot_done();
-                            }
-                        });
-                    }
                 }
                 // DevTools 事件（仅父窗口消费，防止多窗口抢）
                 if !is_parent { return; }
@@ -218,7 +257,7 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
                                 let mut click_handled = false;
                                 for node in nodes.iter().rev() {
                                     if click_handled { break; }
-                                    let mod_strs: Vec<String> = node.modifier.elements().iter().map(|el| format!("{:?}", el)).collect();
+                                    let _mod_strs: Vec<String> = node.modifier.elements().iter().map(|el| format!("{:?}", el)).collect();
                                     for el in node.modifier.elements() {
                                         if let ModifierElement::Clickable { on_click } = el { on_click(); handled = true; click_handled = true; break; }
                                     }
@@ -258,47 +297,56 @@ impl<F> ApplicationHandler for AppState<F> where F: Fn(&mut ComposeCtx) + Send +
     }
 }
 
-impl<F> AppState<F> where F: Fn(&mut ComposeCtx) + Send + Sync + Clone {
-    /// 消费 `app::open_window` 排队的窗口请求 + 初始窗口创建
+impl AppState {
+    /// 消费 `app::open_window` 排队的窗口请求 + 首次初始化
     fn process_pending_windows(&mut self, event_loop: &dyn ActiveEventLoop) {
-        let initial: Option<PendingItem> = if self.windows.is_empty() {
-            Some((400.0, 300.0, Some(Box::new(self.content.clone()) as Box<dyn Fn(&mut ComposeCtx) + Send>), None, None))
-        } else { None };
+        // 首次：运行 init 回调收集主窗口创建请求
+        if self.windows.is_empty() {
+            if let Some(init) = self.init.take() {
+                let mut composer = Composer::new();
+                composer.compose(|ctx| init(ctx));
+                // 临时 composer 被 drop，其 on_remove 可能设置 PENDING_REMOVE_ID
+                // 清除副作用，防止主窗口被错误关闭
+                crate::ui::window::reset_lifecycle_flags();
+            }
+        }
 
         for item in take_pending_windows() {
             self.pending_content.push(item);
         }
 
-        if let Some(item) = initial { self.pending_content.insert(0, item); }
-
-        while let Some((w, h, c_opt, on_close, created_id)) = self.pending_content.pop() {
-            let content = c_opt.unwrap_or_else(|| Box::new(|_| {}));
-            self.open_window(event_loop, w, h, content, on_close, created_id);
+        // 消费 pending：创建窗口
+        while self.pending_content.len() > 0 {
+            // drain-like: pop from front
+            let pending = self.pending_content.remove(0);
+            self.open_window(event_loop, pending);
         }
     }
 
-    fn open_window(&mut self, event_loop: &dyn ActiveEventLoop, width: f32, height: f32, content: Box<dyn Fn(&mut ComposeCtx) + Send>, on_close: Option<Box<dyn FnMut() + Send>>, created_id: Option<u64>) {
+    fn open_window(&mut self, event_loop: &dyn ActiveEventLoop, pending: PendingWindow) {
         let mut a = winit::window::WindowAttributes::default();
-        a.title = "Winia".into();
-        a.surface_size = Some(winit::dpi::Size::Logical(winit::dpi::LogicalSize::new(width as f64, height as f64)));
+        a.title = if pending.title.is_empty() { "Winia".into() } else { pending.title.clone() };
+        a.surface_size = Some(winit::dpi::Size::Logical(winit::dpi::LogicalSize::new(pending.width as f64, pending.height as f64)));
         a.visible = false;
         let w = Arc::new(event_loop.create_window(a).expect("window"));
         let window_id = w.id();
         let sf = w.scale_factor();
         let skia_window = VulkanSkiaWindow::new(event_loop, w);
-        // 首次 compose+render
-        let mut pw = PerWindow::new(content, width, height);
-        pw.on_close = on_close;
-        pw.created_id = created_id;
+        let content = pending.content.unwrap_or_else(|| Box::new(|_| {}));
+        let theme = pending.theme.unwrap_or_else(|| crate::ui::theme::ThemeColors::default_light());
+        let mut pw = PerWindow::new(content, pending.width, pending.height, theme);
+        pw.on_close = pending.on_close;
+        pw.created_id = pending.created_id;
         pw.scale_factor = sf;
         pw.skia_window = Some(skia_window);
         pw.composer.compose(|ctx| (pw.content)(ctx));
-        pw.composer.layout(Constraints::new(0.0, width, 0.0, height));
+        pw.composer.layout(Constraints::new(0.0, pending.width, 0.0, pending.height));
+        let bg = pw.theme.background;
         if let Some(ref mut sw) = pw.skia_window {
             if let Some(root) = pw.composer.layout_root() {
                 let sf2 = sf as f32;
                 sw.draw(|surface| {
-                    let canvas = surface.canvas(); canvas.clear(skia_safe::Color::WHITE);
+                    let canvas = surface.canvas(); canvas.clear(skia_safe::Color::from_argb(bg.a, bg.r, bg.g, bg.b));
                     canvas.save(); canvas.scale((sf2, sf2)); render::render(root, canvas); canvas.restore();
                 });
                 sw.set_visible(true);
@@ -315,17 +363,20 @@ impl<F> AppState<F> where F: Fn(&mut ComposeCtx) + Send + Sync + Clone {
 
 // ── 公共 API ──
 
-static GLOBAL_PENDING: std::sync::Mutex<Vec<PendingItem>> = std::sync::Mutex::new(Vec::new());
+static GLOBAL_PENDING: std::sync::Mutex<Vec<PendingWindow>> = std::sync::Mutex::new(Vec::new());
 static APP_PROXY: Mutex<Option<winit::event_loop::EventLoopProxy>> = Mutex::new(None);
 
 pub fn open_window(width: f32, height: f32, content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>) {
-    GLOBAL_PENDING.lock().unwrap().push((width, height, content, None, None));
+    open_window_with_title(width, height, String::new(), content, None, None, None);
+}
+
+pub fn open_window_with_title(width: f32, height: f32, title: String, content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>, on_close: Option<Box<dyn FnMut() + Send>>, created_id: Option<u64>, theme: Option<crate::ui::theme::ThemeColors>) {
+    GLOBAL_PENDING.lock().unwrap().push(PendingWindow { width, height, title, content, on_close, created_id, theme });
     wake_impl();
 }
 
 pub fn open_window_with_close(width: f32, height: f32, content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>, on_close: Option<Box<dyn FnMut() + Send>>, _created_id: Option<u64>) {
-    GLOBAL_PENDING.lock().unwrap().push((width, height, content, on_close, _created_id));
-    wake_impl();
+    open_window_with_title(width, height, String::new(), content, on_close, _created_id, None);
 }
 
 /// 通过声明式 id 请求关闭窗口
@@ -342,16 +393,14 @@ pub fn cancel_close(created_id: u64) {
 static CLOSE_QUEUED: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
 
 pub(crate) fn wake_impl() {
-    // 优先使用 APP_PROXY（独立于 debug-server feature）
     if let Some(ref proxy) = *APP_PROXY.lock().unwrap() {
         let _ = proxy.wake_up();
         return;
     }
-    // 回退到 debug::wake()（当 debug-server 启用时）
     debug::wake();
 }
 
-pub fn take_pending_windows() -> Vec<PendingItem> {
+pub(crate) fn take_pending_windows() -> Vec<PendingWindow> {
     std::mem::take(&mut *GLOBAL_PENDING.lock().unwrap())
 }
 use crate::modifier::Dimension;
@@ -376,20 +425,18 @@ fn apply_scroll_delta(node: &mut LayoutNode, dy: f32) -> bool {
     false
 }
 
-pub fn run_app(content: impl Fn(&mut ComposeCtx) + Clone + Send + Sync + 'static, _width: f32, _height: f32) {
+pub fn run_app(app: impl FnOnce(&mut ComposeCtx) + 'static) {
     let event_loop = EventLoop::new().expect("event loop");
     let proxy = event_loop.create_proxy();
     debug::set_event_loop_proxy(proxy.clone());
     *APP_PROXY.lock().unwrap() = Some(proxy);
     debug::start_server();
-    let state: &'static mut AppState<_> = Box::leak(Box::new(AppState {
-        content,
+    let state = AppState {
+        init: Some(Box::new(app)),
         windows: HashMap::new(),
         pending_content: Vec::new(),
         parent_window_id: None,
-    }));
+    };
     event_loop.run_app(state).expect("run_app");
-    // run_app 返回 = 事件循环已退出
-    // 停止 debug server 线程后进程自然退出
     debug::force_shutdown();
 }

@@ -26,15 +26,6 @@ pub(crate) fn clear_current_composer() {
     CURRENT_COMPOSER.with(|c| *c.borrow_mut() = None);
 }
 
-/// 当在组合上下文中时，执行给定的注册回调
-pub(crate) fn with_current_composer(f: impl FnOnce(*const ())) {
-    CURRENT_COMPOSER.with(|c| {
-        if let Some(ptr) = *c.borrow() {
-            f(ptr);
-        }
-    });
-}
-
 // ── SubscriberId ──
 
 /// 订阅者标识符，用于精确取消订阅。
@@ -231,18 +222,21 @@ impl Drop for Subscription {
 
 // ── 依赖注册桥接 ──
 ///
-/// State::get() 在 compose 期间调用 → record_dep(state_id, slot_key)
-/// State::notify() → notify_state_changed(state_id)
-/// Composer::compose() → consume pending → mark slot dirty
+/// 设计：不用全局 Mutex，改用 thread-local 指针直接写入 Composer 实例的 vec。
+/// Composer::compose() 开始前 set，结束后 clear；State::get() 通过指针写入。
+/// 这消除了 DEP_REGISTRAR + RECORDED_DEPS 两个全局 Mutex。
 
 use parking_lot::Mutex;
 
-static PENDING_STATES: Mutex<Vec<u32>> = Mutex::new(Vec::new());
-static RECORDED_DEPS: Mutex<Vec<(u32, u64)>> = Mutex::new(Vec::new());
-static GLOBAL_DIRTY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-static DEP_REGISTRAR: Mutex<Option<Box<dyn Fn(u32, u64) + Send>>> = Mutex::new(None);
+thread_local! {
+    /// compose 期间指向当前 Composer 的 recorded_deps vec
+    static RECORDING_TARGET: std::cell::RefCell<Option<*mut Vec<(u32, u64)>>> = const { std::cell::RefCell::new(None) };
+}
 
-/// State::notify 调用：记录变化的 state_id
+static PENDING_STATES: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+static GLOBAL_DIRTY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// State::notify 调用：记录变化的 state_id（全局队列，多窗口共享）
 pub(crate) fn notify_state_changed(state_id: u32) {
     PENDING_STATES.lock().push(state_id);
 }
@@ -252,26 +246,31 @@ pub fn take_pending_states() -> Vec<u32> {
     std::mem::take(&mut *PENDING_STATES.lock())
 }
 
-/// Composer 设置依赖注册器：State::get 时调用
-pub fn set_dependency_registrar(f: impl Fn(u32, u64) + Send + 'static) {
-    *DEP_REGISTRAR.lock() = Some(Box::new(f));
+/// 非破坏性检查：是否有待处理的 state 变化
+pub fn has_pending_states() -> bool {
+    !PENDING_STATES.lock().is_empty()
 }
 
-/// Composer 消费：获取本帧记录的依赖
-pub fn take_recorded_deps() -> Vec<(u32, u64)> {
-    std::mem::take(&mut *RECORDED_DEPS.lock())
+// ── 实例化依赖记录（替代全局 RECORDED_DEPS + DEP_REGISTRAR）──
+
+/// Composer 调用：设置当前 compose 的依赖记录目标
+pub(crate) fn set_recording_target(target: *mut Vec<(u32, u64)>) {
+    RECORDING_TARGET.with(|c| *c.borrow_mut() = Some(target));
 }
 
-/// 注册器内部调用：记录 state_id 依赖当前 slot_key
+/// Composer 调用：清除记录目标（compose 结束后）
+pub(crate) fn clear_recording_target() {
+    RECORDING_TARGET.with(|c| *c.borrow_mut() = None);
+}
+
+/// State::get 时调用：向当前 Composer 的 recorded_deps 写入依赖
 pub fn record_dep(state_id: u32, slot_key: u64) {
-    RECORDED_DEPS.lock().push((state_id, slot_key));
-}
-
-/// State::get 中调用：触发依赖注册器
-fn call_registrar(state_id: u32, slot_key: u64) {
-    if let Some(ref reg) = *DEP_REGISTRAR.lock() {
-        reg(state_id, slot_key);
-    }
+    RECORDING_TARGET.with(|c| {
+        if let Some(ptr) = c.borrow().as_ref() {
+            // SAFETY: ptr 在 compose() 期间有效，compose 持有 &mut self
+            unsafe { &mut **ptr }.push((state_id, slot_key));
+        }
+    });
 }
 
 /// 全局脏标志（State::notify 设置）
@@ -283,10 +282,10 @@ pub fn set_global_dirty() {
     GLOBAL_DIRTY.store(true, std::sync::atomic::Ordering::Release);
 }
 
-/// State::get 中调用（旧接口兼容），通过 thread-local 获取当前 slot key
+/// State::get 中调用：若在 compose 上下文中，记录依赖
 pub fn register_dependency(state_id: u32) {
-    crate::core::state::with_current_composer(|_composer_ptr| {
-        // slot_key 由 Composer 在 compose 期间通过 registrar 提供
-        call_registrar(state_id, 0); // slot_key 在 registrar 内部通过 active_slot_key 获取
+    // 通过 thread-local ACTIVE_SLOT_KEY 获取当前 slot key
+    crate::core::composer::with_active_slot_key(|key| {
+        record_dep(state_id, key);
     });
 }

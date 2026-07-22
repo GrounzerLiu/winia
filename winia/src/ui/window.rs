@@ -90,7 +90,7 @@ impl Window {
 
     pub fn build(self, ctx: &mut ComposeCtx, content: impl Fn(&mut ComposeCtx) + Send + 'static) {
         let created_id = ctx.remember_at_key(u64::MAX, || 0u64);
-        let wid = created_id.get();
+        let _wid = created_id.get();
 
         // 创建仅用于 layout + on_remove 的 leaf slot
         // on_remove 中读取 State 最新值（以应对已创建窗口的 id）
@@ -119,11 +119,15 @@ impl Window {
                 CREATED.lock().unwrap().remove(&id_close);
                 if let Some(ref mut f) = on_close { f(); }
             }));
-            app::open_window_with_close(w, h, Some(Box::new(move |ctx| {
-                Column::new().modifier(Modifier::new().padding(8.0)).build(ctx, |ctx| {
-                    content(ctx);
+            let theme_colors = crate::ui::theme::WiniaTheme::colors();
+            let theme_for_window = theme_colors.clone();
+            app::open_window_with_title(w, h, self.state.title.clone(), Some(Box::new(move |ctx| {
+                crate::ui::theme::WiniaTheme::with_theme(theme_colors.clone(), ctx, |ctx| {
+                    Column::new().modifier(Modifier::new().padding(8.0)).build(ctx, |ctx| {
+                        content(ctx);
+                    });
                 });
-            })), wrapped, Some(id));
+            })), wrapped, Some(id), Some(theme_for_window));
         }
 
         ctx.end_node();

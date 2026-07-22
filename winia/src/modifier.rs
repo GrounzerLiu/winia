@@ -123,7 +123,7 @@ pub(crate) enum ModifierElement {
 
     // ── Content 类 ──
     /// 文本内容（由 Text 组件设置，渲染阶段消费）
-    TextContent { content: String, font_size: f32, color: Color },
+    TextContent { content: String, font_size: f32, color: Color, max_lines: usize, align: crate::ui::TextAlign, overflow: crate::ui::TextOverflow },
 
     // ── Input 类 ──
     /// 可点击
@@ -170,6 +170,22 @@ impl Modifier {
     /// 内部方法：追加一个元素并返回新 Modifier
     pub(crate) fn push(mut self, element: ModifierElement) -> Self {
         self.elements.push(element);
+        self
+    }
+
+    /// 合并另一个 Modifier 链的所有元素（追加到末尾）。
+    ///
+    /// 等价于 Compose 的 `Modifier.then(other)`，用于叠加两个独立的 Modifier 链。
+    ///
+    /// # 示例
+    /// ```ignore
+    /// let base = Modifier::new().size(100, 50).background(RED);
+    /// let extra = Modifier::new().padding(8).clickable(|| {});
+    /// let combined = base.then(extra);
+    /// // combined = size(100,50) → background(RED) → padding(8) → clickable
+    /// ```
+    pub fn then(mut self, other: Modifier) -> Self {
+        self.elements.extend(other.elements);
         self
     }
 
@@ -328,6 +344,7 @@ impl Modifier {
 
 impl Modifier {
     /// 遍历所有 Layout 类元素
+    #[allow(dead_code)]
     pub(crate) fn for_each_layout(&self, mut f: impl FnMut(&ModifierElement)) {
         for el in &self.elements {
             if el.is_layout() {
@@ -337,6 +354,7 @@ impl Modifier {
     }
 
     /// 遍历所有 Draw 类元素
+    #[allow(dead_code)]
     pub(crate) fn for_each_draw(&self, mut f: impl FnMut(&ModifierElement)) {
         for el in &self.elements {
             if el.is_draw() {
@@ -346,6 +364,7 @@ impl Modifier {
     }
 
     /// 遍历所有 Input 类元素
+    #[allow(dead_code)]
     pub(crate) fn for_each_input(&self, mut f: impl FnMut(&ModifierElement)) {
         for el in &self.elements {
             if el.is_input() {
@@ -387,6 +406,7 @@ impl Debug for ModifierElement {
 }
 
 impl ModifierElement {
+    #[allow(dead_code)]
     pub fn is_layout(&self) -> bool {
         matches!(
             self,
@@ -401,6 +421,7 @@ impl ModifierElement {
         )
     }
 
+    #[allow(dead_code)]
     pub fn is_draw(&self) -> bool {
         matches!(
             self,
@@ -413,6 +434,7 @@ impl ModifierElement {
         )
     }
 
+    #[allow(dead_code)]
     pub fn is_input(&self) -> bool {
         matches!(
             self,
@@ -458,6 +480,12 @@ impl Default for ScrollState {
 // ── FocusRequester ──
 
 static NEXT_FOCUS_ID: AtomicU64 = AtomicU64::new(1);
+static FOCUS_REQUESTS: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
+
+/// 消费所有排队的焦点请求（供 app.rs RedrawRequested 调用）
+pub(crate) fn take_focus_requests() -> Vec<u64> {
+    std::mem::take(&mut *FOCUS_REQUESTS.lock().unwrap())
+}
 
 /// 焦点请求器——可在代码中调用 request_focus() 让关联组件获得焦点
 #[derive(Debug, Clone)]
@@ -472,8 +500,11 @@ impl FocusRequester {
 
     pub fn id(&self) -> u64 { self.id }
 
-    /// 请求焦点（通过全局注册表查找目标 LayoutNode 并设置焦点）
+    /// 请求焦点。无论是否启用 debug-server，都生效。
+    /// 焦点将在下一帧 RedrawRequested 时应用。
     pub fn request_focus(&self) {
+        FOCUS_REQUESTS.lock().unwrap().push(self.id);
+        // 同时走 debug 通道（兼容旧行为）
         #[cfg(feature = "debug-server")]
         crate::debug::queue_event(crate::debug::DebugEvent::RequestFocus { id: self.id });
     }

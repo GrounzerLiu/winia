@@ -4,7 +4,7 @@
 
 use super::constraints::Constraints;
 use super::node::*;
-use super::column::measure_node;
+use super::node::measure_node;
 
 /// Row 布局策略
 #[derive(Debug, Clone)]
@@ -77,7 +77,7 @@ impl MeasurePolicy for RowLayout {
             child_sizes.iter().map(|s| s.width).collect()
         };
 
-        let (spacing, leading_space) = compute_row_spacing(
+        let (spacing, leading_space) = compute_spacing(
             self.arrangement,
             remaining_width,
             gap_count,
@@ -128,41 +128,6 @@ impl MeasurePolicy for RowLayout {
     }
 }
 
-fn compute_row_spacing(
-    arrangement: Arrangement,
-    remaining: f32,
-    gap_count: usize,
-) -> (f32, f32) {
-    match arrangement {
-        Arrangement::Start => (0.0, 0.0),
-        Arrangement::End => (0.0, remaining),
-        Arrangement::Center => (0.0, remaining / 2.0),
-        Arrangement::SpaceBetween => {
-            if gap_count > 0 {
-                (remaining / gap_count as f32, 0.0)
-            } else {
-                (0.0, remaining / 2.0)
-            }
-        }
-        Arrangement::SpaceAround => {
-            if gap_count > 0 {
-                let space = remaining / (gap_count + 1) as f32;
-                (space, space)
-            } else {
-                (0.0, remaining / 2.0)
-            }
-        }
-        Arrangement::SpaceEvenly => {
-            let total_gaps = gap_count + 2;
-            if total_gaps > 0 {
-                let space = remaining / total_gaps as f32;
-                (space, space)
-            } else {
-                (0.0, remaining / 2.0)
-            }
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -206,7 +171,7 @@ mod tests {
             make_leaf(20.0, 50.0),
         ];
 
-        let (size, placements) = row.measure(
+        let (_size, placements) = row.measure(
             &mut children,
             Constraints::new(0.0, 200.0, 0.0, f32::INFINITY),
         );

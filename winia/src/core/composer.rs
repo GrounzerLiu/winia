@@ -19,6 +19,11 @@ use std::cell::Cell;
 
 thread_local! { static ACTIVE_SLOT_KEY: Cell<u64> = const { Cell::new(0) }; }
 
+/// 读取当前 compose 位置的 slot key（供 state.rs 依赖追踪使用）
+pub(crate) fn with_active_slot_key(f: impl FnOnce(u64)) {
+    ACTIVE_SLOT_KEY.with(|c| f(c.get()));
+}
+
 // ── Key ──
 
 /// 组合节点的唯一标识符
@@ -79,6 +84,7 @@ impl<'a> ComposeCtx<'a> {
     }
 
     /// 访问内部 Composer（pub(crate)，供 ui/layout 模块使用）
+    #[allow(dead_code)]
     pub(crate) fn composer(&mut self) -> &mut Composer {
         self.composer
     }
@@ -267,6 +273,8 @@ pub struct Composer {
     layout_root: Option<usize>,
     /// state_id -> slot_keys 依赖映射
     slot_deps: HashMap<u32, Vec<u64>>,
+    /// 当前 compose 期间记录的依赖（替代全局 RECORDED_DEPS）
+    recorded_deps: Vec<(u32, u64)>,
 }
 
 impl Composer {
@@ -281,6 +289,7 @@ impl Composer {
             node_stack: Vec::new(),
             layout_root: None,
             slot_deps: HashMap::new(),
+            recorded_deps: Vec::new(),
         }
     }
 
@@ -349,20 +358,19 @@ impl Composer {
         }
         self.slot_deps.clear(); // 清空旧依赖，下面会重新收集
 
-        crate::core::state::set_dependency_registrar(move |state_id, _| {
-            let key = ACTIVE_SLOT_KEY.with(|c| c.get());
-            crate::core::state::record_dep(state_id, key);
-        });
+        // 设置依赖记录目标——State::get() 会通过 thread-local 指针写入 self.recorded_deps
+        crate::core::state::set_recording_target(&mut self.recorded_deps);
 
         {
             let ctx = &mut ComposeCtx::new(self);
             content(ctx);
         }
 
+        crate::core::state::clear_recording_target();
         self.slot_table.truncate();
 
         // 将本帧收集的依赖写入 slot_deps
-        for (state_id, slot_key) in crate::core::state::take_recorded_deps() {
+        for (state_id, slot_key) in self.recorded_deps.drain(..) {
             self.slot_deps.entry(state_id).or_default().push(slot_key);
         }
     }
@@ -391,16 +399,21 @@ impl Composer {
         self.needs_recomposition = true;
     }
 
-    /// 执行待处理的重组。若无待处理则跳过。
-    pub fn recompose(&mut self, content: impl FnOnce(&mut ComposeCtx)) {
-        if !self.needs_recomposition && self.pending_recomposition.is_empty() {
-            return;
+    /// 执行待处理的重组。返回 true 表示实际执行了 compose。
+    /// 若无待处理则跳过，保留上一帧的布局树。
+    pub fn recompose(&mut self, content: impl FnOnce(&mut ComposeCtx)) -> bool {
+        let has_pending = crate::core::state::has_pending_states();
+        let global_dirty = crate::core::state::take_global_dirty();
+
+        if !self.needs_recomposition && !has_pending && !global_dirty && self.pending_recomposition.is_empty() {
+            return false;
         }
 
         // 处理队列中的待重组节点（当前简化：全量重组）
         self.pending_recomposition.clear();
         self.needs_recomposition = false;
         self.compose(content);
+        true
     }
 }
 

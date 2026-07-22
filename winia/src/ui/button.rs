@@ -12,7 +12,7 @@
 
 use crate::core::composer::ComposeCtx;
 use crate::layout::BoxLayout;
-use crate::modifier::Modifier;
+use crate::modifier::{Modifier, Shape};
 use std::sync::Arc;
 use std::fmt;
 
@@ -95,18 +95,37 @@ impl Button {
         self
     }
 
-    /// 设置修饰符链
+    /// 设置修饰符链（追加到已有 modifier）
     pub fn modifier(mut self, modifier: Modifier) -> Self {
-        self.modifier = modifier;
+        self.modifier = self.modifier.then(modifier);
         self
     }
 
     /// 注册到组合树并执行子内容。
+    /// 根据 style 自动从 WiniaTheme 读取默认颜色（用户 modifier 可覆盖）。
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         let key = ctx.next_key();
+        let theme = crate::ui::theme::WiniaTheme::colors();
 
-        // 合并 modifier：用户 modifier + clickable 行为
-        let mut modifier = self.modifier;
+        // 根据 style 在最内层插入主题默认背景/边框
+        let mut modifier = match self.style {
+            ButtonStyle::Filled => {
+                Modifier::new().background(theme.primary, Shape::rounded(20.0))
+            }
+            ButtonStyle::Tonal => {
+                Modifier::new().background(theme.secondary_container, Shape::rounded(20.0))
+            }
+            ButtonStyle::Outlined => {
+                Modifier::new().border(1.0, theme.outline, Shape::rounded(20.0))
+            }
+            ButtonStyle::Text => {
+                Modifier::new() // 无背景、无边框
+            }
+        };
+
+        // 追加用户 modifier（在外层，可覆盖默认样式）
+        modifier = modifier.then(self.modifier);
+
         if self.enabled {
             if let Some(on_click) = &self.on_click {
                 let cb = on_click.clone();
@@ -114,7 +133,6 @@ impl Button {
             }
         }
 
-        // 注册为容器节点（用 BoxLayout 层叠子内容）
         ctx.start_container(key, modifier, BoxLayout::new());
         content(ctx);
         ctx.end_node();

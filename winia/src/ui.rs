@@ -7,6 +7,7 @@ pub mod text;
 pub mod button;
 pub mod layout_components;
 pub mod window;
+pub mod theme;
 
 pub use text::Text;
 pub use text::TextAlign;
@@ -15,3 +16,6 @@ pub use button::Button;
 pub use button::ButtonStyle;
 pub use layout_components::{Column, Row, Stack};
 pub use window::Window;
+pub use theme::WiniaTheme;
+pub use theme::ThemeColors;
+pub use theme::is_system_dark_theme;
