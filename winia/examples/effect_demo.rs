@@ -60,21 +60,29 @@ fn effect_demo_ui(ctx: &mut ComposeCtx) {
                     .build(ctx, |ctx| { Text::new("+1").build(ctx); });
 
                 // 通过协程作用域延迟更新
+                let spawn_count = ctx.remember(|| 0i32);
                 Button::new()
                     .on_click({
                         let c = count.clone();
                         let s = scope.clone();
+                        let sc = spawn_count.clone();
                         move || {
                             let c2 = c.clone();
+                            let sc2 = sc.clone();
                             s.spawn(async move {
+                                sc2.update(|v| *v += 1);
                                 tokio::time::sleep(Duration::from_millis(500)).await;
                                 c2.update(|v| *v += 10);
+                                sc2.update(|v| *v -= 1);
                             });
                         }
                     })
                     .style(ButtonStyle::Tonal)
-                    .modifier(Modifier::new().size(80.0, 36.0))
-                    .build(ctx, |ctx| { Text::new("+10 (delayed 0.5s)").build(ctx); });
+                    .modifier(Modifier::new().size(160.0, 36.0))
+                    .build(ctx, |ctx| {
+                        let label = format!("+10 (active: {})", spawn_count.get());
+                        Text::new(label).build(ctx);
+                    });
             });
 
             // ═══════════════════════════════════════
