@@ -76,6 +76,9 @@ pub struct LaunchedEffect<T: PartialEq + Clone + Send + 'static> {
 impl<T: PartialEq + Clone + Send + 'static> LaunchedEffect<T> {
     pub fn new(key: T) -> Self { Self { key } }
 
+    /// 创建一个 key 为 `()` 的 LaunchedEffect——只在首次组合时执行一次。
+    pub fn unit() -> LaunchedEffect<()> { LaunchedEffect { key: () } }
+
     pub fn build(
         self,
         ctx: &mut ComposeCtx,
@@ -138,6 +141,9 @@ pub struct DisposableEffect<T: PartialEq + Clone + Send + 'static> {
 
 impl<T: PartialEq + Clone + Send + 'static> DisposableEffect<T> {
     pub fn new(key: T) -> Self { Self { key } }
+
+    /// 创建一个 key 为 `()` 的 DisposableEffect——只在首次组合时执行 setup，dispose 时 cleanup。
+    pub fn unit() -> DisposableEffect<()> { DisposableEffect { key: () } }
 
     pub fn build(
         self,
