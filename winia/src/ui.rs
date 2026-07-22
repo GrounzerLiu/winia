@@ -12,6 +12,8 @@ pub mod theme;
 pub use text::Text;
 pub use text::TextAlign;
 pub use text::TextOverflow;
+pub use text::TextStyle;
+pub use text::ProvideTextStyle;
 pub use button::Button;
 pub use button::ButtonStyle;
 pub use layout_components::{Column, Row, Stack};

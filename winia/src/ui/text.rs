@@ -1,173 +1,170 @@
-//! Text 组件 — 文本显示
+//! Text 组件 — 对齐 Compose Material3 Text
 //!
-//! 用法:
-//! ```ignore
-//! Text::new("hello")
-//!     .font_size(16.0)
-//!     .color(Color::BLACK)
-//!     .build(ctx);
-//! ```
+//! - 颜色优先级: .color() > style.color > LocalTextStyle > WiniaTheme on_surface
+//! - ProvideTextStyle 为子树设置默认文字样式
+//! - 单独参数（font_size 等）优先级高于 style 参数
 
 use crate::core::composer::ComposeCtx;
+use crate::core::composition_local::CompositionLocal;
 use crate::modifier::{Color, Modifier, ModifierElement};
+use std::sync::LazyLock;
+
+// ═══════════════════════════════════════════════════════════
+// 文本样式
+// ═══════════════════════════════════════════════════════════
 
 /// 文本对齐方式
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextAlign {
-    Left,
-    Center,
-    Right,
-    Justify,
-}
-
-impl Default for TextAlign {
-    fn default() -> Self {
-        TextAlign::Left
-    }
-}
+pub enum TextAlign { Left, Center, Right, Justify }
+impl Default for TextAlign { fn default() -> Self { TextAlign::Left } }
 
 /// 文本溢出处理
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextOverflow {
-    Clip,
-    Ellipsis,
-    Fade,
+pub enum TextOverflow { Clip, Ellipsis, Fade }
+impl Default for TextOverflow { fn default() -> Self { TextOverflow::Clip } }
+
+/// 文本样式——对标 Compose TextStyle
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextStyle {
+    pub color: Option<Color>,
+    pub font_size: Option<f32>,
+    pub text_align: Option<TextAlign>,
+    pub overflow: Option<TextOverflow>,
+    pub max_lines: Option<usize>,
 }
 
-impl Default for TextOverflow {
-    fn default() -> Self {
-        TextOverflow::Clip
+impl TextStyle {
+    pub fn new() -> Self {
+        Self { color: None, font_size: None, text_align: None, overflow: None, max_lines: None }
+    }
+
+    pub fn color(mut self, c: Color) -> Self { self.color = Some(c); self }
+    pub fn font_size(mut self, s: f32) -> Self { self.font_size = Some(s); self }
+    pub fn align(mut self, a: TextAlign) -> Self { self.text_align = Some(a); self }
+}
+
+impl Default for TextStyle {
+    fn default() -> Self { Self::new() }
+}
+
+// ═══════════════════════════════════════════════════════════
+// LocalTextStyle —— 子树默认文字样式
+// ═══════════════════════════════════════════════════════════
+
+static LOCAL_TEXT_STYLE: LazyLock<CompositionLocal<TextStyle>> = LazyLock::new(|| {
+    CompositionLocal::new(|| TextStyle::default())
+});
+
+/// 在子树中提供默认文字样式（和现有样式合并，不是替换）。
+/// 类似 Compose 的 ProvideTextStyle。
+///
+/// ```ignore
+/// ProvideTextStyle(TextStyle::new().color(RED).font_size(16.0), ctx, |ctx| {
+///     Text::new("hello").build(ctx); // 自动使用红色 16px
+///     Text::new("world").color(BLUE).build(ctx); // 覆盖颜色为蓝色，字号保持 16px
+/// });
+/// ```
+pub fn ProvideTextStyle(style: TextStyle, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
+    let merged = merge_text_styles(&LOCAL_TEXT_STYLE.current(), &style);
+    let ctx_ptr = ctx as *mut ComposeCtx;
+    LOCAL_TEXT_STYLE.provides(merged, || {
+        let ctx = unsafe { &mut *ctx_ptr };
+        content(ctx);
+    });
+}
+
+/// 合并两个 TextStyle——right 中的 Some 覆盖 left（即 right 优先级更高）
+fn merge_text_styles(base: &TextStyle, override_: &TextStyle) -> TextStyle {
+    TextStyle {
+        color: override_.color.or(base.color),
+        font_size: override_.font_size.or(base.font_size),
+        text_align: override_.text_align.or(base.text_align),
+        overflow: override_.overflow.or(base.overflow),
+        max_lines: override_.max_lines.or(base.max_lines),
     }
 }
 
-/// Text 组件 Builder
-///
-/// 声明式文本显示组件。可通过链式方法配置字体大小、颜色、对齐等。
-///
-/// # 示例
-/// ```ignore
-/// Text::new("Hello World")
-///     .font_size(24.0)
-///     .color(Color::RED)
-///     .align(TextAlign::Center)
-///     .max_lines(2)
-///     .overflow(TextOverflow::Ellipsis)
-///     .modifier(Modifier::new().padding(8.0))
-///     .build(ctx);
-/// ```
+// ═══════════════════════════════════════════════════════════
+// Text 组件
+// ═══════════════════════════════════════════════════════════
+
 #[derive(Debug, Clone)]
 pub struct Text {
-    /// 文本内容
     content: String,
-    /// 修饰符链
     modifier: Modifier,
-    /// 字体大小（逻辑像素）
-    font_size: f32,
-    /// 文本颜色（None = 自动使用主题 on_surface）
+    font_size: Option<f32>,
     color: Option<Color>,
-    /// 最大行数（超出按 overflow 处理）
-    max_lines: usize,
-    /// 文本对齐
-    text_align: TextAlign,
-    /// 溢出处理方式
-    overflow: TextOverflow,
+    max_lines: Option<usize>,
+    text_align: Option<TextAlign>,
+    overflow: Option<TextOverflow>,
+    style: Option<TextStyle>,
+    soft_wrap: bool,
 }
 
 impl Text {
-    /// 创建新的 Text 组件
     pub fn new(content: impl Into<String>) -> Self {
         Text {
             content: content.into(),
             modifier: Modifier::new(),
-            font_size: 14.0,
+            font_size: None,
             color: None,
-            max_lines: usize::MAX,
-            text_align: TextAlign::default(),
-            overflow: TextOverflow::default(),
+            max_lines: None,
+            text_align: None,
+            overflow: None,
+            style: None,
+            soft_wrap: true,
         }
     }
 
-    /// 设置修饰符链（追加到已有 modifier）
-    pub fn modifier(mut self, modifier: Modifier) -> Self {
-        self.modifier = self.modifier.then(modifier);
-        self
-    }
+    pub fn modifier(mut self, modifier: Modifier) -> Self { self.modifier = self.modifier.then(modifier); self }
+    pub fn font_size(mut self, size: f32) -> Self { self.font_size = Some(size); self }
+    pub fn color(mut self, color: Color) -> Self { self.color = Some(color); self }
+    pub fn max_lines(mut self, lines: usize) -> Self { self.max_lines = Some(lines); self }
+    pub fn align(mut self, align: TextAlign) -> Self { self.text_align = Some(align); self }
+    pub fn overflow(mut self, overflow: TextOverflow) -> Self { self.overflow = Some(overflow); self }
+    pub fn soft_wrap(mut self, wrap: bool) -> Self { self.soft_wrap = wrap; self }
 
-    /// 设置字体大小
-    pub fn font_size(mut self, size: f32) -> Self {
-        self.font_size = size;
-        self
-    }
+    /// 设置文字样式（单独参数优先级高于此样式）
+    pub fn style(mut self, style: TextStyle) -> Self { self.style = Some(style); self }
 
-    /// 设置文本颜色（覆盖主题默认值）
-    pub fn color(mut self, color: Color) -> Self {
-        self.color = Some(color);
-        self
-    }
-
-    /// 设置最大行数
-    pub fn max_lines(mut self, lines: usize) -> Self {
-        self.max_lines = lines;
-        self
-    }
-
-    /// 设置文本对齐方式
-    pub fn align(mut self, align: TextAlign) -> Self {
-        self.text_align = align;
-        self
-    }
-
-    /// 设置溢出处理方式
-    pub fn overflow(mut self, overflow: TextOverflow) -> Self {
-        self.overflow = overflow;
-        self
-    }
-
-    /// 注册到组合树。
     pub fn build(self, ctx: &mut ComposeCtx) {
         let key = ctx.next_key();
 
-        // 将文本内容附加到 modifier（每次组合都使用最新的 self.content）
-        let resolved_color = self.color.unwrap_or_else(|| {
-            crate::ui::theme::WiniaTheme::colors().on_surface
-        });
+        // 解析最终样式：LocalTextStyle < style 参数 < 单独参数
+        let base = LOCAL_TEXT_STYLE.current();
+        let style = self.style.as_ref().map(|s| merge_text_styles(&base, s)).unwrap_or(base);
+
+        let final_font_size = self.font_size.or(style.font_size).unwrap_or(14.0);
+        let final_align = self.text_align.or(style.text_align).unwrap_or_default();
+        let final_overflow = self.overflow.or(style.overflow).unwrap_or_default();
+        let final_max_lines = self.max_lines.or(style.max_lines).unwrap_or(usize::MAX);
+
+        // 颜色优先级：explicit .color() > style.color > LocalTextStyle.color > theme.on_surface
+        let final_color = self.color
+            .or(style.color)
+            .unwrap_or_else(|| crate::ui::theme::WiniaTheme::colors().on_surface);
 
         let modifier = self.modifier.push(ModifierElement::TextContent {
             content: self.content,
-            font_size: self.font_size,
-            color: resolved_color,
-            max_lines: self.max_lines,
-            align: self.text_align,
-            overflow: self.overflow,
+            font_size: final_font_size,
+            color: final_color,
+            max_lines: final_max_lines,
+            align: final_align,
+            overflow: final_overflow,
         });
 
-        // 注册为叶子布局节点
         ctx.start_leaf(key, modifier);
         ctx.end_node();
     }
 
     // ── Getters（测试用）──
-    pub fn get_content(&self) -> &str {
-        &self.content
-    }
-    pub fn get_font_size(&self) -> f32 {
-        self.font_size
-    }
-    pub fn get_color(&self) -> Option<Color> {
-        self.color
-    }
-    pub fn get_text_align(&self) -> TextAlign {
-        self.text_align
-    }
-    pub fn get_overflow(&self) -> TextOverflow {
-        self.overflow
-    }
-    pub fn get_max_lines(&self) -> usize {
-        self.max_lines
-    }
-    pub fn get_modifier(&self) -> &Modifier {
-        &self.modifier
-    }
+    pub fn get_content(&self) -> &str { &self.content }
+    pub fn get_font_size(&self) -> Option<f32> { self.font_size }
+    pub fn get_color(&self) -> Option<Color> { self.color }
+    pub fn get_text_align(&self) -> Option<TextAlign> { self.text_align }
+    pub fn get_overflow(&self) -> Option<TextOverflow> { self.overflow }
+    pub fn get_max_lines(&self) -> Option<usize> { self.max_lines }
+    pub fn get_modifier(&self) -> &Modifier { &self.modifier }
 }
 
 #[cfg(test)]
@@ -178,10 +175,10 @@ mod tests {
     fn test_text_defaults() {
         let text = Text::new("hello");
         assert_eq!(text.get_content(), "hello");
-        assert_eq!(text.get_font_size(), 14.0);
+        assert_eq!(text.get_font_size(), None);
         assert_eq!(text.get_color(), None);
-        assert_eq!(text.get_text_align(), TextAlign::Left);
-        assert_eq!(text.get_max_lines(), usize::MAX);
+        assert_eq!(text.get_text_align(), None);
+        assert_eq!(text.get_max_lines(), None);
     }
 
     #[test]
@@ -195,11 +192,11 @@ mod tests {
             .modifier(Modifier::new().padding(8.0));
 
         assert_eq!(text.get_content(), "hello world");
-        assert_eq!(text.get_font_size(), 24.0);
+        assert_eq!(text.get_font_size(), Some(24.0));
         assert_eq!(text.get_color(), Some(Color::RED));
-        assert_eq!(text.get_text_align(), TextAlign::Center);
-        assert_eq!(text.get_overflow(), TextOverflow::Ellipsis);
-        assert_eq!(text.get_max_lines(), 3);
+        assert_eq!(text.get_text_align(), Some(TextAlign::Center));
+        assert_eq!(text.get_overflow(), Some(TextOverflow::Ellipsis));
+        assert_eq!(text.get_max_lines(), Some(3));
         assert_eq!(text.get_modifier().elements().len(), 1);
     }
 }
