@@ -66,9 +66,7 @@ static LOCAL_TEXT_STYLE: LazyLock<CompositionLocal<TextStyle>> = LazyLock::new(|
 /// ```
 pub fn ProvideTextStyle(style: TextStyle, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
     let merged = merge_text_styles(&LOCAL_TEXT_STYLE.current(), &style);
-    let ctx_ptr = ctx as *mut ComposeCtx;
     LOCAL_TEXT_STYLE.provides(merged, || {
-        let ctx = unsafe { &mut *ctx_ptr };
         content(ctx);
     });
 }

@@ -15,12 +15,10 @@ use crate::modifier::ModifierElement;
 /// Row 布局策略
 #[derive(Debug, Clone)]
 pub struct RowLayout {
-    /// 主轴排列方式（水平）
     pub arrangement: Arrangement,
-    /// 默认交叉轴对齐（垂直），子节点可通过 AlignSelf 覆盖
     pub alignment: Alignment,
-    /// 子节点间距
     pub spacing: f32,
+    pub direction: LayoutDirection,
 }
 
 impl RowLayout {
@@ -29,12 +27,14 @@ impl RowLayout {
             arrangement: Arrangement::Start,
             alignment: Alignment::Start,
             spacing: 0.0,
+            direction: LayoutDirection::Ltr,
         }
     }
 
     pub fn arrangement(mut self, a: Arrangement) -> Self { self.arrangement = a; self }
     pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
     pub fn spacing(mut self, s: f32) -> Self { self.spacing = s; self }
+    pub fn direction(mut self, d: LayoutDirection) -> Self { self.direction = d; self }
 }
 
 impl Default for RowLayout {
@@ -81,7 +81,10 @@ impl MeasurePolicy for RowLayout {
                 total_weight += w;
                 continue; // 稍后处理
             }
-            let cw = constraints.max_width - total_fixed_width - total_spacing;
+            // 逐减间距：已测子节点数 × spacing
+            let measured_count = child_sizes.iter().take(i).filter(|s| s.width > 0.0 || s.height > 0.0).count() as f32;
+            let spacing_deduct = measured_count * self.spacing;
+            let cw = constraints.max_width - total_fixed_width - spacing_deduct;
             let cc = Constraints {
                 min_width: 0.0,
                 max_width: cw.max(0.0),
@@ -166,7 +169,7 @@ impl MeasurePolicy for RowLayout {
         }
 
         // ── RTL 镜像：x → row_width - x - width ──
-        if crate::ui::theme::WiniaTheme::direction() == crate::layout::LayoutDirection::Rtl {
+        if self.direction == LayoutDirection::Rtl {
             let row_w = constraints.constrain_width(total_content_width + remaining_width);
             for p in &mut placements {
                 p.position.x = row_w - p.position.x - p.size.width;

@@ -234,10 +234,8 @@ impl WiniaTheme {
 
     /// 在子树中提供自定义颜色方案和布局方向。
     pub fn with_theme_and_direction(colors: ThemeColors, direction: LayoutDirection, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
-        let ctx_ptr = ctx as *mut ComposeCtx;
         LOCAL_DIRECTION.provides(direction, || {
             LOCAL_COLORS.provides(colors, || {
-                let ctx = unsafe { &mut *ctx_ptr };
                 content(ctx);
             });
         });

@@ -32,10 +32,12 @@ impl Column {
 
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         let key = ctx.next_key();
+        let dir = crate::ui::theme::WiniaTheme::direction();
         let policy = ColumnLayout::new()
             .arrangement(self.arrangement)
             .alignment(self.alignment)
-            .spacing(self.spacing);
+            .spacing(self.spacing)
+            .direction(dir);
         ctx.start_container(key, self.modifier, policy);
         content(ctx);
         ctx.end_node();
@@ -72,10 +74,12 @@ impl Row {
 
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         let key = ctx.next_key();
+        let dir = crate::ui::theme::WiniaTheme::direction();
         let policy = RowLayout::new()
             .arrangement(self.arrangement)
             .alignment(self.alignment)
-            .spacing(self.spacing);
+            .spacing(self.spacing)
+            .direction(dir);
         ctx.start_container(key, self.modifier, policy);
         content(ctx);
         ctx.end_node();
