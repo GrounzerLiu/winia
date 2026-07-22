@@ -1,0 +1,48 @@
+{
+  "id": "5c8e4b329ff4",
+  "title": "WebSocket + stdin 双通道调试替代 HTTP debug server",
+  "importance": "P1",
+  "progressType": "sequential",
+  "status": "completed",
+  "tags": [
+    "debug",
+    "websocket",
+    "stdin"
+  ],
+  "createdAt": "2026-07-22T16:04:47.412500+00:00",
+  "updatedAt": "2026-07-22T16:22:08.589046+00:00",
+  "_version": 5,
+  "subtasks": [
+    {
+      "index": 1,
+      "title": "调研：WebSocket 依赖选型 + stdin 方案设计",
+      "status": "completed",
+      "note": "tokio-tungstenite 0.30 无版本冲突；stdin 方案：独立线程按行读取，c x y / k key / r / t 命令"
+    },
+    {
+      "index": 2,
+      "title": "实现 stdin 通道：echo 'click 190 130' | ./app 直接注入事件",
+      "status": "completed",
+      "note": "HTTP 删除；stdin + WebSocket 实现完成，编译通过；cargo check --lib + --features debug-server 均通过"
+    },
+    {
+      "index": 3,
+      "title": "实现 WebSocket 通道：保持连接、实时推送树、响应点击",
+      "status": "completed",
+      "note": "HTTP 删除；stdin + WebSocket 实现完成，编译通过；cargo check --lib + --features debug-server 均通过"
+    },
+    {
+      "index": 4,
+      "title": "保留 HTTP 兼容（/click 等旧端点转发到新通道）",
+      "status": "completed",
+      "note": "HTTP 删除；stdin + WebSocket 实现完成，编译通过；cargo check --lib + --features debug-server 均通过"
+    },
+    {
+      "index": 5,
+      "title": "编译测试 + 清理旧代码",
+      "status": "completed",
+      "note": "HTTP 删除；stdin + WebSocket 实现完成，编译通过；cargo check --lib + --features debug-server 均通过"
+    }
+  ],
+  "followups": []
+}

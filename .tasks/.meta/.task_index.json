@@ -7,5 +7,6 @@
   "6ef679806baa": "[P2][multi-window] 多窗口支持 — 对齐 Compose Window composable_done",
   "c54a4586e03c": "[P1][multi-window] 每个窗口独立内容 + Counter 演示_in-progress",
   "695499c1dd98": "[P1]实现声明式 Window composable（if Window { ... }）_done",
-  "22b06311de51": "[P1]实现 Window.on_close 回调_done"
+  "22b06311de51": "[P1]实现 Window.on_close 回调_done",
+  "5c8e4b329ff4": "[P1]WebSocket + stdin 双通道调试替代 HTTP debug server_done"
 }

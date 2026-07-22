@@ -263,6 +263,7 @@ impl ApplicationHandler for AppState {
                                         if let ModifierElement::Clickable { on_click } = el { on_click(); handled = true; click_handled = true; break; }
                                     }
                                 }
+                                eprintln!("[debug-click] handled={} pos=({:.0},{:.0})", click_handled, x, y);
                             }
                         }
                         debug::DebugEvent::Key { key } => {
@@ -431,7 +432,8 @@ pub fn run_app(app: impl FnOnce(&mut ComposeCtx) + 'static) {
     let proxy = event_loop.create_proxy();
     debug::set_event_loop_proxy(proxy.clone());
     *APP_PROXY.lock().unwrap() = Some(proxy);
-    debug::start_server();
+    debug::start_stdin_channel();
+    debug::start_ws_server();
     let state = AppState {
         init: Some(Box::new(app)),
         windows: HashMap::new(),

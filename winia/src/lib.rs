@@ -22,7 +22,8 @@ pub mod debug;
 #[cfg(not(feature = "debug-server"))]
 pub mod debug {
     // no-op stubs
-    pub fn start_server() {}
+    pub fn start_stdin_channel() {}
+    pub fn start_ws_server() {}
     pub fn has_pending() -> bool { false }
     pub fn set_wake_callback(_cb: impl Fn() + Send + Sync + 'static) {}
     pub fn set_event_loop_proxy(_proxy: winit::event_loop::EventLoopProxy) {}
