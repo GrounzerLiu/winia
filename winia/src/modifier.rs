@@ -108,6 +108,10 @@ pub(crate) enum ModifierElement {
     FillMaxHeight,
     /// 填满最大尺寸
     FillMaxSize,
+    /// 子节点在父容器中的交叉轴对齐（覆盖父容器的默认对齐）
+    AlignSelf { alignment: crate::layout::Alignment },
+    /// 布局权重（Row 中分配宽度，Column 中分配高度）
+    LayoutWeight { weight: f32 },
 
     // ── Draw 类 ──
     /// 背景色 + 形状
@@ -385,6 +389,8 @@ impl Debug for ModifierElement {
             Self::FillMaxWidth => f.write_str("FillMaxWidth"),
             Self::FillMaxHeight => f.write_str("FillMaxHeight"),
             Self::FillMaxSize => f.write_str("FillMaxSize"),
+            Self::AlignSelf { alignment } => f.debug_struct("AlignSelf").field("alignment", alignment).finish(),
+            Self::LayoutWeight { weight } => f.debug_struct("LayoutWeight").field("weight", weight).finish(),
             Self::Background { color, shape } => f.debug_struct("Background").field("color", color).field("shape", shape).finish(),
             Self::Border { width, color, shape } => f.debug_struct("Border").field("width", width).field("color", color).field("shape", shape).finish(),
             Self::Clip { shape } => f.debug_struct("Clip").field("shape", shape).finish(),
@@ -418,6 +424,8 @@ impl ModifierElement {
                 | ModifierElement::FillMaxWidth
                 | ModifierElement::FillMaxHeight
                 | ModifierElement::FillMaxSize
+                | ModifierElement::AlignSelf { .. }
+                | ModifierElement::LayoutWeight { .. }
         )
     }
 

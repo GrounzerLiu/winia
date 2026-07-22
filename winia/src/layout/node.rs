@@ -7,6 +7,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// 全局节点 ID 生成器
 static NEXT_NODE_ID: AtomicU64 = AtomicU64::new(1);
 
+// ── LayoutDirection ──
+
+/// 布局方向——控制 Row 等水平布局的 Start/End 语义。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayoutDirection {
+    /// 从左到右（拉丁语系）
+    Ltr,
+    /// 从右到左（阿拉伯语、希伯来语等）
+    Rtl,
+}
+
 // ── Size ──
 
 /// 2D 尺寸

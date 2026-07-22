@@ -4,3 +4,4 @@
 *.ppm
 *.pdb
 /tools
+.reasonix/

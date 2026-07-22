@@ -9,6 +9,7 @@
 
 use crate::core::composition_local::CompositionLocal;
 use crate::core::composer::ComposeCtx;
+use crate::layout::LayoutDirection;
 use crate::modifier::Color;
 use material_colors::color::Argb;
 use material_colors::theme::ThemeBuilder;
@@ -190,6 +191,15 @@ static LOCAL_COLORS: LazyLock<CompositionLocal<ThemeColors>> = LazyLock::new(|| 
     CompositionLocal::new(|| ThemeColors::default_light())
 });
 
+static LOCAL_DIRECTION: LazyLock<CompositionLocal<LayoutDirection>> = LazyLock::new(|| {
+    CompositionLocal::new(|| LayoutDirection::Ltr)
+});
+
+/// 读取当前布局方向
+pub fn current_layout_direction() -> LayoutDirection {
+    LOCAL_DIRECTION.current()
+}
+
 // ═══════════════════════════════════════════════════════════
 // 主题入口
 // ═══════════════════════════════════════════════════════════
@@ -217,17 +227,29 @@ impl WiniaTheme {
         Self::with_theme(ThemeColors::default_dark(), ctx, content);
     }
 
-    /// 在子树中提供自定义颜色方案。
+    /// 在子树中提供自定义颜色方案 + LTR 方向。
     pub fn with_theme(colors: ThemeColors, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
+        Self::with_theme_and_direction(colors, LayoutDirection::Ltr, ctx, content);
+    }
+
+    /// 在子树中提供自定义颜色方案和布局方向。
+    pub fn with_theme_and_direction(colors: ThemeColors, direction: LayoutDirection, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         let ctx_ptr = ctx as *mut ComposeCtx;
-        LOCAL_COLORS.provides(colors, || {
-            let ctx = unsafe { &mut *ctx_ptr };
-            content(ctx);
+        LOCAL_DIRECTION.provides(direction, || {
+            LOCAL_COLORS.provides(colors, || {
+                let ctx = unsafe { &mut *ctx_ptr };
+                content(ctx);
+            });
         });
     }
 
-    /// 读取当前子树主题色（可在任意 composable 函数中调用）。
+    /// 读取当前子树主题色。
     pub fn colors() -> ThemeColors {
         LOCAL_COLORS.current()
+    }
+
+    /// 读取当前布局方向（Ltr 或 Rtl）。
+    pub fn direction() -> LayoutDirection {
+        LOCAL_DIRECTION.current()
     }
 }

@@ -12,6 +12,7 @@ pub struct Column {
     modifier: Modifier,
     arrangement: Arrangement,
     alignment: Alignment,
+    spacing: f32,
 }
 
 impl Column {
@@ -20,18 +21,21 @@ impl Column {
             modifier: Modifier::new(),
             arrangement: Arrangement::Start,
             alignment: Alignment::Start,
+            spacing: 0.0,
         }
     }
 
     pub fn modifier(mut self, m: Modifier) -> Self { self.modifier = m; self }
     pub fn arrangement(mut self, a: Arrangement) -> Self { self.arrangement = a; self }
     pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
+    pub fn spacing(mut self, s: f32) -> Self { self.spacing = s; self }
 
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         let key = ctx.next_key();
         let policy = ColumnLayout::new()
             .arrangement(self.arrangement)
-            .alignment(self.alignment);
+            .alignment(self.alignment)
+            .spacing(self.spacing);
         ctx.start_container(key, self.modifier, policy);
         content(ctx);
         ctx.end_node();
@@ -48,6 +52,7 @@ pub struct Row {
     modifier: Modifier,
     arrangement: Arrangement,
     alignment: Alignment,
+    spacing: f32,
 }
 
 impl Row {
@@ -56,18 +61,21 @@ impl Row {
             modifier: Modifier::new(),
             arrangement: Arrangement::Start,
             alignment: Alignment::Start,
+            spacing: 0.0,
         }
     }
 
     pub fn modifier(mut self, m: Modifier) -> Self { self.modifier = m; self }
     pub fn arrangement(mut self, a: Arrangement) -> Self { self.arrangement = a; self }
     pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
+    pub fn spacing(mut self, s: f32) -> Self { self.spacing = s; self }
 
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         let key = ctx.next_key();
         let policy = RowLayout::new()
             .arrangement(self.arrangement)
-            .alignment(self.alignment);
+            .alignment(self.alignment)
+            .spacing(self.spacing);
         ctx.start_container(key, self.modifier, policy);
         content(ctx);
         ctx.end_node();
