@@ -38,6 +38,7 @@ impl CoroutineScope {
 
 /// 获取当前组合生命周期绑定的协程作用域。
 /// 在 composable 函数中调用，返回的 scope 可 clone 后传入异步回调。
+/// 同一组合位置多次调用返回同一个 scope（重组安全）。
 pub fn remember_coroutine_scope(ctx: &mut ComposeCtx) -> CoroutineScope {
     let scope: CoroutineScope = ctx.remember(|| {
         let rt = Handle::try_current().expect("remember_coroutine_scope requires an active tokio runtime. Start one with `tokio::runtime::Runtime::new()` before calling `run_app`.");
@@ -45,9 +46,11 @@ pub fn remember_coroutine_scope(ctx: &mut ComposeCtx) -> CoroutineScope {
         CoroutineScope { handles, rt }
     }).get();
 
+    // 用 Arc 指针作为固定 key——重组时同一个 scope 的 Arc 地址不变，
+    // slot table 识别为 clean slot 不会触发 on_remove
     let handles_clone = Arc::clone(&scope.handles);
-    let key = ctx.next_key();
-    ctx.start_leaf_with_remove(key, crate::modifier::Modifier::new(), Box::new(move || {
+    let cleanup_key = Arc::as_ptr(&scope.handles) as u64;
+    ctx.start_leaf_with_remove(cleanup_key, crate::modifier::Modifier::new(), Box::new(move || {
         let mut h = handles_clone.lock().unwrap();
         for handle in h.drain(..) {
             handle.abort();
