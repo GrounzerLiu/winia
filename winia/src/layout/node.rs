@@ -501,8 +501,9 @@ pub(crate) fn measure_node(
                 child.position.y += pad_y;
             }
         }
-        node.measured_size = size;
-        (size, placements)
+        let outer_size = Size::new(size.width + pad_x * 2.0, size.height + pad_y * 2.0);
+        node.measured_size = outer_size;
+        (outer_size, placements)
     } else {
         // 叶子节点
         // 检查是否有 TextContent（文字节点需要根据字体测量尺寸）
