@@ -17,48 +17,53 @@ use tokio::task::JoinHandle;
 // ═══════════════════════════════════════════════════════════
 
 /// 组合生命周期绑定的协程作用域——dispose 时自动取消所有未完成任务。
+///
+/// 内部用 `Arc<ScopeState>` 管理任务列表。当最后一个 `CoroutineScope` clone
+/// 被 drop 时（即组合点被移除），`ScopeState::drop` abort 所有未完成任务。
+/// 重组时 `remember` 返回同一个 scope，不会触发 drop。
 pub struct CoroutineScope {
-    handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    state: Arc<ScopeState>,
     rt: Handle,
 }
 
+struct ScopeState {
+    handles: Mutex<Vec<JoinHandle<()>>>,
+}
+
+impl Drop for ScopeState {
+    fn drop(&mut self) {
+        let mut h = self.handles.lock().unwrap();
+        for handle in h.drain(..) {
+            handle.abort();
+        }
+    }
+}
+
 impl Clone for CoroutineScope {
-    fn clone(&self) -> Self { Self { handles: Arc::clone(&self.handles), rt: self.rt.clone() } }
+    fn clone(&self) -> Self { Self { state: Arc::clone(&self.state), rt: self.rt.clone() } }
 }
 
 impl CoroutineScope {
     /// 启动一个协程。当此 composable 离开组合树时，任务会被自动 abort。
     pub fn spawn(&self, fut: impl std::future::Future<Output = ()> + Send + 'static) {
         let handle = self.rt.spawn(fut);
-        let mut h = self.handles.lock().unwrap();
+        let mut h = self.state.handles.lock().unwrap();
         h.retain(|jh| !jh.is_finished());
         h.push(handle);
     }
 }
 
 /// 获取当前组合生命周期绑定的协程作用域。
-/// 在 composable 函数中调用，返回的 scope 可 clone 后传入异步回调。
-/// 同一组合位置多次调用返回同一个 scope（重组安全）。
+/// 重组安全——remember 保证同一组合位置返回同一个 scope。
+/// 当组合点被移除时，ScopeState::drop 自动 abort 所有未完成协程。
 pub fn remember_coroutine_scope(ctx: &mut ComposeCtx) -> CoroutineScope {
-    let scope: CoroutineScope = ctx.remember(|| {
-        let rt = Handle::try_current().expect("remember_coroutine_scope requires an active tokio runtime. Start one with `tokio::runtime::Runtime::new()` before calling `run_app`.");
-        let handles = Arc::new(Mutex::new(Vec::new()));
-        CoroutineScope { handles, rt }
-    }).get();
-
-    // 用 Arc 指针作为固定 key——重组时同一个 scope 的 Arc 地址不变，
-    // slot table 识别为 clean slot 不会触发 on_remove
-    let handles_clone = Arc::clone(&scope.handles);
-    let cleanup_key = Arc::as_ptr(&scope.handles) as u64;
-    ctx.start_leaf_with_remove(cleanup_key, crate::modifier::Modifier::new(), Box::new(move || {
-        let mut h = handles_clone.lock().unwrap();
-        for handle in h.drain(..) {
-            handle.abort();
-        }
-    }));
-    ctx.end_node();
-
-    scope
+    ctx.remember(|| {
+        let rt = Handle::try_current().expect(
+            "remember_coroutine_scope requires an active tokio runtime. \
+             Start one with `tokio::runtime::Runtime::new()` before calling `run_app`."
+        );
+        CoroutineScope { state: Arc::new(ScopeState { handles: Mutex::new(Vec::new()) }), rt }
+    }).get()
 }
 
 // ═══════════════════════════════════════════════════════════
