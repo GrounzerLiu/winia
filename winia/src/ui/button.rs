@@ -133,7 +133,7 @@ impl Button {
             }
         }
 
-        ctx.start_container(key, modifier, BoxLayout::new());
+        ctx.start_container(key, modifier, BoxLayout::new().alignment(crate::layout::Alignment::Center));
 
         // 为子 Text 提供默认文字颜色
         let text_color = match self.style {
