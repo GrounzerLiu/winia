@@ -92,8 +92,8 @@ fn counter_ui(ctx: &mut ComposeCtx) {
                 .modifier(Modifier::new().size(200.0, 150.0).vertical_scroll(scroll_y))
                 .build(ctx, |ctx| {
                     for i in 0..30 {
-                        let color = if i % 2 == 0 { Color::from_argb(255, 240, 240, 240) } else { Color::WHITE };
-                        Row::new().modifier(Modifier::new().size(200.0, 24.0).background(color, Shape::Rectangle))
+                        //let color = if i % 2 == 0 { Color::from_argb(255, 240, 240, 240) } else { Color::WHITE };
+                        Row::new().modifier(Modifier::new().size(200.0, 24.0))
                             .build(ctx, |ctx| {
                                 Text::new(format!("Line {}", i)).font_size(14.0).build(ctx);
                             });

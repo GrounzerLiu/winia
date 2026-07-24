@@ -165,8 +165,10 @@ pub fn start_stdin_channel() {
 
 pub fn start_ws_server() {
     tokio::spawn(async move {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:9998").await
-            .expect("DevTools: failed to bind ws://127.0.0.1:9998");
+        let listener = match tokio::net::TcpListener::bind("127.0.0.1:9998").await {
+            Ok(l) => l,
+            Err(e) => { eprintln!("[DevTools] ws bind failed: {e}"); return; }
+        };
         eprintln!("[DevTools] WebSocket → ws://localhost:9998");
         while let Ok((stream, _)) = listener.accept().await {
             if SHUTDOWN.load(Ordering::SeqCst) { break; }
