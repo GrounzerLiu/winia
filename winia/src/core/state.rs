@@ -59,6 +59,8 @@ struct StateInner<T> {
     value: RwLock<T>,
     /// 订阅者列表。使用 SubscriberId 实现精确删除。
     subscribers: RwLock<Vec<Subscriber>>,
+    /// 通知版本号——每次 set/update 自增，compose 消费后归零
+    notify_version: std::sync::atomic::AtomicU32,
 }
 
 // 全局 State ID 生成器
@@ -76,12 +78,18 @@ impl<T: 'static> State<T> {
                 id: next_state_id(),
                 value: RwLock::new(value),
                 subscribers: RwLock::new(Vec::new()),
+                notify_version: Default::default(),
             }),
         }
     }
 }
 
 impl<T: Clone + 'static> State<T> {
+    /// 读取并重置通知版本号（供 compose 消费确认）
+    pub fn take_notify_version(&self) -> u32 {
+        self.inner.notify_version.swap(0, std::sync::atomic::Ordering::AcqRel)
+    }
+
     /// 读取当前值的快照。
     ///
     /// 如果在组合上下文中调用（即 Composer 正在执行 composable 函数），
@@ -127,6 +135,7 @@ impl<T: 'static> State<T> {
         for sub in subscribers.iter() {
             (sub.callback)();
         }
+        self.inner.notify_version.fetch_add(1, std::sync::atomic::Ordering::Release);
         notify_state_changed(self.inner.id);
         set_global_dirty();
     }
