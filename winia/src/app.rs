@@ -252,10 +252,10 @@ impl ApplicationHandler for AppState {
                 for evt in debug::take_queued_events() {
                     match evt {
                         debug::DebugEvent::Click { x, y } => {
-                            let sf = pw.scale_factor as f32;
                             if let Some(root) = pw.composer.layout_root() {
-                                let nodes = hit_test(root, x / sf, y / sf);
+                                let nodes = hit_test(root, x, y);
                                 let mut click_handled = false;
+                                eprintln!("[debug-click] pos=({:.0},{:.0}) path_len={} sf={}", x, y, nodes.len(), pw.scale_factor);
                                 for node in nodes.iter().rev() {
                                     if click_handled { break; }
                                     let _mod_strs: Vec<String> = node.modifier.elements().iter().map(|el| format!("{:?}", el)).collect();
