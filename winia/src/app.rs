@@ -45,11 +45,20 @@ impl PerWindow {
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
     /// 增量重组 → 恢复焦点 → 布局 → 渲染（供 RedrawRequested 使用）
+    /// 循环消费 notify 队列直到稳定，避免 tokio task 的并发通知丢失。
     fn recompose_layout_render(&mut self, after_draw: impl FnOnce(&LayoutNode, &mut skia_safe::Surface)) {
-        self.composer.recompose(|ctx| (self.content)(ctx));
-        if let Some(fid) = self.focused_id {
-            if let Some(r) = self.composer.layout_root_mut() {
-                crate::layout::node::focus_by_id(r, fid);
+        // 循环 compose 直到没有新的 pending state——处理并发 task 在 compose 期间
+        // 完成的 case（第二个 notify 的 state 在第一次 compose 之后才入队）
+        loop {
+            let did_compose = self.composer.recompose(|ctx| (self.content)(ctx));
+            if let Some(fid) = self.focused_id {
+                if let Some(r) = self.composer.layout_root_mut() {
+                    crate::layout::node::focus_by_id(r, fid);
+                }
+            }
+            // 如果在 compose 期间又有新 notify 入队，需要再处理一次
+            if !did_compose && !crate::core::state::has_pending_states() {
+                break;
             }
         }
         self.composer.layout(Constraints::new(0.0, self.width, 0.0, self.height));
