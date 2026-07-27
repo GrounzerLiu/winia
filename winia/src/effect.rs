@@ -211,7 +211,6 @@ impl<S: futures_util::Stream + Send + 'static> StreamObverse for S {
     {
         let state: State<S::Item> = ctx.remember(|| State::new(initial.clone())).get();
         let s = state.clone();
-        // 只在首次组合时启动消费协程（flag 持久化在 remember 中）
         let started: State<bool> = ctx.remember(|| false);
         if !started.get() {
             started.set(true);
@@ -219,11 +218,38 @@ impl<S: futures_util::Stream + Send + 'static> StreamObverse for S {
             scope.spawn(async move {
                 use futures_util::StreamExt;
                 let mut stream = Box::pin(self);
-                while let Some(_value) = stream.next().await {
-                    s.set(_value);
+                while let Some(value) = stream.next().await {
+                    s.set(value);
                 }
             });
         }
         state
     }
 }
+
+/// 将 watch::Receiver 直接转为 State（不经过 WatchStream，send 始终可靠）
+pub fn observe_watch<T: Clone + Send + Sync + PartialEq + 'static>(
+    ctx: &mut ComposeCtx,
+    rx: tokio::sync::watch::Receiver<T>,
+    initial: T,
+) -> State<T> {
+    let rx = std::sync::Arc::new(parking_lot::Mutex::new(rx));
+    let state: State<T> = ctx.remember(|| State::new(initial.clone())).get();
+    let s = state.clone();
+    let started: State<bool> = ctx.remember(|| false);
+    if !started.get() {
+        started.set(true);
+        let scope = remember_coroutine_scope(ctx);
+        scope.spawn(async move {
+            loop {
+                let changed = rx.lock().changed().await;
+                if changed.is_err() { break; }
+                let v = rx.lock().borrow_and_update().clone();
+                s.set(v);
+            }
+        });
+    }
+    state
+}
+
+// ═══════════════════════════════════════════════════════════
