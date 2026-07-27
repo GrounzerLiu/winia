@@ -8,5 +8,7 @@
   "c54a4586e03c": "[P1][multi-window] 每个窗口独立内容 + Counter 演示_in-progress",
   "695499c1dd98": "[P1]实现声明式 Window composable（if Window { ... }）_done",
   "22b06311de51": "[P1]实现 Window.on_close 回调_done",
-  "5c8e4b329ff4": "[P1]WebSocket + stdin 双通道调试替代 HTTP debug server_done"
+  "5c8e4b329ff4": "[P1]WebSocket + stdin 双通道调试替代 HTTP debug server_done",
+  "5512dd2d0139": "[P1]State 裸指针解耦与全局队列重构_done",
+  "25e66aca5a4d": "[P1]全量重组优化：LayoutNode 复用 + layout 增量 dirty_done"
 }

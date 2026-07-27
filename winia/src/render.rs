@@ -18,7 +18,7 @@ use skia_safe::textlayout::{
 pub fn render(root: &LayoutNode, canvas: &Canvas) {
     let mut backdrop_regions = Vec::new();
     // Phase 1: 非背景模糊内容 + 收集模糊区域
-    render_pass1(root, canvas, 0.0, 0.0, &mut backdrop_regions);
+    render_pass1(root, canvas, 0.0, 0.0, &mut backdrop_regions, false);
     // Phase 2: 背景模糊
     if !backdrop_regions.is_empty() {
         render_backdrop_blur(canvas, &backdrop_regions);
@@ -69,6 +69,7 @@ fn render_pass1<'a>(
     canvas: &Canvas,
     parent_x: f32, parent_y: f32,
     backdrop_regions: &mut Vec<(f32, f32, f32, f32, f32, &'a LayoutNode)>,
+    backdrop_pass: bool,
 ) {
     let x = parent_x + node.position.x;
     let y = parent_y + node.position.y;
@@ -85,17 +86,17 @@ fn render_pass1<'a>(
 
     for el in node.modifier.elements() {
         match el {
-            ModifierElement::Blur { radius } => {
+            ModifierElement::Blur { radius } if !backdrop_pass => {
                 blur_radius = Some(*radius);
             }
-            ModifierElement::BackdropBlur { radius } => {
+            ModifierElement::BackdropBlur { radius } if !backdrop_pass => {
                 is_backdrop = true;
                 backdrop_regions.push((x, y, w, h, *radius, node));
             }
-            ModifierElement::VerticalScroll { state } => {
+            ModifierElement::VerticalScroll { state } if !backdrop_pass => {
                 scroll_offset_v = Some(state.get());
             }
-            ModifierElement::HorizontalScroll { state } => {
+            ModifierElement::HorizontalScroll { state } if !backdrop_pass => {
                 scroll_offset_h = Some(state.get());
             }
             el => {
@@ -107,11 +108,13 @@ fn render_pass1<'a>(
     }
 
     // 内容模糊：saveLayer
-    if let Some(r) = blur_radius {
+    if !backdrop_pass {
+        if let Some(r) = blur_radius {
         let mut paint = Paint::default();
         paint.set_image_filter(image_filters::blur((r, r), skia_safe::TileMode::Clamp, None, None));
         let rec = skia_safe::canvas::SaveLayerRec::default().paint(&paint);
         canvas.save_layer(&rec);
+    }
     }
 
     if let Some((content, font_size, color, max_lines, align, overflow)) = text {
@@ -157,7 +160,7 @@ fn render_pass1<'a>(
     // 穿行子节点（背景模糊节点跳过子节点——Phase 2 处理）
     if !is_backdrop {
         for child in &node.children {
-            render_pass1(child, canvas, x, y, backdrop_regions);
+            render_pass1(child, canvas, x, y, backdrop_regions, false);
         }
     }
 
@@ -215,39 +218,9 @@ fn render_backdrop_blur(
         }
         // 画回模糊节点自己的子节点
         for child in &backdrop_node.children {
-            render_pass1_simple(child, canvas, x, y);
+            render_pass1(child, canvas, x, y, &mut Vec::new(), true);
         }
     }
-}
-
-fn render_pass1_simple(node: &LayoutNode, canvas: &Canvas, px: f32, py: f32) {
-    let x = px + node.position.x;
-    let y = py + node.position.y;
-    let w = node.measured_size.width;
-    let h = node.measured_size.height;
-    if w <= 0.0 || h <= 0.0 { return; }
-    let rect = Rect::new(x, y, x + w, y + h);
-    let mut text: Option<(&str, f32, &crate::modifier::Color, usize, crate::ui::TextAlign, crate::ui::TextOverflow)> = None;
-    for el in node.modifier.elements() {
-        if let Some(tp) = render_modifier_element(canvas, el, rect, x, y, w, h) {
-            text = Some((tp.content, tp.font_size, tp.color, tp.max_lines, tp.align, tp.overflow));
-        }
-    }
-    if let Some((c, fs, cl, ml, al, ov)) = text {
-        if let Some(mut para) = node.cached_paragraph.borrow_mut().take() {
-            if (w - 10000.0).abs() > 0.1 { para.layout(w); }
-            let x_off = match al {
-                crate::ui::TextAlign::Left | crate::ui::TextAlign::Justify => x,
-                crate::ui::TextAlign::Center => x + (w - para.max_intrinsic_width()).max(0.0) / 2.0,
-                crate::ui::TextAlign::Right => x + (w - para.max_intrinsic_width()).max(0.0),
-            };
-            para.paint(canvas, (x_off, y));
-        } else {
-            draw_text(canvas, c, fs, cl, x, y, w, ml, al, ov);
-        }
-    }
-    if node.focused { draw_focus(canvas, rect); }
-    for child in &node.children { render_pass1_simple(child, canvas, x, y); }
 }
 
 // ── 辅助函数 ──
