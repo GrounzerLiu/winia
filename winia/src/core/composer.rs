@@ -413,15 +413,10 @@ impl Composer {
         if let Some(child_idx) = self.node_stack.pop() {
             if let Some(&parent_idx) = self.node_stack.last() {
                 // 有父节点：将当前节点作为子节点添加
-                // SAFETY: parent_idx 和 child_idx 都有效
-                let child = self.layout_nodes.remove(child_idx);
+                // swap_remove 合法因为 child_idx 总是 layout_nodes 的最后一个元素
+                //（子节点在 start_node 时 push，end_node 时 pop，中间无新的 push 越过它）
+                let child = self.layout_nodes.swap_remove(child_idx);
                 self.layout_nodes[parent_idx].add_child(child);
-                // 调整后续索引
-                for idx in self.node_stack.iter_mut() {
-                    if *idx > child_idx {
-                        *idx -= 1;
-                    }
-                }
             } else {
                 // 根节点
                 self.layout_root = Some(child_idx);
