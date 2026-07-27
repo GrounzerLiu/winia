@@ -25,15 +25,12 @@ fn stream_demo_ui(ctx: &mut ComposeCtx) {
     let (tx, rx) = ch.get();
     let count = winia::effect::observe_watch(ctx, rx, 0);
 
-    // 后台每秒自增
+    // 后台每秒自增（LaunchedEffect 自动管理生命周期）
     let tx2 = tx.clone();
-    let scope = winia::effect::remember_coroutine_scope(ctx);
-    scope.spawn(async move {
+    LaunchedEffect::new(()).build(ctx, move |_| async move {
         loop {
             tokio::time::sleep(Duration::from_secs(1)).await;
-            tx2.send_modify(|v| {
-                if *v < 20 { *v += 1; }
-            });
+            tx2.send_modify(|v| { if *v < 20 { *v += 1; } });
         }
     });
 
