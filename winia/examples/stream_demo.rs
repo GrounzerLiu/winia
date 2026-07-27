@@ -66,10 +66,10 @@ fn stream_demo_ui(ctx: &mut ComposeCtx) {
                     .build(ctx);
             }
 
-            // 复位
-            let tx3 = tx.clone();
+            // 复位：同时重置 watch 和 State
+            let c = count.clone();
             Button::new()
-                .on_click(move || { let _ = tx3.send(0); })
+                .on_click(move || { let _ = tx.send(0); c.set(0); })
                 .modifier(Modifier::new().size(120.0, 36.0))
                 .build(ctx, |ctx| {
                     Text::new("Reset").color(theme.on_primary).build(ctx);
