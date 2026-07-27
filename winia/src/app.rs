@@ -57,7 +57,7 @@ impl PerWindow {
                 }
             }
             // 如果在 compose 期间又有新 notify 入队，需要再处理一次
-            if !did_compose && !crate::core::state::has_pending_states() {
+            if !did_compose && !self.composer.has_pending_states() {
                 break;
             }
         }

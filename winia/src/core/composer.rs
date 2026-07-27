@@ -9,11 +9,12 @@
 //! - 重组调度: 批处理状态变化，在下一帧重组
 //! - Key 管理: 全局唯一 key 计数器
 
-use crate::core::state::{State, clear_current_composer, set_current_composer};
+use crate::core::state::State;
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{LayoutNode, MeasurePolicy};
 use crate::modifier::Modifier;
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 use std::any::Any;
 use std::cell::Cell;
 
@@ -47,10 +48,6 @@ pub struct ComposeCtx<'a> {
 
 impl<'a> ComposeCtx<'a> {
     pub(crate) fn new(composer: &'a mut Composer) -> Self {
-        // 设置 thread-local 指针，使 State::get() 能追踪依赖
-        let ptr = composer as *const Composer as *const ();
-        set_current_composer(ptr);
-
         Self {
             composer,
             remember_counter: 0,
@@ -118,12 +115,6 @@ impl<'a> ComposeCtx<'a> {
     /// 结束当前节点
     pub fn end_node(&mut self) {
         self.composer.end_node();
-    }
-}
-
-impl Drop for ComposeCtx<'_> {
-    fn drop(&mut self) {
-        clear_current_composer();
     }
 }
 
@@ -275,10 +266,14 @@ pub struct Composer {
     slot_deps: HashMap<u32, Vec<u64>>,
     /// 当前 compose 期间记录的依赖（替代全局 RECORDED_DEPS）
     recorded_deps: Vec<(u32, u64)>,
+    /// 本 Composer 实例的 pending state 通知队列
+    pending_states: Arc<parking_lot::Mutex<Vec<u32>>>,
 }
 
 impl Composer {
     pub fn new() -> Self {
+        let pending_states = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        crate::core::state::register_composer_queue(Arc::downgrade(&pending_states));
         Self {
             slot_table: SlotTable::new(),
             current_group_key: 0,
@@ -290,6 +285,7 @@ impl Composer {
             layout_root: None,
             slot_deps: HashMap::new(),
             recorded_deps: Vec::new(),
+            pending_states,
         }
     }
 
@@ -347,15 +343,16 @@ impl Composer {
         self.layout_nodes.clear();
         self.node_stack.clear();
 
-        // 消费 global dirty → 标记对应 slot 为脏
-        let pending = crate::core::state::take_pending_states();
-        for state_id in &pending {
-            if let Some(keys) = self.slot_deps.get(state_id) {
+        // 消费本 Composer 实例的 pending states → 标记对应 slot 为脏
+        let mut pending = self.pending_states.lock();
+        for state_id in pending.drain(..) {
+            if let Some(keys) = self.slot_deps.get(&state_id) {
                 for &k in keys {
                     self.slot_table.mark_dirty(k);
                 }
             }
         }
+        drop(pending);
         self.slot_deps.clear(); // 清空旧依赖，下面会重新收集
 
         // 设置依赖记录目标——State::get() 会通过 thread-local 指针写入 self.recorded_deps
@@ -399,13 +396,17 @@ impl Composer {
         self.needs_recomposition = true;
     }
 
+    /// 是否有待处理的 state 变化
+    pub fn has_pending_states(&self) -> bool {
+        !self.pending_states.lock().is_empty()
+    }
+
     /// 执行待处理的重组。返回 true 表示实际执行了 compose。
     /// 若无待处理则跳过，保留上一帧的布局树。
     pub fn recompose(&mut self, content: impl FnOnce(&mut ComposeCtx)) -> bool {
-        let has_pending = crate::core::state::has_pending_states();
-        let global_dirty = crate::core::state::take_global_dirty();
+        let has_pending = !self.pending_states.lock().is_empty();
 
-        if !self.needs_recomposition && !has_pending && !global_dirty && self.pending_recomposition.is_empty() {
+        if !self.needs_recomposition && !has_pending && self.pending_recomposition.is_empty() {
             return false;
         }
 

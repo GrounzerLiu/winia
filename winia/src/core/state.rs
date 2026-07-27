@@ -7,24 +7,7 @@
 //! - Subscription 支持精确取消，避免内存泄漏
 
 use parking_lot::RwLock;
-use std::cell::RefCell;
 use std::fmt::{Debug, Display, Formatter};
-use std::sync::Arc;
-
-// ── thread-local: 当前正在进行的组合（读操作时记录依赖）──
-thread_local! {
-    static CURRENT_COMPOSER: RefCell<Option<*const ()>> = const { RefCell::new(None) };
-}
-
-/// 设置当前组合上下文指针（由 Composer 在进入组合时调用）
-pub(crate) fn set_current_composer(ptr: *const ()) {
-    CURRENT_COMPOSER.with(|c| *c.borrow_mut() = Some(ptr));
-}
-
-/// 清除当前组合上下文指针（由 Composer 在退出组合时调用）
-pub(crate) fn clear_current_composer() {
-    CURRENT_COMPOSER.with(|c| *c.borrow_mut() = None);
-}
 
 // ── SubscriberId ──
 
@@ -137,7 +120,6 @@ impl<T: 'static> State<T> {
         }
         self.inner.notify_version.fetch_add(1, std::sync::atomic::Ordering::Release);
         notify_state_changed(self.inner.id);
-        set_global_dirty();
     }
 
     /// 订阅状态变化。返回 Subscription，drop 时精确取消。
@@ -236,28 +218,34 @@ impl Drop for Subscription {
 /// 这消除了 DEP_REGISTRAR + RECORDED_DEPS 两个全局 Mutex。
 
 use parking_lot::Mutex;
+use std::sync::{Arc, LazyLock, Weak};
 
 thread_local! {
     /// compose 期间指向当前 Composer 的 recorded_deps vec
     static RECORDING_TARGET: std::cell::RefCell<Option<*mut Vec<(u32, u64)>>> = const { std::cell::RefCell::new(None) };
 }
 
-static PENDING_STATES: Mutex<Vec<u32>> = Mutex::new(Vec::new());
-static GLOBAL_DIRTY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+// ── Composer 注册表：每个 Composer 注册自己的通知队列 ──
+// State 变化时通知所有活动 Composer，替代全局 PENDING_STATES + GLOBAL_DIRTY
 
-/// State::notify 调用：记录变化的 state_id（全局队列，多窗口共享）
+static COMPOSER_REGISTRY: LazyLock<Mutex<Vec<Weak<Mutex<Vec<u32>>>>>> =
+    LazyLock::new(|| Mutex::new(Vec::new()));
+
+/// Composer 启动时注册自己的队列（传入 Weak 引用，Composer drop 后自动清理）
+pub(crate) fn register_composer_queue(queue: Weak<Mutex<Vec<u32>>>) {
+    COMPOSER_REGISTRY.lock().push(queue);
+}
+
+/// State 值变化时调用：通知所有活动 Composer
 pub(crate) fn notify_state_changed(state_id: u32) {
-    PENDING_STATES.lock().push(state_id);
-}
-
-/// Composer 消费：获取并清空 pending states
-pub fn take_pending_states() -> Vec<u32> {
-    std::mem::take(&mut *PENDING_STATES.lock())
-}
-
-/// 非破坏性检查：是否有待处理的 state 变化
-pub fn has_pending_states() -> bool {
-    !PENDING_STATES.lock().is_empty()
+    COMPOSER_REGISTRY.lock().retain(|w| {
+        if let Some(q) = w.upgrade() {
+            q.lock().push(state_id);
+            true
+        } else {
+            false
+        }
+    });
 }
 
 // ── 实例化依赖记录（替代全局 RECORDED_DEPS + DEP_REGISTRAR）──
@@ -280,15 +268,6 @@ pub fn record_dep(state_id: u32, slot_key: u64) {
             unsafe { &mut **ptr }.push((state_id, slot_key));
         }
     });
-}
-
-/// 全局脏标志（State::notify 设置）
-pub fn take_global_dirty() -> bool {
-    GLOBAL_DIRTY.swap(false, std::sync::atomic::Ordering::AcqRel)
-}
-
-pub fn set_global_dirty() {
-    GLOBAL_DIRTY.store(true, std::sync::atomic::Ordering::Release);
 }
 
 /// State::get 中调用：若在 compose 上下文中，记录依赖

@@ -359,14 +359,23 @@ mod tests {
 
 // ── 焦点遍历 ──
 
-/// 收集树中所有可聚焦节点（深度优先，对应 Tab 键顺序）
-pub fn collect_focusable<'a>(root: &'a LayoutNode, list: &mut Vec<&'a LayoutNode>) {
+/// 收集树中所有可聚焦节点的 id
+pub fn collect_focusable_ids(root: &LayoutNode, list: &mut Vec<u64>) {
     if has_focusable_modifier(root) {
-        list.push(root);
+        list.push(root.id);
     }
     for child in &root.children {
-        collect_focusable(child, list);
+        collect_focusable_ids(child, list);
     }
+}
+
+/// 通过 node.id 查找节点不可变引用
+fn find_node_by_id(root: &LayoutNode, id: u64) -> Option<&LayoutNode> {
+    if root.id == id { return Some(root); }
+    for child in &root.children {
+        if let Some(n) = find_node_by_id(child, id) { return Some(n); }
+    }
+    None
 }
 
 fn has_focusable_modifier(node: &LayoutNode) -> bool {
@@ -375,23 +384,21 @@ fn has_focusable_modifier(node: &LayoutNode) -> bool {
 
 /// 移动到下一个可聚焦节点，返回是否成功
 pub fn focus_next(root: &mut LayoutNode) -> bool {
-    // 先收集可聚焦节点（不可变借用）
-    let list = {
-        let mut list = Vec::new();
-        collect_focusable(root, &mut list);
-        list.into_iter().map(|n| n as *const LayoutNode).collect::<Vec<_>>()
+    let ids: Vec<u64> = {
+        let mut ids = Vec::new();
+        collect_focusable_ids(root, &mut ids);
+        ids
     };
-    if list.is_empty() {
-        return false;
-    }
-    let current = list.iter().position(|p| unsafe { (**p).focused });
+    if ids.is_empty() { return false; }
+    let current = ids.iter().position(|id| {
+        find_node_by_id(root, *id).map(|n| n.focused).unwrap_or(false)
+    });
     let next = match current {
-        Some(i) if i + 1 < list.len() => i + 1,
+        Some(i) if i + 1 < ids.len() => i + 1,
         _ => 0,
     };
-    // 修改（可变借用）
     clear_focus(root);
-    set_focus_by_ptr(root, list[next]);
+    set_focus_by_id(root, ids[next]);
     true
 }
 
@@ -402,13 +409,13 @@ fn clear_focus(node: &mut LayoutNode) {
     }
 }
 
-fn set_focus_by_ptr(node: &mut LayoutNode, target: *const LayoutNode) -> bool {
-    if std::ptr::eq(node as *const _, target) {
+fn set_focus_by_id(node: &mut LayoutNode, target_id: u64) -> bool {
+    if node.id == target_id {
         node.focused = true;
         return true;
     }
     for child in &mut node.children {
-        if set_focus_by_ptr(child, target) {
+        if set_focus_by_id(child, target_id) {
             return true;
         }
     }
@@ -417,32 +424,31 @@ fn set_focus_by_ptr(node: &mut LayoutNode, target: *const LayoutNode) -> bool {
 
 /// 点击时聚焦指定节点
 pub fn focus_node(root: &mut LayoutNode, target: &LayoutNode) {
-    let target_ptr = target as *const LayoutNode;
     clear_focus(root);
-    set_focus_by_ptr(root, target_ptr);
+    set_focus_by_id(root, target.id);
 }
 
 // ── FocusRequester 全局注册表 ──
 
-/// 通过 FocusRequester ID 设置焦点（遍历树查找匹配的 FocusRequesterId modifier）
-pub fn focus_by_id(root: &mut LayoutNode, id: u64) -> bool {
-    let ptr = find_by_focus_id_immut(root, id);
-    if let Some(ptr) = ptr {
+/// 通过 FocusRequester ID 设置焦点
+pub fn focus_by_id(root: &mut LayoutNode, focus_requester_id: u64) -> bool {
+    let target_id = find_node_id_by_focus_requester(root, focus_requester_id);
+    if let Some(id) = target_id {
         clear_focus(root);
-        set_focus_by_ptr(root, ptr);
+        set_focus_by_id(root, id);
         true
     } else {
         false
     }
 }
 
-fn find_by_focus_id_immut(node: &LayoutNode, id: u64) -> Option<*const LayoutNode> {
-    if has_focus_id(node, id) {
-        return Some(node as *const _);
+fn find_node_id_by_focus_requester(node: &LayoutNode, requester_id: u64) -> Option<u64> {
+    if has_focus_id(node, requester_id) {
+        return Some(node.id);
     }
     for child in &node.children {
-        if let Some(p) = find_by_focus_id_immut(child, id) {
-            return Some(p);
+        if let Some(id) = find_node_id_by_focus_requester(child, requester_id) {
+            return Some(id);
         }
     }
     None
