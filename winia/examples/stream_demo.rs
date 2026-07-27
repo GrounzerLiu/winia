@@ -20,10 +20,10 @@ fn main() {
 fn stream_demo_ui(ctx: &mut ComposeCtx) {
     let theme = WiniaTheme::colors();
 
-    // watch channel → Stream → State
-    let (tx, rx) = tokio::sync::watch::channel(0i32);
-    let rx_stream = tokio_stream::wrappers::WatchStream::new(rx);
-    let count = rx_stream.observe(ctx, 0);
+    // watch channel — remember 防止重组时重建
+    let ch = ctx.remember(|| tokio::sync::watch::channel(0i32));
+    let (tx, rx) = ch.get();
+    let count = winia::effect::observe_watch(ctx, rx, 0);
 
     // 后台每秒自增
     let tx2 = tx.clone();
