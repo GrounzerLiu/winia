@@ -115,7 +115,18 @@ fn render_pass1<'a>(
     }
 
     if let Some((content, font_size, color, max_lines, align, overflow)) = text {
-        draw_text(canvas, content, font_size, color, x, y, w, max_lines, align, overflow);
+        // 优先用测量阶段缓存的 Paragraph（避免重建）
+        if let Some(mut para) = node.cached_paragraph.borrow_mut().take() {
+            if (w - 10000.0).abs() > 0.1 { para.layout(w); }
+            let x_off = match align {
+                crate::ui::TextAlign::Left | crate::ui::TextAlign::Justify => x,
+                crate::ui::TextAlign::Center => x + (w - para.max_intrinsic_width()).max(0.0) / 2.0,
+                crate::ui::TextAlign::Right => x + (w - para.max_intrinsic_width()).max(0.0),
+            };
+            para.paint(canvas, (x_off, y));
+        } else {
+            draw_text(canvas, content, font_size, color, x, y, w, max_lines, align, overflow);
+        }
     }
     if node.focused {
         draw_focus(canvas, rect);
@@ -222,7 +233,19 @@ fn render_pass1_simple(node: &LayoutNode, canvas: &Canvas, px: f32, py: f32) {
             text = Some((tp.content, tp.font_size, tp.color, tp.max_lines, tp.align, tp.overflow));
         }
     }
-    if let Some((c, fs, cl, ml, al, ov)) = text { draw_text(canvas, c, fs, cl, x, y, w, ml, al, ov); }
+    if let Some((c, fs, cl, ml, al, ov)) = text {
+        if let Some(mut para) = node.cached_paragraph.borrow_mut().take() {
+            if (w - 10000.0).abs() > 0.1 { para.layout(w); }
+            let x_off = match al {
+                crate::ui::TextAlign::Left | crate::ui::TextAlign::Justify => x,
+                crate::ui::TextAlign::Center => x + (w - para.max_intrinsic_width()).max(0.0) / 2.0,
+                crate::ui::TextAlign::Right => x + (w - para.max_intrinsic_width()).max(0.0),
+            };
+            para.paint(canvas, (x_off, y));
+        } else {
+            draw_text(canvas, c, fs, cl, x, y, w, ml, al, ov);
+        }
+    }
     if node.focused { draw_focus(canvas, rect); }
     for child in &node.children { render_pass1_simple(child, canvas, x, y); }
 }

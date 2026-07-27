@@ -111,8 +111,9 @@ impl ContentMeasurer for TextContentMeasurer {
         } else {
             f32::MAX
         };
-        let (width, height) = measure_text_size(&self.content, self.font_size, max_w);
-        Size::new(width, height)
+        let (size, _para) = measure_text_size(&self.content, self.font_size, max_w);
+        // 注意：paragraph 无法通过 trait 返回（非 Send），由 measure_node 统一缓存
+        size
     }
 }
 
@@ -155,6 +156,8 @@ pub struct LayoutNode {
     pub(crate) cached_constraints: Option<Constraints>,
     /// composable 调用对应的 slot key（用于 replay 时子节点查找）
     pub(crate) slot_key: u64,
+    /// 测量阶段缓存的 Paragraph（避免渲染时重建）
+    pub(crate) cached_paragraph: std::cell::RefCell<Option<skia_safe::textlayout::Paragraph>>,
 }
 
 // ── CachedNode：LayoutNode 的可缓存子集，用于增量重组时恢复节点 ──
@@ -220,6 +223,7 @@ impl LayoutNode {
             dirty: true,
             cached_constraints: None,
             slot_key: 0,
+            cached_paragraph: std::cell::RefCell::new(None),
         }
     }
 
@@ -253,6 +257,7 @@ impl LayoutNode {
             dirty: true,
             cached_constraints: None,
             slot_key: 0,
+            cached_paragraph: std::cell::RefCell::new(None),
         }
     }
 
@@ -277,6 +282,7 @@ impl Default for LayoutNode {
             dirty: true,
             cached_constraints: None,
             slot_key: 0,
+            cached_paragraph: std::cell::RefCell::new(None),
         }
     }
 }
@@ -606,7 +612,10 @@ pub(crate) fn measure_node(
         // 叶子节点：使用 ContentMeasurer 或默认逻辑
         let size = if let Some(ref measurer) = node.content_measurer {
             // 有内容测量器（如文本）
-            measurer.measure(inner_constraints)
+            let s = measurer.measure(inner_constraints);
+            // 为文本节点缓存 Paragraph（避免渲染时重建）
+            cache_text_paragraph(node, &inner_constraints);
+            s
         } else {
             // 普通叶子节点
             let w = inner_constraints.constrain_width(
@@ -637,7 +646,7 @@ pub(crate) fn measure_node(
 }
 
 /// 使用 Skia Paragraph 测量文本的尺寸（复用全局字体缓存）
-fn measure_text_size(text: &str, font_size: f32, _max_width: f32) -> (f32, f32) {
+fn measure_text_size(text: &str, font_size: f32, _max_width: f32) -> (Size, skia_safe::textlayout::Paragraph) {
     use skia_safe::textlayout::{ParagraphBuilder, ParagraphStyle, TextStyle};
     let para_style = ParagraphStyle::new();
     let mut text_style = TextStyle::new();
@@ -647,9 +656,19 @@ fn measure_text_size(text: &str, font_size: f32, _max_width: f32) -> (f32, f32) 
     builder.push_style(&text_style);
     builder.add_text(text);
     let mut para = builder.build();
-    // 先 layout 到很大宽度（避免换行），再用 intrinsic width 确定实际宽度
     para.layout(10000.0);
-    (para.max_intrinsic_width().ceil(), para.height().ceil())
+    (Size::new(para.max_intrinsic_width().ceil(), para.height().ceil()), para)
+}
+
+/// 为文本节点构建并缓存 Paragraph（供渲染复用，避免重复排版）
+fn cache_text_paragraph(node: &LayoutNode, _constraints: &Constraints) {
+    for el in node.modifier.elements() {
+        if let ModifierElement::TextContent { content, font_size, .. } = el {
+            let (_size, para) = measure_text_size(content, *font_size, f32::MAX);
+            *node.cached_paragraph.borrow_mut() = Some(para);
+            return;
+        }
+    }
 }
 
 // ── 主轴间距计算（Column/Row 共用）──
