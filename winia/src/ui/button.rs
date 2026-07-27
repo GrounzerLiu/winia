@@ -134,21 +134,23 @@ impl Button {
             }
         }
 
-        ctx.start_container(key, modifier, BoxLayout::new().alignment(crate::layout::Alignment::Center));
-
-        // 为子 Text 提供默认文字颜色
-        let text_color = match self.style {
-            ButtonStyle::Filled => theme.on_primary,
-            ButtonStyle::Tonal => theme.on_secondary_container,
-            ButtonStyle::Outlined => theme.primary,
-            ButtonStyle::Text => theme.primary,
-        };
-        crate::ui::text::ProvideTextStyle(
-            crate::ui::text::TextStyle::new().color(text_color),
-            ctx, content,
-        );
-
-        ctx.end_node();
+        match ctx.start_restartable_group(key, modifier, BoxLayout::new().alignment(crate::layout::Alignment::Center)) {
+            crate::core::composer::GroupStatus::Skip => {}
+            crate::core::composer::GroupStatus::Enter => {
+                // 为子 Text 提供默认文字颜色
+                let text_color = match self.style {
+                    ButtonStyle::Filled => theme.on_primary,
+                    ButtonStyle::Tonal => theme.on_secondary_container,
+                    ButtonStyle::Outlined => theme.primary,
+                    ButtonStyle::Text => theme.primary,
+                };
+                crate::ui::text::ProvideTextStyle(
+                    crate::ui::text::TextStyle::new().color(text_color),
+                    ctx, content,
+                );
+            }
+        }
+        ctx.end_restartable_group();
     }
 
     // ── Getters（测试用）──

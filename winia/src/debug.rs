@@ -164,7 +164,11 @@ pub fn start_stdin_channel() {
 // ═══════════════════════════════════════════════════════════
 
 pub fn start_ws_server() {
-    tokio::spawn(async move {
+    let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        eprintln!("[DevTools] No tokio runtime — WebSocket disabled, stdin still works");
+        return;
+    };
+    handle.spawn(async move {
         let listener = match tokio::net::TcpListener::bind("127.0.0.1:9998").await {
             Ok(l) => l,
             Err(e) => { eprintln!("[DevTools] ws bind failed: {e}"); return; }

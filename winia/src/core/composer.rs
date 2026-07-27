@@ -11,9 +11,9 @@
 
 use crate::core::state::State;
 use crate::layout::constraints::Constraints;
-use crate::layout::node::{LayoutNode, MeasurePolicy};
+use crate::layout::node::{LayoutNode, MeasurePolicy, Size};
 use crate::modifier::Modifier;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::any::Any;
 use std::cell::Cell;
@@ -116,6 +116,25 @@ impl<'a> ComposeCtx<'a> {
     pub fn end_node(&mut self) {
         self.composer.end_node();
     }
+
+    /// 开始一个可重启的组合分组（容器节点）。
+    /// 返回 Enter（正常执行闭包）或 Skip（跳过内容，从缓存重放子树）。
+    pub fn start_restartable_group(
+        &mut self,
+        key: u64,
+        modifier: Modifier,
+        policy: impl MeasurePolicy + 'static,
+    ) -> GroupStatus {
+        self.composer
+            .start_restartable_group(key, modifier, Some(Box::new(policy)), None)
+    }
+
+    /// 结束一个可重启分组。
+    /// 在 Enter 模式下等同于 end_node()；
+    /// 在 Skip 模式下重放子 slot 结构并创建 stub LayoutNode。
+    pub fn end_restartable_group(&mut self) {
+        self.composer.end_restartable_group();
+    }
 }
 
 // ── SlotTable ──
@@ -128,6 +147,8 @@ struct Slot {
     children: Vec<Slot>,
     /// 重组时是否需要执行（State 变化标记）
     dirty: bool,
+    /// 当前帧中此 slot 的子树总 slot 数（含自身；用于 skip 时重放）
+    children_count: usize,
 }
 
 impl Slot {
@@ -136,7 +157,8 @@ impl Slot {
             key,
             remembered: HashMap::new(),
             children: Vec::new(),
-            dirty: true, // 新创建的 slot 总是 dirty(首次必须执行)
+            dirty: true, // 新创建的 slot 总是 dirty（首次必须执行）
+            children_count: 1, // 自身
         }
     }
 
@@ -154,6 +176,34 @@ impl Slot {
         self.remembered.insert(slot_key, Box::new(state.clone()));
         state
     }
+}
+
+/// 可重启分组状态 — start_restartable_group() 返回
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum GroupStatus {
+    /// 子树完全 clean → 跳过内容闭包，重放 slot 结构
+    Skip,
+    /// 子树有变化 → 正常执行闭包
+    Enter,
+}
+
+/// 缓存的节点信息（供 clean slot 跳过和子树重放时重建 LayoutNode）
+#[derive(Debug, Clone)]
+struct CachedNode {
+    modifier: Modifier,
+    measured_size: Size,
+    cached_constraints: Option<Constraints>,
+}
+
+/// 槽位状态 — start_slot() 返回
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum SlotStatus {
+    /// slot 与上一帧相同，且未被标记为脏 → 可跳过子树重建
+    Clean,
+    /// slot 与上一帧相同，但被标记为脏 → 需要重新测量
+    Dirty,
+    /// slot 是新创建的（上一帧不存在）→ 需要完整初始化
+    New,
 }
 
 /// 槽位表 — 组合树的内部数据结构（树形嵌套）
@@ -187,20 +237,19 @@ impl SlotTable {
         slot
     }
 
-    fn start_slot(&mut self, key: u64) {
+    fn start_slot(&mut self, key: u64) -> SlotStatus {
         let idx = *self.child_counters.last().unwrap_or(&0);
         self.active_slot_key = key;
         ACTIVE_SLOT_KEY.with(|c| c.set(key));
-        let is_dirty = self.dirty_keys.remove(&key); // 先取走 dirty 状态
+        let is_dirty = self.dirty_keys.remove(&key);
         let parent = self.current_slot();
 
         if idx < parent.children.len() && parent.children[idx].key == key {
             if !parent.children[idx].dirty && !is_dirty {
-                // clean slot，跳过
                 self.path.push(idx);
                 self.child_counters.last_mut().map(|c| *c += 1);
                 self.child_counters.push(0);
-                return;
+                return SlotStatus::Clean;
             }
             parent.children[idx].dirty = false;
             self.path.push(idx);
@@ -211,9 +260,15 @@ impl SlotTable {
         }
         if let Some(last) = self.child_counters.last_mut() { *last += 1; }
         self.child_counters.push(0);
+        SlotStatus::Dirty
     }
 
     fn end_slot(&mut self) {
+        // 计算子树 slot 总数（自身 + 所有子 slot 的 children_count 之和）
+        let count = 1 + self.current_slot().children.iter()
+            .map(|c| c.children_count)
+            .sum::<usize>();
+        self.current_slot().children_count = count;
         self.path.pop();
         self.child_counters.pop();
     }
@@ -238,9 +293,38 @@ impl SlotTable {
         }
     }
 
-    /// 外部标记 slot key 为 dirty（由 State 变化触发）
+    /// 外部标记 slot key 为 dirty（由 State 变化触发）。
+    /// 同时递归标记所有祖先 slot，确保父级 start_restartable_group 返回 Enter。
     pub(crate) fn mark_dirty(&mut self, key: u64) {
         self.dirty_keys.insert(key);
+        let root = &mut self.root_slot;
+        SlotTable::mark_dirty_path(root, key);
+    }
+
+    /// 在 slot 树中查找 key 对应的节点，并将其及所有祖先标记 dirty。
+    /// 返回 true 表示找到了目标。
+    fn mark_dirty_path(slot: &mut Slot, key: u64) -> bool {
+        if slot.key == key {
+            slot.dirty = true;
+            return true;
+        }
+        for child in &mut slot.children {
+            if SlotTable::mark_dirty_path(child, key) {
+                slot.dirty = true;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// 返回当前 slot 在树中的路径（用于 LayoutNode 复用时的 measured_size 查找）
+    fn current_path(&self) -> &[usize] {
+        &self.path
+    }
+
+    /// 返回当前 slot 的子 slot 引用（用于 clean subtree 重放）
+    fn current_children(&mut self) -> &[Slot] {
+        &self.current_slot().children
     }
 }
 
@@ -261,6 +345,8 @@ pub struct Composer {
     needs_recomposition: bool,
     layout_nodes: Vec<LayoutNode>,
     node_stack: Vec<usize>,
+    /// 记录每个 start_restartable_group 的 skip 状态（用于 end_restartable_group 判断）
+    group_skip_stack: Vec<bool>,
     layout_root: Option<usize>,
     /// state_id -> slot_keys 依赖映射
     slot_deps: HashMap<u32, Vec<u64>>,
@@ -268,6 +354,8 @@ pub struct Composer {
     recorded_deps: Vec<(u32, u64)>,
     /// 本 Composer 实例的 pending state 通知队列
     pending_states: Arc<parking_lot::Mutex<Vec<u32>>>,
+    /// 上一帧各 slot 路径 → 节点缓存（用于 clean slot 跳过和子树重放）
+    prev_nodes: HashMap<Vec<usize>, CachedNode>,
 }
 
 impl Composer {
@@ -282,10 +370,12 @@ impl Composer {
             needs_recomposition: false,
             layout_nodes: Vec::new(),
             node_stack: Vec::new(),
+            group_skip_stack: Vec::new(),
             layout_root: None,
             slot_deps: HashMap::new(),
             recorded_deps: Vec::new(),
             pending_states,
+            prev_nodes: HashMap::new(),
         }
     }
 
@@ -299,11 +389,22 @@ impl Composer {
     /// 在组合树中开始一个节点（由组件的 build 方法调用）
     pub fn start_node(&mut self, key: u64, modifier: Modifier, policy: Option<Box<dyn MeasurePolicy>>, on_remove: Option<Box<dyn FnOnce() + Send>>) {
         self.current_group_key = key as u32;
-        self.slot_table.start_slot(key);
+        let slot_status = self.slot_table.start_slot(key);
 
         // 创建对应的 LayoutNode
         let mut node = LayoutNode::new(modifier, policy);
         node.on_remove = on_remove;
+
+        // Clean slot：从上一帧缓存恢复 measured_size 和 cached_constraints
+        if slot_status == SlotStatus::Clean {
+            let path = self.slot_table.current_path().to_vec();
+            if let Some(cached) = self.prev_nodes.get(&path) {
+                node.measured_size = cached.measured_size;
+                node.cached_constraints = cached.cached_constraints;
+                node.dirty = false;
+            }
+        }
+
         let index = self.layout_nodes.len();
         self.layout_nodes.push(node);
         self.node_stack.push(index);
@@ -332,6 +433,105 @@ impl Composer {
         }
     }
 
+    /// 开始可重启分组（内部调用 start_node + 返回 skip/enter 状态）
+    fn start_restartable_group(
+        &mut self,
+        key: u64,
+        modifier: Modifier,
+        policy: Option<Box<dyn MeasurePolicy>>,
+        on_remove: Option<Box<dyn FnOnce() + Send>>,
+    ) -> GroupStatus {
+        self.current_group_key = key as u32;
+        let slot_status = self.slot_table.start_slot(key);
+
+        let mut node = LayoutNode::new(modifier, policy);
+        node.on_remove = on_remove;
+
+        // Clean slot：从缓存恢复
+        let is_skip = if slot_status == SlotStatus::Clean {
+            let path = self.slot_table.current_path().to_vec();
+            if let Some(cached) = self.prev_nodes.get(&path) {
+                node.measured_size = cached.measured_size;
+                node.cached_constraints = cached.cached_constraints;
+                node.dirty = false;
+                true // 子树可跳过
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        let index = self.layout_nodes.len();
+        self.layout_nodes.push(node);
+        self.node_stack.push(index);
+        self.group_skip_stack.push(is_skip);
+
+        if is_skip {
+            GroupStatus::Skip
+        } else {
+            GroupStatus::Enter
+        }
+    }
+
+    /// 结束可重启分组：
+    /// - Skip 模式：重放子 slot 结构并创建 stub LayoutNode
+    /// - Enter 模式：等同于 end_node()
+    fn end_restartable_group(&mut self) {
+        let was_skip = self.group_skip_stack.pop().unwrap_or(false);
+        if was_skip {
+            self.replay_clean_subtree();
+        }
+        self.end_node();
+    }
+
+    /// 重放当前 slot 的所有子 slot：为每个子 slot 创建 stub LayoutNode（从缓存取值），
+    /// 递归处理嵌套子树。最终通过 end_node 将重放的子节点挂接到父节点。
+    fn replay_clean_subtree(&mut self) {
+        // 收集当前 slot 的子 slot 信息（key + children_count）
+        let children: Vec<(u64, usize)> = self
+            .slot_table
+            .current_children()
+            .iter()
+            .map(|c| (c.key, c.children_count))
+            .collect();
+
+        for (child_key, _child_total_count) in &children {
+            self.slot_table.start_slot(*child_key);
+
+            let path = self.slot_table.current_path().to_vec();
+            let cached = self
+                .prev_nodes
+                .get(&path)
+                .cloned()
+                .unwrap_or_else(|| {
+                    // 理论上不会发生（clean slot 必有缓存）
+                    CachedNode {
+                        modifier: Modifier::new(),
+                        measured_size: Size::new(0.0, 0.0),
+                        cached_constraints: None,
+                    }
+                });
+
+            let mut node = LayoutNode::new(cached.modifier, None); // policy=None（不会测量）
+            node.measured_size = cached.measured_size;
+            node.cached_constraints = cached.cached_constraints;
+            node.dirty = false;
+
+            let idx = self.layout_nodes.len();
+            self.layout_nodes.push(node);
+            self.node_stack.push(idx);
+
+            // 递归重放该子 slot 的孙子节点
+            let child_slot_has_children = self.slot_table.current_children().len() > 0;
+            if child_slot_has_children {
+                self.replay_clean_subtree();
+            }
+
+            self.end_node(); // 将子节点挂到父节点（内部会调 end_slot）
+        }
+    }
+
     /// 执行组合：运行 content 闭包，构建/更新组合树和布局树。
     pub fn compose(&mut self, content: impl FnOnce(&mut ComposeCtx)) {
         self.slot_table.reset();
@@ -344,16 +544,23 @@ impl Composer {
         self.node_stack.clear();
 
         // 消费本 Composer 实例的 pending states → 标记对应 slot 为脏
+        // 同时收集受影响的 slot key（用于增量更新 slot_deps）
+        let mut affected_slot_keys = HashSet::new();
         let mut pending = self.pending_states.lock();
         for state_id in pending.drain(..) {
             if let Some(keys) = self.slot_deps.get(&state_id) {
                 for &k in keys {
                     self.slot_table.mark_dirty(k);
+                    affected_slot_keys.insert(k);
                 }
             }
         }
         drop(pending);
-        self.slot_deps.clear(); // 清空旧依赖，下面会重新收集
+
+        // 增量清理：只移除 dirty slot 的旧依赖（clean slot 的保留不动）
+        for keys in self.slot_deps.values_mut() {
+            keys.retain(|k| !affected_slot_keys.contains(k));
+        }
 
         // 设置依赖记录目标——State::get() 会通过 thread-local 指针写入 self.recorded_deps
         crate::core::state::set_recording_target(&mut self.recorded_deps);
@@ -367,8 +574,11 @@ impl Composer {
         self.slot_table.truncate();
 
         // 将本帧收集的依赖写入 slot_deps
+        // 只更新 dirty slot 的依赖（clean slot 的已保留不动）
         for (state_id, slot_key) in self.recorded_deps.drain(..) {
-            self.slot_deps.entry(state_id).or_default().push(slot_key);
+            if affected_slot_keys.contains(&slot_key) {
+                self.slot_deps.entry(state_id).or_default().push(slot_key);
+            }
         }
     }
 
@@ -382,12 +592,15 @@ impl Composer {
         self.layout_root.map(|idx| &mut self.layout_nodes[idx])
     }
 
-    /// 执行整棵布局树的 measure + place
+    /// 执行整棵布局树的 measure + place，并缓存测量结果供下帧复用
     pub fn layout(&mut self, root_constraints: Constraints) {
         if let Some(root_idx) = self.layout_root {
             let root = &mut self.layout_nodes[root_idx];
             let (_size, _placements) = crate::layout::measure_node(root, root_constraints);
             root.measured_size = _size;
+            // 收集整棵树的节点信息（measured_size、cached_constraints、modifier），按 slot 路径索引
+            self.prev_nodes.clear();
+            collect_nodes(root, &mut Vec::new(), &mut self.prev_nodes);
         }
     }
 
@@ -422,6 +635,33 @@ impl Default for Composer {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// 递归遍历布局树，收集每个 slot 路径的 (measured_size, cached_constraints)。
+/// 同时将子节点的 dirty 冒泡到父节点（确保父节点不会因 dirty=false 而跳过脏子树）。
+/// 后序遍历布局树，收集所有节点的 measured_size、cached_constraints 和 modifier
+/// 存入 prev_nodes（以 slot path 为键）。
+/// 同时将子节点的 dirty 冒泡到父节点（确保父节点不会因 dirty=false 而跳过脏子树）。
+fn collect_nodes(
+    node: &mut LayoutNode,
+    path: &mut Vec<usize>,
+    map: &mut HashMap<Vec<usize>, CachedNode>,
+) {
+    // 先递归子节点（后序），以便 dirty 从子向父冒泡
+    for (i, child) in node.children.iter_mut().enumerate() {
+        path.push(i);
+        collect_nodes(child, path, map);
+        if child.dirty {
+            node.dirty = true;
+        }
+        path.pop();
+    }
+    // 缓存当前节点的测量结果 + modifier
+    map.insert(path.clone(), CachedNode {
+        modifier: node.modifier.clone(),
+        measured_size: node.measured_size,
+        cached_constraints: node.cached_constraints,
+    });
 }
 
 // ── 测试 ──
@@ -489,5 +729,84 @@ mod tests {
             }
             assert_eq!(always.get(), 1);
         });
+    }
+
+use crate::layout::BoxLayout;
+
+    /// 测试 restartable group 的 skip → replay 路径：
+    /// 状态变化只影响某个 leaf slot，兄弟 slot 应被 clean skip 并正确 replay。
+    #[test]
+    fn test_restartable_skip_replay_tree_integrity() {
+        let mut composer = Composer::new();
+
+        // Frame 1: 建立初始树
+        composer.compose(|ctx| {
+            let root_key = ctx.next_key();
+            match ctx.start_restartable_group(root_key, Modifier::new(), BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    // 子 1: state-dependent leaf
+                    let text_key = ctx.next_key();
+                    {
+                        let _count: State<i32> = ctx.remember(|| 0);
+                        ctx.start_leaf(text_key, Modifier::new());
+                    }
+                    ctx.end_node();
+
+                    // 子 2: clean restartable group
+                    let btn_key = ctx.next_key();
+                    match ctx.start_restartable_group(btn_key, Modifier::new(), BoxLayout::new()) {
+                        GroupStatus::Skip => {}
+                        GroupStatus::Enter => {
+                            let content_key = ctx.next_key();
+                            ctx.start_leaf(content_key, Modifier::new());
+                            ctx.end_node();
+                        }
+                    }
+                    ctx.end_restartable_group();
+                }
+            }
+            ctx.end_restartable_group();
+        });
+
+        // 断言 Frame 1 树结构
+        let root = composer.layout_root().expect("root should exist");
+        assert_eq!(root.children.len(), 2, "root should have 2 children");
+        assert_eq!(root.children[0].children.len(), 0, "text should be leaf");
+        assert_eq!(root.children[1].children.len(), 1, "button should have 1 child (content)");
+
+        // Frame 2: recompose（button 应被 skip/replay）
+        composer.recompose(|ctx| {
+            let root_key = ctx.next_key();
+            match ctx.start_restartable_group(root_key, Modifier::new(), BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    let text_key = ctx.next_key();
+                    {
+                        let _count: State<i32> = ctx.remember(|| 999);
+                        ctx.start_leaf(text_key, Modifier::new());
+                    }
+                    ctx.end_node();
+
+                    let btn_key = ctx.next_key();
+                    match ctx.start_restartable_group(btn_key, Modifier::new(), BoxLayout::new()) {
+                        GroupStatus::Skip => {}
+                        GroupStatus::Enter => {
+                            let content_key = ctx.next_key();
+                            ctx.start_leaf(content_key, Modifier::new());
+                            ctx.end_node();
+                        }
+                    }
+                    ctx.end_restartable_group();
+                }
+            }
+            ctx.end_restartable_group();
+        });
+
+        // 断言 Frame 2 树结构仍正确
+        let root = composer.layout_root().expect("root should exist");
+        assert_eq!(root.children.len(), 2, "after recompose: root should have 2 children, got {}", root.children.len());
+        assert_eq!(root.children[0].children.len(), 0, "after recompose: text should still be leaf");
+        assert_eq!(root.children[1].children.len(), 1, "after recompose: button should still have 1 child");
     }
 }

@@ -38,9 +38,13 @@ impl Column {
             .alignment(self.alignment)
             .spacing(self.spacing)
             .direction(dir);
-        ctx.start_container(key, self.modifier, policy);
-        content(ctx);
-        ctx.end_node();
+        match ctx.start_restartable_group(key, self.modifier, policy) {
+            crate::core::composer::GroupStatus::Skip => {}
+            crate::core::composer::GroupStatus::Enter => {
+                content(ctx);
+            }
+        }
+        ctx.end_restartable_group();
     }
 }
 
@@ -80,9 +84,13 @@ impl Row {
             .alignment(self.alignment)
             .spacing(self.spacing)
             .direction(dir);
-        ctx.start_container(key, self.modifier, policy);
-        content(ctx);
-        ctx.end_node();
+        match ctx.start_restartable_group(key, self.modifier, policy) {
+            crate::core::composer::GroupStatus::Skip => {}
+            crate::core::composer::GroupStatus::Enter => {
+                content(ctx);
+            }
+        }
+        ctx.end_restartable_group();
     }
 }
 
@@ -111,9 +119,13 @@ impl Stack {
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         let key = ctx.next_key();
         let policy = BoxLayout::new().alignment(self.alignment);
-        ctx.start_container(key, self.modifier, policy);
-        content(ctx);
-        ctx.end_node();
+        match ctx.start_restartable_group(key, self.modifier, policy) {
+            crate::core::composer::GroupStatus::Skip => {}
+            crate::core::composer::GroupStatus::Enter => {
+                content(ctx);
+            }
+        }
+        ctx.end_restartable_group();
     }
 }
 

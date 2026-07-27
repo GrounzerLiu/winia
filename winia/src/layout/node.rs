@@ -149,6 +149,10 @@ pub struct LayoutNode {
     pub focused: bool,
     /// 节点从布局树移除时调用（用于 Window 生命周期管理）
     pub(crate) on_remove: Option<Box<dyn FnOnce() + Send>>,
+    /// 是否需要重新测量（clean slot 复用时为 false）
+    pub(crate) dirty: bool,
+    /// 上次测量时的约束（用于跳过常量布局的 re-measure）
+    pub(crate) cached_constraints: Option<Constraints>,
 }
 
 impl Drop for LayoutNode {
@@ -170,6 +174,8 @@ impl LayoutNode {
             content_measurer,
             focused: false,
             on_remove: None,
+            dirty: true,
+            cached_constraints: None,
         }
     }
 
@@ -200,6 +206,8 @@ impl LayoutNode {
             content_measurer,
             focused: false,
             on_remove: None,
+            dirty: true,
+            cached_constraints: None,
         }
     }
 
@@ -221,6 +229,8 @@ impl Default for LayoutNode {
             content_measurer: None,
             focused: false,
             on_remove: None,
+            dirty: true,
+            cached_constraints: None,
         }
     }
 }
@@ -484,6 +494,11 @@ pub(crate) fn measure_node(
     node: &mut LayoutNode,
     constraints: Constraints,
 ) -> (Size, Vec<Placement>) {
+    // 常量折叠：若节点未变脏且约束相同，直接复用上次结果
+    if !node.dirty && node.cached_constraints == Some(constraints) {
+        return (node.measured_size, Vec::new());
+    }
+
     // 应用 modifier 中的 Layout 约束（使用查询方法）
     let mut inner_constraints = constraints;
 
@@ -524,7 +539,7 @@ pub(crate) fn measure_node(
     }
 
     // 实际测量
-    if let Some(ref policy) = node.measure_policy {
+    let result = if let Some(ref policy) = node.measure_policy {
         let (size, placements) = {
             let children = &mut node.children;
             policy.measure(children, inner_constraints)
@@ -567,7 +582,12 @@ pub(crate) fn measure_node(
 
         node.measured_size = size;
         (size, Vec::new())
-    }
+    };
+
+    // 标记测量完成，缓存约束供下帧复用
+    node.dirty = false;
+    node.cached_constraints = Some(constraints);
+    result
 }
 
 /// 使用 Skia Paragraph 测量文本的尺寸（复用全局字体缓存）
