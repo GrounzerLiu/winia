@@ -11,7 +11,7 @@
 
 use crate::core::state::State;
 use crate::layout::constraints::Constraints;
-use crate::layout::node::{LayoutNode, MeasurePolicy, Point, Size};
+use crate::layout::node::{LayoutNode, MeasurePolicy, Point, Size, CachedNode};
 use crate::modifier::Modifier;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -187,14 +187,6 @@ pub enum GroupStatus {
     Enter,
 }
 
-/// 缓存的节点信息（供 clean slot 跳过和子树重放时重建 LayoutNode）
-#[derive(Debug, Clone)]
-struct CachedNode {
-    modifier: Modifier,
-    measured_size: Size,
-    cached_constraints: Option<Constraints>,
-    position: Point,
-}
 
 /// 槽位状态 — start_slot() 返回
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -350,7 +342,7 @@ pub struct Composer {
     group_skip_stack: Vec<bool>,
     layout_root: Option<usize>,
     /// state_id -> slot_keys 依赖映射
-    slot_deps: HashMap<u32, Vec<u64>>,
+    slot_deps: HashMap<u32, HashSet<u64>>,
     /// 当前 compose 期间记录的依赖（替代全局 RECORDED_DEPS）
     recorded_deps: Vec<(u32, u64)>,
     /// 本 Composer 实例的 pending state 通知队列
@@ -395,14 +387,13 @@ impl Composer {
         // 创建对应的 LayoutNode
         let mut node = LayoutNode::new(modifier, policy);
         node.on_remove = on_remove;
+        node.slot_key = key;
 
         // Clean slot：从上一帧缓存恢复 measured_size 和 cached_constraints
         if slot_status == SlotStatus::Clean {
             let path = self.slot_table.current_path().to_vec();
             if let Some(cached) = self.prev_nodes.get(&path) {
-                node.measured_size = cached.measured_size;
-                node.cached_constraints = cached.cached_constraints;
-                node.dirty = false;
+                node.restore_from(cached);
             }
         }
 
@@ -447,14 +438,13 @@ impl Composer {
 
         let mut node = LayoutNode::new(modifier, policy);
         node.on_remove = on_remove;
+        node.slot_key = key;
 
         // Clean slot：从缓存恢复
         let is_skip = if slot_status == SlotStatus::Clean {
             let path = self.slot_table.current_path().to_vec();
             if let Some(cached) = self.prev_nodes.get(&path) {
-                node.measured_size = cached.measured_size;
-                node.cached_constraints = cached.cached_constraints;
-                node.dirty = false;
+                node.restore_from(cached);
                 true // 子树可跳过
             } else {
                 false
@@ -487,9 +477,9 @@ impl Composer {
     }
 
     /// 重放当前 slot 的所有子 slot：为每个子 slot 创建 stub LayoutNode（从缓存取值），
-    /// 递归处理嵌套子树。最终通过 end_node 将重放的子节点挂接到父节点。
+    /// 递归处理嵌套子树。slot 操作统一通过 start_node/end_node 入口（不再裸调 start_slot）。
     fn replay_clean_subtree(&mut self) {
-        // 收集当前 slot 的子 slot 信息（key + children_count）
+        // 从 Slot 树读取子节点列表（LayoutNode 树在此阶段尚未构建）
         let children: Vec<(u64, usize)> = self
             .slot_table
             .current_children()
@@ -497,45 +487,35 @@ impl Composer {
             .map(|c| (c.key, c.children_count))
             .collect();
 
-        for (child_key, _child_total_count) in &children {
-            self.slot_table.start_slot(*child_key);
+        for (child_key, child_slot_count) in &children {
+            // 通过 start_node 进入 slot + 创建节点（内部会调 start_slot）
+            self.start_node(*child_key, Modifier::new(), None, None);
 
+            // 用缓存覆盖节点所有属性
             let path = self.slot_table.current_path().to_vec();
-            let cached = self
-                .prev_nodes
-                .get(&path)
-                .cloned()
-                .unwrap_or_else(|| {
-                    // 理论上不会发生（clean slot 必有缓存）
-                    CachedNode {
-                        modifier: Modifier::new(),
-                        measured_size: Size::new(0.0, 0.0),
-                        cached_constraints: None,
-                        position: Point::ZERO,
-                    }
-                });
+            if let Some(cached) = self.prev_nodes.get(&path) {
+                let node_idx = *self.node_stack.last().unwrap();
+                self.layout_nodes[node_idx].restore_from(cached);
+            }
 
-            let mut node = LayoutNode::new(cached.modifier, None); // policy=None（不会测量）
-            node.measured_size = cached.measured_size;
-            node.cached_constraints = cached.cached_constraints;
-            node.position = cached.position;
-            node.dirty = false;
-
-            let idx = self.layout_nodes.len();
-            self.layout_nodes.push(node);
-            self.node_stack.push(idx);
-
-            // 递归重放该子 slot 的孙子节点
-            let child_slot_has_children = self.slot_table.current_children().len() > 0;
-            if child_slot_has_children {
+            // 递归重放孙子节点
+            if *child_slot_count > 1 { // >1 因为自身已计入 children_count
                 self.replay_clean_subtree();
             }
 
-            self.end_node(); // 将子节点挂到父节点（内部会调 end_slot）
+            self.end_node(); // 将子节点挂到父节点
         }
     }
 
-    /// 执行组合：运行 content 闭包，构建/更新组合树和布局树。
+    /// Compose 末尾：递归遍历 LayoutNode 树，为所有 modifier 注册 State 依赖
+fn register_modifier_deps_recursive(node: &LayoutNode) {
+    node.modifier.register_state_deps();
+    for child in &node.children {
+        Self::register_modifier_deps_recursive(child);
+    }
+}
+
+/// 执行组合：运行 content 闭包，构建/更新组合树和布局树。
     pub fn compose(&mut self, content: impl FnOnce(&mut ComposeCtx)) {
         self.slot_table.reset();
         self.current_group_key = 0;
@@ -560,11 +540,6 @@ impl Composer {
         }
         drop(pending);
 
-        // 增量清理：只移除 dirty slot 的旧依赖（clean slot 的保留不动）
-        for keys in self.slot_deps.values_mut() {
-            keys.retain(|k| !affected_slot_keys.contains(k));
-        }
-
         // 设置依赖记录目标——State::get() 会通过 thread-local 指针写入 self.recorded_deps
         crate::core::state::set_recording_target(&mut self.recorded_deps);
 
@@ -573,15 +548,18 @@ impl Composer {
             content(ctx);
         }
 
+        // 自动注册所有 modifier 中引用的 State 依赖（scroll 等）
+        if let Some(root_idx) = self.layout_root {
+            let root = &self.layout_nodes[root_idx];
+            Self::register_modifier_deps_recursive(root);
+        }
+
         crate::core::state::clear_recording_target();
         self.slot_table.truncate();
 
-        // 将本帧收集的依赖写入 slot_deps
-        // 只更新 dirty slot 的依赖（clean slot 的已保留不动）
+        // 将本帧收集的依赖写入 slot_deps（HashSet 自动去重）
         for (state_id, slot_key) in self.recorded_deps.drain(..) {
-            if affected_slot_keys.contains(&slot_key) {
-                self.slot_deps.entry(state_id).or_default().push(slot_key);
-            }
+            self.slot_deps.entry(state_id).or_default().insert(slot_key);
         }
     }
 
@@ -659,13 +637,8 @@ fn collect_nodes(
         }
         path.pop();
     }
-    // 缓存当前节点的测量结果 + modifier + position
-    map.insert(path.clone(), CachedNode {
-        modifier: node.modifier.clone(),
-        measured_size: node.measured_size,
-        cached_constraints: node.cached_constraints,
-        position: node.position,
-    });
+    // 缓存当前节点的可缓存子集
+    map.insert(path.clone(), node.to_cached());
 }
 
 // ── 测试 ──

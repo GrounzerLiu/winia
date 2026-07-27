@@ -418,11 +418,14 @@ impl Modifier {
 
     /// 垂直滚动（绑定 ScrollState）
     pub fn vertical_scroll(self, state: ScrollState) -> Self {
+        // 读取 offset 以注册 State→Slot 依赖，确保滚动时触发增量重组
+        let _ = state.offset.get();
         self.push(ModifierElement::VerticalScroll { state: state.offset })
     }
 
     /// 水平滚动
     pub fn horizontal_scroll(self, state: ScrollState) -> Self {
+        let _ = state.offset.get();
         self.push(ModifierElement::HorizontalScroll { state: state.offset })
     }
 }
@@ -592,6 +595,18 @@ impl Modifier {
         for el in &self.elements {
             if el.is_input() {
                 f(el);
+            }
+        }
+    }
+
+    /// Compose 阶段自动注册所有 ModifierElement 中引用的 State 依赖。
+    /// 新增包含 State<T> 的 ModifierElement 变体时，必须在此方法中加对应分支。
+    pub(crate) fn register_state_deps(&self) {
+        for el in &self.elements {
+            match el {
+                ModifierElement::VerticalScroll { state } => { let _ = state.get(); }
+                ModifierElement::HorizontalScroll { state } => { let _ = state.get(); }
+                _ => {}
             }
         }
     }

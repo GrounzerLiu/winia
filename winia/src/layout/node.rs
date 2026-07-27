@@ -153,6 +153,49 @@ pub struct LayoutNode {
     pub(crate) dirty: bool,
     /// 上次测量时的约束（用于跳过常量布局的 re-measure）
     pub(crate) cached_constraints: Option<Constraints>,
+    /// composable 调用对应的 slot key（用于 replay 时子节点查找）
+    pub(crate) slot_key: u64,
+}
+
+// ── CachedNode：LayoutNode 的可缓存子集，用于增量重组时恢复节点 ──
+
+/// LayoutNode 的缓存快照。新增 LayoutNode 字段时，必须同步更新此结构
+/// 及 to_cached() / restore_from() 方法。
+#[derive(Debug, Clone)]
+pub(crate) struct CachedNode {
+    pub modifier: Modifier,
+    pub measured_size: Size,
+    pub position: Point,
+    pub focused: bool,
+    pub dirty: bool,
+    pub cached_constraints: Option<Constraints>,
+    pub slot_key: u64,
+}
+
+impl LayoutNode {
+    /// 生成可缓存快照（编译器强制覆盖所有需缓存字段）
+    pub(crate) fn to_cached(&self) -> CachedNode {
+        CachedNode {
+            modifier: self.modifier.clone(),
+            measured_size: self.measured_size,
+            position: self.position,
+            focused: self.focused,
+            dirty: self.dirty,
+            cached_constraints: self.cached_constraints,
+            slot_key: self.slot_key,
+        }
+    }
+
+    /// 从缓存恢复节点状态
+    pub(crate) fn restore_from(&mut self, cached: &CachedNode) {
+        self.modifier = cached.modifier.clone();
+        self.measured_size = cached.measured_size;
+        self.position = cached.position;
+        self.focused = cached.focused;
+        self.dirty = cached.dirty;
+        self.cached_constraints = cached.cached_constraints;
+        self.slot_key = cached.slot_key;
+    }
 }
 
 impl Drop for LayoutNode {
@@ -176,6 +219,7 @@ impl LayoutNode {
             on_remove: None,
             dirty: true,
             cached_constraints: None,
+            slot_key: 0,
         }
     }
 
@@ -208,6 +252,7 @@ impl LayoutNode {
             on_remove: None,
             dirty: true,
             cached_constraints: None,
+            slot_key: 0,
         }
     }
 
@@ -231,6 +276,7 @@ impl Default for LayoutNode {
             on_remove: None,
             dirty: true,
             cached_constraints: None,
+            slot_key: 0,
         }
     }
 }

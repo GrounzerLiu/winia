@@ -148,6 +148,10 @@ pub fn start_stdin_channel() {
                     queue_event(DebugEvent::Click { x, y });
                 }
                 "k" if parts.len() >= 2 => queue_event(DebugEvent::Key { key: parts[1..].join(" ") }),
+                "s" if parts.len() == 2 => {
+                    let dy: f32 = parts[1].parse().unwrap_or(0.0);
+                    queue_event(DebugEvent::Scroll { dx: 0.0, dy });
+                }
                 "r" => { request_screenshot(); wake(); }
                 "t" => {
                     if let Some(ref d) = *DEBUG_STATE.lock().unwrap() { eprintln!("{}", d.tree_json); }
@@ -202,19 +206,30 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
                 queue_event(DebugEvent::Key { key: parts[1..].join(" ") });
                 let _ = write.send(Message::Text("ok key".into())).await;
             }
+            "s" if parts.len() == 2 => {
+                let dy: f32 = parts[1].parse().unwrap_or(0.0);
+                queue_event(DebugEvent::Scroll { dx: 0.0, dy });
+                let _ = write.send(Message::Text("ok scroll".into())).await;
+            }
             "r" => {
                 request_screenshot(); wake();
                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                let s = match DEBUG_STATE.lock().unwrap().as_ref() {
-                    Some(d) => format!("screenshot {}x{}", d.width, d.height),
-                    None => "no frame".into(),
+                let s = match DEBUG_STATE.lock() {
+                    Ok(guard) => match guard.as_ref() {
+                        Some(d) => format!("screenshot {}x{}", d.width, d.height),
+                        None => "no frame".into(),
+                    },
+                    Err(_) => "lock error".into(),
                 };
                 let _ = write.send(Message::text(s)).await;
             }
             "t" => {
-                let json = match DEBUG_STATE.lock().unwrap().as_ref() {
-                    Some(d) => d.tree_json.clone(),
-                    None => r#"{"error":"no tree"}"#.into(),
+                let json = match DEBUG_STATE.lock() {
+                    Ok(guard) => match guard.as_ref() {
+                        Some(d) => d.tree_json.clone(),
+                        None => r#"{"error":"no tree"}"#.into(),
+                    },
+                    Err(_) => r#"{"error":"lock error"}"#.into(),
                 };
                 let _ = write.send(Message::text(json)).await;
             }
