@@ -19,6 +19,7 @@ thiserror = { workspace = true }
 skia-safe = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 futures-util = "0.3"
+tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-tungstenite = "0.30"
 material-colors = "0.4"
 dark-light = "2.0"
