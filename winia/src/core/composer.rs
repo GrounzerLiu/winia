@@ -349,6 +349,11 @@ pub struct Composer {
     pending_states: Arc<parking_lot::Mutex<Vec<u32>>>,
     /// 上一帧各 slot 路径 → 节点缓存（用于 clean slot 跳过和子树重放）
     prev_nodes: HashMap<Vec<usize>, CachedNode>,
+
+    #[cfg(test)]
+    pub(crate) compose_clean_count: usize,
+    #[cfg(test)]
+    pub(crate) compose_dirty_count: usize,
 }
 
 impl Composer {
@@ -369,6 +374,10 @@ impl Composer {
             recorded_deps: Vec::new(),
             pending_states,
             prev_nodes: HashMap::new(),
+            #[cfg(test)]
+            compose_clean_count: 0,
+            #[cfg(test)]
+            compose_dirty_count: 0,
         }
     }
 
@@ -383,6 +392,7 @@ impl Composer {
     pub fn start_node(&mut self, key: u64, modifier: Modifier, policy: Option<Box<dyn MeasurePolicy>>, on_remove: Option<Box<dyn FnOnce() + Send>>) {
         self.current_group_key = key as u32;
         let slot_status = self.slot_table.start_slot(key);
+        #[cfg(test)] { match slot_status { SlotStatus::Clean => self.compose_clean_count += 1, _ => self.compose_dirty_count += 1, } }
 
         // 创建对应的 LayoutNode
         let mut node = LayoutNode::new(modifier, policy);
@@ -435,6 +445,7 @@ impl Composer {
     ) -> GroupStatus {
         self.current_group_key = key as u32;
         let slot_status = self.slot_table.start_slot(key);
+        #[cfg(test)] { match slot_status { SlotStatus::Clean => self.compose_clean_count += 1, _ => self.compose_dirty_count += 1, } }
 
         let mut node = LayoutNode::new(modifier, policy);
         node.on_remove = on_remove;
@@ -517,6 +528,7 @@ fn register_modifier_deps_recursive(node: &LayoutNode) {
 
 /// 执行组合：运行 content 闭包，构建/更新组合树和布局树。
     pub fn compose(&mut self, content: impl FnOnce(&mut ComposeCtx)) {
+        #[cfg(test)] { self.compose_clean_count = 0; self.compose_dirty_count = 0; }
         self.slot_table.reset();
         self.current_group_key = 0;
         self.next_group_key_counter = 1;
@@ -860,5 +872,46 @@ use crate::layout::BoxLayout;
         let root = composer.layout_root().unwrap();
         assert_eq!(root.children.len(), 1, "Frame2: root has 1 child");
         assert_eq!(root.children[0].children.len(), 2, "Frame2: level2 has 2 children (leaf1 + leaf2)");
+    }
+
+    /// 验证 compose 时 slot 计数功能正常（增量重组的前提）
+    #[test]
+    fn test_compose_counts_clean_and_dirty() {
+        let mut composer = Composer::new();
+        let count: State<i32> = State::new(0);
+
+        // Frame 1: 初始 compose
+        composer.compose(|ctx| {
+            let root_key = ctx.next_key();
+            match ctx.start_restartable_group(root_key, Modifier::new(), BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    let _ = count.get();
+                    { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); }
+                    ctx.end_node();
+                }
+            }
+            ctx.end_restartable_group();
+        });
+        assert_eq!(composer.compose_dirty_count, 2, "initial: root + leaf both new");
+        assert_eq!(composer.compose_clean_count, 0, "initial: no clean slots");
+
+        // Frame 2: recompose
+        composer.recompose(|ctx| {
+            let root_key = ctx.next_key();
+            match ctx.start_restartable_group(root_key, Modifier::new(), BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    let _ = count.get();
+                    { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); }
+                    ctx.end_node();
+                }
+            }
+            ctx.end_restartable_group();
+        });
+        // recompose 后计数非零（具体值取决于 state deps 是否正确触发）
+        assert!(composer.compose_dirty_count + composer.compose_clean_count >= 2,
+            "expected >=2 slots, got dirty={} clean={}",
+            composer.compose_dirty_count, composer.compose_clean_count);
     }
 }
