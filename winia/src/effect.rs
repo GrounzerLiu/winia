@@ -211,14 +211,19 @@ impl<S: futures_util::Stream + Send + 'static> StreamObverse for S {
     {
         let state: State<S::Item> = ctx.remember(|| State::new(initial.clone())).get();
         let s = state.clone();
-        let scope = remember_coroutine_scope(ctx);
-        scope.spawn(async move {
-            use futures_util::StreamExt;
-            let mut stream = Box::pin(self);
-            while let Some(value) = stream.next().await {
-                s.set(value);
-            }
-        });
+        // 只在首次组合时启动消费协程（flag 持久化在 remember 中）
+        let started: State<bool> = ctx.remember(|| false);
+        if !started.get() {
+            started.set(true);
+            let scope = remember_coroutine_scope(ctx);
+            scope.spawn(async move {
+                use futures_util::StreamExt;
+                let mut stream = Box::pin(self);
+                while let Some(value) = stream.next().await {
+                    s.set(value);
+                }
+            });
+        }
         state
     }
 }
