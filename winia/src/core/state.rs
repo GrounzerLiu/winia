@@ -228,6 +228,14 @@ thread_local! {
 // ── Composer 注册表：每个 Composer 注册自己的通知队列 ──
 // State 变化时通知所有活动 Composer，替代全局 PENDING_STATES + GLOBAL_DIRTY
 
+/// 全局唤醒回调（由 app::run_app 注入 EventLoopProxy，协程中 State 变更时唤醒事件循环）
+static WAKE_FN: std::sync::Mutex<Option<Box<dyn Fn() + Send + Sync + 'static>>> =
+    std::sync::Mutex::new(None);
+
+pub(crate) fn set_wake_fn(f: impl Fn() + Send + Sync + 'static) {
+    *WAKE_FN.lock().unwrap() = Some(Box::new(f));
+}
+
 static COMPOSER_REGISTRY: LazyLock<Mutex<Vec<Weak<Mutex<Vec<u32>>>>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
 
@@ -246,6 +254,7 @@ pub(crate) fn notify_state_changed(state_id: u32) {
             false
         }
     });
+    if let Some(ref f) = *WAKE_FN.lock().unwrap() { f(); }
 }
 
 // ── 实例化依赖记录（替代全局 RECORDED_DEPS + DEP_REGISTRAR）──

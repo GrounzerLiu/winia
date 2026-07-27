@@ -138,6 +138,12 @@ impl ApplicationHandler for AppState {
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
             }
         }
+        // 异步 State 变更唤醒事件循环后需要 request_redraw
+        for pw in self.windows.values() {
+            if pw.composer.has_pending_states() {
+                if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+            }
+        }
     }
 
     fn window_event(
@@ -441,7 +447,9 @@ pub fn run_app(app: impl FnOnce(&mut ComposeCtx) + 'static) {
     let event_loop = EventLoop::new().expect("event loop");
     let proxy = event_loop.create_proxy();
     debug::set_event_loop_proxy(proxy.clone());
+    let proxy2 = proxy.clone();
     *APP_PROXY.lock().unwrap() = Some(proxy);
+    crate::core::state::set_wake_fn(move || { let _ = proxy2.wake_up(); });
     debug::start_stdin_channel();
     debug::start_ws_server();
     let state = AppState {
