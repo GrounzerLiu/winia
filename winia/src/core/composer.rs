@@ -80,12 +80,6 @@ impl<'a> ComposeCtx<'a> {
         key
     }
 
-    /// 访问内部 Composer（pub(crate)，供 ui/layout 模块使用）
-    #[allow(dead_code)]
-    pub(crate) fn composer(&mut self) -> &mut Composer {
-        self.composer
-    }
-
     /// 开始一个布局节点（叶子组件如 Text 使用）
     pub fn start_leaf(&mut self, key: u64, modifier: Modifier) {
         self.composer.start_node(key, modifier, None, None);

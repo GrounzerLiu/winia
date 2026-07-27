@@ -154,8 +154,6 @@ pub(crate) enum ModifierElement {
     PaddingHorizontal { value: f32 },
     /// 垂直 padding
     PaddingVertical { value: f32 },
-    /// 全方向 margin
-    Margin { all: f32 },
     /// 填满最大宽度
     FillMaxWidth,
     /// 填满最大高度
@@ -190,8 +188,6 @@ pub(crate) enum ModifierElement {
     Focusable,
     /// 焦点请求器 ID（与 FocusRequester 关联）
     FocusRequesterId { id: u64 },
-    /// 可滚动
-    Scrollable { direction: ScrollDirection },
     /// 垂直滚动（绑定偏移 State）
     VerticalScroll { state: crate::core::state::State<f32> },
     /// 水平滚动
@@ -200,14 +196,6 @@ pub(crate) enum ModifierElement {
     // ── 扩展槽位 ──
     /// 自定义 Modifier 元素（外部通过 `Modifier::custom()` 扩展）
     Custom { inner: Box<dyn ModifierNode> },
-}
-
-/// 滚动方向
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScrollDirection {
-    Vertical,
-    Horizontal,
-    Both,
 }
 
 // ── Modifier ──
@@ -331,11 +319,6 @@ impl Modifier {
         self.push(ModifierElement::PaddingVertical { value })
     }
 
-    /// 四边等距 margin
-    pub fn margin(self, all: f32) -> Self {
-        self.push(ModifierElement::Margin { all })
-    }
-
     /// 宽度填满可用空间
     pub fn fill_max_width(self) -> Self {
         self.push(ModifierElement::FillMaxWidth)
@@ -409,11 +392,6 @@ impl Modifier {
     pub fn focus_requester(self, fr: impl Into<FocusRequester>) -> Self {
         let fr = fr.into();
         self.push(ModifierElement::FocusRequesterId { id: fr.id })
-    }
-
-    /// 添加滚动行为
-    pub fn scrollable(self, direction: ScrollDirection) -> Self {
-        self.push(ModifierElement::Scrollable { direction })
     }
 
     /// 垂直滚动（绑定 ScrollState）
@@ -540,11 +518,6 @@ impl Modifier {
         None
     }
 
-    /// 是否可获焦点
-    pub fn is_focusable(&self) -> bool {
-        self.elements.iter().any(|el| matches!(el, ModifierElement::Focusable))
-    }
-
     /// 焦点请求器 ID
     pub fn focus_requester_id(&self) -> Option<u64> {
         for el in &self.elements {
@@ -569,36 +542,6 @@ impl Modifier {
 // ── 辅助方法: 分类提取 ──
 
 impl Modifier {
-    /// 遍历所有 Layout 类元素
-    #[allow(dead_code)]
-    pub(crate) fn for_each_layout(&self, mut f: impl FnMut(&ModifierElement)) {
-        for el in &self.elements {
-            if el.is_layout() {
-                f(el);
-            }
-        }
-    }
-
-    /// 遍历所有 Draw 类元素
-    #[allow(dead_code)]
-    pub(crate) fn for_each_draw(&self, mut f: impl FnMut(&ModifierElement)) {
-        for el in &self.elements {
-            if el.is_draw() {
-                f(el);
-            }
-        }
-    }
-
-    /// 遍历所有 Input 类元素
-    #[allow(dead_code)]
-    pub(crate) fn for_each_input(&self, mut f: impl FnMut(&ModifierElement)) {
-        for el in &self.elements {
-            if el.is_input() {
-                f(el);
-            }
-        }
-    }
-
     /// Compose 阶段自动注册所有 ModifierElement 中引用的 State 依赖。
     /// 新增包含 State<T> 的 ModifierElement 变体时，必须在此方法中加对应分支。
     pub(crate) fn register_state_deps(&self) {
@@ -619,7 +562,6 @@ impl Debug for ModifierElement {
             Self::Padding { all } => f.debug_struct("Padding").field("all", all).finish(),
             Self::PaddingHorizontal { value } => f.debug_struct("PaddingHorizontal").field("value", value).finish(),
             Self::PaddingVertical { value } => f.debug_struct("PaddingVertical").field("value", value).finish(),
-            Self::Margin { all } => f.debug_struct("Margin").field("all", all).finish(),
             Self::FillMaxWidth => f.write_str("FillMaxWidth"),
             Self::FillMaxHeight => f.write_str("FillMaxHeight"),
             Self::FillMaxSize => f.write_str("FillMaxSize"),
@@ -636,7 +578,6 @@ impl Debug for ModifierElement {
             Self::Clickable { .. } => f.write_str("Clickable(<fn>)"),
             Self::Focusable => f.write_str("Focusable"),
             Self::FocusRequesterId { id } => f.debug_tuple("FocusRequesterId").field(id).finish(),
-            Self::Scrollable { direction } => f.debug_struct("Scrollable").field("direction", direction).finish(),
             Self::VerticalScroll { .. } => f.write_str("VerticalScroll(<state>)"),
             Self::HorizontalScroll { .. } => f.write_str("HorizontalScroll(<state>)"),
             Self::Blur { radius } => f.debug_struct("Blur").field("radius", radius).finish(),
@@ -655,7 +596,6 @@ impl ModifierElement {
             | ModifierElement::Padding { .. }
             | ModifierElement::PaddingHorizontal { .. }
             | ModifierElement::PaddingVertical { .. }
-            | ModifierElement::Margin { .. }
             | ModifierElement::FillMaxWidth
             | ModifierElement::FillMaxHeight
             | ModifierElement::FillMaxSize
@@ -671,7 +611,6 @@ impl ModifierElement {
             ModifierElement::Clickable { .. }
             | ModifierElement::Focusable
             | ModifierElement::FocusRequesterId { .. }
-            | ModifierElement::Scrollable { .. }
             | ModifierElement::VerticalScroll { .. }
             | ModifierElement::HorizontalScroll { .. } => ElementCategory::Input,
 
@@ -827,15 +766,15 @@ mod tests {
             .clip(Shape::Circle); // draw
 
         let mut layout_count = 0;
-        m.for_each_layout(|_| layout_count += 1);
+        for el in m.elements() { if el.is_layout() { layout_count += 1; } }
         assert_eq!(layout_count, 2, "should have 2 layout elements");
 
         let mut draw_count = 0;
-        m.for_each_draw(|_| draw_count += 1);
+        for el in m.elements() { if el.is_draw() { draw_count += 1; } }
         assert_eq!(draw_count, 2, "should have 2 draw elements");
 
         let mut input_count = 0;
-        m.for_each_input(|_| input_count += 1);
+        for el in m.elements() { if el.is_input() { input_count += 1; } }
         assert_eq!(input_count, 1, "should have 1 input element");
     }
 
@@ -851,12 +790,11 @@ mod tests {
     }
 
     #[test]
-    fn test_border_and_scrollable() {
+    fn test_border_and_focusable() {
         let m = Modifier::new()
             .border(2.0, Color::BLUE, Shape::rounded(8.0))
-            .scrollable(ScrollDirection::Vertical)
             .focusable();
 
-        assert_eq!(m.elements().len(), 3);
+        assert_eq!(m.elements().len(), 2);
     }
 }
