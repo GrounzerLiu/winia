@@ -153,10 +153,10 @@ impl<T: PartialEq + Clone + Send + 'static> DisposableEffect<T> {
     /// 创建一个 key 为 `()` 的 DisposableEffect——只在首次组合时执行 setup，dispose 时 cleanup。
     pub fn unit() -> DisposableEffect<()> { DisposableEffect { key: () } }
 
-    pub fn build(
+    pub fn build<F: FnOnce() + Send + 'static>(
         self,
         ctx: &mut ComposeCtx,
-        effect: impl Fn(T) -> Box<dyn FnOnce() + Send> + Send + Sync + 'static,
+        effect: impl Fn(T) -> F + Send + Sync + 'static,
     ) {
         let state: crate::core::state::State<Arc<Mutex<DisposableState<T>>>> =
             ctx.remember(|| Arc::new(Mutex::new(DisposableState { prev_key: None, cleanup: None })));
@@ -173,8 +173,8 @@ impl<T: PartialEq + Clone + Send + 'static> DisposableEffect<T> {
             if let Some(cleanup) = s.cleanup.take() {
                 cleanup();
             }
-            // 执行新 setup
-            s.cleanup = Some(effect(self.key.clone()));
+            // 执行新 setup，框架负责 Box 包装
+            s.cleanup = Some(Box::new(effect(self.key.clone())));
             s.prev_key = Some(self.key);
         }
 

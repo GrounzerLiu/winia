@@ -110,9 +110,9 @@ fn sub_component(ctx: &mut ComposeCtx, parent_count: State<i32>) {
     // DisposableEffect: 进入时 setup，离开时 cleanup
     DisposableEffect::new(()).build(ctx, |_| {
         println!("[DisposableEffect] sub component mounted");
-        Box::new(move || {
+        move || {
             println!("[DisposableEffect] sub component disposed");
-        })
+        }
     });
 
     Column::new()
