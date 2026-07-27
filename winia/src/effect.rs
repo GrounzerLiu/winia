@@ -219,8 +219,8 @@ impl<S: futures_util::Stream + Send + 'static> StreamObverse for S {
             scope.spawn(async move {
                 use futures_util::StreamExt;
                 let mut stream = Box::pin(self);
-                while let Some(value) = stream.next().await {
-                    s.set(value);
+                while let Some(_value) = stream.next().await {
+                    s.set(_value);
                 }
             });
         }

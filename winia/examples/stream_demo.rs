@@ -68,7 +68,7 @@ fn stream_demo_ui(ctx: &mut ComposeCtx) {
 
             // 复位
             Button::new()
-                .on_click(move || { let _ = tx.send(0); })
+                .on_click({ let c = count.clone(); move || { c.set(0); tx.send_replace(0); } })
                 .modifier(Modifier::new().size(120.0, 36.0))
                 .build(ctx, |ctx| {
                     Text::new("Reset").color(theme.on_primary).build(ctx);
