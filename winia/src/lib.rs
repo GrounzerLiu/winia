@@ -59,6 +59,6 @@ pub mod prelude {
     pub use crate::layout::{Arrangement, Alignment, Constraints, LayoutDirection};
     pub use crate::animation::{animate_as_state, animate_to, animate_to_cb, Easing};
     pub use crate::ui::theme::current_layout_direction;
-    pub use crate::effect::{LaunchedEffect, DisposableEffect, CoroutineScope, remember_coroutine_scope};
+    pub use crate::effect::{LaunchedEffect, DisposableEffect, CoroutineScope, remember_coroutine_scope, StreamObverse};
     pub use std::time::Duration;
 }

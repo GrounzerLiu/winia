@@ -3,10 +3,12 @@
 //! - LaunchedEffect: key 变化时启动异步任务，离开组合时自动取消
 //! - DisposableEffect: key 变化时执行同步副作用，离开组合时清理
 //! - remember_coroutine_scope: 获取组合生命周期绑定的协程作用域
+//! - use_stream: 将 Stream 转为组合生命周期绑定的 State
 //!
 //! 依赖 tokio 运行时（已作为项目依赖）。
 
 use crate::core::composer::ComposeCtx;
+use crate::core::state::State;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::runtime::Handle;
@@ -188,5 +190,37 @@ impl<T: PartialEq + Clone + Send + 'static> DisposableEffect<T> {
             }
         }));
         ctx.end_node();
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// StreamObverse — trait: stream.observe(ctx, initial) → State
+// ═══════════════════════════════════════════════════════════
+
+pub trait StreamObverse: futures_util::Stream {
+    fn observe(self, ctx: &mut ComposeCtx, initial: Self::Item) -> State<Self::Item>
+    where
+        Self: Sized + Send + 'static,
+        Self::Item: Clone + Send + Sync + PartialEq + 'static;
+}
+
+impl<S: futures_util::Stream + Send + 'static> StreamObverse for S {
+    fn observe(self, ctx: &mut ComposeCtx, initial: S::Item) -> State<S::Item>
+    where
+        S::Item: Clone + Send + Sync + PartialEq + 'static,
+    {
+        let state: State<S::Item> = ctx.remember(|| State::new(initial.clone())).get();
+        let s = state.clone();
+        LaunchedEffect::<()>::unit().build(ctx, move |_| {
+            let mut stream = Box::pin(self);
+            let s = s;
+            async move {
+                use futures_util::StreamExt;
+                while let Some(value) = stream.next().await {
+                    s.set(value);
+                }
+            }
+        });
+        state
     }
 }
