@@ -211,14 +211,12 @@ impl<S: futures_util::Stream + Send + 'static> StreamObverse for S {
     {
         let state: State<S::Item> = ctx.remember(|| State::new(initial.clone())).get();
         let s = state.clone();
-        LaunchedEffect::<()>::unit().build(ctx, move |_| {
+        let scope = remember_coroutine_scope(ctx);
+        scope.spawn(async move {
+            use futures_util::StreamExt;
             let mut stream = Box::pin(self);
-            let s = s;
-            async move {
-                use futures_util::StreamExt;
-                while let Some(value) = stream.next().await {
-                    s.set(value);
-                }
+            while let Some(value) = stream.next().await {
+                s.set(value);
             }
         });
         state
