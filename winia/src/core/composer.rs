@@ -11,7 +11,7 @@
 
 use crate::core::state::State;
 use crate::layout::constraints::Constraints;
-use crate::layout::node::{LayoutNode, MeasurePolicy, Size};
+use crate::layout::node::{LayoutNode, MeasurePolicy, Point, Size};
 use crate::modifier::Modifier;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -193,6 +193,7 @@ struct CachedNode {
     modifier: Modifier,
     measured_size: Size,
     cached_constraints: Option<Constraints>,
+    position: Point,
 }
 
 /// 槽位状态 — start_slot() 返回
@@ -510,12 +511,14 @@ impl Composer {
                         modifier: Modifier::new(),
                         measured_size: Size::new(0.0, 0.0),
                         cached_constraints: None,
+                        position: Point::ZERO,
                     }
                 });
 
             let mut node = LayoutNode::new(cached.modifier, None); // policy=None（不会测量）
             node.measured_size = cached.measured_size;
             node.cached_constraints = cached.cached_constraints;
+            node.position = cached.position;
             node.dirty = false;
 
             let idx = self.layout_nodes.len();
@@ -656,11 +659,12 @@ fn collect_nodes(
         }
         path.pop();
     }
-    // 缓存当前节点的测量结果 + modifier
+    // 缓存当前节点的测量结果 + modifier + position
     map.insert(path.clone(), CachedNode {
         modifier: node.modifier.clone(),
         measured_size: node.measured_size,
         cached_constraints: node.cached_constraints,
+        position: node.position,
     });
 }
 
@@ -808,5 +812,80 @@ use crate::layout::BoxLayout;
         assert_eq!(root.children.len(), 2, "after recompose: root should have 2 children, got {}", root.children.len());
         assert_eq!(root.children[0].children.len(), 0, "after recompose: text should still be leaf");
         assert_eq!(root.children[1].children.len(), 1, "after recompose: button should still have 1 child");
+    }
+
+    /// 3 层嵌套 restartable group: Column → Column → Text，验证深层 replay 正确性
+    #[test]
+    fn test_deep_nested_skip_replay() {
+        let mut composer = Composer::new();
+
+        // Frame 1: compose 3-level tree
+        composer.compose(|ctx| {
+            let key1 = ctx.next_key();
+            match ctx.start_restartable_group(key1, Modifier::new(), BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    // Level 2: nested restartable group
+                    let key2 = ctx.next_key();
+                    match ctx.start_restartable_group(key2, Modifier::new(), BoxLayout::new()) {
+                        GroupStatus::Skip => {}
+                        GroupStatus::Enter => {
+                            // Level 3: state-dependent leaf
+                            let leaf_key = ctx.next_key();
+                            {
+                                let _count: State<i32> = ctx.remember(|| 0);
+                                ctx.start_leaf(leaf_key, Modifier::new());
+                            }
+                            ctx.end_node();
+
+                            // Sibling: clean leaf
+                            let leaf2_key = ctx.next_key();
+                            ctx.start_leaf(leaf2_key, Modifier::new());
+                            ctx.end_node();
+                        }
+                    }
+                    ctx.end_restartable_group();
+                }
+            }
+            ctx.end_restartable_group();
+        });
+
+        // Verify Frame 1: root → [level2 → [leaf1, leaf2]]
+        let root = composer.layout_root().unwrap();
+        assert_eq!(root.children.len(), 1, "Frame1: root has 1 child");
+        assert_eq!(root.children[0].children.len(), 2, "Frame1: level2 has 2 children");
+
+        // Frame 2: recompose (level2 and leaf2 should be clean → skip/replay)
+        composer.recompose(|ctx| {
+            let key1 = ctx.next_key();
+            match ctx.start_restartable_group(key1, Modifier::new(), BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    let key2 = ctx.next_key();
+                    match ctx.start_restartable_group(key2, Modifier::new(), BoxLayout::new()) {
+                        GroupStatus::Skip => {}
+                        GroupStatus::Enter => {
+                            let leaf_key = ctx.next_key();
+                            {
+                                let _count: State<i32> = ctx.remember(|| 999);
+                                ctx.start_leaf(leaf_key, Modifier::new());
+                            }
+                            ctx.end_node();
+
+                            let leaf2_key = ctx.next_key();
+                            ctx.start_leaf(leaf2_key, Modifier::new());
+                            ctx.end_node();
+                        }
+                    }
+                    ctx.end_restartable_group();
+                }
+            }
+            ctx.end_restartable_group();
+        });
+
+        // Verify Frame 2: structure should be identical
+        let root = composer.layout_root().unwrap();
+        assert_eq!(root.children.len(), 1, "Frame2: root has 1 child");
+        assert_eq!(root.children[0].children.len(), 2, "Frame2: level2 has 2 children (leaf1 + leaf2)");
     }
 }
