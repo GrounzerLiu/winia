@@ -4,7 +4,7 @@ use crate::core::composer::{ComposeCtx, Composer};
 use crate::debug;
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{hit_test, focus_next, LayoutNode};
-use crate::modifier::ModifierElement;
+use crate::modifier::Dimension;
 use crate::render;
 pub(crate) struct PendingWindow {
     pub width: f32,
@@ -193,8 +193,9 @@ impl ApplicationHandler for AppState {
                     let mut handled = false;
                     for node in hit_test(root, lp.x, lp.y).iter().rev() {
                         if handled { break; }
-                        for el in node.modifier.elements() {
-                            if let ModifierElement::Clickable { on_click } = el { on_click(); handled = true; break; }
+                        if let Some(on_click) = node.modifier.on_click() {
+                            on_click();
+                            handled = true;
                         }
                     }
                     eprintln!("[click] handled={} pos=({:.0},{:.0})", handled, lp.x, lp.y);
@@ -267,9 +268,10 @@ impl ApplicationHandler for AppState {
                                 eprintln!("[debug-click] pos=({:.0},{:.0}) path_len={} sf={}", x, y, nodes.len(), pw.scale_factor);
                                 for node in nodes.iter().rev() {
                                     if click_handled { break; }
-                                    let _mod_strs: Vec<String> = node.modifier.elements().iter().map(|el| format!("{:?}", el)).collect();
-                                    for el in node.modifier.elements() {
-                                        if let ModifierElement::Clickable { on_click } = el { on_click(); handled = true; click_handled = true; break; }
+                                    if let Some(on_click) = node.modifier.on_click() {
+                                        on_click();
+                                        handled = true;
+                                        click_handled = true;
                                     }
                                 }
                                 eprintln!("[debug-click] handled={} pos=({:.0},{:.0})", click_handled, x, y);
@@ -414,21 +416,20 @@ pub(crate) fn wake_impl() {
 pub(crate) fn take_pending_windows() -> Vec<PendingWindow> {
     std::mem::take(&mut *GLOBAL_PENDING.lock().unwrap())
 }
-use crate::modifier::Dimension;
 
 fn apply_scroll_delta(node: &mut LayoutNode, dy: f32) -> bool {
-    for el in node.modifier.elements() {
-        if let ModifierElement::VerticalScroll { state } = el {
-            let current = state.get();
-            let content_h = node.children.iter().map(|c| c.position.y + c.measured_size.height).fold(0.0, f32::max);
-            let visible_h = node.modifier.elements().iter().find_map(|el| match el {
-                ModifierElement::Size { height: Dimension::Fixed(h), .. } => Some(*h),
+    if let Some(state) = node.modifier.vertical_scroll_state() {
+        let current = state.get();
+        let content_h = node.children.iter().map(|c| c.position.y + c.measured_size.height).fold(0.0, f32::max);
+        let visible_h = node.modifier.fixed_size()
+            .and_then(|(_, h)| match h {
+                Dimension::Fixed(h) => Some(h),
                 _ => None,
-            }).unwrap_or(0.0);
-            let new = (current - dy).clamp(0.0, (content_h - visible_h).max(0.0));
-            state.set(new);
-            return true;
-        }
+            })
+            .unwrap_or(0.0);
+        let new = (current - dy).clamp(0.0, (content_h - visible_h).max(0.0));
+        state.set(new);
+        return true;
     }
     for child in &mut node.children {
         if apply_scroll_delta(child, dy) { return true; }

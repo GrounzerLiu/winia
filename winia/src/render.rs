@@ -10,24 +10,8 @@ use crate::modifier::Dimension;
 use skia_safe::{Canvas, Color4f, Paint, RRect, Rect};
 use skia_safe::image_filters;
 use skia_safe::textlayout::{
-    FontCollection, ParagraphBuilder, ParagraphStyle, TextStyle,
+    ParagraphBuilder, ParagraphStyle, TextStyle,
 };
-use std::cell::RefCell;
-
-thread_local! {
-    static FONT_COLLECTION: RefCell<Option<FontCollection>> = const { RefCell::new(None) };
-}
-
-fn get_font_collection() -> FontCollection {
-    FONT_COLLECTION.with(|fc| {
-        if fc.borrow().is_none() {
-            let mut collection = FontCollection::new();
-            collection.set_default_font_manager(skia_safe::FontMgr::default(), None);
-            *fc.borrow_mut() = Some(collection);
-        }
-        fc.borrow().as_ref().unwrap().clone()
-    })
-}
 
 // ── 入口 ──
 
@@ -37,17 +21,54 @@ pub fn render(root: &LayoutNode, canvas: &Canvas) {
     render_pass1(root, canvas, 0.0, 0.0, &mut backdrop_regions);
     // Phase 2: 背景模糊
     if !backdrop_regions.is_empty() {
-        render_backdrop_blur(root, canvas, &backdrop_regions);
+        render_backdrop_blur(canvas, &backdrop_regions);
+    }
+}
+
+// ── 视觉 Modifier 渲染（Background / Border / TextContent）──
+
+struct TextParams<'a> {
+    content: &'a str,
+    font_size: f32,
+    color: &'a crate::modifier::Color,
+    max_lines: usize,
+    align: crate::ui::TextAlign,
+    overflow: crate::ui::TextOverflow,
+}
+
+/// 渲染 Background / Border / 提取 TextContent
+fn render_modifier_element<'a>(
+    canvas: &Canvas,
+    el: &'a ModifierElement,
+    rect: Rect,
+    x: f32, y: f32, w: f32, h: f32,
+) -> Option<TextParams<'a>> {
+    match el {
+        ModifierElement::Background { color, shape } => {
+            draw_background(canvas, rect, color, shape);
+            None
+        }
+        ModifierElement::Border { width, color, shape } => {
+            draw_border(canvas, x, y, w, h, *width, color, shape);
+            None
+        }
+        ModifierElement::TextContent { content, font_size, color, max_lines, align, overflow } => {
+            Some(TextParams {
+                content, font_size: *font_size, color,
+                max_lines: *max_lines, align: *align, overflow: *overflow,
+            })
+        }
+        _ => None,
     }
 }
 
 // ── Phase 1: 正常渲染（非 BackdropBlur 节点）──
 
-fn render_pass1(
-    node: &LayoutNode,
+fn render_pass1<'a>(
+    node: &'a LayoutNode,
     canvas: &Canvas,
     parent_x: f32, parent_y: f32,
-    backdrop_regions: &mut Vec<(f32, f32, f32, f32, f32, u64)>,
+    backdrop_regions: &mut Vec<(f32, f32, f32, f32, f32, &'a LayoutNode)>,
 ) {
     let x = parent_x + node.position.x;
     let y = parent_y + node.position.y;
@@ -64,21 +85,12 @@ fn render_pass1(
 
     for el in node.modifier.elements() {
         match el {
-            ModifierElement::Background { color, shape } => {
-                draw_background(canvas, rect, color, shape);
-            }
-            ModifierElement::Border { width, color, shape } => {
-                draw_border(canvas, x, y, w, h, *width, color, shape);
-            }
             ModifierElement::Blur { radius } => {
                 blur_radius = Some(*radius);
             }
             ModifierElement::BackdropBlur { radius } => {
                 is_backdrop = true;
-                backdrop_regions.push((x, y, w, h, *radius, node.id));
-            }
-            ModifierElement::TextContent { content, font_size, color, max_lines, align, overflow } => {
-                text = Some((content, *font_size, color, *max_lines, *align, *overflow));
+                backdrop_regions.push((x, y, w, h, *radius, node));
             }
             ModifierElement::VerticalScroll { state } => {
                 scroll_offset_v = Some(state.get());
@@ -86,7 +98,11 @@ fn render_pass1(
             ModifierElement::HorizontalScroll { state } => {
                 scroll_offset_h = Some(state.get());
             }
-            _ => {}
+            el => {
+                if let Some(tp) = render_modifier_element(canvas, el, rect, x, y, w, h) {
+                    text = Some((tp.content, tp.font_size, tp.color, tp.max_lines, tp.align, tp.overflow));
+                }
+            }
         }
     }
 
@@ -109,14 +125,15 @@ fn render_pass1(
     let mut scrolled = false;
     if scroll_offset_v.is_some() || scroll_offset_h.is_some() {
         // clip 用 visible 尺寸（从 modifier Size 中取），不是 content 尺寸
-        let cw = node.modifier.elements().iter().find_map(|el| match el {
-            ModifierElement::Size { width: Dimension::Fixed(w), .. } => Some(*w),
-            _ => None,
-        }).unwrap_or(w);
-        let ch = node.modifier.elements().iter().find_map(|el| match el {
-            ModifierElement::Size { height: Dimension::Fixed(h), .. } => Some(*h),
-            _ => None,
-        }).unwrap_or(h);
+        let mut cw = w;
+        let mut ch = h;
+        for el in node.modifier.elements() {
+            if let ModifierElement::Size { width: Dimension::Fixed(fw), height: Dimension::Fixed(fh) } = el {
+                cw = *fw;
+                ch = *fh;
+                break;
+            }
+        }
         let clip_rect = Rect::new(x, y, x + cw, y + ch);
         let dx = -scroll_offset_h.unwrap_or(0.0);
         let dy = -scroll_offset_v.unwrap_or(0.0);
@@ -145,13 +162,12 @@ fn render_pass1(
 // ── Phase 2: 背景模糊 ──
 
 fn render_backdrop_blur(
-    root: &LayoutNode,
     canvas: &Canvas,
-    regions: &[(f32, f32, f32, f32, f32, u64)],
+    regions: &[(f32, f32, f32, f32, f32, &LayoutNode)],
 ) {
     // 取整张 surface snapshot（只回读一次）
     let mut snap_bounds: Option<Rect> = None;
-    for &(x, y, w, h, r, _node_id) in regions {
+    for &(x, y, w, h, r, _) in regions {
         let m = r * 2.0;
         let b = Rect::new((x - m).max(0.0), (y - m).max(0.0), x + w + m, y + h + m);
         snap_bounds = Some(match snap_bounds {
@@ -178,7 +194,7 @@ fn render_backdrop_blur(
     };
 
     // 为每个背景模糊区域画回
-    for &(x, y, w, h, radius, node_id) in regions {
+    for &(x, y, w, h, radius, backdrop_node) in regions {
         if let Some(ref snap) = snapshot {
             let mut paint = Paint::default();
             paint.set_image_filter(image_filters::blur((radius, radius), skia_safe::TileMode::Clamp, None, None));
@@ -187,10 +203,8 @@ fn render_backdrop_blur(
             canvas.draw_image_rect(snap, None, &src, &paint);
         }
         // 画回模糊节点自己的子节点
-        if let Some(backdrop_node) = find_node_by_id(root, node_id) {
-            for child in &backdrop_node.children {
-                render_pass1_simple(child, canvas, x, y);
-            }
+        for child in &backdrop_node.children {
+            render_pass1_simple(child, canvas, x, y);
         }
     }
 }
@@ -204,11 +218,8 @@ fn render_pass1_simple(node: &LayoutNode, canvas: &Canvas, px: f32, py: f32) {
     let rect = Rect::new(x, y, x + w, y + h);
     let mut text: Option<(&str, f32, &crate::modifier::Color, usize, crate::ui::TextAlign, crate::ui::TextOverflow)> = None;
     for el in node.modifier.elements() {
-        match el {
-            ModifierElement::Background { color, shape } => draw_background(canvas, rect, color, shape),
-            ModifierElement::Border { width, color, shape } => draw_border(canvas, x, y, w, h, *width, color, shape),
-            ModifierElement::TextContent { content, font_size, color, max_lines, align, overflow } => { text = Some((content, *font_size, color, *max_lines, *align, *overflow)); }
-            _ => {}
+        if let Some(tp) = render_modifier_element(canvas, el, rect, x, y, w, h) {
+            text = Some((tp.content, tp.font_size, tp.color, tp.max_lines, tp.align, tp.overflow));
         }
     }
     if let Some((c, fs, cl, ml, al, ov)) = text { draw_text(canvas, c, fs, cl, x, y, w, ml, al, ov); }
@@ -218,11 +229,20 @@ fn render_pass1_simple(node: &LayoutNode, canvas: &Canvas, px: f32, py: f32) {
 
 // ── 辅助函数 ──
 
+impl From<&crate::modifier::Color> for Color4f {
+    fn from(c: &crate::modifier::Color) -> Self {
+        Color4f::new(
+            c.r as f32 / 255.0,
+            c.g as f32 / 255.0,
+            c.b as f32 / 255.0,
+            c.a as f32 / 255.0,
+        )
+    }
+}
+
 fn draw_background(canvas: &Canvas, rect: Rect, color: &crate::modifier::Color, shape: &crate::modifier::Shape) {
     let mut paint = Paint::default();
-    paint.set_color4f(Color4f::new(
-        color.r as f32 / 255.0, color.g as f32 / 255.0, color.b as f32 / 255.0, color.a as f32 / 255.0,
-    ), None);
+    paint.set_color4f(Color4f::from(color), None);
     paint.set_anti_alias(true);
     match shape {
         crate::modifier::Shape::Rectangle => { canvas.draw_rect(rect, &paint); }
@@ -237,9 +257,7 @@ fn draw_background(canvas: &Canvas, rect: Rect, color: &crate::modifier::Color, 
 
 fn draw_border(canvas: &Canvas, x: f32, y: f32, w: f32, h: f32, width: f32, color: &crate::modifier::Color, shape: &crate::modifier::Shape) {
     let mut paint = Paint::default();
-    paint.set_color4f(Color4f::new(
-        color.r as f32 / 255.0, color.g as f32 / 255.0, color.b as f32 / 255.0, color.a as f32 / 255.0,
-    ), None);
+    paint.set_color4f(Color4f::from(color), None);
     paint.set_style(skia_safe::paint::Style::Stroke);
     paint.set_stroke_width(width);
     paint.set_anti_alias(true);
@@ -270,7 +288,7 @@ fn draw_text(canvas: &Canvas, content: &str, font_size: f32, color: &crate::modi
     let mut text_style = TextStyle::new();
     text_style.set_font_size(font_size);
     text_style.set_color(skia_safe::Color::from_argb(color.a, color.r, color.g, color.b));
-    let fc = get_font_collection();
+    let fc = crate::font::get_font_collection();
     let mut builder = ParagraphBuilder::new(&para_style, &fc);
     builder.push_style(&text_style);
     builder.add_text(content);
@@ -289,17 +307,4 @@ fn surface_snapshot(canvas: &Canvas, bounds: skia_safe::IRect) -> Option<skia_sa
     let surface = unsafe { canvas.surface() }?;
     let mut surface = surface.clone();
     surface.image_snapshot_with_bounds(bounds)
-}
-
-/// 通过唯一 ID 精确查找节点（替代浮点坐标近似匹配）
-fn find_node_by_id(node: &LayoutNode, id: u64) -> Option<&LayoutNode> {
-    if node.id == id {
-        return Some(node);
-    }
-    for child in &node.children {
-        if let Some(n) = find_node_by_id(child, id) {
-            return Some(n);
-        }
-    }
-    None
 }

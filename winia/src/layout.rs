@@ -9,6 +9,7 @@
 
 pub mod constraints;
 pub mod node;
+pub(crate) mod flex;
 pub(crate) mod column;
 mod row;
 pub(crate) mod box_layout;

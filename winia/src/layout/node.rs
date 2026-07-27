@@ -87,12 +87,54 @@ pub enum Alignment {
     Stretch,
 }
 
+// ── ContentMeasurer trait ──
+
+/// 内容测量器 — 抽象叶子节点的内容测量逻辑
+///
+/// 不同内容类型（文本、图片、自定义绘制）实现此 trait，
+/// 由 LayoutNode 持有，在 measure 时调用。
+pub trait ContentMeasurer: Send + Sync {
+    /// 测量内容在给定约束下的理想尺寸
+    fn measure(&self, constraints: Constraints) -> Size;
+}
+
+/// 文本内容测量器
+pub struct TextContentMeasurer {
+    pub content: String,
+    pub font_size: f32,
+}
+
+impl ContentMeasurer for TextContentMeasurer {
+    fn measure(&self, constraints: Constraints) -> Size {
+        let max_w = if constraints.has_fixed_width() {
+            constraints.max_width
+        } else {
+            f32::MAX
+        };
+        let (width, height) = measure_text_size(&self.content, self.font_size, max_w);
+        Size::new(width, height)
+    }
+}
+
+/// 从 Modifier 中提取 TextContent 创建 TextContentMeasurer
+pub fn extract_content_measurer(modifier: &Modifier) -> Option<Box<dyn ContentMeasurer>> {
+    for el in modifier.elements() {
+        if let ModifierElement::TextContent { content, font_size, .. } = el {
+            return Some(Box::new(TextContentMeasurer {
+                content: content.clone(),
+                font_size: *font_size,
+            }));
+        }
+    }
+    None
+}
+
 // ── LayoutNode ──
 
 /// 布局树中的一个节点。
 ///
 /// 每个 LayoutNode 对应 UI 树中的一个可测量/可布局的单元。
-/// 包含 modifier 链和子节点。
+/// 包含 modifier 链、子节点和可选的内容测量器。
 pub struct LayoutNode {
     /// 唯一标识符（用于渲染阶段的精确查找）
     pub id: u64,
@@ -101,6 +143,8 @@ pub struct LayoutNode {
     pub position: Point,
     pub children: Vec<LayoutNode>,
     pub measure_policy: Option<Box<dyn MeasurePolicy>>,
+    /// 叶子节点的内容测量器（如文本、图片）
+    pub(crate) content_measurer: Option<Box<dyn ContentMeasurer>>,
     /// 是否获得焦点
     pub focused: bool,
     /// 节点从布局树移除时调用（用于 Window 生命周期管理）
@@ -115,6 +159,7 @@ impl Drop for LayoutNode {
 
 impl LayoutNode {
     pub fn new(modifier: Modifier, measure_policy: Option<Box<dyn MeasurePolicy>>) -> Self {
+        let content_measurer = extract_content_measurer(&modifier);
         LayoutNode {
             id: NEXT_NODE_ID.fetch_add(1, Ordering::Relaxed),
             modifier,
@@ -122,6 +167,7 @@ impl LayoutNode {
             position: Point::ZERO,
             children: Vec::new(),
             measure_policy,
+            content_measurer,
             focused: false,
             on_remove: None,
         }
@@ -143,6 +189,7 @@ impl LayoutNode {
         children: Vec<LayoutNode>,
         measure_policy: impl MeasurePolicy + 'static,
     ) -> Self {
+        let content_measurer = extract_content_measurer(&modifier);
         LayoutNode {
             id: NEXT_NODE_ID.fetch_add(1, Ordering::Relaxed),
             modifier,
@@ -150,6 +197,7 @@ impl LayoutNode {
             position: Point::ZERO,
             children,
             measure_policy: Some(Box::new(measure_policy)),
+            content_measurer,
             focused: false,
             on_remove: None,
         }
@@ -170,6 +218,7 @@ impl Default for LayoutNode {
             position: Point::ZERO,
             children: Vec::new(),
             measure_policy: None,
+            content_measurer: None,
             focused: false,
             on_remove: None,
         }
@@ -244,12 +293,11 @@ fn hit_test_recursive<'a>(
 fn scroll_offset_for_node(node: &LayoutNode) -> (f32, f32) {
     let mut dx = 0.0;
     let mut dy = 0.0;
-    for el in node.modifier.elements() {
-        match el {
-            ModifierElement::VerticalScroll { state } => dy += state.get(),
-            ModifierElement::HorizontalScroll { state } => dx += state.get(),
-            _ => {}
-        }
+    if let Some(state) = node.modifier.vertical_scroll_state() {
+        dy += state.get();
+    }
+    if let Some(state) = node.modifier.horizontal_scroll_state() {
+        dx += state.get();
     }
     (dx, dy)
 }
@@ -420,10 +468,7 @@ pub fn get_focus_id(root: &LayoutNode) -> Option<u64> {
 }
 
 fn modifier_focus_id(node: &LayoutNode) -> Option<u64> {
-    node.modifier.elements().iter().find_map(|el| match el {
-        crate::modifier::ModifierElement::FocusRequesterId { id } => Some(*id),
-        _ => None,
-    })
+    node.modifier.focus_requester_id()
 }
 
 // ── 递归测量引擎 ──
@@ -433,56 +478,42 @@ pub(crate) fn measure_node(
     node: &mut LayoutNode,
     constraints: Constraints,
 ) -> (Size, Vec<Placement>) {
-    // 应用 modifier 中的 Layout 约束
+    // 应用 modifier 中的 Layout 约束（使用查询方法）
     let mut inner_constraints = constraints;
-    let mut pad_x = 0.0;
-    let mut pad_y = 0.0;
 
-    for el in node.modifier.elements() {
-        match el {
-            ModifierElement::Size { width, height } => {
-                use crate::modifier::Dimension;
-                if let Dimension::Fixed(w) = width {
-                    inner_constraints = inner_constraints.tighten_width(*w);
-                }
-                if let Dimension::Fixed(h) = height {
-                    inner_constraints = inner_constraints.tighten_height(*h);
-                }
-            }
-            ModifierElement::Padding { all } => {
-                let p = *all;
-                pad_x += p; pad_y += p;
-                inner_constraints = inner_constraints.offset(p * 2.0, p * 2.0);
-            }
-            ModifierElement::PaddingHorizontal { value } => {
-                pad_x += value;
-                inner_constraints = inner_constraints.offset(value * 2.0, 0.0);
-            }
-            ModifierElement::PaddingVertical { value } => {
-                pad_y += value;
-                inner_constraints = inner_constraints.offset(0.0, value * 2.0);
-            }
-            ModifierElement::FillMaxWidth => {
-                inner_constraints.min_width = inner_constraints.max_width;
-            }
-            ModifierElement::FillMaxHeight => {
-                inner_constraints.min_height = inner_constraints.max_height;
-            }
-            ModifierElement::FillMaxSize => {
-                inner_constraints.min_width = inner_constraints.max_width;
-                inner_constraints.min_height = inner_constraints.max_height;
-            }
-            _ => {}
+    // 1. 应用固定尺寸
+    if let Some((width, height)) = node.modifier.fixed_size() {
+        use crate::modifier::Dimension;
+        if let Dimension::Fixed(w) = width {
+            inner_constraints = inner_constraints.tighten_width(w);
+        }
+        if let Dimension::Fixed(h) = height {
+            inner_constraints = inner_constraints.tighten_height(h);
         }
     }
 
-    // 检查是否包含 scroll 修饰符——给子节点无限约束
-    let node_is_scroll_v = node.modifier.elements().iter().any(|el| matches!(el, ModifierElement::VerticalScroll { .. }));
-    let node_is_scroll_h = node.modifier.elements().iter().any(|el| matches!(el, ModifierElement::HorizontalScroll { .. }));
-    if node_is_scroll_v {
+    // 2. 应用 padding
+    let (pad_left, pad_right) = node.modifier.get_padding_horizontal();
+    let (pad_top, pad_bottom) = node.modifier.get_padding_vertical();
+    let pad_x = pad_left + pad_right;
+    let pad_y = pad_top + pad_bottom;
+    if pad_x > 0.0 || pad_y > 0.0 {
+        inner_constraints = inner_constraints.offset(pad_x, pad_y);
+    }
+
+    // 3. 应用 FillMax 约束
+    if node.modifier.is_fill_max_width() {
+        inner_constraints.min_width = inner_constraints.max_width;
+    }
+    if node.modifier.is_fill_max_height() {
+        inner_constraints.min_height = inner_constraints.max_height;
+    }
+
+    // 4. 检查 scroll 修饰符——给子节点无限约束
+    if node.modifier.vertical_scroll_state().is_some() {
         inner_constraints.max_height = f32::MAX;
     }
-    if node_is_scroll_h {
+    if node.modifier.horizontal_scroll_state().is_some() {
         inner_constraints.max_width = f32::MAX;
     }
 
@@ -495,34 +526,20 @@ pub(crate) fn measure_node(
         // apply positions
         policy.place(&mut node.children, &placements);
         // apply padding offset
-        if pad_x != 0.0 || pad_y != 0.0 {
+        if pad_left > 0.0 || pad_top > 0.0 {
             for child in &mut node.children {
-                child.position.x += pad_x;
-                child.position.y += pad_y;
+                child.position.x += pad_left;
+                child.position.y += pad_top;
             }
         }
-        let outer_size = Size::new(size.width + pad_x * 2.0, size.height + pad_y * 2.0);
+        let outer_size = Size::new(size.width + pad_x, size.height + pad_y);
         node.measured_size = outer_size;
         (outer_size, placements)
     } else {
-        // 叶子节点
-        // 检查是否有 TextContent（文字节点需要根据字体测量尺寸）
-        let mut text_content: Option<(&str, f32)> = None;
-        for el in node.modifier.elements() {
-            if let ModifierElement::TextContent { content, font_size, .. } = el {
-                text_content = Some((content.as_str(), *font_size));
-                break;
-            }
-        }
-
-        let (width, height) = if let Some((content, font_size)) = text_content {
-            // 用 Skia Paragraph 测量文字尺寸
-            let max_w = if inner_constraints.has_fixed_width() {
-                inner_constraints.max_width
-            } else {
-                f32::MAX
-            };
-            measure_text_size(content, font_size, max_w)
+        // 叶子节点：使用 ContentMeasurer 或默认逻辑
+        let size = if let Some(ref measurer) = node.content_measurer {
+            // 有内容测量器（如文本）
+            measurer.measure(inner_constraints)
         } else {
             // 普通叶子节点
             let w = inner_constraints.constrain_width(
@@ -539,22 +556,21 @@ pub(crate) fn measure_node(
                     0.0
                 },
             );
-            (w, h)
+            Size::new(w, h)
         };
 
-        node.measured_size = Size::new(width, height);
-        (node.measured_size, Vec::new())
+        node.measured_size = size;
+        (size, Vec::new())
     }
 }
 
-/// 使用 Skia Paragraph 测量文本的尺寸
+/// 使用 Skia Paragraph 测量文本的尺寸（复用全局字体缓存）
 fn measure_text_size(text: &str, font_size: f32, _max_width: f32) -> (f32, f32) {
-    use skia_safe::textlayout::{FontCollection, ParagraphBuilder, ParagraphStyle, TextStyle};
+    use skia_safe::textlayout::{ParagraphBuilder, ParagraphStyle, TextStyle};
     let para_style = ParagraphStyle::new();
     let mut text_style = TextStyle::new();
     text_style.set_font_size(font_size);
-    let mut fc = FontCollection::new();
-    fc.set_default_font_manager(skia_safe::FontMgr::default(), None);
+    let fc = crate::font::get_font_collection();
     let mut builder = ParagraphBuilder::new(&para_style, &fc);
     builder.push_style(&text_style);
     builder.add_text(text);

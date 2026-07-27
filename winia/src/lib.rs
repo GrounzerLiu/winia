@@ -9,6 +9,7 @@
 //! - `ui`: UI 组件（待实现）
 
 pub mod core;
+pub mod font;
 pub mod modifier;
 pub mod layout;
 pub mod ui;
@@ -43,7 +44,6 @@ pub mod debug {
     #[derive(Debug, Clone)]
     pub enum DebugEvent { Click { x: f32, y: f32 }, Key { key: String }, Text { value: String }, Scroll { dx: f32, dy: f32 }, Resize { w: f32, h: f32 }, FocusNext, RequestFocus { id: u64 } }
 }
-pub mod input;
 
 // 公开核心类型
 pub use core::composer::{ComposeCtx, Composer, Key};
