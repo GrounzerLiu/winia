@@ -85,7 +85,6 @@ fn render_pass1<'a>(
     let rect = Rect::new(x, y, x + w, y + h);
     let mut blur_radius: Option<f32> = None;
     let mut is_backdrop = false;
-    let mut text_overflow: Option<crate::ui::TextOverflow> = None;
     let mut text: Option<(&str, f32, &crate::modifier::Color, usize, crate::ui::TextAlign, crate::ui::TextOverflow, crate::ui::text::FontWeight, crate::ui::text::FontSlant, bool)> = None;
     let mut scroll_offset_v: Option<f32> = None;
     let mut scroll_offset_h: Option<f32> = None;
@@ -107,7 +106,6 @@ fn render_pass1<'a>(
             }
             el => {
                 if let Some(tp) = render_modifier_element(canvas, el, rect, x, y, w, h) {
-                    text_overflow = Some(tp.overflow);
                     text = Some((tp.content, tp.font_size, tp.color, tp.max_lines, tp.align, tp.overflow, tp.font_weight, tp.font_style, tp.soft_wrap));
                 }
             }
@@ -139,10 +137,6 @@ fn render_pass1<'a>(
         } else {
             draw_text(canvas, content, font_size, color, font_weight, font_style, x, y, w, max_lines, align, overflow, soft_wrap);
         }
-    }
-    // Fade 效果：在文字最右侧画渐变擦除
-    if text_overflow == Some(crate::ui::TextOverflow::Fade) {
-        draw_fade(canvas, x, y, w, h);
     }
     if node.focused {
         draw_focus(canvas, rect);
@@ -298,36 +292,6 @@ fn draw_focus(canvas: &Canvas, rect: Rect) {
     paint.set_stroke_width(2.0);
     paint.set_anti_alias(true);
     canvas.draw_rect(rect, &paint);
-}
-
-/// Fade 效果：在矩形右侧用 saveLayer + DstIn 渐变擦除文本。
-/// 渐变区域约 fade_w 宽，从完全不透明到完全透明。
-fn draw_fade(canvas: &Canvas, x: f32, y: f32, w: f32, h: f32) {
-    use skia_safe::{Point, Shader};
-    if w <= 0.0 || h <= 0.0 { return; }
-    let fade_w = (w * 0.15).min(30.0).max(8.0);
-    let fade_rect = Rect::new(x + w - fade_w, y, x + w, y + h);
-    // 创建离屏图层隔离后续绘制
-    let rec = skia_safe::canvas::SaveLayerRec::default();
-    canvas.save_layer(&rec);
-    // 水平渐变：左端 alpha=1（保留），右端 alpha=0（擦除）
-    let colors = [Color4f::new(0.0, 0.0, 0.0, 1.0), Color4f::new(0.0, 0.0, 0.0, 0.0)];
-    let shader = Shader::linear_gradient(
-        (Point::new(fade_rect.left, 0.0), Point::new(fade_rect.right, 0.0)),
-        &colors[..],
-        None::<&[f32]>,
-        skia_safe::TileMode::Clamp,
-        None,
-        None::<&skia_safe::Matrix>,
-    );
-    if let Some(s) = shader {
-        let mut fade_paint = Paint::default();
-        fade_paint.set_shader(s);
-        // DstIn: 结果 = 目标 × 源 alpha → 渐变区域文字平滑消失
-        fade_paint.set_blend_mode(skia_safe::BlendMode::DstIn);
-        canvas.draw_rect(fade_rect, &fade_paint);
-    }
-    canvas.restore();
 }
 
 fn draw_text(
