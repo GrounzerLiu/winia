@@ -428,14 +428,17 @@ pub(crate) fn take_pending_windows() -> Vec<PendingWindow> {
 fn apply_scroll_delta(node: &mut LayoutNode, dy: f32) -> bool {
     if let Some(state) = node.modifier.vertical_scroll_state() {
         let current = state.get();
-        let content_h = node.children.iter().map(|c| c.position.y + c.measured_size.height).fold(0.0, f32::max);
+        // 滚动极限 = 内容总高度 - 可视区域高度
+        // 使用 node.measured_size.height（含所有 padding）而非 children position 推算，
+        // 后者只计入顶部 padding，导致底部 padding 永远无法滚入视图。
         let visible_h = node.modifier.fixed_size()
             .and_then(|(_, h)| match h {
                 Dimension::Fixed(h) => Some(h),
                 _ => None,
             })
             .unwrap_or(0.0);
-        let new = (current - dy).clamp(0.0, (content_h - visible_h).max(0.0));
+        let max_offset = (node.measured_size.height - visible_h).max(0.0);
+        let new = (current - dy).clamp(0.0, max_offset);
         state.set(new);
         return true;
     }
