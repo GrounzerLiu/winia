@@ -246,8 +246,8 @@ fn rich_text_demo_ui(ctx: &mut ComposeCtx) {
     Stack::new()
         .modifier(Modifier::new().fill_max_width().background(Color::from_argb(240, 230, 240, 255), Shape::rounded(8.0)))
         .build(ctx, |ctx| {
-            Text::new("").modifier(Modifier::new().size(4.0, 60.0).background(Color::from_argb(255, 33, 150, 243), Shape::rounded(2.0))).build(ctx);
-            Column::new().modifier(Modifier::new().fill_max_width().padding(14.0)).build(ctx, |ctx| {
+            Text::new("").modifier(Modifier::new().size(4.0, Dimension::Fill).background(Color::from_argb(255, 33, 150, 243), Shape::rounded(2.0))).build(ctx);
+            Column::new().modifier(Modifier::new().fill_max_size().padding(14.0)).build(ctx, |ctx| {
                 RichText::new().build(ctx, |x| {
                     x.image(info()); x.text("  ");
                     x.bold(|x| { x.text("Update available"); });

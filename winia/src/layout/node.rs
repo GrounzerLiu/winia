@@ -554,12 +554,14 @@ pub(crate) fn measure_node(
         inner_constraints = inner_constraints.offset(pad_x, pad_y);
     }
 
-    // 3. 应用 FillMax 约束
+    // 3. 应用 FillMax 约束（当 max 有限时；无限时 fill 无意义，回退 auto）
     if node.modifier.is_fill_max_width() {
         inner_constraints.min_width = inner_constraints.max_width;
     }
     if node.modifier.is_fill_max_height() {
-        inner_constraints.min_height = inner_constraints.max_height;
+        if inner_constraints.max_height < f32::MAX {
+            inner_constraints.min_height = inner_constraints.max_height;
+        }
     }
 
     // 4. 检查 scroll 修饰符——给子节点无限约束
