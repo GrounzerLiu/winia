@@ -144,9 +144,7 @@ fn render_pass1<'a>(
 
     if let Some((content, font_size, color, max_lines, align, overflow, font_weight, font_style, soft_wrap)) = text {
         // 优先用测量阶段缓存的 Paragraph（避免重建）
-        if let Some(mut para) = node.cached_paragraph.borrow_mut().take() {
-            // 用节点实际宽度重新 layout（测量阶段的排版宽度是约束 max_width，
-            // 渲染时确保与节点 measured_size 对齐）
+        if let Some(para) = node.cached_paragraph.borrow_mut().as_mut() {
             para.layout(w);
             let x_off = match align {
                 crate::ui::TextAlign::Left | crate::ui::TextAlign::Justify => x,
@@ -160,18 +158,19 @@ fn render_pass1<'a>(
     }
 
     // ═══ 富文本（RichText）渲染 ═══
-    // 在文本之后绘制：使用缓存的 Paragraph + 内联 drawable
     if node.has_richtext_content {
-        if let Some(mut para) = node.cached_paragraph.borrow_mut().take() {
+        if let Some(para) = node.cached_paragraph.borrow_mut().as_mut() {
             para.layout(w);
             para.paint(canvas, (x, y));
 
             // 绘制内联 drawable（图片/SVG）
             let drawables = node.inline_drawables.borrow();
             if !drawables.is_empty() {
-                for (i, text_box) in para.get_rects_for_placeholders().iter().enumerate() {
+                // 先 clone 出一组 rect 再画，避免同时再借 node
+                let rects: Vec<_> = para.get_rects_for_placeholders().iter().map(|tb| tb.rect).collect();
+                for (i, text_box_rect) in rects.iter().enumerate() {
                     if let Some(drawable) = drawables.get(i) {
-                        drawable.draw(canvas, x + text_box.rect.left, y + text_box.rect.top);
+                        drawable.draw(canvas, x + text_box_rect.left, y + text_box_rect.top);
                     }
                 }
             }
