@@ -1,17 +1,21 @@
-//! Paragraph — 封装 Skia Paragraph，集成 UTF-8 ↔ UTF-16 索引映射
+//! Paragraph — 封装 Skia Paragraph，集成 UTF-8 ↔ UTF-16 索引映射和内联元素
 
 use super::index_bimap::IndexBiMap;
+use super::inline_drawable::InlineDrawable;
 use skia_safe::textlayout::paragraph::{GlyphClusterInfo, Paragraph as SkParagraph};
 use skia_safe::textlayout::{Affinity, LineMetrics, RectHeightStyle, RectWidthStyle, TextBox};
-use skia_safe::{scalar, Canvas, Font, Point};
+use skia_safe::{scalar, Canvas, Point};
 use std::collections::HashSet;
 use std::ops::Range;
+use std::sync::Arc;
 
 /// 自定义 Paragraph 封装。
 ///
 /// 在 Skia Paragraph 之上叠加索引映射层，解决 UTF-8(Rust) ↔ UTF-16(Skia) 差异。
+/// 同时支持内联 drawable（图片/SVG）的存储与绘制。
 pub struct Paragraph {
     paragraph: SkParagraph,
+    drawables: Vec<Arc<dyn InlineDrawable>>,
     line_breaks: HashSet<Range<usize>>,
     pub(crate) paragraph_byte_to_real_indices: IndexBiMap,
     pub(crate) byte_to_utf16_indices: IndexBiMap,
@@ -20,12 +24,14 @@ pub struct Paragraph {
 impl Paragraph {
     pub(crate) fn new(
         paragraph: SkParagraph,
+        drawables: &[Arc<dyn InlineDrawable>],
         line_breaks: &HashSet<Range<usize>>,
         paragraph_byte_to_real_indices: &IndexBiMap,
         byte_to_utf16_indices: &IndexBiMap,
     ) -> Self {
         Self {
             paragraph,
+            drawables: drawables.to_vec(),
             line_breaks: line_breaks.clone(),
             paragraph_byte_to_real_indices: paragraph_byte_to_real_indices.clone(),
             byte_to_utf16_indices: byte_to_utf16_indices.clone(),
@@ -59,7 +65,6 @@ impl Paragraph {
     /// 前一个 glyph 的 real byte index
     pub fn prev_glyph_byte_index(&self, index: usize) -> Option<usize> {
         let byte_index = self.paragraph_byte_to_real_indices.get_by_right(&index)?;
-        // byte_to_glyph_indices 在简化版中省略，用 paragraph_byte_to_real_indices 替代
         let prev_real = self.paragraph_byte_to_real_indices.left_keys()
             .iter()
             .rev()
@@ -83,8 +88,19 @@ impl Paragraph {
         self.paragraph.layout(width);
     }
 
+    /// 绘制文本内容及内联 drawable。
+    ///
+    /// 先绘制 Skia Paragraph（含文本），再遍历 placeholder rectangles，
+    /// 在对应位置绘制每个内联元素。
     pub fn paint(&self, canvas: &Canvas, x: f32, y: f32) {
         self.paragraph.paint(canvas, (x, y));
+
+        // 绘制内联 drawable（图片/SVG）
+        for (i, text_box) in self.paragraph.get_rects_for_placeholders().iter().enumerate() {
+            if let Some(drawable) = self.drawables.get(i) {
+                drawable.draw(canvas, x + text_box.rect.left, y + text_box.rect.top);
+            }
+        }
     }
 
     /// 获取指定范围的选中区域矩形
@@ -140,4 +156,3 @@ impl Paragraph {
         }
     }
 }
-

@@ -17,6 +17,7 @@ pub struct TextLayout<'a> {
 }
 
 impl<'a> TextLayout<'a> {
+    #[allow(dead_code)]
     pub(crate) fn new(paragraph: &'a Paragraph, length: usize) -> TextLayout<'a> {
         TextLayout { paragraph, length }
     }
@@ -99,9 +100,6 @@ impl<'a> TextLayout<'a> {
     /// 通过坐标命中测试，返回最接近的 grapheme cluster 的 real index
     pub fn get_closest_grapheme_cluster_cluster_at(&self, point: impl Into<Point>) -> usize {
         let point = point.into();
-        let point_clone = point;
-        let para = self.paragraph.inner_paragraph();
-
         if let Some(glyph_info) = self.paragraph.get_closest_glyph_cluster_at(point) {
             let bounds = glyph_info.bounds;
             let center_x = (bounds.left + bounds.right) / 2.0;
@@ -114,7 +112,7 @@ impl<'a> TextLayout<'a> {
             let start = glyph_info.text_range.start;
             let end = glyph_info.text_range.end;
 
-            if point_clone.x < center_x {
+            if point.x < center_x {
                 start
             } else {
                 end
@@ -128,4 +126,3 @@ impl<'a> TextLayout<'a> {
         self.paragraph
     }
 }
-

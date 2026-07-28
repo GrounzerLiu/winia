@@ -182,6 +182,13 @@ pub(crate) enum ModifierElement {
     // ── Content 类 ──
     /// 文本内容（由 Text 组件设置，渲染阶段消费）
     TextContent { content: String, font_size: f32, color: Color, font_weight: crate::ui::text::FontWeight, font_style: crate::ui::text::FontSlant, max_lines: usize, align: crate::ui::TextAlign, overflow: crate::ui::TextOverflow, soft_wrap: bool },
+    /// 富文本内容（含内联 drawable，由 RichText 组件设置）
+    RichTextContent {
+        content: String,
+        drawables: Vec<std::sync::Arc<dyn crate::text::InlineDrawable>>,
+        /// 已解析的样式范围列表
+        spans: Vec<RichSpanStyle>,
+    },
 
     // ── Input 类 ──
     /// 可点击
@@ -603,6 +610,12 @@ impl Debug for ModifierElement {
                 .field("content", content)
                 .field("font_size", font_size)
                 .finish(),
+            Self::RichTextContent { content, spans, .. } => f
+                .debug_struct("RichTextContent")
+                .field("content", content)
+                .field("drawables", &format_args!("{} drawables", content.matches('\u{FFFC}').count()))
+                .field("spans", &format_args!("{} spans", spans.len()))
+                .finish(),
             Self::Clickable { .. } => f.write_str("Clickable(<fn>)"),
             Self::Focusable => f.write_str("Focusable"),
             Self::FocusRequesterId { id } => f.debug_tuple("FocusRequesterId").field(id).finish(),
@@ -643,7 +656,8 @@ impl ModifierElement {
             | ModifierElement::VerticalScroll { .. }
             | ModifierElement::HorizontalScroll { .. } => ElementCategory::Input,
 
-            ModifierElement::TextContent { .. } => ElementCategory::Content,
+            ModifierElement::TextContent { .. }
+            | ModifierElement::RichTextContent { .. } => ElementCategory::Content,
         }
     }
 
@@ -826,4 +840,24 @@ mod tests {
 
         assert_eq!(m.elements().len(), 2);
     }
+}
+
+// ── RichSpanStyle ──
+
+/// 富文本中每段的已解析样式（含范围）。
+/// 在 RichText::build() 中从 TextStyle + ProvideTextStyle + Theme 解析完成，
+/// 存储在 RichTextContent modifier 中供测量/渲染使用。
+#[derive(Debug, Clone, PartialEq)]
+pub struct RichSpanStyle {
+    /// 范围起（字符索引，含）
+    pub start: usize,
+    /// 范围止（字符索引，不含）
+    pub end: usize,
+    pub font_size: f32,
+    pub color: Color,
+    pub font_weight: crate::ui::text::FontWeight,
+    pub font_style: crate::ui::text::FontSlant,
+    pub underline: bool,
+    pub strikethrough: bool,
+    pub background: Option<Color>,
 }

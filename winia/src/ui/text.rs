@@ -63,11 +63,17 @@ pub struct TextStyle {
     pub text_align: Option<TextAlign>,
     pub overflow: Option<TextOverflow>,
     pub max_lines: Option<usize>,
+    /// 下划线（仅 RichText 生效）
+    pub underline: bool,
+    /// 删除线（仅 RichText 生效）
+    pub strikethrough: bool,
+    /// 背景色（仅 RichText 生效）
+    pub background: Option<Color>,
 }
 
 impl TextStyle {
     pub fn new() -> Self {
-        Self { color: None, font_size: None, font_weight: None, font_style: None, text_align: None, overflow: None, max_lines: None }
+        Self { color: None, font_size: None, font_weight: None, font_style: None, text_align: None, overflow: None, max_lines: None, underline: false, strikethrough: false, background: None }
     }
 
     pub fn color(mut self, c: Color) -> Self { self.color = Some(c); self }
@@ -78,6 +84,11 @@ impl TextStyle {
     pub fn bold(mut self) -> Self { self.font_weight = Some(FontWeight::BOLD); self }
     pub fn oblique(mut self) -> Self { self.font_style = Some(FontSlant::Oblique); self }
     pub fn align(mut self, a: TextAlign) -> Self { self.text_align = Some(a); self }
+    pub fn overflow(mut self, overflow: TextOverflow) -> Self { self.overflow = Some(overflow); self }
+    pub fn max_lines(mut self, lines: usize) -> Self { self.max_lines = Some(lines); self }
+    pub fn underline(mut self) -> Self { self.underline = true; self }
+    pub fn strikethrough(mut self) -> Self { self.strikethrough = true; self }
+    pub fn background(mut self, c: Color) -> Self { self.background = Some(c); self }
 }
 
 impl Default for TextStyle {
@@ -88,7 +99,7 @@ impl Default for TextStyle {
 // LocalTextStyle —— 子树默认文字样式
 // ═══════════════════════════════════════════════════════════
 
-static LOCAL_TEXT_STYLE: LazyLock<CompositionLocal<TextStyle>> = LazyLock::new(|| {
+pub(crate) static LOCAL_TEXT_STYLE: LazyLock<CompositionLocal<TextStyle>> = LazyLock::new(|| {
     CompositionLocal::new(|| TextStyle::default())
 });
 
@@ -112,6 +123,9 @@ fn merge_text_styles(base: &TextStyle, override_: &TextStyle) -> TextStyle {
         text_align: override_.text_align.or(base.text_align),
         overflow: override_.overflow.or(base.overflow),
         max_lines: override_.max_lines.or(base.max_lines),
+        underline: override_.underline,
+        strikethrough: override_.strikethrough,
+        background: override_.background.or(base.background),
     }
 }
 
@@ -262,4 +276,3 @@ mod tests {
         assert_eq!(text.font_style.unwrap(), FontSlant::Italic);
     }
 }
-

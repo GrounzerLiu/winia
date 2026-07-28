@@ -57,6 +57,8 @@ pub mod prelude {
     pub use crate::modifier::{Dimension, Modifier, Shape, Color, FocusRequester, ScrollState};
     pub use crate::ui::{Text, TextAlign, TextOverflow, TextStyle, ProvideTextStyle, FontWeight, FontSlant, Button, ButtonStyle, Column, Row, Stack, Window, WiniaTheme, ThemeColors};
     pub use crate::ui::theme::is_system_dark_theme;
+    pub use crate::ui::rich_text::RichText;
+    pub use crate::text::{InlineDrawable, ImageDrawable, SvgDrawable};
     pub use crate::layout::{Arrangement, Alignment, Constraints, LayoutDirection};
     pub use crate::animation::{animate_as_state, animate_to, animate_to_cb, Easing};
     pub use crate::ui::theme::current_layout_direction;

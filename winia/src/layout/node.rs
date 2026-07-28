@@ -1,6 +1,9 @@
 //! 布局节点 — LayoutNode 及相关的尺寸/位置/排列/对齐类型
 
-use crate::modifier::{Modifier, ModifierElement};
+use crate::modifier::{Modifier, ModifierElement, RichSpanStyle};
+use crate::ui::text::FontSlant;
+use skia_safe::FontStyle as SkFontStyle;
+use skia_safe::textlayout::TextStyle as SkTextStyle;
 use super::constraints::Constraints;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -92,6 +95,11 @@ fn modifier_has_text(modifier: &Modifier) -> bool {
     modifier.elements().iter().any(|el| matches!(el, ModifierElement::TextContent { .. }))
 }
 
+/// 检查 modifier 中是否包含 RichTextContent
+fn modifier_has_richtext(modifier: &Modifier) -> bool {
+    modifier.elements().iter().any(|el| matches!(el, ModifierElement::RichTextContent { .. }))
+}
+
 // ── LayoutNode ──
 
 /// 布局树中的一个节点。
@@ -108,6 +116,8 @@ pub struct LayoutNode {
     pub measure_policy: Option<Box<dyn MeasurePolicy>>,
     /// 叶子节点是否包含 TextContent
     pub(crate) has_text_content: bool,
+    /// 叶子节点是否包含 RichTextContent
+    pub(crate) has_richtext_content: bool,
     /// 是否获得焦点
     pub focused: bool,
     /// 节点从布局树移除时调用（用于 Window 生命周期管理）
@@ -120,6 +130,8 @@ pub struct LayoutNode {
     pub(crate) slot_key: u64,
     /// 测量阶段缓存的 Paragraph（避免渲染时重建）
     pub(crate) cached_paragraph: std::cell::RefCell<Option<skia_safe::textlayout::Paragraph>>,
+    /// 富文本内联元素（图片/SVG），测量阶段缓存供渲染使用
+    pub(crate) inline_drawables: std::cell::RefCell<Vec<std::sync::Arc<dyn crate::text::InlineDrawable>>>,
 }
 
 // ── CachedNode：LayoutNode 的可缓存子集，用于增量重组时恢复节点 ──
@@ -161,6 +173,7 @@ impl LayoutNode {
         self.cached_constraints = cached.cached_constraints;
         self.slot_key = cached.slot_key;
         self.has_text_content = modifier_has_text(&self.modifier);
+        self.has_richtext_content = modifier_has_richtext(&self.modifier);
     }
 }
 
@@ -175,6 +188,7 @@ impl LayoutNode {
         LayoutNode {
             id: NEXT_NODE_ID.fetch_add(1, Ordering::Relaxed),
             has_text_content: modifier_has_text(&modifier),
+            has_richtext_content: modifier_has_richtext(&modifier),
             modifier,
             measured_size: Size::ZERO,
             position: Point::ZERO,
@@ -186,6 +200,7 @@ impl LayoutNode {
             cached_constraints: None,
             slot_key: 0,
             cached_paragraph: std::cell::RefCell::new(None),
+            inline_drawables: std::cell::RefCell::new(Vec::new()),
         }
     }
 
@@ -208,6 +223,7 @@ impl LayoutNode {
         LayoutNode {
             id: NEXT_NODE_ID.fetch_add(1, Ordering::Relaxed),
             has_text_content: modifier_has_text(&modifier),
+            has_richtext_content: modifier_has_richtext(&modifier),
             modifier,
             measured_size: Size::ZERO,
             position: Point::ZERO,
@@ -219,6 +235,7 @@ impl LayoutNode {
             cached_constraints: None,
             slot_key: 0,
             cached_paragraph: std::cell::RefCell::new(None),
+            inline_drawables: std::cell::RefCell::new(Vec::new()),
         }
     }
 
@@ -238,12 +255,14 @@ impl Default for LayoutNode {
             children: Vec::new(),
             measure_policy: None,
             has_text_content: false,
+            has_richtext_content: false,
             focused: false,
             on_remove: None,
             dirty: true,
             cached_constraints: None,
             slot_key: 0,
             cached_paragraph: std::cell::RefCell::new(None),
+            inline_drawables: std::cell::RefCell::new(Vec::new()),
         }
     }
 }
@@ -589,6 +608,13 @@ pub(crate) fn measure_node(
                 inner_constraints.constrain_width(text_size.width),
                 inner_constraints.constrain_height(text_size.height),
             )
+        } else if node.has_richtext_content {
+            let layout_width = inner_constraints.max_width;
+            let text_size = measure_and_cache_richtext(node, layout_width);
+            Size::new(
+                inner_constraints.constrain_width(text_size.width),
+                inner_constraints.constrain_height(text_size.height),
+            )
         } else {
             // 普通叶子节点
             let w = inner_constraints.constrain_width(
@@ -682,6 +708,105 @@ fn measure_and_cache_text(node: &LayoutNode, max_width: f32) -> Size {
         }
     }
     Size::ZERO
+}
+
+/// 富文本测量 + 缓存（含内联 drawable）。
+///
+/// 从 RichTextContent modifier 中提取内容文本、内联元素列表和每段样式，
+/// 使用 Skia ParagraphBuilder 构建带 U+FFFC 占位符的段落，
+/// 对每个片段应用对应的样式后缓存 Paragraph 和 drawables 供渲染复用。
+fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> Size {
+    use skia_safe::textlayout::{ParagraphStyle, PlaceholderStyle, PlaceholderAlignment, TextBaseline, TextStyle as SkTextStyle};
+    use skia_safe::FontStyle as SkFontStyle;
+    use crate::ui::text::FontSlant;
+    let fc = crate::font::get_font_collection();
+
+    for el in node.modifier.elements() {
+        if let ModifierElement::RichTextContent { content, drawables, spans } = el {
+            let para_style = ParagraphStyle::new();
+            let mut builder = skia_safe::textlayout::ParagraphBuilder::new(&para_style, &fc);
+
+            // 按 U+FFFC 拆分，逐段 push 样式 + 文本 / 占位符
+            let mut pos: usize = 0;
+            let mut drawable_idx = 0;
+            for part in content.split('\u{FFFC}') {
+                // ── 文本段 ──
+                if !part.is_empty() {
+                    let span = spans.iter().find(|s| s.start <= pos && s.end >= pos + part.len());
+                    if let Some(s) = span {
+                        builder.push_style(&to_sktextstyle(s));
+                        builder.add_text(part);
+                        builder.pop();
+                    } else {
+                        builder.add_text(part);
+                    }
+                }
+                pos += part.len();
+
+                // ── 内联元素占位符（跟在文本段之后）──
+                if drawable_idx < drawables.len() {
+                    // 看当前位置是否有 span
+                    let span = spans.iter().find(|s| s.start <= pos && s.end > pos);
+                    if let Some(s) = span {
+                        builder.push_style(&to_sktextstyle(s));
+                    }
+                    let (w, h) = drawables[drawable_idx].size();
+                    let ph = PlaceholderStyle::new(w, h, PlaceholderAlignment::Bottom, TextBaseline::Alphabetic, 0.0);
+                    builder.add_placeholder(&ph);
+                    if span.is_some() {
+                        builder.pop();
+                    }
+                    drawable_idx += 1;
+                    pos += 1; // 跳过 U+FFFC
+                }
+            }
+
+            let mut para = builder.build();
+            para.layout(max_width);
+            let size = Size::new(
+                para.max_intrinsic_width().ceil().min(max_width),
+                para.height().ceil(),
+            );
+            *node.cached_paragraph.borrow_mut() = Some(para);
+            *node.inline_drawables.borrow_mut() = drawables.clone();
+            return size;
+        }
+    }
+    Size::ZERO
+}
+
+/// 将 RichSpanStyle 转为 Skia TextStyle（含装饰属性）
+fn to_sktextstyle(s: &RichSpanStyle) -> SkTextStyle {
+    let mut ts = SkTextStyle::new();
+    ts.set_font_size(s.font_size);
+    ts.set_color(skia_safe::Color::from_argb(s.color.a, s.color.r, s.color.g, s.color.b));
+
+    // 字重/字型
+    if s.font_weight != crate::ui::text::FontWeight::NORMAL || s.font_style != FontSlant::Upright {
+        let slant = match s.font_style {
+            FontSlant::Upright => skia_safe::font_style::Slant::Upright,
+            FontSlant::Italic => skia_safe::font_style::Slant::Italic,
+            FontSlant::Oblique => skia_safe::font_style::Slant::Oblique,
+        };
+        ts.set_font_style(SkFontStyle::new(s.font_weight.value().into(), 5.into(), slant));
+        }
+
+    // 装饰线
+    let mut deco: skia_safe::textlayout::TextDecoration = skia_safe::textlayout::TextDecoration::default(); // kNoDecoration
+    if s.underline { deco |= skia_safe::textlayout::TextDecoration::UNDERLINE; }
+    if s.strikethrough { deco |= skia_safe::textlayout::TextDecoration::LINE_THROUGH; }
+    ts.set_decoration_type(deco);
+
+    // 背景色
+    if let Some(bg) = &s.background {
+        let mut paint = skia_safe::Paint::default();
+        paint.set_color(skia_safe::Color::from_argb(bg.a, bg.r, bg.g, bg.b));
+        paint.set_style(skia_safe::paint::Style::Fill);
+        ts.set_foreground_paint(&paint);
+        // 注：set_background_paint 也可用，效果是矩形底色
+    }
+
+    ts
 }
 
 // ── 主轴间距计算（Column/Row 共用）──

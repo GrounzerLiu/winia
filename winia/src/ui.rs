@@ -8,6 +8,7 @@ pub mod button;
 pub mod layout_components;
 pub mod window;
 pub mod theme;
+pub mod rich_text;
 
 pub use text::Text;
 pub use text::TextAlign;
@@ -23,3 +24,4 @@ pub use window::Window;
 pub use theme::WiniaTheme;
 pub use theme::ThemeColors;
 pub use theme::is_system_dark_theme;
+pub use rich_text::RichText;

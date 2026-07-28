@@ -158,6 +158,26 @@ fn render_pass1<'a>(
             draw_text(canvas, content, font_size, color, font_weight, font_style, x, y, w, max_lines, align, overflow, soft_wrap);
         }
     }
+
+    // ═══ 富文本（RichText）渲染 ═══
+    // 在文本之后绘制：使用缓存的 Paragraph + 内联 drawable
+    if node.has_richtext_content {
+        if let Some(mut para) = node.cached_paragraph.borrow_mut().take() {
+            para.layout(w);
+            para.paint(canvas, (x, y));
+
+            // 绘制内联 drawable（图片/SVG）
+            let drawables = node.inline_drawables.borrow();
+            if !drawables.is_empty() {
+                for (i, text_box) in para.get_rects_for_placeholders().iter().enumerate() {
+                    if let Some(drawable) = drawables.get(i) {
+                        drawable.draw(canvas, x + text_box.rect.left, y + text_box.rect.top);
+                    }
+                }
+            }
+        }
+    }
+
     if node.focused {
         draw_focus(canvas, rect);
     }

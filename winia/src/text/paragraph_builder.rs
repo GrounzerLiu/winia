@@ -1,10 +1,12 @@
 //! ParagraphBuilder — 构建自定义 Paragraph，同时构建 UTF-8 ↔ UTF-16 索引映射
 
 use super::index_bimap::IndexBiMap;
+use super::inline_drawable::InlineDrawable;
 use super::paragraph::Paragraph;
-use skia_safe::textlayout::{FontCollection, ParagraphBuilder as SkParagraphBuilder, ParagraphStyle, TextStyle};
+use skia_safe::textlayout::{FontCollection, ParagraphBuilder as SkParagraphBuilder, ParagraphStyle, PlaceholderAlignment, PlaceholderStyle, TextBaseline, TextStyle};
 use std::collections::HashSet;
 use std::ops::Range;
+use std::sync::Arc;
 use unicode_segmentation::UnicodeSegmentation;
 
 /// 自定义 Paragraph 构建器。
@@ -14,6 +16,7 @@ use unicode_segmentation::UnicodeSegmentation;
 /// 供后续 TextLayout 中的光标定位和命中测试使用。
 pub struct ParagraphBuilder {
     paragraph_builder: SkParagraphBuilder,
+    drawables: Vec<Arc<dyn InlineDrawable>>,
     last_byte_index: usize,
     last_real_index: usize,
     last_utf16_index: usize,
@@ -27,6 +30,7 @@ impl ParagraphBuilder {
         let paragraph_builder = SkParagraphBuilder::new(style, font_collection);
         ParagraphBuilder {
             paragraph_builder,
+            drawables: Vec::new(),
             last_byte_index: 0,
             last_real_index: 0,
             last_utf16_index: 0,
@@ -90,6 +94,37 @@ impl ParagraphBuilder {
         self.paragraph_builder.add_text(str);
     }
 
+    /// 添加内联 drawable（图片/SVG 等），以 U+FFFC 占位符插入。
+    pub fn push_drawable(&mut self, drawable: Arc<dyn InlineDrawable>) {
+        // 记录终止前的映射
+        self.paragraph_byte_to_real_indices.insert(self.last_byte_index, self.last_real_index);
+        self.byte_to_utf16_indices.insert(self.last_byte_index, self.last_utf16_index);
+
+        // U+FFFC 占位符在 Skia 中占据一个 UTF-16 单元
+        let placeholder_byte_len = 3; // U+FFFC 在 UTF-8 中是 3 字节
+        let placeholder_utf16_len = 1; // U+FFFC 是一个 UTF-16 单元
+
+        // 索引映射：占位符在 Skia 段落中的字节位置 ↔ real index
+        self.byte_to_utf16_indices.insert(self.last_byte_index, self.last_utf16_index);
+        self.paragraph_byte_to_real_indices.insert(self.last_byte_index, self.last_real_index);
+
+        self.last_byte_index += placeholder_byte_len;
+        self.last_utf16_index += placeholder_utf16_len;
+        // drawable 不贡献 real text（对应原文本的零长度区域）
+
+        let (w, h) = drawable.size();
+        self.drawables.push(drawable);
+
+        let ph_style = PlaceholderStyle::new(
+            w,
+            h,
+            PlaceholderAlignment::Bottom,
+            TextBaseline::Alphabetic,
+            0.0,
+        );
+        self.paragraph_builder.add_placeholder(&ph_style);
+    }
+
     /// 构建 Paragraph。在返回前插入最后一个终止位置的映射。
     pub fn build(&mut self) -> Paragraph {
         // 插入终止位置映射（用于表示文本结束）
@@ -99,6 +134,7 @@ impl ParagraphBuilder {
         let paragraph = self.paragraph_builder.build();
         Paragraph::new(
             paragraph,
+            &self.drawables,
             &self.line_breaks,
             &self.paragraph_byte_to_real_indices,
             &self.byte_to_utf16_indices,
@@ -107,6 +143,7 @@ impl ParagraphBuilder {
 
     pub fn reset(&mut self) {
         self.paragraph_builder.reset();
+        self.drawables.clear();
         self.last_byte_index = 0;
         self.last_real_index = 0;
         self.last_utf16_index = 0;
@@ -115,4 +152,3 @@ impl ParagraphBuilder {
         self.byte_to_utf16_indices.clear();
     }
 }
-
