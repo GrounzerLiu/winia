@@ -33,7 +33,7 @@ fn rich_text_demo_ui(ctx: &mut ComposeCtx) {
     let scroll_state = ctx.remember(|| ScrollState::new()).get();
 
     Column::new()
-        .modifier(Modifier::new().size(Dimension::Fill, 1200.0).padding(16.0).vertical_scroll(scroll_state))
+        .modifier(Modifier::new().fill_max_width().fill_max_height().padding(16.0).vertical_scroll(scroll_state))
         .spacing(12.0)
         .build(ctx, |ctx| {
 
