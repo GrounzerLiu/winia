@@ -560,13 +560,15 @@ pub(crate) fn measure_node(
         inner_constraints.min_width = inner_constraints.max_width;
     }
     if node.modifier.is_fill_max_height() {
-        inner_constraints.min_height = inner_constraints.max_height;
+        if inner_constraints.max_height < f32::MAX {
+            inner_constraints.min_height = inner_constraints.max_height;
+        }
     }
 
-    // 4. 检查 scroll 修饰符——给子节点无限约束，但 fill_max_height 用 viewport 约束
+    // 4. 检查 scroll 修饰符——给子节点无限约束
     if node.modifier.vertical_scroll_state().is_some() {
-        if node.modifier.is_fill_max_height() {
-            // fill 使用 viewport 高度（scroll 前约束）
+        // scroll 容器自身填 viewport（fill_max_height 在无限 max 时跳过，这里补上）
+        if node.modifier.is_fill_max_height() && inner_constraints.max_height >= f32::MAX {
             inner_constraints.min_height = viewport_height;
         }
         inner_constraints.max_height = f32::MAX;
