@@ -115,14 +115,13 @@ impl RichText {
         if let Some(v) = style.background { self.current.background = Some(v); }
     }
 
-    /// 通过闭包修改当前累加样式。
+    /// 通过闭包修改当前累加样式（从空白起始，仅保留闭包中明确设置的属性）。
     ///
     /// ```ignore
     /// .with_style(|s| s.bold().font_size(20.0))
     /// ```
     pub fn with_style(mut self, f: impl FnOnce(StyleModifier) -> StyleModifier) -> Self {
-        let sm = StyleModifier(self.current.clone());
-        self.current = f(sm).0;
+        self.current = f(StyleModifier(StyleAccum::default())).0;
         self
     }
 
