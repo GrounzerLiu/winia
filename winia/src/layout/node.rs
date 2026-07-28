@@ -87,46 +87,9 @@ pub enum Alignment {
     Stretch,
 }
 
-// ── ContentMeasurer trait ──
-
-/// 内容测量器 — 抽象叶子节点的内容测量逻辑
-///
-/// 不同内容类型（文本、图片、自定义绘制）实现此 trait，
-/// 由 LayoutNode 持有，在 measure 时调用。
-pub trait ContentMeasurer: Send + Sync {
-    /// 测量内容在给定约束下的理想尺寸
-    fn measure(&self, constraints: Constraints) -> Size;
-}
-
-/// 文本内容测量器
-pub struct TextContentMeasurer {
-    pub content: String,
-    pub font_size: f32,
-}
-
-impl ContentMeasurer for TextContentMeasurer {
-    fn measure(&self, constraints: Constraints) -> Size {
-        let max_w = if constraints.max_width.is_finite() {
-            constraints.max_width
-        } else {
-            f32::MAX
-        };
-        let (size, _para) = measure_text_size(&self.content, self.font_size, max_w);
-        size
-    }
-}
-
-/// 从 Modifier 中提取 TextContent 创建 TextContentMeasurer
-pub fn extract_content_measurer(modifier: &Modifier) -> Option<Box<dyn ContentMeasurer>> {
-    for el in modifier.elements() {
-        if let ModifierElement::TextContent { content, font_size, .. } = el {
-            return Some(Box::new(TextContentMeasurer {
-                content: content.clone(),
-                font_size: *font_size,
-            }));
-        }
-    }
-    None
+/// 检查 modifier 中是否包含 TextContent
+fn modifier_has_text(modifier: &Modifier) -> bool {
+    modifier.elements().iter().any(|el| matches!(el, ModifierElement::TextContent { .. }))
 }
 
 // ── LayoutNode ──
@@ -134,7 +97,7 @@ pub fn extract_content_measurer(modifier: &Modifier) -> Option<Box<dyn ContentMe
 /// 布局树中的一个节点。
 ///
 /// 每个 LayoutNode 对应 UI 树中的一个可测量/可布局的单元。
-/// 包含 modifier 链、子节点和可选的内容测量器。
+/// 包含 modifier 链、子节点。
 pub struct LayoutNode {
     /// 唯一标识符（用于渲染阶段的精确查找）
     pub id: u64,
@@ -143,8 +106,8 @@ pub struct LayoutNode {
     pub position: Point,
     pub children: Vec<LayoutNode>,
     pub measure_policy: Option<Box<dyn MeasurePolicy>>,
-    /// 叶子节点的内容测量器（如文本、图片）
-    pub(crate) content_measurer: Option<Box<dyn ContentMeasurer>>,
+    /// 叶子节点是否包含 TextContent
+    pub(crate) has_text_content: bool,
     /// 是否获得焦点
     pub focused: bool,
     /// 节点从布局树移除时调用（用于 Window 生命周期管理）
@@ -197,6 +160,7 @@ impl LayoutNode {
         self.dirty = cached.dirty;
         self.cached_constraints = cached.cached_constraints;
         self.slot_key = cached.slot_key;
+        self.has_text_content = modifier_has_text(&self.modifier);
     }
 }
 
@@ -208,15 +172,14 @@ impl Drop for LayoutNode {
 
 impl LayoutNode {
     pub fn new(modifier: Modifier, measure_policy: Option<Box<dyn MeasurePolicy>>) -> Self {
-        let content_measurer = extract_content_measurer(&modifier);
         LayoutNode {
             id: NEXT_NODE_ID.fetch_add(1, Ordering::Relaxed),
+            has_text_content: modifier_has_text(&modifier),
             modifier,
             measured_size: Size::ZERO,
             position: Point::ZERO,
             children: Vec::new(),
             measure_policy,
-            content_measurer,
             focused: false,
             on_remove: None,
             dirty: true,
@@ -242,15 +205,14 @@ impl LayoutNode {
         children: Vec<LayoutNode>,
         measure_policy: impl MeasurePolicy + 'static,
     ) -> Self {
-        let content_measurer = extract_content_measurer(&modifier);
         LayoutNode {
             id: NEXT_NODE_ID.fetch_add(1, Ordering::Relaxed),
+            has_text_content: modifier_has_text(&modifier),
             modifier,
             measured_size: Size::ZERO,
             position: Point::ZERO,
             children,
             measure_policy: Some(Box::new(measure_policy)),
-            content_measurer,
             focused: false,
             on_remove: None,
             dirty: true,
@@ -275,7 +237,7 @@ impl Default for LayoutNode {
             position: Point::ZERO,
             children: Vec::new(),
             measure_policy: None,
-            content_measurer: None,
+            has_text_content: false,
             focused: false,
             on_remove: None,
             dirty: true,
@@ -609,7 +571,7 @@ pub(crate) fn measure_node(
         (outer_size, placements)
     } else {
         // 叶子节点：使用 ContentMeasurer 或默认逻辑
-        let size = if node.content_measurer.is_some() {
+        let size = if node.has_text_content {
             // 合并的 measure + cache（避免重复创建 Paragraph）
             // 使用父约束的 max_width 作为排版宽度，确保文本在可用空间内自动换行。
             // 对于可滚动容器，inner_constraints.max_width 已被设为 f32::MAX。
