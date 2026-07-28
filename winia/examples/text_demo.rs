@@ -42,7 +42,7 @@ fn text_demo_ui(ctx: &mut ComposeCtx) {
                 Text::new("36px").font_size(36.0).build(ctx);
             });
 
-            RectDivider(ctx);
+            Column::new().modifier(Modifier::new().fill_max_width().height(1.0).background(Color::from_argb(40, 0, 0, 0), Shape::Rectangle)).build(ctx, |_| {});
 
             // ── 2. 文字颜色（内置 Color + Theme 颜色）──
             Text::new("■ Colors").font_size(16.0).color(Color::from_argb(255, 100, 100, 100)).build(ctx);
@@ -57,8 +57,6 @@ fn text_demo_ui(ctx: &mut ComposeCtx) {
                 .color(Color::from_argb(255, 120, 80, 200))
                 .font_size(14.0)
                 .build(ctx);
-
-            RectDivider(ctx);
 
             // ── 3. 对齐方式（TextAlign）──
             Text::new("■ Text Alignment").font_size(16.0).color(Color::from_argb(255, 100, 100, 100)).build(ctx);
@@ -96,8 +94,6 @@ fn text_demo_ui(ctx: &mut ComposeCtx) {
                 .on_click({ let c = justify_count.clone(); move || { c.update(|v| *v += 1); } })
                 .modifier(Modifier::new().size(80.0, 24.0))
                 .build(ctx, |ctx| { Text::new("+ word").font_size(11.0).build(ctx); });
-
-            RectDivider(ctx);
 
             // ── 4. 溢出处理（max_lines + overflow）──
             Text::new("■ Overflow: max_lines + Ellipsis").font_size(16.0).color(Color::from_argb(255, 100, 100, 100)).build(ctx);
@@ -141,8 +137,6 @@ fn text_demo_ui(ctx: &mut ComposeCtx) {
                 .modifier(Modifier::new().fill_max_width().height(50.0).background(Color::from_argb(20, 0, 0, 255), Shape::Rectangle))
                 .build(ctx);
 
-            RectDivider(ctx);
-
             // ── 5. 粗体与斜体（FontWeight / FontSlant）──
             Text::new("■ Font Weight & Style").font_size(16.0).color(Color::from_argb(255, 100, 100, 100)).build(ctx);
 
@@ -172,8 +166,6 @@ fn text_demo_ui(ctx: &mut ComposeCtx) {
                     .build(ctx);
             });
 
-            RectDivider(ctx);
-
             // ── 6. soft_wrap — 不换行 ──
             Text::new("■ soft_wrap = false (no wrap)").font_size(16.0).color(Color::from_argb(255, 100, 100, 100)).build(ctx);
 
@@ -182,8 +174,6 @@ fn text_demo_ui(ctx: &mut ComposeCtx) {
                 .soft_wrap(false)
                 .modifier(Modifier::new().fill_max_width().height(20.0).background(Color::from_argb(30, 0, 0, 0), Shape::Rectangle))
                 .build(ctx);
-
-            RectDivider(ctx);
 
             // ── 7. 样式层级（ProvideTextStyle → style → 单独参数）──
             Text::new("■ Style Cascading").font_size(16.0).color(Color::from_argb(255, 100, 100, 100)).build(ctx);
@@ -210,8 +200,6 @@ fn text_demo_ui(ctx: &mut ComposeCtx) {
                         .build(ctx);
                 },
             );
-
-            RectDivider(ctx);
 
             // ── 8. 综合示例 ──
             Text::new("■ Combined Example").font_size(16.0).color(Color::from_argb(255, 100, 100, 100)).build(ctx);
@@ -241,13 +229,3 @@ fn text_demo_ui(ctx: &mut ComposeCtx) {
         });
 }
 
-/// 一个简单的分隔线（用 background modifier 模拟）
-fn RectDivider(ctx: &mut ComposeCtx) {
-    let k = ctx.next_key();
-    ctx.start_leaf(k,
-        Modifier::new()
-            .fill_max_width()
-            .height(1.0)
-            .background(Color::from_argb(40, 0, 0, 0), Shape::Rectangle));
-    ctx.end_node();
-}

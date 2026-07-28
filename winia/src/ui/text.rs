@@ -78,8 +78,6 @@ impl TextStyle {
     pub fn bold(mut self) -> Self { self.font_weight = Some(FontWeight::BOLD); self }
     pub fn oblique(mut self) -> Self { self.font_style = Some(FontSlant::Oblique); self }
     pub fn align(mut self, a: TextAlign) -> Self { self.text_align = Some(a); self }
-    pub fn overflow(mut self, overflow: TextOverflow) -> Self { self.overflow = Some(overflow); self }
-    pub fn max_lines(mut self, lines: usize) -> Self { self.max_lines = Some(lines); self }
 }
 
 impl Default for TextStyle {
@@ -167,6 +165,12 @@ impl Text {
 
     /// 设置文字样式（单独参数优先级高于此样式）
     pub fn style(mut self, style: TextStyle) -> Self { self.style = Some(style); self }
+
+    /// 设置背景色和形状（委托到 Modifier::background）
+    pub fn background(mut self, color: Color, shape: impl Into<crate::modifier::Shape>) -> Self {
+        self.modifier = self.modifier.background(color, shape);
+        self
+    }
 
     pub fn build(self, ctx: &mut ComposeCtx) {
         let key = ctx.next_key();

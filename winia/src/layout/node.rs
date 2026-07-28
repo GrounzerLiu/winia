@@ -715,7 +715,7 @@ pub(crate) fn compute_spacing(
         Arrangement::SpaceAround => {
             if gap_count > 0 {
                 let space = remaining / (gap_count + 1) as f32;
-                (space, space)
+                (space, space / 2.0) // (元素间间距, 首/尾边缘间距 = 一半)
             } else {
                 (0.0, remaining / 2.0)
             }
