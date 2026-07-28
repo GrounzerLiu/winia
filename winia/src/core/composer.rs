@@ -11,7 +11,7 @@
 
 use crate::core::state::State;
 use crate::layout::constraints::Constraints;
-use crate::layout::node::{LayoutNode, MeasurePolicy, Point, Size, CachedNode};
+use crate::layout::node::{LayoutNode, MeasurePolicy, CachedNode};
 use crate::modifier::Modifier;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -189,7 +189,8 @@ pub(crate) enum SlotStatus {
     Clean,
     /// slot 与上一帧相同，但被标记为脏 → 需要重新测量
     Dirty,
-    /// slot 是新创建的（上一帧不存在）→ 需要完整初始化
+    /// slot 是新创建的（上一帧不存在）→ 需要完整初始化（当前 start_slot 对此不区分，保留供后续优化）
+    #[allow(dead_code)]
     New,
 }
 

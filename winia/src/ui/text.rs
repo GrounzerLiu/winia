@@ -76,7 +76,10 @@ impl TextStyle {
     pub fn font_style(mut self, s: FontSlant) -> Self { self.font_style = Some(s); self }
     pub fn italic(mut self) -> Self { self.font_style = Some(FontSlant::Italic); self }
     pub fn bold(mut self) -> Self { self.font_weight = Some(FontWeight::BOLD); self }
+    pub fn oblique(mut self) -> Self { self.font_style = Some(FontSlant::Oblique); self }
     pub fn align(mut self, a: TextAlign) -> Self { self.text_align = Some(a); self }
+    pub fn overflow(mut self, overflow: TextOverflow) -> Self { self.overflow = Some(overflow); self }
+    pub fn max_lines(mut self, lines: usize) -> Self { self.max_lines = Some(lines); self }
 }
 
 impl Default for TextStyle {
@@ -93,6 +96,7 @@ static LOCAL_TEXT_STYLE: LazyLock<CompositionLocal<TextStyle>> = LazyLock::new(|
 
 /// 在子树中提供默认文字样式（和现有样式合并，不是替换）。
 /// 类似 Compose 的 ProvideTextStyle。
+#[allow(non_snake_case)]
 pub fn ProvideTextStyle(style: TextStyle, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
     let merged = merge_text_styles(&LOCAL_TEXT_STYLE.current(), &style);
     LOCAL_TEXT_STYLE.provides(merged, || {
@@ -155,6 +159,7 @@ impl Text {
     pub fn font_weight(mut self, w: FontWeight) -> Self { self.font_weight = Some(w); self }
     pub fn bold(mut self) -> Self { self.font_weight = Some(FontWeight::BOLD); self }
     pub fn italic(mut self) -> Self { self.font_style = Some(FontSlant::Italic); self }
+    pub fn oblique(mut self) -> Self { self.font_style = Some(FontSlant::Oblique); self }
     pub fn max_lines(mut self, lines: usize) -> Self { self.max_lines = Some(lines); self }
     pub fn align(mut self, align: TextAlign) -> Self { self.text_align = Some(align); self }
     pub fn overflow(mut self, overflow: TextOverflow) -> Self { self.overflow = Some(overflow); self }
@@ -166,7 +171,6 @@ impl Text {
     pub fn build(self, ctx: &mut ComposeCtx) {
         let key = ctx.next_key();
 
-        // 解析最终样式：LocalTextStyle < style 参数 < 单独参数
         let base = LOCAL_TEXT_STYLE.current();
         let style = self.style.as_ref().map(|s| merge_text_styles(&base, s)).unwrap_or(base);
 
@@ -177,7 +181,6 @@ impl Text {
         let final_overflow = self.overflow.or(style.overflow).unwrap_or_default();
         let final_max_lines = self.max_lines.or(style.max_lines).unwrap_or(usize::MAX);
 
-        // 颜色优先级：explicit .color() > style.color > LocalTextStyle.color > theme.on_surface
         let final_color = self.color
             .or(style.color)
             .unwrap_or_else(|| crate::ui::theme::WiniaTheme::colors().on_surface);
@@ -191,13 +194,14 @@ impl Text {
             max_lines: final_max_lines,
             align: final_align,
             overflow: final_overflow,
+            soft_wrap: self.soft_wrap,
         });
 
         ctx.start_leaf(key, modifier);
         ctx.end_node();
     }
 
-    // ── Getters（测试用）──
+    // ── Getters ──
     pub fn get_content(&self) -> &str { &self.content }
     pub fn get_font_size(&self) -> Option<f32> { self.font_size }
     pub fn get_color(&self) -> Option<Color> { self.color }

@@ -36,6 +36,7 @@ struct TextParams<'a> {
     max_lines: usize,
     align: crate::ui::TextAlign,
     overflow: crate::ui::TextOverflow,
+    soft_wrap: bool,
 }
 
 /// 渲染 Background / Border / 提取 TextContent
@@ -54,11 +55,12 @@ fn render_modifier_element<'a>(
             draw_border(canvas, x, y, w, h, *width, color, shape);
             None
         }
-        ModifierElement::TextContent { content, font_size, color, font_weight, font_style, max_lines, align, overflow } => {
+        ModifierElement::TextContent { content, font_size, color, font_weight, font_style, max_lines, align, overflow, soft_wrap } => {
             Some(TextParams {
                 content, font_size: *font_size, color,
                 font_weight: *font_weight, font_style: *font_style,
                 max_lines: *max_lines, align: *align, overflow: *overflow,
+                soft_wrap: *soft_wrap,
             })
         }
         _ => None,
@@ -83,7 +85,7 @@ fn render_pass1<'a>(
     let rect = Rect::new(x, y, x + w, y + h);
     let mut blur_radius: Option<f32> = None;
     let mut is_backdrop = false;
-    let mut text: Option<(&str, f32, &crate::modifier::Color, usize, crate::ui::TextAlign, crate::ui::TextOverflow, crate::ui::text::FontWeight, crate::ui::text::FontSlant)> = None;
+    let mut text: Option<(&str, f32, &crate::modifier::Color, usize, crate::ui::TextAlign, crate::ui::TextOverflow, crate::ui::text::FontWeight, crate::ui::text::FontSlant, bool)> = None;
     let mut scroll_offset_v: Option<f32> = None;
     let mut scroll_offset_h: Option<f32> = None;
 
@@ -104,7 +106,7 @@ fn render_pass1<'a>(
             }
             el => {
                 if let Some(tp) = render_modifier_element(canvas, el, rect, x, y, w, h) {
-                    text = Some((tp.content, tp.font_size, tp.color, tp.max_lines, tp.align, tp.overflow, tp.font_weight, tp.font_style));
+                    text = Some((tp.content, tp.font_size, tp.color, tp.max_lines, tp.align, tp.overflow, tp.font_weight, tp.font_style, tp.soft_wrap));
                 }
             }
         }
@@ -120,7 +122,7 @@ fn render_pass1<'a>(
     }
     }
 
-    if let Some((content, font_size, color, max_lines, align, overflow, font_weight, font_style)) = text {
+    if let Some((content, font_size, color, max_lines, align, overflow, font_weight, font_style, soft_wrap)) = text {
         // 优先用测量阶段缓存的 Paragraph（避免重建）
         if let Some(mut para) = node.cached_paragraph.borrow_mut().take() {
             // 用节点实际宽度重新 layout（测量阶段的排版宽度是约束 max_width，
@@ -133,7 +135,7 @@ fn render_pass1<'a>(
             };
             para.paint(canvas, (x_off, y));
         } else {
-            draw_text(canvas, content, font_size, color, font_weight, font_style, x, y, w, max_lines, align, overflow);
+            draw_text(canvas, content, font_size, color, font_weight, font_style, x, y, w, max_lines, align, overflow, soft_wrap);
         }
     }
     if node.focused {
@@ -305,6 +307,7 @@ fn draw_text(
     max_lines: usize,
     align: crate::ui::TextAlign,
     overflow: crate::ui::TextOverflow,
+    soft_wrap: bool,
 ) {
     let mut para_style = ParagraphStyle::new();
 
@@ -342,7 +345,9 @@ fn draw_text(
     builder.push_style(&text_style);
     builder.add_text(content);
     let mut para = builder.build();
-    para.layout(max_width);
+    // soft_wrap=false: 无限宽度排版，不换行
+    let layout_width = if soft_wrap { max_width } else { f32::MAX };
+    para.layout(layout_width);
     // 计算 x 偏移以支持 Center/Right/Justify 对齐
     let x_offset = match align {
         crate::ui::TextAlign::Left | crate::ui::TextAlign::Justify => x,

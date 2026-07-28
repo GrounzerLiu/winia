@@ -161,8 +161,10 @@ pub(crate) enum ModifierElement {
     /// 填满最大尺寸
     FillMaxSize,
     /// 子节点在父容器中的交叉轴对齐（覆盖父容器的默认对齐）
+    #[allow(dead_code)]
     AlignSelf { alignment: crate::layout::Alignment },
     /// 布局权重（Row 中分配宽度，Column 中分配高度）
+    #[allow(dead_code)]
     LayoutWeight { weight: f32 },
 
     // ── Draw 类 ──
@@ -179,7 +181,7 @@ pub(crate) enum ModifierElement {
 
     // ── Content 类 ──
     /// 文本内容（由 Text 组件设置，渲染阶段消费）
-    TextContent { content: String, font_size: f32, color: Color, font_weight: crate::ui::text::FontWeight, font_style: crate::ui::text::FontSlant, max_lines: usize, align: crate::ui::TextAlign, overflow: crate::ui::TextOverflow },
+    TextContent { content: String, font_size: f32, color: Color, font_weight: crate::ui::text::FontWeight, font_style: crate::ui::text::FontSlant, max_lines: usize, align: crate::ui::TextAlign, overflow: crate::ui::TextOverflow, soft_wrap: bool },
 
     // ── Input 类 ──
     /// 可点击

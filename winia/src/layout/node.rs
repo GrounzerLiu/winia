@@ -660,7 +660,7 @@ fn measure_and_cache_text(node: &LayoutNode, max_width: f32) -> Size {
 
     for el in node.modifier.elements() {
         if let ModifierElement::TextContent {
-            content, font_size, color, font_weight, font_style, max_lines, align, overflow,
+            content, font_size, color, font_weight, font_style, max_lines, align, overflow, soft_wrap,
         } = el {
             let mut para_style = ParagraphStyle::new();
 
@@ -674,10 +674,13 @@ fn measure_and_cache_text(node: &LayoutNode, max_width: f32) -> Size {
                 para_style.set_ellipsis("\u{2026}");
             }
 
-            // justify alignment：两端对齐需要 Skia 内部调整单词间距
+            // justify alignment
             if *align == crate::ui::TextAlign::Justify {
                 para_style.set_text_align(skia_safe::textlayout::TextAlign::Justify);
             }
+
+            // soft_wrap=false: 无限宽度排版，不换行
+            let layout_width = if *soft_wrap { max_width } else { f32::MAX };
 
             let mut text_style = skia_safe::textlayout::TextStyle::new();
             text_style.set_font_size(*font_size);
@@ -698,7 +701,7 @@ fn measure_and_cache_text(node: &LayoutNode, max_width: f32) -> Size {
             builder.push_style(&text_style);
             builder.add_text(content.as_str());
             let mut para = builder.build();
-            para.layout(max_width);
+            para.layout(layout_width);
 
             let size = Size::new(
                 para.max_intrinsic_width().ceil().min(max_width),
