@@ -62,26 +62,6 @@ fn resolve_base() -> Style {
 
 // ── 纯文本 + drawable 位置 → U+FFFC content ──
 
-fn build_fffc_content(content: &str, drawable_positions: &[usize]) -> String {
-    let mut out = String::with_capacity(content.len() + drawable_positions.len());
-    let mut di = 0usize;
-    let mut char_idx = 0usize;
-    for ch in content.chars() {
-        if di < drawable_positions.len() && drawable_positions[di] == char_idx {
-            out.push('\u{FFFC}');
-            di += 1;
-        }
-        out.push(ch);
-        char_idx += 1;
-    }
-    // drawable 在末尾的情况
-    while di < drawable_positions.len() && drawable_positions[di] == char_idx + di {
-        out.push('\u{FFFC}');
-        di += 1;
-    }
-    out
-}
-
 // ── RichTextScope（给闭包用的可变上下文）──
 
 pub struct RichTextScope<'a> {
@@ -245,11 +225,11 @@ impl RichText {
 
         // 用 D:\winia 分裂算法解析 span
         let spans = resolve_spans(&content, &drawable_positions, &annotations);
-        let content_with_fffc = build_fffc_content(&content, &drawable_positions);
 
         let modifier = self.modifier.push(ModifierElement::RichTextContent {
-            content: content_with_fffc,
+            content,
             drawables,
+            drawable_positions,
             spans,
         });
         let key = ctx.next_key();
@@ -279,7 +259,7 @@ impl Seg {
     }
 }
 
-fn resolve_spans(content: &str, drawable_positions: &[usize], annotations: &[(Style, Range<usize>)]) -> Vec<RichSpanStyle> {
+pub(crate) fn resolve_spans(content: &str, drawable_positions: &[usize], annotations: &[(Style, Range<usize>)]) -> Vec<RichSpanStyle> {
     let base = resolve_base();
     let d_color = base.color.unwrap_or(Color::from_argb(255, 255, 255, 255));
     let d_fs = base.fs.unwrap_or(14.0);
@@ -373,4 +353,157 @@ fn apply_seg(seg: &mut Seg, s: &Style) {
     if s.ul { seg.ul = true; }
     if s.st { seg.st = true; }
     if let Some(v) = s.bg { seg.bg = Some(v); }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::modifier::Color;
+
+    fn test_env() -> (String, Vec<usize>, Vec<(Style, Range<usize>)>) {
+        (String::new(), Vec::new(), Vec::new())
+    }
+
+    struct TestCtx {
+        content: String,
+        drawable_positions: Vec<usize>,
+        annotations: Vec<(Style, Range<usize>)>,
+        cursor: usize,
+    }
+
+    impl TestCtx {
+        fn new() -> Self {
+            TestCtx { content: String::new(), drawable_positions: Vec::new(), annotations: Vec::new(), cursor: 0 }
+        }
+
+        fn text(&mut self, s: &str, style: Style) {
+            if s.is_empty() { return; }
+            let start = self.cursor;
+            self.content.push_str(s);
+            self.cursor += s.chars().count();
+            if !style.is_default() {
+                self.annotations.push((style, start..self.cursor));
+            }
+        }
+
+        fn image(&mut self) {
+            self.drawable_positions.push(self.cursor);
+            self.content.push(' ');
+            self.cursor += 1;
+        }
+
+        fn spans(&self) -> Vec<RichSpanStyle> {
+            resolve_spans(&self.content, &self.drawable_positions, &self.annotations)
+        }
+    }
+
+    impl Style {
+        fn ul() -> Self {
+            Style { ul: true, ..Style::default() }
+        }
+        fn st() -> Self {
+            Style { st: true, ..Style::default() }
+        }
+        fn b() -> Self {
+            Style { fw: Some(FontWeight::BOLD), ..Style::default() }
+        }
+        fn i() -> Self {
+            Style { slant: Some(FontSlant::Italic), ..Style::default() }
+        }
+        fn fs(v: f32) -> Self {
+            Style { fs: Some(v), ..Style::default() }
+        }
+        fn col(c: Color) -> Self {
+            Style { color: Some(c), ..Style::default() }
+        }
+    }
+
+    // ── 1) underline 不泄露到相邻 strikethrough ──
+    #[test]
+    fn test_underline_not_leaking_to_strikethrough() {
+        let mut ctx = TestCtx::new();
+        ctx.text("Underlined text. ", Style::ul());
+        ctx.text("Strikethrough text. ", Style::st());
+        let spans = ctx.spans();
+
+        let ul_span = spans.iter().find(|s| s.underline);
+        let st_span = spans.iter().find(|s| s.strikethrough);
+
+        assert!(ul_span.is_some(), "should have underline span");
+        assert!(st_span.is_some(), "should have strikethrough span");
+
+        if let (Some(ul), Some(st)) = (ul_span, st_span) {
+            assert!(ul.underline && !ul.strikethrough, "first span: underline only");
+            assert!(!st.underline && st.strikethrough, "second span: strikethrough only");
+            assert!(ul.end <= st.start, "spans should not overlap");
+        }
+    }
+
+    // ── 2) color 局限于对应 span ──
+    #[test]
+    fn test_color_scope() {
+        let red = Color::from_argb(255, 255, 0, 0);
+        let mut ctx = TestCtx::new();
+        ctx.text("Normal. ", Style::default());
+        ctx.text("Red. ", Style::col(red));
+        ctx.text("Normal again. ", Style::default());
+        let spans = ctx.spans();
+
+        let red_span = spans.iter().find(|s| s.color == red);
+        assert!(red_span.is_some(), "should have red span");
+        let non_red = spans.iter().filter(|s| s.color != red && s.color.a > 0);
+        for s in non_red {
+            assert_eq!(s.color, spans[0].color, "non-annotated spans keep base color");
+        }
+    }
+
+    // ── 3) font_size ──
+    #[test]
+    fn test_font_size_scope() {
+        let mut ctx = TestCtx::new();
+        ctx.text("Default. ", Style::default());
+        ctx.text("Big. ", Style::fs(20.0));
+        ctx.text("Default again. ", Style::default());
+        let spans = ctx.spans();
+
+        let big = spans.iter().find(|s| (s.font_size - 20.0).abs() < 0.001);
+        assert!(big.is_some(), "should have 20px span");
+    }
+
+    // ── 4) 嵌套样式合并：bold + italic = both ──
+    #[test]
+    fn test_nested_styles_merge() {
+        // 模拟 scope.bold(|x| { x.italic(|x| { x.text("Bold+Italic"); }); });
+        let mut ctx = TestCtx::new();
+        ctx.text("Plain. ", Style::default());
+        // 嵌套：先 bold 后 italic
+        let merged = Style { fw: Some(FontWeight::BOLD), slant: Some(FontSlant::Italic), ..Style::default() };
+        ctx.text("BoldItalic. ", merged);
+        let spans = ctx.spans();
+
+        let bi = spans.iter().find(|s| s.font_weight != FontWeight::NORMAL && s.font_style != FontSlant::Upright);
+        assert!(bi.is_some(), "should have bold+italic span");
+    }
+
+    // ── 5) 多个 drawable 位置正确 ──
+    #[test]
+    fn test_drawable_positions() {
+        let mut ctx = TestCtx::new();
+        ctx.text("Start ", Style::default());
+        ctx.image();
+        ctx.text(" Mid ", Style::default());
+        ctx.image();
+        ctx.text(" End", Style::default());
+
+        assert_eq!(ctx.drawable_positions, vec![6, 12], "drawable at pos 6 and 12");
+        assert_eq!(ctx.content, "Start   Mid   End", "spaces for drawables");
+    }
+
+    // ── 6) 空 content ──
+    #[test]
+    fn test_empty_content() {
+        let ctx = TestCtx::new();
+        let spans = ctx.spans();
+        assert!(spans.is_empty());
+    }
 }

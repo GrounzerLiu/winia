@@ -186,6 +186,8 @@ pub(crate) enum ModifierElement {
     RichTextContent {
         content: String,
         drawables: Vec<std::sync::Arc<dyn crate::text::InlineDrawable>>,
+        /// 内联元素在 content 中的字符索引
+        drawable_positions: Vec<usize>,
         /// 已解析的样式范围列表
         spans: Vec<RichSpanStyle>,
     },
@@ -610,11 +612,10 @@ impl Debug for ModifierElement {
                 .field("content", content)
                 .field("font_size", font_size)
                 .finish(),
-            Self::RichTextContent { content, spans, .. } => f
+            Self::RichTextContent { content, drawable_positions, .. } => f
                 .debug_struct("RichTextContent")
                 .field("content", content)
-                .field("drawables", &format_args!("{} drawables", content.matches('\u{FFFC}').count()))
-                .field("spans", &format_args!("{} spans", spans.len()))
+                .field("drawables", &format_args!("{} drawables", drawable_positions.len()))
                 .finish(),
             Self::Clickable { .. } => f.write_str("Clickable(<fn>)"),
             Self::Focusable => f.write_str("Focusable"),

@@ -722,42 +722,53 @@ fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> Size {
     let fc = crate::font::get_font_collection();
 
     for el in node.modifier.elements() {
-        if let ModifierElement::RichTextContent { content, drawables, spans } = el {
+        if let ModifierElement::RichTextContent { content, drawables, drawable_positions, spans } = el {
             let para_style = ParagraphStyle::new();
             let mut builder = skia_safe::textlayout::ParagraphBuilder::new(&para_style, &fc);
 
-            // 按 U+FFFC 拆分，逐段 push 样式 + 文本 / 占位符
-            let mut pos: usize = 0;
-            let mut drawable_idx = 0;
-            for part in content.split('\u{FFFC}') {
-                // ── 文本段 ──
-                if !part.is_empty() {
-                    let span = spans.iter().find(|s| s.start <= pos && s.end >= pos + part.len());
-                    if let Some(s) = span {
-                        builder.push_style(&to_sktextstyle(s));
-                        builder.add_text(part);
+            // 按 span 迭代：每个 span 有明确的 [start,end) 范围
+            let chars: Vec<char> = content.chars().collect();
+            let mut di = 0usize;
+            let mut span_idx = 0usize;
+            // 处理 spans 之前 / 之间的非覆盖文本（无样式）+ 占位符
+            let total = chars.len();
+            let mut ci = 0usize;
+            while ci < total {
+                // 当前 span
+                while span_idx < spans.len() && spans[span_idx].end <= ci { span_idx += 1; }
+                if span_idx < spans.len() && spans[span_idx].start <= ci && ci < spans[span_idx].end {
+                    // 在这个 span 范围内：累积连续文本后 push_style + add_text
+                    let run_end = spans[span_idx].end.min(total);
+                    // 如果 run_end 之前有占位符，停在占位符前
+                    let mut cut = run_end;
+                    if di < drawable_positions.len() && drawable_positions[di] > ci && drawable_positions[di] < cut {
+                        cut = drawable_positions[di];
+                    }
+                    let text: String = chars[ci..cut].iter().collect();
+                    if !text.is_empty() {
+                        builder.push_style(&to_sktextstyle(&spans[span_idx]));
+                        builder.add_text(&text);
                         builder.pop();
-                    } else {
-                        builder.add_text(part);
                     }
+                    ci = cut;
+                    continue;
                 }
-                pos += part.len();
 
-                // ── 内联元素占位符（跟在文本段之后）──
-                if drawable_idx < drawables.len() {
-                    // 看当前位置是否有 span
-                    let span = spans.iter().find(|s| s.start <= pos && s.end > pos);
-                    if let Some(s) = span {
+                // 不在 span 范围内：占位符 或 无样式文本
+                if di < drawable_positions.len() && drawable_positions[di] == ci {
+                    // 占位符
+                    if let Some(s) = spans.iter().find(|s| s.start <= ci && s.end > ci) {
                         builder.push_style(&to_sktextstyle(s));
                     }
-                    let (w, h) = drawables[drawable_idx].size();
+                    let (w, h) = drawables[di].size();
                     let ph = PlaceholderStyle::new(w, h, PlaceholderAlignment::Bottom, TextBaseline::Alphabetic, 0.0);
                     builder.add_placeholder(&ph);
-                    if span.is_some() {
-                        builder.pop();
-                    }
-                    drawable_idx += 1;
-                    pos += 1; // 跳过 U+FFFC
+                    if let Some(s) = spans.iter().find(|s| s.start <= ci && s.end > ci) { builder.pop(); }
+                    di += 1; ci += 1;
+                } else {
+                    // 无样式文本
+                    builder.add_text(&chars[ci].to_string());
+                    ci += 1;
                 }
             }
 
