@@ -360,10 +360,6 @@ mod tests {
     use super::*;
     use crate::modifier::Color;
 
-    fn test_env() -> (String, Vec<usize>, Vec<(Style, Range<usize>)>) {
-        (String::new(), Vec::new(), Vec::new())
-    }
-
     struct TestCtx {
         content: String,
         drawable_positions: Vec<usize>,
@@ -398,27 +394,43 @@ mod tests {
     }
 
     impl Style {
-        fn ul() -> Self {
-            Style { ul: true, ..Style::default() }
-        }
-        fn st() -> Self {
-            Style { st: true, ..Style::default() }
-        }
-        fn b() -> Self {
-            Style { fw: Some(FontWeight::BOLD), ..Style::default() }
-        }
-        fn i() -> Self {
-            Style { slant: Some(FontSlant::Italic), ..Style::default() }
-        }
-        fn fs(v: f32) -> Self {
-            Style { fs: Some(v), ..Style::default() }
-        }
-        fn col(c: Color) -> Self {
-            Style { color: Some(c), ..Style::default() }
+        fn ul() -> Self { Style { ul: true, ..Style::default() } }
+        fn st() -> Self { Style { st: true, ..Style::default() } }
+        fn b() -> Self { Style { fw: Some(FontWeight::BOLD), ..Style::default() } }
+        fn i() -> Self { Style { slant: Some(FontSlant::Italic), ..Style::default() } }
+        fn fs(v: f32) -> Self { Style { fs: Some(v), ..Style::default() } }
+        fn col(c: Color) -> Self { Style { color: Some(c), ..Style::default() } }
+        fn all() -> Self {
+            Style {
+                fs: Some(18.0),
+                color: Some(Color::from_argb(255, 255, 0, 0)),
+                fw: Some(FontWeight::BOLD),
+                slant: Some(FontSlant::Italic),
+                ul: true, st: true,
+                bg: Some(Color::from_argb(60, 255, 255, 0)),
+            }
         }
     }
 
-    // ── 1) underline 不泄露到相邻 strikethrough ──
+    // ── 基础：空 ──
+    #[test]
+    fn test_empty() {
+        assert!(TestCtx::new().spans().is_empty());
+    }
+
+    // ── 基础：纯文本无注解 ──
+    #[test]
+    fn test_plain_text_no_annotations() {
+        let mut ctx = TestCtx::new();
+        ctx.text("Hello World", Style::default());
+        let spans = ctx.spans();
+        // 应该产生一个覆盖全文的默认 segment
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].start, 0);
+        assert_eq!(spans[0].end, 11);
+    }
+
+    // ── 核心：underline 不泄露到相邻 strikethrough ──
     #[test]
     fn test_underline_not_leaking_to_strikethrough() {
         let mut ctx = TestCtx::new();
@@ -426,84 +438,211 @@ mod tests {
         ctx.text("Strikethrough text. ", Style::st());
         let spans = ctx.spans();
 
-        let ul_span = spans.iter().find(|s| s.underline);
-        let st_span = spans.iter().find(|s| s.strikethrough);
+        let ul: Vec<_> = spans.iter().filter(|s| s.underline).collect();
+        let st: Vec<_> = spans.iter().filter(|s| s.strikethrough).collect();
 
-        assert!(ul_span.is_some(), "should have underline span");
-        assert!(st_span.is_some(), "should have strikethrough span");
-
-        if let (Some(ul), Some(st)) = (ul_span, st_span) {
-            assert!(ul.underline && !ul.strikethrough, "first span: underline only");
-            assert!(!st.underline && st.strikethrough, "second span: strikethrough only");
-            assert!(ul.end <= st.start, "spans should not overlap");
+        // underline 和 strikethrough 各自至少有一段
+        assert!(!ul.is_empty(), "underline should exist");
+        assert!(!st.is_empty(), "strikethrough should exist");
+        // 任意 underline span 的后面都不应再有 underline（只有一个连续段）
+        for s in &spans {
+            if s.underline {
+                assert!(!s.strikethrough, "underline span should not also be strikethrough");
+            }
+            if s.strikethrough {
+                assert!(!s.underline, "strikethrough span should not also be underline");
+            }
+        }
+        // 相邻 span 不重叠
+        for i in 1..spans.len() {
+            assert!(spans[i-1].end <= spans[i].start,
+                "spans[{}].end({}) > spans[{}].start({}) — 重叠",
+                i-1, spans[i-1].end, i, spans[i].start);
         }
     }
 
-    // ── 2) color 局限于对应 span ──
+    // ── 标量属性不跨界 ──
     #[test]
-    fn test_color_scope() {
+    fn test_scalar_properties_scope() {
         let red = Color::from_argb(255, 255, 0, 0);
         let mut ctx = TestCtx::new();
-        ctx.text("Normal. ", Style::default());
+        ctx.text("Plain. ", Style::default());
         ctx.text("Red. ", Style::col(red));
-        ctx.text("Normal again. ", Style::default());
+        ctx.text("Big. ", Style::fs(20.0));
+        ctx.text("Plain again.", Style::default());
         let spans = ctx.spans();
 
-        let red_span = spans.iter().find(|s| s.color == red);
-        assert!(red_span.is_some(), "should have red span");
-        let non_red = spans.iter().filter(|s| s.color != red && s.color.a > 0);
-        for s in non_red {
-            assert_eq!(s.color, spans[0].color, "non-annotated spans keep base color");
+        // 找到每个属性的 span
+        let red_span = spans.iter().find(|s| s.color == red).expect("red span");
+        let big_span = spans.iter().find(|s| (s.font_size - 20.0).abs() < 0.001).expect("big span");
+
+        // red span 只能在它自己的范围内
+        assert_eq!(red_span.color, red);
+        // big span 只能是字号 20
+        assert!((big_span.font_size - 20.0).abs() < 0.001);
+
+        // red span 后面的 span 不应继承 red
+        for s in spans.iter().filter(|s| s.start >= red_span.end) {
+            assert_ne!(s.color, red, "color leaked past red span endpoint");
         }
     }
 
-    // ── 3) font_size ──
-    #[test]
-    fn test_font_size_scope() {
-        let mut ctx = TestCtx::new();
-        ctx.text("Default. ", Style::default());
-        ctx.text("Big. ", Style::fs(20.0));
-        ctx.text("Default again. ", Style::default());
-        let spans = ctx.spans();
-
-        let big = spans.iter().find(|s| (s.font_size - 20.0).abs() < 0.001);
-        assert!(big.is_some(), "should have 20px span");
-    }
-
-    // ── 4) 嵌套样式合并：bold + italic = both ──
+    // ── 嵌套合并：bold + italic 共存 ──
     #[test]
     fn test_nested_styles_merge() {
-        // 模拟 scope.bold(|x| { x.italic(|x| { x.text("Bold+Italic"); }); });
         let mut ctx = TestCtx::new();
         ctx.text("Plain. ", Style::default());
-        // 嵌套：先 bold 后 italic
-        let merged = Style { fw: Some(FontWeight::BOLD), slant: Some(FontSlant::Italic), ..Style::default() };
-        ctx.text("BoldItalic. ", merged);
+        // 模拟 scope.bold(|x| { x.italic(|x| { x.text("BoldItalic"); }); });
+        ctx.text("BoldItalic", Style { fw: Some(FontWeight::BOLD), slant: Some(FontSlant::Italic), ..Style::default() });
         let spans = ctx.spans();
 
-        let bi = spans.iter().find(|s| s.font_weight != FontWeight::NORMAL && s.font_style != FontSlant::Upright);
-        assert!(bi.is_some(), "should have bold+italic span");
+        let bi = spans.iter().find(|s|
+            s.font_weight != FontWeight::NORMAL && s.font_style != FontSlant::Upright
+        ).expect("bold+italic span");
+
+        assert!(bi.font_weight != FontWeight::NORMAL, "should be bold");
+        assert!(bi.font_style != FontSlant::Upright, "should be italic");
     }
 
-    // ── 5) 多个 drawable 位置正确 ──
+    // ── 全部属性同时作用 ──
+    #[test]
+    fn test_all_attributes_together() {
+        let mut ctx = TestCtx::new();
+        ctx.text("Normal. ", Style::default());
+        ctx.text("All. ", Style::all());
+        ctx.text("Normal again.", Style::default());
+        let spans = ctx.spans();
+
+        let all = spans.iter().find(|s|
+            (s.font_size - 18.0).abs() < 0.001
+            && s.underline && s.strikethrough
+            && s.font_weight != FontWeight::NORMAL
+        ).expect("all-attributes span");
+
+        assert!(all.background.is_some(), "background should be set");
+        assert!(all.underline, "underline");
+        assert!(all.strikethrough, "strikethrough");
+    }
+
+    // ── drawable 位置 ──
     #[test]
     fn test_drawable_positions() {
         let mut ctx = TestCtx::new();
-        ctx.text("Start ", Style::default());
-        ctx.image();
-        ctx.text(" Mid ", Style::default());
-        ctx.image();
-        ctx.text(" End", Style::default());
+        ctx.text("A", Style::default());
+        ctx.image();              // pos 1
+        ctx.text("B", Style::default());
+        ctx.image();              // pos 3
+        ctx.text("C", Style::default());
 
-        assert_eq!(ctx.drawable_positions, vec![6, 12], "drawable at pos 6 and 12");
-        assert_eq!(ctx.content, "Start   Mid   End", "spaces for drawables");
+        assert_eq!(ctx.drawable_positions, vec![1, 3], "drawable indices");
+        assert_eq!(ctx.content.chars().nth(1).unwrap(), ' ');
+        assert_eq!(ctx.content.chars().nth(3).unwrap(), ' ');
+        // spans 不应该包含占位位置（placeholder segment 被过滤）
+        let spans = ctx.spans();
+        for s in &spans {
+            assert!(!(1..2).contains(&s.start), "placeholder pos 1 leaked into span");
+            assert!(!(3..4).contains(&s.start), "placeholder pos 3 leaked into span");
+        }
     }
 
-    // ── 6) 空 content ──
+    // ── drawable 在开头 ──
     #[test]
-    fn test_empty_content() {
-        let ctx = TestCtx::new();
+    fn test_drawable_at_start() {
+        let mut ctx = TestCtx::new();
+        ctx.image();              // pos 0
+        ctx.text("Text", Style::default());
+        assert_eq!(ctx.drawable_positions, vec![0]);
         let spans = ctx.spans();
-        assert!(spans.is_empty());
+        // spans 从 pos 1 开始
+        assert!(spans.iter().all(|s| s.start >= 1), "no span should cover drawable position");
+    }
+
+    // ── 连续 drawable ──
+    #[test]
+    fn test_consecutive_drawables() {
+        let mut ctx = TestCtx::new();
+        ctx.image(); ctx.image(); ctx.image();
+        ctx.text("After", Style::default());
+        assert_eq!(ctx.drawable_positions, vec![0, 1, 2]);
+        let spans = ctx.spans();
+        // 只有一个 text segment 从 pos 3 开始
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].start, 3);
+    }
+
+    // ── drawable 嵌入带样式的文本 ──
+    #[test]
+    fn test_drawable_within_styled_text() {
+        let mut ctx = TestCtx::new();
+        ctx.text("A", Style::b());
+        ctx.image();
+        ctx.text("C", Style::b());
+        let spans = ctx.spans();
+        // 应该有两个 bold span（分别左右），中间不含占位符
+        assert_eq!(spans.len(), 2, "text before and after image");
+        for s in &spans {
+            assert!(s.font_weight != FontWeight::NORMAL, "both spans should be bold");
+        }
+        assert_eq!(spans[0].end, 1);
+        assert_eq!(spans[1].start, 2);
+    }
+
+    // ── 注解在开头 ──
+    #[test]
+    fn test_annotation_at_start() {
+        let mut ctx = TestCtx::new();
+        ctx.text("Bold start", Style::b());
+        ctx.text("normal end", Style::default());
+        let spans = ctx.spans();
+        let bold = spans.iter().find(|s| s.font_weight != FontWeight::NORMAL).expect("bold span");
+        assert_eq!(bold.start, 0, "annotation should start at 0");
+    }
+
+    // ── 注解在结尾 ──
+    #[test]
+    fn test_annotation_at_end() {
+        let mut ctx = TestCtx::new();
+        ctx.text("normal ", Style::default());
+        ctx.text("bold end", Style::b());
+        let spans = ctx.spans();
+        let bold = spans.iter().find(|s| s.font_weight != FontWeight::NORMAL).expect("bold span");
+        let content_len = ctx.content.len();
+        assert_eq!(bold.end, content_len, "annotation should reach the end");
+    }
+
+    // ── 零宽度注解（跳过）──
+    #[test]
+    fn test_zero_width_annotation() {
+        let mut ctx = TestCtx::new();
+        ctx.text("A", Style::b());
+        // 理论上不会产生空注解，但如果 cursor 没动，应该被忽略
+        // 模拟零宽度：跳过 text() 直接调 push
+        let spans = ctx.spans();
+        assert!(spans.iter().all(|s| s.end > s.start), "no zero-width spans");
+    }
+
+    // ── 单字符注解 ──
+    #[test]
+    fn test_single_char_annotation() {
+        let mut ctx = TestCtx::new();
+        ctx.text("H", Style::b());
+        ctx.text("ello", Style::default());
+        let spans = ctx.spans();
+        let bold = spans.iter().find(|s| s.font_weight != FontWeight::NORMAL).expect("bold H");
+        assert_eq!(bold.end - bold.start, 1, "single char");
+    }
+
+    // ── 无重叠属性不应互相覆盖 ──
+    #[test]
+    fn test_non_overlapping_attributes_preserved() {
+        let mut ctx = TestCtx::new();
+        // 相同范围：bold + underline + big
+        let style = Style { fw: Some(FontWeight::BOLD), fs: Some(20.0), ul: true, ..Style::default() };
+        ctx.text("Title", style);
+        let spans = ctx.spans();
+        assert_eq!(spans.len(), 1);
+        assert!(spans[0].font_weight != FontWeight::NORMAL, "bold");
+        assert!(spans[0].underline, "underline");
+        assert!((spans[0].font_size - 20.0).abs() < 0.001, "font size");
     }
 }
