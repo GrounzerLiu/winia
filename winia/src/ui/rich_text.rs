@@ -205,7 +205,7 @@ impl<'a> RichTextScope<'a> {
 
     pub fn subscript(&mut self, f: impl FnOnce(&mut Self)) {
         let saved = self.style.clone();
-        self.style.baseline_shift = 0.15; // 正 = 下移（D:\winia: font_size * 0.15）
+        self.style.baseline_shift = 0.259; // 0.15 / 0.58，补偿字号缩小后保持 D:\winia 偏移量
         self.style.fs = Some(saved.fs.unwrap_or(14.0) * 0.58);
         f(self);
         self.style = saved;
@@ -213,7 +213,7 @@ impl<'a> RichTextScope<'a> {
 
     pub fn superscript(&mut self, f: impl FnOnce(&mut Self)) {
         let saved = self.style.clone();
-        self.style.baseline_shift = -0.30; // 负 = 上移（D:\winia: font_size * -0.30）
+        self.style.baseline_shift = -0.517; // -0.30 / 0.58
         self.style.fs = Some(saved.fs.unwrap_or(14.0) * 0.58);
         f(self);
         self.style = saved;
