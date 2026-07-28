@@ -158,10 +158,10 @@ impl RichText {
         self.spans.push(RichSpanStyle {
             start,
             end,
-            font_size: 0.0,   // 运行时解析
-            color: Color::from_argb(0, 0, 0, 0),
-            font_weight: crate::ui::text::FontWeight::NORMAL,
-            font_style: crate::ui::text::FontSlant::Upright,
+            font_size: self.current.font_size.unwrap_or(0.0),
+            color: self.current.color.unwrap_or(Color::from_argb(0, 0, 0, 0)),
+            font_weight: self.current.font_weight.unwrap_or(crate::ui::text::FontWeight::NORMAL),
+            font_style: self.current.font_style.unwrap_or(crate::ui::text::FontSlant::Upright),
             underline: self.current.underline,
             strikethrough: self.current.strikethrough,
             background: self.current.background,
@@ -207,29 +207,28 @@ impl RichText {
 
         let total = self.cursor;
 
-        // 1. 将非默认 span 解析出完整值
+        // 1. 每个 span 独立解析（用 span 自己的值补全缺省）
         let mut resolved: Vec<RichSpanStyle> = self.spans.drain(..).map(|s| {
             RichSpanStyle {
                 start: s.start,
                 end: s.end.min(total),
-                font_size: self.current.font_size.or(base.font_size).unwrap_or(d_font_size),
-                color: self.current.color.or(base.color).unwrap_or(d_color),
-                font_weight: self.current.font_weight.or(base.font_weight).unwrap_or(d_weight),
-                font_style: self.current.font_style.or(base.font_style).unwrap_or(d_slant),
+                font_size: if s.font_size > 0.0 { s.font_size } else { base.font_size.unwrap_or(d_font_size) },
+                color: if s.color.a > 0 || s.color.r > 0 || s.color.g > 0 || s.color.b > 0 { s.color } else { base.color.unwrap_or(d_color) },
+                font_weight: if s.font_weight != crate::ui::text::FontWeight::NORMAL || s.strikethrough { s.font_weight } else { base.font_weight.unwrap_or(d_weight) },
+                font_style: if s.font_style != crate::ui::text::FontSlant::Upright || s.underline { s.font_style } else { base.font_style.unwrap_or(d_slant) },
                 underline: s.underline,
                 strikethrough: s.strikethrough,
-                background: s.background,
+                background: s.background.map(|c| if c.a > 0 || c.r > 0 || c.g > 0 || c.b > 0 { c } else { d_color }).or(base.background),
             }
         }).collect();
 
         // 2. 排序、合并相邻重叠
         resolved.sort_by(|a, b| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
-        // 简单合并策略：取作用域最大的（从 start 到 next start）
         let mut merged: Vec<RichSpanStyle> = Vec::new();
         for span in resolved {
             if let Some(last) = merged.last_mut() {
-                if span.start <= last.end {
-                    // 重叠：扩展 end
+                if span.start < last.end {
+                    // 真重叠（非相邻）时扩展 end
                     last.end = last.end.max(span.end);
                     continue;
                 }
