@@ -65,16 +65,17 @@ fn resolve_base() -> Style {
 fn build_fffc_content(content: &str, drawable_positions: &[usize]) -> String {
     let mut out = String::with_capacity(content.len() + drawable_positions.len());
     let mut di = 0usize;
-    for (ci, ch) in content.char_indices() {
-        if di < drawable_positions.len() && drawable_positions[di] == ci / content[..ci].chars().count() {
+    let mut char_idx = 0usize;
+    for ch in content.chars() {
+        if di < drawable_positions.len() && drawable_positions[di] == char_idx {
             out.push('\u{FFFC}');
             di += 1;
         }
         out.push(ch);
+        char_idx += 1;
     }
     // drawable 在末尾的情况
-    let char_count = content.chars().count();
-    while di < drawable_positions.len() && drawable_positions[di] == char_count + di {
+    while di < drawable_positions.len() && drawable_positions[di] == char_idx + di {
         out.push('\u{FFFC}');
         di += 1;
     }
