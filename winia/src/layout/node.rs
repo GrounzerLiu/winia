@@ -132,6 +132,8 @@ pub struct LayoutNode {
     pub(crate) cached_paragraph: std::cell::RefCell<Option<skia_safe::textlayout::Paragraph>>,
     /// 富文本内联元素（图片/SVG），测量阶段缓存供渲染使用
     pub(crate) inline_drawables: std::cell::RefCell<Vec<std::sync::Arc<dyn crate::text::InlineDrawable>>>,
+    /// scroll 容器的 viewport 高度（由 measure_node 在布局阶段设值，供 apply_scroll_delta 使用）
+    pub(crate) scroll_viewport_height: f32,
 }
 
 // ── CachedNode：LayoutNode 的可缓存子集，用于增量重组时恢复节点 ──
@@ -201,6 +203,7 @@ impl LayoutNode {
             slot_key: 0,
             cached_paragraph: std::cell::RefCell::new(None),
             inline_drawables: std::cell::RefCell::new(Vec::new()),
+            scroll_viewport_height: 0.0,
         }
     }
 
@@ -236,6 +239,7 @@ impl LayoutNode {
             slot_key: 0,
             cached_paragraph: std::cell::RefCell::new(None),
             inline_drawables: std::cell::RefCell::new(Vec::new()),
+            scroll_viewport_height: 0.0,
         }
     }
 
@@ -263,6 +267,7 @@ impl Default for LayoutNode {
             slot_key: 0,
             cached_paragraph: std::cell::RefCell::new(None),
             inline_drawables: std::cell::RefCell::new(Vec::new()),
+            scroll_viewport_height: 0.0,
         }
     }
 }
@@ -571,6 +576,8 @@ pub(crate) fn measure_node(
         if node.modifier.is_fill_max_height() && inner_constraints.max_height >= f32::MAX {
             inner_constraints.min_height = viewport_height;
         }
+        // 保存 viewport 高度供滚动 clamping 使用
+        node.scroll_viewport_height = viewport_height;
         inner_constraints.max_height = f32::MAX;
     }
     if node.modifier.horizontal_scroll_state().is_some() {

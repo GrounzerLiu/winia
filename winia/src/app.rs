@@ -429,14 +429,18 @@ fn apply_scroll_delta(node: &mut LayoutNode, dy: f32) -> bool {
     if let Some(state) = node.modifier.vertical_scroll_state() {
         let current = state.get();
         // 滚动极限 = 内容总高度 - 可视区域高度
-        // 使用 node.measured_size.height（含所有 padding）而非 children position 推算，
-        // 后者只计入顶部 padding，导致底部 padding 永远无法滚入视图。
-        let visible_h = node.modifier.fixed_size()
-            .and_then(|(_, h)| match h {
-                Dimension::Fixed(h) => Some(h),
-                _ => None,
-            })
-            .unwrap_or(0.0);
+        // viewport 高度优先用 scroll_viewport_height（fill_max_height 场景），
+        // 降级到 fixed_size()（固定高度场景），再降级到 0（无限制）。
+        let visible_h = if node.scroll_viewport_height > 0.0 {
+            node.scroll_viewport_height
+        } else {
+            node.modifier.fixed_size()
+                .and_then(|(_, h)| match h {
+                    Dimension::Fixed(h) => Some(h),
+                    _ => None,
+                })
+                .unwrap_or(0.0)
+        };
         let max_offset = (node.measured_size.height - visible_h).max(0.0);
         let new = (current - dy).clamp(0.0, max_offset);
         state.set(new);
