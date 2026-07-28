@@ -1,21 +1,14 @@
-//! RichText 组件 — 带范围属性注解的内联样式富文本
+//! RichText — Compose 风格嵌套作用域富文本 API
 //!
-//! 支持：
-//! - 通过 `.with_style(|s| s.bold().font_size(20.0))` 范围化标注样式
-//! - 内联图片/SVG 嵌入
-//! - 下划线、删除线、背景色等装饰属性
-//!
-//! # 示例
 //! ```ignore
-//! RichText::new()
-//!     .text("Normal text. ")
-//!     .with_style(|s| s.font_size(20.0).bold().color(Color::RED))
-//!     .text("Big red bold. ")
-//!     .with_style(|s| s.underline())
-//!     .text("Underlined. ", &TextStyle::new().font_size(15.0))
-//!     .image(checkmark_svg())
-//!     .text(" Done!", &TextStyle::new())
-//!     .build(ctx);
+//! RichText::new().build(ctx, |x| {
+//!     x.text("Normal ");
+//!     x.bold(|x| {
+//!         x.text("Bold ");
+//!         x.italic(|x| { x.text("Bold+Italic"); });
+//!     });
+//!     x.image(star_svg());
+//! });
 //! ```
 
 use crate::core::composer::ComposeCtx;
@@ -24,256 +17,359 @@ use crate::text::InlineDrawable;
 use crate::ui::text::{FontWeight, FontSlant, TextStyle, LOCAL_TEXT_STYLE};
 use crate::ui::theme::WiniaTheme;
 use std::sync::Arc;
+use std::ops::Range;
 
-/// 富文本组件构建器。
-///
-/// 收集文本段和累加样式标注，构建时合并为不重叠的 `RichSpanStyle` 列表，
-/// 通过 `RichTextContent` modifier 传递给测量和渲染系统。
-pub struct RichText {
-    /// 最终的内容字符序列（drawable 用 U+FFFC 占位）
-    content: String,
-    /// 内联 drawable 列表
-    drawables: Vec<Arc<dyn InlineDrawable>>,
-    /// 当前生效的累加样式（尚未 commit 为范围）
-    current: StyleAccum,
-    /// 已 commit 的范围（含当前范围的起）
-    spans: Vec<RichSpanStyle>,
-    /// 字符计数器：等于 content.chars().count()
+// ── Style（累积样式，按作用域嵌套叠加）──
+
+#[derive(Clone, Debug)]
+struct Style {
+    fs: Option<f32>,
+    color: Option<Color>,
+    fw: Option<FontWeight>,
+    slant: Option<FontSlant>,
+    ul: bool,
+    st: bool,
+    bg: Option<Color>,
+}
+
+impl Style {
+    fn is_empty(&self) -> bool {
+        self.fs.is_none() && self.color.is_none() && self.fw.is_none()
+            && self.slant.is_none() && !self.ul && !self.st && self.bg.is_none()
+    }
+    fn is_default(&self) -> bool {
+        self.fs.is_none() && self.color.is_none() && self.fw.is_none()
+            && self.slant.is_none() && !self.ul && !self.st && self.bg.is_none()
+    }
+}
+
+impl Default for Style {
+    fn default() -> Self { Style { fs: None, color: None, fw: None, slant: None, ul: false, st: false, bg: None } }
+}
+
+/// 从 TextStyle + ProvideTextStyle + Theme 解析默认值
+fn resolve_base() -> Style {
+    let theme = WiniaTheme::colors();
+    let base = LOCAL_TEXT_STYLE.current();
+    Style {
+        fs: base.font_size,
+        color: base.color.or(Some(theme.on_surface)),
+        fw: base.font_weight,
+        slant: base.font_style,
+        ul: false, st: false, bg: None,
+    }
+}
+
+// ── 纯文本 + drawable 位置 → U+FFFC content ──
+
+fn build_fffc_content(content: &str, drawable_positions: &[usize]) -> String {
+    let mut out = String::with_capacity(content.len() + drawable_positions.len());
+    let mut di = 0usize;
+    for (ci, ch) in content.char_indices() {
+        if di < drawable_positions.len() && drawable_positions[di] == ci / content[..ci].chars().count() {
+            out.push('\u{FFFC}');
+            di += 1;
+        }
+        out.push(ch);
+    }
+    // drawable 在末尾的情况
+    let char_count = content.chars().count();
+    while di < drawable_positions.len() && drawable_positions[di] == char_count + di {
+        out.push('\u{FFFC}');
+        di += 1;
+    }
+    out
+}
+
+// ── RichTextScope（给闭包用的可变上下文）──
+
+pub struct RichTextScope<'a> {
+    content: &'a mut String,
+    drawables: &'a mut Vec<Arc<dyn InlineDrawable>>,
+    drawable_positions: &'a mut Vec<usize>,
+    annotations: &'a mut Vec<(Style, Range<usize>)>,
+    style: Style,
     cursor: usize,
-    /// 外部 modifier
+}
+
+impl<'a> RichTextScope<'a> {
+    /// 添加纯文本（使用当前累积样式）。
+    pub fn text(&mut self, s: &str) {
+        if s.is_empty() { return; }
+        let start = self.cursor;
+        self.content.push_str(s);
+        self.cursor += s.chars().count();
+        if !self.style.is_empty() {
+            self.annotations.push((self.style.clone(), start..self.cursor));
+        }
+    }
+
+    /// 添加带样式的文本（等价于 push_style().text(s).pop_style()）。
+    pub fn text_styled(&mut self, s: &str, style: &TextStyle) {
+        let saved = self.style.clone();
+        self.apply_textstyle(style);
+        self.text(s);
+        self.style = saved;
+    }
+
+    fn apply_textstyle(&mut self, s: &TextStyle) {
+        s.color.map(|v| self.style.color = Some(v));
+        s.font_size.map(|v| self.style.fs = Some(v));
+        s.font_weight.map(|v| self.style.fw = Some(v));
+        s.font_style.map(|v| self.style.slant = Some(v));
+        if s.underline { self.style.ul = true; }
+        if s.strikethrough { self.style.st = true; }
+        s.background.map(|v| self.style.bg = Some(v));
+    }
+
+    /// 内联图片。
+    pub fn image(&mut self, drawable: impl Into<Arc<dyn InlineDrawable>>) {
+        let pos = self.cursor;
+        self.drawables.push(drawable.into());
+        self.drawable_positions.push(pos);
+        // 占一个字符位（build 时会替换为 U+FFFC）
+        self.content.push(' ');
+        self.cursor += 1;
+        if !self.style.is_empty() {
+            self.annotations.push((self.style.clone(), pos..pos + 1));
+        }
+    }
+
+    // ── 嵌套作用域方法 ──
+
+    pub fn bold(&mut self, f: impl FnOnce(&mut Self)) {
+        let saved = self.style.clone();
+        self.style.fw = Some(FontWeight::BOLD);
+        f(self);
+        self.style = saved;
+    }
+
+    pub fn italic(&mut self, f: impl FnOnce(&mut Self)) {
+        let saved = self.style.clone();
+        self.style.slant = Some(FontSlant::Italic);
+        f(self);
+        self.style = saved;
+    }
+
+    pub fn font_size(&mut self, v: f32, f: impl FnOnce(&mut Self)) {
+        let saved = self.style.clone();
+        self.style.fs = Some(v);
+        f(self);
+        self.style = saved;
+    }
+
+    pub fn color(&mut self, v: Color, f: impl FnOnce(&mut Self)) {
+        let saved = self.style.clone();
+        self.style.color = Some(v);
+        f(self);
+        self.style = saved;
+    }
+
+    pub fn underline(&mut self, f: impl FnOnce(&mut Self)) {
+        let saved = self.style.clone();
+        self.style.ul = true;
+        f(self);
+        self.style = saved;
+    }
+
+    pub fn strikethrough(&mut self, f: impl FnOnce(&mut Self)) {
+        let saved = self.style.clone();
+        self.style.st = true;
+        f(self);
+        self.style = saved;
+    }
+
+    pub fn background(&mut self, v: Color, f: impl FnOnce(&mut Self)) {
+        let saved = self.style.clone();
+        self.style.bg = Some(v);
+        f(self);
+        self.style = saved;
+    }
+
+    /// 任意样式闭包（用于同时设置多个属性）。
+    pub fn style(&mut self, modifier: impl FnOnce(StyleModifier) -> StyleModifier, f: impl FnOnce(&mut Self)) {
+        let saved = self.style.clone();
+        let sm = modifier(StyleModifier(self.style.clone()));
+        self.style = sm.0;
+        f(self);
+        self.style = saved;
+    }
+}
+
+pub struct StyleModifier(Style);
+
+impl StyleModifier {
+    pub fn bold(mut self) -> Self { self.0.fw = Some(FontWeight::BOLD); self }
+    pub fn italic(mut self) -> Self { self.0.slant = Some(FontSlant::Italic); self }
+    pub fn font_size(mut self, v: f32) -> Self { self.0.fs = Some(v); self }
+    pub fn color(mut self, v: Color) -> Self { self.0.color = Some(v); self }
+    pub fn underline(mut self) -> Self { self.0.ul = true; self }
+    pub fn strikethrough(mut self) -> Self { self.0.st = true; self }
+    pub fn background(mut self, v: Color) -> Self { self.0.bg = Some(v); self }
+}
+
+// ── RichText 组件 ──
+
+pub struct RichText {
     modifier: Modifier,
 }
 
-/// 样式的暂存器，用于连续添加多段文本共用同一组属性。
-#[derive(Clone, Debug)]
-struct StyleAccum {
-    font_size: Option<f32>,
-    color: Option<Color>,
-    font_weight: Option<FontWeight>,
-    font_style: Option<FontSlant>,
-    underline: bool,
-    strikethrough: bool,
-    background: Option<Color>,
-}
-
-impl Default for StyleAccum {
-    fn default() -> Self {
-        StyleAccum {
-            font_size: None,
-            color: None,
-            font_weight: None,
-            font_style: None,
-            underline: false,
-            strikethrough: false,
-            background: None,
-        }
-    }
-}
-
 impl RichText {
-    pub fn new() -> Self {
-        RichText {
-            content: String::new(),
-            drawables: Vec::new(),
-            current: StyleAccum::default(),
-            spans: Vec::new(),
-            cursor: 0,
-            modifier: Modifier::new(),
-        }
-    }
+    pub fn new() -> Self { RichText { modifier: Modifier::new() } }
 
-    /// 添加文本（使用当前累加样式）。
-    pub fn text(mut self, text: impl Into<String>) -> Self {
-        let t = text.into();
-        if !t.is_empty() {
-            let start = self.cursor;
-            let end = start + t.chars().count();
-            self.push_span(start, end);
-            self.content.push_str(&t);
-            self.cursor = end;
-        }
-        self
-    }
-
-    /// 添加文本并覆盖当前样式（此段应用 `style`，之后恢复）。
-    pub fn text_styled(mut self, text: impl Into<String>, style: &TextStyle) -> Self {
-        let saved = self.current.clone();
-        self.apply_textstyle(style);
-        self = self.text(text);
-        self.current = saved;
-        self
-    }
-
-    /// 用 `TextStyle` 覆盖当前累加样式的某些属性。
-    fn apply_textstyle(&mut self, style: &TextStyle) {
-        if let Some(v) = style.color { self.current.color = Some(v); }
-        if let Some(v) = style.font_size { self.current.font_size = Some(v); }
-        if let Some(v) = style.font_weight { self.current.font_weight = Some(v); }
-        if let Some(v) = style.font_style { self.current.font_style = Some(v); }
-        if style.underline { self.current.underline = true; }
-        if style.strikethrough { self.current.strikethrough = true; }
-        if let Some(v) = style.background { self.current.background = Some(v); }
-    }
-
-    /// 通过闭包修改当前累加样式（从空白起始，仅保留闭包中明确设置的属性）。
-    ///
-    /// ```ignore
-    /// .with_style(|s| s.bold().font_size(20.0))
-    /// ```
-    pub fn with_style(mut self, f: impl FnOnce(StyleModifier) -> StyleModifier) -> Self {
-        self.current = f(StyleModifier(StyleAccum::default())).0;
-        self
-    }
-
-    /// 添加内联图片/SVG（使用当前累加样式确定占位尺寸）。
-    pub fn image(mut self, drawable: impl Into<Arc<dyn InlineDrawable>>) -> Self {
-        let drawable: Arc<dyn InlineDrawable> = drawable.into();
-        // 用占位符替代 drawable，并记录样式
-        let start = self.cursor;
-        let end = start + 1; // 一个 U+FFFC 占 1 字符位
-        self.push_span(start, end);
-        self.content.push('\u{FFFC}');
-        self.drawables.push(drawable);
-        self.cursor = end;
-        self
-    }
-
-    /// 应用 Modifier。
     pub fn modifier(mut self, modifier: Modifier) -> Self {
         self.modifier = self.modifier.then(modifier);
         self
     }
 
-    /// 将 [start, end) 的当前样式提交为 span（如果 current 非默认则提交）。
-    fn push_span(&mut self, start: usize, end: usize) {
-        if start >= end { return; }
-        // 如果当前样式都是默认值而且没有装饰属性，不添加 span（用 base 样式渲染）
-        if self.current.font_size.is_none()
-            && self.current.color.is_none()
-            && self.current.font_weight.is_none()
-            && self.current.font_style.is_none()
-            && !self.current.underline
-            && !self.current.strikethrough
-            && self.current.background.is_none() { return; }
-        self.spans.push(RichSpanStyle {
-            start,
-            end,
-            font_size: self.current.font_size.unwrap_or(0.0),
-            color: self.current.color.unwrap_or(Color::from_argb(0, 0, 0, 0)),
-            font_weight: self.current.font_weight.unwrap_or(crate::ui::text::FontWeight::NORMAL),
-            font_style: self.current.font_style.unwrap_or(crate::ui::text::FontSlant::Upright),
-            underline: self.current.underline,
-            strikethrough: self.current.strikethrough,
-            background: self.current.background,
-        });
-    }
+    /// 构建富文本。`f` 接收一个 `RichTextScope`，在其上调用 `.text()` / `.bold()` 等。
+    pub fn build(self, ctx: &mut ComposeCtx, f: impl FnOnce(&mut RichTextScope)) {
+        let mut content = String::new();
+        let mut drawables: Vec<Arc<dyn InlineDrawable>> = Vec::new();
+        let mut drawable_positions: Vec<usize> = Vec::new();
+        let mut annotations: Vec<(Style, Range<usize>)> = Vec::new();
+        let base = resolve_base();
 
-    fn is_default(&self) -> bool {
-        self.current.font_size.is_none()
-            && self.current.color.is_none()
-            && self.current.font_weight.is_none()
-            && self.current.font_style.is_none()
-            && !self.current.underline
-            && !self.current.strikethrough
-            && self.current.background.is_none()
-    }
+        {
+            let mut scope = RichTextScope {
+                content: &mut content,
+                drawables: &mut drawables,
+                drawable_positions: &mut drawable_positions,
+                annotations: &mut annotations,
+                style: base,
+                cursor: 0,
+            };
+            f(&mut scope);
+        }
 
-    /// 构建并注册到组合树。
-    ///
-    /// 解析所有样式的最终值（继承 ProvideTextStyle + Theme），
-    /// 合并相邻重叠的 span，存入 modifier 后注册为叶子节点。
-    pub fn build(mut self, ctx: &mut ComposeCtx) {
-        // 最终 span 解析：合并 + 继承
-        let spans = self.resolve_and_merge();
+        // 用 D:\winia 分裂算法解析 span
+        let spans = resolve_spans(&content, &drawable_positions, &annotations);
+        let content_with_fffc = build_fffc_content(&content, &drawable_positions);
 
         let modifier = self.modifier.push(ModifierElement::RichTextContent {
-            content: self.content,
-            drawables: self.drawables,
+            content: content_with_fffc,
+            drawables,
             spans,
         });
         let key = ctx.next_key();
         ctx.start_leaf(key, modifier);
         ctx.end_node();
     }
+}
 
-    /// 解析所有悬挂 span + 继承默认值，合并重叠范围。
-    fn resolve_and_merge(&mut self) -> Vec<RichSpanStyle> {
-        let base = crate::ui::text::LOCAL_TEXT_STYLE.current();
-        let theme = crate::ui::theme::WiniaTheme::colors();
-        let d_color = base.color.unwrap_or(theme.on_surface);
-        let d_font_size = base.font_size.unwrap_or(14.0);
-        let d_weight = base.font_weight.unwrap_or_default();
-        let d_slant = base.font_style.unwrap_or_default();
+impl Default for RichText { fn default() -> Self { Self::new() } }
 
-        let total = self.cursor;
+// ── D:\winia 风格 span 解析 ──
 
-        // 1. 每个 span 独立解析（用 span 自己的值补全缺省）
-        let mut resolved: Vec<RichSpanStyle> = self.spans.drain(..).map(|s| {
-            RichSpanStyle {
-                start: s.start,
-                end: s.end.min(total),
-                font_size: if s.font_size > 0.0 { s.font_size } else { base.font_size.unwrap_or(d_font_size) },
-                color: if s.color.a > 0 || s.color.r > 0 || s.color.g > 0 || s.color.b > 0 { s.color } else { base.color.unwrap_or(d_color) },
-                font_weight: if s.font_weight != crate::ui::text::FontWeight::NORMAL || s.strikethrough { s.font_weight } else { base.font_weight.unwrap_or(d_weight) },
-                font_style: if s.font_style != crate::ui::text::FontSlant::Upright || s.underline { s.font_style } else { base.font_style.unwrap_or(d_slant) },
-                underline: s.underline,
-                strikethrough: s.strikethrough,
-                background: s.background.map(|c| if c.a > 0 || c.r > 0 || c.g > 0 || c.b > 0 { c } else { d_color }).or(base.background),
-            }
-        }).collect();
+struct Seg {
+    range: Range<usize>,
+    fs: f32, color: Color, fw: FontWeight, slant: FontSlant,
+    ul: bool, st: bool, bg: Option<Color>,
+    placeholder: bool,
+}
 
-        // 2. 排序、合并相邻重叠
-        resolved.sort_by(|a, b| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
-        let mut merged: Vec<RichSpanStyle> = Vec::new();
-        for span in resolved {
-            if let Some(last) = merged.last_mut() {
-                if span.start < last.end {
-                    // 真重叠（非相邻）时扩展 end
-                    last.end = last.end.max(span.end);
-                    continue;
-                }
-            }
-            merged.push(span);
+impl Seg {
+    fn clone_at(&self, range: Range<usize>) -> Self {
+        Seg {
+            range, fs: self.fs, color: self.color, fw: self.fw, slant: self.slant,
+            ul: self.ul, st: self.st, bg: self.bg,
+            placeholder: self.placeholder,
         }
-
-        merged
     }
 }
 
-/// 样式修饰器（用于 `.with_style(|s| s.bold().color(RED))`）。
-pub struct StyleModifier(StyleAccum);
+fn resolve_spans(content: &str, drawable_positions: &[usize], annotations: &[(Style, Range<usize>)]) -> Vec<RichSpanStyle> {
+    let base = resolve_base();
+    let d_color = base.color.unwrap_or(Color::from_argb(255, 255, 255, 255));
+    let d_fs = base.fs.unwrap_or(14.0);
+    let d_fw = base.fw.unwrap_or(FontWeight::NORMAL);
+    let d_sl = base.slant.unwrap_or(FontSlant::Upright);
 
-impl StyleModifier {
-    pub fn bold(mut self) -> Self {
-        self.0.font_weight = Some(crate::ui::text::FontWeight::BOLD);
-        self
+    // 1) 建 PubSeg（纯文本 + drawable 占位）
+    let mut segs: Vec<Seg> = Vec::new();
+    let mut di = 0usize;
+    let total = content.chars().count();
+    let mut ci = 0usize;
+    while ci < total {
+        if di < drawable_positions.len() && drawable_positions[di] == ci {
+            segs.push(Seg {
+                range: ci..ci+1,
+                fs: d_fs, color: d_color, fw: d_fw, slant: d_sl,
+                ul: false, st: false, bg: None, placeholder: true,
+            });
+            di += 1; ci += 1;
+        } else {
+            let run_start = ci;
+            while ci < total && !(di < drawable_positions.len() && drawable_positions[di] == ci) {
+                ci += 1;
+            }
+            let run_len = ci - run_start;
+            if run_len > 0 {
+                segs.push(Seg {
+                    range: run_start..run_start+run_len,
+                    fs: d_fs, color: d_color, fw: d_fw, slant: d_sl,
+                    ul: false, st: false, bg: None, placeholder: false,
+                });
+            }
+        }
     }
-    pub fn italic(mut self) -> Self {
-        self.0.font_style = Some(crate::ui::text::FontSlant::Italic);
-        self
+
+    // 2) D:\winia 分裂
+    let resolved_annos: Vec<(Style, Range<usize>)> = annotations.iter()
+        .filter(|(s, r)| !s.is_default() && r.end > r.start)
+        .map(|(s, r)| (s.clone(), r.clone()))
+        .collect();
+
+    for (attr, anno_range) in &resolved_annos {
+        let a_start = anno_range.start;
+        let a_end = anno_range.end;
+        let mut i = 0;
+        while i < segs.len() {
+            let s_start = segs[i].range.start;
+            let s_end = segs[i].range.end;
+            if s_start >= a_end { break; }
+            if segs[i].placeholder { i += 1; continue; }
+            if a_start <= s_start && a_end >= s_end {
+                apply_seg(&mut segs[i], attr);
+                i += 1;
+            } else if a_start > s_start && a_start < s_end && a_end < s_end {
+                let mut mid = segs[i].clone_at(a_start..a_end);
+                apply_seg(&mut mid, attr);
+                let right = segs[i].clone_at(a_end..s_end);
+                segs[i].range.end = a_start;
+                segs.insert(i+1, mid);
+                segs.insert(i+2, right);
+                i += 3;
+            } else if a_start > s_start && a_start < s_end {
+                let mut right = segs[i].clone_at(a_start..s_end);
+                apply_seg(&mut right, attr);
+                segs[i].range.end = a_start;
+                segs.insert(i+1, right);
+                i += 2;
+            } else if a_end > s_start && a_end < s_end {
+                let mut left = segs[i].clone_at(s_start..a_end);
+                apply_seg(&mut left, attr);
+                segs[i].range.start = a_end;
+                segs.insert(i, left);
+                i += 2;
+            } else { i += 1; }
+        }
     }
-    pub fn font_size(mut self, v: f32) -> Self {
-        self.0.font_size = Some(v);
-        self
-    }
-    pub fn color(mut self, v: Color) -> Self {
-        self.0.color = Some(v);
-        self
-    }
-    pub fn underline(mut self) -> Self {
-        self.0.underline = true;
-        self
-    }
-    pub fn strikethrough(mut self) -> Self {
-        self.0.strikethrough = true;
-        self
-    }
-    pub fn background(mut self, v: Color) -> Self {
-        self.0.background = Some(v);
-        self
-    }
+
+    // 3) 转 RichSpanStyle
+    segs.into_iter().filter(|s| !s.placeholder).map(|s| RichSpanStyle {
+        start: s.range.start, end: s.range.end,
+        font_size: s.fs, color: s.color, font_weight: s.fw, font_style: s.slant,
+        underline: s.ul, strikethrough: s.st, background: s.bg,
+    }).collect()
 }
 
-impl Default for RichText {
-    fn default() -> Self { Self::new() }
+fn apply_seg(seg: &mut Seg, s: &Style) {
+    if let Some(v) = s.fs { seg.fs = v; }
+    if let Some(v) = s.color { seg.color = v; }
+    if let Some(v) = s.fw { seg.fw = v; }
+    if let Some(v) = s.slant { seg.slant = v; }
+    if s.ul { seg.ul = true; }
+    if s.st { seg.st = true; }
+    if let Some(v) = s.bg { seg.bg = Some(v); }
 }

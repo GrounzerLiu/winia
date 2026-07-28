@@ -25,3 +25,4 @@ pub use theme::WiniaTheme;
 pub use theme::ThemeColors;
 pub use theme::is_system_dark_theme;
 pub use rich_text::RichText;
+pub use rich_text::RichTextScope;
