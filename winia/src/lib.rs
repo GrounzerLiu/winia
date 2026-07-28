@@ -13,6 +13,7 @@ pub mod font;
 pub mod modifier;
 pub mod layout;
 pub mod ui;
+pub mod text;
 pub mod render;
 pub mod app;
 pub mod animation;

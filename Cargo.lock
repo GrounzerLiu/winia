@@ -3701,6 +3701,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-tungstenite",
+ "unicode-segmentation",
  "winit 0.31.0-beta.2",
 ]
 
