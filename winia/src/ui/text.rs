@@ -50,7 +50,7 @@ impl Default for TextAlign { fn default() -> Self { TextAlign::Left } }
 
 /// 文本溢出处理
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextOverflow { Clip, Ellipsis, Fade }
+pub enum TextOverflow { Clip, Ellipsis }
 impl Default for TextOverflow { fn default() -> Self { TextOverflow::Clip } }
 
 /// 文本样式——对标 Compose TextStyle
@@ -258,3 +258,4 @@ mod tests {
         assert_eq!(text.font_style.unwrap(), FontSlant::Italic);
     }
 }
+

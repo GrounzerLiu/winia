@@ -161,9 +161,9 @@ pub(crate) fn measure_flex<A: FlexAxis>(
     }
 
     // ── per-child 属性 ──
-    let weights: Vec<Option<f32>> = children.iter().map(|c| c.modifier.layout_weight()).collect();
+    let weights: Vec<Option<f32>> = children.iter().map(|c| c.modifier.get_layout_weight()).collect();
     let aligns: Vec<Alignment> = children.iter()
-        .map(|c| c.modifier.align_self().unwrap_or(alignment))
+        .map(|c| c.modifier.get_align_self().unwrap_or(alignment))
         .collect();
     let total_spacing = spacing * (n as f32 - 1.0).max(0.0);
 

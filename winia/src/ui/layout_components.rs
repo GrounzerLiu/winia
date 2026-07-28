@@ -25,7 +25,7 @@ impl Column {
         }
     }
 
-    pub fn modifier(mut self, m: Modifier) -> Self { self.modifier = m; self }
+    pub fn modifier(mut self, m: Modifier) -> Self { self.modifier = self.modifier.then(m); self }
     pub fn arrangement(mut self, a: Arrangement) -> Self { self.arrangement = a; self }
     pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
     pub fn spacing(mut self, s: f32) -> Self { self.spacing = s; self }
@@ -71,7 +71,7 @@ impl Row {
         }
     }
 
-    pub fn modifier(mut self, m: Modifier) -> Self { self.modifier = m; self }
+    pub fn modifier(mut self, m: Modifier) -> Self { self.modifier = self.modifier.then(m); self }
     pub fn arrangement(mut self, a: Arrangement) -> Self { self.arrangement = a; self }
     pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
     pub fn spacing(mut self, s: f32) -> Self { self.spacing = s; self }
@@ -113,7 +113,7 @@ impl Stack {
         }
     }
 
-    pub fn modifier(mut self, m: Modifier) -> Self { self.modifier = m; self }
+    pub fn modifier(mut self, m: Modifier) -> Self { self.modifier = self.modifier.then(m); self }
     pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
 
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {

@@ -161,10 +161,8 @@ pub(crate) enum ModifierElement {
     /// 填满最大尺寸
     FillMaxSize,
     /// 子节点在父容器中的交叉轴对齐（覆盖父容器的默认对齐）
-    #[allow(dead_code)]
     AlignSelf { alignment: crate::layout::Alignment },
     /// 布局权重（Row 中分配宽度，Column 中分配高度）
-    #[allow(dead_code)]
     LayoutWeight { weight: f32 },
 
     // ── Draw 类 ──
@@ -335,6 +333,16 @@ impl Modifier {
     pub fn fill_max_size(self) -> Self {
         self.push(ModifierElement::FillMaxSize)
     }
+
+    /// 交叉轴对齐覆盖（覆盖父 Column/Row 的默认 alignment）
+    pub fn align_self(self, alignment: crate::layout::Alignment) -> Self {
+        self.push(ModifierElement::AlignSelf { alignment })
+    }
+
+    /// 布局权重（Row 中按比例分配宽度，Column 中按比例分配高度）
+    pub fn layout_weight(self, weight: f32) -> Self {
+        self.push(ModifierElement::LayoutWeight { weight })
+    }
 }
 
 // ── Draw Modifier 方法 ──
@@ -501,7 +509,7 @@ impl Modifier {
     }
 
     /// 布局权重（供 Column/Row 使用）
-    pub fn layout_weight(&self) -> Option<f32> {
+    pub fn get_layout_weight(&self) -> Option<f32> {
         for el in &self.elements {
             if let ModifierElement::LayoutWeight { weight } = el {
                 return Some(*weight);
@@ -511,7 +519,7 @@ impl Modifier {
     }
 
     /// 交叉轴对齐覆盖（供 Column/Row 使用）
-    pub fn align_self(&self) -> Option<crate::layout::Alignment> {
+    pub fn get_align_self(&self) -> Option<crate::layout::Alignment> {
         for el in &self.elements {
             if let ModifierElement::AlignSelf { alignment } = el {
                 return Some(*alignment);
