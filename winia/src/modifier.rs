@@ -179,7 +179,7 @@ pub(crate) enum ModifierElement {
 
     // ── Content 类 ──
     /// 文本内容（由 Text 组件设置，渲染阶段消费）
-    TextContent { content: String, font_size: f32, color: Color, max_lines: usize, align: crate::ui::TextAlign, overflow: crate::ui::TextOverflow },
+    TextContent { content: String, font_size: f32, color: Color, font_weight: crate::ui::text::FontWeight, font_style: crate::ui::text::FontSlant, max_lines: usize, align: crate::ui::TextAlign, overflow: crate::ui::TextOverflow },
 
     // ── Input 类 ──
     /// 可点击

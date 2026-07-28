@@ -31,6 +31,8 @@ struct TextParams<'a> {
     content: &'a str,
     font_size: f32,
     color: &'a crate::modifier::Color,
+    font_weight: crate::ui::text::FontWeight,
+    font_style: crate::ui::text::FontSlant,
     max_lines: usize,
     align: crate::ui::TextAlign,
     overflow: crate::ui::TextOverflow,
@@ -52,9 +54,10 @@ fn render_modifier_element<'a>(
             draw_border(canvas, x, y, w, h, *width, color, shape);
             None
         }
-        ModifierElement::TextContent { content, font_size, color, max_lines, align, overflow } => {
+        ModifierElement::TextContent { content, font_size, color, font_weight, font_style, max_lines, align, overflow } => {
             Some(TextParams {
                 content, font_size: *font_size, color,
+                font_weight: *font_weight, font_style: *font_style,
                 max_lines: *max_lines, align: *align, overflow: *overflow,
             })
         }
@@ -80,7 +83,7 @@ fn render_pass1<'a>(
     let rect = Rect::new(x, y, x + w, y + h);
     let mut blur_radius: Option<f32> = None;
     let mut is_backdrop = false;
-    let mut text: Option<(&str, f32, &crate::modifier::Color, usize, crate::ui::TextAlign, crate::ui::TextOverflow)> = None;
+    let mut text: Option<(&str, f32, &crate::modifier::Color, usize, crate::ui::TextAlign, crate::ui::TextOverflow, crate::ui::text::FontWeight, crate::ui::text::FontSlant)> = None;
     let mut scroll_offset_v: Option<f32> = None;
     let mut scroll_offset_h: Option<f32> = None;
 
@@ -101,7 +104,7 @@ fn render_pass1<'a>(
             }
             el => {
                 if let Some(tp) = render_modifier_element(canvas, el, rect, x, y, w, h) {
-                    text = Some((tp.content, tp.font_size, tp.color, tp.max_lines, tp.align, tp.overflow));
+                    text = Some((tp.content, tp.font_size, tp.color, tp.max_lines, tp.align, tp.overflow, tp.font_weight, tp.font_style));
                 }
             }
         }
@@ -117,10 +120,12 @@ fn render_pass1<'a>(
     }
     }
 
-    if let Some((content, font_size, color, max_lines, align, overflow)) = text {
+    if let Some((content, font_size, color, max_lines, align, overflow, font_weight, font_style)) = text {
         // 优先用测量阶段缓存的 Paragraph（避免重建）
         if let Some(mut para) = node.cached_paragraph.borrow_mut().take() {
-            if (w - 10000.0).abs() > 0.1 { para.layout(w); }
+            // 用节点实际宽度重新 layout（测量阶段的排版宽度是约束 max_width，
+            // 渲染时确保与节点 measured_size 对齐）
+            para.layout(w);
             let x_off = match align {
                 crate::ui::TextAlign::Left | crate::ui::TextAlign::Justify => x,
                 crate::ui::TextAlign::Center => x + (w - para.max_intrinsic_width()).max(0.0) / 2.0,
@@ -128,7 +133,7 @@ fn render_pass1<'a>(
             };
             para.paint(canvas, (x_off, y));
         } else {
-            draw_text(canvas, content, font_size, color, x, y, w, max_lines, align, overflow);
+            draw_text(canvas, content, font_size, color, font_weight, font_style, x, y, w, max_lines, align, overflow);
         }
     }
     if node.focused {
@@ -138,14 +143,22 @@ fn render_pass1<'a>(
     // Scroll clip + translate
     let mut scrolled = false;
     if scroll_offset_v.is_some() || scroll_offset_h.is_some() {
-        // clip 用 visible 尺寸（从 modifier Size 中取），不是 content 尺寸
+        // clip 用 visible 尺寸，优先从 modifier 中提取 Size 或 FillMax 信息
         let mut cw = w;
         let mut ch = h;
         for el in node.modifier.elements() {
-            if let ModifierElement::Size { width: Dimension::Fixed(fw), height: Dimension::Fixed(fh) } = el {
-                cw = *fw;
-                ch = *fh;
-                break;
+            match el {
+                ModifierElement::Size { width, height } => {
+                    if let Dimension::Fixed(fw) = width { cw = *fw; }
+                    if let Dimension::Fixed(fh) = height { ch = *fh; }
+                }
+                ModifierElement::FillMaxWidth | ModifierElement::FillMaxSize => {
+                    cw = w; // measured width = parent max width
+                }
+                ModifierElement::FillMaxHeight => {
+                    ch = h;
+                }
+                _ => {}
             }
         }
         let clip_rect = Rect::new(x, y, x + cw, y + ch);
@@ -279,18 +292,58 @@ fn draw_focus(canvas: &Canvas, rect: Rect) {
     canvas.draw_rect(rect, &paint);
 }
 
-fn draw_text(canvas: &Canvas, content: &str, font_size: f32, color: &crate::modifier::Color, x: f32, y: f32, max_width: f32, _max_lines: usize, align: crate::ui::TextAlign, _overflow: crate::ui::TextOverflow) {
-    let para_style = ParagraphStyle::new();
+fn draw_text(
+    canvas: &Canvas,
+    content: &str,
+    font_size: f32,
+    color: &crate::modifier::Color,
+    font_weight: crate::ui::text::FontWeight,
+    font_style: crate::ui::text::FontSlant,
+    x: f32,
+    y: f32,
+    max_width: f32,
+    max_lines: usize,
+    align: crate::ui::TextAlign,
+    overflow: crate::ui::TextOverflow,
+) {
+    let mut para_style = ParagraphStyle::new();
+
+    // max_lines：限制行数
+    if max_lines < usize::MAX {
+        para_style.set_max_lines(max_lines);
+    }
+
+    // ellipsis overflow：超出时显示省略号
+    if overflow == crate::ui::TextOverflow::Ellipsis {
+        para_style.set_ellipsis("\u{2026}");
+    }
+
+    // justify alignment：两端对齐需要 Skia 内部调整单词间距
+    if align == crate::ui::TextAlign::Justify {
+        para_style.set_text_align(skia_safe::textlayout::TextAlign::Justify);
+    }
+
     let mut text_style = TextStyle::new();
     text_style.set_font_size(font_size);
     text_style.set_color(skia_safe::Color::from_argb(color.a, color.r, color.g, color.b));
+    // 设置字重和倾斜
+    if font_weight != crate::ui::text::FontWeight::NORMAL || font_style != crate::ui::text::FontSlant::Upright {
+        use skia_safe::FontStyle;
+        use crate::ui::text::FontSlant;
+        let slant = match font_style {
+            FontSlant::Upright => skia_safe::font_style::Slant::Upright,
+            FontSlant::Italic => skia_safe::font_style::Slant::Italic,
+            FontSlant::Oblique => skia_safe::font_style::Slant::Oblique,
+        };
+        text_style.set_font_style(FontStyle::new(font_weight.value().into(), 5.into(), slant));
+    }
     let fc = crate::font::get_font_collection();
     let mut builder = ParagraphBuilder::new(&para_style, &fc);
     builder.push_style(&text_style);
     builder.add_text(content);
     let mut para = builder.build();
     para.layout(max_width);
-    // 计算 x 偏移以支持 Center/Right 对齐
+    // 计算 x 偏移以支持 Center/Right/Justify 对齐
     let x_offset = match align {
         crate::ui::TextAlign::Left | crate::ui::TextAlign::Justify => x,
         crate::ui::TextAlign::Center => x + (max_width - para.max_intrinsic_width()).max(0.0) / 2.0,

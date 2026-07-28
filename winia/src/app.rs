@@ -231,6 +231,8 @@ impl ApplicationHandler for AppState {
                     || (l.height - pw.height).abs() > pw.height * 0.5 { /* winit bug #2094 */ }
                 else { pw.width = l.width; pw.height = l.height; }
                 if let Some(ref mut sw) = pw.skia_window { sw.resize(); }
+                // 确保下一帧以新尺寸重新布局（有些平台 resize 后不自动触发 RedrawRequested）
+                if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
             }
             WindowEvent::RedrawRequested => {
                 // 消费焦点请求（在 compose 前处理，避免丢失）

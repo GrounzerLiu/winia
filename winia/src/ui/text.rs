@@ -10,6 +10,36 @@ use crate::modifier::{Color, Modifier, ModifierElement};
 use std::sync::LazyLock;
 
 // ═══════════════════════════════════════════════════════════
+// 字体属性类型
+// ═══════════════════════════════════════════════════════════
+
+/// 字重 — 对标 Skia FontStyle::Weight
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FontWeight(i32);
+
+impl FontWeight {
+    pub const THIN: FontWeight = FontWeight(100);
+    pub const EXTRA_LIGHT: FontWeight = FontWeight(200);
+    pub const LIGHT: FontWeight = FontWeight(300);
+    pub const NORMAL: FontWeight = FontWeight(400);
+    pub const MEDIUM: FontWeight = FontWeight(500);
+    pub const SEMI_BOLD: FontWeight = FontWeight(600);
+    pub const BOLD: FontWeight = FontWeight(700);
+    pub const EXTRA_BOLD: FontWeight = FontWeight(800);
+    pub const BLACK: FontWeight = FontWeight(900);
+
+    pub fn new(weight: i32) -> Self { FontWeight(weight.clamp(1, 1000)) }
+    pub fn value(self) -> i32 { self.0 }
+}
+
+impl Default for FontWeight { fn default() -> Self { FontWeight::NORMAL } }
+
+/// 字体倾斜
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FontSlant { Upright, Italic, Oblique }
+impl Default for FontSlant { fn default() -> Self { FontSlant::Upright } }
+
+// ═══════════════════════════════════════════════════════════
 // 文本样式
 // ═══════════════════════════════════════════════════════════
 
@@ -28,6 +58,8 @@ impl Default for TextOverflow { fn default() -> Self { TextOverflow::Clip } }
 pub struct TextStyle {
     pub color: Option<Color>,
     pub font_size: Option<f32>,
+    pub font_weight: Option<FontWeight>,
+    pub font_style: Option<FontSlant>,
     pub text_align: Option<TextAlign>,
     pub overflow: Option<TextOverflow>,
     pub max_lines: Option<usize>,
@@ -35,11 +67,15 @@ pub struct TextStyle {
 
 impl TextStyle {
     pub fn new() -> Self {
-        Self { color: None, font_size: None, text_align: None, overflow: None, max_lines: None }
+        Self { color: None, font_size: None, font_weight: None, font_style: None, text_align: None, overflow: None, max_lines: None }
     }
 
     pub fn color(mut self, c: Color) -> Self { self.color = Some(c); self }
     pub fn font_size(mut self, s: f32) -> Self { self.font_size = Some(s); self }
+    pub fn font_weight(mut self, w: FontWeight) -> Self { self.font_weight = Some(w); self }
+    pub fn font_style(mut self, s: FontSlant) -> Self { self.font_style = Some(s); self }
+    pub fn italic(mut self) -> Self { self.font_style = Some(FontSlant::Italic); self }
+    pub fn bold(mut self) -> Self { self.font_weight = Some(FontWeight::BOLD); self }
     pub fn align(mut self, a: TextAlign) -> Self { self.text_align = Some(a); self }
 }
 
@@ -57,13 +93,6 @@ static LOCAL_TEXT_STYLE: LazyLock<CompositionLocal<TextStyle>> = LazyLock::new(|
 
 /// 在子树中提供默认文字样式（和现有样式合并，不是替换）。
 /// 类似 Compose 的 ProvideTextStyle。
-///
-/// ```ignore
-/// ProvideTextStyle(TextStyle::new().color(RED).font_size(16.0), ctx, |ctx| {
-///     Text::new("hello").build(ctx); // 自动使用红色 16px
-///     Text::new("world").color(BLUE).build(ctx); // 覆盖颜色为蓝色，字号保持 16px
-/// });
-/// ```
 pub fn ProvideTextStyle(style: TextStyle, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
     let merged = merge_text_styles(&LOCAL_TEXT_STYLE.current(), &style);
     LOCAL_TEXT_STYLE.provides(merged, || {
@@ -76,6 +105,8 @@ fn merge_text_styles(base: &TextStyle, override_: &TextStyle) -> TextStyle {
     TextStyle {
         color: override_.color.or(base.color),
         font_size: override_.font_size.or(base.font_size),
+        font_weight: override_.font_weight.or(base.font_weight),
+        font_style: override_.font_style.or(base.font_style),
         text_align: override_.text_align.or(base.text_align),
         overflow: override_.overflow.or(base.overflow),
         max_lines: override_.max_lines.or(base.max_lines),
@@ -92,6 +123,8 @@ pub struct Text {
     modifier: Modifier,
     font_size: Option<f32>,
     color: Option<Color>,
+    font_weight: Option<FontWeight>,
+    font_style: Option<FontSlant>,
     max_lines: Option<usize>,
     text_align: Option<TextAlign>,
     overflow: Option<TextOverflow>,
@@ -106,6 +139,8 @@ impl Text {
             modifier: Modifier::new(),
             font_size: None,
             color: None,
+            font_weight: None,
+            font_style: None,
             max_lines: None,
             text_align: None,
             overflow: None,
@@ -117,6 +152,9 @@ impl Text {
     pub fn modifier(mut self, modifier: Modifier) -> Self { self.modifier = self.modifier.then(modifier); self }
     pub fn font_size(mut self, size: f32) -> Self { self.font_size = Some(size); self }
     pub fn color(mut self, color: Color) -> Self { self.color = Some(color); self }
+    pub fn font_weight(mut self, w: FontWeight) -> Self { self.font_weight = Some(w); self }
+    pub fn bold(mut self) -> Self { self.font_weight = Some(FontWeight::BOLD); self }
+    pub fn italic(mut self) -> Self { self.font_style = Some(FontSlant::Italic); self }
     pub fn max_lines(mut self, lines: usize) -> Self { self.max_lines = Some(lines); self }
     pub fn align(mut self, align: TextAlign) -> Self { self.text_align = Some(align); self }
     pub fn overflow(mut self, overflow: TextOverflow) -> Self { self.overflow = Some(overflow); self }
@@ -133,6 +171,8 @@ impl Text {
         let style = self.style.as_ref().map(|s| merge_text_styles(&base, s)).unwrap_or(base);
 
         let final_font_size = self.font_size.or(style.font_size).unwrap_or(14.0);
+        let final_font_weight = self.font_weight.or(style.font_weight).unwrap_or_default();
+        let final_font_style = self.font_style.or(style.font_style).unwrap_or_default();
         let final_align = self.text_align.or(style.text_align).unwrap_or_default();
         let final_overflow = self.overflow.or(style.overflow).unwrap_or_default();
         let final_max_lines = self.max_lines.or(style.max_lines).unwrap_or(usize::MAX);
@@ -146,6 +186,8 @@ impl Text {
             content: self.content,
             font_size: final_font_size,
             color: final_color,
+            font_weight: final_font_weight,
+            font_style: final_font_style,
             max_lines: final_max_lines,
             align: final_align,
             overflow: final_overflow,
@@ -184,6 +226,8 @@ mod tests {
         let text = Text::new("hello world")
             .font_size(24.0)
             .color(Color::RED)
+            .bold()
+            .italic()
             .align(TextAlign::Center)
             .max_lines(3)
             .overflow(TextOverflow::Ellipsis)
@@ -196,5 +240,17 @@ mod tests {
         assert_eq!(text.get_overflow(), Some(TextOverflow::Ellipsis));
         assert_eq!(text.get_max_lines(), Some(3));
         assert_eq!(text.get_modifier().elements().len(), 1);
+    }
+
+    #[test]
+    fn test_text_bold_italic() {
+        let text = Text::new("bold italic")
+            .bold()
+            .italic()
+            .font_size(16.0);
+        assert!(text.font_weight.is_some());
+        assert_eq!(text.font_weight.unwrap(), FontWeight::BOLD);
+        assert!(text.font_style.is_some());
+        assert_eq!(text.font_style.unwrap(), FontSlant::Italic);
     }
 }
