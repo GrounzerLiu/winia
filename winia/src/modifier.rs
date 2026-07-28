@@ -160,6 +160,8 @@ pub(crate) enum ModifierElement {
     FillMaxHeight,
     /// 填满最大尺寸
     FillMaxSize,
+    /// 位置偏移（不影响布局尺寸，仅移动绘制位置）
+    Offset { x: f32, y: f32 },
     /// 子节点在父容器中的交叉轴对齐（覆盖父容器的默认对齐）
     AlignSelf { alignment: crate::layout::Alignment },
     /// 布局权重（Row 中分配宽度，Column 中分配高度）
@@ -334,7 +336,12 @@ impl Modifier {
         self.push(ModifierElement::FillMaxSize)
     }
 
-    /// 交叉轴对齐覆盖（覆盖父 Column/Row 的默认 alignment）
+    /// 位置偏移（不影响布局尺寸，仅移动绘制位置）
+    pub fn offset(self, x: f32, y: f32) -> Self {
+        self.push(ModifierElement::Offset { x, y })
+    }
+
+    /// 子节点在父容器中的交叉轴对齐（覆盖父容器的默认对齐）
     pub fn align_self(self, alignment: crate::layout::Alignment) -> Self {
         self.push(ModifierElement::AlignSelf { alignment })
     }
@@ -547,6 +554,16 @@ impl Modifier {
         }
         None
     }
+
+    /// 位置偏移（如果有 Offset modifier）
+    pub fn get_offset(&self) -> Option<(f32, f32)> {
+        for el in &self.elements {
+            if let ModifierElement::Offset { x, y } = el {
+                return Some((*x, *y));
+            }
+        }
+        None
+    }
 }
 
 // ── 辅助方法: 分类提取 ──
@@ -575,6 +592,7 @@ impl Debug for ModifierElement {
             Self::FillMaxWidth => f.write_str("FillMaxWidth"),
             Self::FillMaxHeight => f.write_str("FillMaxHeight"),
             Self::FillMaxSize => f.write_str("FillMaxSize"),
+            Self::Offset { x, y } => f.debug_struct("Offset").field("x", x).field("y", y).finish(),
             Self::AlignSelf { alignment } => f.debug_struct("AlignSelf").field("alignment", alignment).finish(),
             Self::LayoutWeight { weight } => f.debug_struct("LayoutWeight").field("weight", weight).finish(),
             Self::Background { color, shape } => f.debug_struct("Background").field("color", color).field("shape", shape).finish(),
@@ -609,6 +627,7 @@ impl ModifierElement {
             | ModifierElement::FillMaxWidth
             | ModifierElement::FillMaxHeight
             | ModifierElement::FillMaxSize
+            | ModifierElement::Offset { .. }
             | ModifierElement::AlignSelf { .. }
             | ModifierElement::LayoutWeight { .. } => ElementCategory::Layout,
 

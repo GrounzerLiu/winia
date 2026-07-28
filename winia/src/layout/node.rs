@@ -566,6 +566,13 @@ pub(crate) fn measure_node(
                 child.position.y += pad_top;
             }
         }
+        // apply per-child offset modifier
+        for child in &mut node.children {
+            if let Some((ox, oy)) = child.modifier.get_offset() {
+                child.position.x += ox;
+                child.position.y += oy;
+            }
+        }
         let outer_size = Size::new(size.width + pad_x, size.height + pad_y);
         node.measured_size = outer_size;
         (outer_size, placements)
