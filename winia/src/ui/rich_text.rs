@@ -205,7 +205,7 @@ impl<'a> RichTextScope<'a> {
 
     pub fn subscript(&mut self, f: impl FnOnce(&mut Self)) {
         let saved = self.style.clone();
-        self.style.baseline_shift = -0.5;
+        self.style.baseline_shift = 0.15; // 正 = 下移（D:\winia: font_size * 0.15）
         self.style.fs = Some(saved.fs.unwrap_or(14.0) * 0.58);
         f(self);
         self.style = saved;
@@ -213,7 +213,7 @@ impl<'a> RichTextScope<'a> {
 
     pub fn superscript(&mut self, f: impl FnOnce(&mut Self)) {
         let saved = self.style.clone();
-        self.style.baseline_shift = 0.5;
+        self.style.baseline_shift = -0.30; // 负 = 上移（D:\winia: font_size * -0.30）
         self.style.fs = Some(saved.fs.unwrap_or(14.0) * 0.58);
         f(self);
         self.style = saved;

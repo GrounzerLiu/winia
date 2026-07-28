@@ -829,9 +829,9 @@ fn to_sktextstyle(s: &RichSpanStyle) -> SkTextStyle {
         ts.set_decoration_mode(sk);
     }
 
-    // 基线偏移
+    // 基线偏移（D:\winia: shift = font_size * multiplier）
     if s.baseline_shift != 0.0 {
-        ts.set_baseline_shift(s.baseline_shift);
+        ts.set_baseline_shift(s.baseline_shift * s.font_size);
     }
 
     // 间距
@@ -878,7 +878,7 @@ fn to_sktextstyle(s: &RichSpanStyle) -> SkTextStyle {
         let mut paint = skia_safe::Paint::default();
         paint.set_color(skia_safe::Color::from_argb(bg.a, bg.r, bg.g, bg.b));
         paint.set_style(skia_safe::paint::Style::Fill);
-        ts.set_foreground_paint(&paint); // 背景用 foreground_paint 模拟
+        ts.set_background_paint(&paint);
     }
 
     // locale
