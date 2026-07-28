@@ -684,22 +684,6 @@ fn measure_and_cache_text(node: &LayoutNode, max_width: f32) -> Size {
     Size::ZERO
 }
 
-/// 使用 Skia Paragraph 测量文本的尺寸（复用全局字体缓存）
-fn measure_text_size(text: &str, font_size: f32, _max_width: f32) -> (Size, skia_safe::textlayout::Paragraph) {
-    use skia_safe::textlayout::{ParagraphBuilder, ParagraphStyle, TextStyle};
-    let para_style = ParagraphStyle::new();
-    let mut text_style = TextStyle::new();
-    text_style.set_font_size(font_size);
-    let fc = crate::font::get_font_collection();
-    let mut builder = ParagraphBuilder::new(&para_style, &fc);
-    builder.push_style(&text_style);
-    builder.add_text(text);
-    let mut para = builder.build();
-    para.layout(10000.0);
-    (Size::new(para.max_intrinsic_width().ceil(), para.height().ceil()), para)
-}
-
-
 // ── 主轴间距计算（Column/Row 共用）──
 
 /// 计算主轴上的 spacing 和 leading space

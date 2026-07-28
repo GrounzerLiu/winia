@@ -85,6 +85,7 @@ fn render_pass1<'a>(
     let rect = Rect::new(x, y, x + w, y + h);
     let mut blur_radius: Option<f32> = None;
     let mut is_backdrop = false;
+    let mut clip_shape: Option<crate::modifier::Shape> = None;
     let mut text: Option<(&str, f32, &crate::modifier::Color, usize, crate::ui::TextAlign, crate::ui::TextOverflow, crate::ui::text::FontWeight, crate::ui::text::FontSlant, bool)> = None;
     let mut scroll_offset_v: Option<f32> = None;
     let mut scroll_offset_h: Option<f32> = None;
@@ -97,6 +98,9 @@ fn render_pass1<'a>(
             ModifierElement::BackdropBlur { radius } if !backdrop_pass => {
                 is_backdrop = true;
                 backdrop_regions.push((x, y, w, h, *radius, node));
+            }
+            ModifierElement::Clip { shape } if !backdrop_pass => {
+                clip_shape = Some(shape.clone());
             }
             ModifierElement::VerticalScroll { state } if !backdrop_pass => {
                 scroll_offset_v = Some(state.get());
@@ -120,6 +124,22 @@ fn render_pass1<'a>(
         let rec = skia_safe::canvas::SaveLayerRec::default().paint(&paint);
         canvas.save_layer(&rec);
     }
+    }
+
+    // Clip：在绘制内容前设置裁剪区域
+    let mut clipped = false;
+    if let Some(ref shape) = clip_shape {
+        canvas.save();
+        match shape {
+            crate::modifier::Shape::Rectangle => { canvas.clip_rect(rect, None, Some(false)); }
+            crate::modifier::Shape::RoundedRect { corner_radius } => {
+                canvas.clip_rrect(RRect::new_rect_xy(rect, *corner_radius, *corner_radius), None, Some(false));
+            }
+            crate::modifier::Shape::Circle => {
+                canvas.clip_rect(rect, None, Some(false));
+            }
+        }
+        clipped = true;
     }
 
     if let Some((content, font_size, color, max_lines, align, overflow, font_weight, font_style, soft_wrap)) = text {
@@ -180,6 +200,10 @@ fn render_pass1<'a>(
     }
 
     if scrolled {
+        canvas.restore();
+    }
+
+    if clipped {
         canvas.restore();
     }
 
