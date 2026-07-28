@@ -225,19 +225,27 @@ fn main() {
                                         });
                                 });
 
-                            // ── 8. Stack 层叠 ──
-                            Text::new("■ Stack — z-order overlap")
+                            // ── 8. Stack 层叠 + Z-order ──
+                            Text::new("■ Stack — z-order with offset")
                                 .font_size(16.0).color(Color::from_argb(255, 100, 100, 100))
                                 .build(ctx);
 
                             Stack::new()
                                 .modifier(Modifier::new().size(Dimension::Fill, 60.0).background(Color::from_argb(20, 100, 100, 200), Shape::rounded(6.0)))
                                 .build(ctx, |ctx| {
-                                    Text::new("Top layer").font_size(14.0).color(Color::from_argb(255, 60, 60, 80)).build(ctx);
+                                    // 底层（先 build → 先绘制）
+                                    Text::new("Behind").font_size(12.0)
+                                        .background(Color::from_argb(200, 220, 180, 100), Shape::rounded(4.0))
+                                        .modifier(Modifier::new().size(100.0, 36.0).padding(4.0))
+                                        .build(ctx);
+                                    // 顶层（后 build → 后绘制，覆盖底层）
+                                    Text::new("Front (offset)").font_size(12.0)
+                                        .background(Color::from_argb(220, 100, 140, 200), Shape::rounded(4.0))
+                                        .modifier(Modifier::new().size(120.0, 36.0).offset(40.0, 10.0).padding(4.0))
+                                        .build(ctx);
                                 });
                         });
                 });
         });
     });
 }
-
