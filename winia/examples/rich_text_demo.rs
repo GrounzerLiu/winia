@@ -243,8 +243,9 @@ fn rich_text_demo_ui(ctx: &mut ComposeCtx) {
 
     // ═══ 18. 通知卡片 ═══
     sec("18. Notification card", ctx);
+    let theme_colors = WiniaTheme::colors();
     Stack::new()
-        .modifier(Modifier::new().fill_max_width().background(Color::from_argb(240, 230, 240, 255), Shape::rounded(8.0)))
+        .modifier(Modifier::new().fill_max_width().background(theme_colors.surface_container, Shape::rounded(8.0)))
         .build(ctx, |ctx| {
             Text::new("").modifier(Modifier::new().size(4.0, Dimension::Fill).background(Color::from_argb(255, 33, 150, 243), Shape::rounded(2.0))).build(ctx);
             Column::new().modifier(Modifier::new().fill_max_size().padding(14.0)).build(ctx, |ctx| {
@@ -285,7 +286,8 @@ fn sec(text: &str, ctx: &mut ComposeCtx) {
 }
 
 fn card(ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
+    let bg = WiniaTheme::colors().surface_container_low;
     Column::new()
-        .modifier(Modifier::new().fill_max_width().padding(10.0).background(Color::from_argb(18, 0, 0, 0), Shape::rounded(6.0)))
+        .modifier(Modifier::new().fill_max_width().padding(10.0).background(bg, Shape::rounded(6.0)))
         .build(ctx, content);
 }
