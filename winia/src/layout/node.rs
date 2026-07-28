@@ -786,35 +786,104 @@ fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> Size {
     Size::ZERO
 }
 
-/// 将 RichSpanStyle 转为 Skia TextStyle（含装饰属性）
+/// 将 RichSpanStyle 转为 Skia TextStyle
 fn to_sktextstyle(s: &RichSpanStyle) -> SkTextStyle {
     let mut ts = SkTextStyle::new();
     ts.set_font_size(s.font_size);
     ts.set_color(skia_safe::Color::from_argb(s.color.a, s.color.r, s.color.g, s.color.b));
 
-    // 字重/字型
-    if s.font_weight != crate::ui::text::FontWeight::NORMAL || s.font_style != FontSlant::Upright {
-        let slant = match s.font_style {
-            FontSlant::Upright => skia_safe::font_style::Slant::Upright,
-            FontSlant::Italic => skia_safe::font_style::Slant::Italic,
-            FontSlant::Oblique => skia_safe::font_style::Slant::Oblique,
-        };
-        ts.set_font_style(SkFontStyle::new(s.font_weight.value().into(), 5.into(), slant));
-        }
+    // 字重/字型/字宽
+    let slant = match s.font_style {
+        FontSlant::Upright => skia_safe::font_style::Slant::Upright,
+        FontSlant::Italic => skia_safe::font_style::Slant::Italic,
+        FontSlant::Oblique => skia_safe::font_style::Slant::Oblique,
+    };
+    ts.set_font_style(SkFontStyle::new(s.font_weight.value().into(), s.font_width.into(), slant));
 
     // 装饰线
-    let mut deco: skia_safe::textlayout::TextDecoration = skia_safe::textlayout::TextDecoration::default(); // kNoDecoration
+    let mut deco: skia_safe::textlayout::TextDecoration = skia_safe::textlayout::TextDecoration::default();
     if s.underline { deco |= skia_safe::textlayout::TextDecoration::UNDERLINE; }
+    if s.overline { deco |= skia_safe::textlayout::TextDecoration::OVERLINE; }
     if s.strikethrough { deco |= skia_safe::textlayout::TextDecoration::LINE_THROUGH; }
     ts.set_decoration_type(deco);
+    if let Some(c) = &s.decoration_color {
+        ts.set_decoration_color(skia_safe::Color::from_argb(c.a, c.r, c.g, c.b));
+    }
+    if let Some(st) = s.decoration_style {
+        use crate::modifier::DecoStyle;
+        let sk = match st {
+            DecoStyle::Solid => skia_safe::textlayout::TextDecorationStyle::Solid,
+            DecoStyle::Double => skia_safe::textlayout::TextDecorationStyle::Double,
+            DecoStyle::Dotted => skia_safe::textlayout::TextDecorationStyle::Dotted,
+            DecoStyle::Dashed => skia_safe::textlayout::TextDecorationStyle::Dashed,
+            DecoStyle::Wavy => skia_safe::textlayout::TextDecorationStyle::Wavy,
+        };
+        ts.set_decoration_style(sk);
+    }
+    if let Some(m) = s.decoration_mode {
+        use crate::modifier::DecoMode;
+        let sk = match m {
+            DecoMode::Gaps => skia_safe::textlayout::TextDecorationMode::Gaps,
+            DecoMode::Through => skia_safe::textlayout::TextDecorationMode::Through,
+        };
+        ts.set_decoration_mode(sk);
+    }
 
-    // 背景色
+    // 基线偏移
+    if s.baseline_shift != 0.0 {
+        ts.set_baseline_shift(s.baseline_shift);
+    }
+
+    // 间距
+    if s.letter_spacing != 0.0 { ts.set_letter_spacing(s.letter_spacing); }
+    if s.word_spacing != 0.0 { ts.set_word_spacing(s.word_spacing); }
+    if s.height_multiple != 0.0 { ts.set_height(s.height_multiple); ts.set_height_override(true); }
+    if s.half_leading { ts.set_half_leading(true); }
+
+    // 字体族
+    if !s.font_families.is_empty() {
+        ts.set_font_families(&s.font_families.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+    }
+
+    // 渲染精度
+    if let Some(e) = s.font_edging {
+        use crate::modifier::FontEdge;
+        let sk = match e {
+            FontEdge::Alias => skia_safe::font::Edging::Alias,
+            FontEdge::AntiAlias => skia_safe::font::Edging::AntiAlias,
+            FontEdge::SubpixelAntiAlias => skia_safe::font::Edging::SubpixelAntiAlias,
+        };
+        ts.set_font_edging(sk);
+    }
+    if let Some(h) = s.font_hinting {
+        use crate::modifier::FontHint;
+        let sk = match h {
+            FontHint::None => skia_safe::FontHinting::None,
+            FontHint::Slight => skia_safe::FontHinting::Slight,
+            FontHint::Normal => skia_safe::FontHinting::Normal,
+            FontHint::Full => skia_safe::FontHinting::Full,
+        };
+        ts.set_font_hinting(sk);
+    }
+    if s.subpixel { ts.set_subpixel(true); }
+
+    // 前景/背景
+    if let Some(fg) = &s.foreground_color {
+        let mut paint = skia_safe::Paint::default();
+        paint.set_color(skia_safe::Color::from_argb(fg.a, fg.r, fg.g, fg.b));
+        paint.set_style(skia_safe::paint::Style::Fill);
+        ts.set_foreground_paint(&paint);
+    }
     if let Some(bg) = &s.background {
         let mut paint = skia_safe::Paint::default();
         paint.set_color(skia_safe::Color::from_argb(bg.a, bg.r, bg.g, bg.b));
         paint.set_style(skia_safe::paint::Style::Fill);
-        ts.set_foreground_paint(&paint);
-        // 注：set_background_paint 也可用，效果是矩形底色
+        ts.set_foreground_paint(&paint); // 背景用 foreground_paint 模拟
+    }
+
+    // locale
+    if let Some(loc) = &s.locale {
+        ts.set_locale(loc);
     }
 
     ts

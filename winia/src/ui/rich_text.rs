@@ -28,23 +28,53 @@ struct Style {
     fw: Option<FontWeight>,
     slant: Option<FontSlant>,
     ul: bool,
+    ol: bool,
     st: bool,
+    deco_color: Option<Color>,
+    deco_style: Option<crate::modifier::DecoStyle>,
+    deco_mode: Option<crate::modifier::DecoMode>,
+    baseline_shift: f32,
+    letter_spacing: f32,
+    word_spacing: f32,
+    height_multiple: f32,
+    half_leading: bool,
+    font_families: Vec<String>,
+    font_width: i32,
+    font_edging: Option<crate::modifier::FontEdge>,
+    font_hinting: Option<crate::modifier::FontHint>,
+    subpixel: bool,
+    foreground_color: Option<Color>,
     bg: Option<Color>,
+    locale: Option<String>,
 }
 
 impl Style {
-    fn is_empty(&self) -> bool {
-        self.fs.is_none() && self.color.is_none() && self.fw.is_none()
-            && self.slant.is_none() && !self.ul && !self.st && self.bg.is_none()
-    }
-    fn is_default(&self) -> bool {
-        self.fs.is_none() && self.color.is_none() && self.fw.is_none()
-            && self.slant.is_none() && !self.ul && !self.st && self.bg.is_none()
+    fn is_not_default(&self) -> bool {
+        self.fs.is_some() || self.color.is_some() || self.fw.is_some()
+            || self.slant.is_some() || self.ul || self.ol || self.st
+            || self.deco_color.is_some() || self.deco_style.is_some() || self.deco_mode.is_some()
+            || self.baseline_shift != 0.0 || self.letter_spacing != 0.0 || self.word_spacing != 0.0
+            || self.height_multiple != 0.0 || self.half_leading
+            || !self.font_families.is_empty() || self.font_width != 5
+            || self.font_edging.is_some() || self.font_hinting.is_some() || self.subpixel
+            || self.foreground_color.is_some() || self.bg.is_some()
+            || self.locale.is_some()
     }
 }
 
 impl Default for Style {
-    fn default() -> Self { Style { fs: None, color: None, fw: None, slant: None, ul: false, st: false, bg: None } }
+    fn default() -> Self {
+        Style {
+            fs: None, color: None, fw: None, slant: None,
+            ul: false, ol: false, st: false,
+            deco_color: None, deco_style: None, deco_mode: None,
+            baseline_shift: 0.0, letter_spacing: 0.0, word_spacing: 0.0,
+            height_multiple: 0.0, half_leading: false,
+            font_families: Vec::new(), font_width: 5,
+            font_edging: None, font_hinting: None, subpixel: false,
+            foreground_color: None, bg: None, locale: None,
+        }
+    }
 }
 
 /// 从 TextStyle + ProvideTextStyle + Theme 解析默认值
@@ -56,7 +86,13 @@ fn resolve_base() -> Style {
         color: base.color.or(Some(theme.on_surface)),
         fw: base.font_weight,
         slant: base.font_style,
-        ul: false, st: false, bg: None,
+        ul: false, ol: false, st: false,
+        deco_color: None, deco_style: None, deco_mode: None,
+        baseline_shift: 0.0, letter_spacing: 0.0, word_spacing: 0.0,
+        height_multiple: 0.0, half_leading: false,
+        font_families: Vec::new(), font_width: 5,
+        font_edging: None, font_hinting: None, subpixel: false,
+        foreground_color: None, bg: None, locale: None,
     }
 }
 
@@ -80,7 +116,7 @@ impl<'a> RichTextScope<'a> {
         let start = self.cursor;
         self.content.push_str(s);
         self.cursor += s.chars().count();
-        if !self.style.is_empty() {
+        if self.style.is_not_default() {
             self.annotations.push((self.style.clone(), start..self.cursor));
         }
     }
@@ -111,7 +147,7 @@ impl<'a> RichTextScope<'a> {
         // 占一个字符位（build 时会替换为 U+FFFC）
         self.content.push(' ');
         self.cursor += 1;
-        if !self.style.is_empty() {
+        if self.style.is_not_default() {
             self.annotations.push((self.style.clone(), pos..pos + 1));
         }
     }
@@ -160,6 +196,85 @@ impl<'a> RichTextScope<'a> {
         self.style = saved;
     }
 
+    pub fn overline(&mut self, f: impl FnOnce(&mut Self)) {
+        let saved = self.style.clone();
+        self.style.ol = true;
+        f(self);
+        self.style = saved;
+    }
+
+    pub fn subscript(&mut self, f: impl FnOnce(&mut Self)) {
+        let saved = self.style.clone();
+        self.style.baseline_shift = -0.5;
+        self.style.fs = Some(saved.fs.unwrap_or(14.0) * 0.58);
+        f(self);
+        self.style = saved;
+    }
+
+    pub fn superscript(&mut self, f: impl FnOnce(&mut Self)) {
+        let saved = self.style.clone();
+        self.style.baseline_shift = 0.5;
+        self.style.fs = Some(saved.fs.unwrap_or(14.0) * 0.58);
+        f(self);
+        self.style = saved;
+    }
+
+    pub fn baseline_shift(&mut self, v: f32, f: impl FnOnce(&mut Self)) {
+        let saved = self.style.clone();
+        self.style.baseline_shift = v;
+        f(self);
+        self.style = saved;
+    }
+
+    pub fn letter_spacing(&mut self, v: f32, f: impl FnOnce(&mut Self)) {
+        let saved = self.style.clone();
+        self.style.letter_spacing = v;
+        f(self);
+        self.style = saved;
+    }
+
+    pub fn word_spacing(&mut self, v: f32, f: impl FnOnce(&mut Self)) {
+        let saved = self.style.clone();
+        self.style.word_spacing = v;
+        f(self);
+        self.style = saved;
+    }
+
+    pub fn height_multiple(&mut self, v: f32, f: impl FnOnce(&mut Self)) {
+        let saved = self.style.clone();
+        self.style.height_multiple = v;
+        f(self);
+        self.style = saved;
+    }
+
+    pub fn half_leading(&mut self, f: impl FnOnce(&mut Self)) {
+        let saved = self.style.clone();
+        self.style.half_leading = true;
+        f(self);
+        self.style = saved;
+    }
+
+    pub fn font_family(&mut self, v: &str, f: impl FnOnce(&mut Self)) {
+        let saved = self.style.clone();
+        self.style.font_families.push(v.to_string());
+        f(self);
+        self.style = saved;
+    }
+
+    pub fn foreground_color(&mut self, v: Color, f: impl FnOnce(&mut Self)) {
+        let saved = self.style.clone();
+        self.style.foreground_color = Some(v);
+        f(self);
+        self.style = saved;
+    }
+
+    pub fn locale(&mut self, v: &str, f: impl FnOnce(&mut Self)) {
+        let saved = self.style.clone();
+        self.style.locale = Some(v.to_string());
+        f(self);
+        self.style = saved;
+    }
+
     pub fn background(&mut self, v: Color, f: impl FnOnce(&mut Self)) {
         let saved = self.style.clone();
         self.style.bg = Some(v);
@@ -185,8 +300,26 @@ impl StyleModifier {
     pub fn font_size(mut self, v: f32) -> Self { self.0.fs = Some(v); self }
     pub fn color(mut self, v: Color) -> Self { self.0.color = Some(v); self }
     pub fn underline(mut self) -> Self { self.0.ul = true; self }
+    pub fn overline(mut self) -> Self { self.0.ol = true; self }
     pub fn strikethrough(mut self) -> Self { self.0.st = true; self }
     pub fn background(mut self, v: Color) -> Self { self.0.bg = Some(v); self }
+    pub fn decoration_color(mut self, v: Color) -> Self { self.0.deco_color = Some(v); self }
+    pub fn decoration_style(mut self, v: crate::modifier::DecoStyle) -> Self { self.0.deco_style = Some(v); self }
+    pub fn decoration_mode(mut self, v: crate::modifier::DecoMode) -> Self { self.0.deco_mode = Some(v); self }
+    pub fn subscript(mut self) -> Self { self.0.baseline_shift = -0.5; self }
+    pub fn superscript(mut self) -> Self { self.0.baseline_shift = 0.5; self }
+    pub fn baseline_shift(mut self, v: f32) -> Self { self.0.baseline_shift = v; self }
+    pub fn letter_spacing(mut self, v: f32) -> Self { self.0.letter_spacing = v; self }
+    pub fn word_spacing(mut self, v: f32) -> Self { self.0.word_spacing = v; self }
+    pub fn height_multiple(mut self, v: f32) -> Self { self.0.height_multiple = v; self }
+    pub fn half_leading(mut self) -> Self { self.0.half_leading = true; self }
+    pub fn font_family(mut self, v: impl Into<String>) -> Self { self.0.font_families.push(v.into()); self }
+    pub fn font_width(mut self, v: i32) -> Self { self.0.font_width = v; self }
+    pub fn font_edging(mut self, v: crate::modifier::FontEdge) -> Self { self.0.font_edging = Some(v); self }
+    pub fn font_hinting(mut self, v: crate::modifier::FontHint) -> Self { self.0.font_hinting = Some(v); self }
+    pub fn subpixel(mut self) -> Self { self.0.subpixel = true; self }
+    pub fn foreground_color(mut self, v: Color) -> Self { self.0.foreground_color = Some(v); self }
+    pub fn locale(mut self, v: impl Into<String>) -> Self { self.0.locale = Some(v.into()); self }
 }
 
 // ── RichText 组件 ──
@@ -245,15 +378,54 @@ impl Default for RichText { fn default() -> Self { Self::new() } }
 struct Seg {
     range: Range<usize>,
     fs: f32, color: Color, fw: FontWeight, slant: FontSlant,
-    ul: bool, st: bool, bg: Option<Color>,
+    ul: bool, ol: bool, st: bool,
+    deco_color: Option<Color>,
+    deco_style: Option<crate::modifier::DecoStyle>,
+    deco_mode: Option<crate::modifier::DecoMode>,
+    baseline_shift: f32,
+    letter_spacing: f32, word_spacing: f32,
+    height_multiple: f32, half_leading: bool,
+    font_families: Vec<String>,
+    font_width: i32,
+    font_edging: Option<crate::modifier::FontEdge>,
+    font_hinting: Option<crate::modifier::FontHint>,
+    subpixel: bool,
+    foreground_color: Option<Color>,
+    bg: Option<Color>,
+    locale: Option<String>,
     placeholder: bool,
 }
 
 impl Seg {
+    fn default_base(fs: f32, color: Color, fw: FontWeight, slant: FontSlant) -> Self {
+        Seg {
+            range: 0..0, fs, color, fw, slant,
+            ul: false, ol: false, st: false,
+            deco_color: None, deco_style: None, deco_mode: None,
+            baseline_shift: 0.0, letter_spacing: 0.0, word_spacing: 0.0,
+            height_multiple: 0.0, half_leading: false,
+            font_families: Vec::new(), font_width: 5,
+            font_edging: None, font_hinting: None, subpixel: false,
+            foreground_color: None, bg: None, locale: None,
+            placeholder: false,
+        }
+    }
+
     fn clone_at(&self, range: Range<usize>) -> Self {
         Seg {
-            range, fs: self.fs, color: self.color, fw: self.fw, slant: self.slant,
-            ul: self.ul, st: self.st, bg: self.bg,
+            range,
+            fs: self.fs, color: self.color, fw: self.fw, slant: self.slant,
+            ul: self.ul, ol: self.ol, st: self.st,
+            deco_color: self.deco_color, deco_style: self.deco_style, deco_mode: self.deco_mode,
+            baseline_shift: self.baseline_shift,
+            letter_spacing: self.letter_spacing, word_spacing: self.word_spacing,
+            height_multiple: self.height_multiple, half_leading: self.half_leading,
+            font_families: self.font_families.clone(),
+            font_width: self.font_width,
+            font_edging: self.font_edging, font_hinting: self.font_hinting,
+            subpixel: self.subpixel,
+            foreground_color: self.foreground_color, bg: self.bg,
+            locale: self.locale.clone(),
             placeholder: self.placeholder,
         }
     }
@@ -266,38 +438,33 @@ pub(crate) fn resolve_spans(content: &str, drawable_positions: &[usize], annotat
     let d_fw = base.fw.unwrap_or(FontWeight::NORMAL);
     let d_sl = base.slant.unwrap_or(FontSlant::Upright);
 
-    // 1) 建 PubSeg（纯文本 + drawable 占位）
+    // 1) 建 PubSeg
     let mut segs: Vec<Seg> = Vec::new();
     let mut di = 0usize;
     let total = content.chars().count();
     let mut ci = 0usize;
     while ci < total {
         if di < drawable_positions.len() && drawable_positions[di] == ci {
-            segs.push(Seg {
-                range: ci..ci+1,
-                fs: d_fs, color: d_color, fw: d_fw, slant: d_sl,
-                ul: false, st: false, bg: None, placeholder: true,
-            });
+            let mut s = Seg::default_base(d_fs, d_color, d_fw, d_sl);
+            s.range = ci..ci+1;
+            s.placeholder = true;
+            segs.push(s);
             di += 1; ci += 1;
         } else {
             let run_start = ci;
-            while ci < total && !(di < drawable_positions.len() && drawable_positions[di] == ci) {
-                ci += 1;
-            }
+            while ci < total && !(di < drawable_positions.len() && drawable_positions[di] == ci) { ci += 1; }
             let run_len = ci - run_start;
             if run_len > 0 {
-                segs.push(Seg {
-                    range: run_start..run_start+run_len,
-                    fs: d_fs, color: d_color, fw: d_fw, slant: d_sl,
-                    ul: false, st: false, bg: None, placeholder: false,
-                });
+                let mut s = Seg::default_base(d_fs, d_color, d_fw, d_sl);
+                s.range = run_start..run_start+run_len;
+                segs.push(s);
             }
         }
     }
 
     // 2) D:\winia 分裂
     let resolved_annos: Vec<(Style, Range<usize>)> = annotations.iter()
-        .filter(|(s, r)| !s.is_default() && r.end > r.start)
+        .filter(|(s, r)| s.is_not_default() && r.end > r.start)
         .map(|(s, r)| (s.clone(), r.clone()))
         .collect();
 
@@ -341,7 +508,18 @@ pub(crate) fn resolve_spans(content: &str, drawable_positions: &[usize], annotat
     segs.into_iter().filter(|s| !s.placeholder).map(|s| RichSpanStyle {
         start: s.range.start, end: s.range.end,
         font_size: s.fs, color: s.color, font_weight: s.fw, font_style: s.slant,
-        underline: s.ul, strikethrough: s.st, background: s.bg,
+        underline: s.ul, overline: s.ol, strikethrough: s.st,
+        decoration_color: s.deco_color,
+        decoration_style: s.deco_style,
+        decoration_mode: s.deco_mode,
+        baseline_shift: s.baseline_shift,
+        letter_spacing: s.letter_spacing, word_spacing: s.word_spacing,
+        height_multiple: s.height_multiple, half_leading: s.half_leading,
+        font_families: s.font_families, font_width: s.font_width,
+        font_edging: s.font_edging, font_hinting: s.font_hinting,
+        subpixel: s.subpixel,
+        foreground_color: s.foreground_color, background: s.bg,
+        locale: s.locale,
     }).collect()
 }
 
@@ -351,8 +529,24 @@ fn apply_seg(seg: &mut Seg, s: &Style) {
     if let Some(v) = s.fw { seg.fw = v; }
     if let Some(v) = s.slant { seg.slant = v; }
     if s.ul { seg.ul = true; }
+    if s.ol { seg.ol = true; }
     if s.st { seg.st = true; }
+    if let Some(v) = s.deco_color { seg.deco_color = Some(v); }
+    if let Some(v) = s.deco_style { seg.deco_style = Some(v); }
+    if let Some(v) = s.deco_mode { seg.deco_mode = Some(v); }
+    if s.baseline_shift != 0.0 { seg.baseline_shift = s.baseline_shift; }
+    if s.letter_spacing != 0.0 { seg.letter_spacing = s.letter_spacing; }
+    if s.word_spacing != 0.0 { seg.word_spacing = s.word_spacing; }
+    if s.height_multiple != 0.0 { seg.height_multiple = s.height_multiple; }
+    if s.half_leading { seg.half_leading = true; }
+    if !s.font_families.is_empty() { seg.font_families = s.font_families.clone(); }
+    if s.font_width != 5 { seg.font_width = s.font_width; }
+    if let Some(v) = s.font_edging { seg.font_edging = Some(v); }
+    if let Some(v) = s.font_hinting { seg.font_hinting = Some(v); }
+    if s.subpixel { seg.subpixel = true; }
+    if let Some(v) = s.foreground_color { seg.foreground_color = Some(v); }
     if let Some(v) = s.bg { seg.bg = Some(v); }
+    if let Some(v) = &s.locale { seg.locale = Some(v.clone()); }
 }
 
 #[cfg(test)]
@@ -377,7 +571,7 @@ mod tests {
             let start = self.cursor;
             self.content.push_str(s);
             self.cursor += s.chars().count();
-            if !style.is_default() {
+            if style.is_not_default() {
                 self.annotations.push((style, start..self.cursor));
             }
         }
@@ -408,6 +602,7 @@ mod tests {
                 slant: Some(FontSlant::Italic),
                 ul: true, st: true,
                 bg: Some(Color::from_argb(60, 255, 255, 0)),
+                ..Style::default()
             }
         }
     }
