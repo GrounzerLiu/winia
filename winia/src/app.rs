@@ -271,9 +271,8 @@ impl ApplicationHandler for AppState {
                                     .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
                                 let seg = reg.segment_info(innermost.slot_key);
                                 let global_a = seg.map(|(off,_)| off + a).unwrap_or(a);
-                                // 将 anchor 存为全局索引
+                                // 只记 anchor，不设选区（拖拽才开始选中）
                                 pw.pointer_down_state.as_mut().map(|s| s.selection_anchor = Some(global_a));
-                                reg.set_selection(global_a, global_a + 1);
                             }
                         }
                     }
