@@ -44,6 +44,8 @@ pub(crate) struct PerWindow {
     pointer_down_state: Option<PtrDownState>,
     /// 最近的 PointerKind（Move 事件继承自上一个 Down）
     last_pointer_kind: crate::modifier::PointerKind,
+    /// Down 时的最内层节点 ID（后续 Move/Up 优先发给此节点，而非 hit_test）
+    pointer_down_id: Option<u64>,
 }
 
 /// Compose 风格的 click 检测中间状态
@@ -55,7 +57,7 @@ struct PtrDownState {
 
 impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::ui::theme::ThemeColors) -> Self {
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary } }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, pointer_down_id: None }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -249,10 +251,12 @@ impl ApplicationHandler for AppState {
                                 position: scene_pos,
                                 time: Instant::now(),
                             });
+                            pw.pointer_down_id = Some(innermost.id);
                         }
                     }
                 } else {
-                    // ── Up：Compose 风格 click 检测 ──
+                    // ── Up：清除 pointer_down_id（没有按钮按下时）
+                    pw.pointer_down_id = None;
                     const CLICK_SLOP: f32 = 18.0;
                     const CLICK_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
                     if let Some(down) = pw.pointer_down_state.take() {
@@ -290,7 +294,7 @@ impl ApplicationHandler for AppState {
                         is_meta_pressed: self.modifiers.meta_key(),
                     };
                     pw.last_pointer_kind = ptr_ev.kind.clone();
-                    dispatch_ptr_event(&path, &ptr_ev, scene_pos);
+                    dispatch_ptr_event(&path, &ptr_ev, scene_pos, pw.pointer_down_id);
                 }
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 event_loop.set_control_flow(ControlFlow::Poll);
@@ -317,7 +321,7 @@ impl ApplicationHandler for AppState {
                         is_shift_pressed: self.modifiers.shift_key(),
                         is_meta_pressed: self.modifiers.meta_key(),
                     };
-                    dispatch_ptr_event(&path, &ptr_ev, scene_pos);
+                    dispatch_ptr_event(&path, &ptr_ev, scene_pos, pw.pointer_down_id);
                 }
             }
             WindowEvent::ModifiersChanged(m) => {
@@ -650,18 +654,36 @@ fn dispatch_ptr_event(
     path: &[&LayoutNode],
     event: &crate::modifier::PointerEvent,
     scene_pos: (f32, f32),
+    captured_id: Option<u64>,
 ) -> bool {
+    // 如果指针被一个节点捕获（Down 后未释放），以此为根重新构建路径
+    let use_path: Vec<&LayoutNode> = if let Some(cid) = captured_id {
+        // 找到捕获节点及其祖先链
+        let mut ancestors: Vec<&LayoutNode> = Vec::new();
+        if let Some(node) = path.iter().find(|n| n.id == cid) {
+            ancestors.push(node);
+            let mut pid = node.parent_id;
+            while let Some(id) = pid {
+                if let Some(anc) = path.iter().find(|n| n.id == id) {
+                    ancestors.push(anc);
+                    pid = anc.parent_id;
+                } else { break; }
+            }
+            ancestors.reverse(); // root → ... → captured
+            ancestors
+        } else { path.to_vec() }
+    } else { path.to_vec() };
     // 计算路径累积偏移（每个节点的 position 是相对于父节点的偏移）
     let mut abs_x = 0.0f32;
     let mut abs_y = 0.0f32;
-    let abs_positions: Vec<(f32, f32)> = path.iter().map(|n| {
+    let abs_positions: Vec<(f32, f32)> = use_path.iter().map(|n| {
         abs_x += n.position.x;
         abs_y += n.position.y;
         (abs_x, abs_y)
     }).collect();
 
     // on_pre_ptr: outer → inner
-    for (i, node) in path.iter().enumerate() {
+    for (i, node) in use_path.iter().enumerate() {
         let local_x = scene_pos.0 - abs_positions[i].0;
         let local_y = scene_pos.1 - abs_positions[i].1;
         let mut ev = event.clone();
@@ -674,7 +696,7 @@ fn dispatch_ptr_event(
     }
 
     // on_ptr: inner → outer
-    for (i, node) in path.iter().enumerate().rev() {
+    for (i, node) in use_path.iter().enumerate().rev() {
         let local_x = scene_pos.0 - abs_positions[i].0;
         let local_y = scene_pos.1 - abs_positions[i].1;
         let mut ev = event.clone();
