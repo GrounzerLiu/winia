@@ -324,8 +324,9 @@ impl ApplicationHandler for AppState {
                     pw.last_pointer_kind = ptr_ev.kind.clone();
                     dispatch_ptr_event(root, &path, &ptr_ev, scene_pos, pw.pointer_down_slot);
                 }
-                // Up 后清除 capture（已经分发完 Up 事件）
+                // Up 后清除 capture + 通知选区变化
                 if !state.is_pressed() {
+                    crate::ui::selection_container::notify_selection_change();
                     pw.pointer_down_slot = None;
                 }
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
