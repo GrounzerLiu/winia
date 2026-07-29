@@ -212,25 +212,44 @@ impl ApplicationHandler for AppState {
                     }
                     // 文本选中：点击在 Text 节点上且 SelectionRegistrar 存在
                     if !handled {
+                        eprintln!("[sel] checking selection...");
                         if let Some(reg) = pw.composer.selection_registrar.clone() {
+                            eprintln!("[sel] registrar found, computing position");
                             let path = hit_test(root, lp.x, lp.y);
+                            eprintln!("[sel] hit path len={}", path.len());
                             // 计算点击节点的绝对位置
                             let abs_x: f32 = path.iter().map(|n| n.position.x).sum();
                             let abs_y: f32 = path.iter().map(|n| n.position.y).sum();
                             for node in path.iter().rev() {
                                 if node.has_text_content || node.has_richtext_content {
+                                    eprintln!("[sel] text node at abs=({},{})", abs_x, abs_y);
                                     let local_x = lp.x - abs_x;
                                     let local_y = lp.y - abs_y;
-                                    if let Some(para) = node.cached_paragraph.borrow_mut().as_mut() {
-                                        if let Some(gc) = para.get_closest_glyph_cluster_at((local_x, local_y)) {
-                                            let char_index = gc.text_range.start;
-                                            reg.set_selection(node.id, char_index, char_index + 1);
-                                            handled = true;
+                                    eprintln!("[sel] local=({},{})", local_x, local_y);
+                                    match node.cached_paragraph.try_borrow_mut() {
+                                        Ok(mut para_ref) => {
+                                            if let Some(para) = para_ref.as_mut() {
+                                                eprintln!("[sel] got paragraph");
+                                                if let Some(gc) = para.get_closest_glyph_cluster_at((local_x, local_y)) {
+                                                    eprintln!("[sel] char_index={}", gc.text_range.start);
+                                                    reg.set_selection(node.id, gc.text_range.start, gc.text_range.start + 1);
+                                                    handled = true;
+                                                } else {
+                                                    eprintln!("[sel] get_closest_glyph returned None");
+                                                }
+                                            } else {
+                                                eprintln!("[sel] paragraph is None");
+                                            }
+                                        },
+                                        Err(e) => {
+                                            eprintln!("[sel] borrow_mut failed: {:?}", e);
                                         }
                                     }
                                     break;
                                 }
                             }
+                        } else {
+                            eprintln!("[sel] no registrar");
                         }
                     }
                     eprintln!("[click] handled={} pos=({:.0},{:.0})", handled, lp.x, lp.y);
@@ -330,6 +349,29 @@ impl ApplicationHandler for AppState {
                                         handled = true;
                                         click_handled = true;
                                     }
+                                }
+                                // debug 点击也尝试选中
+                                if !click_handled {
+                                    if let Some(reg) = pw.composer.selection_registrar.clone() {
+                                        let abs_x: f32 = nodes.iter().map(|n| n.position.x).sum();
+                                        let abs_y: f32 = nodes.iter().map(|n| n.position.y).sum();
+                                        for node in nodes.iter().rev() {
+                                            if node.has_text_content || node.has_richtext_content {
+                                                let local_x = x - abs_x;
+                                                let local_y = y - abs_y;
+                                                if let Ok(mut borrow) = node.cached_paragraph.try_borrow_mut() {
+                                                    if let Some(para) = borrow.as_mut() {
+                                                        if let Some(gc) = para.get_closest_glyph_cluster_at((local_x, local_y)) {
+                                                            reg.set_selection(node.id, gc.text_range.start, gc.text_range.start + 1);
+                                                            handled = true;
+                                                            click_handled = true;
+                                                        }
+                                                    }
+                                                }
+                                                break;
+                                        }
+                                    }
+                                }
                                 }
                                 eprintln!("[debug-click] handled={} pos=({:.0},{:.0})", click_handled, x, y);
                             }
