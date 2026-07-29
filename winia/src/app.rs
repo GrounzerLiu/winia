@@ -281,7 +281,7 @@ impl ApplicationHandler for AppState {
                         event_type,
                         position: (0.0, 0.0),
                         scene_position: scene_pos,
-                        kind: crate::modifier::PointerButton::from_winit(&button),
+                        kind: crate::modifier::PointerKind::from_button_source(&button),
                         is_alt_pressed: self.modifiers.alt_key(),
                         is_ctrl_pressed: self.modifiers.control_key(),
                         is_shift_pressed: self.modifiers.shift_key(),
@@ -361,20 +361,39 @@ impl ApplicationHandler for AppState {
                 if !consumed {
                     if let Some(fid) = pw.focused_id {
                         if let Some(root) = pw.composer.layout_root() {
+                            // 收集焦点路径：root → ... → focused
+                            let mut path: Vec<&LayoutNode> = Vec::new();
                             if let Some(node) = crate::layout::node::find_node_by_id(root, fid) {
-                                // on_pre_key 优先（对齐 Compose onPreviewKeyEvent）
+                                path.push(node);
+                                // 向上收集父链
+                                let mut pid = node.parent_id;
+                                while let Some(id) = pid {
+                                    if let Some(anc) = crate::layout::node::find_node_by_id(root, id) {
+                                        path.push(anc);
+                                        pid = anc.parent_id;
+                                    } else { break; }
+                                }
+                                path.reverse(); // 现在 path[0] == root, path[last] == focused
+                            }
+
+                            // Preview: root → focused（对齐 onPreviewKeyEvent）
+                            for node in &path {
                                 for el in node.modifier.elements() {
                                     if let crate::modifier::ModifierElement::KbEvent { on_pre_key: Some(handler), .. } = el {
                                         if handler(&ke) { consumed = true; break; }
                                     }
                                 }
-                                if !consumed {
-                                    // on_key（Compose onKeyEvent: inner→outer 冒泡）
+                                if consumed { break; }
+                            }
+                            if !consumed {
+                                // Bubble: focused → root（对齐 onKeyEvent）
+                                for node in path.iter().rev() {
                                     for el in node.modifier.elements().iter().rev() {
                                         if let crate::modifier::ModifierElement::KbEvent { on_key: Some(handler), .. } = el {
                                             if handler(&ke) { consumed = true; break; }
                                         }
                                     }
+                                    if consumed { break; }
                                 }
                             }
                         }

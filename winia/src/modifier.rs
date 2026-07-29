@@ -169,8 +169,8 @@ pub enum PointerButton {
     Other(u16),
 }
 
-impl PointerButton {
-    pub fn from_winit(button: &winit::event::ButtonSource) -> PointerKind {
+impl PointerKind {
+    pub fn from_button_source(button: &winit::event::ButtonSource) -> Self {
         match button {
             winit::event::ButtonSource::Mouse(m) => PointerKind::Mouse {
                 button: match m {
