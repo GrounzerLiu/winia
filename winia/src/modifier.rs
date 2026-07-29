@@ -148,7 +148,6 @@ pub struct KbEvent {
     pub is_ctrl_pressed: bool,
     pub is_shift_pressed: bool,
     pub is_meta_pressed: bool,
-    /// 是否为长按重复事件（Compose 按位处理方式，通常应忽略此字段）
     pub repeat: bool,
 }
 
@@ -160,7 +159,6 @@ pub enum KbEventType {
 }
 
 // ── ModifierElement ──
-
 
 /// Modifier 链中的单个元素。
 ///
@@ -443,29 +441,19 @@ impl Modifier {
     }
 
     /// 关联 FocusRequester（不消耗所有权）
+    pub fn on_key_event(self, handler: impl Fn(&KbEvent) -> bool + Send + Sync + 'static) -> Self {
+        self.push(ModifierElement::KbEvent { on_key: Some(Arc::new(handler)), on_pre_key: None })
+    }
+
+    /// 预拦截按键事件
+    pub fn on_pre_key_event(self, handler: impl Fn(&KbEvent) -> bool + Send + Sync + 'static) -> Self {
+        self.push(ModifierElement::KbEvent { on_key: None, on_pre_key: Some(Arc::new(handler)) })
+    }
+
+    /// 关联 FocusRequester
     pub fn focus_requester(self, fr: impl Into<FocusRequester>) -> Self {
         let fr = fr.into();
         self.push(ModifierElement::FocusRequesterId { id: fr.id })
-    }
-
-    /// 按键事件（焦点节点接收）
-    pub fn on_key_event(mut self, handler: impl Fn(&KbEvent) -> bool + Send + Sync + 'static) -> Self {
-        if let Some(ModifierElement::KbEvent { ref mut on_key, .. }) = self.elements.last_mut() {
-            *on_key = Some(Arc::new(handler));
-        } else {
-            self.push(ModifierElement::KbEvent { on_key: Some(Arc::new(handler)), on_pre_key: None });
-        }
-        self
-    }
-
-    /// 预拦截按键事件（从根分发到焦点节点前触发）
-    pub fn on_pre_key_event(mut self, handler: impl Fn(&KbEvent) -> bool + Send + Sync + 'static) -> Self {
-        if let Some(ModifierElement::KbEvent { ref mut on_pre_key, .. }) = self.elements.last_mut() {
-            *on_pre_key = Some(Arc::new(handler));
-        } else {
-            self.push(ModifierElement::KbEvent { on_key: None, on_pre_key: Some(Arc::new(handler)) });
-        }
-        self
     }
 
     /// 垂直滚动（绑定 ScrollState）
@@ -667,7 +655,7 @@ impl Debug for ModifierElement {
                 .finish(),
             Self::Clickable { .. } => f.write_str("Clickable(<fn>)"),
             Self::Focusable => f.write_str("Focusable"),
-            Self::KbEvent { .. } => f.write_str("KbEvent"),
+            Self::KbEvent { on_key, on_pre_key } => f.debug_struct("KbEvent").field("on_key", &on_key.is_some()).field("on_pre_key", &on_pre_key.is_some()).finish(),
             Self::FocusRequesterId { id } => f.debug_tuple("FocusRequesterId").field(id).finish(),
             Self::VerticalScroll { .. } => f.write_str("VerticalScroll(<state>)"),
             Self::HorizontalScroll { .. } => f.write_str("HorizontalScroll(<state>)"),
