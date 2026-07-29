@@ -263,6 +263,13 @@ impl ApplicationHandler for AppState {
                                 time: Instant::now(),
                                 selection_anchor: anchor,
                             });
+                            // 初始单字符选区（对齐 D:\winia Down 时设置 index..index）
+                            if let Some(a) = anchor {
+                                let reg = pw.composer.selection_registrar.as_ref()
+                                    .cloned()
+                                    .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
+                                reg.set_selection(innermost.id, a, a + 1);
+                            }
                         }
                     }
                 } else {

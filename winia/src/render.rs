@@ -153,6 +153,7 @@ fn render_pass1<'a>(
             };
             // 选中高亮
             if let Some(range) = crate::ui::selection_container::active_registrar().selected_range(node.id) {
+                eprintln!("[selection] render node={} range={}..{}", node.id, range.start, range.end);
                 let rects: Vec<_> = if range.start < range.end {
                 para.get_rects_for_range(range.start..range.end, skia_safe::textlayout::RectHeightStyle::Max, skia_safe::textlayout::RectWidthStyle::Max) } else { Vec::new() };
                 let mut paint = skia_safe::Paint::default();
