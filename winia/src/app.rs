@@ -332,7 +332,7 @@ impl ApplicationHandler for AppState {
                                         if let Some(gc) = para.get_closest_glyph_cluster_at((scene_pos.0 - abs_x, scene_pos.1 - abs_y)) {
                                             let reg = pw.composer.selection_registrar.as_ref()
                                                 .cloned()
-                                                .unwrap_or_else(|| crate::ui::selection_container::LOCAL_SELECTION_REGISTRAR.current());
+                                                .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
                                             let s = gc.text_range.start.min(gc.text_range.end);
                                             let e = gc.text_range.start.max(gc.text_range.end);
                                             reg.set_selection(innermost.id, s, e);

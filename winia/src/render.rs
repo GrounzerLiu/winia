@@ -152,7 +152,7 @@ fn render_pass1<'a>(
                 crate::ui::TextAlign::Right => x + (w - para.max_intrinsic_width()).max(0.0),
             };
             // 选中高亮
-            if let Some(range) = crate::ui::selection_container::LOCAL_SELECTION_REGISTRAR.current().selected_range(node.id) {
+            if let Some(range) = crate::ui::selection_container::active_registrar().selected_range(node.id) {
                 let rects: Vec<_> = if range.start < range.end {
                 para.get_rects_for_range(range.start..range.end, skia_safe::textlayout::RectHeightStyle::Max, skia_safe::textlayout::RectWidthStyle::Max) } else { Vec::new() };
                 let mut paint = skia_safe::Paint::default();
@@ -172,7 +172,7 @@ fn render_pass1<'a>(
         if let Some(para) = node.cached_paragraph.borrow_mut().as_mut() {
             para.layout(w);
             // 选中高亮
-            if let Some(range) = crate::ui::selection_container::LOCAL_SELECTION_REGISTRAR.current().selected_range(node.id) {
+            if let Some(range) = crate::ui::selection_container::active_registrar().selected_range(node.id) {
                 let rects: Vec<_> = if range.start < range.end {
                 para.get_rects_for_range(range.start..range.end, skia_safe::textlayout::RectHeightStyle::Max, skia_safe::textlayout::RectWidthStyle::Max) } else { Vec::new() };
                 let mut paint = skia_safe::Paint::default();
@@ -369,7 +369,7 @@ fn draw_text_with_selection(
     max_lines: usize, align: crate::ui::TextAlign, overflow: crate::ui::TextOverflow, soft_wrap: bool,
     node_id: u64,
 ) {
-    if crate::ui::selection_container::LOCAL_SELECTION_REGISTRAR.current().selected_range(node_id).is_some() {
+    if crate::ui::selection_container::active_registrar().selected_range(node_id).is_some() {
         let mut paint = skia_safe::Paint::default();
         paint.set_color(skia_safe::Color::from_argb(80, 100, 150, 255));
         canvas.draw_rect(skia_safe::Rect::new(x, y, x + w, y + font_size * 1.2), &paint);

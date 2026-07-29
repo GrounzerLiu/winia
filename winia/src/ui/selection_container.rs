@@ -127,6 +127,13 @@ impl RegisteredSegment {
 pub static LOCAL_SELECTION_REGISTRAR: std::sync::LazyLock<CompositionLocal<SelectionRegistrar>> =
     std::sync::LazyLock::new(|| CompositionLocal::new(|| SelectionRegistrar::new()));
 
+/// 活跃的 SelectionRegistrar（渲染和事件处理时取用，避免 CompositionLocal 上下文丢失）
+static ACTIVE_REGISTRAR: std::sync::LazyLock<Mutex<Option<SelectionRegistrar>>> = std::sync::LazyLock::new(|| Mutex::new(None));
+
+pub(crate) fn active_registrar() -> SelectionRegistrar {
+    ACTIVE_REGISTRAR.lock().unwrap().clone().unwrap_or_else(|| SelectionRegistrar::new())
+}
+
 // ═══════════════════════════════════════════════════════════
 // SelectionContainer
 // ═══════════════════════════════════════════════════════════
@@ -157,6 +164,7 @@ impl SelectionContainer {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
                 ctx.set_selection_registrar(registrar.clone());
+                *ACTIVE_REGISTRAR.lock().unwrap() = Some(registrar.clone());
                 LOCAL_SELECTION_REGISTRAR.provides(registrar, || {
                     content(ctx);
                 });
