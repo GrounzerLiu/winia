@@ -246,7 +246,14 @@ impl ApplicationHandler for AppState {
                     crate::modifier::PointerEventType::Up
                 };
                 if state.is_pressed() {
-                    // ── Down：记录按下态 ──
+                    // ── Down：记录按下态 + 清除旧选区 ──
+                    // 清除旧的选区（新点击开始）
+                    {
+                        let reg = pw.composer.selection_registrar.as_ref()
+                            .cloned()
+                            .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
+                        reg.clear_selection();
+                    }
                     if let Some(root) = pw.composer.layout_root() {
                         let path = hit_test(root, scene_pos.0, scene_pos.1);
                         if let Some(innermost) = path.last() {
