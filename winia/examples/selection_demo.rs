@@ -4,8 +4,8 @@ use winia::prelude::*;
 use winia::app;
 
 fn selection_ui(ctx: &mut ComposeCtx) {
-    let t1 = "The SelectionContainer makes all text inside selectable.";
-    let t2 = "Try dragging your mouse across this paragraph to select words.";
+    let t1 = "Hello! 👋😊 The SelectionContainer makes text selectable.";
+    let t2 = "🎉 Drag across 🚀 multiple texts! The highlight follows.";
     let t3 = "You can select across multiple texts! The blue highlight follows the mouse as you drag.";
     let all = format!("{}{}{}", t1, t2, t3);
 
