@@ -5,8 +5,6 @@ use winia::prelude::*;
 use winia::app;
 
 fn selection_ui(ctx: &mut ComposeCtx) {
-    let info = ctx.remember(|| String::new());
-
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(16.0))
         .build(ctx, |ctx| {
@@ -44,9 +42,10 @@ fn selection_ui(ctx: &mut ComposeCtx) {
                     });
                 });
 
-            Text::new(format!("Selection info: {}", info.get()))
+            Text::new("Blue highlight shows selected text range above.")
                 .font_size(12.0)
-                .color(Color::from_argb(150, 150, 150, 150))
+                .color(Color::from_argb(150, 100, 100, 100))
+                .modifier(Modifier::new().padding(8.0))
                 .build(ctx);
         });
 }
