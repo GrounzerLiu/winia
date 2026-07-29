@@ -429,13 +429,15 @@ impl ApplicationHandler for AppState {
                 for id in crate::modifier::take_focus_requests() {
                     if let Some(root) = pw.composer.layout_root_mut() {
                         if crate::layout::node::focus_by_id(root, id) {
-                            pw.focused_id = Some(id);
+                            pw.focused_id = crate::layout::node::get_focus_id(root);
                         }
                     }
                     // 单独查 slot_key（避免与 root 的 borrow 冲突）
-                    if let Some(root) = pw.composer.layout_root() {
-                        if let Some(found) = crate::layout::node::find_node_by_id(root, id) {
-                            pw.focused_slot_key = Some(found.slot_key);
+                    if let Some(fid) = pw.focused_id {
+                        if let Some(root) = pw.composer.layout_root() {
+                            if let Some(found) = crate::layout::node::find_node_by_id(root, fid) {
+                                pw.focused_slot_key = Some(found.slot_key);
+                            }
                         }
                     }
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
