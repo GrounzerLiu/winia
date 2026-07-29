@@ -268,6 +268,15 @@ impl ApplicationHandler for AppState {
                         }
                     }
                 }
+                if matches!(&event.logical_key, Key::Named(NamedKey::Escape)) {
+                    if pw.focused_id.is_some() {
+                        pw.composer.layout_root_mut().map(|root| crate::layout::node::clear_focus(root));
+                        pw.focused_id = None;
+                        pw.focused_slot_key = None;
+                        if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                        event_loop.set_control_flow(ControlFlow::Poll);
+                    }
+                }
                 if matches!(&event.logical_key, Key::Named(NamedKey::Tab)) {
                     let (new_id, new_slot) = pw.composer.layout_root_mut().map(|root| {
                         focus_next(root);

@@ -452,7 +452,7 @@ pub fn focus_next(root: &mut LayoutNode) -> bool {
     true
 }
 
-fn clear_focus(node: &mut LayoutNode) {
+pub fn clear_focus(node: &mut LayoutNode) {
     node.focused = false;
     for child in &mut node.children {
         clear_focus(child);
