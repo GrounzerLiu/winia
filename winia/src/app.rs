@@ -295,8 +295,8 @@ impl ApplicationHandler for AppState {
                                     }
                                 }
                                 if !consumed {
-                                    // on_key（对齐 Compose onKeyEvent）
-                                    for el in node.modifier.elements() {
+                                    // on_key（Compose onKeyEvent: inner→outer 冒泡）
+                                    for el in node.modifier.elements().iter().rev() {
                                         if let crate::modifier::ModifierElement::KbEvent { on_key: Some(handler), .. } = el {
                                             if handler(&ke) { consumed = true; break; }
                                         }
