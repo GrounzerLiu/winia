@@ -1,10 +1,15 @@
 //! 键盘事件演示 — onKeyEvent / onPreviewKeyEvent / 修饰键
 //!
-//! 使用 Tab 切换焦点，焦点的按键日志显示在屏幕上。
+//! 使用 Tab 切换焦点。按键日志通过 RefCell 收集，不触发重组。
 
 use winia::prelude::*;
 use winia::app;
 use winit::keyboard::{Key, NamedKey};
+use std::cell::RefCell;
+
+thread_local! {
+    static KEY_LOG: RefCell<String> = const { RefCell::new(String::new()) };
+}
 
 fn main() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
@@ -20,7 +25,8 @@ fn main() {
 }
 
 fn keyboard_demo_ui(ctx: &mut ComposeCtx) {
-    let log = ctx.remember(|| String::new());
+    // 从 thread-local 读取当前日志
+    let log_display = KEY_LOG.with(|l| l.borrow().clone());
 
     Column::new()
         .modifier(Modifier::new().fill_max_width().fill_max_height().padding(16.0))
@@ -30,7 +36,7 @@ fn keyboard_demo_ui(ctx: &mut ComposeCtx) {
             Text::new("■ Key Event Demo — Tab to switch focus, type keys")
                 .font_size(15.0).color(Color::from_argb(255, 100, 100, 100)).build(ctx);
 
-            // ═══ 第一个可焦点节点（响应所有按键）═══
+            // ═══ 第一个焦点节点（响应所有按键）═══
             Text::new("▶ Node 1: captures all keys")
                 .font_size(14.0)
                 .modifier(Modifier::new()
@@ -38,20 +44,21 @@ fn keyboard_demo_ui(ctx: &mut ComposeCtx) {
                     .padding(10.0)
                     .background(Color::from_argb(18, 0, 0, 0), Shape::rounded(6.0))
                     .focusable()
-                    .on_key_event({
-                        let log = log.clone();
-                        move |e| {
-                            let prev = log.get();
-                            let new = format!("{}Node1: {:?} (Ctrl:{}, Shift:{})\n", prev, e.key, e.is_ctrl_pressed, e.is_shift_pressed);
-                            let lines: Vec<&str> = new.lines().collect();
-                            let last5 = lines.iter().rev().take(5).cloned().collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
-                            log.set(last5 + "\n");
-                            true
-                        }
+                    .on_key_event(move |e| {
+                        KEY_LOG.with(|l| {
+                            let mut log = l.borrow_mut();
+                            log.insert_str(0, &format!("Node1: {:?} (C:{},S:{})\n", e.key, e.is_ctrl_pressed, e.is_shift_pressed));
+                            if log.lines().count() > 5 {
+                                if let Some(pos) = log.rfind('\n') {
+                                    log.truncate(pos);
+                                }
+                            }
+                        });
+                        true
                     }))
                 .build(ctx);
 
-            // ═══ 第二个可焦点节点（只响应 Enter）═══
+            // ═══ 第二个焦点节点（只响应 Enter）═══
             Text::new("▶ Node 2: only Enter")
                 .font_size(14.0)
                 .modifier(Modifier::new()
@@ -59,15 +66,11 @@ fn keyboard_demo_ui(ctx: &mut ComposeCtx) {
                     .padding(10.0)
                     .background(Color::from_argb(18, 0, 0, 0), Shape::rounded(6.0))
                     .focusable()
-                    .on_key_event({
-                        let log = log.clone();
-                        move |e| {
-                            if e.key == Key::Named(NamedKey::Enter) {
-                                let prev = log.get();
-                                log.set(format!("{}Node2: Enter pressed!\n", prev));
-                                true
-                            } else { false }
-                        }
+                    .on_key_event(move |e| {
+                        if e.key == Key::Named(NamedKey::Enter) {
+                            KEY_LOG.with(|l| l.borrow_mut().insert_str(0, "Node2: Enter!\n"));
+                            true
+                        } else { false }
                     }))
                 .build(ctx);
 
@@ -79,37 +82,25 @@ fn keyboard_demo_ui(ctx: &mut ComposeCtx) {
                     .padding(10.0)
                     .background(Color::from_argb(18, 0, 0, 0), Shape::rounded(6.0))
                     .focusable()
-                    .on_pre_key_event({
-                        let log = log.clone();
-                        move |e| {
-                            if e.is_ctrl_pressed && e.key == Key::Character("s".into()) {
-                                let prev = log.get();
-                                log.set(format!("{}Ctrl+S intercepted (preview)!\n", prev));
-                                true
-                            } else { false }
-                        }
+                    .on_pre_key_event(move |e| {
+                        if e.is_ctrl_pressed && e.key == Key::Character("s".into()) {
+                            KEY_LOG.with(|l| l.borrow_mut().insert_str(0, "Ctrl+S intercepted!\n"));
+                            true
+                        } else { false }
                     }))
                 .build(ctx);
 
-            // ═══ 按键日志显示 ═══
+            // ═══ 按键日志显示（用 State 仅在显示时触发重组）═══
             Text::new("■ Event Log (last 5)")
                 .font_size(15.0).color(Color::from_argb(255, 100, 100, 100)).build(ctx);
 
-            Text::new("")
-                .font_size(12.0)
-                .color(Color::from_argb(255, 200, 200, 200))
-                .modifier(Modifier::new()
-                    .fill_max_width()
-                    .height(120.0)
-                    .padding(8.0)
-                    .background(Color::from_argb(30, 255, 255, 255), Shape::rounded(4.0)))
-                .build(ctx);
-
-            // 显示日志
-            Text::new(log.get())
+            Text::new(&log_display)
                 .font_size(12.0)
                 .color(Color::from_argb(255, 180, 180, 180))
-                .modifier(Modifier::new().fill_max_width().padding(8.0))
+                .modifier(Modifier::new()
+                    .fill_max_width()
+                    .padding(8.0)
+                    .background(Color::from_argb(30, 255, 255, 255), Shape::rounded(4.0)))
                 .build(ctx);
 
             Text::new("Tip: Tab to cycle focus, Type keys to see events, Ctrl+S to test preview")
