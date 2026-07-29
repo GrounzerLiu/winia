@@ -53,6 +53,8 @@ struct PtrDownState {
     node_id: u64,
     position: (f32, f32),
     time: Instant,
+    /// 文本选区的起始字符位置（Down 时记录）
+    selection_anchor: Option<usize>,
 }
 
 impl PerWindow {
@@ -248,10 +250,18 @@ impl ApplicationHandler for AppState {
                     if let Some(root) = pw.composer.layout_root() {
                         let path = hit_test(root, scene_pos.0, scene_pos.1);
                         if let Some(innermost) = path.last() {
+                            let anchor = if let Ok(borrow) = innermost.cached_paragraph.try_borrow() {
+                                if let Some(para) = borrow.as_ref() {
+                                    let (ax, ay) = node_abs_position(root, innermost.id);
+                                    para.get_closest_glyph_cluster_at((scene_pos.0 - ax, scene_pos.1 - ay))
+                                        .map(|gc| gc.text_range.start)
+                                } else { None }
+                            } else { None };
                             pw.pointer_down_state = Some(PtrDownState {
                                 node_id: innermost.id,
                                 position: scene_pos,
                                 time: Instant::now(),
+                                selection_anchor: anchor,
                             });
                         }
                     }
@@ -338,8 +348,15 @@ impl ApplicationHandler for AppState {
                                             let reg = pw.composer.selection_registrar.as_ref()
                                                 .cloned()
                                                 .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
-                                            let s = gc.text_range.start.min(gc.text_range.end);
-                                            let e = gc.text_range.start.max(gc.text_range.end);
+                                            let current = gc.text_range.start;
+                                            let s = pw.pointer_down_state.as_ref()
+                                                .and_then(|d| d.selection_anchor)
+                                                .map(|a| a.min(current))
+                                                .unwrap_or(current);
+                                            let e = pw.pointer_down_state.as_ref()
+                                                .and_then(|d| d.selection_anchor)
+                                                .map(|a| a.max(current))
+                                                .unwrap_or(current + 1);
                                             eprintln!("[selection] set node={} range={}..{}", innermost.id, s, e);
                                             reg.set_selection(innermost.id, s, e);
                                         }
