@@ -157,6 +157,7 @@ impl<'a> RichTextScope<'a> {
         let pos = self.cursor;
         let t = text.into();
         let len = t.chars().count();
+        if len == 0 { return; }
         self.content.push_str(&t);
         self.drawables.push(drawable.into());
         self.drawable_ranges.push(pos..pos + len);
@@ -609,6 +610,7 @@ mod tests {
         fn placeholder(&mut self, text: &str, style: Style) {
             let pos = self.cursor;
             let len = text.chars().count();
+            if len == 0 { return; }
             self.drawable_ranges.push(pos..pos + len);
             self.content.push_str(text);
             self.cursor += len;
@@ -985,5 +987,115 @@ mod tests {
         let after = spans.iter().find(|s| s.start == 7 && s.end == 12);
         assert!(before.is_some(), "before text exists");
         assert!(after.is_some(), "after text exists");
+    }
+
+    // placeholder 空文本
+    #[test]
+    fn test_placeholder_empty_text() {
+        let mut ctx = TestCtx::new();
+        ctx.placeholder("", Style::b()); // 空文本不应产生 drawable
+        ctx.text("A", Style::default());
+        assert_eq!(ctx.drawable_ranges.len(), 0, "empty text should not create placeholder");
+        assert_eq!(ctx.content, "A");
+    }
+
+    // placeholder 在开头
+    #[test]
+    fn test_placeholder_at_start() {
+        let mut ctx = TestCtx::new();
+        ctx.placeholder("lead", Style::default());
+        ctx.text("text", Style::default());
+        assert_eq!(ctx.drawable_ranges, vec![0..4]);
+        let spans = ctx.spans();
+        assert_eq!(spans.len(), 1, "only trailing text");
+        assert_eq!(spans[0].start, 4);
+    }
+
+    // placeholder 在末尾
+    #[test]
+    fn test_placeholder_at_end() {
+        let mut ctx = TestCtx::new();
+        ctx.text("head", Style::default());
+        ctx.placeholder("tail", Style::default());
+        assert_eq!(ctx.drawable_ranges, vec![4..8]);
+        let spans = ctx.spans();
+        assert!(spans.iter().all(|s| s.start < 4), "last placeholder covers tail");
+    }
+
+    // 连续 placeholder（相邻范围）
+    #[test]
+    fn test_placeholder_consecutive() {
+        let mut ctx = TestCtx::new();
+        ctx.placeholder("AB", Style::default());
+        ctx.placeholder("CD", Style::default());
+        ctx.text("end", Style::default());
+        assert_eq!(ctx.drawable_ranges, vec![0..2, 2..4]);
+        let spans = ctx.spans();
+        assert_eq!(spans.len(), 1, "only text after placeholders");
+        assert_eq!(spans[0].start, 4, "text starts after both placeholders");
+    }
+
+    // placeholder 占满全文
+    #[test]
+    fn test_placeholder_whole_content() {
+        let mut ctx = TestCtx::new();
+        ctx.placeholder("full", Style::default());
+        let spans = ctx.spans();
+        assert!(spans.is_empty(), "no text spans when whole content is placeholder");
+        assert_eq!(ctx.content, "full");
+        assert_eq!(ctx.drawable_ranges.len(), 1);
+    }
+
+    // placeholder 带全部样式属性
+    #[test]
+    fn test_placeholder_all_style() {
+        let style = Style { fs: Some(16.0), color: Some(Color::from_argb(255,255,0,0)), fw: Some(FontWeight::BOLD), ul: true, ..Style::default() };
+        let mut ctx = TestCtx::new();
+        ctx.text("pre ", Style::default());
+        ctx.placeholder("STYLED", style);
+        ctx.text(" post", Style::default());
+        assert_eq!(ctx.drawable_ranges, vec![4..10]);
+        // 前后的文本不应包含这些样式
+        let spans = ctx.spans();
+        assert_eq!(spans.len(), 2, "plain text before and after");
+        for s in &spans {
+            assert_eq!(s.font_weight, FontWeight::NORMAL, "surrounding text should not be bold");
+            assert!(!s.underline, "surrounding text should not be underlined");
+        }
+    }
+
+    // 多字节 unicode 占位符
+    #[test]
+    fn test_placeholder_unicode() {
+        let mut ctx = TestCtx::new();
+        ctx.text("你好", Style::default());  // 2 个中文字符，content length 2
+        ctx.placeholder("✨🔥", Style::default()); // 2 个 emoji，content length 4
+        ctx.text("!", Style::default());
+        // 每个 emoji 在 chars().count() 中算 1（Rust 的 char 是 Unicode scalar value）
+        // ✨🔥 各 1 char，drawable_range length = 2
+        assert_eq!(ctx.drawable_ranges.len(), 1);
+        let start = ctx.drawable_ranges[0].start;
+        assert!(start >= 2, "placeholder after '你好'");
+        let end = ctx.drawable_ranges[0].end;
+        assert_eq!(end - start, 2, "two-chars placeholder");
+    }
+
+    // 嵌套作用域内的 placeholder（bold → placeholder）
+    #[test]
+    fn test_placeholder_in_nested_scope() {
+        let mut ctx = TestCtx::new();
+        ctx.text("a ", Style::default());
+        ctx.text("mid", Style::b());
+        ctx.placeholder("IMG", Style::b());
+        ctx.text(" end", Style::default());
+        // bold annotation 覆盖 "mid"(2..5) 和 "IMG"(5..8)
+        // placeholder 本身在 5..8，是 drawable
+        // 所以 bold span 只有 "mid"(2..5)
+        let spans = ctx.spans();
+        let bold_spans: Vec<_> = spans.iter().filter(|s| s.font_weight != FontWeight::NORMAL).collect();
+        assert_eq!(bold_spans.len(), 1, "only 'mid' is visible bold");
+        // 'mid' starts at 2, length 3
+        assert_eq!(bold_spans[0].start, 2);
+        assert_eq!(bold_spans[0].end, 5);
     }
 }
