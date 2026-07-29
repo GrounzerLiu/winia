@@ -139,6 +139,7 @@ impl Window {
 
         // end_node 后：标记 Window::build 已被调用
         WINDOW_REBUILT.with(|r| r.set(true));
+        ctx.mark_window_built();
     }
 
     /// 检查 compose 后是否有待关闭窗口（Window::build 未调用）

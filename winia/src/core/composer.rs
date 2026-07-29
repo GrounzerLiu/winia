@@ -44,6 +44,8 @@ pub struct ComposeCtx<'a> {
     composer: &'a mut Composer,
     /// 当前节点内 remember 调用的序号（用于生成位置 key）
     remember_counter: u32,
+    /// 当前 compose 周期中 Window::build 是否被调用（替代 WINDOW_REBUILT 线程局部变量）
+    pub(crate) window_built_flag: bool,
 }
 
 impl<'a> ComposeCtx<'a> {
@@ -51,7 +53,13 @@ impl<'a> ComposeCtx<'a> {
         Self {
             composer,
             remember_counter: 0,
+            window_built_flag: false,
         }
+    }
+
+    /// 标记当前 compose 中已调用 Window::build
+    pub(crate) fn mark_window_built(&mut self) {
+        self.window_built_flag = true;
     }
 
     /// 在组合中记住一个状态。初次调用时执行 init 创建 State，后续重组时返回上次的同一个 State 实例。
@@ -359,6 +367,8 @@ pub struct Composer {
     prev_nodes: HashMap<Vec<usize>, CachedNode>,
     /// 当前选区注册表（SelectionContainer compose 时注入，供事件处理访问）
     pub(crate) selection_registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
+    /// 最近一次 compose 中 Window::build 是否被调用
+    pub(crate) window_built_in_compose: bool,
 
     #[cfg(test)]
     pub(crate) compose_clean_count: usize,
@@ -387,6 +397,7 @@ impl Composer {
             pending_states,
             prev_nodes: HashMap::new(),
             selection_registrar: None,
+            window_built_in_compose: false,
             #[cfg(test)]
             compose_clean_count: 0,
             #[cfg(test)]
@@ -546,6 +557,7 @@ fn register_modifier_deps_recursive(node: &LayoutNode) {
         self.current_group_key = 0;
         self.next_group_key_counter = 1;
         self.layout_root = None;
+        self.window_built_in_compose = false;
         // 重置 Window 生命周期标志（先于 layout_nodes.clear，on_remove 再设置新值）
         crate::ui::window::reset_lifecycle_flags();
         self.layout_nodes.clear();
