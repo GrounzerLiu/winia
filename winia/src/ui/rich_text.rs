@@ -139,7 +139,7 @@ impl<'a> RichTextScope<'a> {
         s.background.map(|v| self.style.bg = Some(v));
     }
 
-    /// 内联图片（推送 U+FFFC 占位符，匹配 D:\winia 设计）。
+    /// 内联图片（向 content 插入 U+FFFC 占位符）。
     pub fn image(&mut self, drawable: impl Into<Arc<dyn InlineDrawable>>) {
         let pos = self.cursor;
         self.drawables.push(drawable.into());
@@ -148,6 +148,19 @@ impl<'a> RichTextScope<'a> {
         self.cursor += 1;
         if self.style.is_not_default() {
             self.annotations.push((self.style.clone(), pos..pos + 1));
+        }
+    }
+
+    /// D:\winia 风格：将已有文本范围标记为图片占位符。
+    /// 范围对应的文本字符在渲染时被替换为 drawable。
+    pub fn placeholder(&mut self, range: Range<usize>, drawable: impl Into<Arc<dyn InlineDrawable>>) {
+        if range.end <= range.start { return; }
+        self.drawables.push(drawable.into());
+        self.drawable_positions.push(range.start);
+        // 被替换的文本段仍保留在 content 中，但 resolve_spans 会为占位符
+        // 位置创建 placeholder segment，被替换的文本字符不参与文本渲染。
+        if self.style.is_not_default() {
+            self.annotations.push((self.style.clone(), range));
         }
     }
 
@@ -731,7 +744,7 @@ mod tests {
         assert_eq!(ctx.drawable_positions, vec![1, 3], "drawable indices");
         assert_eq!(ctx.content.chars().nth(1).unwrap(), '\u{FFFC}');
         assert_eq!(ctx.content.chars().nth(3).unwrap(), '\u{FFFC}');
-        // spans 不应该包含占位位置（placeholder segment 被过滤）
+        // spans 不应包含占位位置
         let spans = ctx.spans();
         for s in &spans {
             assert!(!(1..2).contains(&s.start), "placeholder pos 1 leaked into span");
