@@ -511,9 +511,7 @@ fn has_focus_id(node: &LayoutNode, id: u64) -> bool {
 /// 找到树中第一个焦点节点的 FocusRequesterId（用于持久化）
 pub fn get_focus_id(root: &LayoutNode) -> Option<u64> {
     if root.focused {
-        if let Some(id) = modifier_focus_id(root) {
-            return Some(id);
-        }
+        return Some(root.id);
     }
     for child in &root.children {
         if let Some(id) = get_focus_id(child) {
