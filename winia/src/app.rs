@@ -255,8 +255,7 @@ impl ApplicationHandler for AppState {
                         }
                     }
                 } else {
-                    // ── Up：清除 pointer_down_id（没有按钮按下时）
-                    pw.pointer_down_id = None;
+                    // ── Up：Compose 风格 click 检测 ──
                     const CLICK_SLOP: f32 = 18.0;
                     const CLICK_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
                     if let Some(down) = pw.pointer_down_state.take() {
@@ -280,7 +279,7 @@ impl ApplicationHandler for AppState {
                         }
                     }
                 }
-                // pointer 事件分发（不受 click 影响）
+                // ── 指针事件分发（Up 时先分发后清除 capture）──
                 if let Some(root) = pw.composer.layout_root() {
                     let path = hit_test(root, scene_pos.0, scene_pos.1);
                     let ptr_ev = crate::modifier::PointerEvent {
@@ -295,6 +294,10 @@ impl ApplicationHandler for AppState {
                     };
                     pw.last_pointer_kind = ptr_ev.kind.clone();
                     dispatch_ptr_event(root, &path, &ptr_ev, scene_pos, pw.pointer_down_id);
+                }
+                // Up 后清除 capture（已经分发完 Up 事件）
+                if !state.is_pressed() {
+                    pw.pointer_down_id = None;
                 }
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 event_loop.set_control_flow(ControlFlow::Poll);
