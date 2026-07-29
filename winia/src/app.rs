@@ -56,6 +56,7 @@ impl PerWindow {
             if let Some(slot_key) = self.focused_slot_key {
                 if let Some(r) = self.composer.layout_root_mut() {
                     if let Some(new_id) = crate::layout::node::find_node_id_by_slot_key(r, slot_key) {
+                        crate::layout::node::clear_focus(r);
                         crate::layout::node::set_focus_by_id(r, new_id);
                         self.focused_id = Some(new_id);
                     } else {
@@ -221,13 +222,14 @@ impl ApplicationHandler for AppState {
                 // PointerButton 可能通过 FocusRequester 改变了焦点
                 if let Some(root) = pw.composer.layout_root_mut() {
                     pw.focused_id = crate::layout::node::get_focus_id(root);
+                    pw.focused_slot_key = pw.focused_id.and_then(|id| crate::layout::node::find_node_by_id(root, id).map(|n| n.slot_key));
                 }
                 if let Some(ref proxy) = *APP_PROXY.lock().unwrap() { let _ = proxy.wake_up(); }
             }
             WindowEvent::ModifiersChanged(m) => {
                 self.modifiers = m.state();
             }
-            WindowEvent::KeyboardInput { event, .. } if event.state.is_pressed() => {
+            WindowEvent::KeyboardInput { event, .. } => {
                 let event_type = if event.state.is_pressed() {
                     crate::modifier::KbEventType::KeyDown
                 } else {
@@ -305,6 +307,7 @@ impl ApplicationHandler for AppState {
                     if let Some(root) = pw.composer.layout_root_mut() {
                         if crate::layout::node::focus_by_id(root, id) {
                             pw.focused_id = Some(id);
+                            pw.focused_slot_key = crate::layout::node::find_node_by_id(root, id).map(|n| n.slot_key);
                         }
                     }
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
