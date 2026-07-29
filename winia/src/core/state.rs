@@ -44,6 +44,8 @@ struct StateInner<T> {
     subscribers: RwLock<Vec<Subscriber>>,
     /// 通知版本号——每次 set/update 自增，compose 消费后归零
     notify_version: std::sync::atomic::AtomicU32,
+    /// 创建此 State 的 Composer 队列（用于定向通知，避免跨窗口污染）
+    owner_queue: Option<Weak<parking_lot::Mutex<Vec<u32>>>>,
 }
 
 // 全局 State ID 生成器
@@ -53,17 +55,27 @@ fn next_state_id() -> u32 {
     NEXT_STATE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
+thread_local! {
+    /// 当前正在创建 State 的 Composer 队列引用
+    pub(crate) static STATE_OWNER_QUEUE: std::cell::RefCell<Option<Weak<parking_lot::Mutex<Vec<u32>>>>> = const { std::cell::RefCell::new(None) };
+}
+
 impl<T: 'static> State<T> {
     /// 创建新的状态
     pub fn new(value: T) -> Self {
-        Self {
-            inner: Arc::new(StateInner {
-                id: next_state_id(),
-                value: RwLock::new(value),
-                subscribers: RwLock::new(Vec::new()),
-                notify_version: Default::default(),
-            }),
+        let owner_queue = STATE_OWNER_QUEUE.with(|q| q.borrow().clone());
+        let inner = Arc::new(StateInner {
+            id: next_state_id(),
+            value: RwLock::new(value),
+            subscribers: RwLock::new(Vec::new()),
+            notify_version: Default::default(),
+            owner_queue: owner_queue.clone(),
+        });
+        // 注册到全局映射表，供 notify_state_changed 定向推送
+        if let Some(ref w) = owner_queue {
+            STATE_QUEUE_MAP.lock().insert(inner.id, w.clone());
         }
+        Self { inner }
     }
 }
 
@@ -218,6 +230,7 @@ impl Drop for Subscription {
 /// 这消除了 DEP_REGISTRAR + RECORDED_DEPS 两个全局 Mutex。
 
 use parking_lot::Mutex;
+use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Weak};
 
 thread_local! {
@@ -239,21 +252,21 @@ pub(crate) fn set_wake_fn(f: impl Fn() + Send + Sync + 'static) {
 static COMPOSER_REGISTRY: LazyLock<Mutex<Vec<Weak<Mutex<Vec<u32>>>>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
 
+/// State ID → 创建者 Composer 队列映射（用于定向通知）
+static STATE_QUEUE_MAP: LazyLock<Mutex<HashMap<u32, Weak<parking_lot::Mutex<Vec<u32>>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
 /// Composer 启动时注册自己的队列（传入 Weak 引用，Composer drop 后自动清理）
 pub(crate) fn register_composer_queue(queue: Weak<Mutex<Vec<u32>>>) {
     COMPOSER_REGISTRY.lock().push(queue);
 }
 
-/// State 值变化时调用：通知所有活动 Composer
+/// State 值变化时调用：定向通知创建此 State 的 Composer
 pub(crate) fn notify_state_changed(state_id: u32) {
-    COMPOSER_REGISTRY.lock().retain(|w| {
-        if let Some(q) = w.upgrade() {
-            q.lock().push(state_id);
-            true
-        } else {
-            false
-        }
-    });
+    // 定向通知：只推送到创建此 State 的 Composer 队列，避免跨窗口污染
+    if let Some(q) = STATE_QUEUE_MAP.lock().get(&state_id).and_then(|w| w.upgrade()) {
+        q.lock().push(state_id);
+    }
     if let Some(ref f) = *WAKE_FN.lock().unwrap() { f(); }
 }
 
