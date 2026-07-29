@@ -151,9 +151,19 @@ fn render_pass1<'a>(
                 crate::ui::TextAlign::Center => x + (w - para.max_intrinsic_width()).max(0.0) / 2.0,
                 crate::ui::TextAlign::Right => x + (w - para.max_intrinsic_width()).max(0.0),
             };
+            // 选中高亮
+            if let Some(range) = crate::ui::selection_container::LOCAL_SELECTION_REGISTRAR.current().selected_range(node.id) {
+                let rects: Vec<_> = if range.start < range.end {
+                para.get_rects_for_range(range.start..range.end, skia_safe::textlayout::RectHeightStyle::Max, skia_safe::textlayout::RectWidthStyle::Max) } else { Vec::new() };
+                let mut paint = skia_safe::Paint::default();
+                paint.set_color(skia_safe::Color::from_argb(80, 100, 150, 255));
+                for tb in &rects {
+                    canvas.draw_rect(skia_safe::Rect::new(x_off + tb.rect.left, y + tb.rect.top, x_off + tb.rect.right, y + tb.rect.bottom), &paint);
+                }
+            }
             para.paint(canvas, (x_off, y));
         } else {
-            draw_text(canvas, content, font_size, color, font_weight, font_style, x, y, w, max_lines, align, overflow, soft_wrap);
+            draw_text_with_selection(canvas, content, font_size, color, font_weight, font_style, x, y, w, max_lines, align, overflow, soft_wrap, node.id);
         }
     }
 
@@ -161,6 +171,16 @@ fn render_pass1<'a>(
     if node.has_richtext_content {
         if let Some(para) = node.cached_paragraph.borrow_mut().as_mut() {
             para.layout(w);
+            // 选中高亮
+            if let Some(range) = crate::ui::selection_container::LOCAL_SELECTION_REGISTRAR.current().selected_range(node.id) {
+                let rects: Vec<_> = if range.start < range.end {
+                para.get_rects_for_range(range.start..range.end, skia_safe::textlayout::RectHeightStyle::Max, skia_safe::textlayout::RectWidthStyle::Max) } else { Vec::new() };
+                let mut paint = skia_safe::Paint::default();
+                paint.set_color(skia_safe::Color::from_argb(80, 100, 150, 255));
+                for tb in &rects {
+                    canvas.draw_rect(skia_safe::Rect::new(x + tb.rect.left, y + tb.rect.top, x + tb.rect.right, y + tb.rect.bottom), &paint);
+                }
+            }
             para.paint(canvas, (x, y));
 
             // 绘制内联 drawable（图片/SVG）
@@ -335,6 +355,26 @@ fn draw_focus(canvas: &Canvas, rect: Rect) {
     paint.set_stroke_width(2.0);
     paint.set_anti_alias(true);
     canvas.draw_rect(rect, &paint);
+}
+
+/// draw_text + 选中高亮
+fn draw_text_with_selection(
+    canvas: &Canvas,
+    content: &str,
+    font_size: f32,
+    color: &crate::modifier::Color,
+    font_weight: crate::ui::text::FontWeight,
+    font_style: crate::ui::text::FontSlant,
+    x: f32, y: f32, w: f32,
+    max_lines: usize, align: crate::ui::TextAlign, overflow: crate::ui::TextOverflow, soft_wrap: bool,
+    node_id: u64,
+) {
+    if crate::ui::selection_container::LOCAL_SELECTION_REGISTRAR.current().selected_range(node_id).is_some() {
+        let mut paint = skia_safe::Paint::default();
+        paint.set_color(skia_safe::Color::from_argb(80, 100, 150, 255));
+        canvas.draw_rect(skia_safe::Rect::new(x, y, x + w, y + font_size * 1.2), &paint);
+    }
+    draw_text(canvas, content, font_size, color, font_weight, font_style, x, y, w, max_lines, align, overflow, soft_wrap);
 }
 
 fn draw_text(

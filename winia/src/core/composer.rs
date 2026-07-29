@@ -70,6 +70,11 @@ impl<'a> ComposeCtx<'a> {
         self.composer.next_group_key()
     }
 
+    /// 获取当前正在构建的节点 ID（用于注册选中、焦点等外部状态）
+    pub fn current_node_id(&self) -> Option<u64> {
+        self.composer.current_node_id()
+    }
+
     /// 为 remember 调用生成位置 key。
     ///
     /// 位置 key 编码方式: (current_group_key << 32) | remember_counter。
@@ -374,6 +379,11 @@ impl Composer {
             #[cfg(test)]
             compose_dirty_count: 0,
         }
+    }
+
+    /// 获取当前正在构建的节点 ID（node_stack 栈顶）
+    pub fn current_node_id(&self) -> Option<u64> {
+        self.node_stack.last().map(|&idx| self.layout_nodes[idx].id)
     }
 
     /// 分配下一个全局唯一的 group key

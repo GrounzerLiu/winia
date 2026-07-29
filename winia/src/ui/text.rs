@@ -203,6 +203,8 @@ impl Text {
             .or(style.color)
             .unwrap_or_else(|| crate::ui::theme::WiniaTheme::colors().on_surface);
 
+        let content_len = self.content.chars().count();
+
         let modifier = self.modifier.push(ModifierElement::TextContent {
             content: self.content,
             font_size: final_font_size,
@@ -216,6 +218,11 @@ impl Text {
         });
 
         ctx.start_leaf(key, modifier);
+        // 注册到 SelectionContainer（如果有的话）
+        let registrar = crate::ui::selection_container::LOCAL_SELECTION_REGISTRAR.current();
+        if let Some(node_id) = ctx.current_node_id() {
+            registrar.register(node_id, 0, content_len, None);
+        }
         ctx.end_node();
     }
 
