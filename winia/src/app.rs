@@ -91,6 +91,8 @@ struct AppState {
     pending_content: Vec<PendingWindow>,
     /// 父窗口 ID（用于 is_parent 判断，不依赖 HashMap 顺序）
     parent_window_id: Option<WindowId>,
+    /// 窗口全局修饰键状态（由 ModifiersChanged 更新）
+    modifiers: winit::keyboard::ModifiersState,
     /// 初始化回调（仅首次调用，用于声明式创建主窗口）
     init: Option<Box<dyn FnOnce(&mut ComposeCtx)>>,
 }
@@ -215,14 +217,17 @@ impl ApplicationHandler for AppState {
                 }
                 if let Some(ref proxy) = *APP_PROXY.lock().unwrap() { let _ = proxy.wake_up(); }
             }
+            WindowEvent::ModifiersChanged(m) => {
+                self.modifiers = m.state();
+            }
             WindowEvent::KeyboardInput { event, .. } if event.state.is_pressed() => {
                 // 构建 KeyEvent 并分发到焦点节点（无冒泡，只调用焦点节点的 handler）
                 let ke = crate::modifier::KbEvent {
                     key: event.logical_key.clone(),
                     event_type: crate::modifier::KbEventType::KeyDown,
-                    is_alt_pressed: false,
-                    is_ctrl_pressed: false,
-                    is_shift_pressed: false,
+                    is_alt_pressed: self.modifiers.alt_key(),
+                    is_ctrl_pressed: self.modifiers.control_key(),
+                    is_shift_pressed: self.modifiers.shift_key(),
                     is_meta_pressed: false,
                 };
                 if let Some(fid) = pw.focused_id {
@@ -499,6 +504,7 @@ pub fn run_app(app: impl FnOnce(&mut ComposeCtx) + 'static) {
         windows: HashMap::new(),
         pending_content: Vec::new(),
         parent_window_id: None,
+        modifiers: Default::default(),
     };
     event_loop.run_app(state).expect("run_app");
     debug::force_shutdown();
