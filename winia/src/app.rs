@@ -336,6 +336,8 @@ impl ApplicationHandler for AppState {
                     if pw.pointer_down_state.is_some() {
                         if let Some(innermost) = path.last() {
                             let down = pw.pointer_down_state.as_ref().unwrap();
+                            // 只更新与 Down 相同 slot 的选区（不跨节点）
+                            if pw.pointer_down_slot == Some(innermost.slot_key) {
                             let dx = scene_pos.0 - down.position.0;
                             let dy = scene_pos.1 - down.position.1;
                             const CLICK_SLOP: f32 = 18.0;
@@ -370,6 +372,7 @@ impl ApplicationHandler for AppState {
                                     }
                                 }
                             }
+                        }
                         }
                     }
                     let ptr_ev = crate::modifier::PointerEvent {
