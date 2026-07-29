@@ -88,6 +88,10 @@ impl<'a> ComposeCtx<'a> {
         self.composer.selection_registrar = Some(reg);
     }
 
+    pub fn clear_selection_registrar(&mut self) {
+        self.composer.selection_registrar = None;
+    }
+
     /// 获取选区注册表
     pub fn selection_registrar(&self) -> Option<crate::ui::selection_container::SelectionRegistrar> {
         self.composer.selection_registrar.clone()

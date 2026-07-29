@@ -173,6 +173,8 @@ impl SelectionContainer {
             }
         }
         ctx.end_restartable_group();
+        // 恢复（清除注入的 registrar，避免子树外 Text 误注册）
+        ctx.clear_selection_registrar();
     }
 }
 
