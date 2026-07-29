@@ -267,9 +267,18 @@ impl ApplicationHandler for AppState {
                     if let Some(fid) = pw.focused_id {
                         if let Some(root) = pw.composer.layout_root() {
                             if let Some(node) = crate::layout::node::find_node_by_id(root, fid) {
+                                // on_pre_key 优先（对齐 Compose onPreviewKeyEvent）
                                 for el in node.modifier.elements() {
-                                    if let crate::modifier::ModifierElement::KbEvent { on_key: Some(handler), .. } = el {
+                                    if let crate::modifier::ModifierElement::KbEvent { on_pre_key: Some(handler), .. } = el {
                                         if handler(&ke) { consumed = true; break; }
+                                    }
+                                }
+                                if !consumed {
+                                    // on_key（对齐 Compose onKeyEvent）
+                                    for el in node.modifier.elements() {
+                                        if let crate::modifier::ModifierElement::KbEvent { on_key: Some(handler), .. } = el {
+                                            if handler(&ke) { consumed = true; break; }
+                                        }
                                     }
                                 }
                             }
