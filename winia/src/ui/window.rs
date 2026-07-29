@@ -18,6 +18,11 @@ pub(crate) fn reset_lifecycle_flags() {
     PENDING_REMOVE_ID.with(|p| p.set(0));
 }
 
+/// 仅清除待关闭标志（跨窗口重组时防止误清理 WINDOW_REBUILT）
+pub(crate) fn reset_pending_remove() {
+    PENDING_REMOVE_ID.with(|p| p.set(0));
+}
+
 /// 全局已创建窗口 ID 集合。
 pub(crate) static CREATED: LazyLock<Mutex<HashSet<u64>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);

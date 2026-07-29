@@ -78,6 +78,8 @@ impl PerWindow {
     /// 增量重组 → 恢复焦点 → 布局 → 渲染（供 RedrawRequested 使用）
     /// 循环消费 notify 队列直到稳定，避免 tokio task 的并发通知丢失。
     fn recompose_layout_render(&mut self, after_draw: impl FnOnce(&LayoutNode, &mut skia_safe::Surface)) {
+        // 清除待关闭标志——只捕获本次重组的 on_remove，防止跨窗口污染
+        crate::ui::window::reset_pending_remove();
         // 循环 compose 直到没有新的 pending state——处理并发 task 在 compose 期间
         // 完成的 case（第二个 notify 的 state 在第一次 compose 之后才入队）
         loop {
