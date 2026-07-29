@@ -241,7 +241,7 @@ impl ApplicationHandler for AppState {
                     is_alt_pressed: self.modifiers.alt_key(),
                     is_ctrl_pressed: self.modifiers.control_key(),
                     is_shift_pressed: self.modifiers.shift_key(),
-                    is_meta_pressed: false,
+                    is_meta_pressed: self.modifiers.meta_key(),
                 };
                 // 分发到焦点节点
                 if let Some(fid) = pw.focused_id {
