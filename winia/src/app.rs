@@ -229,16 +229,21 @@ impl ApplicationHandler for AppState {
             WindowEvent::ModifiersChanged(m) => {
                 self.modifiers = m.state();
             }
-            WindowEvent::KeyboardInput { event, .. } if event.state.is_pressed() => {
-                // 构建 KeyEvent 并分发到焦点节点（无冒泡，只调用焦点节点的 handler）
+            WindowEvent::KeyboardInput { event, .. } => {
+                let event_type = if event.state.is_pressed() {
+                    crate::modifier::KbEventType::KeyDown
+                } else {
+                    crate::modifier::KbEventType::KeyUp
+                };
                 let ke = crate::modifier::KbEvent {
                     key: event.logical_key.clone(),
-                    event_type: crate::modifier::KbEventType::KeyDown,
+                    event_type,
                     is_alt_pressed: self.modifiers.alt_key(),
                     is_ctrl_pressed: self.modifiers.control_key(),
                     is_shift_pressed: self.modifiers.shift_key(),
                     is_meta_pressed: false,
                 };
+                // 分发到焦点节点
                 if let Some(fid) = pw.focused_id {
                     if let Some(root) = pw.composer.layout_root() {
                         let path = focused_path(root, fid);
@@ -518,15 +523,6 @@ fn apply_scroll_delta(node: &mut LayoutNode, dy: f32) -> bool {
 }
 
 /// 递归查找指定 ID 的节点
-fn find_node_by_id<'a>(node: &'a LayoutNode, id: u64) -> Option<&'a LayoutNode> {
-    if node.id == id { return Some(node); }
-    for child in &node.children {
-        if let Some(found) = find_node_by_id(child, id) { return Some(found); }
-    }
-    None
-}
-
-/// 从焦点节点到根的路径（用于事件冒泡：根→焦点 = preview，焦点→根 = bubble）
 fn focused_path<'a>(root: &'a LayoutNode, fid: u64) -> Vec<&'a LayoutNode> {
     fn dfs<'a>(node: &'a LayoutNode, fid: u64, path: &mut Vec<&'a LayoutNode>) -> bool {
         if node.id == fid { path.push(node); return true; }
