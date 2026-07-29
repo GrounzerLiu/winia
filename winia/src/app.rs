@@ -245,8 +245,29 @@ impl ApplicationHandler for AppState {
                     repeat: event.repeat,
                 };
                 let mut consumed = false;
-                // 分发到焦点节点
-                if let Some(fid) = pw.focused_id {
+                // 默认按键处理（优先于自定义 handler，确保 Tab/Escape 始终有效）
+                if matches!(&event.logical_key, Key::Named(NamedKey::Escape)) {
+                    if pw.focused_id.is_some() {
+                        pw.composer.layout_root_mut().map(|root| crate::layout::node::clear_focus(root));
+                        pw.focused_id = None;
+                        pw.focused_slot_key = None;
+                        consumed = true;
+                    }
+                }
+                if matches!(&event.logical_key, Key::Named(NamedKey::Tab)) {
+                    let shift = self.modifiers.shift_key();
+                    let (new_id, new_slot) = pw.composer.layout_root_mut().map(|root| {
+                        if shift { focus_prev(root); } else { focus_next(root); }
+                        let id = crate::layout::node::get_focus_id(root);
+                        let slot = id.and_then(|fid| crate::layout::node::find_node_by_id(root, fid).map(|n| n.slot_key));
+                        (id, slot)
+                    }).unwrap_or((None, None));
+                    pw.focused_id = new_id;
+                    pw.focused_slot_key = new_slot;
+                    consumed = true;
+                }
+                // 分发到焦点节点（仅处理未被默认行为吞掉的按键）
+                if !consumed {
                     if let Some(root) = pw.composer.layout_root() {
                         let path = focused_path(root, fid);
                         // onPreviewKeyEvent：根 → 焦点（向下），消费后不进入冒泡
@@ -278,31 +299,6 @@ impl ApplicationHandler for AppState {
                 if consumed {
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                     event_loop.set_control_flow(ControlFlow::Poll);
-                }
-                // 默认按键处理（仅当事件未被消费时）
-                if !consumed {
-                    if matches!(&event.logical_key, Key::Named(NamedKey::Escape)) {
-                        if pw.focused_id.is_some() {
-                            pw.composer.layout_root_mut().map(|root| crate::layout::node::clear_focus(root));
-                            pw.focused_id = None;
-                            pw.focused_slot_key = None;
-                            if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
-                            event_loop.set_control_flow(ControlFlow::Poll);
-                        }
-                    }
-                    if matches!(&event.logical_key, Key::Named(NamedKey::Tab)) {
-                        let shift = self.modifiers.shift_key();
-                        let (new_id, new_slot) = pw.composer.layout_root_mut().map(|root| {
-                            if shift { focus_prev(root); } else { focus_next(root); }
-                            let id = crate::layout::node::get_focus_id(root);
-                            let slot = id.and_then(|fid| crate::layout::node::find_node_by_id(root, fid).map(|n| n.slot_key));
-                            (id, slot)
-                        }).unwrap_or((None, None));
-                        pw.focused_id = new_id;
-                        pw.focused_slot_key = new_slot;
-                        if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
-                        event_loop.set_control_flow(ControlFlow::Poll);
-                    }
                 }
             }
             WindowEvent::SurfaceResized(s) => {
