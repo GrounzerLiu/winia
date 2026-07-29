@@ -232,7 +232,21 @@ impl ApplicationHandler for AppState {
                 };
                 if let Some(fid) = pw.focused_id {
                     if let Some(root) = pw.composer.layout_root() {
-                        if let Some(node) = find_node_by_id(root, fid) {
+                        let path = focused_path(root, fid);
+                        // onPreviewKeyEvent：根 → 焦点（向下）
+                        for &node in &path {
+                            for el in node.modifier.elements() {
+                                if let crate::modifier::ModifierElement::KbEvent { on_pre_key: Some(handler), .. } = el {
+                                    if handler(&ke) {
+                                        if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                                        event_loop.set_control_flow(ControlFlow::Poll);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        // onKeyEvent：焦点 → 根（向上冒泡）
+                        for &node in path.iter().rev() {
                             for el in node.modifier.elements() {
                                 if let crate::modifier::ModifierElement::KbEvent { on_key: Some(handler), .. } = el {
                                     if handler(&ke) {
@@ -488,6 +502,21 @@ fn find_node_by_id<'a>(node: &'a LayoutNode, id: u64) -> Option<&'a LayoutNode> 
         if let Some(found) = find_node_by_id(child, id) { return Some(found); }
     }
     None
+}
+
+/// 从焦点节点到根的路径（用于事件冒泡：根→焦点 = preview，焦点→根 = bubble）
+fn focused_path<'a>(root: &'a LayoutNode, fid: u64) -> Vec<&'a LayoutNode> {
+    fn dfs<'a>(node: &'a LayoutNode, fid: u64, path: &mut Vec<&'a LayoutNode>) -> bool {
+        if node.id == fid { path.push(node); return true; }
+        for child in &node.children {
+            if dfs(child, fid, path) { path.push(node); return true; }
+        }
+        false
+    }
+    let mut path = Vec::new();
+    dfs(root, fid, &mut path);
+    path.reverse();
+    path
 }
 
 pub fn run_app(app: impl FnOnce(&mut ComposeCtx) + 'static) {

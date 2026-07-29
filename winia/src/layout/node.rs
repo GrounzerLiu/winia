@@ -134,6 +134,8 @@ pub struct LayoutNode {
     pub(crate) inline_drawables: std::cell::RefCell<Vec<std::sync::Arc<dyn crate::text::InlineDrawable>>>,
     /// scroll 容器的 viewport 高度（由 measure_node 在布局阶段设值，供 apply_scroll_delta 使用）
     pub(crate) scroll_viewport_height: f32,
+    /// 父节点 ID（键盘事件冒泡用，由 add_child 设置）
+    pub(crate) parent_id: Option<u64>,
 }
 
 // ── CachedNode：LayoutNode 的可缓存子集，用于增量重组时恢复节点 ──
@@ -203,12 +205,13 @@ impl LayoutNode {
             slot_key: 0,
             cached_paragraph: std::cell::RefCell::new(None),
             inline_drawables: std::cell::RefCell::new(Vec::new()),
-            scroll_viewport_height: 0.0,
+            scroll_viewport_height: 0.0, parent_id: None,
         }
     }
 
     /// 添加子节点
-    pub fn add_child(&mut self, child: LayoutNode) {
+    pub fn add_child(&mut self, mut child: LayoutNode) {
+        child.parent_id = Some(self.id);
         self.children.push(child);
     }
 
@@ -239,7 +242,7 @@ impl LayoutNode {
             slot_key: 0,
             cached_paragraph: std::cell::RefCell::new(None),
             inline_drawables: std::cell::RefCell::new(Vec::new()),
-            scroll_viewport_height: 0.0,
+            scroll_viewport_height: 0.0, parent_id: None,
         }
     }
 
@@ -267,7 +270,7 @@ impl Default for LayoutNode {
             slot_key: 0,
             cached_paragraph: std::cell::RefCell::new(None),
             inline_drawables: std::cell::RefCell::new(Vec::new()),
-            scroll_viewport_height: 0.0,
+            scroll_viewport_height: 0.0, parent_id: None,
         }
     }
 }
