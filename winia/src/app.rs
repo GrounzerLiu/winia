@@ -45,7 +45,7 @@ pub(crate) struct PerWindow {
     /// 最近的 PointerKind（Move 事件继承自上一个 Down）
     last_pointer_kind: crate::modifier::PointerKind,
     /// Down 时的最内层节点 ID（后续 Move/Up 优先发给此节点，而非 hit_test）
-    pointer_down_id: Option<u64>,
+    pointer_down_slot: Option<u64>,
 }
 
 /// Compose 风格的 click 检测中间状态
@@ -57,7 +57,7 @@ struct PtrDownState {
 
 impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::ui::theme::ThemeColors) -> Self {
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, pointer_down_id: None }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, pointer_down_slot: None }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -251,7 +251,7 @@ impl ApplicationHandler for AppState {
                                 position: scene_pos,
                                 time: Instant::now(),
                             });
-                            pw.pointer_down_id = Some(innermost.id); eprintln!("[ptr] DOWN set capture id={}", innermost.id);
+                            pw.pointer_down_slot = Some(innermost.slot_key); eprintln!("[ptr] DOWN set capture slot={}", innermost.slot_key);
                         }
                     }
                 } else {
@@ -293,12 +293,12 @@ impl ApplicationHandler for AppState {
                         is_meta_pressed: self.modifiers.meta_key(),
                     };
                     pw.last_pointer_kind = ptr_ev.kind.clone();
-                    dispatch_ptr_event(root, &path, &ptr_ev, scene_pos, pw.pointer_down_id);
+                    dispatch_ptr_event(root, &path, &ptr_ev, scene_pos, pw.pointer_down_slot);
                 }
                 // Up 后清除 capture（已经分发完 Up 事件）
                 if !state.is_pressed() {
                     eprintln!("[ptr] UP clear capture");
-                    pw.pointer_down_id = None;
+                    pw.pointer_down_slot = None;
                 }
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 event_loop.set_control_flow(ControlFlow::Poll);
@@ -325,7 +325,7 @@ impl ApplicationHandler for AppState {
                         is_shift_pressed: self.modifiers.shift_key(),
                         is_meta_pressed: self.modifiers.meta_key(),
                     };
-                    dispatch_ptr_event(root, &path, &ptr_ev, scene_pos, pw.pointer_down_id);
+                    dispatch_ptr_event(root, &path, &ptr_ev, scene_pos, pw.pointer_down_slot);
                 }
             }
             WindowEvent::ModifiersChanged(m) => {
@@ -667,7 +667,7 @@ fn dispatch_ptr_event(
     // 如果指针被一个节点捕获（Down 后未释放），用 root 查找节点并构建祖先链
     let captured_path: Vec<&LayoutNode> = if let Some(cid) = captured_id {
         let mut ancestors: Vec<&LayoutNode> = Vec::new();
-        if let Some(node) = crate::layout::node::find_node_by_id(root, cid) {
+        if let Some(node) = crate::layout::node::find_node_id_by_slot_key(root, cid).and_then(|nid| crate::layout::node::find_node_by_id(root, nid)) {
             ancestors.push(node);
             let mut pid = node.parent_id;
             while let Some(id) = pid {
@@ -680,7 +680,7 @@ fn dispatch_ptr_event(
             if ancestors.is_empty() { eprintln!("[ptr] captured empty after reverse!"); }
             ancestors
         } else {
-            eprintln!("[ptr] captured_id={} NOT FOUND in tree!", cid);
+            eprintln!("[ptr] capture slot={} no matching node in tree!", cid);
             path.to_vec()
         }
     } else { path.to_vec() };
