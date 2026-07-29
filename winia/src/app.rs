@@ -216,6 +216,30 @@ impl ApplicationHandler for AppState {
                 if let Some(ref proxy) = *APP_PROXY.lock().unwrap() { let _ = proxy.wake_up(); }
             }
             WindowEvent::KeyboardInput { event, .. } if event.state.is_pressed() => {
+                // 构建 KeyEvent 并分发到焦点节点（无冒泡，只调用焦点节点的 handler）
+                let ke = crate::modifier::KbEvent {
+                    key: event.logical_key.clone(),
+                    event_type: crate::modifier::KbEventType::KeyDown,
+                    is_alt_pressed: false,
+                    is_ctrl_pressed: false,
+                    is_shift_pressed: false,
+                    is_meta_pressed: false,
+                };
+                if let Some(fid) = pw.focused_id {
+                    if let Some(root) = pw.composer.layout_root() {
+                        if let Some(node) = find_node_by_id(root, fid) {
+                            for el in node.modifier.elements() {
+                                if let crate::modifier::ModifierElement::KbEvent { on_key: Some(handler), .. } = el {
+                                    if handler(&ke) {
+                                        if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                                        event_loop.set_control_flow(ControlFlow::Poll);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 if matches!(&event.logical_key, Key::Named(NamedKey::Tab)) {
                     if let Some(root) = pw.composer.layout_root_mut() {
                         focus_next(root);
@@ -450,6 +474,15 @@ fn apply_scroll_delta(node: &mut LayoutNode, dy: f32) -> bool {
         if apply_scroll_delta(child, dy) { return true; }
     }
     false
+}
+
+/// 递归查找指定 ID 的节点
+fn find_node_by_id<'a>(node: &'a LayoutNode, id: u64) -> Option<&'a LayoutNode> {
+    if node.id == id { return Some(node); }
+    for child in &node.children {
+        if let Some(found) = find_node_by_id(child, id) { return Some(found); }
+    }
+    None
 }
 
 pub fn run_app(app: impl FnOnce(&mut ComposeCtx) + 'static) {

@@ -138,7 +138,27 @@ impl Clone for Box<dyn ModifierNode> {
     }
 }
 
+// ── KbEvent ──
+
+#[derive(Debug, Clone)]
+pub struct KbEvent {
+    pub key: winit::keyboard::Key,
+    pub event_type: KbEventType,
+    pub is_alt_pressed: bool,
+    pub is_ctrl_pressed: bool,
+    pub is_shift_pressed: bool,
+    pub is_meta_pressed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KbEventType {
+    Unknown,
+    KeyDown,
+    KeyUp,
+}
+
 // ── ModifierElement ──
+
 
 /// Modifier 链中的单个元素。
 ///
@@ -200,6 +220,11 @@ pub(crate) enum ModifierElement {
     Focusable,
     /// 焦点请求器 ID（与 FocusRequester 关联）
     FocusRequesterId { id: u64 },
+    /// 键盘事件
+    KbEvent {
+        on_key: Option<Arc<dyn Fn(&KbEvent) -> bool + Send + Sync>>,
+        on_pre_key: Option<Arc<dyn Fn(&KbEvent) -> bool + Send + Sync>>,
+    },
     /// 垂直滚动（绑定偏移 State）
     VerticalScroll { state: crate::core::state::State<f32> },
     /// 水平滚动
@@ -421,6 +446,16 @@ impl Modifier {
         self.push(ModifierElement::FocusRequesterId { id: fr.id })
     }
 
+    /// 按键事件（焦点节点接收）
+    pub fn on_key_event(self, handler: impl Fn(&KbEvent) -> bool + Send + Sync + 'static) -> Self {
+        self.push(ModifierElement::KbEvent { on_key: Some(Arc::new(handler)), on_pre_key: None })
+    }
+
+    /// 预拦截按键事件（从根分发到焦点节点前触发）
+    pub fn on_pre_key_event(self, handler: impl Fn(&KbEvent) -> bool + Send + Sync + 'static) -> Self {
+        self.push(ModifierElement::KbEvent { on_key: None, on_pre_key: Some(Arc::new(handler)) })
+    }
+
     /// 垂直滚动（绑定 ScrollState）
     pub fn vertical_scroll(self, state: ScrollState) -> Self {
         // 读取 offset 以注册 State→Slot 依赖，确保滚动时触发增量重组
@@ -620,6 +655,7 @@ impl Debug for ModifierElement {
                 .finish(),
             Self::Clickable { .. } => f.write_str("Clickable(<fn>)"),
             Self::Focusable => f.write_str("Focusable"),
+            Self::KbEvent { .. } => f.write_str("KbEvent"),
             Self::FocusRequesterId { id } => f.debug_tuple("FocusRequesterId").field(id).finish(),
             Self::VerticalScroll { .. } => f.write_str("VerticalScroll(<state>)"),
             Self::HorizontalScroll { .. } => f.write_str("HorizontalScroll(<state>)"),
@@ -656,7 +692,8 @@ impl ModifierElement {
             | ModifierElement::Focusable
             | ModifierElement::FocusRequesterId { .. }
             | ModifierElement::VerticalScroll { .. }
-            | ModifierElement::HorizontalScroll { .. } => ElementCategory::Input,
+            | ModifierElement::HorizontalScroll { .. }
+            | ModifierElement::KbEvent { .. } => ElementCategory::Input,
 
             ModifierElement::TextContent { .. }
             | ModifierElement::RichTextContent { .. } => ElementCategory::Content,
