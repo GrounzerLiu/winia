@@ -294,7 +294,7 @@ impl ApplicationHandler for AppState {
                         is_meta_pressed: self.modifiers.meta_key(),
                     };
                     pw.last_pointer_kind = ptr_ev.kind.clone();
-                    dispatch_ptr_event(&path, &ptr_ev, scene_pos, pw.pointer_down_id);
+                    dispatch_ptr_event(root, &path, &ptr_ev, scene_pos, pw.pointer_down_id);
                 }
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 event_loop.set_control_flow(ControlFlow::Poll);
@@ -321,7 +321,7 @@ impl ApplicationHandler for AppState {
                         is_shift_pressed: self.modifiers.shift_key(),
                         is_meta_pressed: self.modifiers.meta_key(),
                     };
-                    dispatch_ptr_event(&path, &ptr_ev, scene_pos, pw.pointer_down_id);
+                    dispatch_ptr_event(root, &path, &ptr_ev, scene_pos, pw.pointer_down_id);
                 }
             }
             WindowEvent::ModifiersChanged(m) => {
@@ -651,20 +651,20 @@ fn apply_scroll_delta(node: &mut LayoutNode, dy: f32) -> bool {
 
 /// 分发指针事件到 hit_test 路径（pre: outer→inner, bubble: inner→outer）
 fn dispatch_ptr_event(
+    root: &LayoutNode,
     path: &[&LayoutNode],
     event: &crate::modifier::PointerEvent,
     scene_pos: (f32, f32),
     captured_id: Option<u64>,
 ) -> bool {
-    // 如果指针被一个节点捕获（Down 后未释放），以此为根重新构建路径
+    // 如果指针被一个节点捕获（Down 后未释放），用 root 查找节点并构建祖先链
     let use_path: Vec<&LayoutNode> = if let Some(cid) = captured_id {
-        // 找到捕获节点及其祖先链
         let mut ancestors: Vec<&LayoutNode> = Vec::new();
-        if let Some(node) = path.iter().find(|n| n.id == cid) {
+        if let Some(node) = crate::layout::node::find_node_by_id(root, cid) {
             ancestors.push(node);
             let mut pid = node.parent_id;
             while let Some(id) = pid {
-                if let Some(anc) = path.iter().find(|n| n.id == id) {
+                if let Some(anc) = crate::layout::node::find_node_by_id(root, id) {
                     ancestors.push(anc);
                     pid = anc.parent_id;
                 } else { break; }
