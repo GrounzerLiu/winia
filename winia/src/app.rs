@@ -242,26 +242,26 @@ impl ApplicationHandler for AppState {
                 if let Some(fid) = pw.focused_id {
                     if let Some(root) = pw.composer.layout_root() {
                         let path = focused_path(root, fid);
-                        // onPreviewKeyEvent：根 → 焦点（向下）
-                        for &node in &path {
+                        // onPreviewKeyEvent：根 → 焦点（向下），已消费即停止
+                        'preview: for &node in &path {
                             for el in node.modifier.elements() {
                                 if let crate::modifier::ModifierElement::KbEvent { on_pre_key: Some(handler), .. } = el {
                                     if handler(&ke) {
                                         if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                                         event_loop.set_control_flow(ControlFlow::Poll);
-                                        break;
+                                        break 'preview;
                                     }
                                 }
                             }
                         }
-                        // onKeyEvent：焦点 → 根（向上冒泡）
-                        for &node in path.iter().rev() {
+                        // onKeyEvent：焦点 → 根（向上冒泡），已消费即停止
+                        'bubble: for &node in path.iter().rev() {
                             for el in node.modifier.elements() {
                                 if let crate::modifier::ModifierElement::KbEvent { on_key: Some(handler), .. } = el {
                                     if handler(&ke) {
                                         if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                                         event_loop.set_control_flow(ControlFlow::Poll);
-                                        break;
+                                        break 'bubble;
                                     }
                                 }
                             }
