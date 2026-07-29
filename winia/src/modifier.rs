@@ -170,13 +170,13 @@ pub enum PtrButton {
 }
 
 impl PtrButton {
-    pub fn from_winit(button: winit::event::MouseButton) -> Self {
-        match button {
+    pub fn from_winit(button: winit::event::ButtonSource) -> Option<Self> {
+        button.mouse_button().map(|m| match m {
             winit::event::MouseButton::Left => PtrButton::Primary,
             winit::event::MouseButton::Right => PtrButton::Secondary,
             winit::event::MouseButton::Middle => PtrButton::Middle,
             other => PtrButton::Other(other as u16),
-        }
+        })
     }
 }
 

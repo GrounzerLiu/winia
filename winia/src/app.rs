@@ -218,21 +218,40 @@ impl ApplicationHandler for AppState {
                 pw.scale_factor = scale_factor;
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
             }
-            WindowEvent::PointerButton { position, state, .. } if state.is_pressed() => {
+            WindowEvent::PointerButton { position, state, button, .. } => {
                 let lp = position.to_logical::<f32>(pw.scale_factor);
+                let scene_pos = (lp.x, lp.y);
+                let event_type = if state.is_pressed() {
+                    crate::modifier::PtrEventType::Down
+                } else {
+                    crate::modifier::PtrEventType::Up
+                };
                 if let Some(root) = pw.composer.layout_root() {
-                    let mut handled = false;
-                    for node in hit_test(root, lp.x, lp.y).iter().rev() {
-                        if handled { break; }
-                        if let Some(on_click) = node.modifier.on_click() {
-                            on_click();
-                            handled = true;
+                    let path = hit_test(root, scene_pos.0, scene_pos.1);
+                    let ptr_ev = crate::modifier::PtrEvent {
+                        event_type,
+                        position: (0.0, 0.0),
+                        scene_position: scene_pos,
+                        button: crate::modifier::PtrButton::from_winit(button.clone()),
+                        is_alt_pressed: self.modifiers.alt_key(),
+                        is_ctrl_pressed: self.modifiers.control_key(),
+                        is_shift_pressed: self.modifiers.shift_key(),
+                        is_meta_pressed: self.modifiers.meta_key(),
+                    };
+                    let mut handled = dispatch_ptr_event(root, &path, &ptr_ev, scene_pos);
+                    // fallback: 旧 Clickable
+                    if !handled && state.is_pressed() {
+                        for node in path.iter().rev() {
+                            if let Some(on_click) = node.modifier.on_click() {
+                                on_click();
+                                handled = true;
+                                break;
+                            }
                         }
                     }
-                    eprintln!("[click] handled={} pos=({:.0},{:.0})", handled, lp.x, lp.y);
+                    eprintln!("[click] handled={} pos=({:.0},{:.0})", handled, scene_pos.0, scene_pos.1);
                 }
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
-                // 确保在 Wait 模式下 request_redraw 也能触发 RedrawRequested
                 event_loop.set_control_flow(ControlFlow::Poll);
                 // PointerButton 可能通过 FocusRequester 改变了焦点
                 if let Some(root) = pw.composer.layout_root_mut() {
@@ -242,6 +261,24 @@ impl ApplicationHandler for AppState {
                     pw.focused_slot_key = slot;
                 }
                 if let Some(ref proxy) = *APP_PROXY.lock().unwrap() { let _ = proxy.wake_up(); }
+            }
+            WindowEvent::PointerMoved { position, .. } => {
+                let lp = position.to_logical::<f32>(pw.scale_factor);
+                let scene_pos = (lp.x, lp.y);
+                if let Some(root) = pw.composer.layout_root() {
+                    let path = hit_test(root, scene_pos.0, scene_pos.1);
+                    let ptr_ev = crate::modifier::PtrEvent {
+                        event_type: crate::modifier::PtrEventType::Move,
+                        position: (0.0, 0.0),
+                        scene_position: scene_pos,
+                        button: None,
+                        is_alt_pressed: self.modifiers.alt_key(),
+                        is_ctrl_pressed: self.modifiers.control_key(),
+                        is_shift_pressed: self.modifiers.shift_key(),
+                        is_meta_pressed: self.modifiers.meta_key(),
+                    };
+                    dispatch_ptr_event(root, &path, &ptr_ev, scene_pos);
+                }
             }
             WindowEvent::ModifiersChanged(m) => {
                 self.modifiers = m.state();
@@ -545,6 +582,50 @@ fn apply_scroll_delta(node: &mut LayoutNode, dy: f32) -> bool {
     }
     for child in &mut node.children {
         if apply_scroll_delta(child, dy) { return true; }
+    }
+    false
+}
+
+/// 分发指针事件到 hit_test 路径（pre: outer→inner, bubble: inner→outer）
+fn dispatch_ptr_event(
+    root: &LayoutNode,
+    path: &[&LayoutNode],
+    event: &crate::modifier::PtrEvent,
+    scene_pos: (f32, f32),
+) -> bool {
+    // 计算路径累积偏移（每个节点的 position 是相对于父节点的偏移）
+    let mut abs_x = 0.0f32;
+    let mut abs_y = 0.0f32;
+    let abs_positions: Vec<(f32, f32)> = path.iter().map(|n| {
+        abs_x += n.position.x;
+        abs_y += n.position.y;
+        (abs_x, abs_y)
+    }).collect();
+
+    // on_pre_ptr: outer → inner
+    for (i, node) in path.iter().enumerate() {
+        let local_x = scene_pos.0 - abs_positions[i].0;
+        let local_y = scene_pos.1 - abs_positions[i].1;
+        let mut ev = event.clone();
+        ev.position = (local_x, local_y);
+        for el in node.modifier.elements() {
+            if let crate::modifier::ModifierElement::PtrEvent { on_pre_ptr: Some(handler), .. } = el {
+                if handler(&ev) { return true; }
+            }
+        }
+    }
+
+    // on_ptr: inner → outer
+    for (i, node) in path.iter().enumerate().rev() {
+        let local_x = scene_pos.0 - abs_positions[i].0;
+        let local_y = scene_pos.1 - abs_positions[i].1;
+        let mut ev = event.clone();
+        ev.position = (local_x, local_y);
+        for el in node.modifier.elements() {
+            if let crate::modifier::ModifierElement::PtrEvent { on_ptr: Some(handler), .. } = el {
+                if handler(&ev) { return true; }
+            }
+        }
     }
     false
 }
