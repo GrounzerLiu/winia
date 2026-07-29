@@ -319,6 +319,8 @@ impl ApplicationHandler for AppState {
                     if pw.pointer_down_state.is_some() {
                         if let Some(innermost) = path.last() {
                             let down = pw.pointer_down_state.as_ref().unwrap();
+                            let has_para = innermost.cached_paragraph.try_borrow().map(|b| b.is_some()).ok().unwrap_or(false);
+                            eprintln!("[selection] drag innermost={} has_para={}", innermost.id, has_para);
                             let dx = scene_pos.0 - down.position.0;
                             let dy = scene_pos.1 - down.position.1;
                             const CLICK_SLOP: f32 = 18.0;

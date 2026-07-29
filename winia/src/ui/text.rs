@@ -222,6 +222,7 @@ impl Text {
             let reg = ctx.selection_registrar()
                 .unwrap_or_else(|| crate::ui::selection_container::LOCAL_SELECTION_REGISTRAR.current());
             reg.register(node_id, 0, content_len, None);
+            eprintln!("[selection] Text registered: node_id={} len={}", node_id, content_len);
         }
         ctx.end_node();
     }
