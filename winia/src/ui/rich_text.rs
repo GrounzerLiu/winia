@@ -139,13 +139,12 @@ impl<'a> RichTextScope<'a> {
         s.background.map(|v| self.style.bg = Some(v));
     }
 
-    /// 内联图片。
+    /// 内联图片（推送 U+FFFC 占位符，匹配 D:\winia 设计）。
     pub fn image(&mut self, drawable: impl Into<Arc<dyn InlineDrawable>>) {
         let pos = self.cursor;
         self.drawables.push(drawable.into());
         self.drawable_positions.push(pos);
-        // 占一个字符位（build 时会替换为 U+FFFC）
-        self.content.push(' ');
+        self.content.push('\u{FFFC}');
         self.cursor += 1;
         if self.style.is_not_default() {
             self.annotations.push((self.style.clone(), pos..pos + 1));
@@ -578,7 +577,7 @@ mod tests {
 
         fn image(&mut self) {
             self.drawable_positions.push(self.cursor);
-            self.content.push(' ');
+            self.content.push('\u{FFFC}');
             self.cursor += 1;
         }
 
@@ -730,8 +729,8 @@ mod tests {
         ctx.text("C", Style::default());
 
         assert_eq!(ctx.drawable_positions, vec![1, 3], "drawable indices");
-        assert_eq!(ctx.content.chars().nth(1).unwrap(), ' ');
-        assert_eq!(ctx.content.chars().nth(3).unwrap(), ' ');
+        assert_eq!(ctx.content.chars().nth(1).unwrap(), '\u{FFFC}');
+        assert_eq!(ctx.content.chars().nth(3).unwrap(), '\u{FFFC}');
         // spans 不应该包含占位位置（placeholder segment 被过滤）
         let spans = ctx.spans();
         for s in &spans {
