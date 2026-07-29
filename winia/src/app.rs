@@ -36,7 +36,7 @@ pub(crate) struct PerWindow {
     pub(crate) on_close: Option<Box<dyn FnMut() + Send>>,
     pub(crate) created_id: Option<u64>,
     theme: crate::ui::theme::ThemeColors,
-    /// 焦点节点的 slot_key（跨重组稳定，用于重组后恢复焦点）
+    /// 焦点节点的 slot_key
     pub(crate) focused_slot_key: Option<u64>,
 }
 
@@ -98,6 +98,7 @@ struct AppState {
     pending_content: Vec<PendingWindow>,
     /// 父窗口 ID（用于 is_parent 判断，不依赖 HashMap 顺序）
     parent_window_id: Option<WindowId>,
+    /// 窗口全局修饰键状态
     pub(crate) modifiers: winit::keyboard::ModifiersState,
     /// 初始化回调（仅首次调用，用于声明式创建主窗口）
     init: Option<Box<dyn FnOnce(&mut ComposeCtx)>>,
@@ -223,12 +224,59 @@ impl ApplicationHandler for AppState {
                 }
                 if let Some(ref proxy) = *APP_PROXY.lock().unwrap() { let _ = proxy.wake_up(); }
             }
+            WindowEvent::ModifiersChanged(m) => {
+                self.modifiers = m.state();
+            }
             WindowEvent::KeyboardInput { event, .. } if event.state.is_pressed() => {
-                if matches!(&event.logical_key, Key::Named(NamedKey::Tab)) {
-                    if let Some(root) = pw.composer.layout_root_mut() {
-                        focus_next(root);
-                        pw.focused_id = crate::layout::node::get_focus_id(root);
+                let event_type = if event.state.is_pressed() {
+                    crate::modifier::KbEventType::KeyDown
+                } else {
+                    crate::modifier::KbEventType::KeyUp
+                };
+                let ke = crate::modifier::KbEvent {
+                    key: event.logical_key.clone(),
+                    event_type,
+                    is_alt_pressed: self.modifiers.alt_key(),
+                    is_ctrl_pressed: self.modifiers.control_key(),
+                    is_shift_pressed: self.modifiers.shift_key(),
+                    is_meta_pressed: self.modifiers.meta_key(),
+                    repeat: event.repeat,
+                };
+                let mut consumed = false;
+                if matches!(&event.logical_key, Key::Named(NamedKey::Escape)) {
+                    if pw.focused_id.is_some() {
+                        pw.composer.layout_root_mut().map(|root| crate::layout::node::clear_focus(root));
+                        pw.focused_id = None;
+                        pw.focused_slot_key = None;
+                        consumed = true;
                     }
+                }
+                if matches!(&event.logical_key, Key::Named(NamedKey::Tab)) {
+                    let shift = self.modifiers.shift_key();
+                    let (new_id, new_slot) = pw.composer.layout_root_mut().map(|root| {
+                        if shift { focus_prev(root); } else { focus_next(root); }
+                        let id = crate::layout::node::get_focus_id(root);
+                        let slot = id.and_then(|fid| crate::layout::node::find_node_by_id(root, fid).map(|n| n.slot_key));
+                        (id, slot)
+                    }).unwrap_or((None, None));
+                    pw.focused_id = new_id;
+                    pw.focused_slot_key = new_slot;
+                    consumed = true;
+                }
+                if !consumed {
+                    if let Some(fid) = pw.focused_id {
+                        if let Some(root) = pw.composer.layout_root() {
+                            if let Some(node) = crate::layout::node::find_node_by_id(root, fid) {
+                                for el in node.modifier.elements() {
+                                    if let crate::modifier::ModifierElement::KbEvent { on_key: Some(handler), .. } = el {
+                                        if handler(&ke) { consumed = true; break; }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if consumed {
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                     event_loop.set_control_flow(ControlFlow::Poll);
                 }
