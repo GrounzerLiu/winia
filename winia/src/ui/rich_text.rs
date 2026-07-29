@@ -151,14 +151,11 @@ impl<'a> RichTextScope<'a> {
         }
     }
 
-    /// D:\winia 风格：将已有文本范围标记为图片占位符。
-    /// 范围对应的文本字符在渲染时被替换为 drawable。
+    /// 将文本范围标记为图片占位符。范围中的字符在渲染时被 `drawable` 替换。
     pub fn placeholder(&mut self, range: Range<usize>, drawable: impl Into<Arc<dyn InlineDrawable>>) {
         if range.end <= range.start { return; }
         self.drawables.push(drawable.into());
         self.drawable_positions.push(range.start);
-        // 被替换的文本段仍保留在 content 中，但 resolve_spans 会为占位符
-        // 位置创建 placeholder segment，被替换的文本字符不参与文本渲染。
         if self.style.is_not_default() {
             self.annotations.push((self.style.clone(), range));
         }
