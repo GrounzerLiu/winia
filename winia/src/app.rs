@@ -269,7 +269,9 @@ impl ApplicationHandler for AppState {
                                 let reg = pw.composer.selection_registrar.as_ref()
                                     .cloned()
                                     .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
-                                reg.set_selection(innermost.slot_key, a, a + 1);
+                                let seg = reg.segment_info(innermost.slot_key);
+                                let global_a = seg.map(|(off,_)| off + a).unwrap_or(a);
+                                reg.set_selection(global_a, global_a + 1);
                             }
                         }
                     }
@@ -337,8 +339,6 @@ impl ApplicationHandler for AppState {
                     if pw.pointer_down_state.is_some() {
                         if let Some(innermost) = path.last() {
                             let down = pw.pointer_down_state.as_ref().unwrap();
-                            // 只更新与 Down 相同 slot 的选区（不跨节点）
-                            if pw.pointer_down_slot == Some(innermost.slot_key) {
                             let dx = scene_pos.0 - down.position.0;
                             let dy = scene_pos.1 - down.position.1;
                             const CLICK_SLOP: f32 = 18.0;
@@ -359,21 +359,19 @@ impl ApplicationHandler for AppState {
                                                 .cloned()
                                                 .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
                                             let current = gc.text_range.start;
-                                            let s = pw.pointer_down_state.as_ref()
-                                                .and_then(|d| d.selection_anchor)
-                                                .map(|a| a.min(current))
-                                                .unwrap_or(current);
-                                            let e = pw.pointer_down_state.as_ref()
-                                                .and_then(|d| d.selection_anchor)
-                                                .map(|a| a.max(current))
-                                                .unwrap_or(current + 1);
-                                            eprintln!("[selection] set node={} range={}..{}", innermost.id, s, e);
-                                            reg.set_selection(innermost.slot_key, s, e);
+                                            let seg = reg.segment_info(innermost.slot_key);
+                                            let global_off = seg.map(|(off,_)| off).unwrap_or(0);
+                                            let anchor_local = pw.pointer_down_state.as_ref().and_then(|d| d.selection_anchor);
+                                            let anchor_global = anchor_local.map(|a| global_off + a);
+                                            let current_global = global_off + current;
+                                            let s = anchor_global.map(|a| a.min(current_global)).unwrap_or(current_global);
+                                            let e = anchor_global.map(|a| a.max(current_global)).unwrap_or(current_global + 1);
+                                            eprintln!("[selection] set global range={}..{}", s, e);
+                                            reg.set_selection(s, e);
                                         }
                                     }
                                 }
                             }
-                        }
                         }
                     }
                     let ptr_ev = crate::modifier::PointerEvent {

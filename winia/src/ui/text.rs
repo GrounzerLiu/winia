@@ -220,8 +220,8 @@ impl Text {
         // 注册到选区容器（供文本拖动选中使用）
         let reg = ctx.selection_registrar()
             .unwrap_or_else(|| crate::ui::selection_container::LOCAL_SELECTION_REGISTRAR.current());
-        reg.register(key, 0, content_len, None);
-        eprintln!("[selection] Text registered: slot_key={} len={}", key, content_len);
+        let global_off = reg.register(key, content_len, None);
+        eprintln!("[selection] Text registered: slot_key={} len={} global_off={}", key, content_len, global_off);
         ctx.end_node();
     }
 
