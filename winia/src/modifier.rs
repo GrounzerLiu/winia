@@ -158,6 +158,50 @@ pub enum KbEventType {
     KeyUp,
 }
 
+// ── PointerEvent ──
+
+/// 指针按钮
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PtrButton {
+    Primary,
+    Secondary,
+    Middle,
+    Other(u16),
+}
+
+impl PtrButton {
+    pub fn from_winit(button: winit::event::MouseButton) -> Self {
+        match button {
+            winit::event::MouseButton::Left => PtrButton::Primary,
+            winit::event::MouseButton::Right => PtrButton::Secondary,
+            winit::event::MouseButton::Middle => PtrButton::Middle,
+            other => PtrButton::Other(other as u16),
+        }
+    }
+}
+
+/// 指针事件类型
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PtrEventType {
+    Down,
+    Up,
+    Move,
+    Scroll { delta: f32, is_vertical: bool },
+}
+
+/// 指针事件
+#[derive(Debug, Clone)]
+pub struct PtrEvent {
+    pub event_type: PtrEventType,
+    pub position: (f32, f32),
+    pub scene_position: (f32, f32),
+    pub button: Option<PtrButton>,
+    pub is_alt_pressed: bool,
+    pub is_ctrl_pressed: bool,
+    pub is_shift_pressed: bool,
+    pub is_meta_pressed: bool,
+}
+
 // ── ModifierElement ──
 
 /// Modifier 链中的单个元素。
@@ -224,6 +268,11 @@ pub(crate) enum ModifierElement {
     KbEvent {
         on_key: Option<Arc<dyn Fn(&KbEvent) -> bool + Send + Sync>>,
         on_pre_key: Option<Arc<dyn Fn(&KbEvent) -> bool + Send + Sync>>,
+    },
+    /// 指针事件
+    PtrEvent {
+        on_ptr: Option<Arc<dyn Fn(&PtrEvent) -> bool + Send + Sync>>,
+        on_pre_ptr: Option<Arc<dyn Fn(&PtrEvent) -> bool + Send + Sync>>,
     },
     /// 垂直滚动（绑定偏移 State）
     VerticalScroll { state: crate::core::state::State<f32> },
@@ -451,6 +500,18 @@ impl Modifier {
     }
 
     /// 关联 FocusRequester
+
+    /// 指针事件（inner→outer 冒泡）
+    pub fn on_ptr_event(self, handler: impl Fn(&PtrEvent) -> bool + Send + Sync + 'static) -> Self {
+        self.push(ModifierElement::PtrEvent { on_ptr: Some(Arc::new(handler)), on_pre_ptr: None })
+    }
+
+    /// 预拦截指针事件（outer→inner）
+    pub fn on_pre_ptr_event(self, handler: impl Fn(&PtrEvent) -> bool + Send + Sync + 'static) -> Self {
+        self.push(ModifierElement::PtrEvent { on_ptr: None, on_pre_ptr: Some(Arc::new(handler)) })
+    }
+
+    /// 关联 FocusRequester
     pub fn focus_requester(self, fr: impl Into<FocusRequester>) -> Self {
         let fr = fr.into();
         self.push(ModifierElement::FocusRequesterId { id: fr.id })
@@ -656,6 +717,7 @@ impl Debug for ModifierElement {
             Self::Clickable { .. } => f.write_str("Clickable(<fn>)"),
             Self::Focusable => f.write_str("Focusable"),
             Self::KbEvent { on_key, on_pre_key } => f.debug_struct("KbEvent").field("on_key", &on_key.is_some()).field("on_pre_key", &on_pre_key.is_some()).finish(),
+            Self::PtrEvent { on_ptr, on_pre_ptr } => f.debug_struct("PtrEvent").field("on_ptr", &on_ptr.is_some()).field("on_pre_ptr", &on_pre_ptr.is_some()).finish(),
             Self::FocusRequesterId { id } => f.debug_tuple("FocusRequesterId").field(id).finish(),
             Self::VerticalScroll { .. } => f.write_str("VerticalScroll(<state>)"),
             Self::HorizontalScroll { .. } => f.write_str("HorizontalScroll(<state>)"),
@@ -694,6 +756,7 @@ impl ModifierElement {
             | ModifierElement::VerticalScroll { .. }
             | ModifierElement::HorizontalScroll { .. }
             | ModifierElement::KbEvent { .. } => ElementCategory::Input,
+            | ModifierElement::PtrEvent { .. } => ElementCategory::Input,
 
             ModifierElement::TextContent { .. }
             | ModifierElement::RichTextContent { .. } => ElementCategory::Content,
