@@ -208,6 +208,29 @@ impl ApplicationHandler for AppState {
                             handled = true;
                         }
                     }
+                    // 文本选中：点击在 Text 节点上且 SelectionRegistrar 存在
+                    if !handled {
+                        if let Some(reg) = crate::ui::selection_container::current_registrar() {
+                            let path = hit_test(root, lp.x, lp.y);
+                            // 计算点击节点的绝对位置
+                            let abs_x: f32 = path.iter().map(|n| n.position.x).sum();
+                            let abs_y: f32 = path.iter().map(|n| n.position.y).sum();
+                            for node in path.iter().rev() {
+                                if node.has_text_content || node.has_richtext_content {
+                                    let local_x = lp.x - abs_x;
+                                    let local_y = lp.y - abs_y;
+                                    if let Some(para) = node.cached_paragraph.borrow_mut().as_mut() {
+                                        if let Some(gc) = para.get_closest_glyph_cluster_at((local_x, local_y)) {
+                                            let char_index = gc.text_range.start;
+                                            reg.set_selection(node.id, char_index, char_index + 1);
+                                            handled = true;
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
                     eprintln!("[click] handled={} pos=({:.0},{:.0})", handled, lp.x, lp.y);
                 }
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }

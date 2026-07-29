@@ -6,8 +6,8 @@ use crate::modifier::Modifier;
 use crate::layout::BoxLayout;
 use crate::core::composer::GroupStatus;
 use std::ops::Range;
-use std::rc::Rc;
-use std::cell::RefCell;
+use std::sync::Arc;
+
 
 // ═══════════════════════════════════════════════════════════
 // 辅助类型
@@ -49,17 +49,17 @@ struct RegistrarInner {
     segments: Vec<RegisteredSegment>,
 }
 
-/// 选区注册表，通过 `Rc<RefCell<>>` 实现内部可变性，
+/// 选区注册表，通过 `Arc<Mutex<>>` 实现线程安全内部可变性，
 /// CompositionLocal 中 clone 后仍共享同一状态。
 #[derive(Debug, Clone)]
 pub struct SelectionRegistrar {
-    inner: Rc<RefCell<RegistrarInner>>,
+    inner: Arc<Mutex<RegistrarInner>>,
 }
 
 impl SelectionRegistrar {
     pub fn new() -> Self {
         Self {
-            inner: Rc::new(RefCell::new(RegistrarInner {
+            inner: Arc::new(Mutex::new(RegistrarInner {
                 selection_start: None,
                 selection_end: None,
                 selection_node_id: None,
@@ -70,7 +70,7 @@ impl SelectionRegistrar {
 
     /// 注册一个可选中文本段。
     pub fn register(&self, node_id: u64, start: usize, end: usize, bounds: Option<Rect>) {
-        let mut inner = self.inner.borrow_mut();
+        let mut inner = self.inner.lock().unwrap();
         inner.segments.push(RegisteredSegment {
             node_id,
             text_start: start,
@@ -81,7 +81,7 @@ impl SelectionRegistrar {
 
     /// 设置选区。
     pub fn set_selection(&self, node_id: u64, start: usize, end: usize) {
-        let mut inner = self.inner.borrow_mut();
+        let mut inner = self.inner.lock().unwrap();
         inner.selection_node_id = Some(node_id);
         inner.selection_start = Some(start.min(end));
         inner.selection_end = Some(start.max(end));
@@ -89,7 +89,7 @@ impl SelectionRegistrar {
 
     /// 清除选区。
     pub fn clear_selection(&self) {
-        let mut inner = self.inner.borrow_mut();
+        let mut inner = self.inner.lock().unwrap();
         inner.selection_start = None;
         inner.selection_end = None;
         inner.selection_node_id = None;
@@ -97,7 +97,7 @@ impl SelectionRegistrar {
 
     /// 获取指定 node 在本地位移范围内的选中区域。
     pub fn selected_range(&self, node_id: u64) -> Option<Range<usize>> {
-        let inner = self.inner.borrow();
+        let inner = self.inner.lock().unwrap();
         let (global_start, global_end) = (inner.selection_start?, inner.selection_end?);
         let seg = inner.segments.iter().find(|s| s.node_id == node_id)?;
         let local_start = global_start.saturating_sub(seg.text_start);
@@ -125,6 +125,24 @@ impl RegisteredSegment {
 
 pub static LOCAL_SELECTION_REGISTRAR: std::sync::LazyLock<CompositionLocal<SelectionRegistrar>> =
     std::sync::LazyLock::new(|| CompositionLocal::new(|| SelectionRegistrar::new()));
+
+// ═══════════════════════════════════════════════════════════
+// 全局引用（供事件处理访问当前注册表）
+// ═══════════════════════════════════════════════════════════
+
+use std::sync::Mutex;
+
+static CURRENT_SELECTION: Mutex<Option<SelectionRegistrar>> = Mutex::new(None);
+
+/// 设置当前全局选区注册表（由 SelectionContainer::build 调用）。
+pub(crate) fn set_current_registrar(reg: SelectionRegistrar) {
+    *CURRENT_SELECTION.lock().unwrap() = Some(reg);
+}
+
+/// 获取当前全局选区注册表。
+pub(crate) fn current_registrar() -> Option<SelectionRegistrar> {
+    CURRENT_SELECTION.lock().unwrap().clone()
+}
 
 // ═══════════════════════════════════════════════════════════
 // SelectionContainer
@@ -155,6 +173,7 @@ impl SelectionContainer {
         match ctx.start_restartable_group(key, self.modifier, BoxLayout::new()) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
+                set_current_registrar(registrar.clone());
                 LOCAL_SELECTION_REGISTRAR.provides(registrar, || {
                     content(ctx);
                 });
