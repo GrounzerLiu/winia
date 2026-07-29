@@ -315,6 +315,31 @@ impl ApplicationHandler for AppState {
                 let scene_pos = (lp.x, lp.y);
                 if let Some(root) = pw.composer.layout_root() {
                     let path = hit_test(root, scene_pos.0, scene_pos.1);
+                    // 拖拽选中文本
+                    if pw.pointer_down_state.is_some() {
+                        if let Some(innermost) = path.last() {
+                            let down = pw.pointer_down_state.as_ref().unwrap();
+                            let dx = scene_pos.0 - down.position.0;
+                            let dy = scene_pos.1 - down.position.1;
+                            const CLICK_SLOP: f32 = 18.0;
+                            if (dx*dx + dy*dy).sqrt() > CLICK_SLOP {
+                                // 计算节点的绝对位置
+                                let (abs_x, abs_y) = node_abs_position(root, innermost.id);
+                                if let Ok(borrow) = innermost.cached_paragraph.try_borrow() {
+                                    if let Some(para) = borrow.as_ref() {
+                                        if let Some(gc) = para.get_closest_glyph_cluster_at((scene_pos.0 - abs_x, scene_pos.1 - abs_y)) {
+                                            let reg = pw.composer.selection_registrar.as_ref()
+                                                .cloned()
+                                                .unwrap_or_else(|| crate::ui::selection_container::LOCAL_SELECTION_REGISTRAR.current());
+                                            let s = gc.text_range.start.min(gc.text_range.end);
+                                            let e = gc.text_range.start.max(gc.text_range.end);
+                                            reg.set_selection(innermost.id, s, e);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     let ptr_ev = crate::modifier::PointerEvent {
                         event_type: crate::modifier::PointerEventType::Move,
                         position: (0.0, 0.0),
@@ -656,6 +681,20 @@ fn apply_scroll_delta(node: &mut LayoutNode, dy: f32) -> bool {
 }
 
 /// 分发指针事件到 hit_test 路径（pre: outer→inner, bubble: inner→outer）
+/// 计算节点在布局树中的绝对位置（从根累加 position）
+fn node_abs_position(root: &LayoutNode, id: u64) -> (f32, f32) {
+    fn walk(node: &LayoutNode, target: u64, abs_x: f32, abs_y: f32) -> Option<(f32, f32)> {
+        let nx = abs_x + node.position.x;
+        let ny = abs_y + node.position.y;
+        if node.id == target { return Some((nx, ny)); }
+        for child in &node.children {
+            if let Some(r) = walk(child, target, nx, ny) { return Some(r); }
+        }
+        None
+    }
+    walk(root, id, 0.0, 0.0).unwrap_or((0.0, 0.0))
+}
+
 fn dispatch_ptr_event(
     root: &LayoutNode,
     path: &[&LayoutNode],
