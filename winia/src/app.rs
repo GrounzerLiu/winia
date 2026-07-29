@@ -702,7 +702,7 @@ fn dispatch_ptr_event(
         ev.position = (local_x, local_y);
         for el in node.modifier.elements() {
             if let crate::modifier::ModifierElement::PointerEvent { on_pre_ptr: Some(handler), .. } = el {
-                if handler(&ev) { return true; }
+                if handler(&ev) { eprintln!("[ptr] outer→inner node={} consumed", i); return true; }
             }
         }
     }
@@ -713,9 +713,10 @@ fn dispatch_ptr_event(
         let local_y = scene_pos.1 - abs_positions[i].1;
         let mut ev = event.clone();
         ev.position = (local_x, local_y);
+        eprintln!("[ptr] inner→outer check node idx={}", i);
         for el in node.modifier.elements() {
             if let crate::modifier::ModifierElement::PointerEvent { on_ptr: Some(handler), .. } = el {
-                if handler(&ev) { return true; }
+                if handler(&ev) { eprintln!("[ptr] inner→outer node={} consumed", i); return true; }
             }
         }
     }
