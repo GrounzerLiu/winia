@@ -17,11 +17,13 @@ pub(crate) struct PendingWindow {
 }
 use skiwin::{SkiaWindowTrait, vulkan::VulkanSkiaWindow};
 use std::collections::HashMap;
+use crate::modifier::ModifierElement;
 use std::sync::Arc;
 use std::sync::Mutex;
 use winit::application::ApplicationHandler;use winit::event::{StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
+use winit::keyboard::ModifiersState;
 use winit::window::WindowId;
 
 // ── PerWindow ──
@@ -58,7 +60,7 @@ impl PerWindow {
             }
             // 如果在 compose 期间又有新 notify 入队，需要再处理一次
             if !did_compose && !self.composer.has_pending_states() {
-                break;
+                
             }
         }
         self.composer.layout(Constraints::new(0.0, self.width, 0.0, self.height));
@@ -93,6 +95,8 @@ struct AppState {
     parent_window_id: Option<WindowId>,
     /// 初始化回调（仅首次调用，用于声明式创建主窗口）
     init: Option<Box<dyn FnOnce(&mut ComposeCtx)>>,
+    /// 窗口全局修饰键状态（由 ModifiersChanged 更新）
+    modifiers: winit::keyboard::ModifiersState,
 }
 
 impl ApplicationHandler for AppState {
@@ -198,7 +202,7 @@ impl ApplicationHandler for AppState {
                 if let Some(root) = pw.composer.layout_root() {
                     let mut handled = false;
                     for node in hit_test(root, lp.x, lp.y).iter().rev() {
-                        if handled { break; }
+                        if handled {  }
                         if let Some(on_click) = node.modifier.on_click() {
                             on_click();
                             handled = true;
@@ -215,7 +219,27 @@ impl ApplicationHandler for AppState {
                 }
                 if let Some(ref proxy) = *APP_PROXY.lock().unwrap() { let _ = proxy.wake_up(); }
             }
+            WindowEvent::ModifiersChanged(m) => {
+                self.modifiers = m.state();
+            }
             WindowEvent::KeyboardInput { event, .. } if event.state.is_pressed() => {
+                // 构建 KeyEvent 并分发到焦点节点
+                let ke = crate::core::key::KeyEvent {
+                    key: event.logical_key.clone(),
+                    event_type: crate::core::key::KeyEventType::KeyDown,
+                    is_alt_pressed: self.modifiers.alt_key(),
+                    is_ctrl_pressed: self.modifiers.control_key(),
+                    is_shift_pressed: self.modifiers.shift_key(),
+                    is_meta_pressed: false,
+                };
+                if let Some(root) = pw.composer.layout_root_mut() {
+                    if dispatch_key_event(root, pw.focused_id, &ke) {
+                        if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                        event_loop.set_control_flow(ControlFlow::Poll);
+                        
+                    }
+                }
+                // Tab 切换焦点（默认行为）
                 if matches!(&event.logical_key, Key::Named(NamedKey::Tab)) {
                     if let Some(root) = pw.composer.layout_root_mut() {
                         focus_next(root);
@@ -275,7 +299,7 @@ impl ApplicationHandler for AppState {
                                 let mut click_handled = false;
                                 eprintln!("[debug-click] pos=({:.0},{:.0}) path_len={} sf={}", x, y, nodes.len(), pw.scale_factor);
                                 for node in nodes.iter().rev() {
-                                    if click_handled { break; }
+                                    if click_handled {  }
                                     if let Some(on_click) = node.modifier.on_click() {
                                         on_click();
                                         handled = true;
@@ -452,6 +476,57 @@ fn apply_scroll_delta(node: &mut LayoutNode, dy: f32) -> bool {
     false
 }
 
+// ── 键盘事件分发（对齐 Compose onKeyEvent / onPreviewKeyEvent）──
+
+/// 从根节点查找 ID 为 `focused_id` 的节点及其到根的路径。
+fn find_focused_path<'a>(root: &'a LayoutNode, focused_id: u64) -> Vec<&'a LayoutNode> {
+    fn dfs<'a>(node: &'a LayoutNode, id: u64, path: &mut Vec<&'a LayoutNode>) -> bool {
+        if node.id == id { path.push(node); return true; }
+        for child in &node.children {
+            if dfs(child, id, path) { path.push(node); return true; }
+        }
+        false
+    }
+    let mut path = Vec::new();
+    dfs(root, focused_id, &mut path);
+    path.reverse(); // 根 → 焦点
+    path
+}
+
+/// 分发键盘事件到焦点节点链。
+/// 返回 true 表示事件已被消费。
+pub(crate) fn dispatch_key_event(
+    root: &mut LayoutNode,
+    focused_id: Option<u64>,
+    event: &crate::core::key::KeyEvent,
+) -> bool {
+    let Some(fid) = focused_id else { return false; };
+
+    // 收集焦点路径
+    let path = find_focused_path(root, fid);
+    if path.is_empty() { return false; }
+
+    // onPreviewKeyEvent：从根 → 焦点（向下传递，可中途拦截）
+    for &node in &path {
+        for el in node.modifier.elements() {
+            if let ModifierElement::KeyEvent { on_pre_key: Some(handler), .. } = el {
+                if handler(event) { return true; }
+            }
+        }
+    }
+
+    // onKeyEvent：从焦点 → 根（向上冒泡）
+    for &node in path.iter().rev() {
+        for el in node.modifier.elements() {
+            if let ModifierElement::KeyEvent { on_key: Some(handler), .. } = el {
+                if handler(event) { return true; }
+            }
+        }
+    }
+
+    false
+}
+
 pub fn run_app(app: impl FnOnce(&mut ComposeCtx) + 'static) {
     let event_loop = EventLoop::new().expect("event loop");
     let proxy = event_loop.create_proxy();
@@ -466,6 +541,7 @@ pub fn run_app(app: impl FnOnce(&mut ComposeCtx) + 'static) {
         windows: HashMap::new(),
         pending_content: Vec::new(),
         parent_window_id: None,
+        modifiers: Default::default(),
     };
     event_loop.run_app(state).expect("run_app");
     debug::force_shutdown();

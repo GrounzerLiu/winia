@@ -54,6 +54,7 @@ pub use core::state::State;
 pub mod prelude {
     pub use crate::core::composer::ComposeCtx;
     pub use crate::core::state::State;
+    pub use crate::core::key::{KeyEvent, KeyEventType, ModifierKeyEventExt};
     pub use crate::modifier::{Dimension, Modifier, Shape, Color, FocusRequester, ScrollState, DecoStyle, DecoMode, FontEdge, FontHint};
     pub use crate::ui::{Text, TextAlign, TextOverflow, TextStyle, ProvideTextStyle, FontWeight, FontSlant, Button, ButtonStyle, Column, Row, Stack, Window, WiniaTheme, ThemeColors};
     pub use crate::ui::theme::is_system_dark_theme;

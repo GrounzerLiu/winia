@@ -128,6 +128,8 @@ pub struct LayoutNode {
     pub(crate) cached_constraints: Option<Constraints>,
     /// composable 调用对应的 slot key（用于 replay 时子节点查找）
     pub(crate) slot_key: u64,
+    /// 父节点 ID（键盘事件冒泡用，由 add_child 设置）
+    pub(crate) parent_id: Option<u64>,
     /// 测量阶段缓存的 Paragraph（避免渲染时重建）
     pub(crate) cached_paragraph: std::cell::RefCell<Option<skia_safe::textlayout::Paragraph>>,
     /// 富文本内联元素（图片/SVG），测量阶段缓存供渲染使用
@@ -204,11 +206,13 @@ impl LayoutNode {
             cached_paragraph: std::cell::RefCell::new(None),
             inline_drawables: std::cell::RefCell::new(Vec::new()),
             scroll_viewport_height: 0.0,
+            parent_id: None,
         }
     }
 
     /// 添加子节点
-    pub fn add_child(&mut self, child: LayoutNode) {
+    pub fn add_child(&mut self, mut child: LayoutNode) {
+        child.parent_id = Some(self.id);
         self.children.push(child);
     }
 
@@ -240,6 +244,7 @@ impl LayoutNode {
             cached_paragraph: std::cell::RefCell::new(None),
             inline_drawables: std::cell::RefCell::new(Vec::new()),
             scroll_viewport_height: 0.0,
+            parent_id: None,
         }
     }
 
@@ -268,6 +273,7 @@ impl Default for LayoutNode {
             cached_paragraph: std::cell::RefCell::new(None),
             inline_drawables: std::cell::RefCell::new(Vec::new()),
             scroll_viewport_height: 0.0,
+            parent_id: None,
         }
     }
 }
