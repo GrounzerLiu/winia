@@ -170,13 +170,29 @@ pub enum PtrButton {
 }
 
 impl PtrButton {
-    pub fn from_winit(button: winit::event::ButtonSource) -> Option<Self> {
-        button.mouse_button().map(|m| match m {
-            winit::event::MouseButton::Left => PtrButton::Primary,
-            winit::event::MouseButton::Right => PtrButton::Secondary,
-            winit::event::MouseButton::Middle => PtrButton::Middle,
-            other => PtrButton::Other(other as u16),
-        })
+    pub fn from_winit(button: &winit::event::ButtonSource) -> PointerKind {
+        match button {
+            winit::event::ButtonSource::Mouse(m) => PointerKind::Mouse {
+                button: match m {
+                    winit::event::MouseButton::Left => PtrButton::Primary,
+                    winit::event::MouseButton::Right => PtrButton::Secondary,
+                    winit::event::MouseButton::Middle => PtrButton::Middle,
+                    other => PtrButton::Other(*other as u16),
+                },
+            },
+            winit::event::ButtonSource::Touch { finger_id, force } => PointerKind::Touch {
+                finger_id: finger_id.into_raw() as u64,
+                force: force.map(|f| f.normalized(None) as f32),
+            },
+            winit::event::ButtonSource::TabletTool { kind, data, .. } => PointerKind::Pen {
+                kind: match kind {
+                    winit::event::TabletToolKind::Eraser => PenKind::Eraser,
+                    _ => PenKind::Stylus,
+                },
+                pressure: data.force.map(|f| f.normalized(None) as f32),
+            },
+            _ => PointerKind::Mouse { button: PtrButton::Primary },
+        }
     }
 }
 
@@ -189,13 +205,29 @@ pub enum PtrEventType {
     Scroll { delta: f32, is_vertical: bool },
 }
 
+/// 指针类型（对齐 Compose PointerType）
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PointerKind {
+    Mouse { button: PtrButton },
+    Touch { finger_id: u64, force: Option<f32> },
+    Pen { kind: PenKind, pressure: Option<f32> },
+}
+
+/// 触控笔类型
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PenKind {
+    Stylus,
+    Eraser,
+    Unknown,
+}
+
 /// 指针事件
 #[derive(Debug, Clone)]
 pub struct PtrEvent {
     pub event_type: PtrEventType,
     pub position: (f32, f32),
     pub scene_position: (f32, f32),
-    pub button: Option<PtrButton>,
+    pub kind: PointerKind,
     pub is_alt_pressed: bool,
     pub is_ctrl_pressed: bool,
     pub is_shift_pressed: bool,
