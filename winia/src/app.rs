@@ -222,17 +222,17 @@ impl ApplicationHandler for AppState {
                 let lp = position.to_logical::<f32>(pw.scale_factor);
                 let scene_pos = (lp.x, lp.y);
                 let event_type = if state.is_pressed() {
-                    crate::modifier::PtrEventType::Down
+                    crate::modifier::PointerEventType::Down
                 } else {
-                    crate::modifier::PtrEventType::Up
+                    crate::modifier::PointerEventType::Up
                 };
                 if let Some(root) = pw.composer.layout_root() {
                     let path = hit_test(root, scene_pos.0, scene_pos.1);
-                    let ptr_ev = crate::modifier::PtrEvent {
+                    let ptr_ev = crate::modifier::PointerEvent {
                         event_type,
                         position: (0.0, 0.0),
                         scene_position: scene_pos,
-                        kind: crate::modifier::PtrButton::from_winit(&button),
+                        kind: crate::modifier::PointerButton::from_winit(&button),
                         is_alt_pressed: self.modifiers.alt_key(),
                         is_ctrl_pressed: self.modifiers.control_key(),
                         is_shift_pressed: self.modifiers.shift_key(),
@@ -267,11 +267,11 @@ impl ApplicationHandler for AppState {
                 let scene_pos = (lp.x, lp.y);
                 if let Some(root) = pw.composer.layout_root() {
                     let path = hit_test(root, scene_pos.0, scene_pos.1);
-                    let ptr_ev = crate::modifier::PtrEvent {
-                        event_type: crate::modifier::PtrEventType::Move,
+                    let ptr_ev = crate::modifier::PointerEvent {
+                        event_type: crate::modifier::PointerEventType::Move,
                         position: (0.0, 0.0),
                         scene_position: scene_pos,
-                        kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PtrButton::Primary },
+                        kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary },
                         is_alt_pressed: self.modifiers.alt_key(),
                         is_ctrl_pressed: self.modifiers.control_key(),
                         is_shift_pressed: self.modifiers.shift_key(),
@@ -590,7 +590,7 @@ fn apply_scroll_delta(node: &mut LayoutNode, dy: f32) -> bool {
 fn dispatch_ptr_event(
     root: &LayoutNode,
     path: &[&LayoutNode],
-    event: &crate::modifier::PtrEvent,
+    event: &crate::modifier::PointerEvent,
     scene_pos: (f32, f32),
 ) -> bool {
     // 计算路径累积偏移（每个节点的 position 是相对于父节点的偏移）
@@ -609,7 +609,7 @@ fn dispatch_ptr_event(
         let mut ev = event.clone();
         ev.position = (local_x, local_y);
         for el in node.modifier.elements() {
-            if let crate::modifier::ModifierElement::PtrEvent { on_pre_ptr: Some(handler), .. } = el {
+            if let crate::modifier::ModifierElement::PointerEvent { on_pre_ptr: Some(handler), .. } = el {
                 if handler(&ev) { return true; }
             }
         }
@@ -622,7 +622,7 @@ fn dispatch_ptr_event(
         let mut ev = event.clone();
         ev.position = (local_x, local_y);
         for el in node.modifier.elements() {
-            if let crate::modifier::ModifierElement::PtrEvent { on_ptr: Some(handler), .. } = el {
+            if let crate::modifier::ModifierElement::PointerEvent { on_ptr: Some(handler), .. } = el {
                 if handler(&ev) { return true; }
             }
         }
