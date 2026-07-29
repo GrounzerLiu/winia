@@ -319,22 +319,28 @@ impl ApplicationHandler for AppState {
                     if pw.pointer_down_state.is_some() {
                         if let Some(innermost) = path.last() {
                             let down = pw.pointer_down_state.as_ref().unwrap();
-                            let has_para = innermost.cached_paragraph.try_borrow().map(|b| b.is_some()).ok().unwrap_or(false);
-                            eprintln!("[selection] drag innermost={} has_para={}", innermost.id, has_para);
                             let dx = scene_pos.0 - down.position.0;
                             let dy = scene_pos.1 - down.position.1;
                             const CLICK_SLOP: f32 = 18.0;
                             if (dx*dx + dy*dy).sqrt() > CLICK_SLOP {
-                                // 计算节点的绝对位置
                                 let (abs_x, abs_y) = node_abs_position(root, innermost.id);
                                 if let Ok(borrow) = innermost.cached_paragraph.try_borrow() {
                                     if let Some(para) = borrow.as_ref() {
-                                        if let Some(gc) = para.get_closest_glyph_cluster_at((scene_pos.0 - abs_x, scene_pos.1 - abs_y)) {
+                                        // 对齐偏移（匹配渲染侧 x_off）
+                                        let node_w = innermost.measured_size.width;
+                                        let align = innermost.modifier.align().unwrap_or(crate::ui::TextAlign::Left);
+                                        let x_off = match align {
+                                            crate::ui::TextAlign::Center => abs_x + (node_w - para.max_intrinsic_width()).max(0.0) / 2.0,
+                                            crate::ui::TextAlign::Right => abs_x + (node_w - para.max_intrinsic_width()).max(0.0),
+                                            _ => abs_x,
+                                        };
+                                        if let Some(gc) = para.get_closest_glyph_cluster_at((scene_pos.0 - x_off, scene_pos.1 - abs_y)) {
                                             let reg = pw.composer.selection_registrar.as_ref()
                                                 .cloned()
                                                 .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
                                             let s = gc.text_range.start.min(gc.text_range.end);
                                             let e = gc.text_range.start.max(gc.text_range.end);
+                                            eprintln!("[selection] set node={} range={}..{}", innermost.id, s, e);
                                             reg.set_selection(innermost.id, s, e);
                                         }
                                     }
@@ -353,6 +359,10 @@ impl ApplicationHandler for AppState {
                         is_meta_pressed: self.modifiers.meta_key(),
                     };
                     dispatch_ptr_event(root, &path, &ptr_ev, scene_pos, pw.pointer_down_slot);
+                    // 拖拽选区后请求重绘
+                    if pw.pointer_down_state.is_some() {
+                        if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                    }
                 }
             }
             WindowEvent::ModifiersChanged(m) => {

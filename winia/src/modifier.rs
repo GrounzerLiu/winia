@@ -693,6 +693,16 @@ impl Modifier {
         None
     }
 
+    /// 获取文本对齐方式
+    pub fn align(&self) -> Option<crate::ui::TextAlign> {
+        for el in &self.elements {
+            if let ModifierElement::TextContent { align, .. } = el {
+                return Some(*align);
+            }
+        }
+        None
+    }
+
     /// 位置偏移（如果有 Offset modifier）
     pub fn get_offset(&self) -> Option<(f32, f32)> {
         for el in &self.elements {
