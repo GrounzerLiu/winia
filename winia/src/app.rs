@@ -382,16 +382,21 @@ impl ApplicationHandler for AppState {
                                 if let Some(r) = pw.composer.layout_root_mut() {
                                     focus_next(r);
                                     pw.focused_id = crate::layout::node::get_focus_id(r);
+                                    pw.focused_slot_key = pw.focused_id.and_then(|id| crate::layout::node::find_node_by_id(r, id).map(|n| n.slot_key));
                                     handled = true;
                                 }
                             }
                         }
                         debug::DebugEvent::FocusNext => {
-                            if let Some(r) = pw.composer.layout_root_mut() { focus_next(r); pw.focused_id = crate::layout::node::get_focus_id(r); handled = true; }
+                            if let Some(r) = pw.composer.layout_root_mut() { focus_next(r); pw.focused_id = crate::layout::node::get_focus_id(r); pw.focused_slot_key = pw.focused_id.and_then(|id| crate::layout::node::find_node_by_id(r, id).map(|n| n.slot_key)); handled = true; }
                         }
                         debug::DebugEvent::RequestFocus { id } => {
                             if let Some(r) = pw.composer.layout_root_mut() {
-                                if crate::layout::node::focus_by_id(r, id) { pw.focused_id = Some(id); handled = true; }
+                                if crate::layout::node::focus_by_id(r, id) {
+                                    pw.focused_id = crate::layout::node::get_focus_id(r);
+                                    pw.focused_slot_key = pw.focused_id.and_then(|fid| crate::layout::node::find_node_by_id(r, fid).map(|n| n.slot_key));
+                                    handled = true;
+                                }
                             }
                         }
                         debug::DebugEvent::Scroll { dy, .. } => {
