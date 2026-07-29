@@ -103,7 +103,8 @@ fn resolve_base() -> Style {
 pub struct RichTextScope<'a> {
     content: &'a mut String,
     drawables: &'a mut Vec<Arc<dyn InlineDrawable>>,
-    drawable_positions: &'a mut Vec<usize>,
+    /// 占位范围列表（每个元素 = [start, end)）
+    drawable_ranges: &'a mut Vec<Range<usize>>,
     annotations: &'a mut Vec<(Style, Range<usize>)>,
     style: Style,
     cursor: usize,
@@ -143,7 +144,7 @@ impl<'a> RichTextScope<'a> {
     pub fn image(&mut self, drawable: impl Into<Arc<dyn InlineDrawable>>) {
         let pos = self.cursor;
         self.drawables.push(drawable.into());
-        self.drawable_positions.push(pos);
+        self.drawable_ranges.push(pos..pos + 1);
         self.content.push('\u{FFFC}');
         self.cursor += 1;
         if self.style.is_not_default() {
@@ -151,14 +152,15 @@ impl<'a> RichTextScope<'a> {
         }
     }
 
-    /// 占位符：`text` 写入 content（供无障碍/复制），`drawable` 作视觉替换。
+    /// 占位符：文本写入 content（不渲染），图片作视觉替换（D:\winia 风格）。
     pub fn placeholder(&mut self, text: impl Into<String>, drawable: impl Into<Arc<dyn InlineDrawable>>) {
         let pos = self.cursor;
         let t = text.into();
+        let len = t.chars().count();
         self.content.push_str(&t);
         self.drawables.push(drawable.into());
-        self.drawable_positions.push(pos);
-        self.cursor += t.chars().count();
+        self.drawable_ranges.push(pos..pos + len);
+        self.cursor += len;
         if self.style.is_not_default() {
             self.annotations.push((self.style.clone(), pos..self.cursor));
         }
@@ -352,7 +354,7 @@ impl RichText {
     pub fn build(self, ctx: &mut ComposeCtx, f: impl FnOnce(&mut RichTextScope)) {
         let mut content = String::new();
         let mut drawables: Vec<Arc<dyn InlineDrawable>> = Vec::new();
-        let mut drawable_positions: Vec<usize> = Vec::new();
+        let mut drawable_ranges: Vec<Range<usize>> = Vec::new();
         let mut annotations: Vec<(Style, Range<usize>)> = Vec::new();
         let base = resolve_base();
 
@@ -360,7 +362,7 @@ impl RichText {
             let mut scope = RichTextScope {
                 content: &mut content,
                 drawables: &mut drawables,
-                drawable_positions: &mut drawable_positions,
+                drawable_ranges: &mut drawable_ranges,
                 annotations: &mut annotations,
                 style: base,
                 cursor: 0,
@@ -369,12 +371,12 @@ impl RichText {
         }
 
         // 用 D:\winia 分裂算法解析 span
-        let spans = resolve_spans(&content, &drawable_positions, &annotations);
+        let spans = resolve_spans(&content, &drawable_ranges, &annotations);
 
         let modifier = self.modifier.push(ModifierElement::RichTextContent {
             content,
             drawables,
-            drawable_positions,
+            drawable_ranges,
             spans,
         });
         let key = ctx.next_key();
@@ -443,7 +445,7 @@ impl Seg {
     }
 }
 
-pub(crate) fn resolve_spans(content: &str, drawable_positions: &[usize], annotations: &[(Style, Range<usize>)]) -> Vec<RichSpanStyle> {
+pub(crate) fn resolve_spans(content: &str, drawable_ranges: &[Range<usize>], annotations: &[(Style, Range<usize>)]) -> Vec<RichSpanStyle> {
     let base = resolve_base();
     let d_color = base.color.unwrap_or(Color::from_argb(255, 255, 255, 255));
     let d_fs = base.fs.unwrap_or(14.0);
@@ -456,15 +458,24 @@ pub(crate) fn resolve_spans(content: &str, drawable_positions: &[usize], annotat
     let total = content.chars().count();
     let mut ci = 0usize;
     while ci < total {
-        if di < drawable_positions.len() && drawable_positions[di] == ci {
+        // 检查 ci 是否在当前 drawable 范围内
+        if di < drawable_ranges.len() && ci >= drawable_ranges[di].start && ci < drawable_ranges[di].end {
+            // 整个 drawable 范围作为一个 placeholder segment
+            let range = &drawable_ranges[di];
             let mut s = Seg::default_base(d_fs, d_color, d_fw, d_sl);
-            s.range = ci..ci+1;
+            s.range = range.start..range.end;
             s.placeholder = true;
             segs.push(s);
-            di += 1; ci += 1;
+            ci = range.end;
+            di += 1;
         } else {
             let run_start = ci;
-            while ci < total && !(di < drawable_positions.len() && drawable_positions[di] == ci) { ci += 1; }
+            while ci < total {
+                if di < drawable_ranges.len() && ci >= drawable_ranges[di].start {
+                    break;
+                }
+                ci += 1;
+            }
             let run_len = ci - run_start;
             if run_len > 0 {
                 let mut s = Seg::default_base(d_fs, d_color, d_fw, d_sl);
@@ -568,14 +579,14 @@ mod tests {
 
     struct TestCtx {
         content: String,
-        drawable_positions: Vec<usize>,
+        drawable_ranges: Vec<Range<usize>>,
         annotations: Vec<(Style, Range<usize>)>,
         cursor: usize,
     }
 
     impl TestCtx {
         fn new() -> Self {
-            TestCtx { content: String::new(), drawable_positions: Vec::new(), annotations: Vec::new(), cursor: 0 }
+            TestCtx { content: String::new(), drawable_ranges: Vec::new(), annotations: Vec::new(), cursor: 0 }
         }
 
         fn text(&mut self, s: &str, style: Style) {
@@ -589,13 +600,25 @@ mod tests {
         }
 
         fn image(&mut self) {
-            self.drawable_positions.push(self.cursor);
+            let pos = self.cursor;
+            self.drawable_ranges.push(pos..pos + 1);
             self.content.push('\u{FFFC}');
             self.cursor += 1;
         }
 
+        fn placeholder(&mut self, text: &str, style: Style) {
+            let pos = self.cursor;
+            let len = text.chars().count();
+            self.drawable_ranges.push(pos..pos + len);
+            self.content.push_str(text);
+            self.cursor += len;
+            if style.is_not_default() {
+                self.annotations.push((style, pos..self.cursor));
+            }
+        }
+
         fn spans(&self) -> Vec<RichSpanStyle> {
-            resolve_spans(&self.content, &self.drawable_positions, &self.annotations)
+            resolve_spans(&self.content, &self.drawable_ranges, &self.annotations)
         }
     }
 
@@ -741,14 +764,13 @@ mod tests {
         ctx.image();              // pos 3
         ctx.text("C", Style::default());
 
-        assert_eq!(ctx.drawable_positions, vec![1, 3], "drawable indices");
+        assert_eq!(ctx.drawable_ranges, vec![1..2, 3..4], "drawable indices");
         assert_eq!(ctx.content.chars().nth(1).unwrap(), '\u{FFFC}');
         assert_eq!(ctx.content.chars().nth(3).unwrap(), '\u{FFFC}');
         // spans 不应包含占位位置
         let spans = ctx.spans();
-        for s in &spans {
-            assert!(!(1..2).contains(&s.start), "placeholder pos 1 leaked into span");
-            assert!(!(3..4).contains(&s.start), "placeholder pos 3 leaked into span");
+        for &Range { start, .. } in &ctx.drawable_ranges {
+            assert!(spans.iter().all(|s| s.start != start), "placeholder leaked");
         }
     }
 
@@ -758,7 +780,7 @@ mod tests {
         let mut ctx = TestCtx::new();
         ctx.image();              // pos 0
         ctx.text("Text", Style::default());
-        assert_eq!(ctx.drawable_positions, vec![0]);
+        assert_eq!(ctx.drawable_ranges, vec![0..1]);
         let spans = ctx.spans();
         // spans 从 pos 1 开始
         assert!(spans.iter().all(|s| s.start >= 1), "no span should cover drawable position");
@@ -770,7 +792,7 @@ mod tests {
         let mut ctx = TestCtx::new();
         ctx.image(); ctx.image(); ctx.image();
         ctx.text("After", Style::default());
-        assert_eq!(ctx.drawable_positions, vec![0, 1, 2]);
+        assert_eq!(ctx.drawable_ranges, vec![0..1, 1..2, 2..3]);
         let spans = ctx.spans();
         // 只有一个 text segment 从 pos 3 开始
         assert_eq!(spans.len(), 1);
@@ -851,5 +873,117 @@ mod tests {
         assert!(spans[0].font_weight != FontWeight::NORMAL, "bold");
         assert!(spans[0].underline, "underline");
         assert!((spans[0].font_size - 20.0).abs() < 0.001, "font size");
+    }
+
+    // ────────────────────────────────────────────────────────────
+    // image() / placeholder() 测试
+    // ────────────────────────────────────────────────────────────
+
+    // image: content 含 U+FFFC，drawable_positions 正确
+    #[test]
+    fn test_image_inserts_fffc() {
+        let mut ctx = TestCtx::new();
+        ctx.text("A", Style::default());
+        ctx.image();                     // pos 1
+        ctx.text("C", Style::default());
+        assert_eq!(ctx.content, "A\u{FFFC}C");
+        assert_eq!(ctx.drawable_ranges, vec![1..2]);
+        // spans 不应包含占位位置
+        for s in &ctx.spans() {
+            assert!(!(1..2).contains(&s.start));
+        }
+    }
+
+    // image 连续多个
+    #[test]
+    fn test_image_consecutive() {
+        let mut ctx = TestCtx::new();
+        ctx.image();
+        ctx.image();
+        ctx.image();
+        ctx.text("T", Style::default());
+        assert_eq!(ctx.drawable_ranges, vec![0..1, 1..2, 2..3]);
+        assert_eq!(ctx.content, "\u{FFFC}\u{FFFC}\u{FFFC}T");
+        let spans = ctx.spans();
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].start, 3);
+    }
+
+    // image 在样式作用域内
+    #[test]
+    fn test_image_with_style() {
+        let mut ctx = TestCtx::new();
+        ctx.text("B", Style::b());
+        ctx.image();                     // pos 1 (bold 应覆盖)
+        // 注意：image() 不推 annotation，但之前的 bold 已被 text() 提交
+        // image 位置的 span 应保持 bold 之前的文本属性
+        // 验证点：image 不产生 text span，但前后 text 正确
+        let spans = ctx.spans();
+        let bold = spans.iter().find(|s| s.font_weight != FontWeight::NORMAL);
+        assert!(bold.is_some(), "bold from preceding text");
+    }
+
+    // placeholder: 文本入 content，位置标记为占位
+    #[test]
+    fn test_placeholder_text_in_content() {
+        let mut ctx = TestCtx::new();
+        ctx.text("Hello ", Style::default());
+        ctx.placeholder("★", Style::default());
+        ctx.text(" World", Style::default());
+        // content 必须包含 placeholder 文本
+        assert_eq!(ctx.content, "Hello ★ World");
+        assert_eq!(ctx.drawable_ranges, vec![6..7]);
+        // spans 应包含 "Hello " 和 " World"，不包含 ★ 位置
+        let spans = ctx.spans();
+        for s in &spans {
+            assert!(!(6..7).contains(&s.start), "placeholder leaked");
+        }
+    }
+
+    // placeholder 带样式
+    #[test]
+    fn test_placeholder_with_style() {
+        let mut ctx = TestCtx::new();
+        ctx.text("A", Style::default());
+        ctx.placeholder("ico", Style::b());  // bold
+        ctx.text("B", Style::default());
+        // "ico" 在 content 中，bold annotation 覆盖 1..4
+        // placeholder 段继承 bold 样式，但过滤后不出现为 text span
+        let spans = ctx.spans();
+        let bold_span = spans.iter().find(|s| s.font_weight != FontWeight::NORMAL);
+        // 没有可见 bold span（placeholder 整个范围被替换）
+        assert!(bold_span.is_none(), "placeholder text should not appear as visible span");
+        // content 仍保留文本
+        assert_eq!(ctx.content, "AicoB");
+        assert_eq!(ctx.drawable_ranges, vec![1..4]);
+    }
+
+    // image + placeholder 混合
+    #[test]
+    fn test_image_and_placeholder_mixed() {
+        let mut ctx = TestCtx::new();
+        ctx.text("S", Style::default());
+        ctx.image();                     // pos 1, content 加 FFFC
+        ctx.placeholder("mid", Style::default());  // pos 2, content 加 "mid"
+        ctx.image();                     // pos 5, content 加 FFFC
+        ctx.text("E", Style::default());
+        assert_eq!(ctx.content, "S\u{FFFC}mid\u{FFFC}E");
+        assert_eq!(ctx.drawable_ranges, vec![1..2, 2..5, 5..6]);
+    }
+
+    // placeholder + image 都不影响纯文本区间
+    #[test]
+    fn test_placeholder_preserves_surrounding_text() {
+        let mut ctx = TestCtx::new();
+        ctx.text("before", Style::default());
+        ctx.placeholder("X", Style::default());
+        ctx.text("after", Style::default());
+        let spans = ctx.spans();
+        // 应该有 "before" 和 "after" 两个 text spans（无样式，但不为空）
+        assert!(spans.len() >= 2, "should have text before and after");
+        let before = spans.iter().find(|s| s.start == 0 && s.end == 6);
+        let after = spans.iter().find(|s| s.start == 7 && s.end == 12);
+        assert!(before.is_some(), "before text exists");
+        assert!(after.is_some(), "after text exists");
     }
 }

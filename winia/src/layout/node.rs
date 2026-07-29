@@ -736,54 +736,51 @@ fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> Size {
     let fc = crate::font::get_font_collection();
 
     for el in node.modifier.elements() {
-        if let ModifierElement::RichTextContent { content, drawables, drawable_positions, spans } = el {
+        if let ModifierElement::RichTextContent { content, drawables, drawable_ranges, spans } = el {
             let para_style = ParagraphStyle::new();
             let mut builder = skia_safe::textlayout::ParagraphBuilder::new(&para_style, &fc);
 
-            // 按 span 迭代：每个 span 有明确的 [start,end) 范围
+            // 按 span 迭代 + drawable 范围
             let chars: Vec<char> = content.chars().collect();
             let mut di = 0usize;
             let mut span_idx = 0usize;
-            // 处理 spans 之前 / 之间的非覆盖文本（无样式）+ 占位符
             let total = chars.len();
             let mut ci = 0usize;
             while ci < total {
-                // 当前 span
+                // 是否在 drawable 范围内
+                if di < drawable_ranges.len() && ci >= drawable_ranges[di].start && ci < drawable_ranges[di].end {
+                    // 占位符（只对范围起点做一次 add_placeholder，跳过剩余字符）
+                    if ci == drawable_ranges[di].start {
+                        if let Some(s) = spans.iter().find(|s| s.start <= ci && s.end > ci) {
+                            builder.push_style(&to_sktextstyle(s));
+                        }
+                        let (w, h) = drawables[di].size();
+                        let ph = PlaceholderStyle::new(w, h, PlaceholderAlignment::Bottom, TextBaseline::Alphabetic, 0.0);
+                        builder.add_placeholder(&ph);
+                        if let Some(s) = spans.iter().find(|s| s.start <= ci && s.end > ci) { builder.pop(); }
+                    }
+                    ci += 1;
+                    if ci >= drawable_ranges[di].end { di += 1; }
+                    continue;
+                }
+
+                // 文本：先查 span
                 while span_idx < spans.len() && spans[span_idx].end <= ci { span_idx += 1; }
                 if span_idx < spans.len() && spans[span_idx].start <= ci && ci < spans[span_idx].end {
-                    // 在这个 span 范围内：累积连续文本后 push_style + add_text
                     let run_end = spans[span_idx].end.min(total);
-                    // 如果 run_end 之前有占位符，停在占位符前
-                    let mut cut = run_end;
-                    if di < drawable_positions.len() && drawable_positions[di] > ci && drawable_positions[di] < cut {
-                        cut = drawable_positions[di];
-                    }
-                    let text: String = chars[ci..cut].iter().collect();
+                    let text: String = chars[ci..run_end].iter().collect();
                     if !text.is_empty() {
                         builder.push_style(&to_sktextstyle(&spans[span_idx]));
                         builder.add_text(&text);
                         builder.pop();
                     }
-                    ci = cut;
+                    ci = run_end;
                     continue;
                 }
 
-                // 不在 span 范围内：占位符 或 无样式文本
-                if di < drawable_positions.len() && drawable_positions[di] == ci {
-                    // 占位符
-                    if let Some(s) = spans.iter().find(|s| s.start <= ci && s.end > ci) {
-                        builder.push_style(&to_sktextstyle(s));
-                    }
-                    let (w, h) = drawables[di].size();
-                    let ph = PlaceholderStyle::new(w, h, PlaceholderAlignment::Bottom, TextBaseline::Alphabetic, 0.0);
-                    builder.add_placeholder(&ph);
-                    if let Some(s) = spans.iter().find(|s| s.start <= ci && s.end > ci) { builder.pop(); }
-                    di += 1; ci += 1;
-                } else {
-                    // 无样式文本
-                    builder.add_text(&chars[ci].to_string());
-                    ci += 1;
-                }
+                // 无样式文本
+                builder.add_text(&chars[ci].to_string());
+                ci += 1;
             }
 
             let mut para = builder.build();

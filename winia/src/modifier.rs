@@ -7,6 +7,7 @@
 //! - 通过 `ModifierNode` trait + `Custom` 变体支持外部扩展
 
 use std::sync::Arc;
+use std::ops::Range;
 use std::fmt::{self, Debug};
 use std::any::Any;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -186,8 +187,8 @@ pub(crate) enum ModifierElement {
     RichTextContent {
         content: String,
         drawables: Vec<std::sync::Arc<dyn crate::text::InlineDrawable>>,
-        /// 内联元素在 content 中的字符索引
-        drawable_positions: Vec<usize>,
+        /// 内联元素在 content 中的字符范围（长度 > 1 表示多字符占位符）
+        drawable_ranges: Vec<Range<usize>>,
         /// 已解析的样式范围列表
         spans: Vec<RichSpanStyle>,
     },
@@ -612,10 +613,10 @@ impl Debug for ModifierElement {
                 .field("content", content)
                 .field("font_size", font_size)
                 .finish(),
-            Self::RichTextContent { content, drawable_positions, .. } => f
+            Self::RichTextContent { content, drawable_ranges, .. } => f
                 .debug_struct("RichTextContent")
                 .field("content", content)
-                .field("drawables", &format_args!("{} drawables", drawable_positions.len()))
+                .field("drawables", &format_args!("{} drawables", drawable_ranges.len()))
                 .finish(),
             Self::Clickable { .. } => f.write_str("Clickable(<fn>)"),
             Self::Focusable => f.write_str("Focusable"),
