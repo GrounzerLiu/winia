@@ -271,6 +271,8 @@ impl ApplicationHandler for AppState {
                                     .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
                                 let seg = reg.segment_info(innermost.slot_key);
                                 let global_a = seg.map(|(off,_)| off + a).unwrap_or(a);
+                                // 将 anchor 存为全局索引
+                                pw.pointer_down_state.as_mut().map(|s| s.selection_anchor = Some(global_a));
                                 reg.set_selection(global_a, global_a + 1);
                             }
                         }
@@ -361,9 +363,8 @@ impl ApplicationHandler for AppState {
                                             let current = gc.text_range.start;
                                             let seg = reg.segment_info(innermost.slot_key);
                                             let global_off = seg.map(|(off,_)| off).unwrap_or(0);
-                                            let anchor_local = pw.pointer_down_state.as_ref().and_then(|d| d.selection_anchor);
-                                            let anchor_global = anchor_local.map(|a| global_off + a);
                                             let current_global = global_off + current;
+                                            let anchor_global = pw.pointer_down_state.as_ref().and_then(|d| d.selection_anchor);
                                             let s = anchor_global.map(|a| a.min(current_global)).unwrap_or(current_global);
                                             let e = anchor_global.map(|a| a.max(current_global)).unwrap_or(current_global + 1);
                                             eprintln!("[selection] set global range={}..{}", s, e);
