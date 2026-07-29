@@ -251,7 +251,6 @@ impl ApplicationHandler for AppState {
                                 position: scene_pos,
                                 time: Instant::now(),
                             });
-                            pw.pointer_down_slot = Some(innermost.slot_key); eprintln!("[ptr] DOWN set capture slot={}", innermost.slot_key);
                         }
                     }
                 } else {
@@ -297,7 +296,6 @@ impl ApplicationHandler for AppState {
                 }
                 // Up 后清除 capture（已经分发完 Up 事件）
                 if !state.is_pressed() {
-                    eprintln!("[ptr] UP clear capture");
                     pw.pointer_down_slot = None;
                 }
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
@@ -662,7 +660,6 @@ fn dispatch_ptr_event(
     captured_id: Option<u64>,
 ) -> bool {
     if captured_id.is_some() {
-        eprintln!("[ptr] dispatch event_type={:?} captured_id={:?}", event.event_type, captured_id);
     }
     // 如果指针被一个节点捕获（Down 后未释放），用 root 查找节点并构建祖先链
     let captured_path: Vec<&LayoutNode> = if let Some(cid) = captured_id {
@@ -677,10 +674,8 @@ fn dispatch_ptr_event(
                 } else { break; }
             }
             ancestors.reverse(); // root → ... → captured
-            if ancestors.is_empty() { eprintln!("[ptr] captured empty after reverse!"); }
             ancestors
         } else {
-            eprintln!("[ptr] capture slot={} no matching node in tree!", cid);
             path.to_vec()
         }
     } else { path.to_vec() };
@@ -702,7 +697,6 @@ fn dispatch_ptr_event(
         ev.position = (local_x, local_y);
         for el in node.modifier.elements() {
             if let crate::modifier::ModifierElement::PointerEvent { on_pre_ptr: Some(handler), .. } = el {
-                if handler(&ev) { eprintln!("[ptr] outer→inner node={} consumed", i); return true; }
             }
         }
     }
@@ -713,10 +707,8 @@ fn dispatch_ptr_event(
         let local_y = scene_pos.1 - abs_positions[i].1;
         let mut ev = event.clone();
         ev.position = (local_x, local_y);
-        eprintln!("[ptr] inner→outer check node idx={}", i);
         for el in node.modifier.elements() {
             if let crate::modifier::ModifierElement::PointerEvent { on_ptr: Some(handler), .. } = el {
-                if handler(&ev) { eprintln!("[ptr] inner→outer node={} consumed", i); return true; }
             }
         }
     }
