@@ -151,7 +151,8 @@ impl<'a> RichTextScope<'a> {
         }
     }
 
-    /// 将文本范围标记为图片占位符。范围中的字符在渲染时被 `drawable` 替换。
+    /// D:\winia 风格：将文本范围标记为图片占位符。
+    /// 适用于「先有文本字符串，再注解范围」的模式。
     pub fn placeholder(&mut self, range: Range<usize>, drawable: impl Into<Arc<dyn InlineDrawable>>) {
         if range.end <= range.start { return; }
         self.drawables.push(drawable.into());
