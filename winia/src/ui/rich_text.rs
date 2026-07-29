@@ -151,14 +151,16 @@ impl<'a> RichTextScope<'a> {
         }
     }
 
-    /// D:\winia 风格：将文本范围标记为图片占位符。
-    /// 适用于「先有文本字符串，再注解范围」的模式。
-    pub fn placeholder(&mut self, range: Range<usize>, drawable: impl Into<Arc<dyn InlineDrawable>>) {
-        if range.end <= range.start { return; }
+    /// 占位符：`text` 写入 content（供无障碍/复制），`drawable` 作视觉替换。
+    pub fn placeholder(&mut self, text: impl Into<String>, drawable: impl Into<Arc<dyn InlineDrawable>>) {
+        let pos = self.cursor;
+        let t = text.into();
+        self.content.push_str(&t);
         self.drawables.push(drawable.into());
-        self.drawable_positions.push(range.start);
+        self.drawable_positions.push(pos);
+        self.cursor += t.chars().count();
         if self.style.is_not_default() {
-            self.annotations.push((self.style.clone(), range));
+            self.annotations.push((self.style.clone(), pos..self.cursor));
         }
     }
 
