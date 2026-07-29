@@ -17,13 +17,11 @@ pub(crate) struct PendingWindow {
 }
 use skiwin::{SkiaWindowTrait, vulkan::VulkanSkiaWindow};
 use std::collections::HashMap;
-use crate::modifier::ModifierElement;
 use std::sync::Arc;
 use std::sync::Mutex;
 use winit::application::ApplicationHandler;use winit::event::{StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
-use winit::keyboard::ModifiersState;
 use winit::window::WindowId;
 
 // ── PerWindow ──
@@ -38,13 +36,11 @@ pub(crate) struct PerWindow {
     pub(crate) on_close: Option<Box<dyn FnMut() + Send>>,
     pub(crate) created_id: Option<u64>,
     theme: crate::ui::theme::ThemeColors,
-    /// 当前活动的选区注册表（由 SelectionContainer 在 compose 时设置）
-    pub(crate) selection_registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
 }
 
 impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::ui::theme::ThemeColors) -> Self {
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, selection_registrar: None }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -62,7 +58,7 @@ impl PerWindow {
             }
             // 如果在 compose 期间又有新 notify 入队，需要再处理一次
             if !did_compose && !self.composer.has_pending_states() {
-                
+                break;
             }
         }
         self.composer.layout(Constraints::new(0.0, self.width, 0.0, self.height));
@@ -97,8 +93,6 @@ struct AppState {
     parent_window_id: Option<WindowId>,
     /// 初始化回调（仅首次调用，用于声明式创建主窗口）
     init: Option<Box<dyn FnOnce(&mut ComposeCtx)>>,
-    /// 窗口全局修饰键状态（由 ModifiersChanged 更新）
-    modifiers: winit::keyboard::ModifiersState,
 }
 
 impl ApplicationHandler for AppState {
@@ -204,52 +198,10 @@ impl ApplicationHandler for AppState {
                 if let Some(root) = pw.composer.layout_root() {
                     let mut handled = false;
                     for node in hit_test(root, lp.x, lp.y).iter().rev() {
-                        if handled {  }
+                        if handled { break; }
                         if let Some(on_click) = node.modifier.on_click() {
                             on_click();
                             handled = true;
-                        }
-                    }
-                    // 文本选中：点击在 Text 节点上且 SelectionRegistrar 存在
-                    if !handled {
-                        eprintln!("[sel] checking selection...");
-                        if let Some(reg) = pw.composer.selection_registrar.clone() {
-                            eprintln!("[sel] registrar found, computing position");
-                            let path = hit_test(root, lp.x, lp.y);
-                            eprintln!("[sel] hit path len={}", path.len());
-                            // 计算点击节点的绝对位置
-                            let abs_x: f32 = path.iter().map(|n| n.position.x).sum();
-                            let abs_y: f32 = path.iter().map(|n| n.position.y).sum();
-                            for node in path.iter().rev() {
-                                if node.has_text_content || node.has_richtext_content {
-                                    eprintln!("[sel] text node at abs=({},{})", abs_x, abs_y);
-                                    let local_x = lp.x - abs_x;
-                                    let local_y = lp.y - abs_y;
-                                    eprintln!("[sel] local=({},{})", local_x, local_y);
-                                    match node.cached_paragraph.try_borrow_mut() {
-                                        Ok(mut para_ref) => {
-                                            if let Some(para) = para_ref.as_mut() {
-                                                eprintln!("[sel] got paragraph");
-                                                if let Some(gc) = para.get_closest_glyph_cluster_at((local_x, local_y)) {
-                                                    eprintln!("[sel] char_index={}", gc.text_range.start);
-                                                    reg.set_selection(node.id, gc.text_range.start, gc.text_range.start + 1);
-                                                    handled = true;
-                                                } else {
-                                                    eprintln!("[sel] get_closest_glyph returned None");
-                                                }
-                                            } else {
-                                                eprintln!("[sel] paragraph is None");
-                                            }
-                                        },
-                                        Err(e) => {
-                                            eprintln!("[sel] borrow_mut failed: {:?}", e);
-                                        }
-                                    }
-                                    break;
-                                }
-                            }
-                        } else {
-                            eprintln!("[sel] no registrar");
                         }
                     }
                     eprintln!("[click] handled={} pos=({:.0},{:.0})", handled, lp.x, lp.y);
@@ -263,27 +215,7 @@ impl ApplicationHandler for AppState {
                 }
                 if let Some(ref proxy) = *APP_PROXY.lock().unwrap() { let _ = proxy.wake_up(); }
             }
-            WindowEvent::ModifiersChanged(m) => {
-                self.modifiers = m.state();
-            }
             WindowEvent::KeyboardInput { event, .. } if event.state.is_pressed() => {
-                // 构建 KeyEvent 并分发到焦点节点
-                let ke = crate::core::key::KeyEvent {
-                    key: event.logical_key.clone(),
-                    event_type: crate::core::key::KeyEventType::KeyDown,
-                    is_alt_pressed: self.modifiers.alt_key(),
-                    is_ctrl_pressed: self.modifiers.control_key(),
-                    is_shift_pressed: self.modifiers.shift_key(),
-                    is_meta_pressed: false,
-                };
-                if let Some(root) = pw.composer.layout_root_mut() {
-                    if dispatch_key_event(root, pw.focused_id, &ke) {
-                        if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
-                        event_loop.set_control_flow(ControlFlow::Poll);
-                        
-                    }
-                }
-                // Tab 切换焦点（默认行为）
                 if matches!(&event.logical_key, Key::Named(NamedKey::Tab)) {
                     if let Some(root) = pw.composer.layout_root_mut() {
                         focus_next(root);
@@ -343,35 +275,12 @@ impl ApplicationHandler for AppState {
                                 let mut click_handled = false;
                                 eprintln!("[debug-click] pos=({:.0},{:.0}) path_len={} sf={}", x, y, nodes.len(), pw.scale_factor);
                                 for node in nodes.iter().rev() {
-                                    if click_handled {  }
+                                    if click_handled { break; }
                                     if let Some(on_click) = node.modifier.on_click() {
                                         on_click();
                                         handled = true;
                                         click_handled = true;
                                     }
-                                }
-                                // debug 点击也尝试选中
-                                if !click_handled {
-                                    if let Some(reg) = pw.composer.selection_registrar.clone() {
-                                        let abs_x: f32 = nodes.iter().map(|n| n.position.x).sum();
-                                        let abs_y: f32 = nodes.iter().map(|n| n.position.y).sum();
-                                        for node in nodes.iter().rev() {
-                                            if node.has_text_content || node.has_richtext_content {
-                                                let local_x = x - abs_x;
-                                                let local_y = y - abs_y;
-                                                if let Ok(mut borrow) = node.cached_paragraph.try_borrow_mut() {
-                                                    if let Some(para) = borrow.as_mut() {
-                                                        if let Some(gc) = para.get_closest_glyph_cluster_at((local_x, local_y)) {
-                                                            reg.set_selection(node.id, gc.text_range.start, gc.text_range.start + 1);
-                                                            handled = true;
-                                                            click_handled = true;
-                                                        }
-                                                    }
-                                                }
-                                                break;
-                                        }
-                                    }
-                                }
                                 }
                                 eprintln!("[debug-click] handled={} pos=({:.0},{:.0})", click_handled, x, y);
                             }
@@ -543,57 +452,6 @@ fn apply_scroll_delta(node: &mut LayoutNode, dy: f32) -> bool {
     false
 }
 
-// ── 键盘事件分发（对齐 Compose onKeyEvent / onPreviewKeyEvent）──
-
-/// 从根节点查找 ID 为 `focused_id` 的节点及其到根的路径。
-fn find_focused_path<'a>(root: &'a LayoutNode, focused_id: u64) -> Vec<&'a LayoutNode> {
-    fn dfs<'a>(node: &'a LayoutNode, id: u64, path: &mut Vec<&'a LayoutNode>) -> bool {
-        if node.id == id { path.push(node); return true; }
-        for child in &node.children {
-            if dfs(child, id, path) { path.push(node); return true; }
-        }
-        false
-    }
-    let mut path = Vec::new();
-    dfs(root, focused_id, &mut path);
-    path.reverse(); // 根 → 焦点
-    path
-}
-
-/// 分发键盘事件到焦点节点链。
-/// 返回 true 表示事件已被消费。
-pub(crate) fn dispatch_key_event(
-    root: &mut LayoutNode,
-    focused_id: Option<u64>,
-    event: &crate::core::key::KeyEvent,
-) -> bool {
-    let Some(fid) = focused_id else { return false; };
-
-    // 收集焦点路径
-    let path = find_focused_path(root, fid);
-    if path.is_empty() { return false; }
-
-    // onPreviewKeyEvent：从根 → 焦点（向下传递，可中途拦截）
-    for &node in &path {
-        for el in node.modifier.elements() {
-            if let ModifierElement::KeyEvent { on_pre_key: Some(handler), .. } = el {
-                if handler(event) { return true; }
-            }
-        }
-    }
-
-    // onKeyEvent：从焦点 → 根（向上冒泡）
-    for &node in path.iter().rev() {
-        for el in node.modifier.elements() {
-            if let ModifierElement::KeyEvent { on_key: Some(handler), .. } = el {
-                if handler(event) { return true; }
-            }
-        }
-    }
-
-    false
-}
-
 pub fn run_app(app: impl FnOnce(&mut ComposeCtx) + 'static) {
     let event_loop = EventLoop::new().expect("event loop");
     let proxy = event_loop.create_proxy();
@@ -608,7 +466,6 @@ pub fn run_app(app: impl FnOnce(&mut ComposeCtx) + 'static) {
         windows: HashMap::new(),
         pending_content: Vec::new(),
         parent_window_id: None,
-        modifiers: Default::default(),
     };
     event_loop.run_app(state).expect("run_app");
     debug::force_shutdown();

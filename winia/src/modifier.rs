@@ -200,11 +200,6 @@ pub(crate) enum ModifierElement {
     Focusable,
     /// 焦点请求器 ID（与 FocusRequester 关联）
     FocusRequesterId { id: u64 },
-    /// 键盘事件（对齐 Compose onKeyEvent / onPreviewKeyEvent）
-    KeyEvent {
-        on_key: Option<Arc<dyn Fn(&crate::core::key::KeyEvent) -> bool + Send + Sync>>,
-        on_pre_key: Option<Arc<dyn Fn(&crate::core::key::KeyEvent) -> bool + Send + Sync>>,
-    },
     /// 垂直滚动（绑定偏移 State）
     VerticalScroll { state: crate::core::state::State<f32> },
     /// 水平滚动
@@ -625,7 +620,6 @@ impl Debug for ModifierElement {
                 .finish(),
             Self::Clickable { .. } => f.write_str("Clickable(<fn>)"),
             Self::Focusable => f.write_str("Focusable"),
-            Self::KeyEvent { .. } => f.write_str("KeyEvent"),
             Self::FocusRequesterId { id } => f.debug_tuple("FocusRequesterId").field(id).finish(),
             Self::VerticalScroll { .. } => f.write_str("VerticalScroll(<state>)"),
             Self::HorizontalScroll { .. } => f.write_str("HorizontalScroll(<state>)"),
@@ -663,7 +657,6 @@ impl ModifierElement {
             | ModifierElement::FocusRequesterId { .. }
             | ModifierElement::VerticalScroll { .. }
             | ModifierElement::HorizontalScroll { .. } => ElementCategory::Input,
-            | ModifierElement::KeyEvent { .. } => ElementCategory::Input,
 
             ModifierElement::TextContent { .. }
             | ModifierElement::RichTextContent { .. } => ElementCategory::Content,
