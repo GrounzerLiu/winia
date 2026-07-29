@@ -251,7 +251,7 @@ impl ApplicationHandler for AppState {
                                 position: scene_pos,
                                 time: Instant::now(),
                             });
-                            pw.pointer_down_id = Some(innermost.id);
+                            pw.pointer_down_id = Some(innermost.id); eprintln!("[ptr] DOWN set capture id={}", innermost.id);
                         }
                     }
                 } else {
@@ -297,6 +297,7 @@ impl ApplicationHandler for AppState {
                 }
                 // Up 后清除 capture（已经分发完 Up 事件）
                 if !state.is_pressed() {
+                    eprintln!("[ptr] UP clear capture");
                     pw.pointer_down_id = None;
                 }
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
@@ -660,8 +661,11 @@ fn dispatch_ptr_event(
     scene_pos: (f32, f32),
     captured_id: Option<u64>,
 ) -> bool {
+    if captured_id.is_some() {
+        eprintln!("[ptr] dispatch event_type={:?} captured_id={:?}", event.event_type, captured_id);
+    }
     // 如果指针被一个节点捕获（Down 后未释放），用 root 查找节点并构建祖先链
-    let use_path: Vec<&LayoutNode> = if let Some(cid) = captured_id {
+    let captured_path: Vec<&LayoutNode> = if let Some(cid) = captured_id {
         let mut ancestors: Vec<&LayoutNode> = Vec::new();
         if let Some(node) = crate::layout::node::find_node_by_id(root, cid) {
             ancestors.push(node);
@@ -673,9 +677,14 @@ fn dispatch_ptr_event(
                 } else { break; }
             }
             ancestors.reverse(); // root → ... → captured
+            if ancestors.is_empty() { eprintln!("[ptr] captured empty after reverse!"); }
             ancestors
-        } else { path.to_vec() }
+        } else {
+            eprintln!("[ptr] captured_id={} NOT FOUND in tree!", cid);
+            path.to_vec()
+        }
     } else { path.to_vec() };
+    let use_path = &captured_path;
     // 计算路径累积偏移（每个节点的 position 是相对于父节点的偏移）
     let mut abs_x = 0.0f32;
     let mut abs_y = 0.0f32;
