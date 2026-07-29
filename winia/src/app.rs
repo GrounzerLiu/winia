@@ -3,7 +3,7 @@
 use crate::core::composer::{ComposeCtx, Composer};
 use crate::debug;
 use crate::layout::constraints::Constraints;
-use crate::layout::node::{hit_test, focus_next, LayoutNode};
+use crate::layout::node::{hit_test, focus_next, focus_prev, LayoutNode};
 use crate::modifier::Dimension;
 use crate::render;
 pub(crate) struct PendingWindow {
@@ -242,57 +242,67 @@ impl ApplicationHandler for AppState {
                     is_ctrl_pressed: self.modifiers.control_key(),
                     is_shift_pressed: self.modifiers.shift_key(),
                     is_meta_pressed: self.modifiers.meta_key(),
+                    repeat: event.repeat,
                 };
+                let mut consumed = false;
                 // 分发到焦点节点
                 if let Some(fid) = pw.focused_id {
                     if let Some(root) = pw.composer.layout_root() {
                         let path = focused_path(root, fid);
-                        // onPreviewKeyEvent：根 → 焦点（向下），已消费即停止
+                        // onPreviewKeyEvent：根 → 焦点（向下），消费后不进入冒泡
                         'preview: for &node in &path {
                             for el in node.modifier.elements() {
                                 if let crate::modifier::ModifierElement::KbEvent { on_pre_key: Some(handler), .. } = el {
                                     if handler(&ke) {
-                                        if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
-                                        event_loop.set_control_flow(ControlFlow::Poll);
+                                        consumed = true;
                                         break 'preview;
                                     }
                                 }
                             }
                         }
-                        // onKeyEvent：焦点 → 根（向上冒泡），已消费即停止
-                        'bubble: for &node in path.iter().rev() {
-                            for el in node.modifier.elements() {
-                                if let crate::modifier::ModifierElement::KbEvent { on_key: Some(handler), .. } = el {
-                                    if handler(&ke) {
-                                        if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
-                                        event_loop.set_control_flow(ControlFlow::Poll);
-                                        break 'bubble;
+                        if !consumed {
+                            // onKeyEvent：焦点 → 根（向上冒泡）
+                            'bubble: for &node in path.iter().rev() {
+                                for el in node.modifier.elements() {
+                                    if let crate::modifier::ModifierElement::KbEvent { on_key: Some(handler), .. } = el {
+                                        if handler(&ke) {
+                                            consumed = true;
+                                            break 'bubble;
+                                        }
                                     }
                                 }
                             }
                         }
                     }
                 }
-                if matches!(&event.logical_key, Key::Named(NamedKey::Escape)) {
-                    if pw.focused_id.is_some() {
-                        pw.composer.layout_root_mut().map(|root| crate::layout::node::clear_focus(root));
-                        pw.focused_id = None;
-                        pw.focused_slot_key = None;
+                if consumed {
+                    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                    event_loop.set_control_flow(ControlFlow::Poll);
+                }
+                // 默认按键处理（仅当事件未被消费时）
+                if !consumed {
+                    if matches!(&event.logical_key, Key::Named(NamedKey::Escape)) {
+                        if pw.focused_id.is_some() {
+                            pw.composer.layout_root_mut().map(|root| crate::layout::node::clear_focus(root));
+                            pw.focused_id = None;
+                            pw.focused_slot_key = None;
+                            if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                            event_loop.set_control_flow(ControlFlow::Poll);
+                        }
+                    }
+                    if matches!(&event.logical_key, Key::Named(NamedKey::Tab)) {
+                        let shift = self.modifiers.shift_key();
+                        let (new_id, new_slot) = pw.composer.layout_root_mut().map(|root| {
+                            if shift { focus_prev(root); } else { focus_next(root); }
+                            let id = crate::layout::node::get_focus_id(root);
+                            let slot = id.and_then(|fid| crate::layout::node::find_node_by_id(root, fid).map(|n| n.slot_key));
+                            (id, slot)
+                        }).unwrap_or((None, None));
+                        pw.focused_id = new_id;
+                        pw.focused_slot_key = new_slot;
                         if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                         event_loop.set_control_flow(ControlFlow::Poll);
                     }
-                }
-                if matches!(&event.logical_key, Key::Named(NamedKey::Tab)) {
-                    let (new_id, new_slot) = pw.composer.layout_root_mut().map(|root| {
-                        focus_next(root);
-                        let id = crate::layout::node::get_focus_id(root);
-                        let slot = id.and_then(|fid| crate::layout::node::find_node_by_id(root, fid).map(|n| n.slot_key));
-                        (id, slot)
-                    }).unwrap_or((None, None));
-                    pw.focused_id = new_id;
-                    pw.focused_slot_key = new_slot;
-                    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
-                    event_loop.set_control_flow(ControlFlow::Poll);
                 }
             }
             WindowEvent::SurfaceResized(s) => {

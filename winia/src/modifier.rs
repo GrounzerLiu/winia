@@ -148,6 +148,8 @@ pub struct KbEvent {
     pub is_ctrl_pressed: bool,
     pub is_shift_pressed: bool,
     pub is_meta_pressed: bool,
+    /// 是否为长按重复事件（Compose 按位处理方式，通常应忽略此字段）
+    pub repeat: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

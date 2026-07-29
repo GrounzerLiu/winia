@@ -452,6 +452,26 @@ pub fn focus_next(root: &mut LayoutNode) -> bool {
     true
 }
 
+/// 焦点移到上一个 focusable 节点（Shift+Tab）
+pub fn focus_prev(root: &mut LayoutNode) -> bool {
+    let ids: Vec<u64> = {
+        let mut ids = Vec::new();
+        collect_focusable_ids(root, &mut ids);
+        ids
+    };
+    if ids.is_empty() { return false; }
+    let current = ids.iter().position(|id| {
+        find_node_by_id(root, *id).map(|n| n.focused).unwrap_or(false)
+    });
+    let prev = match current {
+        Some(0) | None => ids.len() - 1,
+        Some(i) => i - 1,
+    };
+    clear_focus(root);
+    set_focus_by_id(root, ids[prev]);
+    true
+}
+
 pub fn clear_focus(node: &mut LayoutNode) {
     node.focused = false;
     for child in &mut node.children {
