@@ -99,6 +99,12 @@ impl SelectionRegistrar {
             .find(|s| s.slot_key == slot_key)
             .map(|s| (s.global_offset, s.text_len))
     }
+
+
+    /// 总文本长度（所有段累计）
+    pub fn total_text_len(&self) -> usize {
+        self.inner.lock().unwrap().next_global_offset
+    }
     pub fn clear_selection(&self) {
         let mut inner = self.inner.lock().unwrap();
         inner.selection_start = None;

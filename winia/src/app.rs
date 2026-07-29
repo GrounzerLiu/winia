@@ -366,15 +366,23 @@ impl ApplicationHandler for AppState {
                                             let reg = pw.composer.selection_registrar.as_ref()
                                                 .cloned()
                                                 .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
-                                            let current = gc.text_range.start;
-                                            let seg = reg.segment_info(innermost.slot_key);
-                                            let global_off = seg.map(|(off,_)| off).unwrap_or(0);
-                                            let current_global = global_off + current;
-                                            let anchor_global = pw.pointer_down_state.as_ref().and_then(|d| d.selection_anchor);
-                                            let s = anchor_global.map(|a| a.min(current_global)).unwrap_or(current_global);
-                                            let e = anchor_global.map(|a| a.max(current_global)).unwrap_or(current_global + 1);
-                                            eprintln!("[selection] set global range={}..{}", s, e);
-                                            reg.set_selection(s, e);
+                                            // 只更新注册到 SelectionContainer 的节点
+                                            if let Some((global_off, _)) = reg.segment_info(innermost.slot_key) {
+                                                let current_global = global_off + gc.text_range.start;
+                                                let anchor_global = pw.pointer_down_state.as_ref().and_then(|d| d.selection_anchor);
+                                                let s = anchor_global.map(|a| a.min(current_global)).unwrap_or(current_global);
+                                                let e = anchor_global.map(|a| a.max(current_global)).unwrap_or(current_global + 1);
+                                                eprintln!("[selection] set global range={}..{}", s, e);
+                                                reg.set_selection(s, e);
+                                            } else if let Some(anchor_global) = pw.pointer_down_state.as_ref().and_then(|d| d.selection_anchor) {
+                                                // 鼠标超出 SelectionContainer：扩展到边界
+                                                let total_len = reg.total_text_len();
+                                                let edge = if scene_pos.1 < abs_y { 0 } else { total_len };
+                                                let s = anchor_global.min(edge);
+                                                let e = anchor_global.max(edge);
+                                                eprintln!("[selection] edge snap range={}..{}", s, e);
+                                                reg.set_selection(s, e);
+                                            }
                                         }
                                     }
                                 }
