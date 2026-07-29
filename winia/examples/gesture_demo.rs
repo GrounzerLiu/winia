@@ -2,15 +2,15 @@
 //! 测试 Compose 风格 click 检测 + on_pointer_event 完整生命周期
 
 use winia::core::composer::ComposeCtx;
-use winia::core::state::State;
 use winia::modifier::{Modifier, Color, Dimension, PointerEvent, PointerEventType};
 use winia::ui::text::Text;
+use winia::ui::Window;
+use winia::ui::theme::WiniaTheme;
 use winia::ui::Column;
 use winia::ui::button::{Button, ButtonStyle};
-use winia::app::run_app;
+use winia::app;
 
-fn main() {
-    run_app(|ctx: &mut ComposeCtx| {
+fn gesture_ui(ctx: &mut ComposeCtx) {
         // ── 状态 ──
         let count = ctx.remember(|| 0i32);
         let last = ctx.remember(|| String::new());
@@ -102,5 +102,17 @@ fn main() {
                     .color(Color::from_argb(180, 80, 80, 80))
                     .build(ctx);
             });
+}
+
+fn main() {
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let _guard = rt.enter();
+    app::run_app(|ctx| {
+        WiniaTheme::auto(ctx, |ctx| {
+            Window::new()
+                .size(480.0, 620.0)
+                .title("Gesture Demo")
+                .build(ctx, gesture_ui);
+        });
     });
 }

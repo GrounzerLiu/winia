@@ -762,9 +762,9 @@ fn measure_and_cache_text(node: &LayoutNode, max_width: f32) -> Size {
 /// 使用 Skia ParagraphBuilder 构建带 U+FFFC 占位符的段落，
 /// 对每个片段应用对应的样式后缓存 Paragraph 和 drawables 供渲染复用。
 fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> Size {
-    use skia_safe::textlayout::{ParagraphStyle, PlaceholderStyle, PlaceholderAlignment, TextBaseline, TextStyle as SkTextStyle};
-    use skia_safe::FontStyle as SkFontStyle;
-    use crate::ui::text::FontSlant;
+    use skia_safe::textlayout::{ParagraphStyle, PlaceholderStyle, PlaceholderAlignment, TextBaseline};
+    
+    
     let fc = crate::font::get_font_collection();
 
     for el in node.modifier.elements() {
@@ -789,7 +789,7 @@ fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> Size {
                         let (w, h) = drawables[di].size();
                         let ph = PlaceholderStyle::new(w, h, PlaceholderAlignment::Bottom, TextBaseline::Alphabetic, 0.0);
                         builder.add_placeholder(&ph);
-                        if let Some(s) = spans.iter().find(|s| s.start <= ci && s.end > ci) { builder.pop(); }
+                        if let Some(_s) = spans.iter().find(|s| s.start <= ci && s.end > ci) { builder.pop(); }
                     }
                     ci += 1;
                     if ci >= drawable_ranges[di].end { di += 1; }

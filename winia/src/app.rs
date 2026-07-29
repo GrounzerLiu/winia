@@ -625,7 +625,7 @@ fn apply_scroll_delta(node: &mut LayoutNode, dy: f32) -> bool {
 
 /// 分发指针事件到 hit_test 路径（pre: outer→inner, bubble: inner→outer）
 fn dispatch_ptr_event(
-    root: &LayoutNode,
+    _root: &LayoutNode,
     path: &[&LayoutNode],
     event: &crate::modifier::PointerEvent,
     scene_pos: (f32, f32),
