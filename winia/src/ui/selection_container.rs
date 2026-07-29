@@ -152,7 +152,19 @@ pub(crate) fn active_registrar() -> SelectionRegistrar {
 pub(crate) fn notify_selection_change() {
     if let Some(reg) = ACTIVE_REGISTRAR.lock().unwrap().as_ref() {
         reg.fire_on_change();
+        // 持久化选区（重组时新 Registrar 会覆盖，需从这里恢复）
+        let inner = reg.inner.lock().unwrap();
+        if let (Some(s), Some(e)) = (inner.selection_start, inner.selection_end) {
+            *PERSISTED_SELECTION.lock().unwrap() = Some((s, e));
+        }
     }
+}
+
+/// 组合重建时恢复的持久化选区
+static PERSISTED_SELECTION: std::sync::LazyLock<Mutex<Option<(usize, usize)>>> = std::sync::LazyLock::new(|| Mutex::new(None));
+
+pub(crate) fn take_persisted_selection() -> Option<(usize, usize)> {
+    PERSISTED_SELECTION.lock().unwrap().take()
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -184,6 +196,10 @@ impl SelectionContainer {
         let registrar = SelectionRegistrar::new();
         if let Some(cb) = self.on_change {
             registrar.set_on_change(cb);
+        }
+        // 恢复上次持久化的选区
+        if let Some((s, e)) = take_persisted_selection() {
+            registrar.set_selection(s, e);
         }
         match ctx.start_restartable_group(key, self.modifier, BoxLayout::new()) {
             GroupStatus::Skip => {}
