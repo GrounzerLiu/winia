@@ -32,7 +32,7 @@ impl Rect {
 /// 注册的文本段信息
 #[derive(Debug, Clone)]
 pub(crate) struct RegisteredSegment {
-    pub node_id: u64,
+    pub slot_key: u64,
     pub text_start: usize,
     pub text_end: usize,
     pub bounds: Rect,
@@ -46,7 +46,7 @@ pub(crate) struct RegisteredSegment {
 struct RegistrarInner {
     selection_start: Option<usize>,
     selection_end: Option<usize>,
-    selection_node_id: Option<u64>,
+    selection_slot_key: Option<u64>,
     segments: Vec<RegisteredSegment>,
 }
 
@@ -63,17 +63,17 @@ impl SelectionRegistrar {
             inner: Arc::new(Mutex::new(RegistrarInner {
                 selection_start: None,
                 selection_end: None,
-                selection_node_id: None,
+                selection_slot_key: None,
                 segments: Vec::new(),
             })),
         }
     }
 
     /// 注册一个可选中文本段。
-    pub fn register(&self, node_id: u64, start: usize, end: usize, bounds: Option<Rect>) {
+    pub fn register(&self, slot_key: u64, start: usize, end: usize, bounds: Option<Rect>) {
         let mut inner = self.inner.lock().unwrap();
         inner.segments.push(RegisteredSegment {
-            node_id,
+            slot_key,
             text_start: start,
             text_end: end,
             bounds: bounds.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)),
@@ -81,9 +81,9 @@ impl SelectionRegistrar {
     }
 
     /// 设置选区。
-    pub fn set_selection(&self, node_id: u64, start: usize, end: usize) {
+    pub fn set_selection(&self, slot_key: u64, start: usize, end: usize) {
         let mut inner = self.inner.lock().unwrap();
-        inner.selection_node_id = Some(node_id);
+        inner.selection_slot_key = Some(slot_key);
         inner.selection_start = Some(start.min(end));
         inner.selection_end = Some(start.max(end));
     }
@@ -93,14 +93,16 @@ impl SelectionRegistrar {
         let mut inner = self.inner.lock().unwrap();
         inner.selection_start = None;
         inner.selection_end = None;
-        inner.selection_node_id = None;
+        inner.selection_slot_key = None;
     }
 
-    /// 获取指定 node 在本地位移范围内的选中区域。
-    pub fn selected_range(&self, node_id: u64) -> Option<Range<usize>> {
+    /// 获取指定 slot_key 对应的选中区域。
+    pub fn selected_range(&self, slot_key: u64) -> Option<Range<usize>> {
         let inner = self.inner.lock().unwrap();
         let (global_start, global_end) = (inner.selection_start?, inner.selection_end?);
-        let seg = inner.segments.iter().find(|s| s.node_id == node_id)?;
+        // 只有被选中的槽位才返回范围
+        if inner.selection_slot_key != Some(slot_key) { return None; }
+        let seg = inner.segments.iter().find(|s| s.slot_key == slot_key)?;
         let local_start = global_start.saturating_sub(seg.text_start);
         let local_end = global_end.saturating_sub(seg.text_start);
         if local_start >= seg.text_len() || local_end == 0 { return None; }

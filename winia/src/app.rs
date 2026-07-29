@@ -268,7 +268,7 @@ impl ApplicationHandler for AppState {
                                 let reg = pw.composer.selection_registrar.as_ref()
                                     .cloned()
                                     .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
-                                reg.set_selection(innermost.id, a, a + 1);
+                                reg.set_selection(innermost.slot_key, a, a + 1);
                             }
                         }
                     }
@@ -365,7 +365,7 @@ impl ApplicationHandler for AppState {
                                                 .map(|a| a.max(current))
                                                 .unwrap_or(current + 1);
                                             eprintln!("[selection] set node={} range={}..{}", innermost.id, s, e);
-                                            reg.set_selection(innermost.id, s, e);
+                                            reg.set_selection(innermost.slot_key, s, e);
                                         }
                                     }
                                 }

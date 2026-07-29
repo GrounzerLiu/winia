@@ -218,12 +218,10 @@ impl Text {
 
         ctx.start_leaf(key, modifier);
         // 注册到选区容器（供文本拖动选中使用）
-        if let Some(node_id) = ctx.current_node_id() {
-            let reg = ctx.selection_registrar()
-                .unwrap_or_else(|| crate::ui::selection_container::LOCAL_SELECTION_REGISTRAR.current());
-            reg.register(node_id, 0, content_len, None);
-            eprintln!("[selection] Text registered: node_id={} len={}", node_id, content_len);
-        }
+        let reg = ctx.selection_registrar()
+            .unwrap_or_else(|| crate::ui::selection_container::LOCAL_SELECTION_REGISTRAR.current());
+        reg.register(key, 0, content_len, None);
+        eprintln!("[selection] Text registered: slot_key={} len={}", key, content_len);
         ctx.end_node();
     }
 
