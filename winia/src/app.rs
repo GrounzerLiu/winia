@@ -53,14 +53,12 @@ impl PerWindow {
         // 完成的 case（第二个 notify 的 state 在第一次 compose 之后才入队）
         loop {
             let did_compose = self.composer.recompose(|ctx| (self.content)(ctx));
-            // 重组后通过 slot_key 恢复焦点（slot_key 跨重组稳定）
             if let Some(slot_key) = self.focused_slot_key {
                 if let Some(r) = self.composer.layout_root_mut() {
                     if let Some(new_id) = crate::layout::node::find_node_id_by_slot_key(r, slot_key) {
                         crate::layout::node::set_focus_by_id(r, new_id);
                         self.focused_id = Some(new_id);
                     } else {
-                        // slot_key 对应的节点不存在 → 焦点丢失
                         self.focused_id = None;
                     }
                 }
@@ -100,8 +98,7 @@ struct AppState {
     pending_content: Vec<PendingWindow>,
     /// 父窗口 ID（用于 is_parent 判断，不依赖 HashMap 顺序）
     parent_window_id: Option<WindowId>,
-    /// 窗口全局修饰键状态（由 ModifiersChanged 更新）
-    modifiers: winit::keyboard::ModifiersState,
+    pub(crate) modifiers: winit::keyboard::ModifiersState,
     /// 初始化回调（仅首次调用，用于声明式创建主窗口）
     init: Option<Box<dyn FnOnce(&mut ComposeCtx)>>,
 }
@@ -226,77 +223,12 @@ impl ApplicationHandler for AppState {
                 }
                 if let Some(ref proxy) = *APP_PROXY.lock().unwrap() { let _ = proxy.wake_up(); }
             }
-            WindowEvent::ModifiersChanged(m) => {
-                self.modifiers = m.state();
-            }
-            WindowEvent::KeyboardInput { event, .. } => {
-                let event_type = if event.state.is_pressed() {
-                    crate::modifier::KbEventType::KeyDown
-                } else {
-                    crate::modifier::KbEventType::KeyUp
-                };
-                let ke = crate::modifier::KbEvent {
-                    key: event.logical_key.clone(),
-                    event_type,
-                    is_alt_pressed: self.modifiers.alt_key(),
-                    is_ctrl_pressed: self.modifiers.control_key(),
-                    is_shift_pressed: self.modifiers.shift_key(),
-                    is_meta_pressed: self.modifiers.meta_key(),
-                    repeat: event.repeat,
-                };
-                let mut consumed = false;
-                // 默认按键处理（优先于自定义 handler，确保 Tab/Escape 始终有效）
-                if matches!(&event.logical_key, Key::Named(NamedKey::Escape)) {
-                    if pw.focused_id.is_some() {
-                        pw.composer.layout_root_mut().map(|root| crate::layout::node::clear_focus(root));
-                        pw.focused_id = None;
-                        pw.focused_slot_key = None;
-                        consumed = true;
-                    }
-                }
+            WindowEvent::KeyboardInput { event, .. } if event.state.is_pressed() => {
                 if matches!(&event.logical_key, Key::Named(NamedKey::Tab)) {
-                    let shift = self.modifiers.shift_key();
-                    let (new_id, new_slot) = pw.composer.layout_root_mut().map(|root| {
-                        if shift { focus_prev(root); } else { focus_next(root); }
-                        let id = crate::layout::node::get_focus_id(root);
-                        let slot = id.and_then(|fid| crate::layout::node::find_node_by_id(root, fid).map(|n| n.slot_key));
-                        (id, slot)
-                    }).unwrap_or((None, None));
-                    pw.focused_id = new_id;
-                    pw.focused_slot_key = new_slot;
-                    consumed = true;
-                }
-                // 分发到焦点节点（仅处理未被默认行为吞掉的按键）
-                if !consumed {
-                    if let Some(root) = pw.composer.layout_root() {
-                        let path = focused_path(root, fid);
-                        // onPreviewKeyEvent：根 → 焦点（向下），消费后不进入冒泡
-                        'preview: for &node in &path {
-                            for el in node.modifier.elements() {
-                                if let crate::modifier::ModifierElement::KbEvent { on_pre_key: Some(handler), .. } = el {
-                                    if handler(&ke) {
-                                        consumed = true;
-                                        break 'preview;
-                                    }
-                                }
-                            }
-                        }
-                        if !consumed {
-                            // onKeyEvent：焦点 → 根（向上冒泡）
-                            'bubble: for &node in path.iter().rev() {
-                                for el in node.modifier.elements() {
-                                    if let crate::modifier::ModifierElement::KbEvent { on_key: Some(handler), .. } = el {
-                                        if handler(&ke) {
-                                            consumed = true;
-                                            break 'bubble;
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                    if let Some(root) = pw.composer.layout_root_mut() {
+                        focus_next(root);
+                        pw.focused_id = crate::layout::node::get_focus_id(root);
                     }
-                }
-                if consumed {
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                     event_loop.set_control_flow(ControlFlow::Poll);
                 }
@@ -526,21 +458,6 @@ fn apply_scroll_delta(node: &mut LayoutNode, dy: f32) -> bool {
         if apply_scroll_delta(child, dy) { return true; }
     }
     false
-}
-
-/// 递归查找指定 ID 的节点
-fn focused_path<'a>(root: &'a LayoutNode, fid: u64) -> Vec<&'a LayoutNode> {
-    fn dfs<'a>(node: &'a LayoutNode, fid: u64, path: &mut Vec<&'a LayoutNode>) -> bool {
-        if node.id == fid { path.push(node); return true; }
-        for child in &node.children {
-            if dfs(child, fid, path) { path.push(node); return true; }
-        }
-        false
-    }
-    let mut path = Vec::new();
-    dfs(root, fid, &mut path);
-    path.reverse();
-    path
 }
 
 pub fn run_app(app: impl FnOnce(&mut ComposeCtx) + 'static) {
