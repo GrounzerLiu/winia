@@ -20,7 +20,7 @@ fn main() {
 }
 
 fn keyboard_demo_ui(ctx: &mut ComposeCtx) {
-    let log = ctx.remember(|| String::new()).get();
+    let log = ctx.remember(|| String::new());
 
     Column::new()
         .modifier(Modifier::new().fill_max_width().fill_max_height().padding(16.0))
@@ -82,7 +82,7 @@ fn keyboard_demo_ui(ctx: &mut ComposeCtx) {
                     .on_pre_key_event({
                         let log = log.clone();
                         move |e| {
-                            if e.is_ctrl_pressed && e.key == Key::Named(NamedKey::KeyS) {
+                            if e.is_ctrl_pressed && e.key == Key::Character("s".into()) {
                                 let prev = log.get();
                                 log.set(format!("{}Ctrl+S intercepted (preview)!\n", prev));
                                 true
