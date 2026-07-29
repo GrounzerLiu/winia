@@ -245,7 +245,7 @@ impl ApplicationHandler for AppState {
                     repeat: event.repeat,
                 };
                 let mut consumed = false;
-                if matches!(&event.logical_key, Key::Named(NamedKey::Escape)) {
+                if event.state.is_pressed() && matches!(&event.logical_key, Key::Named(NamedKey::Escape)) {
                     if pw.focused_id.is_some() {
                         pw.composer.layout_root_mut().map(|root| crate::layout::node::clear_focus(root));
                         pw.focused_id = None;
@@ -253,7 +253,7 @@ impl ApplicationHandler for AppState {
                         consumed = true;
                     }
                 }
-                if matches!(&event.logical_key, Key::Named(NamedKey::Tab)) {
+                if event.state.is_pressed() && matches!(&event.logical_key, Key::Named(NamedKey::Tab)) {
                     let shift = self.modifiers.shift_key();
                     let (new_id, new_slot) = pw.composer.layout_root_mut().map(|root| {
                         if shift { focus_prev(root); } else { focus_next(root); }
