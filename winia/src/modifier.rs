@@ -449,13 +449,23 @@ impl Modifier {
     }
 
     /// 按键事件（焦点节点接收）
-    pub fn on_key_event(self, handler: impl Fn(&KbEvent) -> bool + Send + Sync + 'static) -> Self {
-        self.push(ModifierElement::KbEvent { on_key: Some(Arc::new(handler)), on_pre_key: None })
+    pub fn on_key_event(mut self, handler: impl Fn(&KbEvent) -> bool + Send + Sync + 'static) -> Self {
+        if let Some(ModifierElement::KbEvent { ref mut on_key, .. }) = self.elements.last_mut() {
+            *on_key = Some(Arc::new(handler));
+        } else {
+            self.push(ModifierElement::KbEvent { on_key: Some(Arc::new(handler)), on_pre_key: None });
+        }
+        self
     }
 
     /// 预拦截按键事件（从根分发到焦点节点前触发）
-    pub fn on_pre_key_event(self, handler: impl Fn(&KbEvent) -> bool + Send + Sync + 'static) -> Self {
-        self.push(ModifierElement::KbEvent { on_key: None, on_pre_key: Some(Arc::new(handler)) })
+    pub fn on_pre_key_event(mut self, handler: impl Fn(&KbEvent) -> bool + Send + Sync + 'static) -> Self {
+        if let Some(ModifierElement::KbEvent { ref mut on_pre_key, .. }) = self.elements.last_mut() {
+            *on_pre_key = Some(Arc::new(handler));
+        } else {
+            self.push(ModifierElement::KbEvent { on_key: None, on_pre_key: Some(Arc::new(handler)) });
+        }
+        self
     }
 
     /// 垂直滚动（绑定 ScrollState）
