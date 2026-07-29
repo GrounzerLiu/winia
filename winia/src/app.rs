@@ -36,11 +36,13 @@ pub(crate) struct PerWindow {
     pub(crate) on_close: Option<Box<dyn FnMut() + Send>>,
     pub(crate) created_id: Option<u64>,
     theme: crate::ui::theme::ThemeColors,
+    /// 焦点节点的 slot_key（跨重组稳定，用于重组后恢复焦点）
+    pub(crate) focused_slot_key: Option<u64>,
 }
 
 impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::ui::theme::ThemeColors) -> Self {
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -51,9 +53,16 @@ impl PerWindow {
         // 完成的 case（第二个 notify 的 state 在第一次 compose 之后才入队）
         loop {
             let did_compose = self.composer.recompose(|ctx| (self.content)(ctx));
-            if let Some(fid) = self.focused_id {
+            // 重组后通过 slot_key 恢复焦点（slot_key 跨重组稳定）
+            if let Some(slot_key) = self.focused_slot_key {
                 if let Some(r) = self.composer.layout_root_mut() {
-                    crate::layout::node::focus_by_id(r, fid);
+                    if let Some(new_id) = crate::layout::node::find_node_id_by_slot_key(r, slot_key) {
+                        crate::layout::node::set_focus_by_id(r, new_id);
+                        self.focused_id = Some(new_id);
+                    } else {
+                        // slot_key 对应的节点不存在 → 焦点丢失
+                        self.focused_id = None;
+                    }
                 }
             }
             // 如果在 compose 期间又有新 notify 入队，需要再处理一次
@@ -260,10 +269,14 @@ impl ApplicationHandler for AppState {
                     }
                 }
                 if matches!(&event.logical_key, Key::Named(NamedKey::Tab)) {
-                    if let Some(root) = pw.composer.layout_root_mut() {
+                    let (new_id, new_slot) = pw.composer.layout_root_mut().map(|root| {
                         focus_next(root);
-                        pw.focused_id = crate::layout::node::get_focus_id(root);
-                    }
+                        let id = crate::layout::node::get_focus_id(root);
+                        let slot = id.and_then(|fid| crate::layout::node::find_node_by_id(root, fid).map(|n| n.slot_key));
+                        (id, slot)
+                    }).unwrap_or((None, None));
+                    pw.focused_id = new_id;
+                    pw.focused_slot_key = new_slot;
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                     event_loop.set_control_flow(ControlFlow::Poll);
                 }

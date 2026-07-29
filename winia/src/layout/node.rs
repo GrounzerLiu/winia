@@ -420,7 +420,7 @@ pub fn collect_focusable_ids(root: &LayoutNode, list: &mut Vec<u64>) {
 }
 
 /// 通过 node.id 查找节点不可变引用
-fn find_node_by_id(root: &LayoutNode, id: u64) -> Option<&LayoutNode> {
+pub fn find_node_by_id(root: &LayoutNode, id: u64) -> Option<&LayoutNode> {
     if root.id == id { return Some(root); }
     for child in &root.children {
         if let Some(n) = find_node_by_id(child, id) { return Some(n); }
@@ -459,7 +459,7 @@ fn clear_focus(node: &mut LayoutNode) {
     }
 }
 
-fn set_focus_by_id(node: &mut LayoutNode, target_id: u64) -> bool {
+pub fn set_focus_by_id(node: &mut LayoutNode, target_id: u64) -> bool {
     if node.id == target_id {
         node.focused = true;
         return true;
@@ -498,6 +498,17 @@ fn find_node_id_by_focus_requester(node: &LayoutNode, requester_id: u64) -> Opti
     }
     for child in &node.children {
         if let Some(id) = find_node_id_by_focus_requester(child, requester_id) {
+            return Some(id);
+        }
+    }
+    None
+}
+
+/// 按 slot_key 查找节点 ID（slot_key 跨重组稳定）
+pub fn find_node_id_by_slot_key(node: &LayoutNode, slot_key: u64) -> Option<u64> {
+    if node.slot_key == slot_key { return Some(node.id); }
+    for child in &node.children {
+        if let Some(id) = find_node_id_by_slot_key(child, slot_key) {
             return Some(id);
         }
     }
