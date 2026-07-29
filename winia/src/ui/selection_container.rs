@@ -7,6 +7,7 @@ use crate::layout::BoxLayout;
 use crate::core::composer::GroupStatus;
 use std::ops::Range;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 
 // ═══════════════════════════════════════════════════════════
@@ -127,24 +128,6 @@ pub static LOCAL_SELECTION_REGISTRAR: std::sync::LazyLock<CompositionLocal<Selec
     std::sync::LazyLock::new(|| CompositionLocal::new(|| SelectionRegistrar::new()));
 
 // ═══════════════════════════════════════════════════════════
-// 全局引用（供事件处理访问当前注册表）
-// ═══════════════════════════════════════════════════════════
-
-use std::sync::Mutex;
-
-static CURRENT_SELECTION: Mutex<Option<SelectionRegistrar>> = Mutex::new(None);
-
-/// 设置当前全局选区注册表（由 SelectionContainer::build 调用）。
-pub(crate) fn set_current_registrar(reg: SelectionRegistrar) {
-    *CURRENT_SELECTION.lock().unwrap() = Some(reg);
-}
-
-/// 获取当前全局选区注册表。
-pub(crate) fn current_registrar() -> Option<SelectionRegistrar> {
-    CURRENT_SELECTION.lock().unwrap().clone()
-}
-
-// ═══════════════════════════════════════════════════════════
 // SelectionContainer
 // ═══════════════════════════════════════════════════════════
 
@@ -173,7 +156,7 @@ impl SelectionContainer {
         match ctx.start_restartable_group(key, self.modifier, BoxLayout::new()) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
-                set_current_registrar(registrar.clone());
+                ctx.set_selection_registrar(registrar.clone());
                 LOCAL_SELECTION_REGISTRAR.provides(registrar, || {
                     content(ctx);
                 });

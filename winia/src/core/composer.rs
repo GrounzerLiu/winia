@@ -75,6 +75,16 @@ impl<'a> ComposeCtx<'a> {
         self.composer.current_node_id()
     }
 
+    /// 设置当前选区注册表（由 SelectionContainer::build 调用）
+    pub fn set_selection_registrar(&mut self, reg: crate::ui::selection_container::SelectionRegistrar) {
+        self.composer.selection_registrar = Some(reg);
+    }
+
+    /// 获取选区注册表
+    pub fn selection_registrar(&self) -> Option<crate::ui::selection_container::SelectionRegistrar> {
+        self.composer.selection_registrar.clone()
+    }
+
     /// 为 remember 调用生成位置 key。
     ///
     /// 位置 key 编码方式: (current_group_key << 32) | remember_counter。
@@ -349,6 +359,8 @@ pub struct Composer {
     pending_states: Arc<parking_lot::Mutex<Vec<u32>>>,
     /// 上一帧各 slot 路径 → 节点缓存（用于 clean slot 跳过和子树重放）
     prev_nodes: HashMap<Vec<usize>, CachedNode>,
+    /// 当前选区注册表（SelectionContainer compose 时注入，供事件处理访问）
+    pub(crate) selection_registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
 
     #[cfg(test)]
     pub(crate) compose_clean_count: usize,
@@ -357,6 +369,8 @@ pub struct Composer {
 }
 
 impl Composer {
+/// 选区注册表（由 SelectionContainer 在 compose 时注入，供事件处理访问）
+
     pub fn new() -> Self {
         let pending_states = Arc::new(parking_lot::Mutex::new(Vec::new()));
         crate::core::state::register_composer_queue(Arc::downgrade(&pending_states));
@@ -374,6 +388,7 @@ impl Composer {
             recorded_deps: Vec::new(),
             pending_states,
             prev_nodes: HashMap::new(),
+            selection_registrar: None,
             #[cfg(test)]
             compose_clean_count: 0,
             #[cfg(test)]

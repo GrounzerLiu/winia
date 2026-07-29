@@ -38,11 +38,13 @@ pub(crate) struct PerWindow {
     pub(crate) on_close: Option<Box<dyn FnMut() + Send>>,
     pub(crate) created_id: Option<u64>,
     theme: crate::ui::theme::ThemeColors,
+    /// 当前活动的选区注册表（由 SelectionContainer 在 compose 时设置）
+    pub(crate) selection_registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
 }
 
 impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::ui::theme::ThemeColors) -> Self {
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, selection_registrar: None }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -210,7 +212,7 @@ impl ApplicationHandler for AppState {
                     }
                     // 文本选中：点击在 Text 节点上且 SelectionRegistrar 存在
                     if !handled {
-                        if let Some(reg) = crate::ui::selection_container::current_registrar() {
+                        if let Some(reg) = pw.composer.selection_registrar.clone() {
                             let path = hit_test(root, lp.x, lp.y);
                             // 计算点击节点的绝对位置
                             let abs_x: f32 = path.iter().map(|n| n.position.x).sum();
