@@ -9,6 +9,7 @@ pub mod layout_components;
 pub mod window;
 pub mod theme;
 pub mod rich_text;
+pub mod selection_container;
 
 pub use text::Text;
 pub use text::TextAlign;
@@ -26,3 +27,7 @@ pub use theme::ThemeColors;
 pub use theme::is_system_dark_theme;
 pub use rich_text::RichText;
 pub use rich_text::RichTextScope;
+pub use selection_container::SelectionContainer;
+pub use selection_container::SelectionRegistrar;
+pub use selection_container::Rect;
+pub use selection_container::LOCAL_SELECTION_REGISTRAR;
