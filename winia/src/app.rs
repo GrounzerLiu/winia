@@ -46,6 +46,20 @@ impl PerWindow {
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
+    /// 清除焦点 + 更新缓存
+    fn clear_focus(&mut self, root: &mut LayoutNode) {
+        crate::layout::node::clear_focus(root);
+        self.focused_id = None;
+        self.focused_slot_key = None;
+    }
+
+    /// 从当前焦点节点刷新 cached 字段
+    fn refresh_focus(&mut self, root: &LayoutNode) {
+        self.focused_id = crate::layout::node::get_focus_id(root);
+        self.focused_slot_key = self.focused_id
+            .and_then(|id| crate::layout::node::find_node_by_id(root, id).map(|n| n.slot_key));
+    }
+
     /// 增量重组 → 恢复焦点 → 布局 → 渲染（供 RedrawRequested 使用）
     /// 循环消费 notify 队列直到稳定，避免 tokio task 的并发通知丢失。
     fn recompose_layout_render(&mut self, after_draw: impl FnOnce(&LayoutNode, &mut skia_safe::Surface)) {
@@ -61,6 +75,7 @@ impl PerWindow {
                         self.focused_id = Some(new_id);
                     } else {
                         self.focused_id = None;
+                        self.focused_slot_key = None;
                     }
                 }
             }
@@ -221,8 +236,10 @@ impl ApplicationHandler for AppState {
                 event_loop.set_control_flow(ControlFlow::Poll);
                 // PointerButton 可能通过 FocusRequester 改变了焦点
                 if let Some(root) = pw.composer.layout_root_mut() {
-                    pw.focused_id = crate::layout::node::get_focus_id(root);
-                    pw.focused_slot_key = pw.focused_id.and_then(|id| crate::layout::node::find_node_by_id(root, id).map(|n| n.slot_key));
+                    let fid = crate::layout::node::get_focus_id(root);
+                    let slot = fid.and_then(|id| crate::layout::node::find_node_by_id(root, id).map(|n| n.slot_key));
+                    pw.focused_id = fid;
+                    pw.focused_slot_key = slot;
                 }
                 if let Some(ref proxy) = *APP_PROXY.lock().unwrap() { let _ = proxy.wake_up(); }
             }
@@ -247,7 +264,9 @@ impl ApplicationHandler for AppState {
                 let mut consumed = false;
                 if event.state.is_pressed() && matches!(&event.logical_key, Key::Named(NamedKey::Escape)) {
                     if pw.focused_id.is_some() {
-                        pw.composer.layout_root_mut().map(|root| crate::layout::node::clear_focus(root));
+                        if let Some(root) = pw.composer.layout_root_mut() {
+                            crate::layout::node::clear_focus(root);
+                        }
                         pw.focused_id = None;
                         pw.focused_slot_key = None;
                         consumed = true;
@@ -307,7 +326,12 @@ impl ApplicationHandler for AppState {
                     if let Some(root) = pw.composer.layout_root_mut() {
                         if crate::layout::node::focus_by_id(root, id) {
                             pw.focused_id = Some(id);
-                            pw.focused_slot_key = crate::layout::node::find_node_by_id(root, id).map(|n| n.slot_key);
+                        }
+                    }
+                    // 单独查 slot_key（避免与 root 的 borrow 冲突）
+                    if let Some(root) = pw.composer.layout_root() {
+                        if let Some(found) = crate::layout::node::find_node_by_id(root, id) {
+                            pw.focused_slot_key = Some(found.slot_key);
                         }
                     }
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
