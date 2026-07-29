@@ -1,5 +1,7 @@
 //! 应用壳 — run_app + 窗口管理 + 事件循环（多窗口）
 
+use std::time::Instant;
+
 use crate::core::composer::{ComposeCtx, Composer};
 use crate::debug;
 use crate::layout::constraints::Constraints;
@@ -38,11 +40,20 @@ pub(crate) struct PerWindow {
     theme: crate::ui::theme::ThemeColors,
     /// 焦点节点的 slot_key
     pub(crate) focused_slot_key: Option<u64>,
+    /// 指针按下态（Compose 风格 click 检测）
+    pointer_down_state: Option<PtrDownState>,
+}
+
+/// Compose 风格的 click 检测中间状态
+struct PtrDownState {
+    node_id: u64,
+    position: (f32, f32),
+    time: Instant,
 }
 
 impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::ui::theme::ThemeColors) -> Self {
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -226,6 +237,44 @@ impl ApplicationHandler for AppState {
                 } else {
                     crate::modifier::PointerEventType::Up
                 };
+                if state.is_pressed() {
+                    // ── Down：记录按下态 ──
+                    if let Some(root) = pw.composer.layout_root() {
+                        let path = hit_test(root, scene_pos.0, scene_pos.1);
+                        if let Some(innermost) = path.last() {
+                            pw.pointer_down_state = Some(PtrDownState {
+                                node_id: innermost.id,
+                                position: scene_pos,
+                                time: Instant::now(),
+                            });
+                        }
+                    }
+                } else {
+                    // ── Up：Compose 风格 click 检测 ──
+                    const CLICK_SLOP: f32 = 18.0;
+                    const CLICK_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+                    if let Some(down) = pw.pointer_down_state.take() {
+                        let dx = scene_pos.0 - down.position.0;
+                        let dy = scene_pos.1 - down.position.1;
+                        let dist = (dx * dx + dy * dy).sqrt();
+                        let in_time = down.time.elapsed() < CLICK_TIMEOUT;
+                        if dist <= CLICK_SLOP && in_time {
+                            if let Some(root) = pw.composer.layout_root() {
+                                let path = hit_test(root, scene_pos.0, scene_pos.1);
+                                if path.iter().any(|n| n.id == down.node_id) {
+                                    // 只在相同节点触发 click
+                                    for node in path.iter().rev() {
+                                        if let Some(on_click) = node.modifier.on_click() {
+                                            on_click();
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // pointer 事件分发（不受 click 影响）
                 if let Some(root) = pw.composer.layout_root() {
                     let path = hit_test(root, scene_pos.0, scene_pos.1);
                     let ptr_ev = crate::modifier::PointerEvent {
@@ -238,22 +287,10 @@ impl ApplicationHandler for AppState {
                         is_shift_pressed: self.modifiers.shift_key(),
                         is_meta_pressed: self.modifiers.meta_key(),
                     };
-                    let mut handled = dispatch_ptr_event(root, &path, &ptr_ev, scene_pos);
-                    // fallback: 旧 Clickable
-                    if !handled && state.is_pressed() {
-                        for node in path.iter().rev() {
-                            if let Some(on_click) = node.modifier.on_click() {
-                                on_click();
-                                handled = true;
-                                break;
-                            }
-                        }
-                    }
-                    eprintln!("[click] handled={} pos=({:.0},{:.0})", handled, scene_pos.0, scene_pos.1);
+                    dispatch_ptr_event(root, &path, &ptr_ev, scene_pos);
                 }
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 event_loop.set_control_flow(ControlFlow::Poll);
-                // PointerButton 可能通过 FocusRequester 改变了焦点
                 if let Some(root) = pw.composer.layout_root_mut() {
                     let fid = crate::layout::node::get_focus_id(root);
                     let slot = fid.and_then(|id| crate::layout::node::find_node_by_id(root, id).map(|n| n.slot_key));
