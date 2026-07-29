@@ -183,8 +183,28 @@ fn rich_text_demo_ui(ctx: &mut ComposeCtx) {
         x.text("end.");
     });});
 
-    // ═══ 14. Locale ═══
-    sec("14. Locale (affects line breaking / glyph selection)", ctx);
+    // ═══ 14. placeholder — 文本替换为图片 ═══
+    sec("14. placeholder(text, drawable) — text replaced by image", ctx);
+    card(ctx, |ctx| { RichText::new().build(ctx, |x| {
+        x.text("Icon: ");
+        x.placeholder("★", star());
+        x.text(" in text.");
+    });});
+    card(ctx, |ctx| { RichText::new().build(ctx, |x| {
+        x.text("Multi-char: ");
+        x.placeholder("ICON", info());
+        x.text(" entire word replaced.");
+    });});
+    card(ctx, |ctx| { RichText::new().build(ctx, |x| {
+        x.bold(|x| {
+            x.text("Bold ");
+            x.placeholder("IMG", check());
+            x.text(" scope.");
+        });
+    });});
+
+    // ═══ 15. Locale ═══
+    sec("15. Locale (affects line breaking / glyph selection)", ctx);
     card(ctx, |ctx| { RichText::new().build(ctx, |x| {
         x.locale("ja-JP", |x| { x.text("日本語テキスト "); });
         x.locale("ar-SA", |x| { x.text("نص عربي "); });
