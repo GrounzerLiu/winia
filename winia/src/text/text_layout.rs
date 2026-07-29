@@ -17,7 +17,6 @@ pub struct TextLayout<'a> {
 }
 
 impl<'a> TextLayout<'a> {
-    #[allow(dead_code)]
     pub(crate) fn new(paragraph: &'a Paragraph, length: usize) -> TextLayout<'a> {
         TextLayout { paragraph, length }
     }

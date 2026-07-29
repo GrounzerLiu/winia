@@ -42,6 +42,8 @@ pub(crate) struct PerWindow {
     pub(crate) focused_slot_key: Option<u64>,
     /// 指针按下态（Compose 风格 click 检测）
     pointer_down_state: Option<PtrDownState>,
+    /// 最近的 PointerKind（Move 事件继承自上一个 Down）
+    last_pointer_kind: crate::modifier::PointerKind,
 }
 
 /// Compose 风格的 click 检测中间状态
@@ -53,7 +55,7 @@ struct PtrDownState {
 
 impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::ui::theme::ThemeColors) -> Self {
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary } }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -287,7 +289,8 @@ impl ApplicationHandler for AppState {
                         is_shift_pressed: self.modifiers.shift_key(),
                         is_meta_pressed: self.modifiers.meta_key(),
                     };
-                    dispatch_ptr_event(root, &path, &ptr_ev, scene_pos);
+                    pw.last_pointer_kind = ptr_ev.kind.clone();
+                    dispatch_ptr_event(&path, &ptr_ev, scene_pos);
                 }
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 event_loop.set_control_flow(ControlFlow::Poll);
@@ -308,13 +311,13 @@ impl ApplicationHandler for AppState {
                         event_type: crate::modifier::PointerEventType::Move,
                         position: (0.0, 0.0),
                         scene_position: scene_pos,
-                        kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary },
+                        kind: pw.last_pointer_kind.clone(),
                         is_alt_pressed: self.modifiers.alt_key(),
                         is_ctrl_pressed: self.modifiers.control_key(),
                         is_shift_pressed: self.modifiers.shift_key(),
                         is_meta_pressed: self.modifiers.meta_key(),
                     };
-                    dispatch_ptr_event(root, &path, &ptr_ev, scene_pos);
+                    dispatch_ptr_event(&path, &ptr_ev, scene_pos);
                 }
             }
             WindowEvent::ModifiersChanged(m) => {
@@ -644,7 +647,6 @@ fn apply_scroll_delta(node: &mut LayoutNode, dy: f32) -> bool {
 
 /// 分发指针事件到 hit_test 路径（pre: outer→inner, bubble: inner→outer）
 fn dispatch_ptr_event(
-    _root: &LayoutNode,
     path: &[&LayoutNode],
     event: &crate::modifier::PointerEvent,
     scene_pos: (f32, f32),

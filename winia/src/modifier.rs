@@ -795,17 +795,14 @@ impl ModifierElement {
         }
     }
 
-    #[allow(dead_code)]
     pub fn is_layout(&self) -> bool {
         self.category() == ElementCategory::Layout
     }
 
-    #[allow(dead_code)]
     pub fn is_draw(&self) -> bool {
         self.category() == ElementCategory::Draw
     }
 
-    #[allow(dead_code)]
     pub fn is_input(&self) -> bool {
         self.category() == ElementCategory::Input
     }
