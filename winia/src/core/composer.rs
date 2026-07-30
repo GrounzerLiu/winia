@@ -124,11 +124,7 @@ impl<'a> ComposeCtx<'a> {
     /// animateFloatAsState — 动画浮点值到目标值
     pub fn animate_float_as_state(&mut self, target: f32, spec: crate::animation::AnimationSpec) -> State<f32> {
         let state = self.remember(|| target);
-        let last_target = self.remember(|| target);
-        if (last_target.get() - target).abs() > f32::EPSILON {
-            crate::animation::push_animatable(state.clone(), target, spec);
-            last_target.set(target);
-        }
+        crate::animation::push_animatable(state.clone(), target, spec);
         state
     }
 

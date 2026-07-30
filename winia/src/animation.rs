@@ -25,6 +25,7 @@ use std::sync::{Arc, Mutex, LazyLock};
 /// 动画实例 trait（擦除类型后存储在全局列表）
 pub trait AnimationInstance: Send {
     fn update(&mut self) -> bool;
+    fn is_animating_to(&self, target: f32) -> bool;
 }
 
 static ACTIVE_ANIMATIONS: LazyLock<Mutex<Vec<Box<dyn AnimationInstance>>>> =
@@ -39,6 +40,10 @@ pub fn push_animation(anim: Box<dyn AnimationInstance + 'static>) {
 pub fn push_animatable(state: State<f32>, target: f32, spec: AnimationSpec) {
     let current = state.get();
     if (current - target).abs() < f32::EPSILON { return; }
+    // 检查是否已有同名动画在运行（避免级联）
+    let list = ACTIVE_ANIMATIONS.lock().unwrap();
+    if list.iter().any(|anim| anim.is_animating_to(target)) { return; }
+    std::mem::drop(list);
     let mut anim = Animatable::new(state);
     anim.animate_to(target, spec);
     ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
@@ -48,6 +53,9 @@ pub fn push_animatable(state: State<f32>, target: f32, spec: AnimationSpec) {
 impl AnimationInstance for Animatable<f32> {
     fn update(&mut self) -> bool {
         self.update()
+    }
+    fn is_animating_to(&self, target: f32) -> bool {
+        self.anim_state.as_ref().map(|s| AnimatableValue::to_f32(&s.to) - target).unwrap_or(f32::INFINITY).abs() < f32::EPSILON
     }
 }
 
@@ -210,11 +218,7 @@ impl<T: Clone + PartialEq + 'static> Transition<T> {
     ) -> State<f32> {
         let value = target_fn(&self.target);
         let state: State<f32> = ctx.remember(|| value);
-        let last_target: State<f32> = ctx.remember(|| value);
-        if (last_target.get() - value).abs() > f32::EPSILON {
-            crate::animation::push_animatable(state.clone(), value, self.spec.clone());
-            last_target.set(value);
-        }
+        crate::animation::push_animatable(state.clone(), value, self.spec.clone());
         state
     }
 }
