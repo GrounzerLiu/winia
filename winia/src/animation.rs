@@ -13,7 +13,43 @@
 pub mod interpolator;
 
 use crate::core::state::State;
+use crate::core::composer::Composer;
 use std::time::{Duration, Instant};
+
+// ═══════════════════════════════════════════════════════════
+// 活跃动画管理（全局注册表，避开 Composer 字段修改）
+// ═══════════════════════════════════════════════════════════
+
+use std::sync::{Arc, Mutex, LazyLock};
+
+/// 动画实例 trait（擦除类型后存储在全局列表）
+pub trait AnimationInstance: Send {
+    fn update(&mut self) -> bool;
+}
+
+static ACTIVE_ANIMATIONS: LazyLock<Mutex<Vec<Box<dyn AnimationInstance>>>> =
+    Lazy::new(|| Mutex::new(Vec::new()));
+
+/// 注册一个动画到全局活跃列表
+pub fn push_animation(anim: Box<dyn AnimationInstance + 'static>) {
+    ACTIVE_ANIMATIONS.lock().unwrap().push(anim);
+}
+
+/// 更新所有活跃动画，返回是否有动画还在运行
+pub fn update_animations() -> bool {
+    let mut list = ACTIVE_ANIMATIONS.lock().unwrap();
+    let running = list.len();
+    // retain_mut 是 nightly API，手动 filter
+    let mut i = 0;
+    while i < list.len() {
+        if list[i].update() {
+            i += 1;
+        } else {
+            list.swap_remove(i);
+        }
+    }
+    !list.is_empty()
+}
 
 // ═══════════════════════════════════════════════════════════
 // Animatable — 底层动画值（对标 Compose Animatable）
