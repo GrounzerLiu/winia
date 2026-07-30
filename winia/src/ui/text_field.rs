@@ -79,8 +79,10 @@ impl TextField {
     pub fn build(self, ctx: &mut ComposeCtx) {
         let key = ctx.next_key();
         let cursor_visible = ctx.remember(|| true);
-        // 闪烁动画：500ms toggle
-        {
+        // 闪烁动画：只启动一次
+        let blink_started = ctx.remember(|| false);
+        if !blink_started.get() {
+            blink_started.set(true);
             let cv = cursor_visible.clone();
             tokio::spawn(async move {
                 loop {
