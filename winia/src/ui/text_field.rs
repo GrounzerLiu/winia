@@ -85,6 +85,20 @@ impl TextField {
         let font_size = 14.0;
         let color = theme.on_surface;
 
+        // 光标闪烁状态（D:\winia 风格）
+        let cursor_visible = ctx.remember(|| true);
+        let cv = cursor_visible.clone();
+        let blink_started = ctx.remember(|| false);
+        if !blink_started.get() {
+            blink_started.set(true);
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    cv.update(|v| *v = !*v);
+                }
+            });
+        }
+
         // 键盘事件处理
         let value = self.value.clone();
         let on_change = std::sync::Arc::new(std::sync::Mutex::new(self.on_value_change));
@@ -182,7 +196,7 @@ impl TextField {
         ctx.start_leaf(key, modifier);
 
         // 设置光标位置到节点
-        ctx.set_current_node_cursor(current.selection.start, true);
+        ctx.set_current_node_cursor(current.selection.start, cursor_visible.get());
         ctx.end_node();
     }
 }

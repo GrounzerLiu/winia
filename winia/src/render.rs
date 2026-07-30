@@ -162,22 +162,16 @@ fn render_pass1<'a>(
             }
             para.paint(canvas, x_off, y);
             // 绘制光标（聚焦的 TextField 节点）
-            if node.focused {
+            if node.focused && node.cursor_visible.get() {
                 let tl = crate::text::TextLayout::new(para, 0);
                 if let Some((cx, cy, ch)) = tl.get_cursor_position(node.cursor_index.get()) {
-                    let blink = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| (d.as_millis() / 500) % 2 == 0)
-                        .unwrap_or(true);
-                    if blink {
                         let mut cp = skia_safe::Paint::default();
                         cp.set_color(skia_safe::Color::from_argb(255, color.r, color.g, color.b));
                         cp.set_stroke_width(1.5);
                         canvas.draw_line(skia_safe::Point::new(x_off + cx, y + cy), skia_safe::Point::new(x_off + cx, y + cy + ch), &cp);
                     }
                 }
-            }
-        } else {
+            } else {
             draw_text_with_selection(canvas, content, font_size, color, font_weight, font_style, x, y, w, max_lines, align, overflow, soft_wrap, node.slot_key);
         }
     }
