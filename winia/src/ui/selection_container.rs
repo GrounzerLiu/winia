@@ -218,12 +218,12 @@ impl SelectionContainer {
         {
             let reg = registrar.clone();
             *ACTIVE_REGISTRAR.lock().unwrap() = Some(reg.clone());
+            register_instance(&registrar);
             LOCAL_SELECTION_REGISTRAR.provides(reg, || {
                 match ctx.start_restartable_group(key, self.modifier, BoxLayout::new()) {
                     GroupStatus::Skip => {}
                     GroupStatus::Enter => {
                         ctx.set_selection_registrar(registrar.clone());
-                        register_instance(&registrar);
                         registrar.reset_offsets();
                         content(ctx);
                     }
