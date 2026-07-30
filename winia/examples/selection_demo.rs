@@ -8,7 +8,8 @@ fn selection_ui(ctx: &mut ComposeCtx) {
     let t1 = "Hello! 👋😊 The SelectionContainer makes text selectable.";
     let t2 = "🎉 Drag across 🚀 multiple texts! The highlight follows.";
     let t3 = "You can select across multiple texts! The blue highlight follows the mouse as you drag.";
-    let all = format!("{}{}{}", t1, t2, t3);
+    let rt = "RichText: bold italic red — also selectable!";
+    let all = format!("{}{}{}{}", t1, t2, rt, t3);
 
     let selected = ctx.remember(|| String::from("(none)"));
 
@@ -35,6 +36,13 @@ fn selection_ui(ctx: &mut ComposeCtx) {
                     Column::new().build(ctx, |ctx| {
                         Text::new(t1).font_size(16.0).modifier(Modifier::new().padding(4.0)).build(ctx);
                         Text::new(t2).font_size(14.0).color(Color::from_argb(200, 60, 60, 60)).modifier(Modifier::new().padding(4.0)).build(ctx);
+                        RichText::new().build(ctx, |x| {
+                            x.text("RichText: ");
+                            x.bold(|x| { x.text("bold "); });
+                            x.italic(|x| { x.text("italic "); });
+                            x.color(Color::from_argb(255, 200, 50, 50), |x| { x.text("red"); });
+                            x.text(" — also selectable!");
+                        });
                         Text::new(t3).font_size(13.0).modifier(Modifier::new().padding(4.0)).build(ctx);
                     });
                 });
