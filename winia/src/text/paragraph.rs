@@ -42,13 +42,19 @@ impl Paragraph {
     }
 
     fn get_utf16_index(&self, index: usize) -> Option<usize> {
-        let paragraph_index = self
-            .paragraph_byte_to_real_indices
-            .get_by_right(&index)?;
-        let utf16_index = self
-            .byte_to_utf16_indices
-            .get_by_left(paragraph_index)?;
-        Some(*utf16_index)
+        // 精确命中
+        if let Some(paragraph_index) = self.paragraph_byte_to_real_indices.get_by_right(&index) {
+            return self.byte_to_utf16_indices.get_by_left(paragraph_index).copied();
+        }
+        // 回溯到最近的有效起始字节（多字节字符中间）
+        for left_byte in self.paragraph_byte_to_real_indices.left_keys().iter().rev() {
+            if let Some(mapped) = self.paragraph_byte_to_real_indices.get_by_left(left_byte) {
+                if *mapped <= index {
+                    return self.byte_to_utf16_indices.get_by_left(left_byte).copied();
+                }
+            }
+        }
+        None
     }
 
     pub fn get_glyph_index(&self, index: usize) -> Option<usize> {
