@@ -195,6 +195,7 @@ impl TextField {
         // 设置光标位置到节点
         let cursor_x = (current.selection.start as f32) * font_size * 0.6;
         ctx.set_current_node_cursor(cursor_x, font_size * 1.2, cursor_visible.get());
+        ctx.end_node();
     }
 }
 
