@@ -129,6 +129,14 @@ impl<'a> ComposeCtx<'a> {
         }
     }
 
+    /// 同步 composing_range 到当前节点（渲染画下划线用）
+    pub fn sync_composing_range(&self, range: Option<std::ops::Range<usize>>) {
+        if let Some(&idx) = self.composer.node_stack.last() {
+            let node = &self.composer.layout_nodes[idx];
+            *node.composing_range.borrow_mut() = range;
+        }
+    }
+
     /// 设置当前节点的光标位置
     pub fn set_current_node_cursor(&self, cursor_index: usize, visible: bool) {
         if let Some(idx) = self.composer.node_stack.last() {

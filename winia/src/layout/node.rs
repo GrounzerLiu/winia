@@ -147,6 +147,8 @@ pub struct LayoutNode {
     pub(crate) cursor_callback: std::cell::RefCell<Option<Box<dyn Fn(usize) + Send>>>,
     /// IME 预输入回调（TextField 处理 Preedit 用）
     pub(crate) ime_callback: std::cell::RefCell<Option<Box<dyn Fn(&str, Option<(usize, usize)>) + Send>>>,
+    /// IME 组合文本范围（供渲染画下划线）
+    pub(crate) composing_range: std::cell::RefCell<Option<std::ops::Range<usize>>>,
 }
 
 // ── CachedNode：LayoutNode 的可缓存子集，用于增量重组时恢复节点 ──
@@ -226,6 +228,7 @@ impl LayoutNode {
             cursor_visible: std::cell::Cell::new(false),
             cursor_callback: std::cell::RefCell::new(None),
             ime_callback: std::cell::RefCell::new(None),
+            composing_range: std::cell::RefCell::new(None),
         }
     }
 
@@ -269,6 +272,7 @@ impl LayoutNode {
             cursor_visible: std::cell::Cell::new(false),
             cursor_callback: std::cell::RefCell::new(None),
             ime_callback: std::cell::RefCell::new(None),
+            composing_range: std::cell::RefCell::new(None),
         }
     }
 
@@ -303,6 +307,7 @@ impl Default for LayoutNode {
             cursor_visible: std::cell::Cell::new(false),
             cursor_callback: std::cell::RefCell::new(None),
             ime_callback: std::cell::RefCell::new(None),
+            composing_range: std::cell::RefCell::new(None),
         }
     }
 }

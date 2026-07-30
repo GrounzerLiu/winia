@@ -235,10 +235,14 @@ impl TextField {
                     } else {
                         val.selection = (pos + new_len)..(pos + new_len);
                     }
+                } else {
+                    val.composing_range = None;
                 }
                 v.set(val);
             }));
         }
+        // 同步 composing_range 到节点（渲染画下划线用）
+        ctx.sync_composing_range(current.composing_range.clone());
         ctx.end_node();
     }
 }

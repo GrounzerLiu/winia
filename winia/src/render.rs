@@ -177,6 +177,19 @@ fn render_pass1<'a>(
                     } else { eprintln!("[render] get_cursor_position returned None for idx={}", node.cursor_index.get()); }
                 } else { eprintln!("[render] cursor_visible is false"); }
             }
+            // IME 组合文本下划线
+            if let Some(comp_range) = node.composing_range.borrow().as_ref() {
+                if comp_range.start < comp_range.end {
+                    let rects = para.get_rects_for_range(comp_range.start..comp_range.end, skia_safe::textlayout::RectHeightStyle::Max, skia_safe::textlayout::RectWidthStyle::Max);
+                    let mut und_paint = skia_safe::Paint::default();
+                    und_paint.set_color(skia_safe::Color::from_argb(180, 0, 0, 0));
+                    und_paint.set_stroke_width(1.0);
+                    for tb in &rects {
+                        let r = tb.rect;
+                        canvas.draw_line(skia_safe::Point::new(x_off + r.left, y + r.bottom), skia_safe::Point::new(x_off + r.right, y + r.bottom), &und_paint);
+                    }
+                }
+            }
         } else {
             draw_text_with_selection(canvas, content, font_size, color, font_weight, font_style, x, y, w, max_lines, align, overflow, soft_wrap, node.slot_key);
         }
