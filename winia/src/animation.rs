@@ -83,6 +83,7 @@ struct AnimationState<T> {
     start: Instant,
     spec: AnimationSpec,
     last_velocity: f32,
+    last_update: Instant,
 }
 
 impl<T: Clone + AnimatableValue + 'static> Animatable<T> {
@@ -99,13 +100,16 @@ impl<T: Clone + AnimatableValue + 'static> Animatable<T> {
             start: Instant::now(),
             spec,
             last_velocity: 0.0,
+            last_update: Instant::now(),
         });
     }
 
     /// 检查并更新动画值，返回是否还在动画中
     pub fn update(&mut self) -> bool {
         let Some(ref mut state) = self.anim_state else { return false; };
-        let elapsed = state.start.elapsed();
+        let now = Instant::now();
+        let dt = now.duration_since(state.last_update);
+        state.last_update = now;
         let (value, done) = match &state.spec {
             AnimationSpec::Spring(spec) => {
                 // Spring 用 f32 数值计算
@@ -113,7 +117,7 @@ impl<T: Clone + AnimatableValue + 'static> Animatable<T> {
                 let to_f32 = AnimatableValue::to_f32(&state.to);
                 let displacement = compute_spring_displacement(
                     spec.stiffness, spec.damping_ratio, spec.mass,
-                    from_f32 - to_f32, &mut state.last_velocity, elapsed, spec.threshold,
+                    from_f32 - to_f32, &mut state.last_velocity, dt, spec.threshold,
                 );
                 let spring_val = to_f32 + displacement;
                 let t = ((spring_val - from_f32) / (to_f32 - from_f32).max(f32::EPSILON)).clamp(0.0, 1.0);
@@ -121,6 +125,7 @@ impl<T: Clone + AnimatableValue + 'static> Animatable<T> {
                 (value, displacement.abs() < spec.threshold && state.last_velocity.abs() < spec.threshold)
             }
             AnimationSpec::Tween(spec) => {
+                let elapsed = now - state.start;
                 let t = (elapsed.as_secs_f64() / spec.duration.as_secs_f64()).min(1.0) as f32;
                 let eased = (spec.interpolator)(t);
                 let t = state.from.lerp(&state.to, eased);
