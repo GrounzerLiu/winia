@@ -9,9 +9,7 @@ use crate::modifier::ModifierElement;
 use crate::modifier::Dimension;
 use skia_safe::{Canvas, Color4f, Paint, RRect, Rect};
 use skia_safe::image_filters;
-use skia_safe::textlayout::{
-    ParagraphBuilder, ParagraphStyle, TextStyle,
-};
+use skia_safe::textlayout::{ParagraphStyle, TextStyle};
 
 // ── 入口 ──
 
@@ -425,7 +423,7 @@ fn draw_text(
         text_style.set_font_style(FontStyle::new(font_weight.value().into(), 5.into(), slant));
     }
     let fc = crate::font::get_font_collection();
-    let mut builder = ParagraphBuilder::new(&para_style, &fc);
+    let mut builder = crate::text::ParagraphBuilder::new(&para_style, &fc);
     builder.push_style(&text_style);
     builder.add_text(content);
     let mut para = builder.build();
@@ -438,7 +436,7 @@ fn draw_text(
         crate::ui::TextAlign::Center => x + (max_width - para.max_intrinsic_width()).max(0.0) / 2.0,
         crate::ui::TextAlign::Right => x + (max_width - para.max_intrinsic_width()).max(0.0),
     };
-    para.paint(canvas, (x_offset, y));
+    para.paint(canvas, x_offset, y);
 }
 
 fn surface_snapshot(canvas: &Canvas, bounds: skia_safe::IRect) -> Option<skia_safe::Image> {
