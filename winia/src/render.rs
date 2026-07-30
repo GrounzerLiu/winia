@@ -167,9 +167,14 @@ fn render_pass1<'a>(
                 if node.cursor_visible.get() {
                     let tl = crate::text::TextLayout::new(para, 0);
                     let idx = node.cursor_index.get();
-                    // 调试：直接测 get_closest_glyph_cluster_at
-                    let debug_gc = para.inner_paragraph().get_closest_glyph_cluster_at((1.0, 1.0));
-                    eprintln!("[render] debug gc at (1,1): {:?}", debug_gc.map(|g| (g.text_range.start, g.text_range.end, g.bounds.left, g.bounds.right, g.bounds.top, g.bounds.bottom)));
+                    // 调试：测 get_glyph_cluster_at_UTF16_offset 对各种索引的返回
+                    for test_idx in [0, 1, idx, idx+1] {
+                        if let Some(gc) = para.inner_paragraph().get_glyph_cluster_at_UTF16_offset(test_idx) {
+                            eprintln!("[render] gc[{}]: range={}..{} bounds=({:.1},{:.1})-({:.1},{:.1})", test_idx, gc.text_range.start, gc.text_range.end, gc.bounds.left, gc.bounds.top, gc.bounds.right, gc.bounds.bottom);
+                        } else {
+                            eprintln!("[render] gc[{}]: None", test_idx);
+                        }
+                    }
                     if let Some((cx, cy, ch)) = tl.get_cursor_position(idx) {
                         eprintln!("[render] cursor pos=({:.0},{:.0}) h={:.0}", cx, cy, ch);
                         let mut cp = skia_safe::Paint::default();
