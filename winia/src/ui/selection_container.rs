@@ -80,13 +80,14 @@ impl SelectionRegistrar {
 
     pub fn register(&self, slot_key: u64, text_len: usize, bounds: Option<Rect>) -> usize {
         let mut inner = self.inner.lock().unwrap();
-        let offset = inner.next_global_offset;
-        // HashMap 自动去重——新 slot 才增加 next_global_offset
-        let is_new = !inner.segments.contains_key(&slot_key);
-        inner.segments.insert(slot_key, RegisteredSegment { slot_key, global_offset: offset, text_len, bounds: bounds.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)) });
-        if is_new {
+        let offset = if let Some(existing) = inner.segments.get(&slot_key) {
+            existing.global_offset
+        } else {
+            let off = inner.next_global_offset;
             inner.next_global_offset += text_len;
-        }
+            off
+        };
+        inner.segments.insert(slot_key, RegisteredSegment { slot_key, global_offset: offset, text_len, bounds: bounds.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)) });
         offset
     }
 
@@ -297,7 +298,7 @@ mod tests {
         reg.register(1, 5, None);   // offset=0, next=5
         reg.register(1, 10, None);  // same slot, NOT new → offset stays 0, next stays 5
         assert_eq!(reg.total_text_len(), 5);
-        assert_eq!(reg.segment_info(1), Some((0, 10))); // latest insert wins
+        assert_eq!(reg.segment_info(1), Some((0, 10))); // preserves original offset, latest len
     }
 
     #[test]
