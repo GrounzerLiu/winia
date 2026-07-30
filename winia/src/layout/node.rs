@@ -151,6 +151,7 @@ pub(crate) struct CachedNode {
     pub dirty: bool,
     pub cached_constraints: Option<Constraints>,
     pub slot_key: u64,
+    pub registrar: std::cell::RefCell<Option<crate::ui::selection_container::SelectionRegistrar>>,
 }
 
 impl LayoutNode {
@@ -164,6 +165,7 @@ impl LayoutNode {
             dirty: self.dirty,
             cached_constraints: self.cached_constraints,
             slot_key: self.slot_key,
+            registrar: self.registrar.clone(),
         }
     }
 
@@ -176,6 +178,7 @@ impl LayoutNode {
         self.dirty = cached.dirty;
         self.cached_constraints = cached.cached_constraints;
         self.slot_key = cached.slot_key;
+        self.registrar = cached.registrar.clone();
         self.has_text_content = modifier_has_text(&self.modifier);
         self.has_richtext_content = modifier_has_richtext(&self.modifier);
     }
