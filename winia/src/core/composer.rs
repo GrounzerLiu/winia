@@ -102,6 +102,15 @@ impl<'a> ComposeCtx<'a> {
         }
     }
 
+    /// 设置当前节点的光标位置
+    pub fn set_current_node_cursor(&self, x: f32, height: f32) {
+        if let Some(idx) = self.composer.node_stack.last() {
+            let node = &self.composer.layout_nodes[*idx];
+            node.cursor_x.set(x);
+            node.cursor_height.set(height);
+        }
+    }
+
     /// 获取选区注册表
     pub fn selection_registrar(&self) -> Option<crate::ui::selection_container::SelectionRegistrar> {
         self.composer.selection_registrar.clone()

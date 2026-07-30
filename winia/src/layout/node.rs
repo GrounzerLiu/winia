@@ -136,6 +136,9 @@ pub struct LayoutNode {
     pub(crate) parent_id: Option<u64>,
     /// CompositionLocal 作用域内的 SelectionRegistrar（Text 节点存引用）
     pub(crate) registrar: std::cell::RefCell<Option<crate::ui::selection_container::SelectionRegistrar>>,
+    /// 文本光标 x 偏移（TextField 用，render 根据 focused 画竖线）
+    pub(crate) cursor_x: std::cell::Cell<f32>,
+    pub(crate) cursor_height: std::cell::Cell<f32>,
 }
 
 // ── CachedNode：LayoutNode 的可缓存子集，用于增量重组时恢复节点 ──
@@ -209,6 +212,8 @@ impl LayoutNode {
             cached_paragraph: std::cell::RefCell::new(None),
             scroll_viewport_height: 0.0, parent_id: None,
             registrar: std::cell::RefCell::new(None),
+            cursor_x: std::cell::Cell::new(0.0),
+            cursor_height: std::cell::Cell::new(0.0),
         }
     }
 
@@ -246,6 +251,8 @@ impl LayoutNode {
             cached_paragraph: std::cell::RefCell::new(None),
             scroll_viewport_height: 0.0, parent_id: None,
             registrar: std::cell::RefCell::new(None),
+            cursor_x: std::cell::Cell::new(0.0),
+            cursor_height: std::cell::Cell::new(0.0),
         }
     }
 
@@ -274,6 +281,8 @@ impl Default for LayoutNode {
             cached_paragraph: std::cell::RefCell::new(None),
             scroll_viewport_height: 0.0, parent_id: None,
             registrar: std::cell::RefCell::new(None),
+            cursor_x: std::cell::Cell::new(0.0),
+            cursor_height: std::cell::Cell::new(0.0),
         }
     }
 }
