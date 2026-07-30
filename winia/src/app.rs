@@ -324,7 +324,18 @@ impl ApplicationHandler for AppState {
                 }
                 // Up 后清除 capture + 通知选区变化
                 if !state.is_pressed() {
-                    crate::ui::selection_container::notify_selection_change();
+                    // Compose 方式：从拖拽节点 slot_key 取 registrar 直接 fire
+                    if let Some(slot) = pw.pointer_down_slot {
+                        if let Some(root) = pw.composer.layout_root() {
+                            if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(root, slot) {
+                                if let Some(node) = crate::layout::node::find_node_by_id(root, nid) {
+                                    if let Some(reg) = node.registrar.borrow().as_ref() {
+                                        reg.fire_on_change();
+                                    }
+                                }
+                            }
+                        }
+                    }
                     pw.pointer_down_slot = None;
                 }
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
