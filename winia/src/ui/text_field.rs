@@ -104,6 +104,8 @@ impl TextField {
         // 键盘事件处理
         let value = self.value.clone();
         let on_change = std::sync::Arc::new(std::sync::Mutex::new(self.on_value_change));
+        // 从当前节点获取段落索引映射（供方向键按 glyph 边界移动）
+        let paragraph_indices = Some(ctx.cached_paragraph_maps());
         let kb_handler = {
             let v = value.clone();
             let cb = on_change.clone();
@@ -139,16 +141,25 @@ impl TextField {
                             return true;
                         }
                         winit::keyboard::NamedKey::ArrowLeft => {
-                            if val.selection.start > 0 {
-                                val.selection = (val.selection.start - 1)..(val.selection.start - 1);
+                            let prev = paragraph_indices.as_ref().and_then(|(para, _)| {
+                                let byte = para.get_by_right(&val.selection.start)?;
+                                para.left_keys().iter().rev().find(|&&b| b < *byte).copied()
+                                    .and_then(|b| para.get_by_left(&b).copied())
+                            }).unwrap_or(val.selection.start.saturating_sub(1));
+                            if prev != val.selection.start {
+                                val.selection = prev..prev;
                                 v.set(val.clone());
                             }
                             return true;
                         }
                         winit::keyboard::NamedKey::ArrowRight => {
-                            eprintln!("[kb] ArrowRight");
-                            if val.selection.start < val.text.len() {
-                                val.selection = (val.selection.start + 1)..(val.selection.start + 1);
+                            let next = paragraph_indices.as_ref().and_then(|(para, _)| {
+                                let byte = para.get_by_right(&val.selection.start)?;
+                                para.left_keys().iter().find(|&&b| b > *byte).copied()
+                                    .and_then(|b| para.get_by_left(&b).copied())
+                            }).unwrap_or(val.selection.start + 1);
+                            if next > val.selection.start && next <= val.text.len() {
+                                val.selection = next..next;
                                 v.set(val.clone());
                             }
                             return true;

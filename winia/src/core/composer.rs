@@ -137,6 +137,19 @@ impl<'a> ComposeCtx<'a> {
         }
     }
 
+    /// 获取当前节点缓存段落中的索引映射（供方向键按 glyph 边界移动）
+    pub fn cached_paragraph_maps(&self) -> (crate::text::IndexBiMap, crate::text::IndexBiMap) {
+        if let Some(&idx) = self.composer.node_stack.last() {
+            if let Some(node) = self.composer.layout_nodes.get(idx) {
+                if let Some(p) = node.cached_paragraph.borrow().as_ref() {
+                    return (p.paragraph_byte_to_real_indices.clone(), p.byte_to_utf16_indices.clone());
+                }
+            }
+        }
+        // 返回空映射作为后备
+        (crate::text::IndexBiMap::new(), crate::text::IndexBiMap::new())
+    }
+
     /// 设置当前节点的光标位置
     pub fn set_current_node_cursor(&self, cursor_index: usize, visible: bool) {
         if let Some(idx) = self.composer.node_stack.last() {
