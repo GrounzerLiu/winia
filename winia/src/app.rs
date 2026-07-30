@@ -260,8 +260,8 @@ impl ApplicationHandler for AppState {
                             let anchor = if let Ok(borrow) = innermost.cached_paragraph.try_borrow() {
                                 if let Some(para) = borrow.as_ref() {
                                     let (ax, ay) = node_abs_position(root, innermost.id);
-                                    para.get_closest_glyph_cluster_at(skia_safe::Point::new(scene_pos.0 - ax, scene_pos.1 - ay))
-                                        .map(|gc| { eprintln!("[selection] gc real idx={} for emoji test", gc.text_range.start); gc.text_range.start })
+                                    let tl = crate::text::TextLayout::new(para, 0); // length not critical for hit test
+                                    Some(tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(scene_pos.0 - ax, scene_pos.1 - ay)))
                                 } else { None }
                             } else { None };
                             pw.pointer_down_state = Some(PtrDownState {
@@ -363,13 +363,15 @@ impl ApplicationHandler for AppState {
                                             crate::ui::TextAlign::Right => abs_x + (node_w - para.max_intrinsic_width()).max(0.0),
                                             _ => abs_x,
                                         };
-                                        if let Some(gc) = para.get_closest_glyph_cluster_at(skia_safe::Point::new(scene_pos.0 - x_off, scene_pos.1 - abs_y)) {
+                                        let tl = crate::text::TextLayout::new(para, 0);
+                                        {
                                             let reg = pw.composer.selection_registrar.as_ref()
                                                 .cloned()
                                                 .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
                                             // 只更新注册到 SelectionContainer 的节点
                                             if let Some((global_off, _)) = reg.segment_info(innermost.slot_key) {
-                                                let current_global = global_off + gc.text_range.start;
+                                                let current_index = tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(scene_pos.0 - x_off, scene_pos.1 - abs_y));
+                                                let current_global = global_off + current_index;
                                                 let anchor_global = pw.pointer_down_state.as_ref().and_then(|d| d.selection_anchor);
                                                 let s = anchor_global.map(|a| a.min(current_global)).unwrap_or(current_global);
                                                 let e = anchor_global.map(|a| a.max(current_global)).unwrap_or(current_global + 1);
