@@ -207,31 +207,109 @@ impl ParagraphBuilder {
 }
 
 #[cfg(test)]
-mod paragraph_builder_test{
-    use crate::text::index_bimap::IndexBiMap;
-    use crate::text::paragraph::Paragraph;
+mod paragraph_builder_test {
+    use crate::text::paragraph_builder::ParagraphBuilder;
     use skia_safe::textlayout::{FontCollection, ParagraphStyle};
-    use unicode_segmentation::UnicodeSegmentation;
+    use crate::text::index_bimap::IndexBiMap;
+
+    // ── IndexBiMap 基础 ──
 
     #[test]
-    fn test_paragraph_builder() {
-        // let font_collection = FontCollection::new();
-        // let paragraph_style = ParagraphStyle::default();
-        // let mut paragraph_builder = super::ParagraphBuilder::new(&paragraph_style, font_collection);
-        // paragraph_builder.add_text("abc");
-        // paragraph_builder.add_placeholder("h", SharedDrawable::empty());
-        // paragraph_builder.add_text("🤗");
-        // paragraph_builder.add_placeholder("hhhhhhh", SharedDrawable::empty());
-        // paragraph_builder.add_text("一二三");
-        // paragraph_builder.build();
-        // let text = paragraph_builder.paragraph_builder.get_text();
-        // let length = text.len();
-        // let utf16_length = text.encode_utf16().count();
-        // let glyph_length = text.graphemes(true).count();
-        // assert_eq!(paragraph_builder.byte_to_glyph_indices.get_by_left(&length), Some(&glyph_length));
-        // assert_eq!(paragraph_builder.byte_to_utf16_indices.get_by_left(&length), Some(&utf16_length));
-        // println!("byte_to_glyph_indices: {:?}", paragraph_builder.byte_to_glyph_indices);
-        // println!("byte_to_utf16_indices: {:?}", paragraph_builder.byte_to_utf16_indices);
-        // println!("paragraph_byte_to_real_index: {:?}", paragraph_builder.paragraph_byte_to_real_index);
+    fn test_index_bimap_basic() {
+        let mut m = IndexBiMap::new();
+        m.insert(0, 10);
+        m.insert(1, 11);
+        m.insert(3, 15);
+        assert_eq!(m.get_by_left(&0), Some(&10));
+        assert_eq!(m.get_by_left(&1), Some(&11));
+        assert_eq!(m.get_by_left(&3), Some(&15));
+        assert_eq!(m.get_by_left(&2), None);
+        assert_eq!(m.get_by_right(&10), Some(&0));
+        assert_eq!(m.get_by_right(&11), Some(&1));
+        assert_eq!(m.get_by_right(&15), Some(&3));
+        assert_eq!(m.get_by_right(&99), None);
+        assert_eq!(m.len(), 3);
+    }
+
+    #[test]
+    fn test_index_bimap_contains() {
+        let mut m = IndexBiMap::new();
+        m.insert(5, 50);
+        assert!(m.contains_left(&5));
+        assert!(!m.contains_left(&0));
+        assert!(m.contains_right(&50));
+        assert!(!m.contains_right(&0));
+    }
+
+    #[test]
+    fn test_index_bimap_clear() {
+        let mut m = IndexBiMap::new();
+        m.insert(0, 0);
+        m.clear();
+        assert!(m.is_empty());
+        assert_eq!(m.len(), 0);
+    }
+
+    // ── ParagraphBuilder::add_text 纯 ASCII ──
+
+    #[test]
+    fn test_builder_ascii() {
+        let fc = FontCollection::new();
+        let style = ParagraphStyle::default();
+        let mut b = ParagraphBuilder::new(&style, fc);
+        b.add_text("Hello");
+        // 每个 ASCII 字符: byte=1, utf16=1, real=1
+        assert_eq!(b.last_byte_index, 5);
+        assert_eq!(b.last_real_index, 5);
+        assert_eq!(b.last_utf16_index, 5);
+        // byte 0 -> utf16 0
+        assert_eq!(b.byte_to_utf16_indices.get_by_left(&0), Some(&0));
+        // byte 4 -> utf16 4
+        assert_eq!(b.byte_to_utf16_indices.get_by_left(&4), Some(&4));
+    }
+
+    // ── ParagraphBuilder::add_text 含 emoji ──
+
+    #[test]
+    fn test_builder_emoji() {
+        let fc = FontCollection::new();
+        let style = ParagraphStyle::default();
+        let mut b = ParagraphBuilder::new(&style, fc);
+        b.add_text("Hi 😊"); // H(0),i(1),space(2),😊(3-6) -> 7 bytes, 4 chars, 5 utf16 units
+        // real (byte index) for '😊' is 3
+        assert_eq!(b.paragraph_byte_to_real_indices.get_by_left(&3).copied(), Some(3));
+        // utf16 for '😊' at byte 3 should be 3 (H=0,i=1,space=2,😊=3-4)
+        assert_eq!(b.byte_to_utf16_indices.get_by_left(&3).copied(), Some(3));
+        // utf16 for byte 4 (part of 😊 surrogate) — should not exist
+        assert!(b.byte_to_utf16_indices.get_by_left(&4).is_none());
+    }
+
+    // ── ParagraphBuilder::add_text 混合 CJK ──
+
+    #[test]
+    fn test_builder_cjk() {
+        let fc = FontCollection::new();
+        let style = ParagraphStyle::default();
+        let mut b = ParagraphBuilder::new(&style, fc);
+        b.add_text("A中文B");
+        // A(0),中(1-3),文(4-6),B(7) -> 8 bytes, 4 chars
+        // utf16: A=0, 中=1, 文=2, B=3
+        assert_eq!(b.byte_to_utf16_indices.get_by_left(&1).copied(), Some(1)); // 中 byte 1 -> utf16 1
+        assert_eq!(b.byte_to_utf16_indices.get_by_left(&4).copied(), Some(2)); // 文 byte 4 -> utf16 2
+    }
+
+    // ── 多段 add_text 拼接 ──
+
+    #[test]
+    fn test_builder_multiple_calls() {
+        let fc = FontCollection::new();
+        let style = ParagraphStyle::default();
+        let mut b = ParagraphBuilder::new(&style, fc);
+        b.add_text("ab");
+        b.add_text("cd");
+        // total 4 bytes
+        assert_eq!(b.last_byte_index, 4);
+        // 'c' at byte 2 -> utf16 2
+        assert_eq!(b.byte_to_utf16_indices.get_by_left(&2).copied(), Some(2));
     }
 }

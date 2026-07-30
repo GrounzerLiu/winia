@@ -359,117 +359,28 @@ impl Paragraph {
 #[cfg(test)]
 mod paragraph_tests {
     use skia_safe::FontMgr;
-    use skia_safe::textlayout::{FontCollection, ParagraphStyle, RectHeightStyle, RectWidthStyle, TextStyle};
-    use unicode_segmentation::UnicodeSegmentation;
-    use crate::text::index_bimap::IndexBiMap;
+    use skia_safe::textlayout::{FontCollection, ParagraphStyle, TextStyle};
     use crate::text::ParagraphBuilder;
 
-    //#[test]
-    // fn test_paragraph() {
-    //     let text = "eat d🤗eeeeee 你好世界👩🏽‍🦰三";
-    //     let mut font_collection = FontCollection::new();
-    //     font_collection.set_default_font_manager(FontMgr::default(), None);
-    //     let paragraph_style = ParagraphStyle::default();
-    //     let mut paragraph_builder = ParagraphBuilder::new(&paragraph_style, font_collection);
-    //     let mut text_style = TextStyle::new();
-    //     text_style.set_font_size(30.0);
-    // 
-    //     paragraph_builder.push_style(&text_style);
-    //     paragraph_builder.add_text("eat ");
-    //     paragraph_builder.pop();
-    // 
-    //     paragraph_builder.push_style(&text_style);
-    //     paragraph_builder.add_placeholder("d", SharedDrawable::from_file("/home/grounzer/Downloads/check_box_selected.svg").unwrap());
-    //     paragraph_builder.pop();
-    // 
-    //     paragraph_builder.push_style(&text_style);
-    //     paragraph_builder.add_text("🤗");
-    //     paragraph_builder.pop();
-    // 
-    //     paragraph_builder.push_style(&text_style);
-    //     paragraph_builder.add_placeholder("eeeeee", SharedDrawable::from_file("/home/grounzer/Downloads/check_box_selected.svg").unwrap());
-    //     paragraph_builder.pop();
-    // 
-    //     paragraph_builder.push_style(&text_style);
-    //     paragraph_builder.add_text(" 你好世界👩🏽‍🦰三");
-    //     paragraph_builder.pop();
-    // 
-    //     // println!("text: {}", text);
-    //     // println!("{}", paragraph_builder.get_text());
-    //     // let mut last_utf16_index = 0;
-    //     // paragraph_builder.get_text().grapheme_indices(false).for_each(|(index, str)| {
-    //     //     println!("start: {}, end: {}, str: {}", index, index + str.len(), str);
-    //     //     println!("utf16_index: {}", last_utf16_index);
-    //     //     last_utf16_index += str.encode_utf16().count();
-    //     //     println!("utf16_index: {}", last_utf16_index);
-    //     // });
-    // 
-    //     let mut paragraph = paragraph_builder.build();
-    //     paragraph.layout(90.0);
-    // 
-    //     println!("paragraph_byte_to_real_index: {:?}", paragraph.paragraph_byte_to_real_index);
-    //     println!("byte_to_utf16_indices: {:?}", paragraph.byte_to_utf16_indices);
-    //     println!("byte_to_glyph_indices: {:?}", paragraph.byte_to_glyph_indices);
-    //     
-    //     println!("width: {}", paragraph.max_width());
-    //     println!("height: {}", paragraph.height());
-    //     paragraph.get_line_metrics().iter().for_each(|line| {
-    //         println!("line: start: {}, end: {}", line.start_index, line.end_index);
-    //     });
-    //     // paragraph.get_rects_for_range(0..18, RectHeightStyle::Max, RectWidthStyle::Tight).iter().for_each(|rect| {
-    //     //     println!("rect: {:?}", rect);
-    //     // });
-    // 
-    //     println!();
-    // 
-    //     // for (index, str) in text.grapheme_indices(false) {
-    //     //     let rect = paragraph.get_rects_for_range(index..index + str.len(), RectHeightStyle::Max, RectWidthStyle::Tight);
-    //     //     let center = rect[0].rect.center();
-    //     //     let p = paragraph.get_glyph_position_at_coordinate(center);
-    //     //     println!("index: {}, str: {}, rect: {:?}, p: {:?}", index, str, rect[0], p);
-    //     // }
-    //     println!();
-    //     let mut last_index = 0;
-    //     for (byte_index, glyph) in paragraph.byte_to_glyph_indices.clone().iter() {
-    //         if *byte_index == 0 {
-    //             continue;
-    //         }
-    //         let start = *paragraph.paragraph_byte_to_real_index.get_by_left(&last_index).unwrap();
-    //         let end = *paragraph.paragraph_byte_to_real_index.get_by_left(byte_index).unwrap();
-    //         println!("start: {}, end: {}", start, end);
-    //         let rect = paragraph.get_rects_for_range(start..end, RectHeightStyle::Max, RectWidthStyle::Tight);
-    //         let mut center = rect[0].rect.center();
-    //         center.x -= 5.0;
-    //         let p = paragraph.get_glyph_position_at_coordinate(center);
-    //         println!("get_rects_for_range:");
-    //         println!("\tx: {}, y: {}, width: {}, height: {}", rect[0].rect.left, rect[0].rect.top, rect[0].rect.width(), rect[0].rect.height());
-    //         println!("get_glyph_position_at_coordinate:");
-    //         println!("\tp: {:?}", p);
-    //         println!("get_word_boundary:");
-    //         let range = paragraph.get_word_boundary(start);
-    //         println!("\trange: {:?}", range);
-    //         println!("get_line_number_at:");
-    //         println!("\tline {:?}", paragraph.get_line_number_at(start));
-    //         println!("get_glyph_cluster_at:");
-    //         println!("\t{:?}", paragraph.get_glyph_cluster_at(start));
-    //         println!("get_closest_glyph_cluster_at:");
-    //         println!("\t{:?}", paragraph.get_closest_glyph_cluster_at(center));
-    //         println!("get_font_at:");
-    //         println!("\t{:?}", paragraph.get_font_at(start));
-    //         
-    //         println!();
-    //         
-    //         
-    //         last_index = *byte_index;
-    //     }
-    // 
-    // }
+    #[test]
+    fn test_paragraph_layout_and_hit_test() {
+        let mut fc = FontCollection::new();
+        fc.set_default_font_manager(FontMgr::default(), None);
+        let style = ParagraphStyle::default();
+        let mut b = ParagraphBuilder::new(&style, fc);
+        let mut ts = TextStyle::new();
+        ts.set_font_size(16.0);
+        b.push_style(&ts);
+        b.add_text("Hello 世界");
+        let mut p = b.build();
+        p.layout(200.0);
+        assert!(p.height() > 0.0);
+        assert!(p.max_intrinsic_width() > 0.0);
+        // get_closest_glyph_cluster_at: hits should return valid info
+        let gc = p.get_closest_glyph_cluster_at((10.0, 5.0));
+        assert!(gc.is_some());
+        // get_rects_for_range returns rects
+        let rects = p.get_rects_for_range(0..5, skia_safe::textlayout::RectHeightStyle::Max, skia_safe::textlayout::RectWidthStyle::Max);
+        assert!(!rects.is_empty());
+    }
 }
-
-/*
-line: start: 0, end: 5
-line: start: 5, end: 16
-line: start: 16, end: 25
-line: start: 25, end: 43
-line: start: 43, end: 46
-*/
