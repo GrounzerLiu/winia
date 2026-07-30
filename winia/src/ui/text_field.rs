@@ -81,9 +81,9 @@ impl TextField {
         let current = self.value.get();
         let content = current.text.clone();
 
-        // 样式默认值
+        let theme = crate::ui::theme::WiniaTheme::colors();
         let font_size = 14.0;
-        let color = crate::modifier::Color::from_argb(255, 0, 0, 0);
+        let color = theme.on_surface;
 
         // 键盘事件处理
         let value = self.value.clone();

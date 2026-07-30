@@ -170,7 +170,7 @@ fn render_pass1<'a>(
                     .unwrap_or(true);
                 if blink {
                 let mut cursor_paint = skia_safe::Paint::default();
-                cursor_paint.set_color(skia_safe::Color::from_argb(255, 0, 0, 0));
+                cursor_paint.set_color(skia_safe::Color::from_argb(255, color.r, color.g, color.b));
                 cursor_paint.set_stroke_width(1.5);
                 let cx = x_off + node.cursor_x.get();
                 let cy = y + 2.0;
