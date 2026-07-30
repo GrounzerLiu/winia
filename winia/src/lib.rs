@@ -15,8 +15,8 @@ pub mod layout;
 pub mod ui;
 pub mod text;
 pub mod render;
-pub mod app;
 pub mod animation;
+pub mod app;
 pub mod effect;
 #[cfg(feature = "debug-server")]
 pub mod debug;
@@ -60,7 +60,6 @@ pub mod prelude {
     pub use crate::ui::rich_text::RichText;
     pub use crate::text::{InlineDrawable, ImageDrawable, SvgDrawable};
     pub use crate::layout::{Arrangement, Alignment, Constraints, LayoutDirection};
-    pub use crate::animation::{animate_as_state, animate_to, animate_to_cb, Easing};
     pub use crate::ui::theme::current_layout_direction;
     pub use crate::effect::{LaunchedEffect, DisposableEffect, CoroutineScope, remember_coroutine_scope, StreamObverse, observe_watch};
     pub use std::time::Duration;

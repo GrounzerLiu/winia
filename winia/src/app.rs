@@ -732,7 +732,6 @@ impl ApplicationHandler for AppState {
                     }
                 }
                 if handled { if let Some(ref sw) = pw.skia_window { sw.request_redraw(); } }
-                if crate::animation::tick() { if let Some(ref sw) = pw.skia_window { sw.request_redraw(); } }
                 if debug::has_pending() { if let Some(ref sw) = pw.skia_window { sw.request_redraw(); } }
             }
             _ => {}
