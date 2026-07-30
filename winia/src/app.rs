@@ -248,9 +248,11 @@ impl ApplicationHandler for AppState {
                 };
                 if state.is_pressed() {
                     // ── Down：记录按下态 + 清除旧选区 ──
-                    if let Some(root) = pw.composer.layout_root() {
+                    let (focusable_id, is_focusable) = if let Some(root) = pw.composer.layout_root() {
                         let path = hit_test(root, scene_pos.0, scene_pos.1);
                         if let Some(innermost) = path.last() {
+                            let fid = innermost.id;
+                            let f = crate::layout::node::has_focusable_modifier(innermost);
                             // 清除旧的选区（新点击开始）
                             {
                                 let reg = innermost.registrar.borrow().as_ref().cloned()
@@ -260,18 +262,14 @@ impl ApplicationHandler for AppState {
                             let anchor = if let Ok(borrow) = innermost.cached_paragraph.try_borrow() {
                                 if let Some(para) = borrow.as_ref() {
                                     let (ax, ay) = node_abs_position(root, innermost.id);
-                                    let tl = crate::text::TextLayout::new(para, 0); // length not critical for hit test
+                                    let tl = crate::text::TextLayout::new(para, 0);
                                     Some(tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(scene_pos.0 - ax, scene_pos.1 - ay)))
                                 } else { None }
                             } else { None };
                             pw.pointer_down_state = Some(PtrDownState {
-                                node_id: innermost.id,
-                                position: scene_pos,
-                                time: Instant::now(),
-                                selection_anchor: None,
-                            });
+                                node_id: innermost.id, position: scene_pos, time: Instant::now(), selection_anchor: None });
                             pw.pointer_down_slot = Some(innermost.slot_key);
-                            // 将 anchor 转为全局索引再存入 PtrDownState
+                            // 将 anchor 转为全局索引再存入
                             if let Some(a) = anchor {
                                 let reg = innermost.registrar.borrow().as_ref().cloned()
                                     .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
@@ -279,9 +277,11 @@ impl ApplicationHandler for AppState {
                                 let global_a = seg.map(|(off,_)| off + a).unwrap_or(a);
                                 pw.pointer_down_state.as_mut().map(|s| s.selection_anchor = Some(global_a));
                             }
-                        }
-                    }
-                } else {
+                            (Some(fid), f)
+                        } else { (None, false) }
+                    } else { (None, false) };
+                    // 点击自动聚焦
+                    if is_focusable { if let Some(id) = focusable_id { if let Some(root) = pw.composer.layout_root_mut() { crate::layout::node::clear_focus(root); crate::layout::node::set_focus_by_id(root, id); } } }
                     // ── Up：Compose 风格 click 检测 ──
                     const CLICK_SLOP: f32 = 18.0;
                     const CLICK_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);

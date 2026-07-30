@@ -445,7 +445,7 @@ pub fn find_node_by_id(root: &LayoutNode, id: u64) -> Option<&LayoutNode> {
     None
 }
 
-fn has_focusable_modifier(node: &LayoutNode) -> bool {
+pub fn has_focusable_modifier(node: &LayoutNode) -> bool {
     node.modifier.elements().iter().any(|el| matches!(el, crate::modifier::ModifierElement::Focusable))
 }
 
