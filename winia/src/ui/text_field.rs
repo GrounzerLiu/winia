@@ -115,20 +115,31 @@ impl TextField {
                 match key {
                     winit::keyboard::Key::Named(named) => match named {
                         winit::keyboard::NamedKey::Backspace => {
-                            if val.selection.start == val.selection.end && val.selection.start > 0 {
-                                let change = TextChange::Deleted { range: (val.selection.start - 1)..val.selection.start };
-                                change.apply_to(&mut val);
+                            if val.selection.start > 0 {
+                                let prev = val.text.as_str()
+                                    .grapheme_indices(true)
+                                    .map(|(i, _)| i)
+                                    .rev()
+                                    .find(|&pos| pos < val.selection.start)
+                                    .unwrap_or(0);
+                                let range = prev..val.selection.start;
+                                val.text.replace_range(range.clone(), "");
+                                val.selection = prev..prev;
                                 v.set(val.clone());
-                                if let Ok(cb) = cb.lock() { cb(val); }
                             }
                             return true;
                         }
                         winit::keyboard::NamedKey::Delete => {
-                            if val.selection.start == val.selection.end && val.selection.start < val.text.len() {
-                                let change = TextChange::Deleted { range: val.selection.start..(val.selection.start + 1) };
-                                change.apply_to(&mut val);
+                            if val.selection.start < val.text.len() {
+                                let next = val.text.as_str()
+                                    .grapheme_indices(true)
+                                    .map(|(i, _)| i)
+                                    .find(|&pos| pos > val.selection.start)
+                                    .unwrap_or(val.text.len());
+                                let range = val.selection.start..next;
+                                val.text.replace_range(range.clone(), "");
+                                val.selection = val.selection.start..val.selection.start;
                                 v.set(val.clone());
-                                if let Ok(cb) = cb.lock() { cb(val); }
                             }
                             return true;
                         }
