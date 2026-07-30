@@ -161,6 +161,20 @@ fn render_pass1<'a>(
                 }
             }
             para.paint(canvas, x_off, y);
+            // 绘制选中高亮（selection.start != selection.end）
+            let sel_range = node.selection_range.borrow().clone()
+                .filter(|r| r.start < r.end);
+            if let Some(ref range) = sel_range {
+                if range.start < range.end {
+                    let rects = para.get_rects_for_range(range.clone(), skia_safe::textlayout::RectHeightStyle::Max, skia_safe::textlayout::RectWidthStyle::Max);
+                    let mut sel_paint = skia_safe::Paint::default();
+                    let tc = crate::ui::theme::WiniaTheme::colors().primary;
+                    sel_paint.set_color(skia_safe::Color::from_argb(60, tc.r, tc.g, tc.b));
+                    for tb in &rects {
+                        canvas.draw_rect(skia_safe::Rect::new(x_off + tb.rect.left, y + tb.rect.top, x_off + tb.rect.right, y + tb.rect.bottom), &sel_paint);
+                    }
+                }
+            }
             // 绘制光标（聚焦的 TextField 节点）
             if node.focused {
                 eprintln!("[render] cursor focused=true idx={} cursor_visible={}", node.cursor_index.get(), node.cursor_visible.get());

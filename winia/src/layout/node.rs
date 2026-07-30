@@ -149,6 +149,8 @@ pub struct LayoutNode {
     pub(crate) ime_callback: std::cell::RefCell<Option<Box<dyn Fn(&str, Option<(usize, usize)>) + Send>>>,
     /// IME 组合文本范围（供渲染画下划线）
     pub(crate) composing_range: std::cell::RefCell<Option<std::ops::Range<usize>>>,
+    /// 选区范围（供渲染高亮选中文本）
+    pub(crate) selection_range: std::cell::RefCell<Option<std::ops::Range<usize>>>,
 }
 
 // ── CachedNode：LayoutNode 的可缓存子集，用于增量重组时恢复节点 ──
@@ -229,6 +231,7 @@ impl LayoutNode {
             cursor_callback: std::cell::RefCell::new(None),
             ime_callback: std::cell::RefCell::new(None),
             composing_range: std::cell::RefCell::new(None),
+            selection_range: std::cell::RefCell::new(None),
         }
     }
 
@@ -273,6 +276,7 @@ impl LayoutNode {
             cursor_callback: std::cell::RefCell::new(None),
             ime_callback: std::cell::RefCell::new(None),
             composing_range: std::cell::RefCell::new(None),
+            selection_range: std::cell::RefCell::new(None),
         }
     }
 
@@ -308,6 +312,7 @@ impl Default for LayoutNode {
             cursor_callback: std::cell::RefCell::new(None),
             ime_callback: std::cell::RefCell::new(None),
             composing_range: std::cell::RefCell::new(None),
+            selection_range: std::cell::RefCell::new(None),
         }
     }
 }

@@ -137,6 +137,14 @@ impl<'a> ComposeCtx<'a> {
         }
     }
 
+    /// 同步 selection_range 到当前节点（渲染高亮选区用）
+    pub fn sync_selection_range(&self, range: Option<std::ops::Range<usize>>) {
+        if let Some(&idx) = self.composer.node_stack.last() {
+            let node = &self.composer.layout_nodes[idx];
+            *node.selection_range.borrow_mut() = range;
+        }
+    }
+
     /// 获取当前节点缓存段落中的索引映射（供方向键按 glyph 边界移动）
     pub fn cached_paragraph_maps(&self) -> (crate::text::IndexBiMap, crate::text::IndexBiMap) {
         if let Some(&idx) = self.composer.node_stack.last() {

@@ -112,10 +112,18 @@ impl TextField {
                 if e.event_type != crate::modifier::KbEventType::KeyDown { return false; }
                 let mut val = v.get();
                 let key = &e.key;
+                let shift = e.is_shift_pressed;
                 match key {
                     winit::keyboard::Key::Named(named) => match named {
                         winit::keyboard::NamedKey::Backspace => {
-                            if val.selection.start > 0 {
+                            if val.selection.start != val.selection.end {
+                                // 有选区：删除选区
+                                let s = val.selection.start.min(val.selection.end);
+                                let e = val.selection.start.max(val.selection.end);
+                                val.text.replace_range(s..e, "");
+                                val.selection = s..s;
+                                v.set(val.clone());
+                            } else if val.selection.start > 0 {
                                 let prev = val.text.as_str()
                                     .grapheme_indices(true)
                                     .map(|(i, _)| i)
@@ -130,7 +138,13 @@ impl TextField {
                             return true;
                         }
                         winit::keyboard::NamedKey::Delete => {
-                            if val.selection.start < val.text.len() {
+                            if val.selection.start != val.selection.end {
+                                let s = val.selection.start.min(val.selection.end);
+                                let e = val.selection.start.max(val.selection.end);
+                                val.text.replace_range(s..e, "");
+                                val.selection = s..s;
+                                v.set(val.clone());
+                            } else if val.selection.start < val.text.len() {
                                 let next = val.text.as_str()
                                     .grapheme_indices(true)
                                     .map(|(i, _)| i)
@@ -151,27 +165,33 @@ impl TextField {
                             return true;
                         }
                         winit::keyboard::NamedKey::ArrowLeft => {
-                            // 按 grapheme cluster 边界移动（对齐 D:\winia）
                             let prev = val.text.as_str()
                                 .grapheme_indices(true)
                                 .map(|(i, _)| i)
                                 .rev()
                                 .find(|&pos| pos < val.selection.start);
                             if let Some(prev) = prev {
-                                val.selection = prev..prev;
+                                if shift {
+                                    val.selection = prev..val.selection.end.max(prev);
+                                } else {
+                                    val.selection = prev..prev;
+                                }
                                 v.set(val.clone());
                             }
                             return true;
                         }
                         winit::keyboard::NamedKey::ArrowRight => {
-                            // 按 grapheme cluster 边界移动（对齐 D:\winia）
                             let next = val.text.as_str()
                                 .grapheme_indices(true)
                                 .map(|(i, _)| i)
                                 .find(|&pos| pos > val.selection.start);
                             if let Some(next) = next {
                                 if next <= val.text.len() {
-                                    val.selection = next..next;
+                                    if shift {
+                                        val.selection = val.selection.start.min(next)..next;
+                                    } else {
+                                        val.selection = next..next;
+                                    }
                                     v.set(val.clone());
                                 }
                             }
@@ -267,6 +287,11 @@ impl TextField {
         }
         // 同步 composing_range 到节点（渲染画下划线用）
         ctx.sync_composing_range(current.composing_range.clone());
+        // 同步 selection_range 到节点（渲染高亮选区用）
+        let sel = if current.selection.start != current.selection.end {
+            Some(current.selection.start.min(current.selection.end)..current.selection.start.max(current.selection.end))
+        } else { None };
+        ctx.sync_selection_range(sel);
         ctx.end_node();
     }
 }
