@@ -49,6 +49,8 @@ pub fn push_animatable(state: State<f32>, target: f32, spec: AnimationSpec) {
     list.retain(|anim| anim.state_id() != sid);
     let mut anim = Animatable::new(state);
     anim.animate_to(target, spec);
+    // 立即执行首次更新，避免等下一帧 flash
+    anim.update();
     list.push(Box::new(anim));
 }
 
