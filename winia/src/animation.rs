@@ -37,6 +37,8 @@ pub fn push_animation(anim: Box<dyn AnimationInstance + 'static>) {
 
 /// 注册一个 Animatable<f32> 到全局活跃列表（由 animate_float_as_state 调用）
 pub fn push_animatable(state: State<f32>, target: f32, spec: AnimationSpec) {
+    let current = state.get();
+    if (current - target).abs() < f32::EPSILON { return; }
     let mut anim = Animatable::new(state);
     anim.animate_to(target, spec);
     ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
