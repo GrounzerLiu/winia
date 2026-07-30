@@ -144,6 +144,7 @@ impl TextField {
                             return true;
                         }
                         winit::keyboard::NamedKey::ArrowRight => {
+                            eprintln!("[kb] ArrowRight");
                             if val.selection.start < val.text.len() {
                                 val.selection = (val.selection.start + 1)..(val.selection.start + 1);
                                 v.set(val.clone());
