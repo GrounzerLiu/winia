@@ -166,7 +166,11 @@ fn render_pass1<'a>(
                 eprintln!("[render] cursor focused=true idx={} cursor_visible={}", node.cursor_index.get(), node.cursor_visible.get());
                 if node.cursor_visible.get() {
                     let tl = crate::text::TextLayout::new(para, 0);
-                    if let Some((cx, cy, ch)) = tl.get_cursor_position(node.cursor_index.get()) {
+                    let idx = node.cursor_index.get();
+                    // 调试：直接测 get_closest_glyph_cluster_at
+                    let debug_gc = para.inner_paragraph().get_closest_glyph_cluster_at((1.0, 1.0));
+                    eprintln!("[render] debug gc at (1,1): {:?}", debug_gc.map(|g| (g.text_range.start, g.text_range.end, g.bounds.left, g.bounds.right, g.bounds.top, g.bounds.bottom)));
+                    if let Some((cx, cy, ch)) = tl.get_cursor_position(idx) {
                         eprintln!("[render] cursor pos=({:.0},{:.0}) h={:.0}", cx, cy, ch);
                         let mut cp = skia_safe::Paint::default();
                         cp.set_color(skia_safe::Color::from_argb(255, color.r, color.g, color.b));
