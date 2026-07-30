@@ -6,6 +6,7 @@ use crate::core::composer::ComposeCtx;
 use crate::core::state::State;
 use crate::modifier::Modifier;
 use std::ops::Range;
+use unicode_segmentation::UnicodeSegmentation;
 
 // ═══════════════════════════════════════════════════════════
 // TextFieldValue — 文本输入状态
@@ -104,8 +105,6 @@ impl TextField {
         // 键盘事件处理
         let value = self.value.clone();
         let on_change = std::sync::Arc::new(std::sync::Mutex::new(self.on_value_change));
-        // 从当前节点获取段落索引映射（供方向键按 glyph 边界移动）
-        let paragraph_indices = Some(ctx.cached_paragraph_maps());
         let kb_handler = {
             let v = value.clone();
             let cb = on_change.clone();
@@ -141,26 +140,29 @@ impl TextField {
                             return true;
                         }
                         winit::keyboard::NamedKey::ArrowLeft => {
-                            let prev = paragraph_indices.as_ref().and_then(|(para, _)| {
-                                let byte = para.get_by_right(&val.selection.start)?;
-                                para.left_keys().iter().rev().find(|&&b| b < *byte).copied()
-                                    .and_then(|b| para.get_by_left(&b).copied())
-                            }).unwrap_or(val.selection.start.saturating_sub(1));
-                            if prev != val.selection.start {
+                            // 按 grapheme cluster 边界移动（对齐 D:\winia）
+                            let prev = val.text.as_str()
+                                .grapheme_indices(true)
+                                .map(|(i, _)| i)
+                                .rev()
+                                .find(|&pos| pos < val.selection.start);
+                            if let Some(prev) = prev {
                                 val.selection = prev..prev;
                                 v.set(val.clone());
                             }
                             return true;
                         }
                         winit::keyboard::NamedKey::ArrowRight => {
-                            let next = paragraph_indices.as_ref().and_then(|(para, _)| {
-                                let byte = para.get_by_right(&val.selection.start)?;
-                                para.left_keys().iter().find(|&&b| b > *byte).copied()
-                                    .and_then(|b| para.get_by_left(&b).copied())
-                            }).unwrap_or(val.selection.start + 1);
-                            if next > val.selection.start && next <= val.text.len() {
-                                val.selection = next..next;
-                                v.set(val.clone());
+                            // 按 grapheme cluster 边界移动（对齐 D:\winia）
+                            let next = val.text.as_str()
+                                .grapheme_indices(true)
+                                .map(|(i, _)| i)
+                                .find(|&pos| pos > val.selection.start);
+                            if let Some(next) = next {
+                                if next <= val.text.len() {
+                                    val.selection = next..next;
+                                    v.set(val.clone());
+                                }
                             }
                             return true;
                         }
