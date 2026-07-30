@@ -1,24 +1,22 @@
-//! TextLayout — 文本排版布局，提供光标定位、选中区域、命中测试
-
-use super::Paragraph;
+use crate::text::Paragraph;
 use skia_safe::textlayout::{RectHeightStyle, RectWidthStyle, TextBox, TextDirection};
 use skia_safe::{Canvas, Point};
 use std::ops::Range;
 
-/// 文本布局封装。
-///
-/// 基于已排版的 Paragraph 提供：
-/// - `get_cursor_position()` — 获取光标位置 (x, y, height)
-/// - `get_rects_for_range()` — 获取选中区域矩形
-/// - `get_closest_grapheme_cluster_cluster_at()` — 命中测试
 pub struct TextLayout<'a> {
     paragraph: &'a Paragraph,
     length: usize,
 }
 
 impl<'a> TextLayout<'a> {
-    pub(crate) fn new(paragraph: &'a Paragraph, length: usize) -> TextLayout<'a> {
-        TextLayout { paragraph, length }
+    pub(crate) fn new(
+        paragraph: &'a Paragraph,
+        length: usize,
+    ) -> TextLayout<'a> {
+        TextLayout {
+            paragraph,
+            length,
+        }
     }
 
     pub fn draw(&self, canvas: &Canvas, x: f32, y: f32) {
@@ -41,49 +39,46 @@ impl<'a> TextLayout<'a> {
         }
     }
 
-    /// 获取光标在指定 index 处的 (x, y, height) 坐标。
-    /// 兼容空文本（length == 0）情况。
+    /// get the cursor position and height of the line at the index
+    /// * return (x,y,height)
     pub fn get_cursor_position(&self, index: usize) -> Option<(f32, f32, f32)> {
-        let para = self.paragraph.inner_paragraph();
-
-        // 空文本：取第一个 glyph cluster 位置（如果有）
         if self.length == 0 {
-            if let Some(gc) = para.get_glyph_cluster_at(0) {
+            if let Some(gc) = self.paragraph.get_glyph_cluster_at(0) {
                 return Some((gc.bounds.left, gc.bounds.top, gc.bounds.height()));
             }
-            return None;
         }
 
-        // 通过 paragraph_byte_to_real_indices 找到对应的 Skia 段落字节位置
-        let paragraph_byte = self.paragraph.paragraph_byte_to_real_indices.get_by_right(&index)?;
-        let glyph_cluster = para.get_glyph_cluster_at(*paragraph_byte)?;
-
-        // 判断光标位置取字符前侧还是后侧
-        let prev_line_break = if index == 0 {
-            true
-        } else {
-            let prev = self.paragraph.prev_glyph_byte_index(index);
-            match prev {
-                Some(prev_idx) => self.paragraph.is_line_break(prev_idx..index),
-                None => false,
-            }
-        };
-
-        if index == 0 || prev_line_break {
-            // 行首 → 取字符左侧
-            if glyph_cluster.position == TextDirection::LTR {
-                Some((glyph_cluster.bounds.left, glyph_cluster.bounds.top, glyph_cluster.bounds.height()))
+        let paragraph_index = self.paragraph
+            .paragraph_byte_to_real_indices
+            .get_by_right(&index)?;
+        let glyph_index = self.paragraph.byte_to_glyph_indices.get_by_left(paragraph_index)?;
+        if index == 0 || {
+            let prev_byte_index = self.paragraph.prev_glyph_byte_index(index);
+            if let Some(prev_byte_index) = prev_byte_index {
+                self.paragraph.is_line_break(prev_byte_index..index)
             } else {
-                Some((glyph_cluster.bounds.right, glyph_cluster.bounds.top, glyph_cluster.bounds.height()))
+                false
+            }
+        } {
+            if let Some(gc) = self.paragraph.inner_paragraph().get_glyph_cluster_at(*paragraph_index) {
+                if gc.position == TextDirection::LTR {
+                    Some((gc.bounds.left, gc.bounds.top, gc.bounds.height()))
+                } else {
+                    Some((gc.bounds.right, gc.bounds.top, gc.bounds.height()))
+                }
+            } else {
+                None
             }
         } else {
-            // 非行首 → 取前一个字符右侧
-            let prev_byte = self.paragraph.paragraph_byte_to_real_indices.get_by_right(&(index.checked_sub(1)?))?;
-            if let Some(prev_gc) = para.get_glyph_cluster_at(*prev_byte) {
-                if prev_gc.position == TextDirection::LTR {
-                    Some((prev_gc.bounds.right, prev_gc.bounds.top, prev_gc.bounds.height()))
+            let prev_glyph_index = glyph_index.checked_sub(1)?;
+            let prev_byte_index = self.paragraph.byte_to_glyph_indices
+                .get_by_right(&prev_glyph_index)?;
+
+            if let Some(gc) = self.paragraph.inner_paragraph().get_glyph_cluster_at(*prev_byte_index) {
+                if gc.position == TextDirection::LTR {
+                    Some((gc.bounds.right, gc.bounds.top, gc.bounds.height()))
                 } else {
-                    Some((prev_gc.bounds.left, prev_gc.bounds.top, prev_gc.bounds.height()))
+                    Some((gc.bounds.left, gc.bounds.top, gc.bounds.height()))
                 }
             } else {
                 None
@@ -91,34 +86,62 @@ impl<'a> TextLayout<'a> {
         }
     }
 
-    /// 获取指定范围的选中矩形
     pub fn get_rects_for_range(&self, range: Range<usize>) -> Vec<TextBox> {
-        self.paragraph.get_rects_for_range(range, RectHeightStyle::Max, RectWidthStyle::Tight)
+        self.paragraph.get_rects_for_range(
+            range,
+            RectHeightStyle::Max,
+            RectWidthStyle::Tight,
+        )
     }
 
-    /// 通过坐标命中测试，返回最接近的 grapheme cluster 的 real index
     pub fn get_closest_grapheme_cluster_cluster_at(&self, point: impl Into<Point>) -> usize {
         let point = point.into();
-        if let Some(glyph_info) = self.paragraph.get_closest_glyph_cluster_at(point) {
+        let point_clone = point.clone();
+        let glyph_info = self.paragraph.inner_paragraph().get_closest_glyph_cluster_at(point);
+        if let Some(glyph_info) = glyph_info {
             let bounds = glyph_info.bounds;
             let center_x = (bounds.left + bounds.right) / 2.0;
-
             if self.paragraph.is_line_break(glyph_info.text_range.clone()) {
                 return glyph_info.text_range.start;
             }
 
-            // 通过 paragraph_byte_to_real_indices 反向查找 real index
-            let start = glyph_info.text_range.start;
-            let end = glyph_info.text_range.end;
-
-            if point.x < center_x {
+            let start = {
+                let mut start = glyph_info.text_range.start;
+                while !self.paragraph.byte_to_glyph_indices.contains_left(&start) {
+                    if start == 0 {
+                        break;
+                    }
+                    start -= 1;
+                }
                 start
-            } else {
+            };
+            let end = {
+                let mut end = glyph_info.text_range.end;
+                while !self.paragraph.byte_to_glyph_indices.contains_left(&end) {
+                    if end >= self.length {
+                        break;
+                    }
+                    end += 1;
+                }
                 end
-            }
-        } else {
-            0
+            };
+
+            let start = self.paragraph.paragraph_byte_to_real_indices.get_by_left(&start).cloned().unwrap();
+            let end = self.paragraph.paragraph_byte_to_real_indices.get_by_left(&end).cloned().unwrap();
+
+            return if point_clone.x < center_x {
+                if glyph_info.position == TextDirection::LTR {
+                    start
+                } else {
+                    end
+                }
+            } else if glyph_info.position == TextDirection::LTR {
+                end
+            } else {
+                start
+            };
         }
+        0
     }
 
     pub fn inner_paragraph(&self) -> &Paragraph {

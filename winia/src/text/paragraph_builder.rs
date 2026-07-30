@@ -1,154 +1,237 @@
-//! ParagraphBuilder — 构建自定义 Paragraph，同时构建 UTF-8 ↔ UTF-16 索引映射
-
-use super::index_bimap::IndexBiMap;
-use super::inline_drawable::InlineDrawable;
-use super::paragraph::Paragraph;
+use crate::text::index_bimap::IndexBiMap;
+use crate::text::paragraph::Paragraph;
 use skia_safe::textlayout::{FontCollection, ParagraphBuilder as SkParagraphBuilder, ParagraphStyle, PlaceholderAlignment, PlaceholderStyle, TextBaseline, TextStyle};
 use std::collections::HashSet;
 use std::ops::Range;
 use std::sync::Arc;
 use unicode_segmentation::UnicodeSegmentation;
 
-/// 自定义 Paragraph 构建器。
-///
-/// 在调用 Skia 的 ParagraphBuilder 添加文本的同时，
-/// 同步构建 `paragraph_byte_to_real_indices` 和 `byte_to_utf16_indices` 映射表，
-/// 供后续 TextLayout 中的光标定位和命中测试使用。
 pub struct ParagraphBuilder {
     paragraph_builder: SkParagraphBuilder,
-    drawables: Vec<Arc<dyn InlineDrawable>>,
+    placeholders: Vec<std::sync::Arc<dyn crate::text::InlineDrawable>>,
     last_byte_index: usize,
     last_real_index: usize,
     last_utf16_index: usize,
+    last_grapheme_cluster_index: usize,
     line_breaks: HashSet<Range<usize>>,
     paragraph_byte_to_real_indices: IndexBiMap,
     byte_to_utf16_indices: IndexBiMap,
+    byte_to_grapheme_cluster_indices: IndexBiMap,
 }
 
 impl ParagraphBuilder {
     pub fn new(style: &ParagraphStyle, font_collection: impl Into<FontCollection>) -> Self {
         let paragraph_builder = SkParagraphBuilder::new(style, font_collection);
+        let placeholders = Vec::new();
+        let last_byte_index = 0;
+        let last_real_index = 0;
+        let last_utf16_index = 0;
+        let last_grapheme_cluster_index = 0;
+        
+        let line_breaks = HashSet::new();
+        let paragraph_byte_to_real_indices = IndexBiMap::new();
+        let byte_to_utf16_indices = IndexBiMap::new();
+        let byte_to_grapheme_cluster_indices = IndexBiMap::new();
+
         ParagraphBuilder {
             paragraph_builder,
-            drawables: Vec::new(),
-            last_byte_index: 0,
-            last_real_index: 0,
-            last_utf16_index: 0,
-            line_breaks: HashSet::new(),
-            paragraph_byte_to_real_indices: IndexBiMap::new(),
-            byte_to_utf16_indices: IndexBiMap::new(),
+            placeholders,
+            last_byte_index,
+            last_real_index,
+            last_utf16_index,
+            last_grapheme_cluster_index,
+            line_breaks,
+            paragraph_byte_to_real_indices,
+            byte_to_utf16_indices,
+            byte_to_grapheme_cluster_indices,
         }
     }
-
+    
     pub fn push_style(&mut self, style: &TextStyle) -> &mut Self {
         self.paragraph_builder.push_style(style);
         self
     }
-
+    
     pub fn pop(&mut self) -> &mut Self {
         self.paragraph_builder.pop();
         self
     }
-
-    /// 添加文本，同时构建索引映射。
-    ///
-    /// 以 grapheme cluster 为单位遍历，对每个字符记录：
-    /// - `paragraph_byte_to_real_indices`: Skia(UTF-16) 字节位置 → Rust(UTF-8) 字节位置
-    /// - `byte_to_utf16_indices`: Rust 字节位置 → UTF-16 单元位置
+    
+    pub fn peek_style(&mut self) -> TextStyle {
+        self.paragraph_builder.peek_style()
+    }
+    
     pub fn add_text(&mut self, str: impl AsRef<str>) {
         let str = str.as_ref();
         if str.is_empty() {
             return;
         }
 
-        let mut last_byte_index = 0;
         let mut last_real_index = 0;
+        let mut last_byte_index = 0;
         let mut last_utf16_index = 0;
+        let mut last_grapheme_cluster_index = 0;
 
-        // 遍历 grapheme cluster（用户感知的字符单元）
-        str.grapheme_indices(true).for_each(|(byte_offset, grapheme)| {
-            // 记录换行符位置
-            if grapheme == "\r\n" || grapheme == "\n" || grapheme == "\r" {
-                let index = self.last_real_index + byte_offset;
-                self.line_breaks.insert(index..index + grapheme.len());
-            }
+        str.grapheme_indices(true)
+            .enumerate()
+            .for_each(|(grapheme_cluster_index, (byte_index, str))| {
+                if str == "\r\n" || str == "\n" || str == "\r" {
+                    let index = self.last_real_index + byte_index;
+                    self.line_breaks.insert(index..index + str.len());
+                }
+                let m_byte_index = self.last_byte_index + byte_index;
+                self.byte_to_grapheme_cluster_indices.insert(
+                    m_byte_index,
+                    self.last_grapheme_cluster_index + grapheme_cluster_index
+                );
 
-            // 遍历 grapheme 中的每个 Unicode 标量值（char）
-            grapheme.char_indices().for_each(|(char_offset, ch)| {
-                let m_byte_index = self.last_byte_index + byte_offset + char_offset;
-                let real_index = self.last_real_index + byte_offset + char_offset;
+                str.char_indices().for_each(|(index, char)|{
+                    let m_byte_index = m_byte_index + index;
+                    self.byte_to_utf16_indices
+                        .insert(
+                            m_byte_index,
+                            self.last_utf16_index + last_utf16_index
+                        );
+                    self.paragraph_byte_to_real_indices
+                        .insert(m_byte_index, self.last_real_index + byte_index + index);
 
-                self.byte_to_utf16_indices.insert(m_byte_index, self.last_utf16_index + last_utf16_index);
-                self.paragraph_byte_to_real_indices.insert(m_byte_index, real_index);
 
-                last_utf16_index += ch.len_utf16();
-                last_byte_index = m_byte_index + ch.len_utf8();
-                last_real_index = real_index + ch.len_utf8();
+                    let utf16_length = char.len_utf16();
+                    let uft8_length = char.len_utf8();
+                    last_utf16_index += utf16_length;
+                    last_byte_index = m_byte_index + uft8_length;
+                    last_real_index = byte_index + index + uft8_length;
+                    // println!("last_byte_index: {}, last_real_index: {}, last_utf16_index: {}", last_byte_index, last_real_index, last_utf16_index);
+                });
+                last_grapheme_cluster_index = grapheme_cluster_index + 1;
             });
-        });
-
-        self.last_real_index = last_real_index;
+        
+        self.last_real_index += last_real_index;
         self.last_byte_index = last_byte_index;
         self.last_utf16_index += last_utf16_index;
+        // println!("self.last_byte_index: {}, self.last_real_index: {}, self.last_utf16_index: {}", self.last_byte_index, self.last_real_index, self.last_utf16_index);
+        self.last_grapheme_cluster_index += last_grapheme_cluster_index;
 
         self.paragraph_builder.add_text(str);
     }
 
-    /// 添加内联 drawable（图片/SVG 等），以 U+FFFC 占位符插入。
-    pub fn push_drawable(&mut self, drawable: Arc<dyn InlineDrawable>) {
-        // 记录终止前的映射
+    pub fn add_placeholder(
+        &mut self, 
+        str: impl AsRef<str>, 
+        placeholder: std::sync::Arc<dyn crate::text::InlineDrawable>, 
+        placeholder_style: &Option<(PlaceholderAlignment, TextBaseline, f32)>,
+    ) {
+        let str = str.as_ref();
+        if str.is_empty() {
+            return;
+        }
+        
         self.paragraph_byte_to_real_indices.insert(self.last_byte_index, self.last_real_index);
         self.byte_to_utf16_indices.insert(self.last_byte_index, self.last_utf16_index);
+        self.byte_to_grapheme_cluster_indices.insert(self.last_byte_index, self.last_grapheme_cluster_index);
 
-        // U+FFFC 占位符在 Skia 中占据一个 UTF-16 单元
-        let placeholder_byte_len = 3; // U+FFFC 在 UTF-8 中是 3 字节
-        let placeholder_utf16_len = 1; // U+FFFC 是一个 UTF-16 单元
-
-        // 索引映射：占位符在 Skia 段落中的字节位置 ↔ real index
-        self.byte_to_utf16_indices.insert(self.last_byte_index, self.last_utf16_index);
-        self.paragraph_byte_to_real_indices.insert(self.last_byte_index, self.last_real_index);
-
+        let placeholder_str = String::from_utf16(&[0xFFFC]).unwrap();
+        let placeholder_byte_len = placeholder_str.len();
+        let placeholder_utf16_len = placeholder_str.encode_utf16().count();
+        let placeholder_grapheme_cluster_len = placeholder_str.graphemes(true).count();
+        self.last_real_index += str.len();
         self.last_byte_index += placeholder_byte_len;
         self.last_utf16_index += placeholder_utf16_len;
-        // drawable 不贡献 real text（对应原文本的零长度区域）
-
-        let (w, h) = drawable.size();
-        self.drawables.push(drawable);
-
-        let ph_style = PlaceholderStyle::new(
-            w,
-            h,
-            PlaceholderAlignment::Bottom,
-            TextBaseline::Alphabetic,
-            0.0,
-        );
-        self.paragraph_builder.add_placeholder(&ph_style);
+        self.last_grapheme_cluster_index += placeholder_grapheme_cluster_len;
+        
+        
+        let (width, height) = placeholder.size();
+        self.placeholders.push(placeholder);
+        let placeholder_style = if let Some((alignment, baseline, offset)) = placeholder_style {
+            PlaceholderStyle::new(
+                width,
+                height,
+                *alignment,
+                *baseline,
+                *offset,
+            )
+        } else {
+            PlaceholderStyle::new(
+                width,
+                height,
+                PlaceholderAlignment::Bottom,
+                TextBaseline::Alphabetic,
+                0.0,
+            )
+        };
+        self.paragraph_builder
+            .add_placeholder(&placeholder_style);
+            // .add_placeholder(&PlaceholderStyle::new(
+            //     width,
+            //     height,
+            //     PlaceholderAlignment::Bottom,
+            //     TextBaseline::Alphabetic,
+            //     0.0,
+            // ));
     }
 
-    /// 构建 Paragraph。在返回前插入最后一个终止位置的映射。
     pub fn build(&mut self) -> Paragraph {
-        // 插入终止位置映射（用于表示文本结束）
         self.paragraph_byte_to_real_indices.insert(self.last_byte_index, self.last_real_index);
         self.byte_to_utf16_indices.insert(self.last_byte_index, self.last_utf16_index);
-
+        self.byte_to_grapheme_cluster_indices.insert(self.last_byte_index, self.last_grapheme_cluster_index);
+        // println!("paragraph_byte_to_real_index: {:?}", self.paragraph_byte_to_real_index);
+        // println!("byte_to_utf16_indices: {:?}", self.byte_to_utf16_indices);
+        // println!("byte_to_grapheme_cluster_indices: {:?}", self.byte_to_grapheme_cluster_indices);
         let paragraph = self.paragraph_builder.build();
         Paragraph::new(
             paragraph,
-            &self.drawables,
+            &self.placeholders,
             &self.line_breaks,
             &self.paragraph_byte_to_real_indices,
             &self.byte_to_utf16_indices,
+            &self.byte_to_grapheme_cluster_indices,
         )
     }
-
+    
+    pub fn get_paragraph_style(&self) -> ParagraphStyle {
+        self.paragraph_builder.get_paragraph_style()
+    }
+    
     pub fn reset(&mut self) {
         self.paragraph_builder.reset();
-        self.drawables.clear();
+        self.placeholders.clear();
         self.last_byte_index = 0;
         self.last_real_index = 0;
         self.last_utf16_index = 0;
+        self.last_grapheme_cluster_index = 0;
         self.line_breaks.clear();
         self.paragraph_byte_to_real_indices.clear();
         self.byte_to_utf16_indices.clear();
+        self.byte_to_grapheme_cluster_indices.clear();
+    }
+}
+
+#[cfg(test)]
+mod paragraph_builder_test{
+    use crate::text::index_bimap::IndexBiMap;
+    use crate::text::paragraph::Paragraph;
+    use skia_safe::textlayout::{FontCollection, ParagraphStyle};
+    use unicode_segmentation::UnicodeSegmentation;
+
+    #[test]
+    fn test_paragraph_builder() {
+        // let font_collection = FontCollection::new();
+        // let paragraph_style = ParagraphStyle::default();
+        // let mut paragraph_builder = super::ParagraphBuilder::new(&paragraph_style, font_collection);
+        // paragraph_builder.add_text("abc");
+        // paragraph_builder.add_placeholder("h", SharedDrawable::empty());
+        // paragraph_builder.add_text("🤗");
+        // paragraph_builder.add_placeholder("hhhhhhh", SharedDrawable::empty());
+        // paragraph_builder.add_text("一二三");
+        // paragraph_builder.build();
+        // let text = paragraph_builder.paragraph_builder.get_text();
+        // let length = text.len();
+        // let utf16_length = text.encode_utf16().count();
+        // let glyph_length = text.graphemes(true).count();
+        // assert_eq!(paragraph_builder.byte_to_glyph_indices.get_by_left(&length), Some(&glyph_length));
+        // assert_eq!(paragraph_builder.byte_to_utf16_indices.get_by_left(&length), Some(&utf16_length));
+        // println!("byte_to_glyph_indices: {:?}", paragraph_builder.byte_to_glyph_indices);
+        // println!("byte_to_utf16_indices: {:?}", paragraph_builder.byte_to_utf16_indices);
+        // println!("paragraph_byte_to_real_index: {:?}", paragraph_builder.paragraph_byte_to_real_index);
     }
 }

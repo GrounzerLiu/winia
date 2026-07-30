@@ -827,6 +827,7 @@ fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> Size {
                 &std::collections::HashSet::new(),
                 &crate::text::IndexBiMap::new(),
                 &crate::text::IndexBiMap::new(),
+                &crate::text::IndexBiMap::new(),
             ));
             *node.inline_drawables.borrow_mut() = drawables.clone();
             return size;
