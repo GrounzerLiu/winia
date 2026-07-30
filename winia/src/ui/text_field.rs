@@ -109,13 +109,20 @@ impl TextField {
                 match key {
                     winit::keyboard::Key::Named(named) => match named {
                         winit::keyboard::NamedKey::Backspace => {
-                            if val.selection.start == val.selection.end {
-                                if val.selection.start > 0 {
-                                    let change = TextChange::Deleted { range: (val.selection.start - 1)..val.selection.start };
-                                    change.apply_to(&mut val);
-                                    v.set(val.clone());
-                                    if let Ok(cb) = cb.lock() { cb(val); }
-                                }
+                            if val.selection.start == val.selection.end && val.selection.start > 0 {
+                                let change = TextChange::Deleted { range: (val.selection.start - 1)..val.selection.start };
+                                change.apply_to(&mut val);
+                                v.set(val.clone());
+                                if let Ok(cb) = cb.lock() { cb(val); }
+                            }
+                            return true;
+                        }
+                        winit::keyboard::NamedKey::Delete => {
+                            if val.selection.start == val.selection.end && val.selection.start < val.text.len() {
+                                let change = TextChange::Deleted { range: val.selection.start..(val.selection.start + 1) };
+                                change.apply_to(&mut val);
+                                v.set(val.clone());
+                                if let Ok(cb) = cb.lock() { cb(val); }
                             }
                             return true;
                         }
@@ -124,6 +131,31 @@ impl TextField {
                             change.apply_to(&mut val);
                             v.set(val.clone());
                             if let Ok(cb) = cb.lock() { cb(val); }
+                            return true;
+                        }
+                        winit::keyboard::NamedKey::ArrowLeft => {
+                            if val.selection.start > 0 {
+                                val.selection = (val.selection.start - 1)..(val.selection.start - 1);
+                                v.set(val.clone());
+                            }
+                            return true;
+                        }
+                        winit::keyboard::NamedKey::ArrowRight => {
+                            if val.selection.start < val.text.len() {
+                                val.selection = (val.selection.start + 1)..(val.selection.start + 1);
+                                v.set(val.clone());
+                            }
+                            return true;
+                        }
+                        winit::keyboard::NamedKey::Home => {
+                            val.selection = 0..0;
+                            v.set(val.clone());
+                            return true;
+                        }
+                        winit::keyboard::NamedKey::End => {
+                            let len = val.text.len();
+                            val.selection = len..len;
+                            v.set(val.clone());
                             return true;
                         }
                         _ => {}
