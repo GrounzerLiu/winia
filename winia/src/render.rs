@@ -162,7 +162,7 @@ fn render_pass1<'a>(
             }
             para.paint(canvas, x_off, y);
             // 绘制光标（聚焦的 TextField 节点）
-            if node.focused && node.cursor_x.get() > 0.0 {
+            if node.focused && node.cursor_x.get() > 0.0 && node.cursor_visible.get() {
                 let mut cursor_paint = skia_safe::Paint::default();
                 cursor_paint.set_color(skia_safe::Color::from_argb(255, 0, 0, 0));
                 cursor_paint.set_stroke_width(1.5);

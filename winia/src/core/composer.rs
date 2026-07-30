@@ -103,11 +103,12 @@ impl<'a> ComposeCtx<'a> {
     }
 
     /// 设置当前节点的光标位置
-    pub fn set_current_node_cursor(&self, x: f32, height: f32) {
+    pub fn set_current_node_cursor(&self, x: f32, height: f32, visible: bool) {
         if let Some(idx) = self.composer.node_stack.last() {
             let node = &self.composer.layout_nodes[*idx];
             node.cursor_x.set(x);
             node.cursor_height.set(height);
+            node.cursor_visible.set(visible);
         }
     }
 

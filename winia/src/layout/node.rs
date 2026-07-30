@@ -139,6 +139,8 @@ pub struct LayoutNode {
     /// 文本光标 x 偏移（TextField 用，render 根据 focused 画竖线）
     pub(crate) cursor_x: std::cell::Cell<f32>,
     pub(crate) cursor_height: std::cell::Cell<f32>,
+    /// 光标是否可见（闪烁 toggle，TextField 设置）
+    pub(crate) cursor_visible: std::cell::Cell<bool>,
 }
 
 // ── CachedNode：LayoutNode 的可缓存子集，用于增量重组时恢复节点 ──
@@ -214,6 +216,7 @@ impl LayoutNode {
             registrar: std::cell::RefCell::new(None),
             cursor_x: std::cell::Cell::new(0.0),
             cursor_height: std::cell::Cell::new(0.0),
+            cursor_visible: std::cell::Cell::new(false),
         }
     }
 
@@ -253,6 +256,7 @@ impl LayoutNode {
             registrar: std::cell::RefCell::new(None),
             cursor_x: std::cell::Cell::new(0.0),
             cursor_height: std::cell::Cell::new(0.0),
+            cursor_visible: std::cell::Cell::new(false),
         }
     }
 
@@ -283,6 +287,7 @@ impl Default for LayoutNode {
             registrar: std::cell::RefCell::new(None),
             cursor_x: std::cell::Cell::new(0.0),
             cursor_height: std::cell::Cell::new(0.0),
+            cursor_visible: std::cell::Cell::new(false),
         }
     }
 }
