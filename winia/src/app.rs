@@ -68,6 +68,7 @@ impl PerWindow {
         crate::layout::node::clear_focus(root);
         self.focused_id = None;
         self.focused_slot_key = None;
+        if let Some(ref sw) = self.skia_window { sw.set_ime_allowed(false); }
     }
 
     /// 从当前焦点节点刷新 cached 字段
@@ -281,7 +282,7 @@ impl ApplicationHandler for AppState {
                         } else { (None, false) }
                     } else { (None, false) };
                     // 点击自动聚焦
-                    if is_focusable { if let Some(id) = focusable_id { if let Some(root) = pw.composer.layout_root_mut() { crate::layout::node::clear_focus(root); crate::layout::node::set_focus_by_id(root, id); } } }
+                    if is_focusable { if let Some(id) = focusable_id { if let Some(root) = pw.composer.layout_root_mut() { crate::layout::node::clear_focus(root); crate::layout::node::set_focus_by_id(root, id); } if let Some(ref sw) = pw.skia_window { sw.set_ime_allowed(true); } } }
                     // ── Up：Compose 风格 click 检测 ──
                     const CLICK_SLOP: f32 = 18.0;
                     const CLICK_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
