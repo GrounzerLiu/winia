@@ -261,7 +261,7 @@ impl ApplicationHandler for AppState {
                                 if let Some(para) = borrow.as_ref() {
                                     let (ax, ay) = node_abs_position(root, innermost.id);
                                     para.get_closest_glyph_cluster_at(skia_safe::Point::new(scene_pos.0 - ax, scene_pos.1 - ay))
-                                        .map(|gc| gc.text_range.start)
+                                        .map(|gc| { eprintln!("[selection] gc real idx={} for emoji test", gc.text_range.start); gc.text_range.start })
                                 } else { None }
                             } else { None };
                             pw.pointer_down_state = Some(PtrDownState {
