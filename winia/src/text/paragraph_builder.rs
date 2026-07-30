@@ -87,8 +87,8 @@ impl ParagraphBuilder {
             });
         });
 
-        self.last_real_index += last_real_index;
-        self.last_byte_index += last_byte_index;
+        self.last_real_index = last_real_index;
+        self.last_byte_index = last_byte_index;
         self.last_utf16_index += last_utf16_index;
 
         self.paragraph_builder.add_text(str);
