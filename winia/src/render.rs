@@ -182,7 +182,8 @@ fn render_pass1<'a>(
                 if comp_range.start < comp_range.end {
                     let rects = para.get_rects_for_range(comp_range.start..comp_range.end, skia_safe::textlayout::RectHeightStyle::Max, skia_safe::textlayout::RectWidthStyle::Max);
                     let mut und_paint = skia_safe::Paint::default();
-                    und_paint.set_color(crate::ui::theme::WiniaTheme::colors().primary);
+                    let c = crate::ui::theme::WiniaTheme::colors().primary;
+                    und_paint.set_color(skia_safe::Color::from_argb(c.a, c.r, c.g, c.b));
                     und_paint.set_stroke_width(1.0);
                     for tb in &rects {
                         let r = tb.rect;
