@@ -209,6 +209,36 @@ impl TextField {
                 }
             }),
         );
+        // IME 预输入回调（D:\winia 风格——直接修改 text 内容）
+        {
+            let v = value.clone();
+            ctx.set_current_node_ime_callback(Box::new(move |text, cursor| {
+                let mut val = v.get();
+                // 删除旧的 composing range
+                if let Some(ref comp_range) = val.composing_range.clone() {
+                    val.text.replace_range(comp_range.clone(), "");
+                    let len = comp_range.len();
+                    let shift = len.min(val.selection.start.saturating_sub(comp_range.start));
+                    val.selection = (val.selection.start - shift)..(val.selection.end - shift.min(val.selection.end));
+                    val.composing_range = None;
+                }
+                // 插入新的预输入文本
+                if !text.is_empty() {
+                    let pos = val.selection.start;
+                    val.text.insert_str(pos, text);
+                    let new_len = text.len();
+                    val.composing_range = Some(pos..(pos + new_len));
+                    if let Some((start, end)) = cursor {
+                        let s = (pos + start).min(val.text.len());
+                        let e = (pos + end).min(val.text.len());
+                        val.selection = s..e;
+                    } else {
+                        val.selection = (pos + new_len)..(pos + new_len);
+                    }
+                }
+                v.set(val);
+            }));
+        }
         ctx.end_node();
     }
 }

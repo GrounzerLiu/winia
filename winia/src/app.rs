@@ -522,6 +522,19 @@ impl ApplicationHandler for AppState {
             WindowEvent::Ime(ime) => {
                 use winit::event::Ime;
                 match ime {
+                    Ime::Preedit(text, cursor) => {
+                        // 通过 focused node 的 ime_callback 通知 TextField
+                        if let Some(fid) = pw.focused_id {
+                            if let Some(root) = pw.composer.layout_root() {
+                                if let Some(node) = crate::layout::node::find_node_by_id(root, fid) {
+                                    if let Some(cb) = node.ime_callback.borrow_mut().as_mut() {
+                                        cb(&text, cursor);
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                    }
                     Ime::Commit(text) => {
                         // IME 提交文本——派发给聚焦节点的 on_key_event 以 Character 形式
                         if let Some(fid) = pw.focused_id {

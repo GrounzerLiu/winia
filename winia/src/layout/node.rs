@@ -145,6 +145,8 @@ pub struct LayoutNode {
     pub(crate) cursor_visible: std::cell::Cell<bool>,
     /// 光标位置回调（TextField 点击后更新 selection 用）
     pub(crate) cursor_callback: std::cell::RefCell<Option<Box<dyn Fn(usize) + Send>>>,
+    /// IME 预输入回调（TextField 处理 Preedit 用）
+    pub(crate) ime_callback: std::cell::RefCell<Option<Box<dyn Fn(&str, Option<(usize, usize)>) + Send>>>,
 }
 
 // ── CachedNode：LayoutNode 的可缓存子集，用于增量重组时恢复节点 ──
@@ -223,6 +225,7 @@ impl LayoutNode {
             cursor_index: std::cell::Cell::new(0),
             cursor_visible: std::cell::Cell::new(false),
             cursor_callback: std::cell::RefCell::new(None),
+            ime_callback: std::cell::RefCell::new(None),
         }
     }
 
@@ -265,6 +268,7 @@ impl LayoutNode {
             cursor_index: std::cell::Cell::new(0),
             cursor_visible: std::cell::Cell::new(false),
             cursor_callback: std::cell::RefCell::new(None),
+            ime_callback: std::cell::RefCell::new(None),
         }
     }
 
@@ -298,6 +302,7 @@ impl Default for LayoutNode {
             cursor_index: std::cell::Cell::new(0),
             cursor_visible: std::cell::Cell::new(false),
             cursor_callback: std::cell::RefCell::new(None),
+            ime_callback: std::cell::RefCell::new(None),
         }
     }
 }

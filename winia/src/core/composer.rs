@@ -121,6 +121,14 @@ impl<'a> ComposeCtx<'a> {
         }
     }
 
+    /// 设置当前节点的 IME 预输入回调
+    pub fn set_current_node_ime_callback(&self, callback: Box<dyn Fn(&str, Option<(usize, usize)>) + Send>) {
+        if let Some(&idx) = self.composer.node_stack.last() {
+            let node = &self.composer.layout_nodes[idx];
+            *node.ime_callback.borrow_mut() = Some(callback);
+        }
+    }
+
     /// 设置当前节点的光标位置
     pub fn set_current_node_cursor(&self, cursor_index: usize, visible: bool) {
         if let Some(idx) = self.composer.node_stack.last() {
