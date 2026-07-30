@@ -613,19 +613,36 @@ impl ApplicationHandler for AppState {
                     if let Some(fid) = pw.focused_id {
                         if let Some(root) = pw.composer.layout_root() {
                             if let Some(para) = crate::layout::node::find_node_by_id(root, fid) {
-                                let cx = para.cursor_index.get() as f32 * 8.0; // rough x, improves with TextLayout
-                                let abs = node_abs_position(root, fid);
-                                let x = (abs.0 + cx) as f64;
-                                let y = abs.1 as f64;
-                                let _ = sw.request_ime_update(
-                                    winit::window::ImeRequest::Update(
-                                        winit::window::ImeRequestData::default()
-                                            .with_cursor_area(
-                                                winit::dpi::Position::Logical(winit::dpi::LogicalPosition::new(x, y)),
-                                                winit::dpi::Size::Logical(winit::dpi::LogicalSize::new(2.0, 20.0)),
-                                            )
-                                    )
-                                );
+                                if let Ok(borrow) = para.cached_paragraph.try_borrow() {
+                                    if let Some(p) = borrow.as_ref() {
+                                        let tl = crate::text::TextLayout::new(
+                                            p,
+                                            p.paragraph_byte_to_real_indices.len(),
+                                        );
+                                        if let Some((cx, cy, ch)) = tl.get_cursor_position(para.cursor_index.get()) {
+                                            let abs = node_abs_position(root, fid);
+                                            let align = para.modifier.align();
+                                            let node_w = para.measured_size.width;
+                                            let intrinsic_w = p.max_intrinsic_width();
+                                            let x_off = match align {
+                                                crate::ui::TextAlign::Left | crate::ui::TextAlign::Justify => abs.0,
+                                                crate::ui::TextAlign::Center => abs.0 + (node_w - intrinsic_w).max(0.0) / 2.0,
+                                                crate::ui::TextAlign::Right => abs.0 + (node_w - intrinsic_w).max(0.0),
+                                            };
+                                            let x = (x_off + cx) as f64;
+                                            let y = (abs.1 + cy) as f64;
+                                            let _ = sw.request_ime_update(
+                                                winit::window::ImeRequest::Update(
+                                                    winit::window::ImeRequestData::default()
+                                                        .with_cursor_area(
+                                                            winit::dpi::Position::Logical(winit::dpi::LogicalPosition::new(x, y)),
+                                                            winit::dpi::Size::Logical(winit::dpi::LogicalSize::new(2.0, ch as f64)),
+                                                        )
+                                                )
+                                            );
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
