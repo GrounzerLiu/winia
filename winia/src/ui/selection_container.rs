@@ -194,20 +194,22 @@ impl SelectionContainer {
         if let Some(cb) = self.on_change {
             registrar.set_on_change(cb);
         }
-        let r = registrar.clone();
-        ctx.set_selection_registrar(r.clone());
-        *ACTIVE_REGISTRAR.lock().unwrap() = Some(r.clone());
-        LOCAL_SELECTION_REGISTRAR.provides(r, || {
-            match ctx.start_restartable_group(key, self.modifier, BoxLayout::new()) {
-                GroupStatus::Skip => {}
-                GroupStatus::Enter => {
-                    registrar.reset_offsets();
-                    content(ctx);
+        {
+            let reg = registrar.clone();
+            *ACTIVE_REGISTRAR.lock().unwrap() = Some(reg.clone());
+            LOCAL_SELECTION_REGISTRAR.provides(reg, || {
+                match ctx.start_restartable_group(key, self.modifier, BoxLayout::new()) {
+                    GroupStatus::Skip => {}
+                    GroupStatus::Enter => {
+                        ctx.set_selection_registrar(registrar.clone());
+                        registrar.reset_offsets();
+                        content(ctx);
+                    }
                 }
-            }
-            ctx.end_restartable_group();
-        });
-        ctx.clear_selection_registrar();
+                ctx.end_restartable_group();
+            });
+            ctx.clear_selection_registrar();
+        }
     }
 }
 
