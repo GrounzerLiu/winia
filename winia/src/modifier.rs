@@ -703,6 +703,19 @@ impl Modifier {
         None
     }
 
+    /// 获取文本内容字节长度（Text / RichText）
+    pub fn content_len(&self) -> usize {
+        for el in &self.elements {
+            if let ModifierElement::TextContent { content, .. } = el {
+                return content.len();
+            }
+            if let ModifierElement::RichTextContent { content, .. } = el {
+                return content.len();
+            }
+        }
+        0
+    }
+
     /// 位置偏移（如果有 Offset modifier）
     pub fn get_offset(&self) -> Option<(f32, f32)> {
         for el in &self.elements {

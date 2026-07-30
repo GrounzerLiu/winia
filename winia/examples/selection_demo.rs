@@ -1,6 +1,7 @@
 //! 文本选中演示 — SelectionContainer + on_selection_change + 跨 Text 合并选择
 
 use winia::prelude::*;
+use winia::ui::RichText;
 use winia::app;
 
 fn selection_ui(ctx: &mut ComposeCtx) {

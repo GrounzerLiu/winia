@@ -374,6 +374,7 @@ impl RichText {
         // 用 D:\winia 分裂算法解析 span
         let spans = resolve_spans(&content, &drawable_ranges, &annotations);
 
+        let content_len = content.len();
         let modifier = self.modifier.push(ModifierElement::RichTextContent {
             content,
             drawables,
@@ -382,6 +383,10 @@ impl RichText {
         });
         let key = ctx.next_key();
         ctx.start_leaf(key, modifier);
+        // 注册到选区容器（支持文本选中）
+        let reg = ctx.selection_registrar()
+            .unwrap_or_else(|| crate::ui::selection_container::LOCAL_SELECTION_REGISTRAR.current());
+        reg.register(key, content_len, None);
         ctx.end_node();
     }
 }
