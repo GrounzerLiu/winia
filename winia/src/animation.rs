@@ -28,11 +28,25 @@ pub trait AnimationInstance: Send {
 }
 
 static ACTIVE_ANIMATIONS: LazyLock<Mutex<Vec<Box<dyn AnimationInstance>>>> =
-    Lazy::new(|| Mutex::new(Vec::new()));
+    LazyLock::new(|| Mutex::new(Vec::new()));
 
 /// 注册一个动画到全局活跃列表
 pub fn push_animation(anim: Box<dyn AnimationInstance + 'static>) {
     ACTIVE_ANIMATIONS.lock().unwrap().push(anim);
+}
+
+/// 注册一个 Animatable<f32> 到全局活跃列表（由 animate_float_as_state 调用）
+pub fn push_animatable(state: State<f32>, target: f32, spec: AnimationSpec) {
+    let mut anim = Animatable::new(state);
+    anim.animate_to(target, spec);
+    push_animation(anim);
+}
+
+/// 实现 AnimationInstance for Animatable<f32>
+impl AnimationInstance for Animatable<f32> {
+    fn update(&mut self) -> bool {
+        self.update()
+    }
 }
 
 /// 更新所有活跃动画，返回是否有动画还在运行
@@ -67,6 +81,55 @@ struct AnimationState<T> {
     start: Instant,
     spec: AnimationSpec,
     last_velocity: f32,
+}
+
+impl<T: Clone + AnimatableValue + 'static> Animatable<T> {
+    pub fn new(state: State<T>) -> Self {
+        Self { state, anim_state: None }
+    }
+
+    /// 启动动画到目标值
+    pub fn animate_to(&mut self, to: T, spec: AnimationSpec) {
+        let from = self.state.get();
+        self.anim_state = Some(AnimationState {
+            from: from.clone(),
+            to,
+            start: Instant::now(),
+            spec,
+            last_velocity: 0.0,
+        });
+    }
+
+    /// 检查并更新动画值，返回是否还在动画中
+    pub fn update(&mut self) -> bool {
+        let Some(ref mut state) = self.anim_state else { return false; };
+        let elapsed = state.start.elapsed();
+        let (value, done) = match &state.spec {
+            AnimationSpec::Spring(spec) => {
+                let displacement = compute_spring_displacement(
+                    spec.stiffness, spec.damping_ratio, spec.mass,
+                    0.0, &mut state.last_velocity, elapsed, spec.threshold,
+                );
+                let t = state.from.lerp(&state.to, displacement);
+                (t, displacement.abs() < spec.threshold && state.last_velocity.abs() < spec.threshold)
+            }
+            AnimationSpec::Tween(spec) => {
+                let t = (elapsed.as_secs_f64() / spec.duration.as_secs_f64()).min(1.0) as f32;
+                let eased = (spec.interpolator)(t);
+                let t = state.from.lerp(&state.to, eased);
+                (t, eased >= 1.0)
+            }
+        };
+        self.state.set(value);
+        if done { self.anim_state = None; }
+        !done
+    }
+
+    /// 立即跳转到目标值（无动画）
+    pub fn snap_to(&mut self, value: T) {
+        self.anim_state = None;
+        self.state.set(value);
+    }
 }
 
 #[derive(Clone)]

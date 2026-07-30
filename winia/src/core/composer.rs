@@ -121,6 +121,13 @@ impl<'a> ComposeCtx<'a> {
         }
     }
 
+    /// animateFloatAsState — 动画浮点值到目标值
+    pub fn animate_float_as_state(&mut self, target: f32, spec: crate::animation::AnimationSpec) -> State<f32> {
+        let state = self.remember(|| target);
+        crate::animation::push_animatable(state.clone(), target, spec);
+        state
+    }
+
     /// 设置当前节点的 IME 预输入回调
     pub fn set_current_node_ime_callback(&self, callback: Box<dyn Fn(&str, Option<(usize, usize)>) + Send>) {
         if let Some(&idx) = self.composer.node_stack.last() {
