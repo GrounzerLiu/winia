@@ -11,46 +11,77 @@ fn selection_ui(ctx: &mut ComposeCtx) {
     let rt = "RichText: bold italic red — also selectable!";
     let all = format!("{}{}{}{}", t1, t2, rt, t3);
 
-    let selected = ctx.remember(|| String::from("(none)"));
+    let a1 = "Container B: independent selection context.";
+    let a2 = "This text is inside a separate SelectionContainer.";
+    let all_b = format!("{}{}", a1, a2);
+
+    let selected_a = ctx.remember(|| String::from("(none)"));
+    let selected_b = ctx.remember(|| String::from("(none)"));
 
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(16.0))
         .build(ctx, |ctx| {
-            Text::new("Text Selection Demo (cross-text)")
-                .font_size(22.0).font_weight(FontWeight::BOLD)
+            Text::new("Two SelectionContainers — independent selection")
+                .font_size(18.0).font_weight(FontWeight::BOLD)
                 .modifier(Modifier::new().padding(4.0))
                 .build(ctx);
 
-            let s = selected.clone();
-            let all_text = all.clone();
+            // ── Container A ──
+            let sa = selected_a.clone();
+            let all_a_text = all.clone();
             SelectionContainer::new()
                 .modifier(Modifier::new()
                     .fill_max_width()
-                    .padding(12.0)
+                    .padding(10.0)
                     .background(Color::from_argb(30, 200, 200, 100), Shape::rounded(8.0)))
                 .on_selection_change(move |start, end| {
-                    let txt = &all_text[start.min(end)..start.max(end)];
-                    s.set(format!("\"{}\"", txt));
+                    let txt = &all_a_text[start.min(end)..start.max(end)];
+                    sa.set(format!("A: \"{}\"", txt));
                 })
                 .build(ctx, |ctx| {
                     Column::new().build(ctx, |ctx| {
-                        Text::new(t1).font_size(16.0).modifier(Modifier::new().padding(4.0)).build(ctx);
-                        Text::new(t2).font_size(14.0).color(Color::from_argb(200, 60, 60, 60)).modifier(Modifier::new().padding(4.0)).build(ctx);
+                        Text::new("[A] ").font_size(12.0).color(Color::from_argb(200, 0, 100, 0)).build(ctx);
+                        Text::new(t1).font_size(15.0).modifier(Modifier::new().padding(2.0)).build(ctx);
+                        Text::new(t2).font_size(13.0).color(Color::from_argb(200, 60, 60, 60)).modifier(Modifier::new().padding(2.0)).build(ctx);
                         RichText::new().build(ctx, |x| {
                             x.text("RichText: ");
                             x.bold(|x| { x.text("bold "); });
                             x.italic(|x| { x.text("italic "); });
                             x.color(Color::from_argb(255, 200, 50, 50), |x| { x.text("red"); });
-                            x.text(" — also selectable!");
+                            x.text(" — selectable!");
                         });
-                        Text::new(t3).font_size(13.0).modifier(Modifier::new().padding(4.0)).build(ctx);
+                        Text::new(t3).font_size(12.0).modifier(Modifier::new().padding(2.0)).build(ctx);
                     });
                 });
 
-            Text::new(format!("Selected: {}", selected.get()))
-                .font_size(14.0).font_weight(FontWeight::BOLD)
-                .color(Color::from_argb(255, 0, 100, 200))
-                .modifier(Modifier::new().padding(8.0))
+            Text::new(format!("Container A: {}", selected_a.get()))
+                .font_size(12.0).color(Color::from_argb(200, 0, 120, 0))
+                .modifier(Modifier::new().padding(4.0))
+                .build(ctx);
+
+            // ── Container B ──
+            let sb = selected_b.clone();
+            let all_b_text = all_b.clone();
+            SelectionContainer::new()
+                .modifier(Modifier::new()
+                    .fill_max_width()
+                    .padding(10.0)
+                    .background(Color::from_argb(30, 200, 150, 200), Shape::rounded(8.0)))
+                .on_selection_change(move |start, end| {
+                    let txt = &all_b_text[start.min(end)..start.max(end)];
+                    sb.set(format!("B: \"{}\"", txt));
+                })
+                .build(ctx, |ctx| {
+                    Column::new().build(ctx, |ctx| {
+                        Text::new("[B] ").font_size(12.0).color(Color::from_argb(200, 150, 0, 150)).build(ctx);
+                        Text::new(a1).font_size(15.0).modifier(Modifier::new().padding(2.0)).build(ctx);
+                        Text::new(a2).font_size(14.0).color(Color::from_argb(200, 80, 80, 80)).modifier(Modifier::new().padding(2.0)).build(ctx);
+                    });
+                });
+
+            Text::new(format!("Container B: {}", selected_b.get()))
+                .font_size(12.0).color(Color::from_argb(200, 120, 0, 120))
+                .modifier(Modifier::new().padding(4.0))
                 .build(ctx);
         });
 }
@@ -61,7 +92,7 @@ fn main() {
     app::run_app(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
-                .size(520.0, 550.0)
+                .size(520.0, 720.0)
                 .title("Text Selection Demo")
                 .build(ctx, selection_ui);
         });
