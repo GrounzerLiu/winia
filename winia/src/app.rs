@@ -660,6 +660,10 @@ impl ApplicationHandler for AppState {
                         }
                     }
                 }
+                // 更新活跃动画
+                if crate::animation::update_animations() {
+                    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                }
                 // 检查 compose 后是否有待关闭窗口
                 if crate::ui::window::Window::has_pending_close() {
                     if let Some(ref proxy) = *APP_PROXY.lock().unwrap() { let _ = proxy.wake_up(); }

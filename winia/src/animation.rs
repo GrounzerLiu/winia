@@ -154,6 +154,48 @@ fn compute_spring_displacement(
     displacement
 }
 
+// ═══════════════════════════════════════════════════════════
+// updateTransition
+// ═══════════════════════════════════════════════════════════
+
+use crate::core::composer::ComposeCtx;
+
+pub struct Transition<T: Clone + PartialEq + 'static> {
+    target: T,
+    spec: AnimationSpec,
+    #[allow(dead_code)]
+    label: &'static str,
+}
+
+impl ComposeCtx<'_> {
+    pub fn update_transition<T: Clone + PartialEq + 'static>(
+        &mut self,
+        target: T,
+        spec: AnimationSpec,
+        label: &'static str,
+    ) -> Transition<T> {
+        Transition { target, spec, label }
+    }
+}
+
+impl<T: Clone + PartialEq + 'static> Transition<T> {
+    pub fn animate_float(
+        &mut self,
+        ctx: &mut ComposeCtx,
+        target_fn: impl Fn(&T) -> f32,
+        _label: &'static str,
+    ) -> State<f32> {
+        let value = target_fn(&self.target);
+        let state: State<f32> = ctx.remember(|| value);
+        if state.get() != value {
+            let spec = self.spec.clone();
+            let s = state.clone();
+            crate::animation::push_animatable(s, value, spec);
+        }
+        state
+    }
+}
+
 #[derive(Clone)]
 pub enum AnimationSpec {
     Spring(SpringSpec),
