@@ -81,9 +81,12 @@ impl SelectionRegistrar {
     pub fn register(&self, slot_key: u64, text_len: usize, bounds: Option<Rect>) -> usize {
         let mut inner = self.inner.lock().unwrap();
         let offset = inner.next_global_offset;
-        // 用 HashMap 自动去重——每个 slot_key 只保留最新注册
+        // HashMap 自动去重——新 slot 才增加 next_global_offset
+        let is_new = !inner.segments.contains_key(&slot_key);
         inner.segments.insert(slot_key, RegisteredSegment { slot_key, global_offset: offset, text_len, bounds: bounds.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)) });
-        inner.next_global_offset += text_len;
+        if is_new {
+            inner.next_global_offset += text_len;
+        }
         offset
     }
 
@@ -255,6 +258,14 @@ mod tests {
     }
 
     #[test]
+    fn test_partial_selection() {
+        let reg = SelectionRegistrar::new();
+        reg.register(1, 20, None);
+        reg.set_selection(15, 30); // extends beyond text
+        assert_eq!(reg.selected_range(1), Some(15..20)); // clamped
+    }
+
+    #[test]
     fn test_selection_outside() {
         let reg = SelectionRegistrar::new();
         reg.register(42, 10, rect(0.0, 0.0, 100.0, 20.0));
@@ -278,5 +289,105 @@ mod tests {
         reg1.register(42, 10, rect(0.0, 0.0, 100.0, 20.0));
         reg1.set_selection(2, 8);
         assert_eq!(reg2.selected_range(42), Some(2..8));
+    }
+
+    #[test]
+    fn test_slot_dedup() {
+        let reg = SelectionRegistrar::new();
+        reg.register(1, 5, None);   // offset=0, next=5
+        reg.register(1, 10, None);  // same slot, NOT new → offset stays 0, next stays 5
+        assert_eq!(reg.total_text_len(), 5);
+        assert_eq!(reg.segment_info(1), Some((0, 10))); // latest insert wins
+    }
+
+    #[test]
+    fn test_total_text_len_accumulation() {
+        let reg = SelectionRegistrar::new();
+        reg.register(1, 10, None);  // offset=0, len=10, total=10
+        reg.register(2, 15, None);  // offset=10, len=15, total=25
+        reg.register(3, 5, None);   // offset=25, len=5, total=30
+        assert_eq!(reg.total_text_len(), 30);
+        assert_eq!(reg.segment_info(1), Some((0, 10)));
+        assert_eq!(reg.segment_info(2), Some((10, 15)));
+        assert_eq!(reg.segment_info(3), Some((25, 5)));
+    }
+
+    #[test]
+    fn test_on_change_callback() {
+        use std::sync::Mutex;
+        let reg = SelectionRegistrar::new();
+        let called = std::sync::Arc::new(Mutex::new(false));
+        let c = called.clone();
+        reg.set_on_change(move |_, _| { *c.lock().unwrap() = true; });
+        reg.register(1, 10, None);
+        reg.set_selection(2, 5);
+        reg.fire_on_change();
+        assert!(*called.lock().unwrap());
+    }
+
+    #[test]
+    fn test_on_change_not_called_when_no_selection() {
+        use std::sync::Mutex;
+        let reg = SelectionRegistrar::new();
+        let called = std::sync::Arc::new(Mutex::new(false));
+        let c = called.clone();
+        reg.set_on_change(move |_, _| { *c.lock().unwrap() = true; });
+        reg.fire_on_change(); // no selection set → should not fire
+        assert!(!*called.lock().unwrap());
+    }
+
+    #[test]
+    fn test_reset_offsets_clears_and_restarts() {
+        let reg = SelectionRegistrar::new();
+        reg.register(1, 10, None);
+        reg.register(2, 15, None);
+        assert_eq!(reg.total_text_len(), 25);
+        reg.reset_offsets();
+        assert_eq!(reg.total_text_len(), 0);
+        // re-register starts from offset 0
+        reg.register(3, 5, None);
+        assert_eq!(reg.segment_info(3), Some((0, 5)));
+    }
+
+    #[test]
+    fn test_selection_across_three_segments() {
+        let reg = SelectionRegistrar::new();
+        reg.register(10, 100, None);  // offset=0
+        reg.register(20, 200, None);  // offset=100
+        reg.register(30, 50, None);   // offset=300
+        // select spanning middle of 1st to middle of 3rd
+        reg.set_selection(50, 320);
+        assert_eq!(reg.selected_range(10), Some(50..100));   // local 50..100
+        assert_eq!(reg.selected_range(20), Some(0..200));     // full second
+        assert_eq!(reg.selected_range(30), Some(0..20));      // first 20 of third
+    }
+
+    #[test]
+    fn test_reversed_selection() {
+        let reg = SelectionRegistrar::new();
+        reg.register(1, 20, None);
+        reg.set_selection(15, 5); // reversed: start > end
+        assert_eq!(reg.selected_range(1), Some(5..15)); // normalized
+    }
+
+    #[test]
+    fn test_selection_exactly_at_boundary() {
+        let reg = SelectionRegistrar::new();
+        reg.register(1, 10, None);
+        reg.register(2, 10, None); // offset=10
+        // selection at exact boundary
+        reg.set_selection(10, 10); // zero-width
+        assert!(reg.selected_range(1).is_none()); // local_end == 0
+        assert!(reg.selected_range(2).is_none()); // local_start == 0, local_end == 0
+    }
+
+    #[test]
+    fn test_selection_single_char_last_segment() {
+        let reg = SelectionRegistrar::new();
+        reg.register(1, 10, None);  // offset=0
+        reg.register(2, 5, None);   // offset=10
+        reg.set_selection(13, 14);  // chars 13-14 in global = 3-4 in seg2
+        assert_eq!(reg.selected_range(2), Some(3..4));
+        assert!(reg.selected_range(1).is_none());
     }
 }
