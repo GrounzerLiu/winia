@@ -132,6 +132,28 @@ impl<T: Clone + AnimatableValue + 'static> Animatable<T> {
     }
 }
 
+// ═══════════════════════════════════════════════════════════
+// Spring 物理模拟（半隐式欧拉积分）
+// ═══════════════════════════════════════════════════════════
+
+fn compute_spring_displacement(
+    stiffness: f32, damping_ratio: f32, mass: f32,
+    initial_displacement: f32, velocity: &mut f32,
+    elapsed: Duration, threshold: f32,
+) -> f32 {
+    let dt = elapsed.as_secs_f32().min(1.0 / 30.0);
+    let omega0 = (stiffness / mass).sqrt();
+    let damping_coeff = damping_ratio * 2.0 * omega0 * mass;
+    let force = -stiffness * initial_displacement - damping_coeff * *velocity;
+    *velocity += force / mass * dt;
+    let displacement = initial_displacement + *velocity * dt;
+    if displacement.abs() < threshold && velocity.abs() < threshold {
+        *velocity = 0.0;
+        return 0.0;
+    }
+    displacement
+}
+
 #[derive(Clone)]
 pub enum AnimationSpec {
     Spring(SpringSpec),
