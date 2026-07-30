@@ -154,8 +154,9 @@ impl SpringSimulation {
 
 ### 实现顺序
 
-1. `AnimationSpec` + `SpringSimulation`
-2. `Animatable<T>` + 帧驱动集成
-3. `animate_float_as_state`（基于 Animatable + State）
-4. `updateTransition`
-5. `AnimatedVisibility`
+1. ✅ `AnimationSpec` + `SpringSimulation` + 24 种 Interpolator
+2. ✅ `Animatable<T>` — 底层值动画（animate_to / update / snap_to）
+3. ✅ `animate_float_as_state` — 高层单值动画（ComposeCtx 方法）
+4. ✅ 帧驱动集成 — `RedrawRequested` 中 `update_animations()`
+5. ✅ `updateTransition` — 多属性协同动画
+6. ❌ `AnimatedVisibility` — 内容出现/消失动画
