@@ -39,7 +39,7 @@ pub fn push_animation(anim: Box<dyn AnimationInstance + 'static>) {
 pub fn push_animatable(state: State<f32>, target: f32, spec: AnimationSpec) {
     let mut anim = Animatable::new(state);
     anim.animate_to(target, spec);
-    push_animation(anim);
+    ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
 }
 
 /// 实现 AnimationInstance for Animatable<f32>
@@ -120,7 +120,7 @@ impl<T: Clone + AnimatableValue + 'static> Animatable<T> {
                 (t, eased >= 1.0)
             }
         };
-        self.state.set(value);
+        self.state.update(|v| *v = value);
         if done { self.anim_state = None; }
         !done
     }
@@ -128,7 +128,7 @@ impl<T: Clone + AnimatableValue + 'static> Animatable<T> {
     /// 立即跳转到目标值（无动画）
     pub fn snap_to(&mut self, value: T) {
         self.anim_state = None;
-        self.state.set(value);
+        self.state.update(|v| *v = value);
     }
 }
 
