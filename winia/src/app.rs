@@ -264,9 +264,12 @@ impl ApplicationHandler for AppState {
                                 if let Some(para) = borrow.as_ref() {
                                     let (ax, ay) = node_abs_position(root, innermost.id);
                                     let tl = crate::text::TextLayout::new(para, 0);
-                                    Some(tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(scene_pos.0 - ax, scene_pos.1 - ay)))
-                                } else { None }
-                            } else { None };
+                                    let closest = tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(scene_pos.0 - ax, scene_pos.1 - ay));
+                                    eprintln!("[cursor] click scene=({:.0},{:.0}) abs=({:.0},{:.0}) local=({:.0},{:.0}) anchor={:?}",
+                                        scene_pos.0, scene_pos.1, ax, ay, scene_pos.0 - ax, scene_pos.1 - ay, closest);
+                                    Some(closest)
+                                } else { eprintln!("[cursor] para None"); None }
+                            } else { eprintln!("[cursor] try_borrow failed"); None };
                             pw.pointer_down_state = Some(PtrDownState {
                                 node_id: innermost.id, position: scene_pos, time: Instant::now(), selection_anchor: None });
                             pw.pointer_down_slot = Some(innermost.slot_key);
@@ -635,6 +638,35 @@ impl ApplicationHandler for AppState {
                             if let Some(root) = pw.composer.layout_root() {
                                 let nodes = hit_test(root, x, y);
                                 let mut click_handled = false;
+
+                                // 设置焦点（对齐 PointerButton 行为）
+                                if let Some(innermost) = nodes.last() {
+                                    let is_focusable = crate::layout::node::has_focusable_modifier(innermost);
+                                    if is_focusable {
+                                        // 焦点
+                                        let fid = innermost.id;
+                                        crate::layout::node::clear_focus(root);
+                                        crate::layout::node::set_focus_by_id(root, fid);
+                                        pw.focused_id = Some(fid);
+                                        pw.focused_slot_key = Some(innermost.slot_key);
+                                        // IME
+                                        if let Some(ref sw) = pw.skia_window { sw.set_ime_allowed(true); }
+                                        // 光标位置
+                                        if let Ok(borrow) = innermost.cached_paragraph.try_borrow() {
+                                            if let Some(para) = borrow.as_ref() {
+                                                let (ax, ay) = node_abs_position(root, fid);
+                                                let tl = crate::text::TextLayout::new(para, 0);
+                                                let idx = tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(x - ax, y - ay));
+                                                innermost.cursor_index.set(idx);
+                                                if let Some(cb) = innermost.cursor_callback.borrow_mut().as_mut() {
+                                                    cb(idx);
+                                                }
+                                                eprintln!("[cursor] debug-click idx={} xy=({:.0},{:.0}) abs=({:.0},{:.0})", idx, x, y, ax, ay);
+                                            }
+                                        }
+                                    }
+                                }
+
                                 eprintln!("[debug-click] pos=({:.0},{:.0}) path_len={} sf={}", x, y, nodes.len(), pw.scale_factor);
                                 for node in nodes.iter().rev() {
                                     if click_handled { break; }
