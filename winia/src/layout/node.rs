@@ -143,6 +143,8 @@ pub struct LayoutNode {
     pub(crate) cursor_index: std::cell::Cell<usize>,
     /// 光标是否可见（闪烁 toggle，TextField 设置）
     pub(crate) cursor_visible: std::cell::Cell<bool>,
+    /// 光标位置回调（TextField 点击后更新 selection 用）
+    pub(crate) cursor_callback: std::cell::RefCell<Option<Box<dyn Fn(usize) + Send>>>,
 }
 
 // ── CachedNode：LayoutNode 的可缓存子集，用于增量重组时恢复节点 ──
@@ -220,6 +222,7 @@ impl LayoutNode {
             cursor_height: std::cell::Cell::new(0.0),
             cursor_index: std::cell::Cell::new(0),
             cursor_visible: std::cell::Cell::new(false),
+            cursor_callback: std::cell::RefCell::new(None),
         }
     }
 
@@ -261,6 +264,7 @@ impl LayoutNode {
             cursor_height: std::cell::Cell::new(0.0),
             cursor_index: std::cell::Cell::new(0),
             cursor_visible: std::cell::Cell::new(false),
+            cursor_callback: std::cell::RefCell::new(None),
         }
     }
 
@@ -293,6 +297,7 @@ impl Default for LayoutNode {
             cursor_height: std::cell::Cell::new(0.0),
             cursor_index: std::cell::Cell::new(0),
             cursor_visible: std::cell::Cell::new(false),
+            cursor_callback: std::cell::RefCell::new(None),
         }
     }
 }

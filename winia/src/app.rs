@@ -277,6 +277,12 @@ impl ApplicationHandler for AppState {
                                 let seg = reg.segment_info(innermost.slot_key);
                                 let global_a = seg.map(|(off,_)| off + a).unwrap_or(a);
                                 pw.pointer_down_state.as_mut().map(|s| s.selection_anchor = Some(global_a));
+                                // 设置 TextField 光标位置
+                                innermost.cursor_index.set(a);
+                                // 触发 TextField 的 selection 更新回调
+                                if let Some(cb) = innermost.cursor_callback.borrow_mut().as_mut() {
+                                    cb(a);
+                                }
                             }
                             (Some(fid), f)
                         } else { (None, false) }

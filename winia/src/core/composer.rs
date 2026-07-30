@@ -83,6 +83,10 @@ impl<'a> ComposeCtx<'a> {
         self.composer.current_node_id()
     }
 
+    pub fn layout_root(&self) -> Option<&crate::layout::node::LayoutNode> {
+        self.composer.layout_root()
+    }
+
     /// 设置当前选区注册表（由 SelectionContainer::build 调用）
     pub fn set_selection_registrar(&mut self, reg: crate::ui::selection_container::SelectionRegistrar) {
         self.composer.selection_registrar = Some(reg);
