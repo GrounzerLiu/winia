@@ -588,6 +588,10 @@ impl ApplicationHandler for AppState {
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
             }
             WindowEvent::RedrawRequested => {
+                // 在 compose 前更新动画（确保渲染使用最新值，消除一帧滞后抖动）
+                if crate::animation::update_animations() {
+                    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                }
                 // 消费焦点请求（在 compose 前处理，避免丢失）
                 for id in crate::modifier::take_focus_requests() {
                     if let Some(root) = pw.composer.layout_root_mut() {
@@ -659,10 +663,6 @@ impl ApplicationHandler for AppState {
                             }
                         }
                     }
-                }
-                // 更新活跃动画
-                if crate::animation::update_animations() {
-                    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 }
                 // 检查 compose 后是否有待关闭窗口
                 if crate::ui::window::Window::has_pending_close() {
