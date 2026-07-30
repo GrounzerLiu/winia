@@ -43,10 +43,10 @@ pub fn push_animatable(state: State<f32>, target: f32, spec: AnimationSpec) {
     if (current - target).abs() < f32::EPSILON { return; }
     let sid = state.id();
     let mut list = ACTIVE_ANIMATIONS.lock().unwrap();
-    // 移除同一 state 的旧动画，保留当前动画
+    // 检查是否已有同目标动画运行中（同目标直接跳过，防止每帧重启）
+    if list.iter().any(|anim| anim.state_id() == sid && anim.is_animating_to(target)) { return; }
+    // 同一 state 但目标不同时移除旧动画（用户改变了目标值）
     list.retain(|anim| anim.state_id() != sid);
-    // 检查是否已有动画指向此目标（同目标不重复创建）
-    if list.iter().any(|anim| anim.is_animating_to(target)) { return; }
     let mut anim = Animatable::new(state);
     anim.animate_to(target, spec);
     list.push(Box::new(anim));
