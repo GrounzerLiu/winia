@@ -174,7 +174,8 @@ fn render_pass1<'a>(
                         canvas.draw_line(skia_safe::Point::new(x_off + cx, y + cy), skia_safe::Point::new(x_off + cx, y + cy + ch), &cp);
                     } else { eprintln!("[render] get_cursor_position returned None for idx={}", node.cursor_index.get()); }
                 } else { eprintln!("[render] cursor_visible is false"); }
-            } else {
+            }
+        } else {
             draw_text_with_selection(canvas, content, font_size, color, font_weight, font_style, x, y, w, max_lines, align, overflow, soft_wrap, node.slot_key);
         }
     }
