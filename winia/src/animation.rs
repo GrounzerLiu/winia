@@ -140,6 +140,7 @@ impl<T: Clone + AnimatableValue + 'static> Animatable<T> {
                     state.current_displacement, &mut state.last_velocity, dt, spec.threshold,
                 );
                 let spring_val = to_f32 + displacement;
+                state.current_displacement = displacement;
                 let t = ((spring_val - from_f32) / (to_f32 - from_f32).max(f32::EPSILON)).clamp(0.0, 1.0);
                 let value = state.from.lerp(&state.to, t);
                 (value, displacement.abs() < spec.threshold && state.last_velocity.abs() < spec.threshold)
