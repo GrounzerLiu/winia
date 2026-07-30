@@ -92,6 +92,16 @@ impl<'a> ComposeCtx<'a> {
         self.composer.selection_registrar = None;
     }
 
+    /// 给当前节点设 registrar 引用（供后续渲染/事件从中读取）
+    pub fn set_current_node_registrar(&self, reg: crate::ui::selection_container::SelectionRegistrar) {
+        if let Some(id) = self.current_node_id() {
+            if let Some(idx) = self.composer.node_stack.last() {
+                let node = &self.composer.layout_nodes[*idx];
+                *node.registrar.borrow_mut() = Some(reg);
+            }
+        }
+    }
+
     /// 获取选区注册表
     pub fn selection_registrar(&self) -> Option<crate::ui::selection_container::SelectionRegistrar> {
         self.composer.selection_registrar.clone()

@@ -134,6 +134,8 @@ pub struct LayoutNode {
     pub(crate) scroll_viewport_height: f32,
     /// 父节点 ID（键盘事件冒泡用，由 add_child 设置）
     pub(crate) parent_id: Option<u64>,
+    /// CompositionLocal 作用域内的 SelectionRegistrar（Text 节点存引用）
+    pub(crate) registrar: std::cell::RefCell<Option<crate::ui::selection_container::SelectionRegistrar>>,
 }
 
 // ── CachedNode：LayoutNode 的可缓存子集，用于增量重组时恢复节点 ──
@@ -203,6 +205,7 @@ impl LayoutNode {
             slot_key: 0,
             cached_paragraph: std::cell::RefCell::new(None),
             scroll_viewport_height: 0.0, parent_id: None,
+            registrar: std::cell::RefCell::new(None),
         }
     }
 
@@ -239,6 +242,7 @@ impl LayoutNode {
             slot_key: 0,
             cached_paragraph: std::cell::RefCell::new(None),
             scroll_viewport_height: 0.0, parent_id: None,
+            registrar: std::cell::RefCell::new(None),
         }
     }
 
@@ -266,6 +270,7 @@ impl Default for LayoutNode {
             slot_key: 0,
             cached_paragraph: std::cell::RefCell::new(None),
             scroll_viewport_height: 0.0, parent_id: None,
+            registrar: std::cell::RefCell::new(None),
         }
     }
 }

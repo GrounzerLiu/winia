@@ -150,7 +150,7 @@ fn render_pass1<'a>(
                 crate::ui::TextAlign::Right => x + (w - para.max_intrinsic_width()).max(0.0),
             };
             // 选中高亮
-            if let Some(range) = crate::ui::selection_container::find_registrar_for_slot(node.slot_key).unwrap_or_else(|| crate::ui::selection_container::active_registrar()).selected_range(node.slot_key) {
+            if let Some(range) = node.registrar.borrow().as_ref().cloned().unwrap_or_else(|| crate::ui::selection_container::active_registrar()).selected_range(node.slot_key) {
                 eprintln!("[selection] render node={} range={}..{}", node.id, range.start, range.end);
                 let rects: Vec<_> = if range.start < range.end {
                 para.get_rects_for_range(range.start..range.end, skia_safe::textlayout::RectHeightStyle::Max, skia_safe::textlayout::RectWidthStyle::Max) } else { Vec::new() };
@@ -171,7 +171,7 @@ fn render_pass1<'a>(
         if let Some(para) = node.cached_paragraph.borrow_mut().as_mut() {
             para.layout(w);
             // 选中高亮
-            if let Some(range) = crate::ui::selection_container::find_registrar_for_slot(node.slot_key).unwrap_or_else(|| crate::ui::selection_container::active_registrar()).selected_range(node.slot_key) {
+            if let Some(range) = node.registrar.borrow().as_ref().cloned().unwrap_or_else(|| crate::ui::selection_container::active_registrar()).selected_range(node.slot_key) {
                 let rects: Vec<_> = if range.start < range.end {
                 para.get_rects_for_range(range.start..range.end, skia_safe::textlayout::RectHeightStyle::Max, skia_safe::textlayout::RectWidthStyle::Max) } else { Vec::new() };
                 let mut paint = skia_safe::Paint::default();
@@ -356,7 +356,7 @@ fn draw_text_with_selection(
     max_lines: usize, align: crate::ui::TextAlign, overflow: crate::ui::TextOverflow, soft_wrap: bool,
     slot_key: u64,
 ) {
-    if crate::ui::selection_container::find_registrar_for_slot(slot_key).unwrap_or_else(|| crate::ui::selection_container::active_registrar()).selected_range(slot_key).is_some() {
+    if crate::ui::selection_container::active_registrar().selected_range(slot_key).is_some() {
         let mut paint = skia_safe::Paint::default();
         paint.set_color(skia_safe::Color::from_argb(80, 100, 150, 255));
         canvas.draw_rect(skia_safe::Rect::new(x, y, x + w, y + font_size * 1.2), &paint);

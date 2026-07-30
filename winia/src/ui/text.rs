@@ -221,6 +221,7 @@ impl Text {
         let reg = ctx.selection_registrar()
             .unwrap_or_else(|| crate::ui::selection_container::LOCAL_SELECTION_REGISTRAR.current());
         let global_off = reg.register(key, content_len, None);
+        ctx.set_current_node_registrar(reg);
         eprintln!("[selection] Text registered: slot_key={} len={} global_off={}", key, content_len, global_off);
         ctx.end_node();
     }

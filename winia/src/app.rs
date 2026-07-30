@@ -253,7 +253,7 @@ impl ApplicationHandler for AppState {
                         if let Some(innermost) = path.last() {
                             // 清除旧的选区（新点击开始）
                             {
-                                let reg = crate::ui::selection_container::find_registrar_for_slot(innermost.slot_key)
+                                let reg = innermost.registrar.borrow().as_ref().cloned()
                                     .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
                                 reg.clear_selection();
                             }
@@ -273,7 +273,7 @@ impl ApplicationHandler for AppState {
                             pw.pointer_down_slot = Some(innermost.slot_key);
                             // 将 anchor 转为全局索引再存入 PtrDownState
                             if let Some(a) = anchor {
-                                let reg = crate::ui::selection_container::find_registrar_for_slot(innermost.slot_key)
+                                let reg = innermost.registrar.borrow().as_ref().cloned()
                                     .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
                                 let seg = reg.segment_info(innermost.slot_key);
                                 let global_a = seg.map(|(off,_)| off + a).unwrap_or(a);
@@ -363,7 +363,7 @@ impl ApplicationHandler for AppState {
                                         };
                                         let tl = crate::text::TextLayout::new(para, 0);
                                         {
-                                            let reg = crate::ui::selection_container::find_registrar_for_slot(innermost.slot_key)
+                                            let reg = innermost.registrar.borrow().as_ref().cloned()
                                                 .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
                                             // 只更新注册到 SelectionContainer 的节点
                                             if let Some((global_off, _)) = reg.segment_info(innermost.slot_key) {
