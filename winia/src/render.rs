@@ -181,18 +181,6 @@ fn render_pass1<'a>(
                 }
             }
             para.paint(canvas, x, y);
-
-            // 绘制内联 drawable（图片/SVG）
-            let drawables = node.inline_drawables.borrow();
-            if !drawables.is_empty() {
-                // 先 clone 出一组 rect 再画，避免同时再借 node
-                let rects: Vec<_> = para.get_rects_for_placeholders().iter().map(|tb| tb.rect).collect();
-                for (i, text_box_rect) in rects.iter().enumerate() {
-                    if let Some(drawable) = drawables.get(i) {
-                        drawable.draw(canvas, x + text_box_rect.left, y + text_box_rect.top);
-                    }
-                }
-            }
         }
     }
 

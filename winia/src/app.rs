@@ -268,17 +268,16 @@ impl ApplicationHandler for AppState {
                                 node_id: innermost.id,
                                 position: scene_pos,
                                 time: Instant::now(),
-                                selection_anchor: anchor,
+                                selection_anchor: None,
                             });
                             pw.pointer_down_slot = Some(innermost.slot_key);
-                            // 初始单字符选区（对齐 D:\winia Down 时设置 index..index）
+                            // 将 anchor 转为全局索引再存入 PtrDownState
                             if let Some(a) = anchor {
                                 let reg = pw.composer.selection_registrar.as_ref()
                                     .cloned()
                                     .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
                                 let seg = reg.segment_info(innermost.slot_key);
                                 let global_a = seg.map(|(off,_)| off + a).unwrap_or(a);
-                                // 只记 anchor，不设选区（拖拽才开始选中）
                                 pw.pointer_down_state.as_mut().map(|s| s.selection_anchor = Some(global_a));
                             }
                         }
