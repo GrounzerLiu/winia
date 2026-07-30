@@ -141,6 +141,16 @@ fn render_pass1<'a>(
     }
 
     if let Some((content, font_size, color, max_lines, align, overflow, font_weight, font_style, soft_wrap)) = text {
+        // 图形层变换
+        let gl_saved = if let Some(gl) = node.modifier.graphics_layer_params() {
+            canvas.save();
+            // 应用变换：平移 → 缩放 → 旋转
+            canvas.translate((gl.translation_x, gl.translation_y));
+            canvas.scale((gl.scale_x, gl.scale_y));
+            canvas.rotate(gl.rotation_z, None);
+            true
+        } else { false };
+
         // 优先用测量阶段缓存的 Paragraph（避免重建）
         if let Some(para) = node.cached_paragraph.borrow_mut().as_mut() {
             para.layout(w);
@@ -208,6 +218,7 @@ fn render_pass1<'a>(
         } else {
             draw_text_with_selection(canvas, content, font_size, color, font_weight, font_style, x, y, w, max_lines, align, overflow, soft_wrap, node.slot_key);
         }
+        if gl_saved { canvas.restore(); }
     }
 
     // ═══ 富文本（RichText）渲染 ═══

@@ -310,6 +310,8 @@ pub(crate) enum ModifierElement {
     VerticalScroll { state: crate::core::state::State<f32> },
     /// 水平滚动
     HorizontalScroll { state: crate::core::state::State<f32> },
+    /// 图形层变换（scale/alpha/rotation/translation——只触发重绘，不触发布局）
+    GraphicsLayer { params: GraphicsLayerParams },
 
     // ── 扩展槽位 ──
     /// 自定义 Modifier 元素（外部通过 `Modifier::custom()` 扩展）
@@ -549,6 +551,11 @@ impl Modifier {
         self.push(ModifierElement::FocusRequesterId { id: fr.id })
     }
 
+    /// 图形层变换（scale/alpha/rotation/translation）
+    pub fn graphics_layer(self, params: GraphicsLayerParams) -> Self {
+        self.push(ModifierElement::GraphicsLayer { params })
+    }
+
     /// 垂直滚动（绑定 ScrollState）
     pub fn vertical_scroll(self, state: ScrollState) -> Self {
         // 读取 offset 以注册 State→Slot 依赖，确保滚动时触发增量重组
@@ -693,6 +700,12 @@ impl Modifier {
         None
     }
 
+    pub fn graphics_layer_params(&self) -> Option<GraphicsLayerParams> {
+        self.elements.iter().find_map(|el| {
+            if let ModifierElement::GraphicsLayer { params } = el { Some(*params) } else { None }
+        })
+    }
+
     /// 获取文本对齐方式
     pub fn align(&self) -> Option<crate::ui::TextAlign> {
         for el in &self.elements {
@@ -776,6 +789,7 @@ impl Debug for ModifierElement {
             Self::FocusRequesterId { id } => f.debug_tuple("FocusRequesterId").field(id).finish(),
             Self::VerticalScroll { .. } => f.write_str("VerticalScroll(<state>)"),
             Self::HorizontalScroll { .. } => f.write_str("HorizontalScroll(<state>)"),
+            Self::GraphicsLayer { params } => f.debug_struct("GraphicsLayer").field("params", params).finish(),
             Self::Blur { radius } => f.debug_struct("Blur").field("radius", radius).finish(),
             Self::BackdropBlur { radius } => f.debug_struct("BackdropBlur").field("radius", radius).finish(),
             Self::Custom { .. } => f.write_str("Custom(<dyn ModifierNode>)"),
@@ -815,6 +829,7 @@ impl ModifierElement {
 
             ModifierElement::TextContent { .. }
             | ModifierElement::RichTextContent { .. } => ElementCategory::Content,
+            ModifierElement::GraphicsLayer { .. } => ElementCategory::Draw,
         }
     }
 
@@ -832,6 +847,26 @@ impl ModifierElement {
 }
 
 // ── ScrollState ──
+
+/// 图形层变换参数
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GraphicsLayerParams {
+    pub scale_x: f32,
+    pub scale_y: f32,
+    pub alpha: f32,
+    pub translation_x: f32,
+    pub translation_y: f32,
+    pub rotation_z: f32,
+}
+
+impl Default for GraphicsLayerParams {
+    fn default() -> Self {
+        Self {
+            scale_x: 1.0, scale_y: 1.0, alpha: 1.0,
+            translation_x: 0.0, translation_y: 0.0, rotation_z: 0.0,
+        }
+    }
+}
 
 /// 滚动状态，对齐 Compose ScrollState
 #[derive(Debug, Clone)]
