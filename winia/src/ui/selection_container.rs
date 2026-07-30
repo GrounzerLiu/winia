@@ -165,6 +165,23 @@ pub(crate) fn notify_selection_change() {
     if let Some(reg) = ACTIVE_REGISTRAR.lock().unwrap().as_ref() {
         reg.fire_on_change();
     }
+    // also fire on all registrars
+    for reg in ALL_REGISTRARS.lock().unwrap().iter() {
+        reg.fire_on_change();
+    }
+}
+static ALL_REGISTRARS: std::sync::LazyLock<Mutex<Vec<SelectionRegistrar>>> = std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
+
+pub(crate) fn register_instance(reg: &SelectionRegistrar) {
+    ALL_REGISTRARS.lock().unwrap().push(reg.clone());
+}
+
+pub(crate) fn find_registrar_for_slot(slot_key: u64) -> Option<SelectionRegistrar> {
+    ALL_REGISTRARS.lock().unwrap().iter().find(|r| r.segment_info(slot_key).is_some()).cloned()
+}
+
+pub(crate) fn clear_all_registrars() {
+    ALL_REGISTRARS.lock().unwrap().clear();
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -206,13 +223,14 @@ impl SelectionContainer {
                     GroupStatus::Skip => {}
                     GroupStatus::Enter => {
                         ctx.set_selection_registrar(registrar.clone());
+                        register_instance(&registrar);
                         registrar.reset_offsets();
                         content(ctx);
                     }
                 }
                 ctx.end_restartable_group();
             });
-            ctx.clear_selection_registrar();
+            // 不再清除 registrar——由下一个 SelectionContainer 构建时覆盖
         }
     }
 }

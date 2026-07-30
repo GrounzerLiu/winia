@@ -82,6 +82,7 @@ impl PerWindow {
     fn recompose_layout_render(&mut self, after_draw: impl FnOnce(&LayoutNode, &mut skia_safe::Surface)) {
         // 清除待关闭标志——只捕获本次重组的 on_remove，防止跨窗口污染
         crate::ui::window::reset_pending_remove();
+        crate::ui::selection_container::clear_all_registrars();
         // 循环 compose 直到没有新的 pending state——处理并发 task 在 compose 期间
         // 完成的 case（第二个 notify 的 state 在第一次 compose 之后才入队）
         loop {
@@ -247,16 +248,15 @@ impl ApplicationHandler for AppState {
                 };
                 if state.is_pressed() {
                     // ── Down：记录按下态 + 清除旧选区 ──
-                    // 清除旧的选区（新点击开始）
-                    {
-                        let reg = pw.composer.selection_registrar.as_ref()
-                            .cloned()
-                            .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
-                        reg.clear_selection();
-                    }
                     if let Some(root) = pw.composer.layout_root() {
                         let path = hit_test(root, scene_pos.0, scene_pos.1);
                         if let Some(innermost) = path.last() {
+                            // 清除旧的选区（新点击开始）
+                            {
+                                let reg = crate::ui::selection_container::find_registrar_for_slot(innermost.slot_key)
+                                    .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
+                                reg.clear_selection();
+                            }
                             let anchor = if let Ok(borrow) = innermost.cached_paragraph.try_borrow() {
                                 if let Some(para) = borrow.as_ref() {
                                     let (ax, ay) = node_abs_position(root, innermost.id);
@@ -273,8 +273,7 @@ impl ApplicationHandler for AppState {
                             pw.pointer_down_slot = Some(innermost.slot_key);
                             // 将 anchor 转为全局索引再存入 PtrDownState
                             if let Some(a) = anchor {
-                                let reg = pw.composer.selection_registrar.as_ref()
-                                    .cloned()
+                                let reg = crate::ui::selection_container::find_registrar_for_slot(innermost.slot_key)
                                     .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
                                 let seg = reg.segment_info(innermost.slot_key);
                                 let global_a = seg.map(|(off,_)| off + a).unwrap_or(a);
@@ -364,8 +363,7 @@ impl ApplicationHandler for AppState {
                                         };
                                         let tl = crate::text::TextLayout::new(para, 0);
                                         {
-                                            let reg = pw.composer.selection_registrar.as_ref()
-                                                .cloned()
+                                            let reg = crate::ui::selection_container::find_registrar_for_slot(innermost.slot_key)
                                                 .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
                                             // 只更新注册到 SelectionContainer 的节点
                                             if let Some((global_off, _)) = reg.segment_info(innermost.slot_key) {
