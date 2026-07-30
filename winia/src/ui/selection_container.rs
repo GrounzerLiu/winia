@@ -161,9 +161,6 @@ static ACTIVE_REGISTRAR: std::sync::LazyLock<Mutex<Option<SelectionRegistrar>>> 
 pub(crate) fn active_registrar() -> SelectionRegistrar {
     ACTIVE_REGISTRAR.lock().unwrap().clone().unwrap_or_else(|| SelectionRegistrar::new())
 }
-
-pub(crate) fn notify_selection_change() {}
-
 // ═══════════════════════════════════════════════════════════
 // SelectionContainer
 // ═══════════════════════════════════════════════════════════
