@@ -106,6 +106,21 @@ impl<'a> ComposeCtx<'a> {
         }
     }
 
+    /// 设置当前节点的光标位置和可见性，同时设置光标回调
+    pub fn set_current_node_cursor_and_callback(
+        &self,
+        cursor_index: usize,
+        visible: bool,
+        callback: Box<dyn Fn(usize) + Send>,
+    ) {
+        if let Some(&idx) = self.composer.node_stack.last() {
+            let node = &self.composer.layout_nodes[idx];
+            node.cursor_index.set(cursor_index);
+            node.cursor_visible.set(visible);
+            *node.cursor_callback.borrow_mut() = Some(callback);
+        }
+    }
+
     /// 设置当前节点的光标位置
     pub fn set_current_node_cursor(&self, cursor_index: usize, visible: bool) {
         if let Some(idx) = self.composer.node_stack.last() {

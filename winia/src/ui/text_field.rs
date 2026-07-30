@@ -196,20 +196,18 @@ impl TextField {
 
         ctx.start_leaf(key, modifier);
 
-        // 设置光标位置到节点
-        ctx.set_current_node_cursor(current.selection.start, cursor_visible.get());
-        // 设置点击回调和更新 value.selection/光标
-        if let Some(node_id) = ctx.current_node_id() {
-            if let Some(root) = ctx.layout_root() {
-                if let Some(node) = crate::layout::node::find_node_by_id(root, node_id) {
-                    let v = value.clone();
-                    node.cursor_callback.borrow_mut().replace(Box::new(move |idx| {
-                        eprintln!("[cursor_callback] idx={}", idx);
-                        v.update(|val| { val.selection.start = idx; val.selection.end = idx; });
-                    }));
+        // 设置光标位置和回调（用 node_stack 直接访问，find_node_by_id 因树未建立无效）
+        ctx.set_current_node_cursor_and_callback(
+            current.selection.start,
+            cursor_visible.get(),
+            Box::new({
+                let v = value.clone();
+                move |idx| {
+                    eprintln!("[cursor_callback] idx={}", idx);
+                    v.update(|val| { val.selection.start = idx; val.selection.end = idx; });
                 }
-            }
-        }
+            }),
+        );
         ctx.end_node();
     }
 }
