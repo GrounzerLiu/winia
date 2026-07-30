@@ -162,7 +162,13 @@ fn render_pass1<'a>(
             }
             para.paint(canvas, x_off, y);
             // 绘制光标（聚焦的 TextField 节点）
-            if node.focused && node.cursor_x.get() > 0.0 && node.cursor_visible.get() {
+            if node.focused && node.cursor_x.get() > 0.0 {
+                // 500ms 闪烁：根据系统时间判断可见性
+                let blink = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| (d.as_millis() / 500) % 2 == 0)
+                    .unwrap_or(true);
+                if blink {
                 let mut cursor_paint = skia_safe::Paint::default();
                 cursor_paint.set_color(skia_safe::Color::from_argb(255, 0, 0, 0));
                 cursor_paint.set_stroke_width(1.5);
@@ -170,6 +176,7 @@ fn render_pass1<'a>(
                 let cy = y + 2.0;
                 let ch = node.cursor_height.get().max(2.0);
                 canvas.draw_line(skia_safe::Point::new(cx, cy), skia_safe::Point::new(cx, cy + ch), &cursor_paint);
+            }
             }
         } else {
             draw_text_with_selection(canvas, content, font_size, color, font_weight, font_style, x, y, w, max_lines, align, overflow, soft_wrap, node.slot_key);
