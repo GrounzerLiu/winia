@@ -770,7 +770,7 @@ fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> Size {
     for el in node.modifier.elements() {
         if let ModifierElement::RichTextContent { content, drawables, drawable_ranges, spans } = el {
             let para_style = ParagraphStyle::new();
-            let mut builder = skia_safe::textlayout::ParagraphBuilder::new(&para_style, &fc);
+            let mut builder = crate::text::ParagraphBuilder::new(&para_style, &fc);
 
             // 按 span 迭代 + drawable 范围
             let chars: Vec<char> = content.chars().collect();
@@ -786,9 +786,8 @@ fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> Size {
                         if let Some(s) = spans.iter().find(|s| s.start <= ci && s.end > ci) {
                             builder.push_style(&to_sktextstyle(s));
                         }
-                        let (w, h) = drawables[di].size();
-                        let ph = PlaceholderStyle::new(w, h, PlaceholderAlignment::Bottom, TextBaseline::Alphabetic, 0.0);
-                        builder.add_placeholder(&ph);
+                        let d = drawables[di].clone();
+                        builder.add_placeholder(" ", d, &Some((PlaceholderAlignment::Bottom, TextBaseline::Alphabetic, 0.0)));
                         if let Some(_s) = spans.iter().find(|s| s.start <= ci && s.end > ci) { builder.pop(); }
                     }
                     ci += 1;
@@ -821,14 +820,7 @@ fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> Size {
                 para.max_intrinsic_width().ceil().min(max_width),
                 para.height().ceil(),
             );
-            *node.cached_paragraph.borrow_mut() = Some(crate::text::Paragraph::new(
-                para,
-                &[],
-                &std::collections::HashSet::new(),
-                &crate::text::IndexBiMap::new(),
-                &crate::text::IndexBiMap::new(),
-                &crate::text::IndexBiMap::new(),
-            ));
+            *node.cached_paragraph.borrow_mut() = Some(para);
             *node.inline_drawables.borrow_mut() = drawables.clone();
             return size;
         }
