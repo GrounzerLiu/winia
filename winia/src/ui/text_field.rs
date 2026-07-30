@@ -17,13 +17,15 @@ pub struct TextFieldValue {
     pub text: String,
     /// 光标/选区范围（start == end 表示无选区仅光标）
     pub selection: Range<usize>,
+    /// IME 组合范围（预输入文本在 text 中的字节范围，None 表示无组合）
+    pub composing_range: Option<Range<usize>>,
 }
 
 impl TextFieldValue {
     pub fn new(text: impl Into<String>) -> Self {
         let text = text.into();
         let len = text.len();
-        Self { text, selection: len..len }
+        Self { text, selection: len..len, composing_range: None }
     }
 }
 
@@ -203,7 +205,6 @@ impl TextField {
             Box::new({
                 let v = value.clone();
                 move |idx| {
-                    eprintln!("[cursor_callback] idx={}", idx);
                     v.update(|val| { val.selection.start = idx; val.selection.end = idx; });
                 }
             }),
