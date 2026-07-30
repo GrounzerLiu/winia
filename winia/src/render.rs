@@ -164,7 +164,7 @@ fn render_pass1<'a>(
             }
             para.paint(canvas, x_off, y);
         } else {
-            draw_text_with_selection(canvas, content, font_size, color, font_weight, font_style, x, y, w, max_lines, align, overflow, soft_wrap, node.id);
+            draw_text_with_selection(canvas, content, font_size, color, font_weight, font_style, x, y, w, max_lines, align, overflow, soft_wrap, node.slot_key);
         }
     }
 
@@ -368,9 +368,9 @@ fn draw_text_with_selection(
     font_style: crate::ui::text::FontSlant,
     x: f32, y: f32, w: f32,
     max_lines: usize, align: crate::ui::TextAlign, overflow: crate::ui::TextOverflow, soft_wrap: bool,
-    node_id: u64,
+    slot_key: u64,
 ) {
-    if crate::ui::selection_container::active_registrar().selected_range(node_id).is_some() {
+    if crate::ui::selection_container::active_registrar().selected_range(slot_key).is_some() {
         let mut paint = skia_safe::Paint::default();
         paint.set_color(skia_safe::Color::from_argb(80, 100, 150, 255));
         canvas.draw_rect(skia_safe::Rect::new(x, y, x + w, y + font_size * 1.2), &paint);
