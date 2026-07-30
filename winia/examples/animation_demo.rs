@@ -1,6 +1,7 @@
 //! 动画系统演示
 //!
-//! 展示 animate_float_as_state / updateTransition / Spring / Tween / Bouncy
+//! 展示 animate_float_as_state / updateTransition / Spring / Tween
+//! 动画值绑定到 visual 属性（size、background）实现可视动画
 
 use winia::prelude::*;
 use winia::animation::{AnimationSpec, SpringSpec, TweenSpec, Transition};
@@ -15,46 +16,66 @@ fn animation_demo(ctx: &mut ComposeCtx) {
             // ── Title ──
             Text::new("Animation Demo")
                 .font_size(22.0)
-                .modifier(Modifier::new().padding(0.0).padding_vertical(8.0))
+                .modifier(Modifier::new().padding_vertical(8.0))
                 .build(ctx);
 
-            // ── 1. animate_float_as_state ──
-            Text::new("1. animate_float_as_state (Spring Bouncy)")
+            // ── 1. Spring Bouncy — 宽度弹跳 ──
+            Text::new("1. Spring Bouncy — box width")
                 .font_size(14.0)
                 .color(Color::from_argb(200, 100, 100, 100))
                 .build(ctx);
 
             let scale = ctx.animate_float_as_state(
-                if clicked.get() { 1.5 } else { 1.0 },
+                if clicked.get() { 300.0 } else { 50.0 },
                 AnimationSpec::Spring(SpringSpec::bouncy()),
             );
-            Text::new(format!("Scale: {:.2}", scale.get()))
-                .font_size(12.0)
-                .modifier(Modifier::new().padding(4.0).padding_vertical(2.0))
-                .build(ctx);
+            // 用动画值控制 Box 宽度——可视的弹跳效果
+            Column::new()
+                .modifier(Modifier::new()
+                    .size(scale.get(), 24.0)
+                    .background(Color::from_argb(255, 100, 149, 237), Shape::rounded(6.0))
+                    .padding(4.0))
+                .build(ctx, |ctx| {
+                    Text::new(format!("{:.0}px", scale.get()))
+                        .font_size(12.0)
+                        .color(Color::from_argb(255, 255, 255, 255))
+                        .build(ctx);
+                });
 
-            // ── 2. Tween animation ──
-            Text::new("2. Tween (300ms linear)")
+            // ── 2. Tween — 颜色过渡 ──
+            Text::new("2. Tween 300ms — background color")
                 .font_size(14.0)
                 .color(Color::from_argb(200, 100, 100, 100))
+                .modifier(Modifier::new().padding_vertical(8.0))
                 .build(ctx);
 
             let alpha = ctx.animate_float_as_state(
-                if clicked.get() { 0.2 } else { 1.0 },
+                if clicked.get() { 0.9 } else { 0.2 },
                 AnimationSpec::Tween(TweenSpec {
-                    duration: Duration::from_millis(300),
+                    duration: std::time::Duration::from_millis(300),
                     interpolator: winia::animation::interpolator::linear,
                 }),
             );
-            Text::new(format!("Alpha: {:.2}", alpha.get()))
-                .font_size(12.0)
-                .modifier(Modifier::new().padding(4.0).padding_vertical(2.0))
-                .build(ctx);
+            let c = Color::from_argb(
+                (alpha.get() * 255.0) as u8, 76, 175, 80,
+            );
+            Column::new()
+                .modifier(Modifier::new()
+                    .size(alpha.get() * 200.0 + 50.0, 30.0)
+                    .background(c, Shape::rounded(6.0))
+                    .padding(4.0))
+                .build(ctx, |ctx| {
+                    Text::new(format!("Alpha: {:.2}", alpha.get()))
+                        .font_size(12.0)
+                        .color(Color::from_argb(255, 255, 255, 255))
+                        .build(ctx);
+                });
 
-            // ── 3. updateTransition ──
-            Text::new("3. updateTransition (multi-property)")
+            // ── 3. updateTransition — 位置偏移 ──
+            Text::new("3. updateTransition — offset")
                 .font_size(14.0)
                 .color(Color::from_argb(200, 100, 100, 100))
+                .modifier(Modifier::new().padding_vertical(8.0))
                 .build(ctx);
 
             let page = if clicked.get() { 1u8 } else { 0u8 };
@@ -63,25 +84,27 @@ fn animation_demo(ctx: &mut ComposeCtx) {
                 AnimationSpec::Spring(SpringSpec::default()),
                 "page",
             );
-            let tx = t.animate_float(
-                ctx,
-                |p| if *p == 0 { 0.0 } else { 100.0 },
-                "tx",
-            );
-            let ty = t.animate_float(
-                ctx,
-                |p| if *p == 0 { 0.0 } else { 50.0 },
-                "ty",
-            );
-            Text::new(format!("Page {}: offset=({:.0},{:.0})", page, tx.get(), ty.get()))
-                .font_size(12.0)
-                .modifier(Modifier::new().padding(4.0).padding_vertical(2.0))
-                .build(ctx);
+            let tx = t.animate_float(ctx, |p| if *p == 0 { 0.0 } else { 80.0 }, "tx");
+            let ty = t.animate_float(ctx, |p| if *p == 0 { 0.0 } else { 30.0 }, "ty");
+
+            // 用 offset 模拟位置动画
+            Column::new()
+                .modifier(Modifier::new()
+                    .offset(tx.get(), ty.get())
+                    .size(100.0, 30.0)
+                    .background(Color::from_argb(255, 255, 152, 0), Shape::rounded(6.0))
+                    .padding(4.0))
+                .build(ctx, |ctx| {
+                    Text::new(format!("Page {} ({:.0},{:.0})", page, tx.get(), ty.get()))
+                        .font_size(12.0)
+                        .color(Color::from_argb(255, 255, 255, 255))
+                        .build(ctx);
+                });
 
             // ── Toggle button ──
             Button::new()
                 .on_click({ let c = clicked.clone(); move || { c.update(|v| *v = !*v); } })
-                .modifier(Modifier::new().padding(8.0))
+                .modifier(Modifier::new().padding_vertical(16.0))
                 .build(ctx, |ctx| {
                     Text::new(if clicked.get() { "Reset" } else { "Animate!" })
                         .font_size(16.0)
@@ -94,7 +117,7 @@ fn main() {
     app::run_app(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
-                .size(400.0, 500.0)
+                .size(420.0, 500.0)
                 .title("Animation Demo")
                 .build(ctx, |ctx| animation_demo(ctx));
         });
