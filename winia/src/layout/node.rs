@@ -139,6 +139,8 @@ pub struct LayoutNode {
     /// 文本光标 x 偏移（TextField 用，render 根据 focused 画竖线）
     pub(crate) cursor_x: std::cell::Cell<f32>,
     pub(crate) cursor_height: std::cell::Cell<f32>,
+    /// 光标字符索引（TextField 设置，render 用 TextLayout 精确计算位置）
+    pub(crate) cursor_index: std::cell::Cell<usize>,
     /// 光标是否可见（闪烁 toggle，TextField 设置）
     pub(crate) cursor_visible: std::cell::Cell<bool>,
 }
@@ -216,6 +218,7 @@ impl LayoutNode {
             registrar: std::cell::RefCell::new(None),
             cursor_x: std::cell::Cell::new(0.0),
             cursor_height: std::cell::Cell::new(0.0),
+            cursor_index: std::cell::Cell::new(0),
             cursor_visible: std::cell::Cell::new(false),
         }
     }
@@ -256,6 +259,7 @@ impl LayoutNode {
             registrar: std::cell::RefCell::new(None),
             cursor_x: std::cell::Cell::new(0.0),
             cursor_height: std::cell::Cell::new(0.0),
+            cursor_index: std::cell::Cell::new(0),
             cursor_visible: std::cell::Cell::new(false),
         }
     }
@@ -287,6 +291,7 @@ impl Default for LayoutNode {
             registrar: std::cell::RefCell::new(None),
             cursor_x: std::cell::Cell::new(0.0),
             cursor_height: std::cell::Cell::new(0.0),
+            cursor_index: std::cell::Cell::new(0),
             cursor_visible: std::cell::Cell::new(false),
         }
     }

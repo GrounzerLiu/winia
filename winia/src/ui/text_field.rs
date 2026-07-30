@@ -181,8 +181,7 @@ impl TextField {
         ctx.start_leaf(key, modifier);
 
         // 设置光标位置到节点
-        let cursor_x = (current.selection.start as f32) * font_size * 0.6;
-        ctx.set_current_node_cursor(cursor_x, font_size * 1.2, true);
+        ctx.set_current_node_cursor(current.selection.start, true);
         ctx.end_node();
     }
 }
