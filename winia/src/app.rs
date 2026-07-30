@@ -594,6 +594,28 @@ impl ApplicationHandler for AppState {
                         debug::screenshot_done();
                     }
                 });
+                // IME 光标区域更新（输入法候选框跟随光标位置）
+                if let Some(ref sw) = pw.skia_window {
+                    if let Some(fid) = pw.focused_id {
+                        if let Some(root) = pw.composer.layout_root() {
+                            if let Some(para) = crate::layout::node::find_node_by_id(root, fid) {
+                                let cx = para.cursor_index.get() as f32 * 8.0; // rough x, improves with TextLayout
+                                let abs = node_abs_position(root, fid);
+                                let x = (abs.0 + cx) as f64;
+                                let y = abs.1 as f64;
+                                let _ = sw.request_ime_update(
+                                    winit::window::ImeRequest::Update(
+                                        winit::window::ImeRequestData::default()
+                                            .with_cursor_area(
+                                                winit::dpi::Position::Logical(winit::dpi::LogicalPosition::new(x, y)),
+                                                winit::dpi::Size::Logical(winit::dpi::LogicalSize::new(2.0, 20.0)),
+                                            )
+                                    )
+                                );
+                            }
+                        }
+                    }
+                }
                 // 检查 compose 后是否有待关闭窗口
                 if crate::ui::window::Window::has_pending_close() {
                     if let Some(ref proxy) = *APP_PROXY.lock().unwrap() { let _ = proxy.wake_up(); }
