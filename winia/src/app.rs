@@ -504,6 +504,52 @@ impl ApplicationHandler for AppState {
                     event_loop.set_control_flow(ControlFlow::Poll);
                 }
             }
+            WindowEvent::Ime(ime) => {
+                use winit::event::Ime;
+                match ime {
+                    Ime::Commit(text) => {
+                        // IME 提交文本——派发给聚焦节点的 on_key_event 以 Character 形式
+                        if let Some(fid) = pw.focused_id {
+                            if let Some(root) = pw.composer.layout_root_mut() {
+                                // 逐字符发送
+                                for ch in text.chars() {
+                                    let s = ch.to_string();
+                                    let ke = crate::modifier::KbEvent {
+                                        key: winit::keyboard::Key::Character(s.clone().into()),
+                                        event_type: crate::modifier::KbEventType::KeyDown,
+                                        is_alt_pressed: false, is_ctrl_pressed: false,
+                                        is_shift_pressed: false, is_meta_pressed: false,
+                                        repeat: false,
+                                    };
+                                    let mut path = Vec::new();
+                                    if let Some(node) = crate::layout::node::find_node_by_id(root, fid) {
+                                        path.push(node);
+                                        let mut pid = node.parent_id;
+                                        while let Some(id) = pid {
+                                            if let Some(anc) = crate::layout::node::find_node_by_id(root, id) {
+                                                path.push(anc); pid = anc.parent_id;
+                                            } else { break; }
+                                        }
+                                        path.reverse();
+                                    }
+                                    for node in path.iter().rev() {
+                                        let mut consumed = false;
+                                        for el in node.modifier.elements().iter().rev() {
+                                            if let crate::modifier::ModifierElement::KbEvent { on_key: Some(handler), .. } = el {
+                                                if handler(&ke) { consumed = true; break; }
+                                            }
+                                        }
+                                        if consumed { break; }
+                                    }
+                                }
+                                if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                            }
+                        }
+                    }
+                    Ime::Enabled | Ime::Disabled => {}
+                    _ => {}
+                }
+            }
             WindowEvent::SurfaceResized(s) => {
                 let l = s.to_logical::<f32>(pw.scale_factor);
                 if (l.width - pw.width).abs() > pw.width * 0.5
