@@ -73,9 +73,13 @@ impl PerWindow {
 
     /// 从当前焦点节点刷新 cached 字段
     fn refresh_focus(&mut self, root: &LayoutNode) {
-        self.focused_id = crate::layout::node::get_focus_id(root);
-        self.focused_slot_key = self.focused_id
-            .and_then(|id| crate::layout::node::find_node_by_id(root, id).map(|n| n.slot_key));
+        // 如果树中已有焦点节点，直接读取
+        if let Some(fid) = crate::layout::node::get_focus_id(root) {
+            self.focused_id = Some(fid);
+            self.focused_slot_key = crate::layout::node::find_node_by_id(root, fid).map(|n| n.slot_key);
+        }
+        // 否则：如果之前有关焦点但树中丢失了（重组后新节点 focus=false），保留 focused_id
+        // （由后续触发的 set_focus_by_id 或 pointer 事件补上树的焦点标记）
     }
 
     /// 增量重组 → 恢复焦点 → 布局 → 渲染（供 RedrawRequested 使用）
@@ -94,6 +98,7 @@ impl PerWindow {
                         crate::layout::node::clear_focus(r);
                         crate::layout::node::set_focus_by_id(r, new_id);
                         self.focused_id = Some(new_id);
+                            eprintln!("[focus] restored by slot_key id={}", new_id);
                     } else {
                         self.focused_id = None;
                         self.focused_slot_key = None;
