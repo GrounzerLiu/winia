@@ -203,10 +203,10 @@ impl<T: Clone + PartialEq + 'static> Transition<T> {
     ) -> State<f32> {
         let value = target_fn(&self.target);
         let state: State<f32> = ctx.remember(|| value);
-        if state.get() != value {
-            let spec = self.spec.clone();
-            let s = state.clone();
-            crate::animation::push_animatable(s, value, spec);
+        let last_target: State<f32> = ctx.remember(|| value);
+        if (last_target.get() - value).abs() > f32::EPSILON {
+            crate::animation::push_animatable(state.clone(), value, self.spec.clone());
+            last_target.set(value);
         }
         state
     }
@@ -239,7 +239,7 @@ impl Default for SpringSpec {
 
 impl SpringSpec {
     pub fn bouncy() -> Self {
-        Self { damping_ratio: 0.4, ..Self::default() }
+        Self { damping_ratio: 0.6, threshold: 0.5, ..Self::default() }
     }
 }
 
