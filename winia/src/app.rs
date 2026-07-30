@@ -260,7 +260,7 @@ impl ApplicationHandler for AppState {
                             let anchor = if let Ok(borrow) = innermost.cached_paragraph.try_borrow() {
                                 if let Some(para) = borrow.as_ref() {
                                     let (ax, ay) = node_abs_position(root, innermost.id);
-                                    para.get_closest_glyph_cluster_at((scene_pos.0 - ax, scene_pos.1 - ay))
+                                    para.get_closest_glyph_cluster_at(skia_safe::Point::new(scene_pos.0 - ax, scene_pos.1 - ay))
                                         .map(|gc| gc.text_range.start)
                                 } else { None }
                             } else { None };
@@ -363,7 +363,7 @@ impl ApplicationHandler for AppState {
                                             crate::ui::TextAlign::Right => abs_x + (node_w - para.max_intrinsic_width()).max(0.0),
                                             _ => abs_x,
                                         };
-                                        if let Some(gc) = para.get_closest_glyph_cluster_at((scene_pos.0 - x_off, scene_pos.1 - abs_y)) {
+                                        if let Some(gc) = para.get_closest_glyph_cluster_at(skia_safe::Point::new(scene_pos.0 - x_off, scene_pos.1 - abs_y)) {
                                             let reg = pw.composer.selection_registrar.as_ref()
                                                 .cloned()
                                                 .unwrap_or_else(|| crate::ui::selection_container::active_registrar());

@@ -110,6 +110,10 @@ impl Paragraph {
         self.paragraph.get_rects_for_range(start..end, rect_height_style, rect_width_style)
     }
 
+    pub fn get_rects_for_placeholders(&self) -> Vec<TextBox> {
+        self.paragraph.get_rects_for_placeholders()
+    }
+
     /// 通过坐标命中测试，返回 real index
     pub fn get_glyph_position_at_coordinate(&self, p: impl Into<Point>) -> (usize, Affinity) {
         let p_with_a = self.paragraph.get_glyph_position_at_coordinate(p);

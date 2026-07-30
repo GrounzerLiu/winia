@@ -162,7 +162,7 @@ fn render_pass1<'a>(
                     canvas.draw_rect(skia_safe::Rect::new(x_off + tb.rect.left, y + tb.rect.top, x_off + tb.rect.right, y + tb.rect.bottom), &paint);
                 }
             }
-            para.paint(canvas, (x_off, y));
+            para.paint(canvas, x_off, y);
         } else {
             draw_text_with_selection(canvas, content, font_size, color, font_weight, font_style, x, y, w, max_lines, align, overflow, soft_wrap, node.id);
         }
@@ -182,7 +182,7 @@ fn render_pass1<'a>(
                     canvas.draw_rect(skia_safe::Rect::new(x + tb.rect.left, y + tb.rect.top, x + tb.rect.right, y + tb.rect.bottom), &paint);
                 }
             }
-            para.paint(canvas, (x, y));
+            para.paint(canvas, x, y);
 
             // 绘制内联 drawable（图片/SVG）
             let drawables = node.inline_drawables.borrow();

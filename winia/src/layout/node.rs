@@ -129,7 +129,7 @@ pub struct LayoutNode {
     /// composable 调用对应的 slot key（用于 replay 时子节点查找）
     pub(crate) slot_key: u64,
     /// 测量阶段缓存的 Paragraph（避免渲染时重建）
-    pub(crate) cached_paragraph: std::cell::RefCell<Option<skia_safe::textlayout::Paragraph>>,
+    pub(crate) cached_paragraph: std::cell::RefCell<Option<crate::text::Paragraph>>,
     /// 富文本内联元素（图片/SVG），测量阶段缓存供渲染使用
     pub(crate) inline_drawables: std::cell::RefCell<Vec<std::sync::Arc<dyn crate::text::InlineDrawable>>>,
     /// scroll 容器的 viewport 高度（由 measure_node 在布局阶段设值，供 apply_scroll_delta 使用）
@@ -738,7 +738,7 @@ fn measure_and_cache_text(node: &LayoutNode, max_width: f32) -> Size {
                 };
                 text_style.set_font_style(FontStyle::new(font_weight.value().into(), 5.into(), slant));
             }
-            let mut builder = skia_safe::textlayout::ParagraphBuilder::new(&para_style, &fc);
+            let mut builder = crate::text::ParagraphBuilder::new(&para_style, &fc);
             builder.push_style(&text_style);
             builder.add_text(content.as_str());
             let mut para = builder.build();
@@ -821,7 +821,13 @@ fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> Size {
                 para.max_intrinsic_width().ceil().min(max_width),
                 para.height().ceil(),
             );
-            *node.cached_paragraph.borrow_mut() = Some(para);
+            *node.cached_paragraph.borrow_mut() = Some(crate::text::Paragraph::new(
+                para,
+                &[],
+                &std::collections::HashSet::new(),
+                &crate::text::IndexBiMap::new(),
+                &crate::text::IndexBiMap::new(),
+            ));
             *node.inline_drawables.borrow_mut() = drawables.clone();
             return size;
         }
