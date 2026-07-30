@@ -165,16 +165,17 @@ impl TextField {
 
         let modifier = self.modifier
             .focusable()
+            .padding(8.0)
             .push(crate::modifier::ModifierElement::TextContent {
                 content,
                 font_size,
                 color,
                 font_weight: crate::ui::text::FontWeight::NORMAL,
                 font_style: crate::ui::text::FontSlant::Upright,
-                max_lines: 1,
+                max_lines: 0, // unlimited lines
                 align: crate::ui::TextAlign::Left,
                 overflow: crate::ui::TextOverflow::Clip,
-                soft_wrap: false,
+                soft_wrap: true, // allow text wrapping
             })
             .on_key_event(kb_handler);
 
