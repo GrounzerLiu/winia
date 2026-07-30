@@ -638,36 +638,12 @@ impl ApplicationHandler for AppState {
                             if let Some(root) = pw.composer.layout_root() {
                                 let nodes = hit_test(root, x, y);
                                 let mut click_handled = false;
-
-                                // 设置焦点（对齐 PointerButton 行为）
-                                if let Some(innermost) = nodes.last() {
-                                    let is_focusable = crate::layout::node::has_focusable_modifier(innermost);
-                                    if is_focusable {
-                                        // 焦点
-                                        let fid = innermost.id;
-                                        crate::layout::node::clear_focus(root);
-                                        crate::layout::node::set_focus_by_id(root, fid);
-                                        pw.focused_id = Some(fid);
-                                        pw.focused_slot_key = Some(innermost.slot_key);
-                                        // IME
-                                        if let Some(ref sw) = pw.skia_window { sw.set_ime_allowed(true); }
-                                        // 光标位置
-                                        if let Ok(borrow) = innermost.cached_paragraph.try_borrow() {
-                                            if let Some(para) = borrow.as_ref() {
-                                                let (ax, ay) = node_abs_position(root, fid);
-                                                let tl = crate::text::TextLayout::new(para, 0);
-                                                let idx = tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(x - ax, y - ay));
-                                                innermost.cursor_index.set(idx);
-                                                if let Some(cb) = innermost.cursor_callback.borrow_mut().as_mut() {
-                                                    cb(idx);
-                                                }
-                                                eprintln!("[cursor] debug-click idx={} xy=({:.0},{:.0}) abs=({:.0},{:.0})", idx, x, y, ax, ay);
-                                            }
-                                        }
-                                    }
-                                }
-
-                                eprintln!("[debug-click] pos=({:.0},{:.0}) path_len={} sf={}", x, y, nodes.len(), pw.scale_factor);
+                                let (fid, sk) = nodes.last()
+                                    .filter(|n| crate::layout::node::has_focusable_modifier(n))
+                                    .map(|n| (n.id, n.slot_key))
+                                    .unwrap_or((0, 0));
+                                let path_len = nodes.len();
+                                // Click 检测（消耗 nodes/root 前做）
                                 for node in nodes.iter().rev() {
                                     if click_handled { break; }
                                     if let Some(on_click) = node.modifier.on_click() {
@@ -676,6 +652,18 @@ impl ApplicationHandler for AppState {
                                         click_handled = true;
                                     }
                                 }
+                                std::mem::drop(nodes);
+                                std::mem::drop(root);
+                                if fid != 0 {
+                                    if let Some(root_mut) = pw.composer.layout_root_mut() {
+                                        crate::layout::node::clear_focus(root_mut);
+                                        crate::layout::node::set_focus_by_id(root_mut, fid);
+                                    }
+                                    pw.focused_id = Some(fid);
+                                    pw.focused_slot_key = Some(sk);
+                                    if let Some(ref sw) = pw.skia_window { sw.set_ime_allowed(true); }
+                                }
+                                eprintln!("[debug-click] pos=({:.0},{:.0}) path_len={} sf={}", x, y, path_len, pw.scale_factor);
                                 eprintln!("[debug-click] handled={} pos=({:.0},{:.0})", click_handled, x, y);
                             }
                         }
