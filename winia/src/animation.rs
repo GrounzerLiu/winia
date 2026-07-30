@@ -108,12 +108,15 @@ impl<T: Clone + AnimatableValue + 'static> Animatable<T> {
         let elapsed = state.start.elapsed();
         let (value, done) = match &state.spec {
             AnimationSpec::Spring(spec) => {
+                let from: f32 = state.from.lerp(&state.to, 0.0);
+                let to: f32 = state.to.lerp(&state.to, 0.0);
+                let initial_displacement = from - to;
                 let displacement = compute_spring_displacement(
                     spec.stiffness, spec.damping_ratio, spec.mass,
-                    0.0, &mut state.last_velocity, elapsed, spec.threshold,
+                    initial_displacement, &mut state.last_velocity, elapsed, spec.threshold,
                 );
-                let t = state.from.lerp(&state.to, displacement);
-                (t, displacement.abs() < spec.threshold && state.last_velocity.abs() < spec.threshold)
+                let value = to + displacement;
+                (value, displacement.abs() < spec.threshold && state.last_velocity.abs() < spec.threshold)
             }
             AnimationSpec::Tween(spec) => {
                 let t = (elapsed.as_secs_f64() / spec.duration.as_secs_f64()).min(1.0) as f32;
