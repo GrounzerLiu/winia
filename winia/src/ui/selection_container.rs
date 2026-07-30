@@ -135,11 +135,12 @@ impl SelectionRegistrar {
     }
 
     pub(crate) fn fire_on_change(&self) {
-        let inner = self.inner.lock().unwrap();
-        if let (Some(s), Some(e)) = (inner.selection_start, inner.selection_end) {
-            if let Some(ref cb) = inner.on_change {
-                cb(s, e);
-            }
+        let (s, e, cb) = {
+            let inner = self.inner.lock().unwrap();
+            (inner.selection_start, inner.selection_end, inner.on_change.clone())
+        };
+        if let (Some(s), Some(e), Some(ref cb)) = (s, e, cb) {
+            cb(s, e);
         }
     }
 }
@@ -161,28 +162,7 @@ pub(crate) fn active_registrar() -> SelectionRegistrar {
     ACTIVE_REGISTRAR.lock().unwrap().clone().unwrap_or_else(|| SelectionRegistrar::new())
 }
 
-pub(crate) fn notify_selection_change() {
-    if let Some(reg) = ACTIVE_REGISTRAR.lock().unwrap().as_ref() {
-        reg.fire_on_change();
-    }
-    // also fire on all registrars
-    for reg in ALL_REGISTRARS.lock().unwrap().iter() {
-        reg.fire_on_change();
-    }
-}
-static ALL_REGISTRARS: std::sync::LazyLock<Mutex<Vec<SelectionRegistrar>>> = std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
-
-pub(crate) fn register_instance(reg: &SelectionRegistrar) {
-    ALL_REGISTRARS.lock().unwrap().push(reg.clone());
-}
-
-pub(crate) fn find_registrar_for_slot(slot_key: u64) -> Option<SelectionRegistrar> {
-    ALL_REGISTRARS.lock().unwrap().iter().find(|r| r.segment_info(slot_key).is_some()).cloned()
-}
-
-pub(crate) fn clear_all_registrars() {
-    ALL_REGISTRARS.lock().unwrap().clear();
-}
+pub(crate) fn notify_selection_change() {}
 
 // ═══════════════════════════════════════════════════════════
 // SelectionContainer
@@ -218,7 +198,6 @@ impl SelectionContainer {
         {
             let reg = registrar.clone();
             *ACTIVE_REGISTRAR.lock().unwrap() = Some(reg.clone());
-            register_instance(&registrar);
             LOCAL_SELECTION_REGISTRAR.provides(reg, || {
                 match ctx.start_restartable_group(key, self.modifier, BoxLayout::new()) {
                     GroupStatus::Skip => {}
