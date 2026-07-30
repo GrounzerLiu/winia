@@ -84,6 +84,8 @@ struct AnimationState<T> {
     spec: AnimationSpec,
     last_velocity: f32,
     last_update: Instant,
+    // Spring 持续的位移（累积值，非每帧重算）
+    current_displacement: f32,
 }
 
 impl<T: Clone + AnimatableValue + 'static> Animatable<T> {
@@ -94,6 +96,7 @@ impl<T: Clone + AnimatableValue + 'static> Animatable<T> {
     /// 启动动画到目标值
     pub fn animate_to(&mut self, to: T, spec: AnimationSpec) {
         let from = self.state.get();
+        let displacement = AnimatableValue::to_f32(&from) - AnimatableValue::to_f32(&to);
         self.anim_state = Some(AnimationState {
             from: from.clone(),
             to,
@@ -101,6 +104,7 @@ impl<T: Clone + AnimatableValue + 'static> Animatable<T> {
             spec,
             last_velocity: 0.0,
             last_update: Instant::now(),
+            current_displacement: displacement,
         });
     }
 
@@ -117,7 +121,7 @@ impl<T: Clone + AnimatableValue + 'static> Animatable<T> {
                 let to_f32 = AnimatableValue::to_f32(&state.to);
                 let displacement = compute_spring_displacement(
                     spec.stiffness, spec.damping_ratio, spec.mass,
-                    from_f32 - to_f32, &mut state.last_velocity, dt, spec.threshold,
+                    state.current_displacement, &mut state.last_velocity, dt, spec.threshold,
                 );
                 let spring_val = to_f32 + displacement;
                 let t = ((spring_val - from_f32) / (to_f32 - from_f32).max(f32::EPSILON)).clamp(0.0, 1.0);
