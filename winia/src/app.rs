@@ -82,10 +82,10 @@ impl PerWindow {
     fn recompose_layout_render(&mut self, after_draw: impl FnOnce(&LayoutNode, &mut skia_safe::Surface)) {
         // 清除待关闭标志——只捕获本次重组的 on_remove，防止跨窗口污染
         crate::ui::window::reset_pending_remove();
-        crate::ui::selection_container::clear_all_registrars();
         // 循环 compose 直到没有新的 pending state——处理并发 task 在 compose 期间
         // 完成的 case（第二个 notify 的 state 在第一次 compose 之后才入队）
         loop {
+            crate::ui::selection_container::clear_all_registrars();
             let did_compose = self.composer.recompose(|ctx| (self.content)(ctx));
             if let Some(slot_key) = self.focused_slot_key {
                 if let Some(r) = self.composer.layout_root_mut() {
