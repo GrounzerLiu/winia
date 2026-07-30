@@ -621,7 +621,7 @@ impl ApplicationHandler for AppState {
                                         );
                                         if let Some((cx, cy, ch)) = tl.get_cursor_position(para.cursor_index.get()) {
                                             let abs = node_abs_position(root, fid);
-                                            let align = para.modifier.align();
+                                            let align = para.modifier.align().unwrap_or(crate::ui::TextAlign::Left);
                                             let node_w = para.measured_size.width;
                                             let intrinsic_w = p.max_intrinsic_width();
                                             let x_off = match align {
