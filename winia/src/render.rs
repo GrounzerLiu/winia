@@ -165,16 +165,9 @@ fn render_pass1<'a>(
             if node.focused {
                 eprintln!("[render] cursor focused=true idx={} cursor_visible={}", node.cursor_index.get(), node.cursor_visible.get());
                 if node.cursor_visible.get() {
-                    let tl = crate::text::TextLayout::new(para, 0);
+                    let length = para.paragraph_byte_to_real_indices.len();
+                    let tl = crate::text::TextLayout::new(para, length);
                     let idx = node.cursor_index.get();
-                    // 调试：测 get_glyph_cluster_at_UTF16_offset 对各种索引的返回
-                    for test_idx in [0, 1, idx, idx+1] {
-                        if let Some(gc) = para.inner_paragraph().get_glyph_cluster_at_UTF16_offset(test_idx) {
-                            eprintln!("[render] gc[{}]: range={}..{} bounds=({:.1},{:.1})-({:.1},{:.1})", test_idx, gc.text_range.start, gc.text_range.end, gc.bounds.left, gc.bounds.top, gc.bounds.right, gc.bounds.bottom);
-                        } else {
-                            eprintln!("[render] gc[{}]: None", test_idx);
-                        }
-                    }
                     if let Some((cx, cy, ch)) = tl.get_cursor_position(idx) {
                         eprintln!("[render] cursor pos=({:.0},{:.0}) h={:.0}", cx, cy, ch);
                         let mut cp = skia_safe::Paint::default();
