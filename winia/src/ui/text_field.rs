@@ -1,0 +1,159 @@
+//! TextField — 文本输入组件（对齐 Jetpack Compose BasicTextField）
+//!
+//! 参考：D:\winia\winia\src\ui\widget\text_field.rs
+
+use crate::core::composer::ComposeCtx;
+use crate::core::state::State;
+use crate::modifier::Modifier;
+use std::ops::Range;
+
+// ═══════════════════════════════════════════════════════════
+// TextFieldValue — 文本输入状态
+// ═══════════════════════════════════════════════════════════
+
+/// 文本输入状态（对齐 Compose TextFieldValue）
+#[derive(Clone, PartialEq)]
+pub struct TextFieldValue {
+    pub text: String,
+    /// 光标/选区范围（start == end 表示无选区仅光标）
+    pub selection: Range<usize>,
+}
+
+impl TextFieldValue {
+    pub fn new(text: impl Into<String>) -> Self {
+        let text = text.into();
+        let len = text.len();
+        Self { text, selection: len..len }
+    }
+}
+
+/// 文本变更描述
+#[derive(Clone)]
+pub enum TextChange {
+    Inserted { index: usize, text: String },
+    Deleted { range: Range<usize> },
+}
+
+impl TextChange {
+    pub fn apply_to(&self, value: &mut TextFieldValue) {
+        match self {
+            TextChange::Inserted { index, text } => {
+                value.text.insert_str(*index, text);
+                value.selection = (index + text.len())..(index + text.len());
+            }
+            TextChange::Deleted { range } => {
+                value.text.drain(range.clone());
+                value.selection = range.start..range.start;
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// TextField — composable widget
+// ═══════════════════════════════════════════════════════════
+
+pub struct TextField {
+    value: State<TextFieldValue>,
+    on_value_change: Box<dyn Fn(TextFieldValue) + Send + Sync>,
+    modifier: Modifier,
+}
+
+impl TextField {
+    pub fn new(
+        value: State<TextFieldValue>,
+        on_value_change: impl Fn(TextFieldValue) + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            value,
+            on_value_change: Box::new(on_value_change),
+            modifier: Modifier::new(),
+        }
+    }
+
+    pub fn modifier(mut self, modifier: Modifier) -> Self {
+        self.modifier = self.modifier.then(modifier);
+        self
+    }
+
+    pub fn build(self, ctx: &mut ComposeCtx) {
+        let key = ctx.next_key();
+        let current = self.value.get();
+        let content = current.text.clone();
+
+        // 样式默认值
+        let font_size = 14.0;
+        let color = crate::modifier::Color::from_argb(255, 0, 0, 0);
+
+        // 键盘事件处理
+        let value = self.value.clone();
+        let on_change = std::sync::Arc::new(std::sync::Mutex::new(self.on_value_change));
+        let kb_handler = {
+            let v = value.clone();
+            let cb = on_change.clone();
+            move |e: &crate::modifier::KbEvent| -> bool {
+                if e.event_type != crate::modifier::KbEventType::KeyDown { return false; }
+                let mut val = v.get();
+                let key = &e.key;
+                match key {
+                    winit::keyboard::Key::Named(named) => match named {
+                        winit::keyboard::NamedKey::Backspace => {
+                            if val.selection.start == val.selection.end {
+                                if val.selection.start > 0 {
+                                    let change = TextChange::Deleted { range: (val.selection.start - 1)..val.selection.start };
+                                    change.apply_to(&mut val);
+                                    v.set(val.clone());
+                                    if let Ok(cb) = cb.lock() { cb(val); }
+                                }
+                            }
+                            return true;
+                        }
+                        winit::keyboard::NamedKey::Enter => {
+                            let change = TextChange::Inserted { index: val.selection.start, text: "\n".into() };
+                            change.apply_to(&mut val);
+                            v.set(val.clone());
+                            if let Ok(cb) = cb.lock() { cb(val); }
+                            return true;
+                        }
+                        _ => {}
+                    },
+                    winit::keyboard::Key::Character(c) => {
+                        if c.is_empty() { return false; }
+                        let change = TextChange::Inserted { index: val.selection.start, text: c.to_string() };
+                        change.apply_to(&mut val);
+                        v.set(val.clone());
+                        if let Ok(cb) = cb.lock() { cb(val); }
+                        return true;
+                    }
+                    _ => {}
+                }
+                false
+            }
+        };
+
+        let modifier = self.modifier
+            .push(crate::modifier::ModifierElement::TextContent {
+                content,
+                font_size,
+                color,
+                font_weight: crate::ui::text::FontWeight::NORMAL,
+                font_style: crate::ui::text::FontSlant::Upright,
+                max_lines: 1,
+                align: crate::ui::TextAlign::Left,
+                overflow: crate::ui::TextOverflow::Clip,
+                soft_wrap: false,
+            })
+            .on_key_event(kb_handler);
+
+        ctx.start_leaf(key, modifier);
+    }
+}
+
+impl Default for TextField {
+    fn default() -> Self {
+        Self::new(
+            State::new(TextFieldValue::new("")),
+            |_| {},
+        )
+    }
+}
