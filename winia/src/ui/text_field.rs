@@ -203,6 +203,7 @@ impl TextField {
                 if let Some(node) = crate::layout::node::find_node_by_id(root, node_id) {
                     let v = value.clone();
                     node.cursor_callback.borrow_mut().replace(Box::new(move |idx| {
+                        eprintln!("[cursor_callback] idx={}", idx);
                         v.update(|val| { val.selection.start = idx; val.selection.end = idx; });
                     }));
                 }
