@@ -164,6 +164,7 @@ impl TextField {
         };
 
         let modifier = self.modifier
+            .focusable()
             .push(crate::modifier::ModifierElement::TextContent {
                 content,
                 font_size,
