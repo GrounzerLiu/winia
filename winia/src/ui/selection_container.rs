@@ -5,6 +5,7 @@ use crate::core::composer::ComposeCtx;
 use crate::modifier::Modifier;
 use crate::layout::BoxLayout;
 use crate::core::composer::GroupStatus;
+use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -49,7 +50,7 @@ struct RegistrarInner {
     selection_start: Option<usize>,
     selection_end: Option<usize>,
     next_global_offset: usize,
-    segments: Vec<RegisteredSegment>,
+    segments: HashMap<u64, RegisteredSegment>,
     on_change: Option<OnChangeFn>,
 }
 
@@ -71,7 +72,7 @@ impl SelectionRegistrar {
                 selection_start: None,
                 selection_end: None,
                 next_global_offset: 0,
-                segments: Vec::new(),
+                segments: HashMap::new(),
                 on_change: None,
             })),
         }
@@ -80,7 +81,8 @@ impl SelectionRegistrar {
     pub fn register(&self, slot_key: u64, text_len: usize, bounds: Option<Rect>) -> usize {
         let mut inner = self.inner.lock().unwrap();
         let offset = inner.next_global_offset;
-        inner.segments.push(RegisteredSegment { slot_key, global_offset: offset, text_len, bounds: bounds.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)) });
+        // 用 HashMap 自动去重——每个 slot_key 只保留最新注册
+        inner.segments.insert(slot_key, RegisteredSegment { slot_key, global_offset: offset, text_len, bounds: bounds.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)) });
         inner.next_global_offset += text_len;
         offset
     }
@@ -99,7 +101,13 @@ impl SelectionRegistrar {
 
     pub fn segment_info(&self, slot_key: u64) -> Option<(usize, usize)> {
         let inner = self.inner.lock().unwrap();
-        inner.segments.iter().find(|s| s.slot_key == slot_key).map(|s| (s.global_offset, s.text_len))
+        inner.segments.get(&slot_key).map(|s| (s.global_offset, s.text_len))
+    }
+
+    pub(crate) fn reset_offsets(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.next_global_offset = 0;
+        inner.segments.clear();
     }
 
     pub fn total_text_len(&self) -> usize {
@@ -109,7 +117,7 @@ impl SelectionRegistrar {
     pub fn selected_range(&self, slot_key: u64) -> Option<Range<usize>> {
         let inner = self.inner.lock().unwrap();
         let (global_start, global_end) = (inner.selection_start?, inner.selection_end?);
-        let seg = inner.segments.iter().find(|s| s.slot_key == slot_key)?;
+        let seg = inner.segments.get(&slot_key)?;
         let local_start = global_start.saturating_sub(seg.global_offset);
         let local_end = global_end.saturating_sub(seg.global_offset);
         if local_start >= seg.text_len || local_end == 0 { return None; }
@@ -152,19 +160,7 @@ pub(crate) fn active_registrar() -> SelectionRegistrar {
 pub(crate) fn notify_selection_change() {
     if let Some(reg) = ACTIVE_REGISTRAR.lock().unwrap().as_ref() {
         reg.fire_on_change();
-        // 持久化选区（重组时新 Registrar 会覆盖，需从这里恢复）
-        let inner = reg.inner.lock().unwrap();
-        if let (Some(s), Some(e)) = (inner.selection_start, inner.selection_end) {
-            *PERSISTED_SELECTION.lock().unwrap() = Some((s, e));
-        }
     }
-}
-
-/// 组合重建时恢复的持久化选区
-static PERSISTED_SELECTION: std::sync::LazyLock<Mutex<Option<(usize, usize)>>> = std::sync::LazyLock::new(|| Mutex::new(None));
-
-pub(crate) fn take_persisted_selection() -> Option<(usize, usize)> {
-    PERSISTED_SELECTION.lock().unwrap().take()
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -193,25 +189,24 @@ impl SelectionContainer {
 
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         let key = ctx.next_key();
-        let registrar = SelectionRegistrar::new();
+        // 持久化同一个 Registrar（重组时不新建，segments 跨重组保留）
+        let registrar = ctx.remember_at_key(key, || SelectionRegistrar::new()).get();
         if let Some(cb) = self.on_change {
             registrar.set_on_change(cb);
         }
-        // 恢复上次持久化的选区
-        if let Some((s, e)) = take_persisted_selection() {
-            registrar.set_selection(s, e);
-        }
-        match ctx.start_restartable_group(key, self.modifier, BoxLayout::new()) {
-            GroupStatus::Skip => {}
-            GroupStatus::Enter => {
-                ctx.set_selection_registrar(registrar.clone());
-                *ACTIVE_REGISTRAR.lock().unwrap() = Some(registrar.clone());
-                LOCAL_SELECTION_REGISTRAR.provides(registrar, || {
+        let r = registrar.clone();
+        ctx.set_selection_registrar(r.clone());
+        *ACTIVE_REGISTRAR.lock().unwrap() = Some(r.clone());
+        LOCAL_SELECTION_REGISTRAR.provides(r, || {
+            match ctx.start_restartable_group(key, self.modifier, BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    registrar.reset_offsets();
                     content(ctx);
-                });
+                }
             }
-        }
-        ctx.end_restartable_group();
+            ctx.end_restartable_group();
+        });
         ctx.clear_selection_registrar();
     }
 }
