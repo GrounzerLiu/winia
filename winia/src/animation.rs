@@ -111,6 +111,61 @@ pub fn push_infinite_float(state: State<f32>, from: f32, to: f32, spec: Infinite
     ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
 }
 
+/// 无限循环颜色动画列表
+static ACTIVE_INFINITE_COLOR_ANIMATIONS: LazyLock<Mutex<Vec<InfiniteColor>>> =
+    LazyLock::new(|| Mutex::new(Vec::new()));
+
+/// 无限循环颜色动画实例
+struct InfiniteColor {
+    state: State<crate::modifier::Color>,
+    from: crate::modifier::Color,
+    to: crate::modifier::Color,
+    spec: InfiniteRepeatableSpec,
+    start: Instant,
+}
+
+impl InfiniteColor {
+    fn value_at(&self, t: f32) -> crate::modifier::Color {
+        self.from.lerp(&self.to, t)
+    }
+}
+
+impl AnimationInstance for InfiniteColor {
+    fn update(&mut self) -> bool {
+        let elapsed = self.start.elapsed();
+        match self.spec.mode {
+            RepeatMode::Restart => {
+                let t = (elapsed.as_secs_f32() / self.spec.duration.as_secs_f32().max(0.001)).min(1.0);
+                self.state.set(self.value_at(t));
+                if elapsed >= self.spec.duration { self.start = Instant::now(); }
+            }
+            RepeatMode::Reverse => {
+                let cycle_secs = self.spec.duration.as_secs_f32().max(0.001) * 2.0;
+                let phase = (elapsed.as_secs_f32() % cycle_secs) / self.spec.duration.as_secs_f32().max(0.001);
+                let t = if phase < 1.0 { phase } else { 2.0 - phase };
+                self.state.set(self.value_at(t));
+            }
+        }
+        true
+    }
+    fn is_animating_to(&self, _target: f32) -> bool { false }
+    fn state_id(&self) -> u32 { self.state.id() }
+}
+
+/// 注册一个无限循环颜色动画
+pub fn push_infinite_color(
+    state: State<crate::modifier::Color>, from: crate::modifier::Color, to: crate::modifier::Color,
+    spec: InfiniteRepeatableSpec,
+) {
+    let sid = state.id();
+    {
+        let list = ACTIVE_INFINITE_COLOR_ANIMATIONS.lock().unwrap();
+        if list.iter().any(|a| a.state.id() == sid) { return; }
+    }
+    let anim = InfiniteColor { state, from, to, spec, start: Instant::now() };
+    ACTIVE_INFINITE_COLOR_ANIMATIONS.lock().unwrap().push(anim);
+}
+
 /// 注册一个动画到全局活跃列表
 pub fn push_animation(anim: Box<dyn AnimationInstance + 'static>) {
     ACTIVE_ANIMATIONS.lock().unwrap().push(anim);
@@ -187,13 +242,22 @@ pub fn update_animations() -> bool {
     }
     let mut clist = ACTIVE_COLOR_ANIMATIONS.lock().unwrap();
     clist.extend(cstill);
-    !list.is_empty() || !clist.is_empty()
+    // 无限 Color 动画
+    let mut icanims = std::mem::take(&mut *ACTIVE_INFINITE_COLOR_ANIMATIONS.lock().unwrap());
+    let mut icstill = Vec::new();
+    for mut c in icanims {
+        if c.update() { icstill.push(c); }
+    }
+    let mut iclist = ACTIVE_INFINITE_COLOR_ANIMATIONS.lock().unwrap();
+    iclist.extend(icstill);
+    !list.is_empty() || !clist.is_empty() || !iclist.is_empty()
 }
 
 /// 是否有动画在运行（用于控制事件循环 Poll/Wait）
 pub fn is_animating() -> bool {
     !ACTIVE_ANIMATIONS.lock().unwrap().is_empty()
         || !ACTIVE_COLOR_ANIMATIONS.lock().unwrap().is_empty()
+        || !ACTIVE_INFINITE_COLOR_ANIMATIONS.lock().unwrap().is_empty()
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -376,6 +440,19 @@ impl InfiniteTransition {
         crate::animation::push_infinite_float(state.clone(), from, to, spec);
         state
     }
+
+    /// 注册一个 from→to 无限循环颜色动画（CAM16-UCS 插值）
+    pub fn animate_color(
+        &mut self,
+        ctx: &mut ComposeCtx,
+        from: crate::modifier::Color,
+        to: crate::modifier::Color,
+        spec: InfiniteRepeatableSpec,
+    ) -> State<crate::modifier::Color> {
+        let state: State<crate::modifier::Color> = ctx.remember(|| from);
+        crate::animation::push_infinite_color(state.clone(), from, to, spec);
+        state
+    }
 }
 
 #[derive(Clone)]
@@ -437,15 +514,15 @@ impl AnimatableValue for f32 {
 }
 
 impl AnimatableValue for crate::modifier::Color {
-    /// RGBA 各通道线性插值
+    /// CAM16-UCS 色彩空间插值（人眼感知均匀，避免 RGBA 插值经过灰暗中间色）
     fn lerp(&self, to: &Self, t: f32) -> Self {
+        use material_colors::blend::cam16_ucs;
+        use material_colors::color::Argb;
         let t = t.clamp(0.0, 1.0);
-        Self::from_argb(
-            (self.a as f32 + (to.a as f32 - self.a as f32) * t).round() as u8,
-            (self.r as f32 + (to.r as f32 - self.r as f32) * t).round() as u8,
-            (self.g as f32 + (to.g as f32 - self.g as f32) * t).round() as u8,
-            (self.b as f32 + (to.b as f32 - self.b as f32) * t).round() as u8,
-        )
+        let from = Argb::new(self.a, self.r, self.g, self.b);
+        let to = Argb::new(to.a, to.r, to.g, to.b);
+        let b = cam16_ucs(from, to, t as f64);
+        Self::from_argb(b.alpha, b.red, b.green, b.blue)
     }
     fn to_f32(&self) -> f32 { self.a as f32 }
     fn from_f32(v: f32) -> Self { Self::from_argb(v as u8, 0, 0, 0) }

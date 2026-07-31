@@ -142,7 +142,15 @@ fn animation_demo(ctx: &mut ComposeCtx) {
                 winia::animation::InfiniteRepeatableSpec::reverse(std::time::Duration::from_millis(600)),
             );
             let p = pulse.get();
-            // 呼吸圆点：alpha 往返 0.4↔1.0
+            // 无限颜色：蓝色↔红色 CAM16 插值
+            let pulse_color = infinite.animate_color(
+                ctx,
+                Color::from_argb(255, 33, 150, 243),
+                Color::from_argb(255, 255, 82, 82),
+                winia::animation::InfiniteRepeatableSpec::reverse(std::time::Duration::from_millis(600)),
+            );
+            let pc = pulse_color.get();
+            // 呼吸圆点：alpha + 颜色往返
             Column::new()
                 .modifier(Modifier::new()
                     .size(40.0, 40.0)
@@ -150,7 +158,7 @@ fn animation_demo(ctx: &mut ComposeCtx) {
                         alpha: p,
                         ..Default::default()
                     })
-                    .background(Color::from_argb(255, 33, 150, 243), Shape::Circle)
+                    .background(pc, Shape::Circle)
                 )
                 .build(ctx, |_| {});
 
