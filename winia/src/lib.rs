@@ -62,7 +62,7 @@ pub mod prelude {
     pub use crate::text::{InlineDrawable, ImageDrawable, SvgDrawable};
     pub use crate::layout::{Arrangement, Alignment, Constraints, LayoutDirection};
     pub use crate::ui::theme::current_layout_direction;
-    pub use crate::unit::{Dp, Sp, Offset, Size, IntOffset, IntSize, Density, DpExt, SpExt};
+    pub use crate::unit::{Dp, Sp, Offset, Size, IntOffset, IntSize, Density, Px, DpExt, SpExt, PxExt};
     pub use crate::effect::{LaunchedEffect, DisposableEffect, CoroutineScope, remember_coroutine_scope, StreamObverse, observe_watch};
     pub use std::time::Duration;
 }

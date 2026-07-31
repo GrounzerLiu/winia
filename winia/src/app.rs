@@ -91,7 +91,11 @@ impl PerWindow {
         // 完成的 case（第二个 notify 的 state 在第一次 compose 之后才入队）
         // 循环 compose 直到没有新的 pending state
         loop {
-            let did_compose = self.composer.recompose(|ctx| (self.content)(ctx));
+            // 提供当前窗口 Density（从 scale_factor）——对标 Compose LocalDensity
+            let density = crate::unit::Density::from_density(self.scale_factor as f32);
+            let did_compose = crate::unit::with_density(density, || {
+                self.composer.recompose(|ctx| (self.content)(ctx))
+            });
             if let Some(slot_key) = self.focused_slot_key {
                 if let Some(r) = self.composer.layout_root_mut() {
                     if let Some(new_id) = crate::layout::node::find_node_id_by_slot_key(r, slot_key) {
@@ -864,9 +868,13 @@ fn apply_scroll_delta(node: &mut LayoutNode, dy: f32) -> bool {
             node.scroll_viewport_height
         } else {
             node.modifier.fixed_size()
-                .and_then(|(_, h)| match h {
-                    Dimension::Fixed(h) => Some(h),
-                    _ => None,
+                .and_then(|(_, h)| {
+                    use crate::modifier::Dimension;
+                    match h {
+                        Dimension::Fixed(h) | Dimension::Dp(crate::unit::Dp(h)) => Some(h),
+                        Dimension::Px(p) => Some(p.to_logical(crate::unit::current_density())),
+                        _ => None,
+                    }
                 })
                 .unwrap_or(0.0)
         };

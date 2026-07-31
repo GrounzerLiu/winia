@@ -616,11 +616,18 @@ pub(crate) fn measure_node(
     // 1. 应用固定尺寸
     if let Some((width, height)) = node.modifier.fixed_size() {
         use crate::modifier::Dimension;
-        if let Dimension::Fixed(w) = width {
+        if let Dimension::Fixed(w) | Dimension::Dp(crate::unit::Dp(w)) = width {
             inner_constraints = inner_constraints.tighten_width(w);
         }
-        if let Dimension::Fixed(h) = height {
+        if let Dimension::Fixed(h) | Dimension::Dp(crate::unit::Dp(h)) = height {
             inner_constraints = inner_constraints.tighten_height(h);
+        }
+        // Px 需 Density 转换
+        if let Dimension::Px(p) = width {
+            inner_constraints = inner_constraints.tighten_width(p.to_logical(crate::unit::current_density()));
+        }
+        if let Dimension::Px(p) = height {
+            inner_constraints = inner_constraints.tighten_height(p.to_logical(crate::unit::current_density()));
         }
     }
 

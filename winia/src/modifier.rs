@@ -15,10 +15,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 // ── Dimension ──
 
 /// 尺寸值，用于 Modifier 和 Layout
+///
+/// 支持多种单位：`Fixed(f32)`（逻辑像素）、`Dp`（密度无关，== 逻辑像素）、
+/// `Px`（物理像素，需 Density 转换）、`Fill`、`Auto`。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Dimension {
-    /// 固定像素值
+    /// 固定逻辑像素值
     Fixed(f32),
+    /// 密度无关像素（本项目 1dp == 1 逻辑像素，无需转换）
+    Dp(crate::unit::Dp),
+    /// 物理像素（需 Density 转逻辑像素）
+    Px(crate::unit::Px),
     /// 填满可用空间
     Fill,
     /// 自适应内容大小
@@ -27,17 +34,39 @@ pub enum Dimension {
 
 impl Dimension {
     pub fn is_fixed(&self) -> bool {
-        matches!(self, Dimension::Fixed(_))
+        matches!(self, Dimension::Fixed(_) | Dimension::Dp(_) | Dimension::Px(_))
     }
 
     pub fn is_fill(&self) -> bool {
         matches!(self, Dimension::Fill)
+    }
+
+    /// 解析为逻辑像素（Px 需要 Density，Dp/Fixed 直接是逻辑像素）
+    pub fn to_logical_px(&self) -> f32 {
+        match self {
+            Dimension::Fixed(v) => *v,
+            Dimension::Dp(d) => d.value(),
+            Dimension::Px(p) => p.to_logical(crate::unit::current_density()),
+            Dimension::Fill | Dimension::Auto => 0.0,
+        }
     }
 }
 
 impl From<f32> for Dimension {
     fn from(v: f32) -> Self {
         Dimension::Fixed(v)
+    }
+}
+
+impl From<crate::unit::Dp> for Dimension {
+    fn from(d: crate::unit::Dp) -> Self {
+        Dimension::Dp(d)
+    }
+}
+
+impl From<crate::unit::Px> for Dimension {
+    fn from(p: crate::unit::Px) -> Self {
+        Dimension::Px(p)
     }
 }
 

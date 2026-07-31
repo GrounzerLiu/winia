@@ -253,8 +253,9 @@ fn render_pass1<'a>(
         for el in node.modifier.elements() {
             match el {
                 ModifierElement::Size { width, height } => {
-                    if let Dimension::Fixed(fw) = width { cw = *fw; }
-                    if let Dimension::Fixed(fh) = height { ch = *fh; }
+                    use crate::modifier::Dimension;
+                    if width.is_fixed() { cw = width.to_logical_px(); }
+                    if height.is_fixed() { ch = height.to_logical_px(); }
                 }
                 ModifierElement::FillMaxWidth | ModifierElement::FillMaxSize => {
                     cw = w; // measured width = parent max width

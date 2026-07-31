@@ -10,6 +10,7 @@
 //! - 均实现 `AnimatableValue`，可直接用于动画系统
 
 use std::ops::{Add, AddAssign, Div, Mul, Neg, Sub, SubAssign};
+use std::sync::LazyLock;
 
 // ═══════════════════════════════════════════════════════════
 // Dp — 密度无关像素（1dp ≈ 1/160 inch）
@@ -351,6 +352,61 @@ impl SpExt for u32 {
 }
 
 // ═══════════════════════════════════════════════════════════
+// Px — 物理像素
+// ═══════════════════════════════════════════════════════════
+
+/// 物理像素（需 Density 转换为逻辑像素用于布局）
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Default)]
+pub struct Px(pub f32);
+
+impl Px {
+    pub const ZERO: Px = Px(0.0);
+
+    pub fn new(value: f32) -> Self { Px(value) }
+    pub fn value(&self) -> f32 { self.0 }
+
+    /// 通过 Density 转换为逻辑像素
+    pub fn to_logical(&self, density: Density) -> f32 {
+        self.0 / density.density.max(f32::EPSILON)
+    }
+}
+
+/// 数字 → Px 扩展（`20.px()`）
+pub trait PxExt {
+    fn px(self) -> Px;
+}
+
+impl PxExt for f32 {
+    fn px(self) -> Px { Px(self) }
+}
+impl PxExt for i32 {
+    fn px(self) -> Px { Px(self as f32) }
+}
+impl PxExt for u32 {
+    fn px(self) -> Px { Px(self as f32) }
+}
+
+// ═══════════════════════════════════════════════════════════
+// LOCAL_DENSITY — CompositionLocal（对标 Compose LocalDensity）
+// ═══════════════════════════════════════════════════════════
+
+use crate::core::composition_local::CompositionLocal;
+
+static LOCAL_DENSITY: LazyLock<CompositionLocal<Density>> = LazyLock::new(|| {
+    CompositionLocal::new(|| Density::standard())
+});
+
+/// 读取当前子树 Density（默认 standard=1.0）
+pub fn current_density() -> Density {
+    LOCAL_DENSITY.current()
+}
+
+/// 在子树中提供 Density
+pub fn with_density<R>(density: Density, content: impl FnOnce() -> R) -> R {
+    LOCAL_DENSITY.provides(density, content)
+}
+
+// ═══════════════════════════════════════════════════════════
 // 单元测试
 // ═══════════════════════════════════════════════════════════
 
@@ -429,5 +485,28 @@ mod tests {
         assert_eq!(s, Sp(14.0));
         let sf: Sp = 1.5f32.sp();
         assert_eq!(sf, Sp(1.5));
+    }
+
+    #[test]
+    fn px_extension_and_dimension_conversion() {
+        // 20.px() → Px
+        let px: Px = 20.px();
+        assert_eq!(px, Px(20.0));
+        let pxf: Px = 3.5f32.px();
+        assert_eq!(pxf, Px(3.5));
+
+        // Dp/Px → Dimension（供 .size() 消费）
+        use crate::modifier::Dimension;
+        let d: Dimension = 10.dp().into();
+        assert_eq!(d, Dimension::Dp(Dp(10.0)));
+        let p: Dimension = 20.px().into();
+        assert_eq!(p, Dimension::Px(Px(20.0)));
+
+        // Dp → 逻辑像素 = dp 值；Px → 逻辑像素 = px/density
+        with_density(Density::from_density(2.0), || {
+            assert_eq!(Dimension::Dp(Dp(10.0)).to_logical_px(), 10.0);
+            assert_eq!(Dimension::Px(Px(20.0)).to_logical_px(), 10.0); // 20px / 2.0 = 10 逻辑
+            assert_eq!(Dimension::Fixed(8.0).to_logical_px(), 8.0);
+        });
     }
 }
