@@ -42,16 +42,18 @@ pub fn push_animatable(state: State<f32>, target: f32, spec: AnimationSpec) {
     let current = state.get();
     if (current - target).abs() < f32::EPSILON { return; }
     let sid = state.id();
-    let mut list = ACTIVE_ANIMATIONS.lock().unwrap();
-    // 检查是否已有同目标动画运行中（同目标直接跳过，防止每帧重启）
-    if list.iter().any(|anim| anim.state_id() == sid && anim.is_animating_to(target)) { return; }
-    // 同一 state 但目标不同时移除旧动画（用户改变了目标值）
-    list.retain(|anim| anim.state_id() != sid);
+    {
+        let mut list = ACTIVE_ANIMATIONS.lock().unwrap();
+        // 检查是否已有同目标动画运行中（同目标直接跳过，防止每帧重启）
+        if list.iter().any(|anim| anim.state_id() == sid && anim.is_animating_to(target)) { return; }
+        // 同一 state 但目标不同时移除旧动画（用户改变了目标值）
+        list.retain(|anim| anim.state_id() != sid);
+    } // 锁释放，下面 anim.update() 不持锁执行用户代码
     let mut anim = Animatable::new(state);
     anim.animate_to(target, spec);
     // 立即执行首次更新，避免等下一帧 flash
     anim.update();
-    list.push(Box::new(anim));
+    ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
 }
 
 /// 实现 AnimationInstance for Animatable<f32>
@@ -69,17 +71,14 @@ impl AnimationInstance for Animatable<f32> {
 
 /// 更新所有活跃动画，返回是否有动画还在运行
 pub fn update_animations() -> bool {
-    let mut list = ACTIVE_ANIMATIONS.lock().unwrap();
-    let running = list.len();
-    // retain_mut 是 nightly API，手动 filter
-    let mut i = 0;
-    while i < list.len() {
-        if list[i].update() {
-            i += 1;
-        } else {
-            list.swap_remove(i);
-        }
+    // 锁内取出动画，锁外执行 update（避免锁内执行用户代码导致死锁）
+    let mut anims = std::mem::take(&mut *ACTIVE_ANIMATIONS.lock().unwrap());
+    let mut still = Vec::new();
+    for mut a in anims {
+        if a.update() { still.push(a); }
     }
+    let mut list = ACTIVE_ANIMATIONS.lock().unwrap();
+    list.extend(still);
     !list.is_empty()
 }
 

@@ -590,7 +590,10 @@ impl ApplicationHandler for AppState {
             }
             WindowEvent::RedrawRequested => {
                 // 在 compose 前更新动画（确保渲染使用最新值，消除一帧滞后抖动）
-                let was_animating = crate::animation::update_animations();
+                // 仅主窗口推进全局动画，避免多窗口双倍速
+                let was_animating = if is_parent {
+                    crate::animation::update_animations()
+                } else { false };
                 if was_animating {
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 }
