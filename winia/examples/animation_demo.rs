@@ -162,6 +162,27 @@ fn animation_demo(ctx: &mut ComposeCtx) {
                 )
                 .build(ctx, |_| {});
 
+            // ── 6. Keyframes 关键帧 ──
+            Text::new("6. Keyframes (400ms, overshoot)")
+                .font_size(14.0)
+                .color(Color::from_argb(200, 100, 100, 100))
+                .modifier(Modifier::new().padding_vertical(8.0))
+                .build(ctx);
+
+            let kf = ctx.animate_float_as_state(
+                if clicked.get() { 200.0 } else { 40.0 },
+                AnimationSpec::Keyframes(winia::animation::KeyframesSpec::new(
+                    std::time::Duration::from_millis(400),
+                    vec![(0.0, 0.0), (0.6, 1.2), (1.0, 1.0)], // 中途 120% 超调
+                )),
+            );
+            Column::new()
+                .modifier(Modifier::new()
+                    .size(kf.get(), 24.0)
+                    .background(Color::from_argb(255, 0, 150, 136), Shape::rounded(6.0))
+                    .padding(4.0))
+                .build(ctx, |_| {});
+
             // ── 撑满剩余空间，把按钮推到底部 ──
             Column::new()
                 .modifier(Modifier::new().fill_max_size())
