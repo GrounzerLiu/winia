@@ -1,162 +1,149 @@
-# 动画系统分析与设计
+# 动画系统 — 实现与进度
 
-## 一、Jetpack Compose 动画架构
+> 更新日期：2026-07-31 · 分支：text-field
 
-### 三层 API 体系
+## 一、总体架构
 
-| 层级 | API | 适用场景 |
-|------|-----|---------|
-| 高层 | `animate*AsState`, `AnimatedVisibility`, `Crossfade`, `animateContentSize` | 常见动画模式，开箱即用 |
-| 中层 | `updateTransition`, `rememberInfiniteTransition` | 多属性协同动画、无限循环 |
-| 底层 | `Animatable`, `TargetBasedAnimation` | 完全控制动画播放 |
-
-### 核心机制：物理引擎驱动的 Spring
-
-Compose 默认动画不是补间（tween），而是**物理弹簧模拟**（spring）：
+对标 Jetpack Compose 三层动画 API，基于本项目 `State<T>` + 事件循环驱动。
 
 ```
-// 半隐式欧拉积分
-val k = stiffness * -(lastDisplacement - finalPosition)  // F = -kx
-val c = dampingRatio * 2 * sqrt(stiffness)                // 阻尼系数
-val force = k - c * lastVelocity                           // 净力
-lastVelocity += force / mass * timeStep
-lastDisplacement += lastVelocity * timeStep
+用户 API 层
+  animate_float_as_state / animate_color_as_state / updateTransition
+           │
+Animatable<T> 引擎（底层）
+  animate_to(target, spec) / update() / snap_to()
+           │
+AnimationSpec（动画规格）
+  Spring(Tween / SpringSpec / TweenSpec
+           │
+帧驱动（app.rs new_events）
+  update_animations() → Animatable::update → State.set → notify → 重组渲染
 ```
 
-- **有记忆**：每帧依赖上一帧速度，不是无状态百分比
-- **可中断**：目标变化时立即重算，不重启
-- **三种阻尼**：`<1` 超调振荡、`=1` 临界最快、`>1` 过阻尼迟钝
+## 二、已实现 ✅
 
-### 帧驱动管线
+### 1. 值类型（AnimatableValue trait）
+- `f32` — 线性插值
+- `Color` — RGBA 四通道插值（`crate::modifier::Color`）
 
+### 2. 动画规格（AnimationSpec）
+- **Spring**：物理弹簧，半隐式欧拉积分，固定 1/60s 子步 + accumulator（最多 10 步）
+  - `SpringSpec { damping_ratio, stiffness, mass, threshold }`
+  - `default()`：damping=1.0（临界）、stiffness=1500、threshold=0.01
+  - `bouncy()`：damping=0.6、threshold=0.1（约 300ms 收敛，带超调回弹）
+- **Tween**：补间，`duration` + `interpolator`（函数指针）
+  - `TweenSpec::default()`：300ms + linear
+
+### 3. 插值器（interpolator.rs）
+从 D:\winia 复制，含 **24 种**预计算 bezier 插值器：
+`Linear`, `EaseIn/Out/InOut` (Sine, Quad, Cubic, Quart, Quint, Expo, Circ, Back, Elastic, Bounce)
+
+### 4. 高层 API（ComposeCtx 方法）
+- `animate_float_as_state(target, spec) -> State<f32>` — 对标 animateFloatAsState
+- `animate_color_as_state(target, spec) -> State<Color>` — 对标 animateColorAsState（Spring 自动降级 Tween）
+
+### 5. 中层 API
+- `update_transition(target, spec, label) -> Transition` — 对标 updateTransition
+  - `transition.animate_float(ctx, target_fn, label) -> State<f32>`
+
+### 6. 底层 API
+- `Animatable<T>` — `new / animate_to / update / snap_to`
+- `push_animatable` / `push_animatable_color` — 注册到全局活跃列表
+
+### 7. 渲染支持
+- `Modifier::graphics_layer(GraphicsLayerParams)` — 对标 Compose graphicsLayer
+  - `scale_x/y, alpha, translation_x/y, rotation_z`
+  - 渲染时 `canvas.save → translate → scale → rotate → restore`
+
+### 8. 帧驱动
+- `update_animations()` / `is_animating()` — 全局动画列表（f32 + Color 分开）
+- `app.rs new_events`：每轮事件批次推进动画 → 请求所有窗口 redraw
+- 动画注册后：`push_*` 首次 `update()` → notify → wake_up → 下一轮 new_events 自续
+- `ControlFlow::Wait` + `request_redraw` 自驱动（无 Poll/Wait 切换竞态）
+
+## 三、关键机制
+
+### Spring 物理（animation.rs compute_spring_displacement）
 ```
-VSync → Choreographer → withFrameNanos → 物理积分 → MutableState 写入
-→ Snapshot 通知重组 → Composable 重绘
+半隐式欧拉积分：
+  force = -stiffness * displacement - damping_coeff * velocity
+  velocity += force / mass * step
+  displacement += velocity * step
+固定步长：FIXED_DT = 1/60s，accumulator 最多 10 子步
+位移持续累积（current_displacement 存于 AnimationState）
+收敛：|displacement| < threshold && |velocity| < threshold
 ```
 
-- `Animatable` 持有 `AnimationState(当前值, 速度)`
-- `TargetBasedAnimation` 用 `AnimationSpec` 计算每帧值
-- 结果写入 `MutableState` → `Snapshot` 自动追踪依赖 → 触发重组
+### 动画去重（push_animatable）
+```
+1. state.get() == target → 跳过（已到位）
+2. 同 state_id + 同 target 已有动画 → 跳过（防每帧重启）
+3. 同 state_id 目标不同 → 移除旧动画，创建新动画
+4. 锁内只检查/收集，anim.update() 锁外执行（防死锁）
+```
 
-### Transition：多属性协同
+### 锁安全
+- `push_animatable` / `update_animations` 持有 Mutex 时**不执行用户代码**
+- `update_animations` 用 `std::mem::take` 取出列表 → 锁外 update → 锁内 extend
 
-`updateTransition` 用一个 `targetState` 控制所有子动画共享同一帧回调，避免多个独立 `animate*AsState` 不同步。
+## 四、Demo（animation_demo.rs）
 
-### AnimationSpec 类型
+| 节 | 内容 | 动画 |
+|----|------|------|
+| 1 | 蓝色盒子宽度 | Spring Bouncy（50↔300px） |
+| 2 | 绿色盒子透明度/宽度 | Tween 300ms |
+| 3 | 橙色盒子 offset | updateTransition (Spring) |
+| 4 | 颜色盒子 | animate_color_as_state（绿↔紫 500ms） |
 
-| 类型 | 描述 |
-|------|------|
-| `spring(dampingRatio, stiffness)` | 物理弹簧，**默认** |
-| `tween(duration, easing)` | 补间，可指定插值器 |
-| `keyframes { ... }` | 关键帧序列 |
-| `repeatable/repeatableInfinite` | 重复播放 |
+## 五、单元测试（5 个）
+
+- `spring_converges_to_target` — 临界阻尼收敛
+- `spring_bouncy_overshoots_then_converges` — 欠阻尼超调后收敛
+- `spring_reverse_animation` — 反向动画（防 max(EPSILON) 卡死回归）
+- `spring_dt_zero_is_safe` — dt=0 无 NaN
+- `tween_completes_within_duration` — 300ms 内完成
+
+## 六、缺失（对标 Compose）❌
+
+### 高层
+| API | 用途 | 优先级 |
+|-----|------|--------|
+| `AnimatedVisibility` | 内容出现/消失（fade/expand/shrink） | 高 |
+| `Crossfade` | 两内容交叉淡入淡出 | 中 |
+| `animateContentSize` | 尺寸变化自动动画 | 中 |
+| `animateDpAsState` / `animateSizeAsState` / `animateOffsetAsState` | 其他值类型 | 中 |
+
+### 中层
+| API | 用途 |
+|-----|------|
+| `rememberInfiniteTransition` | 无限循环动画（加载指示器） |
+| `updateTransition` 完整版 | animate_dp/animate_color/animate_size |
+
+### 底层
+| API | 用途 |
+|-----|------|
+| `keyframes` | 关键帧动画 |
+| `repeatable` / `infiniteRepeatable` | 重复/往返动画 |
 | `snap` | 瞬时跳转 |
 
----
+### 值类型
+| 类型 | 状态 |
+|------|------|
+| `Dp` / `Offset` / `Size` | 需实现 AnimatableValue + lerp |
+| `Rect` / `BorderRadius` | 需实现 |
 
-## 二、D:\winia 动画架构
+## 七、已知限制
 
-### 两套体系并存
+1. **Color Spring 降级**：颜色无单一 f32 值，Spring 自动降级 Tween
+2. **dt 超 166ms 截断**：掉帧后弹簧丢时间（可接受）
+3. **dedup 忽略 spec**：同 state+同 target 不同 spec 的重启请求被忽略
+4. **`is_animating()` 无调用者**：可清理或用于后续节流
+5. **动画期间无 60fps 节流**：等效 Poll，CPU 占用较高（动画时长有限，可接受）
 
-**A. 布局动画（LayoutAnimation）** — 用于 UI 属性插值
-- 创建：`ctx.animate(include_target!(...)).duration(300).transformation(|| {...}).start()`
-- 进度：`start_time + duration`
-- 插值器：`EaseOutCirc`, `EaseInCirc` 等
-- 驱动：`EventLoopProxy` 发事件 + `request_redraw()`
+## 八、后续计划
 
-**B. 共享值动画（Shared Animation）** — 独立数值动画
-- `Tween<T>` — 补间，from→to，Duration+Interpolator
-- `Spring<T>` — 物理弹簧，解析解（三种阻尼），固定 dt=1/60
-- `Keyframes<T>` — 关键帧序列
-- `Repeat<T>` — 循环/往返重复
-- `SharedAnimation<T>` — 包装为 `Box<dyn Animation<T>>`，自动写回 `SharedSource`
-
-### 与 Compose 的关键差异
-
-| 维度 | Compose | D:\winia |
-|------|---------|----------|
-| 默认 spec | `spring()` | 无默认 |
-| 架构 | `Animatable` + `Snapshot` + 重组 | `SharedSource` + `LayoutAnimation` |
-| 帧驱动 | `MonotonicFrameClock` → `Choreographer` | `request_redraw()` |
-| 多属性同步 | `updateTransition` 统一帧回调 | 独立 anim 加入列表统一 update |
-| 值类型 | `AnimationVector` + `TwoWayConverter` | `f32` / `Color` / 泛型 |
-| 可中断 | 随时 `animateTo` 新目标 | `animate_to(target)` |
-
----
-
-## 三、本项目动画系统设计方案
-
-### 核心原则
-
-1. **与现有 State 系统集成**：动画值写入 `State<T>` → 自动触发重组
-2. **物理弹簧为主，补间为辅**：默认 `SpringSpec`，可选 `TweenSpec`
-3. **单帧回调管线**：在 `AboutToWait` / `RedrawRequested` 中统一更新活跃动画
-4. **无外部依赖**：用 `std::time::Instant`，无需额外定时器
-
-### API 设计（对齐 Compose）
-
-```rust
-// 高层：animateFloatAsState
-let alpha = ctx.animate_float_as_state(
-    1.0,                                // 目标值
-    SpringSpec::default(),              // 动画规格
-);
-// alpha.get() 随时间从旧值平滑过渡到 1.0
-
-// 中层：updateTransition
-let transition = ctx.update_transition(current_page, |page| {
-    let offset_x = transition.animate_dp(page_to_offset(page));
-    let alpha = transition.animate_float(page_to_alpha(page));
-});
-
-// 底层：Animatable
-let mut anim = ctx.animatable(0.0);
-anim.animate_to(100.0, SpringSpec::bouncy());
-```
-
-### 模块结构
-
-```
-winia/src/animation/
-├── mod.rs          // 导出 + AnimationSpec 枚举
-├── spec.rs         // SpringSpec, TweenSpec, KeyframeSpec
-├── animatable.rs   // Animatable<T> — 底层值动画
-├── animate_as_state.rs  // animate_float_as_state 等高层 API
-├── transition.rs   // updateTransition
-└── clock.rs        // AnimationClock — 帧时间源
-```
-
-### 与现有系统集成
-
-1. **State 绑定**：`Animatable` 内部持有 `State<T>`，`update()` 时写 `State::set()`
-2. **帧驱动**：在 `app.rs` 的 `AboutToWait` 或 `RedrawRequested` 中遍历活跃 `Animatable`，调用 `update()`
-3. **Spring 物理模拟**：用半隐式欧拉积分，纯 Rust 实现
-
-### Spring 物理模拟
-
-```rust
-pub struct SpringSimulation {
-    displacement: f32,      // 当前位移（距目标）
-    velocity: f32,          // 当前速度
-    stiffness: f32,         // 刚度（默认 1500.0）
-    damping_ratio: f32,     // 阻尼比（默认 1.0 临界）
-    mass: f32,              // 质量（默认 1.0）
-    threshold: f32,         // 停止阈值（默认 0.01）
-    // 固定 dt=1/60, accumulator 模式，最多 10 子步
-}
-
-impl SpringSimulation {
-    pub fn update(dt: Duration) -> f32;
-    pub fn is_done(&self) -> bool;
-    pub fn animate_to(&mut self, target: f32);
-}
-```
-
-### 实现顺序
-
-1. ✅ `AnimationSpec` + `SpringSimulation` + 24 种 Interpolator
-2. ✅ `Animatable<T>` — 底层值动画（animate_to / update / snap_to）
-3. ✅ `animate_float_as_state` — 高层单值动画（ComposeCtx 方法）
-4. ✅ 帧驱动集成 — `RedrawRequested` 中 `update_animations()`
-5. ✅ `updateTransition` — 多属性协同动画
-6. ❌ `AnimatedVisibility` — 内容出现/消失动画
+1. **`rememberInfiniteTransition`**（低投入高回报，加载动画基础）
+2. **`AnimatedVisibility`**（最常用 UI 动画，需布局层配合）
+3. **`keyframes` + `repeatable`**（spec 生态补全）
+4. **`Crossfade` / `animateContentSize`**
+5. **更多值类型**（Dp/Offset/Size）
