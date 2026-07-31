@@ -233,7 +233,12 @@ pub fn update_animations() -> bool {
         if a.update() { still.push(a); }
     }
     let mut list = ACTIVE_ANIMATIONS.lock().unwrap();
-    list.extend(still);
+    // 去重：锁外新 push 的动画优先，丢弃 still 中同 state 的旧动画
+    for a in still {
+        if !list.iter().any(|x| x.state_id() == a.state_id()) {
+            list.push(a);
+        }
+    }
     // Color 动画
     let mut canims = std::mem::take(&mut *ACTIVE_COLOR_ANIMATIONS.lock().unwrap());
     let mut cstill = Vec::new();
@@ -241,7 +246,11 @@ pub fn update_animations() -> bool {
         if c.update() { cstill.push(c); }
     }
     let mut clist = ACTIVE_COLOR_ANIMATIONS.lock().unwrap();
-    clist.extend(cstill);
+    for c in cstill {
+        if !clist.iter().any(|x| x.state.id() == c.state.id()) {
+            clist.push(c);
+        }
+    }
     // 无限 Color 动画
     let mut icanims = std::mem::take(&mut *ACTIVE_INFINITE_COLOR_ANIMATIONS.lock().unwrap());
     let mut icstill = Vec::new();
@@ -249,8 +258,19 @@ pub fn update_animations() -> bool {
         if c.update() { icstill.push(c); }
     }
     let mut iclist = ACTIVE_INFINITE_COLOR_ANIMATIONS.lock().unwrap();
-    iclist.extend(icstill);
+    for c in icstill {
+        if !iclist.iter().any(|x| x.state.id() == c.state.id()) {
+            iclist.push(c);
+        }
+    }
     !list.is_empty() || !clist.is_empty() || !iclist.is_empty()
+}
+
+/// 从所有动画列表移除指定 state 的动画（InfiniteTransition::dispose 用）
+pub fn remove_animation_by_state(state_id: u32) {
+    ACTIVE_ANIMATIONS.lock().unwrap().retain(|a| a.state_id() != state_id);
+    ACTIVE_COLOR_ANIMATIONS.lock().unwrap().retain(|a| a.state.id() != state_id);
+    ACTIVE_INFINITE_COLOR_ANIMATIONS.lock().unwrap().retain(|a| a.state.id() != state_id);
 }
 
 /// 是否有动画在运行（用于控制事件循环 Poll/Wait）
@@ -418,12 +438,17 @@ impl<T: Clone + PartialEq + 'static> Transition<T> {
 // InfiniteTransition — 无限循环动画
 // ═══════════════════════════════════════════════════════════
 
-pub struct InfiniteTransition;
+/// 无限循环动画作用域：记录其创建的动画 state_id，可 dispose 统一移除
+pub struct InfiniteTransition {
+    ids: std::sync::Arc<std::sync::Mutex<Vec<u32>>>,
+}
 
 impl ComposeCtx<'_> {
     /// rememberInfiniteTransition — 创建无限循环动画作用域
     pub fn remember_infinite_transition(&mut self) -> InfiniteTransition {
-        InfiniteTransition
+        let ids_state = self.remember(|| std::sync::Arc::new(std::sync::Mutex::new(Vec::new())));
+        let ids = ids_state.get();
+        InfiniteTransition { ids }
     }
 }
 
@@ -437,6 +462,7 @@ impl InfiniteTransition {
         spec: InfiniteRepeatableSpec,
     ) -> State<f32> {
         let state: State<f32> = ctx.remember(|| from);
+        self.ids.lock().unwrap().push(state.id());
         crate::animation::push_infinite_float(state.clone(), from, to, spec);
         state
     }
@@ -450,8 +476,17 @@ impl InfiniteTransition {
         spec: InfiniteRepeatableSpec,
     ) -> State<crate::modifier::Color> {
         let state: State<crate::modifier::Color> = ctx.remember(|| from);
+        self.ids.lock().unwrap().push(state.id());
         crate::animation::push_infinite_color(state.clone(), from, to, spec);
         state
+    }
+
+    /// 取消此作用域创建的所有动画（组件离开组合/不再需要时调用）
+    pub fn dispose(&self) {
+        let ids: Vec<u32> = self.ids.lock().unwrap().drain(..).collect();
+        for sid in ids {
+            crate::animation::remove_animation_by_state(sid);
+        }
     }
 }
 
@@ -705,5 +740,26 @@ mod tests {
         }
         assert!(saw_blue, "should reach blue");
         assert!(saw_red, "should return to red");
+    }
+
+    #[test]
+    fn remove_animation_by_state_cleans_lists() {
+        // 推入 f32 + Color + 无限 Color 三种动画
+        let s1 = State::new(0.0f32);
+        let s2 = State::new(crate::modifier::Color::RED);
+        let s3 = State::new(crate::modifier::Color::BLUE);
+        push_animatable(s1.clone(), 10.0, AnimationSpec::Tween(TweenSpec::default()));
+        push_animatable_color(s2.clone(), crate::modifier::Color::GREEN, AnimationSpec::Tween(TweenSpec::default()));
+        push_infinite_color(s3.clone(), crate::modifier::Color::BLUE, crate::modifier::Color::RED,
+            InfiniteRepeatableSpec::restart(Duration::from_millis(50)));
+        assert!(is_animating(), "animations should be registered");
+
+        // 移除 s1 和 s3 对应的动画
+        remove_animation_by_state(s1.id());
+        remove_animation_by_state(s3.id());
+        // s2 仍在
+        assert!(is_animating(), "s2 color animation should remain");
+        remove_animation_by_state(s2.id());
+        assert!(!is_animating(), "all animations should be removed");
     }
 }
