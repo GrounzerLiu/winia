@@ -262,7 +262,7 @@ impl Default for SpringSpec {
 
 impl SpringSpec {
     pub fn bouncy() -> Self {
-        Self { damping_ratio: 0.6, threshold: 0.5, ..Self::default() }
+        Self { damping_ratio: 0.6, threshold: 0.1, ..Self::default() }
     }
 }
 
