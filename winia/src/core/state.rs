@@ -95,6 +95,11 @@ impl<T: Clone + 'static> State<T> {
 
         self.inner.value.read().clone()
     }
+
+    /// 读取但不注册依赖（动画引擎内部用——避免把依赖记到动画创建处）
+    pub fn peek(&self) -> T {
+        self.inner.value.read().clone()
+    }
 }
 
 impl<T: PartialEq + 'static> State<T> {

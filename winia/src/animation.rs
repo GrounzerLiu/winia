@@ -118,7 +118,7 @@ pub fn push_animation(anim: Box<dyn AnimationInstance + 'static>) {
 
 /// 注册一个 Animatable<f32> 到全局活跃列表（由 animate_float_as_state 调用）
 pub fn push_animatable(state: State<f32>, target: f32, spec: AnimationSpec) {
-    let current = state.get();
+    let current = state.peek();
     if (current - target).abs() < f32::EPSILON { return; }
     let sid = state.id();
     {
@@ -138,7 +138,7 @@ pub fn push_animatable(state: State<f32>, target: f32, spec: AnimationSpec) {
 /// 注册一个 Animatable<Color> 到全局活跃列表（由 animate_color_as_state 调用）
 pub fn push_animatable_color(state: State<crate::modifier::Color>, target: crate::modifier::Color, spec: AnimationSpec) {
     use crate::modifier::Color;
-    if state.get() == target { return; }
+    if state.peek() == target { return; }
     let sid = state.id();
     {
         let mut list = ACTIVE_COLOR_ANIMATIONS.lock().unwrap();
@@ -224,7 +224,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
 
     /// 启动动画到目标值
     pub fn animate_to(&mut self, to: T, spec: AnimationSpec) {
-        let from = self.state.get();
+        let from = self.state.peek();
         let displacement = AnimatableValue::to_f32(&from) - AnimatableValue::to_f32(&to);
         self.anim_state = Some(AnimationState {
             from: from.clone(),
