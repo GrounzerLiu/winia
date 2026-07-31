@@ -148,12 +148,8 @@ struct AppState {
 
 impl ApplicationHandler for AppState {
         fn new_events(&mut self, event_loop: &dyn ActiveEventLoop, _cause: StartCause) {
-        // 动画运行时用 Poll 保持连续渲染，空闲时 Wait 省电
-        if crate::animation::is_animating() {
-            event_loop.set_control_flow(ControlFlow::Poll);
-        } else {
-            event_loop.set_control_flow(ControlFlow::Wait);
-        }
+        // Wait + request_redraw 自驱动动画（避免 Poll↔Wait 切换竞态丢帧）
+        event_loop.set_control_flow(ControlFlow::Wait);
     }
 
     fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {

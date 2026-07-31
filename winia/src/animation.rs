@@ -109,7 +109,7 @@ struct AnimationState<T> {
     current_displacement: f32,
 }
 
-impl<T: Clone + AnimatableValue + 'static> Animatable<T> {
+impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
     pub fn new(state: State<T>) -> Self {
         Self { state, anim_state: None }
     }
@@ -156,7 +156,7 @@ impl<T: Clone + AnimatableValue + 'static> Animatable<T> {
                 (t, eased >= 1.0)
             }
         };
-        self.state.update(|v| *v = value);
+        self.state.set(value);
         if done { self.anim_state = None; }
         !done
     }
@@ -164,7 +164,7 @@ impl<T: Clone + AnimatableValue + 'static> Animatable<T> {
     /// 立即跳转到目标值（无动画）
     pub fn snap_to(&mut self, value: T) {
         self.anim_state = None;
-        self.state.update(|v| *v = value);
+        self.state.set(value);
     }
 }
 
