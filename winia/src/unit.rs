@@ -309,6 +309,40 @@ impl crate::animation::AnimatableValue for Size {
 }
 
 // ═══════════════════════════════════════════════════════════
+// Dp/Sp 扩展 trait（对标 Compose：100.dp / 14.sp）
+// ═══════════════════════════════════════════════════════════
+
+/// 数字 → Dp 扩展（`100.dp()`，对标 Compose 的 `100.dp`）
+pub trait DpExt {
+    fn dp(self) -> Dp;
+}
+
+impl DpExt for f32 {
+    fn dp(self) -> Dp { Dp(self) }
+}
+impl DpExt for i32 {
+    fn dp(self) -> Dp { Dp(self as f32) }
+}
+impl DpExt for u32 {
+    fn dp(self) -> Dp { Dp(self as f32) }
+}
+
+/// 数字 → Sp 扩展（`14.sp()`，对标 Compose 的 `14.sp`）
+pub trait SpExt {
+    fn sp(self) -> Sp;
+}
+
+impl SpExt for f32 {
+    fn sp(self) -> Sp { Sp(self) }
+}
+impl SpExt for i32 {
+    fn sp(self) -> Sp { Sp(self as f32) }
+}
+impl SpExt for u32 {
+    fn sp(self) -> Sp { Sp(self as f32) }
+}
+
+// ═══════════════════════════════════════════════════════════
 // 单元测试
 // ═══════════════════════════════════════════════════════════
 
@@ -371,5 +405,21 @@ mod tests {
         // Size 动画
         let s = Size::new(0.0, 0.0).lerp(&Size::new(8.0, 6.0), 0.25);
         assert_eq!(s, Size::new(2.0, 1.5));
+    }
+
+    #[test]
+    fn dp_sp_extensions() {
+        // 对标 Compose 100.dp / 14.sp
+        let w: Dp = 100.dp();
+        assert_eq!(w, Dp(100.0));
+        let f: Dp = 2.5f32.dp();
+        assert_eq!(f, Dp(2.5));
+        let u: Dp = 30u32.dp();
+        assert_eq!(u, Dp(30.0));
+
+        let s: Sp = 14.sp();
+        assert_eq!(s, Sp(14.0));
+        let sf: Sp = 1.5f32.sp();
+        assert_eq!(sf, Sp(1.5));
     }
 }
