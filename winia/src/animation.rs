@@ -132,17 +132,15 @@ impl<T: Clone + AnimatableValue + 'static> Animatable<T> {
         state.last_update = now;
         let (value, done) = match &state.spec {
             AnimationSpec::Spring(spec) => {
-                // Spring 用 f32 数值计算
-                let from_f32 = AnimatableValue::to_f32(&state.from);
                 let to_f32 = AnimatableValue::to_f32(&state.to);
                 let displacement = compute_spring_displacement(
                     spec.stiffness, spec.damping_ratio, spec.mass,
                     state.current_displacement, &mut state.last_velocity, dt, spec.threshold,
                 );
-                let spring_val = to_f32 + displacement;
                 state.current_displacement = displacement;
-                let t = ((spring_val - from_f32) / (to_f32 - from_f32).max(f32::EPSILON)).clamp(0.0, 1.0);
-                let value = state.from.lerp(&state.to, t);
+                // 直接使用物理值，不做 lerp/clamp（避免超调截断导致抖动）
+                let spring_val = to_f32 + displacement;
+                let value = AnimatableValue::from_f32(spring_val);
                 (value, displacement.abs() < spec.threshold && state.last_velocity.abs() < spec.threshold)
             }
             AnimationSpec::Tween(spec) => {
@@ -280,9 +278,12 @@ pub trait AnimatableValue: Clone {
     fn lerp(&self, to: &Self, t: f32) -> Self;
     /// 转换为 f32（Spring 物理引擎使用）
     fn to_f32(&self) -> f32;
+    /// 从 f32 构建（Spring 物理引擎返回）
+    fn from_f32(v: f32) -> Self;
 }
 
 impl AnimatableValue for f32 {
     fn lerp(&self, to: &f32, t: f32) -> Self { self + (to - self) * t }
     fn to_f32(&self) -> f32 { *self }
+    fn from_f32(v: f32) -> Self { v }
 }
