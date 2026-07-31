@@ -129,6 +129,31 @@ fn animation_demo(ctx: &mut ComposeCtx) {
                         .build(ctx);
                 });
 
+            // ── 5. rememberInfiniteTransition — 无限循环 ──
+            Text::new("5. rememberInfiniteTransition (Reverse)")
+                .font_size(14.0)
+                .color(Color::from_argb(200, 100, 100, 100))
+                .modifier(Modifier::new().padding_vertical(8.0))
+                .build(ctx);
+
+            let mut infinite = ctx.remember_infinite_transition();
+            let pulse = infinite.animate_float(
+                ctx, 0.4, 1.0,
+                winia::animation::InfiniteRepeatableSpec::reverse(std::time::Duration::from_millis(600)),
+            );
+            let p = pulse.get();
+            // 呼吸圆点：alpha 往返 0.4↔1.0
+            Column::new()
+                .modifier(Modifier::new()
+                    .size(40.0, 40.0)
+                    .graphics_layer(winia::modifier::GraphicsLayerParams {
+                        alpha: p,
+                        ..Default::default()
+                    })
+                    .background(Color::from_argb(255, 33, 150, 243), Shape::Circle)
+                )
+                .build(ctx, |_| {});
+
             // ── 撑满剩余空间，把按钮推到底部 ──
             Column::new()
                 .modifier(Modifier::new().fill_max_size())

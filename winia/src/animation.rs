@@ -35,6 +35,82 @@ static ACTIVE_ANIMATIONS: LazyLock<Mutex<Vec<Box<dyn AnimationInstance>>>> =
 static ACTIVE_COLOR_ANIMATIONS: LazyLock<Mutex<Vec<Animatable<crate::modifier::Color>>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
 
+// ═══════════════════════════════════════════════════════════
+// InfiniteTransition — 无限循环动画（对标 Compose rememberInfiniteTransition）
+// ═══════════════════════════════════════════════════════════
+
+/// 重复模式
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepeatMode {
+    /// 结束回到起点重来
+    Restart,
+    /// 往返（from→to→from）
+    Reverse,
+}
+
+/// 无限循环规格
+#[derive(Debug, Clone)]
+pub struct InfiniteRepeatableSpec {
+    pub duration: Duration,
+    pub mode: RepeatMode,
+}
+
+impl InfiniteRepeatableSpec {
+    pub fn restart(duration: Duration) -> Self {
+        Self { duration, mode: RepeatMode::Restart }
+    }
+    pub fn reverse(duration: Duration) -> Self {
+        Self { duration, mode: RepeatMode::Reverse }
+    }
+}
+
+/// 无限循环浮点动画实例（永远运行，直到被移除）
+struct InfiniteFloat {
+    state: State<f32>,
+    from: f32,
+    to: f32,
+    spec: InfiniteRepeatableSpec,
+    start: Instant,
+}
+
+impl AnimationInstance for InfiniteFloat {
+    fn update(&mut self) -> bool {
+        let elapsed = self.start.elapsed();
+        match self.spec.mode {
+            RepeatMode::Restart => {
+                let t = (elapsed.as_secs_f32() / self.spec.duration.as_secs_f32().max(0.001)).min(1.0);
+                self.state.set(self.from + (self.to - self.from) * t);
+                if elapsed >= self.spec.duration { self.start = Instant::now(); }
+            }
+            RepeatMode::Reverse => {
+                // 周期 = 2×duration：前半 from→to，后半 to→from
+                let cycle_secs = self.spec.duration.as_secs_f32().max(0.001) * 2.0;
+                let phase = (elapsed.as_secs_f32() % cycle_secs) / self.spec.duration.as_secs_f32().max(0.001);
+                let v = if phase < 1.0 {
+                    self.from + (self.to - self.from) * phase
+                } else {
+                    self.to + (self.from - self.to) * (phase - 1.0)
+                };
+                self.state.set(v);
+            }
+        }
+        true // 永远运行
+    }
+    fn is_animating_to(&self, _target: f32) -> bool { false }
+    fn state_id(&self) -> u32 { self.state.id() }
+}
+
+/// 注册一个无限循环浮点动画
+pub fn push_infinite_float(state: State<f32>, from: f32, to: f32, spec: InfiniteRepeatableSpec) {
+    let sid = state.id();
+    {
+        let list = ACTIVE_ANIMATIONS.lock().unwrap();
+        if list.iter().any(|a| a.state_id() == sid) { return; } // 已有此 state 的动画（含无限）
+    }
+    let anim = InfiniteFloat { state, from, to, spec, start: Instant::now() };
+    ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
+}
+
 /// 注册一个动画到全局活跃列表
 pub fn push_animation(anim: Box<dyn AnimationInstance + 'static>) {
     ACTIVE_ANIMATIONS.lock().unwrap().push(anim);
@@ -274,6 +350,34 @@ impl<T: Clone + PartialEq + 'static> Transition<T> {
     }
 }
 
+// ═══════════════════════════════════════════════════════════
+// InfiniteTransition — 无限循环动画
+// ═══════════════════════════════════════════════════════════
+
+pub struct InfiniteTransition;
+
+impl ComposeCtx<'_> {
+    /// rememberInfiniteTransition — 创建无限循环动画作用域
+    pub fn remember_infinite_transition(&mut self) -> InfiniteTransition {
+        InfiniteTransition
+    }
+}
+
+impl InfiniteTransition {
+    /// 注册一个 from→to 无限循环浮点动画
+    pub fn animate_float(
+        &mut self,
+        ctx: &mut ComposeCtx,
+        from: f32,
+        to: f32,
+        spec: InfiniteRepeatableSpec,
+    ) -> State<f32> {
+        let state: State<f32> = ctx.remember(|| from);
+        crate::animation::push_infinite_float(state.clone(), from, to, spec);
+        state
+    }
+}
+
 #[derive(Clone)]
 pub enum AnimationSpec {
     Spring(SpringSpec),
@@ -433,5 +537,52 @@ mod tests {
         }
         assert!(frames < 60, "tween should finish within 600ms, took {} frames", frames);
         assert_eq!(anim.state.get(), 100.0);
+    }
+
+    #[test]
+    fn infinite_float_restart_loops() {
+        let state = State::new(0.0);
+        let mut inf = InfiniteFloat {
+            state: state.clone(),
+            from: 0.0, to: 10.0,
+            spec: InfiniteRepeatableSpec::restart(Duration::from_millis(50)),
+            start: Instant::now(),
+        };
+        // 跑 6 个周期（每个 50ms，用 10ms sleep 推进）
+        let mut max_seen = 0.0f32;
+        let mut min_seen = 10.0f32;
+        for _ in 0..30 {
+            inf.update();
+            std::thread::sleep(Duration::from_millis(10));
+            let v = state.get();
+            max_seen = max_seen.max(v);
+            min_seen = min_seen.min(v);
+        }
+        assert!(min_seen <= 0.5, "restart should return near from, min={}", min_seen);
+        assert!(max_seen >= 9.5, "restart should reach near to, max={}", max_seen);
+        // 无限动画永不完成
+        assert!(inf.update(), "infinite should never complete");
+    }
+
+    #[test]
+    fn infinite_float_reverse_oscillates() {
+        let state = State::new(0.4);
+        let mut inf = InfiniteFloat {
+            state: state.clone(),
+            from: 0.4, to: 1.0,
+            spec: InfiniteRepeatableSpec::reverse(Duration::from_millis(50)),
+            start: Instant::now(),
+        };
+        let mut saw_high = false;
+        let mut saw_low = false;
+        for _ in 0..30 {
+            inf.update();
+            std::thread::sleep(Duration::from_millis(10));
+            let v = state.get();
+            if v > 0.95 { saw_high = true; }
+            if v < 0.45 { saw_low = true; }
+        }
+        assert!(saw_high, "reverse should reach near to=1.0");
+        assert!(saw_low, "reverse should return near from=0.4");
     }
 }
