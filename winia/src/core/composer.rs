@@ -128,6 +128,13 @@ impl<'a> ComposeCtx<'a> {
         state
     }
 
+    /// animateColorAsState — 动画颜色值到目标值（RGBA 插值，Tween 驱动）
+    pub fn animate_color_as_state(&mut self, target: crate::modifier::Color, spec: crate::animation::AnimationSpec) -> State<crate::modifier::Color> {
+        let state = self.remember(|| target);
+        crate::animation::push_animatable_color(state.clone(), target, spec);
+        state
+    }
+
     /// 设置当前节点的 IME 预输入回调
     pub fn set_current_node_ime_callback(&self, callback: Box<dyn Fn(&str, Option<(usize, usize)>) + Send>) {
         if let Some(&idx) = self.composer.node_stack.last() {

@@ -31,6 +31,9 @@ pub trait AnimationInstance: Send {
 
 static ACTIVE_ANIMATIONS: LazyLock<Mutex<Vec<Box<dyn AnimationInstance>>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
+/// Color 动画列表（与 f32 动画分开，避免类型擦除）
+static ACTIVE_COLOR_ANIMATIONS: LazyLock<Mutex<Vec<Animatable<crate::modifier::Color>>>> =
+    LazyLock::new(|| Mutex::new(Vec::new()));
 
 /// 注册一个动画到全局活跃列表
 pub fn push_animation(anim: Box<dyn AnimationInstance + 'static>) {
@@ -56,6 +59,27 @@ pub fn push_animatable(state: State<f32>, target: f32, spec: AnimationSpec) {
     ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
 }
 
+/// 注册一个 Animatable<Color> 到全局活跃列表（由 animate_color_as_state 调用）
+pub fn push_animatable_color(state: State<crate::modifier::Color>, target: crate::modifier::Color, spec: AnimationSpec) {
+    use crate::modifier::Color;
+    if state.get() == target { return; }
+    let sid = state.id();
+    {
+        let mut list = ACTIVE_COLOR_ANIMATIONS.lock().unwrap();
+        if list.iter().any(|anim| anim.state.id() == sid && anim.anim_state.as_ref().map(|s| s.to == target).unwrap_or(false)) { return; }
+        list.retain(|anim| anim.state.id() != sid);
+    }
+    let mut anim = Animatable::new(state);
+    // Color 弹簧无意义（无单一 f32 值），强制 Tween
+    let spec = match spec {
+        AnimationSpec::Spring(_) => AnimationSpec::Tween(TweenSpec::default()),
+        other => other,
+    };
+    anim.animate_to(target, spec);
+    anim.update();
+    ACTIVE_COLOR_ANIMATIONS.lock().unwrap().push(anim);
+}
+
 /// 实现 AnimationInstance for Animatable<f32>
 impl AnimationInstance for Animatable<f32> {
     fn update(&mut self) -> bool {
@@ -79,12 +103,21 @@ pub fn update_animations() -> bool {
     }
     let mut list = ACTIVE_ANIMATIONS.lock().unwrap();
     list.extend(still);
-    !list.is_empty()
+    // Color 动画
+    let mut canims = std::mem::take(&mut *ACTIVE_COLOR_ANIMATIONS.lock().unwrap());
+    let mut cstill = Vec::new();
+    for mut c in canims {
+        if c.update() { cstill.push(c); }
+    }
+    let mut clist = ACTIVE_COLOR_ANIMATIONS.lock().unwrap();
+    clist.extend(cstill);
+    !list.is_empty() || !clist.is_empty()
 }
 
 /// 是否有动画在运行（用于控制事件循环 Poll/Wait）
 pub fn is_animating() -> bool {
     !ACTIVE_ANIMATIONS.lock().unwrap().is_empty()
+        || !ACTIVE_COLOR_ANIMATIONS.lock().unwrap().is_empty()
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -297,6 +330,21 @@ impl AnimatableValue for f32 {
     fn lerp(&self, to: &f32, t: f32) -> Self { self + (to - self) * t }
     fn to_f32(&self) -> f32 { *self }
     fn from_f32(v: f32) -> Self { v }
+}
+
+impl AnimatableValue for crate::modifier::Color {
+    /// RGBA 各通道线性插值
+    fn lerp(&self, to: &Self, t: f32) -> Self {
+        let t = t.clamp(0.0, 1.0);
+        Self::from_argb(
+            (self.a as f32 + (to.a as f32 - self.a as f32) * t).round() as u8,
+            (self.r as f32 + (to.r as f32 - self.r as f32) * t).round() as u8,
+            (self.g as f32 + (to.g as f32 - self.g as f32) * t).round() as u8,
+            (self.b as f32 + (to.b as f32 - self.b as f32) * t).round() as u8,
+        )
+    }
+    fn to_f32(&self) -> f32 { self.a as f32 }
+    fn from_f32(v: f32) -> Self { Self::from_argb(v as u8, 0, 0, 0) }
 }
 
 // ═══════════════════════════════════════════════════════════

@@ -101,6 +101,34 @@ fn animation_demo(ctx: &mut ComposeCtx) {
                         .build(ctx);
                 });
 
+            // ── 4. animate_color_as_state — 颜色过渡 ──
+            Text::new("4. animate_color_as_state (Tween 500ms)")
+                .font_size(14.0)
+                .color(Color::from_argb(200, 100, 100, 100))
+                .modifier(Modifier::new().padding_vertical(8.0))
+                .build(ctx);
+
+            let bg = ctx.animate_color_as_state(
+                if clicked.get() { Color::from_argb(255, 76, 175, 80) }
+                else { Color::from_argb(255, 156, 39, 176) },
+                AnimationSpec::Tween(TweenSpec {
+                    duration: std::time::Duration::from_millis(500),
+                    interpolator: winia::animation::interpolator::linear,
+                }),
+            );
+            let c = bg.get();
+            Column::new()
+                .modifier(Modifier::new()
+                    .size(200.0, 40.0)
+                    .background(c, Shape::rounded(6.0))
+                    .padding(4.0))
+                .build(ctx, |ctx| {
+                    Text::new(format!("#{:02X}{:02X}{:02X}", c.r, c.g, c.b))
+                        .font_size(12.0)
+                        .color(Color::WHITE)
+                        .build(ctx);
+                });
+
             // ── 撑满剩余空间，把按钮推到底部 ──
             Column::new()
                 .modifier(Modifier::new().fill_max_size())
