@@ -9,6 +9,7 @@
 //! - `ui`: UI 组件（待实现）
 
 pub mod core;
+pub mod unit;
 pub mod font;
 pub mod modifier;
 pub mod layout;
