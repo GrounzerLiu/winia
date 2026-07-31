@@ -87,6 +87,11 @@ impl From<Dp> for f32 {
 // ═══════════════════════════════════════════════════════════
 
 /// 缩放像素（Scaling pixel，字体专用）
+///
+/// ## ⚠️ 当前实现说明
+/// 系统字体缩放（无障碍大字体）的获取暂未接入——本项目目前不查询系统 font_scale，
+/// `Density.font_scale` 恒为 1.0，因此 **Sp 当前行为与 Dp 完全一致**。
+/// 未来接入系统设置后，`to_px` 将随用户字体缩放变化（dp 不变，sp 变大）。
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Default)]
 pub struct Sp(pub f32);
 
@@ -137,6 +142,9 @@ impl From<Sp> for f32 {
 // ═══════════════════════════════════════════════════════════
 
 /// 屏幕密度 + 字体缩放
+///
+/// ⚠️ `font_scale` 当前恒为 1.0（未接入系统字体缩放），
+/// 因此 `to_sp_px` / `to_sp` 的 font_scale 因子暂不生效，Sp 行为等同 Dp。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Density {
     /// 逻辑像素与物理像素比（1.0 = mdpi）
