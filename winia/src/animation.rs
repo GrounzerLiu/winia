@@ -533,18 +533,8 @@ impl InfiniteTransition {
         state
     }
 
-    /// 取消此作用域创建的所有动画（组件离开组合/不再需要时调用）
+    /// 取消此作用域创建的所有动画（组件离开组合/不再需要时手动调用）
     pub fn dispose(&self) {
-        let ids: Vec<u32> = self.ids.lock().unwrap().drain(..).collect();
-        for sid in ids {
-            crate::animation::remove_animation_by_state(sid);
-        }
-    }
-}
-
-impl Drop for InfiniteTransition {
-    fn drop(&mut self) {
-        // 兜底：调用方忘记 dispose 时，作用域销毁自动清理动画
         let ids: Vec<u32> = self.ids.lock().unwrap().drain(..).collect();
         for sid in ids {
             crate::animation::remove_animation_by_state(sid);
