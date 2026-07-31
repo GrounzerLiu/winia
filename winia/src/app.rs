@@ -87,15 +87,15 @@ impl PerWindow {
     fn recompose_layout_render(&mut self, after_draw: impl FnOnce(&LayoutNode, &mut skia_safe::Surface)) {
         // 清除待关闭标志——只捕获本次重组的 on_remove，防止跨窗口污染
         crate::ui::window::reset_pending_remove();
+        // 提供当前窗口 Density（从 scale_factor）——覆盖 compose + layout + draw 全程，
+        // 保证 Dimension::Px / TextUnit::Px 在布局/渲染期使用窗口 sf 而非 standard(1.0)
+        let density = crate::unit::Density::from_density(self.scale_factor as f32);
+        crate::unit::with_density(density, || {
         // 循环 compose 直到没有新的 pending state——处理并发 task 在 compose 期间
         // 完成的 case（第二个 notify 的 state 在第一次 compose 之后才入队）
         // 循环 compose 直到没有新的 pending state
         loop {
-            // 提供当前窗口 Density（从 scale_factor）——对标 Compose LocalDensity
-            let density = crate::unit::Density::from_density(self.scale_factor as f32);
-            let did_compose = crate::unit::with_density(density, || {
-                self.composer.recompose(|ctx| (self.content)(ctx))
-            });
+            let did_compose = self.composer.recompose(|ctx| (self.content)(ctx));
             if let Some(slot_key) = self.focused_slot_key {
                 if let Some(r) = self.composer.layout_root_mut() {
                     if let Some(new_id) = crate::layout::node::find_node_id_by_slot_key(r, slot_key) {
@@ -132,6 +132,7 @@ impl PerWindow {
                 });
             }
         }
+        });
     }
 }
 
@@ -225,7 +226,7 @@ impl ApplicationHandler for AppState {
                     winit::event::MouseScrollDelta::PixelDelta(p) => p.y as f32,
                 };
                 if dy != 0.0 {
-                    if let Some(root) = pw.composer.layout_root_mut() { apply_scroll_delta(root, dy); }
+                    if let Some(root) = pw.composer.layout_root_mut() { apply_scroll_delta(root, dy, crate::unit::Density::from_density(pw.scale_factor as f32)); }
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 }
             }
@@ -737,7 +738,7 @@ impl ApplicationHandler for AppState {
                             }
                         }
                         debug::DebugEvent::Scroll { dy, .. } => {
-                            if let Some(root) = pw.composer.layout_root_mut() { apply_scroll_delta(root, dy); handled = true; }
+                            if let Some(root) = pw.composer.layout_root_mut() { apply_scroll_delta(root, dy, crate::unit::Density::from_density(pw.scale_factor as f32)); handled = true; }
                         }
                         debug::DebugEvent::Resize { w, h } => { pw.width = w; pw.height = h; handled = true; }
                         _ => {}
@@ -858,7 +859,7 @@ pub(crate) fn take_pending_windows() -> Vec<PendingWindow> {
     std::mem::take(&mut *GLOBAL_PENDING.lock().unwrap())
 }
 
-fn apply_scroll_delta(node: &mut LayoutNode, dy: f32) -> bool {
+fn apply_scroll_delta(node: &mut LayoutNode, dy: f32, density: crate::unit::Density) -> bool {
     if let Some(state) = node.modifier.vertical_scroll_state() {
         let current = state.get();
         // 滚动极限 = 内容总高度 - 可视区域高度
@@ -872,7 +873,7 @@ fn apply_scroll_delta(node: &mut LayoutNode, dy: f32) -> bool {
                     use crate::modifier::Dimension;
                     match h {
                         Dimension::Fixed(h) | Dimension::Dp(crate::unit::Dp(h)) => Some(h),
-                        Dimension::Px(p) => Some(p.to_logical(crate::unit::current_density())),
+                        Dimension::Px(p) => Some(p.to_logical(density)),
                         _ => None,
                     }
                 })
@@ -884,7 +885,7 @@ fn apply_scroll_delta(node: &mut LayoutNode, dy: f32) -> bool {
         return true;
     }
     for child in &mut node.children {
-        if apply_scroll_delta(child, dy) { return true; }
+        if apply_scroll_delta(child, dy, density) { return true; }
     }
     false
 }
