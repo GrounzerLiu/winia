@@ -505,8 +505,21 @@ impl Modifier {
     /// 设置背景色和形状
     /// 设置背景色和形状。
     ///
-    /// 静态用法：`background(Color::RED, Shape::Circle)`
-    /// 动画用法（渲染时每帧求值，不触发重组）：`background(|| pulse.peek(), Shape::Circle)`
+    /// 统一入口：静态颜色与动画闭包自动适配（`impl Into<BackgroundColor>`）。
+    ///
+    /// **静态用法**（构建时固定颜色）：
+    /// ```
+    /// .background(Color::RED, Shape::Circle)
+    /// ```
+    ///
+    /// **动画用法**（渲染时每帧求值，不触发重组）：
+    /// ```
+    /// .background(|| pulse.peek(), Shape::Circle)
+    /// ```
+    ///
+    /// **原则**：静态绘制属性传 `Color`；需要动画（颜色随帧变化）时传闭包，
+    /// 闭包内用 `State::peek()` 读取动画值（不要用 `get()`——会注册依赖触发重组）。
+    /// 动画值由 `set_visual` 写入（不 notify），配合动画引擎每帧 `request_redraw` 实现零重组。
     pub fn background(self, color: impl Into<BackgroundColor>, shape: impl Into<Shape>) -> Self {
         let bg = color.into();
         self.push(ModifierElement::Background {
@@ -587,8 +600,20 @@ impl Modifier {
 
     /// 图形层变换（scale/alpha/rotation/translation）。
     ///
-    /// 静态用法：`graphics_layer(GraphicsLayerParams { alpha: 0.5, ..Default::default() })`
-    /// 动画用法（渲染时每帧求值，不触发重组）：`graphics_layer(|| GraphicsLayerParams { alpha: pulse.peek(), ..Default::default() })`
+    /// 统一入口：静态参数与动画闭包自动适配（`impl Into<GraphicsLayerSpec>`）。
+    ///
+    /// **静态用法**：
+    /// ```
+    /// .graphics_layer(GraphicsLayerParams { alpha: 0.5, ..Default::default() })
+    /// ```
+    ///
+    /// **动画用法**（渲染时每帧求值，不触发重组）：
+    /// ```
+    /// .graphics_layer(|| GraphicsLayerParams { alpha: pulse.peek(), ..Default::default() })
+    /// ```
+    ///
+    /// **原则**：与 `background` 相同——静态传值，动画传闭包（`peek()` 读取，
+    /// 配合 `set_visual` 零重组）。仅影响绘制层，不触发布局。
     pub fn graphics_layer(self, params: impl Into<GraphicsLayerSpec>) -> Self {
         let spec = params.into();
         self.push(ModifierElement::GraphicsLayer {

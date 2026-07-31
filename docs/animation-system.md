@@ -59,10 +59,42 @@ AnimationSpec（动画规格）
 - `Animatable<T>` — `new / animate_to / update / snap_to`
 - 超 5s 未收敛强制 snap（防 stiffness=0 无限 busy-loop）
 
-### 7. 渲染支持
-- `Modifier::graphics_layer(GraphicsLayerParams)` — scale/alpha/translation/rotation
-  - 应用到整个节点（background + text + children）
-  - alpha 用 `canvas.save_layer_alpha_f(None, alpha)`
+### 7. 渲染支持（绘制层动画）
+
+**统一入口**：`background` / `graphics_layer` 各只有一个方法，静态值与动画闭包自动适配
+（`impl Into<BackgroundColor>` / `impl Into<GraphicsLayerSpec>`）：
+
+```rust
+// 静态（构建时固定）
+.background(Color::RED, Shape::Circle)
+.graphics_layer(GraphicsLayerParams { alpha: 0.5, ..Default::default() })
+
+// 动画（渲染时每帧求值，零重组）——闭包内用 State::peek()
+.background(|| pulse.peek(), Shape::Circle)
+.graphics_layer(|| GraphicsLayerParams { alpha: pulse.peek(), ..Default::default() })
+```
+
+- `graphics_layer` 应用到整个节点（background + text + children）
+- alpha 用 `canvas.save_layer_alpha_f(None, alpha)`
+
+**⚠️ 使用原则**：
+- 静态绘制属性 → 传值（`Color` / `GraphicsLayerParams`）
+- 需要动画（值随帧变化）→ 传闭包，闭包内必须用 **`State::peek()`**（不注册依赖）
+- **不要**在闭包里用 `State::get()`——会注册依赖触发整树重组，破坏零重组设计
+
+### 7.1 绘制层 vs 布局层（Compose 分层模型）
+
+| 属性 | 动画方式 | 触发 | 对应 API |
+|------|---------|------|---------|
+| 布局属性（size/offset/weight） | 值变→重组+重测 | `State::set()` → notify | `animate_float_as_state` 等 |
+| 绘制层属性（alpha/scale/颜色/位移） | 值变→只重绘 | `State::set_visual()`（不 notify）+ `request_redraw` | `graphics_layer(闭包)` / `background(闭包)` |
+
+绘制层动画链路：
+```
+动画引擎 update → state.set_visual(新值)   // 写值，不 notify → 零重组
+→ 动画引擎 request_redraw()               // 请求重绘
+→ 渲染 → background/graphics_layer 闭包执行 → peek() 读到最新值 → 绘制
+```
 
 ### 8. 帧驱动
 - `update_animations()` / `is_animating()` — 三个全局列表（f32 / Color / 无限 Color）
