@@ -83,6 +83,11 @@ pub fn update_animations() -> bool {
     !list.is_empty()
 }
 
+/// 是否有动画在运行（用于控制事件循环 Poll/Wait）
+pub fn is_animating() -> bool {
+    !ACTIVE_ANIMATIONS.lock().unwrap().is_empty()
+}
+
 // ═══════════════════════════════════════════════════════════
 // Animatable — 底层动画值（对标 Compose Animatable）
 // ═══════════════════════════════════════════════════════════
