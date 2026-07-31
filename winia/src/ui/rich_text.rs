@@ -183,9 +183,9 @@ impl<'a> RichTextScope<'a> {
         self.style = saved;
     }
 
-    pub fn font_size(&mut self, v: f32, f: impl FnOnce(&mut Self)) {
+    pub fn font_size(&mut self, v: impl Into<crate::unit::TextUnit>, f: impl FnOnce(&mut Self)) {
         let saved = self.style.clone();
-        self.style.fs = Some(v);
+        self.style.fs = Some(v.into().to_logical_px());
         f(self);
         self.style = saved;
     }
@@ -312,7 +312,7 @@ pub struct StyleModifier(Style);
 impl StyleModifier {
     pub fn bold(mut self) -> Self { self.0.fw = Some(FontWeight::BOLD); self }
     pub fn italic(mut self) -> Self { self.0.slant = Some(FontSlant::Italic); self }
-    pub fn font_size(mut self, v: f32) -> Self { self.0.fs = Some(v); self }
+    pub fn font_size(mut self, v: impl Into<crate::unit::TextUnit>) -> Self { self.0.fs = Some(v.into().to_logical_px()); self }
     pub fn color(mut self, v: Color) -> Self { self.0.color = Some(v); self }
     pub fn underline(mut self) -> Self { self.0.ul = true; self }
     pub fn overline(mut self) -> Self { self.0.ol = true; self }

@@ -60,6 +60,7 @@ pub struct TextField {
     value: State<TextFieldValue>,
     on_value_change: Box<dyn Fn(TextFieldValue) + Send + Sync>,
     modifier: Modifier,
+    font_size: Option<crate::unit::TextUnit>,
 }
 
 impl TextField {
@@ -71,11 +72,18 @@ impl TextField {
             value,
             on_value_change: Box::new(on_value_change),
             modifier: Modifier::new(),
+            font_size: None,
         }
     }
 
     pub fn modifier(mut self, modifier: Modifier) -> Self {
         self.modifier = self.modifier.then(modifier);
+        self
+    }
+
+    /// 设置字号（支持 .sp() / .px() / f32，默认 14.sp()）
+    pub fn font_size(mut self, size: impl Into<crate::unit::TextUnit>) -> Self {
+        self.font_size = Some(size.into());
         self
     }
 
@@ -85,7 +93,9 @@ impl TextField {
         let content = current.text.clone();
 
         let theme = crate::ui::theme::WiniaTheme::colors();
-        let font_size = 14.0;
+        let font_size = self.font_size
+            .unwrap_or(crate::unit::TextUnit::Sp(crate::unit::Sp(14.0)))
+            .to_logical_px();
         let color = theme.on_surface;
 
         // 光标闪烁状态（D:\winia 风格）
