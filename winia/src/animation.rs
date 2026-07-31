@@ -355,6 +355,38 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
                 let t = state.from.lerp(&state.to, eased);
                 (t, eased >= 1.0)
             }
+            AnimationSpec::Keyframes(spec) => {
+                let elapsed = now - state.start;
+                let t = (elapsed.as_secs_f64() / spec.duration.as_secs_f64()).min(1.0) as f32;
+                let factor = interpolate_keyframes(&spec.frames, t);
+                let value = state.from.lerp(&state.to, factor);
+                (value, t >= 1.0)
+            }
+            AnimationSpec::Repeatable(spec) => {
+                // 简化：base 仅支持 Tween
+                let base_duration = match spec.base.as_ref() {
+                    AnimationSpec::Tween(t) => t.duration,
+                    _ => Duration::from_millis(300),
+                };
+                let elapsed = now - state.start;
+                let total = base_duration.saturating_mul(spec.iterations);
+                if elapsed >= total {
+                    (state.to.clone(), true)
+                } else {
+                    let cycle = elapsed.as_secs_f64() % base_duration.as_secs_f64().max(0.001);
+                    let t = (cycle / base_duration.as_secs_f64().max(0.001)) as f32;
+                    let cycle_idx = (elapsed.as_secs_f64() / base_duration.as_secs_f64().max(0.001)).floor() as u32;
+                    let factor = match spec.mode {
+                        RepeatMode::Restart => t,
+                        RepeatMode::Reverse => if cycle_idx % 2 == 0 { t } else { 1.0 - t },
+                    };
+                    let value = state.from.lerp(&state.to, factor);
+                    (value, false)
+                }
+            }
+            AnimationSpec::Snap => {
+                (state.to.clone(), true)
+            }
         };
         self.state.set(value);
         if done { self.anim_state = None; }
@@ -372,6 +404,25 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
 // Spring 物理模拟（半隐式欧拉积分）
 // ═══════════════════════════════════════════════════════════
 
+/// 关键帧插值：在 frames 中按进度 t 定位段，段内用 interpolator 插值
+fn interpolate_keyframes(frames: &[(f32, f32, fn(f32) -> f32)], t: f32) -> f32 {
+    if frames.is_empty() { return 0.0; }
+    if t <= 0.0 { return frames[0].1; }
+    let last = frames.last().unwrap();
+    if t >= last.0 { return last.1; }
+    for i in 0..frames.len() - 1 {
+        let (p0, v0, _) = frames[i];
+        let (p1, v1, interp) = frames[i + 1];
+        if t >= p0 && t <= p1 {
+            let seg = if p1 > p0 { (t - p0) / (p1 - p0) } else { 0.0 };
+            let eased = interp(seg.clamp(0.0, 1.0));
+            return v0 + (v1 - v0) * eased;
+        }
+    }
+    last.1
+}
+
+/// 固定时间步长弹簧积分（accumulator 模式，最多 10 步）
 fn compute_spring_displacement(
     stiffness: f32, damping_ratio: f32, mass: f32,
     initial_displacement: f32, velocity: &mut f32,
@@ -505,6 +556,12 @@ impl Drop for InfiniteTransition {
 pub enum AnimationSpec {
     Spring(SpringSpec),
     Tween(TweenSpec),
+    /// 关键帧序列（对标 Compose keyframes）
+    Keyframes(KeyframesSpec),
+    /// 重复执行子动画（对标 Compose repeatable）
+    Repeatable(RepeatableSpec),
+    /// 瞬时跳转到目标（对标 Compose snap）
+    Snap,
 }
 
 #[derive(Clone)]
@@ -541,6 +598,36 @@ pub struct TweenSpec {
 impl Default for TweenSpec {
     fn default() -> Self {
         Self { duration: Duration::from_millis(300), interpolator: interpolator::linear }
+    }
+}
+
+/// 关键帧序列：(进度 0~1, 值, 段间插值器)
+#[derive(Clone)]
+pub struct KeyframesSpec {
+    pub duration: Duration,
+    pub frames: Vec<(f32, f32, fn(f32) -> f32)>,
+}
+
+impl KeyframesSpec {
+    /// 简化构造：仅 (progress, value)，段间线性
+    pub fn new(duration: Duration, frames: Vec<(f32, f32)>) -> Self {
+        let linear: fn(f32) -> f32 = interpolator::linear;
+        let frames = frames.into_iter().map(|(p, v)| (p, v, linear)).collect();
+        Self { duration, frames }
+    }
+}
+
+/// 重复执行：iterations 次后完成
+#[derive(Clone)]
+pub struct RepeatableSpec {
+    pub iterations: u32,
+    pub mode: RepeatMode,
+    pub base: Box<AnimationSpec>,
+}
+
+impl RepeatableSpec {
+    pub fn new(iterations: u32, mode: RepeatMode, base: AnimationSpec) -> Self {
+        Self { iterations, mode, base: Box::new(base) }
     }
 }
 
@@ -772,5 +859,42 @@ mod tests {
         assert!(is_animating(), "s2 color animation should remain");
         remove_animation_by_state(s2.id());
         assert!(!is_animating(), "all animations should be removed");
+    }
+
+    #[test]
+    fn keyframes_interpolate_segments() {
+        use crate::unit::DpExt;
+        // 0%→0, 50%→50, 100%→100，线性
+        let spec = KeyframesSpec::new(Duration::from_millis(100), vec![(0.0, 0.0), (0.5, 0.5), (1.0, 1.0)]);
+        assert_eq!(interpolate_keyframes(&spec.frames, 0.0), 0.0);
+        assert_eq!(interpolate_keyframes(&spec.frames, 0.25), 0.25);
+        assert_eq!(interpolate_keyframes(&spec.frames, 0.5), 0.5);
+        assert_eq!(interpolate_keyframes(&spec.frames, 0.75), 0.75);
+        assert_eq!(interpolate_keyframes(&spec.frames, 1.0), 1.0);
+        assert_eq!(interpolate_keyframes(&spec.frames, 2.0), 1.0); // 超界 clamp
+    }
+
+    #[test]
+    fn repeatable_runs_iterations() {
+        let mut anim = Animatable::<f32>::new(State::new(0.0));
+        anim.animate_to(100.0, AnimationSpec::Repeatable(
+            RepeatableSpec::new(3, RepeatMode::Restart,
+                AnimationSpec::Tween(TweenSpec { duration: Duration::from_millis(40), interpolator: interpolator::linear }))));
+        let mut frames = 0;
+        while anim.update() && frames < 100 {
+            std::thread::sleep(Duration::from_millis(10));
+            frames += 1;
+        }
+        // 3 × 40ms = 120ms，应完成
+        assert!(frames < 100, "repeatable should finish within 100 frames");
+        assert_eq!(anim.state.get(), 100.0);
+    }
+
+    #[test]
+    fn snap_jumps_immediately() {
+        let mut anim = Animatable::<f32>::new(State::new(0.0));
+        anim.animate_to(42.0, AnimationSpec::Snap);
+        assert!(!anim.update(), "snap completes in one update");
+        assert_eq!(anim.state.get(), 42.0);
     }
 }
