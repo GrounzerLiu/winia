@@ -590,7 +590,8 @@ impl ApplicationHandler for AppState {
             }
             WindowEvent::RedrawRequested => {
                 // 在 compose 前更新动画（确保渲染使用最新值，消除一帧滞后抖动）
-                if crate::animation::update_animations() {
+                let was_animating = crate::animation::update_animations();
+                if was_animating {
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 }
                 // 消费焦点请求（在 compose 前处理，避免丢失）
@@ -664,6 +665,10 @@ impl ApplicationHandler for AppState {
                             }
                         }
                     }
+                }
+                // compose 后：若新注册了动画（compose 前无动画、现在有），请求下一帧启动动画
+                if !was_animating && crate::animation::is_animating() {
+                    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 }
                 // 检查 compose 后是否有待关闭窗口
                 if crate::ui::window::Window::has_pending_close() {
