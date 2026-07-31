@@ -293,12 +293,14 @@ impl crate::animation::AnimatableValue for Dp {
     fn lerp(&self, to: &Dp, t: f32) -> Dp { Dp(self.0 + (to.0 - self.0) * t) }
     fn to_f32(&self) -> f32 { self.0 }
     fn from_f32(v: f32) -> Dp { Dp(v) }
+    fn supports_spring() -> bool { true }
 }
 
 impl crate::animation::AnimatableValue for Sp {
     fn lerp(&self, to: &Sp, t: f32) -> Sp { Sp(self.0 + (to.0 - self.0) * t) }
     fn to_f32(&self) -> f32 { self.0 }
     fn from_f32(v: f32) -> Sp { Sp(v) }
+    fn supports_spring() -> bool { true }
 }
 
 impl crate::animation::AnimatableValue for Offset {

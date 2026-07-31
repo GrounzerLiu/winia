@@ -25,8 +25,9 @@ use std::sync::{Arc, Mutex, LazyLock};
 /// 动画实例 trait（擦除类型后存储在全局列表）
 pub trait AnimationInstance: Send {
     fn update(&mut self) -> bool;
-    fn is_animating_to(&self, target: f32) -> bool;
     fn state_id(&self) -> u32;
+    /// 类型安全的精确目标比较（跨类型返回 false）
+    fn same_target(&self, target: &dyn std::any::Any) -> bool;
 }
 
 static ACTIVE_ANIMATIONS: LazyLock<Mutex<Vec<Box<dyn AnimationInstance>>>> =
@@ -96,7 +97,7 @@ impl AnimationInstance for InfiniteFloat {
         }
         true // 永远运行
     }
-    fn is_animating_to(&self, _target: f32) -> bool { false }
+    fn same_target(&self, _target: &dyn std::any::Any) -> bool { false }
     fn state_id(&self) -> u32 { self.state.id() }
 }
 
@@ -145,7 +146,7 @@ impl AnimationInstance for InfiniteColor {
         }
         true
     }
-    fn is_animating_to(&self, _target: f32) -> bool { false }
+    fn same_target(&self, _target: &dyn std::any::Any) -> bool { false }
     fn state_id(&self) -> u32 { self.state.id() }
 }
 
@@ -165,15 +166,25 @@ pub fn push_animation(anim: Box<dyn AnimationInstance + 'static>) {
     ACTIVE_ANIMATIONS.lock().unwrap().push(anim);
 }
 
-/// 注册一个 Animatable<f32> 到全局活跃列表（由 animate_float_as_state 调用）
+/// 注册一个 Animatable<T> 到全局活跃列表（由 animate_*_as_state 调用）
 pub fn push_animatable<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(state: State<T>, target: T, spec: AnimationSpec) {
     if state.peek() == target { return; }
     let sid = state.id();
-    let target_f = AnimatableValue::to_f32(&target);
+    // 跨列表去重（同 state 已有动画则不重复注册，防双驱动）
+    if has_animation_for_state(sid) { return; }
+    // 非标量类型（Offset/Size/Color 等）Spring 无单值物理，强制降级 Tween
+    let spec = if T::supports_spring() {
+        spec
+    } else {
+        match spec {
+            AnimationSpec::Spring(_) => AnimationSpec::Tween(TweenSpec::default()),
+            other => other,
+        }
+    };
     {
         let mut list = ACTIVE_ANIMATIONS.lock().unwrap();
-        // 检查是否已有同目标动画运行中（同目标直接跳过，防止每帧重启）
-        if list.iter().any(|anim| anim.state_id() == sid && anim.is_animating_to(target_f)) { return; }
+        // 检查是否已有同目标动画运行中（同目标直接跳过，防止每帧重启）——类型安全精确比较
+        if list.iter().any(|anim| anim.state_id() == sid && anim.same_target(&target)) { return; }
         // 同一 state 但目标不同时移除旧动画（用户改变了目标值）
         list.retain(|anim| anim.state_id() != sid);
     } // 锁释放，下面 anim.update() 不持锁执行用户代码
@@ -208,13 +219,15 @@ pub fn push_animatable_color(state: State<crate::modifier::Color>, target: crate
 /// 实现 AnimationInstance for Animatable<f32>
 impl<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static> AnimationInstance for Animatable<T> {
     fn update(&mut self) -> bool {
-        self.update()
-    }
-    fn is_animating_to(&self, target: f32) -> bool {
-        self.anim_state.as_ref().map(|s| AnimatableValue::to_f32(&s.to) - target).unwrap_or(f32::INFINITY).abs() < f32::EPSILON
+        Animatable::update(self)
     }
     fn state_id(&self) -> u32 {
         self.state.id()
+    }
+    fn same_target(&self, target: &dyn std::any::Any) -> bool {
+        target.downcast_ref::<T>()
+            .map(|t| self.anim_state.as_ref().map(|s| s.to == *t).unwrap_or(false))
+            .unwrap_or(false)
     }
 }
 
@@ -633,18 +646,23 @@ impl RepeatableSpec {
 }
 
 /// 可动画化的值类型
-pub trait AnimatableValue: Clone {
+pub trait AnimatableValue: Clone + PartialEq {
     fn lerp(&self, to: &Self, t: f32) -> Self;
-    /// 转换为 f32（Spring 物理引擎使用）
+    /// 转换为 f32（Spring 物理引擎 + 去重用；⚠️ 非单射——Offset/Size 返回范数，仅标量类型精确）
     fn to_f32(&self) -> f32;
-    /// 从 f32 构建（Spring 物理引擎返回）
+    /// 从 f32 构建（⚠️ 仅标量类型可用；向量/Color 的 from_f32 是占位，Spring 会强制降级 Tween）
     fn from_f32(v: f32) -> Self;
+    /// 精确比较目标（默认 PartialEq；f32/Dp/Offset/Size 均精确）
+    fn same_target(&self, other: &Self) -> bool { self == other }
+    /// 是否支持 Spring（标量类型 true；向量/Color 无单值物理，false）
+    fn supports_spring() -> bool { false }
 }
 
 impl AnimatableValue for f32 {
     fn lerp(&self, to: &f32, t: f32) -> Self { self + (to - self) * t }
     fn to_f32(&self) -> f32 { *self }
     fn from_f32(v: f32) -> Self { v }
+    fn supports_spring() -> bool { true }
 }
 
 impl AnimatableValue for crate::modifier::Color {
@@ -857,9 +875,9 @@ mod tests {
         remove_animation_by_state(s1.id());
         remove_animation_by_state(s3.id());
         // s2 仍在
-        assert!(is_animating(), "s2 color animation should remain");
+        assert!(has_animation_for_state(s2.id()), "s2 color animation should remain");
         remove_animation_by_state(s2.id());
-        assert!(!is_animating(), "all animations should be removed");
+        assert!(!has_animation_for_state(s2.id()), "s2 should be removed");
     }
 
     #[test]
@@ -922,5 +940,35 @@ mod tests {
         anim.animate_to(42.0, AnimationSpec::Snap);
         assert!(!anim.update(), "snap completes in one update");
         assert_eq!(anim.state.get(), 42.0);
+    }
+
+    #[test]
+    fn offset_dedup_is_exact_not_norm() {
+        // blocking bug：两个同范数不同 Offset 不应互相误判为同目标
+        use crate::unit::Offset;
+        let s = State::new(Offset::new(0.0, 0.0));
+        push_animatable(s.clone(), Offset::new(10.0, 0.0), AnimationSpec::Tween(TweenSpec::default()));
+        // 移除第一个动画（避免跨列表拦截），再注册同范数不同目标
+        remove_animation_by_state(s.id());
+        push_animatable(s.clone(), Offset::new(0.0, 10.0), AnimationSpec::Tween(TweenSpec::default()));
+        assert!(is_animating(), "new offset animation should be registered (norm collision must not block)");
+        // 目标精确是 (0,10) 而非 (10,0)
+        let list = ACTIVE_ANIMATIONS.lock().unwrap();
+        let target_ok = list.iter().any(|a| a.same_target(&Offset::new(0.0, 10.0)));
+        assert!(target_ok, "animation target should be (0,10)");
+        let wrong_ok = list.iter().any(|a| a.same_target(&Offset::new(10.0, 0.0)));
+        assert!(!wrong_ok, "animation should NOT match (10,0)");
+    }
+
+    #[test]
+    fn offset_spring_downgraded_to_tween() {
+        // blocking bug：Offset 用 Spring 会收敛到 (norm,norm) 而非目标，应强制 Tween
+        use crate::unit::Offset;
+        let s = State::new(Offset::new(0.0, 0.0));
+        push_animatable(s.clone(), Offset::new(3.0, 4.0), AnimationSpec::Spring(SpringSpec::default()));
+        // 验证动画注册（Spring 被降级为 Tween 后仍正常运行）
+        assert!(has_animation_for_state(s.id()), "Offset animation should be registered");
+        remove_animation_by_state(s.id());
+        assert!(!has_animation_for_state(s.id()), "own animation should be removed");
     }
 }
