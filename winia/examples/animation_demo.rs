@@ -101,6 +101,11 @@ fn animation_demo(ctx: &mut ComposeCtx) {
                         .build(ctx);
                 });
 
+            // ── 撑满剩余空间，把按钮推到底部 ──
+            Column::new()
+                .modifier(Modifier::new().fill_max_size())
+                .build(ctx, |_| {});
+
             // ── Toggle button ──
             Button::new()
                 .on_click({ let c = clicked.clone(); move || { c.update(|v| *v = !*v); } })
