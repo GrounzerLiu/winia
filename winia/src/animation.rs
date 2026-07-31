@@ -132,6 +132,13 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
     pub fn update(&mut self) -> bool {
         let Some(ref mut state) = self.anim_state else { return false; };
         let now = Instant::now();
+        // 极端参数保护：超过 5s 未收敛强制完成（stiffness=0 等永不收敛的场景）
+        if now.duration_since(state.start) > Duration::from_secs(5) {
+            let final_val = state.to.clone();
+            self.state.set(final_val);
+            self.anim_state = None;
+            return false;
+        }
         let dt = now.duration_since(state.last_update);
         state.last_update = now;
         let (value, done) = match &state.spec {
@@ -290,4 +297,93 @@ impl AnimatableValue for f32 {
     fn lerp(&self, to: &f32, t: f32) -> Self { self + (to - self) * t }
     fn to_f32(&self) -> f32 { *self }
     fn from_f32(v: f32) -> Self { v }
+}
+
+// ═══════════════════════════════════════════════════════════
+// 单元测试
+// ═══════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// 模拟一帧 16.7ms，步进 n 帧推进弹簧
+    fn step_spring(
+        stiffness: f32, damping: f32, threshold: f32,
+        start: f32, target: f32,
+        frames: usize,
+    ) -> (f32, bool) {
+        let mut disp = start - target;
+        let mut vel = 0.0f32;
+        for _ in 0..frames {
+            disp = compute_spring_displacement(
+                stiffness, damping, 1.0, disp, &mut vel,
+                Duration::from_millis(17), threshold,
+            );
+        }
+        let val = target + disp;
+        let done = disp.abs() < threshold && vel.abs() < threshold;
+        (val, done)
+    }
+
+    #[test]
+    fn spring_converges_to_target() {
+        // 临界阻尼，50→300
+        let (val, done) = step_spring(1500.0, 1.0, 0.1, 50.0, 300.0, 300);
+        assert!(done, "spring should settle within 300 frames");
+        assert!((val - 300.0).abs() < 1.0, "val={} should be near 300", val);
+    }
+
+    #[test]
+    fn spring_bouncy_overshoots_then_converges() {
+        // 欠阻尼 bouncy，应超调后收敛
+        let (mut val, mut done) = step_spring(1500.0, 0.6, 0.1, 50.0, 300.0, 5);
+        // 早期应明显低于目标（尚未到达）或已超调
+        let (final_val, final_done) = step_spring(1500.0, 0.6, 0.1, 50.0, 300.0, 300);
+        assert!(final_done, "bouncy should settle");
+        assert!((final_val - 300.0).abs() < 1.0, "final_val={}", final_val);
+        // 记录中间某帧是否超调过（val > 300 出现过）
+        let mut overshot = false;
+        let mut disp = -250.0f32;
+        let mut vel = 0.0f32;
+        for _ in 0..60 {
+            disp = compute_spring_displacement(1500.0, 0.6, 0.1, disp, &mut vel, Duration::from_millis(17), 0.1);
+            if 300.0 + disp > 300.0 { overshot = true; }
+        }
+        assert!(overshot, "underdamped spring should overshoot");
+        let _ = (val, done);
+    }
+
+    #[test]
+    fn spring_reverse_animation() {
+        // 反向 300→50 也应收敛（此前 bug：分母 max(EPSILON) 卡死）
+        let (val, done) = step_spring(1500.0, 1.0, 0.1, 300.0, 50.0, 300);
+        assert!(done);
+        assert!((val - 50.0).abs() < 1.0, "val={} should be near 50", val);
+    }
+
+    #[test]
+    fn spring_dt_zero_is_safe() {
+        // dt=0 不应 panic/产生 NaN
+        let mut disp = -250.0f32;
+        let mut vel = 0.0f32;
+        let d = compute_spring_displacement(1500.0, 1.0, 0.1, disp, &mut vel, Duration::ZERO, 0.1);
+        assert!(d.is_finite());
+        let _ = disp;
+    }
+
+    #[test]
+    fn tween_completes_within_duration() {
+        let mut anim = Animatable::<f32>::new(State::new(0.0));
+        anim.animate_to(100.0, AnimationSpec::Tween(TweenSpec::default()));
+        // 模拟 400ms（每帧 10ms），应超过 300ms duration 完成
+        let mut frames = 0;
+        while anim.update() && frames < 60 {
+            std::thread::sleep(Duration::from_millis(10));
+            frames += 1;
+        }
+        assert!(frames < 60, "tween should finish within 600ms, took {} frames", frames);
+        assert_eq!(anim.state.get(), 100.0);
+    }
 }
