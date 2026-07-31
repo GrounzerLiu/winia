@@ -363,7 +363,9 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
                 (value, t >= 1.0)
             }
             AnimationSpec::Repeatable(spec) => {
-                // 简化：base 仅支持 Tween
+                // 简化：base 仅支持 Tween（开发期断言，其他类型回退 300ms 线性）
+                debug_assert!(matches!(&*spec.base, AnimationSpec::Tween(_)),
+                    "RepeatableSpec 目前仅支持 Tween base");
                 let base_duration = match spec.base.as_ref() {
                     AnimationSpec::Tween(t) => t.duration,
                     _ => Duration::from_millis(300),
@@ -371,7 +373,14 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
                 let elapsed = now - state.start;
                 let total = base_duration.saturating_mul(spec.iterations);
                 if elapsed >= total {
-                    (state.to.clone(), true)
+                    // 完成值：Reverse + 偶数次时最后 cycle 结束于 from（否则结束于 to）
+                    let end_val = match spec.mode {
+                        RepeatMode::Restart => state.to.clone(),
+                        RepeatMode::Reverse => {
+                            if spec.iterations % 2 == 0 { state.from.clone() } else { state.to.clone() }
+                        }
+                    };
+                    (end_val, true)
                 } else {
                     let cycle = elapsed.as_secs_f64() % base_duration.as_secs_f64().max(0.001);
                     let t = (cycle / base_duration.as_secs_f64().max(0.001)) as f32;
@@ -410,6 +419,8 @@ fn interpolate_keyframes(frames: &[(f32, f32, fn(f32) -> f32)], t: f32) -> f32 {
     if t <= 0.0 { return frames[0].1; }
     let last = frames.last().unwrap();
     if t >= last.0 { return last.1; }
+    // t 小于首帧 progress 时取首帧值（首帧 progress 可能 > 0）
+    if t < frames[0].0 { return frames[0].1; }
     for i in 0..frames.len() - 1 {
         let (p0, v0, _) = frames[i];
         let (p1, v1, interp) = frames[i + 1];
@@ -878,6 +889,31 @@ mod tests {
         // 3 × 40ms = 120ms，应完成
         assert!(frames < 100, "repeatable should finish within 100 frames");
         assert_eq!(anim.state.get(), 100.0);
+    }
+
+    #[test]
+    fn repeatable_reverse_even_ends_at_from() {
+        // blocking bug：Reverse + 偶数次时最后 cycle 结束于 from，完成值不应跳变到 to
+        let mut anim = Animatable::<f32>::new(State::new(0.0));
+        anim.animate_to(100.0, AnimationSpec::Repeatable(
+            RepeatableSpec::new(2, RepeatMode::Reverse,
+                AnimationSpec::Tween(TweenSpec { duration: Duration::from_millis(40), interpolator: interpolator::linear }))));
+        while anim.update() {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // 2 次反向：第1次 0→100，第2次 100→0，结束于 0（from）
+        let final_val = anim.state.peek();
+        assert!((final_val - 0.0).abs() < 1.0, "should end at from=0, got {}", final_val);
+    }
+
+    #[test]
+    fn keyframes_first_frame_offset() {
+        // 首帧 progress > 0 时，t < 首帧 progress 应取首帧值
+        let spec = KeyframesSpec::new(Duration::from_millis(100), vec![(0.5, 0.7), (1.0, 1.0)]);
+        assert_eq!(interpolate_keyframes(&spec.frames, 0.1), 0.7);
+        assert_eq!(interpolate_keyframes(&spec.frames, 0.5), 0.7);
+        assert_eq!(interpolate_keyframes(&spec.frames, 0.75), 0.85);
+        assert_eq!(interpolate_keyframes(&spec.frames, 1.0), 1.0);
     }
 
     #[test]
