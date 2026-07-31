@@ -150,6 +150,12 @@ impl ApplicationHandler for AppState {
         fn new_events(&mut self, event_loop: &dyn ActiveEventLoop, _cause: StartCause) {
         // Wait + request_redraw 自驱动动画（避免 Poll↔Wait 切换竞态丢帧）
         event_loop.set_control_flow(ControlFlow::Wait);
+        // 每轮推进动画（与窗口解耦，多窗口/子窗口动画均正确推进）
+        if crate::animation::update_animations() {
+            for pw in self.windows.values_mut() {
+                if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+            }
+        }
     }
 
     fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
@@ -589,14 +595,7 @@ impl ApplicationHandler for AppState {
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
             }
             WindowEvent::RedrawRequested => {
-                // 在 compose 前更新动画（确保渲染使用最新值，消除一帧滞后抖动）
-                // 仅主窗口推进全局动画，避免多窗口双倍速
-                let was_animating = if is_parent {
-                    crate::animation::update_animations()
-                } else { false };
-                if was_animating {
-                    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
-                }
+                // 动画推进已移到 new_events（每轮一次，与窗口解耦）
                 // 消费焦点请求（在 compose 前处理，避免丢失）
                 for id in crate::modifier::take_focus_requests() {
                     if let Some(root) = pw.composer.layout_root_mut() {
@@ -668,10 +667,6 @@ impl ApplicationHandler for AppState {
                             }
                         }
                     }
-                }
-                // compose 后：若新注册了动画（compose 前无动画、现在有），请求下一帧启动动画
-                if !was_animating && crate::animation::is_animating() {
-                    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 }
                 // 检查 compose 后是否有待关闭窗口
                 if crate::ui::window::Window::has_pending_close() {
