@@ -80,7 +80,7 @@ impl AnimationInstance for InfiniteFloat {
         match self.spec.mode {
             RepeatMode::Restart => {
                 let t = (elapsed.as_secs_f32() / self.spec.duration.as_secs_f32().max(0.001)).min(1.0);
-                self.state.set(self.from + (self.to - self.from) * t);
+                self.state.set_visual(self.from + (self.to - self.from) * t);
                 if elapsed >= self.spec.duration { self.start = Instant::now(); }
             }
             RepeatMode::Reverse => {
@@ -92,7 +92,7 @@ impl AnimationInstance for InfiniteFloat {
                 } else {
                     self.to + (self.from - self.to) * (phase - 1.0)
                 };
-                self.state.set(v);
+                self.state.set_visual(v);
             }
         }
         true // 永远运行
@@ -134,14 +134,14 @@ impl AnimationInstance for InfiniteColor {
         match self.spec.mode {
             RepeatMode::Restart => {
                 let t = (elapsed.as_secs_f32() / self.spec.duration.as_secs_f32().max(0.001)).min(1.0);
-                self.state.set(self.value_at(t));
+                self.state.set_visual(self.value_at(t));
                 if elapsed >= self.spec.duration { self.start = Instant::now(); }
             }
             RepeatMode::Reverse => {
                 let cycle_secs = self.spec.duration.as_secs_f32().max(0.001) * 2.0;
                 let phase = (elapsed.as_secs_f32() % cycle_secs) / self.spec.duration.as_secs_f32().max(0.001);
                 let t = if phase < 1.0 { phase } else { 2.0 - phase };
-                self.state.set(self.value_at(t));
+                self.state.set_visual(self.value_at(t));
             }
         }
         true

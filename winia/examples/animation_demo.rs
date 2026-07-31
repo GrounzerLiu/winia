@@ -141,24 +141,28 @@ fn animation_demo(ctx: &mut ComposeCtx) {
                 ctx, 0.4, 1.0,
                 winia::animation::InfiniteRepeatableSpec::reverse(std::time::Duration::from_millis(600)),
             );
-            let p = pulse.get();
-            // 无限颜色：蓝色↔红色 CAM16 插值
+            // 无限颜色：蓝色↔红色 CAM16 插值（绘制层动画：set_visual 不触发重组，渲染时 peek）
             let pulse_color = infinite.animate_color(
                 ctx,
                 Color::from_argb(255, 33, 150, 243),
                 Color::from_argb(255, 255, 82, 82),
                 winia::animation::InfiniteRepeatableSpec::reverse(std::time::Duration::from_millis(600)),
             );
-            let pc = pulse_color.get();
-            // 呼吸圆点：alpha + 颜色往返
+            // 呼吸圆点：alpha + 颜色由动态闭包在渲染时求值（零重组，只重绘）
             Column::new()
                 .modifier(Modifier::new()
                     .size(40.0, 40.0)
-                    .graphics_layer(winia::modifier::GraphicsLayerParams {
-                        alpha: p,
-                        ..Default::default()
+                    .graphics_layer_dynamic({
+                        let pulse = pulse.clone();
+                        move || winia::modifier::GraphicsLayerParams {
+                            alpha: pulse.peek(),
+                            ..Default::default()
+                        }
                     })
-                    .background(pc, Shape::Circle)
+                    .background_dynamic({
+                        let pulse_color = pulse_color.clone();
+                        move || pulse_color.peek()
+                    }, Shape::Circle)
                 )
                 .build(ctx, |_| {});
 
@@ -221,6 +225,10 @@ fn animation_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
+    // 启动 tokio 运行时（供 debug WS server 使用）
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let _guard = rt.enter();
+
     app::run_app(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()

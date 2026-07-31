@@ -49,6 +49,10 @@ fn render_modifier_element<'a>(
             draw_background(canvas, rect, color, shape);
             None
         }
+        ModifierElement::BackgroundDynamic { color_fn, shape } => {
+            draw_background(canvas, rect, &(color_fn)(), shape);
+            None
+        }
         ModifierElement::Border { width, color, shape } => {
             draw_border(canvas, x, y, w, h, *width, color, shape);
             None

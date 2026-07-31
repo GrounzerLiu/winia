@@ -113,6 +113,16 @@ impl<T: PartialEq + 'static> State<T> {
         drop(current);
         self.notify();
     }
+
+    /// 设置新值但**不触发重组**。
+    ///
+    /// 绘制层动画专用：alpha/scale/颜色等视觉属性变化只触发重绘（由动画引擎
+    /// 每帧 `request_redraw` 驱动），不触发 `notify → mark_dirty → 重组`。
+    /// 与 Compose `graphicsLayer { }` 的"绘制层属性不触发重组"一致。
+    pub fn set_visual(&self, value: T) {
+        let mut current = self.inner.value.write();
+        *current = value;
+    }
 }
 
 impl<T: 'static> State<T> {

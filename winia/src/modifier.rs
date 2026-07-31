@@ -296,6 +296,8 @@ pub(crate) enum ModifierElement {
     // ── Draw 类 ──
     /// 背景色 + 形状
     Background { color: Color, shape: Shape },
+    /// 动态背景色（渲染时每帧求值——绘制层颜色动画用，闭包内 `State::peek()`）
+    BackgroundDynamic { color_fn: Arc<dyn Fn() -> Color + Send + Sync>, shape: Shape },
     /// 边框
     Border { width: f32, color: Color, shape: Shape },
     /// 裁剪
@@ -340,7 +342,7 @@ pub(crate) enum ModifierElement {
     /// 水平滚动
     HorizontalScroll { state: crate::core::state::State<f32> },
     /// 图形层变换（scale/alpha/rotation/translation——只触发重绘，不触发布局）
-    GraphicsLayer { params: GraphicsLayerParams },
+    GraphicsLayer { params_fn: Arc<dyn Fn() -> GraphicsLayerParams + Send + Sync> },
 
     // ── 扩展槽位 ──
     /// 自定义 Modifier 元素（外部通过 `Modifier::custom()` 扩展）
@@ -510,6 +512,18 @@ impl Modifier {
         })
     }
 
+    /// 动态背景色（渲染时每帧求值——绘制层颜色动画用，闭包内 `State::peek()`）
+    pub fn background_dynamic(
+        self,
+        color_fn: impl Fn() -> Color + Send + Sync + 'static,
+        shape: impl Into<Shape>,
+    ) -> Self {
+        self.push(ModifierElement::BackgroundDynamic {
+            color_fn: Arc::new(color_fn),
+            shape: shape.into(),
+        })
+    }
+
     /// 设置边框
     pub fn border(self, width: f32, color: Color, shape: impl Into<Shape>) -> Self {
         self.push(ModifierElement::Border {
@@ -580,9 +594,21 @@ impl Modifier {
         self.push(ModifierElement::FocusRequesterId { id: fr.id })
     }
 
-    /// 图形层变换（scale/alpha/rotation/translation）
+    /// 图形层变换（静态值：scale/alpha/rotation/translation）
     pub fn graphics_layer(self, params: GraphicsLayerParams) -> Self {
-        self.push(ModifierElement::GraphicsLayer { params })
+        self.push(ModifierElement::GraphicsLayer {
+            params_fn: Arc::new(move || params),
+        })
+    }
+
+    /// 图形层变换（动态：渲染时每帧求值——绘制层动画用，闭包内 `State::peek()` 读取）
+    pub fn graphics_layer_dynamic(
+        self,
+        params_fn: impl Fn() -> GraphicsLayerParams + Send + Sync + 'static,
+    ) -> Self {
+        self.push(ModifierElement::GraphicsLayer {
+            params_fn: Arc::new(params_fn),
+        })
     }
 
     /// 垂直滚动（绑定 ScrollState）
@@ -731,7 +757,7 @@ impl Modifier {
 
     pub fn graphics_layer_params(&self) -> Option<GraphicsLayerParams> {
         self.elements.iter().find_map(|el| {
-            if let ModifierElement::GraphicsLayer { params } = el { Some(*params) } else { None }
+            if let ModifierElement::GraphicsLayer { params_fn } = el { Some((params_fn)()) } else { None }
         })
     }
 
@@ -799,6 +825,7 @@ impl Debug for ModifierElement {
             Self::AlignSelf { alignment } => f.debug_struct("AlignSelf").field("alignment", alignment).finish(),
             Self::LayoutWeight { weight } => f.debug_struct("LayoutWeight").field("weight", weight).finish(),
             Self::Background { color, shape } => f.debug_struct("Background").field("color", color).field("shape", shape).finish(),
+            Self::BackgroundDynamic { .. } => f.debug_struct("BackgroundDynamic").finish(),
             Self::Border { width, color, shape } => f.debug_struct("Border").field("width", width).field("color", color).field("shape", shape).finish(),
             Self::Clip { shape } => f.debug_struct("Clip").field("shape", shape).finish(),
             Self::TextContent { content, font_size, .. } => f
@@ -818,7 +845,7 @@ impl Debug for ModifierElement {
             Self::FocusRequesterId { id } => f.debug_tuple("FocusRequesterId").field(id).finish(),
             Self::VerticalScroll { .. } => f.write_str("VerticalScroll(<state>)"),
             Self::HorizontalScroll { .. } => f.write_str("HorizontalScroll(<state>)"),
-            Self::GraphicsLayer { params } => f.debug_struct("GraphicsLayer").field("params", params).finish(),
+            Self::GraphicsLayer { .. } => f.debug_struct("GraphicsLayer").finish(),
             Self::Blur { radius } => f.debug_struct("Blur").field("radius", radius).finish(),
             Self::BackdropBlur { radius } => f.debug_struct("BackdropBlur").field("radius", radius).finish(),
             Self::Custom { .. } => f.write_str("Custom(<dyn ModifierNode>)"),
@@ -843,6 +870,7 @@ impl ModifierElement {
             | ModifierElement::LayoutWeight { .. } => ElementCategory::Layout,
 
             ModifierElement::Background { .. }
+            | ModifierElement::BackgroundDynamic { .. }
             | ModifierElement::Border { .. }
             | ModifierElement::Clip { .. }
             | ModifierElement::Blur { .. }
