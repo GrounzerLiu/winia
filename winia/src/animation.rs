@@ -103,10 +103,7 @@ impl AnimationInstance for InfiniteFloat {
 /// 注册一个无限循环浮点动画
 pub fn push_infinite_float(state: State<f32>, from: f32, to: f32, spec: InfiniteRepeatableSpec) {
     let sid = state.id();
-    {
-        let list = ACTIVE_ANIMATIONS.lock().unwrap();
-        if list.iter().any(|a| a.state_id() == sid) { return; } // 已有此 state 的动画（含无限）
-    }
+    if has_animation_for_state(sid) { return; } // 跨列表去重
     let anim = InfiniteFloat { state, from, to, spec, start: Instant::now() };
     ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
 }
@@ -158,10 +155,7 @@ pub fn push_infinite_color(
     spec: InfiniteRepeatableSpec,
 ) {
     let sid = state.id();
-    {
-        let list = ACTIVE_INFINITE_COLOR_ANIMATIONS.lock().unwrap();
-        if list.iter().any(|a| a.state.id() == sid) { return; }
-    }
+    if has_animation_for_state(sid) { return; } // 跨列表去重
     let anim = InfiniteColor { state, from, to, spec, start: Instant::now() };
     ACTIVE_INFINITE_COLOR_ANIMATIONS.lock().unwrap().push(anim);
 }
@@ -271,6 +265,13 @@ pub fn remove_animation_by_state(state_id: u32) {
     ACTIVE_ANIMATIONS.lock().unwrap().retain(|a| a.state_id() != state_id);
     ACTIVE_COLOR_ANIMATIONS.lock().unwrap().retain(|a| a.state.id() != state_id);
     ACTIVE_INFINITE_COLOR_ANIMATIONS.lock().unwrap().retain(|a| a.state.id() != state_id);
+}
+
+/// 指定 state 是否已在任一动画列表（跨列表去重，防双倍推进）
+pub fn has_animation_for_state(state_id: u32) -> bool {
+    ACTIVE_ANIMATIONS.lock().unwrap().iter().any(|a| a.state_id() == state_id)
+        || ACTIVE_COLOR_ANIMATIONS.lock().unwrap().iter().any(|a| a.state.id() == state_id)
+        || ACTIVE_INFINITE_COLOR_ANIMATIONS.lock().unwrap().iter().any(|a| a.state.id() == state_id)
 }
 
 /// 是否有动画在运行（用于控制事件循环 Poll/Wait）
@@ -483,6 +484,16 @@ impl InfiniteTransition {
 
     /// 取消此作用域创建的所有动画（组件离开组合/不再需要时调用）
     pub fn dispose(&self) {
+        let ids: Vec<u32> = self.ids.lock().unwrap().drain(..).collect();
+        for sid in ids {
+            crate::animation::remove_animation_by_state(sid);
+        }
+    }
+}
+
+impl Drop for InfiniteTransition {
+    fn drop(&mut self) {
+        // 兜底：调用方忘记 dispose 时，作用域销毁自动清理动画
         let ids: Vec<u32> = self.ids.lock().unwrap().drain(..).collect();
         for sid in ids {
             crate::animation::remove_animation_by_state(sid);
