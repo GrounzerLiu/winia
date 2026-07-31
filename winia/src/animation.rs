@@ -514,15 +514,18 @@ impl AnimatableValue for f32 {
 }
 
 impl AnimatableValue for crate::modifier::Color {
-    /// CAM16-UCS 色彩空间插值（人眼感知均匀，避免 RGBA 插值经过灰暗中间色）
+    /// CAM16-UCS 色彩空间插值（人眼感知均匀）+ alpha 单独线性插值
+    /// （cam16_ucs 忽略 alpha，需要手动插值保持透明度动画正确）
     fn lerp(&self, to: &Self, t: f32) -> Self {
         use material_colors::blend::cam16_ucs;
         use material_colors::color::Argb;
         let t = t.clamp(0.0, 1.0);
-        let from = Argb::new(self.a, self.r, self.g, self.b);
-        let to = Argb::new(to.a, to.r, to.g, to.b);
-        let b = cam16_ucs(from, to, t as f64);
-        Self::from_argb(b.alpha, b.red, b.green, b.blue)
+        // RGB 用 CAM16-UCS，alpha 用线性（cam16_ucs 返回 alpha 恒 255）
+        let from_argb = Argb::new(255, self.r, self.g, self.b);
+        let to_argb = Argb::new(255, to.r, to.g, to.b);
+        let b = cam16_ucs(from_argb, to_argb, t as f64);
+        let a = (self.a as f32 + (to.a as f32 - self.a as f32) * t).round() as u8;
+        Self::from_argb(a, b.red, b.green, b.blue)
     }
     fn to_f32(&self) -> f32 { self.a as f32 }
     fn from_f32(v: f32) -> Self { Self::from_argb(v as u8, 0, 0, 0) }
@@ -661,5 +664,46 @@ mod tests {
         }
         assert!(saw_high, "reverse should reach near to=1.0");
         assert!(saw_low, "reverse should return near from=0.4");
+    }
+
+    #[test]
+    fn color_lerp_uses_cam16_and_preserves_alpha() {
+        use crate::modifier::Color;
+        // 蓝 → 红，alpha 128 → 255
+        let from = Color::from_argb(128, 33, 150, 243);
+        let to = Color::from_argb(255, 255, 82, 82);
+        let mid = from.lerp(&to, 0.5);
+        // alpha 应线性插值（≈191）
+        assert!((mid.a as i32 - 191).abs() <= 1, "alpha={} should be ~191", mid.a);
+        // RGB 应在蓝和红之间（非灰暗：r 和 b 至少一个 > 100）
+        assert!(mid.r > 100 || mid.b > 100, "mid={:?} should not be grayish", mid);
+        // 端点保持
+        let start = from.lerp(&to, 0.0);
+        assert_eq!(start, from);
+        let end = from.lerp(&to, 1.0);
+        assert_eq!(end, to);
+    }
+
+    #[test]
+    fn infinite_color_reverse_cycles() {
+        use crate::modifier::Color;
+        let state = State::new(Color::RED);
+        let mut inf = InfiniteColor {
+            state: state.clone(),
+            from: Color::RED, to: Color::BLUE,
+            spec: InfiniteRepeatableSpec::reverse(Duration::from_millis(50)),
+            start: Instant::now(),
+        };
+        let mut saw_blue = false;
+        let mut saw_red = false;
+        for _ in 0..30 {
+            inf.update();
+            std::thread::sleep(Duration::from_millis(10));
+            let c = state.get();
+            if c.b > 200 && c.r < 50 { saw_blue = true; }
+            if c.r > 200 && c.b < 50 { saw_red = true; }
+        }
+        assert!(saw_blue, "should reach blue");
+        assert!(saw_red, "should return to red");
     }
 }
