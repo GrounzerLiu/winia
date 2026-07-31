@@ -15,8 +15,18 @@ fn unit_demo(ctx: &mut ComposeCtx) {
         .modifier(Modifier::new().padding(16.0).fill_max_size())
         .build(ctx, |ctx| {
             Text::new("Unit Demo")
-                .font_size(22.0)
+                .font_size(22.sp())
                 .modifier(Modifier::new().padding_vertical(8.0))
+                .build(ctx);
+
+            Text::new("Text sizes: 22.sp(), 14.sp(), 12.sp(), 10.sp()")
+                .font_size(14.sp())
+                .color(Color::from_argb(200, 100, 100, 100))
+                .build(ctx);
+            // px 字体：20.px() 在 density=2 时逻辑 10
+            Text::new("This line uses 20.px() font (density=2 → logical 10)")
+                .font_size(20.px())
+                .color(Color::from_argb(200, 156, 39, 176))
                 .build(ctx);
 
             // ── 1. Density 信息 ──

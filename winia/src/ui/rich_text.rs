@@ -82,7 +82,7 @@ fn resolve_base() -> Style {
     let theme = WiniaTheme::colors();
     let base = LOCAL_TEXT_STYLE.current();
     Style {
-        fs: base.font_size,
+        fs: base.font_size.map(|u| u.to_logical_px()),
         color: base.color.or(Some(theme.on_surface)),
         fw: base.font_weight,
         slant: base.font_style,
@@ -132,7 +132,7 @@ impl<'a> RichTextScope<'a> {
 
     fn apply_textstyle(&mut self, s: &TextStyle) {
         s.color.map(|v| self.style.color = Some(v));
-        s.font_size.map(|v| self.style.fs = Some(v));
+        s.font_size.map(|v| self.style.fs = Some(v.to_logical_px()));
         s.font_weight.map(|v| self.style.fw = Some(v));
         s.font_style.map(|v| self.style.slant = Some(v));
         if s.underline { self.style.ul = true; }

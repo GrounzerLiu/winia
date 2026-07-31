@@ -387,6 +387,41 @@ impl PxExt for u32 {
 }
 
 // ═══════════════════════════════════════════════════════════
+// TextUnit — 文本尺寸单位（Sp/Px 统一，对标 Compose TextUnit）
+// ═══════════════════════════════════════════════════════════
+
+/// 文本尺寸单位：Sp（字体缩放像素）或 Px（物理像素）
+///
+/// `f32` 默认按 Sp 处理（font_scale=1 时 Sp == 逻辑像素，向后兼容旧 API）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TextUnit {
+    /// 缩放像素（当前 font_scale=1，行为等同逻辑像素）
+    Sp(Sp),
+    /// 物理像素（需 Density 转逻辑像素）
+    Px(Px),
+}
+
+impl TextUnit {
+    /// 解析为逻辑像素（Sp 直接取值；Px 需 Density 转换）
+    pub fn to_logical_px(&self) -> f32 {
+        match self {
+            TextUnit::Sp(s) => s.value(),
+            TextUnit::Px(p) => p.to_logical(current_density()),
+        }
+    }
+}
+
+impl From<f32> for TextUnit {
+    fn from(v: f32) -> Self { TextUnit::Sp(Sp(v)) }
+}
+impl From<Sp> for TextUnit {
+    fn from(s: Sp) -> Self { TextUnit::Sp(s) }
+}
+impl From<Px> for TextUnit {
+    fn from(p: Px) -> Self { TextUnit::Px(p) }
+}
+
+// ═══════════════════════════════════════════════════════════
 // LOCAL_DENSITY — CompositionLocal（对标 Compose LocalDensity）
 // ═══════════════════════════════════════════════════════════
 

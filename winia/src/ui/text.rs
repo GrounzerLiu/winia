@@ -7,6 +7,7 @@
 use crate::core::composer::ComposeCtx;
 use crate::core::composition_local::CompositionLocal;
 use crate::modifier::{Color, Modifier, ModifierElement};
+use crate::unit::TextUnit;
 use std::sync::LazyLock;
 
 // ═══════════════════════════════════════════════════════════
@@ -57,7 +58,7 @@ impl Default for TextOverflow { fn default() -> Self { TextOverflow::Clip } }
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextStyle {
     pub color: Option<Color>,
-    pub font_size: Option<f32>,
+    pub font_size: Option<TextUnit>,
     pub font_weight: Option<FontWeight>,
     pub font_style: Option<FontSlant>,
     pub text_align: Option<TextAlign>,
@@ -77,7 +78,7 @@ impl TextStyle {
     }
 
     pub fn color(mut self, c: Color) -> Self { self.color = Some(c); self }
-    pub fn font_size(mut self, s: f32) -> Self { self.font_size = Some(s); self }
+    pub fn font_size(mut self, s: impl Into<TextUnit>) -> Self { self.font_size = Some(s.into()); self }
     pub fn font_weight(mut self, w: FontWeight) -> Self { self.font_weight = Some(w); self }
     pub fn font_style(mut self, s: FontSlant) -> Self { self.font_style = Some(s); self }
     pub fn italic(mut self) -> Self { self.font_style = Some(FontSlant::Italic); self }
@@ -137,7 +138,7 @@ fn merge_text_styles(base: &TextStyle, override_: &TextStyle) -> TextStyle {
 pub struct Text {
     content: String,
     modifier: Modifier,
-    font_size: Option<f32>,
+    font_size: Option<TextUnit>,
     color: Option<Color>,
     font_weight: Option<FontWeight>,
     font_style: Option<FontSlant>,
@@ -166,7 +167,7 @@ impl Text {
     }
 
     pub fn modifier(mut self, modifier: Modifier) -> Self { self.modifier = self.modifier.then(modifier); self }
-    pub fn font_size(mut self, size: f32) -> Self { self.font_size = Some(size); self }
+    pub fn font_size(mut self, size: impl Into<TextUnit>) -> Self { self.font_size = Some(size.into()); self }
     pub fn color(mut self, color: Color) -> Self { self.color = Some(color); self }
     pub fn font_weight(mut self, w: FontWeight) -> Self { self.font_weight = Some(w); self }
     pub fn bold(mut self) -> Self { self.font_weight = Some(FontWeight::BOLD); self }
@@ -192,7 +193,7 @@ impl Text {
         let base = LOCAL_TEXT_STYLE.current();
         let style = self.style.as_ref().map(|s| merge_text_styles(&base, s)).unwrap_or(base);
 
-        let final_font_size = self.font_size.or(style.font_size).unwrap_or(14.0);
+        let final_font_size = self.font_size.or(style.font_size).unwrap_or(TextUnit::Sp(crate::unit::Sp(14.0)));
         let final_font_weight = self.font_weight.or(style.font_weight).unwrap_or_default();
         let final_font_style = self.font_style.or(style.font_style).unwrap_or_default();
         let final_align = self.text_align.or(style.text_align).unwrap_or_default();
@@ -206,7 +207,7 @@ impl Text {
         let content_len = self.content.len();
         let modifier = self.modifier.push(ModifierElement::TextContent {
             content: self.content,
-            font_size: final_font_size,
+            font_size: final_font_size.to_logical_px(),
             color: final_color,
             font_weight: final_font_weight,
             font_style: final_font_style,
@@ -228,7 +229,7 @@ impl Text {
 
     // ── Getters ──
     pub fn get_content(&self) -> &str { &self.content }
-    pub fn get_font_size(&self) -> Option<f32> { self.font_size }
+    pub fn get_font_size(&self) -> Option<TextUnit> { self.font_size }
     pub fn get_color(&self) -> Option<Color> { self.color }
     pub fn get_text_align(&self) -> Option<TextAlign> { self.text_align }
     pub fn get_overflow(&self) -> Option<TextOverflow> { self.overflow }
@@ -263,7 +264,7 @@ mod tests {
             .modifier(Modifier::new().padding(8.0));
 
         assert_eq!(text.get_content(), "hello world");
-        assert_eq!(text.get_font_size(), Some(24.0));
+        assert_eq!(text.get_font_size(), Some(crate::unit::TextUnit::Sp(crate::unit::Sp(24.0))));
         assert_eq!(text.get_color(), Some(Color::RED));
         assert_eq!(text.get_text_align(), Some(TextAlign::Center));
         assert_eq!(text.get_overflow(), Some(TextOverflow::Ellipsis));
