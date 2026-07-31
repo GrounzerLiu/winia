@@ -794,6 +794,9 @@ impl AppState {
         pw.created_id = pending.created_id;
         pw.scale_factor = sf;
         pw.skia_window = Some(skia_window);
+        // 首次 compose+layout+draw 也提供 Density（Px 单位首帧即正确）
+        let density = crate::unit::Density::from_density(sf as f32);
+        crate::unit::with_density(density, || {
         pw.composer.compose(|ctx| (pw.content)(ctx));
         pw.composer.layout(Constraints::new(0.0, pending.width, 0.0, pending.height));
         let bg = pw.theme.background;
@@ -807,6 +810,7 @@ impl AppState {
                 sw.set_visible(true);
             }
         }
+        });
         self.windows.insert(window_id, pw);
         if self.parent_window_id.is_none() {
             self.parent_window_id = Some(window_id);
