@@ -118,7 +118,7 @@ fn build_node_json(node: &LayoutNode, out: &mut String, depth: usize) {
 fn describe_modifier(modifier: &crate::modifier::Modifier) -> String {
     modifier.elements().iter().filter_map(|el| match el {
         ModifierElement::Size { width, height } => Some(format!("size({:?},{:?})", width, height)),
-        ModifierElement::Background { color, .. } => Some(format!("bg({:?})", color)),
+        ModifierElement::Background { color_fn, .. } => Some("bg(<dynamic>)".into()),
         ModifierElement::Clickable { .. } => Some("click".into()),
         ModifierElement::Focusable => Some("focus".into()),
         ModifierElement::TextContent { content, .. } => Some(format!("text({})", content)),

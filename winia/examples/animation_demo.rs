@@ -152,14 +152,14 @@ fn animation_demo(ctx: &mut ComposeCtx) {
             Column::new()
                 .modifier(Modifier::new()
                     .size(40.0, 40.0)
-                    .graphics_layer_dynamic({
+                    .graphics_layer({
                         let pulse = pulse.clone();
                         move || winia::modifier::GraphicsLayerParams {
                             alpha: pulse.peek(),
                             ..Default::default()
                         }
                     })
-                    .background_dynamic({
+                    .background({
                         let pulse_color = pulse_color.clone();
                         move || pulse_color.peek()
                     }, Shape::Circle)

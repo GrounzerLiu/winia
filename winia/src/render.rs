@@ -45,11 +45,7 @@ fn render_modifier_element<'a>(
     x: f32, y: f32, w: f32, h: f32,
 ) -> Option<TextParams<'a>> {
     match el {
-        ModifierElement::Background { color, shape } => {
-            draw_background(canvas, rect, color, shape);
-            None
-        }
-        ModifierElement::BackgroundDynamic { color_fn, shape } => {
+        ModifierElement::Background { color_fn, shape } => {
             draw_background(canvas, rect, &(color_fn)(), shape);
             None
         }

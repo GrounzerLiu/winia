@@ -294,10 +294,8 @@ pub(crate) enum ModifierElement {
     LayoutWeight { weight: f32 },
 
     // ── Draw 类 ──
-    /// 背景色 + 形状
-    Background { color: Color, shape: Shape },
-    /// 动态背景色（渲染时每帧求值——绘制层颜色动画用，闭包内 `State::peek()`）
-    BackgroundDynamic { color_fn: Arc<dyn Fn() -> Color + Send + Sync>, shape: Shape },
+    /// 背景色 + 形状（color_fn 渲染时求值——静态色或动画闭包统一为闭包）
+    Background { color_fn: Arc<dyn Fn() -> Color + Send + Sync>, shape: Shape },
     /// 边框
     Border { width: f32, color: Color, shape: Shape },
     /// 裁剪
@@ -505,21 +503,14 @@ impl Modifier {
 
 impl Modifier {
     /// 设置背景色和形状
-    pub fn background(self, color: Color, shape: impl Into<Shape>) -> Self {
+    /// 设置背景色和形状。
+    ///
+    /// 静态用法：`background(Color::RED, Shape::Circle)`
+    /// 动画用法（渲染时每帧求值，不触发重组）：`background(|| pulse.peek(), Shape::Circle)`
+    pub fn background(self, color: impl Into<BackgroundColor>, shape: impl Into<Shape>) -> Self {
+        let bg = color.into();
         self.push(ModifierElement::Background {
-            color,
-            shape: shape.into(),
-        })
-    }
-
-    /// 动态背景色（渲染时每帧求值——绘制层颜色动画用，闭包内 `State::peek()`）
-    pub fn background_dynamic(
-        self,
-        color_fn: impl Fn() -> Color + Send + Sync + 'static,
-        shape: impl Into<Shape>,
-    ) -> Self {
-        self.push(ModifierElement::BackgroundDynamic {
-            color_fn: Arc::new(color_fn),
+            color_fn: bg.0,
             shape: shape.into(),
         })
     }
@@ -594,20 +585,14 @@ impl Modifier {
         self.push(ModifierElement::FocusRequesterId { id: fr.id })
     }
 
-    /// 图形层变换（静态值：scale/alpha/rotation/translation）
-    pub fn graphics_layer(self, params: GraphicsLayerParams) -> Self {
+    /// 图形层变换（scale/alpha/rotation/translation）。
+    ///
+    /// 静态用法：`graphics_layer(GraphicsLayerParams { alpha: 0.5, ..Default::default() })`
+    /// 动画用法（渲染时每帧求值，不触发重组）：`graphics_layer(|| GraphicsLayerParams { alpha: pulse.peek(), ..Default::default() })`
+    pub fn graphics_layer(self, params: impl Into<GraphicsLayerSpec>) -> Self {
+        let spec = params.into();
         self.push(ModifierElement::GraphicsLayer {
-            params_fn: Arc::new(move || params),
-        })
-    }
-
-    /// 图形层变换（动态：渲染时每帧求值——绘制层动画用，闭包内 `State::peek()` 读取）
-    pub fn graphics_layer_dynamic(
-        self,
-        params_fn: impl Fn() -> GraphicsLayerParams + Send + Sync + 'static,
-    ) -> Self {
-        self.push(ModifierElement::GraphicsLayer {
-            params_fn: Arc::new(params_fn),
+            params_fn: spec.0,
         })
     }
 
@@ -824,8 +809,7 @@ impl Debug for ModifierElement {
             Self::Offset { x, y } => f.debug_struct("Offset").field("x", x).field("y", y).finish(),
             Self::AlignSelf { alignment } => f.debug_struct("AlignSelf").field("alignment", alignment).finish(),
             Self::LayoutWeight { weight } => f.debug_struct("LayoutWeight").field("weight", weight).finish(),
-            Self::Background { color, shape } => f.debug_struct("Background").field("color", color).field("shape", shape).finish(),
-            Self::BackgroundDynamic { .. } => f.debug_struct("BackgroundDynamic").finish(),
+            Self::Background { .. } => f.debug_struct("Background").finish(),
             Self::Border { width, color, shape } => f.debug_struct("Border").field("width", width).field("color", color).field("shape", shape).finish(),
             Self::Clip { shape } => f.debug_struct("Clip").field("shape", shape).finish(),
             Self::TextContent { content, font_size, .. } => f
@@ -870,7 +854,6 @@ impl ModifierElement {
             | ModifierElement::LayoutWeight { .. } => ElementCategory::Layout,
 
             ModifierElement::Background { .. }
-            | ModifierElement::BackgroundDynamic { .. }
             | ModifierElement::Border { .. }
             | ModifierElement::Clip { .. }
             | ModifierElement::Blur { .. }
@@ -922,6 +905,38 @@ impl Default for GraphicsLayerParams {
             scale_x: 1.0, scale_y: 1.0, alpha: 1.0,
             translation_x: 0.0, translation_y: 0.0, rotation_z: 0.0,
         }
+    }
+}
+
+/// 背景色规格：静态 `Color` 或动态闭包（渲染时每帧求值）。
+/// 通过 `impl Into<BackgroundColor>` 统一 `background()` 入口——传 `Color` 或闭包均可。
+pub struct BackgroundColor(pub(crate) Arc<dyn Fn() -> Color + Send + Sync>);
+
+impl From<Color> for BackgroundColor {
+    fn from(color: Color) -> Self {
+        Self(Arc::new(move || color))
+    }
+}
+
+impl<F: Fn() -> Color + Send + Sync + 'static> From<F> for BackgroundColor {
+    fn from(f: F) -> Self {
+        Self(Arc::new(f))
+    }
+}
+
+/// 图形层规格：静态 `GraphicsLayerParams` 或动态闭包（渲染时每帧求值）。
+/// 通过 `impl Into<GraphicsLayerSpec>` 统一 `graphics_layer()` 入口。
+pub struct GraphicsLayerSpec(pub(crate) Arc<dyn Fn() -> GraphicsLayerParams + Send + Sync>);
+
+impl From<GraphicsLayerParams> for GraphicsLayerSpec {
+    fn from(params: GraphicsLayerParams) -> Self {
+        Self(Arc::new(move || params))
+    }
+}
+
+impl<F: Fn() -> GraphicsLayerParams + Send + Sync + 'static> From<F> for GraphicsLayerSpec {
+    fn from(f: F) -> Self {
+        Self(Arc::new(f))
     }
 }
 
