@@ -166,14 +166,14 @@ pub fn push_animation(anim: Box<dyn AnimationInstance + 'static>) {
 }
 
 /// 注册一个 Animatable<f32> 到全局活跃列表（由 animate_float_as_state 调用）
-pub fn push_animatable(state: State<f32>, target: f32, spec: AnimationSpec) {
-    let current = state.peek();
-    if (current - target).abs() < f32::EPSILON { return; }
+pub fn push_animatable<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(state: State<T>, target: T, spec: AnimationSpec) {
+    if state.peek() == target { return; }
     let sid = state.id();
+    let target_f = AnimatableValue::to_f32(&target);
     {
         let mut list = ACTIVE_ANIMATIONS.lock().unwrap();
         // 检查是否已有同目标动画运行中（同目标直接跳过，防止每帧重启）
-        if list.iter().any(|anim| anim.state_id() == sid && anim.is_animating_to(target)) { return; }
+        if list.iter().any(|anim| anim.state_id() == sid && anim.is_animating_to(target_f)) { return; }
         // 同一 state 但目标不同时移除旧动画（用户改变了目标值）
         list.retain(|anim| anim.state_id() != sid);
     } // 锁释放，下面 anim.update() 不持锁执行用户代码
@@ -206,7 +206,7 @@ pub fn push_animatable_color(state: State<crate::modifier::Color>, target: crate
 }
 
 /// 实现 AnimationInstance for Animatable<f32>
-impl AnimationInstance for Animatable<f32> {
+impl<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static> AnimationInstance for Animatable<T> {
     fn update(&mut self) -> bool {
         self.update()
     }

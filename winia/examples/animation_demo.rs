@@ -183,6 +183,26 @@ fn animation_demo(ctx: &mut ComposeCtx) {
                     .padding(4.0))
                 .build(ctx, |_| {});
 
+            // ── 7. animateDpAsState — Dp 动画 ──
+            Text::new("7. animateDpAsState (Dp)")
+                .font_size(14.0)
+                .color(Color::from_argb(200, 100, 100, 100))
+                .modifier(Modifier::new().padding_vertical(8.0))
+                .build(ctx);
+
+            let dp = ctx.animate_dp_as_state(
+                if clicked.get() { 30.dp() } else { 100.dp() },
+                AnimationSpec::Spring(winia::animation::SpringSpec::default()),
+            );
+            Text::new(format!("Width: {:.0}dp", dp.get().value()))
+                .font_size(12.0)
+                .build(ctx);
+            Column::new()
+                .modifier(Modifier::new()
+                    .size(dp.get().value(), 20.0)
+                    .background(Color::from_argb(255, 63, 81, 181), Shape::rounded(4.0)))
+                .build(ctx, |_| {});
+
             // ── 撑满剩余空间，把按钮推到底部 ──
             Column::new()
                 .modifier(Modifier::new().fill_max_size())

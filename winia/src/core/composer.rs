@@ -135,6 +135,27 @@ impl<'a> ComposeCtx<'a> {
         state
     }
 
+    /// animateDpAsState — 动画 Dp 值（对标 Compose animateDpAsState）
+    pub fn animate_dp_as_state(&mut self, target: crate::unit::Dp, spec: crate::animation::AnimationSpec) -> State<crate::unit::Dp> {
+        let state = self.remember(|| target);
+        crate::animation::push_animatable(state.clone(), target, spec);
+        state
+    }
+
+    /// animateOffsetAsState — 动画 Offset 值（对标 Compose animateOffsetAsState）
+    pub fn animate_offset_as_state(&mut self, target: crate::unit::Offset, spec: crate::animation::AnimationSpec) -> State<crate::unit::Offset> {
+        let state = self.remember(|| target);
+        crate::animation::push_animatable(state.clone(), target, spec);
+        state
+    }
+
+    /// animateSizeAsState — 动画 Size 值（对标 Compose animateSizeAsState）
+    pub fn animate_size_as_state(&mut self, target: crate::unit::Size, spec: crate::animation::AnimationSpec) -> State<crate::unit::Size> {
+        let state = self.remember(|| target);
+        crate::animation::push_animatable(state.clone(), target, spec);
+        state
+    }
+
     /// 设置当前节点的 IME 预输入回调
     pub fn set_current_node_ime_callback(&self, callback: Box<dyn Fn(&str, Option<(usize, usize)>) + Send>) {
         if let Some(&idx) = self.composer.node_stack.last() {
