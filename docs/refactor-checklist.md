@@ -9,18 +9,22 @@
 
 ## 阶段 0：当前状态（已完成，勿重做）
 
-**组合 scope 原型已实现并验证**：
-- `Slot::is_scope` + `SlotTable::start_scope/end_scope/find_slot_mut/mark_dirty_subtree`（`winia/src/core/composer.rs`）
-- `SCOPE_STACK` thread-local + `with_active_scope`（scope 栈顶优先，否则 ACTIVE_SLOT_KEY）（`composer.rs` / `state.rs`）
+**组合 scope 原型已实现并验证（含 review 修复 80e15cb）**：
+- `Slot::is_scope` + `SlotTable::start_scope/end_scope/find_slot_mut/mark_dirty_subtree/current_child_is_scope`（`winia/src/core/composer.rs`）
+- `SCOPE_STACK` + `NODE_DEPTH` thread-local + `with_active_scope`：
+  **组件 build 内（NODE_DEPTH>0）→ 当前节点 key（组件级失效粒度）；组件外（表达式/局部变量）→ 最内层 scope key**（`composer.rs` / `state.rs`）
 - `Composer::start_scope/end_scope`、`ComposeCtx::start_scope/end_scope`（`composer.rs`）
 - `register_dependency` 用 `with_active_scope`（`state.rs`）
-- **content 闭包自动 scope**：`Column::build`/`Row::build` 内部 `ctx.start_scope()` ... `ctx.end_scope()`（`ui/layout_components.rs`）
-- 验证：demo 第 2 节 `let w = alpha.get() * 200.0 + 50.0; .size(w, 30.0)` 不用闭包、动画平滑（188px 中间值）、注册数 5s≈13、114 测试过
+- **content 闭包自动 scope**：`Column::build`/`Row::build`/`Stack::build`/`Button::build` 内部 `ctx.start_scope()` ... `ctx.end_scope()`（`ui/layout_components.rs` / `ui/button.rs`）
+- **replay 修复**：`replay_clean_subtree` 跳过 scope slot（`is_scope` 不建 LayoutNode，只递归重放子，子挂到当前父节点）——消除幽灵 stub/双重挂载
+- **is_scope 重置**：`start_node` 复用 scope slot 时 `set_current_scope(false)`（同路径类型切换）
+- 验证：demo 第 2 节 `let w = alpha.get() * 200.0 + 50.0; .size(w, 30.0)` 不用闭包、动画平滑（188px/Alpha 0.66 中间值）、注册数 5s≈13、**117 测试过**（含 3 个 scope 测试：依赖失效/scope-group 配对/节点优先级）
 
 **当前已知问题**（后续阶段注意）：
 - `modifier_fn` 字段还在 `Column`（`ui/layout_components.rs`）——派生值/属性宏方案下可删
 - `Column` 的 `set_current_node_modifier`（`composer.rs`）——modifier_fn 专用，可删
 - content scope 与组件 start 的顺序：`start_scope` 在 `start_restartable_group` **之前**（content 内表达式注册到 content scope）
+- scope 是 slot 树中 group 的**父**（start_scope 先于 start_restartable_group）——slot 树与 LayoutNode 树结构不一致（scope 无 LayoutNode），replay/路径查找需特殊处理（已修，但属于脆弱点）
 
 ---
 
