@@ -94,6 +94,7 @@ impl PerWindow {
         // 循环 compose 直到没有新的 pending state——处理并发 task 在 compose 期间
         // 完成的 case（第二个 notify 的 state 在第一次 compose 之后才入队）
         // 循环 compose 直到没有新的 pending state
+        self.composer.clear_frame_cache();
         loop {
             let did_compose = self.composer.recompose(|ctx| (self.content)(ctx));
             if let Some(slot_key) = self.focused_slot_key {

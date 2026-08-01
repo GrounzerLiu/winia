@@ -13,11 +13,37 @@ fn animation_demo(ctx: &mut ComposeCtx) {
     Column::new()
         .modifier(Modifier::new().padding(16.0).fill_max_size())
         .build(ctx, |ctx| {
-            // ── Title ──
-            Text::new("Animation Demo")
-                .font_size(22.0)
-                .modifier(Modifier::new().padding_vertical(8.0))
-                .build(ctx);
+            // 在最外层闭包（key 稳定处）remember scroll 状态
+            let scroll_y = ctx.remember(|| ScrollState::new()).get();
+
+            // ── 顶部固定：标题 + Toggle 按钮（不随滚动）──
+            Row::new()
+                .modifier(Modifier::new().fill_max_width())
+                .alignment(winia::layout::Alignment::Center)
+                .build(ctx, |ctx| {
+                    Text::new("Animation Demo")
+                        .font_size(22.0)
+                        .modifier(Modifier::new().padding_vertical(8.0))
+                        .build(ctx);
+                    Column::new()
+                        .modifier(Modifier::new().layout_weight(1.0))
+                        .build(ctx, |_| {});
+                    Button::new()
+                        .on_click({ let c = clicked.clone(); move || { c.update(|v| *v = !*v); } })
+                        .build(ctx, |ctx| {
+                            Text::new(if clicked.get() { "Reset" } else { "Animate!" })
+                                .font_size(16.0)
+                                .build(ctx);
+                        });
+                });
+
+            // ── 可滚动内容区（1-7 节）──
+            Column::new()
+                .modifier(Modifier::new()
+                    .padding_vertical(8.0)
+                    .fill_max_size()
+                    .vertical_scroll(scroll_y))
+                .build(ctx, |ctx| {
 
             // ── 1. Spring Bouncy — 宽度弹跳 ──
             Text::new("1. Spring Bouncy — box width")
@@ -207,20 +233,8 @@ fn animation_demo(ctx: &mut ComposeCtx) {
                     .background(Color::from_argb(255, 63, 81, 181), Shape::rounded(4.0)))
                 .build(ctx, |_| {});
 
-            // ── 撑满剩余空间，把按钮推到底部 ──
-            Column::new()
-                .modifier(Modifier::new().fill_max_size())
-                .build(ctx, |_| {});
-
-            // ── Toggle button ──
-            Button::new()
-                .on_click({ let c = clicked.clone(); move || { c.update(|v| *v = !*v); } })
-                .modifier(Modifier::new().padding_vertical(16.0))
-                .build(ctx, |ctx| {
-                    Text::new(if clicked.get() { "Reset" } else { "Animate!" })
-                        .font_size(16.0)
-                        .build(ctx);
-                });
+            // ── 滚动内容区结束 ──
+            });
         });
 }
 

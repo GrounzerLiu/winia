@@ -479,6 +479,9 @@ pub struct Composer {
     pending_states: Arc<parking_lot::Mutex<Vec<u32>>>,
     /// 上一帧各 slot 路径 → 节点缓存（用于 clean slot 跳过和子树重放）
     prev_nodes: HashMap<Vec<usize>, CachedNode>,
+    /// 本帧暂存（recompose 循环内 Enter 的结果——Skip 时优先恢复它，
+    /// 避免循环内第二次重组用旧 prev_nodes 覆盖本次 Enter 的状态）
+    frame_cache: HashMap<Vec<usize>, CachedNode>,
     /// 当前选区注册表（SelectionContainer compose 时注入，供事件处理访问）
     pub(crate) selection_registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
 
@@ -508,6 +511,7 @@ impl Composer {
             recorded_deps: Vec::new(),
             pending_states,
             prev_nodes: HashMap::new(),
+            frame_cache: HashMap::new(),
             selection_registrar: None,
             #[cfg(test)]
             compose_clean_count: 0,
@@ -554,6 +558,15 @@ impl Composer {
 
     /// 结束当前节点：出栈并建立父子关系
     pub fn end_node(&mut self) {
+        // 在 end_slot（pop path）之前记录本帧结果到 frame_cache（供本帧后续 Skip 恢复）
+        {
+            let slot_path = self.slot_table.current_path().to_vec();
+            let lpath: Vec<usize> = slot_path.get(1..).unwrap_or(&slot_path).to_vec();
+            if let Some(&idx) = self.node_stack.last() {
+                let cached = self.layout_nodes[idx].to_cached();
+                self.frame_cache.insert(lpath, cached);
+            }
+        }
         self.slot_table.end_slot();
 
         if let Some(child_idx) = self.node_stack.pop() {
@@ -637,11 +650,28 @@ impl Composer {
             // 通过 start_node 进入 slot + 创建节点（内部会调 start_slot）
             self.start_node(*child_key, Modifier::new(), None, None);
 
-            // 用缓存覆盖节点所有属性
-            let path = self.slot_table.current_path().to_vec();
+            // 标记为重放 stub：clean-skip 节点无 measure_policy，
+            // 测量必须直接返回缓存尺寸（见 measure_node 的 is_replay_stub 分支）
+            let node_idx = *self.node_stack.last().unwrap();
+            self.layout_nodes[node_idx].is_replay_stub = true;
+
+            // 用缓存覆盖节点属性：
+            // 布局部分（size/position/constraints）来自 prev_nodes（上帧 layout 结果），
+            // 内容部分（modifier）优先 frame_cache（本帧已 Enter 的构建结果，
+            // 避免循环内第二次重组用旧 prev_nodes 覆盖本次 Enter 的内容）
+            let slot_path = self.slot_table.current_path().to_vec();
+            let path: Vec<usize> = slot_path.get(1..).unwrap_or(&slot_path).to_vec();
             if let Some(cached) = self.prev_nodes.get(&path) {
-                let node_idx = *self.node_stack.last().unwrap();
                 self.layout_nodes[node_idx].restore_from(cached);
+                if let Some(frame) = self.frame_cache.get(&path) {
+                    self.layout_nodes[node_idx].modifier = frame.modifier.clone();
+                    self.layout_nodes[node_idx].has_text_content =
+                        crate::layout::node::modifier_has_text(&frame.modifier);
+                    self.layout_nodes[node_idx].has_richtext_content =
+                        crate::layout::node::modifier_has_richtext(&frame.modifier);
+                }
+            } else if let Some(frame) = self.frame_cache.get(&path) {
+                self.layout_nodes[node_idx].restore_from(frame);
             }
 
             // 递归重放孙子节点
@@ -740,6 +770,12 @@ fn register_modifier_deps_recursive(node: &LayoutNode) {
     /// 是否有待处理的 state 变化
     pub fn has_pending_states(&self) -> bool {
         !self.pending_states.lock().is_empty()
+    }
+
+    /// 本帧暂存清理（在 recompose 循环开始前调用——整个重组周期内保留 Enter 结果，
+    /// 供循环内后续 Skip 恢复，避免旧 prev_nodes 覆盖本次 Enter 的状态）
+    pub fn clear_frame_cache(&mut self) {
+        self.frame_cache.clear();
     }
 
     /// 执行待处理的重组。返回 true 表示实际执行了 compose。
