@@ -1250,44 +1250,45 @@ use crate::layout::BoxLayout;
 }
 
 #[cfg(test)]
+#[cfg(test)]
 mod scope_tests {
     use super::*;
 
-    /// scope 内表达式读取注册到 scope：State 变化 → scope 失效（子树强制 Enter）
+    /// scope 内 remember 创建 State（owner=composer）→ 读取注册到 scope →
+    /// State.set() 进入 pending → 第二次组合 scope 子树强制 Enter（leaf 不 clean）
     #[test]
     fn test_scope_dependency_invalidation() {
         let mut composer = Composer::new();
-        let state = crate::core::state::State::new(0.0f32);
+        let holder = std::cell::RefCell::new(None::<crate::core::state::State<f32>>);
 
-        composer.compose(|ctx| {
-            ctx.start_scope();
-            let _v = state.get();
-            let key = ctx.next_key();
-            ctx.start_leaf(key, Modifier::new());
-            ctx.end_node();
-            ctx.end_scope();
-        });
-        eprintln!("[test] dirty={} clean={}", composer.compose_dirty_count, composer.compose_clean_count);
-        assert!(composer.compose_dirty_count >= 1, "leaf 应 dirty（scope 不计入 dirty 统计）");
+        let compose_once = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                ctx.start_scope();
+                let s = ctx.remember(|| 0.0f32);
+                *holder.borrow_mut() = Some(s.clone());
+                let _v = s.get();           // scope 内读取 → 注册到 scope
+                let key = ctx.next_key();
+                ctx.start_leaf(key, Modifier::new());
+                ctx.end_node();
+                ctx.end_scope();
+            });
+        };
 
-        state.set(1.0);
-        composer.compose(|ctx| {
-            ctx.start_scope();
-            let _v = state.get();
-            let key = ctx.next_key();
-            ctx.start_leaf(key, Modifier::new());
-            ctx.end_node();
-            ctx.end_scope();
-        });
-        // scope 失效 → 子树强制 Enter：leaf 不应 clean（不 Skip）
-        assert!(composer.compose_clean_count < 2, "scope 失效后 leaf 不应 clean");
+        compose_once(&mut composer);
+        // 手动触发失效（State 已绑定 composer owner）
+        let s = holder.borrow().clone().unwrap();
+        s.set(1.0);
+        compose_once(&mut composer);
+        // scope 失效 → 子树强制 Enter：leaf 必须 dirty（不 clean）
+        assert_eq!(composer.compose_clean_count, 0,
+            "scope 失效后 leaf 应强制 Enter，实际 clean={}", composer.compose_clean_count);
     }
 
     /// scope 与 restartable group 配对：scope 不产生 LayoutNode，children 数稳定
     #[test]
     fn test_scope_group_pairing() {
         let mut composer = Composer::new();
-        let state = crate::core::state::State::new(false);
+        let holder = std::cell::RefCell::new(None::<crate::core::state::State<bool>>);
 
         let compose_both = |composer: &mut Composer| {
             composer.compose(|ctx| {
@@ -1295,7 +1296,9 @@ mod scope_tests {
                 let group_key = ctx.next_key();
                 let status = ctx.start_restartable_group(group_key, Modifier::new(), TestPolicy);
                 if let GroupStatus::Enter = status {
-                    let _v = state.get();
+                    let s = ctx.remember(|| false);
+                    *holder.borrow_mut() = Some(s.clone());
+                    let _v = s.get();       // group 内读取 → 注册到 group（NODE_DEPTH>0）
                     let key = ctx.next_key();
                     ctx.start_leaf(key, Modifier::new());
                     ctx.end_node();
@@ -1308,43 +1311,41 @@ mod scope_tests {
         compose_both(&mut composer);
         let n1 = composer.layout_root().map(|r| r.children.len());
 
-        state.set(true);
+        let s = holder.borrow().clone().unwrap();
+        s.set(true);
         compose_both(&mut composer);
         let n2 = composer.layout_root().map(|r| r.children.len());
 
         assert_eq!(n1, n2, "scope 不产生 LayoutNode，两次组合 children 数应稳定");
     }
 
-    /// 组件内读取优先节点（NODE_DEPTH），组件外读取注册到 scope
+    /// 组件内读取优先节点（NODE_DEPTH>0），组件外读取注册到 scope
     #[test]
     fn test_node_dependency_precedence() {
         let mut composer = Composer::new();
-        let state = crate::core::state::State::new(0.0f32);
+        let holder = std::cell::RefCell::new(None::<crate::core::state::State<f32>>);
 
-        // 组件内读取（start_leaf 后）→ 注册到 leaf 节点；组件外（scope 内、leaf 前）→ scope
-        composer.compose(|ctx| {
-            ctx.start_scope();
-            let _outer = state.get();       // 组件外 → scope
-            let key = ctx.next_key();
-            ctx.start_leaf(key, Modifier::new());
-            let _inner = state.get();       // 组件内 → leaf 节点
-            ctx.end_node();
-            ctx.end_scope();
-        });
+        let compose_once = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                ctx.start_scope();
+                let s = ctx.remember(|| 0.0f32);
+                *holder.borrow_mut() = Some(s.clone());
+                let _outer = s.get();       // 组件外 → scope
+                let key = ctx.next_key();
+                ctx.start_leaf(key, Modifier::new());
+                let _inner = s.get();       // 组件内 → leaf 节点
+                ctx.end_node();
+                ctx.end_scope();
+            });
+        };
 
-        // state 变化：scope 和 leaf 都应失效（两处都读了）
-        state.set(1.0);
-        composer.compose(|ctx| {
-            ctx.start_scope();
-            let _outer = state.get();
-            let key = ctx.next_key();
-            ctx.start_leaf(key, Modifier::new());
-            let _inner = state.get();
-            ctx.end_node();
-            ctx.end_scope();
-        });
-        // leaf 被强制 Enter（组件内依赖）——clean 少
-        assert!(composer.compose_clean_count < 2, "leaf 依赖 state，不应 clean");
+        compose_once(&mut composer);
+        let s = holder.borrow().clone().unwrap();
+        s.set(1.0);
+        compose_once(&mut composer);
+        // leaf 依赖 state（组件内读取）→ 强制 Enter，不 clean
+        assert_eq!(composer.compose_clean_count, 0,
+            "leaf 依赖 state，应强制 Enter，实际 clean={}", composer.compose_clean_count);
     }
 
     #[derive(Clone, Debug)]
