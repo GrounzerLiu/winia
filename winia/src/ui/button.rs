@@ -134,6 +134,8 @@ impl Button {
             }
         }
 
+        // content 闭包自动成为组合 scope（与 Column 一致）
+        ctx.start_scope();
         match ctx.start_restartable_group(key, modifier, BoxLayout::new().alignment(crate::layout::Alignment::Center)) {
             crate::core::composer::GroupStatus::Skip => {}
             crate::core::composer::GroupStatus::Enter => {
@@ -151,6 +153,7 @@ impl Button {
             }
         }
         ctx.end_restartable_group();
+        ctx.end_scope();
     }
 
     // ── Getters（测试用）──

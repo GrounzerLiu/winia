@@ -103,6 +103,8 @@ impl Row {
             .alignment(self.alignment)
             .spacing(self.spacing)
             .direction(dir);
+        // content 闭包自动成为组合 scope（与 Column 一致）
+        ctx.start_scope();
         match ctx.start_restartable_group(key, self.modifier, policy) {
             crate::core::composer::GroupStatus::Skip => {}
             crate::core::composer::GroupStatus::Enter => {
@@ -110,6 +112,7 @@ impl Row {
             }
         }
         ctx.end_restartable_group();
+        ctx.end_scope();
     }
 }
 
@@ -138,6 +141,8 @@ impl Stack {
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         let key = ctx.next_key();
         let policy = BoxLayout::new().alignment(self.alignment);
+        // content 闭包自动成为组合 scope（与 Column 一致）
+        ctx.start_scope();
         match ctx.start_restartable_group(key, self.modifier, policy) {
             crate::core::composer::GroupStatus::Skip => {}
             crate::core::composer::GroupStatus::Enter => {
@@ -145,6 +150,7 @@ impl Stack {
             }
         }
         ctx.end_restartable_group();
+        ctx.end_scope();
     }
 }
 

@@ -21,11 +21,16 @@ use std::cell::RefCell;
 
 thread_local! { static ACTIVE_SLOT_KEY: Cell<u64> = const { Cell::new(0) }; }
 thread_local! { static SCOPE_STACK: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) }; }
+thread_local! { static NODE_DEPTH: Cell<usize> = const { Cell::new(0) }; }
 
 /// 读取当前组合作用域的依赖注册目标：
-/// scope 栈非空 → 最内层 scope key（组合 scope 内、组件外的 State::get() 注册到这里）；
-/// 否则 → 当前 slot key（组件内）。
+/// 组件 build 内（NODE_DEPTH > 0）→ 当前节点 key（组件级失效粒度）；
+/// 组件外（表达式/局部变量）→ 最内层 scope key。
 pub(crate) fn with_active_scope(f: impl FnOnce(u64)) {
+    if NODE_DEPTH.with(|d| d.get()) > 0 {
+        with_active_slot_key(f);
+        return;
+    }
     SCOPE_STACK.with(|s| {
         let s = s.borrow();
         if let Some(&k) = s.last() {
@@ -523,6 +528,11 @@ impl SlotTable {
         self.end_slot();
     }
 
+    /// 设置当前（栈顶）slot 是否为 scope（start_node 复用 scope slot 时重置为普通节点）
+    fn set_current_scope(&mut self, is_scope: bool) {
+        self.current_slot().is_scope = is_scope;
+    }
+
     /// 在 slot 树中查找 key 对应的节点，并将其及所有祖先标记 dirty。
     /// 返回 true 表示找到了目标。
     fn mark_dirty_path(slot: &mut Slot, key: u64) -> bool {
@@ -547,6 +557,14 @@ impl SlotTable {
     /// 返回当前 slot 的子 slot 引用（用于 clean subtree 重放）
     fn current_children(&mut self) -> &[Slot] {
         &self.current_slot().children
+    }
+
+    /// 当前 slot 的指定子 slot 是否为 scope（replay 时 scope 不建 LayoutNode，只递归）
+    fn current_child_is_scope(&mut self, key: u64) -> bool {
+        self.current_slot().children.iter()
+            .find(|c| c.key == key)
+            .map(|c| c.is_scope)
+            .unwrap_or(false)
     }
 }
 
@@ -659,7 +677,10 @@ impl Composer {
     /// 在组合树中开始一个节点（由组件的 build 方法调用）
     pub fn start_node(&mut self, key: u64, modifier: Modifier, policy: Option<Box<dyn MeasurePolicy>>, on_remove: Option<Box<dyn FnOnce() + Send>>) {
         self.current_group_key = key as u32;
+        NODE_DEPTH.with(|d| d.set(d.get() + 1));
         let slot_status = self.slot_table.start_slot(key);
+        // 普通节点：复用 scope slot 时重置为普通（同路径类型切换场景）
+        self.slot_table.set_current_scope(false);
         #[cfg(test)] { match slot_status { SlotStatus::Clean => self.compose_clean_count += 1, _ => self.compose_dirty_count += 1, } }
 
         // 创建对应的 LayoutNode
@@ -682,6 +703,7 @@ impl Composer {
 
     /// 结束当前节点：出栈并建立父子关系
     pub fn end_node(&mut self) {
+        NODE_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
         // 在 end_slot（pop path）之前记录本帧结果到 frame_cache（供本帧后续 Skip 恢复）
         {
             let slot_path = self.slot_table.current_path().to_vec();
@@ -771,6 +793,17 @@ impl Composer {
             .collect();
 
         for (child_key, child_slot_count) in &children {
+            // scope slot：不建 LayoutNode（scope 无布局节点），只递归重放其子
+            //（子组件挂到当前父 LayoutNode——node_stack 顶是 skip 的 group 节点）
+            if self.slot_table.current_child_is_scope(*child_key) {
+                self.slot_table.start_scope(*child_key);
+                if *child_slot_count > 1 {
+                    self.replay_clean_subtree();
+                }
+                self.slot_table.end_scope();
+                continue;
+            }
+
             // 通过 start_node 进入 slot + 创建节点（内部会调 start_slot）
             self.start_node(*child_key, Modifier::new(), None, None);
 
@@ -1213,5 +1246,121 @@ use crate::layout::BoxLayout;
         assert!(composer.compose_dirty_count + composer.compose_clean_count >= 2,
             "expected >=2 slots, got dirty={} clean={}",
             composer.compose_dirty_count, composer.compose_clean_count);
+    }
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+
+    /// scope 内表达式读取注册到 scope：State 变化 → scope 失效（子树强制 Enter）
+    #[test]
+    fn test_scope_dependency_invalidation() {
+        let mut composer = Composer::new();
+        let state = crate::core::state::State::new(0.0f32);
+
+        composer.compose(|ctx| {
+            ctx.start_scope();
+            let _v = state.get();
+            let key = ctx.next_key();
+            ctx.start_leaf(key, Modifier::new());
+            ctx.end_node();
+            ctx.end_scope();
+        });
+        eprintln!("[test] dirty={} clean={}", composer.compose_dirty_count, composer.compose_clean_count);
+        assert!(composer.compose_dirty_count >= 1, "leaf 应 dirty（scope 不计入 dirty 统计）");
+
+        state.set(1.0);
+        composer.compose(|ctx| {
+            ctx.start_scope();
+            let _v = state.get();
+            let key = ctx.next_key();
+            ctx.start_leaf(key, Modifier::new());
+            ctx.end_node();
+            ctx.end_scope();
+        });
+        // scope 失效 → 子树强制 Enter：leaf 不应 clean（不 Skip）
+        assert!(composer.compose_clean_count < 2, "scope 失效后 leaf 不应 clean");
+    }
+
+    /// scope 与 restartable group 配对：scope 不产生 LayoutNode，children 数稳定
+    #[test]
+    fn test_scope_group_pairing() {
+        let mut composer = Composer::new();
+        let state = crate::core::state::State::new(false);
+
+        let compose_both = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                ctx.start_scope();
+                let group_key = ctx.next_key();
+                let status = ctx.start_restartable_group(group_key, Modifier::new(), TestPolicy);
+                if let GroupStatus::Enter = status {
+                    let _v = state.get();
+                    let key = ctx.next_key();
+                    ctx.start_leaf(key, Modifier::new());
+                    ctx.end_node();
+                }
+                ctx.end_restartable_group();
+                ctx.end_scope();
+            });
+        };
+
+        compose_both(&mut composer);
+        let n1 = composer.layout_root().map(|r| r.children.len());
+
+        state.set(true);
+        compose_both(&mut composer);
+        let n2 = composer.layout_root().map(|r| r.children.len());
+
+        assert_eq!(n1, n2, "scope 不产生 LayoutNode，两次组合 children 数应稳定");
+    }
+
+    /// 组件内读取优先节点（NODE_DEPTH），组件外读取注册到 scope
+    #[test]
+    fn test_node_dependency_precedence() {
+        let mut composer = Composer::new();
+        let state = crate::core::state::State::new(0.0f32);
+
+        // 组件内读取（start_leaf 后）→ 注册到 leaf 节点；组件外（scope 内、leaf 前）→ scope
+        composer.compose(|ctx| {
+            ctx.start_scope();
+            let _outer = state.get();       // 组件外 → scope
+            let key = ctx.next_key();
+            ctx.start_leaf(key, Modifier::new());
+            let _inner = state.get();       // 组件内 → leaf 节点
+            ctx.end_node();
+            ctx.end_scope();
+        });
+
+        // state 变化：scope 和 leaf 都应失效（两处都读了）
+        state.set(1.0);
+        composer.compose(|ctx| {
+            ctx.start_scope();
+            let _outer = state.get();
+            let key = ctx.next_key();
+            ctx.start_leaf(key, Modifier::new());
+            let _inner = state.get();
+            ctx.end_node();
+            ctx.end_scope();
+        });
+        // leaf 被强制 Enter（组件内依赖）——clean 少
+        assert!(composer.compose_clean_count < 2, "leaf 依赖 state，不应 clean");
+    }
+
+    #[derive(Clone, Debug)]
+    struct TestPolicy;
+    impl crate::layout::node::MeasurePolicy for TestPolicy {
+        fn measure(&self, children: &mut [crate::layout::node::LayoutNode], constraints: crate::layout::constraints::Constraints)
+            -> (crate::layout::node::Size, Vec<crate::layout::node::Placement>) {
+            let mut h = 0.0f32;
+            for c in children.iter_mut() {
+                let (s, _) = crate::layout::node::measure_node(c, constraints);
+                h += s.height;
+            }
+            (crate::layout::node::Size::new(0.0, h), Vec::new())
+        }
+        fn place(&self, children: &mut [crate::layout::node::LayoutNode], _placements: &[crate::layout::node::Placement]) {
+            let _ = children;
+        }
     }
 }
