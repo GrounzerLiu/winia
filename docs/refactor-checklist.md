@@ -24,37 +24,50 @@
 
 ---
 
-## 阶段 2：派生值（DerivedFloat 运算符）
+## 阶段 2：派生值（泛型 DerivedValue<T>）
 
-**目标**：`.size(&alpha * 200.0 + 50.0, 30.0)` 内联表达式（非闭包、非宏、非 `let w` 中间变量）
+**目标**：`.size(&alpha * 200.0 + 50.0, 30.0)` 内联表达式（非闭包、非宏、非 `let w` 中间变量）；
+泛型化支持 Color/Dp/Offset 等任意类型派生。
 
 ### 步骤
 
-**1. `winia/src/core/state.rs` 末尾加 `DerivedFloat`**：
+**1. `winia/src/core/state.rs` 末尾加泛型 `DerivedValue<T>`**：
 ```rust
 #[derive(Clone)]
-pub struct DerivedFloat(pub(crate) Arc<dyn Fn() -> f32 + Send + Sync>);
-impl DerivedFloat {
-    pub fn new(f: impl Fn() -> f32 + Send + Sync + 'static) -> Self { DerivedFloat(Arc::new(f)) }
-    pub fn get(&self) -> f32 { (self.0)() }
+pub struct DerivedValue<T>(pub(crate) Arc<dyn Fn() -> T + Send + Sync>);
+
+impl<T> DerivedValue<T> {
+    pub fn new(f: impl Fn() -> T + Send + Sync + 'static) -> Self { DerivedValue(Arc::new(f)) }
+    pub fn get(&self) -> T { (self.0)() }
 }
-// 运算符（macro 批量）：
-// impl Add/Sub/Mul/Div<f32> for DerivedFloat / &DerivedFloat / &State<f32>，Output = DerivedFloat
+
+/// f32 派生别名（运算符返回类型）
+pub type DerivedFloat = DerivedValue<f32>;
+
+// 运算符（macro 批量，Output = DerivedValue<f32>）：
+// impl Add/Sub/Mul/Div<f32> for DerivedFloat / &DerivedFloat / &State<f32>
 // 常数在左：impl Mul<&State<f32>> for f32
 // 每个 impl 内部：闭包持 State clone（State 是 Arc 句柄，clone 廉价），move || s.get() $op rhs
 ```
 
 **2. `winia/src/modifier.rs` `SizeValue` 加 `From`**：
 ```rust
-impl From<crate::core::state::DerivedFloat> for SizeValue { /* Dynamic(Arc::new(move || d.get())) */ }
-impl From<&crate::core::state::DerivedFloat> for SizeValue { /* clone 后同上 */ }
+impl From<crate::core::state::DerivedValue<f32>> for SizeValue { /* Dynamic(Arc::new(move || d.get())) */ }
+impl From<&crate::core::state::DerivedValue<f32>> for SizeValue { /* clone 后同上 */ }
 ```
 
-**3. demo 第 2 节改内联**：
+**3. （可选）`BackgroundColor` 加 `From<DerivedValue<Color>>`**（颜色派生）：
+```rust
+impl From<DerivedValue<Color>> for BackgroundColor { /* color_fn = move || d.get() */ }
+impl From<&DerivedValue<Color>> for BackgroundColor { /* clone 后同上 */ }
+// 用法：.background(&pulse_color, Shape::Circle) 或 DerivedValue::new(|| pulse_color.get())
+```
+
+**4. demo 第 2 节改内联**：
 ```rust
 .size(&alpha * 200.0 + 50.0, 30.0)   // 替换 let w = alpha.get() * 200.0 + 50.0
 ```
-（`background` 颜色可用 `let c` 或闭包——颜色派生可选，先只做 size）
+（`background` 颜色可用 `let c` 或颜色派生）
 
 ### 验证
 - `cargo test --lib` 全过
@@ -62,9 +75,10 @@ impl From<&crate::core::state::DerivedFloat> for SizeValue { /* clone 后同上 
 - 注册数仍低（<20/5s）
 
 ### 已知坑
-- `&alpha * 200.0` 中 alpha 是局部 `State<f32>`，借用后可被后续使用（DerivedFloat move 了 clone）
+- `&alpha * 200.0` 中 alpha 是局部 `State<f32>`，借用后可被后续使用（DerivedValue move 了 clone）
 - 运算符 impl 可能与其他类型冲突（`f32 * &State` 与 `&State * f32` 方向不同，需都实现）
 - `SizeValue` 的 `resolved_size` 已支持 `SizeValue::Dynamic(f) => Some(f())`——派生值走 Dynamic 分支即可（`modifier.rs` ~775 行）
+- 泛型 `Arc<dyn Fn() -> T>` 的 Clone：手动 impl（Arc 共享）或 derive（Arc<T:?Sized> 是 Clone）——derive 即可
 
 ---
 
