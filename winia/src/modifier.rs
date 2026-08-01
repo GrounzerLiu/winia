@@ -761,18 +761,21 @@ impl Modifier {
         None
     }
 
-    /// 动态尺寸（测量时求值）——返回 (width_fn, height_fn) 调用结果。
-    /// 动态 SizeValue（State/闭包）在测量时求值并注册依赖到本节点。
-    pub fn dynamic_size(&self) -> Option<(f32, f32)> {
+    /// 解析 Size 元素的尺寸（静态/动态单轴独立解析）——返回 (width, height) 解析值，
+    /// None 表示该轴不约束（Auto/Fill）。
+    pub fn resolved_size(&self) -> Option<(Option<f32>, Option<f32>)> {
+        use crate::unit::{current_density, Dp, Px};
         for el in &self.elements {
-            if let ModifierElement::Size { width: SizeValue::Dynamic(w), height: SizeValue::Dynamic(h) } = el {
-                return Some(((w)(), (h)()));
-            }
-            if let ModifierElement::Size { width: SizeValue::Dynamic(w), .. } = el {
-                return Some(((w)(), f32::NAN));
-            }
-            if let ModifierElement::Size { height: SizeValue::Dynamic(h), .. } = el {
-                return Some((f32::NAN, (h)()));
+            if let ModifierElement::Size { width, height } = el {
+                let resolve = |sv: &SizeValue| -> Option<f32> {
+                    match sv {
+                        SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(Dp(v))) => Some(*v),
+                        SizeValue::Static(Dimension::Px(p)) => Some(p.to_logical(current_density())),
+                        SizeValue::Static(Dimension::Auto) | SizeValue::Static(Dimension::Fill) => None,
+                        SizeValue::Dynamic(f) => Some(f()),
+                    }
+                };
+                return Some((resolve(width), resolve(height)));
             }
         }
         None

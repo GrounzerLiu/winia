@@ -85,10 +85,11 @@ fn animation_demo(ctx: &mut ComposeCtx) {
                 }),
             );
             {
+                let alpha_w = alpha.clone();
                 let alpha_bg = alpha.clone();
                 Column::new()
                     .modifier(Modifier::new()
-                        .size(alpha.clone(), 30.0)
+                        .size(move || alpha_w.get() * 200.0 + 50.0, 30.0)
                         .background(move || Color::from_argb((alpha_bg.get() * 255.0) as u8, 76, 175, 80), Shape::rounded(6.0))
                         .padding(4.0))
                     .build(ctx, |ctx| {

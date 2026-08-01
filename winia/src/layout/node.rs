@@ -629,13 +629,14 @@ pub(crate) fn measure_node(
     // 应用 modifier 中的 Layout 约束（使用查询方法）
     let mut inner_constraints = constraints;
 
-    // 0. 应用动态尺寸（测量时求值——布局属性动画，State::get() 注册依赖到本节点）
-    if let Some((dw, dh)) = node.modifier.dynamic_size() {
-        if !dw.is_nan() { inner_constraints = inner_constraints.tighten_width(dw); }
-        if !dh.is_nan() { inner_constraints = inner_constraints.tighten_height(dh); }
+    // 应用 Size 元素（静态/动态单轴独立解析——布局属性动画用 State/闭包，
+    // 测量时求值并注册依赖到本节点）
+    if let Some((sw, sh)) = node.modifier.resolved_size() {
+        if let Some(w) = sw { inner_constraints = inner_constraints.tighten_width(w); }
+        if let Some(h) = sh { inner_constraints = inner_constraints.tighten_height(h); }
     }
 
-    // 1. 应用固定尺寸
+    // 1. 固定尺寸（仅 Static+Static 的 Size——由 resolved_size 已处理，此分支保留兼容其他查询）
     if let Some((width, height)) = node.modifier.fixed_size() {
         use crate::modifier::Dimension;
         if let Dimension::Fixed(w) | Dimension::Dp(crate::unit::Dp(w)) = width {
