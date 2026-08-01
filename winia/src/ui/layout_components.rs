@@ -10,6 +10,7 @@ use crate::modifier::Modifier;
 
 pub struct Column {
     modifier: Modifier,
+    modifier_fn: Option<Box<dyn Fn() -> Modifier + Send + Sync>>,
     arrangement: Arrangement,
     alignment: Alignment,
     spacing: f32,
@@ -19,6 +20,7 @@ impl Column {
     pub fn new() -> Self {
         Column {
             modifier: Modifier::new(),
+            modifier_fn: None,
             arrangement: Arrangement::Start,
             alignment: Alignment::Start,
             spacing: 0.0,
@@ -26,6 +28,14 @@ impl Column {
     }
 
     pub fn modifier(mut self, m: Modifier) -> Self { self.modifier = self.modifier.then(m); self }
+
+    /// 延迟求值的 modifier（研究用）：build 内 start 节点后求值，
+    /// `State::get()` 注册依赖到本节点 → 动画值变化 → 本节点 Enter → 重算 modifier
+    pub fn modifier_fn(mut self, f: impl Fn() -> Modifier + Send + Sync + 'static) -> Self {
+        self.modifier_fn = Some(Box::new(f));
+        self
+    }
+
     pub fn arrangement(mut self, a: Arrangement) -> Self { self.arrangement = a; self }
     pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
     pub fn spacing(mut self, s: f32) -> Self { self.spacing = s; self }
@@ -38,9 +48,14 @@ impl Column {
             .alignment(self.alignment)
             .spacing(self.spacing)
             .direction(dir);
+        let modifier_fn = self.modifier_fn;
         match ctx.start_restartable_group(key, self.modifier, policy) {
             crate::core::composer::GroupStatus::Skip => {}
             crate::core::composer::GroupStatus::Enter => {
+                // modifier_fn：start 后求值（ACTIVE = 本节点）→ State::get() 注册依赖到本节点
+                if let Some(f) = modifier_fn {
+                    ctx.set_current_node_modifier(f());
+                }
                 content(ctx);
             }
         }

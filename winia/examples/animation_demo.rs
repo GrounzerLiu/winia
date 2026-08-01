@@ -84,21 +84,23 @@ fn animation_demo(ctx: &mut ComposeCtx) {
                     interpolator: winia::animation::interpolator::linear,
                 }),
             );
-            {
-                let alpha_w = alpha.clone();
-                let alpha_bg = alpha.clone();
-                Column::new()
-                    .modifier(Modifier::new()
-                        .size(move || alpha_w.get() * 200.0 + 50.0, 30.0)
-                        .background(move || Color::from_argb((alpha_bg.get() * 255.0) as u8, 76, 175, 80), Shape::rounded(6.0))
-                        .padding(4.0))
-                    .build(ctx, |ctx| {
-                        Text::new(format!("Alpha: {:.2}", alpha.get()))
-                            .font_size(12.0)
-                            .color(Color::from_argb(255, 255, 255, 255))
-                            .build(ctx);
-                    });
-            }
+            // 组合 scope：scope 内（组件外）的 State::get() 注册到 scope，
+            // alpha 变化 → scope 失效 → 整段代码重跑（Column 不 Skip）→ size(w) 重算——不用闭包
+            ctx.start_scope();
+            let w = alpha.get() * 200.0 + 50.0;
+            let c = Color::from_argb((alpha.get() * 255.0) as u8, 76, 175, 80);
+            Column::new()
+                .modifier(Modifier::new()
+                    .size(w, 30.0)
+                    .background(c, Shape::rounded(6.0))
+                    .padding(4.0))
+                .build(ctx, |ctx| {
+                    Text::new(format!("Alpha: {:.2}", alpha.get()))
+                        .font_size(12.0)
+                        .color(Color::from_argb(255, 255, 255, 255))
+                        .build(ctx);
+                });
+            ctx.end_scope();
 
             // ── 3. updateTransition — 位置偏移 ──
             Text::new("3. updateTransition — offset")

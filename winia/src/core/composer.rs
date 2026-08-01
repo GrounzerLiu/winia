@@ -17,8 +17,24 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::any::Any;
 use std::cell::Cell;
+use std::cell::RefCell;
 
 thread_local! { static ACTIVE_SLOT_KEY: Cell<u64> = const { Cell::new(0) }; }
+thread_local! { static SCOPE_STACK: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) }; }
+
+/// 读取当前组合作用域的依赖注册目标：
+/// scope 栈非空 → 最内层 scope key（组合 scope 内、组件外的 State::get() 注册到这里）；
+/// 否则 → 当前 slot key（组件内）。
+pub(crate) fn with_active_scope(f: impl FnOnce(u64)) {
+    SCOPE_STACK.with(|s| {
+        let s = s.borrow();
+        if let Some(&k) = s.last() {
+            f(k);
+        } else {
+            with_active_slot_key(f);
+        }
+    });
+}
 
 /// 读取当前 compose 位置的 slot key（供 state.rs 依赖追踪使用）
 pub(crate) fn with_active_slot_key(f: impl FnOnce(u64)) {
@@ -83,6 +99,18 @@ impl<'a> ComposeCtx<'a> {
         self.composer.next_group_key()
     }
 
+    /// 开始一个组合 scope——scope 内（组件外）的 `State::get()` 注册依赖到本 scope，
+    /// State 变化 → scope 失效 → 其内组合代码整体重跑（组件不 Skip，modifier 重算）。
+    /// 与 `end_scope` 配对。
+    pub fn start_scope(&mut self) -> u64 {
+        self.composer.start_scope()
+    }
+
+    /// 结束组合 scope（与 start_scope 配对）
+    pub fn end_scope(&mut self) {
+        self.composer.end_scope();
+    }
+
     /// 获取当前正在构建的节点 ID（用于注册选中、焦点等外部状态）
     pub fn current_node_id(&self) -> Option<u64> {
         self.composer.current_node_id()
@@ -108,6 +136,16 @@ impl<'a> ComposeCtx<'a> {
                 let node = &self.composer.layout_nodes[*idx];
                 *node.registrar.borrow_mut() = Some(reg);
             }
+        }
+    }
+
+    /// 覆盖当前节点的 modifier（modifier_fn 延迟求值用——start 后用求得的 modifier 替换空壳）
+    pub fn set_current_node_modifier(&mut self, m: Modifier) {
+        if let Some(&idx) = self.composer.node_stack.last() {
+            let node = &mut self.composer.layout_nodes[idx];
+            node.modifier = m;
+            node.has_text_content = crate::layout::node::modifier_has_text(&node.modifier);
+            node.has_richtext_content = crate::layout::node::modifier_has_richtext(&node.modifier);
         }
     }
 
@@ -296,6 +334,8 @@ struct Slot {
     dirty: bool,
     /// 当前帧中此 slot 的子树总 slot 数（含自身；用于 skip 时重放）
     children_count: usize,
+    /// 是否为组合 scope（无 LayoutNode 的作用域节点——依赖注册目标 + 失效传播单位）
+    is_scope: bool,
 }
 
 impl Slot {
@@ -306,6 +346,7 @@ impl Slot {
             children: Vec::new(),
             dirty: true, // 新创建的 slot 总是 dirty（首次必须执行）
             children_count: 1, // 自身
+            is_scope: false,
         }
     }
 
@@ -443,7 +484,43 @@ impl SlotTable {
     pub(crate) fn mark_dirty(&mut self, key: u64) {
         self.dirty_keys.insert(key);
         let root = &mut self.root_slot;
+        // scope 失效 → 整个子树强制 Enter（scope 内组合代码重跑，modifier 重算）
+        if let Some(slot) = SlotTable::find_slot_mut(root, key) {
+            if slot.is_scope {
+                SlotTable::mark_dirty_subtree(slot);
+            }
+        }
         SlotTable::mark_dirty_path(root, key);
+    }
+
+    /// 在 slot 树中查找 key 对应的 slot
+    fn find_slot_mut<'a>(slot: &'a mut Slot, key: u64) -> Option<&'a mut Slot> {
+        if slot.key == key { return Some(slot); }
+        for child in &mut slot.children {
+            if let Some(s) = SlotTable::find_slot_mut(child, key) { return Some(s); }
+        }
+        None
+    }
+
+    /// 标记 slot 及其所有后代 dirty（scope 失效传播）
+    fn mark_dirty_subtree(slot: &mut Slot) {
+        slot.dirty = true;
+        for child in &mut slot.children {
+            SlotTable::mark_dirty_subtree(child);
+        }
+    }
+
+    /// 开始一个组合 scope（无 LayoutNode 的作用域节点——依赖注册目标 + 失效传播单位）
+    fn start_scope(&mut self, key: u64) -> SlotStatus {
+        let status = self.start_slot(key);
+        // 标记当前（刚进入的）slot 为 scope
+        self.current_slot().is_scope = true;
+        status
+    }
+
+    /// 结束组合 scope
+    fn end_scope(&mut self) {
+        self.end_slot();
     }
 
     /// 在 slot 树中查找 key 对应的节点，并将其及所有祖先标记 dirty。
@@ -562,6 +639,21 @@ impl Composer {
         let key = (h << 32) | (self.next_group_key_counter as u64);
         self.next_group_key_counter += 1;
         key
+    }
+
+    /// 开始一个组合 scope（无 LayoutNode 的作用域节点——组合代码重跑的失效单位）。
+    /// 返回 scope key；`State::get()` 在 scope 内（组件外）注册依赖到 scope。
+    pub fn start_scope(&mut self) -> u64 {
+        let key = self.next_group_key();
+        self.slot_table.start_scope(key);
+        SCOPE_STACK.with(|s| s.borrow_mut().push(key));
+        key
+    }
+
+    /// 结束组合 scope
+    pub fn end_scope(&mut self) {
+        self.slot_table.end_scope();
+        SCOPE_STACK.with(|s| { s.borrow_mut().pop(); });
     }
 
     /// 在组合树中开始一个节点（由组件的 build 方法调用）

@@ -309,8 +309,9 @@ pub fn record_dep(state_id: u32, slot_key: u64) {
 
 /// State::get 中调用：若在 compose 上下文中，记录依赖
 pub fn register_dependency(state_id: u32) {
-    // 通过 thread-local ACTIVE_SLOT_KEY 获取当前 slot key
-    crate::core::composer::with_active_slot_key(|key| {
+    // 依赖注册目标：scope 栈非空 → 最内层 scope（组合 scope 内、组件外的读取）；
+    // 否则 → 当前 slot key（组件内 build 的读取）
+    crate::core::composer::with_active_scope(|key| {
         record_dep(state_id, key);
     });
 }
