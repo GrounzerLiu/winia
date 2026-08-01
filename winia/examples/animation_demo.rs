@@ -84,9 +84,8 @@ fn animation_demo(ctx: &mut ComposeCtx) {
                     interpolator: winia::animation::interpolator::linear,
                 }),
             );
-            // 组合 scope：scope 内（组件外）的 State::get() 注册到 scope，
-            // alpha 变化 → scope 失效 → 整段代码重跑（Column 不 Skip）→ size(w) 重算——不用闭包
-            ctx.start_scope();
+            // content 闭包自动是 scope：alpha.get() 表达式注册到所在 content scope，
+            // alpha 变化 → 该 content 重跑 → w/c 重算——不用闭包、不用显式 start_scope
             let w = alpha.get() * 200.0 + 50.0;
             let c = Color::from_argb((alpha.get() * 255.0) as u8, 76, 175, 80);
             Column::new()
@@ -100,7 +99,6 @@ fn animation_demo(ctx: &mut ComposeCtx) {
                         .color(Color::from_argb(255, 255, 255, 255))
                         .build(ctx);
                 });
-            ctx.end_scope();
 
             // ── 3. updateTransition — 位置偏移 ──
             Text::new("3. updateTransition — offset")

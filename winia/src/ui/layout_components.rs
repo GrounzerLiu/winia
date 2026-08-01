@@ -49,6 +49,9 @@ impl Column {
             .spacing(self.spacing)
             .direction(dir);
         let modifier_fn = self.modifier_fn;
+        // content 闭包自动成为组合 scope：content 内（组件外）的 State::get() 注册到本 content scope，
+        // State 变化 → 本 content 整体重跑（子组件不 Skip，modifier/表达式重算）——无需显式 start_scope
+        ctx.start_scope();
         match ctx.start_restartable_group(key, self.modifier, policy) {
             crate::core::composer::GroupStatus::Skip => {}
             crate::core::composer::GroupStatus::Enter => {
@@ -60,6 +63,7 @@ impl Column {
             }
         }
         ctx.end_restartable_group();
+        ctx.end_scope();
     }
 }
 
