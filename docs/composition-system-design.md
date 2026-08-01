@@ -177,44 +177,43 @@ fn remember<T>(ctx, key, init) -> State<T> {
 
 ### 三种 API 形态（渐进）
 
-**A. builder 自动 scope（当前方向，最小改动）**
+**A. builder + content 闭包（**当前方向，已实现**）**
 ```rust
-Column::new().build(ctx, |ctx| { ... });  // content 闭包 = Group
+let w = alpha.get() * 200.0 + 50.0;   // 表达式直接写（无闭包）
+let c = Color::from_argb((alpha.get() * 255.0) as u8, 76, 175, 80);
+Column::new()
+    .modifier(Modifier::new()
+        .size(w, 30.0)          // 静态值（content scope 重跑时重算）
+        .background(c, Shape::rounded(6.0)))
+    .build(ctx, |ctx| {          // content 闭包（用户可接受的唯一闭包形式）
+        Text::new(format!("Alpha: {:.2}", alpha.get()))...;
+    });
 ```
-- 每个 build 的 content = Group
+- **content 闭包自动是 Group（scope）**：content 内表达式注册到本 scope，
+  State 变化 → scope 失效 → content 重跑 → `w`/`c` 重算
+- **modifier 不用闭包**（构建时值 + scope 重跑），派生值仅可选补充
+- 闭包**只出现在 content**（组件内容），事件回调（on_click）天然闭包
 - 粒度 = content 闭包（拆小 content 即细粒度）
-- 局限：modifier 在调用方 Group 求值（父粒度）
 
-**B. 组合函数标记（推荐，中等改动）**
+**B. 派生值（可选补充，非必须）**
 ```rust
-// 宏标记组合函数：函数体 = Group
-composable_fn!(fn section2(ctx, alpha: &State<f32>) {
-    let w = alpha.get() * 200.0 + 50.0;  // 注册到 section2 的 Group
-    Column::new().modifier(Modifier::new().size(w, 30.0)).build(ctx, ...);
-});
+.size(&alpha * 200.0 + 50.0, 30.0)   // 运算符表达式（State 运算返回延迟表达式）
 ```
-- 宏展开：函数入口 startGroup（压 CURRENT_GROUP）、出口 endGroup
-- **粒度 = 用户函数**（对标 Compose @Composable）
-- modifier 在函数 Group 内求值 → 注册到函数 Group → 失效只重跑该函数
+- 替代"content 内先算 let w"的写法，直接内联
+- 不是闭包也不是宏；`size` 统一收 `impl Into<SizeValue>`（静态/Dynamic/派生值）
 
-**C. 声明式宏（远期，最接近 Compose）**
+**C. 组合函数宏（远期，仅当需要函数级粒度）**
 ```rust
-compose! {
-    Column {
-        Text(format!("Count: {}", count.get()))
-        Box(Modifier.size(count.get() * 2, 24)) { ... }
-    }
-}
+composable_fn!(fn section2(ctx, alpha: &State<f32>) { ... });
 ```
-- 宏把块转成组合调用序列，自动产生 Group
-- 需要宏引擎支持（proc-macro），工程量大
+- 粒度 = 用户函数（对标 @Composable），但引入自定义宏（用户偏好避免）
 
 ### 推荐路线
-1. **阶段 1（当前分支）**：A（content 自动 scope）——验证机制，零显式
-2. **阶段 2**：B（composable_fn 宏）——细粒度组合函数，对标 Compose @Composable
+1. **阶段 1（当前分支，已完成）**：A（builder + content 闭包自动 scope）——表达式不用闭包，验证机制
+2. **阶段 2（可选）**：B（派生值运算符）——`&alpha * 200.0 + 50.0` 内联替代 `let w`，非闭包非宏
 3. **阶段 3**：布局树独立缓存（组合 diff → 增量更新 LayoutNode）
 4. **阶段 4**：参数相等性跳过（Stable trait）——真正 Compose 式 Skip
-5. **远期**：C（声明式宏）——若 API 体验要求高
+5. **远期（可选）**：C（composable_fn 宏）——仅当需要函数级粒度且用户接受宏
 
 ## 五、关键权衡
 
