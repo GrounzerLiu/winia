@@ -590,7 +590,8 @@ impl Default for SpringSpec {
     fn default() -> Self {
         Self {
             damping_ratio: 1.0,
-            stiffness: 1500.0,
+            // Compose StiffnessLow 级别（200）：收敛 ~300-400ms，过渡平滑明显
+            stiffness: 200.0,
             mass: 1.0,
             threshold: 0.01,
         }

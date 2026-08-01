@@ -622,8 +622,18 @@ pub(crate) fn measure_node(
         return (node.measured_size, Vec::new());
     }
 
+    // 设置 ACTIVE_SLOT_KEY = 本节点 slot——使 SizeDynamic 闭包内的 State::get()
+    // 把依赖注册到本节点（动画值变化 → 本节点 dirty → 重组重测）
+    crate::core::composer::set_active_slot_key(node.slot_key);
+
     // 应用 modifier 中的 Layout 约束（使用查询方法）
     let mut inner_constraints = constraints;
+
+    // 0. 应用动态尺寸（测量时求值——布局属性动画）
+    if let Some((w, h)) = node.modifier.dynamic_size() {
+        inner_constraints = inner_constraints.tighten_width(w);
+        inner_constraints = inner_constraints.tighten_height(h);
+    }
 
     // 1. 应用固定尺寸
     if let Some((width, height)) = node.modifier.fixed_size() {

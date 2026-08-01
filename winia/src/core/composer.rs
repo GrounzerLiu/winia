@@ -25,6 +25,11 @@ pub(crate) fn with_active_slot_key(f: impl FnOnce(u64)) {
     ACTIVE_SLOT_KEY.with(|c| f(c.get()));
 }
 
+/// 设置当前 slot key（measure_node 用它把动态尺寸的依赖注册到节点）
+pub(crate) fn set_active_slot_key(key: u64) {
+    ACTIVE_SLOT_KEY.with(|c| c.set(key));
+}
+
 // ── Key ──
 
 /// 组合节点的唯一标识符
@@ -123,7 +128,11 @@ impl<'a> ComposeCtx<'a> {
 
     /// animateFloatAsState — 动画浮点值到目标值
     pub fn animate_float_as_state(&mut self, target: f32, spec: crate::animation::AnimationSpec) -> State<f32> {
-        let state = self.remember(|| target);
+        let remember_key = self.next_remember_key();
+        let state = self.composer.slot_table.remember(remember_key, || {
+            crate::core::state::STATE_OWNER_QUEUE.with(|q| *q.borrow_mut() = Some(Arc::downgrade(&self.composer.pending_states)));
+            crate::core::state::State::new(target)
+        });
         crate::animation::push_animatable(state.clone(), target, spec);
         state
     }
@@ -209,10 +218,17 @@ impl<'a> ComposeCtx<'a> {
 
     /// 为 remember 调用生成位置 key。
     ///
-    /// 位置 key 编码方式: (current_group_key << 32) | remember_counter。
-    /// 这保证了同一 composable 函数中的同一 remember 调用在重组时得到相同的 key。
+    /// 位置 key 编码方式: 基于 slot 树路径（结构稳定——不随 Enter/Skip 的
+    /// next_key 序列漂移，保证同一组合位置跨重组复用同一 State）。
     fn next_remember_key(&mut self) -> u64 {
-        let key = ((self.composer.current_group_key as u64) << 32) | (self.remember_counter as u64);
+        let path = self.composer.slot_table.current_path().to_vec();
+        // 路径哈希（FNV-1a 风格）：不同路径 → 不同高位，同一 slot 内多个 remember 用 counter 区分
+        let mut h: u64 = 0xcbf29ce484222325;
+        for &idx in &path {
+            h ^= idx as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        let key = (h << 32) | (self.remember_counter as u64);
         self.remember_counter += 1;
         key
     }
@@ -367,7 +383,13 @@ impl SlotTable {
         let is_dirty = self.dirty_keys.remove(&key);
         let parent = self.current_slot();
 
-        if idx < parent.children.len() && parent.children[idx].key == key {
+        // key 匹配，或"同位置"（key 高位 = slot 路径哈希相同）——Enter/Skip 的
+        // counter 漂移不改位置，按索引复用（更新 key 保持同步），避免 truncate
+        // 重建 slot 导致 remember 的 State 丢失
+        let same_position = idx < parent.children.len()
+            && parent.children[idx].key >> 32 == key >> 32;
+        if idx < parent.children.len() && (parent.children[idx].key == key || same_position) {
+            parent.children[idx].key = key; // 同步最新 key（counter 可能漂移）
             if !parent.children[idx].dirty && !is_dirty {
                 self.path.push(idx);
                 self.child_counters.last_mut().map(|c| *c += 1);
@@ -525,9 +547,19 @@ impl Composer {
         self.node_stack.last().map(|&idx| self.layout_nodes[idx].id)
     }
 
-    /// 分配下一个全局唯一的 group key
+    /// 分配下一个 group key。
+    ///
+    /// 基于 slot 路径编码：结构稳定——Enter/Skip 的执行顺序不影响 key，
+    /// 保证同一组合位置跨重组得到相同 slot（否则 slot 树 truncate 重建，
+    /// 导致 remember 的 State 全部丢失重建）。
     pub fn next_group_key(&mut self) -> u64 {
-        let key = self.next_group_key_counter as u64;
+        let path = self.slot_table.current_path().to_vec();
+        let mut h: u64 = 0xcbf29ce484222325;
+        for &idx in &path {
+            h ^= idx as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        let key = (h << 32) | (self.next_group_key_counter as u64);
         self.next_group_key_counter += 1;
         key
     }
@@ -759,6 +791,10 @@ fn register_modifier_deps_recursive(node: &LayoutNode) {
             // 收集整棵树的节点信息（measured_size、cached_constraints、modifier），按 slot 路径索引
             self.prev_nodes.clear();
             collect_nodes(root, &mut Vec::new(), &mut self.prev_nodes);
+            // measure 阶段（SizeDynamic 闭包内的 State::get()）注册的依赖也要进入 slot_deps
+            for (state_id, slot_key) in self.recorded_deps.drain(..) {
+                self.slot_deps.entry(state_id).or_default().insert(slot_key);
+            }
         }
     }
 
@@ -834,9 +870,10 @@ mod tests {
     fn test_composer_new() {
         let mut composer = Composer::new();
         let key = composer.next_group_key();
-        assert_eq!(key, 1);
         let key2 = composer.next_group_key();
-        assert_eq!(key2, 2);
+        // key = (slot 路径哈希 << 32) | counter：同一路径下 counter 区分，高位相同
+        assert_ne!(key, key2);
+        assert_eq!(key >> 32, key2 >> 32);
     }
 
     #[test]

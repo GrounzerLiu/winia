@@ -55,18 +55,21 @@ fn animation_demo(ctx: &mut ComposeCtx) {
                 if clicked.get() { 300.0 } else { 50.0 },
                 AnimationSpec::Spring(SpringSpec::bouncy()),
             );
-            // 用动画值控制 Box 宽度——可视的弹跳效果
-            Column::new()
-                .modifier(Modifier::new()
-                    .size(scale.get(), 24.0)
-                    .background(Color::from_argb(255, 100, 149, 237), Shape::rounded(6.0))
-                    .padding(4.0))
-                .build(ctx, |ctx| {
-                    Text::new(format!("{:.0}px", scale.get()))
-                        .font_size(12.0)
-                        .color(Color::from_argb(255, 255, 255, 255))
-                        .build(ctx);
-                });
+            // 布局属性动画：size_dynamic 在测量时求值，依赖注册到本节点 → 每帧重组重测平滑过渡
+            {
+                let scale_w = scale.clone();
+                Column::new()
+                    .modifier(Modifier::new()
+                        .size_dynamic(move || scale_w.get(), || 24.0)
+                        .background(Color::from_argb(255, 100, 149, 237), Shape::rounded(6.0))
+                        .padding(4.0))
+                    .build(ctx, |ctx| {
+                        Text::new(format!("{:.0}px", scale.get()))
+                            .font_size(12.0)
+                            .color(Color::from_argb(255, 255, 255, 255))
+                            .build(ctx);
+                    });
+            }
 
             // ── 2. Tween — 颜色过渡 ──
             Text::new("2. Tween 300ms — background color")
@@ -82,20 +85,21 @@ fn animation_demo(ctx: &mut ComposeCtx) {
                     interpolator: winia::animation::interpolator::linear,
                 }),
             );
-            let c = Color::from_argb(
-                (alpha.get() * 255.0) as u8, 76, 175, 80,
-            );
-            Column::new()
-                .modifier(Modifier::new()
-                    .size(alpha.get() * 200.0 + 50.0, 30.0)
-                    .background(c, Shape::rounded(6.0))
-                    .padding(4.0))
-                .build(ctx, |ctx| {
-                    Text::new(format!("Alpha: {:.2}", alpha.get()))
-                        .font_size(12.0)
-                        .color(Color::from_argb(255, 255, 255, 255))
-                        .build(ctx);
-                });
+            {
+                let alpha_w = alpha.clone();
+                let alpha_bg = alpha.clone();
+                Column::new()
+                    .modifier(Modifier::new()
+                        .size_dynamic(move || alpha_w.get() * 200.0 + 50.0, || 30.0)
+                        .background(move || Color::from_argb((alpha_bg.get() * 255.0) as u8, 76, 175, 80), Shape::rounded(6.0))
+                        .padding(4.0))
+                    .build(ctx, |ctx| {
+                        Text::new(format!("Alpha: {:.2}", alpha.get()))
+                            .font_size(12.0)
+                            .color(Color::from_argb(255, 255, 255, 255))
+                            .build(ctx);
+                    });
+            }
 
             // ── 3. updateTransition — 位置偏移 ──
             Text::new("3. updateTransition — offset")
@@ -113,18 +117,23 @@ fn animation_demo(ctx: &mut ComposeCtx) {
             let tx = t.animate_float(ctx, |p| if *p == 0 { 0.0 } else { 80.0 }, "tx");
             let ty = t.animate_float(ctx, |p| if *p == 0 { 0.0 } else { 30.0 }, "ty");
 
-            // 用 offset 模拟位置动画
+            // 用 offset 模拟位置动画（动画值在容器闭包内读取）
             Column::new()
-                .modifier(Modifier::new()
-                    .offset(tx.get(), ty.get())
-                    .size(100.0, 30.0)
-                    .background(Color::from_argb(255, 255, 152, 0), Shape::rounded(6.0))
-                    .padding(4.0))
                 .build(ctx, |ctx| {
-                    Text::new(format!("Page {} ({:.0},{:.0})", page, tx.get(), ty.get()))
-                        .font_size(12.0)
-                        .color(Color::from_argb(255, 255, 255, 255))
-                        .build(ctx);
+                    let x = tx.get();
+                    let y = ty.get();
+                    Column::new()
+                        .modifier(Modifier::new()
+                            .offset(x, y)
+                            .size(100.0, 30.0)
+                            .background(Color::from_argb(255, 255, 152, 0), Shape::rounded(6.0))
+                            .padding(4.0))
+                        .build(ctx, |ctx| {
+                            Text::new(format!("Page {} ({:.0},{:.0})", page, x, y))
+                                .font_size(12.0)
+                                .color(Color::from_argb(255, 255, 255, 255))
+                                .build(ctx);
+                        });
                 });
 
             // ── 4. animate_color_as_state — 颜色过渡 ──
@@ -142,17 +151,20 @@ fn animation_demo(ctx: &mut ComposeCtx) {
                     interpolator: winia::animation::interpolator::linear,
                 }),
             );
-            let c = bg.get();
             Column::new()
-                .modifier(Modifier::new()
-                    .size(200.0, 40.0)
-                    .background(c, Shape::rounded(6.0))
-                    .padding(4.0))
                 .build(ctx, |ctx| {
-                    Text::new(format!("#{:02X}{:02X}{:02X}", c.r, c.g, c.b))
-                        .font_size(12.0)
-                        .color(Color::WHITE)
-                        .build(ctx);
+                    let c = bg.get();
+                    Column::new()
+                        .modifier(Modifier::new()
+                            .size(200.0, 40.0)
+                            .background(c, Shape::rounded(6.0))
+                            .padding(4.0))
+                        .build(ctx, |ctx| {
+                            Text::new(format!("#{:02X}{:02X}{:02X}", c.r, c.g, c.b))
+                                .font_size(12.0)
+                                .color(Color::WHITE)
+                                .build(ctx);
+                        });
                 });
 
             // ── 5. rememberInfiniteTransition — 无限循环 ──
@@ -206,12 +218,15 @@ fn animation_demo(ctx: &mut ComposeCtx) {
                     vec![(0.0, 0.0), (0.6, 1.2), (1.0, 1.0)], // 中途 120% 超调
                 )),
             );
-            Column::new()
-                .modifier(Modifier::new()
-                    .size(kf.get(), 24.0)
-                    .background(Color::from_argb(255, 0, 150, 136), Shape::rounded(6.0))
-                    .padding(4.0))
-                .build(ctx, |_| {});
+            {
+                let kf = kf.clone();
+                Column::new()
+                    .modifier(Modifier::new()
+                        .size_dynamic(move || kf.get(), || 24.0)
+                        .background(Color::from_argb(255, 0, 150, 136), Shape::rounded(6.0))
+                        .padding(4.0))
+                    .build(ctx, |_| {});
+            }
 
             // ── 7. animateDpAsState — Dp 动画 ──
             Text::new("7. animateDpAsState (Dp)")
@@ -224,14 +239,14 @@ fn animation_demo(ctx: &mut ComposeCtx) {
                 if clicked.get() { 30.dp() } else { 100.dp() },
                 AnimationSpec::Spring(winia::animation::SpringSpec::default()),
             );
-            Text::new(format!("Width: {:.0}dp", dp.get().value()))
-                .font_size(12.0)
-                .build(ctx);
-            Column::new()
-                .modifier(Modifier::new()
-                    .size(dp.get().value(), 20.0)
-                    .background(Color::from_argb(255, 63, 81, 181), Shape::rounded(4.0)))
-                .build(ctx, |_| {});
+            {
+                let dp = dp.clone();
+                Column::new()
+                    .modifier(Modifier::new()
+                        .size_dynamic(move || dp.get().value(), || 20.0)
+                        .background(Color::from_argb(255, 63, 81, 181), Shape::rounded(4.0)))
+                    .build(ctx, |_| {});
+            }
 
             // ── 滚动内容区结束 ──
             });

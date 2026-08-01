@@ -274,6 +274,8 @@ pub(crate) enum ModifierElement {
     // ── Layout 类 ──
     /// 固定尺寸
     Size { width: Dimension, height: Dimension },
+    /// 动态尺寸（测量时每帧求值——布局属性动画用，闭包内 `State::get()` 读取并注册依赖到本节点）
+    SizeDynamic { width: Arc<dyn Fn() -> f32 + Send + Sync>, height: Arc<dyn Fn() -> f32 + Send + Sync> },
     /// 全方向 padding
     Padding { all: f32 },
     /// 水平 padding
@@ -433,6 +435,22 @@ impl Modifier {
         self.push(ModifierElement::Size {
             width: width.into(),
             height: height.into(),
+        })
+    }
+
+    /// 动态尺寸（测量时每帧求值——布局属性动画用）。
+    ///
+    /// 闭包内用 `State::get()` 读取动画值——measure 阶段会把依赖注册到本节点，
+    /// 动画值变化 → 本节点 dirty → 重组重测 → 平滑过渡。
+    /// 示例：`.size_dynamic(move || scale.get(), || 24.0)`
+    pub fn size_dynamic(
+        self,
+        width: impl Fn() -> f32 + Send + Sync + 'static,
+        height: impl Fn() -> f32 + Send + Sync + 'static,
+    ) -> Self {
+        self.push(ModifierElement::SizeDynamic {
+            width: Arc::new(width),
+            height: Arc::new(height),
         })
     }
 
@@ -691,6 +709,16 @@ impl Modifier {
         None
     }
 
+    /// 动态尺寸（测量时求值）——返回 (width_fn, height_fn) 调用结果
+    pub fn dynamic_size(&self) -> Option<(f32, f32)> {
+        for el in &self.elements {
+            if let ModifierElement::SizeDynamic { width, height } = el {
+                return Some(((width)(), (height)()));
+            }
+        }
+        None
+    }
+
     /// 是否填满最大宽度
     pub fn is_fill_max_width(&self) -> bool {
         self.elements.iter().any(|el| matches!(el,
@@ -825,6 +853,7 @@ impl Debug for ModifierElement {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Size { width, height } => f.debug_struct("Size").field("width", width).field("height", height).finish(),
+            Self::SizeDynamic { .. } => f.debug_struct("SizeDynamic").finish(),
             Self::Padding { all } => f.debug_struct("Padding").field("all", all).finish(),
             Self::PaddingHorizontal { value } => f.debug_struct("PaddingHorizontal").field("value", value).finish(),
             Self::PaddingVertical { value } => f.debug_struct("PaddingVertical").field("value", value).finish(),
@@ -868,6 +897,7 @@ impl ModifierElement {
         match self {
             ModifierElement::Custom { inner } => inner.category(),
             ModifierElement::Size { .. }
+            | ModifierElement::SizeDynamic { .. }
             | ModifierElement::Padding { .. }
             | ModifierElement::PaddingHorizontal { .. }
             | ModifierElement::PaddingVertical { .. }
