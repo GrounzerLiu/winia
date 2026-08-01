@@ -195,25 +195,43 @@ Column::new()
 - 闭包**只出现在 content**（组件内容），事件回调（on_click）天然闭包
 - 粒度 = content 闭包（拆小 content 即细粒度）
 
-**B. 派生值（可选补充，非必须）**
+**B. `#[composable]` 属性宏（**最优形态，推荐**）**
+```rust
+#[composable]
+fn section2(ctx: &mut ComposeCtx, alpha: &State<f32>) {
+    let w = alpha.get() * 200.0 + 50.0;      // 表达式直接写
+    let c = Color::from_argb((alpha.get()*255.0) as u8, 76, 175, 80);
+    Column::new()
+        .modifier(Modifier::new().size(w, 30.0).background(c, ...))
+        .build(ctx, |ctx| { ... });          // 或函数参数式（无 content 闭包）
+}
+```
+- **proc-macro 变换**：函数开头注入 `ctx.start_group()`、结尾 `ctx.end_group()` → 函数 = Group
+- **无 content 闭包**（可配函数参数式组件 API）、**无显式 scope**（宏注入）
+- **粒度 = 函数**（对标 @Composable——函数失效 → 函数体重跑）
+- ctx 显式传（Rust 属性宏不能变换调用点，无法隐式 ctx）
+- 实现：新 proc-macro crate（`syn`/`quote`，~200 行）
+
+**C. 派生值（可选补充，非必须）**
 ```rust
 .size(&alpha * 200.0 + 50.0, 30.0)   // 运算符表达式（State 运算返回延迟表达式）
 ```
 - 替代"content 内先算 let w"的写法，直接内联
 - 不是闭包也不是宏；`size` 统一收 `impl Into<SizeValue>`（静态/Dynamic/派生值）
 
-**C. 组合函数宏（远期，仅当需要函数级粒度）**
+**D. 函数式宏 `compose!`（远期，语法受限）**
 ```rust
-composable_fn!(fn section2(ctx, alpha: &State<f32>) { ... });
+compose! { Column(ctx, vec![Text(ctx, ...), Box(ctx, ...)]) }
 ```
-- 粒度 = 用户函数（对标 @Composable），但引入自定义宏（用户偏好避免）
+- 宏解析块 → 组合调用，但宏内 Rust 语法受限，不如属性宏灵活
 
 ### 推荐路线
 1. **阶段 1（当前分支，已完成）**：A（builder + content 闭包自动 scope）——表达式不用闭包，验证机制
-2. **阶段 2（可选）**：B（派生值运算符）——`&alpha * 200.0 + 50.0` 内联替代 `let w`，非闭包非宏
-3. **阶段 3**：布局树独立缓存（组合 diff → 增量更新 LayoutNode）
-4. **阶段 4**：参数相等性跳过（Stable trait）——真正 Compose 式 Skip
-5. **远期（可选）**：C（composable_fn 宏）——仅当需要函数级粒度且用户接受宏
+2. **阶段 2（推荐）**：B（`#[composable]` 属性宏）——函数 = Group，无 content 闭包、无显式 scope、粒度=函数
+3. **阶段 3（可选）**：C（派生值运算符）——`&alpha * 200.0 + 50.0` 内联替代 `let w`，非闭包非宏
+4. **阶段 4**：布局树独立缓存（组合 diff → 增量更新 LayoutNode）
+5. **阶段 5**：参数相等性跳过（Stable trait）——真正 Compose 式 Skip
+6. **远期（可选）**：D（compose! 函数式宏）——语法受限，仅当声明式块需求高
 
 ## 五、关键权衡
 
