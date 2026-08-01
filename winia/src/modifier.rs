@@ -32,6 +32,75 @@ pub enum Dimension {
     Auto,
 }
 
+/// 尺寸值：静态 `Dimension` 或动态求值（布局属性动画用）。
+///
+/// `size()` 统一入口——传 `f32`/`Dimension`（静态）或 `State<f32>`/闭包（动态）：
+/// - `.size(50.0, 24.0)` 静态
+/// - `.size(&scale, 24.0)` 动画（State 直接传，测量时 `get()` 注册依赖到本节点）
+/// - `.size(|| scale.get() * 2.0, 24.0)` 复杂表达式（闭包）
+pub enum SizeValue {
+    Static(Dimension),
+    Dynamic(Arc<dyn Fn() -> f32 + Send + Sync>),
+}
+
+impl From<Dimension> for SizeValue {
+    fn from(d: Dimension) -> Self { SizeValue::Static(d) }
+}
+
+impl From<f32> for SizeValue {
+    fn from(v: f32) -> Self { SizeValue::Static(Dimension::Fixed(v)) }
+}
+
+impl From<crate::unit::Dp> for SizeValue {
+    fn from(v: crate::unit::Dp) -> Self { SizeValue::Static(Dimension::Dp(v)) }
+}
+
+impl From<crate::unit::Px> for SizeValue {
+    fn from(v: crate::unit::Px) -> Self { SizeValue::Static(Dimension::Px(v)) }
+}
+
+impl From<crate::core::state::State<f32>> for SizeValue {
+    fn from(s: crate::core::state::State<f32>) -> Self {
+        SizeValue::Dynamic(Arc::new(move || s.get()))
+    }
+}
+
+impl From<&crate::core::state::State<f32>> for SizeValue {
+    fn from(s: &crate::core::state::State<f32>) -> Self {
+        let s = s.clone();
+        SizeValue::Dynamic(Arc::new(move || s.get()))
+    }
+}
+
+impl From<&crate::core::state::State<crate::unit::Dp>> for SizeValue {
+    fn from(s: &crate::core::state::State<crate::unit::Dp>) -> Self {
+        let s = s.clone();
+        SizeValue::Dynamic(Arc::new(move || s.get().value()))
+    }
+}
+
+impl<F: Fn() -> f32 + Send + Sync + 'static> From<F> for SizeValue {
+    fn from(f: F) -> Self { SizeValue::Dynamic(Arc::new(f)) }
+}
+
+impl Clone for SizeValue {
+    fn clone(&self) -> Self {
+        match self {
+            SizeValue::Static(d) => SizeValue::Static(*d),
+            SizeValue::Dynamic(f) => SizeValue::Dynamic(f.clone()),
+        }
+    }
+}
+
+impl std::fmt::Debug for SizeValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SizeValue::Static(d) => write!(f, "{:?}", d),
+            SizeValue::Dynamic(_) => write!(f, "<dynamic>"),
+        }
+    }
+}
+
 impl Dimension {
     pub fn is_fixed(&self) -> bool {
         matches!(self, Dimension::Fixed(_) | Dimension::Dp(_) | Dimension::Px(_))
@@ -273,9 +342,8 @@ pub struct PointerEvent {
 pub(crate) enum ModifierElement {
     // ── Layout 类 ──
     /// 固定尺寸
-    Size { width: Dimension, height: Dimension },
-    /// 动态尺寸（测量时每帧求值——布局属性动画用，闭包内 `State::get()` 读取并注册依赖到本节点）
-    SizeDynamic { width: Arc<dyn Fn() -> f32 + Send + Sync>, height: Arc<dyn Fn() -> f32 + Send + Sync> },
+    /// 尺寸（静态 Dimension 或动态求值 SizeValue——布局属性动画用 State/闭包）
+    Size { width: SizeValue, height: SizeValue },
     /// 全方向 padding
     Padding { all: f32 },
     /// 水平 padding
@@ -431,26 +499,10 @@ impl Modifier {
 
 impl Modifier {
     /// 设置固定宽高
-    pub fn size(self, width: impl Into<Dimension>, height: impl Into<Dimension>) -> Self {
+    pub fn size(self, width: impl Into<SizeValue>, height: impl Into<SizeValue>) -> Self {
         self.push(ModifierElement::Size {
             width: width.into(),
             height: height.into(),
-        })
-    }
-
-    /// 动态尺寸（测量时每帧求值——布局属性动画用）。
-    ///
-    /// 闭包内用 `State::get()` 读取动画值——measure 阶段会把依赖注册到本节点，
-    /// 动画值变化 → 本节点 dirty → 重组重测 → 平滑过渡。
-    /// 示例：`.size_dynamic(move || scale.get(), || 24.0)`
-    pub fn size_dynamic(
-        self,
-        width: impl Fn() -> f32 + Send + Sync + 'static,
-        height: impl Fn() -> f32 + Send + Sync + 'static,
-    ) -> Self {
-        self.push(ModifierElement::SizeDynamic {
-            width: Arc::new(width),
-            height: Arc::new(height),
         })
     }
 
@@ -458,16 +510,16 @@ impl Modifier {
     pub fn width(self, w: impl Into<Dimension>) -> Self {
         // 使用 Auto 占位高度，表示不约束
         self.push(ModifierElement::Size {
-            width: w.into(),
-            height: Dimension::Auto,
+            width: SizeValue::Static(w.into()),
+            height: SizeValue::Static(Dimension::Auto),
         })
     }
 
     /// 仅设置高度
     pub fn height(self, h: impl Into<Dimension>) -> Self {
         self.push(ModifierElement::Size {
-            width: Dimension::Auto,
-            height: h.into(),
+            width: SizeValue::Static(Dimension::Auto),
+            height: SizeValue::Static(h.into()),
         })
     }
 
@@ -702,18 +754,25 @@ impl Modifier {
     /// 固定尺寸（从 Size modifier 提取）
     pub fn fixed_size(&self) -> Option<(Dimension, Dimension)> {
         for el in &self.elements {
-            if let ModifierElement::Size { width, height } = el {
-                return Some((*width, *height));
+            if let ModifierElement::Size { width: SizeValue::Static(w), height: SizeValue::Static(h) } = el {
+                return Some((*w, *h));
             }
         }
         None
     }
 
-    /// 动态尺寸（测量时求值）——返回 (width_fn, height_fn) 调用结果
+    /// 动态尺寸（测量时求值）——返回 (width_fn, height_fn) 调用结果。
+    /// 动态 SizeValue（State/闭包）在测量时求值并注册依赖到本节点。
     pub fn dynamic_size(&self) -> Option<(f32, f32)> {
         for el in &self.elements {
-            if let ModifierElement::SizeDynamic { width, height } = el {
-                return Some(((width)(), (height)()));
+            if let ModifierElement::Size { width: SizeValue::Dynamic(w), height: SizeValue::Dynamic(h) } = el {
+                return Some(((w)(), (h)()));
+            }
+            if let ModifierElement::Size { width: SizeValue::Dynamic(w), .. } = el {
+                return Some(((w)(), f32::NAN));
+            }
+            if let ModifierElement::Size { height: SizeValue::Dynamic(h), .. } = el {
+                return Some((f32::NAN, (h)()));
             }
         }
         None
@@ -853,7 +912,6 @@ impl Debug for ModifierElement {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Size { width, height } => f.debug_struct("Size").field("width", width).field("height", height).finish(),
-            Self::SizeDynamic { .. } => f.debug_struct("SizeDynamic").finish(),
             Self::Padding { all } => f.debug_struct("Padding").field("all", all).finish(),
             Self::PaddingHorizontal { value } => f.debug_struct("PaddingHorizontal").field("value", value).finish(),
             Self::PaddingVertical { value } => f.debug_struct("PaddingVertical").field("value", value).finish(),
@@ -897,7 +955,6 @@ impl ModifierElement {
         match self {
             ModifierElement::Custom { inner } => inner.category(),
             ModifierElement::Size { .. }
-            | ModifierElement::SizeDynamic { .. }
             | ModifierElement::Padding { .. }
             | ModifierElement::PaddingHorizontal { .. }
             | ModifierElement::PaddingVertical { .. }
@@ -1098,8 +1155,13 @@ mod tests {
         // 第一个是 Size { width: Fixed(100), height: Fill }
         match &elements[0] {
             ModifierElement::Size { width, height } => {
-                assert_eq!(*width, Dimension::Fixed(100.0));
-                assert_eq!(*height, Dimension::Fill);
+                match (width, height) {
+                    (crate::modifier::SizeValue::Static(w), crate::modifier::SizeValue::Static(h)) => {
+                        assert_eq!(*w, Dimension::Fixed(100.0));
+                        assert_eq!(*h, Dimension::Fill);
+                    }
+                    _ => panic!("expected static size"),
+                }
             }
             _ => panic!("expected Size"),
         }

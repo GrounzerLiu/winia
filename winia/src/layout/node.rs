@@ -629,10 +629,10 @@ pub(crate) fn measure_node(
     // 应用 modifier 中的 Layout 约束（使用查询方法）
     let mut inner_constraints = constraints;
 
-    // 0. 应用动态尺寸（测量时求值——布局属性动画）
-    if let Some((w, h)) = node.modifier.dynamic_size() {
-        inner_constraints = inner_constraints.tighten_width(w);
-        inner_constraints = inner_constraints.tighten_height(h);
+    // 0. 应用动态尺寸（测量时求值——布局属性动画，State::get() 注册依赖到本节点）
+    if let Some((dw, dh)) = node.modifier.dynamic_size() {
+        if !dw.is_nan() { inner_constraints = inner_constraints.tighten_width(dw); }
+        if !dh.is_nan() { inner_constraints = inner_constraints.tighten_height(dh); }
     }
 
     // 1. 应用固定尺寸

@@ -57,10 +57,9 @@ fn animation_demo(ctx: &mut ComposeCtx) {
             );
             // 布局属性动画：size_dynamic 在测量时求值，依赖注册到本节点 → 每帧重组重测平滑过渡
             {
-                let scale_w = scale.clone();
                 Column::new()
                     .modifier(Modifier::new()
-                        .size_dynamic(move || scale_w.get(), || 24.0)
+                        .size(&scale, 24.0)
                         .background(Color::from_argb(255, 100, 149, 237), Shape::rounded(6.0))
                         .padding(4.0))
                     .build(ctx, |ctx| {
@@ -86,11 +85,10 @@ fn animation_demo(ctx: &mut ComposeCtx) {
                 }),
             );
             {
-                let alpha_w = alpha.clone();
                 let alpha_bg = alpha.clone();
                 Column::new()
                     .modifier(Modifier::new()
-                        .size_dynamic(move || alpha_w.get() * 200.0 + 50.0, || 30.0)
+                        .size(alpha.clone(), 30.0)
                         .background(move || Color::from_argb((alpha_bg.get() * 255.0) as u8, 76, 175, 80), Shape::rounded(6.0))
                         .padding(4.0))
                     .build(ctx, |ctx| {
@@ -219,10 +217,9 @@ fn animation_demo(ctx: &mut ComposeCtx) {
                 )),
             );
             {
-                let kf = kf.clone();
                 Column::new()
                     .modifier(Modifier::new()
-                        .size_dynamic(move || kf.get(), || 24.0)
+                        .size(&kf, 24.0)
                         .background(Color::from_argb(255, 0, 150, 136), Shape::rounded(6.0))
                         .padding(4.0))
                     .build(ctx, |_| {});
@@ -240,10 +237,9 @@ fn animation_demo(ctx: &mut ComposeCtx) {
                 AnimationSpec::Spring(winia::animation::SpringSpec::default()),
             );
             {
-                let dp = dp.clone();
                 Column::new()
                     .modifier(Modifier::new()
-                        .size_dynamic(move || dp.get().value(), || 20.0)
+                        .size(&dp, 20.0)
                         .background(Color::from_argb(255, 63, 81, 181), Shape::rounded(4.0)))
                     .build(ctx, |_| {});
             }
