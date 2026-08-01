@@ -144,16 +144,6 @@ impl<'a> ComposeCtx<'a> {
         }
     }
 
-    /// 覆盖当前节点的 modifier（modifier_fn 延迟求值用——start 后用求得的 modifier 替换空壳）
-    pub fn set_current_node_modifier(&mut self, m: Modifier) {
-        if let Some(&idx) = self.composer.node_stack.last() {
-            let node = &mut self.composer.layout_nodes[idx];
-            node.modifier = m;
-            node.has_text_content = crate::layout::node::modifier_has_text(&node.modifier);
-            node.has_richtext_content = crate::layout::node::modifier_has_richtext(&node.modifier);
-        }
-    }
-
     /// 设置当前节点的光标位置和可见性，同时设置光标回调
     pub fn set_current_node_cursor_and_callback(
         &self,
@@ -489,22 +479,26 @@ impl SlotTable {
     pub(crate) fn mark_dirty(&mut self, key: u64) {
         self.dirty_keys.insert(key);
         let root = &mut self.root_slot;
-        // scope 失效 → 整个子树强制 Enter（scope 内组合代码重跑，modifier 重算）
-        if let Some(slot) = SlotTable::find_slot_mut(root, key) {
+        // 一次 DFS：找到目标 → 标其及所有祖先 dirty；若目标是 scope → 整个子树强制 Enter
+        SlotTable::mark_dirty_path_scope(root, key);
+    }
+
+    /// 查找 key 的 slot：标其及所有祖先 dirty；若目标是 scope，整个子树标 dirty（失效传播）
+    fn mark_dirty_path_scope(slot: &mut Slot, key: u64) -> bool {
+        if slot.key == key {
+            slot.dirty = true;
             if slot.is_scope {
                 SlotTable::mark_dirty_subtree(slot);
             }
+            return true;
         }
-        SlotTable::mark_dirty_path(root, key);
-    }
-
-    /// 在 slot 树中查找 key 对应的 slot
-    fn find_slot_mut<'a>(slot: &'a mut Slot, key: u64) -> Option<&'a mut Slot> {
-        if slot.key == key { return Some(slot); }
         for child in &mut slot.children {
-            if let Some(s) = SlotTable::find_slot_mut(child, key) { return Some(s); }
+            if SlotTable::mark_dirty_path_scope(child, key) {
+                slot.dirty = true;
+                return true;
+            }
         }
-        None
+        false
     }
 
     /// 标记 slot 及其所有后代 dirty（scope 失效传播）
@@ -559,10 +553,9 @@ impl SlotTable {
         &self.current_slot().children
     }
 
-    /// 当前 slot 的指定子 slot 是否为 scope（replay 时 scope 不建 LayoutNode，只递归）
-    fn current_child_is_scope(&mut self, key: u64) -> bool {
-        self.current_slot().children.iter()
-            .find(|c| c.key == key)
+    /// 当前 slot 的指定索引子 slot 是否为 scope（replay 按位置遍历，索引匹配不受 key 漂移影响）
+    fn current_child_is_scope(&mut self, idx: usize) -> bool {
+        self.current_slot().children.get(idx)
             .map(|c| c.is_scope)
             .unwrap_or(false)
     }
@@ -671,7 +664,11 @@ impl Composer {
     /// 结束组合 scope
     pub fn end_scope(&mut self) {
         self.slot_table.end_scope();
-        SCOPE_STACK.with(|s| { s.borrow_mut().pop(); });
+        // 防御性配对：非空才 pop（start_scope/end_scope 不配对时避免 panic/污染其他 scope）
+        SCOPE_STACK.with(|s| {
+            let mut s = s.borrow_mut();
+            if !s.is_empty() { s.pop(); }
+        });
     }
 
     /// 在组合树中开始一个节点（由组件的 build 方法调用）
@@ -792,10 +789,10 @@ impl Composer {
             .map(|c| (c.key, c.children_count))
             .collect();
 
-        for (child_key, child_slot_count) in &children {
+        for (idx, (child_key, child_slot_count)) in children.iter().enumerate() {
             // scope slot：不建 LayoutNode（scope 无布局节点），只递归重放其子
             //（子组件挂到当前父 LayoutNode——node_stack 顶是 skip 的 group 节点）
-            if self.slot_table.current_child_is_scope(*child_key) {
+            if self.slot_table.current_child_is_scope(idx) {
                 self.slot_table.start_scope(*child_key);
                 if *child_slot_count > 1 {
                     self.replay_clean_subtree();
