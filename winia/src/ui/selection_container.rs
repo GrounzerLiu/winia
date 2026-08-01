@@ -197,6 +197,8 @@ impl SelectionContainer {
             *ACTIVE_REGISTRAR.lock().unwrap() = Some(reg.clone());
             LOCAL_SELECTION_REGISTRAR.provides(reg, || {
                 ctx.set_selection_registrar(registrar.clone());
+                // content 闭包自动成为组合 scope（与 Column/Row/Stack/Button 一致）
+                ctx.start_scope();
                 match ctx.start_restartable_group(key, self.modifier, BoxLayout::new()) {
                     GroupStatus::Skip => {}
                     GroupStatus::Enter => {
@@ -205,6 +207,7 @@ impl SelectionContainer {
                     }
                 }
                 ctx.end_restartable_group();
+                ctx.end_scope();
             });
             // 不再清除 registrar——由下一个 SelectionContainer 构建时覆盖
         }

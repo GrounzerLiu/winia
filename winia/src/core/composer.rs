@@ -437,6 +437,9 @@ impl SlotTable {
         } else {
             parent.children.truncate(idx);
             parent.children.push(Slot::new(key));
+            // 新建 slot：本帧返回 Dirty 即已执行；立即消费 dirty 标记，
+            // 否则残留 true 会让下一帧本应 clean 的 slot 误判为 Dirty
+            parent.children.last_mut().unwrap().dirty = false;
             self.path.push(idx);
         }
         if let Some(last) = self.child_counters.last_mut() { *last += 1; }
@@ -529,20 +532,6 @@ impl SlotTable {
 
     /// 在 slot 树中查找 key 对应的节点，并将其及所有祖先标记 dirty。
     /// 返回 true 表示找到了目标。
-    fn mark_dirty_path(slot: &mut Slot, key: u64) -> bool {
-        if slot.key == key {
-            slot.dirty = true;
-            return true;
-        }
-        for child in &mut slot.children {
-            if SlotTable::mark_dirty_path(child, key) {
-                slot.dirty = true;
-                return true;
-            }
-        }
-        false
-    }
-
     /// 返回当前 slot 在树中的路径（用于 LayoutNode 复用时的 measured_size 查找）
     fn current_path(&self) -> &[usize] {
         &self.path
@@ -735,6 +724,8 @@ impl Composer {
         on_remove: Option<Box<dyn FnOnce() + Send>>,
     ) -> GroupStatus {
         self.current_group_key = key as u32;
+        // 与 start_node 对称：容器 build 期间 NODE_DEPTH+1（组件内读取注册到本节点）
+        NODE_DEPTH.with(|d| d.set(d.get() + 1));
         let slot_status = self.slot_table.start_slot(key);
         #[cfg(test)] { match slot_status { SlotStatus::Clean => self.compose_clean_count += 1, _ => self.compose_dirty_count += 1, } }
 
@@ -1318,21 +1309,25 @@ mod scope_tests {
 
     /// 组件内读取优先节点（NODE_DEPTH>0），组件外读取注册到 scope
     #[test]
+    /// 组件内读取优先节点（NODE_DEPTH>0）：无 scope 场景下，组件内读取只标该 leaf，
+    /// 未读对照 leaf 保持 clean（验证组件级失效粒度）
+    #[test]
     fn test_node_dependency_precedence() {
         let mut composer = Composer::new();
         let holder = std::cell::RefCell::new(None::<crate::core::state::State<f32>>);
 
         let compose_once = |composer: &mut Composer| {
             composer.compose(|ctx| {
-                ctx.start_scope();
                 let s = ctx.remember(|| 0.0f32);
                 *holder.borrow_mut() = Some(s.clone());
-                let _outer = s.get();       // 组件外 → scope
                 let key = ctx.next_key();
                 ctx.start_leaf(key, Modifier::new());
                 let _inner = s.get();       // 组件内 → leaf 节点
                 ctx.end_node();
-                ctx.end_scope();
+                // 未读 state 的对照 leaf——若读取误注册到 scope/父级，对照会被连带标脏
+                let key2 = ctx.next_key();
+                ctx.start_leaf(key2, Modifier::new());
+                ctx.end_node();
             });
         };
 
@@ -1340,9 +1335,10 @@ mod scope_tests {
         let s = holder.borrow().clone().unwrap();
         s.set(1.0);
         compose_once(&mut composer);
-        // leaf 依赖 state（组件内读取）→ 强制 Enter，不 clean
-        assert_eq!(composer.compose_clean_count, 0,
-            "leaf 依赖 state，应强制 Enter，实际 clean={}", composer.compose_clean_count);
+        // 读 state 的 leaf 强制 Enter（组件内依赖），对照 leaf 保持 clean
+        assert_eq!(composer.compose_clean_count, 1,
+            "读 state 的 leaf 应 Enter，未读对照 leaf 应 clean（组件内读取注册到节点），实际 clean={}",
+            composer.compose_clean_count);
     }
 
     #[derive(Clone, Debug)]
