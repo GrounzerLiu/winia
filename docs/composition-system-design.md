@@ -225,13 +225,16 @@ compose! { Column(ctx, vec![Text(ctx, ...), Box(ctx, ...)]) }
 ```
 - 宏解析块 → 组合调用，但宏内 Rust 语法受限，不如属性宏灵活
 
-### 推荐路线
-1. **阶段 1（当前分支，已完成）**：A（builder + content 闭包自动 scope）——表达式不用闭包，验证机制
-2. **阶段 2（推荐）**：B（`#[composable]` 属性宏）——函数 = Group，无 content 闭包、无显式 scope、粒度=函数
-3. **阶段 3（可选）**：C（派生值运算符）——`&alpha * 200.0 + 50.0` 内联替代 `let w`，非闭包非宏
-4. **阶段 4**：布局树独立缓存（组合 diff → 增量更新 LayoutNode）
+### 推荐路线（用户决策 2026-08）
+1. **阶段 1（已完成）**：A（builder + content 闭包自动 scope）——表达式不用闭包，验证机制
+2. **阶段 2**：派生值运算符（`&alpha * 200.0 + 50.0` 内联，非闭包非宏）
+3. **阶段 3**：`#[composable]` 属性宏（proc-macro crate，函数 = Group，无 content 闭包、无显式 scope、粒度 = 函数）
+4. **阶段 4**：布局树独立缓存（组合 diff → 增量更新 LayoutNode，跨重组复用）
 5. **阶段 5**：参数相等性跳过（Stable trait）——真正 Compose 式 Skip
-6. **远期（可选）**：D（compose! 函数式宏）——语法受限，仅当声明式块需求高
+6. **远期（可选）**：`compose!` 函数式宏——语法受限，仅当声明式块需求高
+
+**组件 API 形态**：保持 **builder + content 闭包**（`Column::new().modifier(...).build(ctx, |ctx| {...})`），
+属性宏/派生值在此之上叠加，不更换组件 API。
 
 ## 五、关键权衡
 
