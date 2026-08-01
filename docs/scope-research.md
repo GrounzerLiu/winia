@@ -38,22 +38,37 @@
 
 ### 用法（demo 第 2 节）
 
+**v1（显式 scope）**：
 ```rust
-ctx.start_scope();                       // 进入 scope
-let w = alpha.get() * 200.0 + 50.0;      // 注册到 scope（组件外）
+ctx.start_scope();
+let w = alpha.get() * 200.0 + 50.0;
+let c = Color::from_argb((alpha.get()*255.0) as u8, 76, 175, 80);
+Column::new()
+    .modifier(Modifier::new().size(w, 30.0).background(c, ...))
+    .build(ctx, ...);
+ctx.end_scope();
+```
+
+**v2（免显式——content 闭包自动成为 scope）**：`Column::build`/`Row::build` 内部自动 `start_scope()/end_scope()`，
+content 闭包内（组件外）的表达式天然注册到本 content scope：
+```rust
+let w = alpha.get() * 200.0 + 50.0;      // 注册到所在 content scope（自动）
 let c = Color::from_argb((alpha.get()*255.0) as u8, 76, 175, 80);
 Column::new()
     .modifier(Modifier::new().size(w, 30.0).background(c, ...))  // 静态值，不用闭包
-    .build(ctx, ...);
-ctx.end_scope();                         // 退出 scope
+    .build(ctx, |ctx| { ... });
 ```
+无需 `start_scope`/`end_scope`——每个 content 闭包就是 scope，`State::get()` 在闭包内
+（组件外）注册到该闭包的 scope。
 
 **机制**：alpha 变化 → mark_dirty(scope) → scope 子树全 Enter → 组合代码重跑 → `w`/`c` 重算 → Column 重建（modifier 用新值）。
 
 ## 三、验证结果
 
 - ✅ **不用闭包**：`size(w, 30.0)` 直接静态值
-- ✅ **动画平滑**：点击后 0.2s box 宽 180（alpha 0.2→0.9 中间值）、Alpha 0.65
+- ✅ **免显式 scope**：content 闭包自动 scope（v2）
+- ✅ **动画平滑**：点击后 0.2s box 宽 188（alpha 0.2→0.9 中间值）、Alpha 0.69
+- ✅ **重组局部化**：注册数 5s 仅 13（无全树重建风暴）
 - ✅ **依赖到位**：scope 内 `alpha.get()` 注册到 scope（非上一个节点）
 - ✅ **失效传播**：scope 子树强制 Enter，组合代码重跑
 - ✅ 114 测试全过、28/28 布局正常
