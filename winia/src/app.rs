@@ -297,6 +297,7 @@ impl ApplicationHandler for AppState {
                                 pw.pointer_down_state = Some(PtrDownState {
                                     node_id: nodes[innermost].id, position: scene_pos, time: Instant::now(), selection_anchor: None });
                                 pw.pointer_down_slot = Some(nodes[innermost].slot_key);
+                                eprintln!("[sel-down] pointer_down_state set, slot={}", nodes[innermost].slot_key);
                                 // 将 anchor 转为全局索引再存入
                                 if let Some(a) = anchor {
                                     let reg = nodes[innermost].registrar.borrow().as_ref().cloned()
@@ -326,24 +327,28 @@ impl ApplicationHandler for AppState {
                             if let Some(ref sw) = pw.skia_window { sw.set_ime_allowed(true); }
                         }
                     }
-                    // ── Up：Compose 风格 click 检测 ──
-                    const CLICK_SLOP: f32 = 18.0;
-                    const CLICK_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
-                    if let Some(down) = pw.pointer_down_state.take() {
-                        let dx = scene_pos.0 - down.position.0;
-                        let dy = scene_pos.1 - down.position.1;
-                        let dist = (dx * dx + dy * dy).sqrt();
-                        let in_time = down.time.elapsed() < CLICK_TIMEOUT;
-                        if dist <= CLICK_SLOP && in_time {
-                            let nodes = pw.composer.arena_nodes();
-                            if let Some(r) = pw.composer.layout_root_idx() {
-                                let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
-                                if path.iter().any(|&i| nodes[i].id == down.node_id) {
-                                    // 只在相同节点触发 click
-                                    for &i in path.iter().rev() {
-                                        if let Some(on_click) = nodes[i].modifier.on_click() {
-                                            on_click();
-                                            break;
+                    // ── Up：Compose 风格 click 检测（仅释放时——Down 保留
+                    // pointer_down_state 供拖动选择；无条件执行会 Down 后立即 take
+                    // 掉 state → 拖动无法选择）──
+                    if !state.is_pressed() {
+                        const CLICK_SLOP: f32 = 18.0;
+                        const CLICK_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+                        if let Some(down) = pw.pointer_down_state.take() {
+                            let dx = scene_pos.0 - down.position.0;
+                            let dy = scene_pos.1 - down.position.1;
+                            let dist = (dx * dx + dy * dy).sqrt();
+                            let in_time = down.time.elapsed() < CLICK_TIMEOUT;
+                            if dist <= CLICK_SLOP && in_time {
+                                let nodes = pw.composer.arena_nodes();
+                                if let Some(r) = pw.composer.layout_root_idx() {
+                                    let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
+                                    if path.iter().any(|&i| nodes[i].id == down.node_id) {
+                                        // 只在相同节点触发 click
+                                        for &i in path.iter().rev() {
+                                            if let Some(on_click) = nodes[i].modifier.on_click() {
+                                                on_click();
+                                                break;
+                                            }
                                         }
                                     }
                                 }
@@ -399,6 +404,8 @@ impl ApplicationHandler for AppState {
             WindowEvent::PointerMoved { position, .. } => {
                 let lp = position.to_logical::<f32>(pw.scale_factor);
                 let scene_pos = (lp.x, lp.y);
+                eprintln!("[sel-move-ev] pos=({:.0},{:.0}) down_state={}",
+                    scene_pos.0, scene_pos.1, pw.pointer_down_state.is_some());
                 let nodes = pw.composer.arena_nodes();
                 if let Some(r) = pw.composer.layout_root_idx() {
                     let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
@@ -411,6 +418,11 @@ impl ApplicationHandler for AppState {
                             const CLICK_SLOP: f32 = 18.0;
                             if (dx*dx + dy*dy).sqrt() > CLICK_SLOP {
                                 let (abs_x, abs_y) = node_abs_position(nodes, r, nodes[innermost].id);
+                                eprintln!("[sel-move] pos=({:.0},{:.0}) down=({:.0},{:.0}) slop_ok node={} has_text={} para={} anchor={:?}",
+                                    scene_pos.0, scene_pos.1, down.position.0, down.position.1,
+                                    nodes[innermost].id, nodes[innermost].has_text_content,
+                                    nodes[innermost].cached_paragraph.try_borrow().ok().map(|b| b.is_some()).unwrap_or(false),
+                                    down.selection_anchor);
                                 if let Ok(borrow) = nodes[innermost].cached_paragraph.try_borrow() {
                                     if let Some(para) = borrow.as_ref() {
                                         // 对齐偏移（匹配渲染侧 x_off）
