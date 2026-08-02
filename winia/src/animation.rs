@@ -690,6 +690,8 @@ impl AnimatableValue for crate::modifier::Color {
 
 #[cfg(test)]
 mod tests {
+    // 测试串行锁：动画引擎用全局 ACTIVE_ANIMATIONS——并行测试互相干扰（push/update 竞态）
+    static TEST_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
     use super::*;
     use std::time::Duration;
 
@@ -714,6 +716,7 @@ mod tests {
 
     #[test]
     fn spring_converges_to_target() {
+        let _g = TEST_SERIAL.lock().unwrap();
         // 临界阻尼，50→300
         let (val, done) = step_spring(1500.0, 1.0, 0.1, 50.0, 300.0, 300);
         assert!(done, "spring should settle within 300 frames");
@@ -722,6 +725,7 @@ mod tests {
 
     #[test]
     fn spring_bouncy_overshoots_then_converges() {
+        let _g = TEST_SERIAL.lock().unwrap();
         // 欠阻尼 bouncy，应超调后收敛
         let (mut val, mut done) = step_spring(1500.0, 0.6, 0.1, 50.0, 300.0, 5);
         // 早期应明显低于目标（尚未到达）或已超调
@@ -742,6 +746,7 @@ mod tests {
 
     #[test]
     fn spring_reverse_animation() {
+        let _g = TEST_SERIAL.lock().unwrap();
         // 反向 300→50 也应收敛（此前 bug：分母 max(EPSILON) 卡死）
         let (val, done) = step_spring(1500.0, 1.0, 0.1, 300.0, 50.0, 300);
         assert!(done);
@@ -750,6 +755,7 @@ mod tests {
 
     #[test]
     fn spring_dt_zero_is_safe() {
+        let _g = TEST_SERIAL.lock().unwrap();
         // dt=0 不应 panic/产生 NaN
         let mut disp = -250.0f32;
         let mut vel = 0.0f32;
@@ -760,6 +766,7 @@ mod tests {
 
     #[test]
     fn tween_completes_within_duration() {
+        let _g = TEST_SERIAL.lock().unwrap();
         let mut anim = Animatable::<f32>::new(State::new(0.0));
         anim.animate_to(100.0, AnimationSpec::Tween(TweenSpec::default()));
         // 模拟 400ms（每帧 10ms），应超过 300ms duration 完成
@@ -774,6 +781,7 @@ mod tests {
 
     #[test]
     fn infinite_float_restart_loops() {
+        let _g = TEST_SERIAL.lock().unwrap();
         let state = State::new(0.0);
         let mut inf = InfiniteFloat {
             state: state.clone(),
@@ -799,6 +807,7 @@ mod tests {
 
     #[test]
     fn infinite_float_reverse_oscillates() {
+        let _g = TEST_SERIAL.lock().unwrap();
         let state = State::new(0.4);
         let mut inf = InfiniteFloat {
             state: state.clone(),
@@ -821,6 +830,7 @@ mod tests {
 
     #[test]
     fn color_lerp_uses_cam16_and_preserves_alpha() {
+        let _g = TEST_SERIAL.lock().unwrap();
         use crate::modifier::Color;
         // 蓝 → 红，alpha 128 → 255
         let from = Color::from_argb(128, 33, 150, 243);
@@ -839,6 +849,7 @@ mod tests {
 
     #[test]
     fn infinite_color_reverse_cycles() {
+        let _g = TEST_SERIAL.lock().unwrap();
         use crate::modifier::Color;
         let state = State::new(Color::RED);
         let mut inf = InfiniteColor {
@@ -862,6 +873,7 @@ mod tests {
 
     #[test]
     fn remove_animation_by_state_cleans_lists() {
+        let _g = TEST_SERIAL.lock().unwrap();
         // 推入 f32 + Color + 无限 Color 三种动画
         let s1 = State::new(0.0f32);
         let s2 = State::new(crate::modifier::Color::RED);
@@ -883,6 +895,7 @@ mod tests {
 
     #[test]
     fn keyframes_interpolate_segments() {
+        let _g = TEST_SERIAL.lock().unwrap();
         use crate::unit::DpExt;
         // 0%→0, 50%→50, 100%→100，线性
         let spec = KeyframesSpec::new(Duration::from_millis(100), vec![(0.0, 0.0), (0.5, 0.5), (1.0, 1.0)]);
@@ -896,6 +909,7 @@ mod tests {
 
     #[test]
     fn repeatable_runs_iterations() {
+        let _g = TEST_SERIAL.lock().unwrap();
         let mut anim = Animatable::<f32>::new(State::new(0.0));
         anim.animate_to(100.0, AnimationSpec::Repeatable(
             RepeatableSpec::new(3, RepeatMode::Restart,
@@ -912,6 +926,7 @@ mod tests {
 
     #[test]
     fn repeatable_reverse_even_ends_at_from() {
+        let _g = TEST_SERIAL.lock().unwrap();
         // blocking bug：Reverse + 偶数次时最后 cycle 结束于 from，完成值不应跳变到 to
         let mut anim = Animatable::<f32>::new(State::new(0.0));
         anim.animate_to(100.0, AnimationSpec::Repeatable(
@@ -927,6 +942,7 @@ mod tests {
 
     #[test]
     fn keyframes_first_frame_offset() {
+        let _g = TEST_SERIAL.lock().unwrap();
         // 首帧 progress > 0 时，t < 首帧 progress 应取首帧值
         let spec = KeyframesSpec::new(Duration::from_millis(100), vec![(0.5, 0.7), (1.0, 1.0)]);
         assert_eq!(interpolate_keyframes(&spec.frames, 0.1), 0.7);
@@ -937,6 +953,7 @@ mod tests {
 
     #[test]
     fn snap_jumps_immediately() {
+        let _g = TEST_SERIAL.lock().unwrap();
         let mut anim = Animatable::<f32>::new(State::new(0.0));
         anim.animate_to(42.0, AnimationSpec::Snap);
         assert!(!anim.update(), "snap completes in one update");
@@ -945,6 +962,7 @@ mod tests {
 
     #[test]
     fn offset_dedup_is_exact_not_norm() {
+        let _g = TEST_SERIAL.lock().unwrap();
         // blocking bug：两个同范数不同 Offset 不应互相误判为同目标
         use crate::unit::Offset;
         let s = State::new(Offset::new(0.0, 0.0));
@@ -963,6 +981,7 @@ mod tests {
 
     #[test]
     fn offset_spring_downgraded_to_tween() {
+        let _g = TEST_SERIAL.lock().unwrap();
         // blocking bug：Offset 用 Spring 会收敛到 (norm,norm) 而非目标，应强制 Tween
         use crate::unit::Offset;
         let s = State::new(Offset::new(0.0, 0.0));
