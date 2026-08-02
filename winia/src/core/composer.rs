@@ -961,6 +961,15 @@ impl Default for Composer {
     }
 }
 
+impl Drop for Composer {
+    fn drop(&mut self) {
+        // 防御：若本 Composer 是当前 RECORDING_TARGET 的持有者（compose 后未
+        // layout/clear 就 drop——如 init 临时 composer 或未来新增路径），清除之，
+        // 防止悬垂裸指针 UB（后续 State::get() 写已释放内存）。
+        crate::core::state::clear_recording_target();
+    }
+}
+
 /// 递归遍历布局树，收集每个节点的可缓存子集。
 /// 同时将子节点的 dirty 冒泡到父节点（确保父节点不会因 dirty=false 而跳过脏子树）。
 /// 后序遍历，以 slot_key 为键存入 prev_nodes（slot_key 是稳定位置标识，
@@ -1456,4 +1465,6 @@ fn test_is_skip_with_scope_layer() {
     });
     assert!(skip_happened,
         "含 scope 层的 clean group 应 Skip（slot_key 键修复后两棵树路径错位不再导致 miss）——若 Enter 说明回归");
+    // 自清洁：帧2 后 layout（clear recording target），避免 RECORDING_TARGET 残留
+    composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
 }
