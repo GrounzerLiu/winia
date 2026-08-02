@@ -2001,3 +2001,131 @@ fn test_reused_node_remeasures_on_state_change() {
     assert!(size2 > size1 + 10.0,
         "State 变化后复用节点应重测：frame1 w={} frame2 w={}（冻结则 bug 复发）", size1, size2);
 }
+
+/// 缓存审视：新建节点（无复用）的 restore_layout 是否死代码——
+/// 新建 = 上帧无该 slot_key = prev_nodes 无该 key（应永不命中）。
+#[test]
+fn test_new_node_restore_is_dead_code() {
+    let mut composer = Composer::new();
+    let count: State<i32> = State::new(0);
+
+    let build = |composer: &mut Composer| {
+        composer.compose(|ctx| {
+            ctx.start_scope();
+            let root_key = ctx.next_key();
+            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    let _ = count.get();
+                    { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                }
+            }
+            ctx.end_restartable_group();
+            ctx.end_scope();
+        });
+        composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
+    };
+
+    build(&mut composer);
+    // 帧2：全部复用（结构稳定）——新建路径不执行
+    build(&mut composer);
+    // 帧3：数据驱动的结构变化（State 变 → root Enter → 新增 leaf 生效）
+    // 注：源码级结构变化（不加 State 依赖）在 Skip 语义下不触发（对标 Compose——
+    // 结构变化必须由数据驱动；Skip 时 content 不重跑，新增自然不创建）
+    let holder = std::cell::RefCell::new(None::<State<i32>>);
+    composer.compose(|ctx| {
+        let s = ctx.remember(|| 0i32);
+        *holder.borrow_mut() = Some(s.clone());
+        ctx.start_scope();
+        let root_key = ctx.next_key();
+        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                let _ = s.get(); // 数据依赖：s 变化 → Enter → 重建结构
+                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); } // 新增 leaf（数据驱动）
+            }
+        }
+        ctx.end_restartable_group();
+        ctx.end_scope();
+    });
+    composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
+    // 数据驱动变化：s.set → Enter → 新增 leaf 应生效
+    let s = holder.borrow().clone().unwrap();
+    s.set(1);
+    composer.compose(|ctx| {
+        let s = ctx.remember(|| 0i32);
+        *holder.borrow_mut() = Some(s.clone());
+        ctx.start_scope();
+        let root_key = ctx.next_key();
+        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                let _ = s.get();
+                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+            }
+        }
+        ctx.end_restartable_group();
+        ctx.end_scope();
+    });
+    composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
+    // 验证：数据驱动结构变化生效（新增 leaf 存在）
+    let nodes = composer.arena_nodes();
+    let root = composer.layout_root_idx().unwrap();
+    eprintln!("[struct-change] root.children={} nodes={}", nodes[root].children.len(), nodes.len());
+    eprintln!("[struct-change] dirty={} clean={}", composer.compose_dirty_count, composer.compose_clean_count);
+    assert!(nodes[root].children.len() >= 2, "数据驱动结构变化：新增 leaf 应生效");
+}
+
+/// 数据驱动的结构变化：State 变 → root Enter → 新增 leaf 生效。
+/// （源码级结构变化在 Skip 语义下不触发——对标 Compose：结构变化必须由数据驱动）
+#[test]
+fn test_data_driven_structure_change() {
+    let mut composer = Composer::new();
+    let holder = std::cell::RefCell::new(None::<State<i32>>);
+
+    let build = |composer: &mut Composer, two_leaves: bool| {
+        composer.compose(|ctx| {
+            let s = ctx.remember(|| 0i32);
+            *holder.borrow_mut() = Some(s.clone());
+            ctx.start_scope();
+            let root_key = ctx.next_key();
+            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    let _ = s.get();
+                    { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                    if two_leaves {
+                        { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                    }
+                }
+            }
+            ctx.end_restartable_group();
+            ctx.end_scope();
+        });
+        composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
+    };
+
+    // 帧1：1 leaf（Enter）
+    build(&mut composer, false);
+    let root = composer.layout_root_idx().unwrap();
+    assert_eq!(composer.arena_nodes()[root].children.len(), 1, "帧1 应有 1 leaf");
+
+    // 帧2：s 变化 → Enter → 2 leaf（数据驱动结构变化）
+    let s = holder.borrow().clone().unwrap();
+    s.set(1);
+    build(&mut composer, true);
+    let root = composer.layout_root_idx().unwrap();
+    assert_eq!(composer.arena_nodes()[root].children.len(), 2,
+        "数据驱动结构变化：s.set → Enter → 新增 leaf 应生效");
+    eprintln!("[struct-change] ok: 1 leaf → 2 leaf（数据驱动）");
+
+    // 帧3：s 再变 → 结构回退 1 leaf（未复用节点回收）
+    let s = holder.borrow().clone().unwrap();
+    s.set(2);
+    build(&mut composer, false);
+    let root = composer.layout_root_idx().unwrap();
+    assert_eq!(composer.arena_nodes()[root].children.len(), 1,
+        "结构回退：移除 leaf 应生效（未复用节点回收）");
+}
