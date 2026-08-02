@@ -23,6 +23,24 @@ thread_local! { static ACTIVE_SLOT_KEY: Cell<u64> = const { Cell::new(0) }; }
 thread_local! { static SCOPE_STACK: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) }; }
 thread_local! { static NODE_DEPTH: Cell<usize> = const { Cell::new(0) }; }
 
+/// 参数值（阶段5 参数相等跳过用）——`ComposeCtx::changed` 暂存的参数，
+/// 支持跨帧按类型比较（`Box<dyn Any>` 无法通用 PartialEq，用 trait object 桥接）。
+pub(crate) trait ParamValue: Any {
+    fn eq_any(&self, other: &dyn Any) -> bool;
+}
+
+impl<T: PartialEq + 'static> ParamValue for T {
+    fn eq_any(&self, other: &dyn Any) -> bool {
+        other.downcast_ref::<T>() == Some(self)
+    }
+}
+
+/// 两个参数序列是否逐项相等（数量相同 + 类型/值全等）
+fn params_equal(a: &[Box<dyn ParamValue>], b: &[Box<dyn ParamValue>]) -> bool {
+    if a.len() != b.len() { return false; }
+    a.iter().zip(b.iter()).all(|(x, y)| x.eq_any(&**y))
+}
+
 /// 读取当前组合作用域的依赖注册目标：
 /// 组件 build 内（NODE_DEPTH > 0）→ 当前节点 key（组件级失效粒度）；
 /// 组件外（表达式/局部变量）→ 最内层 scope key。
@@ -109,6 +127,36 @@ impl<'a> ComposeCtx<'a> {
     /// 与 `end_scope` 配对。
     pub fn start_scope(&mut self) -> u64 {
         self.composer.start_scope()
+    }
+
+    /// 参数比较（对标 Compose `$composer.changed(param)`）。
+    ///
+    /// 在 start 组件**前**调用（参数求值处）：与"即将 start 的 slot"上帧记录的参数
+    /// 按序比较——相等返回 `false`（参数未变），不等/首次返回 `true`。
+    /// 暂存本帧参数（start_node 时写入 slot.params，供下帧比较）。
+    ///
+    /// 用法（组件 build 内）：
+    /// ```rust
+    /// let text_changed = ctx.changed(&self.content);   // 参数序列（按序）
+    /// let size_changed = ctx.changed(&self.font_size);
+    /// let key = ctx.next_key();
+    /// let status = ctx.start_leaf(key, modifier);
+    /// if !text_changed && !size_changed && status == SlotStatus::Clean {
+    ///     // 参数未变 + slot clean → 短路（复用缓存，跳过注册/后续开销）
+    /// }
+    /// ```
+    pub fn changed<T: PartialEq + Clone + 'static>(&mut self, param: &T) -> bool {
+        // 与"即将 start 的 child slot"的上帧 params 按序比较
+        let unchanged = {
+            let idx = *self.composer.slot_table.child_counters.last().unwrap_or(&0);
+            let param_idx = self.composer.pending_params.len();
+            let prev = self.composer.slot_table.current_slot().children.get(idx)
+                .and_then(|c| c.params.get(param_idx))
+                .map(|p| p.eq_any(param));
+            prev == Some(true)
+        };
+        self.composer.pending_params.push(Box::new(param.clone()));
+        !unchanged
     }
 
     /// 结束组合 scope（与 start_scope 配对）
@@ -320,7 +368,6 @@ impl<'a> ComposeCtx<'a> {
 // ── SlotTable ──
 
 /// 组合节点的一个槽位。每个 composable 调用对应一个 Slot。
-#[derive(Debug)]
 struct Slot {
     key: u64,
     remembered: HashMap<u64, Box<dyn Any>>,
@@ -331,6 +378,8 @@ struct Slot {
     children_count: usize,
     /// 是否为组合 scope（无 LayoutNode 的作用域节点——依赖注册目标 + 失效传播单位）
     is_scope: bool,
+    /// 上帧参数（`ComposeCtx::changed` 写入，按序比较——对标 Compose `$composer.changed`）
+    params: Vec<Box<dyn ParamValue>>,
 }
 
 impl Slot {
@@ -342,6 +391,7 @@ impl Slot {
             dirty: true, // 新创建的 slot 总是 dirty（首次必须执行）
             children_count: 1, // 自身
             is_scope: false,
+            params: Vec::new(),
         }
     }
 
@@ -382,7 +432,7 @@ pub(crate) enum SlotStatus {
 }
 
 /// 槽位表 — 组合树的内部数据结构（树形嵌套）
-#[derive(Debug)]
+
 pub(crate) struct SlotTable {
     path: Vec<usize>,
     root_slot: Slot,
@@ -410,6 +460,11 @@ impl SlotTable {
             slot = &mut slot.children[idx];
         }
         slot
+    }
+
+    /// 设置当前 slot 的参数（`ComposeCtx::changed` 暂存的参数，start_node 时写入）
+    fn set_current_params(&mut self, params: Vec<Box<dyn ParamValue>>) {
+        self.current_slot().params = params;
     }
 
     fn start_slot(&mut self, key: u64) -> SlotStatus {
@@ -583,6 +638,8 @@ pub struct Composer {
     /// 本帧暂存（recompose 循环内 Enter 的结果——Skip 时优先恢复它，
     /// 避免循环内第二次重组用旧 prev_nodes 覆盖本次 Enter 的状态）
     frame_cache: HashMap<u64, CachedNode>,
+    /// `ComposeCtx::changed` 暂存的参数（start_slot 时写入新 slot 的 params）
+    pending_params: Vec<Box<dyn ParamValue>>,
     /// 当前选区注册表（SelectionContainer compose 时注入，供事件处理访问）
     pub(crate) selection_registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
 
@@ -613,6 +670,7 @@ impl Composer {
             pending_states,
             prev_nodes: HashMap::new(),
             frame_cache: HashMap::new(),
+            pending_params: Vec::new(),
             selection_registrar: None,
             #[cfg(test)]
             compose_clean_count: 0,
@@ -669,6 +727,8 @@ impl Composer {
         let slot_status = self.slot_table.start_slot(key);
         // 普通节点：复用 scope slot 时重置为普通（同路径类型切换场景）
         self.slot_table.set_current_scope(false);
+        // 写入 `ComposeCtx::changed` 暂存的参数（供下帧比较）
+        self.slot_table.set_current_params(std::mem::take(&mut self.pending_params));
         #[cfg(test)] { match slot_status { SlotStatus::Clean => self.compose_clean_count += 1, _ => self.compose_dirty_count += 1, } }
 
         // 创建对应的 LayoutNode
@@ -733,17 +793,30 @@ impl Composer {
         node.on_remove = on_remove;
         node.slot_key = key;
 
-        // Clean slot：从缓存恢复
+        // Clean slot：从缓存恢复（阶段5：加参数相等条件——slot clean 且参数
+        // 全相等才 Skip；参数变化（changed 比较）时即使 slot clean 也 Enter）
         let is_skip = if slot_status == SlotStatus::Clean {
-            if let Some(cached) = self.prev_nodes.get(&key) {
-                node.restore_from(cached);
-                true // 子树可跳过
+            // 与上帧 slot.params 比较（pending_params = 本帧 changed 暂存；
+            // slot.params 此刻仍是上帧的——本帧写入在其后）
+            let params_unchanged = params_equal(
+                &self.pending_params,
+                &self.slot_table.current_slot().params,
+            );
+            if params_unchanged {
+                if let Some(cached) = self.prev_nodes.get(&key) {
+                    node.restore_from(cached);
+                    true // 子树可跳过
+                } else {
+                    false
+                }
             } else {
                 false
             }
         } else {
             false
         };
+        // 写入本帧参数（在 is_skip 比较之后——比较用上帧 slot.params）
+        self.slot_table.set_current_params(std::mem::take(&mut self.pending_params));
 
         let index = self.layout_nodes.len();
         self.layout_nodes.push(node);
@@ -1467,4 +1540,91 @@ fn test_is_skip_with_scope_layer() {
         "含 scope 层的 clean group 应 Skip（slot_key 键修复后两棵树路径错位不再导致 miss）——若 Enter 说明回归");
     // 自清洁：帧2 后 layout（clear recording target），避免 RECORDING_TARGET 残留
     composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
+}
+
+/// 阶段5：changed 参数比较机制——帧1 参数写入 slot.params，帧2 同参数比较返回 false（未变）。
+/// 参数变化时返回 true（触发重建）。
+#[test]
+fn test_changed_param_comparison() {
+    let mut composer = Composer::new();
+
+    // 帧1：参数 "hello"（首次 → changed=true）
+    let mut p1 = None;
+    composer.compose(|ctx| {
+        p1 = Some(ctx.changed(&"hello".to_string()));
+        let k = ctx.next_key();
+        ctx.start_leaf(k, Modifier::new());
+        ctx.end_node();
+    });
+    assert_eq!(p1, Some(true), "首次 changed 应返回 true");
+
+    // 帧2：同参数 → changed=false（未变）
+    let mut p2 = None;
+    composer.compose(|ctx| {
+        p2 = Some(ctx.changed(&"hello".to_string()));
+        let k = ctx.next_key();
+        ctx.start_leaf(k, Modifier::new());
+        ctx.end_node();
+    });
+    assert_eq!(p2, Some(false), "同参数 changed 应返回 false（未变）");
+
+    // 帧3：参数变化 → changed=true
+    let mut p3 = None;
+    composer.compose(|ctx| {
+        p3 = Some(ctx.changed(&"world".to_string()));
+        let k = ctx.next_key();
+        ctx.start_leaf(k, Modifier::new());
+        ctx.end_node();
+    });
+    assert_eq!(p3, Some(true), "参数变化 changed 应返回 true");
+
+    // 帧4：回到帧2 的参数（同位置 → 与上帧比较——上帧是 "world" → 变化 → true）
+    let mut p4 = None;
+    composer.compose(|ctx| {
+        p4 = Some(ctx.changed(&"hello".to_string()));
+        let k = ctx.next_key();
+        ctx.start_leaf(k, Modifier::new());
+        ctx.end_node();
+    });
+    assert_eq!(p4, Some(true), "与上帧比较（hello vs world）→ 变化 → true");
+}
+
+/// 阶段5：参数相等跳过集成测试——#[composable] 组件用 ctx.changed 声明参数，
+/// 参数未变 + slot clean → group Skip；参数变化 → Enter。
+#[test]
+fn test_param_equal_skip_integration() {
+    let mut composer = Composer::new();
+    let mut title = "hello".to_string();
+    let mut last_status = None;
+
+    let compose_once = |composer: &mut Composer, title: &str, out: &mut Option<GroupStatus>| {
+        composer.compose(|ctx| {
+            // 组件（模拟 #[composable]）：参数声明（start group 前）
+            let _changed = ctx.changed(&title.to_string());
+            let key = ctx.next_key();
+            let status = ctx.start_restartable_group(key, Modifier::new(), crate::layout::BoxLayout::new());
+            *out = Some(status);
+            if let GroupStatus::Enter = status {
+                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); }
+                ctx.end_node();
+            }
+            ctx.end_restartable_group();
+        });
+    };
+
+    // 帧1：参数 "hello"（首次 → Enter）
+    compose_once(&mut composer, &title, &mut last_status);
+    assert_eq!(last_status, Some(GroupStatus::Enter), "首次应 Enter");
+    // layout（prev_nodes 填充）
+    composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
+
+    // 帧2：参数未变 → Skip（参数相等 + slot clean）
+    compose_once(&mut composer, &title, &mut last_status);
+    assert_eq!(last_status, Some(GroupStatus::Skip), "参数未变 + clean 应 Skip");
+    composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
+
+    // 帧3：参数变化 → Enter（即使 slot clean）
+    title = "world".to_string();
+    compose_once(&mut composer, &title, &mut last_status);
+    assert_eq!(last_status, Some(GroupStatus::Enter), "参数变化应 Enter（绕过 clean-skip）");
 }
