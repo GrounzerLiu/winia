@@ -401,6 +401,9 @@ impl SlotTable {
         } else {
             parent.children.truncate(idx);
             parent.children.push(Slot::new(key));
+            // 新建 slot：本帧返回 Dirty 即已执行；立即消费 dirty 标记，
+            // 否则残留 true 会让下一帧本应 clean 的 slot 误判为 Dirty
+            parent.children.last_mut().unwrap().dirty = false;
             self.path.push(idx);
         }
         if let Some(last) = self.child_counters.last_mut() { *last += 1; }
