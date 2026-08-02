@@ -8,6 +8,7 @@
 use winia::prelude::*;
 use winia::app;
 
+#[composable]
 fn unit_demo(ctx: &mut ComposeCtx) {
     let density = winia::unit::current_density();
 

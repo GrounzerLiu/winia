@@ -20,6 +20,7 @@ fn main() {
     });
 }
 
+#[composable]
 fn keyboard_demo_ui(ctx: &mut ComposeCtx) {
     let log = ctx.remember(|| String::new());
 

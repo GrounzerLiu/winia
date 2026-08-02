@@ -17,6 +17,7 @@ fn main() {
     });
 }
 
+#[composable]
 fn stream_demo_ui(ctx: &mut ComposeCtx) {
     let theme = WiniaTheme::colors();
 

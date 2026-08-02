@@ -3,6 +3,8 @@
 use winia::prelude::*;
 use winia::app;
 
+/// Counter 主界面（#[composable] = 函数级 scope：count/show_alt 等 State 变化 → 本函数重跑）
+#[composable]
 fn counter_ui(ctx: &mut ComposeCtx) {
     let count = ctx.remember(|| 0i32);
     let show_alt = ctx.remember(|| false);

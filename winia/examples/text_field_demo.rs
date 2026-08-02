@@ -4,6 +4,7 @@ use winia::prelude::*;
 use winia::ui::{TextField, TextFieldValue};
 use winia::app;
 
+#[composable]
 fn text_field_ui(ctx: &mut ComposeCtx) {
     let text = ctx.remember(|| TextFieldValue::new("Type here..."));
 

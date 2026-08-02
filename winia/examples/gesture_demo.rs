@@ -2,6 +2,7 @@
 //! 测试 Compose 风格 click 检测 + on_pointer_event 完整生命周期
 
 use winia::core::composer::ComposeCtx;
+use winia::composable;
 use winia::modifier::{Modifier, Color, Dimension, PointerEvent, PointerEventType};
 use winia::ui::text::Text;
 use winia::ui::Window;
@@ -10,6 +11,7 @@ use winia::ui::Column;
 use winia::ui::button::{Button, ButtonStyle};
 use winia::app;
 
+#[composable]
 fn gesture_ui(ctx: &mut ComposeCtx) {
         // ── 状态 ──
         let count = ctx.remember(|| 0i32);

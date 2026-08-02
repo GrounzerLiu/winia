@@ -4,6 +4,7 @@ use winia::prelude::*;
 use winia::ui::RichText;
 use winia::app;
 
+#[composable]
 fn selection_ui(ctx: &mut ComposeCtx) {
     let t1 = "Hello! 👋😊 The SelectionContainer makes text selectable.";
     let t2 = "🎉 Drag across 🚀 multiple texts! The highlight follows.";

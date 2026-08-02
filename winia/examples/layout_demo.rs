@@ -5,19 +5,12 @@
 use winia::prelude::*;
 use winia::app;
 
-fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
+/// 布局演示主界面（#[composable] = 函数级组合 scope）
+#[composable]
+fn layout_demo_ui(ctx: &mut ComposeCtx) {
+    let scroll_state = ctx.remember(|| ScrollState::new()).get();
 
-    app::run_app(|ctx| {
-        WiniaTheme::auto(ctx, |ctx| {
-            Window::new()
-                .size(480.0, 700.0)
-                .title("Layout Demo")
-                .build(ctx, |ctx| {
-                    let scroll_state = ctx.remember(|| ScrollState::new()).get();
-
-                    Column::new()
+    Column::new()
                         .modifier(Modifier::new()
                             .size(Dimension::Fill, 700.0)
                             .padding(16.0)
@@ -245,7 +238,18 @@ fn main() {
                                         .build(ctx);
                                 });
                         });
-                });
+}
+
+fn main() {
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let _guard = rt.enter();
+
+    app::run_app(|ctx| {
+        WiniaTheme::auto(ctx, |ctx| {
+            Window::new()
+                .size(480.0, 700.0)
+                .title("Layout Demo")
+                .build(ctx, |ctx| layout_demo_ui(ctx));
         });
     });
 }
