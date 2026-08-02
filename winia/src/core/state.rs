@@ -114,6 +114,22 @@ impl<T: PartialEq + 'static> State<T> {
         self.notify();
     }
 
+    /// 设置新值并通知（标记重组），但**不唤醒事件循环**（跳过 WAKE_FN）。
+    ///
+    /// 动画引擎专用：动画 tick 已由 `request_redraw` 驱动渲染帧，若每个动画
+    /// state 的 set 再 wake_up，会触发 wake 自旋（每显示帧多次 compose，
+    /// 重组风暴）。通知仍标记 pending → 下帧渲染时重组重测；
+    /// 仅省去不必要的立即唤醒。
+    pub fn set_no_wake(&self, value: T) {
+        let mut current = self.inner.value.write();
+        if *current == value {
+            return;
+        }
+        *current = value;
+        drop(current);
+        self.notify_no_wake();
+    }
+
     /// 设置新值但**不触发重组**。
     ///
     /// 绘制层动画专用：alpha/scale/颜色等视觉属性变化只触发重绘（由动画引擎
@@ -141,12 +157,21 @@ impl<T: 'static> State<T> {
 
     /// 通知所有订阅者（通常触发重组）
     fn notify(&self) {
+        self.notify_inner(true);
+    }
+
+    /// 通知但不唤醒事件循环（动画引擎用）
+    fn notify_no_wake(&self) {
+        self.notify_inner(false);
+    }
+
+    fn notify_inner(&self, wake: bool) {
         let subscribers = self.inner.subscribers.read();
         for sub in subscribers.iter() {
             (sub.callback)();
         }
         self.inner.notify_version.fetch_add(1, std::sync::atomic::Ordering::Release);
-        notify_state_changed(self.inner.id);
+        notify_state_changed_inner(self.inner.id, wake);
     }
 
     /// 订阅状态变化。返回 Subscription，drop 时精确取消。
@@ -278,11 +303,17 @@ pub(crate) fn register_composer_queue(queue: Weak<Mutex<Vec<u32>>>) {
 
 /// State 值变化时调用：定向通知创建此 State 的 Composer
 pub(crate) fn notify_state_changed(state_id: u32) {
+    notify_state_changed_inner(state_id, true);
+}
+
+pub(crate) fn notify_state_changed_inner(state_id: u32, wake: bool) {
     // 定向通知：只推送到创建此 State 的 Composer 队列，避免跨窗口污染
     if let Some(q) = STATE_QUEUE_MAP.lock().get(&state_id).and_then(|w| w.upgrade()) {
         q.lock().push(state_id);
     }
-    if let Some(ref f) = *WAKE_FN.lock().unwrap() { f(); }
+    if wake {
+        if let Some(ref f) = *WAKE_FN.lock().unwrap() { f(); }
+    }
 }
 
 // ── 实例化依赖记录（替代全局 RECORDED_DEPS + DEP_REGISTRAR）──

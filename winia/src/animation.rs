@@ -342,7 +342,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
         // 极端参数保护：超过 5s 未收敛强制完成（stiffness=0 等永不收敛的场景）
         if now.duration_since(state.start) > Duration::from_secs(5) {
             let final_val = state.to.clone();
-            self.state.set(final_val);
+            self.state.set_no_wake(final_val);
             self.anim_state = None;
             return false;
         }
@@ -410,7 +410,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
                 (state.to.clone(), true)
             }
         };
-        self.state.set(value);
+        self.state.set_no_wake(value);
         if done { self.anim_state = None; }
         !done
     }
@@ -418,7 +418,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
     /// 立即跳转到目标值（无动画）
     pub fn snap_to(&mut self, value: T) {
         self.anim_state = None;
-        self.state.set(value);
+        self.state.set_no_wake(value);
     }
 }
 

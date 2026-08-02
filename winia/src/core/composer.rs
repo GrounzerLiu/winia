@@ -873,7 +873,9 @@ fn register_modifier_deps_recursive(node: &LayoutNode) {
             Self::register_modifier_deps_recursive(root);
         }
 
-        crate::core::state::clear_recording_target();
+        // 注意：recording target 不在此处清除——layout()（measure 阶段）的
+        // SizeDynamic 闭包内 State::get() 也要记录依赖（kf/dp 尺寸动画），
+        // 由 layout() 末尾统一 clear + drain（见 layout()）。
         self.slot_table.truncate();
         // 防御：scope 配对完整性（漏配 end_scope 会导致 SCOPE_STACK 残留跨帧，
         // 使下帧组件外读取注册到失效 scope → 失效静默丢失）
@@ -910,6 +912,8 @@ fn register_modifier_deps_recursive(node: &LayoutNode) {
             for (state_id, slot_key) in self.recorded_deps.drain(..) {
                 self.slot_deps.entry(state_id).or_default().insert(slot_key);
             }
+            // 组合 + 测量全部完成：清除 recording target
+            crate::core::state::clear_recording_target();
         }
     }
 
