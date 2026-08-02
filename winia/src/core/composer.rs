@@ -878,6 +878,11 @@ fn register_modifier_deps_recursive(node: &LayoutNode) {
 
         crate::core::state::clear_recording_target();
         self.slot_table.truncate();
+        // 防御：scope 配对完整性（漏配 end_scope 会导致 SCOPE_STACK 残留跨帧，
+        // 使下帧组件外读取注册到失效 scope → 失效静默丢失）
+        debug_assert_eq!(SCOPE_STACK.with(|s| s.borrow().len()), 0,
+            "compose 结束时 SCOPE_STACK 应清空（scope 配对不完整）");
+        SCOPE_STACK.with(|s| s.borrow_mut().clear());
 
         // 将本帧收集的依赖写入 slot_deps（HashSet 自动去重）
         for (state_id, slot_key) in self.recorded_deps.drain(..) {
@@ -1238,7 +1243,6 @@ use crate::layout::BoxLayout;
 }
 
 #[cfg(test)]
-#[cfg(test)]
 mod scope_tests {
     use super::*;
 
@@ -1263,6 +1267,11 @@ mod scope_tests {
         };
 
         compose_once(&mut composer);
+        // 对照帧：无 State 变化 → 至少 scope/leaf 之一 Clean（证明本测试下正常可 Skip）
+        compose_once(&mut composer);
+        assert!(composer.compose_clean_count >= 1,
+            "对照帧（未失效）应至少 1 个 clean，实际 clean={}（若 0 说明永不 Skip，测试无鉴别力）",
+            composer.compose_clean_count);
         // 手动触发失效（State 已绑定 composer owner）
         let s = holder.borrow().clone().unwrap();
         s.set(1.0);
@@ -1308,7 +1317,6 @@ mod scope_tests {
     }
 
     /// 组件内读取优先节点（NODE_DEPTH>0），组件外读取注册到 scope
-    #[test]
     /// 组件内读取优先节点（NODE_DEPTH>0）：无 scope 场景下，组件内读取只标该 leaf，
     /// 未读对照 leaf 保持 clean（验证组件级失效粒度）
     #[test]
