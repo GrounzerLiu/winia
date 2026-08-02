@@ -36,7 +36,8 @@ fn selection_ui(ctx: &mut ComposeCtx) {
                     .padding(10.0)
                     .background(Color::from_argb(30, 200, 200, 100), Shape::rounded(8.0)))
                 .on_selection_change(move |start, end| {
-                    let txt = &all_a_text[start.min(end)..start.max(end)];
+                    let s = start.min(end); let e = start.max(end);
+                    let txt = all_a_text.get(s..e).unwrap_or(""); // 字节安全切片（emoji 多字节时 get 防越界）
                     sa.set(format!("A: \"{}\"", txt));
                 })
                 .build(ctx, |ctx| {
@@ -69,7 +70,8 @@ fn selection_ui(ctx: &mut ComposeCtx) {
                     .padding(10.0)
                     .background(Color::from_argb(30, 200, 150, 200), Shape::rounded(8.0)))
                 .on_selection_change(move |start, end| {
-                    let txt = &all_b_text[start.min(end)..start.max(end)];
+                    let s = start.min(end); let e = start.max(end);
+                    let txt = all_b_text.get(s..e).unwrap_or(""); // 字节安全切片（emoji 多字节时 get 防越界）
                     sb.set(format!("B: \"{}\"", txt));
                 })
                 .build(ctx, |ctx| {

@@ -375,6 +375,7 @@ impl ApplicationHandler for AppState {
                 }
                 // Up 后清除 capture + 通知选区变化
                 if !state.is_pressed() {
+                    eprintln!("[sel-up-clean] fired, slot={:?}", pw.pointer_down_slot);
                     // Compose 方式：从拖拽节点 slot_key 取 registrar 直接 fire
                     if let Some(slot) = pw.pointer_down_slot {
                         let nodes = pw.composer.arena_nodes();
@@ -389,6 +390,8 @@ impl ApplicationHandler for AppState {
                         }
                     }
                     pw.pointer_down_slot = None;
+                    // 防御：take 可能未执行（click 检测分支外的边界）——强制清 state
+                    pw.pointer_down_state = None;
                 }
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 event_loop.set_control_flow(ControlFlow::Poll);

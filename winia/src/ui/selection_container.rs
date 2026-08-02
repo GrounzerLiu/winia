@@ -207,7 +207,9 @@ impl SelectionContainer {
                 }
                 ctx.end_restartable_group();
             });
-            // 不再清除 registrar——由下一个 SelectionContainer 构建时覆盖
+            // provides 退出后恢复 composer 的 selection_registrar（防残留——
+            // build 之后的 Text 会误注册到本 SelectionContainer，如"显示选中文本"的输出 Text）
+            ctx.clear_selection_registrar();
         }
     }
 }
