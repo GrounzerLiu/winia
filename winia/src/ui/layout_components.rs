@@ -39,9 +39,6 @@ impl Column {
             .alignment(self.alignment)
             .spacing(self.spacing)
             .direction(dir);
-        // content 闭包自动成为组合 scope：content 内（组件外）的 State::get() 注册到本 content scope，
-        // State 变化 → 本 content 整体重跑（子组件不 Skip，modifier/表达式重算）——无需显式 start_scope
-        ctx.start_scope();
         match ctx.start_restartable_group(key, self.modifier, policy) {
             crate::core::composer::GroupStatus::Skip => {}
             crate::core::composer::GroupStatus::Enter => {
@@ -49,7 +46,6 @@ impl Column {
             }
         }
         ctx.end_restartable_group();
-        ctx.end_scope();
     }
 }
 
@@ -89,8 +85,6 @@ impl Row {
             .alignment(self.alignment)
             .spacing(self.spacing)
             .direction(dir);
-        // content 闭包自动成为组合 scope（与 Column 一致）
-        ctx.start_scope();
         match ctx.start_restartable_group(key, self.modifier, policy) {
             crate::core::composer::GroupStatus::Skip => {}
             crate::core::composer::GroupStatus::Enter => {
@@ -98,7 +92,6 @@ impl Row {
             }
         }
         ctx.end_restartable_group();
-        ctx.end_scope();
     }
 }
 
@@ -128,7 +121,6 @@ impl Stack {
         let key = ctx.next_key();
         let policy = BoxLayout::new().alignment(self.alignment);
         // content 闭包自动成为组合 scope（与 Column 一致）
-        ctx.start_scope();
         match ctx.start_restartable_group(key, self.modifier, policy) {
             crate::core::composer::GroupStatus::Skip => {}
             crate::core::composer::GroupStatus::Enter => {
@@ -136,7 +128,6 @@ impl Stack {
             }
         }
         ctx.end_restartable_group();
-        ctx.end_scope();
     }
 }
 

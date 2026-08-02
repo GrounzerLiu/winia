@@ -21,7 +21,6 @@ use std::cell::RefCell;
 
 thread_local! { static ACTIVE_SLOT_KEY: Cell<u64> = const { Cell::new(0) }; }
 thread_local! { static SCOPE_STACK: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) }; }
-thread_local! { static NODE_DEPTH: Cell<usize> = const { Cell::new(0) }; }
 
 /// 参数值（阶段5 参数相等跳过用）——`ComposeCtx::changed` 暂存的参数，
 /// 支持跨帧按类型比较（`Box<dyn Any>` 无法通用 PartialEq，用 trait object 桥接）。
@@ -41,14 +40,15 @@ fn params_equal(a: &[Box<dyn ParamValue>], b: &[Box<dyn ParamValue>]) -> bool {
     a.iter().zip(b.iter()).all(|(x, y)| x.eq_any(&**y))
 }
 
-/// 读取当前组合作用域的依赖注册目标：
-/// 组件 build 内（NODE_DEPTH > 0）→ 当前节点 key（组件级失效粒度）；
-/// 组件外（表达式/局部变量）→ 最内层 scope key。
+/// 读取当前组合作用域的依赖注册目标：最内层 scope（容器组件/函数 scope）；
+/// scope 栈空（组合外/测量）→ ACTIVE_SLOT_KEY。
 pub(crate) fn with_active_scope(f: impl FnOnce(u64)) {
-    if NODE_DEPTH.with(|d| d.get()) > 0 {
-        with_active_slot_key(f);
-        return;
-    }
+    // 统一依赖注册目标 = 最内层 scope（容器组件 start_restartable_group 时 push、
+    // #[composable] 函数 start_scope 时 push）：组件内读取（Text build）注册到最近
+    // 容器 scope（对标 Compose ReplaceGroup 内联语义）；content 闭包内表达式注册到
+    // 所在容器 scope。NODE_DEPTH 不再参与（此前导致 content scope 收不到依赖——
+    // content 闭包内 NODE_DEPTH 恒 ≥1，永远走 ACTIVE_SLOT_KEY）。
+    // scope 栈空（组合外/测量阶段）→ 回退 ACTIVE_SLOT_KEY（测量时节点）
     SCOPE_STACK.with(|s| {
         let s = s.borrow();
         if let Some(&k) = s.last() {
@@ -730,7 +730,6 @@ impl Composer {
     /// 在组合树中开始一个节点（由组件的 build 方法调用）
     pub fn start_node(&mut self, key: u64, modifier: Modifier, policy: Option<Box<dyn MeasurePolicy>>, on_remove: Option<Box<dyn FnOnce() + Send>>) {
         self.current_group_key = key as u32;
-        NODE_DEPTH.with(|d| d.set(d.get() + 1));
         let slot_status = self.slot_table.start_slot(key);
         // 普通节点：复用 scope slot 时重置为普通（同路径类型切换场景）
         self.slot_table.set_current_scope(false);
@@ -793,7 +792,6 @@ impl Composer {
 
     /// 结束当前节点：出栈并建立父子关系
     pub fn end_node(&mut self) {
-        NODE_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
         // 在 end_slot（pop path）之前记录本帧结果到 frame_cache（供本帧后续 Skip 恢复）
         {
             if let Some(&idx) = self.node_stack.last() {
@@ -824,9 +822,11 @@ impl Composer {
         on_remove: Option<Box<dyn FnOnce() + Send>>,
     ) -> GroupStatus {
         self.current_group_key = key as u32;
-        // 与 start_node 对称：容器 build 期间 NODE_DEPTH+1（组件内读取注册到本节点）
-        NODE_DEPTH.with(|d| d.set(d.get() + 1));
+        // 容器 build 期间维护（scope 栈由 start_restartable_group 管理）
         let slot_status = self.slot_table.start_slot(key);
+        // 容器组件 = scope（对标 Compose RestartGroup）：push 组件 scope——
+        // 组件内/ content 闭包内读取注册到本组件（最内层 scope）
+        SCOPE_STACK.with(|s| s.borrow_mut().push(key));
         #[cfg(test)] { match slot_status { SlotStatus::Clean => self.compose_clean_count += 1, _ => self.compose_dirty_count += 1, } }
 
         // 阶段D：按 slot_key 复用上帧节点槽位（policy/measured_size 沿用）
@@ -921,6 +921,11 @@ impl Composer {
         if was_skip {
             self.replay_clean_subtree();
         }
+        // 容器 scope 配对（与 start_restartable_group 的 push 对应）
+        SCOPE_STACK.with(|s| {
+            let mut s = s.borrow_mut();
+            if !s.is_empty() { s.pop(); }
+        });
         self.end_node();
     }
 
@@ -1512,7 +1517,7 @@ mod scope_tests {
                 if let GroupStatus::Enter = status {
                     let s = ctx.remember(|| false);
                     *holder.borrow_mut() = Some(s.clone());
-                    let _v = s.get();       // group 内读取 → 注册到 group（NODE_DEPTH>0）
+                    let _v = s.get();       // 容器 scope 内读取 → 注册到容器（最内层 scope）
                     let key = ctx.next_key();
                     ctx.start_leaf(key, Modifier::new());
                     ctx.end_node();
@@ -1533,9 +1538,8 @@ mod scope_tests {
         assert_eq!(n1, n2, "scope 不产生 LayoutNode，两次组合 children 数应稳定");
     }
 
-    /// 组件内读取优先节点（NODE_DEPTH>0），组件外读取注册到 scope
-    /// 组件内读取优先节点（NODE_DEPTH>0）：无 scope 场景下，组件内读取只标该 leaf，
-    /// 未读对照 leaf 保持 clean（验证组件级失效粒度）
+    /// 依赖注册目标：无 scope（无容器）场景下读取回退 ACTIVE_SLOT_KEY（leaf 节点）——
+    /// 未读对照 leaf 保持 clean（验证回退粒度）
     #[test]
     fn test_node_dependency_precedence() {
         let mut composer = Composer::new();
