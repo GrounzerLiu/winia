@@ -766,12 +766,14 @@ impl Composer {
             let n = &mut self.arena.nodes[idx];
             n.children.clear();
             n.modifier = modifier;
-            n.measure_policy = pidx.or(n.measure_policy);
+            n.measure_policy = pidx; // 显式赋值（None 清空——防类型切换残留旧 policy）
             n.is_replay_stub = false;
             n.on_remove = on_remove;
             n.slot_key = key;
-
-            // dirty/measured_size/cached_constraints 保留——slot_status 决定（Clean → 折叠/重测）
+            // 关键：按 slot_status 设 dirty——State 变化只标记 slot，与 LayoutNode.dirty
+            // 无桥接；复用节点若不设 dirty，measure_node 常量折叠（!dirty && 约束同）
+            // 会返回旧尺寸——动画/文本/布局参数不更新。Dirty → 重测；Clean → 折叠（保留测量）
+            n.dirty = slot_status != SlotStatus::Clean;
             idx
         } else {
             let mut node = LayoutNode::new(modifier, pidx);
@@ -850,11 +852,14 @@ impl Composer {
             let n = &mut self.arena.nodes[idx];
             n.children.clear();
             n.modifier = modifier;
-            n.measure_policy = pidx.or(n.measure_policy);
+            n.measure_policy = pidx; // 显式赋值（None 清空——防类型切换残留旧 policy）
             n.is_replay_stub = false;
             n.on_remove = on_remove;
             n.slot_key = key;
-            // 复用节点：保留 measured_size/cached_constraints——is_skip 判定后
+            // 复用节点：dirty 由 is_skip 判定后决定（Skip → restore_from 覆盖回缓存值；
+            // Enter → 保持 dirty 重测）。这里先按 slot_status 设，is_skip 分支再调整。
+            n.dirty = slot_status != SlotStatus::Clean;
+            // 保留 measured_size/cached_constraints——is_skip 判定后
             // Skip 则 content 不重跑（stub 由 replay 建）；Enter 则重测
             None // 复用路径不新建（索引已确定）
         } else {
@@ -1948,4 +1953,51 @@ fn test_policy_pool_growth() {
     let p2 = composer.arena.policies.len();
     eprintln!("[policy-growth] frame1={} frame21={}", p1, p2);
     assert!(p2 <= p1 + 1, "policy 池应稳定（复用 policy）——frame1={} frame21={}", p1, p2);
+}
+
+/// 回归测试（review 发现的 Blocking bug）：复用节点必须按 slot_status 设 dirty——
+/// State 变化只标记 slot，与 LayoutNode.dirty 无桥接；复用节点不设 dirty 会被
+/// 常量折叠返回旧尺寸（动画/文本不更新）。本测试：帧2 set State → 节点应重测。
+#[test]
+fn test_reused_node_remeasures_on_state_change() {
+    let mut composer = Composer::new();
+    let count: State<f32> = State::new(50.0);
+    let holder = std::cell::RefCell::new(None::<State<f32>>);
+
+    let build = |composer: &mut Composer| {
+        composer.compose(|ctx| {
+            let s = ctx.remember(|| 0.0f32);
+            *holder.borrow_mut() = Some(s.clone());
+            let root_key = ctx.next_key();
+            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    let _ = s.get();
+                    // 尺寸由 State 驱动（动态 size——测量时求值 + 注册依赖）
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, Modifier::new().size(&s, 10.0));
+                    ctx.end_node();
+                }
+            }
+            ctx.end_restartable_group();
+        });
+        composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+    };
+
+    build(&mut composer);
+    let root_idx = composer.layout_root_idx().unwrap();
+    let w1 = composer.arena_nodes()[root_idx].children[0];
+    let size1 = composer.arena_nodes()[w1].measured_size.width;
+    eprintln!("[remeasure] frame1 w={}", size1);
+
+    // 帧2：State 变化（尺寸目标变）→ 节点复用 → 必须重测（dirty 桥接）
+    let s = holder.borrow().clone().unwrap();
+    s.set(300.0);
+    build(&mut composer);
+    let root_idx = composer.layout_root_idx().unwrap();
+    let w1 = composer.arena_nodes()[root_idx].children[0];
+    let size2 = composer.arena_nodes()[w1].measured_size.width;
+    eprintln!("[remeasure] frame2 w={}", size2);
+    assert!(size2 > size1 + 10.0,
+        "State 变化后复用节点应重测：frame1 w={} frame2 w={}（冻结则 bug 复发）", size1, size2);
 }

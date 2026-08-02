@@ -351,6 +351,12 @@ impl NodeArena {
     ) {
         if !visited.insert(idx) { return; }
         if skip.contains(&idx) { return; }
+        // 防御：被 free 的节点不应在本帧树中（复用节点在 skip；新建节点不在
+        // prev_node_by_key——若破坏该不变量会静默误 free 本帧节点）
+        debug_assert!(
+            !self.nodes[idx].children.iter().any(|&c| c == idx),
+            "树环（自引用）——free 应终止"
+        );
         let children = std::mem::take(&mut self.nodes[idx].children);
         for c in children {
             self.free_node_skip(c, skip, visited);
@@ -638,12 +644,6 @@ pub fn set_focus_by_id(nodes: &mut Vec<LayoutNode>, root: usize, target_id: u64)
 }
 
 /// 点击时聚焦指定节点（target 为 arena 索引）
-pub fn focus_node(nodes: &mut Vec<LayoutNode>, root: usize, target_idx: usize) {
-    let target_id = nodes[target_idx].id;
-    clear_focus(nodes, root);
-    set_focus_by_id(nodes, root, target_id);
-}
-
 // ── FocusRequester 全局注册表 ──
 
 /// 通过 FocusRequester ID 设置焦点
