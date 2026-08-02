@@ -151,7 +151,13 @@ fn section2(ctx: &mut ComposeCtx, alpha: &State<f32>) { ... }
 
 ---
 
-## 阶段 4：布局树独立缓存
+## 阶段 4：布局树独立缓存 —— 🔄 Part1-3 完成（is_skip 修复/依赖修复/粒度优化）
+
+**Part1（2059720）**：`prev_nodes`/`frame_cache` 改以 `slot_key` 为键（原 slot path 含 scope 层 vs LayoutNode path 无 scope → 键 miss → is_skip 恒 false 全 Enter）；新增 `restore_layout`（不覆盖本帧 build 的 modifier——修复按钮 label 切换丢失）；`test_is_skip_after_clean_frame` 验证无变化帧真 Skip。
+**Part2（2df4474）**：修复两个根因——① measure 期动态尺寸依赖是死的（recording target 在 compose 末尾清除、layout 在其后 → kf/dp 尺寸动画冻结）：改到 layout() 末尾统一 clear+drain；② 动画 set 触发 wake 自旋（每显示帧多次 compose）：`State::set_no_wake`（notify 但跳过 WAKE_FN）。
+**Part3（c5fc856）**：粒度优化——animation_demo 7 节拆独立 `#[composable]` 函数（动画只重跑对应节）：注册数 2155→829（3.3x）。
+
+**遗留（后续）**：动画期间高频渲染（无 vsync 节流，每显示帧多次重组）——渲染层问题（winit/skia vsync 配置），超出本阶段范围。
 
 **目标**：组合 diff → 增量更新 LayoutNode，跨重组复用（省测量/paragraph 重建）
 
