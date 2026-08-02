@@ -28,7 +28,7 @@
 
 ---
 
-## 阶段 2：派生值（泛型 DerivedValue<T>）
+## 阶段 2：派生值（泛型 DerivedValue<T>）—— ✅ 已完成（fa477f3）
 
 **目标**：`.size(&alpha * 200.0 + 50.0, 30.0)` 内联表达式（非闭包、非宏、非 `let w` 中间变量）；
 泛型化支持 Color/Dp/Offset 等任意类型派生。
@@ -223,7 +223,7 @@ cargo build -p winia --example animation_demo --features debug-server
 
 ## 里程碑检查
 
-- [ ] 阶段 2：派生值（`.size(&alpha * 200.0 + 50.0, 30.0)`）
+- [x] 阶段 2：派生值（`.size(&alpha * 200.0 + 50.0, 30.0)`）——fa477f3 完成
 - [ ] 阶段 3：`#[composable]` 属性宏（函数 = Group）
 - [ ] 阶段 4：布局树独立缓存（LayoutNode 复用）
 - [ ] 阶段 5：参数相等跳过（Stable trait）
