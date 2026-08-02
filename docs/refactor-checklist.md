@@ -199,19 +199,25 @@ fn apply_composition(composer: &mut Composer) {
 
 ---
 
-## 阶段 5：参数相等性跳过（Stable trait）
+## 阶段 5：参数相等性跳过（Stable trait）—— ✅ 已完成（877e4e7）
 
-**目标**：Compose 式 Skip——参数相等则跳过函数体重跑
+**实现**：`ParamValue` trait（`Box<dyn Any>` 无法通用 PartialEq，trait object 桥接 `eq_any`）+ `Slot.params`/`Composer.pending_params` + `ComposeCtx::changed<T: PartialEq + Clone>`（对标 Compose `$composer.changed(param)` 参数序列比较——start 组件前按序调用，与上帧 slot.params 比较）+ `start_restartable_group` 的 is_skip 加参数相等条件（slot clean **且参数全等**才 Skip；参数变化即使 clean 也 Enter）。
 
-### 步骤
-1. `trait Stable: PartialEq {}`（或 derive 宏）
-2. 组件参数实现 Stable → 相等时子 Group 不重跑
-3. 动态值（&State/DerivedFloat/闭包）→ 非 Stable → 依赖追踪决定
-4. `start_restartable_group` 的 Skip 判定：**slot clean && 参数相等**（当前只有 clean）
+**用法**（#[composable] 组件内）：
+```rust
+#[composable]
+fn card(ctx, title: &str) {
+    let _changed = ctx.changed(&title.to_string());  // 参数声明（start group 前）
+    Column::new()...build(ctx, ...);  // title 未变 + slot clean → Skip（content 不重跑）
+}
+```
 
-### 验证
-- 参数未变时子树 Skip（不重建）
-- 参数变化时重跑
+**测试**：`test_changed_param_comparison`（机制：首次 true/同参 false/变化 true/回退 true）+ `test_param_equal_skip_integration`（参数未变 Skip、参数变化 Enter）——121 测试全过。
+
+**已知边界**：
+- 动态值（`&State`/DerivedValue/闭包）不可比较——依赖追踪决定（State 变化 → slot dirty → Enter）
+- Text 等 leaf 组件不参与（内联 ReplaceGroup 语义——随父 scope 重跑，对标 Compose）
+- 手动 `ctx.changed` 声明（Rust 无编译器自动生成——Compose 的编译器等价物由用户显式调用）
 
 ---
 
@@ -232,5 +238,5 @@ cargo build -p winia --example animation_demo --features debug-server
 - [x] 阶段 2：派生值（`.size(&alpha * 200.0 + 50.0, 30.0)`）——fa477f3 完成
 - [x] 阶段 3：`#[composable]` 属性宏（函数 = Group）——1813329 完成
 - [ ] 阶段 4：布局树独立缓存（LayoutNode 复用）
-- [ ] 阶段 5：参数相等跳过（Stable trait）
+- [x] 阶段 5：参数相等跳过（Stable trait）——877e4e7 完成（changed 机制）
 - [ ] 文档最终更新（设计 + 使用指南）
