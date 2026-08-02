@@ -158,8 +158,11 @@ fn section2(ctx: &mut ComposeCtx, alpha: &State<f32>) { ... }
 **Part3（c5fc856）**：demo 粒度优化（注册数 3.3x）。
 **Part4（1cd7e1c）**：**arena 索引树重构**——`LayoutNode.children: Vec<LayoutNode>` → `Vec<usize>` + `NodeArena`（nodes/free/root/policies 池）+ `MeasurePolicy` trait arena 化（nodes/policies/children 索引拆分借用）+ measure_node/hit_test/focus 系列全部 arena 化 + render/app/debug 调用点（fleet 4 并行任务 + 手动修复）。
 **Part5（a68c180）**：**节点复用**——compose 保留上帧树 + `prev_node_by_key` + start_node/start_restartable_group 按 slot_key 复用槽位 + compose 末尾回收未复用（`free_node_skip` 跳过已复用——修复复用节点被 free 递归进本帧树成环的栈溢出；根因：start_restartable_group 复用分支漏记 reused_nodes）+ visited 防环——`test_arena_reuse_stabilizes` 验证 10 帧 arena 16→16 **零增长**（对象级复用 100%）。
+**Part6（9ecd2e1）**：**content scope 死代码修复（架构级）**——统一依赖注册目标 = 最内层 scope（对标 Compose RestartGroup/ReplaceGroup）：`with_active_scope` 移除 NODE_DEPTH 优先（content 闭包内 NODE_DEPTH 恒≥1 → scope 栈收不到依赖）→ 始终 scope 栈顶、空则回退 ACTIVE_SLOT_KEY；`start_restartable_group` push 组件 scope / end pop（容器=scope：组件内 Text 读取注册最近容器——对标 ReplaceGroup 内联）；移除组件自动 content scope（与容器 scope 合并）；删 NODE_DEPTH 死代码。
 
-**遗留（后续）**：动画期间高频渲染（无 vsync 节流）——渲染层问题，超出组合系统范围。
+**遗留（后续）**：
+- vsync：swapchain 已用 PresentMode::Fifo，但动画期间每显示帧多次重组（事件循环 Wait + request_redraw 的 Windows 行为疑点）——渲染层性能优化，非正确性
+- 组合树与布局树仍耦合（设计文档"组合树一等公民"——Slot 树 + arena 树并存——远期）
 
 **目标**：组合 diff → 增量更新 LayoutNode，跨重组复用（省测量/paragraph 重建）
 
