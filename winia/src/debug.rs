@@ -80,6 +80,12 @@ pub enum DebugEvent {
     Resize { w: f32, h: f32 },
     FocusNext,
     RequestFocus { id: u64 },
+    /// 模拟指针按下（选择拖动的起点）
+    PointerDown { x: f32, y: f32 },
+    /// 模拟指针移动（拖动选择）
+    PointerMove { x: f32, y: f32 },
+    /// 模拟指针释放
+    PointerUp { x: f32, y: f32 },
 }
 
 pub fn queue_event(event: DebugEvent) { QUEUED_EVENTS.lock().unwrap().push(event); wake(); }
@@ -148,6 +154,21 @@ pub fn start_stdin_channel() {
                     let y: f32 = parts[2].parse().unwrap_or(0.0);
                     queue_event(DebugEvent::Click { x, y });
                 }
+                "d" if parts.len() >= 3 => {
+                    let x: f32 = parts[1].parse().unwrap_or(0.0);
+                    let y: f32 = parts[2].parse().unwrap_or(0.0);
+                    queue_event(DebugEvent::PointerDown { x, y });
+                }
+                "m" if parts.len() >= 3 => {
+                    let x: f32 = parts[1].parse().unwrap_or(0.0);
+                    let y: f32 = parts[2].parse().unwrap_or(0.0);
+                    queue_event(DebugEvent::PointerMove { x, y });
+                }
+                "u" if parts.len() >= 3 => {
+                    let x: f32 = parts[1].parse().unwrap_or(0.0);
+                    let y: f32 = parts[2].parse().unwrap_or(0.0);
+                    queue_event(DebugEvent::PointerUp { x, y });
+                }
                 "k" if parts.len() >= 2 => queue_event(DebugEvent::Key { key: parts[1..].join(" ") }),
                 "s" if parts.len() == 2 => {
                     let dy: f32 = parts[1].parse().unwrap_or(0.0);
@@ -202,6 +223,24 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
                 let y: f32 = parts[2].parse().unwrap_or(0.0);
                 queue_event(DebugEvent::Click { x, y });
                 let _ = write.send(Message::Text("ok click".into())).await;
+            }
+            "d" if parts.len() >= 3 => {
+                let x: f32 = parts[1].parse().unwrap_or(0.0);
+                let y: f32 = parts[2].parse().unwrap_or(0.0);
+                queue_event(DebugEvent::PointerDown { x, y });
+                let _ = write.send(Message::Text("ok down".into())).await;
+            }
+            "m" if parts.len() >= 3 => {
+                let x: f32 = parts[1].parse().unwrap_or(0.0);
+                let y: f32 = parts[2].parse().unwrap_or(0.0);
+                queue_event(DebugEvent::PointerMove { x, y });
+                let _ = write.send(Message::Text("ok move".into())).await;
+            }
+            "u" if parts.len() >= 3 => {
+                let x: f32 = parts[1].parse().unwrap_or(0.0);
+                let y: f32 = parts[2].parse().unwrap_or(0.0);
+                queue_event(DebugEvent::PointerUp { x, y });
+                let _ = write.send(Message::Text("ok up".into())).await;
             }
             "k" if parts.len() >= 2 => {
                 queue_event(DebugEvent::Key { key: parts[1..].join(" ") });

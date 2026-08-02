@@ -779,6 +779,100 @@ impl ApplicationHandler for AppState {
                                 }
                             }
                         }
+                        debug::DebugEvent::PointerDown { x, y } => {
+                            // 模拟指针按下：选择拖动起点（复用 PointerButton Down 的选择核心）
+                            let nodes = pw.composer.arena_nodes();
+                            if let Some(r) = pw.composer.layout_root_idx() {
+                                let path = hit_test(nodes, r, x, y);
+                                if let Some(&innermost) = path.last() {
+                                    {
+                                        let reg = nodes[innermost].registrar.borrow().as_ref().cloned()
+                                            .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
+                                        reg.clear_selection();
+                                    }
+                                    eprintln!("[sel-debug] node id={} has_text={} para={} dirty={} cc={:?} size={:?}",
+                                        nodes[innermost].id,
+                                        nodes[innermost].has_text_content,
+                                        nodes[innermost].cached_paragraph.borrow().is_some(),
+                                        nodes[innermost].dirty,
+                                        nodes[innermost].cached_constraints,
+                                        nodes[innermost].measured_size);
+                                    let anchor = if let Ok(borrow) = nodes[innermost].cached_paragraph.try_borrow() {
+                                        borrow.as_ref().map(|para| {
+                                            let (ax, ay) = node_abs_position(nodes, r, nodes[innermost].id);
+                                            let tl = crate::text::TextLayout::new(para, 0);
+                                            tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(x - ax, y - ay))
+                                        })
+                                    } else {
+                                        eprintln!("[sel-debug] try_borrow FAILED（渲染借用中？）");
+                                        None
+                                    };
+                                    eprintln!("[sel-debug] down para={} anchor={:?}", nodes[innermost].cached_paragraph.borrow().is_some(), anchor);
+                                    let anchor_global = anchor.and_then(|a| {
+                                        let reg = nodes[innermost].registrar.borrow().as_ref().cloned()
+                                            .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
+                                        reg.segment_info(nodes[innermost].slot_key).map(|(off, _)| off + a)
+                                    });
+                                    pw.pointer_down_state = Some(crate::app::PtrDownState {
+                                        node_id: nodes[innermost].id, position: (x, y), time: std::time::Instant::now(), selection_anchor: anchor_global });
+                                    pw.pointer_down_slot = Some(nodes[innermost].slot_key);
+                                    eprintln!("[sel-debug] anchor_global={:?}", anchor_global);
+                                    handled = true;
+                                }
+                            }
+                        }
+                        debug::DebugEvent::PointerMove { x, y } => {
+                            // 模拟拖动选择（复用 PointerMoved 的选择核心）
+                            let nodes = pw.composer.arena_nodes();
+                            if let Some(r) = pw.composer.layout_root_idx() {
+                                let path = hit_test(nodes, r, x, y);
+                                if pw.pointer_down_state.is_some() {
+                                    if let Some(&innermost) = path.last() {
+                                        let down = pw.pointer_down_state.as_ref().unwrap();
+                                        let dx = x - down.position.0;
+                                        let dy = y - down.position.1;
+                                        if (dx*dx + dy*dy).sqrt() > 18.0 {
+                                            if let Some(para) = nodes[innermost].cached_paragraph.borrow().as_ref() {
+                                                let (abs_x, abs_y) = node_abs_position(nodes, r, nodes[innermost].id);
+                                                let tl = crate::text::TextLayout::new(para, 0);
+                                                let reg = nodes[innermost].registrar.borrow().as_ref().cloned()
+                                                    .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
+                                                if let Some((global_off, _)) = reg.segment_info(nodes[innermost].slot_key) {
+                                                    let current = tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(x - abs_x, y - abs_y));
+                                                    let current_global = global_off + current;
+                                                    let anchor_global = down.selection_anchor;
+                                                    let s = anchor_global.map(|a| a.min(current_global)).unwrap_or(current_global);
+                                                    let e = anchor_global.map(|a| a.max(current_global)).unwrap_or(current_global + 1);
+                                                    eprintln!("[selection] set global range={}..{}", s, e);
+                                                    reg.set_selection(s, e);
+                                                    handled = true;
+                                                }
+                                            } else {
+                                                eprintln!("[sel-debug] move para None——无法计算选择位置");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        debug::DebugEvent::PointerUp { x: _, y: _ } => {
+                            // 模拟释放：通知选区变化 + 清理
+                            if let Some(slot) = pw.pointer_down_slot {
+                                let nodes = pw.composer.arena_nodes();
+                                if let Some(r) = pw.composer.layout_root_idx() {
+                                    if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot) {
+                                        if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, nid) {
+                                            if let Some(reg) = nodes[idx].registrar.borrow().as_ref() {
+                                                reg.fire_on_change();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            pw.pointer_down_slot = None;
+                            pw.pointer_down_state = None;
+                            handled = true;
+                        }
                         debug::DebugEvent::Scroll { dy, .. } => {
                             if let Some(r) = pw.composer.layout_root_idx() {
                                 apply_scroll_delta(pw.composer.arena_nodes_mut(), r, dy, crate::unit::Density::from_density(pw.scale_factor as f32));
