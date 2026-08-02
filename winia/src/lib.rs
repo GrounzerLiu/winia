@@ -49,12 +49,12 @@ pub mod debug {
 
 // 公开核心类型
 pub use core::composer::{ComposeCtx, Composer, Key};
-pub use core::state::State;
+pub use core::state::{DerivedFloat, DerivedValue, State};
 
 /// Prelude: 使用 Winia 时通常需要的所有导入
 pub mod prelude {
     pub use crate::core::composer::ComposeCtx;
-    pub use crate::core::state::State;
+    pub use crate::core::state::{DerivedFloat, DerivedValue, State};
     pub use crate::modifier::{Dimension, Modifier, Shape, Color, FocusRequester, ScrollState, DecoStyle, DecoMode, FontEdge, FontHint, KbEvent, KbEventType, PointerEvent, PointerEventType, PointerButton, PointerKind, PenKind};
     pub use crate::ui::{Text, TextAlign, TextOverflow, TextStyle, ProvideTextStyle, FontWeight, FontSlant, Button, ButtonStyle, Column, Row, Stack, Window, WiniaTheme, ThemeColors, SelectionContainer};
     pub use crate::ui::theme::is_system_dark_theme;

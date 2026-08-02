@@ -85,12 +85,12 @@ fn animation_demo(ctx: &mut ComposeCtx) {
                 }),
             );
             // content 闭包自动是 scope：alpha.get() 表达式注册到所在 content scope，
-            // alpha 变化 → 该 content 重跑 → w/c 重算——不用闭包、不用显式 start_scope
-            let w = alpha.get() * 200.0 + 50.0;
+            // alpha 变化 → 该 content 重跑 → 表达式重算——不用闭包、不用显式 start_scope
+            // 阶段2 派生值：&alpha * 200.0 + 50.0 内联（State 运算符 → DerivedValue<f32> → SizeValue）
             let c = Color::from_argb((alpha.get() * 255.0) as u8, 76, 175, 80);
             Column::new()
                 .modifier(Modifier::new()
-                    .size(w, 30.0)
+                    .size(&alpha * 200.0 + 50.0, 30.0)
                     .background(c, Shape::rounded(6.0))
                     .padding(4.0))
                 .build(ctx, |ctx| {
