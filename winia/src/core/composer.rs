@@ -135,14 +135,17 @@ impl<'a> ComposeCtx<'a> {
     /// 按序比较——相等返回 `false`（参数未变），不等/首次返回 `true`。
     /// 暂存本帧参数（start_node 时写入 slot.params，供下帧比较）。
     ///
-    /// 用法（组件 build 内）：
+    /// 用法（#[composable] 组件内——参数未变 + slot clean 时容器 Skip，content 不重跑）：
     /// ```rust
-    /// let text_changed = ctx.changed(&self.content);   // 参数序列（按序）
-    /// let size_changed = ctx.changed(&self.font_size);
-    /// let key = ctx.next_key();
-    /// let status = ctx.start_leaf(key, modifier);
-    /// if !text_changed && !size_changed && status == SlotStatus::Clean {
-    ///     // 参数未变 + slot clean → 短路（复用缓存，跳过注册/后续开销）
+    /// #[composable]
+    /// fn card(ctx: &mut ComposeCtx, title: &str) {
+    ///     let _title_changed = ctx.changed(&title.to_string());  // 参数声明（start 容器前）
+    ///     Column::new()
+    ///         .modifier(Modifier::new().padding(8.0))
+    ///         .build(ctx, |ctx| {
+    ///             Text::new(title).build(ctx);
+    ///             // title 未变 + slot clean → Column Skip（content 不执行）
+    ///         });
     /// }
     /// ```
     pub fn changed<T: PartialEq + Clone + 'static>(&mut self, param: &T) -> bool {
@@ -727,8 +730,13 @@ impl Composer {
         let slot_status = self.slot_table.start_slot(key);
         // 普通节点：复用 scope slot 时重置为普通（同路径类型切换场景）
         self.slot_table.set_current_scope(false);
-        // 写入 `ComposeCtx::changed` 暂存的参数（供下帧比较）
-        self.slot_table.set_current_params(std::mem::take(&mut self.pending_params));
+        // 写入 `ComposeCtx::changed` 暂存的参数（供下帧比较）——
+        // 仅当 pending 非空（有 changed 声明）；否则保留上帧 params：
+        // replay 的 stub start_node（pending 空）不清空子 slot params，
+        // 避免父 Skip 后子组件参数未变也被强制 Enter
+        if !self.pending_params.is_empty() {
+            self.slot_table.set_current_params(std::mem::take(&mut self.pending_params));
+        }
         #[cfg(test)] { match slot_status { SlotStatus::Clean => self.compose_clean_count += 1, _ => self.compose_dirty_count += 1, } }
 
         // 创建对应的 LayoutNode
@@ -816,7 +824,10 @@ impl Composer {
             false
         };
         // 写入本帧参数（在 is_skip 比较之后——比较用上帧 slot.params）
-        self.slot_table.set_current_params(std::mem::take(&mut self.pending_params));
+        // 仅当 pending 非空（有 changed 声明）；空则保留上帧 params（replay stub 场景）
+        if !self.pending_params.is_empty() {
+            self.slot_table.set_current_params(std::mem::take(&mut self.pending_params));
+        }
 
         let index = self.layout_nodes.len();
         self.layout_nodes.push(node);
@@ -1627,4 +1638,76 @@ fn test_param_equal_skip_integration() {
     title = "world".to_string();
     compose_once(&mut composer, &title, &mut last_status);
     assert_eq!(last_status, Some(GroupStatus::Enter), "参数变化应 Enter（绕过 clean-skip）");
+}
+
+/// 阶段5 边界：changed 调用次数变化（上帧 2 参，本帧 1 参）→ 保守 Enter（不等）。
+#[test]
+fn test_changed_count_change_enters() {
+    let mut composer = Composer::new();
+    let mut last_status = None;
+
+    // 帧1：2 个参数
+    composer.compose(|ctx| {
+        ctx.changed(&"a".to_string());
+        ctx.changed(&1u32);
+        let k = ctx.next_key();
+        let s = ctx.start_restartable_group(k, Modifier::new(), crate::layout::BoxLayout::new());
+        last_status = Some(s);
+        if let GroupStatus::Enter = s { ctx.end_node(); }
+        ctx.end_restartable_group();
+    });
+    composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
+
+    // 帧2：1 个参数（次数变化）→ 与上帧 2 参比较 → 数量不等 → Enter（保守）
+    composer.compose(|ctx| {
+        ctx.changed(&"a".to_string());
+        let k = ctx.next_key();
+        let s = ctx.start_restartable_group(k, Modifier::new(), crate::layout::BoxLayout::new());
+        last_status = Some(s);
+        if let GroupStatus::Enter = s { ctx.end_node(); }
+        ctx.end_restartable_group();
+    });
+    assert_eq!(last_status, Some(GroupStatus::Enter),
+        "changed 次数变化（2→1）应保守 Enter");
+
+    // 帧3：恢复 2 参（与帧2 的 1 参比较 → 数量不等 → Enter）
+    composer.compose(|ctx| {
+        ctx.changed(&"a".to_string());
+        ctx.changed(&1u32);
+        let k = ctx.next_key();
+        let s = ctx.start_restartable_group(k, Modifier::new(), crate::layout::BoxLayout::new());
+        last_status = Some(s);
+        if let GroupStatus::Enter = s { ctx.end_node(); }
+        ctx.end_restartable_group();
+    });
+    assert_eq!(last_status, Some(GroupStatus::Enter), "次数恢复 1→2 应保守 Enter");
+}
+
+/// 阶段5 边界：组件结构切换（参数组件 → 无参数容器）→ 保守 Enter，不错 Skip。
+#[test]
+fn test_param_to_plain_switch_enters() {
+    let mut composer = Composer::new();
+    let mut last_status = None;
+
+    // 帧1：声明参数的组件（changed 1 次）
+    composer.compose(|ctx| {
+        ctx.changed(&"x".to_string());
+        let k = ctx.next_key();
+        let s = ctx.start_restartable_group(k, Modifier::new(), crate::layout::BoxLayout::new());
+        last_status = Some(s);
+        if let GroupStatus::Enter = s { ctx.end_node(); }
+        ctx.end_restartable_group();
+    });
+    composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
+
+    // 帧2：同位置换成无参数容器（不调 changed）→ pending 空 vs 上帧 params 非空 → 不等 → Enter
+    composer.compose(|ctx| {
+        let k = ctx.next_key();
+        let s = ctx.start_restartable_group(k, Modifier::new(), crate::layout::BoxLayout::new());
+        last_status = Some(s);
+        if let GroupStatus::Enter = s { ctx.end_node(); }
+        ctx.end_restartable_group();
+    });
+    assert_eq!(last_status, Some(GroupStatus::Enter),
+        "参数组件→无参数容器切换应保守 Enter");
 }
