@@ -782,6 +782,16 @@ impl Composer {
             // 无桥接；复用节点若不设 dirty，measure_node 常量折叠（!dirty && 约束同）
             // 会返回旧尺寸——动画/文本/布局参数不更新。Dirty → 重测；Clean → 折叠（保留测量）
             n.dirty = slot_status != SlotStatus::Clean;
+            // 文本内容变化检测：依赖注册在父容器（④ 后）→ leaf slot Clean 但
+            // TextContent content 变了（输入/选择）——不重测则 cached_paragraph 旧
+            // 内容 → 渲染画旧文本（输入不显示，resize 才刷新）
+            if slot_status == SlotStatus::Clean {
+                if let Some(cached) = self.prev_nodes.get(&key) {
+                    if crate::layout::node::modifier_text_content_differs(&cached.modifier, &n.modifier) {
+                        n.dirty = true;
+                    }
+                }
+            }
             idx
         } else {
             let mut node = LayoutNode::new(modifier, pidx);
@@ -2147,4 +2157,61 @@ fn test_key_stable_across_skip_enter() {
     let n2 = composer.arena.nodes.len();
     eprintln!("[key-stable] 帧2 nodes={}", n2);
     assert_eq!(n1, n2, "Row Skip 时 scroll 节点 key 应稳定（每路径 counter）——旧全局 counter 会平移 → arena 增长");
+}
+
+/// 回归测试（TextField 输入不显示 bug）：文本内容变化（依赖注册在父容器 →
+/// leaf slot Clean）→ 复用节点必须重测（modifier_text_content_differs 检测）——
+/// 否则常量折叠 + cached_paragraph 旧内容 → 渲染画旧文本。
+#[test]
+fn test_text_content_change_remeasures() {
+    let mut composer = Composer::new();
+    let holder = std::cell::RefCell::new(None::<crate::core::state::State<String>>);
+
+    // 模拟 TextField：外部 value State（依赖注册在容器 scope）+ TextContent leaf
+    let build = |composer: &mut Composer, text: &str| {
+        composer.compose(|ctx| {
+            let value = ctx.remember(|| "".to_string());
+            *holder.borrow_mut() = Some(value.clone());
+            let root_key = ctx.next_key();
+            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    let _ = value.get(); // 依赖注册到容器 scope（对标 TextField）
+                    let k = ctx.next_key();
+                    // TextContent leaf（content 来自 value——但内容在 build 时快照）
+                    let modifier = Modifier::new().push(crate::modifier::ModifierElement::TextContent {
+                        content: text.to_string(),
+                        font_size: 14.0,
+                        color: crate::modifier::Color::from_argb(255, 0, 0, 0),
+                        font_weight: crate::ui::text::FontWeight::NORMAL,
+                        font_style: crate::ui::text::FontSlant::Upright,
+                        max_lines: usize::MAX,
+                        align: crate::ui::TextAlign::Left,
+                        overflow: crate::ui::TextOverflow::Clip,
+                        soft_wrap: true,
+                    });
+                    ctx.start_leaf(k, modifier);
+                    ctx.end_node();
+                }
+            }
+            ctx.end_restartable_group();
+        });
+        composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+    };
+
+    build(&mut composer, "");
+    let root = composer.layout_root_idx().unwrap();
+    let leaf = composer.arena_nodes()[root].children[0];
+    let w1 = composer.arena_nodes()[leaf].measured_size.width;
+    eprintln!("[text-change] frame1 w={}", w1);
+
+    // 帧2：value 变（容器 Enter）+ content 新（"hello"）→ leaf 复用但内容变 → 必须重测
+    let s = holder.borrow().clone().unwrap();
+    s.set("hello".to_string());
+    build(&mut composer, "hello");
+    let root = composer.layout_root_idx().unwrap();
+    let leaf = composer.arena_nodes()[root].children[0];
+    let w2 = composer.arena_nodes()[leaf].measured_size.width;
+    eprintln!("[text-change] frame2 w={}", w2);
+    assert!(w2 > w1, "文本内容变化后复用 leaf 应重测（宽度变）：frame1 w={} frame2 w={}（冻结则 bug 复发）", w1, w2);
 }

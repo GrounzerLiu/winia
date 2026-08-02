@@ -95,6 +95,20 @@ pub(crate) fn modifier_has_text(modifier: &Modifier) -> bool {
     modifier.elements().iter().any(|el| matches!(el, ModifierElement::TextContent { .. }))
 }
 
+/// 比较两个 modifier 的文本内容（TextContent/RichTextContent 的 content）——
+/// 文本内容变化但 slot Clean（依赖注册在父容器）时，复用节点需重测
+/// （否则常量折叠 + cached_paragraph 旧内容 → 渲染画旧文本，输入不显示）。
+pub(crate) fn modifier_text_content_differs(a: &Modifier, b: &Modifier) -> bool {
+    let text_of = |m: &Modifier| -> Option<String> {
+        m.elements().iter().find_map(|el| match el {
+            ModifierElement::TextContent { content, .. } => Some(content.clone()),
+            ModifierElement::RichTextContent { .. } => Some("<richtext>".to_string()), // RichText 变化保守视为不同
+            _ => None,
+        })
+    };
+    text_of(a) != text_of(b)
+}
+
 /// 检查 modifier 中是否包含 RichTextContent
 pub(crate) fn modifier_has_richtext(modifier: &Modifier) -> bool {
     modifier.elements().iter().any(|el| matches!(el, ModifierElement::RichTextContent { .. }))
