@@ -2072,3 +2072,72 @@ fn test_data_driven_structure_change() {
     assert_eq!(composer.arena_nodes()[root].children.len(), 1,
         "结构回退：移除 leaf 应生效（未复用节点回收）");
 }
+
+/// 回归测试（23ad6a7）：Skip/Enter 交替时 key 稳定性——
+/// 模拟 demo 场景：帧1 全 Enter → 帧2 部分 Skip（Row 的 content 不执行，
+/// 其内 next_key 消失——全局 counter 会平移，每路径 counter 不漂移）→
+/// 帧3 全 Enter——关键：帧3 的 scroll 内节点 key 与帧1 相同（复用命中）。
+#[test]
+fn test_key_stable_across_skip_enter() {
+    let mut composer = Composer::new();
+    let count: State<i32> = State::new(0);
+
+    // 模拟：root Column → [Row(Text+spacer+Button), scroll Column(2 节 × (标题+box))]
+    let build = |composer: &mut Composer, row_skip_trigger: bool| {
+        composer.compose(|ctx| {
+            let _ = count.get(); // root 依赖（触发 root Enter 的条件）
+            ctx.start_scope();
+            let root_key = ctx.next_key();
+            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    // Row（帧2 可能 Skip——由 row_skip_trigger 控制的依赖）
+                    let row_key = ctx.next_key();
+                    match ctx.start_restartable_group(row_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                        GroupStatus::Skip => {}
+                        GroupStatus::Enter => {
+                            let _ = count.get(); // Row 依赖
+                            { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                            { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                            { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                        }
+                    }
+                    ctx.end_restartable_group();
+                    // scroll Column（依赖 count——帧3 Enter）
+                    let scroll_key = ctx.next_key();
+                    match ctx.start_restartable_group(scroll_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                        GroupStatus::Skip => {}
+                        GroupStatus::Enter => {
+                            for _ in 0..2 {
+                                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); } // 标题
+                                let g = ctx.next_key();
+                                match ctx.start_restartable_group(g, Modifier::new(), crate::layout::BoxLayout::new()) {
+                                    GroupStatus::Skip => {}
+                                    GroupStatus::Enter => { { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); } }
+                                }
+                                ctx.end_restartable_group();
+                            }
+                        }
+                    }
+                    ctx.end_restartable_group();
+                }
+            }
+            ctx.end_restartable_group();
+            ctx.end_scope();
+        });
+        composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
+    };
+
+    // 帧1：全 Enter（count 首次 → dirty）
+    build(&mut composer, false);
+    let n1 = composer.arena.nodes.len();
+    eprintln!("[key-stable] 帧1 nodes={}", n1);
+
+    // 帧2：count 变 → 全 Enter（同路径 counter 恒定 → key 同帧1 → 全复用）
+    let s = count.clone();
+    s.set(1);
+    build(&mut composer, false);
+    let n2 = composer.arena.nodes.len();
+    eprintln!("[key-stable] 帧2 nodes={}", n2);
+    assert_eq!(n1, n2, "同路径 counter 应跨帧恒定（key 不漂移 → 全复用，arena 不增长）");
+}
