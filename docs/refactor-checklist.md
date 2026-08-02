@@ -86,7 +86,7 @@ impl From<&DerivedValue<Color>> for BackgroundColor { /* clone 后同上 */ }
 
 ---
 
-## 阶段 3：`#[composable]` 属性宏
+## 阶段 3：`#[composable]` 属性宏 —— ✅ 已完成（1813329）
 
 **目标**：`#[composable]` 标记函数 = Group（函数级 scope），无 content 闭包、无显式 scope
 
@@ -224,7 +224,7 @@ cargo build -p winia --example animation_demo --features debug-server
 ## 里程碑检查
 
 - [x] 阶段 2：派生值（`.size(&alpha * 200.0 + 50.0, 30.0)`）——fa477f3 完成
-- [ ] 阶段 3：`#[composable]` 属性宏（函数 = Group）
+- [x] 阶段 3：`#[composable]` 属性宏（函数 = Group）——1813329 完成
 - [ ] 阶段 4：布局树独立缓存（LayoutNode 复用）
 - [ ] 阶段 5：参数相等跳过（Stable trait）
 - [ ] 文档最终更新（设计 + 使用指南）
