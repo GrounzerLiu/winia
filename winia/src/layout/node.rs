@@ -200,6 +200,19 @@ impl LayoutNode {
         self.has_text_content = modifier_has_text(&self.modifier);
         self.has_richtext_content = modifier_has_richtext(&self.modifier);
     }
+
+    /// 只恢复布局部分（measured_size/cached_constraints/position/focused）——
+    /// 不覆盖 modifier（modifier 用本帧 build 的值；Enter 重建的节点若恢复旧
+    /// modifier，会把本帧新值覆盖成上帧缓存，导致状态变化（如按钮 label）丢失）。
+    /// 用于 start_node 的 clean leaf 恢复；Skip 的 stub 用完整 restore_from。
+    pub(crate) fn restore_layout(&mut self, cached: &CachedNode) {
+        self.measured_size = cached.measured_size;
+        self.position = cached.position;
+        self.focused = cached.focused;
+        self.dirty = cached.dirty;
+        self.cached_constraints = cached.cached_constraints;
+        self.slot_key = cached.slot_key;
+    }
 }
 
 impl Drop for LayoutNode {

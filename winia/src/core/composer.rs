@@ -576,11 +576,13 @@ pub struct Composer {
     recorded_deps: Vec<(u32, u64)>,
     /// 本 Composer 实例的 pending state 通知队列
     pending_states: Arc<parking_lot::Mutex<Vec<u32>>>,
-    /// 上一帧各 slot 路径 → 节点缓存（用于 clean slot 跳过和子树重放）
-    prev_nodes: HashMap<Vec<usize>, CachedNode>,
+    /// 上一帧各 slot_key → 节点缓存（用于 clean slot 跳过和子树重放；
+    /// 用 slot_key 而非 slot 路径作键——scope 层不产生 LayoutNode，路径在两棵树不一致，
+    /// key 是稳定位置标识（路径哈希 + counter），两侧天然对齐）
+    prev_nodes: HashMap<u64, CachedNode>,
     /// 本帧暂存（recompose 循环内 Enter 的结果——Skip 时优先恢复它，
     /// 避免循环内第二次重组用旧 prev_nodes 覆盖本次 Enter 的状态）
-    frame_cache: HashMap<Vec<usize>, CachedNode>,
+    frame_cache: HashMap<u64, CachedNode>,
     /// 当前选区注册表（SelectionContainer compose 时注入，供事件处理访问）
     pub(crate) selection_registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
 
@@ -674,11 +676,11 @@ impl Composer {
         node.on_remove = on_remove;
         node.slot_key = key;
 
-        // Clean slot：从上一帧缓存恢复 measured_size 和 cached_constraints
+        // Clean slot：从上一帧缓存恢复布局部分（measured_size/cached_constraints）——
+        // modifier 用本帧 build 的值（恢复旧 modifier 会覆盖本帧新值，如按钮 label 切换）
         if slot_status == SlotStatus::Clean {
-            let path = self.slot_table.current_path().to_vec();
-            if let Some(cached) = self.prev_nodes.get(&path) {
-                node.restore_from(cached);
+            if let Some(cached) = self.prev_nodes.get(&key) {
+                node.restore_layout(cached);
             }
         }
 
@@ -692,11 +694,9 @@ impl Composer {
         NODE_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
         // 在 end_slot（pop path）之前记录本帧结果到 frame_cache（供本帧后续 Skip 恢复）
         {
-            let slot_path = self.slot_table.current_path().to_vec();
-            let lpath: Vec<usize> = slot_path.get(1..).unwrap_or(&slot_path).to_vec();
             if let Some(&idx) = self.node_stack.last() {
                 let cached = self.layout_nodes[idx].to_cached();
-                self.frame_cache.insert(lpath, cached);
+                self.frame_cache.insert(self.layout_nodes[idx].slot_key, cached);
             }
         }
         self.slot_table.end_slot();
@@ -735,8 +735,7 @@ impl Composer {
 
         // Clean slot：从缓存恢复
         let is_skip = if slot_status == SlotStatus::Clean {
-            let path = self.slot_table.current_path().to_vec();
-            if let Some(cached) = self.prev_nodes.get(&path) {
+            if let Some(cached) = self.prev_nodes.get(&key) {
                 node.restore_from(cached);
                 true // 子树可跳过
             } else {
@@ -804,18 +803,16 @@ impl Composer {
             // 布局部分（size/position/constraints）来自 prev_nodes（上帧 layout 结果），
             // 内容部分（modifier）优先 frame_cache（本帧已 Enter 的构建结果，
             // 避免循环内第二次重组用旧 prev_nodes 覆盖本次 Enter 的内容）
-            let slot_path = self.slot_table.current_path().to_vec();
-            let path: Vec<usize> = slot_path.get(1..).unwrap_or(&slot_path).to_vec();
-            if let Some(cached) = self.prev_nodes.get(&path) {
+            if let Some(cached) = self.prev_nodes.get(child_key) {
                 self.layout_nodes[node_idx].restore_from(cached);
-                if let Some(frame) = self.frame_cache.get(&path) {
+                if let Some(frame) = self.frame_cache.get(child_key) {
                     self.layout_nodes[node_idx].modifier = frame.modifier.clone();
                     self.layout_nodes[node_idx].has_text_content =
                         crate::layout::node::modifier_has_text(&frame.modifier);
                     self.layout_nodes[node_idx].has_richtext_content =
                         crate::layout::node::modifier_has_richtext(&frame.modifier);
                 }
-            } else if let Some(frame) = self.frame_cache.get(&path) {
+            } else if let Some(frame) = self.frame_cache.get(child_key) {
                 self.layout_nodes[node_idx].restore_from(frame);
             }
 
@@ -908,7 +905,7 @@ fn register_modifier_deps_recursive(node: &LayoutNode) {
             root.measured_size = _size;
             // 收集整棵树的节点信息（measured_size、cached_constraints、modifier），按 slot 路径索引
             self.prev_nodes.clear();
-            collect_nodes(root, &mut Vec::new(), &mut self.prev_nodes);
+            collect_nodes(root, &mut self.prev_nodes);
             // measure 阶段（SizeDynamic 闭包内的 State::get()）注册的依赖也要进入 slot_deps
             for (state_id, slot_key) in self.recorded_deps.drain(..) {
                 self.slot_deps.entry(state_id).or_default().insert(slot_key);
@@ -955,27 +952,24 @@ impl Default for Composer {
     }
 }
 
-/// 递归遍历布局树，收集每个 slot 路径的 (measured_size, cached_constraints)。
+/// 递归遍历布局树，收集每个节点的可缓存子集。
 /// 同时将子节点的 dirty 冒泡到父节点（确保父节点不会因 dirty=false 而跳过脏子树）。
-/// 后序遍历布局树，收集所有节点的 measured_size、cached_constraints 和 modifier
-/// 存入 prev_nodes（以 slot path 为键）。
-/// 同时将子节点的 dirty 冒泡到父节点（确保父节点不会因 dirty=false 而跳过脏子树）。
+/// 后序遍历，以 slot_key 为键存入 prev_nodes（slot_key 是稳定位置标识，
+/// 与 start_node/start_restartable_group 的查询键一致——scope 层不产生
+/// LayoutNode，两棵树路径不一致，key 天然对齐）。
 fn collect_nodes(
     node: &mut LayoutNode,
-    path: &mut Vec<usize>,
-    map: &mut HashMap<Vec<usize>, CachedNode>,
+    map: &mut HashMap<u64, CachedNode>,
 ) {
     // 先递归子节点（后序），以便 dirty 从子向父冒泡
-    for (i, child) in node.children.iter_mut().enumerate() {
-        path.push(i);
-        collect_nodes(child, path, map);
+    for child in node.children.iter_mut() {
+        collect_nodes(child, map);
         if child.dirty {
             node.dirty = true;
         }
-        path.pop();
     }
     // 缓存当前节点的可缓存子集
-    map.insert(path.clone(), node.to_cached());
+    map.insert(node.slot_key, node.to_cached());
 }
 
 // ── 测试 ──
@@ -1057,7 +1051,7 @@ use crate::layout::BoxLayout;
         // Frame 1: 建立初始树
         composer.compose(|ctx| {
             let root_key = ctx.next_key();
-            match ctx.start_restartable_group(root_key, Modifier::new(), BoxLayout::new()) {
+            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     // 子 1: state-dependent leaf
@@ -1070,7 +1064,7 @@ use crate::layout::BoxLayout;
 
                     // 子 2: clean restartable group
                     let btn_key = ctx.next_key();
-                    match ctx.start_restartable_group(btn_key, Modifier::new(), BoxLayout::new()) {
+                    match ctx.start_restartable_group(btn_key, Modifier::new(), crate::layout::BoxLayout::new()) {
                         GroupStatus::Skip => {}
                         GroupStatus::Enter => {
                             let content_key = ctx.next_key();
@@ -1093,7 +1087,7 @@ use crate::layout::BoxLayout;
         // Frame 2: recompose（button 应被 skip/replay）
         composer.recompose(|ctx| {
             let root_key = ctx.next_key();
-            match ctx.start_restartable_group(root_key, Modifier::new(), BoxLayout::new()) {
+            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     let text_key = ctx.next_key();
@@ -1104,7 +1098,7 @@ use crate::layout::BoxLayout;
                     ctx.end_node();
 
                     let btn_key = ctx.next_key();
-                    match ctx.start_restartable_group(btn_key, Modifier::new(), BoxLayout::new()) {
+                    match ctx.start_restartable_group(btn_key, Modifier::new(), crate::layout::BoxLayout::new()) {
                         GroupStatus::Skip => {}
                         GroupStatus::Enter => {
                             let content_key = ctx.next_key();
@@ -1133,12 +1127,12 @@ use crate::layout::BoxLayout;
         // Frame 1: compose 3-level tree
         composer.compose(|ctx| {
             let key1 = ctx.next_key();
-            match ctx.start_restartable_group(key1, Modifier::new(), BoxLayout::new()) {
+            match ctx.start_restartable_group(key1, Modifier::new(), crate::layout::BoxLayout::new()) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     // Level 2: nested restartable group
                     let key2 = ctx.next_key();
-                    match ctx.start_restartable_group(key2, Modifier::new(), BoxLayout::new()) {
+                    match ctx.start_restartable_group(key2, Modifier::new(), crate::layout::BoxLayout::new()) {
                         GroupStatus::Skip => {}
                         GroupStatus::Enter => {
                             // Level 3: state-dependent leaf
@@ -1169,11 +1163,11 @@ use crate::layout::BoxLayout;
         // Frame 2: recompose (level2 and leaf2 should be clean → skip/replay)
         composer.recompose(|ctx| {
             let key1 = ctx.next_key();
-            match ctx.start_restartable_group(key1, Modifier::new(), BoxLayout::new()) {
+            match ctx.start_restartable_group(key1, Modifier::new(), crate::layout::BoxLayout::new()) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     let key2 = ctx.next_key();
-                    match ctx.start_restartable_group(key2, Modifier::new(), BoxLayout::new()) {
+                    match ctx.start_restartable_group(key2, Modifier::new(), crate::layout::BoxLayout::new()) {
                         GroupStatus::Skip => {}
                         GroupStatus::Enter => {
                             let leaf_key = ctx.next_key();
@@ -1209,7 +1203,7 @@ use crate::layout::BoxLayout;
         // Frame 1: 初始 compose
         composer.compose(|ctx| {
             let root_key = ctx.next_key();
-            match ctx.start_restartable_group(root_key, Modifier::new(), BoxLayout::new()) {
+            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     let _ = count.get();
@@ -1225,7 +1219,7 @@ use crate::layout::BoxLayout;
         // Frame 2: recompose
         composer.recompose(|ctx| {
             let root_key = ctx.next_key();
-            match ctx.start_restartable_group(root_key, Modifier::new(), BoxLayout::new()) {
+            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     let _ = count.get();
@@ -1365,4 +1359,46 @@ mod scope_tests {
             let _ = children;
         }
     }
+}
+
+/// 阶段4 键修复验证：prev_nodes/frame_cache 改用 slot_key 后，
+/// 无变化帧的 clean group 应真正 Skip（键 miss 时恒 Enter）。
+/// 帧1 组合 root+leaf（无 scope）→ 帧2 无状态变化 → root 应返回 Skip。
+#[test]
+fn test_is_skip_after_clean_frame() {
+    let mut composer = Composer::new();
+    let count: State<i32> = State::new(0);
+
+    composer.compose(|ctx| {
+        let root_key = ctx.next_key();
+        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                let _ = count.get();
+                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); }
+                ctx.end_node();
+            }
+        }
+        ctx.end_restartable_group();
+    });
+
+    // layout 一次：填充 prev_nodes（真实流程：compose → layout → 下帧 compose）
+    composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
+
+    // 帧2：无状态变化 → root slot Clean → prev_nodes 按 slot_key 命中 → Skip
+    let mut skip_happened = false;
+    composer.compose(|ctx| {
+        let root_key = ctx.next_key();
+        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            GroupStatus::Skip => skip_happened = true,
+            GroupStatus::Enter => {
+                let _ = count.get();
+                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); }
+                ctx.end_node();
+            }
+        }
+        ctx.end_restartable_group();
+    });
+    assert!(skip_happened,
+        "无变化帧的 clean group 应 Skip（prev_nodes 按 slot_key 命中）——若 Enter 说明 is_skip 键 miss");
 }
