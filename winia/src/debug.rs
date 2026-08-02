@@ -92,14 +92,15 @@ pub fn simulate_native_click(x: f32, y: f32) {
 
 // ── 组件树 JSON ──
 
-pub fn build_tree_json(root: &LayoutNode) -> String {
+pub fn build_tree_json(nodes: &[LayoutNode], root_idx: usize) -> String {
     let mut out = String::from("[");
-    build_node_json(root, &mut out, 0);
+    build_node_json(nodes, root_idx, &mut out, 0);
     out.push(']');
     out
 }
 
-fn build_node_json(node: &LayoutNode, out: &mut String, depth: usize) {
+fn build_node_json(nodes: &[LayoutNode], idx: usize, out: &mut String, depth: usize) {
+    let node = &nodes[idx];
     let indent = "  ".repeat(depth + 1);
     let mod_desc = describe_modifier(&node.modifier);
     if depth > 0 { out.push_str(",\n"); }
@@ -108,9 +109,9 @@ fn build_node_json(node: &LayoutNode, out: &mut String, depth: usize) {
         node.position.x, node.position.y, node.measured_size.width, node.measured_size.height,
         mod_desc, node.focused,
     ));
-    for (i, child) in node.children.iter().enumerate() {
+    for (i, &child) in node.children.iter().enumerate() {
         if i > 0 { out.push(','); }
-        build_node_json(child, out, depth + 1);
+        build_node_json(nodes, child, out, depth + 1);
     }
     out.push(']'); out.push('}');
 }

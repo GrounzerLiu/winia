@@ -40,7 +40,7 @@ pub mod debug {
     pub fn take_queued_events() -> Vec<DebugEvent> { Vec::new() }
     pub fn queue_event(_event: DebugEvent) {}
     pub fn simulate_native_click(_x: f32, _y: f32) {}
-    pub fn build_tree_json(_root: &crate::layout::node::LayoutNode) -> String { String::new() }
+    pub fn build_tree_json(_nodes: &[crate::layout::node::LayoutNode], _root_idx: usize) -> String { String::new() }
     pub fn set_event_result(_s: &str) {}
     pub fn get_event_result() -> String { String::new() }
     #[derive(Debug, Clone)]

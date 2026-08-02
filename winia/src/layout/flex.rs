@@ -146,7 +146,9 @@ pub(crate) fn measure_flex<A: FlexAxis>(
     alignment: Alignment,
     spacing: f32,
     direction: LayoutDirection,
-    children: &mut [LayoutNode],
+    nodes: &mut Vec<LayoutNode>,
+    policies: &[Box<dyn MeasurePolicy>],
+    children: &[usize],
     constraints: &Constraints,
 ) -> (Size, Vec<Placement>) {
     let n = children.len();
@@ -161,9 +163,9 @@ pub(crate) fn measure_flex<A: FlexAxis>(
     }
 
     // ── per-child 属性 ──
-    let weights: Vec<Option<f32>> = children.iter().map(|c| c.modifier.get_layout_weight()).collect();
+    let weights: Vec<Option<f32>> = children.iter().map(|&c| nodes[c].modifier.get_layout_weight()).collect();
     let aligns: Vec<Alignment> = children.iter()
-        .map(|c| c.modifier.get_align_self().unwrap_or(alignment))
+        .map(|&c| nodes[c].modifier.get_align_self().unwrap_or(alignment))
         .collect();
     let total_spacing = spacing * (n as f32 - 1.0).max(0.0);
 
@@ -173,7 +175,7 @@ pub(crate) fn measure_flex<A: FlexAxis>(
     let mut max_cross: f32 = 0.0;
     let mut total_weight: f32 = 0.0;
 
-    for (i, child) in children.iter_mut().enumerate() {
+    for (i, &c) in children.iter().enumerate() {
         if let Some(w) = weights[i] {
             total_weight += w;
             continue;
@@ -187,7 +189,7 @@ pub(crate) fn measure_flex<A: FlexAxis>(
         let main_remaining = A::main_max(constraints) - total_fixed_main - spacing_deduct;
 
         let cc = A::build_phase1(constraints, main_remaining);
-        let (size, _) = measure_node(child, cc);
+        let (size, _) = measure_node(nodes, policies, c, cc);
         total_fixed_main += A::main_size(size);
         max_cross = max_cross.max(A::cross_size(size));
         child_sizes[i] = size;
@@ -201,12 +203,12 @@ pub(crate) fn measure_flex<A: FlexAxis>(
     };
 
     // ── Phase 2: weight 子节点 ──
-    for (i, child) in children.iter_mut().enumerate() {
+    for (i, &c) in children.iter().enumerate() {
         if let Some(w) = weights[i] {
             let allocated = if total_weight > 0.0 { remaining * w / total_weight } else { 0.0 };
             let stretch_cross = alignment == Alignment::Stretch || aligns[i] == Alignment::Stretch;
             let cc = A::build_phase2(constraints, allocated, stretch_cross);
-            let (size, _) = measure_node(child, cc);
+            let (size, _) = measure_node(nodes, policies, c, cc);
             max_cross = max_cross.max(A::cross_size(size));
             child_sizes[i] = size;
         }

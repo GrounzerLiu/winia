@@ -189,7 +189,7 @@ impl<'a> ComposeCtx<'a> {
     pub fn set_current_node_registrar(&self, reg: crate::ui::selection_container::SelectionRegistrar) {
         if let Some(id) = self.current_node_id() {
             if let Some(idx) = self.composer.node_stack.last() {
-                let node = &self.composer.layout_nodes[*idx];
+                let node = &self.composer.arena.nodes[*idx];
                 *node.registrar.borrow_mut() = Some(reg);
             }
         }
@@ -203,7 +203,7 @@ impl<'a> ComposeCtx<'a> {
         callback: Box<dyn Fn(usize) + Send>,
     ) {
         if let Some(&idx) = self.composer.node_stack.last() {
-            let node = &self.composer.layout_nodes[idx];
+            let node = &self.composer.arena.nodes[idx];
             node.cursor_index.set(cursor_index);
             node.cursor_visible.set(visible);
             *node.cursor_callback.borrow_mut() = Some(callback);
@@ -252,7 +252,7 @@ impl<'a> ComposeCtx<'a> {
     /// 设置当前节点的 IME 预输入回调
     pub fn set_current_node_ime_callback(&self, callback: Box<dyn Fn(&str, Option<(usize, usize)>) + Send>) {
         if let Some(&idx) = self.composer.node_stack.last() {
-            let node = &self.composer.layout_nodes[idx];
+            let node = &self.composer.arena.nodes[idx];
             *node.ime_callback.borrow_mut() = Some(callback);
         }
     }
@@ -260,7 +260,7 @@ impl<'a> ComposeCtx<'a> {
     /// 同步 composing_range 到当前节点（渲染画下划线用）
     pub fn sync_composing_range(&self, range: Option<std::ops::Range<usize>>) {
         if let Some(&idx) = self.composer.node_stack.last() {
-            let node = &self.composer.layout_nodes[idx];
+            let node = &self.composer.arena.nodes[idx];
             *node.composing_range.borrow_mut() = range;
         }
     }
@@ -268,7 +268,7 @@ impl<'a> ComposeCtx<'a> {
     /// 同步 selection_range 到当前节点（渲染高亮选区用）
     pub fn sync_selection_range(&self, range: Option<std::ops::Range<usize>>) {
         if let Some(&idx) = self.composer.node_stack.last() {
-            let node = &self.composer.layout_nodes[idx];
+            let node = &self.composer.arena.nodes[idx];
             *node.selection_range.borrow_mut() = range;
         }
     }
@@ -276,7 +276,7 @@ impl<'a> ComposeCtx<'a> {
     /// 获取当前节点缓存段落中的索引映射（供方向键按 glyph 边界移动）
     pub fn cached_paragraph_maps(&self) -> (crate::text::IndexBiMap, crate::text::IndexBiMap) {
         if let Some(&idx) = self.composer.node_stack.last() {
-            if let Some(node) = self.composer.layout_nodes.get(idx) {
+            if let Some(node) = self.composer.arena.nodes.get(idx) {
                 if let Some(p) = node.cached_paragraph.borrow().as_ref() {
                     return (p.paragraph_byte_to_real_indices.clone(), p.byte_to_utf16_indices.clone());
                 }
@@ -289,7 +289,7 @@ impl<'a> ComposeCtx<'a> {
     /// 设置当前节点的光标位置
     pub fn set_current_node_cursor(&self, cursor_index: usize, visible: bool) {
         if let Some(idx) = self.composer.node_stack.last() {
-            let node = &self.composer.layout_nodes[*idx];
+            let node = &self.composer.arena.nodes[*idx];
             node.cursor_index.set(cursor_index);
             node.cursor_visible.set(visible);
         }
@@ -623,11 +623,10 @@ pub struct Composer {
     next_group_key_counter: u32,
     pending_recomposition: VecDeque<u64>,
     needs_recomposition: bool,
-    layout_nodes: Vec<LayoutNode>,
+    arena: crate::layout::node::NodeArena,
     node_stack: Vec<usize>,
     /// 记录每个 start_restartable_group 的 skip 状态（用于 end_restartable_group 判断）
     group_skip_stack: Vec<bool>,
-    layout_root: Option<usize>,
     /// state_id -> slot_keys 依赖映射
     slot_deps: HashMap<u32, HashSet<u64>>,
     /// 当前 compose 期间记录的依赖（替代全局 RECORDED_DEPS）
@@ -664,10 +663,9 @@ impl Composer {
             next_group_key_counter: 1,
             pending_recomposition: VecDeque::new(),
             needs_recomposition: false,
-            layout_nodes: Vec::new(),
+            arena: crate::layout::node::NodeArena::new(),
             node_stack: Vec::new(),
             group_skip_stack: Vec::new(),
-            layout_root: None,
             slot_deps: HashMap::new(),
             recorded_deps: Vec::new(),
             pending_states,
@@ -684,7 +682,7 @@ impl Composer {
 
     /// 获取当前正在构建的节点 ID（node_stack 栈顶）
     pub fn current_node_id(&self) -> Option<u64> {
-        self.node_stack.last().map(|&idx| self.layout_nodes[idx].id)
+        self.node_stack.last().map(|&idx| self.arena.nodes[idx].id)
     }
 
     /// 分配下一个 group key。
@@ -739,8 +737,9 @@ impl Composer {
         }
         #[cfg(test)] { match slot_status { SlotStatus::Clean => self.compose_clean_count += 1, _ => self.compose_dirty_count += 1, } }
 
-        // 创建对应的 LayoutNode
-        let mut node = LayoutNode::new(modifier, policy);
+        // 创建对应的 LayoutNode（policy 入池，节点存池索引）
+        let pidx = policy.map(|p| self.arena.alloc_policy(p));
+        let mut node = LayoutNode::new(modifier, pidx);
         node.on_remove = on_remove;
         node.slot_key = key;
 
@@ -752,8 +751,7 @@ impl Composer {
             }
         }
 
-        let index = self.layout_nodes.len();
-        self.layout_nodes.push(node);
+        let index = self.arena.alloc(node);
         self.node_stack.push(index);
     }
 
@@ -763,22 +761,20 @@ impl Composer {
         // 在 end_slot（pop path）之前记录本帧结果到 frame_cache（供本帧后续 Skip 恢复）
         {
             if let Some(&idx) = self.node_stack.last() {
-                let cached = self.layout_nodes[idx].to_cached();
-                self.frame_cache.insert(self.layout_nodes[idx].slot_key, cached);
+                let node = self.arena.get(idx);
+                let cached = node.to_cached();
+                self.frame_cache.insert(node.slot_key, cached);
             }
         }
         self.slot_table.end_slot();
 
         if let Some(child_idx) = self.node_stack.pop() {
             if let Some(&parent_idx) = self.node_stack.last() {
-                // 有父节点：将当前节点作为子节点添加
-                // swap_remove 合法因为 child_idx 总是 layout_nodes 的最后一个元素
-                //（子节点在 start_node 时 push，end_node 时 pop，中间无新的 push 越过它）
-                let child = self.layout_nodes.swap_remove(child_idx);
-                self.layout_nodes[parent_idx].add_child(child);
+                // 有父节点：arena 持久——子节点已在池中，挂索引即可（不移除）
+                self.arena.add_child(parent_idx, child_idx);
             } else {
                 // 根节点
-                self.layout_root = Some(child_idx);
+                self.arena.root = Some(child_idx);
             }
         }
     }
@@ -797,7 +793,8 @@ impl Composer {
         let slot_status = self.slot_table.start_slot(key);
         #[cfg(test)] { match slot_status { SlotStatus::Clean => self.compose_clean_count += 1, _ => self.compose_dirty_count += 1, } }
 
-        let mut node = LayoutNode::new(modifier, policy);
+        let pidx = policy.map(|p| self.arena.alloc_policy(p));
+        let mut node = LayoutNode::new(modifier, pidx);
         node.on_remove = on_remove;
         node.slot_key = key;
 
@@ -829,8 +826,7 @@ impl Composer {
             self.slot_table.set_current_params(std::mem::take(&mut self.pending_params));
         }
 
-        let index = self.layout_nodes.len();
-        self.layout_nodes.push(node);
+        let index = self.arena.alloc(node);
         self.node_stack.push(index);
         self.group_skip_stack.push(is_skip);
 
@@ -881,23 +877,22 @@ impl Composer {
             // 标记为重放 stub：clean-skip 节点无 measure_policy，
             // 测量必须直接返回缓存尺寸（见 measure_node 的 is_replay_stub 分支）
             let node_idx = *self.node_stack.last().unwrap();
-            self.layout_nodes[node_idx].is_replay_stub = true;
+            self.arena.get_mut(node_idx).is_replay_stub = true;
 
             // 用缓存覆盖节点属性：
             // 布局部分（size/position/constraints）来自 prev_nodes（上帧 layout 结果），
             // 内容部分（modifier）优先 frame_cache（本帧已 Enter 的构建结果，
             // 避免循环内第二次重组用旧 prev_nodes 覆盖本次 Enter 的内容）
             if let Some(cached) = self.prev_nodes.get(child_key) {
-                self.layout_nodes[node_idx].restore_from(cached);
+                self.arena.get_mut(node_idx).restore_from(cached);
                 if let Some(frame) = self.frame_cache.get(child_key) {
-                    self.layout_nodes[node_idx].modifier = frame.modifier.clone();
-                    self.layout_nodes[node_idx].has_text_content =
-                        crate::layout::node::modifier_has_text(&frame.modifier);
-                    self.layout_nodes[node_idx].has_richtext_content =
-                        crate::layout::node::modifier_has_richtext(&frame.modifier);
+                    let n = self.arena.get_mut(node_idx);
+                    n.modifier = frame.modifier.clone();
+                    n.has_text_content = crate::layout::node::modifier_has_text(&frame.modifier);
+                    n.has_richtext_content = crate::layout::node::modifier_has_richtext(&frame.modifier);
                 }
             } else if let Some(frame) = self.frame_cache.get(child_key) {
-                self.layout_nodes[node_idx].restore_from(frame);
+                self.arena.get_mut(node_idx).restore_from(frame);
             }
 
             // 递归重放孙子节点
@@ -909,24 +904,17 @@ impl Composer {
         }
     }
 
-    /// Compose 末尾：递归遍历 LayoutNode 树，为所有 modifier 注册 State 依赖
-fn register_modifier_deps_recursive(node: &LayoutNode) {
-    node.modifier.register_state_deps();
-    for child in &node.children {
-        Self::register_modifier_deps_recursive(child);
-    }
-}
-
-/// 执行组合：运行 content 闭包，构建/更新组合树和布局树。
+    /// 执行组合：运行 content 闭包，构建/更新组合树和布局树。
     pub fn compose(&mut self, content: impl FnOnce(&mut ComposeCtx)) {
         #[cfg(test)] { self.compose_clean_count = 0; self.compose_dirty_count = 0; }
         self.slot_table.reset();
         self.current_group_key = 0;
         self.next_group_key_counter = 1;
-        self.layout_root = None;
-        // 重置 Window 生命周期标志（先于 layout_nodes.clear，on_remove 再设置新值）
+        self.arena.root = None;
+        // 重置 Window 生命周期标志（先于 arena.free_root，on_remove 再设置新值）
         crate::ui::window::reset_lifecycle_flags();
-        self.layout_nodes.clear();
+        // arena 持久：free 上帧根树（节点回收进 free 池；阶段D 复用）
+        self.arena.free_root();
         self.node_stack.clear();
 
         // 消费本 Composer 实例的 pending states → 标记对应 slot 为脏
@@ -952,9 +940,8 @@ fn register_modifier_deps_recursive(node: &LayoutNode) {
         }
 
         // 自动注册所有 modifier 中引用的 State 依赖（scroll 等）
-        if let Some(root_idx) = self.layout_root {
-            let root = &self.layout_nodes[root_idx];
-            Self::register_modifier_deps_recursive(root);
+        if let Some(root_idx) = self.arena.root {
+            register_modifier_deps_recursive(&self.arena, root_idx);
         }
 
         // 注意：recording target 不在此处清除——layout()（measure 阶段）的
@@ -975,23 +962,43 @@ fn register_modifier_deps_recursive(node: &LayoutNode) {
 
     /// 返回 LayoutNode 树的根节点引用
     pub fn layout_root(&self) -> Option<&LayoutNode> {
-        self.layout_root.map(|idx| &self.layout_nodes[idx])
+        self.arena.root()
     }
 
     /// 返回 LayoutNode 树的根节点可变引用
     pub fn layout_root_mut(&mut self) -> Option<&mut LayoutNode> {
-        self.layout_root.map(|idx| &mut self.layout_nodes[idx])
+        self.arena.root_mut()
+    }
+
+    /// arena 节点池只读访问（arena 化遍历用）
+    pub fn arena_nodes(&self) -> &[LayoutNode] {
+        &self.arena.nodes
+    }
+
+    /// arena 节点池可变访问（arena 化遍历用）
+    pub fn arena_nodes_mut(&mut self) -> &mut Vec<LayoutNode> {
+        &mut self.arena.nodes
+    }
+
+    /// 根节点 arena 索引
+    pub fn layout_root_idx(&self) -> Option<usize> {
+        self.arena.root
+    }
+
+    /// 测量策略池只读访问（measure_node 用）
+    pub fn arena_policies(&self) -> &[Box<dyn MeasurePolicy>] {
+        &self.arena.policies
     }
 
     /// 执行整棵布局树的 measure + place，并缓存测量结果供下帧复用
     pub fn layout(&mut self, root_constraints: Constraints) {
-        if let Some(root_idx) = self.layout_root {
-            let root = &mut self.layout_nodes[root_idx];
-            let (_size, _placements) = crate::layout::measure_node(root, root_constraints);
-            root.measured_size = _size;
+        if let Some(root_idx) = self.arena.root {
+            let (_size, _placements) = crate::layout::measure_node(
+                &mut self.arena.nodes, &self.arena.policies, root_idx, root_constraints);
+            self.arena.nodes[root_idx].measured_size = _size;
             // 收集整棵树的节点信息（measured_size、cached_constraints、modifier），按 slot_key 索引
             self.prev_nodes.clear();
-            collect_nodes(root, &mut self.prev_nodes);
+            collect_nodes(&mut self.arena, root_idx, &mut self.prev_nodes);
             // measure 阶段（SizeDynamic 闭包内的 State::get()）注册的依赖也要进入 slot_deps
             for (state_id, slot_key) in self.recorded_deps.drain(..) {
                 self.slot_deps.entry(state_id).or_default().insert(slot_key);
@@ -1039,6 +1046,16 @@ fn register_modifier_deps_recursive(node: &LayoutNode) {
     }
 }
 
+/// Compose 末尾：递归遍历 LayoutNode 树（arena），为所有 modifier 注册 State 依赖。
+/// 模块级函数（impl 外）——impl 内直接调用。
+fn register_modifier_deps_recursive(arena: &crate::layout::node::NodeArena, idx: usize) {
+    arena.nodes[idx].modifier.register_state_deps();
+    let children = arena.nodes[idx].children.clone();
+    for c in children {
+        register_modifier_deps_recursive(arena, c);
+    }
+}
+
 impl Default for Composer {
     fn default() -> Self {
         Self::new()
@@ -1060,18 +1077,20 @@ impl Drop for Composer {
 /// 与 start_node/start_restartable_group 的查询键一致——scope 层不产生
 /// LayoutNode，两棵树路径不一致，key 天然对齐）。
 fn collect_nodes(
-    node: &mut LayoutNode,
+    arena: &mut crate::layout::node::NodeArena,
+    idx: usize,
     map: &mut HashMap<u64, CachedNode>,
 ) {
     // 先递归子节点（后序），以便 dirty 从子向父冒泡
-    for child in node.children.iter_mut() {
-        collect_nodes(child, map);
-        if child.dirty {
-            node.dirty = true;
+    let children = arena.nodes[idx].children.clone();
+    for c in children {
+        collect_nodes(arena, c, map);
+        if arena.nodes[c].dirty {
+            arena.nodes[idx].dirty = true;
         }
     }
     // 缓存当前节点的可缓存子集
-    map.insert(node.slot_key, node.to_cached());
+    map.insert(arena.nodes[idx].slot_key, arena.nodes[idx].to_cached());
 }
 
 // ── 测试 ──
@@ -1181,10 +1200,10 @@ use crate::layout::BoxLayout;
         });
 
         // 断言 Frame 1 树结构
-        let root = composer.layout_root().expect("root should exist");
-        assert_eq!(root.children.len(), 2, "root should have 2 children");
-        assert_eq!(root.children[0].children.len(), 0, "text should be leaf");
-        assert_eq!(root.children[1].children.len(), 1, "button should have 1 child (content)");
+        let root = composer.layout_root_idx().expect("root should exist");
+        assert_eq!(composer.arena_nodes()[root].children.len(), 2, "root should have 2 children");
+        assert_eq!(composer.arena_nodes()[composer.arena_nodes()[root].children[0]].children.len(), 0, "text should be leaf");
+        assert_eq!(composer.arena_nodes()[composer.arena_nodes()[root].children[1]].children.len(), 1, "button should have 1 child (content)");
 
         // Frame 2: recompose（button 应被 skip/replay）
         composer.recompose(|ctx| {
@@ -1215,10 +1234,10 @@ use crate::layout::BoxLayout;
         });
 
         // 断言 Frame 2 树结构仍正确
-        let root = composer.layout_root().expect("root should exist");
-        assert_eq!(root.children.len(), 2, "after recompose: root should have 2 children, got {}", root.children.len());
-        assert_eq!(root.children[0].children.len(), 0, "after recompose: text should still be leaf");
-        assert_eq!(root.children[1].children.len(), 1, "after recompose: button should still have 1 child");
+        let root = composer.layout_root_idx().expect("root should exist");
+        assert_eq!(composer.arena_nodes()[root].children.len(), 2, "after recompose: root should have 2 children, got {}", composer.arena_nodes()[root].children.len());
+        assert_eq!(composer.arena_nodes()[composer.arena_nodes()[root].children[0]].children.len(), 0, "after recompose: text should still be leaf");
+        assert_eq!(composer.arena_nodes()[composer.arena_nodes()[root].children[1]].children.len(), 1, "after recompose: button should still have 1 child");
     }
 
     /// 3 层嵌套 restartable group: Column → Column → Text，验证深层 replay 正确性
@@ -1258,9 +1277,9 @@ use crate::layout::BoxLayout;
         });
 
         // Verify Frame 1: root → [level2 → [leaf1, leaf2]]
-        let root = composer.layout_root().unwrap();
-        assert_eq!(root.children.len(), 1, "Frame1: root has 1 child");
-        assert_eq!(root.children[0].children.len(), 2, "Frame1: level2 has 2 children");
+        let root = composer.layout_root_idx().unwrap();
+        assert_eq!(composer.arena_nodes()[root].children.len(), 1, "Frame1: root has 1 child");
+        assert_eq!(composer.arena_nodes()[composer.arena_nodes()[root].children[0]].children.len(), 2, "Frame1: level2 has 2 children");
 
         // Frame 2: recompose (level2 and leaf2 should be clean → skip/replay)
         composer.recompose(|ctx| {
@@ -1291,9 +1310,9 @@ use crate::layout::BoxLayout;
         });
 
         // Verify Frame 2: structure should be identical
-        let root = composer.layout_root().unwrap();
-        assert_eq!(root.children.len(), 1, "Frame2: root has 1 child");
-        assert_eq!(root.children[0].children.len(), 2, "Frame2: level2 has 2 children (leaf1 + leaf2)");
+        let root = composer.layout_root_idx().unwrap();
+        assert_eq!(composer.arena_nodes()[root].children.len(), 1, "Frame2: root has 1 child");
+        assert_eq!(composer.arena_nodes()[composer.arena_nodes()[root].children[0]].children.len(), 2, "Frame2: level2 has 2 children (leaf1 + leaf2)");
     }
 
     /// 验证 compose 时 slot 计数功能正常（增量重组的前提）
@@ -1448,17 +1467,17 @@ mod scope_tests {
     #[derive(Clone, Debug)]
     struct TestPolicy;
     impl crate::layout::node::MeasurePolicy for TestPolicy {
-        fn measure(&self, children: &mut [crate::layout::node::LayoutNode], constraints: crate::layout::constraints::Constraints)
+        fn measure(&self, nodes: &mut Vec<crate::layout::node::LayoutNode>, policies: &[Box<dyn MeasurePolicy>], children: &[usize], constraints: crate::layout::constraints::Constraints)
             -> (crate::layout::node::Size, Vec<crate::layout::node::Placement>) {
             let mut h = 0.0f32;
-            for c in children.iter_mut() {
-                let (s, _) = crate::layout::node::measure_node(c, constraints);
+            for &c in children {
+                let (s, _) = crate::layout::node::measure_node(nodes, policies, c, constraints);
                 h += s.height;
             }
             (crate::layout::node::Size::new(0.0, h), Vec::new())
         }
-        fn place(&self, children: &mut [crate::layout::node::LayoutNode], _placements: &[crate::layout::node::Placement]) {
-            let _ = children;
+        fn place(&self, nodes: &mut Vec<crate::layout::node::LayoutNode>, children: &[usize], _placements: &[crate::layout::node::Placement]) {
+            let _ = (nodes, children);
         }
     }
 }
@@ -1710,4 +1729,53 @@ fn test_param_to_plain_switch_enters() {
     });
     assert_eq!(last_status, Some(GroupStatus::Enter),
         "参数组件→无参数容器切换应保守 Enter");
+}
+
+/// 量化：无变化帧的重组粒度——clean（可跳过/复用缓存）vs dirty（需重建）占比。
+/// 若 clean 占比高 → 增量重组已达成（对象复用收益边际）；dirty 高 → 重建是主开销。
+#[test]
+fn test_quantify_reuse_ratio() {
+    let mut composer = Composer::new();
+    let count: State<i32> = State::new(0);
+
+    // 模拟 demo 结构：root Column(scope) → 7 节 × (标题 Text + 动画 box Column + Text)
+    let build_tree = |composer: &mut Composer| {
+        composer.compose(|ctx| {
+            ctx.start_scope();
+            let root_key = ctx.next_key();
+            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    for _ in 0..7 {
+                        { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); } // 标题
+                        let g = ctx.next_key();
+                        match ctx.start_restartable_group(g, Modifier::new(), crate::layout::BoxLayout::new()) {
+                            GroupStatus::Skip => {}
+                            GroupStatus::Enter => {
+                                let _ = count.get();
+                                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                            }
+                        }
+                        ctx.end_restartable_group();
+                    }
+                }
+            }
+            ctx.end_restartable_group();
+            ctx.end_scope();
+        });
+        composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
+    };
+
+    build_tree(&mut composer);
+    let clean1 = composer.compose_clean_count;
+    let dirty1 = composer.compose_dirty_count;
+    eprintln!("[quant] 帧1: clean={} dirty={}", clean1, dirty1);
+
+    // 帧2：无变化 → 应全 clean（Skip）
+    build_tree(&mut composer);
+    let clean2 = composer.compose_clean_count;
+    let dirty2 = composer.compose_dirty_count;
+    eprintln!("[quant] 帧2(无变化): clean={} dirty={}  → clean占比 {:.0}%",
+        clean2, dirty2, if clean2+dirty2>0 { clean2*100/(clean2+dirty2) } else { 0 });
+    assert!(clean2 >= dirty2, "无变化帧 clean 应 ≥ dirty（增量重组生效）");
 }
