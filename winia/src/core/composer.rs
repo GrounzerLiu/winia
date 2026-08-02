@@ -744,10 +744,24 @@ impl Composer {
         #[cfg(test)] { match slot_status { SlotStatus::Clean => self.compose_clean_count += 1, _ => self.compose_dirty_count += 1, } }
 
         // 创建对应的 LayoutNode（policy 入池，节点存池索引）
-        let pidx = policy.map(|p| self.arena.alloc_policy(p));
+        // 复用节点：policy 替换旧槽（本帧参数生效 + 池不增长——否则每帧 alloc 泄漏）
+        let reused_idx = self.prev_node_by_key.remove(&key);
+        let pidx = if reused_idx.is_some() {
+            if let Some(p) = policy {
+                let old = self.arena.nodes[reused_idx.unwrap()].measure_policy;
+                if let Some(op) = old {
+                    self.arena.policies[op] = p;
+                    Some(op)
+                } else {
+                    Some(self.arena.alloc_policy(p))
+                }
+            } else { None }
+        } else {
+            policy.map(|p| self.arena.alloc_policy(p))
+        };
         // 阶段D：按 slot_key 复用上帧节点槽位（省分配；policy/measured_size 沿用——
         // 同 key = 同调用位置 = 同组件类型，policy 复用安全）
-        let index = if let Some(idx) = self.prev_node_by_key.remove(&key) {
+        let index = if let Some(idx) = reused_idx {
             self.reused_nodes.insert(idx);
             let n = &mut self.arena.nodes[idx];
             n.children.clear();
@@ -756,7 +770,7 @@ impl Composer {
             n.is_replay_stub = false;
             n.on_remove = on_remove;
             n.slot_key = key;
-    
+
             // dirty/measured_size/cached_constraints 保留——slot_status 决定（Clean → 折叠/重测）
             idx
         } else {
@@ -813,12 +827,25 @@ impl Composer {
         let slot_status = self.slot_table.start_slot(key);
         #[cfg(test)] { match slot_status { SlotStatus::Clean => self.compose_clean_count += 1, _ => self.compose_dirty_count += 1, } }
 
-        let pidx = policy.map(|p| self.arena.alloc_policy(p));
         // 阶段D：按 slot_key 复用上帧节点槽位（policy/measured_size 沿用）
+        // 复用节点：policy 替换旧槽（本帧参数生效 + 池不增长）
         let reused_idx = self.prev_node_by_key.remove(&key);
         if let Some(idx) = reused_idx {
             self.reused_nodes.insert(idx);
         }
+        let pidx = if reused_idx.is_some() {
+            if let Some(p) = policy {
+                let old = self.arena.nodes[reused_idx.unwrap()].measure_policy;
+                if let Some(op) = old {
+                    self.arena.policies[op] = p;
+                    Some(op)
+                } else {
+                    Some(self.arena.alloc_policy(p))
+                }
+            } else { None }
+        } else {
+            policy.map(|p| self.arena.alloc_policy(p))
+        };
         let mut node = if let Some(idx) = reused_idx {
             let n = &mut self.arena.nodes[idx];
             n.children.clear();
@@ -1894,4 +1921,31 @@ fn test_arena_reuse_stabilizes() {
     eprintln!("[reuse-check] frame11 nodes={}", n2);
     assert!(n2 <= n1 + 2,
         "节点复用应使 arena 稳定：frame1={} frame11={}（无复用会持续增长）", n1, n2);
+}
+
+/// 遗留问题验证：policy 池是否每帧增长（节点复用但 policy 每帧 alloc → 内存泄漏）
+#[test]
+fn test_policy_pool_growth() {
+    let mut composer = Composer::new();
+    let count: State<i32> = State::new(0);
+    let build = |composer: &mut Composer| {
+        composer.compose(|ctx| {
+            let root_key = ctx.next_key();
+            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    let _ = count.get();
+                    { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                }
+            }
+            ctx.end_restartable_group();
+        });
+        composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
+    };
+    build(&mut composer);
+    let p1 = composer.arena.policies.len();
+    for _ in 0..20 { build(&mut composer); }
+    let p2 = composer.arena.policies.len();
+    eprintln!("[policy-growth] frame1={} frame21={}", p1, p2);
+    assert!(p2 <= p1 + 1, "policy 池应稳定（复用 policy）——frame1={} frame21={}", p1, p2);
 }
