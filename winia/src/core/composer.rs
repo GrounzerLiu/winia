@@ -620,7 +620,6 @@ impl SlotTable {
 pub struct Composer {
     pub(crate) slot_table: SlotTable,
     pub(crate) current_group_key: u32,
-    next_group_key_counter: u32,
     /// 每路径独立 counter（next_group_key 用）——同组合位置跨帧 counter 恒定，
     /// key 不随 Skip/Enter 的 next_key 调用序变化（全局 counter 会因 Skip 的
     /// content 不执行而平移 → key 漂移 → 节点复用错位 + 常量折叠冻结）
@@ -670,7 +669,6 @@ impl Composer {
         Self {
             slot_table: SlotTable::new(),
             current_group_key: 0,
-            next_group_key_counter: 1,
             path_counters: std::collections::HashMap::new(),
             remember_path_counters: std::collections::HashMap::new(),
             pending_recomposition: VecDeque::new(),
@@ -1001,7 +999,6 @@ impl Composer {
         #[cfg(test)] { self.compose_clean_count = 0; self.compose_dirty_count = 0; }
         self.slot_table.reset();
         self.current_group_key = 0;
-        self.next_group_key_counter = 1;
         self.path_counters.clear();
         self.remember_path_counters.clear();
         self.arena.root = None;
@@ -1939,6 +1936,7 @@ fn test_arena_reuse_stabilizes() {
     for _ in 0..10 {
         build(&mut composer);
     }
+    eprintln!("[key-stable] 帧2 clean={} dirty={}", composer.compose_clean_count, composer.compose_dirty_count);
     let n2 = composer.arena.nodes.len();
     eprintln!("[reuse-check] frame11 nodes={}", n2);
     assert!(n2 <= n1 + 2,
@@ -2019,9 +2017,7 @@ fn test_reused_node_remeasures_on_state_change() {
         "State 变化后复用节点应重测：frame1 w={} frame2 w={}（冻结则 bug 复发）", size1, size2);
 }
 
-/// 缓存审视：新建节点（无复用）的 restore_layout 是否死代码——
-/// 新建 = 上帧无该 slot_key = prev_nodes 无该 key（应永不命中）。
-#[test]
+/// 数据驱动的结构变化：State 变 → root Enter → 新增 leaf 生效。
 /// （源码级结构变化在 Skip 语义下不触发——对标 Compose：结构变化必须由数据驱动）
 #[test]
 fn test_data_driven_structure_change() {
@@ -2080,34 +2076,42 @@ fn test_data_driven_structure_change() {
 #[test]
 fn test_key_stable_across_skip_enter() {
     let mut composer = Composer::new();
-    let count: State<i32> = State::new(0);
+    let count_holder = std::cell::RefCell::new(None::<State<i32>>);
+    let row_holder = std::cell::RefCell::new(None::<State<i32>>);
 
     // 模拟：root Column → [Row(Text+spacer+Button), scroll Column(2 节 × (标题+box))]
-    let build = |composer: &mut Composer, row_skip_trigger: bool| {
+    // row_state 驱动 Row（帧2 不变 → Row Skip → 其内 3 个 next_key 消失——全局
+    // counter 会平移 scroll 的 key；每路径 counter 不漂移）
+    let build = |composer: &mut Composer| {
         composer.compose(|ctx| {
-            let _ = count.get(); // root 依赖（触发 root Enter 的条件）
+            let count = ctx.remember(|| 0i32);
+            *count_holder.borrow_mut() = Some(count.clone());
+            let row_state = ctx.remember(|| 0i32);
+            *row_holder.borrow_mut() = Some(row_state.clone());
             ctx.start_scope();
             let root_key = ctx.next_key();
             match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
-                    // Row（帧2 可能 Skip——由 row_skip_trigger 控制的依赖）
+                    let _ = count.get(); // root 依赖（root scope 内注册——帧2 count 变 → root Enter）
+                    // Row（帧2 依赖 row_state 未变 → Clean → Skip——content 不执行）
                     let row_key = ctx.next_key();
                     match ctx.start_restartable_group(row_key, Modifier::new(), crate::layout::BoxLayout::new()) {
                         GroupStatus::Skip => {}
                         GroupStatus::Enter => {
-                            let _ = count.get(); // Row 依赖
+                            let _ = row_state.get(); // Row 依赖
                             { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
                             { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
                             { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
                         }
                     }
                     ctx.end_restartable_group();
-                    // scroll Column（依赖 count——帧3 Enter）
+                    // scroll Column（依赖 count——帧2 Enter：count 变 → scroll 重跑）
                     let scroll_key = ctx.next_key();
                     match ctx.start_restartable_group(scroll_key, Modifier::new(), crate::layout::BoxLayout::new()) {
                         GroupStatus::Skip => {}
                         GroupStatus::Enter => {
+                            let _ = count.get(); // scroll 依赖（帧2 count 变 → scroll Enter）
                             for _ in 0..2 {
                                 { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); } // 标题
                                 let g = ctx.next_key();
@@ -2128,16 +2132,19 @@ fn test_key_stable_across_skip_enter() {
         composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
     };
 
-    // 帧1：全 Enter（count 首次 → dirty）
-    build(&mut composer, false);
+    // 帧1：全 Enter（count + row_state 首次 → dirty）
+    build(&mut composer);
     let n1 = composer.arena.nodes.len();
     eprintln!("[key-stable] 帧1 nodes={}", n1);
 
-    // 帧2：count 变 → 全 Enter（同路径 counter 恒定 → key 同帧1 → 全复用）
-    let s = count.clone();
+    // 帧2：count 变（root/scroll Enter）但 row_state 不变 → **Row Skip**（其内
+    // 3 个 next_key 消失——旧全局 counter 会平移 scroll 的 key → 不复用 → arena 增长；
+    // 每路径 counter 恒定 → scroll 节点 key 同帧1 → 全复用）
+    let s = count_holder.borrow().clone().unwrap();
     s.set(1);
-    build(&mut composer, false);
+    build(&mut composer);
+    eprintln!("[key-stable] 帧2 clean={} dirty={}", composer.compose_clean_count, composer.compose_dirty_count);
     let n2 = composer.arena.nodes.len();
     eprintln!("[key-stable] 帧2 nodes={}", n2);
-    assert_eq!(n1, n2, "同路径 counter 应跨帧恒定（key 不漂移 → 全复用，arena 不增长）");
+    assert_eq!(n1, n2, "Row Skip 时 scroll 节点 key 应稳定（每路径 counter）——旧全局 counter 会平移 → arena 增长");
 }
