@@ -86,15 +86,12 @@ pub struct Key(u64);
 /// 注意: ComposeCtx 不实现 Clone —— 组合树是严格树形遍历。
 pub struct ComposeCtx<'a> {
     composer: &'a mut Composer,
-    /// 当前节点内 remember 调用的序号（用于生成位置 key）
-    remember_counter: u32,
 }
 
 impl<'a> ComposeCtx<'a> {
     pub(crate) fn new(composer: &'a mut Composer) -> Self {
         Self {
             composer,
-            remember_counter: 0,
         }
     }
 
@@ -306,15 +303,18 @@ impl<'a> ComposeCtx<'a> {
     /// next_key 序列漂移，保证同一组合位置跨重组复用同一 State）。
     fn next_remember_key(&mut self) -> u64 {
         let path = self.composer.slot_table.current_path().to_vec();
-        // 路径哈希（FNV-1a 风格）：不同路径 → 不同高位，同一 slot 内多个 remember 用 counter 区分
+        // 路径哈希（FNV-1a 风格）：不同路径 → 不同高位，同一 slot 内多个 remember 用
+        // 每路径独立 counter 区分（跨帧恒定——全局 counter 会因 Skip 平移 → remember key
+        // 漂移 → State 重建/复用错位）
         let mut h: u64 = 0xcbf29ce484222325;
         for &idx in &path {
             h ^= idx as u64;
             h = h.wrapping_mul(0x100000001b3);
         }
-        let key = (h << 32) | (self.remember_counter as u64);
-        self.remember_counter += 1;
-        key
+        let counter = self.composer.remember_path_counters.entry(h).or_insert(0);
+        let c = *counter;
+        *counter += 1;
+        (h << 32) | (c as u64)
     }
 
     /// 开始一个布局节点（叶子组件如 Text 使用）
@@ -621,6 +621,12 @@ pub struct Composer {
     pub(crate) slot_table: SlotTable,
     pub(crate) current_group_key: u32,
     next_group_key_counter: u32,
+    /// 每路径独立 counter（next_group_key 用）——同组合位置跨帧 counter 恒定，
+    /// key 不随 Skip/Enter 的 next_key 调用序变化（全局 counter 会因 Skip 的
+    /// content 不执行而平移 → key 漂移 → 节点复用错位 + 常量折叠冻结）
+    path_counters: std::collections::HashMap<u64, u32>,
+    /// 每路径独立 counter（next_remember_key 用——同上，防 remember key 漂移）
+    remember_path_counters: std::collections::HashMap<u64, u32>,
     pending_recomposition: VecDeque<u64>,
     needs_recomposition: bool,
     arena: crate::layout::node::NodeArena,
@@ -665,6 +671,8 @@ impl Composer {
             slot_table: SlotTable::new(),
             current_group_key: 0,
             next_group_key_counter: 1,
+            path_counters: std::collections::HashMap::new(),
+            remember_path_counters: std::collections::HashMap::new(),
             pending_recomposition: VecDeque::new(),
             needs_recomposition: false,
             arena: crate::layout::node::NodeArena::new(),
@@ -703,9 +711,12 @@ impl Composer {
             h ^= idx as u64;
             h = h.wrapping_mul(0x100000001b3);
         }
-        let key = (h << 32) | (self.next_group_key_counter as u64);
-        self.next_group_key_counter += 1;
-        key
+        // 每路径独立 counter：同路径第 N 次调用跨帧恒定（全局 counter 会因
+        // Skip 的 content 不执行而平移 → key 漂移 → 节点复用错位 + 常量折叠冻结）
+        let counter = self.path_counters.entry(h).or_insert(1);
+        let c = *counter;
+        *counter += 1;
+        (h << 32) | (c as u64)
     }
 
     /// 开始一个组合 scope（无 LayoutNode 的作用域节点——组合代码重跑的失效单位）。
@@ -991,6 +1002,8 @@ impl Composer {
         self.slot_table.reset();
         self.current_group_key = 0;
         self.next_group_key_counter = 1;
+        self.path_counters.clear();
+        self.remember_path_counters.clear();
         self.arena.root = None;
         // 重置 Window 生命周期标志（先于未复用节点回收，on_remove 再设置新值）
         crate::ui::window::reset_lifecycle_flags();
