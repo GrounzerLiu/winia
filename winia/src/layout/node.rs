@@ -339,11 +339,21 @@ impl NodeArena {
         }
     }
 
-    /// 释放节点（含子树——递归释放 children，on_remove 触发）
-    pub fn free_node(&mut self, idx: usize) {
+    /// 释放节点（含子树——递归释放 children，on_remove 触发）。
+    /// `skip`：本帧已复用的节点集合——复用节点已挂入本帧树，free 它会导致
+    /// 递归进本帧树形成环（无限递归栈溢出），必须跳过。
+    /// `visited`：防环防御（树异常成环时终止递归）。
+    pub fn free_node_skip(
+        &mut self,
+        idx: usize,
+        skip: &std::collections::HashSet<usize>,
+        visited: &mut std::collections::HashSet<usize>,
+    ) {
+        if !visited.insert(idx) { return; }
+        if skip.contains(&idx) { return; }
         let children = std::mem::take(&mut self.nodes[idx].children);
         for c in children {
-            self.free_node(c);
+            self.free_node_skip(c, skip, visited);
         }
         if let Some(f) = self.nodes[idx].on_remove.take() { f(); }
         self.nodes[idx] = LayoutNode::default();
@@ -357,8 +367,20 @@ impl NodeArena {
         }
     }
 
+    /// 释放节点（含子树——递归释放 children，on_remove 触发）
+    pub fn free_node(&mut self, idx: usize) {
+        let children = std::mem::take(&mut self.nodes[idx].children);
+        for c in children {
+            self.free_node(c);
+        }
+        if let Some(f) = self.nodes[idx].on_remove.take() { f(); }
+        self.nodes[idx] = LayoutNode::default();
+        self.free.push(idx);
+    }
+
     /// 将子节点挂到父（子节点已在池中——start_node 时 alloc，这里只挂索引 + 设 parent_id）
     pub fn add_child(&mut self, parent: usize, child_idx: usize) {
+
         self.nodes[parent].children.push(child_idx);
         self.nodes[child_idx].parent_id = Some(self.nodes[parent].id);
     }

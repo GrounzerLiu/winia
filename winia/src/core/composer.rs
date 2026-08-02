@@ -642,6 +642,10 @@ pub struct Composer {
     frame_cache: HashMap<u64, CachedNode>,
     /// `ComposeCtx::changed` 暂存的参数（start_slot 时写入新 slot 的 params）
     pending_params: Vec<Box<dyn ParamValue>>,
+    /// 上帧布局树：slot_key → arena 节点索引（阶段D 节点复用——start_node 按 key 复用槽位）
+    prev_node_by_key: HashMap<u64, usize>,
+    /// 本帧已复用的节点索引（free 时跳过——避免递归进本帧树形成环）
+    reused_nodes: std::collections::HashSet<usize>,
     /// 当前选区注册表（SelectionContainer compose 时注入，供事件处理访问）
     pub(crate) selection_registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
 
@@ -672,6 +676,8 @@ impl Composer {
             prev_nodes: HashMap::new(),
             frame_cache: HashMap::new(),
             pending_params: Vec::new(),
+            prev_node_by_key: HashMap::new(),
+            reused_nodes: std::collections::HashSet::new(),
             selection_registrar: None,
             #[cfg(test)]
             compose_clean_count: 0,
@@ -739,19 +745,33 @@ impl Composer {
 
         // 创建对应的 LayoutNode（policy 入池，节点存池索引）
         let pidx = policy.map(|p| self.arena.alloc_policy(p));
-        let mut node = LayoutNode::new(modifier, pidx);
-        node.on_remove = on_remove;
-        node.slot_key = key;
-
-        // Clean slot：从上一帧缓存恢复布局部分（measured_size/cached_constraints）——
-        // modifier 用本帧 build 的值（恢复旧 modifier 会覆盖本帧新值，如按钮 label 切换）
-        if slot_status == SlotStatus::Clean {
-            if let Some(cached) = self.prev_nodes.get(&key) {
-                node.restore_layout(cached);
+        // 阶段D：按 slot_key 复用上帧节点槽位（省分配；policy/measured_size 沿用——
+        // 同 key = 同调用位置 = 同组件类型，policy 复用安全）
+        let index = if let Some(idx) = self.prev_node_by_key.remove(&key) {
+            self.reused_nodes.insert(idx);
+            let n = &mut self.arena.nodes[idx];
+            n.children.clear();
+            n.modifier = modifier;
+            n.measure_policy = pidx.or(n.measure_policy);
+            n.is_replay_stub = false;
+            n.on_remove = on_remove;
+            n.slot_key = key;
+    
+            // dirty/measured_size/cached_constraints 保留——slot_status 决定（Clean → 折叠/重测）
+            idx
+        } else {
+            let mut node = LayoutNode::new(modifier, pidx);
+            node.on_remove = on_remove;
+            node.slot_key = key;
+            // Clean slot：从上一帧缓存恢复布局部分（measured_size/cached_constraints）——
+            // modifier 用本帧 build 的值（恢复旧 modifier 会覆盖本帧新值，如按钮 label 切换）
+            if slot_status == SlotStatus::Clean {
+                if let Some(cached) = self.prev_nodes.get(&key) {
+                    node.restore_layout(cached);
+                }
             }
-        }
-
-        let index = self.arena.alloc(node);
+            self.arena.alloc(node)
+        };
         self.node_stack.push(index);
     }
 
@@ -794,9 +814,28 @@ impl Composer {
         #[cfg(test)] { match slot_status { SlotStatus::Clean => self.compose_clean_count += 1, _ => self.compose_dirty_count += 1, } }
 
         let pidx = policy.map(|p| self.arena.alloc_policy(p));
-        let mut node = LayoutNode::new(modifier, pidx);
-        node.on_remove = on_remove;
-        node.slot_key = key;
+        // 阶段D：按 slot_key 复用上帧节点槽位（policy/measured_size 沿用）
+        let reused_idx = self.prev_node_by_key.remove(&key);
+        if let Some(idx) = reused_idx {
+            self.reused_nodes.insert(idx);
+        }
+        let mut node = if let Some(idx) = reused_idx {
+            let n = &mut self.arena.nodes[idx];
+            n.children.clear();
+            n.modifier = modifier;
+            n.measure_policy = pidx.or(n.measure_policy);
+            n.is_replay_stub = false;
+            n.on_remove = on_remove;
+            n.slot_key = key;
+            // 复用节点：保留 measured_size/cached_constraints——is_skip 判定后
+            // Skip 则 content 不重跑（stub 由 replay 建）；Enter 则重测
+            None // 复用路径不新建（索引已确定）
+        } else {
+            let mut node = LayoutNode::new(modifier, pidx);
+            node.on_remove = on_remove;
+            node.slot_key = key;
+            Some(node)
+        };
 
         // Clean slot：从缓存恢复（阶段5：加参数相等条件——slot clean 且参数
         // 全相等才 Skip；参数变化（changed 比较）时即使 slot clean 也 Enter）
@@ -809,7 +848,9 @@ impl Composer {
             );
             if params_unchanged {
                 if let Some(cached) = self.prev_nodes.get(&key) {
-                    node.restore_from(cached);
+                    if let Some(n) = node.as_mut() {
+                        n.restore_from(cached);
+                    }
                     true // 子树可跳过
                 } else {
                     false
@@ -826,7 +867,10 @@ impl Composer {
             self.slot_table.set_current_params(std::mem::take(&mut self.pending_params));
         }
 
-        let index = self.arena.alloc(node);
+        let index = match node {
+            Some(n) => self.arena.alloc(n),
+            None => reused_idx.unwrap(),
+        };
         self.node_stack.push(index);
         self.group_skip_stack.push(is_skip);
 
@@ -911,10 +955,11 @@ impl Composer {
         self.current_group_key = 0;
         self.next_group_key_counter = 1;
         self.arena.root = None;
-        // 重置 Window 生命周期标志（先于 arena.free_root，on_remove 再设置新值）
+        // 重置 Window 生命周期标志（先于未复用节点回收，on_remove 再设置新值）
         crate::ui::window::reset_lifecycle_flags();
-        // arena 持久：free 上帧根树（节点回收进 free 池；阶段D 复用）
-        self.arena.free_root();
+        // 阶段D：保留上帧树（prev_node_by_key 由上帧 layout 构建）——
+        // start_node 按 slot_key 复用节点槽位；本帧未复用的旧节点在
+        // compose 末尾统一 free（见下方 drain）
         self.node_stack.clear();
 
         // 消费本 Composer 实例的 pending states → 标记对应 slot 为脏
@@ -953,6 +998,15 @@ impl Composer {
         debug_assert_eq!(SCOPE_STACK.with(|s| s.borrow().len()), 0,
             "compose 结束时 SCOPE_STACK 应清空（scope 配对不完整）");
         SCOPE_STACK.with(|s| s.borrow_mut().clear());
+
+        // 阶段D：回收本帧未复用的上帧节点（结构变化移除的子树——on_remove 触发）；
+        // 跳过已复用节点（已挂入本帧树，free 会递归进本帧树形成环）
+        let mut visited = std::collections::HashSet::new();
+        for (_, idx) in self.prev_node_by_key.drain() {
+            self.arena.free_node_skip(idx, &self.reused_nodes, &mut visited);
+        }
+        self.prev_node_by_key.clear();
+        self.reused_nodes.clear();
 
         // 将本帧收集的依赖写入 slot_deps（HashSet 自动去重）
         for (state_id, slot_key) in self.recorded_deps.drain(..) {
@@ -999,6 +1053,9 @@ impl Composer {
             // 收集整棵树的节点信息（measured_size、cached_constraints、modifier），按 slot_key 索引
             self.prev_nodes.clear();
             collect_nodes(&mut self.arena, root_idx, &mut self.prev_nodes);
+            // 阶段D：重建 slot_key → 节点索引映射（供下帧 start_node 复用）
+            self.prev_node_by_key.clear();
+            collect_node_keys(&self.arena, root_idx, &mut self.prev_node_by_key);
             // measure 阶段（SizeDynamic 闭包内的 State::get()）注册的依赖也要进入 slot_deps
             for (state_id, slot_key) in self.recorded_deps.drain(..) {
                 self.slot_deps.entry(state_id).or_default().insert(slot_key);
@@ -1091,6 +1148,19 @@ fn collect_nodes(
     }
     // 缓存当前节点的可缓存子集
     map.insert(arena.nodes[idx].slot_key, arena.nodes[idx].to_cached());
+}
+
+/// 收集 arena 树中所有节点的 slot_key → 索引映射（阶段D 节点复用用）
+fn collect_node_keys(
+    arena: &crate::layout::node::NodeArena,
+    idx: usize,
+    map: &mut HashMap<u64, usize>,
+) {
+    map.insert(arena.nodes[idx].slot_key, idx);
+    let children = arena.nodes[idx].children.clone();
+    for c in children {
+        collect_node_keys(arena, c, map);
+    }
 }
 
 // ── 测试 ──
@@ -1778,4 +1848,50 @@ fn test_quantify_reuse_ratio() {
     eprintln!("[quant] 帧2(无变化): clean={} dirty={}  → clean占比 {:.0}%",
         clean2, dirty2, if clean2+dirty2>0 { clean2*100/(clean2+dirty2) } else { 0 });
     assert!(clean2 >= dirty2, "无变化帧 clean 应 ≥ dirty（增量重组生效）");
+}
+
+/// 阶段D：节点复用生效验证——连续 compose+layout 多帧，arena 节点数应稳定
+/// （复用 = 不新增 alloc；无复用 = 每帧全新建 → 持续增长）。
+#[test]
+fn test_arena_reuse_stabilizes() {
+    let mut composer = Composer::new();
+    let count: State<i32> = State::new(0);
+
+    let build = |composer: &mut Composer| {
+        composer.compose(|ctx| {
+            ctx.start_scope();
+            let root_key = ctx.next_key();
+            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    for _ in 0..5 {
+                        { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                        let g = ctx.next_key();
+                        match ctx.start_restartable_group(g, Modifier::new(), crate::layout::BoxLayout::new()) {
+                            GroupStatus::Skip => {}
+                            GroupStatus::Enter => {
+                                let _ = count.get();
+                                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                            }
+                        }
+                        ctx.end_restartable_group();
+                    }
+                }
+            }
+            ctx.end_restartable_group();
+            ctx.end_scope();
+        });
+        composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
+    };
+
+    build(&mut composer);
+    let n1 = composer.arena.nodes.len();
+    eprintln!("[reuse-check] frame1 nodes={}", n1);
+    for _ in 0..10 {
+        build(&mut composer);
+    }
+    let n2 = composer.arena.nodes.len();
+    eprintln!("[reuse-check] frame11 nodes={}", n2);
+    assert!(n2 <= n1 + 2,
+        "节点复用应使 arena 稳定：frame1={} frame11={}（无复用会持续增长）", n1, n2);
 }
