@@ -69,27 +69,26 @@ pub fn composable(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     }
 
-    // 提取函数体语句（去掉末尾表达式 → 换成末尾 end_scope + 表达式）
+    // 提取函数体语句：尾表达式（含分号的普通语句）统一转带分号语句，
+    // 保证 end_scope 能安全插在所有语句之后（scope 覆盖整个函数体，含原尾表达式）。
     let mut stmts: Vec<Stmt> = block.stmts.clone();
-    let tail_expr = match stmts.pop() {
-        Some(Stmt::Expr(expr, _)) => Some(expr),
-        _ => None,
-    };
+    // pop 最后一条：表达式（Stmt::Expr，可能带分号）或 let/item 语句
+    let tail = stmts.pop();
 
     // 开头注入 start_scope
     let start = quote! { let __composable_scope = #ctx_ident.start_scope(); };
-    // 结尾注入 end_scope
+    // 结尾注入 end_scope（在所有语句之后——scope 覆盖整个函数体）
     let end = quote! { #ctx_ident.end_scope(); };
 
     let mut new_stmts = vec![syn::parse2::<Stmt>(start).unwrap()];
     new_stmts.extend(stmts);
-    if let Some(expr) = tail_expr {
-        // 末尾表达式：先 end_scope 再返回表达式（无返回值时尾表达式丢弃）
-        new_stmts.push(syn::parse2::<Stmt>(end.clone()).unwrap());
-        new_stmts.push(Stmt::Expr(expr, None));
-    } else {
-        new_stmts.push(syn::parse2::<Stmt>(end).unwrap());
+    if let Some(Stmt::Expr(expr, _)) = tail {
+        // 尾表达式补分号转普通语句（组合函数返回 ()，丢弃尾值合法）
+        new_stmts.push(Stmt::Expr(expr, Some(Default::default())));
+    } else if let Some(o) = tail {
+        new_stmts.push(o); // let/item 原样放回
     }
+    new_stmts.push(syn::parse2::<Stmt>(end).unwrap());
 
     let new_block = syn::Block {
         brace_token: block.brace_token,
