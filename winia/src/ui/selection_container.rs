@@ -103,6 +103,12 @@ impl SelectionRegistrar {
         inner.selection_end = None;
     }
 
+    /// 是否同一实例（Arc 身份——跨容器拖动的 anchor 归属判断：拖到别的
+    /// SelectionContainer 的文本上时，用 anchor 容器做 edge snap，不切偏移空间）
+    pub fn is_same(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
     pub fn segment_info(&self, slot_key: u64) -> Option<(usize, usize)> {
         let inner = self.inner.lock().unwrap();
         inner.segments.get(&slot_key).map(|s| (s.global_offset, s.text_len))

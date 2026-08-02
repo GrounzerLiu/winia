@@ -54,6 +54,8 @@ struct PtrDownState {
     time: Instant,
     /// 文本选区的起始字符位置（Down 时记录）
     selection_anchor: Option<usize>,
+    /// Down 时所在的 SelectionContainer registrar（拖动跨容器时选择不切偏移空间）
+    anchor_registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
 }
 
 impl PerWindow {
@@ -295,7 +297,8 @@ impl ApplicationHandler for AppState {
                                     } else { eprintln!("[cursor] para None"); None }
                                 } else { eprintln!("[cursor] try_borrow failed"); None };
                                 pw.pointer_down_state = Some(PtrDownState {
-                                    node_id: nodes[innermost].id, position: scene_pos, time: Instant::now(), selection_anchor: None });
+                                    node_id: nodes[innermost].id, position: scene_pos, time: Instant::now(),
+                                    selection_anchor: None, anchor_registrar: None });
                                 pw.pointer_down_slot = Some(nodes[innermost].slot_key);
                                 eprintln!("[sel-down] pointer_down_state set, slot={}", nodes[innermost].slot_key);
                                 // 将 anchor 转为全局索引再存入
@@ -304,7 +307,10 @@ impl ApplicationHandler for AppState {
                                         .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
                                     let seg = reg.segment_info(nodes[innermost].slot_key);
                                     let global_a = seg.map(|(off,_)| off + a).unwrap_or(a);
-                                    pw.pointer_down_state.as_mut().map(|s| s.selection_anchor = Some(global_a));
+                                    pw.pointer_down_state.as_mut().map(|s| {
+                                        s.selection_anchor = Some(global_a);
+                                        s.anchor_registrar = Some(reg.clone());
+                                    });
                                     // 设置 TextField 光标位置
                                     nodes[innermost].cursor_index.set(a);
                                     // 触发 TextField 的 selection 更新回调
@@ -438,25 +444,42 @@ impl ApplicationHandler for AppState {
                                         };
                                         let tl = crate::text::TextLayout::new(para, 0);
                                         {
+                                            let down = pw.pointer_down_state.as_ref().unwrap();
                                             let reg = nodes[innermost].registrar.borrow().as_ref().cloned()
                                                 .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
-                                            // 只更新注册到 SelectionContainer 的节点
-                                            if let Some((global_off, _)) = reg.segment_info(nodes[innermost].slot_key) {
-                                                let current_index = tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(scene_pos.0 - x_off, scene_pos.1 - abs_y));
-                                                let current_global = global_off + current_index;
-                                                let anchor_global = pw.pointer_down_state.as_ref().and_then(|d| d.selection_anchor);
-                                                let s = anchor_global.map(|a| a.min(current_global)).unwrap_or(current_global);
-                                                let e = anchor_global.map(|a| a.max(current_global)).unwrap_or(current_global + 1);
-                                                eprintln!("[selection] set global range={}..{}", s, e);
-                                                reg.set_selection(s, e);
-                                            } else if let Some(anchor_global) = pw.pointer_down_state.as_ref().and_then(|d| d.selection_anchor) {
-                                                // 鼠标超出 SelectionContainer：扩展到边界
-                                                let total_len = reg.total_text_len();
-                                                let edge = if scene_pos.1 < abs_y { 0 } else { total_len };
+                                            // 跨容器判定：当前 innermost 的 registrar 与 Down 时的 anchor registrar 是否同一
+                                            // 实例（Arc 身份）。不同（拖到别的 SelectionContainer 的文本上）→ 用 anchor 容器
+                                            // 做 edge snap，绝不切到当前容器的偏移空间（否则 anchor 的全局偏移与当前
+                                            // 容器的 global_off 混合 → 错选当前容器文本）
+                                            let same_reg = down.anchor_registrar.as_ref()
+                                                .map(|ar| ar.is_same(&reg)).unwrap_or(false);
+                                            if same_reg {
+                                                // 只更新注册到 SelectionContainer 的节点
+                                                if let Some((global_off, _)) = reg.segment_info(nodes[innermost].slot_key) {
+                                                    let current_index = tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(scene_pos.0 - x_off, scene_pos.1 - abs_y));
+                                                    let current_global = global_off + current_index;
+                                                    let anchor_global = down.selection_anchor;
+                                                    let s = anchor_global.map(|a| a.min(current_global)).unwrap_or(current_global);
+                                                    let e = anchor_global.map(|a| a.max(current_global)).unwrap_or(current_global + 1);
+                                                    eprintln!("[selection] set global range={}..{}", s, e);
+                                                    reg.set_selection(s, e);
+                                                } else if let Some(anchor_global) = down.selection_anchor {
+                                                    // 鼠标超出 SelectionContainer：扩展到边界
+                                                    let total_len = reg.total_text_len();
+                                                    let edge = if scene_pos.1 < abs_y { 0 } else { total_len };
+                                                    let s = anchor_global.min(edge);
+                                                    let e = anchor_global.max(edge);
+                                                    eprintln!("[selection] edge snap range={}..{}", s, e);
+                                                    reg.set_selection(s, e);
+                                                }
+                                            } else if let (Some(anchor_reg), Some(anchor_global)) = (down.anchor_registrar.as_ref(), down.selection_anchor) {
+                                                // 跨容器：当前在别的 SelectionContainer 的文本上——用 anchor 容器做 edge snap
+                                                let total_len = anchor_reg.total_text_len();
+                                                let edge = if scene_pos.1 < down.position.1 { 0 } else { total_len };
                                                 let s = anchor_global.min(edge);
                                                 let e = anchor_global.max(edge);
-                                                eprintln!("[selection] edge snap range={}..{}", s, e);
-                                                reg.set_selection(s, e);
+                                                eprintln!("[selection] cross-container edge snap range={}..{}", s, e);
+                                                anchor_reg.set_selection(s, e);
                                             }
                                         }
                                     }
@@ -823,13 +846,15 @@ impl ApplicationHandler for AppState {
                                         None
                                     };
                                     eprintln!("[sel-debug] down para={} anchor={:?}", nodes[innermost].cached_paragraph.borrow().is_some(), anchor);
+                                    let mut anchor_reg: Option<crate::ui::selection_container::SelectionRegistrar> = None;
                                     let anchor_global = anchor.and_then(|a| {
                                         let reg = nodes[innermost].registrar.borrow().as_ref().cloned()
                                             .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
+                                        anchor_reg = Some(reg.clone());
                                         reg.segment_info(nodes[innermost].slot_key).map(|(off, _)| off + a)
                                     });
                                     pw.pointer_down_state = Some(crate::app::PtrDownState {
-                                        node_id: nodes[innermost].id, position: (x, y), time: std::time::Instant::now(), selection_anchor: anchor_global });
+                                        node_id: nodes[innermost].id, position: (x, y), time: std::time::Instant::now(), selection_anchor: anchor_global, anchor_registrar: anchor_reg });
                                     pw.pointer_down_slot = Some(nodes[innermost].slot_key);
                                     eprintln!("[sel-debug] anchor_global={:?}", anchor_global);
                                     handled = true;
@@ -852,14 +877,34 @@ impl ApplicationHandler for AppState {
                                                 let tl = crate::text::TextLayout::new(para, 0);
                                                 let reg = nodes[innermost].registrar.borrow().as_ref().cloned()
                                                     .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
-                                                if let Some((global_off, _)) = reg.segment_info(nodes[innermost].slot_key) {
-                                                    let current = tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(x - abs_x, y - abs_y));
-                                                    let current_global = global_off + current;
-                                                    let anchor_global = down.selection_anchor;
-                                                    let s = anchor_global.map(|a| a.min(current_global)).unwrap_or(current_global);
-                                                    let e = anchor_global.map(|a| a.max(current_global)).unwrap_or(current_global + 1);
-                                                    eprintln!("[selection] set global range={}..{}", s, e);
-                                                    reg.set_selection(s, e);
+                                                let same_reg = down.anchor_registrar.as_ref()
+                                                    .map(|ar| ar.is_same(&reg)).unwrap_or(false);
+                                                if same_reg {
+                                                    if let Some((global_off, _)) = reg.segment_info(nodes[innermost].slot_key) {
+                                                        let current = tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(x - abs_x, y - abs_y));
+                                                        let current_global = global_off + current;
+                                                        let anchor_global = down.selection_anchor;
+                                                        let s = anchor_global.map(|a| a.min(current_global)).unwrap_or(current_global);
+                                                        let e = anchor_global.map(|a| a.max(current_global)).unwrap_or(current_global + 1);
+                                                        eprintln!("[selection] set global range={}..{}", s, e);
+                                                        reg.set_selection(s, e);
+                                                        handled = true;
+                                                    } else if let Some(anchor_global) = down.selection_anchor {
+                                                        let total_len = reg.total_text_len();
+                                                        let edge = if y < abs_y { 0 } else { total_len };
+                                                        let s = anchor_global.min(edge);
+                                                        let e = anchor_global.max(edge);
+                                                        eprintln!("[selection] edge snap range={}..{}", s, e);
+                                                        reg.set_selection(s, e);
+                                                        handled = true;
+                                                    }
+                                                } else if let (Some(anchor_reg), Some(anchor_global)) = (down.anchor_registrar.as_ref(), down.selection_anchor) {
+                                                    let total_len = anchor_reg.total_text_len();
+                                                    let edge = if y < down.position.1 { 0 } else { total_len };
+                                                    let s = anchor_global.min(edge);
+                                                    let e = anchor_global.max(edge);
+                                                    eprintln!("[selection] cross-container edge snap range={}..{}", s, e);
+                                                    anchor_reg.set_selection(s, e);
                                                     handled = true;
                                                 }
                                             } else {
