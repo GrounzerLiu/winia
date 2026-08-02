@@ -3702,7 +3702,17 @@ dependencies = [
  "tokio-stream",
  "tokio-tungstenite",
  "unicode-segmentation",
+ "winia-macros",
  "winit 0.31.0-beta.2",
+]
+
+[[package]]
+name = "winia-macros"
+version = "0.2.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]

@@ -15,7 +15,6 @@ fn animation_demo(ctx: &mut ComposeCtx) {
         .build(ctx, |ctx| {
             // 在最外层闭包（key 稳定处）remember scroll 状态
             let scroll_y = ctx.remember(|| ScrollState::new()).get();
-
             // ── 顶部固定：标题 + Toggle 按钮（不随滚动）──
             Row::new()
                 .modifier(Modifier::new().fill_max_width())
@@ -70,35 +69,8 @@ fn animation_demo(ctx: &mut ComposeCtx) {
                     });
             }
 
-            // ── 2. Tween — 颜色过渡 ──
-            Text::new("2. Tween 300ms — background color")
-                .font_size(14.0)
-                .color(Color::from_argb(200, 100, 100, 100))
-                .modifier(Modifier::new().padding_vertical(8.0))
-                .build(ctx);
-
-            let alpha = ctx.animate_float_as_state(
-                if clicked.get() { 0.9 } else { 0.2 },
-                AnimationSpec::Tween(TweenSpec {
-                    duration: std::time::Duration::from_millis(300),
-                    interpolator: winia::animation::interpolator::linear,
-                }),
-            );
-            // content 闭包自动是 scope：alpha.get() 表达式注册到所在 content scope，
-            // alpha 变化 → 该 content 重跑 → 表达式重算——不用闭包、不用显式 start_scope
-            // 阶段2 派生值：&alpha * 200.0 + 50.0 内联（State 运算符 → DerivedValue<f32> → SizeValue）
-            let c = Color::from_argb((alpha.get() * 255.0) as u8, 76, 175, 80);
-            Column::new()
-                .modifier(Modifier::new()
-                    .size(&alpha * 200.0 + 50.0, 30.0)
-                    .background(c, Shape::rounded(6.0))
-                    .padding(4.0))
-                .build(ctx, |ctx| {
-                    Text::new(format!("Alpha: {:.2}", alpha.get()))
-                        .font_size(12.0)
-                        .color(Color::from_argb(255, 255, 255, 255))
-                        .build(ctx);
-                });
+            // ── 2. Tween — 颜色过渡（#[composable] 函数 = 函数级 scope）──
+            section2(ctx, &clicked);
 
             // ── 3. updateTransition — 位置偏移 ──
             Text::new("3. updateTransition — offset")
@@ -247,6 +219,41 @@ fn animation_demo(ctx: &mut ComposeCtx) {
 
             // ── 滚动内容区结束 ──
             });
+        });
+}
+
+/// 第 2 节：Tween 颜色过渡。
+/// `#[composable]` 使本函数成为**函数级组合 scope**——函数体开头注入 `ctx.start_scope()`、
+/// 结尾 `ctx.end_scope()`（winia-macros 属性宏展开）。函数内（组件外）的 `alpha.get()`
+/// 表达式注册到本函数 scope：alpha 变化 → **本函数整体重跑** → 表达式重算 → 新 modifier。
+/// 粒度 = 函数（对标 Compose @Composable）。
+#[composable]
+fn section2(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
+    Text::new("2. Tween 300ms — background color")
+        .font_size(14.0)
+        .color(Color::from_argb(200, 100, 100, 100))
+        .modifier(Modifier::new().padding_vertical(8.0))
+        .build(ctx);
+
+    let alpha = ctx.animate_float_as_state(
+        if clicked.get() { 0.9 } else { 0.2 },
+        AnimationSpec::Tween(TweenSpec {
+            duration: std::time::Duration::from_millis(300),
+            interpolator: winia::animation::interpolator::linear,
+        }),
+    );
+    // 表达式直接写（非闭包非宏非中间变量）——注册到本函数 scope
+    let c = Color::from_argb((alpha.get() * 255.0) as u8, 76, 175, 80);
+    Column::new()
+        .modifier(Modifier::new()
+            .size(&alpha * 200.0 + 50.0, 30.0)
+            .background(c, Shape::rounded(6.0))
+            .padding(4.0))
+        .build(ctx, |ctx| {
+            Text::new(format!("Alpha: {:.2}", alpha.get()))
+                .font_size(12.0)
+                .color(Color::from_argb(255, 255, 255, 255))
+                .build(ctx);
         });
 }
 

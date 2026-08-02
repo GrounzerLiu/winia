@@ -50,6 +50,7 @@ pub mod debug {
 // 公开核心类型
 pub use core::composer::{ComposeCtx, Composer, Key};
 pub use core::state::{DerivedFloat, DerivedValue, State};
+pub use winia_macros::composable;
 
 /// Prelude: 使用 Winia 时通常需要的所有导入
 pub mod prelude {
@@ -58,6 +59,7 @@ pub mod prelude {
     pub use crate::modifier::{Dimension, Modifier, Shape, Color, FocusRequester, ScrollState, DecoStyle, DecoMode, FontEdge, FontHint, KbEvent, KbEventType, PointerEvent, PointerEventType, PointerButton, PointerKind, PenKind};
     pub use crate::ui::{Text, TextAlign, TextOverflow, TextStyle, ProvideTextStyle, FontWeight, FontSlant, Button, ButtonStyle, Column, Row, Stack, Window, WiniaTheme, ThemeColors, SelectionContainer};
     pub use crate::ui::theme::is_system_dark_theme;
+    pub use crate::composable;
     pub use crate::ui::rich_text::RichText;
     pub use crate::text::{InlineDrawable, ImageDrawable, SvgDrawable};
     pub use crate::layout::{Arrangement, Alignment, Constraints, LayoutDirection};

@@ -1,0 +1,13 @@
+[package]
+name = "winia-macros"
+version = "0.2.0"
+edition = "2024"
+description = "winia 组合系统属性宏（#[composable] = 函数级组合 scope）"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
