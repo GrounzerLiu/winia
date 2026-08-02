@@ -1125,4 +1125,45 @@ use crate::layout::BoxLayout;
             "expected >=2 slots, got dirty={} clean={}",
             composer.compose_dirty_count, composer.compose_clean_count);
     }
+
+    /// 回归测试（4545e59）：新建 slot 的 dirty:true 残留 bug——
+    /// 帧1 新建 slot（Dirty），帧2 无状态变化 recompose → 应 Clean（Skip）。
+    /// bug 复现时：新建 slot 的 dirty 标记跨帧残留 → 帧2 误判 Dirty → clean=0。
+    #[test]
+    fn test_new_slot_dirty_not_sticky() {
+        let mut composer = Composer::new();
+        let count: State<i32> = State::new(0);
+
+        // Frame 1: 初始 compose（root + leaf 新建）
+        composer.compose(|ctx| {
+            let root_key = ctx.next_key();
+            match ctx.start_restartable_group(root_key, Modifier::new(), BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    let _ = count.get();
+                    { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); }
+                    ctx.end_node();
+                }
+            }
+            ctx.end_restartable_group();
+        });
+        assert_eq!(composer.compose_clean_count, 0, "initial: all new → all Dirty");
+
+        // Frame 2: 无状态变化强制重组 → 新建 slot 下帧应 Clean（修复后）
+        composer.compose(|ctx| {
+            let root_key = ctx.next_key();
+            match ctx.start_restartable_group(root_key, Modifier::new(), BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    let _ = count.get();
+                    { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); }
+                    ctx.end_node();
+                }
+            }
+            ctx.end_restartable_group();
+        });
+        assert!(composer.compose_clean_count >= 1,
+            "新建 slot 的 dirty 不应跨帧残留：帧2 应 Clean（可 Skip），实际 clean={}",
+            composer.compose_clean_count);
+    }
 }
