@@ -313,19 +313,32 @@ impl Default for LayoutNode {
 pub struct NodeArena {
     pub(crate) nodes: Vec<LayoutNode>,
     pub(crate) policies: Vec<Box<dyn MeasurePolicy>>,
+    pub(crate) free_policies: Vec<usize>,
     pub(crate) free: Vec<usize>,
     pub(crate) root: Option<usize>,
 }
 
 impl NodeArena {
     pub fn new() -> Self {
-        Self { nodes: Vec::new(), policies: Vec::new(), free: Vec::new(), root: None }
+        Self { nodes: Vec::new(), policies: Vec::new(), free_policies: Vec::new(), free: Vec::new(), root: None }
     }
 
-    /// 分配测量策略到池，返回索引（供 LayoutNode.measure_policy 引用）
+    /// 分配测量策略到池（优先复用回收槽），返回索引（供 LayoutNode.measure_policy 引用）
     pub fn alloc_policy(&mut self, policy: Box<dyn MeasurePolicy>) -> usize {
-        self.policies.push(policy);
-        self.policies.len() - 1
+        if let Some(idx) = self.free_policies.pop() {
+            self.policies[idx] = policy;
+            idx
+        } else {
+            self.policies.push(policy);
+            self.policies.len() - 1
+        }
+    }
+
+    /// 回收节点占用的 policy 槽（结构变化移除节点时——低频泄漏防护）
+    fn recycle_policy(&mut self, idx: usize) {
+        if let Some(p) = self.nodes[idx].measure_policy.take() {
+            self.free_policies.push(p);
+        }
     }
 
     /// 分配/复用槽位（free 优先），返回索引
@@ -361,6 +374,7 @@ impl NodeArena {
         for c in children {
             self.free_node_skip(c, skip, visited);
         }
+        self.recycle_policy(idx);
         if let Some(f) = self.nodes[idx].on_remove.take() { f(); }
         self.nodes[idx] = LayoutNode::default();
         self.free.push(idx);
@@ -379,6 +393,7 @@ impl NodeArena {
         for c in children {
             self.free_node(c);
         }
+        self.recycle_policy(idx);
         if let Some(f) = self.nodes[idx].on_remove.take() { f(); }
         self.nodes[idx] = LayoutNode::default();
         self.free.push(idx);
