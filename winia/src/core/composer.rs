@@ -905,16 +905,21 @@ fn register_modifier_deps_recursive(node: &LayoutNode) {
             let root = &mut self.layout_nodes[root_idx];
             let (_size, _placements) = crate::layout::measure_node(root, root_constraints);
             root.measured_size = _size;
-            // 收集整棵树的节点信息（measured_size、cached_constraints、modifier），按 slot 路径索引
+            // 收集整棵树的节点信息（measured_size、cached_constraints、modifier），按 slot_key 索引
             self.prev_nodes.clear();
             collect_nodes(root, &mut self.prev_nodes);
             // measure 阶段（SizeDynamic 闭包内的 State::get()）注册的依赖也要进入 slot_deps
             for (state_id, slot_key) in self.recorded_deps.drain(..) {
                 self.slot_deps.entry(state_id).or_default().insert(slot_key);
             }
-            // 组合 + 测量全部完成：清除 recording target
-            crate::core::state::clear_recording_target();
+        } else {
+            // 无根节点（空内容帧）：recorded_deps 无 measure 期新增，直接清空
+            self.recorded_deps.clear();
         }
+        // 组合 + 测量全部完成：清除 recording target（无论是否有 root——
+        // 否则 RECORDING_TARGET 残留指向本 Composer 的裸指针，Composer drop 后
+        // 后续 State::get() 会写悬垂内存（UB））
+        crate::core::state::clear_recording_target();
     }
 
     /// 请求重组（由 State 变化触发）。
@@ -1405,4 +1410,50 @@ fn test_is_skip_after_clean_frame() {
     });
     assert!(skip_happened,
         "无变化帧的 clean group 应 Skip（prev_nodes 按 slot_key 命中）——若 Enter 说明 is_skip 键 miss");
+}
+
+/// 阶段4 键修复的**关键回归用例**：scope 层存在时（scope 是 slot 树中 group 的父，
+/// LayoutNode 树无 scope 层——两棵树路径不一致），prev_nodes 按 slot_key 索引仍应命中。
+/// path 键实现下此场景 miss → 恒 Enter；slot_key 键修复后应 Skip。
+#[test]
+fn test_is_skip_with_scope_layer() {
+    let mut composer = Composer::new();
+    let count: State<i32> = State::new(0);
+
+    composer.compose(|ctx| {
+        ctx.start_scope();
+        let root_key = ctx.next_key();
+        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                let _ = count.get();
+                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); }
+                ctx.end_node();
+            }
+        }
+        ctx.end_restartable_group();
+        ctx.end_scope();
+    });
+
+    // layout 一次：填充 prev_nodes（真实流程：compose → layout → 下帧 compose）
+    composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
+
+    // 帧2：无状态变化 → group slot Clean → prev_nodes 按 slot_key 命中 → Skip（尽管 scope 层在 slot 树中）
+    let mut skip_happened = false;
+    composer.compose(|ctx| {
+        ctx.start_scope();
+        let root_key = ctx.next_key();
+        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            GroupStatus::Skip => skip_happened = true,
+            GroupStatus::Enter => {
+                let _ = count.get();
+                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); }
+                ctx.end_node();
+            }
+        }
+        ctx.end_restartable_group();
+        ctx.end_scope();
+    });
+    assert!(skip_happened,
+        "含 scope 层的 clean group 应 Skip（slot_key 键修复后两棵树路径错位不再导致 miss）——若 Enter 说明回归");
 }

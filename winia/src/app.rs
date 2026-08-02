@@ -761,6 +761,9 @@ impl AppState {
             if let Some(init) = self.init.take() {
                 let mut composer = Composer::new();
                 composer.compose(|ctx| init(ctx));
+                // 临时 composer 不调 layout()——显式清除 recording target，
+                // 否则 RECORDING_TARGET 残留指向已 drop 的 composer 的裸指针（UB）
+                crate::core::state::clear_recording_target();
                 // 临时 composer 被 drop，其 on_remove 可能设置 PENDING_REMOVE_ID
                 // 清除副作用，防止主窗口被错误关闭
                 crate::ui::window::reset_lifecycle_flags();
