@@ -10,6 +10,7 @@
 //! - Key 管理: 全局唯一 key 计数器
 
 use crate::core::state::State;
+use crate::debug_log;
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{LayoutNode, MeasurePolicy, CachedNode};
 use crate::modifier::Modifier;
@@ -124,6 +125,39 @@ impl<'a> ComposeCtx<'a> {
     /// 与 `end_scope` 配对。
     pub fn start_scope(&mut self) -> u64 {
         self.composer.start_scope()
+    }
+
+    /// #[composable] 宏注入：以源码哈希为 scope key 开始（函数级 key 稳定——
+    /// 结构变化不漂移）。内部节点的 next_key 以 scope 源码哈希为 key 基。
+    pub fn start_scope_keyed(&mut self, source_hash: u64) -> u64 {
+        self.composer.scope_source_stack.push(source_hash);
+        self.composer.start_scope()
+    }
+
+    /// #[composable] 宏注入：进入一条语句（id 为编译期固定的源码位置序号）。
+    /// 语句内组件 build 的 next_key 以 (scope 源码哈希, 语句 id) 为基——稳定。
+    pub fn push_stmt(&mut self, id: u32) {
+        self.composer.stmt_stack.push(id);
+    }
+
+    /// #[composable] 宏注入：退出语句（与 push_stmt 配对）
+    pub fn pop_stmt(&mut self) {
+        self.composer.stmt_stack.pop();
+    }
+
+    /// 显式 key（对标 Compose `key(id)`）：包裹的子树用 id 哈希为 key 基——
+    /// 结构变化（列表重排/子树移动）时 remember/复用仍稳定。
+    /// 用法：`ctx.key("scroll_list", |ctx| { ... });`
+    pub fn key<R>(&mut self, id: &'static str, f: impl FnOnce(&mut Self) -> R) -> R {
+        let mut h: u64 = 0xcbf29ce484222325;
+        for b in id.as_bytes() {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        self.composer.key_override_stack.push(h);
+        let r = f(self);
+        self.composer.key_override_stack.pop();
+        r
     }
 
     /// 参数比较（对标 Compose `$composer.changed(param)`）。
@@ -302,19 +336,29 @@ impl<'a> ComposeCtx<'a> {
     /// 位置 key 编码方式: 基于 slot 树路径（结构稳定——不随 Enter/Skip 的
     /// next_key 序列漂移，保证同一组合位置跨重组复用同一 State）。
     fn next_remember_key(&mut self) -> u64 {
-        let path = self.composer.slot_table.current_path().to_vec();
-        // 路径哈希（FNV-1a 风格）：不同路径 → 不同高位，同一 slot 内多个 remember 用
-        // 每路径独立 counter 区分（跨帧恒定——全局 counter 会因 Skip 平移 → remember key
-        // 漂移 → State 重建/复用错位）
-        let mut h: u64 = 0xcbf29ce484222325;
-        for &idx in &path {
-            h ^= idx as u64;
-            h = h.wrapping_mul(0x100000001b3);
-        }
-        let counter = self.composer.remember_path_counters.entry(h).or_insert(0);
+        // key 基与 next_group_key 一致：显式 key() > 语句 id（源码位置）> 路径哈希。
+        // remember 的 State 跨帧稳定依赖 key 稳定——结构变化时语句 id 不动 → State 保留。
+        let base = if let Some(&k) = self.composer.key_override_stack.last() {
+            k
+        } else if let Some(&sid) = self.composer.stmt_stack.last() {
+            let scope_src = self.composer.scope_source_stack.last().copied().unwrap_or(0);
+            let mut h: u64 = 0xcbf29ce484222325;
+            h ^= scope_src; h = h.wrapping_mul(0x100000001b3);
+            h ^= sid as u64; h = h.wrapping_mul(0x100000001b3);
+            h
+        } else {
+            let path = self.composer.slot_table.current_path().to_vec();
+            let mut h: u64 = 0xcbf29ce484222325;
+            for &idx in &path {
+                h ^= idx as u64;
+                h = h.wrapping_mul(0x100000001b3);
+            }
+            h
+        };
+        let counter = self.composer.remember_path_counters.entry(base).or_insert(0);
         let c = *counter;
         *counter += 1;
-        (h << 32) | (c as u64)
+        (base << 32) | (c as u64)
     }
 
     /// 开始一个布局节点（叶子组件如 Text 使用）
@@ -626,6 +670,12 @@ pub struct Composer {
     path_counters: std::collections::HashMap<u64, u32>,
     /// 每路径独立 counter（next_remember_key 用——同上，防 remember key 漂移）
     remember_path_counters: std::collections::HashMap<u64, u32>,
+    /// #[composable] 宏注入的语句 id 栈（编译期稳定——结构变化不漂移；空 = 宏外路径哈希）
+    stmt_stack: Vec<u32>,
+    /// 组合 scope 的源码哈希栈（宏传——函数级 key 基）
+    scope_source_stack: Vec<u64>,
+    /// ctx.key() 显式 key 栈（最高优先级）
+    key_override_stack: Vec<u64>,
     pending_recomposition: VecDeque<u64>,
     needs_recomposition: bool,
     arena: crate::layout::node::NodeArena,
@@ -671,6 +721,9 @@ impl Composer {
             current_group_key: 0,
             path_counters: std::collections::HashMap::new(),
             remember_path_counters: std::collections::HashMap::new(),
+            stmt_stack: Vec::new(),
+            scope_source_stack: Vec::new(),
+            key_override_stack: Vec::new(),
             pending_recomposition: VecDeque::new(),
             needs_recomposition: false,
             arena: crate::layout::node::NodeArena::new(),
@@ -703,18 +756,34 @@ impl Composer {
     /// 保证同一组合位置跨重组得到相同 slot（否则 slot 树 truncate 重建，
     /// 导致 remember 的 State 全部丢失重建）。
     pub fn next_group_key(&mut self) -> u64 {
-        let path = self.slot_table.current_path().to_vec();
-        let mut h: u64 = 0xcbf29ce484222325;
-        for &idx in &path {
-            h ^= idx as u64;
-            h = h.wrapping_mul(0x100000001b3);
-        }
-        // 每路径独立 counter：同路径第 N 次调用跨帧恒定（全局 counter 会因
-        // Skip 的 content 不执行而平移 → key 漂移 → 节点复用错位 + 常量折叠冻结）
-        let counter = self.path_counters.entry(h).or_insert(1);
+        // key 基优先级：显式 ctx.key() > #[composable] 语句 id（源码位置）> 路径哈希。
+        // 语句 id 由宏注入（编译期按源码结构固定编号）——结构变化（前面插入/移除兄弟
+        // 节点）不影响语句 id → key 不漂移 → remember/复用稳定（对标 Compose 编译器
+        // 的调用点 key）。宏外（测试/手动组合）退化为路径哈希（现状）。
+        let base = if let Some(&k) = self.key_override_stack.last() {
+            k
+        } else if let Some(&sid) = self.stmt_stack.last() {
+            let scope_src = self.scope_source_stack.last().copied().unwrap_or(0);
+            // FNV 混合 scope 源码哈希 + 语句 id（不同函数的同序号语句 key 隔离）
+            let mut h: u64 = 0xcbf29ce484222325;
+            h ^= scope_src; h = h.wrapping_mul(0x100000001b3);
+            h ^= sid as u64; h = h.wrapping_mul(0x100000001b3);
+            h
+        } else {
+            let path = self.slot_table.current_path().to_vec();
+            let mut h: u64 = 0xcbf29ce484222325;
+            for &idx in &path {
+                h ^= idx as u64;
+                h = h.wrapping_mul(0x100000001b3);
+            }
+            h
+        };
+        // 每路径独立 counter：同 key 基第 N 次调用跨帧恒定（Skip 的 content 不执行
+        // 不平移——节点复用错位 + 常量折叠冻结的防护）
+        let counter = self.path_counters.entry(base).or_insert(1);
         let c = *counter;
         *counter += 1;
-        (h << 32) | (c as u64)
+        (base << 32) | (c as u64)
     }
 
     /// 开始一个组合 scope（无 LayoutNode 的作用域节点——组合代码重跑的失效单位）。
@@ -734,6 +803,7 @@ impl Composer {
             let mut s = s.borrow_mut();
             if !s.is_empty() { s.pop(); }
         });
+        if !self.scope_source_stack.is_empty() { self.scope_source_stack.pop(); }
     }
 
     /// 在组合树中开始一个节点（由组件的 build 方法调用）
@@ -1011,6 +1081,9 @@ impl Composer {
         self.current_group_key = 0;
         self.path_counters.clear();
         self.remember_path_counters.clear();
+        self.stmt_stack.clear();
+        self.scope_source_stack.clear();
+        self.key_override_stack.clear();
         self.arena.root = None;
         // 重置 Window 生命周期标志（先于未复用节点回收，on_remove 再设置新值）
         crate::ui::window::reset_lifecycle_flags();

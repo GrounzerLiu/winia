@@ -89,7 +89,9 @@ fn counter_ui(ctx: &mut ComposeCtx) {
                     });
             }
 
-            // 滚动区域
+            // 滚动区域（显式 key——Window 开/关等结构变化时列表 key 不漂移：
+            // 复用/折叠保持 + scroll_y 状态保留）
+            ctx.key("scroll_list", |ctx| {
             Column::new()
                 .modifier(Modifier::new().size(200.0, 150.0).vertical_scroll(scroll_y))
                 .build(ctx, |ctx| {
@@ -101,6 +103,7 @@ fn counter_ui(ctx: &mut ComposeCtx) {
                             });
                     }
                 });
+            });
         });
 }
 
