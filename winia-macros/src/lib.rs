@@ -447,3 +447,62 @@ mod inject_tests {
         assert!(out.contains("enter_stmt"), "let init 应有 guard");
     }
 }
+
+#[cfg(test)]
+mod inject_tests_extra {
+    use super::*;
+
+    fn ctx_ident() -> syn::Ident {
+        syn::Ident::new("ctx", proc_macro2::Span::call_site())
+    }
+
+    fn enter_count(body: syn::Block) -> usize {
+        let mut counter = 0;
+        let stmts = inject_stmt_ids(body.stmts, &ctx_ident(), &mut counter);
+        quote!(#(#stmts)*).to_string().matches("enter_stmt").count()
+    }
+
+    #[test]
+    fn test_match_arm_body_injected() {
+        let body: syn::Block = syn::parse_quote!({
+            match mode {
+                0 => { Text::new("a").build(ctx); },
+                _ => { Text::new("b").build(ctx); },
+            };
+        });
+        let n = enter_count(body);
+        assert!(n >= 3, "顶层 + 两臂体都应注入（实际 {n}）");
+    }
+
+    #[test]
+    fn test_for_body_injected() {
+        let body: syn::Block = syn::parse_quote!({
+            for i in 0..5 {
+                Text::new("x").build(ctx);
+            };
+        });
+        let n = enter_count(body);
+        assert!(n >= 2, "顶层 for + 循环体都应注入（实际 {n}）");
+    }
+
+    #[test]
+    fn test_nested_closure_injected() {
+        // content 闭包内的 content 闭包——双层注入
+        let body: syn::Block = syn::parse_quote!({
+            Column::new().build(ctx, |ctx| {
+                Row::new().build(ctx, |ctx| { Text::new("x").build(ctx); });
+            });
+        });
+        let n = enter_count(body);
+        assert!(n >= 3, "顶层 + 外层闭包 + 内层闭包都应注入（实际 {n}）");
+    }
+
+    #[test]
+    fn test_let_else_diverge_injected() {
+        let body: syn::Block = syn::parse_quote!({
+            let Some(x) = opt else { return; };
+        });
+        let n = enter_count(body);
+        assert!(n >= 1, "let init 应有 guard（实际 {n}）");
+    }
+}
