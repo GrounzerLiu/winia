@@ -20,7 +20,21 @@ use std::any::Any;
 use std::cell::Cell;
 use std::cell::RefCell;
 
+/// RAII guard：语句作用域结束（含 return/break/continue/panic 提前退出）自动 pop_stmt。
+/// 零大小——Drop 直接操作 thread_local 栈（不持有 &mut ctx，无借用冲突）。
+pub struct StmtGuard;
+
+impl Drop for StmtGuard {
+    fn drop(&mut self) {
+        STMT_STACK.with(|s| { s.borrow_mut().pop(); });
+    }
+}
+
 thread_local! { static ACTIVE_SLOT_KEY: Cell<u64> = const { Cell::new(0) }; }
+/// 语句 id 栈（#[composable] 宏注入——RAII guard 写入/弹出；thread_local 使
+/// guard 的 Drop 无需持有 &mut ctx——闭包/循环体内 return/break/continue 提前
+/// 退出时自动 pop，不泄漏。多窗口安全：组合按窗口顺序执行，compose 开头 clear）
+thread_local! { static STMT_STACK: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) }; }
 thread_local! { static SCOPE_STACK: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) }; }
 
 /// 参数值（阶段5 参数相等跳过用）——`ComposeCtx::changed` 暂存的参数，
@@ -135,14 +149,22 @@ impl<'a> ComposeCtx<'a> {
     }
 
     /// #[composable] 宏注入：进入一条语句（id 为编译期固定的源码位置序号）。
-    /// 语句内组件 build 的 next_key 以 (scope 源码哈希, 语句 id) 为基——稳定。
+    /// 返回 RAII guard——语句块结束时 drop 自动 pop_stmt：闭包体/循环体内的
+    /// `return`/`break`/`continue`/`panic!` 提前退出也不会泄漏 stmt 栈
+    /// （显式 push/pop 在提前退出时栈会永久错位——后续语句 key 静默漂移）。
+    pub fn enter_stmt(&mut self, id: u32) -> StmtGuard {
+        STMT_STACK.with(|s| s.borrow_mut().push(id));
+        StmtGuard
+    }
+
+    /// #[composable] 宏注入：退出语句（与 push_stmt 配对）——保留兼容旧用法
     pub fn push_stmt(&mut self, id: u32) {
-        self.composer.stmt_stack.push(id);
+        STMT_STACK.with(|s| s.borrow_mut().push(id));
     }
 
     /// #[composable] 宏注入：退出语句（与 push_stmt 配对）
     pub fn pop_stmt(&mut self) {
-        self.composer.stmt_stack.pop();
+        STMT_STACK.with(|s| { s.borrow_mut().pop(); });
     }
 
     /// 显式 key（对标 Compose `key(id)`）：包裹的子树用 id 哈希为 key 基——
@@ -159,6 +181,7 @@ impl<'a> ComposeCtx<'a> {
         self.composer.key_override_stack.pop();
         r
     }
+
 
     /// 参数比较（对标 Compose `$composer.changed(param)`）。
     ///
@@ -340,7 +363,7 @@ impl<'a> ComposeCtx<'a> {
         // remember 的 State 跨帧稳定依赖 key 稳定——结构变化时语句 id 不动 → State 保留。
         let base = if let Some(&k) = self.composer.key_override_stack.last() {
             k
-        } else if let Some(&sid) = self.composer.stmt_stack.last() {
+        } else if let Some(sid) = STMT_STACK.with(|s| s.borrow().last().copied()) {
             let scope_src = self.composer.scope_source_stack.last().and_then(|s| *s).unwrap_or(0);
             let mut h: u64 = 0xcbf29ce484222325;
             h ^= scope_src; h = h.wrapping_mul(0x100000001b3);
@@ -670,8 +693,7 @@ pub struct Composer {
     path_counters: std::collections::HashMap<u64, u32>,
     /// 每路径独立 counter（next_remember_key 用——同上，防 remember key 漂移）
     remember_path_counters: std::collections::HashMap<u64, u32>,
-    /// #[composable] 宏注入的语句 id 栈（编译期稳定——结构变化不漂移；空 = 宏外路径哈希）
-    stmt_stack: Vec<u32>,
+
     /// 组合 scope 的源码哈希栈（宏传——函数级 key 基）
     scope_source_stack: Vec<Option<u64>>,
     /// ctx.key() 显式 key 栈（最高优先级）
@@ -721,7 +743,6 @@ impl Composer {
             current_group_key: 0,
             path_counters: std::collections::HashMap::new(),
             remember_path_counters: std::collections::HashMap::new(),
-            stmt_stack: Vec::new(),
             scope_source_stack: Vec::new(),
             key_override_stack: Vec::new(),
             pending_recomposition: VecDeque::new(),
@@ -762,7 +783,7 @@ impl Composer {
         // 的调用点 key）。宏外（测试/手动组合）退化为路径哈希（现状）。
         let base = if let Some(&k) = self.key_override_stack.last() {
             k
-        } else if let Some(&sid) = self.stmt_stack.last() {
+        } else if let Some(sid) = STMT_STACK.with(|s| s.borrow().last().copied()) {
             let scope_src = self.scope_source_stack.last().and_then(|s| *s).unwrap_or(0);
             // FNV 混合 scope 源码哈希 + 语句 id（不同函数的同序号语句 key 隔离）
             let mut h: u64 = 0xcbf29ce484222325;
@@ -1084,7 +1105,7 @@ impl Composer {
         self.current_group_key = 0;
         self.path_counters.clear();
         self.remember_path_counters.clear();
-        self.stmt_stack.clear();
+        STMT_STACK.with(|s| s.borrow_mut().clear());
         self.scope_source_stack.clear();
         self.key_override_stack.clear();
         self.arena.root = None;
@@ -2393,4 +2414,21 @@ fn test_key_override_differs_from_stmt() {
         keys.push((k1, k2));
     });
     assert_ne!(keys[0].0, keys[0].1, "显式 key() 与语句 key 不同空间");
+}
+
+#[test]
+fn test_stmt_guard_drops_on_scope_exit() {
+    let mut composer = Composer::new();
+    composer.compose(|ctx| {
+        let _ = ctx.start_scope_keyed(0xABCD);
+        // 块内 enter_stmt——块尾（模拟 return/break 提前退出）guard drop 自动 pop
+        {
+            let _g = ctx.enter_stmt(7);
+            assert_eq!(STMT_STACK.with(|s| s.borrow().last().copied()), Some(7), "guard 生效：栈顶为 7");
+        } // 块退出——guard drop
+        assert!(STMT_STACK.with(|s| s.borrow().is_empty()), "提前退出后栈应自动恢复（无泄漏）");
+        let _ = ctx.enter_stmt(8);
+        ctx.pop_stmt(); // 显式配对也正常
+        ctx.end_scope();
+    });
 }

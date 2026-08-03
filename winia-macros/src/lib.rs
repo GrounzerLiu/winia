@@ -55,11 +55,26 @@ fn inject_stmt_ids(stmts: Vec<Stmt>, ctx: &syn::Ident, counter: &mut u32) -> Vec
         let id = *counter;
         *counter += 1;
         let stmt = inject_nested(stmt, ctx, counter);
-        let push: Stmt = syn::parse_quote!(#ctx.push_stmt(#id););
-        let pop: Stmt = syn::parse_quote!(#ctx.pop_stmt(););
-        out.push(push);
-        out.push(stmt);
-        out.push(pop);
+        match &stmt {
+            // let：显式 push/pop（块包会破坏变量作用域；let 语句本身无
+            // return/break/continue——init 表达式内的闭包/循环已注入自己的 guard）
+            Stmt::Local(_) => {
+                let push: Stmt = syn::parse_quote!(#ctx.push_stmt(#id););
+                let pop: Stmt = syn::parse_quote!(#ctx.pop_stmt(););
+                out.push(push);
+                out.push(stmt);
+                out.push(pop);
+            }
+            // 其他语句：RAII guard 块包——语句块退出（含 return/break/continue/
+            // panic 提前退出）guard drop 自动 pop_stmt（显式 pop 会因提前退出泄漏
+            // stmt 栈 → 后续语句 key 静默错位）
+            _ => {
+                out.push(syn::parse_quote!({
+                    let __stmt_guard = #ctx.enter_stmt(#id);
+                    #stmt
+                }));
+            }
+        }
     }
     out
 }
@@ -99,6 +114,7 @@ fn inject_block(block: syn::Block, ctx: &syn::Ident, counter: &mut u32) -> syn::
 fn inject_expr_blocks(expr: syn::Expr, ctx: &syn::Ident, counter: &mut u32) -> syn::Expr {
     match expr {
         syn::Expr::If(mut e) => {
+            e.cond = Box::new(inject_expr_blocks(*e.cond, ctx, counter));
             e.then_branch = inject_block(e.then_branch, ctx, counter);
             if let Some((_, else_expr)) = e.else_branch.take() {
                 let else_expr = inject_expr_blocks(*else_expr, ctx, counter);
@@ -107,10 +123,12 @@ fn inject_expr_blocks(expr: syn::Expr, ctx: &syn::Ident, counter: &mut u32) -> s
             syn::Expr::If(e)
         }
         syn::Expr::ForLoop(mut e) => {
+            e.expr = Box::new(inject_expr_blocks(*e.expr, ctx, counter)); // iterable
             e.body = inject_block(e.body, ctx, counter);
             syn::Expr::ForLoop(e)
         }
         syn::Expr::While(mut e) => {
+            e.cond = Box::new(inject_expr_blocks(*e.cond, ctx, counter));
             e.body = inject_block(e.body, ctx, counter);
             syn::Expr::While(e)
         }
@@ -119,7 +137,12 @@ fn inject_expr_blocks(expr: syn::Expr, ctx: &syn::Ident, counter: &mut u32) -> s
             syn::Expr::Block(e)
         }
         syn::Expr::Match(mut e) => {
+            e.expr = Box::new(inject_expr_blocks(*e.expr, ctx, counter)); // scrutinee
             for arm in e.arms.iter_mut() {
+                if let Some((_, guard)) = &mut arm.guard {
+                    let g = std::mem::replace(guard, Box::new(syn::parse_quote!(true)));
+                    *guard = Box::new(inject_expr_blocks(*g, ctx, counter));
+                }
                 let body = std::mem::replace(&mut arm.body, Box::new(syn::parse_quote!(())));
                 if let syn::Expr::Block(b) = *body {
                     let injected = inject_block(b.block, ctx, counter);
@@ -129,30 +152,33 @@ fn inject_expr_blocks(expr: syn::Expr, ctx: &syn::Ident, counter: &mut u32) -> s
                         block: injected,
                     }));
                 } else {
-                    arm.body = body;
+                    // 非 Block 臂体（表达式臂）也递归
+                    arm.body = Box::new(inject_expr_blocks(*body, ctx, counter));
                 }
             }
             syn::Expr::Match(e)
         }
-        // 函数调用：遍历参数（content 闭包通常在 build(...) 的参数位——闭包识别注入）
+        // 函数调用：func + 参数都遍历（content 闭包通常在 build(...) 参数位）
         syn::Expr::Call(mut e) => {
+            let f = std::mem::replace(&mut *e.func, syn::parse_quote!(0));
+            *e.func = inject_expr_blocks(f, ctx, counter);
             for arg in e.args.iter_mut() {
                 let a = std::mem::replace(arg, syn::parse_quote!(0));
                 *arg = inject_expr_blocks(a, ctx, counter);
             }
             syn::Expr::Call(e)
         }
-        // 方法调用（build(ctx, |ctx| {...}) 的常见形态）：同样遍历参数
+        // 方法调用（build(ctx, |ctx| {...})）：receiver + 参数都遍历（链式 receiver 漏注入修复）
         syn::Expr::MethodCall(mut e) => {
+            let recv = std::mem::replace(&mut *e.receiver, syn::parse_quote!(0));
+            *e.receiver = inject_expr_blocks(recv, ctx, counter);
             for arg in e.args.iter_mut() {
                 let a = std::mem::replace(arg, syn::parse_quote!(0));
                 *arg = inject_expr_blocks(a, ctx, counter);
             }
             syn::Expr::MethodCall(e)
         }
-        // 闭包：单参数且名为 `ctx` → content 闭包（约定——组件 build 的内容闭包），
-        // 注入其体（闭包内节点获得语句级源码位置 key——结构变化不漂移）。
-        // 其他闭包（map 回调等）不注入（参数名非 ctx——执行时机不定）。
+        // 闭包：单参数且名为 `ctx` → content 闭包（约定），注入其体
         syn::Expr::Closure(mut e) => {
             let is_content = match e.inputs.first() {
                 Some(syn::Pat::Ident(pi)) if e.inputs.len() == 1 && pi.ident == "ctx" => true,
@@ -163,13 +189,94 @@ fn inject_expr_blocks(expr: syn::Expr, ctx: &syn::Ident, counter: &mut u32) -> s
                 _ => false,
             };
             if is_content {
-                let body = std::mem::replace(&mut e.body, Box::new(syn::parse_quote!(())));
-                let injected = inject_expr_blocks(*body, ctx, counter);
-                e.body = Box::new(injected);
+                // async 闭包排除（延迟执行——注入的 guard 会在错误时机执行）
+                if !e.asyncness.is_some() {
+                    let body = std::mem::replace(&mut e.body, Box::new(syn::parse_quote!(())));
+                    let injected = inject_expr_blocks(*body, ctx, counter);
+                    e.body = Box::new(injected);
+                }
             }
             syn::Expr::Closure(e)
         }
-        _ => expr, // 其他表达式不深入
+        // 括号/引用/解引用/一元：子表达式递归
+        syn::Expr::Paren(mut e) => {
+            *e.expr = inject_expr_blocks(*e.expr, ctx, counter);
+            syn::Expr::Paren(e)
+        }
+        syn::Expr::Reference(mut e) => {
+            *e.expr = inject_expr_blocks(*e.expr, ctx, counter);
+            syn::Expr::Reference(e)
+        }
+        syn::Expr::Unary(mut e) => {
+            *e.expr = inject_expr_blocks(*e.expr, ctx, counter);
+            syn::Expr::Unary(e)
+        }
+        // 二元/赋值：左右递归
+        syn::Expr::Binary(mut e) => {
+            *e.left = inject_expr_blocks(*e.left, ctx, counter);
+            *e.right = inject_expr_blocks(*e.right, ctx, counter);
+            syn::Expr::Binary(e)
+        }
+        syn::Expr::Assign(mut e) => {
+            *e.left = inject_expr_blocks(*e.left, ctx, counter);
+            *e.right = inject_expr_blocks(*e.right, ctx, counter);
+            syn::Expr::Assign(e)
+        }
+        // 字面量集合：元素/字段递归
+        syn::Expr::Array(mut e) => {
+            for el in e.elems.iter_mut() {
+                let a = std::mem::replace(el, syn::parse_quote!(0));
+                *el = inject_expr_blocks(a, ctx, counter);
+            }
+            syn::Expr::Array(e)
+        }
+        syn::Expr::Tuple(mut e) => {
+            for el in e.elems.iter_mut() {
+                let a = std::mem::replace(el, syn::parse_quote!(0));
+                *el = inject_expr_blocks(a, ctx, counter);
+            }
+            syn::Expr::Tuple(e)
+        }
+        syn::Expr::Repeat(mut e) => {
+            *e.expr = inject_expr_blocks(*e.expr, ctx, counter);
+            *e.len = inject_expr_blocks(*e.len, ctx, counter);
+            syn::Expr::Repeat(e)
+        }
+        syn::Expr::Struct(mut e) => {
+            for f in e.fields.iter_mut() {
+                let fe = std::mem::replace(&mut f.expr, syn::parse_quote!(0));
+                f.expr = inject_expr_blocks(fe, ctx, counter);
+            }
+            syn::Expr::Struct(e)
+        }
+        // 索引/字段访问：base 递归
+        syn::Expr::Index(mut e) => {
+            *e.expr = inject_expr_blocks(*e.expr, ctx, counter);
+            *e.index = inject_expr_blocks(*e.index, ctx, counter);
+            syn::Expr::Index(e)
+        }
+        syn::Expr::Field(mut e) => {
+            *e.base = inject_expr_blocks(*e.base, ctx, counter);
+            syn::Expr::Field(e)
+        }
+        // 循环/块变体：体注入
+        syn::Expr::Loop(mut e) => {
+            e.body = inject_block(e.body, ctx, counter);
+            syn::Expr::Loop(e)
+        }
+        syn::Expr::Async(mut e) => {
+            e.block = inject_block(e.block, ctx, counter);
+            syn::Expr::Async(e)
+        }
+        syn::Expr::Unsafe(mut e) => {
+            e.block = inject_block(e.block, ctx, counter);
+            syn::Expr::Unsafe(e)
+        }
+        syn::Expr::TryBlock(mut e) => {
+            e.block = inject_block(e.block, ctx, counter);
+            syn::Expr::TryBlock(e)
+        }
+        _ => expr, // 字面量/路径/宏调用等无子或不可见（宏内容不注入——接受）
     }
 }
 
@@ -221,8 +328,12 @@ pub fn composable(_attr: TokenStream, item: TokenStream) -> TokenStream {
     // pop 最后一条：表达式（Stmt::Expr，可能带分号）或 let/item 语句
     let tail = stmts.pop();
 
-    // 函数名哈希（scope 源码 key——函数级稳定）
-    let scope_hash = fnv64(&sig.ident.to_string());
+    // 函数级源码哈希：完整签名 token（含参数类型）+ 源码行号——降低跨模块
+    // 同名 composable 的 scope key 碰撞（仅函数名哈希在组件库多模块场景易冲突）
+    let sig_str = quote!(#sig).to_string();
+    // proc_macro2 的 Span 无 line()（stable）——仅用签名 token（含参数类型）
+    // 区分：不同模块同签名同名的 composable 仍可能碰撞（罕见——slot 位置兜底）
+    let scope_hash = fnv64(&sig_str);
     // 开头注入 start_scope_keyed（函数级 key 稳定）
     let start = quote! { let __composable_scope = #ctx_ident.start_scope_keyed(#scope_hash); };
     // 结尾注入 end_scope（在所有语句之后——scope 覆盖整个函数体）
