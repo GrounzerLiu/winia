@@ -302,14 +302,19 @@ impl ApplicationHandler for AppState {
                                 pw.pointer_down_slot = Some(nodes[innermost].slot_key);
                                 eprintln!("[sel-down] pointer_down_state set, slot={}", nodes[innermost].slot_key);
                                 // 将 anchor 转为全局索引再存入
+                                // reg 只用节点自己的 registrar（不 fallback active_registrar）——
+                                // 不可选节点（输出 Text 等未注册）的 node.registrar 为 None，
+                                // fallback 会取到全局残留（如 Container B 的）→ anchor_registrar
+                                // 错绑 B → 拖动到 B 时 same_reg=true → 混合偏移 → B 被选
                                 if let Some(a) = anchor {
-                                    let reg = nodes[innermost].registrar.borrow().as_ref().cloned()
-                                        .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
-                                    let seg = reg.segment_info(nodes[innermost].slot_key);
-                                    let global_a = seg.map(|(off,_)| off + a).unwrap_or(a);
+                                    let own_reg = nodes[innermost].registrar.borrow().as_ref().cloned();
+                                    let global_a = own_reg.as_ref()
+                                        .and_then(|r| r.segment_info(nodes[innermost].slot_key))
+                                        .map(|(off,_)| off + a)
+                                        .unwrap_or(a);
                                     pw.pointer_down_state.as_mut().map(|s| {
                                         s.selection_anchor = Some(global_a);
-                                        s.anchor_registrar = Some(reg.clone());
+                                        s.anchor_registrar = own_reg;  // None（不可选节点）→ 无 anchor 容器
                                     });
                                     // 设置 TextField 光标位置
                                     nodes[innermost].cursor_index.set(a);
@@ -445,8 +450,10 @@ impl ApplicationHandler for AppState {
                                         let tl = crate::text::TextLayout::new(para, 0);
                                         {
                                             let down = pw.pointer_down_state.as_ref().unwrap();
-                                            let reg = nodes[innermost].registrar.borrow().as_ref().cloned()
-                                                .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
+                                            let Some(reg) = nodes[innermost].registrar.borrow().as_ref().cloned() else {
+                                                // 不可选节点（未注册到任何 SelectionContainer）→ 不更新选择
+                                                return;
+                                            };
                                             // 跨容器判定：当前 innermost 的 registrar 与 Down 时的 anchor registrar 是否同一
                                             // 实例（Arc 身份）。不同（拖到别的 SelectionContainer 的文本上）→ 用 anchor 容器
                                             // 做 edge snap，绝不切到当前容器的偏移空间（否则 anchor 的全局偏移与当前
@@ -846,15 +853,14 @@ impl ApplicationHandler for AppState {
                                         None
                                     };
                                     eprintln!("[sel-debug] down para={} anchor={:?}", nodes[innermost].cached_paragraph.borrow().is_some(), anchor);
-                                    let mut anchor_reg: Option<crate::ui::selection_container::SelectionRegistrar> = None;
+                                    // reg 只用节点自己的（不 fallback active_registrar——理由同真实 Down）
+                                    let own_reg = nodes[innermost].registrar.borrow().as_ref().cloned();
                                     let anchor_global = anchor.and_then(|a| {
-                                        let reg = nodes[innermost].registrar.borrow().as_ref().cloned()
-                                            .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
-                                        anchor_reg = Some(reg.clone());
-                                        reg.segment_info(nodes[innermost].slot_key).map(|(off, _)| off + a)
+                                        own_reg.as_ref()
+                                            .and_then(|r| r.segment_info(nodes[innermost].slot_key).map(|(off, _)| off + a))
                                     });
                                     pw.pointer_down_state = Some(crate::app::PtrDownState {
-                                        node_id: nodes[innermost].id, position: (x, y), time: std::time::Instant::now(), selection_anchor: anchor_global, anchor_registrar: anchor_reg });
+                                        node_id: nodes[innermost].id, position: (x, y), time: std::time::Instant::now(), selection_anchor: anchor_global, anchor_registrar: own_reg });
                                     pw.pointer_down_slot = Some(nodes[innermost].slot_key);
                                     eprintln!("[sel-debug] anchor_global={:?}", anchor_global);
                                     handled = true;
@@ -875,8 +881,11 @@ impl ApplicationHandler for AppState {
                                             if let Some(para) = nodes[innermost].cached_paragraph.borrow().as_ref() {
                                                 let (abs_x, abs_y) = node_abs_position(nodes, r, nodes[innermost].id);
                                                 let tl = crate::text::TextLayout::new(para, 0);
-                                                let reg = nodes[innermost].registrar.borrow().as_ref().cloned()
-                                                    .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
+                                                let Some(reg) = nodes[innermost].registrar.borrow().as_ref().cloned() else {
+                                                    // 不可选节点 → 不更新选择
+                                                    handled = true;
+                                                    return;
+                                                };
                                                 let same_reg = down.anchor_registrar.as_ref()
                                                     .map(|ar| ar.is_same(&reg)).unwrap_or(false);
                                                 if same_reg {
