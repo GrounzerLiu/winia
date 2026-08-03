@@ -31,11 +31,14 @@ impl Drop for StmtGuard {
 }
 
 thread_local! { static ACTIVE_SLOT_KEY: Cell<u64> = const { Cell::new(0) }; }
+/// 依赖注册目标栈（统一）：scope（容器组件/组合函数）与节点（leaf 组件）共用——
+/// 读取 State 注册到栈顶（最内层 Group）。组合外（测量阶段）栈空 → 回退 ACTIVE_SLOT_KEY。
+thread_local! { static GROUP_STACK: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) }; }
 /// 语句 id 栈（#[composable] 宏注入——RAII guard 写入/弹出；thread_local 使
 /// guard 的 Drop 无需持有 &mut ctx——闭包/循环体内 return/break/continue 提前
 /// 退出时自动 pop，不泄漏。多窗口安全：组合按窗口顺序执行，compose 开头 clear）
 thread_local! { static STMT_STACK: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) }; }
-thread_local! { static SCOPE_STACK: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) }; }
+
 
 /// 参数值（阶段5 参数相等跳过用）——`ComposeCtx::changed` 暂存的参数，
 /// 支持跨帧按类型比较（`Box<dyn Any>` 无法通用 PartialEq，用 trait object 桥接）。
@@ -64,7 +67,7 @@ pub(crate) fn with_active_scope(f: impl FnOnce(u64)) {
     // 所在容器 scope。NODE_DEPTH 不再参与（此前导致 content scope 收不到依赖——
     // content 闭包内 NODE_DEPTH 恒 ≥1，永远走 ACTIVE_SLOT_KEY）。
     // scope 栈空（组合外/测量阶段）→ 回退 ACTIVE_SLOT_KEY（测量时节点）
-    SCOPE_STACK.with(|s| {
+    GROUP_STACK.with(|s| {
         let s = s.borrow();
         if let Some(&k) = s.last() {
             f(k);
@@ -149,7 +152,7 @@ impl<'a> ComposeCtx<'a> {
         self.composer.scope_source_stack.push(Some(source_hash));
         let key = self.composer.next_group_key();
         self.composer.slot_table.start_scope(key);
-        SCOPE_STACK.with(|s| s.borrow_mut().push(key));
+        GROUP_STACK.with(|s| s.borrow_mut().push(key));
         key
     }
 
@@ -820,7 +823,7 @@ impl Composer {
         self.scope_source_stack.push(None);
         let key = self.next_group_key();
         self.slot_table.start_scope(key);
-        SCOPE_STACK.with(|s| s.borrow_mut().push(key));
+        GROUP_STACK.with(|s| s.borrow_mut().push(key));
         key
     }
 
@@ -828,7 +831,7 @@ impl Composer {
     pub fn end_scope(&mut self) {
         self.slot_table.end_scope();
         // 防御性配对：非空才 pop（start_scope/end_scope 不配对时避免 panic/污染其他 scope）
-        SCOPE_STACK.with(|s| {
+        GROUP_STACK.with(|s| {
             let mut s = s.borrow_mut();
             if !s.is_empty() { s.pop(); }
         });
@@ -906,6 +909,9 @@ impl Composer {
             self.arena.alloc(node)
         };
         self.node_stack.push(index);
+        // 统一依赖栈：节点 push（组件 build 期间 State 读取注册到最内层 Group——
+        // 组件内读取失效目标 = 本节点（对标 Compose 最内层 Group 语义））
+        GROUP_STACK.with(|s| s.borrow_mut().push(key));
     }
 
     /// 结束当前节点：出栈并建立父子关系
@@ -929,6 +935,7 @@ impl Composer {
                 self.arena.root = Some(child_idx);
             }
         }
+        GROUP_STACK.with(|s| { s.borrow_mut().pop(); }); // 与 start_node 的 push 配对
     }
 
     /// 开始可重启分组（内部调用 start_node + 返回 skip/enter 状态）
@@ -944,7 +951,7 @@ impl Composer {
         let slot_status = self.slot_table.start_slot(key);
         // 容器组件 = scope（对标 Compose RestartGroup）：push 组件 scope——
         // 组件内/ content 闭包内读取注册到本组件（最内层 scope）
-        SCOPE_STACK.with(|s| s.borrow_mut().push(key));
+        GROUP_STACK.with(|s| s.borrow_mut().push(key));
         #[cfg(test)] { match slot_status { SlotStatus::Clean => self.compose_clean_count += 1, _ => self.compose_dirty_count += 1, } }
 
         // 阶段D：按 slot_key 复用上帧节点槽位（policy/measured_size 沿用）
@@ -1040,7 +1047,7 @@ impl Composer {
             self.replay_clean_subtree();
         }
         // 容器 scope 配对（与 start_restartable_group 的 push 对应）
-        SCOPE_STACK.with(|s| {
+        GROUP_STACK.with(|s| {
             let mut s = s.borrow_mut();
             if !s.is_empty() { s.pop(); }
         });
@@ -1154,9 +1161,9 @@ impl Composer {
         self.slot_table.truncate();
         // 防御：scope 配对完整性（漏配 end_scope 会导致 SCOPE_STACK 残留跨帧，
         // 使下帧组件外读取注册到失效 scope → 失效静默丢失）
-        debug_assert_eq!(SCOPE_STACK.with(|s| s.borrow().len()), 0,
-            "compose 结束时 SCOPE_STACK 应清空（scope 配对不完整）");
-        SCOPE_STACK.with(|s| s.borrow_mut().clear());
+        debug_assert_eq!(GROUP_STACK.with(|s| s.borrow().len()), 0,
+            "compose 结束时 GROUP_STACK 应清空（scope/节点配对不完整）");
+        GROUP_STACK.with(|s| s.borrow_mut().clear());
 
         // 阶段D：回收本帧未复用的上帧节点（结构变化移除的子树——on_remove 触发）；
         // 跳过已复用节点（已挂入本帧树，free 会递归进本帧树形成环）
