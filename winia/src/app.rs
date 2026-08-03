@@ -1174,6 +1174,8 @@ fn dispatch_ptr_event(
 }
 
 pub fn run_app(app: impl FnOnce(&mut ComposeCtx) + 'static) {
+    // 构建指纹（无条件打印——用户运行第一行即可确认构建版本；无此行 = 旧 exe）
+    eprintln!("[app] winia build={} click-fix=f1edb49", env!("CARGO_PKG_VERSION"));
     let event_loop = EventLoop::new().expect("event loop");
     let proxy = event_loop.create_proxy();
     debug::set_event_loop_proxy(proxy.clone());
