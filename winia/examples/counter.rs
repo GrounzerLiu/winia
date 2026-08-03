@@ -6,7 +6,7 @@ use winia::app;
 /// Counter 主界面（#[composable] = 函数级 scope：count/show_alt 等 State 变化 → 本函数重跑）
 #[composable]
 fn counter_ui(ctx: &mut ComposeCtx) {
-    let count = ctx.remember(|| 0i32);
+        let count = ctx.remember(|| 0i32);
     let show_alt = ctx.remember(|| false);
     let show_window = ctx.remember(|| false);
     let scroll_y = ctx.remember(|| ScrollState::new()).get();
@@ -22,7 +22,7 @@ fn counter_ui(ctx: &mut ComposeCtx) {
                 .build(ctx);
 
             // Filled 按钮：自动使用 primary 背景 + on_primary 文字
-            Button::new().on_click({ let c = count.clone(); let b = btn2.clone(); move || { c.update(|v| *v += 1); b.request_focus(); } })
+                        Button::new().on_click({ let c = count.clone(); let b = btn2.clone(); move || { c.update(|v| *v += 1); b.request_focus(); } })
                 .modifier(Modifier::new().size(200.0, 36.0).focusable().focus_requester(&btn1))
                 .build(ctx, |ctx| { Text::new("+1 focus btn2").font_size(12.0).build(ctx); });
 
@@ -57,15 +57,13 @@ fn counter_ui(ctx: &mut ComposeCtx) {
                     .modifier(Modifier::new()
                         .size(200.0, 60.0)
                         .background(Color::from_argb(255, 200, 220, 255), Shape::rounded(6.0)))
-                    .build(ctx, |ctx| {
-                        Text::new(format!("Add 10 (now {})", count.get()))
+                    .build(ctx, |ctx| {                         Text::new(format!("Add 10 (now {})", count.get()))
                             .font_size(14.0).build(ctx);
                     });
             }
 
-            eprintln!("[ui-probe] window-done"); // Window 分支后（列表前）
             // ── 声明式多窗口按钮 ──
-            Button::new().on_click({ let s = show_window.clone(); move || { s.update(|v| *v = !*v); } })
+                        Button::new().on_click({ let s = show_window.clone(); move || { s.update(|v| *v = !*v); } })
                 .modifier(Modifier::new().size(200.0, 32.0).background(Color::from_argb(255, 180, 100, 200), Shape::rounded(4.0)))
                 .build(ctx, |ctx| {
                     Text::new(if show_window.get() { "Close sub window" } else { "Open sub window" })
@@ -73,24 +71,23 @@ fn counter_ui(ctx: &mut ComposeCtx) {
                 });
 
             // ── Window 子窗口（if 条件控制生命周期）──
-            if show_window.get() {
+                        if show_window.get() {
                 Window::new()
                     .size(250.0, 180.0)
                     .title("Sub Window")
                     .on_close({ let s = show_window.clone(); move || { s.update(|v| *v = false); } })
-                    .build(ctx, |ctx| {
-                        let sw_count = ctx.remember(|| 0i32);
+                    .build(ctx, |ctx| {                         let sw_count = ctx.remember(|| 0i32);
                         Text::new(format!("Sub count: {}", sw_count.get()))
                             .font_size(18.0)
                             .modifier(Modifier::new().padding(8.0))
                             .build(ctx);
                         Button::new().on_click({ let c = sw_count.clone(); move || { c.update(|v| *v += 1); } })
                             .modifier(Modifier::new().size(120.0, 36.0).background(Color::BLUE, Shape::rounded(4.0)))
-                            .build(ctx, |ctx| { Text::new("Inc").color(Color::WHITE).font_size(14.0).build(ctx); });
+                            .build(ctx, |ctx| { eprintln!("[u] 3.1 col-content-start"); Text::new("Inc").color(Color::WHITE).font_size(14.0).build(ctx); });
                     });
             }
 
-            // 滚动区域（content 闭包已被 #[composable] 注入语句级 key——
+                        // 滚动区域（content 闭包已被 #[composable] 注入语句级 key——
             // Window 开/关等结构变化时列表 key 不漂移，无需显式 key()）
             Column::new()
                 .modifier(Modifier::new().size(200.0, 150.0).vertical_scroll(scroll_y))
@@ -98,13 +95,12 @@ fn counter_ui(ctx: &mut ComposeCtx) {
                     for i in 0..30 {
                         //let color = if i % 2 == 0 { Color::from_argb(255, 240, 240, 240) } else { Color::WHITE };
                         Row::new().modifier(Modifier::new().size(200.0, 24.0))
-                            .build(ctx, |ctx| {
-                                Text::new(format!("Line {}", i)).font_size(14.0).build(ctx);
+                            .build(ctx, |ctx| {                                 Text::new(format!("Line {}", i)).font_size(14.0).build(ctx);
                             });
                     }
                 });
         });
-}
+        }
 
 fn main() {
     // panic hook: 写入文件以便诊断崩溃

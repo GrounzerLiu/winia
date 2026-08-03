@@ -115,6 +115,16 @@ impl<T: PartialEq + 'static> State<T> {
         self.notify();
     }
 
+    /// 静默更新：改值但不触发 notify/重组。用于"内部标记"类 State——
+    /// 值变化不需要响应式（如 Window 的 created_id：窗口创建标记，下次
+    /// compose 自然读到新值；notify 会在 compose 中触发异常重组（pending
+    /// 消费于物化后 → key 雪崩/树塌缩））
+    pub fn set_silent(&self, value: T) {
+        let mut current = self.inner.value.write();
+        *current = value;
+        drop(current);
+    }
+
     /// 设置新值并通知（标记重组），但**不唤醒事件循环**（跳过 WAKE_FN）。
     ///
     /// 动画引擎专用：动画 tick 已由 `request_redraw` 驱动渲染帧，若每个动画
@@ -417,5 +427,30 @@ impl std::ops::Mul<&State<f32>> for f32 {
     fn mul(self, rhs: &State<f32>) -> DerivedFloat {
         let s = rhs.clone();
         DerivedValue(Arc::new(move || self * s.get()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_set_silent_no_notify() {
+        // set_silent 改值但不入 pending 队列（内部标记类 State——窗口创建标记）
+        let s = State::new(0i32);
+        // 模拟 remember 绑定：注册 owner queue（否则 notify 也不入队——无法区分）
+        let q = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+        {
+            STATE_OWNER_QUEUE.with(|o| *o.borrow_mut() = Some(std::sync::Arc::downgrade(&q)));
+            let s2 = State::new(0i32);
+            s2.set_silent(42);
+            assert_eq!(s2.get(), 42);
+            assert!(q.lock().is_empty(), "set_silent 不应入队");
+            s2.set(43);
+            assert_eq!(q.lock().len(), 1, "set 应入队");
+            drop(s2);
+            STATE_OWNER_QUEUE.with(|o| *o.borrow_mut() = None);
+        }
+        let _ = s.get();
     }
 }

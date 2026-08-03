@@ -61,7 +61,6 @@ fn params_equal(a: &[Box<dyn ParamValue>], b: &[Box<dyn ParamValue>]) -> bool {
 /// 读取当前组合作用域的依赖注册目标：最内层 scope（容器组件/函数 scope）；
 /// scope 栈空（组合外/测量）→ ACTIVE_SLOT_KEY。
 pub(crate) fn with_active_scope(f: impl FnOnce(u64)) {
-    #[cfg(test)] { eprintln!("[scope-probe] gstack={:?}", GROUP_STACK.with(|s| s.borrow().iter().map(|k| k >> 32).collect::<Vec<_>>())); }
     // 统一依赖注册目标 = 最内层 scope（容器组件 start_restartable_group 时 push、
     // #[composable] 函数 start_scope 时 push）：组件内读取（Text build）注册到最近
     // 容器 scope（对标 Compose ReplaceGroup 内联语义）；content 闭包内表达式注册到
@@ -119,7 +118,6 @@ impl<'a> ComposeCtx<'a> {
         let slot_key = self.next_remember_key();
         let pq = Arc::downgrade(&self.composer.pending_states);
         self.composer.slot_table.remember(slot_key, || {
-            #[cfg(test)] { eprintln!("[remember-probe] exec——设置 STATE_OWNER_QUEUE"); }
             crate::core::state::STATE_OWNER_QUEUE.with(|q| *q.borrow_mut() = Some(pq.clone()));
             State::new(init())
         })
@@ -583,7 +581,6 @@ impl SlotTable {
     fn set_current_desc(&mut self, desc: Option<NodeDesc>) {
         let has = desc.is_some();
         self.current_slot().desc = desc;
-        #[cfg(debug_assertions)] { if has { eprintln!("[wd-probe] wrote desc path_len={} key={}", self.path.len(), self.current_slot().key >> 32); } }
     }
 
     /// 收集物化描述树：Slot 树 → 纯节点树（scope 跳过——children 提升；
@@ -594,8 +591,6 @@ impl SlotTable {
     /// 但属于 Skip group）整体收集（skip 标记——物化恢复）
     fn collect_desc_tree(&mut self, out: &mut Vec<DescNode>) {
         fn rec(slot: &mut Slot, out: &mut Vec<DescNode>, in_skip: bool, depth: usize) {
-            if depth > 60 { eprintln!("[c-probe] DEPTH 60 溢出——slot 树成环"); return; }
-            #[cfg(debug_assertions)] { eprintln!("[c-probe] d={} key={} vis={} scope={} desc={} nchild={}", depth, slot.key >> 32, slot.visited, slot.is_scope, slot.desc.is_some(), slot.children.len()); }
             if !slot.visited && !in_skip {
                 // 本帧未访问且不在 Skip 子树内（结构回退残留）：不收集——
                 // 对应 arena 节点由 prev_node_by_key 回收（free）
@@ -645,6 +640,7 @@ impl SlotTable {
     }
 
     fn start_slot(&mut self, key: u64) -> SlotStatus {
+        eprintln!("[ss2] key={}", key >> 32);
         let idx = *self.child_counters.last().unwrap_or(&0);
         self.active_slot_key = key;
         ACTIVE_SLOT_KEY.with(|c| c.set(key));
@@ -656,7 +652,7 @@ impl SlotTable {
         // 重建 slot 导致 remember 的 State 丢失
         let same_position = idx < parent.children.len()
             && parent.children[idx].key >> 32 == key >> 32;
-        #[cfg(debug_assertions)] { eprintln!("[ss-probe] key={} pchildren={} idx={} same={} dirty={}", key >> 32, parent.children.len(), idx, same_position, is_dirty); }
+        #[cfg(debug_assertions)] { eprintln!("[sp] key={} pn={} idx={}", key >> 32, parent.children.len(), idx); }
         if idx < parent.children.len() && (parent.children[idx].key == key || same_position) {
             parent.children[idx].key = key; // 同步最新 key（counter 可能漂移）
             parent.children[idx].visited = true; // 本帧活跃（物化收集依据）
@@ -1027,31 +1023,30 @@ impl Composer {
     /// 物化：组合树（Slot desc）→ 布局树（arena LayoutNode）——完整分离的核心。
     /// 由 layout() 调用（组合阶段不建节点）
     pub fn materialize(&mut self) {
-        // 物化前：统计 slot 树 desc 数（写入后是否被清）
+        // 探针：slot 树状态
         {
-            fn dstat(slot: &Slot, n: &mut usize) {
-                if slot.desc.is_some() { *n += 1; }
-                for c in &slot.children { dstat(c, n); }
+            fn sstat(slot: &Slot, n: &mut (usize, usize)) {
+                n.0 += 1;
+                if slot.visited { n.1 += 1; }
+                for c in &slot.children { sstat(c, n); }
             }
-            let mut n = 0;
-            for c in &self.slot_table.root_slot.children { dstat(c, &mut n); }
-            eprintln!("[pre-mat] desc_count={}", n);
+            let mut n = (0, 0);
+            for c in &self.slot_table.root_slot.children { sstat(c, &mut n); }
+            eprintln!("[ms] slots={} visited={}", n.0, n.1);
         }
         let mut descs = Vec::new();
         self.slot_table.collect_desc_tree(&mut descs);
-        // 树统计（物化前 desc 结构）
+        // 探针：descs 树结构
         {
-            fn dstat(d: &DescNode, n: &mut usize) {
+            fn dstat(d: &DescNode, n: &mut usize, depth: usize) {
+                if depth <= 2 { eprintln!("[md] d={} key={} nchild={}", depth, d.key >> 32, d.children.len()); }
                 *n += 1;
-                for c in &d.children { dstat(c, n); }
+                for c in &d.children { dstat(c, n, depth + 1); }
             }
             let mut n = 0;
-            for d in &descs { dstat(d, &mut n); }
-            eprintln!("[tree-dbg] desc_total={} top={}", n, descs.len());
+            for d in &descs { dstat(d, &mut n, 0); }
+            eprintln!("[md] total={} top={}", n, descs.len());
         }
-        let mut kstr = String::new();
-        for d in &descs { kstr.push_str(&format!(" {:x}{}", d.key >> 32, if d.skip {"s"} else {"e"})); }
-        debug_log!("[mat-dbg] descs={}{}", descs.len(), kstr);
         if descs.is_empty() {
             return; // 无组合产物（layout 防御调用——树保留；compose 末尾已物化）
         }
@@ -1083,7 +1078,6 @@ impl Composer {
             on_remove,
             dirty: slot_status != SlotStatus::Clean, // 重测标记（slot.dirty 已消费）
         }));
-        #[cfg(debug_assertions)] { eprintln!("[desc-probe] start_node wrote desc key={}", key >> 32); }
         // 统一依赖栈：节点 push（组件 build 期间 State 读取注册到最内层 Group——
         // 组件内读取失效目标 = 本节点（对标 Compose 最内层 Group 语义））
         GROUP_STACK.with(|s| s.borrow_mut().push(key));
@@ -1139,7 +1133,6 @@ impl Composer {
         // content 不执行（无新描述），物化时按 key 恢复缓存节点（skip 标记）
         if is_skip {
             self.slot_table.set_current_desc(None);
-            #[cfg(debug_assertions)] { eprintln!("[desc-probe] group skip key={}", key >> 32); }
         } else {
             self.slot_table.set_current_desc(Some(NodeDesc {
                 key,
@@ -1148,7 +1141,6 @@ impl Composer {
                 on_remove,
                 dirty: true, // Enter 即重测（content 重跑——参数/内容可能变；Skip 恢复不受影响）
             }));
-            #[cfg(debug_assertions)] { eprintln!("[desc-probe] group enter wrote desc key={}", key >> 32); }
         }
         self.group_skip_stack.push(is_skip);
 
@@ -1195,7 +1187,6 @@ impl Composer {
         // 同时收集受影响的 slot key（用于增量更新 slot_deps）
         let mut affected_slot_keys = HashSet::new();
         let mut pending = self.pending_states.lock();
-        #[cfg(test)] { eprintln!("[pending-probe] n={} slot_deps_keys={:?}", pending.len(), self.slot_deps.iter().map(|(k, v)| (k, v.iter().map(|x| x >> 32).collect::<Vec<_>>())).collect::<Vec<_>>()); }
         for state_id in pending.drain(..) {
             if let Some(keys) = self.slot_deps.get(&state_id) {
                 for &k in keys {
@@ -1228,7 +1219,6 @@ impl Composer {
         GROUP_STACK.with(|s| s.borrow_mut().clear());
 
         // 依赖注册（recorded_deps → slot_deps）保持此处（组合期收集的 State 依赖）
-        #[cfg(test)] { eprintln!("[drain-probe] n={}", self.recorded_deps.len()); }
         for (state_id, slot_key) in self.recorded_deps.drain(..) {
             self.slot_deps.entry(state_id).or_default().insert(slot_key);
         }
