@@ -45,6 +45,8 @@ pub(crate) struct PerWindow {
     /// 帧间隔（屏幕刷新率对齐——窗口创建时从 monitor 获取；刷新率变化（显示器
     /// 切换）需重建窗口——当前不做动态跟踪）
     pub(crate) frame_interval: std::time::Duration,
+    /// 强制渲染（resize/动画停止等必须显示的帧——跳过分支的请求链断裂修复）
+    pub(crate) force_redraw: bool,
 
     /// 上次渲染时间（帧率限制——Windows acquire 不阻塞 vsync，应用层节流 60fps）
     pub(crate) last_render_time: std::time::Instant,
@@ -71,7 +73,7 @@ struct PtrDownState {
 
 impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::ui::theme::ThemeColors) -> Self {
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, pointer_down_slot: None, frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16) }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, pointer_down_slot: None, frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -176,11 +178,28 @@ impl ApplicationHandler for AppState {
         // Wait + request_redraw 自驱动动画（避免 Poll↔Wait 切换竞态丢帧）
         event_loop.set_control_flow(ControlFlow::Wait);
         // 每轮推进动画（与窗口解耦，多窗口/子窗口动画均正确推进）
-        if crate::animation::update_animations() {
+        let animating = crate::animation::update_animations();
+        if animating {
+            // 动画活跃：WaitUntil 定时唤醒（对齐刷新率）保证每帧唤醒（不冻结），
+            // request 节流（距上次渲染 >= 帧间隔）限制 WM_PAINT 生成频率——
+            // 修复 request 每轮发送 → WM_PAINT 消息唤醒 Wait 的 55k/s 自驱动空转
+            let interval = self.windows.values().map(|pw| pw.frame_interval).min()
+                .unwrap_or(std::time::Duration::from_millis(16));
+            event_loop.set_control_flow(ControlFlow::WaitUntil(std::time::Instant::now() + interval));
+            let now = std::time::Instant::now();
             for pw in self.windows.values_mut() {
+                if now.duration_since(pw.last_render_time) >= pw.frame_interval {
+                    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                }
+            }
+        } else if self.was_animating {
+            // 动画刚停止：强制终帧渲染（最后一次 set 的 request 可能被跳过）
+            for pw in self.windows.values_mut() {
+                pw.force_redraw = true;
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
             }
         }
+        self.was_animating = animating;
     }
 
     fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
@@ -647,6 +666,7 @@ impl ApplicationHandler for AppState {
                 else { pw.width = l.width; pw.height = l.height; }
                 if let Some(ref mut sw) = pw.skia_window { sw.resize(); }
                 // 确保下一帧以新尺寸重新布局（有些平台 resize 后不自动触发 RedrawRequested）
+                pw.force_redraw = true; // resize 重绘不因帧率限制跳过而丢失
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
             }
             WindowEvent::RedrawRequested => {
@@ -675,9 +695,10 @@ impl ApplicationHandler for AppState {
                 // 无节流会 ~1300fps 渲染风暴（present fence 只等 GPU 提交不等显示刷新）。
                 // 距上次渲染 <16ms（~60fps）跳过——动画值下轮渲染时取最新（不丢帧）。
                 let now = std::time::Instant::now();
-                if now.duration_since(pw.last_render_time) < pw.frame_interval {
+                if !pw.force_redraw && now.duration_since(pw.last_render_time) < pw.frame_interval {
                     // 不 request——等外部驱动（动画 set → wake / 交互事件）再渲染
                 } else {
+                pw.force_redraw = false;
                 pw.last_render_time = now;
                 let w = pw.width;
                 let h = pw.height;
