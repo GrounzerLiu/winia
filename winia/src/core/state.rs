@@ -310,6 +310,7 @@ pub(crate) fn notify_state_changed_inner(state_id: u32, wake: bool) {
     // 定向通知：只推送到创建此 State 的 Composer 队列，避免跨窗口污染
     if let Some(q) = STATE_QUEUE_MAP.lock().get(&state_id).and_then(|w| w.upgrade()) {
         q.lock().push(state_id);
+    } else {
     }
     if wake {
         if let Some(ref f) = *WAKE_FN.lock().unwrap() { f(); }

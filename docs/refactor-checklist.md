@@ -235,6 +235,69 @@ fn card(ctx, title: &str) {
 
 ---
 
+## 阶段 6：组合/布局完整分离 —— 进行中（composition-separation 分支）
+
+**目标**（设计文档"组合树 = 一等公民"）：compose 阶段只构建组合树（Slot 树——持有节点描述）；
+布局阶段（materialize）从组合树物化 LayoutNode（arena）——两棵树完全分离。
+当前耦合点：`start_node` 同时做组合侧（start_slot）和布局侧（直接建/复用 arena 节点）——
+把布局侧移出组合阶段。
+
+### 步骤
+
+**1. Slot 加节点描述字段**：
+```rust
+struct Slot {
+    // ...现有（key/remembered/children/dirty/children_count/is_scope/params）
+    desc: Option<NodeDesc>,   // 节点描述（组合产物）——is_scope 或纯组合 Slot 为 None
+}
+struct NodeDesc {
+    key: u64,
+    modifier: Modifier,
+    policy: Option<Box<dyn MeasurePolicy>>,
+    on_remove: Option<Box<dyn FnOnce() + Send>>,
+}
+```
+
+**2. start_node/end_node 改造（组合侧只写描述）**：
+- `start_node`：start_slot + 写 `desc`（modifier/policy/on_remove）到当前 Slot——不碰 arena
+- `end_node`：end_slot——不收集 frame_cache（物化期处理）
+- `replay_clean_subtree`（Skip）：改——clean 子树物化期恢复缓存（组合期只标记/跳过）
+- GROUP_STACK push/pop 保留（组合侧——依赖注册不变）
+
+**3. 新增 materialize()（layout 开头调用）**：
+```rust
+fn materialize(&mut self) {
+    // 遍历 Slot 树（组合树）——对每个节点 Slot（desc.is_some()）：
+    //   - key 匹配 prev_node_by_key → 复用 arena 节点（更新 modifier/policy/on_remove；
+    //     dirty 按 Slot.dirty；clean → restore_layout 缓存）
+    //   - 不匹配 → 新建
+    //   - is_scope / 纯组合 Slot → 跳过（不物化）
+    // 建树（children 顺序 = Slot 树顺序——递归物化）
+    // 回收未复用节点（free——on_remove 触发）
+    // 更新 prev_node_by_key / prev_nodes
+}
+```
+
+**4. layout()：先 materialize() 再 measure_node + place**
+
+**5. 清理**：start_node/end_node 的 arena 操作、frame_cache（如果物化替代）、
+`replay_clean_subtree` 的 stub 机制（物化期统一恢复）
+
+### 验证
+- 154 测试全过（arena 相关测试调整）
+- 动画 demo 各节正常 + 动画平滑（WS 验证）
+- 注册数低（重组局部化不变）
+- 组合树/布局树结构一致（is_scope 跳过物化的正确性）
+
+### 已知坑
+- Slot 树与 arena 树的结构一致性（is_scope Slot 不物化——子挂到最近物化父）
+- on_remove 时机（物化期触发——Window 生命周期）
+- GROUP_STACK 依赖注册（组合侧不变——节点 key 在组合期已知）
+- prev_node_by_key 的 key 匹配（Slot.key 与 arena 节点 slot_key）
+- 文本内容变化检测（modifier_text_content_differs——物化期处理 clean 但内容变）
+
+---
+
 ## 通用验证（每阶段后）
 
 ```bash

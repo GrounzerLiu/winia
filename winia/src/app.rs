@@ -115,7 +115,6 @@ impl PerWindow {
         // 循环 compose 直到没有新的 pending state——处理并发 task 在 compose 期间
         // 完成的 case（第二个 notify 的 state 在第一次 compose 之后才入队）
         // 循环 compose 直到没有新的 pending state
-        self.composer.clear_frame_cache();
         loop {
             let did_compose = self.composer.recompose(|ctx| (self.content)(ctx));
             if let Some(slot_key) = self.focused_slot_key {
@@ -216,6 +215,7 @@ impl ApplicationHandler for AppState {
     fn resumed(&mut self, _event_loop: &dyn ActiveEventLoop) {}
 
     fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
+        debug_log!("[wake-probe] proxy_wake_up");
         // 如果 debug server 请求关闭，退出事件循环
         if debug::is_shutdown() {
             event_loop.exit();
@@ -677,6 +677,7 @@ impl ApplicationHandler for AppState {
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
             }
             WindowEvent::RedrawRequested => {
+                debug_log!("[rr-probe] RedrawRequested");
                 // 动画推进已移到 new_events（每轮一次，与窗口解耦）
                 // 消费焦点请求（在 compose 前处理，避免丢失）
                 for id in crate::modifier::take_focus_requests() {
@@ -951,7 +952,6 @@ impl ApplicationHandler for AppState {
                         _ => {}
                     }
                 }
-                if handled { if let Some(ref sw) = pw.skia_window { sw.request_redraw(); } }
                 if debug::has_pending() { if let Some(ref sw) = pw.skia_window { sw.request_redraw(); } }
             }
             _ => {}
