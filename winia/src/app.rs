@@ -450,10 +450,9 @@ impl ApplicationHandler for AppState {
                                         let tl = crate::text::TextLayout::new(para, 0);
                                         {
                                             let down = pw.pointer_down_state.as_ref().unwrap();
-                                            let Some(reg) = nodes[innermost].registrar.borrow().as_ref().cloned() else {
-                                                // 不可选节点（未注册到任何 SelectionContainer）→ 不更新选择
-                                                return;
-                                            };
+                                            // 不可选节点（未注册到任何 SelectionContainer）→ 不更新选择
+                                            // （用 if let 包裹而非 else return——return 会跳过 dispatch_ptr_event/request_redraw）
+                                            if let Some(reg) = nodes[innermost].registrar.borrow().as_ref().cloned() {
                                             // 跨容器判定：当前 innermost 的 registrar 与 Down 时的 anchor registrar 是否同一
                                             // 实例（Arc 身份）。不同（拖到别的 SelectionContainer 的文本上）→ 用 anchor 容器
                                             // 做 edge snap，绝不切到当前容器的偏移空间（否则 anchor 的全局偏移与当前
@@ -488,6 +487,7 @@ impl ApplicationHandler for AppState {
                                                 eprintln!("[selection] cross-container edge snap range={}..{}", s, e);
                                                 anchor_reg.set_selection(s, e);
                                             }
+                                            } // end if let Some(reg)
                                         }
                                     }
                                 }
@@ -881,11 +881,10 @@ impl ApplicationHandler for AppState {
                                             if let Some(para) = nodes[innermost].cached_paragraph.borrow().as_ref() {
                                                 let (abs_x, abs_y) = node_abs_position(nodes, r, nodes[innermost].id);
                                                 let tl = crate::text::TextLayout::new(para, 0);
-                                                let Some(reg) = nodes[innermost].registrar.borrow().as_ref().cloned() else {
-                                                    // 不可选节点 → 不更新选择
-                                                    handled = true;
-                                                    return;
-                                                };
+                                                // 不可选节点 → 不更新选择
+                                                // （if let 包裹而非 else return——return 会中断事件队列循环，
+                                                // 同帧排队的 PointerUp 不执行 → pointer_down_state 卡死）
+                                                if let Some(reg) = nodes[innermost].registrar.borrow().as_ref().cloned() {
                                                 let same_reg = down.anchor_registrar.as_ref()
                                                     .map(|ar| ar.is_same(&reg)).unwrap_or(false);
                                                 if same_reg {
@@ -916,6 +915,7 @@ impl ApplicationHandler for AppState {
                                                     anchor_reg.set_selection(s, e);
                                                     handled = true;
                                                 }
+                                                } // end if let Some(reg)
                                             } else {
                                                 eprintln!("[sel-debug] move para None——无法计算选择位置");
                                             }
