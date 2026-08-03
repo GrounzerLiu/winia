@@ -344,6 +344,7 @@ impl ApplicationHandler for AppState {
                     if !state.is_pressed() {
                         // 显式请求重绘：on_click 内的 State set 走 wake_up 链路（异步），
                         // 若无 pending 检查兜底会漏刷新（用户看到 count 不变）
+                        eprintln!("[up] detect_click called"); // 构建指纹：无此行 = 旧 exe
                         if detect_click(pw, scene_pos) {
                             if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                         }
@@ -1057,24 +1058,37 @@ fn apply_scroll_delta(nodes: &mut [LayoutNode], idx: usize, dy: f32, density: cr
 fn detect_click(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
     const CLICK_SLOP: f32 = 18.0;
     const CLICK_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
-    if let Some(down) = pw.pointer_down_state.take() {
-        let dx = scene_pos.0 - down.position.0;
-        let dy = scene_pos.1 - down.position.1;
-        let dist = (dx * dx + dy * dy).sqrt();
-        let in_time = down.time.elapsed() < CLICK_TIMEOUT;
-        if dist <= CLICK_SLOP && in_time {
-            let nodes = pw.composer.arena_nodes();
-            if let Some(r) = pw.composer.layout_root_idx() {
-                let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
-                if path.iter().any(|&i| nodes[i].id == down.node_id) {
-                    // 只在相同节点触发 click（从内到外找第一个 on_click）
-                    for &i in path.iter().rev() {
-                        if let Some(on_click) = nodes[i].modifier.on_click() {
-                            on_click();
-                            return true;
-                        }
+    let Some(down) = pw.pointer_down_state.take() else {
+        eprintln!("[click-dbg] take=None");
+        return false;
+    };
+    // Down 时所在节点的 slot_key（跨重组稳定——Down 与 Up 之间可能发生重组
+    // （如聚焦触发），arena 节点重建 → node_id 变化 → 旧 id 匹配必然失败；
+    // slot_key 按组合位置稳定，不受重组影响）
+    let down_slot = pw.pointer_down_slot;
+    let dx = scene_pos.0 - down.position.0;
+    let dy = scene_pos.1 - down.position.1;
+    let dist = (dx * dx + dy * dy).sqrt();
+    let in_time = down.time.elapsed() < CLICK_TIMEOUT;
+    eprintln!("[click-dbg] down=({:.0},{:.0}) up=({:.0},{:.0}) dist={:.1} in_time={} node={} slot={:?}", down.position.0, down.position.1, scene_pos.0, scene_pos.1, dist, in_time, down.node_id, down_slot);
+    if dist <= CLICK_SLOP && in_time {
+        let nodes = pw.composer.arena_nodes();
+        if let Some(r) = pw.composer.layout_root_idx() {
+            let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
+            let hit = down_slot
+                .map(|slot| path.iter().any(|&i| nodes[i].slot_key == slot))
+                .unwrap_or_else(|| path.iter().any(|&i| nodes[i].id == down.node_id));
+            eprintln!("[click-dbg] path={:?} hit={}", path.iter().map(|&i| nodes[i].id).collect::<Vec<_>>(), hit);
+            if hit {
+                // 只在相同节点触发 click（从内到外找第一个 on_click）
+                for &i in path.iter().rev() {
+                    if let Some(on_click) = nodes[i].modifier.on_click() {
+                        eprintln!("[click-dbg] on_click found at node={}", nodes[i].id);
+                        on_click();
+                        return true;
                     }
                 }
+                eprintln!("[click-dbg] path 无 on_click");
             }
         }
     }
