@@ -130,7 +130,7 @@ impl<'a> ComposeCtx<'a> {
     /// #[composable] 宏注入：以源码哈希为 scope key 开始（函数级 key 稳定——
     /// 结构变化不漂移）。内部节点的 next_key 以 scope 源码哈希为 key 基。
     pub fn start_scope_keyed(&mut self, source_hash: u64) -> u64 {
-        self.composer.scope_source_stack.push(source_hash);
+        self.composer.scope_source_stack.push(Some(source_hash));
         self.composer.start_scope()
     }
 
@@ -341,7 +341,7 @@ impl<'a> ComposeCtx<'a> {
         let base = if let Some(&k) = self.composer.key_override_stack.last() {
             k
         } else if let Some(&sid) = self.composer.stmt_stack.last() {
-            let scope_src = self.composer.scope_source_stack.last().copied().unwrap_or(0);
+            let scope_src = self.composer.scope_source_stack.last().and_then(|s| *s).unwrap_or(0);
             let mut h: u64 = 0xcbf29ce484222325;
             h ^= scope_src; h = h.wrapping_mul(0x100000001b3);
             h ^= sid as u64; h = h.wrapping_mul(0x100000001b3);
@@ -673,7 +673,7 @@ pub struct Composer {
     /// #[composable] 宏注入的语句 id 栈（编译期稳定——结构变化不漂移；空 = 宏外路径哈希）
     stmt_stack: Vec<u32>,
     /// 组合 scope 的源码哈希栈（宏传——函数级 key 基）
-    scope_source_stack: Vec<u64>,
+    scope_source_stack: Vec<Option<u64>>,
     /// ctx.key() 显式 key 栈（最高优先级）
     key_override_stack: Vec<u64>,
     pending_recomposition: VecDeque<u64>,
@@ -763,7 +763,7 @@ impl Composer {
         let base = if let Some(&k) = self.key_override_stack.last() {
             k
         } else if let Some(&sid) = self.stmt_stack.last() {
-            let scope_src = self.scope_source_stack.last().copied().unwrap_or(0);
+            let scope_src = self.scope_source_stack.last().and_then(|s| *s).unwrap_or(0);
             // FNV 混合 scope 源码哈希 + 语句 id（不同函数的同序号语句 key 隔离）
             let mut h: u64 = 0xcbf29ce484222325;
             h ^= scope_src; h = h.wrapping_mul(0x100000001b3);
@@ -788,7 +788,10 @@ impl Composer {
 
     /// 开始一个组合 scope（无 LayoutNode 的作用域节点——组合代码重跑的失效单位）。
     /// 返回 scope key；`State::get()` 在 scope 内（组件外）注册依赖到 scope。
+    /// 开始一个组合 scope（手动调用——无源码哈希；scope_source_stack push None，
+    /// 与 start_scope_keyed 的 Some 区分——end_scope 严格配对，不破坏外层宏注入的 source）
     pub fn start_scope(&mut self) -> u64 {
+        self.scope_source_stack.push(None);
         let key = self.next_group_key();
         self.slot_table.start_scope(key);
         SCOPE_STACK.with(|s| s.borrow_mut().push(key));
@@ -2287,4 +2290,107 @@ fn test_text_content_change_remeasures() {
     let w2 = composer.arena_nodes()[leaf].measured_size.width;
     eprintln!("[text-change] frame2 w={}", w2);
     assert!(w2 > w1, "文本内容变化后复用 leaf 应重测（宽度变）：frame1 w={} frame2 w={}（冻结则 bug 复发）", w1, w2);
+}
+
+#[test]
+fn test_stmt_key_stable_across_structure_change() {
+    let mut composer = Composer::new();
+    // 模拟 #[composable] 宏注入：帧 1 语句 5 内组合两个节点；帧 2 前插入一条语句
+    // （运行时结构变化——但语句 id 是源码位置，不受影响）→ key 应稳定。
+    let mut keys_frame1 = Vec::new();
+    composer.compose(|ctx| {
+        let _ = ctx.start_scope_keyed(0xABCD);
+        ctx.push_stmt(5);
+        let k1 = ctx.next_key();
+        ctx.start_leaf(k1, Modifier::new());
+        ctx.end_node();
+        let k2 = ctx.next_key();
+        ctx.start_leaf(k2, Modifier::new());
+        ctx.end_node();
+        ctx.pop_stmt();
+        ctx.end_scope();
+        keys_frame1.push((k1, k2));
+    });
+    let mut keys_frame2 = Vec::new();
+    composer.compose(|ctx| {
+        let _ = ctx.start_scope_keyed(0xABCD);
+        ctx.push_stmt(3); // 模拟"前面插入的新语句"（源码里在语句 5 前新增）
+        ctx.pop_stmt();
+        ctx.push_stmt(5); // 原语句 5——id 不变
+        let k1 = ctx.next_key();
+        ctx.start_leaf(k1, Modifier::new());
+        ctx.end_node();
+        let k2 = ctx.next_key();
+        ctx.start_leaf(k2, Modifier::new());
+        ctx.end_node();
+        ctx.pop_stmt();
+        ctx.end_scope();
+        keys_frame2.push((k1, k2));
+    });
+    assert_eq!(keys_frame1[0], keys_frame2[0], "同语句 id 跨帧 key 应稳定（结构变化不漂移）");
+}
+
+#[test]
+fn test_stmt_key_differs_by_stmt_id() {
+    let mut composer = Composer::new();
+    let mut keys = Vec::new();
+    composer.compose(|ctx| {
+        let _ = ctx.start_scope_keyed(0xABCD);
+        ctx.push_stmt(1);
+        let k1 = ctx.next_key();
+        ctx.start_leaf(k1, Modifier::new());
+        ctx.end_node();
+        ctx.pop_stmt();
+        ctx.push_stmt(2);
+        let k2 = ctx.next_key();
+        ctx.start_leaf(k2, Modifier::new());
+        ctx.end_node();
+        ctx.pop_stmt();
+        ctx.end_scope();
+        keys.push((k1, k2));
+    });
+    assert_ne!(keys[0].0, keys[0].1, "不同语句 id → 不同 key");
+}
+
+#[test]
+fn test_key_override_stable() {
+    let mut composer = Composer::new();
+    let mut keys = Vec::new();
+    for _ in 0..2 {
+        composer.compose(|ctx| {
+            let _ = ctx.start_scope_keyed(0xABCD);
+            let k = ctx.key("scroll_list", |ctx| {
+                let k = ctx.next_key();
+                ctx.start_leaf(k, Modifier::new());
+                ctx.end_node();
+                k
+            });
+            ctx.end_scope();
+            keys.push(k);
+        });
+    }
+    assert_eq!(keys[0], keys[1], "显式 key() 跨帧稳定");
+}
+
+#[test]
+fn test_key_override_differs_from_stmt() {
+    let mut composer = Composer::new();
+    let mut keys = Vec::new();
+    composer.compose(|ctx| {
+        let _ = ctx.start_scope_keyed(0xABCD);
+        ctx.push_stmt(1);
+        let k1 = ctx.next_key();
+        ctx.start_leaf(k1, Modifier::new());
+        ctx.end_node();
+        ctx.pop_stmt();
+        let k2 = ctx.key("other", |ctx| {
+            let k = ctx.next_key();
+            ctx.start_leaf(k, Modifier::new());
+            ctx.end_node();
+            k
+        });
+        ctx.end_scope();
+        keys.push((k1, k2));
+    });
+    assert_ne!(keys[0].0, keys[0].1, "显式 key() 与语句 key 不同空间");
 }

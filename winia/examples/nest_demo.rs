@@ -1,6 +1,11 @@
 //! 多种嵌套组合演示——验证 #[composable] 宏的语句级 key 注入在复杂嵌套下工作：
 //! 嵌套函数、多级 if/else、match、for/while 循环、深层 content 闭包、
 //! 结构切换（插入/移除分支）时 remember 状态保留（key 源码位置稳定不漂移）。
+//!
+//! ⚠ content 闭包约定：`build(ctx, |ctx| { ... })` 的内容闭包必须是**单参数且
+//! 参数名为 ctx**（可带类型标注 `|ctx: &mut ComposeCtx|`）——宏据此注入语句级 key。
+//! 其他单参数名为 ctx 的闭包（如延迟执行的异步回调）会被误注入——避免在
+//! #[composable] 函数内使用"参数名为 ctx 的非 content 闭包"。
 
 use winia::prelude::*;
 use winia::app;

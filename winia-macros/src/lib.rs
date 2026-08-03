@@ -45,6 +45,13 @@ fn fnv64(s: &str) -> u64 {
 fn inject_stmt_ids(stmts: Vec<Stmt>, ctx: &syn::Ident, counter: &mut u32) -> Vec<Stmt> {
     let mut out = Vec::new();
     for stmt in stmts {
+        // 尾表达式（无分号）不包裹 push/pop——包裹会吞掉尾值
+        // （`{ 300.0 }` 变 `{ push; 300.0; pop }` → 块值变 ()，if/块表达式类型错）。
+        // 尾表达式通常是值表达式（组合函数返回 ()，无 build）——递归仍注入内部块。
+        if let Stmt::Expr(_, None) = stmt {
+            out.push(inject_nested(stmt, ctx, counter));
+            continue;
+        }
         let id = *counter;
         *counter += 1;
         let stmt = inject_nested(stmt, ctx, counter);
@@ -64,7 +71,20 @@ fn inject_nested(stmt: Stmt, ctx: &syn::Ident, counter: &mut u32) -> Stmt {
             let e = inject_expr_blocks(expr, ctx, counter);
             Stmt::Expr(e, semi)
         }
-        other => other, // let/item 不深入（内嵌闭包/块由语句级 push 覆盖）
+        // let 的 init 表达式也递归注入（`let x = if a { build } else {...}` 的
+        // 分支内 build 获得语句级 key——与"语句级 key 不漂移"承诺一致）
+        Stmt::Local(mut l) => {
+            if let Some(init) = l.init.take() {
+                let injected = inject_expr_blocks(*init.expr, ctx, counter);
+                l.init = Some(syn::LocalInit {
+                    eq_token: init.eq_token,
+                    expr: Box::new(injected),
+                    diverge: init.diverge,
+                });
+            }
+            Stmt::Local(l)
+        }
+        other => other, // item 不深入（内嵌闭包/块由语句级 push 覆盖）
     }
 }
 
@@ -136,6 +156,10 @@ fn inject_expr_blocks(expr: syn::Expr, ctx: &syn::Ident, counter: &mut u32) -> s
         syn::Expr::Closure(mut e) => {
             let is_content = match e.inputs.first() {
                 Some(syn::Pat::Ident(pi)) if e.inputs.len() == 1 && pi.ident == "ctx" => true,
+                // 带类型标注的写法 `|ctx: &mut ComposeCtx|`（Pat::Type 内层是 Pat::Ident）
+                Some(syn::Pat::Type(pt)) if e.inputs.len() == 1 => {
+                    matches!(&*pt.pat, syn::Pat::Ident(pi) if pi.ident == "ctx")
+                }
                 _ => false,
             };
             if is_content {
