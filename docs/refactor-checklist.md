@@ -20,11 +20,11 @@
 - **is_scope 重置**：`start_node` 复用 scope slot 时 `set_current_scope(false)`（同路径类型切换）
 - 验证：demo 第 2 节 `let w = alpha.get() * 200.0 + 50.0; .size(w, 30.0)` 不用闭包、动画平滑（188px/Alpha 0.66 中间值）、注册数 5s≈13、**117 测试过**（含 3 个 scope 测试：依赖失效/scope-group 配对/节点优先级）
 
-**当前已知问题**（后续阶段注意）：
-- `modifier_fn` 字段还在 `Column`（`ui/layout_components.rs`）——派生值/属性宏方案下可删
-- `Column` 的 `set_current_node_modifier`（`composer.rs`）——modifier_fn 专用，可删
-- content scope 与组件 start 的顺序：`start_scope` 在 `start_restartable_group` **之前**（content 内表达式注册到 content scope）
-- scope 是 slot 树中 group 的**父**（start_scope 先于 start_restartable_group）——slot 树与 LayoutNode 树结构不一致（scope 无 LayoutNode），replay/路径查找需特殊处理（已修，但属于脆弱点）
+**当前已知问题**（后续阶段已解决——记录留档）：
+- ~~`modifier_fn` 字段还在 `Column`~~——派生值方案下已删
+- ~~`Column` 的 `set_current_node_modifier`~~——modifier_fn 专用，已删
+- ~~content scope 与组件 start 的顺序~~——Part6（9ecd2e1）已统一：`start_restartable_group` push 组件 scope（容器=scope），移除组件自动 content scope
+- ~~scope 是 slot 树中 group 的父（slot 树与 LayoutNode 树结构不一致的脆弱点）~~——Part6 后容器即 scope（slot 树与 LayoutNode 树结构一致），脆弱点消除
 
 ---
 
@@ -145,13 +145,22 @@ fn section2(ctx: &mut ComposeCtx, alpha: &State<f32>) { ... }
 
 ### 已知坑
 - 属性宏**不能变换调用点**——ctx 必须显式传（已定：接受）
-- 提前 return 处理（v1 限制：无提前 return 或需处理）
+- 提前 return 处理（v1 限制：无提前 return 或需处理）——**已被 RAII guard 方案自然解决**（见下）
 - proc-macro crate 必须独立于 lib crate（workspace 新 crate）
 - syn/quote 版本与 workspace 兼容
 
+### 超出原规划的扩展（后续提交）
+
+- **语句级 key 注入**：`start_scope_keyed(签名哈希)` + 每条语句 `enter_stmt(id)`（RAII `StmtGuard`——thread_local STMT_STACK——return/break/continue/panic 提前退出自动 pop 防泄漏）+ 表达式语句 guard 块包 / let init guard 块包 / 尾表达式跳过包裹（值语义）
+- **content 闭包注入**：单参数名为 `ctx` 的闭包视为 content（约定）——注入其体（嵌套递归）；Call/MethodCall 参数遍历（build 的闭包在方法调用参数位）
+- **`ctx.key(id, |ctx|)`** 显式 key API（key_override_stack——列表重排/子树移动场景）
+- **签名哈希**（含参数类型——跨模块同名碰撞缓解）
+- **8 个宏展开级防回归测试**（winia-macros：content 闭包/if 分支/let init/嵌套闭包/match 臂/for 体/let-else diverge/尾表达式）
+- 关键修复：`inject_stmt_ids` 的"先注入后 match"统一注入点（防回归测试守护）；`start_scope_keyed` 独立实现避免双重 push（scope=0 跨函数 key 碰撞串位 bug）
+
 ---
 
-## 阶段 4：布局树独立缓存 —— ✅ 全部完成（Part1-5）
+## 阶段 4：布局树独立缓存 —— ✅ 全部完成（Part1-6）
 
 **Part1（2059720）**：`prev_nodes`/`frame_cache` 改以 `slot_key` 为键（原 slot path 含 scope 层 vs LayoutNode path 无 scope → 键 miss → is_skip 恒 false 全 Enter）；新增 `restore_layout`；`test_is_skip_after_clean_frame`。
 **Part2（2df4474）**：measure 期动态尺寸依赖修复（kf/dp 冻结）+ `State::set_no_wake`（wake 自旋）。
@@ -242,6 +251,33 @@ cargo build -p winia --example animation_demo --features debug-server
 
 - [x] 阶段 2：派生值（`.size(&alpha * 200.0 + 50.0, 30.0)`）——fa477f3 完成
 - [x] 阶段 3：`#[composable]` 属性宏（函数 = Group）——1813329 完成
-- [ ] 阶段 4：布局树独立缓存（LayoutNode 复用）
-- [x] 阶段 5：参数相等跳过（Stable trait）——877e4e7 完成（changed 机制）
-- [ ] 文档最终更新（设计 + 使用指南）
+- [x] 阶段 4：布局树独立缓存（LayoutNode 复用）——Part1-6 全部完成（c64f335 free 池测试）
+- [x] 阶段 5：参数相等跳过（Stable trait）——877e4e7（changed 机制）+ c53b719（容器组件自动参数暂存）+ 07db7d7（布局层 dirty 修复）
+- [x] 文档最终更新（设计 + 使用指南）——composition-system-design.md 第七节（2026-08 现状评估）
+
+---
+
+## 多做的（超出原 checklist 规划）
+
+### 设计文档目标①：依赖注册唯一化（GROUP_STACK——40e9441）
+`ACTIVE_SLOT_KEY` + `SCOPE_STACK` 双轨合并为 `GROUP_STACK`（thread_local 统一栈——scope/容器/节点共用）——`State.get()` 注册到栈顶最内层 Group（单一注册目标）；start_node push / end_node pop 配对（组件内读取失效目标 = 节点）；测量阶段栈空回退 ACTIVE_SLOT_KEY。checklist 未规划（只有阶段 2-5），实际完成。
+
+### 交互修复链（大量 bug 修复——非 checklist 内容）
+- **真实点击**：Up click 检测嵌套在 Down 块内永不执行（9031ed6）+ slot_key 跨重组匹配（f1edb49）
+- **拖动选择**：跨容器 clamp（935638c）、输出文本不可选（09bb4df/871f44b）、compute_selection 纯函数共享（6c51532）、RichText 自选修复（6febd6f——try_current 统一）
+- **Window key 加盐**（034a415——结构变化误复用旧槽幽灵节点）+ 多 Window remember 独立（b376167）
+- **nest_demo 串位**（6c81f91——start_scope_keyed 双重 push None 覆盖 Some → scope=0 跨函数 key 碰撞）
+- **窗口列表消失**（键盘/焦点/列表稳定性相关修复）
+
+### 阶段 4/5 的补全（checklist 未记）
+- 阶段 4 Part6（9ecd2e1）：content scope 死代码修复（容器=scope 统一——with_active_scope 移除 NODE_DEPTH 优先）
+- 阶段 5 容器组件自动参数暂存（c53b719——checklist 只有手动 changed）+ 布局层 dirty 修复（07db7d7——参数变化 Enter 时置 dirty 防常量折叠返回旧值）
+
+### 测试与工具
+- 149 测试全过（winia）+ 8 全过（winia-macros）
+- debug_log! 宏（debug-server feature 门控——用户构建零日志）
+- nest_demo（多种嵌套演示——嵌套函数/多级 if/match/for/while/深层闭包/结构切换）
+
+### 明确不做（收益边际）
+- **组合树与布局树完整分离**（apply_composition 两棵树）——实际收益已通过 arena 复用 + 折叠 + key 匹配达成（与 Compose 组合产物模式一致）——设计文档标注远期
+- **阶段 4 的三套缓存合并**（prev_nodes/frame_cache/is_replay_stub）——依赖完整分离——当前机制仍需要
