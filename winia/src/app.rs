@@ -5,6 +5,7 @@ use std::time::Instant;
 use crate::core::composer::{ComposeCtx, Composer};
 use crate::debug;
 use crate::layout::constraints::Constraints;
+use crate::debug_log;
 use crate::layout::node::{hit_test, focus_next, focus_prev, LayoutNode};
 use crate::render;
 pub(crate) struct PendingWindow {
@@ -98,13 +99,6 @@ impl PerWindow {
         self.composer.clear_frame_cache();
         loop {
             let did_compose = self.composer.recompose(|ctx| (self.content)(ctx));
-            if let Some(r) = self.composer.layout_root_idx() {
-                let nodes = self.composer.arena_nodes();
-                let has_line = nodes.iter().any(|n| format!("{:?}", n.modifier).contains("Line "));
-                // 列表 Column（vertical_scroll）的 key——诊断每帧漂移
-                let list_key = nodes.iter().find(|n| format!("{:?}", n.modifier).contains("vertical_scroll")).map(|n| n.slot_key);
-                eprintln!("[win-dbg] id={:?} nodes={} has_line={} list_key={:?}", self.created_id, nodes.len(), has_line, list_key);
-            }
             if let Some(slot_key) = self.focused_slot_key {
                 if let Some(r) = self.composer.layout_root_idx() {
                     let nodes = self.composer.arena_nodes_mut();
@@ -112,7 +106,7 @@ impl PerWindow {
                         crate::layout::node::clear_focus(nodes, r);
                         crate::layout::node::set_focus_by_id(nodes, r, new_id);
                         self.focused_id = Some(new_id);
-                            eprintln!("[focus] restored by slot_key id={}", new_id);
+                            debug_log!("[focus] restored by slot_key id={}", new_id);
                     } else {
                         self.focused_id = None;
                         self.focused_slot_key = None;
@@ -272,7 +266,7 @@ impl ApplicationHandler for AppState {
             WindowEvent::PointerButton { position, state, button, .. } => {
                 let lp = position.to_logical::<f32>(pw.scale_factor);
                 let scene_pos = (lp.x, lp.y);
-                eprintln!("[pb] state={:?} button={:?} pos=({:.0},{:.0})", state, button, scene_pos.0, scene_pos.1); // 分支入口标记
+                debug_log!("[pb] state={:?} button={:?} pos=({:.0},{:.0})", state, button, scene_pos.0, scene_pos.1); // 分支入口标记
                 let event_type = if state.is_pressed() {
                     crate::modifier::PointerEventType::Down
                 } else {
@@ -299,16 +293,16 @@ impl ApplicationHandler for AppState {
                                         let (ax, ay) = node_abs_position(nodes, r, nodes[innermost].id);
                                         let tl = crate::text::TextLayout::new(para, 0);
                                         let closest = tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(scene_pos.0 - ax, scene_pos.1 - ay));
-                                        eprintln!("[cursor] click scene=({:.0},{:.0}) abs=({:.0},{:.0}) local=({:.0},{:.0}) anchor={:?}",
+                                        debug_log!("[cursor] click scene=({:.0},{:.0}) abs=({:.0},{:.0}) local=({:.0},{:.0}) anchor={:?}",
                                             scene_pos.0, scene_pos.1, ax, ay, scene_pos.0 - ax, scene_pos.1 - ay, closest);
                                         Some(closest)
-                                    } else { eprintln!("[cursor] para None"); None }
-                                } else { eprintln!("[cursor] try_borrow failed"); None };
+                                    } else { debug_log!("[cursor] para None"); None }
+                                } else { debug_log!("[cursor] try_borrow failed"); None };
                                 pw.pointer_down_state = Some(PtrDownState {
                                     node_id: nodes[innermost].id, position: scene_pos, time: Instant::now(),
                                     selection_anchor: None, anchor_registrar: None });
                                 pw.pointer_down_slot = Some(nodes[innermost].slot_key);
-                                eprintln!("[sel-down] pointer_down_state set, slot={}", nodes[innermost].slot_key);
+                                debug_log!("[sel-down] pointer_down_state set, slot={}", nodes[innermost].slot_key);
                                 // 将 anchor 转为全局索引再存入
                                 // reg 只用节点自己的 registrar（不 fallback active_registrar）——
                                 // 不可选节点（输出 Text 等未注册）的 node.registrar 为 None，
@@ -356,7 +350,7 @@ impl ApplicationHandler for AppState {
                 if !state.is_pressed() {
                     // 显式请求重绘：on_click 内的 State set 走 wake_up 链路（异步），
                     // 若无 pending 检查兜底会漏刷新（用户看到 count 不变）
-                    eprintln!("[up] detect_click called");
+                    debug_log!("[up] detect_click called");
                     if detect_click(pw, scene_pos) {
                         if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                     }
@@ -380,7 +374,7 @@ impl ApplicationHandler for AppState {
                 }
                 // Up 后清除 capture + 通知选区变化
                 if !state.is_pressed() {
-                    eprintln!("[sel-up-clean] fired, slot={:?}", pw.pointer_down_slot);
+                    debug_log!("[sel-up-clean] fired, slot={:?}", pw.pointer_down_slot);
                     // Compose 方式：从拖拽节点 slot_key 取 registrar 直接 fire
                     if let Some(slot) = pw.pointer_down_slot {
                         let nodes = pw.composer.arena_nodes();
@@ -412,7 +406,7 @@ impl ApplicationHandler for AppState {
             WindowEvent::PointerMoved { position, .. } => {
                 let lp = position.to_logical::<f32>(pw.scale_factor);
                 let scene_pos = (lp.x, lp.y);
-                eprintln!("[sel-move-ev] pos=({:.0},{:.0}) down_state={}",
+                debug_log!("[sel-move-ev] pos=({:.0},{:.0}) down_state={}",
                     scene_pos.0, scene_pos.1, pw.pointer_down_state.is_some());
                 let nodes = pw.composer.arena_nodes();
                 if let Some(r) = pw.composer.layout_root_idx() {
@@ -426,7 +420,7 @@ impl ApplicationHandler for AppState {
                             const CLICK_SLOP: f32 = 18.0;
                             if (dx*dx + dy*dy).sqrt() > CLICK_SLOP {
                                 let (abs_x, abs_y) = node_abs_position(nodes, r, nodes[innermost].id);
-                                eprintln!("[sel-move] pos=({:.0},{:.0}) down=({:.0},{:.0}) slop_ok node={} has_text={} para={} anchor={:?}",
+                                debug_log!("[sel-move] pos=({:.0},{:.0}) down=({:.0},{:.0}) slop_ok node={} has_text={} para={} anchor={:?}",
                                     scene_pos.0, scene_pos.1, down.position.0, down.position.1,
                                     nodes[innermost].id, nodes[innermost].has_text_content,
                                     nodes[innermost].cached_paragraph.try_borrow().ok().map(|b| b.is_some()).unwrap_or(false),
@@ -454,7 +448,7 @@ impl ApplicationHandler for AppState {
                                                 &reg, cur_off, current_index,
                                                 scene_pos.1, down.position.1, abs_y,
                                             ) {
-                                                eprintln!("[selection] set global range={}..{}", s, e);
+                                                debug_log!("[selection] set global range={}..{}", s, e);
                                                 target.set_selection(s, e);
                                             }
                                             } // end if let Some(reg)
@@ -665,25 +659,14 @@ impl ApplicationHandler for AppState {
                 let w = pw.width;
                 let h = pw.height;
                 let sf = pw.scale_factor as f32;
-                let is_main_window = pw.created_id.unwrap_or(0) <= 1; // 临时：多窗口时 t 只打印主窗口
                 pw.recompose_layout_render(|nodes, root_idx, surface| {
-                    if is_main_window {
-                        debug::update_tree(&debug::build_tree_json(nodes, root_idx));
-                    }
+                    debug::update_tree(&debug::build_tree_json(nodes, root_idx));
                     if debug::screenshot_requested() {
                         let (pw2, ph2) = ((w * sf) as i32, (h * sf) as i32);
                         let info = skia_safe::ImageInfo::new((pw2, ph2), skia_safe::ColorType::RGBA8888, skia_safe::AlphaType::Premul, None);
                         let mut pixels = vec![0u8; (pw2 * ph2 * 4) as usize];
                         if surface.read_pixels(&info, &mut pixels, pw2 as usize * 4, (0, 0)) {
                             debug::update_pixels(&pixels, pw2 as u32, ph2 as u32);
-                            // 临时：保存 png 供图像分析
-                            if let Some(mut surf) = skia_safe::Surface::new_raster(&info, None, None) {
-                                surf.canvas().write_pixels(&info, &pixels, pw2 as usize * 4, (0, 0));
-                                let img = surf.image_snapshot();
-                                if let Some(data) = img.encode(None, skia_safe::EncodedImageFormat::PNG, 90) {
-                                    let _ = std::fs::write("D:/Projects/winia/dbg_win.png", data.as_bytes());
-                                }
-                            }
                         }
                         debug::screenshot_done();
                     }
@@ -772,8 +755,8 @@ impl ApplicationHandler for AppState {
                                 pw.focused_slot_key = Some(sk);
                                 if let Some(ref sw) = pw.skia_window { sw.set_ime_allowed(true); }
                             }
-                            eprintln!("[debug-click] pos=({:.0},{:.0}) path_len={} sf={}", x, y, path_len, pw.scale_factor);
-                            eprintln!("[debug-click] handled={} pos=({:.0},{:.0})", click_handled, x, y);
+                            debug_log!("[debug-click] pos=({:.0},{:.0}) path_len={} sf={}", x, y, path_len, pw.scale_factor);
+                            debug_log!("[debug-click] handled={} pos=({:.0},{:.0})", click_handled, x, y);
                         }
                         debug::DebugEvent::Key { key } => {
                             if key == "Tab" {
@@ -816,7 +799,7 @@ impl ApplicationHandler for AppState {
                                             .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
                                         reg.clear_selection();
                                     }
-                                    eprintln!("[sel-debug] node id={} has_text={} para={} dirty={} cc={:?} size={:?}",
+                                    debug_log!("[sel-debug] node id={} has_text={} para={} dirty={} cc={:?} size={:?}",
                                         nodes[innermost].id,
                                         nodes[innermost].has_text_content,
                                         nodes[innermost].cached_paragraph.borrow().is_some(),
@@ -830,10 +813,10 @@ impl ApplicationHandler for AppState {
                                             tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(x - ax, y - ay))
                                         })
                                     } else {
-                                        eprintln!("[sel-debug] try_borrow FAILED（渲染借用中？）");
+                                        debug_log!("[sel-debug] try_borrow FAILED（渲染借用中？）");
                                         None
                                     };
-                                    eprintln!("[sel-debug] down para={} anchor={:?}", nodes[innermost].cached_paragraph.borrow().is_some(), anchor);
+                                    debug_log!("[sel-debug] down para={} anchor={:?}", nodes[innermost].cached_paragraph.borrow().is_some(), anchor);
                                     // reg 只用节点自己的（不 fallback active_registrar——理由同真实 Down）
                                     let own_reg = nodes[innermost].registrar.borrow().as_ref().cloned();
                                     let anchor_global = anchor.and_then(|a| {
@@ -843,7 +826,7 @@ impl ApplicationHandler for AppState {
                                     pw.pointer_down_state = Some(crate::app::PtrDownState {
                                         node_id: nodes[innermost].id, position: (x, y), time: std::time::Instant::now(), selection_anchor: anchor_global, anchor_registrar: own_reg });
                                     pw.pointer_down_slot = Some(nodes[innermost].slot_key);
-                                    eprintln!("[sel-debug] anchor_global={:?}", anchor_global);
+                                    debug_log!("[sel-debug] anchor_global={:?}", anchor_global);
                                     handled = true;
                                 }
                             }
@@ -873,13 +856,13 @@ impl ApplicationHandler for AppState {
                                                     &reg, cur_off, current,
                                                     y as f32, down.position.1, abs_y as f32,
                                                 ) {
-                                                    eprintln!("[selection] set global range={}..{}", s, e);
+                                                    debug_log!("[selection] set global range={}..{}", s, e);
                                                     target.set_selection(s, e);
                                                     handled = true;
                                                 }
                                                 } // end if let Some(reg)
                                             } else {
-                                                eprintln!("[sel-debug] move para None——无法计算选择位置");
+                                                debug_log!("[sel-debug] move para None——无法计算选择位置");
                                             }
                                         }
                                     }
@@ -1081,7 +1064,7 @@ fn detect_click(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
     const CLICK_SLOP: f32 = 18.0;
     const CLICK_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
     let Some(down) = pw.pointer_down_state.take() else {
-        eprintln!("[click-dbg] take=None");
+        debug_log!("[click-dbg] take=None");
         return false;
     };
     // Down 时所在节点的 slot_key（跨重组稳定——Down 与 Up 之间可能发生重组
@@ -1092,7 +1075,7 @@ fn detect_click(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
     let dy = scene_pos.1 - down.position.1;
     let dist = (dx * dx + dy * dy).sqrt();
     let in_time = down.time.elapsed() < CLICK_TIMEOUT;
-    eprintln!("[click-dbg] down=({:.0},{:.0}) up=({:.0},{:.0}) dist={:.1} in_time={} node={} slot={:?}", down.position.0, down.position.1, scene_pos.0, scene_pos.1, dist, in_time, down.node_id, down_slot);
+    debug_log!("[click-dbg] down=({:.0},{:.0}) up=({:.0},{:.0}) dist={:.1} in_time={} node={} slot={:?}", down.position.0, down.position.1, scene_pos.0, scene_pos.1, dist, in_time, down.node_id, down_slot);
     if dist <= CLICK_SLOP && in_time {
         let nodes = pw.composer.arena_nodes();
         if let Some(r) = pw.composer.layout_root_idx() {
@@ -1100,17 +1083,17 @@ fn detect_click(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
             let hit = down_slot
                 .map(|slot| path.iter().any(|&i| nodes[i].slot_key == slot))
                 .unwrap_or_else(|| path.iter().any(|&i| nodes[i].id == down.node_id));
-            eprintln!("[click-dbg] path={:?} hit={}", path.iter().map(|&i| nodes[i].id).collect::<Vec<_>>(), hit);
+            debug_log!("[click-dbg] path={:?} hit={}", path.iter().map(|&i| nodes[i].id).collect::<Vec<_>>(), hit);
             if hit {
                 // 只在相同节点触发 click（从内到外找第一个 on_click）
                 for &i in path.iter().rev() {
                     if let Some(on_click) = nodes[i].modifier.on_click() {
-                        eprintln!("[click-dbg] on_click found at node={}", nodes[i].id);
+                        debug_log!("[click-dbg] on_click found at node={}", nodes[i].id);
                         on_click();
                         return true;
                     }
                 }
-                eprintln!("[click-dbg] path 无 on_click");
+                debug_log!("[click-dbg] path 无 on_click");
             }
         }
     }
@@ -1196,8 +1179,6 @@ fn dispatch_ptr_event(
 }
 
 pub fn run_app(app: impl FnOnce(&mut ComposeCtx) + 'static) {
-    // 构建指纹（无条件打印——用户运行第一行即可确认构建版本；无此行 = 旧 exe）
-    eprintln!("[app] winia build={} click-fix=f1edb49", env!("CARGO_PKG_VERSION"));
     let event_loop = EventLoop::new().expect("event loop");
     let proxy = event_loop.create_proxy();
     debug::set_event_loop_proxy(proxy.clone());

@@ -4,6 +4,7 @@
 //!   Phase 1: 非 BackdropBlur 内容 + 收集背景模糊区域
 //!   Phase 2: snapshot → 每个模糊区域 crop → blur → 画回 + 画子节点
 
+use crate::debug_log;
 use crate::layout::node::LayoutNode;
 use crate::modifier::ModifierElement;
 use skia_safe::{Canvas, Color4f, Paint, RRect, Rect};
@@ -164,7 +165,7 @@ fn render_pass1(
             };
             // 选中高亮
             if let Some(range) = node.registrar.borrow().as_ref().cloned().unwrap_or_else(|| crate::ui::selection_container::active_registrar()).selected_range(node.slot_key) {
-                eprintln!("[selection] render node={} range={}..{}", node.id, range.start, range.end);
+                debug_log!("[selection] render node={} range={}..{}", node.id, range.start, range.end);
                 let rects: Vec<_> = if range.start < range.end {
                 para.get_rects_for_range(range.start..range.end, skia_safe::textlayout::RectHeightStyle::Max, skia_safe::textlayout::RectWidthStyle::Max) } else { Vec::new() };
                 let mut paint = skia_safe::Paint::default();
@@ -190,19 +191,19 @@ fn render_pass1(
             }
             // 绘制光标（聚焦的 TextField 节点）
             if node.focused {
-                eprintln!("[render] cursor focused=true idx={} cursor_visible={}", node.cursor_index.get(), node.cursor_visible.get());
+                debug_log!("[render] cursor focused=true idx={} cursor_visible={}", node.cursor_index.get(), node.cursor_visible.get());
                 if node.cursor_visible.get() {
                     let length = para.paragraph_byte_to_real_indices.len();
                     let tl = crate::text::TextLayout::new(para, length);
                     let idx = node.cursor_index.get();
                     if let Some((cx, cy, ch)) = tl.get_cursor_position(idx) {
-                        eprintln!("[render] cursor pos=({:.0},{:.0}) h={:.0}", cx, cy, ch);
+                        debug_log!("[render] cursor pos=({:.0},{:.0}) h={:.0}", cx, cy, ch);
                         let mut cp = skia_safe::Paint::default();
                         cp.set_color(skia_safe::Color::from_argb(255, color.r, color.g, color.b));
                         cp.set_stroke_width(1.5);
                         canvas.draw_line(skia_safe::Point::new(x_off + cx, y + cy), skia_safe::Point::new(x_off + cx, y + cy + ch), &cp);
-                    } else { eprintln!("[render] get_cursor_position returned None for idx={}", node.cursor_index.get()); }
-                } else { eprintln!("[render] cursor_visible is false"); }
+                    } else { debug_log!("[render] get_cursor_position returned None for idx={}", node.cursor_index.get()); }
+                } else { debug_log!("[render] cursor_visible is false"); }
             }
             // IME 组合文本下划线
             if let Some(comp_range) = node.composing_range.borrow().as_ref() {

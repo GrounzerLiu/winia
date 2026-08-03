@@ -4,6 +4,7 @@
 //! - ProvideTextStyle 为子树设置默认文字样式
 //! - 单独参数（font_size 等）优先级高于 style 参数
 
+use crate::debug_log;
 use crate::core::composer::ComposeCtx;
 use crate::core::composition_local::CompositionLocal;
 use crate::modifier::{Color, Modifier, ModifierElement};
@@ -227,7 +228,7 @@ impl Text {
         {
             let global_off = reg.register(key, content_len, None);
             ctx.set_current_node_registrar(reg);
-            eprintln!("[selection] Text registered: slot_key={} len={} global_off={}", key, content_len, global_off);
+            debug_log!("[selection] Text registered: slot_key={} len={} global_off={}", key, content_len, global_off);
         }
         ctx.end_node();
     }
