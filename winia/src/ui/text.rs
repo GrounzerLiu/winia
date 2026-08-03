@@ -4,6 +4,7 @@
 //! - ProvideTextStyle 为子树设置默认文字样式
 //! - 单独参数（font_size 等）优先级高于 style 参数
 
+use crate::debug_log;
 use crate::core::composer::ComposeCtx;
 use crate::core::composition_local::CompositionLocal;
 use crate::modifier::{Color, Modifier, ModifierElement};
@@ -218,12 +219,17 @@ impl Text {
         });
 
         ctx.start_leaf(key, modifier);
-        // 注册到选区容器（供文本拖动选中使用）
-        let reg = ctx.selection_registrar()
-            .unwrap_or_else(|| crate::ui::selection_container::LOCAL_SELECTION_REGISTRAR.current());
-        let global_off = reg.register(key, content_len, None);
-        ctx.set_current_node_registrar(reg);
-        eprintln!("[selection] Text registered: slot_key={} len={} global_off={}", key, content_len, global_off);
+        // 注册到选区容器（供文本拖动选中使用）——仅在 SelectionContainer 的
+        // provides 作用域内注册；作用域外（普通 Text / SelectionContainer 之后的
+        // 输出 Text）不注册（注册到 default 空 registrar 会让它"自选"——点击自己
+        // 时用空 registrar 正常选择，显示为可选中）
+        if let Some(reg) = ctx.selection_registrar()
+            .or_else(|| crate::ui::selection_container::LOCAL_SELECTION_REGISTRAR.try_current())
+        {
+            let global_off = reg.register(key, content_len, None);
+            ctx.set_current_node_registrar(reg);
+            debug_log!("[selection] Text registered: slot_key={} len={} global_off={}", key, content_len, global_off);
+        }
         ctx.end_node();
     }
 

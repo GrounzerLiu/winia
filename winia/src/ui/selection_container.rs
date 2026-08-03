@@ -103,6 +103,12 @@ impl SelectionRegistrar {
         inner.selection_end = None;
     }
 
+    /// 是否同一实例（Arc 身份——跨容器拖动的 anchor 归属判断：拖到别的
+    /// SelectionContainer 的文本上时，用 anchor 容器做 edge snap，不切偏移空间）
+    pub fn is_same(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
     pub fn segment_info(&self, slot_key: u64) -> Option<(usize, usize)> {
         let inner = self.inner.lock().unwrap();
         inner.segments.get(&slot_key).map(|s| (s.global_offset, s.text_len))
@@ -197,6 +203,7 @@ impl SelectionContainer {
             *ACTIVE_REGISTRAR.lock().unwrap() = Some(reg.clone());
             LOCAL_SELECTION_REGISTRAR.provides(reg, || {
                 ctx.set_selection_registrar(registrar.clone());
+                // content 闭包自动成为组合 scope（与 Column/Row/Stack/Button 一致）
                 match ctx.start_restartable_group(key, self.modifier, BoxLayout::new()) {
                     GroupStatus::Skip => {}
                     GroupStatus::Enter => {
@@ -206,13 +213,66 @@ impl SelectionContainer {
                 }
                 ctx.end_restartable_group();
             });
-            // 不再清除 registrar——由下一个 SelectionContainer 构建时覆盖
+            // provides 退出后恢复 composer 的 selection_registrar（防残留——
+            // build 之后的 Text 会误注册到本 SelectionContainer，如"显示选中文本"的输出 Text）
+            ctx.clear_selection_registrar();
         }
     }
 }
 
 impl Default for SelectionContainer {
     fn default() -> Self { Self::new() }
+}
+
+// ═══════════════════════════════════════════════════════════
+// 拖动选择核心（真实 PointerMoved 与 debug 模拟共用——消除平行代码 + 可测）
+// ═══════════════════════════════════════════════════════════
+
+/// 计算一次 PointerMove 后的选择范围。
+///
+/// 返回 `Some((要设选的 registrar, 全局 start, 全局 end))`；`None` = 不更新选择。
+/// 三种情况：
+/// - 同容器 + 当前文本内：`anchor_global ↔ current_global`（当前文本的全局偏移）
+/// - 同容器 + 容器空白：edge snap 到当前容器边界（上拖 0 / 下拖 total）
+/// - 跨容器（当前在别的 SelectionContainer 文本上）：用 anchor 容器 edge snap——
+///   绝不切到当前容器的偏移空间（否则 anchor 全局偏移与当前容器 global_off 混合 → 错选）
+/// - 无 anchor 容器（Down 在不可选节点上，如 SelectionContainer 外的输出 Text）→ None
+pub(crate) fn compute_selection(
+    anchor_reg: Option<&SelectionRegistrar>,
+    anchor_global: Option<usize>,
+    cur_reg: &SelectionRegistrar,
+    cur_global_off: Option<usize>,
+    cur_index: usize,
+    scene_y: f32,
+    down_y: f32,
+    node_abs_y: f32,
+) -> Option<(SelectionRegistrar, usize, usize)> {
+    let same_reg = anchor_reg.map(|ar| ar.is_same(cur_reg)).unwrap_or(false);
+    if same_reg {
+        if let Some(off) = cur_global_off {
+            let current_global = off + cur_index;
+            let s = anchor_global.map(|a| a.min(current_global)).unwrap_or(current_global);
+            let e = anchor_global.map(|a| a.max(current_global)).unwrap_or(current_global + 1);
+            Some((cur_reg.clone(), s, e))
+        } else if let Some(a) = anchor_global {
+            // 同容器超出：edge snap 到容器边界
+            let edge = if scene_y < node_abs_y { 0 } else { cur_reg.total_text_len() };
+            let s = a.min(edge);
+            let e = a.max(edge);
+            Some((cur_reg.clone(), s, e))
+        } else {
+            None
+        }
+    } else if let (Some(anchor_reg), Some(a)) = (anchor_reg, anchor_global) {
+        // 跨容器：用 anchor 容器做 edge snap（拖出 anchor 容器 → clamp 到其边界）
+        let total = anchor_reg.total_text_len();
+        let edge = if scene_y < down_y { 0 } else { total };
+        let s = a.min(edge);
+        let e = a.max(edge);
+        Some((anchor_reg.clone(), s, e))
+    } else {
+        None
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -384,5 +444,70 @@ mod tests {
         reg.set_selection(13, 14);  // chars 13-14 in global = 3-4 in seg2
         assert_eq!(reg.selected_range(2), Some(3..4));
         assert!(reg.selected_range(1).is_none());
+    }
+}
+
+#[cfg(test)]
+mod compute_selection_tests {
+    use super::*;
+
+    fn regs() -> (SelectionRegistrar, SelectionRegistrar) {
+        (SelectionRegistrar::new(), SelectionRegistrar::new())
+    }
+
+    #[test]
+    fn test_same_container_text_inner() {
+        let (a, _) = regs();
+        // 同容器文本内：anchor 10 → current 20 → (10, 20)
+        let r = compute_selection(Some(&a), Some(10), &a, Some(0), 20, 100.0, 50.0, 50.0);
+        let (reg, s, e) = r.unwrap();
+        assert!(reg.is_same(&a));
+        assert_eq!((s, e), (10, 20));
+    }
+
+    #[test]
+    fn test_same_container_edge_snap_down() {
+        let (a, _) = regs();
+        a.register(1, 100, None); // total=100
+        // 同容器超出（向下拖出节点）：edge = total = 100
+        let r = compute_selection(Some(&a), Some(5), &a, None, 0, 300.0, 50.0, 100.0);
+        let (_, s, e) = r.unwrap();
+        assert_eq!((s, e), (5, 100));
+    }
+
+    #[test]
+    fn test_same_container_edge_snap_up() {
+        let (a, _) = regs();
+        // 同容器超出（向上拖出节点）：edge = 0
+        let r = compute_selection(Some(&a), Some(5), &a, None, 0, 10.0, 50.0, 100.0);
+        let (_, s, e) = r.unwrap();
+        assert_eq!((s, e), (0, 5));
+    }
+
+    #[test]
+    fn test_cross_container_uses_anchor_reg() {
+        let (a, b) = regs();
+        a.register(1, 100, None); // anchor 容器 total=100
+        // 跨容器：anchor 在 a，当前在 b 的文本上 → 用 a 做 edge snap（不切 b 的偏移空间）
+        let r = compute_selection(Some(&a), Some(10), &b, Some(0), 5, 200.0, 50.0, 50.0);
+        let (reg, s, e) = r.unwrap();
+        assert!(reg.is_same(&a), "应设 anchor 容器 a 的选择");
+        assert_eq!((s, e), (10, 100)); // 向下拖出 a → clamp 到 a 末尾
+    }
+
+    #[test]
+    fn test_no_anchor_container_returns_none() {
+        let (_, b) = regs();
+        // Down 在不可选节点（anchor_reg None）→ 拖动不选
+        let r = compute_selection(None, None, &b, Some(0), 5, 200.0, 50.0, 50.0);
+        assert!(r.is_none());
+    }
+
+    #[test]
+    fn test_cross_container_no_anchor_global_none() {
+        let (a, b) = regs();
+        // 跨容器但无 anchor_global（不可选节点按下但 anchor_reg 残留？——守卫）→ None
+        let r = compute_selection(Some(&a), None, &b, Some(0), 5, 200.0, 50.0, 50.0);
+        assert!(r.is_none());
     }
 }

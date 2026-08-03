@@ -12,6 +12,7 @@ debug-server = []
 
 [dependencies]
 skiwin = { path = "../skiwin" }
+winia-macros = { path = "../winia-macros" }
 winit = { workspace = true }
 parking_lot = { workspace = true }
 log = { workspace = true }

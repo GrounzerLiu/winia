@@ -4,22 +4,22 @@
 //!   Phase 1: 非 BackdropBlur 内容 + 收集背景模糊区域
 //!   Phase 2: snapshot → 每个模糊区域 crop → blur → 画回 + 画子节点
 
+use crate::debug_log;
 use crate::layout::node::LayoutNode;
 use crate::modifier::ModifierElement;
-use crate::modifier::Dimension;
 use skia_safe::{Canvas, Color4f, Paint, RRect, Rect};
 use skia_safe::image_filters;
 use skia_safe::textlayout::{ParagraphStyle, TextStyle};
 
 // ── 入口 ──
 
-pub fn render(root: &LayoutNode, canvas: &Canvas) {
+pub fn render(nodes: &[LayoutNode], root_idx: usize, canvas: &Canvas) {
     let mut backdrop_regions = Vec::new();
     // Phase 1: 非背景模糊内容 + 收集模糊区域
-    render_pass1(root, canvas, 0.0, 0.0, &mut backdrop_regions, false);
+    render_pass1(nodes, root_idx, canvas, 0.0, 0.0, &mut backdrop_regions, false);
     // Phase 2: 背景模糊
     if !backdrop_regions.is_empty() {
-        render_backdrop_blur(canvas, &backdrop_regions);
+        render_backdrop_blur(canvas, nodes, &backdrop_regions);
     }
 }
 
@@ -67,13 +67,15 @@ fn render_modifier_element<'a>(
 
 // ── Phase 1: 正常渲染（非 BackdropBlur 节点）──
 
-fn render_pass1<'a>(
-    node: &'a LayoutNode,
+fn render_pass1(
+    nodes: &[LayoutNode],
+    idx: usize,
     canvas: &Canvas,
     parent_x: f32, parent_y: f32,
-    backdrop_regions: &mut Vec<(f32, f32, f32, f32, f32, &'a LayoutNode)>,
+    backdrop_regions: &mut Vec<(f32, f32, f32, f32, f32, usize)>,
     backdrop_pass: bool,
 ) {
+    let node = &nodes[idx];
     let x = parent_x + node.position.x;
     let y = parent_y + node.position.y;
     let w = node.measured_size.width;
@@ -107,7 +109,7 @@ fn render_pass1<'a>(
             }
             ModifierElement::BackdropBlur { radius } if !backdrop_pass => {
                 is_backdrop = true;
-                backdrop_regions.push((x, y, w, h, *radius, node));
+                backdrop_regions.push((x, y, w, h, *radius, idx));
             }
             ModifierElement::Clip { shape } if !backdrop_pass => {
                 clip_shape = Some(shape.clone());
@@ -163,7 +165,7 @@ fn render_pass1<'a>(
             };
             // 选中高亮
             if let Some(range) = node.registrar.borrow().as_ref().cloned().unwrap_or_else(|| crate::ui::selection_container::active_registrar()).selected_range(node.slot_key) {
-                eprintln!("[selection] render node={} range={}..{}", node.id, range.start, range.end);
+                debug_log!("[selection] render node={} range={}..{}", node.id, range.start, range.end);
                 let rects: Vec<_> = if range.start < range.end {
                 para.get_rects_for_range(range.start..range.end, skia_safe::textlayout::RectHeightStyle::Max, skia_safe::textlayout::RectWidthStyle::Max) } else { Vec::new() };
                 let mut paint = skia_safe::Paint::default();
@@ -189,19 +191,19 @@ fn render_pass1<'a>(
             }
             // 绘制光标（聚焦的 TextField 节点）
             if node.focused {
-                eprintln!("[render] cursor focused=true idx={} cursor_visible={}", node.cursor_index.get(), node.cursor_visible.get());
+                debug_log!("[render] cursor focused=true idx={} cursor_visible={}", node.cursor_index.get(), node.cursor_visible.get());
                 if node.cursor_visible.get() {
                     let length = para.paragraph_byte_to_real_indices.len();
                     let tl = crate::text::TextLayout::new(para, length);
                     let idx = node.cursor_index.get();
                     if let Some((cx, cy, ch)) = tl.get_cursor_position(idx) {
-                        eprintln!("[render] cursor pos=({:.0},{:.0}) h={:.0}", cx, cy, ch);
+                        debug_log!("[render] cursor pos=({:.0},{:.0}) h={:.0}", cx, cy, ch);
                         let mut cp = skia_safe::Paint::default();
                         cp.set_color(skia_safe::Color::from_argb(255, color.r, color.g, color.b));
                         cp.set_stroke_width(1.5);
                         canvas.draw_line(skia_safe::Point::new(x_off + cx, y + cy), skia_safe::Point::new(x_off + cx, y + cy + ch), &cp);
-                    } else { eprintln!("[render] get_cursor_position returned None for idx={}", node.cursor_index.get()); }
-                } else { eprintln!("[render] cursor_visible is false"); }
+                    } else { debug_log!("[render] get_cursor_position returned None for idx={}", node.cursor_index.get()); }
+                } else { debug_log!("[render] cursor_visible is false"); }
             }
             // IME 组合文本下划线
             if let Some(comp_range) = node.composing_range.borrow().as_ref() {
@@ -253,7 +255,6 @@ fn render_pass1<'a>(
         for el in node.modifier.elements() {
             match el {
                 ModifierElement::Size { width, height } => {
-                    use crate::modifier::Dimension;
                     if let crate::modifier::SizeValue::Static(dw) = width {
                         if dw.is_fixed() { cw = dw.to_logical_px(); }
                     }
@@ -281,8 +282,8 @@ fn render_pass1<'a>(
 
     // 穿行子节点（背景模糊节点跳过子节点——Phase 2 处理）
     if !is_backdrop {
-        for child in &node.children {
-            render_pass1(child, canvas, x, y, backdrop_regions, false);
+        for &child in &node.children {
+            render_pass1(nodes, child, canvas, x, y, backdrop_regions, false);
         }
     }
 
@@ -307,7 +308,8 @@ fn render_pass1<'a>(
 
 fn render_backdrop_blur(
     canvas: &Canvas,
-    regions: &[(f32, f32, f32, f32, f32, &LayoutNode)],
+    nodes: &[LayoutNode],
+    regions: &[(f32, f32, f32, f32, f32, usize)],
 ) {
     // 取整张 surface snapshot（只回读一次）
     let mut snap_bounds: Option<Rect> = None;
@@ -338,7 +340,7 @@ fn render_backdrop_blur(
     };
 
     // 为每个背景模糊区域画回
-    for &(x, y, w, h, radius, backdrop_node) in regions {
+    for &(x, y, w, h, radius, backdrop_idx) in regions {
         if let Some(ref snap) = snapshot {
             let mut paint = Paint::default();
             paint.set_image_filter(image_filters::blur((radius, radius), skia_safe::TileMode::Clamp, None, None));
@@ -347,8 +349,8 @@ fn render_backdrop_blur(
             canvas.draw_image_rect(snap, None, &src, &paint);
         }
         // 画回模糊节点自己的子节点
-        for child in &backdrop_node.children {
-            render_pass1(child, canvas, x, y, &mut Vec::new(), true);
+        for &child in &nodes[backdrop_idx].children {
+            render_pass1(nodes, child, canvas, x, y, &mut Vec::new(), true);
         }
     }
 }

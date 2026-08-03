@@ -170,8 +170,6 @@ pub fn push_animation(anim: Box<dyn AnimationInstance + 'static>) {
 pub fn push_animatable<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(state: State<T>, target: T, spec: AnimationSpec) {
     if state.peek() == target { return; }
     let sid = state.id();
-    // 跨列表去重（同 state 已有动画则不重复注册，防双驱动）
-    if has_animation_for_state(sid) { return; }
     // 非标量类型（Offset/Size/Color 等）Spring 无单值物理，强制降级 Tween
     let spec = if T::supports_spring() {
         spec
@@ -183,9 +181,10 @@ pub fn push_animatable<T: Clone + PartialEq + AnimatableValue + Send + Sync + 's
     };
     {
         let mut list = ACTIVE_ANIMATIONS.lock().unwrap();
-        // 检查是否已有同目标动画运行中（同目标直接跳过，防止每帧重启）——类型安全精确比较
+        // 同 state 同目标运行中 → 跳过（防每帧重启/双驱动）
         if list.iter().any(|anim| anim.state_id() == sid && anim.same_target(&target)) { return; }
-        // 同一 state 但目标不同时移除旧动画（用户改变了目标值）
+        // 同 state 不同目标 → 移除旧动画（用户中途改目标——旧动画继续会与
+        // 新目标竞争，导致值卡在旧目标路径上）
         list.retain(|anim| anim.state_id() != sid);
     } // 锁释放，下面 anim.update() 不持锁执行用户代码
     let mut anim = Animatable::new(state);
@@ -342,7 +341,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
         // 极端参数保护：超过 5s 未收敛强制完成（stiffness=0 等永不收敛的场景）
         if now.duration_since(state.start) > Duration::from_secs(5) {
             let final_val = state.to.clone();
-            self.state.set(final_val);
+            self.state.set_no_wake(final_val);
             self.anim_state = None;
             return false;
         }
@@ -410,7 +409,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
                 (state.to.clone(), true)
             }
         };
-        self.state.set(value);
+        self.state.set_no_wake(value);
         if done { self.anim_state = None; }
         !done
     }
@@ -418,7 +417,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
     /// 立即跳转到目标值（无动画）
     pub fn snap_to(&mut self, value: T) {
         self.anim_state = None;
-        self.state.set(value);
+        self.state.set_no_wake(value);
     }
 }
 
@@ -690,6 +689,8 @@ impl AnimatableValue for crate::modifier::Color {
 
 #[cfg(test)]
 mod tests {
+    // 测试串行锁：动画引擎用全局 ACTIVE_ANIMATIONS——并行测试互相干扰（push/update 竞态）
+    pub(super) static TEST_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
     use super::*;
     use std::time::Duration;
 
@@ -714,6 +715,7 @@ mod tests {
 
     #[test]
     fn spring_converges_to_target() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         // 临界阻尼，50→300
         let (val, done) = step_spring(1500.0, 1.0, 0.1, 50.0, 300.0, 300);
         assert!(done, "spring should settle within 300 frames");
@@ -722,6 +724,7 @@ mod tests {
 
     #[test]
     fn spring_bouncy_overshoots_then_converges() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         // 欠阻尼 bouncy，应超调后收敛
         let (mut val, mut done) = step_spring(1500.0, 0.6, 0.1, 50.0, 300.0, 5);
         // 早期应明显低于目标（尚未到达）或已超调
@@ -742,6 +745,7 @@ mod tests {
 
     #[test]
     fn spring_reverse_animation() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         // 反向 300→50 也应收敛（此前 bug：分母 max(EPSILON) 卡死）
         let (val, done) = step_spring(1500.0, 1.0, 0.1, 300.0, 50.0, 300);
         assert!(done);
@@ -750,6 +754,7 @@ mod tests {
 
     #[test]
     fn spring_dt_zero_is_safe() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         // dt=0 不应 panic/产生 NaN
         let mut disp = -250.0f32;
         let mut vel = 0.0f32;
@@ -760,6 +765,7 @@ mod tests {
 
     #[test]
     fn tween_completes_within_duration() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let mut anim = Animatable::<f32>::new(State::new(0.0));
         anim.animate_to(100.0, AnimationSpec::Tween(TweenSpec::default()));
         // 模拟 400ms（每帧 10ms），应超过 300ms duration 完成
@@ -774,6 +780,7 @@ mod tests {
 
     #[test]
     fn infinite_float_restart_loops() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let state = State::new(0.0);
         let mut inf = InfiniteFloat {
             state: state.clone(),
@@ -799,6 +806,7 @@ mod tests {
 
     #[test]
     fn infinite_float_reverse_oscillates() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let state = State::new(0.4);
         let mut inf = InfiniteFloat {
             state: state.clone(),
@@ -821,6 +829,7 @@ mod tests {
 
     #[test]
     fn color_lerp_uses_cam16_and_preserves_alpha() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         use crate::modifier::Color;
         // 蓝 → 红，alpha 128 → 255
         let from = Color::from_argb(128, 33, 150, 243);
@@ -839,6 +848,7 @@ mod tests {
 
     #[test]
     fn infinite_color_reverse_cycles() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         use crate::modifier::Color;
         let state = State::new(Color::RED);
         let mut inf = InfiniteColor {
@@ -862,6 +872,7 @@ mod tests {
 
     #[test]
     fn remove_animation_by_state_cleans_lists() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         // 推入 f32 + Color + 无限 Color 三种动画
         let s1 = State::new(0.0f32);
         let s2 = State::new(crate::modifier::Color::RED);
@@ -883,6 +894,7 @@ mod tests {
 
     #[test]
     fn keyframes_interpolate_segments() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         use crate::unit::DpExt;
         // 0%→0, 50%→50, 100%→100，线性
         let spec = KeyframesSpec::new(Duration::from_millis(100), vec![(0.0, 0.0), (0.5, 0.5), (1.0, 1.0)]);
@@ -896,6 +908,7 @@ mod tests {
 
     #[test]
     fn repeatable_runs_iterations() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let mut anim = Animatable::<f32>::new(State::new(0.0));
         anim.animate_to(100.0, AnimationSpec::Repeatable(
             RepeatableSpec::new(3, RepeatMode::Restart,
@@ -912,6 +925,7 @@ mod tests {
 
     #[test]
     fn repeatable_reverse_even_ends_at_from() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         // blocking bug：Reverse + 偶数次时最后 cycle 结束于 from，完成值不应跳变到 to
         let mut anim = Animatable::<f32>::new(State::new(0.0));
         anim.animate_to(100.0, AnimationSpec::Repeatable(
@@ -927,6 +941,7 @@ mod tests {
 
     #[test]
     fn keyframes_first_frame_offset() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         // 首帧 progress > 0 时，t < 首帧 progress 应取首帧值
         let spec = KeyframesSpec::new(Duration::from_millis(100), vec![(0.5, 0.7), (1.0, 1.0)]);
         assert_eq!(interpolate_keyframes(&spec.frames, 0.1), 0.7);
@@ -937,6 +952,7 @@ mod tests {
 
     #[test]
     fn snap_jumps_immediately() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let mut anim = Animatable::<f32>::new(State::new(0.0));
         anim.animate_to(42.0, AnimationSpec::Snap);
         assert!(!anim.update(), "snap completes in one update");
@@ -945,6 +961,7 @@ mod tests {
 
     #[test]
     fn offset_dedup_is_exact_not_norm() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         // blocking bug：两个同范数不同 Offset 不应互相误判为同目标
         use crate::unit::Offset;
         let s = State::new(Offset::new(0.0, 0.0));
@@ -963,6 +980,7 @@ mod tests {
 
     #[test]
     fn offset_spring_downgraded_to_tween() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         // blocking bug：Offset 用 Spring 会收敛到 (norm,norm) 而非目标，应强制 Tween
         use crate::unit::Offset;
         let s = State::new(Offset::new(0.0, 0.0));
@@ -971,5 +989,60 @@ mod tests {
         assert!(has_animation_for_state(s.id()), "Offset animation should be registered");
         remove_animation_by_state(s.id());
         assert!(!has_animation_for_state(s.id()), "own animation should be removed");
+    }
+}
+
+#[cfg(test)]
+mod repeated_tests {
+    use super::*;
+
+    /// 反复动画循环：多次 push 目标 + update 步进——最终收敛到最新目标。
+    /// 验证动画引擎在反复触发（点击循环）时值正确（旧动画移除/去重无双驱动）。
+    #[test]
+    fn repeated_animation_cycles_converge() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let state = crate::core::state::State::new(40.0f32);
+
+        // 每轮：push 目标 → sleep 超过动画时长 → update 一次（真实时间 dt）→ 检查收敛
+        for (i, target) in [(1usize, 200.0f32), (2, 40.0), (3, 200.0), (4, 40.0)] {
+            push_animatable(state.clone(), target, AnimationSpec::Tween(TweenSpec {
+                duration: std::time::Duration::from_millis(300),
+                interpolator: crate::animation::interpolator::linear,
+            }));
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            update_animations();
+            let v = state.peek();
+            eprintln!("[repeat-anim] round {} target={} val={:.1}", i, target, v);
+            assert!((v - target).abs() < 1.0,
+                "反复动画第 {} 轮应收敛到 {}，实际 {:.1}", i, target, v);
+        }
+    }
+
+    /// 动画未完成时再次 push（中途改变目标）——应切换目标（旧动画移除）
+    #[test]
+    fn mid_flight_retarget_switches() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let state = crate::core::state::State::new(40.0f32);
+        push_animatable(state.clone(), 200.0, AnimationSpec::Tween(TweenSpec {
+            duration: std::time::Duration::from_millis(1000),
+            interpolator: crate::animation::interpolator::linear,
+        }));
+        // 中途（10 帧后）改目标 40——应切换（用真实时间 sleep 模拟帧间隔）
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        update_animations();
+        let mid = state.peek();
+        assert!(mid > 40.0 && mid < 200.0, "中途应处于动画中（{}）", mid);
+        push_animatable(state.clone(), 90.0, AnimationSpec::Tween(TweenSpec {
+            duration: std::time::Duration::from_millis(200),
+            interpolator: crate::animation::interpolator::linear,
+        }));
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        update_animations();
+        // 完成判定可能差一帧（dt 偏移）——再 sleep + update 一次确保收敛
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        update_animations();
+        let v = state.peek();
+        eprintln!("[retarget] mid={:.1} final={:.1}", mid, v);
+        assert!((v - 90.0).abs() < 1.0, "中途改目标应收敛到 90，实际 {:.1}", v);
     }
 }

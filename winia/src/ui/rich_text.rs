@@ -383,11 +383,16 @@ impl RichText {
         });
         let key = ctx.next_key();
         ctx.start_leaf(key, modifier);
-        // 注册到选区容器（支持文本选中）
-        let reg = ctx.selection_registrar()
-            .unwrap_or_else(|| crate::ui::selection_container::LOCAL_SELECTION_REGISTRAR.current());
-        reg.register(key, content_len, None);
-        ctx.set_current_node_registrar(reg);
+        // 注册到选区容器（支持文本选中）——仅在 SelectionContainer 的 provides
+        // 作用域内注册（try_current：无容器 → 不注册——与 Text::build 一致；
+        // 旧写法 current() 的 default 空 registrar 会让 RichText 自选——点击自己
+        // 时用空 registrar 正常选择，显示为可选中）
+        if let Some(reg) = ctx.selection_registrar()
+            .or_else(|| crate::ui::selection_container::LOCAL_SELECTION_REGISTRAR.try_current())
+        {
+            reg.register(key, content_len, None);
+            ctx.set_current_node_registrar(reg);
+        }
         ctx.end_node();
     }
 }

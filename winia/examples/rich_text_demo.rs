@@ -29,6 +29,7 @@ fn big_decoration() -> SvgDrawable {
     SvgDrawable::from_str(r##"<svg viewBox="0 0 48 48"><defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#FF6B6B"/><stop offset="50%" stop-color="#4ECDC4"/><stop offset="100%" stop-color="#45B7D1"/></linearGradient></defs><circle cx="24" cy="24" r="22" fill="url(#g)"/><text x="24" y="30" text-anchor="middle" fill="white" font-size="20">✦</text></svg>"##, 36.0, 36.0).expect("decoration")
 }
 
+#[composable]
 fn rich_text_demo_ui(ctx: &mut ComposeCtx) {
     let scroll_state = ctx.remember(|| ScrollState::new()).get();
 

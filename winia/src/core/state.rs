@@ -114,6 +114,22 @@ impl<T: PartialEq + 'static> State<T> {
         self.notify();
     }
 
+    /// 设置新值并通知（标记重组），但**不唤醒事件循环**（跳过 WAKE_FN）。
+    ///
+    /// 动画引擎专用：动画 tick 已由 `request_redraw` 驱动渲染帧，若每个动画
+    /// state 的 set 再 wake_up，会触发 wake 自旋（每显示帧多次 compose，
+    /// 重组风暴）。通知仍标记 pending → 下帧渲染时重组重测；
+    /// 仅省去不必要的立即唤醒。
+    pub fn set_no_wake(&self, value: T) {
+        let mut current = self.inner.value.write();
+        if *current == value {
+            return;
+        }
+        *current = value;
+        drop(current);
+        self.notify_no_wake();
+    }
+
     /// 设置新值但**不触发重组**。
     ///
     /// 绘制层动画专用：alpha/scale/颜色等视觉属性变化只触发重绘（由动画引擎
@@ -141,12 +157,21 @@ impl<T: 'static> State<T> {
 
     /// 通知所有订阅者（通常触发重组）
     fn notify(&self) {
+        self.notify_inner(true);
+    }
+
+    /// 通知但不唤醒事件循环（动画引擎用）
+    fn notify_no_wake(&self) {
+        self.notify_inner(false);
+    }
+
+    fn notify_inner(&self, wake: bool) {
         let subscribers = self.inner.subscribers.read();
         for sub in subscribers.iter() {
             (sub.callback)();
         }
         self.inner.notify_version.fetch_add(1, std::sync::atomic::Ordering::Release);
-        notify_state_changed(self.inner.id);
+        notify_state_changed_inner(self.inner.id, wake);
     }
 
     /// 订阅状态变化。返回 Subscription，drop 时精确取消。
@@ -278,11 +303,17 @@ pub(crate) fn register_composer_queue(queue: Weak<Mutex<Vec<u32>>>) {
 
 /// State 值变化时调用：定向通知创建此 State 的 Composer
 pub(crate) fn notify_state_changed(state_id: u32) {
+    notify_state_changed_inner(state_id, true);
+}
+
+pub(crate) fn notify_state_changed_inner(state_id: u32, wake: bool) {
     // 定向通知：只推送到创建此 State 的 Composer 队列，避免跨窗口污染
     if let Some(q) = STATE_QUEUE_MAP.lock().get(&state_id).and_then(|w| w.upgrade()) {
         q.lock().push(state_id);
     }
-    if let Some(ref f) = *WAKE_FN.lock().unwrap() { f(); }
+    if wake {
+        if let Some(ref f) = *WAKE_FN.lock().unwrap() { f(); }
+    }
 }
 
 // ── 实例化依赖记录（替代全局 RECORDED_DEPS + DEP_REGISTRAR）──
@@ -309,8 +340,77 @@ pub fn record_dep(state_id: u32, slot_key: u64) {
 
 /// State::get 中调用：若在 compose 上下文中，记录依赖
 pub fn register_dependency(state_id: u32) {
-    // 通过 thread-local ACTIVE_SLOT_KEY 获取当前 slot key
-    crate::core::composer::with_active_slot_key(|key| {
+    // 依赖注册目标：scope 栈非空 → 最内层 scope（组合 scope 内、组件外的读取）；
+    // 否则 → 当前 slot key（组件内 build 的读取）
+    crate::core::composer::with_active_scope(|key| {
         record_dep(state_id, key);
     });
+}
+
+// ═══════════════════════════════════════════════════════════
+// DerivedValue<T> — 泛型派生值（State 变换的延迟表达式，对标 Compose derivedStateOf）
+// ═══════════════════════════════════════════════════════════
+
+/// 泛型派生值：`&State<f32>` 算术运算或其他 State 变换的延迟表达式。
+///
+/// 读取时执行闭包（内部 `State::get()` 在组合/测量上下文注册依赖），
+/// 动画值变化 → 依赖节点 dirty → 重组重测 → 表达式重算。
+/// f32 特化支持算术运算符（`&alpha * 200.0 + 50.0`）；任意类型用 `DerivedValue::new`。
+#[derive(Clone)]
+pub struct DerivedValue<T>(pub(crate) Arc<dyn Fn() -> T + Send + Sync>);
+
+impl<T> DerivedValue<T> {
+    /// 从闭包构建派生值（复杂表达式/自定义逻辑用，对标 Compose `derivedStateOf { }`）。
+    /// 闭包内 `State::get()` 在组合/测量上下文注册依赖 → 动画值变化触发节点重组重测。
+    pub fn new(f: impl Fn() -> T + Send + Sync + 'static) -> Self {
+        DerivedValue(Arc::new(f))
+    }
+
+    /// 求值当前表达式（组合/测量上下文内调用 → 内部 State::get() 注册依赖）
+    pub fn get(&self) -> T {
+        (self.0)()
+    }
+}
+
+/// f32 派生值别名（算术运算符的返回类型）
+pub type DerivedFloat = DerivedValue<f32>;
+
+macro_rules! impl_derived_arith {
+    ($trait:ident, $method:ident, $op:tt) => {
+        impl std::ops::$trait<f32> for DerivedFloat {
+            type Output = DerivedFloat;
+            fn $method(self, rhs: f32) -> DerivedFloat {
+                let f = self.0.clone();
+                DerivedValue(Arc::new(move || f() $op rhs))
+            }
+        }
+        impl std::ops::$trait<f32> for &DerivedFloat {
+            type Output = DerivedFloat;
+            fn $method(self, rhs: f32) -> DerivedFloat {
+                let f = self.0.clone();
+                DerivedValue(Arc::new(move || f() $op rhs))
+            }
+        }
+        impl std::ops::$trait<f32> for &State<f32> {
+            type Output = DerivedFloat;
+            fn $method(self, rhs: f32) -> DerivedFloat {
+                let s = self.clone();
+                DerivedValue(Arc::new(move || s.get() $op rhs))
+            }
+        }
+    };
+}
+
+impl_derived_arith!(Add, add, +);
+impl_derived_arith!(Sub, sub, -);
+impl_derived_arith!(Mul, mul, *);
+impl_derived_arith!(Div, div, /);
+
+/// 常数在左：`2.0 * alpha`
+impl std::ops::Mul<&State<f32>> for f32 {
+    type Output = DerivedFloat;
+    fn mul(self, rhs: &State<f32>) -> DerivedFloat {
+        let s = rhs.clone();
+        DerivedValue(Arc::new(move || self * s.get()))
+    }
 }

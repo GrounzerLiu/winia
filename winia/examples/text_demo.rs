@@ -21,6 +21,7 @@ fn main() {
     });
 }
 
+#[composable]
 fn text_demo_ui(ctx: &mut ComposeCtx) {
     // 用于演示 justify 对齐的切换状态
     let justify_count = ctx.remember(|| 10i32);

@@ -22,6 +22,8 @@ fn main() {
     });
 }
 
+/// effect 演示主界面（#[composable] = 函数级 scope）
+#[composable]
 fn effect_demo_ui(ctx: &mut ComposeCtx) {
     let count = ctx.remember(|| 0i32);
     let show_counter = ctx.remember(|| false);
@@ -104,6 +106,8 @@ fn effect_demo_ui(ctx: &mut ComposeCtx) {
         });
 }
 
+/// 子组件（#[composable] = 独立函数级 scope：local_count 变化只重跑本函数）
+#[composable]
 fn sub_component(ctx: &mut ComposeCtx, parent_count: State<i32>) {
     let local_count = ctx.remember(|| 0i32);
 

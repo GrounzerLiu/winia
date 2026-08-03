@@ -95,6 +95,20 @@ pub(crate) fn modifier_has_text(modifier: &Modifier) -> bool {
     modifier.elements().iter().any(|el| matches!(el, ModifierElement::TextContent { .. }))
 }
 
+/// 比较两个 modifier 的文本内容（TextContent/RichTextContent 的 content）——
+/// 文本内容变化但 slot Clean（依赖注册在父容器）时，复用节点需重测
+/// （否则常量折叠 + cached_paragraph 旧内容 → 渲染画旧文本，输入不显示）。
+pub(crate) fn modifier_text_content_differs(a: &Modifier, b: &Modifier) -> bool {
+    let text_of = |m: &Modifier| -> Option<String> {
+        m.elements().iter().find_map(|el| match el {
+            ModifierElement::TextContent { content, .. } => Some(content.clone()),
+            ModifierElement::RichTextContent { .. } => Some("<richtext>".to_string()), // RichText 变化保守视为不同
+            _ => None,
+        })
+    };
+    text_of(a) != text_of(b)
+}
+
 /// 检查 modifier 中是否包含 RichTextContent
 pub(crate) fn modifier_has_richtext(modifier: &Modifier) -> bool {
     modifier.elements().iter().any(|el| matches!(el, ModifierElement::RichTextContent { .. }))
@@ -112,8 +126,10 @@ pub struct LayoutNode {
     pub modifier: Modifier,
     pub measured_size: Size,
     pub position: Point,
-    pub children: Vec<LayoutNode>,
-    pub measure_policy: Option<Box<dyn MeasurePolicy>>,
+    /// 子节点索引（arena 树——节点存于 NodeArena.nodes，跨重组复用）
+    pub children: Vec<usize>,
+    /// 测量策略索引（NodeArena.policies 池——独立于节点，避免借用冲突）
+    pub measure_policy: Option<usize>,
     /// 叶子节点是否包含 TextContent
     pub(crate) has_text_content: bool,
     /// 叶子节点是否包含 RichTextContent
@@ -200,6 +216,19 @@ impl LayoutNode {
         self.has_text_content = modifier_has_text(&self.modifier);
         self.has_richtext_content = modifier_has_richtext(&self.modifier);
     }
+
+    /// 只恢复布局部分（measured_size/cached_constraints/position/focused）——
+    /// 不覆盖 modifier（modifier 用本帧 build 的值；Enter 重建的节点若恢复旧
+    /// modifier，会把本帧新值覆盖成上帧缓存，导致状态变化（如按钮 label）丢失）。
+    /// 用于 start_node 的 clean leaf 恢复；Skip 的 stub 用完整 restore_from。
+    pub(crate) fn restore_layout(&mut self, cached: &CachedNode) {
+        self.measured_size = cached.measured_size;
+        self.position = cached.position;
+        self.focused = cached.focused;
+        self.dirty = cached.dirty;
+        self.cached_constraints = cached.cached_constraints;
+        self.slot_key = cached.slot_key;
+    }
 }
 
 impl Drop for LayoutNode {
@@ -209,7 +238,9 @@ impl Drop for LayoutNode {
 }
 
 impl LayoutNode {
-    pub fn new(modifier: Modifier, measure_policy: Option<Box<dyn MeasurePolicy>>) -> Self {
+    /// 创建节点。`measure_policy` 为 NodeArena.policies 池中的策略索引
+    ///（由调用方先 `arena.alloc_policy(...)` 取得）；叶子节点传 `None`。
+    pub fn new(modifier: Modifier, measure_policy: Option<usize>) -> Self {
         LayoutNode {
             id: NEXT_NODE_ID.fetch_add(1, Ordering::Relaxed),
             has_text_content: modifier_has_text(&modifier),
@@ -239,10 +270,10 @@ impl LayoutNode {
         }
     }
 
-    /// 添加子节点
-    pub fn add_child(&mut self, mut child: LayoutNode) {
-        child.parent_id = Some(self.id);
-        self.children.push(child);
+    /// 添加子节点（arena 化——子节点分配索引后挂入 children）
+    pub fn add_child(&mut self, child_idx: usize) {
+        // parent_id 由 NodeArena 在挂入时设置（需要父 id）
+        self.children.push(child_idx);
     }
 
     /// 创建叶子节点（无子节点）
@@ -251,40 +282,6 @@ impl LayoutNode {
     }
 
     /// 创建容器节点（有子节点和布局策略）
-    pub fn container(
-        modifier: Modifier,
-        children: Vec<LayoutNode>,
-        measure_policy: impl MeasurePolicy + 'static,
-    ) -> Self {
-        LayoutNode {
-            id: NEXT_NODE_ID.fetch_add(1, Ordering::Relaxed),
-            has_text_content: modifier_has_text(&modifier),
-            has_richtext_content: modifier_has_richtext(&modifier),
-            modifier,
-            measured_size: Size::ZERO,
-            position: Point::ZERO,
-            children,
-            measure_policy: Some(Box::new(measure_policy)),
-            focused: false,
-            on_remove: None,
-            dirty: true,
-            is_replay_stub: false,
-            cached_constraints: None,
-            slot_key: 0,
-            cached_paragraph: std::cell::RefCell::new(None),
-            scroll_viewport_height: 0.0, parent_id: None,
-            registrar: std::cell::RefCell::new(None),
-            cursor_x: std::cell::Cell::new(0.0),
-            cursor_height: std::cell::Cell::new(0.0),
-            cursor_index: std::cell::Cell::new(0),
-            cursor_visible: std::cell::Cell::new(false),
-            cursor_callback: std::cell::RefCell::new(None),
-            ime_callback: std::cell::RefCell::new(None),
-            composing_range: std::cell::RefCell::new(None),
-            selection_range: std::cell::RefCell::new(None),
-        }
-    }
-
     /// 是否叶子节点
     pub fn is_leaf(&self) -> bool {
         self.children.is_empty() && self.measure_policy.is_none()
@@ -323,6 +320,128 @@ impl Default for LayoutNode {
     }
 }
 
+// ── NodeArena：布局树节点池（arena 索引树，节点跨重组复用）──
+
+/// 布局树节点池：所有 LayoutNode 存于 `nodes`，树通过索引（`children: Vec<usize>`）
+/// 组织。节点**跨重组持久**（对象级复用——组合 diff 只更新内容，不重建对象）。
+pub struct NodeArena {
+    pub(crate) nodes: Vec<LayoutNode>,
+    pub(crate) policies: Vec<Box<dyn MeasurePolicy>>,
+    pub(crate) free_policies: Vec<usize>,
+    pub(crate) free: Vec<usize>,
+    pub(crate) root: Option<usize>,
+}
+
+impl NodeArena {
+    pub fn new() -> Self {
+        Self { nodes: Vec::new(), policies: Vec::new(), free_policies: Vec::new(), free: Vec::new(), root: None }
+    }
+
+    /// 分配测量策略到池（优先复用回收槽），返回索引（供 LayoutNode.measure_policy 引用）
+    pub fn alloc_policy(&mut self, policy: Box<dyn MeasurePolicy>) -> usize {
+        if let Some(idx) = self.free_policies.pop() {
+            self.policies[idx] = policy;
+            idx
+        } else {
+            self.policies.push(policy);
+            self.policies.len() - 1
+        }
+    }
+
+    /// 回收节点占用的 policy 槽（结构变化移除节点时——低频泄漏防护）
+    fn recycle_policy(&mut self, idx: usize) {
+        if let Some(p) = self.nodes[idx].measure_policy.take() {
+            self.free_policies.push(p);
+        }
+    }
+
+    /// 分配/复用槽位（free 优先），返回索引
+    pub fn alloc(&mut self, node: LayoutNode) -> usize {
+        if let Some(idx) = self.free.pop() {
+            self.nodes[idx] = node;
+            idx
+        } else {
+            self.nodes.push(node);
+            self.nodes.len() - 1
+        }
+    }
+
+    /// 释放节点（含子树——递归释放 children，on_remove 触发）。
+    /// `skip`：本帧已复用的节点集合——复用节点已挂入本帧树，free 它会导致
+    /// 递归进本帧树形成环（无限递归栈溢出），必须跳过。
+    /// `visited`：防环防御（树异常成环时终止递归）。
+    pub fn free_node_skip(
+        &mut self,
+        idx: usize,
+        skip: &std::collections::HashSet<usize>,
+        visited: &mut std::collections::HashSet<usize>,
+    ) {
+        if !visited.insert(idx) { return; }
+        if skip.contains(&idx) { return; }
+        // 防御：被 free 的节点不应在本帧树中（复用节点在 skip；新建节点不在
+        // prev_node_by_key——若破坏该不变量会静默误 free 本帧节点）
+        debug_assert!(
+            !self.nodes[idx].children.iter().any(|&c| c == idx),
+            "树环（自引用）——free 应终止"
+        );
+        let children = std::mem::take(&mut self.nodes[idx].children);
+        for c in children {
+            self.free_node_skip(c, skip, visited);
+        }
+        self.recycle_policy(idx);
+        if let Some(f) = self.nodes[idx].on_remove.take() { f(); }
+        self.nodes[idx] = LayoutNode::default();
+        self.free.push(idx);
+    }
+
+    /// 释放整棵根树（free_node 递归 + on_remove），root 置空
+    pub fn free_root(&mut self) {
+        if let Some(r) = self.root.take() {
+            self.free_node(r);
+        }
+    }
+
+    /// 释放节点（含子树——递归释放 children，on_remove 触发）
+    pub fn free_node(&mut self, idx: usize) {
+        let children = std::mem::take(&mut self.nodes[idx].children);
+        for c in children {
+            self.free_node(c);
+        }
+        self.recycle_policy(idx);
+        if let Some(f) = self.nodes[idx].on_remove.take() { f(); }
+        self.nodes[idx] = LayoutNode::default();
+        self.free.push(idx);
+    }
+
+    /// 将子节点挂到父（子节点已在池中——start_node 时 alloc，这里只挂索引 + 设 parent_id）
+    pub fn add_child(&mut self, parent: usize, child_idx: usize) {
+
+        self.nodes[parent].children.push(child_idx);
+        self.nodes[child_idx].parent_id = Some(self.nodes[parent].id);
+    }
+
+    pub fn get(&self, idx: usize) -> &LayoutNode { &self.nodes[idx] }
+    pub fn get_mut(&mut self, idx: usize) -> &mut LayoutNode { &mut self.nodes[idx] }
+    pub fn root(&self) -> Option<&LayoutNode> { self.root.map(|i| &self.nodes[i]) }
+    pub fn root_mut(&mut self) -> Option<&mut LayoutNode> { self.root.map(|i| &mut self.nodes[i]) }
+    pub fn root_idx(&self) -> Option<usize> { self.root }
+    pub fn set_root(&mut self, idx: usize) { self.root = Some(idx); }
+
+    /// 递归遍历（只读）——fn(arena, idx)
+    pub fn for_each(&self, mut f: impl FnMut(&NodeArena, usize)) {
+        if let Some(r) = self.root {
+            self.for_each_rec(r, &mut f);
+        }
+    }
+    fn for_each_rec(&self, idx: usize, f: &mut impl FnMut(&NodeArena, usize)) {
+        f(self, idx);
+        let children = self.nodes[idx].children.clone();
+        for c in children {
+            self.for_each_rec(c, f);
+        }
+    }
+}
+
 // ── MeasurePolicy trait ──
 
 /// 测量和布局策略。
@@ -330,34 +449,41 @@ impl Default for LayoutNode {
 /// 类似 Compose 的 MeasurePolicy。
 /// 实现此 trait 的类型定义了一个容器的布局逻辑。
 pub trait MeasurePolicy: std::fmt::Debug {
-    /// 测量阶段：给定约束，返回自身尺寸和子节点的放置方案
+    /// 测量阶段：给定约束，返回自身尺寸和子节点的放置方案。
+    /// arena 版：children 是子节点索引；nodes/policies 为拆分借用（policy 在
+    /// policies 池、节点在 nodes——字段级借用避免冲突）。实现内通过
+    /// `measure_node(nodes, policies, c, cc)` 递归测量子节点。
     fn measure(
         &self,
-        children: &mut [LayoutNode],
+        nodes: &mut Vec<LayoutNode>,
+        policies: &[Box<dyn MeasurePolicy>],
+        children: &[usize],
         constraints: Constraints,
     ) -> (Size, Vec<Placement>);
 
-    /// 布局阶段：给定已分配的尺寸，为子节点分配位置
-    fn place(&self, children: &mut [LayoutNode], placements: &[Placement]);
+    /// 布局阶段：给定已分配的尺寸，为子节点分配位置。
+    fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]);
 }
 
 // ── 命中测试 ──
 
-/// 命中测试结果：从根到叶的节点引用链
-pub fn hit_test(root: &LayoutNode, x: f32, y: f32) -> Vec<&LayoutNode> {
+/// 命中测试：返回从根到叶的节点索引链（arena 版）
+pub fn hit_test(nodes: &[LayoutNode], root: usize, x: f32, y: f32) -> Vec<usize> {
     let mut path = Vec::new();
-    hit_test_recursive(root, x, y, 0.0, 0.0, &mut path);
+    hit_test_recursive(nodes, root, x, y, 0.0, 0.0, &mut path);
     path
 }
 
-fn hit_test_recursive<'a>(
-    node: &'a LayoutNode,
+fn hit_test_recursive(
+    nodes: &[LayoutNode],
+    idx: usize,
     x: f32,
     y: f32,
     parent_x: f32,
     parent_y: f32,
-    path: &mut Vec<&'a LayoutNode>,
+    path: &mut Vec<usize>,
 ) -> bool {
+    let node = &nodes[idx];
     let nx = parent_x + node.position.x;
     let ny = parent_y + node.position.y;
     let nw = node.measured_size.width;
@@ -368,7 +494,7 @@ fn hit_test_recursive<'a>(
         return false;
     }
 
-    path.push(node);
+    path.push(idx);
 
     // 计算 scroll 偏移（渲染时 canvas.translate(-offset)）
     let (scroll_dx, scroll_dy) = scroll_offset_for_node(node);
@@ -378,8 +504,8 @@ fn hit_test_recursive<'a>(
     let child_py = ny - scroll_dy;
 
     // 深度优先：先检查子节点（子节点在父节点上方）
-    for child in &node.children {
-        if hit_test_recursive(child, x, y, child_px, child_py, path) {
+    for &c in &node.children {
+        if hit_test_recursive(nodes, c, x, y, child_px, child_py, path) {
             return true;
         }
     }
@@ -407,71 +533,75 @@ mod tests {
 
     #[test]
     fn test_hit_test_basic() {
-        let mut parent = LayoutNode::leaf(Modifier::new().size(100.0, 100.0));
-        parent.measured_size = Size::new(100.0, 100.0);
-        parent.position = Point::new(0.0, 0.0);
+        let mut nodes = vec![LayoutNode::leaf(Modifier::new().size(100.0, 100.0))];
+        nodes[0].measured_size = Size::new(100.0, 100.0);
+        nodes[0].position = Point::new(0.0, 0.0);
 
-        let path = hit_test(&parent, 50.0, 50.0);
-        assert_eq!(path.len(), 1);
+        let path = hit_test(&nodes, 0, 50.0, 50.0);
+        assert_eq!(path, vec![0]);
     }
 
     #[test]
     fn test_hit_test_miss() {
-        let mut parent = LayoutNode::leaf(Modifier::new().size(100.0, 100.0));
-        parent.measured_size = Size::new(100.0, 100.0);
+        let mut nodes = vec![LayoutNode::leaf(Modifier::new().size(100.0, 100.0))];
+        nodes[0].measured_size = Size::new(100.0, 100.0);
 
-        let path = hit_test(&parent, 150.0, 50.0);
+        let path = hit_test(&nodes, 0, 150.0, 50.0);
         assert_eq!(path.len(), 0);
     }
 
     #[test]
     fn test_hit_test_child() {
-        let mut child = LayoutNode::leaf(Modifier::new().size(50.0, 30.0));
-        child.measured_size = Size::new(50.0, 30.0);
-        child.position = Point::new(10.0, 60.0);
-
-        let mut parent = LayoutNode::leaf(Modifier::new().size(100.0, 100.0));
-        parent.measured_size = Size::new(100.0, 100.0);
-        parent.children.push(child);
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new().size(100.0, 100.0)),
+            LayoutNode::leaf(Modifier::new().size(50.0, 30.0)),
+        ];
+        nodes[0].measured_size = Size::new(100.0, 100.0);
+        nodes[1].measured_size = Size::new(50.0, 30.0);
+        nodes[1].position = Point::new(10.0, 60.0);
+        nodes[0].children.push(1);
 
         // 点击子节点
-        let path = hit_test(&parent, 30.0, 75.0);
-        assert_eq!(path.len(), 2, "should hit parent and child");
+        let path = hit_test(&nodes, 0, 30.0, 75.0);
+        assert_eq!(path, vec![0, 1], "should hit parent and child");
     }
 
     #[test]
     fn test_hit_test_child_miss() {
-        let mut child = LayoutNode::leaf(Modifier::new().size(50.0, 30.0));
-        child.measured_size = Size::new(50.0, 30.0);
-        child.position = Point::new(10.0, 60.0);
-
-        let mut parent = LayoutNode::leaf(Modifier::new().size(100.0, 100.0));
-        parent.measured_size = Size::new(100.0, 100.0);
-        parent.children.push(child);
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new().size(100.0, 100.0)),
+            LayoutNode::leaf(Modifier::new().size(50.0, 30.0)),
+        ];
+        nodes[0].measured_size = Size::new(100.0, 100.0);
+        nodes[1].measured_size = Size::new(50.0, 30.0);
+        nodes[1].position = Point::new(10.0, 60.0);
+        nodes[0].children.push(1);
 
         // 点击父节点但不在子节点范围内
-        let path = hit_test(&parent, 80.0, 75.0);
-        assert_eq!(path.len(), 1, "should only hit parent");
+        let path = hit_test(&nodes, 0, 80.0, 75.0);
+        assert_eq!(path, vec![0], "should only hit parent");
     }
 }
 
 // ── 焦点遍历 ──
 
-/// 收集树中所有可聚焦节点的 id
-pub fn collect_focusable_ids(root: &LayoutNode, list: &mut Vec<u64>) {
-    if has_focusable_modifier(root) {
-        list.push(root.id);
+/// 收集树中所有可聚焦节点的 id（arena 版）
+pub fn collect_focusable_ids(nodes: &[LayoutNode], root: usize, list: &mut Vec<u64>) {
+    if has_focusable_modifier(&nodes[root]) {
+        list.push(nodes[root].id);
     }
-    for child in &root.children {
-        collect_focusable_ids(child, list);
+    let children = nodes[root].children.clone();
+    for c in children {
+        collect_focusable_ids(nodes, c, list);
     }
 }
 
-/// 通过 node.id 查找节点不可变引用
-pub fn find_node_by_id(root: &LayoutNode, id: u64) -> Option<&LayoutNode> {
-    if root.id == id { return Some(root); }
-    for child in &root.children {
-        if let Some(n) = find_node_by_id(child, id) { return Some(n); }
+/// 通过 node.id 查找节点，返回 arena 索引（不可变）
+pub fn find_node_by_id(nodes: &[LayoutNode], root: usize, id: u64) -> Option<usize> {
+    if nodes[root].id == id { return Some(root); }
+    let children = nodes[root].children.clone();
+    for c in children {
+        if let Some(n) = find_node_by_id(nodes, c, id) { return Some(n); }
     }
     None
 }
@@ -481,91 +611,90 @@ pub fn has_focusable_modifier(node: &LayoutNode) -> bool {
 }
 
 /// 移动到下一个可聚焦节点，返回是否成功
-pub fn focus_next(root: &mut LayoutNode) -> bool {
+pub fn focus_next(nodes: &mut Vec<LayoutNode>, root: usize) -> bool {
     let ids: Vec<u64> = {
         let mut ids = Vec::new();
-        collect_focusable_ids(root, &mut ids);
+        collect_focusable_ids(nodes, root, &mut ids);
         ids
     };
     if ids.is_empty() { return false; }
     let current = ids.iter().position(|id| {
-        find_node_by_id(root, *id).map(|n| n.focused).unwrap_or(false)
+        find_node_by_id(nodes, root, *id).map(|n| nodes[n].focused).unwrap_or(false)
     });
     let next = match current {
         Some(i) if i + 1 < ids.len() => i + 1,
         _ => 0,
     };
-    clear_focus(root);
-    set_focus_by_id(root, ids[next]);
+    clear_focus(nodes, root);
+    set_focus_by_id(nodes, root, ids[next]);
     true
 }
 
 /// 焦点移到上一个 focusable 节点（Shift+Tab）
-pub fn focus_prev(root: &mut LayoutNode) -> bool {
+pub fn focus_prev(nodes: &mut Vec<LayoutNode>, root: usize) -> bool {
     let ids: Vec<u64> = {
         let mut ids = Vec::new();
-        collect_focusable_ids(root, &mut ids);
+        collect_focusable_ids(nodes, root, &mut ids);
         ids
     };
     if ids.is_empty() { return false; }
     let current = ids.iter().position(|id| {
-        find_node_by_id(root, *id).map(|n| n.focused).unwrap_or(false)
+        find_node_by_id(nodes, root, *id).map(|n| nodes[n].focused).unwrap_or(false)
     });
     let prev = match current {
         Some(0) | None => ids.len() - 1,
         Some(i) => i - 1,
     };
-    clear_focus(root);
-    set_focus_by_id(root, ids[prev]);
+    clear_focus(nodes, root);
+    set_focus_by_id(nodes, root, ids[prev]);
     true
 }
 
-pub fn clear_focus(node: &mut LayoutNode) {
-    node.focused = false;
-    for child in &mut node.children {
-        clear_focus(child);
+pub fn clear_focus(nodes: &mut Vec<LayoutNode>, root: usize) {
+    nodes[root].focused = false;
+    let children = nodes[root].children.clone();
+    for c in children {
+        clear_focus(nodes, c);
     }
 }
 
-pub fn set_focus_by_id(node: &mut LayoutNode, target_id: u64) -> bool {
-    if node.id == target_id {
-        node.focused = true;
+pub fn set_focus_by_id(nodes: &mut Vec<LayoutNode>, root: usize, target_id: u64) -> bool {
+    if nodes[root].id == target_id {
+        nodes[root].focused = true;
         return true;
     }
-    for child in &mut node.children {
-        if set_focus_by_id(child, target_id) {
+    let children = nodes[root].children.clone();
+    for c in children {
+        if set_focus_by_id(nodes, c, target_id) {
             return true;
         }
     }
     false
 }
 
-/// 点击时聚焦指定节点
-pub fn focus_node(root: &mut LayoutNode, target: &LayoutNode) {
-    clear_focus(root);
-    set_focus_by_id(root, target.id);
-}
-
+/// 点击时聚焦指定节点（target 为 arena 索引）
 // ── FocusRequester 全局注册表 ──
 
 /// 通过 FocusRequester ID 设置焦点
-pub fn focus_by_id(root: &mut LayoutNode, focus_requester_id: u64) -> bool {
-    let target_id = find_node_id_by_focus_requester(root, focus_requester_id);
+pub fn focus_by_id(nodes: &mut Vec<LayoutNode>, root: usize, focus_requester_id: u64) -> bool {
+    let target_id = find_node_id_by_focus_requester(nodes, root, focus_requester_id);
     if let Some(id) = target_id {
-        clear_focus(root);
-        set_focus_by_id(root, id);
+        clear_focus(nodes, root);
+        set_focus_by_id(nodes, root, id);
         true
     } else {
         false
     }
 }
 
-fn find_node_id_by_focus_requester(node: &LayoutNode, requester_id: u64) -> Option<u64> {
-    if has_focus_id(node, requester_id) {
-        return Some(node.id);
+/// 内部辅助：按 FocusRequesterId 查找节点 id（arena 版）
+pub fn find_node_id_by_focus_requester(nodes: &[LayoutNode], root: usize, requester_id: u64) -> Option<u64> {
+    if has_focus_id(&nodes[root], requester_id) {
+        return Some(nodes[root].id);
     }
-    for child in &node.children {
-        if let Some(id) = find_node_id_by_focus_requester(child, requester_id) {
+    let children = nodes[root].children.clone();
+    for c in children {
+        if let Some(id) = find_node_id_by_focus_requester(nodes, c, requester_id) {
             return Some(id);
         }
     }
@@ -573,10 +702,11 @@ fn find_node_id_by_focus_requester(node: &LayoutNode, requester_id: u64) -> Opti
 }
 
 /// 按 slot_key 查找节点 ID（slot_key 跨重组稳定）
-pub fn find_node_id_by_slot_key(node: &LayoutNode, slot_key: u64) -> Option<u64> {
-    if node.slot_key == slot_key { return Some(node.id); }
-    for child in &node.children {
-        if let Some(id) = find_node_id_by_slot_key(child, slot_key) {
+pub fn find_node_id_by_slot_key(nodes: &[LayoutNode], root: usize, slot_key: u64) -> Option<u64> {
+    if nodes[root].slot_key == slot_key { return Some(nodes[root].id); }
+    let children = nodes[root].children.clone();
+    for c in children {
+        if let Some(id) = find_node_id_by_slot_key(nodes, c, slot_key) {
             return Some(id);
         }
     }
@@ -588,12 +718,13 @@ fn has_focus_id(node: &LayoutNode, id: u64) -> bool {
 }
 
 /// 找到树中第一个焦点节点的 FocusRequesterId（用于持久化）
-pub fn get_focus_id(root: &LayoutNode) -> Option<u64> {
-    if root.focused {
-        return Some(root.id);
+pub fn get_focus_id(nodes: &[LayoutNode], root: usize) -> Option<u64> {
+    if nodes[root].focused {
+        return Some(nodes[root].id);
     }
-    for child in &root.children {
-        if let Some(id) = get_focus_id(child) {
+    let children = nodes[root].children.clone();
+    for c in children {
+        if let Some(id) = get_focus_id(nodes, c) {
             return Some(id);
         }
     }
@@ -606,38 +737,43 @@ fn modifier_focus_id(node: &LayoutNode) -> Option<u64> {
 
 // ── 递归测量引擎 ──
 
-/// 递归测量节点（处理 modifier 中的约束并调用子节点的 measure_policy）
+/// 递归测量节点（处理 modifier 中的约束并调用子节点的 measure_policy）。
+///
+/// arena 版：`nodes` 为节点池、`policies` 为策略池、`idx` 为当前节点索引。
+/// 子节点通过 `nodes[idx].children`（索引列表）递归测量。
 pub(crate) fn measure_node(
-    node: &mut LayoutNode,
+    nodes: &mut Vec<LayoutNode>,
+    policies: &[Box<dyn MeasurePolicy>],
+    idx: usize,
     constraints: Constraints,
 ) -> (Size, Vec<Placement>) {
     // 重放 stub：clean-skip 节点无 measure_policy，绝不能重新测量
     //（无 policy 走叶子分支会返回 0 并污染 prev_nodes 缓存，导致塌缩不可逆）。
     // stub 只在 slot 真正 clean（无状态变化）时出现；约束若变化，下帧该 slot dirty → Enter 正常重建。
-    if node.is_replay_stub {
-        return (node.measured_size, Vec::new());
+    if nodes[idx].is_replay_stub {
+        return (nodes[idx].measured_size, Vec::new());
     }
     // 常量折叠：若节点未变脏且约束相同，直接复用上次结果
-    if !node.dirty && node.cached_constraints == Some(constraints) {
-        return (node.measured_size, Vec::new());
+    if !nodes[idx].dirty && nodes[idx].cached_constraints == Some(constraints) {
+        return (nodes[idx].measured_size, Vec::new());
     }
 
     // 设置 ACTIVE_SLOT_KEY = 本节点 slot——使 SizeDynamic 闭包内的 State::get()
     // 把依赖注册到本节点（动画值变化 → 本节点 dirty → 重组重测）
-    crate::core::composer::set_active_slot_key(node.slot_key);
+    crate::core::composer::set_active_slot_key(nodes[idx].slot_key);
 
     // 应用 modifier 中的 Layout 约束（使用查询方法）
     let mut inner_constraints = constraints;
 
     // 应用 Size 元素（静态/动态单轴独立解析——布局属性动画用 State/闭包，
     // 测量时求值并注册依赖到本节点）
-    if let Some((sw, sh)) = node.modifier.resolved_size() {
+    if let Some((sw, sh)) = nodes[idx].modifier.resolved_size() {
         if let Some(w) = sw { inner_constraints = inner_constraints.tighten_width(w); }
         if let Some(h) = sh { inner_constraints = inner_constraints.tighten_height(h); }
     }
 
     // 1. 固定尺寸（仅 Static+Static 的 Size——由 resolved_size 已处理，此分支保留兼容其他查询）
-    if let Some((width, height)) = node.modifier.fixed_size() {
+    if let Some((width, height)) = nodes[idx].modifier.fixed_size() {
         use crate::modifier::Dimension;
         if let Dimension::Fixed(w) | Dimension::Dp(crate::unit::Dp(w)) = width {
             inner_constraints = inner_constraints.tighten_width(w);
@@ -655,8 +791,8 @@ pub(crate) fn measure_node(
     }
 
     // 2. 应用 padding
-    let (pad_left, pad_right) = node.modifier.get_padding_horizontal();
-    let (pad_top, pad_bottom) = node.modifier.get_padding_vertical();
+    let (pad_left, pad_right) = nodes[idx].modifier.get_padding_horizontal();
+    let (pad_top, pad_bottom) = nodes[idx].modifier.get_padding_vertical();
     let pad_x = pad_left + pad_right;
     let pad_y = pad_top + pad_bottom;
     if pad_x > 0.0 || pad_y > 0.0 {
@@ -665,70 +801,69 @@ pub(crate) fn measure_node(
 
     // 3. 应用 FillMax 约束（在 scroll 修改 max 之前，保存 viewport 约束）
     let viewport_height = inner_constraints.max_height;
-    if node.modifier.is_fill_max_width() {
+    if nodes[idx].modifier.is_fill_max_width() {
         inner_constraints.min_width = inner_constraints.max_width;
     }
-    if node.modifier.is_fill_max_height() {
+    if nodes[idx].modifier.is_fill_max_height() {
         if inner_constraints.max_height < f32::MAX {
             inner_constraints.min_height = inner_constraints.max_height;
         }
     }
 
     // 4. 检查 scroll 修饰符——给子节点无限约束
-    if node.modifier.vertical_scroll_state().is_some() {
+    if nodes[idx].modifier.vertical_scroll_state().is_some() {
         // scroll 容器自身填 viewport（fill_max_height 在无限 max 时跳过，这里补上）
-        if node.modifier.is_fill_max_height() && inner_constraints.max_height >= f32::MAX {
+        if nodes[idx].modifier.is_fill_max_height() && inner_constraints.max_height >= f32::MAX {
             inner_constraints.min_height = viewport_height;
         }
         // 保存 viewport 高度供滚动 clamping 使用
-        node.scroll_viewport_height = viewport_height;
+        nodes[idx].scroll_viewport_height = viewport_height;
         inner_constraints.max_height = f32::MAX;
     }
-    if node.modifier.horizontal_scroll_state().is_some() {
+    if nodes[idx].modifier.horizontal_scroll_state().is_some() {
         inner_constraints.max_width = f32::MAX;
     }
 
     // 实际测量
-    let result = if let Some(ref policy) = node.measure_policy {
-        let (size, placements) = {
-            let children = &mut node.children;
-            policy.measure(children, inner_constraints)
-        };
+    let result = if let Some(pidx) = nodes[idx].measure_policy {
+        // 先拷贝子节点索引（policy.measure 会可变借用整个 nodes，不能持有 nodes[idx] 借用）
+        let children = nodes[idx].children.clone();
+        let (size, placements) = policies[pidx].measure(nodes, policies, &children, inner_constraints);
         // apply positions
-        policy.place(&mut node.children, &placements);
+        policies[pidx].place(nodes, &children, &placements);
         // apply padding offset
         if pad_left > 0.0 || pad_top > 0.0 {
-            for child in &mut node.children {
-                child.position.x += pad_left;
-                child.position.y += pad_top;
+            for &c in &children {
+                nodes[c].position.x += pad_left;
+                nodes[c].position.y += pad_top;
             }
         }
         // apply per-child offset modifier
-        for child in &mut node.children {
-            if let Some((ox, oy)) = child.modifier.get_offset() {
-                child.position.x += ox;
-                child.position.y += oy;
+        for &c in &children {
+            if let Some((ox, oy)) = nodes[c].modifier.get_offset() {
+                nodes[c].position.x += ox;
+                nodes[c].position.y += oy;
             }
         }
         let outer_size = Size::new(size.width + pad_x, size.height + pad_y);
-        node.measured_size = outer_size;
+        nodes[idx].measured_size = outer_size;
         (outer_size, placements)
     } else {
         // 叶子节点：使用 ContentMeasurer 或默认逻辑
-        let size = if node.has_text_content {
+        let size = if nodes[idx].has_text_content {
             // 合并的 measure + cache（避免重复创建 Paragraph）
             // 使用父约束的 max_width 作为排版宽度，确保文本在可用空间内自动换行。
             // 对于可滚动容器，inner_constraints.max_width 已被设为 f32::MAX。
             let layout_width = inner_constraints.max_width;
-            let text_size = measure_and_cache_text(node, layout_width);
+            let text_size = measure_and_cache_text(&nodes[idx], layout_width);
             // 用约束 clamping 最终尺寸（fill_max_width 时约束收紧，文本应填满可用宽度）
             Size::new(
                 inner_constraints.constrain_width(text_size.width),
                 inner_constraints.constrain_height(text_size.height),
             )
-        } else if node.has_richtext_content {
+        } else if nodes[idx].has_richtext_content {
             let layout_width = inner_constraints.max_width;
-            let text_size = measure_and_cache_richtext(node, layout_width);
+            let text_size = measure_and_cache_richtext(&nodes[idx], layout_width);
             Size::new(
                 inner_constraints.constrain_width(text_size.width),
                 inner_constraints.constrain_height(text_size.height),
@@ -752,13 +887,13 @@ pub(crate) fn measure_node(
             Size::new(w, h)
         };
 
-        node.measured_size = size;
+        nodes[idx].measured_size = size;
         (size, Vec::new())
     };
 
     // 标记测量完成，缓存约束供下帧复用
-    node.dirty = false;
-    node.cached_constraints = Some(constraints);
+    nodes[idx].dirty = false;
+    nodes[idx].cached_constraints = Some(constraints);
     result
 }
 
@@ -1004,24 +1139,25 @@ fn to_sktextstyle(s: &RichSpanStyle) -> SkTextStyle {
 
 // ── 主轴间距计算（Column/Row 共用）──
 
-/// 计算主轴上的 spacing 和 leading space
-pub(crate) fn compute_spacing(
-    arrangement: Arrangement,
+/// 计算 Arrangement 的间距分配：返回 (元素间额外间距, 首/尾 leading offset)。
+/// Column 垂直主轴 / Row 水平主轴——由调用方（measure_flex）确定主轴分量。
+pub fn compute_spacing(
+    arrangement: crate::layout::Arrangement,
     remaining: f32,
     gap_count: usize,
 ) -> (f32, f32) {
     match arrangement {
-        Arrangement::Start => (0.0, 0.0),
-        Arrangement::End => (0.0, remaining),
-        Arrangement::Center => (0.0, remaining / 2.0),
-        Arrangement::SpaceBetween => {
+        crate::layout::Arrangement::Start => (0.0, 0.0),
+        crate::layout::Arrangement::End => (0.0, remaining),
+        crate::layout::Arrangement::Center => (0.0, remaining / 2.0),
+        crate::layout::Arrangement::SpaceBetween => {
             if gap_count > 0 {
                 (remaining / gap_count as f32, 0.0)
             } else {
                 (0.0, remaining / 2.0)
             }
         }
-        Arrangement::SpaceAround => {
+        crate::layout::Arrangement::SpaceAround => {
             if gap_count > 0 {
                 let space = remaining / (gap_count + 1) as f32;
                 (space, space / 2.0) // (元素间间距, 首/尾边缘间距 = 一半)
@@ -1029,11 +1165,10 @@ pub(crate) fn compute_spacing(
                 (0.0, remaining / 2.0)
             }
         }
-        Arrangement::SpaceEvenly => {
-            let total_gaps = gap_count + 2; // 前后也有间距
-            if total_gaps > 0 {
-                let space = remaining / total_gaps as f32;
-                (space, space)
+        crate::layout::Arrangement::SpaceEvenly => {
+            if gap_count > 0 {
+                let space = remaining / (gap_count + 1) as f32;
+                (space, space) // 元素间与边缘间距相等
             } else {
                 (0.0, remaining / 2.0)
             }

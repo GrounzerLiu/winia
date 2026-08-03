@@ -45,7 +45,9 @@ impl Default for ColumnLayout {
 impl MeasurePolicy for ColumnLayout {
     fn measure(
         &self,
-        children: &mut [LayoutNode],
+        nodes: &mut Vec<LayoutNode>,
+        policies: &[Box<dyn MeasurePolicy>],
+        children: &[usize],
         constraints: Constraints,
     ) -> (Size, Vec<Placement>) {
         flex::measure_flex::<flex::VerticalAxis>(
@@ -53,15 +55,17 @@ impl MeasurePolicy for ColumnLayout {
             self.alignment,
             self.spacing,
             self.direction,
+            nodes,
+            policies,
             children,
             &constraints,
         )
     }
 
-    fn place(&self, children: &mut [LayoutNode], placements: &[Placement]) {
-        for (child, placement) in children.iter_mut().zip(placements.iter()) {
-            child.position = placement.position;
-            child.measured_size = placement.size;
+    fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]) {
+        for (i, &c) in children.iter().enumerate() {
+            nodes[c].position = placements[i].position;
+            nodes[c].measured_size = placements[i].size;
         }
     }
 }
@@ -82,8 +86,9 @@ mod tests {
     #[test]
     fn test_column_simple() {
         let column = ColumnLayout::new();
-        let mut children = vec![make_leaf(100.0, 20.0), make_leaf(80.0, 30.0), make_leaf(120.0, 10.0)];
-        let (size, placements) = column.measure(&mut children, Constraints::UNBOUNDED);
+        let mut nodes = vec![make_leaf(100.0, 20.0), make_leaf(80.0, 30.0), make_leaf(120.0, 10.0)];
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let (size, placements) = column.measure(&mut nodes, &[], &children, Constraints::UNBOUNDED);
         assert_eq!(size.height, 60.0); // 20+30+10
         assert_eq!(placements[0].position.y, 0.0);
         assert_eq!(placements[1].position.y, 20.0);
@@ -93,8 +98,9 @@ mod tests {
     #[test]
     fn test_column_spacing() {
         let column = ColumnLayout::new().spacing(5.0);
-        let mut children = vec![make_leaf(100.0, 20.0), make_leaf(80.0, 30.0)];
-        let (size, placements) = column.measure(&mut children, Constraints::UNBOUNDED);
+        let mut nodes = vec![make_leaf(100.0, 20.0), make_leaf(80.0, 30.0)];
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let (size, placements) = column.measure(&mut nodes, &[], &children, Constraints::UNBOUNDED);
         assert_eq!(size.height, 55.0); // 20+5+30
         assert_eq!(placements[1].position.y, 25.0);
     }
@@ -102,8 +108,9 @@ mod tests {
     #[test]
     fn test_column_end_alignment() {
         let column = ColumnLayout::new().alignment(Alignment::End);
-        let mut children = vec![make_leaf(50.0, 20.0), make_leaf(100.0, 20.0)];
-        let (_size, placements) = column.measure(&mut children, Constraints::UNBOUNDED);
+        let mut nodes = vec![make_leaf(50.0, 20.0), make_leaf(100.0, 20.0)];
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let (_size, placements) = column.measure(&mut nodes, &[], &children, Constraints::UNBOUNDED);
         assert_eq!(placements[0].position.x, 100.0 - 50.0);
         assert_eq!(placements[1].position.x, 0.0);
     }

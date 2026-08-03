@@ -10,6 +10,16 @@
 
 pub mod core;
 pub mod unit;
+/// 调试日志宏：仅 `debug-server` feature 下打印（用户构建零噪音）。
+/// 用法：`debug_log!("[tag] {}", x);`——编译期折叠（非 feature 构建零开销）。
+#[macro_export]
+macro_rules! debug_log {
+    ($($arg:tt)*) => {
+        #[cfg(feature = "debug-server")]
+        { eprintln!($($arg)*); }
+    };
+}
+
 pub mod font;
 pub mod modifier;
 pub mod layout;
@@ -40,24 +50,26 @@ pub mod debug {
     pub fn take_queued_events() -> Vec<DebugEvent> { Vec::new() }
     pub fn queue_event(_event: DebugEvent) {}
     pub fn simulate_native_click(_x: f32, _y: f32) {}
-    pub fn build_tree_json(_root: &crate::layout::node::LayoutNode) -> String { String::new() }
+    pub fn build_tree_json(_nodes: &[crate::layout::node::LayoutNode], _root_idx: usize) -> String { String::new() }
     pub fn set_event_result(_s: &str) {}
     pub fn get_event_result() -> String { String::new() }
     #[derive(Debug, Clone)]
-    pub enum DebugEvent { Click { x: f32, y: f32 }, Key { key: String }, Text { value: String }, Scroll { dx: f32, dy: f32 }, Resize { w: f32, h: f32 }, FocusNext, RequestFocus { id: u64 } }
+    pub enum DebugEvent { Click { x: f32, y: f32 }, Key { key: String }, Text { value: String }, Scroll { dx: f32, dy: f32 }, Resize { w: f32, h: f32 }, FocusNext, RequestFocus { id: u64 }, PointerDown { x: f32, y: f32 }, PointerMove { x: f32, y: f32 }, PointerUp { x: f32, y: f32 } }
 }
 
 // 公开核心类型
 pub use core::composer::{ComposeCtx, Composer, Key};
-pub use core::state::State;
+pub use core::state::{DerivedFloat, DerivedValue, State};
+pub use winia_macros::composable;
 
 /// Prelude: 使用 Winia 时通常需要的所有导入
 pub mod prelude {
     pub use crate::core::composer::ComposeCtx;
-    pub use crate::core::state::State;
+    pub use crate::core::state::{DerivedFloat, DerivedValue, State};
     pub use crate::modifier::{Dimension, Modifier, Shape, Color, FocusRequester, ScrollState, DecoStyle, DecoMode, FontEdge, FontHint, KbEvent, KbEventType, PointerEvent, PointerEventType, PointerButton, PointerKind, PenKind};
     pub use crate::ui::{Text, TextAlign, TextOverflow, TextStyle, ProvideTextStyle, FontWeight, FontSlant, Button, ButtonStyle, Column, Row, Stack, Window, WiniaTheme, ThemeColors, SelectionContainer};
     pub use crate::ui::theme::is_system_dark_theme;
+    pub use crate::composable;
     pub use crate::ui::rich_text::RichText;
     pub use crate::text::{InlineDrawable, ImageDrawable, SvgDrawable};
     pub use crate::layout::{Arrangement, Alignment, Constraints, LayoutDirection};

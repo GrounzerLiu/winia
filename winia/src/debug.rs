@@ -80,6 +80,12 @@ pub enum DebugEvent {
     Resize { w: f32, h: f32 },
     FocusNext,
     RequestFocus { id: u64 },
+    /// 模拟指针按下（选择拖动的起点）
+    PointerDown { x: f32, y: f32 },
+    /// 模拟指针移动（拖动选择）
+    PointerMove { x: f32, y: f32 },
+    /// 模拟指针释放
+    PointerUp { x: f32, y: f32 },
 }
 
 pub fn queue_event(event: DebugEvent) { QUEUED_EVENTS.lock().unwrap().push(event); wake(); }
@@ -92,14 +98,15 @@ pub fn simulate_native_click(x: f32, y: f32) {
 
 // ── 组件树 JSON ──
 
-pub fn build_tree_json(root: &LayoutNode) -> String {
+pub fn build_tree_json(nodes: &[LayoutNode], root_idx: usize) -> String {
     let mut out = String::from("[");
-    build_node_json(root, &mut out, 0);
+    build_node_json(nodes, root_idx, &mut out, 0);
     out.push(']');
     out
 }
 
-fn build_node_json(node: &LayoutNode, out: &mut String, depth: usize) {
+fn build_node_json(nodes: &[LayoutNode], idx: usize, out: &mut String, depth: usize) {
+    let node = &nodes[idx];
     let indent = "  ".repeat(depth + 1);
     let mod_desc = describe_modifier(&node.modifier);
     if depth > 0 { out.push_str(",\n"); }
@@ -108,9 +115,9 @@ fn build_node_json(node: &LayoutNode, out: &mut String, depth: usize) {
         node.position.x, node.position.y, node.measured_size.width, node.measured_size.height,
         mod_desc, node.focused,
     ));
-    for (i, child) in node.children.iter().enumerate() {
+    for (i, &child) in node.children.iter().enumerate() {
         if i > 0 { out.push(','); }
-        build_node_json(child, out, depth + 1);
+        build_node_json(nodes, child, out, depth + 1);
     }
     out.push(']'); out.push('}');
 }
@@ -146,6 +153,21 @@ pub fn start_stdin_channel() {
                     let x: f32 = parts[1].parse().unwrap_or(0.0);
                     let y: f32 = parts[2].parse().unwrap_or(0.0);
                     queue_event(DebugEvent::Click { x, y });
+                }
+                "d" if parts.len() >= 3 => {
+                    let x: f32 = parts[1].parse().unwrap_or(0.0);
+                    let y: f32 = parts[2].parse().unwrap_or(0.0);
+                    queue_event(DebugEvent::PointerDown { x, y });
+                }
+                "m" if parts.len() >= 3 => {
+                    let x: f32 = parts[1].parse().unwrap_or(0.0);
+                    let y: f32 = parts[2].parse().unwrap_or(0.0);
+                    queue_event(DebugEvent::PointerMove { x, y });
+                }
+                "u" if parts.len() >= 3 => {
+                    let x: f32 = parts[1].parse().unwrap_or(0.0);
+                    let y: f32 = parts[2].parse().unwrap_or(0.0);
+                    queue_event(DebugEvent::PointerUp { x, y });
                 }
                 "k" if parts.len() >= 2 => queue_event(DebugEvent::Key { key: parts[1..].join(" ") }),
                 "s" if parts.len() == 2 => {
@@ -201,6 +223,24 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
                 let y: f32 = parts[2].parse().unwrap_or(0.0);
                 queue_event(DebugEvent::Click { x, y });
                 let _ = write.send(Message::Text("ok click".into())).await;
+            }
+            "d" if parts.len() >= 3 => {
+                let x: f32 = parts[1].parse().unwrap_or(0.0);
+                let y: f32 = parts[2].parse().unwrap_or(0.0);
+                queue_event(DebugEvent::PointerDown { x, y });
+                let _ = write.send(Message::Text("ok down".into())).await;
+            }
+            "m" if parts.len() >= 3 => {
+                let x: f32 = parts[1].parse().unwrap_or(0.0);
+                let y: f32 = parts[2].parse().unwrap_or(0.0);
+                queue_event(DebugEvent::PointerMove { x, y });
+                let _ = write.send(Message::Text("ok move".into())).await;
+            }
+            "u" if parts.len() >= 3 => {
+                let x: f32 = parts[1].parse().unwrap_or(0.0);
+                let y: f32 = parts[2].parse().unwrap_or(0.0);
+                queue_event(DebugEvent::PointerUp { x, y });
+                let _ = write.send(Message::Text("ok up".into())).await;
             }
             "k" if parts.len() >= 2 => {
                 queue_event(DebugEvent::Key { key: parts[1..].join(" ") });

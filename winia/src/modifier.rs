@@ -72,6 +72,19 @@ impl From<&crate::core::state::State<f32>> for SizeValue {
     }
 }
 
+impl From<crate::core::state::DerivedValue<f32>> for SizeValue {
+    fn from(d: crate::core::state::DerivedValue<f32>) -> Self {
+        SizeValue::Dynamic(Arc::new(move || d.get()))
+    }
+}
+
+impl From<&crate::core::state::DerivedValue<f32>> for SizeValue {
+    fn from(d: &crate::core::state::DerivedValue<f32>) -> Self {
+        let d = d.clone();
+        SizeValue::Dynamic(Arc::new(move || d.get()))
+    }
+}
+
 impl From<&crate::core::state::State<crate::unit::Dp>> for SizeValue {
     fn from(s: &crate::core::state::State<crate::unit::Dp>) -> Self {
         let s = s.clone();
@@ -1036,6 +1049,19 @@ impl From<Color> for BackgroundColor {
 impl<F: Fn() -> Color + Send + Sync + 'static> From<F> for BackgroundColor {
     fn from(f: F) -> Self {
         Self(Arc::new(f))
+    }
+}
+
+impl From<crate::core::state::DerivedValue<Color>> for BackgroundColor {
+    fn from(d: crate::core::state::DerivedValue<Color>) -> Self {
+        Self(Arc::new(move || d.get()))
+    }
+}
+
+impl From<&crate::core::state::DerivedValue<Color>> for BackgroundColor {
+    fn from(d: &crate::core::state::DerivedValue<Color>) -> Self {
+        let d = d.clone();
+        Self(Arc::new(move || d.get()))
     }
 }
 

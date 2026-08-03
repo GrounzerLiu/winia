@@ -104,6 +104,9 @@ impl Button {
     /// 注册到组合树并执行子内容。
     /// 根据 style 自动从 WiniaTheme 读取默认颜色（用户 modifier 可覆盖）。
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
+        // 参数暂存（参数相等跳过——style/enabled 未变 → 容器 Skip）
+        ctx.changed(&self.style);
+        ctx.changed(&self.enabled);
         let key = ctx.next_key();
         let theme = crate::ui::theme::WiniaTheme::colors();
 
@@ -134,6 +137,7 @@ impl Button {
             }
         }
 
+        // content 闭包自动成为组合 scope（与 Column 一致）
         match ctx.start_restartable_group(key, modifier, BoxLayout::new().alignment(crate::layout::Alignment::Center)) {
             crate::core::composer::GroupStatus::Skip => {}
             crate::core::composer::GroupStatus::Enter => {

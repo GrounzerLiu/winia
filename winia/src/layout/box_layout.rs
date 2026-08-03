@@ -38,7 +38,9 @@ impl Default for BoxLayout {
 impl MeasurePolicy for BoxLayout {
     fn measure(
         &self,
-        children: &mut [LayoutNode],
+        nodes: &mut Vec<LayoutNode>,
+        policies: &[Box<dyn MeasurePolicy>],
+        children: &[usize],
         constraints: Constraints,
     ) -> (Size, Vec<Placement>) {
         let mut max_width: f32 = 0.0;
@@ -46,8 +48,8 @@ impl MeasurePolicy for BoxLayout {
         let mut child_sizes: Vec<Size> = Vec::with_capacity(children.len());
 
         // 测量所有子节点，每个子节点获得相同的约束
-        for child in children.iter_mut() {
-            let (child_size, _) = measure_node(child, constraints.loosen());
+        for &c in children {
+            let (child_size, _) = measure_node(nodes, policies, c, constraints.loosen());
             max_width = max_width.max(child_size.width);
             max_height = max_height.max(child_size.height);
             child_sizes.push(child_size);
@@ -92,10 +94,10 @@ impl MeasurePolicy for BoxLayout {
         (Size::new(width, height), placements)
     }
 
-    fn place(&self, children: &mut [LayoutNode], placements: &[Placement]) {
-        for (child, placement) in children.iter_mut().zip(placements.iter()) {
-            child.position = placement.position;
-            child.measured_size = placement.size;
+    fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]) {
+        for (i, &c) in children.iter().enumerate() {
+            nodes[c].position = placements[i].position;
+            nodes[c].measured_size = placements[i].size;
         }
     }
 }
@@ -116,14 +118,17 @@ mod tests {
     #[test]
     fn test_box_max_size() {
         let box_layout = BoxLayout::new();
-        let mut children = vec![
+        let mut nodes = vec![
             make_leaf(50.0, 30.0),
             make_leaf(100.0, 20.0),
             make_leaf(30.0, 80.0),
         ];
+        let children: Vec<usize> = (0..nodes.len()).collect();
 
         let (size, placements) = box_layout.measure(
-            &mut children,
+            &mut nodes,
+            &[],
+            &children,
             Constraints::UNBOUNDED,
         );
 
@@ -135,13 +140,16 @@ mod tests {
     #[test]
     fn test_box_center_alignment() {
         let box_layout = BoxLayout::new().alignment(Alignment::Center);
-        let mut children = vec![
+        let mut nodes = vec![
             make_leaf(50.0, 30.0),
             make_leaf(100.0, 80.0),
         ];
+        let children: Vec<usize> = (0..nodes.len()).collect();
 
         let (size, placements) = box_layout.measure(
-            &mut children,
+            &mut nodes,
+            &[],
+            &children,
             Constraints::UNBOUNDED,
         );
 

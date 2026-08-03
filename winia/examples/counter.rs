@@ -3,6 +3,8 @@
 use winia::prelude::*;
 use winia::app;
 
+/// Counter 主界面（#[composable] = 函数级 scope：count/show_alt 等 State 变化 → 本函数重跑）
+#[composable]
 fn counter_ui(ctx: &mut ComposeCtx) {
     let count = ctx.remember(|| 0i32);
     let show_alt = ctx.remember(|| false);
@@ -87,7 +89,8 @@ fn counter_ui(ctx: &mut ComposeCtx) {
                     });
             }
 
-            // 滚动区域
+            // 滚动区域（content 闭包已被 #[composable] 注入语句级 key——
+            // Window 开/关等结构变化时列表 key 不漂移，无需显式 key()）
             Column::new()
                 .modifier(Modifier::new().size(200.0, 150.0).vertical_scroll(scroll_y))
                 .build(ctx, |ctx| {

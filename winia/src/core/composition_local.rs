@@ -61,6 +61,21 @@ impl<T: Clone + 'static> CompositionLocal<T> {
         })
     }
 
+    /// 读取栈顶匹配的当前值；无匹配时返回 `None`（不调用 default——
+    /// 用于区分"provides 内（有值）"与"provides 外（无值）"，如 Text 注册到
+    /// SelectionContainer 的判定：provides 外不应注册到 default 空 registrar）
+    pub fn try_current(&self) -> Option<T> {
+        SLOTS.with(|s| {
+            let slots = s.borrow();
+            for (sid, val) in slots.iter().rev() {
+                if *sid == self.id {
+                    return Some(val.downcast_ref::<T>().unwrap().clone());
+                }
+            }
+            None
+        })
+    }
+
     /// 在闭包执行期间提供新值。嵌套 provides 通过 unique ID 正确隔离——
     /// 即使是同一个 `CompositionLocal` 再次嵌套，`rposition` 也能弹出最内层。
     pub fn provides<R>(&self, value: T, f: impl FnOnce() -> R) -> R {
@@ -130,3 +145,15 @@ mod tests {
         assert_eq!(local.current(), 99);
     }
 }
+
+    #[test]
+    fn test_try_current_scope_boundary() {
+        let local = CompositionLocal::new(|| 0i32);
+        assert_eq!(local.try_current(), None); // provides 外无值
+        let result = local.provides(7, || {
+            assert_eq!(local.try_current(), Some(7)); // provides 内有值
+            local.current()
+        });
+        assert_eq!(result, 7);
+        assert_eq!(local.try_current(), None); // 退出后恢复无值
+    }

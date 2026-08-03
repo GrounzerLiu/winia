@@ -5,6 +5,9 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 
+/// Window 占位 leaf / created_id 的 key 盐（黄金比例——与内容节点 next_key 空间隔离）
+const WINDOW_KEY_SALT: u64 = 0x9E37_79B9_7F4A_7C15;
+
 thread_local! {
     /// compose 末尾检测 Window::build 是否被调用
     static WINDOW_REBUILT: Cell<bool> = const { Cell::new(false) };
@@ -94,13 +97,16 @@ impl Window {
     }
 
     pub fn build(self, ctx: &mut ComposeCtx, content: impl Fn(&mut ComposeCtx) + Send + 'static) {
-        let created_id = ctx.remember_at_key(u64::MAX, || 0u64);
+        // 占位 leaf 与 created_id 共用同一个加盐 key：① 与内容节点 key 空间隔离
+        // （结构变化时不误复用旧槽）；② 每 Window 独立（remember_at_key(u64::MAX)
+        // 会让多个 Window 共享同一 created_id → 第二个 Window 永不创建）
+        let key = ctx.next_key().wrapping_add(WINDOW_KEY_SALT);
+        let created_id = ctx.remember_at_key(key, || 0u64);
         let _wid = created_id.get();
 
         // 创建仅用于 layout + on_remove 的 leaf slot
         // on_remove 中读取 State 最新值（以应对已创建窗口的 id）
         let cid = created_id.clone();
-        let key = ctx.next_key();
         ctx.start_leaf_with_remove(key, Modifier::new(), Box::new(move || {
             let wid = cid.get();
             if wid != 0 && CREATED.lock().unwrap().contains(&wid) {
@@ -147,3 +153,4 @@ impl Window {
         wid != 0 && !WINDOW_REBUILT.get()
     }
 }
+
