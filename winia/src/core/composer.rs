@@ -143,9 +143,14 @@ impl<'a> ComposeCtx<'a> {
 
     /// #[composable] 宏注入：以源码哈希为 scope key 开始（函数级 key 稳定——
     /// 结构变化不漂移）。内部节点的 next_key 以 scope 源码哈希为 key 基。
+    /// ⚠ 不调用 start_scope（它也会 push None——双重 push 后栈顶是 None，
+    /// next_key 读 scope=0 → 跨函数同 stmt id 的 key 碰撞 → 节点复用串位）
     pub fn start_scope_keyed(&mut self, source_hash: u64) -> u64 {
         self.composer.scope_source_stack.push(Some(source_hash));
-        self.composer.start_scope()
+        let key = self.composer.next_group_key();
+        self.composer.slot_table.start_scope(key);
+        SCOPE_STACK.with(|s| s.borrow_mut().push(key));
+        key
     }
 
     /// #[composable] 宏注入：进入一条语句（id 为编译期固定的源码位置序号）。
