@@ -42,6 +42,10 @@ pub(crate) struct PerWindow {
     theme: crate::ui::theme::ThemeColors,
     /// 渲染帧计数（vsync 研究——Fifo 下应 ~60fps）
     pub(crate) frame_counter: u64,
+    /// 上次 request_redraw 时刻（request 节流独立计时——避免与渲染节流共用
+    /// last_render_time 导致理论上的 2I 间隔减半：WM_PAINT 处理晚于 request（ε>0），
+    /// 定时器按 I 唤醒时 now-last_render = I-ε < I 恒拦截）
+    last_request_time: std::time::Instant,
     /// 帧间隔（屏幕刷新率对齐——窗口创建时从 monitor 获取；刷新率变化（显示器
     /// 切换）需重建窗口——当前不做动态跟踪）
     pub(crate) frame_interval: std::time::Duration,
@@ -73,7 +77,7 @@ struct PtrDownState {
 
 impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::ui::theme::ThemeColors) -> Self {
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, pointer_down_slot: None, frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, pointer_down_slot: None, frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, last_request_time: std::time::Instant::now() }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -188,15 +192,18 @@ impl ApplicationHandler for AppState {
             event_loop.set_control_flow(ControlFlow::WaitUntil(std::time::Instant::now() + interval));
             let now = std::time::Instant::now();
             for pw in self.windows.values_mut() {
-                if now.duration_since(pw.last_render_time) >= pw.frame_interval {
+                if now.duration_since(pw.last_request_time) >= pw.frame_interval {
+                    pw.last_request_time = now;
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 }
             }
         } else if self.was_animating {
             // 动画刚停止：强制终帧渲染（最后一次 set 的 request 可能被跳过）
             for pw in self.windows.values_mut() {
-                pw.force_redraw = true;
-                if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                if let Some(ref sw) = pw.skia_window {
+                    pw.force_redraw = true; // 仅可渲染窗口设（避免 None 残留）
+                    sw.request_redraw();
+                }
             }
         }
         self.was_animating = animating;
@@ -698,7 +705,6 @@ impl ApplicationHandler for AppState {
                 if !pw.force_redraw && now.duration_since(pw.last_render_time) < pw.frame_interval {
                     // 不 request——等外部驱动（动画 set → wake / 交互事件）再渲染
                 } else {
-                pw.force_redraw = false;
                 pw.last_render_time = now;
                 let w = pw.width;
                 let h = pw.height;
@@ -715,6 +721,7 @@ impl ApplicationHandler for AppState {
                         debug::screenshot_done();
                     }
                 });
+                pw.force_redraw = false; // 渲染成功后才清除强制帧（中途异常保留）
                 // IME 光标区域更新（输入法候选框跟随光标位置）
                 if let Some(ref sw) = pw.skia_window {
                     if let Some(fid) = pw.focused_id {
@@ -1230,6 +1237,56 @@ fn dispatch_ptr_event(
         }
     }
     false
+}
+
+/// request 节流判断（纯函数——边界单测）：
+/// 距上次 request >= 帧间隔才允许请求（WM_PAINT 生成频率受控为刷新率）。
+/// 独立于渲染节流（last_render_time）——避免 WM_PAINT 晚于 request（ε>0）导致
+/// 定时器唤醒时 now-last_render = I-ε < I 恒拦截 → 渲染频率减半（2I 间隔）。
+pub(crate) fn should_request_redraw(last_request: std::time::Instant, now: std::time::Instant, interval: std::time::Duration) -> bool {
+    now.duration_since(last_request) >= interval
+}
+
+#[cfg(test)]
+mod frame_throttle_tests {
+    use super::should_request_redraw;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn request_at_exact_interval_allowed() {
+        let t0 = Instant::now();
+        let interval = Duration::from_millis(16);
+        assert!(should_request_redraw(t0, t0 + interval, interval));
+    }
+
+    #[test]
+    fn request_below_interval_blocked() {
+        // I-ε（ε=1ns）：减半回归的边界——晚于 request 的渲染不应把下次请求推迟到 2I
+        let t0 = Instant::now();
+        let interval = Duration::from_millis(16);
+        assert!(!should_request_redraw(t0, t0 + interval - Duration::from_nanos(1), interval));
+    }
+
+    #[test]
+    fn request_after_two_intervals_allowed() {
+        let t0 = Instant::now();
+        let interval = Duration::from_millis(16);
+        assert!(should_request_redraw(t0, t0 + interval * 2, interval));
+    }
+
+    #[test]
+    fn request_at_zero_blocked() {
+        let t0 = Instant::now();
+        let interval = Duration::from_millis(16);
+        assert!(!should_request_redraw(t0, t0, interval));
+    }
+
+    #[test]
+    fn request_over_interval_allowed() {
+        let t0 = Instant::now();
+        let interval = Duration::from_millis(16);
+        assert!(should_request_redraw(t0, t0 + interval + Duration::from_millis(1), interval));
+    }
 }
 
 pub fn run_app(app: impl FnOnce(&mut ComposeCtx) + 'static) {
