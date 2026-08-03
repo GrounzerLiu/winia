@@ -369,17 +369,8 @@ impl VulkanRenderer {
 
             match present_result {
                 Ok(future) => {
-                    // vsync 同步：等待 present 完成（fence——present 显示后才信号）。
-                    // Windows 上 acquire_next_image 不等待 vsync（实测 1-2ms 立即返回），
-                    // 不等待 present 会导致 CPU 侧无节流渲染（~1300fps 风暴）。
-                    // present 完成 ≈ 图像已显示（Fifo 下与刷新同步）——下一帧 acquire
-                    // 自然拿到已显示的图像，渲染频率对齐 vsync（~60fps）。
-                    match future.wait(None) {
-                        Ok(()) => {}
-                        Err(e) => {
-                            eprintln!("Failed to wait present: {e:?}");
-                        }
-                    }
+                    // 异步 present（fence wait(None) 实测立即返回——不等待显示刷新，
+                    // vsync 由 app 层帧率限制处理——见 app.rs 的 frame_interval 节流）
                     self.last_render = Some(future.boxed());
                 }
                 Err(Validated::Error(VulkanError::OutOfDate)) => {
