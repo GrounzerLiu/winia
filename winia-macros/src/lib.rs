@@ -45,30 +45,42 @@ fn fnv64(s: &str) -> u64 {
 fn inject_stmt_ids(stmts: Vec<Stmt>, ctx: &syn::Ident, counter: &mut u32) -> Vec<Stmt> {
     let mut out = Vec::new();
     for stmt in stmts {
-        // 尾表达式（无分号）不包裹 push/pop——包裹会吞掉尾值
-        // （`{ 300.0 }` 变 `{ push; 300.0; pop }` → 块值变 ()，if/块表达式类型错）。
-        // 尾表达式通常是值表达式（组合函数返回 ()，无 build）——递归仍注入内部块。
-        if let Stmt::Expr(_, None) = stmt {
-            out.push(inject_nested(stmt, ctx, counter));
-            continue;
-        }
         let id = *counter;
         *counter += 1;
-        let stmt = inject_nested(stmt, ctx, counter);
-        match &stmt {
-            // let：显式 push/pop（块包会破坏变量作用域；let 语句本身无
-            // return/break/continue——init 表达式内的闭包/循环已注入自己的 guard）
-            Stmt::Local(_) => {
-                let push: Stmt = syn::parse_quote!(#ctx.push_stmt(#id););
-                let pop: Stmt = syn::parse_quote!(#ctx.pop_stmt(););
-                out.push(push);
-                out.push(stmt);
-                out.push(pop);
+        match stmt {
+            // 尾表达式（无分号）不包裹 push/pop——包裹会吞掉尾值
+            // （`{ 300.0 }` 变 `{ push; 300.0; pop }` → 块值变 ()，if/块表达式类型错）。
+            // 尾表达式通常是值表达式（组合函数返回 ()，无 build）——递归仍注入内部块。
+            Stmt::Expr(e, None) => {
+                out.push(inject_nested(Stmt::Expr(e, None), ctx, counter));
+            }
+            // let：init 用 guard 块包（`let x = { guard; <init> };`）——init 表达式内
+            // 的提前 return/panic 离开块时 guard drop 自动 pop（显式 push/pop 会泄漏）；
+            // 块包不破坏变量作用域（let 在块外，值 = init 块的值）
+            Stmt::Local(mut l) => {
+                if let Some(init) = l.init.take() {
+                    let pat = l.pat;
+                    // init.expr 已注入（inject_nested 前序）；diverge（let-else 的 else 块）也注入
+                    let init_expr = *init.expr;
+                    let diverge = init.diverge.map(|(else_tok, else_expr)| {
+                        (else_tok, Box::new(inject_expr_blocks(*else_expr, ctx, counter)))
+                    });
+                    let mut new_l = syn::Local { attrs: l.attrs, let_token: l.let_token, pat, init: None, semi_token: l.semi_token };
+                    new_l.init = Some(syn::LocalInit {
+                        eq_token: init.eq_token,
+                        expr: Box::new(syn::parse_quote!({ let __stmt_guard = #ctx.enter_stmt(#id); #init_expr })),
+                        diverge,
+                    });
+                    out.push(Stmt::Local(new_l));
+                } else {
+                    // 无 init（`let x;`）——无 build——不注入
+                    out.push(Stmt::Local(l));
+                }
             }
             // 其他语句：RAII guard 块包——语句块退出（含 return/break/continue/
             // panic 提前退出）guard drop 自动 pop_stmt（显式 pop 会因提前退出泄漏
             // stmt 栈 → 后续语句 key 静默错位）
-            _ => {
+            stmt => {
                 out.push(syn::parse_quote!({
                     let __stmt_guard = #ctx.enter_stmt(#id);
                     #stmt
@@ -264,10 +276,9 @@ fn inject_expr_blocks(expr: syn::Expr, ctx: &syn::Ident, counter: &mut u32) -> s
             e.body = inject_block(e.body, ctx, counter);
             syn::Expr::Loop(e)
         }
-        syn::Expr::Async(mut e) => {
-            e.block = inject_block(e.block, ctx, counter);
-            syn::Expr::Async(e)
-        }
+        // async 块排除（延迟恢复——await 期间事件循环继续，guard 会悬挂在
+        // thread_local 栈上串扰其他窗口组合；与 async 闭包排除一致）
+        syn::Expr::Async(e) => syn::Expr::Async(e),
         syn::Expr::Unsafe(mut e) => {
             e.block = inject_block(e.block, ctx, counter);
             syn::Expr::Unsafe(e)
