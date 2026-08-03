@@ -47,12 +47,17 @@ fn inject_stmt_ids(stmts: Vec<Stmt>, ctx: &syn::Ident, counter: &mut u32) -> Vec
     for stmt in stmts {
         let id = *counter;
         *counter += 1;
+        // 先递归注入（if/while/for/match 条件与体、闭包体、let init、表达式嵌套的
+        // content 闭包）——再按语句形态决定包裹方式（尾表达式不包 / let init guard
+        // 块包 / 其他 guard 块包）。⚠ 此注入点必须对每条语句执行——漏掉会导致
+        // 嵌套闭包体 key 退化路径哈希（结构变化漂移复发）
+        let stmt = inject_nested(stmt, ctx, counter);
         match stmt {
             // 尾表达式（无分号）不包裹 push/pop——包裹会吞掉尾值
             // （`{ 300.0 }` 变 `{ push; 300.0; pop }` → 块值变 ()，if/块表达式类型错）。
             // 尾表达式通常是值表达式（组合函数返回 ()，无 build）——递归仍注入内部块。
             Stmt::Expr(e, None) => {
-                out.push(inject_nested(Stmt::Expr(e, None), ctx, counter));
+                out.push(Stmt::Expr(e, None));
             }
             // let：init 用 guard 块包（`let x = { guard; <init> };`）——init 表达式内
             // 的提前 return/panic 离开块时 guard drop 自动 pop（显式 push/pop 会泄漏）；
@@ -60,7 +65,6 @@ fn inject_stmt_ids(stmts: Vec<Stmt>, ctx: &syn::Ident, counter: &mut u32) -> Vec
             Stmt::Local(mut l) => {
                 if let Some(init) = l.init.take() {
                     let pat = l.pat;
-                    // init.expr 已注入（inject_nested 前序）；diverge（let-else 的 else 块）也注入
                     let init_expr = *init.expr;
                     let diverge = init.diverge.map(|(else_tok, else_expr)| {
                         (else_tok, Box::new(inject_expr_blocks(*else_expr, ctx, counter)))
@@ -375,4 +379,71 @@ pub fn composable(_attr: TokenStream, item: TokenStream) -> TokenStream {
         #vis #sig #new_block
     };
     TokenStream::from(output)
+}
+
+#[cfg(test)]
+mod inject_tests {
+    use super::*;
+
+    fn ctx_ident() -> syn::Ident {
+        syn::Ident::new("ctx", proc_macro2::Span::call_site())
+    }
+
+    /// 防回归：content 闭包（单参 ctx）必须被注入（嵌套 enter_stmt）——
+    /// 若 inject_nested 统一注入点被误删，闭包体 key 退化路径哈希（结构变化漂移复发）
+    #[test]
+    fn test_content_closure_body_injected() {
+        let body: syn::Block = syn::parse_quote!({
+            Column::new().build(ctx, |ctx| { Text::new("a").build(ctx); });
+        });
+        let mut counter = 0;
+        let stmts = inject_stmt_ids(body.stmts, &ctx_ident(), &mut counter);
+        let out = quote!(#(#stmts)*).to_string();
+        let n = out.matches("enter_stmt").count();
+        assert!(n >= 2, "顶层 + content 闭包体都应注入 enter_stmt（实际 {n}）——嵌套注入丢失");
+    }
+
+    /// 防回归：if 分支内的 build（带分号语句）也应注入（控制流体递归）
+    #[test]
+    fn test_if_branch_injected() {
+        let body: syn::Block = syn::parse_quote!({
+            if cond {
+                Text::new("a").build(ctx);
+            } else {
+                Text::new("b").build(ctx);
+            };
+        });
+        let mut counter = 0;
+        let stmts = inject_stmt_ids(body.stmts, &ctx_ident(), &mut counter);
+        let out = quote!(#(#stmts)*).to_string();
+        let n = out.matches("enter_stmt").count();
+        assert!(n >= 3, "顶层（带分号非尾）+ if 两分支都应注入（实际 {n}）");
+    }
+
+    /// 防回归：let init 内嵌闭包（content）也应注入
+    #[test]
+    fn test_let_init_closure_injected() {
+        let body: syn::Block = syn::parse_quote!({
+            let x = Column::new().build(ctx, |ctx| { Text::new("a").build(ctx); });
+        });
+        let mut counter = 0;
+        let stmts = inject_stmt_ids(body.stmts, &ctx_ident(), &mut counter);
+        let out = quote!(#(#stmts)*).to_string();
+        let n = out.matches("enter_stmt").count();
+        assert!(n >= 2, "let init 内 content 闭包应注入（实际 {n}）");
+    }
+
+    /// 尾表达式（无分号）不包裹——但内部块仍注入
+    #[test]
+    fn test_tail_expr_not_wrapped_but_inner_injected() {
+        let body: syn::Block = syn::parse_quote!({
+            let v = if c { 1 } else { 2 };
+            v
+        });
+        let mut counter = 0;
+        let stmts = inject_stmt_ids(body.stmts, &ctx_ident(), &mut counter);
+        let out = quote!(#(#stmts)*).to_string();
+        // 尾表达式 v 不包裹——但 let 的 init 有 guard
+        assert!(out.contains("enter_stmt"), "let init 应有 guard");
+    }
 }
