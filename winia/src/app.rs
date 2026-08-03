@@ -21,7 +21,9 @@ use skiwin::{SkiaWindowTrait, vulkan::VulkanSkiaWindow};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
-use winit::application::ApplicationHandler;use winit::event::{StartCause, WindowEvent};
+use winit::application::ApplicationHandler;
+use winit::event::{StartCause, WindowEvent};
+use winit::monitor::MonitorHandleProvider;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::WindowId;
@@ -40,6 +42,9 @@ pub(crate) struct PerWindow {
     theme: crate::ui::theme::ThemeColors,
     /// 渲染帧计数（vsync 研究——Fifo 下应 ~60fps）
     pub(crate) frame_counter: u64,
+    /// 帧间隔（屏幕刷新率对齐——窗口创建时从 monitor 获取；刷新率变化（显示器
+    /// 切换）需重建窗口——当前不做动态跟踪）
+    pub(crate) frame_interval: std::time::Duration,
 
     /// 上次渲染时间（帧率限制——Windows acquire 不阻塞 vsync，应用层节流 60fps）
     pub(crate) last_render_time: std::time::Instant,
@@ -66,7 +71,7 @@ struct PtrDownState {
 
 impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::ui::theme::ThemeColors) -> Self {
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, pointer_down_slot: None, frame_counter: 0, last_render_time: std::time::Instant::now() }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, pointer_down_slot: None, frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16) }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -668,7 +673,7 @@ impl ApplicationHandler for AppState {
                 // 无节流会 ~1300fps 渲染风暴（present fence 只等 GPU 提交不等显示刷新）。
                 // 距上次渲染 <16ms（~60fps）跳过——动画值下轮渲染时取最新（不丢帧）。
                 let now = std::time::Instant::now();
-                if now.duration_since(pw.last_render_time) < std::time::Duration::from_millis(16) {
+                if now.duration_since(pw.last_render_time) < pw.frame_interval {
                     // 不 request——等外部驱动（动画 set → wake / 交互事件）再渲染
                 } else {
                 pw.last_render_time = now;
@@ -961,6 +966,14 @@ impl AppState {
         let w = Arc::new(event_loop.create_window(a).expect("window"));
         let window_id = w.id();
         let sf = w.scale_factor();
+        // 帧间隔对齐屏幕刷新率（refresh_rate_millihertz：60000 = 60Hz）——须在 w 移入前获取
+        let mhz_opt = w.current_monitor()
+            .and_then(|m| m.current_video_mode())
+            .and_then(|v| v.refresh_rate_millihertz())
+            .map(|m| m.get());
+        let frame_interval = mhz_opt
+            .map(|mhz| std::time::Duration::from_nanos(1_000_000_000_000 / mhz as u64))
+            .unwrap_or(std::time::Duration::from_millis(16));
         let skia_window = VulkanSkiaWindow::new(event_loop, w);
         let content = pending.content.unwrap_or_else(|| Box::new(|_| {}));
         let theme = pending.theme.unwrap_or_else(|| crate::ui::theme::ThemeColors::default_light());
@@ -969,6 +982,7 @@ impl AppState {
         pw.created_id = pending.created_id;
         pw.scale_factor = sf;
         pw.skia_window = Some(skia_window);
+        pw.frame_interval = frame_interval;
         // 首次 compose+layout+draw 也提供 Density（Px 单位首帧即正确）
         let density = crate::unit::Density::from_density(sf as f32);
         crate::unit::with_density(density, || {
