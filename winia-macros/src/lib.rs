@@ -114,7 +114,38 @@ fn inject_expr_blocks(expr: syn::Expr, ctx: &syn::Ident, counter: &mut u32) -> s
             }
             syn::Expr::Match(e)
         }
-        _ => expr, // 闭包/函数调用等不深入
+        // 函数调用：遍历参数（content 闭包通常在 build(...) 的参数位——闭包识别注入）
+        syn::Expr::Call(mut e) => {
+            for arg in e.args.iter_mut() {
+                let a = std::mem::replace(arg, syn::parse_quote!(0));
+                *arg = inject_expr_blocks(a, ctx, counter);
+            }
+            syn::Expr::Call(e)
+        }
+        // 方法调用（build(ctx, |ctx| {...}) 的常见形态）：同样遍历参数
+        syn::Expr::MethodCall(mut e) => {
+            for arg in e.args.iter_mut() {
+                let a = std::mem::replace(arg, syn::parse_quote!(0));
+                *arg = inject_expr_blocks(a, ctx, counter);
+            }
+            syn::Expr::MethodCall(e)
+        }
+        // 闭包：单参数且名为 `ctx` → content 闭包（约定——组件 build 的内容闭包），
+        // 注入其体（闭包内节点获得语句级源码位置 key——结构变化不漂移）。
+        // 其他闭包（map 回调等）不注入（参数名非 ctx——执行时机不定）。
+        syn::Expr::Closure(mut e) => {
+            let is_content = match e.inputs.first() {
+                Some(syn::Pat::Ident(pi)) if e.inputs.len() == 1 && pi.ident == "ctx" => true,
+                _ => false,
+            };
+            if is_content {
+                let body = std::mem::replace(&mut e.body, Box::new(syn::parse_quote!(())));
+                let injected = inject_expr_blocks(*body, ctx, counter);
+                e.body = Box::new(injected);
+            }
+            syn::Expr::Closure(e)
+        }
+        _ => expr, // 其他表达式不深入
     }
 }
 
