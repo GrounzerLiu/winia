@@ -1028,6 +1028,14 @@ impl Composer {
             Some(n) => self.arena.alloc(n),
             None => reused_idx.unwrap(),
         };
+        // 参数变化（slot clean 但 params 不等 → Enter）时：节点必须重测——
+        // 复用路径的 dirty 按 slot_status 设置（Clean → false），但参数变化
+        // 需要布局层重算（spacing/alignment 影响尺寸与子位置——measure_node
+        // 常量折叠会返回旧值）。统一：Enter 即置 dirty（Skip 分支 restore_from
+        // 会覆盖回缓存值，不受影响）。
+        if !is_skip {
+            self.arena.nodes[index].dirty = true;
+        }
         self.node_stack.push(index);
         self.group_skip_stack.push(is_skip);
 
@@ -2540,4 +2548,42 @@ fn test_component_param_change_forces_reenter() {
     });
     composer.layout(crate::layout::constraints::Constraints::new(0.0, 800.0, 0.0, 600.0));
     assert_eq!(run_count.get(), 0, "参数未变 → Skip（content 不执行）");
+}
+
+/// 参数变化后布局层必须更新（should-fix 回归：Enter 时置 dirty——
+/// 否则 measure_node 常量折叠返回上帧尺寸/子位置）
+#[test]
+fn test_param_change_updates_layout() {
+    use crate::ui::layout_components::Column;
+    use crate::layout::node::find_node_by_id;
+    let mut composer = Composer::new();
+    let root_id = std::cell::Cell::new(0u64);
+
+    // 帧 1：spacing 0，两个子 Text
+    composer.compose(|ctx| {
+        Column::new().spacing(0.0).build(ctx, |ctx| {
+            crate::ui::text::Text::new("a").build(ctx);
+            crate::ui::text::Text::new("b").build(ctx);
+        });
+    });
+    let c = crate::layout::constraints::Constraints::new(0.0, 800.0, 0.0, 600.0);
+    composer.layout(c);
+
+    // 帧 2：spacing 10——参数变化 → Enter + dirty → 布局更新
+    composer.compose(|ctx| {
+        Column::new().spacing(10.0).build(ctx, |ctx| {
+            crate::ui::text::Text::new("a").build(ctx);
+            crate::ui::text::Text::new("b").build(ctx);
+        });
+    });
+    composer.layout(c);
+    let nodes = &composer.arena.nodes;
+    // b 的 position（相对 Column——spacing 10 后应 > spacing 0 时）
+    // 子 Text 的 position（相对 Column）：a 在 0，b 在 a 高 + spacing 之后
+    let positions: Vec<f32> = nodes.iter().filter(|n| n.slot_key != 0 && n.measured_size.height > 0.0)
+        .map(|n| n.position.y).collect();
+    assert!(positions.len() >= 2, "两个子节点应有 position");
+    let max_y = positions.iter().cloned().fold(0.0_f32, f32::max);
+    assert!(max_y >= 19.0 + 10.0 - 0.5,
+        "参数变化后子位置应反映 spacing=10（b 应在 a 高 19 + spacing 10 之后——实际 {positions:?}）");
 }
