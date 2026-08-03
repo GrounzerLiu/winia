@@ -140,6 +140,9 @@ fn toggler(ctx: &mut ComposeCtx, show_extra: &State<bool>) {
         });
 }
 
+/// 顶层组合函数（#[composable]——函数级 scope key 源码稳定；最佳实践：
+/// 组合入口函数也应标注，使函数内语句的 key 有独立 scope 基）
+#[composable]
 fn nest_demo(ctx: &mut ComposeCtx) {
     let level = ctx.remember(|| 1i32);
     let mode = ctx.remember(|| 0i32);

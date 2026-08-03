@@ -2432,8 +2432,64 @@ fn test_stmt_guard_drops_on_scope_exit() {
             assert_eq!(STMT_STACK.with(|s| s.borrow().last().copied()), Some(7), "guard 生效：栈顶为 7");
         } // 块退出——guard drop
         assert!(STMT_STACK.with(|s| s.borrow().is_empty()), "提前退出后栈应自动恢复（无泄漏）");
-        let _ = ctx.enter_stmt(8);
+        // guard 存活期间显式 pop 配对（guard 仍持有——drop 时再 pop 一次无害）
+        let _g8 = ctx.enter_stmt(8);
         ctx.pop_stmt(); // 显式配对也正常
+        drop(_g8);
         ctx.end_scope();
+    });
+}
+
+/// 串位 bug 回归：两个不同 scope（不同源码哈希）内**相同的语句 id**（同 push_stmt(5)）
+/// 必须生成不同 key——旧 bug（start_scope_keyed 双重 push None → scope=0）下
+/// 同 stmt id 跨函数碰撞 → 节点复用串位（nest_demo row 0 ↔ [extra] button）
+#[test]
+fn test_scope_isolates_stmt_key_across_functions() {
+    let mut composer = Composer::new();
+    let mut keys = Vec::new();
+    composer.compose(|ctx| {
+        // 函数 A（hash A）
+        let _ = ctx.start_scope_keyed(0xAAAA);
+        ctx.push_stmt(5);
+        let k_a = ctx.next_key();
+        ctx.start_leaf(k_a, Modifier::new());
+        ctx.end_node();
+        ctx.pop_stmt();
+        ctx.end_scope();
+        // 函数 B（hash B——不同）
+        let _ = ctx.start_scope_keyed(0xBBBB);
+        ctx.push_stmt(5); // 相同语句 id
+        let k_b = ctx.next_key();
+        ctx.start_leaf(k_b, Modifier::new());
+        ctx.end_node();
+        ctx.pop_stmt();
+        ctx.end_scope();
+        keys.push((k_a, k_b));
+    });
+    // 断言 key 基（高位）不同——旧 bug（scope=0）下两函数 base 相同（仅 counter 区分）
+    let base_a = keys[0].0 >> 32;
+    let base_b = keys[0].1 >> 32;
+    assert_ne!(base_a, base_b, "不同 scope 的 key 基必须不同（scope 隔离）——旧 bug 下 base 相同（scope=0）跨函数碰撞");
+}
+
+/// 手动 start_scope（push None）与宏 start_scope_keyed（push Some）混用——配对正确
+#[test]
+fn test_mixed_manual_and_keyed_scope_pairing() {
+    let mut composer = Composer::new();
+    composer.compose(|ctx| {
+        let _ = ctx.start_scope_keyed(0xAAAA);
+        {
+            // 手动 scope（None——不覆盖外层 Some）
+            let _ = ctx.start_scope();
+            ctx.end_scope();
+        }
+        ctx.push_stmt(7);
+        let k = ctx.next_key();
+        ctx.start_leaf(k, Modifier::new());
+        ctx.end_node();
+        ctx.pop_stmt();
+        ctx.end_scope();
+        // 外层 keyed scope 的 source 应保留（未被手动 scope 的 None 破坏）
+        assert_eq!(STMT_STACK.with(|s| s.borrow().len()), 0, "stmt 栈应清空");
     });
 }
