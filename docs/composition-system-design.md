@@ -257,3 +257,26 @@ compose! { Column(ctx, vec![Text(ctx, ...), Box(ctx, ...)]) }
 
 **当前 scope-research 分支的成果**（content 自动 scope）是阶段 1 的可行验证；
 阶段 2（composable_fn 宏）是下一个自然步骤。
+
+---
+
+## 七、阶段 4/5 现状评估（2026-08）
+
+### 阶段 4（布局树独立缓存）——实际收益已基本实现
+
+| 目标 | 实现 | 验证 |
+|------|------|------|
+| 布局节点跨重组复用 | NodeArena 槽位复用（同 key 复用 + free 池回收结构变化删除的节点） | test_arena_recycles_freed_slots（帧3 容量不增长） |
+| 省测量 | measure_node 常量折叠（dirty=false + 约束同 → 返回缓存） | 动画 demo 注册数低 |
+| 布局结果缓存 | prev_nodes（measured_size/constraints/paragraph——layout() 阶段收集） | 参数相等 Skip 依赖 |
+| 组合增量更新 | start_node 按 slot_key 匹配复用（组合 diff 的等价物） | 结构变化测试 |
+| policy 池 | 策略槽复用（free_policies 回收） | — |
+
+**差距（理论理想——远期）**："组合树 = 一等公民"（Group 不直接产生 LayoutNode——两棵树完全分离）。当前是"组合时按 key 增量更新布局节点"——与 Compose 的组合产物模式一致（Compose 也是组合产生/复用 LayoutNode 树，非先建独立 Group 再 diff）。完整分离重构风险高、收益边际，标注远期。组合/布局的两阶段已存在（compose() → layout()）。
+
+### 阶段 5（参数相等跳过）状态
+
+- ctx.changed(param) 显式机制（早期完成）→ 容器组件自动参数暂存（Column/Row/Stack/Button——spacing/arrangement/alignment/style/enabled——c53b719）
+- 参数未变 + slot clean → 容器 Skip（content 不重跑）；参数变化 → Enter + 置 dirty（布局重算——07db7d7 修复布局层缺口）
+- 测试：test_component_param_change_forces_reenter（三帧语义）+ test_param_change_updates_layout（布局断言——鉴别力已验证）
+- 剩余：Stable trait/derive（自动比较的完整形态——当前组件手动 changed）

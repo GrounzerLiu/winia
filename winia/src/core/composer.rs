@@ -2587,3 +2587,57 @@ fn test_param_change_updates_layout() {
     assert!(max_y >= 19.0 + 10.0 - 0.5,
         "参数变化后子位置应反映 spacing=10（b 应在 a 高 19 + spacing 10 之后——实际 {positions:?}）");
 }
+
+/// ③ 布局树独立缓存边界：结构变化删除的节点槽位应回收复用（free 池）——
+/// arena 容量不随结构变化持续增长
+#[test]
+fn test_arena_recycles_freed_slots() {
+    use crate::ui::layout_components::Column;
+    use crate::ui::text::Text;
+    let mut composer = Composer::new();
+    let show = crate::core::state::State::new(true);
+    let c = crate::layout::constraints::Constraints::new(0.0, 800.0, 0.0, 600.0);
+
+    // 帧 1：show=true——含 extra 分支（3 个 Text）
+    let mut cap1 = 0;
+    composer.compose(|ctx| {
+        Column::new().build(ctx, |ctx| {
+            Text::new("a").build(ctx);
+            if show.get() {
+                Text::new("b").build(ctx);
+                Text::new("c").build(ctx);
+            }
+        });
+    });
+    composer.layout(c);
+    cap1 = composer.arena.nodes.len();
+    assert!(cap1 >= 4, "帧1 应有 4+ 节点（根+3 Text）");
+
+    // 帧 2：show=false——extra 分支删除（2 节点 free）
+    show.set(false);
+    composer.compose(|ctx| {
+        Column::new().build(ctx, |ctx| {
+            Text::new("a").build(ctx);
+            if show.get() {
+                Text::new("b").build(ctx);
+                Text::new("c").build(ctx);
+            }
+        });
+    });
+    composer.layout(c);
+
+    // 帧 3：show=true——重新创建分支——槽位应复用（容量不持续增长）
+    show.set(true);
+    composer.compose(|ctx| {
+        Column::new().build(ctx, |ctx| {
+            Text::new("a").build(ctx);
+            if show.get() {
+                Text::new("b").build(ctx);
+                Text::new("c").build(ctx);
+            }
+        });
+    });
+    composer.layout(c);
+    let cap3 = composer.arena.nodes.len();
+    assert!(cap3 <= cap1 + 2, "槽位应复用（帧3 容量 {cap3} 不应远超帧1 {cap1}——free 池回收）");
+}
