@@ -61,6 +61,7 @@ fn params_equal(a: &[Box<dyn ParamValue>], b: &[Box<dyn ParamValue>]) -> bool {
 /// 读取当前组合作用域的依赖注册目标：最内层 scope（容器组件/函数 scope）；
 /// scope 栈空（组合外/测量）→ ACTIVE_SLOT_KEY。
 pub(crate) fn with_active_scope(f: impl FnOnce(u64)) {
+    #[cfg(test)] { eprintln!("[scope-probe] gstack={:?}", GROUP_STACK.with(|s| s.borrow().iter().map(|k| k >> 32).collect::<Vec<_>>())); }
     // 统一依赖注册目标 = 最内层 scope（容器组件 start_restartable_group 时 push、
     // #[composable] 函数 start_scope 时 push）：组件内读取（Text build）注册到最近
     // 容器 scope（对标 Compose ReplaceGroup 内联语义）；content 闭包内表达式注册到
@@ -118,6 +119,7 @@ impl<'a> ComposeCtx<'a> {
         let slot_key = self.next_remember_key();
         let pq = Arc::downgrade(&self.composer.pending_states);
         self.composer.slot_table.remember(slot_key, || {
+            #[cfg(test)] { eprintln!("[remember-probe] exec——设置 STATE_OWNER_QUEUE"); }
             crate::core::state::STATE_OWNER_QUEUE.with(|q| *q.borrow_mut() = Some(pq.clone()));
             State::new(init())
         })
@@ -579,7 +581,9 @@ impl SlotTable {
 
     /// 设置当前 slot 的节点描述（组合产物——物化阶段消费）
     fn set_current_desc(&mut self, desc: Option<NodeDesc>) {
+        let has = desc.is_some();
         self.current_slot().desc = desc;
+        #[cfg(debug_assertions)] { if has { eprintln!("[wd-probe] wrote desc path_len={} key={}", self.path.len(), self.current_slot().key >> 32); } }
     }
 
     /// 收集物化描述树：Slot 树 → 纯节点树（scope 跳过——children 提升；
@@ -589,7 +593,9 @@ impl SlotTable {
     /// 残留（visited false 且不在 Skip 子树内）不收集；Skip 子树（visited false
     /// 但属于 Skip group）整体收集（skip 标记——物化恢复）
     fn collect_desc_tree(&mut self, out: &mut Vec<DescNode>) {
-        fn rec(slot: &mut Slot, out: &mut Vec<DescNode>, in_skip: bool) {
+        fn rec(slot: &mut Slot, out: &mut Vec<DescNode>, in_skip: bool, depth: usize) {
+            if depth > 60 { eprintln!("[c-probe] DEPTH 60 溢出——slot 树成环"); return; }
+            #[cfg(debug_assertions)] { eprintln!("[c-probe] d={} key={} vis={} scope={} desc={} nchild={}", depth, slot.key >> 32, slot.visited, slot.is_scope, slot.desc.is_some(), slot.children.len()); }
             if !slot.visited && !in_skip {
                 // 本帧未访问且不在 Skip 子树内（结构回退残留）：不收集——
                 // 对应 arena 节点由 prev_node_by_key 回收（free）
@@ -606,7 +612,7 @@ impl SlotTable {
                     children: Vec::new(),
                 };
                 for child in &mut slot.children {
-                    rec(child, &mut node.children, false);
+                    rec(child, &mut node.children, false, depth + 1);
                 }
                 out.push(node);
             } else if !slot.is_scope {
@@ -623,18 +629,18 @@ impl SlotTable {
                     children: Vec::new(),
                 };
                 for child in &mut slot.children {
-                    rec(child, &mut node.children, true); // Skip 子树内：子也按同一规则（收集）
+                    rec(child, &mut node.children, true, depth + 1); // Skip 子树内：子也按同一规则（收集）
                 }
                 out.push(node);
             } else {
                 // scope：不物化——children 提升到最近物化父（保持 in_skip 状态）
                 for child in &mut slot.children {
-                    rec(child, out, in_skip);
+                    rec(child, out, in_skip, depth + 1);
                 }
             }
         }
         for child in &mut self.root_slot.children {
-            rec(child, out, false);
+            rec(child, out, false, 0);
         }
     }
 
@@ -650,6 +656,7 @@ impl SlotTable {
         // 重建 slot 导致 remember 的 State 丢失
         let same_position = idx < parent.children.len()
             && parent.children[idx].key >> 32 == key >> 32;
+        #[cfg(debug_assertions)] { eprintln!("[ss-probe] key={} pchildren={} idx={} same={} dirty={}", key >> 32, parent.children.len(), idx, same_position, is_dirty); }
         if idx < parent.children.len() && (parent.children[idx].key == key || same_position) {
             parent.children[idx].key = key; // 同步最新 key（counter 可能漂移）
             parent.children[idx].visited = true; // 本帧活跃（物化收集依据）
@@ -1020,8 +1027,31 @@ impl Composer {
     /// 物化：组合树（Slot desc）→ 布局树（arena LayoutNode）——完整分离的核心。
     /// 由 layout() 调用（组合阶段不建节点）
     pub fn materialize(&mut self) {
+        // 物化前：统计 slot 树 desc 数（写入后是否被清）
+        {
+            fn dstat(slot: &Slot, n: &mut usize) {
+                if slot.desc.is_some() { *n += 1; }
+                for c in &slot.children { dstat(c, n); }
+            }
+            let mut n = 0;
+            for c in &self.slot_table.root_slot.children { dstat(c, &mut n); }
+            eprintln!("[pre-mat] desc_count={}", n);
+        }
         let mut descs = Vec::new();
         self.slot_table.collect_desc_tree(&mut descs);
+        // 树统计（物化前 desc 结构）
+        {
+            fn dstat(d: &DescNode, n: &mut usize) {
+                *n += 1;
+                for c in &d.children { dstat(c, n); }
+            }
+            let mut n = 0;
+            for d in &descs { dstat(d, &mut n); }
+            eprintln!("[tree-dbg] desc_total={} top={}", n, descs.len());
+        }
+        let mut kstr = String::new();
+        for d in &descs { kstr.push_str(&format!(" {:x}{}", d.key >> 32, if d.skip {"s"} else {"e"})); }
+        debug_log!("[mat-dbg] descs={}{}", descs.len(), kstr);
         if descs.is_empty() {
             return; // 无组合产物（layout 防御调用——树保留；compose 末尾已物化）
         }
@@ -1053,6 +1083,7 @@ impl Composer {
             on_remove,
             dirty: slot_status != SlotStatus::Clean, // 重测标记（slot.dirty 已消费）
         }));
+        #[cfg(debug_assertions)] { eprintln!("[desc-probe] start_node wrote desc key={}", key >> 32); }
         // 统一依赖栈：节点 push（组件 build 期间 State 读取注册到最内层 Group——
         // 组件内读取失效目标 = 本节点（对标 Compose 最内层 Group 语义））
         GROUP_STACK.with(|s| s.borrow_mut().push(key));
@@ -1108,6 +1139,7 @@ impl Composer {
         // content 不执行（无新描述），物化时按 key 恢复缓存节点（skip 标记）
         if is_skip {
             self.slot_table.set_current_desc(None);
+            #[cfg(debug_assertions)] { eprintln!("[desc-probe] group skip key={}", key >> 32); }
         } else {
             self.slot_table.set_current_desc(Some(NodeDesc {
                 key,
@@ -1116,6 +1148,7 @@ impl Composer {
                 on_remove,
                 dirty: true, // Enter 即重测（content 重跑——参数/内容可能变；Skip 恢复不受影响）
             }));
+            #[cfg(debug_assertions)] { eprintln!("[desc-probe] group enter wrote desc key={}", key >> 32); }
         }
         self.group_skip_stack.push(is_skip);
 
@@ -1133,11 +1166,9 @@ impl Composer {
         let _was_skip = self.group_skip_stack.pop().unwrap_or(false);
         // Skip：content 未执行——slot 树保留（上帧 children 结构）——物化时
         // 整棵子树按 key 从 prev_node_by_key 恢复（stub 机制已由物化替代）
-        // 容器 scope 配对（与 start_restartable_group 的 push 对应）
-        GROUP_STACK.with(|s| {
-            let mut s = s.borrow_mut();
-            if !s.is_empty() { s.pop(); }
-        });
+        // GROUP_STACK pop 由 end_node 统一处理（与 start_restartable_group 的
+        // push 配对——此前此处额外 pop 导致容器组件两次 pop 一次 push →
+        // 栈错乱 → 后续依赖注册到错误 Group → State 变化不标记容器 dirty）
         self.end_node();
     }
 
@@ -1164,6 +1195,7 @@ impl Composer {
         // 同时收集受影响的 slot key（用于增量更新 slot_deps）
         let mut affected_slot_keys = HashSet::new();
         let mut pending = self.pending_states.lock();
+        #[cfg(test)] { eprintln!("[pending-probe] n={} slot_deps_keys={:?}", pending.len(), self.slot_deps.iter().map(|(k, v)| (k, v.iter().map(|x| x >> 32).collect::<Vec<_>>())).collect::<Vec<_>>()); }
         for state_id in pending.drain(..) {
             if let Some(keys) = self.slot_deps.get(&state_id) {
                 for &k in keys {
@@ -1196,6 +1228,7 @@ impl Composer {
         GROUP_STACK.with(|s| s.borrow_mut().clear());
 
         // 依赖注册（recorded_deps → slot_deps）保持此处（组合期收集的 State 依赖）
+        #[cfg(test)] { eprintln!("[drain-probe] n={}", self.recorded_deps.len()); }
         for (state_id, slot_key) in self.recorded_deps.drain(..) {
             self.slot_deps.entry(state_id).or_default().insert(slot_key);
         }
@@ -2675,4 +2708,71 @@ fn test_arena_recycles_freed_slots() {
     let cap3 = composer.arena.nodes.len();
     assert!(cap3 <= cap1 + 2, "槽位应复用（帧3 容量 {cap3} 不应远超帧1 {cap1}——free 池回收）");
 
+}
+
+#[test]
+fn test_materialize_structure_change_window_insert() {
+    // 结构变化回归：if 分支插入（Window 场景）——slot 树重建——物化树应完整
+    let mut composer = Composer::new();
+    // show 必须经 remember 创建（owner queue 绑定——notify 定向推送本 Composer）
+    let mut show: Option<crate::core::state::State<bool>> = None;
+
+    // 帧1：false（无 Window 分支）
+    composer.compose(|ctx| {
+        let root_key = ctx.next_key();
+        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                show = Some(ctx.remember(|| false));
+                let _ = show.as_ref().unwrap().get();
+                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+            }
+        }
+        ctx.end_restartable_group();
+    });
+    composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
+    let r = composer.layout_root_idx().unwrap();
+    assert_eq!(composer.arena_nodes()[r].children.len(), 2, "帧1 应 2 leaf");
+
+    // 帧2：true（Window 分支插入——结构变化）
+    show.as_ref().unwrap().set(true);
+    composer.compose(|ctx| {
+        let root_key = ctx.next_key();
+        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                let _ = show.as_ref().unwrap().get();
+                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                if show.as_ref().unwrap().get() {
+                    { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                }
+            }
+        }
+        ctx.end_restartable_group();
+    });
+    composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
+    let r = composer.layout_root_idx().unwrap();
+    assert_eq!(composer.arena_nodes()[r].children.len(), 2, "帧2 应 2 leaf（if 插入后）");
+
+    // 帧3：false（结构回退）
+    show.as_ref().unwrap().set(false);
+    composer.compose(|ctx| {
+        let root_key = ctx.next_key();
+        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                let _ = show.as_ref().unwrap().get();
+                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+            }
+        }
+        ctx.end_restartable_group();
+    });
+    composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
+    let r = composer.layout_root_idx().unwrap();
+    eprintln!("[t3] root children={} nodes={}", composer.arena_nodes()[r].children.len(), composer.arena_nodes().len());
+    for c in composer.arena_nodes()[r].children.clone() {
+        eprintln!("[t3] child key={} dirty={}", composer.arena_nodes()[c].slot_key >> 32, composer.arena_nodes()[c].dirty);
+    }
+    assert_eq!(composer.arena_nodes()[r].children.len(), 1, "帧3 应 1 leaf（回退）");
 }

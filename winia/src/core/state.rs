@@ -72,6 +72,7 @@ impl<T: 'static> State<T> {
             owner_queue: owner_queue.clone(),
         });
         // 注册到全局映射表，供 notify_state_changed 定向推送
+        #[cfg(test)] { if inner.id == 1 { eprintln!("[new-probe] id=1 owner={} bt={:?}", owner_queue.is_some(), std::backtrace::Backtrace::force_capture().to_string().lines().take(30).collect::<Vec<_>>()); } }
         if let Some(ref w) = owner_queue {
             STATE_QUEUE_MAP.lock().insert(inner.id, w.clone());
         }
@@ -308,10 +309,13 @@ pub(crate) fn notify_state_changed(state_id: u32) {
 
 pub(crate) fn notify_state_changed_inner(state_id: u32, wake: bool) {
     // 定向通知：只推送到创建此 State 的 Composer 队列，避免跨窗口污染
-    if let Some(q) = STATE_QUEUE_MAP.lock().get(&state_id).and_then(|w| w.upgrade()) {
+    let pushed = if let Some(q) = STATE_QUEUE_MAP.lock().get(&state_id).and_then(|w| w.upgrade()) {
         q.lock().push(state_id);
+        true
     } else {
-    }
+        false
+    };
+    #[cfg(test)] { eprintln!("[notify-inner] state={} pushed={} map={:?}", state_id, pushed, STATE_QUEUE_MAP.lock().keys().collect::<Vec<_>>()); }
     if wake {
         if let Some(ref f) = *WAKE_FN.lock().unwrap() { f(); }
     }

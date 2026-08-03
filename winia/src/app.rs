@@ -106,6 +106,8 @@ impl PerWindow {
         // vsync 研究：渲染帧计数（每秒渲染次数——Fifo 下应 ~60）
         self.frame_counter += 1;
         debug_log!("[fps] render#{} compose#{} pending={}", self.frame_counter, self.composer.compose_count(), self.composer.pending_state_count());
+        // 临时：窗口节点数（诊断主窗口塌缩）
+        debug_log!("[wn-dbg] nodes={} root={:?}", self.composer.arena_nodes().len(), self.composer.layout_root_idx());
         // 清除待关闭标志——只捕获本次重组的 on_remove，防止跨窗口污染
         crate::ui::window::reset_pending_remove();
         // 提供当前窗口 Density（从 scale_factor）——覆盖 compose + layout + draw 全程，
@@ -215,8 +217,7 @@ impl ApplicationHandler for AppState {
     fn resumed(&mut self, _event_loop: &dyn ActiveEventLoop) {}
 
     fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
-        debug_log!("[wake-probe] proxy_wake_up");
-        // 如果 debug server 请求关闭，退出事件循环
+                // 如果 debug server 请求关闭，退出事件循环
         if debug::is_shutdown() {
             event_loop.exit();
             return;
@@ -677,8 +678,7 @@ impl ApplicationHandler for AppState {
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
             }
             WindowEvent::RedrawRequested => {
-                debug_log!("[rr-probe] RedrawRequested");
-                // 动画推进已移到 new_events（每轮一次，与窗口解耦）
+                                // 动画推进已移到 new_events（每轮一次，与窗口解耦）
                 // 消费焦点请求（在 compose 前处理，避免丢失）
                 for id in crate::modifier::take_focus_requests() {
                     if let Some(r) = pw.composer.layout_root_idx() {

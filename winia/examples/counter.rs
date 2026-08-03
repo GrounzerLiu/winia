@@ -63,6 +63,7 @@ fn counter_ui(ctx: &mut ComposeCtx) {
                     });
             }
 
+            eprintln!("[ui-probe] window-done"); // Window 分支后（列表前）
             // ── 声明式多窗口按钮 ──
             Button::new().on_click({ let s = show_window.clone(); move || { s.update(|v| *v = !*v); } })
                 .modifier(Modifier::new().size(200.0, 32.0).background(Color::from_argb(255, 180, 100, 200), Shape::rounded(4.0)))
