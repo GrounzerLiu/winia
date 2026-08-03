@@ -265,6 +265,7 @@ impl ApplicationHandler for AppState {
             WindowEvent::PointerButton { position, state, button, .. } => {
                 let lp = position.to_logical::<f32>(pw.scale_factor);
                 let scene_pos = (lp.x, lp.y);
+                eprintln!("[pb] state={:?} button={:?} pos=({:.0},{:.0})", state, button, scene_pos.0, scene_pos.1); // 分支入口标记
                 let event_type = if state.is_pressed() {
                     crate::modifier::PointerEventType::Down
                 } else {
