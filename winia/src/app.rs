@@ -98,6 +98,13 @@ impl PerWindow {
         self.composer.clear_frame_cache();
         loop {
             let did_compose = self.composer.recompose(|ctx| (self.content)(ctx));
+            if let Some(r) = self.composer.layout_root_idx() {
+                let nodes = self.composer.arena_nodes();
+                let has_line = nodes.iter().any(|n| format!("{:?}", n.modifier).contains("Line "));
+                // 列表 Column（vertical_scroll）的 key——诊断每帧漂移
+                let list_key = nodes.iter().find(|n| format!("{:?}", n.modifier).contains("vertical_scroll")).map(|n| n.slot_key);
+                eprintln!("[win-dbg] id={:?} nodes={} has_line={} list_key={:?}", self.created_id, nodes.len(), has_line, list_key);
+            }
             if let Some(slot_key) = self.focused_slot_key {
                 if let Some(r) = self.composer.layout_root_idx() {
                     let nodes = self.composer.arena_nodes_mut();
@@ -658,14 +665,25 @@ impl ApplicationHandler for AppState {
                 let w = pw.width;
                 let h = pw.height;
                 let sf = pw.scale_factor as f32;
+                let is_main_window = pw.created_id.unwrap_or(0) <= 1; // 临时：多窗口时 t 只打印主窗口
                 pw.recompose_layout_render(|nodes, root_idx, surface| {
-                    debug::update_tree(&debug::build_tree_json(nodes, root_idx));
+                    if is_main_window {
+                        debug::update_tree(&debug::build_tree_json(nodes, root_idx));
+                    }
                     if debug::screenshot_requested() {
                         let (pw2, ph2) = ((w * sf) as i32, (h * sf) as i32);
                         let info = skia_safe::ImageInfo::new((pw2, ph2), skia_safe::ColorType::RGBA8888, skia_safe::AlphaType::Premul, None);
                         let mut pixels = vec![0u8; (pw2 * ph2 * 4) as usize];
                         if surface.read_pixels(&info, &mut pixels, pw2 as usize * 4, (0, 0)) {
                             debug::update_pixels(&pixels, pw2 as u32, ph2 as u32);
+                            // 临时：保存 png 供图像分析
+                            if let Some(mut surf) = skia_safe::Surface::new_raster(&info, None, None) {
+                                surf.canvas().write_pixels(&info, &pixels, pw2 as usize * 4, (0, 0));
+                                let img = surf.image_snapshot();
+                                if let Some(data) = img.encode(None, skia_safe::EncodedImageFormat::PNG, 90) {
+                                    let _ = std::fs::write("D:/Projects/winia/dbg_win.png", data.as_bytes());
+                                }
+                            }
                         }
                         debug::screenshot_done();
                     }

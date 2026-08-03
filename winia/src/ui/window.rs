@@ -100,7 +100,11 @@ impl Window {
         // 创建仅用于 layout + on_remove 的 leaf slot
         // on_remove 中读取 State 最新值（以应对已创建窗口的 id）
         let cid = created_id.clone();
-        let key = ctx.next_key();
+        // 占位 leaf 的 key 加盐（黄金比例）——与内容节点的 next_key 空间隔离：
+        // 结构变化时（如列表前插入 Window 分支）位置 6 的旧列表 key 与本帧 Window
+        // 的 key 相同 → 复用旧列表槽 + Clean 折叠（保留旧尺寸 720）→ 幽灵节点占位
+        // 720 高 → 真正列表被挤到窗口外（列表"消失"）
+        let key = ctx.next_key().wrapping_add(0x9E37_79B9_7F4A_7C15);
         ctx.start_leaf_with_remove(key, Modifier::new(), Box::new(move || {
             let wid = cid.get();
             if wid != 0 && CREATED.lock().unwrap().contains(&wid) {
