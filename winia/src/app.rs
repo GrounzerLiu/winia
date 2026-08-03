@@ -167,6 +167,8 @@ struct AppState {
     pub(crate) modifiers: winit::keyboard::ModifiersState,
     /// 初始化回调（仅首次调用，用于声明式创建主窗口）
     init: Option<Box<dyn FnOnce(&mut ComposeCtx)>>,
+    /// 上轮动画是否活跃（停止时强制终帧渲染）
+    was_animating: bool,
 }
 
 impl ApplicationHandler for AppState {
@@ -1220,6 +1222,7 @@ pub fn run_app(app: impl FnOnce(&mut ComposeCtx) + 'static) {
     debug::start_ws_server();
     let state = AppState {
         init: Some(Box::new(app)),
+        was_animating: false,
         windows: HashMap::new(),
         pending_content: Vec::new(),
         parent_window_id: None,
