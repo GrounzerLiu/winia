@@ -192,6 +192,8 @@ pub fn push_animatable<T: Clone + PartialEq + AnimatableValue + Send + Sync + 's
     // 立即执行首次更新，避免等下一帧 flash
     anim.update();
     ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
+    // 唤醒事件循环启动推进轮次（渲染中注册——渲染后 Wait 休眠会卡住动画）
+    crate::core::state::wake_loop();
 }
 
 /// 注册一个 Animatable<Color> 到全局活跃列表（由 animate_color_as_state 调用）
@@ -213,6 +215,8 @@ pub fn push_animatable_color(state: State<crate::modifier::Color>, target: crate
     anim.animate_to(target, spec);
     anim.update();
     ACTIVE_COLOR_ANIMATIONS.lock().unwrap().push(anim);
+    // 唤醒事件循环启动推进轮次（同 push_animatable）
+    crate::core::state::wake_loop();
 }
 
 /// 实现 AnimationInstance for Animatable<f32>

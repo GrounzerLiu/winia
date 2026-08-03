@@ -107,7 +107,6 @@ impl PerWindow {
         self.frame_counter += 1;
         debug_log!("[fps] render#{} compose#{} pending={}", self.frame_counter, self.composer.compose_count(), self.composer.pending_state_count());
         // 临时：窗口节点数（诊断主窗口塌缩）
-        debug_log!("[wn-dbg] nodes={} root={:?}", self.composer.arena_nodes().len(), self.composer.layout_root_idx());
         // 清除待关闭标志——只捕获本次重组的 on_remove，防止跨窗口污染
         crate::ui::window::reset_pending_remove();
         // 提供当前窗口 Density（从 scale_factor）——覆盖 compose + layout + draw 全程，

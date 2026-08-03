@@ -317,6 +317,14 @@ pub(crate) fn notify_state_changed(state_id: u32) {
     notify_state_changed_inner(state_id, true);
 }
 
+/// 唤醒事件循环一次（动画注册后调用——启动推进轮次；动画活跃后 AboutToWait
+/// 的 WaitUntil 接管每帧推进）。动画注册发生在渲染（RedrawRequested）中，
+/// 渲染后事件循环 Wait 无限休眠（set_no_wake 不 wake）——无唤醒则动画不推进
+/// （1 秒后外部事件才唤醒——大 dt 一次收敛——视觉"直接跳"）
+pub(crate) fn wake_loop() {
+    if let Some(ref f) = *WAKE_FN.lock().unwrap() { f(); }
+}
+
 pub(crate) fn notify_state_changed_inner(state_id: u32, wake: bool) {
     // 定向通知：只推送到创建此 State 的 Composer 队列，避免跨窗口污染
     let pushed = if let Some(q) = STATE_QUEUE_MAP.lock().get(&state_id).and_then(|w| w.upgrade()) {
