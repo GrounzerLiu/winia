@@ -339,16 +339,19 @@ impl ApplicationHandler for AppState {
                             if let Some(ref sw) = pw.skia_window { sw.set_ime_allowed(true); }
                         }
                     }
-                    // ── Up：Compose 风格 click 检测（仅释放时——Down 保留
-                    // pointer_down_state 供拖动选择；无条件执行会 Down 后立即 take
-                    // 掉 state → 拖动无法选择）──
-                    if !state.is_pressed() {
-                        // 显式请求重绘：on_click 内的 State set 走 wake_up 链路（异步），
-                        // 若无 pending 检查兜底会漏刷新（用户看到 count 不变）
-                        eprintln!("[up] detect_click called"); // 构建指纹：无此行 = 旧 exe
-                        if detect_click(pw, scene_pos) {
-                            if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
-                        }
+                }
+                // ── Up：Compose 风格 click 检测（仅释放时——Down 保留
+                // pointer_down_state 供拖动选择；无条件执行会 Down 后立即 take
+                // 掉 state → 拖动无法选择）──
+                // ⚠ 必须位于 `if state.is_pressed()`（Down 块）之外：Up 事件（Released）
+                // 不进入 Down 块——嵌套在块内的 click 检测对 Up 事件永不执行
+                // （曾导致真实点击永远无效，而 [sel-up-clean]（块外）正常打印）
+                if !state.is_pressed() {
+                    // 显式请求重绘：on_click 内的 State set 走 wake_up 链路（异步），
+                    // 若无 pending 检查兜底会漏刷新（用户看到 count 不变）
+                    eprintln!("[up] detect_click called");
+                    if detect_click(pw, scene_pos) {
+                        if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                     }
                 }
                 // ── 指针事件分发（Up 时先分发后清除 capture）──
