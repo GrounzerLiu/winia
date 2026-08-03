@@ -738,6 +738,8 @@ pub struct Composer {
     pub(crate) compose_clean_count: usize,
     #[cfg(test)]
     pub(crate) compose_dirty_count: usize,
+    /// 重组总次数（vsync 研究——单次渲染内多次 compose 的观测）
+    pub(crate) compose_count: u64,
 }
 
 impl Composer {
@@ -771,6 +773,7 @@ impl Composer {
             compose_clean_count: 0,
             #[cfg(test)]
             compose_dirty_count: 0,
+            compose_count: 0,
         }
     }
 
@@ -1121,6 +1124,7 @@ impl Composer {
     /// 执行组合：运行 content 闭包，构建/更新组合树和布局树。
     pub fn compose(&mut self, content: impl FnOnce(&mut ComposeCtx)) {
         #[cfg(test)] { self.compose_clean_count = 0; self.compose_dirty_count = 0; }
+        self.compose_count += 1;
         self.slot_table.reset();
         self.current_group_key = 0;
         self.path_counters.clear();
@@ -1252,6 +1256,16 @@ impl Composer {
     /// 是否有待处理的 state 变化
     pub fn has_pending_states(&self) -> bool {
         !self.pending_states.lock().is_empty()
+    }
+
+    /// 重组次数（vsync 研究——单次渲染内的 compose 次数）
+    pub fn compose_count(&self) -> u64 {
+        self.compose_count
+    }
+
+    /// 待消费 State 数（vsync 研究——渲染时刻的 pending 积压）
+    pub fn pending_state_count(&self) -> usize {
+        self.pending_states.lock().len()
     }
 
     /// 本帧暂存清理（在 recompose 循环开始前调用——整个重组周期内保留 Enter 结果，

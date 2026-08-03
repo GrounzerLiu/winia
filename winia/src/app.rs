@@ -38,6 +38,11 @@ pub(crate) struct PerWindow {
     pub(crate) on_close: Option<Box<dyn FnMut() + Send>>,
     pub(crate) created_id: Option<u64>,
     theme: crate::ui::theme::ThemeColors,
+    /// 渲染帧计数（vsync 研究——Fifo 下应 ~60fps）
+    pub(crate) frame_counter: u64,
+
+    /// 上次渲染时间（帧率限制——Windows acquire 不阻塞 vsync，应用层节流 60fps）
+    pub(crate) last_render_time: std::time::Instant,
     /// 焦点节点的 slot_key
     pub(crate) focused_slot_key: Option<u64>,
     /// 指针按下态（Compose 风格 click 检测）
@@ -61,7 +66,7 @@ struct PtrDownState {
 
 impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::ui::theme::ThemeColors) -> Self {
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, pointer_down_slot: None }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, pointer_down_slot: None, frame_counter: 0, last_render_time: std::time::Instant::now() }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -87,6 +92,9 @@ impl PerWindow {
     /// 增量重组 → 恢复焦点 → 布局 → 渲染（供 RedrawRequested 使用）
     /// 循环消费 notify 队列直到稳定，避免 tokio task 的并发通知丢失。
     fn recompose_layout_render(&mut self, after_draw: impl FnOnce(&[LayoutNode], usize, &mut skia_safe::Surface)) {
+        // vsync 研究：渲染帧计数（每秒渲染次数——Fifo 下应 ~60）
+        self.frame_counter += 1;
+        debug_log!("[fps] render#{} compose#{} pending={}", self.frame_counter, self.composer.compose_count(), self.composer.pending_state_count());
         // 清除待关闭标志——只捕获本次重组的 on_remove，防止跨窗口污染
         crate::ui::window::reset_pending_remove();
         // 提供当前窗口 Density（从 scale_factor）——覆盖 compose + layout + draw 全程，
@@ -656,6 +664,14 @@ impl ApplicationHandler for AppState {
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 }
                 // 增量重组 → 布局 → 渲染
+                // 帧率限制：Windows 上 acquire_next_image 不阻塞 vsync（实测 1-2ms），
+                // 无节流会 ~1300fps 渲染风暴（present fence 只等 GPU 提交不等显示刷新）。
+                // 距上次渲染 <16ms（~60fps）跳过——动画值下轮渲染时取最新（不丢帧）。
+                let now = std::time::Instant::now();
+                if now.duration_since(pw.last_render_time) < std::time::Duration::from_millis(16) {
+                    // 不 request——等外部驱动（动画 set → wake / 交互事件）再渲染
+                } else {
+                pw.last_render_time = now;
                 let w = pw.width;
                 let h = pw.height;
                 let sf = pw.scale_factor as f32;
@@ -711,6 +727,7 @@ impl ApplicationHandler for AppState {
                         }
                     }
                 }
+                } // end 帧率限制 else（渲染 + IME 同步）
                 // 检查 compose 后是否有待关闭窗口
                 if crate::ui::window::Window::has_pending_close() {
                     if let Some(ref proxy) = *APP_PROXY.lock().unwrap() { let _ = proxy.wake_up(); }
