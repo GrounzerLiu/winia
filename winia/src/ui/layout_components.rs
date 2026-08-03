@@ -32,6 +32,12 @@ impl Column {
     pub fn spacing(mut self, s: f32) -> Self { self.spacing = s; self }
 
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
+        // 参数暂存（阶段 5：参数相等跳过——下帧 is_skip 比较 slot.params：
+        // spacing/arrangement/alignment 未变 → 容器 Skip（content 不重跑）；
+        // 变化 → Enter（重跑——修复"参数变化仍 Skip 用旧值"的缺口）
+        ctx.changed(&self.spacing);
+        ctx.changed(&self.arrangement);
+        ctx.changed(&self.alignment);
         let key = ctx.next_key();
         let dir = crate::ui::theme::WiniaTheme::direction();
         let policy = ColumnLayout::new()
@@ -78,6 +84,10 @@ impl Row {
     pub fn spacing(mut self, s: f32) -> Self { self.spacing = s; self }
 
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
+        // 参数暂存（参数相等跳过——同 Column）
+        ctx.changed(&self.spacing);
+        ctx.changed(&self.arrangement);
+        ctx.changed(&self.alignment);
         let key = ctx.next_key();
         let dir = crate::ui::theme::WiniaTheme::direction();
         let policy = RowLayout::new()
@@ -118,6 +128,8 @@ impl Stack {
     pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
 
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
+        // 参数暂存（参数相等跳过——同 Column）
+        ctx.changed(&self.alignment);
         let key = ctx.next_key();
         let policy = BoxLayout::new().alignment(self.alignment);
         // content 闭包自动成为组合 scope（与 Column 一致）

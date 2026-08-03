@@ -2500,3 +2500,44 @@ fn test_mixed_manual_and_keyed_scope_pairing() {
         assert_eq!(STMT_STACK.with(|s| s.borrow().len()), 0, "stmt 栈应清空");
     });
 }
+
+/// 阶段 5 集成测试：容器组件参数（spacing）相等跳过——
+/// 参数变化 → Enter（content 重跑）；参数未变 + slot clean → Skip（content 不跑）
+#[test]
+fn test_component_param_change_forces_reenter() {
+    use crate::ui::layout_components::Column;
+    let mut composer = Composer::new();
+    let mut run_count = std::cell::Cell::new(0);
+
+    // 帧 1：spacing 0（首帧——Enter）
+    composer.compose(|ctx| {
+        Column::new().spacing(0.0).build(ctx, |ctx| {
+            run_count.set(run_count.get() + 1);
+            let _ = ctx;
+        });
+    });
+    composer.layout(crate::layout::constraints::Constraints::new(0.0, 800.0, 0.0, 600.0)); // prev_nodes 在 layout 更新
+    assert_eq!(run_count.get(), 1, "首帧 content 执行");
+
+    // 帧 2：spacing 10（参数变化 → Enter——content 重跑）
+    run_count.set(0);
+    composer.compose(|ctx| {
+        Column::new().spacing(10.0).build(ctx, |ctx| {
+            run_count.set(run_count.get() + 1);
+            let _ = ctx;
+        });
+    });
+    composer.layout(crate::layout::constraints::Constraints::new(0.0, 800.0, 0.0, 600.0));
+    assert_eq!(run_count.get(), 1, "参数变化 → content 重跑");
+
+    // 帧 3：spacing 10（参数未变 + clean → Skip——content 不跑）
+    run_count.set(0);
+    composer.compose(|ctx| {
+        Column::new().spacing(10.0).build(ctx, |ctx| {
+            run_count.set(run_count.get() + 1);
+            let _ = ctx;
+        });
+    });
+    composer.layout(crate::layout::constraints::Constraints::new(0.0, 800.0, 0.0, 600.0));
+    assert_eq!(run_count.get(), 0, "参数未变 → Skip（content 不执行）");
+}
