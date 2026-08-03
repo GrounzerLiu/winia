@@ -83,7 +83,7 @@ fn counter_ui(ctx: &mut ComposeCtx) {
                             .build(ctx);
                         Button::new().on_click({ let c = sw_count.clone(); move || { c.update(|v| *v += 1); } })
                             .modifier(Modifier::new().size(120.0, 36.0).background(Color::BLUE, Shape::rounded(4.0)))
-                            .build(ctx, |ctx| { eprintln!("[u] 3.1 col-content-start"); Text::new("Inc").color(Color::WHITE).font_size(14.0).build(ctx); });
+                            .build(ctx, |ctx| { Text::new("Inc").color(Color::WHITE).font_size(14.0).build(ctx); });
                     });
             }
 

@@ -579,7 +579,6 @@ impl SlotTable {
 
     /// 设置当前 slot 的节点描述（组合产物——物化阶段消费）
     fn set_current_desc(&mut self, desc: Option<NodeDesc>) {
-        let has = desc.is_some();
         self.current_slot().desc = desc;
     }
 
@@ -640,7 +639,6 @@ impl SlotTable {
     }
 
     fn start_slot(&mut self, key: u64) -> SlotStatus {
-        eprintln!("[ss2] key={}", key >> 32);
         let idx = *self.child_counters.last().unwrap_or(&0);
         self.active_slot_key = key;
         ACTIVE_SLOT_KEY.with(|c| c.set(key));
@@ -652,7 +650,6 @@ impl SlotTable {
         // 重建 slot 导致 remember 的 State 丢失
         let same_position = idx < parent.children.len()
             && parent.children[idx].key >> 32 == key >> 32;
-        #[cfg(debug_assertions)] { eprintln!("[sp] key={} pn={} idx={}", key >> 32, parent.children.len(), idx); }
         if idx < parent.children.len() && (parent.children[idx].key == key || same_position) {
             parent.children[idx].key = key; // 同步最新 key（counter 可能漂移）
             parent.children[idx].visited = true; // 本帧活跃（物化收集依据）
@@ -1021,32 +1018,10 @@ impl Composer {
     }
 
     /// 物化：组合树（Slot desc）→ 布局树（arena LayoutNode）——完整分离的核心。
-    /// 由 layout() 调用（组合阶段不建节点）
+    /// 由 compose 末尾调用（layout 只测量）；descs 为空时保留现有树（防御路径）
     pub fn materialize(&mut self) {
-        // 探针：slot 树状态
-        {
-            fn sstat(slot: &Slot, n: &mut (usize, usize)) {
-                n.0 += 1;
-                if slot.visited { n.1 += 1; }
-                for c in &slot.children { sstat(c, n); }
-            }
-            let mut n = (0, 0);
-            for c in &self.slot_table.root_slot.children { sstat(c, &mut n); }
-            eprintln!("[ms] slots={} visited={}", n.0, n.1);
-        }
         let mut descs = Vec::new();
         self.slot_table.collect_desc_tree(&mut descs);
-        // 探针：descs 树结构
-        {
-            fn dstat(d: &DescNode, n: &mut usize, depth: usize) {
-                if depth <= 2 { eprintln!("[md] d={} key={} nchild={}", depth, d.key >> 32, d.children.len()); }
-                *n += 1;
-                for c in &d.children { dstat(c, n, depth + 1); }
-            }
-            let mut n = 0;
-            for d in &descs { dstat(d, &mut n, 0); }
-            eprintln!("[md] total={} top={}", n, descs.len());
-        }
         if descs.is_empty() {
             return; // 无组合产物（layout 防御调用——树保留；compose 末尾已物化）
         }
@@ -2765,4 +2740,49 @@ fn test_materialize_structure_change_window_insert() {
         eprintln!("[t3] child key={} dirty={}", composer.arena_nodes()[c].slot_key >> 32, composer.arena_nodes()[c].dirty);
     }
     assert_eq!(composer.arena_nodes()[r].children.len(), 1, "帧3 应 1 leaf（回退）");
+}
+
+#[test]
+fn test_materialize_skip_restores_subtree() {
+    // Skip 恢复（物化核心路径）：帧2 无 State 变化/无参数变化 → 容器 Skip →
+    // content 不执行 → 物化从 prev_node_by_key 恢复整个子树（children 重新挂接）
+    let mut composer = Composer::new();
+    let c = crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0);
+
+    // 帧1：Enter——容器 + 2 leaf
+    composer.compose(|ctx| {
+        let key = ctx.next_key();
+        match ctx.start_restartable_group(key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+            }
+        }
+        ctx.end_restartable_group();
+    });
+    composer.layout(c);
+    let r = composer.layout_root_idx().unwrap();
+    assert_eq!(composer.arena_nodes()[r].children.len(), 2, "帧1 应 2 leaf");
+
+    // 帧2：无变化 → 容器 Skip（content 不跑）→ 物化恢复上帧子树
+    composer.compose(|ctx| {
+        let key = ctx.next_key();
+        match ctx.start_restartable_group(key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                panic!("帧2 应 Skip（content 不应执行）");
+            }
+        }
+        ctx.end_restartable_group();
+    });
+    composer.layout(c);
+    let r = composer.layout_root_idx().unwrap();
+    assert_eq!(composer.arena_nodes()[r].children.len(), 2, "Skip 应恢复上帧 2 leaf");
+    for ci in composer.arena_nodes()[r].children.clone() {
+        let n = &composer.arena_nodes()[ci];
+        assert!(!n.dirty, "恢复的 leaf 不应 dirty（缓存测量保留）");
+        assert!(n.cached_constraints.is_some(), "恢复的 leaf 应保留测量缓存（cached_constraints）");
+        assert_eq!(n.slot_key, composer.arena_nodes()[r].children.iter().find(|&&x| x == ci).map(|_| composer.arena_nodes()[ci].slot_key).unwrap(), "恢复的 leaf slot_key 保留");
+    }
 }
