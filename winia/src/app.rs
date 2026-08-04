@@ -368,7 +368,6 @@ impl ApplicationHandler for AppState {
                                     node_id: nodes[innermost].id, position: scene_pos, time: Instant::now(),
                                     selection_anchor: None, anchor_registrar: None });
                                 pw.pointer_down_slot = Some(nodes[innermost].slot_key);
-                                debug_log!("[sel-down] pointer_down_state set, slot={}", nodes[innermost].slot_key);
                                 // 将 anchor 转为全局索引再存入
                                 // reg 只用节点自己的 registrar（不 fallback active_registrar）——
                                 // 不可选节点（输出 Text 等未注册）的 node.registrar 为 None，
@@ -416,7 +415,6 @@ impl ApplicationHandler for AppState {
                 if !state.is_pressed() {
                     // 显式请求重绘：on_click 内的 State set 走 wake_up 链路（异步），
                     // 若无 pending 检查兜底会漏刷新（用户看到 count 不变）
-                    debug_log!("[up] detect_click called");
                     if detect_click(pw, scene_pos) {
                         if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                     }
@@ -440,7 +438,6 @@ impl ApplicationHandler for AppState {
                 }
                 // Up 后清除 capture + 通知选区变化
                 if !state.is_pressed() {
-                    debug_log!("[sel-up-clean] fired, slot={:?}", pw.pointer_down_slot);
                     // Compose 方式：从拖拽节点 slot_key 取 registrar 直接 fire
                     if let Some(slot) = pw.pointer_down_slot {
                         let nodes = pw.composer.arena_nodes();
@@ -472,8 +469,6 @@ impl ApplicationHandler for AppState {
             WindowEvent::PointerMoved { position, .. } => {
                 let lp = position.to_logical::<f32>(pw.scale_factor);
                 let scene_pos = (lp.x, lp.y);
-                debug_log!("[sel-move-ev] pos=({:.0},{:.0}) down_state={}",
-                    scene_pos.0, scene_pos.1, pw.pointer_down_state.is_some());
                 let nodes = pw.composer.arena_nodes();
                 if let Some(r) = pw.composer.layout_root_idx() {
                     let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
@@ -486,11 +481,6 @@ impl ApplicationHandler for AppState {
                             const CLICK_SLOP: f32 = 18.0;
                             if (dx*dx + dy*dy).sqrt() > CLICK_SLOP {
                                 let (abs_x, abs_y) = node_abs_position(nodes, r, nodes[innermost].id);
-                                debug_log!("[sel-move] pos=({:.0},{:.0}) down=({:.0},{:.0}) slop_ok node={} has_text={} para={} anchor={:?}",
-                                    scene_pos.0, scene_pos.1, down.position.0, down.position.1,
-                                    nodes[innermost].id, nodes[innermost].has_text_content,
-                                    nodes[innermost].cached_paragraph.try_borrow().ok().map(|b| b.is_some()).unwrap_or(false),
-                                    down.selection_anchor);
                                 if let Ok(borrow) = nodes[innermost].cached_paragraph.try_borrow() {
                                     if let Some(para) = borrow.as_ref() {
                                         // 对齐偏移（匹配渲染侧 x_off）
@@ -514,7 +504,6 @@ impl ApplicationHandler for AppState {
                                                 &reg, cur_off, current_index,
                                                 scene_pos.1, down.position.1, abs_y,
                                             ) {
-                                                debug_log!("[selection] set global range={}..{}", s, e);
                                                 target.set_selection(s, e);
                                             }
                                             } // end if let Some(reg)
@@ -535,10 +524,9 @@ impl ApplicationHandler for AppState {
                         is_meta_pressed: self.modifiers.meta_key(),
                     };
                     dispatch_ptr_event(nodes, r, &path, &ptr_ev, scene_pos, pw.pointer_down_slot);
-                    // 拖拽选区后请求重绘
-                    if pw.pointer_down_state.is_some() {
-                        if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
-                    }
+                    // on_pointer_event 可能更新 State（悬停 Move 回调）——无条件
+                    // 请求重绘；仅按下时请求会漏掉悬停移动（用户看到 Drag pos 不刷新）
+                    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 }
             }
             WindowEvent::ModifiersChanged(m) => {
@@ -867,13 +855,6 @@ impl ApplicationHandler for AppState {
                                             .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
                                         reg.clear_selection();
                                     }
-                                    debug_log!("[sel-debug] node id={} has_text={} para={} dirty={} cc={:?} size={:?}",
-                                        nodes[innermost].id,
-                                        nodes[innermost].has_text_content,
-                                        nodes[innermost].cached_paragraph.borrow().is_some(),
-                                        nodes[innermost].dirty,
-                                        nodes[innermost].cached_constraints,
-                                        nodes[innermost].measured_size);
                                     let anchor = if let Ok(borrow) = nodes[innermost].cached_paragraph.try_borrow() {
                                         borrow.as_ref().map(|para| {
                                             let (ax, ay) = node_abs_position(nodes, r, nodes[innermost].id);
@@ -881,10 +862,8 @@ impl ApplicationHandler for AppState {
                                             tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(x - ax, y - ay))
                                         })
                                     } else {
-                                        debug_log!("[sel-debug] try_borrow FAILED（渲染借用中？）");
                                         None
                                     };
-                                    debug_log!("[sel-debug] down para={} anchor={:?}", nodes[innermost].cached_paragraph.borrow().is_some(), anchor);
                                     // reg 只用节点自己的（不 fallback active_registrar——理由同真实 Down）
                                     let own_reg = nodes[innermost].registrar.borrow().as_ref().cloned();
                                     let anchor_global = anchor.and_then(|a| {
@@ -894,7 +873,18 @@ impl ApplicationHandler for AppState {
                                     pw.pointer_down_state = Some(crate::app::PtrDownState {
                                         node_id: nodes[innermost].id, position: (x, y), time: std::time::Instant::now(), selection_anchor: anchor_global, anchor_registrar: own_reg });
                                     pw.pointer_down_slot = Some(nodes[innermost].slot_key);
-                                    debug_log!("[sel-debug] anchor_global={:?}", anchor_global);
+                                    // 与真实 PointerButton Down 一致：分发 on_pointer_event
+                                    let ptr_ev = crate::modifier::PointerEvent {
+                                        event_type: crate::modifier::PointerEventType::Down,
+                                        position: (0.0, 0.0),
+                                        scene_position: (x, y),
+                                        kind: pw.last_pointer_kind.clone(),
+                                        is_alt_pressed: self.modifiers.alt_key(),
+                                        is_ctrl_pressed: self.modifiers.control_key(),
+                                        is_shift_pressed: self.modifiers.shift_key(),
+                                        is_meta_pressed: self.modifiers.meta_key(),
+                                    };
+                                    dispatch_ptr_event(nodes, r, &path, &ptr_ev, (x, y), pw.pointer_down_slot);
                                     handled = true;
                                 }
                             }
@@ -904,8 +894,7 @@ impl ApplicationHandler for AppState {
                             let nodes = pw.composer.arena_nodes();
                             if let Some(r) = pw.composer.layout_root_idx() {
                                 let path = hit_test(nodes, r, x, y);
-                                if pw.pointer_down_state.is_some() {
-                                    if let Some(&innermost) = path.last() {
+                                if pw.pointer_down_state.is_some() {                                    if let Some(&innermost) = path.last() {
                                         let down = pw.pointer_down_state.as_ref().unwrap();
                                         let dx = x - down.position.0;
                                         let dy = y - down.position.1;
@@ -924,22 +913,39 @@ impl ApplicationHandler for AppState {
                                                     &reg, cur_off, current,
                                                     y as f32, down.position.1, abs_y as f32,
                                                 ) {
-                                                    debug_log!("[selection] set global range={}..{}", s, e);
                                                     target.set_selection(s, e);
                                                     handled = true;
                                                 }
                                                 } // end if let Some(reg)
                                             } else {
-                                                debug_log!("[sel-debug] move para None——无法计算选择位置");
                                             }
                                         }
                                     }
                                 }
+                                // 与真实 PointerMoved 一致：分发 on_pointer_event（悬停
+                                // Move 回调也可能更新 State）并请求重绘
+                                let ptr_ev = crate::modifier::PointerEvent {
+                                    event_type: crate::modifier::PointerEventType::Move,
+                                    position: (0.0, 0.0),
+                                    scene_position: (x, y),
+                                    kind: pw.last_pointer_kind.clone(),
+                                    is_alt_pressed: self.modifiers.alt_key(),
+                                    is_ctrl_pressed: self.modifiers.control_key(),
+                                    is_shift_pressed: self.modifiers.shift_key(),
+                                    is_meta_pressed: self.modifiers.meta_key(),
+                                };
+                                dispatch_ptr_event(nodes, r, &path, &ptr_ev, (x, y), pw.pointer_down_slot);
+                                if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                             }
                         }
                         debug::DebugEvent::PointerUp { x, y } => {
                             // 模拟释放：先走真实 Up 的 click 检测（验证真实链路）
-                            detect_click(pw, (x, y));
+                            // 与真实路径（PointerButton Up 分支）一致：on_click 内
+                            // State set 后必须 request_redraw——否则依赖 wake_up 异步
+                            // 链（偶发丢失 → 用户看到 count 不刷新）
+                            if detect_click(pw, (x, y)) {
+                                if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                            }
                             // 通知选区变化 + 清理
                             if let Some(slot) = pw.pointer_down_slot {
                                 let nodes = pw.composer.arena_nodes();
@@ -1141,7 +1147,6 @@ fn detect_click(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
     const CLICK_SLOP: f32 = 18.0;
     const CLICK_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
     let Some(down) = pw.pointer_down_state.take() else {
-        debug_log!("[click-dbg] take=None");
         return false;
     };
     // Down 时所在节点的 slot_key（跨重组稳定——Down 与 Up 之间可能发生重组
@@ -1152,7 +1157,6 @@ fn detect_click(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
     let dy = scene_pos.1 - down.position.1;
     let dist = (dx * dx + dy * dy).sqrt();
     let in_time = down.time.elapsed() < CLICK_TIMEOUT;
-    debug_log!("[click-dbg] down=({:.0},{:.0}) up=({:.0},{:.0}) dist={:.1} in_time={} node={} slot={:?}", down.position.0, down.position.1, scene_pos.0, scene_pos.1, dist, in_time, down.node_id, down_slot);
     if dist <= CLICK_SLOP && in_time {
         let nodes = pw.composer.arena_nodes();
         if let Some(r) = pw.composer.layout_root_idx() {
@@ -1160,17 +1164,14 @@ fn detect_click(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
             let hit = down_slot
                 .map(|slot| path.iter().any(|&i| nodes[i].slot_key == slot))
                 .unwrap_or_else(|| path.iter().any(|&i| nodes[i].id == down.node_id));
-            debug_log!("[click-dbg] path={:?} hit={}", path.iter().map(|&i| nodes[i].id).collect::<Vec<_>>(), hit);
             if hit {
                 // 只在相同节点触发 click（从内到外找第一个 on_click）
                 for &i in path.iter().rev() {
                     if let Some(on_click) = nodes[i].modifier.on_click() {
-                        debug_log!("[click-dbg] on_click found at node={}", nodes[i].id);
                         on_click();
                         return true;
                     }
                 }
-                debug_log!("[click-dbg] path 无 on_click");
             }
         }
     }
@@ -1237,6 +1238,7 @@ fn dispatch_ptr_event(
         ev.position = (local_x, local_y);
         for el in nodes[ni].modifier.elements() {
             if let crate::modifier::ModifierElement::PointerEvent { on_pre_ptr: Some(handler), .. } = el {
+                if handler(&ev) { return true; }
             }
         }
     }
@@ -1249,6 +1251,7 @@ fn dispatch_ptr_event(
         ev.position = (local_x, local_y);
         for el in nodes[ni].modifier.elements() {
             if let crate::modifier::ModifierElement::PointerEvent { on_ptr: Some(handler), .. } = el {
+                if handler(&ev) { return true; }
             }
         }
     }

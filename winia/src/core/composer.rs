@@ -672,6 +672,11 @@ impl SlotTable {
         self.active_slot_key = key;
         ACTIVE_SLOT_KEY.with(|c| c.set(key));
         let is_dirty = self.dirty_keys.remove(&key);
+        #[cfg(debug_assertions)] {
+            if std::env::var("WINIA_SLOT_TRACE").is_ok() {
+                eprintln!("[slot] key={} path={:?} dirty={}", key >> 32, self.path.clone(), is_dirty);
+            }
+        }
         let parent = self.current_slot();
 
         // key 匹配，或"同位置"（key 高位 = slot 路径哈希相同）——Enter/Skip 的
@@ -1165,6 +1170,13 @@ impl Composer {
                 &self.pending_params,
                 &self.slot_table.current_slot().params,
             );
+            #[cfg(debug_assertions)] {
+                if std::env::var("WINIA_SKIP_TRACE").is_ok() {
+                    eprintln!("[skip] key={} clean={} params_u={} prev={} pending_len={}",
+                        key >> 32, slot_status == SlotStatus::Clean, params_unchanged,
+                        self.prev_nodes.contains_key(&key), self.pending_params.len());
+                }
+            }
             if params_unchanged {
                 // 有上帧缓存才可 Skip（否则物化无节点可恢复）
                 self.prev_nodes.contains_key(&key)

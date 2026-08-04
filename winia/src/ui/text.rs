@@ -189,6 +189,11 @@ impl Text {
     }
 
     pub fn build(self, ctx: &mut ComposeCtx) {
+        #[cfg(debug_assertions)] {
+            if std::env::var("WINIA_TEXT_TRACE").is_ok() {
+                eprintln!("[text-build] content={:?}", self.content.get(..16.min(self.content.len())));
+            }
+        }
         let key = ctx.next_key();
 
         let base = LOCAL_TEXT_STYLE.current();
