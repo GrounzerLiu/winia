@@ -144,7 +144,9 @@ fn section3(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
                     .background(Color::from_argb(255, 255, 152, 0), Shape::rounded(6.0))
                     .padding(4.0))
                 .build(ctx, |ctx| {
-                    Text::new(format!("Page {} ({:.0},{:.0})", page, x, y))
+                    // Text 直接读 State（内层组注册依赖——随动画更新；
+                    // 捕获值不触发内层重组——与 Compose 语义一致）
+                    Text::new(format!("Page {} ({:.0},{:.0})", page, tx.get(), ty.get()))
                         .font_size(12.0)
                         .color(Color::from_argb(255, 255, 255, 255))
                         .build(ctx);
@@ -178,7 +180,9 @@ fn section4(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
                     .background(c, Shape::rounded(6.0))
                     .padding(4.0))
                 .build(ctx, |ctx| {
-                    Text::new(format!("#{:02X}{:02X}{:02X}", c.r, c.g, c.b))
+                    // Text 直接读 State——内层组注册依赖，随动画更新
+                    let cur = bg.get();
+                    Text::new(format!("#{:02X}{:02X}{:02X}", cur.r, cur.g, cur.b))
                         .font_size(12.0)
                         .color(Color::WHITE)
                         .build(ctx);

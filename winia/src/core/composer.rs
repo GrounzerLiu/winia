@@ -463,6 +463,10 @@ struct DescNode {
     /// 物化时从 prev_node_by_key 按 key 恢复缓存节点（不新建）
     skip: bool,
     modifier: Modifier,
+    /// Skip 子树内：本帧 build 是否被调用（容器自身调了 set_skip_modifier——
+    /// modifier 是父层重跑传入的新值，应应用；后代未执行——modifier 为 default，
+    /// 应保留缓存节点的 modifier，避免视觉被清空）
+    preserve_modifier: bool,
     policy: Option<Box<dyn MeasurePolicy>>,
     on_remove: Option<Box<dyn FnOnce() + Send>>,
     dirty: bool,
@@ -488,6 +492,10 @@ struct Slot {
     /// slot：结构回退时（content 少建子节点）末尾残留的上帧 slot 不收集——
     /// 其 desc 不物化，对应 arena 节点由 prev_node_by_key 回收（free）
     visited: bool,
+    /// Skip 子树时保留的组合产物 modifier（content 未执行——desc 为 None；
+    /// 但 build 的 modifier 参数可能变化（父层重跑传入的 offset/背景等视觉
+    /// 属性）——物化 Skip 恢复时应用，避免视觉卡旧值（动画中间值不渲染）
+    skip_modifier: Option<Modifier>,
 }
 
 impl Slot {
@@ -502,6 +510,7 @@ impl Slot {
             params: Vec::new(),
             desc: None,
             visited: true, // 新建即本帧活跃
+            skip_modifier: None,
         }
     }
 
@@ -582,6 +591,12 @@ impl SlotTable {
         self.current_slot().desc = desc;
     }
 
+    /// Skip 路径保留组合产物 modifier（content 未执行——desc=None；物化
+    /// Skip 恢复节点时应用新 modifier——视觉属性（offset/背景）随父层重跑更新）
+    fn set_skip_modifier(&mut self, modifier: Modifier) {
+        self.current_slot().skip_modifier = Some(modifier);
+    }
+
     /// 收集物化描述树：Slot 树 → 纯节点树（scope 跳过——children 提升；
     /// Skip 子树 slot 记 skip 标记——物化时从 prev_node_by_key 恢复）。
     /// 消费 desc（take——policy/on_remove 移出）——物化阶段调用。
@@ -600,6 +615,7 @@ impl SlotTable {
                     key: desc.key,
                     skip: false,
                     modifier: desc.modifier,
+                    preserve_modifier: false,
                     policy: desc.policy,
                     on_remove: desc.on_remove,
                     dirty: desc.dirty, // start_slot 的 Dirty 状态（slot.dirty 已消费）
@@ -613,10 +629,14 @@ impl SlotTable {
                 // Skip 子树 slot（content 未执行——desc 空但非 scope）：
                 // 整棵子树按 key 结构恢复（物化时从 prev_node_by_key 恢复——
                 // 不物化上帧 desc——子树整体保留，children 重新挂接）
+                let sm = slot.skip_modifier.take();
                 let mut node = DescNode {
                     key: slot.key,
                     skip: true,
-                    modifier: Modifier::default(),
+                    modifier: sm.clone().unwrap_or_default(),
+                    // 容器自身 build 被调（set_skip_modifier 写入）→ 应用新 modifier；
+                    // 后代（Skip 子树内未执行）→ 保留缓存节点 modifier（不清空视觉）
+                    preserve_modifier: sm.is_none(),
                     policy: None,
                     on_remove: None,
                     dirty: false,
@@ -932,7 +952,7 @@ impl Composer {
     /// 完整分离后由 materialize() 从组合树（Slot desc）调用——替代 start_node 的组合期建节点。
     /// Skip 节点（desc.skip）从 prev_node_by_key 恢复缓存节点（content 未执行——节点保留）
     fn materialize_node(&mut self, desc: DescNode, parent: Option<usize>) -> Option<usize> {
-        let DescNode { key, skip, modifier, policy, on_remove, dirty, children } = desc;
+        let DescNode { key, skip, modifier, preserve_modifier, policy, on_remove, dirty, children } = desc;
         let index = if skip {
             // Skip：恢复上帧节点（key 匹配——保留测量/内容；children 清空后
             // 按 slot 树结构重新挂接（子节点逐个从 prev_node_by_key 恢复——
@@ -942,6 +962,12 @@ impl Composer {
                     self.reused_nodes.insert(idx);
                     let n = &mut self.arena.nodes[idx];
                     n.children.clear();
+                    // 应用本帧组合产物 modifier（容器自身 Skip——外层构造的 modifier
+                    // 参数可能变化（offset/background 等视觉属性）——不更新则视觉卡旧值；
+                    // 后代（preserve_modifier）保留缓存节点 modifier——不清空视觉）
+                    if !preserve_modifier {
+                        n.modifier = modifier;
+                    }
                     n.is_replay_stub = false;
                     n.dirty = false; // 恢复缓存——测量折叠（保留测量）
                     Some(idx)
@@ -1108,6 +1134,8 @@ impl Composer {
         // content 不执行（无新描述），物化时按 key 恢复缓存节点（skip 标记）
         if is_skip {
             self.slot_table.set_current_desc(None);
+            // 保留本帧组合产物 modifier（父层重跑传入的新 offset/背景——物化应用）
+            self.slot_table.set_skip_modifier(modifier);
         } else {
             self.slot_table.set_current_desc(Some(NodeDesc {
                 key,
