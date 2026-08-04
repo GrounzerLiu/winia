@@ -66,14 +66,14 @@ fn default_spec() -> AnimationSpec {
     AnimationSpec::Tween(crate::animation::TweenSpec::default())
 }
 
-/// 纯淡入（300ms 线性）——布局不动
+/// 纯淡入（300ms 线性）+ 高度展开（布局平滑，下方组件随之下移）
 pub fn fade_in() -> EnterTransition {
-    EnterTransition { spec: default_spec(), offset_y: 0.0, layout: false }
+    EnterTransition { spec: default_spec(), offset_y: 0.0, layout: true }
 }
 
-/// 纯淡出（300ms 线性）——布局不动
+/// 纯淡出（300ms 线性）+ 高度收缩（布局平滑，下方组件随之上移）
 pub fn fade_out() -> ExitTransition {
-    ExitTransition { spec: default_spec(), offset_y: 0.0, layout: false }
+    ExitTransition { spec: default_spec(), offset_y: 0.0, layout: true }
 }
 
 /// 淡入 + 从下方 20px 滑入 + 高度展开
