@@ -54,6 +54,9 @@ fn animation_demo(ctx: &mut ComposeCtx) {
                     section5(ctx);
                     section6(ctx, &clicked);
                     section7(ctx, &clicked);
+                    section8(ctx, &clicked);
+                    section9(ctx, &clicked);
+                    section10(ctx, &clicked);
                 });
         });
 }
@@ -272,6 +275,105 @@ fn section7(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
         .modifier(Modifier::new()
             .size(&dp, 20.0)
             .background(Color::from_argb(255, 63, 81, 181), Shape::rounded(4.0)))
+        .build(ctx, |_| {});
+}
+
+/// 第 8 节：updateTransition 多属性协同（float + color + dp 同 spec 同步动画）。
+#[composable]
+fn section8(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
+    Text::new("8. updateTransition (float + color + dp)")
+        .font_size(14.0)
+        .color(Color::from_argb(200, 100, 100, 100))
+        .modifier(Modifier::new().padding_vertical(8.0))
+        .build(ctx);
+
+    let mut t = ctx.update_transition(
+        if clicked.get() { 1u8 } else { 0u8 },
+        AnimationSpec::Tween(winia::animation::TweenSpec::default()),
+        "s8",
+    );
+    // 三个属性由同一 Transition 驱动——切换时同步动画（Compose updateTransition 语义）
+    let w = t.animate_float(ctx, |&s| if s == 1 { 220.0 } else { 40.0 }, "w");
+    let c = t.animate_color(ctx, |&s| {
+        if s == 1 { Color::from_argb(255, 255, 152, 0) } else { Color::from_argb(255, 33, 150, 243) }
+    }, "c");
+    let dp = t.animate_dp(ctx, |&s| if s == 1 { 40.dp() } else { 12.dp() }, "dp");
+
+    Column::new()
+        .modifier(Modifier::new()
+            .size(&w, &dp)
+            .background({
+                let c = c.clone();
+                move || c.peek()
+            }, Shape::rounded(8.0)))
+        .build(ctx, |_| {});
+}
+
+/// 第 9 节：Int 系列（animateIntAsState / animateIntOffsetAsState / animateIntSizeAsState）。
+#[composable]
+fn section9(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
+    Text::new("9. Int 系列 (animateIntAsState)")
+        .font_size(14.0)
+        .color(Color::from_argb(200, 100, 100, 100))
+        .modifier(Modifier::new().padding_vertical(8.0))
+        .build(ctx);
+
+    let spec = AnimationSpec::Tween(winia::animation::TweenSpec {
+        duration: std::time::Duration::from_millis(400),
+        ..Default::default()
+    });
+    let n = ctx.animate_int_as_state(if clicked.get() { 128 } else { 3 }, spec.clone());
+    let off = ctx.animate_int_offset_as_state(
+        if clicked.get() { (200, 40) } else { (8, 8) }, spec.clone(),
+    );
+    let sz = ctx.animate_int_size_as_state(
+        if clicked.get() { (180, 48) } else { (60, 24) }, spec,
+    );
+    let (ox, oy) = off.get();
+    let (sw, sh) = sz.get();
+    Text::new(format!("int={} offset=({},{}) size=({},{})", n.get(), ox, oy, sw, sh))
+        .font_size(14.0)
+        .color(Color::from_argb(255, 96, 125, 139, ))
+        .modifier(Modifier::new().padding(6.0).background(Color::from_argb(30, 96, 125, 139), Shape::rounded(4.0)))
+        .build(ctx);
+}
+
+/// 第 10 节：RepeatableSpec start_offset（首轮延迟）。
+#[composable]
+fn section10(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
+    Text::new("10. Repeatable + startOffset (delay 300ms)")
+        .font_size(14.0)
+        .color(Color::from_argb(200, 100, 100, 100))
+        .modifier(Modifier::new().padding_vertical(8.0))
+        .build(ctx);
+
+    // 目标随 clicked 切换（0↔1）：动画才启动；spec 带 300ms 首轮延迟——
+    // 点击后 300ms 停在原位，然后 250ms×2 往返移动
+    let pulse = ctx.animate_float_as_state(
+        if clicked.get() { 1.0 } else { 0.0 },
+        AnimationSpec::Repeatable(
+            winia::animation::RepeatableSpec::new(
+                2, winia::animation::RepeatMode::Restart,
+                AnimationSpec::Tween(winia::animation::TweenSpec {
+                    duration: std::time::Duration::from_millis(250),
+                    interpolator: winia::animation::interpolator::linear,
+                }),
+            ).with_start_offset(std::time::Duration::from_millis(300)),
+        ),
+    );
+    // graphics_layer 渲染期读取（零重组）
+    Column::new()
+        .modifier(Modifier::new()
+            .size(60.0, 24.0)
+            .graphics_layer({
+                let pulse = pulse.clone();
+                move || winia::modifier::GraphicsLayerParams {
+                    alpha: 0.3 + pulse.peek() * 0.7,
+                    translation_x: pulse.peek() * 80.0,
+                    ..Default::default()
+                }
+            })
+            .background(Color::from_argb(255, 121, 85, 72), Shape::rounded(4.0)))
         .build(ctx, |_| {});
 }
 

@@ -29,49 +29,55 @@
 
 ---
 
-## 阶段 1：API 补齐（小改动、快收益）—— ✅/⬜ 待做
+## 阶段 1：API 补齐（小改动、快收益）—— ✅ 已完成（166 tests）
 
 **目标**：把 `animate*AsState` / Transition / Spec 的变体补齐到 Compose 同级。
 
 ### 步骤
 
-**1. Transition 补多属性变体**（`animation.rs` Transition impl）：
+**1. Transition 补多属性变体**（`animation.rs` Transition impl）：—— ✅ 已完成
 ```rust
 impl<T: Clone + PartialEq + 'static> Transition<T> {
     pub fn animate_float(&mut self, ctx, target_fn, label) -> State<f32>;      // ✅ 已有
-    pub fn animate_color(&mut self, ctx, target_fn, label) -> State<Color>;     // 新增——push_animatable_color
-    pub fn animate_dp(&mut self, ctx, target_fn, label) -> State<Dp>;           // 新增
-    pub fn animate_offset(&mut self, ctx, target_fn, label) -> State<Offset>;   // 新增
+    pub fn animate_color(&mut self, ctx, target_fn, label) -> State<Color>;     // ✅ 新增——走泛型 animate_value → push_animatable
+    pub fn animate_dp(&mut self, ctx, target_fn, label) -> State<Dp>;           // ✅ 新增
+    pub fn animate_offset(&mut self, ctx, target_fn, label) -> State<Offset>;   // ✅ 新增
 }
 ```
-- 通用化：抽内部辅助 `fn transition_value<T>(ctx, target_fn, spec, remember_init)`——各变体只差类型与 push 函数
+- 实现：抽内部辅助 `fn animate_value<T2>(ctx, value)`（remember + push_animatable）——各变体只差目标值类型与提取闭包
 
-**2. Int 系列 as_state**（`composer.rs`）：
+**2. Int 系列 as_state**（`composer.rs`）：—— ✅ 已完成
 ```rust
-pub fn animate_int_as_state(&mut self, target: i32, spec) -> State<i32>;
-pub fn animate_int_offset_as_state(&mut self, target: (i32, i32), spec) -> State<(i32,i32)>;
-pub fn animate_int_size_as_state(&mut self, target: (i32, i32), spec) -> State<(i32,i32)>;
+pub fn animate_int_as_state(&mut self, target: i32, spec) -> State<i32>;                              // ✅
+pub fn animate_int_offset_as_state(&mut self, target: (i32, i32), spec) -> State<(i32,i32)>;          // ✅
+pub fn animate_int_size_as_state(&mut self, target: (i32, i32), spec) -> State<(i32,i32)>;            // ✅
 ```
-- 需 `AnimatableValue` 为 i32/(i32,i32) 实现（lerp 插值）
+- `AnimatableValue` 为 i32 / (i32, i32) 实现（lerp 四舍五入；(i32,i32) supports_spring=false）—— ✅
+- 验证：demo section9——150ms 采样 int=49 offset=(78,20)（400ms 动画 37% 插值 ✓）
+- 测试：`int_value_lerp_rounds` / `int_offset_lerp_rounds` / `animatable_i32_animates`
 
-**3. `RepeatableSpec` 加 `start_offset`**（对齐 Compose repeatable 的 StartOffset）：
+**3. `RepeatableSpec` 加 `start_offset`**（对齐 Compose repeatable 的 StartOffset）：—— ✅ 已完成
 ```rust
 pub struct RepeatableSpec {
     pub iterations: u32,
     pub mode: RepeatMode,
     pub base: AnimationSpec,
-    pub start_offset: Duration,   // 新增——首轮延迟
+    pub start_offset: Duration,   // ✅ 新增——首轮延迟（delay 语义），期间值停在 from
 }
+impl RepeatableSpec { pub fn with_start_offset(self, offset: Duration) -> Self; }
 ```
-- `Animatable::update` 里首轮先消耗 start_offset
+- `Animatable::update` Repeatable 分支：`total = base×iterations + start_offset`；`eff = elapsed - start_offset`，eff==0 时停在 from
+- 测试：`repeatable_start_offset_delays_first_cycle`（延迟期断言停在 from，完成后断言终值）
 
-**4. 泛型 `animate_value_as_state<T>`**：
+**4. 泛型 `animate_value_as_state<T>`**：—— ✅ 已完成
 ```rust
-pub fn animate_value_as_state<T: AnimatableValue + Send + Sync + 'static>(
+pub fn animate_value_as_state<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(
     &mut self, target: T, spec: AnimationSpec,
 ) -> State<T>;
 ```
-- 内部 = push_animatable（已有泛型）——只是 ComposeCtx 层缺泛型入口
+- 注意：Color 建议用 `animate_color_as_state`（专用 CAM16-UCS 注册表，避免跨列表双驱动）
+
+**Demo**：section8（updateTransition float+color+dp 协同）/ section9（Int 系列）/ section10（Repeatable+startOffset）—— ✅
 
 ### 验证
 - `cargo test --lib` 全过
@@ -243,7 +249,7 @@ cargo build -p winia --example animation_demo --features debug-server
 
 ## 里程碑检查
 
-- [ ] 阶段 1：API 补齐（Transition 变体 / Int 系列 / start_offset / 泛型 as_state）
+- [x] 阶段 1：API 补齐（Transition 变体 / Int 系列 / start_offset / 泛型 as_state）
 - [ ] 阶段 2：AnimatedVisibility（延迟移除 + enter/exit）
 - [ ] 阶段 3：Crossfade / AnimatedContent
 - [ ] 阶段 4：animateContentSize

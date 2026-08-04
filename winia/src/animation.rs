@@ -387,7 +387,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
                     _ => Duration::from_millis(300),
                 };
                 let elapsed = now - state.start;
-                let total = base_duration.saturating_mul(spec.iterations);
+                let total = base_duration.saturating_mul(spec.iterations) + spec.start_offset;
                 if elapsed >= total {
                     // 完成值：Reverse + 偶数次时最后 cycle 结束于 from（否则结束于 to）
                     let end_val = match spec.mode {
@@ -398,15 +398,22 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
                     };
                     (end_val, true)
                 } else {
-                    let cycle = elapsed.as_secs_f64() % base_duration.as_secs_f64().max(0.001);
-                    let t = (cycle / base_duration.as_secs_f64().max(0.001)) as f32;
-                    let cycle_idx = (elapsed.as_secs_f64() / base_duration.as_secs_f64().max(0.001)).floor() as u32;
-                    let factor = match spec.mode {
-                        RepeatMode::Restart => t,
-                        RepeatMode::Reverse => if cycle_idx % 2 == 0 { t } else { 1.0 - t },
-                    };
-                    let value = state.from.lerp(&state.to, factor);
-                    (value, false)
+                    // 首轮延迟期间停在 from（StartOffset.Delay 语义）
+                    let eff = elapsed.saturating_sub(spec.start_offset);
+                    let base = base_duration.as_secs_f64().max(0.001);
+                    if eff == Duration::ZERO {
+                        (state.from.clone(), false)
+                    } else {
+                        let cycle = eff.as_secs_f64() % base;
+                        let t = (cycle / base) as f32;
+                        let cycle_idx = (eff.as_secs_f64() / base).floor() as u32;
+                        let factor = match spec.mode {
+                            RepeatMode::Restart => t,
+                            RepeatMode::Reverse => if cycle_idx % 2 == 0 { t } else { 1.0 - t },
+                        };
+                        let value = state.from.lerp(&state.to, factor);
+                        (value, false)
+                    }
                 }
             }
             AnimationSpec::Snap => {
@@ -500,6 +507,17 @@ impl ComposeCtx<'_> {
 }
 
 impl<T: Clone + PartialEq + 'static> Transition<T> {
+    /// 通用动画值注册：各变体只差目标值类型与提取闭包
+    fn animate_value<T2: Clone + PartialEq + crate::animation::AnimatableValue + Send + Sync + 'static>(
+        &mut self,
+        ctx: &mut ComposeCtx,
+        value: T2,
+    ) -> State<T2> {
+        let state: State<T2> = ctx.remember(|| value.clone());
+        crate::animation::push_animatable(state.clone(), value, self.spec.clone());
+        state
+    }
+
     pub fn animate_float(
         &mut self,
         ctx: &mut ComposeCtx,
@@ -507,9 +525,40 @@ impl<T: Clone + PartialEq + 'static> Transition<T> {
         _label: &'static str,
     ) -> State<f32> {
         let value = target_fn(&self.target);
-        let state: State<f32> = ctx.remember(|| value);
-        crate::animation::push_animatable(state.clone(), value, self.spec.clone());
-        state
+        self.animate_value(ctx, value)
+    }
+
+    /// animateColor — Transition 目标变化时颜色动画（CAM16-UCS 插值）
+    pub fn animate_color(
+        &mut self,
+        ctx: &mut ComposeCtx,
+        target_fn: impl Fn(&T) -> crate::modifier::Color,
+        _label: &'static str,
+    ) -> State<crate::modifier::Color> {
+        let value = target_fn(&self.target);
+        self.animate_value(ctx, value)
+    }
+
+    /// animateDp — Transition 目标变化时 Dp 动画
+    pub fn animate_dp(
+        &mut self,
+        ctx: &mut ComposeCtx,
+        target_fn: impl Fn(&T) -> crate::unit::Dp,
+        _label: &'static str,
+    ) -> State<crate::unit::Dp> {
+        let value = target_fn(&self.target);
+        self.animate_value(ctx, value)
+    }
+
+    /// animateOffset — Transition 目标变化时 Offset 动画
+    pub fn animate_offset(
+        &mut self,
+        ctx: &mut ComposeCtx,
+        target_fn: impl Fn(&T) -> crate::unit::Offset,
+        _label: &'static str,
+    ) -> State<crate::unit::Offset> {
+        let value = target_fn(&self.target);
+        self.animate_value(ctx, value)
     }
 }
 
@@ -641,11 +690,20 @@ pub struct RepeatableSpec {
     pub iterations: u32,
     pub mode: RepeatMode,
     pub base: Box<AnimationSpec>,
+    /// 首轮开始前的延迟（对标 Compose `StartOffset(offset, delay)`——本项目仅支持 delay 语义；
+    /// 期间值停在 from，之后正常循环）
+    pub start_offset: Duration,
 }
 
 impl RepeatableSpec {
     pub fn new(iterations: u32, mode: RepeatMode, base: AnimationSpec) -> Self {
-        Self { iterations, mode, base: Box::new(base) }
+        Self { iterations, mode, base: Box::new(base), start_offset: Duration::ZERO }
+    }
+
+    /// 带首轮延迟的构造（StartOffset.Delay 语义）
+    pub fn with_start_offset(mut self, offset: Duration) -> Self {
+        self.start_offset = offset;
+        self
     }
 }
 
@@ -685,6 +743,24 @@ impl AnimatableValue for crate::modifier::Color {
     }
     fn to_f32(&self) -> f32 { self.a as f32 }
     fn from_f32(v: f32) -> Self { Self::from_argb(v as u8, 0, 0, 0) }
+}
+
+impl AnimatableValue for i32 {
+    fn lerp(&self, to: &i32, t: f32) -> i32 { (*self as f32 + (*to - *self) as f32 * t).round() as i32 }
+    fn to_f32(&self) -> f32 { *self as f32 }
+    fn from_f32(v: f32) -> i32 { v.round() as i32 }
+    fn supports_spring() -> bool { true }
+}
+
+/// 整型坐标/尺寸（对标 Compose IntOffset/IntSize——本项目以 (i32, i32) 表示）
+impl AnimatableValue for (i32, i32) {
+    fn lerp(&self, to: &(i32, i32), t: f32) -> (i32, i32) {
+        ((self.0 as f32 + (to.0 - self.0) as f32 * t).round() as i32,
+         (self.1 as f32 + (to.1 - self.1) as f32 * t).round() as i32)
+    }
+    fn to_f32(&self) -> f32 { ((self.0 * self.0 + self.1 * self.1) as f32).sqrt() }
+    fn from_f32(v: f32) -> (i32, i32) { (v.round() as i32, v.round() as i32) }
+    fn supports_spring() -> bool { false }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -925,6 +1001,72 @@ mod tests {
         // 3 × 40ms = 120ms，应完成
         assert!(frames < 100, "repeatable should finish within 100 frames");
         assert_eq!(anim.state.get(), 100.0);
+    }
+
+    #[test]
+    fn repeatable_start_offset_delays_first_cycle() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        // StartOffset.Delay 语义：首轮延迟 100ms，期间值停在 from
+        let mut anim = Animatable::<f32>::new(State::new(0.0));
+        let spec = RepeatableSpec::new(2, RepeatMode::Restart,
+            AnimationSpec::Tween(TweenSpec { duration: Duration::from_millis(40), interpolator: interpolator::linear }))
+            .with_start_offset(Duration::from_millis(100));
+        anim.animate_to(100.0, AnimationSpec::Repeatable(spec));
+        // 30ms：仍在延迟期——值应停在 from(0)
+        std::thread::sleep(Duration::from_millis(30));
+        anim.update();
+        assert_eq!(anim.state.get(), 0.0, "start_offset 期间应停在 from");
+        // 再 30ms：仍应停在 from（累计 60ms < 100ms）
+        std::thread::sleep(Duration::from_millis(30));
+        anim.update();
+        assert_eq!(anim.state.get(), 0.0);
+        // 跳过延迟+2 周期：total = 100 + 2×40 = 180ms——推进至完成
+        let mut frames = 0;
+        while anim.update() && frames < 60 {
+            std::thread::sleep(Duration::from_millis(10));
+            frames += 1;
+        }
+        assert!(frames < 60, "start_offset repeatable should finish");
+        assert_eq!(anim.state.get(), 100.0, "Restart 模式偶数次完成于 to");
+    }
+
+    #[test]
+    fn int_value_lerp_rounds() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(AnimatableValue::lerp(&0i32, &100i32, 0.0), 0);
+        assert_eq!(AnimatableValue::lerp(&0i32, &100i32, 0.25), 25);
+        assert_eq!(AnimatableValue::lerp(&0i32, &100i32, 0.5), 50);
+        assert_eq!(AnimatableValue::lerp(&0i32, &100i32, 1.0), 100);
+        assert_eq!(AnimatableValue::lerp(&0i32, &100i32, 0.333), 33); // 33.3 → 四舍五入 33
+        // from_f32 / to_f32 往返
+        assert_eq!(<i32 as AnimatableValue>::from_f32(42.7), 43);
+        assert_eq!(AnimatableValue::to_f32(&-7i32), -7.0);
+    }
+
+    #[test]
+    fn int_offset_lerp_rounds() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(AnimatableValue::lerp(&(0, 0), &(10, 20), 0.5), (5, 10));
+        assert_eq!(AnimatableValue::lerp(&(0, 0), &(10, 20), 1.0), (10, 20));
+        assert_eq!(AnimatableValue::lerp(&(0, 0), &(10, 20), 0.0), (0, 0));
+        assert_eq!(AnimatableValue::lerp(&(0, 0), &(3, 3), 0.5), (2, 2)); // 1.5 → 2
+        // 负向插值
+        assert_eq!(AnimatableValue::lerp(&(10, 10), &(0, 0), 0.5), (5, 5));
+        assert!(!<(i32, i32) as AnimatableValue>::supports_spring(), "向量类型不支持 Spring");
+    }
+
+    #[test]
+    fn animatable_i32_animates() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut anim = Animatable::<i32>::new(State::new(0));
+        anim.animate_to(100, AnimationSpec::Tween(TweenSpec::default()));
+        let mut frames = 0;
+        while anim.update() && frames < 60 {
+            std::thread::sleep(Duration::from_millis(10));
+            frames += 1;
+        }
+        assert!(frames < 60, "int tween should finish");
+        assert_eq!(anim.state.get(), 100);
     }
 
     #[test]

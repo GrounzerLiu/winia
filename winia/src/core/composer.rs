@@ -310,6 +310,38 @@ impl<'a> ComposeCtx<'a> {
         state
     }
 
+    /// animateIntAsState — 动画整数值（对标 Compose animateIntAsState）
+    pub fn animate_int_as_state(&mut self, target: i32, spec: crate::animation::AnimationSpec) -> State<i32> {
+        let state = self.remember(|| target);
+        crate::animation::push_animatable(state.clone(), target, spec);
+        state
+    }
+
+    /// animateIntOffsetAsState — 动画整型坐标 (x, y)（对标 Compose animateIntOffsetAsState）
+    pub fn animate_int_offset_as_state(&mut self, target: (i32, i32), spec: crate::animation::AnimationSpec) -> State<(i32, i32)> {
+        let state = self.remember(|| target);
+        crate::animation::push_animatable(state.clone(), target, spec);
+        state
+    }
+
+    /// animateIntSizeAsState — 动画整型尺寸 (w, h)（对标 Compose animateIntSizeAsState）
+    pub fn animate_int_size_as_state(&mut self, target: (i32, i32), spec: crate::animation::AnimationSpec) -> State<(i32, i32)> {
+        let state = self.remember(|| target);
+        crate::animation::push_animatable(state.clone(), target, spec);
+        state
+    }
+
+    /// animateValueAsState — 泛型值动画（对标 Compose animateValueAsState）。
+    /// 任何实现 `AnimatableValue` 的类型（f32/i32/Dp/Sp/Offset/Size/Color/自定义）都可动画；
+    /// Color 建议用 `animate_color_as_state`（专用 CAM16-UCS 注册表，避免跨列表双驱动）。
+    pub fn animate_value_as_state<T: Clone + PartialEq + crate::animation::AnimatableValue + Send + Sync + 'static>(
+        &mut self, target: T, spec: crate::animation::AnimationSpec,
+    ) -> State<T> {
+        let state = self.remember(|| target.clone());
+        crate::animation::push_animatable(state.clone(), target, spec);
+        state
+    }
+
     /// 设置当前节点的 IME 预输入回调
     pub fn set_current_node_ime_callback(&self, callback: Box<dyn Fn(&str, Option<(usize, usize)>) + Send>) {
         if let Some(&idx) = self.composer.node_stack.last() {
