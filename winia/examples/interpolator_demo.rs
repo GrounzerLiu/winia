@@ -92,8 +92,10 @@ fn interpolator_demo(ctx: &mut ComposeCtx) {
         });
 }
 
-/// 一行：名称 + 轨道 + 移动色块
-const TRACK_W: f32 = 300.0;
+/// 一行：名称 + 轨道 + 移动色块。轨道宽度留余量：超调插值器（Back/Elastic 峰值 ~1.3）
+/// 的色块位置 = 轨道起点 + t×(TRACK_W-16)——t>1 时右移，需保证仍在窗口内。
+const TRACK_W: f32 = 270.0;
+const NAME_W: f32 = 100.0;
 
 #[winia::composable]
 fn interpolator_row(
@@ -111,34 +113,34 @@ fn interpolator_row(
             Text::new(name)
                 .font_size(12.0)
                 .color(Color::from_argb(220, 120, 120, 120))
-                .modifier(Modifier::new().width(110.0))
+                .modifier(Modifier::new().width(NAME_W))
                 .build(ctx);
 
             Column::new()
                 .modifier(Modifier::new().width(6.0).height(16.0))
                 .build(ctx, |_| {});
 
-            // 轨道（浅色背景）
+            // 轨道容器（浅色背景）+ 内部色块：色块在轨道内移动（x = interp(progress)×(TRACK_W-16)）
             Column::new()
                 .modifier(Modifier::new()
                     .width(TRACK_W)
                     .height(16.0)
                     .background(Color::from_argb(25, 255, 255, 255), Shape::rounded(3.0)))
-                .build(ctx, |_| {});
-
-            // 色块：x = interp(progress) * (TRACK_W - 16) —— 渲染期求值（零重组）
-            let progress = progress.clone();
-            Column::new()
-                .modifier(Modifier::new()
-                    .size(16.0, 16.0)
-                    .graphics_layer(move || {
-                        let t = interp.interpolate(progress.peek());
-                        winia::modifier::GraphicsLayerParams {
-                            translation_x: t * (TRACK_W - 16.0),
-                            ..Default::default()
-                        }
-                    })
-                    .background(Color::from_argb(255, 255, 152, 0), Shape::rounded(3.0)))
-                .build(ctx, |_| {});
+                .build(ctx, |ctx| {
+                    // 色块：渲染期求值（零重组）
+                    let progress = progress.clone();
+                    Column::new()
+                        .modifier(Modifier::new()
+                            .size(16.0, 16.0)
+                            .graphics_layer(move || {
+                                let t = interp.interpolate(progress.peek());
+                                winia::modifier::GraphicsLayerParams {
+                                    translation_x: t * (TRACK_W - 16.0),
+                                    ..Default::default()
+                                }
+                            })
+                            .background(Color::from_argb(255, 255, 152, 0), Shape::rounded(3.0)))
+                        .build(ctx, |_| {});
+                });
         });
 }
