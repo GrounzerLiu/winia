@@ -10,11 +10,15 @@ fn selection_ui(ctx: &mut ComposeCtx) {
     let t2 = "🎉 Drag across 🚀 multiple texts! The highlight follows.";
     let t3 = "You can select across multiple texts! The blue highlight follows the mouse as you drag.";
     let rt = "RichText: bold italic red — also selectable!";
-    let all = format!("{}{}{}{}", t1, t2, rt, t3);
+    // 注意：on_selection_change 的偏移是**容器全局字节偏移**（含容器内所有
+    // 已注册 Text——包括标题 [A]）。all 必须与注册顺序对齐（[A] 在前 4 字节），
+    // 否则 get(s..e) 错位后可能落在 emoji 多字节中间返回 None（空切片）。
+    let all = format!("[A] {}{}{}{}", t1, t2, rt, t3);
 
     let a1 = "Container B: independent selection context.";
     let a2 = "This text is inside a separate SelectionContainer.";
-    let all_b = format!("{}{}", a1, a2);
+    // 同上：B 容器的全局偏移含 [B]（前 4 字节）——all_b 对齐
+    let all_b = format!("[B] {}{}", a1, a2);
 
     let selected_a = ctx.remember(|| String::from("(none)"));
     let selected_b = ctx.remember(|| String::from("(none)"));

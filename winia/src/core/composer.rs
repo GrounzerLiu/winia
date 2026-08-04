@@ -247,13 +247,12 @@ impl<'a> ComposeCtx<'a> {
         self.composer.selection_registrar = None;
     }
 
-    /// 给当前节点设 registrar 引用（供后续渲染/事件从中读取）
-    pub fn set_current_node_registrar(&self, reg: crate::ui::selection_container::SelectionRegistrar) {
-        if let Some(id) = self.current_node_id() {
-            if let Some(idx) = self.composer.node_stack.last() {
-                let node = &self.composer.arena.nodes[*idx];
-                *node.registrar.borrow_mut() = Some(reg);
-            }
+    /// 给当前节点设 registrar 引用（供后续渲染/事件从中读取）。
+    /// 组合期（物化前）写入当前 slot 的 desc——物化时应用到 arena 节点
+    /// （组合/布局分离后 node_stack 在组合期为空，直接写节点会丢失）。
+    pub fn set_current_node_registrar(&mut self, reg: crate::ui::selection_container::SelectionRegistrar) {
+        if let Some(desc) = &mut self.composer.slot_table.current_slot().desc {
+            desc.registrar = Some(reg);
         }
     }
 
@@ -454,6 +453,8 @@ struct NodeDesc {
     /// 本帧是否需重测（start_slot 的 Dirty 状态——slot.dirty 在 start_slot
     /// 被消费清 false，物化时须从 desc 携带）
     dirty: bool,
+    /// 文本选择 registrar（组合期 set_current_node_registrar 写入——物化时应用）
+    registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
 }
 
 /// 物化描述树（Slot 树 → 纯节点树——scope 跳过、children 提升到最近物化父）
@@ -470,6 +471,8 @@ struct DescNode {
     policy: Option<Box<dyn MeasurePolicy>>,
     on_remove: Option<Box<dyn FnOnce() + Send>>,
     dirty: bool,
+    /// 文本选择 registrar（物化时写入节点——组合期与物化期分离的传递通道）
+    registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
     children: Vec<DescNode>,
 }
 
@@ -627,6 +630,7 @@ impl SlotTable {
                     policy: desc.policy,
                     on_remove: desc.on_remove,
                     dirty: desc.dirty, // start_slot 的 Dirty 状态（slot.dirty 已消费）
+                    registrar: desc.registrar,
                     children: Vec::new(),
                 };
                 for child in &mut slot.children {
@@ -649,6 +653,7 @@ impl SlotTable {
                     policy: sp,
                     on_remove: None,
                     dirty: false,
+                    registrar: None,
                     children: Vec::new(),
                 };
                 for child in &mut slot.children {
@@ -966,7 +971,7 @@ impl Composer {
     /// 完整分离后由 materialize() 从组合树（Slot desc）调用——替代 start_node 的组合期建节点。
     /// Skip 节点（desc.skip）从 prev_node_by_key 恢复缓存节点（content 未执行——节点保留）
     fn materialize_node(&mut self, desc: DescNode, parent: Option<usize>) -> Option<usize> {
-        let DescNode { key, skip, modifier, preserve_modifier, policy, on_remove, dirty, children } = desc;
+        let DescNode { key, skip, modifier, preserve_modifier, policy, on_remove, dirty, registrar, children } = desc;
         let index = if skip {
             // Skip：恢复上帧节点（key 匹配——保留测量/内容；children 清空后
             // 按 slot 树结构重新挂接（子节点逐个从 prev_node_by_key 恢复——
@@ -1075,6 +1080,11 @@ impl Composer {
             // 兜底（children 已由降级/Enter 路径递归处理）
             return None;
         };
+        // 应用文本选择 registrar（组合期写入 desc——物化时落到节点；
+        // Skip 恢复路径的节点保留缓存 registrar，不走此处）
+        if let Some(reg) = registrar {
+            *self.arena.nodes[index].registrar.borrow_mut() = Some(reg);
+        }
         if let Some(p) = parent {
             self.arena.add_child(p, index);
         } else {
@@ -1133,6 +1143,7 @@ impl Composer {
             policy,
             on_remove,
             dirty: slot_status != SlotStatus::Clean, // 重测标记（slot.dirty 已消费）
+            registrar: None,
         }));
         // 统一依赖栈：节点 push（组件 build 期间 State 读取注册到最内层 Group——
         // 组件内读取失效目标 = 本节点（对标 Compose 最内层 Group 语义））
@@ -1208,6 +1219,7 @@ impl Composer {
                 policy,
                 on_remove,
                 dirty: true, // Enter 即重测（content 重跑——参数/内容可能变；Skip 恢复不受影响）
+                registrar: None,
             }));
         }
         self.group_skip_stack.push(is_skip);

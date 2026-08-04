@@ -127,7 +127,8 @@ fn describe_modifier(modifier: &crate::modifier::Modifier) -> String {
         ModifierElement::Background { color_fn, .. } => Some("bg(<dynamic>)".into()),
         ModifierElement::Clickable { .. } => Some("click".into()),
         ModifierElement::Focusable => Some("focus".into()),
-        ModifierElement::TextContent { content, .. } => Some(format!("text({})", content)),
+        ModifierElement::TextContent { content, .. } => Some(format!("text({})",
+            content.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n"))),
         ModifierElement::Padding { all } => Some(format!("pad({})", all)),
         _ => None,
     }).collect::<Vec<_>>().join("|")
