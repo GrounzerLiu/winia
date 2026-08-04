@@ -145,7 +145,7 @@ impl PerWindow {
             let nodes = self.composer.arena_nodes();
             if let Some(ref mut sw) = self.skia_window {
                 let sf = self.scale_factor as f32;
-                sw.draw(|surface| {
+                                sw.draw(|surface| {
                     let canvas = surface.canvas();
                     canvas.clear(skia_safe::Color::from_argb(bg.a, bg.r, bg.g, bg.b));
                     canvas.save();
