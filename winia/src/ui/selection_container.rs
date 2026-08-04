@@ -107,6 +107,9 @@ impl SelectionRegistrar {
             inner.next_global_offset += text_len;
             off
         };
+        // 保持拼接不变量：段区间互不重叠——dedup 覆盖更长文本时推进全局偏移，
+        // 否则后续段起点落在本段内部（build_selection 拼接重复/丢段）
+        inner.next_global_offset = inner.next_global_offset.max(offset + text_len);
         inner.segments.insert(slot_key, RegisteredSegment {
             slot_key, global_offset: offset, text_len, bounds: bounds.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)),
             text: text.into(),
@@ -166,9 +169,13 @@ impl SelectionRegistrar {
     /// 构造当前选择的 Selection（按注册段自动拼接文本——跨段/emoji 边界安全）
     pub(crate) fn build_selection(&self) -> Option<Selection> {
         let inner = self.inner.lock().unwrap();
+        let total = inner.next_global_offset;
         let (s, e) = (inner.selection_start?, inner.selection_end?);
         let (s, e) = (s.min(e), s.max(e));
         // 零宽（点击未拖动）→ 无选择（与 selected_range 一致）
+        if s == e { return None; }
+        // 越界 clamp 到容器总长度（防御：异常偏移不暴露空文本+越界值）
+        let (s, e) = (s.min(total), e.min(total));
         if s == e { return None; }
         let mut segs: Vec<&RegisteredSegment> = inner.segments.values().collect();
         segs.sort_by_key(|seg| seg.global_offset);
@@ -184,6 +191,11 @@ impl SelectionRegistrar {
             if let Some(part) = seg.text.get(start..end) {
                 text.push_str(part);
             }
+        }
+        // RichText 内联元素（image/placeholder）以 U+FFFC 占位——选中文本对
+        // 用户无意义（不可复制），剔除
+        if text.contains('\u{FFFC}') {
+            text = text.replace('\u{FFFC}', "");
         }
         Some(Selection { start: s, end: e, text })
     }
@@ -233,6 +245,12 @@ impl SelectionContainer {
         self
     }
 
+    /// 注册选区变化回调。参数为 `Selection`——含选中文本（框架按注册段自动
+    /// 拼接，用户无需自维护平行字符串）。
+    ///
+    /// 语义：仅在实际产生**非零宽**选择（拖动）时触发——单击（零宽）不触发，
+    /// 因此"清空选择"没有通知路径（如需在单击后刷新 UI，可在 content 外层
+    /// 自行处理）。
     pub fn on_selection_change(mut self, f: impl Fn(&Selection) + Send + Sync + 'static) -> Self {
         self.on_change = Some(Box::new(f));
         self
@@ -398,8 +416,8 @@ mod tests {
     fn test_slot_dedup() {
         let reg = SelectionRegistrar::new();
         reg.register(1, "hello", None);   // offset=0, next=5
-        reg.register(1, "hello world", None);  // same slot, NOT new → offset stays 0, next stays 5
-        assert_eq!(reg.total_text_len(), 5);
+        reg.register(1, "hello world", None);  // same slot, NOT new → offset stays 0, next=max(5,0+11)=11
+        assert_eq!(reg.total_text_len(), 11);
         assert_eq!(reg.segment_info(1), Some((0, 11))); // preserves original offset, latest len
     }
 
@@ -526,7 +544,7 @@ mod tests {
         let reg = SelectionRegistrar::new();
         // emoji 👋（4 字节）在段中间——偏移必须落在字符边界才切片成功
         reg.register(1, "Hi 👋 world", None);
-        // 选择 "👋 wo"（字节 3..11：H=0 i=1 sp=2 👋=3..7 sp=7 w=8 o=9 r=10 l=11）
+        // 选择 "👋 wor"（字节 3..11：H=0 i=1 sp=2 👋=3..7 sp=7 w=8 o=9 r=10 l=11）
         reg.set_selection(3, 11);
         let sel = reg.build_selection().unwrap();
         assert_eq!(sel.text(), "👋 wor");
