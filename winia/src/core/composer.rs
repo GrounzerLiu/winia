@@ -987,7 +987,6 @@ impl Composer {
                     if !preserve_modifier {
                         n.modifier = modifier;
                     }
-                    n.is_replay_stub = false;
                     n.dirty = false; // 恢复缓存——测量折叠（保留测量）
                     Some(idx)
                 }
@@ -1046,7 +1045,6 @@ impl Composer {
                 n.children.clear();
                 n.modifier = modifier;
                 n.measure_policy = pidx; // 显式赋值（None 清空——防类型切换残留旧 policy）
-                n.is_replay_stub = false;
                 n.on_remove = on_remove;
                 n.slot_key = key;
                 n.dirty = dirty; // Dirty → 重测；Clean → 折叠（保留测量）

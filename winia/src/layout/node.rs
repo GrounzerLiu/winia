@@ -140,9 +140,6 @@ pub struct LayoutNode {
     pub(crate) on_remove: Option<Box<dyn FnOnce() + Send>>,
     /// 是否需要重新测量（clean slot 复用时为 false）
     pub(crate) dirty: bool,
-    /// 是否 replay_clean_subtree 生成的重放 stub（clean-skip 时无 measure_policy，
-    /// 测量应直接返回缓存尺寸，绝不重新测量——否则无 policy 走叶子分支返回 0）
-    pub(crate) is_replay_stub: bool,
     /// 上次测量时的约束（用于跳过常量布局的 re-measure）
     pub(crate) cached_constraints: Option<Constraints>,
     /// composable 调用对应的 slot key（用于 replay 时子节点查找）
@@ -253,7 +250,6 @@ impl LayoutNode {
             focused: false,
             on_remove: None,
             dirty: true,
-            is_replay_stub: false,
             cached_constraints: None,
             slot_key: 0,
             cached_paragraph: std::cell::RefCell::new(None),
@@ -302,7 +298,6 @@ impl Default for LayoutNode {
             focused: false,
             on_remove: None,
             dirty: true,
-            is_replay_stub: false,
             cached_constraints: None,
             slot_key: 0,
             cached_paragraph: std::cell::RefCell::new(None),
@@ -750,9 +745,6 @@ pub(crate) fn measure_node(
     // 重放 stub：clean-skip 节点无 measure_policy，绝不能重新测量
     //（无 policy 走叶子分支会返回 0 并污染 prev_nodes 缓存，导致塌缩不可逆）。
     // stub 只在 slot 真正 clean（无状态变化）时出现；约束若变化，下帧该 slot dirty → Enter 正常重建。
-    if nodes[idx].is_replay_stub {
-        return (nodes[idx].measured_size, Vec::new());
-    }
     // 常量折叠：若节点未变脏且约束相同，直接复用上次结果
     if !nodes[idx].dirty && nodes[idx].cached_constraints == Some(constraints) {
         return (nodes[idx].measured_size, Vec::new());
