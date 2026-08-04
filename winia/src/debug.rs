@@ -273,6 +273,21 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
                 };
                 let _ = write.send(Message::text(json)).await;
             }
+            "p" => {
+                // 像素转储（调试截图分析）：二进制帧 = 8 字节 header(WxH u32 LE) + RGBA
+                let shot: Option<(u32, u32, Vec<u8>)> = DEBUG_STATE.lock().ok()
+                    .and_then(|g| g.as_ref().map(|d| (d.width, d.height, d.pixels.clone())));
+                match shot {
+                    Some((w, h, pixels)) => {
+                        let mut raw = Vec::with_capacity(8 + pixels.len());
+                        raw.extend_from_slice(&w.to_le_bytes());
+                        raw.extend_from_slice(&h.to_le_bytes());
+                        raw.extend_from_slice(&pixels);
+                        let _ = write.send(Message::Binary(raw.into())).await;
+                    }
+                    None => { let _ = write.send(Message::text("no frame".to_string())).await; }
+                }
+            }
             _ => { let _ = write.send(Message::Text("?".into())).await; }
         }
     }

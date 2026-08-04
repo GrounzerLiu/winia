@@ -267,8 +267,13 @@ impl VulkanRenderer {
     }
 
     fn get_next_frame(&mut self) -> Option<(u32, SwapchainAcquireFuture)> {
+        // acquire 带 timeout：vkAcquireNextImageKHR 会 CPU 阻塞直到图像从显示引擎
+        // 释放（free function 内部自带 fence+semaphore）。绘制前必须等图像可用，
+        // 否则绘制命令与扫描输出竞态——间歇性呈现部分渲染帧（动画启动时一帧闪烁）。
         let (image_index, suboptimal, acquire_future) =
-            match acquire_next_image(self.swapchain.clone(), None).map_err(Validated::unwrap) {
+            match acquire_next_image(self.swapchain.clone(), Some(std::time::Duration::from_millis(100)))
+                .map_err(Validated::unwrap)
+            {
                 Ok(r) => r,
                 Err(VulkanError::OutOfDate) => {
                     self.swapchain_is_valid = false;
@@ -369,8 +374,11 @@ impl VulkanRenderer {
 
             match present_result {
                 Ok(future) => {
-                    // 异步 present（fence wait(None) 实测立即返回——不等待显示刷新，
-                    // vsync 由 app 层帧率限制处理——见 app.rs 的 frame_interval 节流）
+                    // 同步等待本帧 present 完成（GPU 同步）——异步 present 链与
+                    // 当前帧绘制存在竞态（present 只 join 上一帧 present + acquire，
+                    // 不显式等待本帧 draw 完成）——间歇性呈现部分渲染帧（动画启动
+                    // 时一帧闪烁）。等待后 GPU 管线串行：draw → present → 下帧。
+                    let _ = future.wait(None);
                     self.last_render = Some(future.boxed());
                 }
                 Err(Validated::Error(VulkanError::OutOfDate)) => {
