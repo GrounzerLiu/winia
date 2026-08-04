@@ -3,7 +3,7 @@
 > 用途：给后来者或压缩上下文后的实现者——照此逐步完善动画系统。
 > 分支：`animation-improve`（基于 `text-field` @ `4edd48d`）
 > 目标：对齐 Jetpack Compose 动画 API 体系（值动画 / 内容动画 / 无限动画 / 多属性协同 / 低层控制）
-> 现状（2026-08 评估）：三层 API 已有骨架（animate_*_as_state / update_transition / Animatable）+ 无限动画 + 21 种插值器 + graphics_layer 绘制层变换——**缺口集中在"内容动画家族"与若干 API 变体**（详见阶段 0）。
+> 现状（2026-08 评估）：三层 API 已有骨架（animate_*_as_state / update_transition / Animatable）+ 无限动画 + 31 种插值器（已全部接入 Tween/Keyframes）+ graphics_layer 绘制层变换——**缺口集中在"内容动画家族"与若干 API 变体**（详见阶段 0）。
 
 ---
 
@@ -16,7 +16,7 @@
 - **低层**：`Animatable<T>`（`new`/`animate_to`/`update`/`snap_to`——帧驱动非协程）+ `push_animatable` / `push_animatable_color`
 - **无限**：`remember_infinite_transition` + `InfiniteTransition::animate_float` / `animate_color`（CAM16-UCS 插值）+ `RepeatMode::{Restart, Reverse}` + `dispose`
 - **Spec**：`AnimationSpec::{Spring, Tween, Keyframes, Repeatable, Snap}` + `SpringSpec`（bouncy 等）+ `TweenSpec` + `KeyframesSpec` + `RepeatableSpec`
-- **插值器**：21 种（`interpolator.rs`——linear/ease_in/ease_out/ease_in_out/bounce 等，trait + 批量宏）
+- **插值器**：31 种（`interpolator.rs`——Linear 手动 + 30 种宏生成表驱动曲线：EaseIn/Out/InOut × Quad/Quart/Quint/Sine/Expo/Circ/Back/Elastic/Bounce + Cubic；trait + 批量宏，全部 Box<dyn Interpolator> 接入 Tween/Keyframes）
 - **绘制层**：`Modifier::graphics_layer(GraphicsLayerParams)`（scale/alpha/rotation/translation——只触发重绘不触发布局）+ 派生值（DerivedValue）渲染期求值
 - **帧驱动**：`app.rs` AboutToWait → `update_animations()`（全局注册表 ACTIVE_ANIMATIONS）
 - **颜色动画**：f32 与 Color 分离注册表；Color 用 material-color-utilities blend/CAM16-UCS
