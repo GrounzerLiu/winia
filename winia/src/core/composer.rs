@@ -991,14 +991,24 @@ impl Composer {
                     let mut node = LayoutNode::new(modifier, pidx);
                     node.on_remove = on_remove;
                     node.slot_key = key;
-                    // 降级节点无 policy（Skip 的 desc 未执行 content——policy 缺失）：
-                    // 从 prev_nodes 恢复缓存测量折叠（避免 policy=None 测量出 0 尺寸）
+                    // 降级节点：Skip 的 desc 通常已带 policy（skip_policy 保存外层传入值），
+                    // 此处为最终兜底——从 prev_nodes 恢复缓存测量折叠
+                    // （policy 仍缺失时避免测量出 0 尺寸）
                     if let Some(cached) = self.prev_nodes.get(&key) {
                         node.measured_size = cached.measured_size;
                         node.cached_constraints = cached.cached_constraints;
                         node.dirty = false;
                     } else {
                         node.dirty = true;
+                    }
+                    // 文本内容差异检测（与 Enter 路径一致）：dirty=false 折叠测量时
+                    // 若 TextContent 变化（输入/选择）→ 强制重测，避免缓存 paragraph 旧内容
+                    if !node.dirty {
+                        if let Some(cached) = self.prev_nodes.get(&key) {
+                            if crate::layout::node::modifier_text_content_differs(&cached.modifier, &node.modifier) {
+                                node.dirty = true;
+                            }
+                        }
                     }
                     let idx = self.arena.alloc(node);
                     Some(idx)
@@ -1072,11 +1082,16 @@ impl Composer {
     }
 
     /// 物化：组合树（Slot desc）→ 布局树（arena LayoutNode）——完整分离的核心。
-    /// 由 compose 末尾调用（layout 只测量）；descs 为空时保留现有树（防御路径）
+    /// 由 compose 末尾调用（layout 只测量）。
+    /// descs 为空时：同帧二次 compose（prev 已被首次物化 drain）保留现有树；
+    /// 内容确实消失（prev 非空——正常 compose 无产物）清空树（旧行为——避免旧树持续渲染）。
     pub fn materialize(&mut self) {
         let mut descs = Vec::new();
         self.slot_table.collect_desc_tree(&mut descs);
         if descs.is_empty() {
+            if !(self.prev_node_by_key.is_empty() && self.arena.root.is_some()) {
+                self.arena.root = None;
+            }
             return; // 无组合产物（layout 防御调用——树保留；compose 末尾已物化）
         }
         // 同帧多次 compose：第一次已物化并 drain 了 prev_node_by_key——
@@ -1867,6 +1882,59 @@ fn test_is_skip_after_clean_frame() {
     });
     assert!(skip_happened,
         "无变化帧的 clean group 应 Skip（prev_nodes 按 slot_key 命中）——若 Enter 说明 is_skip 键 miss");
+}
+
+/// 回归：同帧二次 compose（recompose 循环）——首次物化后 drain 了 prev_node_by_key，
+/// 第二次 materialize 必须保留现有树（守卫：prev 空 + root 有）——否则空 prev 重建
+/// → Skip 恢复全失败 → 树塌缩（动画启动瞬间坐标错乱 bug）。
+#[test]
+fn test_same_frame_second_compose_retains_tree() {
+    let mut composer = Composer::new();
+
+    // 帧 1：初始 compose + layout（prev 构建）
+    composer.compose(|ctx| {
+        let root_key = ctx.next_key();
+        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); }
+                ctx.end_node();
+            }
+        }
+        ctx.end_restartable_group();
+    });
+    composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
+    let root1 = composer.layout_root_idx().expect("帧1 root");
+    let nodes1 = composer.arena_nodes().len();
+
+    // 帧 2 同帧两次 compose（模拟 recompose 循环——中间无 layout）：
+    // 第一次 compose 物化并 drain prev_node_by_key；第二次 materialize 命中守卫保留树
+    composer.compose(|ctx| {
+        let root_key = ctx.next_key();
+        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); }
+                ctx.end_node();
+            }
+        }
+        ctx.end_restartable_group();
+    });
+    composer.compose(|ctx| {
+        let root_key = ctx.next_key();
+        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); }
+                ctx.end_node();
+            }
+        }
+        ctx.end_restartable_group();
+    });
+
+    let root2 = composer.layout_root_idx().expect("帧2 root");
+    assert_eq!(root1, root2, "守卫应保留现有树（root 不被降级重建）");
+    assert_eq!(composer.arena_nodes().len(), nodes1, "树不应被重建/膨胀（节点数不变）");
 }
 
 /// 阶段4 键修复的**关键回归用例**：scope 层存在时（scope 是 slot 树中 group 的父，

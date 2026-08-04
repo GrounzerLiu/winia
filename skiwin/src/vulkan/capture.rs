@@ -7,7 +7,7 @@ use std::sync::Mutex;
 static CAPTURE_REQUEST: AtomicBool = AtomicBool::new(false);
 static CAPTURE_RESULT: Mutex<Option<(u32, u32, Vec<u8>)>> = Mutex::new(None);
 
-/// 请求下一帧绘制完成后捕获像素（draw 内部消费该标志）。
+/// 请求下一帧绘制完成后捕获像素。
 pub fn request_capture() {
     CAPTURE_REQUEST.store(true, Ordering::Relaxed);
 }
@@ -17,11 +17,14 @@ pub fn take_capture() -> Option<(u32, u32, Vec<u8>)> {
     CAPTURE_RESULT.lock().unwrap().take()
 }
 
-/// draw 内部调用：若已请求捕获，在 flush 后读回图像并保存。
-pub(crate) fn capture_if_requested(surface: &mut skia_safe::Surface) {
-    if !CAPTURE_REQUEST.swap(false, Ordering::Relaxed) {
-        return;
-    }
+/// draw 入口消费捕获请求（提前返回路径也消费——避免 flag 残留被
+/// 其他窗口/下一帧的 draw 消费造成跨窗口串扰）。
+pub(crate) fn take_capture_request() -> bool {
+    CAPTURE_REQUEST.swap(false, Ordering::Relaxed)
+}
+
+/// draw 内部（flush 后）调用：读回图像并保存。仅当 take_capture_request 返回 true。
+pub(crate) fn capture_surface(surface: &mut skia_safe::Surface) {
     let w = surface.width();
     let h = surface.height();
     if w <= 0 || h <= 0 {

@@ -306,6 +306,9 @@ impl VulkanRenderer {
     where
         F: FnOnce(&mut skia_safe::Surface),
     {
+        // draw 入口消费截图请求（提前返回路径也消费——flag 不残留跨帧/跨窗口）
+        let want_capture = crate::vulkan::capture::take_capture_request();
+
         // Clean up finished resources to prevent memory leaks
         if let Some(last_render) = self.last_render.as_mut() {
             if last_render.queue().is_some() {
@@ -356,7 +359,9 @@ impl VulkanRenderer {
             skia_ctx.lock().flush_and_submit();
 
             // 调试截图：flush 后读回（保证读到真实呈现帧）
-            crate::vulkan::capture::capture_if_requested(&mut surface);
+            if want_capture {
+                crate::vulkan::capture::capture_surface(&mut surface);
+            }
 
             let previous_future = self.last_render.take();
 
