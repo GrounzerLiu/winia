@@ -302,10 +302,12 @@ fn rich_text_demo_ui(ctx: &mut ComposeCtx) {
         });
 }
 
+#[composable]
 fn sec(text: &str, ctx: &mut ComposeCtx) {
     Text::new(text).font_size(15.0).color(Color::from_argb(255, 100, 100, 100)).build(ctx);
 }
 
+#[composable]
 fn card(ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
     let bg = WiniaTheme::colors().surface_container_low;
     Column::new()
