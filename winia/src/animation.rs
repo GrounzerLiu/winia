@@ -161,8 +161,14 @@ pub fn push_infinite_color(
     ACTIVE_INFINITE_COLOR_ANIMATIONS.lock().unwrap().push(anim);
 }
 
-/// 注册一个动画到全局活跃列表
+/// 注册一个动画到全局活跃列表。
+/// 同 state 的新动画替换旧动画（保留最新用户意图——快速连续点击时旧动画的
+/// on_done 会被新动画取代：进入动画未完成就点 Hide → 退出动画接管 alpha，
+/// 其 on_done（shown.set(false)）在完成时触发——否则 update_animations 的
+/// 去重会丢掉带 on_done 的动画 → 面板永不移除）
 pub fn push_animation(anim: Box<dyn AnimationInstance + 'static>) {
+    let sid = anim.state_id();
+    ACTIVE_ANIMATIONS.lock().unwrap().retain(|a| a.state_id() != sid);
     ACTIVE_ANIMATIONS.lock().unwrap().push(anim);
 }
 
