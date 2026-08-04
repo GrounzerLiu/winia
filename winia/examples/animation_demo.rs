@@ -10,6 +10,7 @@ use winia::prelude::*;
 use winia::animation::{AnimationSpec, SpringSpec, TweenSpec, Transition};
 use winia::app;
 
+#[composable]
 fn animation_demo(ctx: &mut ComposeCtx) {
     let clicked = ctx.remember(|| false);
 
