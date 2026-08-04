@@ -116,6 +116,7 @@ impl<'a> ComposeCtx<'a> {
     /// 在组合中记住一个状态。初次调用时执行 init 创建 State，后续重组时返回上次的同一个 State 实例。
     pub fn remember<T: Clone + 'static>(&mut self, init: impl FnOnce() -> T) -> State<T> {
         let slot_key = self.next_remember_key();
+        crate::debug_log!("[rm] key={:#x} cnt={}", slot_key, self.composer.compose_count());
         let pq = Arc::downgrade(&self.composer.pending_states);
         self.composer.slot_table.remember(slot_key, || {
             crate::core::state::STATE_OWNER_QUEUE.with(|q| *q.borrow_mut() = Some(pq.clone()));
@@ -407,6 +408,17 @@ impl<'a> ComposeCtx<'a> {
             let mut h: u64 = 0xcbf29ce484222325;
             h ^= scope_src; h = h.wrapping_mul(0x100000001b3);
             h ^= sid as u64; h = h.wrapping_mul(0x100000001b3);
+            // 位置折叠（与 next_group_key 一致）：同源码位置多次调用时按
+            // 父路径 + 子序号区分——兄弟 Skip/Enter 变化不漂移（防 key 碰撞）
+            let path = self.composer.slot_table.current_path().to_vec();
+            let idx = *self.composer.slot_table.child_counters.last().unwrap_or(&0);
+            h ^= 0x9e3779b97f4a7c15;
+            for &i in &path {
+                h ^= i as u64;
+                h = h.wrapping_mul(0x100000001b3);
+            }
+            h ^= idx as u64;
+            h = h.wrapping_mul(0x100000001b3);
             h
         } else {
             let path = self.composer.slot_table.current_path().to_vec();
@@ -711,7 +723,7 @@ impl SlotTable {
         let is_dirty = self.dirty_keys.remove(&key);
         #[cfg(debug_assertions)] {
             if std::env::var("WINIA_SLOT_TRACE").is_ok() {
-                eprintln!("[slot] key={} path={:?} dirty={}", key >> 32, self.path.clone(), is_dirty);
+                eprintln!("[slot] key={:#x} path={:?} dk={}", key, self.path.clone(), is_dirty);
             }
         }
         let parent = self.current_slot();
@@ -786,10 +798,12 @@ impl SlotTable {
     /// 外部标记 slot key 为 dirty（由 State 变化触发）。
     /// 同时递归标记所有祖先 slot，确保父级 start_restartable_group 返回 Enter。
     pub(crate) fn mark_dirty(&mut self, key: u64) {
+        let found = SlotTable::mark_dirty_path_scope(&mut self.root_slot, key);
         self.dirty_keys.insert(key);
-        let root = &mut self.root_slot;
-        // 一次 DFS：找到目标 → 标其及所有祖先 dirty；若目标是 scope → 整个子树强制 Enter
-        SlotTable::mark_dirty_path_scope(root, key);
+        if !found {
+            // 一次 DFS：找到目标 → 标其及所有祖先 dirty；若目标是 scope → 整个子树强制 Enter
+            SlotTable::mark_dirty_path_scope(&mut self.root_slot, key);
+        }
     }
 
     /// 查找 key 的 slot：标其及所有祖先 dirty；若目标是 scope，整个子树标 dirty（失效传播）
@@ -957,6 +971,21 @@ impl Composer {
             let mut h: u64 = 0xcbf29ce484222325;
             h ^= scope_src; h = h.wrapping_mul(0x100000001b3);
             h ^= sid as u64; h = h.wrapping_mul(0x100000001b3);
+            // 位置折叠：同一源码位置被多次调用（同一函数多次调用/循环）时，仅靠
+            // 调用序 counter 会在兄弟 Skip/Enter 变化时漂移（v1 容器 Skip → 其
+            // content 不执行 → v2 的同 base 调用 counter 少 1 → 与 v1 的 key 碰撞
+            // → slot 树与 arena 的 slot_key 失同步 → Skip 恢复 miss → 子树塌缩）。
+            // 折叠"父路径 + 子序号"使 key 与组合位置绑定——兄弟 Skip/Enter 不影响
+            // 同位置的 key（对标 Compose 编译器按调用点 + 位置编号的 key）。
+            let path = self.slot_table.current_path().to_vec();
+            let idx = *self.slot_table.child_counters.last().unwrap_or(&0);
+            h ^= 0x9e3779b97f4a7c15;
+            for &i in &path {
+                h ^= i as u64;
+                h = h.wrapping_mul(0x100000001b3);
+            }
+            h ^= idx as u64;
+            h = h.wrapping_mul(0x100000001b3);
             h
         } else {
             let path = self.slot_table.current_path().to_vec();
@@ -1133,6 +1162,15 @@ impl Composer {
     pub fn materialize(&mut self) {
         let mut descs = Vec::new();
         self.slot_table.collect_desc_tree(&mut descs);
+        {
+            fn dump(d: &DescNode, depth: usize) {
+                crate::debug_log!("[mat] {}{} key={:#x} skip={} child={}", "  ".repeat(depth),
+                    if d.skip { "S" } else { "N" }, d.key, d.skip, d.children.len());
+                for c in &d.children { dump(c, depth + 1); }
+            }
+            crate::debug_log!("[mat] == descs={} ==", descs.len());
+            for d in &descs { dump(d, 0); }
+        }
         if descs.is_empty() {
             if !(self.prev_node_by_key.is_empty() && self.arena.root.is_some()) {
                 self.arena.root = None;

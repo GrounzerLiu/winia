@@ -85,6 +85,9 @@ impl AnimatedVisibility {
     pub fn enter(mut self, t: EnterTransition) -> Self { self.enter = t; self }
     pub fn exit(mut self, t: ExitTransition) -> Self { self.exit = t; self }
 
+    /// 组合构建（普通函数——调用点应在 #[composable] 函数内，获取稳定的
+    /// STMT_STACK 上下文；build 自身不注入宏——宏对方法体的语句 id 注入与
+    /// 调用方闭包语句交互，实测会破坏 key 稳定性）
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         let visible = self.visible.clone();
 
@@ -99,17 +102,24 @@ impl AnimatedVisibility {
         let shown_now = shown.get();
 
         if vis_now && !shown_now {
-            // 进入：立即组合 content（alpha=0 不可见），再播放淡入
-            exiting.set(false);
-            shown.set(true);
+            // 进入：立即组合 content（alpha=0 不可见），再播放淡入。
+            // 注意 set_no_wake：当前 compose 继续执行 if shown.get() 即组合 content，
+            // 无需 notify 触发同帧二次 compose（会消耗 prev_node_by_key 导致 Skip 恢复失败）
+            exiting.set_no_wake(false);
+            shown.set_no_wake(true);
             start_anim(alpha.clone(), 1.0, self.enter.spec.clone(), None);
         } else if !vis_now && shown_now {
-            // 退出：播放淡出，完成后 shown=false → content 从组合移除（延迟移除）
-            exiting.set(true);
-            let s2 = shown.clone();
-            start_anim(alpha.clone(), 0.0, self.exit.spec.clone(), Some(Box::new(move || {
-                s2.set(false);
-            })));
+            // 退出：播放淡出，完成后 shown=false → content 从组合移除（延迟移除）。
+            // exiting 仅渲染期读取（graphics_layer 闭包）——set_no_wake 不触发二次 compose；
+            // 防重复：exiting 已 true（动画播放中）不再 start_anim——否则 demo 每帧重跑时
+            // 每帧重建动画对象（alpha 永不达终值、on_done 不触发、pending 每帧空转）
+            if !exiting.get() {
+                exiting.set_no_wake(true);
+                let s2 = shown.clone();
+                start_anim(alpha.clone(), 0.0, self.exit.spec.clone(), Some(Box::new(move || {
+                    s2.set(false); // 必须 notify——触发重组移除 content
+                })));
+            }
         }
 
         if shown.get() {

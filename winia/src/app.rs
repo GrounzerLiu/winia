@@ -994,7 +994,7 @@ impl ApplicationHandler for AppState {
                         _ => {}
                     }
                 }
-                if handled { if let Some(ref sw) = pw.skia_window { sw.request_redraw(); } }
+                if handled { if let Some(ref sw) = pw.skia_window { sw.request_redraw(); } pw.force_redraw = true; }
                 if debug::has_pending() { if let Some(ref sw) = pw.skia_window { sw.request_redraw(); } }
             }
             _ => {}
