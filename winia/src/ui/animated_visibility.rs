@@ -19,30 +19,46 @@ use crate::layout::{Alignment, Arrangement, ColumnLayout, LayoutDirection, Measu
 use crate::modifier::{GraphicsLayerParams, Modifier};
 use crate::ui::layout_components::Column;
 
-/// 进入过渡：透明度 + 从下往上的位移
+/// 进入过渡：透明度 + 位移 + 可选布局展开
 pub struct EnterTransition {
     pub(crate) spec: AnimationSpec,
     /// 从下往上的进入位移（像素；alpha 0→1 时 y 从 +offset_y 滑到 0）
     pub(crate) offset_y: f32,
+    /// 是否布局动画：高度 0→full 展开（下方组件随布局平滑下移）
+    pub(crate) layout: bool,
 }
 
-/// 退出过渡：透明度 + 位移
+/// 退出过渡：透明度 + 位移 + 可选布局收缩
 pub struct ExitTransition {
     pub(crate) spec: AnimationSpec,
     pub(crate) offset_y: f32,
+    /// 是否布局动画：高度 full→0 收缩（下方组件随布局平滑上移）
+    pub(crate) layout: bool,
 }
 
 impl EnterTransition {
-    /// 自定义进入过渡
+    /// 自定义进入过渡（默认带布局展开动画）
     pub fn new(spec: AnimationSpec, offset_y: f32) -> Self {
-        Self { spec, offset_y }
+        Self { spec, offset_y, layout: true }
+    }
+
+    /// 关闭布局展开（纯渲染动画——下方组件不移动）
+    pub fn no_layout(mut self) -> Self {
+        self.layout = false;
+        self
     }
 }
 
 impl ExitTransition {
-    /// 自定义退出过渡
+    /// 自定义退出过渡（默认带布局收缩动画）
     pub fn new(spec: AnimationSpec, offset_y: f32) -> Self {
-        Self { spec, offset_y }
+        Self { spec, offset_y, layout: true }
+    }
+
+    /// 关闭布局收缩（纯渲染动画——下方组件不移动）
+    pub fn no_layout(mut self) -> Self {
+        self.layout = false;
+        self
     }
 }
 
@@ -50,24 +66,24 @@ fn default_spec() -> AnimationSpec {
     AnimationSpec::Tween(crate::animation::TweenSpec::default())
 }
 
-/// 纯淡入（300ms 线性）
+/// 纯淡入（300ms 线性）——布局不动
 pub fn fade_in() -> EnterTransition {
-    EnterTransition { spec: default_spec(), offset_y: 0.0 }
+    EnterTransition { spec: default_spec(), offset_y: 0.0, layout: false }
 }
 
-/// 纯淡出（300ms 线性）
+/// 纯淡出（300ms 线性）——布局不动
 pub fn fade_out() -> ExitTransition {
-    ExitTransition { spec: default_spec(), offset_y: 0.0 }
+    ExitTransition { spec: default_spec(), offset_y: 0.0, layout: false }
 }
 
-/// 淡入 + 从下方 20px 滑入
+/// 淡入 + 从下方 20px 滑入 + 高度展开
 pub fn expand_in() -> EnterTransition {
-    EnterTransition { spec: default_spec(), offset_y: 20.0 }
+    EnterTransition { spec: default_spec(), offset_y: 20.0, layout: true }
 }
 
-/// 淡出 + 向下方 20px 滑出
+/// 淡出 + 向下方 20px 滑出 + 高度收缩
 pub fn shrink_out() -> ExitTransition {
-    ExitTransition { spec: default_spec(), offset_y: 20.0 }
+    ExitTransition { spec: default_spec(), offset_y: 20.0, layout: true }
 }
 
 /// 内容出现/消失动画容器
@@ -151,6 +167,8 @@ impl AnimatedVisibility {
                     .direction(dir)),
                 alpha: alpha.clone(),
                 exiting: exiting.clone(),
+                enter_layout: self.enter.layout,
+                exit_layout: self.exit.layout,
             };
             ctx.start_container(key, gfx, policy);
             content(ctx);
@@ -166,6 +184,10 @@ struct ShrinkPolicy {
     inner: Box<dyn MeasurePolicy>,
     alpha: State<f32>,
     exiting: State<bool>,
+    /// 进入方向是否布局动画（展开）——fade_in=false / expand_in=true
+    enter_layout: bool,
+    /// 退出方向是否布局动画（收缩）——fade_out=false / shrink_out=true
+    exit_layout: bool,
 }
 
 impl std::fmt::Debug for ShrinkPolicy {
@@ -184,11 +206,13 @@ impl MeasurePolicy for ShrinkPolicy {
     ) -> (Size, Vec<Placement>) {
         let (size, mut placements) = self.inner.measure(nodes, policies, children, constraints);
         let r = self.alpha.peek().clamp(0.0, 1.0);
-        if r < 1.0 {
-            // 布局动画期间（进入 0→1 展开 / 退出 1→0 收缩）高度跟随 alpha——
-            // 下方组件随布局平滑移动（不再瞬间跳变）
+        let exiting = self.exiting.peek();
+        // 仅当该方向配置了布局动画（expand_in/shrink_out）才收缩/展开高度；
+        // fade_in/fade_out 纯渲染动画——布局保持全高（下方组件不移动）
+        let layout = if exiting { self.exit_layout } else { self.enter_layout };
+        if layout && r < 1.0 {
             let full_h = size.height;
-            if self.exiting.peek() {
+            if exiting {
                 // 退出：内容向下滚出容器（与 alpha 淡出同步）
                 let dy = (1.0 - r) * full_h;
                 for p in &mut placements {
@@ -207,7 +231,8 @@ impl MeasurePolicy for ShrinkPolicy {
     }
 
     fn force_remeasure(&self) -> bool {
-        true
+        // 任一方向配置了布局动画就每帧重测（读最新 alpha 计算收缩高度）
+        self.enter_layout || self.exit_layout
     }
 }
 
