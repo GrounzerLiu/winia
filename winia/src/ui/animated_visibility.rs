@@ -34,6 +34,8 @@ pub struct ExitTransition {
     pub(crate) offset_y: f32,
     /// 是否布局动画：高度 full→0 收缩（下方组件随布局平滑上移）
     pub(crate) layout: bool,
+    /// 收缩时内容是否向下滚出（fade=false——内容原地淡出；shrink=true——滚出）
+    pub(crate) roll_out: bool,
 }
 
 impl EnterTransition {
@@ -50,9 +52,9 @@ impl EnterTransition {
 }
 
 impl ExitTransition {
-    /// 自定义退出过渡（默认带布局收缩动画）
+    /// 自定义退出过渡（默认带布局收缩动画 + 内容滚出）
     pub fn new(spec: AnimationSpec, offset_y: f32) -> Self {
-        Self { spec, offset_y, layout: true }
+        Self { spec, offset_y, layout: true, roll_out: true }
     }
 
     /// 关闭布局收缩（纯渲染动画——下方组件不移动）
@@ -71,9 +73,9 @@ pub fn fade_in() -> EnterTransition {
     EnterTransition { spec: default_spec(), offset_y: 0.0, layout: true }
 }
 
-/// 纯淡出（300ms 线性）+ 高度收缩（布局平滑，下方组件随之上移）
+/// 纯淡出（300ms 线性）+ 高度收缩（布局平滑，下方组件随之上移）——内容原地淡出
 pub fn fade_out() -> ExitTransition {
-    ExitTransition { spec: default_spec(), offset_y: 0.0, layout: true }
+    ExitTransition { spec: default_spec(), offset_y: 0.0, layout: true, roll_out: false }
 }
 
 /// 淡入 + 从下方 20px 滑入 + 高度展开
@@ -81,9 +83,9 @@ pub fn expand_in() -> EnterTransition {
     EnterTransition { spec: default_spec(), offset_y: 20.0, layout: true }
 }
 
-/// 淡出 + 向下方 20px 滑出 + 高度收缩
+/// 淡出 + 向下方 20px 滑出 + 高度收缩（内容滚出）
 pub fn shrink_out() -> ExitTransition {
-    ExitTransition { spec: default_spec(), offset_y: 20.0, layout: true }
+    ExitTransition { spec: default_spec(), offset_y: 20.0, layout: true, roll_out: true }
 }
 
 /// 内容出现/消失动画容器
@@ -169,6 +171,7 @@ impl AnimatedVisibility {
                 exiting: exiting.clone(),
                 enter_layout: self.enter.layout,
                 exit_layout: self.exit.layout,
+                roll_out: self.exit.roll_out,
             };
             ctx.start_container(key, gfx, policy);
             content(ctx);
@@ -188,6 +191,8 @@ struct ShrinkPolicy {
     enter_layout: bool,
     /// 退出方向是否布局动画（收缩）——fade_out=false / shrink_out=true
     exit_layout: bool,
+    /// 退出收缩时内容是否向下滚出（fade=false——原地淡出；shrink=true——滚出）
+    roll_out: bool,
 }
 
 impl std::fmt::Debug for ShrinkPolicy {
@@ -207,19 +212,18 @@ impl MeasurePolicy for ShrinkPolicy {
         let (size, mut placements) = self.inner.measure(nodes, policies, children, constraints);
         let r = self.alpha.peek().clamp(0.0, 1.0);
         let exiting = self.exiting.peek();
-        // 仅当该方向配置了布局动画（expand_in/shrink_out）才收缩/展开高度；
-        // fade_in/fade_out 纯渲染动画——布局保持全高（下方组件不移动）
+        // 仅当该方向配置了布局动画才收缩/展开高度——下方组件随布局平滑移动
         let layout = if exiting { self.exit_layout } else { self.enter_layout };
         if layout && r < 1.0 {
             let full_h = size.height;
-            if exiting {
-                // 退出：内容向下滚出容器（与 alpha 淡出同步）
+            if exiting && self.roll_out {
+                // 退出 + shrink 语义：内容向下滚出容器（与 alpha 淡出同步）
                 let dy = (1.0 - r) * full_h;
                 for p in &mut placements {
                     p.position.y += dy;
                 }
             }
-            // 进入：内容顶部对齐，面板从顶部向下展开
+            // 进入 / fade 退出：内容顶部对齐，面板从顶部向下展开/收缩
             (Size::new(size.width, full_h * r), placements)
         } else {
             (size, placements)
