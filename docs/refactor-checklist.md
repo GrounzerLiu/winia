@@ -344,3 +344,30 @@ cargo build -p winia --example animation_demo --features debug-server
 ### 明确不做（收益边际）
 - **组合树与布局树完整分离**（apply_composition 两棵树）——实际收益已通过 arena 复用 + 折叠 + key 匹配达成（与 Compose 组合产物模式一致）——设计文档标注远期
 - **阶段 4 的三套缓存合并**（prev_nodes/frame_cache/is_replay_stub）——依赖完整分离——当前机制仍需要
+
+---
+
+## 后续 API 演进（记录待办——非当前分支范围）
+
+### SelectionContainer 回调设计缺口：只给偏移、不给文本
+
+**问题本质**：`on_selection_change(start, end)` 只透出**容器全局字节偏移**，文本内容由用户自维护
+平行字符串切片（demo 的 `all`）——用户必须保证平行字符串与**注册进容器的实际文本**逐字节一致
+（含标题、含 RichText 实际渲染文本），否则切片错位/落到 emoji 多字节中间返回 None。
+
+**实际踩坑记录**（selection_demo，2026-08）：
+1. `all` 漏 `[A]` 前缀（容器全局偏移含标题 4 字节）→ 错位后撞 emoji 边界 → 空切片
+2. RichText span DSL 内部合并纯文本（41 字节），用户按变量手工拼 `all`（46 字节，多 "also "）
+   → t3 偏移错位 5 字节 → 选中 "You can select" 显示 "ble!You can selec"
+
+**建议方案**（按优先级）：
+1. **RichText 暴露实际纯文本**（`RichText::new().text(...)` 或构建后 `plain_text()`）——
+   用户直接用组件内容拼 all，消除手工拼接错误
+2. **框架提供"全局偏移 → 文本"辅助**（治本，对标 Compose AnnotatedString）：
+   `SelectionRegistrar::selected_text()` 按 segments 自动拼接返回选中内容——
+   registrar 已持有每个 segment 的 `(slot_key, global_offset, text_len)`，
+   选中范围落段/截取由框架算——用户不再需要平行字符串
+3. **回调改传段信息**（更结构化）：`on_selection_change(|ranges: Vec<(u64, Range<usize>)>| ...)`
+   ——按段取文本，但 API 更重
+
+**当前状态**：仅 demo 侧规避（all 与注册严格对齐）——框架侧未动，待后续分支处理。
