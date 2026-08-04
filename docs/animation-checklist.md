@@ -91,50 +91,49 @@ pub fn animate_value_as_state<T: Clone + PartialEq + AnimatableValue + Send + Sy
 
 ---
 
-## 阶段 2：AnimatedVisibility（出现/消失动画）—— ⬜ 待做
+## 阶段 2：AnimatedVisibility（出现/消失动画）—— ✅ 已完成
 
-**目标**：`AnimatedVisibility(visible) { content }`——进入/退出动画；退出完成后**从组合移除**（对标 Compose）。
+**目标**：`AnimatedVisibility(visible) { content }`——进入/退出动画；退出完成后**从组合移除**（对标 Compose）。—— ✅
 
-### 步骤
+### 实现（`ui/animated_visibility.rs` 120 行）
 
-**1. 组件骨架**（`ui/animated_visibility.rs`）：
+**1. 组件骨架**：—— ✅
 ```rust
-pub struct AnimatedVisibility {
-    visible: State<bool>,
-    enter: EnterTransition,   // alpha/offset/scale 组合
-    exit: ExitTransition,
-}
+pub struct AnimatedVisibility { visible: State<bool>, enter: EnterTransition, exit: ExitTransition }
 impl AnimatedVisibility {
+    pub fn new(visible: State<bool>) -> Self;      // 默认 fade_in/fade_out
+    pub fn enter(self, t: EnterTransition) -> Self;
+    pub fn exit(self, t: ExitTransition) -> Self;
     pub fn build(self, ctx, content: impl FnOnce(&mut ComposeCtx));
 }
+pub struct EnterTransition { spec, offset_y }      // fade_in() / expand_in()（20px）
+pub struct ExitTransition  { spec, offset_y }      // fade_out() / shrink_out()
 ```
-- 内部：visible 变化 → 记录 enter/exit 动画状态（自身 State：alpha/offset）
-- **退出语义**：visible=false 时先播放 exit 动画，结束后 content 不再组合（Slot 树移除）——需要一个"延迟移除"机制（Compose 用 `Pending` 状态：内容保留在组合直到 exit 完成）
 
-**2. 延迟移除**（核心难点）：
-- Slot 树层面：exit 期间 content 仍组合（占用槽位），动画完成后再移除
-- 方案：`AnimatedVisibility` 内部持 `keep_alive: State<bool>`——visible 变化时：
-  - true → 立即显示（enter 动画）
-  - false → 播放 exit → `keep_alive.set(false)` → 外层 `if keep_alive.get() { content }` 才真正移除
-- **已知坑**：重组时 `if keep_alive` 分支变化——Slot 树结构变化（content 移除）——与现有结构变化路径一致（nest_demo 已验证）
+**2. 延迟移除**（核心）：—— ✅
+- 内部 `shown: State<bool>`（是否在组合）+ `alpha: State<f32>`（透明度）
+- visible=true 且 !shown → shown=true + push 淡入（alpha 0→1）
+- visible=false 且 shown → push 淡出 + **on_complete 回调置 shown=false** → 重组 → content 移除
+- 动画经 graphics_layer（alpha + translation_y）渲染期求值——零重组
+- 中途重入：exit 中 re-enter 自动换轨（同 state 不同 target 重定向）
 
-**3. Enter/Exit 过渡定义**：
-```rust
-pub struct EnterTransition { pub alpha: f32, pub offset: (f32, f32), pub spec: AnimationSpec }
-// 默认 fadeIn：alpha 0→1；fadeOut：alpha 1→0
-pub fn fade_in() -> EnterTransition; pub fn fade_out() -> ExitTransition;
-```
-- 实现走 graphics_layer（alpha/offset——零布局）——**绘制层动画，不触发布局**
+**3. 动画引擎支持**：—— ✅
+- `Animatable::on_complete(f)` 完成回调（update 完成 / snap / 5s 超时强制完成时消费一次）
+- `start_anim` 辅助：目标已是终值直接回调（snap 语义）；非标量 Spring 降级 Tween
 
-**4. demo**：开关切换面板（show/hide + 淡入淡出 + 位移）
+**4. demo**（animated_visibility_demo）：fade / expand+shrink / spring bouncy 三面板开关—— ✅
 
 ### 验证
-- demo：点 Toggle → 内容淡入/淡出；退出完成后从树消失（`t` 命令确认节点移除）
-- 快速切换（exit 中途 re-enter）不闪断
+- WS d/u 真实指针路径（逻辑坐标——scale≠1 时 c/d/u 用逻辑坐标）：
+  - 退出动画 250ms 面板仍在（延迟移除）、1s 已移除（树 JSON 确认）
+  - 重新进入、中途重入（exit 100ms 内 re-enter）正常
+  - 点击仅 1 次 notify、动画结束后渲染停止（无空转）
+- 166 tests 全过
 
-### 已知坑
-- exit 期间重组：keep_alive 的 State 依赖注册（content 在 if 内读取）
-- 动画未完成时 visible 又变 true：取消 exit 立即 enter（Animatable 重定向——现有 mid-flight retarget 已支持）
+### 顺带修复：debug-server 空闲事件滞留
+- DebugEvent 在 RedrawRequested 处理——空闲窗口（无动画）wake_up 不产生 RedrawRequested
+  → 模拟点击永远排队。修复：new_events 兜底加 `has_queued_events()`（同 pending 节流模式）
+- 已知坑记录：**c/d/u 命令坐标是逻辑坐标**（scale=1.5 时按钮 (357,62) 逻辑 → 物理 535,93——用逻辑）；调试期间误判"点击无效"多次，实为坐标错位 + 编译失败跑旧 exe 叠加
 
 ---
 
@@ -250,7 +249,7 @@ cargo build -p winia --example animation_demo --features debug-server
 ## 里程碑检查
 
 - [x] 阶段 1：API 补齐（Transition 变体 / Int 系列 / start_offset / 泛型 as_state）
-- [ ] 阶段 2：AnimatedVisibility（延迟移除 + enter/exit）
+- [x] 阶段 2：AnimatedVisibility（延迟移除 + enter/exit）
 - [ ] 阶段 3：Crossfade / AnimatedContent
 - [ ] 阶段 4：animateContentSize
 - [ ] 阶段 5：animateDecay
