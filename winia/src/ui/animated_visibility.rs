@@ -183,13 +183,19 @@ impl MeasurePolicy for ShrinkPolicy {
         constraints: crate::layout::Constraints,
     ) -> (Size, Vec<Placement>) {
         let (size, mut placements) = self.inner.measure(nodes, policies, children, constraints);
-        if self.exiting.peek() {
-            let r = self.alpha.peek().clamp(0.0, 1.0);
+        let r = self.alpha.peek().clamp(0.0, 1.0);
+        if r < 1.0 {
+            // 布局动画期间（进入 0→1 展开 / 退出 1→0 收缩）高度跟随 alpha——
+            // 下方组件随布局平滑移动（不再瞬间跳变）
             let full_h = size.height;
-            let dy = (1.0 - r) * full_h;
-            for p in &mut placements {
-                p.position.y += dy;
+            if self.exiting.peek() {
+                // 退出：内容向下滚出容器（与 alpha 淡出同步）
+                let dy = (1.0 - r) * full_h;
+                for p in &mut placements {
+                    p.position.y += dy;
+                }
             }
+            // 进入：内容顶部对齐，面板从顶部向下展开
             (Size::new(size.width, full_h * r), placements)
         } else {
             (size, placements)
