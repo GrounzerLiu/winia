@@ -496,6 +496,9 @@ struct Slot {
     /// 但 build 的 modifier 参数可能变化（父层重跑传入的 offset/背景等视觉
     /// 属性）——物化 Skip 恢复时应用，避免视觉卡旧值（动画中间值不渲染）
     skip_modifier: Option<Modifier>,
+    /// Skip 时保存的容器 policy（外层传入——content 未执行但 policy 可用，
+    /// 物化降级/恢复时避免 policy 缺失导致测量 0 尺寸）
+    skip_policy: Option<Box<dyn MeasurePolicy>>,
 }
 
 impl Slot {
@@ -511,6 +514,7 @@ impl Slot {
             desc: None,
             visited: true, // 新建即本帧活跃
             skip_modifier: None,
+            skip_policy: None,
         }
     }
 
@@ -597,6 +601,10 @@ impl SlotTable {
         self.current_slot().skip_modifier = Some(modifier);
     }
 
+    fn set_skip_policy(&mut self, policy: Option<Box<dyn MeasurePolicy>>) {
+        self.current_slot().skip_policy = policy;
+    }
+
     /// 收集物化描述树：Slot 树 → 纯节点树（scope 跳过——children 提升；
     /// Skip 子树 slot 记 skip 标记——物化时从 prev_node_by_key 恢复）。
     /// 消费 desc（take——policy/on_remove 移出）——物化阶段调用。
@@ -630,6 +638,7 @@ impl SlotTable {
                 // 整棵子树按 key 结构恢复（物化时从 prev_node_by_key 恢复——
                 // 不物化上帧 desc——子树整体保留，children 重新挂接）
                 let sm = slot.skip_modifier.take();
+                let sp = slot.skip_policy.take();
                 let mut node = DescNode {
                     key: slot.key,
                     skip: true,
@@ -637,7 +646,7 @@ impl SlotTable {
                     // 容器自身 build 被调（set_skip_modifier 写入）→ 应用新 modifier；
                     // 后代（Skip 子树内未执行）→ 保留缓存节点 modifier（不清空视觉）
                     preserve_modifier: sm.is_none(),
-                    policy: None,
+                    policy: sp,
                     on_remove: None,
                     dirty: false,
                     children: Vec::new(),
@@ -972,7 +981,28 @@ impl Composer {
                     n.dirty = false; // 恢复缓存——测量折叠（保留测量）
                     Some(idx)
                 }
-                None => None,
+                None => {
+                    // 防御降级：Skip 恢复失败（key 不匹配/prev 缺失）→ 按 Enter 重建
+                    // （dirty=true 重测）。否则节点缺失 → 子树塌缩（间歇性坐标错乱）。
+                    // 子树完整优先于测量折叠——下一帧 key 稳定后恢复 Skip。
+                    // 注意：不能 return（会跳过尾部 add_child/children 挂接）——
+                    // 返回 Some(idx) 走统一挂接路径。
+                    let pidx = policy.map(|p| self.arena.alloc_policy(p));
+                    let mut node = LayoutNode::new(modifier, pidx);
+                    node.on_remove = on_remove;
+                    node.slot_key = key;
+                    // 降级节点无 policy（Skip 的 desc 未执行 content——policy 缺失）：
+                    // 从 prev_nodes 恢复缓存测量折叠（避免 policy=None 测量出 0 尺寸）
+                    if let Some(cached) = self.prev_nodes.get(&key) {
+                        node.measured_size = cached.measured_size;
+                        node.cached_constraints = cached.cached_constraints;
+                        node.dirty = false;
+                    } else {
+                        node.dirty = true;
+                    }
+                    let idx = self.arena.alloc(node);
+                    Some(idx)
+                }
             }
         } else {
             // 复用节点：policy 替换旧槽（本帧参数生效 + 池不增长——否则每帧 alloc 泄漏）
@@ -1026,10 +1056,8 @@ impl Composer {
             Some(idx)
         };
         let Some(index) = index else {
-            // Skip 节点无缓存（防御）：children 仍递归（挂到父）——但自身不建
-            for child in children {
-                self.materialize_node(child, parent);
-            }
+            // Skip 恢复失败已在上方降级为 Enter（重建节点）——此处仅 Enter 恒 Some
+            // 兜底（children 已由降级/Enter 路径递归处理）
             return None;
         };
         if let Some(p) = parent {
@@ -1050,6 +1078,13 @@ impl Composer {
         self.slot_table.collect_desc_tree(&mut descs);
         if descs.is_empty() {
             return; // 无组合产物（layout 防御调用——树保留；compose 末尾已物化）
+        }
+        // 同帧多次 compose：第一次已物化并 drain 了 prev_node_by_key——
+        // 第二次 materialize 若重建，Skip 恢复全部失败（prev 空）→ 树塌缩。
+        // 保留现有树（组合产物差异只影响值/结构微调——布局读最新 State 值，
+        // 结构变化下一帧（prev 已重建）自然收敛）。注意：必须在清 root 前判断。
+        if self.prev_node_by_key.is_empty() && self.arena.root.is_some() {
+            return;
         }
         self.arena.root = None;
         for desc in descs {
@@ -1136,6 +1171,9 @@ impl Composer {
             self.slot_table.set_current_desc(None);
             // 保留本帧组合产物 modifier（父层重跑传入的新 offset/背景——物化应用）
             self.slot_table.set_skip_modifier(modifier);
+            // 保留 policy（外层传入——Skip 时 content 未执行但 policy 可用；
+            // 物化恢复失败降级时避免 policy 缺失测量 0 尺寸）
+            self.slot_table.set_skip_policy(policy);
         } else {
             self.slot_table.set_current_desc(Some(NodeDesc {
                 key,
@@ -1178,7 +1216,9 @@ impl Composer {
         STMT_STACK.with(|s| s.borrow_mut().clear());
         self.scope_source_stack.clear();
         self.key_override_stack.clear();
-        self.arena.root = None;
+        // 注意：不在 compose 开头清 arena.root——materialize 管理 root
+        // （开头清 + 末尾设）。此处若清，同帧第二次 compose 的 materialize
+        // 守卫（prev 空 + root 有）失效 → 空 prev 重建 → 树塌缩。
         // 重置 Window 生命周期标志（先于未复用节点回收，on_remove 再设置新值）
         crate::ui::window::reset_lifecycle_flags();
         // 阶段D：保留上帧树（prev_node_by_key 由上帧 layout 构建）——
@@ -1390,7 +1430,9 @@ fn collect_node_keys(
     idx: usize,
     map: &mut HashMap<u64, usize>,
 ) {
-    map.insert(arena.nodes[idx].slot_key, idx);
+    if let Some(prev) = map.insert(arena.nodes[idx].slot_key, idx) {
+        #[cfg(debug_assertions)] { eprintln!("[dup-key] sk={} idx={} 被 {} 覆盖", arena.nodes[idx].slot_key >> 32, prev, idx); }
+    }
     let children = arena.nodes[idx].children.clone();
     for c in children {
         collect_node_keys(arena, c, map);

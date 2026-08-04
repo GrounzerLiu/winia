@@ -355,6 +355,9 @@ impl VulkanRenderer {
 
             skia_ctx.lock().flush_and_submit();
 
+            // 调试截图：flush 后读回（保证读到真实呈现帧）
+            crate::vulkan::capture::capture_if_requested(&mut surface);
+
             let previous_future = self.last_render.take();
 
             let present_future: Box<dyn GpuFuture> = match previous_future {

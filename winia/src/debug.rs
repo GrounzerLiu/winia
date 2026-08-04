@@ -109,14 +109,13 @@ fn build_node_json(nodes: &[LayoutNode], idx: usize, out: &mut String, depth: us
     let node = &nodes[idx];
     let indent = "  ".repeat(depth + 1);
     let mod_desc = describe_modifier(&node.modifier);
-    if depth > 0 { out.push_str(",\n"); }
     out.push_str(&format!(
         r#"{indent}{{"pos":[{:.0},{:.0}],"size":[{:.0},{:.0}],"mod":"{}","focused":{},"children":["#,
         node.position.x, node.position.y, node.measured_size.width, node.measured_size.height,
         mod_desc, node.focused,
     ));
     for (i, &child) in node.children.iter().enumerate() {
-        if i > 0 { out.push(','); }
+        if i > 0 { out.push_str(",\n"); }
         build_node_json(nodes, child, out, depth + 1);
     }
     out.push(']'); out.push('}');

@@ -1,5 +1,8 @@
+mod capture;
 mod context;
 mod renderer;
+
+pub use capture::{request_capture, take_capture};
 
 use crate::vulkan::context::VulkanRenderContext;
 use crate::vulkan::renderer::VulkanRenderer;

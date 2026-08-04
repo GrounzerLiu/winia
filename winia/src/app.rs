@@ -18,6 +18,7 @@ pub(crate) struct PendingWindow {
     pub theme: Option<crate::ui::theme::ThemeColors>,
 }
 use skiwin::{SkiaWindowTrait, vulkan::VulkanSkiaWindow};
+use skiwin::vulkan::{request_capture, take_capture};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -145,7 +146,10 @@ impl PerWindow {
             let nodes = self.composer.arena_nodes();
             if let Some(ref mut sw) = self.skia_window {
                 let sf = self.scale_factor as f32;
-                                sw.draw(|surface| {
+                if crate::debug::screenshot_requested() {
+                    request_capture();
+                }
+                sw.draw(|surface| {
                     let canvas = surface.canvas();
                     canvas.clear(skia_safe::Color::from_argb(bg.a, bg.r, bg.g, bg.b));
                     canvas.save();
@@ -154,6 +158,13 @@ impl PerWindow {
                     canvas.restore();
                     after_draw(nodes, root_idx, surface);
                 });
+                // 截图读回在 flush 之后（skiwin draw 内）——保证真实呈现帧
+                if crate::debug::screenshot_requested() {
+                    if let Some((w2, h2, pixels)) = take_capture() {
+                        crate::debug::update_pixels(&pixels, w2, h2);
+                    }
+                    crate::debug::screenshot_done();
+                }
             }
         }
         });
@@ -711,15 +722,6 @@ impl ApplicationHandler for AppState {
                 let sf = pw.scale_factor as f32;
                 pw.recompose_layout_render(|nodes, root_idx, surface| {
                     debug::update_tree(&debug::build_tree_json(nodes, root_idx));
-                    if debug::screenshot_requested() {
-                        let (pw2, ph2) = ((w * sf) as i32, (h * sf) as i32);
-                        let info = skia_safe::ImageInfo::new((pw2, ph2), skia_safe::ColorType::RGBA8888, skia_safe::AlphaType::Premul, None);
-                        let mut pixels = vec![0u8; (pw2 * ph2 * 4) as usize];
-                        if surface.read_pixels(&info, &mut pixels, pw2 as usize * 4, (0, 0)) {
-                            debug::update_pixels(&pixels, pw2 as u32, ph2 as u32);
-                        }
-                        debug::screenshot_done();
-                    }
                 });
                 pw.force_redraw = false; // 渲染成功后才清除强制帧（中途异常保留）
                 // IME 光标区域更新（输入法候选框跟随光标位置）
