@@ -458,6 +458,26 @@ pub trait MeasurePolicy: std::fmt::Debug {
 
     /// 布局阶段：给定已分配的尺寸，为子节点分配位置。
     fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]);
+
+    /// 布局动画策略：返回 true 的节点**每帧强制重测**（连同所有祖先——下方兄弟
+    /// 位置随之更新）。动画值在 measure 期直接读取（`State::peek`——不注册依赖、
+    /// 不触发重组），每帧渲染的 layout 阶段用最新值重新测量。
+    /// 典型实现：AnimatedVisibility 退出时的"高度收缩"（对标 Compose shrinkVertically）。
+    fn force_remeasure(&self) -> bool {
+        false
+    }
+}
+
+/// 判断节点自身或任一后代是否带 `force_remeasure` 布局动画策略——
+/// 有则本节点必须跳过测量缓存（后代高度变化 → 本节点尺寸/子位置随之变化）
+fn has_force_remeasure(nodes: &[LayoutNode], policies: &[Box<dyn MeasurePolicy>], idx: usize) -> bool {
+    let own = nodes[idx].measure_policy
+        .map(|p| policies[p].force_remeasure())
+        .unwrap_or(false);
+    if own {
+        return true;
+    }
+    nodes[idx].children.iter().any(|&c| has_force_remeasure(nodes, policies, c))
 }
 
 // ── 命中测试 ──
@@ -745,8 +765,12 @@ pub(crate) fn measure_node(
     // 重放 stub：clean-skip 节点无 measure_policy，绝不能重新测量
     //（无 policy 走叶子分支会返回 0 并污染 prev_nodes 缓存，导致塌缩不可逆）。
     // stub 只在 slot 真正 clean（无状态变化）时出现；约束若变化，下帧该 slot dirty → Enter 正常重建。
-    // 常量折叠：若节点未变脏且约束相同，直接复用上次结果
-    if !nodes[idx].dirty && nodes[idx].cached_constraints == Some(constraints) {
+    // 常量折叠：若节点未变脏且约束相同，直接复用上次结果。
+    // 布局动画（force_remeasure）节点及其所有祖先跳过折叠——每帧用最新动画值重测
+    if !nodes[idx].dirty
+        && !has_force_remeasure(nodes, policies, idx)
+        && nodes[idx].cached_constraints == Some(constraints)
+    {
         return (nodes[idx].measured_size, Vec::new());
     }
 

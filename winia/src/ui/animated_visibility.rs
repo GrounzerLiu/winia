@@ -15,6 +15,7 @@
 use crate::animation::{push_animation, AnimationSpec};
 use crate::core::composer::ComposeCtx;
 use crate::core::state::State;
+use crate::layout::{Alignment, Arrangement, ColumnLayout, LayoutDirection, MeasurePolicy, Placement, Size};
 use crate::modifier::{GraphicsLayerParams, Modifier};
 use crate::ui::layout_components::Column;
 
@@ -127,19 +128,80 @@ impl AnimatedVisibility {
             let exiting2 = exiting.clone();
             let enter_off = self.enter.offset_y;
             let exit_off = self.exit.offset_y;
-            Column::new()
-                .modifier(Modifier::new().graphics_layer(move || {
-                    let a = alpha2.peek();
-                    let off = if exiting2.peek() { exit_off } else { enter_off };
-                    GraphicsLayerParams {
-                        alpha: a,
-                        // 进入：y 从 +off 滑到 0；退出：y 从 0 滑到 +off（同方向公式）
-                        translation_y: (1.0 - a) * off,
-                        ..Default::default()
-                    }
-                }))
-                .build(ctx, content);
+            let gfx = Modifier::new().graphics_layer(move || {
+                let a = alpha2.peek();
+                let off = if exiting2.peek() { exit_off } else { enter_off };
+                GraphicsLayerParams {
+                    alpha: a,
+                    // 进入：y 从 +off 滑到 0；退出：y 从 0 滑到 +off（同方向公式）
+                    translation_y: (1.0 - a) * off,
+                    ..Default::default()
+                }
+            });
+            // 退出动画期间高度收缩（对标 Compose shrinkVertically）：alpha 1→0 时
+            // 高度 full→0、内容向下滚出——下方组件随布局平滑上移（不再瞬间跳变）。
+            // force_remeasure：每帧重测（布局帧读最新 alpha，零重组）
+            let key = ctx.next_key();
+            let dir = crate::ui::theme::WiniaTheme::direction();
+            let policy = ShrinkPolicy {
+                inner: Box::new(ColumnLayout::new()
+                    .arrangement(Arrangement::Start)
+                    .alignment(Alignment::Start)
+                    .spacing(0.0)
+                    .direction(dir)),
+                alpha: alpha.clone(),
+                exiting: exiting.clone(),
+            };
+            ctx.start_container(key, gfx, policy);
+            content(ctx);
+            ctx.end_node();
         }
+    }
+}
+
+/// 布局收缩策略：退出方向时高度按 alpha（1→0）收缩、内容向下滚出容器。
+/// `force_remeasure() -> true`——每帧渲染的 layout 阶段重测（及所有祖先），
+/// 用最新 alpha 值计算收缩高度；动画值用 `peek` 读取（不注册依赖、零重组）。
+struct ShrinkPolicy {
+    inner: Box<dyn MeasurePolicy>,
+    alpha: State<f32>,
+    exiting: State<bool>,
+}
+
+impl std::fmt::Debug for ShrinkPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ShrinkPolicy").finish_non_exhaustive()
+    }
+}
+
+impl MeasurePolicy for ShrinkPolicy {
+    fn measure(
+        &self,
+        nodes: &mut Vec<crate::layout::node::LayoutNode>,
+        policies: &[Box<dyn MeasurePolicy>],
+        children: &[usize],
+        constraints: crate::layout::Constraints,
+    ) -> (Size, Vec<Placement>) {
+        let (size, mut placements) = self.inner.measure(nodes, policies, children, constraints);
+        if self.exiting.peek() {
+            let r = self.alpha.peek().clamp(0.0, 1.0);
+            let full_h = size.height;
+            let dy = (1.0 - r) * full_h;
+            for p in &mut placements {
+                p.position.y += dy;
+            }
+            (Size::new(size.width, full_h * r), placements)
+        } else {
+            (size, placements)
+        }
+    }
+
+    fn place(&self, nodes: &mut Vec<crate::layout::node::LayoutNode>, children: &[usize], placements: &[Placement]) {
+        self.inner.place(nodes, children, placements);
+    }
+
+    fn force_remeasure(&self) -> bool {
+        true
     }
 }
 
