@@ -217,6 +217,17 @@ impl ApplicationHandler for AppState {
                 }
             }
         }
+        // 兜底：pending 存在（State 已变化待重组——点击/异步回调）时请求重绘。
+        // proxy_wake_up 的 request 在 winit Wait 模式偶发丢失（RedrawRequested 不来），
+        // new_events 每轮事件批次必然执行——pending 消费后自然停止（不空转）。
+        // 节流（last_request_time）：动画持续 pending 时每 16ms 至多一次。
+        let now = std::time::Instant::now();
+        for pw in self.windows.values_mut() {
+            if pw.composer.has_pending_states() && now.duration_since(pw.last_request_time) >= pw.frame_interval {
+                pw.last_request_time = now;
+                if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+            }
+        }
         self.was_animating = animating;
     }
 
@@ -258,9 +269,12 @@ impl ApplicationHandler for AppState {
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
             }
         }
-        // 异步 State 变更唤醒事件循环后需要 request_redraw
-        for pw in self.windows.values() {
-            if pw.composer.has_pending_states() {
+        // 异步 State 变更唤醒事件循环后需要 request_redraw（节流：距上次 request
+        // 够帧间隔才发——动画每帧 notify 触发 proxy_wake_up，无节流会渲染风暴）
+        let now = std::time::Instant::now();
+        for pw in self.windows.values_mut() {
+            if pw.composer.has_pending_states() && now.duration_since(pw.last_request_time) >= pw.frame_interval {
+                pw.last_request_time = now;
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
             }
         }
