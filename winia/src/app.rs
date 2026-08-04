@@ -332,7 +332,6 @@ impl ApplicationHandler for AppState {
             WindowEvent::PointerButton { position, state, button, .. } => {
                 let lp = position.to_logical::<f32>(pw.scale_factor);
                 let scene_pos = (lp.x, lp.y);
-                debug_log!("[pb] state={:?} button={:?} pos=({:.0},{:.0})", state, button, scene_pos.0, scene_pos.1); // 分支入口标记
                 let event_type = if state.is_pressed() {
                     crate::modifier::PointerEventType::Down
                 } else {
@@ -359,11 +358,9 @@ impl ApplicationHandler for AppState {
                                         let (ax, ay) = node_abs_position(nodes, r, nodes[innermost].id);
                                         let tl = crate::text::TextLayout::new(para, 0);
                                         let closest = tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(scene_pos.0 - ax, scene_pos.1 - ay));
-                                        debug_log!("[cursor] click scene=({:.0},{:.0}) abs=({:.0},{:.0}) local=({:.0},{:.0}) anchor={:?}",
-                                            scene_pos.0, scene_pos.1, ax, ay, scene_pos.0 - ax, scene_pos.1 - ay, closest);
                                         Some(closest)
-                                    } else { debug_log!("[cursor] para None"); None }
-                                } else { debug_log!("[cursor] try_borrow failed"); None };
+                                    } else { None }
+                                } else { None };
                                 pw.pointer_down_state = Some(PtrDownState {
                                     node_id: nodes[innermost].id, position: scene_pos, time: Instant::now(),
                                     selection_anchor: None, anchor_registrar: None });
@@ -404,6 +401,24 @@ impl ApplicationHandler for AppState {
                             }
                             if let Some(ref sw) = pw.skia_window { sw.set_ime_allowed(true); }
                         }
+                    }
+                    // ── Down：分发 on_pointer_event（与 Up/Move 一致）──
+                    // （03bed64 后 debug 模拟 Down 已 dispatch，真实路径补齐避免行为分叉）
+                    let nodes = pw.composer.arena_nodes();
+                    if let Some(r) = pw.composer.layout_root_idx() {
+                        let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
+                        let ptr_ev = crate::modifier::PointerEvent {
+                            event_type: crate::modifier::PointerEventType::Down,
+                            position: (0.0, 0.0),
+                            scene_position: scene_pos,
+                            kind: crate::modifier::PointerKind::from_button_source(&button),
+                            is_alt_pressed: self.modifiers.alt_key(),
+                            is_ctrl_pressed: self.modifiers.control_key(),
+                            is_shift_pressed: self.modifiers.shift_key(),
+                            is_meta_pressed: self.modifiers.meta_key(),
+                        };
+                        pw.last_pointer_kind = ptr_ev.kind.clone();
+                        dispatch_ptr_event(nodes, r, &path, &ptr_ev, scene_pos, pw.pointer_down_slot);
                     }
                 }
                 // ── Up：Compose 风格 click 检测（仅释放时——Down 保留
@@ -523,10 +538,12 @@ impl ApplicationHandler for AppState {
                         is_shift_pressed: self.modifiers.shift_key(),
                         is_meta_pressed: self.modifiers.meta_key(),
                     };
-                    dispatch_ptr_event(nodes, r, &path, &ptr_ev, scene_pos, pw.pointer_down_slot);
-                    // on_pointer_event 可能更新 State（悬停 Move 回调）——无条件
-                    // 请求重绘；仅按下时请求会漏掉悬停移动（用户看到 Drag pos 不刷新）
-                    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                    let consumed = dispatch_ptr_event(nodes, r, &path, &ptr_ev, scene_pos, pw.pointer_down_slot);
+                    // 消费（on_pointer_event 可能更新 State）或按下拖动选区时请求重绘；
+                    // 未消费的悬停移动不唤醒事件循环（避免每帧白醒）
+                    if consumed || pw.pointer_down_state.is_some() {
+                        if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                    }
                 }
             }
             WindowEvent::ModifiersChanged(m) => {
@@ -894,7 +911,8 @@ impl ApplicationHandler for AppState {
                             let nodes = pw.composer.arena_nodes();
                             if let Some(r) = pw.composer.layout_root_idx() {
                                 let path = hit_test(nodes, r, x, y);
-                                if pw.pointer_down_state.is_some() {                                    if let Some(&innermost) = path.last() {
+                                if pw.pointer_down_state.is_some() {
+                                    if let Some(&innermost) = path.last() {
                                         let down = pw.pointer_down_state.as_ref().unwrap();
                                         let dx = x - down.position.0;
                                         let dy = y - down.position.1;

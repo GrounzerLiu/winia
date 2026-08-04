@@ -1458,7 +1458,11 @@ fn collect_node_keys(
     map: &mut HashMap<u64, usize>,
 ) {
     if let Some(prev) = map.insert(arena.nodes[idx].slot_key, idx) {
-        #[cfg(debug_assertions)] { eprintln!("[dup-key] sk={} idx={} 被 {} 覆盖", arena.nodes[idx].slot_key >> 32, prev, idx); }
+        #[cfg(debug_assertions)] {
+            if std::env::var("WINIA_KEY_TRACE").is_ok() {
+                eprintln!("[dup-key] sk={} idx={} 被 {} 覆盖", arena.nodes[idx].slot_key >> 32, prev, idx);
+            }
+        }
     }
     let children = arena.nodes[idx].children.clone();
     for c in children {
