@@ -89,6 +89,12 @@ pub enum DebugEvent {
 }
 
 pub fn queue_event(event: DebugEvent) { QUEUED_EVENTS.lock().unwrap().push(event); wake(); }
+
+/// 是否有待处理事件（app new_events 兜底 request_redraw——空闲时 wake_up
+/// 不产生 RedrawRequested，DebugEvent 在 RedrawRequested 里处理会永远滞留）
+pub fn has_queued_events() -> bool {
+    !QUEUED_EVENTS.lock().unwrap().is_empty()
+}
 pub fn take_queued_events() -> Vec<DebugEvent> { std::mem::take(&mut *QUEUED_EVENTS.lock().unwrap()) }
 
 pub fn simulate_native_click(x: f32, y: f32) {

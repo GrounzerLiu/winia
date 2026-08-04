@@ -305,6 +305,8 @@ pub fn is_animating() -> bool {
 pub struct Animatable<T: Clone + 'static> {
     state: State<T>,
     anim_state: Option<AnimationState<T>>,
+    /// 动画完成回调（完成时消费并调用一次；供 AnimatedVisibility 等延迟移除用）
+    on_done: Option<Box<dyn FnOnce() + Send>>,
 }
 
 struct AnimationState<T> {
@@ -320,7 +322,13 @@ struct AnimationState<T> {
 
 impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
     pub fn new(state: State<T>) -> Self {
-        Self { state, anim_state: None }
+        Self { state, anim_state: None, on_done: None }
+    }
+
+    /// 设置动画完成回调（仅动画正常完成时触发；snap/强制完成也触发）
+    pub fn on_complete(mut self, f: impl FnOnce() + Send + 'static) -> Self {
+        self.on_done = Some(Box::new(f));
+        self
     }
 
     /// 启动动画到目标值
@@ -346,6 +354,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
         if now.duration_since(state.start) > Duration::from_secs(5) {
             let final_val = state.to.clone();
             self.state.set_no_wake(final_val);
+            if let Some(f) = self.on_done.take() { f(); }
             self.anim_state = None;
             return false;
         }
@@ -421,13 +430,17 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
             }
         };
         self.state.set_no_wake(value);
-        if done { self.anim_state = None; }
+        if done {
+            if let Some(f) = self.on_done.take() { f(); }
+            self.anim_state = None;
+        }
         !done
     }
 
     /// 立即跳转到目标值（无动画）
     pub fn snap_to(&mut self, value: T) {
         self.anim_state = None;
+        if let Some(f) = self.on_done.take() { f(); }
         self.state.set_no_wake(value);
     }
 }

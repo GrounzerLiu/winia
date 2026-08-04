@@ -48,6 +48,7 @@ pub mod debug {
     pub fn is_shutdown() -> bool { false }
     pub fn update_pixels(_pixels: &[u8], _width: u32, _height: u32) {}
     pub fn take_queued_events() -> Vec<DebugEvent> { Vec::new() }
+    pub fn has_queued_events() -> bool { false }
     pub fn queue_event(_event: DebugEvent) {}
     pub fn simulate_native_click(_x: f32, _y: f32) {}
     pub fn build_tree_json(_nodes: &[crate::layout::node::LayoutNode], _root_idx: usize) -> String { String::new() }
@@ -69,6 +70,7 @@ pub mod prelude {
     pub use crate::modifier::{Dimension, Modifier, Shape, Color, FocusRequester, ScrollState, DecoStyle, DecoMode, FontEdge, FontHint, KbEvent, KbEventType, PointerEvent, PointerEventType, PointerButton, PointerKind, PenKind};
     pub use crate::ui::{Text, TextAlign, TextOverflow, TextStyle, ProvideTextStyle, FontWeight, FontSlant, Button, ButtonStyle, Column, Row, Stack, Window, WiniaTheme, ThemeColors, SelectionContainer};
     pub use crate::ui::theme::is_system_dark_theme;
+    pub use crate::ui::animated_visibility::{AnimatedVisibility, EnterTransition, ExitTransition, fade_in, fade_out, expand_in, shrink_out};
     pub use crate::composable;
     pub use crate::ui::rich_text::RichText;
     pub use crate::text::{InlineDrawable, ImageDrawable, SvgDrawable};

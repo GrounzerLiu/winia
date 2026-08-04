@@ -223,7 +223,9 @@ impl ApplicationHandler for AppState {
         // 节流（last_request_time）：动画持续 pending 时每 16ms 至多一次。
         let now = std::time::Instant::now();
         for pw in self.windows.values_mut() {
-            if pw.composer.has_pending_states() && now.duration_since(pw.last_request_time) >= pw.frame_interval {
+            if (pw.composer.has_pending_states() || crate::debug::has_queued_events())
+                && now.duration_since(pw.last_request_time) >= pw.frame_interval
+            {
                 pw.last_request_time = now;
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
             }
@@ -791,7 +793,8 @@ impl ApplicationHandler for AppState {
                 // DevTools 事件（仅父窗口消费，防止多窗口抢）
                 if !is_parent { return; }
                 let mut handled = false;
-                for evt in debug::take_queued_events() {
+                let evts = debug::take_queued_events();
+                for evt in evts {
                     match evt {
                         debug::DebugEvent::Click { x, y } => {
                             // 只读阶段：hit_test + click 检测（arena 借用在块尾结束）
