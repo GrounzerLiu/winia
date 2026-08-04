@@ -37,13 +37,32 @@ pub(crate) struct RegisteredSegment {
     pub global_offset: usize,
     pub text_len: usize,
     pub bounds: Rect,
+    /// 段实际文本（注册时保存——selected_text 拼接用，用户无需自维护平行字符串）
+    pub text: Arc<str>,
 }
 
 // ═══════════════════════════════════════════════════════════
 // SelectionRegistrar
 // ═══════════════════════════════════════════════════════════
 
-type OnChangeFn = Arc<dyn Fn(usize, usize) + Send + Sync>;
+type OnChangeFn = Arc<dyn Fn(&Selection) + Send + Sync>;
+
+/// 选择结果——回调参数（对标 Compose `Selection`：自带选中文本）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Selection {
+    start: usize,
+    end: usize,
+    text: String,
+}
+
+impl Selection {
+    /// 容器全局起始偏移（含容器内所有已注册段）
+    pub fn start(&self) -> usize { self.start }
+    /// 容器全局结束偏移（含容器内所有已注册段）
+    pub fn end(&self) -> usize { self.end }
+    /// 选中的文本（框架按注册段自动拼接——含跨段/emoji 边界安全）
+    pub fn text(&self) -> &str { &self.text }
+}
 
 #[derive(Clone)]
 struct RegistrarInner {
@@ -78,8 +97,9 @@ impl SelectionRegistrar {
         }
     }
 
-    pub fn register(&self, slot_key: u64, text_len: usize, bounds: Option<Rect>) -> usize {
+    pub fn register(&self, slot_key: u64, text: &str, bounds: Option<Rect>) -> usize {
         let mut inner = self.inner.lock().unwrap();
+        let text_len = text.len();
         let offset = if let Some(existing) = inner.segments.get(&slot_key) {
             existing.global_offset
         } else {
@@ -87,7 +107,10 @@ impl SelectionRegistrar {
             inner.next_global_offset += text_len;
             off
         };
-        inner.segments.insert(slot_key, RegisteredSegment { slot_key, global_offset: offset, text_len, bounds: bounds.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)) });
+        inner.segments.insert(slot_key, RegisteredSegment {
+            slot_key, global_offset: offset, text_len, bounds: bounds.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)),
+            text: text.into(),
+        });
         offset
     }
 
@@ -135,18 +158,42 @@ impl SelectionRegistrar {
         Some(local_start.min(len)..local_end.min(len))
     }
 
-    /// 设置选区变化回调
-    pub fn set_on_change(&self, f: impl Fn(usize, usize) + Send + Sync + 'static) {
+    /// 设置选区变化回调（参数为 Selection——含选中文本，用户无需自维护平行字符串）
+    pub fn set_on_change(&self, f: impl Fn(&Selection) + Send + Sync + 'static) {
         self.inner.lock().unwrap().on_change = Some(Arc::new(f));
     }
 
+    /// 构造当前选择的 Selection（按注册段自动拼接文本——跨段/emoji 边界安全）
+    pub(crate) fn build_selection(&self) -> Option<Selection> {
+        let inner = self.inner.lock().unwrap();
+        let (s, e) = (inner.selection_start?, inner.selection_end?);
+        let (s, e) = (s.min(e), s.max(e));
+        // 零宽（点击未拖动）→ 无选择（与 selected_range 一致）
+        if s == e { return None; }
+        let mut segs: Vec<&RegisteredSegment> = inner.segments.values().collect();
+        segs.sort_by_key(|seg| seg.global_offset);
+        let mut text = String::new();
+        for seg in segs {
+            let seg_s = seg.global_offset;
+            let seg_e = seg_s + seg.text_len;
+            if seg_e <= s || seg_s >= e { continue; }
+            let start = s.max(seg_s) - seg_s;
+            let end = e.min(seg_e) - seg_s;
+            // 防御：偏移理论上是字符边界（get_closest 保证），但跨段拼接时
+            // 用 get 避免任何越界/非边界 panic（异常时跳过该段）
+            if let Some(part) = seg.text.get(start..end) {
+                text.push_str(part);
+            }
+        }
+        Some(Selection { start: s, end: e, text })
+    }
+
     pub(crate) fn fire_on_change(&self) {
-        let (s, e, cb) = {
-            let inner = self.inner.lock().unwrap();
-            (inner.selection_start, inner.selection_end, inner.on_change.clone())
-        };
-        if let (Some(s), Some(e), Some(ref cb)) = (s, e, cb) {
-            cb(s, e);
+        let cb = self.inner.lock().unwrap().on_change.clone();
+        if let Some(cb) = cb {
+            if let Some(sel) = self.build_selection() {
+                cb(&sel);
+            }
         }
     }
 }
@@ -173,7 +220,7 @@ pub(crate) fn active_registrar() -> SelectionRegistrar {
 
 pub struct SelectionContainer {
     modifier: Modifier,
-    on_change: Option<Box<dyn Fn(usize, usize) + Send + Sync>>,
+    on_change: Option<Box<dyn Fn(&Selection) + Send + Sync>>,
 }
 
 impl SelectionContainer {
@@ -186,7 +233,7 @@ impl SelectionContainer {
         self
     }
 
-    pub fn on_selection_change(mut self, f: impl Fn(usize, usize) + Send + Sync + 'static) -> Self {
+    pub fn on_selection_change(mut self, f: impl Fn(&Selection) + Send + Sync + 'static) -> Self {
         self.on_change = Some(Box::new(f));
         self
     }
@@ -296,16 +343,17 @@ mod tests {
     #[test]
     fn test_register_and_set_selection() {
         let reg = SelectionRegistrar::new();
-        reg.register(42, 20, rect(0.0, 0.0, 200.0, 40.0));
+        reg.register(42, "hello world", rect(0.0, 0.0, 200.0, 40.0));
         reg.set_selection(5, 15);
-        assert_eq!(reg.selected_range(42), Some(5..15));
+        // "hello world" 仅 11 字节——clamp 到 11
+        assert_eq!(reg.selected_range(42), Some(5..11));
     }
 
     #[test]
     fn test_cross_text_merged() {
         let reg = SelectionRegistrar::new();
-        reg.register(1, 10, rect(0.0, 0.0, 100.0, 20.0));
-        reg.register(2, 15, rect(0.0, 0.0, 150.0, 20.0));
+        reg.register(1, "abcdefghij", rect(0.0, 0.0, 100.0, 20.0));
+        reg.register(2, "klmnopqrstuvwxy", rect(0.0, 0.0, 150.0, 20.0));
         reg.set_selection(5, 20);
         assert_eq!(reg.selected_range(1), Some(5..10));
         assert_eq!(reg.selected_range(2), Some(0..10));
@@ -315,7 +363,7 @@ mod tests {
     #[test]
     fn test_partial_selection() {
         let reg = SelectionRegistrar::new();
-        reg.register(1, 20, None);
+        reg.register(1, "abcdefghijklmnopqrst", None);
         reg.set_selection(15, 30); // extends beyond text
         assert_eq!(reg.selected_range(1), Some(15..20)); // clamped
     }
@@ -323,7 +371,7 @@ mod tests {
     #[test]
     fn test_selection_outside() {
         let reg = SelectionRegistrar::new();
-        reg.register(42, 10, rect(0.0, 0.0, 100.0, 20.0));
+        reg.register(42, "abcdefghij", rect(0.0, 0.0, 100.0, 20.0));
         reg.set_selection(20, 30);
         assert!(reg.selected_range(42).is_none());
     }
@@ -331,7 +379,7 @@ mod tests {
     #[test]
     fn test_clear() {
         let reg = SelectionRegistrar::new();
-        reg.register(42, 20, rect(0.0, 0.0, 200.0, 40.0));
+        reg.register(42, "hello world", rect(0.0, 0.0, 200.0, 40.0));
         reg.set_selection(5, 15);
         reg.clear_selection();
         assert!(reg.selected_range(42).is_none());
@@ -341,7 +389,7 @@ mod tests {
     fn test_clone_shared() {
         let reg1 = SelectionRegistrar::new();
         let reg2 = reg1.clone();
-        reg1.register(42, 10, rect(0.0, 0.0, 100.0, 20.0));
+        reg1.register(42, "abcdefghij", rect(0.0, 0.0, 100.0, 20.0));
         reg1.set_selection(2, 8);
         assert_eq!(reg2.selected_range(42), Some(2..8));
     }
@@ -349,18 +397,18 @@ mod tests {
     #[test]
     fn test_slot_dedup() {
         let reg = SelectionRegistrar::new();
-        reg.register(1, 5, None);   // offset=0, next=5
-        reg.register(1, 10, None);  // same slot, NOT new → offset stays 0, next stays 5
+        reg.register(1, "hello", None);   // offset=0, next=5
+        reg.register(1, "hello world", None);  // same slot, NOT new → offset stays 0, next stays 5
         assert_eq!(reg.total_text_len(), 5);
-        assert_eq!(reg.segment_info(1), Some((0, 10))); // preserves original offset, latest len
+        assert_eq!(reg.segment_info(1), Some((0, 11))); // preserves original offset, latest len
     }
 
     #[test]
     fn test_total_text_len_accumulation() {
         let reg = SelectionRegistrar::new();
-        reg.register(1, 10, None);  // offset=0, len=10, total=10
-        reg.register(2, 15, None);  // offset=10, len=15, total=25
-        reg.register(3, 5, None);   // offset=25, len=5, total=30
+        reg.register(1, "abcdefghij", None);  // offset=0, len=10, total=10
+        reg.register(2, "klmnopqrstuvwxy", None);  // offset=10, len=15, total=25
+        reg.register(3, "12345", None);   // offset=25, len=5, total=30
         assert_eq!(reg.total_text_len(), 30);
         assert_eq!(reg.segment_info(1), Some((0, 10)));
         assert_eq!(reg.segment_info(2), Some((10, 15)));
@@ -373,8 +421,8 @@ mod tests {
         let reg = SelectionRegistrar::new();
         let called = std::sync::Arc::new(Mutex::new(false));
         let c = called.clone();
-        reg.set_on_change(move |_, _| { *c.lock().unwrap() = true; });
-        reg.register(1, 10, None);
+        reg.set_on_change(move |_| { *c.lock().unwrap() = true; });
+        reg.register(1, "abcdefghij", None);
         reg.set_selection(2, 5);
         reg.fire_on_change();
         assert!(*called.lock().unwrap());
@@ -386,7 +434,7 @@ mod tests {
         let reg = SelectionRegistrar::new();
         let called = std::sync::Arc::new(Mutex::new(false));
         let c = called.clone();
-        reg.set_on_change(move |_, _| { *c.lock().unwrap() = true; });
+        reg.set_on_change(move |_| { *c.lock().unwrap() = true; });
         reg.fire_on_change(); // no selection set → should not fire
         assert!(!*called.lock().unwrap());
     }
@@ -394,22 +442,22 @@ mod tests {
     #[test]
     fn test_reset_offsets_clears_and_restarts() {
         let reg = SelectionRegistrar::new();
-        reg.register(1, 10, None);
-        reg.register(2, 15, None);
+        reg.register(1, "abcdefghij", None);
+        reg.register(2, "klmnopqrstuvwxy", None);
         assert_eq!(reg.total_text_len(), 25);
         reg.reset_offsets();
         assert_eq!(reg.total_text_len(), 0);
         // re-register starts from offset 0
-        reg.register(3, 5, None);
+        reg.register(3, "12345", None);
         assert_eq!(reg.segment_info(3), Some((0, 5)));
     }
 
     #[test]
     fn test_selection_across_three_segments() {
         let reg = SelectionRegistrar::new();
-        reg.register(10, 100, None);  // offset=0
-        reg.register(20, 200, None);  // offset=100
-        reg.register(30, 50, None);   // offset=300
+        reg.register(10, &"x".repeat(100), None);  // offset=0
+        reg.register(20, &"y".repeat(200), None);  // offset=100
+        reg.register(30, &"z".repeat(50), None);   // offset=300
         // select spanning middle of 1st to middle of 3rd
         reg.set_selection(50, 320);
         assert_eq!(reg.selected_range(10), Some(50..100));   // local 50..100
@@ -420,7 +468,7 @@ mod tests {
     #[test]
     fn test_reversed_selection() {
         let reg = SelectionRegistrar::new();
-        reg.register(1, 20, None);
+        reg.register(1, "abcdefghijklmnopqrst", None);
         reg.set_selection(15, 5); // reversed: start > end
         assert_eq!(reg.selected_range(1), Some(5..15)); // normalized
     }
@@ -428,8 +476,8 @@ mod tests {
     #[test]
     fn test_selection_exactly_at_boundary() {
         let reg = SelectionRegistrar::new();
-        reg.register(1, 10, None);
-        reg.register(2, 10, None); // offset=10
+        reg.register(1, "abcdefghij", None);
+        reg.register(2, "klmnopqrst", None); // offset=10
         // selection at exact boundary
         reg.set_selection(10, 10); // zero-width
         assert!(reg.selected_range(1).is_none()); // local_end == 0
@@ -439,11 +487,62 @@ mod tests {
     #[test]
     fn test_selection_single_char_last_segment() {
         let reg = SelectionRegistrar::new();
-        reg.register(1, 10, None);  // offset=0
-        reg.register(2, 5, None);   // offset=10
+        reg.register(1, "abcdefghij", None);  // offset=0
+        reg.register(2, "12345", None);   // offset=10
         reg.set_selection(13, 14);  // chars 13-14 in global = 3-4 in seg2
         assert_eq!(reg.selected_range(2), Some(3..4));
         assert!(reg.selected_range(1).is_none());
+    }
+
+    #[test]
+    fn test_build_selection_single_segment() {
+        let reg = SelectionRegistrar::new();
+        reg.register(1, "Hello, world!", None);
+        reg.set_selection(7, 12);
+        let sel = reg.build_selection().unwrap();
+        assert_eq!(sel.start(), 7);
+        assert_eq!(sel.end(), 12);
+        assert_eq!(sel.text(), "world");
+    }
+
+    #[test]
+    fn test_build_selection_cross_segments() {
+        let reg = SelectionRegistrar::new();
+        reg.register(1, "Hello! ", None);        // offset=0
+        reg.register(2, "Drag me ", None);       // offset=7
+        reg.register(3, "finish.", None);        // offset=15
+        // 跨三段：第 1 段尾部 + 第 2 段全部 + 第 3 段头部
+        reg.set_selection(4, 19);
+        let sel = reg.build_selection().unwrap();
+        assert_eq!(sel.text(), "o! Drag me fini");
+        // 反向选择归一化
+        reg.set_selection(19, 4);
+        let sel = reg.build_selection().unwrap();
+        assert_eq!(sel.text(), "o! Drag me fini");
+    }
+
+    #[test]
+    fn test_build_selection_emoji_boundary() {
+        let reg = SelectionRegistrar::new();
+        // emoji 👋（4 字节）在段中间——偏移必须落在字符边界才切片成功
+        reg.register(1, "Hi 👋 world", None);
+        // 选择 "👋 wo"（字节 3..11：H=0 i=1 sp=2 👋=3..7 sp=7 w=8 o=9 r=10 l=11）
+        reg.set_selection(3, 11);
+        let sel = reg.build_selection().unwrap();
+        assert_eq!(sel.text(), "👋 wor");
+        // 空选择（零宽）→ None
+        reg.set_selection(5, 5);
+        assert!(reg.build_selection().is_none());
+    }
+
+    #[test]
+    fn test_build_selection_reversed() {
+        let reg = SelectionRegistrar::new();
+        reg.register(1, "abcdef", None);
+        reg.set_selection(5, 2); // start > end
+        let sel = reg.build_selection().unwrap();
+        assert_eq!((sel.start(), sel.end()), (2, 5));
+        assert_eq!(sel.text(), "cde");
     }
 }
 
@@ -468,7 +567,7 @@ mod compute_selection_tests {
     #[test]
     fn test_same_container_edge_snap_down() {
         let (a, _) = regs();
-        a.register(1, 100, None); // total=100
+        a.register(1, &"x".repeat(100), None); // total=100
         // 同容器超出（向下拖出节点）：edge = total = 100
         let r = compute_selection(Some(&a), Some(5), &a, None, 0, 300.0, 50.0, 100.0);
         let (_, s, e) = r.unwrap();
@@ -487,7 +586,7 @@ mod compute_selection_tests {
     #[test]
     fn test_cross_container_uses_anchor_reg() {
         let (a, b) = regs();
-        a.register(1, 100, None); // anchor 容器 total=100
+        a.register(1, &"x".repeat(100), None); // anchor 容器 total=100
         // 跨容器：anchor 在 a，当前在 b 的文本上 → 用 a 做 edge snap（不切 b 的偏移空间）
         let r = compute_selection(Some(&a), Some(10), &b, Some(0), 5, 200.0, 50.0, 50.0);
         let (reg, s, e) = r.unwrap();

@@ -9,20 +9,9 @@ fn selection_ui(ctx: &mut ComposeCtx) {
     let t1 = "Hello! 👋😊 The SelectionContainer makes text selectable.";
     let t2 = "🎉 Drag across 🚀 multiple texts! The highlight follows.";
     let t3 = "You can select across multiple texts! The blue highlight follows the mouse as you drag.";
-    let rt = "RichText: bold italic red — also selectable!";
-    // RichText 组件实际渲染的纯文本（demo 用 span 分段拼接，与 rt 变量不同
-    // ——注意不含 "also "）。on_selection_change 的全局偏移按**实际渲染文本**
-    // 注册——all 必须用同一文本，否则错位（选择 t3 时切片偏移差 rt 长度差）。
-    let rt_actual = "RichText: bold italic red — selectable!";
-    // 注意：on_selection_change 的偏移是**容器全局字节偏移**（含容器内所有
-    // 已注册 Text——包括标题 [A]）。all 必须与注册顺序对齐（[A] 在前 4 字节），
-    // 否则 get(s..e) 错位后可能落在 emoji 多字节中间返回 None（空切片）。
-    let all = format!("[A] {}{}{}{}", t1, t2, rt_actual, t3);
 
     let a1 = "Container B: independent selection context.";
     let a2 = "This text is inside a separate SelectionContainer.";
-    // 同上：B 容器的全局偏移含 [B]（前 4 字节）——all_b 对齐
-    let all_b = format!("[B] {}{}", a1, a2);
 
     let selected_a = ctx.remember(|| String::from("(none)"));
     let selected_b = ctx.remember(|| String::from("(none)"));
@@ -37,16 +26,15 @@ fn selection_ui(ctx: &mut ComposeCtx) {
 
             // ── Container A ──
             let sa = selected_a.clone();
-            let all_a_text = all.clone();
             SelectionContainer::new()
                 .modifier(Modifier::new()
                     .fill_max_width()
                     .padding(10.0)
                     .background(Color::from_argb(30, 200, 200, 100), Shape::rounded(8.0)))
-                .on_selection_change(move |start, end| {
-                    let s = start.min(end); let e = start.max(end);
-                    let txt = all_a_text.get(s..e).unwrap_or(""); // 字节安全切片（emoji 多字节时 get 防越界）
-                    sa.set(format!("A: \"{}\"", txt));
+                .on_selection_change(move |sel| {
+                    // 新 API：sel.text() 直接给选中文本（框架按注册段自动拼接——
+                    // 无需自维护平行字符串，无偏移错位/emoji 边界问题）
+                    sa.set(format!("A: {:?}", sel.text()));
                 })
                 .build(ctx, |ctx| {
                     Column::new().build(ctx, |ctx| {
@@ -71,16 +59,13 @@ fn selection_ui(ctx: &mut ComposeCtx) {
 
             // ── Container B ──
             let sb = selected_b.clone();
-            let all_b_text = all_b.clone();
             SelectionContainer::new()
                 .modifier(Modifier::new()
                     .fill_max_width()
                     .padding(10.0)
                     .background(Color::from_argb(30, 200, 150, 200), Shape::rounded(8.0)))
-                .on_selection_change(move |start, end| {
-                    let s = start.min(end); let e = start.max(end);
-                    let txt = all_b_text.get(s..e).unwrap_or(""); // 字节安全切片（emoji 多字节时 get 防越界）
-                    sb.set(format!("B: \"{}\"", txt));
+                .on_selection_change(move |sel| {
+                    sb.set(format!("B: {:?}", sel.text()));
                 })
                 .build(ctx, |ctx| {
                     Column::new().build(ctx, |ctx| {

@@ -211,6 +211,17 @@ impl Text {
             .unwrap_or_else(|| crate::ui::theme::WiniaTheme::colors().on_surface);
 
         let content_len = self.content.len();
+        // 注册到选区容器（供文本拖动选中使用）——仅在 SelectionContainer 的
+        // provides 作用域内注册；须在 move self.content 之前调用（借用）。
+        // set_current_node_registrar 必须在 start_leaf 之后（desc 已创建）。
+        let (reg_for_node, registered_off) = {
+            if let Some(reg) = ctx.selection_registrar()
+                .or_else(|| crate::ui::selection_container::LOCAL_SELECTION_REGISTRAR.try_current())
+            {
+                let off = reg.register(key, &self.content, None);
+                (Some(reg), Some((key, content_len, off)))
+            } else { (None, None) }
+        };
         let modifier = self.modifier.push(ModifierElement::TextContent {
             content: self.content,
             font_size: final_font_size.to_logical_px(),
@@ -224,16 +235,11 @@ impl Text {
         });
 
         ctx.start_leaf(key, modifier);
-        // 注册到选区容器（供文本拖动选中使用）——仅在 SelectionContainer 的
-        // provides 作用域内注册；作用域外（普通 Text / SelectionContainer 之后的
-        // 输出 Text）不注册（注册到 default 空 registrar 会让它"自选"——点击自己
-        // 时用空 registrar 正常选择，显示为可选中）
-        if let Some(reg) = ctx.selection_registrar()
-            .or_else(|| crate::ui::selection_container::LOCAL_SELECTION_REGISTRAR.try_current())
-        {
-            let global_off = reg.register(key, content_len, None);
+        if let Some(reg) = reg_for_node {
             ctx.set_current_node_registrar(reg);
-            debug_log!("[selection] Text registered: slot_key={} len={} global_off={}", key, content_len, global_off);
+        }
+        if let Some((k, len, off)) = registered_off {
+            debug_log!("[selection] Text registered: slot_key={} len={} global_off={}", k, len, off);
         }
         ctx.end_node();
     }
