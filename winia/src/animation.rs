@@ -367,7 +367,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
             AnimationSpec::Tween(spec) => {
                 let elapsed = now - state.start;
                 let t = (elapsed.as_secs_f64() / spec.duration.as_secs_f64()).min(1.0) as f32;
-                let eased = (spec.interpolator)(t);
+                let eased = spec.interpolator.interpolate(t);
                 let t = state.from.lerp(&state.to, eased);
                 (t, eased >= 1.0)
             }
@@ -437,7 +437,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
 // ═══════════════════════════════════════════════════════════
 
 /// 关键帧插值：在 frames 中按进度 t 定位段，段内用 interpolator 插值
-fn interpolate_keyframes(frames: &[(f32, f32, fn(f32) -> f32)], t: f32) -> f32 {
+fn interpolate_keyframes(frames: &[(f32, f32, Box<dyn interpolator::Interpolator>)], t: f32) -> f32 {
     if frames.is_empty() { return 0.0; }
     if t <= 0.0 { return frames[0].1; }
     let last = frames.last().unwrap();
@@ -446,11 +446,11 @@ fn interpolate_keyframes(frames: &[(f32, f32, fn(f32) -> f32)], t: f32) -> f32 {
     if t < frames[0].0 { return frames[0].1; }
     for i in 0..frames.len() - 1 {
         let (p0, v0, _) = frames[i];
-        let (p1, v1, interp) = frames[i + 1];
-        if t >= p0 && t <= p1 {
-            let seg = if p1 > p0 { (t - p0) / (p1 - p0) } else { 0.0 };
-            let eased = interp(seg.clamp(0.0, 1.0));
-            return v0 + (v1 - v0) * eased;
+        let (p1, v1, interp) = &frames[i + 1];
+        if t >= p0 && t <= *p1 {
+            let seg = if *p1 > p0 { (t - p0) / (*p1 - p0) } else { 0.0 };
+            let eased = interp.interpolate(seg.clamp(0.0, 1.0));
+            return v0 + (*v1 - v0) * eased;
         }
     }
     last.1
@@ -659,12 +659,14 @@ impl SpringSpec {
 #[derive(Clone)]
 pub struct TweenSpec {
     pub duration: Duration,
-    pub interpolator: fn(f32) -> f32,
+    /// 时间→进度缓动（表驱动插值器——`interpolator::Linear::boxed()` 或任意
+    /// `Interpolator` 实现；不能用 fn 形式，因为表驱动插值器需保留控制点数据）
+    pub interpolator: Box<dyn interpolator::Interpolator>,
 }
 
 impl Default for TweenSpec {
     fn default() -> Self {
-        Self { duration: Duration::from_millis(300), interpolator: interpolator::linear }
+        Self { duration: Duration::from_millis(300), interpolator: interpolator::Linear::boxed() }
     }
 }
 
@@ -672,14 +674,14 @@ impl Default for TweenSpec {
 #[derive(Clone)]
 pub struct KeyframesSpec {
     pub duration: Duration,
-    pub frames: Vec<(f32, f32, fn(f32) -> f32)>,
+    pub frames: Vec<(f32, f32, Box<dyn interpolator::Interpolator>)>,
 }
 
 impl KeyframesSpec {
     /// 简化构造：仅 (progress, value)，段间线性
     pub fn new(duration: Duration, frames: Vec<(f32, f32)>) -> Self {
-        let linear: fn(f32) -> f32 = interpolator::linear;
-        let frames = frames.into_iter().map(|(p, v)| (p, v, linear)).collect();
+        let linear = interpolator::Linear::boxed();
+        let frames = frames.into_iter().map(|(p, v)| (p, v, linear.clone())).collect();
         Self { duration, frames }
     }
 }
@@ -992,7 +994,7 @@ mod tests {
         let mut anim = Animatable::<f32>::new(State::new(0.0));
         anim.animate_to(100.0, AnimationSpec::Repeatable(
             RepeatableSpec::new(3, RepeatMode::Restart,
-                AnimationSpec::Tween(TweenSpec { duration: Duration::from_millis(40), interpolator: interpolator::linear }))));
+                AnimationSpec::Tween(TweenSpec { duration: Duration::from_millis(40), interpolator: interpolator::Linear::boxed() }))));
         let mut frames = 0;
         while anim.update() && frames < 100 {
             std::thread::sleep(Duration::from_millis(10));
@@ -1009,7 +1011,7 @@ mod tests {
         // StartOffset.Delay 语义：首轮延迟 100ms，期间值停在 from
         let mut anim = Animatable::<f32>::new(State::new(0.0));
         let spec = RepeatableSpec::new(2, RepeatMode::Restart,
-            AnimationSpec::Tween(TweenSpec { duration: Duration::from_millis(40), interpolator: interpolator::linear }))
+            AnimationSpec::Tween(TweenSpec { duration: Duration::from_millis(40), interpolator: interpolator::Linear::boxed() }))
             .with_start_offset(Duration::from_millis(100));
         anim.animate_to(100.0, AnimationSpec::Repeatable(spec));
         // 30ms：仍在延迟期——值应停在 from(0)
@@ -1076,7 +1078,7 @@ mod tests {
         let mut anim = Animatable::<f32>::new(State::new(0.0));
         anim.animate_to(100.0, AnimationSpec::Repeatable(
             RepeatableSpec::new(2, RepeatMode::Reverse,
-                AnimationSpec::Tween(TweenSpec { duration: Duration::from_millis(40), interpolator: interpolator::linear }))));
+                AnimationSpec::Tween(TweenSpec { duration: Duration::from_millis(40), interpolator: interpolator::Linear::boxed() }))));
         while anim.update() {
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -1153,7 +1155,7 @@ mod repeated_tests {
         for (i, target) in [(1usize, 200.0f32), (2, 40.0), (3, 200.0), (4, 40.0)] {
             push_animatable(state.clone(), target, AnimationSpec::Tween(TweenSpec {
                 duration: std::time::Duration::from_millis(300),
-                interpolator: crate::animation::interpolator::linear,
+                interpolator: crate::animation::interpolator::Linear::boxed(),
             }));
             std::thread::sleep(std::time::Duration::from_millis(400));
             update_animations();
@@ -1171,7 +1173,7 @@ mod repeated_tests {
         let state = crate::core::state::State::new(40.0f32);
         push_animatable(state.clone(), 200.0, AnimationSpec::Tween(TweenSpec {
             duration: std::time::Duration::from_millis(1000),
-            interpolator: crate::animation::interpolator::linear,
+            interpolator: crate::animation::interpolator::Linear::boxed(),
         }));
         // 中途（10 帧后）改目标 40——应切换（用真实时间 sleep 模拟帧间隔）
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -1180,7 +1182,7 @@ mod repeated_tests {
         assert!(mid > 40.0 && mid < 200.0, "中途应处于动画中（{}）", mid);
         push_animatable(state.clone(), 90.0, AnimationSpec::Tween(TweenSpec {
             duration: std::time::Duration::from_millis(200),
-            interpolator: crate::animation::interpolator::linear,
+            interpolator: crate::animation::interpolator::Linear::boxed(),
         }));
         std::thread::sleep(std::time::Duration::from_millis(300));
         update_animations();

@@ -100,7 +100,7 @@ fn section2(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
         if clicked.get() { 0.9 } else { 0.2 },
         AnimationSpec::Tween(TweenSpec {
             duration: std::time::Duration::from_millis(300),
-            interpolator: winia::animation::interpolator::linear,
+            interpolator: winia::animation::interpolator::Linear::boxed(),
         }),
     );
     // 表达式直接写（非闭包非宏非中间变量）——注册到本函数 scope
@@ -172,7 +172,7 @@ fn section4(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
         else { Color::from_argb(255, 156, 39, 176) },
         AnimationSpec::Tween(TweenSpec {
             duration: std::time::Duration::from_millis(500),
-            interpolator: winia::animation::interpolator::linear,
+            interpolator: winia::animation::interpolator::Linear::boxed(),
         }),
     );
     Column::new()
@@ -356,7 +356,8 @@ fn section10(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
                 2, winia::animation::RepeatMode::Restart,
                 AnimationSpec::Tween(winia::animation::TweenSpec {
                     duration: std::time::Duration::from_millis(250),
-                    interpolator: winia::animation::interpolator::linear,
+                    // 表驱动插值器（非 fn）——验证 20 种曲线插值器接入
+                    interpolator: winia::animation::interpolator::EaseOutSine::boxed(),
                 }),
             ).with_start_offset(std::time::Duration::from_millis(300)),
         ),

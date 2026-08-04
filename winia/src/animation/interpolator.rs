@@ -3,9 +3,18 @@ pub fn linear(x: f32) -> f32 { x }
 
 pub trait Interpolator : Sync + Send {
     fn interpolate(&self, x: f32) -> f32;
+    /// 克隆为 trait object（供 Box<dyn Interpolator> 的 Clone 实现）
+    fn clone_box(&self) -> Box<dyn Interpolator>;
+}
+
+impl Clone for Box<dyn Interpolator> {
+    fn clone(&self) -> Self {
+        self.clone_box()
+    }
 }
 
 /// ![image](https://upload.wikimedia.org/wikipedia/commons/0/0e/Linear_interpolation.svg)
+#[derive(Clone)]
 pub struct Linear {}
 impl Default for Linear {
     fn default() -> Self {
@@ -25,6 +34,9 @@ impl Linear {
 impl Interpolator for Linear {
     fn interpolate(&self, x: f32) -> f32 {
         x
+    }
+    fn clone_box(&self) -> Box<dyn Interpolator> {
+        Box::new(self.clone())
     }
 }
 
@@ -50,6 +62,7 @@ fn find_interval(points: &Vec<(f32, f32)>, x: f32) -> usize {
 
 macro_rules! interpolator {
     ($name:ident, $map: expr) => {
+        #[derive(Clone)]
         pub struct $name {
             points: Vec<(f32, f32)>,
         }
@@ -82,6 +95,9 @@ macro_rules! interpolator {
                 let (x1, y1) = self.points[idx];
                 let (x2, y2) = self.points[idx + 1];
                 ((y2 - y1) / (x2 - x1)) * (x - x1) + y1
+            }
+            fn clone_box(&self) -> Box<dyn Interpolator> {
+                Box::new(self.clone())
             }
         }
     };
