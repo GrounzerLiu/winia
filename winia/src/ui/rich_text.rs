@@ -152,7 +152,7 @@ impl<'a> RichTextScope<'a> {
         }
     }
 
-    /// 占位符：文本写入 content（不渲染），图片作视觉替换（D:\winia 风格）。
+    /// 占位符：文本写入 content（不渲染），图片作视觉替换（参考旧版 winia v1）。
     pub fn placeholder(&mut self, text: impl Into<String>, drawable: impl Into<Arc<dyn InlineDrawable>>) {
         let pos = self.cursor;
         let t = text.into();
@@ -220,7 +220,7 @@ impl<'a> RichTextScope<'a> {
 
     pub fn subscript(&mut self, f: impl FnOnce(&mut Self)) {
         let saved = self.style.clone();
-        self.style.baseline_shift = 0.259; // 0.15 / 0.58，补偿字号缩小后保持 D:\winia 偏移量
+        self.style.baseline_shift = 0.259; // 0.15 / 0.58，补偿字号缩小后保持旧版偏移量
         self.style.fs = Some(saved.fs.unwrap_or(14.0) * 0.58);
         f(self);
         self.style = saved;
@@ -371,7 +371,7 @@ impl RichText {
             f(&mut scope);
         }
 
-        // 用 D:\winia 分裂算法解析 span
+        // 用旧版 winia 的分裂算法解析 span
         let spans = resolve_spans(&content, &drawable_ranges, &annotations);
 
         // 注册到选区容器（支持文本选中）——仅在 SelectionContainer 的 provides
@@ -404,7 +404,7 @@ impl RichText {
 
 impl Default for RichText { fn default() -> Self { Self::new() } }
 
-// ── D:\winia 风格 span 解析 ──
+// ── 旧版 winia 风格 span 解析 ──
 
 #[derive(Clone)]
 struct Seg {
@@ -472,7 +472,7 @@ pub(crate) fn resolve_spans(content: &str, drawable_ranges: &[Range<usize>], ann
         }
     }
 
-    // 2) D:\winia 分裂
+    // 2) 旧版分裂
     let resolved_annos: Vec<(Style, Range<usize>)> = annotations.iter()
         .filter(|(s, r)| s.is_not_default() && r.end > r.start)
         .map(|(s, r)| (s.clone(), r.clone()))

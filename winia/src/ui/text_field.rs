@@ -1,6 +1,6 @@
 //! TextField — 文本输入组件（对齐 Jetpack Compose BasicTextField）
 //!
-//! 参考：D:\winia\winia\src\ui\widget\text_field.rs
+//! 参考：旧版 winia v1 的 text_field 实现
 
 use crate::core::composer::ComposeCtx;
 use crate::core::state::State;
@@ -98,7 +98,7 @@ impl TextField {
             .to_logical_px();
         let color = theme.on_surface;
 
-        // 光标闪烁状态（D:\winia 风格）
+        // 光标闪烁状态（旧版风格）
         let cursor_visible = ctx.remember(|| true);
         let cv = cursor_visible.clone();
         let blink_started = ctx.remember(|| false);
@@ -263,7 +263,7 @@ impl TextField {
                 }
             }),
         );
-        // IME 预输入回调（D:\winia 风格——直接修改 text 内容）
+        // IME 预输入回调（旧版风格——直接修改 text 内容）
         {
             let v = value.clone();
             ctx.set_current_node_ime_callback(Box::new(move |text, cursor| {

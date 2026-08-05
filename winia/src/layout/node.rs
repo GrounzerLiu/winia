@@ -1148,7 +1148,7 @@ fn to_sktextstyle(s: &RichSpanStyle) -> SkTextStyle {
         ts.set_decoration_mode(sk);
     }
 
-    // 基线偏移（D:\winia: shift = font_size * multiplier）
+    // 基线偏移（shift = font_size * multiplier）
     if s.baseline_shift != 0.0 {
         ts.set_baseline_shift(s.baseline_shift * s.font_size);
     }
