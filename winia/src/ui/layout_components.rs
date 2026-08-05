@@ -2,9 +2,26 @@
 //!
 //! 这些是用户面组件，内部使用 layout 模块的 MeasurePolicy
 
-use crate::core::composer::ComposeCtx;
-use crate::layout::{Arrangement, Alignment, ColumnLayout, RowLayout, BoxLayout};
+use crate::core::composer::{ComposeCtx, GroupStatus};
+use crate::layout::{Arrangement, Alignment, ColumnLayout, RowLayout, BoxLayout, MeasurePolicy};
 use crate::modifier::Modifier;
+
+/// 容器 build 样板合并（P2-4）：Column/Row/Stack 共用——
+/// start_restartable_group 的 Skip/Enter 分支 + end 配对收拢一处。
+/// 参数暂存（changed）由各组件在自己 build 里做（参数集不同）。
+fn build_container(
+    ctx: &mut ComposeCtx,
+    modifier: Modifier,
+    policy: impl MeasurePolicy + 'static,
+    content: impl FnOnce(&mut ComposeCtx),
+) {
+    let key = ctx.next_key();
+    match ctx.start_restartable_group(key, modifier, policy) {
+        GroupStatus::Skip => {}
+        GroupStatus::Enter => { content(ctx); }
+    }
+    ctx.end_restartable_group();
+}
 
 // ── Column ──
 
@@ -38,20 +55,17 @@ impl Column {
         ctx.changed(&self.spacing);
         ctx.changed(&self.arrangement);
         ctx.changed(&self.alignment);
-        let key = ctx.next_key();
         let dir = crate::ui::theme::WiniaTheme::direction();
-        let policy = ColumnLayout::new()
-            .arrangement(self.arrangement)
-            .alignment(self.alignment)
-            .spacing(self.spacing)
-            .direction(dir);
-        match ctx.start_restartable_group(key, self.modifier, policy) {
-            crate::core::composer::GroupStatus::Skip => {}
-            crate::core::composer::GroupStatus::Enter => {
-                content(ctx);
-            }
-        }
-        ctx.end_restartable_group();
+        build_container(
+            ctx,
+            self.modifier,
+            ColumnLayout::new()
+                .arrangement(self.arrangement)
+                .alignment(self.alignment)
+                .spacing(self.spacing)
+                .direction(dir),
+            content,
+        );
     }
 }
 
@@ -88,20 +102,17 @@ impl Row {
         ctx.changed(&self.spacing);
         ctx.changed(&self.arrangement);
         ctx.changed(&self.alignment);
-        let key = ctx.next_key();
         let dir = crate::ui::theme::WiniaTheme::direction();
-        let policy = RowLayout::new()
-            .arrangement(self.arrangement)
-            .alignment(self.alignment)
-            .spacing(self.spacing)
-            .direction(dir);
-        match ctx.start_restartable_group(key, self.modifier, policy) {
-            crate::core::composer::GroupStatus::Skip => {}
-            crate::core::composer::GroupStatus::Enter => {
-                content(ctx);
-            }
-        }
-        ctx.end_restartable_group();
+        build_container(
+            ctx,
+            self.modifier,
+            RowLayout::new()
+                .arrangement(self.arrangement)
+                .alignment(self.alignment)
+                .spacing(self.spacing)
+                .direction(dir),
+            content,
+        );
     }
 }
 
@@ -130,16 +141,8 @@ impl Stack {
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         // 参数暂存（参数相等跳过——同 Column）
         ctx.changed(&self.alignment);
-        let key = ctx.next_key();
-        let policy = BoxLayout::new().alignment(self.alignment);
         // content 闭包自动成为组合 scope（与 Column 一致）
-        match ctx.start_restartable_group(key, self.modifier, policy) {
-            crate::core::composer::GroupStatus::Skip => {}
-            crate::core::composer::GroupStatus::Enter => {
-                content(ctx);
-            }
-        }
-        ctx.end_restartable_group();
+        build_container(ctx, self.modifier, BoxLayout::new().alignment(self.alignment), content);
     }
 }
 

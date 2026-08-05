@@ -15,6 +15,7 @@ use crate::layout::constraints::Constraints;
 use crate::layout::node::{LayoutNode, MeasurePolicy, CachedNode};
 use crate::modifier::Modifier;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::any::Any;
 use std::cell::Cell;
@@ -37,7 +38,17 @@ thread_local! { static GROUP_STACK: RefCell<Vec<u64>> = const { RefCell::new(Vec
 /// 语句 id 栈（#[composable] 宏注入——RAII guard 写入/弹出；thread_local 使
 /// guard 的 Drop 无需持有 &mut ctx——闭包/循环体内 return/break/continue 提前
 /// 退出时自动 pop，不泄漏。多窗口安全：组合按窗口顺序执行，compose 开头 clear）
-thread_local! { static STMT_STACK: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) }; }
+thread_local! { static STMT_STACK: RefCell<Vec<(u32, u32)>> = const { RefCell::new(Vec::new()) }; }
+/// 语句调用序号（compose 级计数）：同语句 id 第 n 次进入（for 循环迭代）→ seq=n。
+/// key = hash(scope, stmt_id, seq)——循环体内每次迭代的 key 不同（迭代索引分量），
+/// 修复：for 循环 30 次迭代共享同 stmt_id → key 全同 → 槽/缓存恢复错乱（丢行）。
+thread_local! { static STMT_SEQ: RefCell<std::collections::HashMap<(u64, u32), u32>> = RefCell::new(std::collections::HashMap::new()); }
+/// 当前 scope 源码哈希栈（与 Composer::scope_source_stack 镜像）——SlotTable 的
+/// enter_stmt 取不到 Composer 字段，经此 thread_local 读当前 scope：STMT_SEQ 按
+/// (scope_src, id) 计数，避免跨函数语句 id 重复（每个 #[composable] 的语句编号
+/// 各自从 0 开始）导致的 seq 基数泄漏（函数 A 的迭代次数成为函数 B 的 seq 基数
+/// → 函数 B 行数变化时 key 漂移）。scope_source_stack 的 push/pop/clear 三处同步。
+thread_local! { static SCOPE_SRC_STACK: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) }; }
 
 
 /// 参数值（阶段5 参数相等跳过用）——`ComposeCtx::changed` 暂存的参数，
@@ -86,12 +97,6 @@ pub(crate) fn with_active_slot_key(f: impl FnOnce(u64)) {
 pub(crate) fn set_active_slot_key(key: u64) {
     ACTIVE_SLOT_KEY.with(|c| c.set(key));
 }
-
-// ── Key ──
-
-/// 组合节点的唯一标识符
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Key(u64);
 
 // ── ComposeCtx ──
 
@@ -150,7 +155,11 @@ impl<'a> ComposeCtx<'a> {
     /// next_key 读 scope=0 → 跨函数同 stmt id 的 key 碰撞 → 节点复用串位）
     pub fn start_scope_keyed(&mut self, source_hash: u64) -> u64 {
         self.composer.scope_source_stack.push(Some(source_hash));
-        let key = self.composer.next_group_key();
+        SCOPE_SRC_STACK.with(|s| s.borrow_mut().push(source_hash)); // 镜像（enter_stmt 读）
+        // scope key = 源码哈希本身（稳定唯一——不依赖 next_group_key：scope 是
+        // 组合第一条调用（STMT_STACK 空），走路径哈希在宏外（app_root!/根）会
+        // 触发稳定 key panic；且路径哈希在结构变化时漂移——hash 反而更稳）
+        let key = source_hash;
         self.composer.slot_table.start_scope(key);
         GROUP_STACK.with(|s| s.borrow_mut().push(key));
         key
@@ -160,14 +169,50 @@ impl<'a> ComposeCtx<'a> {
     /// 返回 RAII guard——语句块结束时 drop 自动 pop_stmt：闭包体/循环体内的
     /// `return`/`break`/`continue`/`panic!` 提前退出也不会泄漏 stmt 栈
     /// （显式 push/pop 在提前退出时栈会永久错位——后续语句 key 静默漂移）。
+    ///
+    /// seq（迭代位置）解析：**max(自身执行计数, 栈顶外层语句的 seq)**——
+    /// ① for 体语句每次迭代都执行：自身计数 = 迭代位置（1..30）✓；② content
+    /// 闭包内的语句只在容器 Enter 时执行（行 Skip 时 content 不跑）——自身计数
+    /// 会漂移（首帧 seq=30，滚动后首次执行 seq=1）→ key 碰撞（text29 撞 text0）
+    /// → 槽树 truncate 重建 → 内容丢失——继承外层行语句的迭代位置（max 兜底）。
+    /// 已知限制：嵌套循环（for i { for j { … } }）内层语句取 max(内层次数, 外层
+    /// 位置)——内层迭代与外层位置可能混淆，需显式 key（文档化）。
     pub fn enter_stmt(&mut self, id: u32) -> StmtGuard {
-        STMT_STACK.with(|s| s.borrow_mut().push(id));
+        let scope_src = SCOPE_SRC_STACK.with(|s| s.borrow().last().copied().unwrap_or(0));
+        let self_seq = STMT_SEQ.with(|m| {
+            let mut m = m.borrow_mut();
+            let c = m.entry((scope_src, id)).or_insert(0u32);
+            *c += 1;
+            *c
+        });
+        // max(自身计数, 外层迭代位置)：for 体语句自身计数=迭代位置；
+        // content 闭包内语句（只在 Enter 执行）继承外层行语句的迭代位置
+        let outer_seq = STMT_STACK.with(|s| {
+            s.borrow().last().map(|&(_, os)| os).unwrap_or(0)
+        });
+        let seq = self_seq.max(outer_seq);
+        #[cfg(debug_assertions)]
+        if std::env::var("WINIA_STMT_TRACE").is_ok() {
+            eprintln!("[stmt] id={} seq={} self={} outer={}", id, seq, self_seq, outer_seq);
+        }
+        STMT_STACK.with(|s| s.borrow_mut().push((id, seq)));
         StmtGuard
     }
 
     /// #[composable] 宏注入：退出语句（与 push_stmt 配对）——保留兼容旧用法
     pub fn push_stmt(&mut self, id: u32) {
-        STMT_STACK.with(|s| s.borrow_mut().push(id));
+        let scope_src = SCOPE_SRC_STACK.with(|s| s.borrow().last().copied().unwrap_or(0));
+        let self_seq = STMT_SEQ.with(|m| {
+            let mut m = m.borrow_mut();
+            let c = m.entry((scope_src, id)).or_insert(0u32);
+            *c += 1;
+            *c
+        });
+        let outer_seq = STMT_STACK.with(|s| {
+            s.borrow().last().map(|&(_, os)| os).unwrap_or(0)
+        });
+        let seq = self_seq.max(outer_seq);
+        STMT_STACK.with(|s| s.borrow_mut().push((id, seq)));
     }
 
     /// #[composable] 宏注入：退出语句（与 push_stmt 配对）
@@ -178,12 +223,16 @@ impl<'a> ComposeCtx<'a> {
     /// 显式 key（对标 Compose `key(id)`）：包裹的子树用 id 哈希为 key 基——
     /// 结构变化（列表重排/子树移动）时 remember/复用仍稳定。
     /// 用法：`ctx.key("scroll_list", |ctx| { ... });`
-    pub fn key<R>(&mut self, id: &'static str, f: impl FnOnce(&mut Self) -> R) -> R {
-        let mut h: u64 = 0xcbf29ce484222325;
-        for b in id.as_bytes() {
-            h ^= *b as u64;
-            h = h.wrapping_mul(0x100000001b3);
-        }
+    /// 显式 key 作用域（对标 Compose `key(key1, content)`）：`id` 参与内部所有
+    /// 语句/组件的 key 基——`id` 变化 → 内部槽 key 变化 → 旧子树重建（结构切换）；
+    /// `id` 稳定 → 跨重组 key 稳定（remember State 保留）。
+    /// 支持任意 `Hash` 值：`key("section", ...)`、`key(i, ...)`（循环迭代变量——
+    /// 嵌套循环内层迭代位置的显式正解，语句级 seq 只携带外层位置）、
+    /// `key((row, col), ...)`。
+    pub fn key<R>(&mut self, id: impl std::hash::Hash, f: impl FnOnce(&mut Self) -> R) -> R {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        id.hash(&mut hasher);
+        let h = hasher.finish();
         self.composer.key_override_stack.push(h);
         let r = f(self);
         self.composer.key_override_stack.pop();
@@ -198,7 +247,7 @@ impl<'a> ComposeCtx<'a> {
     /// 暂存本帧参数（start_node 时写入 slot.params，供下帧比较）。
     ///
     /// 用法（#[composable] 组件内——参数未变 + slot clean 时容器 Skip，content 不重跑）：
-    /// ```rust
+    /// ```ignore
     /// #[composable]
     /// fn card(ctx: &mut ComposeCtx, title: &str) {
     ///     let _title_changed = ctx.changed(&title.to_string());  // 参数声明（start 容器前）
@@ -370,13 +419,16 @@ impl<'a> ComposeCtx<'a> {
         // remember 的 State 跨帧稳定依赖 key 稳定——结构变化时语句 id 不动 → State 保留。
         let base = if let Some(&k) = self.composer.key_override_stack.last() {
             k
-        } else if let Some(sid) = STMT_STACK.with(|s| s.borrow().last().copied()) {
+        } else if let Some((sid, seq)) = STMT_STACK.with(|s| s.borrow().last().copied()) {
             let scope_src = self.composer.scope_source_stack.last().and_then(|s| *s).unwrap_or(0);
+            // FNV 混合 scope 源码哈希 + 语句 id + 调用序号（for 循环迭代索引分量）
             let mut h: u64 = 0xcbf29ce484222325;
             h ^= scope_src; h = h.wrapping_mul(0x100000001b3);
             h ^= sid as u64; h = h.wrapping_mul(0x100000001b3);
+            h ^= (seq as u64).wrapping_mul(0x9E3779B97F4A7C15);
             h
-        } else {
+        } else if cfg!(test) {
+            // 测试路径：路径哈希 fallback（同 next_group_key——测试自控结构）
             let path = self.composer.slot_table.current_path().to_vec();
             let mut h: u64 = 0xcbf29ce484222325;
             for &idx in &path {
@@ -384,6 +436,14 @@ impl<'a> ComposeCtx<'a> {
                 h = h.wrapping_mul(0x100000001b3);
             }
             h
+        } else {
+            // 快速失败（与 next_group_key 一致）：remember 的 State 跨帧稳定
+            // 依赖 key 稳定——无语句级 key 则路径哈希在结构变化时漂移
+            // → remember 状态错位。修复：调用点在 #[composable]/app_root! 内。
+            panic!(
+                "remember 调用点缺少稳定 key：ctx.remember() 必须位于 #[composable] \
+                 函数内（或根闭包用 winia::app_root!），或用 ctx.key() 显式指定。"
+            );
         };
         let counter = self.composer.remember_path_counters.entry(base).or_insert(0);
         let c = *counter;
@@ -455,25 +515,6 @@ struct NodeDesc {
     dirty: bool,
     /// 文本选择 registrar（组合期 set_current_node_registrar 写入——物化时应用）
     registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
-}
-
-/// 物化描述树（Slot 树 → 纯节点树——scope 跳过、children 提升到最近物化父）
-struct DescNode {
-    key: u64,
-    /// Skip 节点（组合期 content 未执行——desc 空但非 scope）：
-    /// 物化时从 prev_node_by_key 按 key 恢复缓存节点（不新建）
-    skip: bool,
-    modifier: Modifier,
-    /// Skip 子树内：本帧 build 是否被调用（容器自身调了 set_skip_modifier——
-    /// modifier 是父层重跑传入的新值，应应用；后代未执行——modifier 为 default，
-    /// 应保留缓存节点的 modifier，避免视觉被清空）
-    preserve_modifier: bool,
-    policy: Option<Box<dyn MeasurePolicy>>,
-    on_remove: Option<Box<dyn FnOnce() + Send>>,
-    dirty: bool,
-    /// 文本选择 registrar（物化时写入节点——组合期与物化期分离的传递通道）
-    registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
-    children: Vec<DescNode>,
 }
 
 /// 组合节点的一个槽位。每个 composable 调用对应一个 Slot。
@@ -614,15 +655,15 @@ impl SlotTable {
     /// visited 语义：本帧活跃（start_slot 置 true；reset 每帧清）——结构回退的
     /// 残留（visited false 且不在 Skip 子树内）不收集；Skip 子树（visited false
     /// 但属于 Skip group）整体收集（skip 标记——物化恢复）
-    fn collect_desc_tree(&mut self, out: &mut Vec<DescNode>) {
-        fn rec(slot: &mut Slot, out: &mut Vec<DescNode>, in_skip: bool, depth: usize) {
+    pub(crate) fn collect_desc_tree(&mut self, out: &mut Vec<crate::core::materialize::DescNode>) {
+        fn rec(slot: &mut Slot, out: &mut Vec<crate::core::materialize::DescNode>, in_skip: bool, depth: usize) {
             if !slot.visited && !in_skip {
                 // 本帧未访问且不在 Skip 子树内（结构回退残留）：不收集——
                 // 对应 arena 节点由 prev_node_by_key 回收（free）
                 return;
             }
             if let Some(desc) = slot.desc.take() {
-                let mut node = DescNode {
+                let mut node = crate::core::materialize::DescNode {
                     key: desc.key,
                     skip: false,
                     modifier: desc.modifier,
@@ -643,7 +684,7 @@ impl SlotTable {
                 // 不物化上帧 desc——子树整体保留，children 重新挂接）
                 let sm = slot.skip_modifier.take();
                 let sp = slot.skip_policy.take();
-                let mut node = DescNode {
+                let mut node = crate::core::materialize::DescNode {
                     key: slot.key,
                     skip: true,
                     modifier: sm.clone().unwrap_or_default(),
@@ -658,6 +699,10 @@ impl SlotTable {
                 };
                 for child in &mut slot.children {
                     rec(child, &mut node.children, true, depth + 1); // Skip 子树内：子也按同一规则（收集）
+                }
+                #[cfg(debug_assertions)]
+                if std::env::var("WINIA_MAT_PROBE").is_ok() {
+                    eprintln!("[collect] skip key={:x} kids={}", slot.key, node.children.len());
                 }
                 out.push(node);
             } else {
@@ -683,6 +728,11 @@ impl SlotTable {
             }
         }
         let parent = self.current_slot();
+        #[cfg(debug_assertions)] {
+            if std::env::var("WINIA_SLOT_TRACE").is_ok() {
+                eprintln!("[slot] key={} idx={} parent_kids={} dirty={}", key >> 32, idx, parent.children.len(), is_dirty);
+            }
+        }
 
         // key 匹配，或"同位置"（key 高位 = slot 路径哈希相同）——Enter/Skip 的
         // counter 漂移不改位置，按索引复用（更新 key 保持同步），避免 truncate
@@ -701,6 +751,12 @@ impl SlotTable {
             parent.children[idx].dirty = false;
             self.path.push(idx);
         } else {
+            #[cfg(debug_assertions)]
+            if std::env::var("WINIA_SLOT_TRACE").is_ok() {
+                let plen = parent.children.len();
+                let pkey = parent.key;
+                eprintln!("[slot-trunc] key={:x} parent={:x} idx={} len={}", key, pkey, idx, plen);
+            }
             parent.children.truncate(idx);
             parent.children.push(Slot::new(key));
             // 新建 slot：本帧返回 Dirty 即已执行；立即消费 dirty 标记，
@@ -837,26 +893,30 @@ pub struct Composer {
     key_override_stack: Vec<u64>,
     pending_recomposition: VecDeque<u64>,
     needs_recomposition: bool,
-    arena: crate::layout::node::NodeArena,
+    pub(crate) arena: crate::layout::node::NodeArena,
     node_stack: Vec<usize>,
     /// 记录每个 start_restartable_group 的 skip 状态（用于 end_restartable_group 判断）
     group_skip_stack: Vec<bool>,
     /// state_id -> slot_keys 依赖映射
     slot_deps: HashMap<u32, HashSet<u64>>,
-    /// 当前 compose 期间记录的依赖（替代全局 RECORDED_DEPS）
-    recorded_deps: Vec<(u32, u64)>,
+    /// 布局依赖表（state_id → slot_key；上帧布局注册的持久表，供下帧 pending 消费）
+    layout_deps: HashMap<u32, HashSet<u64>>,
+    /// 本帧 pending 消费收集的布局失效 key（layout() 应用后清空）
+    layout_dirty_keys: HashSet<u64>,
+    /// 本帧确认移除的 slot_key（compose 末尾回收未复用节点时收集——layout_deps 死 key 清理用）
+    removed_slot_keys: HashSet<u64>,
     /// 本 Composer 实例的 pending state 通知队列
     pending_states: Arc<parking_lot::Mutex<Vec<u32>>>,
     /// 上一帧各 slot_key → 节点缓存（用于 clean slot 跳过和子树重放；
     /// 用 slot_key 而非 slot 路径作键——scope 层不产生 LayoutNode，路径在两棵树不一致，
     /// key 是稳定位置标识（路径哈希 + counter），两侧天然对齐）
-    prev_nodes: HashMap<u64, CachedNode>,
+    pub(crate) prev_nodes: HashMap<u64, CachedNode>,
     /// `ComposeCtx::changed` 暂存的参数（start_slot 时写入新 slot 的 params）
     pending_params: Vec<Box<dyn ParamValue>>,
     /// 上帧布局树：slot_key → arena 节点索引（阶段D 节点复用——start_node 按 key 复用槽位）
-    prev_node_by_key: HashMap<u64, usize>,
+    pub(crate) prev_node_by_key: HashMap<u64, usize>,
     /// 本帧已复用的节点索引（free 时跳过——避免递归进本帧树形成环）
-    reused_nodes: std::collections::HashSet<usize>,
+    pub(crate) reused_nodes: std::collections::HashSet<usize>,
     /// 当前选区注册表（SelectionContainer compose 时注入，供事件处理访问）
     pub(crate) selection_registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
 
@@ -887,7 +947,9 @@ impl Composer {
             node_stack: Vec::new(),
             group_skip_stack: Vec::new(),
             slot_deps: HashMap::new(),
-            recorded_deps: Vec::new(),
+            layout_deps: HashMap::new(),
+            layout_dirty_keys: HashSet::new(),
+            removed_slot_keys: HashSet::new(),
             pending_states,
             prev_nodes: HashMap::new(),
             pending_params: Vec::new(),
@@ -919,14 +981,17 @@ impl Composer {
         // 的调用点 key）。宏外（测试/手动组合）退化为路径哈希（现状）。
         let base = if let Some(&k) = self.key_override_stack.last() {
             k
-        } else if let Some(sid) = STMT_STACK.with(|s| s.borrow().last().copied()) {
+        } else if let Some((sid, seq)) = STMT_STACK.with(|s| s.borrow().last().copied()) {
             let scope_src = self.scope_source_stack.last().and_then(|s| *s).unwrap_or(0);
-            // FNV 混合 scope 源码哈希 + 语句 id（不同函数的同序号语句 key 隔离）
+            // FNV 混合 scope 源码哈希 + 语句 id + 调用序号（for 循环迭代索引分量）
             let mut h: u64 = 0xcbf29ce484222325;
             h ^= scope_src; h = h.wrapping_mul(0x100000001b3);
             h ^= sid as u64; h = h.wrapping_mul(0x100000001b3);
+            h ^= (seq as u64).wrapping_mul(0x9E3779B97F4A7C15);
             h
-        } else {
+        } else if cfg!(test) {
+            // 测试路径：无语句级 key 时退化为路径哈希（测试自控结构——漂移由
+            // 测试自己负责；生产代码禁止——见下方 panic）
             let path = self.slot_table.current_path().to_vec();
             let mut h: u64 = 0xcbf29ce484222325;
             for &idx in &path {
@@ -934,6 +999,16 @@ impl Composer {
                 h = h.wrapping_mul(0x100000001b3);
             }
             h
+        } else {
+            // 快速失败（用户要求）：组件调用点必须能获得稳定 key——无法保证则
+            // panic 而非静默降级（路径哈希在结构变化时漂移 → remember 状态错位/
+            // 节点复用串位等难查 bug）。修复：调用点包在 #[composable] 函数内
+            // （或根闭包用 winia::app_root!）获得语句级 key；或显式 ctx.key()。
+            panic!(
+                "组合调用点缺少稳定 key：组件调用必须位于 #[composable] 函数内 \
+                 （或根闭包用 winia::app_root!），或用 ctx.key() 显式指定。\
+                 当前调用点在宏覆盖之外——key 会在结构变化时漂移。"
+            );
         };
         // 每路径独立 counter：同 key 基第 N 次调用跨帧恒定（Skip 的 content 不执行
         // 不平移——节点复用错位 + 常量折叠冻结的防护）
@@ -945,10 +1020,14 @@ impl Composer {
 
     /// 开始一个组合 scope（无 LayoutNode 的作用域节点——组合代码重跑的失效单位）。
     /// 返回 scope key；`State::get()` 在 scope 内（组件外）注册依赖到 scope。
-    /// 开始一个组合 scope（手动调用——无源码哈希；scope_source_stack push None，
-    /// 与 start_scope_keyed 的 Some 区分——end_scope 严格配对，不破坏外层宏注入的 source）
+    ///
+    /// ⚠ 手动调用（无源码哈希）：scope_source_stack push None，与 start_scope_keyed
+    /// 的 Some 区分——end_scope 严格配对，不破坏外层宏注入的 source。
+    /// ⚠ release 下宏外调用会触发稳定 key panic（next_group_key 快速失败）——
+    /// 生产代码应使用 #[composable]/app_root! 注入的 start_scope_keyed。
     pub fn start_scope(&mut self) -> u64 {
         self.scope_source_stack.push(None);
+        SCOPE_SRC_STACK.with(|s| s.borrow_mut().push(0)); // 镜像（手动 scope——无源码哈希）
         let key = self.next_group_key();
         self.slot_table.start_scope(key);
         GROUP_STACK.with(|s| s.borrow_mut().push(key));
@@ -964,162 +1043,16 @@ impl Composer {
             if !s.is_empty() { s.pop(); }
         });
         if !self.scope_source_stack.is_empty() { self.scope_source_stack.pop(); }
-    }
-
-    /// 在组合树中开始一个节点（由组件的 build 方法调用）
-    /// 物化单个节点描述：按 key 复用/新建 arena 节点——递归建子树（挂到 parent）。
-    /// 完整分离后由 materialize() 从组合树（Slot desc）调用——替代 start_node 的组合期建节点。
-    /// Skip 节点（desc.skip）从 prev_node_by_key 恢复缓存节点（content 未执行——节点保留）
-    fn materialize_node(&mut self, desc: DescNode, parent: Option<usize>) -> Option<usize> {
-        let DescNode { key, skip, modifier, preserve_modifier, policy, on_remove, dirty, registrar, children } = desc;
-        let index = if skip {
-            // Skip：恢复上帧节点（key 匹配——保留测量/内容；children 清空后
-            // 按 slot 树结构重新挂接（子节点逐个从 prev_node_by_key 恢复——
-            // 不残留不 free）。无缓存为异常——防御跳过
-            match self.prev_node_by_key.remove(&key) {
-                Some(idx) => {
-                    self.reused_nodes.insert(idx);
-                    let n = &mut self.arena.nodes[idx];
-                    n.children.clear();
-                    // 应用本帧组合产物 modifier（容器自身 Skip——外层构造的 modifier
-                    // 参数可能变化（offset/background 等视觉属性）——不更新则视觉卡旧值；
-                    // 后代（preserve_modifier）保留缓存节点 modifier——不清空视觉）
-                    if !preserve_modifier {
-                        n.modifier = modifier;
-                    }
-                    n.dirty = false; // 恢复缓存——测量折叠（保留测量）
-                    Some(idx)
-                }
-                None => {
-                    // 防御降级：Skip 恢复失败（key 不匹配/prev 缺失）→ 按 Enter 重建
-                    // （dirty=true 重测）。否则节点缺失 → 子树塌缩（间歇性坐标错乱）。
-                    // 子树完整优先于测量折叠——下一帧 key 稳定后恢复 Skip。
-                    // 注意：不能 return（会跳过尾部 add_child/children 挂接）——
-                    // 返回 Some(idx) 走统一挂接路径。
-                    let pidx = policy.map(|p| self.arena.alloc_policy(p));
-                    let mut node = LayoutNode::new(modifier, pidx);
-                    node.on_remove = on_remove;
-                    node.slot_key = key;
-                    // 降级节点：Skip 的 desc 通常已带 policy（skip_policy 保存外层传入值），
-                    // 此处为最终兜底——从 prev_nodes 恢复缓存测量折叠
-                    // （policy 仍缺失时避免测量出 0 尺寸）
-                    if let Some(cached) = self.prev_nodes.get(&key) {
-                        node.measured_size = cached.measured_size;
-                        node.cached_constraints = cached.cached_constraints;
-                        node.dirty = false;
-                    } else {
-                        node.dirty = true;
-                    }
-                    // 文本内容差异检测（与 Enter 路径一致）：dirty=false 折叠测量时
-                    // 若 TextContent 变化（输入/选择）→ 强制重测，避免缓存 paragraph 旧内容
-                    if !node.dirty {
-                        if let Some(cached) = self.prev_nodes.get(&key) {
-                            if crate::layout::node::modifier_text_content_differs(&cached.modifier, &node.modifier) {
-                                node.dirty = true;
-                            }
-                        }
-                    }
-                    let idx = self.arena.alloc(node);
-                    Some(idx)
-                }
-            }
-        } else {
-            // 复用节点：policy 替换旧槽（本帧参数生效 + 池不增长——否则每帧 alloc 泄漏）
-            let reused_idx = self.prev_node_by_key.remove(&key);
-            let pidx = if reused_idx.is_some() {
-                if let Some(p) = policy {
-                    let old = self.arena.nodes[reused_idx.unwrap()].measure_policy;
-                    if let Some(op) = old {
-                        self.arena.policies[op] = p;
-                        Some(op)
-                    } else {
-                        Some(self.arena.alloc_policy(p))
-                    }
-                } else { None }
-            } else {
-                policy.map(|p| self.arena.alloc_policy(p))
-            };
-            let idx = if let Some(idx) = reused_idx {
-                self.reused_nodes.insert(idx);
-                let n = &mut self.arena.nodes[idx];
-                n.children.clear();
-                n.modifier = modifier;
-                n.measure_policy = pidx; // 显式赋值（None 清空——防类型切换残留旧 policy）
-                n.on_remove = on_remove;
-                n.slot_key = key;
-                n.dirty = dirty; // Dirty → 重测；Clean → 折叠（保留测量）
-                // 文本内容变化检测：依赖注册在父容器 → leaf Slot Clean 但 TextContent 变了
-                // （输入/选择）——不重测则 cached_paragraph 旧内容（输入不显示）
-                if !dirty {
-                    if let Some(cached) = self.prev_nodes.get(&key) {
-                        if crate::layout::node::modifier_text_content_differs(&cached.modifier, &n.modifier) {
-                            n.dirty = true;
-                        }
-                    }
-                }
-                idx
-            } else {
-                let mut node = LayoutNode::new(modifier, pidx);
-                node.on_remove = on_remove;
-                node.slot_key = key;
-                if !dirty {
-                    // Clean slot：从上一帧缓存恢复布局部分（measured_size/cached_constraints）——
-                    // modifier 用本帧 build 的值（恢复旧 modifier 会覆盖本帧新值，如按钮 label 切换）
-                    if let Some(cached) = self.prev_nodes.get(&key) {
-                        node.restore_layout(cached);
-                    }
-                }
-                self.arena.alloc(node)
-            };
-            Some(idx)
-        };
-        let Some(index) = index else {
-            // Skip 恢复失败已在上方降级为 Enter（重建节点）——此处仅 Enter 恒 Some
-            // 兜底（children 已由降级/Enter 路径递归处理）
-            return None;
-        };
-        // 应用文本选择 registrar（组合期写入 desc——物化时落到节点；
-        // Skip 恢复路径的节点保留缓存 registrar，不走此处）
-        if let Some(reg) = registrar {
-            *self.arena.nodes[index].registrar.borrow_mut() = Some(reg);
-        }
-        if let Some(p) = parent {
-            self.arena.add_child(p, index);
-        } else {
-            self.arena.root = Some(index);
-        }
-        for child in children {
-            self.materialize_node(child, Some(index));
-        }
-        Some(index)
+        SCOPE_SRC_STACK.with(|s| { let mut s = s.borrow_mut(); if !s.is_empty() { s.pop(); } }); // 镜像同步
     }
 
     /// 物化：组合树（Slot desc）→ 布局树（arena LayoutNode）——完整分离的核心。
-    /// 由 compose 末尾调用（layout 只测量）。
-    /// descs 为空时：同帧二次 compose（prev 已被首次物化 drain）保留现有树；
-    /// 内容确实消失（prev 非空——正常 compose 无产物）清空树（旧行为——避免旧树持续渲染）。
+    /// 由 compose 末尾调用（layout 只测量）。实现拆到 core/materialize.rs（SRP）。
     pub fn materialize(&mut self) {
-        let mut descs = Vec::new();
-        self.slot_table.collect_desc_tree(&mut descs);
-        if descs.is_empty() {
-            if !(self.prev_node_by_key.is_empty() && self.arena.root.is_some()) {
-                self.arena.root = None;
-            }
-            return; // 无组合产物（layout 防御调用——树保留；compose 末尾已物化）
-        }
-        // 同帧多次 compose：第一次已物化并 drain 了 prev_node_by_key——
-        // 第二次 materialize 若重建，Skip 恢复全部失败（prev 空）→ 树塌缩。
-        // 保留现有树（组合产物差异只影响值/结构微调——布局读最新 State 值，
-        // 结构变化下一帧（prev 已重建）自然收敛）。注意：必须在清 root 前判断。
-        if self.prev_node_by_key.is_empty() && self.arena.root.is_some() {
-            return;
-        }
-        self.arena.root = None;
-        for desc in descs {
-            self.materialize_node(desc, None);
-        }
+        crate::core::materialize::materialize(self);
     }
 
+    /// 在组合树中开始一个节点（由组件的 build 方法调用）
     pub fn start_node(&mut self, key: u64, modifier: Modifier, policy: Option<Box<dyn MeasurePolicy>>, on_remove: Option<Box<dyn FnOnce() + Send>>) {
         self.current_group_key = key as u32;
         let slot_status = self.slot_table.start_slot(key);
@@ -1251,6 +1184,8 @@ impl Composer {
         self.path_counters.clear();
         self.remember_path_counters.clear();
         STMT_STACK.with(|s| s.borrow_mut().clear());
+        STMT_SEQ.with(|m| m.borrow_mut().clear()); // 语句调用序号重置——重组时循环迭代 key 与首帧一致
+        SCOPE_SRC_STACK.with(|s| s.borrow_mut().clear()); // scope 镜像同步
         self.scope_source_stack.clear();
         self.key_override_stack.clear();
         // 注意：不在 compose 开头清 arena.root——materialize 管理 root
@@ -1274,11 +1209,17 @@ impl Composer {
                     affected_slot_keys.insert(k);
                 }
             }
+            // 两段式依赖：布局期注册的依赖 → 只标布局失效（重测不重组）
+            if let Some(keys) = self.layout_deps.get(&state_id) {
+                for &k in keys {
+                    self.layout_dirty_keys.insert(k);
+                }
+            }
         }
         drop(pending);
 
-        // 设置依赖记录目标——State::get() 会通过 thread-local 指针写入 self.recorded_deps
-        crate::core::state::set_recording_target(&mut self.recorded_deps);
+        // 开始组合期依赖记录（thread_local 缓冲——State::get 写入，末尾 take_deps 取走）
+        crate::core::state::begin_compose_deps();
 
         {
             let ctx = &mut ComposeCtx::new(self);
@@ -1298,21 +1239,24 @@ impl Composer {
             "compose 结束时 GROUP_STACK 应清空（scope/节点配对不完整）");
         GROUP_STACK.with(|s| s.borrow_mut().clear());
 
-        // 依赖注册（recorded_deps → slot_deps）保持此处（组合期收集的 State 依赖）
-        for (state_id, slot_key) in self.recorded_deps.drain(..) {
-            self.slot_deps.entry(state_id).or_default().insert(slot_key);
-        }
-
         // 完整分离：组合完成后物化布局树（测试/调用方可直接 layout_root_idx）
         self.materialize();
-        // 物化后：注册 modifier 中引用的 State 依赖（scroll 等——组合期 arena 空）
+        // 物化后：注册 modifier 中引用的 State 依赖（scroll 等——组合期 arena 空）。
+        // 必须在 take_deps() 之前执行——其中 State::get() 依赖 DEP_MODE=Compose
+        //（begin_compose_deps 后未复位）；先复位则 scroll 依赖被静默丢弃（滚动不刷新）
         if let Some(root_idx) = self.arena.root {
             register_modifier_deps_recursive(&self.arena, root_idx);
+        }
+        // 依赖注册（组合期 + modifier 期收集的 State 依赖 → slot_deps）
+        for (state_id, slot_key) in crate::core::state::take_deps() {
+            self.slot_deps.entry(state_id).or_default().insert(slot_key);
         }
         // 回收本帧未复用的上帧节点（结构变化移除的子树——on_remove 触发）；
         // 跳过已复用节点（已挂入本帧树，free 会递归进本帧树形成环）
         let mut visited = std::collections::HashSet::new();
-        for (_, idx) in self.prev_node_by_key.drain() {
+        for (key, idx) in self.prev_node_by_key.drain() {
+            // 收集移除的 slot_key（layout_deps 死 key 清理）
+            self.removed_slot_keys.insert(key);
             self.arena.free_node_skip(idx, &self.reused_nodes, &mut visited);
         }
         self.prev_node_by_key.clear();
@@ -1351,30 +1295,62 @@ impl Composer {
 
     /// 执行整棵布局树的 measure + place，并缓存测量结果供下帧复用
     pub fn layout(&mut self, root_constraints: Constraints) {
+        // 应用布局失效：清全树旧标记 → 按 layout_dirty_keys 标节点 + 祖先传播
+        // （保守超集：祖先全链标脏——布局动画场景父必然依赖子尺寸，Compose 精确传播留待优化）
+        if let Some(root_idx) = self.arena.root {
+            let nodes = &mut self.arena.nodes;
+            // 清全树旧标记（每帧重新标记）
+            for n in nodes.iter_mut() { n.layout_dirty = false; }
+            if !self.layout_dirty_keys.is_empty() {
+                crate::layout::node::apply_layout_dirty(nodes, root_idx, &self.layout_dirty_keys);
+            }
+            self.layout_dirty_keys.clear();
+        } else {
+            self.layout_dirty_keys.clear();
+        }
         // 物化只在 compose 末尾（完整分离：组合完成即建树）——layout 只测量。
         // 单独调 layout（无 compose）时树为空——measure 无操作（无害）
+        // 开始布局期依赖记录（measure 中 State::get → 两段式分流）
+        crate::core::state::begin_layout_deps();
         if let Some(root_idx) = self.arena.root {
             let (_size, _placements) = crate::layout::measure_node(
                 &mut self.arena.nodes, &self.arena.policies, root_idx, root_constraints);
             self.arena.nodes[root_idx].measured_size = _size;
             // 收集整棵树的节点信息（measured_size、cached_constraints、modifier），按 slot_key 索引
             self.prev_nodes.clear();
-            collect_nodes(&mut self.arena, root_idx, &mut self.prev_nodes);
+            crate::core::materialize::collect_nodes(&mut self.arena, root_idx, &mut self.prev_nodes);
             // 阶段D：重建 slot_key → 节点索引映射（供下帧 start_node 复用）
             self.prev_node_by_key.clear();
-            collect_node_keys(&self.arena, root_idx, &mut self.prev_node_by_key);
-            // measure 阶段（SizeDynamic 闭包内的 State::get()）注册的依赖也要进入 slot_deps
-            for (state_id, slot_key) in self.recorded_deps.drain(..) {
-                self.slot_deps.entry(state_id).or_default().insert(slot_key);
+            crate::core::materialize::collect_node_keys(&self.arena, root_idx, &mut self.prev_node_by_key);
+            // 布局依赖增量更新（两段式依赖）：
+            // 本帧 measure 过的 slot_key（touched）→ 清旧写新（依赖集收敛）；
+            // 未 measure 的（常量折叠命中）→ 保留旧项（折叠前提=依赖无 notify，闭环成立）。
+            let recorded: Vec<(u32, u64)> = crate::core::state::take_deps();
+            let touched: HashSet<u64> = recorded.iter().map(|&(_, k)| k).collect();
+            if !touched.is_empty() {
+                for set in self.layout_deps.values_mut() {
+                    set.retain(|k| !touched.contains(k));
+                }
+            }
+            // 顺手清理死 key：本帧确认移除的节点（compose 末尾回收时收集）
+            if !self.removed_slot_keys.is_empty() {
+                for set in self.layout_deps.values_mut() {
+                    set.retain(|k| !self.removed_slot_keys.contains(k));
+                }
+                self.removed_slot_keys.clear();
+            }
+            // 空条目清理（节点不再依赖任何 state 或已移除）
+            self.layout_deps.retain(|_, set| !set.is_empty());
+            // 写入本帧新注册
+            for (state_id, slot_key) in recorded {
+                self.layout_deps.entry(state_id).or_default().insert(slot_key);
             }
         } else {
-            // 无根节点（空内容帧）：recorded_deps 无 measure 期新增，直接清空
-            self.recorded_deps.clear();
+            // 无根节点（空内容帧）：布局依赖缓冲无 measure 期新增，直接取走丢弃
+            //（防御性对称——未来若在无 root 路径写入 measure 依赖，不会残留跨帧）
+            crate::core::state::take_deps();
         }
-        // 组合 + 测量全部完成：清除 recording target（无论是否有 root——
-        // 否则 RECORDING_TARGET 残留指向本 Composer 的裸指针，Composer drop 后
-        // 后续 State::get() 会写悬垂内存（UB））
-        crate::core::state::clear_recording_target();
+        // 组合 + 测量全部完成：记录模式已由 take_deps 复位（无指针残留——无悬垂风险）
     }
 
     /// 请求重组（由 State 变化触发）。
@@ -1427,56 +1403,6 @@ fn register_modifier_deps_recursive(arena: &crate::layout::node::NodeArena, idx:
 impl Default for Composer {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl Drop for Composer {
-    fn drop(&mut self) {
-        // 防御：若本 Composer 是当前 RECORDING_TARGET 的持有者（compose 后未
-        // layout/clear 就 drop——如 init 临时 composer 或未来新增路径），清除之，
-        // 防止悬垂裸指针 UB（后续 State::get() 写已释放内存）。
-        crate::core::state::clear_recording_target();
-    }
-}
-
-/// 递归遍历布局树，收集每个节点的可缓存子集。
-/// 同时将子节点的 dirty 冒泡到父节点（确保父节点不会因 dirty=false 而跳过脏子树）。
-/// 后序遍历，以 slot_key 为键存入 prev_nodes（slot_key 是稳定位置标识，
-/// 与 start_node/start_restartable_group 的查询键一致——scope 层不产生
-/// LayoutNode，两棵树路径不一致，key 天然对齐）。
-fn collect_nodes(
-    arena: &mut crate::layout::node::NodeArena,
-    idx: usize,
-    map: &mut HashMap<u64, CachedNode>,
-) {
-    // 先递归子节点（后序），以便 dirty 从子向父冒泡
-    let children = arena.nodes[idx].children.clone();
-    for c in children {
-        collect_nodes(arena, c, map);
-        if arena.nodes[c].dirty {
-            arena.nodes[idx].dirty = true;
-        }
-    }
-    // 缓存当前节点的可缓存子集
-    map.insert(arena.nodes[idx].slot_key, arena.nodes[idx].to_cached());
-}
-
-/// 收集 arena 树中所有节点的 slot_key → 索引映射（阶段D 节点复用用）
-fn collect_node_keys(
-    arena: &crate::layout::node::NodeArena,
-    idx: usize,
-    map: &mut HashMap<u64, usize>,
-) {
-    if let Some(prev) = map.insert(arena.nodes[idx].slot_key, idx) {
-        #[cfg(debug_assertions)] {
-            if std::env::var("WINIA_KEY_TRACE").is_ok() {
-                eprintln!("[dup-key] sk={} idx={} 被 {} 覆盖", arena.nodes[idx].slot_key >> 32, prev, idx);
-            }
-        }
-    }
-    let children = arena.nodes[idx].children.clone();
-    for c in children {
-        collect_node_keys(arena, c, map);
     }
 }
 
@@ -2007,7 +1933,7 @@ fn test_is_skip_with_scope_layer() {
     });
     assert!(skip_happened,
         "含 scope 层的 clean group 应 Skip（slot_key 键修复后两棵树路径错位不再导致 miss）——若 Enter 说明回归");
-    // 自清洁：帧2 后 layout（clear recording target），避免 RECORDING_TARGET 残留
+    // 自清洁：帧2 后 layout（复位依赖记录模式——take_deps 等价）
     composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
 }
 
@@ -2340,6 +2266,252 @@ fn test_reused_node_remeasures_on_state_change() {
         "State 变化后复用节点应重测：frame1 w={} frame2 w={}（冻结则 bug 复发）", size1, size2);
 }
 
+// ═══════════════════════════════════════════════════════════
+// 两段式依赖测试（P2-1：布局期读动画值只重测不重组）
+// ═══════════════════════════════════════════════════════════
+
+/// T1 记录分流：组合期 get() 进 slot_deps；布局期（measure 中 SizeDynamic）get() 进 layout_deps
+#[test]
+fn test_layout_dep_recording_split() {
+    let mut composer = Composer::new();
+    let holder = std::cell::RefCell::new(None::<State<f32>>);
+
+    composer.compose(|ctx| {
+        let s = ctx.remember(|| 0.0f32);
+        *holder.borrow_mut() = Some(s.clone());
+        let root_key = ctx.next_key();
+        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                let _ = s.get(); // 组合期读 → slot_deps
+                let k = ctx.next_key();
+                ctx.start_leaf(k, Modifier::new().size(&s, 10.0)); // 布局期读 → layout_deps
+                ctx.end_node();
+            }
+        }
+        ctx.end_restartable_group();
+    });
+    composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+
+    let s = holder.borrow().clone().unwrap();
+    let sid = s.id();
+    assert!(composer.slot_deps.contains_key(&sid),
+        "组合期 get() 应注册进 slot_deps");
+    assert!(composer.layout_deps.contains_key(&sid),
+        "布局期（SizeDynamic）get() 应注册进 layout_deps");
+    // 同一 State 双通道（组合+布局）各自记录
+    let keys_layout = composer.layout_deps.get(&sid).unwrap();
+    assert_eq!(keys_layout.len(), 1, "layout_deps 应含叶子节点 key");
+}
+
+/// T2 布局失效传播：layout_dirty_keys 命中的节点 + 祖先链全部标 layout_dirty
+#[test]
+fn test_layout_dirty_propagates_to_ancestors() {
+    let mut composer = Composer::new();
+    let holder = std::cell::RefCell::new(None::<State<f32>>);
+
+    composer.compose(|ctx| {
+        let s = ctx.remember(|| 0.0f32);
+        *holder.borrow_mut() = Some(s.clone());
+        let root_key = ctx.next_key();
+        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                let k = ctx.next_key();
+                ctx.start_leaf(k, Modifier::new().size(&s, 10.0));
+                ctx.end_node();
+            }
+        }
+        ctx.end_restartable_group();
+    });
+    composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+
+    let root_idx = composer.layout_root_idx().unwrap();
+    let leaf_idx = composer.arena_nodes()[root_idx].children[0];
+    let leaf_key = composer.arena_nodes()[leaf_idx].slot_key;
+
+    // 模拟 pending 消费收集 → 直接测 apply_layout_dirty（裸函数：DFS + 祖先传播）
+    composer.layout_dirty_keys.insert(leaf_key);
+    let mut nodes = std::mem::take(&mut composer.arena.nodes);
+    crate::layout::node::apply_layout_dirty(&mut nodes, root_idx, &composer.layout_dirty_keys);
+    assert!(nodes[root_idx].layout_dirty, "祖先（root）应被传播标脏");
+    assert!(nodes[leaf_idx].layout_dirty, "命中节点应标脏");
+    composer.arena.nodes = nodes;
+}
+
+/// T3 动画尺寸只重测不重组：布局依赖 State 变化 → 组合不重跑（clean 计数）+ 尺寸更新
+#[test]
+fn test_layout_dep_remesures_without_recompose() {
+    let mut composer = Composer::new();
+    let holder = std::cell::RefCell::new(None::<State<f32>>);
+
+    let build = |composer: &mut Composer| {
+        composer.compose(|ctx| {
+            let s = ctx.remember(|| 0.0f32);
+            *holder.borrow_mut() = Some(s.clone());
+            let root_key = ctx.next_key();
+            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, Modifier::new().size(&s, 10.0));
+                    ctx.end_node();
+                }
+            }
+            ctx.end_restartable_group();
+        });
+        composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+    };
+
+    build(&mut composer);
+    let root_idx = composer.layout_root_idx().unwrap();
+    let leaf_idx = composer.arena_nodes()[root_idx].children[0];
+    let size1 = composer.arena_nodes()[leaf_idx].measured_size.width;
+
+    // 布局动画值变化（set_no_wake——动画推进语义）
+    let s = holder.borrow().clone().unwrap();
+    s.set_no_wake(300.0);
+    build(&mut composer);
+    let root_idx = composer.layout_root_idx().unwrap();
+    let leaf_idx = composer.arena_nodes()[root_idx].children[0];
+    let size2 = composer.arena_nodes()[leaf_idx].measured_size.width;
+
+    assert!(size2 > size1 + 10.0, "布局依赖 State 变化应重测：frame1 w={} frame2 w={}", size1, size2);
+    // 关键断言：不重组——leaf slot 应为 Clean（layout_dirty 不触发组合级 dirty）
+    assert_eq!(composer.compose_dirty_count, 0,
+        "布局动画值变化不应触发组合级 dirty（只重测不重组）——dirty_count={}", composer.compose_dirty_count);
+}
+
+/// T4 常量折叠保留布局依赖：折叠帧不重新注册 → layout_deps 旧项保留；notify 后重测
+#[test]
+fn test_layout_dep_survives_const_fold() {
+    let mut composer = Composer::new();
+    let holder = std::cell::RefCell::new(None::<State<f32>>);
+
+    let build = |composer: &mut Composer| {
+        composer.compose(|ctx| {
+            let s = ctx.remember(|| 0.0f32);
+            *holder.borrow_mut() = Some(s.clone());
+            let root_key = ctx.next_key();
+            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, Modifier::new().size(&s, 10.0));
+                    ctx.end_node();
+                }
+            }
+            ctx.end_restartable_group();
+        });
+        composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+    };
+
+    build(&mut composer);
+    let sid = holder.borrow().clone().unwrap().id();
+    assert!(composer.layout_deps.contains_key(&sid), "帧1 应注册布局依赖");
+
+    // 帧2：无 notify 的重复 build——compose 全 Skip、measure 常量折叠命中
+    use crate::layout::node::MEASURE_COUNT;
+    let m1 = MEASURE_COUNT.with(|c| c.get());
+    build(&mut composer);
+    let m2 = MEASURE_COUNT.with(|c| c.get());
+    assert_eq!(m1, m2,
+        "折叠帧不应重新 measure（m1={} m2={}——若重测则依赖续期而非折叠保留，T4 语义失效）", m1, m2);
+    assert!(composer.layout_deps.contains_key(&sid),
+        "常量折叠帧（未重新 measure）应保留旧布局依赖——丢失则布局动画冻结");
+    let leaf_key = {
+        let root_idx = composer.layout_root_idx().unwrap();
+        let leaf_idx = composer.arena_nodes()[root_idx].children[0];
+        composer.arena_nodes()[leaf_idx].slot_key
+    };
+    assert!(composer.layout_deps.get(&sid).unwrap().contains(&leaf_key),
+        "旧依赖项（state→leaf key）应保留");
+
+    // 帧3：notify → 重测并维持依赖
+    let s = holder.borrow().clone().unwrap();
+    s.set_no_wake(123.0);
+    build(&mut composer);
+    let m3 = MEASURE_COUNT.with(|c| c.get());
+    assert!(m3 > m2, "notify 后应重新 measure（布局失效生效）");
+    assert!(composer.layout_deps.contains_key(&sid), "重测后依赖应续期");
+}
+
+/// 回归测试（review 发现）：register_modifier_deps_recursive（scroll 等 modifier 内
+/// State::get）必须在 take_deps 之前执行——否则依赖被静默丢弃、滚动不刷新。
+#[test]
+fn test_modifier_scroll_dep_registered() {
+    let mut composer = Composer::new();
+    let holder = std::cell::RefCell::new(None::<crate::modifier::ScrollState>);
+
+    let build = |composer: &mut Composer| {
+        composer.compose(|ctx| {
+            let ss = ctx.remember(|| crate::modifier::ScrollState::new()).get();
+            *holder.borrow_mut() = Some(ss.clone());
+            let root_key = ctx.next_key();
+            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, Modifier::new().vertical_scroll(ss.clone()));
+                    ctx.end_node();
+                }
+            }
+            ctx.end_restartable_group();
+        });
+        composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+    };
+
+    build(&mut composer);
+    let sid = holder.borrow().as_ref().unwrap().offset.id();
+    assert!(composer.slot_deps.contains_key(&sid),
+        "scroll offset 应注册组合依赖（register_modifier_deps_recursive）——丢失则滚动不刷新");
+
+    // offset 变化 → 下帧该 slot 组合级 dirty（滚动触发重组）
+    holder.borrow().as_ref().unwrap().offset.set(50.0);
+    build(&mut composer);
+    assert!(composer.compose_dirty_count > 0,
+        "scroll 变化应触发组合级 dirty（dirty_count={}）", composer.compose_dirty_count);
+}
+
+/// 崩溃边界（P3-3）前提验证：content panic 后（catch_unwind 捕获），
+/// 下帧恢复正常内容应自愈——slot 表/依赖缓冲（DEP_MODE 残留由 begin 清空）
+/// 从半状态重建，不残留垃圾。
+#[test]
+fn test_compose_panic_recovers_next_frame() {
+    let mut composer = Composer::new();
+    let should_panic = std::cell::Cell::new(true);
+
+    let content = |ctx: &mut ComposeCtx| {
+        if should_panic.get() {
+            panic!("模拟用户 content panic");
+        }
+        let root_key = ctx.next_key();
+        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                let k = ctx.next_key();
+                ctx.start_leaf(k, Modifier::new());
+                ctx.end_node();
+            }
+        }
+        ctx.end_restartable_group();
+    };
+
+    // 帧1：panic（上层 catch_unwind 捕获——此处直接验证 panic 确实发生）
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        composer.compose(content);
+    }));
+    assert!(r.is_err(), "帧1 应 panic（模拟渲染路径崩溃边界触发）");
+
+    // 帧2：恢复正常内容 → 自愈
+    should_panic.set(false);
+    composer.compose(content);
+    composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+    assert!(composer.layout_root_idx().is_some(), "panic 后下帧应自愈（树重建）");
+    let root_idx = composer.layout_root_idx().unwrap();
+    assert_eq!(composer.arena_nodes()[root_idx].children.len(), 1, "自愈后结构正确");
+}
+
 /// 数据驱动的结构变化：State 变 → root Enter → 新增 leaf 生效。
 /// （源码级结构变化在 Skip 语义下不触发——对标 Compose：结构变化必须由数据驱动）
 #[test]
@@ -2640,7 +2812,7 @@ fn test_stmt_guard_drops_on_scope_exit() {
         // 块内 enter_stmt——块尾（模拟 return/break 提前退出）guard drop 自动 pop
         {
             let _g = ctx.enter_stmt(7);
-            assert_eq!(STMT_STACK.with(|s| s.borrow().last().copied()), Some(7), "guard 生效：栈顶为 7");
+            assert_eq!(STMT_STACK.with(|s| s.borrow().last().copied()), Some((7, 1)), "guard 生效：栈顶为 (id=7, seq=1)");
         } // 块退出——guard drop
         assert!(STMT_STACK.with(|s| s.borrow().is_empty()), "提前退出后栈应自动恢复（无泄漏）");
         // guard 存活期间显式 pop 配对（guard 仍持有——drop 时再 pop 一次无害）
@@ -2649,6 +2821,93 @@ fn test_stmt_guard_drops_on_scope_exit() {
         drop(_g8);
         ctx.end_scope();
     });
+}
+
+/// for 循环迭代 key 回归：content 闭包内语句只在容器 Enter 时执行——自身执行
+/// 计数会漂移（首帧 30 次迭代全 Enter → seq=30；滚动后前 29 次迭代行 Skip、
+/// 第 30 次才 Enter → text 语句首次执行 seq=1）→ key 碰撞（text29 撞 text0）
+/// → 槽树 truncate 重建 → 行内容丢失。seq 解析 = max(自身计数, 外层迭代位置)
+/// ——content 内语句继承外层行语句的迭代位置（行语句每次迭代都执行）。
+#[test]
+fn test_stmt_seq_inherits_outer_iteration_position() {
+    let mut composer = Composer::new();
+    let mut keys_first = Vec::new();
+    let mut keys_recompose = Vec::new();
+    // 首帧：30 次迭代全执行 text（全 Enter）——text 自身计数 1..30
+    composer.compose(|ctx| {
+        let _ = ctx.start_scope_keyed(0xABCD);
+        for _ in 0..30 {
+            ctx.push_stmt(6); // for 循环体语句（每次迭代执行）
+            ctx.push_stmt(7); // content 内语句（行 Enter 时执行）
+            keys_first.push(ctx.next_key());
+            ctx.pop_stmt();
+            ctx.pop_stmt();
+        }
+        ctx.end_scope();
+    });
+    // 重组：前 29 次迭代行 Skip（text 不执行），第 30 次迭代行 Enter（text 执行）
+    composer.compose(|ctx| {
+        let _ = ctx.start_scope_keyed(0xABCD);
+        for i in 0..30 {
+            ctx.push_stmt(6);
+            if i == 29 {
+                ctx.push_stmt(7); // 自身计数=1（重置后首次）→ max(1, 30)=30
+                keys_recompose.push(ctx.next_key());
+                ctx.pop_stmt();
+            }
+            ctx.pop_stmt();
+        }
+        ctx.end_scope();
+    });
+    assert_eq!(
+        keys_first[29], keys_recompose[0],
+        "content 内语句继承外层迭代位置——重组后 key 与首帧一致（防 text29 撞 text0）"
+    );
+    assert_ne!(
+        keys_first[0], keys_first[29],
+        "迭代 key 互异——30 行 key 全同（无 seq 分量时代）会让槽树错乱"
+    );
+}
+
+/// 跨函数 seq 基数泄漏回归：不同 #[composable] 函数的语句 id 各自从 0 开始——
+/// STMT_SEQ 若只按裸 id 计数，先执行函数的迭代次数会成为后执行函数的 seq 基数
+/// （函数 B 行数变化 → 函数 A 的 key 漂移 → remember State 重置/槽树重建）。
+/// 修复：STMT_SEQ 按 (scope_src, id) 计数——不同 scope 完全隔离。
+#[test]
+fn test_stmt_seq_isolated_across_functions() {
+    let mut composer = Composer::new();
+    let mut keys_a = Vec::new();
+    let mut keys_b = Vec::new();
+    composer.compose(|ctx| {
+        // 函数 A（scope 0xAAAA）：3 次迭代
+        let _ = ctx.start_scope_keyed(0xAAAA);
+        for _ in 0..3 {
+            ctx.push_stmt(1);
+            keys_a.push(ctx.next_key());
+            ctx.pop_stmt();
+        }
+        ctx.end_scope();
+        // 函数 B（scope 0xBBBB）：语句 id 也从 1 开始——seq 必须独立（=1，不是 A 的 3）
+        let _ = ctx.start_scope_keyed(0xBBBB);
+        ctx.push_stmt(1);
+        keys_b.push(ctx.next_key());
+        ctx.pop_stmt();
+        ctx.end_scope();
+    });
+    // B 的 seq 若泄漏 A 的基数（=4）→ 与"B 单独首帧"的 key 不同——构造对比：
+    let mut composer2 = Composer::new();
+    let mut keys_b_alone = Vec::new();
+    composer2.compose(|ctx| {
+        let _ = ctx.start_scope_keyed(0xBBBB);
+        ctx.push_stmt(1);
+        keys_b_alone.push(ctx.next_key());
+        ctx.pop_stmt();
+        ctx.end_scope();
+    });
+    assert_eq!(
+        keys_b[0], keys_b_alone[0],
+        "函数 B 的语句 seq 与函数 A 的执行无关（跨函数基数泄漏）"
+    );
 }
 
 /// 串位 bug 回归：两个不同 scope（不同源码哈希）内**相同的语句 id**（同 push_stmt(5)）
@@ -2949,4 +3208,215 @@ fn test_materialize_skip_restores_subtree() {
         assert!(n.cached_constraints.is_some(), "恢复的 leaf 应保留测量缓存（cached_constraints）");
         assert_eq!(n.slot_key, composer.arena_nodes()[r].children.iter().find(|&&x| x == ci).map(|_| composer.arena_nodes()[ci].slot_key).unwrap(), "恢复的 leaf slot_key 保留");
     }
+}
+
+// ═══════════════════════════════════════════════════════════
+// P3-1 Skip 恢复健壮性测试（结构签名）
+// ═══════════════════════════════════════════════════════════
+
+/// T2：State 驱动结构变化回归——if 分支增删（show_b State）→ root Enter 重建，
+/// A 位置不复用 B 缓存，B 移除后无残留。
+#[test]
+fn test_skip_recovery_structure_change_by_state() {
+    let mut composer = Composer::new();
+    let holder = std::cell::RefCell::new(None::<State<bool>>);
+
+    let build = |composer: &mut Composer, holder: &std::cell::RefCell<Option<State<bool>>>| {
+        composer.compose(|ctx| {
+            let show_b = ctx.remember(|| true);
+            *holder.borrow_mut() = Some(show_b.clone());
+            let root_key = ctx.next_key();
+            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    // A 叶子（始终在）
+                    { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                    // B 分支（show_b 控制）
+                    if show_b.get() {
+                        let k = ctx.next_key();
+                        ctx.start_leaf(k, Modifier::new().size(100.0, 50.0));
+                        ctx.end_node();
+                    }
+                }
+            }
+            ctx.end_restartable_group();
+        });
+        composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+    };
+
+    build(&mut composer, &holder);
+    let r = composer.layout_root_idx().unwrap();
+    assert_eq!(composer.arena_nodes()[r].children.len(), 2, "帧1 应有 A+B 两个 leaf");
+
+    // 帧2：show_b=false（State 驱动 → root Enter → content 重跑 → B 分支不建）
+    holder.borrow().as_ref().unwrap().set(false);
+    build(&mut composer, &holder);
+    let r = composer.layout_root_idx().unwrap();
+    assert_eq!(composer.arena_nodes()[r].children.len(), 1, "帧2 应只剩 A（B 移除）");
+    // A 正常保留；不应复用 B 的缓存（B 的 size 100x50）
+    let a = composer.arena_nodes()[r].children[0];
+    assert!(composer.arena_nodes()[a].measured_size.width < 100.0,
+        "A 不应复用 B 的缓存（B 的 width=100 不应出现在 A）——width={}", composer.arena_nodes()[a].measured_size.width);
+
+    // 帧3：B 恢复
+    holder.borrow().as_ref().unwrap().set(true);
+    build(&mut composer, &holder);
+    let r = composer.layout_root_idx().unwrap();
+    assert_eq!(composer.arena_nodes()[r].children.len(), 2, "帧3 应恢复 A+B");
+}
+
+/// T3：结构签名直接验证——手动构造"缓存 children 数 != desc children 数"，
+/// materialize_node Skip 恢复应放弃（重建 + key 保留待回收，防张冠李戴与泄漏）。
+#[test]
+fn test_skip_recovery_sig_mismatch_direct() {
+    let mut composer = Composer::new();
+    // 帧1：root + 2 leaf
+    composer.compose(|ctx| {
+        let root_key = ctx.next_key();
+        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+            }
+        }
+        ctx.end_restartable_group();
+    });
+    composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+    let old_root = composer.layout_root_idx().unwrap();
+    let old_root_key = composer.arena_nodes()[old_root].slot_key;
+    let leaf0_key = composer.arena_nodes()[composer.arena_nodes()[old_root].children[0]].slot_key;
+
+    // 手动构造 Skip desc：root 只有 1 子（缓存 2 子——签名不等）
+    let desc = crate::core::materialize::DescNode {
+        key: old_root_key,
+        skip: true,
+        modifier: Modifier::new(),
+        preserve_modifier: true,
+        policy: None,
+        on_remove: None,
+        dirty: false,
+        registrar: None,
+        children: vec![crate::core::materialize::DescNode {
+            key: leaf0_key,
+            skip: true,
+            modifier: Modifier::new(),
+            preserve_modifier: true,
+            policy: None,
+            on_remove: None,
+            dirty: false,
+            registrar: None,
+            children: vec![],
+        }],
+    };
+    composer.arena.root = None; // 模拟新帧物化开始
+    let new_root = crate::core::materialize::materialize_node(&mut composer, desc, None).unwrap();
+
+    // 断言：签名不等 → 重建（new_root != old_root）而非恢复缓存
+    assert_ne!(new_root, old_root, "签名不等应重建而非恢复缓存");
+    // 旧 root 未被复用（不在 reused_nodes）；key 保留在 prev_node_by_key（待 compose 末尾回收 free）
+    assert!(!composer.reused_nodes.contains(&old_root), "旧节点不应标记复用（待回收）");
+    assert!(composer.prev_node_by_key.contains_key(&old_root_key),
+        "key 应保留待回收（否则旧节点 arena 泄漏）");
+}
+
+/// T4：数量相同内容不同（A→B 同位置）——保持恢复（Compose 位置复用语义，不强制 Enter）
+#[test]
+fn test_skip_recovery_same_count_different_content() {
+    let mut composer = Composer::new();
+    let content = std::cell::Cell::new(0u32);
+
+    let build = |composer: &mut Composer, content: &std::cell::Cell<u32>| {
+        composer.compose(|ctx| {
+            let root_key = ctx.next_key();
+            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    // 同位置单个 leaf（数量恒 1）——内容由 cell 控制（无 state 驱动）
+                    let _ = content.get();
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, Modifier::new());
+                    ctx.end_node();
+                }
+            }
+            ctx.end_restartable_group();
+        });
+        composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+    };
+
+    build(&mut composer, &content);
+    // 帧2：内容 cell 变化但无 state notify → slot clean + 参数相同 → Skip（恢复）
+    content.set(1);
+    build(&mut composer, &content);
+    // 关键断言：帧2 全 Skip（clean 计数 > 0）——同数量同位置保持恢复（Compose 语义）
+    assert!(composer.compose_clean_count > 0, "数量相同内容不同应保持 Skip（clean_count={}）", composer.compose_clean_count);
+}
+
+// ═══════════════════════════════════════════════════════════
+// app_root! 根入口宏——稳定 key 测试（T7）
+// ═══════════════════════════════════════════════════════════
+
+/// T7：app_root! 覆盖下，根闭包内组件调用点获得语句级稳定 key——
+/// if 分支结构增删后同位置组件 key 不变、remember 状态保留。
+#[test]
+fn test_app_root_stable_keys_across_structure_change() {
+    let mut composer = Composer::new();
+    let show_holder = std::cell::RefCell::new(None::<State<bool>>);
+    // B 组件的 key 记录（跨帧断言）
+    let b_key = std::cell::Cell::new(None::<u64>);
+
+    // 根入口用 app_root!（宏注入语句级 key——根闭包内调用点稳定）
+    let root = crate::app_root!(|ctx: &mut ComposeCtx| {
+        let show = ctx.remember(|| true);
+        *show_holder.borrow_mut() = Some(show.clone());
+        let root_key = ctx.next_key();
+        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            crate::core::composer::GroupStatus::Skip => {}
+            crate::core::composer::GroupStatus::Enter => {
+                // A 组件（if 分支包裹——结构变化场景）
+                if show.get() {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, Modifier::new());
+                    ctx.end_node();
+                }
+                // B 组件（始终存在——key 应跨结构变化稳定）
+                let k2 = ctx.next_key();
+                ctx.start_leaf(k2, Modifier::new().size(50.0, 20.0));
+                ctx.end_node();
+            }
+        }
+        ctx.end_restartable_group();
+    });
+
+    let build = |composer: &mut Composer| {
+        composer.compose(|ctx| { root(ctx); });
+        composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+        // 记录 B 组件（最后一个 leaf）的 slot_key
+        let r = composer.layout_root_idx().unwrap();
+        let children = composer.arena_nodes()[r].children.clone();
+        let b = children[children.len() - 1];
+        b_key.set(Some(composer.arena_nodes()[b].slot_key));
+    };
+
+    // 帧1：[A, B]
+    build(&mut composer);
+    let k1 = b_key.get().unwrap();
+    // show 状态 id（跨帧保留断言）
+    let show_id = show_holder.borrow().as_ref().unwrap().id();
+
+    // 帧2：show=false → [B]（A 移除——结构变化）
+    show_holder.borrow().as_ref().unwrap().set(false);
+    build(&mut composer);
+    let k2 = b_key.get().unwrap();
+    assert_eq!(k1, k2, "结构变化后 B 组件 key 应稳定（语句级 key）——k1={:x} k2={:x}", k1, k2);
+
+    // 帧3：show=true → [A, B]（A 恢复）
+    show_holder.borrow().as_ref().unwrap().set(true);
+    build(&mut composer);
+    let k3 = b_key.get().unwrap();
+    assert_eq!(k1, k3, "A 恢复后 B 组件 key 仍应稳定");
+
+    // remember 状态（show）跨结构变化保留（同一 State id）
+    assert_eq!(show_holder.borrow().as_ref().unwrap().id(), show_id,
+        "remember 状态应跨结构变化保留（语句级 key 稳定）");
 }

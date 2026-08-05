@@ -7,7 +7,7 @@
 //! 动画 state 失效只重跑对应节函数（对标 Compose @Composable 的用户函数粒度）。
 
 use winia::prelude::*;
-use winia::animation::{AnimationSpec, SpringSpec, TweenSpec, Transition};
+use winia::animation::{AnimationSpec, SpringSpec, TweenSpec};
 use winia::app;
 
 #[composable]
@@ -280,7 +280,7 @@ fn main() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let _guard = rt.enter();
 
-    app::run_app(|ctx| {
+    winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
                 .size(420.0, 500.0)

@@ -57,10 +57,6 @@ impl ParagraphBuilder {
         self
     }
     
-    pub fn peek_style(&mut self) -> TextStyle {
-        self.paragraph_builder.peek_style()
-    }
-    
     pub fn add_text(&mut self, str: impl AsRef<str>) {
         let str = str.as_ref();
         if str.is_empty() {
@@ -186,23 +182,6 @@ impl ParagraphBuilder {
             &self.byte_to_utf16_indices,
             &self.byte_to_grapheme_cluster_indices,
         )
-    }
-    
-    pub fn get_paragraph_style(&self) -> ParagraphStyle {
-        self.paragraph_builder.get_paragraph_style()
-    }
-    
-    pub fn reset(&mut self) {
-        self.paragraph_builder.reset();
-        self.placeholders.clear();
-        self.last_byte_index = 0;
-        self.last_real_index = 0;
-        self.last_utf16_index = 0;
-        self.last_grapheme_cluster_index = 0;
-        self.line_breaks.clear();
-        self.paragraph_byte_to_real_indices.clear();
-        self.byte_to_utf16_indices.clear();
-        self.byte_to_grapheme_cluster_indices.clear();
     }
 }
 

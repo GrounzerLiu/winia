@@ -52,6 +52,10 @@ pub(crate) struct PerWindow {
     pub(crate) frame_interval: std::time::Duration,
     /// 强制渲染（resize/动画停止等必须显示的帧——跳过分支的请求链断裂修复）
     pub(crate) force_redraw: bool,
+    /// 崩溃边界（P3-3）：连续渲染 panic 计数（防风暴停更）
+    pub(crate) consecutive_panics: u32,
+    /// 渲染已禁用（连续 panic 后停更——保留最后画面，不再自旋）
+    pub(crate) render_disabled: bool,
 
     /// 上次渲染时间（帧率限制——Windows acquire 不阻塞 vsync，应用层节流 60fps）
     pub(crate) last_render_time: std::time::Instant,
@@ -78,7 +82,7 @@ struct PtrDownState {
 
 impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::ui::theme::ThemeColors) -> Self {
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, pointer_down_slot: None, frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, last_request_time: std::time::Instant::now() }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, pointer_down_slot: None, frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now() }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -228,6 +232,11 @@ impl ApplicationHandler for AppState {
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
             }
         }
+        // DevTools 事件兜底消费（主窗口）——多窗口下主窗口在后台时
+        // RedrawRequested 不来（window_event 不调用）→ 注入事件卡队列
+        if let Some(wid) = self.parent_window_id {
+            self.consume_debug_events(wid);
+        }
         self.was_animating = animating;
     }
 
@@ -246,23 +255,6 @@ impl ApplicationHandler for AppState {
         AppState::process_pending_windows(self, event_loop);
         // 消费 pending close（on_remove 推入，compose 末尾也消费一次）
         crate::ui::window::Window::process_detached(&mut self.windows, event_loop, &|| debug::force_shutdown());
-        // 处理 close_window_by_id 请求（先 drain 再处理，避免持锁调用 cb）
-        let queue = std::mem::take(&mut *CLOSE_QUEUED.lock().unwrap());
-        for cid in queue {
-            let to_close: Vec<WindowId> = self.windows.iter()
-                .filter(|(_, pw)| pw.created_id() == Some(cid))
-                .map(|(wid, _)| *wid)
-                .collect();
-            for wid in to_close {
-                if let Some(mut pw) = self.windows.remove(&wid) {
-                    if let Some(ref mut cb) = pw.on_close { cb(); }
-                    for pw2 in self.windows.values() {
-                        if let Some(ref sw) = pw2.skia_window { sw.request_redraw(); }
-                    }
-                    if self.windows.is_empty() { debug::force_shutdown(); event_loop.exit(); }
-                }
-            }
-        }
         // 调试工具有 pending 请求时唤醒窗口（截图/模拟事件需要 RedrawRequested）
         if debug::has_pending() {
             for pw in self.windows.values() {
@@ -306,6 +298,8 @@ impl ApplicationHandler for AppState {
             WindowEvent::CloseRequested => {
                 if let Some(ref mut cb) = pw.on_close { cb(); }
                 self.windows.remove(&window_id);
+                // 清理 debug 树条目（窗口关闭后不再渲染——残留会让 UI 测试误判）
+                debug::remove_tree(window_id.into_raw() as u64);
                 // 通知其他窗口重绘（状态可能已变化）
                 for pw in self.windows.values() {
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
@@ -318,6 +312,7 @@ impl ApplicationHandler for AppState {
             WindowEvent::Destroyed => {
                 if let Some(cid) = pw.created_id { crate::ui::window::CREATED.lock().unwrap().remove(&cid); }
                 self.windows.remove(&window_id);
+                debug::remove_tree(window_id.into_raw() as u64);
                 for pw in self.windows.values() {
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 }
@@ -338,88 +333,8 @@ impl ApplicationHandler for AppState {
                     crate::modifier::PointerEventType::Up
                 };
                 if state.is_pressed() {
-                    // ── Down：记录按下态 + 清除旧选区 ──
-                    let (focusable_id, is_focusable) = {
-                        let nodes = pw.composer.arena_nodes();
-                        let root_idx = pw.composer.layout_root_idx();
-                        if let Some(r) = root_idx {
-                            let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
-                            if let Some(&innermost) = path.last() {
-                                let fid = nodes[innermost].id;
-                                let f = crate::layout::node::has_focusable_modifier(&nodes[innermost]);
-                                // 清除旧的选区（新点击开始）
-                                {
-                                    let reg = nodes[innermost].registrar.borrow().as_ref().cloned()
-                                        .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
-                                    reg.clear_selection();
-                                }
-                                let anchor = if let Ok(borrow) = nodes[innermost].cached_paragraph.try_borrow() {
-                                    if let Some(para) = borrow.as_ref() {
-                                        let (ax, ay) = node_abs_position(nodes, r, nodes[innermost].id);
-                                        let tl = crate::text::TextLayout::new(para, 0);
-                                        let closest = tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(scene_pos.0 - ax, scene_pos.1 - ay));
-                                        Some(closest)
-                                    } else { None }
-                                } else { None };
-                                pw.pointer_down_state = Some(PtrDownState {
-                                    node_id: nodes[innermost].id, position: scene_pos, time: Instant::now(),
-                                    selection_anchor: None, anchor_registrar: None });
-                                pw.pointer_down_slot = Some(nodes[innermost].slot_key);
-                                // 将 anchor 转为全局索引再存入
-                                // reg 只用节点自己的 registrar（不 fallback active_registrar）——
-                                // 不可选节点（输出 Text 等未注册）的 node.registrar 为 None，
-                                // fallback 会取到全局残留（如 Container B 的）→ anchor_registrar
-                                // 错绑 B → 拖动到 B 时 same_reg=true → 混合偏移 → B 被选
-                                if let Some(a) = anchor {
-                                    let own_reg = nodes[innermost].registrar.borrow().as_ref().cloned();
-                                    let global_a = own_reg.as_ref()
-                                        .and_then(|r| r.segment_info(nodes[innermost].slot_key))
-                                        .map(|(off,_)| off + a);
-                                    // 无容器（own_reg None）→ anchor_global None（不可选节点按下无选择）
-                                    pw.pointer_down_state.as_mut().map(|s| {
-                                        s.selection_anchor = global_a;
-                                        s.anchor_registrar = own_reg;  // None（不可选节点）→ 无 anchor 容器
-                                    });
-                                    // 设置 TextField 光标位置
-                                    nodes[innermost].cursor_index.set(a);
-                                    // 触发 TextField 的 selection 更新回调
-                                    if let Some(cb) = nodes[innermost].cursor_callback.borrow_mut().as_mut() {
-                                        cb(a);
-                                    }
-                                }
-                                (Some(fid), f)
-                            } else { (None, false) }
-                        } else { (None, false) }
-                    };
-                    // 点击自动聚焦
-                    if is_focusable {
-                        if let Some(id) = focusable_id {
-                            if let Some(r) = pw.composer.layout_root_idx() {
-                                let nodes = pw.composer.arena_nodes_mut();
-                                crate::layout::node::clear_focus(nodes, r);
-                                crate::layout::node::set_focus_by_id(nodes, r, id);
-                            }
-                            if let Some(ref sw) = pw.skia_window { sw.set_ime_allowed(true); }
-                        }
-                    }
-                    // ── Down：分发 on_pointer_event（与 Up/Move 一致）──
-                    // （03bed64 后 debug 模拟 Down 已 dispatch，真实路径补齐避免行为分叉）
-                    let nodes = pw.composer.arena_nodes();
-                    if let Some(r) = pw.composer.layout_root_idx() {
-                        let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
-                        let ptr_ev = crate::modifier::PointerEvent {
-                            event_type: crate::modifier::PointerEventType::Down,
-                            position: (0.0, 0.0),
-                            scene_position: scene_pos,
-                            kind: crate::modifier::PointerKind::from_button_source(&button),
-                            is_alt_pressed: self.modifiers.alt_key(),
-                            is_ctrl_pressed: self.modifiers.control_key(),
-                            is_shift_pressed: self.modifiers.shift_key(),
-                            is_meta_pressed: self.modifiers.meta_key(),
-                        };
-                        pw.last_pointer_kind = ptr_ev.kind.clone();
-                        dispatch_ptr_event(nodes, r, &path, &ptr_ev, scene_pos, pw.pointer_down_slot);
-                    }
+                    // ── Down：指针按下核心（共享——真实/Debug 防分叉）──
+                    handle_pointer_down(pw, scene_pos, crate::modifier::PointerKind::from_button_source(&button), &self.modifiers, true);
                 }
                 // ── Up：Compose 风格 click 检测（仅释放时——Down 保留
                 // pointer_down_state 供拖动选择；无条件执行会 Down 后立即 take
@@ -484,66 +399,13 @@ impl ApplicationHandler for AppState {
             WindowEvent::PointerMoved { position, .. } => {
                 let lp = position.to_logical::<f32>(pw.scale_factor);
                 let scene_pos = (lp.x, lp.y);
-                let nodes = pw.composer.arena_nodes();
-                if let Some(r) = pw.composer.layout_root_idx() {
-                    let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
-                    // 拖拽选中文本
-                    if pw.pointer_down_state.is_some() {
-                        if let Some(&innermost) = path.last() {
-                            let down = pw.pointer_down_state.as_ref().unwrap();
-                            let dx = scene_pos.0 - down.position.0;
-                            let dy = scene_pos.1 - down.position.1;
-                            const CLICK_SLOP: f32 = 18.0;
-                            if (dx*dx + dy*dy).sqrt() > CLICK_SLOP {
-                                let (abs_x, abs_y) = node_abs_position(nodes, r, nodes[innermost].id);
-                                if let Ok(borrow) = nodes[innermost].cached_paragraph.try_borrow() {
-                                    if let Some(para) = borrow.as_ref() {
-                                        // 对齐偏移（匹配渲染侧 x_off）
-                                        let node_w = nodes[innermost].measured_size.width;
-                                        let align = nodes[innermost].modifier.align().unwrap_or(crate::ui::TextAlign::Left);
-                                        let x_off = match align {
-                                            crate::ui::TextAlign::Center => abs_x + (node_w - para.max_intrinsic_width()).max(0.0) / 2.0,
-                                            crate::ui::TextAlign::Right => abs_x + (node_w - para.max_intrinsic_width()).max(0.0),
-                                            _ => abs_x,
-                                        };
-                                        let tl = crate::text::TextLayout::new(para, 0);
-                                        {
-                                            let down = pw.pointer_down_state.as_ref().unwrap();
-                                            // 不可选节点（未注册到任何 SelectionContainer）→ 不更新选择
-                                            // （用 if let 包裹而非 else return——return 会跳过 dispatch_ptr_event/request_redraw）
-                                            if let Some(reg) = nodes[innermost].registrar.borrow().as_ref().cloned() {
-                                            let current_index = tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(scene_pos.0 - x_off, scene_pos.1 - abs_y));
-                                            let cur_off = reg.segment_info(nodes[innermost].slot_key).map(|(off, _)| off);
-                                            if let Some((target, s, e)) = crate::ui::selection_container::compute_selection(
-                                                down.anchor_registrar.as_ref(), down.selection_anchor,
-                                                &reg, cur_off, current_index,
-                                                scene_pos.1, down.position.1, abs_y,
-                                            ) {
-                                                target.set_selection(s, e);
-                                            }
-                                            } // end if let Some(reg)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    let ptr_ev = crate::modifier::PointerEvent {
-                        event_type: crate::modifier::PointerEventType::Move,
-                        position: (0.0, 0.0),
-                        scene_position: scene_pos,
-                        kind: pw.last_pointer_kind.clone(),
-                        is_alt_pressed: self.modifiers.alt_key(),
-                        is_ctrl_pressed: self.modifiers.control_key(),
-                        is_shift_pressed: self.modifiers.shift_key(),
-                        is_meta_pressed: self.modifiers.meta_key(),
-                    };
-                    let consumed = dispatch_ptr_event(nodes, r, &path, &ptr_ev, scene_pos, pw.pointer_down_slot);
-                    // 消费（on_pointer_event 可能更新 State）或按下拖动选区时请求重绘；
-                    // 未消费的悬停移动不唤醒事件循环（避免每帧白醒）
-                    if consumed || pw.pointer_down_state.is_some() {
-                        if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
-                    }
+                // 指针移动核心（共享——真实/Debug 防分叉；Debug 路径此前缺
+                // x_off 对齐偏移——Center/Right 对齐文本选择错位，合并修复）
+                let consumed = handle_pointer_move(pw, scene_pos, pw.last_pointer_kind.clone(), &self.modifiers);
+                // 消费（on_pointer_event 可能更新 State）或按下拖动选区时请求重绘；
+                // 未消费的悬停移动不唤醒事件循环（避免每帧白醒）
+                if consumed || pw.pointer_down_state.is_some() {
+                    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 }
             }
             WindowEvent::ModifiersChanged(m) => {
@@ -732,6 +594,10 @@ impl ApplicationHandler for AppState {
                 // 无节流会 ~1300fps 渲染风暴（present fence 只等 GPU 提交不等显示刷新）。
                 // 距上次渲染 <16ms（~60fps）跳过——动画值下轮渲染时取最新（不丢帧）。
                 let now = std::time::Instant::now();
+                if pw.render_disabled {
+                    // 崩溃边界（P3-3）：连续 panic 后停更——保留最后画面
+                    return;
+                }
                 if !pw.force_redraw && now.duration_since(pw.last_render_time) < pw.frame_interval {
                     // 不 request——等外部驱动（动画 set → wake / 交互事件）再渲染
                 } else {
@@ -739,10 +605,35 @@ impl ApplicationHandler for AppState {
                 let w = pw.width;
                 let h = pw.height;
                 let sf = pw.scale_factor as f32;
-                pw.recompose_layout_render(|nodes, root_idx, surface| {
-                    debug::update_tree(&debug::build_tree_json(nodes, root_idx));
-                });
-                pw.force_redraw = false; // 渲染成功后才清除强制帧（中途异常保留）
+                // 崩溃边界（P3-3）：compose/layout/draw 任一段 panic（用户 content 代码 /
+                // skia 异常）不崩窗口——捕获后跳过本帧（保留上帧画面），下帧正常重试。
+                // 连续 panic 计数防风暴：超过阈值打印错误并停更（不再自旋）。
+                // 渲染路径无 unsafe（P2-3 后）——catch_unwind 后继续用 self 仅"逻辑不一致"
+                // 非内存不安全；slot/arena 每帧从 root 重建结构，panic 中断的半状态下帧自愈。
+                let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let wid = window_id.into_raw() as u64;
+                    pw.recompose_layout_render(|nodes, root_idx, surface| {
+                        debug::update_tree(wid, &debug::build_tree_json(nodes, root_idx));
+                    });
+                }));
+                match panic_result {
+                    Ok(()) => {
+                        pw.force_redraw = false; // 渲染成功后才清除强制帧（中途异常保留）
+                        pw.consecutive_panics = 0;
+                    }
+                    Err(e) => {
+                        pw.consecutive_panics += 1;
+                        let msg = if let Some(s) = e.downcast_ref::<&str>() { (*s).to_string() }
+                                  else if let Some(s) = e.downcast_ref::<String>() { s.clone() }
+                                  else { "unknown panic".to_string() };
+                        eprintln!("[render-panic] 第 {} 次连续 panic（本帧已跳过，上帧画面保留）: {}", pw.consecutive_panics, msg);
+                        if pw.consecutive_panics >= 30 {
+                            eprintln!("[render-panic] 连续 30 次 panic——停止本窗口渲染（避免 panic 风暴）");
+                            pw.render_disabled = true;
+                        }
+                        // force_redraw 保持 true——下帧继续尝试（若未停更）
+                    }
+                }
                 // IME 光标区域更新（输入法候选框跟随光标位置）
                 if let Some(ref sw) = pw.skia_window {
                     if let Some(fid) = pw.focused_id {
@@ -788,214 +679,142 @@ impl ApplicationHandler for AppState {
                 if crate::ui::window::Window::has_pending_close() {
                     if let Some(ref proxy) = *APP_PROXY.lock().unwrap() { let _ = proxy.wake_up(); }
                 }
-                // DevTools 事件（仅父窗口消费，防止多窗口抢）
-                if !is_parent { return; }
-                let mut handled = false;
-                for evt in debug::take_queued_events() {
-                    match evt {
-                        debug::DebugEvent::Click { x, y } => {
-                            // 只读阶段：hit_test + click 检测（arena 借用在块尾结束）
-                            let (fid, sk, path_len, click_handled) = {
-                                let arena = pw.composer.arena_nodes();
-                                let root_idx = pw.composer.layout_root_idx();
-                                if let Some(r) = root_idx {
-                                    let path = hit_test(arena, r, x, y);
-                                    let mut click_handled = false;
-                                    let (fid, sk) = path.last()
-                                        .filter(|&&i| crate::layout::node::has_focusable_modifier(&arena[i]))
-                                        .map(|&i| (arena[i].id, arena[i].slot_key))
-                                        .unwrap_or((0, 0));
-                                    let path_len = path.len();
-                                    // Click 检测（消耗 path 前做）
-                                    for &i in path.iter().rev() {
-                                        if click_handled { break; }
-                                        if let Some(on_click) = arena[i].modifier.on_click() {
-                                            on_click();
-                                            handled = true;
-                                            click_handled = true;
-                                        }
-                                    }
-                                    (fid, sk, path_len, click_handled)
-                                } else { (0, 0, 0, false) }
-                            };
-                            if fid != 0 {
-                                if let Some(r) = pw.composer.layout_root_idx() {
-                                    let nodes = pw.composer.arena_nodes_mut();
-                                    crate::layout::node::clear_focus(nodes, r);
-                                    crate::layout::node::set_focus_by_id(nodes, r, fid);
-                                }
-                                pw.focused_id = Some(fid);
-                                pw.focused_slot_key = Some(sk);
-                                if let Some(ref sw) = pw.skia_window { sw.set_ime_allowed(true); }
-                            }
-                            debug_log!("[debug-click] pos=({:.0},{:.0}) path_len={} sf={}", x, y, path_len, pw.scale_factor);
-                            debug_log!("[debug-click] handled={} pos=({:.0},{:.0})", click_handled, x, y);
-                        }
-                        debug::DebugEvent::Key { key } => {
-                            if key == "Tab" {
-                                if let Some(r) = pw.composer.layout_root_idx() {
-                                    let nodes = pw.composer.arena_nodes_mut();
-                                    focus_next(nodes, r);
-                                    pw.focused_id = crate::layout::node::get_focus_id(nodes, r);
-                                    pw.focused_slot_key = pw.focused_id.and_then(|id| crate::layout::node::find_node_by_id(nodes, r, id).map(|idx| nodes[idx].slot_key));
-                                    handled = true;
-                                }
-                            }
-                        }
-                        debug::DebugEvent::FocusNext => {
-                            if let Some(r) = pw.composer.layout_root_idx() {
-                                let nodes = pw.composer.arena_nodes_mut();
-                                focus_next(nodes, r);
-                                pw.focused_id = crate::layout::node::get_focus_id(nodes, r);
-                                pw.focused_slot_key = pw.focused_id.and_then(|id| crate::layout::node::find_node_by_id(nodes, r, id).map(|idx| nodes[idx].slot_key));
-                                handled = true;
-                            }
-                        }
-                        debug::DebugEvent::RequestFocus { id } => {
-                            if let Some(r) = pw.composer.layout_root_idx() {
-                                let nodes = pw.composer.arena_nodes_mut();
-                                if crate::layout::node::focus_by_id(nodes, r, id) {
-                                    pw.focused_id = crate::layout::node::get_focus_id(nodes, r);
-                                    pw.focused_slot_key = pw.focused_id.and_then(|fid| crate::layout::node::find_node_by_id(nodes, r, fid).map(|idx| nodes[idx].slot_key));
-                                    handled = true;
-                                }
-                            }
-                        }
-                        debug::DebugEvent::PointerDown { x, y } => {
-                            // 模拟指针按下：选择拖动起点（复用 PointerButton Down 的选择核心）
-                            let nodes = pw.composer.arena_nodes();
-                            if let Some(r) = pw.composer.layout_root_idx() {
-                                let path = hit_test(nodes, r, x, y);
-                                if let Some(&innermost) = path.last() {
-                                    {
-                                        let reg = nodes[innermost].registrar.borrow().as_ref().cloned()
-                                            .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
-                                        reg.clear_selection();
-                                    }
-                                    let anchor = if let Ok(borrow) = nodes[innermost].cached_paragraph.try_borrow() {
-                                        borrow.as_ref().map(|para| {
-                                            let (ax, ay) = node_abs_position(nodes, r, nodes[innermost].id);
-                                            let tl = crate::text::TextLayout::new(para, 0);
-                                            tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(x - ax, y - ay))
-                                        })
-                                    } else {
-                                        None
-                                    };
-                                    // reg 只用节点自己的（不 fallback active_registrar——理由同真实 Down）
-                                    let own_reg = nodes[innermost].registrar.borrow().as_ref().cloned();
-                                    let anchor_global = anchor.and_then(|a| {
-                                        own_reg.as_ref()
-                                            .and_then(|r| r.segment_info(nodes[innermost].slot_key).map(|(off, _)| off + a))
-                                    });
-                                    pw.pointer_down_state = Some(crate::app::PtrDownState {
-                                        node_id: nodes[innermost].id, position: (x, y), time: std::time::Instant::now(), selection_anchor: anchor_global, anchor_registrar: own_reg });
-                                    pw.pointer_down_slot = Some(nodes[innermost].slot_key);
-                                    // 与真实 PointerButton Down 一致：分发 on_pointer_event
-                                    let ptr_ev = crate::modifier::PointerEvent {
-                                        event_type: crate::modifier::PointerEventType::Down,
-                                        position: (0.0, 0.0),
-                                        scene_position: (x, y),
-                                        kind: pw.last_pointer_kind.clone(),
-                                        is_alt_pressed: self.modifiers.alt_key(),
-                                        is_ctrl_pressed: self.modifiers.control_key(),
-                                        is_shift_pressed: self.modifiers.shift_key(),
-                                        is_meta_pressed: self.modifiers.meta_key(),
-                                    };
-                                    dispatch_ptr_event(nodes, r, &path, &ptr_ev, (x, y), pw.pointer_down_slot);
-                                    handled = true;
-                                }
-                            }
-                        }
-                        debug::DebugEvent::PointerMove { x, y } => {
-                            // 模拟拖动选择（复用 PointerMoved 的选择核心）
-                            let nodes = pw.composer.arena_nodes();
-                            if let Some(r) = pw.composer.layout_root_idx() {
-                                let path = hit_test(nodes, r, x, y);
-                                if pw.pointer_down_state.is_some() {
-                                    if let Some(&innermost) = path.last() {
-                                        let down = pw.pointer_down_state.as_ref().unwrap();
-                                        let dx = x - down.position.0;
-                                        let dy = y - down.position.1;
-                                        if (dx*dx + dy*dy).sqrt() > 18.0 {
-                                            if let Some(para) = nodes[innermost].cached_paragraph.borrow().as_ref() {
-                                                let (abs_x, abs_y) = node_abs_position(nodes, r, nodes[innermost].id);
-                                                let tl = crate::text::TextLayout::new(para, 0);
-                                                // 不可选节点 → 不更新选择
-                                                // （if let 包裹而非 else return——return 会中断事件队列循环，
-                                                // 同帧排队的 PointerUp 不执行 → pointer_down_state 卡死）
-                                                if let Some(reg) = nodes[innermost].registrar.borrow().as_ref().cloned() {
-                                                let current = tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(x - abs_x, y - abs_y));
-                                                let cur_off = reg.segment_info(nodes[innermost].slot_key).map(|(off, _)| off);
-                                                if let Some((target, s, e)) = crate::ui::selection_container::compute_selection(
-                                                    down.anchor_registrar.as_ref(), down.selection_anchor,
-                                                    &reg, cur_off, current,
-                                                    y as f32, down.position.1, abs_y as f32,
-                                                ) {
-                                                    target.set_selection(s, e);
-                                                    handled = true;
-                                                }
-                                                } // end if let Some(reg)
-                                            } else {
-                                            }
-                                        }
-                                    }
-                                }
-                                // 与真实 PointerMoved 一致：分发 on_pointer_event（悬停
-                                // Move 回调也可能更新 State）并请求重绘
-                                let ptr_ev = crate::modifier::PointerEvent {
-                                    event_type: crate::modifier::PointerEventType::Move,
-                                    position: (0.0, 0.0),
-                                    scene_position: (x, y),
-                                    kind: pw.last_pointer_kind.clone(),
-                                    is_alt_pressed: self.modifiers.alt_key(),
-                                    is_ctrl_pressed: self.modifiers.control_key(),
-                                    is_shift_pressed: self.modifiers.shift_key(),
-                                    is_meta_pressed: self.modifiers.meta_key(),
-                                };
-                                dispatch_ptr_event(nodes, r, &path, &ptr_ev, (x, y), pw.pointer_down_slot);
-                                if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
-                            }
-                        }
-                        debug::DebugEvent::PointerUp { x, y } => {
-                            // 模拟释放：先走真实 Up 的 click 检测（验证真实链路）
-                            // 与真实路径（PointerButton Up 分支）一致：on_click 内
-                            // State set 后必须 request_redraw——否则依赖 wake_up 异步
-                            // 链（偶发丢失 → 用户看到 count 不刷新）
-                            if detect_click(pw, (x, y)) {
-                                if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
-                            }
-                            // 通知选区变化 + 清理
-                            if let Some(slot) = pw.pointer_down_slot {
-                                let nodes = pw.composer.arena_nodes();
-                                if let Some(r) = pw.composer.layout_root_idx() {
-                                    if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot) {
-                                        if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, nid) {
-                                            if let Some(reg) = nodes[idx].registrar.borrow().as_ref() {
-                                                reg.fire_on_change();
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            pw.pointer_down_slot = None;
-                            pw.pointer_down_state = None;
-                            handled = true;
-                        }
-                        debug::DebugEvent::Scroll { dy, .. } => {
-                            if let Some(r) = pw.composer.layout_root_idx() {
-                                apply_scroll_delta(pw.composer.arena_nodes_mut(), r, dy, crate::unit::Density::from_density(pw.scale_factor as f32));
-                                handled = true;
-                            }
-                        }
-                        debug::DebugEvent::Resize { w, h } => { pw.width = w; pw.height = h; handled = true; }
-                        _ => {}
-                    }
+                // DevTools 事件消费（仅父窗口）——new_events 也兜底调用（见下）
+                if is_parent {
+                    self.consume_debug_events(window_id);
                 }
-                if handled { if let Some(ref sw) = pw.skia_window { sw.request_redraw(); } }
-                if debug::has_pending() { if let Some(ref sw) = pw.skia_window { sw.request_redraw(); } }
             }
             _ => {}
         }
+    }
+}
+
+impl AppState {
+    /// 消费 DevTools 注入事件（点击/按键/滚动/拖拽等——UI 测试 + WS 调试）。
+    /// 在 window_event（RedrawRequested）与 new_events（兜底）两处调用：
+    /// 多窗口下主窗口可能在后台——RedrawRequested 不来时事件卡队列，
+    /// new_events 每轮事件批次必然执行——保证注入事件不丢失。
+    fn consume_debug_events(&mut self, window_id: WindowId) {
+        let Some(pw) = self.windows.get_mut(&window_id) else { return };
+        let mut handled = false;
+        for evt in debug::take_queued_events() {
+            match evt {
+                debug::DebugEvent::Click { x, y } => {
+                    // 只读阶段：hit_test + click 检测（arena 借用在块尾结束）
+                    let (fid, sk, path_len, click_handled) = {
+                        let arena = pw.composer.arena_nodes();
+                        let root_idx = pw.composer.layout_root_idx();
+                        if let Some(r) = root_idx {
+                            let path = hit_test(arena, r, x, y);
+                            let mut click_handled = false;
+                            let (fid, sk) = path.last()
+                                .filter(|&&i| crate::layout::node::has_focusable_modifier(&arena[i]))
+                                .map(|&i| (arena[i].id, arena[i].slot_key))
+                                .unwrap_or((0, 0));
+                            let path_len = path.len();
+                            // Click 检测（消耗 path 前做）
+                            for &i in path.iter().rev() {
+                                if click_handled { break; }
+                                if let Some(on_click) = arena[i].modifier.on_click() {
+                                    on_click();
+                                    handled = true;
+                                    click_handled = true;
+                                }
+                            }
+                            (fid, sk, path_len, click_handled)
+                        } else { (0, 0, 0, false) }
+                    };
+                    if fid != 0 {
+                        if let Some(r) = pw.composer.layout_root_idx() {
+                            let nodes = pw.composer.arena_nodes_mut();
+                            crate::layout::node::clear_focus(nodes, r);
+                            crate::layout::node::set_focus_by_id(nodes, r, fid);
+                        }
+                        pw.focused_id = Some(fid);
+                        pw.focused_slot_key = Some(sk);
+                        if let Some(ref sw) = pw.skia_window { sw.set_ime_allowed(true); }
+                    }
+                    debug_log!("[debug-click] pos=({:.0},{:.0}) path_len={} sf={}", x, y, path_len, pw.scale_factor);
+                    debug_log!("[debug-click] handled={} pos=({:.0},{:.0})", click_handled, x, y);
+                }
+                debug::DebugEvent::Key { key } => {
+                    if key == "Tab" {
+                        if let Some(r) = pw.composer.layout_root_idx() {
+                            let nodes = pw.composer.arena_nodes_mut();
+                            focus_next(nodes, r);
+                            pw.focused_id = crate::layout::node::get_focus_id(nodes, r);
+                            pw.focused_slot_key = pw.focused_id.and_then(|id| crate::layout::node::find_node_by_id(nodes, r, id).map(|idx| nodes[idx].slot_key));
+                            handled = true;
+                        }
+                    }
+                }
+                debug::DebugEvent::FocusNext => {
+                    if let Some(r) = pw.composer.layout_root_idx() {
+                        let nodes = pw.composer.arena_nodes_mut();
+                        focus_next(nodes, r);
+                        pw.focused_id = crate::layout::node::get_focus_id(nodes, r);
+                        pw.focused_slot_key = pw.focused_id.and_then(|id| crate::layout::node::find_node_by_id(nodes, r, id).map(|idx| nodes[idx].slot_key));
+                        handled = true;
+                    }
+                }
+                debug::DebugEvent::RequestFocus { id } => {
+                    if let Some(r) = pw.composer.layout_root_idx() {
+                        let nodes = pw.composer.arena_nodes_mut();
+                        if crate::layout::node::focus_by_id(nodes, r, id) {
+                            pw.focused_id = crate::layout::node::get_focus_id(nodes, r);
+                            pw.focused_slot_key = pw.focused_id.and_then(|fid| crate::layout::node::find_node_by_id(nodes, r, fid).map(|idx| nodes[idx].slot_key));
+                            handled = true;
+                        }
+                    }
+                }
+                debug::DebugEvent::PointerDown { x, y } => {
+                    // 模拟指针按下：与真实 PointerButton Down 共用核心
+                    // （with_focus=false——调试路径不做光标/聚焦）
+                    handle_pointer_down(pw, (x, y), pw.last_pointer_kind.clone(), &self.modifiers, false);
+                    handled = true;
+                }
+                debug::DebugEvent::PointerMove { x, y } => {
+                    // 模拟拖动选择：与真实 PointerMoved 共用核心（含 x_off 对齐偏移）
+                    handle_pointer_move(pw, (x, y), pw.last_pointer_kind.clone(), &self.modifiers);
+                    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                }
+                debug::DebugEvent::PointerUp { x, y } => {
+                    // 模拟释放：先走真实 Up 的 click 检测（验证真实链路）
+                    // 与真实路径（PointerButton Up 分支）一致：on_click 内
+                    // State set 后必须 request_redraw——否则依赖 wake_up 异步
+                    // 链（偶发丢失 → 用户看到 count 不刷新）
+                    if detect_click(pw, (x, y)) {
+                        if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                    }
+                    // 通知选区变化 + 清理
+                    if let Some(slot) = pw.pointer_down_slot {
+                        let nodes = pw.composer.arena_nodes();
+                        if let Some(r) = pw.composer.layout_root_idx() {
+                            if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot) {
+                                if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, nid) {
+                                    if let Some(reg) = nodes[idx].registrar.borrow().as_ref() {
+                                        reg.fire_on_change();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    pw.pointer_down_slot = None;
+                    pw.pointer_down_state = None;
+                    handled = true;
+                }
+                debug::DebugEvent::Scroll { dy, .. } => {
+                    if let Some(r) = pw.composer.layout_root_idx() {
+                        apply_scroll_delta(pw.composer.arena_nodes_mut(), r, dy, crate::unit::Density::from_density(pw.scale_factor as f32));
+                        handled = true;
+                    }
+                }
+                debug::DebugEvent::Resize { w, h } => { pw.width = w; pw.height = h; handled = true; }
+                _ => {}
+            }
+        }
+        if handled { if let Some(ref sw) = pw.skia_window { sw.request_redraw(); } }
+        if debug::has_pending() { if let Some(ref sw) = pw.skia_window { sw.request_redraw(); } }
     }
 }
 
@@ -1007,9 +826,9 @@ impl AppState {
             if let Some(init) = self.init.take() {
                 let mut composer = Composer::new();
                 composer.compose(|ctx| init(ctx));
-                // 临时 composer 不调 layout()——显式清除 recording target，
-                // 否则 RECORDING_TARGET 残留指向已 drop 的 composer 的裸指针（UB）
-                crate::core::state::clear_recording_target();
+                // 临时 composer：compose 内部已 take_deps（注册到其 slot_deps）——
+                // 此处再 take 是防御性空操作（缓冲已空），确保 DEP_MODE 复位
+                crate::core::state::take_deps();
                 // 临时 composer 被 drop，其 on_remove 可能设置 PENDING_REMOVE_ID
                 // 清除副作用，防止主窗口被错误关闭
                 crate::ui::window::reset_lifecycle_flags();
@@ -1085,31 +904,10 @@ impl AppState {
 static GLOBAL_PENDING: std::sync::Mutex<Vec<PendingWindow>> = std::sync::Mutex::new(Vec::new());
 static APP_PROXY: Mutex<Option<winit::event_loop::EventLoopProxy>> = Mutex::new(None);
 
-pub fn open_window(width: f32, height: f32, content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>) {
-    open_window_with_title(width, height, String::new(), content, None, None, None);
-}
-
 pub fn open_window_with_title(width: f32, height: f32, title: String, content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>, on_close: Option<Box<dyn FnMut() + Send>>, created_id: Option<u64>, theme: Option<crate::ui::theme::ThemeColors>) {
     GLOBAL_PENDING.lock().unwrap().push(PendingWindow { width, height, title, content, on_close, created_id, theme });
     wake_impl();
 }
-
-pub fn open_window_with_close(width: f32, height: f32, content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>, on_close: Option<Box<dyn FnMut() + Send>>, _created_id: Option<u64>) {
-    open_window_with_title(width, height, String::new(), content, on_close, _created_id, None);
-}
-
-/// 通过声明式 id 请求关闭窗口
-pub fn close_window_by_id(created_id: u64) {
-    CLOSE_QUEUED.lock().unwrap().push(created_id);
-    wake_impl();
-}
-
-/// 取消关闭请求（Window::build 重建窗口时调用，抵消旧节点 on_remove 的推送）
-pub fn cancel_close(created_id: u64) {
-    CLOSE_QUEUED.lock().unwrap().retain(|&x| x != created_id);
-}
-
-static CLOSE_QUEUED: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
 
 pub(crate) fn wake_impl() {
     if let Some(ref proxy) = *APP_PROXY.lock().unwrap() {
@@ -1194,6 +992,170 @@ fn detect_click(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
         }
     }
     false
+}
+
+/// 指针按下核心（真实 PointerButton 与 debug 模拟共用——防行为分叉）。
+///
+/// 统一：hit_test → 清除旧选区 → grapheme anchor 定位 → PtrDownState 记录 →
+/// 光标设置/自动聚焦（仅真实路径 `with_focus`）→ on_pointer_event 分发。
+/// 返回 true 表示命中节点并已处理。
+fn handle_pointer_down(
+    pw: &mut PerWindow,
+    scene_pos: (f32, f32),
+    kind: crate::modifier::PointerKind,
+    modifiers: &winit::keyboard::ModifiersState,
+    with_focus: bool,
+) -> bool {
+    let nodes = pw.composer.arena_nodes();
+    let Some(r) = pw.composer.layout_root_idx() else { return false; };
+    let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
+    let Some(&innermost) = path.last() else { return false; };
+
+    // 清除旧的选区（新点击开始）
+    {
+        let reg = nodes[innermost].registrar.borrow().as_ref().cloned()
+            .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
+        reg.clear_selection();
+    }
+    // grapheme anchor 定位
+    let anchor = if let Ok(borrow) = nodes[innermost].cached_paragraph.try_borrow() {
+        borrow.as_ref().map(|para| {
+            let (ax, ay) = node_abs_position(nodes, r, nodes[innermost].id);
+            let tl = crate::text::TextLayout::new(para, 0);
+            tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(scene_pos.0 - ax, scene_pos.1 - ay))
+        })
+    } else {
+        None
+    };
+    // reg 只用节点自己的 registrar（不 fallback active_registrar）——
+    // 不可选节点（输出 Text 等未注册）的 node.registrar 为 None，
+    // fallback 会取到全局残留（如 Container B 的）→ anchor_registrar
+    // 错绑 B → 拖动到 B 时 same_reg=true → 混合偏移 → B 被选
+    let own_reg = nodes[innermost].registrar.borrow().as_ref().cloned();
+    let anchor_global = anchor.and_then(|a| {
+        own_reg.as_ref()
+            .and_then(|reg| reg.segment_info(nodes[innermost].slot_key).map(|(off, _)| off + a))
+    });
+    pw.pointer_down_state = Some(PtrDownState {
+        node_id: nodes[innermost].id,
+        position: scene_pos,
+        time: std::time::Instant::now(),
+        selection_anchor: anchor_global,
+        anchor_registrar: own_reg, // None（不可选节点）→ 无 anchor 容器
+    });
+    pw.pointer_down_slot = Some(nodes[innermost].slot_key);
+
+    if with_focus {
+        // 设置 TextField 光标位置 + selection 更新回调（仅真实路径）
+        if let Some(a) = anchor {
+            nodes[innermost].cursor_index.set(a);
+            if let Some(cb) = nodes[innermost].cursor_callback.borrow_mut().as_mut() {
+                cb(a);
+            }
+        }
+        // 点击自动聚焦
+        if crate::layout::node::has_focusable_modifier(&nodes[innermost]) {
+            let focus_id = nodes[innermost].id;
+            if let Some(r) = pw.composer.layout_root_idx() {
+                let nodes = pw.composer.arena_nodes_mut();
+                crate::layout::node::clear_focus(nodes, r);
+                crate::layout::node::set_focus_by_id(nodes, r, focus_id);
+            }
+            if let Some(ref sw) = pw.skia_window { sw.set_ime_allowed(true); }
+        }
+    }
+
+    // 分发 on_pointer_event（Down）
+    let nodes = pw.composer.arena_nodes();
+    let ptr_ev = crate::modifier::PointerEvent {
+        event_type: crate::modifier::PointerEventType::Down,
+        position: (0.0, 0.0),
+        scene_position: scene_pos,
+        kind,
+        is_alt_pressed: modifiers.alt_key(),
+        is_ctrl_pressed: modifiers.control_key(),
+        is_shift_pressed: modifiers.shift_key(),
+        is_meta_pressed: modifiers.meta_key(),
+    };
+    pw.last_pointer_kind = ptr_ev.kind.clone();
+    dispatch_ptr_event(nodes, r, &path, &ptr_ev, scene_pos, pw.pointer_down_slot);
+    true
+}
+
+/// 指针移动核心（真实 PointerMoved 与 debug 模拟共用——防行为分叉）。
+///
+/// 统一：拖拽选区（18px slop + x_off 对齐偏移 + grapheme 定位 + compute_selection）
+/// + on_pointer_event 分发。返回是否消费（选择更新或 handler 消费）。
+fn handle_pointer_move(
+    pw: &mut PerWindow,
+    scene_pos: (f32, f32),
+    kind: crate::modifier::PointerKind,
+    modifiers: &winit::keyboard::ModifiersState,
+) -> bool {
+    let nodes = pw.composer.arena_nodes();
+    let Some(r) = pw.composer.layout_root_idx() else { return false; };
+    let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
+    let mut handled = false;
+
+    // 拖拽选中文本
+    if pw.pointer_down_state.is_some() {
+        if let Some(&innermost) = path.last() {
+            let down = pw.pointer_down_state.as_ref().unwrap();
+            let dx = scene_pos.0 - down.position.0;
+            let dy = scene_pos.1 - down.position.1;
+            const CLICK_SLOP: f32 = 18.0;
+            if (dx * dx + dy * dy).sqrt() > CLICK_SLOP {
+                let (abs_x, abs_y) = node_abs_position(nodes, r, nodes[innermost].id);
+                if let Ok(borrow) = nodes[innermost].cached_paragraph.try_borrow() {
+                    if let Some(para) = borrow.as_ref() {
+                        // 对齐偏移（匹配渲染侧 x_off）
+                        let node_w = nodes[innermost].measured_size.width;
+                        let align = nodes[innermost].modifier.align().unwrap_or(crate::ui::TextAlign::Left);
+                        let x_off = match align {
+                            crate::ui::TextAlign::Center => abs_x + (node_w - para.max_intrinsic_width()).max(0.0) / 2.0,
+                            crate::ui::TextAlign::Right => abs_x + (node_w - para.max_intrinsic_width()).max(0.0),
+                            _ => abs_x,
+                        };
+                        let tl = crate::text::TextLayout::new(para, 0);
+                        {
+                            let down = pw.pointer_down_state.as_ref().unwrap();
+                            // 不可选节点（未注册到任何 SelectionContainer）→ 不更新选择
+                            // （用 if let 包裹而非 else return——return 会跳过 dispatch_ptr_event/request_redraw）
+                            if let Some(reg) = nodes[innermost].registrar.borrow().as_ref().cloned() {
+                                let current_index = tl.get_closest_grapheme_cluster_cluster_at(
+                                    skia_safe::Point::new(scene_pos.0 - x_off, scene_pos.1 - abs_y));
+                                let cur_off = reg.segment_info(nodes[innermost].slot_key).map(|(off, _)| off);
+                                if let Some((target, s, e)) = crate::ui::selection_container::compute_selection(
+                                    down.anchor_registrar.as_ref(), down.selection_anchor,
+                                    &reg, cur_off, current_index,
+                                    scene_pos.1, down.position.1, abs_y,
+                                ) {
+                                    target.set_selection(s, e);
+                                    handled = true;
+                                }
+                            } // end if let Some(reg)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 分发 on_pointer_event（悬停 Move 也可能更新 State）
+    let nodes = pw.composer.arena_nodes();
+    let ptr_ev = crate::modifier::PointerEvent {
+        event_type: crate::modifier::PointerEventType::Move,
+        position: (0.0, 0.0),
+        scene_position: scene_pos,
+        kind,
+        is_alt_pressed: modifiers.alt_key(),
+        is_ctrl_pressed: modifiers.control_key(),
+        is_shift_pressed: modifiers.shift_key(),
+        is_meta_pressed: modifiers.meta_key(),
+    };
+    pw.last_pointer_kind = ptr_ev.kind.clone();
+    let consumed = dispatch_ptr_event(nodes, r, &path, &ptr_ev, scene_pos, pw.pointer_down_slot);
+    handled || consumed
 }
 
 /// 分发指针事件到 hit_test 路径（pre: outer→inner, bubble: inner→outer）

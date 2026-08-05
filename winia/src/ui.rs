@@ -30,7 +30,6 @@ pub use rich_text::RichText;
 pub use rich_text::RichTextScope;
 pub use selection_container::SelectionContainer;
 pub use selection_container::SelectionRegistrar;
-pub use selection_container::Rect;
 pub use selection_container::LOCAL_SELECTION_REGISTRAR;
 pub use text_field::TextField;
 pub use text_field::TextFieldValue;

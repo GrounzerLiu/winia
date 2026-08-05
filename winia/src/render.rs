@@ -9,7 +9,6 @@ use crate::layout::node::LayoutNode;
 use crate::modifier::ModifierElement;
 use skia_safe::{Canvas, Color4f, Paint, RRect, Rect};
 use skia_safe::image_filters;
-use skia_safe::textlayout::{ParagraphStyle, TextStyle};
 
 // ── 入口 ──
 
@@ -428,63 +427,22 @@ fn draw_text_with_selection(
         paint.set_color(skia_safe::Color::from_argb(80, 100, 150, 255));
         canvas.draw_rect(skia_safe::Rect::new(x, y, x + w, y + font_size * 1.2), &paint);
     }
-    draw_text(canvas, content, font_size, color, font_weight, font_style, x, y, w, max_lines, align, overflow, soft_wrap);
+    // 兜底路径：缓存缺失时用共享构建函数重建（与测量期同一套逻辑——SSOT）
+    let para = crate::layout::node::build_plain_paragraph(
+        content, font_size, color, font_weight, font_style,
+        max_lines, align, overflow, soft_wrap, w,
+    );
+    draw_text(canvas, &para, x, y, w, align);
 }
 
 fn draw_text(
     canvas: &Canvas,
-    content: &str,
-    font_size: f32,
-    color: &crate::modifier::Color,
-    font_weight: crate::ui::text::FontWeight,
-    font_style: crate::ui::text::FontSlant,
+    para: &crate::text::Paragraph,
     x: f32,
     y: f32,
     max_width: f32,
-    max_lines: usize,
     align: crate::ui::TextAlign,
-    overflow: crate::ui::TextOverflow,
-    soft_wrap: bool,
 ) {
-    let mut para_style = ParagraphStyle::new();
-
-    // max_lines：限制行数
-    if max_lines < usize::MAX {
-        para_style.set_max_lines(max_lines);
-    }
-
-    // ellipsis overflow：超出时显示省略号
-    if overflow == crate::ui::TextOverflow::Ellipsis {
-        para_style.set_ellipsis("\u{2026}");
-    }
-
-    // justify alignment：两端对齐需要 Skia 内部调整单词间距
-    if align == crate::ui::TextAlign::Justify {
-        para_style.set_text_align(skia_safe::textlayout::TextAlign::Justify);
-    }
-
-    let mut text_style = TextStyle::new();
-    text_style.set_font_size(font_size);
-    text_style.set_color(skia_safe::Color::from_argb(color.a, color.r, color.g, color.b));
-    // 设置字重和倾斜
-    if font_weight != crate::ui::text::FontWeight::NORMAL || font_style != crate::ui::text::FontSlant::Upright {
-        use skia_safe::FontStyle;
-        use crate::ui::text::FontSlant;
-        let slant = match font_style {
-            FontSlant::Upright => skia_safe::font_style::Slant::Upright,
-            FontSlant::Italic => skia_safe::font_style::Slant::Italic,
-            FontSlant::Oblique => skia_safe::font_style::Slant::Oblique,
-        };
-        text_style.set_font_style(FontStyle::new(font_weight.value().into(), 5.into(), slant));
-    }
-    let fc = crate::font::get_font_collection();
-    let mut builder = crate::text::ParagraphBuilder::new(&para_style, &fc);
-    builder.push_style(&text_style);
-    builder.add_text(content);
-    let mut para = builder.build();
-    // soft_wrap=false: 无限宽度排版，不换行
-    let layout_width = if soft_wrap { max_width } else { f32::MAX };
-    para.layout(layout_width);
     // 计算 x 偏移以支持 Center/Right/Justify 对齐
     let x_offset = match align {
         crate::ui::TextAlign::Left | crate::ui::TextAlign::Justify => x,

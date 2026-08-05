@@ -1,4 +1,4 @@
-//! StreamObverse 演示 — watch channel → stream → State → recompose
+//! observe_watch 演示 — watch channel → State → recompose
 
 use winia::prelude::*;
 use winia::app;
@@ -7,7 +7,7 @@ use std::time::Duration;
 fn main() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let _guard = rt.enter();
-    app::run_app(|ctx| {
+    winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
                 .size(360.0, 340.0)

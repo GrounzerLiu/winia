@@ -140,6 +140,8 @@ pub struct LayoutNode {
     pub(crate) on_remove: Option<Box<dyn FnOnce() + Send>>,
     /// 是否需要重新测量（clean slot 复用时为 false）
     pub(crate) dirty: bool,
+    /// 布局级失效（两段式依赖：布局动画值变化只重测不重组——measure 后清除）
+    pub(crate) layout_dirty: bool,
     /// 上次测量时的约束（用于跳过常量布局的 re-measure）
     pub(crate) cached_constraints: Option<Constraints>,
     /// composable 调用对应的 slot key（用于 replay 时子节点查找）
@@ -182,6 +184,10 @@ pub(crate) struct CachedNode {
     pub dirty: bool,
     pub cached_constraints: Option<Constraints>,
     pub slot_key: u64,
+    /// 结构签名（P3-1）：上帧直接子节点数——Skip 恢复命中条件之一。
+    /// 子树结构增删（if 分支/列表项）后同位置 slot_key 仍相同，签名不等则
+    /// 放弃恢复（走 Enter 重建），防旧内容缓存张冠李戴。
+    pub children_count: usize,
     pub registrar: std::cell::RefCell<Option<crate::ui::selection_container::SelectionRegistrar>>,
 }
 
@@ -196,6 +202,7 @@ impl LayoutNode {
             dirty: self.dirty,
             cached_constraints: self.cached_constraints,
             slot_key: self.slot_key,
+            children_count: self.children.len(),
             registrar: self.registrar.clone(),
         }
     }
@@ -250,6 +257,7 @@ impl LayoutNode {
             focused: false,
             on_remove: None,
             dirty: true,
+            layout_dirty: false,
             cached_constraints: None,
             slot_key: 0,
             cached_paragraph: std::cell::RefCell::new(None),
@@ -298,6 +306,7 @@ impl Default for LayoutNode {
             focused: false,
             on_remove: None,
             dirty: true,
+            layout_dirty: false,
             cached_constraints: None,
             slot_key: 0,
             cached_paragraph: std::cell::RefCell::new(None),
@@ -736,6 +745,38 @@ fn modifier_focus_id(node: &LayoutNode) -> Option<u64> {
 ///
 /// arena 版：`nodes` 为节点池、`policies` 为策略池、`idx` 为当前节点索引。
 /// 子节点通过 `nodes[idx].children`（索引列表）递归测量。
+/// 应用布局失效：DFS 树，命中 layout_dirty_keys 的节点标 layout_dirty=true 并沿祖先链传播。
+/// 保守超集：祖先全链标脏（布局动画场景父必然依赖子尺寸；Compose 精确传播留待优化）。
+pub(crate) fn apply_layout_dirty(nodes: &mut [LayoutNode], root_idx: usize, dirty_keys: &std::collections::HashSet<u64>) {
+    fn walk(nodes: &mut [LayoutNode], idx: usize, dirty_keys: &std::collections::HashSet<u64>, ancestor_dirty: bool) -> bool {
+        let hit = dirty_keys.contains(&nodes[idx].slot_key);
+        if hit || ancestor_dirty {
+            nodes[idx].layout_dirty = true;
+        }
+        // 索引读避免 clone（layout 是热路径）；每次索引读是临时借用，不阻塞递归写
+        let mut child_hit = false;
+        let n = nodes[idx].children.len();
+        for i in 0..n {
+            let child = nodes[idx].children[i];
+            if walk(nodes, child, dirty_keys, hit || ancestor_dirty) {
+                child_hit = true;
+            }
+        }
+        if child_hit {
+            nodes[idx].layout_dirty = true;
+        }
+        hit || child_hit
+    }
+    walk(nodes, root_idx, dirty_keys, false);
+}
+
+/// 测量计数（测试用：验证常量折叠/布局失效路径确实跳过或执行 measure）。
+/// thread_local 隔离——cargo test 并行线程互不串扰（全局 Atomic 会跨测试计数破坏断言）。
+#[cfg(test)]
+thread_local! {
+    pub(crate) static MEASURE_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 pub(crate) fn measure_node(
     nodes: &mut Vec<LayoutNode>,
     policies: &[Box<dyn MeasurePolicy>],
@@ -745,10 +786,15 @@ pub(crate) fn measure_node(
     // 重放 stub：clean-skip 节点无 measure_policy，绝不能重新测量
     //（无 policy 走叶子分支会返回 0 并污染 prev_nodes 缓存，导致塌缩不可逆）。
     // stub 只在 slot 真正 clean（无状态变化）时出现；约束若变化，下帧该 slot dirty → Enter 正常重建。
-    // 常量折叠：若节点未变脏且约束相同，直接复用上次结果
-    if !nodes[idx].dirty && nodes[idx].cached_constraints == Some(constraints) {
+    // 常量折叠：若节点未变脏、无布局失效且约束相同，直接复用上次结果
+    //（layout_dirty：两段式依赖——布局动画值变化只重测不重组）
+    if !nodes[idx].dirty && !nodes[idx].layout_dirty && nodes[idx].cached_constraints == Some(constraints) {
         return (nodes[idx].measured_size, Vec::new());
     }
+
+    // 真正执行 measure 才计数（常量折叠命中不计——测试验证折叠路径）
+    #[cfg(test)]
+    MEASURE_COUNT.with(|c| c.set(c.get() + 1));
 
     // 设置 ACTIVE_SLOT_KEY = 本节点 slot——使 SizeDynamic 闭包内的 State::get()
     // 把依赖注册到本节点（动画值变化 → 本节点 dirty → 重组重测）
@@ -885,8 +931,72 @@ pub(crate) fn measure_node(
 
     // 标记测量完成，缓存约束供下帧复用
     nodes[idx].dirty = false;
+    nodes[idx].layout_dirty = false;
     nodes[idx].cached_constraints = Some(constraints);
     result
+}
+
+/// 构建普通文本段落（测量与绘制共用——单一事实来源）。
+///
+/// 从 TextStyle 参数构造 skia Paragraph（含 max_lines/ellipsis/justify/字重/倾斜），
+/// 并按 soft_wrap 决定布局宽度。测量期（node.rs）与绘制兜底（render.rs）都调此函数，
+/// 避免两处独立构造导致样式不一致。
+pub(crate) fn build_plain_paragraph(
+    content: &str,
+    font_size: f32,
+    color: &crate::modifier::Color,
+    font_weight: crate::ui::text::FontWeight,
+    font_style: crate::ui::text::FontSlant,
+    max_lines: usize,
+    align: crate::ui::TextAlign,
+    overflow: crate::ui::TextOverflow,
+    soft_wrap: bool,
+    max_width: f32,
+) -> crate::text::Paragraph {
+    use skia_safe::textlayout::ParagraphStyle;
+
+    let mut para_style = ParagraphStyle::new();
+
+    // max_lines：限制行数
+    if max_lines < usize::MAX {
+        para_style.set_max_lines(max_lines);
+    }
+
+    // ellipsis overflow：超出时显示省略号
+    if overflow == crate::ui::TextOverflow::Ellipsis {
+        para_style.set_ellipsis("\u{2026}");
+    }
+
+    // justify alignment
+    if align == crate::ui::TextAlign::Justify {
+        para_style.set_text_align(skia_safe::textlayout::TextAlign::Justify);
+    }
+
+    // soft_wrap=false: 无限宽度排版，不换行
+    let layout_width = if soft_wrap { max_width } else { f32::MAX };
+
+    let mut text_style = skia_safe::textlayout::TextStyle::new();
+    text_style.set_font_size(font_size);
+    // IMPORTANT: 设置文字颜色（Skia TextStyle 默认白色，不设的话画在白色背景上不可见）
+    text_style.set_color(skia_safe::Color::from_argb(color.a, color.r, color.g, color.b));
+    // 设置字重和倾斜
+    if font_weight != crate::ui::text::FontWeight::NORMAL || font_style != crate::ui::text::FontSlant::Upright {
+        use skia_safe::FontStyle;
+        use crate::ui::text::FontSlant;
+        let slant = match font_style {
+            FontSlant::Upright => skia_safe::font_style::Slant::Upright,
+            FontSlant::Italic => skia_safe::font_style::Slant::Italic,
+            FontSlant::Oblique => skia_safe::font_style::Slant::Oblique,
+        };
+        text_style.set_font_style(FontStyle::new(font_weight.value().into(), 5.into(), slant));
+    }
+    let fc = crate::font::get_font_collection();
+    let mut builder = crate::text::ParagraphBuilder::new(&para_style, &fc);
+    builder.push_style(&text_style);
+    builder.add_text(content);
+    let mut para = builder.build();
+    para.layout(layout_width);
+    para
 }
 
 /// 合并的文本测量 + Paragraph 缓存。
@@ -895,53 +1005,22 @@ pub(crate) fn measure_node(
 /// 在 ParagraphStyle 上正确设置后一次创建 Paragraph，测量尺寸并缓存供渲染复用。
 /// 消除旧代码中 `measurer.measure()` + `cache_text_paragraph()` 重复创建的开销。
 fn measure_and_cache_text(node: &LayoutNode, max_width: f32) -> Size {
-    use skia_safe::textlayout::ParagraphStyle;
-    let fc = crate::font::get_font_collection();
-
     for el in node.modifier.elements() {
         if let ModifierElement::TextContent {
             content, font_size, color, font_weight, font_style, max_lines, align, overflow, soft_wrap,
         } = el {
-            let mut para_style = ParagraphStyle::new();
-
-            // max_lines：限制行数
-            if *max_lines < usize::MAX {
-                para_style.set_max_lines(*max_lines);
-            }
-
-            // ellipsis overflow：超出时显示省略号
-            if *overflow == crate::ui::TextOverflow::Ellipsis {
-                para_style.set_ellipsis("\u{2026}");
-            }
-
-            // justify alignment
-            if *align == crate::ui::TextAlign::Justify {
-                para_style.set_text_align(skia_safe::textlayout::TextAlign::Justify);
-            }
-
-            // soft_wrap=false: 无限宽度排版，不换行
-            let layout_width = if *soft_wrap { max_width } else { f32::MAX };
-
-            let mut text_style = skia_safe::textlayout::TextStyle::new();
-            text_style.set_font_size(*font_size);
-            // IMPORTANT: 设置文字颜色（Skia TextStyle 默认白色，不设的话画在白色背景上不可见）
-            text_style.set_color(skia_safe::Color::from_argb(color.a, color.r, color.g, color.b));
-            // 设置字重和倾斜
-            if *font_weight != crate::ui::text::FontWeight::NORMAL || *font_style != crate::ui::text::FontSlant::Upright {
-                use skia_safe::FontStyle;
-                use crate::ui::text::FontSlant;
-                let slant = match font_style {
-                    FontSlant::Upright => skia_safe::font_style::Slant::Upright,
-                    FontSlant::Italic => skia_safe::font_style::Slant::Italic,
-                    FontSlant::Oblique => skia_safe::font_style::Slant::Oblique,
-                };
-                text_style.set_font_style(FontStyle::new(font_weight.value().into(), 5.into(), slant));
-            }
-            let mut builder = crate::text::ParagraphBuilder::new(&para_style, &fc);
-            builder.push_style(&text_style);
-            builder.add_text(content.as_str());
-            let mut para = builder.build();
-            para.layout(layout_width);
+            let para = build_plain_paragraph(
+                content.as_str(),
+                *font_size,
+                color,
+                *font_weight,
+                *font_style,
+                *max_lines,
+                *align,
+                *overflow,
+                *soft_wrap,
+                max_width,
+            );
 
             let size = Size::new(
                 para.max_intrinsic_width().ceil().min(max_width),
@@ -1069,7 +1148,7 @@ fn to_sktextstyle(s: &RichSpanStyle) -> SkTextStyle {
         ts.set_decoration_mode(sk);
     }
 
-    // 基线偏移（D:\winia: shift = font_size * multiplier）
+    // 基线偏移（shift = font_size * multiplier）
     if s.baseline_shift != 0.0 {
         ts.set_baseline_shift(s.baseline_shift * s.font_size);
     }

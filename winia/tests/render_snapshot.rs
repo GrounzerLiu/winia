@@ -38,7 +38,10 @@ fn render_ui(w: f32, h: f32, ui: impl FnOnce(&mut ComposeCtx)) -> (skia_safe::Su
     let mut surface = raster_surface(w as i32, h as i32);
     surface.canvas().clear(skia_safe::Color::WHITE);
     if let Some(root) = composer.layout_root() {
-        render::render(root, surface.canvas());
+        if let Some(root_idx) = composer.layout_root_idx() {
+            let nodes = composer.arena_nodes();
+            render::render(nodes, root_idx, surface.canvas());
+        }
     }
     (surface, composer)
 }
@@ -57,11 +60,11 @@ fn empty_canvas_is_white() {
 #[test]
 fn solid_background_fills_rect() {
     // 40×30 红色矩形，不填满 100×60 surface
-    let (mut surface, _) = render_ui(100.0, 60.0, |ctx| {
+    let (mut surface, _) = render_ui(100.0, 60.0, winia::app_root!(|ctx| {
         let key = ctx.next_key();
         ctx.start_leaf(key, Modifier::new().size(40.0, 30.0).background(Color::RED, Shape::Rectangle));
         ctx.end_node();
-    });
+    }));
 
     let (r, g, b, _) = pixel(&mut surface, 20, 15);
     assert!(color_close((r, g, b), (255, 0, 0), 10),
@@ -75,12 +78,12 @@ fn solid_background_fills_rect() {
 
 #[test]
 fn blue_rounded_rect() {
-    let (mut surface, _) = render_ui(80.0, 40.0, |ctx| {
+    let (mut surface, _) = render_ui(80.0, 40.0, winia::app_root!(|ctx| {
         let key = ctx.next_key();
         ctx.start_leaf(key,
             Modifier::new().size(80.0, 40.0).background(Color::BLUE, Shape::rounded(6.0)));
         ctx.end_node();
-    });
+    }));
 
     let (r, g, b, _) = pixel(&mut surface, 40, 20);
     assert!(color_close((r, g, b), (0, 0, 255), 10));
@@ -89,9 +92,9 @@ fn blue_rounded_rect() {
 #[test]
 fn text_renders_something() {
     // 不测精确字形——只确保文字区域不是全白
-    let (mut surface, _) = render_ui(200.0, 40.0, |ctx| {
+    let (mut surface, _) = render_ui(200.0, 40.0, winia::app_root!(|ctx| {
         Text::new("Hello World").font_size(20.0).color(Color::BLACK).build(ctx);
-    });
+    }));
 
     let mut dark_pixels = 0;
     for x in 10..150 {
@@ -104,7 +107,7 @@ fn text_renders_something() {
 #[test]
 fn column_stacks_vertically() {
     // Column: 上方 30px 红色 + 下方填满蓝色
-    let (mut surface, _) = render_ui(200.0, 100.0, |ctx| {
+    let (mut surface, _) = render_ui(200.0, 100.0, winia::app_root!(|ctx| {
         Column::new().build(ctx, |ctx| {
             let k1 = ctx.next_key();
             ctx.start_leaf(k1, Modifier::new().size(200.0, 30.0).background(Color::RED, Shape::Rectangle));
@@ -113,7 +116,7 @@ fn column_stacks_vertically() {
             ctx.start_leaf(k2, Modifier::new().fill_max_width().fill_max_height().background(Color::BLUE, Shape::Rectangle));
             ctx.end_node();
         });
-    });
+    }));
 
     // y=10 在红色区域
     let (r, _, _, _) = pixel(&mut surface, 100, 10);
@@ -127,7 +130,7 @@ fn column_stacks_vertically() {
 #[test]
 fn row_arranges_horizontally() {
     // Row: 左 50px 红色 + 右 50px 蓝色
-    let (mut surface, _) = render_ui(100.0, 40.0, |ctx| {
+    let (mut surface, _) = render_ui(100.0, 40.0, winia::app_root!(|ctx| {
         Row::new().build(ctx, |ctx| {
             let k1 = ctx.next_key();
             ctx.start_leaf(k1, Modifier::new().size(50.0, 40.0).background(Color::RED, Shape::Rectangle));
@@ -136,7 +139,7 @@ fn row_arranges_horizontally() {
             ctx.start_leaf(k2, Modifier::new().size(50.0, 40.0).background(Color::BLUE, Shape::Rectangle));
             ctx.end_node();
         });
-    });
+    }));
 
     let (r, _, _, _) = pixel(&mut surface, 20, 20);
     assert!(r > 200, "left should be reddish, R={r}");
@@ -148,18 +151,18 @@ fn row_arranges_horizontally() {
 #[test]
 fn button_with_text_does_not_crash() {
     // 最基本的集成——确保不 panic
-    let (_surface, _) = render_ui(200.0, 60.0, |ctx| {
+    let (_surface, _) = render_ui(200.0, 60.0, winia::app_root!(|ctx| {
         Button::new()
             .modifier(Modifier::new().size(120.0, 36.0).background(Color::BLUE, Shape::rounded(4.0)))
             .build(ctx, |ctx| {
                 Text::new("Click").color(Color::WHITE).font_size(14.0).build(ctx);
             });
-    });
+    }));
 }
 
 #[test]
 fn nested_layout_does_not_crash() {
-    let (_surface, _) = render_ui(300.0, 80.0, |ctx| {
+    let (_surface, _) = render_ui(300.0, 80.0, winia::app_root!(|ctx| {
         Row::new().build(ctx, |ctx| {
             Column::new().modifier(Modifier::new().size(100.0, 80.0).background(Color::RED, Shape::Rectangle))
                 .build(ctx, |_ctx| {});
@@ -168,7 +171,7 @@ fn nested_layout_does_not_crash() {
             Column::new().modifier(Modifier::new().fill_max_width().fill_max_height().background(Color::GREEN, Shape::Rectangle))
                 .build(ctx, |_ctx| {});
         });
-    });
+    }));
 }
 
 #[test]
@@ -176,7 +179,7 @@ fn smoke_render_counter_ui() {
     // 类似 counter 示例的完整 UI 结构
     use winia::prelude::*;
 
-    let (_surface, _) = render_ui(400.0, 500.0, |ctx| {
+    let (_surface, _) = render_ui(400.0, 500.0, winia::app_root!(|ctx| {
         let count = ctx.remember(|| 0i32);
 
         Column::new().modifier(Modifier::new().padding(16.0)).build(ctx, |ctx| {
@@ -204,5 +207,5 @@ fn smoke_render_counter_ui() {
                     }
                 });
         });
-    });
+    }));
 }

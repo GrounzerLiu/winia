@@ -40,7 +40,8 @@ pub mod debug {
     pub fn has_pending() -> bool { false }
     pub fn set_wake_callback(_cb: impl Fn() + Send + Sync + 'static) {}
     pub fn set_event_loop_proxy(_proxy: winit::event_loop::EventLoopProxy) {}
-    pub fn update_tree(_json: &str) {}
+    pub fn update_tree(_window_id: u64, _json: &str) {}
+    pub fn remove_tree(_window_id: u64) {}
     pub fn screenshot_requested() -> bool { false }
     pub fn screenshot_done() {}
     pub fn wake() {}
@@ -58,9 +59,9 @@ pub mod debug {
 }
 
 // 公开核心类型
-pub use core::composer::{ComposeCtx, Composer, Key};
+pub use core::composer::{ComposeCtx, Composer};
 pub use core::state::{DerivedFloat, DerivedValue, State};
-pub use winia_macros::composable;
+pub use winia_macros::{app_root, composable, run_app};
 
 /// Prelude: 使用 Winia 时通常需要的所有导入
 pub mod prelude {
@@ -69,12 +70,11 @@ pub mod prelude {
     pub use crate::modifier::{Dimension, Modifier, Shape, Color, FocusRequester, ScrollState, DecoStyle, DecoMode, FontEdge, FontHint, KbEvent, KbEventType, PointerEvent, PointerEventType, PointerButton, PointerKind, PenKind};
     pub use crate::ui::{Text, TextAlign, TextOverflow, TextStyle, ProvideTextStyle, FontWeight, FontSlant, Button, ButtonStyle, Column, Row, Stack, Window, WiniaTheme, ThemeColors, SelectionContainer};
     pub use crate::ui::theme::is_system_dark_theme;
-    pub use crate::composable;
+    pub use crate::{app_root, composable, run_app};
     pub use crate::ui::rich_text::RichText;
     pub use crate::text::{InlineDrawable, ImageDrawable, SvgDrawable};
     pub use crate::layout::{Arrangement, Alignment, Constraints, LayoutDirection};
-    pub use crate::ui::theme::current_layout_direction;
-    pub use crate::unit::{Dp, Sp, Offset, Size, IntOffset, IntSize, Density, Px, DpExt, SpExt, PxExt};
-    pub use crate::effect::{LaunchedEffect, DisposableEffect, CoroutineScope, remember_coroutine_scope, StreamObverse, observe_watch};
+    pub use crate::unit::{Dp, Sp, Offset, Size, Density, Px, DpExt, SpExt, PxExt};
+    pub use crate::effect::{LaunchedEffect, DisposableEffect, CoroutineScope, remember_coroutine_scope, observe_watch};
     pub use std::time::Duration;
 }

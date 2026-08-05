@@ -7,7 +7,8 @@
 //! 函数体内（组件外）的 `State::get()` 表达式注册到该函数 scope——
 //! 依赖的 State 变化 → scope 失效 → **函数整体重跑**（对标 Compose @Composable）。
 //!
-//! ```rust
+//! ```rust,ignore
+//! // 示例片段：winia-macros crate 无法依赖 winia（循环依赖）——仅展示 API 形状
 //! use winia::ComposeCtx;
 //! use winia::core::state::State;
 //!
@@ -379,6 +380,93 @@ pub fn composable(_attr: TokenStream, item: TokenStream) -> TokenStream {
         #vis #sig #new_block
     };
     TokenStream::from(output)
+}
+
+/// 根组合入口宏（闭包版 #[composable]——保留外部捕获）。
+///
+/// 用法：`winia::app_root!(|ctx| { ... })` 得到注入语句级 key 的根闭包，
+/// 传给 `app::run_app`。日常用法请直接使用 `winia::run_app!`（合并入口）。
+///
+/// 展开：闭包体注入 `start_scope_keyed(固定根哈希)` + 每条语句 `enter_stmt`
+/// （语句级稳定 key——结构变化不漂移）+ `end_scope()`——根闭包内所有组件
+/// 调用点获得与 #[composable] 相同的稳定 key。
+///
+/// 与 #[composable] 的区别：作用于闭包（可捕获 main 局部变量，如 tokio runtime），
+/// 且只有一个根入口（scope key 固定常量——无需源码哈希）。
+#[proc_macro]
+pub fn app_root(input: TokenStream) -> TokenStream {
+    TokenStream::from(transform_root_closure(input))
+}
+
+/// 应用入口宏（合并写法）：`winia::run_app!(|ctx| { ... })`——
+/// 等价 `app::run_app(winia::app_root!(|ctx| { ... }))`，根闭包自动获得
+/// 语句级稳定 key（结构变化不漂移）。
+#[proc_macro]
+pub fn run_app(input: TokenStream) -> TokenStream {
+    let closure = transform_root_closure(input);
+    // 展开为 run_app(注入闭包)——用绝对路径（宏展开处 crate 名为 winia）
+    TokenStream::from(quote!(::winia::app::run_app(#closure)))
+}
+
+/// 根闭包变换共享逻辑：注入 start_scope_keyed + 语句级 key + end_scope。
+fn transform_root_closure(input: proc_macro::TokenStream) -> proc_macro2::TokenStream {
+    let closure = syn::parse::<syn::ExprClosure>(input)
+        .expect("app_root!/run_app! 需要一个闭包参数（|ctx| { ... }）");
+    // 校验：单参且名为 ctx（与 run_app 签名一致）——兼容 `|ctx|` 与 `|ctx: &mut ComposeCtx|`
+    let ctx_ident = closure
+        .inputs
+        .iter()
+        .find_map(|arg| match arg {
+            syn::Pat::Ident(pat_ident) if pat_ident.ident == "ctx" => Some(pat_ident.ident.clone()),
+            // 带类型注解的参数（Pat::Type）——解包内层 ident
+            syn::Pat::Type(pt) => match &*pt.pat {
+                syn::Pat::Ident(pat_ident) if pat_ident.ident == "ctx" => Some(pat_ident.ident.clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("app_root! 闭包必须有一个名为 `ctx` 的参数（如 |ctx| { ... }）");
+
+    // 闭包体取 Block 的语句（Box<Block> 字段自动解引用）
+    let body_stmts = match &*closure.body {
+        syn::Expr::Block(b) => b.block.stmts.clone(),
+        other => panic!("app_root! 闭包体必须是块表达式（|ctx| {{ ... }}）"),
+    };
+    let brace_token = match &*closure.body {
+        syn::Expr::Block(b) => b.block.brace_token,
+        _ => unreachable!(),
+    };
+
+    /// 语句级 key 注入（与 #[composable] 相同——递归覆盖 content 闭包）
+    ///
+    /// 已知限制：scope hash = fnv64(签名 token)（不含模块路径）——跨模块同名同签名
+    /// #[composable] 函数在**同一组合位置交替调用**（if 分支 A/B）时 key 确定性碰撞。
+    /// 位置隔离（不同调用位置不串位）兜底大部分场景；该交替场景罕见，文档化接受。
+    let mut stmt_counter: u32 = 0;
+    let injected = inject_stmt_ids(body_stmts, &ctx_ident, &mut stmt_counter);
+
+    // 根 scope key：固定常量（应用唯一根入口——无跨模块碰撞问题）
+    let root_hash = 0xA11C_E0F0_0000_0001u64; // app_root 根入口专用（完整 64 位）
+    let start = quote! { let __app_root_scope = #ctx_ident.start_scope_keyed(#root_hash); };
+    let end = quote! { #ctx_ident.end_scope(); };
+
+    let mut new_stmts = vec![syn::parse2::<Stmt>(start).unwrap()];
+    new_stmts.extend(injected);
+    new_stmts.push(syn::parse2::<Stmt>(end).unwrap());
+
+    let new_block = syn::Block {
+        brace_token,
+        stmts: new_stmts,
+    };
+
+    // 重建闭包（保留捕获/属性，body 换注入后的块）
+    let mut out_closure = closure;
+    out_closure.body = Box::new(syn::Expr::Block(syn::ExprBlock {
+        attrs: Vec::new(),
+        label: None,
+        block: new_block,
+    }));
+    quote!(#out_closure)
 }
 
 #[cfg(test)]

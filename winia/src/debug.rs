@@ -3,7 +3,7 @@
 //! stdin:  echo 'c 190 130' | ./app   # 点击
 //!         echo t | ./app              # 打印 UI 树
 //!         echo r | ./app              # 截图请求
-//! WebSocket: ws://127.0.0.1:9998
+//! WebSocket: ws://127.0.0.1:9998（可用环境变量 WINIA_DEBUG_PORT 覆盖——UI 测试并行隔离）
 //!         wscat -c ws://localhost:9998 → 输入 c 190 130
 
 use crate::layout::node::LayoutNode;
@@ -52,7 +52,9 @@ pub fn wake() {
 }
 
 struct DebugData {
-    pixels: Vec<u8>, width: u32, height: u32, tree_json: String,
+    pixels: Vec<u8>, width: u32, height: u32,
+    /// 每个窗口的树 JSON（单行、合法 JSON）——window_id → 树根数组
+    trees: std::collections::HashMap<u64, String>,
 }
 
 pub fn update_pixels(pixels: &[u8], width: u32, height: u32) {
@@ -60,11 +62,38 @@ pub fn update_pixels(pixels: &[u8], width: u32, height: u32) {
     if let Some(ref mut d) = *data { d.pixels = pixels.to_vec(); d.width = width; d.height = height; }
 }
 
-pub fn update_tree(json: &str) {
+/// 更新指定窗口的树 JSON（多窗口：各窗口独立存储——不再互相覆盖）
+pub fn update_tree(window_id: u64, json: &str) {
     let mut data = DEBUG_STATE.lock().unwrap();
     if data.is_none() {
-        *data = Some(DebugData { pixels: Vec::new(), width: 0, height: 0, tree_json: json.to_string() });
-    } else if let Some(ref mut d) = *data { d.tree_json = json.to_string(); }
+        *data = Some(DebugData { pixels: Vec::new(), width: 0, height: 0, trees: Default::default() });
+    }
+    if let Some(ref mut d) = *data {
+        d.trees.insert(window_id, json.to_string());
+    }
+}
+
+/// 移除指定窗口的树 JSON（窗口关闭时清理——避免残留）
+pub fn remove_tree(window_id: u64) {
+    if let Some(ref mut d) = *DEBUG_STATE.lock().unwrap() {
+        d.trees.remove(&window_id);
+    }
+}
+
+/// 全部窗口树 → 多窗口 JSON：`[{"window":0,"root":[...]},{"window":1,"root":[...]}]`
+/// （按 window id 排序——顺序稳定；空树列表输出 `[]`）
+fn all_trees_json() -> String {
+    let data = DEBUG_STATE.lock().unwrap();
+    let Some(d) = data.as_ref() else { return "[]".to_string() };
+    let mut entries: Vec<(u64, &String)> = d.trees.iter().map(|(id, j)| (*id, j)).collect();
+    entries.sort_by_key(|(id, _)| *id);
+    let mut out = String::from("[");
+    for (i, (id, json)) in entries.iter().enumerate() {
+        if i > 0 { out.push(','); }
+        out.push_str(&format!(r#"{{"window":{id},"root":{json}}}"#));
+    }
+    out.push(']');
+    out
 }
 
 // ── 事件队列 ──
@@ -109,13 +138,18 @@ fn build_node_json(nodes: &[LayoutNode], idx: usize, out: &mut String, depth: us
     let node = &nodes[idx];
     let indent = "  ".repeat(depth + 1);
     let mod_desc = describe_modifier(&node.modifier);
+    // 非有限数（NaN/Inf——未初始化的测量值）格式化为 0——保证 JSON 合法
+    // （serde_json 拒绝 NaN——UI 测试解析树会失败）
+    let pos_x = if node.position.x.is_finite() { node.position.x } else { 0.0 };
+    let pos_y = if node.position.y.is_finite() { node.position.y } else { 0.0 };
+    let size_w = if node.measured_size.width.is_finite() { node.measured_size.width } else { 0.0 };
+    let size_h = if node.measured_size.height.is_finite() { node.measured_size.height } else { 0.0 };
     out.push_str(&format!(
-        r#"{indent}{{"pos":[{:.0},{:.0}],"size":[{:.0},{:.0}],"mod":"{}","focused":{},"children":["#,
-        node.position.x, node.position.y, node.measured_size.width, node.measured_size.height,
+        r#"{indent}{{"pos":[{pos_x:.0},{pos_y:.0}],"size":[{size_w:.0},{size_h:.0}],"mod":"{}","focused":{},"children":["#,
         mod_desc, node.focused,
     ));
     for (i, &child) in node.children.iter().enumerate() {
-        if i > 0 { out.push_str(",\n"); }
+        if i > 0 { out.push_str(","); } // 紧凑单行（无换行——println 走 stdout 管道不拆行）
         build_node_json(nodes, child, out, depth + 1);
     }
     out.push(']'); out.push('}');
@@ -128,7 +162,11 @@ fn describe_modifier(modifier: &crate::modifier::Modifier) -> String {
         ModifierElement::Clickable { .. } => Some("click".into()),
         ModifierElement::Focusable => Some("focus".into()),
         ModifierElement::TextContent { content, .. } => Some(format!("text({})",
-            content.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n"))),
+            // 完整转义（JSON 字符串——\t/\r/\b/\f 等控制字符不转义会生成非法 JSON，
+            // serde_json 解析失败 → 测试表现为超时难排查）
+            content.replace('\\', "\\\\").replace('"', "\\\"")
+                .replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t")
+                .replace('\u{8}', "\\b").replace('\u{c}', "\\f"))),
         ModifierElement::Padding { all } => Some(format!("pad({})", all)),
         _ => None,
     }).collect::<Vec<_>>().join("|")
@@ -176,7 +214,10 @@ pub fn start_stdin_channel() {
                 }
                 "r" => { request_screenshot(); wake(); }
                 "t" => {
-                    if let Some(ref d) = *DEBUG_STATE.lock().unwrap() { eprintln!("{}", d.tree_json); }
+                    // 树响应走 stdout（前缀 TREE:——UI 测试读管道；其他 demo
+                    // 输出可能污染 stdout——测试按前缀过滤）。无条件响应
+                    // （DEBUG_STATE 未填充时输出空——测试可区分 stdin 链路 vs 渲染时序）
+                    println!("TREE:{}", all_trees_json());
                 }
                 "q" => { force_shutdown(); break; }
                 _ => {}
@@ -195,11 +236,17 @@ pub fn start_ws_server() {
         return;
     };
     handle.spawn(async move {
-        let listener = match tokio::net::TcpListener::bind("127.0.0.1:9998").await {
+        // 端口参数化（环境变量 WINIA_DEBUG_PORT）——UI 测试并行隔离；默认 9998
+        let port: u16 = std::env::var("WINIA_DEBUG_PORT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(9998);
+        let addr = format!("127.0.0.1:{port}");
+        let listener = match tokio::net::TcpListener::bind(&addr).await {
             Ok(l) => l,
             Err(e) => { eprintln!("[DevTools] ws bind failed: {e}"); return; }
         };
-        eprintln!("[DevTools] WebSocket → ws://localhost:9998");
+        eprintln!("[DevTools] WebSocket → ws://localhost:{port}");
         while let Ok((stream, _)) = listener.accept().await {
             if SHUTDOWN.load(Ordering::SeqCst) { break; }
             tokio::spawn(handle_ws(stream));
@@ -264,14 +311,7 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
                 let _ = write.send(Message::text(s)).await;
             }
             "t" => {
-                let json = match DEBUG_STATE.lock() {
-                    Ok(guard) => match guard.as_ref() {
-                        Some(d) => d.tree_json.clone(),
-                        None => r#"{"error":"no tree"}"#.into(),
-                    },
-                    Err(_) => r#"{"error":"lock error"}"#.into(),
-                };
-                let _ = write.send(Message::text(json)).await;
+                let _ = write.send(Message::text(all_trees_json())).await;
             }
             "p" => {
                 // 像素转储（调试截图分析）：二进制帧 = 8 字节 header(WxH u32 LE) + RGBA

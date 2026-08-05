@@ -1,7 +1,6 @@
 use crate::text::Paragraph;
-use skia_safe::textlayout::{RectHeightStyle, RectWidthStyle, TextBox, TextDirection};
-use skia_safe::{Canvas, Point};
-use std::ops::Range;
+use skia_safe::textlayout::TextDirection;
+use skia_safe::Point;
 
 pub struct TextLayout<'a> {
     paragraph: &'a Paragraph,
@@ -16,26 +15,6 @@ impl<'a> TextLayout<'a> {
         TextLayout {
             paragraph,
             length,
-        }
-    }
-
-    pub fn draw(&self, canvas: &Canvas, x: f32, y: f32) {
-        self.paragraph.paint(canvas, x, y);
-    }
-
-    pub fn width(&self) -> f32 {
-        self.paragraph.max_intrinsic_width()
-    }
-
-    pub fn height(&self) -> f32 {
-        self.paragraph.height()
-    }
-
-    pub fn base_line(&self) -> f32 {
-        if let Some(line_metrics) = self.paragraph.get_line_metrics_at(0) {
-            line_metrics.baseline as f32
-        } else {
-            0.0
         }
     }
 
@@ -84,14 +63,6 @@ impl<'a> TextLayout<'a> {
                 None
             }
         }
-    }
-
-    pub fn get_rects_for_range(&self, range: Range<usize>) -> Vec<TextBox> {
-        self.paragraph.get_rects_for_range(
-            range,
-            RectHeightStyle::Max,
-            RectWidthStyle::Tight,
-        )
     }
 
     pub fn get_closest_grapheme_cluster_cluster_at(&self, point: impl Into<Point>) -> usize {

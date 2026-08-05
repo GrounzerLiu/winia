@@ -152,7 +152,7 @@ impl<'a> RichTextScope<'a> {
         }
     }
 
-    /// 占位符：文本写入 content（不渲染），图片作视觉替换（D:\winia 风格）。
+    /// 占位符：文本写入 content（不渲染），图片作视觉替换（参考旧版 winia v1）。
     pub fn placeholder(&mut self, text: impl Into<String>, drawable: impl Into<Arc<dyn InlineDrawable>>) {
         let pos = self.cursor;
         let t = text.into();
@@ -220,7 +220,7 @@ impl<'a> RichTextScope<'a> {
 
     pub fn subscript(&mut self, f: impl FnOnce(&mut Self)) {
         let saved = self.style.clone();
-        self.style.baseline_shift = 0.259; // 0.15 / 0.58，补偿字号缩小后保持 D:\winia 偏移量
+        self.style.baseline_shift = 0.259; // 0.15 / 0.58，补偿字号缩小后保持旧版偏移量
         self.style.fs = Some(saved.fs.unwrap_or(14.0) * 0.58);
         f(self);
         self.style = saved;
@@ -371,7 +371,7 @@ impl RichText {
             f(&mut scope);
         }
 
-        // 用 D:\winia 分裂算法解析 span
+        // 用旧版 winia 的分裂算法解析 span
         let spans = resolve_spans(&content, &drawable_ranges, &annotations);
 
         // 注册到选区容器（支持文本选中）——仅在 SelectionContainer 的 provides
@@ -382,7 +382,7 @@ impl RichText {
             if let Some(reg) = ctx.selection_registrar()
                 .or_else(|| crate::ui::selection_container::LOCAL_SELECTION_REGISTRAR.try_current())
             {
-                reg.register(key, &content, None);
+                reg.register(key, &content);
                 Some(reg)
             } else { None }
         };
@@ -404,61 +404,31 @@ impl RichText {
 
 impl Default for RichText { fn default() -> Self { Self::new() } }
 
-// ── D:\winia 风格 span 解析 ──
+// ── 旧版 winia 风格 span 解析 ──
 
+#[derive(Clone)]
 struct Seg {
     range: Range<usize>,
-    fs: f32, color: Color, fw: FontWeight, slant: FontSlant,
-    ul: bool, ol: bool, st: bool,
-    deco_color: Option<Color>,
-    deco_style: Option<crate::modifier::DecoStyle>,
-    deco_mode: Option<crate::modifier::DecoMode>,
-    baseline_shift: f32,
-    letter_spacing: f32, word_spacing: f32,
-    height_multiple: f32, half_leading: bool,
-    font_families: Vec<String>,
-    font_width: i32,
-    font_edging: Option<crate::modifier::FontEdge>,
-    font_hinting: Option<crate::modifier::FontHint>,
-    subpixel: bool,
-    foreground_color: Option<Color>,
-    bg: Option<Color>,
-    locale: Option<String>,
     placeholder: bool,
+    /// 已解析样式（Option 语义——未指定字段用默认；注解 apply 覆盖）。
+    /// 内嵌 Style 而非镜像字段——新增样式字段只需改 Style 一处（P3-4 镜像合并）
+    style: Style,
 }
 
 impl Seg {
     fn default_base(fs: f32, color: Color, fw: FontWeight, slant: FontSlant) -> Self {
         Seg {
-            range: 0..0, fs, color, fw, slant,
-            ul: false, ol: false, st: false,
-            deco_color: None, deco_style: None, deco_mode: None,
-            baseline_shift: 0.0, letter_spacing: 0.0, word_spacing: 0.0,
-            height_multiple: 0.0, half_leading: false,
-            font_families: Vec::new(), font_width: 5,
-            font_edging: None, font_hinting: None, subpixel: false,
-            foreground_color: None, bg: None, locale: None,
+            range: 0..0,
             placeholder: false,
+            style: Style {
+                fs: Some(fs), color: Some(color), fw: Some(fw), slant: Some(slant),
+                ..Style::default()
+            },
         }
     }
 
     fn clone_at(&self, range: Range<usize>) -> Self {
-        Seg {
-            range,
-            fs: self.fs, color: self.color, fw: self.fw, slant: self.slant,
-            ul: self.ul, ol: self.ol, st: self.st,
-            deco_color: self.deco_color, deco_style: self.deco_style, deco_mode: self.deco_mode,
-            baseline_shift: self.baseline_shift,
-            letter_spacing: self.letter_spacing, word_spacing: self.word_spacing,
-            height_multiple: self.height_multiple, half_leading: self.half_leading,
-            font_families: self.font_families.clone(),
-            font_width: self.font_width,
-            font_edging: self.font_edging, font_hinting: self.font_hinting,
-            subpixel: self.subpixel,
-            foreground_color: self.foreground_color, bg: self.bg,
-            locale: self.locale.clone(),
-            placeholder: self.placeholder,
-        }
+        Seg { range, ..self.clone() }
     }
 }
 
@@ -502,7 +472,7 @@ pub(crate) fn resolve_spans(content: &str, drawable_ranges: &[Range<usize>], ann
         }
     }
 
-    // 2) D:\winia 分裂
+    // 2) 旧版分裂
     let resolved_annos: Vec<(Style, Range<usize>)> = annotations.iter()
         .filter(|(s, r)| s.is_not_default() && r.end > r.start)
         .map(|(s, r)| (s.clone(), r.clone()))
@@ -518,11 +488,11 @@ pub(crate) fn resolve_spans(content: &str, drawable_ranges: &[Range<usize>], ann
             if s_start >= a_end { break; }
             if segs[i].placeholder { i += 1; continue; }
             if a_start <= s_start && a_end >= s_end {
-                apply_seg(&mut segs[i], attr);
+                segs[i].style.apply(attr);
                 i += 1;
             } else if a_start > s_start && a_start < s_end && a_end < s_end {
                 let mut mid = segs[i].clone_at(a_start..a_end);
-                apply_seg(&mut mid, attr);
+                mid.style.apply(attr);
                 let right = segs[i].clone_at(a_end..s_end);
                 segs[i].range.end = a_start;
                 segs.insert(i+1, mid);
@@ -530,13 +500,13 @@ pub(crate) fn resolve_spans(content: &str, drawable_ranges: &[Range<usize>], ann
                 i += 3;
             } else if a_start > s_start && a_start < s_end {
                 let mut right = segs[i].clone_at(a_start..s_end);
-                apply_seg(&mut right, attr);
+                right.style.apply(attr);
                 segs[i].range.end = a_start;
                 segs.insert(i+1, right);
                 i += 2;
             } else if a_end > s_start && a_end < s_end {
                 let mut left = segs[i].clone_at(s_start..a_end);
-                apply_seg(&mut left, attr);
+                left.style.apply(attr);
                 segs[i].range.start = a_end;
                 segs.insert(i, left);
                 i += 2;
@@ -547,46 +517,53 @@ pub(crate) fn resolve_spans(content: &str, drawable_ranges: &[Range<usize>], ann
     // 3) 转 RichSpanStyle
     segs.into_iter().filter(|s| !s.placeholder).map(|s| RichSpanStyle {
         start: s.range.start, end: s.range.end,
-        font_size: s.fs, color: s.color, font_weight: s.fw, font_style: s.slant,
-        underline: s.ul, overline: s.ol, strikethrough: s.st,
-        decoration_color: s.deco_color,
-        decoration_style: s.deco_style,
-        decoration_mode: s.deco_mode,
-        baseline_shift: s.baseline_shift,
-        letter_spacing: s.letter_spacing, word_spacing: s.word_spacing,
-        height_multiple: s.height_multiple, half_leading: s.half_leading,
-        font_families: s.font_families, font_width: s.font_width,
-        font_edging: s.font_edging, font_hinting: s.font_hinting,
-        subpixel: s.subpixel,
-        foreground_color: s.foreground_color, background: s.bg,
-        locale: s.locale,
+        font_size: s.style.fs.unwrap_or(d_fs),
+        color: s.style.color.unwrap_or(d_color),
+        font_weight: s.style.fw.unwrap_or(d_fw),
+        font_style: s.style.slant.unwrap_or(d_sl),
+        underline: s.style.ul, overline: s.style.ol, strikethrough: s.style.st,
+        decoration_color: s.style.deco_color,
+        decoration_style: s.style.deco_style,
+        decoration_mode: s.style.deco_mode,
+        baseline_shift: s.style.baseline_shift,
+        letter_spacing: s.style.letter_spacing, word_spacing: s.style.word_spacing,
+        height_multiple: s.style.height_multiple, half_leading: s.style.half_leading,
+        font_families: s.style.font_families, font_width: s.style.font_width,
+        font_edging: s.style.font_edging, font_hinting: s.style.font_hinting,
+        subpixel: s.style.subpixel,
+        foreground_color: s.style.foreground_color, background: s.style.bg,
+        locale: s.style.locale,
     }).collect()
 }
 
-fn apply_seg(seg: &mut Seg, s: &Style) {
-    if let Some(v) = s.fs { seg.fs = v; }
-    if let Some(v) = s.color { seg.color = v; }
-    if let Some(v) = s.fw { seg.fw = v; }
-    if let Some(v) = s.slant { seg.slant = v; }
-    if s.ul { seg.ul = true; }
-    if s.ol { seg.ol = true; }
-    if s.st { seg.st = true; }
-    if let Some(v) = s.deco_color { seg.deco_color = Some(v); }
-    if let Some(v) = s.deco_style { seg.deco_style = Some(v); }
-    if let Some(v) = s.deco_mode { seg.deco_mode = Some(v); }
-    if s.baseline_shift != 0.0 { seg.baseline_shift = s.baseline_shift; }
-    if s.letter_spacing != 0.0 { seg.letter_spacing = s.letter_spacing; }
-    if s.word_spacing != 0.0 { seg.word_spacing = s.word_spacing; }
-    if s.height_multiple != 0.0 { seg.height_multiple = s.height_multiple; }
-    if s.half_leading { seg.half_leading = true; }
-    if !s.font_families.is_empty() { seg.font_families = s.font_families.clone(); }
-    if s.font_width != 5 { seg.font_width = s.font_width; }
-    if let Some(v) = s.font_edging { seg.font_edging = Some(v); }
-    if let Some(v) = s.font_hinting { seg.font_hinting = Some(v); }
-    if s.subpixel { seg.subpixel = true; }
-    if let Some(v) = s.foreground_color { seg.foreground_color = Some(v); }
-    if let Some(v) = s.bg { seg.bg = Some(v); }
-    if let Some(v) = &s.locale { seg.locale = Some(v.clone()); }
+impl Style {
+    /// 将另一 Style 的已指定字段覆盖到 self（注解继承语义——嵌套 bold/italic 等）。
+    /// 原 apply_seg 手抄 22 字段——Style 内嵌 Seg 后此方法为唯一合并点（P3-4）
+    fn apply(&mut self, other: &Style) {
+        if let Some(v) = other.fs { self.fs = Some(v); }
+        if let Some(v) = other.color { self.color = Some(v); }
+        if let Some(v) = other.fw { self.fw = Some(v); }
+        if let Some(v) = other.slant { self.slant = Some(v); }
+        if other.ul { self.ul = true; }
+        if other.ol { self.ol = true; }
+        if other.st { self.st = true; }
+        if let Some(v) = other.deco_color { self.deco_color = Some(v); }
+        if let Some(v) = other.deco_style { self.deco_style = Some(v); }
+        if let Some(v) = other.deco_mode { self.deco_mode = Some(v); }
+        if other.baseline_shift != 0.0 { self.baseline_shift = other.baseline_shift; }
+        if other.letter_spacing != 0.0 { self.letter_spacing = other.letter_spacing; }
+        if other.word_spacing != 0.0 { self.word_spacing = other.word_spacing; }
+        if other.height_multiple != 0.0 { self.height_multiple = other.height_multiple; }
+        if other.half_leading { self.half_leading = true; }
+        if !other.font_families.is_empty() { self.font_families = other.font_families.clone(); }
+        if other.font_width != 5 { self.font_width = other.font_width; }
+        if let Some(v) = other.font_edging { self.font_edging = Some(v); }
+        if let Some(v) = other.font_hinting { self.font_hinting = Some(v); }
+        if other.subpixel { self.subpixel = true; }
+        if let Some(v) = other.foreground_color { self.foreground_color = Some(v); }
+        if let Some(v) = other.bg { self.bg = Some(v); }
+        if let Some(v) = &other.locale { self.locale = Some(v.clone()); }
+    }
 }
 
 #[cfg(test)]

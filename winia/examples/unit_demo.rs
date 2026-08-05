@@ -130,7 +130,7 @@ fn unit_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    app::run_app(|ctx| {
+    winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
                 .size(420.0, 520.0)

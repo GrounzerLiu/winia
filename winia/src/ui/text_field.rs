@@ -1,6 +1,6 @@
 //! TextField — 文本输入组件（对齐 Jetpack Compose BasicTextField）
 //!
-//! 参考：D:\winia\winia\src\ui\widget\text_field.rs
+//! 参考：旧版 winia v1 的 text_field 实现
 
 use crate::core::composer::ComposeCtx;
 use crate::core::state::State;
@@ -98,7 +98,7 @@ impl TextField {
             .to_logical_px();
         let color = theme.on_surface;
 
-        // 光标闪烁状态（D:\winia 风格）
+        // 光标闪烁状态（旧版风格）
         let cursor_visible = ctx.remember(|| true);
         let cv = cursor_visible.clone();
         let blink_started = ctx.remember(|| false);
@@ -237,17 +237,17 @@ impl TextField {
         let modifier = self.modifier
             .focusable()
             .padding(8.0)
-            .push(crate::modifier::ModifierElement::TextContent {
+            .text_content(
                 content,
                 font_size,
                 color,
-                font_weight: crate::ui::text::FontWeight::NORMAL,
-                font_style: crate::ui::text::FontSlant::Upright,
-                max_lines: usize::MAX, // unlimited lines
-                align: crate::ui::TextAlign::Left,
-                overflow: crate::ui::TextOverflow::Clip,
-                soft_wrap: true, // allow text wrapping
-            })
+                crate::ui::text::FontWeight::NORMAL,
+                crate::ui::text::FontSlant::Upright,
+                usize::MAX, // unlimited lines
+                crate::ui::TextAlign::Left,
+                crate::ui::TextOverflow::Clip,
+                true, // allow text wrapping
+            )
             .on_key_event(kb_handler);
 
         ctx.start_leaf(key, modifier);
@@ -263,7 +263,7 @@ impl TextField {
                 }
             }),
         );
-        // IME 预输入回调（D:\winia 风格——直接修改 text 内容）
+        // IME 预输入回调（旧版风格——直接修改 text 内容）
         {
             let v = value.clone();
             ctx.set_current_node_ime_callback(Box::new(move |text, cursor| {

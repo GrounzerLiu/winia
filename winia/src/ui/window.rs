@@ -15,6 +15,16 @@ thread_local! {
     static PENDING_REMOVE_ID: Cell<u64> = const { Cell::new(0) };
 }
 
+/// 子窗口内容包装（#[composable]——框架内部组合点也遵守稳定 key 规则：
+/// app.rs 的 process_pending_windows 直接 compose 此闭包——STMT_STACK 空，
+/// 无宏覆盖会触发稳定 key panic）
+#[composable]
+fn sub_window_content(ctx: &mut ComposeCtx, content: &impl Fn(&mut ComposeCtx)) {
+    Column::new().modifier(Modifier::new().padding(8.0)).build(ctx, |ctx| {
+        content(ctx);
+    });
+}
+
 /// 在 compose 开头调用，重置生命周期标志
 pub(crate) fn reset_lifecycle_flags() {
     WINDOW_REBUILT.with(|r| r.set(false));
@@ -87,6 +97,8 @@ impl Window {
             .collect();
         for w in to_close {
             if let Some(mut pw) = windows.remove(&w) {
+                // 清理 debug 树条目（逻辑关闭不走 winit Destroyed——残留会误判）
+                crate::debug::remove_tree(w.into_raw() as u64);
                 if let Some(ref mut cb) = pw.on_close { cb(); }
                 for pw2 in windows.values() {
                     if let Some(ref sw) = pw2.skia_window { sw.request_redraw(); }
@@ -134,9 +146,7 @@ impl Window {
             let theme_for_window = theme_colors.clone();
             app::open_window_with_title(w, h, self.state.title.clone(), Some(Box::new(move |ctx| {
                 crate::ui::theme::WiniaTheme::with_theme(theme_colors.clone(), ctx, |ctx| {
-                    Column::new().modifier(Modifier::new().padding(8.0)).build(ctx, |ctx| {
-                        content(ctx);
-                    });
+                    sub_window_content(ctx, &content);
                 });
             })), wrapped, Some(id), Some(theme_for_window));
         }

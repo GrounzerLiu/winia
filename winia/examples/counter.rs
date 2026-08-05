@@ -103,18 +103,11 @@ fn counter_ui(ctx: &mut ComposeCtx) {
         }
 
 fn main() {
-    // panic hook: 写入文件以便诊断崩溃
-    std::panic::set_hook(Box::new(|info| {
-        let msg = format!("PANIC: {:?}", info);
-        eprintln!("{}", msg);
-        let _ = std::fs::write("D:/Projects/winia/crash.log", &msg);
-    }));
-
     // 启动 tokio 运行时（供 debug WS server 使用）
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let _guard = rt.enter();
 
-    app::run_app(|ctx| {
+    winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
                 .size(400.0, 500.0)
