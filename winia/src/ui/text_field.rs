@@ -237,17 +237,17 @@ impl TextField {
         let modifier = self.modifier
             .focusable()
             .padding(8.0)
-            .push(crate::modifier::ModifierElement::TextContent {
+            .text_content(
                 content,
                 font_size,
                 color,
-                font_weight: crate::ui::text::FontWeight::NORMAL,
-                font_style: crate::ui::text::FontSlant::Upright,
-                max_lines: usize::MAX, // unlimited lines
-                align: crate::ui::TextAlign::Left,
-                overflow: crate::ui::TextOverflow::Clip,
-                soft_wrap: true, // allow text wrapping
-            })
+                crate::ui::text::FontWeight::NORMAL,
+                crate::ui::text::FontSlant::Upright,
+                usize::MAX, // unlimited lines
+                crate::ui::TextAlign::Left,
+                crate::ui::TextOverflow::Clip,
+                true, // allow text wrapping
+            )
             .on_key_event(kb_handler);
 
         ctx.start_leaf(key, modifier);

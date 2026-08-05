@@ -528,6 +528,32 @@ impl Modifier {
         })
     }
 
+    /// 统一构造 TextContent 元素（Text/TextField 共用——字段单一来源，P3-6）
+    pub(crate) fn text_content(
+        mut self,
+        content: String,
+        font_size: f32,
+        color: crate::modifier::Color,
+        font_weight: crate::ui::text::FontWeight,
+        font_style: crate::ui::text::FontSlant,
+        max_lines: usize,
+        align: crate::ui::TextAlign,
+        overflow: crate::ui::TextOverflow,
+        soft_wrap: bool,
+    ) -> Self {
+        self.push(ModifierElement::TextContent {
+            content,
+            font_size,
+            color,
+            font_weight,
+            font_style,
+            max_lines,
+            align,
+            overflow,
+            soft_wrap,
+        })
+    }
+
     /// 设置边框
     pub fn border(self, width: f32, color: Color, shape: impl Into<Shape>) -> Self {
         self.push(ModifierElement::Border {

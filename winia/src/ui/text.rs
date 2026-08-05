@@ -222,17 +222,17 @@ impl Text {
                 (Some(reg), Some((key, content_len, off)))
             } else { (None, None) }
         };
-        let modifier = self.modifier.push(ModifierElement::TextContent {
-            content: self.content,
-            font_size: final_font_size.to_logical_px(),
-            color: final_color,
-            font_weight: final_font_weight,
-            font_style: final_font_style,
-            max_lines: final_max_lines,
-            align: final_align,
-            overflow: final_overflow,
-            soft_wrap: self.soft_wrap,
-        });
+        let modifier = self.modifier.text_content(
+            self.content,
+            final_font_size.to_logical_px(),
+            final_color,
+            final_font_weight,
+            final_font_style,
+            final_max_lines,
+            final_align,
+            final_overflow,
+            self.soft_wrap,
+        );
 
         ctx.start_leaf(key, modifier);
         if let Some(reg) = reg_for_node {
