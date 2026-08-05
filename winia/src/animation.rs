@@ -287,9 +287,16 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
                 );
                 state.current_displacement = displacement;
                 // 直接使用物理值，不做 lerp/clamp（避免超调截断导致抖动）
-                let spring_val = to_f32 + displacement;
-                let value = AnimatableValue::from_f32(spring_val);
-                (value, displacement.abs() < spec.threshold && state.last_velocity.abs() < spec.threshold)
+                let done = displacement.abs() < spec.threshold && state.last_velocity.abs() < spec.threshold;
+                if done {
+                    // Spring 渐近收敛：done 时位移只是"小于阈值"而非精确 0——
+                    // 必须返回精确目标值，否则调用方（如 AnimatedVisibility 的
+                    // exit 完成检测 progress<0.001）会因残余位移卡住/误判
+                    (state.to.clone(), true)
+                } else {
+                    let spring_val = to_f32 + displacement;
+                    (AnimatableValue::from_f32(spring_val), false)
+                }
             }
             AnimationSpec::Tween(spec) => {
                 let elapsed = now - state.start;
@@ -994,6 +1001,27 @@ mod tests {
         assert!(has_animation_for_state(s.id()), "Offset animation should be registered");
         remove_animation_by_state(s.id());
         assert!(!has_animation_for_state(s.id()), "own animation should be removed");
+    }
+
+    #[test]
+    fn spring_done_returns_exact_target() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        // 回归：Spring 渐近收敛——done 时 Animatable 必须写出精确目标值
+        // （修复前返回 to+残余位移——AnimatedVisibility 的 exit 完成检测
+        //   progress<0.001 会因残余位移卡住/误判）
+        use crate::core::state::State;
+        let st = State::new(1.0f32);
+        let mut anim = Animatable::new(st.clone());
+        anim.animate_to(0.0, AnimationSpec::Spring(SpringSpec::default()));
+        // 步进直到完成：update() 用真实时钟（Instant::now()）——连续调用 dt≈0
+        // 永不推进，需真实帧间隔（16ms ≈ 60fps）；上限 100 帧防死循环
+        let mut frames = 0;
+        while anim.update() && frames < 100 {
+            std::thread::sleep(Duration::from_millis(16));
+            frames += 1;
+        }
+        assert!(frames < 100, "spring 应收敛（stiffness=200 约 300-400ms）");
+        assert_eq!(st.peek(), 0.0, "done 后值必须精确等于目标（修复前为残余位移）");
     }
 }
 
