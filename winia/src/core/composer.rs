@@ -839,6 +839,14 @@ pub struct Composer {
     slot_deps: HashMap<u32, HashSet<u64>>,
     /// 当前 compose 期间记录的依赖（替代全局 RECORDED_DEPS）
     recorded_deps: Vec<(u32, u64)>,
+    /// 布局期依赖记录（measure 中 State::get 写入——两段式依赖：只重测不重组）
+    layout_recorded: Vec<(u32, u64)>,
+    /// 布局依赖表（state_id → slot_key；上帧布局注册的持久表，供下帧 pending 消费）
+    layout_deps: HashMap<u32, HashSet<u64>>,
+    /// 本帧 pending 消费收集的布局失效 key（layout() 应用后清空）
+    layout_dirty_keys: HashSet<u64>,
+    /// 本帧确认移除的 slot_key（compose 末尾回收未复用节点时收集——layout_deps 死 key 清理用）
+    removed_slot_keys: HashSet<u64>,
     /// 本 Composer 实例的 pending state 通知队列
     pending_states: Arc<parking_lot::Mutex<Vec<u32>>>,
     /// 上一帧各 slot_key → 节点缓存（用于 clean slot 跳过和子树重放；
@@ -882,6 +890,10 @@ impl Composer {
             group_skip_stack: Vec::new(),
             slot_deps: HashMap::new(),
             recorded_deps: Vec::new(),
+            layout_recorded: Vec::new(),
+            layout_deps: HashMap::new(),
+            layout_dirty_keys: HashSet::new(),
+            removed_slot_keys: HashSet::new(),
             pending_states,
             prev_nodes: HashMap::new(),
             pending_params: Vec::new(),
@@ -1268,6 +1280,12 @@ impl Composer {
                     affected_slot_keys.insert(k);
                 }
             }
+            // 两段式依赖：布局期注册的依赖 → 只标布局失效（重测不重组）
+            if let Some(keys) = self.layout_deps.get(&state_id) {
+                for &k in keys {
+                    self.layout_dirty_keys.insert(k);
+                }
+            }
         }
         drop(pending);
 
@@ -1306,7 +1324,9 @@ impl Composer {
         // 回收本帧未复用的上帧节点（结构变化移除的子树——on_remove 触发）；
         // 跳过已复用节点（已挂入本帧树，free 会递归进本帧树形成环）
         let mut visited = std::collections::HashSet::new();
-        for (_, idx) in self.prev_node_by_key.drain() {
+        for (key, idx) in self.prev_node_by_key.drain() {
+            // 收集移除的 slot_key（layout_deps 死 key 清理）
+            self.removed_slot_keys.insert(key);
             self.arena.free_node_skip(idx, &self.reused_nodes, &mut visited);
         }
         self.prev_node_by_key.clear();
@@ -1345,6 +1365,21 @@ impl Composer {
 
     /// 执行整棵布局树的 measure + place，并缓存测量结果供下帧复用
     pub fn layout(&mut self, root_constraints: Constraints) {
+        // 布局期：measure 中的 State::get() 写入 layout_recorded（两段式依赖分流）
+        crate::core::state::set_layout_recording_target(&mut self.layout_recorded);
+        // 应用布局失效：清全树旧标记 → 按 layout_dirty_keys 标节点 + 祖先传播
+        // （保守超集：祖先全链标脏——布局动画场景父必然依赖子尺寸，Compose 精确传播留待优化）
+        if let Some(root_idx) = self.arena.root {
+            let nodes = &mut self.arena.nodes;
+            // 清全树旧标记（每帧重新标记）
+            for n in nodes.iter_mut() { n.layout_dirty = false; }
+            if !self.layout_dirty_keys.is_empty() {
+                crate::layout::node::apply_layout_dirty(nodes, root_idx, &self.layout_dirty_keys);
+            }
+            self.layout_dirty_keys.clear();
+        } else {
+            self.layout_dirty_keys.clear();
+        }
         // 物化只在 compose 末尾（完整分离：组合完成即建树）——layout 只测量。
         // 单独调 layout（无 compose）时树为空——measure 无操作（无害）
         if let Some(root_idx) = self.arena.root {
@@ -1360,6 +1395,29 @@ impl Composer {
             // measure 阶段（SizeDynamic 闭包内的 State::get()）注册的依赖也要进入 slot_deps
             for (state_id, slot_key) in self.recorded_deps.drain(..) {
                 self.slot_deps.entry(state_id).or_default().insert(slot_key);
+            }
+            // 布局依赖增量更新（两段式依赖）：
+            // 本帧 measure 过的 slot_key（touched）→ 清旧写新（依赖集收敛）；
+            // 未 measure 的（常量折叠命中）→ 保留旧项（折叠前提=依赖无 notify，闭环成立）。
+            let recorded: Vec<(u32, u64)> = self.layout_recorded.drain(..).collect();
+            let touched: HashSet<u64> = recorded.iter().map(|&(_, k)| k).collect();
+            if !touched.is_empty() {
+                for set in self.layout_deps.values_mut() {
+                    set.retain(|k| !touched.contains(k));
+                }
+            }
+            // 顺手清理死 key：本帧确认移除的节点（compose 末尾回收时收集）
+            if !self.removed_slot_keys.is_empty() {
+                for set in self.layout_deps.values_mut() {
+                    set.retain(|k| !self.removed_slot_keys.contains(k));
+                }
+                self.removed_slot_keys.clear();
+            }
+            // 空条目清理（节点不再依赖任何 state 或已移除）
+            self.layout_deps.retain(|_, set| !set.is_empty());
+            // 写入本帧新注册
+            for (state_id, slot_key) in recorded {
+                self.layout_deps.entry(state_id).or_default().insert(slot_key);
             }
         } else {
             // 无根节点（空内容帧）：recorded_deps 无 measure 期新增，直接清空

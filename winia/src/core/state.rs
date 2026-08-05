@@ -203,8 +203,12 @@ use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Weak};
 
 thread_local! {
-    /// compose 期间指向当前 Composer 的 recorded_deps vec
-    static RECORDING_TARGET: std::cell::RefCell<Option<*mut Vec<(u32, u64)>>> = const { std::cell::RefCell::new(None) };
+    /// 组合期记录目标（compose 的 recorded_deps——State::get 写入）
+    static COMPOSE_RECORDING_TARGET: std::cell::RefCell<Option<*mut Vec<(u32, u64)>>> = const { std::cell::RefCell::new(None) };
+    /// 布局期记录目标（layout 的 layout_recorded——measure 中 State::get 写入）
+    static LAYOUT_RECORDING_TARGET: std::cell::RefCell<Option<*mut Vec<(u32, u64)>>> = const { std::cell::RefCell::new(None) };
+    /// 是否处于布局期（measure 中）——决定 record_dep 写入哪个目标（两段式依赖：布局读动画值只重测不重组）
+    static IN_LAYOUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 // ── Composer 注册表：每个 Composer 注册自己的通知队列 ──
@@ -259,24 +263,43 @@ pub(crate) fn notify_state_changed_inner(state_id: u32, wake: bool) {
 
 // ── 实例化依赖记录（替代全局 RECORDED_DEPS + DEP_REGISTRAR）──
 
-/// Composer 调用：设置当前 compose 的依赖记录目标
+/// Composer 调用：设置当前 compose 的依赖记录目标（组合期——写入 recorded_deps）
 pub(crate) fn set_recording_target(target: *mut Vec<(u32, u64)>) {
-    RECORDING_TARGET.with(|c| *c.borrow_mut() = Some(target));
+    COMPOSE_RECORDING_TARGET.with(|c| *c.borrow_mut() = Some(target));
+    IN_LAYOUT.with(|c| c.set(false));
 }
 
-/// Composer 调用：清除记录目标（compose 结束后）
+/// Composer 调用：设置布局期依赖记录目标（measure 中写入 layout_recorded）
+pub(crate) fn set_layout_recording_target(target: *mut Vec<(u32, u64)>) {
+    LAYOUT_RECORDING_TARGET.with(|c| *c.borrow_mut() = Some(target));
+    IN_LAYOUT.with(|c| c.set(true));
+}
+
+/// Composer 调用：清除记录目标（compose/layout 结束后——防悬垂指针 UB）
 pub(crate) fn clear_recording_target() {
-    RECORDING_TARGET.with(|c| *c.borrow_mut() = None);
+    COMPOSE_RECORDING_TARGET.with(|c| *c.borrow_mut() = None);
+    LAYOUT_RECORDING_TARGET.with(|c| *c.borrow_mut() = None);
+    IN_LAYOUT.with(|c| c.set(false));
 }
 
-/// State::get 时调用：向当前 Composer 的 recorded_deps 写入依赖
+/// State::get 时调用：按 IN_LAYOUT 分流——组合期写 recorded_deps（→ 重组），
+/// 布局期写 layout_recorded（→ 只重测不重组）。两段式依赖的核心分流点。
 pub(crate) fn record_dep(state_id: u32, slot_key: u64) {
-    RECORDING_TARGET.with(|c| {
-        if let Some(ptr) = c.borrow().as_ref() {
-            // SAFETY: ptr 在 compose() 期间有效，compose 持有 &mut self
-            unsafe { &mut **ptr }.push((state_id, slot_key));
-        }
-    });
+    if IN_LAYOUT.with(|c| c.get()) {
+        LAYOUT_RECORDING_TARGET.with(|c| {
+            if let Some(ptr) = c.borrow().as_ref() {
+                // SAFETY: ptr 在 layout() 期间有效，composer 持有 &mut self
+                unsafe { &mut **ptr }.push((state_id, slot_key));
+            }
+        });
+    } else {
+        COMPOSE_RECORDING_TARGET.with(|c| {
+            if let Some(ptr) = c.borrow().as_ref() {
+                // SAFETY: ptr 在 compose() 期间有效，composer 持有 &mut self
+                unsafe { &mut **ptr }.push((state_id, slot_key));
+            }
+        });
+    }
 }
 
 /// State::get 中调用：若在 compose 上下文中，记录依赖

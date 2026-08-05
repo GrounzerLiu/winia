@@ -140,6 +140,8 @@ pub struct LayoutNode {
     pub(crate) on_remove: Option<Box<dyn FnOnce() + Send>>,
     /// 是否需要重新测量（clean slot 复用时为 false）
     pub(crate) dirty: bool,
+    /// 布局级失效（两段式依赖：布局动画值变化只重测不重组——measure 后清除）
+    pub(crate) layout_dirty: bool,
     /// 上次测量时的约束（用于跳过常量布局的 re-measure）
     pub(crate) cached_constraints: Option<Constraints>,
     /// composable 调用对应的 slot key（用于 replay 时子节点查找）
@@ -250,6 +252,7 @@ impl LayoutNode {
             focused: false,
             on_remove: None,
             dirty: true,
+            layout_dirty: false,
             cached_constraints: None,
             slot_key: 0,
             cached_paragraph: std::cell::RefCell::new(None),
@@ -298,6 +301,7 @@ impl Default for LayoutNode {
             focused: false,
             on_remove: None,
             dirty: true,
+            layout_dirty: false,
             cached_constraints: None,
             slot_key: 0,
             cached_paragraph: std::cell::RefCell::new(None),
@@ -736,6 +740,30 @@ fn modifier_focus_id(node: &LayoutNode) -> Option<u64> {
 ///
 /// arena 版：`nodes` 为节点池、`policies` 为策略池、`idx` 为当前节点索引。
 /// 子节点通过 `nodes[idx].children`（索引列表）递归测量。
+/// 应用布局失效：DFS 树，命中 layout_dirty_keys 的节点标 layout_dirty=true 并沿祖先链传播。
+/// 保守超集：祖先全链标脏（布局动画场景父必然依赖子尺寸；Compose 精确传播留待优化）。
+pub(crate) fn apply_layout_dirty(nodes: &mut [LayoutNode], root_idx: usize, dirty_keys: &std::collections::HashSet<u64>) {
+    fn walk(nodes: &mut [LayoutNode], idx: usize, dirty_keys: &std::collections::HashSet<u64>, ancestor_dirty: bool) -> bool {
+        let hit = dirty_keys.contains(&nodes[idx].slot_key);
+        if hit || ancestor_dirty {
+            nodes[idx].layout_dirty = true;
+        }
+        // 子树是否有命中（用于父链传播）
+        let mut child_hit = false;
+        let children = nodes[idx].children.clone();
+        for child in children {
+            if walk(nodes, child, dirty_keys, hit || ancestor_dirty) {
+                child_hit = true;
+            }
+        }
+        if child_hit {
+            nodes[idx].layout_dirty = true;
+        }
+        hit || child_hit
+    }
+    walk(nodes, root_idx, dirty_keys, false);
+}
+
 pub(crate) fn measure_node(
     nodes: &mut Vec<LayoutNode>,
     policies: &[Box<dyn MeasurePolicy>],
@@ -745,8 +773,9 @@ pub(crate) fn measure_node(
     // 重放 stub：clean-skip 节点无 measure_policy，绝不能重新测量
     //（无 policy 走叶子分支会返回 0 并污染 prev_nodes 缓存，导致塌缩不可逆）。
     // stub 只在 slot 真正 clean（无状态变化）时出现；约束若变化，下帧该 slot dirty → Enter 正常重建。
-    // 常量折叠：若节点未变脏且约束相同，直接复用上次结果
-    if !nodes[idx].dirty && nodes[idx].cached_constraints == Some(constraints) {
+    // 常量折叠：若节点未变脏、无布局失效且约束相同，直接复用上次结果
+    //（layout_dirty：两段式依赖——布局动画值变化只重测不重组）
+    if !nodes[idx].dirty && !nodes[idx].layout_dirty && nodes[idx].cached_constraints == Some(constraints) {
         return (nodes[idx].measured_size, Vec::new());
     }
 
@@ -885,6 +914,7 @@ pub(crate) fn measure_node(
 
     // 标记测量完成，缓存约束供下帧复用
     nodes[idx].dirty = false;
+    nodes[idx].layout_dirty = false;
     nodes[idx].cached_constraints = Some(constraints);
     result
 }
