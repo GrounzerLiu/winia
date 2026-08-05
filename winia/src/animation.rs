@@ -42,7 +42,7 @@ static ACTIVE_COLOR_ANIMATIONS: LazyLock<Mutex<Vec<Animatable<crate::modifier::C
 
 /// 重复模式
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RepeatMode {
+pub(crate) enum RepeatMode {
     /// 结束回到起点重来
     Restart,
     /// 往返（from→to→from）
@@ -298,7 +298,7 @@ pub fn is_animating() -> bool {
 // ═══════════════════════════════════════════════════════════
 
 /// 可动画化的单一值
-pub struct Animatable<T: Clone + 'static> {
+pub(crate) struct Animatable<T: Clone + 'static> {
     state: State<T>,
     anim_state: Option<AnimationState<T>>,
 }
@@ -633,7 +633,7 @@ impl KeyframesSpec {
 
 /// 重复执行：iterations 次后完成
 #[derive(Clone)]
-pub struct RepeatableSpec {
+pub(crate) struct RepeatableSpec {
     pub iterations: u32,
     pub mode: RepeatMode,
     pub base: Box<AnimationSpec>,
