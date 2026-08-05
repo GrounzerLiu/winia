@@ -18,6 +18,14 @@ use tokio::task::JoinHandle;
 // remember_coroutine_scope
 // ═══════════════════════════════════════════════════════════
 
+/// 挂载一个组合点移除时的清理回调（P2-5 样板合并——
+/// LaunchedEffect/DisposableEffect 共用：隐式 leaf + on_remove + end 配对）。
+fn attach_cleanup(ctx: &mut ComposeCtx, cleanup: impl FnOnce() + Send + 'static) {
+    let key = ctx.next_key();
+    ctx.start_leaf_with_remove(key, crate::modifier::Modifier::new(), Box::new(cleanup));
+    ctx.end_node();
+}
+
 /// 组合生命周期绑定的协程作用域——dispose 时自动取消所有未完成任务。
 ///
 /// 内部用 `Arc<ScopeState>` 管理任务列表。当最后一个 `CoroutineScope` clone
@@ -121,14 +129,12 @@ impl<T: PartialEq + Clone + Send + 'static> LaunchedEffect<T> {
 
         // on_remove 时取消
         let state_for_remove = Arc::clone(&state_clone);
-        let key2 = ctx.next_key();
-        ctx.start_leaf_with_remove(key2, crate::modifier::Modifier::new(), Box::new(move || {
+        attach_cleanup(ctx, move || {
             let mut s = state_for_remove.lock().unwrap();
             if let Some(h) = s.abort_handle.take() {
                 h.abort();
             }
-        }));
-        ctx.end_node();
+        });
     }
 }
 
@@ -176,14 +182,12 @@ impl<T: PartialEq + Clone + Send + 'static> DisposableEffect<T> {
 
         // on_remove 时执行最终清理
         let state_for_remove = Arc::clone(&state_clone);
-        let key2 = ctx.next_key();
-        ctx.start_leaf_with_remove(key2, crate::modifier::Modifier::new(), Box::new(move || {
+        attach_cleanup(ctx, move || {
             let mut s = state_for_remove.lock().unwrap();
             if let Some(cleanup) = s.cleanup.take() {
                 cleanup();
             }
-        }));
-        ctx.end_node();
+        });
     }
 }
 
