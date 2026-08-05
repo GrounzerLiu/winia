@@ -80,6 +80,17 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
                 if !preserve_modifier {
                     n.modifier = modifier;
                 }
+                if std::env::var("WINIA_MAT_PROBE").is_ok() {
+                    let sz = n.measured_size;
+                    eprintln!(
+                        "[mat] skip key={:x} preserve={} size=({:.0},{:.0}) text={:?}",
+                        key, preserve_modifier, sz.width, sz.height,
+                        n.modifier.elements().iter().find_map(|el| match el {
+                            crate::modifier::ModifierElement::TextContent { content, .. } => Some(content.clone()),
+                            _ => None,
+                        })
+                    );
+                }
                 n.dirty = false; // 恢复缓存——测量折叠（保留测量）
                 Some(idx)
             }
@@ -113,6 +124,16 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
                     }
                 }
                 let idx = composer.arena.alloc(node);
+                if std::env::var("WINIA_MAT_PROBE").is_ok() {
+                    eprintln!(
+                        "[mat-fb] key={:x} text={:?}",
+                        key,
+                        composer.arena.nodes[idx].modifier.elements().iter().find_map(|el| match el {
+                            crate::modifier::ModifierElement::TextContent { content, .. } => Some(content.clone()),
+                            _ => None,
+                        })
+                    );
+                }
                 Some(idx)
             }
         }

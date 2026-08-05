@@ -37,7 +37,11 @@ thread_local! { static GROUP_STACK: RefCell<Vec<u64>> = const { RefCell::new(Vec
 /// 语句 id 栈（#[composable] 宏注入——RAII guard 写入/弹出；thread_local 使
 /// guard 的 Drop 无需持有 &mut ctx——闭包/循环体内 return/break/continue 提前
 /// 退出时自动 pop，不泄漏。多窗口安全：组合按窗口顺序执行，compose 开头 clear）
-thread_local! { static STMT_STACK: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) }; }
+thread_local! { static STMT_STACK: RefCell<Vec<(u32, u32)>> = const { RefCell::new(Vec::new()) }; }
+/// 语句调用序号（compose 级计数）：同语句 id 第 n 次进入（for 循环迭代）→ seq=n。
+/// key = hash(scope, stmt_id, seq)——循环体内每次迭代的 key 不同（迭代索引分量），
+/// 修复：for 循环 30 次迭代共享同 stmt_id → key 全同 → 槽/缓存恢复错乱（丢行）。
+thread_local! { static STMT_SEQ: RefCell<std::collections::HashMap<u32, u32>> = RefCell::new(std::collections::HashMap::new()); }
 
 
 /// 参数值（阶段5 参数相等跳过用）——`ComposeCtx::changed` 暂存的参数，
@@ -157,14 +161,48 @@ impl<'a> ComposeCtx<'a> {
     /// 返回 RAII guard——语句块结束时 drop 自动 pop_stmt：闭包体/循环体内的
     /// `return`/`break`/`continue`/`panic!` 提前退出也不会泄漏 stmt 栈
     /// （显式 push/pop 在提前退出时栈会永久错位——后续语句 key 静默漂移）。
+    ///
+    /// seq（迭代位置）解析：**max(自身执行计数, 栈顶外层语句的 seq)**——
+    /// ① for 体语句每次迭代都执行：自身计数 = 迭代位置（1..30）✓；② content
+    /// 闭包内的语句只在容器 Enter 时执行（行 Skip 时 content 不跑）——自身计数
+    /// 会漂移（首帧 seq=30，滚动后首次执行 seq=1）→ key 碰撞（text29 撞 text0）
+    /// → 槽树 truncate 重建 → 内容丢失——继承外层行语句的迭代位置（max 兜底）。
+    /// 已知限制：嵌套循环（for i { for j { … } }）内层语句取 max(内层次数, 外层
+    /// 位置)——内层迭代与外层位置可能混淆，需显式 key（文档化）。
     pub fn enter_stmt(&mut self, id: u32) -> StmtGuard {
-        STMT_STACK.with(|s| s.borrow_mut().push(id));
+        let self_seq = STMT_SEQ.with(|m| {
+            let mut m = m.borrow_mut();
+            let c = m.entry(id).or_insert(0u32);
+            *c += 1;
+            *c
+        });
+        // max(自身计数, 外层迭代位置)：for 体语句自身计数=迭代位置；
+        // content 闭包内语句（只在 Enter 执行）继承外层行语句的迭代位置
+        let outer_seq = STMT_STACK.with(|s| {
+            s.borrow().last().map(|&(_, os)| os).unwrap_or(0)
+        });
+        let seq = self_seq.max(outer_seq);
+        #[cfg(debug_assertions)]
+        if std::env::var("WINIA_STMT_TRACE").is_ok() {
+            eprintln!("[stmt] id={} seq={} self={} outer={}", id, seq, self_seq, outer_seq);
+        }
+        STMT_STACK.with(|s| s.borrow_mut().push((id, seq)));
         StmtGuard
     }
 
     /// #[composable] 宏注入：退出语句（与 push_stmt 配对）——保留兼容旧用法
     pub fn push_stmt(&mut self, id: u32) {
-        STMT_STACK.with(|s| s.borrow_mut().push(id));
+        let self_seq = STMT_SEQ.with(|m| {
+            let mut m = m.borrow_mut();
+            let c = m.entry(id).or_insert(0u32);
+            *c += 1;
+            *c
+        });
+        let outer_seq = STMT_STACK.with(|s| {
+            s.borrow().last().map(|&(_, os)| os).unwrap_or(0)
+        });
+        let seq = self_seq.max(outer_seq);
+        STMT_STACK.with(|s| s.borrow_mut().push((id, seq)));
     }
 
     /// #[composable] 宏注入：退出语句（与 push_stmt 配对）
@@ -367,11 +405,13 @@ impl<'a> ComposeCtx<'a> {
         // remember 的 State 跨帧稳定依赖 key 稳定——结构变化时语句 id 不动 → State 保留。
         let base = if let Some(&k) = self.composer.key_override_stack.last() {
             k
-        } else if let Some(sid) = STMT_STACK.with(|s| s.borrow().last().copied()) {
+        } else if let Some((sid, seq)) = STMT_STACK.with(|s| s.borrow().last().copied()) {
             let scope_src = self.composer.scope_source_stack.last().and_then(|s| *s).unwrap_or(0);
+            // FNV 混合 scope 源码哈希 + 语句 id + 调用序号（for 循环迭代索引分量）
             let mut h: u64 = 0xcbf29ce484222325;
             h ^= scope_src; h = h.wrapping_mul(0x100000001b3);
             h ^= sid as u64; h = h.wrapping_mul(0x100000001b3);
+            h ^= (seq as u64).wrapping_mul(0x9E3779B97F4A7C15);
             h
         } else if cfg!(test) {
             // 测试路径：路径哈希 fallback（同 next_group_key——测试自控结构）
@@ -646,6 +686,9 @@ impl SlotTable {
                 for child in &mut slot.children {
                     rec(child, &mut node.children, true, depth + 1); // Skip 子树内：子也按同一规则（收集）
                 }
+                if std::env::var("WINIA_MAT_PROBE").is_ok() {
+                    eprintln!("[collect] skip key={:x} kids={}", slot.key, node.children.len());
+                }
                 out.push(node);
             } else {
                 // scope：不物化——children 提升到最近物化父（保持 in_skip 状态）
@@ -670,6 +713,11 @@ impl SlotTable {
             }
         }
         let parent = self.current_slot();
+        #[cfg(debug_assertions)] {
+            if std::env::var("WINIA_SLOT_TRACE").is_ok() {
+                eprintln!("[slot] key={} idx={} parent_kids={} dirty={}", key >> 32, idx, parent.children.len(), is_dirty);
+            }
+        }
 
         // key 匹配，或"同位置"（key 高位 = slot 路径哈希相同）——Enter/Skip 的
         // counter 漂移不改位置，按索引复用（更新 key 保持同步），避免 truncate
@@ -688,6 +736,12 @@ impl SlotTable {
             parent.children[idx].dirty = false;
             self.path.push(idx);
         } else {
+            #[cfg(debug_assertions)]
+            if std::env::var("WINIA_SLOT_TRACE").is_ok() {
+                let plen = parent.children.len();
+                let pkey = parent.key;
+                eprintln!("[slot-trunc] key={:x} parent={:x} idx={} len={}", key, pkey, idx, plen);
+            }
             parent.children.truncate(idx);
             parent.children.push(Slot::new(key));
             // 新建 slot：本帧返回 Dirty 即已执行；立即消费 dirty 标记，
@@ -912,12 +966,13 @@ impl Composer {
         // 的调用点 key）。宏外（测试/手动组合）退化为路径哈希（现状）。
         let base = if let Some(&k) = self.key_override_stack.last() {
             k
-        } else if let Some(sid) = STMT_STACK.with(|s| s.borrow().last().copied()) {
+        } else if let Some((sid, seq)) = STMT_STACK.with(|s| s.borrow().last().copied()) {
             let scope_src = self.scope_source_stack.last().and_then(|s| *s).unwrap_or(0);
-            // FNV 混合 scope 源码哈希 + 语句 id（不同函数的同序号语句 key 隔离）
+            // FNV 混合 scope 源码哈希 + 语句 id + 调用序号（for 循环迭代索引分量）
             let mut h: u64 = 0xcbf29ce484222325;
             h ^= scope_src; h = h.wrapping_mul(0x100000001b3);
             h ^= sid as u64; h = h.wrapping_mul(0x100000001b3);
+            h ^= (seq as u64).wrapping_mul(0x9E3779B97F4A7C15);
             h
         } else if cfg!(test) {
             // 测试路径：无语句级 key 时退化为路径哈希（测试自控结构——漂移由
@@ -1112,6 +1167,7 @@ impl Composer {
         self.path_counters.clear();
         self.remember_path_counters.clear();
         STMT_STACK.with(|s| s.borrow_mut().clear());
+        STMT_SEQ.with(|m| m.borrow_mut().clear()); // 语句调用序号重置——重组时循环迭代 key 与首帧一致
         self.scope_source_stack.clear();
         self.key_override_stack.clear();
         // 注意：不在 compose 开头清 arena.root——materialize 管理 root
@@ -2738,7 +2794,7 @@ fn test_stmt_guard_drops_on_scope_exit() {
         // 块内 enter_stmt——块尾（模拟 return/break 提前退出）guard drop 自动 pop
         {
             let _g = ctx.enter_stmt(7);
-            assert_eq!(STMT_STACK.with(|s| s.borrow().last().copied()), Some(7), "guard 生效：栈顶为 7");
+            assert_eq!(STMT_STACK.with(|s| s.borrow().last().copied()), Some((7, 1)), "guard 生效：栈顶为 (id=7, seq=1)");
         } // 块退出——guard drop
         assert!(STMT_STACK.with(|s| s.borrow().is_empty()), "提前退出后栈应自动恢复（无泄漏）");
         // guard 存活期间显式 pop 配对（guard 仍持有——drop 时再 pop 一次无害）
@@ -2747,6 +2803,48 @@ fn test_stmt_guard_drops_on_scope_exit() {
         drop(_g8);
         ctx.end_scope();
     });
+}
+
+/// for 循环迭代 key 回归：content 闭包内语句只在容器 Enter 时执行——自身执行
+/// 计数会漂移（首帧 30 次迭代全 Enter → seq=30；滚动后前 29 次迭代行 Skip、
+/// 第 30 次才 Enter → text 语句首次执行 seq=1）→ key 碰撞（text29 撞 text0）
+/// → 槽树 truncate 重建 → 行内容丢失。seq 解析 = max(自身计数, 外层迭代位置)
+/// ——content 内语句继承外层行语句的迭代位置（行语句每次迭代都执行）。
+#[test]
+fn test_stmt_seq_inherits_outer_iteration_position() {
+    let mut composer = Composer::new();
+    let mut keys_first = Vec::new();
+    let mut keys_recompose = Vec::new();
+    // 首帧：30 次迭代全执行 text（全 Enter）——text 自身计数 1..30
+    composer.compose(|ctx| {
+        let _ = ctx.start_scope_keyed(0xABCD);
+        for _ in 0..30 {
+            ctx.push_stmt(6); // for 循环体语句（每次迭代执行）
+            ctx.push_stmt(7); // content 内语句（行 Enter 时执行）
+            keys_first.push(ctx.next_key());
+            ctx.pop_stmt();
+            ctx.pop_stmt();
+        }
+        ctx.end_scope();
+    });
+    // 重组：前 29 次迭代行 Skip（text 不执行），第 30 次迭代行 Enter（text 执行）
+    composer.compose(|ctx| {
+        let _ = ctx.start_scope_keyed(0xABCD);
+        for i in 0..30 {
+            ctx.push_stmt(6);
+            if i == 29 {
+                ctx.push_stmt(7); // 自身计数=1（重置后首次）→ max(1, 30)=30
+                keys_recompose.push(ctx.next_key());
+                ctx.pop_stmt();
+            }
+            ctx.pop_stmt();
+        }
+        ctx.end_scope();
+    });
+    assert_eq!(
+        keys_first[29], keys_recompose[0],
+        "content 内语句继承外层迭代位置——重组后 key 与首帧一致（防 text29 撞 text0）"
+    );
 }
 
 /// 串位 bug 回归：两个不同 scope（不同源码哈希）内**相同的语句 id**（同 push_stmt(5)）

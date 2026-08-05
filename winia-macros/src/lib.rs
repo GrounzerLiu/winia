@@ -7,7 +7,8 @@
 //! 函数体内（组件外）的 `State::get()` 表达式注册到该函数 scope——
 //! 依赖的 State 变化 → scope 失效 → **函数整体重跑**（对标 Compose @Composable）。
 //!
-//! ```rust
+//! ```rust,ignore
+//! // 示例片段：winia-macros crate 无法依赖 winia（循环依赖）——仅展示 API 形状
 //! use winia::ComposeCtx;
 //! use winia::core::state::State;
 //!
