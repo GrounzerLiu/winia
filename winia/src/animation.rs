@@ -519,10 +519,24 @@ pub struct InfiniteTransition {
 }
 
 impl ComposeCtx<'_> {
-    /// rememberInfiniteTransition — 创建无限循环动画作用域
+    /// rememberInfiniteTransition — 创建无限循环动画作用域。
+    ///
+    /// 生命周期绑定组合点：组合点被移除时自动 dispose（on_remove 触发——
+    /// 从动画全局表移除，防泄漏/每帧空转）。显式 `dispose()` 仍可用，
+    /// 双重触发安全（ids drain 幂等）。
     pub fn remember_infinite_transition(&mut self) -> InfiniteTransition {
         let ids_state = self.remember(|| std::sync::Arc::new(std::sync::Mutex::new(Vec::new())));
         let ids = ids_state.get();
+        // 自动清理：组合点移除 → on_remove 触发 → 表内移除本作用域全部动画
+        let key = self.next_key();
+        let ids2 = std::sync::Arc::clone(&ids);
+        self.start_leaf_with_remove(key, crate::modifier::Modifier::new(), Box::new(move || {
+            let ids: Vec<u32> = ids2.lock().unwrap().drain(..).collect();
+            for sid in ids {
+                crate::animation::remove_animation_by_state(sid);
+            }
+        }));
+        self.end_node();
         InfiniteTransition { ids }
     }
 }
@@ -1045,4 +1059,138 @@ mod repeated_tests {
         eprintln!("[retarget] mid={:.1} final={:.1}", mid, v);
         assert!((v - 90.0).abs() < 1.0, "中途改目标应收敛到 90，实际 {:.1}", v);
     }
+}
+
+// ═══════════════════════════════════════════════════════════
+// P3-2 无限动画生命周期（T5/T6）
+// ═══════════════════════════════════════════════════════════
+
+/// T5：无限动画作用域随组合点移除自动 dispose——动画全局表清空，
+/// `update_animations()` 不再空转。
+#[test]
+fn test_infinite_transition_auto_dispose() {
+    // 全局动画表共享——串行锁（仓库既有约定，防并行测试 clear 误删）
+    let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    use crate::core::composer::{Composer, GroupStatus};
+    use crate::layout::constraints::Constraints;
+    use crate::layout::BoxLayout;
+    use crate::modifier::Modifier;
+    use crate::core::state::State;
+    use std::time::Duration;
+
+    // 清空全局动画表（跨测试并行隔离）
+    ACTIVE_ANIMATIONS.lock().unwrap().clear();
+    ACTIVE_COLOR_ANIMATIONS.lock().unwrap().clear();
+    ACTIVE_INFINITE_COLOR_ANIMATIONS.lock().unwrap().clear();
+    let mut composer = Composer::new();
+    let holder = std::cell::RefCell::new(None::<State<bool>>);
+    // 记录自己动画的 state_id（跨测试并行隔离——只断言自己的动画状态）
+    let sid_holder = std::cell::RefCell::new(None::<u32>);
+
+    let build = |composer: &mut Composer,
+                 holder: &std::cell::RefCell<Option<State<bool>>>,
+                 sid_holder: &std::cell::RefCell<Option<u32>>| {
+        composer.compose(|ctx| {
+            let show = ctx.remember(|| true);
+            *holder.borrow_mut() = Some(show.clone());
+            let root_key = ctx.next_key();
+            match ctx.start_restartable_group(root_key, Modifier::new(), BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    if show.get() {
+                        // 无限动画作用域（内部挂 on_remove 自动 dispose）
+                        let mut inf = ctx.remember_infinite_transition();
+                        let s = inf.animate_float(
+                            ctx,
+                            0.0,
+                            1.0,
+                            InfiniteRepeatableSpec {
+                                duration: Duration::from_millis(100),
+                                mode: RepeatMode::Restart,
+                            },
+                        );
+                        *sid_holder.borrow_mut() = Some(s.id());
+                    }
+                }
+            }
+            ctx.end_restartable_group();
+        });
+        composer.layout(Constraints::new(0.0, 500.0, 0.0, 500.0));
+    };
+
+    // 帧1：动画注册 → 活跃
+    build(&mut composer, &holder, &sid_holder);
+    let sid = sid_holder.borrow().unwrap();
+    assert!(has_animation_for_state(sid), "帧1 应有无限动画（活跃）");
+
+    // 帧2：show=false → 组合点移除 → on_remove → dispose → 表清空
+    holder.borrow().as_ref().unwrap().set(false);
+    build(&mut composer, &holder, &sid_holder);
+    assert!(!has_animation_for_state(sid), "组合点移除后无限动画应自动 dispose（无空转）");
+}
+
+/// T6：显式 dispose + on_remove 双重触发幂等——无 panic、表不变。
+#[test]
+fn test_infinite_transition_manual_dispose_idempotent() {
+    // 全局动画表共享——串行锁（仓库既有约定，防并行测试 clear 误删）
+    let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    use crate::core::composer::{Composer, GroupStatus};
+    use crate::layout::constraints::Constraints;
+    use crate::layout::BoxLayout;
+    use crate::modifier::Modifier;
+    use crate::core::state::State;
+    use std::time::Duration;
+
+    // 清空全局动画表（跨测试并行隔离）
+    ACTIVE_ANIMATIONS.lock().unwrap().clear();
+    ACTIVE_COLOR_ANIMATIONS.lock().unwrap().clear();
+    ACTIVE_INFINITE_COLOR_ANIMATIONS.lock().unwrap().clear();
+    let mut composer = Composer::new();
+    let holder = std::cell::RefCell::new(None::<State<bool>>);
+    // 保存 InfiniteTransition 引用（模拟用户持有——显式 dispose 路径）
+    let inf_holder = std::cell::RefCell::new(None::<InfiniteTransition>);
+
+    let build = |composer: &mut Composer,
+                 holder: &std::cell::RefCell<Option<State<bool>>>,
+                 inf_holder: &std::cell::RefCell<Option<InfiniteTransition>>| {
+        composer.compose(|ctx| {
+            let show = ctx.remember(|| true);
+            *holder.borrow_mut() = Some(show.clone());
+            let root_key = ctx.next_key();
+            match ctx.start_restartable_group(root_key, Modifier::new(), BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    if show.get() {
+                        let mut inf = ctx.remember_infinite_transition();
+                        let _s = inf.animate_float(
+                            ctx,
+                            0.0,
+                            1.0,
+                            InfiniteRepeatableSpec {
+                                duration: Duration::from_millis(100),
+                                mode: RepeatMode::Restart,
+                            },
+                        );
+                        *inf_holder.borrow_mut() = Some(inf);
+                    }
+                }
+            }
+            ctx.end_restartable_group();
+        });
+        composer.layout(Constraints::new(0.0, 500.0, 0.0, 500.0));
+    };
+
+    // 帧1：注册
+    build(&mut composer, &holder, &inf_holder);
+    let sid = inf_holder.borrow().as_ref().unwrap().ids.lock().unwrap()[0];
+    assert!(has_animation_for_state(sid), "帧1 应有无限动画");
+
+    // 显式 dispose（用户路径）→ 表清空
+    inf_holder.borrow().as_ref().unwrap().dispose();
+    assert!(!has_animation_for_state(sid), "显式 dispose 后表应清空");
+
+    // 组合点移除 → on_remove 再触发（ids 已 drain——幂等无 panic）
+    holder.borrow().as_ref().unwrap().set(false);
+    build(&mut composer, &holder, &inf_holder);
+    assert!(!has_animation_for_state(sid), "双重触发后表仍空（幂等）");
 }
