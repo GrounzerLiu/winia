@@ -1,4 +1,4 @@
-//! StreamObverse 演示 — watch channel → stream → State → recompose
+//! observe_watch 演示 — watch channel → State → recompose
 
 use winia::prelude::*;
 use winia::app;

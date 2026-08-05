@@ -86,9 +86,6 @@ pub struct LaunchedEffect<T: PartialEq + Clone + Send + 'static> {
 impl<T: PartialEq + Clone + Send + 'static> LaunchedEffect<T> {
     pub fn new(key: T) -> Self { Self { key } }
 
-    /// 创建一个 key 为 `()` 的 LaunchedEffect——只在首次组合时执行一次。
-    pub fn unit() -> LaunchedEffect<()> { LaunchedEffect { key: () } }
-
     pub fn build<F: std::future::Future<Output = ()> + Send + 'static>(
         self,
         ctx: &mut ComposeCtx,
@@ -152,9 +149,6 @@ pub struct DisposableEffect<T: PartialEq + Clone + Send + 'static> {
 impl<T: PartialEq + Clone + Send + 'static> DisposableEffect<T> {
     pub fn new(key: T) -> Self { Self { key } }
 
-    /// 创建一个 key 为 `()` 的 DisposableEffect——只在首次组合时执行 setup，dispose 时 cleanup。
-    pub fn unit() -> DisposableEffect<()> { DisposableEffect { key: () } }
-
     pub fn build<F: FnOnce() + Send + 'static>(
         self,
         ctx: &mut ComposeCtx,
@@ -194,38 +188,8 @@ impl<T: PartialEq + Clone + Send + 'static> DisposableEffect<T> {
 }
 
 // ═══════════════════════════════════════════════════════════
-// StreamObverse — trait: stream.observe(ctx, initial) → State
+// Stream → State 桥接
 // ═══════════════════════════════════════════════════════════
-
-pub trait StreamObverse: futures_util::Stream {
-    fn observe(self, ctx: &mut ComposeCtx, initial: Self::Item) -> State<Self::Item>
-    where
-        Self: Sized + Send + 'static,
-        Self::Item: Clone + Send + Sync + PartialEq + 'static;
-}
-
-impl<S: futures_util::Stream + Send + 'static> StreamObverse for S {
-    fn observe(self, ctx: &mut ComposeCtx, initial: S::Item) -> State<S::Item>
-    where
-        S::Item: Clone + Send + Sync + PartialEq + 'static,
-    {
-        let state: State<S::Item> = ctx.remember(|| State::new(initial.clone())).get();
-        let s = state.clone();
-        let started: State<bool> = ctx.remember(|| false);
-        if !started.get() {
-            started.set(true);
-            let scope = remember_coroutine_scope(ctx);
-            scope.spawn(async move {
-                use futures_util::StreamExt;
-                let mut stream = Box::pin(self);
-                while let Some(value) = stream.next().await {
-                    s.set(value);
-                }
-            });
-        }
-        state
-    }
-}
 
 /// 将 watch::Receiver 直接转为 State（不经过 WatchStream，send 始终可靠）
 pub fn observe_watch<T: Clone + Send + Sync + PartialEq + 'static>(
