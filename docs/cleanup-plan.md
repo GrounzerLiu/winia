@@ -120,7 +120,7 @@
 - [ ] P3-4 rich_text Style/Seg 镜像合并（C6）
 - [ ] P3-5 TextUnit vs Dimension 统一（C7）
 - [ ] P3-6 Text vs TextField TextContent 构造合并（C8）
-- [ ] P3-7 文档对齐：architecture.md 原则更新为现实（宏已存在、错误恢复未做）
+- [x] P3-7 文档对齐：architecture.md 原则更新为现实（宏已存在、错误恢复未做）——✅ 2026-08（compose-core 分支）
 
 ### 保留清单（扩展点/基础设施，**勿删**）
 
