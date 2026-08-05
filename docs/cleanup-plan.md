@@ -114,8 +114,8 @@
 
 ### P3 — 长远（记录方向，不在本次范围）
 
-- [ ] P3-1 Skip 语义 Compose 化（参数相等跳过为主导，dirty 为辅）——D2
-- [ ] P3-2 副作用生命周期契约（动画/回调与 Skip 协调）——D3
+- [x] P3-1 Skip 语义 Compose 化（参数相等跳过为主导，dirty 为辅）——D2（25d9a40：结构签名 + T2-T4）
+- [x] P3-2 副作用生命周期契约（动画/回调与 Skip 协调）——D3（11bb3e2：无限动画自动 dispose + T5/T6）
 - [x] P3-3 错误可恢复（渲染崩溃边界）——原则 6 ✅ 2026-08（catch_unwind + 连续 panic 停更 + 自愈测试）
 - [x] P3-4 rich_text Style/Seg 镜像合并（C6）——✅ 2026-08（Seg 内嵌 Style，apply_seg → Style::apply）
 - [x] P3-5 TextUnit vs Dimension 统一（C7）——✅ 2026-08 决策：**保留不合并**——语义层不同（TextUnit=文本字体缩放 Sp/Px；Dimension=布局空间 Fixed/Dp/Px/Fill/Auto），合并会让双方出现无意义变体；仅"Px"概念共享属正确分层
