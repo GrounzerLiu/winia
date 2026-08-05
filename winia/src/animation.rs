@@ -3,7 +3,7 @@
 //! ## 层级
 //! - **高层**: `animate_*_as_state` — 单值动画，开箱即用
 //! - **中层**: `update_transition` — 多属性协同动画
-//! - **底层**: `Animatable` — 完全控制动画播放
+//! - **底层**: `Animatable`（内部实现，pub(crate)——由高层 API 驱动）
 //!
 //! ## 核心
 //! - 默认 `SpringSpec`（物理弹簧），可选 `TweenSpec`（补间）

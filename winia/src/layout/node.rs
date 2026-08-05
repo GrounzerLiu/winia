@@ -742,7 +742,8 @@ fn modifier_focus_id(node: &LayoutNode) -> Option<u64> {
 /// 子节点通过 `nodes[idx].children`（索引列表）递归测量。
 /// 应用布局失效：DFS 树，命中 layout_dirty_keys 的节点标 layout_dirty=true 并沿祖先链传播。
 /// 保守超集：祖先全链标脏（布局动画场景父必然依赖子尺寸；Compose 精确传播留待优化）。
-pub(crate) fn apply_layout_dirty(nodes: &mut [LayoutNode], root_idx: usize, dirty_keys: &std::collections::HashSet<u64>) {    fn walk(nodes: &mut [LayoutNode], idx: usize, dirty_keys: &std::collections::HashSet<u64>, ancestor_dirty: bool) -> bool {
+pub(crate) fn apply_layout_dirty(nodes: &mut [LayoutNode], root_idx: usize, dirty_keys: &std::collections::HashSet<u64>) {
+    fn walk(nodes: &mut [LayoutNode], idx: usize, dirty_keys: &std::collections::HashSet<u64>, ancestor_dirty: bool) -> bool {
         let hit = dirty_keys.contains(&nodes[idx].slot_key);
         if hit || ancestor_dirty {
             nodes[idx].layout_dirty = true;
@@ -764,9 +765,12 @@ pub(crate) fn apply_layout_dirty(nodes: &mut [LayoutNode], root_idx: usize, dirt
     walk(nodes, root_idx, dirty_keys, false);
 }
 
-/// 测量计数（测试用：验证常量折叠/布局失效路径确实跳过或执行 measure）
+/// 测量计数（测试用：验证常量折叠/布局失效路径确实跳过或执行 measure）。
+/// thread_local 隔离——cargo test 并行线程互不串扰（全局 Atomic 会跨测试计数破坏断言）。
 #[cfg(test)]
-pub(crate) static MEASURE_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+thread_local! {
+    pub(crate) static MEASURE_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
 
 pub(crate) fn measure_node(
     nodes: &mut Vec<LayoutNode>,
@@ -785,7 +789,7 @@ pub(crate) fn measure_node(
 
     // 真正执行 measure 才计数（常量折叠命中不计——测试验证折叠路径）
     #[cfg(test)]
-    MEASURE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    MEASURE_COUNT.with(|c| c.set(c.get() + 1));
 
     // 设置 ACTIVE_SLOT_KEY = 本节点 slot——使 SizeDynamic 闭包内的 State::get()
     // 把依赖注册到本节点（动画值变化 → 本节点 dirty → 重组重测）

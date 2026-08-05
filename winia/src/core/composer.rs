@@ -2333,9 +2333,9 @@ fn test_layout_dep_survives_const_fold() {
 
     // 帧2：无 notify 的重复 build——compose 全 Skip、measure 常量折叠命中
     use crate::layout::node::MEASURE_COUNT;
-    let m1 = MEASURE_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+    let m1 = MEASURE_COUNT.with(|c| c.get());
     build(&mut composer);
-    let m2 = MEASURE_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+    let m2 = MEASURE_COUNT.with(|c| c.get());
     assert_eq!(m1, m2,
         "折叠帧不应重新 measure（m1={} m2={}——若重测则依赖续期而非折叠保留，T4 语义失效）", m1, m2);
     assert!(composer.layout_deps.contains_key(&sid),
@@ -2352,7 +2352,7 @@ fn test_layout_dep_survives_const_fold() {
     let s = holder.borrow().clone().unwrap();
     s.set_no_wake(123.0);
     build(&mut composer);
-    let m3 = MEASURE_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+    let m3 = MEASURE_COUNT.with(|c| c.get());
     assert!(m3 > m2, "notify 后应重新 measure（布局失效生效）");
     assert!(composer.layout_deps.contains_key(&sid), "重测后依赖应续期");
 }

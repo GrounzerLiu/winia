@@ -110,9 +110,9 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
     } else {
         // 复用节点：policy 替换旧槽（本帧参数生效 + 池不增长——否则每帧 alloc 泄漏）
         let reused_idx = composer.prev_node_by_key.remove(&key);
-        let pidx = if reused_idx.is_some() {
+        let pidx = if let Some(ridx) = reused_idx {
             if let Some(p) = policy {
-                let old = composer.arena.nodes[reused_idx.unwrap()].measure_policy;
+                let old = composer.arena.nodes[ridx].measure_policy;
                 if let Some(op) = old {
                     composer.arena.policies[op] = p;
                     Some(op)
