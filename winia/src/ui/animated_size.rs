@@ -193,4 +193,40 @@ mod tests {
         advance(&mut composer);
         assert_eq!(container_width(&composer), 200.0, "动画完成后到达新尺寸");
     }
+
+    /// 内容 State 变化但尺寸不变——不注册新动画（无重测风暴）
+    #[test]
+    fn animated_size_no_animation_when_size_unchanged() {
+        let mut composer = Composer::new();
+        let holder = std::cell::RefCell::new(None::<State<f32>>);
+
+        let mut recompose = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                let w: State<f32> = ctx.remember(|| 50.0);
+                *holder.borrow_mut() = Some(w.clone());
+                // 内容宽度恒为 80——w 变化只触发内容重建（不改变尺寸）
+                AnimatedSize::new(crate::animation::TweenSpec::default()).build(ctx, |ctx| {
+                    let _ = w.get();
+                    SizedLeaf { w: 80.0 }.build(ctx);
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+
+        recompose(&mut composer);
+        assert_eq!(container_width(&composer), 80.0, "首帧显示内容尺寸");
+
+        // w 变化 → 内容重建但尺寸不变 → 容器保持 80（无动画注册）
+        let w = holder.borrow().as_ref().unwrap().clone();
+        w.set(999.0);
+        recompose(&mut composer);
+        assert_eq!(container_width(&composer), 80.0, "尺寸不变时容器不应有动画/跳变");
+        // 推进几帧——若错误注册了动画，宽度会短暂偏离 80
+        for _ in 0..5 {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            recompose(&mut composer);
+            assert_eq!(container_width(&composer), 80.0, "尺寸不变时动画推进不应改变宽度");
+        }
+    }
 }

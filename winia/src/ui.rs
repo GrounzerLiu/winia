@@ -15,6 +15,10 @@ pub mod animated_visibility;
 pub mod animated_size;
 pub mod crossfade;
 
+pub use animated_visibility::{AnimatedVisibility, VisibilityTransition, SlideDirection};
+pub use animated_size::AnimatedSize;
+pub use crossfade::Crossfade;
+
 pub use text::Text;
 pub use text::TextAlign;
 pub use text::TextOverflow;

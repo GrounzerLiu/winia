@@ -16,8 +16,9 @@
 //!   → 容器槽 Enter → 内容重建（新 target）→ 淡入（progress 0→1）
 //! - **不触发重排**：布局尺寸 = 内容尺寸（BoxLayout Stack 语义），动画纯绘制层
 //!   （graphics_layer 动态闭包渲染期 peek）——零重排零重组
-//! - **每帧重组仅重跑本 build**（O(1)）：progress.get() 注册外层依赖——动画推进
-//!   notify → build 重跑（切换检测执行）；容器槽只在 current 变化时 Enter（内容重建）
+//! - **每帧重组重跑调用方组件闭包**：progress.get() 注册在调用方槽——动画推进
+//!   notify → 调用方组件闭包重跑（本 build 重执行）；容器槽仅 current 变化时
+//!   Enter（内容重建），动画期间内容子树保持 Skip 不重建
 
 use crate::animation::{push_animatable, AnimationSpec};
 use crate::core::composer::{ComposeCtx, GroupStatus};
@@ -125,6 +126,7 @@ mod tests {
     /// 通过多次 compose + 手动推进动画模拟切换生命周期。
     #[test]
     fn crossfade_switches_content_on_target_change() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let mut composer = Composer::new();
         let target = State::new(0u32);
         let t = target.clone();
@@ -142,7 +144,7 @@ mod tests {
         };
         // 推进动画帧（真实时间驱动 Tween）
         let mut advance = |composer: &mut Composer| {
-            for _ in 0..8 {
+            for _ in 0..12 {
                 crate::animation::update_animations();
                 std::thread::sleep(std::time::Duration::from_millis(60));
                 recompose(composer);
@@ -164,5 +166,54 @@ mod tests {
         recompose(&mut composer);
         advance(&mut composer);
         assert_eq!(leaf_width(&composer), 50.0, "切回后内容重建为 target 0");
+    }
+
+    /// 淡出中途 retarget（A→B 淡出未完成改 C）——旧动画移除 + 平滑过渡到新目标
+    #[test]
+    fn crossfade_retarget_mid_fade() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut composer = Composer::new();
+        let target = State::new(0u32);
+        let t = target.clone();
+
+        let mut recompose = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                Crossfade::new(t.clone())
+                    .animation(crate::animation::TweenSpec::default())
+                    .build(ctx, |ctx, page| {
+                        let w = match page {
+                            0 => 50.0,
+                            1 => 100.0,
+                            _ => 200.0,
+                        };
+                        SizedLeaf { w }.build(ctx);
+                    });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        let mut advance = |composer: &mut Composer| {
+            for _ in 0..15 {
+                crate::animation::update_animations();
+                std::thread::sleep(std::time::Duration::from_millis(30));
+                recompose(composer);
+            }
+        };
+
+        // 0 → 1（开始淡出）→ 仅推 2 帧（淡出未完成）→ 改 2（retarget）
+        recompose(&mut composer);
+        assert_eq!(leaf_width(&composer), 50.0);
+        target.set(1);
+        recompose(&mut composer);
+        for _ in 0..2 {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            recompose(&mut composer);
+        }
+        // 淡出未完成（progress 还在 1→0 途中）→ 直接 retarget 到 2
+        target.set(2);
+        recompose(&mut composer);
+        advance(&mut composer);
+        // 最终收敛到目标 2——且没有 panic/卡死（retarget 移除旧动画）
+        assert_eq!(leaf_width(&composer), 200.0, "retarget 后应收敛到新目标 2");
     }
 }

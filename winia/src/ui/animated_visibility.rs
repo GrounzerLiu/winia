@@ -280,6 +280,7 @@ mod tests {
     /// 通过多次 compose + 手动推进动画模拟可见性生命周期。
     #[test]
     fn visibility_toggle_enters_and_exits() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let mut composer = Composer::new();
         let visible = State::new(false);
         let v1 = visible.clone();

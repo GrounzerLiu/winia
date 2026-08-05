@@ -163,6 +163,10 @@ pub fn push_animatable_color(state: State<crate::modifier::Color>, target: crate
 
 /// `push_animatable` + 完成回调（对标 Compose animate*AsState 的 finishedListener）：
 /// 动画自然完成/超时强制完成时调用一次 `done`。
+///
+/// 注意：动画未完成时再次 push 同 state（retarget）会移除旧动画——
+/// **旧回调被静默丢弃且不调用**（新动画持有新回调）。需要"每次动画完成都触发"
+/// 的语义请用 `Animatable::on_finish` 实例级管理，或自行在回调里重新注册。
 pub fn push_animatable_with_done<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(
     state: State<T>,
     target: T,
@@ -769,9 +773,9 @@ impl AnimatableValue for crate::modifier::Color {
 // ═══════════════════════════════════════════════════════════
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     // 测试串行锁：动画引擎用全局 ACTIVE_ANIMATIONS——并行测试互相干扰（push/update 竞态）
-    pub(super) static TEST_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    pub(crate) static TEST_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
     use super::*;
     use std::time::Duration;
 
