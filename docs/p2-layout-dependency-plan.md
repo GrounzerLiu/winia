@@ -120,7 +120,18 @@ measure_node 常量折叠条件：
 
 ---
 
-## 6. 实施步骤（提交拆分）
+## 7. 妥协点追踪表（实施时必须写进代码注释，避免后来者误以为是精确实现）
+
+| # | 妥协点 | 后续去向 | 状态 |
+|---|--------|---------|------|
+| 1 | thread_local 魔法（IN_LAYOUT + 双指针 RECORDING_TARGET）——现有裸指针方案的扩展，非显式 measure scope | **P2-3 依赖注册收敛**：slot_deps/layout_deps 统一依赖管理器 + 评估去裸指针 | 已立项 |
+| 2 | 祖先全链 layout_dirty 是保守超集（Compose 是精确传播） | **无立项**：布局动画场景父必然依赖子尺寸，实际等价；等深树高频布局动画的性能证据再精确化（YAGNI） | 接受降级 |
+| 3 | composer.rs 新增 4 字段/方法，SRP 继续恶化 | **P2-2 物化器拆分**：desc→arena 物化拆出；依赖表归属（独立 dependency.rs 或随物化器）P2-3 定 | 已立项 |
+| 4 | layout_deps 死 key 残留（永久移除的节点旧项不清理） | **P2-1 顺手清**：每帧 diff 时用 prev_node_by_key 已知的本帧移除 slot_key 集合清理（约 5 行） | 本计划实施 |
+
+---
+
+## 8. 实施步骤（提交拆分）
 
 1. **提交 1**：state.rs 双指针分流 + composer.rs 字段与 setter（编译通过，行为不变——layout_deps 未接线）
 2. **提交 2**：composer.rs pending 分流 + layout_dirty_keys 收集 + apply_layout_dirty（含祖先传播）
