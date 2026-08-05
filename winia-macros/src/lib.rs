@@ -418,12 +418,16 @@ pub fn app_root(input: TokenStream) -> TokenStream {
         _ => unreachable!(),
     };
 
-    // 语句级 key 注入（与 #[composable] 相同——递归覆盖 content 闭包）
+    /// 语句级 key 注入（与 #[composable] 相同——递归覆盖 content 闭包）
+    ///
+    /// 已知限制：scope hash = fnv64(签名 token)（不含模块路径）——跨模块同名同签名
+    /// #[composable] 函数在**同一组合位置交替调用**（if 分支 A/B）时 key 确定性碰撞。
+    /// 位置隔离（不同调用位置不串位）兜底大部分场景；该交替场景罕见，文档化接受。
     let mut stmt_counter: u32 = 0;
     let injected = inject_stmt_ids(body_stmts, &ctx_ident, &mut stmt_counter);
 
     // 根 scope key：固定常量（应用唯一根入口——无跨模块碰撞问题）
-    let root_hash = 0xa11ce_f00du64; // "app_root" 语义占位（仅根入口使用）
+    let root_hash = 0xA11C_E0F0_0000_0001u64; // app_root 根入口专用（完整 64 位）
     let start = quote! { let __app_root_scope = #ctx_ident.start_scope_keyed(#root_hash); };
     let end = quote! { #ctx_ident.end_scope(); };
 

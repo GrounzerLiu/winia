@@ -373,7 +373,8 @@ impl<'a> ComposeCtx<'a> {
             h ^= scope_src; h = h.wrapping_mul(0x100000001b3);
             h ^= sid as u64; h = h.wrapping_mul(0x100000001b3);
             h
-        } else {
+        } else if cfg!(test) {
+            // 测试路径：路径哈希 fallback（同 next_group_key——测试自控结构）
             let path = self.composer.slot_table.current_path().to_vec();
             let mut h: u64 = 0xcbf29ce484222325;
             for &idx in &path {
@@ -381,6 +382,14 @@ impl<'a> ComposeCtx<'a> {
                 h = h.wrapping_mul(0x100000001b3);
             }
             h
+        } else {
+            // 快速失败（与 next_group_key 一致）：remember 的 State 跨帧稳定
+            // 依赖 key 稳定——无语句级 key 则路径哈希在结构变化时漂移
+            // → remember 状态错位。修复：调用点在 #[composable]/app_root! 内。
+            panic!(
+                "remember 调用点缺少稳定 key：ctx.remember() 必须位于 #[composable] \
+                 函数内（或根闭包用 winia::app_root!），或用 ctx.key() 显式指定。"
+            );
         };
         let counter = self.composer.remember_path_counters.entry(base).or_insert(0);
         let c = *counter;
@@ -941,8 +950,11 @@ impl Composer {
 
     /// 开始一个组合 scope（无 LayoutNode 的作用域节点——组合代码重跑的失效单位）。
     /// 返回 scope key；`State::get()` 在 scope 内（组件外）注册依赖到 scope。
-    /// 开始一个组合 scope（手动调用——无源码哈希；scope_source_stack push None，
-    /// 与 start_scope_keyed 的 Some 区分——end_scope 严格配对，不破坏外层宏注入的 source）
+    ///
+    /// ⚠ 手动调用（无源码哈希）：scope_source_stack push None，与 start_scope_keyed
+    /// 的 Some 区分——end_scope 严格配对，不破坏外层宏注入的 source。
+    /// ⚠ release 下宏外调用会触发稳定 key panic（next_group_key 快速失败）——
+    /// 生产代码应使用 #[composable]/app_root! 注入的 start_scope_keyed。
     pub fn start_scope(&mut self) -> u64 {
         self.scope_source_stack.push(None);
         let key = self.next_group_key();
