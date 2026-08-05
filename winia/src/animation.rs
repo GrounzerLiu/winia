@@ -427,16 +427,68 @@ impl ComposeCtx<'_> {
 }
 
 impl<T: Clone + PartialEq + 'static> Transition<T> {
+    /// 泛型值动画（对标 Compose `TransitionScope.animateValue`）——任意
+    /// AnimatableValue 类型，target 变化 → 自动平滑过渡到新目标值。
+    pub fn animate<U: crate::animation::AnimatableValue + Send + Sync + 'static>(
+        &mut self,
+        ctx: &mut ComposeCtx,
+        target_fn: impl Fn(&T) -> U,
+        _label: &'static str,
+    ) -> State<U> {
+        let value = target_fn(&self.target);
+        let state: State<U> = ctx.remember(|| value.clone());
+        crate::animation::push_animatable(state.clone(), value, self.spec.clone());
+        state
+    }
+
+    /// animateFloat — 浮点值动画（对标 Compose `TransitionScope.animateFloat`）
     pub fn animate_float(
         &mut self,
         ctx: &mut ComposeCtx,
         target_fn: impl Fn(&T) -> f32,
-        _label: &'static str,
+        label: &'static str,
     ) -> State<f32> {
-        let value = target_fn(&self.target);
-        let state: State<f32> = ctx.remember(|| value);
-        crate::animation::push_animatable(state.clone(), value, self.spec.clone());
-        state
+        self.animate(ctx, target_fn, label)
+    }
+
+    /// animateColor — 颜色动画（CAM16-UCS 插值，对标 `animateColor`）
+    pub fn animate_color(
+        &mut self,
+        ctx: &mut ComposeCtx,
+        target_fn: impl Fn(&T) -> crate::modifier::Color,
+        label: &'static str,
+    ) -> State<crate::modifier::Color> {
+        self.animate(ctx, target_fn, label)
+    }
+
+    /// animateDp — Dp 值动画（对标 `animateDp`）
+    pub fn animate_dp(
+        &mut self,
+        ctx: &mut ComposeCtx,
+        target_fn: impl Fn(&T) -> crate::unit::Dp,
+        label: &'static str,
+    ) -> State<crate::unit::Dp> {
+        self.animate(ctx, target_fn, label)
+    }
+
+    /// animateSize — Size 值动画（对标 `animateSize`）
+    pub fn animate_size(
+        &mut self,
+        ctx: &mut ComposeCtx,
+        target_fn: impl Fn(&T) -> crate::unit::Size,
+        label: &'static str,
+    ) -> State<crate::unit::Size> {
+        self.animate(ctx, target_fn, label)
+    }
+
+    /// animateOffset — Offset 值动画（对标 `animateOffset`）
+    pub fn animate_offset(
+        &mut self,
+        ctx: &mut ComposeCtx,
+        target_fn: impl Fn(&T) -> crate::unit::Offset,
+        label: &'static str,
+    ) -> State<crate::unit::Offset> {
+        self.animate(ctx, target_fn, label)
     }
 }
 
@@ -965,8 +1017,7 @@ mod repeated_tests {
 
     /// 动画未完成时再次 push（中途改变目标）——应切换目标（旧动画移除）
     #[test]
-    fn mid_flight_retarget_switches() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    fn mid_flight_retarget_switches() {        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let state = crate::core::state::State::new(40.0f32);
         push_animatable(state.clone(), 200.0, AnimationSpec::Tween(TweenSpec {
             duration: std::time::Duration::from_millis(1000),
@@ -989,6 +1040,42 @@ mod repeated_tests {
         let v = state.peek();
         eprintln!("[retarget] mid={:.1} final={:.1}", mid, v);
         assert!((v - 90.0).abs() < 1.0, "中途改目标应收敛到 90，实际 {:.1}", v);
+    }
+
+    /// i32 插值（animate_int_as_state 的基础）：四舍五入 + spring 支持
+    #[test]
+    fn int_value_lerp_rounds() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        use crate::animation::AnimatableValue;
+        assert_eq!(<i32 as AnimatableValue>::lerp(&0, &10, 0.5), 5);
+        assert_eq!(<i32 as AnimatableValue>::lerp(&0, &10, 0.51), 5);
+        assert_eq!(<i32 as AnimatableValue>::lerp(&0, &10, 0.55), 6);
+        assert_eq!(<i32 as AnimatableValue>::from_f32(3.7), 4);
+        assert!(<i32 as AnimatableValue>::supports_spring(), "i32 标量应支持 Spring");
+        // 动画收敛：0 → 100（Tween）
+        let state = crate::core::state::State::new(0i32);
+        push_animatable(state.clone(), 100, AnimationSpec::Tween(TweenSpec {
+            duration: std::time::Duration::from_millis(200),
+            interpolator: crate::animation::interpolator::linear,
+        }));
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        update_animations();
+        assert_eq!(state.peek(), 100, "i32 动画应收敛到 100");
+    }
+
+    /// Transition::animate 泛型（animate_value 核心）：Color 值经 target_fn
+    /// 映射 + push_animatable 驱动收敛
+    #[test]
+    fn transition_animate_generic_value() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut composer = crate::core::composer::Composer::new();
+        let mut captured = None;
+        composer.compose(|ctx| {
+            let mut t = ctx.update_transition(3.0f32, AnimationSpec::Tween(TweenSpec::default()), "t");
+            let s = t.animate(ctx, |v| *v * 2.0, "v");
+            captured = Some(s);
+        });
+        assert_eq!(captured.unwrap().peek(), 6.0, "target_fn 映射应立即生效（同值跳过动画）");
     }
 }
 

@@ -359,6 +359,25 @@ impl<'a> ComposeCtx<'a> {
         state
     }
 
+    /// animateIntAsState — 动画整数值（对标 Compose animateIntAsState）
+    pub fn animate_int_as_state(&mut self, target: i32, spec: crate::animation::AnimationSpec) -> State<i32> {
+        let state = self.remember(|| target);
+        crate::animation::push_animatable(state.clone(), target, spec);
+        state
+    }
+
+    /// animateValueAsState — 泛型值动画（对标 Compose animateValueAsState——
+    /// 任何实现 AnimatableValue 的类型：lerp/to_f32/from_f32）
+    pub fn animate_value_as_state<T: crate::animation::AnimatableValue + Send + Sync + 'static>(
+        &mut self,
+        target: T,
+        spec: crate::animation::AnimationSpec,
+    ) -> State<T> {
+        let state = self.remember(|| target.clone());
+        crate::animation::push_animatable(state.clone(), target, spec);
+        state
+    }
+
     /// 设置当前节点的 IME 预输入回调
     pub fn set_current_node_ime_callback(&self, callback: Box<dyn Fn(&str, Option<(usize, usize)>) + Send>) {
         if let Some(&idx) = self.composer.node_stack.last() {
