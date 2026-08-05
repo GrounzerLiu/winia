@@ -4,29 +4,10 @@
 //! - State<T>: 可观察的值容器，读时自动追踪依赖，写时通知重组
 //! - 基于 thread-local 的依赖追踪，无需显式传递 CompositionContext
 //! - 通过 PartialEq 去重，避免无效重组
-//! - Subscription 支持精确取消，避免内存泄漏
+//! - 通知走 STATE_QUEUE_MAP（per-Composer 定向推送）+ notify_version
 
 use parking_lot::RwLock;
 use std::fmt::{Debug, Display, Formatter};
-
-// ── SubscriberId ──
-
-/// 订阅者标识符，用于精确取消订阅。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct SubscriberId(u64);
-
-static NEXT_SUBSCRIBER_ID: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(1);
-
-fn next_subscriber_id() -> SubscriberId {
-    SubscriberId(NEXT_SUBSCRIBER_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
-}
-
-/// 订阅者条目
-struct Subscriber {
-    id: SubscriberId,
-    callback: Box<dyn Fn() + Send + Sync>,
-}
 
 // ── State<T> ──
 
@@ -40,8 +21,6 @@ pub struct State<T> {
 struct StateInner<T> {
     id: u32,
     value: RwLock<T>,
-    /// 订阅者列表。使用 SubscriberId 实现精确删除。
-    subscribers: RwLock<Vec<Subscriber>>,
     /// 通知版本号——每次 set/update 自增，compose 消费后归零
     notify_version: std::sync::atomic::AtomicU32,
     /// 创建此 State 的 Composer 队列（用于定向通知，避免跨窗口污染）
@@ -67,7 +46,6 @@ impl<T: 'static> State<T> {
         let inner = Arc::new(StateInner {
             id: next_state_id(),
             value: RwLock::new(value),
-            subscribers: RwLock::new(Vec::new()),
             notify_version: Default::default(),
             owner_queue: owner_queue.clone(),
         });
@@ -177,30 +155,8 @@ impl<T: 'static> State<T> {
     }
 
     fn notify_inner(&self, wake: bool) {
-        let subscribers = self.inner.subscribers.read();
-        for sub in subscribers.iter() {
-            (sub.callback)();
-        }
         self.inner.notify_version.fetch_add(1, std::sync::atomic::Ordering::Release);
         notify_state_changed_inner(self.inner.id, wake);
-    }
-
-    /// 订阅状态变化。返回 Subscription，drop 时精确取消。
-    ///
-    /// 每次 set()/update() 时会调用 callback。
-    pub fn subscribe(&self, callback: impl Fn() + Send + Sync + 'static) -> Subscription {
-        let id = next_subscriber_id();
-        self.inner.subscribers.write().push(Subscriber {
-            id,
-            callback: Box::new(callback),
-        });
-
-        let weak = Arc::downgrade(&self.inner);
-        Subscription::new(id, move || {
-            if let Some(inner) = weak.upgrade() {
-                inner.subscribers.write().retain(|s| s.id != id);
-            }
-        })
     }
 }
 
@@ -235,44 +191,6 @@ impl<T: PartialEq> PartialEq for State<T> {
 }
 
 impl<T> Eq for State<T> where T: Eq {}
-
-// ── Subscription ──
-
-/// 订阅句柄。Drop 时自动精确取消订阅（从 subscribers 列表中移除对应条目）。
-pub struct Subscription {
-    id: SubscriberId,
-    /// 取消函数：在 drop 时执行。None 表示已取消。
-    cancel_fn: Option<Box<dyn FnOnce()>>,
-}
-
-impl Subscription {
-    fn new(id: SubscriberId, cancel_fn: impl FnOnce() + 'static) -> Self {
-        Self {
-            id,
-            cancel_fn: Some(Box::new(cancel_fn)),
-        }
-    }
-
-    /// 返回此订阅的 ID（调试用）
-    pub fn id(&self) -> SubscriberId {
-        self.id
-    }
-
-    /// 手动取消订阅（提前取消，不走 Drop）
-    pub fn cancel(mut self) {
-        if let Some(cancel) = self.cancel_fn.take() {
-            cancel();
-        }
-    }
-}
-
-impl Drop for Subscription {
-    fn drop(&mut self) {
-        if let Some(cancel) = self.cancel_fn.take() {
-            cancel();
-        }
-    }
-}
 
 // ── 依赖注册桥接 ──
 ///
@@ -352,7 +270,7 @@ pub(crate) fn clear_recording_target() {
 }
 
 /// State::get 时调用：向当前 Composer 的 recorded_deps 写入依赖
-pub fn record_dep(state_id: u32, slot_key: u64) {
+pub(crate) fn record_dep(state_id: u32, slot_key: u64) {
     RECORDING_TARGET.with(|c| {
         if let Some(ptr) = c.borrow().as_ref() {
             // SAFETY: ptr 在 compose() 期间有效，compose 持有 &mut self
@@ -362,7 +280,7 @@ pub fn record_dep(state_id: u32, slot_key: u64) {
 }
 
 /// State::get 中调用：若在 compose 上下文中，记录依赖
-pub fn register_dependency(state_id: u32) {
+pub(crate) fn register_dependency(state_id: u32) {
     // 依赖注册目标：scope 栈非空 → 最内层 scope（组合 scope 内、组件外的读取）；
     // 否则 → 当前 slot key（组件内 build 的读取）
     crate::core::composer::with_active_scope(|key| {
