@@ -202,13 +202,50 @@ use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Weak};
 
+// ── 依赖记录（两段式：组合依赖 → slot_deps 重组；布局依赖 → layout_deps 只重测）──
+//
+// thread_local 存**数据缓冲**（Vec）而非裸指针：composer 通过 begin/take 交接——
+// begin_*_deps 清空缓冲并置模式，take_deps O(1) Vec 移动取走（无拷贝、无悬垂风险）。
+// 多窗口安全：winit 单线程事件循环，同一时刻只有一个 composer 在 compose/layout。
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DepMode {
+    None,
+    Compose,
+    Layout,
+}
+
 thread_local! {
-    /// 组合期记录目标（compose 的 recorded_deps——State::get 写入）
-    static COMPOSE_RECORDING_TARGET: std::cell::RefCell<Option<*mut Vec<(u32, u64)>>> = const { std::cell::RefCell::new(None) };
-    /// 布局期记录目标（layout 的 layout_recorded——measure 中 State::get 写入）
-    static LAYOUT_RECORDING_TARGET: std::cell::RefCell<Option<*mut Vec<(u32, u64)>>> = const { std::cell::RefCell::new(None) };
-    /// 是否处于布局期（measure 中）——决定 record_dep 写入哪个目标（两段式依赖：布局读动画值只重测不重组）
-    static IN_LAYOUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// 依赖记录缓冲（State::get 写入；begin 清空、take 取走）
+    static DEP_BUFFER: std::cell::RefCell<Vec<(u32, u64)>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// 当前记录模式（None=非组合/布局上下文——get 不记录）
+    static DEP_MODE: std::cell::Cell<DepMode> = const { std::cell::Cell::new(DepMode::None) };
+}
+
+/// Composer 调用：开始组合期依赖记录（清空缓冲——上一帧残留丢弃）
+pub(crate) fn begin_compose_deps() {
+    DEP_BUFFER.with(|b| b.borrow_mut().clear());
+    DEP_MODE.with(|m| m.set(DepMode::Compose));
+}
+
+/// Composer 调用：开始布局期依赖记录（measure 中 State::get 写入——两段式分流）
+pub(crate) fn begin_layout_deps() {
+    DEP_BUFFER.with(|b| b.borrow_mut().clear());
+    DEP_MODE.with(|m| m.set(DepMode::Layout));
+}
+
+/// Composer 调用：结束记录并取走缓冲（O(1) Vec 移动）
+pub(crate) fn take_deps() -> Vec<(u32, u64)> {
+    DEP_MODE.with(|m| m.set(DepMode::None));
+    DEP_BUFFER.with(|b| std::mem::take(&mut *b.borrow_mut()))
+}
+
+/// State::get 时调用：记录当前依赖（模式 None 时忽略——组合/布局外读取不注册）
+pub(crate) fn record_dep(state_id: u32, slot_key: u64) {
+    if DEP_MODE.with(|m| m.get()) == DepMode::None {
+        return;
+    }
+    DEP_BUFFER.with(|b| b.borrow_mut().push((state_id, slot_key)));
 }
 
 // ── Composer 注册表：每个 Composer 注册自己的通知队列 ──
@@ -262,45 +299,6 @@ pub(crate) fn notify_state_changed_inner(state_id: u32, wake: bool) {
 }
 
 // ── 实例化依赖记录（替代全局 RECORDED_DEPS + DEP_REGISTRAR）──
-
-/// Composer 调用：设置当前 compose 的依赖记录目标（组合期——写入 recorded_deps）
-pub(crate) fn set_recording_target(target: *mut Vec<(u32, u64)>) {
-    COMPOSE_RECORDING_TARGET.with(|c| *c.borrow_mut() = Some(target));
-    IN_LAYOUT.with(|c| c.set(false));
-}
-
-/// Composer 调用：设置布局期依赖记录目标（measure 中写入 layout_recorded）
-pub(crate) fn set_layout_recording_target(target: *mut Vec<(u32, u64)>) {
-    LAYOUT_RECORDING_TARGET.with(|c| *c.borrow_mut() = Some(target));
-    IN_LAYOUT.with(|c| c.set(true));
-}
-
-/// Composer 调用：清除记录目标（compose/layout 结束后——防悬垂指针 UB）
-pub(crate) fn clear_recording_target() {
-    COMPOSE_RECORDING_TARGET.with(|c| *c.borrow_mut() = None);
-    LAYOUT_RECORDING_TARGET.with(|c| *c.borrow_mut() = None);
-    IN_LAYOUT.with(|c| c.set(false));
-}
-
-/// State::get 时调用：按 IN_LAYOUT 分流——组合期写 recorded_deps（→ 重组），
-/// 布局期写 layout_recorded（→ 只重测不重组）。两段式依赖的核心分流点。
-pub(crate) fn record_dep(state_id: u32, slot_key: u64) {
-    if IN_LAYOUT.with(|c| c.get()) {
-        LAYOUT_RECORDING_TARGET.with(|c| {
-            if let Some(ptr) = c.borrow().as_ref() {
-                // SAFETY: ptr 在 layout() 期间有效，composer 持有 &mut self
-                unsafe { &mut **ptr }.push((state_id, slot_key));
-            }
-        });
-    } else {
-        COMPOSE_RECORDING_TARGET.with(|c| {
-            if let Some(ptr) = c.borrow().as_ref() {
-                // SAFETY: ptr 在 compose() 期间有效，composer 持有 &mut self
-                unsafe { &mut **ptr }.push((state_id, slot_key));
-            }
-        });
-    }
-}
 
 /// State::get 中调用：若在 compose 上下文中，记录依赖
 pub(crate) fn register_dependency(state_id: u32) {

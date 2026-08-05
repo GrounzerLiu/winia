@@ -818,10 +818,6 @@ pub struct Composer {
     group_skip_stack: Vec<bool>,
     /// state_id -> slot_keys 依赖映射
     slot_deps: HashMap<u32, HashSet<u64>>,
-    /// 当前 compose 期间记录的依赖（替代全局 RECORDED_DEPS）
-    recorded_deps: Vec<(u32, u64)>,
-    /// 布局期依赖记录（measure 中 State::get 写入——两段式依赖：只重测不重组）
-    layout_recorded: Vec<(u32, u64)>,
     /// 布局依赖表（state_id → slot_key；上帧布局注册的持久表，供下帧 pending 消费）
     layout_deps: HashMap<u32, HashSet<u64>>,
     /// 本帧 pending 消费收集的布局失效 key（layout() 应用后清空）
@@ -870,8 +866,6 @@ impl Composer {
             node_stack: Vec::new(),
             group_skip_stack: Vec::new(),
             slot_deps: HashMap::new(),
-            recorded_deps: Vec::new(),
-            layout_recorded: Vec::new(),
             layout_deps: HashMap::new(),
             layout_dirty_keys: HashSet::new(),
             removed_slot_keys: HashSet::new(),
@@ -1123,8 +1117,8 @@ impl Composer {
         }
         drop(pending);
 
-        // 设置依赖记录目标——State::get() 会通过 thread-local 指针写入 self.recorded_deps
-        crate::core::state::set_recording_target(&mut self.recorded_deps);
+        // 开始组合期依赖记录（thread_local 缓冲——State::get 写入，末尾 take_deps 取走）
+        crate::core::state::begin_compose_deps();
 
         {
             let ctx = &mut ComposeCtx::new(self);
@@ -1144,8 +1138,8 @@ impl Composer {
             "compose 结束时 GROUP_STACK 应清空（scope/节点配对不完整）");
         GROUP_STACK.with(|s| s.borrow_mut().clear());
 
-        // 依赖注册（recorded_deps → slot_deps）保持此处（组合期收集的 State 依赖）
-        for (state_id, slot_key) in self.recorded_deps.drain(..) {
+        // 依赖注册（组合期收集的 State 依赖 → slot_deps）
+        for (state_id, slot_key) in crate::core::state::take_deps() {
             self.slot_deps.entry(state_id).or_default().insert(slot_key);
         }
 
@@ -1199,8 +1193,6 @@ impl Composer {
 
     /// 执行整棵布局树的 measure + place，并缓存测量结果供下帧复用
     pub fn layout(&mut self, root_constraints: Constraints) {
-        // 布局期：measure 中的 State::get() 写入 layout_recorded（两段式依赖分流）
-        crate::core::state::set_layout_recording_target(&mut self.layout_recorded);
         // 应用布局失效：清全树旧标记 → 按 layout_dirty_keys 标节点 + 祖先传播
         // （保守超集：祖先全链标脏——布局动画场景父必然依赖子尺寸，Compose 精确传播留待优化）
         if let Some(root_idx) = self.arena.root {
@@ -1216,6 +1208,8 @@ impl Composer {
         }
         // 物化只在 compose 末尾（完整分离：组合完成即建树）——layout 只测量。
         // 单独调 layout（无 compose）时树为空——measure 无操作（无害）
+        // 开始布局期依赖记录（measure 中 State::get → 两段式分流）
+        crate::core::state::begin_layout_deps();
         if let Some(root_idx) = self.arena.root {
             let (_size, _placements) = crate::layout::measure_node(
                 &mut self.arena.nodes, &self.arena.policies, root_idx, root_constraints);
@@ -1226,14 +1220,10 @@ impl Composer {
             // 阶段D：重建 slot_key → 节点索引映射（供下帧 start_node 复用）
             self.prev_node_by_key.clear();
             crate::core::materialize::collect_node_keys(&self.arena, root_idx, &mut self.prev_node_by_key);
-            // measure 阶段（SizeDynamic 闭包内的 State::get()）注册的依赖也要进入 slot_deps
-            for (state_id, slot_key) in self.recorded_deps.drain(..) {
-                self.slot_deps.entry(state_id).or_default().insert(slot_key);
-            }
             // 布局依赖增量更新（两段式依赖）：
             // 本帧 measure 过的 slot_key（touched）→ 清旧写新（依赖集收敛）；
             // 未 measure 的（常量折叠命中）→ 保留旧项（折叠前提=依赖无 notify，闭环成立）。
-            let recorded: Vec<(u32, u64)> = self.layout_recorded.drain(..).collect();
+            let recorded: Vec<(u32, u64)> = crate::core::state::take_deps();
             let touched: HashSet<u64> = recorded.iter().map(|&(_, k)| k).collect();
             if !touched.is_empty() {
                 for set in self.layout_deps.values_mut() {
@@ -1254,15 +1244,11 @@ impl Composer {
                 self.layout_deps.entry(state_id).or_default().insert(slot_key);
             }
         } else {
-            // 无根节点（空内容帧）：recorded_deps/layout_recorded 无 measure 期新增，直接清空
+            // 无根节点（空内容帧）：布局依赖缓冲无 measure 期新增，直接取走丢弃
             //（防御性对称——未来若在无 root 路径写入 measure 依赖，不会残留跨帧）
-            self.recorded_deps.clear();
-            self.layout_recorded.clear();
+            crate::core::state::take_deps();
         }
-        // 组合 + 测量全部完成：清除 recording target（无论是否有 root——
-        // 否则 RECORDING_TARGET 残留指向本 Composer 的裸指针，Composer drop 后
-        // 后续 State::get() 会写悬垂内存（UB））
-        crate::core::state::clear_recording_target();
+        // 组合 + 测量全部完成：记录模式已由 take_deps 复位（无指针残留——无悬垂风险）
     }
 
     /// 请求重组（由 State 变化触发）。
@@ -1315,15 +1301,6 @@ fn register_modifier_deps_recursive(arena: &crate::layout::node::NodeArena, idx:
 impl Default for Composer {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl Drop for Composer {
-    fn drop(&mut self) {
-        // 防御：若本 Composer 是当前 RECORDING_TARGET 的持有者（compose 后未
-        // layout/clear 就 drop——如 init 临时 composer 或未来新增路径），清除之，
-        // 防止悬垂裸指针 UB（后续 State::get() 写已释放内存）。
-        crate::core::state::clear_recording_target();
     }
 }
 
@@ -1854,7 +1831,7 @@ fn test_is_skip_with_scope_layer() {
     });
     assert!(skip_happened,
         "含 scope 层的 clean group 应 Skip（slot_key 键修复后两棵树路径错位不再导致 miss）——若 Enter 说明回归");
-    // 自清洁：帧2 后 layout（clear recording target），避免 RECORDING_TARGET 残留
+    // 自清洁：帧2 后 layout（复位依赖记录模式——take_deps 等价）
     composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
 }
 
