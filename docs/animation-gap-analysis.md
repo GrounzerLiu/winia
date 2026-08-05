@@ -147,10 +147,17 @@
 3. **`animate_int_as_state` / `animate_value_as_state`**（泛型 AnimatableValue——低成本，机制已有）
 
 ### P1 — 常见需求
-4. **`Crossfade`**（两内容交叉淡入淡出——简单版 AnimatedContent）
-5. **`animate_content_size`**（Modifier——尺寸变化自动动画，布局层机制已具备）
-6. **`finished_listener` / `label`**（animate\*AsState 完成回调 + 调试标签）
-7. **spring 常量**（`Spring::damping_ratio_no_bouncy()` 等——API 体验）
+4. **`Crossfade`**（两内容交叉淡入淡出——简单版 AnimatedContent）✅ `7d85252`
+   - 实现为**顺序淡入淡出**（非交叉）：组合引擎单内容世代（无 Compose 双世代
+     outgoing 组合）——旧内容淡出完成才切换新内容淡入；`Crossfade::new(target).build(ctx, |ctx, t| ...)`
+5. **`animate_content_size`**（尺寸变化自动动画）✅ `7d85252`
+   - 实现为**容器组件 `AnimatedSize`**（非 Modifier）：本框架 Modifier 是纯数据
+     （构建期无组合上下文）无法内嵌 remember——容器组件在组合期创建 State（机制等价）
+   - 注意：target 状态必须用 State 跨重组保留（policy 实例每次 build 重建）
+6. **`finished_listener` / `label`** ✅ 部分 `7d85252`
+   - `Animatable::on_finish` + `push_animatable_with_done`（完成回调）已实现
+   - animate\*AsState 的 `label` 参数跳过（Transition 已有 label；调试价值低）
+7. **spring 常量**（`SpringSpec::DAMPING_RATIO_*` / `STIFFNESS_*`）✅ `7d85252`
 
 ### P2 — 进阶
 8. **`animate_decay` + fling**（DecayAnimationSpec：exponential_decay——拖拽/惯性滚动配合）
