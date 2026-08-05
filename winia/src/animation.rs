@@ -53,7 +53,7 @@ pub(crate) enum RepeatMode {
 #[derive(Debug, Clone)]
 pub struct InfiniteRepeatableSpec {
     pub duration: Duration,
-    pub mode: RepeatMode,
+    pub(crate) mode: RepeatMode,
 }
 
 impl InfiniteRepeatableSpec {

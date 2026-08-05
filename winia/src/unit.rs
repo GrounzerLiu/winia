@@ -1,6 +1,6 @@
 //! UI 值类型（对标 Jetpack Compose androidx.compose.ui.unit）
 //!
-//! 提供 Dp / Sp / Offset / Size / IntOffset / IntSize 等类型，
+//! 提供 Dp / Sp / Offset / Size 等类型，
 //! 以及 Density 密度抽象用于 Dp/Sp ↔ px 转换。
 //!
 //! ## 设计
@@ -114,9 +114,8 @@ impl From<Sp> for f32 {
 // ═══════════════════════════════════════════════════════════
 
 /// 屏幕密度 + 字体缩放
-///
 /// ⚠️ `font_scale` 当前恒为 1.0（未接入系统字体缩放），
-/// 因此 `to_sp_px` / `to_sp` 的 font_scale 因子暂不生效，Sp 行为等同 Dp。
+/// 因此 Sp 行为等同 Dp。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Density {
     /// 逻辑像素与物理像素比（1.0 = mdpi）

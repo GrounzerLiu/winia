@@ -742,16 +742,16 @@ fn modifier_focus_id(node: &LayoutNode) -> Option<u64> {
 /// 子节点通过 `nodes[idx].children`（索引列表）递归测量。
 /// 应用布局失效：DFS 树，命中 layout_dirty_keys 的节点标 layout_dirty=true 并沿祖先链传播。
 /// 保守超集：祖先全链标脏（布局动画场景父必然依赖子尺寸；Compose 精确传播留待优化）。
-pub(crate) fn apply_layout_dirty(nodes: &mut [LayoutNode], root_idx: usize, dirty_keys: &std::collections::HashSet<u64>) {
-    fn walk(nodes: &mut [LayoutNode], idx: usize, dirty_keys: &std::collections::HashSet<u64>, ancestor_dirty: bool) -> bool {
+pub(crate) fn apply_layout_dirty(nodes: &mut [LayoutNode], root_idx: usize, dirty_keys: &std::collections::HashSet<u64>) {    fn walk(nodes: &mut [LayoutNode], idx: usize, dirty_keys: &std::collections::HashSet<u64>, ancestor_dirty: bool) -> bool {
         let hit = dirty_keys.contains(&nodes[idx].slot_key);
         if hit || ancestor_dirty {
             nodes[idx].layout_dirty = true;
         }
-        // 子树是否有命中（用于父链传播）
+        // 索引读避免 clone（layout 是热路径）；每次索引读是临时借用，不阻塞递归写
         let mut child_hit = false;
-        let children = nodes[idx].children.clone();
-        for child in children {
+        let n = nodes[idx].children.len();
+        for i in 0..n {
+            let child = nodes[idx].children[i];
             if walk(nodes, child, dirty_keys, hit || ancestor_dirty) {
                 child_hit = true;
             }
@@ -763,6 +763,10 @@ pub(crate) fn apply_layout_dirty(nodes: &mut [LayoutNode], root_idx: usize, dirt
     }
     walk(nodes, root_idx, dirty_keys, false);
 }
+
+/// 测量计数（测试用：验证常量折叠/布局失效路径确实跳过或执行 measure）
+#[cfg(test)]
+pub(crate) static MEASURE_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub(crate) fn measure_node(
     nodes: &mut Vec<LayoutNode>,
@@ -778,6 +782,10 @@ pub(crate) fn measure_node(
     if !nodes[idx].dirty && !nodes[idx].layout_dirty && nodes[idx].cached_constraints == Some(constraints) {
         return (nodes[idx].measured_size, Vec::new());
     }
+
+    // 真正执行 measure 才计数（常量折叠命中不计——测试验证折叠路径）
+    #[cfg(test)]
+    MEASURE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
     // 设置 ACTIVE_SLOT_KEY = 本节点 slot——使 SizeDynamic 闭包内的 State::get()
     // 把依赖注册到本节点（动画值变化 → 本节点 dirty → 重组重测）

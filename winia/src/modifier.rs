@@ -4,7 +4,6 @@
 //! - 链式 API: `Modifier::new().size(100, 100).padding(10).background(Color::RED)`
 //! - 左到右 = 外到内
 //! - 分为三类: LayoutModifier / DrawModifier / PointerInputModifier
-//! - 通过 `ModifierNode` trait + `Custom` 变体支持外部扩展
 
 use std::sync::Arc;
 use std::ops::Range;

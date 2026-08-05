@@ -1420,8 +1420,10 @@ impl Composer {
                 self.layout_deps.entry(state_id).or_default().insert(slot_key);
             }
         } else {
-            // 无根节点（空内容帧）：recorded_deps 无 measure 期新增，直接清空
+            // 无根节点（空内容帧）：recorded_deps/layout_recorded 无 measure 期新增，直接清空
+            //（防御性对称——未来若在无 root 路径写入 measure 依赖，不会残留跨帧）
             self.recorded_deps.clear();
+            self.layout_recorded.clear();
         }
         // 组合 + 测量全部完成：清除 recording target（无论是否有 root——
         // 否则 RECORDING_TARGET 残留指向本 Composer 的裸指针，Composer drop 后
@@ -2537,7 +2539,12 @@ fn test_layout_dep_survives_const_fold() {
     assert!(composer.layout_deps.contains_key(&sid), "帧1 应注册布局依赖");
 
     // 帧2：无 notify 的重复 build——compose 全 Skip、measure 常量折叠命中
+    use crate::layout::node::MEASURE_COUNT;
+    let m1 = MEASURE_COUNT.load(std::sync::atomic::Ordering::Relaxed);
     build(&mut composer);
+    let m2 = MEASURE_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(m1, m2,
+        "折叠帧不应重新 measure（m1={} m2={}——若重测则依赖续期而非折叠保留，T4 语义失效）", m1, m2);
     assert!(composer.layout_deps.contains_key(&sid),
         "常量折叠帧（未重新 measure）应保留旧布局依赖——丢失则布局动画冻结");
     let leaf_key = {
@@ -2552,6 +2559,8 @@ fn test_layout_dep_survives_const_fold() {
     let s = holder.borrow().clone().unwrap();
     s.set_no_wake(123.0);
     build(&mut composer);
+    let m3 = MEASURE_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(m3 > m2, "notify 后应重新 measure（布局失效生效）");
     assert!(composer.layout_deps.contains_key(&sid), "重测后依赖应续期");
 }
 
