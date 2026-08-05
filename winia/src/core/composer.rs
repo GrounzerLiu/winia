@@ -1138,16 +1138,17 @@ impl Composer {
             "compose 结束时 GROUP_STACK 应清空（scope/节点配对不完整）");
         GROUP_STACK.with(|s| s.borrow_mut().clear());
 
-        // 依赖注册（组合期收集的 State 依赖 → slot_deps）
-        for (state_id, slot_key) in crate::core::state::take_deps() {
-            self.slot_deps.entry(state_id).or_default().insert(slot_key);
-        }
-
         // 完整分离：组合完成后物化布局树（测试/调用方可直接 layout_root_idx）
         self.materialize();
-        // 物化后：注册 modifier 中引用的 State 依赖（scroll 等——组合期 arena 空）
+        // 物化后：注册 modifier 中引用的 State 依赖（scroll 等——组合期 arena 空）。
+        // 必须在 take_deps() 之前执行——其中 State::get() 依赖 DEP_MODE=Compose
+        //（begin_compose_deps 后未复位）；先复位则 scroll 依赖被静默丢弃（滚动不刷新）
         if let Some(root_idx) = self.arena.root {
             register_modifier_deps_recursive(&self.arena, root_idx);
+        }
+        // 依赖注册（组合期 + modifier 期收集的 State 依赖 → slot_deps）
+        for (state_id, slot_key) in crate::core::state::take_deps() {
+            self.slot_deps.entry(state_id).or_default().insert(slot_key);
         }
         // 回收本帧未复用的上帧节点（结构变化移除的子树——on_remove 触发）；
         // 跳过已复用节点（已挂入本帧树，free 会递归进本帧树形成环）
@@ -2332,6 +2333,43 @@ fn test_layout_dep_survives_const_fold() {
     let m3 = MEASURE_COUNT.with(|c| c.get());
     assert!(m3 > m2, "notify 后应重新 measure（布局失效生效）");
     assert!(composer.layout_deps.contains_key(&sid), "重测后依赖应续期");
+}
+
+/// 回归测试（review 发现）：register_modifier_deps_recursive（scroll 等 modifier 内
+/// State::get）必须在 take_deps 之前执行——否则依赖被静默丢弃、滚动不刷新。
+#[test]
+fn test_modifier_scroll_dep_registered() {
+    let mut composer = Composer::new();
+    let holder = std::cell::RefCell::new(None::<crate::modifier::ScrollState>);
+
+    let build = |composer: &mut Composer| {
+        composer.compose(|ctx| {
+            let ss = ctx.remember(|| crate::modifier::ScrollState::new()).get();
+            *holder.borrow_mut() = Some(ss.clone());
+            let root_key = ctx.next_key();
+            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, Modifier::new().vertical_scroll(ss.clone()));
+                    ctx.end_node();
+                }
+            }
+            ctx.end_restartable_group();
+        });
+        composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+    };
+
+    build(&mut composer);
+    let sid = holder.borrow().as_ref().unwrap().offset.id();
+    assert!(composer.slot_deps.contains_key(&sid),
+        "scroll offset 应注册组合依赖（register_modifier_deps_recursive）——丢失则滚动不刷新");
+
+    // offset 变化 → 下帧该 slot 组合级 dirty（滚动触发重组）
+    holder.borrow().as_ref().unwrap().offset.set(50.0);
+    build(&mut composer);
+    assert!(composer.compose_dirty_count > 0,
+        "scroll 变化应触发组合级 dirty（dirty_count={}）", composer.compose_dirty_count);
 }
 
 /// 数据驱动的结构变化：State 变 → root Enter → 新增 leaf 生效。

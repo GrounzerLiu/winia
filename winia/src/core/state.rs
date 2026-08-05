@@ -217,6 +217,12 @@ enum DepMode {
 
 thread_local! {
     /// 依赖记录缓冲（State::get 写入；begin 清空、take 取走）
+    ///
+    /// ⚠️ 语义边界（有意为之，勿"修复"）：
+    /// - **panic 路径**：content/measure panic 时 DEP_MODE 残留——无 UB（数据缓冲非裸指针），
+    ///   下一次 begin_*_deps 清空自愈；测试线程复用时注意。
+    /// - **嵌套 compose**：同线程递归 compose 时内层 begin 无条件清空缓冲，外层前半段
+    ///   已记录依赖被丢弃。winit 单线程事件循环下不发生（同一时刻单 composer 在组合）。
     static DEP_BUFFER: std::cell::RefCell<Vec<(u32, u64)>> = const { std::cell::RefCell::new(Vec::new()) };
     /// 当前记录模式（None=非组合/布局上下文——get 不记录）
     static DEP_MODE: std::cell::Cell<DepMode> = const { std::cell::Cell::new(DepMode::None) };
