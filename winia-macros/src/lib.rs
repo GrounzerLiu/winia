@@ -381,6 +381,71 @@ pub fn composable(_attr: TokenStream, item: TokenStream) -> TokenStream {
     TokenStream::from(output)
 }
 
+/// 根组合入口宏（闭包版 #[composable]——保留外部捕获）。
+///
+/// 用法：`run_app(winia::app_root!(|ctx| { ... }))`（或 `app::run_app(...)`）。
+/// 展开：闭包体注入 `start_scope_keyed(固定根哈希)` + 每条语句 `enter_stmt`
+/// （语句级稳定 key——结构变化不漂移）+ `end_scope()`——根闭包内所有组件
+/// 调用点获得与 #[composable] 相同的稳定 key。
+///
+/// 与 #[composable] 的区别：作用于闭包（可捕获 main 局部变量，如 tokio runtime），
+/// 且只有一个根入口（scope key 固定常量——无需源码哈希）。
+#[proc_macro]
+pub fn app_root(input: TokenStream) -> TokenStream {
+    let closure = parse_macro_input!(input as syn::ExprClosure);
+    // 校验：单参且名为 ctx（与 run_app 签名一致）——兼容 `|ctx|` 与 `|ctx: &mut ComposeCtx|`
+    let ctx_ident = closure
+        .inputs
+        .iter()
+        .find_map(|arg| match arg {
+            syn::Pat::Ident(pat_ident) if pat_ident.ident == "ctx" => Some(pat_ident.ident.clone()),
+            // 带类型注解的参数（Pat::Type）——解包内层 ident
+            syn::Pat::Type(pt) => match &*pt.pat {
+                syn::Pat::Ident(pat_ident) if pat_ident.ident == "ctx" => Some(pat_ident.ident.clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("app_root! 闭包必须有一个名为 `ctx` 的参数（如 |ctx| { ... }）");
+
+    // 闭包体取 Block 的语句（Box<Block> 字段自动解引用）
+    let body_stmts = match &*closure.body {
+        syn::Expr::Block(b) => b.block.stmts.clone(),
+        other => panic!("app_root! 闭包体必须是块表达式（|ctx| {{ ... }}）"),
+    };
+    let brace_token = match &*closure.body {
+        syn::Expr::Block(b) => b.block.brace_token,
+        _ => unreachable!(),
+    };
+
+    // 语句级 key 注入（与 #[composable] 相同——递归覆盖 content 闭包）
+    let mut stmt_counter: u32 = 0;
+    let injected = inject_stmt_ids(body_stmts, &ctx_ident, &mut stmt_counter);
+
+    // 根 scope key：固定常量（应用唯一根入口——无跨模块碰撞问题）
+    let root_hash = 0xa11ce_f00du64; // "app_root" 语义占位（仅根入口使用）
+    let start = quote! { let __app_root_scope = #ctx_ident.start_scope_keyed(#root_hash); };
+    let end = quote! { #ctx_ident.end_scope(); };
+
+    let mut new_stmts = vec![syn::parse2::<Stmt>(start).unwrap()];
+    new_stmts.extend(injected);
+    new_stmts.push(syn::parse2::<Stmt>(end).unwrap());
+
+    let new_block = syn::Block {
+        brace_token,
+        stmts: new_stmts,
+    };
+
+    // 重建闭包（保留捕获/属性，body 换注入后的块）
+    let mut out_closure = closure;
+    out_closure.body = Box::new(syn::Expr::Block(syn::ExprBlock {
+        attrs: Vec::new(),
+        label: None,
+        block: new_block,
+    }));
+    TokenStream::from(quote!(#out_closure))
+}
+
 #[cfg(test)]
 mod inject_tests {
     use super::*;

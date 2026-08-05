@@ -7,14 +7,14 @@ use std::time::Duration;
 fn main() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let _guard = rt.enter();
-    app::run_app(|ctx| {
+    app::run_app(winia::app_root!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
                 .size(360.0, 340.0)
                 .title("Stream Observer Demo")
                 .build(ctx, |ctx| stream_demo_ui(ctx));
         });
-    });
+    }));
 }
 
 #[composable]

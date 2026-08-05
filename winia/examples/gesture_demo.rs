@@ -109,12 +109,12 @@ fn gesture_ui(ctx: &mut ComposeCtx) {
 fn main() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let _guard = rt.enter();
-    app::run_app(|ctx| {
+    app::run_app(winia::app_root!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
                 .size(480.0, 620.0)
                 .title("Gesture Demo")
                 .build(ctx, gesture_ui);
         });
-    });
+    }));
 }

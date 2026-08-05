@@ -244,12 +244,12 @@ fn main() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let _guard = rt.enter();
 
-    app::run_app(|ctx| {
+    app::run_app(winia::app_root!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
                 .size(480.0, 700.0)
                 .title("Layout Demo")
                 .build(ctx, |ctx| layout_demo_ui(ctx));
         });
-    });
+    }));
 }

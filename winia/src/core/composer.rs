@@ -144,7 +144,10 @@ impl<'a> ComposeCtx<'a> {
     /// next_key 读 scope=0 → 跨函数同 stmt id 的 key 碰撞 → 节点复用串位）
     pub fn start_scope_keyed(&mut self, source_hash: u64) -> u64 {
         self.composer.scope_source_stack.push(Some(source_hash));
-        let key = self.composer.next_group_key();
+        // scope key = 源码哈希本身（稳定唯一——不依赖 next_group_key：scope 是
+        // 组合第一条调用（STMT_STACK 空），走路径哈希在宏外（app_root!/根）会
+        // 触发稳定 key panic；且路径哈希在结构变化时漂移——hash 反而更稳）
+        let key = source_hash;
         self.composer.slot_table.start_scope(key);
         GROUP_STACK.with(|s| s.borrow_mut().push(key));
         key
@@ -907,7 +910,9 @@ impl Composer {
             h ^= scope_src; h = h.wrapping_mul(0x100000001b3);
             h ^= sid as u64; h = h.wrapping_mul(0x100000001b3);
             h
-        } else {
+        } else if cfg!(test) {
+            // 测试路径：无语句级 key 时退化为路径哈希（测试自控结构——漂移由
+            // 测试自己负责；生产代码禁止——见下方 panic）
             let path = self.slot_table.current_path().to_vec();
             let mut h: u64 = 0xcbf29ce484222325;
             for &idx in &path {
@@ -915,6 +920,16 @@ impl Composer {
                 h = h.wrapping_mul(0x100000001b3);
             }
             h
+        } else {
+            // 快速失败（用户要求）：组件调用点必须能获得稳定 key——无法保证则
+            // panic 而非静默降级（路径哈希在结构变化时漂移 → remember 状态错位/
+            // 节点复用串位等难查 bug）。修复：调用点包在 #[composable] 函数内
+            // （或根闭包用 winia::app_root!）获得语句级 key；或显式 ctx.key()。
+            panic!(
+                "组合调用点缺少稳定 key：组件调用必须位于 #[composable] 函数内 \
+                 （或根闭包用 winia::app_root!），或用 ctx.key() 显式指定。\
+                 当前调用点在宏覆盖之外——key 会在结构变化时漂移。"
+            );
         };
         // 每路径独立 counter：同 key 基第 N 次调用跨帧恒定（Skip 的 content 不执行
         // 不平移——节点复用错位 + 常量折叠冻结的防护）
@@ -3162,4 +3177,73 @@ fn test_skip_recovery_same_count_different_content() {
     build(&mut composer, &content);
     // 关键断言：帧2 全 Skip（clean 计数 > 0）——同数量同位置保持恢复（Compose 语义）
     assert!(composer.compose_clean_count > 0, "数量相同内容不同应保持 Skip（clean_count={}）", composer.compose_clean_count);
+}
+
+// ═══════════════════════════════════════════════════════════
+// app_root! 根入口宏——稳定 key 测试（T7）
+// ═══════════════════════════════════════════════════════════
+
+/// T7：app_root! 覆盖下，根闭包内组件调用点获得语句级稳定 key——
+/// if 分支结构增删后同位置组件 key 不变、remember 状态保留。
+#[test]
+fn test_app_root_stable_keys_across_structure_change() {
+    let mut composer = Composer::new();
+    let show_holder = std::cell::RefCell::new(None::<State<bool>>);
+    // B 组件的 key 记录（跨帧断言）
+    let b_key = std::cell::Cell::new(None::<u64>);
+
+    // 根入口用 app_root!（宏注入语句级 key——根闭包内调用点稳定）
+    let root = crate::app_root!(|ctx: &mut ComposeCtx| {
+        let show = ctx.remember(|| true);
+        *show_holder.borrow_mut() = Some(show.clone());
+        let root_key = ctx.next_key();
+        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            crate::core::composer::GroupStatus::Skip => {}
+            crate::core::composer::GroupStatus::Enter => {
+                // A 组件（if 分支包裹——结构变化场景）
+                if show.get() {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, Modifier::new());
+                    ctx.end_node();
+                }
+                // B 组件（始终存在——key 应跨结构变化稳定）
+                let k2 = ctx.next_key();
+                ctx.start_leaf(k2, Modifier::new().size(50.0, 20.0));
+                ctx.end_node();
+            }
+        }
+        ctx.end_restartable_group();
+    });
+
+    let build = |composer: &mut Composer| {
+        composer.compose(|ctx| { root(ctx); });
+        composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+        // 记录 B 组件（最后一个 leaf）的 slot_key
+        let r = composer.layout_root_idx().unwrap();
+        let children = composer.arena_nodes()[r].children.clone();
+        let b = children[children.len() - 1];
+        b_key.set(Some(composer.arena_nodes()[b].slot_key));
+    };
+
+    // 帧1：[A, B]
+    build(&mut composer);
+    let k1 = b_key.get().unwrap();
+    // show 状态 id（跨帧保留断言）
+    let show_id = show_holder.borrow().as_ref().unwrap().id();
+
+    // 帧2：show=false → [B]（A 移除——结构变化）
+    show_holder.borrow().as_ref().unwrap().set(false);
+    build(&mut composer);
+    let k2 = b_key.get().unwrap();
+    assert_eq!(k1, k2, "结构变化后 B 组件 key 应稳定（语句级 key）——k1={:x} k2={:x}", k1, k2);
+
+    // 帧3：show=true → [A, B]（A 恢复）
+    show_holder.borrow().as_ref().unwrap().set(true);
+    build(&mut composer);
+    let k3 = b_key.get().unwrap();
+    assert_eq!(k1, k3, "A 恢复后 B 组件 key 仍应稳定");
+
+    // remember 状态（show）跨结构变化保留（同一 State id）
+    assert_eq!(show_holder.borrow().as_ref().unwrap().id(), show_id,
+        "remember 状态应跨结构变化保留（语句级 key 稳定）");
 }

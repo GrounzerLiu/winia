@@ -187,7 +187,7 @@ fn main() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let _guard = rt.enter();
 
-    app::run_app(|ctx| {
+    app::run_app(winia::app_root!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
                 .size(420.0, 640.0)
@@ -196,5 +196,5 @@ fn main() {
                     nest_demo(ctx);
                 });
         });
-    });
+    }));
 }

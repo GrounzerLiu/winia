@@ -9,7 +9,7 @@ fn main() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let _guard = rt.enter();
 
-    app::run_app(|ctx| {
+    app::run_app(winia::app_root!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
                 .size(540.0, 700.0)
@@ -18,7 +18,7 @@ fn main() {
                     text_demo_ui(ctx);
                 });
         });
-    });
+    }));
 }
 
 #[composable]

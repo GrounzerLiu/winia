@@ -85,12 +85,12 @@ fn selection_ui(ctx: &mut ComposeCtx) {
 fn main() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let _guard = rt.enter();
-    app::run_app(|ctx| {
+    app::run_app(winia::app_root!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
                 .size(520.0, 720.0)
                 .title("Text Selection Demo")
                 .build(ctx, selection_ui);
         });
-    });
+    }));
 }
