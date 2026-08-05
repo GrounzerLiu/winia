@@ -2,7 +2,7 @@
 //! 场景：`Open sub window` 按钮点击 → 子窗口创建；再点（Close）→ 子窗口销毁；
 //! 主窗口内容全程保持。
 //!
-//! 由 `[[test]] harness = false` 编译为独立 exe，测试通过 stdin/stdout 管道驱动。
+//! 由 `[[bin]]` 注册编译为独立 exe，测试通过 stdin/stdout 管道驱动。
 
 use winia::prelude::*;
 

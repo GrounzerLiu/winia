@@ -2,7 +2,7 @@
 //! 场景：`switch` 按钮点击 → level 1 → 2 → other → 1 …循环；每态节点数不同；
 //! 重复进入同一状态时节点数一致（结构稳定、key 不漂移）。
 //!
-//! 由 `[[test]] harness = false` 编译为独立 exe，测试通过 stdin/stdout 管道驱动。
+//! 由 `[[bin]]` 注册编译为独立 exe，测试通过 stdin/stdout 管道驱动。
 
 use winia::prelude::*;
 

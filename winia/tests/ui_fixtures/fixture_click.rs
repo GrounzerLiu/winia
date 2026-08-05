@@ -1,7 +1,7 @@
 //! UI 测试 fixture：点击计数（State 更新 → 增量重组渲染）。
 //! 场景：`+1` 按钮点击 → `Count` 文本更新；10 个静态行保持（点击后不塌缩）。
 //!
-//! 由 `[[test]] harness = false` 编译为独立 exe，测试通过 stdin/stdout 管道驱动。
+//! 由 `[[bin]]` 注册编译为独立 exe，测试通过 stdin/stdout 管道驱动。
 
 use winia::prelude::*;
 

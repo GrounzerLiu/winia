@@ -269,9 +269,15 @@ impl UiTest {
             .unwrap_or(0)
     }
 
-    /// 在树中查找第一个 mod 包含 `label` 的节点，返回 (abs_x, abs_y, width, height)
+    /// 在树中查找第一个 mod 包含 `label` 的节点，返回 (abs_x, abs_y, width, height)。
+    /// ⚠ 仅对主窗口可靠（debug 注入事件只作用于主窗口）——多窗口请用 `find_in_window`。
     pub fn find(&self, label: &str) -> Option<(f32, f32, f32, f32)> {
         find_node(&self.tree, label)
+    }
+
+    /// 在指定窗口内查找节点（多窗口精确定位）
+    pub fn find_in_window(&self, window_id: u64, label: &str) -> Option<(f32, f32, f32, f32)> {
+        find_node_in_window(&self.tree, window_id, label)
     }
 
     /// 断言树中出现 `text`（带重试——等待异步重组/动画）
@@ -310,7 +316,7 @@ impl UiTest {
             self.click(x, y);
             let deadline = Instant::now() + timeout;
             loop {
-                let tree = self.tree().expect("demo 进程已退出？");
+                let tree = self.tree().expect("树查询失败（进程退出或树为空）");
                 if until(&tree) {
                     return;
                 }
@@ -462,7 +468,9 @@ fn count_nodes(tree: &Value) -> usize {
 }
 
 /// 查找 mod 包含 label 的节点 → (abs_x, abs_y, w, h)。
-/// 遍历所有窗口（按 window id 顺序）返回第一个匹配——坐标是该窗口内的绝对坐标。
+/// ⚠ 仅对主窗口有效：遍历所有窗口（按 window id 顺序）返回第一个匹配，坐标是该
+/// 窗口内的绝对坐标——但 debug 注入事件只作用于主窗口。多窗口场景请用
+/// `find_in_window` 精确定位。
 fn find_node(tree: &Value, label: &str) -> Option<(f32, f32, f32, f32)> {
     fn walk(n: &Value, ax: f32, ay: f32, label: &str) -> Option<(f32, f32, f32, f32)> {
         // root 可能是数组（根节点列表）
@@ -506,6 +514,56 @@ fn find_node(tree: &Value, label: &str) -> Option<(f32, f32, f32, f32)> {
     let mut found = None;
     for_each_window(tree, |_, root| {
         if found.is_none() {
+            found = walk(root, 0.0, 0.0, label);
+        }
+    });
+    found
+}
+
+/// 在指定窗口内查找节点（多窗口精确定位——坐标是该窗口内的绝对坐标；
+/// 注意 debug 注入事件仍只作用于主窗口，坐标用于断言/记录）
+fn find_node_in_window(tree: &Value, window_id: u64, label: &str) -> Option<(f32, f32, f32, f32)> {
+    fn walk(n: &Value, ax: f32, ay: f32, label: &str) -> Option<(f32, f32, f32, f32)> {
+        if let Some(arr) = n.as_array() {
+            for el in arr {
+                if let Some(r) = walk(el, ax, ay, label) {
+                    return Some(r);
+                }
+            }
+            return None;
+        }
+        let pos = n.get("pos").and_then(|p| p.as_array());
+        let (x, y) = match pos {
+            Some(v) if v.len() >= 2 => (
+                ax + v[0].as_f64().unwrap_or(0.0) as f32,
+                ay + v[1].as_f64().unwrap_or(0.0) as f32,
+            ),
+            _ => (ax, ay),
+        };
+        let m = n.get("mod").and_then(|m| m.as_str()).unwrap_or("");
+        if m.contains(label) {
+            let size = n.get("size").and_then(|s| s.as_array());
+            let (w, h) = match size {
+                Some(v) if v.len() >= 2 => (
+                    v[0].as_f64().unwrap_or(0.0) as f32,
+                    v[1].as_f64().unwrap_or(0.0) as f32,
+                ),
+                _ => (0.0, 0.0),
+            };
+            return Some((x, y, w, h));
+        }
+        if let Some(children) = n.get("children").and_then(|c| c.as_array()) {
+            for c in children {
+                if let Some(r) = walk(c, x, y, label) {
+                    return Some(r);
+                }
+            }
+        }
+        None
+    }
+    let mut found = None;
+    for_each_window(tree, |id, root| {
+        if found.is_none() && id == window_id {
             found = walk(root, 0.0, 0.0, label);
         }
     });

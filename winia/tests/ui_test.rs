@@ -99,16 +99,23 @@ fn subwindow_open_close_preserves_main_and_trees() {
 // fixture_scroll：滚动容器
 // ═══════════════════════════════════════════════════════════════
 
-/// Given 30 行内容在 150px 滚动容器内
-/// When  滚动 +300 再 -600
-/// Then  内容保持（树完整）且不崩溃
+/// Given 30 行内容在 150px 滚动容器内 + `offset:` 实时文本
+/// When  向下滚动 -300 再向上 +600
+/// Then  offset 文本先 300 后回 0（真实滚动行为——vertical_scroll 只改偏移不移除节点；
+///       负 dy = 向下滚：current - dy）
 #[test]
 fn scroll_container_keeps_content() {
     let mut app = UiTest::launch("scroll");
-    app.expect_text("Line 0"); // 等首帧就绪
-    app.scroll(300.0);
-    app.expect_text("Line 0"); // 滚动是偏移不是移除——树仍完整
-    app.scroll(-600.0);
+    app.expect_text("offset: 0"); // 等首帧就绪（初始偏移 0）
+    app.expect_text("Line 0");
+    // 向下滚动（负 dy）：offset 增大
+    app.scroll(-300.0);
+    app.expect_text_timeout("offset: 300", Duration::from_secs(5));
+    // 向上回滚：offset 归零（clamp 到 0——滚回顶部）
+    app.scroll(600.0);
+    app.expect_text_timeout("offset: 0", Duration::from_secs(5));
+    // 内容完整（滚动是偏移不是移除）
+    app.expect_text("Line 0");
     app.expect_text("Line 29");
 }
 
@@ -146,7 +153,8 @@ fn nest_structure_switch_cycles_stably() {
             "按钮位置漂移：{pos0:?} → ({}, {})",
             btn.0, btn.1
         );
-        // 三态循环：第 i 与第 i+3 次进入同一状态——节点数一致
+        // 三态循环：第 i 与第 i+3 次进入同一状态——节点数一致。
+        // 已知限制：debug 渲染断导致点击重试时可能跳两态（双触发）——偶发假失败可重跑。
         if i >= 3 {
             assert_eq!(
                 counts[i], counts[i - 3],

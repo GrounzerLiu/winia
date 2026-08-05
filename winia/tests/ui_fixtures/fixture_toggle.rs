@@ -1,7 +1,7 @@
 //! UI 测试 fixture：条件结构切换（if/else 分支）。
 //! 场景：`Show Alt` 按钮点击 → 分支 A（Alternative）↔ 分支 B（Add 10）互斥切换。
 //!
-//! 由 `[[test]] harness = false` 编译为独立 exe，测试通过 stdin/stdout 管道驱动。
+//! 由 `[[bin]]` 注册编译为独立 exe，测试通过 stdin/stdout 管道驱动。
 
 use winia::prelude::*;
 
