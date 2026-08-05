@@ -562,7 +562,7 @@ impl InfiniteTransition {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum AnimationSpec {
     Spring(SpringSpec),
     Tween(TweenSpec),
@@ -574,7 +574,15 @@ pub enum AnimationSpec {
     Snap,
 }
 
-#[derive(Clone)]
+impl From<TweenSpec> for AnimationSpec {
+    fn from(s: TweenSpec) -> Self { AnimationSpec::Tween(s) }
+}
+
+impl From<SpringSpec> for AnimationSpec {
+    fn from(s: SpringSpec) -> Self { AnimationSpec::Spring(s) }
+}
+
+#[derive(Clone, Debug)]
 pub struct SpringSpec {
     pub damping_ratio: f32,
     pub stiffness: f32,
@@ -600,7 +608,7 @@ impl SpringSpec {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TweenSpec {
     pub duration: Duration,
     pub interpolator: fn(f32) -> f32,
@@ -613,7 +621,7 @@ impl Default for TweenSpec {
 }
 
 /// 关键帧序列：(进度 0~1, 值, 段间插值器)
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct KeyframesSpec {
     pub duration: Duration,
     pub frames: Vec<(f32, f32, fn(f32) -> f32)>,
@@ -629,7 +637,7 @@ impl KeyframesSpec {
 }
 
 /// 重复执行：iterations 次后完成
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct RepeatableSpec {
     pub iterations: u32,
     pub mode: RepeatMode,
