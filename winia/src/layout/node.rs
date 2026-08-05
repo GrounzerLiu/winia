@@ -889,59 +889,91 @@ pub(crate) fn measure_node(
     result
 }
 
+/// 构建普通文本段落（测量与绘制共用——单一事实来源）。
+///
+/// 从 TextStyle 参数构造 skia Paragraph（含 max_lines/ellipsis/justify/字重/倾斜），
+/// 并按 soft_wrap 决定布局宽度。测量期（node.rs）与绘制兜底（render.rs）都调此函数，
+/// 避免两处独立构造导致样式不一致。
+pub(crate) fn build_plain_paragraph(
+    content: &str,
+    font_size: f32,
+    color: &crate::modifier::Color,
+    font_weight: crate::ui::text::FontWeight,
+    font_style: crate::ui::text::FontSlant,
+    max_lines: usize,
+    align: crate::ui::TextAlign,
+    overflow: crate::ui::TextOverflow,
+    soft_wrap: bool,
+    max_width: f32,
+) -> crate::text::Paragraph {
+    use skia_safe::textlayout::ParagraphStyle;
+
+    let mut para_style = ParagraphStyle::new();
+
+    // max_lines：限制行数
+    if max_lines < usize::MAX {
+        para_style.set_max_lines(max_lines);
+    }
+
+    // ellipsis overflow：超出时显示省略号
+    if overflow == crate::ui::TextOverflow::Ellipsis {
+        para_style.set_ellipsis("\u{2026}");
+    }
+
+    // justify alignment
+    if align == crate::ui::TextAlign::Justify {
+        para_style.set_text_align(skia_safe::textlayout::TextAlign::Justify);
+    }
+
+    // soft_wrap=false: 无限宽度排版，不换行
+    let layout_width = if soft_wrap { max_width } else { f32::MAX };
+
+    let mut text_style = skia_safe::textlayout::TextStyle::new();
+    text_style.set_font_size(font_size);
+    // IMPORTANT: 设置文字颜色（Skia TextStyle 默认白色，不设的话画在白色背景上不可见）
+    text_style.set_color(skia_safe::Color::from_argb(color.a, color.r, color.g, color.b));
+    // 设置字重和倾斜
+    if font_weight != crate::ui::text::FontWeight::NORMAL || font_style != crate::ui::text::FontSlant::Upright {
+        use skia_safe::FontStyle;
+        use crate::ui::text::FontSlant;
+        let slant = match font_style {
+            FontSlant::Upright => skia_safe::font_style::Slant::Upright,
+            FontSlant::Italic => skia_safe::font_style::Slant::Italic,
+            FontSlant::Oblique => skia_safe::font_style::Slant::Oblique,
+        };
+        text_style.set_font_style(FontStyle::new(font_weight.value().into(), 5.into(), slant));
+    }
+    let fc = crate::font::get_font_collection();
+    let mut builder = crate::text::ParagraphBuilder::new(&para_style, &fc);
+    builder.push_style(&text_style);
+    builder.add_text(content);
+    let mut para = builder.build();
+    para.layout(layout_width);
+    para
+}
+
 /// 合并的文本测量 + Paragraph 缓存。
 ///
 /// 从 TextContent modifier 中提取所有参数（font_size、max_lines、overflow、align），
 /// 在 ParagraphStyle 上正确设置后一次创建 Paragraph，测量尺寸并缓存供渲染复用。
 /// 消除旧代码中 `measurer.measure()` + `cache_text_paragraph()` 重复创建的开销。
 fn measure_and_cache_text(node: &LayoutNode, max_width: f32) -> Size {
-    use skia_safe::textlayout::ParagraphStyle;
-    let fc = crate::font::get_font_collection();
-
     for el in node.modifier.elements() {
         if let ModifierElement::TextContent {
             content, font_size, color, font_weight, font_style, max_lines, align, overflow, soft_wrap,
         } = el {
-            let mut para_style = ParagraphStyle::new();
-
-            // max_lines：限制行数
-            if *max_lines < usize::MAX {
-                para_style.set_max_lines(*max_lines);
-            }
-
-            // ellipsis overflow：超出时显示省略号
-            if *overflow == crate::ui::TextOverflow::Ellipsis {
-                para_style.set_ellipsis("\u{2026}");
-            }
-
-            // justify alignment
-            if *align == crate::ui::TextAlign::Justify {
-                para_style.set_text_align(skia_safe::textlayout::TextAlign::Justify);
-            }
-
-            // soft_wrap=false: 无限宽度排版，不换行
-            let layout_width = if *soft_wrap { max_width } else { f32::MAX };
-
-            let mut text_style = skia_safe::textlayout::TextStyle::new();
-            text_style.set_font_size(*font_size);
-            // IMPORTANT: 设置文字颜色（Skia TextStyle 默认白色，不设的话画在白色背景上不可见）
-            text_style.set_color(skia_safe::Color::from_argb(color.a, color.r, color.g, color.b));
-            // 设置字重和倾斜
-            if *font_weight != crate::ui::text::FontWeight::NORMAL || *font_style != crate::ui::text::FontSlant::Upright {
-                use skia_safe::FontStyle;
-                use crate::ui::text::FontSlant;
-                let slant = match font_style {
-                    FontSlant::Upright => skia_safe::font_style::Slant::Upright,
-                    FontSlant::Italic => skia_safe::font_style::Slant::Italic,
-                    FontSlant::Oblique => skia_safe::font_style::Slant::Oblique,
-                };
-                text_style.set_font_style(FontStyle::new(font_weight.value().into(), 5.into(), slant));
-            }
-            let mut builder = crate::text::ParagraphBuilder::new(&para_style, &fc);
-            builder.push_style(&text_style);
-            builder.add_text(content.as_str());
-            let mut para = builder.build();
-            para.layout(layout_width);
+            let para = build_plain_paragraph(
+                content.as_str(),
+                *font_size,
+                color,
+                *font_weight,
+                *font_style,
+                *max_lines,
+                *align,
+                *overflow,
+                *soft_wrap,
+                max_width,
+            );
 
             let size = Size::new(
                 para.max_intrinsic_width().ceil().min(max_width),
