@@ -1,20 +1,26 @@
 # UI 测试（界面级集成测试）
 
-通过真实运行 demo（Vulkan 窗口 + 渲染循环），向 demo 进程注入操作（点击/滚动/拖拽），
-从树 JSON 断言界面状态——验证**重组/布局/多窗口**等真实行为，而非单元级行为。
+通过真实运行**测试专用 fixture**（Vulkan 窗口 + 渲染循环），向 fixture 进程注入操作
+（点击/滚动/拖拽），从树 JSON 断言界面状态——验证**重组/布局/多窗口**等真实行为。
+
+**fixture 与 examples 分离**：examples 只做展示；UI 测试使用 `tests/ui_fixtures/` 下的
+独立场景（`[[test]] harness = false`——cargo 编译为独立 exe），每个用例单一职责
+（Given/When/Then 设计原则）。
 
 ## 架构
 
 ```
-cargo test --test ui_test --features debug-server
+cargo test --features debug-server
         │
-        ├─ tests/ui/mod.rs   UiTest 封装（进程管理 + 管道协议 + 断言辅助）
-        └─ tests/ui_test.rs  场景测试（counter / nest_demo / …）
+        ├─ tests/ui/mod.rs       UiTest 封装（进程管理 + 管道协议 + 断言辅助）
+        ├─ tests/ui_test.rs      场景断言（click/toggle/subwindow/scroll/nest 5 用例）
+        ├─ tests/ui_fixtures/    fixture 源码（harness=false 的 [[test]] → 独立 exe）
+        └─ tests/{event_flow,layout_snapshot,render_snapshot}.rs  库行为快照测试
                 │
                 │ stdin 管道（命令）        stdout 管道（响应）
                 ▼                             ▲
         ┌───────────────────────────────────────────┐
-        │  demo 进程（target/debug/examples/*.exe）   │
+        │  fixture 进程（target/debug/deps/fixture_*）│
         │  --features debug-server 编译（管道协议）    │
         └───────────────────────────────────────────┘
 ```
@@ -63,38 +69,53 @@ cargo test --test ui_test --features debug-server
    主/子窗口内容（`window_count()` 辅助）。`find` 返回第一个匹配窗口的坐标（点击只注入
    父窗口——子窗口按钮不可点击，关闭走主窗口按钮）。
 3. **端口隔离**：各测试用独立 debug 端口（9100 起递增），不占用默认 9998。
-4. stderr 管道**必须被读线程消费**（不读会填满 64KB 阻塞 demo——历史教训）。
+4. stderr 管道**必须被读线程消费**（不读会填满 64KB 阻塞 fixture——历史教训）。
 
 ## 运行
 
 ```bash
 cd winia
-# 需要先构建带 debug-server 的 demo exe（ui_test 直接 spawn exe，不触发 cargo 构建）
-cargo build -p winia --examples --features debug-server
-# 跑 UI 测试（串行 ~25s）
-cargo test --test ui_test --features debug-server
-# 单测全量（含 UI 测试）
+# 需要先构建带 debug-server 的 fixture exe（ui_test 直接 spawn exe，不触发 cargo 构建）
+cargo test --features debug-server --no-run
+# 跑全部测试（含 UI 测试——串行 ~25s）
 cargo test --features debug-server
+# 只跑 UI 测试
+cargo test --features debug-server --test ui_test
 ```
 
-环境变量：`UI_TEST_STDERR=1` 转发 demo stderr 到测试输出（诊断用）。
+环境变量：`UI_TEST_STDERR=1` 转发 fixture stderr 到测试输出（诊断用）。
 
-## 新增场景测试
+## 新增场景测试（按测试用例设计原则）
 
-1. 在 `winia/examples/` 写 demo（含可点击按钮 + 可断言文本）。
-2. `cargo build -p winia --example <name> --features debug-server` 确认构建。
-3. 在 `tests/ui_test.rs` 加 `#[test] fn …`：
-   - `launch("<name>")` → `expect_text` 等首帧 → `find` 定位按钮 → `click_until` 交互 →
-     `tree()` / `all_texts()` 断言。
-   - 按钮坐标用 `find` 返回的 rect 中心（`x + w/2, y + h/2`）。
-4. 跑测试 + 检查残留进程（`Get-Process <name>` 应为 0）。
+1. 在 `tests/ui_fixtures/` 写 fixture（**单一场景**——Given/When/Then 可读）：
+   ```rust
+   //! UI 测试 fixture：<场景描述>
+   use winia::prelude::*;
+   #[composable]
+   fn ui(ctx: &mut ComposeCtx) { /* 最小场景 UI */ }
+   fn main() { /* tokio rt + winia::run_app!(Window::new()...) */ }
+   ```
+2. `Cargo.toml` 注册：`[[test]] name = "fixture_<name>" path = "tests/ui_fixtures/fixture_<name>.rs" harness = false`
+3. `tests/ui_test.rs` 加用例：`launch("<name>")` → `expect_text` 等首帧 → `find` 定位 →
+   `click_until` 交互（点击丢失自动重试）→ 断言。
+4. 跑测试 + 检查残留进程（`Get-Process fixture_*` 应为 0）。
 
-## 测试清单（当前 5 个场景）
+## 测试清单
 
-| 测试 | demo | 覆盖 |
-|------|------|------|
-| counter_click_increments_count | counter | 点击 → State 更新 → 重组渲染 |
-| counter_toggle_alt_shows_hides | counter | 条件分支结构切换（Show Alt ↔ Add 10） |
-| counter_sub_window_open_close | counter | 多窗口开/关 + 主窗口完整 |
-| counter_scroll_moves_content | counter | 滚动容器 |
-| nest_demo_structure_switch_stable | nest_demo | 多级 if/else 结构切换 3 态循环——节点数稳定 + 按钮不漂移 |
+### UI 集成（fixture 驱动，5 用例）
+
+| 用例 | fixture | 覆盖（Given/When/Then） |
+|------|---------|------------------------|
+| click_updates_state_and_keeps_structure | fixture_click | 点击 +1 三次 → Count 更新；静态行不塌缩 |
+| toggle_switches_conditional_branch_exclusively | fixture_toggle | 切换两次 → 分支 A ↔ B 互斥 |
+| subwindow_open_close_preserves_main_and_trees | fixture_subwindow | 多窗口开/关 → 两窗口树共存（window_count 1→2→1） |
+| scroll_container_keeps_content | fixture_scroll | 滚动 ± → 内容保持不崩溃 |
+| nest_structure_switch_cycles_stably | fixture_nest | 3 态循环 6 次 → 状态重复进入节点数一致 + 按钮不漂移 |
+
+### 库行为快照（无窗口，直接驱动 Composer）
+
+| 文件 | 覆盖 |
+|------|------|
+| tests/event_flow.rs | State 变化 → 增量重组/布局重算/remember 持久/跳过 |
+| tests/layout_snapshot.rs | 布局断言（leaf/column/row/padding/fill） |
+| tests/render_snapshot.rs | 渲染快照（文本/圆角矩形/嵌套不崩溃） |

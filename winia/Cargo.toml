@@ -30,3 +30,25 @@ unicode-segmentation = "1.12"
 skia-safe = { workspace = true, features = ["vulkan", "textlayout", "svg", "gl", "d3d"] }
 [dev-dependencies]
 serde_json = "1"
+
+# ── UI 测试 fixture（bin target——cargo test 不执行；路径固定 target/debug/fixture_*）──
+# 供 tests/ui_test.rs 通过 stdin/stdout 管道驱动（不依赖 examples——测试资产独立）
+[[bin]]
+name = "fixture_click"
+path = "tests/ui_fixtures/fixture_click.rs"
+
+[[bin]]
+name = "fixture_toggle"
+path = "tests/ui_fixtures/fixture_toggle.rs"
+
+[[bin]]
+name = "fixture_subwindow"
+path = "tests/ui_fixtures/fixture_subwindow.rs"
+
+[[bin]]
+name = "fixture_scroll"
+path = "tests/ui_fixtures/fixture_scroll.rs"
+
+[[bin]]
+name = "fixture_nest"
+path = "tests/ui_fixtures/fixture_nest.rs"

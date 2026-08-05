@@ -509,11 +509,12 @@ impl Modifier {
     ///
     /// **静态用法**（构建时固定颜色）：
     /// ```
-    /// .background(Color::RED, Shape::Circle)
+    /// # use winia::prelude::*;
+    /// let _m = Modifier::new().background(Color::RED, Shape::Circle);
     /// ```
     ///
     /// **动画用法**（渲染时每帧求值，不触发重组）：
-    /// ```
+    /// ```ignore
     /// .background(|| pulse.peek(), Shape::Circle)
     /// ```
     ///
@@ -630,11 +631,13 @@ impl Modifier {
     ///
     /// **静态用法**：
     /// ```
-    /// .graphics_layer(GraphicsLayerParams { alpha: 0.5, ..Default::default() })
+    /// # use winia::prelude::*;
+    /// # use winia::modifier::GraphicsLayerParams;
+    /// let _m = Modifier::new().graphics_layer(GraphicsLayerParams { alpha: 0.5, ..Default::default() });
     /// ```
     ///
     /// **动画用法**（渲染时每帧求值，不触发重组）：
-    /// ```
+    /// ```ignore
     /// .graphics_layer(|| GraphicsLayerParams { alpha: pulse.peek(), ..Default::default() })
     /// ```
     ///

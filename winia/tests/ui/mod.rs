@@ -1,12 +1,12 @@
 //! UI 集成测试（真实窗口 + stdin/stdout 管道驱动）。
 //!
-//! 前提：demo 已用 debug-server feature 构建（测试会检查 exe 存在）：
+//! 前提：fixture 已用 debug-server feature 构建（测试会检查 exe 存在）：
 //! ```sh
-//! cargo build --examples --features debug-server
+//! cargo test --features debug-server --no-run
 //! cargo test --test ui_test --features debug-server
 //! ```
 //!
-//! 原理：测试 spawn demo 进程并持有其 stdin/stdout 管道——写命令
+//! 原理：测试 spawn fixture 进程并持有其 stdin/stdout 管道——写命令
 //! （c 点击 / s 滚动 / k 键盘 / t 树查询）→ 读 `TREE:` 前缀的树 JSON
 //! 响应 → 断言（带重试——等待异步重组）。
 //!
@@ -61,28 +61,30 @@ impl Drop for UiTest {
 }
 
 impl UiTest {
-    /// 启动 example（exe 名如 "counter"），等待首帧树可用。
+    /// 启动测试 fixture（`tests/ui_fixtures/` 下，`[[bin]]` 构建的独立 exe——
+    /// 不依赖 examples；cargo test 不执行 bin，仅构建）。exe 路径固定
+    /// `target/debug/fixture_<name>.exe`。
     /// 注意：持有全局串行锁（防 taskkill 互杀 + 窗口干扰）——UiTest drop 释放。
-    pub fn launch(example: &str) -> Self {
-        let _serial = TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());        // 检查 exe 已构建（workspace 共享 target——在 crate 目录上一级）
+    pub fn launch(fixture: &str) -> Self {
+        let _serial = TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        // 定位 fixture exe（workspace 共享 target——在 crate 目录上一级）
         let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("crate 不在 workspace 根下一级");
-        let exe = workspace_root
-            .join("target/debug/examples")
-            .join(format!("{example}.exe"));
+        let exe = workspace_root.join("target/debug").join(format!("fixture_{fixture}.exe"));
         if !exe.exists() {
             panic!(
-                "demo 未构建：请先 `cargo build -p winia --example {example} --features debug-server`（exe: {}）",
+                "fixture 未构建：请先 `cargo build --bins --features debug-server`（exe: {}）",
                 exe.display()
             );
         }
+        let exe_name = format!("fixture_{fixture}.exe");
 
-        // 清理同名残留进程（测试中断/上次失败可能留下孤儿 demo——防窗口累积）。
+        // 清理同名残留进程（测试中断/上次失败可能留下孤儿 fixture——防窗口累积）。
         // 注意：仅在持有串行锁时执行（并行会互杀）；若残留进程占着 exe 文件锁，
         // 等待其退出后再 spawn。
         let _ = Command::new("taskkill")
-            .args(["/f", "/im", &format!("{example}.exe")])
+            .args(["/f", "/im", &exe_name])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();

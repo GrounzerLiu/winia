@@ -195,7 +195,7 @@ impl<'a> ComposeCtx<'a> {
     /// 暂存本帧参数（start_node 时写入 slot.params，供下帧比较）。
     ///
     /// 用法（#[composable] 组件内——参数未变 + slot clean 时容器 Skip，content 不重跑）：
-    /// ```rust
+    /// ```ignore
     /// #[composable]
     /// fn card(ctx: &mut ComposeCtx, title: &str) {
     ///     let _title_changed = ctx.changed(&title.to_string());  // 参数声明（start 容器前）
