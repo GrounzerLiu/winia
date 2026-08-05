@@ -351,7 +351,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
             AnimationSpec::Tween(spec) => {
                 let elapsed = now - state.start;
                 let t = (elapsed.as_secs_f64() / spec.duration.as_secs_f64()).min(1.0) as f32;
-                let eased = (spec.interpolator)(t);
+                let eased = spec.interpolator.interpolate(t);
                 let t = state.from.lerp(&state.to, eased);
                 (t, eased >= 1.0)
             }
@@ -419,7 +419,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
 // ═══════════════════════════════════════════════════════════
 
 /// 关键帧插值：在 frames 中按进度 t 定位段，段内用 interpolator 插值
-fn interpolate_keyframes(frames: &[(f32, f32, fn(f32) -> f32)], t: f32) -> f32 {
+fn interpolate_keyframes(frames: &[(f32, f32, std::sync::Arc<dyn interpolator::Interpolator>)], t: f32) -> f32 {
     if frames.is_empty() { return 0.0; }
     if t <= 0.0 { return frames[0].1; }
     let last = frames.last().unwrap();
@@ -428,10 +428,10 @@ fn interpolate_keyframes(frames: &[(f32, f32, fn(f32) -> f32)], t: f32) -> f32 {
     if t < frames[0].0 { return frames[0].1; }
     for i in 0..frames.len() - 1 {
         let (p0, v0, _) = frames[i];
-        let (p1, v1, interp) = frames[i + 1];
+        let (p1, v1, interp) = frames[i + 1].clone();
         if t >= p0 && t <= p1 {
             let seg = if p1 > p0 { (t - p0) / (p1 - p0) } else { 0.0 };
-            let eased = interp(seg.clamp(0.0, 1.0));
+            let eased = interp.interpolate(seg.clamp(0.0, 1.0));
             return v0 + (v1 - v0) * eased;
         }
     }
@@ -691,12 +691,16 @@ impl SpringSpec {
 #[derive(Clone, Debug)]
 pub struct TweenSpec {
     pub duration: Duration,
-    pub interpolator: fn(f32) -> f32,
+    /// 表驱动插值器（v1 预采样表——避免运行时计算过重；`Linear::new()` 为恒等）
+    pub interpolator: std::sync::Arc<dyn interpolator::Interpolator>,
 }
 
 impl Default for TweenSpec {
     fn default() -> Self {
-        Self { duration: Duration::from_millis(300), interpolator: interpolator::linear }
+        Self {
+            duration: Duration::from_millis(300),
+            interpolator: std::sync::Arc::new(interpolator::Linear::new()),
+        }
     }
 }
 
@@ -704,14 +708,15 @@ impl Default for TweenSpec {
 #[derive(Clone, Debug)]
 pub struct KeyframesSpec {
     pub duration: Duration,
-    pub frames: Vec<(f32, f32, fn(f32) -> f32)>,
+    pub frames: Vec<(f32, f32, std::sync::Arc<dyn interpolator::Interpolator>)>,
 }
 
 impl KeyframesSpec {
     /// 简化构造：仅 (progress, value)，段间线性
     pub fn new(duration: Duration, frames: Vec<(f32, f32)>) -> Self {
-        let linear: fn(f32) -> f32 = interpolator::linear;
-        let frames = frames.into_iter().map(|(p, v)| (p, v, linear)).collect();
+        let linear: std::sync::Arc<dyn interpolator::Interpolator> =
+            std::sync::Arc::new(interpolator::Linear::new());
+        let frames = frames.into_iter().map(|(p, v)| (p, v, linear.clone())).collect();
         Self { duration, frames }
     }
 }
@@ -997,7 +1002,7 @@ pub(crate) mod tests {
         let mut anim = Animatable::<f32>::new(State::new(0.0));
         anim.animate_to(100.0, AnimationSpec::Repeatable(
             RepeatableSpec::new(3, RepeatMode::Restart,
-                AnimationSpec::Tween(TweenSpec { duration: Duration::from_millis(40), interpolator: interpolator::linear }))));
+                AnimationSpec::Tween(TweenSpec { duration: Duration::from_millis(40), interpolator: std::sync::Arc::new(interpolator::Linear::new()) }))));
         let mut frames = 0;
         while anim.update() && frames < 100 {
             std::thread::sleep(Duration::from_millis(10));
@@ -1015,7 +1020,7 @@ pub(crate) mod tests {
         let mut anim = Animatable::<f32>::new(State::new(0.0));
         anim.animate_to(100.0, AnimationSpec::Repeatable(
             RepeatableSpec::new(2, RepeatMode::Reverse,
-                AnimationSpec::Tween(TweenSpec { duration: Duration::from_millis(40), interpolator: interpolator::linear }))));
+                AnimationSpec::Tween(TweenSpec { duration: Duration::from_millis(40), interpolator: std::sync::Arc::new(interpolator::Linear::new()) }))));
         while anim.update() {
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -1133,7 +1138,7 @@ mod repeated_tests {
         for (i, target) in [(1usize, 200.0f32), (2, 40.0), (3, 200.0), (4, 40.0)] {
             push_animatable(state.clone(), target, AnimationSpec::Tween(TweenSpec {
                 duration: std::time::Duration::from_millis(300),
-                interpolator: crate::animation::interpolator::linear,
+                interpolator: std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
             }));
             std::thread::sleep(std::time::Duration::from_millis(400));
             update_animations();
@@ -1151,7 +1156,7 @@ mod repeated_tests {
         let state = crate::core::state::State::new(40.0f32);
         push_animatable(state.clone(), 200.0, AnimationSpec::Tween(TweenSpec {
             duration: std::time::Duration::from_millis(1000),
-            interpolator: crate::animation::interpolator::linear,
+            interpolator: std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
         }));
         // 中途（10 帧后）改目标 40——应切换（用真实时间 sleep 模拟帧间隔）
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -1160,7 +1165,7 @@ mod repeated_tests {
         assert!(mid > 40.0 && mid < 200.0, "中途应处于动画中（{}）", mid);
         push_animatable(state.clone(), 90.0, AnimationSpec::Tween(TweenSpec {
             duration: std::time::Duration::from_millis(200),
-            interpolator: crate::animation::interpolator::linear,
+            interpolator: std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
         }));
         std::thread::sleep(std::time::Duration::from_millis(300));
         update_animations();
@@ -1186,7 +1191,7 @@ mod repeated_tests {
         let state = crate::core::state::State::new(0i32);
         push_animatable(state.clone(), 100, AnimationSpec::Tween(TweenSpec {
             duration: std::time::Duration::from_millis(200),
-            interpolator: crate::animation::interpolator::linear,
+            interpolator: std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
         }));
         std::thread::sleep(std::time::Duration::from_millis(300));
         update_animations();
@@ -1340,3 +1345,44 @@ fn test_infinite_transition_manual_dispose_idempotent() {
     build(&mut composer, &holder, &inf_holder);
     assert!(!has_animation_for_state(sid), "双重触发后表仍空（幂等）");
 }
+
+    /// 表驱动插值器接入引擎的接线测试（v1 29 个插值器 + Linear）
+    #[test]
+    fn tween_uses_table_interpolator() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        use crate::animation::interpolator::{EaseInQuad, Interpolator, Linear};
+        // 1. default 是 Linear 包装（恒等）
+        let t = TweenSpec::default();
+        assert_eq!(t.interpolator.interpolate(0.5), 0.5, "默认 linear 中点 = 0.5");
+        // 2. 表驱动曲线生效（EaseInQuad 中点 < 0.5——缓入）
+        let ease = Arc::new(EaseInQuad::new());
+        assert!(ease.interpolate(0.5) < 0.5, "EaseInQuad 中点应 < 0.5（缓入）");
+        assert!(ease.interpolate(0.0) == 0.0 && ease.interpolate(1.0) == 1.0, "端点 clamp");
+        // 3. 引擎接线：Animatable 用表插值器动画——推进 60ms（t≈0.2）后
+        //    EaseInQuad(0.2)=0.04 → 值≈4，linear(0.2)=0.2 → 值≈20（差异 5 倍，
+        //    dt 抖动 ±10ms 不影响区分度）
+        let st = State::new(0.0f32);
+        let mut anim = Animatable::new(st.clone());
+        anim.animate_to(
+            100.0,
+            AnimationSpec::Tween(TweenSpec {
+                duration: Duration::from_millis(300),
+                interpolator: Arc::new(EaseInQuad::new()),
+            }),
+        );
+        std::thread::sleep(Duration::from_millis(60));
+        anim.update();
+        let v = st.peek();
+        assert!(
+            v > 0.0 && v < 10.0,
+            "EaseInQuad 推进 60ms 应远小于 linear（实际 {}，linear 约 20）",
+            v
+        );
+        // 对照：linear 同参数推进 ≈ 20
+        let st2 = State::new(0.0f32);
+        let mut anim2 = Animatable::new(st2.clone());
+        anim2.animate_to(100.0, AnimationSpec::Tween(TweenSpec::default()));
+        std::thread::sleep(Duration::from_millis(60));
+        anim2.update();
+        assert!((st2.peek() - 20.0).abs() < 5.0, "linear 推进 60ms 应≈20（实际 {}）", st2.peek());
+    }

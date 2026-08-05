@@ -1,11 +1,12 @@
 /** 线性插值 (x = x) */
 pub fn linear(x: f32) -> f32 { x }
 
-pub trait Interpolator : Sync + Send {
+pub trait Interpolator : Sync + Send + std::fmt::Debug {
     fn interpolate(&self, x: f32) -> f32;
 }
 
 /// ![image](https://upload.wikimedia.org/wikipedia/commons/0/0e/Linear_interpolation.svg)
+#[derive(Debug)]
 pub struct Linear {}
 impl Default for Linear {
     fn default() -> Self {
@@ -50,6 +51,7 @@ fn find_interval(points: &Vec<(f32, f32)>, x: f32) -> usize {
 
 macro_rules! interpolator {
     ($name:ident, $map: expr) => {
+        #[derive(Debug)]
         pub struct $name {
             points: Vec<(f32, f32)>,
         }

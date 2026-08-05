@@ -98,7 +98,7 @@ fn section2(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
         if clicked.get() { 0.9 } else { 0.2 },
         AnimationSpec::Tween(TweenSpec {
             duration: std::time::Duration::from_millis(300),
-            interpolator: winia::animation::interpolator::linear,
+            interpolator: std::sync::Arc::new(winia::animation::interpolator::Linear::new()),
         }),
     );
     // 表达式直接写（非闭包非宏非中间变量）——注册到本函数 scope
@@ -170,7 +170,7 @@ fn section4(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
         else { Color::from_argb(255, 156, 39, 176) },
         AnimationSpec::Tween(TweenSpec {
             duration: std::time::Duration::from_millis(500),
-            interpolator: winia::animation::interpolator::linear,
+            interpolator: std::sync::Arc::new(winia::animation::interpolator::Linear::new()),
         }),
     );
     Column::new()
