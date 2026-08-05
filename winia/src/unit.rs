@@ -21,31 +21,10 @@ use std::sync::LazyLock;
 pub struct Dp(pub f32);
 
 impl Dp {
-    pub const ZERO: Dp = Dp(0.0);
-    pub const UNSPECIFIED: Dp = Dp(f32::NAN);
-
-    pub fn new(value: f32) -> Self { Dp(value) }
     pub fn value(&self) -> f32 { self.0 }
-
-    /// 是否未指定
-    pub fn is_specified(&self) -> bool { !self.0.is_nan() }
 
     /// 通过 Density 转换为物理像素
     pub fn to_px(&self, density: Density) -> f32 { self.0 * density.density }
-
-    /// 通过 Density 从物理像素构造
-    pub fn from_px(px: f32, density: Density) -> Self {
-        Dp(px / density.density.max(f32::EPSILON))
-    }
-
-    /// 取整到最近的整数 dp
-    pub fn round(self) -> Dp { Dp(self.0.round()) }
-    pub fn floor(self) -> Dp { Dp(self.0.floor()) }
-    pub fn ceil(self) -> Dp { Dp(self.0.ceil()) }
-    pub fn abs(self) -> Dp { Dp(self.0.abs()) }
-    pub fn min(self, other: Dp) -> Dp { Dp(self.0.min(other.0)) }
-    pub fn max(self, other: Dp) -> Dp { Dp(self.0.max(other.0)) }
-    pub fn coerce_in(self, min: Dp, max: Dp) -> Dp { Dp(self.0.clamp(min.0, max.0)) }
 }
 
 // ── Dp 算术 ──
@@ -97,19 +76,11 @@ impl From<Dp> for f32 {
 pub struct Sp(pub f32);
 
 impl Sp {
-    pub const ZERO: Sp = Sp(0.0);
-
-    pub fn new(value: f32) -> Self { Sp(value) }
     pub fn value(&self) -> f32 { self.0 }
 
     /// 通过 Density 转换为物理像素（density + font_scale）
     pub fn to_px(&self, density: Density) -> f32 {
         self.0 * density.density * density.font_scale
-    }
-
-    /// 通过 Density 从物理像素构造
-    pub fn from_px(px: f32, density: Density) -> Self {
-        Sp(px / (density.density * density.font_scale).max(f32::EPSILON))
     }
 }
 
@@ -155,9 +126,6 @@ pub struct Density {
 }
 
 impl Density {
-    pub const fn new(density: f32, font_scale: f32) -> Self {
-        Self { density, font_scale }
-    }
     pub const fn from_density(density: f32) -> Self {
         Self { density, font_scale: 1.0 }
     }
@@ -166,11 +134,6 @@ impl Density {
     }
 
     pub fn to_px(&self, dp: Dp) -> f32 { dp.0 * self.density }
-    pub fn to_dp(&self, px: f32) -> Dp { Dp(px / self.density.max(f32::EPSILON)) }
-    pub fn to_sp_px(&self, sp: Sp) -> f32 { sp.0 * self.density * self.font_scale }
-    pub fn to_sp(&self, px: f32) -> Sp {
-        Sp(px / (self.density * self.font_scale).max(f32::EPSILON))
-    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -185,20 +148,7 @@ pub struct Offset {
 }
 
 impl Offset {
-    pub const ZERO: Offset = Offset { x: 0.0, y: 0.0 };
-    pub const UNSPECIFIED: Offset = Offset { x: f32::NAN, y: f32::NAN };
-
     pub fn new(x: f32, y: f32) -> Self { Offset { x, y } }
-    pub fn is_specified(&self) -> bool { !self.x.is_nan() && !self.y.is_nan() }
-
-    /// 与另一个 Offset 相加（无重载，语义化命名）
-    pub fn plus(&self, other: Offset) -> Offset { Offset::new(self.x + other.x, self.y + other.y) }
-    pub fn minus(&self, other: Offset) -> Offset { Offset::new(self.x - other.x, self.y - other.y) }
-    pub fn times(&self, scale: f32) -> Offset { Offset::new(self.x * scale, self.y * scale) }
-
-    pub fn distance(&self, other: Offset) -> f32 {
-        ((self.x - other.x).powi(2) + (self.y - other.y).powi(2)).sqrt()
-    }
 }
 
 impl Add for Offset {
@@ -227,16 +177,8 @@ pub struct Size {
 
 impl Size {
     pub const ZERO: Size = Size { width: 0.0, height: 0.0 };
-    pub const UNSPECIFIED: Size = Size { width: f32::NAN, height: f32::NAN };
 
     pub fn new(width: f32, height: f32) -> Self { Size { width, height } }
-    pub fn is_specified(&self) -> bool { !self.width.is_nan() && !self.height.is_nan() }
-
-    pub fn width(&self) -> f32 { self.width }
-    pub fn height(&self) -> f32 { self.height }
-    pub fn area(&self) -> f32 { self.width * self.height }
-    pub fn min_dimension(&self) -> f32 { self.width.min(self.height) }
-    pub fn max_dimension(&self) -> f32 { self.width.max(self.height) }
 
     /// 包含判断
     pub fn contains(&self, offset: Offset) -> bool {
@@ -251,38 +193,6 @@ impl Add for Size {
 impl Sub for Size {
     type Output = Size;
     fn sub(self, rhs: Size) -> Size { Size::new(self.width - rhs.width, self.height - rhs.height) }
-}
-
-// ═══════════════════════════════════════════════════════════
-// IntOffset / IntSize — 整数版本（像素级，滚动偏移等）
-// ═══════════════════════════════════════════════════════════
-
-/// 整数 2D 偏移
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct IntOffset {
-    pub x: i32,
-    pub y: i32,
-}
-
-impl IntOffset {
-    pub const ZERO: IntOffset = IntOffset { x: 0, y: 0 };
-
-    pub fn new(x: i32, y: i32) -> Self { IntOffset { x, y } }
-    pub fn to_offset(&self) -> Offset { Offset::new(self.x as f32, self.y as f32) }
-}
-
-/// 整数 2D 尺寸
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct IntSize {
-    pub width: i32,
-    pub height: i32,
-}
-
-impl IntSize {
-    pub const ZERO: IntSize = IntSize { width: 0, height: 0 };
-
-    pub fn new(width: i32, height: i32) -> Self { IntSize { width, height } }
-    pub fn to_size(&self) -> Size { Size::new(self.width as f32, self.height as f32) }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -362,11 +272,6 @@ impl SpExt for u32 {
 pub struct Px(pub f32);
 
 impl Px {
-    pub const ZERO: Px = Px(0.0);
-
-    pub fn new(value: f32) -> Self { Px(value) }
-    pub fn value(&self) -> f32 { self.0 }
-
     /// 通过 Density 转换为逻辑像素
     pub fn to_logical(&self, density: Density) -> f32 {
         self.0 / density.density.max(f32::EPSILON)
@@ -456,15 +361,13 @@ mod tests {
         let d = Density::from_density(2.0);
         let dp = Dp(10.0);
         assert_eq!(dp.to_px(d), 20.0);
-        assert_eq!(Dp::from_px(20.0, d), Dp(10.0));
     }
 
     #[test]
     fn sp_px_conversion_with_font_scale() {
-        let d = Density::new(2.0, 1.5);
+        let d = Density::from_density(2.0);
         let sp = Sp(12.0);
-        assert_eq!(sp.to_px(d), 36.0);
-        assert_eq!(Sp::from_px(36.0, d), Sp(12.0));
+        assert_eq!(sp.to_px(d), 24.0);
     }
 
     #[test]
@@ -484,12 +387,10 @@ mod tests {
         let o2 = Offset::new(3.0, 4.0);
         assert_eq!(o + o2, Offset::new(4.0, 6.0));
         assert_eq!(o2 - o, Offset::new(2.0, 2.0));
-        assert_eq!(o.distance(o2), 2.0f32.sqrt() * 2.0);
 
         let s = Size::new(100.0, 50.0);
         assert!(s.contains(Offset::new(50.0, 25.0)));
         assert!(!s.contains(Offset::new(101.0, 25.0)));
-        assert_eq!(s.area(), 5000.0);
     }
 
     #[test]
