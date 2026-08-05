@@ -238,7 +238,14 @@ impl MeasurePolicy for VisibilityPolicy {
         children: &[usize],
         constraints: Constraints,
     ) -> (Size, Vec<Placement>) {
-        let p = self.progress.get(); // layout_dep——动画值变化 → 本节点重测
+        // expand=true 时高度随动画进度缩放——读 progress 注册 layout_dep
+        // （动画推进 → 本节点重测）；expand=false 时布局与进度无关——
+        // 不注册依赖，动画推进走 graphics_layer 绘制变换（零重排）
+        let p = if self.expand {
+            self.progress.get()
+        } else {
+            self.progress.peek()
+        };
         // 测量子节点（content 根，通常 1 个）——取最大宽高（Stack 语义）
         let mut max_w = 0.0f32;
         let mut max_h = 0.0f32;

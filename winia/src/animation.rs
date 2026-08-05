@@ -1053,7 +1053,8 @@ mod repeated_tests {
 
     /// 动画未完成时再次 push（中途改变目标）——应切换目标（旧动画移除）
     #[test]
-    fn mid_flight_retarget_switches() {        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    fn mid_flight_retarget_switches() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let state = crate::core::state::State::new(40.0f32);
         push_animatable(state.clone(), 200.0, AnimationSpec::Tween(TweenSpec {
             duration: std::time::Duration::from_millis(1000),
