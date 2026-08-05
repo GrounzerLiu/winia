@@ -52,6 +52,10 @@ pub(crate) struct PerWindow {
     pub(crate) frame_interval: std::time::Duration,
     /// 强制渲染（resize/动画停止等必须显示的帧——跳过分支的请求链断裂修复）
     pub(crate) force_redraw: bool,
+    /// 崩溃边界（P3-3）：连续渲染 panic 计数（防风暴停更）
+    pub(crate) consecutive_panics: u32,
+    /// 渲染已禁用（连续 panic 后停更——保留最后画面，不再自旋）
+    pub(crate) render_disabled: bool,
 
     /// 上次渲染时间（帧率限制——Windows acquire 不阻塞 vsync，应用层节流 60fps）
     pub(crate) last_render_time: std::time::Instant,
@@ -78,7 +82,7 @@ struct PtrDownState {
 
 impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::ui::theme::ThemeColors) -> Self {
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, pointer_down_slot: None, frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, last_request_time: std::time::Instant::now() }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, pointer_down_slot: None, frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now() }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -715,6 +719,10 @@ impl ApplicationHandler for AppState {
                 // 无节流会 ~1300fps 渲染风暴（present fence 只等 GPU 提交不等显示刷新）。
                 // 距上次渲染 <16ms（~60fps）跳过——动画值下轮渲染时取最新（不丢帧）。
                 let now = std::time::Instant::now();
+                if pw.render_disabled {
+                    // 崩溃边界（P3-3）：连续 panic 后停更——保留最后画面
+                    return;
+                }
                 if !pw.force_redraw && now.duration_since(pw.last_render_time) < pw.frame_interval {
                     // 不 request——等外部驱动（动画 set → wake / 交互事件）再渲染
                 } else {
@@ -722,10 +730,34 @@ impl ApplicationHandler for AppState {
                 let w = pw.width;
                 let h = pw.height;
                 let sf = pw.scale_factor as f32;
-                pw.recompose_layout_render(|nodes, root_idx, surface| {
-                    debug::update_tree(&debug::build_tree_json(nodes, root_idx));
-                });
-                pw.force_redraw = false; // 渲染成功后才清除强制帧（中途异常保留）
+                // 崩溃边界（P3-3）：compose/layout/draw 任一段 panic（用户 content 代码 /
+                // skia 异常）不崩窗口——捕获后跳过本帧（保留上帧画面），下帧正常重试。
+                // 连续 panic 计数防风暴：超过阈值打印错误并停更（不再自旋）。
+                // 渲染路径无 unsafe（P2-3 后）——catch_unwind 后继续用 self 仅"逻辑不一致"
+                // 非内存不安全；slot/arena 每帧从 root 重建结构，panic 中断的半状态下帧自愈。
+                let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    pw.recompose_layout_render(|nodes, root_idx, surface| {
+                        debug::update_tree(&debug::build_tree_json(nodes, root_idx));
+                    });
+                }));
+                match panic_result {
+                    Ok(()) => {
+                        pw.force_redraw = false; // 渲染成功后才清除强制帧（中途异常保留）
+                        pw.consecutive_panics = 0;
+                    }
+                    Err(e) => {
+                        pw.consecutive_panics += 1;
+                        let msg = if let Some(s) = e.downcast_ref::<&str>() { (*s).to_string() }
+                                  else if let Some(s) = e.downcast_ref::<String>() { s.clone() }
+                                  else { "unknown panic".to_string() };
+                        eprintln!("[render-panic] 第 {} 次连续 panic（本帧已跳过，上帧画面保留）: {}", pw.consecutive_panics, msg);
+                        if pw.consecutive_panics >= 30 {
+                            eprintln!("[render-panic] 连续 30 次 panic——停止本窗口渲染（避免 panic 风暴）");
+                            pw.render_disabled = true;
+                        }
+                        // force_redraw 保持 true——下帧继续尝试（若未停更）
+                    }
+                }
                 // IME 光标区域更新（输入法候选框跟随光标位置）
                 if let Some(ref sw) = pw.skia_window {
                     if let Some(fid) = pw.focused_id {

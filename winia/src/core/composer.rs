@@ -2372,6 +2372,45 @@ fn test_modifier_scroll_dep_registered() {
         "scroll 变化应触发组合级 dirty（dirty_count={}）", composer.compose_dirty_count);
 }
 
+/// 崩溃边界（P3-3）前提验证：content panic 后（catch_unwind 捕获），
+/// 下帧恢复正常内容应自愈——slot 表/依赖缓冲（DEP_MODE 残留由 begin 清空）
+/// 从半状态重建，不残留垃圾。
+#[test]
+fn test_compose_panic_recovers_next_frame() {
+    let mut composer = Composer::new();
+    let should_panic = std::cell::Cell::new(true);
+
+    let content = |ctx: &mut ComposeCtx| {
+        if should_panic.get() {
+            panic!("模拟用户 content panic");
+        }
+        let root_key = ctx.next_key();
+        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                let k = ctx.next_key();
+                ctx.start_leaf(k, Modifier::new());
+                ctx.end_node();
+            }
+        }
+        ctx.end_restartable_group();
+    };
+
+    // 帧1：panic（上层 catch_unwind 捕获——此处直接验证 panic 确实发生）
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        composer.compose(content);
+    }));
+    assert!(r.is_err(), "帧1 应 panic（模拟渲染路径崩溃边界触发）");
+
+    // 帧2：恢复正常内容 → 自愈
+    should_panic.set(false);
+    composer.compose(content);
+    composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+    assert!(composer.layout_root_idx().is_some(), "panic 后下帧应自愈（树重建）");
+    let root_idx = composer.layout_root_idx().unwrap();
+    assert_eq!(composer.arena_nodes()[root_idx].children.len(), 1, "自愈后结构正确");
+}
+
 /// 数据驱动的结构变化：State 变 → root Enter → 新增 leaf 生效。
 /// （源码级结构变化在 Skip 语义下不触发——对标 Compose：结构变化必须由数据驱动）
 #[test]
