@@ -2392,6 +2392,169 @@ fn test_reused_node_remeasures_on_state_change() {
         "State 变化后复用节点应重测：frame1 w={} frame2 w={}（冻结则 bug 复发）", size1, size2);
 }
 
+// ═══════════════════════════════════════════════════════════
+// 两段式依赖测试（P2-1：布局期读动画值只重测不重组）
+// ═══════════════════════════════════════════════════════════
+
+/// T1 记录分流：组合期 get() 进 slot_deps；布局期（measure 中 SizeDynamic）get() 进 layout_deps
+#[test]
+fn test_layout_dep_recording_split() {
+    let mut composer = Composer::new();
+    let holder = std::cell::RefCell::new(None::<State<f32>>);
+
+    composer.compose(|ctx| {
+        let s = ctx.remember(|| 0.0f32);
+        *holder.borrow_mut() = Some(s.clone());
+        let root_key = ctx.next_key();
+        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                let _ = s.get(); // 组合期读 → slot_deps
+                let k = ctx.next_key();
+                ctx.start_leaf(k, Modifier::new().size(&s, 10.0)); // 布局期读 → layout_deps
+                ctx.end_node();
+            }
+        }
+        ctx.end_restartable_group();
+    });
+    composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+
+    let s = holder.borrow().clone().unwrap();
+    let sid = s.id();
+    assert!(composer.slot_deps.contains_key(&sid),
+        "组合期 get() 应注册进 slot_deps");
+    assert!(composer.layout_deps.contains_key(&sid),
+        "布局期（SizeDynamic）get() 应注册进 layout_deps");
+    // 同一 State 双通道（组合+布局）各自记录
+    let keys_layout = composer.layout_deps.get(&sid).unwrap();
+    assert_eq!(keys_layout.len(), 1, "layout_deps 应含叶子节点 key");
+}
+
+/// T2 布局失效传播：layout_dirty_keys 命中的节点 + 祖先链全部标 layout_dirty
+#[test]
+fn test_layout_dirty_propagates_to_ancestors() {
+    let mut composer = Composer::new();
+    let holder = std::cell::RefCell::new(None::<State<f32>>);
+
+    composer.compose(|ctx| {
+        let s = ctx.remember(|| 0.0f32);
+        *holder.borrow_mut() = Some(s.clone());
+        let root_key = ctx.next_key();
+        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                let k = ctx.next_key();
+                ctx.start_leaf(k, Modifier::new().size(&s, 10.0));
+                ctx.end_node();
+            }
+        }
+        ctx.end_restartable_group();
+    });
+    composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+
+    let root_idx = composer.layout_root_idx().unwrap();
+    let leaf_idx = composer.arena_nodes()[root_idx].children[0];
+    let leaf_key = composer.arena_nodes()[leaf_idx].slot_key;
+
+    // 模拟 pending 消费收集 → 直接测 apply_layout_dirty（裸函数：DFS + 祖先传播）
+    composer.layout_dirty_keys.insert(leaf_key);
+    let mut nodes = std::mem::take(&mut composer.arena.nodes);
+    crate::layout::node::apply_layout_dirty(&mut nodes, root_idx, &composer.layout_dirty_keys);
+    assert!(nodes[root_idx].layout_dirty, "祖先（root）应被传播标脏");
+    assert!(nodes[leaf_idx].layout_dirty, "命中节点应标脏");
+    composer.arena.nodes = nodes;
+}
+
+/// T3 动画尺寸只重测不重组：布局依赖 State 变化 → 组合不重跑（clean 计数）+ 尺寸更新
+#[test]
+fn test_layout_dep_remesures_without_recompose() {
+    let mut composer = Composer::new();
+    let holder = std::cell::RefCell::new(None::<State<f32>>);
+
+    let build = |composer: &mut Composer| {
+        composer.compose(|ctx| {
+            let s = ctx.remember(|| 0.0f32);
+            *holder.borrow_mut() = Some(s.clone());
+            let root_key = ctx.next_key();
+            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, Modifier::new().size(&s, 10.0));
+                    ctx.end_node();
+                }
+            }
+            ctx.end_restartable_group();
+        });
+        composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+    };
+
+    build(&mut composer);
+    let root_idx = composer.layout_root_idx().unwrap();
+    let leaf_idx = composer.arena_nodes()[root_idx].children[0];
+    let size1 = composer.arena_nodes()[leaf_idx].measured_size.width;
+
+    // 布局动画值变化（set_no_wake——动画推进语义）
+    let s = holder.borrow().clone().unwrap();
+    s.set_no_wake(300.0);
+    build(&mut composer);
+    let root_idx = composer.layout_root_idx().unwrap();
+    let leaf_idx = composer.arena_nodes()[root_idx].children[0];
+    let size2 = composer.arena_nodes()[leaf_idx].measured_size.width;
+
+    assert!(size2 > size1 + 10.0, "布局依赖 State 变化应重测：frame1 w={} frame2 w={}", size1, size2);
+    // 关键断言：不重组——leaf slot 应为 Clean（layout_dirty 不触发组合级 dirty）
+    assert_eq!(composer.compose_dirty_count, 0,
+        "布局动画值变化不应触发组合级 dirty（只重测不重组）——dirty_count={}", composer.compose_dirty_count);
+}
+
+/// T4 常量折叠保留布局依赖：折叠帧不重新注册 → layout_deps 旧项保留；notify 后重测
+#[test]
+fn test_layout_dep_survives_const_fold() {
+    let mut composer = Composer::new();
+    let holder = std::cell::RefCell::new(None::<State<f32>>);
+
+    let build = |composer: &mut Composer| {
+        composer.compose(|ctx| {
+            let s = ctx.remember(|| 0.0f32);
+            *holder.borrow_mut() = Some(s.clone());
+            let root_key = ctx.next_key();
+            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, Modifier::new().size(&s, 10.0));
+                    ctx.end_node();
+                }
+            }
+            ctx.end_restartable_group();
+        });
+        composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+    };
+
+    build(&mut composer);
+    let sid = holder.borrow().clone().unwrap().id();
+    assert!(composer.layout_deps.contains_key(&sid), "帧1 应注册布局依赖");
+
+    // 帧2：无 notify 的重复 build——compose 全 Skip、measure 常量折叠命中
+    build(&mut composer);
+    assert!(composer.layout_deps.contains_key(&sid),
+        "常量折叠帧（未重新 measure）应保留旧布局依赖——丢失则布局动画冻结");
+    let leaf_key = {
+        let root_idx = composer.layout_root_idx().unwrap();
+        let leaf_idx = composer.arena_nodes()[root_idx].children[0];
+        composer.arena_nodes()[leaf_idx].slot_key
+    };
+    assert!(composer.layout_deps.get(&sid).unwrap().contains(&leaf_key),
+        "旧依赖项（state→leaf key）应保留");
+
+    // 帧3：notify → 重测并维持依赖
+    let s = holder.borrow().clone().unwrap();
+    s.set_no_wake(123.0);
+    build(&mut composer);
+    assert!(composer.layout_deps.contains_key(&sid), "重测后依赖应续期");
+}
+
 /// 数据驱动的结构变化：State 变 → root Enter → 新增 leaf 生效。
 /// （源码级结构变化在 Skip 语义下不触发——对标 Compose：结构变化必须由数据驱动）
 #[test]
