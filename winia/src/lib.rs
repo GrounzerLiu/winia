@@ -70,6 +70,8 @@ pub mod prelude {
     pub use crate::modifier::{Dimension, Modifier, Shape, Color, FocusRequester, ScrollState, DecoStyle, DecoMode, FontEdge, FontHint, KbEvent, KbEventType, PointerEvent, PointerEventType, PointerButton, PointerKind, PenKind};
     pub use crate::ui::{Text, TextAlign, TextOverflow, TextStyle, ProvideTextStyle, FontWeight, FontSlant, Button, ButtonStyle, Column, Row, Stack, Window, WiniaTheme, ThemeColors, SelectionContainer};
     pub use crate::ui::animated_visibility::{AnimatedVisibility, VisibilityTransition, SlideDirection};
+    pub use crate::ui::animated_size::AnimatedSize;
+    pub use crate::ui::crossfade::Crossfade;
     pub use crate::ui::theme::is_system_dark_theme;
     pub use crate::{app_root, composable, run_app};
     pub use crate::ui::rich_text::RichText;

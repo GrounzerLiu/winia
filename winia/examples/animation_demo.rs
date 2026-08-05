@@ -54,6 +54,7 @@ fn animation_demo(ctx: &mut ComposeCtx) {
                     section5(ctx);
                     section6(ctx, &clicked);
                     section7(ctx, &clicked);
+                    section8(ctx, &clicked);
                 });
         });
 }
@@ -273,6 +274,93 @@ fn section7(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
             .size(&dp, 20.0)
             .background(Color::from_argb(255, 63, 81, 181), Shape::rounded(4.0)))
         .build(ctx, |_| {});
+}
+
+#[composable]
+fn section8(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
+    // 8a. AnimatedSize——尺寸变化自动动画（对标 animateContentSize）
+    Text::new("8a. AnimatedSize (尺寸变化动画)")
+        .font_size(14.0)
+        .color(Color::from_argb(200, 100, 100, 100))
+        .modifier(Modifier::new().padding_vertical(8.0))
+        .build(ctx);
+    AnimatedSize::new(TweenSpec::default())
+        .build(ctx, |ctx| {
+            Column::new()
+                .modifier(Modifier::new()
+                    .width(if clicked.get() { 80.0 } else { 220.0 })
+                    .height(40.0)
+                    .background(Color::from_argb(255, 63, 81, 181), Shape::rounded(4.0)))
+                .build(ctx, |_| {});
+        });
+
+    // 8b. Crossfade——内容切换淡入淡出
+    Text::new("8b. Crossfade (内容切换)")
+        .font_size(14.0)
+        .color(Color::from_argb(200, 100, 100, 100))
+        .modifier(Modifier::new().padding_vertical(8.0))
+        .build(ctx);
+    let page: winia::core::state::State<u32> = ctx.remember(|| 0u32);
+    Crossfade::new(page.clone())
+        .animation(TweenSpec::default())
+        .build(ctx, |ctx, p| {
+            let (color, label) = match p % 3 {
+                0 => (Color::from_argb(255, 76, 175, 80), "Page A"),
+                1 => (Color::from_argb(255, 255, 152, 0), "Page B"),
+                _ => (Color::from_argb(255, 233, 30, 99), "Page C"),
+            };
+            Row::new()
+                .modifier(Modifier::new()
+                    .width(220.0)
+                    .height(40.0)
+                    .background(color, Shape::rounded(4.0)))
+                .alignment(winia::layout::Alignment::Center)
+                .build(ctx, |ctx| {
+                    Text::new(label).color(Color::from_argb(255, 255, 255, 255)).build(ctx);
+                });
+        });
+    // 切换按钮（+ Crossfade 无动画完成回调场景）
+    Row::new().build(ctx, |ctx| {
+        Button::new()
+            .on_click({ let p = page.clone(); move || { p.update(|v| *v = (*v + 1) % 3); } })
+            .build(ctx, |ctx| { Text::new("Next").build(ctx); });
+    });
+
+    // 8c. Spring 常量 + on_finish 回调
+    Text::new("8c. Spring 常量 + finishedListener")
+        .font_size(14.0)
+        .color(Color::from_argb(200, 100, 100, 100))
+        .modifier(Modifier::new().padding_vertical(8.0))
+        .build(ctx);
+    let spring = SpringSpec {
+        damping_ratio: SpringSpec::DAMPING_RATIO_HIGH_BOUNCY,
+        stiffness: SpringSpec::STIFFNESS_HIGH,
+        ..Default::default()
+    };
+    let done_flag = ctx.remember(|| false);
+    let alpha = ctx.animate_float_as_state(
+        if clicked.get() { 0.2 } else { 1.0 },
+        AnimationSpec::Spring(spring.clone()),
+    );
+    // 演示 on_finish：动画完成时翻转标记（展示 finishedListener 语义）
+    winia::animation::push_animatable_with_done(
+        alpha.clone(),
+        if clicked.get() { 0.2 } else { 1.0 },
+        AnimationSpec::Spring(spring.clone()),
+        { let d = done_flag.clone(); move || { d.set(true); } },
+    );
+    Column::new()
+        .modifier(Modifier::new()
+            .size(220.0, 40.0)
+            .background(
+                Color::from_argb((alpha.get() * 255.0) as u8, 63, 81, 181),
+                Shape::rounded(4.0),
+            ))
+        .build(ctx, |_| {});
+    Text::new(if done_flag.get() { " 完成回调触发 ✓" } else { " 动画未完成" })
+        .font_size(12.0)
+        .color(Color::from_argb(200, 200, 200, 200))
+        .build(ctx);
 }
 
 fn main() {

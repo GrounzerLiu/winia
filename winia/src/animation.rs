@@ -161,6 +161,41 @@ pub fn push_animatable_color(state: State<crate::modifier::Color>, target: crate
     crate::core::state::wake_loop();
 }
 
+/// `push_animatable` + 完成回调（对标 Compose animate*AsState 的 finishedListener）：
+/// 动画自然完成/超时强制完成时调用一次 `done`。
+pub fn push_animatable_with_done<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(
+    state: State<T>,
+    target: T,
+    spec: AnimationSpec,
+    done: impl FnOnce() + Send + 'static,
+) {
+    if state.peek() == target {
+        // 已等于目标——无动画（Compose 语义：无动画不回调？——不，Compose
+        // 立即到达也会回调；这里保持简单：无动画不回调，调用方自查）
+        return;
+    }
+    let sid = state.id();
+    let spec = if T::supports_spring() {
+        spec
+    } else {
+        match spec {
+            AnimationSpec::Spring(_) => AnimationSpec::Tween(TweenSpec::default()),
+            other => other,
+        }
+    };
+    {
+        let mut list = ACTIVE_ANIMATIONS.lock().unwrap();
+        if list.iter().any(|anim| anim.state_id() == sid && anim.same_target(&target)) { return; }
+        list.retain(|anim| anim.state_id() != sid);
+    }
+    let mut anim = Animatable::new(state);
+    anim.on_finish(done);
+    anim.animate_to(target, spec);
+    anim.update();
+    ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
+    crate::core::state::wake_loop();
+}
+
 /// 实现 AnimationInstance for Animatable<f32>
 impl<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static> AnimationInstance for Animatable<T> {
     fn update(&mut self) -> bool {
@@ -232,6 +267,8 @@ pub fn is_animating() -> bool {
 pub(crate) struct Animatable<T: Clone + 'static> {
     state: State<T>,
     anim_state: Option<AnimationState<T>>,
+    /// 动画完成回调（done 帧触发一次，take 后释放）
+    on_finish: Option<Box<dyn FnOnce() + Send>>,
 }
 
 struct AnimationState<T> {
@@ -247,7 +284,13 @@ struct AnimationState<T> {
 
 impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
     pub fn new(state: State<T>) -> Self {
-        Self { state, anim_state: None }
+        Self { state, anim_state: None, on_finish: None }
+    }
+
+    /// 注册动画完成回调（对标 Compose animate*AsState 的 finishedListener——
+    /// 动画自然完成/超时强制完成时调用一次）
+    pub fn on_finish(&mut self, f: impl FnOnce() + Send + 'static) {
+        self.on_finish = Some(Box::new(f));
     }
 
     /// 启动动画到目标值
@@ -274,6 +317,9 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
             let final_val = state.to.clone();
             self.state.set_no_wake(final_val);
             self.anim_state = None;
+            if let Some(f) = self.on_finish.take() {
+                f();
+            }
             return false;
         }
         let dt = now.duration_since(state.last_update);
@@ -348,7 +394,12 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
             }
         };
         self.state.set_no_wake(value);
-        if done { self.anim_state = None; }
+        if done {
+            self.anim_state = None;
+            if let Some(f) = self.on_finish.take() {
+                f();
+            }
+        }
         !done
     }
 
@@ -610,6 +661,24 @@ impl Default for SpringSpec {
 }
 
 impl SpringSpec {
+    // ── Compose Spring 常量（对标 androidx.compose.animation.core.Spring）──
+    /// 阻尼比：无弹跳（1.0——临界阻尼）
+    pub const DAMPING_RATIO_NO_BOUNCY: f32 = 1.0;
+    /// 阻尼比：低弹跳（0.75）
+    pub const DAMPING_RATIO_LOW_BOUNCY: f32 = 0.75;
+    /// 阻尼比：中弹跳（0.5）
+    pub const DAMPING_RATIO_MEDIUM_BOUNCY: f32 = 0.5;
+    /// 阻尼比：高弹跳（0.4）
+    pub const DAMPING_RATIO_HIGH_BOUNCY: f32 = 0.4;
+    /// 刚度：极低（50——慢速柔和）
+    pub const STIFFNESS_VERY_LOW: f32 = 50.0;
+    /// 刚度：低（200）
+    pub const STIFFNESS_LOW: f32 = 200.0;
+    /// 刚度：中（400）
+    pub const STIFFNESS_MEDIUM: f32 = 400.0;
+    /// 刚度：高（1000——快速干脆）
+    pub const STIFFNESS_HIGH: f32 = 1000.0;
+
     pub fn bouncy() -> Self {
         Self { damping_ratio: 0.6, threshold: 0.1, ..Self::default() }
     }
@@ -1022,6 +1091,26 @@ mod tests {
         }
         assert!(frames < 100, "spring 应收敛（stiffness=200 约 300-400ms）");
         assert_eq!(st.peek(), 0.0, "done 后值必须精确等于目标（修复前为残余位移）");
+    }
+
+    #[test]
+    fn on_finish_fires_when_animation_completes() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        // finishedListener（对标 Compose）：动画完成帧触发一次
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        use crate::core::state::State;
+        let st = State::new(0.0f32);
+        let mut anim = Animatable::new(st.clone());
+        let fired = Arc::new(AtomicBool::new(false));
+        let f2 = fired.clone();
+        anim.on_finish(move || {
+            f2.store(true, Ordering::SeqCst);
+        });
+        anim.animate_to(1.0, AnimationSpec::Snap);
+        anim.update(); // Snap 一帧完成 → 回调触发
+        assert!(fired.load(Ordering::SeqCst), "动画完成应触发 on_finish");
+        assert_eq!(st.peek(), 1.0, "动画值应到达目标");
     }
 }
 

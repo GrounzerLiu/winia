@@ -12,6 +12,8 @@ pub mod rich_text;
 pub mod selection_container;
 pub mod text_field;
 pub mod animated_visibility;
+pub mod animated_size;
+pub mod crossfade;
 
 pub use text::Text;
 pub use text::TextAlign;
