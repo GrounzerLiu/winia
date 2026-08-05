@@ -27,14 +27,19 @@ cargo test --test ui_test --features debug-server
 | `d x y` / `m x y` / `u` | 按下 / 移动 / 释放（拖拽选择） | `ok …` |
 | `k <key>` | 键盘事件 | `ok key` |
 | `s <dy>` | 滚动 | `ok scroll` |
-| `t` | 树 JSON（**单行**，stdout 前缀 `TREE:`） | `TREE:{json}` |
+| `t` | 树 JSON（**单行**，stdout 前缀 `TREE:`） | `TREE:[{window,root},…]` |
 | `r` | 截图（stderr 打印路径） | — |
 | `q` | 优雅退出（force_shutdown → 事件循环退出） | — |
 
 - 命令走 **stdin 管道**（行分隔）；树响应走 **stdout 管道**（`TREE:` 前缀——测试按前缀过滤）。
+- 树 JSON 为**多窗口格式**：`[{"window":<id>,"root":[...]}, …]`——每个窗口独立存储
+  （`update_tree(window_id, json)`），互不覆盖；窗口关闭时 `remove_tree` 清理条目。
 - 树 JSON 必须是**紧凑单行**：`build_node_json` 内部不输出换行（多行会被 println 拆散，
   UI 测试按行读无法拼回完整 JSON——历史教训）。
 - 树 JSON 中的 NaN/Inf 格式化为 0（serde_json 拒绝 NaN——历史教训）。
+- DevTools 注入事件（c/d/m/u/k/s）在 `new_events` 兜底消费——多窗口下主窗口在后台时
+  RedrawRequested 不来（window_event 不调用）→ 事件卡队列（历史教训：子窗口打开后
+  第二次点击失效）。
 
 ### UiTest 封装（`tests/ui/mod.rs`）
 
@@ -53,8 +58,10 @@ cargo test --test ui_test --features debug-server
 1. **点击偶发丢失 / 树刷新延迟**：debug 注入走 `queue_event`，在 winit `Wait` 模式下
    `RedrawRequested` 偶发不来（渲染断）→ 状态已变但树未刷新。**真实鼠标正常**（仅模拟链路）。
    → 测试一律用 `click_until`（自动重试）；断言用轮询版（expect_text_timeout）。
-2. **多窗口树归属**：debug 树是"最后渲染的窗口"——子窗口打开期间树是子窗口的，主窗口
-   断言需在关闭后进行（counter_sub_window_open_close 的注释说明）。
+   已缓解：DebugEvent 在 `new_events` 兜底消费（多窗口后台主窗口也不卡队列）。
+2. **多窗口树**：一次 `t` 查询返回**所有窗口**（按 window id 排序）——测试可同时断言
+   主/子窗口内容（`window_count()` 辅助）。`find` 返回第一个匹配窗口的坐标（点击只注入
+   父窗口——子窗口按钮不可点击，关闭走主窗口按钮）。
 3. **端口隔离**：各测试用独立 debug 端口（9100 起递增），不占用默认 9998。
 4. stderr 管道**必须被读线程消费**（不读会填满 64KB 阻塞 demo——历史教训）。
 

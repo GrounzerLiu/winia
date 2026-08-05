@@ -150,7 +150,12 @@ impl UiTest {
                 tree_responses += 1;
             }
             if let Some(t) = t {
-                if !t.is_null() {
+                // 就绪 = 至少一个窗口的树（空数组 `[]` 是 DEBUG_STATE 未渲染——继续等）
+                let has_window = t
+                    .as_array()
+                    .map(|arr| arr.iter().any(|w| w.get("root").is_some()))
+                    .unwrap_or(false);
+                if has_window {
                     tree = t;
                     break;
                 }
@@ -216,11 +221,16 @@ impl UiTest {
         std::thread::sleep(Duration::from_millis(100));
     }
 
-    /// 查询最新树 JSON（写 t → 读 TREE: 响应；超时返回 None）
+    /// 查询最新树 JSON（写 t → 读 TREE: 响应；超时/无窗口返回 None）
     pub fn tree(&mut self) -> Option<Value> {
         let (t, _) = query_tree(&mut self.child_stdin, &self.stdout_rx, Duration::from_secs(2));
         if let Some(t) = t {
-            if !t.is_null() {
+            // 至少一个窗口的树才视为有效（空数组 `[]` = 未渲染）
+            let has_window = t
+                .as_array()
+                .map(|arr| arr.iter().any(|w| w.get("root").is_some()))
+                .unwrap_or(false);
+            if has_window {
                 self.tree = t.clone();
                 return Some(t);
             }
@@ -247,6 +257,14 @@ impl UiTest {
         let mut out = Vec::new();
         collect_texts(tree, &mut out);
         out
+    }
+
+    /// 当前树中的窗口数量（多窗口树）
+    pub fn window_count(&self) -> usize {
+        self.tree
+            .as_array()
+            .map(|arr| arr.iter().filter(|w| w.get("root").is_some()).count())
+            .unwrap_or(0)
     }
 
     /// 在树中查找第一个 mod 包含 `label` 的节点，返回 (abs_x, abs_y, width, height)
@@ -362,11 +380,32 @@ impl UiTest {
 
 // ── 树 JSON 辅助 ──
 
-/// 根节点可能是数组（[root]）或对象
+/// 多窗口树格式：`[{"window":<id>,"root":{...}}, ...]`（debug.rs 按 window id 排序）。
+/// 遍历所有窗口的 root，对每个调用 `f(window_id, root)`。
+fn for_each_window(tree: &Value, mut f: impl FnMut(u64, &Value)) {
+    if let Some(arr) = tree.as_array() {
+        for w in arr {
+            if let Some(root) = w.get("root") {
+                let id = w.get("window").and_then(|v| v.as_u64()).unwrap_or(0);
+                f(id, root);
+            }
+        }
+    }
+}
+
+/// 第一个窗口的根节点（root 可能是数组——取第一个元素；单窗口退化兼容）
 fn root_of(tree: &Value) -> &Value {
     if let Some(arr) = tree.as_array() {
         if let Some(first) = arr.first() {
-            return first;
+            if let Some(root) = first.get("root") {
+                // root 值可能是根节点数组——取第一个节点
+                if let Some(rarr) = root.as_array() {
+                    if let Some(node) = rarr.first() {
+                        return node;
+                    }
+                }
+                return root;
+            }
         }
     }
     tree
@@ -385,8 +424,14 @@ fn tree_size(tree: &Value) -> (f32, f32) {
 }
 
 fn collect_texts(tree: &Value, out: &mut Vec<String>) {
-    let root = root_of(tree);
     fn walk(n: &Value, out: &mut Vec<String>) {
+        // root 可能是数组（根节点列表）
+        if let Some(arr) = n.as_array() {
+            for el in arr {
+                walk(el, out);
+            }
+            return;
+        }
         if let Some(m) = n.get("mod").and_then(|m| m.as_str()) {
             out.push(m.to_string());
         }
@@ -396,24 +441,37 @@ fn collect_texts(tree: &Value, out: &mut Vec<String>) {
             }
         }
     }
-    walk(root, out);
+    for_each_window(tree, |_, root| walk(root, out));
 }
 
 fn count_nodes(tree: &Value) -> usize {
-    let root = root_of(tree);
     fn walk(n: &Value) -> usize {
+        if let Some(arr) = n.as_array() {
+            return arr.iter().map(walk).sum();
+        }
         1 + n.get("children")
             .and_then(|c| c.as_array())
             .map(|cs| cs.iter().map(walk).sum())
             .unwrap_or(0)
     }
-    walk(root)
+    let mut total = 0;
+    for_each_window(tree, |_, root| total += walk(root));
+    total
 }
 
-/// 查找 mod 包含 label 的节点 → (abs_x, abs_y, w, h)
+/// 查找 mod 包含 label 的节点 → (abs_x, abs_y, w, h)。
+/// 遍历所有窗口（按 window id 顺序）返回第一个匹配——坐标是该窗口内的绝对坐标。
 fn find_node(tree: &Value, label: &str) -> Option<(f32, f32, f32, f32)> {
-    let root = root_of(tree);
     fn walk(n: &Value, ax: f32, ay: f32, label: &str) -> Option<(f32, f32, f32, f32)> {
+        // root 可能是数组（根节点列表）
+        if let Some(arr) = n.as_array() {
+            for el in arr {
+                if let Some(r) = walk(el, ax, ay, label) {
+                    return Some(r);
+                }
+            }
+            return None;
+        }
         let pos = n.get("pos").and_then(|p| p.as_array());
         let (x, y) = match pos {
             Some(v) if v.len() >= 2 => (
@@ -443,5 +501,11 @@ fn find_node(tree: &Value, label: &str) -> Option<(f32, f32, f32, f32)> {
         }
         None
     }
-    walk(root, 0.0, 0.0, label)
+    let mut found = None;
+    for_each_window(tree, |_, root| {
+        if found.is_none() {
+            found = walk(root, 0.0, 0.0, label);
+        }
+    });
+    found
 }

@@ -52,7 +52,9 @@ pub fn wake() {
 }
 
 struct DebugData {
-    pixels: Vec<u8>, width: u32, height: u32, tree_json: String,
+    pixels: Vec<u8>, width: u32, height: u32,
+    /// 每个窗口的树 JSON（单行、合法 JSON）——window_id → 树根数组
+    trees: std::collections::HashMap<u64, String>,
 }
 
 pub fn update_pixels(pixels: &[u8], width: u32, height: u32) {
@@ -60,11 +62,38 @@ pub fn update_pixels(pixels: &[u8], width: u32, height: u32) {
     if let Some(ref mut d) = *data { d.pixels = pixels.to_vec(); d.width = width; d.height = height; }
 }
 
-pub fn update_tree(json: &str) {
+/// 更新指定窗口的树 JSON（多窗口：各窗口独立存储——不再互相覆盖）
+pub fn update_tree(window_id: u64, json: &str) {
     let mut data = DEBUG_STATE.lock().unwrap();
     if data.is_none() {
-        *data = Some(DebugData { pixels: Vec::new(), width: 0, height: 0, tree_json: json.to_string() });
-    } else if let Some(ref mut d) = *data { d.tree_json = json.to_string(); }
+        *data = Some(DebugData { pixels: Vec::new(), width: 0, height: 0, trees: Default::default() });
+    }
+    if let Some(ref mut d) = *data {
+        d.trees.insert(window_id, json.to_string());
+    }
+}
+
+/// 移除指定窗口的树 JSON（窗口关闭时清理——避免残留）
+pub fn remove_tree(window_id: u64) {
+    if let Some(ref mut d) = *DEBUG_STATE.lock().unwrap() {
+        d.trees.remove(&window_id);
+    }
+}
+
+/// 全部窗口树 → 多窗口 JSON：`[{"window":0,"root":[...]},{"window":1,"root":[...]}]`
+/// （按 window id 排序——顺序稳定；空树列表输出 `[]`）
+fn all_trees_json() -> String {
+    let data = DEBUG_STATE.lock().unwrap();
+    let Some(d) = data.as_ref() else { return "[]".to_string() };
+    let mut entries: Vec<(u64, &String)> = d.trees.iter().map(|(id, j)| (*id, j)).collect();
+    entries.sort_by_key(|(id, _)| *id);
+    let mut out = String::from("[");
+    for (i, (id, json)) in entries.iter().enumerate() {
+        if i > 0 { out.push(','); }
+        out.push_str(&format!(r#"{{"window":{id},"root":{json}}}"#));
+    }
+    out.push(']');
+    out
 }
 
 // ── 事件队列 ──
@@ -184,13 +213,7 @@ pub fn start_stdin_channel() {
                     // 树响应走 stdout（前缀 TREE:——UI 测试读管道；其他 demo
                     // 输出可能污染 stdout——测试按前缀过滤）。无条件响应
                     // （DEBUG_STATE 未填充时输出空——测试可区分 stdin 链路 vs 渲染时序）
-                    let json = DEBUG_STATE
-                        .lock()
-                        .unwrap()
-                        .as_ref()
-                        .map(|d| d.tree_json.clone())
-                        .unwrap_or_default();
-                    println!("TREE:{json}");
+                    println!("TREE:{}", all_trees_json());
                 }
                 "q" => { force_shutdown(); break; }
                 _ => {}
@@ -284,14 +307,7 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
                 let _ = write.send(Message::text(s)).await;
             }
             "t" => {
-                let json = match DEBUG_STATE.lock() {
-                    Ok(guard) => match guard.as_ref() {
-                        Some(d) => d.tree_json.clone(),
-                        None => r#"{"error":"no tree"}"#.into(),
-                    },
-                    Err(_) => r#"{"error":"lock error"}"#.into(),
-                };
-                let _ = write.send(Message::text(json)).await;
+                let _ = write.send(Message::text(all_trees_json())).await;
             }
             "p" => {
                 // 像素转储（调试截图分析）：二进制帧 = 8 字节 header(WxH u32 LE) + RGBA

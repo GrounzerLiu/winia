@@ -97,6 +97,8 @@ impl Window {
             .collect();
         for w in to_close {
             if let Some(mut pw) = windows.remove(&w) {
+                // 清理 debug 树条目（逻辑关闭不走 winit Destroyed——残留会误判）
+                crate::debug::remove_tree(w.into_raw() as u64);
                 if let Some(ref mut cb) = pw.on_close { cb(); }
                 for pw2 in windows.values() {
                     if let Some(ref sw) = pw2.skia_window { sw.request_redraw(); }

@@ -48,23 +48,38 @@ fn counter_toggle_alt_shows_hides() {
     });
 }
 
-/// counter：子窗口开/关——关闭后主窗口保持完整（结构变化 + 多窗口回归）。
-/// 注意：多窗口时 debug 树是"最后渲染的窗口"——子窗口打开期间树是子窗口的，
-/// 主窗口断言在关闭后进行。
+/// counter：子窗口开/关——多窗口树同时包含两个窗口（互不覆盖），关闭后主窗口完整。
 #[test]
 fn counter_sub_window_open_close() {
     let mut app = UiTest::launch("counter");
     app.expect_text("Count: 0"); // 等首帧就绪
+    assert_eq!(app.window_count(), 1, "初始应只有主窗口");
     let (x, y, w, h) = app.find("Open sub window").expect("找不到子窗口按钮");
-    // 开
-    app.click(x + w / 2.0, y + h / 2.0);
-    app.expect_text("Sub count: 0");
-    // 关（子窗口按钮位置在子窗口树里查不到——主窗口按钮需先关窗口；
-    // 关闭后树回到主窗口）
-    app.click(x + w / 2.0, y + h / 2.0);
+    // 开——多窗口树应同时含主窗口 + 子窗口
+    app.click_until(x + w / 2.0, y + h / 2.0, Duration::from_secs(4), |t| {
+        UiTest::tree_texts(t).iter().any(|s| s.contains("Sub count"))
+    });
+    app.refresh();
+    assert_eq!(app.window_count(), 2, "子窗口打开后应有 2 个窗口");
+    let texts = app.all_texts();
+    assert!(
+        texts.iter().any(|s| s.contains("Sub count: 0")),
+        "子窗口树应存在。当前: {}",
+        texts.join(" | ")
+    );
+    assert!(
+        texts.iter().any(|s| s.contains("Count: 0")),
+        "主窗口树应同时存在（多窗口不覆盖）。当前: {}",
+        texts.join(" | ")
+    );
+    // 关——回到单窗口
+    app.click_until(x + w / 2.0, y + h / 2.0, Duration::from_secs(4), |t| {
+        !UiTest::tree_texts(t).iter().any(|s| s.contains("Sub count"))
+    });
+    app.refresh();
+    assert_eq!(app.window_count(), 1, "关闭后应回到 1 个窗口");
     app.expect_text("Count: 0");
     app.expect_text("Line 0");
-    app.expect_no_text("Sub count");
 }
 
 /// counter：滚动区域（Line 0..29）——滚动后内容变化

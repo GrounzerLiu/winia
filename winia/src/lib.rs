@@ -40,7 +40,8 @@ pub mod debug {
     pub fn has_pending() -> bool { false }
     pub fn set_wake_callback(_cb: impl Fn() + Send + Sync + 'static) {}
     pub fn set_event_loop_proxy(_proxy: winit::event_loop::EventLoopProxy) {}
-    pub fn update_tree(_json: &str) {}
+    pub fn update_tree(_window_id: u64, _json: &str) {}
+    pub fn remove_tree(_window_id: u64) {}
     pub fn screenshot_requested() -> bool { false }
     pub fn screenshot_done() {}
     pub fn wake() {}
