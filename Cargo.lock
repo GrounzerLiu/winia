@@ -3695,6 +3695,7 @@ dependencies = [
  "log",
  "material-colors",
  "parking_lot",
+ "serde_json",
  "skia-safe",
  "skiwin",
  "thiserror 2.0.18",
