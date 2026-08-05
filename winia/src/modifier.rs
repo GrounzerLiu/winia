@@ -9,7 +9,6 @@
 use std::sync::Arc;
 use std::ops::Range;
 use std::fmt::{self, Debug};
-use std::any::Any;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 // ── Dimension ──
@@ -195,59 +194,7 @@ impl Color {
     }
 }
 
-// ── ElementCategory ──
-
-/// Modifier 元素的分类，用于子系统路由。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ElementCategory {
-    /// 影响布局（约束、尺寸、padding、对齐等）
-    Layout,
-    /// 影响绘制（背景、边框、模糊、裁剪等）
-    Draw,
-    /// 影响输入处理（点击、焦点、滚动等）
-    Input,
-    /// 表示内容（文本、图片等）
-    Content,
-}
-
-// ── ModifierNode trait ──
-
-/// Modifier 节点 trait —— 自定义 Modifier 元素实现此 trait。
-///
-/// 类似 Compose 的 `Modifier.Element`，外部 crate 可通过实现此 trait
-/// 并传入 `Modifier::custom()` 来扩展 Modifier 系统。
-///
-/// # 示例
-/// ```ignore
-/// struct MyShadowNode { radius: f32 }
-///
-/// impl ModifierNode for MyShadowNode {
-///     fn category(&self) -> ElementCategory { ElementCategory::Draw }
-///     fn box_clone(&self) -> Box<dyn ModifierNode> {
-///         Box::new(MyShadowNode { radius: self.radius })
-///     }
-/// }
-///
-/// let m = Modifier::new().custom(MyShadowNode { radius: 10.0 });
-/// ```
-pub trait ModifierNode: Any + Send + Sync {
-    /// 元素分类，用于子系统路由
-    fn category(&self) -> ElementCategory;
-
-    /// 克隆（用于 Modifier 的 Clone）
-    fn box_clone(&self) -> Box<dyn ModifierNode>;
-
-    /// 转为 Any，便于下游通过 downcast_ref 获取具体类型
-    /// 默认实现适用于所有 Sized 类型
-    fn as_any(&self) -> &dyn Any;
-}
-
-// 为 Clone trait 提供便捷实现
-impl Clone for Box<dyn ModifierNode> {
-    fn clone(&self) -> Self {
-        self.box_clone()
-    }
-}
+// ── Modifier ──
 
 // ── KbEvent ──
 
@@ -424,10 +371,6 @@ pub(crate) enum ModifierElement {
     HorizontalScroll { state: crate::core::state::State<f32> },
     /// 图形层变换（scale/alpha/rotation/translation——只触发重绘，不触发布局）
     GraphicsLayer { params_fn: Arc<dyn Fn() -> GraphicsLayerParams + Send + Sync> },
-
-    // ── 扩展槽位 ──
-    /// 自定义 Modifier 元素（外部通过 `Modifier::custom()` 扩展）
-    Custom { inner: Box<dyn ModifierNode> },
 }
 
 // ── Modifier ──
@@ -480,31 +423,6 @@ impl Modifier {
 impl Default for Modifier {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-// ── 扩展 Modifier 方法 ──
-
-impl Modifier {
-    /// 添加自定义 Modifier 元素
-    ///
-    /// 外部 crate 可实现 `ModifierNode` trait 并通过此方法扩展 Modifier。
-    ///
-    /// # 示例
-    /// ```ignore
-    /// struct ShadowNode { radius: f32 }
-    ///
-    /// impl ModifierNode for ShadowNode {
-    ///     fn category(&self) -> ElementCategory { ElementCategory::Draw }
-    ///     fn box_clone(&self) -> Box<dyn ModifierNode> {
-    ///         Box::new(ShadowNode { radius: self.radius })
-    ///     }
-    /// }
-    ///
-    /// let m = Modifier::new().custom(ShadowNode { radius: 12.0 });
-    /// ```
-    pub fn custom(self, node: impl ModifierNode + 'static) -> Self {
-        self.push(ModifierElement::Custom { inner: Box::new(node) })
     }
 }
 
@@ -960,57 +878,7 @@ impl Debug for ModifierElement {
             Self::GraphicsLayer { .. } => f.debug_struct("GraphicsLayer").finish(),
             Self::Blur { radius } => f.debug_struct("Blur").field("radius", radius).finish(),
             Self::BackdropBlur { radius } => f.debug_struct("BackdropBlur").field("radius", radius).finish(),
-            Self::Custom { .. } => f.write_str("Custom(<dyn ModifierNode>)"),
         }
-    }
-}
-
-impl ModifierElement {
-    /// 返回元素的分类（用于子系统路由）
-    pub fn category(&self) -> ElementCategory {
-        match self {
-            ModifierElement::Custom { inner } => inner.category(),
-            ModifierElement::Size { .. }
-            | ModifierElement::Padding { .. }
-            | ModifierElement::PaddingHorizontal { .. }
-            | ModifierElement::PaddingVertical { .. }
-            | ModifierElement::FillMaxWidth
-            | ModifierElement::FillMaxHeight
-            | ModifierElement::FillMaxSize
-            | ModifierElement::Offset { .. }
-            | ModifierElement::AlignSelf { .. }
-            | ModifierElement::LayoutWeight { .. } => ElementCategory::Layout,
-
-            ModifierElement::Background { .. }
-            | ModifierElement::Border { .. }
-            | ModifierElement::Clip { .. }
-            | ModifierElement::Blur { .. }
-            | ModifierElement::BackdropBlur { .. } => ElementCategory::Draw,
-
-            ModifierElement::Clickable { .. }
-            | ModifierElement::Focusable
-            | ModifierElement::FocusRequesterId { .. }
-            | ModifierElement::VerticalScroll { .. }
-            | ModifierElement::HorizontalScroll { .. }
-            | ModifierElement::KbEvent { .. } => ElementCategory::Input,
-            | ModifierElement::PointerEvent { .. } => ElementCategory::Input,
-
-            ModifierElement::TextContent { .. }
-            | ModifierElement::RichTextContent { .. } => ElementCategory::Content,
-            ModifierElement::GraphicsLayer { .. } => ElementCategory::Draw,
-        }
-    }
-
-    pub fn is_layout(&self) -> bool {
-        self.category() == ElementCategory::Layout
-    }
-
-    pub fn is_draw(&self) -> bool {
-        self.category() == ElementCategory::Draw
-    }
-
-    pub fn is_input(&self) -> bool {
-        self.category() == ElementCategory::Input
     }
 }
 
@@ -1204,28 +1072,6 @@ mod tests {
             .fill_max_size();
 
         assert_eq!(m.elements().len(), 3);
-    }
-
-    #[test]
-    fn test_category_filters() {
-        let m = Modifier::new()
-            .size(100.0, 50.0) // layout
-            .padding(8.0) // layout
-            .background(Color::RED, Shape::Rectangle) // draw
-            .clickable(|| {}) // input
-            .clip(Shape::Circle); // draw
-
-        let mut layout_count = 0;
-        for el in m.elements() { if el.is_layout() { layout_count += 1; } }
-        assert_eq!(layout_count, 2, "should have 2 layout elements");
-
-        let mut draw_count = 0;
-        for el in m.elements() { if el.is_draw() { draw_count += 1; } }
-        assert_eq!(draw_count, 2, "should have 2 draw elements");
-
-        let mut input_count = 0;
-        for el in m.elements() { if el.is_input() { input_count += 1; } }
-        assert_eq!(input_count, 1, "should have 1 input element");
     }
 
     #[test]
