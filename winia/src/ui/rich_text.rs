@@ -382,7 +382,7 @@ impl RichText {
             if let Some(reg) = ctx.selection_registrar()
                 .or_else(|| crate::ui::selection_container::LOCAL_SELECTION_REGISTRAR.try_current())
             {
-                reg.register(key, &content, None);
+                reg.register(key, &content);
                 Some(reg)
             } else { None }
         };

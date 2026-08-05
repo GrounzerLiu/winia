@@ -218,7 +218,7 @@ impl Text {
             if let Some(reg) = ctx.selection_registrar()
                 .or_else(|| crate::ui::selection_container::LOCAL_SELECTION_REGISTRAR.try_current())
             {
-                let off = reg.register(key, &self.content, None);
+                let off = reg.register(key, &self.content);
                 (Some(reg), Some((key, content_len, off)))
             } else { (None, None) }
         };
