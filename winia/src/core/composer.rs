@@ -15,6 +15,7 @@ use crate::layout::constraints::Constraints;
 use crate::layout::node::{LayoutNode, MeasurePolicy, CachedNode};
 use crate::modifier::Modifier;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::any::Any;
 use std::cell::Cell;
@@ -41,7 +42,13 @@ thread_local! { static STMT_STACK: RefCell<Vec<(u32, u32)>> = const { RefCell::n
 /// 语句调用序号（compose 级计数）：同语句 id 第 n 次进入（for 循环迭代）→ seq=n。
 /// key = hash(scope, stmt_id, seq)——循环体内每次迭代的 key 不同（迭代索引分量），
 /// 修复：for 循环 30 次迭代共享同 stmt_id → key 全同 → 槽/缓存恢复错乱（丢行）。
-thread_local! { static STMT_SEQ: RefCell<std::collections::HashMap<u32, u32>> = RefCell::new(std::collections::HashMap::new()); }
+thread_local! { static STMT_SEQ: RefCell<std::collections::HashMap<(u64, u32), u32>> = RefCell::new(std::collections::HashMap::new()); }
+/// 当前 scope 源码哈希栈（与 Composer::scope_source_stack 镜像）——SlotTable 的
+/// enter_stmt 取不到 Composer 字段，经此 thread_local 读当前 scope：STMT_SEQ 按
+/// (scope_src, id) 计数，避免跨函数语句 id 重复（每个 #[composable] 的语句编号
+/// 各自从 0 开始）导致的 seq 基数泄漏（函数 A 的迭代次数成为函数 B 的 seq 基数
+/// → 函数 B 行数变化时 key 漂移）。scope_source_stack 的 push/pop/clear 三处同步。
+thread_local! { static SCOPE_SRC_STACK: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) }; }
 
 
 /// 参数值（阶段5 参数相等跳过用）——`ComposeCtx::changed` 暂存的参数，
@@ -148,6 +155,7 @@ impl<'a> ComposeCtx<'a> {
     /// next_key 读 scope=0 → 跨函数同 stmt id 的 key 碰撞 → 节点复用串位）
     pub fn start_scope_keyed(&mut self, source_hash: u64) -> u64 {
         self.composer.scope_source_stack.push(Some(source_hash));
+        SCOPE_SRC_STACK.with(|s| s.borrow_mut().push(source_hash)); // 镜像（enter_stmt 读）
         // scope key = 源码哈希本身（稳定唯一——不依赖 next_group_key：scope 是
         // 组合第一条调用（STMT_STACK 空），走路径哈希在宏外（app_root!/根）会
         // 触发稳定 key panic；且路径哈希在结构变化时漂移——hash 反而更稳）
@@ -170,9 +178,10 @@ impl<'a> ComposeCtx<'a> {
     /// 已知限制：嵌套循环（for i { for j { … } }）内层语句取 max(内层次数, 外层
     /// 位置)——内层迭代与外层位置可能混淆，需显式 key（文档化）。
     pub fn enter_stmt(&mut self, id: u32) -> StmtGuard {
+        let scope_src = SCOPE_SRC_STACK.with(|s| s.borrow().last().copied().unwrap_or(0));
         let self_seq = STMT_SEQ.with(|m| {
             let mut m = m.borrow_mut();
-            let c = m.entry(id).or_insert(0u32);
+            let c = m.entry((scope_src, id)).or_insert(0u32);
             *c += 1;
             *c
         });
@@ -192,9 +201,10 @@ impl<'a> ComposeCtx<'a> {
 
     /// #[composable] 宏注入：退出语句（与 push_stmt 配对）——保留兼容旧用法
     pub fn push_stmt(&mut self, id: u32) {
+        let scope_src = SCOPE_SRC_STACK.with(|s| s.borrow().last().copied().unwrap_or(0));
         let self_seq = STMT_SEQ.with(|m| {
             let mut m = m.borrow_mut();
-            let c = m.entry(id).or_insert(0u32);
+            let c = m.entry((scope_src, id)).or_insert(0u32);
             *c += 1;
             *c
         });
@@ -213,12 +223,16 @@ impl<'a> ComposeCtx<'a> {
     /// 显式 key（对标 Compose `key(id)`）：包裹的子树用 id 哈希为 key 基——
     /// 结构变化（列表重排/子树移动）时 remember/复用仍稳定。
     /// 用法：`ctx.key("scroll_list", |ctx| { ... });`
-    pub fn key<R>(&mut self, id: &'static str, f: impl FnOnce(&mut Self) -> R) -> R {
-        let mut h: u64 = 0xcbf29ce484222325;
-        for b in id.as_bytes() {
-            h ^= *b as u64;
-            h = h.wrapping_mul(0x100000001b3);
-        }
+    /// 显式 key 作用域（对标 Compose `key(key1, content)`）：`id` 参与内部所有
+    /// 语句/组件的 key 基——`id` 变化 → 内部槽 key 变化 → 旧子树重建（结构切换）；
+    /// `id` 稳定 → 跨重组 key 稳定（remember State 保留）。
+    /// 支持任意 `Hash` 值：`key("section", ...)`、`key(i, ...)`（循环迭代变量——
+    /// 嵌套循环内层迭代位置的显式正解，语句级 seq 只携带外层位置）、
+    /// `key((row, col), ...)`。
+    pub fn key<R>(&mut self, id: impl std::hash::Hash, f: impl FnOnce(&mut Self) -> R) -> R {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        id.hash(&mut hasher);
+        let h = hasher.finish();
         self.composer.key_override_stack.push(h);
         let r = f(self);
         self.composer.key_override_stack.pop();
@@ -686,6 +700,7 @@ impl SlotTable {
                 for child in &mut slot.children {
                     rec(child, &mut node.children, true, depth + 1); // Skip 子树内：子也按同一规则（收集）
                 }
+                #[cfg(debug_assertions)]
                 if std::env::var("WINIA_MAT_PROBE").is_ok() {
                     eprintln!("[collect] skip key={:x} kids={}", slot.key, node.children.len());
                 }
@@ -1012,6 +1027,7 @@ impl Composer {
     /// 生产代码应使用 #[composable]/app_root! 注入的 start_scope_keyed。
     pub fn start_scope(&mut self) -> u64 {
         self.scope_source_stack.push(None);
+        SCOPE_SRC_STACK.with(|s| s.borrow_mut().push(0)); // 镜像（手动 scope——无源码哈希）
         let key = self.next_group_key();
         self.slot_table.start_scope(key);
         GROUP_STACK.with(|s| s.borrow_mut().push(key));
@@ -1027,6 +1043,7 @@ impl Composer {
             if !s.is_empty() { s.pop(); }
         });
         if !self.scope_source_stack.is_empty() { self.scope_source_stack.pop(); }
+        SCOPE_SRC_STACK.with(|s| { let mut s = s.borrow_mut(); if !s.is_empty() { s.pop(); } }); // 镜像同步
     }
 
     /// 物化：组合树（Slot desc）→ 布局树（arena LayoutNode）——完整分离的核心。
@@ -1168,6 +1185,7 @@ impl Composer {
         self.remember_path_counters.clear();
         STMT_STACK.with(|s| s.borrow_mut().clear());
         STMT_SEQ.with(|m| m.borrow_mut().clear()); // 语句调用序号重置——重组时循环迭代 key 与首帧一致
+        SCOPE_SRC_STACK.with(|s| s.borrow_mut().clear()); // scope 镜像同步
         self.scope_source_stack.clear();
         self.key_override_stack.clear();
         // 注意：不在 compose 开头清 arena.root——materialize 管理 root
@@ -2844,6 +2862,51 @@ fn test_stmt_seq_inherits_outer_iteration_position() {
     assert_eq!(
         keys_first[29], keys_recompose[0],
         "content 内语句继承外层迭代位置——重组后 key 与首帧一致（防 text29 撞 text0）"
+    );
+    assert_ne!(
+        keys_first[0], keys_first[29],
+        "迭代 key 互异——30 行 key 全同（无 seq 分量时代）会让槽树错乱"
+    );
+}
+
+/// 跨函数 seq 基数泄漏回归：不同 #[composable] 函数的语句 id 各自从 0 开始——
+/// STMT_SEQ 若只按裸 id 计数，先执行函数的迭代次数会成为后执行函数的 seq 基数
+/// （函数 B 行数变化 → 函数 A 的 key 漂移 → remember State 重置/槽树重建）。
+/// 修复：STMT_SEQ 按 (scope_src, id) 计数——不同 scope 完全隔离。
+#[test]
+fn test_stmt_seq_isolated_across_functions() {
+    let mut composer = Composer::new();
+    let mut keys_a = Vec::new();
+    let mut keys_b = Vec::new();
+    composer.compose(|ctx| {
+        // 函数 A（scope 0xAAAA）：3 次迭代
+        let _ = ctx.start_scope_keyed(0xAAAA);
+        for _ in 0..3 {
+            ctx.push_stmt(1);
+            keys_a.push(ctx.next_key());
+            ctx.pop_stmt();
+        }
+        ctx.end_scope();
+        // 函数 B（scope 0xBBBB）：语句 id 也从 1 开始——seq 必须独立（=1，不是 A 的 3）
+        let _ = ctx.start_scope_keyed(0xBBBB);
+        ctx.push_stmt(1);
+        keys_b.push(ctx.next_key());
+        ctx.pop_stmt();
+        ctx.end_scope();
+    });
+    // B 的 seq 若泄漏 A 的基数（=4）→ 与"B 单独首帧"的 key 不同——构造对比：
+    let mut composer2 = Composer::new();
+    let mut keys_b_alone = Vec::new();
+    composer2.compose(|ctx| {
+        let _ = ctx.start_scope_keyed(0xBBBB);
+        ctx.push_stmt(1);
+        keys_b_alone.push(ctx.next_key());
+        ctx.pop_stmt();
+        ctx.end_scope();
+    });
+    assert_eq!(
+        keys_b[0], keys_b_alone[0],
+        "函数 B 的语句 seq 与函数 A 的执行无关（跨函数基数泄漏）"
     );
 }
 

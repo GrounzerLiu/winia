@@ -80,6 +80,7 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
                 if !preserve_modifier {
                     n.modifier = modifier;
                 }
+                #[cfg(debug_assertions)]
                 if std::env::var("WINIA_MAT_PROBE").is_ok() {
                     let sz = n.measured_size;
                     eprintln!(
@@ -124,6 +125,7 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
                     }
                 }
                 let idx = composer.arena.alloc(node);
+                #[cfg(debug_assertions)]
                 if std::env::var("WINIA_MAT_PROBE").is_ok() {
                     eprintln!(
                         "[mat-fb] key={:x} text={:?}",
