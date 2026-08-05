@@ -80,35 +80,35 @@
 
 ### P0 — 死代码清理（机械、低风险、先做）
 
-- [ ] P0-1 删 7 个完全死导出（A 表全部）
-- [ ] P0-2 清 effect.rs 死 API（StreamObverse/两个 unit()）
-- [ ] P0-3 清 unit.rs 死 API（IntOffset/IntSize/Offset::plus/minus/times/Density::to_dp/to_sp_px/to_sp/约 20 个 Dp/Sp/Px/Offset/Size 方法）
-- [ ] P0-4 清 text/ 死 API（paragraph.rs 27 透传 + text_layout.rs 6 + paragraph_builder.rs 3 + ImageDrawable）
-- [ ] P0-5 清 app.rs legacy（open_window/open_window_with_title/close_window_by_id）
-- [ ] P0-6 modifier.rs：ElementCategory/ModifierNode 决策（删或落地 Custom 扩展点）
-- [ ] P0-7 state.rs：SubscriberId/Subscription/record_dep/register_dependency 降 pub(crate) 或删
-- [ ] P0-8 animation.rs：Animatable/InfiniteTransition/RepeatableSpec/RepeatMode 降 pub(crate)
-- [ ] P0-9 删 RegisteredSegment.bounds（只写不读）
-- [ ] P0-10 theme.rs：light/dark/light_from_seed/dark_from_seed 决策（保留为公开扩展点则补文档）
-- [ ] P0-11 清 TextStyle 死 builder + Text::oblique/style
+- [x] P0-1（1b3e7b5） 删 7 个完全死导出（A 表全部）
+- [x] P0-2（4b39cbf） 清 effect.rs 死 API（StreamObverse/两个 unit()）
+- [x] P0-3（b79902f） 清 unit.rs 死 API（IntOffset/IntSize/Offset::plus/minus/times/Density::to_dp/to_sp_px/to_sp/约 20 个 Dp/Sp/Px/Offset/Size 方法）
+- [x] P0-4（47e1197） 清 text/ 死 API（paragraph.rs 27 透传 + text_layout.rs 6 + paragraph_builder.rs 3 + ImageDrawable）
+- [x] P0-5（fde356f） 清 app.rs legacy（open_window/open_window_with_title/close_window_by_id）
+- [x] P0-6（4bb3b9e） modifier.rs：ElementCategory/ModifierNode 决策（删或落地 Custom 扩展点）
+- [x] P0-7（4cbb826） state.rs：SubscriberId/Subscription/record_dep/register_dependency 降 pub(crate) 或删
+- [x] P0-8（671452f） animation.rs：Animatable/InfiniteTransition/RepeatableSpec/RepeatMode 降 pub(crate)
+- [x] P0-9（cec2a49） 删 RegisteredSegment.bounds（只写不读）
+- [x] P0-10（决策：保留——用户指定，非死代码） theme.rs：light/dark/light_from_seed/dark_from_seed 决策（保留为公开扩展点则补文档）
+- [x] P0-11（决策：保留——用户指定，非死代码） 清 TextStyle 死 builder + Text::oblique/style
 
 **P0 验收**：`cargo test --lib` 162 全绿；`cargo check --examples` 全绿；`cargo build -p winia` 警告数不增加；git diff 无 CRLF 噪音；一次提交一个文件组，每个提交独立可回滚。
 
 ### P1 — DRY 重复合并（中风险，逐项验证）
 
-- [ ] P1-1 段落构建双实现合并（node.rs 测量期与 render.rs 绘制期共用一套 ParagraphBuilder 流程 + to_sktextstyle）
-- [ ] P1-2 Rect 统一（删 selection_container::Rect，render.rs 内联计算收敛到一处）
+- [x] P1-1 段落构建双实现合并（c4c74f8）（node.rs 测量期与 render.rs 绘制期共用一套 ParagraphBuilder 流程 + to_sktextstyle）
+- [x] P1-2 Rect 统一（随 P0-9 cec2a49 自然解决——全项目只剩 skia_safe::Rect）（删 selection_container::Rect，render.rs 内联计算收敛到一处）
 
 **P1 验收**：文本测量/绘制行为不变（text_demo/rich_text_demo/text_field_demo 截图对比）；测试全绿；`cargo check --examples` 干净。
 
 ### P2 — 架构机制统一（核心重构，先设计后实施）
 
-- [ ] P2-1 **两段式依赖（布局动画统一机制）**——state.rs 记录分流（IN_LAYOUT）+ composer.rs `layout_deps` + node.rs `layout_dirty`；布局动画写 `get()` 读动画值即生效，消灭 force_remeasure 式旁路。验收：写一个布局动画测试（高度随动画 State 收缩，下方节点跟随，且组合不重跑——用组合计数断言）
-- [ ] P2-2 物化器拆分（composer.rs 拆出 `materialize` 模块：desc 树 → arena 树独立成模块）——SRP
-- [ ] P2-3 依赖注册收敛（slot_deps/layout_deps 统一管理；评估去掉 thread_local 裸指针桥接）——DIP/SSOT
-- [ ] P2-4 Column/Row/Stack build 样板合并（宏或共享辅助函数）
-- [ ] P2-5 effect.rs 三处样板合并
-- [ ] P2-6 Dp/Sp/Px 宏化（三副本合一）
+- [x] P2-1 **两段式依赖（布局动画统一机制）**——state.rs 记录分流（IN_LAYOUT）+ composer.rs `layout_deps` + node.rs `layout_dirty`；布局动画写 `get()` 读动画值即生效，消灭 force_remeasure 式旁路。验收：写一个布局动画测试（高度随动画 State 收缩，下方节点跟随，且组合不重跑——用组合计数断言）
+- [x] P2-2 物化器拆分（4246708）（composer.rs 拆出 `materialize` 模块：desc 树 → arena 树独立成模块）——SRP
+- [x] P2-3 依赖注册收敛（8ba77dd + a41adcc）（slot_deps/layout_deps 统一管理；评估去掉 thread_local 裸指针桥接）——DIP/SSOT
+- [x] P2-4 Column/Row/Stack build 样板合并（09ef301 build_container）（宏或共享辅助函数）
+- [x] P2-5 effect.rs 三处样板合并（65f2840 attach_cleanup）
+- [ ] P2-6 Dp/Sp/Px 宏化（三副本合一）——**决策：不做**（用户 2026-08：YAGNI，宏化收益仅代码量）
 
 **P2 验收**：每项有对应测试（组合计数/依赖注册断言/布局动画行为）；13 个 demo 全回归；162+ 测试全绿。
 
