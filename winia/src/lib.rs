@@ -58,7 +58,7 @@ pub mod debug {
 }
 
 // 公开核心类型
-pub use core::composer::{ComposeCtx, Composer, Key};
+pub use core::composer::{ComposeCtx, Composer};
 pub use core::state::{DerivedFloat, DerivedValue, State};
 pub use winia_macros::composable;
 
@@ -73,7 +73,6 @@ pub mod prelude {
     pub use crate::ui::rich_text::RichText;
     pub use crate::text::{InlineDrawable, ImageDrawable, SvgDrawable};
     pub use crate::layout::{Arrangement, Alignment, Constraints, LayoutDirection};
-    pub use crate::ui::theme::current_layout_direction;
     pub use crate::unit::{Dp, Sp, Offset, Size, IntOffset, IntSize, Density, Px, DpExt, SpExt, PxExt};
     pub use crate::effect::{LaunchedEffect, DisposableEffect, CoroutineScope, remember_coroutine_scope, StreamObverse, observe_watch};
     pub use std::time::Duration;

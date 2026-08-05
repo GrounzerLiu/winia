@@ -195,11 +195,6 @@ static LOCAL_DIRECTION: LazyLock<CompositionLocal<LayoutDirection>> = LazyLock::
     CompositionLocal::new(|| LayoutDirection::Ltr)
 });
 
-/// 读取当前布局方向
-pub fn current_layout_direction() -> LayoutDirection {
-    LOCAL_DIRECTION.current()
-}
-
 // ═══════════════════════════════════════════════════════════
 // 主题入口
 // ═══════════════════════════════════════════════════════════

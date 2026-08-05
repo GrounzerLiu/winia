@@ -162,10 +162,6 @@ pub fn push_infinite_color(
 }
 
 /// 注册一个动画到全局活跃列表
-pub fn push_animation(anim: Box<dyn AnimationInstance + 'static>) {
-    ACTIVE_ANIMATIONS.lock().unwrap().push(anim);
-}
-
 /// 注册一个 Animatable<T> 到全局活跃列表（由 animate_*_as_state 调用）
 pub fn push_animatable<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(state: State<T>, target: T, spec: AnimationSpec) {
     if state.peek() == target { return; }

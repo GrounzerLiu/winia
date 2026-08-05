@@ -87,12 +87,6 @@ pub(crate) fn set_active_slot_key(key: u64) {
     ACTIVE_SLOT_KEY.with(|c| c.set(key));
 }
 
-// ── Key ──
-
-/// 组合节点的唯一标识符
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Key(u64);
-
 // ── ComposeCtx ──
 
 /// 组合上下文。

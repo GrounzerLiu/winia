@@ -1094,19 +1094,10 @@ pub fn open_window_with_title(width: f32, height: f32, title: String, content: O
     wake_impl();
 }
 
-pub fn open_window_with_close(width: f32, height: f32, content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>, on_close: Option<Box<dyn FnMut() + Send>>, _created_id: Option<u64>) {
-    open_window_with_title(width, height, String::new(), content, on_close, _created_id, None);
-}
-
 /// 通过声明式 id 请求关闭窗口
 pub fn close_window_by_id(created_id: u64) {
     CLOSE_QUEUED.lock().unwrap().push(created_id);
     wake_impl();
-}
-
-/// 取消关闭请求（Window::build 重建窗口时调用，抵消旧节点 on_remove 的推送）
-pub fn cancel_close(created_id: u64) {
-    CLOSE_QUEUED.lock().unwrap().retain(|&x| x != created_id);
 }
 
 static CLOSE_QUEUED: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());

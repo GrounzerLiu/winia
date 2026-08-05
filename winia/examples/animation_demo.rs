@@ -7,7 +7,7 @@
 //! 动画 state 失效只重跑对应节函数（对标 Compose @Composable 的用户函数粒度）。
 
 use winia::prelude::*;
-use winia::animation::{AnimationSpec, SpringSpec, TweenSpec, Transition};
+use winia::animation::{AnimationSpec, SpringSpec, TweenSpec};
 use winia::app;
 
 #[composable]
