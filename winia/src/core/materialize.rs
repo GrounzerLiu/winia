@@ -59,9 +59,18 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
     let index = if skip {
         // Skip：恢复上帧节点（key 匹配——保留测量/内容；children 清空后
         // 按 slot 树结构重新挂接（子节点逐个从 prev_node_by_key 恢复——
-        // 不残留不 free）。无缓存为异常——防御跳过
-        match composer.prev_node_by_key.remove(&key) {
-            Some(idx) => {
+        // 不残留不 free）。无缓存为异常——防御跳过。
+        // 结构签名（P3-1）：本帧 desc 直接子数 vs 缓存节点直接子数——子树结构
+        // 增删（if 分支/列表项）后同位置 slot_key 仍相同，签名不等则放弃恢复
+        // （走 None 降级 → Enter 重建），防旧内容缓存张冠李戴（塌缩类 bug 根因）。
+        // 结构签名（P3-1）：本帧 desc 直接子数 vs 缓存节点直接子数——子树结构
+        // 增删（if 分支/列表项）后同位置 slot_key 仍相同，签名不等则放弃恢复
+        // （走 None 降级 → Enter 重建），防旧内容缓存张冠李戴（塌缩类 bug 根因）。
+        // 注意：签名不等时**不 remove**——key 留待 compose 末尾回收（free），
+        // 否则旧节点成为 arena 孤儿（泄漏）。
+        match composer.prev_node_by_key.get(&key) {
+            Some(&idx) if children.len() == composer.arena.nodes[idx].children.len() => {
+                let idx = composer.prev_node_by_key.remove(&key).unwrap();
                 composer.reused_nodes.insert(idx);
                 let n = &mut composer.arena.nodes[idx];
                 n.children.clear();
@@ -74,8 +83,8 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
                 n.dirty = false; // 恢复缓存——测量折叠（保留测量）
                 Some(idx)
             }
-            None => {
-                // 防御降级：Skip 恢复失败（key 不匹配/prev 缺失）→ 按 Enter 重建
+            _ => {
+                // 防御降级：Skip 恢复失败（无缓存/结构签名不等）→ 按 Enter 重建
                 // （dirty=true 重测）。否则节点缺失 → 子树塌缩（间歇性坐标错乱）。
                 // 子树完整优先于测量折叠——下一帧 key 稳定后恢复 Skip。
                 // 注意：不能 return（会跳过尾部 add_child/children 挂接）——

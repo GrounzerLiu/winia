@@ -184,6 +184,10 @@ pub(crate) struct CachedNode {
     pub dirty: bool,
     pub cached_constraints: Option<Constraints>,
     pub slot_key: u64,
+    /// 结构签名（P3-1）：上帧直接子节点数——Skip 恢复命中条件之一。
+    /// 子树结构增删（if 分支/列表项）后同位置 slot_key 仍相同，签名不等则
+    /// 放弃恢复（走 Enter 重建），防旧内容缓存张冠李戴。
+    pub children_count: usize,
     pub registrar: std::cell::RefCell<Option<crate::ui::selection_container::SelectionRegistrar>>,
 }
 
@@ -198,6 +202,7 @@ impl LayoutNode {
             dirty: self.dirty,
             cached_constraints: self.cached_constraints,
             slot_key: self.slot_key,
+            children_count: self.children.len(),
             registrar: self.registrar.clone(),
         }
     }

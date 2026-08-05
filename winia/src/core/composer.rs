@@ -3021,3 +3021,145 @@ fn test_materialize_skip_restores_subtree() {
         assert_eq!(n.slot_key, composer.arena_nodes()[r].children.iter().find(|&&x| x == ci).map(|_| composer.arena_nodes()[ci].slot_key).unwrap(), "恢复的 leaf slot_key 保留");
     }
 }
+
+// ═══════════════════════════════════════════════════════════
+// P3-1 Skip 恢复健壮性测试（结构签名）
+// ═══════════════════════════════════════════════════════════
+
+/// T2：State 驱动结构变化回归——if 分支增删（show_b State）→ root Enter 重建，
+/// A 位置不复用 B 缓存，B 移除后无残留。
+#[test]
+fn test_skip_recovery_structure_change_by_state() {
+    let mut composer = Composer::new();
+    let holder = std::cell::RefCell::new(None::<State<bool>>);
+
+    let build = |composer: &mut Composer, holder: &std::cell::RefCell<Option<State<bool>>>| {
+        composer.compose(|ctx| {
+            let show_b = ctx.remember(|| true);
+            *holder.borrow_mut() = Some(show_b.clone());
+            let root_key = ctx.next_key();
+            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    // A 叶子（始终在）
+                    { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                    // B 分支（show_b 控制）
+                    if show_b.get() {
+                        let k = ctx.next_key();
+                        ctx.start_leaf(k, Modifier::new().size(100.0, 50.0));
+                        ctx.end_node();
+                    }
+                }
+            }
+            ctx.end_restartable_group();
+        });
+        composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+    };
+
+    build(&mut composer, &holder);
+    let r = composer.layout_root_idx().unwrap();
+    assert_eq!(composer.arena_nodes()[r].children.len(), 2, "帧1 应有 A+B 两个 leaf");
+
+    // 帧2：show_b=false（State 驱动 → root Enter → content 重跑 → B 分支不建）
+    holder.borrow().as_ref().unwrap().set(false);
+    build(&mut composer, &holder);
+    let r = composer.layout_root_idx().unwrap();
+    assert_eq!(composer.arena_nodes()[r].children.len(), 1, "帧2 应只剩 A（B 移除）");
+    // A 正常保留；不应复用 B 的缓存（B 的 size 100x50）
+    let a = composer.arena_nodes()[r].children[0];
+    assert!(composer.arena_nodes()[a].measured_size.width < 100.0,
+        "A 不应复用 B 的缓存（B 的 width=100 不应出现在 A）——width={}", composer.arena_nodes()[a].measured_size.width);
+
+    // 帧3：B 恢复
+    holder.borrow().as_ref().unwrap().set(true);
+    build(&mut composer, &holder);
+    let r = composer.layout_root_idx().unwrap();
+    assert_eq!(composer.arena_nodes()[r].children.len(), 2, "帧3 应恢复 A+B");
+}
+
+/// T3：结构签名直接验证——手动构造"缓存 children 数 != desc children 数"，
+/// materialize_node Skip 恢复应放弃（重建 + key 保留待回收，防张冠李戴与泄漏）。
+#[test]
+fn test_skip_recovery_sig_mismatch_direct() {
+    let mut composer = Composer::new();
+    // 帧1：root + 2 leaf
+    composer.compose(|ctx| {
+        let root_key = ctx.next_key();
+        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+            }
+        }
+        ctx.end_restartable_group();
+    });
+    composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+    let old_root = composer.layout_root_idx().unwrap();
+    let old_root_key = composer.arena_nodes()[old_root].slot_key;
+    let leaf0_key = composer.arena_nodes()[composer.arena_nodes()[old_root].children[0]].slot_key;
+
+    // 手动构造 Skip desc：root 只有 1 子（缓存 2 子——签名不等）
+    let desc = crate::core::materialize::DescNode {
+        key: old_root_key,
+        skip: true,
+        modifier: Modifier::new(),
+        preserve_modifier: true,
+        policy: None,
+        on_remove: None,
+        dirty: false,
+        registrar: None,
+        children: vec![crate::core::materialize::DescNode {
+            key: leaf0_key,
+            skip: true,
+            modifier: Modifier::new(),
+            preserve_modifier: true,
+            policy: None,
+            on_remove: None,
+            dirty: false,
+            registrar: None,
+            children: vec![],
+        }],
+    };
+    composer.arena.root = None; // 模拟新帧物化开始
+    let new_root = crate::core::materialize::materialize_node(&mut composer, desc, None).unwrap();
+
+    // 断言：签名不等 → 重建（new_root != old_root）而非恢复缓存
+    assert_ne!(new_root, old_root, "签名不等应重建而非恢复缓存");
+    // 旧 root 未被复用（不在 reused_nodes）；key 保留在 prev_node_by_key（待 compose 末尾回收 free）
+    assert!(!composer.reused_nodes.contains(&old_root), "旧节点不应标记复用（待回收）");
+    assert!(composer.prev_node_by_key.contains_key(&old_root_key),
+        "key 应保留待回收（否则旧节点 arena 泄漏）");
+}
+
+/// T4：数量相同内容不同（A→B 同位置）——保持恢复（Compose 位置复用语义，不强制 Enter）
+#[test]
+fn test_skip_recovery_same_count_different_content() {
+    let mut composer = Composer::new();
+    let content = std::cell::Cell::new(0u32);
+
+    let build = |composer: &mut Composer, content: &std::cell::Cell<u32>| {
+        composer.compose(|ctx| {
+            let root_key = ctx.next_key();
+            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    // 同位置单个 leaf（数量恒 1）——内容由 cell 控制（无 state 驱动）
+                    let _ = content.get();
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, Modifier::new());
+                    ctx.end_node();
+                }
+            }
+            ctx.end_restartable_group();
+        });
+        composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+    };
+
+    build(&mut composer, &content);
+    // 帧2：内容 cell 变化但无 state notify → slot clean + 参数相同 → Skip（恢复）
+    content.set(1);
+    build(&mut composer, &content);
+    // 关键断言：帧2 全 Skip（clean 计数 > 0）——同数量同位置保持恢复（Compose 语义）
+    assert!(composer.compose_clean_count > 0, "数量相同内容不同应保持 Skip（clean_count={}）", composer.compose_clean_count);
+}
