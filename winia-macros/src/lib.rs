@@ -383,7 +383,9 @@ pub fn composable(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
 /// 根组合入口宏（闭包版 #[composable]——保留外部捕获）。
 ///
-/// 用法：`run_app(winia::app_root!(|ctx| { ... }))`（或 `app::run_app(...)`）。
+/// 用法：`winia::app_root!(|ctx| { ... })` 得到注入语句级 key 的根闭包，
+/// 传给 `app::run_app`。日常用法请直接使用 `winia::run_app!`（合并入口）。
+///
 /// 展开：闭包体注入 `start_scope_keyed(固定根哈希)` + 每条语句 `enter_stmt`
 /// （语句级稳定 key——结构变化不漂移）+ `end_scope()`——根闭包内所有组件
 /// 调用点获得与 #[composable] 相同的稳定 key。
@@ -392,7 +394,23 @@ pub fn composable(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// 且只有一个根入口（scope key 固定常量——无需源码哈希）。
 #[proc_macro]
 pub fn app_root(input: TokenStream) -> TokenStream {
-    let closure = parse_macro_input!(input as syn::ExprClosure);
+    TokenStream::from(transform_root_closure(input))
+}
+
+/// 应用入口宏（合并写法）：`winia::run_app!(|ctx| { ... })`——
+/// 等价 `app::run_app(winia::app_root!(|ctx| { ... }))`，根闭包自动获得
+/// 语句级稳定 key（结构变化不漂移）。
+#[proc_macro]
+pub fn run_app(input: TokenStream) -> TokenStream {
+    let closure = transform_root_closure(input);
+    // 展开为 run_app(注入闭包)——用绝对路径（宏展开处 crate 名为 winia）
+    TokenStream::from(quote!(::winia::app::run_app(#closure)))
+}
+
+/// 根闭包变换共享逻辑：注入 start_scope_keyed + 语句级 key + end_scope。
+fn transform_root_closure(input: proc_macro::TokenStream) -> proc_macro2::TokenStream {
+    let closure = syn::parse::<syn::ExprClosure>(input)
+        .expect("app_root!/run_app! 需要一个闭包参数（|ctx| { ... }）");
     // 校验：单参且名为 ctx（与 run_app 签名一致）——兼容 `|ctx|` 与 `|ctx: &mut ComposeCtx|`
     let ctx_ident = closure
         .inputs
@@ -447,7 +465,7 @@ pub fn app_root(input: TokenStream) -> TokenStream {
         label: None,
         block: new_block,
     }));
-    TokenStream::from(quote!(#out_closure))
+    quote!(#out_closure)
 }
 
 #[cfg(test)]

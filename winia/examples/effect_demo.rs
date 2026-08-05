@@ -10,7 +10,7 @@ fn main() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let _guard = rt.enter(); // 进入 runtime 上下文，使 Handle::try_current() 可用
 
-    app::run_app(winia::app_root!(|ctx| {
+    winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
                 .size(420.0, 520.0)
@@ -19,7 +19,7 @@ fn main() {
                     effect_demo_ui(ctx);
                 });
         });
-    }));
+    });
 }
 
 /// effect 演示主界面（#[composable] = 函数级 scope）

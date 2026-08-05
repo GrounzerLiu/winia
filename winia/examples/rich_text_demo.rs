@@ -6,14 +6,14 @@ use winia::app;
 fn main() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let _guard = rt.enter();
-    app::run_app(winia::app_root!(|ctx| {
+    winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
                 .size(680.0, 1200.0)
                 .title("RichText — All Features")
                 .build(ctx, |ctx| rich_text_demo_ui(ctx));
         });
-    }));
+    });
 }
 
 fn check() -> SvgDrawable {

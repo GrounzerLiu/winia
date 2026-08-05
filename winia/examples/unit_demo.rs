@@ -130,12 +130,12 @@ fn unit_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    app::run_app(winia::app_root!(|ctx| {
+    winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
                 .size(420.0, 520.0)
                 .title("Unit Demo")
                 .build(ctx, |ctx| unit_demo(ctx));
         });
-    }));
+    });
 }

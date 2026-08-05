@@ -19,12 +19,12 @@ fn text_field_ui(ctx: &mut ComposeCtx) {
 fn main() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let _guard = rt.enter();
-    app::run_app(winia::app_root!(|ctx| {
+    winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
                 .size(400.0, 150.0)
                 .title("TextField Test")
                 .build(ctx, text_field_ui);
         });
-    }));
+    });
 }
