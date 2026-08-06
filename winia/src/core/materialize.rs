@@ -107,7 +107,10 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
                 // 注意：不能 return（会跳过尾部 add_child/children 挂接）——
                 // 返回 Some(idx) 走统一挂接路径。
                 let pidx = policy.map(|p| composer.arena.alloc_policy(p));
+                let dir = modifier.get_layout_direction()
+                    .unwrap_or(crate::ui::theme::WiniaTheme::direction());
                 let mut node = crate::layout::node::LayoutNode::new(modifier, pidx);
+                node.layout_direction = dir;
                 node.on_remove = on_remove;
                 node.slot_key = key;
                 // 降级节点：Skip 的 desc 通常已带 policy（skip_policy 保存外层传入值），
@@ -180,7 +183,10 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
             }
             idx
         } else {
+            let dir = modifier.get_layout_direction()
+                .unwrap_or(crate::ui::theme::WiniaTheme::direction());
             let mut node = crate::layout::node::LayoutNode::new(modifier, pidx);
+            node.layout_direction = dir;
             node.on_remove = on_remove;
             node.slot_key = key;
             if !dirty {

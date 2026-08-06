@@ -55,7 +55,8 @@ impl Column {
         ctx.changed(&self.spacing);
         ctx.changed(&self.arrangement);
         ctx.changed(&self.alignment);
-        let dir = crate::ui::theme::WiniaTheme::direction();
+        // 方向：modifier 覆盖（Modifier::layout_direction）> CompositionLocal 默认
+        let dir = self.modifier.get_layout_direction().unwrap_or(crate::ui::theme::WiniaTheme::direction());
         build_container(
             ctx,
             self.modifier,
@@ -102,7 +103,8 @@ impl Row {
         ctx.changed(&self.spacing);
         ctx.changed(&self.arrangement);
         ctx.changed(&self.alignment);
-        let dir = crate::ui::theme::WiniaTheme::direction();
+        // 方向：modifier 覆盖（Modifier::layout_direction）> CompositionLocal 默认
+        let dir = self.modifier.get_layout_direction().unwrap_or(crate::ui::theme::WiniaTheme::direction());
         build_container(
             ctx,
             self.modifier,

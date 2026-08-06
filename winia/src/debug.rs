@@ -169,7 +169,20 @@ fn describe_modifier(modifier: &crate::modifier::Modifier) -> String {
             content.replace('\\', "\\\\").replace('"', "\\\"")
                 .replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t")
                 .replace('\u{8}', "\\b").replace('\u{c}', "\\f"))),
-        ModifierElement::Padding { all } => Some(format!("pad({})", all)),
+        ModifierElement::PaddingSides { start, top, end, bottom } => {
+            use crate::modifier::{Dimension, SizeValue};
+            // 四边求值（Debug 场景：显示累积/动态标记）
+            let sv = |v: &SizeValue| match v {
+                SizeValue::Static(Dimension::Fixed(x)) | SizeValue::Static(Dimension::Dp(crate::unit::Dp(x))) => format!("{x}"),
+                SizeValue::Static(Dimension::Auto) | SizeValue::Static(Dimension::Fill) => "0".to_string(),
+                SizeValue::Static(Dimension::Px(p)) => format!("{:.0}", p.to_logical(crate::unit::current_density())),
+                SizeValue::Dynamic(_) => "<dyn>".to_string(),
+            };
+            Some(format!(
+                "pad({},{},{},{})",
+                sv(start), sv(top), sv(end), sv(bottom)
+            ))
+        }
         _ => None,
     }).collect::<Vec<_>>().join("|")
 }

@@ -144,6 +144,9 @@ pub struct LayoutNode {
     pub(crate) layout_dirty: bool,
     /// 上次测量时的约束（用于跳过常量布局的 re-measure）
     pub(crate) cached_constraints: Option<Constraints>,
+    /// 布局方向（组合期快照：modifier 覆盖 > CompositionLocal 默认）——
+    /// 测量/渲染期 padding start/end 镜像、文本对齐用
+    pub(crate) layout_direction: LayoutDirection,
     /// composable 调用对应的 slot key（用于 replay 时子节点查找）
     pub(crate) slot_key: u64,
     /// 测量阶段缓存的 Paragraph（避免渲染时重建）
@@ -259,6 +262,7 @@ impl LayoutNode {
             dirty: true,
             layout_dirty: false,
             cached_constraints: None,
+            layout_direction: LayoutDirection::Ltr,
             slot_key: 0,
             cached_paragraph: std::cell::RefCell::new(None),
             scroll_viewport_height: 0.0, parent_id: None,
@@ -308,6 +312,7 @@ impl Default for LayoutNode {
             dirty: true,
             layout_dirty: false,
             cached_constraints: None,
+            layout_direction: LayoutDirection::Ltr,
             slot_key: 0,
             cached_paragraph: std::cell::RefCell::new(None),
             scroll_viewport_height: 0.0, parent_id: None,
@@ -662,6 +667,70 @@ mod tests {
         let c = Modifier::new().test_tag("a");
         assert!(a.param_eq(&c), "tag 相同必须相等");
     }
+
+    #[test]
+    fn test_measure_node_rtl_padding() {
+        // RTL + padding_start(10)：start 在右——子内容靠右 10（左侧空隙 0）
+        use crate::layout::row::RowLayout;
+        let mut nodes = vec![
+            LayoutNode::new(
+                Modifier::new()
+                    .size(100.0, 50.0)
+                    .layout_direction(LayoutDirection::Rtl)
+                    .padding_start(10.0),
+                Some(0),
+            ),
+            LayoutNode::leaf(Modifier::new().size(30.0, 20.0)),
+        ];
+        nodes[0].children = vec![1];
+        nodes[0].layout_direction = LayoutDirection::Rtl; // 模拟物化快照（modifier 覆盖）
+        let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(RowLayout::new().direction(LayoutDirection::Rtl))];
+        let _ = measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 100.0, 0.0, 100.0));
+        // 内容区宽 = 100-10 = 90；RTL 第一个子（30 宽）在右端 → x = 60
+        // padding 偏移（Rtl 用 end=0）→ 不变
+        assert_eq!(nodes[1].position.x, 60.0, "RTL 下 start 在右：子内容靠右，右侧空隙 10");
+        // 右侧空隙 = 100 - (60+30) = 10 ✓（padding_start 生效在右）
+    }
+
+    #[test]
+    fn test_measure_node_rtl_padding_end_left() {
+        // RTL + padding_end(20)：end 在左——子内容从右侧排，左侧空隙 20
+        use crate::layout::row::RowLayout;
+        let mut nodes = vec![
+            LayoutNode::new(
+                Modifier::new()
+                    .size(100.0, 50.0)
+                    .layout_direction(LayoutDirection::Rtl)
+                    .padding_end(20.0),
+                Some(0),
+            ),
+            LayoutNode::leaf(Modifier::new().size(30.0, 20.0)),
+        ];
+        nodes[0].children = vec![1];
+        nodes[0].layout_direction = LayoutDirection::Rtl; // 模拟物化快照
+        let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(RowLayout::new().direction(LayoutDirection::Rtl))];
+        let _ = measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 100.0, 0.0, 100.0));
+        // 内容区宽 = 100-20 = 80；flex RTL 第一个子 x = 80-30 = 50
+        // padding 偏移（Rtl 用 end=20）→ 50+20 = 70
+        assert_eq!(nodes[1].position.x, 70.0, "RTL 下 end 在左：子靠右排，左侧空隙 20");
+    }
+
+    #[test]
+    fn test_measure_node_ltr_padding_unaffected() {
+        // LTR 对照组：padding_start(10) → 子靠左 10
+        use crate::layout::row::RowLayout;
+        let mut nodes = vec![
+            LayoutNode::new(
+                Modifier::new().size(100.0, 50.0).padding_start(10.0),
+                Some(0),
+            ),
+            LayoutNode::leaf(Modifier::new().size(30.0, 20.0)),
+        ];
+        nodes[0].children = vec![1];
+        let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(RowLayout::new())];
+        let _ = measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 100.0, 0.0, 100.0));
+        assert_eq!(nodes[1].position.x, 10.0, "LTR 下 start 在左：子靠左 10");
+    }
 }
 
 // ── 焦点遍历 ──
@@ -921,9 +990,9 @@ pub(crate) fn measure_node(
     }
 
     // 2. 应用 padding
-    let (pad_left, pad_right) = nodes[idx].modifier.get_padding_horizontal();
+    let (pad_start, pad_end) = nodes[idx].modifier.get_padding_horizontal();
     let (pad_top, pad_bottom) = nodes[idx].modifier.get_padding_vertical();
-    let pad_x = pad_left + pad_right;
+    let pad_x = pad_start + pad_end;
     let pad_y = pad_top + pad_bottom;
     if pad_x > 0.0 || pad_y > 0.0 {
         inner_constraints = inner_constraints.offset(pad_x, pad_y);
@@ -961,10 +1030,12 @@ pub(crate) fn measure_node(
         let (size, placements) = policies[pidx].measure(nodes, policies, &children, inner_constraints);
         // apply positions
         policies[pidx].place(nodes, &children, &placements);
-        // apply padding offset
-        if pad_left > 0.0 || pad_top > 0.0 {
+        // apply padding offset（RTL：start 在右——子靠右偏移）
+        let rtl = nodes[idx].layout_direction == LayoutDirection::Rtl;
+        let left_offset = if rtl { pad_end } else { pad_start };
+        if left_offset > 0.0 || pad_top > 0.0 {
             for &c in &children {
-                nodes[c].position.x += pad_left;
+                nodes[c].position.x += left_offset;
                 nodes[c].position.y += pad_top;
             }
         }

@@ -199,6 +199,97 @@ fn component_demo(ctx: &mut ComposeCtx) {
                         .color(Color::WHITE)
                         .build(ctx);
                 });
+
+            // ── 8. padding（start/end/单边/动态动画） ──
+            Text::new("8. padding start/end/单边 + 动态（动画作用于 padding）")
+                .font_size(14.0)
+                .color(Color::from_argb(200, 100, 100, 100))
+                .modifier(Modifier::new().padding_vertical(8.0))
+                .build(ctx);
+            let pad_anim = ctx.animate_float_as_state(
+                if clicked.get() { 40.0 } else { 4.0 },
+                winia::animation::AnimationSpec::Spring(winia::animation::SpringSpec::bouncy()),
+            );
+            Button::new()
+                .on_click({ let c = clicked.clone(); move || c.set(!c.get()) })
+                .modifier(Modifier::new().size(160.0, 36.0))
+                .build(ctx, |ctx| {
+                    Text::new(if clicked.get() { "padding 40（点击还原）" } else { "padding 4（点击动画）" })
+                        .font_size(12.0)
+                        .color(Color::WHITE)
+                        .build(ctx);
+                });
+            Column::new()
+                .modifier(
+                    Modifier::new()
+                        .size(200.0, 60.0)
+                        // 动态 padding：动画 State 驱动 → 每帧重测 → 内容平滑移动
+                        .padding_sides(
+                            pad_anim.clone(), // start 动画
+                            8.0,              // top 固定
+                            4.0,              // end 固定
+                            2.0,              // bottom 固定
+                        )
+                        .background(Color::from_argb(255, 63, 81, 181), Shape::rounded(8.0)),
+                )
+                .build(ctx, |ctx| {
+                    Text::new("内容随 padding_start 动画移动")
+                        .font_size(13.0)
+                        .color(Color::WHITE)
+                        .build(ctx);
+                });
+
+            // ── 9. 布局方向（RTL 切换——适配阿拉伯语/希伯来语） ──
+            Text::new("9. 布局方向 RTL（切换后：Row 镜像 / 文本右对齐 / padding start 在右）")
+                .font_size(14.0)
+                .color(Color::from_argb(200, 100, 100, 100))
+                .modifier(Modifier::new().padding_vertical(8.0))
+                .build(ctx);
+            let rtl_state = ctx.remember(|| false);
+            Button::new()
+                .on_click({ let r = rtl_state.clone(); move || r.set(!r.get()) })
+                .modifier(Modifier::new().size(180.0, 36.0))
+                .build(ctx, |ctx| {
+                    Text::new(if rtl_state.get() { "当前 RTL（点击切回 LTR）" } else { "当前 LTR（点击切换 RTL）" })
+                        .font_size(12.0)
+                        .color(Color::WHITE)
+                        .build(ctx);
+                });
+            let dir = if rtl_state.get() {
+                winia::layout::LayoutDirection::Rtl
+            } else {
+                winia::layout::LayoutDirection::Ltr
+            };
+            // 组合期方向作用域（CompositionLocal 语义——对标 Compose
+            // CompositionLocalProvider(LocalLayoutDirection)）
+            WiniaTheme::with_theme_and_direction(WiniaTheme::colors(), dir, ctx, |ctx| {
+                // Row：RTL 下子节点从右到左
+                Row::new()
+                    .modifier(Modifier::new().padding_vertical(4.0))
+                    .build(ctx, |ctx| {
+                        Text::new("[1]").font_size(13.0).build(ctx);
+                        Text::new("[2]").font_size(13.0).build(ctx);
+                        Text::new("[3]").font_size(13.0).build(ctx);
+                    });
+                // 文本：RTL 下默认右对齐
+                Text::new("RTL 默认右对齐（未指定 align）")
+                    .font_size(13.0)
+                    .build(ctx);
+                // padding start：RTL 下 start 在右
+                Column::new()
+                    .modifier(
+                        Modifier::new()
+                            .size(200.0, 44.0)
+                            .padding_start(12.0)
+                            .background(Color::from_argb(255, 255, 152, 0), Shape::rounded(6.0)),
+                    )
+                    .build(ctx, |ctx| {
+                        Text::new("padding_start 12")
+                            .font_size(12.0)
+                            .color(Color::WHITE)
+                            .build(ctx);
+                    });
+            });
         });
 }
 

@@ -212,7 +212,14 @@ impl Text {
         let final_font_size = self.font_size.or(style.font_size).unwrap_or(TextUnit::Sp(crate::unit::Sp(14.0)));
         let final_font_weight = self.font_weight.or(style.font_weight).unwrap_or_default();
         let final_font_style = self.font_style.or(style.font_style).unwrap_or_default();
-        let final_align = self.text_align.or(style.text_align).unwrap_or_default();
+        let final_align = self.text_align.or(style.text_align).unwrap_or_else(|| {
+            // 默认对齐随布局方向（对标 Compose：Rtl 默认右对齐）
+            if crate::ui::theme::WiniaTheme::direction() == crate::layout::LayoutDirection::Rtl {
+                TextAlign::Right
+            } else {
+                TextAlign::Left
+            }
+        });
         let final_overflow = self.overflow.or(style.overflow).unwrap_or_default();
         let final_max_lines = self.max_lines.or(style.max_lines).unwrap_or(usize::MAX);
 

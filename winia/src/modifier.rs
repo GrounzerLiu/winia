@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::ops::Range;
 use std::fmt::{self, Debug};
 use std::sync::atomic::{AtomicU64, Ordering};
+use crate::layout::LayoutDirection;
 
 // ── Dimension ──
 
@@ -303,12 +304,13 @@ pub(crate) enum ModifierElement {
     /// 固定尺寸
     /// 尺寸（静态 Dimension 或动态求值 SizeValue——布局属性动画用 State/闭包）
     Size { width: SizeValue, height: SizeValue },
-    /// 全方向 padding
-    Padding { all: f32 },
-    /// 水平 padding
-    PaddingHorizontal { value: f32 },
-    /// 垂直 padding
-    PaddingVertical { value: f32 },
+    /// 四边 padding（每边独立，支持动态 SizeValue——动画可作用于 padding）
+    PaddingSides {
+        start: SizeValue,
+        top: SizeValue,
+        end: SizeValue,
+        bottom: SizeValue,
+    },
     /// 填满最大宽度
     FillMaxWidth,
     /// 填满最大高度
@@ -329,6 +331,9 @@ pub(crate) enum ModifierElement {
     /// 测试标记（对标 Compose `Modifier.testTag`——UI 测试定位；
     /// 调试树 JSON 暴露 tag 字段）
     TestTag { tag: String },
+    /// 布局方向作用域（对标 Compose `CompositionLocalProvider(LocalLayoutDirection)`）——
+    /// 影响子树内 Row 排列、Text 对齐、padding start/end 的镜像
+    LayoutDirection(crate::layout::LayoutDirection),
     /// 阴影（对标 Compose `Modifier.shadow`——elevation 模糊 + 内容裁剪）
     /// 阴影（对标 Compose `Modifier.shadow`——单层参数；elevation 便捷版
     /// 展开为 ambient+spot 两层元素）
@@ -465,19 +470,97 @@ impl Modifier {
         })
     }
 
-    /// 四边等距 padding
-    pub fn padding(self, all: f32) -> Self {
-        self.push(ModifierElement::Padding { all })
+    /// 四边等距 padding（支持动态：`State<f32>`/`DerivedValue`/闭包——
+    /// 动画可作用于 padding，对标 Compose `animateDpAsState` + `padding`）
+    pub fn padding(self, all: impl Into<SizeValue>) -> Self {
+        let v = all.into();
+        self.push(ModifierElement::PaddingSides {
+            start: v.clone(),
+            top: v.clone(),
+            end: v.clone(),
+            bottom: v,
+        })
     }
 
-    /// 水平方向 padding
-    pub fn padding_horizontal(self, value: f32) -> Self {
-        self.push(ModifierElement::PaddingHorizontal { value })
+    /// 水平方向 padding（start + end）
+    pub fn padding_horizontal(self, value: impl Into<SizeValue>) -> Self {
+        let v = value.into();
+        self.push(ModifierElement::PaddingSides {
+            start: v.clone(),
+            top: SizeValue::Static(Dimension::Auto),
+            end: v,
+            bottom: SizeValue::Static(Dimension::Auto),
+        })
     }
 
-    /// 垂直方向 padding
-    pub fn padding_vertical(self, value: f32) -> Self {
-        self.push(ModifierElement::PaddingVertical { value })
+    /// 垂直方向 padding（top + bottom）
+    pub fn padding_vertical(self, value: impl Into<SizeValue>) -> Self {
+        let v = value.into();
+        self.push(ModifierElement::PaddingSides {
+            start: SizeValue::Static(Dimension::Auto),
+            top: v.clone(),
+            end: SizeValue::Static(Dimension::Auto),
+            bottom: v,
+        })
+    }
+
+    /// 起始边（左）padding——单边，支持动态
+    pub fn padding_start(self, value: impl Into<SizeValue>) -> Self {
+        self.push(ModifierElement::PaddingSides {
+            start: value.into(),
+            top: SizeValue::Static(Dimension::Auto),
+            end: SizeValue::Static(Dimension::Auto),
+            bottom: SizeValue::Static(Dimension::Auto),
+        })
+    }
+
+    /// 末尾边（右）padding——单边，支持动态
+    pub fn padding_end(self, value: impl Into<SizeValue>) -> Self {
+        self.push(ModifierElement::PaddingSides {
+            start: SizeValue::Static(Dimension::Auto),
+            top: SizeValue::Static(Dimension::Auto),
+            end: value.into(),
+            bottom: SizeValue::Static(Dimension::Auto),
+        })
+    }
+
+    /// 顶部 padding——单边，支持动态
+    pub fn padding_top(self, value: impl Into<SizeValue>) -> Self {
+        self.push(ModifierElement::PaddingSides {
+            start: SizeValue::Static(Dimension::Auto),
+            top: value.into(),
+            end: SizeValue::Static(Dimension::Auto),
+            bottom: SizeValue::Static(Dimension::Auto),
+        })
+    }
+
+    /// 底部 padding——单边，支持动态
+    pub fn padding_bottom(self, value: impl Into<SizeValue>) -> Self {
+        self.push(ModifierElement::PaddingSides {
+            start: SizeValue::Static(Dimension::Auto),
+            top: SizeValue::Static(Dimension::Auto),
+            end: SizeValue::Static(Dimension::Auto),
+            bottom: value.into(),
+        })
+    }
+
+    /// 四边各自独立 padding（对标 Compose
+    /// `Modifier.padding(start = .., top = .., end = .., bottom = ..)`）。
+    /// 参数顺序：(start, top, end, bottom)——全部支持动态。
+    /// 与其它 padding 方法可叠加（累积）。
+    pub fn padding_sides(
+        self,
+        start: impl Into<SizeValue>,
+        top: impl Into<SizeValue>,
+        end: impl Into<SizeValue>,
+        bottom: impl Into<SizeValue>,
+    ) -> Self {
+        self.push(ModifierElement::PaddingSides {
+            start: start.into(),
+            top: top.into(),
+            end: end.into(),
+            bottom: bottom.into(),
+        })
     }
 
     /// 宽度填满可用空间
@@ -542,6 +625,12 @@ impl Modifier {
     /// 标记，UI 测试/调试树用其定位节点（树 JSON 的 `tag` 字段）。
     pub fn test_tag(self, tag: impl Into<String>) -> Self {
         self.push(ModifierElement::TestTag { tag: tag.into() })
+    }
+
+    /// 布局方向作用域——子树内 Row/Text/padding 的 start/end 语义按此方向解析
+    /// （对标 Compose `CompositionLocalProvider(LocalLayoutDirection provides Rtl)`）
+    pub fn layout_direction(self, d: crate::layout::LayoutDirection) -> Self {
+        self.push(ModifierElement::LayoutDirection(d))
     }
 
     /// `shadow(elevation, shape, clip, color)`（对标 Compose `Modifier.shadow`）——
@@ -856,47 +945,56 @@ impl Modifier {
 // ── 查询方法: 布局参数提取 ──
 
 impl Modifier {
-    /// 累积的 padding 值（水平 + 垂直分别计算）
-    ///
-    /// 返回 (horizontal_padding, vertical_padding)，每边的 padding 值
-    pub fn get_padding_values(&self) -> (f32, f32) {
-        let mut h = 0.0;
-        let mut v = 0.0;
-        for el in &self.elements {
-            match el {
-                ModifierElement::Padding { all } => { h += all; v += all; }
-                ModifierElement::PaddingHorizontal { value } => { h += value; }
-                ModifierElement::PaddingVertical { value } => { v += value; }
-                _ => {}
-            }
-        }
-        (h, v)
+    /// 累积的四边 padding（start, top, end, bottom 各自独立）——
+    /// 非对称 padding 的基础查询，其余查询方法由其派生。
+    /// 动态值（State/闭包）在此求值（measure/layout 期间读 State 会
+    /// 注册布局依赖——动画更新 State → 节点重测）
+    /// 布局方向元素：返回自身覆盖的方向（无则 None——继承父作用域）
+    pub fn get_layout_direction(&self) -> Option<crate::layout::LayoutDirection> {
+        self.elements.iter().find_map(|el| match el {
+            ModifierElement::LayoutDirection(d) => Some(*d),
+            _ => None,
+        })
     }
 
-    /// 水平方向 padding（左 + 右各自累积后返回 (left, right)）
+    pub fn get_padding_sides(&self) -> (f32, f32, f32, f32) {
+        use crate::unit::{current_density, Dp, Px};
+        let resolve = |sv: &SizeValue| -> f32 {
+            match sv {
+                SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(Dp(v))) => *v,
+                SizeValue::Static(Dimension::Px(p)) => p.to_logical(current_density()),
+                SizeValue::Static(Dimension::Auto) | SizeValue::Static(Dimension::Fill) => 0.0,
+                SizeValue::Dynamic(f) => f(),
+            }
+        };
+        let (mut s, mut t, mut e, mut b) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+        for el in &self.elements {
+            if let ModifierElement::PaddingSides { start, top, end, bottom } = el {
+                s += resolve(start);
+                t += resolve(top);
+                e += resolve(end);
+                b += resolve(bottom);
+            }
+        }
+        (s, t, e, b)
+    }
+
+    /// 水平方向 padding——返回 (start, end)（各自独立，非对称时不同）
     pub fn get_padding_horizontal(&self) -> (f32, f32) {
-        let mut total = 0.0;
-        for el in &self.elements {
-            match el {
-                ModifierElement::Padding { all } => { total += all; }
-                ModifierElement::PaddingHorizontal { value } => { total += value; }
-                _ => {}
-            }
-        }
-        (total, total)
+        let (s, _, e, _) = self.get_padding_sides();
+        (s, e)
     }
 
-    /// 垂直方向 padding（上 + 下各自累积后返回 (top, bottom)）
+    /// 垂直方向 padding——返回 (top, bottom)（各自独立，非对称时不同）
     pub fn get_padding_vertical(&self) -> (f32, f32) {
-        let mut total = 0.0;
-        for el in &self.elements {
-            match el {
-                ModifierElement::Padding { all } => { total += all; }
-                ModifierElement::PaddingVertical { value } => { total += value; }
-                _ => {}
-            }
-        }
-        (total, total)
+        let (_, t, _, b) = self.get_padding_sides();
+        (t, b)
+    }
+
+    /// 累积 padding 总量——返回 (start+end, top+bottom)
+    pub fn get_padding_values(&self) -> (f32, f32) {
+        let (s, t, e, b) = self.get_padding_sides();
+        (s + e, t + b)
     }
 
     /// 固定尺寸（从 Size modifier 提取）
@@ -1104,9 +1202,13 @@ impl Debug for ModifierElement {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Size { width, height } => f.debug_struct("Size").field("width", width).field("height", height).finish(),
-            Self::Padding { all } => f.debug_struct("Padding").field("all", all).finish(),
-            Self::PaddingHorizontal { value } => f.debug_struct("PaddingHorizontal").field("value", value).finish(),
-            Self::PaddingVertical { value } => f.debug_struct("PaddingVertical").field("value", value).finish(),
+            Self::PaddingSides { start, top, end, bottom } => f
+                .debug_struct("PaddingSides")
+                .field("start", start)
+                .field("top", top)
+                .field("end", end)
+                .field("bottom", bottom)
+                .finish(),
             Self::FillMaxWidth => f.write_str("FillMaxWidth"),
             Self::FillMaxHeight => f.write_str("FillMaxHeight"),
             Self::FillMaxSize => f.write_str("FillMaxSize"),
@@ -1120,6 +1222,7 @@ impl Debug for ModifierElement {
                 .field("height", height)
                 .finish(),
             Self::TestTag { tag } => f.debug_struct("TestTag").field("tag", tag).finish(),
+            Self::LayoutDirection(d) => f.debug_tuple("LayoutDirection").field(d).finish(),
             Self::Shadow { params, .. } => f.debug_struct("Shadow").field("radius", &params.radius).field("spread", &params.spread).finish(),
             Self::Background { .. } => f.debug_struct("Background").finish(),
             Self::Border { width, color, shape } => f.debug_struct("Border").field("width", width).field("color", color).field("shape", shape).finish(),
@@ -1373,6 +1476,47 @@ mod tests {
     }
 
     #[test]
+    fn test_padding_sides_queries() {
+        // 非对称 padding：四边独立
+        let m = Modifier::new().padding_sides(2.0, 4.0, 6.0, 8.0);
+        assert_eq!(m.get_padding_sides(), (2.0, 4.0, 6.0, 8.0));
+        assert_eq!(m.get_padding_horizontal(), (2.0, 6.0));
+        assert_eq!(m.get_padding_vertical(), (4.0, 8.0));
+        assert_eq!(m.get_padding_values(), (8.0, 12.0));
+
+        // 与等距/对称 padding 叠加（累积）
+        let m = Modifier::new()
+            .padding(1.0)
+            .padding_horizontal(10.0)
+            .padding_vertical(20.0)
+            .padding_sides(2.0, 4.0, 6.0, 8.0);
+        assert_eq!(m.get_padding_sides(), (13.0, 25.0, 17.0, 29.0));
+    }
+
+    #[test]
+    fn test_padding_single_sides() {
+        // 单边方法：只影响对应边
+        let m = Modifier::new()
+            .padding_start(3.0)
+            .padding_end(5.0)
+            .padding_top(7.0)
+            .padding_bottom(9.0);
+        assert_eq!(m.get_padding_sides(), (3.0, 7.0, 5.0, 9.0));
+    }
+
+    #[test]
+    fn test_padding_dynamic_value() {
+        // 动态 padding：State 驱动（动画作用于 padding 的机制）
+        let s = crate::core::state::State::new(4.0f32);
+        let m = Modifier::new().padding_start(s.clone());
+        let (start, _, _, _) = m.get_padding_sides();
+        assert_eq!(start, 4.0);
+        s.set(20.0);
+        let (start, _, _, _) = m.get_padding_sides();
+        assert_eq!(start, 20.0, "动态 padding 重新求值");
+    }
+
+    #[test]
     fn test_dimension_conversions() {
         let m = Modifier::new()
             .size(100.0, Dimension::Fill) // f32 → Dimension::Fixed, Dimension::Fill
@@ -1513,9 +1657,12 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (Size { width: aw, height: ah }, Size { width: bw, height: bh }) => {
             size_value_eq(aw, bw) && size_value_eq(ah, bh)
         }
-        (Padding { all: av }, Padding { all: bv }) => av == bv,
-        (PaddingHorizontal { value: av }, PaddingHorizontal { value: bv }) => av == bv,
-        (PaddingVertical { value: av }, PaddingVertical { value: bv }) => av == bv,
+        (
+            PaddingSides { start: as_, top: at, end: ae, bottom: ab },
+            PaddingSides { start: bs, top: bt, end: be, bottom: bb },
+        ) => {
+            size_value_eq(as_, bs) && size_value_eq(at, bt) && size_value_eq(ae, be) && size_value_eq(ab, bb)
+        }
         (FillMaxWidth, FillMaxWidth) => true,
         (FillMaxHeight, FillMaxHeight) => true,
         (FillMaxSize, FillMaxSize) => true,
@@ -1529,6 +1676,7 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
             aw == bw && ah == bh
         }
         (TestTag { tag: at }, TestTag { tag: bt }) => at == bt,
+        (LayoutDirection(ad), LayoutDirection(bd)) => ad == bd,
         (Shadow { params: ap, shape: as_, clip: ac }, Shadow { params: bp, shape: bs, clip: bc }) => {
             ap == bp && as_ == bs && ac == bc
         }

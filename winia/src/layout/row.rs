@@ -114,4 +114,28 @@ mod tests {
         assert_eq!(placements[0].position.y, (100.0 - 20.0) / 2.0);
         assert_eq!(placements[1].position.y, 0.0);
     }
+
+    #[test]
+    fn test_row_rtl_mirror() {
+        // RTL：子节点从右到左排列（第一个子在最右）
+        let row = RowLayout::new().direction(LayoutDirection::Rtl);
+        let mut nodes = vec![make_leaf(10.0, 100.0), make_leaf(30.0, 80.0)];
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let (size, placements) = row.measure(&mut nodes, &[], &children, Constraints::UNBOUNDED);
+        assert_eq!(size.width, 40.0);
+        // 容器宽 40：第一个子（10 宽）在最右 → x = 30
+        assert_eq!(placements[0].position.x, 30.0);
+        assert_eq!(placements[1].position.x, 0.0);
+    }
+
+    #[test]
+    fn test_row_rtl_fill_container() {
+        // RTL + fill_max_width：容器 100 宽，子镜像到右侧
+        let row = RowLayout::new().direction(LayoutDirection::Rtl);
+        let mut nodes = vec![make_leaf(20.0, 50.0), make_leaf(30.0, 50.0)];
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let (_, placements) = row.measure(&mut nodes, &[], &children, Constraints::new(0.0, 100.0, 0.0, 100.0));
+        assert_eq!(placements[0].position.x, 80.0, "第一个子在最右");
+        assert_eq!(placements[1].position.x, 50.0);
+    }
 }
