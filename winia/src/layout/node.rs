@@ -585,6 +585,54 @@ mod tests {
         let path = hit_test(&nodes, 0, 80.0, 75.0);
         assert_eq!(path, vec![0], "should only hit parent");
     }
+
+    // ── aspectRatio / requiredSize ──
+
+    #[test]
+    fn required_size_overrides_incoming() {
+        // 父约束 100x100，requiredSize(200, 50) → 溢出（enforceIncoming=false）
+        let m = Modifier::new().required_size(200.0, 50.0);
+        let mut nodes = vec![LayoutNode::leaf(m)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 100.0, 0.0, 100.0));
+        assert_eq!((size.width, size.height), (200.0, 50.0), "required 忽略 incoming 收缩");
+    }
+
+    #[test]
+    fn required_width_only() {
+        let m = Modifier::new().required_width(300.0);
+        let mut nodes = vec![LayoutNode::leaf(m)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 100.0, 0.0, 100.0));
+        assert_eq!(size.width, 300.0, "requiredWidth 溢出");
+        assert!(size.height <= 100.0, "高度仍受 incoming 约束");
+    }
+
+    #[test]
+    fn aspect_ratio_derives_from_max_width() {
+        // 约束 max 300x150，ratio 2 → 宽 300 高 150（h = 300/2 = 150 ≤ 150）
+        let m = Modifier::new().size(50.0, 20.0).aspect_ratio(2.0, false);
+        let mut nodes = vec![LayoutNode::leaf(m)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 300.0, 0.0, 300.0));
+        assert_eq!((size.width, size.height), (300.0, 150.0), "以 max_w 为基准推导");
+    }
+
+    #[test]
+    fn aspect_ratio_clamps_to_max_height() {
+        // 约束 max 300x100，ratio 2 → h = 300/2 = 150 > 100 → clamp：(100*2, 100)
+        let m = Modifier::new().size(50.0, 20.0).aspect_ratio(2.0, false);
+        let mut nodes = vec![LayoutNode::leaf(m)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 300.0, 0.0, 100.0));
+        assert_eq!((size.width, size.height), (200.0, 100.0), "高度超界时反推宽度");
+    }
+
+    #[test]
+    fn aspect_ratio_match_height_first() {
+        // match_height_first：以 max_h 为基准——约束 max 100x300，ratio 2
+        // → h = 300，w = 600 > 100 → clamp：(100, 50)
+        let m = Modifier::new().size(50.0, 20.0).aspect_ratio(2.0, true);
+        let mut nodes = vec![LayoutNode::leaf(m)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 100.0, 0.0, 300.0));
+        assert_eq!((size.width, size.height), (100.0, 50.0), "match_height_first 反推");
+    }
 }
 
 // ── 焦点遍历 ──
@@ -803,6 +851,19 @@ pub(crate) fn measure_node(
     // 应用 modifier 中的 Layout 约束（使用查询方法）
     let mut inner_constraints = constraints;
 
+    // 强制尺寸（requiredSize——忽略 incoming 收缩，允许溢出：
+    // min/max 直接覆盖 incoming，Compose enforceIncoming=false 语义）
+    if let Some((rw, rh)) = nodes[idx].modifier.required_size_constraint() {
+        if let Some(w) = rw {
+            inner_constraints.min_width = w;
+            inner_constraints.max_width = w;
+        }
+        if let Some(h) = rh {
+            inner_constraints.min_height = h;
+            inner_constraints.max_height = h;
+        }
+    }
+
     // 应用 Size 元素（静态/动态单轴独立解析——布局属性动画用 State/闭包，
     // 测量时求值并注册依赖到本节点）
     if let Some((sw, sh)) = nodes[idx].modifier.resolved_size() {
@@ -863,7 +924,7 @@ pub(crate) fn measure_node(
     }
 
     // 实际测量
-    let result = if let Some(pidx) = nodes[idx].measure_policy {
+    let mut result = if let Some(pidx) = nodes[idx].measure_policy {
         // 先拷贝子节点索引（policy.measure 会可变借用整个 nodes，不能持有 nodes[idx] 借用）
         let children = nodes[idx].children.clone();
         let (size, placements) = policies[pidx].measure(nodes, policies, &children, inner_constraints);
@@ -928,6 +989,35 @@ pub(crate) fn measure_node(
         nodes[idx].measured_size = size;
         (size, Vec::new())
     };
+
+    // aspectRatio：测量后按约束 max 推导节点尺寸（Compose 语义——以
+    // constraints.max 为基准固定一轴，另一轴按 ratio 推导并 clamp；
+    // 内容按 inner_constraints 已排版，节点尺寸可能大于内容——留白正常）
+    if let Some((ratio, match_height_first)) = nodes[idx].modifier.aspect_ratio_constraint() {
+        let (min_w, max_w) = (constraints.min_width, constraints.max_width);
+        let (min_h, max_h) = (constraints.min_height, constraints.max_height);
+        let (w, h) = if match_height_first {
+            if max_h < f32::MAX {
+                let w = max_h * ratio;
+                if w <= max_w { (w, max_h) } else { (max_w, max_w / ratio) }
+            } else if max_w < f32::MAX {
+                (max_w, max_w / ratio)
+            } else {
+                (result.0.width, result.0.height)
+            }
+        } else if max_w < f32::MAX {
+            let h = max_w / ratio;
+            if h <= max_h { (max_w, h) } else { (max_h * ratio, max_h) }
+        } else if max_h < f32::MAX {
+            (max_h * ratio, max_h)
+        } else {
+            (result.0.width, result.0.height)
+        };
+        let w = w.clamp(min_w, max_w);
+        let h = h.clamp(min_h, max_h);
+        result.0 = Size::new(w, h);
+        nodes[idx].measured_size = result.0;
+    }
 
     // 标记测量完成，缓存约束供下帧复用
     nodes[idx].dirty = false;

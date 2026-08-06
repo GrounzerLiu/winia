@@ -321,6 +321,11 @@ pub(crate) enum ModifierElement {
     AlignSelf { alignment: crate::layout::Alignment },
     /// 布局权重（Row 中分配宽度，Column 中分配高度）
     LayoutWeight { weight: f32 },
+    /// 宽高比约束（对标 Compose `Modifier.aspectRatio`——ratio = 宽/高）
+    AspectRatio { ratio: f32, match_height_first: bool },
+    /// 强制尺寸（对标 Compose `Modifier.requiredSize`——忽略 incoming
+    /// constraints 的收缩，允许溢出父约束）
+    RequiredSize { width: Option<f32>, height: Option<f32> },
 
     // ── Draw 类 ──
     /// 背景色 + 形状（color_fn 渲染时求值——静态色或动画闭包统一为闭包）
@@ -496,6 +501,34 @@ impl Modifier {
     /// 布局权重（Row 中按比例分配宽度，Column 中按比例分配高度）
     pub fn layout_weight(self, weight: f32) -> Self {
         self.push(ModifierElement::LayoutWeight { weight })
+    }
+
+    /// `aspect_ratio(ratio)`（对标 Compose `Modifier.aspectRatio`）——
+    /// 约束本节点宽高比（ratio = 宽/高，必须 > 0）。
+    ///
+    /// `match_height_first = true` 时优先按高度约束推导宽度
+    /// （对标 `matchHeightConstraintsFirst`）。
+    pub fn aspect_ratio(mut self, ratio: f32, match_height_first: bool) -> Self {
+        assert!(ratio > 0.0, "aspectRatio {ratio} must be > 0（Compose 前置校验）");
+        self.push(ModifierElement::AspectRatio { ratio, match_height_first })
+    }
+
+    /// `required_size(w, h)`（对标 Compose `Modifier.requiredSize`）——
+    /// 强制本节点为该尺寸，**忽略 incoming constraints 的收缩**（允许
+    /// 溢出父约束——enforceIncoming=false 语义）。单轴用
+    /// `required_width` / `required_height`。
+    pub fn required_size(self, width: f32, height: f32) -> Self {
+        self.push(ModifierElement::RequiredSize { width: Some(width), height: Some(height) })
+    }
+
+    /// 仅强制宽度
+    pub fn required_width(self, width: f32) -> Self {
+        self.push(ModifierElement::RequiredSize { width: Some(width), height: None })
+    }
+
+    /// 仅强制高度
+    pub fn required_height(self, height: f32) -> Self {
+        self.push(ModifierElement::RequiredSize { width: None, height: Some(height) })
     }
 }
 
@@ -852,6 +885,28 @@ impl Modifier {
         None
     }
 
+    /// 宽高比约束（ratio, match_height_first）
+    pub fn aspect_ratio_constraint(&self) -> Option<(f32, bool)> {
+        self.elements.iter().find_map(|el| {
+            if let ModifierElement::AspectRatio { ratio, match_height_first } = el {
+                Some((*ratio, *match_height_first))
+            } else {
+                None
+            }
+        })
+    }
+
+    /// 强制尺寸（单轴 None = 未约束）
+    pub fn required_size_constraint(&self) -> Option<(Option<f32>, Option<f32>)> {
+        self.elements.iter().find_map(|el| {
+            if let ModifierElement::RequiredSize { width, height } = el {
+                Some((*width, *height))
+            } else {
+                None
+            }
+        })
+    }
+
     /// 交叉轴对齐覆盖（供 Column/Row 使用）
     pub fn get_align_self(&self) -> Option<crate::layout::Alignment> {
         for el in &self.elements {
@@ -951,6 +1006,12 @@ impl Debug for ModifierElement {
             Self::Offset { x, y } => f.debug_struct("Offset").field("x", x).field("y", y).finish(),
             Self::AlignSelf { alignment } => f.debug_struct("AlignSelf").field("alignment", alignment).finish(),
             Self::LayoutWeight { weight } => f.debug_struct("LayoutWeight").field("weight", weight).finish(),
+            Self::AspectRatio { ratio, .. } => f.debug_struct("AspectRatio").field("ratio", ratio).finish(),
+            Self::RequiredSize { width, height } => f
+                .debug_struct("RequiredSize")
+                .field("width", width)
+                .field("height", height)
+                .finish(),
             Self::Background { .. } => f.debug_struct("Background").finish(),
             Self::Border { width, color, shape } => f.debug_struct("Border").field("width", width).field("color", color).field("shape", shape).finish(),
             Self::Clip { shape } => f.debug_struct("Clip").field("shape", shape).finish(),
@@ -1314,6 +1375,12 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (Offset { x: ax, y: ay }, Offset { x: bx, y: by }) => ax == bx && ay == by,
         (AlignSelf { alignment: aa }, AlignSelf { alignment: ba }) => aa == ba,
         (LayoutWeight { weight: aw }, LayoutWeight { weight: bw }) => aw == bw,
+        (AspectRatio { ratio: ar, match_height_first: am }, AspectRatio { ratio: br, match_height_first: bm }) => {
+            ar == br && am == bm
+        }
+        (RequiredSize { width: aw, height: ah }, RequiredSize { width: bw, height: bh }) => {
+            aw == bw && ah == bh
+        }
         // 背景色闭包视为相同（渲染期求值——动画颜色不触发 Enter）
         (Background { shape: as_, .. }, Background { shape: bs, .. }) => as_ == bs,
         (Border { width: aw, color: ac, shape: as_ }, Border { width: bw, color: bc, shape: bs }) => {
