@@ -103,8 +103,9 @@ impl Row {
         ctx.changed(&self.spacing);
         ctx.changed(&self.arrangement);
         ctx.changed(&self.alignment);
-        // 方向：modifier 覆盖（Modifier::layout_direction）> CompositionLocal 默认
+        // 方向参与 changed（同 Column——方向切换必须 Enter 替换 policy）
         let dir = self.modifier.get_layout_direction().unwrap_or(crate::ui::theme::WiniaTheme::direction());
+        ctx.changed(&dir);
         build_container(
             ctx,
             self.modifier,

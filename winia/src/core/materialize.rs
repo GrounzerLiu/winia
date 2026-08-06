@@ -84,6 +84,10 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
                 // 后代（preserve_modifier）保留缓存节点 modifier——不清空视觉）
                 if !preserve_modifier {
                     n.modifier = modifier;
+                    // 刷新方向快照（modifier 覆盖 > CompositionLocal）——
+                    // 复用节点必须与新建路径一致，否则方向元素变化后 padding 镜像不生效
+                    n.layout_direction = n.modifier.get_layout_direction()
+                        .unwrap_or(crate::ui::theme::WiniaTheme::direction());
                 }
                 #[cfg(debug_assertions)]
                 if std::env::var("WINIA_MAT_PROBE").is_ok() {
@@ -168,6 +172,9 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
             let n = &mut composer.arena.nodes[idx];
             n.children.clear();
             n.modifier = modifier;
+            // 刷新方向快照（复用节点与新建路径一致）
+            n.layout_direction = n.modifier.get_layout_direction()
+                .unwrap_or(crate::ui::theme::WiniaTheme::direction());
             n.measure_policy = pidx; // 显式赋值（None 清空——防类型切换残留旧 policy）
             n.on_remove = on_remove;
             n.slot_key = key;

@@ -331,8 +331,11 @@ pub(crate) enum ModifierElement {
     /// 测试标记（对标 Compose `Modifier.testTag`——UI 测试定位；
     /// 调试树 JSON 暴露 tag 字段）
     TestTag { tag: String },
-    /// 布局方向作用域（对标 Compose `CompositionLocalProvider(LocalLayoutDirection)`）——
-    /// 影响子树内 Row 排列、Text 对齐、padding start/end 的镜像
+    /// 布局方向——本节点 padding start/end 的解析方向；Row/Column 组件
+    /// 优先读自身此元素（其次 CompositionLocal 全局方向）。
+    /// ⚠ 当前**不**向子树继承（对标 Compose 的子树级方向用
+    /// `WiniaTheme::with_theme_and_direction`——CompositionLocal 作用域；
+    /// 全 demo 切换也走它）。此元素是节点级便捷覆盖。
     LayoutDirection(crate::layout::LayoutDirection),
     /// 阴影（对标 Compose `Modifier.shadow`——elevation 模糊 + 内容裁剪）
     /// 阴影（对标 Compose `Modifier.shadow`——单层参数；elevation 便捷版
@@ -627,8 +630,9 @@ impl Modifier {
         self.push(ModifierElement::TestTag { tag: tag.into() })
     }
 
-    /// 布局方向作用域——子树内 Row/Text/padding 的 start/end 语义按此方向解析
-    /// （对标 Compose `CompositionLocalProvider(LocalLayoutDirection provides Rtl)`）
+    /// 布局方向——本节点 padding start/end 解析 + Row/Column 容器布局方向。
+    /// 节点级便捷覆盖；子树级方向切换用
+    /// `WiniaTheme::with_theme_and_direction`（CompositionLocal 作用域）。
     pub fn layout_direction(self, d: crate::layout::LayoutDirection) -> Self {
         self.push(ModifierElement::LayoutDirection(d))
     }

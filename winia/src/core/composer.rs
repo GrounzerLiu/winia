@@ -3283,6 +3283,58 @@ fn test_materialize_skip_restores_subtree() {
     }
 }
 
+/// review 修复回归：复用路径必须刷新 layout_direction 快照。
+/// 帧1 无方向元素 → Ltr；帧2 modifier 加 layout_direction(Rtl) →
+/// param_eq 变化 → Enter 复用旧节点 → 快照必须更新为 Rtl
+/// （修复前只有新建节点路径设置快照，复用节点保持旧 Ltr → padding 镜像失效）
+#[test]
+fn test_materialize_reuse_refreshes_layout_direction() {
+    use crate::layout::LayoutDirection;
+    let mut composer = Composer::new();
+    let c = crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0);
+
+    composer.compose(|ctx| {
+        let key = ctx.next_key();
+        match ctx.start_restartable_group(key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+            }
+        }
+        ctx.end_restartable_group();
+    });
+    composer.layout(c);
+    let r = composer.layout_root_idx().unwrap();
+    assert_eq!(
+        composer.arena_nodes()[r].layout_direction,
+        LayoutDirection::Ltr,
+        "帧1 无方向元素 → Ltr"
+    );
+
+    // 帧2：modifier 加 layout_direction(Rtl) → param_eq 不等 → Enter 复用旧节点
+    composer.compose(|ctx| {
+        let key = ctx.next_key();
+        match ctx.start_restartable_group(
+            key,
+            Modifier::new().layout_direction(LayoutDirection::Rtl),
+            crate::layout::BoxLayout::new(),
+        ) {
+            GroupStatus::Skip => panic!("方向变化应 Enter（param_eq 不等）"),
+            GroupStatus::Enter => {
+                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); ctx.end_node(); }
+            }
+        }
+        ctx.end_restartable_group();
+    });
+    composer.layout(c);
+    let r = composer.layout_root_idx().unwrap();
+    assert_eq!(
+        composer.arena_nodes()[r].layout_direction,
+        LayoutDirection::Rtl,
+        "复用路径必须刷新方向快照（modifier 覆盖 > theme）"
+    );
+}
+
 // ═══════════════════════════════════════════════════════════
 // P3-1 Skip 恢复健壮性测试（结构签名）
 // ═══════════════════════════════════════════════════════════
