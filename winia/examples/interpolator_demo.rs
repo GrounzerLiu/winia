@@ -49,6 +49,11 @@ fn all_interpolators() -> Vec<(&'static str, Arc<dyn Interpolator>)> {
         ("EaseInBounce", EaseInBounce::new().into()),
         ("EaseOutBounce", EaseOutBounce::new().into()),
         ("EaseInOutBounce", EaseInOutBounce::new().into()),
+        // 运行时自定义缓动（P2-11：不查表，直接求值）
+        ("CubicBezier(0.25,0.1,0.75,0.9)", CubicBezier::new(0.25, 0.1, 0.75, 0.9).into()),
+        ("PathEasing[(0,0),(0.2,0.9),(0.7,0.3),(1,1)]", PathEasing::new(vec![
+            (0.0, 0.0), (0.2, 0.9), (0.7, 0.3), (1.0, 1.0),
+        ]).into()),
     ]
 }
 
@@ -68,7 +73,7 @@ fn interpolator_demo(ctx: &mut ComposeCtx) {
                 .modifier(Modifier::new().fill_max_width())
                 .alignment(winia::layout::Alignment::Center)
                 .build(ctx, |ctx| {
-                    Text::new("Interpolator Demo (30)")
+                    Text::new("Interpolator Demo (32)")
                         .font_size(20.0)
                         .color(Color::from_argb(255, 233, 30, 99))
                         .build(ctx);

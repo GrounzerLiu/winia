@@ -172,7 +172,10 @@
 10. **`Repeatable` 支持任意 base spec** ✅ 本分支
     - 支持 Tween/Keyframes（有明确时长——周期内走 base 曲线，Reverse 时曲线倒放）；Snap（total=0 首次即完成）；Spring/Decay/嵌套 Repeatable 断言拒绝（无循环长度语义）
     - 测试：`repeatable_keyframes_base`（3×50ms 在 ~10 帧内完成，修复前回退 300ms 线性）/ `repeatable_snap_base`
-11. **easing 自定义**（`cubic_bezier(p1x,p1y,p2x,p2y)`/`path_easing`——插值器表外运行时曲线）
+11. **easing 自定义** ✅ 本分支
+    - `CubicBezier::new(p1x,p1y,p2x,p2y)`（对标 Compose CubicBezierEasing——牛顿 + 二分求解，epsilon 1e-6）+ `PathEasing::new(points)`（对标 PathEasing——段间线性，复用 find_interval）
+    - 均可 `Into<Arc<dyn Interpolator>>` → `TweenSpec::new(dur, ...)` 直接接线
+    - 测试：5 个（端点/对称/单调/clamp/单点退化/接线）；interpolator_demo 扩至 32 行
 
 ### P3 — 基础设施/远期
 12. **帧时钟 API**（`with_frame_nanos` 类——LaunchedEffect/自定义动画的帧驱动入口）
