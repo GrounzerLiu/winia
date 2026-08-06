@@ -10,6 +10,7 @@
 use std::sync::Arc;
 use winia::animation::interpolator::Interpolator;
 use winia::animation::{AnimationSpec, TweenSpec};
+use winia::modifier::GraphicsLayerParams;
 use winia::prelude::*;
 use winia::app;
 
@@ -91,12 +92,11 @@ fn interpolator_demo(ctx: &mut ComposeCtx) {
                 .build(ctx, |ctx| {
                     let list = all_interpolators();
                     for (name, interp) in &list {
-                        // 每行动画值：240（播放）/ 0（复位）——各自插值器 1200ms；
-                        // 值直接是像素宽——.size(v.clone(), ...) 动态尺寸
-                        // （measure 时 get() 注册 layout_dep → 每帧重测；
-                        //   若用静态 .width(v.get()*240) 则节点不 dirty → 折叠 0 尺寸）
+                        // 位移动画：滑块 40px 在 240px 轨道上从 0 滑到 200——
+                        // 插值器决定滑动速度曲线；graphics_layer 渲染层变换
+                        // （渲染期 peek——零重排零重组，动画推进仅重绘）
                         let v = ctx.animate_float_as_state(
-                            if is_playing { 240.0 } else { 0.0 },
+                            if is_playing { 200.0 } else { 0.0 },
                             AnimationSpec::Tween(TweenSpec::new(
                                 std::time::Duration::from_millis(1200),
                                 interp.clone(),
@@ -114,15 +114,34 @@ fn interpolator_demo(ctx: &mut ComposeCtx) {
                                             .color(Color::from_argb(200, 120, 120, 120))
                                             .build(ctx);
                                     });
-                                // 进度条：宽 = 动画值（0→240）——动态尺寸曲线形态直观可见
-                                Column::new()
-                                    .modifier(Modifier::new()
-                                        .size(v.clone(), 14.0)
-                                        .background(
-                                            Color::from_argb(255, 63, 81, 181),
-                                            Shape::rounded(3.0),
-                                        ))
-                                    .build(ctx, |_| {});
+                                // 轨道 + 滑块（Stack 叠放——滑块 graphics_layer 平移）
+                                Stack::new().build(ctx, |ctx| {
+                                    // 轨道（浅色底）
+                                    Column::new()
+                                        .modifier(Modifier::new()
+                                            .size(240.0, 14.0)
+                                            .background(
+                                                Color::from_argb(60, 120, 120, 120),
+                                                Shape::rounded(3.0),
+                                            ))
+                                        .build(ctx, |_| {});
+                                    // 滑块（40px，translation_x = 动画值）
+                                    let g = v.clone();
+                                    let gfx = move || {
+                                        let mut p = GraphicsLayerParams::default();
+                                        p.translation_x = g.peek();
+                                        p
+                                    };
+                                    Column::new()
+                                        .modifier(Modifier::new()
+                                            .size(40.0, 14.0)
+                                            .background(
+                                                Color::from_argb(255, 63, 81, 181),
+                                                Shape::rounded(3.0),
+                                            )
+                                            .graphics_layer(gfx))
+                                        .build(ctx, |_| {});
+                                });
                             });
                     }
                 });
