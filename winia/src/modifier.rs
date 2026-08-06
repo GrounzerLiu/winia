@@ -888,6 +888,10 @@ impl Modifier {
     /// None 表示该轴不约束（Auto/Fill）。
     pub fn resolved_size(&self) -> Option<(Option<f32>, Option<f32>)> {
         use crate::unit::{current_density, Dp, Px};
+        // 合并所有 Size 元素（链序：后 push 的外层胜出——非 None 覆盖）。
+        // ⚠ 不能只返回第一个：`width(300).height(dyn)` 是两个 Size 元素，
+        // 只取第一个会丢 height（min_lines 动态高度失效的根因）
+        let mut out: Option<(Option<f32>, Option<f32>)> = None;
         for el in &self.elements {
             if let ModifierElement::Size { width, height } = el {
                 let resolve = |sv: &SizeValue| -> Option<f32> {
@@ -898,10 +902,14 @@ impl Modifier {
                         SizeValue::Dynamic(f) => Some(f()),
                     }
                 };
-                return Some((resolve(width), resolve(height)));
+                let (w, h) = (resolve(width), resolve(height));
+                out = Some(match out {
+                    Some((ow, oh)) => (w.or(ow), h.or(oh)),
+                    None => (w, h),
+                });
             }
         }
-        None
+        out
     }
 
     /// 是否填满最大宽度

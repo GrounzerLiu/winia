@@ -204,12 +204,14 @@ impl TextField {
             move |e: &crate::modifier::KbEvent| -> bool {
                 if e.event_type != crate::modifier::KbEventType::KeyDown { return false; }
                 let key = &e.key;
-                // 导航键（只读时仍允许——对标 Compose readOnly 可选中）
+                // 导航键（只读时仍允许——对标 Compose readOnly 可选中；
+                // Tab 必须放行——否则键盘焦点无法移出）
                 let is_nav = matches!(key,
                     winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowLeft)
                     | winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowRight)
                     | winit::keyboard::Key::Named(winit::keyboard::NamedKey::Home)
                     | winit::keyboard::Key::Named(winit::keyboard::NamedKey::End)
+                    | winit::keyboard::Key::Named(winit::keyboard::NamedKey::Tab)
                 );
                 // 只读：编辑键直接消耗（不修改值）
                 if read_only && !is_nav {
@@ -345,12 +347,22 @@ impl TextField {
                 crate::ui::TextOverflow::Clip,
                 true, // allow text wrapping
             );
-        // minLines 占位：内容为空时高度至少 min_lines 行（近似 Compose minLines——
-        // 动态高度闭包，内容变化时重测）
+        // minLines：高度至少 min_lines 行——动态高度闭包（内容变化时重测）。
+        // ⚠ 非空时不能返回 0（0 是合法固定尺寸 → tighten_height(0) → 节点高度 0
+        // → 输入后整个 TextField 消失）。按显式换行数 × 行高近似——折行
+        // （无 \n 的长文本自动换行）高度不精确，会裁剪——精确需容器 policy。
         let modifier = if self.min_lines > 1 {
             let v = value.clone();
-            let min_h = self.min_lines as f32 * font_size * 1.4;
-            modifier.height(move || if v.get().text.is_empty() { min_h } else { 0.0 })
+            let line_h = font_size * 1.4;
+            let min_h = self.min_lines as f32 * line_h;
+            modifier.height(move || {
+                let text = v.get().text;
+                if text.is_empty() {
+                    min_h
+                } else {
+                    (text.matches('\n').count() as f32 + 1.0) * line_h
+                }
+            })
         } else {
             modifier
         };
@@ -493,5 +505,39 @@ mod tests {
         let m = build_field(TextField::new(value.clone(), |_| {}).placeholder("请输入"));
         let content = find_text_content(&m).unwrap_or_default();
         assert_eq!(content, "已有内容", "有值时显示真实内容");
+    }
+
+    #[test]
+    fn min_lines_height_grows_with_content() {
+        // 回归：min_lines 动态高度非空时不能返回 0（节点消失 bug）
+        let value = State::new(TextFieldValue::new(""));
+        let mut composer = Composer::new();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let _guard = rt.enter();
+        composer.compose(|ctx| {
+            TextField::new(value.clone(), |_| {})
+                .min_lines(3)
+                .modifier(Modifier::new().width(300.0))
+                .build(ctx);
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.layout_root_idx().unwrap();
+        let h0 = composer.arena_nodes()[root].measured_size.height;
+        // min_h 58.8 被 build 内 padding(8) 扣减 → 内容区 42.8（近似 3 行）
+        assert!(h0 > 30.0, "空内容高度 = min_lines 占位（实际 {h0}）");
+
+        // 输入 2 行（显式换行）→ 高度按行数增长（非 0——修复前输入后消失）
+        value.set(TextFieldValue::new("a\nb"));
+        // 重新组合（消费 pending + 同 key 复用节点 → dirty → 重测）
+        composer.compose(|ctx| {
+            TextField::new(value.clone(), |_| {})
+                .min_lines(3)
+                .modifier(Modifier::new().width(300.0))
+                .build(ctx);
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let h1 = composer.arena_nodes()[root].measured_size.height;
+        assert!(h1 > 0.0, "输入后高度必须 > 0（修复前为 0——TextField 消失）");
+        assert!(h1 < h0, "2 行高度 < 3 行占位（{h1} < {h0}）");
     }
 }

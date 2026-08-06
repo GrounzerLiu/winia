@@ -608,17 +608,27 @@ mod tests {
 
     #[test]
     fn aspect_ratio_derives_from_max_width() {
-        // 约束 max 300x150，ratio 2 → 宽 300 高 150（h = 300/2 = 150 ≤ 150）
-        let m = Modifier::new().size(50.0, 20.0).aspect_ratio(2.0, false);
+        // 无 size 约束：外层 max 300x300，ratio 2 → 宽 300 高 150
+        let m = Modifier::new().aspect_ratio(2.0, false);
         let mut nodes = vec![LayoutNode::leaf(m)];
         let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 300.0, 0.0, 300.0));
         assert_eq!((size.width, size.height), (300.0, 150.0), "以 max_w 为基准推导");
     }
 
     #[test]
-    fn aspect_ratio_clamps_to_max_height() {
-        // 约束 max 300x100，ratio 2 → h = 300/2 = 150 > 100 → clamp：(100*2, 100)
+    fn aspect_ratio_respects_inner_fixed_size() {
+        // 链内 size(50,20) 是 tight（min=max）——aspect 推导 40x20 被
+        // clamp 回 min——Compose 同（tight size 下 aspect 无法改变尺寸）
         let m = Modifier::new().size(50.0, 20.0).aspect_ratio(2.0, false);
+        let mut nodes = vec![LayoutNode::leaf(m)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 300.0, 0.0, 300.0));
+        assert_eq!((size.width, size.height), (50.0, 20.0), "tight size 约束 aspect 不可改变（Compose 一致）");
+    }
+
+    #[test]
+    fn aspect_ratio_clamps_to_max_height() {
+        // 无 size：外层 max 300x100，ratio 2 → h = 300/2 = 150 > 100 → clamp：(200, 100)
+        let m = Modifier::new().aspect_ratio(2.0, false);
         let mut nodes = vec![LayoutNode::leaf(m)];
         let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 300.0, 0.0, 100.0));
         assert_eq!((size.width, size.height), (200.0, 100.0), "高度超界时反推宽度");
@@ -626,9 +636,9 @@ mod tests {
 
     #[test]
     fn aspect_ratio_match_height_first() {
-        // match_height_first：以 max_h 为基准——约束 max 100x300，ratio 2
+        // match_height_first：以 max_h 为基准——无 size 时外层 100x300，ratio 2
         // → h = 300，w = 600 > 100 → clamp：(100, 50)
-        let m = Modifier::new().size(50.0, 20.0).aspect_ratio(2.0, true);
+        let m = Modifier::new().aspect_ratio(2.0, true);
         let mut nodes = vec![LayoutNode::leaf(m)];
         let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 100.0, 0.0, 300.0));
         assert_eq!((size.width, size.height), (100.0, 50.0), "match_height_first 反推");
@@ -870,8 +880,17 @@ pub(crate) fn measure_node(
     // 应用 modifier 中的 Layout 约束（使用查询方法）
     let mut inner_constraints = constraints;
 
+    // 应用 Size 元素（静态/动态单轴独立解析——布局属性动画用 State/闭包，
+    // 测量时求值并注册依赖到本节点）
+    if let Some((sw, sh)) = nodes[idx].modifier.resolved_size() {
+        if let Some(w) = sw { inner_constraints = inner_constraints.tighten_width(w); }
+        if let Some(h) = sh { inner_constraints = inner_constraints.tighten_height(h); }
+    }
+
     // 强制尺寸（requiredSize——忽略 incoming 收缩，允许溢出：
-    // min/max 直接覆盖 incoming，Compose enforceIncoming=false 语义）
+    // min/max 直接覆盖 incoming，Compose enforceIncoming=false 语义）。
+    // ⚠ 必须在 resolved_size **之后**执行：否则 size() 的 tighten 会反超
+    // required（链序反转——Compose requiredSize 固定大小最终胜出）。
     if let Some((rw, rh)) = nodes[idx].modifier.required_size_constraint() {
         if let Some(w) = rw {
             inner_constraints.min_width = w;
@@ -881,13 +900,6 @@ pub(crate) fn measure_node(
             inner_constraints.min_height = h;
             inner_constraints.max_height = h;
         }
-    }
-
-    // 应用 Size 元素（静态/动态单轴独立解析——布局属性动画用 State/闭包，
-    // 测量时求值并注册依赖到本节点）
-    if let Some((sw, sh)) = nodes[idx].modifier.resolved_size() {
-        if let Some(w) = sw { inner_constraints = inner_constraints.tighten_width(w); }
-        if let Some(h) = sh { inner_constraints = inner_constraints.tighten_height(h); }
     }
 
     // 1. 固定尺寸（仅 Static+Static 的 Size——由 resolved_size 已处理，此分支保留兼容其他查询）
@@ -1009,12 +1021,13 @@ pub(crate) fn measure_node(
         (size, Vec::new())
     };
 
-    // aspectRatio：测量后按约束 max 推导节点尺寸（Compose 语义——以
-    // constraints.max 为基准固定一轴，另一轴按 ratio 推导并 clamp；
-    // 内容按 inner_constraints 已排版，节点尺寸可能大于内容——留白正常）
+    // aspectRatio：测量后按 inner_constraints（含 size/required 链内收紧）
+    // 推导节点尺寸（对标 Compose——aspect 的 incoming = 链中 aspect 位置的
+    // 约束；固定一轴推另一轴 + clamp；内容按 inner_constraints 已排版，
+    // 节点尺寸可能大于内容——留白正常）
     if let Some((ratio, match_height_first)) = nodes[idx].modifier.aspect_ratio_constraint() {
-        let (min_w, max_w) = (constraints.min_width, constraints.max_width);
-        let (min_h, max_h) = (constraints.min_height, constraints.max_height);
+        let (min_w, max_w) = (inner_constraints.min_width, inner_constraints.max_width);
+        let (min_h, max_h) = (inner_constraints.min_height, inner_constraints.max_height);
         let (w, h) = if match_height_first {
             if max_h < f32::MAX {
                 let w = max_h * ratio;
@@ -1095,10 +1108,12 @@ pub(crate) fn build_plain_paragraph(
         text_style.set_letter_spacing(letter_spacing);
     }
     // 行高（对标 Compose TextStyle.lineHeight——固定 px；skia 是倍数语义，
-    // set_height(multiplier)——行高 = 倍数 × fontSize）
+    // set_height(multiplier) + set_height_override(true)——override 才强制
+    // 行高生效（与 RichText 路径 node.rs:1284 一致，否则被字体默认行高覆盖））
     if let Some(lh) = line_height {
         if lh > 0.0 && font_size > 0.0 {
             text_style.set_height(lh / font_size);
+            text_style.set_height_override(true);
         }
     }
     // 设置字重和倾斜

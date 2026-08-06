@@ -162,11 +162,12 @@ fn component_demo(ctx: &mut ComposeCtx) {
                 .enabled(false)
                 .modifier(Modifier::new().size(300.0, 36.0))
                 .build(ctx);
-            // 多行 + minLines=3
+            // 多行 + minLines=3（宽度限定——size 含 Fixed(0) 高度会覆盖
+            // minLines 动态高度）
             let v4 = ctx.remember(|| winia::ui::text_field::TextFieldValue::new("多行输入\n第二行\n第三行"));
             TextField::new(v4.clone(), |_| {})
                 .min_lines(3)
-                .modifier(Modifier::new().size(300.0, 0.0))
+                .modifier(Modifier::new().width(300.0))
                 .build(ctx);
 
             // ── 6. Text letterSpacing / lineHeight ──
