@@ -473,15 +473,21 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
                 }
             }
             AnimationSpec::Repeatable(spec) => {
-                // 简化：base 仅支持 Tween（开发期断言，其他类型回退 300ms 线性）
-                debug_assert!(matches!(&*spec.base, AnimationSpec::Tween(_)),
-                    "RepeatableSpec 目前仅支持 Tween base");
-                let base_duration = match spec.base.as_ref() {
+                // P2-10：支持任意有明确时长的 base（Tween/Keyframes）；Snap 立即跳；
+                // Spring/Decay/Repeatable 嵌套无循环长度语义 → 断言拒绝
+                let base = spec.base.as_ref();
+                let base_duration = match base {
                     AnimationSpec::Tween(t) => t.duration,
-                    _ => Duration::from_millis(300),
+                    AnimationSpec::Keyframes(k) => k.duration,
+                    AnimationSpec::Snap => Duration::ZERO,
+                    other => {
+                        debug_assert!(false, "Repeatable 仅支持 Tween/Keyframes/Snap base（收到 {other:?}）");
+                        Duration::from_millis(300)
+                    }
                 };
                 let elapsed = now - state.start;
                 let total = base_duration.saturating_mul(spec.iterations);
+                // total=0（Snap/0 时长）→ elapsed>=0 恒真 → 首次 update 即完成（Snap 语义）
                 if elapsed >= total {
                     // 完成值：Reverse + 偶数次时最后 cycle 结束于 from（否则结束于 to）
                     let end_val = match spec.mode {
@@ -492,14 +498,24 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
                     };
                     (end_val, true)
                 } else {
-                    let cycle = elapsed.as_secs_f64() % base_duration.as_secs_f64().max(0.001);
-                    let t = (cycle / base_duration.as_secs_f64().max(0.001)) as f32;
-                    let cycle_idx = (elapsed.as_secs_f64() / base_duration.as_secs_f64().max(0.001)).floor() as u32;
+                    let d = base_duration.as_secs_f64().max(0.001);
+                    let cycle = elapsed.as_secs_f64() % d;
+                    let t = (cycle / d) as f32;
+                    let cycle_idx = (elapsed.as_secs_f64() / d).floor() as u32;
                     let factor = match spec.mode {
                         RepeatMode::Restart => t,
                         RepeatMode::Reverse => if cycle_idx % 2 == 0 { t } else { 1.0 - t },
                     };
-                    let value = state.from.lerp(&state.to, factor);
+                    // base 曲线求值（factor 反转对 Keyframes 即曲线倒放）
+                    let value = match base {
+                        AnimationSpec::Tween(tw) => state.from.lerp(&state.to, tw.interpolator.interpolate(factor)),
+                        AnimationSpec::Keyframes(kf) => state.from.lerp(&state.to, interpolate_keyframes(&kf.frames, factor)),
+                        AnimationSpec::Snap => state.to.clone(),
+                        other => {
+                            debug_assert!(false, "Repeatable 仅支持 Tween/Keyframes/Snap base（收到 {other:?}）");
+                            state.from.lerp(&state.to, factor)
+                        }
+                    };
                     (value, false)
                 }
             }
@@ -1272,6 +1288,47 @@ pub(crate) mod tests {
             limit,
             st.peek()
         );
+    }
+
+    /// P2-10：Repeatable 支持 Keyframes base——每周期走关键帧曲线
+    /// （修复前回退 300ms 线性：3 次迭代 = 900ms；Keyframes base 50ms×3=150ms）
+    #[test]
+    fn repeatable_keyframes_base() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let st = State::new(0.0f32);
+        let mut anim = Animatable::new(st.clone());
+        anim.animate_to(
+            100.0,
+            AnimationSpec::Repeatable(RepeatableSpec::new(
+                3,
+                RepeatMode::Restart,
+                AnimationSpec::Keyframes(KeyframesSpec::new(
+                    Duration::from_millis(50),
+                    vec![(0.0, 0.0), (0.5, 0.5), (1.0, 1.0)],
+                )),
+            )),
+        );
+        let mut frames = 0;
+        while anim.update() && frames < 30 {
+            std::thread::sleep(Duration::from_millis(16));
+            frames += 1;
+        }
+        assert!(frames < 20, "Keyframes base 3×50ms 应在 ~10 帧内完成（实际 {frames}——回退 300ms 线性会 >20）");
+        assert_eq!(st.peek(), 100.0, "完成后必须精确停靠 to");
+    }
+
+    /// P2-10：Repeatable 支持 Snap base——立即完成
+    #[test]
+    fn repeatable_snap_base() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let st = State::new(0.0f32);
+        let mut anim = Animatable::new(st.clone());
+        anim.animate_to(
+            100.0,
+            AnimationSpec::Repeatable(RepeatableSpec::new(3, RepeatMode::Restart, AnimationSpec::Snap)),
+        );
+        assert!(!anim.update(), "Snap base 应首次 update 即完成");
+        assert_eq!(st.peek(), 100.0, "Snap base 完成值 = to");
     }
 
     /// Decay：初始速度为 0 → 立即完成，值不变

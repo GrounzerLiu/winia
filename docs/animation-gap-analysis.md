@@ -169,7 +169,9 @@
    - `animate_to` 继承自身 `last_velocity`；`push_animatable` retarget 从被移除的旧动画继承（`AnimationInstance::last_velocity()` trait 方法）
    - Spring/Decay 每帧更新速度（Decay 解析式算瞬时速度）；Tween/Keyframes 无速度语义恒 0（从静止重启）
    - 测试：`retarget_inherits_velocity`（实例级）/ `push_retarget_inherits_velocity`（push 路径）
-10. **`Repeatable` 支持任意 base spec**（当前仅 Tween）
+10. **`Repeatable` 支持任意 base spec** ✅ 本分支
+    - 支持 Tween/Keyframes（有明确时长——周期内走 base 曲线，Reverse 时曲线倒放）；Snap（total=0 首次即完成）；Spring/Decay/嵌套 Repeatable 断言拒绝（无循环长度语义）
+    - 测试：`repeatable_keyframes_base`（3×50ms 在 ~10 帧内完成，修复前回退 300ms 线性）/ `repeatable_snap_base`
 11. **easing 自定义**（`cubic_bezier(p1x,p1y,p2x,p2y)`/`path_easing`——插值器表外运行时曲线）
 
 ### P3 — 基础设施/远期
