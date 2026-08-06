@@ -650,6 +650,74 @@ impl Modifier {
         })
     }
 
+    /// `alpha(a)`（对标 Compose `Modifier.alpha`）——透明度便捷包装：
+    /// `a != 1.0` 时应用 `graphicsLayer(alpha = a, clip = true)`（**alpha<1
+    /// 隐式裁剪到 bounds**——Compose 语义）。已存在 GraphicsLayer 元素时
+    /// **合并**（alpha 相乘 + 开 clip）而非叠加嵌套层。
+    pub fn alpha(self, alpha: f32) -> Self {
+        if alpha == 1.0 {
+            return self;
+        }
+        self.merge_graphics_layer(move |p| {
+            p.alpha *= alpha;
+            p.clip = true;
+        })
+    }
+
+    /// `rotate(degrees)`（对标 Compose `Modifier.rotate`）——绕**中心**
+    /// 顺时针旋转（默认 transformOrigin=Center）。`degrees != 0` 才应用。
+    pub fn rotate(self, degrees: f32) -> Self {
+        if degrees == 0.0 {
+            return self;
+        }
+        self.merge_graphics_layer(move |p| p.rotation_z += degrees)
+    }
+
+    /// `scale(sx, sy)`（对标 Compose `Modifier.scale`）——绕**中心**缩放。
+    /// 非 1 才应用。
+    pub fn scale(self, sx: f32, sy: f32) -> Self {
+        if sx == 1.0 && sy == 1.0 {
+            return self;
+        }
+        self.merge_graphics_layer(move |p| {
+            p.scale_x *= sx;
+            p.scale_y *= sy;
+        })
+    }
+
+    /// 便捷包装合并：已有 GraphicsLayer 元素 → 包装其 params_fn（叠加）；
+    /// 否则 push 新元素。
+    fn merge_graphics_layer(mut self, f: impl Fn(&mut GraphicsLayerParams) + Send + Sync + 'static) -> Self {
+        let f = Arc::new(f);
+        // mem::take 取出 elements（空 Vec 占位）——局部修改后再放回，
+        // 完全避开 self 借用与 push 的冲突
+        let mut elements = std::mem::take(&mut self.elements);
+        if let Some(el) = elements
+            .iter_mut()
+            .find(|e| matches!(e, ModifierElement::GraphicsLayer { .. }))
+        {
+            if let ModifierElement::GraphicsLayer { params_fn } = el {
+                let old = params_fn.clone();
+                let f = f.clone();
+                *params_fn = Arc::new(move || {
+                    let mut p = (old)();
+                    f(&mut p);
+                    p
+                });
+            }
+        } else {
+            elements.push(ModifierElement::GraphicsLayer {
+                params_fn: Arc::new(move || {
+                    let mut p = GraphicsLayerParams::default();
+                    f(&mut p);
+                    p
+                }),
+            });
+        }
+        self.elements = elements;
+        self
+    }
+
     /// 垂直滚动（绑定 ScrollState）
     pub fn vertical_scroll(self, state: ScrollState) -> Self {
         // 读取 offset 以注册 State→Slot 依赖，确保滚动时触发增量重组
@@ -921,6 +989,12 @@ pub struct GraphicsLayerParams {
     pub translation_x: f32,
     pub translation_y: f32,
     pub rotation_z: f32,
+    /// 变换原点（pivot 分数——0..1，相对节点宽高）——对标 Compose
+    /// `transformOrigin`（默认 Center——scale/rotate 绕中心）
+    pub transform_origin: TransformOrigin,
+    /// 裁剪到节点 bounds（对标 Compose graphicsLayer `clip`；
+    /// `Modifier.alpha` 便捷版默认 clip=true）
+    pub clip: bool,
 }
 
 impl Default for GraphicsLayerParams {
@@ -928,7 +1002,29 @@ impl Default for GraphicsLayerParams {
         Self {
             scale_x: 1.0, scale_y: 1.0, alpha: 1.0,
             translation_x: 0.0, translation_y: 0.0, rotation_z: 0.0,
+            transform_origin: TransformOrigin::CENTER,
+            clip: false,
         }
+    }
+}
+
+/// 变换原点（对标 Compose `TransformOrigin`）——pivot 分数坐标，
+/// 相对节点宽高（0.0 = 左/上，0.5 = 中心，1.0 = 右/下）
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct TransformOrigin(pub f32, pub f32);
+
+impl TransformOrigin {
+    /// 中心（Compose 默认）
+    pub const CENTER: Self = Self(0.5, 0.5);
+    /// 左上角
+    pub const TOP_LEFT: Self = Self(0.0, 0.0);
+    /// 右下角
+    pub const BOTTOM_RIGHT: Self = Self(1.0, 1.0);
+}
+
+impl Default for TransformOrigin {
+    fn default() -> Self {
+        Self::CENTER
     }
 }
 
@@ -1284,5 +1380,64 @@ mod param_eq_tests {
         let a = Modifier::new().width(200.0);
         let b = Modifier::new().width(200.0).padding(4.0);
         assert!(!a.param_eq(&b), "元素数不同必须不等");
+    }
+
+    // ── GraphicsLayer 便捷包装（alpha/rotate/scale + transformOrigin）──
+
+    #[test]
+    fn default_transform_origin_is_center() {
+        // 对标 Compose：transformOrigin 默认 Center（0.5, 0.5）
+        let p = GraphicsLayerParams::default();
+        assert_eq!(p.transform_origin, TransformOrigin::CENTER);
+        assert!(!p.clip, "graphics_layer 本身默认不 clip（alpha 便捷版才 clip）");
+    }
+
+    #[test]
+    fn alpha_creates_layer_with_clip() {
+        // 对标源码：`alpha(a) = graphicsLayer(alpha=a, clip=true)`
+        let m = Modifier::new().alpha(0.5);
+        let p = m.graphics_layer_params().unwrap();
+        assert_eq!(p.alpha, 0.5);
+        assert!(p.clip, "alpha<1 必须隐式 clip（Compose 语义）");
+    }
+
+    #[test]
+    fn alpha_identity_no_op() {
+        let m = Modifier::new().alpha(1.0);
+        assert!(m.graphics_layer_params().is_none(), "alpha=1 不应用（源码 early-return）");
+        let m = Modifier::new().rotate(0.0).scale(1.0, 1.0);
+        assert!(m.graphics_layer_params().is_none(), "rotate=0/scale=1 不应用");
+    }
+
+    #[test]
+    fn alpha_merges_into_existing_layer() {
+        // 已存在 GraphicsLayer → 合并（alpha 相乘 + clip）而非嵌套层
+        let m = Modifier::new()
+            .graphics_layer(GraphicsLayerParams { alpha: 0.8, ..Default::default() })
+            .alpha(0.5);
+        let p = m.graphics_layer_params().unwrap();
+        assert!((p.alpha - 0.4).abs() < 1e-6, "alpha 相乘（0.8*0.5）");
+        assert!(p.clip);
+    }
+
+    #[test]
+    fn rotate_scale_merge_with_origin() {
+        let m = Modifier::new().rotate(45.0).scale(2.0, 3.0);
+        let p = m.graphics_layer_params().unwrap();
+        assert_eq!(p.rotation_z, 45.0);
+        assert_eq!(p.scale_x, 2.0);
+        assert_eq!(p.scale_y, 3.0);
+        // 便捷包装不动 transform_origin（默认 Center——绕中心，Compose 语义）
+        assert_eq!(p.transform_origin, TransformOrigin::CENTER);
+    }
+
+    #[test]
+    fn chain_alpha_rotate_scale_merge() {
+        let m = Modifier::new().alpha(0.5).rotate(90.0).scale(2.0, 2.0);
+        let p = m.graphics_layer_params().unwrap();
+        assert_eq!(p.alpha, 0.5);
+        assert_eq!(p.rotation_z, 90.0);
+        assert_eq!(p.scale_x, 2.0);
+        assert!(p.clip);
     }
 }

@@ -89,9 +89,18 @@ fn render_pass1(
         } else {
             canvas.save();
         }
+        // clip 到节点 bounds（内容坐标系——变换前应用，对标 Compose clip 语义）
+        if gl.clip {
+            canvas.clip_rect(rect, None, true);
+        }
+        // transformOrigin：先平移到 pivot → 变换 → 平移回（对标 Compose
+        // transformOrigin 默认 Center——scale/rotate 绕中心而非左上）
+        let (px, py) = (w * gl.transform_origin.0, h * gl.transform_origin.1);
         canvas.translate((gl.translation_x, gl.translation_y));
+        canvas.translate((px, py));
         canvas.scale((gl.scale_x, gl.scale_y));
         canvas.rotate(gl.rotation_z, None);
+        canvas.translate((-px, -py));
         true
     } else { false };
     let mut blur_radius: Option<f32> = None;
