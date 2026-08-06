@@ -28,6 +28,8 @@ pub trait AnimationInstance: Send {
     fn state_id(&self) -> u32;
     /// 类型安全的精确目标比较（跨类型返回 false）
     fn same_target(&self, target: &dyn std::any::Any) -> bool;
+    /// 当前速度（px/s）——供 retarget 速度延续（P2-9）
+    fn last_velocity(&self) -> f32;
 }
 
 static ACTIVE_ANIMATIONS: LazyLock<Mutex<Vec<Box<dyn AnimationInstance>>>> =
@@ -95,6 +97,7 @@ impl<T: AnimatableValue + Send + Sync + 'static> AnimationInstance for Infinite<
     }
     fn same_target(&self, _target: &dyn std::any::Any) -> bool { false }
     fn state_id(&self) -> u32 { self.state.id() }
+    fn last_velocity(&self) -> f32 { 0.0 } // 无限循环无速度延续语义
 }
 
 /// 注册一个无限循环动画（f32/Color 等 AnimatableValue 共用——泛型表，无独立第三表）
@@ -112,6 +115,7 @@ pub fn push_infinite<T: AnimatableValue + Send + Sync + 'static>(
 pub fn push_animatable<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(state: State<T>, target: T, spec: AnimationSpec) {
     if state.peek() == target { return; }
     let sid = state.id();
+    let mut inherited_velocity = 0.0f32;
     // 非标量类型（Offset/Size/Color 等）Spring 无单值物理，强制降级 Tween
     let spec = if T::supports_spring() {
         spec
@@ -126,11 +130,14 @@ pub fn push_animatable<T: Clone + PartialEq + AnimatableValue + Send + Sync + 's
         // 同 state 同目标运行中 → 跳过（防每帧重启/双驱动）
         if list.iter().any(|anim| anim.state_id() == sid && anim.same_target(&target)) { return; }
         // 同 state 不同目标 → 移除旧动画（用户中途改目标——旧动画继续会与
-        // 新目标竞争，导致值卡在旧目标路径上）
+        // 新目标竞争，导致值卡在旧目标路径上）；P2-9：移除前继承旧速度
+        // （Spring/Decay 被打断时新动画从当前速度继续，物理连续）
+        inherited_velocity = list.iter().find(|a| a.state_id() == sid)
+            .map(|a| a.last_velocity()).unwrap_or(0.0);
         list.retain(|anim| anim.state_id() != sid);
     } // 锁释放，下面 anim.update() 不持锁执行用户代码
     let mut anim = Animatable::new(state);
-    anim.animate_to(target, spec);
+    anim.start_with_velocity(target, spec, inherited_velocity);
     // 立即执行首次更新，避免等下一帧 flash
     anim.update();
     ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
@@ -263,6 +270,9 @@ impl<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static> AnimationIn
             .map(|t| self.anim_state.as_ref().map(|s| s.to == *t).unwrap_or(false))
             .unwrap_or(false)
     }
+    fn last_velocity(&self) -> f32 {
+        self.anim_state.as_ref().map(|s| s.last_velocity).unwrap_or(0.0)
+    }
 }
 
 /// 更新所有活跃动画，返回是否有动画还在运行
@@ -351,6 +361,17 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
 
     /// 启动动画到目标值
     pub fn animate_to(&mut self, to: T, spec: AnimationSpec) {
+        // P2-9 速度延续：被打断的动画从当前速度继续（Compose 核心语义——
+        // 弹簧弹到一半改目标，新动画继承旧速度，物理连续）。
+        // Spring/Decay 每帧更新 last_velocity；Tween/Keyframes/Repeatable
+        // 无速度语义恒 0——继承无影响（从静止重启）。
+        let start_velocity = self.anim_state.as_ref().map(|s| s.last_velocity).unwrap_or(0.0);
+        self.start_with_velocity(to, spec, start_velocity);
+    }
+
+    /// 内部启动入口：显式指定初始速度（`push_animatable` retarget 时从
+    /// 被移除的旧动画继承；`animate_to` 从自身 anim_state 继承）。
+    fn start_with_velocity(&mut self, to: T, spec: AnimationSpec, start_velocity: f32) {
         let from = self.state.peek();
         let displacement = AnimatableValue::to_f32(&from) - AnimatableValue::to_f32(&to);
         self.anim_state = Some(AnimationState {
@@ -358,7 +379,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
             to,
             start: Instant::now(),
             spec,
-            last_velocity: 0.0,
+            last_velocity: start_velocity,
             last_update: Instant::now(),
             current_displacement: displacement,
             initial_velocity: 0.0,
@@ -1262,6 +1283,65 @@ pub(crate) mod tests {
         anim.animate_decay(0.0, DecaySpec::default());
         assert!(!anim.update(), "v0=0 应立即完成");
         assert_eq!(st.peek(), 42.0, "v0=0 值不变");
+    }
+
+    /// P2-9 速度延续（实例级）：Decay 中途 animate_to(Spring)——
+    /// 新动画继承旧速度（物理连续，Compose 打断语义）
+    #[test]
+    fn retarget_inherits_velocity() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let st = State::new(0.0f32);
+        let mut anim = Animatable::new(st.clone());
+        anim.animate_decay(1000.0, DecaySpec::default());
+        // 步进 5 帧（20ms）——速度衰减但仍 > 0
+        for _ in 0..5 {
+            anim.update();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let old_vel = anim.anim_state.as_ref().unwrap().last_velocity;
+        assert!(old_vel > 100.0, "5 帧后速度应仍显著（实际 {old_vel}）");
+        // 打断 → 新 Spring 目标 200——继承旧速度
+        anim.animate_to(200.0, AnimationSpec::Spring(SpringSpec::default()));
+        let new_vel = anim.anim_state.as_ref().unwrap().last_velocity;
+        assert_eq!(new_vel, old_vel, "retarget 必须继承旧速度（修复前为 0 重启）");
+        // 且起点 = 当前值（不跳变）
+        let from = anim.anim_state.as_ref().unwrap().from;
+        assert!((from - st.peek()).abs() < 0.01, "from 必须是当前值（无跳变）");
+    }
+
+    /// P2-9 速度延续（push 路径）：push_decay → push_animatable retarget——
+    /// 全局表里的新动画继承旧速度
+    #[test]
+    fn push_retarget_inherits_velocity() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        use crate::core::state::State;
+        let st = State::new(0.0f32);
+        push_decay(st.clone(), 1000.0, DecaySpec::default());
+        // 推进 5 帧（update_animations 驱动全局表）
+        for _ in 0..5 {
+            super::update_animations();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let vel_before = {
+            let list = ACTIVE_ANIMATIONS.lock().unwrap();
+            list.iter().find(|a| a.state_id() == st.id()).map(|a| a.last_velocity()).unwrap_or(0.0)
+        };
+        assert!(vel_before > 100.0, "Decay 推进后速度应显著（实际 {vel_before}）");
+        // retarget：同 state 推新目标（Spring）
+        push_animatable(st.clone(), 200.0, AnimationSpec::Spring(SpringSpec::default()));
+        let vel_after = {
+            let list = ACTIVE_ANIMATIONS.lock().unwrap();
+            list.iter().find(|a| a.state_id() == st.id()).map(|a| a.last_velocity()).unwrap_or(0.0)
+        };
+        assert!(
+            (vel_after - vel_before).abs() < 1.0,
+            "push retarget 必须继承旧速度（before={vel_before} after={vel_after}——Spring 首步 dt≈0 引入微差）"
+        );
+        // 清理：等动画结束（避免残留影响其他测试）
+        for _ in 0..60 {
+            if !super::update_animations() { break; }
+            std::thread::sleep(Duration::from_millis(16));
+        }
     }
 
     #[test]
