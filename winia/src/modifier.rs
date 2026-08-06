@@ -329,6 +329,8 @@ pub(crate) enum ModifierElement {
     /// 测试标记（对标 Compose `Modifier.testTag`——UI 测试定位；
     /// 调试树 JSON 暴露 tag 字段）
     TestTag { tag: String },
+    /// 阴影（对标 Compose `Modifier.shadow`——elevation 模糊 + 内容裁剪）
+    Shadow { elevation: f32, shape: Shape, clip: bool, color: Color },
 
     // ── Draw 类 ──
     /// 背景色 + 形状（color_fn 渲染时求值——静态色或动画闭包统一为闭包）
@@ -538,6 +540,33 @@ impl Modifier {
     /// 标记，UI 测试/调试树用其定位节点（树 JSON 的 `tag` 字段）。
     pub fn test_tag(self, tag: impl Into<String>) -> Self {
         self.push(ModifierElement::TestTag { tag: tag.into() })
+    }
+
+    /// `shadow(elevation, shape, clip, color)`（对标 Compose `Modifier.shadow`）——
+    /// 阴影 + 可选内容裁剪。默认：RectangleShape、`clip = elevation > 0`、
+    /// 黑色阴影（Compose DefaultShadowColor）。elevation <= 0 且 !clip 时
+    /// 返回自身（Compose early-return 语义）。
+    pub fn shadow(
+        self,
+        elevation: f32,
+        shape: impl Into<Shape>,
+        clip: bool,
+        color: Color,
+    ) -> Self {
+        if elevation <= 0.0 && !clip {
+            return self;
+        }
+        self.push(ModifierElement::Shadow {
+            elevation,
+            shape: shape.into(),
+            clip,
+            color,
+        })
+    }
+
+    /// `shadow(elevation)`——便捷版（默认形状/黑色/自动 clip）
+    pub fn shadow_default(self, elevation: f32) -> Self {
+        self.shadow(elevation, Shape::Rectangle, elevation > 0.0, Color::from_argb(255, 0, 0, 0))
     }
 }
 
@@ -1033,6 +1062,7 @@ impl Debug for ModifierElement {
                 .field("height", height)
                 .finish(),
             Self::TestTag { tag } => f.debug_struct("TestTag").field("tag", tag).finish(),
+            Self::Shadow { elevation, .. } => f.debug_struct("Shadow").field("elevation", elevation).finish(),
             Self::Background { .. } => f.debug_struct("Background").finish(),
             Self::Border { width, color, shape } => f.debug_struct("Border").field("width", width).field("color", color).field("shape", shape).finish(),
             Self::Clip { shape } => f.debug_struct("Clip").field("shape", shape).finish(),
@@ -1403,6 +1433,10 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
             aw == bw && ah == bh
         }
         (TestTag { tag: at }, TestTag { tag: bt }) => at == bt,
+        (Shadow { elevation: ae, shape: as_, clip: ac, color: acol },
+         Shadow { elevation: be, shape: bs, clip: bc, color: bcol }) => {
+            ae == be && as_ == bs && ac == bc && acol == bcol
+        }
         // 背景色闭包视为相同（渲染期求值——动画颜色不触发 Enter）
         (Background { shape: as_, .. }, Background { shape: bs, .. }) => as_ == bs,
         (Border { width: aw, color: ac, shape: as_ }, Border { width: bw, color: bc, shape: bs }) => {

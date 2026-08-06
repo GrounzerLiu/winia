@@ -106,6 +106,9 @@ fn render_pass1(
     let mut blur_radius: Option<f32> = None;
     let mut is_backdrop = false;
     let mut clip_shape: Option<crate::modifier::Shape> = None;
+    // 阴影（elevation, shape, color）——链序中与 background 同层绘制；
+    // clip=true 时并入 clip_shape（内容裁剪，阴影不受裁——Compose 语义）
+    let mut shadow: Option<(f32, crate::modifier::Shape, crate::modifier::Color)> = None;
     let mut text: Option<(&str, f32, &crate::modifier::Color, usize, crate::ui::TextAlign, crate::ui::TextOverflow, crate::ui::text::FontWeight, crate::ui::text::FontSlant, bool)> = None;
     let mut scroll_offset_v: Option<f32> = None;
     let mut scroll_offset_h: Option<f32> = None;
@@ -121,6 +124,12 @@ fn render_pass1(
             }
             ModifierElement::Clip { shape } if !backdrop_pass => {
                 clip_shape = Some(shape.clone());
+            }
+            ModifierElement::Shadow { elevation, shape, clip, color } if !backdrop_pass => {
+                shadow = Some((*elevation, shape.clone(), *color));
+                if *clip {
+                    clip_shape = Some(shape.clone());
+                }
             }
             ModifierElement::VerticalScroll { state } if !backdrop_pass => {
                 scroll_offset_v = Some(state.get());
@@ -144,6 +153,35 @@ fn render_pass1(
         let rec = skia_safe::canvas::SaveLayerRec::default().paint(&paint);
         canvas.save_layer(&rec);
     }
+    }
+
+    // 阴影：模糊形状垫底（elevation 模糊半径 + 向下偏移）——在背景/内容之前
+    if !backdrop_pass {
+        if let Some((elevation, shape, color)) = shadow {
+            if elevation > 0.0 {
+                let mut sp = Paint::default();
+                sp.set_color4f(Color4f::from(&color), None);
+                sp.set_anti_alias(true);
+                sp.set_image_filter(image_filters::blur(
+                    (elevation, elevation),
+                    skia_safe::TileMode::Clamp,
+                    None,
+                    None,
+                ));
+                canvas.save();
+                canvas.translate((0.0, elevation * 0.5)); // 阴影向下偏移
+                match &shape {
+                    crate::modifier::Shape::Rectangle => { canvas.draw_rect(rect, &sp); }
+                    crate::modifier::Shape::RoundedRect { corner_radius } => {
+                        canvas.draw_rrect(RRect::new_rect_xy(rect, *corner_radius, *corner_radius), &sp);
+                    }
+                    crate::modifier::Shape::Circle => {
+                        canvas.draw_circle((rect.center_x(), rect.center_y()), rect.width().min(rect.height()) / 2.0, &sp);
+                    }
+                }
+                canvas.restore();
+            }
+        }
     }
 
     // Clip：在绘制内容前设置裁剪区域
