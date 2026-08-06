@@ -79,12 +79,20 @@ Text / TextField / Button / Column / Row / Stack / RichText / SelectionContainer
 
 ## 四、实施顺序建议
 
-1. P0-1 Modifier 便捷包装（alpha/scale/rotate）——半天
-2. P0-3 aspect_ratio + P0-4 required_size——布局层新约束
-3. P0-5 test_tag——UI 测试增强
-4. P0-2 shadow——渲染层
-5. 组件：Button enabled+colors、TextField label/placeholder/enabled/readOnly、Text letterSpacing/lineHeight、布局 contentPadding
-6. P2-11 enabled 语义统一
-7. P2-12 InteractionSource 最小版
-8. P1 GraphicsLayer 补属性（pivot/shadow/clip）
-9. P2-13 手势层（远期）
+**✅ 已完成（component-polish 分支）**：
+1. ✅ transformOrigin（默认绕中心——Compose 语义修正）+ GraphicsLayerParams.clip
+2. ✅ Modifier.alpha/rotate/scale 便捷包装（合并语义 + alpha 隐式 clip）
+3. ✅ Modifier.aspect_ratio（约束 max 推导 + match_height_first）+ required_size/width/height（enforceIncoming=false）
+4. ✅ Modifier.test_tag（调试树 tag 字段）
+5. ✅ Modifier.shadow（elevation/shape/clip/颜色——模糊垫底）
+6. ✅ Button enabled + ButtonColors（container/content/disabled 变体）
+7. ✅ TextField enabled/readOnly/placeholder
+8. ✅ Text letterSpacing/lineHeight（TextContent 元素全链路）
+9. ✅ 多行 TextField（singleLine/maxLines/minLines）
+10. ✅ frame_clock 并行 flaky 双根因修复（旧帧丢弃同步化 + 首次 0ns 兜底）
+
+**剩余**：
+- P1 GraphicsLayer 补属性（shadowElevation/rotationX/Y/cameraDistance——shadow 已做基础版）
+- P2 enabled 语义统一（InteractionSource 最小版——Button/TextField 已独立实现）
+- TextField label（Composable 浮动——需动画支持，P2）
+- 手势层 hoverable/draggable（远期）
