@@ -346,7 +346,7 @@ pub(crate) enum ModifierElement {
 
     // ── Content 类 ──
     /// 文本内容（由 Text 组件设置，渲染阶段消费）
-    TextContent { content: String, font_size: f32, color: Color, font_weight: crate::ui::text::FontWeight, font_style: crate::ui::text::FontSlant, max_lines: usize, align: crate::ui::TextAlign, overflow: crate::ui::TextOverflow, soft_wrap: bool },
+    TextContent { content: String, font_size: f32, color: Color, font_weight: crate::ui::text::FontWeight, font_style: crate::ui::text::FontSlant, max_lines: usize, align: crate::ui::TextAlign, overflow: crate::ui::TextOverflow, soft_wrap: bool, letter_spacing: f32, line_height: Option<f32> },
     /// 富文本内容（含内联 drawable，由 RichText 组件设置）
     RichTextContent {
         content: String,
@@ -613,6 +613,29 @@ impl Modifier {
         overflow: crate::ui::TextOverflow,
         soft_wrap: bool,
     ) -> Self {
+        self.text_content_full(
+            content, font_size, color, font_weight, font_style,
+            max_lines, align, overflow, soft_wrap,
+            0.0, None,
+        )
+    }
+
+    /// 全参版（含 letter_spacing/line_height——Text 组件用，对标 Compose
+    /// TextStyle.letterSpacing/lineHeight）
+    pub(crate) fn text_content_full(
+        mut self,
+        content: String,
+        font_size: f32,
+        color: crate::modifier::Color,
+        font_weight: crate::ui::text::FontWeight,
+        font_style: crate::ui::text::FontSlant,
+        max_lines: usize,
+        align: crate::ui::TextAlign,
+        overflow: crate::ui::TextOverflow,
+        soft_wrap: bool,
+        letter_spacing: f32,
+        line_height: Option<f32>,
+    ) -> Self {
         self.push(ModifierElement::TextContent {
             content,
             font_size,
@@ -623,6 +646,8 @@ impl Modifier {
             align,
             overflow,
             soft_wrap,
+            letter_spacing,
+            line_height,
         })
     }
 
@@ -1445,9 +1470,9 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (Clip { shape: as_ }, Clip { shape: bs }) => as_ == bs,
         (Blur { radius: ar }, Blur { radius: br }) => ar == br,
         (BackdropBlur { radius: ar }, BackdropBlur { radius: br }) => ar == br,
-        (TextContent { content: ac, font_size: af, color: acol, font_weight: afw, font_style: afs, max_lines: am, align: aa, overflow: ao, soft_wrap: asw },
-         TextContent { content: bc, font_size: bf, color: bcol, font_weight: bfw, font_style: bfs, max_lines: bm, align: ba, overflow: bo, soft_wrap: bsw }) => {
-            ac == bc && af == bf && acol == bcol && afw == bfw && afs == bfs && am == bm && aa == ba && ao == bo && asw == bsw
+        (TextContent { content: ac, font_size: af, color: acol, font_weight: afw, font_style: afs, max_lines: am, align: aa, overflow: ao, soft_wrap: asw, letter_spacing: als, line_height: alh },
+         TextContent { content: bc, font_size: bf, color: bcol, font_weight: bfw, font_style: bfs, max_lines: bm, align: ba, overflow: bo, soft_wrap: bsw, letter_spacing: bls, line_height: blh }) => {
+            ac == bc && af == bf && acol == bcol && afw == bfw && afs == bfs && am == bm && aa == ba && ao == bo && asw == bsw && als == bls && alh == blh
         }
         // 富文本：内容 + 内联元素数比较；样式范围视为相同（每次 build 重建）
         (RichTextContent { content: ac, drawables: ad, drawable_ranges: ar, .. },

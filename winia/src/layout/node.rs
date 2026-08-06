@@ -1060,6 +1060,8 @@ pub(crate) fn build_plain_paragraph(
     align: crate::ui::TextAlign,
     overflow: crate::ui::TextOverflow,
     soft_wrap: bool,
+    letter_spacing: f32,
+    line_height: Option<f32>,
     max_width: f32,
 ) -> crate::text::Paragraph {
     use skia_safe::textlayout::ParagraphStyle;
@@ -1088,6 +1090,17 @@ pub(crate) fn build_plain_paragraph(
     text_style.set_font_size(font_size);
     // IMPORTANT: 设置文字颜色（Skia TextStyle 默认白色，不设的话画在白色背景上不可见）
     text_style.set_color(skia_safe::Color::from_argb(color.a, color.r, color.g, color.b));
+    // 字间距（对标 Compose TextStyle.letterSpacing——逻辑像素）
+    if letter_spacing != 0.0 {
+        text_style.set_letter_spacing(letter_spacing);
+    }
+    // 行高（对标 Compose TextStyle.lineHeight——固定 px；skia 是倍数语义，
+    // set_height(multiplier)——行高 = 倍数 × fontSize）
+    if let Some(lh) = line_height {
+        if lh > 0.0 && font_size > 0.0 {
+            text_style.set_height(lh / font_size);
+        }
+    }
     // 设置字重和倾斜
     if font_weight != crate::ui::text::FontWeight::NORMAL || font_style != crate::ui::text::FontSlant::Upright {
         use skia_safe::FontStyle;
@@ -1117,6 +1130,7 @@ fn measure_and_cache_text(node: &LayoutNode, max_width: f32) -> Size {
     for el in node.modifier.elements() {
         if let ModifierElement::TextContent {
             content, font_size, color, font_weight, font_style, max_lines, align, overflow, soft_wrap,
+            letter_spacing, line_height,
         } = el {
             let para = build_plain_paragraph(
                 content.as_str(),
@@ -1128,6 +1142,8 @@ fn measure_and_cache_text(node: &LayoutNode, max_width: f32) -> Size {
                 *align,
                 *overflow,
                 *soft_wrap,
+                *letter_spacing,
+                *line_height,
                 max_width,
             );
 

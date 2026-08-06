@@ -148,6 +148,8 @@ pub struct Text {
     overflow: Option<TextOverflow>,
     style: Option<TextStyle>,
     soft_wrap: bool,
+    letter_spacing: Option<f32>,
+    line_height: Option<f32>,
 }
 
 impl Text {
@@ -164,6 +166,8 @@ impl Text {
             overflow: None,
             style: None,
             soft_wrap: true,
+            letter_spacing: None,
+            line_height: None,
         }
     }
 
@@ -178,6 +182,12 @@ impl Text {
     pub fn align(mut self, align: TextAlign) -> Self { self.text_align = Some(align); self }
     pub fn overflow(mut self, overflow: TextOverflow) -> Self { self.overflow = Some(overflow); self }
     pub fn soft_wrap(mut self, wrap: bool) -> Self { self.soft_wrap = wrap; self }
+
+    /// 字间距（逻辑像素，对标 Compose `TextStyle.letterSpacing`）
+    pub fn letter_spacing(mut self, spacing: f32) -> Self { self.letter_spacing = Some(spacing); self }
+
+    /// 行高（逻辑像素，对标 Compose `TextStyle.lineHeight`——固定行高）
+    pub fn line_height(mut self, height: f32) -> Self { self.line_height = Some(height); self }
 
     /// 设置文字样式（单独参数优先级高于此样式）
     pub fn style(mut self, style: TextStyle) -> Self { self.style = Some(style); self }
@@ -222,7 +232,7 @@ impl Text {
                 (Some(reg), Some((key, content_len, off)))
             } else { (None, None) }
         };
-        let modifier = self.modifier.text_content(
+        let modifier = self.modifier.text_content_full(
             self.content,
             final_font_size.to_logical_px(),
             final_color,
@@ -232,6 +242,8 @@ impl Text {
             final_align,
             final_overflow,
             self.soft_wrap,
+            self.letter_spacing.unwrap_or(0.0),
+            self.line_height,
         );
 
         ctx.start_leaf(key, modifier);
@@ -299,5 +311,33 @@ mod tests {
         assert_eq!(text.font_weight.unwrap(), FontWeight::BOLD);
         assert!(text.font_style.is_some());
         assert_eq!(text.font_style.unwrap(), FontSlant::Italic);
+    }
+
+    #[test]
+    fn test_text_letter_spacing_and_line_height() {
+        let text = Text::new("spacing").letter_spacing(2.0).line_height(28.0);
+        assert_eq!(text.letter_spacing, Some(2.0));
+        assert_eq!(text.line_height, Some(28.0));
+    }
+
+    #[test]
+    fn test_text_content_full_carries_typography() {
+        use crate::modifier::ModifierElement;
+        let mut composer = crate::core::composer::Composer::new();
+        composer.compose(|ctx| {
+            Text::new("styled").letter_spacing(1.5).line_height(30.0).build(ctx);
+        });
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let m = &nodes[root].modifier;
+        let (ls, lh) = m.elements().iter().find_map(|el| {
+            if let ModifierElement::TextContent { letter_spacing, line_height, .. } = el {
+                Some((*letter_spacing, *line_height))
+            } else {
+                None
+            }
+        }).unwrap();
+        assert_eq!(ls, 1.5, "letter_spacing 传入 TextContent 元素");
+        assert_eq!(lh, Some(30.0), "line_height 传入 TextContent 元素");
     }
 }

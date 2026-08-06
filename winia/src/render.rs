@@ -34,6 +34,8 @@ struct TextParams<'a> {
     align: crate::ui::TextAlign,
     overflow: crate::ui::TextOverflow,
     soft_wrap: bool,
+    letter_spacing: f32,
+    line_height: Option<f32>,
 }
 
 /// 渲染 Background / Border / 提取 TextContent
@@ -52,12 +54,13 @@ fn render_modifier_element<'a>(
             draw_border(canvas, x, y, w, h, *width, color, shape);
             None
         }
-        ModifierElement::TextContent { content, font_size, color, font_weight, font_style, max_lines, align, overflow, soft_wrap } => {
+        ModifierElement::TextContent { content, font_size, color, font_weight, font_style, max_lines, align, overflow, soft_wrap, letter_spacing, line_height } => {
             Some(TextParams {
                 content, font_size: *font_size, color,
                 font_weight: *font_weight, font_style: *font_style,
                 max_lines: *max_lines, align: *align, overflow: *overflow,
                 soft_wrap: *soft_wrap,
+                letter_spacing: *letter_spacing, line_height: *line_height,
             })
         }
         _ => None,
@@ -109,7 +112,7 @@ fn render_pass1(
     // 阴影（elevation, shape, color）——链序中与 background 同层绘制；
     // clip=true 时并入 clip_shape（内容裁剪，阴影不受裁——Compose 语义）
     let mut shadow: Option<(f32, crate::modifier::Shape, crate::modifier::Color)> = None;
-    let mut text: Option<(&str, f32, &crate::modifier::Color, usize, crate::ui::TextAlign, crate::ui::TextOverflow, crate::ui::text::FontWeight, crate::ui::text::FontSlant, bool)> = None;
+    let mut text: Option<(&str, f32, &crate::modifier::Color, usize, crate::ui::TextAlign, crate::ui::TextOverflow, crate::ui::text::FontWeight, crate::ui::text::FontSlant, bool, f32, Option<f32>)> = None;
     let mut scroll_offset_v: Option<f32> = None;
     let mut scroll_offset_h: Option<f32> = None;
 
@@ -139,7 +142,7 @@ fn render_pass1(
             }
             el => {
                 if let Some(tp) = render_modifier_element(canvas, el, rect, x, y, w, h) {
-                    text = Some((tp.content, tp.font_size, tp.color, tp.max_lines, tp.align, tp.overflow, tp.font_weight, tp.font_style, tp.soft_wrap));
+                    text = Some((tp.content, tp.font_size, tp.color, tp.max_lines, tp.align, tp.overflow, tp.font_weight, tp.font_style, tp.soft_wrap, tp.letter_spacing, tp.line_height));
                 }
             }
         }
@@ -200,7 +203,7 @@ fn render_pass1(
         clipped = true;
     }
 
-    if let Some((content, font_size, color, max_lines, align, overflow, font_weight, font_style, soft_wrap)) = text {
+    if let Some((content, font_size, color, max_lines, align, overflow, font_weight, font_style, soft_wrap, letter_spacing, line_height)) = text {
         // 优先用测量阶段缓存的 Paragraph（避免重建）
         if let Some(para) = node.cached_paragraph.borrow_mut().as_mut() {
             para.layout(w);
@@ -266,7 +269,7 @@ fn render_pass1(
                 }
             }
         } else {
-            draw_text_with_selection(canvas, content, font_size, color, font_weight, font_style, x, y, w, max_lines, align, overflow, soft_wrap, node.slot_key);
+            draw_text_with_selection(canvas, content, font_size, color, font_weight, font_style, x, y, w, max_lines, align, overflow, soft_wrap, letter_spacing, line_height, node.slot_key);
         }
     }
 
@@ -467,6 +470,7 @@ fn draw_text_with_selection(
     font_style: crate::ui::text::FontSlant,
     x: f32, y: f32, w: f32,
     max_lines: usize, align: crate::ui::TextAlign, overflow: crate::ui::TextOverflow, soft_wrap: bool,
+    letter_spacing: f32, line_height: Option<f32>,
     slot_key: u64,
 ) {
     if crate::ui::selection_container::active_registrar().selected_range(slot_key).is_some() {
@@ -477,7 +481,7 @@ fn draw_text_with_selection(
     // 兜底路径：缓存缺失时用共享构建函数重建（与测量期同一套逻辑——SSOT）
     let para = crate::layout::node::build_plain_paragraph(
         content, font_size, color, font_weight, font_style,
-        max_lines, align, overflow, soft_wrap, w,
+        max_lines, align, overflow, soft_wrap, letter_spacing, line_height, w,
     );
     draw_text(canvas, &para, x, y, w, align);
 }

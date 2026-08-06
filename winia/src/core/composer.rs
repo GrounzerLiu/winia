@@ -2745,6 +2745,8 @@ fn test_text_content_change_remeasures() {
                         align: crate::ui::TextAlign::Left,
                         overflow: crate::ui::TextOverflow::Clip,
                         soft_wrap: true,
+                        letter_spacing: 0.0,
+                        line_height: None,
                     });
                     ctx.start_leaf(k, modifier);
                     ctx.end_node();
