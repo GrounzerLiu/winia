@@ -8,6 +8,7 @@ use winia::ui::text::Text;
 use winia::ui::Window;
 use winia::ui::theme::WiniaTheme;
 use winia::ui::Column;
+use winia::ui::layout_components::Row;
 use winia::ui::button::{Button, ButtonStyle};
 use winia::app;
 
@@ -100,6 +101,76 @@ fn gesture_ui(ctx: &mut ComposeCtx) {
                     .build(ctx);
 
                 Text::new(format!("Drag pos: ({:.0},{:.0})", drag.get().0, drag.get().1))
+                    .font_size(12.0)
+                    .color(Color::from_argb(180, 80, 80, 80))
+                    .build(ctx);
+
+                // ── 4. 手势：tap / double-tap / long-press（对标 detectTapGestures） ──
+                let tap_info = ctx.remember(|| String::from("等待手势…"));
+                Text::new("Tap / Double / Long-press 手势区")
+                    .modifier(
+                        Modifier::new()
+                            .padding(12.0)
+                            .size(240.0, Dimension::Auto)
+                            .background(Color::from_argb(80, 156, 39, 176), winia::modifier::Shape::rounded(6.0))
+                            .on_press({ let l = tap_info.clone(); move |p: (f32, f32)| {
+                                l.set(format!("press at ({:.0},{:.0})", p.0, p.1));
+                            } })
+                            .on_tap({ let l = tap_info.clone(); move |p: (f32, f32)| {
+                                l.set(format!("tap at ({:.0},{:.0})", p.0, p.1));
+                            } })
+                            .on_double_tap({ let l = tap_info.clone(); move |p: (f32, f32)| {
+                                l.set(format!("double-tap at ({:.0},{:.0})", p.0, p.1));
+                            } })
+                            .on_long_press({ let l = tap_info.clone(); move |p: (f32, f32)| {
+                                l.set(format!("long-press at ({:.0},{:.0})", p.0, p.1));
+                            } }),
+                    )
+                    .build(ctx);
+                Text::new(format!("手势: {}", tap_info.get()))
+                    .font_size(12.0)
+                    .color(Color::from_argb(180, 80, 80, 80))
+                    .build(ctx);
+
+                // ── 5. 手势：drag（方块跟随——对标 detectDragGestures） ──
+                let drag_x = ctx.remember(|| 0.0f32);
+                let drag_y = ctx.remember(|| 0.0f32);
+                let drag_state = ctx.remember(|| String::from("未拖拽"));
+                Row::new()
+                    .modifier(Modifier::new().padding_vertical(12.0))
+                    .build(ctx, |ctx| {
+                        Column::new()
+                            .modifier(
+                                Modifier::new()
+                                    .size(70.0, 70.0)
+                                    .offset(drag_x.clone(), drag_y.clone())
+                                    .background(Color::from_argb(255, 255, 87, 34), winia::modifier::Shape::rounded(8.0))
+                                    .on_drag_start({ let s = drag_state.clone(); move |_p: (f32, f32)| {
+                                        s.set(String::from("拖拽开始"));
+                                    } })
+                                    .on_drag({
+                                        let x = drag_x.clone();
+                                        let y = drag_y.clone();
+                                        move |_p: (f32, f32), delta: (f32, f32)| {
+                                            x.update(|v| *v += delta.0);
+                                            y.update(|v| *v += delta.1);
+                                        }
+                                    })
+                                    .on_drag_end({ let s = drag_state.clone(); move || {
+                                        s.set(String::from("拖拽结束"));
+                                    } })
+                                    .on_drag_cancel({ let s = drag_state.clone(); move || {
+                                        s.set(String::from("拖拽取消"));
+                                    } }),
+                            )
+                            .build(ctx, |ctx| {
+                                Text::new("拖我")
+                                    .font_size(12.0)
+                                    .color(Color::WHITE)
+                                    .build(ctx);
+                            });
+                    });
+                Text::new(format!("drag: {} (pos {:.0},{:.0})", drag_state.get(), drag_x.get(), drag_y.get()))
                     .font_size(12.0)
                     .color(Color::from_argb(180, 80, 80, 80))
                     .build(ctx);

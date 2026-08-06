@@ -373,6 +373,23 @@ pub(crate) enum ModifierElement {
     // ── Input 类 ──
     /// 可点击
     Clickable { on_click: Arc<dyn Fn() + Send + Sync> },
+    /// 点按手势回调（对标 Compose `detectTapGestures` 的 onTap）——
+    /// 位置参数为组件本地坐标
+    TapOnTap { cb: Arc<dyn Fn((f32, f32)) + Send + Sync> },
+    /// 双击回调
+    TapOnDoubleTap { cb: Arc<dyn Fn((f32, f32)) + Send + Sync> },
+    /// 长按回调（当前在 up 时判定——与 Compose 即时触发有差异）
+    TapOnLongPress { cb: Arc<dyn Fn((f32, f32)) + Send + Sync> },
+    /// 按下回调（down 立即触发）
+    TapOnPress { cb: Arc<dyn Fn((f32, f32)) + Send + Sync> },
+    /// 拖拽开始（首次超过 touch slop）
+    DragOnStart { cb: Arc<dyn Fn((f32, f32)) + Send + Sync> },
+    /// 拖拽移动（当前位置, 增量）
+    DragOnMove { cb: Arc<dyn Fn((f32, f32), (f32, f32)) + Send + Sync> },
+    /// 拖拽结束
+    DragOnEnd { cb: Arc<dyn Fn() + Send + Sync> },
+    /// 拖拽取消（系统打断）
+    DragOnCancel { cb: Arc<dyn Fn() + Send + Sync> },
     /// 可获得焦点
     Focusable,
     /// 焦点请求器 ID（与 FocusRequester 关联）
@@ -837,6 +854,48 @@ impl Modifier {
         })
     }
 
+    // ── 手势（对标 Compose detectTapGestures / detectDragGestures） ──
+
+    /// 点按回调（up 且未超过 touch slop）——参数为本地坐标
+    pub fn on_tap(self, cb: impl Fn((f32, f32)) + Send + Sync + 'static) -> Self {
+        self.push(ModifierElement::TapOnTap { cb: Arc::new(cb) })
+    }
+
+    /// 双击回调（两次 tap 间隔 < 300ms 且位置差 < 50px）
+    pub fn on_double_tap(self, cb: impl Fn((f32, f32)) + Send + Sync + 'static) -> Self {
+        self.push(ModifierElement::TapOnDoubleTap { cb: Arc::new(cb) })
+    }
+
+    /// 长按回调（down 持续 > 500ms 且未移动）——当前在 up 时判定
+    pub fn on_long_press(self, cb: impl Fn((f32, f32)) + Send + Sync + 'static) -> Self {
+        self.push(ModifierElement::TapOnLongPress { cb: Arc::new(cb) })
+    }
+
+    /// 按下回调（down 立即触发——onPress 语义）
+    pub fn on_press(self, cb: impl Fn((f32, f32)) + Send + Sync + 'static) -> Self {
+        self.push(ModifierElement::TapOnPress { cb: Arc::new(cb) })
+    }
+
+    /// 拖拽开始回调（首次超过 touch slop）
+    pub fn on_drag_start(self, cb: impl Fn((f32, f32)) + Send + Sync + 'static) -> Self {
+        self.push(ModifierElement::DragOnStart { cb: Arc::new(cb) })
+    }
+
+    /// 拖拽移动回调（当前位置, 增量）
+    pub fn on_drag(self, cb: impl Fn((f32, f32), (f32, f32)) + Send + Sync + 'static) -> Self {
+        self.push(ModifierElement::DragOnMove { cb: Arc::new(cb) })
+    }
+
+    /// 拖拽结束回调
+    pub fn on_drag_end(self, cb: impl Fn() + Send + Sync + 'static) -> Self {
+        self.push(ModifierElement::DragOnEnd { cb: Arc::new(cb) })
+    }
+
+    /// 拖拽取消回调（系统打断）
+    pub fn on_drag_cancel(self, cb: impl Fn() + Send + Sync + 'static) -> Self {
+        self.push(ModifierElement::DragOnCancel { cb: Arc::new(cb) })
+    }
+
     /// 标记为可获焦点
     pub fn focusable(self) -> Self {
         self.push(ModifierElement::Focusable)
@@ -1177,6 +1236,32 @@ impl Modifier {
         None
     }
 
+    /// 是否声明了任意手势回调（tap/drag 系列）——app.rs 手势路由判定用
+    pub fn has_gesture(&self) -> bool {
+        self.elements.iter().any(|el| matches!(
+            el,
+            ModifierElement::TapOnTap { .. }
+                | ModifierElement::TapOnDoubleTap { .. }
+                | ModifierElement::TapOnLongPress { .. }
+                | ModifierElement::TapOnPress { .. }
+                | ModifierElement::DragOnStart { .. }
+                | ModifierElement::DragOnMove { .. }
+                | ModifierElement::DragOnEnd { .. }
+                | ModifierElement::DragOnCancel { .. }
+        ))
+    }
+
+    /// 是否声明了拖拽回调（决定 slop 后走 drag 还是取消 tap）
+    pub fn has_drag_gesture(&self) -> bool {
+        self.elements.iter().any(|el| matches!(
+            el,
+            ModifierElement::DragOnStart { .. }
+                | ModifierElement::DragOnMove { .. }
+                | ModifierElement::DragOnEnd { .. }
+                | ModifierElement::DragOnCancel { .. }
+        ))
+    }
+
     pub fn graphics_layer_params(&self) -> Option<GraphicsLayerParams> {
         self.elements.iter().find_map(|el| {
             if let ModifierElement::GraphicsLayer { params_fn } = el { Some((params_fn)()) } else { None }
@@ -1301,6 +1386,14 @@ impl Debug for ModifierElement {
                 .field("drawables", &format_args!("{} drawables", drawable_ranges.len()))
                 .finish(),
             Self::Clickable { .. } => f.write_str("Clickable(<fn>)"),
+            Self::TapOnTap { .. } => f.write_str("TapOnTap(<fn>)"),
+            Self::TapOnDoubleTap { .. } => f.write_str("TapOnDoubleTap(<fn>)"),
+            Self::TapOnLongPress { .. } => f.write_str("TapOnLongPress(<fn>)"),
+            Self::TapOnPress { .. } => f.write_str("TapOnPress(<fn>)"),
+            Self::DragOnStart { .. } => f.write_str("DragOnStart(<fn>)"),
+            Self::DragOnMove { .. } => f.write_str("DragOnMove(<fn>)"),
+            Self::DragOnEnd { .. } => f.write_str("DragOnEnd(<fn>)"),
+            Self::DragOnCancel { .. } => f.write_str("DragOnCancel(<fn>)"),
             Self::Focusable => f.write_str("Focusable"),
             Self::KbEvent { on_key, on_pre_key } => f.debug_struct("KbEvent").field("on_key", &on_key.is_some()).field("on_pre_key", &on_pre_key.is_some()).finish(),
             Self::PointerEvent { on_ptr, on_pre_ptr } => f.debug_struct("PointerEvent").field("on_ptr", &on_ptr.is_some()).field("on_pre_ptr", &on_pre_ptr.is_some()).finish(),
@@ -1800,6 +1893,14 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         }
         // 点击/键盘/指针回调视为相同（行为不参与内容重建判定）
         (Clickable { .. }, Clickable { .. }) => true,
+        (TapOnTap { .. }, TapOnTap { .. }) => true,
+        (TapOnDoubleTap { .. }, TapOnDoubleTap { .. }) => true,
+        (TapOnLongPress { .. }, TapOnLongPress { .. }) => true,
+        (TapOnPress { .. }, TapOnPress { .. }) => true,
+        (DragOnStart { .. }, DragOnStart { .. }) => true,
+        (DragOnMove { .. }, DragOnMove { .. }) => true,
+        (DragOnEnd { .. }, DragOnEnd { .. }) => true,
+        (DragOnCancel { .. }, DragOnCancel { .. }) => true,
         (Focusable, Focusable) => true,
         (FocusRequesterId { id: ai }, FocusRequesterId { id: bi }) => ai == bi,
         (KbEvent { .. }, KbEvent { .. }) => true,

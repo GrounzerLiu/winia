@@ -29,6 +29,7 @@ pub mod render;
 pub mod animation;
 pub mod app;
 pub mod effect;
+pub(crate) mod input;
 #[cfg(feature = "debug-server")]
 pub mod debug;
 
