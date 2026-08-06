@@ -24,6 +24,8 @@ pub(crate) struct DescNode {
     pub(crate) dirty: bool,
     /// 文本选择 registrar（物化时写入节点——组合期与物化期分离的传递通道）
     pub(crate) registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
+    /// 布局方向（组合期捕获——物化直接用，不读 CompositionLocal）
+    pub(crate) direction: crate::layout::LayoutDirection,
     pub(crate) children: Vec<DescNode>,
 }
 
@@ -60,7 +62,7 @@ pub(crate) fn materialize(composer: &mut Composer) {
 
 /// 物化单个 desc 节点（递归子节点）——Skip 恢复 / 节点复用 / 降级重建。
 pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: Option<usize>) -> Option<usize> {
-    let DescNode { key, skip, modifier, preserve_modifier, policy, on_remove, dirty, registrar, children } = desc;
+    let DescNode { key, skip, modifier, preserve_modifier, policy, on_remove, dirty, registrar, direction, children } = desc;
     let index = if skip {
         // Skip：恢复上帧节点（key 匹配——保留测量/内容；children 清空后
         // 按 slot 树结构重新挂接（子节点逐个从 prev_node_by_key 恢复——
@@ -84,10 +86,8 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
                 // 后代（preserve_modifier）保留缓存节点 modifier——不清空视觉）
                 if !preserve_modifier {
                     n.modifier = modifier;
-                    // 刷新方向快照（modifier 覆盖 > CompositionLocal）——
-                    // 复用节点必须与新建路径一致，否则方向元素变化后 padding 镜像不生效
-                    n.layout_direction = n.modifier.get_layout_direction()
-                        .unwrap_or(crate::ui::theme::WiniaTheme::direction());
+                    // 刷新方向快照（组合期捕获值——复用节点必须与新建路径一致）
+                    n.layout_direction = desc.direction;
                 }
                 #[cfg(debug_assertions)]
                 if std::env::var("WINIA_MAT_PROBE").is_ok() {
@@ -111,10 +111,9 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
                 // 注意：不能 return（会跳过尾部 add_child/children 挂接）——
                 // 返回 Some(idx) 走统一挂接路径。
                 let pidx = policy.map(|p| composer.arena.alloc_policy(p));
-                let dir = modifier.get_layout_direction()
-                    .unwrap_or(crate::ui::theme::WiniaTheme::direction());
                 let mut node = crate::layout::node::LayoutNode::new(modifier, pidx);
-                node.layout_direction = dir;
+                // 方向用组合期捕获值（desc.direction）——物化期读不到 CompositionLocal
+                node.layout_direction = desc.direction;
                 node.on_remove = on_remove;
                 node.slot_key = key;
                 // 降级节点：Skip 的 desc 通常已带 policy（skip_policy 保存外层传入值），
@@ -172,9 +171,8 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
             let n = &mut composer.arena.nodes[idx];
             n.children.clear();
             n.modifier = modifier;
-            // 刷新方向快照（复用节点与新建路径一致）
-            n.layout_direction = n.modifier.get_layout_direction()
-                .unwrap_or(crate::ui::theme::WiniaTheme::direction());
+            // 刷新方向快照（复用节点与新建路径一致——组合期捕获值）
+            n.layout_direction = desc.direction;
             n.measure_policy = pidx; // 显式赋值（None 清空——防类型切换残留旧 policy）
             n.on_remove = on_remove;
             n.slot_key = key;
@@ -190,10 +188,9 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
             }
             idx
         } else {
-            let dir = modifier.get_layout_direction()
-                .unwrap_or(crate::ui::theme::WiniaTheme::direction());
             let mut node = crate::layout::node::LayoutNode::new(modifier, pidx);
-            node.layout_direction = dir;
+            // 方向用组合期捕获值（desc.direction）——物化期读不到 CompositionLocal
+            node.layout_direction = desc.direction;
             node.on_remove = on_remove;
             node.slot_key = key;
             if !dirty {

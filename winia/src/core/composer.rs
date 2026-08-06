@@ -534,6 +534,10 @@ struct NodeDesc {
     dirty: bool,
     /// 文本选择 registrar（组合期 set_current_node_registrar 写入——物化时应用）
     registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
+    /// 布局方向（组合期捕获——provides 作用域内读 CompositionLocal；
+    /// 物化在组合回调后执行——届时 WiniaTheme::direction() 已退出作用域，
+    /// 必须从 desc 携带，否则 RTL 下节点快照恒 Ltr → offset/padding 镜像失效）
+    direction: crate::layout::LayoutDirection,
 }
 
 /// 组合节点的一个槽位。每个 composable 调用对应一个 Slot。
@@ -559,6 +563,8 @@ struct Slot {
     /// 但 build 的 modifier 参数可能变化（父层重跑传入的 offset/背景等视觉
     /// 属性）——物化 Skip 恢复时应用，避免视觉卡旧值（动画中间值不渲染）
     skip_modifier: Option<Modifier>,
+    /// 布局方向（组合期捕获——物化期读不到 CompositionLocal）
+    direction: crate::layout::LayoutDirection,
     /// 上帧 modifier（Skip 判定用——param_eq 比较数值参数变化）
     prev_modifier: Option<Modifier>,
     /// Skip 时保存的容器 policy（外层传入——content 未执行但 policy 可用，
@@ -581,6 +587,7 @@ impl Slot {
             skip_modifier: None,
             prev_modifier: None,
             skip_policy: None,
+            direction: crate::layout::LayoutDirection::Ltr,
         }
     }
 
@@ -667,6 +674,10 @@ impl SlotTable {
         self.current_slot().skip_modifier = Some(modifier);
     }
 
+    /// Skip 分支组合期捕获布局方向（物化期读不到 CompositionLocal）
+    fn set_skip_direction(&mut self, direction: crate::layout::LayoutDirection) {
+        self.current_slot().direction = direction;
+    }
     fn set_skip_policy(&mut self, policy: Option<Box<dyn MeasurePolicy>>) {
         self.current_slot().skip_policy = policy;
     }
@@ -694,6 +705,7 @@ impl SlotTable {
                     on_remove: desc.on_remove,
                     dirty: desc.dirty, // start_slot 的 Dirty 状态（slot.dirty 已消费）
                     registrar: desc.registrar,
+                    direction: desc.direction,
                     children: Vec::new(),
                 };
                 for child in &mut slot.children {
@@ -717,6 +729,7 @@ impl SlotTable {
                     on_remove: None,
                     dirty: false,
                     registrar: None,
+                    direction: slot.direction,
                     children: Vec::new(),
                 };
                 for child in &mut slot.children {
@@ -1090,6 +1103,10 @@ impl Composer {
         #[cfg(test)] { match slot_status { SlotStatus::Clean => self.compose_clean_count += 1, _ => self.compose_dirty_count += 1, } }
 
         // 组合产物写入 Slot（物化阶段消费——完整分离：arena 建节点移出组合阶段）
+        // ⚠ direction 必须在此捕获（组合期 provides 作用域内）——物化期
+        // WiniaTheme::direction() 已退出作用域读不到（RTL 全局切换失效根因）
+        let direction = modifier.get_layout_direction()
+            .unwrap_or(crate::ui::theme::WiniaTheme::direction());
         self.slot_table.set_current_desc(Some(NodeDesc {
             key,
             modifier,
@@ -1097,6 +1114,7 @@ impl Composer {
             on_remove,
             dirty: slot_status != SlotStatus::Clean, // 重测标记（slot.dirty 已消费）
             registrar: None,
+            direction,
         }));
         // 统一依赖栈：节点 push（组件 build 期间 State 读取注册到最内层 Group——
         // 组件内读取失效目标 = 本节点（对标 Compose 最内层 Group 语义））
@@ -1163,15 +1181,23 @@ impl Composer {
         // 组合产物写入 Slot：Enter 写完整描述（物化消费）；Skip 写 None——
         // content 不执行（无新描述），物化时按 key 恢复缓存节点（skip 标记）
         if is_skip {
+            // 方向先算（modifier 随后 move 进 set_skip_modifier）
+            let direction = modifier.get_layout_direction()
+                .unwrap_or(crate::ui::theme::WiniaTheme::direction());
             self.slot_table.set_current_desc(None);
             // 保留本帧组合产物 modifier（父层重跑传入的新 offset/背景——物化应用）
             self.slot_table.set_skip_modifier(modifier);
             // 保留 policy（外层传入——Skip 时 content 未执行但 policy 可用；
             // 物化恢复失败降级时避免 policy 缺失测量 0 尺寸）
             self.slot_table.set_skip_policy(policy);
+            // Skip 容器方向也须组合期捕获（同 Enter——物化期读不到 theme）
+            self.slot_table.set_skip_direction(direction);
         } else {
             // Enter：记录本帧 modifier（下帧 Skip 判定比较用）
             self.slot_table.current_slot().prev_modifier = Some(modifier.clone());
+            // Enter：组合期捕获方向（provides 作用域内）——先算再 move
+            let direction = modifier.get_layout_direction()
+                .unwrap_or(crate::ui::theme::WiniaTheme::direction());
             self.slot_table.set_current_desc(Some(NodeDesc {
                 key,
                 modifier,
@@ -1179,6 +1205,7 @@ impl Composer {
                 on_remove,
                 dirty: true, // Enter 即重测（content 重跑——参数/内容可能变；Skip 恢复不受影响）
                 registrar: None,
+                direction,
             }));
         }
         self.group_skip_stack.push(is_skip);
@@ -3335,6 +3362,53 @@ fn test_materialize_reuse_refreshes_layout_direction() {
     );
 }
 
+/// RTL 全局切换修复回归：组合期 provides 作用域内捕获方向到 desc——
+/// 物化在组合回调后执行（WiniaTheme::direction() 已退出作用域），
+/// 修复前物化期读 theme 恒 Ltr → offset/padding 镜像全部失效（用户实测
+/// "都是同向运动"根因）。此测试验证 desc 携带方向。
+#[test]
+fn test_compose_captures_direction_in_provides_scope() {
+    use crate::ui::theme::WiniaTheme;
+    let mut composer = Composer::new();
+    let c = crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0);
+
+    // 模拟 demo 全局切换：with_theme_and_direction(Rtl) 包住组合回调
+    composer.compose(|ctx| {
+        WiniaTheme::with_theme_and_direction(
+            WiniaTheme::colors(),
+            crate::layout::LayoutDirection::Rtl,
+            ctx,
+            |ctx| {
+                let key = ctx.next_key();
+                ctx.start_leaf(key, Modifier::new());
+                ctx.end_node();
+            },
+        );
+    });
+    composer.layout(c);
+    let r = composer.layout_root_idx().unwrap();
+    assert_eq!(
+        composer.arena_nodes()[r].layout_direction,
+        crate::layout::LayoutDirection::Rtl,
+        "组合期 provides 作用域内必须捕获 Rtl（物化期读 theme 会退回 Ltr）"
+    );
+
+    // 对照组：无 provides → Ltr
+    let mut composer = Composer::new();
+    composer.compose(|ctx| {
+        let key = ctx.next_key();
+        ctx.start_leaf(key, Modifier::new());
+        ctx.end_node();
+    });
+    composer.layout(c);
+    let r = composer.layout_root_idx().unwrap();
+    assert_eq!(
+        composer.arena_nodes()[r].layout_direction,
+        crate::layout::LayoutDirection::Ltr,
+        "无 provides 作用域默认 Ltr"
+    );
+}
+
 // ═══════════════════════════════════════════════════════════
 // P3-1 Skip 恢复健壮性测试（结构签名）
 // ═══════════════════════════════════════════════════════════
@@ -3422,6 +3496,7 @@ fn test_skip_recovery_sig_mismatch_direct() {
         on_remove: None,
         dirty: false,
         registrar: None,
+        direction: crate::layout::LayoutDirection::Ltr,
         children: vec![crate::core::materialize::DescNode {
             key: leaf0_key,
             skip: true,
@@ -3431,6 +3506,7 @@ fn test_skip_recovery_sig_mismatch_direct() {
             on_remove: None,
             dirty: false,
             registrar: None,
+            direction: crate::layout::LayoutDirection::Ltr,
             children: vec![],
         }],
     };
