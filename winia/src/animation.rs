@@ -316,8 +316,12 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
     pub fn update(&mut self) -> bool {
         let Some(ref mut state) = self.anim_state else { return false; };
         let now = Instant::now();
-        // 极端参数保护：超过 5s 未收敛强制完成（stiffness=0 等永不收敛的场景）
-        if now.duration_since(state.start) > Duration::from_secs(5) {
+        // 极端参数保护：Spring 超过 5s 未收敛强制完成（stiffness=0 等永不收敛场景）——
+        // 仅 Spring 需要（有 done 阈值但渐近收敛可能永不达）；Tween/Keyframes/
+        // Repeatable 有明确时长、Snap 立即完成——不被截断（用户设 >5s 时长合法）
+        if now.duration_since(state.start) > Duration::from_secs(5)
+            && matches!(state.spec, AnimationSpec::Spring(_))
+        {
             let final_val = state.to.clone();
             self.state.set_no_wake(final_val);
             self.anim_state = None;
@@ -363,9 +367,15 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
             AnimationSpec::Keyframes(spec) => {
                 let elapsed = now - state.start;
                 let t = (elapsed.as_secs_f64() / spec.duration.as_secs_f64()).min(1.0) as f32;
-                let factor = interpolate_keyframes(&spec.frames, t);
-                let value = state.from.lerp(&state.to, factor);
-                (value, t >= 1.0)
+                if t >= 1.0 {
+                    // 时间到：写精确目标（与 Tween/Spring done 语义一致——
+                    // 末帧 progress<1.0 或末帧值过冲时插值结果可能≠to）
+                    (state.to.clone(), true)
+                } else {
+                    let factor = interpolate_keyframes(&spec.frames, t);
+                    let value = state.from.lerp(&state.to, factor);
+                    (value, false)
+                }
             }
             AnimationSpec::Repeatable(spec) => {
                 // 简化：base 仅支持 Tween（开发期断言，其他类型回退 300ms 线性）
@@ -1426,4 +1436,31 @@ fn test_infinite_transition_manual_dispose_idempotent() {
         }
         assert!(frames < 30, "动画应收敛");
         assert_eq!(st.peek(), 100.0, "过冲插值器完成必须精确停靠目标（修复前停在越界值）");
+    }
+
+    /// Keyframes done 帧同样必须停靠精确目标（与 Tween/Spring 一致）——
+    /// 末帧 progress<1.0 时插值结果 ≠ to
+    #[test]
+    fn keyframes_settles_at_target() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let st = State::new(0.0f32);
+        let mut anim = Animatable::new(st.clone());
+        // 末帧 progress=0.8（<1.0）——done 时若用插值结果将 ≠ to
+        anim.animate_to(
+            100.0,
+            AnimationSpec::Keyframes(KeyframesSpec {
+                duration: Duration::from_millis(200),
+                frames: vec![
+                    (0.0, 0.0, Arc::new(crate::animation::interpolator::Linear::new())),
+                    (0.8, 50.0, Arc::new(crate::animation::interpolator::Linear::new())),
+                ],
+            }),
+        );
+        let mut frames = 0;
+        while anim.update() && frames < 20 {
+            std::thread::sleep(Duration::from_millis(40));
+            frames += 1;
+        }
+        assert!(frames < 20, "keyframes 应收敛");
+        assert_eq!(st.peek(), 100.0, "keyframes 完成必须精确停靠目标（末帧 progress<1.0 时修复前≠to）");
     }
