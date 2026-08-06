@@ -16,9 +16,34 @@ fn component_demo(ctx: &mut ComposeCtx) {
     let c = clicked.clone();
     let show = ctx.remember(|| false);
     let s = show.clone();
+    // 全局布局方向切换（RTL/LTR——顶部固定按钮，不跟随滚动）
+    let rtl_state = ctx.remember(|| false);
     // ScrollState 必须 remember（跨重组保留 offset）
     let scroll_y = ctx.remember(|| winia::modifier::ScrollState::new()).get();
 
+    // ── 顶部固定：方向切换按钮（不滚动） ──
+    Row::new()
+        .modifier(Modifier::new().padding(8.0))
+        .build(ctx, |ctx| {
+            Button::new()
+                .on_click({ let r = rtl_state.clone(); move || r.set(!r.get()) })
+                .modifier(Modifier::new().size(200.0, 36.0))
+                .build(ctx, |ctx| {
+                    Text::new(if rtl_state.get() { "切换为 LTR（当前 RTL）" } else { "切换为 RTL（当前 LTR）" })
+                        .font_size(12.0)
+                        .color(Color::WHITE)
+                        .build(ctx);
+                });
+        });
+
+    let dir = if rtl_state.get() {
+        winia::layout::LayoutDirection::Rtl
+    } else {
+        winia::layout::LayoutDirection::Ltr
+    };
+    // 整个 demo 的方向作用域（对标 Compose CompositionLocalProvider
+    // (LocalLayoutDirection)——所有 Row/Text/padding start-end 随方向镜像）
+    WiniaTheme::with_theme_and_direction(WiniaTheme::colors(), dir, ctx, |ctx| {
     Column::new()
         .modifier(Modifier::new()
             .padding_vertical(8.0)
@@ -239,58 +264,42 @@ fn component_demo(ctx: &mut ComposeCtx) {
                         .build(ctx);
                 });
 
-            // ── 9. 布局方向（RTL 切换——适配阿拉伯语/希伯来语） ──
-            Text::new("9. 布局方向 RTL（切换后：Row 镜像 / 文本右对齐 / padding start 在右）")
+            // ── 9. 布局方向（跟随顶部全局切换） ──
+            Text::new("9. 布局方向（跟随全局切换：Row 镜像 / 文本右对齐 / padding start 在右）")
                 .font_size(14.0)
                 .color(Color::from_argb(200, 100, 100, 100))
                 .modifier(Modifier::new().padding_vertical(8.0))
                 .build(ctx);
-            let rtl_state = ctx.remember(|| false);
-            Button::new()
-                .on_click({ let r = rtl_state.clone(); move || r.set(!r.get()) })
-                .modifier(Modifier::new().size(180.0, 36.0))
+            // Row：RTL 下子节点从右到左
+            Row::new()
+                .modifier(Modifier::new().padding_vertical(4.0))
                 .build(ctx, |ctx| {
-                    Text::new(if rtl_state.get() { "当前 RTL（点击切回 LTR）" } else { "当前 LTR（点击切换 RTL）" })
+                    Text::new("[1]").font_size(13.0).build(ctx);
+                    Text::new("[2]").font_size(13.0).build(ctx);
+                    Text::new("[3]").font_size(13.0).build(ctx);
+                });
+            // 文本：RTL 下默认右对齐（fill_max_width 让文字框全宽——
+            // 右对齐差异才可见；wrap 宽度时对齐无效果）
+            Text::new("默认对齐跟随方向（未指定 align）——RTL 下此段文字靠右对齐，LTR 下靠左；多行换行时差异更明显。")
+                .font_size(13.0)
+                .modifier(Modifier::new().fill_max_width())
+                .build(ctx);
+            // padding start：RTL 下 start 在右
+            Column::new()
+                .modifier(
+                    Modifier::new()
+                        .size(200.0, 44.0)
+                        .padding_start(12.0)
+                        .background(Color::from_argb(255, 255, 152, 0), Shape::rounded(6.0)),
+                )
+                .build(ctx, |ctx| {
+                    Text::new("padding_start 12")
                         .font_size(12.0)
                         .color(Color::WHITE)
                         .build(ctx);
                 });
-            let dir = if rtl_state.get() {
-                winia::layout::LayoutDirection::Rtl
-            } else {
-                winia::layout::LayoutDirection::Ltr
-            };
-            // 组合期方向作用域（CompositionLocal 语义——对标 Compose
-            // CompositionLocalProvider(LocalLayoutDirection)）
-            WiniaTheme::with_theme_and_direction(WiniaTheme::colors(), dir, ctx, |ctx| {
-                // Row：RTL 下子节点从右到左
-                Row::new()
-                    .modifier(Modifier::new().padding_vertical(4.0))
-                    .build(ctx, |ctx| {
-                        Text::new("[1]").font_size(13.0).build(ctx);
-                        Text::new("[2]").font_size(13.0).build(ctx);
-                        Text::new("[3]").font_size(13.0).build(ctx);
-                    });
-                // 文本：RTL 下默认右对齐
-                Text::new("RTL 默认右对齐（未指定 align）")
-                    .font_size(13.0)
-                    .build(ctx);
-                // padding start：RTL 下 start 在右
-                Column::new()
-                    .modifier(
-                        Modifier::new()
-                            .size(200.0, 44.0)
-                            .padding_start(12.0)
-                            .background(Color::from_argb(255, 255, 152, 0), Shape::rounded(6.0)),
-                    )
-                    .build(ctx, |ctx| {
-                        Text::new("padding_start 12")
-                            .font_size(12.0)
-                            .color(Color::WHITE)
-                            .build(ctx);
-                    });
-            });
         });
+    });
 }
 
 fn main() {
