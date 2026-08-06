@@ -326,6 +326,9 @@ pub(crate) enum ModifierElement {
     /// 强制尺寸（对标 Compose `Modifier.requiredSize`——忽略 incoming
     /// constraints 的收缩，允许溢出父约束）
     RequiredSize { width: Option<f32>, height: Option<f32> },
+    /// 测试标记（对标 Compose `Modifier.testTag`——UI 测试定位；
+    /// 调试树 JSON 暴露 tag 字段）
+    TestTag { tag: String },
 
     // ── Draw 类 ──
     /// 背景色 + 形状（color_fn 渲染时求值——静态色或动画闭包统一为闭包）
@@ -529,6 +532,12 @@ impl Modifier {
     /// 仅强制高度
     pub fn required_height(self, height: f32) -> Self {
         self.push(ModifierElement::RequiredSize { width: None, height: Some(height) })
+    }
+
+    /// `test_tag(tag)`（对标 Compose `Modifier.testTag`）——给节点打测试
+    /// 标记，UI 测试/调试树用其定位节点（树 JSON 的 `tag` 字段）。
+    pub fn test_tag(self, tag: impl Into<String>) -> Self {
+        self.push(ModifierElement::TestTag { tag: tag.into() })
     }
 }
 
@@ -885,6 +894,17 @@ impl Modifier {
         None
     }
 
+    /// 测试标记（供调试树/UI 测试定位）
+    pub fn get_test_tag(&self) -> Option<&str> {
+        self.elements.iter().find_map(|el| {
+            if let ModifierElement::TestTag { tag } = el {
+                Some(tag.as_str())
+            } else {
+                None
+            }
+        })
+    }
+
     /// 宽高比约束（ratio, match_height_first）
     pub fn aspect_ratio_constraint(&self) -> Option<(f32, bool)> {
         self.elements.iter().find_map(|el| {
@@ -1012,6 +1032,7 @@ impl Debug for ModifierElement {
                 .field("width", width)
                 .field("height", height)
                 .finish(),
+            Self::TestTag { tag } => f.debug_struct("TestTag").field("tag", tag).finish(),
             Self::Background { .. } => f.debug_struct("Background").finish(),
             Self::Border { width, color, shape } => f.debug_struct("Border").field("width", width).field("color", color).field("shape", shape).finish(),
             Self::Clip { shape } => f.debug_struct("Clip").field("shape", shape).finish(),
@@ -1381,6 +1402,7 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (RequiredSize { width: aw, height: ah }, RequiredSize { width: bw, height: bh }) => {
             aw == bw && ah == bh
         }
+        (TestTag { tag: at }, TestTag { tag: bt }) => at == bt,
         // 背景色闭包视为相同（渲染期求值——动画颜色不触发 Enter）
         (Background { shape: as_, .. }, Background { shape: bs, .. }) => as_ == bs,
         (Border { width: aw, color: ac, shape: as_ }, Border { width: bw, color: bc, shape: bs }) => {

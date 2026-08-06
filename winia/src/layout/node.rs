@@ -633,6 +633,25 @@ mod tests {
         let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 100.0, 0.0, 300.0));
         assert_eq!((size.width, size.height), (100.0, 50.0), "match_height_first 反推");
     }
+
+    // ── test_tag ──
+
+    #[test]
+    fn test_tag_stored_and_queried() {
+        let m = Modifier::new().test_tag("btn-submit");
+        assert_eq!(m.get_test_tag(), Some("btn-submit"));
+        let m2 = Modifier::new();
+        assert_eq!(m2.get_test_tag(), None);
+    }
+
+    #[test]
+    fn test_tag_in_param_eq() {
+        let a = Modifier::new().test_tag("a");
+        let b = Modifier::new().test_tag("b");
+        assert!(!a.param_eq(&b), "tag 不同必须不等");
+        let c = Modifier::new().test_tag("a");
+        assert!(a.param_eq(&c), "tag 相同必须相等");
+    }
 }
 
 // ── 焦点遍历 ──

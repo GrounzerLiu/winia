@@ -145,8 +145,10 @@ fn build_node_json(nodes: &[LayoutNode], idx: usize, out: &mut String, depth: us
     let size_w = if node.measured_size.width.is_finite() { node.measured_size.width } else { 0.0 };
     let size_h = if node.measured_size.height.is_finite() { node.measured_size.height } else { 0.0 };
     out.push_str(&format!(
-        r#"{indent}{{"pos":[{pos_x:.0},{pos_y:.0}],"size":[{size_w:.0},{size_h:.0}],"mod":"{}","focused":{},"children":["#,
-        mod_desc, node.focused,
+        r#"{indent}{{"pos":[{pos_x:.0},{pos_y:.0}],"size":[{size_w:.0},{size_h:.0}],"mod":"{}","tag":{},"focused":{},"children":["#,
+        mod_desc,
+        node.modifier.get_test_tag().map(|t| format!("\"{}\"", t)).unwrap_or_else(|| "null".into()),
+        node.focused,
     ));
     for (i, &child) in node.children.iter().enumerate() {
         if i > 0 { out.push_str(","); } // 紧凑单行（无换行——println 走 stdout 管道不拆行）
