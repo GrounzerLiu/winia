@@ -242,7 +242,8 @@ static FRAME_EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLoc
 /// 单调时钟纳秒（Instant 基准——墙钟 SystemTime 可能回拨，导致 dt 为负/巨大）
 fn monotonic_nanos() -> u64 {
     let epoch = *FRAME_EPOCH.get_or_init(std::time::Instant::now);
-    epoch.elapsed().as_nanos() as u64
+    // max(1)：首次初始化与调用同纳秒时 elapsed=0（测试断言 > 0 会失败）
+    (epoch.elapsed().as_nanos() as u64).max(1)
 }
 
 /// 帧循环每帧调用（app.rs RedrawRequested 内注入）——向所有等待者广播帧时间戳。
@@ -273,6 +274,13 @@ pub fn with_frame_nanos() -> impl std::future::Future<Output = u64> + Send {
     // 非 async fn：subscribe 在**调用时**执行（async fn 在首次 poll 才执行——
     // 会错过调用与 await 之间 frame_tick 发出的帧）
     let mut rx = FRAME_CLOCK.0.subscribe();
+    // 同步丢弃订阅时刻已存在的旧帧：broadcast 新 receiver 的游标从当前
+    // 最新开始——不丢弃的话 recv 会立即返回"已经发生"的帧而非"下一帧"
+    //（并行测试 poll 时机不定——flaky 根因）。
+    // ⚠ 必须在这里同步执行：放进 async body 会在首次 poll 才运行——若
+    // frame_tick 发生在 subscribe 与 poll 之间，会把"下一帧"误当旧帧丢弃
+    // → 死等（曾引入此 bug）。
+    let _ = rx.try_recv();
     async move {
         loop {
             match rx.recv().await {

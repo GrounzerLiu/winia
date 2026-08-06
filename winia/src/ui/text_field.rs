@@ -67,6 +67,12 @@ pub struct TextField {
     read_only: bool,
     /// 占位文字（值空时灰色显示——简化版；Compose 是 @Composable 参数）
     placeholder: Option<String>,
+    /// 单行模式（Enter 吞掉不换行——对标 Compose singleLine）
+    single_line: bool,
+    /// 最大行数（对标 Compose maxLines，默认无限）
+    max_lines: usize,
+    /// 最小行数（对标 Compose minLines，默认 1——空内容也占位）
+    min_lines: usize,
 }
 
 impl TextField {
@@ -82,6 +88,9 @@ impl TextField {
             enabled: true,
             read_only: false,
             placeholder: None,
+            single_line: false,
+            max_lines: usize::MAX,
+            min_lines: 1,
         }
     }
 
@@ -111,6 +120,27 @@ impl TextField {
     /// 占位文字（值空时灰色显示——对标 Compose placeholder，简化版）
     pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
         self.placeholder = Some(placeholder.into());
+        self
+    }
+
+    /// 单行模式（Enter 吞掉不换行——对标 Compose singleLine）
+    pub fn single_line(mut self, single_line: bool) -> Self {
+        self.single_line = single_line;
+        if single_line {
+            self.max_lines = 1;
+        }
+        self
+    }
+
+    /// 最大行数（默认无限——对标 Compose maxLines）
+    pub fn max_lines(mut self, max_lines: usize) -> Self {
+        self.max_lines = max_lines;
+        self
+    }
+
+    /// 最小行数（默认 1——空内容也占位，对标 Compose minLines）
+    pub fn min_lines(mut self, min_lines: usize) -> Self {
+        self.min_lines = min_lines;
         self
     }
 
@@ -170,6 +200,7 @@ impl TextField {
             let v = value.clone();
             let cb = on_change.clone();
             let read_only = self.read_only;
+            let single_line = self.single_line;
             move |e: &crate::modifier::KbEvent| -> bool {
                 if e.event_type != crate::modifier::KbEventType::KeyDown { return false; }
                 let key = &e.key;
@@ -231,6 +262,10 @@ impl TextField {
                             return true;
                         }
                         winit::keyboard::NamedKey::Enter => {
+                            // 单行模式：Enter 吞掉不换行（对标 Compose singleLine）
+                            if single_line {
+                                return true;
+                            }
                             let change = TextChange::Inserted { index: val.selection.start, text: "\n".into() };
                             change.apply_to(&mut val);
                             v.set(val.clone());
@@ -305,11 +340,20 @@ impl TextField {
                 display_color,
                 crate::ui::text::FontWeight::NORMAL,
                 crate::ui::text::FontSlant::Upright,
-                usize::MAX, // unlimited lines
+                if self.single_line { 1 } else { self.max_lines }, // maxLines（singleLine → 1）
                 crate::ui::TextAlign::Left,
                 crate::ui::TextOverflow::Clip,
                 true, // allow text wrapping
             );
+        // minLines 占位：内容为空时高度至少 min_lines 行（近似 Compose minLines——
+        // 动态高度闭包，内容变化时重测）
+        let modifier = if self.min_lines > 1 {
+            let v = value.clone();
+            let min_h = self.min_lines as f32 * font_size * 1.4;
+            modifier.height(move || if v.get().text.is_empty() { min_h } else { 0.0 })
+        } else {
+            modifier
+        };
         // 禁用：不聚焦不响应键盘（Compose disabled 语义）；否则聚焦 + 键盘
         let modifier = if self.enabled {
             modifier.focusable().on_key_event(kb_handler)
