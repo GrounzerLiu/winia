@@ -40,7 +40,14 @@ fn decay_demo(ctx: &mut ComposeCtx) {
                             Text::new("Fling →").build(ctx);
                         });
                     Button::new()
-                        .on_click({ let x = x.clone(); move || { x.set(0.0); } })
+                        .on_click({
+                            let x = x.clone();
+                            move || {
+                                // 先取消进行中的 fling（否则 set 后下一帧被动画覆盖——reset 无效）
+                                winia::animation::cancel_animation(&x);
+                                x.set(0.0);
+                            }
+                        })
                         .build(ctx, |ctx| {
                             Text::new("Reset").build(ctx);
                         });

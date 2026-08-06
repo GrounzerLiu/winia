@@ -79,6 +79,6 @@ pub mod prelude {
     pub use crate::layout::{Arrangement, Alignment, Constraints, LayoutDirection};
     pub use crate::unit::{Dp, Sp, Offset, Size, Density, Px, DpExt, SpExt, PxExt};
     pub use crate::effect::{LaunchedEffect, DisposableEffect, CoroutineScope, remember_coroutine_scope, observe_watch};
-    pub use crate::animation::{DecaySpec, exponential_decay, push_decay};
+    pub use crate::animation::{DecaySpec, exponential_decay, push_decay, cancel_animation};
     pub use std::time::Duration;
 }

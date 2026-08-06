@@ -317,6 +317,17 @@ pub fn has_animation_for_state(state_id: u32) -> bool {
         || ACTIVE_COLOR_ANIMATIONS.lock().unwrap().iter().any(|a| a.state.id() == state_id)
 }
 
+/// 取消指定 state 的进行中动画（值保持当前，不再被动画覆盖）。
+///
+/// 注意：`State::set` **不**取消动画——动画是独立系统，set 后下一帧
+/// update_animations 仍会把动画值写回。要"立即停下并设为目标值"请先
+/// `cancel_animation(&state)` 再 `state.set(v)`（或直接用 Snap push）。
+pub fn cancel_animation<T: 'static>(state: &State<T>) {
+    let sid = state.id();
+    ACTIVE_ANIMATIONS.lock().unwrap().retain(|a| a.state_id() != sid);
+    ACTIVE_COLOR_ANIMATIONS.lock().unwrap().retain(|a| a.state.id() != sid);
+}
+
 /// 是否有动画在运行（用于控制事件循环 Poll/Wait）
 pub fn is_animating() -> bool {
     !ACTIVE_ANIMATIONS.lock().unwrap().is_empty()
@@ -1364,6 +1375,31 @@ pub(crate) mod tests {
         // 且起点 = 当前值（不跳变）
         let from = anim.anim_state.as_ref().unwrap().from;
         assert!((from - st.peek()).abs() < 0.01, "from 必须是当前值（无跳变）");
+    }
+
+    /// cancel_animation：动画进行中取消后，值不再被动画覆盖
+    /// （回归：Reset 按钮 set(0) 后下一帧被 Decay 写回——reset 无效）
+    #[test]
+    fn cancel_animation_stops_decay() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let st = State::new(0.0f32);
+        push_decay(st.clone(), 1000.0, DecaySpec::default());
+        // 推进 5 帧——值显著移动
+        for _ in 0..5 {
+            super::update_animations();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let mid = st.peek();
+        assert!(mid > 50.0, "Decay 推进后值应显著（实际 {mid}）");
+        // 取消动画 + set 0（Reset 语义）
+        cancel_animation(&st);
+        st.set(0.0);
+        // 再推进 5 帧——值必须保持 0（不被动画写回）
+        for _ in 0..5 {
+            super::update_animations();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(st.peek(), 0.0, "取消后值必须保持（修复前被 Decay 写回）");
     }
 
     /// P2-9 速度延续（push 路径）：push_decay → push_animatable retarget——
