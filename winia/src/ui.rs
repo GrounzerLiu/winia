@@ -29,6 +29,7 @@ pub use text::ProvideTextStyle;
 pub use text::FontWeight;
 pub use text::FontSlant;
 pub use button::Button;
+pub use button::ButtonColors;
 pub use button::ButtonStyle;
 pub use layout_components::{Column, Row, Stack};
 pub use window::Window;
