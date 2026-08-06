@@ -140,7 +140,9 @@ impl GestureTracker {
         GestureAction::Tap(self.down_pos)
     }
 
-    /// 取消（系统打断）——返回 drag cancel（拖拽中）或 None
+    /// 取消（系统打断）——返回 drag cancel（拖拽中）或 None。
+    /// ⚠ 当前 winit 未接入 PointerCanceled/TouchCanceled 事件——此分支为
+    /// 预留 API（未来窗口失焦/触控取消时驱动）；状态机逻辑已单测覆盖。
     pub(crate) fn on_cancel(&mut self) -> GestureAction {
         if self.dragging {
             GestureAction::DragCancel

@@ -71,8 +71,11 @@ pub(crate) struct PerWindow {
     gesture: Option<crate::input::gesture::GestureTracker>,
     /// 手势回调路由：手势节点 id
     gesture_node: Option<u64>,
-    /// 双击上下文（上次 tap 的时刻/位置——跨手势传递）
-    gesture_tap_ctx: Option<(std::time::Instant, (f32, f32))>,
+    /// 双击上下文（上次 tap 的节点/时刻/位置——跨手势传递；
+    /// 绑定节点——不同节点的手势不共享双击计数）
+    gesture_tap_ctx: Option<(u64, std::time::Instant, (f32, f32))>,
+    /// 手势节点的 slot_key（跨重组稳定——node_id 会变，find_node_by_id 会失败）
+    gesture_slot: Option<u64>,
 }
 
 /// Compose 风格的 click 检测中间状态
@@ -88,7 +91,7 @@ struct PtrDownState {
 
 impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::ui::theme::ThemeColors) -> Self {
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now() }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now() }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -974,35 +977,40 @@ fn apply_scroll_delta(nodes: &mut [LayoutNode], idx: usize, dy: f32, density: cr
 }
 
 /// 手势动作 → 节点回调（坐标转组件本地——对标 Compose onTap 的本地 offset）。
+/// `scene_pos` 是事件位置；tap/drag 系列动作自带 `down_pos`——坐标用动作
+/// 携带的位置（slop 内移动后 up 位置与按下位置不同，用 up 会偏）。
 /// 返回是否消费（有回调执行）。
 fn fire_gesture_action(
     nodes: &[crate::layout::node::LayoutNode],
     root: usize,
-    node_id: u64,
-    scene_pos: (f32, f32),
+    slot_key: u64,
     action: crate::input::gesture::GestureAction,
 ) -> bool {
-    let Some(idx) = crate::layout::node::find_node_by_id(nodes, root, node_id) else {
+    // ⚠ 用 slot_key 解析节点（跨重组稳定）——node_id 在重组后会变
+    let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, root, slot_key) else {
         return false;
     };
-    let (ax, ay) = node_abs_position(nodes, root, node_id);
-    let local = (scene_pos.0 - ax, scene_pos.1 - ay);
+    let Some(idx) = crate::layout::node::find_node_by_id(nodes, root, nid) else {
+        return false;
+    };
+    let (ax, ay) = node_abs_position(nodes, root, nid);
     use crate::input::gesture::GestureAction as G;
     use crate::modifier::ModifierElement as E;
     let mut fired = false;
     for el in nodes[idx].modifier.elements() {
         match (el, action) {
-            (E::TapOnPress { cb }, G::Press(_)) => { (cb)(local); fired = true; }
-            (E::TapOnTap { cb }, G::Tap(_)) => { (cb)(local); fired = true; }
-            (E::TapOnDoubleTap { cb }, G::DoubleTap(_)) => { (cb)(local); fired = true; }
-            (E::TapOnLongPress { cb }, G::LongPress(_)) => { (cb)(local); fired = true; }
-            (E::DragOnStart { cb }, G::DragStart(_)) => { (cb)(local); fired = true; }
-            (E::DragOnMove { cb }, G::DragMove(pos, delta)) => {
-                // DragMove 的位置也转本地；增量不变（全局 delta 与本地一致）
-                (cb)((pos.0 - ax, pos.1 - ay), delta);
+            (E::TapOnPress { cb }, G::Press(p)) => { (cb)((p.0 - ax, p.1 - ay)); fired = true; }
+            (E::TapOnTap { cb }, G::Tap(p)) => { (cb)((p.0 - ax, p.1 - ay)); fired = true; }
+            (E::TapOnDoubleTap { cb }, G::DoubleTap(p)) => { (cb)((p.0 - ax, p.1 - ay)); fired = true; }
+            (E::TapOnLongPress { cb }, G::LongPress(p)) => { (cb)((p.0 - ax, p.1 - ay)); fired = true; }
+            (E::DragOnStart { cb }, G::DragStart(p)) => { (cb)((p.0 - ax, p.1 - ay)); fired = true; }
+            (E::DragOnMove { cb }, G::DragMove(p, delta)) => {
+                (cb)((p.0 - ax, p.1 - ay), delta);
                 fired = true;
             }
-            (E::DragOnEnd { cb }, G::DragEnd) => { (cb)(); fired = true; }
+            (E::DragOnEnd { cb }, G::DragEnd) => {
+                (cb)(); fired = true;
+            }
             (E::DragOnCancel { cb }, G::DragCancel) => { (cb)(); fired = true; }
             _ => {}
         }
@@ -1021,16 +1029,21 @@ fn gesture_down(pw: &mut PerWindow, scene_pos: (f32, f32)) {
     };
     let has_drag = nodes[gid].modifier.has_drag_gesture();
     let node_id = nodes[gid].id;
-    let ctx = pw.gesture_tap_ctx.take();
+    let slot = nodes[gid].slot_key;
+    // 双击上下文按节点隔离（Compose per-pointerInput 语义）——不同节点不共享
+    let ctx = pw.gesture_tap_ctx.take()
+        .filter(|(n, _, _)| *n == node_id)
+        .map(|(_, t, p)| (t, p));
     pw.gesture = Some(crate::input::gesture::GestureTracker::new(node_id, scene_pos, has_drag, ctx));
     pw.gesture_node = Some(node_id);
+    pw.gesture_slot = Some(slot);
     // on_press 立即触发（本地坐标）
-    fire_gesture_action(nodes, r, node_id, scene_pos, crate::input::gesture::GestureAction::Press(scene_pos));
+    fire_gesture_action(nodes, r, slot, crate::input::gesture::GestureAction::Press(scene_pos));
 }
 
 /// 指针移动手势入口：tracker 存在即路由（capture——不依赖 hit test）。
 fn gesture_move(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
-    let Some(gid) = pw.gesture_node else { return false; };
+    let Some(slot) = pw.gesture_slot else { return false; };
     let action = {
         let Some(t) = pw.gesture.as_mut() else { return false; };
         t.on_move(scene_pos)
@@ -1040,27 +1053,29 @@ fn gesture_move(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
     }
     let nodes = pw.composer.arena_nodes();
     let Some(r) = pw.composer.layout_root_idx() else { return false; };
-    fire_gesture_action(nodes, r, gid, scene_pos, action)
+    fire_gesture_action(nodes, r, slot, action)
 }
 
 /// 指针释放手势入口：up 判定（tap/double-tap/long-press/drag-end）→ 销毁 tracker。
 fn gesture_up(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
+    let Some(slot) = pw.gesture_slot else { return false; };
     let Some(gid) = pw.gesture_node else { return false; };
     let action = {
         let Some(mut t) = pw.gesture.take() else { return false; };
         // ⚠ 必须先 on_up（Tap 分支记录 last_tap）再取 tap_context——
         // 顺序颠倒则双击上下文恒 None（ctx 在 up 判定前读取）
         let action = t.on_up();
-        pw.gesture_tap_ctx = t.tap_context();
+        pw.gesture_tap_ctx = t.tap_context().map(|(t, p)| (gid, t, p));
         action
     };
     pw.gesture_node = None;
+    pw.gesture_slot = None;
     if action == crate::input::gesture::GestureAction::None {
         return false;
     }
     let nodes = pw.composer.arena_nodes();
     let Some(r) = pw.composer.layout_root_idx() else { return false; };
-    fire_gesture_action(nodes, r, gid, scene_pos, action)
+    fire_gesture_action(nodes, r, slot, action)
 }
 
 /// Compose 风格 click 检测：Down 记录（pointer_down_state）、Up 释放时触发 on_click。
