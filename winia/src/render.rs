@@ -158,21 +158,57 @@ fn render_pass1(
     }
     }
 
-    // 阴影：模糊形状垫底（elevation 模糊半径 + 向下偏移）——在背景/内容之前
+    // 阴影：ambient + spot 两层（对标 Compose DropShadow——环境光无偏移
+    // 大模糊 + 聚光偏移小模糊；alpha 随 elevation 增强——Material 层级感：
+    // elevation 小（1-3）淡、大（8+）明显；单层全黑大模糊太生硬）
     if !backdrop_pass {
         if let Some((elevation, shape, color)) = shadow {
             if elevation > 0.0 {
+                // 强度随 elevation 增强（0~1，12 封顶——Material 层级上限）
+                let strength = (elevation / 12.0).min(1.0);
+                // ambient：无偏移、模糊 = e*0.5、低 alpha
+                let mut ap = Paint::default();
+                ap.set_color4f(
+                    Color4f::from(&crate::modifier::Color::from_argb(
+                        (color.a as f32 * 0.22 * strength) as u8,
+                        color.r, color.g, color.b,
+                    )),
+                    None,
+                );
+                ap.set_anti_alias(true);
+                ap.set_image_filter(image_filters::blur(
+                    (elevation * 0.5, elevation * 0.5),
+                    skia_safe::TileMode::Clamp,
+                    None,
+                    None,
+                ));
+                match &shape {
+                    crate::modifier::Shape::Rectangle => { canvas.draw_rect(rect, &ap); }
+                    crate::modifier::Shape::RoundedRect { corner_radius } => {
+                        canvas.draw_rrect(RRect::new_rect_xy(rect, *corner_radius, *corner_radius), &ap);
+                    }
+                    crate::modifier::Shape::Circle => {
+                        canvas.draw_circle((rect.center_x(), rect.center_y()), rect.width().min(rect.height()) / 2.0, &ap);
+                    }
+                }
+                // spot：偏移 (0, e*0.5)、模糊 = e*0.25、中 alpha
                 let mut sp = Paint::default();
-                sp.set_color4f(Color4f::from(&color), None);
+                sp.set_color4f(
+                    Color4f::from(&crate::modifier::Color::from_argb(
+                        (color.a as f32 * 0.45 * strength) as u8,
+                        color.r, color.g, color.b,
+                    )),
+                    None,
+                );
                 sp.set_anti_alias(true);
                 sp.set_image_filter(image_filters::blur(
-                    (elevation, elevation),
+                    (elevation * 0.25, elevation * 0.25),
                     skia_safe::TileMode::Clamp,
                     None,
                     None,
                 ));
                 canvas.save();
-                canvas.translate((0.0, elevation * 0.5)); // 阴影向下偏移
+                canvas.translate((0.0, elevation * 0.5));
                 match &shape {
                     crate::modifier::Shape::Rectangle => { canvas.draw_rect(rect, &sp); }
                     crate::modifier::Shape::RoundedRect { corner_radius } => {
