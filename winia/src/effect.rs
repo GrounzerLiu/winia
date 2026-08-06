@@ -221,3 +221,89 @@ pub fn observe_watch<T: Clone + Send + Sync + PartialEq + 'static>(
 }
 
 // ═══════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════
+// 帧时钟（P3-12）——对标 Compose withFrameNanos
+// ═══════════════════════════════════════════════════════════
+
+use std::sync::LazyLock;
+use tokio::sync::broadcast;
+
+/// 帧时钟发送端——渲染循环（RedrawRequested 处理器）每帧调用 [`frame_tick`]。
+/// broadcast 队列化每个帧时间戳：订阅者收到**下一帧**（无 watch 的跳过语义）。
+/// static 持有 receiver 防 send 因无订阅者而失败。
+static FRAME_CLOCK: LazyLock<(broadcast::Sender<u64>, broadcast::Receiver<u64>)> = LazyLock::new(|| {
+    let (tx, rx) = broadcast::channel(16);
+    (tx, rx)
+});
+
+static FRAME_EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// 单调时钟纳秒（Instant 基准——墙钟 SystemTime 可能回拨，导致 dt 为负/巨大）
+fn monotonic_nanos() -> u64 {
+    let epoch = *FRAME_EPOCH.get_or_init(std::time::Instant::now);
+    epoch.elapsed().as_nanos() as u64
+}
+
+/// 帧循环每帧调用（app.rs RedrawRequested 内注入）——向所有等待者广播帧时间戳。
+/// 无副作用失败：无订阅者时 send 返回 Err，忽略（帧时钟只是辅助驱动）。
+pub fn frame_tick() {
+    let _ = FRAME_CLOCK.0.send(monotonic_nanos());
+}
+
+/// 等待下一帧并返回帧时间戳（纳秒，UNIX epoch 基准）——
+/// 自定义动画的帧驱动入口（对标 Compose `withFrameNanos`）。
+///
+/// 用法（LaunchedEffect / CoroutineScope 内）：
+/// ```ignore
+/// scope.spawn(async move {
+///     let mut last = 0u64;
+///     loop {
+///         let now = winia::effect::with_frame_nanos().await;
+///         let dt = (now - last) as f32 / 1e9;
+///         last = now;
+///         // 按 dt 推进自定义状态……
+///     }
+/// });
+/// ```
+///
+/// 注意：帧时钟由渲染循环驱动——窗口未渲染（最小化/无 request_redraw）时
+/// 不会返回。需要"时间驱动"而非"帧驱动"请用 tokio sleep。
+pub fn with_frame_nanos() -> impl std::future::Future<Output = u64> + Send {
+    // 非 async fn：subscribe 在**调用时**执行（async fn 在首次 poll 才执行——
+    // 会错过调用与 await 之间 frame_tick 发出的帧）
+    let mut rx = FRAME_CLOCK.0.subscribe();
+    async move {
+        loop {
+            match rx.recv().await {
+                Ok(v) => return v,
+                // 订阅晚于缓冲区淘汰（长时间无渲染后恢复）——跳过丢失帧继续等
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => return 0, // 发送端消亡——兜底
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// frame_tick 广播后，with_frame_nanos 返回新时间戳（非初始 0）
+    #[test]
+    fn frame_clock_ticks_and_waits() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        rt.block_on(async {
+            let fut = with_frame_nanos();
+            frame_tick();
+            let v = fut.await;
+            assert!(v > 0, "帧时间戳必须 > 0（实际 {v}）");
+            // 第二次 tick 返回更新的时间戳
+            let fut2 = with_frame_nanos();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            frame_tick();
+            let v2 = fut2.await;
+            assert!(v2 > v, "第二次 tick 时间戳必须递增（{v} -> {v2}）");
+        });
+    }
+}

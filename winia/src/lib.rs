@@ -69,12 +69,20 @@ pub mod prelude {
     pub use crate::core::state::{DerivedFloat, DerivedValue, State};
     pub use crate::modifier::{Dimension, Modifier, Shape, Color, FocusRequester, ScrollState, DecoStyle, DecoMode, FontEdge, FontHint, KbEvent, KbEventType, PointerEvent, PointerEventType, PointerButton, PointerKind, PenKind};
     pub use crate::ui::{Text, TextAlign, TextOverflow, TextStyle, ProvideTextStyle, FontWeight, FontSlant, Button, ButtonStyle, Column, Row, Stack, Window, WiniaTheme, ThemeColors, SelectionContainer};
+    pub use crate::ui::animated_visibility::{AnimatedVisibility, VisibilityTransition, SlideDirection};
+    pub use crate::ui::animated_size::AnimatedSize;
+    pub use crate::ui::animated_content::AnimatedContent;
+    pub use crate::ui::crossfade::Crossfade;
     pub use crate::ui::theme::is_system_dark_theme;
     pub use crate::{app_root, composable, run_app};
     pub use crate::ui::rich_text::RichText;
     pub use crate::text::{InlineDrawable, ImageDrawable, SvgDrawable};
     pub use crate::layout::{Arrangement, Alignment, Constraints, LayoutDirection};
     pub use crate::unit::{Dp, Sp, Offset, Size, Density, Px, DpExt, SpExt, PxExt};
-    pub use crate::effect::{LaunchedEffect, DisposableEffect, CoroutineScope, remember_coroutine_scope, observe_watch};
+    pub use crate::effect::{LaunchedEffect, DisposableEffect, CoroutineScope, remember_coroutine_scope, observe_watch, with_frame_nanos};
+    pub use crate::animation::{
+        animate_int_as_state, animate_value_as_state, cancel_animation, DecaySpec,
+        exponential_decay, push_decay,
+    };
     pub use std::time::Duration;
 }

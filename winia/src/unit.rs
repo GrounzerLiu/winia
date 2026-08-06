@@ -205,6 +205,16 @@ impl crate::animation::AnimatableValue for Dp {
     fn supports_spring() -> bool { true }
 }
 
+impl crate::animation::AnimatableValue for i32 {
+    fn lerp(&self, to: &i32, t: f32) -> i32 {
+        let from = *self as f32;
+        (from + (*to as f32 - from) * t).round() as i32
+    }
+    fn to_f32(&self) -> f32 { *self as f32 }
+    fn from_f32(v: f32) -> i32 { v.round() as i32 }
+    fn supports_spring() -> bool { true }
+}
+
 impl crate::animation::AnimatableValue for Sp {
     fn lerp(&self, to: &Sp, t: f32) -> Sp { Sp(self.0 + (to.0 - self.0) * t) }
     fn to_f32(&self) -> f32 { self.0 }

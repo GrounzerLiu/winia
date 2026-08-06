@@ -1,11 +1,12 @@
 /** 线性插值 (x = x) */
 pub fn linear(x: f32) -> f32 { x }
 
-pub trait Interpolator : Sync + Send {
+pub trait Interpolator : Sync + Send + std::fmt::Debug {
     fn interpolate(&self, x: f32) -> f32;
 }
 
 /// ![image](https://upload.wikimedia.org/wikipedia/commons/0/0e/Linear_interpolation.svg)
+#[derive(Debug)]
 pub struct Linear {}
 impl Default for Linear {
     fn default() -> Self {
@@ -20,6 +21,12 @@ impl Linear {
 	pub fn boxed() -> Box<dyn Interpolator> {
 		Box::new(Self::new())
 	}
+}
+
+impl From<Linear> for std::sync::Arc<dyn Interpolator> {
+    fn from(i: Linear) -> Self {
+        std::sync::Arc::new(i)
+    }
 }
 
 impl Interpolator for Linear {
@@ -50,6 +57,7 @@ fn find_interval(points: &Vec<(f32, f32)>, x: f32) -> usize {
 
 macro_rules! interpolator {
     ($name:ident, $map: expr) => {
+        #[derive(Debug)]
         pub struct $name {
             points: Vec<(f32, f32)>,
         }
@@ -66,6 +74,11 @@ macro_rules! interpolator {
 			pub fn boxed() -> Box<dyn Interpolator> {
 				Box::new(Self::new())
 			}
+        }
+        impl From<$name> for std::sync::Arc<dyn Interpolator> {
+            fn from(i: $name) -> Self {
+                std::sync::Arc::new(i)
+            }
         }
         impl Interpolator for $name {
             fn interpolate(&self, x: f32) -> f32 {
@@ -1257,3 +1270,163 @@ interpolator!(
 		(0.99, 0.9946375),    (1.0, 1.0),
 	]
 );
+// ═══════════════════════════════════════════════════════════
+// 运行时自定义缓动（对标 Compose CubicBezierEasing / PathEasing）
+// ═══════════════════════════════════════════════════════════
+
+/// 三次贝塞尔缓动（对标 Compose `CubicBezierEasing`）——运行时曲线，
+/// 不预采样查表：x→t 用牛顿迭代 + 二分兜底求解，然后采样 y。
+///
+/// 用法：`TweenSpec::new(dur, CubicBezier::new(0.25, 0.1, 0.25, 1.0))`
+#[derive(Debug, Clone)]
+pub struct CubicBezier {
+    p1x: f32, p1y: f32, p2x: f32, p2y: f32,
+}
+
+impl CubicBezier {
+    pub fn new(p1x: f32, p1y: f32, p2x: f32, p2y: f32) -> Self {
+        Self { p1x, p1y, p2x, p2y }
+    }
+
+    fn sample(&self, t: f32) -> f32 {
+        let mt = 1.0 - t;
+        3.0 * mt * mt * t * self.p1x + 3.0 * mt * t * t * self.p2x + t * t * t
+    }
+    fn sample_y(&self, t: f32) -> f32 {
+        let mt = 1.0 - t;
+        3.0 * mt * mt * t * self.p1y + 3.0 * mt * t * t * self.p2y + t * t * t
+    }
+    fn sample_derivative(&self, t: f32) -> f32 {
+        let mt = 1.0 - t;
+        3.0 * mt * mt * self.p1x + 6.0 * mt * t * (self.p2x - self.p1x) + 3.0 * t * t * (1.0 - self.p2x)
+    }
+
+    /// 牛顿迭代求解 x→t（epsilon 1e-6；迭代失败回退二分）
+    fn solve_x(&self, x: f32) -> f32 {
+        let mut t = x;
+        for _ in 0..8 {
+            let err = self.sample(t) - x;
+            if err.abs() < 1e-6 { return t; }
+            let d = self.sample_derivative(t);
+            if d.abs() < 1e-6 { break; }
+            t -= err / d;
+        }
+        // 二分兜底
+        let (mut lo, mut hi) = (0.0f32, 1.0f32);
+        let mut t = x;
+        while hi - lo > 1e-7 {
+            t = (lo + hi) / 2.0;
+            if self.sample(t) < x { lo = t; } else { hi = t; }
+        }
+        t
+    }
+}
+
+impl Interpolator for CubicBezier {
+    fn interpolate(&self, x: f32) -> f32 {
+        if x <= 0.0 { return 0.0; }
+        if x >= 1.0 { return 1.0; }
+        self.sample_y(self.solve_x(x))
+    }
+}
+
+impl From<CubicBezier> for std::sync::Arc<dyn Interpolator> {
+    fn from(e: CubicBezier) -> Self { std::sync::Arc::new(e) }
+}
+
+/// 运行时路径缓动（对标 Compose `PathEasing`）——任意控制点折线，
+/// 段间线性插值（表驱动插值器的运行时等价物，点集不固定）。
+///
+/// 用法：`TweenSpec::new(dur, PathEasing::new(vec![(0.0,0.0),(0.5,1.0),(1.0,1.0)]))`
+#[derive(Debug, Clone)]
+pub struct PathEasing {
+    points: Vec<(f32, f32)>,
+}
+
+impl PathEasing {
+    /// 控制点折线（x 必须单调递增——二分查找依赖有序性）
+    pub fn new(points: Vec<(f32, f32)>) -> Self {
+        debug_assert!(
+            points.windows(2).all(|w| w[0].0 <= w[1].0),
+            "PathEasing 点集 x 必须单调递增（收到 {points:?}）"
+        );
+        Self { points }
+    }
+}
+
+impl Interpolator for PathEasing {
+    fn interpolate(&self, x: f32) -> f32 {
+        if x <= 0.0 { return 0.0; }
+        if x >= 1.0 { return 1.0; }
+        if self.points.len() < 2 {
+            return self.points.first().map(|p| p.1).unwrap_or(0.0);
+        }
+        let idx = find_interval(&self.points, x);
+        let (x0, y0) = self.points[idx];
+        let (x1, y1) = self.points[idx + 1];
+        let t = if x1 > x0 { (x - x0) / (x1 - x0) } else { 0.0 };
+        y0 + (y1 - y0) * t
+    }
+}
+
+impl From<PathEasing> for std::sync::Arc<dyn Interpolator> {
+    fn from(e: PathEasing) -> Self { std::sync::Arc::new(e) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// CubicBezier：端点精确、对称曲线中点 ≈ 0.5、单调递增
+    #[test]
+    fn cubic_bezier_endpoints_symmetry_monotonic() {
+        let e = CubicBezier::new(0.25, 0.1, 0.75, 0.9); // 标准 easeInOut（对称：p1+p2=(1,1)）
+        assert_eq!(e.interpolate(0.0), 0.0, "起点必须精确 0");
+        assert_eq!(e.interpolate(1.0), 1.0, "终点必须精确 1");
+        assert!((e.interpolate(0.5) - 0.5).abs() < 0.02, "对称曲线中点应≈0.5（实际 {}）", e.interpolate(0.5));
+        // 单调性：10 个采样点递增
+        let mut prev = 0.0f32;
+        for i in 1..=10 {
+            let v = e.interpolate(i as f32 / 10.0);
+            assert!(v >= prev - 1e-4, "必须单调（{prev} -> {v}）");
+            prev = v;
+        }
+    }
+
+    /// CubicBezier：越界 clamp（Compose 语义）
+    #[test]
+    fn cubic_bezier_clamps_out_of_range() {
+        let e = CubicBezier::new(0.4, 0.0, 0.2, 1.0);
+        assert_eq!(e.interpolate(-0.5), 0.0);
+        assert_eq!(e.interpolate(1.5), 1.0);
+    }
+
+    /// PathEasing：段间线性插值 + 端点/clamp
+    #[test]
+    fn path_easing_segment_interpolation() {
+        let e = PathEasing::new(vec![(0.0, 0.0), (0.5, 1.0), (1.0, 1.0)]);
+        assert_eq!(e.interpolate(0.0), 0.0);
+        assert_eq!(e.interpolate(1.0), 1.0);
+        assert_eq!(e.interpolate(-1.0), 0.0, "越界 clamp");
+        assert_eq!(e.interpolate(1.5), 1.0, "越界 clamp");
+        assert!((e.interpolate(0.25) - 0.5).abs() < 1e-5, "第一段中点 = 0.5");
+        assert!((e.interpolate(0.75) - 1.0).abs() < 1e-5, "第二段已到平台 1.0");
+        assert!((e.interpolate(0.5) - 1.0).abs() < 1e-5, "拐点 = 1.0");
+    }
+
+    /// PathEasing：单点退化（无段可插值 → 返回该点 y）
+    #[test]
+    fn path_easing_single_point() {
+        let e = PathEasing::new(vec![(0.0, 0.3)]);
+        assert_eq!(e.interpolate(0.5), 0.3);
+    }
+
+    /// 两种运行时缓动都能进入 TweenSpec（From<Arc<dyn Interpolator>> 接线）
+    #[test]
+    fn runtime_easing_into_tween() {
+        let cb: std::sync::Arc<dyn Interpolator> = CubicBezier::new(0.4, 0.0, 0.2, 1.0).into();
+        let pe: std::sync::Arc<dyn Interpolator> = PathEasing::new(vec![(0.0, 0.0), (1.0, 1.0)]).into();
+        assert_eq!(cb.interpolate(1.0), 1.0);
+        assert_eq!(pe.interpolate(0.5), 0.5);
+    }
+}

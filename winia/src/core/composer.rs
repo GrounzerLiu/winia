@@ -359,6 +359,25 @@ impl<'a> ComposeCtx<'a> {
         state
     }
 
+    /// animateIntAsState — 动画整数值（对标 Compose animateIntAsState）
+    pub fn animate_int_as_state(&mut self, target: i32, spec: crate::animation::AnimationSpec) -> State<i32> {
+        let state = self.remember(|| target);
+        crate::animation::push_animatable(state.clone(), target, spec);
+        state
+    }
+
+    /// animateValueAsState — 泛型值动画（对标 Compose animateValueAsState——
+    /// 任何实现 AnimatableValue 的类型：lerp/to_f32/from_f32）
+    pub fn animate_value_as_state<T: crate::animation::AnimatableValue + Send + Sync + 'static>(
+        &mut self,
+        target: T,
+        spec: crate::animation::AnimationSpec,
+    ) -> State<T> {
+        let state = self.remember(|| target.clone());
+        crate::animation::push_animatable(state.clone(), target, spec);
+        state
+    }
+
     /// 设置当前节点的 IME 预输入回调
     pub fn set_current_node_ime_callback(&self, callback: Box<dyn Fn(&str, Option<(usize, usize)>) + Send>) {
         if let Some(&idx) = self.composer.node_stack.last() {
@@ -540,6 +559,8 @@ struct Slot {
     /// 但 build 的 modifier 参数可能变化（父层重跑传入的 offset/背景等视觉
     /// 属性）——物化 Skip 恢复时应用，避免视觉卡旧值（动画中间值不渲染）
     skip_modifier: Option<Modifier>,
+    /// 上帧 modifier（Skip 判定用——param_eq 比较数值参数变化）
+    prev_modifier: Option<Modifier>,
     /// Skip 时保存的容器 policy（外层传入——content 未执行但 policy 可用，
     /// 物化降级/恢复时避免 policy 缺失导致测量 0 尺寸）
     skip_policy: Option<Box<dyn MeasurePolicy>>,
@@ -558,6 +579,7 @@ impl Slot {
             desc: None,
             visited: true, // 新建即本帧活跃
             skip_modifier: None,
+            prev_modifier: None,
             skip_policy: None,
         }
     }
@@ -1111,7 +1133,11 @@ impl Composer {
             let params_unchanged = params_equal(
                 &self.pending_params,
                 &self.slot_table.current_slot().params,
-            );
+            ) && {
+                // modifier 数值参数相等（width/背景色等变化 → Enter 重跑内容）
+                let prev_m = self.slot_table.current_slot().prev_modifier.as_ref();
+                prev_m.map(|pm| modifier.param_eq(pm)).unwrap_or(false)
+            };
             #[cfg(debug_assertions)] {
                 if std::env::var("WINIA_SKIP_TRACE").is_ok() {
                     eprintln!("[skip] key={} clean={} params_u={} prev={} pending_len={}",
@@ -1144,6 +1170,8 @@ impl Composer {
             // 物化恢复失败降级时避免 policy 缺失测量 0 尺寸）
             self.slot_table.set_skip_policy(policy);
         } else {
+            // Enter：记录本帧 modifier（下帧 Skip 判定比较用）
+            self.slot_table.current_slot().prev_modifier = Some(modifier.clone());
             self.slot_table.set_current_desc(Some(NodeDesc {
                 key,
                 modifier,
@@ -1166,7 +1194,14 @@ impl Composer {
     /// - Skip 模式：重放子 slot 结构并创建 stub LayoutNode
     /// - Enter 模式：等同于 end_node()
     fn end_restartable_group(&mut self) {
-        let _was_skip = self.group_skip_stack.pop().unwrap_or(false);
+        let was_skip = self.group_skip_stack.pop().unwrap_or(false);
+        // Enter（content 重跑）：清理未访问子槽——内容结构变化后残留的旧槽
+        // （如 AnimatedContent B(3 文本) → A(2 文本) 的第 3 槽）若保留，下帧
+        // Skip 收集时结构签名（desc children vs 缓存 children）不等 → 物化
+        // 降级 0x0 → 子树塌缩。Skip 槽保留（content 未执行——结构需保留供恢复）。
+        if !was_skip {
+            self.slot_table.current_slot().children.retain(|c| c.visited);
+        }
         // Skip：content 未执行——slot 树保留（上帧 children 结构）——物化时
         // 整棵子树按 key 从 prev_node_by_key 恢复（stub 机制已由物化替代）
         // GROUP_STACK pop 由 end_node 统一处理（与 start_restartable_group 的
@@ -1856,11 +1891,12 @@ fn test_same_frame_second_compose_retains_tree() {
         ctx.end_restartable_group();
     });
     composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
-    let root1 = composer.layout_root_idx().expect("帧1 root");
-    let nodes1 = composer.arena_nodes().len();
 
     // 帧 2 同帧两次 compose（模拟 recompose 循环——中间无 layout）：
-    // 第一次 compose 物化并 drain prev_node_by_key；第二次 materialize 命中守卫保留树
+    // 第一次 compose 物化并 drain prev_node_by_key；第二次 materialize
+    // 不再命中守卫（8548718 守卫已移除——守卫会错误阻断同帧二次 compose 的
+    // 真实 Enter 内容，如 AnimatedContent 切换帧）——走防御降级重建：
+    // Skip 无缓存 → 按 Enter 重建（dirty 重测）——不塌缩、内容正确
     composer.compose(|ctx| {
         let root_key = ctx.next_key();
         match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
@@ -1885,8 +1921,43 @@ fn test_same_frame_second_compose_retains_tree() {
     });
 
     let root2 = composer.layout_root_idx().expect("帧2 root");
-    assert_eq!(root1, root2, "守卫应保留现有树（root 不被降级重建）");
-    assert_eq!(composer.arena_nodes().len(), nodes1, "树不应被重建/膨胀（节点数不变）");
+    // 树完整（root 有效 + 内容保留——降级重建不塌缩）
+    let nodes = composer.arena_nodes();
+    assert!(nodes[root2].children.len() == 1, "root 仍有一个 leaf 子节点（未塌缩）");
+
+    // 帧 3：prev 空（帧2 无 layout——collect 未跑）→ 降级重建（不塌缩、内容正确）
+    let nodes2 = composer.arena_nodes().len();
+    composer.compose(|ctx| {
+        let root_key = ctx.next_key();
+        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); }
+                ctx.end_node();
+            }
+        }
+        ctx.end_restartable_group();
+    });
+    composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
+    let nodes3 = composer.arena_nodes().len();
+    let root3 = composer.layout_root_idx().expect("帧3 root");
+    assert!(composer.arena_nodes()[root3].children.len() == 1, "帧3 重建后树完整");
+
+    // 帧 4：帧3 已 collect → 恢复 Skip 复用（节点数不再增长）
+    composer.compose(|ctx| {
+        let root_key = ctx.next_key();
+        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new()); }
+                ctx.end_node();
+            }
+        }
+        ctx.end_restartable_group();
+    });
+    composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
+    let nodes4 = composer.arena_nodes().len();
+    assert_eq!(nodes3, nodes4, "帧4 应恢复 Skip 复用（节点数不变）");
 }
 
 /// 阶段4 键修复的**关键回归用例**：scope 层存在时（scope 是 slot 树中 group 的父，

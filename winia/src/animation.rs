@@ -28,6 +28,8 @@ pub trait AnimationInstance: Send {
     fn state_id(&self) -> u32;
     /// 类型安全的精确目标比较（跨类型返回 false）
     fn same_target(&self, target: &dyn std::any::Any) -> bool;
+    /// 当前速度（px/s）——供 retarget 速度延续（P2-9）
+    fn last_velocity(&self) -> f32;
 }
 
 static ACTIVE_ANIMATIONS: LazyLock<Mutex<Vec<Box<dyn AnimationInstance>>>> =
@@ -95,6 +97,7 @@ impl<T: AnimatableValue + Send + Sync + 'static> AnimationInstance for Infinite<
     }
     fn same_target(&self, _target: &dyn std::any::Any) -> bool { false }
     fn state_id(&self) -> u32 { self.state.id() }
+    fn last_velocity(&self) -> f32 { 0.0 } // 无限循环无速度延续语义
 }
 
 /// 注册一个无限循环动画（f32/Color 等 AnimatableValue 共用——泛型表，无独立第三表）
@@ -112,6 +115,7 @@ pub fn push_infinite<T: AnimatableValue + Send + Sync + 'static>(
 pub fn push_animatable<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(state: State<T>, target: T, spec: AnimationSpec) {
     if state.peek() == target { return; }
     let sid = state.id();
+    let mut inherited_velocity = 0.0f32;
     // 非标量类型（Offset/Size/Color 等）Spring 无单值物理，强制降级 Tween
     let spec = if T::supports_spring() {
         spec
@@ -126,11 +130,14 @@ pub fn push_animatable<T: Clone + PartialEq + AnimatableValue + Send + Sync + 's
         // 同 state 同目标运行中 → 跳过（防每帧重启/双驱动）
         if list.iter().any(|anim| anim.state_id() == sid && anim.same_target(&target)) { return; }
         // 同 state 不同目标 → 移除旧动画（用户中途改目标——旧动画继续会与
-        // 新目标竞争，导致值卡在旧目标路径上）
+        // 新目标竞争，导致值卡在旧目标路径上）；P2-9：移除前继承旧速度
+        // （Spring/Decay 被打断时新动画从当前速度继续，物理连续）
+        inherited_velocity = list.iter().find(|a| a.state_id() == sid)
+            .map(|a| a.last_velocity()).unwrap_or(0.0);
         list.retain(|anim| anim.state_id() != sid);
     } // 锁释放，下面 anim.update() 不持锁执行用户代码
     let mut anim = Animatable::new(state);
-    anim.animate_to(target, spec);
+    anim.start_with_velocity(target, spec, inherited_velocity);
     // 立即执行首次更新，避免等下一帧 flash
     anim.update();
     ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
@@ -161,6 +168,139 @@ pub fn push_animatable_color(state: State<crate::modifier::Color>, target: crate
     crate::core::state::wake_loop();
 }
 
+/// 指数衰减动画规格（对标 Compose exponentialDecay）——无目标值，
+/// 从初始速度衰减到自然停止（fling/惯性滚动核心）。
+///
+/// 解析式：`value(t) = from + v0/friction·(1 - e^(-friction·t))`
+/// 完成：速度 `|v0·e^(-friction·t)| < threshold` → 写极限值（精确停靠）。
+///
+/// ⚠️ 仅标量语义：内部经 `AnimatableValue::to_f32/from_f32`，向量类型
+/// （Offset/Size）会退化为范数方向——Decay 只应用于 f32（滚动偏移等）。
+#[derive(Clone, Debug)]
+pub struct DecaySpec {
+    /// 摩擦系数（越大停得越快；对标 Compose 默认 4.2）
+    pub friction: f32,
+    /// 速度阈值（低于即视为停止，px/s 量级）
+    pub threshold: f32,
+}
+
+impl DecaySpec {
+    /// 快速失败：friction<=0 会导致极限位移无限大（v0/friction）或永不停止——
+    /// 配置错误立即暴露（`max(0.001)` 是 update 里的双保险，不替代校验）
+    pub fn new(friction: f32, threshold: f32) -> Self {
+        assert!(friction > 0.0, "DecaySpec::new: friction 必须 > 0（收到 {friction}）");
+        assert!(threshold > 0.0, "DecaySpec::new: threshold 必须 > 0（收到 {threshold}）");
+        Self { friction, threshold }
+    }
+}
+
+impl Default for DecaySpec {
+    fn default() -> Self {
+        Self { friction: 4.2, threshold: 0.1 }
+    }
+}
+
+/// `exponential_decay(friction)`——对标 Compose `exponentialDecay(frictionMultiplier)`。
+/// 摩擦越大停得越快（默认 4.2）。
+pub fn exponential_decay(friction: f32) -> DecaySpec {
+    DecaySpec::new(friction, 0.1)
+}
+
+/// 便捷注册指数衰减（fling/惯性滚动）：`push_decay(state, v0, exponential_decay(4.2))`。
+/// 语义：同 state 已有动画 → 取代（新 fling 接管，与 retarget 一致）。
+pub fn push_decay(state: State<f32>, initial_velocity: f32, spec: DecaySpec) {
+    let sid = state.id();
+    {
+        let mut list = ACTIVE_ANIMATIONS.lock().unwrap();
+        list.retain(|anim| anim.state_id() != sid);
+    }
+    let mut anim = Animatable::new(state);
+    anim.animate_decay(initial_velocity, spec);
+    anim.update();
+    ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
+    // 唤醒事件循环启动推进轮次（同 push_animatable）
+    crate::core::state::wake_loop();
+}
+
+/// `animateIntAsState`（对标 Compose）——target 变化时自动从当前值动画到新值，
+/// 返回的 State 直接用于渲染（组合期 `get()` 或绘制期 `peek()`）。
+///
+/// ```ignore
+/// let animated = animate_int_as_state(ctx, count.get(), TweenSpec::new(300, EaseOutQuad::new()));
+/// Text::new(format!("{}", animated.get()));
+/// ```
+///
+/// 内部：`remember` 保存动画 State + 每次调用比较 target——变化即
+/// `push_animatable`（target 由调用方 `get()` 注册依赖 → 变化触发重跑）。
+pub fn animate_int_as_state(
+    ctx: &mut ComposeCtx,
+    target: i32,
+    spec: impl Into<AnimationSpec>,
+) -> State<i32> {
+    let value: State<i32> = ctx.remember(|| target);
+    if value.peek() != target {
+        push_animatable(value.clone(), target, spec.into());
+    }
+    value
+}
+
+/// `animateValueAsState`（对标 Compose 泛型版）——任意 `AnimatableValue` 的
+/// target 动画（f32/i32/Color；Offset/Size 等向量类型 Spring 自动降级 Tween）。
+///
+/// ```ignore
+/// let animated = animate_value_as_state(ctx, color, TweenSpec::new(300, Linear::new()));
+/// ```
+pub fn animate_value_as_state<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(
+    ctx: &mut ComposeCtx,
+    target: T,
+    spec: impl Into<AnimationSpec>,
+) -> State<T> {
+    let value: State<T> = ctx.remember(|| target.clone());
+    if value.peek() != target {
+        push_animatable(value.clone(), target, spec.into());
+    }
+    value
+}
+
+/// `push_animatable` + 完成回调（对标 Compose animate*AsState 的 finishedListener）：
+/// 动画自然完成/超时强制完成时调用一次 `done`。
+///
+/// 注意：动画未完成时再次 push 同 state（retarget）会移除旧动画——
+/// **旧回调被静默丢弃且不调用**（新动画持有新回调）。需要"每次动画完成都触发"
+/// 的语义请用 `Animatable::on_finish` 实例级管理，或自行在回调里重新注册。
+pub fn push_animatable_with_done<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(
+    state: State<T>,
+    target: T,
+    spec: AnimationSpec,
+    done: impl FnOnce() + Send + 'static,
+) {
+    if state.peek() == target {
+        // 已等于目标——无动画（Compose 语义：无动画不回调？——不，Compose
+        // 立即到达也会回调；这里保持简单：无动画不回调，调用方自查）
+        return;
+    }
+    let sid = state.id();
+    let spec = if T::supports_spring() {
+        spec
+    } else {
+        match spec {
+            AnimationSpec::Spring(_) => AnimationSpec::Tween(TweenSpec::default()),
+            other => other,
+        }
+    };
+    {
+        let mut list = ACTIVE_ANIMATIONS.lock().unwrap();
+        if list.iter().any(|anim| anim.state_id() == sid && anim.same_target(&target)) { return; }
+        list.retain(|anim| anim.state_id() != sid);
+    }
+    let mut anim = Animatable::new(state);
+    anim.on_finish(done);
+    anim.animate_to(target, spec);
+    anim.update();
+    ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
+    crate::core::state::wake_loop();
+}
+
 /// 实现 AnimationInstance for Animatable<f32>
 impl<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static> AnimationInstance for Animatable<T> {
     fn update(&mut self) -> bool {
@@ -173,6 +313,9 @@ impl<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static> AnimationIn
         target.downcast_ref::<T>()
             .map(|t| self.anim_state.as_ref().map(|s| s.to == *t).unwrap_or(false))
             .unwrap_or(false)
+    }
+    fn last_velocity(&self) -> f32 {
+        self.anim_state.as_ref().map(|s| s.last_velocity).unwrap_or(0.0)
     }
 }
 
@@ -218,6 +361,17 @@ pub fn has_animation_for_state(state_id: u32) -> bool {
         || ACTIVE_COLOR_ANIMATIONS.lock().unwrap().iter().any(|a| a.state.id() == state_id)
 }
 
+/// 取消指定 state 的进行中动画（值保持当前，不再被动画覆盖）。
+///
+/// 注意：`State::set` **不**取消动画——动画是独立系统，set 后下一帧
+/// update_animations 仍会把动画值写回。要"立即停下并设为目标值"请先
+/// `cancel_animation(&state)` 再 `state.set(v)`（或直接用 Snap push）。
+pub fn cancel_animation<T: 'static>(state: &State<T>) {
+    let sid = state.id();
+    ACTIVE_ANIMATIONS.lock().unwrap().retain(|a| a.state_id() != sid);
+    ACTIVE_COLOR_ANIMATIONS.lock().unwrap().retain(|a| a.state.id() != sid);
+}
+
 /// 是否有动画在运行（用于控制事件循环 Poll/Wait）
 pub fn is_animating() -> bool {
     !ACTIVE_ANIMATIONS.lock().unwrap().is_empty()
@@ -232,6 +386,8 @@ pub fn is_animating() -> bool {
 pub(crate) struct Animatable<T: Clone + 'static> {
     state: State<T>,
     anim_state: Option<AnimationState<T>>,
+    /// 动画完成回调（done 帧触发一次，take 后释放）
+    on_finish: Option<Box<dyn FnOnce() + Send>>,
 }
 
 struct AnimationState<T> {
@@ -243,15 +399,41 @@ struct AnimationState<T> {
     last_update: Instant,
     // Spring 持续的位移（累积值，非每帧重算）
     current_displacement: f32,
+    // Decay 初始速度（v0 常数——解析式需要，不被 last_velocity 覆盖）
+    initial_velocity: f32,
 }
 
 impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
     pub fn new(state: State<T>) -> Self {
-        Self { state, anim_state: None }
+        Self { state, anim_state: None, on_finish: None }
+    }
+
+    /// 注册动画完成回调（对标 Compose animate*AsState 的 finishedListener——
+    /// 动画自然完成/超时强制完成时调用一次）
+    pub fn on_finish(&mut self, f: impl FnOnce() + Send + 'static) {
+        self.on_finish = Some(Box::new(f));
     }
 
     /// 启动动画到目标值
     pub fn animate_to(&mut self, to: T, spec: AnimationSpec) {
+        // P2-9 速度延续：被打断的动画从当前速度继续（Compose 核心语义——
+        // 弹簧弹到一半改目标，新动画继承旧速度，物理连续）。
+        // Spring/Decay 每帧更新 last_velocity；Tween/Keyframes/Repeatable
+        // 无速度语义恒 0——继承无影响（从静止重启）。
+        let start_velocity = self.anim_state.as_ref().map(|s| s.last_velocity).unwrap_or(0.0);
+        self.start_with_velocity(to, spec, start_velocity);
+    }
+
+    /// 内部启动入口：显式指定初始速度（`push_animatable` retarget 时从
+    /// 被移除的旧动画继承；`animate_to` 从自身 anim_state 继承）。
+    fn start_with_velocity(&mut self, to: T, spec: AnimationSpec, start_velocity: f32) {
+        // review fix：只有 Spring/Decay 有物理速度语义——Tween/Keyframes/
+        // Repeatable/Snap 被打断时从静止重启。否则"Spring→Tween→Spring"
+        // 第二次打断会继承 Tween 期间的过期速度（Tween 不更新 last_velocity）。
+        let start_velocity = match spec {
+            AnimationSpec::Spring(_) | AnimationSpec::Decay(_) => start_velocity,
+            _ => 0.0,
+        };
         let from = self.state.peek();
         let displacement = AnimatableValue::to_f32(&from) - AnimatableValue::to_f32(&to);
         self.anim_state = Some(AnimationState {
@@ -259,9 +441,31 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
             to,
             start: Instant::now(),
             spec,
-            last_velocity: 0.0,
+            last_velocity: start_velocity,
             last_update: Instant::now(),
             current_displacement: displacement,
+            initial_velocity: 0.0,
+        });
+    }
+
+    /// 以初始速度启动指数衰减（fling/惯性滚动）——无目标值，自然停止。
+    ///
+    /// 解析式：`value(t) = from + v0/friction·(1 - e^(-friction·t))`
+    /// 完成：速度 `|v0·e^(-friction·t)| < threshold` → 写极限值（精确停靠）。
+    ///
+    /// ⚠️ 仅标量语义：内部经 `AnimatableValue::to_f32/from_f32`，向量类型
+    /// （Offset/Size）会退化为范数方向——Decay 只应用于 f32（滚动偏移等）。
+    pub fn animate_decay(&mut self, initial_velocity: f32, spec: DecaySpec) {
+        let from = self.state.peek();
+        self.anim_state = Some(AnimationState {
+            from: from.clone(),
+            to: from.clone(), // Decay 无目标——占位（更新时用解析式）
+            start: Instant::now(),
+            spec: AnimationSpec::Decay(spec),
+            last_velocity: 0.0,
+            last_update: Instant::now(),
+            current_displacement: 0.0,
+            initial_velocity,
         });
     }
 
@@ -269,12 +473,33 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
     pub fn update(&mut self) -> bool {
         let Some(ref mut state) = self.anim_state else { return false; };
         let now = Instant::now();
-        // 极端参数保护：超过 5s 未收敛强制完成（stiffness=0 等永不收敛的场景）
+        // 极端参数保护：Spring/Decay 超过 5s 未收敛强制完成——Spring 有 done
+        // 阈值但渐近收敛可能永不达（stiffness=0）；Decay 的 friction 过小时
+        // 速度衰减极慢（e^(-0.1·t) 需 ~94s 才低于阈值）。Tween/Keyframes/
+        // Repeatable 有明确时长、Snap 立即完成——不被截断（用户设 >5s 时长合法）
         if now.duration_since(state.start) > Duration::from_secs(5) {
-            let final_val = state.to.clone();
-            self.state.set_no_wake(final_val);
-            self.anim_state = None;
-            return false;
+            let overrun = match &state.spec {
+                AnimationSpec::Spring(_) => Some(state.to.clone()),
+                // Decay：写当前解析值（极限可能因 friction 过小而超大——不跳极限）
+                AnimationSpec::Decay(spec) => {
+                    let t = now.duration_since(state.start).as_secs_f32();
+                    let friction = spec.friction.max(0.001);
+                    let v0 = state.initial_velocity;
+                    let decay = (-friction * t).exp();
+                    Some(AnimatableValue::from_f32(
+                        state.from.to_f32() + v0 / friction * (1.0 - decay),
+                    ))
+                }
+                _ => None,
+            };
+            if let Some(final_val) = overrun {
+                self.state.set_no_wake(final_val);
+                self.anim_state = None;
+                if let Some(f) = self.on_finish.take() {
+                    f();
+                }
+                return false;
+            }
         }
         let dt = now.duration_since(state.last_update);
         state.last_update = now;
@@ -287,34 +512,68 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
                 );
                 state.current_displacement = displacement;
                 // 直接使用物理值，不做 lerp/clamp（避免超调截断导致抖动）
-                let spring_val = to_f32 + displacement;
-                let value = AnimatableValue::from_f32(spring_val);
-                (value, displacement.abs() < spec.threshold && state.last_velocity.abs() < spec.threshold)
+                let done = displacement.abs() < spec.threshold && state.last_velocity.abs() < spec.threshold;
+                if done {
+                    // Spring 渐近收敛：done 时位移只是"小于阈值"而非精确 0——
+                    // 必须返回精确目标值，否则调用方（如 AnimatedVisibility 的
+                    // exit 完成检测 progress<0.001）会因残余位移卡住/误判
+                    (state.to.clone(), true)
+                } else {
+                    let spring_val = to_f32 + displacement;
+                    (AnimatableValue::from_f32(spring_val), false)
+                }
             }
             AnimationSpec::Tween(spec) => {
                 let elapsed = now - state.start;
-                let t = (elapsed.as_secs_f64() / spec.duration.as_secs_f64()).min(1.0) as f32;
-                let eased = (spec.interpolator)(t);
-                let t = state.from.lerp(&state.to, eased);
-                (t, eased >= 1.0)
+                // duration=0 → 立即完成（0 时长 = 瞬移）；>0 走正常时间轴
+                let t = if spec.duration.is_zero() {
+                    1.0
+                } else {
+                    (elapsed.as_secs_f64() / spec.duration.as_secs_f64()).min(1.0) as f32
+                };
+                let eased = spec.interpolator.interpolate(t);
+                if t >= 1.0 {
+                    // 时间到：写精确目标——过冲插值器（Elastic/Back）eased 会提前
+                    // >= 1.0，若用 eased 判定则动画提前结束于过冲值（停在越界位置）
+                    (state.to.clone(), true)
+                } else {
+                    (state.from.lerp(&state.to, eased), false)
+                }
             }
             AnimationSpec::Keyframes(spec) => {
                 let elapsed = now - state.start;
-                let t = (elapsed.as_secs_f64() / spec.duration.as_secs_f64()).min(1.0) as f32;
-                let factor = interpolate_keyframes(&spec.frames, t);
-                let value = state.from.lerp(&state.to, factor);
-                (value, t >= 1.0)
+                // duration=0 → 立即完成（同 Tween）
+                let t = if spec.duration.is_zero() {
+                    1.0
+                } else {
+                    (elapsed.as_secs_f64() / spec.duration.as_secs_f64()).min(1.0) as f32
+                };
+                if t >= 1.0 {
+                    // 时间到：写精确目标（与 Tween/Spring done 语义一致——
+                    // 末帧 progress<1.0 或末帧值过冲时插值结果可能≠to）
+                    (state.to.clone(), true)
+                } else {
+                    let factor = interpolate_keyframes(&spec.frames, t);
+                    let value = state.from.lerp(&state.to, factor);
+                    (value, false)
+                }
             }
             AnimationSpec::Repeatable(spec) => {
-                // 简化：base 仅支持 Tween（开发期断言，其他类型回退 300ms 线性）
-                debug_assert!(matches!(&*spec.base, AnimationSpec::Tween(_)),
-                    "RepeatableSpec 目前仅支持 Tween base");
-                let base_duration = match spec.base.as_ref() {
+                // P2-10：支持任意有明确时长的 base（Tween/Keyframes）；Snap 立即跳；
+                // Spring/Decay/Repeatable 嵌套无循环长度语义 → 断言拒绝
+                let base = spec.base.as_ref();
+                let base_duration = match base {
                     AnimationSpec::Tween(t) => t.duration,
-                    _ => Duration::from_millis(300),
+                    AnimationSpec::Keyframes(k) => k.duration,
+                    AnimationSpec::Snap => Duration::ZERO,
+                    other => {
+                        debug_assert!(false, "Repeatable 仅支持 Tween/Keyframes/Snap base（收到 {other:?}）");
+                        Duration::from_millis(300)
+                    }
                 };
                 let elapsed = now - state.start;
                 let total = base_duration.saturating_mul(spec.iterations);
+                // total=0（Snap/0 时长）→ elapsed>=0 恒真 → 首次 update 即完成（Snap 语义）
                 if elapsed >= total {
                     // 完成值：Reverse + 偶数次时最后 cycle 结束于 from（否则结束于 to）
                     let end_val = match spec.mode {
@@ -325,23 +584,56 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
                     };
                     (end_val, true)
                 } else {
-                    let cycle = elapsed.as_secs_f64() % base_duration.as_secs_f64().max(0.001);
-                    let t = (cycle / base_duration.as_secs_f64().max(0.001)) as f32;
-                    let cycle_idx = (elapsed.as_secs_f64() / base_duration.as_secs_f64().max(0.001)).floor() as u32;
+                    let d = base_duration.as_secs_f64().max(0.001);
+                    let cycle = elapsed.as_secs_f64() % d;
+                    let t = (cycle / d) as f32;
+                    let cycle_idx = (elapsed.as_secs_f64() / d).floor() as u32;
                     let factor = match spec.mode {
                         RepeatMode::Restart => t,
                         RepeatMode::Reverse => if cycle_idx % 2 == 0 { t } else { 1.0 - t },
                     };
-                    let value = state.from.lerp(&state.to, factor);
+                    // base 曲线求值（factor 反转对 Keyframes 即曲线倒放）
+                    let value = match base {
+                        AnimationSpec::Tween(tw) => state.from.lerp(&state.to, tw.interpolator.interpolate(factor)),
+                        AnimationSpec::Keyframes(kf) => state.from.lerp(&state.to, interpolate_keyframes(&kf.frames, factor)),
+                        AnimationSpec::Snap => state.to.clone(),
+                        other => {
+                            debug_assert!(false, "Repeatable 仅支持 Tween/Keyframes/Snap base（收到 {other:?}）");
+                            state.from.lerp(&state.to, factor)
+                        }
+                    };
                     (value, false)
                 }
             }
             AnimationSpec::Snap => {
                 (state.to.clone(), true)
             }
+            AnimationSpec::Decay(spec) => {
+                let elapsed = now - state.start;
+                let t = elapsed.as_secs_f32();
+                let friction = spec.friction.max(0.001); // 除零保护（friction<=0 退化为极慢）
+                let v0 = state.initial_velocity;
+                let decay = (-friction * t).exp();
+                let vel_now = v0 * decay;
+                state.last_velocity = vel_now; // 供打断（P2-9 速度延续）使用
+                if vel_now.abs() < spec.threshold {
+                    // 速度低于阈值：写极限值 from + v0/friction（精确停靠）
+                    let limit = state.from.to_f32() + v0 / friction;
+                    (AnimatableValue::from_f32(limit), true)
+                } else {
+                    let disp = v0 / friction * (1.0 - decay);
+                    let val = AnimatableValue::from_f32(state.from.to_f32() + disp);
+                    (val, false)
+                }
+            }
         };
         self.state.set_no_wake(value);
-        if done { self.anim_state = None; }
+        if done {
+            self.anim_state = None;
+            if let Some(f) = self.on_finish.take() {
+                f();
+            }
+        }
         !done
     }
 
@@ -357,7 +649,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
 // ═══════════════════════════════════════════════════════════
 
 /// 关键帧插值：在 frames 中按进度 t 定位段，段内用 interpolator 插值
-fn interpolate_keyframes(frames: &[(f32, f32, fn(f32) -> f32)], t: f32) -> f32 {
+fn interpolate_keyframes(frames: &[(f32, f32, std::sync::Arc<dyn interpolator::Interpolator>)], t: f32) -> f32 {
     if frames.is_empty() { return 0.0; }
     if t <= 0.0 { return frames[0].1; }
     let last = frames.last().unwrap();
@@ -366,10 +658,10 @@ fn interpolate_keyframes(frames: &[(f32, f32, fn(f32) -> f32)], t: f32) -> f32 {
     if t < frames[0].0 { return frames[0].1; }
     for i in 0..frames.len() - 1 {
         let (p0, v0, _) = frames[i];
-        let (p1, v1, interp) = frames[i + 1];
+        let (p1, v1, interp) = frames[i + 1].clone();
         if t >= p0 && t <= p1 {
             let seg = if p1 > p0 { (t - p0) / (p1 - p0) } else { 0.0 };
-            let eased = interp(seg.clamp(0.0, 1.0));
+            let eased = interp.interpolate(seg.clamp(0.0, 1.0));
             return v0 + (v1 - v0) * eased;
         }
     }
@@ -427,16 +719,68 @@ impl ComposeCtx<'_> {
 }
 
 impl<T: Clone + PartialEq + 'static> Transition<T> {
+    /// 泛型值动画（对标 Compose `TransitionScope.animateValue`）——任意
+    /// AnimatableValue 类型，target 变化 → 自动平滑过渡到新目标值。
+    pub fn animate<U: crate::animation::AnimatableValue + Send + Sync + 'static>(
+        &mut self,
+        ctx: &mut ComposeCtx,
+        target_fn: impl Fn(&T) -> U,
+        _label: &'static str,
+    ) -> State<U> {
+        let value = target_fn(&self.target);
+        let state: State<U> = ctx.remember(|| value.clone());
+        crate::animation::push_animatable(state.clone(), value, self.spec.clone());
+        state
+    }
+
+    /// animateFloat — 浮点值动画（对标 Compose `TransitionScope.animateFloat`）
     pub fn animate_float(
         &mut self,
         ctx: &mut ComposeCtx,
         target_fn: impl Fn(&T) -> f32,
-        _label: &'static str,
+        label: &'static str,
     ) -> State<f32> {
-        let value = target_fn(&self.target);
-        let state: State<f32> = ctx.remember(|| value);
-        crate::animation::push_animatable(state.clone(), value, self.spec.clone());
-        state
+        self.animate(ctx, target_fn, label)
+    }
+
+    /// animateColor — 颜色动画（CAM16-UCS 插值，对标 `animateColor`）
+    pub fn animate_color(
+        &mut self,
+        ctx: &mut ComposeCtx,
+        target_fn: impl Fn(&T) -> crate::modifier::Color,
+        label: &'static str,
+    ) -> State<crate::modifier::Color> {
+        self.animate(ctx, target_fn, label)
+    }
+
+    /// animateDp — Dp 值动画（对标 `animateDp`）
+    pub fn animate_dp(
+        &mut self,
+        ctx: &mut ComposeCtx,
+        target_fn: impl Fn(&T) -> crate::unit::Dp,
+        label: &'static str,
+    ) -> State<crate::unit::Dp> {
+        self.animate(ctx, target_fn, label)
+    }
+
+    /// animateSize — Size 值动画（对标 `animateSize`）
+    pub fn animate_size(
+        &mut self,
+        ctx: &mut ComposeCtx,
+        target_fn: impl Fn(&T) -> crate::unit::Size,
+        label: &'static str,
+    ) -> State<crate::unit::Size> {
+        self.animate(ctx, target_fn, label)
+    }
+
+    /// animateOffset — Offset 值动画（对标 `animateOffset`）
+    pub fn animate_offset(
+        &mut self,
+        ctx: &mut ComposeCtx,
+        target_fn: impl Fn(&T) -> crate::unit::Offset,
+        label: &'static str,
+    ) -> State<crate::unit::Offset> {
+        self.animate(ctx, target_fn, label)
     }
 }
 
@@ -510,7 +854,7 @@ impl InfiniteTransition {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum AnimationSpec {
     Spring(SpringSpec),
     Tween(TweenSpec),
@@ -520,9 +864,23 @@ pub enum AnimationSpec {
     Repeatable(RepeatableSpec),
     /// 瞬时跳转到目标（对标 Compose snap）
     Snap,
+    /// 指数衰减（对标 Compose exponentialDecay——fling/惯性滚动，无目标值）
+    Decay(DecaySpec),
 }
 
-#[derive(Clone)]
+impl From<TweenSpec> for AnimationSpec {
+    fn from(s: TweenSpec) -> Self { AnimationSpec::Tween(s) }
+}
+
+impl From<SpringSpec> for AnimationSpec {
+    fn from(s: SpringSpec) -> Self { AnimationSpec::Spring(s) }
+}
+
+impl From<DecaySpec> for AnimationSpec {
+    fn from(s: DecaySpec) -> Self { AnimationSpec::Decay(s) }
+}
+
+#[derive(Clone, Debug)]
 pub struct SpringSpec {
     pub damping_ratio: f32,
     pub stiffness: f32,
@@ -543,41 +901,75 @@ impl Default for SpringSpec {
 }
 
 impl SpringSpec {
+    // ── Compose Spring 常量（对标 androidx.compose.animation.core.Spring）──
+    /// 阻尼比：无弹跳（1.0——临界阻尼）
+    pub const DAMPING_RATIO_NO_BOUNCY: f32 = 1.0;
+    /// 阻尼比：低弹跳（0.75）
+    pub const DAMPING_RATIO_LOW_BOUNCY: f32 = 0.75;
+    /// 阻尼比：中弹跳（0.5）
+    pub const DAMPING_RATIO_MEDIUM_BOUNCY: f32 = 0.5;
+    /// 阻尼比：高弹跳（0.4）
+    pub const DAMPING_RATIO_HIGH_BOUNCY: f32 = 0.4;
+    /// 刚度：极低（50——慢速柔和）
+    pub const STIFFNESS_VERY_LOW: f32 = 50.0;
+    /// 刚度：低（200）
+    pub const STIFFNESS_LOW: f32 = 200.0;
+    /// 刚度：中（400）
+    pub const STIFFNESS_MEDIUM: f32 = 400.0;
+    /// 刚度：高（1000——快速干脆）
+    pub const STIFFNESS_HIGH: f32 = 1000.0;
+
     pub fn bouncy() -> Self {
         Self { damping_ratio: 0.6, threshold: 0.1, ..Self::default() }
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TweenSpec {
     pub duration: Duration,
-    pub interpolator: fn(f32) -> f32,
+    /// 表驱动插值器（v1 预采样表——避免运行时计算过重；`Linear::new()` 为恒等）
+    pub interpolator: std::sync::Arc<dyn interpolator::Interpolator>,
+}
+
+impl TweenSpec {
+    /// 便捷构造：`TweenSpec::new(duration, interpolator)`——插值器自动包装为
+    /// `Arc<dyn Interpolator>`（29 个表驱动插值器 + Linear 直接传入）
+    pub fn new(
+        duration: Duration,
+        interpolator: impl Into<std::sync::Arc<dyn interpolator::Interpolator>>,
+    ) -> Self {
+        Self { duration, interpolator: interpolator.into() }
+    }
 }
 
 impl Default for TweenSpec {
     fn default() -> Self {
-        Self { duration: Duration::from_millis(300), interpolator: interpolator::linear }
+        Self {
+            duration: Duration::from_millis(300),
+            interpolator: std::sync::Arc::new(interpolator::Linear::new()),
+        }
     }
 }
 
 /// 关键帧序列：(进度 0~1, 值, 段间插值器)
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct KeyframesSpec {
     pub duration: Duration,
-    pub frames: Vec<(f32, f32, fn(f32) -> f32)>,
+    pub frames: Vec<(f32, f32, std::sync::Arc<dyn interpolator::Interpolator>)>,
 }
 
 impl KeyframesSpec {
     /// 简化构造：仅 (progress, value)，段间线性
     pub fn new(duration: Duration, frames: Vec<(f32, f32)>) -> Self {
-        let linear: fn(f32) -> f32 = interpolator::linear;
-        let frames = frames.into_iter().map(|(p, v)| (p, v, linear)).collect();
+        let linear: std::sync::Arc<dyn interpolator::Interpolator> =
+            std::sync::Arc::new(interpolator::Linear::new());
+        let frames = frames.into_iter().map(|(p, v)| (p, v, linear.clone())).collect();
         Self { duration, frames }
     }
 }
 
 /// 重复执行：iterations 次后完成
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct RepeatableSpec {
     pub iterations: u32,
     pub mode: RepeatMode,
@@ -633,9 +1025,9 @@ impl AnimatableValue for crate::modifier::Color {
 // ═══════════════════════════════════════════════════════════
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     // 测试串行锁：动画引擎用全局 ACTIVE_ANIMATIONS——并行测试互相干扰（push/update 竞态）
-    pub(super) static TEST_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    pub(crate) static TEST_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
     use super::*;
     use std::time::Duration;
 
@@ -857,7 +1249,7 @@ mod tests {
         let mut anim = Animatable::<f32>::new(State::new(0.0));
         anim.animate_to(100.0, AnimationSpec::Repeatable(
             RepeatableSpec::new(3, RepeatMode::Restart,
-                AnimationSpec::Tween(TweenSpec { duration: Duration::from_millis(40), interpolator: interpolator::linear }))));
+                AnimationSpec::Tween(TweenSpec { duration: Duration::from_millis(40), interpolator: std::sync::Arc::new(interpolator::Linear::new()) }))));
         let mut frames = 0;
         while anim.update() && frames < 100 {
             std::thread::sleep(Duration::from_millis(10));
@@ -875,7 +1267,7 @@ mod tests {
         let mut anim = Animatable::<f32>::new(State::new(0.0));
         anim.animate_to(100.0, AnimationSpec::Repeatable(
             RepeatableSpec::new(2, RepeatMode::Reverse,
-                AnimationSpec::Tween(TweenSpec { duration: Duration::from_millis(40), interpolator: interpolator::linear }))));
+                AnimationSpec::Tween(TweenSpec { duration: Duration::from_millis(40), interpolator: std::sync::Arc::new(interpolator::Linear::new()) }))));
         while anim.update() {
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -935,6 +1327,348 @@ mod tests {
         remove_animation_by_state(s.id());
         assert!(!has_animation_for_state(s.id()), "own animation should be removed");
     }
+
+    #[test]
+    fn spring_done_returns_exact_target() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        // 回归：Spring 渐近收敛——done 时 Animatable 必须写出精确目标值
+        // （修复前返回 to+残余位移——AnimatedVisibility 的 exit 完成检测
+        //   progress<0.001 会因残余位移卡住/误判）
+        use crate::core::state::State;
+        let st = State::new(1.0f32);
+        let mut anim = Animatable::new(st.clone());
+        anim.animate_to(0.0, AnimationSpec::Spring(SpringSpec::default()));
+        // 步进直到完成：update() 用真实时钟（Instant::now()）——连续调用 dt≈0
+        // 永不推进，需真实帧间隔（16ms ≈ 60fps）；上限 100 帧防死循环
+        let mut frames = 0;
+        while anim.update() && frames < 100 {
+            std::thread::sleep(Duration::from_millis(16));
+            frames += 1;
+        }
+        assert!(frames < 100, "spring 应收敛（stiffness=200 约 300-400ms）");
+        assert_eq!(st.peek(), 0.0, "done 后值必须精确等于目标（修复前为残余位移）");
+    }
+
+    /// Decay（指数衰减）：v0=1000、friction=4.2 → 极限 = 1000/4.2 ≈ 238.1
+    /// 验证：单调递增、done 后精确停靠极限值
+    #[test]
+    fn decay_moves_and_stops_at_limit() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let st = State::new(0.0f32);
+        let mut anim = Animatable::new(st.clone());
+        anim.animate_decay(1000.0, DecaySpec::new(4.2, 0.1));
+        let mut prev = 0.0f32;
+        let mut frames = 0;
+        while anim.update() && frames < 300 {
+            let v = st.peek();
+            assert!(v >= prev - 0.01, "decay 必须单调（帧 {}：{prev} -> {v}）", frames);
+            prev = v;
+            std::thread::sleep(Duration::from_millis(20));
+            frames += 1;
+        }
+        assert!(frames < 300, "decay 应收敛");
+        let limit = 1000.0 / 4.2;
+        assert!(
+            (st.peek() - limit).abs() < 0.5,
+            "done 后必须精确停靠极限 {}（实际 {}）",
+            limit,
+            st.peek()
+        );
+    }
+
+    /// P2-10：Repeatable 支持 Keyframes base——每周期走关键帧曲线
+    /// （修复前回退 300ms 线性：3 次迭代 = 900ms；Keyframes base 50ms×3=150ms）
+    #[test]
+    fn repeatable_keyframes_base() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let st = State::new(0.0f32);
+        let mut anim = Animatable::new(st.clone());
+        anim.animate_to(
+            100.0,
+            AnimationSpec::Repeatable(RepeatableSpec::new(
+                3,
+                RepeatMode::Restart,
+                AnimationSpec::Keyframes(KeyframesSpec::new(
+                    Duration::from_millis(50),
+                    vec![(0.0, 0.0), (0.5, 0.5), (1.0, 1.0)],
+                )),
+            )),
+        );
+        let mut frames = 0;
+        while anim.update() && frames < 30 {
+            std::thread::sleep(Duration::from_millis(16));
+            frames += 1;
+        }
+        assert!(frames < 20, "Keyframes base 3×50ms 应在 ~10 帧内完成（实际 {frames}——回退 300ms 线性会 >20）");
+        assert_eq!(st.peek(), 100.0, "完成后必须精确停靠 to");
+    }
+
+    /// P2-10：Repeatable 支持 Snap base——立即完成
+    #[test]
+    fn repeatable_snap_base() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let st = State::new(0.0f32);
+        let mut anim = Animatable::new(st.clone());
+        anim.animate_to(
+            100.0,
+            AnimationSpec::Repeatable(RepeatableSpec::new(3, RepeatMode::Restart, AnimationSpec::Snap)),
+        );
+        assert!(!anim.update(), "Snap base 应首次 update 即完成");
+        assert_eq!(st.peek(), 100.0, "Snap base 完成值 = to");
+    }
+
+    /// Decay：初始速度为 0 → 立即完成，值不变
+    #[test]
+    fn decay_zero_velocity_done_immediately() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let st = State::new(42.0f32);
+        let mut anim = Animatable::new(st.clone());
+        anim.animate_decay(0.0, DecaySpec::default());
+        assert!(!anim.update(), "v0=0 应立即完成");
+        assert_eq!(st.peek(), 42.0, "v0=0 值不变");
+    }
+
+    /// animateIntAsState：target 变化自动动画，值单调逼近且最终精确到达
+    #[test]
+    fn animate_int_as_state_animates_to_target() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut composer = Composer::new();
+        let value: std::cell::RefCell<Option<State<i32>>> = std::cell::RefCell::new(None);
+        let mut recompose = |composer: &mut Composer, t: i32| {
+            composer.compose(|ctx| {
+                let v = crate::animation::animate_int_as_state(
+                    ctx,
+                    t,
+                    crate::animation::TweenSpec::new(
+                        std::time::Duration::from_millis(300),
+                        crate::animation::interpolator::Linear::new(),
+                    ),
+                );
+                let _ = v.get(); // 注册依赖（目标变化驱动重跑）
+                *value.borrow_mut() = Some(v.clone());
+            });
+        };
+        recompose(&mut composer, 0);
+        assert_eq!(value.borrow().as_ref().unwrap().peek(), 0, "初始 = target");
+
+        // target 变 100 → 动画启动 → 中途值在 0..100 且递增
+        recompose(&mut composer, 100);
+        let mut prev = 0i32;
+        let mut frames = 0;
+        loop {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            let v = value.borrow().as_ref().unwrap().peek();
+            assert!(v >= prev, "i32 动画必须单调递增（{prev} -> {v}）");
+            prev = v;
+            frames += 1;
+            if v >= 100 || frames > 60 {
+                break;
+            }
+        }
+        assert_eq!(prev, 100, "i32 动画最终精确到达 target（{frames} 帧）");
+    }
+
+    /// animateValueAsState 泛型：Color target 动画到达目标色
+    #[test]
+    fn animate_value_as_state_color_reaches_target() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut composer = Composer::new();
+        let from = crate::modifier::Color::from_argb(255, 0, 0, 0);
+        let to = crate::modifier::Color::from_argb(255, 255, 255, 255);
+        let value: std::cell::RefCell<Option<State<crate::modifier::Color>>> = std::cell::RefCell::new(None);
+        let mut recompose = |composer: &mut Composer, t: crate::modifier::Color| {
+            composer.compose(|ctx| {
+                let v = crate::animation::animate_value_as_state(
+                    ctx,
+                    t,
+                    crate::animation::TweenSpec::new(
+                        std::time::Duration::from_millis(200),
+                        crate::animation::interpolator::Linear::new(),
+                    ),
+                );
+                let _ = v.get();
+                *value.borrow_mut() = Some(v.clone());
+            });
+        };
+        recompose(&mut composer, from.clone());
+        assert_eq!(value.borrow().as_ref().unwrap().peek(), from, "初始 = target");
+
+        recompose(&mut composer, to.clone());
+        let mut frames = 0;
+        loop {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            let v = value.borrow().as_ref().unwrap().peek();
+            frames += 1;
+            if v == to || frames > 60 {
+                break;
+            }
+        }
+        assert_eq!(value.borrow().as_ref().unwrap().peek(), to, "Color 到达 target（{frames} 帧）");
+    }
+
+    /// P2-9 速度延续（实例级）：Decay 中途 animate_to(Spring)——
+    /// 新动画继承旧速度（物理连续，Compose 打断语义）
+    #[test]
+    fn retarget_inherits_velocity() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let st = State::new(0.0f32);
+        let mut anim = Animatable::new(st.clone());
+        anim.animate_decay(1000.0, DecaySpec::default());
+        // 步进 5 帧（20ms）——速度衰减但仍 > 0
+        for _ in 0..5 {
+            anim.update();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let old_vel = anim.anim_state.as_ref().unwrap().last_velocity;
+        assert!(old_vel > 100.0, "5 帧后速度应仍显著（实际 {old_vel}）");
+        // 打断 → 新 Spring 目标 200——继承旧速度
+        anim.animate_to(200.0, AnimationSpec::Spring(SpringSpec::default()));
+        let new_vel = anim.anim_state.as_ref().unwrap().last_velocity;
+        assert_eq!(new_vel, old_vel, "retarget 必须继承旧速度（修复前为 0 重启）");
+        // 且起点 = 当前值（不跳变）
+        let from = anim.anim_state.as_ref().unwrap().from;
+        assert!((from - st.peek()).abs() < 0.01, "from 必须是当前值（无跳变）");
+    }
+
+    /// cancel_animation：动画进行中取消后，值不再被动画覆盖
+    /// （回归：Reset 按钮 set(0) 后下一帧被 Decay 写回——reset 无效）
+    #[test]
+    fn cancel_animation_stops_decay() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let st = State::new(0.0f32);
+        push_decay(st.clone(), 1000.0, DecaySpec::default());
+        // 推进 5 帧——值显著移动
+        for _ in 0..5 {
+            super::update_animations();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let mid = st.peek();
+        assert!(mid > 50.0, "Decay 推进后值应显著（实际 {mid}）");
+        // 取消动画 + set 0（Reset 语义）
+        cancel_animation(&st);
+        st.set(0.0);
+        // 再推进 5 帧——值必须保持 0（不被动画写回）
+        for _ in 0..5 {
+            super::update_animations();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(st.peek(), 0.0, "取消后值必须保持（修复前被 Decay 写回）");
+    }
+
+    /// review fix：速度残留——Spring→Tween→Spring 第二次打断必须从静止重启
+    /// （Tween 期间 last_velocity 不更新，继承它会带着过期物理速度）
+    #[test]
+    fn retarget_after_tween_restarts_from_rest() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let st = State::new(0.0f32);
+        let mut anim = Animatable::new(st.clone());
+        // 1) Spring 跑起来（速度显著）
+        anim.animate_to(100.0, AnimationSpec::Spring(SpringSpec::default()));
+        for _ in 0..5 {
+            anim.update();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let spring_vel = anim.anim_state.as_ref().unwrap().last_velocity;
+        assert!(spring_vel > 10.0, "Spring 推进后速度应显著（实际 {spring_vel}）");
+        // 2) 打断成 Tween（review fix：非物理 spec 不继承速度——归零）
+        anim.animate_to(200.0, AnimationSpec::Tween(TweenSpec::default()));
+        for _ in 0..3 {
+            anim.update();
+            std::thread::sleep(Duration::from_millis(16));
+        }
+        let tween_vel = anim.anim_state.as_ref().unwrap().last_velocity;
+        assert_eq!(tween_vel, 0.0, "Tween 必须从静止开始（review fix：不继承 Spring 速度）");
+        // 3) 再打断成 Spring——必须从静止重启（修复前继承 Tween 的过期 spring_vel）
+        anim.animate_to(50.0, AnimationSpec::Spring(SpringSpec::default()));
+        let final_vel = anim.anim_state.as_ref().unwrap().last_velocity;
+        assert_eq!(final_vel, 0.0, "Tween 打断后的 Spring 必须从静止重启（修复前继承过期速度 {spring_vel}）");
+    }
+
+    /// review fix：DecaySpec friction<=0 快速失败（配置错误立即暴露）
+    #[test]
+    #[should_panic(expected = "friction 必须 > 0")]
+    fn decay_spec_rejects_nonpositive_friction() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = DecaySpec::new(0.0, 0.1);
+    }
+
+    /// 限制 #6：duration=0 的 Tween/Keyframes 立即完成且值精确 = to（无除零 NaN）
+    #[test]
+    fn zero_duration_tween_and_keyframes_complete_immediately() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        // Tween duration=0
+        let st = State::new(0.0f32);
+        let mut anim = Animatable::new(st.clone());
+        anim.animate_to(42.0, AnimationSpec::Tween(TweenSpec::new(Duration::ZERO, interpolator::Linear::new())));
+        assert!(!anim.update(), "duration=0 Tween 应首次 update 即完成");
+        assert_eq!(st.peek(), 42.0, "duration=0 Tween 完成值 = to");
+        // Keyframes duration=0
+        let st2 = State::new(0.0f32);
+        let mut anim2 = Animatable::new(st2.clone());
+        anim2.animate_to(
+            42.0,
+            AnimationSpec::Keyframes(KeyframesSpec::new(Duration::ZERO, vec![(0.0, 0.0), (1.0, 1.0)])),
+        );
+        assert!(!anim2.update(), "duration=0 Keyframes 应首次 update 即完成");
+        assert_eq!(st2.peek(), 42.0, "duration=0 Keyframes 完成值 = to");
+    }
+
+    /// P2-9 速度延续（push 路径）：push_decay → push_animatable retarget——
+    /// 全局表里的新动画继承旧速度
+    #[test]
+    fn push_retarget_inherits_velocity() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        use crate::core::state::State;
+        let st = State::new(0.0f32);
+        push_decay(st.clone(), 1000.0, DecaySpec::default());
+        // 推进 5 帧（update_animations 驱动全局表）
+        for _ in 0..5 {
+            super::update_animations();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let vel_before = {
+            let list = ACTIVE_ANIMATIONS.lock().unwrap();
+            list.iter().find(|a| a.state_id() == st.id()).map(|a| a.last_velocity()).unwrap_or(0.0)
+        };
+        assert!(vel_before > 100.0, "Decay 推进后速度应显著（实际 {vel_before}）");
+        // retarget：同 state 推新目标（Spring）
+        push_animatable(st.clone(), 200.0, AnimationSpec::Spring(SpringSpec::default()));
+        let vel_after = {
+            let list = ACTIVE_ANIMATIONS.lock().unwrap();
+            list.iter().find(|a| a.state_id() == st.id()).map(|a| a.last_velocity()).unwrap_or(0.0)
+        };
+        assert!(
+            (vel_after - vel_before).abs() < 1.0,
+            "push retarget 必须继承旧速度（before={vel_before} after={vel_after}——Spring 首步 dt≈0 引入微差）"
+        );
+        // 清理：等动画结束（避免残留影响其他测试）
+        for _ in 0..60 {
+            if !super::update_animations() { break; }
+            std::thread::sleep(Duration::from_millis(16));
+        }
+    }
+
+    #[test]
+    fn on_finish_fires_when_animation_completes() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        // finishedListener（对标 Compose）：动画完成帧触发一次
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        use crate::core::state::State;
+        let st = State::new(0.0f32);
+        let mut anim = Animatable::new(st.clone());
+        let fired = Arc::new(AtomicBool::new(false));
+        let f2 = fired.clone();
+        anim.on_finish(move || {
+            f2.store(true, Ordering::SeqCst);
+        });
+        anim.animate_to(1.0, AnimationSpec::Snap);
+        anim.update(); // Snap 一帧完成 → 回调触发
+        assert!(fired.load(Ordering::SeqCst), "动画完成应触发 on_finish");
+        assert_eq!(st.peek(), 1.0, "动画值应到达目标");
+    }
 }
 
 #[cfg(test)]
@@ -952,7 +1686,7 @@ mod repeated_tests {
         for (i, target) in [(1usize, 200.0f32), (2, 40.0), (3, 200.0), (4, 40.0)] {
             push_animatable(state.clone(), target, AnimationSpec::Tween(TweenSpec {
                 duration: std::time::Duration::from_millis(300),
-                interpolator: crate::animation::interpolator::linear,
+                interpolator: std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
             }));
             std::thread::sleep(std::time::Duration::from_millis(400));
             update_animations();
@@ -970,7 +1704,7 @@ mod repeated_tests {
         let state = crate::core::state::State::new(40.0f32);
         push_animatable(state.clone(), 200.0, AnimationSpec::Tween(TweenSpec {
             duration: std::time::Duration::from_millis(1000),
-            interpolator: crate::animation::interpolator::linear,
+            interpolator: std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
         }));
         // 中途（10 帧后）改目标 40——应切换（用真实时间 sleep 模拟帧间隔）
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -979,7 +1713,7 @@ mod repeated_tests {
         assert!(mid > 40.0 && mid < 200.0, "中途应处于动画中（{}）", mid);
         push_animatable(state.clone(), 90.0, AnimationSpec::Tween(TweenSpec {
             duration: std::time::Duration::from_millis(200),
-            interpolator: crate::animation::interpolator::linear,
+            interpolator: std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
         }));
         std::thread::sleep(std::time::Duration::from_millis(300));
         update_animations();
@@ -989,6 +1723,42 @@ mod repeated_tests {
         let v = state.peek();
         eprintln!("[retarget] mid={:.1} final={:.1}", mid, v);
         assert!((v - 90.0).abs() < 1.0, "中途改目标应收敛到 90，实际 {:.1}", v);
+    }
+
+    /// i32 插值（animate_int_as_state 的基础）：四舍五入 + spring 支持
+    #[test]
+    fn int_value_lerp_rounds() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        use crate::animation::AnimatableValue;
+        assert_eq!(<i32 as AnimatableValue>::lerp(&0, &10, 0.5), 5);
+        assert_eq!(<i32 as AnimatableValue>::lerp(&0, &10, 0.51), 5);
+        assert_eq!(<i32 as AnimatableValue>::lerp(&0, &10, 0.55), 6);
+        assert_eq!(<i32 as AnimatableValue>::from_f32(3.7), 4);
+        assert!(<i32 as AnimatableValue>::supports_spring(), "i32 标量应支持 Spring");
+        // 动画收敛：0 → 100（Tween）
+        let state = crate::core::state::State::new(0i32);
+        push_animatable(state.clone(), 100, AnimationSpec::Tween(TweenSpec {
+            duration: std::time::Duration::from_millis(200),
+            interpolator: std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
+        }));
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        update_animations();
+        assert_eq!(state.peek(), 100, "i32 动画应收敛到 100");
+    }
+
+    /// Transition::animate 泛型（animate_value 核心）：Color 值经 target_fn
+    /// 映射 + push_animatable 驱动收敛
+    #[test]
+    fn transition_animate_generic_value() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut composer = crate::core::composer::Composer::new();
+        let mut captured = None;
+        composer.compose(|ctx| {
+            let mut t = ctx.update_transition(3.0f32, AnimationSpec::Tween(TweenSpec::default()), "t");
+            let s = t.animate(ctx, |v| *v * 2.0, "v");
+            captured = Some(s);
+        });
+        assert_eq!(captured.unwrap().peek(), 6.0, "target_fn 映射应立即生效（同值跳过动画）");
     }
 }
 
@@ -1123,3 +1893,96 @@ fn test_infinite_transition_manual_dispose_idempotent() {
     build(&mut composer, &holder, &inf_holder);
     assert!(!has_animation_for_state(sid), "双重触发后表仍空（幂等）");
 }
+
+    /// 表驱动插值器接入引擎的接线测试（v1 29 个插值器 + Linear）
+    #[test]
+    fn tween_uses_table_interpolator() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        use crate::animation::interpolator::{EaseInQuad, Interpolator, Linear};
+        // 1. default 是 Linear 包装（恒等）
+        let t = TweenSpec::default();
+        assert_eq!(t.interpolator.interpolate(0.5), 0.5, "默认 linear 中点 = 0.5");
+        // 2. 表驱动曲线生效（EaseInQuad 中点 < 0.5——缓入）
+        let ease = Arc::new(EaseInQuad::new());
+        assert!(ease.interpolate(0.5) < 0.5, "EaseInQuad 中点应 < 0.5（缓入）");
+        assert!(ease.interpolate(0.0) == 0.0 && ease.interpolate(1.0) == 1.0, "端点 clamp");
+        // 3. 引擎接线：Animatable 用表插值器动画——推进 60ms（t≈0.2）后
+        //    EaseInQuad(0.2)=0.04 → 值≈4，linear(0.2)=0.2 → 值≈20（差异 5 倍，
+        //    dt 抖动 ±10ms 不影响区分度）
+        let st = State::new(0.0f32);
+        let mut anim = Animatable::new(st.clone());
+        anim.animate_to(
+            100.0,
+            AnimationSpec::Tween(TweenSpec {
+                duration: Duration::from_millis(300),
+                interpolator: Arc::new(EaseInQuad::new()),
+            }),
+        );
+        std::thread::sleep(Duration::from_millis(60));
+        anim.update();
+        let v = st.peek();
+        assert!(
+            v > 0.0 && v < 10.0,
+            "EaseInQuad 推进 60ms 应远小于 linear（实际 {}，linear 约 20）",
+            v
+        );
+        // 对照：linear 同参数推进 ≈ 20
+        let st2 = State::new(0.0f32);
+        let mut anim2 = Animatable::new(st2.clone());
+        anim2.animate_to(100.0, AnimationSpec::Tween(TweenSpec::default()));
+        std::thread::sleep(Duration::from_millis(60));
+        anim2.update();
+        assert!((st2.peek() - 20.0).abs() < 5.0, "linear 推进 60ms 应≈20（实际 {}）", st2.peek());
+    }
+
+    /// 回归：过冲插值器（Elastic/Back）动画完成后必须停靠精确目标——
+    /// 修复前用 eased>=1.0 判定，过冲使动画提前结束于越界值
+    #[test]
+    fn tween_overshoot_interpolator_settles_at_target() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        use crate::animation::interpolator::{EaseOutElastic, Interpolator};
+        // 曲线本身在 t≈0.98 处 eased 就 > 1.0（过冲）
+        let ease = EaseOutElastic::new();
+        assert!(ease.interpolate(0.98) > 1.0, "EaseOutElastic 末端应过冲（>1.0）");
+        // 动画推进完整时长——必须精确停靠 100（修复前停在过冲值）
+        let st = State::new(0.0f32);
+        let mut anim = Animatable::new(st.clone());
+        anim.animate_to(
+            100.0,
+            AnimationSpec::Tween(TweenSpec::new(Duration::from_millis(200), EaseOutElastic::new())),
+        );
+        let mut frames = 0;
+        while anim.update() && frames < 30 {
+            std::thread::sleep(Duration::from_millis(40));
+            frames += 1;
+        }
+        assert!(frames < 30, "动画应收敛");
+        assert_eq!(st.peek(), 100.0, "过冲插值器完成必须精确停靠目标（修复前停在越界值）");
+    }
+
+    /// Keyframes done 帧同样必须停靠精确目标（与 Tween/Spring 一致）——
+    /// 末帧 progress<1.0 时插值结果 ≠ to
+    #[test]
+    fn keyframes_settles_at_target() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let st = State::new(0.0f32);
+        let mut anim = Animatable::new(st.clone());
+        // 末帧 progress=0.8（<1.0）——done 时若用插值结果将 ≠ to
+        anim.animate_to(
+            100.0,
+            AnimationSpec::Keyframes(KeyframesSpec {
+                duration: Duration::from_millis(200),
+                frames: vec![
+                    (0.0, 0.0, Arc::new(crate::animation::interpolator::Linear::new())),
+                    (0.8, 50.0, Arc::new(crate::animation::interpolator::Linear::new())),
+                ],
+            }),
+        );
+        let mut frames = 0;
+        while anim.update() && frames < 20 {
+            std::thread::sleep(Duration::from_millis(40));
+            frames += 1;
+        }
+        assert!(frames < 20, "keyframes 应收敛");
+        assert_eq!(st.peek(), 100.0, "keyframes 完成必须精确停靠目标（末帧 progress<1.0 时修复前≠to）");
+    }
