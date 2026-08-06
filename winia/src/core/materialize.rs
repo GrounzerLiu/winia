@@ -40,12 +40,17 @@ pub(crate) fn materialize(composer: &mut Composer) {
         }
         return; // 无组合产物（layout 防御调用——树保留；compose 末尾已物化）
     }
-    // 同帧多次 compose：第一次已物化并 drain 了 prev_node_by_key——
-    // 第二次 materialize 若重建，Skip 恢复全部失败（prev 空）→ 树塌缩。
-    // 保留现有树（组合产物差异只影响值/结构微调——布局读最新 State 值，
-    // 结构变化下一帧（prev 已重建）自然收敛）。注意：必须在清 root 前判断。
+    // 同帧多次 compose：第一次已物化并 drain 了 prev_node_by_key——第二次
+    // materialize 若直接重建，Skip 恢复全部失败（prev 空）→ 走防御降级（按
+    // Enter 重建）——但**降级重建的 Skip 容器会丢失子内容**（desc=None →
+    // 空节点 → collect 缓存空 → 按钮等永久消失）。8548718 的守卫（prev 空
+    // 直接保留旧树）则错误阻断二次 compose 的真实 Enter 内容（AnimatedContent
+    // 切换帧 B 内容被丢弃 → 树永远停留旧内容）。
+    // 正解：用**现有树**重建 prev 索引（collect_node_keys）——Skip 节点复用
+    // 现有节点（子内容保留），Enter 节点走正常复用+更新路径——内容正确且
+    // 不丢失子树（一帧全树重挂的代价仅发生在同帧二次 compose——频率低）。
     if composer.prev_node_by_key.is_empty() && composer.arena.root.is_some() {
-        return;
+        crate::core::materialize::collect_node_keys(&composer.arena, composer.arena.root.unwrap(), &mut composer.prev_node_by_key);
     }
     composer.arena.root = None;
     for desc in descs {

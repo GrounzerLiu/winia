@@ -178,16 +178,26 @@
     - 测试：5 个（端点/对称/单调/clamp/单点退化/接线）；interpolator_demo 扩至 32 行
 
 ### P3 — 基础设施/远期
-12. **帧时钟 API**（`with_frame_nanos` 类——LaunchedEffect/自定义动画的帧驱动入口）
+12. **帧时钟 API**（`with_frame_nanos` 类）✅ 本分支
+    - `winia::effect::with_frame_nanos()`（对标 Compose withFrameNanos——broadcast 帧时钟，渲染循环 `frame_tick()` 每帧广播纳秒时间戳；订阅者收到**下一帧**）
+    - LaunchedEffect/CoroutineScope 内 `loop { let t = with_frame_nanos().await; ... }` 驱动自定义动画（dt 自算）
+    - 测试：`frame_clock_ticks_and_waits`；prelude 导出
 13. **graphics_layer 补属性**（shadow/clip/shape/blur——渲染层能力）
 14. **`animate_item`**（列表增删/移动动画——需先有 LazyList 或简单列表容器）
-15. **`AnimatedContent`**（targetState 切换 + sizeTransform）
+15. **`AnimatedContent`** ✅ 本分支
+    - `AnimatedContent<T>::new(target)` + `.animation(spec)`（fade）+ `.size_animation(spec)`（sizeTransform，默认 Spring bouncy）
+    - 机制：target 变 → 旧内容淡出 → 淡出完成（progress<0.001）→ 锁定旧尺寸 → current.set → 内容重建 → 淡入；**容器尺寸 = lerp(prev_size, 新内容尺寸, progress)**（布局层 layout_dep 每帧重测）；alpha 绘制层 peek（零重组）
+    - 单内容世代（无 Compose 双世代 outgoing——组合引擎限制，文档注明）
+    - 测试：`animated_content_switches_with_size_transform`；demo：`animated_content_demo`
 
 ### 缺陷修复（随上述实施顺带）
 - dedup 忽略 spec（P0-2 时修）
 - dt 166ms 截断（P2-9 速度延续时修）
 - Keyframes duration=0 除零（P0-2 时修）
 - 60fps 节流（帧驱动层）
+- duration=0 Tween/Keyframes 立即完成（显式 is_zero 分支 + 测试）
+- dedup 同 target 不更新 spec：**与 Compose 语义一致**（animate*AsState target 未变不重启）——保留
+- 同帧二次 compose 物化：8548718 守卫移除——改为现有树重建 prev 索引（Skip 复用保留子内容 + Enter 正常更新；AnimatedContent 切换帧的 B 内容不再被丢弃）
 - Color Spring 降级显式化（supports_spring 文档 + 运行时警告）
 
 ---

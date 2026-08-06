@@ -569,6 +569,8 @@ impl ApplicationHandler for AppState {
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
             }
             WindowEvent::RedrawRequested => {
+                // 帧时钟 tick（P3-12：with_frame_nanos 的驱动源——每帧广播时间戳）
+                crate::effect::frame_tick();
                                 // 动画推进已移到 new_events（每轮一次，与窗口解耦）
                 // 消费焦点请求（在 compose 前处理，避免丢失）
                 for id in crate::modifier::take_focus_requests() {

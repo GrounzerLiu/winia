@@ -13,10 +13,12 @@ pub mod selection_container;
 pub mod text_field;
 pub mod animated_visibility;
 pub mod animated_size;
+pub mod animated_content;
 pub mod crossfade;
 
 pub use animated_visibility::{AnimatedVisibility, VisibilityTransition, SlideDirection};
 pub use animated_size::AnimatedSize;
+pub use animated_content::AnimatedContent;
 pub use crossfade::Crossfade;
 
 pub use text::Text;

@@ -485,7 +485,12 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
             }
             AnimationSpec::Tween(spec) => {
                 let elapsed = now - state.start;
-                let t = (elapsed.as_secs_f64() / spec.duration.as_secs_f64()).min(1.0) as f32;
+                // duration=0 → 立即完成（0 时长 = 瞬移）；>0 走正常时间轴
+                let t = if spec.duration.is_zero() {
+                    1.0
+                } else {
+                    (elapsed.as_secs_f64() / spec.duration.as_secs_f64()).min(1.0) as f32
+                };
                 let eased = spec.interpolator.interpolate(t);
                 if t >= 1.0 {
                     // 时间到：写精确目标——过冲插值器（Elastic/Back）eased 会提前
@@ -497,7 +502,12 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
             }
             AnimationSpec::Keyframes(spec) => {
                 let elapsed = now - state.start;
-                let t = (elapsed.as_secs_f64() / spec.duration.as_secs_f64()).min(1.0) as f32;
+                // duration=0 → 立即完成（同 Tween）
+                let t = if spec.duration.is_zero() {
+                    1.0
+                } else {
+                    (elapsed.as_secs_f64() / spec.duration.as_secs_f64()).min(1.0) as f32
+                };
                 if t >= 1.0 {
                     // 时间到：写精确目标（与 Tween/Spring done 语义一致——
                     // 末帧 progress<1.0 或末帧值过冲时插值结果可能≠to）
@@ -1462,6 +1472,27 @@ pub(crate) mod tests {
     fn decay_spec_rejects_nonpositive_friction() {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let _ = DecaySpec::new(0.0, 0.1);
+    }
+
+    /// 限制 #6：duration=0 的 Tween/Keyframes 立即完成且值精确 = to（无除零 NaN）
+    #[test]
+    fn zero_duration_tween_and_keyframes_complete_immediately() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        // Tween duration=0
+        let st = State::new(0.0f32);
+        let mut anim = Animatable::new(st.clone());
+        anim.animate_to(42.0, AnimationSpec::Tween(TweenSpec::new(Duration::ZERO, interpolator::Linear::new())));
+        assert!(!anim.update(), "duration=0 Tween 应首次 update 即完成");
+        assert_eq!(st.peek(), 42.0, "duration=0 Tween 完成值 = to");
+        // Keyframes duration=0
+        let st2 = State::new(0.0f32);
+        let mut anim2 = Animatable::new(st2.clone());
+        anim2.animate_to(
+            42.0,
+            AnimationSpec::Keyframes(KeyframesSpec::new(Duration::ZERO, vec![(0.0, 0.0), (1.0, 1.0)])),
+        );
+        assert!(!anim2.update(), "duration=0 Keyframes 应首次 update 即完成");
+        assert_eq!(st2.peek(), 42.0, "duration=0 Keyframes 完成值 = to");
     }
 
     /// P2-9 速度延续（push 路径）：push_decay → push_animatable retarget——

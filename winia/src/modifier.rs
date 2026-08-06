@@ -1179,3 +1179,110 @@ pub struct RichSpanStyle {
     // ── 其他 ──
     pub locale: Option<String>,
 }
+
+// ── 参数相等性（Skip 判定） ──
+
+impl Modifier {
+    /// 参数相等性（start_restartable_group 的 Skip 判定用）——可比较元素
+    /// （数值/枚举/字符串/颜色）精确比较；**闭包类元素**（背景色/点击回调/
+    /// 图形层动态参数/滚动状态/富文本样式）**视为相同**——每次 build 重建的
+    /// 闭包无法比较，精确比会破坏 Skip（列表每行永不 Skip）。
+    ///
+    /// 近似语义：modifier 的**数值参数**变化（width/padding/颜色等）→ 不等 →
+    /// Enter（content 重跑）；闭包参数变化（回调重设）→ 相同 → Skip（保持）。
+    /// 注意：动画驱动的动态尺寸（SizeValue::Dynamic）视为相同——布局期
+    /// layout_dep 每帧重测已覆盖，无需 Enter。
+    pub(crate) fn param_eq(&self, other: &Modifier) -> bool {
+        if self.elements.len() != other.elements.len() {
+            return false;
+        }
+        self.elements
+            .iter()
+            .zip(&other.elements)
+            .all(|(a, b)| element_param_eq(a, b))
+    }
+}
+
+fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
+    use ModifierElement::*;
+    match (a, b) {
+        (Size { width: aw, height: ah }, Size { width: bw, height: bh }) => {
+            size_value_eq(aw, bw) && size_value_eq(ah, bh)
+        }
+        (Padding { all: av }, Padding { all: bv }) => av == bv,
+        (PaddingHorizontal { value: av }, PaddingHorizontal { value: bv }) => av == bv,
+        (PaddingVertical { value: av }, PaddingVertical { value: bv }) => av == bv,
+        (FillMaxWidth, FillMaxWidth) => true,
+        (FillMaxHeight, FillMaxHeight) => true,
+        (FillMaxSize, FillMaxSize) => true,
+        (Offset { x: ax, y: ay }, Offset { x: bx, y: by }) => ax == bx && ay == by,
+        (AlignSelf { alignment: aa }, AlignSelf { alignment: ba }) => aa == ba,
+        (LayoutWeight { weight: aw }, LayoutWeight { weight: bw }) => aw == bw,
+        // 背景色闭包视为相同（渲染期求值——动画颜色不触发 Enter）
+        (Background { shape: as_, .. }, Background { shape: bs, .. }) => as_ == bs,
+        (Border { width: aw, color: ac, shape: as_ }, Border { width: bw, color: bc, shape: bs }) => {
+            aw == bw && ac == bc && as_ == bs
+        }
+        (Clip { shape: as_ }, Clip { shape: bs }) => as_ == bs,
+        (Blur { radius: ar }, Blur { radius: br }) => ar == br,
+        (BackdropBlur { radius: ar }, BackdropBlur { radius: br }) => ar == br,
+        (TextContent { content: ac, font_size: af, color: acol, font_weight: afw, font_style: afs, max_lines: am, align: aa, overflow: ao, soft_wrap: asw },
+         TextContent { content: bc, font_size: bf, color: bcol, font_weight: bfw, font_style: bfs, max_lines: bm, align: ba, overflow: bo, soft_wrap: bsw }) => {
+            ac == bc && af == bf && acol == bcol && afw == bfw && afs == bfs && am == bm && aa == ba && ao == bo && asw == bsw
+        }
+        // 富文本：内容 + 内联元素数比较；样式范围视为相同（每次 build 重建）
+        (RichTextContent { content: ac, drawables: ad, drawable_ranges: ar, .. },
+         RichTextContent { content: bc, drawables: bd, drawable_ranges: br, .. }) => {
+            ac == bc && ad.len() == bd.len() && ar == br
+        }
+        // 点击/键盘/指针回调视为相同（行为不参与内容重建判定）
+        (Clickable { .. }, Clickable { .. }) => true,
+        (Focusable, Focusable) => true,
+        (FocusRequesterId { id: ai }, FocusRequesterId { id: bi }) => ai == bi,
+        (KbEvent { .. }, KbEvent { .. }) => true,
+        (PointerEvent { .. }, PointerEvent { .. }) => true,
+        (VerticalScroll { state: as_ }, VerticalScroll { state: bs }) => std::ptr::eq(as_, bs),
+        (HorizontalScroll { state: as_ }, HorizontalScroll { state: bs }) => std::ptr::eq(as_, bs),
+        // 图形层动态参数视为相同（渲染期求值——动画不触发 Enter）
+        (GraphicsLayer { .. }, GraphicsLayer { .. }) => true,
+        _ => false,
+    }
+}
+
+fn size_value_eq(a: &SizeValue, b: &SizeValue) -> bool {
+    match (a, b) {
+        (SizeValue::Static(ad), SizeValue::Static(bd)) => ad == bd,
+        // 动态尺寸（动画 State/闭包）视为相同——布局期 layout_dep 已覆盖
+        (SizeValue::Dynamic(_), SizeValue::Dynamic(_)) => true,
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod param_eq_tests {
+    use super::*;
+
+    #[test]
+    fn param_eq_detects_size_change() {
+        let a = Modifier::new().width(200.0);
+        let b = Modifier::new().width(360.0);
+        assert!(!a.param_eq(&b), "width 200 vs 360 必须不等");
+        let c = Modifier::new().width(200.0);
+        assert!(a.param_eq(&c), "width 相同必须相等");
+    }
+
+    #[test]
+    fn param_eq_ignores_closure_elements() {
+        let a = Modifier::new().width(200.0).background(Color::from_argb(255, 66, 133, 244), Shape::rounded(8.0));
+        let b = Modifier::new().width(200.0).background(Color::from_argb(255, 76, 175, 80), Shape::rounded(8.0));
+        // 背景色闭包视为相同（渲染期求值）——宽度相同 → 相等
+        assert!(a.param_eq(&b), "闭包元素（背景色）应视为相同");
+    }
+
+    #[test]
+    fn param_eq_element_count_mismatch() {
+        let a = Modifier::new().width(200.0);
+        let b = Modifier::new().width(200.0).padding(4.0);
+        assert!(!a.param_eq(&b), "元素数不同必须不等");
+    }
+}
