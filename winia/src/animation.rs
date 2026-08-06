@@ -695,6 +695,17 @@ pub struct TweenSpec {
     pub interpolator: std::sync::Arc<dyn interpolator::Interpolator>,
 }
 
+impl TweenSpec {
+    /// 便捷构造：`TweenSpec::new(duration, interpolator)`——插值器自动包装为
+    /// `Arc<dyn Interpolator>`（29 个表驱动插值器 + Linear 直接传入）
+    pub fn new(
+        duration: Duration,
+        interpolator: impl Into<std::sync::Arc<dyn interpolator::Interpolator>>,
+    ) -> Self {
+        Self { duration, interpolator: interpolator.into() }
+    }
+}
+
 impl Default for TweenSpec {
     fn default() -> Self {
         Self {

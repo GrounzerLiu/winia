@@ -23,6 +23,12 @@ impl Linear {
 	}
 }
 
+impl From<Linear> for std::sync::Arc<dyn Interpolator> {
+    fn from(i: Linear) -> Self {
+        std::sync::Arc::new(i)
+    }
+}
+
 impl Interpolator for Linear {
     fn interpolate(&self, x: f32) -> f32 {
         x
@@ -68,6 +74,11 @@ macro_rules! interpolator {
 			pub fn boxed() -> Box<dyn Interpolator> {
 				Box::new(Self::new())
 			}
+        }
+        impl From<$name> for std::sync::Arc<dyn Interpolator> {
+            fn from(i: $name) -> Self {
+                std::sync::Arc::new(i)
+            }
         }
         impl Interpolator for $name {
             fn interpolate(&self, x: f32) -> f32 {
