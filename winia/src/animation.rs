@@ -161,6 +161,56 @@ pub fn push_animatable_color(state: State<crate::modifier::Color>, target: crate
     crate::core::state::wake_loop();
 }
 
+/// 指数衰减动画规格（对标 Compose exponentialDecay）——无目标值，
+/// 从初始速度衰减到自然停止（fling/惯性滚动核心）。
+///
+/// 解析式：`value(t) = from + v0/friction·(1 - e^(-friction·t))`
+/// 完成：速度 `|v0·e^(-friction·t)| < threshold` → 写极限值（精确停靠）。
+///
+/// ⚠️ 仅标量语义：内部经 `AnimatableValue::to_f32/from_f32`，向量类型
+/// （Offset/Size）会退化为范数方向——Decay 只应用于 f32（滚动偏移等）。
+#[derive(Clone, Debug)]
+pub struct DecaySpec {
+    /// 摩擦系数（越大停得越快；对标 Compose 默认 4.2）
+    pub friction: f32,
+    /// 速度阈值（低于即视为停止，px/s 量级）
+    pub threshold: f32,
+}
+
+impl DecaySpec {
+    pub fn new(friction: f32, threshold: f32) -> Self {
+        Self { friction, threshold }
+    }
+}
+
+impl Default for DecaySpec {
+    fn default() -> Self {
+        Self { friction: 4.2, threshold: 0.1 }
+    }
+}
+
+/// `exponential_decay(friction)`——对标 Compose `exponentialDecay(frictionMultiplier)`。
+/// 摩擦越大停得越快（默认 4.2）。
+pub fn exponential_decay(friction: f32) -> DecaySpec {
+    DecaySpec::new(friction, 0.1)
+}
+
+/// 便捷注册指数衰减（fling/惯性滚动）：`push_decay(state, v0, exponential_decay(4.2))`。
+/// 语义：同 state 已有动画 → 取代（新 fling 接管，与 retarget 一致）。
+pub fn push_decay(state: State<f32>, initial_velocity: f32, spec: DecaySpec) {
+    let sid = state.id();
+    {
+        let mut list = ACTIVE_ANIMATIONS.lock().unwrap();
+        list.retain(|anim| anim.state_id() != sid);
+    }
+    let mut anim = Animatable::new(state);
+    anim.animate_decay(initial_velocity, spec);
+    anim.update();
+    ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
+    // 唤醒事件循环启动推进轮次（同 push_animatable）
+    crate::core::state::wake_loop();
+}
+
 /// `push_animatable` + 完成回调（对标 Compose animate*AsState 的 finishedListener）：
 /// 动画自然完成/超时强制完成时调用一次 `done`。
 ///
@@ -284,6 +334,8 @@ struct AnimationState<T> {
     last_update: Instant,
     // Spring 持续的位移（累积值，非每帧重算）
     current_displacement: f32,
+    // Decay 初始速度（v0 常数——解析式需要，不被 last_velocity 覆盖）
+    initial_velocity: f32,
 }
 
 impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
@@ -309,6 +361,28 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
             last_velocity: 0.0,
             last_update: Instant::now(),
             current_displacement: displacement,
+            initial_velocity: 0.0,
+        });
+    }
+
+    /// 以初始速度启动指数衰减（fling/惯性滚动）——无目标值，自然停止。
+    ///
+    /// 解析式：`value(t) = from + v0/friction·(1 - e^(-friction·t))`
+    /// 完成：速度 `|v0·e^(-friction·t)| < threshold` → 写极限值（精确停靠）。
+    ///
+    /// ⚠️ 仅标量语义：内部经 `AnimatableValue::to_f32/from_f32`，向量类型
+    /// （Offset/Size）会退化为范数方向——Decay 只应用于 f32（滚动偏移等）。
+    pub fn animate_decay(&mut self, initial_velocity: f32, spec: DecaySpec) {
+        let from = self.state.peek();
+        self.anim_state = Some(AnimationState {
+            from: from.clone(),
+            to: from.clone(), // Decay 无目标——占位（更新时用解析式）
+            start: Instant::now(),
+            spec: AnimationSpec::Decay(spec),
+            last_velocity: 0.0,
+            last_update: Instant::now(),
+            current_displacement: 0.0,
+            initial_velocity,
         });
     }
 
@@ -410,6 +484,24 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
             }
             AnimationSpec::Snap => {
                 (state.to.clone(), true)
+            }
+            AnimationSpec::Decay(spec) => {
+                let elapsed = now - state.start;
+                let t = elapsed.as_secs_f32();
+                let friction = spec.friction.max(0.001); // 除零保护（friction<=0 退化为极慢）
+                let v0 = state.initial_velocity;
+                let decay = (-friction * t).exp();
+                let vel_now = v0 * decay;
+                state.last_velocity = vel_now; // 供打断（P2-9 速度延续）使用
+                if vel_now.abs() < spec.threshold {
+                    // 速度低于阈值：写极限值 from + v0/friction（精确停靠）
+                    let limit = state.from.to_f32() + v0 / friction;
+                    (AnimatableValue::from_f32(limit), true)
+                } else {
+                    let disp = v0 / friction * (1.0 - decay);
+                    let val = AnimatableValue::from_f32(state.from.to_f32() + disp);
+                    (val, false)
+                }
             }
         };
         self.state.set_no_wake(value);
@@ -649,6 +741,8 @@ pub enum AnimationSpec {
     Repeatable(RepeatableSpec),
     /// 瞬时跳转到目标（对标 Compose snap）
     Snap,
+    /// 指数衰减（对标 Compose exponentialDecay——fling/惯性滚动，无目标值）
+    Decay(DecaySpec),
 }
 
 impl From<TweenSpec> for AnimationSpec {
@@ -657,6 +751,10 @@ impl From<TweenSpec> for AnimationSpec {
 
 impl From<SpringSpec> for AnimationSpec {
     fn from(s: SpringSpec) -> Self { AnimationSpec::Spring(s) }
+}
+
+impl From<DecaySpec> for AnimationSpec {
+    fn from(s: DecaySpec) -> Self { AnimationSpec::Decay(s) }
 }
 
 #[derive(Clone, Debug)]
@@ -1126,6 +1224,44 @@ pub(crate) mod tests {
         }
         assert!(frames < 100, "spring 应收敛（stiffness=200 约 300-400ms）");
         assert_eq!(st.peek(), 0.0, "done 后值必须精确等于目标（修复前为残余位移）");
+    }
+
+    /// Decay（指数衰减）：v0=1000、friction=4.2 → 极限 = 1000/4.2 ≈ 238.1
+    /// 验证：单调递增、done 后精确停靠极限值
+    #[test]
+    fn decay_moves_and_stops_at_limit() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let st = State::new(0.0f32);
+        let mut anim = Animatable::new(st.clone());
+        anim.animate_decay(1000.0, DecaySpec::new(4.2, 0.1));
+        let mut prev = 0.0f32;
+        let mut frames = 0;
+        while anim.update() && frames < 300 {
+            let v = st.peek();
+            assert!(v >= prev - 0.01, "decay 必须单调（帧 {}：{prev} -> {v}）", frames);
+            prev = v;
+            std::thread::sleep(Duration::from_millis(20));
+            frames += 1;
+        }
+        assert!(frames < 300, "decay 应收敛");
+        let limit = 1000.0 / 4.2;
+        assert!(
+            (st.peek() - limit).abs() < 0.5,
+            "done 后必须精确停靠极限 {}（实际 {}）",
+            limit,
+            st.peek()
+        );
+    }
+
+    /// Decay：初始速度为 0 → 立即完成，值不变
+    #[test]
+    fn decay_zero_velocity_done_immediately() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let st = State::new(42.0f32);
+        let mut anim = Animatable::new(st.clone());
+        anim.animate_decay(0.0, DecaySpec::default());
+        assert!(!anim.update(), "v0=0 应立即完成");
+        assert_eq!(st.peek(), 42.0, "v0=0 值不变");
     }
 
     #[test]

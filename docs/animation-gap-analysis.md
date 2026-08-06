@@ -160,8 +160,13 @@
 7. **spring 常量**（`SpringSpec::DAMPING_RATIO_*` / `STIFFNESS_*`）✅ `7d85252`
 
 ### P2 — 进阶
-8. **`animate_decay` + fling**（DecayAnimationSpec：exponential_decay——拖拽/惯性滚动配合）
+8. **`animate_decay` + fling**（DecayAnimationSpec：exponential_decay——拖拽/惯性滚动配合）✅ 本分支
+   - `AnimationSpec::Decay(DecaySpec)` + `Animatable::animate_decay(v0, spec)` + `push_decay(state, v0, spec)` + `exponential_decay(friction)`（prelude 导出）
+   - 解析式 `value(t) = from + v0/friction·(1-e^(-friction·t))`；速度 `< threshold` 时写极限值精确停靠
+   - ⚠️ 仅标量语义（to_f32/from_f32 对向量类型退化为范数方向）
+   - 测试：`decay_moves_and_stops_at_limit` / `decay_zero_velocity_done_immediately`；demo：`decay_demo`（fling 方块）
 9. **`Animatable` 速度延续**（被打断时从当前速度继续——Compose 核心语义，当前从 0 速度重启）
+   - 铺垫：`AnimationState.initial_velocity` 字段已加（Decay v0）；Decay 分支每帧更新 `last_velocity` 供打断继承
 10. **`Repeatable` 支持任意 base spec**（当前仅 Tween）
 11. **easing 自定义**（`cubic_bezier(p1x,p1y,p2x,p2y)`/`path_easing`——插值器表外运行时曲线）
 
