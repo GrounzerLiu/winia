@@ -317,8 +317,11 @@ pub(crate) enum ModifierElement {
     FillMaxHeight,
     /// 填满最大尺寸
     FillMaxSize,
-    /// 位置偏移（不影响布局尺寸，仅移动绘制位置）
-    Offset { x: f32, y: f32 },
+    /// 位置偏移（不影响布局尺寸，仅移动绘制位置；RTL 下 x 镜像——
+    /// 对标 Compose `Modifier.offset`；值支持动态——动画可作用于 offset）
+    Offset { x: SizeValue, y: SizeValue },
+    /// 绝对偏移（RTL 下**不**镜像——对标 Compose `Modifier.absoluteOffset`）
+    AbsoluteOffset { x: SizeValue, y: SizeValue },
     /// 子节点在父容器中的交叉轴对齐（覆盖父容器的默认对齐）
     AlignSelf { alignment: crate::layout::Alignment },
     /// 布局权重（Row 中分配宽度，Column 中分配高度）
@@ -581,9 +584,37 @@ impl Modifier {
         self.push(ModifierElement::FillMaxSize)
     }
 
-    /// 位置偏移（不影响布局尺寸，仅移动绘制位置）
-    pub fn offset(self, x: f32, y: f32) -> Self {
-        self.push(ModifierElement::Offset { x, y })
+    /// 位置偏移（不影响布局尺寸，仅移动绘制位置；RTL 下 x 镜像——
+    /// 对标 Compose `Modifier.offset`）。
+    /// 值支持动态（`State`/`DerivedValue`/闭包——动画可作用于 offset）。
+    pub fn offset(self, x: impl Into<SizeValue>, y: impl Into<SizeValue>) -> Self {
+        self.push(ModifierElement::Offset { x: x.into(), y: y.into() })
+    }
+
+    /// 仅 x 方向偏移（RTL 下镜像）
+    pub fn offset_x(self, x: impl Into<SizeValue>) -> Self {
+        self.push(ModifierElement::Offset { x: x.into(), y: SizeValue::Static(Dimension::Fixed(0.0)) })
+    }
+
+    /// 仅 y 方向偏移（不受 RTL 影响——垂直方向）
+    pub fn offset_y(self, y: impl Into<SizeValue>) -> Self {
+        self.push(ModifierElement::Offset { x: SizeValue::Static(Dimension::Fixed(0.0)), y: y.into() })
+    }
+
+    /// 绝对偏移（RTL 下**不**镜像——对标 Compose `Modifier.absoluteOffset`）。
+    /// 值支持动态。
+    pub fn absolute_offset(self, x: impl Into<SizeValue>, y: impl Into<SizeValue>) -> Self {
+        self.push(ModifierElement::AbsoluteOffset { x: x.into(), y: y.into() })
+    }
+
+    /// 仅 x 方向绝对偏移（RTL 下不镜像）
+    pub fn absolute_offset_x(self, x: impl Into<SizeValue>) -> Self {
+        self.push(ModifierElement::AbsoluteOffset { x: x.into(), y: SizeValue::Static(Dimension::Fixed(0.0)) })
+    }
+
+    /// 仅 y 方向绝对偏移
+    pub fn absolute_offset_y(self, y: impl Into<SizeValue>) -> Self {
+        self.push(ModifierElement::AbsoluteOffset { x: SizeValue::Static(Dimension::Fixed(0.0)), y: y.into() })
     }
 
     /// 子节点在父容器中的交叉轴对齐（覆盖父容器的默认对齐）
@@ -1176,10 +1207,37 @@ impl Modifier {
     }
 
     /// 位置偏移（如果有 Offset modifier）
+    /// 普通偏移（RTL 下 x 镜像）——动态值在此求值（measure 期读 State 注册布局依赖）
     pub fn get_offset(&self) -> Option<(f32, f32)> {
+        let resolve = |sv: &SizeValue| -> f32 {
+            match sv {
+                SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(crate::unit::Dp(v))) => *v,
+                SizeValue::Static(Dimension::Px(p)) => p.to_logical(crate::unit::current_density()),
+                SizeValue::Static(Dimension::Auto) | SizeValue::Static(Dimension::Fill) => 0.0,
+                SizeValue::Dynamic(f) => f(),
+            }
+        };
         for el in &self.elements {
             if let ModifierElement::Offset { x, y } = el {
-                return Some((*x, *y));
+                return Some((resolve(x), resolve(y)));
+            }
+        }
+        None
+    }
+
+    /// 绝对偏移（RTL 下不镜像）——动态值求值同 `get_offset`
+    pub fn get_absolute_offset(&self) -> Option<(f32, f32)> {
+        let resolve = |sv: &SizeValue| -> f32 {
+            match sv {
+                SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(crate::unit::Dp(v))) => *v,
+                SizeValue::Static(Dimension::Px(p)) => p.to_logical(crate::unit::current_density()),
+                SizeValue::Static(Dimension::Auto) | SizeValue::Static(Dimension::Fill) => 0.0,
+                SizeValue::Dynamic(f) => f(),
+            }
+        };
+        for el in &self.elements {
+            if let ModifierElement::AbsoluteOffset { x, y } = el {
+                return Some((resolve(x), resolve(y)));
             }
         }
         None
@@ -1217,6 +1275,7 @@ impl Debug for ModifierElement {
             Self::FillMaxHeight => f.write_str("FillMaxHeight"),
             Self::FillMaxSize => f.write_str("FillMaxSize"),
             Self::Offset { x, y } => f.debug_struct("Offset").field("x", x).field("y", y).finish(),
+            Self::AbsoluteOffset { x, y } => f.debug_struct("AbsoluteOffset").field("x", x).field("y", y).finish(),
             Self::AlignSelf { alignment } => f.debug_struct("AlignSelf").field("alignment", alignment).finish(),
             Self::LayoutWeight { weight } => f.debug_struct("LayoutWeight").field("weight", weight).finish(),
             Self::AspectRatio { ratio, .. } => f.debug_struct("AspectRatio").field("ratio", ratio).finish(),
@@ -1521,6 +1580,43 @@ mod tests {
     }
 
     #[test]
+    fn test_offset_basic_and_single_axis() {
+        // 全参 + 单轴
+        let m = Modifier::new().offset(10.0, 20.0);
+        assert_eq!(m.get_offset(), Some((10.0, 20.0)));
+        let m = Modifier::new().offset_x(5.0);
+        assert_eq!(m.get_offset(), Some((5.0, 0.0)));
+        let m = Modifier::new().offset_y(7.0);
+        assert_eq!(m.get_offset(), Some((0.0, 7.0)));
+        // 无 offset → None
+        assert_eq!(Modifier::new().get_offset(), None);
+    }
+
+    #[test]
+    fn test_offset_dynamic_animation() {
+        // 动态 offset：State 驱动（动画作用于 offset——Compose offset 动画语义）
+        let s = crate::core::state::State::new(0.0f32);
+        let m = Modifier::new().offset(s.clone(), 10.0);
+        assert_eq!(m.get_offset(), Some((0.0, 10.0)));
+        s.set(50.0);
+        assert_eq!(m.get_offset(), Some((50.0, 10.0)), "动态 offset 重新求值");
+    }
+
+    #[test]
+    fn test_absolute_offset() {
+        // absolute_offset：单独查询，与普通 offset 互不影响
+        let m = Modifier::new().absolute_offset(3.0, 4.0);
+        assert_eq!(m.get_offset(), None, "absolute 不进普通 offset 查询");
+        assert_eq!(m.get_absolute_offset(), Some((3.0, 4.0)));
+        let m = Modifier::new().absolute_offset_x(9.0);
+        assert_eq!(m.get_absolute_offset(), Some((9.0, 0.0)));
+        // 两者共存：各查各的
+        let m = Modifier::new().offset(1.0, 2.0).absolute_offset(3.0, 4.0);
+        assert_eq!(m.get_offset(), Some((1.0, 2.0)));
+        assert_eq!(m.get_absolute_offset(), Some((3.0, 4.0)));
+    }
+
+    #[test]
     fn test_dimension_conversions() {
         let m = Modifier::new()
             .size(100.0, Dimension::Fill) // f32 → Dimension::Fixed, Dimension::Fill
@@ -1670,7 +1766,8 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (FillMaxWidth, FillMaxWidth) => true,
         (FillMaxHeight, FillMaxHeight) => true,
         (FillMaxSize, FillMaxSize) => true,
-        (Offset { x: ax, y: ay }, Offset { x: bx, y: by }) => ax == bx && ay == by,
+        (Offset { x: ax, y: ay }, Offset { x: bx, y: by }) => size_value_eq(ax, bx) && size_value_eq(ay, by),
+        (AbsoluteOffset { x: ax, y: ay }, AbsoluteOffset { x: bx, y: by }) => size_value_eq(ax, bx) && size_value_eq(ay, by),
         (AlignSelf { alignment: aa }, AlignSelf { alignment: ba }) => aa == ba,
         (LayoutWeight { weight: aw }, LayoutWeight { weight: bw }) => aw == bw,
         (AspectRatio { ratio: ar, match_height_first: am }, AspectRatio { ratio: br, match_height_first: bm }) => {

@@ -298,6 +298,52 @@ fn component_demo(ctx: &mut ComposeCtx) {
                         .color(Color::WHITE)
                         .build(ctx);
                 });
+
+            // ── 10. offset（动态动画 + RTL 镜像 / absolute_offset 豁免） ──
+            Text::new("10. offset（点击动画；RTL 下普通 offset 镜像、absolute_offset 豁免）")
+                .font_size(14.0)
+                .color(Color::from_argb(200, 100, 100, 100))
+                .modifier(Modifier::new().padding_vertical(8.0))
+                .build(ctx);
+            let off_anim = ctx.animate_float_as_state(
+                if clicked.get() { 60.0 } else { 0.0 },
+                winia::animation::AnimationSpec::Spring(winia::animation::SpringSpec::bouncy()),
+            );
+            Button::new()
+                .on_click({ let c = clicked.clone(); move || c.set(!c.get()) })
+                .modifier(Modifier::new().size(180.0, 36.0))
+                .build(ctx, |ctx| {
+                    Text::new(if clicked.get() { "offset 60（点击还原）" } else { "offset 0（点击动画）" })
+                        .font_size(12.0)
+                        .color(Color::WHITE)
+                        .build(ctx);
+                });
+            Row::new()
+                .modifier(Modifier::new().padding_vertical(8.0))
+                .build(ctx, |ctx| {
+                    // 普通 offset：RTL 下动画方向镜像（x 反向）
+                    Column::new()
+                        .modifier(
+                            Modifier::new()
+                                .size(90.0, 36.0)
+                                .offset_x(off_anim.clone())
+                                .background(Color::from_argb(255, 76, 175, 80), Shape::rounded(6.0)),
+                        )
+                        .build(ctx, |ctx| {
+                            Text::new("offset 镜像").font_size(11.0).color(Color::WHITE).build(ctx);
+                        });
+                    // absolute_offset：RTL 下不镜像
+                    Column::new()
+                        .modifier(
+                            Modifier::new()
+                                .size(90.0, 36.0)
+                                .absolute_offset_x(off_anim.clone())
+                                .background(Color::from_argb(255, 255, 152, 0), Shape::rounded(6.0)),
+                        )
+                        .build(ctx, |ctx| {
+                            Text::new("absolute 不镜像").font_size(11.0).color(Color::WHITE).build(ctx);
+                        });
+                });
         });
     });
 }

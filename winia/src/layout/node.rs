@@ -732,6 +732,44 @@ mod tests {
         let _ = measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 100.0, 0.0, 100.0));
         assert_eq!(nodes[1].position.x, 10.0, "LTR 下 start 在左：子靠左 10");
     }
+
+    #[test]
+    fn test_measure_node_offset_rtl_mirror() {
+        // 普通 offset 在 RTL 下 x 镜像（对标 Compose offset）；absolute_offset 豁免
+        use crate::layout::row::RowLayout;
+        // LTR：offset(10, 5) → 子 x 加 10
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new().size(100.0, 50.0), Some(0)),
+            LayoutNode::leaf(Modifier::new().size(30.0, 20.0).offset(10.0, 5.0)),
+        ];
+        nodes[0].children = vec![1];
+        let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(RowLayout::new())];
+        let _ = measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 100.0, 0.0, 100.0));
+        assert_eq!(nodes[1].position.x, 10.0, "LTR offset(10) 向右");
+        assert_eq!(nodes[1].position.y, 5.0, "offset y 不受方向影响");
+
+        // RTL：offset(10) 镜像 → x 减 10
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new().size(100.0, 50.0), Some(0)),
+            LayoutNode::leaf(Modifier::new().size(30.0, 20.0).offset(10.0, 5.0)),
+        ];
+        nodes[0].children = vec![1];
+        nodes[0].layout_direction = LayoutDirection::Rtl;
+        let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(RowLayout::new().direction(LayoutDirection::Rtl))];
+        let _ = measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 100.0, 0.0, 100.0));
+        assert_eq!(nodes[1].position.x, 60.0, "RTL offset(10) x 镜像（flex 70 - 10）");
+
+        // RTL + absolute_offset：不镜像 → x 加 10
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new().size(100.0, 50.0), Some(0)),
+            LayoutNode::leaf(Modifier::new().size(30.0, 20.0).absolute_offset(10.0, 0.0)),
+        ];
+        nodes[0].children = vec![1];
+        nodes[0].layout_direction = LayoutDirection::Rtl;
+        let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(RowLayout::new().direction(LayoutDirection::Rtl))];
+        let _ = measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 100.0, 0.0, 100.0));
+        assert_eq!(nodes[1].position.x, 80.0, "RTL absolute_offset(10) 不镜像（flex 70 + 10）");
+    }
 }
 
 // ── 焦点遍历 ──
@@ -1040,11 +1078,17 @@ pub(crate) fn measure_node(
                 nodes[c].position.y += pad_top;
             }
         }
-        // apply per-child offset modifier
+        // apply per-child offset modifier（普通 offset 在 RTL 下 x 镜像——
+        // 对标 Compose；absolute_offset 豁免镜像）
+        let rtl = nodes[idx].layout_direction == LayoutDirection::Rtl;
         for &c in &children {
             if let Some((ox, oy)) = nodes[c].modifier.get_offset() {
-                nodes[c].position.x += ox;
+                nodes[c].position.x += if rtl { -ox } else { ox };
                 nodes[c].position.y += oy;
+            }
+            if let Some((ax, ay)) = nodes[c].modifier.get_absolute_offset() {
+                nodes[c].position.x += ax;
+                nodes[c].position.y += ay;
             }
         }
         let outer_size = Size::new(size.width + pad_x, size.height + pad_y);
