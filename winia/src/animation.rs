@@ -352,8 +352,13 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
                 let elapsed = now - state.start;
                 let t = (elapsed.as_secs_f64() / spec.duration.as_secs_f64()).min(1.0) as f32;
                 let eased = spec.interpolator.interpolate(t);
-                let t = state.from.lerp(&state.to, eased);
-                (t, eased >= 1.0)
+                if t >= 1.0 {
+                    // 时间到：写精确目标——过冲插值器（Elastic/Back）eased 会提前
+                    // >= 1.0，若用 eased 判定则动画提前结束于过冲值（停在越界位置）
+                    (state.to.clone(), true)
+                } else {
+                    (state.from.lerp(&state.to, eased), false)
+                }
             }
             AnimationSpec::Keyframes(spec) => {
                 let elapsed = now - state.start;
@@ -1396,4 +1401,29 @@ fn test_infinite_transition_manual_dispose_idempotent() {
         std::thread::sleep(Duration::from_millis(60));
         anim2.update();
         assert!((st2.peek() - 20.0).abs() < 5.0, "linear 推进 60ms 应≈20（实际 {}）", st2.peek());
+    }
+
+    /// 回归：过冲插值器（Elastic/Back）动画完成后必须停靠精确目标——
+    /// 修复前用 eased>=1.0 判定，过冲使动画提前结束于越界值
+    #[test]
+    fn tween_overshoot_interpolator_settles_at_target() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        use crate::animation::interpolator::{EaseOutElastic, Interpolator};
+        // 曲线本身在 t≈0.98 处 eased 就 > 1.0（过冲）
+        let ease = EaseOutElastic::new();
+        assert!(ease.interpolate(0.98) > 1.0, "EaseOutElastic 末端应过冲（>1.0）");
+        // 动画推进完整时长——必须精确停靠 100（修复前停在过冲值）
+        let st = State::new(0.0f32);
+        let mut anim = Animatable::new(st.clone());
+        anim.animate_to(
+            100.0,
+            AnimationSpec::Tween(TweenSpec::new(Duration::from_millis(200), EaseOutElastic::new())),
+        );
+        let mut frames = 0;
+        while anim.update() && frames < 30 {
+            std::thread::sleep(Duration::from_millis(40));
+            frames += 1;
+        }
+        assert!(frames < 30, "动画应收敛");
+        assert_eq!(st.peek(), 100.0, "过冲插值器完成必须精确停靠目标（修复前停在越界值）");
     }
