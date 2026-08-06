@@ -1344,7 +1344,12 @@ pub struct PathEasing {
 }
 
 impl PathEasing {
+    /// 控制点折线（x 必须单调递增——二分查找依赖有序性）
     pub fn new(points: Vec<(f32, f32)>) -> Self {
+        debug_assert!(
+            points.windows(2).all(|w| w[0].0 <= w[1].0),
+            "PathEasing 点集 x 必须单调递增（收到 {points:?}）"
+        );
         Self { points }
     }
 }

@@ -185,7 +185,11 @@ pub struct DecaySpec {
 }
 
 impl DecaySpec {
+    /// 快速失败：friction<=0 会导致极限位移无限大（v0/friction）或永不停止——
+    /// 配置错误立即暴露（`max(0.001)` 是 update 里的双保险，不替代校验）
     pub fn new(friction: f32, threshold: f32) -> Self {
+        assert!(friction > 0.0, "DecaySpec::new: friction 必须 > 0（收到 {friction}）");
+        assert!(threshold > 0.0, "DecaySpec::new: threshold 必须 > 0（收到 {threshold}）");
         Self { friction, threshold }
     }
 }
@@ -383,6 +387,13 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
     /// 内部启动入口：显式指定初始速度（`push_animatable` retarget 时从
     /// 被移除的旧动画继承；`animate_to` 从自身 anim_state 继承）。
     fn start_with_velocity(&mut self, to: T, spec: AnimationSpec, start_velocity: f32) {
+        // review fix：只有 Spring/Decay 有物理速度语义——Tween/Keyframes/
+        // Repeatable/Snap 被打断时从静止重启。否则"Spring→Tween→Spring"
+        // 第二次打断会继承 Tween 期间的过期速度（Tween 不更新 last_velocity）。
+        let start_velocity = match spec {
+            AnimationSpec::Spring(_) | AnimationSpec::Decay(_) => start_velocity,
+            _ => 0.0,
+        };
         let from = self.state.peek();
         let displacement = AnimatableValue::to_f32(&from) - AnimatableValue::to_f32(&to);
         self.anim_state = Some(AnimationState {
@@ -422,19 +433,33 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
     pub fn update(&mut self) -> bool {
         let Some(ref mut state) = self.anim_state else { return false; };
         let now = Instant::now();
-        // 极端参数保护：Spring 超过 5s 未收敛强制完成（stiffness=0 等永不收敛场景）——
-        // 仅 Spring 需要（有 done 阈值但渐近收敛可能永不达）；Tween/Keyframes/
+        // 极端参数保护：Spring/Decay 超过 5s 未收敛强制完成——Spring 有 done
+        // 阈值但渐近收敛可能永不达（stiffness=0）；Decay 的 friction 过小时
+        // 速度衰减极慢（e^(-0.1·t) 需 ~94s 才低于阈值）。Tween/Keyframes/
         // Repeatable 有明确时长、Snap 立即完成——不被截断（用户设 >5s 时长合法）
-        if now.duration_since(state.start) > Duration::from_secs(5)
-            && matches!(state.spec, AnimationSpec::Spring(_))
-        {
-            let final_val = state.to.clone();
-            self.state.set_no_wake(final_val);
-            self.anim_state = None;
-            if let Some(f) = self.on_finish.take() {
-                f();
+        if now.duration_since(state.start) > Duration::from_secs(5) {
+            let overrun = match &state.spec {
+                AnimationSpec::Spring(_) => Some(state.to.clone()),
+                // Decay：写当前解析值（极限可能因 friction 过小而超大——不跳极限）
+                AnimationSpec::Decay(spec) => {
+                    let t = now.duration_since(state.start).as_secs_f32();
+                    let friction = spec.friction.max(0.001);
+                    let v0 = state.initial_velocity;
+                    let decay = (-friction * t).exp();
+                    Some(AnimatableValue::from_f32(
+                        state.from.to_f32() + v0 / friction * (1.0 - decay),
+                    ))
+                }
+                _ => None,
+            };
+            if let Some(final_val) = overrun {
+                self.state.set_no_wake(final_val);
+                self.anim_state = None;
+                if let Some(f) = self.on_finish.take() {
+                    f();
+                }
+                return false;
             }
-            return false;
         }
         let dt = now.duration_since(state.last_update);
         state.last_update = now;
@@ -1400,6 +1425,43 @@ pub(crate) mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         assert_eq!(st.peek(), 0.0, "取消后值必须保持（修复前被 Decay 写回）");
+    }
+
+    /// review fix：速度残留——Spring→Tween→Spring 第二次打断必须从静止重启
+    /// （Tween 期间 last_velocity 不更新，继承它会带着过期物理速度）
+    #[test]
+    fn retarget_after_tween_restarts_from_rest() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let st = State::new(0.0f32);
+        let mut anim = Animatable::new(st.clone());
+        // 1) Spring 跑起来（速度显著）
+        anim.animate_to(100.0, AnimationSpec::Spring(SpringSpec::default()));
+        for _ in 0..5 {
+            anim.update();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let spring_vel = anim.anim_state.as_ref().unwrap().last_velocity;
+        assert!(spring_vel > 10.0, "Spring 推进后速度应显著（实际 {spring_vel}）");
+        // 2) 打断成 Tween（review fix：非物理 spec 不继承速度——归零）
+        anim.animate_to(200.0, AnimationSpec::Tween(TweenSpec::default()));
+        for _ in 0..3 {
+            anim.update();
+            std::thread::sleep(Duration::from_millis(16));
+        }
+        let tween_vel = anim.anim_state.as_ref().unwrap().last_velocity;
+        assert_eq!(tween_vel, 0.0, "Tween 必须从静止开始（review fix：不继承 Spring 速度）");
+        // 3) 再打断成 Spring——必须从静止重启（修复前继承 Tween 的过期 spring_vel）
+        anim.animate_to(50.0, AnimationSpec::Spring(SpringSpec::default()));
+        let final_vel = anim.anim_state.as_ref().unwrap().last_velocity;
+        assert_eq!(final_vel, 0.0, "Tween 打断后的 Spring 必须从静止重启（修复前继承过期速度 {spring_vel}）");
+    }
+
+    /// review fix：DecaySpec friction<=0 快速失败（配置错误立即暴露）
+    #[test]
+    #[should_panic(expected = "friction 必须 > 0")]
+    fn decay_spec_rejects_nonpositive_friction() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = DecaySpec::new(0.0, 0.1);
     }
 
     /// P2-9 速度延续（push 路径）：push_decay → push_animatable retarget——
