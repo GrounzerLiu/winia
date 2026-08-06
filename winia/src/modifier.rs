@@ -1241,8 +1241,8 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (FocusRequesterId { id: ai }, FocusRequesterId { id: bi }) => ai == bi,
         (KbEvent { .. }, KbEvent { .. }) => true,
         (PointerEvent { .. }, PointerEvent { .. }) => true,
-        (VerticalScroll { state: as_ }, VerticalScroll { state: bs }) => std::ptr::eq(as_, bs),
-        (HorizontalScroll { state: as_ }, HorizontalScroll { state: bs }) => std::ptr::eq(as_, bs),
+        (VerticalScroll { state: as_ }, VerticalScroll { state: bs }) => as_.id() == bs.id(),
+        (HorizontalScroll { state: as_ }, HorizontalScroll { state: bs }) => as_.id() == bs.id(),
         // 图形层动态参数视为相同（渲染期求值——动画不触发 Enter）
         (GraphicsLayer { .. }, GraphicsLayer { .. }) => true,
         _ => false,

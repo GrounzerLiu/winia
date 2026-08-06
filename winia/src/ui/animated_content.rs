@@ -110,6 +110,10 @@ impl<T: Clone + PartialEq + 'static> AnimatedContent<T> {
         // 内部状态（remember——语句级 key 稳定，跨重组保留）
         let current: State<T> = ctx.remember(|| target.clone());
         let progress: State<f32> = ctx.remember(|| 1.0);
+        // ⚠ sizeTransform 用独立 State——与 fade 共享 progress 会被
+        // push_animatable 的 same_target 去重跳过（同 state 同目标第二次 push
+        // 被忽略）→ size_spec（Spring）从未生效。
+        let size_progress: State<f32> = ctx.remember(|| 1.0);
         let prev_size: State<Option<(f32, f32)>> = ctx.remember(|| None);
         let last_size: State<Option<(f32, f32)>> = ctx.remember(|| None);
         // 动画推进 → 外层重组（淡出完成检测执行）
@@ -131,7 +135,7 @@ impl<T: Clone + PartialEq + 'static> AnimatedContent<T> {
             prev_size.set(None);
         }
         push_animatable(progress.clone(), goal, self.spec.clone());
-        push_animatable(progress.clone(), goal, self.size_spec.clone());
+        push_animatable(size_progress.clone(), goal, self.size_spec.clone());
         // 绘制层：alpha = progress（淡出 1→0 / 淡入 0→1）——渲染期 peek 不注册依赖
         let g = progress.clone();
         let gfx = move || {
@@ -140,7 +144,7 @@ impl<T: Clone + PartialEq + 'static> AnimatedContent<T> {
             params
         };
         let modifier = Modifier::new().graphics_layer(gfx);
-        let policy = ContentSizePolicy { prev_size, last_size, progress };
+        let policy = ContentSizePolicy { prev_size, last_size, progress: size_progress };
         let key = ctx.next_key();
         match ctx.start_restartable_group(key, modifier, policy) {
             GroupStatus::Skip => {}
@@ -254,5 +258,54 @@ mod tests {
             advance_one(&mut composer);
         }
         assert_eq!(container_width(&composer), 50.0, "切回后容器宽度 = 50");
+    }
+
+    /// sizeTransform 独立生效（回归：与 fade 共享 progress 会被 same_target
+    /// 去重跳过——size_spec 从未生效）。size_animation 用 Snap：淡入阶段容器
+    /// 宽度应立即 = 新内容宽（而非 fade 的 lerp 中途值）
+    #[test]
+    fn size_animation_independent_of_fade() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut composer = Composer::new();
+        let target = State::new(0u32);
+        let t = target.clone();
+
+        let mut recompose = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                AnimatedContent::new(t.clone())
+                    .animation(crate::animation::TweenSpec::new(
+                        std::time::Duration::from_millis(600),
+                        crate::animation::interpolator::Linear::new(),
+                    ))
+                    .size_animation(crate::animation::AnimationSpec::Snap)
+                    .build(ctx, |ctx, page| {
+                        let w = if page == 0 { 50.0 } else { 200.0 };
+                        SizedLeaf { w }.build(ctx);
+                    });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        let mut advance_one = |composer: &mut Composer| {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(16));
+            recompose(composer);
+        };
+
+        recompose(&mut composer);
+        assert_eq!(container_width(&composer), 50.0, "初始显示 target 0");
+
+        // 切换 → 淡出（600ms fade）→ 切换完成 → 淡入（600ms）
+        target.set(7);
+        recompose(&mut composer);
+        for _ in 0..45 {
+            advance_one(&mut composer);
+        }
+        // 此刻 fade 淡入中（~300ms/600ms）——若 size 独立（Snap）容器宽应已 = 200；
+        // 若共享 progress（旧 bug）→ size 走 600ms Tween → 宽是 lerp 中途值（<200）
+        let w = container_width(&composer);
+        assert!(
+            (w - 200.0).abs() < 0.5,
+            "sizeTransform(Snap) 应在淡入中途即到达 200（实际 {w}）"
+        );
     }
 }
