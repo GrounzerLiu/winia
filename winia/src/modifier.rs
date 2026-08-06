@@ -330,7 +330,9 @@ pub(crate) enum ModifierElement {
     /// 调试树 JSON 暴露 tag 字段）
     TestTag { tag: String },
     /// 阴影（对标 Compose `Modifier.shadow`——elevation 模糊 + 内容裁剪）
-    Shadow { elevation: f32, shape: Shape, clip: bool, color: Color },
+    /// 阴影（对标 Compose `Modifier.shadow`——单层参数；elevation 便捷版
+    /// 展开为 ambient+spot 两层元素）
+    Shadow { params: ShadowParams, shape: Shape, clip: bool },
 
     // ── Draw 类 ──
     /// 背景色 + 形状（color_fn 渲染时求值——静态色或动画闭包统一为闭包）
@@ -543,9 +545,11 @@ impl Modifier {
     }
 
     /// `shadow(elevation, shape, clip, color)`（对标 Compose `Modifier.shadow`）——
-    /// 阴影 + 可选内容裁剪。默认：RectangleShape、`clip = elevation > 0`、
-    /// 黑色阴影（Compose DefaultShadowColor）。elevation <= 0 且 !clip 时
-    /// 返回自身（Compose early-return 语义）。
+    /// elevation 便捷版：展开为 **ambient + spot 两层**（Compose DropShadow
+    /// 物理阴影——ambient 无偏移大模糊低 alpha、spot 偏移 e*0.5 小模糊中
+    /// alpha；alpha 随 elevation 增强——Material 层级感）。
+    /// 默认：RectangleShape、`clip = elevation > 0`、黑色阴影。
+    /// elevation <= 0 且 !clip 时返回自身（Compose early-return 语义）。
     pub fn shadow(
         self,
         elevation: f32,
@@ -556,17 +560,36 @@ impl Modifier {
         if elevation <= 0.0 && !clip {
             return self;
         }
-        self.push(ModifierElement::Shadow {
-            elevation,
-            shape: shape.into(),
-            clip,
-            color,
-        })
+        let strength = (elevation / 12.0).min(1.0);
+        // ambient：无偏移、模糊 = e*0.5、低 alpha
+        let ambient = ShadowParams::new(
+            elevation * 0.5, 0.0, 0.0,
+            color, 0.22 * strength,
+        );
+        // spot：偏移 (0, e*0.5)、模糊 = e*0.25、中 alpha
+        let spot = ShadowParams::new(
+            elevation * 0.25, 0.0, elevation * 0.5,
+            color, 0.45 * strength,
+        );
+        let shape = shape.into();
+        self.push(ModifierElement::Shadow { params: ambient, shape: shape.clone(), clip })
+            .push(ModifierElement::Shadow { params: spot, shape, clip })
     }
 
     /// `shadow(elevation)`——便捷版（默认形状/黑色/自动 clip）
     pub fn shadow_default(self, elevation: f32) -> Self {
         self.shadow(elevation, Shape::Rectangle, elevation > 0.0, Color::from_argb(255, 0, 0, 0))
+    }
+
+    /// `drop_shadow(shape, params)`（对标 Compose `Modifier.dropShadow`）——
+    /// 完全自定义单层阴影（radius/spread/offset/color/alpha）。多个
+    /// drop_shadow 可叠加（多阴影，Compose vararg 语义）。
+    pub fn drop_shadow(self, shape: impl Into<Shape>, params: ShadowParams) -> Self {
+        self.push(ModifierElement::Shadow {
+            params,
+            shape: shape.into(),
+            clip: false,
+        })
     }
 }
 
@@ -1095,7 +1118,7 @@ impl Debug for ModifierElement {
                 .field("height", height)
                 .finish(),
             Self::TestTag { tag } => f.debug_struct("TestTag").field("tag", tag).finish(),
-            Self::Shadow { elevation, .. } => f.debug_struct("Shadow").field("elevation", elevation).finish(),
+            Self::Shadow { params, .. } => f.debug_struct("Shadow").field("radius", &params.radius).field("spread", &params.spread).finish(),
             Self::Background { .. } => f.debug_struct("Background").finish(),
             Self::Border { width, color, shape } => f.debug_struct("Border").field("width", width).field("color", color).field("shape", shape).finish(),
             Self::Clip { shape } => f.debug_struct("Clip").field("shape", shape).finish(),
@@ -1157,6 +1180,44 @@ impl Default for GraphicsLayerParams {
 /// 相对节点宽高（0.0 = 左/上，0.5 = 中心，1.0 = 右/下）
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct TransformOrigin(pub f32, pub f32);
+
+/// 阴影参数（对标 Compose `graphics.shadow.Shadow`——dropShadow 可配置集）。
+/// 绘制对齐 DropShadowPainter：扩边画布 → 形状路径（模糊）画进离屏 mask →
+/// 颜色 SrcIn 着色 → 按 offset 平移到画布。
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct ShadowParams {
+    /// 模糊半径（逻辑 px，对标 radius）
+    pub radius: f32,
+    /// 扩展半径（阴影比形状大多少——超出部分另画 stroke，对标 spread）
+    pub spread: f32,
+    /// 阴影偏移（对标 offset）
+    pub offset_x: f32,
+    pub offset_y: f32,
+    /// 阴影颜色（对标 color，默认黑）
+    pub color: Color,
+    /// 独立透明度 0-1（对标 alpha）
+    pub alpha: f32,
+}
+
+impl ShadowParams {
+    /// 便捷构造（radius/offset/color/alpha；spread=0）
+    pub fn new(radius: f32, offset_x: f32, offset_y: f32, color: Color, alpha: f32) -> Self {
+        Self { radius, spread: 0.0, offset_x, offset_y, color, alpha }
+    }
+}
+
+impl Default for ShadowParams {
+    fn default() -> Self {
+        Self {
+            radius: 0.0,
+            spread: 0.0,
+            offset_x: 0.0,
+            offset_y: 0.0,
+            color: Color::from_argb(255, 0, 0, 0),
+            alpha: 1.0,
+        }
+    }
+}
 
 impl TransformOrigin {
     /// 中心（Compose 默认）
@@ -1466,9 +1527,8 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
             aw == bw && ah == bh
         }
         (TestTag { tag: at }, TestTag { tag: bt }) => at == bt,
-        (Shadow { elevation: ae, shape: as_, clip: ac, color: acol },
-         Shadow { elevation: be, shape: bs, clip: bc, color: bcol }) => {
-            ae == be && as_ == bs && ac == bc && acol == bcol
+        (Shadow { params: ap, shape: as_, clip: ac }, Shadow { params: bp, shape: bs, clip: bc }) => {
+            ap == bp && as_ == bs && ac == bc
         }
         // 背景色闭包视为相同（渲染期求值——动画颜色不触发 Enter）
         (Background { shape: as_, .. }, Background { shape: bs, .. }) => as_ == bs,
@@ -1595,5 +1655,58 @@ mod param_eq_tests {
         assert_eq!(p.rotation_z, 90.0);
         assert_eq!(p.scale_x, 2.0);
         assert!(p.clip);
+    }
+
+    // ── shadow / drop_shadow ──
+
+    #[test]
+    fn shadow_expands_to_ambient_and_spot() {
+        // elevation 便捷版展开为两层（ambient 无偏移 + spot 偏移 e*0.5）
+        let m = Modifier::new().shadow(8.0, Shape::rounded(4.0), true, Color::from_argb(255, 0, 0, 0));
+        let layers: Vec<_> = m.elements().iter().filter_map(|el| {
+            if let ModifierElement::Shadow { params, .. } = el {
+                Some((params.radius, params.offset_x, params.offset_y, params.alpha))
+            } else {
+                None
+            }
+        }).collect();
+        assert_eq!(layers.len(), 2, "shadow() 展开 ambient + spot 两层");
+        let (r0, _, oy0, a0) = layers[0];
+        let (r1, _, oy1, a1) = layers[1];
+        // ambient：无偏移、模糊 e*0.5、低 alpha
+        assert_eq!(oy0, 0.0);
+        assert!((r0 - 4.0).abs() < 1e-6, "ambient 模糊 e*0.5");
+        assert!(a0 < a1, "ambient alpha 低于 spot");
+        // spot：偏移 e*0.5、模糊 e*0.25
+        assert!((oy1 - 4.0).abs() < 1e-6, "spot 偏移 e*0.5");
+        assert!((r1 - 2.0).abs() < 1e-6, "spot 模糊 e*0.25");
+        // strength = 8/12 → ambient 0.22×0.667、spot 0.45×0.667
+        assert!((a0 - 0.22 * 8.0 / 12.0).abs() < 1e-3);
+        assert!((a1 - 0.45 * 8.0 / 12.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn drop_shadow_custom_params() {
+        let m = Modifier::new().drop_shadow(
+            Shape::rounded(8.0),
+            ShadowParams { radius: 6.0, spread: 2.0, offset_x: 3.0, offset_y: 5.0, color: Color::from_argb(255, 50, 50, 50), alpha: 0.6 },
+        );
+        let p = m.elements().iter().find_map(|el| {
+            if let ModifierElement::Shadow { params, .. } = el { Some(*params) } else { None }
+        }).unwrap();
+        assert_eq!(p.radius, 6.0);
+        assert_eq!(p.spread, 2.0);
+        assert_eq!(p.offset_x, 3.0);
+        assert_eq!(p.offset_y, 5.0);
+        assert_eq!(p.alpha, 0.6);
+    }
+
+    #[test]
+    fn multiple_drop_shadows_stack() {
+        let m = Modifier::new()
+            .drop_shadow(Shape::Rectangle, ShadowParams::new(2.0, 0.0, 1.0, Color::BLACK, 0.3))
+            .drop_shadow(Shape::Rectangle, ShadowParams::new(4.0, 0.0, 2.0, Color::BLACK, 0.2));
+        let n = m.elements().iter().filter(|el| matches!(el, ModifierElement::Shadow { .. })).count();
+        assert_eq!(n, 2, "多个 drop_shadow 叠加（Compose vararg 语义）");
     }
 }

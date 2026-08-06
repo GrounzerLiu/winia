@@ -46,7 +46,7 @@ fn component_demo(ctx: &mut ComposeCtx) {
                 });
 
             // ── 2. shadow ──
-            Text::new("2. shadow（elevation + 内容裁剪）")
+            Text::new("2. shadow（elevation 便捷版 / drop_shadow 自定义）")
                 .font_size(14.0)
                 .color(Color::from_argb(200, 100, 100, 100))
                 .modifier(Modifier::new().padding_vertical(8.0))
@@ -55,7 +55,7 @@ fn component_demo(ctx: &mut ComposeCtx) {
                 Column::new()
                     .modifier(Modifier::new()
                         .size(120.0, 60.0)
-                        .shadow(8.0, Shape::rounded(12.0), true, Color::from_argb(120, 0, 0, 0))
+                        .shadow(8.0, Shape::rounded(12.0), true, Color::from_argb(255, 0, 0, 0))
                         .background(Color::from_argb(255, 76, 175, 80), Shape::rounded(12.0)))
                     .build(ctx, |ctx| {
                         Text::new("shadow 8").color(Color::WHITE).font_size(13.0).build(ctx);
@@ -63,10 +63,10 @@ fn component_demo(ctx: &mut ComposeCtx) {
                 Column::new()
                     .modifier(Modifier::new()
                         .size(120.0, 60.0)
-                        .shadow(2.0, Shape::rounded(12.0), true, Color::from_argb(120, 0, 0, 0))
+                        .drop_shadow(Shape::rounded(12.0), winia::modifier::ShadowParams::new(6.0, 4.0, 6.0, Color::from_argb(180, 100, 60, 0), 0.8))
                         .background(Color::from_argb(255, 255, 152, 0), Shape::rounded(12.0)))
                     .build(ctx, |ctx| {
-                        Text::new("shadow 2").color(Color::WHITE).font_size(13.0).build(ctx);
+                        Text::new("drop 自定义").color(Color::WHITE).font_size(13.0).build(ctx);
                     });
             });
 
