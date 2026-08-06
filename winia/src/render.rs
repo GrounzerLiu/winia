@@ -46,87 +46,106 @@ struct TextParams<'a> {
 /// 3. drawImage 带 paint：colorFilter = Blend(color, SrcIn)（Compose
 ///    ColorFilter.tint 等价——保留 alpha 形状染成 color）+ alpha（整体透明度）
 /// 4. 平移 offset（Compose onDrawShadow：offset = -(radius+spread)）
-/// 单层阴影绘制——直接在主画布绘制（对标 Compose `DropShadowPainter` 的
-/// 软件路径：形状 + BlurMaskFilter 模糊 + 颜色）：
-/// - 形状路径（圆角矩形/圆形/矩形）直接画，paint 带 ImageFilter::blur
-///   （BlurMaskFilter(radius) 近似：sigma = radius×0.5——Skia 的
-///   kBlurRadiusToSigma 在 0.3535~0.577 之间，0.5 视觉最接近）
-/// - 颜色 = 阴影色（含自身 alpha）× params.alpha
-/// - spread>0：Fill + Stroke 两遍（Compose createOuterShadowBitmap 同款）
-/// - 直接画主画布避免了离屏 bitmap 的边界 clamp 伪影（此前实测阴影
-///   右下角被贴图边缘"裁切"+ 周期残影）
+/// 单层阴影绘制——严格按参考实现（D:\winia 阴影绘制）：
+/// 1. 离屏 surface = **内容尺寸**（不扩边）
+/// 2. 白色形状（含 spread 外圈 stroke）画到离屏
+/// 3. draw_paint(SrcIn) 染成阴影色（透明区域保持透明）
+/// 4. 主画布 draw_image + ImageFilter::blur（**blur 在绘制时应用**——
+///    不存在离屏边缘 clamp/裁切）+ CropRect 限定模糊输入范围
+///    （内容 rect ± pad——blur 可正确溢出 image 边界）
+/// 5. 偏移应用在 draw_image 位置（参考实现：y + shadow_offset）
 fn draw_shadow_layer(
     canvas: &Canvas,
     rect: Rect,
     shape: &crate::modifier::Shape,
     params: &crate::modifier::ShadowParams,
 ) {
-    use skia_safe::{Color4f, Paint, PaintStyle};
+    use skia_safe::{BlendMode, Color4f, Paint, PaintStyle, surfaces};
 
-    if params.radius <= 0.0 && params.spread <= 0.0 {
+    let w = rect.width();
+    let h = rect.height();
+    if w <= 0.0 || h <= 0.0 || (params.radius <= 0.0 && params.spread <= 0.0) {
         return;
     }
-    let sigma = params.radius * 0.5;
-    let local = Rect::new(0.0, 0.0, rect.width(), rect.height());
-    // 阴影色（含自身 alpha）再乘 params.alpha——与 Compose drawImage(alpha)
-    // 的语义一致（alpha 与颜色分开传）
+    let sigma = params.radius * 0.57735; // Skia ConvertRadiusToSigma：BlurMaskFilter(radius) → sigma = radius/√3
+    // blur 输入范围扩边（CropRect 边界 = 内容 ± pad）——参考实现 e×6 同款
+    let pad = params.radius * 2.0 + params.spread * 2.0;
+
+    // 1. 离屏（内容尺寸）
+    let Some(mut surface) = surfaces::raster_n32_premul((
+        w.ceil().max(1.0) as i32,
+        h.ceil().max(1.0) as i32,
+    )) else {
+        return;
+    };
+    let sc = surface.canvas();
+    sc.clear(skia_safe::Color::TRANSPARENT);
+    let local = Rect::new(0.0, 0.0, w, h);
+    // 2. 白色形状
+    let mut mask = Paint::default();
+    mask.set_color(skia_safe::Color::WHITE);
+    mask.set_anti_alias(true);
+    match shape {
+        crate::modifier::Shape::Rectangle => { sc.draw_rect(local, &mask); }
+        crate::modifier::Shape::RoundedRect { corner_radius } => {
+            sc.draw_rrect(RRect::new_rect_xy(local, *corner_radius, *corner_radius), &mask);
+        }
+        crate::modifier::Shape::Circle => {
+            sc.draw_circle((local.center_x(), local.center_y()), local.width().min(local.height()) / 2.0, &mask);
+        }
+    }
+    // spread：外圈 stroke（Fill + Stroke 两遍——Compose createOuterShadowBitmap 同款）
+    if params.spread > 0.0 {
+        let mut stroke = Paint::default();
+        stroke.set_color(skia_safe::Color::WHITE);
+        stroke.set_anti_alias(true);
+        stroke.set_style(PaintStyle::Stroke);
+        stroke.set_stroke_width(params.spread * 2.0);
+        match shape {
+            crate::modifier::Shape::Rectangle => { sc.draw_rect(local, &stroke); }
+            crate::modifier::Shape::RoundedRect { corner_radius } => {
+                sc.draw_rrect(RRect::new_rect_xy(local, *corner_radius, *corner_radius), &stroke);
+            }
+            crate::modifier::Shape::Circle => {
+                sc.draw_circle((local.center_x(), local.center_y()), local.width().min(local.height()) / 2.0, &stroke);
+            }
+        }
+    }
+    // 3. SrcIn 染色（阴影色 × 形状 alpha——透明区保持透明）
     let a = params.color.a as f32 / 255.0 * params.alpha.clamp(0.0, 1.0);
-    let color4f = Color4f::new(
+    let mut tint = Paint::default();
+    tint.set_color4f(Color4f::new(
         params.color.r as f32 / 255.0,
         params.color.g as f32 / 255.0,
         params.color.b as f32 / 255.0,
         a,
-    );
+    ), None);
+    tint.set_blend_mode(BlendMode::SrcIn);
+    sc.draw_paint(&tint);
+    let image = surface.image_snapshot();
 
-    canvas.save();
-    canvas.translate((rect.x() + params.offset_x, rect.y() + params.offset_y));
-    let mut paint = Paint::default();
-    paint.set_color4f(color4f, None);
-    paint.set_anti_alias(true);
+    // 4. 主画布：draw_image（绝对位置，参考实现同款）+ blur（绘制时应用）
+    //    + CropRect 限定模糊输入范围（绝对坐标——与 draw 同一空间）
+    let mut blur_paint = Paint::default();
     if sigma > 0.0 {
-        paint.set_image_filter(image_filters::blur(
+        let crop = skia_safe::image_filters::CropRect::from(Rect::from_xywh(
+            rect.x() + params.offset_x - pad,
+            rect.y() + params.offset_y - pad,
+            w + pad * 2.0,
+            h + pad * 2.0,
+        ));
+        blur_paint.set_image_filter(image_filters::blur(
             (sigma, sigma),
             skia_safe::TileMode::Clamp,
             None,
-            None,
+            crop,
         ));
     }
-    match shape {
-        crate::modifier::Shape::Rectangle => { canvas.draw_rect(local, &paint); }
-        crate::modifier::Shape::RoundedRect { corner_radius } => {
-            canvas.draw_rrect(RRect::new_rect_xy(local, *corner_radius, *corner_radius), &paint);
-        }
-        crate::modifier::Shape::Circle => {
-            canvas.draw_circle((local.center_x(), local.center_y()), local.width().min(local.height()) / 2.0, &paint);
-        }
-    }
-    // spread：外圈 stroke（Compose createOuterShadowBitmap：Fill + Stroke 两遍，
-    // strokeWidth = spread×2）
-    if params.spread > 0.0 {
-        let mut stroke = Paint::default();
-        stroke.set_color4f(color4f, None);
-        stroke.set_anti_alias(true);
-        stroke.set_style(PaintStyle::Stroke);
-        stroke.set_stroke_width(params.spread * 2.0);
-        if sigma > 0.0 {
-            stroke.set_image_filter(image_filters::blur(
-                (sigma, sigma),
-                skia_safe::TileMode::Clamp,
-                None,
-                None,
-            ));
-        }
-        match shape {
-            crate::modifier::Shape::Rectangle => { canvas.draw_rect(local, &stroke); }
-            crate::modifier::Shape::RoundedRect { corner_radius } => {
-                canvas.draw_rrect(RRect::new_rect_xy(local, *corner_radius, *corner_radius), &stroke);
-            }
-            crate::modifier::Shape::Circle => {
-                canvas.draw_circle((local.center_x(), local.center_y()), local.width().min(local.height()) / 2.0, &stroke);
-            }
-        }
-    }
-    canvas.restore();
+    canvas.draw_image(
+        &image,
+        (rect.x() + params.offset_x, rect.y() + params.offset_y),
+        Some(&blur_paint),
+    );
 }
 
 /// 渲染 Background / Border / 提取 TextContent

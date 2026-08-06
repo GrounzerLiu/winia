@@ -351,16 +351,21 @@ impl TextField {
         // ⚠ 非空时不能返回 0（0 是合法固定尺寸 → tighten_height(0) → 节点高度 0
         // → 输入后整个 TextField 消失）。按显式换行数 × 行高近似——折行
         // （无 \n 的长文本自动换行）高度不精确，会裁剪——精确需容器 policy。
+        // ⚠ 必须加 padding：measure_node 把 padding 从约束中扣除（内尺寸），
+        // 动态高度返回的是外尺寸——不加 pad 时内高 = 外高 - pad，3 行文本
+        // （~50.4）超出内高（42.8）→ 末行溢出与下一元素重叠（实测 bug）
         let modifier = if self.min_lines > 1 {
             let v = value.clone();
             let line_h = font_size * 1.4;
-            let min_h = self.min_lines as f32 * line_h;
+            let (pt, pb) = modifier.get_padding_vertical();
+            let pad_y = pt + pb;
+            let min_h = self.min_lines as f32 * line_h + pad_y;
             modifier.height(move || {
                 let text = v.get().text;
                 if text.is_empty() {
                     min_h
                 } else {
-                    (text.matches('\n').count() as f32 + 1.0) * line_h
+                    (text.matches('\n').count() as f32 + 1.0) * line_h + pad_y
                 }
             })
         } else {
