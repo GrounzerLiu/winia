@@ -237,14 +237,18 @@ static FRAME_CLOCK: LazyLock<(broadcast::Sender<u64>, broadcast::Receiver<u64>)>
     (tx, rx)
 });
 
+static FRAME_EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// 单调时钟纳秒（Instant 基准——墙钟 SystemTime 可能回拨，导致 dt 为负/巨大）
+fn monotonic_nanos() -> u64 {
+    let epoch = *FRAME_EPOCH.get_or_init(std::time::Instant::now);
+    epoch.elapsed().as_nanos() as u64
+}
+
 /// 帧循环每帧调用（app.rs RedrawRequested 内注入）——向所有等待者广播帧时间戳。
 /// 无副作用失败：无订阅者时 send 返回 Err，忽略（帧时钟只是辅助驱动）。
 pub fn frame_tick() {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
-    let _ = FRAME_CLOCK.0.send(now);
+    let _ = FRAME_CLOCK.0.send(monotonic_nanos());
 }
 
 /// 等待下一帧并返回帧时间戳（纳秒，UNIX epoch 基准）——

@@ -57,8 +57,10 @@ impl MeasurePolicy for ContentSizePolicy {
         // 容器高度跟随内容切换动画；peek 不注册 → 高度卡首帧值不动）
         let p = self.progress.get();
         let child_size = (child_size.width, child_size.height);
-        // 记录上帧内容尺寸（切换瞬间锁定 prev_size 用）
-        self.last_size.set(Some(child_size));
+        // 记录上帧内容尺寸（切换瞬间锁定 prev_size 用）——set_silent：
+        // 值只被切换瞬间 peek 读，无订阅者——每帧 notify 只会白白触发
+        // 调用方重组合。
+        self.last_size.set_silent(Some(child_size));
         let (w, h) = match self.prev_size.peek() {
             Some((pw, ph)) => (
                 pw + (child_size.0 - pw) * p,
@@ -124,14 +126,23 @@ impl<T: Clone + PartialEq + 'static> AnimatedContent<T> {
         if cur != target && progress.peek() < 0.001 {
             prev_size.set(last_size.peek()); // 旧内容尺寸（上帧测量）
             current.set(target.clone());
+            // size_progress 同步归零（起点准确）——否则淡出阶段共用 goal 后
+            // size 未到 0 就切目标 → lerp 起点非 0 → 切换帧尺寸跳变
+            size_progress.set_silent(0.0);
         }
         // 动画目标用**切换后**的 current（切换帧 cur 是 set 前的旧值——用旧值
         // 算 goal 会得 0 → 淡入永不启动 → progress 卡 0 卡片透明）
         let shown_now = current.peek().clone();
         let goal = if shown_now == target { 1.0 } else { 0.0 };
         // 淡入完成 → 重置 prev_size（下次切换重新锁定；残留会让下一次淡出
-        // 阶段错误地 lerp（旧尺寸收缩）而非保持当前内容尺寸）
-        if goal >= 1.0 && progress.peek() >= 0.999 && prev_size.peek().is_some() {
+        // 阶段错误地 lerp（旧尺寸收缩）而非保持当前内容尺寸）——
+        // 必须 size 也完成才重置：fade 先到 1 而 size（Spring）还在动画时
+        // 重置 → 尺寸动画截断跳变。
+        if goal >= 1.0
+            && progress.peek() >= 0.999
+            && size_progress.peek() >= 0.999
+            && prev_size.peek().is_some()
+        {
             prev_size.set(None);
         }
         push_animatable(progress.clone(), goal, self.spec.clone());
