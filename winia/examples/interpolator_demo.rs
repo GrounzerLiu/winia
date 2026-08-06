@@ -91,9 +91,12 @@ fn interpolator_demo(ctx: &mut ComposeCtx) {
                 .build(ctx, |ctx| {
                     let list = all_interpolators();
                     for (name, interp) in &list {
-                        // 每行动画值：0→1（播放） / 1→0（复位）——各自插值器 1200ms
+                        // 每行动画值：240（播放）/ 0（复位）——各自插值器 1200ms；
+                        // 值直接是像素宽——.size(v.clone(), ...) 动态尺寸
+                        // （measure 时 get() 注册 layout_dep → 每帧重测；
+                        //   若用静态 .width(v.get()*240) 则节点不 dirty → 折叠 0 尺寸）
                         let v = ctx.animate_float_as_state(
-                            if is_playing { 1.0 } else { 0.0 },
+                            if is_playing { 240.0 } else { 0.0 },
                             AnimationSpec::Tween(TweenSpec::new(
                                 std::time::Duration::from_millis(1200),
                                 interp.clone(),
@@ -111,11 +114,10 @@ fn interpolator_demo(ctx: &mut ComposeCtx) {
                                             .color(Color::from_argb(200, 120, 120, 120))
                                             .build(ctx);
                                     });
-                                // 进度条：宽 = 动画值 × 240（曲线形态直观可见）
+                                // 进度条：宽 = 动画值（0→240）——动态尺寸曲线形态直观可见
                                 Column::new()
                                     .modifier(Modifier::new()
-                                        .width(v.get() * 240.0)
-                                        .height(14.0)
+                                        .size(v.clone(), 14.0)
                                         .background(
                                             Color::from_argb(255, 63, 81, 181),
                                             Shape::rounded(3.0),

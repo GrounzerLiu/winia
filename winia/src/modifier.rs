@@ -436,20 +436,20 @@ impl Modifier {
         })
     }
 
-    /// 仅设置宽度
-    pub fn width(self, w: impl Into<Dimension>) -> Self {
+    /// 仅设置宽度（支持动态：`State<f32>`/`DerivedValue`/闭包——measure 时读）
+    pub fn width(self, w: impl Into<SizeValue>) -> Self {
         // 使用 Auto 占位高度，表示不约束
         self.push(ModifierElement::Size {
-            width: SizeValue::Static(w.into()),
+            width: w.into(),
             height: SizeValue::Static(Dimension::Auto),
         })
     }
 
-    /// 仅设置高度
-    pub fn height(self, h: impl Into<Dimension>) -> Self {
+    /// 仅设置高度（支持动态：`State<f32>`/`DerivedValue`/闭包——measure 时读）
+    pub fn height(self, h: impl Into<SizeValue>) -> Self {
         self.push(ModifierElement::Size {
             width: SizeValue::Static(Dimension::Auto),
-            height: SizeValue::Static(h.into()),
+            height: h.into(),
         })
     }
 
