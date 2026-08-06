@@ -64,7 +64,9 @@ fn draw_shadow_layer(
     };
     let sc = surface.canvas();
     sc.clear(skia_safe::Color::TRANSPARENT);
+    // ⚠ 离屏画**局部坐标**形状（0,0 起）——画主画布绝对 rect 会画出离屏外
     sc.translate((params.radius + params.spread, params.radius + params.spread));
+    let local = Rect::new(0.0, 0.0, rect.width(), rect.height());
     // mask：白色形状（含模糊）
     let mut mask = Paint::default();
     mask.set_color(skia_safe::Color::WHITE);
@@ -78,12 +80,12 @@ fn draw_shadow_layer(
         ));
     }
     match shape {
-        crate::modifier::Shape::Rectangle => { sc.draw_rect(rect, &mask); }
+        crate::modifier::Shape::Rectangle => { sc.draw_rect(local, &mask); }
         crate::modifier::Shape::RoundedRect { corner_radius } => {
-            sc.draw_rrect(RRect::new_rect_xy(rect, *corner_radius, *corner_radius), &mask);
+            sc.draw_rrect(RRect::new_rect_xy(local, *corner_radius, *corner_radius), &mask);
         }
         crate::modifier::Shape::Circle => {
-            sc.draw_circle((rect.center_x(), rect.center_y()), rect.width().min(rect.height()) / 2.0, &mask);
+            sc.draw_circle((local.center_x(), local.center_y()), local.width().min(local.height()) / 2.0, &mask);
         }
     }
     // spread：外圈 stroke（Compose：drawPath stroke + blur——阴影向外扩展）
@@ -102,12 +104,12 @@ fn draw_shadow_layer(
             ));
         }
         match shape {
-            crate::modifier::Shape::Rectangle => { sc.draw_rect(rect, &stroke); }
+            crate::modifier::Shape::Rectangle => { sc.draw_rect(local, &stroke); }
             crate::modifier::Shape::RoundedRect { corner_radius } => {
-                sc.draw_rrect(RRect::new_rect_xy(rect, *corner_radius, *corner_radius), &stroke);
+                sc.draw_rrect(RRect::new_rect_xy(local, *corner_radius, *corner_radius), &stroke);
             }
             crate::modifier::Shape::Circle => {
-                sc.draw_circle((rect.center_x(), rect.center_y()), rect.width().min(rect.height()) / 2.0, &stroke);
+                sc.draw_circle((local.center_x(), local.center_y()), local.width().min(local.height()) / 2.0, &stroke);
             }
         }
     }
@@ -123,10 +125,15 @@ fn draw_shadow_layer(
     tint.set_blend_mode(BlendMode::SrcIn);
     sc.draw_paint(&tint);
 
-    // 主画布：offset 平移到目标位置
+    // 主画布：image 的 (0,0) 是扩边起点——形状在 (radius+spread) 处——
+    // 平移需让形状左上落在 (rect.xy + offset)（Compose onDrawShadow 的
+    // offset = -(radius+spread) 同款）
     let image = surface.image_snapshot();
     canvas.save();
-    canvas.translate((rect.x() + params.offset_x, rect.y() + params.offset_y));
+    canvas.translate((
+        rect.x() + params.offset_x - (params.radius + params.spread),
+        rect.y() + params.offset_y - (params.radius + params.spread),
+    ));
     canvas.draw_image(&image, (0, 0), None);
     canvas.restore();
 }
