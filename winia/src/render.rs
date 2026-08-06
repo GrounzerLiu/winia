@@ -38,103 +38,94 @@ struct TextParams<'a> {
     line_height: Option<f32>,
 }
 
-/// 单层阴影绘制（对标 Compose `DropShadowPainter` 流程）：
-/// 1. 扩边离屏画布（outset = radius×2 + spread×2——模糊不被画布边界裁剪）
-/// 2. 形状路径画进 mask（带 BlurFilter(radius)；spread>0 时再画外圈 stroke，
-///    strokeWidth = spread×2——Compose createOuterShadowBitmap 同款）
-/// 3. 颜色 SrcIn 着色（mask 白色区域填充 color×alpha——Compose drawImage +
-///    composite SrcIn 等价）
-/// 4. 主画布 translate(offset) 后绘出
+/// 单层阴影绘制——严格对齐 Compose `DropShadowPainter`：
+/// 1. Alpha8 离屏画布（扩边 = radius×2 + spread×2——Compose outset）
+/// 2. 画**黑色**形状（BlurMaskFilter(radius) 近似：sigma = radius×0.3535，
+///    Skia kBlurRadiusToSigma=1/√8；spread>0 时 Fill + Stroke 两遍）
+///    ——Alpha8 画布只写 alpha（黑形状 → alpha 形状）
+/// 3. drawImage 带 paint：colorFilter = Blend(color, SrcIn)（Compose
+///    ColorFilter.tint 等价——保留 alpha 形状染成 color）+ alpha（整体透明度）
+/// 4. 平移 offset（Compose onDrawShadow：offset = -(radius+spread)）
+/// 单层阴影绘制——直接在主画布绘制（对标 Compose `DropShadowPainter` 的
+/// 软件路径：形状 + BlurMaskFilter 模糊 + 颜色）：
+/// - 形状路径（圆角矩形/圆形/矩形）直接画，paint 带 ImageFilter::blur
+///   （BlurMaskFilter(radius) 近似：sigma = radius×0.5——Skia 的
+///   kBlurRadiusToSigma 在 0.3535~0.577 之间，0.5 视觉最接近）
+/// - 颜色 = 阴影色（含自身 alpha）× params.alpha
+/// - spread>0：Fill + Stroke 两遍（Compose createOuterShadowBitmap 同款）
+/// - 直接画主画布避免了离屏 bitmap 的边界 clamp 伪影（此前实测阴影
+///   右下角被贴图边缘"裁切"+ 周期残影）
 fn draw_shadow_layer(
     canvas: &Canvas,
     rect: Rect,
     shape: &crate::modifier::Shape,
     params: &crate::modifier::ShadowParams,
 ) {
-    use skia_safe::{BlendMode, Paint, PaintStyle, surfaces};
+    use skia_safe::{Color4f, Paint, PaintStyle};
 
     if params.radius <= 0.0 && params.spread <= 0.0 {
         return;
     }
-    let outset = params.radius * 2.0 + params.spread * 2.0;
-    let bw = (rect.width() + outset).ceil().max(1.0) as i32;
-    let bh = (rect.height() + outset).ceil().max(1.0) as i32;
-    let Some(mut surface) = surfaces::raster_n32_premul((bw, bh)) else {
-        return;
-    };
-    let sc = surface.canvas();
-    sc.clear(skia_safe::Color::TRANSPARENT);
-    // ⚠ 离屏画**局部坐标**形状（0,0 起）——画主画布绝对 rect 会画出离屏外
-    sc.translate((params.radius + params.spread, params.radius + params.spread));
+    let sigma = params.radius * 0.5;
     let local = Rect::new(0.0, 0.0, rect.width(), rect.height());
-    // mask：白色形状（含模糊）
-    let mut mask = Paint::default();
-    mask.set_color(skia_safe::Color::WHITE);
-    mask.set_anti_alias(true);
-    if params.radius > 0.0 {
-        mask.set_image_filter(image_filters::blur(
-            (params.radius, params.radius),
+    // 阴影色（含自身 alpha）再乘 params.alpha——与 Compose drawImage(alpha)
+    // 的语义一致（alpha 与颜色分开传）
+    let a = params.color.a as f32 / 255.0 * params.alpha.clamp(0.0, 1.0);
+    let color4f = Color4f::new(
+        params.color.r as f32 / 255.0,
+        params.color.g as f32 / 255.0,
+        params.color.b as f32 / 255.0,
+        a,
+    );
+
+    canvas.save();
+    canvas.translate((rect.x() + params.offset_x, rect.y() + params.offset_y));
+    let mut paint = Paint::default();
+    paint.set_color4f(color4f, None);
+    paint.set_anti_alias(true);
+    if sigma > 0.0 {
+        paint.set_image_filter(image_filters::blur(
+            (sigma, sigma),
             skia_safe::TileMode::Clamp,
             None,
             None,
         ));
     }
     match shape {
-        crate::modifier::Shape::Rectangle => { sc.draw_rect(local, &mask); }
+        crate::modifier::Shape::Rectangle => { canvas.draw_rect(local, &paint); }
         crate::modifier::Shape::RoundedRect { corner_radius } => {
-            sc.draw_rrect(RRect::new_rect_xy(local, *corner_radius, *corner_radius), &mask);
+            canvas.draw_rrect(RRect::new_rect_xy(local, *corner_radius, *corner_radius), &paint);
         }
         crate::modifier::Shape::Circle => {
-            sc.draw_circle((local.center_x(), local.center_y()), local.width().min(local.height()) / 2.0, &mask);
+            canvas.draw_circle((local.center_x(), local.center_y()), local.width().min(local.height()) / 2.0, &paint);
         }
     }
-    // spread：外圈 stroke（Compose：drawPath stroke + blur——阴影向外扩展）
+    // spread：外圈 stroke（Compose createOuterShadowBitmap：Fill + Stroke 两遍，
+    // strokeWidth = spread×2）
     if params.spread > 0.0 {
         let mut stroke = Paint::default();
-        stroke.set_color(skia_safe::Color::WHITE);
+        stroke.set_color4f(color4f, None);
         stroke.set_anti_alias(true);
         stroke.set_style(PaintStyle::Stroke);
         stroke.set_stroke_width(params.spread * 2.0);
-        if params.radius > 0.0 {
+        if sigma > 0.0 {
             stroke.set_image_filter(image_filters::blur(
-                (params.radius, params.radius),
+                (sigma, sigma),
                 skia_safe::TileMode::Clamp,
                 None,
                 None,
             ));
         }
         match shape {
-            crate::modifier::Shape::Rectangle => { sc.draw_rect(local, &stroke); }
+            crate::modifier::Shape::Rectangle => { canvas.draw_rect(local, &stroke); }
             crate::modifier::Shape::RoundedRect { corner_radius } => {
-                sc.draw_rrect(RRect::new_rect_xy(local, *corner_radius, *corner_radius), &stroke);
+                canvas.draw_rrect(RRect::new_rect_xy(local, *corner_radius, *corner_radius), &stroke);
             }
             crate::modifier::Shape::Circle => {
-                sc.draw_circle((local.center_x(), local.center_y()), local.width().min(local.height()) / 2.0, &stroke);
+                canvas.draw_circle((local.center_x(), local.center_y()), local.width().min(local.height()) / 2.0, &stroke);
             }
         }
     }
-    // SrcIn 着色：mask 白色区域填充 color×alpha（透明区域保持透明）
-    let mut tint = Paint::default();
-    tint.set_color4f(
-        Color4f::from(&crate::modifier::Color::from_argb(
-            (params.color.a as f32 * params.alpha.clamp(0.0, 1.0)) as u8,
-            params.color.r, params.color.g, params.color.b,
-        )),
-        None,
-    );
-    tint.set_blend_mode(BlendMode::SrcIn);
-    sc.draw_paint(&tint);
-
-    // 主画布：image 的 (0,0) 是扩边起点——形状在 (radius+spread) 处——
-    // 平移需让形状左上落在 (rect.xy + offset)（Compose onDrawShadow 的
-    // offset = -(radius+spread) 同款）
-    let image = surface.image_snapshot();
-    canvas.save();
-    canvas.translate((
-        rect.x() + params.offset_x - (params.radius + params.spread),
-        rect.y() + params.offset_y - (params.radius + params.spread),
-    ));
-    canvas.draw_image(&image, (0, 0), None);
     canvas.restore();
 }
 
@@ -211,11 +202,21 @@ fn render_pass1(
     let mut clip_shape: Option<crate::modifier::Shape> = None;
     // 阴影（elevation, shape, color）——链序中与 background 同层绘制；
     // clip=true 时并入 clip_shape（内容裁剪，阴影不受裁——Compose 语义）
-    // 阴影层（多元素顺序叠加——Compose 多阴影；elevation 版展开为两层）
-    let mut shadows: Vec<(crate::modifier::ShadowParams, crate::modifier::Shape)> = Vec::new();
+    // 阴影层（预扫描直接绘制——见下方 pre-scan 注释）
     let mut text: Option<(&str, f32, &crate::modifier::Color, usize, crate::ui::TextAlign, crate::ui::TextOverflow, crate::ui::text::FontWeight, crate::ui::text::FontSlant, bool, f32, Option<f32>)> = None;
     let mut scroll_offset_v: Option<f32> = None;
     let mut scroll_offset_h: Option<f32> = None;
+
+    // ⚠ 阴影必须**垫底**（主循环绘制背景之前——无论链序）：Compose shadow
+    // 是 graphicsLayer 独立层（垫底）。此前预扫描代码误放在主循环之后——
+    // 阴影画在背景之上 → 卡片被压暗（绿卡 ×(1-0.43)≈0.6——实测 bug）
+    if !backdrop_pass {
+        for el in node.modifier.elements() {
+            if let ModifierElement::Shadow { params, shape, .. } = el {
+                draw_shadow_layer(canvas, rect, shape, params);
+            }
+        }
+    }
 
     for el in node.modifier.elements() {
         match el {
@@ -229,8 +230,7 @@ fn render_pass1(
             ModifierElement::Clip { shape } if !backdrop_pass => {
                 clip_shape = Some(shape.clone());
             }
-            ModifierElement::Shadow { params, shape, clip } if !backdrop_pass => {
-                shadows.push((*params, shape.clone()));
+            ModifierElement::Shadow { shape, clip, .. } if !backdrop_pass => {
                 if *clip {
                     clip_shape = Some(shape.clone());
                 }
@@ -257,14 +257,6 @@ fn render_pass1(
         let rec = skia_safe::canvas::SaveLayerRec::default().paint(&paint);
         canvas.save_layer(&rec);
     }
-    }
-
-    // 阴影：逐层按 DropShadowPainter 流程绘制（扩边离屏 mask → 模糊 →
-    // SrcIn 着色 → offset 平移）——在背景/内容之前
-    if !backdrop_pass {
-        for (params, shape) in &shadows {
-            draw_shadow_layer(canvas, rect, shape, params);
-        }
     }
 
     // Clip：在绘制内容前设置裁剪区域

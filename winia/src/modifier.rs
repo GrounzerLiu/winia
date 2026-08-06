@@ -561,15 +561,17 @@ impl Modifier {
             return self;
         }
         let strength = (elevation / 12.0).min(1.0);
-        // ambient：无偏移、模糊 = e*0.5、低 alpha
+        // ambient：无偏移、模糊半径 = e（SkShadowUtils：ambient blur = elevation——
+        // 大范围环境光）、alpha 0.18（桌面观感——宽而淡；之前 0.25 偏深）
         let ambient = ShadowParams::new(
-            elevation * 0.5, 0.0, 0.0,
-            color, 0.22 * strength,
+            elevation, 0.0, 0.0,
+            color, 0.18 * strength,
         );
-        // spot：偏移 (0, e*0.5)、模糊 = e*0.25、中 alpha
+        // spot：偏移 (0, e*0.5)、模糊半径 = e*0.25（SkShadowUtils 同款——
+        // 边缘清晰的下阴影）、alpha 0.30
         let spot = ShadowParams::new(
             elevation * 0.25, 0.0, elevation * 0.5,
-            color, 0.45 * strength,
+            color, 0.30 * strength,
         );
         let shape = shape.into();
         self.push(ModifierElement::Shadow { params: ambient, shape: shape.clone(), clip })
@@ -1673,16 +1675,16 @@ mod param_eq_tests {
         assert_eq!(layers.len(), 2, "shadow() 展开 ambient + spot 两层");
         let (r0, _, oy0, a0) = layers[0];
         let (r1, _, oy1, a1) = layers[1];
-        // ambient：无偏移、模糊 e*0.5、低 alpha
+        // ambient：无偏移、模糊半径 = e（SkShadowUtils）、低 alpha
         assert_eq!(oy0, 0.0);
-        assert!((r0 - 4.0).abs() < 1e-6, "ambient 模糊 e*0.5");
+        assert!((r0 - 8.0).abs() < 1e-6, "ambient 模糊半径 = e");
         assert!(a0 < a1, "ambient alpha 低于 spot");
-        // spot：偏移 e*0.5、模糊 e*0.25
+        // spot：偏移 e*0.5、模糊半径 e*0.25（SkShadowUtils）
         assert!((oy1 - 4.0).abs() < 1e-6, "spot 偏移 e*0.5");
-        assert!((r1 - 2.0).abs() < 1e-6, "spot 模糊 e*0.25");
-        // strength = 8/12 → ambient 0.22×0.667、spot 0.45×0.667
-        assert!((a0 - 0.22 * 8.0 / 12.0).abs() < 1e-3);
-        assert!((a1 - 0.45 * 8.0 / 12.0).abs() < 1e-3);
+        assert!((r1 - 2.0).abs() < 1e-6, "spot 模糊半径 e*0.25");
+        // strength = 8/12 → ambient 0.18×0.667、spot 0.30×0.667
+        assert!((a0 - 0.18 * 8.0 / 12.0).abs() < 1e-3);
+        assert!((a1 - 0.30 * 8.0 / 12.0).abs() < 1e-3);
     }
 
     #[test]
