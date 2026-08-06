@@ -207,7 +207,8 @@ fn main() {
     let _guard = rt.enter();
 
     winia::run_app!(|ctx| {
-        WiniaTheme::auto(ctx, |ctx| {
+        // 亮色主题：暗色背景上看不清阴影
+        WiniaTheme::light(ctx, |ctx| {
             Window::new()
                 .size(420.0, 720.0)
                 .title("Component Polish Demo")
