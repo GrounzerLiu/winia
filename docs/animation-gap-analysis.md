@@ -144,7 +144,10 @@
 ### P0 — 常用体验（先做）
 1. **`AnimatedVisibility`**：enter/exit 过渡（fade/slide/expand/shrink + togetherWith 组合）——**布局层动画正路**（layout_deps 测量期读动画值，无 force_remeasure 旁路）；退出动画期间子树保留（exit 完成才移除）
 2. **`Transition` 补全**：`animate_color`/`animate_dp`/`animate_size`/`animate_offset`/`animate_value` + `label`
-3. **`animate_int_as_state` / `animate_value_as_state`**（泛型 AnimatableValue——低成本，机制已有）
+3. **`animate_int_as_state` / `animate_value_as_state`**（泛型 AnimatableValue——低成本，机制已有）✅ 本分支
+   - `animate_int_as_state(ctx, target, spec) -> State<i32>`（对标 Compose animateIntAsState——remember 保存动画 State + 每次调用比较 target，变化即 push_animatable；i32 lerp 四舍五入逐级跳变）
+   - `animate_value_as_state<T: AnimatableValue>(ctx, target, spec) -> State<T>`（泛型——f32/i32/Color 等；向量类型 Spring 自动降级）
+   - 测试：`animate_int_as_state_animates_to_target`（单调递增 + 精确到达）/ `animate_value_as_state_color_reaches_target`；demo：animation_demo §9
 
 ### P1 — 常见需求
 4. **`Crossfade`**（两内容交叉淡入淡出——简单版 AnimatedContent）✅ `7d85252`

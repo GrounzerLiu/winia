@@ -222,6 +222,46 @@ pub fn push_decay(state: State<f32>, initial_velocity: f32, spec: DecaySpec) {
     crate::core::state::wake_loop();
 }
 
+/// `animateIntAsState`（对标 Compose）——target 变化时自动从当前值动画到新值，
+/// 返回的 State 直接用于渲染（组合期 `get()` 或绘制期 `peek()`）。
+///
+/// ```ignore
+/// let animated = animate_int_as_state(ctx, count.get(), TweenSpec::new(300, EaseOutQuad::new()));
+/// Text::new(format!("{}", animated.get()));
+/// ```
+///
+/// 内部：`remember` 保存动画 State + 每次调用比较 target——变化即
+/// `push_animatable`（target 由调用方 `get()` 注册依赖 → 变化触发重跑）。
+pub fn animate_int_as_state(
+    ctx: &mut ComposeCtx,
+    target: i32,
+    spec: impl Into<AnimationSpec>,
+) -> State<i32> {
+    let value: State<i32> = ctx.remember(|| target);
+    if value.peek() != target {
+        push_animatable(value.clone(), target, spec.into());
+    }
+    value
+}
+
+/// `animateValueAsState`（对标 Compose 泛型版）——任意 `AnimatableValue` 的
+/// target 动画（f32/i32/Color；Offset/Size 等向量类型 Spring 自动降级 Tween）。
+///
+/// ```ignore
+/// let animated = animate_value_as_state(ctx, color, TweenSpec::new(300, Linear::new()));
+/// ```
+pub fn animate_value_as_state<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(
+    ctx: &mut ComposeCtx,
+    target: T,
+    spec: impl Into<AnimationSpec>,
+) -> State<T> {
+    let value: State<T> = ctx.remember(|| target.clone());
+    if value.peek() != target {
+        push_animatable(value.clone(), target, spec.into());
+    }
+    value
+}
+
 /// `push_animatable` + 完成回调（对标 Compose animate*AsState 的 finishedListener）：
 /// 动画自然完成/超时强制完成时调用一次 `done`。
 ///
@@ -1386,6 +1426,86 @@ pub(crate) mod tests {
         anim.animate_decay(0.0, DecaySpec::default());
         assert!(!anim.update(), "v0=0 应立即完成");
         assert_eq!(st.peek(), 42.0, "v0=0 值不变");
+    }
+
+    /// animateIntAsState：target 变化自动动画，值单调逼近且最终精确到达
+    #[test]
+    fn animate_int_as_state_animates_to_target() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut composer = Composer::new();
+        let value: std::cell::RefCell<Option<State<i32>>> = std::cell::RefCell::new(None);
+        let mut recompose = |composer: &mut Composer, t: i32| {
+            composer.compose(|ctx| {
+                let v = crate::animation::animate_int_as_state(
+                    ctx,
+                    t,
+                    crate::animation::TweenSpec::new(
+                        std::time::Duration::from_millis(300),
+                        crate::animation::interpolator::Linear::new(),
+                    ),
+                );
+                let _ = v.get(); // 注册依赖（目标变化驱动重跑）
+                *value.borrow_mut() = Some(v.clone());
+            });
+        };
+        recompose(&mut composer, 0);
+        assert_eq!(value.borrow().as_ref().unwrap().peek(), 0, "初始 = target");
+
+        // target 变 100 → 动画启动 → 中途值在 0..100 且递增
+        recompose(&mut composer, 100);
+        let mut prev = 0i32;
+        let mut frames = 0;
+        loop {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            let v = value.borrow().as_ref().unwrap().peek();
+            assert!(v >= prev, "i32 动画必须单调递增（{prev} -> {v}）");
+            prev = v;
+            frames += 1;
+            if v >= 100 || frames > 60 {
+                break;
+            }
+        }
+        assert_eq!(prev, 100, "i32 动画最终精确到达 target（{frames} 帧）");
+    }
+
+    /// animateValueAsState 泛型：Color target 动画到达目标色
+    #[test]
+    fn animate_value_as_state_color_reaches_target() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut composer = Composer::new();
+        let from = crate::modifier::Color::from_argb(255, 0, 0, 0);
+        let to = crate::modifier::Color::from_argb(255, 255, 255, 255);
+        let value: std::cell::RefCell<Option<State<crate::modifier::Color>>> = std::cell::RefCell::new(None);
+        let mut recompose = |composer: &mut Composer, t: crate::modifier::Color| {
+            composer.compose(|ctx| {
+                let v = crate::animation::animate_value_as_state(
+                    ctx,
+                    t,
+                    crate::animation::TweenSpec::new(
+                        std::time::Duration::from_millis(200),
+                        crate::animation::interpolator::Linear::new(),
+                    ),
+                );
+                let _ = v.get();
+                *value.borrow_mut() = Some(v.clone());
+            });
+        };
+        recompose(&mut composer, from.clone());
+        assert_eq!(value.borrow().as_ref().unwrap().peek(), from, "初始 = target");
+
+        recompose(&mut composer, to.clone());
+        let mut frames = 0;
+        loop {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            let v = value.borrow().as_ref().unwrap().peek();
+            frames += 1;
+            if v == to || frames > 60 {
+                break;
+            }
+        }
+        assert_eq!(value.borrow().as_ref().unwrap().peek(), to, "Color 到达 target（{frames} 帧）");
     }
 
     /// P2-9 速度延续（实例级）：Decay 中途 animate_to(Spring)——

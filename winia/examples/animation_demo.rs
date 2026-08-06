@@ -55,6 +55,7 @@ fn animation_demo(ctx: &mut ComposeCtx) {
                     section6(ctx, &clicked);
                     section7(ctx, &clicked);
                     section8(ctx, &clicked);
+                    section9(ctx, &clicked);
                 });
         });
 }
@@ -361,6 +362,58 @@ fn section8(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
         .font_size(12.0)
         .color(Color::from_argb(200, 200, 200, 200))
         .build(ctx);
+}
+
+fn section9(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
+    // 9a. animateIntAsState——target 变化自动动画（对标 Compose animateIntAsState）
+    Text::new("9a. animateIntAsState (整数动画)")
+        .font_size(14.0)
+        .color(Color::from_argb(200, 100, 100, 100))
+        .modifier(Modifier::new().padding_vertical(8.0))
+        .build(ctx);
+    let animated = winia::animation::animate_int_as_state(
+        ctx,
+        if clicked.get() { 100 } else { 0 },
+        TweenSpec::new(std::time::Duration::from_millis(400), winia::animation::interpolator::EaseOutQuad::new()),
+    );
+    Column::new()
+        .modifier(Modifier::new()
+            .width(220.0)
+            .height(40.0)
+            .background(
+                Color::from_argb(255, 0, 150, 136),
+                Shape::rounded(4.0),
+            ))
+        .build(ctx, |ctx| {
+            Text::new(format!("{}", animated.get()))
+                .font_size(16.0)
+                .color(Color::from_argb(255, 255, 255, 255))
+                .build(ctx);
+        });
+
+    // 9b. animateValueAsState（Color）——颜色自动动画（对标 animateValueAsState<Color>）
+    Text::new("9b. animateValueAsState (颜色动画)")
+        .font_size(14.0)
+        .color(Color::from_argb(200, 100, 100, 100))
+        .modifier(Modifier::new().padding_vertical(8.0))
+        .build(ctx);
+    let target_color = if clicked.get() {
+        Color::from_argb(255, 255, 87, 34)
+    } else {
+        Color::from_argb(255, 33, 150, 243)
+    };
+    let animated_color = winia::animation::animate_value_as_state(
+        ctx,
+        target_color,
+        TweenSpec::new(std::time::Duration::from_millis(400), winia::animation::interpolator::EaseOutQuad::new()),
+    );
+    let c = animated_color.get();
+    Column::new()
+        .modifier(Modifier::new()
+            .width(220.0)
+            .height(40.0)
+            .background(c, Shape::rounded(4.0)))
+        .build(ctx, |_| {});
 }
 
 fn main() {
