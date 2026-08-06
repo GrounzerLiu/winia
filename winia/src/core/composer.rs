@@ -1194,7 +1194,14 @@ impl Composer {
     /// - Skip 模式：重放子 slot 结构并创建 stub LayoutNode
     /// - Enter 模式：等同于 end_node()
     fn end_restartable_group(&mut self) {
-        let _was_skip = self.group_skip_stack.pop().unwrap_or(false);
+        let was_skip = self.group_skip_stack.pop().unwrap_or(false);
+        // Enter（content 重跑）：清理未访问子槽——内容结构变化后残留的旧槽
+        // （如 AnimatedContent B(3 文本) → A(2 文本) 的第 3 槽）若保留，下帧
+        // Skip 收集时结构签名（desc children vs 缓存 children）不等 → 物化
+        // 降级 0x0 → 子树塌缩。Skip 槽保留（content 未执行——结构需保留供恢复）。
+        if !was_skip {
+            self.slot_table.current_slot().children.retain(|c| c.visited);
+        }
         // Skip：content 未执行——slot 树保留（上帧 children 结构）——物化时
         // 整棵子树按 key 从 prev_node_by_key 恢复（stub 机制已由物化替代）
         // GROUP_STACK pop 由 end_node 统一处理（与 start_restartable_group 的

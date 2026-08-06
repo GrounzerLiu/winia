@@ -53,8 +53,9 @@ impl MeasurePolicy for ContentSizePolicy {
     ) -> (Size, Vec<Placement>) {
         let child = children[0];
         let (child_size, _) = crate::layout::node::measure_node(nodes, policies, child, constraints.loosen());
-        // 布局期读 progress（注册 layout_dep → 每帧重测）——动画期间尺寸平滑过渡
-        let p = self.progress.peek();
+        // 布局期读 progress（get 注册 layout_dep → 动画期间每帧重测——
+        // 容器高度跟随内容切换动画；peek 不注册 → 高度卡首帧值不动）
+        let p = self.progress.get();
         let child_size = (child_size.width, child_size.height);
         // 记录上帧内容尺寸（切换瞬间锁定 prev_size 用）
         self.last_size.set(Some(child_size));
@@ -124,6 +125,11 @@ impl<T: Clone + PartialEq + 'static> AnimatedContent<T> {
         // 算 goal 会得 0 → 淡入永不启动 → progress 卡 0 卡片透明）
         let shown_now = current.peek().clone();
         let goal = if shown_now == target { 1.0 } else { 0.0 };
+        // 淡入完成 → 重置 prev_size（下次切换重新锁定；残留会让下一次淡出
+        // 阶段错误地 lerp（旧尺寸收缩）而非保持当前内容尺寸）
+        if goal >= 1.0 && progress.peek() >= 0.999 && prev_size.peek().is_some() {
+            prev_size.set(None);
+        }
         push_animatable(progress.clone(), goal, self.spec.clone());
         push_animatable(progress.clone(), goal, self.size_spec.clone());
         // 绘制层：alpha = progress（淡出 1→0 / 淡入 0→1）——渲染期 peek 不注册依赖
@@ -139,13 +145,12 @@ impl<T: Clone + PartialEq + 'static> AnimatedContent<T> {
         match ctx.start_restartable_group(key, modifier, policy) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
-                // 注册容器槽依赖：current 变化 → 容器槽 dirty → 下帧 Enter → 内容重建
+                // 注册容器槽依赖：current 变化 → 容器槽 dirty → Enter → 内容重建
                 let _c = current.get();
-                let shown = current.peek().clone();
-                // ⚠ 必须读 current 最新值而非外层 cur：切换瞬间 set(1) 发生在本帧
-                // 容器槽 start 之前——外层 cur 是 set 前读取的旧值，会导致内容永远
-                // 停留在旧 target（容器槽之后 Skip——current 不再变化）
-                content(ctx, shown);
+                // ⚠ 必须读 current 最新值而非外层 cur：切换瞬间 set 发生在本帧
+                // 容器槽 start 之前——外层 cur 是 set 前读取的旧值，会导致内容
+                // 永远停留在旧 target（容器槽之后 Skip——current 不再变化）
+                content(ctx, current.peek().clone());
             }
         }
         ctx.end_restartable_group();
