@@ -76,6 +76,26 @@ pub(crate) struct PerWindow {
     gesture_tap_ctx: Option<(u64, std::time::Instant, (f32, f32))>,
     /// 手势节点的 slot_key（跨重组稳定——node_id 会变，find_node_by_id 会失败）
     gesture_slot: Option<u64>,
+    /// 顶层弹出层（独立组合单元——渲染在主树之上）
+    overlays: Vec<OverlayWindow>,
+    /// overlay 点击目标（down 命中 overlay 记录——up 执行 click；v1 仅 clickable）
+    overlay_click: Option<(usize, (f32, f32), u64)>,
+}
+
+/// 顶层弹出层实例——独立 Composer 组合单元（State 跨帧保持），
+/// 渲染定位在主树之上（模态遮罩 + 内容）
+struct OverlayWindow {
+    id: u64,
+    composer: crate::core::composer::Composer,
+    anchor_slot: Option<u64>,
+    position: crate::ui::overlay::PopupPosition,
+    offset: (f32, f32),
+    modal: bool,
+    dismiss_on_outside: bool,
+    on_dismiss: Option<Arc<dyn Fn() + Send + Sync>>,
+    content: Box<dyn Fn(&mut ComposeCtx)>,
+    /// 渲染/命中用的屏幕位置（逻辑坐标——每帧布局后更新）
+    screen_pos: (f32, f32),
 }
 
 /// Compose 风格的 click 检测中间状态
@@ -91,7 +111,7 @@ struct PtrDownState {
 
 impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::ui::theme::ThemeColors) -> Self {
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now() }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, overlays: Vec::new(), overlay_click: None, frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now() }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -153,6 +173,10 @@ impl PerWindow {
         }
         self.composer.layout(Constraints::new(0.0, self.width, 0.0, self.height));
 
+        // 顶层弹出层：同步（按 id 匹配保留 State）+ compose + layout + 定位
+        sync_overlays(self);
+        layout_overlays(self);
+
         let bg = self.theme.background;
 
         if let Some(root_idx) = self.composer.layout_root_idx() {
@@ -169,6 +193,8 @@ impl PerWindow {
                     canvas.scale((sf, sf));
                     render::render(nodes, root_idx, canvas);
                     canvas.restore();
+                    // overlay 渲染在主树之上（逻辑坐标——translate 已含 scale）
+                    render_overlays(&self.overlays, canvas, sf, (self.width, self.height));
                     after_draw(nodes, root_idx, surface);
                 });
                 // 截图读回在 flush 之后（skiwin draw 内）——保证真实呈现帧
@@ -355,6 +381,11 @@ impl ApplicationHandler for AppState {
                     // 显式请求重绘：on_click 内的 State set 走 wake_up 链路（异步），
                     // 若无 pending 检查兜底会漏刷新（用户看到 count 不变）
                     if detect_click(pw, scene_pos) {
+                        if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                    }
+                    // overlay 点击执行（down 命中 overlay 时记录——up 触发；
+                    // 主树 detect_click 因 down 短路未记录 pointer_down_state 而空转）
+                    if exec_overlay_click(pw) {
                         if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                     }
                     // 手势 up 判定（tap/double-tap/long-press/drag-end）
@@ -801,6 +832,10 @@ impl AppState {
                     if detect_click(pw, (x, y)) {
                         if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                     }
+                    // overlay 点击执行（与真实路径一致）
+                    if exec_overlay_click(pw) {
+                        if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                    }
                     // 手势 up 判定（与真实路径一致）
                     if gesture_up(pw, (x, y)) {
                         if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
@@ -1078,6 +1113,193 @@ fn gesture_up(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
     fire_gesture_action(nodes, r, slot, action)
 }
 
+// ── 顶层弹出层（Popup/Dialog/DropdownMenu） ──
+
+impl OverlayWindow {
+    fn new(desc: crate::ui::overlay::OverlayDesc) -> Self {
+        Self {
+            id: desc.id,
+            composer: Composer::new(),
+            anchor_slot: desc.anchor_slot,
+            position: desc.position,
+            offset: desc.offset,
+            modal: desc.modal,
+            dismiss_on_outside: desc.dismiss_on_outside,
+            on_dismiss: desc.on_dismiss,
+            content: desc.content,
+            screen_pos: (0.0, 0.0),
+        }
+    }
+
+    fn update(&mut self, desc: crate::ui::overlay::OverlayDesc) {
+        self.anchor_slot = desc.anchor_slot;
+        self.position = desc.position;
+        self.offset = desc.offset;
+        self.modal = desc.modal;
+        self.dismiss_on_outside = desc.dismiss_on_outside;
+        self.on_dismiss = desc.on_dismiss;
+        self.content = desc.content;
+    }
+}
+
+/// 主树 compose 后同步 overlay：按 id 匹配（保留 State）——新增/更新/移除
+fn sync_overlays(pw: &mut PerWindow) {
+    let descs = pw.composer.take_overlays();
+    let mut alive = std::collections::HashSet::new();
+    for desc in descs {
+        alive.insert(desc.id);
+        if let Some(ov) = pw.overlays.iter_mut().find(|o| o.id == desc.id) {
+            ov.update(desc);
+        } else {
+            pw.overlays.push(OverlayWindow::new(desc));
+        }
+    }
+    pw.overlays.retain(|o| alive.contains(&o.id));
+}
+
+/// overlay compose + layout（独立组合单元——约束为窗口尺寸），并计算屏幕定位
+fn layout_overlays(pw: &mut PerWindow) {
+    for ov in &mut pw.overlays {
+        ov.composer.recompose(|ctx| (ov.content)(ctx));
+        ov.composer.layout(crate::layout::Constraints::new(0.0, pw.width, 0.0, pw.height));
+    }
+    // 定位（需主树锚点位置——在 draw 前算）
+    let nodes = pw.composer.arena_nodes();
+    let root = pw.composer.layout_root_idx();
+    let (w, h) = (pw.width, pw.height);
+    for ov in &mut pw.overlays {
+        let size = ov.composer.layout_root()
+            .map(|r| (r.measured_size.width, r.measured_size.height))
+            .unwrap_or((0.0, 0.0));
+        // 锚点位置（主树）
+        let anchor = ov.anchor_slot.and_then(|s| root.and_then(|r| {
+            crate::layout::node::find_node_id_by_slot_key(nodes, r, s)
+        })).and_then(|nid| root.map(|r| {
+            node_abs_position(nodes, r, nid)
+        }));
+        let anchor_size = ov.anchor_slot.and_then(|s| root.and_then(|r| {
+            crate::layout::node::find_node_id_by_slot_key(nodes, r, s)
+        })).and_then(|nid| root.and_then(|r| {
+            crate::layout::node::find_node_by_id(nodes, r, nid).map(|i| nodes[i].measured_size)
+        }));
+        let (ax, ay, aw, ah) = match (anchor, anchor_size) {
+            (Some((x, y)), Some(s)) => (x, y, s.width, s.height),
+            _ => (0.0, 0.0, 0.0, 0.0),
+        };
+        use crate::ui::overlay::PopupPosition as P;
+        let pos = match ov.position {
+            // 窗口对齐（无锚点）
+            P::Center => ((w - size.0) / 2.0, (h - size.1) / 2.0),
+            P::TopLeft => (0.0, 0.0),
+            P::TopCenter => ((w - size.0) / 2.0, 0.0),
+            P::TopRight => (w - size.0, 0.0),
+            P::BottomLeft => (0.0, h - size.1),
+            P::BottomCenter => ((w - size.0) / 2.0, h - size.1),
+            P::BottomRight => (w - size.0, h - size.1),
+        };
+        // 有锚点时：按位置相对锚点（Bottom* = 锚点下方，Top* = 锚点上方）
+        let pos = if ov.anchor_slot.is_some() {
+            match ov.position {
+                P::BottomLeft => (ax, ay + ah),
+                P::BottomCenter => (ax + (aw - size.0) / 2.0, ay + ah),
+                P::BottomRight => (ax + aw - size.0, ay + ah),
+                P::TopLeft => (ax, ay - size.1),
+                P::TopCenter => (ax + (aw - size.0) / 2.0, ay - size.1),
+                P::TopRight => (ax + aw - size.0, ay - size.1),
+                P::Center => ((w - size.0) / 2.0, (h - size.1) / 2.0),
+            }
+        } else { pos };
+        ov.screen_pos = (pos.0 + ov.offset.0, pos.1 + ov.offset.1);
+    }
+}
+
+/// overlay 命中测试——返回 (overlay 索引, 本地坐标)——从最上层（最后一个）往下
+fn hit_overlay(pw: &PerWindow, scene_pos: (f32, f32)) -> Option<(usize, (f32, f32))> {
+    for i in (0..pw.overlays.len()).rev() {
+        let ov = &pw.overlays[i];
+        let local = (scene_pos.0 - ov.screen_pos.0, scene_pos.1 - ov.screen_pos.1);
+        if let Some(r) = ov.composer.layout_root_idx() {
+            let nodes = ov.composer.arena_nodes();
+            if !hit_test(nodes, r, local.0, local.1).is_empty() {
+                return Some((i, local));
+            }
+        }
+    }
+    None
+}
+
+/// overlay 渲染（主树之后——上层；模态先画遮罩）
+fn render_overlays(overlays: &[OverlayWindow], canvas: &skia_safe::Canvas, scale: f32, window: (f32, f32)) {
+    for ov in overlays {
+        // 模态遮罩
+        if ov.modal {
+            let mut mask = skia_safe::Paint::default();
+            mask.set_color(skia_safe::Color::from_argb(110, 0, 0, 0));
+            canvas.draw_rect(
+                skia_safe::Rect::from_xywh(0.0, 0.0, window.0 * scale, window.1 * scale),
+                &mask,
+            );
+        }
+        let Some(r) = ov.composer.layout_root_idx() else { continue; };
+        let nodes = ov.composer.arena_nodes();
+        canvas.save();
+        canvas.translate((ov.screen_pos.0 * scale, ov.screen_pos.1 * scale));
+        render::render(nodes, r, canvas);
+        canvas.restore();
+    }
+}
+
+/// overlay 点击执行（up 时——v1 仅 clickable）
+fn exec_overlay_click(pw: &mut PerWindow) -> bool {
+    let Some((idx, local, _nid)) = pw.overlay_click.take() else { return false; };
+    let Some(ov) = pw.overlays.get(idx) else { return false; };
+    let Some(r) = ov.composer.layout_root_idx() else { return false; };
+    let nodes = ov.composer.arena_nodes();
+    let path = hit_test(nodes, r, local.0, local.1);
+    // 沿路径找 clickable（最内层优先）
+    fire_click_along_path(nodes, &path)
+}
+
+/// 沿命中路径从内到外触发第一个 on_click——返回是否触发。
+/// 主树 click 与 overlay 点击共用（消除重复）
+fn fire_click_along_path(nodes: &[crate::layout::node::LayoutNode], path: &[usize]) -> bool {
+    for &i in path.iter().rev() {
+        if let Some(cb) = nodes[i].modifier.on_click() {
+            (cb)();
+            return true;
+        }
+    }
+    false
+}
+
+/// 指针按下：先测 overlay（最上层）——命中 → 记录点击目标；外部 → dismiss
+fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
+    if pw.overlays.is_empty() {
+        return false;
+    }
+    if let Some((i, local)) = hit_overlay(pw, scene_pos) {
+        // 命中 overlay 内容——记录点击目标（v1：仅 clickable——up 时执行）
+        let ov = &pw.overlays[i];
+        let nid = ov.composer.layout_root_idx().and_then(|r| {
+            let nodes = ov.composer.arena_nodes();
+            hit_test(nodes, r, local.0, local.1).last().map(|&idx| nodes[idx].id)
+        });
+        pw.overlay_click = Some((i, local, nid.unwrap_or(0)));
+        return true; // 事件消费——不进主树
+    }
+    // 外部点击：模态或可关闭 → dismiss（消费事件）
+    for i in (0..pw.overlays.len()).rev() {
+        let ov = &pw.overlays[i];
+        if ov.modal || ov.dismiss_on_outside {
+            if let Some(cb) = &ov.on_dismiss {
+                (cb)();
+            }
+            return true;
+        }
+    }
+    false
+}
+
 /// Compose 风格 click 检测：Down 记录（pointer_down_state）、Up 释放时触发 on_click。
 /// 真实 PointerButton Up 与 debug 模拟（d/u）共用——消除平行实现并可模拟验证。
 fn detect_click(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
@@ -1103,12 +1325,7 @@ fn detect_click(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
                 .unwrap_or_else(|| path.iter().any(|&i| nodes[i].id == down.node_id));
             if hit {
                 // 只在相同节点触发 click（从内到外找第一个 on_click）
-                for &i in path.iter().rev() {
-                    if let Some(on_click) = nodes[i].modifier.on_click() {
-                        on_click();
-                        return true;
-                    }
-                }
+                return fire_click_along_path(nodes, &path);
             }
         }
     }
@@ -1127,6 +1344,11 @@ fn handle_pointer_down(
     modifiers: &winit::keyboard::ModifiersState,
     with_focus: bool,
 ) -> bool {
+    // 顶层弹出层优先：命中 overlay → 记录点击目标（事件不进主树）；
+    // 外部点击 → dismiss（模态/可关闭）
+    if overlay_down(pw, scene_pos) {
+        return true;
+    }
     let nodes = pw.composer.arena_nodes();
     let Some(r) = pw.composer.layout_root_idx() else { return false; };
     let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);

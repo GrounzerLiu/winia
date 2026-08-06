@@ -15,11 +15,13 @@ pub mod animated_visibility;
 pub mod animated_size;
 pub mod animated_content;
 pub mod crossfade;
+pub mod overlay;
 
 pub use animated_visibility::{AnimatedVisibility, VisibilityTransition, SlideDirection};
 pub use animated_size::AnimatedSize;
 pub use animated_content::AnimatedContent;
 pub use crossfade::Crossfade;
+pub use overlay::{Popup, Dialog, DropdownMenu, DropdownMenuItem, PopupPosition};
 
 pub use text::Text;
 pub use text::TextAlign;

@@ -128,6 +128,17 @@ impl<'a> ComposeCtx<'a> {
         })
     }
 
+    /// 注册顶层弹出层（Popup/Dialog/DropdownMenu 内部调用）——组合期收集，
+    /// compose 后由 app.rs 取走并独立物化/渲染
+    pub fn open_overlay(&mut self, desc: crate::ui::overlay::OverlayDesc) {
+        self.composer.overlays.push(desc);
+    }
+
+    /// 当前组合节点的 slot_key（DropdownMenu 锚点用）
+    pub fn composer_slot_key(&self) -> u64 {
+        self.composer.slot_table.active_slot_key()
+    }
+
     /// 使用固定 key 记住一个状态（不受 remember_counter 影响，适合跨分支持久化的值）
     pub fn remember_at_key<T: Clone + 'static>(&mut self, key: u64, init: impl FnOnce() -> T) -> State<T> {
         let pq = Arc::downgrade(&self.composer.pending_states);
@@ -658,6 +669,11 @@ impl SlotTable {
         slot
     }
 
+    /// 当前活跃 slot 的 key（overlay 锚点用）
+    fn active_slot_key(&self) -> u64 {
+        self.active_slot_key
+    }
+
     /// 设置当前 slot 的参数（`ComposeCtx::changed` 暂存的参数，start_node 时写入）
     fn set_current_params(&mut self, params: Vec<Box<dyn ParamValue>>) {
         self.current_slot().params = params;
@@ -932,6 +948,9 @@ pub struct Composer {
     node_stack: Vec<usize>,
     /// 记录每个 start_restartable_group 的 skip 状态（用于 end_restartable_group 判断）
     group_skip_stack: Vec<bool>,
+    /// 顶层弹出层（Popup/Dialog/DropdownMenu——组合期注册，compose 后取走；
+    /// 内容为独立组合单元——独立 Composer 物化/布局/渲染，不参与主树布局）
+    pub(crate) overlays: Vec<crate::ui::overlay::OverlayDesc>,
     /// state_id -> slot_keys 依赖映射
     slot_deps: HashMap<u32, HashSet<u64>>,
     /// 布局依赖表（state_id → slot_key；上帧布局注册的持久表，供下帧 pending 消费）
@@ -977,10 +996,11 @@ impl Composer {
             scope_source_stack: Vec::new(),
             key_override_stack: Vec::new(),
             pending_recomposition: VecDeque::new(),
-            needs_recomposition: false,
+            needs_recomposition: true,
             arena: crate::layout::node::NodeArena::new(),
             node_stack: Vec::new(),
             group_skip_stack: Vec::new(),
+            overlays: Vec::new(),
             slot_deps: HashMap::new(),
             layout_deps: HashMap::new(),
             layout_dirty_keys: HashSet::new(),
@@ -1423,6 +1443,16 @@ impl Composer {
     /// 是否有待处理的 state 变化
     pub fn has_pending_states(&self) -> bool {
         !self.pending_states.lock().is_empty()
+    }
+
+    /// 取走本帧注册的顶层弹出层（compose 后调用——清空收集）
+    pub fn take_overlays(&mut self) -> Vec<crate::ui::overlay::OverlayDesc> {
+        std::mem::take(&mut self.overlays)
+    }
+
+    /// 当前组合节点的 slot_key（overlay 锚点用）
+    pub fn active_slot_key(&self) -> u64 {
+        self.slot_table.active_slot_key()
     }
 
     /// 重组次数（vsync 研究——单次渲染内的 compose 次数）
