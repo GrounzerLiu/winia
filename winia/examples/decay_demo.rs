@@ -32,8 +32,9 @@ fn decay_demo(ctx: &mut ComposeCtx) {
                         .on_click({
                             let xs = x.clone();
                             move || {
-                                // 从当前位置以 1300px/s 向右 fling（极限 ≈ 310px，停在 360px 轨道内）
-                                push_decay(xs.clone(), 1300.0, exponential_decay(4.2));
+                                // 从当前位置以 1344px/s 向右 fling（极限 = 1344/4.2 = 320px，
+                                // 方块右缘 320+40 = 360 精确贴轨道尽头）
+                                push_decay(xs.clone(), 1344.0, exponential_decay(4.2));
                             }
                         })
                         .build(ctx, |ctx| {
