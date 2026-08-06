@@ -16,70 +16,66 @@
 ### 组件已有
 Text / TextField / Button / Column / Row / Stack / RichText / SelectionContainer / AnimatedVisibility / AnimatedContent / AnimatedSize / Crossfade / Window
 
-## 二、Modifier 差距（按优先级）
+## 二、Modifier 差距（按优先级）——**已对照 Compose 1.11.4 源码核实**
 
 ### P0 — 常用便捷（低成本，纯包装/新元素）
-1. **`alpha(a)` / `scale(sx, sy)` / `rotate(deg)` / `offset(x, y)`**——graphics_layer 的直接包装（对标 Compose Modifier.alpha/scale/rotate/offset）
-   - ⚠ offset 与现有布局 `offset()` 冲突（现有是布局期位移）——Compose 的 `offset()` 是绘制期变换——**新增 `graphics_offset`？**——不——**直接包装 graphics_layer 的翻译**（布局 offset 保留）
-2. **`shadow(elevation, shape, color)`**——对标 Compose Modifier.shadow（GraphicsLayer 阴影 + 裁剪——skia 实现：画模糊矩形底 + 内容）
-3. **`aspect_ratio(ratio)`**——宽高比约束（布局期：按 cross 轴推导 main 轴）
-4. **`required_size(w, h)`**——强制尺寸（无视 constraints 约束，clip 溢出）
-5. **`test_tag(tag)`**——测试标记（UI 测试定位——debug 树暴露 tag 字段）
-6. **`semantics`/`content_description`**——无障碍（基础版：标记 + 树暴露）
+1. **`alpha(a)` / `rotate(deg)` / `scale(sx, sy)`**——graphics_layer 直接包装，**对标源码语义**：
+   - `alpha(a)`：`a != 1.0f` 时 `graphicsLayer(alpha = a, clip = true)`（**alpha<1 隐式裁剪到 bounds**）；范围 0..1
+   - `rotate(degrees)`：`degrees != 0` 时 `graphicsLayer(rotationZ = degrees)`（**绕中心**）
+   - `scale(sx, sy)` / `scale(s)`：非 1 时 `graphicsLayer(scaleX, scaleY)`（**绕中心**）
+   - ⚠ 以上变换**默认绕中心**（transformOrigin=Center）——当前项目 graphics_layer 绕左上——**需要先补 transformOrigin**（P1-7）语义才一致
+2. **`shadow(elevation, shape = RectangleShape, clip = elevation > 0.dp, ambientColor = Black, spotColor = Black)`**——`elevation > 0 || clip` 才应用（否则返回 this）——对标 DropShadowPainter
+3. **`aspect_ratio(ratio, match_height_constraints_first = false)`**——ratio 必须 > 0（前置校验）——按 cross 轴推导 main 轴
+4. **`required_size(size)`**——SizeElement(min=max=size, **enforceIncoming=false**——incoming constraints 不强制，子内容可溢出）；另有 requiredWidth/requiredHeight
+5. **`test_tag(tag)`**——对标 testTag（Compose 基于 semantics——本项目无 semantics 系统：实现为独立 modifier 元素 + 调试树暴露）
+6. **`offset(x, y)`**——**布局期**（已核实：Compose Modifier.offset 是 LayoutModifierNode 布局期位移——项目现有实现一致，无需改）；absoluteOffset（rtlAware=false）待 RTL 支持时再补
 
 ### P1 — GraphicsLayer 补属性（渲染层能力）
-7. **pivot / transformOrigin**（变换原点——默认左上 vs Compose 中心）
-8. **shadow_elevation / ambient / spot 颜色**（与 Modifier.shadow 合并实现）
-9. **clip + shape**（graphics_layer 内裁剪）
-10. **rotation_x/y / camera_distance**（3D 透视——skia 支持有限，可降级）
+7. **transformOrigin（pivotFractionX/Y，默认 Center (0.5, 0.5)）**——**关键**：Compose 变换默认绕中心，项目当前绕左上——语义偏差，P0 便捷包装依赖它
+8. **shadowElevation / ambientShadowColor / spotShadowColor**（与 Modifier.shadow 合并实现）
+9. **shape + clip**（graphics_layer 内裁剪）
+10. **rotationX/Y / cameraDistance**（3D 透视——skia 支持有限，可降级）
 
 ### P2 — 状态与交互
 11. **enabled 语义**（组件禁用——clickable 不响应 + 视觉降透明度）——Button/TextField 先接
-12. **InteractionSource / ComponentState**（hover/press/focus 状态聚合——Button 波纹/颜色变化的依据——**大工程，先做最小版**：`MutableInteractionSource` + 状态读取）
+12. **InteractionSource / ComponentState**（hover/press/focus 状态聚合——Button 颜色/阴影变化的依据——**大工程，先做最小版**：`MutableInteractionSource` + 状态读取）
 13. **hoverable / draggable / pointer_input**（手势层——**远期**，需 pointer 事件管道增强）
 
-## 三、组件属性差距
+## 三、组件属性差距——**已对照 material3 1.4.0 / foundation 1.11.4 源码核实**
 
-### Text（winia/src/ui/text.rs）
-| Compose | 现状 | 缺口 |
+### Text（对标 foundation BasicText + ui-text TextStyle）
+| Compose 签名 | 现状 | 缺口 |
 |---|---|---|
-| maxLines / overflow / softWrap | 有（text_content 参数） | — |
-| textAlign | 有（TextAlign） | — |
-| fontSize / fontWeight / fontStyle / fontFamily | 有 | — |
-| letterSpacing | 无 | 加（skia 支持） |
-| lineHeight | 无 | 加（Paragraph 支持） |
-| textDecoration / textShadow | RichText Style 有 | Text 便捷缺 |
-| color | 有 | — |
+| `BasicText(text, style, overflow=Clip, softWrap=true, maxLines=MAX, minLines=1, color)` | 部分 | minLines（小） |
+| TextStyle: fontSize/weight/style/family/color | 有 | — |
+| TextStyle: **letterSpacing** / **lineHeight** | 无 | **加**（skia/Paragraph 原生支持） |
+| TextStyle: textDecoration / textShadow / background | RichText Style 有 | Text 便捷缺（中优先） |
+| textAlign | 有 | — |
 
-### Button（winia/src/ui/button.rs）
-| Compose | 现状 | 缺口 |
-|---|---|---|
-| enabled | 无 | **加**（禁用：不响应点击 + alpha 0.5 + 无波纹） |
-| onClick | 有（modifier clickable） | — |
-| colors（container/content） | 硬编码主题色 | **加**（ButtonColors 覆盖） |
-| shape / border / elevation | shape 可经 modifier | 便捷缺 |
-| contentPadding | 固定 | **加** |
+### Button（对标 material3 `Button(onClick, modifier, enabled=true, shape, colors, elevation, border, contentPadding, interactionSource)`）
+| 缺口 | 说明 |
+|---|---|
+| **enabled** | 禁用：容器色/内容色切换（colors.containerColor(enabled)）+ 不响应点击 |
+| **colors**（ButtonColors: container/content + disabled 变体） | 现硬编码主题色 |
+| **elevation**（ButtonElevation: shadowElevation 随 enabled/interaction 变化） | 无（结合 Modifier.shadow） |
+| **border / contentPadding** | border 可经 modifier；contentPadding 固定 | 
+| **interactionSource** | P2-12 后接 |
 
-### TextField（winia/src/ui/text_field.rs）
-| Compose | 现状 | 缺口 |
-|---|---|---|
-| value / onValueChange | 有（State<String> + 回调） | — |
-| label / placeholder | 无 | **加**（placeholder 文字显示在空值时） |
-| enabled / readOnly | 无 | **加** |
-| singleLine / maxLines | 单行 | **加** multiLine 支持（换行高度已有基础） |
-| isError / colors | 无 | **加**（错误边框/文字色） |
-| leadingIcon / trailingIcon | 无 | 远期（inline 内容） |
+### TextField（对标 material3 `TextField(value, onValueChange, enabled=true, readOnly=false, label, placeholder, leadingIcon, trailingIcon, prefix, suffix, supportingText, isError, visualTransformation, keyboardOptions, singleLine=false, maxLines=MAX, minLines=1, colors)`）
+| 缺口 | 说明 |
+|---|---|
+| **enabled / readOnly** | 禁用不响应；只读不可编辑仍可选 |
+| **label / placeholder** | **@Composable (() -> Unit)**（非 String）——placeholder 空值时显示 |
+| **isError** | 错误边框/文字色（colors 变体） |
+| **多行（singleLine=false 默认、maxLines、minLines）** | 项目现单行——**Compose 默认多行**，需换行测量 + 光标移动支持（基础已有） |
+| leadingIcon/trailingIcon/prefix/suffix/supportingText | 中优先（inline 内容） |
 
-### Column/Row/Stack（winia/src/ui/layout_components.rs）
-| Compose | 现状 | 缺口 |
-|---|---|---|
-| horizontalArrangement / verticalAlignment | 有（Arrangement/Alignment） | — |
-| contentPadding | 无 | **加**（内部 padding，避免包一层） |
-| reverseLayout | 无 | 远期 |
-| Stack: alignment | 有 | — |
-
-### 通用
-- **disabled 组件统一处理**（alpha + 事件屏蔽）
+### Column/Row/Stack（对标 foundation-layout Column/Row/Box）
+| Compose 签名 | 结论 |
+|---|---|
+| `Column(modifier, verticalArrangement, horizontalAlignment)` | **无 contentPadding 参数**（核实：只有 modifier/arrangement/alignment）——**文档此前想当然，删除**；contentPadding 是 Material 组件层（Button 等）的概念 |
+| `Row(modifier, horizontalArrangement, verticalAlignment)` | 同上 |
+| `Box(modifier, contentAlignment)` | 项目 Stack 等价 ✓ |
 
 ## 四、实施顺序建议
 
