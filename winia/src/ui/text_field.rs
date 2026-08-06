@@ -61,6 +61,12 @@ pub struct TextField {
     on_value_change: Box<dyn Fn(TextFieldValue) + Send + Sync>,
     modifier: Modifier,
     font_size: Option<crate::unit::TextUnit>,
+    /// 是否启用（禁用：不聚焦不响应键盘，视觉 50% alpha——对标 Compose enabled）
+    enabled: bool,
+    /// 只读（可聚焦/选中，不可编辑——编辑键吞掉不生效，导航键保留）
+    read_only: bool,
+    /// 占位文字（值空时灰色显示——简化版；Compose 是 @Composable 参数）
+    placeholder: Option<String>,
 }
 
 impl TextField {
@@ -73,6 +79,9 @@ impl TextField {
             on_value_change: Box::new(on_value_change),
             modifier: Modifier::new(),
             font_size: None,
+            enabled: true,
+            read_only: false,
+            placeholder: None,
         }
     }
 
@@ -87,6 +96,24 @@ impl TextField {
         self
     }
 
+    /// 启用状态（禁用：不聚焦不响应键盘，视觉 50% alpha）
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    /// 只读（可聚焦/选中，不可编辑——编辑键吞掉不生效，导航键保留）
+    pub fn read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
+    }
+
+    /// 占位文字（值空时灰色显示——对标 Compose placeholder，简化版）
+    pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
+        self.placeholder = Some(placeholder.into());
+        self
+    }
+
     pub fn build(self, ctx: &mut ComposeCtx) {
         let key = ctx.next_key();
         let current = self.value.get();
@@ -96,7 +123,31 @@ impl TextField {
         let font_size = self.font_size
             .unwrap_or(crate::unit::TextUnit::Sp(crate::unit::Sp(14.0)))
             .to_logical_px();
-        let color = theme.on_surface;
+        // 禁用：文字 50% alpha（对标 Compose disabled 内容色）
+        let color = if self.enabled {
+            theme.on_surface
+        } else {
+            crate::modifier::Color::from_argb(
+                (theme.on_surface.a as f32 * 0.5) as u8,
+                theme.on_surface.r, theme.on_surface.g, theme.on_surface.b,
+            )
+        };
+
+        // 占位文字：值空时显示（灰色），否则正常内容
+        let show_placeholder = content.is_empty() && self.placeholder.is_some();
+        let display_content = if show_placeholder {
+            self.placeholder.as_deref().unwrap_or("").to_string()
+        } else {
+            content
+        };
+        let display_color = if show_placeholder {
+            crate::modifier::Color::from_argb(
+                (theme.on_surface_variant.a as f32 * 0.7) as u8,
+                theme.on_surface_variant.r, theme.on_surface_variant.g, theme.on_surface_variant.b,
+            )
+        } else {
+            color
+        };
 
         // 光标闪烁状态（旧版风格）
         let cursor_visible = ctx.remember(|| true);
@@ -112,16 +163,28 @@ impl TextField {
             });
         }
 
-        // 键盘事件处理
+        // 键盘事件处理（read_only：编辑键吞掉不生效；enabled=false：不注册）
         let value = self.value.clone();
         let on_change = std::sync::Arc::new(std::sync::Mutex::new(self.on_value_change));
         let kb_handler = {
             let v = value.clone();
             let cb = on_change.clone();
+            let read_only = self.read_only;
             move |e: &crate::modifier::KbEvent| -> bool {
                 if e.event_type != crate::modifier::KbEventType::KeyDown { return false; }
-                let mut val = v.get();
                 let key = &e.key;
+                // 导航键（只读时仍允许——对标 Compose readOnly 可选中）
+                let is_nav = matches!(key,
+                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowLeft)
+                    | winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowRight)
+                    | winit::keyboard::Key::Named(winit::keyboard::NamedKey::Home)
+                    | winit::keyboard::Key::Named(winit::keyboard::NamedKey::End)
+                );
+                // 只读：编辑键直接消耗（不修改值）
+                if read_only && !is_nav {
+                    return true;
+                }
+                let mut val = v.get();
                 let shift = e.is_shift_pressed;
                 match key {
                     winit::keyboard::Key::Named(named) => match named {
@@ -235,20 +298,24 @@ impl TextField {
         };
 
         let modifier = self.modifier
-            .focusable()
             .padding(8.0)
             .text_content(
-                content,
+                display_content,
                 font_size,
-                color,
+                display_color,
                 crate::ui::text::FontWeight::NORMAL,
                 crate::ui::text::FontSlant::Upright,
                 usize::MAX, // unlimited lines
                 crate::ui::TextAlign::Left,
                 crate::ui::TextOverflow::Clip,
                 true, // allow text wrapping
-            )
-            .on_key_event(kb_handler);
+            );
+        // 禁用：不聚焦不响应键盘（Compose disabled 语义）；否则聚焦 + 键盘
+        let modifier = if self.enabled {
+            modifier.focusable().on_key_event(kb_handler)
+        } else {
+            modifier
+        };
 
         ctx.start_leaf(key, modifier);
 
@@ -312,5 +379,75 @@ impl Default for TextField {
             State::new(TextFieldValue::new("")),
             |_| {},
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::composer::Composer;
+    use crate::modifier::ModifierElement;
+
+    fn find_text_content(modifier: &Modifier) -> Option<String> {
+        modifier.elements().iter().find_map(|el| {
+            if let ModifierElement::TextContent { content, .. } = el {
+                Some(content.clone())
+            } else {
+                None
+            }
+        })
+    }
+
+    fn has_focusable(modifier: &Modifier) -> bool {
+        modifier.elements().iter().any(|el| matches!(el, ModifierElement::Focusable))
+    }
+
+    /// 构建 TextField 并取叶子节点 modifier
+    fn build_field(field: TextField) -> Modifier {
+        // build 内 tokio::spawn 光标闪烁——需要 runtime 上下文
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = rt.enter();
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            field.build(ctx);
+        });
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        nodes[root].modifier.clone()
+    }
+
+    #[test]
+    fn disabled_field_has_no_focusable() {
+        let value = State::new(TextFieldValue::new("hi"));
+        let m = build_field(TextField::new(value.clone(), |_| {}).enabled(false));
+        assert!(!has_focusable(&m), "禁用字段不应可聚焦");
+        // 禁用字段仍渲染文本（文字 50% alpha 在 build 内处理）
+        assert!(find_text_content(&m).is_some(), "禁用字段仍显示内容");
+    }
+
+    #[test]
+    fn enabled_field_has_focusable() {
+        let value = State::new(TextFieldValue::new("hi"));
+        let m = build_field(TextField::new(value.clone(), |_| {}));
+        assert!(has_focusable(&m), "启用字段应可聚焦");
+    }
+
+    #[test]
+    fn placeholder_shown_when_empty() {
+        let value = State::new(TextFieldValue::new(""));
+        let m = build_field(TextField::new(value.clone(), |_| {}).placeholder("请输入"));
+        let content = find_text_content(&m).unwrap_or_default();
+        assert_eq!(content, "请输入", "空值显示 placeholder");
+    }
+
+    #[test]
+    fn placeholder_hidden_when_has_content() {
+        let value = State::new(TextFieldValue::new("已有内容"));
+        let m = build_field(TextField::new(value.clone(), |_| {}).placeholder("请输入"));
+        let content = find_text_content(&m).unwrap_or_default();
+        assert_eq!(content, "已有内容", "有值时显示真实内容");
     }
 }
