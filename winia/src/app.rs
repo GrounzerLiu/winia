@@ -793,6 +793,14 @@ impl ApplicationHandler for AppState {
                         if let Some(r) = pw.composer.layout_root_idx() {
                             if let Some(found) = crate::layout::node::find_node_by_id(nodes, r, fid) {
                                 pw.focused_slot_key = Some(nodes[found].slot_key);
+                                // IME 按组件声明开关：文本组件（TextField）在组合期
+                                // set_current_node_ime_callback 主动声明 IME 需求；
+                                // 框架只做机械转发，不判断组件类型。Button 等未声明
+                                // ime_callback 的 focusable 聚焦时不开启输入法。
+                                let wants_ime = nodes[found].ime_callback.borrow().is_some();
+                                if let Some(ref sw) = pw.skia_window {
+                                    sw.set_ime_allowed(wants_ime);
+                                }
                             }
                         }
                     }
@@ -920,8 +928,10 @@ impl AppState {
                         if let Some(r) = root_idx {
                             let path = hit_test(arena, r, x, y);
                             let mut click_handled = false;
+                            // 与组件自决语义一致：仅"声明了 IME/输入需求"的组件
+                            // （TextField 设置过 ime_callback）在 debug 点击时聚焦
                             let (fid, sk) = path.last()
-                                .filter(|&&i| crate::layout::node::has_focusable_modifier(&arena[i]))
+                                .filter(|&&i| arena[i].ime_callback.borrow().is_some())
                                 .map(|&i| (arena[i].id, arena[i].slot_key))
                                 .unwrap_or((0, 0));
                             let path_len = path.len();
@@ -1691,22 +1701,15 @@ fn handle_pointer_down(
     pw.pointer_down_slot = Some(nodes[innermost].slot_key);
 
     if with_focus {
-        // 设置 TextField 光标位置 + selection 更新回调（仅真实路径）
+        // 设置 TextField 光标位置 + selection 更新回调（仅真实路径）。
+        // ⚠ 点击聚焦由组件自己决定（TextField 内部 requestFocus）——
+        // 框架层不自动聚焦（对标 Compose：clickable/focusable 点击不请求焦点，
+        // 焦点由 Tab 导航或显式 requestFocus 获得）。
         if let Some(a) = anchor {
             nodes[innermost].cursor_index.set(a);
             if let Some(cb) = nodes[innermost].cursor_callback.borrow_mut().as_mut() {
                 cb(a);
             }
-        }
-        // 点击自动聚焦
-        if crate::layout::node::has_focusable_modifier(&nodes[innermost]) {
-            let focus_id = nodes[innermost].id;
-            if let Some(r) = pw.composer.layout_root_idx() {
-                let nodes = pw.composer.arena_nodes_mut();
-                crate::layout::node::clear_focus(nodes, r);
-                crate::layout::node::set_focus_by_id(nodes, r, focus_id);
-            }
-            if let Some(ref sw) = pw.skia_window { sw.set_ime_allowed(true); }
         }
     }
 

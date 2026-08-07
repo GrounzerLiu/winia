@@ -398,7 +398,15 @@ impl TextField {
             // 交互源：外部注入或内部 remember（focus 状态发射到此源）
             let interaction = self.interaction_source
                 .unwrap_or_else(|| ctx.remember(|| crate::ui::interaction::MutableInteractionSource::new()).get());
-            modifier.focusable_with_source(&interaction).on_key_event(kb_handler)
+            // 点击聚焦由组件自己请求（对标 Compose BasicTextField：点击 requestFocus；
+            // 框架层 clickable/focusable 点击不自动聚焦——Button 等组件点击不抢焦点）
+            let fr = ctx.remember(|| crate::modifier::FocusRequester::new()).get();
+            let fr_click = fr.clone();
+            modifier
+                .focusable_with_source(&interaction)
+                .focus_requester(&fr)
+                .on_press(move |_| { fr_click.request_focus(); })
+                .on_key_event(kb_handler)
         } else {
             modifier
         };

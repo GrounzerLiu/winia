@@ -508,6 +508,7 @@ impl Button {
     pub fn get_enabled(&self) -> bool { self.enabled }
     pub fn get_style(&self) -> ButtonStyle { self.style }
     pub fn get_colors(&self) -> Option<ButtonColors> { self.colors }
+    pub fn get_elevation(&self) -> Option<ButtonElevation> { self.elevation }
     pub fn get_shape(&self) -> Shape { self.shape }
     pub fn get_content_padding(&self) -> Option<&(SizeValue, SizeValue, SizeValue, SizeValue)> {
         self.content_padding.as_ref()
