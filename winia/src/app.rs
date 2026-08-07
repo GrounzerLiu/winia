@@ -1288,10 +1288,13 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
         return true; // 事件消费——不进主树
     }
     // 外部点击：模态或可关闭 → dismiss（消费事件）
+    // ⚠ 同步移除（不等 recompose）——否则残留 overlay 会吞掉关闭后
+    // 紧接着的点击（用户"点两次才打开"）且多渲染一帧（视觉闪烁）
     for i in (0..pw.overlays.len()).rev() {
-        let ov = &pw.overlays[i];
-        if ov.modal || ov.dismiss_on_outside {
-            if let Some(cb) = &ov.on_dismiss {
+        if pw.overlays[i].modal || pw.overlays[i].dismiss_on_outside {
+            let cb = pw.overlays[i].on_dismiss.take();
+            pw.overlays.remove(i);
+            if let Some(cb) = cb {
                 (cb)();
             }
             return true;
