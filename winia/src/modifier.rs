@@ -155,10 +155,13 @@ impl From<crate::unit::Px> for Dimension {
 // ── Shape ──
 
 /// 形状描述（用于 background / border / clip）
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Shape {
     /// 矩形（可带圆角）
     RoundedRect { corner_radius: f32 },
+    /// 胶囊（圆角 = 短边一半——对标 Compose `CornerFull`，material3
+    /// Button 默认形状；宽高变化时自动跟随）
+    Pill,
     /// 圆形
     Circle,
     /// 直角矩形
@@ -168,6 +171,11 @@ pub enum Shape {
 impl Shape {
     pub fn rounded(corner_radius: f32) -> Self {
         Shape::RoundedRect { corner_radius }
+    }
+
+    /// 胶囊形状（对标 Compose `RoundedCornerShape(50)`——短边一半圆角）
+    pub fn pill() -> Self {
+        Shape::Pill
     }
 }
 
@@ -321,6 +329,11 @@ pub(crate) enum ModifierElement {
     /// 固定尺寸
     /// 尺寸（静态 Dimension 或动态求值 SizeValue——布局属性动画用 State/闭包）
     Size { width: SizeValue, height: SizeValue },
+    /// 最小宽度（对标 Compose `Modifier.widthIn(min=...)`——仅提升 incoming
+    /// min 约束；宽度超限时被 max 夹住；支持动态值——动画可作用于 min）
+    MinWidth { value: SizeValue },
+    /// 最小高度（对标 Compose `Modifier.heightIn(min=...)`）
+    MinHeight { value: SizeValue },
     /// 四边 padding（每边独立，支持动态 SizeValue——动画可作用于 padding）
     PaddingSides {
         start: SizeValue,
@@ -613,6 +626,17 @@ impl Modifier {
     /// 宽度填满可用空间
     pub fn fill_max_width(self) -> Self {
         self.push(ModifierElement::FillMaxWidth)
+    }
+
+    /// 最小宽度（对标 Compose `Modifier.widthIn(min = ...)`）——提升布局
+    /// 最小约束，内容不足时撑到该宽度；受父 max 约束夹住。支持动态值。
+    pub fn min_width(self, value: impl Into<SizeValue>) -> Self {
+        self.push(ModifierElement::MinWidth { value: value.into() })
+    }
+
+    /// 最小高度（对标 Compose `Modifier.heightIn(min = ...)`）
+    pub fn min_height(self, value: impl Into<SizeValue>) -> Self {
+        self.push(ModifierElement::MinHeight { value: value.into() })
     }
 
     /// 高度填满可用空间
@@ -1231,6 +1255,34 @@ impl Modifier {
         out
     }
 
+    /// 解析 MinWidth/MinHeight 元素——返回 (min_width, min_height)，None 表示
+    /// 该轴无最小约束。动态值在布局期求值（State::get 注册 layout_dep——
+    /// 动画可驱动 min 尺寸，只重测不重组）。
+    pub fn min_size_constraint(&self) -> (Option<f32>, Option<f32>) {
+        use crate::unit::{current_density, Dp, Px};
+        let resolve = |sv: &SizeValue| -> Option<f32> {
+            match sv {
+                SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(Dp(v))) => Some(*v),
+                SizeValue::Static(Dimension::Px(p)) => Some(p.to_logical(current_density())),
+                SizeValue::Static(Dimension::Auto) | SizeValue::Static(Dimension::Fill) => None,
+                SizeValue::Dynamic(f) => Some(f()),
+            }
+        };
+        let mut out = (None, None);
+        for el in &self.elements {
+            match el {
+                ModifierElement::MinWidth { value } => {
+                    if let Some(v) = resolve(value) { out.0 = Some(v); }
+                }
+                ModifierElement::MinHeight { value } => {
+                    if let Some(v) = resolve(value) { out.1 = Some(v); }
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
     /// 是否填满最大宽度
     pub fn is_fill_max_width(&self) -> bool {
         self.elements.iter().any(|el| matches!(el,
@@ -1496,6 +1548,8 @@ impl Debug for ModifierElement {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Size { width, height } => f.debug_struct("Size").field("width", width).field("height", height).finish(),
+            Self::MinWidth { value } => f.debug_struct("MinWidth").field("value", value).finish(),
+            Self::MinHeight { value } => f.debug_struct("MinHeight").field("value", value).finish(),
             Self::PaddingSides { start, top, end, bottom } => f
                 .debug_struct("PaddingSides")
                 .field("start", start)
@@ -2023,6 +2077,8 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (Size { width: aw, height: ah }, Size { width: bw, height: bh }) => {
             size_value_eq(aw, bw) && size_value_eq(ah, bh)
         }
+        (MinWidth { value: av }, MinWidth { value: bv }) => size_value_eq(av, bv),
+        (MinHeight { value: av }, MinHeight { value: bv }) => size_value_eq(av, bv),
         (
             PaddingSides { start: as_, top: at, end: ae, bottom: ab },
             PaddingSides { start: bs, top: bt, end: be, bottom: bb },

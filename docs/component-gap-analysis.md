@@ -7,7 +7,7 @@
 ## 一、现状盘点
 
 ### Modifier 已有（winia/src/modifier.rs）
-- 布局：`size`/`width`/`height`（SizeValue 静态/动态）、`padding`(+h/v)、`fill_max_*`、`offset`（动态值 + 单轴 + RTL 镜像）、`align_self`、`layout_weight`、`aspect_ratio`、`required_size`/`required_width`/`required_height`
+- 布局：`size`/`width`/`height`（SizeValue 静态/动态）、`min_width`/`min_height`（对标 Compose widthIn/heightIn）、`padding`(+h/v)、`fill_max_*`、`offset`（动态值 + 单轴 + RTL 镜像）、`align_self`、`layout_weight`、`aspect_ratio`、`required_size`/`required_width`/`required_height`
 - 绘制：`background`（Color/闭包 + Shape）、`border`、`clip`、`blur`、`backdrop_blur`、`shadow`（elevation/shape/颜色）
 - 交互：`clickable`/`clickable_with_source`、`focusable`/`focusable_with_source`、`hoverable`、`on_key_event`/`on_pre_key_event`、`on_pointer_event`/`on_pre_pointer_event`、`focus_requester`、手势 `on_tap`/`on_double_tap`/`on_long_press`/`on_drag_start`/`on_drag`/`on_drag_end`/`on_drag_cancel`
 - 视觉：`alpha`/`rotate`/`scale`/`rotation_x`/`rotation_y`/`camera_distance`/`shadow_elevation` 便捷包装、`graphics_layer`（scale_x/y、alpha、translation_x/y、rotation_z、**transformOrigin + clip + 3D 旋转透视 + 阴影已补**）、`test_tag`
@@ -59,8 +59,9 @@ Text / TextField / Button / Column / Row / Stack / RichText / SelectionContainer
 | **enabled** | ✅ 已实现：禁用：容器色/内容色切换（colors.containerColor(enabled)）+ 不响应点击 |
 | **colors**（ButtonColors: container/content + disabled 变体） | ✅ 已实现（默认从主题按 style 生成） |
 | **elevation**（ButtonElevation: shadowElevation 随 enabled/interaction 变化） | ✅ 已实现（`Button::elevation` + `ButtonElevation::for_state`——press/hover/focus/disabled 阴影；`ButtonElevation::elevated()` 近似 ElevatedButton） |
-| **border / contentPadding** | border 可经 modifier；contentPadding 固定 | 
-| **interactionSource** | P2-12 后接 |
+| **shape**（容器/边框/阴影/波纹裁剪统一） | ✅ 已实现（`Button::shape`——默认胶囊 `Shape::pill()`，对标 CornerFull；`Shape` 增 `Pill` 变体） |
+| **border / contentPadding / minSize** | ✅ 已实现：`content_padding` 可配置（默认 24/8，Text 12/8——对标 ButtonDefaults.ContentPadding）；`min_size` 可覆盖（默认 58x40——对标 MinWidth/MinHeight）；border 仍经 modifier |
+| **interactionSource** | ✅ 已实现（hoist——`Button::interaction_source`；未传则内部 remember） |
 
 ### TextField（对标 material3 `TextField(value, onValueChange, enabled=true, readOnly=false, label, placeholder, leadingIcon, trailingIcon, prefix, suffix, supportingText, isError, visualTransformation, keyboardOptions, singleLine=false, maxLines=MAX, minLines=1, colors)`）
 | 缺口 | 说明 |

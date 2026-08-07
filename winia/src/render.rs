@@ -193,6 +193,10 @@ fn draw_shadow_layer(
         crate::modifier::Shape::RoundedRect { corner_radius } => {
             sc.draw_rrect(RRect::new_rect_xy(local, *corner_radius, *corner_radius), &mask);
         }
+        crate::modifier::Shape::Pill => {
+            let r = local.width().min(local.height()) / 2.0;
+            sc.draw_rrect(RRect::new_rect_xy(local, r, r), &mask);
+        }
         crate::modifier::Shape::Circle => {
             sc.draw_circle((local.center_x(), local.center_y()), local.width().min(local.height()) / 2.0, &mask);
         }
@@ -208,6 +212,10 @@ fn draw_shadow_layer(
             crate::modifier::Shape::Rectangle => { sc.draw_rect(local, &stroke); }
             crate::modifier::Shape::RoundedRect { corner_radius } => {
                 sc.draw_rrect(RRect::new_rect_xy(local, *corner_radius, *corner_radius), &stroke);
+            }
+            crate::modifier::Shape::Pill => {
+                let r = local.width().min(local.height()) / 2.0;
+                sc.draw_rrect(RRect::new_rect_xy(local, r, r), &stroke);
             }
             crate::modifier::Shape::Circle => {
                 sc.draw_circle((local.center_x(), local.center_y()), local.width().min(local.height()) / 2.0, &stroke);
@@ -394,6 +402,10 @@ fn render_pass1(
             crate::modifier::Shape::Rectangle => { canvas.clip_rect(rect, None, Some(false)); }
             crate::modifier::Shape::RoundedRect { corner_radius } => {
                 canvas.clip_rrect(RRect::new_rect_xy(rect, *corner_radius, *corner_radius), None, Some(false));
+            }
+            crate::modifier::Shape::Pill => {
+                let r = rect.width().min(rect.height()) / 2.0;
+                canvas.clip_rrect(RRect::new_rect_xy(rect, r, r), None, Some(false));
             }
             crate::modifier::Shape::Circle => {
                 canvas.clip_rect(rect, None, Some(false));
@@ -586,6 +598,14 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
                         Some(false),
                     );
                 }
+                Some(crate::modifier::Shape::Pill) => {
+                    let r = rect.width().min(rect.height()) / 2.0;
+                    canvas.clip_rrect(
+                        skia_safe::RRect::new_rect_xy(rect, r, r),
+                        None,
+                        Some(false),
+                    );
+                }
                 _ => {
                     canvas.clip_rect(rect, None, Some(false));
                 }
@@ -717,6 +737,10 @@ fn draw_background(canvas: &Canvas, rect: Rect, color: &crate::modifier::Color, 
         crate::modifier::Shape::RoundedRect { corner_radius } => {
             canvas.draw_rrect(RRect::new_rect_xy(rect, *corner_radius, *corner_radius), &paint);
         }
+        crate::modifier::Shape::Pill => {
+            let r = rect.width().min(rect.height()) / 2.0;
+            canvas.draw_rrect(RRect::new_rect_xy(rect, r, r), &paint);
+        }
         crate::modifier::Shape::Circle => {
             canvas.draw_circle((rect.center_x(), rect.center_y()), rect.width().min(rect.height()) / 2.0, &paint);
         }
@@ -735,6 +759,10 @@ fn draw_border(canvas: &Canvas, x: f32, y: f32, w: f32, h: f32, width: f32, colo
         crate::modifier::Shape::Rectangle => { canvas.draw_rect(sr, &paint); }
         crate::modifier::Shape::RoundedRect { corner_radius } => {
             canvas.draw_rrect(RRect::new_rect_xy(sr, (*corner_radius - inset).max(0.0), (*corner_radius - inset).max(0.0)), &paint);
+        }
+        crate::modifier::Shape::Pill => {
+            let r = (sr.width().min(sr.height()) / 2.0 - inset).max(0.0);
+            canvas.draw_rrect(RRect::new_rect_xy(sr, r, r), &paint);
         }
         crate::modifier::Shape::Circle => {
             canvas.draw_circle((sr.center_x(), sr.center_y()), sr.width().min(sr.height()) / 2.0, &paint);

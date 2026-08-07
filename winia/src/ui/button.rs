@@ -154,6 +154,36 @@ impl Default for ButtonStyle {
     }
 }
 
+/// Button 默认值（对标 material3 `ButtonDefaults`——M3 small button tokens）
+pub struct ButtonDefaults;
+
+impl ButtonDefaults {
+    /// 默认形状：胶囊（对标 `ButtonSmallTokens.ContainerShapeRound` = CornerFull）
+    pub fn shape() -> Shape {
+        Shape::pill()
+    }
+
+    /// 默认最小宽度（对标 `ButtonDefaults.MinWidth` 58.dp）
+    pub fn min_width() -> f32 {
+        58.0
+    }
+
+    /// 默认最小高度（对标 `ButtonDefaults.MinHeight` 40.dp——ContainerHeight）
+    pub fn min_height() -> f32 {
+        40.0
+    }
+
+    /// 默认内容 padding `(start, top, end, bottom)`——Button 系 24/8/24/8，
+    /// Text 按钮 12/8/12/8（对标 `ButtonDefaults.ContentPadding` /
+    /// `TextButtonContentPadding`）
+    pub fn content_padding(style: ButtonStyle) -> (f32, f32, f32, f32) {
+        match style {
+            ButtonStyle::Text => (12.0, 8.0, 12.0, 8.0),
+            _ => (24.0, 8.0, 24.0, 8.0),
+        }
+    }
+}
+
 /// Button 组件 Builder
 ///
 /// 声明式按钮组件。通过链式方法配置点击行为、样式、状态等。
@@ -187,6 +217,13 @@ pub struct Button {
     interaction_source: Option<MutableInteractionSource>,
     /// 阴影高度（None = 默认全 0——对标 material3 ButtonElevation）
     elevation: Option<ButtonElevation>,
+    /// 容器/边框/阴影形状（对标 material3 `Button(shape = ...)`——默认胶囊）
+    shape: Shape,
+    /// 内容 padding (start, top, end, bottom)——None = 按 style 默认
+    content_padding: Option<(f32, f32, f32, f32)>,
+    /// 最小尺寸覆盖（None = ButtonDefaults MinWidth/MinHeight）
+    min_width: Option<f32>,
+    min_height: Option<f32>,
     /// 修饰符链（尺寸、颜色、形状等）
     modifier: Modifier,
 }
@@ -201,6 +238,10 @@ impl Button {
             colors: None,
             interaction_source: None,
             elevation: None,
+            shape: ButtonDefaults::shape(),
+            content_padding: None,
+            min_width: None,
+            min_height: None,
             modifier: Modifier::new(),
         }
     }
@@ -242,6 +283,27 @@ impl Button {
         self
     }
 
+    /// 设置容器/边框/阴影形状（对标 material3 `Button(shape = ...)`——默认胶囊）
+    pub fn shape(mut self, shape: Shape) -> Self {
+        self.shape = shape;
+        self
+    }
+
+    /// 设置内容 padding (start, top, end, bottom)——不设置则按 style 取
+    /// [`ButtonDefaults::content_padding`]
+    pub fn content_padding(mut self, padding: (f32, f32, f32, f32)) -> Self {
+        self.content_padding = Some(padding);
+        self
+    }
+
+    /// 覆盖默认最小宽度（对标 material3 内部 `defaultMinSize(MinWidth, MinHeight)`——
+    /// 默认 58/40，用户可经此或 `Modifier::min_width` 覆盖）
+    pub fn min_size(mut self, min_width: f32, min_height: f32) -> Self {
+        self.min_width = Some(min_width);
+        self.min_height = Some(min_height);
+        self
+    }
+
     /// 设置修饰符链（追加到已有 modifier）
     pub fn modifier(mut self, modifier: Modifier) -> Self {
         self.modifier = self.modifier.then(modifier);
@@ -266,28 +328,35 @@ impl Button {
         let text_color = colors.content_color_for(&state);
         let elevation = self.elevation.map(|e| e.for_state(&state)).unwrap_or(0.0);
 
+        // 对标 material3 Button：内部 Row = defaultMinSize(58,40) + contentPadding，
+        // 容器/边框/阴影统一使用 shape 参数（默认胶囊 CornerFull）。
+        let shape = self.shape;
+        let (pad_s, pad_t, pad_e, pad_b) = self
+            .content_padding
+            .unwrap_or_else(|| ButtonDefaults::content_padding(self.style));
+        let min_w = self.min_width.unwrap_or_else(ButtonDefaults::min_width);
+        let min_h = self.min_height.unwrap_or_else(ButtonDefaults::min_height);
+
+        let mut modifier = Modifier::new()
+            .min_width(min_w)
+            .min_height(min_h)
+            .padding_sides(pad_s, pad_t, pad_e, pad_b);
         // 根据 style 在最内层插入主题默认背景/边框
-        // 默认 wrap content（不撑满父容器），用户可用 .size()/.fill_max_size() 覆盖
-        let mut modifier = match self.style {
-            ButtonStyle::Filled => {
-                Modifier::new().padding_horizontal(12.0).padding_vertical(8.0).background(container, Shape::rounded(20.0))
-            }
-            ButtonStyle::Tonal => {
-                Modifier::new().padding_horizontal(12.0).padding_vertical(8.0).background(container, Shape::rounded(20.0))
+        modifier = match self.style {
+            ButtonStyle::Filled | ButtonStyle::Tonal => {
+                modifier.background(container, shape)
             }
             ButtonStyle::Outlined => {
-                Modifier::new().padding_horizontal(12.0).padding_vertical(8.0).border(1.0, colors.content_color(self.enabled), Shape::rounded(20.0))
+                modifier.border(1.0, colors.content_color(self.enabled), shape)
             }
-            ButtonStyle::Text => {
-                Modifier::new().padding_horizontal(12.0).padding_vertical(8.0)
-            }
+            ButtonStyle::Text => modifier,
         };
 
         // 阴影（elevation > 0 才应用——Modifier.shadow 本身也按 elevation>0 短路）
         if elevation > 0.0 {
             modifier = modifier.shadow(
                 elevation,
-                Shape::rounded(20.0),
+                shape,
                 true,
                 crate::modifier::Color::BLACK,
             );
@@ -324,6 +393,9 @@ impl Button {
     pub fn get_enabled(&self) -> bool { self.enabled }
     pub fn get_style(&self) -> ButtonStyle { self.style }
     pub fn get_colors(&self) -> Option<ButtonColors> { self.colors }
+    pub fn get_shape(&self) -> Shape { self.shape }
+    pub fn get_content_padding(&self) -> Option<(f32, f32, f32, f32)> { self.content_padding }
+    pub fn get_min_size(&self) -> (Option<f32>, Option<f32>) { (self.min_width, self.min_height) }
     pub fn get_modifier(&self) -> &Modifier { &self.modifier }
 }
 
@@ -354,7 +426,19 @@ mod tests {
         let btn = Button::new();
         assert!(btn.get_enabled());
         assert_eq!(btn.get_style(), ButtonStyle::Filled);
+        assert_eq!(btn.get_shape(), Shape::pill(), "默认形状对齐 CornerFull 胶囊");
+        assert_eq!(btn.get_content_padding(), None, "content_padding 默认按 style 取");
+        assert_eq!(btn.get_min_size(), (None, None), "min 尺寸默认取 ButtonDefaults");
         assert_eq!(btn.get_modifier().elements().len(), 0);
+    }
+
+    #[test]
+    fn test_button_defaults_values() {
+        assert_eq!(ButtonDefaults::shape(), Shape::pill());
+        assert_eq!(ButtonDefaults::min_width(), 58.0);
+        assert_eq!(ButtonDefaults::min_height(), 40.0);
+        assert_eq!(ButtonDefaults::content_padding(ButtonStyle::Filled), (24.0, 8.0, 24.0, 8.0));
+        assert_eq!(ButtonDefaults::content_padding(ButtonStyle::Text), (12.0, 8.0, 12.0, 8.0));
     }
 
     #[test]

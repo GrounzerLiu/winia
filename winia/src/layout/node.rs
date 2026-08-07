@@ -724,6 +724,42 @@ mod tests {
         assert_eq!((size.width, size.height), (100.0, 50.0), "match_height_first 反推");
     }
 
+    // ── minWidth / minHeight（对标 Compose widthIn/heightIn）──
+
+    #[test]
+    fn min_width_height_raises_min_constraints() {
+        // min_width(58).min_height(40) + 空内容 → 撑到 58x40（Button 默认最小尺寸）
+        let m = Modifier::new().min_width(58.0).min_height(40.0);
+        let mut nodes = vec![LayoutNode::leaf(m)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 100.0, 0.0, 100.0));
+        assert_eq!((size.width, size.height), (58.0, 40.0), "min 约束提升 incoming min");
+    }
+
+    #[test]
+    fn min_width_yields_to_tight_size() {
+        // tight size(30,20) 之后 min(58) 被 max=30 夹住（Compose constraints 合并语义）
+        let m = Modifier::new().size(30.0, 20.0).min_width(58.0);
+        let mut nodes = vec![LayoutNode::leaf(m)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 100.0, 0.0, 100.0));
+        assert_eq!((size.width, size.height), (30.0, 20.0), "min 不得越过 tight max");
+    }
+
+    #[test]
+    fn min_width_dynamic_state() {
+        // 动态 min（动画）：measure 期 get() 注册布局依赖——值变化重测生效
+        use crate::core::state::State;
+        let s = State::new(58.0);
+        let m = Modifier::new().min_width(&s);
+        let mut nodes = vec![LayoutNode::leaf(m)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 100.0, 0.0, 100.0));
+        assert_eq!(size.width, 58.0);
+        s.set(70.0);
+        // 模拟动画值 notify 后的布局失效（真实链路：composer pending → layout_dirty）
+        nodes[0].layout_dirty = true;
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 100.0, 0.0, 100.0));
+        assert_eq!(size.width, 70.0, "动态 min 值变化后重测取新值");
+    }
+
     // ── test_tag ──
 
     #[test]
@@ -1067,6 +1103,17 @@ pub(crate) fn measure_node(
     if let Some((sw, sh)) = nodes[idx].modifier.resolved_size() {
         if let Some(w) = sw { inner_constraints = inner_constraints.tighten_width(w); }
         if let Some(h) = sh { inner_constraints = inner_constraints.tighten_height(h); }
+    }
+
+    // 最小尺寸（MinWidth/MinHeight——对标 Compose widthIn/heightIn）：
+    // 提升 incoming min，受 max 夹住（min 不得越过 max——tight size 下
+    // 最小约束让位于固定尺寸，与 Compose constraints 合并语义一致）。
+    let (min_w, min_h) = nodes[idx].modifier.min_size_constraint();
+    if let Some(w) = min_w {
+        inner_constraints.min_width = inner_constraints.min_width.max(w).min(inner_constraints.max_width);
+    }
+    if let Some(h) = min_h {
+        inner_constraints.min_height = inner_constraints.min_height.max(h).min(inner_constraints.max_height);
     }
 
     // 强制尺寸（requiredSize——忽略 incoming 收缩，允许溢出：
