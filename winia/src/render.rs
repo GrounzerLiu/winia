@@ -63,7 +63,9 @@ fn build_gl_3d_matrix(
     // （相机距离无效的根因）。左乘后 w 行自动折叠出 -sinθ/cam 等系数。
     // 有效相机距离下限 = 视图半尺寸：默认 8 对 170dp 卡片太小，近边
     // z'=h/2·sinθ 会超过相机 → w 变负 → 卡片“飞走”（Compose 文档明示
-    // 该伪影：cameraDistance 应 ≥ 视图尺寸）。钳制后任意角度 w>0，不消失。
+    // 该伪影：cameraDistance 应 ≥ 视图尺寸）。钳制后任意角度 w>0 且
+    // 近边不会放大到画面外。低于下限的相机值（物理上“在卡片内部”）统一
+    // 表现为最大合理透视——演示时请用超过半尺寸的值（如 200/400/1200）。
     let effective_cam = gl.camera_distance
         .max(w.max(h) / 2.0 + 1.0)
         .max(1.0);
@@ -797,7 +799,7 @@ mod tests {
         let m = build_gl_3d_matrix(&gl, 200.0, 160.0).expect("rotationX 应返回矩阵");
         let mut row = [0.0f32; 16];
         m.get_row_major(&mut row);
-        // 有效相机距离 = max(8, max(200,160)/2+1) = 101；w 行折叠系数
+        // 有效相机距离 = max(8, max(200,160)/2+1) = 101
         let s = 45f32.to_radians().sin();
         let c = 45f32.to_radians().cos();
         let persp_y = row[3 * 4 + 1];

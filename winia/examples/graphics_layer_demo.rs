@@ -55,7 +55,9 @@ fn graphics_layer_ui(ctx: &mut ComposeCtx) {
                 }
             });
             Row::new().spacing(8.0).build(ctx, |ctx| {
-                for (label, v) in [("相机近(2)", 2.0f32), ("默认(8)", 8.0), ("相机远(100)", 100.0)] {
+                // 卡片 260x170——相机下限 = 半尺寸 131：按钮必须超过下限
+                // 才能看到切换差异（低于下限的值统一表现为最大合理透视）
+                for (label, v) in [("相机近(200)", 200.0f32), ("默认(400)", 400.0), ("相机远(1200)", 1200.0)] {
                     Button::new()
                         .on_click({
                             let cam = cam.clone();
