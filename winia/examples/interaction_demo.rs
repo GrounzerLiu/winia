@@ -105,7 +105,8 @@ fn main() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let _guard = rt.enter();
     winia::run_app!(|ctx| {
-        WiniaTheme::auto(ctx, |ctx| {
+        // 固定亮色（避免跟随系统暗色/检测失败——截图与演示效果一致）
+        WiniaTheme::light(ctx, |ctx| {
             Window::new()
                 .size(520.0, 560.0)
                 .title("Interaction Demo")
