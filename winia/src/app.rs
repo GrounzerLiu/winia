@@ -1529,7 +1529,7 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
 /// 按下：命中路径最内层 clickable 绑定的交互源 → 发射 Press
 /// （对标 Compose clickable 的 PressInteraction.Press）
 fn press_interaction_down(pw: &mut PerWindow, path: &[usize], scene_pos: (f32, f32)) {
-    let (slot, src) = {
+    let (slot, idx, src) = {
         let nodes = pw.composer.arena_nodes();
         let Some(&idx) = path.iter().rev().find(|&&i| {
             nodes[i].modifier.clickable_interaction().is_some()
@@ -1540,9 +1540,16 @@ fn press_interaction_down(pw: &mut PerWindow, path: &[usize], scene_pos: (f32, f
             Some(s) => s.clone(),
             None => return,
         };
-        (nodes[idx].slot_key, src)
+        (nodes[idx].slot_key, idx, src)
     };
-    src.emit_press_at(scene_pos);
+    // 场景坐标 → 节点本地坐标（对标 Compose PressInteraction.Press.pressPosition）。
+    // 波纹中心必须存本地坐标：绘制时加回布局原点，滚动/变换后波纹跟随节点；
+    // 若存场景坐标，按下后滚动/动画会脱离按钮。
+    let local = {
+        let nodes = pw.composer.arena_nodes();
+        crate::layout::node::scene_to_node_local(nodes, path, idx, scene_pos.0, scene_pos.1)
+    };
+    src.emit_press_at(local);
     pw.pressed_interaction = Some((slot, src));
 }
 

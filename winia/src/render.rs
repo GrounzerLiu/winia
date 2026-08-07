@@ -612,6 +612,10 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
         }
 
         // ── 波纹层：按压点实心圆（半径=对角线×progress，旧版 draw_circle）──
+        // 中心存的是节点本地坐标（press_interaction_down 已从场景坐标换算）；
+        // 画布坐标 = 布局原点 + 本地坐标——祖先 scroll translate 与自身
+        // graphics_layer 变换都已作用在画布上，波纹视觉位置自动跟随节点
+        // （按下后滚动/变换动画中不脱离按钮）。
         for layer in source.ripple_layers() {
             let progress = layer.progress.get();
             let opacity = layer.opacity.get();
@@ -627,9 +631,8 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
                 color.g,
                 color.b,
             ));
-            // 按压点已是场景（画布）坐标——非滚动/无 graphicsLayer 变换的节点直接可用
             canvas.draw_circle(
-                skia_safe::Point::new(layer.center.0, layer.center.1),
+                skia_safe::Point::new(x + layer.center.0, y + layer.center.1),
                 radius,
                 &paint,
             );

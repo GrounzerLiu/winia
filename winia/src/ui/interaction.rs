@@ -27,13 +27,14 @@ pub(crate) const STATE_LAYER_FOCUS: f32 = 0.12;
 pub(crate) const STATE_LAYER_TRANSITION_MS: u64 = 500;
 
 /// 单个波纹层（参考旧版 D:\winia ripple.rs 的分层设计）：
-/// 每次按下产生一层，中心 = 按压点（场景坐标），扩散进度 0→1；
+/// 每次按下产生一层，中心 = 按压点（节点本地坐标——相对节点左上角，
+/// 对标 Compose pressPosition），扩散进度 0→1；
 /// 释放后标记 fading，透明度淡出到 0 后自动从列表移除（动画 on_finish）。
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct RippleLayer {
     /// 层 id（按下递增——多指预留；当前单指针模型）
     pub(crate) id: u64,
-    /// 按压点（场景坐标——渲染时换算节点本地坐标）
+    /// 按压点（节点本地坐标——渲染时加布局原点即画布坐标）
     pub(crate) center: (f32, f32),
     /// 扩散进度 0..1（500ms Tween 驱动）
     pub(crate) progress: crate::core::state::State<f32>,
@@ -143,7 +144,8 @@ impl MutableInteractionSource {
         self.emit_press_at((0.0, 0.0));
     }
 
-    /// 按下并记录位置（对标 Compose `PressInteraction.Press(pressPosition)`——
+    /// 按下并记录位置（对标 Compose `PressInteraction.Press(pressPosition)`，
+    /// `pos` 为**节点本地坐标**——
     /// 新建一层水波纹从按压点扩散；进度由动画系统驱动（500ms Tween——
     /// 参考旧版 ripple.rs），完成自动停止）
     pub fn emit_press_at(&self, pos: (f32, f32)) {

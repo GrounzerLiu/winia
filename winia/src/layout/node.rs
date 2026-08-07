@@ -536,6 +536,36 @@ fn scroll_offset_for_node(node: &LayoutNode) -> (f32, f32) {
     (dx, dy)
 }
 
+/// 场景坐标 → 目标节点的本地坐标（相对节点左上角）。
+///
+/// 与 `hit_test_recursive` 走同一条路径：从根累加 position，并减去
+/// 祖先 scroll 偏移（渲染时 scroll 容器 translate(-offset)）。用于
+/// 波纹按压点存储——对标 Compose `PressInteraction.Press.pressPosition`
+/// 的本地坐标语义（绘制时加回布局原点，滚动/图形层变换后波纹跟随节点）。
+/// graphics_layer 变换暂不计——与命中测试行为一致（命中本身未反变换 GL）。
+pub(crate) fn scene_to_node_local(
+    nodes: &[LayoutNode],
+    path: &[usize],
+    target: usize,
+    x: f32,
+    y: f32,
+) -> (f32, f32) {
+    let mut ox = 0.0;
+    let mut oy = 0.0;
+    for &i in path {
+        let node = &nodes[i];
+        ox += node.position.x;
+        oy += node.position.y;
+        if i == target {
+            break;
+        }
+        let (dx, dy) = scroll_offset_for_node(node);
+        ox -= dx;
+        oy -= dy;
+    }
+    (x - ox, y - oy)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -590,6 +620,44 @@ mod tests {
         // 点击父节点但不在子节点范围内
         let path = hit_test(&nodes, 0, 80.0, 75.0);
         assert_eq!(path, vec![0], "should only hit parent");
+    }
+
+    // ── scene_to_node_local（波纹按压点本地坐标）──
+
+    #[test]
+    fn scene_to_node_local_plain() {
+        // root(10,20) → child(30,40)：视觉原点 (40,60)
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new().size(100.0, 100.0)),
+            LayoutNode::leaf(Modifier::new().size(50.0, 50.0)),
+        ];
+        nodes[0].position = Point::new(10.0, 20.0);
+        nodes[1].position = Point::new(30.0, 40.0);
+        nodes[0].children.push(1);
+
+        let (lx, ly) = scene_to_node_local(&nodes, &[0, 1], 1, 45.0, 62.0);
+        assert_eq!((lx, ly), (5.0, 2.0), "无滚动：本地 = 场景 - 布局原点");
+    }
+
+    #[test]
+    fn scene_to_node_local_under_scroll() {
+        // root(0,0) → scroll 容器(50,100, offset=50) → child(100,0)：
+        // 视觉原点 = (50+100-0, 100+0-50) = (150, 50)
+        let scroll = crate::modifier::ScrollState::new();
+        scroll.offset.set(50.0);
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new().size(300.0, 300.0)),
+            LayoutNode::leaf(Modifier::new().size(200.0, 200.0).vertical_scroll(scroll)),
+            LayoutNode::leaf(Modifier::new().size(50.0, 50.0)),
+        ];
+        nodes[0].position = Point::new(0.0, 0.0);
+        nodes[1].position = Point::new(50.0, 100.0);
+        nodes[2].position = Point::new(100.0, 0.0);
+        nodes[0].children.push(1);
+        nodes[1].children.push(2);
+
+        let (lx, ly) = scene_to_node_local(&nodes, &[0, 1, 2], 2, 160.0, 60.0);
+        assert_eq!((lx, ly), (10.0, 10.0), "滚动偏移从视觉原点扣除（与 hit_test/渲染一致）");
     }
 
     // ── aspectRatio / requiredSize ──
