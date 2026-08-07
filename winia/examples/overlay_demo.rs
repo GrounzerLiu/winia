@@ -225,7 +225,7 @@ fn main() {
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
-                .size(560.0, 620.0)
+                .size(560.0, 720.0)
                 .title("Overlay Demo")
                 .build(ctx, overlay_ui);
         });
