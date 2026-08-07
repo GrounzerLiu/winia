@@ -447,65 +447,88 @@ fn render_pass1(
     }
 }
 
-/// 水波纹（对标 Compose indication/ripple）：按下时从按压点扩散的径向渐变圆，
-/// 释放后淡出；同时绘制 hover/focus 状态层（参考旧版 ripple.rs 的
-/// background_opacity 设计：hover 8% / focus 12%）。分层驱动：每次按下
-/// 一层（RippleLayer），事件循环 update_ripples 推进并清理。
+/// 水波纹（按旧版 D:\winia ripple.rs 的绘制方式）：
+/// - 实心圆（非径向渐变）：状态层 = 节点中心大圆（半径=对角线/2），
+///   波纹层 = 按压点实心圆（半径=对角线×progress）
+/// - 绘制前裁剪到节点背景形状（bounded）——避免圆溢出圆角按钮
+/// - hover/focus 状态层透明度动画值；每层扩散/淡出由动画系统驱动
 fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f32) {
     for el in node.modifier.elements() {
         let ModifierElement::Ripple { source, color, bounded } = el else { continue };
 
-        // ── 状态层（hover 0.08 / focus 0.12——动画值，500ms 平滑过渡，
-        //    参考旧版 ripple.rs background_opacity + Tween）──
+        let diagonal = (w * w + h * h).sqrt();
+        let rect = Rect::new(x, y, x + w, y + h);
+
+        // bounded：裁剪到节点背景形状（无 Background 则按矩形）
+        let mut clipped = false;
+        if *bounded {
+            let shape = node.modifier.elements().iter().rev().find_map(|el| {
+                if let ModifierElement::Background { shape, .. } = el {
+                    Some(shape.clone())
+                } else {
+                    None
+                }
+            });
+            canvas.save();
+            match shape.as_ref() {
+                Some(crate::modifier::Shape::RoundedRect { corner_radius }) => {
+                    canvas.clip_rrect(
+                        skia_safe::RRect::new_rect_xy(rect, *corner_radius, *corner_radius),
+                        None,
+                        Some(false),
+                    );
+                }
+                _ => {
+                    canvas.clip_rect(rect, None, Some(false));
+                }
+            }
+            clipped = true;
+        }
+
+        // ── 状态层：节点中心实心圆（半径=对角线/2，旧版 draw_circle）──
         let state_alpha = source.hover_opacity_value() + source.focus_opacity_value();
         if state_alpha > 0.0 {
             let mut paint = skia_safe::Paint::default();
+            paint.set_anti_alias(true);
             paint.set_color(skia_safe::Color::from_argb(
                 (color.a as f32 * state_alpha) as u8,
                 color.r,
                 color.g,
                 color.b,
             ));
-            canvas.draw_rect(Rect::new(x, y, x + w, y + h), &paint);
+            canvas.draw_circle(
+                skia_safe::Point::new(x + w / 2.0, y + h / 2.0),
+                diagonal / 2.0,
+                &paint,
+            );
         }
 
-        // ── 波纹层（每次按下一层——RippleLayer）──
-        let max_r = if *bounded {
-            ((w * w + h * h).sqrt() * 0.5).max(24.0) + 8.0
-        } else {
-            96.0
-        };
+        // ── 波纹层：按压点实心圆（半径=对角线×progress，旧版 draw_circle）──
         for layer in source.ripple_layers() {
-            // 扩散进度已由动画系统缓动（500ms EaseOutCubic——旧版时长）
             let progress = layer.progress.get();
             let opacity = layer.opacity.get();
-            let radius = max_r * progress;
+            let radius = diagonal * progress;
             if radius <= 0.0 || opacity <= 0.0 {
                 continue;
             }
-            // 按压点已是场景（画布）坐标——非滚动/无 graphicsLayer 变换的节点直接可用
-            let center = skia_safe::Point::new(layer.center.0, layer.center.1);
-            let solid = skia_safe::Color::from_argb(
+            let mut paint = skia_safe::Paint::default();
+            paint.set_anti_alias(true);
+            paint.set_color(skia_safe::Color::from_argb(
                 (color.a as f32 * opacity) as u8,
                 color.r,
                 color.g,
                 color.b,
-            );
-            let transparent = skia_safe::Color::from_argb(0, color.r, color.g, color.b);
-            let colors = [solid, transparent];
-            if let Some(shader) = skia_safe::Shader::radial_gradient(
-                center,
+            ));
+            // 按压点已是场景（画布）坐标——非滚动/无 graphicsLayer 变换的节点直接可用
+            canvas.draw_circle(
+                skia_safe::Point::new(layer.center.0, layer.center.1),
                 radius,
-                &colors[..],
-                None,
-                skia_safe::TileMode::Clamp,
-                None,
-                None,
-            ) {
-                let mut paint = skia_safe::Paint::default();
-                paint.set_shader(shader);
-                canvas.draw_rect(Rect::new(x, y, x + w, y + h), &paint);
-            }
+                &paint,
+            );
+        }
+
+        if clipped {
+            canvas.restore();
         }
     }
 }
