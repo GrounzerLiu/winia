@@ -338,6 +338,15 @@ impl<'a> ComposeCtx<'a> {
         }
     }
 
+    /// 设置当前节点的焦点环颜色（组合期调用——主题色在此捕获；
+    /// 渲染期 CompositionLocal 已退出，不能读主题）
+    pub fn set_current_node_focus_color(&self, color: crate::modifier::Color) {
+        if let Some(&idx) = self.composer.node_stack.last() {
+            let node = &self.composer.arena.nodes[idx];
+            node.focus_color.set(color);
+        }
+    }
+
     /// animateFloatAsState — 动画浮点值到目标值
     pub fn animate_float_as_state(&mut self, target: f32, spec: crate::animation::AnimationSpec) -> State<f32> {
         let remember_key = self.next_remember_key();

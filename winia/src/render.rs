@@ -503,7 +503,15 @@ fn render_pass1(
     }
 
     if node.focused {
-        draw_focus(canvas, rect);
+        // 焦点环形状跟随组件（最近 Background/Border/Clip 形状，回退矩形）；
+        // 颜色由组件组合期从主题捕获（node.focus_color）
+        let focus_shape = node.modifier.elements().iter().rev().find_map(|el| match el {
+            ModifierElement::Background { shape, .. }
+            | ModifierElement::Border { shape, .. }
+            | ModifierElement::Clip { shape } => Some(*shape),
+            _ => None,
+        }).unwrap_or(crate::modifier::Shape::Rectangle);
+        draw_focus(canvas, rect, &focus_shape, node.focus_color.get());
     }
 
     // Scroll clip + translate
@@ -773,13 +781,48 @@ fn draw_border(canvas: &Canvas, x: f32, y: f32, w: f32, h: f32, width: f32, colo
     }
 }
 
-fn draw_focus(canvas: &Canvas, rect: Rect) {
+/// 焦点环（M3 focus indicator）——宽 3、与组件边缘距离 2、形状跟随组件、
+/// 颜色来自组件组合期捕获的主题色。
+fn draw_focus(
+    canvas: &Canvas,
+    rect: Rect,
+    shape: &crate::modifier::Shape,
+    color: crate::modifier::Color,
+) {
+    const FOCUS_GAP: f32 = 2.0;
+    const FOCUS_WIDTH: f32 = 3.0;
+    let sr = Rect::new(
+        rect.left + FOCUS_GAP,
+        rect.top + FOCUS_GAP,
+        rect.right - FOCUS_GAP,
+        rect.bottom - FOCUS_GAP,
+    );
+    if sr.width() <= 0.0 || sr.height() <= 0.0 {
+        return;
+    }
     let mut paint = Paint::default();
-    paint.set_color4f(Color4f::new(0.3, 0.6, 1.0, 0.8), None);
+    paint.set_color4f(Color4f::from(&color), None);
     paint.set_style(skia_safe::paint::Style::Stroke);
-    paint.set_stroke_width(2.0);
+    paint.set_stroke_width(FOCUS_WIDTH);
     paint.set_anti_alias(true);
-    canvas.draw_rect(rect, &paint);
+    match shape {
+        crate::modifier::Shape::Rectangle => { canvas.draw_rect(sr, &paint); }
+        crate::modifier::Shape::RoundedRect { corner_radius } => {
+            let r = (*corner_radius - FOCUS_GAP).max(0.0);
+            canvas.draw_rrect(RRect::new_rect_xy(sr, r, r), &paint);
+        }
+        crate::modifier::Shape::Pill => {
+            let r = sr.width().min(sr.height()) / 2.0;
+            canvas.draw_rrect(RRect::new_rect_xy(sr, r, r), &paint);
+        }
+        crate::modifier::Shape::Circle => {
+            canvas.draw_circle(
+                (sr.center_x(), sr.center_y()),
+                sr.width().min(sr.height()) / 2.0,
+                &paint,
+            );
+        }
+    }
 }
 
 /// draw_text + 选中高亮

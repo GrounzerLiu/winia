@@ -424,6 +424,8 @@ impl TextField {
                 }
             }),
         );
+        // 焦点环颜色：主题 primary（组合期捕获——渲染期 CompositionLocal 已退出）
+        ctx.set_current_node_focus_color(crate::ui::theme::WiniaTheme::colors().primary);
         // IME 预输入回调（旧版风格——直接修改 text 内容）
         {
             let v = value.clone();

@@ -173,6 +173,9 @@ pub struct LayoutNode {
     pub(crate) composing_range: std::cell::RefCell<Option<std::ops::Range<usize>>>,
     /// 选区范围（供渲染高亮选中文本）
     pub(crate) selection_range: std::cell::RefCell<Option<std::ops::Range<usize>>>,
+    /// 焦点环颜色（组合期由组件从主题捕获写入——渲染期 CompositionLocal
+    /// 已退出，不能读主题；未设置时回退默认蓝色）
+    pub(crate) focus_color: std::cell::Cell<crate::modifier::Color>,
 }
 
 // ── CachedNode：LayoutNode 的可缓存子集，用于增量重组时恢复节点 ──
@@ -276,6 +279,7 @@ impl LayoutNode {
             ime_callback: std::cell::RefCell::new(None),
             composing_range: std::cell::RefCell::new(None),
             selection_range: std::cell::RefCell::new(None),
+            focus_color: std::cell::Cell::new(crate::modifier::Color::from_argb(204, 77, 153, 255)),
         }
     }
 
@@ -326,6 +330,7 @@ impl Default for LayoutNode {
             ime_callback: std::cell::RefCell::new(None),
             composing_range: std::cell::RefCell::new(None),
             selection_range: std::cell::RefCell::new(None),
+            focus_color: std::cell::Cell::new(crate::modifier::Color::from_argb(204, 77, 153, 255)),
         }
     }
 }
