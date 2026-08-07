@@ -29,6 +29,16 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::WindowId;
 
+/// 查询窗口当前所在显示器的刷新率 → 帧间隔（mHz：300000 = 300Hz）。
+/// 查询失败返回 None——调用方保留旧值（创建期才回退 16ms）。
+fn current_frame_interval(sw: &VulkanSkiaWindow) -> Option<std::time::Duration> {
+    let mhz = sw.current_monitor()
+        .and_then(|m| m.current_video_mode())
+        .and_then(|v| v.refresh_rate_millihertz())
+        .map(|m| m.get())?;
+    Some(std::time::Duration::from_nanos(1_000_000_000_000 / mhz as u64))
+}
+
 // ── PerWindow ──
 
 pub(crate) struct PerWindow {
@@ -80,6 +90,12 @@ pub(crate) struct PerWindow {
     overlays: Vec<OverlayWindow>,
     /// overlay 点击目标（down 命中 overlay 记录——up 执行 click；v1 仅 clickable）
     overlay_click: Option<(usize, (f32, f32), u64)>,
+    /// 延迟 tap 列表（节点注册 on_double_tap 时——Compose 语义：onTap 延迟到
+    /// 双击窗口结束；窗口内第二次 down 同节点 → 取消；超时 → 补发；不同节点
+    /// 的 pending 相互独立——快速连续点击多个手势节点时各自按 deadline 补发）
+    pending_taps: Vec<crate::input::gesture::PendingTap>,
+    /// 上次刷新率查询时刻（Moved/ScaleFactorChanged 高频触发——300ms 去抖）
+    last_refresh_check: std::time::Instant,
 }
 
 /// 顶层弹出层实例——独立 Composer 组合单元（State 跨帧保持），
@@ -111,9 +127,42 @@ struct PtrDownState {
 
 impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::ui::theme::ThemeColors) -> Self {
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, overlays: Vec::new(), overlay_click: None, frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now() }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, overlays: Vec::new(), overlay_click: None, pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now() }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
+
+    /// 重新查询窗口所在显示器的刷新率并更新帧间隔（跨屏跟随）。
+    /// Moved/ScaleFactorChanged 高频触发——300ms 去抖；查询失败保留旧值
+    /// （避免瞬时失败把高刷错误降级成 60fps）。
+    fn refresh_frame_interval(&mut self) {
+        const RECHECK_MIN: std::time::Duration = std::time::Duration::from_millis(300);
+        let now = std::time::Instant::now();
+        if now.duration_since(self.last_refresh_check) < RECHECK_MIN {
+            return;
+        }
+        self.last_refresh_check = now;
+        let Some(ref sw) = self.skia_window else { return; };
+        let Some(interval) = current_frame_interval(sw) else { return; };
+        if interval != self.frame_interval {
+            debug_log!("[refresh] frame_interval {:?} -> {:?}", self.frame_interval, interval);
+            self.frame_interval = interval;
+            if let Some(ref sw) = self.skia_window { sw.request_redraw(); }
+        }
+    }
+
+    /// 补发延迟的 tap（Compose：onDoubleTap 存在时 onTap 延迟到双击窗口结束）。
+    /// 超时或按下其他节点时调用——按当前布局树换算组件本地坐标。
+    fn fire_pending_tap(&mut self, t: crate::input::gesture::PendingTap) {
+        let nodes = self.composer.arena_nodes();
+        let Some(r) = self.composer.layout_root_idx() else { return; };
+        fire_gesture_action(
+            nodes,
+            r,
+            t.slot_key,
+            crate::input::gesture::GestureAction::Tap(t.pos),
+        );
+        if let Some(ref sw) = self.skia_window { sw.request_redraw(); }
+    }
 
     /// 清除焦点 + 更新缓存
     fn clear_focus(&mut self, nodes: &mut Vec<LayoutNode>, root: usize) {
@@ -261,16 +310,58 @@ impl ApplicationHandler for AppState {
                 }
             }
         }
-        // 兜底：pending 存在（State 已变化待重组——点击/异步回调）时请求重绘。
-        // proxy_wake_up 的 request 在 winit Wait 模式偶发丢失（RedrawRequested 不来），
-        // new_events 每轮事件批次必然执行——pending 消费后自然停止（不空转）。
-        // 节流（last_request_time）：动画持续 pending 时每 16ms 至多一次。
+        // 兜底：pending 存在（State 已变化待重组——点击/异步回调）或渲染欠账
+        // （force_redraw——帧节流跳过的更新）时请求重绘。节流命中不丢弃：
+        // WaitUntil 到下一个可用时刻重试，保证一次性更新不卡到外部事件
         let now = std::time::Instant::now();
+        let mut retry_deadline: Option<std::time::Instant> = None;
         for pw in self.windows.values_mut() {
-            if pw.composer.has_pending_states() && now.duration_since(pw.last_request_time) >= pw.frame_interval {
-                pw.last_request_time = now;
-                if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+            // 渲染欠账按 last_render 对齐（force_redraw 由帧节流跳过时设置）
+            if pw.force_redraw {
+                if now.duration_since(pw.last_render_time) >= pw.frame_interval {
+                    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                } else {
+                    let d = pw.last_render_time + pw.frame_interval;
+                    retry_deadline = Some(match retry_deadline { Some(e) => e.min(d), None => d });
+                }
             }
+            // pending state 按 last_request 节流（动画持续 pending 时每帧至多一次）
+            if pw.composer.has_pending_states() {
+                if now.duration_since(pw.last_request_time) >= pw.frame_interval {
+                    pw.last_request_time = now;
+                    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                } else {
+                    let d = pw.last_request_time + pw.frame_interval;
+                    retry_deadline = Some(match retry_deadline { Some(e) => e.min(d), None => d });
+                }
+            }
+        }
+        if let Some(d) = retry_deadline {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(d));
+        }
+        // 延迟 tap 超时补发（Compose detectTapGestures：onDoubleTap 存在时
+        // onTap 延迟触发）——超时立即补发；未超时用 WaitUntil 定时唤醒
+        // （idle 时也能在双击窗口结束后补发，不依赖下一次输入事件）
+        let now = std::time::Instant::now();
+        let mut next_tap_deadline: Option<std::time::Instant> = None;
+        for pw in self.windows.values_mut() {
+            let mut kept = Vec::new();
+            for t in std::mem::take(&mut pw.pending_taps) {
+                if t.deadline <= now {
+                    pw.fire_pending_tap(t);
+                } else {
+                    let d = t.deadline;
+                    kept.push(t);
+                    next_tap_deadline = Some(match next_tap_deadline {
+                        Some(e) => e.min(d),
+                        None => d,
+                    });
+                }
+            }
+            pw.pending_taps = kept;
+        }
+        if let Some(d) = next_tap_deadline {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(d));
         }
         // DevTools 事件兜底消费（主窗口）——多窗口下主窗口在后台时
         // RedrawRequested 不来（window_event 不调用）→ 注入事件卡队列
@@ -304,11 +395,21 @@ impl ApplicationHandler for AppState {
         // 异步 State 变更唤醒事件循环后需要 request_redraw（节流：距上次 request
         // 够帧间隔才发——动画每帧 notify 触发 proxy_wake_up，无节流会渲染风暴）
         let now = std::time::Instant::now();
+        let mut retry_deadline: Option<std::time::Instant> = None;
         for pw in self.windows.values_mut() {
-            if pw.composer.has_pending_states() && now.duration_since(pw.last_request_time) >= pw.frame_interval {
-                pw.last_request_time = now;
-                if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+            if pw.composer.has_pending_states() {
+                if now.duration_since(pw.last_request_time) >= pw.frame_interval {
+                    pw.last_request_time = now;
+                    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                } else {
+                    // 节流命中不丢弃：到期重试（一次性更新不卡到外部事件）
+                    let d = pw.last_request_time + pw.frame_interval;
+                    retry_deadline = Some(match retry_deadline { Some(e) => e.min(d), None => d });
+                }
             }
+        }
+        if let Some(d) = retry_deadline {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(d));
         }
     }
 
@@ -360,8 +461,14 @@ impl ApplicationHandler for AppState {
                     event_loop.exit();
                 }
             }
+            // 跨屏移动：Moved 高频触发（拖动过程）——内部 300ms 去抖
+            WindowEvent::Moved { .. } => {
+                pw.refresh_frame_interval();
+            }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 pw.scale_factor = scale_factor;
+                // 换显示器可能伴随缩放变化——顺带刷新帧间隔（去抖在方法内）
+                pw.refresh_frame_interval();
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
             }
             WindowEvent::PointerButton { position, state, button, .. } => {
@@ -650,7 +757,11 @@ impl ApplicationHandler for AppState {
                     return;
                 }
                 if !pw.force_redraw && now.duration_since(pw.last_render_time) < pw.frame_interval {
-                    // 不 request——等外部驱动（动画 set → wake / 交互事件）再渲染
+                    // 帧节流命中：不丢弃本次更新——记渲染欠账（force_redraw），
+                    // 下一个可用帧由 new_events 补发 request_redraw。原实现直接
+                    // 跳过：一次性状态变更（如双击延迟 tap）会卡到外部事件才刷新
+                    pw.force_redraw = true;
+                    event_loop.set_control_flow(ControlFlow::WaitUntil(pw.last_render_time + pw.frame_interval));
                 } else {
                 pw.last_render_time = now;
                 let w = pw.width;
@@ -1041,7 +1152,10 @@ fn fire_gesture_action(
         match (el, action) {
             (E::TapOnPress { cb }, G::Press(p)) => { (cb)((p.0 - ax, p.1 - ay)); fired = true; }
             (E::TapOnTap { cb }, G::Tap(p)) => { (cb)((p.0 - ax, p.1 - ay)); fired = true; }
-            (E::TapOnDoubleTap { cb }, G::DoubleTap(p)) => { (cb)((p.0 - ax, p.1 - ay)); fired = true; }
+            (E::TapOnDoubleTap { cb }, G::DoubleTap(p)) => {
+                (cb)((p.0 - ax, p.1 - ay));
+                fired = true;
+            }
             (E::TapOnLongPress { cb }, G::LongPress(p)) => { (cb)((p.0 - ax, p.1 - ay)); fired = true; }
             (E::DragOnStart { cb }, G::DragStart(p)) => { (cb)((p.0 - ax, p.1 - ay)); fired = true; }
             (E::DragOnMove { cb }, G::DragMove(p, delta)) => {
@@ -1061,15 +1175,34 @@ fn fire_gesture_action(
 /// 指针按下手势入口：hit test 找最内层手势节点 → 创建 tracker（capture 语义——
 /// 后续 move/up 由 gesture_node 路由，指针移出组件仍接收）→ on_press 立即触发。
 fn gesture_down(pw: &mut PerWindow, scene_pos: (f32, f32)) {
-    let nodes = pw.composer.arena_nodes();
-    let Some(r) = pw.composer.layout_root_idx() else { return; };
-    let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
-    let Some(gid) = path.iter().rev().find(|&&i| nodes[i].modifier.has_gesture()).copied() else {
-        return;
+    // 先解析手势目标（借用结束即释放——后面要可变借用 pw 处理 pending tap）
+    let hit = {
+        let nodes = pw.composer.arena_nodes();
+        let Some(r) = pw.composer.layout_root_idx() else { return; };
+        let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
+        let Some(gid) = path.iter().rev().find(|&&i| nodes[i].modifier.has_gesture()).copied() else {
+            return;
+        };
+        let n = &nodes[gid];
+        (n.id, n.slot_key, n.modifier.has_drag_gesture())
     };
-    let has_drag = nodes[gid].modifier.has_drag_gesture();
-    let node_id = nodes[gid].id;
-    let slot = nodes[gid].slot_key;
+    let (node_id, slot, has_drag) = hit;
+
+    // 处理待补发的 tap（Compose 双击语义，规则见 pending_tap_on_down）：
+    // - 超时 → 补发；同节点窗口内第二次按下 → 取消（等 up 判定双击）；
+    //   其他节点按下 → 保留到 deadline 补发（不提前也不取消）
+    let now = std::time::Instant::now();
+    let mut kept = Vec::new();
+    for t in std::mem::take(&mut pw.pending_taps) {
+        use crate::input::gesture::PendingTapAction as A;
+        match crate::input::gesture::pending_tap_on_down(&t, now, node_id) {
+            A::Fire => pw.fire_pending_tap(t),
+            A::Cancel => {}
+            A::Keep => kept.push(t),
+        }
+    }
+    pw.pending_taps = kept;
+
     // 双击上下文按节点隔离（Compose per-pointerInput 语义）——不同节点不共享
     let ctx = pw.gesture_tap_ctx.take()
         .filter(|(n, _, _)| *n == node_id)
@@ -1078,6 +1211,8 @@ fn gesture_down(pw: &mut PerWindow, scene_pos: (f32, f32)) {
     pw.gesture_node = Some(node_id);
     pw.gesture_slot = Some(slot);
     // on_press 立即触发（本地坐标）
+    let nodes = pw.composer.arena_nodes();
+    let Some(r) = pw.composer.layout_root_idx() else { return; };
     fire_gesture_action(nodes, r, slot, crate::input::gesture::GestureAction::Press(scene_pos));
 }
 
@@ -1112,6 +1247,26 @@ fn gesture_up(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
     pw.gesture_slot = None;
     if action == crate::input::gesture::GestureAction::None {
         return false;
+    }
+    // ⚠ Compose detectTapGestures 语义：节点注册 onDoubleTap 时，onTap 延迟
+    // 到双击窗口结束——窗口内第二次 up 命中双击 → 只发 DoubleTap（第一次 tap
+    // 已在第二次 down 时取消）；超时/按下其他节点 → 补发 Tap（fire_pending_tap）
+    if let crate::input::gesture::GestureAction::Tap(pos) = action {
+        let nodes = pw.composer.arena_nodes();
+        let Some(r) = pw.composer.layout_root_idx() else { return false; };
+        let has_double_tap = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot)
+            .and_then(|nid| crate::layout::node::find_node_by_id(nodes, r, nid))
+            .map(|idx| nodes[idx].modifier.has_double_tap())
+            .unwrap_or(false);
+        if has_double_tap {
+            pw.pending_taps.push(crate::input::gesture::PendingTap::new(slot, gid, pos));
+            return false;
+        }
+        return fire_gesture_action(nodes, r, slot, action);
+    }
+    if matches!(action, crate::input::gesture::GestureAction::DoubleTap(_)) {
+        // 双击命中：第一次 tap 的 pending 应已在第二次 down 时取消——防御性清理同节点残留
+        pw.pending_taps.retain(|t| t.node_id != gid);
     }
     let nodes = pw.composer.arena_nodes();
     let Some(r) = pw.composer.layout_root_idx() else { return false; };

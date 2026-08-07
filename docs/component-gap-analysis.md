@@ -7,39 +7,39 @@
 ## 一、现状盘点
 
 ### Modifier 已有（winia/src/modifier.rs）
-- 布局：`size`/`width`/`height`（SizeValue 静态/动态）、`padding`(+h/v)、`fill_max_*`、`offset`、`align_self`、`layout_weight`
-- 绘制：`background`（Color/闭包 + Shape）、`border`、`clip`、`blur`、`backdrop_blur`
-- 交互：`clickable`、`focusable`、`on_key_event`/`on_pre_key_event`、`on_pointer_event`/`on_pre_pointer_event`、`focus_requester`
-- 视觉：`graphics_layer`（scale_x/y、alpha、translation_x/y、rotation_z——**无 pivot/transformOrigin/shadow/clip**）
+- 布局：`size`/`width`/`height`（SizeValue 静态/动态）、`padding`(+h/v)、`fill_max_*`、`offset`（动态值 + 单轴 + RTL 镜像）、`align_self`、`layout_weight`、`aspect_ratio`、`required_size`/`required_width`/`required_height`
+- 绘制：`background`（Color/闭包 + Shape）、`border`、`clip`、`blur`、`backdrop_blur`、`shadow`（elevation/shape/颜色）
+- 交互：`clickable`、`focusable`、`on_key_event`/`on_pre_key_event`、`on_pointer_event`/`on_pre_pointer_event`、`focus_requester`、手势 `on_tap`/`on_double_tap`/`on_long_press`/`on_drag_start`/`on_drag`/`on_drag_end`/`on_drag_cancel`
+- 视觉：`alpha`/`rotate`/`scale` 便捷包装、`graphics_layer`（scale_x/y、alpha、translation_x/y、rotation_z、**transformOrigin + clip 已补**；shadowElevation/rotationX/Y 仍缺）、`test_tag`
 - 滚动：`vertical_scroll`/`horizontal_scroll`（ScrollState）
 
 ### 组件已有
-Text / TextField / Button / Column / Row / Stack / RichText / SelectionContainer / AnimatedVisibility / AnimatedContent / AnimatedSize / Crossfade / Window
+Text / TextField / Button / Column / Row / Stack / RichText / SelectionContainer / AnimatedVisibility / AnimatedContent / AnimatedSize / Crossfade / Window / **Popup / Dialog / DropdownMenu / DropdownMenuItem**
 
 ## 二、Modifier 差距（按优先级）——**已对照 Compose 1.11.4 源码核实**
 
 ### P0 — 常用便捷（低成本，纯包装/新元素）
-1. **`alpha(a)` / `rotate(deg)` / `scale(sx, sy)`**——graphics_layer 直接包装，**对标源码语义**：
+1. ✅ **`alpha(a)` / `rotate(deg)` / `scale(sx, sy)`**——graphics_layer 直接包装，**对标源码语义**：
    - `alpha(a)`：`a != 1.0f` 时 `graphicsLayer(alpha = a, clip = true)`（**alpha<1 隐式裁剪到 bounds**）；范围 0..1
    - `rotate(degrees)`：`degrees != 0` 时 `graphicsLayer(rotationZ = degrees)`（**绕中心**）
    - `scale(sx, sy)` / `scale(s)`：非 1 时 `graphicsLayer(scaleX, scaleY)`（**绕中心**）
-   - ⚠ 以上变换**默认绕中心**（transformOrigin=Center）——当前项目 graphics_layer 绕左上——**需要先补 transformOrigin**（P1-7）语义才一致
-2. **`shadow(elevation, shape = RectangleShape, clip = elevation > 0.dp, ambientColor = Black, spotColor = Black)`**——`elevation > 0 || clip` 才应用（否则返回 this）——对标 DropShadowPainter
-3. **`aspect_ratio(ratio, match_height_constraints_first = false)`**——ratio 必须 > 0（前置校验）——按 cross 轴推导 main 轴
-4. **`required_size(size)`**——SizeElement(min=max=size, **enforceIncoming=false**——incoming constraints 不强制，子内容可溢出）；另有 requiredWidth/requiredHeight
-5. **`test_tag(tag)`**——对标 testTag（Compose 基于 semantics——本项目无 semantics 系统：实现为独立 modifier 元素 + 调试树暴露）
-6. **`offset(x, y)`**——**布局期**（已核实：Compose Modifier.offset 是 LayoutModifierNode 布局期位移——项目现有实现一致，无需改）；absoluteOffset（rtlAware=false）待 RTL 支持时再补
+   - ✅ transformOrigin（P1-7）已补——变换**默认绕中心**（transformOrigin=Center），语义与 Compose 一致
+2. ✅ **`shadow(elevation, shape = RectangleShape, clip = elevation > 0.dp, ambientColor = Black, spotColor = Black)`**——`elevation > 0 || clip` 才应用（否则返回 this）——对标 DropShadowPainter
+3. ✅ **`aspect_ratio(ratio, match_height_constraints_first = false)`**——ratio 必须 > 0（前置校验）——按 cross 轴推导 main 轴
+4. ✅ **`required_size(size)`**——SizeElement(min=max=size, **enforceIncoming=false**——incoming constraints 不强制，子内容可溢出）；另有 requiredWidth/requiredHeight
+5. ✅ **`test_tag(tag)`**——对标 testTag（Compose 基于 semantics——本项目无 semantics 系统：实现为独立 modifier 元素 + 调试树暴露）
+6. ✅ **`offset(x, y)`**——**布局期**（已核实：Compose Modifier.offset 是 LayoutModifierNode 布局期位移——项目现有实现一致）；已补动态值 + 单轴 + **RTL 镜像语义**（absoluteOffset 待 RTL 便捷 API 时补）
 
 ### P1 — GraphicsLayer 补属性（渲染层能力）
-7. **transformOrigin（pivotFractionX/Y，默认 Center (0.5, 0.5)）**——**关键**：Compose 变换默认绕中心，项目当前绕左上——语义偏差，P0 便捷包装依赖它
-8. **shadowElevation / ambientShadowColor / spotShadowColor**（与 Modifier.shadow 合并实现）
-9. **shape + clip**（graphics_layer 内裁剪）
+7. ✅ **transformOrigin（pivotFractionX/Y，默认 Center (0.5, 0.5)）**——**关键**：Compose 变换默认绕中心，项目当前绕左上——语义偏差，P0 便捷包装依赖它（已实现并修正）
+8. **shadowElevation / ambientShadowColor / spotShadowColor**（与 Modifier.shadow 合并实现——shadow 基础版已做）
+9. clip ✅（graphics_layer 内裁剪到节点 bounds）；**shape 裁剪仍缺**（GraphicsLayerParams 无 shape 字段）
 10. **rotationX/Y / cameraDistance**（3D 透视——skia 支持有限，可降级）
 
 ### P2 — 状态与交互
-11. **enabled 语义**（组件禁用——clickable 不响应 + 视觉降透明度）——Button/TextField 先接
+11. ✅ **enabled 语义**（组件禁用——clickable 不响应 + 视觉降透明度）——Button/TextField 已独立实现；统一语义见 12
 12. **InteractionSource / ComponentState**（hover/press/focus 状态聚合——Button 颜色/阴影变化的依据——**大工程，先做最小版**：`MutableInteractionSource` + 状态读取）
-13. **hoverable / draggable / pointer_input**（手势层——**远期**，需 pointer 事件管道增强）
+13. **hoverable / draggable / pointer_input**（手势层——**tap/double-tap/long-press/drag 已实现**（`Modifier.on_tap` 等）；hoverable/draggable/pointer_input 仍远期）
 
 ## 三、组件属性差距——**已对照 material3 1.4.0 / foundation 1.11.4 源码核实**
 
@@ -48,15 +48,15 @@ Text / TextField / Button / Column / Row / Stack / RichText / SelectionContainer
 |---|---|---|
 | `BasicText(text, style, overflow=Clip, softWrap=true, maxLines=MAX, minLines=1, color)` | 部分 | minLines（小） |
 | TextStyle: fontSize/weight/style/family/color | 有 | — |
-| TextStyle: **letterSpacing** / **lineHeight** | 无 | **加**（skia/Paragraph 原生支持） |
+| TextStyle: **letterSpacing** / **lineHeight** | ✅ 已加（TextContent 元素全链路） | — |
 | TextStyle: textDecoration / textShadow / background | RichText Style 有 | Text 便捷缺（中优先） |
 | textAlign | 有 | — |
 
 ### Button（对标 material3 `Button(onClick, modifier, enabled=true, shape, colors, elevation, border, contentPadding, interactionSource)`）
 | 缺口 | 说明 |
 |---|---|
-| **enabled** | 禁用：容器色/内容色切换（colors.containerColor(enabled)）+ 不响应点击 |
-| **colors**（ButtonColors: container/content + disabled 变体） | 现硬编码主题色 |
+| **enabled** | ✅ 已实现：禁用：容器色/内容色切换（colors.containerColor(enabled)）+ 不响应点击 |
+| **colors**（ButtonColors: container/content + disabled 变体） | ✅ 已实现（默认从主题按 style 生成） |
 | **elevation**（ButtonElevation: shadowElevation 随 enabled/interaction 变化） | 无（结合 Modifier.shadow） |
 | **border / contentPadding** | border 可经 modifier；contentPadding 固定 | 
 | **interactionSource** | P2-12 后接 |
@@ -64,10 +64,10 @@ Text / TextField / Button / Column / Row / Stack / RichText / SelectionContainer
 ### TextField（对标 material3 `TextField(value, onValueChange, enabled=true, readOnly=false, label, placeholder, leadingIcon, trailingIcon, prefix, suffix, supportingText, isError, visualTransformation, keyboardOptions, singleLine=false, maxLines=MAX, minLines=1, colors)`）
 | 缺口 | 说明 |
 |---|---|
-| **enabled / readOnly** | 禁用不响应；只读不可编辑仍可选 |
+| **enabled / readOnly** | ✅ 已实现：禁用不响应；只读不可编辑仍可选 |
 | **label / placeholder** | **@Composable (() -> Unit)**（非 String）——placeholder 空值时显示 |
 | **isError** | 错误边框/文字色（colors 变体） |
-| **多行（singleLine=false 默认、maxLines、minLines）** | 项目现单行——**Compose 默认多行**，需换行测量 + 光标移动支持（基础已有） |
+| **多行（singleLine=false 默认、maxLines、minLines）** | ✅ 已实现：换行测量 + 光标移动支持（基础已有） |
 | leadingIcon/trailingIcon/prefix/suffix/supportingText | 中优先（inline 内容） |
 
 ### Column/Row/Stack（对标 foundation-layout Column/Row/Box）
@@ -90,9 +90,15 @@ Text / TextField / Button / Column / Row / Stack / RichText / SelectionContainer
 8. ✅ Text letterSpacing/lineHeight（TextContent 元素全链路）
 9. ✅ 多行 TextField（singleLine/maxLines/minLines）
 10. ✅ frame_clock 并行 flaky 双根因修复（旧帧丢弃同步化 + 首次 0ns 兜底）
+11. ✅ RTL 布局方向支持 + 非对称/动态 padding（组合期捕获方向到 desc——修复 RTL 切换后 offset/padding 镜像失效）
+12. ✅ Modifier.offset 对标 Compose——动态值 + 单轴 + RTL 镜像语义
+13. ✅ 手势识别层——tap/double-tap/long-press/drag（对标 Compose detectTapGestures/detectDragGestures；Modifier.on_tap/on_double_tap/on_long_press/on_drag_*）
+14. ✅ 顶层弹出组件——Popup / Dialog / DropdownMenu（模态遮罩、点击外部 dismiss、按 id 保留 State）
+15. ✅ overlay 渲染 HiDPI 修复——内容按 scale 绘制，可见位置与命中测试对齐
+16. ✅ Popup 锚定到调用位置的上一个兄弟节点（对标 Compose Popup 定位；无兄弟回退窗口对齐）
 
 **剩余**：
 - P1 GraphicsLayer 补属性（shadowElevation/rotationX/Y/cameraDistance——shadow 已做基础版）
 - P2 enabled 语义统一（InteractionSource 最小版——Button/TextField 已独立实现）
 - TextField label（Composable 浮动——需动画支持，P2）
-- 手势层 hoverable/draggable（远期）
+- 手势层 hoverable/draggable/pointer_input（远期；tap/double-tap/long-press/drag 已完成）

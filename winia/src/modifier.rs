@@ -1262,6 +1262,13 @@ impl Modifier {
         ))
     }
 
+    /// 是否声明了双击回调——决定 onTap 是否延迟到双击窗口结束
+    /// （Compose detectTapGestures：onDoubleTap 存在时 onTap 延迟触发，
+    /// 窗口内第二次按下同节点 → 取消；超时 → 补发）
+    pub fn has_double_tap(&self) -> bool {
+        self.elements.iter().any(|el| matches!(el, ModifierElement::TapOnDoubleTap { .. }))
+    }
+
     pub fn graphics_layer_params(&self) -> Option<GraphicsLayerParams> {
         self.elements.iter().find_map(|el| {
             if let ModifierElement::GraphicsLayer { params_fn } = el { Some((params_fn)()) } else { None }
