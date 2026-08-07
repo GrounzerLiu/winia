@@ -73,6 +73,10 @@ pub struct TextField {
     max_lines: usize,
     /// 最小行数（对标 Compose minLines，默认 1——空内容也占位）
     min_lines: usize,
+    /// 交互源（None = build 时内部 remember——对标 Compose TextField 可选注入）
+    interaction_source: Option<crate::ui::interaction::MutableInteractionSource>,
+    /// 错误状态（对标 Compose isError——文字/边框错误色，供按状态取色）
+    is_error: bool,
 }
 
 impl TextField {
@@ -91,6 +95,8 @@ impl TextField {
             single_line: false,
             max_lines: usize::MAX,
             min_lines: 1,
+            interaction_source: None,
+            is_error: false,
         }
     }
 
@@ -144,6 +150,19 @@ impl TextField {
         self
     }
 
+    /// 注入交互源（hoist——TextField 的 focus 状态发射到此源；
+    /// 不传则内部 remember 一个）
+    pub fn interaction_source(mut self, source: crate::ui::interaction::MutableInteractionSource) -> Self {
+        self.interaction_source = Some(source);
+        self
+    }
+
+    /// 错误状态（对标 Compose isError——错误时文字/边框用 error 色）
+    pub fn is_error(mut self, is_error: bool) -> Self {
+        self.is_error = is_error;
+        self
+    }
+
     pub fn build(self, ctx: &mut ComposeCtx) {
         let key = ctx.next_key();
         let current = self.value.get();
@@ -154,13 +173,16 @@ impl TextField {
             .unwrap_or(crate::unit::TextUnit::Sp(crate::unit::Sp(14.0)))
             .to_logical_px();
         // 禁用：文字 50% alpha（对标 Compose disabled 内容色）
-        let color = if self.enabled {
-            theme.on_surface
-        } else {
+        // 错误：enabled 且 is_error → error 色（对标 Compose TextField isError 文字色）
+        let color = if !self.enabled {
             crate::modifier::Color::from_argb(
                 (theme.on_surface.a as f32 * 0.5) as u8,
                 theme.on_surface.r, theme.on_surface.g, theme.on_surface.b,
             )
+        } else if self.is_error {
+            theme.error
+        } else {
+            theme.on_surface
         };
 
         // 占位文字：值空时显示（灰色），否则正常内容
@@ -373,7 +395,10 @@ impl TextField {
         };
         // 禁用：不聚焦不响应键盘（Compose disabled 语义）；否则聚焦 + 键盘
         let modifier = if self.enabled {
-            modifier.focusable().on_key_event(kb_handler)
+            // 交互源：外部注入或内部 remember（focus 状态发射到此源）
+            let interaction = self.interaction_source
+                .unwrap_or_else(|| ctx.remember(|| crate::ui::interaction::MutableInteractionSource::new()).get());
+            modifier.focusable_with_source(&interaction).on_key_event(kb_handler)
         } else {
             modifier
         };
@@ -460,7 +485,7 @@ mod tests {
     }
 
     fn has_focusable(modifier: &Modifier) -> bool {
-        modifier.elements().iter().any(|el| matches!(el, ModifierElement::Focusable))
+        modifier.elements().iter().any(|el| matches!(el, ModifierElement::Focusable { .. }))
     }
 
     /// 构建 TextField 并取叶子节点 modifier

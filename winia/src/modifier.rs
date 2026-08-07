@@ -10,6 +10,7 @@ use std::ops::Range;
 use std::fmt::{self, Debug};
 use std::sync::atomic::{AtomicU64, Ordering};
 use crate::layout::LayoutDirection;
+use crate::ui::interaction::MutableInteractionSource;
 
 // ── Dimension ──
 
@@ -194,6 +195,22 @@ impl Color {
     }
 }
 
+impl Color {
+    /// 状态层叠加（对标 Material3 state layer）：
+    /// 把 `overlay` 以 `alpha` 透明度叠到当前颜色上——hover 8% / press/focus 12% /
+    /// drag 16% 的近似实现（Material3 的容器状态层）。
+    pub fn overlay(&self, overlay: Color, alpha: f32) -> Color {
+        let a = alpha.clamp(0.0, 1.0);
+        let lerp = |b: u8, o: u8| (b as f32 * (1.0 - a) + o as f32 * a).round() as u8;
+        Color::from_argb(
+            self.a,
+            lerp(self.r, overlay.r),
+            lerp(self.g, overlay.g),
+            lerp(self.b, overlay.b),
+        )
+    }
+}
+
 // ── Modifier ──
 
 // ── KbEvent ──
@@ -372,7 +389,9 @@ pub(crate) enum ModifierElement {
 
     // ── Input 类 ──
     /// 可点击
-    Clickable { on_click: Arc<dyn Fn() + Send + Sync> },
+    /// 可点击——`interaction` 为 Some 时自动发射 press/focus/hover 交互
+    /// （对标 Compose clickable(interactionSource)）
+    Clickable { on_click: Arc<dyn Fn() + Send + Sync>, interaction: Option<MutableInteractionSource> },
     /// 点按手势回调（对标 Compose `detectTapGestures` 的 onTap）——
     /// 位置参数为组件本地坐标
     TapOnTap { cb: Arc<dyn Fn((f32, f32)) + Send + Sync> },
@@ -390,8 +409,10 @@ pub(crate) enum ModifierElement {
     DragOnEnd { cb: Arc<dyn Fn() + Send + Sync> },
     /// 拖拽取消（系统打断）
     DragOnCancel { cb: Arc<dyn Fn() + Send + Sync> },
-    /// 可获得焦点
-    Focusable,
+    /// 可获得焦点——`interaction` 为 Some 时焦点变化自动发射 Focus/Unfocus
+    Focusable { interaction: Option<MutableInteractionSource> },
+    /// 悬停——指针进入/离开自动发射 Hover Enter/Exit（对标 Compose hoverable）
+    Hoverable { interaction: MutableInteractionSource },
     /// 焦点请求器 ID（与 FocusRequester 关联）
     FocusRequesterId { id: u64 },
     /// 键盘事件
@@ -851,7 +872,24 @@ impl Modifier {
     pub fn clickable(self, on_click: impl Fn() + Send + Sync + 'static) -> Self {
         self.push(ModifierElement::Clickable {
             on_click: Arc::new(on_click),
+            interaction: None,
         })
+    }
+
+    /// 添加点击行为并绑定交互源——按下/释放/聚焦/悬停自动发射到 `source`
+    /// （对标 Compose `clickable(interactionSource)`：内部组合 focusable + hover）
+    pub fn clickable_with_source(
+        self,
+        source: &MutableInteractionSource,
+        on_click: impl Fn() + Send + Sync + 'static,
+    ) -> Self {
+        let source = source.clone();
+        self.push(ModifierElement::Clickable {
+            on_click: Arc::new(on_click),
+            interaction: Some(source.clone()),
+        })
+        .push(ModifierElement::Focusable { interaction: Some(source.clone()) })
+        .push(ModifierElement::Hoverable { interaction: source })
     }
 
     // ── 手势（对标 Compose detectTapGestures / detectDragGestures） ──
@@ -898,7 +936,17 @@ impl Modifier {
 
     /// 标记为可获焦点
     pub fn focusable(self) -> Self {
-        self.push(ModifierElement::Focusable)
+        self.push(ModifierElement::Focusable { interaction: None })
+    }
+
+    /// 标记为可获焦点并绑定交互源——焦点变化自动发射 Focus/Unfocus
+    pub fn focusable_with_source(self, source: &MutableInteractionSource) -> Self {
+        self.push(ModifierElement::Focusable { interaction: Some(source.clone()) })
+    }
+
+    /// 悬停——指针进入/离开自动发射 Hover Enter/Exit（对标 Compose hoverable）
+    pub fn hoverable(self, source: &MutableInteractionSource) -> Self {
+        self.push(ModifierElement::Hoverable { interaction: source.clone() })
     }
 
     /// 关联 FocusRequester（不消耗所有权）
@@ -1229,11 +1277,49 @@ impl Modifier {
     /// 点击回调（如果有 Clickable modifier）
     pub fn on_click(&self) -> Option<&Arc<dyn Fn() + Send + Sync>> {
         for el in &self.elements {
-            if let ModifierElement::Clickable { on_click } = el {
+            if let ModifierElement::Clickable { on_click, .. } = el {
                 return Some(on_click);
             }
         }
         None
+    }
+
+    /// Clickable 绑定的交互源（无则 None）
+    pub fn clickable_interaction(&self) -> Option<&MutableInteractionSource> {
+        self.elements.iter().find_map(|el| {
+            if let ModifierElement::Clickable { interaction: Some(s), .. } = el {
+                Some(s)
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Focusable 绑定的交互源（无则 None）
+    pub fn focusable_interaction(&self) -> Option<&MutableInteractionSource> {
+        self.elements.iter().find_map(|el| {
+            if let ModifierElement::Focusable { interaction: Some(s) } = el {
+                Some(s)
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Hoverable 绑定的交互源
+    pub fn hoverable_interaction(&self) -> Option<&MutableInteractionSource> {
+        self.elements.iter().find_map(|el| {
+            if let ModifierElement::Hoverable { interaction } = el {
+                Some(interaction)
+            } else {
+                None
+            }
+        })
+    }
+
+    /// 是否声明了悬停交互（hover 路由判定）
+    pub fn has_hoverable(&self) -> bool {
+        self.elements.iter().any(|el| matches!(el, ModifierElement::Hoverable { .. }))
     }
 
     /// 是否声明了任意手势回调（tap/drag 系列）——app.rs 手势路由判定用
@@ -1401,7 +1487,8 @@ impl Debug for ModifierElement {
             Self::DragOnMove { .. } => f.write_str("DragOnMove(<fn>)"),
             Self::DragOnEnd { .. } => f.write_str("DragOnEnd(<fn>)"),
             Self::DragOnCancel { .. } => f.write_str("DragOnCancel(<fn>)"),
-            Self::Focusable => f.write_str("Focusable"),
+            Self::Focusable { .. } => f.write_str("Focusable"),
+            Self::Hoverable { .. } => f.write_str("Hoverable"),
             Self::KbEvent { on_key, on_pre_key } => f.debug_struct("KbEvent").field("on_key", &on_key.is_some()).field("on_pre_key", &on_pre_key.is_some()).finish(),
             Self::PointerEvent { on_ptr, on_pre_ptr } => f.debug_struct("PointerEvent").field("on_ptr", &on_ptr.is_some()).field("on_pre_ptr", &on_pre_ptr.is_some()).finish(),
             Self::FocusRequesterId { id } => f.debug_tuple("FocusRequesterId").field(id).finish(),
@@ -1898,8 +1985,8 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
          RichTextContent { content: bc, drawables: bd, drawable_ranges: br, .. }) => {
             ac == bc && ad.len() == bd.len() && ar == br
         }
-        // 点击/键盘/指针回调视为相同（行为不参与内容重建判定）
-        (Clickable { .. }, Clickable { .. }) => true,
+        // 点击：交互源身份参与判定（换源需重入 content 捕获新源）；回调视为相同
+        (Clickable { interaction: ai, .. }, Clickable { interaction: bi, .. }) => ai == bi,
         (TapOnTap { .. }, TapOnTap { .. }) => true,
         (TapOnDoubleTap { .. }, TapOnDoubleTap { .. }) => true,
         (TapOnLongPress { .. }, TapOnLongPress { .. }) => true,
@@ -1908,7 +1995,8 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (DragOnMove { .. }, DragOnMove { .. }) => true,
         (DragOnEnd { .. }, DragOnEnd { .. }) => true,
         (DragOnCancel { .. }, DragOnCancel { .. }) => true,
-        (Focusable, Focusable) => true,
+        (Focusable { interaction: ai }, Focusable { interaction: bi }) => ai == bi,
+        (Hoverable { interaction: ai }, Hoverable { interaction: bi }) => ai == bi,
         (FocusRequesterId { id: ai }, FocusRequesterId { id: bi }) => ai == bi,
         (KbEvent { .. }, KbEvent { .. }) => true,
         (PointerEvent { .. }, PointerEvent { .. }) => true,

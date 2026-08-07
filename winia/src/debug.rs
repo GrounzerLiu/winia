@@ -162,7 +162,8 @@ fn describe_modifier(modifier: &crate::modifier::Modifier) -> String {
         ModifierElement::Size { width, height } => Some(format!("size({:?},{:?})", width, height)),
         ModifierElement::Background { color_fn, .. } => Some("bg(<dynamic>)".into()),
         ModifierElement::Clickable { .. } => Some("click".into()),
-        ModifierElement::Focusable => Some("focus".into()),
+        ModifierElement::Focusable { .. } => Some("focus".into()),
+        ModifierElement::Hoverable { .. } => Some("hover".into()),
         ModifierElement::TextContent { content, .. } => Some(format!("text({})",
             // 完整转义（JSON 字符串——\t/\r/\b/\f 等控制字符不转义会生成非法 JSON，
             // serde_json 解析失败 → 测试表现为超时难排查）

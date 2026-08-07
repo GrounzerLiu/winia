@@ -13,6 +13,7 @@
 use crate::core::composer::ComposeCtx;
 use crate::layout::BoxLayout;
 use crate::modifier::{Modifier, Shape};
+use crate::ui::interaction::{ComponentState, MutableInteractionSource};
 use std::sync::Arc;
 use std::fmt;
 
@@ -52,12 +53,37 @@ impl ButtonColors {
 
     /// 按启用状态取容器色
     pub fn container_color(&self, enabled: bool) -> crate::modifier::Color {
-        if enabled { self.container } else { self.disabled_container }
+        self.container_color_for(&ComponentState { enabled, ..ComponentState::idle() })
     }
 
     /// 按启用状态取内容（文字）色
     pub fn content_color(&self, enabled: bool) -> crate::modifier::Color {
-        if enabled { self.content } else { self.disabled_content }
+        self.content_color_for(&ComponentState { enabled, ..ComponentState::idle() })
+    }
+
+    /// 状态化容器色（对标 material3 状态层：hover 8% / press/focus 12% / drag 16%，
+    /// 用内容色作状态层叠加到容器色上——M3 的 onContainer state layer 近似）。
+    pub fn container_color_for(&self, state: &ComponentState) -> crate::modifier::Color {
+        if !state.enabled {
+            return self.disabled_container;
+        }
+        let overlay = self.content;
+        if state.pressed {
+            self.container.overlay(overlay, 0.12)
+        } else if state.dragged {
+            self.container.overlay(overlay, 0.16)
+        } else if state.hovered {
+            self.container.overlay(overlay, 0.08)
+        } else if state.focused {
+            self.container.overlay(overlay, 0.12)
+        } else {
+            self.container
+        }
+    }
+
+    /// 状态化内容色（内容色仅区分 enabled/disabled——与 material3 ButtonColors 一致）
+    pub fn content_color_for(&self, state: &ComponentState) -> crate::modifier::Color {
+        if state.enabled { self.content } else { self.disabled_content }
     }
 
     /// 从主题按 style 生成默认色（Compose ButtonDefaults.buttonColors 对标）
@@ -77,6 +103,58 @@ impl ButtonColors {
             (content.a as f32 * 0.5) as u8, content.r, content.g, content.b,
         );
         Self::new(container, content, disabled_container, disabled_content)
+    }
+}
+
+/// 按钮阴影高度（对标 material3 `ButtonElevation`）——各交互状态取不同 elevation，
+/// 由 `Button::elevation` 应用为 `Modifier.shadow`。默认 FilledButton 全 0
+/// （M3 tokens）；`ButtonElevation::elevated()` 给出 ElevatedButton 近似值。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ButtonElevation {
+    pub default: f32,
+    pub pressed: f32,
+    pub focused: f32,
+    pub hovered: f32,
+    pub disabled: f32,
+}
+
+impl ButtonElevation {
+    pub fn new(default: f32, pressed: f32, focused: f32, hovered: f32, disabled: f32) -> Self {
+        Self { default, pressed, focused, hovered, disabled }
+    }
+
+    /// M3 FilledButton 默认：全 0（阴影由用户显式配置）
+    pub fn default_elevation() -> Self {
+        Self::new(0.0, 0.0, 0.0, 0.0, 0.0)
+    }
+
+    /// ElevatedButton 近似（M3 tokens：rest 1 / pressed 8 / focused 2 / hovered 2 / disabled 0）
+    pub fn elevated() -> Self {
+        Self::new(1.0, 8.0, 2.0, 2.0, 0.0)
+    }
+
+    /// 按状态取 elevation（优先级 disabled > pressed > dragged > hovered > focused > default——
+    /// 与 material3 的"最近交互优先"一致）
+    pub fn for_state(&self, state: &ComponentState) -> f32 {
+        if !state.enabled {
+            self.disabled
+        } else if state.pressed {
+            self.pressed
+        } else if state.dragged {
+            self.pressed.max(self.hovered)
+        } else if state.hovered {
+            self.hovered
+        } else if state.focused {
+            self.focused
+        } else {
+            self.default
+        }
+    }
+}
+
+impl Default for ButtonElevation {
+    fn default() -> Self {
+        Self::default_elevation()
     }
 }
 
@@ -115,6 +193,10 @@ pub struct Button {
     style: ButtonStyle,
     /// 颜色集（None = 从主题按 style 默认）
     colors: Option<ButtonColors>,
+    /// 交互源（None = build 时内部 remember——对标 Compose 可选注入）
+    interaction_source: Option<MutableInteractionSource>,
+    /// 阴影高度（None = 默认全 0——对标 material3 ButtonElevation）
+    elevation: Option<ButtonElevation>,
     /// 修饰符链（尺寸、颜色、形状等）
     modifier: Modifier,
 }
@@ -127,6 +209,8 @@ impl Button {
             enabled: true,
             style: ButtonStyle::default(),
             colors: None,
+            interaction_source: None,
+            elevation: None,
             modifier: Modifier::new(),
         }
     }
@@ -155,6 +239,19 @@ impl Button {
         self
     }
 
+    /// 注入交互源（hoist——Button 的 press/hover/focus 状态发射到此源；
+    /// 不传则内部 remember 一个）
+    pub fn interaction_source(mut self, source: MutableInteractionSource) -> Self {
+        self.interaction_source = Some(source);
+        self
+    }
+
+    /// 设置阴影高度（各状态取值见 [`ButtonElevation::for_state`]）
+    pub fn elevation(mut self, elevation: ButtonElevation) -> Self {
+        self.elevation = Some(elevation);
+        self
+    }
+
     /// 设置修饰符链（追加到已有 modifier）
     pub fn modifier(mut self, modifier: Modifier) -> Self {
         self.modifier = self.modifier.then(modifier);
@@ -170,9 +267,14 @@ impl Button {
         let key = ctx.next_key();
         let theme = crate::ui::theme::WiniaTheme::colors();
         let colors = self.colors.unwrap_or_else(|| ButtonColors::from_theme(&theme, self.style));
-
-        // 容器色（禁用时自动切换 disabled 变体——Compose ButtonColors 语义）
-        let container = colors.container_color(self.enabled);
+        // 交互源：外部注入或内部 remember（对标 Compose Button 的 interactionSource 参数）
+        let interaction = self.interaction_source
+            .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
+        // 状态化取色（读取注册依赖——press/hover/focus 变化自动重组）
+        let state = interaction.state(self.enabled);
+        let container = colors.container_color_for(&state);
+        let text_color = colors.content_color_for(&state);
+        let elevation = self.elevation.map(|e| e.for_state(&state)).unwrap_or(0.0);
 
         // 根据 style 在最内层插入主题默认背景/边框
         // 默认 wrap content（不撑满父容器），用户可用 .size()/.fill_max_size() 覆盖
@@ -191,13 +293,23 @@ impl Button {
             }
         };
 
+        // 阴影（elevation > 0 才应用——Modifier.shadow 本身也按 elevation>0 短路）
+        if elevation > 0.0 {
+            modifier = modifier.shadow(
+                elevation,
+                Shape::rounded(20.0),
+                true,
+                crate::modifier::Color::BLACK,
+            );
+        }
+
         // 追加用户 modifier（在外层，可覆盖默认样式）
         modifier = modifier.then(self.modifier);
 
         if self.enabled {
             if let Some(on_click) = &self.on_click {
                 let cb = on_click.clone();
-                modifier = modifier.clickable(move || cb());
+                modifier = modifier.clickable_with_source(&interaction, move || cb());
             }
         }
 
@@ -205,8 +317,6 @@ impl Button {
         match ctx.start_restartable_group(key, modifier, BoxLayout::new().alignment(crate::layout::Alignment::Center)) {
             crate::core::composer::GroupStatus::Skip => {}
             crate::core::composer::GroupStatus::Enter => {
-                // 为子 Text 提供默认文字颜色（禁用时自动切换 disabled 内容色）
-                let text_color = colors.content_color(self.enabled);
                 crate::ui::text::ProvideTextStyle(
                     crate::ui::text::TextStyle::new().color(text_color),
                     ctx, content,
@@ -291,5 +401,46 @@ mod tests {
 
         // 组合树应该正确构建
         assert!(composer.layout_root().is_some());
+    }
+
+    #[test]
+    fn test_button_colors_state_resolution() {
+        use crate::modifier::Color;
+        let colors = ButtonColors::new(
+            Color::RED,
+            Color::WHITE,
+            Color::from_argb(100, 100, 100, 100),
+            Color::from_argb(80, 200, 200, 200),
+        );
+        // disabled 优先
+        assert_eq!(colors.container_color_for(&ComponentState::disabled()), colors.disabled_container);
+        // idle = 容器原色
+        assert_eq!(colors.container_color_for(&ComponentState::idle()), colors.container);
+        // hover/focus/press 都是状态层叠加（≠ 原色）
+        let hovered = colors.container_color_for(&ComponentState { hovered: true, ..ComponentState::idle() });
+        let focused = colors.container_color_for(&ComponentState { focused: true, ..ComponentState::idle() });
+        let pressed = colors.container_color_for(&ComponentState { pressed: true, ..ComponentState::idle() });
+        assert_ne!(hovered, colors.container);
+        assert_ne!(focused, colors.container);
+        assert_ne!(pressed, hovered, "press 12% > hover 8%——叠加量不同");
+        // 内容色只区分 enabled/disabled（与 material3 ButtonColors 一致）
+        assert_eq!(colors.content_color_for(&ComponentState::idle()), colors.content);
+        assert_eq!(colors.content_color_for(&ComponentState::disabled()), colors.disabled_content);
+    }
+
+    #[test]
+    fn test_button_elevation_priority() {
+        let e = ButtonElevation::new(1.0, 8.0, 2.0, 2.0, 0.0);
+        assert_eq!(e.for_state(&ComponentState::disabled()), 0.0);
+        assert_eq!(e.for_state(&ComponentState::idle()), 1.0);
+        assert_eq!(e.for_state(&ComponentState { pressed: true, ..ComponentState::idle() }), 8.0);
+        assert_eq!(e.for_state(&ComponentState { hovered: true, ..ComponentState::idle() }), 2.0);
+        assert_eq!(e.for_state(&ComponentState { focused: true, ..ComponentState::idle() }), 2.0);
+        // 优先级：disabled > pressed > dragged > hovered > focused > default
+        assert_eq!(
+            e.for_state(&ComponentState { pressed: true, hovered: true, ..ComponentState::idle() }),
+            8.0
+        );
+        assert_eq!(ButtonElevation::default_elevation().for_state(&ComponentState::idle()), 0.0);
     }
 }

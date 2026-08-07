@@ -96,6 +96,12 @@ pub(crate) struct PerWindow {
     pending_taps: Vec<crate::input::gesture::PendingTap>,
     /// 上次刷新率查询时刻（Moved/ScaleFactorChanged 高频触发——300ms 去抖）
     last_refresh_check: std::time::Instant,
+    /// 当前悬停节点的 slot_key（指针移入/移出时发射 Hover Enter/Exit）
+    hovered_slot: Option<u64>,
+    /// 当前按下交互（clickable 绑定源 + 按下节点 slot——Up/越界 slop 时释放）
+    pressed_interaction: Option<(u64, crate::ui::interaction::MutableInteractionSource)>,
+    /// 已发射 Focus 的节点 slot（focus 变化时对旧节点补发 Unfocus）
+    focused_interaction_slot: Option<u64>,
 }
 
 /// 顶层弹出层实例——独立 Composer 组合单元（State 跨帧保持），
@@ -127,9 +133,43 @@ struct PtrDownState {
 
 impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::ui::theme::ThemeColors) -> Self {
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, overlays: Vec::new(), overlay_click: None, pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now() }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, overlays: Vec::new(), overlay_click: None, pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), hovered_slot: None, pressed_interaction: None, focused_interaction_slot: None }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
+
+    /// 焦点同步：focused_slot_key 变化时，对旧焦点节点补发 Unfocus、
+    /// 新焦点节点补发 Focus（布局后调用——焦点标志已随重组刷新）。
+    fn sync_focus_interaction(&mut self) {
+        let new_slot = self.focused_slot_key;
+        if new_slot == self.focused_interaction_slot {
+            return;
+        }
+        if let Some(old) = self.focused_interaction_slot.take() {
+            let nodes = self.composer.arena_nodes();
+            if let Some(r) = self.composer.layout_root_idx() {
+                if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, old) {
+                    if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, nid) {
+                        if let Some(src) = nodes[idx].modifier.focusable_interaction() {
+                            src.emit_unfocus();
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(new) = new_slot {
+            let nodes = self.composer.arena_nodes();
+            if let Some(r) = self.composer.layout_root_idx() {
+                if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, new) {
+                    if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, nid) {
+                        if let Some(src) = nodes[idx].modifier.focusable_interaction() {
+                            src.emit_focus();
+                            self.focused_interaction_slot = Some(new);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     /// 重新查询窗口所在显示器的刷新率并更新帧间隔（跨屏跟随）。
     /// Moved/ScaleFactorChanged 高频触发——300ms 去抖；查询失败保留旧值
@@ -223,6 +263,8 @@ impl PerWindow {
             }
         }
         self.composer.layout(Constraints::new(0.0, self.width, 0.0, self.height));
+        // 焦点交互同步（Focus/Unfocus 发射——focus 标志已随重组刷新）
+        self.sync_focus_interaction();
 
         // 顶层弹出层：同步（按 id 匹配保留 State）+ compose + layout + 定位
         // ⚠ recomposed 标志：recompose 跳过的帧（无 pending State 变化）不能执行
@@ -504,6 +546,8 @@ impl ApplicationHandler for AppState {
                     if gesture_up(pw, scene_pos) {
                         if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                     }
+                    // 释放按下交互（Compose Release 语义——clickable 按下态结束）
+                    release_pressed_interaction(pw);
                 }
                 // ── 指针事件分发（Up 时先分发后清除 capture）──
                 let nodes = pw.composer.arena_nodes();
@@ -562,6 +606,12 @@ impl ApplicationHandler for AppState {
                 // 未消费的悬停移动不唤醒事件循环（避免每帧白醒）
                 if consumed || pw.pointer_down_state.is_some() {
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                }
+            }
+            // 指针离开窗口：清 hover（对最后一个 hoverable 补发 Exit）
+            WindowEvent::PointerLeft { .. } => {
+                if let Some(old) = pw.hovered_slot.take() {
+                    exit_hover_at(pw, old);
                 }
             }
             WindowEvent::ModifiersChanged(m) => {
@@ -956,6 +1006,8 @@ impl AppState {
                     if gesture_up(pw, (x, y)) {
                         if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                     }
+                    // 释放按下交互（与真实路径一致）
+                    release_pressed_interaction(pw);
                     // 通知选区变化 + 清理
                     if let Some(slot) = pw.pointer_down_slot {
                         let nodes = pw.composer.arena_nodes();
@@ -1473,6 +1525,75 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
     false
 }
 
+/// 按下：命中路径最内层 clickable 绑定的交互源 → 发射 Press
+/// （对标 Compose clickable 的 PressInteraction.Press）
+fn press_interaction_down(pw: &mut PerWindow, path: &[usize]) {
+    let (slot, src) = {
+        let nodes = pw.composer.arena_nodes();
+        let Some(&idx) = path.iter().rev().find(|&&i| {
+            nodes[i].modifier.clickable_interaction().is_some()
+        }) else {
+            return;
+        };
+        let src = match nodes[idx].modifier.clickable_interaction() {
+            Some(s) => s.clone(),
+            None => return,
+        };
+        (nodes[idx].slot_key, src)
+    };
+    src.emit_press();
+    pw.pressed_interaction = Some((slot, src));
+}
+
+/// 释放/取消按下交互（Up 或越界 slop）——对标 PressInteraction.Release/Cancel
+fn release_pressed_interaction(pw: &mut PerWindow) {
+    if let Some((_, src)) = pw.pressed_interaction.take() {
+        src.emit_release();
+    }
+}
+
+/// 悬停更新：最内层 hoverable 节点进入/离开 → 发射 Hover Enter/Exit
+/// （对标 Compose hoverable：Enter/Exit 成对；节点移除时自动补 Exit）
+fn update_hover(pw: &mut PerWindow, scene_pos: (f32, f32)) {
+    let hit = {
+        let nodes = pw.composer.arena_nodes();
+        let Some(r) = pw.composer.layout_root_idx() else { return; };
+        let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
+        path.iter().rev()
+            .find(|&&i| nodes[i].modifier.has_hoverable())
+            .copied()
+            .map(|i| (nodes[i].slot_key, nodes[i].modifier.hoverable_interaction().map(|s| s.clone())))
+    };
+    let Some((slot, Some(src))) = hit else {
+        // 不在任何 hoverable 上：退出旧的
+        if let Some(old) = pw.hovered_slot.take() {
+            exit_hover_at(pw, old);
+        }
+        return;
+    };
+    if pw.hovered_slot == Some(slot) {
+        return;
+    }
+    if let Some(old) = pw.hovered_slot.take() {
+        exit_hover_at(pw, old);
+    }
+    src.emit_hover_enter();
+    pw.hovered_slot = Some(slot);
+}
+
+/// 对指定 slot 的节点补发 Hover Exit（节点已移除则跳过——hover 状态自然清理）
+fn exit_hover_at(pw: &mut PerWindow, slot: u64) {
+    let nodes = pw.composer.arena_nodes();
+    let Some(r) = pw.composer.layout_root_idx() else { return; };
+    if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot) {
+        if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, nid) {
+            if let Some(src) = nodes[idx].modifier.hoverable_interaction() {
+                src.emit_hover_exit();
+            }
+        }
+    }
+}
+
 /// Compose 风格 click 检测：Down 记录（pointer_down_state）、Up 释放时触发 on_click。
 /// 真实 PointerButton Up 与 debug 模拟（d/u）共用——消除平行实现并可模拟验证。
 fn detect_click(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
@@ -1581,6 +1702,9 @@ fn handle_pointer_down(
         }
     }
 
+    // 按下交互（clickable 绑定源——Compose Press 语义；置于 nodes 借用结束后）
+    press_interaction_down(pw, &path);
+
     // 手势入口（on_press 立即触发；后续 move/up 由 gesture_node 路由）——
     // 置于 with_focus 块后（nodes 借用结束，避免与 pw mut 冲突）
     gesture_down(pw, scene_pos);
@@ -1617,6 +1741,17 @@ fn handle_pointer_move(
     let mut handled = false;
     if pw.gesture_node.is_some() && gesture_move(pw, scene_pos) {
         handled = true;
+    }
+    // 悬停更新（自身 hit test——不依赖下方 nodes 借用）
+    update_hover(pw, scene_pos);
+    // 越界 slop：按下交互取消（Compose：press 超过 touch slop → Cancel）
+    if pw.pointer_down_state.is_some() {
+        let down = pw.pointer_down_state.as_ref().unwrap();
+        let dx = scene_pos.0 - down.position.0;
+        let dy = scene_pos.1 - down.position.1;
+        if (dx * dx + dy * dy).sqrt() > 18.0 {
+            release_pressed_interaction(pw);
+        }
     }
     let nodes = pw.composer.arena_nodes();
     let Some(r) = pw.composer.layout_root_idx() else { return false; };

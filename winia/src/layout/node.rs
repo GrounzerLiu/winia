@@ -796,7 +796,7 @@ pub fn find_node_by_id(nodes: &[LayoutNode], root: usize, id: u64) -> Option<usi
 }
 
 pub fn has_focusable_modifier(node: &LayoutNode) -> bool {
-    node.modifier.elements().iter().any(|el| matches!(el, crate::modifier::ModifierElement::Focusable))
+    node.modifier.elements().iter().any(|el| matches!(el, crate::modifier::ModifierElement::Focusable { .. }))
 }
 
 /// 移动到下一个可聚焦节点，返回是否成功

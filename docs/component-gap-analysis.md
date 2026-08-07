@@ -9,7 +9,7 @@
 ### Modifier 已有（winia/src/modifier.rs）
 - 布局：`size`/`width`/`height`（SizeValue 静态/动态）、`padding`(+h/v)、`fill_max_*`、`offset`（动态值 + 单轴 + RTL 镜像）、`align_self`、`layout_weight`、`aspect_ratio`、`required_size`/`required_width`/`required_height`
 - 绘制：`background`（Color/闭包 + Shape）、`border`、`clip`、`blur`、`backdrop_blur`、`shadow`（elevation/shape/颜色）
-- 交互：`clickable`、`focusable`、`on_key_event`/`on_pre_key_event`、`on_pointer_event`/`on_pre_pointer_event`、`focus_requester`、手势 `on_tap`/`on_double_tap`/`on_long_press`/`on_drag_start`/`on_drag`/`on_drag_end`/`on_drag_cancel`
+- 交互：`clickable`/`clickable_with_source`、`focusable`/`focusable_with_source`、`hoverable`、`on_key_event`/`on_pre_key_event`、`on_pointer_event`/`on_pre_pointer_event`、`focus_requester`、手势 `on_tap`/`on_double_tap`/`on_long_press`/`on_drag_start`/`on_drag`/`on_drag_end`/`on_drag_cancel`
 - 视觉：`alpha`/`rotate`/`scale` 便捷包装、`graphics_layer`（scale_x/y、alpha、translation_x/y、rotation_z、**transformOrigin + clip 已补**；shadowElevation/rotationX/Y 仍缺）、`test_tag`
 - 滚动：`vertical_scroll`/`horizontal_scroll`（ScrollState）
 
@@ -38,8 +38,8 @@ Text / TextField / Button / Column / Row / Stack / RichText / SelectionContainer
 
 ### P2 — 状态与交互
 11. ✅ **enabled 语义**（组件禁用——clickable 不响应 + 视觉降透明度）——Button/TextField 已独立实现；统一语义见 12
-12. **InteractionSource / ComponentState**（hover/press/focus 状态聚合——Button 颜色/阴影变化的依据——**大工程，先做最小版**：`MutableInteractionSource` + 状态读取）
-13. **hoverable / draggable / pointer_input**（手势层——**tap/double-tap/long-press/drag 已实现**（`Modifier.on_tap` 等）；hoverable/draggable/pointer_input 仍远期）
+12. ✅ **InteractionSource / ComponentState**（`MutableInteractionSource`：press/focus/hover/drag 四态 + hoist + 派生状态读取；Button 状态取色/阴影、TextField focus/isError 已接入；Modifier.clickable/focusable/hoverable 自动发射）
+13. **hoverable ✅（`Modifier.hoverable` + clickable 内部自动 hover）；draggable / pointer_input 仍远期**（tap/double-tap/long-press/drag 已实现）
 
 ## 三、组件属性差距——**已对照 material3 1.4.0 / foundation 1.11.4 源码核实**
 
@@ -57,7 +57,7 @@ Text / TextField / Button / Column / Row / Stack / RichText / SelectionContainer
 |---|---|
 | **enabled** | ✅ 已实现：禁用：容器色/内容色切换（colors.containerColor(enabled)）+ 不响应点击 |
 | **colors**（ButtonColors: container/content + disabled 变体） | ✅ 已实现（默认从主题按 style 生成） |
-| **elevation**（ButtonElevation: shadowElevation 随 enabled/interaction 变化） | 无（结合 Modifier.shadow） |
+| **elevation**（ButtonElevation: shadowElevation 随 enabled/interaction 变化） | ✅ 已实现（`Button::elevation` + `ButtonElevation::for_state`——press/hover/focus/disabled 阴影；`ButtonElevation::elevated()` 近似 ElevatedButton） |
 | **border / contentPadding** | border 可经 modifier；contentPadding 固定 | 
 | **interactionSource** | P2-12 后接 |
 
@@ -66,7 +66,7 @@ Text / TextField / Button / Column / Row / Stack / RichText / SelectionContainer
 |---|---|
 | **enabled / readOnly** | ✅ 已实现：禁用不响应；只读不可编辑仍可选 |
 | **label / placeholder** | **@Composable (() -> Unit)**（非 String）——placeholder 空值时显示 |
-| **isError** | 错误边框/文字色（colors 变体） |
+| **isError** | ✅ 已实现（错误文字色；`is_error` 状态可驱动边框色——需提升 interactionSource） |
 | **多行（singleLine=false 默认、maxLines、minLines）** | ✅ 已实现：换行测量 + 光标移动支持（基础已有） |
 | leadingIcon/trailingIcon/prefix/suffix/supportingText | 中优先（inline 内容） |
 
@@ -96,9 +96,10 @@ Text / TextField / Button / Column / Row / Stack / RichText / SelectionContainer
 14. ✅ 顶层弹出组件——Popup / Dialog / DropdownMenu（模态遮罩、点击外部 dismiss、按 id 保留 State）
 15. ✅ overlay 渲染 HiDPI 修复——内容按 scale 绘制，可见位置与命中测试对齐
 16. ✅ Popup 锚定到调用位置的上一个兄弟节点（对标 Compose Popup 定位；无兄弟回退窗口对齐）
+17. ✅ InteractionSource/ComponentState（press/focus/hover/drag + hoist）+ Button 状态取色/ButtonElevation + TextField focus/isError + Modifier.hoverable（对照 Compose foundation 1.11.4 源码）
 
 **剩余**：
 - P1 GraphicsLayer 补属性（shadowElevation/rotationX/Y/cameraDistance——shadow 已做基础版）
-- P2 enabled 语义统一（InteractionSource 最小版——Button/TextField 已独立实现）
 - TextField label（Composable 浮动——需动画支持，P2）
-- 手势层 hoverable/draggable/pointer_input（远期；tap/double-tap/long-press/drag 已完成）
+- 手势层 draggable/pointer_input（远期；tap/double-tap/long-press/drag、hoverable 已完成）
+- TextField 内置容器/边框视觉（Outlined/Filled 变体——当前视觉由用户 modifier 提供，isError/focus 状态可驱动）
