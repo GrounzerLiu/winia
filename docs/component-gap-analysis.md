@@ -60,7 +60,7 @@ Text / TextField / Button / Column / Row / Stack / RichText / SelectionContainer
 | **colors**（ButtonColors: container/content + disabled 变体） | ✅ 已实现（默认从主题按 style 生成） |
 | **elevation**（ButtonElevation: shadowElevation 随 enabled/interaction 变化） | ✅ 已实现（`Button::elevation` + `ButtonElevation::for_state`——press/hover/focus/disabled 阴影；`ButtonElevation::elevated()` 近似 ElevatedButton） |
 | **shape**（容器/边框/阴影/波纹裁剪统一） | ✅ 已实现（`Button::shape`——默认胶囊 `Shape::pill()`，对标 CornerFull；`Shape` 增 `Pill` 变体） |
-| **border / contentPadding / minSize** | ✅ 已实现：`border(ButtonBorder)`（对标 BorderStroke——形状跟随 shape；Outlined 默认 1px 主题色）；`content_padding` 可配置（默认 24/8，Text 12/8）；`min_size` 可覆盖（默认 58x40） |
+| **border / contentPadding / minSize** | ✅ 已实现：`border(ButtonBorder)`（对标 BorderStroke——形状跟随 shape；Outlined 默认 1px 主题色）；`content_padding`/`min_size` 支持动态 `SizeValue`（动画 State/闭包——measure 期求值只重测不重组；默认 24/8 与 58x40） |
 | **interactionSource** | ✅ 已实现（hoist——`Button::interaction_source`；未传则内部 remember） |
 
 ### TextField（对标 material3 `TextField(value, onValueChange, enabled=true, readOnly=false, label, placeholder, leadingIcon, trailingIcon, prefix, suffix, supportingText, isError, visualTransformation, keyboardOptions, singleLine=false, maxLines=MAX, minLines=1, colors)`）

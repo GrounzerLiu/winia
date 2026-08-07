@@ -12,7 +12,7 @@
 
 use crate::core::composer::ComposeCtx;
 use crate::layout::BoxLayout;
-use crate::modifier::{Modifier, Shape};
+use crate::modifier::{Modifier, Shape, SizeValue};
 use crate::ui::interaction::{ComponentState, MutableInteractionSource};
 use std::sync::Arc;
 use std::fmt;
@@ -189,11 +189,11 @@ impl ButtonDefaults {
 
     /// 默认内容 padding `(start, top, end, bottom)`——Button 系 24/8/24/8，
     /// Text 按钮 12/8/12/8（对标 `ButtonDefaults.ContentPadding` /
-    /// `TextButtonContentPadding`）
-    pub fn content_padding(style: ButtonStyle) -> (f32, f32, f32, f32) {
+    /// `TextButtonContentPadding`）；`SizeValue`——支持动画
+    pub fn content_padding(style: ButtonStyle) -> (SizeValue, SizeValue, SizeValue, SizeValue) {
         match style {
-            ButtonStyle::Text => (12.0, 8.0, 12.0, 8.0),
-            _ => (24.0, 8.0, 24.0, 8.0),
+            ButtonStyle::Text => (12.0.into(), 8.0.into(), 12.0.into(), 8.0.into()),
+            _ => (24.0.into(), 8.0.into(), 24.0.into(), 8.0.into()),
         }
     }
 }
@@ -233,11 +233,12 @@ pub struct Button {
     elevation: Option<ButtonElevation>,
     /// 容器/边框/阴影形状（对标 material3 `Button(shape = ...)`——默认胶囊）
     shape: Shape,
-    /// 内容 padding (start, top, end, bottom)——None = 按 style 默认
-    content_padding: Option<(f32, f32, f32, f32)>,
-    /// 最小尺寸覆盖（None = ButtonDefaults MinWidth/MinHeight）
-    min_width: Option<f32>,
-    min_height: Option<f32>,
+    /// 内容 padding (start, top, end, bottom)——None = 按 style 默认；
+    /// `SizeValue` 支持动态（动画 State/闭包——measure 期求值，只重测不重组）
+    content_padding: Option<(SizeValue, SizeValue, SizeValue, SizeValue)>,
+    /// 最小尺寸覆盖（None = ButtonDefaults MinWidth/MinHeight；支持动画）
+    min_width: Option<SizeValue>,
+    min_height: Option<SizeValue>,
     /// 边框（None = 按 style 默认——Outlined 有 1px 主题色边框，其余无）
     border: Option<ButtonBorder>,
     /// 修饰符链（尺寸、颜色、形状等）
@@ -307,17 +308,30 @@ impl Button {
     }
 
     /// 设置内容 padding (start, top, end, bottom)——不设置则按 style 取
-    /// [`ButtonDefaults::content_padding`]
-    pub fn content_padding(mut self, padding: (f32, f32, f32, f32)) -> Self {
-        self.content_padding = Some(padding);
+    /// [`ButtonDefaults::content_padding`]；每边支持动态 `SizeValue`
+    /// （`&State<f32>` / `State<f32>` / 闭包——动画可作用于内边距）
+    pub fn content_padding<A: Into<SizeValue>, B: Into<SizeValue>, C: Into<SizeValue>, D: Into<SizeValue>>(
+        mut self,
+        padding: (A, B, C, D),
+    ) -> Self {
+        self.content_padding = Some((
+            padding.0.into(),
+            padding.1.into(),
+            padding.2.into(),
+            padding.3.into(),
+        ));
         self
     }
 
     /// 覆盖默认最小宽度（对标 material3 内部 `defaultMinSize(MinWidth, MinHeight)`——
-    /// 默认 58/40，用户可经此或 `Modifier::min_width` 覆盖）
-    pub fn min_size(mut self, min_width: f32, min_height: f32) -> Self {
-        self.min_width = Some(min_width);
-        self.min_height = Some(min_height);
+    /// 默认 58/40，用户可经此或 `Modifier::min_width` 覆盖；支持动态 `SizeValue`）
+    pub fn min_size<A: Into<SizeValue>, B: Into<SizeValue>>(
+        mut self,
+        min_width: A,
+        min_height: B,
+    ) -> Self {
+        self.min_width = Some(min_width.into());
+        self.min_height = Some(min_height.into());
         self
     }
 
@@ -358,8 +372,14 @@ impl Button {
         let (pad_s, pad_t, pad_e, pad_b) = self
             .content_padding
             .unwrap_or_else(|| ButtonDefaults::content_padding(self.style));
-        let min_w = self.min_width.unwrap_or_else(ButtonDefaults::min_width);
-        let min_h = self.min_height.unwrap_or_else(ButtonDefaults::min_height);
+        let min_w = self
+            .min_width
+            .clone()
+            .unwrap_or_else(|| ButtonDefaults::min_width().into());
+        let min_h = self
+            .min_height
+            .clone()
+            .unwrap_or_else(|| ButtonDefaults::min_height().into());
 
         let mut modifier = Modifier::new()
             .min_width(min_w)
@@ -427,8 +447,12 @@ impl Button {
     pub fn get_style(&self) -> ButtonStyle { self.style }
     pub fn get_colors(&self) -> Option<ButtonColors> { self.colors }
     pub fn get_shape(&self) -> Shape { self.shape }
-    pub fn get_content_padding(&self) -> Option<(f32, f32, f32, f32)> { self.content_padding }
-    pub fn get_min_size(&self) -> (Option<f32>, Option<f32>) { (self.min_width, self.min_height) }
+    pub fn get_content_padding(&self) -> Option<&(SizeValue, SizeValue, SizeValue, SizeValue)> {
+        self.content_padding.as_ref()
+    }
+    pub fn get_min_size(&self) -> (Option<SizeValue>, Option<SizeValue>) {
+        (self.min_width.clone(), self.min_height.clone())
+    }
     pub fn get_border(&self) -> Option<ButtonBorder> { self.border }
     pub fn get_modifier(&self) -> &Modifier { &self.modifier }
 }
@@ -461,8 +485,9 @@ mod tests {
         assert!(btn.get_enabled());
         assert_eq!(btn.get_style(), ButtonStyle::Filled);
         assert_eq!(btn.get_shape(), Shape::pill(), "默认形状对齐 CornerFull 胶囊");
-        assert_eq!(btn.get_content_padding(), None, "content_padding 默认按 style 取");
-        assert_eq!(btn.get_min_size(), (None, None), "min 尺寸默认取 ButtonDefaults");
+        assert!(btn.get_content_padding().is_none(), "content_padding 默认按 style 取");
+        assert!(btn.get_min_size().0.is_none() && btn.get_min_size().1.is_none(),
+            "min 尺寸默认取 ButtonDefaults");
         assert_eq!(btn.get_border(), None, "border 默认按 style（Outlined 才有）");
         assert_eq!(btn.get_modifier().elements().len(), 0);
     }
@@ -472,8 +497,11 @@ mod tests {
         assert_eq!(ButtonDefaults::shape(), Shape::pill());
         assert_eq!(ButtonDefaults::min_width(), 58.0);
         assert_eq!(ButtonDefaults::min_height(), 40.0);
-        assert_eq!(ButtonDefaults::content_padding(ButtonStyle::Filled), (24.0, 8.0, 24.0, 8.0));
-        assert_eq!(ButtonDefaults::content_padding(ButtonStyle::Text), (12.0, 8.0, 12.0, 8.0));
+        let p = ButtonDefaults::content_padding(ButtonStyle::Filled);
+        assert!(matches!(p.0, SizeValue::Static(crate::modifier::Dimension::Fixed(24.0))));
+        assert!(matches!(p.1, SizeValue::Static(crate::modifier::Dimension::Fixed(8.0))));
+        let p = ButtonDefaults::content_padding(ButtonStyle::Text);
+        assert!(matches!(p.0, SizeValue::Static(crate::modifier::Dimension::Fixed(12.0))));
     }
 
     #[test]
@@ -483,6 +511,20 @@ mod tests {
         let btn = Button::new().border(b);
         assert_eq!(btn.get_border(), Some(b));
         assert_eq!(btn.get_border().unwrap().color, crate::modifier::Color::RED);
+    }
+
+    #[test]
+    fn test_button_dynamic_padding_and_min_size() {
+        use crate::core::state::State;
+        let pad = State::new(10.0);
+        let btn = Button::new()
+            .content_padding((&pad, 4.0, &pad, 4.0))
+            .min_size(&pad, 40.0);
+        let (p, (mw, mh)) = (btn.get_content_padding().unwrap(), btn.get_min_size());
+        assert!(matches!(&p.0, SizeValue::Dynamic(_)), "State 引用 → 动态（动画可驱动）");
+        assert!(matches!(&p.1, SizeValue::Static(_)));
+        assert!(matches!(&mw.unwrap(), SizeValue::Dynamic(_)));
+        assert!(matches!(&mh.unwrap(), SizeValue::Static(_)));
     }
 
     #[test]

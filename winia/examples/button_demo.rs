@@ -9,6 +9,7 @@
 //! - interactionSource hoist（实时显示 press/hover/focus 状态）
 
 use winia::prelude::*;
+use winia::animation::{AnimationSpec, TweenSpec};
 
 fn section_title(ctx: &mut ComposeCtx, text: &str) {
     Text::new(text)
@@ -105,6 +106,24 @@ fn button_demo(ctx: &mut ComposeCtx) {
                 let count = count.clone();
                 Button::new().min_size(120.0, 48.0)
                     .on_click(move || count.update(|v| *v += 1))
+            });
+            // 动画 min_size：SizeValue 动态闭包——measure 期求值，动画期间只重测不重组
+            let min_toggle = ctx.remember(|| false);
+            let min_target = if min_toggle.get() { 140.0 } else { 58.0 };
+            let min_w_anim = ctx.animate_float_as_state(
+                min_target,
+                AnimationSpec::Tween(TweenSpec::new(
+                    Duration::from_millis(400),
+                    winia::animation::interpolator::EaseOutCubic::new(),
+                )),
+            );
+            demo_row(ctx, "动画 min_size", |_| {
+                let aw = min_w_anim.clone();
+                let aw_h = min_w_anim.clone();
+                let at = min_toggle.clone();
+                Button::new()
+                    .min_size(move || aw.get(), move || aw_h.get() * 0.4)
+                    .on_click(move || { at.update(|v| *v = !*v); })
             });
 
             section_title(ctx, "阴影、颜色与边框");
