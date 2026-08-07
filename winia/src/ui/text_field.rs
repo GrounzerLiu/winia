@@ -231,6 +231,8 @@ impl TextField {
                 let is_nav = matches!(key,
                     winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowLeft)
                     | winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowRight)
+                    | winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowUp)
+                    | winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowDown)
                     | winit::keyboard::Key::Named(winit::keyboard::NamedKey::Home)
                     | winit::keyboard::Key::Named(winit::keyboard::NamedKey::End)
                     | winit::keyboard::Key::Named(winit::keyboard::NamedKey::Tab)
@@ -337,6 +339,32 @@ impl TextField {
                         winit::keyboard::NamedKey::End => {
                             let len = val.text.len();
                             val.selection = len..len;
+                            v.set(val.clone());
+                            return true;
+                        }
+                        winit::keyboard::NamedKey::ArrowUp => {
+                            // 单行：放行给框架的方向键焦点导航（对标 Compose
+                            // 单行输入框 Up/Down 不移动光标，焦点可移出）
+                            if single_line { return false; }
+                            // 无布局信息时的近似：移到上一行行首（\n 分隔）
+                            let target = caret_prev_line(&val.text, val.selection.start);
+                            if shift {
+                                val.selection = target..val.selection.end.max(target);
+                            } else {
+                                val.selection = target..target;
+                            }
+                            v.set(val.clone());
+                            return true;
+                        }
+                        winit::keyboard::NamedKey::ArrowDown => {
+                            if single_line { return false; }
+                            // 近似：移到下一行行首；已是最后一行则保持原位
+                            let target = caret_next_line(&val.text, val.selection.start);
+                            if shift {
+                                val.selection = val.selection.start.min(target)..target;
+                            } else {
+                                val.selection = target..target;
+                            }
                             v.set(val.clone());
                             return true;
                         }
@@ -469,6 +497,30 @@ impl TextField {
     }
 }
 
+/// Up 键光标目标：上一行行首（`\n` 分隔的近似——无布局信息时使用；
+/// 首行返回 0）。按字节定位 `\n`（ASCII）——pos 非字符边界也不会 panic。
+fn caret_prev_line(text: &str, pos: usize) -> usize {
+    let bytes = text.as_bytes();
+    let pos = pos.min(bytes.len());
+    bytes[..pos]
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .map(|i| i + 1)
+        .unwrap_or(0)
+}
+
+/// Down 键光标目标：下一行行首；已是最后一行则保持原位。
+/// 按字节定位 `\n`（ASCII）——pos 非字符边界也不会 panic。
+fn caret_next_line(text: &str, pos: usize) -> usize {
+    let bytes = text.as_bytes();
+    let pos = pos.min(bytes.len());
+    bytes[pos..]
+        .iter()
+        .position(|&b| b == b'\n')
+        .map(|i| pos + i + 1)
+        .unwrap_or(pos)
+}
+
 impl Default for TextField {
     fn default() -> Self {
         Self::new(
@@ -579,5 +631,25 @@ mod tests {
         let h1 = composer.arena_nodes()[root].measured_size.height;
         assert!(h1 > 0.0, "输入后高度必须 > 0（修复前为 0——TextField 消失）");
         assert!(h1 < h0, "2 行高度 < 3 行占位（{h1} < {h0}）");
+    }
+
+    #[test]
+    fn caret_up_down_line_targets() {
+        let text = "ab\ncd\nef";
+        // 首行 → 0；第二行中部 → 上一行行首 3；第三行中部 → 上一行行首 6
+        assert_eq!(caret_prev_line(text, 1), 0);
+        assert_eq!(caret_prev_line(text, 4), 3);
+        assert_eq!(caret_prev_line(text, 7), 6);
+        // 恰在行首 → 保持（上一行行首即自身）
+        assert_eq!(caret_prev_line(text, 3), 3);
+        // 第一行 → 下一行行首；最后一行 → 末尾；末尾后不越界
+        assert_eq!(caret_next_line(text, 1), 3);
+        assert_eq!(caret_next_line(text, 4), 6);
+        assert_eq!(caret_next_line(text, 6), 6, "末行 Down 保持原位");
+        assert_eq!(caret_next_line(text, text.len() + 10), text.len(), "越界钳制到末尾");
+        // 非字符边界 pos 不 panic（按字节查找 \n）
+        let cjk = "a\n中b";
+        assert_eq!(caret_prev_line(cjk, 3), 2, "‘中’字内部 pos 回退到上一行行首");
+        assert_eq!(caret_next_line(cjk, 3), 3, "‘中’字内部 pos 无下一行则保持");
     }
 }

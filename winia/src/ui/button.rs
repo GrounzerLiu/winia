@@ -167,6 +167,23 @@ impl ButtonBorder {
     pub fn new(width: f32, color: crate::modifier::Color) -> Self {
         Self { width, color }
     }
+
+    /// OutlinedButton 默认边框（对标 material3：1dp + `ColorScheme.outline`；
+    /// disabled 用 outline 的 50% alpha——与项目禁用色近似约定一致）
+    fn outlined(theme: &crate::ui::theme::ThemeColors, enabled: bool) -> Self {
+        let c = theme.outline;
+        let color = if enabled {
+            c
+        } else {
+            crate::modifier::Color::from_argb(
+                (c.a as f32 * 0.5) as u8,
+                c.r,
+                c.g,
+                c.b,
+            )
+        };
+        Self::new(1.0, color)
+    }
 }
 
 /// Button 默认值（对标 material3 `ButtonDefaults`——M3 small button tokens）
@@ -447,16 +464,19 @@ impl Button {
             .min_width(min_w)
             .min_height(min_h)
             .padding_sides(pad_s, pad_t, pad_e, pad_b);
-        // 背景按 style（Filled/Tonal 有容器色，Outlined/Text 无）
+        // 背景按 style（Filled/Tonal 有容器色，Outlined 无）；
+        // Text 补透明 clip(shape)：无 Background/Border 时焦点环/波纹
+        // 形状推断会回退矩形，clip 让焦点环正确跟随胶囊（对标 Surface shape）
         modifier = match self.style {
             ButtonStyle::Filled | ButtonStyle::Tonal => modifier.background(container, shape),
-            ButtonStyle::Outlined | ButtonStyle::Text => modifier,
+            ButtonStyle::Outlined => modifier,
+            ButtonStyle::Text => modifier.clip(shape),
         };
-        // 边框：显式 border 优先，否则 Outlined 默认 1px 主题内容色
+        // 边框：显式 border 优先，否则 Outlined 默认 1px outline 色
         // （对标 material3 OutlinedButton = Button(border = BorderStroke(1.dp, outline))）
         let border = self.border.or_else(|| {
             if self.style == ButtonStyle::Outlined {
-                Some(ButtonBorder::new(1.0, colors.content_color(self.enabled)))
+                Some(ButtonBorder::outlined(&theme, self.enabled))
             } else {
                 None
             }
@@ -584,6 +604,18 @@ mod tests {
         let btn = Button::new().border(b);
         assert_eq!(btn.get_border(), Some(b));
         assert_eq!(btn.get_border().unwrap().color, crate::modifier::Color::RED);
+    }
+
+    #[test]
+    fn test_outlined_border_uses_theme_outline() {
+        // 对标 M3：OutlinedButton 边框 = ColorScheme.outline（非 primary 内容色）
+        let theme = crate::ui::theme::ThemeColors::light_from_seed(0x6750A4);
+        let enabled = ButtonBorder::outlined(&theme, true);
+        assert_eq!(enabled.width, 1.0);
+        assert_eq!(enabled.color, theme.outline, "启用态边框 = outline");
+        assert_ne!(enabled.color, theme.primary, "不能误用内容色 primary");
+        let disabled = ButtonBorder::outlined(&theme, false);
+        assert_eq!(disabled.color.a, (theme.outline.a as f32 * 0.5) as u8, "禁用态 = outline 50% alpha");
     }
 
     #[test]
