@@ -46,6 +46,63 @@ struct TextParams<'a> {
 /// 3. drawImage 带 paint：colorFilter = Blend(color, SrcIn)（Compose
 ///    ColorFilter.tint 等价——保留 alpha 形状染成 color）+ alpha（整体透明度）
 /// 4. 平移 offset（Compose onDrawShadow：offset = -(radius+spread)）
+/// graphicsLayer 3D 变换矩阵（rotationX/Y + cameraDistance 透视）。
+/// 顺序：scale → rotationZ → rotationY → rotationX → 相机透视
+/// （矩阵左乘序与 Compose RenderNode 一致；调用方负责先平移到 pivot）。
+/// 无 3D 旋转时返回 None（走 2D 路径）。
+fn build_gl_3d_matrix(gl: &crate::modifier::GraphicsLayerParams) -> Option<skia_safe::M44> {
+    if gl.rotation_x == 0.0 && gl.rotation_y == 0.0 {
+        return None;
+    }
+    let mut m = skia_safe::M44::new_identity();
+    m.pre_scale_xyz(gl.scale_x, gl.scale_y, 1.0);
+    if gl.rotation_z != 0.0 {
+        m.pre_concat(&skia_safe::M44::rotate(
+            skia_safe::V3::new(0.0, 0.0, 1.0),
+            gl.rotation_z.to_radians(),
+        ));
+    }
+    if gl.rotation_y != 0.0 {
+        m.pre_concat(&skia_safe::M44::rotate(
+            skia_safe::V3::new(0.0, 1.0, 0.0),
+            gl.rotation_y.to_radians(),
+        ));
+    }
+    if gl.rotation_x != 0.0 {
+        m.pre_concat(&skia_safe::M44::rotate(
+            skia_safe::V3::new(1.0, 0.0, 0.0),
+            gl.rotation_x.to_radians(),
+        ));
+    }
+    // 相机透视（Compose Camera 近似）：w' = 1 - z/cameraDistance
+    let cam = gl.camera_distance.max(1.0);
+    m.set_rc(3, 2, -1.0 / cam);
+    Some(m)
+}
+
+/// graphicsLayer shadowElevation：按 Modifier.shadow 同款参数画
+/// ambient + spot 两层（垫底——图层变换前绘制）
+fn draw_elevation_shadow(
+    canvas: &Canvas,
+    rect: Rect,
+    shape: &crate::modifier::Shape,
+    elevation: f32,
+) {
+    use crate::modifier::{Color, ShadowParams};
+    let strength = (elevation / 12.0).min(1.0);
+    let color = Color::from_argb(255, 0, 0, 0);
+    let ambient = ShadowParams::new(elevation, 0.0, 0.0, color, 0.18 * strength);
+    let spot = ShadowParams::new(
+        elevation * 0.25,
+        0.0,
+        elevation * 0.5,
+        color,
+        0.30 * strength,
+    );
+    draw_shadow_layer(canvas, rect, shape, &ambient);
+    draw_shadow_layer(canvas, rect, shape, &spot);
+}
+
 /// 单层阴影绘制——严格按参考实现（D:\winia 阴影绘制）：
 /// 1. 离屏 surface = **内容尺寸**（不扩边）
 /// 2. 白色形状（含 spread 外圈 stroke）画到离屏
@@ -196,7 +253,18 @@ fn render_pass1(
 
     let rect = Rect::new(x, y, x + w, y + h);
     // 图形层：包住整个节点（background + text + children），应用 alpha/变换
-    let gl_saved = if let Some(gl) = node.modifier.graphics_layer_params() {
+    let gl_params = node.modifier.graphics_layer_params();
+    // graphicsLayer shadowElevation：与 Modifier.shadow 同层垫底（图层变换前——
+    // 阴影基于未变换的节点形状，对标 Compose 层阴影）
+    if !backdrop_pass {
+        if let Some(gl) = &gl_params {
+            if gl.shadow_elevation > 0.0 {
+                let shape = gl.shadow_shape.clone().unwrap_or(crate::modifier::Shape::Rectangle);
+                draw_elevation_shadow(canvas, rect, &shape, gl.shadow_elevation);
+            }
+        }
+    }
+    let gl_saved = if let Some(gl) = gl_params {
         if gl.alpha < 1.0 {
             canvas.save_layer_alpha_f(None, gl.alpha);
         } else {
@@ -211,8 +279,16 @@ fn render_pass1(
         let (px, py) = (w * gl.transform_origin.0, h * gl.transform_origin.1);
         canvas.translate((gl.translation_x, gl.translation_y));
         canvas.translate((px, py));
-        canvas.scale((gl.scale_x, gl.scale_y));
-        canvas.rotate(gl.rotation_z, None);
+        // 3D 旋转（rotationX/Y + cameraDistance 透视）：整体拼成 4x4 矩阵
+        // （scale → rotationZ → rotationY → rotationX → 相机透视），
+        // 与 2D 路径共用 pivot 语义
+        match build_gl_3d_matrix(&gl) {
+            Some(m) => { canvas.concat_44(&m); }
+            None => {
+                canvas.scale((gl.scale_x, gl.scale_y));
+                canvas.rotate(gl.rotation_z, None);
+            }
+        }
         canvas.translate((-px, -py));
         true
     } else { false };
@@ -687,4 +763,40 @@ fn surface_snapshot(canvas: &Canvas, bounds: skia_safe::IRect) -> Option<skia_sa
     let surface = unsafe { canvas.surface() }?;
     let mut surface = surface.clone();
     surface.image_snapshot_with_bounds(bounds)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::modifier::GraphicsLayerParams;
+
+    #[test]
+    fn test_gl_3d_matrix_none_without_3d() {
+        let gl = GraphicsLayerParams::default();
+        assert!(build_gl_3d_matrix(&gl).is_none(), "无 3D 旋转应走 2D 路径");
+        let mut gl = GraphicsLayerParams::default();
+        gl.rotation_z = 45.0; // 仅 rotationZ 不触发 3D 矩阵
+        assert!(build_gl_3d_matrix(&gl).is_none());
+    }
+
+    #[test]
+    fn test_gl_3d_matrix_perspective() {
+        let mut gl = GraphicsLayerParams::default();
+        gl.rotation_x = 45.0;
+        let m = build_gl_3d_matrix(&gl).expect("rotationX 应返回矩阵");
+        let mut row = [0.0f32; 16];
+        m.get_row_major(&mut row);
+        // 透视项 row3 col2（w 行 z 系数）= -1/cameraDistance
+        let persp = row[3 * 4 + 2];
+        assert!(persp < 0.0, "透视项应为负：{persp}");
+        assert!((persp + 1.0 / 8.0).abs() < 1e-6, "默认相机距离 8 的透视项应为 -1/8");
+        // 相机越远透视越平
+        let mut far = GraphicsLayerParams::default();
+        far.rotation_x = 45.0;
+        far.camera_distance = 100.0;
+        let mf = build_gl_3d_matrix(&far).unwrap();
+        let mut rowf = [0.0f32; 16];
+        mf.get_row_major(&mut rowf);
+        assert!(rowf[14].abs() < persp.abs(), "相机距离大 → 透视项小");
+    }
 }

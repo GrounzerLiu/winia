@@ -1051,6 +1051,46 @@ impl Modifier {
         })
     }
 
+    /// `rotationX(degrees)`（对标 Compose `Modifier.rotationX`）——绕 X 轴
+    /// 3D 旋转（带 cameraDistance 透视；绕 transformOrigin）。`degrees != 0`
+    /// 才应用。
+    pub fn rotation_x(self, degrees: f32) -> Self {
+        if degrees == 0.0 {
+            return self;
+        }
+        self.merge_graphics_layer(move |p| p.rotation_x += degrees)
+    }
+
+    /// `rotationY(degrees)`（对标 Compose `Modifier.rotationY`）——绕 Y 轴
+    /// 3D 旋转（带 cameraDistance 透视；绕 transformOrigin）。
+    pub fn rotation_y(self, degrees: f32) -> Self {
+        if degrees == 0.0 {
+            return self;
+        }
+        self.merge_graphics_layer(move |p| p.rotation_y += degrees)
+    }
+
+    /// `cameraDistance(distance)`（对标 Compose `Modifier.cameraDistance`）——
+    /// 3D 旋转的相机距离（逻辑 px；越大透视越平，Compose 默认 8.dp）。
+    pub fn camera_distance(self, distance: f32) -> Self {
+        self.merge_graphics_layer(move |p| p.camera_distance = distance)
+    }
+
+    /// `shadowElevation(elevation)`（对标 Compose `graphicsLayer.shadowElevation`）——
+    /// 图层阴影高度（逻辑 px；>0 时在图层内容后画 ambient+spot 阴影）。
+    pub fn shadow_elevation(self, elevation: f32) -> Self {
+        if elevation <= 0.0 {
+            return self;
+        }
+        self.merge_graphics_layer(move |p| p.shadow_elevation = elevation)
+    }
+
+    /// 图层阴影形状（对标 Compose `graphicsLayer.shape`——默认矩形）
+    pub fn shadow_shape(self, shape: impl Into<Shape>) -> Self {
+        let shape = shape.into();
+        self.merge_graphics_layer(move |p| p.shadow_shape = Some(shape.clone()))
+    }
+
     /// 便捷包装合并：已有 GraphicsLayer 元素 → 包装其 params_fn（叠加）；
     /// 否则 push 新元素。
     fn merge_graphics_layer(mut self, f: impl Fn(&mut GraphicsLayerParams) + Send + Sync + 'static) -> Self {
@@ -1523,7 +1563,7 @@ impl Debug for ModifierElement {
 // ── ScrollState ──
 
 /// 图形层变换参数
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GraphicsLayerParams {
     pub scale_x: f32,
     pub scale_y: f32,
@@ -1537,6 +1577,17 @@ pub struct GraphicsLayerParams {
     /// 裁剪到节点 bounds（对标 Compose graphicsLayer `clip`；
     /// `Modifier.alpha` 便捷版默认 clip=true）
     pub clip: bool,
+    /// 绕 X 轴 3D 旋转（度——带 cameraDistance 透视）
+    pub rotation_x: f32,
+    /// 绕 Y 轴 3D 旋转（度——带 cameraDistance 透视）
+    pub rotation_y: f32,
+    /// 3D 相机距离（逻辑 px——越大透视越平；Compose 默认 8.dp）
+    pub camera_distance: f32,
+    /// 图层阴影高度（逻辑 px——>0 时画 ambient+spot 阴影，对标
+    /// Compose graphicsLayer.shadowElevation）
+    pub shadow_elevation: f32,
+    /// 图层阴影形状（None = 矩形）
+    pub shadow_shape: Option<Shape>,
 }
 
 impl Default for GraphicsLayerParams {
@@ -1546,6 +1597,10 @@ impl Default for GraphicsLayerParams {
             translation_x: 0.0, translation_y: 0.0, rotation_z: 0.0,
             transform_origin: TransformOrigin::CENTER,
             clip: false,
+            rotation_x: 0.0, rotation_y: 0.0,
+            camera_distance: 8.0,
+            shadow_elevation: 0.0,
+            shadow_shape: None,
         }
     }
 }
@@ -1643,7 +1698,7 @@ pub struct GraphicsLayerSpec(pub(crate) Arc<dyn Fn() -> GraphicsLayerParams + Se
 
 impl From<GraphicsLayerParams> for GraphicsLayerSpec {
     fn from(params: GraphicsLayerParams) -> Self {
-        Self(Arc::new(move || params))
+        Self(Arc::new(move || params.clone()))
     }
 }
 

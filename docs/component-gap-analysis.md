@@ -10,7 +10,7 @@
 - 布局：`size`/`width`/`height`（SizeValue 静态/动态）、`padding`(+h/v)、`fill_max_*`、`offset`（动态值 + 单轴 + RTL 镜像）、`align_self`、`layout_weight`、`aspect_ratio`、`required_size`/`required_width`/`required_height`
 - 绘制：`background`（Color/闭包 + Shape）、`border`、`clip`、`blur`、`backdrop_blur`、`shadow`（elevation/shape/颜色）
 - 交互：`clickable`/`clickable_with_source`、`focusable`/`focusable_with_source`、`hoverable`、`on_key_event`/`on_pre_key_event`、`on_pointer_event`/`on_pre_pointer_event`、`focus_requester`、手势 `on_tap`/`on_double_tap`/`on_long_press`/`on_drag_start`/`on_drag`/`on_drag_end`/`on_drag_cancel`
-- 视觉：`alpha`/`rotate`/`scale` 便捷包装、`graphics_layer`（scale_x/y、alpha、translation_x/y、rotation_z、**transformOrigin + clip 已补**；shadowElevation/rotationX/Y 仍缺）、`test_tag`
+- 视觉：`alpha`/`rotate`/`scale`/`rotation_x`/`rotation_y`/`camera_distance`/`shadow_elevation` 便捷包装、`graphics_layer`（scale_x/y、alpha、translation_x/y、rotation_z、**transformOrigin + clip + 3D 旋转透视 + 阴影已补**）、`test_tag`
 - 指示：`ripple(source, color, bounded)`——水波纹（对标 Compose indication/ripple；Button 自动附带）
 - 滚动：`vertical_scroll`/`horizontal_scroll`（ScrollState）
 
@@ -33,9 +33,9 @@ Text / TextField / Button / Column / Row / Stack / RichText / SelectionContainer
 
 ### P1 — GraphicsLayer 补属性（渲染层能力）
 7. ✅ **transformOrigin（pivotFractionX/Y，默认 Center (0.5, 0.5)）**——**关键**：Compose 变换默认绕中心，项目当前绕左上——语义偏差，P0 便捷包装依赖它（已实现并修正）
-8. **shadowElevation / ambientShadowColor / spotShadowColor**（与 Modifier.shadow 合并实现——shadow 基础版已做）
+8. ✅ **shadowElevation / ambientShadowColor / spotShadowColor**（graphicsLayer shadowElevation + shadow_shape——复用 Modifier.shadow 的 ambient/spot 实现）
 9. clip ✅（graphics_layer 内裁剪到节点 bounds）；**shape 裁剪仍缺**（GraphicsLayerParams 无 shape 字段）
-10. **rotationX/Y / cameraDistance**（3D 透视——skia 支持有限，可降级）
+10. ✅ **rotationX/Y / cameraDistance**（3D 透视——M44 + Canvas::concat_44，相机透视 w'=1-z/d 近似）
 
 ### P2 — 状态与交互
 11. ✅ **enabled 语义**（组件禁用——clickable 不响应 + 视觉降透明度）——Button/TextField 已独立实现；统一语义见 12
@@ -99,9 +99,9 @@ Text / TextField / Button / Column / Row / Stack / RichText / SelectionContainer
 16. ✅ Popup 锚定到调用位置的上一个兄弟节点（对标 Compose Popup 定位；无兄弟回退窗口对齐）
 17. ✅ InteractionSource/ComponentState（press/focus/hover/drag + hoist）+ Button 状态取色/ButtonElevation + TextField focus/isError + Modifier.hoverable（对照 Compose foundation 1.11.4 源码）
 18. ✅ 水波纹 indication（ripple）——分层设计（每次按压一层 RippleLayer，扩散 500ms EaseOutCubic + 释放淡出 300ms 后清理；参考旧版 D:\winia ripple.rs 的时长/透明度/分层思路）+ hover/focus 状态层（8%/12%，500ms 平滑过渡）；Button 自动附带
+19. ✅ GraphicsLayer 3D：rotationX/rotationY + cameraDistance（M44 透视）+ shadowElevation/shadow_shape（复用 Modifier.shadow ambient/spot）+ 便捷 Modifier 方法
 
 **剩余**：
-- P1 GraphicsLayer 补属性（shadowElevation/rotationX/Y/cameraDistance——shadow 已做基础版）
 - TextField label（Composable 浮动——需动画支持，P2）
 - 手势层 draggable/pointer_input（远期；tap/double-tap/long-press/drag、hoverable 已完成）
 - TextField 内置容器/边框视觉（Outlined/Filled 变体——当前视觉由用户 modifier 提供，isError/focus 状态可驱动）
