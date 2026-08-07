@@ -118,10 +118,10 @@ impl ButtonElevation {
         Self::new(0.0, 0.0, 0.0, 0.0, 0.0)
     }
 
-    /// ElevatedButton 近似（rest 1 / pressed 8 / focused 3 / hovered 4 / disabled 0——
+    /// ElevatedButton 近似（rest 2 / pressed 10 / focused 6 / hovered 8 / disabled 0——
     /// hover 明显高于 rest，悬停即可见阴影升高；变化经动画平滑过渡）
     pub fn elevated() -> Self {
-        Self::new(1.0, 8.0, 3.0, 4.0, 0.0)
+        Self::new(2.0, 10.0, 6.0, 8.0, 0.0)
     }
 
     /// 按状态取 elevation（优先级 disabled > pressed > dragged > hovered > focused > default——
