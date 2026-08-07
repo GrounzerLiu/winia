@@ -699,6 +699,31 @@ impl ApplicationHandler for AppState {
                         }
                     }
                 }
+                // 聚焦组件的键盘激活（对标 Compose clickable：聚焦时按
+                // Enter/Space 触发 onClick——从聚焦节点向外找第一个 on_click）
+                let is_activate = matches!(&event.logical_key, Key::Named(NamedKey::Enter))
+                    || matches!(&event.logical_key, Key::Character(c) if c == " ");
+                if !consumed && event.state.is_pressed() && !event.repeat
+                    && is_activate
+                {
+                    if let Some(fid) = pw.focused_id {
+                        let nodes = pw.composer.arena_nodes();
+                        if let Some(r) = pw.composer.layout_root_idx() {
+                            if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, fid) {
+                                let mut cur = Some(idx);
+                                while let Some(i) = cur {
+                                    if let Some(on_click) = nodes[i].modifier.on_click() {
+                                        on_click();
+                                        consumed = true;
+                                        break;
+                                    }
+                                    cur = nodes[i].parent_id
+                                        .and_then(|pid| crate::layout::node::find_node_by_id(nodes, r, pid));
+                                }
+                            }
+                        }
+                    }
+                }
                 if consumed {
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                     event_loop.set_control_flow(ControlFlow::Poll);
