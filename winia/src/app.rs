@@ -1266,7 +1266,8 @@ fn exec_overlay_click(pw: &mut PerWindow) -> bool {
     let nodes = ov.composer.arena_nodes();
     let path = hit_test(nodes, r, local.0, local.1);
     // 沿路径找 clickable（最内层优先）
-    fire_click_along_path(nodes, &path)
+    let r = fire_click_along_path(nodes, &path);
+    r
 }
 
 /// 沿命中路径从内到外触发第一个 on_click——返回是否触发。
