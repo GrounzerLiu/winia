@@ -178,6 +178,25 @@ impl ButtonDefaults {
         Shape::pill()
     }
 
+    /// 默认按钮颜色（对标 material3 `ButtonDefaults.buttonColors()`——
+    /// 从主题色板按 style 推导容器/内容色）
+    pub fn button_colors(
+        theme: &crate::ui::theme::ThemeColors,
+        style: ButtonStyle,
+    ) -> ButtonColors {
+        ButtonColors::from_theme(theme, style)
+    }
+
+    /// 默认阴影（对标 `ButtonDefaults.buttonElevation()`——Filled 系全 0）
+    pub fn button_elevation() -> ButtonElevation {
+        ButtonElevation::default_elevation()
+    }
+
+    /// ElevatedButton 默认阴影（对标 `ButtonDefaults.elevatedButtonElevation()`）
+    pub fn elevated_button_elevation() -> ButtonElevation {
+        ButtonElevation::elevated()
+    }
+
     /// 默认最小宽度（对标 `ButtonDefaults.MinWidth` 58.dp）
     pub fn min_width() -> f32 {
         58.0
@@ -357,7 +376,8 @@ impl Button {
         ctx.changed(&self.enabled);
         let key = ctx.next_key();
         let theme = crate::ui::theme::WiniaTheme::colors();
-        let colors = self.colors.unwrap_or_else(|| ButtonColors::from_theme(&theme, self.style));
+        // 默认颜色统一从 ButtonDefaults 取（对标 material3 ButtonDefaults.buttonColors）
+        let colors = self.colors.unwrap_or_else(|| ButtonDefaults::button_colors(&theme, self.style));
         // 交互源：外部注入或内部 remember（对标 Compose Button 的 interactionSource 参数）
         let interaction = self.interaction_source
             .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
@@ -514,6 +534,14 @@ mod tests {
         assert_eq!(ButtonDefaults::shape(), Shape::pill());
         assert_eq!(ButtonDefaults::min_width(), 58.0);
         assert_eq!(ButtonDefaults::min_height(), 40.0);
+        // 颜色工厂与 from_theme 一致（薄包装语义对标 Compose buttonColors()）
+        let theme = crate::ui::theme::ThemeColors::light_from_seed(0x6750A4);
+        assert_eq!(
+            ButtonDefaults::button_colors(&theme, ButtonStyle::Filled),
+            ButtonColors::from_theme(&theme, ButtonStyle::Filled),
+        );
+        assert_eq!(ButtonDefaults::button_elevation(), ButtonElevation::default_elevation());
+        assert_eq!(ButtonDefaults::elevated_button_elevation(), ButtonElevation::elevated());
         let p = ButtonDefaults::content_padding(ButtonStyle::Filled);
         assert!(matches!(p.0, SizeValue::Static(crate::modifier::Dimension::Fixed(24.0))));
         assert!(matches!(p.1, SizeValue::Static(crate::modifier::Dimension::Fixed(8.0))));
