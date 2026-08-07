@@ -50,15 +50,25 @@ struct TextParams<'a> {
 /// 顺序：scale → rotationZ → rotationY → rotationX → 相机透视
 /// （矩阵左乘序与 Compose RenderNode 一致；调用方负责先平移到 pivot）。
 /// 无 3D 旋转时返回 None（走 2D 路径）。
-fn build_gl_3d_matrix(gl: &crate::modifier::GraphicsLayerParams) -> Option<skia_safe::M44> {
+fn build_gl_3d_matrix(
+    gl: &crate::modifier::GraphicsLayerParams,
+    w: f32,
+    h: f32,
+) -> Option<skia_safe::M44> {
     if gl.rotation_x == 0.0 && gl.rotation_y == 0.0 {
         return None;
     }
     // 相机透视投影必须**左乘**到组合矩阵（P·Rx·Ry·Rz·S）：
     // 直接 set_rc(3,2) 只改 w 行 z 列，2D 点 z 恒为 0 → 透视永远不参与
     // （相机距离无效的根因）。左乘后 w 行自动折叠出 -sinθ/cam 等系数。
+    // 有效相机距离下限 = 视图半尺寸：默认 8 对 170dp 卡片太小，近边
+    // z'=h/2·sinθ 会超过相机 → w 变负 → 卡片“飞走”（Compose 文档明示
+    // 该伪影：cameraDistance 应 ≥ 视图尺寸）。钳制后任意角度 w>0，不消失。
+    let effective_cam = gl.camera_distance
+        .max(w.max(h) / 2.0 + 1.0)
+        .max(1.0);
     let mut persp = skia_safe::M44::new_identity();
-    persp.set_rc(3, 2, -1.0 / gl.camera_distance.max(1.0));
+    persp.set_rc(3, 2, -1.0 / effective_cam);
     let mut m = persp;
     if gl.rotation_z != 0.0 {
         m = skia_safe::M44::concat(&m, &skia_safe::M44::rotate(
@@ -273,7 +283,7 @@ fn render_pass1(
         // 3D 旋转（rotationX/Y + cameraDistance 透视）：整体拼成 4x4 矩阵
         // （scale → rotationZ → rotationY → rotationX → 相机透视），
         // 与 2D 路径共用 pivot 语义
-        match build_gl_3d_matrix(&gl) {
+        match build_gl_3d_matrix(&gl, w, h) {
             Some(m) => { canvas.concat_44(&m); }
             None => {
                 canvas.scale((gl.scale_x, gl.scale_y));
@@ -774,35 +784,40 @@ mod tests {
     #[test]
     fn test_gl_3d_matrix_none_without_3d() {
         let gl = GraphicsLayerParams::default();
-        assert!(build_gl_3d_matrix(&gl).is_none(), "无 3D 旋转应走 2D 路径");
+        assert!(build_gl_3d_matrix(&gl, 200.0, 160.0).is_none(), "无 3D 旋转应走 2D 路径");
         let mut gl = GraphicsLayerParams::default();
         gl.rotation_z = 45.0; // 仅 rotationZ 不触发 3D 矩阵
-        assert!(build_gl_3d_matrix(&gl).is_none());
+        assert!(build_gl_3d_matrix(&gl, 200.0, 160.0).is_none());
     }
 
     #[test]
     fn test_gl_3d_matrix_perspective() {
         let mut gl = GraphicsLayerParams::default();
         gl.rotation_x = 45.0;
-        let m = build_gl_3d_matrix(&gl).expect("rotationX 应返回矩阵");
+        let m = build_gl_3d_matrix(&gl, 200.0, 160.0).expect("rotationX 应返回矩阵");
         let mut row = [0.0f32; 16];
         m.get_row_major(&mut row);
-        // P·Rx 的 w 行 = [0, -sinθ/cam, -cosθ/cam, 1]——透视必须折叠进
-        // x/y 系数（z=0 的点才会受影响；直接 set_rc(3,2) 永远无效）
+        // 有效相机距离 = max(8, max(200,160)/2+1) = 101；w 行折叠系数
         let s = 45f32.to_radians().sin();
         let c = 45f32.to_radians().cos();
         let persp_y = row[3 * 4 + 1];
         let persp_z = row[3 * 4 + 2];
-        assert!((persp_y + s / 8.0).abs() < 1e-6, "w 行 y 系数应为 -sinθ/cam：{persp_y}");
-        assert!((persp_z + c / 8.0).abs() < 1e-6, "w 行 z 系数应为 -cosθ/cam：{persp_z}");
+        assert!((persp_y + s / 101.0).abs() < 1e-6, "w 行 y 系数应为 -sinθ/cam：{persp_y}");
+        assert!((persp_z + c / 101.0).abs() < 1e-6, "w 行 z 系数应为 -cosθ/cam：{persp_z}");
         // 相机越远透视越平
+        let mut near = GraphicsLayerParams::default();
+        near.rotation_x = 45.0;
+        near.camera_distance = 2.0; // 低于半尺寸 → 钳制到 101
+        let mn = build_gl_3d_matrix(&near, 200.0, 160.0).unwrap();
+        let mut rown = [0.0f32; 16];
+        mn.get_row_major(&mut rown);
         let mut far = GraphicsLayerParams::default();
         far.rotation_x = 45.0;
-        far.camera_distance = 100.0;
-        let mf = build_gl_3d_matrix(&far).unwrap();
+        far.camera_distance = 500.0;
+        let mf = build_gl_3d_matrix(&far, 200.0, 160.0).unwrap();
         let mut rowf = [0.0f32; 16];
         mf.get_row_major(&mut rowf);
-        assert!(rowf[13].abs() < persp_y.abs(), "相机距离大 → 透视项小");
+        assert!(rowf[13].abs() < rown[13].abs(), "相机距离大 → 透视项小");
     }
 
     fn render_rect_with_gl(gl: &GraphicsLayerParams) -> (usize, usize) {
@@ -815,7 +830,7 @@ mod tests {
         canvas.translate((200.0, 100.0));
         canvas.scale((sf, sf));
         canvas.translate((px, py));
-        match build_gl_3d_matrix(gl) {
+        match build_gl_3d_matrix(gl, 200.0, 160.0) {
             Some(m) => { canvas.concat_44(&m); }
             None => { canvas.scale((gl.scale_x, gl.scale_y)); canvas.rotate(gl.rotation_z, None); }
         }
@@ -871,5 +886,14 @@ mod tests {
         let (t1, b1) = render_rect_with_gl(&near);
         let (t2, b2) = render_rect_with_gl(&far);
         assert_ne!((t1, b1), (t2, b2), "相机距离应改变投影结果");
+    }
+
+    #[test]
+    fn test_rotation_never_disappears_with_default_camera() {
+        // 默认相机 8 对 160dp 卡片：有效距离钳制到半尺寸，任意角度 w>0
+        let mut gl = GraphicsLayerParams::default();
+        gl.rotation_x = 75.0; // 75° 仍可见（90° 侧立成线是正确行为）
+        let (top, bottom) = render_rect_with_gl(&gl);
+        assert!(bottom > top, "rotationX=75 默认相机应仍可见：top={top} bottom={bottom}");
     }
 }
