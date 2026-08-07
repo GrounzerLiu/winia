@@ -52,11 +52,12 @@ pub(crate) fn next_overlay_id() -> u64 {
 // ═══════════════ Popup ═══════════════
 
 /// 非模态弹出层（对标 Compose `Popup`）——相对锚点/窗口定位，
-/// 点击外部触发 `on_dismiss_request`。
+/// 点击外部触发 `on_dismiss_request`。锚点 = 调用位置的上一个兄弟节点
+/// （如 Demo 中的触发按钮——弹出内容紧跟其后）；无兄弟时窗口对齐。
 ///
 /// ```ignore
 /// Popup::new()
-///     .position(PopupPosition::BottomStart)
+///     .position(PopupPosition::BottomLeft)
 ///     .on_dismiss_request(|| show.set(false))
 ///     .build(ctx, |ctx| { /* 弹出内容 */ });
 /// ```
@@ -94,7 +95,9 @@ impl Popup {
         let id = ctx.remember(|| next_overlay_id());
         ctx.open_overlay(crate::ui::overlay::OverlayDesc {
             id: id.get(),
-            anchor_slot: None,
+            // 锚点 = 当前作用域最后一个兄弟（紧跟其组合位置——Compose Popup 语义）；
+            // 无兄弟时 None → 窗口对齐
+            anchor_slot: ctx.prev_sibling_slot_key(),
             position: self.position,
             offset: self.offset,
             modal: false,

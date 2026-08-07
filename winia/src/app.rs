@@ -1191,6 +1191,7 @@ fn layout_overlays(pw: &mut PerWindow) {
         })).and_then(|nid| root.and_then(|r| {
             crate::layout::node::find_node_by_id(nodes, r, nid).map(|i| nodes[i].measured_size)
         }));
+        let anchored = anchor.is_some() && anchor_size.is_some();
         let (ax, ay, aw, ah) = match (anchor, anchor_size) {
             (Some((x, y)), Some(s)) => (x, y, s.width, s.height),
             _ => (0.0, 0.0, 0.0, 0.0),
@@ -1206,8 +1207,9 @@ fn layout_overlays(pw: &mut PerWindow) {
             P::BottomCenter => ((w - size.0) / 2.0, h - size.1),
             P::BottomRight => (w - size.0, h - size.1),
         };
-        // 有锚点时：按位置相对锚点（Bottom* = 锚点下方，Top* = 锚点上方）
-        let pos = if ov.anchor_slot.is_some() {
+        // 有锚点（且在主树中找到）时：按位置相对锚点（Bottom* = 锚点下方，
+        // Top* = 锚点上方）；锚点缺失/未物化（scope）回退窗口对齐——避免 (0,0)
+        let pos = if anchored {
             match ov.position {
                 P::BottomLeft => (ax, ay + ah),
                 P::BottomCenter => (ax + (aw - size.0) / 2.0, ay + ah),

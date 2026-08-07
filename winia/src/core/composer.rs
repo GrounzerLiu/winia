@@ -139,6 +139,13 @@ impl<'a> ComposeCtx<'a> {
         self.composer.slot_table.active_slot_key()
     }
 
+    /// 当前作用域内最后一个已组合兄弟的 slot_key（Popup 锚点用）——
+    /// 紧跟最后组合的兄弟之后，等价于 Compose Popup 零尺寸占位节点在父布局中的位置。
+    /// 无兄弟时返回 None（Popup 回退窗口对齐）。
+    pub fn prev_sibling_slot_key(&self) -> Option<u64> {
+        self.composer.slot_table.prev_sibling_slot_key()
+    }
+
     /// 使用固定 key 记住一个状态（不受 remember_counter 影响，适合跨分支持久化的值）
     pub fn remember_at_key<T: Clone + 'static>(&mut self, key: u64, init: impl FnOnce() -> T) -> State<T> {
         let pq = Arc::downgrade(&self.composer.pending_states);
@@ -672,6 +679,22 @@ impl SlotTable {
     /// 当前活跃 slot 的 key（overlay 锚点用）
     fn active_slot_key(&self) -> u64 {
         self.active_slot_key
+    }
+
+    /// 当前作用域内"前一个已组合兄弟"的 slot key（Popup 锚点用：对标 Compose
+    /// Popup 在父布局中的位置）。按本帧 child_counters 索引——不能取
+    /// children.last()：重组帧中上一帧的后缀兄弟尚未 truncate，会锚错节点。
+    /// 无前一个兄弟时返回 None（调用方回退窗口对齐）。
+    fn prev_sibling_slot_key(&self) -> Option<u64> {
+        let idx = *self.child_counters.last().unwrap_or(&0);
+        if idx == 0 {
+            return None;
+        }
+        let mut slot = &self.root_slot;
+        for &i in &self.path {
+            slot = &slot.children[i];
+        }
+        slot.children.get(idx - 1).map(|c| c.key)
     }
 
     /// 设置当前 slot 的参数（`ComposeCtx::changed` 暂存的参数，start_node 时写入）
@@ -1567,6 +1590,50 @@ mod tests {
     }
 
 use crate::layout::BoxLayout;
+
+    /// Popup 锚点：当前作用域最后一个兄弟的 slot key（无兄弟 → None）
+    #[test]
+    fn test_prev_sibling_slot_key() {
+        let mut composer = Composer::new();
+        let mut root_key = 0u64;
+        let mut leaf1_key = 0u64;
+        let mut leaf2_key = 0u64;
+        let mut observed: Vec<Option<u64>> = Vec::new();
+        composer.compose(|ctx| {
+            root_key = ctx.next_key();
+            ctx.start_container(root_key, Modifier::new(), BoxLayout::new());
+            leaf1_key = ctx.next_key();
+            ctx.start_leaf(leaf1_key, Modifier::new());
+            ctx.end_node();
+            observed.push(ctx.prev_sibling_slot_key());
+            leaf2_key = ctx.next_key();
+            ctx.start_leaf(leaf2_key, Modifier::new());
+            ctx.end_node();
+            observed.push(ctx.prev_sibling_slot_key());
+            ctx.end_node();
+            observed.push(ctx.prev_sibling_slot_key());
+        });
+        assert_eq!(observed, vec![Some(leaf1_key), Some(leaf2_key), Some(root_key)]);
+
+        // 重组帧：上一帧有 A/B/C 三个兄弟，本帧只重组合 A 后查询——
+        // 必须返回 A（而非残留的 C）——复现 Popup 锚点错位到 Dialog 按钮的 bug
+        composer.compose(|ctx| {
+            for _ in 0..3 {
+                let k = ctx.next_key();
+                ctx.start_leaf(k, Modifier::new());
+                ctx.end_node();
+            }
+        });
+        let mut recomposed: Option<u64> = None;
+        let mut a_key = 0u64;
+        composer.compose(|ctx| {
+            a_key = ctx.next_key();
+            ctx.start_leaf(a_key, Modifier::new());
+            ctx.end_node();
+            recomposed = ctx.prev_sibling_slot_key();
+        });
+        assert_eq!(recomposed, Some(a_key), "重组帧应锚到本帧刚组合的兄弟 A，而非残留的旧兄弟");
+    }
 
     /// 测试 restartable group 的 skip → replay 路径：
     /// 状态变化只影响某个 leaf slot，兄弟 slot 应被 clean skip 并正确 replay。
