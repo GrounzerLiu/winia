@@ -781,21 +781,23 @@ fn draw_border(canvas: &Canvas, x: f32, y: f32, w: f32, h: f32, width: f32, colo
     }
 }
 
-/// 焦点环（M3 focus indicator）——宽 3、与组件边缘距离 2、形状跟随组件、
-/// 颜色来自组件组合期捕获的主题色。
+/// 焦点环（M3 focus indicator）——宽 3、完全位于组件**外部**（环内侧距
+/// 组件边缘 2）、形状跟随组件、颜色来自组件组合期捕获的主题色。
 fn draw_focus(
     canvas: &Canvas,
     rect: Rect,
     shape: &crate::modifier::Shape,
     color: crate::modifier::Color,
 ) {
-    const FOCUS_GAP: f32 = 2.0;
+    const FOCUS_GAP: f32 = 2.0;   // 环内侧与组件边缘的距离
     const FOCUS_WIDTH: f32 = 3.0;
+    // 环中心线在组件外 gap + 半宽处——stroke 居中绘制时环完全在外侧
+    let inset = FOCUS_GAP + FOCUS_WIDTH / 2.0;
     let sr = Rect::new(
-        rect.left + FOCUS_GAP,
-        rect.top + FOCUS_GAP,
-        rect.right - FOCUS_GAP,
-        rect.bottom - FOCUS_GAP,
+        rect.left - inset,
+        rect.top - inset,
+        rect.right + inset,
+        rect.bottom + inset,
     );
     if sr.width() <= 0.0 || sr.height() <= 0.0 {
         return;
@@ -808,7 +810,8 @@ fn draw_focus(
     match shape {
         crate::modifier::Shape::Rectangle => { canvas.draw_rect(sr, &paint); }
         crate::modifier::Shape::RoundedRect { corner_radius } => {
-            let r = (*corner_radius - FOCUS_GAP).max(0.0);
+            // 外扩后圆角同步放大（保持与组件同心）
+            let r = (*corner_radius + inset).max(0.0);
             canvas.draw_rrect(RRect::new_rect_xy(sr, r, r), &paint);
         }
         crate::modifier::Shape::Pill => {
