@@ -29,6 +29,10 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::WindowId;
 
+/// 方向键焦点导航方向
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FocusDir { Left, Right, Up, Down }
+
 /// 查询窗口当前所在显示器的刷新率 → 帧间隔（mHz：300000 = 300Hz）。
 /// 查询失败返回 None——调用方保留旧值（创建期才回退 16ms）。
 fn current_frame_interval(sw: &VulkanSkiaWindow) -> Option<std::time::Duration> {
@@ -221,6 +225,62 @@ impl PerWindow {
         }
         // 否则：如果之前有关焦点但树中丢失了（重组后新节点 focus=false），保留 focused_id
         // （由后续触发的 set_focus_by_id 或 pointer 事件补上树的焦点标记）
+    }
+
+    /// 方向键移动焦点（对标 Compose Desktop 方向导航）——
+    /// 候选 = 目标方向半平面内的可聚焦节点，得分 = 方向距离 + 垂直偏离×2
+    fn focus_move_directional(&mut self, dir: FocusDir) -> bool {
+        let Some(fid) = self.focused_id else { return false; };
+        let Some(r) = self.composer.layout_root_idx() else { return false; };
+        let best = {
+            let nodes = self.composer.arena_nodes();
+            let candidates = crate::layout::node::collect_focus_candidates(nodes, r);
+            let Some((_, cur_cx, cur_cy)) = candidates.iter().find(|(id, _, _)| *id == fid) else {
+                return false;
+            };
+            let mut best: Option<(f32, u64)> = None;
+            for &(id, cx, cy) in &candidates {
+                if id == fid { continue; }
+                let (dx, dy) = (cx - cur_cx, cy - cur_cy);
+                let in_dir = match dir {
+                    FocusDir::Right => dx > 0.0,
+                    FocusDir::Left => dx < 0.0,
+                    FocusDir::Down => dy > 0.0,
+                    FocusDir::Up => dy < 0.0,
+                };
+                if !in_dir { continue; }
+                let (main, cross) = match dir {
+                    FocusDir::Right | FocusDir::Left => (dx.abs(), dy.abs()),
+                    FocusDir::Down | FocusDir::Up => (dy.abs(), dx.abs()),
+                };
+                let score = main + cross * 2.0;
+                if best.map_or(true, |(s, _)| score < s) {
+                    best = Some((score, id));
+                }
+            }
+            best
+        };
+        if let Some((_, target)) = best {
+            if let Some(r) = self.composer.layout_root_idx() {
+                let nodes = self.composer.arena_nodes_mut();
+                crate::layout::node::clear_focus(nodes, r);
+                if crate::layout::node::set_focus_by_id(nodes, r, target) {
+                    self.focused_id = Some(target);
+                    self.focused_slot_key =
+                        crate::layout::node::find_node_by_id(nodes, r, target)
+                            .map(|idx| nodes[idx].slot_key);
+                    // IME 按组件声明（方向键聚焦文本组件时开启输入法）
+                    if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, target) {
+                        let wants_ime = nodes[idx].ime_callback.borrow().is_some();
+                        if let Some(ref sw) = self.skia_window {
+                            sw.set_ime_allowed(wants_ime);
+                        }
+                    }
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// 增量重组 → 恢复焦点 → 布局 → 渲染（供 RedrawRequested 使用）
@@ -721,6 +781,22 @@ impl ApplicationHandler for AppState {
                                         .and_then(|pid| crate::layout::node::find_node_by_id(nodes, r, pid));
                                 }
                             }
+                        }
+                    }
+                }
+                // 方向键焦点导航（对标 Compose Desktop arrow-key navigation）——
+                // 在目标方向半平面内选"方向距离 + 垂直偏离×2"最小的可聚焦节点
+                if !consumed && event.state.is_pressed() && !event.repeat {
+                    let dir = match &event.logical_key {
+                        Key::Named(NamedKey::ArrowRight) => Some(FocusDir::Right),
+                        Key::Named(NamedKey::ArrowLeft) => Some(FocusDir::Left),
+                        Key::Named(NamedKey::ArrowDown) => Some(FocusDir::Down),
+                        Key::Named(NamedKey::ArrowUp) => Some(FocusDir::Up),
+                        _ => None,
+                    };
+                    if let Some(dir) = dir {
+                        if pw.focus_move_directional(dir) {
+                            consumed = true;
                         }
                     }
                 }

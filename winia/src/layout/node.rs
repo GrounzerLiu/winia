@@ -671,6 +671,29 @@ mod tests {
         assert_eq!((lx, ly), (10.0, 10.0), "滚动偏移从视觉原点扣除（与 hit_test/渲染一致）");
     }
 
+    #[test]
+    fn collect_focus_candidates_uses_visual_centers() {
+        // root(0,0) → scroll 容器(50,100, offset=50) → focusable(100,0, 20x20)
+        let scroll = crate::modifier::ScrollState::new();
+        scroll.offset.set(50.0);
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new().size(300.0, 300.0)),
+            LayoutNode::leaf(Modifier::new().size(200.0, 200.0).vertical_scroll(scroll)),
+            LayoutNode::leaf(Modifier::new().size(20.0, 20.0).focusable()),
+        ];
+        nodes[0].position = Point::new(0.0, 0.0);
+        nodes[1].position = Point::new(50.0, 100.0);
+        nodes[2].position = Point::new(100.0, 0.0);
+        nodes[0].children.push(1);
+        nodes[1].children.push(2);
+
+        let cands = collect_focus_candidates(&nodes, 0);
+        assert_eq!(cands.len(), 1, "仅 focusable 子节点进入候选");
+        // 视觉位置 = (150, 50)，中心 = (160, 60)（scroll offset 已扣除）
+        assert_eq!(cands[0].0, nodes[2].id);
+        assert_eq!((cands[0].1, cands[0].2), (160.0, 60.0));
+    }
+
     // ── aspectRatio / requiredSize ──
 
     #[test]
@@ -897,6 +920,38 @@ pub fn collect_focusable_ids(nodes: &[LayoutNode], root: usize, list: &mut Vec<u
     let children = nodes[root].children.clone();
     for c in children {
         collect_focusable_ids(nodes, c, list);
+    }
+}
+
+/// 收集所有可聚焦节点及其**视觉中心**（绝对坐标，含祖先 scroll 偏移——
+/// 与 hit_test 同路径）——方向键焦点导航用。
+pub fn collect_focus_candidates(nodes: &[LayoutNode], root: usize) -> Vec<(u64, f32, f32)> {
+    let mut out = Vec::new();
+    collect_focus_candidates_rec(nodes, root, 0.0, 0.0, &mut out);
+    out
+}
+
+fn collect_focus_candidates_rec(
+    nodes: &[LayoutNode],
+    idx: usize,
+    parent_x: f32,
+    parent_y: f32,
+    out: &mut Vec<(u64, f32, f32)>,
+) {
+    let node = &nodes[idx];
+    let nx = parent_x + node.position.x;
+    let ny = parent_y + node.position.y;
+    if has_focusable_modifier(node) {
+        out.push((
+            node.id,
+            nx + node.measured_size.width / 2.0,
+            ny + node.measured_size.height / 2.0,
+        ));
+    }
+    let (sdx, sdy) = scroll_offset_for_node(node);
+    let children = node.children.clone();
+    for c in children {
+        collect_focus_candidates_rec(nodes, c, nx - sdx, ny - sdy, out);
     }
 }
 
