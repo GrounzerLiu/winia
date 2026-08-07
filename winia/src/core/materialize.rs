@@ -24,6 +24,8 @@ pub(crate) struct DescNode {
     pub(crate) dirty: bool,
     /// 文本选择 registrar（物化时写入节点——组合期与物化期分离的传递通道）
     pub(crate) registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
+    /// 焦点环颜色（物化时写入节点——组合期捕获，渲染期读取）
+    pub(crate) focus_color: Option<crate::modifier::Color>,
     /// 布局方向（组合期捕获——物化直接用，不读 CompositionLocal）
     pub(crate) direction: crate::layout::LayoutDirection,
     pub(crate) children: Vec<DescNode>,
@@ -62,7 +64,7 @@ pub(crate) fn materialize(composer: &mut Composer) {
 
 /// 物化单个 desc 节点（递归子节点）——Skip 恢复 / 节点复用 / 降级重建。
 pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: Option<usize>) -> Option<usize> {
-    let DescNode { key, skip, modifier, preserve_modifier, policy, on_remove, dirty, registrar, direction, children } = desc;
+    let DescNode { key, skip, modifier, preserve_modifier, policy, on_remove, dirty, registrar, focus_color, direction, children } = desc;
     let index = if skip {
         // Skip：恢复上帧节点（key 匹配——保留测量/内容；children 清空后
         // 按 slot 树结构重新挂接（子节点逐个从 prev_node_by_key 恢复——
@@ -213,6 +215,10 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
     // Skip 恢复路径的节点保留缓存 registrar，不走此处）
     if let Some(reg) = registrar {
         *composer.arena.nodes[index].registrar.borrow_mut() = Some(reg);
+    }
+    // 应用焦点环颜色（组合期捕获——Enter 路径写入；Skip 恢复保留缓存值）
+    if let Some(color) = focus_color {
+        composer.arena.nodes[index].focus_color.set(color);
     }
     if let Some(p) = parent {
         composer.arena.add_child(p, index);

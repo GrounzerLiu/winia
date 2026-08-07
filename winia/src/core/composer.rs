@@ -340,10 +340,11 @@ impl<'a> ComposeCtx<'a> {
 
     /// 设置当前节点的焦点环颜色（组合期调用——主题色在此捕获；
     /// 渲染期 CompositionLocal 已退出，不能读主题）
-    pub fn set_current_node_focus_color(&self, color: crate::modifier::Color) {
-        if let Some(&idx) = self.composer.node_stack.last() {
-            let node = &self.composer.arena.nodes[idx];
-            node.focus_color.set(color);
+    pub fn set_current_node_focus_color(&mut self, color: crate::modifier::Color) {
+        // 组合/布局分离：组合期没有 arena 节点——写入当前 slot 的 desc，
+        // 物化时应用到节点（与 set_current_node_registrar 同一通道）
+        if let Some(desc) = &mut self.composer.slot_table.current_slot().desc {
+            desc.focus_color = Some(color);
         }
     }
 
@@ -561,6 +562,9 @@ struct NodeDesc {
     dirty: bool,
     /// 文本选择 registrar（组合期 set_current_node_registrar 写入——物化时应用）
     registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
+    /// 焦点环颜色（组合期 set_current_node_focus_color 写入——物化时应用；
+    /// 渲染期 CompositionLocal 已退出，必须组合期捕获）
+    focus_color: Option<crate::modifier::Color>,
     /// 布局方向（组合期捕获——provides 作用域内读 CompositionLocal；
     /// 物化在组合回调后执行——届时 WiniaTheme::direction() 已退出作用域，
     /// 必须从 desc 携带，否则 RTL 下节点快照恒 Ltr → offset/padding 镜像失效）
@@ -753,6 +757,7 @@ impl SlotTable {
                     on_remove: desc.on_remove,
                     dirty: desc.dirty, // start_slot 的 Dirty 状态（slot.dirty 已消费）
                     registrar: desc.registrar,
+                    focus_color: desc.focus_color,
                     direction: desc.direction,
                     children: Vec::new(),
                 };
@@ -777,6 +782,7 @@ impl SlotTable {
                     on_remove: None,
                     dirty: false,
                     registrar: None,
+                    focus_color: None,
                     direction: slot.direction,
                     children: Vec::new(),
                 };
@@ -1166,6 +1172,7 @@ impl Composer {
             on_remove,
             dirty: slot_status != SlotStatus::Clean, // 重测标记（slot.dirty 已消费）
             registrar: None,
+            focus_color: None,
             direction,
         }));
         // 统一依赖栈：节点 push（组件 build 期间 State 读取注册到最内层 Group——
@@ -1257,6 +1264,7 @@ impl Composer {
                 on_remove,
                 dirty: true, // Enter 即重测（content 重跑——参数/内容可能变；Skip 恢复不受影响）
                 registrar: None,
+                focus_color: None,
                 direction,
             }));
         }
@@ -3602,6 +3610,7 @@ fn test_skip_recovery_sig_mismatch_direct() {
         on_remove: None,
         dirty: false,
         registrar: None,
+        focus_color: None,
         direction: crate::layout::LayoutDirection::Ltr,
         children: vec![crate::core::materialize::DescNode {
             key: leaf0_key,
@@ -3612,6 +3621,7 @@ fn test_skip_recovery_sig_mismatch_direct() {
             on_remove: None,
             dirty: false,
             registrar: None,
+            focus_color: None,
             direction: crate::layout::LayoutDirection::Ltr,
             children: vec![],
         }],
