@@ -12,57 +12,47 @@
 
 use crate::core::state::State;
 use parking_lot::Mutex;
-use std::sync::{Arc, LazyLock};
-use std::time::Instant;
+use std::sync::Arc;
 
-/// 水波纹扩散时长（ms）——对标 Compose ripple 的 PressAnimationSpec（~225ms）
-pub(crate) const RIPPLE_EXPAND_MS: f32 = 225.0;
-/// 释放后淡出时长（ms）
-pub(crate) const RIPPLE_FADE_MS: f32 = 180.0;
-/// 波纹不透明度（按下期间）
-pub(crate) const RIPPLE_OPACITY: f32 = 0.24;
+/// 水波纹扩散时长——参考旧版 ripple.rs（Tween 500ms）
+pub(crate) const RIPPLE_EXPAND_MS: u64 = 500;
+/// 释放后淡出时长——参考旧版 ripple.rs（Tween 300ms）
+pub(crate) const RIPPLE_FADE_MS: u64 = 300;
+/// 波纹不透明度——参考旧版 ripple.rs（ripple_opacity 0.1）
+pub(crate) const RIPPLE_OPACITY: f32 = 0.10;
+/// hover/focus 状态层透明度（参考旧版 background_opacity 0.08）
+pub(crate) const STATE_LAYER_HOVER: f32 = 0.08;
+pub(crate) const STATE_LAYER_FOCUS: f32 = 0.12;
+/// 状态层过渡时长（旧版 hover 动画 500ms）
+pub(crate) const STATE_LAYER_TRANSITION_MS: u64 = 500;
 
 /// 单个波纹层（参考旧版 D:\winia ripple.rs 的分层设计）：
 /// 每次按下产生一层，中心 = 按压点（场景坐标），扩散进度 0→1；
-/// 释放后标记 fading，透明度淡出到 0 后由 update_ripples 清理。
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// 释放后标记 fading，透明度淡出到 0 后自动从列表移除（动画 on_finish）。
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct RippleLayer {
     /// 层 id（按下递增——多指预留；当前单指针模型）
     pub(crate) id: u64,
     /// 按压点（场景坐标——渲染时换算节点本地坐标）
     pub(crate) center: (f32, f32),
-    /// 扩散进度 0..1（225ms easeOutCubic）
-    pub(crate) progress: f32,
-    /// 当前透明度（按下 0.24；释放后 180ms 淡出到 0）
-    pub(crate) opacity: f32,
-    /// 释放后淡出中
+    /// 扩散进度 0..1（500ms Tween 驱动）
+    pub(crate) progress: crate::core::state::State<f32>,
+    /// 当前透明度（按下 0.10；释放后 300ms 淡出到 0）
+    pub(crate) opacity: crate::core::state::State<f32>,
+    /// 释放后淡出中（防重复触发淡出）
     pub(crate) fading: bool,
 }
 
 impl RippleLayer {
     fn new(id: u64, center: (f32, f32)) -> Self {
-        Self { id, center, progress: 0.0, opacity: RIPPLE_OPACITY, fading: false }
+        Self {
+            id,
+            center,
+            progress: crate::core::state::State::new(0.0),
+            opacity: crate::core::state::State::new(RIPPLE_OPACITY),
+            fading: false,
+        }
     }
-}
-
-/// 全局活动波纹（按下注册，淡出结束清理）——驱动事件循环持续重绘
-static ACTIVE_RIPPLES: LazyLock<Mutex<Vec<MutableInteractionSource>>> =
-    LazyLock::new(|| Mutex::new(Vec::new()));
-static LAST_RIPPLE_TICK: LazyLock<Mutex<Instant>> =
-    LazyLock::new(|| Mutex::new(Instant::now()));
-
-/// 每轮事件循环调用：清理已结束的波纹，返回是否仍有波纹在动画中
-/// （有则请求重绘——扩散/淡出期间保持帧驱动）。
-pub(crate) fn update_ripples() -> bool {
-    let now = Instant::now();
-    let dt = now.duration_since(*LAST_RIPPLE_TICK.lock());
-    *LAST_RIPPLE_TICK.lock() = now;
-    let mut list = ACTIVE_RIPPLES.lock();
-    for s in list.iter() {
-        s.advance_ripples(dt);
-    }
-    list.retain(|s| s.has_active_ripples());
-    !list.is_empty()
 }
 
 /// 组件交互状态快照（对标 material3 状态组合：enabled/pressed/hovered/focused/dragged）。
@@ -108,6 +98,9 @@ pub struct MutableInteractionSource {
     ripple_layers: Arc<Mutex<Vec<RippleLayer>>>,
     /// 层 id 计数器
     next_layer_id: Arc<std::sync::atomic::AtomicU64>,
+    /// hover/focus 状态层透明度（动画驱动——避免状态切换生硬跳变）
+    hover_opacity: crate::core::state::State<f32>,
+    focus_opacity: crate::core::state::State<f32>,
 }
 
 /// 身份比较：同一交互源实例（跨 clone 稳定）——供 Modifier 参数相等判断
@@ -138,6 +131,8 @@ impl MutableInteractionSource {
             dragged: State::new(false),
             ripple_layers: Arc::new(Mutex::new(Vec::new())),
             next_layer_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
+            hover_opacity: crate::core::state::State::new(0.0),
+            focus_opacity: crate::core::state::State::new(0.0),
         }
     }
 
@@ -149,39 +144,59 @@ impl MutableInteractionSource {
     }
 
     /// 按下并记录位置（对标 Compose `PressInteraction.Press(pressPosition)`——
-    /// 新建一层水波纹从按压点扩散；同时注册全局波纹驱动重绘）
+    /// 新建一层水波纹从按压点扩散；进度由动画系统驱动（500ms Tween——
+    /// 参考旧版 ripple.rs），完成自动停止）
     pub fn emit_press_at(&self, pos: (f32, f32)) {
         let id = self.next_layer_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.ripple_layers.lock().push(RippleLayer::new(id, pos));
         self.pressed.set(true);
-        ACTIVE_RIPPLES.lock().push(self.clone());
+        let progress = self.ripple_layers.lock().last().unwrap().progress.clone();
+        crate::animation::push_animatable(
+            progress,
+            1.0,
+            crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
+                std::time::Duration::from_millis(RIPPLE_EXPAND_MS),
+                crate::animation::interpolator::EaseOutCubic::new(),
+            )),
+        );
     }
 
     /// 释放（PressInteraction.Release 等价——含拖拽越界取消）：
-    /// 当前层进入淡出（参考 ripple.rs：释放后 opacity 动画到 0 再清理）
+    /// 当前层进入淡出（参考 ripple.rs：释放后 opacity 动画到 0，on_finish 清理）
     pub fn emit_release(&self) {
-        let mut layers = self.ripple_layers.lock();
-        for l in layers.iter_mut() {
-            if !l.fading {
-                l.fading = true;
+        let ids: Vec<u64> = {
+            let mut layers = self.ripple_layers.lock();
+            layers.iter_mut()
+                .filter(|l| !l.fading)
+                .map(|l| {
+                    l.fading = true;
+                    l.id
+                })
+                .collect()
+        };
+        for id in ids {
+            let opacity = self.ripple_layers.lock().iter()
+                .find(|l| l.id == id)
+                .map(|l| l.opacity.clone());
+            if let Some(opacity) = opacity {
+                let src = self.clone();
+                crate::animation::push_animatable_with_done(
+                    opacity,
+                    0.0,
+                    crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
+                        std::time::Duration::from_millis(RIPPLE_FADE_MS),
+                        crate::animation::interpolator::EaseInOutCubic::new(),
+                    )),
+                    move || src.remove_ripple_layer(id),
+                );
             }
         }
         self.pressed.set(false);
     }
 
-    /// 推进波纹动画（事件循环每轮调用）：扩散进度 + 淡出透明度，完成后移除层
-    pub(crate) fn advance_ripples(&self, dt: std::time::Duration) {
-        let dt_ms = dt.as_secs_f32() * 1000.0;
-        let mut layers = self.ripple_layers.lock();
-        for l in layers.iter_mut() {
-            if l.fading {
-                l.opacity = (l.opacity - dt_ms / RIPPLE_FADE_MS * RIPPLE_OPACITY).max(0.0);
-            } else {
-                l.progress = (l.progress + dt_ms / RIPPLE_EXPAND_MS).min(1.0);
-            }
-        }
-        // 清理条件：透明度归零（淡出完成）即移除；扩散中即使 progress=1 也保留到释放
-        layers.retain(|l| !l.fading || l.opacity > 0.0);
+    /// 淡出完成回调：从列表移除层
+    fn remove_ripple_layer(&self, id: u64) {
+        self.ripple_layers.lock().retain(|l| l.id != id);
     }
 
     /// 是否有未结束的波纹层（事件循环驱动重绘的依据）
@@ -197,21 +212,47 @@ impl MutableInteractionSource {
     /// 获得焦点（FocusInteraction.Focus 等价）
     pub fn emit_focus(&self) {
         self.focused.set(true);
+        self.animate_state_layer(&self.focus_opacity, STATE_LAYER_FOCUS);
     }
 
     /// 失去焦点（FocusInteraction.Unfocus 等价）
     pub fn emit_unfocus(&self) {
         self.focused.set(false);
+        self.animate_state_layer(&self.focus_opacity, 0.0);
     }
 
-    /// 指针悬停进入（HoverInteraction.Enter 等价）
+    /// 指针悬停进入（HoverInteraction.Enter 等价）——状态层 500ms 淡入
     pub fn emit_hover_enter(&self) {
         self.hovered.set(true);
+        self.animate_state_layer(&self.hover_opacity, STATE_LAYER_HOVER);
     }
 
-    /// 指针悬停离开（HoverInteraction.Exit 等价）
+    /// 指针悬停离开（HoverInteraction.Exit 等价）——状态层 500ms 淡出
     pub fn emit_hover_exit(&self) {
         self.hovered.set(false);
+        self.animate_state_layer(&self.hover_opacity, 0.0);
+    }
+
+    /// 状态层透明度动画（hover/focus 过渡平滑——参考旧版 500ms Tween）
+    fn animate_state_layer(&self, state: &crate::core::state::State<f32>, target: f32) {
+        crate::animation::push_animatable(
+            state.clone(),
+            target,
+            crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
+                std::time::Duration::from_millis(STATE_LAYER_TRANSITION_MS),
+                crate::animation::interpolator::EaseInOutCubic::new(),
+            )),
+        );
+    }
+
+    /// hover 状态层当前透明度（渲染读取——动画值）
+    pub(crate) fn hover_opacity_value(&self) -> f32 {
+        self.hover_opacity.peek()
+    }
+
+    /// focus 状态层当前透明度（渲染读取——动画值）
+    pub(crate) fn focus_opacity_value(&self) -> f32 {
+        self.focus_opacity.peek()
     }
 
     /// 拖拽开始（DragInteraction.Start 等价）
@@ -310,8 +351,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ripple_layers_advance_and_fade() {
-        use std::time::Duration;
+    fn test_ripple_layers_press_release() {
         let s = MutableInteractionSource::new();
         // 未按下：无层
         assert!(!s.has_active_ripples());
@@ -321,23 +361,22 @@ mod tests {
         let layers = s.ripple_layers();
         assert_eq!(layers.len(), 1);
         assert_eq!(layers[0].center, (12.0, 34.0));
+        assert_eq!(layers[0].opacity.get(), RIPPLE_OPACITY, "波纹初始透明度 0.10");
         assert!(!layers[0].fading);
-        // 推进扩散：progress 增长到 1（225ms 完成）
-        s.advance_ripples(Duration::from_millis(113));
-        let mid = s.ripple_layers()[0];
-        assert!(mid.progress > 0.0 && mid.progress < 1.0, "扩散中 progress 应介于 0..1");
-        s.advance_ripples(Duration::from_millis(120));
-        assert_eq!(s.ripple_layers()[0].progress, 1.0);
-        // 释放：进入淡出
+        assert!(s.has_active_ripples());
+        // 释放：进入淡出（进度/透明度动画由动画系统驱动——animation 测试覆盖）
         s.emit_release();
         assert!(!s.is_pressed());
         assert!(s.ripple_layers()[0].fading);
-        // 淡出推进：透明度下降，结束后层被清理
-        s.advance_ripples(Duration::from_millis(90));
-        let mid = s.ripple_layers();
-        assert_eq!(mid.len(), 1);
-        assert!(mid[0].opacity > 0.0 && mid[0].opacity < RIPPLE_OPACITY);
-        s.advance_ripples(Duration::from_millis(100));
+    }
+
+    #[test]
+    fn test_ripple_removed_after_fade() {
+        // 淡出动画 on_finish 的清理路径：remove_ripple_layer 按 id 移除
+        let s = MutableInteractionSource::new();
+        s.emit_press_at((1.0, 2.0));
+        let id = s.ripple_layers()[0].id;
+        s.remove_ripple_layer(id);
         assert!(!s.has_active_ripples(), "淡出完成后层应被清理");
     }
 }

@@ -455,18 +455,9 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
     for el in node.modifier.elements() {
         let ModifierElement::Ripple { source, color, bounded } = el else { continue };
 
-        // ── 状态层（hover/focus——对标 ripple.rs background_opacity）──
-        let hovered = source.is_hovered();
-        let focused = source.is_focused();
-        let state_alpha = if hovered && focused {
-            0.12
-        } else if hovered {
-            0.08
-        } else if focused {
-            0.12
-        } else {
-            0.0
-        };
+        // ── 状态层（hover 0.08 / focus 0.12——动画值，500ms 平滑过渡，
+        //    参考旧版 ripple.rs background_opacity + Tween）──
+        let state_alpha = source.hover_opacity_value() + source.focus_opacity_value();
         if state_alpha > 0.0 {
             let mut paint = skia_safe::Paint::default();
             paint.set_color(skia_safe::Color::from_argb(
@@ -485,16 +476,17 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
             96.0
         };
         for layer in source.ripple_layers() {
-            // 扩散：225ms easeOutCubic（对标 Compose PressAnimationSpec 时长）
-            let eased = 1.0 - (1.0 - layer.progress).powi(3);
-            let radius = eased * max_r;
-            if radius <= 0.0 || layer.opacity <= 0.0 {
+            // 扩散进度已由动画系统缓动（500ms EaseOutCubic——旧版时长）
+            let progress = layer.progress.get();
+            let opacity = layer.opacity.get();
+            let radius = max_r * progress;
+            if radius <= 0.0 || opacity <= 0.0 {
                 continue;
             }
             // 按压点已是场景（画布）坐标——非滚动/无 graphicsLayer 变换的节点直接可用
             let center = skia_safe::Point::new(layer.center.0, layer.center.1);
             let solid = skia_safe::Color::from_argb(
-                (color.a as f32 * layer.opacity) as u8,
+                (color.a as f32 * opacity) as u8,
                 color.r,
                 color.g,
                 color.b,

@@ -328,9 +328,8 @@ impl ApplicationHandler for AppState {
         // Wait + request_redraw 自驱动动画（避免 Poll↔Wait 切换竞态丢帧）
         event_loop.set_control_flow(ControlFlow::Wait);
         // 每轮推进动画（与窗口解耦，多窗口/子窗口动画均正确推进）
-        // 动画 + 水波纹（波纹扩散/淡出期间持续驱动重绘）
-        let animating = crate::animation::update_animations()
-            || crate::ui::interaction::update_ripples();
+        // 动画（水波纹/状态层过渡也注册在全局动画列表——自动驱动重绘）
+        let animating = crate::animation::update_animations();
         if animating {
             // 动画活跃：WaitUntil 定时唤醒（对齐刷新率）保证每帧唤醒（不冻结），
             // request 节流（距上次渲染 >= 帧间隔）限制 WM_PAINT 生成频率——
