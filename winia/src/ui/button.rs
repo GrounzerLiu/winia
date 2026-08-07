@@ -118,9 +118,10 @@ impl ButtonElevation {
         Self::new(0.0, 0.0, 0.0, 0.0, 0.0)
     }
 
-    /// ElevatedButton 近似（M3 tokens：rest 1 / pressed 8 / focused 2 / hovered 2 / disabled 0）
+    /// ElevatedButton 近似（rest 1 / pressed 8 / focused 3 / hovered 4 / disabled 0——
+    /// hover 明显高于 rest，悬停即可见阴影升高；变化经动画平滑过渡）
     pub fn elevated() -> Self {
-        Self::new(1.0, 8.0, 2.0, 2.0, 0.0)
+        Self::new(1.0, 8.0, 3.0, 4.0, 0.0)
     }
 
     /// 按状态取 elevation（优先级 disabled > pressed > dragged > hovered > focused > default——
@@ -364,7 +365,23 @@ impl Button {
         let state = interaction.state(self.enabled);
         let container = colors.container_color_for(&state);
         let text_color = colors.content_color_for(&state);
-        let elevation = self.elevation.map(|e| e.for_state(&state)).unwrap_or(0.0);
+        // 阴影高度：状态变化（hover/focus/press 进入与离开）用动画 State
+        // 平滑过渡——悬停时阴影逐渐升高、移出后逐渐回落，不跳变。
+        let elevation_anim = self.elevation.and_then(|e| {
+            if e.default <= 0.0 && e.pressed <= 0.0 && e.focused <= 0.0
+                && e.hovered <= 0.0 && e.disabled <= 0.0
+            {
+                None // 全 0：无阴影，不加图层
+            } else {
+                Some(ctx.animate_float_as_state(
+                    e.for_state(&state),
+                    crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
+                        std::time::Duration::from_millis(180),
+                        crate::animation::interpolator::EaseOutCubic::new(),
+                    )),
+                ))
+            }
+        });
 
         // 对标 material3 Button：内部 Row = defaultMinSize(58,40) + contentPadding，
         // 容器/边框/阴影统一使用 shape 参数（默认胶囊 CornerFull）。
@@ -403,14 +420,14 @@ impl Button {
             modifier = modifier.border(b.width, b.color, shape);
         }
 
-        // 阴影（elevation > 0 才应用——Modifier.shadow 本身也按 elevation>0 短路）
-        if elevation > 0.0 {
-            modifier = modifier.shadow(
-                elevation,
-                shape,
-                true,
-                crate::modifier::Color::BLACK,
-            );
+        // 阴影渲染走 graphics_layer 动态闭包（shadow_elevation 每帧读取动画值——
+        // 渲染期求值不触发重组；对标 Compose 层阴影语义；形状跟随 Button shape）
+        if let Some(anim) = elevation_anim {
+            modifier = modifier.graphics_layer(move || crate::modifier::GraphicsLayerParams {
+                shadow_elevation: anim.get(),
+                shadow_shape: Some(shape),
+                ..Default::default()
+            });
         }
 
         // 追加用户 modifier（在外层，可覆盖默认样式）
