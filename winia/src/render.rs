@@ -54,29 +54,34 @@ fn build_gl_3d_matrix(gl: &crate::modifier::GraphicsLayerParams) -> Option<skia_
     if gl.rotation_x == 0.0 && gl.rotation_y == 0.0 {
         return None;
     }
-    let mut m = skia_safe::M44::new_identity();
-    m.pre_scale_xyz(gl.scale_x, gl.scale_y, 1.0);
+    // 相机透视投影必须**左乘**到组合矩阵（P·Rx·Ry·Rz·S）：
+    // 直接 set_rc(3,2) 只改 w 行 z 列，2D 点 z 恒为 0 → 透视永远不参与
+    // （相机距离无效的根因）。左乘后 w 行自动折叠出 -sinθ/cam 等系数。
+    let mut persp = skia_safe::M44::new_identity();
+    persp.set_rc(3, 2, -1.0 / gl.camera_distance.max(1.0));
+    let mut m = persp;
     if gl.rotation_z != 0.0 {
-        m.pre_concat(&skia_safe::M44::rotate(
+        m = skia_safe::M44::concat(&m, &skia_safe::M44::rotate(
             skia_safe::V3::new(0.0, 0.0, 1.0),
             gl.rotation_z.to_radians(),
         ));
     }
     if gl.rotation_y != 0.0 {
-        m.pre_concat(&skia_safe::M44::rotate(
+        m = skia_safe::M44::concat(&m, &skia_safe::M44::rotate(
             skia_safe::V3::new(0.0, 1.0, 0.0),
             gl.rotation_y.to_radians(),
         ));
     }
     if gl.rotation_x != 0.0 {
-        m.pre_concat(&skia_safe::M44::rotate(
+        m = skia_safe::M44::concat(&m, &skia_safe::M44::rotate(
             skia_safe::V3::new(1.0, 0.0, 0.0),
             gl.rotation_x.to_radians(),
         ));
     }
-    // 相机透视（Compose Camera 近似）：w' = 1 - z/cameraDistance
-    let cam = gl.camera_distance.max(1.0);
-    m.set_rc(3, 2, -1.0 / cam);
+    // 缩放最内层（先缩放后旋转——Compose 变换序）
+    let mut s = skia_safe::M44::new_identity();
+    s.set_scale(gl.scale_x, gl.scale_y, 1.0);
+    m = skia_safe::M44::concat(&m, &s);
     Some(m)
 }
 
@@ -254,25 +259,11 @@ fn render_pass1(
     let rect = Rect::new(x, y, x + w, y + h);
     // 图形层：包住整个节点（background + text + children），应用 alpha/变换
     let gl_params = node.modifier.graphics_layer_params();
-    // graphicsLayer shadowElevation：与 Modifier.shadow 同层垫底（图层变换前——
-    // 阴影基于未变换的节点形状，对标 Compose 层阴影）
-    if !backdrop_pass {
-        if let Some(gl) = &gl_params {
-            if gl.shadow_elevation > 0.0 {
-                let shape = gl.shadow_shape.clone().unwrap_or(crate::modifier::Shape::Rectangle);
-                draw_elevation_shadow(canvas, rect, &shape, gl.shadow_elevation);
-            }
-        }
-    }
     let gl_saved = if let Some(gl) = gl_params {
         if gl.alpha < 1.0 {
             canvas.save_layer_alpha_f(None, gl.alpha);
         } else {
             canvas.save();
-        }
-        // clip 到节点 bounds（内容坐标系——变换前应用，对标 Compose clip 语义）
-        if gl.clip {
-            canvas.clip_rect(rect, None, true);
         }
         // transformOrigin：先平移到 pivot → 变换 → 平移回（对标 Compose
         // transformOrigin 默认 Center——scale/rotate 绕中心而非左上）
@@ -290,6 +281,16 @@ fn render_pass1(
             }
         }
         canvas.translate((-px, -py));
+        // graphicsLayer shadowElevation：在**变换空间内**绘制（随 3D 形变），
+        // 且先于 clip——阴影不被内容裁剪（对标 Compose 层阴影在边界外）
+        if gl.shadow_elevation > 0.0 && !backdrop_pass {
+            let shape = gl.shadow_shape.clone().unwrap_or(crate::modifier::Shape::Rectangle);
+            draw_elevation_shadow(canvas, rect, &shape, gl.shadow_elevation);
+        }
+        // clip 到节点 bounds（变换后应用——内容裁剪在图层空间内）
+        if gl.clip {
+            canvas.clip_rect(rect, None, true);
+        }
         true
     } else { false };
     let mut blur_radius: Option<f32> = None;
@@ -786,10 +787,14 @@ mod tests {
         let m = build_gl_3d_matrix(&gl).expect("rotationX 应返回矩阵");
         let mut row = [0.0f32; 16];
         m.get_row_major(&mut row);
-        // 透视项 row3 col2（w 行 z 系数）= -1/cameraDistance
-        let persp = row[3 * 4 + 2];
-        assert!(persp < 0.0, "透视项应为负：{persp}");
-        assert!((persp + 1.0 / 8.0).abs() < 1e-6, "默认相机距离 8 的透视项应为 -1/8");
+        // P·Rx 的 w 行 = [0, -sinθ/cam, -cosθ/cam, 1]——透视必须折叠进
+        // x/y 系数（z=0 的点才会受影响；直接 set_rc(3,2) 永远无效）
+        let s = 45f32.to_radians().sin();
+        let c = 45f32.to_radians().cos();
+        let persp_y = row[3 * 4 + 1];
+        let persp_z = row[3 * 4 + 2];
+        assert!((persp_y + s / 8.0).abs() < 1e-6, "w 行 y 系数应为 -sinθ/cam：{persp_y}");
+        assert!((persp_z + c / 8.0).abs() < 1e-6, "w 行 z 系数应为 -cosθ/cam：{persp_z}");
         // 相机越远透视越平
         let mut far = GraphicsLayerParams::default();
         far.rotation_x = 45.0;
@@ -797,6 +802,74 @@ mod tests {
         let mf = build_gl_3d_matrix(&far).unwrap();
         let mut rowf = [0.0f32; 16];
         mf.get_row_major(&mut rowf);
-        assert!(rowf[14].abs() < persp.abs(), "相机距离大 → 透视项小");
+        assert!(rowf[13].abs() < persp_y.abs(), "相机距离大 → 透视项小");
+    }
+
+    fn render_rect_with_gl(gl: &GraphicsLayerParams) -> (usize, usize) {
+        use skia_safe::{Color, Paint, surfaces};
+        let mut surface = surfaces::raster_n32_premul((400, 200)).unwrap();
+        let canvas = surface.canvas();
+        canvas.clear(Color::BLACK);
+        // 完全复刻 render.rs 的 graphicsLayer 序列
+        let (sf, px, py) = (1.5f32, 100.0f32, 80.0f32);
+        canvas.translate((200.0, 100.0));
+        canvas.scale((sf, sf));
+        canvas.translate((px, py));
+        match build_gl_3d_matrix(gl) {
+            Some(m) => { canvas.concat_44(&m); }
+            None => { canvas.scale((gl.scale_x, gl.scale_y)); canvas.rotate(gl.rotation_z, None); }
+        }
+        canvas.translate((-px, -py));
+        let mut paint = Paint::default();
+        paint.set_color(Color::WHITE);
+        canvas.draw_rect(skia_safe::Rect::from_xywh(-100.0, -80.0, 200.0, 160.0), &paint);
+        let pm = surface.peek_pixels().expect("pixmap");
+        let px2: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+        let at = |x: usize, y: usize| -> [u8; 4] { px2[y * 400 + x] };
+        let mut top = 200usize;
+        let mut bottom = 0usize;
+        for y in 0..200 {
+            for x in (0..400).step_by(2) {
+                if at(x, y) == [255, 255, 255, 255] {
+                    if y < top { top = y; }
+                    if y > bottom { bottom = y; }
+                    break;
+                }
+            }
+        }
+        (top, bottom)
+    }
+
+    #[test]
+    fn test_perspective_renders_in_full_sequence() {
+        let mut gl = GraphicsLayerParams::default();
+        gl.rotation_x = 45.0;
+        gl.camera_distance = 300.0;
+        let (top, bottom) = render_rect_with_gl(&gl);
+        assert!(bottom > top, "矩形应可见：top={top} bottom={bottom}");
+        // 与近似无透视（相机极远 → w≈1）的投影高度对比——透视会压缩投影
+        let mut affine = GraphicsLayerParams::default();
+        affine.rotation_x = 45.0;
+        affine.camera_distance = 1.0e9;
+        let (top_a, bottom_a) = render_rect_with_gl(&affine);
+        let persp_h = (bottom - top) as f32;
+        let affine_h = (bottom_a - top_a) as f32;
+        assert!(
+            (persp_h - affine_h).abs() > 5.0,
+            "透视应显著压缩投影高度：persp_h={persp_h} affine_h={affine_h}"
+        );
+    }
+
+    #[test]
+    fn test_camera_distance_changes_projection() {
+        let mut near = GraphicsLayerParams::default();
+        near.rotation_x = 45.0;
+        near.camera_distance = 20.0;
+        let mut far = GraphicsLayerParams::default();
+        far.rotation_x = 45.0;
+        far.camera_distance = 500.0;
+        let (t1, b1) = render_rect_with_gl(&near);
+        let (t2, b2) = render_rect_with_gl(&far);
+        assert_ne!((t1, b1), (t2, b2), "相机距离应改变投影结果");
     }
 }
