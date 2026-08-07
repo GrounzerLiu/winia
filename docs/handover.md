@@ -9,10 +9,10 @@
 ## 0. 三分钟速览
 
 - 这是一个 **Rust 声明式 GUI 框架**，对标 Jetpack Compose：`winit`（窗口/事件）+ `skia-safe`（绘制）+ 自研组合引擎。
-- 核心文件就几个：`winia/src/core/composer.rs`（2952 行，组合引擎）、`src/app.rs`（1348 行，事件循环）、`src/layout/node.rs`（1169 行，布局）、`src/modifier.rs`（1307 行，修饰符）、`src/animation.rs`（1052 行，动画）。
-- 构建：`cargo build -p winia`；测试：`cargo test --lib`（当前 162 个）；跑 demo：`cargo run -p winia --example counter`。
+- 核心文件就几个：`winia/src/core/composer.rs`（约 3700 行，组合引擎；物化已拆到 `core/materialize.rs`）、`src/app.rs`（约 1970 行，事件循环）、`src/layout/node.rs`（约 1500 行，布局）、`src/modifier.rs`（约 2200 行，修饰符）、`src/animation.rs`（约 2000 行，动画）。
+- 构建：`cargo build -p winia`；测试：`cargo test -p winia --lib`（当前 273 个）；跑 demo：`cargo run -p winia --example counter`。
 - 调试：`--features debug-server` 开启 WebSocket（9998 端口）调试通道，可模拟点击/滚动/截图/读树。
-- 主线分支：`text-field`。各功能分支见 §1。
+- 当前工作基座：`component-polish`（组件/Modifier 对齐 Compose、交互源与波纹、GraphicsLayer 3D）。各功能分支见 §1。
 
 ---
 
@@ -29,12 +29,15 @@ D:\Projects\winia\
 
 | 分支 | 状态 | 说明 |
 |------|------|------|
-| `text-field` | **主线** | TextField、选择、键盘事件等已合入，当前工作基座 |
-| `composition-separation` | 已合并进 text-field 前的研究线 | 组合/布局分离（compose 写 desc → materialize 建树） |
-| `animation-improve` | **已放弃** | AnimatedVisibility 布局动画实验（shrink/expand）。**保留不删**——里面有 `force_remeasure`/`ShrinkPolicy`/`roll_out` 的完整实现可参考，但机制本身是框架缺陷（见 §3.1），不要直接搬回主线 |
-| `scope-research` / `selection-api` / `vsync-research` / `v2` | 历史 | 各自主题的研究线，均已合入或弃用 |
+| `component-polish` | **当前工作基座** | 组件属性/Modifier 对齐 Compose：Overlay/Popup/Dialog 修复、InteractionSource/水波纹、GraphicsLayer 3D 等（清单见 `docs/component-gap-analysis.md`） |
+| `text-field` | 历史主线 | TextField、选择、键盘事件等，已并入当前工作基座 |
+| `composition-separation` | 已合并 | 组合/布局分离（compose 写 desc → materialize 建树） |
+| `compose-core` | 已合并 | 死代码清理、两段式依赖、物化器拆分、Skip 结构签名、UI 测试框架 |
+| `animation-system` / `scope-research` / `selection-api` / `vsync-research` / `v2` | 已合并 | 各自主题的研究线，均已合入 |
+| `interaction-source` / `graphics-layer-3d` | 已合并（可删） | 交互源/波纹；GraphicsLayer 3D |
+| `animation-improve` | **保留不删** | AnimatedVisibility 布局动画实验（shrink/expand）。**勿直接搬回主线**——`force_remeasure` 已被两段式依赖取代（见 §3.1），机制本身是历史旁路 |
 
-**接手提示**：新工作一律从 `text-field` 开新分支；`animation-improve` 的教训（布局动画为什么痛苦）见 §3。
+**接手提示**：新功能工作从 `component-polish`（或合并后的主线）开分支；分支名用描述性短名称（如 `interaction-source`、`graphics-layer-3d`），**不要使用 `codex/` 前缀**（约定见 AGENTS.md）。
 
 ---
 
@@ -77,7 +80,7 @@ D:\Projects\winia\
 ### 2.4 布局（layout/node.rs + layout/*.rs）
 
 - 三阶段：`Constraints → measure() → place()`，`MeasurePolicy` trait（measure 返回 `(Size, Vec<Placement>)`）。
-- `LayoutNode` 含 `dirty: bool` + `cached_constraints: Option<Constraints>`——**常量折叠**：`!dirty && cached_constraints == Some(constraints)` 直接复用（node.rs:749）。
+- `LayoutNode` 含 `dirty: bool` + `layout_dirty: bool` + `cached_constraints: Option<Constraints>`——**常量折叠**：`!dirty && !layout_dirty && cached_constraints == Some(constraints)` 直接复用；布局期动画值变化只标 `layout_dirty` 不触发重组（两段式依赖，见 §3.1）。
 - 布局策略：`ColumnLayout`/`RowLayout`（flex.rs 泛型 `measure_flex<A: FlexAxis>`）/`BoxLayout`。
 - `hit_test(root, x, y)` 深度优先命中；focus 遍历用 slot_key（跨重组稳定）。
 - 尺寸单位：`unit.rs` 的 `Dp`/`Sp`/`Px`/`Offset`/`Size`，`current_density()` 全局密度。
@@ -112,29 +115,38 @@ D:\Projects\winia\
 
 ## 3. 已知问题（接手必读）
 
-### 3.1 布局缓存与动画的旁路耦合（**最痛**）
+### 3.1 布局缓存与动画的旁路耦合 —— **已解决（2026-08，compose-core）**
 
-**症状**：做 AnimatedVisibility 布局动画（高度收缩/展开）时，被迫发明 `MeasurePolicy::force_remeasure()`——递归扫描整条祖先链，每帧强制重测。`animation-improve` 分支的 `ShrinkPolicy` 就是典型。
+**历史教训**：早期做 AnimatedVisibility 布局动画时被迫发明 `MeasurePolicy::force_remeasure()`（递归扫描祖先链每帧强制重测；`animation-improve` 分支的 `ShrinkPolicy` 是典型）。
 
-**根因**：动画值用 `peek()` 读（零依赖、不重组），布局缓存只认 `(dirty, constraints)`——**缓存不知道动画值变了**。于是"动画驱动布局"只能走旁路（force_remeasure），每加一种布局动画都要新造一个旁路机制，且必须小心翼翼保证祖先链全重测，否则下方组件不跟随。
+**现方案（两段式依赖，取代旁路）**：
+- 组合期 `State::get()` → `slot_deps` → 标 slot dirty → 重组；
+- **布局期（measure 中）`State::get()` → `layout_deps`**（state.rs 记录分流 + composer.rs 收集，state_id → slot_key）→ notify 时只标 `layout_dirty`，不触发重组；
+- 常量折叠条件为 `!dirty && !layout_dirty && cached_constraints == Some(constraints)`——动画推进自然重测；
+- `AnimatedVisibility`/`AnimatedSize`/`AnimatedContent` 已全部走此正路；`force_remeasure` 已删除。
+- 实现提交：`fbf451e`（核心）+ `bb564e7`（T1-T4 测试）+ `8ba77dd`（依赖注册收敛）；节点移除时清理 `layout_deps` 死 key。
+- 已知优化点：`apply_layout_dirty` 命中后祖先全链标脏（保守超集——父必然依赖子尺寸；Compose 精确传播未做）。
 
-**正确方向**：给 LayoutNode（或 Composer）加**动画版本号**（每帧 bump），measure 缓存检查 `(constraints, anim_version)` 二元组——动画期间自然失效，`force_remeasure` 旁路可整体删除。改动小、机制统一。
-
-### 3.2 Skip 恢复依赖路径 key，结构变化时脆弱
+### 3.2 Skip 恢复依赖路径 key，结构变化时脆弱 —— **已部分解决（2026-08，compose-core）**
 
 **症状**：`prev_node_by_key: HashMap<Vec<usize>, CachedNode>` 以路径为 key。if 分支、面板移除/插入、列表项变化等**结构变化**后，同位置不同内容的 slot 会错误复用缓存——历史上反复出现：nest_demo 塌缩、面板双击消失、modifier 被清空、位置丢失、key 碰撞（三个同名 composable 共用函数 hash）。
 
 **根因**：路径 key 隐含"结构没变"假设；结构一变，缓存恢复就是错的。`#[composable]` 宏的 scope hash 只到函数级，同名函数多实例靠位置区分——补丁是"位置折叠进 key"。
 
-**正确方向**：物化恢复改为"树内 diff + 局部重建"，或 desc 树比较；至少把 CachedNode 恢复的命中条件从"路径相等"升级为"路径相等 + 结构签名相等"。
+**已落地**：
+- P3-1 `CachedNode.children_count` 结构签名校验——if 分支/列表项增删后放弃恢复走 Enter 重建（25d9a40，T2-T4）；
+- for 循环 key 稳定性：`seq = max(自身执行计数, 栈顶外层语句 seq)` + `STMT_SEQ` 按 `(scope_src, id)` 计数（跨函数不泄漏）；**嵌套循环内层仍可能混淆——正解 `ctx.key(i, ...)`**（已泛型化为 `impl Hash`）。
+- 完整"树内 diff + 局部重建"未做（YAGNI 决策——数量相同内容不同的恢复保留，Compose 语义）。
 
-### 3.3 副作用与 Skip 的协调脆弱
+### 3.3 副作用与 Skip 的协调脆弱 —— **已部分解决（2026-08，compose-core）**
 
 **症状**：动画注册、`on_done` 回调、`remember` 状态初始化这些副作用，与"子树被 Skip 跳过"反复冲突：快速切换时 exit 动画 on_done 丢失（面板卡住）、Skip 分支清空后代 modifier、动画注册时机导致双 compose 消耗 prev 缓存。
 
 **根因**：Skip 是"从缓存重建"，但副作用（动画对象、回调、注册表项）**不是缓存的一部分**——Skip 与副作用两个系统没有统一的生命周期契约。
 
-**建议**：副作用（尤其是动画）尽量挂在 State 上而非 slot 上（State 是跨重组稳定的），或给 Skip 恢复路径显式提供副作用重放钩子。
+**已落地**：P3-2 无限动画自动 dispose（`InfiniteTransition` 生命周期与组合点对齐，11bb3e2，T5/T6）。
+
+**未做**：`on_done` 回调等其余副作用的统一生命周期契约；设计原则仍是副作用（尤其是动画）尽量挂在 State 上（State 跨重组稳定），或给 Skip 恢复路径显式提供副作用重放钩子。
 
 ### 3.4 布局期 modifier 扫描重复
 
@@ -196,6 +208,8 @@ asyncio.run(t())
 
 - `WINIA_SLOT_TRACE=1`：slot 分配/复用跟踪（composer.rs）
 - `WINIA_SKIP_TRACE=1`：Skip 恢复路径跟踪
+- `WINIA_STMT_TRACE=1`：语句级 id/seq/self/outer 跟踪（for 循环 key 问题调试）
+- `WINIA_MAT_PROBE=1`：物化探针（[mat]/[mat-fb]/[collect]）
 
 ```bash
 WINIA_SLOT_TRACE=1 /d/Projects/winia/target/debug/examples/animated_visibility_demo.exe 2>&1 | grep slot
@@ -209,9 +223,19 @@ WINIA_SLOT_TRACE=1 /d/Projects/winia/target/debug/examples/animated_visibility_d
 ### 4.5 测试
 
 ```bash
-cargo test --lib          # 162 个，改动后必须全绿
-cargo build -p winia      # 库编译干净（0 error）
+cargo test -p winia --lib          # 273 个，改动后必须全绿
+cargo test --test ui_test --features debug-server   # UI 集成测试（真实窗口）
+cargo build -p winia               # 库编译干净（0 error）
 ```
+
+### 4.6 UI 集成测试的坑（compose-core 固化的教训）
+
+- **stderr 管道必须被读线程消费**——不读 64KB 填满会阻塞 demo 进程（表现为超时）；
+- launch 前 **taskkill 同名残留 + 全局串行锁**——并行测试的 taskkill 会互杀刚启动的进程；
+- 树 JSON 必须**单行紧凑 + 完整转义**（`\r`/`\t`/`\b`/`\f`）——控制字符生成非法 JSON 解析失败；
+- fixture 用 `[[bin]]` 而非 `[[test]] harness=false`——后者会被 cargo test 当测试执行（跑窗口循环）卡死全量测试；
+- debug 注入事件只作用于主窗口——消费需双路兜底（window_event + new_events）；
+- 测试创建 State 必须走 `ctx.remember`（直接 `State::new` 无 owner → notify 不推送 → 增量重组不触发）。
 
 **写测试的纪律**：
 - State 必须 `remember` 创建（直接 `State::new` 不注册队列，notify 不推送）。
@@ -222,10 +246,10 @@ cargo build -p winia      # 库编译干净（0 error）
 
 ## 5. 接手路线建议
 
-1. **先修 §3.1（动画版本号）**——小改动、立刻消除布局动画的最大摩擦，`animation-improve` 分支的布局动画实验可以基于它重做并合回。
-2. 再攻 §3.2（物化恢复健壮性）——这是历史 bug 的最大来源，但工程量大，建议先补结构变化的回归测试再动。
-3. §3.3 副作用契约——设计 State 级动画挂载，逐步减少 slot 级副作用。
-4. 功能面缺口（按需）：动画 API 补全（AnimatedContent、Crossfade、keyframes 完善）、LazyColumn、布局动画（§3.1 修复后）、TextField 文本选择。
+1. **功能面缺口（按需）**：`docs/component-gap-analysis.md` 剩余项——TextField label（浮动 Composable）、TextField 内置容器视觉（Outlined/Filled）、GraphicsLayer shape 裁剪、draggable/pointer_input（远期）。
+2. **性能**：§3.4 布局期 modifier 多遍扫描（每帧多遍遍历元素列表，顺手优化）。
+3. **长远架构**：组合树/布局树完整分离（当前为"desc 树 → 物化"中间形态）、副作用契约完善（State 级动画挂载）、LazyColumn、基于两段式依赖重做布局动画实验。
+4. 历史分支 `animation-improve` 的实验勿直接搬回主线（机制已被两段式依赖取代）。
 
 ---
 

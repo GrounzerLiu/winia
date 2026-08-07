@@ -1,5 +1,6 @@
 # Winia v2 — 架构设计文档
 
+> ⚠ 早期设计稿，部分内容过时。权威现状见 `docs/handover.md`；组件/Modifier 对齐清单见 `docs/component-gap-analysis.md`；本文"设计原则现状对照"章节已随 compose-core 更新。
 > 版本: 0.2.0  
 > 状态: 设计阶段  
 > 目标: 基于 winit + skia-safe 的声明式跨平台 GUI 框架，架构对标 Jetpack Compose
@@ -532,7 +533,7 @@ State:count.set(1) → notify_state_changed
 - **Modifier.focus_requester(&fr)** — 不消耗所有权（`From<&FocusRequester>`）
 - **Tab 键遍历** — `focus_next()` 深度优先 + `focus_next` 事件
 - **焦点持久化** — `AppState.focused_id: Option<u64>` 跨 compose 保持，compose 后 `focus_by_id` 恢复
-- 文档：`docs/focus-system.md`
+- 文档：`docs/handover.md` §2.7（输入与焦点）
 
 ### 3.10 动画系统（v2 最新）
 
