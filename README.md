@@ -59,6 +59,7 @@ cargo test --test ui_test --features debug-server  # UI 集成测试（真实窗
 
 - [接手文档](docs/handover.md) — 架构现状、已知问题、调试指南（新读者先看这里）
 - [组件/Modifier 差距分析](docs/component-gap-analysis.md) — 对标 Compose 的实现清单与剩余缺口
+- [Button 组件文档](docs/button.md) — Button API、实现细节与未实现项
 - [动画差距分析](docs/animation-gap-analysis.md) — 动画系统全景与实现状态
 - [架构设计文档](docs/architecture.md) — 早期设计稿（部分过时，以接手文档为准）
 - [UI 测试框架](docs/ui-testing.md) — 集成测试的用法与坑
