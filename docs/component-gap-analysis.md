@@ -98,7 +98,7 @@ Text / TextField / Button / Column / Row / Stack / RichText / SelectionContainer
 15. ✅ overlay 渲染 HiDPI 修复——内容按 scale 绘制，可见位置与命中测试对齐
 16. ✅ Popup 锚定到调用位置的上一个兄弟节点（对标 Compose Popup 定位；无兄弟回退窗口对齐）
 17. ✅ InteractionSource/ComponentState（press/focus/hover/drag + hoist）+ Button 状态取色/ButtonElevation + TextField focus/isError + Modifier.hoverable（对照 Compose foundation 1.11.4 源码）
-18. ✅ 水波纹 indication（ripple）——按压点径向渐变扩散 + 释放淡出（225ms/180ms，对标 Compose ripple；Button 自动附带）
+18. ✅ 水波纹 indication（ripple）——分层设计（每次按压一层 RippleLayer，扩散 225ms + 释放淡出 180ms 后清理；参考旧版 D:\winia ripple.rs 的分层/状态层思路）+ hover/focus 状态层（8%/12%）；Button 自动附带
 
 **剩余**：
 - P1 GraphicsLayer 补属性（shadowElevation/rotationX/Y/cameraDistance——shadow 已做基础版）

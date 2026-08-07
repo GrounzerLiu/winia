@@ -61,21 +61,11 @@ impl ButtonColors {
         self.content_color_for(&ComponentState { enabled, ..ComponentState::idle() })
     }
 
-    /// 状态化容器色（对标 material3 状态层：hover 8% / press/focus 12% / drag 16%，
-    /// 用内容色作状态层叠加到容器色上——M3 的 onContainer state layer 近似）。
+    /// 状态化容器色——仅区分 enabled/disabled（与 material3 ButtonColors 一致；
+    /// hover/focus/press 视觉由 indication（ripple）状态层绘制，避免双重叠加）。
     pub fn container_color_for(&self, state: &ComponentState) -> crate::modifier::Color {
         if !state.enabled {
-            return self.disabled_container;
-        }
-        let overlay = self.content;
-        if state.pressed {
-            self.container.overlay(overlay, 0.12)
-        } else if state.dragged {
-            self.container.overlay(overlay, 0.16)
-        } else if state.hovered {
-            self.container.overlay(overlay, 0.08)
-        } else if state.focused {
-            self.container.overlay(overlay, 0.12)
+            self.disabled_container
         } else {
             self.container
         }
@@ -418,15 +408,13 @@ mod tests {
         );
         // disabled 优先
         assert_eq!(colors.container_color_for(&ComponentState::disabled()), colors.disabled_container);
-        // idle = 容器原色
+        // 容器色仅区分 enabled/disabled（与 material3 ButtonColors 一致——
+        // hover/focus/press 状态层由 ripple indication 绘制，不叠加在容器色上）
         assert_eq!(colors.container_color_for(&ComponentState::idle()), colors.container);
-        // hover/focus/press 都是状态层叠加（≠ 原色）
-        let hovered = colors.container_color_for(&ComponentState { hovered: true, ..ComponentState::idle() });
-        let focused = colors.container_color_for(&ComponentState { focused: true, ..ComponentState::idle() });
-        let pressed = colors.container_color_for(&ComponentState { pressed: true, ..ComponentState::idle() });
-        assert_ne!(hovered, colors.container);
-        assert_ne!(focused, colors.container);
-        assert_ne!(pressed, hovered, "press 12% > hover 8%——叠加量不同");
+        assert_eq!(
+            colors.container_color_for(&ComponentState { hovered: true, pressed: true, ..ComponentState::idle() }),
+            colors.container,
+        );
         // 内容色只区分 enabled/disabled（与 material3 ButtonColors 一致）
         assert_eq!(colors.content_color_for(&ComponentState::idle()), colors.content);
         assert_eq!(colors.content_color_for(&ComponentState::disabled()), colors.disabled_content);

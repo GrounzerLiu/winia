@@ -448,63 +448,72 @@ fn render_pass1(
 }
 
 /// 水波纹（对标 Compose indication/ripple）：按下时从按压点扩散的径向渐变圆，
-/// 释放后淡出。纯时间驱动（读取交互源的时间戳），无额外动画状态；
-/// 事件循环在有波纹动画期间持续驱动重绘（update_ripples）。
+/// 释放后淡出；同时绘制 hover/focus 状态层（参考旧版 ripple.rs 的
+/// background_opacity 设计：hover 8% / focus 12%）。分层驱动：每次按下
+/// 一层（RippleLayer），事件循环 update_ripples 推进并清理。
 fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f32) {
     for el in node.modifier.elements() {
         let ModifierElement::Ripple { source, color, bounded } = el else { continue };
-        let now = std::time::Instant::now();
-        let Some(press_t) = source.press_started_at() else { continue };
-        let pressed = source.is_pressed();
-        // 扩散：225ms easeOutCubic（对标 Compose PressAnimationSpec 时长）
-        let expand = (now.duration_since(press_t).as_secs_f32() * 1000.0
-            / crate::ui::interaction::RIPPLE_EXPAND_MS).min(1.0);
-        let eased = 1.0 - (1.0 - expand).powi(3);
+
+        // ── 状态层（hover/focus——对标 ripple.rs background_opacity）──
+        let hovered = source.is_hovered();
+        let focused = source.is_focused();
+        let state_alpha = if hovered && focused {
+            0.12
+        } else if hovered {
+            0.08
+        } else if focused {
+            0.12
+        } else {
+            0.0
+        };
+        if state_alpha > 0.0 {
+            let mut paint = skia_safe::Paint::default();
+            paint.set_color(skia_safe::Color::from_argb(
+                (color.a as f32 * state_alpha) as u8,
+                color.r,
+                color.g,
+                color.b,
+            ));
+            canvas.draw_rect(Rect::new(x, y, x + w, y + h), &paint);
+        }
+
+        // ── 波纹层（每次按下一层——RippleLayer）──
         let max_r = if *bounded {
             ((w * w + h * h).sqrt() * 0.5).max(24.0) + 8.0
         } else {
             96.0
         };
-        let radius = eased * max_r;
-        // 透明度：按下期间 ~0.24（扩散后期略降）；释放后 180ms 淡出
-        let alpha = if pressed {
-            0.24 * (1.0 - expand * 0.25)
-        } else if let Some(rel) = source.released_at() {
-            let fade = (now.duration_since(rel).as_secs_f32() * 1000.0
-                / crate::ui::interaction::RIPPLE_FADE_MS).min(1.0);
-            if fade >= 1.0 {
+        for layer in source.ripple_layers() {
+            // 扩散：225ms easeOutCubic（对标 Compose PressAnimationSpec 时长）
+            let eased = 1.0 - (1.0 - layer.progress).powi(3);
+            let radius = eased * max_r;
+            if radius <= 0.0 || layer.opacity <= 0.0 {
                 continue;
             }
-            0.24 * (1.0 - fade)
-        } else {
-            continue;
-        };
-        if alpha <= 0.0 || radius <= 0.0 {
-            continue;
-        }
-        let Some((px, py)) = source.press_position() else { continue };
-        // 按压点已是场景（画布）坐标——非滚动/无 graphicsLayer 变换的节点直接可用
-        let center = skia_safe::Point::new(px, py);
-        let solid = skia_safe::Color::from_argb(
-            (color.a as f32 * alpha) as u8,
-            color.r,
-            color.g,
-            color.b,
-        );
-        let transparent = skia_safe::Color::from_argb(0, color.r, color.g, color.b);
-        let colors = [solid, transparent];
-        if let Some(shader) = skia_safe::Shader::radial_gradient(
-            center,
-            radius,
-            &colors[..],
-            None,
-            skia_safe::TileMode::Clamp,
-            None,
-            None,
-        ) {
-            let mut paint = skia_safe::Paint::default();
-            paint.set_shader(shader);
-            canvas.draw_rect(Rect::new(x, y, x + w, y + h), &paint);
+            // 按压点已是场景（画布）坐标——非滚动/无 graphicsLayer 变换的节点直接可用
+            let center = skia_safe::Point::new(layer.center.0, layer.center.1);
+            let solid = skia_safe::Color::from_argb(
+                (color.a as f32 * layer.opacity) as u8,
+                color.r,
+                color.g,
+                color.b,
+            );
+            let transparent = skia_safe::Color::from_argb(0, color.r, color.g, color.b);
+            let colors = [solid, transparent];
+            if let Some(shader) = skia_safe::Shader::radial_gradient(
+                center,
+                radius,
+                &colors[..],
+                None,
+                skia_safe::TileMode::Clamp,
+                None,
+                None,
+            ) {
+                let mut paint = skia_safe::Paint::default();
+                paint.set_shader(shader);
+                canvas.draw_rect(Rect::new(x, y, x + w, y + h), &paint);
+            }
         }
     }
 }
