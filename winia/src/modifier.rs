@@ -427,8 +427,10 @@ pub(crate) enum ModifierElement {
     /// 悬停——指针进入/离开自动发射 Hover Enter/Exit（对标 Compose hoverable）
     Hoverable { interaction: MutableInteractionSource },
     /// 水波纹指示（对标 Compose indication/ripple）——按下时从按压点扩散的
-    /// 径向渐变圆，释放后淡出；渲染期按时间计算，无额外动画状态
-    Ripple { source: MutableInteractionSource, color: Color, bounded: bool },
+    /// 径向渐变圆，释放后淡出；渲染期按时间计算，无额外动画状态。
+    /// `shape = Some` 时波纹裁剪到该形状（Button 传入容器 shape——
+    /// Outlined/Text 无背景元素时也能正确裁剪）；None 则从 Background/Border 推断。
+    Ripple { source: MutableInteractionSource, color: Color, bounded: bool, shape: Option<Shape> },
     /// 焦点请求器 ID（与 FocusRequester 关联）
     FocusRequesterId { id: u64 },
     /// 键盘事件
@@ -984,6 +986,25 @@ impl Modifier {
             source: source.clone(),
             color,
             bounded,
+            shape: None,
+        })
+    }
+
+    /// 水波纹指示——显式指定裁剪形状（对标 Compose Surface indication：
+    /// 容器 shape 同时决定波纹裁剪；Outlined/Text 等无背景元素的按钮
+    /// 必须显式传 shape，否则裁剪回退为矩形）
+    pub fn ripple_with_shape(
+        self,
+        source: &MutableInteractionSource,
+        color: Color,
+        bounded: bool,
+        shape: Shape,
+    ) -> Self {
+        self.push(ModifierElement::Ripple {
+            source: source.clone(),
+            color,
+            bounded,
+            shape: Some(shape),
         })
     }
 
@@ -2132,8 +2153,8 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (DragOnCancel { .. }, DragOnCancel { .. }) => true,
         (Focusable { interaction: ai }, Focusable { interaction: bi }) => ai == bi,
         (Hoverable { interaction: ai }, Hoverable { interaction: bi }) => ai == bi,
-        (Ripple { source: as_, color: ac, bounded: abc }, Ripple { source: bs, color: bc, bounded: bbc }) => {
-            as_ == bs && ac == bc && abc == bbc
+        (Ripple { source: as_, color: ac, bounded: abc, shape: ash }, Ripple { source: bs, color: bc, bounded: bbc, shape: bsh }) => {
+            as_ == bs && ac == bc && abc == bbc && ash == bsh
         }
         (FocusRequesterId { id: ai }, FocusRequesterId { id: bi }) => ai == bi,
         (KbEvent { .. }, KbEvent { .. }) => true,

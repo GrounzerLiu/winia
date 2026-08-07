@@ -574,26 +574,29 @@ fn render_pass1(
 /// - hover/focus 状态层透明度动画值；每层扩散/淡出由动画系统驱动
 fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f32) {
     for el in node.modifier.elements() {
-        let ModifierElement::Ripple { source, color, bounded } = el else { continue };
+        let ModifierElement::Ripple { source, color, bounded, shape } = el else { continue };
 
         let diagonal = (w * w + h * h).sqrt();
         let rect = Rect::new(x, y, x + w, y + h);
 
-        // bounded：裁剪到节点背景形状（无 Background 则按矩形）
+        // bounded：裁剪到波纹形状——显式 shape（Button 传入容器 shape——
+        // Outlined/Text 无背景元素时仍按胶囊裁剪）优先；否则从链上最近的
+        // Background/Border 推断（通用 clickable + ripple 保持可用）
         let mut clipped = false;
         if *bounded {
-            let shape = node.modifier.elements().iter().rev().find_map(|el| {
-                if let ModifierElement::Background { shape, .. } = el {
-                    Some(shape.clone())
-                } else {
-                    None
-                }
+            let clip_shape = (*shape).or_else(|| {
+                node.modifier.elements().iter().rev().find_map(|el| match el {
+                    ModifierElement::Background { shape, .. } | ModifierElement::Border { shape, .. } => {
+                        Some(*shape)
+                    }
+                    _ => None,
+                })
             });
             canvas.save();
-            match shape.as_ref() {
+            match clip_shape {
                 Some(crate::modifier::Shape::RoundedRect { corner_radius }) => {
                     canvas.clip_rrect(
-                        skia_safe::RRect::new_rect_xy(rect, *corner_radius, *corner_radius),
+                        skia_safe::RRect::new_rect_xy(rect, corner_radius, corner_radius),
                         None,
                         Some(false),
                     );

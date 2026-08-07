@@ -372,7 +372,9 @@ impl Button {
                 // clickable 默认 indication=ripple；颜色用内容色）
                 modifier = modifier
                     .clickable_with_source(&interaction, move || cb())
-                    .ripple(&interaction, text_color, true);
+                    // 显式传容器 shape——Outlined/Text 无 Background 元素，
+                    // 若让波纹自行推断会回退成矩形裁剪（超出胶囊范围）
+                    .ripple_with_shape(&interaction, text_color, true, shape);
             }
         }
 
