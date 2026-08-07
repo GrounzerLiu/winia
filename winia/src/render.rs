@@ -502,7 +502,12 @@ fn render_pass1(
         }
     }
 
-    if node.focused {
+    // 焦点环：聚焦淡入、失焦淡出——透明度来自交互源 focus_indicator_alpha
+    // （失焦后动画期间 alpha>0 继续绘制，实现平滑淡出）
+    let focus_alpha = node.modifier.focusable_interaction()
+        .map(|src| src.focus_indicator_alpha_value())
+        .unwrap_or(if node.focused { 1.0 } else { 0.0 });
+    if node.focused || focus_alpha > 0.001 {
         // 焦点环形状跟随组件（最近 Background/Border/Clip 形状，回退矩形）；
         // 颜色由组件组合期从主题捕获（node.focus_color）
         let focus_shape = node.modifier.elements().iter().rev().find_map(|el| match el {
@@ -511,7 +516,7 @@ fn render_pass1(
             | ModifierElement::Clip { shape } => Some(*shape),
             _ => None,
         }).unwrap_or(crate::modifier::Shape::Rectangle);
-        draw_focus(canvas, rect, &focus_shape, node.focus_color.get());
+        draw_focus(canvas, rect, &focus_shape, node.focus_color.get(), focus_alpha);
     }
 
     // Scroll clip + translate
@@ -788,22 +793,39 @@ fn draw_focus(
     rect: Rect,
     shape: &crate::modifier::Shape,
     color: crate::modifier::Color,
+    alpha: f32,
 ) {
     const FOCUS_GAP: f32 = 2.0;   // 环内侧与组件边缘的距离
     const FOCUS_WIDTH: f32 = 3.0;
+    const FOCUS_SCALE_AMOUNT: f32 = 0.15; // 淡入起点放大倍数（大环收缩到贴合）
     // 环中心线在组件外 gap + 半宽处——stroke 居中绘制时环完全在外侧
     let inset = FOCUS_GAP + FOCUS_WIDTH / 2.0;
-    let sr = Rect::new(
+    let mut sr = Rect::new(
         rect.left - inset,
         rect.top - inset,
         rect.right + inset,
         rect.bottom + inset,
     );
+    // 淡入：alpha 0→1 时环从放大（1.15×）收缩到最终位置——以组件中心为锚
+    let scale = 1.0 + (1.0 - alpha.clamp(0.0, 1.0)) * FOCUS_SCALE_AMOUNT;
+    let (cx, cy) = (sr.center_x(), sr.center_y());
+    sr = Rect::from_xywh(
+        cx + (sr.left - cx) * scale,
+        cy + (sr.top - cy) * scale,
+        sr.width() * scale,
+        sr.height() * scale,
+    );
     if sr.width() <= 0.0 || sr.height() <= 0.0 {
         return;
     }
     let mut paint = Paint::default();
-    paint.set_color4f(Color4f::from(&color), None);
+    // 透明度随 focus_indicator_alpha 动画（聚焦淡入/失焦淡出）
+    paint.set_color4f(Color4f::new(
+        color.r as f32 / 255.0,
+        color.g as f32 / 255.0,
+        color.b as f32 / 255.0,
+        color.a as f32 / 255.0 * alpha.clamp(0.0, 1.0),
+    ), None);
     paint.set_style(skia_safe::paint::Style::Stroke);
     paint.set_stroke_width(FOCUS_WIDTH);
     paint.set_anti_alias(true);
@@ -811,7 +833,7 @@ fn draw_focus(
         crate::modifier::Shape::Rectangle => { canvas.draw_rect(sr, &paint); }
         crate::modifier::Shape::RoundedRect { corner_radius } => {
             // 外扩后圆角同步放大（保持与组件同心）
-            let r = (*corner_radius + inset).max(0.0);
+            let r = (*corner_radius + inset).max(0.0) * scale;
             canvas.draw_rrect(RRect::new_rect_xy(sr, r, r), &paint);
         }
         crate::modifier::Shape::Pill => {

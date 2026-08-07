@@ -25,6 +25,8 @@ pub(crate) const STATE_LAYER_HOVER: f32 = 0.08;
 pub(crate) const STATE_LAYER_FOCUS: f32 = 0.12;
 /// 状态层过渡时长（旧版 hover 动画 500ms）
 pub(crate) const STATE_LAYER_TRANSITION_MS: u64 = 500;
+/// 焦点环淡入/淡出时长（M3 focus indicator 约 150-200ms）
+pub(crate) const FOCUS_INDICATOR_TRANSITION_MS: u64 = 180;
 
 /// 单个波纹层（参考旧版 D:\winia ripple.rs 的分层设计）：
 /// 每次按下产生一层，中心 = 按压点（节点本地坐标——相对节点左上角，
@@ -102,6 +104,8 @@ pub struct MutableInteractionSource {
     /// hover/focus 状态层透明度（动画驱动——避免状态切换生硬跳变）
     hover_opacity: crate::core::state::State<f32>,
     focus_opacity: crate::core::state::State<f32>,
+    /// 焦点环透明度（聚焦 0→1 淡入、失焦 1→0 淡出——独立于状态层）
+    focus_indicator_alpha: crate::core::state::State<f32>,
 }
 
 /// 身份比较：同一交互源实例（跨 clone 稳定）——供 Modifier 参数相等判断
@@ -134,6 +138,7 @@ impl MutableInteractionSource {
             next_layer_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             hover_opacity: crate::core::state::State::new(0.0),
             focus_opacity: crate::core::state::State::new(0.0),
+            focus_indicator_alpha: crate::core::state::State::new(0.0),
         }
     }
 
@@ -215,12 +220,14 @@ impl MutableInteractionSource {
     pub fn emit_focus(&self) {
         self.focused.set(true);
         self.animate_state_layer(&self.focus_opacity, STATE_LAYER_FOCUS);
+        self.animate_focus_indicator(1.0);
     }
 
     /// 失去焦点（FocusInteraction.Unfocus 等价）
     pub fn emit_unfocus(&self) {
         self.focused.set(false);
         self.animate_state_layer(&self.focus_opacity, 0.0);
+        self.animate_focus_indicator(0.0);
     }
 
     /// 指针悬停进入（HoverInteraction.Enter 等价）——状态层 500ms 淡入
@@ -247,6 +254,18 @@ impl MutableInteractionSource {
         );
     }
 
+    /// 焦点环透明度动画（M3 focus indicator 淡入/淡出）
+    fn animate_focus_indicator(&self, target: f32) {
+        crate::animation::push_animatable(
+            self.focus_indicator_alpha.clone(),
+            target,
+            crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
+                std::time::Duration::from_millis(FOCUS_INDICATOR_TRANSITION_MS),
+                crate::animation::interpolator::EaseOutCubic::new(),
+            )),
+        );
+    }
+
     /// hover 状态层当前透明度（渲染读取——动画值）
     pub(crate) fn hover_opacity_value(&self) -> f32 {
         self.hover_opacity.peek()
@@ -255,6 +274,11 @@ impl MutableInteractionSource {
     /// focus 状态层当前透明度（渲染读取——动画值）
     pub(crate) fn focus_opacity_value(&self) -> f32 {
         self.focus_opacity.peek()
+    }
+
+    /// 焦点环当前透明度（渲染读取——动画值）
+    pub(crate) fn focus_indicator_alpha_value(&self) -> f32 {
+        self.focus_indicator_alpha.peek()
     }
 
     /// 拖拽开始（DragInteraction.Start 等价）
@@ -380,5 +404,13 @@ mod tests {
         let id = s.ripple_layers()[0].id;
         s.remove_ripple_layer(id);
         assert!(!s.has_active_ripples(), "淡出完成后层应被清理");
+    }
+
+    #[test]
+    fn test_focus_indicator_alpha_api() {
+        let s = MutableInteractionSource::new();
+        assert_eq!(s.focus_indicator_alpha_value(), 0.0, "初始无焦点环");
+        s.emit_focus();   // 淡入动画启动（值由全局动画系统推进）
+        s.emit_unfocus(); // 淡出动画启动
     }
 }
