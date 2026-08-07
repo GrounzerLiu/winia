@@ -18,7 +18,8 @@ fn section_title(ctx: &mut ComposeCtx, text: &str) {
         .build(ctx);
 }
 
-fn demo_row(ctx: &mut ComposeCtx, label: &str, build_btn: impl FnOnce(i32) -> Button) {
+#[composable]
+fn demo_row(ctx: &mut ComposeCtx, label: &str, build_btn: impl FnOnce(&State<i32>) -> Button) {
     let count = ctx.remember(|| 0i32);
     let c = count.clone();
     Row::new()
@@ -28,7 +29,7 @@ fn demo_row(ctx: &mut ComposeCtx, label: &str, build_btn: impl FnOnce(i32) -> Bu
                 .font_size(13.0)
                 .modifier(Modifier::new().width(150.0))
                 .build(ctx);
-            build_btn(count.get()).build(ctx, |ctx| {
+            build_btn(&count).build(ctx, |ctx| {
                 Text::new(format!("Click {}", c.get())).font_size(13.0).build(ctx);
             });
         });
@@ -48,72 +49,72 @@ fn button_demo(ctx: &mut ComposeCtx) {
                 .build(ctx);
 
             section_title(ctx, "样式（ButtonStyle）");
-            demo_row(ctx, "Filled（默认）", |_| {
-                let c = c.clone();
-                Button::new().on_click(move || c.update(|v| *v += 1))
+            demo_row(ctx, "Filled（默认）", |count| {
+                let count = count.clone();
+                Button::new().on_click(move || count.update(|v| *v += 1))
             });
-            demo_row(ctx, "Tonal", |_| {
-                let c = c.clone();
-                Button::new().style(ButtonStyle::Tonal).on_click(move || c.update(|v| *v += 1))
+            demo_row(ctx, "Tonal", |count| {
+                let count = count.clone();
+                Button::new().style(ButtonStyle::Tonal).on_click(move || count.update(|v| *v += 1))
             });
-            demo_row(ctx, "Outlined", |_| {
-                let c = c.clone();
-                Button::new().style(ButtonStyle::Outlined).on_click(move || c.update(|v| *v += 1))
+            demo_row(ctx, "Outlined", |count| {
+                let count = count.clone();
+                Button::new().style(ButtonStyle::Outlined).on_click(move || count.update(|v| *v += 1))
             });
-            demo_row(ctx, "Text", |_| {
-                let c = c.clone();
-                Button::new().style(ButtonStyle::Text).on_click(move || c.update(|v| *v += 1))
+            demo_row(ctx, "Text", |count| {
+                let count = count.clone();
+                Button::new().style(ButtonStyle::Text).on_click(move || count.update(|v| *v += 1))
             });
 
             section_title(ctx, "状态");
-            demo_row(ctx, "Enabled", |_| {
-                let c = c.clone();
-                Button::new().on_click(move || c.update(|v| *v += 1))
+            demo_row(ctx, "Enabled", |count| {
+                let count = count.clone();
+                Button::new().on_click(move || count.update(|v| *v += 1))
             });
-            demo_row(ctx, "Disabled", |_| {
-                let c = c.clone();
-                Button::new().enabled(false).on_click(move || c.update(|v| *v += 1))
+            demo_row(ctx, "Disabled", |count| {
+                let count = count.clone();
+                Button::new().enabled(false).on_click(move || count.update(|v| *v += 1))
             });
 
             section_title(ctx, "形状（shape）");
-            demo_row(ctx, "默认胶囊", |_| {
-                let c = c.clone();
-                Button::new().on_click(move || c.update(|v| *v += 1))
+            demo_row(ctx, "默认胶囊", |count| {
+                let count = count.clone();
+                Button::new().on_click(move || count.update(|v| *v += 1))
             });
-            demo_row(ctx, "rounded(4)", |_| {
-                let c = c.clone();
-                Button::new().shape(Shape::rounded(4.0)).on_click(move || c.update(|v| *v += 1))
+            demo_row(ctx, "rounded(4)", |count| {
+                let count = count.clone();
+                Button::new().shape(Shape::rounded(4.0)).on_click(move || count.update(|v| *v += 1))
             });
-            demo_row(ctx, "Rectangle", |_| {
-                let c = c.clone();
-                Button::new().shape(Shape::Rectangle).on_click(move || c.update(|v| *v += 1))
+            demo_row(ctx, "Rectangle", |count| {
+                let count = count.clone();
+                Button::new().shape(Shape::Rectangle).on_click(move || count.update(|v| *v += 1))
             });
 
             section_title(ctx, "尺寸与内边距");
-            demo_row(ctx, "紧凑 padding", |_| {
-                let c = c.clone();
+            demo_row(ctx, "紧凑 padding", |count| {
+                let count = count.clone();
                 Button::new().content_padding((10.0, 4.0, 10.0, 4.0))
-                    .on_click(move || c.update(|v| *v += 1))
+                    .on_click(move || count.update(|v| *v += 1))
             });
-            demo_row(ctx, "min_size(0,0)", |_| {
-                let c = c.clone();
+            demo_row(ctx, "min_size(0,0)", |count| {
+                let count = count.clone();
                 Button::new().min_size(0.0, 0.0)
-                    .on_click(move || c.update(|v| *v += 1))
+                    .on_click(move || count.update(|v| *v += 1))
             });
-            demo_row(ctx, "min_size(120,48)", |_| {
-                let c = c.clone();
+            demo_row(ctx, "min_size(120,48)", |count| {
+                let count = count.clone();
                 Button::new().min_size(120.0, 48.0)
-                    .on_click(move || c.update(|v| *v += 1))
+                    .on_click(move || count.update(|v| *v += 1))
             });
 
             section_title(ctx, "阴影与颜色");
-            demo_row(ctx, "Elevated", |_| {
-                let c = c.clone();
+            demo_row(ctx, "Elevated", |count| {
+                let count = count.clone();
                 Button::new().elevation(ButtonElevation::elevated())
-                    .on_click(move || c.update(|v| *v += 1))
+                    .on_click(move || count.update(|v| *v += 1))
             });
-            demo_row(ctx, "自定义 colors", |_| {
-                let c = c.clone();
+            demo_row(ctx, "自定义 colors", |count| {
+                let count = count.clone();
                 Button::new()
                     .colors(ButtonColors::new(
                         Color::from_argb(255, 126, 87, 194),
@@ -121,7 +122,7 @@ fn button_demo(ctx: &mut ComposeCtx) {
                         Color::from_argb(120, 126, 87, 194),
                         Color::from_argb(180, 255, 255, 255),
                     ))
-                    .on_click(move || c.update(|v| *v += 1))
+                    .on_click(move || count.update(|v| *v += 1))
             });
 
             section_title(ctx, "interactionSource hoist");
