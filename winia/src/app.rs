@@ -150,8 +150,10 @@ impl PerWindow {
         // 循环 compose 直到没有新的 pending state——处理并发 task 在 compose 期间
         // 完成的 case（第二个 notify 的 state 在第一次 compose 之后才入队）
         // 循环 compose 直到没有新的 pending state
+        let mut any_composed = false;
         loop {
             let did_compose = self.composer.recompose(|ctx| (self.content)(ctx));
+            any_composed |= did_compose;
             if let Some(slot_key) = self.focused_slot_key {
                 if let Some(r) = self.composer.layout_root_idx() {
                     let nodes = self.composer.arena_nodes_mut();
@@ -174,7 +176,10 @@ impl PerWindow {
         self.composer.layout(Constraints::new(0.0, self.width, 0.0, self.height));
 
         // 顶层弹出层：同步（按 id 匹配保留 State）+ compose + layout + 定位
-        sync_overlays(self);
+        // ⚠ recomposed 标志：recompose 跳过的帧（无 pending State 变化）不能执行
+        // retain 删除——take_overlays 为空会误删仍开着的 overlay（dialog_open 未变），
+        // 导致 overlay 消失但状态残留 → 下次点击 toggle 错乱（"点两次才开"）
+        sync_overlays(self, any_composed);
         layout_overlays(self);
 
         let bg = self.theme.background;
@@ -1143,7 +1148,7 @@ impl OverlayWindow {
 }
 
 /// 主树 compose 后同步 overlay：按 id 匹配（保留 State）——新增/更新/移除
-fn sync_overlays(pw: &mut PerWindow) {
+fn sync_overlays(pw: &mut PerWindow, recomposed: bool) {
     let descs = pw.composer.take_overlays();
     let mut alive = std::collections::HashSet::new();
     for desc in descs {
@@ -1154,7 +1159,11 @@ fn sync_overlays(pw: &mut PerWindow) {
             pw.overlays.push(OverlayWindow::new(desc));
         }
     }
-    pw.overlays.retain(|o| alive.contains(&o.id));
+    if recomposed {
+        // 本次组合的 desc 是权威——未注册的 overlay 已关闭（如 Dialog 确定按钮
+        // set(false)）→ 移除；跳过的帧保留（组合未跑不代表 overlay 该消失）
+        pw.overlays.retain(|o| alive.contains(&o.id));
+    }
 }
 
 /// overlay compose + layout（独立组合单元——约束为窗口尺寸），并计算屏幕定位
