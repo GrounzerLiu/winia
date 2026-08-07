@@ -15,6 +15,7 @@
 ## 其他约定
 
 - 新功能工作从 `text-field`（或当前主线）开分支，分支名按需求；本仓库历史分支
-  不使用 codex/ 前缀时遵循现有命名习惯。
+  使用描述性短名称（如 `interaction-source`、`text-field`、`component-polish`），
+  **不要使用 `codex/` 前缀**。
 - 分支清单/差距分析见 `docs/component-gap-analysis.md`（component-polish 分支）
   与 `docs/handover.md`（真实架构与已知问题）。
