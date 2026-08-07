@@ -309,7 +309,11 @@ impl Button {
         if self.enabled {
             if let Some(on_click) = &self.on_click {
                 let cb = on_click.clone();
-                modifier = modifier.clickable_with_source(&interaction, move || cb());
+                // clickable（press/focus/hover 交互）+ 水波纹（对标 Compose
+                // clickable 默认 indication=ripple；颜色用内容色）
+                modifier = modifier
+                    .clickable_with_source(&interaction, move || cb())
+                    .ripple(&interaction, text_color, true);
             }
         }
 

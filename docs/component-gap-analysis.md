@@ -11,6 +11,7 @@
 - 绘制：`background`（Color/闭包 + Shape）、`border`、`clip`、`blur`、`backdrop_blur`、`shadow`（elevation/shape/颜色）
 - 交互：`clickable`/`clickable_with_source`、`focusable`/`focusable_with_source`、`hoverable`、`on_key_event`/`on_pre_key_event`、`on_pointer_event`/`on_pre_pointer_event`、`focus_requester`、手势 `on_tap`/`on_double_tap`/`on_long_press`/`on_drag_start`/`on_drag`/`on_drag_end`/`on_drag_cancel`
 - 视觉：`alpha`/`rotate`/`scale` 便捷包装、`graphics_layer`（scale_x/y、alpha、translation_x/y、rotation_z、**transformOrigin + clip 已补**；shadowElevation/rotationX/Y 仍缺）、`test_tag`
+- 指示：`ripple(source, color, bounded)`——水波纹（对标 Compose indication/ripple；Button 自动附带）
 - 滚动：`vertical_scroll`/`horizontal_scroll`（ScrollState）
 
 ### 组件已有
@@ -97,6 +98,7 @@ Text / TextField / Button / Column / Row / Stack / RichText / SelectionContainer
 15. ✅ overlay 渲染 HiDPI 修复——内容按 scale 绘制，可见位置与命中测试对齐
 16. ✅ Popup 锚定到调用位置的上一个兄弟节点（对标 Compose Popup 定位；无兄弟回退窗口对齐）
 17. ✅ InteractionSource/ComponentState（press/focus/hover/drag + hoist）+ Button 状态取色/ButtonElevation + TextField focus/isError + Modifier.hoverable（对照 Compose foundation 1.11.4 源码）
+18. ✅ 水波纹 indication（ripple）——按压点径向渐变扩散 + 释放淡出（225ms/180ms，对标 Compose ripple；Button 自动附带）
 
 **剩余**：
 - P1 GraphicsLayer 补属性（shadowElevation/rotationX/Y/cameraDistance——shadow 已做基础版）

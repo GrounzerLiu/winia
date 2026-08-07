@@ -11,6 +11,27 @@
 //! 多指/多交互并存；Winia 每窗口单活动指针，布尔标志足够，多指支持留待指针管道升级。
 
 use crate::core::state::State;
+use parking_lot::Mutex;
+use std::sync::{Arc, LazyLock};
+use std::time::Instant;
+
+/// 水波纹扩散时长（ms）——对标 Compose ripple 的 PressAnimationSpec（~225ms）
+pub(crate) const RIPPLE_EXPAND_MS: f32 = 225.0;
+/// 释放后淡出时长（ms）
+pub(crate) const RIPPLE_FADE_MS: f32 = 180.0;
+
+/// 全局活动波纹（按下注册，淡出结束清理）——驱动事件循环持续重绘
+static ACTIVE_RIPPLES: LazyLock<Mutex<Vec<MutableInteractionSource>>> =
+    LazyLock::new(|| Mutex::new(Vec::new()));
+
+/// 每轮事件循环调用：清理已结束的波纹，返回是否仍有波纹在动画中
+/// （有则请求重绘——扩散/淡出期间保持帧驱动）。
+pub(crate) fn update_ripples() -> bool {
+    let now = Instant::now();
+    let mut list = ACTIVE_RIPPLES.lock();
+    list.retain(|s| s.ripple_animating(now));
+    !list.is_empty()
+}
 
 /// 组件交互状态快照（对标 material3 状态组合：enabled/pressed/hovered/focused/dragged）。
 /// 由 `MutableInteractionSource::state(enabled)` 一次性读取（注册依赖）。
@@ -51,6 +72,12 @@ pub struct MutableInteractionSource {
     hovered: State<bool>,
     focused: State<bool>,
     dragged: State<bool>,
+    /// 按下位置（场景坐标——水波纹中心；Ripple 渲染读取）
+    press_pos: Arc<Mutex<Option<(f32, f32)>>>,
+    /// 按下时刻（水波纹扩散起点）
+    press_time: Arc<Mutex<Option<Instant>>>,
+    /// 释放时刻（水波纹淡出起点）
+    release_time: Arc<Mutex<Option<Instant>>>,
 }
 
 /// 身份比较：同一交互源实例（跨 clone 稳定）——供 Modifier 参数相等判断
@@ -79,19 +106,59 @@ impl MutableInteractionSource {
             hovered: State::new(false),
             focused: State::new(false),
             dragged: State::new(false),
+            press_pos: Arc::new(Mutex::new(None)),
+            press_time: Arc::new(Mutex::new(None)),
+            release_time: Arc::new(Mutex::new(None)),
         }
     }
 
     // ── 发射（对标 Compose emit/tryEmit）──
 
-    /// 按下（PressInteraction.Press 等价）
+    /// 按下（PressInteraction.Press 等价——位置取 (0,0)）
     pub fn emit_press(&self) {
+        self.emit_press_at((0.0, 0.0));
+    }
+
+    /// 按下并记录位置（对标 Compose `PressInteraction.Press(pressPosition)`——
+    /// 水波纹从按压点扩散；同时注册全局波纹驱动重绘）
+    pub fn emit_press_at(&self, pos: (f32, f32)) {
+        *self.press_pos.lock() = Some(pos);
+        *self.press_time.lock() = Some(Instant::now());
+        *self.release_time.lock() = None;
         self.pressed.set(true);
+        ACTIVE_RIPPLES.lock().push(self.clone());
     }
 
     /// 释放（PressInteraction.Release 等价——含拖拽越界取消）
     pub fn emit_release(&self) {
+        *self.release_time.lock() = Some(Instant::now());
         self.pressed.set(false);
+    }
+
+    /// 按压位置（场景坐标——水波纹渲染用）
+    pub fn press_position(&self) -> Option<(f32, f32)> {
+        *self.press_pos.lock()
+    }
+
+    /// 按压时刻（水波纹扩散起点）
+    pub fn press_started_at(&self) -> Option<Instant> {
+        *self.press_time.lock()
+    }
+
+    /// 释放时刻（水波纹淡出起点；未释放为 None）
+    pub fn released_at(&self) -> Option<Instant> {
+        *self.release_time.lock()
+    }
+
+    /// 波纹是否仍在动画中（按下中，或释放后淡出窗口内）
+    pub(crate) fn ripple_animating(&self, now: Instant) -> bool {
+        if self.pressed.get() {
+            return true;
+        }
+        match self.released_at() {
+            Some(t) => now.duration_since(t).as_secs_f32() * 1000.0 < RIPPLE_FADE_MS,
+            None => false,
+        }
     }
 
     /// 获得焦点（FocusInteraction.Focus 等价）
@@ -207,5 +274,24 @@ mod tests {
         });
         assert!(reads > before, "读取过 is_pressed 的 slot 应被标记 dirty 并重跑");
         assert!(src.is_pressed());
+    }
+
+    #[test]
+    fn test_ripple_animating_window() {
+        use std::time::Duration;
+        let s = MutableInteractionSource::new();
+        let now = Instant::now();
+        // 未按下：无波纹动画
+        assert!(!s.ripple_animating(now));
+        // 按下：记录位置/时间，且视为动画中
+        s.emit_press_at((12.0, 34.0));
+        assert_eq!(s.press_position(), Some((12.0, 34.0)));
+        assert!(s.is_pressed());
+        assert!(s.ripple_animating(now));
+        // 释放：淡出窗口内仍视为动画中；超过淡出时长后结束
+        s.emit_release();
+        assert!(!s.is_pressed());
+        assert!(s.ripple_animating(now), "释放后淡出窗口内仍驱动重绘");
+        assert!(!s.ripple_animating(now + Duration::from_secs(1)), "淡出结束后停止");
     }
 }

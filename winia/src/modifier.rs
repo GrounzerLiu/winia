@@ -413,6 +413,9 @@ pub(crate) enum ModifierElement {
     Focusable { interaction: Option<MutableInteractionSource> },
     /// 悬停——指针进入/离开自动发射 Hover Enter/Exit（对标 Compose hoverable）
     Hoverable { interaction: MutableInteractionSource },
+    /// 水波纹指示（对标 Compose indication/ripple）——按下时从按压点扩散的
+    /// 径向渐变圆，释放后淡出；渲染期按时间计算，无额外动画状态
+    Ripple { source: MutableInteractionSource, color: Color, bounded: bool },
     /// 焦点请求器 ID（与 FocusRequester 关联）
     FocusRequesterId { id: u64 },
     /// 键盘事件
@@ -947,6 +950,17 @@ impl Modifier {
     /// 悬停——指针进入/离开自动发射 Hover Enter/Exit（对标 Compose hoverable）
     pub fn hoverable(self, source: &MutableInteractionSource) -> Self {
         self.push(ModifierElement::Hoverable { interaction: source.clone() })
+    }
+
+    /// 水波纹指示（对标 Compose `indication` + Material ripple）。
+    /// `bounded=true` 时裁剪到节点形状（默认）；`color` 为波纹颜色
+    /// （Material 用 content 色——Button 已自动附加，通用 clickable 可手动加）。
+    pub fn ripple(self, source: &MutableInteractionSource, color: Color, bounded: bool) -> Self {
+        self.push(ModifierElement::Ripple {
+            source: source.clone(),
+            color,
+            bounded,
+        })
     }
 
     /// 关联 FocusRequester（不消耗所有权）
@@ -1489,6 +1503,11 @@ impl Debug for ModifierElement {
             Self::DragOnCancel { .. } => f.write_str("DragOnCancel(<fn>)"),
             Self::Focusable { .. } => f.write_str("Focusable"),
             Self::Hoverable { .. } => f.write_str("Hoverable"),
+            Self::Ripple { color, bounded, .. } => f
+                .debug_struct("Ripple")
+                .field("color", color)
+                .field("bounded", bounded)
+                .finish(),
             Self::KbEvent { on_key, on_pre_key } => f.debug_struct("KbEvent").field("on_key", &on_key.is_some()).field("on_pre_key", &on_pre_key.is_some()).finish(),
             Self::PointerEvent { on_ptr, on_pre_ptr } => f.debug_struct("PointerEvent").field("on_ptr", &on_ptr.is_some()).field("on_pre_ptr", &on_pre_ptr.is_some()).finish(),
             Self::FocusRequesterId { id } => f.debug_tuple("FocusRequesterId").field(id).finish(),
@@ -1997,6 +2016,9 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (DragOnCancel { .. }, DragOnCancel { .. }) => true,
         (Focusable { interaction: ai }, Focusable { interaction: bi }) => ai == bi,
         (Hoverable { interaction: ai }, Hoverable { interaction: bi }) => ai == bi,
+        (Ripple { source: as_, color: ac, bounded: abc }, Ripple { source: bs, color: bc, bounded: bbc }) => {
+            as_ == bs && ac == bc && abc == bbc
+        }
         (FocusRequesterId { id: ai }, FocusRequesterId { id: bi }) => ai == bi,
         (KbEvent { .. }, KbEvent { .. }) => true,
         (PointerEvent { .. }, PointerEvent { .. }) => true,

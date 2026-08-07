@@ -427,6 +427,9 @@ fn render_pass1(
         }
     }
 
+    // 水波纹（indication ripple）——覆盖内容之上、受 shape/scroll 裁剪
+    draw_ripple(node, canvas, x, y, w, h);
+
     if scrolled {
         canvas.restore();
     }
@@ -441,6 +444,68 @@ fn render_pass1(
 
     if gl_saved {
         canvas.restore();
+    }
+}
+
+/// 水波纹（对标 Compose indication/ripple）：按下时从按压点扩散的径向渐变圆，
+/// 释放后淡出。纯时间驱动（读取交互源的时间戳），无额外动画状态；
+/// 事件循环在有波纹动画期间持续驱动重绘（update_ripples）。
+fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f32) {
+    for el in node.modifier.elements() {
+        let ModifierElement::Ripple { source, color, bounded } = el else { continue };
+        let now = std::time::Instant::now();
+        let Some(press_t) = source.press_started_at() else { continue };
+        let pressed = source.is_pressed();
+        // 扩散：225ms easeOutCubic（对标 Compose PressAnimationSpec 时长）
+        let expand = (now.duration_since(press_t).as_secs_f32() * 1000.0
+            / crate::ui::interaction::RIPPLE_EXPAND_MS).min(1.0);
+        let eased = 1.0 - (1.0 - expand).powi(3);
+        let max_r = if *bounded {
+            ((w * w + h * h).sqrt() * 0.5).max(24.0) + 8.0
+        } else {
+            96.0
+        };
+        let radius = eased * max_r;
+        // 透明度：按下期间 ~0.24（扩散后期略降）；释放后 180ms 淡出
+        let alpha = if pressed {
+            0.24 * (1.0 - expand * 0.25)
+        } else if let Some(rel) = source.released_at() {
+            let fade = (now.duration_since(rel).as_secs_f32() * 1000.0
+                / crate::ui::interaction::RIPPLE_FADE_MS).min(1.0);
+            if fade >= 1.0 {
+                continue;
+            }
+            0.24 * (1.0 - fade)
+        } else {
+            continue;
+        };
+        if alpha <= 0.0 || radius <= 0.0 {
+            continue;
+        }
+        let Some((px, py)) = source.press_position() else { continue };
+        // 按压点已是场景（画布）坐标——非滚动/无 graphicsLayer 变换的节点直接可用
+        let center = skia_safe::Point::new(px, py);
+        let solid = skia_safe::Color::from_argb(
+            (color.a as f32 * alpha) as u8,
+            color.r,
+            color.g,
+            color.b,
+        );
+        let transparent = skia_safe::Color::from_argb(0, color.r, color.g, color.b);
+        let colors = [solid, transparent];
+        if let Some(shader) = skia_safe::Shader::radial_gradient(
+            center,
+            radius,
+            &colors[..],
+            None,
+            skia_safe::TileMode::Clamp,
+            None,
+            None,
+        ) {
+            let mut paint = skia_safe::Paint::default();
+            paint.set_shader(shader);
+            canvas.draw_rect(Rect::new(x, y, x + w, y + h), &paint);
+        }
     }
 }
 

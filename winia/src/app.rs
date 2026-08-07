@@ -328,7 +328,9 @@ impl ApplicationHandler for AppState {
         // Wait + request_redraw 自驱动动画（避免 Poll↔Wait 切换竞态丢帧）
         event_loop.set_control_flow(ControlFlow::Wait);
         // 每轮推进动画（与窗口解耦，多窗口/子窗口动画均正确推进）
-        let animating = crate::animation::update_animations();
+        // 动画 + 水波纹（波纹扩散/淡出期间持续驱动重绘）
+        let animating = crate::animation::update_animations()
+            || crate::ui::interaction::update_ripples();
         if animating {
             // 动画活跃：WaitUntil 定时唤醒（对齐刷新率）保证每帧唤醒（不冻结），
             // request 节流（距上次渲染 >= 帧间隔）限制 WM_PAINT 生成频率——
@@ -1527,7 +1529,7 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
 
 /// 按下：命中路径最内层 clickable 绑定的交互源 → 发射 Press
 /// （对标 Compose clickable 的 PressInteraction.Press）
-fn press_interaction_down(pw: &mut PerWindow, path: &[usize]) {
+fn press_interaction_down(pw: &mut PerWindow, path: &[usize], scene_pos: (f32, f32)) {
     let (slot, src) = {
         let nodes = pw.composer.arena_nodes();
         let Some(&idx) = path.iter().rev().find(|&&i| {
@@ -1541,7 +1543,7 @@ fn press_interaction_down(pw: &mut PerWindow, path: &[usize]) {
         };
         (nodes[idx].slot_key, src)
     };
-    src.emit_press();
+    src.emit_press_at(scene_pos);
     pw.pressed_interaction = Some((slot, src));
 }
 
@@ -1703,7 +1705,7 @@ fn handle_pointer_down(
     }
 
     // 按下交互（clickable 绑定源——Compose Press 语义；置于 nodes 借用结束后）
-    press_interaction_down(pw, &path);
+    press_interaction_down(pw, &path, scene_pos);
 
     // 手势入口（on_press 立即触发；后续 move/up 由 gesture_node 路由）——
     // 置于 with_focus 块后（nodes 借用结束，避免与 pw mut 冲突）
