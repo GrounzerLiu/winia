@@ -107,7 +107,7 @@ fn button_demo(ctx: &mut ComposeCtx) {
                     .on_click(move || count.update(|v| *v += 1))
             });
 
-            section_title(ctx, "阴影与颜色");
+            section_title(ctx, "阴影、颜色与边框");
             demo_row(ctx, "Elevated", |count| {
                 let count = count.clone();
                 Button::new().elevation(ButtonElevation::elevated())
@@ -122,6 +122,12 @@ fn button_demo(ctx: &mut ComposeCtx) {
                         Color::from_argb(120, 126, 87, 194),
                         Color::from_argb(180, 255, 255, 255),
                     ))
+                    .on_click(move || count.update(|v| *v += 1))
+            });
+            demo_row(ctx, "自定义 border", |count| {
+                let count = count.clone();
+                Button::new()
+                    .border(ButtonBorder::new(2.0, Color::from_argb(255, 33, 150, 243)))
                     .on_click(move || count.update(|v| *v += 1))
             });
 

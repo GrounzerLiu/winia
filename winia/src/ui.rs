@@ -32,6 +32,7 @@ pub use text::ProvideTextStyle;
 pub use text::FontWeight;
 pub use text::FontSlant;
 pub use button::Button;
+pub use button::ButtonBorder;
 pub use button::ButtonColors;
 pub use button::ButtonDefaults;
 pub use button::ButtonElevation;

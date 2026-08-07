@@ -154,6 +154,20 @@ impl Default for ButtonStyle {
     }
 }
 
+/// 按钮边框（对标 material3 `BorderStroke`）——宽度 + 颜色；
+/// 形状由 [`Button::shape`] 决定（画在容器形状边缘）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ButtonBorder {
+    pub width: f32,
+    pub color: crate::modifier::Color,
+}
+
+impl ButtonBorder {
+    pub fn new(width: f32, color: crate::modifier::Color) -> Self {
+        Self { width, color }
+    }
+}
+
 /// Button 默认值（对标 material3 `ButtonDefaults`——M3 small button tokens）
 pub struct ButtonDefaults;
 
@@ -224,6 +238,8 @@ pub struct Button {
     /// 最小尺寸覆盖（None = ButtonDefaults MinWidth/MinHeight）
     min_width: Option<f32>,
     min_height: Option<f32>,
+    /// 边框（None = 按 style 默认——Outlined 有 1px 主题色边框，其余无）
+    border: Option<ButtonBorder>,
     /// 修饰符链（尺寸、颜色、形状等）
     modifier: Modifier,
 }
@@ -242,6 +258,7 @@ impl Button {
             content_padding: None,
             min_width: None,
             min_height: None,
+            border: None,
             modifier: Modifier::new(),
         }
     }
@@ -304,6 +321,13 @@ impl Button {
         self
     }
 
+    /// 设置边框（对标 material3 `Button(border = BorderStroke(...))`）——
+    /// 显式传入后覆盖 style 默认（Outlined 的 1px 主题色边框），形状跟随 shape
+    pub fn border(mut self, border: ButtonBorder) -> Self {
+        self.border = Some(border);
+        self
+    }
+
     /// 设置修饰符链（追加到已有 modifier）
     pub fn modifier(mut self, modifier: Modifier) -> Self {
         self.modifier = self.modifier.then(modifier);
@@ -341,16 +365,23 @@ impl Button {
             .min_width(min_w)
             .min_height(min_h)
             .padding_sides(pad_s, pad_t, pad_e, pad_b);
-        // 根据 style 在最内层插入主题默认背景/边框
+        // 背景按 style（Filled/Tonal 有容器色，Outlined/Text 无）
         modifier = match self.style {
-            ButtonStyle::Filled | ButtonStyle::Tonal => {
-                modifier.background(container, shape)
-            }
-            ButtonStyle::Outlined => {
-                modifier.border(1.0, colors.content_color(self.enabled), shape)
-            }
-            ButtonStyle::Text => modifier,
+            ButtonStyle::Filled | ButtonStyle::Tonal => modifier.background(container, shape),
+            ButtonStyle::Outlined | ButtonStyle::Text => modifier,
         };
+        // 边框：显式 border 优先，否则 Outlined 默认 1px 主题内容色
+        // （对标 material3 OutlinedButton = Button(border = BorderStroke(1.dp, outline))）
+        let border = self.border.or_else(|| {
+            if self.style == ButtonStyle::Outlined {
+                Some(ButtonBorder::new(1.0, colors.content_color(self.enabled)))
+            } else {
+                None
+            }
+        });
+        if let Some(b) = border {
+            modifier = modifier.border(b.width, b.color, shape);
+        }
 
         // 阴影（elevation > 0 才应用——Modifier.shadow 本身也按 elevation>0 短路）
         if elevation > 0.0 {
@@ -398,6 +429,7 @@ impl Button {
     pub fn get_shape(&self) -> Shape { self.shape }
     pub fn get_content_padding(&self) -> Option<(f32, f32, f32, f32)> { self.content_padding }
     pub fn get_min_size(&self) -> (Option<f32>, Option<f32>) { (self.min_width, self.min_height) }
+    pub fn get_border(&self) -> Option<ButtonBorder> { self.border }
     pub fn get_modifier(&self) -> &Modifier { &self.modifier }
 }
 
@@ -431,6 +463,7 @@ mod tests {
         assert_eq!(btn.get_shape(), Shape::pill(), "默认形状对齐 CornerFull 胶囊");
         assert_eq!(btn.get_content_padding(), None, "content_padding 默认按 style 取");
         assert_eq!(btn.get_min_size(), (None, None), "min 尺寸默认取 ButtonDefaults");
+        assert_eq!(btn.get_border(), None, "border 默认按 style（Outlined 才有）");
         assert_eq!(btn.get_modifier().elements().len(), 0);
     }
 
@@ -441,6 +474,15 @@ mod tests {
         assert_eq!(ButtonDefaults::min_height(), 40.0);
         assert_eq!(ButtonDefaults::content_padding(ButtonStyle::Filled), (24.0, 8.0, 24.0, 8.0));
         assert_eq!(ButtonDefaults::content_padding(ButtonStyle::Text), (12.0, 8.0, 12.0, 8.0));
+    }
+
+    #[test]
+    fn test_button_border() {
+        let b = ButtonBorder::new(2.0, crate::modifier::Color::RED);
+        assert_eq!(b.width, 2.0);
+        let btn = Button::new().border(b);
+        assert_eq!(btn.get_border(), Some(b));
+        assert_eq!(btn.get_border().unwrap().color, crate::modifier::Color::RED);
     }
 
     #[test]
