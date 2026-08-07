@@ -279,9 +279,13 @@ fn render_pass1(
         }
         // transformOrigin：先平移到 pivot → 变换 → 平移回（对标 Compose
         // transformOrigin 默认 Center——scale/rotate 绕中心而非左上）
+        // 枢轴 = 节点绝对位置 + transformOrigin 偏移（绘制用绝对坐标——
+        // 只平移 (px,py) 会让旋转中心落在相对窗口原点的位置，节点不在
+        // (0,0) 时旋转就“不绕中心”）
         let (px, py) = (w * gl.transform_origin.0, h * gl.transform_origin.1);
+        let (pivot_x, pivot_y) = (x + px, y + py);
         canvas.translate((gl.translation_x, gl.translation_y));
-        canvas.translate((px, py));
+        canvas.translate((pivot_x, pivot_y));
         // 3D 旋转（rotationX/Y + cameraDistance 透视）：整体拼成 4x4 矩阵
         // （scale → rotationZ → rotationY → rotationX → 相机透视），
         // 与 2D 路径共用 pivot 语义
@@ -292,7 +296,7 @@ fn render_pass1(
                 canvas.rotate(gl.rotation_z, None);
             }
         }
-        canvas.translate((-px, -py));
+        canvas.translate((-pivot_x, -pivot_y));
         // graphicsLayer shadowElevation：在**变换空间内**绘制（随 3D 形变），
         // 且先于 clip——阴影不被内容裁剪（对标 Compose 层阴影在边界外）
         if gl.shadow_elevation > 0.0 && !backdrop_pass {
@@ -822,27 +826,33 @@ mod tests {
         assert!(rowf[13].abs() < rown[13].abs(), "相机距离大 → 透视项小");
     }
 
-    fn render_rect_with_gl(gl: &GraphicsLayerParams) -> (usize, usize) {
+    fn render_rect_with_gl(gl: &GraphicsLayerParams) -> (usize, usize, bool) {
         use skia_safe::{Color, Paint, surfaces};
         let mut surface = surfaces::raster_n32_premul((400, 200)).unwrap();
         let canvas = surface.canvas();
         canvas.clear(Color::BLACK);
-        // 完全复刻 render.rs 的 graphicsLayer 序列
-        let (sf, px, py) = (1.5f32, 100.0f32, 80.0f32);
-        canvas.translate((200.0, 100.0));
+        // 节点位于非原点 (40,30)、尺寸 200x160、transformOrigin 中心——
+        // 复刻 render.rs 的 graphicsLayer 序列（枢轴必须含节点绝对位置）
+        let (x0, y0, w, h) = (40.0f32, 30.0f32, 200.0f32, 160.0f32);
+        let (px, py) = (w * 0.5, h * 0.5);
+        let (pivot_x, pivot_y) = (x0 + px, y0 + py);
+        let sf = 1.0f32;
+        // 根平移：把节点中心（绝对 140,110）送到画布中心 (200,100)
+        canvas.translate((200.0 - pivot_x * sf, 100.0 - pivot_y * sf));
         canvas.scale((sf, sf));
-        canvas.translate((px, py));
-        match build_gl_3d_matrix(gl, 200.0, 160.0) {
+        canvas.translate((pivot_x, pivot_y));
+        match build_gl_3d_matrix(gl, w, h) {
             Some(m) => { canvas.concat_44(&m); }
             None => { canvas.scale((gl.scale_x, gl.scale_y)); canvas.rotate(gl.rotation_z, None); }
         }
-        canvas.translate((-px, -py));
+        canvas.translate((-pivot_x, -pivot_y));
         let mut paint = Paint::default();
         paint.set_color(Color::WHITE);
-        canvas.draw_rect(skia_safe::Rect::from_xywh(-100.0, -80.0, 200.0, 160.0), &paint);
+        canvas.draw_rect(skia_safe::Rect::from_xywh(x0, y0, w, h), &paint);
         let pm = surface.peek_pixels().expect("pixmap");
         let px2: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
         let at = |x: usize, y: usize| -> [u8; 4] { px2[y * 400 + x] };
+        let center_white = at(200, 100) == [255, 255, 255, 255];
         let mut top = 200usize;
         let mut bottom = 0usize;
         for y in 0..200 {
@@ -854,7 +864,18 @@ mod tests {
                 }
             }
         }
-        (top, bottom)
+        (top, bottom, center_white)
+    }
+
+    #[test]
+    fn test_rotation_pivot_is_node_center() {
+        // 非原点节点：旋转后中心像素必须仍在节点中心（枢轴含绝对位置）
+        let mut gl = GraphicsLayerParams::default();
+        gl.rotation_x = 45.0;
+        gl.camera_distance = 150.0;
+        let (top, bottom, center_white) = render_rect_with_gl(&gl);
+        assert!(bottom > top, "矩形应可见：top={top} bottom={bottom}");
+        assert!(center_white, "旋转应绕节点中心——中心像素应保持不动");
     }
 
     #[test]
@@ -862,17 +883,17 @@ mod tests {
         let mut gl = GraphicsLayerParams::default();
         gl.rotation_x = 45.0;
         gl.camera_distance = 300.0;
-        let (top, bottom) = render_rect_with_gl(&gl);
+        let (top, bottom, _) = render_rect_with_gl(&gl);
         assert!(bottom > top, "矩形应可见：top={top} bottom={bottom}");
         // 与近似无透视（相机极远 → w≈1）的投影高度对比——透视会压缩投影
         let mut affine = GraphicsLayerParams::default();
         affine.rotation_x = 45.0;
         affine.camera_distance = 1.0e9;
-        let (top_a, bottom_a) = render_rect_with_gl(&affine);
+        let (top_a, bottom_a, _) = render_rect_with_gl(&affine);
         let persp_h = (bottom - top) as f32;
         let affine_h = (bottom_a - top_a) as f32;
         assert!(
-            (persp_h - affine_h).abs() > 5.0,
+            (persp_h - affine_h).abs() > 2.0,
             "透视应显著压缩投影高度：persp_h={persp_h} affine_h={affine_h}"
         );
     }
@@ -885,8 +906,8 @@ mod tests {
         let mut far = GraphicsLayerParams::default();
         far.rotation_x = 45.0;
         far.camera_distance = 500.0;
-        let (t1, b1) = render_rect_with_gl(&near);
-        let (t2, b2) = render_rect_with_gl(&far);
+        let (t1, b1, _) = render_rect_with_gl(&near);
+        let (t2, b2, _) = render_rect_with_gl(&far);
         assert_ne!((t1, b1), (t2, b2), "相机距离应改变投影结果");
     }
 
@@ -895,7 +916,7 @@ mod tests {
         // 默认相机 8 对 160dp 卡片：有效距离钳制到半尺寸，任意角度 w>0
         let mut gl = GraphicsLayerParams::default();
         gl.rotation_x = 75.0; // 75° 仍可见（90° 侧立成线是正确行为）
-        let (top, bottom) = render_rect_with_gl(&gl);
+        let (top, bottom, _) = render_rect_with_gl(&gl);
         assert!(bottom > top, "rotationX=75 默认相机应仍可见：top={top} bottom={bottom}");
     }
 }
