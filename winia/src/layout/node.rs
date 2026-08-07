@@ -478,6 +478,12 @@ pub trait MeasurePolicy: std::fmt::Debug {
 // ── 命中测试 ──
 
 /// 命中测试：返回从根到叶的节点索引链（arena 版）
+///
+/// 坐标空间 = 布局空间（场景坐标）。只处理 scroll 偏移（布局层位移）；
+/// **不处理 graphics_layer 变换**——图形层只影响绘制、不影响命中
+/// （对标 Compose graphicsLayer：点击区域始终是布局 bounds，变换后
+/// 视觉超出/缩进的部分不改变命中范围）。波纹按压点本地坐标换算
+/// （scene_to_node_local）与此保持一致。
 pub fn hit_test(nodes: &[LayoutNode], root: usize, x: f32, y: f32) -> Vec<usize> {
     let mut path = Vec::new();
     hit_test_recursive(nodes, root, x, y, 0.0, 0.0, &mut path);

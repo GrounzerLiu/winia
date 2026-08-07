@@ -1563,6 +1563,11 @@ impl Debug for ModifierElement {
 // ── ScrollState ──
 
 /// 图形层变换参数
+///
+/// ⚠ 只影响**绘制**（外观），不参与布局与命中测试（对标 Compose
+/// graphicsLayer：命中区域始终是布局 bounds）。命中测试唯一考虑的
+/// 位移是 scroll（布局层）；此处变换（translation/scale/rotate/
+/// rotationX/Y/camera）不会改变可点击区域或按压点本地坐标。
 #[derive(Debug, Clone, PartialEq)]
 pub struct GraphicsLayerParams {
     pub scale_x: f32,
