@@ -684,6 +684,10 @@ mod tests {
         nodes[0].position = Point::new(0.0, 0.0);
         nodes[1].position = Point::new(50.0, 100.0);
         nodes[2].position = Point::new(100.0, 0.0);
+        // 测试不执行 measure——显式设置测量尺寸（与 scene_to_node_local 系列一致）
+        nodes[0].measured_size = Size::new(300.0, 300.0);
+        nodes[1].measured_size = Size::new(200.0, 200.0);
+        nodes[2].measured_size = Size::new(20.0, 20.0);
         nodes[0].children.push(1);
         nodes[1].children.push(2);
 

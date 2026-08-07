@@ -175,6 +175,26 @@ impl PerWindow {
         }
     }
 
+    /// 按指定焦点节点同步 IME 开关（Tab/方向键/Escape/焦点请求共用）——
+    /// 框架只做机械转发：节点声明了 ime_callback 才开启，否则关闭。
+    fn apply_ime_for_focus(&self, fid: Option<u64>) {
+        let wants_ime = if let Some(fid) = fid {
+            if let Some(r) = self.composer.layout_root_idx() {
+                let nodes = self.composer.arena_nodes();
+                crate::layout::node::find_node_by_id(nodes, r, fid)
+                    .map(|idx| nodes[idx].ime_callback.borrow().is_some())
+                    .unwrap_or(false)
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if let Some(ref sw) = self.skia_window {
+            sw.set_ime_allowed(wants_ime);
+        }
+    }
+
     /// 重新查询窗口所在显示器的刷新率并更新帧间隔（跨屏跟随）。
     /// Moved/ScaleFactorChanged 高频触发——300ms 去抖；查询失败保留旧值
     /// （避免瞬时失败把高刷错误降级成 60fps）。
@@ -261,23 +281,16 @@ impl PerWindow {
             best
         };
         if let Some((_, target)) = best {
-            if let Some(r) = self.composer.layout_root_idx() {
-                let nodes = self.composer.arena_nodes_mut();
-                crate::layout::node::clear_focus(nodes, r);
-                if crate::layout::node::set_focus_by_id(nodes, r, target) {
-                    self.focused_id = Some(target);
-                    self.focused_slot_key =
-                        crate::layout::node::find_node_by_id(nodes, r, target)
-                            .map(|idx| nodes[idx].slot_key);
-                    // IME 按组件声明（方向键聚焦文本组件时开启输入法）
-                    if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, target) {
-                        let wants_ime = nodes[idx].ime_callback.borrow().is_some();
-                        if let Some(ref sw) = self.skia_window {
-                            sw.set_ime_allowed(wants_ime);
-                        }
-                    }
-                    return true;
-                }
+            let nodes = self.composer.arena_nodes_mut();
+            crate::layout::node::clear_focus(nodes, r);
+            if crate::layout::node::set_focus_by_id(nodes, r, target) {
+                self.focused_id = Some(target);
+                self.focused_slot_key =
+                    crate::layout::node::find_node_by_id(nodes, r, target)
+                        .map(|idx| nodes[idx].slot_key);
+                // IME 按组件声明（方向键聚焦文本组件时开启输入法）
+                self.apply_ime_for_focus(Some(target));
+                return true;
             }
         }
         false
@@ -701,6 +714,8 @@ impl ApplicationHandler for AppState {
                         }
                         pw.focused_id = None;
                         pw.focused_slot_key = None;
+                        // Escape 清焦后关闭输入法（避免 IME 残留开启）
+                        pw.apply_ime_for_focus(None);
                         consumed = true;
                     }
                 }
@@ -715,6 +730,8 @@ impl ApplicationHandler for AppState {
                     }).unwrap_or((None, None));
                     pw.focused_id = new_id;
                     pw.focused_slot_key = new_slot;
+                    // Tab 聚焦文本组件时同步开启输入法（与方向键/点击路径一致）
+                    pw.apply_ime_for_focus(new_id);
                     consumed = true;
                 }
                 if !consumed {
@@ -760,7 +777,8 @@ impl ApplicationHandler for AppState {
                     }
                 }
                 // 聚焦组件的键盘激活（对标 Compose clickable：聚焦时按
-                // Enter/Space 触发 onClick——从聚焦节点向外找第一个 on_click）
+                // Enter/Space 触发 onClick——仅聚焦节点自身的 clickable 响应，
+                // 不向祖先冒泡：clickable 容器内的子组件聚焦时不应触发容器点击）
                 let is_activate = matches!(&event.logical_key, Key::Named(NamedKey::Enter))
                     || matches!(&event.logical_key, Key::Character(c) if c == " ");
                 if !consumed && event.state.is_pressed() && !event.repeat
@@ -770,15 +788,9 @@ impl ApplicationHandler for AppState {
                         let nodes = pw.composer.arena_nodes();
                         if let Some(r) = pw.composer.layout_root_idx() {
                             if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, fid) {
-                                let mut cur = Some(idx);
-                                while let Some(i) = cur {
-                                    if let Some(on_click) = nodes[i].modifier.on_click() {
-                                        on_click();
-                                        consumed = true;
-                                        break;
-                                    }
-                                    cur = nodes[i].parent_id
-                                        .and_then(|pid| crate::layout::node::find_node_by_id(nodes, r, pid));
+                                if let Some(on_click) = nodes[idx].modifier.on_click() {
+                                    on_click();
+                                    consumed = true;
                                 }
                             }
                         }
@@ -1068,6 +1080,7 @@ impl AppState {
                             focus_next(nodes, r);
                             pw.focused_id = crate::layout::node::get_focus_id(nodes, r);
                             pw.focused_slot_key = pw.focused_id.and_then(|id| crate::layout::node::find_node_by_id(nodes, r, id).map(|idx| nodes[idx].slot_key));
+                            pw.apply_ime_for_focus(pw.focused_id);
                             handled = true;
                         }
                     }
@@ -1078,6 +1091,7 @@ impl AppState {
                         focus_next(nodes, r);
                         pw.focused_id = crate::layout::node::get_focus_id(nodes, r);
                         pw.focused_slot_key = pw.focused_id.and_then(|id| crate::layout::node::find_node_by_id(nodes, r, id).map(|idx| nodes[idx].slot_key));
+                        pw.apply_ime_for_focus(pw.focused_id);
                         handled = true;
                     }
                 }
@@ -1087,6 +1101,7 @@ impl AppState {
                         if crate::layout::node::focus_by_id(nodes, r, id) {
                             pw.focused_id = crate::layout::node::get_focus_id(nodes, r);
                             pw.focused_slot_key = pw.focused_id.and_then(|fid| crate::layout::node::find_node_by_id(nodes, r, fid).map(|idx| nodes[idx].slot_key));
+                            pw.apply_ime_for_focus(pw.focused_id);
                             handled = true;
                         }
                     }
