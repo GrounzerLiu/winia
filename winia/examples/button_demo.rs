@@ -50,21 +50,25 @@ fn button_demo(ctx: &mut ComposeCtx) {
                 .build(ctx);
 
             section_title(ctx, "样式（ButtonStyle）");
-            demo_row(ctx, "Filled（默认）", |count| {
+            demo_row(ctx, "Button::filled()", |count| {
                 let count = count.clone();
-                Button::new().on_click(move || count.update(|v| *v += 1))
+                Button::filled().on_click(move || count.update(|v| *v += 1))
             });
-            demo_row(ctx, "Tonal", |count| {
+            demo_row(ctx, "Button::elevated()", |count| {
                 let count = count.clone();
-                Button::new().style(ButtonStyle::Tonal).on_click(move || count.update(|v| *v += 1))
+                Button::elevated().on_click(move || count.update(|v| *v += 1))
             });
-            demo_row(ctx, "Outlined", |count| {
+            demo_row(ctx, "Button::filled_tonal()", |count| {
                 let count = count.clone();
-                Button::new().style(ButtonStyle::Outlined).on_click(move || count.update(|v| *v += 1))
+                Button::filled_tonal().on_click(move || count.update(|v| *v += 1))
             });
-            demo_row(ctx, "Text", |count| {
+            demo_row(ctx, "Button::outlined()", |count| {
                 let count = count.clone();
-                Button::new().style(ButtonStyle::Text).on_click(move || count.update(|v| *v += 1))
+                Button::outlined().on_click(move || count.update(|v| *v += 1))
+            });
+            demo_row(ctx, "Button::text()", |count| {
+                let count = count.clone();
+                Button::text().on_click(move || count.update(|v| *v += 1))
             });
 
             section_title(ctx, "状态");

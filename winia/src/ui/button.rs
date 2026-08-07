@@ -284,6 +284,31 @@ impl Button {
         }
     }
 
+    /// 实心按钮（对标 material3 `Button`）——默认 Filled 样式
+    pub fn filled() -> Self {
+        Self::new()
+    }
+
+    /// 悬浮按钮（对标 material3 `ElevatedButton`）——Filled 样式 + 默认阴影
+    pub fn elevated() -> Self {
+        Self::new().elevation(ButtonElevation::elevated())
+    }
+
+    /// 柔和按钮（对标 material3 `FilledTonalButton`）——SecondaryContainer 色
+    pub fn filled_tonal() -> Self {
+        Self::new().style(ButtonStyle::Tonal)
+    }
+
+    /// 轮廓按钮（对标 material3 `OutlinedButton`）——透明底 + 1px 主题色边框
+    pub fn outlined() -> Self {
+        Self::new().style(ButtonStyle::Outlined)
+    }
+
+    /// 文本按钮（对标 material3 `TextButton`）——透明底、紧凑内边距
+    pub fn text() -> Self {
+        Self::new().style(ButtonStyle::Text)
+    }
+
     /// 设置点击回调
     pub fn on_click(mut self, f: impl Fn() + Send + Sync + 'static) -> Self {
         self.on_click = Some(Arc::new(f));
@@ -588,6 +613,17 @@ mod tests {
         assert_eq!(btn.get_modifier().elements().len(), 1);
 
         // 由于 on_click 被移动到 Button 中，测试完成后 drop
+    }
+
+    #[test]
+    fn test_button_variant_constructors() {
+        // 对标 material3 各变体独立 composable 的默认参数差异
+        assert_eq!(Button::filled().get_style(), ButtonStyle::Filled);
+        assert_eq!(Button::elevated().get_style(), ButtonStyle::Filled);
+        assert_eq!(Button::elevated().get_elevation(), Some(ButtonElevation::elevated()));
+        assert_eq!(Button::filled_tonal().get_style(), ButtonStyle::Tonal);
+        assert_eq!(Button::outlined().get_style(), ButtonStyle::Outlined);
+        assert_eq!(Button::text().get_style(), ButtonStyle::Text);
     }
 
     #[test]
