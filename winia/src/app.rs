@@ -1253,6 +1253,9 @@ fn render_overlays(overlays: &[OverlayWindow], canvas: &skia_safe::Canvas, scale
         let nodes = ov.composer.arena_nodes();
         canvas.save();
         canvas.translate((ov.screen_pos.0 * scale, ov.screen_pos.1 * scale));
+        // overlay 内容与主树一致按 scale 绘制（坐标均为逻辑单位）——
+        // 缺省会导致内容以 1x 绘制：可见位置/大小与命中测试（逻辑坐标）错位
+        canvas.scale((scale, scale));
         render::render(nodes, r, canvas);
         canvas.restore();
     }
