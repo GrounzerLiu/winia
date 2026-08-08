@@ -70,6 +70,17 @@ winia 没有为每种 M3 变体单独建 composable，而是用 `Button` builder
 链顺序（内→外）：min → padding → 容器(background/border/clip) →
 shadow(graphics_layer) → 用户 modifier → clickable/ripple。
 
+- **内容 = 居中 Row**（对标 M3：图标/文字并排）；内容色经
+  `WiniaTheme::content_color()` 下传——`Icon::tint(Auto)` 取按钮内容色
+  （如 Filled 内图标自动 on_primary）。
+- **图标间距**：内部 Row 自动应用 8dp（对标 IconLabelSpace；M3 需手动
+  spacing，本框架自动）。
+- **带图标 padding**：`ButtonDefaults::button_with_icon_content_padding()`
+  （左 16/右 24）与 `text_button_with_icon_content_padding()`（左 12/右 16），
+  对标 M3 同名常量——带图标按钮请传入，否则默认 24/8/24/8。
+- **内容统一包在 Row 内**：`fill_max_width`/`weight` 等子节点在内部 Row
+  上下文中解析（与 M3 内容即 Row 一致）；自定义排布可自建 Row 作为内容。
+
 ### 2.2 状态与取色
 
 - 容器/内容色只区分 enabled/disabled（M3 `ButtonColors` 语义）；

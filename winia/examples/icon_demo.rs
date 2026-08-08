@@ -21,13 +21,15 @@ fn icon_demo(ctx: &mut ComposeCtx) {
         Column::new()
             .modifier(Modifier::new().fill_max_size().padding(16.0).vertical_scroll(scroll_y))
             .build(ctx, |ctx| {
-                Row::new().modifier(Modifier::new().padding_bottom(6.0)).build(ctx, |ctx| {
+                Row::new()
+                    .modifier(Modifier::new().padding_bottom(6.0))
+                    .spacing(16.0)
+                    .build(ctx, |ctx| {
                     Text::new(if rtl.get() { "Icon 演示（RTL）" } else { "Icon 演示（LTR）" })
                         .font_size(20.0)
                         .build(ctx);
                     Button::new()
                         .on_click(move || toggle.update(|v| *v = !*v))
-                        .modifier(Modifier::new().padding_start(16.0))
                         .build(ctx, |ctx| {
                             Text::new("切换 LTR/RTL").font_size(12.0).build(ctx);
                         });
@@ -105,6 +107,30 @@ fn icon_demo(ctx: &mut ComposeCtx) {
                 .font_size(12.0)
                 .color(Color::from_argb(255, 100, 100, 100))
                 .build(ctx);
+
+            section_title(ctx, "Button 带图标（内容 = 居中 Row，对标 M3）");
+            let star = "M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z";
+            Row::new()
+                .modifier(Modifier::new().padding_vertical(3.0))
+                .spacing(12.0)
+                .build(ctx, |ctx| {
+                // Filled：图标 tint Auto 取按钮内容色 on_primary
+                Button::filled()
+                    .content_padding(ButtonDefaults::button_with_icon_content_padding())
+                    .on_click(|| {})
+                    .build(ctx, |ctx| {
+                        Icon::svg_path(star).build(ctx);
+                        Text::new("收藏").font_size(13.0).build(ctx);
+                    });
+                // Outlined：带图标左 16 / 右 24，间距由 Row 自动 8dp
+                Button::outlined()
+                    .content_padding(ButtonDefaults::button_with_icon_content_padding())
+                    .on_click(|| {})
+                    .build(ctx, |ctx| {
+                        Icon::svg_path(star).build(ctx);
+                        Text::new("加星").font_size(13.0).build(ctx);
+                    });
+                });
 
             section_title(ctx, "可变字体（--features material-symbols-outlined）");
             #[cfg(feature = "material-symbols-outlined")]

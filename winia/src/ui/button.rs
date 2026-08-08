@@ -233,6 +233,26 @@ impl ButtonDefaults {
             _ => (24.0.into(), 8.0.into(), 24.0.into(), 8.0.into()),
         }
     }
+
+    /// 图标与文字间距（对标 `ButtonDefaults.IconSpacing` =
+    /// ButtonSmallTokens.IconLabelSpace，8dp）——M3 不自动应用，
+    /// 本框架在内容 Row 内自动应用；内部 Row 的 spacing 无法从外部覆盖，
+    /// 自定义间距时给 Icon/Text 加 padding 或自排内容
+    pub fn icon_spacing() -> f32 {
+        8.0
+    }
+
+    /// 带图标的 Button 内容 padding（对标 `ButtonDefaults.ButtonWithIconContentPadding`：
+    /// 左 16 / 右 24——图标贴近边缘，文字保持标准右边距）
+    pub fn button_with_icon_content_padding() -> (SizeValue, SizeValue, SizeValue, SizeValue) {
+        (16.0.into(), 8.0.into(), 24.0.into(), 8.0.into())
+    }
+
+    /// 带图标的 Text 按钮内容 padding（对标
+    /// `ButtonDefaults.TextButtonWithIconContentPadding`：左 12 / 右 16）
+    pub fn text_button_with_icon_content_padding() -> (SizeValue, SizeValue, SizeValue, SizeValue) {
+        (12.0.into(), 8.0.into(), 16.0.into(), 8.0.into())
+    }
 }
 
 /// Button 组件 Builder
@@ -515,10 +535,21 @@ impl Button {
         match ctx.start_restartable_group(key, modifier, BoxLayout::new().alignment(crate::layout::Alignment::Center)) {
             crate::core::composer::GroupStatus::Skip => {}
             crate::core::composer::GroupStatus::Enter => {
-                crate::ui::text::ProvideTextStyle(
-                    crate::ui::text::TextStyle::new().color(text_color),
-                    ctx, content,
-                );
+                // 对标 M3：Button 内容 = 居中 Row（图标/文字并排）；
+                // 内容色下传（LocalContentColor 等价物）——Icon tint Auto
+                // 取按钮内容色（如 Filled 内图标自动 on_primary）
+                crate::ui::theme::WiniaTheme::with_content_color(text_color, ctx, |ctx| {
+                    crate::ui::text::ProvideTextStyle(
+                        crate::ui::text::TextStyle::new().color(text_color),
+                        ctx,
+                        |ctx| {
+                            crate::ui::Row::new()
+                                .alignment(crate::layout::Alignment::Center)
+                                .spacing(ButtonDefaults::icon_spacing())
+                                .build(ctx, content);
+                        },
+                    );
+                });
             }
         }
         // 焦点环颜色：主题 primary（组合期捕获——渲染期 CompositionLocal 已退出）
@@ -582,6 +613,7 @@ mod tests {
         assert_eq!(ButtonDefaults::shape(), Shape::pill());
         assert_eq!(ButtonDefaults::min_width(), 58.0);
         assert_eq!(ButtonDefaults::min_height(), 40.0);
+        assert_eq!(ButtonDefaults::icon_spacing(), 8.0, "IconLabelSpace");
         // 颜色工厂与 from_theme 一致（薄包装语义对标 Compose buttonColors()）
         let theme = crate::ui::theme::ThemeColors::light_from_seed(0x6750A4);
         assert_eq!(
@@ -595,6 +627,12 @@ mod tests {
         assert!(matches!(p.1, SizeValue::Static(crate::modifier::Dimension::Fixed(8.0))));
         let p = ButtonDefaults::content_padding(ButtonStyle::Text);
         assert!(matches!(p.0, SizeValue::Static(crate::modifier::Dimension::Fixed(12.0))));
+        let icon = ButtonDefaults::button_with_icon_content_padding();
+        assert!(matches!(icon.0, SizeValue::Static(crate::modifier::Dimension::Fixed(16.0))));
+        assert!(matches!(icon.2, SizeValue::Static(crate::modifier::Dimension::Fixed(24.0))));
+        let text_icon = ButtonDefaults::text_button_with_icon_content_padding();
+        assert!(matches!(text_icon.0, SizeValue::Static(crate::modifier::Dimension::Fixed(12.0))));
+        assert!(matches!(text_icon.2, SizeValue::Static(crate::modifier::Dimension::Fixed(16.0))));
     }
 
     #[test]
