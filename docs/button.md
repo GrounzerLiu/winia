@@ -70,6 +70,12 @@ winia 没有为每种 M3 变体单独建 composable，而是用 `Button` builder
 链顺序（内→外）：min → padding → 容器(background/border/clip) →
 shadow(graphics_layer) → 用户 modifier → clickable/ripple。
 
+- **尺寸变体**：`ButtonSize`（XSmall 32 / Small 40 / Medium 56 / Large 96 /
+  XLarge 136，`.size(...)` 设置，默认 Small）。随尺寸联动：min-height =
+  容器高、水平 padding 16/24/24/48/64、图标间距 8/8/8/12/16、
+  Outlined 边框宽 1/1/1/2/3、建议图标尺寸 20/20/24/32/40
+  （`icon_size()`）；`ButtonDefaults::content_padding_for(size, style)`。
+
 - **内容 = 居中 Row**（对标 M3：图标/文字并排）；内容色经
   `WiniaTheme::content_color()` 下传——`Icon::tint(Auto)` 取按钮内容色
   （如 Filled 内图标自动 on_primary）。

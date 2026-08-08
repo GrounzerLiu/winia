@@ -30,6 +30,68 @@ pub enum ButtonStyle {
     Tonal,
 }
 
+/// Button 尺寸变体（对标 material3 ButtonTokens 系列，v0_11_0）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ButtonSize {
+    XSmall,
+    Small,
+    Medium,
+    Large,
+    XLarge,
+}
+
+impl ButtonSize {
+    /// 容器高度（ContainerHeight：32/40/56/96/136）
+    pub fn container_height(self) -> f32 {
+        match self {
+            ButtonSize::XSmall => 32.0,
+            ButtonSize::Small => 40.0,
+            ButtonSize::Medium => 56.0,
+            ButtonSize::Large => 96.0,
+            ButtonSize::XLarge => 136.0,
+        }
+    }
+
+    /// 建议图标尺寸（IconSize：20/20/24/32/40）
+    pub fn icon_size(self) -> f32 {
+        match self {
+            ButtonSize::XSmall | ButtonSize::Small => 20.0,
+            ButtonSize::Medium => 24.0,
+            ButtonSize::Large => 32.0,
+            ButtonSize::XLarge => 40.0,
+        }
+    }
+
+    /// 图标/文字间距（IconLabelSpace：8/8/8/12/16）
+    pub fn icon_label_space(self) -> f32 {
+        match self {
+            ButtonSize::XSmall | ButtonSize::Small | ButtonSize::Medium => 8.0,
+            ButtonSize::Large => 12.0,
+            ButtonSize::XLarge => 16.0,
+        }
+    }
+
+    /// 水平 padding（LeadingSpace/TrailingSpace：16/24/24/48/64；
+    /// Small 用 M3 ButtonDefaults 的 24 惯例）
+    pub fn horizontal_padding(self) -> f32 {
+        match self {
+            ButtonSize::XSmall => 16.0,
+            ButtonSize::Small | ButtonSize::Medium => 24.0,
+            ButtonSize::Large => 48.0,
+            ButtonSize::XLarge => 64.0,
+        }
+    }
+
+    /// Outlined 边框宽度（OutlinedOutlineWidth：1/1/1/2/3）
+    pub fn outline_width(self) -> f32 {
+        match self {
+            ButtonSize::XSmall | ButtonSize::Small | ButtonSize::Medium => 1.0,
+            ButtonSize::Large => 2.0,
+            ButtonSize::XLarge => 3.0,
+        }
+    }
+}
+
 /// 按钮颜色集（对标 material3 `ButtonColors`）——container/content 各含
 /// enabled/disabled 变体；`container_color(enabled)` / `content_color(enabled)`
 /// 按状态取色（禁用：默认 50% alpha 近似 Compose 12%/38% 变体）。
@@ -221,7 +283,11 @@ impl ButtonDefaults {
 
     /// 默认最小高度（对标 `ButtonDefaults.MinHeight` 40.dp——ContainerHeight）
     pub fn min_height() -> f32 {
-        40.0
+        ButtonSize::Small.container_height()
+    }
+
+    pub fn min_height_for(size: ButtonSize) -> f32 {
+        size.container_height()
     }
 
     /// 默认内容 padding `(start, top, end, bottom)`——Button 系 24/8/24/8，
@@ -239,7 +305,11 @@ impl ButtonDefaults {
     /// 本框架在内容 Row 内自动应用；内部 Row 的 spacing 无法从外部覆盖，
     /// 自定义间距时给 Icon/Text 加 padding 或自排内容
     pub fn icon_spacing() -> f32 {
-        8.0
+        ButtonSize::Small.icon_label_space()
+    }
+
+    pub fn icon_spacing_for(size: ButtonSize) -> f32 {
+        size.icon_label_space()
     }
 
     /// 带图标的 Button 内容 padding（对标 `ButtonDefaults.ButtonWithIconContentPadding`：
@@ -252,6 +322,19 @@ impl ButtonDefaults {
     /// `ButtonDefaults.TextButtonWithIconContentPadding`：左 12 / 右 16）
     pub fn text_button_with_icon_content_padding() -> (SizeValue, SizeValue, SizeValue, SizeValue) {
         (12.0.into(), 8.0.into(), 16.0.into(), 8.0.into())
+    }
+
+    /// 按尺寸取默认内容 padding：水平 = 尺寸 Leading/Trailing，垂直 8；
+    /// Text 按钮固定 12/8/12/8（紧凑）
+    pub fn content_padding_for(
+        size: ButtonSize,
+        style: ButtonStyle,
+    ) -> (SizeValue, SizeValue, SizeValue, SizeValue) {
+        if style == ButtonStyle::Text {
+            return (12.0.into(), 8.0.into(), 12.0.into(), 8.0.into());
+        }
+        let h = size.horizontal_padding();
+        (h.into(), 8.0.into(), h.into(), 8.0.into())
     }
 }
 
@@ -298,6 +381,8 @@ pub struct Button {
     min_height: Option<SizeValue>,
     /// 边框（None = 按 style 默认——Outlined 有 1px 主题色边框，其余无）
     border: Option<ButtonBorder>,
+    /// 尺寸变体（默认 Small）
+    size_variant: ButtonSize,
     /// 修饰符链（尺寸、颜色、形状等）
     modifier: Modifier,
 }
@@ -317,6 +402,7 @@ impl Button {
             min_width: None,
             min_height: None,
             border: None,
+            size_variant: ButtonSize::Small,
             modifier: Modifier::new(),
         }
     }
@@ -424,6 +510,12 @@ impl Button {
         self
     }
 
+    /// 尺寸变体（XSmall/Small/Medium/Large/XLarge，默认 Small）
+    pub fn size(mut self, size: ButtonSize) -> Self {
+        self.size_variant = size;
+        self
+    }
+
     /// 设置修饰符链（追加到已有 modifier）
     pub fn modifier(mut self, modifier: Modifier) -> Self {
         self.modifier = self.modifier.then(modifier);
@@ -470,7 +562,7 @@ impl Button {
         let shape = self.shape;
         let (pad_s, pad_t, pad_e, pad_b) = self
             .content_padding
-            .unwrap_or_else(|| ButtonDefaults::content_padding(self.style));
+            .unwrap_or_else(|| ButtonDefaults::content_padding_for(self.size_variant, self.style));
         let min_w = self
             .min_width
             .clone()
@@ -478,7 +570,7 @@ impl Button {
         let min_h = self
             .min_height
             .clone()
-            .unwrap_or_else(|| ButtonDefaults::min_height().into());
+            .unwrap_or_else(|| ButtonDefaults::min_height_for(self.size_variant).into());
 
         let mut modifier = Modifier::new()
             .min_width(min_w)
@@ -496,7 +588,10 @@ impl Button {
         // （对标 material3 OutlinedButton = Button(border = BorderStroke(1.dp, outline))）
         let border = self.border.or_else(|| {
             if self.style == ButtonStyle::Outlined {
-                Some(ButtonBorder::outlined(&theme, self.enabled))
+                Some(ButtonBorder::outlined(&theme, self.enabled)).map(|mut b| {
+                    b.width = self.size_variant.outline_width();
+                    b
+                })
             } else {
                 None
             }
@@ -545,7 +640,7 @@ impl Button {
                         |ctx| {
                             crate::ui::Row::new()
                                 .alignment(crate::layout::Alignment::Center)
-                                .spacing(ButtonDefaults::icon_spacing())
+                                .spacing(self.size_variant.icon_label_space())
                                 .build(ctx, content);
                         },
                     );
@@ -570,6 +665,7 @@ impl Button {
         (self.min_width.clone(), self.min_height.clone())
     }
     pub fn get_border(&self) -> Option<ButtonBorder> { self.border }
+    pub fn get_size(&self) -> ButtonSize { self.size_variant }
     pub fn get_modifier(&self) -> &Modifier { &self.modifier }
 }
 
@@ -697,6 +793,63 @@ mod tests {
         assert_eq!(Button::filled_tonal().get_style(), ButtonStyle::Tonal);
         assert_eq!(Button::outlined().get_style(), ButtonStyle::Outlined);
         assert_eq!(Button::text().get_style(), ButtonStyle::Text);
+        assert_eq!(Button::new().get_size(), ButtonSize::Small);
+        assert_eq!(Button::new().size(ButtonSize::XLarge).get_size(), ButtonSize::XLarge);
+    }
+
+    #[test]
+    fn button_size_dimensions() {
+        assert_eq!(ButtonSize::XSmall.container_height(), 32.0);
+        assert_eq!(ButtonSize::Small.container_height(), 40.0);
+        assert_eq!(ButtonSize::Medium.container_height(), 56.0);
+        assert_eq!(ButtonSize::Large.container_height(), 96.0);
+        assert_eq!(ButtonSize::XLarge.container_height(), 136.0);
+        assert_eq!(ButtonSize::XSmall.icon_size(), 20.0);
+        assert_eq!(ButtonSize::Small.icon_size(), 20.0);
+        assert_eq!(ButtonSize::Medium.icon_size(), 24.0);
+        assert_eq!(ButtonSize::Large.icon_size(), 32.0);
+        assert_eq!(ButtonSize::XLarge.icon_size(), 40.0);
+        assert_eq!(ButtonSize::XSmall.icon_label_space(), 8.0);
+        assert_eq!(ButtonSize::Large.icon_label_space(), 12.0);
+        assert_eq!(ButtonSize::XLarge.icon_label_space(), 16.0);
+        assert_eq!(ButtonSize::XSmall.horizontal_padding(), 16.0);
+        assert_eq!(ButtonSize::Small.horizontal_padding(), 24.0);
+        assert_eq!(ButtonSize::XLarge.horizontal_padding(), 64.0);
+        assert_eq!(ButtonSize::Large.outline_width(), 2.0);
+        assert_eq!(ButtonSize::XLarge.outline_width(), 3.0);
+        assert_eq!(ButtonSize::Small.outline_width(), 1.0);
+        assert_eq!(ButtonSize::Medium.outline_width(), 1.0);
+        assert_eq!(ButtonSize::Medium.horizontal_padding(), 24.0);
+        assert_eq!(ButtonSize::XLarge.icon_label_space(), 16.0);
+        // content_padding_for：按尺寸水平 padding、Text 固定 12
+        let p = ButtonDefaults::content_padding_for(ButtonSize::Medium, ButtonStyle::Filled);
+        assert!(matches!(p.0, SizeValue::Static(crate::modifier::Dimension::Fixed(24.0))));
+        let pt = ButtonDefaults::content_padding_for(ButtonSize::XLarge, ButtonStyle::Text);
+        assert!(matches!(pt.0, SizeValue::Static(crate::modifier::Dimension::Fixed(12.0))));
+    }
+
+    #[test]
+    fn outlined_border_width_follows_size_variant() {
+        // 端到端：XLarge Outlined 按钮物化节点的 Border 宽度应为 3
+        let mut composer = crate::core::composer::Composer::new();
+        composer.compose(|ctx| {
+            Button::outlined()
+                .size(ButtonSize::XLarge)
+                .on_click(|| {})
+                .build(ctx, |ctx| {
+                    crate::ui::Text::new("x").build(ctx);
+                });
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 300.0));
+        let mut width = 0.0f32;
+        for node in composer.arena_nodes() {
+            for el in node.modifier.elements() {
+                if let crate::modifier::ModifierElement::Border { width: w, .. } = el {
+                    width = *w;
+                }
+            }
+        }
+        assert_eq!(width, 3.0, "XLarge Outlined 边框 3dp");
     }
 
     #[test]

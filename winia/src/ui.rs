@@ -39,6 +39,7 @@ pub use button::ButtonBorder;
 pub use button::ButtonColors;
 pub use button::ButtonDefaults;
 pub use button::ButtonElevation;
+pub use button::ButtonSize;
 pub use button::ButtonStyle;
 pub use layout_components::{Column, Row, Stack};
 pub use window::Window;
