@@ -195,6 +195,12 @@ static LOCAL_DIRECTION: LazyLock<CompositionLocal<LayoutDirection>> = LazyLock::
     CompositionLocal::new(|| LayoutDirection::Ltr)
 });
 
+/// 内容色（对标 Compose `LocalContentColor`）——Icon 等内容组件默认取
+/// 当前子树内容色；`with_theme*` 子树内默认 on_surface，容器组件
+/// （如 IconButton）可覆盖。未包裹主题时回退纯黑（与 Compose 默认一致）。
+static LOCAL_CONTENT_COLOR: LazyLock<CompositionLocal<Color>> =
+    LazyLock::new(|| CompositionLocal::new(|| Color::BLACK));
+
 // ═══════════════════════════════════════════════════════════
 // 主题入口
 // ═══════════════════════════════════════════════════════════
@@ -229,11 +235,19 @@ impl WiniaTheme {
 
     /// 在子树中提供自定义颜色方案和布局方向。
     pub fn with_theme_and_direction(colors: ThemeColors, direction: LayoutDirection, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
+        let on_surface = colors.on_surface;
         LOCAL_DIRECTION.provides(direction, || {
             LOCAL_COLORS.provides(colors, || {
-                content(ctx);
+                LOCAL_CONTENT_COLOR.provides(on_surface, || {
+                    content(ctx);
+                });
             });
         });
+    }
+
+    /// 在子树中覆盖内容色（对标 Compose `CompositionLocalProvider(LocalContentColor)`）
+    pub fn with_content_color(color: Color, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
+        LOCAL_CONTENT_COLOR.provides(color, || content(ctx));
     }
 
     /// 读取当前子树主题色。
@@ -244,5 +258,10 @@ impl WiniaTheme {
     /// 读取当前布局方向（Ltr 或 Rtl）。
     pub fn direction() -> LayoutDirection {
         LOCAL_DIRECTION.current()
+    }
+
+    /// 读取当前子树内容色（默认主题 on_surface）
+    pub fn content_color() -> Color {
+        LOCAL_CONTENT_COLOR.current()
     }
 }

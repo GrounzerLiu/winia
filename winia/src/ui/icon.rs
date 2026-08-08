@@ -255,9 +255,10 @@ impl From<Option<Color>> for Tint {
 }
 
 impl Tint {
-    fn resolve(self, source: &IconSource, theme: &ThemeColors) -> Option<Color> {
+    /// Auto：单色源染当前内容色（默认主题 on_surface），File 保留原色
+    fn resolve(self, source: &IconSource, default_content: Color) -> Option<Color> {
         match self {
-            Tint::Auto => source.default_tinted().then(|| theme.on_surface),
+            Tint::Auto => source.default_tinted().then_some(default_content),
             Tint::Color(c) => Some(c),
             Tint::None => None,
         }
@@ -653,8 +654,7 @@ impl Icon {
         ctx.changed(&self.tint);
         ctx.changed(&self.auto_mirror);
         ctx.changed(&self.axes);
-        let theme = WiniaTheme::colors();
-        let tint = self.tint.resolve(&self.source, &theme);
+        let tint = self.tint.resolve(&self.source, WiniaTheme::content_color());
         let (w, h) = self
             .size
             .map(|s| (s, s))
@@ -704,11 +704,11 @@ mod tests {
     fn tint_auto_resolves_by_source() {
         let theme = ThemeColors::light_from_seed(0x6750A4);
         let path_src = IconSource::svg_path("M0 0h1z");
-        assert_eq!(Tint::Auto.resolve(&path_src, &theme), Some(theme.on_surface));
+        assert_eq!(Tint::Auto.resolve(&path_src, theme.on_surface), Some(theme.on_surface));
         let file_src = IconSource::file("logo.png");
-        assert_eq!(Tint::Auto.resolve(&file_src, &theme), None, "File 默认保留原色");
-        assert_eq!(Tint::None.resolve(&path_src, &theme), None);
-        assert_eq!(Tint::Color(Color::RED).resolve(&file_src, &theme), Some(Color::RED));
+        assert_eq!(Tint::Auto.resolve(&file_src, theme.on_surface), None, "File 默认保留原色");
+        assert_eq!(Tint::None.resolve(&path_src, theme.on_surface), None);
+        assert_eq!(Tint::Color(Color::RED).resolve(&file_src, theme.on_surface), Some(Color::RED));
     }
 
     #[test]
