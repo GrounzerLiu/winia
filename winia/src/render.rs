@@ -538,7 +538,7 @@ fn render_pass1(
                 canvas.clip_rrect(RRect::new_rect_xy(rect, r, r), None, Some(false));
             }
             crate::modifier::Shape::Circle => {
-                canvas.clip_rect(rect, None, Some(false));
+                canvas.clip_rrect(RRect::new_oval(rect), None, Some(false));
             }
         }
         clipped = true;
@@ -751,6 +751,11 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
                         None,
                         Some(false),
                     );
+                }
+                Some(crate::modifier::Shape::Circle) => {
+                    // 圆形裁剪（此前落入 _ => clip_rect 被裁成矩形——
+                    // IconButton 等圆形容器的波纹呈矩形）
+                    canvas.clip_rrect(skia_safe::RRect::new_oval(rect), None, Some(false));
                 }
                 _ => {
                     canvas.clip_rect(rect, None, Some(false));
