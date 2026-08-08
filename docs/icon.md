@@ -98,8 +98,31 @@ material-symbols-sharp    = []   # Sharp（~8.6MB）
 - `contentDescription` 仅存储，semantics 树未实现（全框架缺口）。
 - 可变轴动画逐帧生成新 TextBlob（有缓存但连续动画会持续 miss）；
   后续可做离屏栅格化/位图缓存。
-- `IconButton`（点击/焦点/波纹容器）未实现，留待后续组件。
 - 文件缓存不监听 mtime 变化（进程内同一路径复用首次解码结果）。
+
+## 6. IconButton（已实现）
+
+对标 material3 `IconButton` 一族，见 `winia/src/ui/icon_button.rs`：
+
+- 变体：`IconButton::new()`（标准）/ `filled()` / `filled_tonal()` /
+  `outlined()`（默认 1px outline 边框）。
+- 默认：48×48 圆形容器（M3 为 40dp 容器 + 48dp 触摸目标，本框架直接 48）、
+  点击波纹、焦点环（主题 primary、圆形跟随）、禁用不响应。
+- 颜色：`IconButtonColors`（container/content/disabled 变体），
+  `IconButtonDefaults` 提供四套默认色（标准透明底 on_surface；
+  Filled primary/on_primary；Tonal secondary_container；Outlined 透明底
+  on_surface_variant）。
+- **内容色下传**：新增 `WiniaTheme::content_color()`（对标
+  `LocalContentColor`）——IconButton 用 `with_content_color` 包裹内容，
+  `Icon` 的 `Tint::Auto` 会取容器提供的内容色（如 Filled 里图标自动
+  on_primary）。
+- 差异：内容色默认取主题 on_surface（Compose 默认 LocalContentColor）；
+  disabled 容器 = onSurface 12%、disabled 内容 = onSurface 38%（M3 token）；
+  hover/press 视觉反馈由波纹指示提供（M3 的状态层同样属于 indication，
+  不在 IconButtonColors 四色模型内）。
+- 已知边界：`with_content_color` 是 CompositionLocal，变化不注册依赖——
+  若外层内容色变化而 IconButton 自身参数未变（Skip），内部 Icon 不会
+  重解析 tint；改变颜色请通过 IconButton 的 `colors()` 参数触发。
 
 ## 5. Demo
 

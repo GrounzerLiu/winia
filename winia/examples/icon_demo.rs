@@ -76,6 +76,36 @@ fn icon_demo(ctx: &mut ComposeCtx) {
                     .build(ctx);
             });
 
+            section_title(ctx, "IconButton（标准 / Filled / Tonal / Outlined / Disabled）");
+            let ib_clicks = ctx.remember(|| 0i32);
+            let ibc = ib_clicks.clone();
+            Row::new().modifier(Modifier::new().padding_vertical(3.0)).build(ctx, |ctx| {
+                let star = "M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z";
+                let c0 = ibc.clone();
+                IconButton::new().on_click(move || c0.update(|v| *v += 1)).build(ctx, |ctx| {
+                    Icon::svg_path(star).build(ctx);
+                });
+                let c1 = ibc.clone();
+                IconButton::filled().on_click(move || c1.update(|v| *v += 1)).build(ctx, |ctx| {
+                    Icon::svg_path(star).build(ctx);
+                });
+                let c2 = ibc.clone();
+                IconButton::filled_tonal().on_click(move || c2.update(|v| *v += 1)).build(ctx, |ctx| {
+                    Icon::svg_path(star).build(ctx);
+                });
+                let c3 = ibc.clone();
+                IconButton::outlined().on_click(move || c3.update(|v| *v += 1)).build(ctx, |ctx| {
+                    Icon::svg_path(star).build(ctx);
+                });
+                IconButton::new().enabled(false).on_click(|| {}).build(ctx, |ctx| {
+                    Icon::svg_path(star).build(ctx);
+                });
+            });
+            Text::new(format!("IconButton 总点击 {}", ib_clicks.get()))
+                .font_size(12.0)
+                .color(Color::from_argb(255, 100, 100, 100))
+                .build(ctx);
+
             section_title(ctx, "可变字体（--features material-symbols-outlined）");
             #[cfg(feature = "material-symbols-outlined")]
             {
