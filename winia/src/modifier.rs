@@ -431,6 +431,8 @@ pub(crate) enum ModifierElement {
     /// `shape = Some` 时波纹裁剪到该形状（Button 传入容器 shape——
     /// Outlined/Text 无背景元素时也能正确裁剪）；None 则从 Background/Border 推断。
     Ripple { source: MutableInteractionSource, color: Color, bounded: bool, shape: Option<Shape> },
+    /// 图标绘制（Icon 组件内部使用）——source/tint/autoMirror/可变轴
+    DrawIcon { spec: crate::ui::icon::IconSpec },
     /// 焦点请求器 ID（与 FocusRequester 关联）
     FocusRequesterId { id: u64 },
     /// 键盘事件
@@ -1006,6 +1008,11 @@ impl Modifier {
             bounded,
             shape: Some(shape),
         })
+    }
+
+    /// 绘制图标（Icon 组件内部使用）——tint/autoMirror/可变轴在渲染期求值
+    pub fn draw_icon(self, spec: crate::ui::icon::IconSpec) -> Self {
+        self.push(ModifierElement::DrawIcon { spec })
     }
 
     /// 关联 FocusRequester（不消耗所有权）
@@ -1623,6 +1630,7 @@ impl Debug for ModifierElement {
                 .field("color", color)
                 .field("bounded", bounded)
                 .finish(),
+            Self::DrawIcon { .. } => f.write_str("DrawIcon"),
             Self::KbEvent { on_key, on_pre_key } => f.debug_struct("KbEvent").field("on_key", &on_key.is_some()).field("on_pre_key", &on_pre_key.is_some()).finish(),
             Self::PointerEvent { on_ptr, on_pre_ptr } => f.debug_struct("PointerEvent").field("on_ptr", &on_ptr.is_some()).field("on_pre_ptr", &on_pre_ptr.is_some()).finish(),
             Self::FocusRequesterId { id } => f.debug_tuple("FocusRequesterId").field(id).finish(),
@@ -2156,6 +2164,7 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (Ripple { source: as_, color: ac, bounded: abc, shape: ash }, Ripple { source: bs, color: bc, bounded: bbc, shape: bsh }) => {
             as_ == bs && ac == bc && abc == bbc && ash == bsh
         }
+        (DrawIcon { spec: a }, DrawIcon { spec: b }) => a == b,
         (FocusRequesterId { id: ai }, FocusRequesterId { id: bi }) => ai == bi,
         (KbEvent { .. }, KbEvent { .. }) => true,
         (PointerEvent { .. }, PointerEvent { .. }) => true,

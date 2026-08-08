@@ -5,10 +5,15 @@
 //!   Phase 2: snapshot → 每个模糊区域 crop → blur → 画回 + 画子节点
 
 use crate::debug_log;
+use crate::layout::LayoutDirection;
 use crate::layout::node::LayoutNode;
 use crate::modifier::ModifierElement;
-use skia_safe::{Canvas, Color4f, Paint, RRect, Rect};
+use crate::ui::icon::{DecodedIcon, IconSource, IconSpec, decoded_icon};
+use skia_safe::{BlendMode, Canvas, Color4f, Paint, RRect, Rect, SamplingOptions};
+use skia_safe::sampling_options::{FilterMode, MipmapMode};
 use skia_safe::image_filters;
+use skia_safe::svg;
+use std::cell::RefCell;
 
 // ── 入口 ──
 
@@ -265,6 +270,7 @@ fn render_modifier_element<'a>(
     el: &'a ModifierElement,
     rect: Rect,
     x: f32, y: f32, w: f32, h: f32,
+    direction: LayoutDirection,
 ) -> Option<TextParams<'a>> {
     match el {
         ModifierElement::Background { color_fn, shape } => {
@@ -284,8 +290,132 @@ fn render_modifier_element<'a>(
                 letter_spacing: *letter_spacing, line_height: *line_height,
             })
         }
+        ModifierElement::DrawIcon { spec } => {
+            draw_icon(canvas, rect, direction, spec);
+            None
+        }
         _ => None,
     }
+}
+
+/// 图标绘制：SVG path / SVG 文档 / 图片文件 / 可变字体符号
+fn draw_icon(canvas: &Canvas, rect: Rect, direction: LayoutDirection, spec: &IconSpec) {
+    let mirror = spec.auto_mirror && direction == LayoutDirection::Rtl;
+    if mirror {
+        canvas.save();
+        let c = rect.center();
+        canvas.translate((c.x, c.y));
+        canvas.scale((-1.0, 1.0));
+        canvas.translate((-c.x, -c.y));
+    }
+    match &spec.source {
+        IconSource::SvgPath { .. } | IconSource::Svg(_) | IconSource::File(_) => {
+            if let Some(decoded) = decoded_icon(&spec.source) {
+                match decoded.as_ref() {
+                    DecodedIcon::Bitmap { image, width, height } => {
+                        let dst = fit_rect(rect, *width, *height);
+                        let src = Rect::new(0.0, 0.0, *width, *height);
+                        let mut paint = Paint::default();
+                        paint.set_anti_alias(true);
+                        if let Some(tint) = spec.tint {
+                            if let Some(filter) =
+                                skia_safe::color_filters::blend(skia_color(tint), BlendMode::SrcIn)
+                            {
+                                paint.set_color_filter(filter);
+                            }
+                        }
+                        // 位图缩放用线性 + 线性 mipmap（三线性）与 Strict 约束：
+                        // 避免放大锯齿/缩小摩尔纹（默认 Fast + 低质量采样）
+                        canvas.draw_image_rect_with_sampling_options(
+                            image,
+                            Some((&src, skia_safe::canvas::SrcRectConstraint::Strict)),
+                            &dst,
+                            SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear),
+                            &paint,
+                        );
+                    }
+                    DecodedIcon::Svg { dom, width, height } => {
+                        draw_svg_dom(canvas, dom, *width, *height, rect, spec.tint);
+                    }
+                }
+            }
+        }
+        #[cfg(any(
+            feature = "material-symbols-outlined",
+            feature = "material-symbols-rounded",
+            feature = "material-symbols-sharp"
+        ))]
+        IconSource::Symbol(symbol) => {
+            let size = rect.width().min(rect.height());
+            if size > 0.0 {
+                if let Some(blob) = crate::ui::icon::symbol_blob(*symbol, size, &spec.axes) {
+                    let x = rect.left + (rect.width() - size) / 2.0;
+                    let y = rect.top + (rect.height() - size) / 2.0 + size;
+                    let mut paint = Paint::default();
+                    paint.set_anti_alias(true);
+                    paint.set_color(skia_color(spec.tint.unwrap_or(crate::modifier::Color::BLACK)));
+                    canvas.draw_text_blob(&blob, (x, y), &paint);
+                }
+            }
+        }
+    }
+    if mirror {
+        canvas.restore();
+    }
+}
+
+fn skia_color(c: crate::modifier::Color) -> skia_safe::Color {
+    skia_safe::Color::from_argb(c.a, c.r, c.g, c.b)
+}
+
+/// 等比缩放居中（ContentScale.Fit 语义）
+fn fit_rect(rect: Rect, iw: f32, ih: f32) -> Rect {
+    if iw <= 0.0 || ih <= 0.0 {
+        return rect;
+    }
+    let scale = (rect.width() / iw).min(rect.height() / ih);
+    let w = iw * scale;
+    let h = ih * scale;
+    Rect::from_xywh(
+        rect.left + (rect.width() - w) / 2.0,
+        rect.top + (rect.height() - h) / 2.0,
+        w,
+        h,
+    )
+}
+
+fn draw_svg_dom(
+    canvas: &Canvas,
+    dom: &RefCell<svg::Dom>,
+    vw: f32,
+    vh: f32,
+    rect: Rect,
+    tint: Option<crate::modifier::Color>,
+) {
+    let dst = fit_rect(rect, vw, vh);
+    if dst.width() <= 0.0 || dst.height() <= 0.0 {
+        return;
+    }
+    // 直接画布渲染（与字体路径一致）：容器尺寸设为目标尺寸后 render。
+    // tint 用 saveLayer 颜色滤镜（SrcIn）在图层合成时统一染色。
+    canvas.save();
+    canvas.translate((dst.left, dst.top));
+    let layer = if let Some(tint) = tint {
+        skia_safe::color_filters::blend(skia_color(tint), BlendMode::SrcIn).map(|filter| {
+            let mut paint = Paint::default();
+            paint.set_color_filter(filter);
+            canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default().paint(&paint));
+        })
+    } else {
+        None
+    };
+    // 缓存线程本地，绘制期 set_container_size 不跨线程
+    dom.borrow_mut().set_container_size((dst.width(), dst.height()));
+    dom.borrow().render(canvas);
+    if layer.is_some() {
+        canvas.restore();
+    }
+    canvas.restore();
 }
 
 // ── Phase 1: 正常渲染（非 BackdropBlur 节点）──
@@ -377,7 +507,7 @@ fn render_pass1(
                 scroll_offset_h = Some(state.get());
             }
             el => {
-                if let Some(tp) = render_modifier_element(canvas, el, rect, x, y, w, h) {
+                if let Some(tp) = render_modifier_element(canvas, el, rect, x, y, w, h, node.layout_direction) {
                     text = Some((tp.content, tp.font_size, tp.color, tp.max_lines, tp.align, tp.overflow, tp.font_weight, tp.font_style, tp.soft_wrap, tp.letter_spacing, tp.line_height));
                 }
             }
@@ -902,6 +1032,13 @@ fn surface_snapshot(canvas: &Canvas, bounds: skia_safe::IRect) -> Option<skia_sa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fit_rect_preserves_aspect_and_centers() {
+        let r = fit_rect(skia_safe::Rect::new(0.0, 0.0, 100.0, 50.0), 24.0, 24.0);
+        assert_eq!((r.width(), r.height()), (50.0, 50.0), "等比缩放到短边");
+        assert_eq!((r.left, r.top), (25.0, 0.0), "水平居中");
+    }
     use crate::modifier::GraphicsLayerParams;
 
     #[test]

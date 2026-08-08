@@ -21,6 +21,7 @@ macro_rules! debug_log {
 }
 
 pub mod font;
+pub mod icon;
 pub mod modifier;
 pub mod layout;
 pub mod ui;
@@ -69,7 +70,7 @@ pub mod prelude {
     pub use crate::core::composer::ComposeCtx;
     pub use crate::core::state::{DerivedFloat, DerivedValue, State};
     pub use crate::modifier::{Dimension, Modifier, Shape, Color, FocusRequester, ScrollState, DecoStyle, DecoMode, FontEdge, FontHint, KbEvent, KbEventType, PointerEvent, PointerEventType, PointerButton, PointerKind, PenKind};
-    pub use crate::ui::{Text, TextAlign, TextOverflow, TextStyle, ProvideTextStyle, FontWeight, FontSlant, Button, ButtonBorder, ButtonColors, ButtonDefaults, ButtonElevation, ButtonStyle, Column, Row, Stack, Window, WiniaTheme, ThemeColors, SelectionContainer, TextField, TextFieldValue};
+    pub use crate::ui::{Text, TextAlign, TextOverflow, TextStyle, ProvideTextStyle, FontWeight, FontSlant, Button, ButtonBorder, ButtonColors, ButtonDefaults, ButtonElevation, ButtonStyle, Column, Row, Stack, Window, WiniaTheme, ThemeColors, SelectionContainer, TextField, TextFieldValue, Icon, IconSource, Tint, PathFillType, AxisValue};
     pub use crate::ui::interaction::{MutableInteractionSource, ComponentState};
     pub use crate::ui::animated_visibility::{AnimatedVisibility, VisibilityTransition, SlideDirection};
     pub use crate::ui::animated_size::AnimatedSize;

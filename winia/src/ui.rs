@@ -17,6 +17,7 @@ pub mod animated_content;
 pub mod crossfade;
 pub mod overlay;
 pub mod interaction;
+pub mod icon;
 
 pub use animated_visibility::{AnimatedVisibility, VisibilityTransition, SlideDirection};
 pub use animated_size::AnimatedSize;
@@ -51,3 +52,4 @@ pub use text_field::TextField;
 pub use text_field::TextFieldValue;
 pub use text_field::TextChange;
 pub use interaction::{MutableInteractionSource, ComponentState};
+pub use icon::{AxisValue, Icon, IconSource, PathFillType, Tint};
