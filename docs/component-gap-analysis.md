@@ -69,6 +69,7 @@ Text / TextField / Button / Icon / Column / Row / Stack / RichText / SelectionCo
 | **Icon 组件** | ✅ 已实现（多来源：SVG path / 完整 SVG / 图片文件 / 可变字体符号；tint Auto 语义；autoMirror 属性；可变轴 FILL/GRAD/opsz/wght 动画）——见 [docs/icon.md](icon.md) |
 | **内置图标集** | ⚠️ 默认不内置（设计如此）；`material-symbols-outlined/rounded/sharp` feature 提供 4207 个/主题 |
 | **IconButton** | ✅ 已实现（标准/Filled/FilledTonal/Outlined；圆形容器+波纹+焦点环；内容色经 LocalContentColor 等价物下传）——见 [docs/icon.md](icon.md) |
+| **IconToggleButton** | ✅ 已实现（六色模型 checked 态、Outlined checked 无边框、点击取反回调）——见 [docs/icon.md](icon.md) |
 | **semantics contentDescription** | 仅存储，未接入无障碍树 |
 
 ### TextField（对标 material3 `TextField(value, onValueChange, enabled=true, readOnly=false, label, placeholder, leadingIcon, trailingIcon, prefix, suffix, supportingText, isError, visualTransformation, keyboardOptions, singleLine=false, maxLines=MAX, minLines=1, colors)`）

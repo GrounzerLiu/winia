@@ -48,10 +48,10 @@ impl IconButtonColors {
     /// 从主题按变体生成默认色（对标 IconButtonDefaults.*Colors）
     pub fn from_theme(theme: &ThemeColors, style: IconButtonStyle) -> Self {
         let transparent = Color::from_argb(0, 0, 0, 0);
-        // M3 token：disabled 容器 = onSurface 12%、disabled 内容 = onSurface 38%
+        // M3 token：disabled 容器 = OnSurface @ 0.10、disabled 内容 = OnSurface @ 0.38
         // （不是容器色/内容色的 alpha——Filled 禁用是灰而非半透明紫）
         let alpha = |c: Color, a: f32| Color::from_argb((c.a as f32 * a) as u8, c.r, c.g, c.b);
-        let disabled_container = alpha(theme.on_surface, 0.12);
+        let disabled_container = alpha(theme.on_surface, 0.10);
         let disabled_content = alpha(theme.on_surface, 0.38);
         match style {
             IconButtonStyle::Standard => {
@@ -108,9 +108,10 @@ impl IconButtonDefaults {
         IconButtonColors::from_theme(theme, IconButtonStyle::Outlined)
     }
 
-    /// Outlined 边框：1dp + outline 色；disabled 为 38% alpha
+    /// Outlined 边框：1dp + OutlineVariant 色；disabled 为 38% alpha
     pub fn outlined_border(theme: &ThemeColors, enabled: bool) -> ButtonBorder {
-        let c = theme.outline;
+        // OutlinedIconButtonTokens.OutlineColor = OutlineVariant
+        let c = theme.outline_variant;
         let color = if enabled {
             c
         } else {
@@ -216,6 +217,7 @@ impl IconButton {
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         ctx.changed(&self.style);
         ctx.changed(&self.enabled);
+        ctx.changed(&self.colors);
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
         let colors = self
@@ -318,9 +320,9 @@ mod tests {
     fn outlined_border_disabled_alpha() {
         let theme = ThemeColors::light_from_seed(0x6750A4);
         let enabled = IconButtonDefaults::outlined_border(&theme, true);
-        assert_eq!(enabled.color, theme.outline);
+        assert_eq!(enabled.color, theme.outline_variant, "Outlined 边框 = OutlineVariant");
         let disabled = IconButtonDefaults::outlined_border(&theme, false);
-        assert_eq!(disabled.color.a, (theme.outline.a as f32 * 0.38) as u8);
+        assert_eq!(disabled.color.a, (theme.outline_variant.a as f32 * 0.38) as u8);
     }
 
     #[test]
@@ -331,8 +333,8 @@ mod tests {
         assert_eq!(colors.container_color(false), colors.disabled_container);
         assert_eq!(colors.content_color(true), theme.on_primary);
         assert_eq!(colors.content_color(false), colors.disabled_content);
-        // M3 token：禁用容器 onSurface 12%、禁用内容 onSurface 38%
-        assert_eq!(colors.disabled_container.a, (theme.on_surface.a as f32 * 0.12) as u8);
+        // M3 token：禁用容器 OnSurface 10%、禁用内容 OnSurface 38%
+        assert_eq!(colors.disabled_container.a, (theme.on_surface.a as f32 * 0.10) as u8);
         assert_eq!(colors.disabled_content.a, (theme.on_surface.a as f32 * 0.38) as u8);
         let standard = IconButtonDefaults::icon_button_colors(&theme);
         assert_eq!(standard.disabled_container.a, 0, "标准版禁用容器仍透明");

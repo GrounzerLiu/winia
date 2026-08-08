@@ -19,6 +19,7 @@ pub mod overlay;
 pub mod interaction;
 pub mod icon;
 pub mod icon_button;
+pub mod icon_toggle_button;
 
 pub use animated_visibility::{AnimatedVisibility, VisibilityTransition, SlideDirection};
 pub use animated_size::AnimatedSize;
@@ -55,3 +56,4 @@ pub use text_field::TextChange;
 pub use interaction::{MutableInteractionSource, ComponentState};
 pub use icon::{AxisValue, Icon, IconSource, PathFillType, Tint};
 pub use icon_button::{IconButton, IconButtonColors, IconButtonDefaults, IconButtonStyle};
+pub use icon_toggle_button::{IconToggleButton, IconToggleButtonColors, IconToggleButtonDefaults};

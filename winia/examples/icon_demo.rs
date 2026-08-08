@@ -36,7 +36,10 @@ fn icon_demo(ctx: &mut ComposeCtx) {
                 });
 
             section_title(ctx, "SVG path（fonts.google.com/icons 复制）");
-            Row::new().modifier(Modifier::new().padding_vertical(3.0)).build(ctx, |ctx| {
+            Row::new()
+                .modifier(Modifier::new().padding_vertical(3.0))
+                .spacing(12.0)
+                .build(ctx, |ctx| {
                 // add
                 Icon::svg_path("M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z").build(ctx);
                 // star（tint 主题色 + 放大）
@@ -104,6 +107,53 @@ fn icon_demo(ctx: &mut ComposeCtx) {
                 });
             });
             Text::new(format!("IconButton 总点击 {}", ib_clicks.get()))
+                .font_size(12.0)
+                .color(Color::from_argb(255, 100, 100, 100))
+                .build(ctx);
+
+            section_title(ctx, "IconToggleButton（点击切换 checked）");
+            let t0 = ctx.remember(|| false);
+            let t1 = ctx.remember(|| false);
+            let t2 = ctx.remember(|| false);
+            let t3 = ctx.remember(|| false);
+            let star = "M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z";
+            let check = "M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z";
+            Row::new()
+                .modifier(Modifier::new().padding_vertical(3.0))
+                .spacing(12.0)
+                .build(ctx, |ctx| {
+                let checked0 = t0.get();
+                let c0 = t0.clone();
+                IconToggleButton::new(checked0).on_checked_change(move |v| c0.update(|cur| *cur = v)).build(ctx, |ctx| {
+                    Icon::svg_path(if checked0 { check } else { star }).build(ctx);
+                });
+                let checked1 = t1.get();
+                let c1 = t1.clone();
+                IconToggleButton::filled(checked1).on_checked_change(move |v| c1.update(|cur| *cur = v)).build(ctx, |ctx| {
+                    Icon::svg_path(if checked1 { check } else { star }).build(ctx);
+                });
+                let checked2 = t2.get();
+                let c2 = t2.clone();
+                IconToggleButton::filled_tonal(checked2).on_checked_change(move |v| c2.update(|cur| *cur = v)).build(ctx, |ctx| {
+                    Icon::svg_path(if checked2 { check } else { star }).build(ctx);
+                });
+                let checked3 = t3.get();
+                let c3 = t3.clone();
+                IconToggleButton::outlined(checked3).on_checked_change(move |v| c3.update(|cur| *cur = v)).build(ctx, |ctx| {
+                    Icon::svg_path(if checked3 { check } else { star }).build(ctx);
+                });
+                // 禁用
+                IconToggleButton::new(false).enabled(false).on_checked_change(|_| {}).build(ctx, |ctx| {
+                    Icon::svg_path(star).build(ctx);
+                });
+                });
+            Text::new(format!(
+                "checked = {}/{}/{}/{}（星形=未选，对勾=已选）",
+                t0.get(),
+                t1.get(),
+                t2.get(),
+                t3.get()
+            ))
                 .font_size(12.0)
                 .color(Color::from_argb(255, 100, 100, 100))
                 .build(ctx);

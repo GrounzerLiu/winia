@@ -117,12 +117,31 @@ material-symbols-sharp    = []   # Sharp（~8.6MB）
   `Icon` 的 `Tint::Auto` 会取容器提供的内容色（如 Filled 里图标自动
   on_primary）。
 - 差异：内容色默认取主题 on_surface（Compose 默认 LocalContentColor）；
-  disabled 容器 = onSurface 12%、disabled 内容 = onSurface 38%（M3 token）；
+  disabled 容器 = OnSurface 10%、disabled 内容 = OnSurface 38%（M3 token）；
   hover/press 视觉反馈由波纹指示提供（M3 的状态层同样属于 indication，
   不在 IconButtonColors 四色模型内）。
+- Outlined 边框 = `OutlineVariant`（非 outline），disabled 38% alpha。
 - 已知边界：`with_content_color` 是 CompositionLocal，变化不注册依赖——
   若外层内容色变化而 IconButton 自身参数未变（Skip），内部 Icon 不会
-  重解析 tint；改变颜色请通过 IconButton 的 `colors()` 参数触发。
+  重解析 tint；改变颜色请通过 IconButton 的 `colors()` 参数触发
+  （`colors` 已注册进 `ctx.changed`，参数变化会重组合）。
+
+### IconToggleButton（已实现）
+
+对标 material3 `IconToggleButton` 一族（`winia/src/ui/icon_toggle_button.rs`）：
+
+- 构造：`IconToggleButton::new(checked)` / `filled` / `filled_tonal` /
+  `outlined`；`on_checked_change(|checked| ...)` 回调（点击取反后调用）。
+- 六色模型 `IconToggleButtonColors`（container/content/disabled/
+  checked_container/checked_content），默认（M3 14_1_0 token）：
+  Standard checked 内容 = primary；Filled 未选 = SurfaceContainer/
+  OnSurfaceVariant、checked = Primary/OnPrimary；FilledTonal 未选 =
+  SecondaryContainer、checked = **Secondary/OnSecondary**；Outlined 未选
+  透明 + OnSurfaceVariant、checked = **InverseSurface/InverseOnSurface**
+  且**无边框**（`outlinedIconToggleButtonBorder`——checked 返回 null；
+  边框色 = OutlineVariant）。
+- 内容色下传与 IconButton 相同（checked 态内容色同样生效）。
+- 差异：disabled 容器 = OnSurface 10%、内容 = OnSurface 38%。
 
 ## 5. Demo
 
