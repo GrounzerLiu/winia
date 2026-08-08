@@ -203,6 +203,22 @@ fn icon_demo(ctx: &mut ComposeCtx) {
                         Icon::svg_path(star).build(ctx);
                         Text::new("加星").font_size(13.0).build(ctx);
                     });
+                // Elevated：图标 + 阴影
+                Button::elevated()
+                    .content_padding(ButtonDefaults::button_with_icon_content_padding())
+                    .on_click(|| {})
+                    .build(ctx, |ctx| {
+                        Icon::svg_path(star).build(ctx);
+                        Text::new("收藏").font_size(13.0).build(ctx);
+                    });
+                // Text：紧凑 12/8/16/8
+                Button::text()
+                    .content_padding(ButtonDefaults::text_button_with_icon_content_padding())
+                    .on_click(|| {})
+                    .build(ctx, |ctx| {
+                        Icon::svg_path(star).build(ctx);
+                        Text::new("加星").font_size(13.0).build(ctx);
+                    });
                 });
 
             section_title(ctx, "可变字体（--features material-symbols-outlined）");
