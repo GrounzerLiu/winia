@@ -152,6 +152,42 @@ fn button_demo(ctx: &mut ComposeCtx) {
                 .color(Color::from_argb(255, 100, 100, 100))
                 .build(ctx);
 
+            section_title(ctx, "带图标（Icon + Text，内容 = 居中 Row）");
+            let star = "M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z";
+            Row::new()
+                .modifier(Modifier::new().padding_vertical(3.0))
+                .spacing(12.0)
+                .build(ctx, |ctx| {
+                    Button::filled()
+                        .content_padding(ButtonDefaults::button_with_icon_content_padding())
+                        .on_click(|| {})
+                        .build(ctx, |ctx| {
+                            Icon::svg_path(star).build(ctx);
+                            Text::new("收藏").font_size(13.0).build(ctx);
+                        });
+                    Button::outlined()
+                        .content_padding(ButtonDefaults::button_with_icon_content_padding())
+                        .on_click(|| {})
+                        .build(ctx, |ctx| {
+                            Icon::svg_path(star).build(ctx);
+                            Text::new("加星").font_size(13.0).build(ctx);
+                        });
+                    Button::elevated()
+                        .content_padding(ButtonDefaults::button_with_icon_content_padding())
+                        .on_click(|| {})
+                        .build(ctx, |ctx| {
+                            Icon::svg_path(star).build(ctx);
+                            Text::new("收藏").font_size(13.0).build(ctx);
+                        });
+                    Button::text()
+                        .content_padding(ButtonDefaults::text_button_with_icon_content_padding())
+                        .on_click(|| {})
+                        .build(ctx, |ctx| {
+                            Icon::svg_path(star).build(ctx);
+                            Text::new("加星").font_size(13.0).build(ctx);
+                        });
+                });
+
             section_title(ctx, "阴影、颜色与边框");
             demo_row(ctx, "Elevated", |count| {
                 let count = count.clone();
