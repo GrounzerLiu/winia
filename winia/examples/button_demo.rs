@@ -130,6 +130,28 @@ fn button_demo(ctx: &mut ComposeCtx) {
                     .on_click(move || { at.update(|v| *v = !*v); })
             });
 
+            section_title(ctx, "尺寸变体（XSmall ~ XLarge）");
+            Row::new()
+                .modifier(Modifier::new().padding_vertical(3.0))
+                .spacing(12.0)
+                .build(ctx, |ctx| {
+                    for size in [
+                        ButtonSize::XSmall,
+                        ButtonSize::Small,
+                        ButtonSize::Medium,
+                        ButtonSize::Large,
+                        ButtonSize::XLarge,
+                    ] {
+                        Button::filled().size(size).on_click(|| {}).build(ctx, |ctx| {
+                            Text::new("按钮").font_size(12.0).build(ctx);
+                        });
+                    }
+                });
+            Text::new("XSmall 32 / Small 40 / Medium 56 / Large 96 / XLarge 136")
+                .font_size(12.0)
+                .color(Color::from_argb(255, 100, 100, 100))
+                .build(ctx);
+
             section_title(ctx, "阴影、颜色与边框");
             demo_row(ctx, "Elevated", |count| {
                 let count = count.clone();
