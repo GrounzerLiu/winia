@@ -129,13 +129,34 @@ mod tests {
     }
 
     #[test]
-    fn test_row_rtl_fill_container() {
-        // RTL + fill_max_width：容器 100 宽，子镜像到右侧
+    fn test_row_rtl_uses_own_width_not_constraint() {
+        // 回归：wrap Row 的 RTL 镜像必须用行自身宽度（此前误用 incoming
+        // max——子节点被推到约束宽度，wrap 行内容消失/错位）
         let row = RowLayout::new().direction(LayoutDirection::Rtl);
         let mut nodes = vec![make_leaf(20.0, 50.0), make_leaf(30.0, 50.0)];
         let children: Vec<usize> = (0..nodes.len()).collect();
         let (_, placements) = row.measure(&mut nodes, &[], &children, Constraints::new(0.0, 100.0, 0.0, 100.0));
+        assert_eq!(placements[0].position.x, 30.0, "第一个子（20 宽）在最右");
+        assert_eq!(placements[1].position.x, 0.0);
+    }
+
+    #[test]
+    fn test_row_rtl_space_between_mirrors_full_width() {
+        // SpaceBetween 填满容器：镜像基准 = 行测量宽度（100，含 remaining）
+        let row = RowLayout::new()
+            .direction(LayoutDirection::Rtl)
+            .arrangement(Arrangement::SpaceBetween);
+        let mut nodes = vec![make_leaf(20.0, 50.0), make_leaf(30.0, 50.0)];
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let (size, placements) = row.measure(
+            &mut nodes,
+            &[],
+            &children,
+            Constraints::new(0.0, 100.0, 0.0, 100.0),
+        );
+        assert_eq!(size.width, 100.0, "SpaceBetween 填满容器");
+        // LTR 位置：0 / 70（间距 50）；RTL 镜像后：80 / 0
         assert_eq!(placements[0].position.x, 80.0, "第一个子在最右");
-        assert_eq!(placements[1].position.x, 50.0);
+        assert_eq!(placements[1].position.x, 0.0, "第二个子在最左");
     }
 }

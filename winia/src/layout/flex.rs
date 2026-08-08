@@ -33,13 +33,9 @@ pub(crate) trait FlexAxis {
     fn point(main: f32, cross: f32) -> Point;
 
     // ── RTL ──
-    /// RTL 镜像时的容器宽度（x 轴范围）
-    fn rtl_container_width(
-        constraints: &Constraints,
-        total_content_main: f32,
-        remaining_main: f32,
-        cross_size: f32,
-    ) -> f32;
+    /// RTL 镜像时的容器宽度（x 轴范围）——水平主轴用行自身测量宽度，
+    /// 垂直主轴（Column）用交叉轴宽度
+    fn rtl_container_width(measured_main: f32, cross_size: f32) -> f32;
 }
 
 // ── 实现：垂直主轴 (Column) ──
@@ -80,12 +76,7 @@ impl FlexAxis for VerticalAxis {
     #[inline] fn point(main: f32, cross: f32) -> Point { Point::new(cross, main) }
 
     #[inline]
-    fn rtl_container_width(
-        _c: &Constraints,
-        _total_content_main: f32,
-        _remaining_main: f32,
-        cross_size: f32,
-    ) -> f32 {
+    fn rtl_container_width(_measured_main: f32, cross_size: f32) -> f32 {
         cross_size
     }
 }
@@ -128,13 +119,8 @@ impl FlexAxis for HorizontalAxis {
     #[inline] fn point(main: f32, cross: f32) -> Point { Point::new(main, cross) }
 
     #[inline]
-    fn rtl_container_width(
-        constraints: &Constraints,
-        total_content_main: f32,
-        remaining_main: f32,
-        _cross_size: f32,
-    ) -> f32 {
-        constraints.constrain_width(total_content_main + remaining_main)
+    fn rtl_container_width(measured_main: f32, _cross_size: f32) -> f32 {
+        measured_main
     }
 }
 
@@ -256,22 +242,18 @@ pub(crate) fn measure_flex<A: FlexAxis>(
     }
 
     // ── RTL 镜像 ──
-    if direction == LayoutDirection::Rtl {
-        let container_x = A::rtl_container_width(
-            constraints, total_content_main, remaining_main, cross_size,
-        );
-        for p in &mut placements {
-            p.position.x = container_x - p.position.x - p.size.width;
-        }
-    }
-
-    // 最终测量尺寸
     let measured_main = match arrangement {
         Arrangement::SpaceBetween | Arrangement::SpaceAround | Arrangement::SpaceEvenly => {
             A::constrain_main(constraints, total_content_main + remaining_main)
         }
         _ => A::constrain_main(constraints, total_content_main),
     };
+    if direction == LayoutDirection::Rtl {
+        let container_x = A::rtl_container_width(measured_main, cross_size);
+        for p in &mut placements {
+            p.position.x = container_x - p.position.x - p.size.width;
+        }
+    }
 
     (A::size(measured_main, cross_size), placements)
 }
