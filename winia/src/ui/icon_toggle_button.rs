@@ -6,7 +6,7 @@ use crate::core::composer::{ComposeCtx, GroupStatus};
 use crate::layout::BoxLayout;
 use crate::modifier::{Color, Modifier, Shape};
 use crate::ui::button::ButtonBorder;
-use crate::ui::icon_button::{IconButtonDefaults, IconButtonStyle};
+use crate::ui::icon_button::{IconButtonDefaults, IconButtonSize, IconButtonStyle};
 use crate::ui::interaction::MutableInteractionSource;
 use crate::ui::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
@@ -147,6 +147,7 @@ impl IconToggleButtonDefaults {
         theme: &ThemeColors,
         enabled: bool,
         checked: bool,
+        width: f32,
     ) -> Option<ButtonBorder> {
         if checked {
             return None;
@@ -158,7 +159,7 @@ impl IconToggleButtonDefaults {
         } else {
             Color::from_argb((c.a as f32 * 0.38) as u8, c.r, c.g, c.b)
         };
-        Some(ButtonBorder::new(1.0, color))
+        Some(ButtonBorder::new(width, color))
     }
 }
 
@@ -172,6 +173,7 @@ pub struct IconToggleButton {
     interaction_source: Option<MutableInteractionSource>,
     shape: Shape,
     border: Option<ButtonBorder>,
+    size_variant: IconButtonSize,
     modifier: Modifier,
 }
 
@@ -186,6 +188,7 @@ impl IconToggleButton {
             interaction_source: None,
             shape: IconButtonDefaults::shape(),
             border: None,
+            size_variant: IconButtonSize::Small,
             modifier: Modifier::new(),
         }
     }
@@ -242,6 +245,12 @@ impl IconToggleButton {
         self
     }
 
+    /// 尺寸变体（XSmall/Small/Medium/Large/XLarge，默认 Small）
+    pub fn size(mut self, size: IconButtonSize) -> Self {
+        self.size_variant = size;
+        self
+    }
+
     pub fn modifier(mut self, modifier: Modifier) -> Self {
         self.modifier = self.modifier.then(modifier);
         self
@@ -264,11 +273,16 @@ impl IconToggleButton {
         let content_color = colors.content_color(self.enabled, self.checked);
         let shape = self.shape;
 
-        let size = IconButtonDefaults::container_size();
+        let size = self.size_variant.container_size();
         let mut modifier = Modifier::new().size(size, size).background(container, shape);
         let border = self.border.or_else(|| {
             if self.style == IconButtonStyle::Outlined {
-                IconToggleButtonDefaults::outlined_border(&theme, self.enabled, self.checked)
+                IconToggleButtonDefaults::outlined_border(
+                    &theme,
+                    self.enabled,
+                    self.checked,
+                    self.size_variant.outline_width(),
+                )
             } else {
                 None
             }
@@ -327,6 +341,9 @@ impl IconToggleButton {
     pub fn get_border(&self) -> Option<ButtonBorder> {
         self.border
     }
+    pub fn get_size(&self) -> IconButtonSize {
+        self.size_variant
+    }
 }
 
 #[cfg(test)]
@@ -368,14 +385,20 @@ mod tests {
     #[test]
     fn outlined_border_hidden_when_checked() {
         let theme = ThemeColors::light_from_seed(0x6750A4);
-        assert!(IconToggleButtonDefaults::outlined_border(&theme, true, false).is_some());
+        assert!(IconToggleButtonDefaults::outlined_border(&theme, true, false, 1.0).is_some());
         assert_eq!(
-            IconToggleButtonDefaults::outlined_border(&theme, true, false).unwrap().color,
+            IconToggleButtonDefaults::outlined_border(&theme, true, false, 1.0).unwrap().color,
             theme.outline_variant
         );
-        assert!(IconToggleButtonDefaults::outlined_border(&theme, true, true).is_none(), "checked 无边框");
-        let disabled = IconToggleButtonDefaults::outlined_border(&theme, false, false).unwrap();
+        assert!(IconToggleButtonDefaults::outlined_border(&theme, true, true, 1.0).is_none(), "checked 无边框");
+        let disabled = IconToggleButtonDefaults::outlined_border(&theme, false, false, 1.0).unwrap();
         assert_eq!(disabled.color.a, (theme.outline_variant.a as f32 * 0.38) as u8);
+        assert_eq!(
+            IconToggleButtonDefaults::outlined_border(&theme, true, false, IconButtonSize::Large.outline_width())
+                .unwrap()
+                .width,
+            2.0
+        );
     }
 
     #[test]
@@ -386,6 +409,14 @@ mod tests {
         assert_eq!(IconToggleButton::filled_tonal(true).get_style(), IconButtonStyle::FilledTonal);
         assert_eq!(IconToggleButton::outlined(true).get_style(), IconButtonStyle::Outlined);
         assert_eq!(IconToggleButton::new(true).checked(false).get_checked(), false);
+        assert_eq!(IconToggleButton::new(true).get_size(), IconButtonSize::Small);
+        assert_eq!(
+            IconToggleButton::new(true).size(IconButtonSize::XLarge).get_size(),
+            IconButtonSize::XLarge
+        );
+        // 尺寸表与 IconButton 共用同一 token 表
+        assert_eq!(IconToggleButton::new(true).size(IconButtonSize::XSmall).get_size().container_size(), 32.0);
+        assert_eq!(IconToggleButton::new(true).size(IconButtonSize::Large).get_size().icon_size(), 32.0);
     }
 
     #[test]

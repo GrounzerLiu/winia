@@ -18,6 +18,49 @@ pub enum IconButtonStyle {
     Outlined,
 }
 
+/// IconButton 尺寸变体（对标 material3 IconButtonTokens 系列）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IconButtonSize {
+    XSmall,
+    Small,
+    Medium,
+    Large,
+    XLarge,
+}
+
+impl IconButtonSize {
+    /// 容器边长（Small = 48：本框架把 M3 的 40dp 视觉容器与 48dp 触摸目标
+    /// 合并为一个容器；其余按 token：32/56/96/136）
+    pub fn container_size(self) -> f32 {
+        match self {
+            IconButtonSize::XSmall => 32.0,
+            IconButtonSize::Small => 48.0,
+            IconButtonSize::Medium => 56.0,
+            IconButtonSize::Large => 96.0,
+            IconButtonSize::XLarge => 136.0,
+        }
+    }
+
+    /// 建议图标尺寸（token IconSize：20/24/24/32/40）
+    pub fn icon_size(self) -> f32 {
+        match self {
+            IconButtonSize::XSmall => 20.0,
+            IconButtonSize::Small | IconButtonSize::Medium => 24.0,
+            IconButtonSize::Large => 32.0,
+            IconButtonSize::XLarge => 40.0,
+        }
+    }
+
+    /// Outlined 边框宽度（token OutlinedOutlineWidth：1/1/1/2/3）
+    pub fn outline_width(self) -> f32 {
+        match self {
+            IconButtonSize::XSmall | IconButtonSize::Small | IconButtonSize::Medium => 1.0,
+            IconButtonSize::Large => 2.0,
+            IconButtonSize::XLarge => 3.0,
+        }
+    }
+}
+
 /// 图标按钮颜色集——容器/内容各含 enabled/disabled 变体
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct IconButtonColors {
@@ -84,7 +127,7 @@ pub struct IconButtonDefaults;
 impl IconButtonDefaults {
     /// 容器尺寸：M3 为 40dp 容器 + 48dp 最小触摸目标；本框架直接用 48
     pub fn container_size() -> f32 {
-        48.0
+        IconButtonSize::Small.container_size()
     }
 
     /// 默认形状：圆形（对标 ContainerShapeRound）
@@ -108,8 +151,9 @@ impl IconButtonDefaults {
         IconButtonColors::from_theme(theme, IconButtonStyle::Outlined)
     }
 
-    /// Outlined 边框：1dp + OutlineVariant 色；disabled 为 38% alpha
-    pub fn outlined_border(theme: &ThemeColors, enabled: bool) -> ButtonBorder {
+    /// Outlined 边框：OutlineVariant 色；disabled 为 38% alpha；
+    /// 宽度按尺寸变体（token OutlinedOutlineWidth）
+    pub fn outlined_border(theme: &ThemeColors, enabled: bool, width: f32) -> ButtonBorder {
         // OutlinedIconButtonTokens.OutlineColor = OutlineVariant
         let c = theme.outline_variant;
         let color = if enabled {
@@ -117,7 +161,7 @@ impl IconButtonDefaults {
         } else {
             Color::from_argb((c.a as f32 * 0.38) as u8, c.r, c.g, c.b)
         };
-        ButtonBorder::new(1.0, color)
+        ButtonBorder::new(width, color)
     }
 
     fn colors_for(theme: &ThemeColors, style: IconButtonStyle) -> IconButtonColors {
@@ -139,6 +183,7 @@ pub struct IconButton {
     interaction_source: Option<MutableInteractionSource>,
     shape: Shape,
     border: Option<ButtonBorder>,
+    size_variant: IconButtonSize,
     modifier: Modifier,
 }
 
@@ -153,6 +198,7 @@ impl IconButton {
             interaction_source: None,
             shape: IconButtonDefaults::shape(),
             border: None,
+            size_variant: IconButtonSize::Small,
             modifier: Modifier::new(),
         }
     }
@@ -207,6 +253,12 @@ impl IconButton {
         self
     }
 
+    /// 尺寸变体（XSmall/Small/Medium/Large/XLarge，默认 Small）
+    pub fn size(mut self, size: IconButtonSize) -> Self {
+        self.size_variant = size;
+        self
+    }
+
     pub fn modifier(mut self, modifier: Modifier) -> Self {
         self.modifier = self.modifier.then(modifier);
         self
@@ -230,14 +282,18 @@ impl IconButton {
         let content_color = colors.content_color(self.enabled);
         let shape = self.shape;
 
-        let size = IconButtonDefaults::container_size();
+        let size = self.size_variant.container_size();
         let mut modifier = Modifier::new()
             .size(size, size)
             .background(container, shape);
-        // 边框：显式优先，Outlined 默认 1px outline
+        // 边框：显式优先；Outlined 默认 OutlineVariant，宽度随尺寸变体
         let border = self.border.or_else(|| {
             if self.style == IconButtonStyle::Outlined {
-                Some(IconButtonDefaults::outlined_border(&theme, self.enabled))
+                Some(IconButtonDefaults::outlined_border(
+                    &theme,
+                    self.enabled,
+                    self.size_variant.outline_width(),
+                ))
             } else {
                 None
             }
@@ -293,6 +349,9 @@ impl IconButton {
     pub fn get_border(&self) -> Option<ButtonBorder> {
         self.border
     }
+    pub fn get_size(&self) -> IconButtonSize {
+        self.size_variant
+    }
 }
 
 #[cfg(test)]
@@ -319,10 +378,16 @@ mod tests {
     #[test]
     fn outlined_border_disabled_alpha() {
         let theme = ThemeColors::light_from_seed(0x6750A4);
-        let enabled = IconButtonDefaults::outlined_border(&theme, true);
+        let enabled = IconButtonDefaults::outlined_border(&theme, true, 1.0);
         assert_eq!(enabled.color, theme.outline_variant, "Outlined 边框 = OutlineVariant");
-        let disabled = IconButtonDefaults::outlined_border(&theme, false);
+        let disabled = IconButtonDefaults::outlined_border(&theme, false, 1.0);
         assert_eq!(disabled.color.a, (theme.outline_variant.a as f32 * 0.38) as u8);
+        assert_eq!(
+            IconButtonDefaults::outlined_border(&theme, true, IconButtonSize::Large.outline_width())
+                .width,
+            2.0,
+            "Large 边框 2dp"
+        );
     }
 
     #[test]
@@ -347,6 +412,29 @@ mod tests {
         assert_eq!(IconButton::filled_tonal().get_style(), IconButtonStyle::FilledTonal);
         assert_eq!(IconButton::outlined().get_style(), IconButtonStyle::Outlined);
         assert_eq!(IconButton::new().get_shape(), Shape::Circle);
+        assert_eq!(IconButton::new().get_size(), IconButtonSize::Small);
+        assert_eq!(
+            IconButton::new().size(IconButtonSize::Large).get_size(),
+            IconButtonSize::Large
+        );
+    }
+
+    #[test]
+    fn size_variant_dimensions() {
+        assert_eq!(IconButtonSize::XSmall.container_size(), 32.0);
+        assert_eq!(IconButtonSize::Small.container_size(), 48.0);
+        assert_eq!(IconButtonSize::Medium.container_size(), 56.0);
+        assert_eq!(IconButtonSize::Large.container_size(), 96.0);
+        assert_eq!(IconButtonSize::XLarge.container_size(), 136.0);
+        assert_eq!(IconButtonSize::XSmall.icon_size(), 20.0);
+        assert_eq!(IconButtonSize::Small.icon_size(), 24.0);
+        assert_eq!(IconButtonSize::Medium.icon_size(), 24.0);
+        assert_eq!(IconButtonSize::Large.icon_size(), 32.0);
+        assert_eq!(IconButtonSize::XLarge.icon_size(), 40.0);
+        assert_eq!(IconButtonSize::XSmall.outline_width(), 1.0);
+        assert_eq!(IconButtonSize::Medium.outline_width(), 1.0);
+        assert_eq!(IconButtonSize::Large.outline_width(), 2.0);
+        assert_eq!(IconButtonSize::XLarge.outline_width(), 3.0);
     }
 
     #[test]

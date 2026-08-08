@@ -116,6 +116,11 @@ material-symbols-sharp    = []   # Sharp（~8.6MB）
   `LocalContentColor`）——IconButton 用 `with_content_color` 包裹内容，
   `Icon` 的 `Tint::Auto` 会取容器提供的内容色（如 Filled 里图标自动
   on_primary）。
+- **尺寸变体**：`IconButtonSize`（XSmall 32 / Small 48 / Medium 56 /
+  Large 96 / XLarge 136，`.size(...)` 设置；`icon_size()` 给建议图标
+  尺寸 20/24/24/32/40、`outline_width()` 给 Outlined 边框宽 1/1/1/2/3）。
+  Small 把 M3 的 40dp 视觉容器与 48dp 触摸目标合并为一个容器，
+  其余按 token。
 - 差异：内容色默认取主题 on_surface（Compose 默认 LocalContentColor）；
   disabled 容器 = OnSurface 10%、disabled 内容 = OnSurface 38%（M3 token）；
   hover/press 视觉反馈由波纹指示提供（M3 的状态层同样属于 indication，

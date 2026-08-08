@@ -111,6 +111,29 @@ fn icon_demo(ctx: &mut ComposeCtx) {
                 .color(Color::from_argb(255, 100, 100, 100))
                 .build(ctx);
 
+            section_title(ctx, "IconButton 尺寸变体（XSmall ~ XLarge）");
+            let star = "M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z";
+            Row::new()
+                .modifier(Modifier::new().padding_vertical(3.0))
+                .spacing(12.0)
+                .build(ctx, |ctx| {
+                    for size in [
+                        IconButtonSize::XSmall,
+                        IconButtonSize::Small,
+                        IconButtonSize::Medium,
+                        IconButtonSize::Large,
+                        IconButtonSize::XLarge,
+                    ] {
+                        IconButton::new().size(size).on_click(|| {}).build(ctx, |ctx| {
+                            Icon::svg_path(star).size(size.icon_size()).build(ctx);
+                        });
+                    }
+                });
+            Text::new("XSmall 32 / Small 48 / Medium 56 / Large 96 / XLarge 136")
+                .font_size(12.0)
+                .color(Color::from_argb(255, 100, 100, 100))
+                .build(ctx);
+
             section_title(ctx, "IconToggleButton（点击切换 checked）");
             let t0 = ctx.remember(|| false);
             let t1 = ctx.remember(|| false);
