@@ -15,7 +15,7 @@
 - 滚动：`vertical_scroll`/`horizontal_scroll`（ScrollState）
 
 ### 组件已有
-Text / TextField / Button / Column / Row / Stack / RichText / SelectionContainer / AnimatedVisibility / AnimatedContent / AnimatedSize / Crossfade / Window / **Popup / Dialog / DropdownMenu / DropdownMenuItem**
+Text / TextField / Button / Icon / Column / Row / Stack / RichText / SelectionContainer / AnimatedVisibility / AnimatedContent / AnimatedSize / Crossfade / Window / **Popup / Dialog / DropdownMenu / DropdownMenuItem**
 
 ## 二、Modifier 差距（按优先级）——**已对照 Compose 1.11.4 源码核实**
 
@@ -62,6 +62,14 @@ Text / TextField / Button / Column / Row / Stack / RichText / SelectionContainer
 | **shape**（容器/边框/阴影/波纹裁剪统一） | ✅ 已实现（`Button::shape`——默认胶囊 `Shape::pill()`，对标 CornerFull；`Shape` 增 `Pill` 变体） |
 | **border / contentPadding / minSize** | ✅ 已实现：`border(ButtonBorder)`（对标 BorderStroke——形状跟随 shape；Outlined 默认 1px `outline` 色）；`content_padding`/`min_size` 支持动态 `SizeValue`（动画 State/闭包——measure 期求值只重测不重组；默认 24/8 与 58x40） |
 | **interactionSource** | ✅ 已实现（hoist——`Button::interaction_source`；未传则内部 remember） |
+
+### Icon（对标 material3 `Icon(imageVector, contentDescription, modifier, tint)`）
+| 缺口 | 说明 |
+|---|---|
+| **Icon 组件** | ✅ 已实现（多来源：SVG path / 完整 SVG / 图片文件 / 可变字体符号；tint Auto 语义；autoMirror 属性；可变轴 FILL/GRAD/opsz/wght 动画）——见 [docs/icon.md](icon.md) |
+| **内置图标集** | ⚠️ 默认不内置（设计如此）；`material-symbols-outlined/rounded/sharp` feature 提供 4207 个/主题 |
+| **IconButton** | 未实现（点击/焦点/波纹容器） |
+| **semantics contentDescription** | 仅存储，未接入无障碍树 |
 
 ### TextField（对标 material3 `TextField(value, onValueChange, enabled=true, readOnly=false, label, placeholder, leadingIcon, trailingIcon, prefix, suffix, supportingText, isError, visualTransformation, keyboardOptions, singleLine=false, maxLines=MAX, minLines=1, colors)`）
 | 缺口 | 说明 |
