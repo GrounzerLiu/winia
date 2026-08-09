@@ -53,9 +53,12 @@ disabled 按 token alpha（38%/38%）叠 Surface。
 - 颜色过渡：拇指/轨道颜色经 `animate_color_as_state`（180ms EaseOutCubic）
   + 动态 background 闭包（`peek()` 渲染期求值）渐变——观感增强项
   （M3 1.4.0 `SwitchImpl` 为静态取色）。
+- 拖拽切换：轨道上挂 `on_drag_start/on_drag/on_drag_end/on_drag_cancel`——
+  drag 期间拇指保持 28px 并跟随手指（偏移钳制 2..22），释放时按中点 12
+  判定目标状态（超过则切换、未超过则弹回）；释放位置作为动画起点
+  （`set_silent` 写入避免先弹回旧目标）。点击（slop 内）仍走 clickable 切换。
 - 禁用：不注册 clickable/ripple/focusable，取 disabled 色组。
 
 ## 4. 未实现 / 后续
 
-- 拖拽滑动切换（M3 TODO 同样未做，b/223797571）。
 - 焦点环 Secondary 形状跟随轨道 Pill（已有）。

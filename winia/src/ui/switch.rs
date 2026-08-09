@@ -39,6 +39,10 @@ pub const SWITCH_THUMB_MAX_OFFSET: f32 = 24.0;
 pub const SWITCH_ICON_SIZE: f32 = 16.0;
 /// 波纹最大半径（M3 `ripple(bounded = false, radius = StateLayerSize/2)`）
 pub const SWITCH_RIPPLE_RADIUS: f32 = 20.0;
+/// 拖拽偏移钳制范围（28px 拇指的轨道内边界：2..22）与释放判定中点
+pub const SWITCH_DRAG_MIN_OFFSET: f32 = SWITCH_TRACK_OUTLINE_WIDTH;
+pub const SWITCH_DRAG_MAX_OFFSET: f32 = SWITCH_THUMB_MAX_OFFSET - SWITCH_TRACK_OUTLINE_WIDTH;
+pub const SWITCH_DRAG_THRESHOLD: f32 = (SWITCH_DRAG_MIN_OFFSET + SWITCH_DRAG_MAX_OFFSET) / 2.0;
 
 /// Switch 颜色集（对标 material3 `SwitchColors`）——enabled/disabled ×
 /// checked/unchecked 的 thumb/track/border/icon 四组色。
@@ -296,6 +300,13 @@ impl Switch {
             crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::default()),
         );
 
+        // 拖拽状态：drag 期间 thumb_offset 被覆盖；释放后从当前位置动画回目标
+        // （M3 计划中的 Swipeable 语义——b/223797571 在本框架已实现）
+        let drag_active = ctx.remember(|| false);
+        let drag_offset = ctx.remember(|| 0.0f32);
+        let drag_base = ctx.remember(|| 0.0f32);
+        let drag_start_x = ctx.remember(|| 0.0f32);
+
         // 轨道：toggleable + 波纹都挂在这里（按压坐标是 clickable 本地坐标，
         // 波纹锚定按压点、固定半径 20——M3 视觉）
         let track_shape = SwitchDefaults::shape();
@@ -310,6 +321,59 @@ impl Switch {
         if self.enabled {
             if let Some(on_checked_change) = &self.on_checked_change {
                 let cb = on_checked_change.clone();
+                // 拖拽回调：位置是轨道本地坐标，增量不用于偏移（防双倍位移）
+                let d_active = drag_active.clone();
+                let d_offset = drag_offset.clone();
+                let d_base = drag_base.clone();
+                let d_start_x = drag_start_x.clone();
+                let anim_offset = thumb_offset.clone();
+                let on_drag_start = move |pos: (f32, f32)| {
+                    let base = anim_offset.peek();
+                    d_base.set(base);
+                    d_offset.set(base);
+                    d_start_x.set(pos.0);
+                    d_active.set(true);
+                };
+                let d_active2 = drag_active.clone();
+                let d_offset2 = drag_offset.clone();
+                let d_base2 = drag_base.clone();
+                let d_start_x2 = drag_start_x.clone();
+                let on_drag = move |pos: (f32, f32), _delta: (f32, f32)| {
+                    if !d_active2.get() {
+                        return;
+                    }
+                    let offset = (d_base2.get() + (pos.0 - d_start_x2.get()))
+                        .clamp(SWITCH_DRAG_MIN_OFFSET, SWITCH_DRAG_MAX_OFFSET);
+                    d_offset2.set(offset);
+                };
+                let d_active3 = drag_active.clone();
+                let d_offset3 = drag_offset.clone();
+                let anim_offset3 = thumb_offset.clone();
+                let checked_end = checked;
+                let cb_end = on_checked_change.clone();
+                let on_drag_end = move || {
+                    if !d_active3.get() {
+                        return;
+                    }
+                    let release = d_offset3.get();
+                    // 从释放位置开始动画归位（静默写入，避免先弹回旧目标）
+                    anim_offset3.set_silent(release);
+                    d_active3.set(false);
+                    let target = release > SWITCH_DRAG_THRESHOLD;
+                    if target != checked_end {
+                        cb_end(target);
+                    }
+                };
+                let d_active4 = drag_active.clone();
+                let d_offset4 = drag_offset.clone();
+                let anim_offset4 = thumb_offset.clone();
+                let on_drag_cancel = move || {
+                    if !d_active4.get() {
+                        return;
+                    }
+                    anim_offset4.set_silent(d_offset4.get());
+                    d_active4.set(false);
+                };
                 modifier = modifier
                     .clickable_with_source(&interaction, move || cb(!checked))
                     // M3：ripple(bounded = false, radius = 20) 锚定按压点——
@@ -319,7 +383,11 @@ impl Switch {
                         theme.on_surface,
                         false,
                         SWITCH_RIPPLE_RADIUS,
-                    );
+                    )
+                    .on_drag_start(on_drag_start)
+                    .on_drag(on_drag)
+                    .on_drag_end(on_drag_end)
+                    .on_drag_cancel(on_drag_cancel);
             }
         }
         modifier = modifier.then(self.modifier);
@@ -336,13 +404,39 @@ impl Switch {
                 // 拇指：动态尺寸 + 水平偏移 + Circle 背景；unbounded ripple
                 let s1 = thumb_size.clone();
                 let s2 = thumb_size.clone();
-                let s3 = thumb_size.clone();
+                let da_size = drag_active.clone();
+                let da_size_y = drag_active.clone();
                 let o1 = thumb_offset.clone();
+                let da_x = drag_active.clone();
+                let do_x = drag_offset.clone();
+                let s_y = thumb_size.clone();
+                // drag 期间：尺寸保持 28（按压态）、偏移跟随手指
+                let size_eff = move || {
+                    if da_size.get() {
+                        SWITCH_THUMB_PRESSED_SIZE
+                    } else {
+                        s1.get()
+                    }
+                };
+                let size_eff_y = move || {
+                    if da_size_y.get() {
+                        SWITCH_THUMB_PRESSED_SIZE
+                    } else {
+                        s_y.get()
+                    }
+                };
+                let offset_eff = move || {
+                    if da_x.get() {
+                        do_x.get()
+                    } else {
+                        o1.get()
+                    }
+                };
                 let thumb = Modifier::new()
-                    .size(move || s1.get(), move || s2.get())
+                    .size(size_eff, move || s2.get())
                     .offset(
-                        move || o1.get(),
-                        move || (SWITCH_TRACK_HEIGHT - s3.get()) / 2.0,
+                        offset_eff,
+                        move || (SWITCH_TRACK_HEIGHT - size_eff_y()) / 2.0,
                     )
                     .background(move || thumb_color_anim.peek(), Shape::Circle);
                 let tkey = ctx.next_key();
@@ -481,6 +575,37 @@ mod tests {
             }
         }
         assert!(found, "启用的 Switch 轨道应带固定半径波纹");
+    }
+
+    #[test]
+    fn drag_gesture_attached_when_interactable() {
+        use crate::modifier::ModifierElement;
+        let mut composer = crate::core::composer::Composer::new();
+        composer.compose(|ctx| {
+            Switch::new(false)
+                .on_checked_change(|_| {})
+                .build(ctx, |_| {});
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let mut start = false;
+        let mut mv = false;
+        let mut end = false;
+        let mut cancel = false;
+        for node in composer.arena_nodes() {
+            for el in node.modifier.elements() {
+                match el {
+                    ModifierElement::DragOnStart { .. } => start = true,
+                    ModifierElement::DragOnMove { .. } => mv = true,
+                    ModifierElement::DragOnEnd { .. } => end = true,
+                    ModifierElement::DragOnCancel { .. } => cancel = true,
+                    _ => {}
+                }
+            }
+        }
+        assert!(start && mv && end && cancel, "可交互 Switch 应挂拖拽手势");
+        assert_eq!(SWITCH_DRAG_MIN_OFFSET, 2.0);
+        assert_eq!(SWITCH_DRAG_MAX_OFFSET, 22.0);
+        assert_eq!(SWITCH_DRAG_THRESHOLD, 12.0);
     }
 
     #[test]
