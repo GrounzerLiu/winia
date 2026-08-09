@@ -1099,35 +1099,6 @@ mod tests {
             let canvas = surface.canvas();
             canvas.clear(Color::WHITE);
             let rect = skia_safe::Rect::from_xywh(20.0, 20.0, 80.0, 80.0);
-            let mut paint = Paint::default();
-            paint.set_color(Color::WHITE);
-            canvas.draw_rect(rect, &paint);
-            draw_elevation_shadow(
-                canvas,
-                rect,
-                &crate::modifier::Shape::Rectangle,
-                elevation,
-            );
-            let pm = surface.peek_pixels().expect("pixmap");
-            let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
-            let at = |x: usize, y: usize| -> [u8; 4] { px[y * 120 + x] };
-            let bg = at(4, 4);
-            let dark = |p: [u8; 4]| -> i32 {
-                (bg[0] as i32 - p[0] as i32)
-                    + (bg[1] as i32 - p[1] as i32)
-                    + (bg[2] as i32 - p[2] as i32)
-            };
-            (
-                dark(at(60, 102)), // 下方 2px
-                dark(at(60, 18)),  // 上方 2px
-                dark(at(18, 60)),  // 左侧 2px
-            )
-        };
-        let measure = |elevation: f32| -> (i32, i32, i32) {
-            let mut surface = surfaces::raster_n32_premul((120, 120)).unwrap();
-            let canvas = surface.canvas();
-            canvas.clear(Color::WHITE);
-            let rect = skia_safe::Rect::from_xywh(20.0, 20.0, 80.0, 80.0);
             // 真实管线顺序：先垫底阴影，再画内容
             draw_elevation_shadow(canvas, rect, &crate::modifier::Shape::Rectangle, elevation);
             let mut paint = Paint::default();
