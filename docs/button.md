@@ -41,8 +41,8 @@ winia 没有为每种 M3 变体单独建 composable，而是用 `Button` builder
 - `ButtonColors`：`container / content / disabled_container / disabled_content`。
 - `ButtonElevation`：`default / pressed / focused / hovered / disabled`。
   - `default_elevation()`：全 0（Filled 系）。
-  - `elevated()`：`6 / 12 / 8 / 10 / 0`（ElevatedButton 近似——平时即可感知高度，
-    hover 更高）。
+  - `elevated()`：`1 / 1 / 1 / 3 / 0`（对齐 M3 1.4.0 `ElevatedButtonTokens`：
+    rest/focus/press = Level1、hover = Level2、disabled = Level0）。
 - `ButtonBorder`：`width + color`（对标 `BorderStroke`）。
 - `ButtonDefaults`：
   - `shape()` = 胶囊（对标 `CornerFull`）；
@@ -105,7 +105,7 @@ shadow(graphics_layer) → 用户 modifier → clickable/ripple。
 ### 2.3 阴影（hover 升高动画）
 
 - 阴影值由 `graphics_layer.shadow_elevation` 动态闭包驱动，180ms tween 平滑过渡，
-  悬停 10 / 聚焦 8 / 按下 12 / rest 6（Elevated 系），移出后回落。
+  悬停 3 / 聚焦 1 / 按下 1 / rest 1（Elevated 系，对齐 M3 token），移出后回落。
 - 阴影形状跟随 `Button::shape`；全 0 阴影（Filled 默认）不创建图层。
 - `graphics_layer` 只影响外观，不参与命中测试（语义已注释）。
 

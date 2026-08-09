@@ -198,10 +198,11 @@ impl ButtonElevation {
         Self::new(0.0, 0.0, 0.0, 0.0, 0.0)
     }
 
-    /// ElevatedButton 近似（rest 6 / pressed 12 / focused 8 / hovered 10 / disabled 0——
-    /// 平时即有可感知高度，hover 明显更高，悬停即可见阴影升高；变化经动画平滑过渡）
+    /// ElevatedButton 默认阴影（对齐 M3 1.4.0 `ElevatedButtonTokens`：
+    /// rest 1 / pressed 1 / focused 1 / hovered 3 / disabled 0——
+    /// 平时有高度，hover 更高；变化经动画平滑过渡）
     pub fn elevated() -> Self {
-        Self::new(6.0, 12.0, 8.0, 10.0, 0.0)
+        Self::new(1.0, 1.0, 1.0, 3.0, 0.0)
     }
 
     /// 按状态取 elevation（优先级 disabled > pressed > dragged > hovered > focused > default——
