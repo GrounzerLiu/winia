@@ -59,7 +59,6 @@ fn checkbox_demo(ctx: &mut ComposeCtx) {
                         .build(ctx);
                     TriStateCheckbox::new(ToggleableState::Indeterminate)
                         .enabled(false)
-                        .on_click(|| {})
                         .build(ctx);
                 });
 

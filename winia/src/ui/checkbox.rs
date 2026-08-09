@@ -44,6 +44,9 @@ impl ToggleableState {
         if checked { Self::On } else { Self::Off }
     }
 
+    /// 视觉“着色选中”态：On 与 Indeterminate 都算（颜色解析用）。
+    /// 注意与 M3 `ToggleableState.isSelected`（仅 On）语义不同——外部如需
+    /// “真选中”判断请用 `self == ToggleableState::On`。
     pub fn is_checked(self) -> bool {
         matches!(self, Self::On | Self::Indeterminate)
     }

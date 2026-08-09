@@ -53,8 +53,8 @@ TriStateCheckbox::new(state: ToggleableState)    // 对标 TriStateCheckbox(stat
 
 | 状态 | 容器 | 边框 | 勾号 |
 |---|---|---|---|
-| checked | Primary | Primary（与容器合并） | OnPrimary |
-| unchecked | 透明 | OnSurfaceVariant | 透明 |
+| On | Primary | Primary（与容器合并） | OnPrimary |
+| Off | 透明 | OnSurfaceVariant | 透明 |
 | disabled On | OnSurface @ 38% | 同左 | OnPrimary（M3 `CheckboxColors`
   无 disabled checkmark 字段，`SelectedDisabledIconColor` token 未参与实现） |
 | disabled Off | 透明 | OnSurface @ 38% | 透明 |
