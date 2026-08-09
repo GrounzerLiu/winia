@@ -15,7 +15,7 @@
 - 滚动：`vertical_scroll`/`horizontal_scroll`（ScrollState）
 
 ### 组件已有
-Text / TextField / Button / Icon / IconButton / IconToggleButton / **Checkbox** / Column / Row / Stack / RichText / SelectionContainer / AnimatedVisibility / AnimatedContent / AnimatedSize / Crossfade / Window / **Popup / Dialog / DropdownMenu / DropdownMenuItem**
+Text / TextField / Button / Icon / IconButton / IconToggleButton / **Checkbox / TriStateCheckbox** / Column / Row / Stack / RichText / SelectionContainer / AnimatedVisibility / AnimatedContent / AnimatedSize / Crossfade / Window / **Popup / Dialog / DropdownMenu / DropdownMenuItem**
 
 ## 二、Modifier 差距（按优先级）——**已对照 Compose 1.11.4 源码核实**
 

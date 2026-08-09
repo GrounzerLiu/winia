@@ -59,4 +59,4 @@ pub use interaction::{MutableInteractionSource, ComponentState};
 pub use icon::{AxisValue, Icon, IconSource, PathFillType, Tint};
 pub use icon_button::{IconButton, IconButtonColors, IconButtonDefaults, IconButtonSize, IconButtonStyle};
 pub use icon_toggle_button::{IconToggleButton, IconToggleButtonColors, IconToggleButtonDefaults};
-pub use checkbox::{Checkbox, CheckboxColors, CheckboxDefaults};
+pub use checkbox::{Checkbox, CheckboxColors, CheckboxDefaults, TriStateCheckbox, ToggleableState};

@@ -1,11 +1,13 @@
-//! Checkbox 组件 — 对标 material3 `Checkbox`（Boolean 状态）
+//! Checkbox / TriStateCheckbox 组件 — 对标 material3 `Checkbox` / `TriStateCheckbox`
 //!
 //! M3 1.4.0 实现要点（对齐项）：
-//! - 视觉 20×20、圆角 2、勾选框；描边 2dp，checked 时边框色=容器色（合并）；
+//! - 视觉 20×20、圆角 2、描边 2dp；checked/indeterminate 时边框色=容器色（合并）；
 //! - 触摸目标/状态层 40×40（`CheckboxTokens.StateLayerSize`），波纹 unbounded；
-//! - 颜色只分 enabled×checked（M3 `CheckboxColors` 无 hover/focus/press 变体，
+//! - 颜色只分 enabled×state（M3 `CheckboxColors` 无 hover/focus/press 变体，
 //!   交互反馈由 ripple 承担）；
-//! - 勾号用填充 check 路径 + 缩放动画近似 M3 `checkDrawFraction` 过渡。
+//! - On=check 路径、Indeterminate=横线（M3 drawCheck 中段压平），用两个图标
+//!   各自缩放动画近似 `checkDrawFraction` + `crossCenterGravitation` 过渡；
+//! - `Checkbox` 内部委托 `TriStateCheckbox(state = ToggleableState(checked))`。
 
 use crate::core::composer::{ComposeCtx, GroupStatus};
 use crate::layout::BoxLayout;
@@ -25,9 +27,34 @@ pub const CHECKBOX_CORNER_RADIUS: f32 = 2.0;
 
 /// Material Icons “check”（24dp viewBox 填充路径）——勾号
 const CHECK_MARK_PATH: &str = "M9.55 18.2 3.55 12.2 5 10.75 9.55 15.3 19 5.85 20.45 7.3z";
+/// Indeterminate 横线（M3 drawCheck 中段：0.2w..0.8w、y=0.5h，2dp 高）
+const DASH_PATH: &str = "M4.8 11h14.4v2H4.8z";
+
+/// 三态（对标 foundation `ToggleableState`）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToggleableState {
+    Off,
+    On,
+    Indeterminate,
+}
+
+impl ToggleableState {
+    /// `ToggleableState(checked: Boolean)` 等价物
+    pub fn from_bool(checked: bool) -> Self {
+        if checked { Self::On } else { Self::Off }
+    }
+
+    pub fn is_checked(self) -> bool {
+        matches!(self, Self::On | Self::Indeterminate)
+    }
+
+    pub fn is_indeterminate(self) -> bool {
+        self == Self::Indeterminate
+    }
+}
 
 /// 勾选框颜色集（对标 material3 `CheckboxColors`）——box/border/checkmark
-/// 三组色 × enabled/disabled × checked/unchecked。
+/// 三组色 × enabled/disabled × Off/On/Indeterminate。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CheckboxColors {
     pub checked_checkmark: Color,
@@ -36,10 +63,12 @@ pub struct CheckboxColors {
     pub unchecked_box: Color,
     pub disabled_checked_box: Color,
     pub disabled_unchecked_box: Color,
+    pub disabled_indeterminate_box: Color,
     pub checked_border: Color,
     pub unchecked_border: Color,
     pub disabled_border: Color,
     pub disabled_unchecked_border: Color,
+    pub disabled_indeterminate_border: Color,
 }
 
 impl CheckboxColors {
@@ -51,10 +80,12 @@ impl CheckboxColors {
         unchecked_box: Color,
         disabled_checked_box: Color,
         disabled_unchecked_box: Color,
+        disabled_indeterminate_box: Color,
         checked_border: Color,
         unchecked_border: Color,
         disabled_border: Color,
         disabled_unchecked_border: Color,
+        disabled_indeterminate_border: Color,
     ) -> Self {
         Self {
             checked_checkmark,
@@ -63,10 +94,12 @@ impl CheckboxColors {
             unchecked_box,
             disabled_checked_box,
             disabled_unchecked_box,
+            disabled_indeterminate_box,
             checked_border,
             unchecked_border,
             disabled_border,
             disabled_unchecked_border,
+            disabled_indeterminate_border,
         }
     }
 
@@ -75,12 +108,9 @@ impl CheckboxColors {
     pub fn from_theme(theme: &ThemeColors) -> Self {
         let transparent = Color::from_argb(0, 0, 0, 0);
         let alpha = |c: Color, a: f32| Color::from_argb((c.a as f32 * a) as u8, c.r, c.g, c.b);
-        // Selected：容器/边框 Primary、勾号 OnPrimary
+        // Selected（On/Indeterminate）：容器/边框 Primary、勾号 OnPrimary
         // Unselected：容器透明、边框 OnSurfaceVariant、勾号透明
-        // Disabled Selected：OnSurface @ 0.38 + 勾号 OnPrimary
-        // （M3 CheckboxColors 无 disabled checkmark 字段，禁用勾号仍取
-        // checkedCheckmarkColor——与 1.4.0 实现一致）
-        // Disabled Unselected：容器透明、边框 OnSurface @ 0.38
+        // Disabled：容器与边框 OnSurface @ 0.38（含 indeterminate 专用字段）
         Self::new(
             theme.on_primary,
             transparent,
@@ -88,37 +118,48 @@ impl CheckboxColors {
             transparent,
             alpha(theme.on_surface, 0.38),
             transparent,
+            alpha(theme.on_surface, 0.38),
             theme.primary,
             theme.on_surface_variant,
+            alpha(theme.on_surface, 0.38),
             alpha(theme.on_surface, 0.38),
             alpha(theme.on_surface, 0.38),
         )
     }
 
-    pub fn box_color(&self, enabled: bool, checked: bool) -> Color {
+    pub fn box_color(&self, enabled: bool, state: ToggleableState) -> Color {
         if !enabled {
-            if checked { self.disabled_checked_box } else { self.disabled_unchecked_box }
-        } else if checked {
+            match state {
+                ToggleableState::On => self.disabled_checked_box,
+                ToggleableState::Off => self.disabled_unchecked_box,
+                ToggleableState::Indeterminate => self.disabled_indeterminate_box,
+            }
+        } else if state.is_checked() {
             self.checked_box
         } else {
             self.unchecked_box
         }
     }
 
-    pub fn border_color(&self, enabled: bool, checked: bool) -> Color {
+    pub fn border_color(&self, enabled: bool, state: ToggleableState) -> Color {
         if !enabled {
-            if checked { self.disabled_border } else { self.disabled_unchecked_border }
-        } else if checked {
+            match state {
+                ToggleableState::On => self.disabled_border,
+                ToggleableState::Off => self.disabled_unchecked_border,
+                ToggleableState::Indeterminate => self.disabled_indeterminate_border,
+            }
+        } else if state.is_checked() {
             self.checked_border
         } else {
             self.unchecked_border
         }
     }
 
-    pub fn checkmark_color(&self, enabled: bool, checked: bool) -> Color {
-        if !enabled {
-            if checked { self.checked_checkmark } else { self.unchecked_checkmark }
-        } else if checked {
+    /// M3 `checkmarkColor(state)`：只分 On/Indeterminate 与 Off，忽略 enabled
+    /// （`CheckboxColors` 无 disabled checkmark 字段，禁用勾号仍取
+    /// checkedCheckmarkColor——与 1.4.0 实现一致）
+    pub fn checkmark_color(&self, state: ToggleableState) -> Color {
+        if state.is_checked() {
             self.checked_checkmark
         } else {
             self.unchecked_checkmark
@@ -143,8 +184,202 @@ impl CheckboxDefaults {
     }
 }
 
+/// 共享实现（对标 M3 `CheckboxImpl`）——`Checkbox` 与 `TriStateCheckbox` 共用
+#[allow(clippy::too_many_arguments)]
+fn checkbox_impl(
+    ctx: &mut ComposeCtx,
+    state: ToggleableState,
+    on_click: Option<Arc<dyn Fn() + Send + Sync>>,
+    enabled: bool,
+    colors: Option<CheckboxColors>,
+    interaction_source: Option<MutableInteractionSource>,
+    modifier: Modifier,
+) {
+    ctx.changed(&state);
+    ctx.changed(&enabled);
+    ctx.changed(&colors);
+    let key = ctx.next_key();
+    let theme = WiniaTheme::colors();
+    let colors = colors.unwrap_or_else(|| CheckboxDefaults::checkbox_colors(&theme));
+    let interaction = interaction_source
+        .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
+    let box_color = colors.box_color(enabled, state);
+    let border_color = colors.border_color(enabled, state);
+    let check_color = colors.checkmark_color(state);
+
+    // On→check 缩放 1、Indeterminate→dash 缩放 1、Off→都 0（Spring 近似
+    // M3 checkDrawFraction + crossCenterGravitation 过渡）
+    let check_scale = ctx.animate_float_as_state(
+        if state == ToggleableState::On { 1.0 } else { 0.0 },
+        crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::default()),
+    );
+    let dash_scale = ctx.animate_float_as_state(
+        if state == ToggleableState::Indeterminate { 1.0 } else { 0.0 },
+        crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::default()),
+    );
+
+    let shape = CheckboxDefaults::shape();
+    let mut m = Modifier::new()
+        .size(CHECKBOX_TOUCH_TARGET, CHECKBOX_TOUCH_TARGET)
+        // 状态层形状 = Circle（焦点环跟随圆形；波纹 unbounded 不受 clip 影响）
+        .clip(Shape::Circle);
+    if enabled {
+        if let Some(on_click) = on_click {
+            m = m
+                .clickable_with_source(&interaction, move || on_click())
+                // M3：ripple(bounded = false, radius = StateLayerSize / 2)；
+                // 本框架 ripple 无 radius 参数，半径由节点尺寸隐式决定
+                .ripple(&interaction, theme.on_surface, false);
+        }
+    }
+    m = m.then(modifier);
+
+    match ctx.start_restartable_group(
+        key,
+        m,
+        BoxLayout::new().alignment(crate::layout::Alignment::Center),
+    ) {
+        GroupStatus::Skip => {}
+        GroupStatus::Enter => {
+            // 视觉 20×20 勾选框：checked/indeterminate 时边框色=容器色（合并为
+            // 纯填充），Off 时透明底 + 2dp 边框——对标 M3 drawBox 分支
+            let visual = Modifier::new()
+                .size(CHECKBOX_SIZE, CHECKBOX_SIZE)
+                .background(box_color, shape)
+                .border(CHECKBOX_STROKE_WIDTH, border_color, shape);
+            let vkey = ctx.next_key();
+            match ctx.start_restartable_group(
+                vkey,
+                visual,
+                BoxLayout::new().alignment(crate::layout::Alignment::Center),
+            ) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    // 勾号（On）
+                    let scale = check_scale.clone();
+                    crate::ui::icon::Icon::svg_path(CHECK_MARK_PATH)
+                        .size(CHECKBOX_SIZE)
+                        .tint(check_color)
+                        .modifier(Modifier::new().graphics_layer(move || GraphicsLayerParams {
+                            scale_x: scale.get(),
+                            scale_y: scale.get(),
+                            ..Default::default()
+                        }))
+                        .build(ctx);
+                    // 横线（Indeterminate）
+                    let scale = dash_scale.clone();
+                    crate::ui::icon::Icon::svg_path(DASH_PATH)
+                        .size(CHECKBOX_SIZE)
+                        .tint(check_color)
+                        .modifier(Modifier::new().graphics_layer(move || GraphicsLayerParams {
+                            scale_x: scale.get(),
+                            scale_y: scale.get(),
+                            ..Default::default()
+                        }))
+                        .build(ctx);
+                }
+            }
+            ctx.end_restartable_group();
+        }
+    }
+    ctx.set_current_node_focus_color(theme.primary);
+    ctx.end_restartable_group();
+}
+
+/// TriStateCheckbox 组件 Builder（对标 material3 `TriStateCheckbox(state,
+/// onClick, enabled, colors, interactionSource)`）
+pub struct TriStateCheckbox {
+    state: ToggleableState,
+    on_click: Option<Arc<dyn Fn() + Send + Sync>>,
+    enabled: bool,
+    colors: Option<CheckboxColors>,
+    interaction_source: Option<MutableInteractionSource>,
+    modifier: Modifier,
+}
+
+impl TriStateCheckbox {
+    pub fn new(state: ToggleableState) -> Self {
+        Self {
+            state,
+            on_click: None,
+            enabled: true,
+            colors: None,
+            interaction_source: None,
+            modifier: Modifier::new(),
+        }
+    }
+
+    pub fn state(mut self, state: ToggleableState) -> Self {
+        self.state = state;
+        self
+    }
+
+    pub fn on_click(mut self, f: impl Fn() + Send + Sync + 'static) -> Self {
+        self.on_click = Some(Arc::new(f));
+        self
+    }
+
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    pub fn colors(mut self, colors: CheckboxColors) -> Self {
+        self.colors = Some(colors);
+        self
+    }
+
+    /// 注入交互源（hoist——press/hover/focus 状态发射到此源）
+    pub fn interaction_source(mut self, source: MutableInteractionSource) -> Self {
+        self.interaction_source = Some(source);
+        self
+    }
+
+    pub fn modifier(mut self, modifier: Modifier) -> Self {
+        self.modifier = self.modifier.then(modifier);
+        self
+    }
+
+    fn on_click_opt(mut self, f: Option<Arc<dyn Fn() + Send + Sync>>) -> Self {
+        self.on_click = f;
+        self
+    }
+
+    fn colors_opt(mut self, colors: Option<CheckboxColors>) -> Self {
+        self.colors = colors;
+        self
+    }
+
+    fn interaction_source_opt(mut self, source: Option<MutableInteractionSource>) -> Self {
+        self.interaction_source = source;
+        self
+    }
+
+    pub fn build(self, ctx: &mut ComposeCtx) {
+        checkbox_impl(
+            ctx,
+            self.state,
+            self.on_click,
+            self.enabled,
+            self.colors,
+            self.interaction_source,
+            self.modifier,
+        );
+    }
+
+    pub fn get_state(&self) -> ToggleableState {
+        self.state
+    }
+    pub fn get_enabled(&self) -> bool {
+        self.enabled
+    }
+    pub fn get_colors(&self) -> Option<CheckboxColors> {
+        self.colors
+    }
+}
+
 /// Checkbox 组件 Builder（对标 material3 `Checkbox(checked, onCheckedChange,
-/// enabled, colors, interactionSource)`）
+/// enabled, colors, interactionSource)`——内部委托 `TriStateCheckbox`）
 pub struct Checkbox {
     checked: bool,
     on_checked_change: Option<Arc<dyn Fn(bool) + Send + Sync>>,
@@ -198,85 +433,19 @@ impl Checkbox {
     }
 
     pub fn build(self, ctx: &mut ComposeCtx) {
-        ctx.changed(&self.checked);
-        ctx.changed(&self.enabled);
-        ctx.changed(&self.colors);
-        let key = ctx.next_key();
-        let theme = WiniaTheme::colors();
-        let colors = self
-            .colors
-            .unwrap_or_else(|| CheckboxDefaults::checkbox_colors(&theme));
-        let interaction = self
-            .interaction_source
-            .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
+        // M3：Checkbox → TriStateCheckbox(state = ToggleableState(checked),
+        // onClick = { onCheckedChange(!checked) })
         let checked = self.checked;
-        let box_color = colors.box_color(self.enabled, checked);
-        let border_color = colors.border_color(self.enabled, checked);
-        let check_color = colors.checkmark_color(self.enabled, checked);
-
-        // 勾号动画：checked 缩放入场、unchecked 缩出（对标 M3 checkDrawFraction
-        // 过渡——Spring 近似 motion scheme）
-        let check_scale = ctx.animate_float_as_state(
-            if checked { 1.0 } else { 0.0 },
-            crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::default()),
-        );
-
-        let shape = CheckboxDefaults::shape();
-        let mut modifier = Modifier::new()
-            .size(CHECKBOX_TOUCH_TARGET, CHECKBOX_TOUCH_TARGET)
-            // 状态层形状 = Circle（焦点环跟随圆形；波纹 unbounded 不受 clip 影响）
-            .clip(Shape::Circle);
-        if self.enabled {
-            if let Some(on_checked_change) = &self.on_checked_change {
-                let cb = on_checked_change.clone();
-                modifier = modifier
-                    .clickable_with_source(&interaction, move || cb(!checked))
-                    // M3：ripple(bounded = false, radius = StateLayerSize / 2)；
-                    // 本框架 ripple 无 radius 参数，半径由节点尺寸隐式决定
-                    .ripple(&interaction, theme.on_surface, false);
-            }
-        }
-        modifier = modifier.then(self.modifier);
-
-        match ctx.start_restartable_group(
-            key,
-            modifier,
-            BoxLayout::new().alignment(crate::layout::Alignment::Center),
-        ) {
-            GroupStatus::Skip => {}
-            GroupStatus::Enter => {
-                // 视觉 20×20 勾选框：checked 时边框色=容器色（合并为纯填充），
-                // unchecked 时透明底 + 2dp 边框——对标 M3 drawBox 分支
-                let visual = Modifier::new()
-                    .size(CHECKBOX_SIZE, CHECKBOX_SIZE)
-                    .background(box_color, shape)
-                    .border(CHECKBOX_STROKE_WIDTH, border_color, shape);
-                let vkey = ctx.next_key();
-                match ctx.start_restartable_group(
-                    vkey,
-                    visual,
-                    BoxLayout::new().alignment(crate::layout::Alignment::Center),
-                ) {
-                    GroupStatus::Skip => {}
-                    GroupStatus::Enter => {
-                        // 勾号：graphicsLayer 缩放动画（unchecked scale=0 不渲染）
-                        let scale = check_scale.clone();
-                        crate::ui::icon::Icon::svg_path(CHECK_MARK_PATH)
-                            .size(CHECKBOX_SIZE)
-                            .tint(check_color)
-                            .modifier(Modifier::new().graphics_layer(move || GraphicsLayerParams {
-                                scale_x: scale.get(),
-                                scale_y: scale.get(),
-                                ..Default::default()
-                            }))
-                            .build(ctx);
-                    }
-                }
-                ctx.end_restartable_group();
-            }
-        }
-        ctx.set_current_node_focus_color(theme.primary);
-        ctx.end_restartable_group();
+        let on_click = self.on_checked_change.map(|cb| -> Arc<dyn Fn() + Send + Sync> {
+            Arc::new(move || cb(!checked))
+        });
+        TriStateCheckbox::new(ToggleableState::from_bool(checked))
+            .on_click_opt(on_click)
+            .enabled(self.enabled)
+            .colors_opt(self.colors)
+            .interaction_source_opt(self.interaction_source)
+            .modifier(self.modifier)
+            .build(ctx);
     }
 
     pub fn get_checked(&self) -> bool {
@@ -295,31 +464,55 @@ mod tests {
     use super::*;
 
     #[test]
-    fn color_state_resolution() {
-        let theme = ThemeColors::light_from_seed(0x6750A4);
-        let colors = CheckboxDefaults::checkbox_colors(&theme);
-        // checked：primary 容器/边框 + onPrimary 勾号
-        assert_eq!(colors.box_color(true, true), theme.primary);
-        assert_eq!(colors.border_color(true, true), theme.primary);
-        assert_eq!(colors.checkmark_color(true, true), theme.on_primary);
-        // unchecked：透明容器 + OnSurfaceVariant 边框 + 透明勾号
-        assert_eq!(colors.box_color(true, false).a, 0);
-        assert_eq!(colors.border_color(true, false), theme.on_surface_variant);
-        assert_eq!(colors.checkmark_color(true, false).a, 0);
-        // disabled 优先于 checked
-        assert_eq!(colors.box_color(false, true), colors.disabled_checked_box);
-        assert_eq!(colors.border_color(false, false), colors.disabled_unchecked_border);
-        // disabled 色值：OnSurface @ 38%（SelectedDisabledContainerOpacity）
-        assert_eq!(colors.disabled_checked_box.a, (theme.on_surface.a as f32 * 0.38) as u8);
-        assert_eq!(colors.disabled_unchecked_border.a, (theme.on_surface.a as f32 * 0.38) as u8);
-        // M3 CheckboxColors 无 disabled checkmark 字段：禁用勾号仍取
-        // checkedCheckmarkColor = OnPrimary（SelectedDisabledIconColor token
-        // 定义了但实现未使用——与 1.4.0 源码一致）
-        assert_eq!(colors.checkmark_color(false, true), theme.on_primary);
+    fn toggleable_state_conversion() {
+        assert_eq!(ToggleableState::from_bool(true), ToggleableState::On);
+        assert_eq!(ToggleableState::from_bool(false), ToggleableState::Off);
+        assert!(ToggleableState::On.is_checked());
+        assert!(ToggleableState::Indeterminate.is_checked());
+        assert!(!ToggleableState::Off.is_checked());
+        assert!(ToggleableState::Indeterminate.is_indeterminate());
     }
 
     #[test]
-    fn callback_receives_inverted_checked() {
+    fn color_state_resolution() {
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let colors = CheckboxDefaults::checkbox_colors(&theme);
+        // On：primary 容器/边框 + onPrimary 勾号
+        assert_eq!(colors.box_color(true, ToggleableState::On), theme.primary);
+        assert_eq!(colors.border_color(true, ToggleableState::On), theme.primary);
+        assert_eq!(colors.checkmark_color(ToggleableState::On), theme.on_primary);
+        // Indeterminate 与 On 共用 checked 色组
+        assert_eq!(colors.box_color(true, ToggleableState::Indeterminate), theme.primary);
+        assert_eq!(colors.border_color(true, ToggleableState::Indeterminate), theme.primary);
+        assert_eq!(colors.checkmark_color(ToggleableState::Indeterminate), theme.on_primary);
+        // Off：透明容器 + OnSurfaceVariant 边框 + 透明勾号
+        assert_eq!(colors.box_color(true, ToggleableState::Off).a, 0);
+        assert_eq!(colors.border_color(true, ToggleableState::Off), theme.on_surface_variant);
+        assert_eq!(colors.checkmark_color(ToggleableState::Off).a, 0);
+        // disabled 优先于状态
+        assert_eq!(colors.box_color(false, ToggleableState::On), colors.disabled_checked_box);
+        assert_eq!(
+            colors.border_color(false, ToggleableState::Indeterminate),
+            colors.disabled_indeterminate_border
+        );
+        assert_eq!(
+            colors.box_color(false, ToggleableState::Indeterminate),
+            colors.disabled_indeterminate_box
+        );
+        // disabled 色值：OnSurface @ 38%
+        assert_eq!(colors.disabled_checked_box.a, (theme.on_surface.a as f32 * 0.38) as u8);
+        assert_eq!(colors.disabled_unchecked_border.a, (theme.on_surface.a as f32 * 0.38) as u8);
+        assert_eq!(
+            colors.disabled_indeterminate_box.a,
+            (theme.on_surface.a as f32 * 0.38) as u8
+        );
+        // M3 CheckboxColors 无 disabled checkmark 字段：禁用勾号仍取
+        // checkedCheckmarkColor = OnPrimary（与 1.4.0 源码一致）
+        assert_eq!(colors.checkmark_color(ToggleableState::On), theme.on_primary);
+    }
+
+    #[test]
+    fn checkbox_callback_receives_inverted_checked() {
         use crate::modifier::ModifierElement;
         use std::sync::atomic::{AtomicBool, Ordering};
         for (checked, expect) in [(false, true), (true, false)] {
@@ -347,31 +540,61 @@ mod tests {
     }
 
     #[test]
-    fn disabled_checkbox_has_no_interaction_elements() {
+    fn tri_state_on_click_fires() {
         use crate::modifier::ModifierElement;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let clicks = Arc::new(AtomicUsize::new(0));
+        let c = clicks.clone();
         let mut composer = crate::core::composer::Composer::new();
         composer.compose(|ctx| {
-            Checkbox::new(false)
-                .enabled(false)
-                .on_checked_change(|_| {})
+            TriStateCheckbox::new(ToggleableState::Indeterminate)
+                .on_click(move || {
+                    c.fetch_add(1, Ordering::Relaxed);
+                })
                 .build(ctx);
         });
         composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let mut clicked = false;
         for node in composer.arena_nodes() {
             for el in node.modifier.elements() {
-                assert!(
-                    !matches!(el, ModifierElement::Ripple { .. })
-                        && !matches!(el, ModifierElement::Focusable { .. })
-                        && !matches!(el, ModifierElement::Clickable { .. }),
-                    "禁用 Checkbox 不应有交互元素: {el:?}"
-                );
+                if let ModifierElement::Clickable { on_click, .. } = el {
+                    on_click();
+                    clicked = true;
+                }
+            }
+        }
+        assert!(clicked, "存在 Clickable");
+        assert_eq!(clicks.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn disabled_checkbox_has_no_interaction_elements() {
+        use crate::modifier::ModifierElement;
+        for state in [ToggleableState::Off, ToggleableState::On, ToggleableState::Indeterminate] {
+            let mut composer = crate::core::composer::Composer::new();
+            composer.compose(|ctx| {
+                TriStateCheckbox::new(state)
+                    .enabled(false)
+                    .on_click(|| {})
+                    .build(ctx);
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 200.0));
+            for node in composer.arena_nodes() {
+                for el in node.modifier.elements() {
+                    assert!(
+                        !matches!(el, ModifierElement::Ripple { .. })
+                            && !matches!(el, ModifierElement::Focusable { .. })
+                            && !matches!(el, ModifierElement::Clickable { .. }),
+                        "禁用 Checkbox 不应有交互元素: {el:?}"
+                    );
+                }
             }
         }
     }
 
     #[test]
     fn checked_checkmark_icon_tint_resolves_to_on_primary() {
-        // 集成：checked 时勾号图标 tint = on_primary
+        // 集成：On 时勾号/横线图标 tint = on_primary
         let theme = ThemeColors::light_from_seed(0x6750A4);
         let mut composer = crate::core::composer::Composer::new();
         composer.compose(|ctx| {
@@ -380,24 +603,24 @@ mod tests {
             });
         });
         composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 200.0));
-        let mut tint = None;
+        let mut count = 0;
         for node in composer.arena_nodes() {
             for el in node.modifier.elements() {
                 if let crate::modifier::ModifierElement::DrawIcon { spec } = el {
-                    tint = spec.tint;
+                    assert_eq!(spec.tint, Some(theme.on_primary), "勾号 tint = OnPrimary");
+                    count += 1;
                 }
             }
         }
-        assert_eq!(tint, Some(theme.on_primary), "勾号 tint = OnPrimary");
+        assert_eq!(count, 2, "On 状态同时挂 check 与 dash 两个图标（动画节点）");
     }
 
     #[test]
     fn unchecked_has_transparent_checkmark_and_no_fill() {
-        // 结构断言：unchecked 时勾号透明、容器无填充色（M3 语义）
         let theme = ThemeColors::light_from_seed(0x6750A4);
         let colors = CheckboxColors::from_theme(&theme);
         assert_eq!(colors.unchecked_box.a, 0);
-        assert_eq!(colors.unchecked_checkmark.a, 0);
+        assert_eq!(colors.checkmark_color(ToggleableState::Off).a, 0);
         assert_eq!(colors.checked_box, theme.primary);
     }
 }

@@ -50,6 +50,67 @@ fn checkbox_demo(ctx: &mut ComposeCtx) {
             state_row(ctx, "已选中", true, true);
             state_row(ctx, "禁用未选中", false, false);
             state_row(ctx, "禁用已选中", true, false);
+            Row::new()
+                .modifier(Modifier::new().padding_vertical(3.0))
+                .build(ctx, |ctx| {
+                    Text::new("禁用不确定")
+                        .font_size(13.0)
+                        .modifier(Modifier::new().width(150.0).padding_top(10.0))
+                        .build(ctx);
+                    TriStateCheckbox::new(ToggleableState::Indeterminate)
+                        .enabled(false)
+                        .on_click(|| {})
+                        .build(ctx);
+                });
+
+            section_title(ctx, "TriState 父子联动");
+            let c1 = ctx.remember(|| true);
+            let c2 = ctx.remember(|| true);
+            let c3 = ctx.remember(|| false);
+            let all = c1.get() && c2.get() && c3.get();
+            let none = !c1.get() && !c2.get() && !c3.get();
+            let parent_state = if all {
+                ToggleableState::On
+            } else if none {
+                ToggleableState::Off
+            } else {
+                ToggleableState::Indeterminate
+            };
+            Row::new()
+                .modifier(Modifier::new().padding_vertical(3.0))
+                .build(ctx, |ctx| {
+                    Text::new("全选")
+                        .font_size(13.0)
+                        .modifier(Modifier::new().width(150.0).padding_top(10.0))
+                        .build(ctx);
+                    let (p1, p2, p3) = (c1.clone(), c2.clone(), c3.clone());
+                    TriStateCheckbox::new(parent_state)
+                        .on_click(move || {
+                            let target = !(p1.get() && p2.get() && p3.get());
+                            p1.update(|v| *v = target);
+                            p2.update(|v| *v = target);
+                            p3.update(|v| *v = target);
+                        })
+                        .build(ctx);
+                });
+            for (label, c) in [
+                ("子项 1", c1.clone()),
+                ("子项 2", c2.clone()),
+                ("子项 3", c3.clone()),
+            ] {
+                Row::new()
+                    .modifier(Modifier::new().padding_sides(20.0, 3.0, 0.0, 3.0))
+                    .build(ctx, |ctx| {
+                        Text::new(label)
+                            .font_size(13.0)
+                            .modifier(Modifier::new().width(130.0).padding_top(10.0))
+                            .build(ctx);
+                        let cc = c.clone();
+                        Checkbox::new(c.get())
+                            .on_checked_change(move |v| cc.update(|s| *s = v))
+                            .build(ctx);
+                    });
+            }
 
             section_title(ctx, "点击切换");
             Row::new()
