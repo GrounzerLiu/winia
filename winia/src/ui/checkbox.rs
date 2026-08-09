@@ -77,7 +77,9 @@ impl CheckboxColors {
         let alpha = |c: Color, a: f32| Color::from_argb((c.a as f32 * a) as u8, c.r, c.g, c.b);
         // Selected：容器/边框 Primary、勾号 OnPrimary
         // Unselected：容器透明、边框 OnSurfaceVariant、勾号透明
-        // Disabled Selected：OnSurface @ 0.38 + 勾号 Surface
+        // Disabled Selected：OnSurface @ 0.38 + 勾号 OnPrimary
+        // （M3 CheckboxColors 无 disabled checkmark 字段，禁用勾号仍取
+        // checkedCheckmarkColor——与 1.4.0 实现一致）
         // Disabled Unselected：容器透明、边框 OnSurface @ 0.38
         Self::new(
             theme.on_primary,
@@ -229,7 +231,8 @@ impl Checkbox {
                 let cb = on_checked_change.clone();
                 modifier = modifier
                     .clickable_with_source(&interaction, move || cb(!checked))
-                    // M3：ripple(bounded = false, radius = StateLayerSize / 2)
+                    // M3：ripple(bounded = false, radius = StateLayerSize / 2)；
+                    // 本框架 ripple 无 radius 参数，半径由节点尺寸隐式决定
                     .ripple(&interaction, theme.on_surface, false);
             }
         }
