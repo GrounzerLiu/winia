@@ -70,7 +70,7 @@ pub mod prelude {
     pub use crate::core::composer::ComposeCtx;
     pub use crate::core::state::{DerivedFloat, DerivedValue, State};
     pub use crate::modifier::{Dimension, Modifier, Shape, Color, FocusRequester, ScrollState, DecoStyle, DecoMode, FontEdge, FontHint, KbEvent, KbEventType, PointerEvent, PointerEventType, PointerButton, PointerKind, PenKind};
-    pub use crate::ui::{Text, TextAlign, TextOverflow, TextStyle, ProvideTextStyle, FontWeight, FontSlant, Button, ButtonBorder, ButtonColors, ButtonDefaults, ButtonElevation, ButtonSize, ButtonStyle, Icon, IconSource, Tint, PathFillType, AxisValue, IconButton, IconButtonColors, IconButtonDefaults, IconButtonSize, IconButtonStyle, IconToggleButton, IconToggleButtonColors, IconToggleButtonDefaults, Column, Row, Stack, Window, WiniaTheme, ThemeColors, SelectionContainer, TextField, TextFieldValue};
+    pub use crate::ui::{Text, TextAlign, TextOverflow, TextStyle, ProvideTextStyle, FontWeight, FontSlant, Button, ButtonBorder, ButtonColors, ButtonDefaults, ButtonElevation, ButtonSize, ButtonStyle, Icon, IconSource, Tint, PathFillType, AxisValue, IconButton, IconButtonColors, IconButtonDefaults, IconButtonSize, IconButtonStyle, IconToggleButton, IconToggleButtonColors, IconToggleButtonDefaults, Checkbox, CheckboxColors, CheckboxDefaults, Column, Row, Stack, Window, WiniaTheme, ThemeColors, SelectionContainer, TextField, TextFieldValue};
     pub use crate::ui::interaction::{MutableInteractionSource, ComponentState};
     pub use crate::ui::animated_visibility::{AnimatedVisibility, VisibilityTransition, SlideDirection};
     pub use crate::ui::animated_size::AnimatedSize;
