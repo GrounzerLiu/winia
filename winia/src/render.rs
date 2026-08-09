@@ -142,13 +142,15 @@ fn draw_elevation_shadow(
     use crate::modifier::{Color, ShadowParams};
     let strength = (elevation / 12.0).min(1.0);
     let color = Color::from_argb(255, 0, 0, 0);
-    let ambient = ShadowParams::new(elevation, 0.0, 0.0, color, 0.18 * strength);
+    // 强度曲线：低高度也需可感知的“浮起感”（rest 6 时可见柔和投影，
+    // hover 10 / press 12 逐级增强），系数 0.28/0.42 为实测可辨的最小档。
+    let ambient = ShadowParams::new(elevation, 0.0, 0.0, color, 0.28 * strength);
     let spot = ShadowParams::new(
         elevation * 0.25,
         0.0,
         elevation * 0.5,
         color,
-        0.30 * strength,
+        0.42 * strength,
     );
     draw_shadow_layer(canvas, rect, shape, &ambient);
     draw_shadow_layer(canvas, rect, shape, &spot);
@@ -1083,6 +1085,51 @@ mod tests {
         let mut rowf = [0.0f32; 16];
         mf.get_row_major(&mut rowf);
         assert!(rowf[13].abs() < rown[13].abs(), "相机距离大 → 透视项小");
+    }
+
+    #[test]
+    fn test_low_elevation_shadow_is_visible() {
+        // Elevated rest=6 阴影必须可感知（“平时有高度”），hover=10 明显更高——
+        // 矩形四周采样应比纯白背景明显更暗，防强度曲线被调回不可见。
+        use skia_safe::{Color, Paint, surfaces};
+        let measure = |elevation: f32| -> (i32, i32, i32) {
+            let mut surface = surfaces::raster_n32_premul((120, 120)).unwrap();
+            let canvas = surface.canvas();
+            canvas.clear(Color::WHITE);
+            let rect = skia_safe::Rect::from_xywh(20.0, 20.0, 80.0, 80.0);
+            let mut paint = Paint::default();
+            paint.set_color(Color::WHITE);
+            canvas.draw_rect(rect, &paint);
+            draw_elevation_shadow(
+                canvas,
+                rect,
+                &crate::modifier::Shape::Rectangle,
+                elevation,
+            );
+            let pm = surface.peek_pixels().expect("pixmap");
+            let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+            let at = |x: usize, y: usize| -> [u8; 4] { px[y * 120 + x] };
+            let bg = at(4, 4);
+            let dark = |p: [u8; 4]| -> i32 {
+                (bg[0] as i32 - p[0] as i32)
+                    + (bg[1] as i32 - p[1] as i32)
+                    + (bg[2] as i32 - p[2] as i32)
+            };
+            (
+                dark(at(60, 102)), // 下方 2px
+                dark(at(60, 18)),  // 上方 2px
+                dark(at(18, 60)),  // 左侧 2px
+            )
+        };
+        let (rest_below, rest_above, rest_left) = measure(6.0);
+        assert!(rest_below >= 60, "rest 下方阴影过弱: {rest_below}");
+        assert!(rest_above >= 20, "rest 上方阴影过弱: {rest_above}");
+        assert!(rest_left >= 20, "rest 左侧阴影过弱: {rest_left}");
+        let (hover_below, _, _) = measure(10.0);
+        assert!(
+            hover_below > rest_below,
+            "hover 阴影应高于 rest: rest={rest_below} hover={hover_below}"
+        );
     }
 
     fn render_rect_with_gl(gl: &GraphicsLayerParams) -> (usize, usize, bool) {

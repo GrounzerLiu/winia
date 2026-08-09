@@ -14,7 +14,7 @@ winia 没有为每种 M3 变体单独建 composable，而是用 `Button` builder
 | 构造 | 等价 material3 | 差异点 |
 |---|---|---|
 | `Button::filled()`（同 `new()`） | `Button` | 默认 Filled 样式 |
-| `Button::elevated()` | `ElevatedButton` | Filled 样式 + `ButtonElevation::elevated()` |
+| `Button::elevated()` | `ElevatedButton` | `ButtonStyle::Elevated`（SurfaceContainerLow 容器 + primary 内容）+ `ButtonElevation::elevated()` |
 | `Button::filled_tonal()` | `FilledTonalButton` | `ButtonStyle::Tonal` |
 | `Button::outlined()` | `OutlinedButton` | `ButtonStyle::Outlined`（透明底 + 1px outline 边框） |
 | `Button::text()` | `TextButton` | `ButtonStyle::Text`（透明底、紧凑内边距） |
@@ -41,7 +41,8 @@ winia 没有为每种 M3 变体单独建 composable，而是用 `Button` builder
 - `ButtonColors`：`container / content / disabled_container / disabled_content`。
 - `ButtonElevation`：`default / pressed / focused / hovered / disabled`。
   - `default_elevation()`：全 0（Filled 系）。
-  - `elevated()`：`2 / 10 / 6 / 8 / 0`（ElevatedButton 近似）。
+  - `elevated()`：`6 / 12 / 8 / 10 / 0`（ElevatedButton 近似——平时即可感知高度，
+    hover 更高）。
 - `ButtonBorder`：`width + color`（对标 `BorderStroke`）。
 - `ButtonDefaults`：
   - `shape()` = 胶囊（对标 `CornerFull`）；
@@ -91,14 +92,20 @@ shadow(graphics_layer) → 用户 modifier → clickable/ripple。
 
 - 容器/内容色只区分 enabled/disabled（M3 `ButtonColors` 语义）；
   hover/press/focus 的视觉反馈由 ripple 状态层绘制，不叠加在背景色上。
-- 禁用近似：容器/内容 50% alpha（M3 为 12%/38%，项目统一约定）。
-- Outlined 边框：enabled = `theme.outline`，disabled = outline 50% alpha
-  （M3：`BorderStroke(1.dp, outline)`，禁用 onSurface 12%）。
+- M3 token 配色（1.4.0）：Filled = Primary/OnPrimary；Elevated =
+  SurfaceContainerLow/Primary；Tonal = SecondaryContainer/OnSecondaryContainer；
+  Outlined = 透明/OnSurfaceVariant；Text = 透明/Primary（M3 实现如此，
+  token 标注待修正）。
+- 禁用：Filled/Elevated 容器 OnSurface@10%、Tonal 容器 OnSurface@12%、
+  Outlined/Text 容器透明；内容 OnSurface(Variant)@38%。
+- Outlined 边框：`OutlineVariant`（非 outline），disabled 为
+  OutlineVariant @ DisabledContainerOpacity(0.1)；
+  宽度随尺寸变体 1/1/1/2/3。
 
 ### 2.3 阴影（hover 升高动画）
 
 - 阴影值由 `graphics_layer.shadow_elevation` 动态闭包驱动，180ms tween 平滑过渡，
-  悬停 8 / 聚焦 6 / 按下 10 / rest 2（Elevated 系），移出后回落。
+  悬停 10 / 聚焦 8 / 按下 12 / rest 6（Elevated 系），移出后回落。
 - 阴影形状跟随 `Button::shape`；全 0 阴影（Filled 默认）不创建图层。
 - `graphics_layer` 只影响外观，不参与命中测试（语义已注释）。
 

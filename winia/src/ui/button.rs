@@ -22,6 +22,8 @@ use std::fmt;
 pub enum ButtonStyle {
     /// 实心填充按钮（主要操作）
     Filled,
+    /// 悬浮按钮（对标 `ElevatedButton`）——SurfaceContainerLow 容器 + primary 内容
+    Elevated,
     /// 轮廓按钮（次要操作）
     Outlined,
     /// 纯文本按钮（最低强调）
@@ -94,7 +96,7 @@ impl ButtonSize {
 
 /// 按钮颜色集（对标 material3 `ButtonColors`）——container/content 各含
 /// enabled/disabled 变体；`container_color(enabled)` / `content_color(enabled)`
-/// 按状态取色（禁用：默认 50% alpha 近似 Compose 12%/38% 变体）。
+/// 按状态取色（禁用：M3 token——容器 OnSurface@10/12%、内容 OnSurface(Variant)@38%）。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ButtonColors {
     pub container: crate::modifier::Color,
@@ -143,17 +145,33 @@ impl ButtonColors {
         use crate::modifier::Color;
         let (container, content) = match style {
             ButtonStyle::Filled => (theme.primary, theme.on_primary),
+            ButtonStyle::Elevated => (theme.surface_container_low, theme.primary),
             ButtonStyle::Tonal => (theme.secondary_container, theme.on_secondary_container),
-            ButtonStyle::Outlined => (Color::from_argb(0, 0, 0, 0), theme.primary),
+            ButtonStyle::Outlined => (Color::from_argb(0, 0, 0, 0), theme.on_surface_variant),
             ButtonStyle::Text => (Color::from_argb(0, 0, 0, 0), theme.primary),
         };
-        // 禁用变体：容器 50% alpha、内容 50% alpha（近似 Compose 12%/38%）
-        let disabled_container = Color::from_argb(
-            (container.a as f32 * 0.5) as u8, container.r, container.g, container.b,
-        );
-        let disabled_content = Color::from_argb(
-            (content.a as f32 * 0.5) as u8, content.r, content.g, content.b,
-        );
+        // M3 token：Filled/Elevated 禁用容器 OnSurface@10%、FilledTonal 12%、
+        // Outlined/Text 容器透明；禁用内容 OnSurface(Variant)@38%
+        let transparent = Color::from_argb(0, 0, 0, 0);
+        let alpha = |c: Color, a: f32| Color::from_argb((c.a as f32 * a) as u8, c.r, c.g, c.b);
+        let (disabled_container, disabled_content) = match style {
+            ButtonStyle::Filled | ButtonStyle::Elevated => (
+                alpha(theme.on_surface, 0.10),
+                alpha(theme.on_surface_variant, 0.38),
+            ),
+            ButtonStyle::Tonal => (
+                alpha(theme.on_surface, 0.12),
+                alpha(theme.on_surface, 0.38),
+            ),
+            ButtonStyle::Outlined => (
+                transparent,
+                alpha(theme.on_surface_variant, 0.38),
+            ),
+            ButtonStyle::Text => (
+                transparent,
+                alpha(theme.on_surface_variant, 0.38),
+            ),
+        };
         Self::new(container, content, disabled_container, disabled_content)
     }
 }
@@ -180,10 +198,10 @@ impl ButtonElevation {
         Self::new(0.0, 0.0, 0.0, 0.0, 0.0)
     }
 
-    /// ElevatedButton 近似（rest 2 / pressed 10 / focused 6 / hovered 8 / disabled 0——
-    /// hover 明显高于 rest，悬停即可见阴影升高；变化经动画平滑过渡）
+    /// ElevatedButton 近似（rest 6 / pressed 12 / focused 8 / hovered 10 / disabled 0——
+    /// 平时即有可感知高度，hover 明显更高，悬停即可见阴影升高；变化经动画平滑过渡）
     pub fn elevated() -> Self {
-        Self::new(2.0, 10.0, 6.0, 8.0, 0.0)
+        Self::new(6.0, 12.0, 8.0, 10.0, 0.0)
     }
 
     /// 按状态取 elevation（优先级 disabled > pressed > dragged > hovered > focused > default——
@@ -230,15 +248,16 @@ impl ButtonBorder {
         Self { width, color }
     }
 
-    /// OutlinedButton 默认边框（对标 material3：1dp + `ColorScheme.outline`；
-    /// disabled 用 outline 的 50% alpha——与项目禁用色近似约定一致）
+    /// OutlinedButton 默认边框（对标 material3：1dp + `OutlineVariant`；
+    /// disabled 为 OutlineVariant @ DisabledContainerOpacity(0.1)）
     fn outlined(theme: &crate::ui::theme::ThemeColors, enabled: bool) -> Self {
-        let c = theme.outline;
+        // OutlinedButtonTokens.OutlineColor = OutlineVariant
+        let c = theme.outline_variant;
         let color = if enabled {
             c
         } else {
             crate::modifier::Color::from_argb(
-                (c.a as f32 * 0.5) as u8,
+                (c.a as f32 * 0.10) as u8,
                 c.r,
                 c.g,
                 c.b,
@@ -412,9 +431,12 @@ impl Button {
         Self::new()
     }
 
-    /// 悬浮按钮（对标 material3 `ElevatedButton`）——Filled 样式 + 默认阴影
+    /// 悬浮按钮（对标 material3 `ElevatedButton`）——Elevated 样式（
+    /// SurfaceContainerLow 容器 + primary 内容）+ 默认阴影
     pub fn elevated() -> Self {
-        Self::new().elevation(ButtonElevation::elevated())
+        Self::new()
+            .style(ButtonStyle::Elevated)
+            .elevation(ButtonElevation::elevated())
     }
 
     /// 柔和按钮（对标 material3 `FilledTonalButton`）——SecondaryContainer 色
@@ -580,12 +602,14 @@ impl Button {
         // Text 补透明 clip(shape)：无 Background/Border 时焦点环/波纹
         // 形状推断会回退矩形，clip 让焦点环正确跟随胶囊（对标 Surface shape）
         modifier = match self.style {
-            ButtonStyle::Filled | ButtonStyle::Tonal => modifier.background(container, shape),
+            ButtonStyle::Filled | ButtonStyle::Elevated | ButtonStyle::Tonal => {
+                modifier.background(container, shape)
+            }
             ButtonStyle::Outlined => modifier,
             ButtonStyle::Text => modifier.clip(shape),
         };
         // 边框：显式 border 优先，否则 Outlined 默认 1px outline 色
-        // （对标 material3 OutlinedButton = Button(border = BorderStroke(1.dp, outline))）
+        // （对标 material3 OutlinedButton = Button(border = BorderStroke(1.dp, OutlineVariant))）
         let border = self.border.or_else(|| {
             if self.style == ButtonStyle::Outlined {
                 Some(ButtonBorder::outlined(&theme, self.enabled)).map(|mut b| {
@@ -742,14 +766,47 @@ mod tests {
 
     #[test]
     fn test_outlined_border_uses_theme_outline() {
-        // 对标 M3：OutlinedButton 边框 = ColorScheme.outline（非 primary 内容色）
+        // 对标 M3：OutlinedButton 边框 = OutlineVariant（非 outline/primary）
         let theme = crate::ui::theme::ThemeColors::light_from_seed(0x6750A4);
         let enabled = ButtonBorder::outlined(&theme, true);
         assert_eq!(enabled.width, 1.0);
-        assert_eq!(enabled.color, theme.outline, "启用态边框 = outline");
+        assert_eq!(enabled.color, theme.outline_variant, "启用态边框 = OutlineVariant");
         assert_ne!(enabled.color, theme.primary, "不能误用内容色 primary");
         let disabled = ButtonBorder::outlined(&theme, false);
-        assert_eq!(disabled.color.a, (theme.outline.a as f32 * 0.5) as u8, "禁用态 = outline 50% alpha");
+        assert_eq!(
+            disabled.color.a,
+            (theme.outline_variant.a as f32 * 0.10) as u8,
+            "禁用态 = OutlineVariant @ DisabledContainerOpacity(0.1)"
+        );
+    }
+
+    #[test]
+    fn button_default_colors_match_m3_tokens() {
+        let theme = crate::ui::theme::ThemeColors::light_from_seed(0x6750A4);
+        let alpha = |c: crate::modifier::Color, a: f32| {
+            crate::modifier::Color::from_argb((c.a as f32 * a) as u8, c.r, c.g, c.b)
+        };
+        let f = ButtonColors::from_theme(&theme, ButtonStyle::Filled);
+        assert_eq!(f.container, theme.primary);
+        assert_eq!(f.content, theme.on_primary);
+        assert_eq!(f.disabled_container, alpha(theme.on_surface, 0.10));
+        assert_eq!(f.disabled_content, alpha(theme.on_surface_variant, 0.38));
+        let e = ButtonColors::from_theme(&theme, ButtonStyle::Elevated);
+        assert_eq!(e.container, theme.surface_container_low, "Elevated = SurfaceContainerLow");
+        assert_eq!(e.content, theme.primary);
+        let t = ButtonColors::from_theme(&theme, ButtonStyle::Tonal);
+        assert_eq!(t.container, theme.secondary_container);
+        assert_eq!(t.content, theme.on_secondary_container);
+        assert_eq!(t.disabled_container, alpha(theme.on_surface, 0.12), "Tonal 禁用容器 12%");
+        assert_eq!(t.disabled_content, alpha(theme.on_surface, 0.38));
+        let o = ButtonColors::from_theme(&theme, ButtonStyle::Outlined);
+        assert_eq!(o.container.a, 0, "Outlined 容器透明");
+        assert_eq!(o.content, theme.on_surface_variant, "Outlined 内容 = OnSurfaceVariant");
+        assert_eq!(o.disabled_container.a, 0);
+        assert_eq!(o.disabled_content, alpha(theme.on_surface_variant, 0.38));
+        let tx = ButtonColors::from_theme(&theme, ButtonStyle::Text);
+        assert_eq!(tx.content, theme.primary, "Text 内容 = Primary（M3 实现）");
+        assert_eq!(tx.disabled_content, alpha(theme.on_surface_variant, 0.38));
     }
 
     #[test]
@@ -788,7 +845,7 @@ mod tests {
     fn test_button_variant_constructors() {
         // 对标 material3 各变体独立 composable 的默认参数差异
         assert_eq!(Button::filled().get_style(), ButtonStyle::Filled);
-        assert_eq!(Button::elevated().get_style(), ButtonStyle::Filled);
+        assert_eq!(Button::elevated().get_style(), ButtonStyle::Elevated);
         assert_eq!(Button::elevated().get_elevation(), Some(ButtonElevation::elevated()));
         assert_eq!(Button::filled_tonal().get_style(), ButtonStyle::Tonal);
         assert_eq!(Button::outlined().get_style(), ButtonStyle::Outlined);
