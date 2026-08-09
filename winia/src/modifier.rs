@@ -430,7 +430,7 @@ pub(crate) enum ModifierElement {
     /// 径向渐变圆，释放后淡出；渲染期按时间计算，无额外动画状态。
     /// `shape = Some` 时波纹裁剪到该形状（Button 传入容器 shape——
     /// Outlined/Text 无背景元素时也能正确裁剪）；None 则从 Background/Border 推断。
-    Ripple { source: MutableInteractionSource, color: Color, bounded: bool, shape: Option<Shape> },
+    Ripple { source: MutableInteractionSource, color: Color, bounded: bool, shape: Option<Shape>, radius: Option<f32> },
     /// 图标绘制（Icon 组件内部使用）——source/tint/autoMirror/可变轴
     DrawIcon { spec: crate::ui::icon::IconSpec },
     /// 焦点请求器 ID（与 FocusRequester 关联）
@@ -989,6 +989,7 @@ impl Modifier {
             color,
             bounded,
             shape: None,
+            radius: None,
         })
     }
 
@@ -1007,6 +1008,26 @@ impl Modifier {
             color,
             bounded,
             shape: Some(shape),
+            radius: None,
+        })
+    }
+
+    /// 水波纹指示——固定最大半径（对标 M3 `ripple(bounded = false,
+    /// radius = 20.dp)` 等显式半径用法；默认按节点对角线扩散时不需要）。
+    /// 半径仍按 progress 缩放：`绘制半径 = radius × progress`。
+    pub fn ripple_with_radius(
+        self,
+        source: &MutableInteractionSource,
+        color: Color,
+        bounded: bool,
+        radius: f32,
+    ) -> Self {
+        self.push(ModifierElement::Ripple {
+            source: source.clone(),
+            color,
+            bounded,
+            shape: None,
+            radius: Some(radius),
         })
     }
 
@@ -2161,8 +2182,8 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (DragOnCancel { .. }, DragOnCancel { .. }) => true,
         (Focusable { interaction: ai }, Focusable { interaction: bi }) => ai == bi,
         (Hoverable { interaction: ai }, Hoverable { interaction: bi }) => ai == bi,
-        (Ripple { source: as_, color: ac, bounded: abc, shape: ash }, Ripple { source: bs, color: bc, bounded: bbc, shape: bsh }) => {
-            as_ == bs && ac == bc && abc == bbc && ash == bsh
+        (Ripple { source: as_, color: ac, bounded: abc, shape: ash, radius: ar }, Ripple { source: bs, color: bc, bounded: bbc, shape: bsh, radius: br }) => {
+            as_ == bs && ac == bc && abc == bbc && ash == bsh && ar == br
         }
         (DrawIcon { spec: a }, DrawIcon { spec: b }) => a == b,
         (FocusRequesterId { id: ai }, FocusRequesterId { id: bi }) => ai == bi,

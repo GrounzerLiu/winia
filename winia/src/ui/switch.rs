@@ -37,6 +37,8 @@ pub const SWITCH_THUMB_PADDING: f32 = 4.0;
 pub const SWITCH_THUMB_MAX_OFFSET: f32 = 24.0;
 /// 拇指内容图标尺寸（`SwitchDefaults.IconSize`）
 pub const SWITCH_ICON_SIZE: f32 = 16.0;
+/// 波纹最大半径（M3 `ripple(bounded = false, radius = StateLayerSize/2)`）
+pub const SWITCH_RIPPLE_RADIUS: f32 = 20.0;
 
 /// Switch 颜色集（对标 material3 `SwitchColors`）——enabled/disabled ×
 /// checked/unchecked 的 thumb/track/border/icon 四组色。
@@ -261,6 +263,15 @@ impl Switch {
         let thumb_color = colors.thumb_color(self.enabled, checked);
         let icon_color = colors.icon_color(self.enabled, checked);
 
+        // 拇指/轨道颜色过渡（180ms EaseOutCubic——切换时颜色跟随滑动渐变，
+        // 而不是生硬跳变；M3 1.4.0 实现为静态取色，此为观感增强）
+        let color_spec = crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
+            std::time::Duration::from_millis(180),
+            crate::animation::interpolator::EaseOutCubic::new(),
+        ));
+        let track_color_anim = ctx.animate_color_as_state(track_color, color_spec.clone());
+        let thumb_color_anim = ctx.animate_color_as_state(thumb_color, color_spec);
+
         // 拇指尺寸/偏移动画（M3 ThumbNode：pressed=28 且偏移内收 2）
         let thumb_size = ctx.animate_float_as_state(
             if state.pressed {
@@ -285,11 +296,12 @@ impl Switch {
             crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::default()),
         );
 
-        // 轨道（toggleable 在此，indication=null——波纹在拇指上）
+        // 轨道：toggleable + 波纹都挂在这里（按压坐标是 clickable 本地坐标，
+        // 波纹锚定按压点、固定半径 20——M3 视觉）
         let track_shape = SwitchDefaults::shape();
         let mut modifier = Modifier::new()
             .size(SWITCH_TRACK_WIDTH, SWITCH_TRACK_HEIGHT)
-            .background(track_color, track_shape)
+            .background(move || track_color_anim.peek(), track_shape)
             .border(
                 SWITCH_TRACK_OUTLINE_WIDTH,
                 border_color,
@@ -299,7 +311,15 @@ impl Switch {
             if let Some(on_checked_change) = &self.on_checked_change {
                 let cb = on_checked_change.clone();
                 modifier = modifier
-                    .clickable_with_source(&interaction, move || cb(!checked));
+                    .clickable_with_source(&interaction, move || cb(!checked))
+                    // M3：ripple(bounded = false, radius = 20) 锚定按压点——
+                    // 波纹必须与 clickable 同节点（按压坐标是其本地坐标）
+                    .ripple_with_radius(
+                        &interaction,
+                        theme.on_surface,
+                        false,
+                        SWITCH_RIPPLE_RADIUS,
+                    );
             }
         }
         modifier = modifier.then(self.modifier);
@@ -318,17 +338,13 @@ impl Switch {
                 let s2 = thumb_size.clone();
                 let s3 = thumb_size.clone();
                 let o1 = thumb_offset.clone();
-                let mut thumb = Modifier::new()
+                let thumb = Modifier::new()
                     .size(move || s1.get(), move || s2.get())
                     .offset(
                         move || o1.get(),
                         move || (SWITCH_TRACK_HEIGHT - s3.get()) / 2.0,
                     )
-                    .background(thumb_color, Shape::Circle);
-                if self.enabled {
-                    // M3：ripple(bounded = false, radius = StateLayerSize / 2)
-                    thumb = thumb.ripple(&interaction, theme.on_surface, false);
-                }
+                    .background(move || thumb_color_anim.peek(), Shape::Circle);
                 let tkey = ctx.next_key();
                 match ctx.start_restartable_group(
                     tkey,
@@ -442,6 +458,29 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn ripple_anchored_on_track_with_fixed_radius() {
+        // 波纹必须与 clickable 同节点（轨道），且固定半径 20（M3）
+        use crate::modifier::ModifierElement;
+        let mut composer = crate::core::composer::Composer::new();
+        composer.compose(|ctx| {
+            Switch::new(false)
+                .on_checked_change(|_| {})
+                .build(ctx, |_| {});
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let mut found = false;
+        for node in composer.arena_nodes() {
+            for el in node.modifier.elements() {
+                if let ModifierElement::Ripple { radius, .. } = el {
+                    assert_eq!(*radius, Some(SWITCH_RIPPLE_RADIUS), "固定半径 20");
+                    found = true;
+                }
+            }
+        }
+        assert!(found, "启用的 Switch 轨道应带固定半径波纹");
     }
 
     #[test]

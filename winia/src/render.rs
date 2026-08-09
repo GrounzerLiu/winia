@@ -721,7 +721,7 @@ fn render_pass1(
 /// - hover/focus 状态层透明度动画值；每层扩散/淡出由动画系统驱动
 fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f32) {
     for el in node.modifier.elements() {
-        let ModifierElement::Ripple { source, color, bounded, shape } = el else { continue };
+        let ModifierElement::Ripple { source, color, bounded, shape, radius } = el else { continue };
 
         let diagonal = (w * w + h * h).sqrt();
         let rect = Rect::new(x, y, x + w, y + h);
@@ -794,8 +794,11 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
         for layer in source.ripple_layers() {
             let progress = layer.progress.get();
             let opacity = layer.opacity.get();
-            let radius = diagonal * progress;
-            if radius <= 0.0 || opacity <= 0.0 {
+            // 显式 radius（如 M3 Switch ripple=20dp）按 progress 缩放；
+            // 否则默认按节点对角线扩散
+            let max_radius = radius.unwrap_or(diagonal);
+            let r = max_radius * progress;
+            if r <= 0.0 || opacity <= 0.0 {
                 continue;
             }
             let mut paint = skia_safe::Paint::default();
@@ -808,7 +811,7 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
             ));
             canvas.draw_circle(
                 skia_safe::Point::new(x + layer.center.0, y + layer.center.1),
-                radius,
+                r,
                 &paint,
             );
         }

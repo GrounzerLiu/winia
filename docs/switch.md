@@ -27,7 +27,7 @@ Switch::new(checked: bool)                        // 对标 Switch(checked, ...)
 | 拇指 | 圆形：checked=24 / unchecked=16 / pressed=28 |
 | 拇指偏移 | unchecked=4、checked=24；pressed 时内收 2（22 / 2） |
 | 拇指内容图标 | 16×16（`SwitchDefaults.IconSize`） |
-| 波纹 | 拇指上 unbounded（radius = StateLayerSize/2 = 20）；轨道 toggleable 无 indication |
+| 波纹 | 轨道上 unbounded、锚定按压点、固定 radius 20（M3 ripple(bounded=false, radius=20)） |
 | 焦点环 | Secondary（`SwitchTokens.FocusIndicatorColor`，与其它组件 Primary 不同） |
 
 ### 颜色（`SwitchColors::from_theme`）
@@ -44,15 +44,18 @@ disabled 按 token alpha（38%/38%）叠 Surface。
 
 ## 3. 实现细节
 
-- 组合结构：轨道节点（52×32，`background`+`border`+`clickable_with_source`）
-  → 拇指节点（动态 `size` + 动态 `offset` + Circle 背景 + unbounded ripple）。
+- 组合结构：轨道节点（52×32，`background`+`border`+`clickable_with_source`+
+  `ripple_with_radius`——波纹必须与 clickable 同节点，按压坐标即其本地坐标）
+  → 拇指节点（动态 `size` + 动态 `offset` + Circle 背景）。
 - 拇指动画：`animate_float_as_state` 驱动尺寸（16/24/28）与水平偏移（4/22/24），
   Spring 近似 M3 `ThumbNode` 的 FastSpatial（pressed 的 Snap 统一用 Spring）；
   y 偏移 = (轨道高 - 拇指尺寸)/2 跟随尺寸动画，实现“左对齐 + 垂直居中”。
+- 颜色过渡：拇指/轨道颜色经 `animate_color_as_state`（180ms EaseOutCubic）
+  + 动态 background 闭包（`peek()` 渲染期求值）渐变——观感增强项
+  （M3 1.4.0 `SwitchImpl` 为静态取色）。
 - 禁用：不注册 clickable/ripple/focusable，取 disabled 色组。
 
 ## 4. 未实现 / 后续
 
 - 拖拽滑动切换（M3 TODO 同样未做，b/223797571）。
-- 轨道/拇指颜色过渡动画（M3 `SwitchImpl` 本身静态取色，暂无差距）。
 - 焦点环 Secondary 形状跟随轨道 Pill（已有）。
