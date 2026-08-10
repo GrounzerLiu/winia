@@ -275,26 +275,26 @@ fn render_modifier_element<'a>(
     rect: Rect,
     x: f32, y: f32, w: f32, h: f32,
     direction: LayoutDirection,
-    last_background: &mut Option<crate::modifier::Color>,
+    last_background: &mut Option<(crate::modifier::Color, crate::modifier::Shape)>,
 ) -> Option<TextParams<'a>> {
     match el {
         ModifierElement::Background { color_fn, shape } => {
             let color = (color_fn)();
-            *last_background = Some(color);
+            *last_background = Some((color, shape.clone()));
             draw_background(canvas, rect, &color, shape);
             None
         }
         ModifierElement::Border { width, color, shape } => {
-            // 边框色 = 容器色时合并为纯填充（M3 drawBox 语义）：半透明色
-            // 在填充上再叠一层 stroke 会双重混合，边框带明显深于内部
-            if *last_background != Some(*color) {
+            // 边框色与形状均等于容器时合并为纯填充（M3 drawBox 语义）：
+            // 半透明色在填充上再叠一层 stroke 会双重混合，边框带明显深于内部
+            if *last_background != Some((*color, shape.clone())) {
                 draw_border(canvas, x, y, w, h, *width, color, shape);
             }
             None
         }
         ModifierElement::BorderDynamic { width, color_fn, shape } => {
             let color = (color_fn)();
-            if *last_background != Some(color) {
+            if *last_background != Some((color, shape.clone())) {
                 draw_border(canvas, x, y, w, h, *width, &color, shape);
             }
             None
@@ -501,8 +501,9 @@ fn render_pass1(
         }
     }
 
-    // 同节点链序中最后绘制的背景色——边框色等于它时跳过（合并为纯填充）
-    let mut last_background: Option<crate::modifier::Color> = None;
+    // 同节点链序中最后绘制的背景（颜色+形状）——边框色与形状都等于它时
+    // 跳过描边（合并为纯填充），避免半透明同色双重混合
+    let mut last_background: Option<(crate::modifier::Color, crate::modifier::Shape)> = None;
     for el in node.modifier.elements() {
         match el {
             ModifierElement::Blur { radius } if !backdrop_pass => {

@@ -160,7 +160,9 @@ impl CheckboxColors {
 
     /// M3 `checkmarkColor(state)`：只分 On/Indeterminate 与 Off，忽略 enabled
     /// （`CheckboxColors` 无 disabled checkmark 字段，禁用勾号仍取
-    /// checkedCheckmarkColor——与 1.4.0 实现一致）
+    /// checkedCheckmarkColor——与 1.4.0 实现一致）。
+    /// 注：生产组合路径用 `checked_checkmark` 常量（Off 由 scale=0 隐藏，
+    /// 保证取消选中退出动画可见），本方法保留供 API 对齐与测试引用。
     pub fn checkmark_color(&self, state: ToggleableState) -> Color {
         if state.is_checked() {
             self.checked_checkmark
@@ -215,15 +217,19 @@ fn checkbox_impl(
 
     // 动画规格：Compose/M3 默认级 Spring（StiffnessMedium=400、NoBouncy）。
     // 注意 winia 的 SpringSpec::default() 是 StiffnessLow(200)——比 M3 基准
-    // 软一档，过渡尾巴偏长（“动画有点慢”）。
+    // 软一档，过渡尾巴偏长（“动画有点慢”）。仅浮点动画生效。
     let check_spec = crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec {
         stiffness: crate::animation::SpringSpec::STIFFNESS_MEDIUM,
         ..crate::animation::SpringSpec::default()
     });
     // 容器/边框颜色过渡（M3 animateColorAsState）：选中/取消选中都从当前
-    // 颜色动画到目标色，而不是瞬间跳变。
-    let box_color_anim = ctx.animate_color_as_state(box_color, check_spec.clone());
-    let border_color_anim = ctx.animate_color_as_state(border_color, check_spec.clone());
+    // 颜色动画到目标色，而不是瞬间跳变。push_animatable_color 会把 Spring
+    // 降级为 TweenSpec::default()（300ms Linear），这里显式传 Tween 避免
+    // 规格/注释误导。
+    let color_spec =
+        crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::default());
+    let box_color_anim = ctx.animate_color_as_state(box_color, color_spec.clone());
+    let border_color_anim = ctx.animate_color_as_state(border_color, color_spec);
 
     // On→check 缩放 1、Indeterminate→dash 缩放 1、Off→都 0（Spring 近似
     // M3 checkDrawFraction + crossCenterGravitation 过渡）
@@ -763,6 +769,8 @@ mod tests {
             }
         }
         assert!(found, "应有 40×40 触摸目标");
+        // 当前场景是单层布局，node.position 即全局像素坐标（与 switch 像素
+        // 测试同一约定）；若测试引入嵌套节点需改为递归累计偏移。
         let at = |x: f32, y: f32| {
             let p = px[(y as usize) * 300 + (x as usize)];
             (p[0] as i32, p[1] as i32, p[2] as i32)

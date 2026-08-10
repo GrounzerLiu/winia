@@ -68,13 +68,16 @@ TriStateCheckbox::new(state: ToggleableState)    // 对标 TriStateCheckbox(stat
 - 组合结构：外层 40×40 节点（clip Circle 供焦点环推断形状）→
   `clickable_with_source` + unbounded ripple → 内层 20×20 视觉盒
   （`background` + `border`，checked 时边框色=容器色合并为纯填充）。
-- 容器/边框颜色：`animate_color_as_state` Spring 过渡（对标 M3
-  `animateColorAsState`），Off/On/Indeterminate 切换时渐变而非跳变；
+- 容器/边框颜色：`animate_color_as_state` Tween 300ms Linear 过渡（对标 M3
+  `animateColorAsState`；`push_animatable_color` 会把 Spring 降级为
+  `TweenSpec::default()`），Off/On/Indeterminate 切换时渐变而非跳变；
   渲染期 `peek()` 读取动画值不触发重组。
 - 边框色 = 容器色时渲染层跳过描边（合并为纯填充）——半透明色若再叠
   stroke 会双重混合，边框带明显深于内部（禁用已选中态可见）。
-- 动画规格统一为 Spring `StiffnessMedium(400)`/NoBouncy（Compose/M3 默认
-  级）；winia `SpringSpec::default()` 是 `StiffnessLow(200)`，过渡尾巴偏长。
+- 动画规格：勾号/横线缩放为 Spring `StiffnessMedium(400)`/NoBouncy
+  （Compose/M3 默认级；winia `SpringSpec::default()` 是 `StiffnessLow(200)`，
+  过渡尾巴偏长）；颜色动画为 Tween 300ms Linear（`push_animatable_color`
+  内部将 Spring 降级）。
 - 勾号：Material Icons “check” 填充路径（20×20），外层 `graphics_layer`
   缩放动画（checked=1 / unchecked=0，Spring 近似 M3 `checkDrawFraction`
   过渡）。勾号 tint 固定为选中色（OnPrimary），未选中静止态由 scale=0
