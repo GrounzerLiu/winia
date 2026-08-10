@@ -349,7 +349,7 @@ fn draw_icon(canvas: &Canvas, rect: Rect, direction: LayoutDirection, spec: &Ico
                         );
                     }
                     DecodedIcon::Svg { dom, width, height } => {
-                        draw_svg_dom(canvas, dom, *width, *height, rect, spec.tint);
+                        draw_svg_dom(canvas, dom, *width, *height, rect, spec.tint, 1.0);
                     }
                 }
             }
@@ -382,9 +382,64 @@ fn skia_color(c: crate::modifier::Color) -> skia_safe::Color {
     skia_safe::Color::from_argb(c.a, c.r, c.g, c.b)
 }
 
+/// Image 组件绘制：ContentScale 缩放 + 对齐 + alpha（内容区域 rect）。
+/// 位图：缩放矩形（含 Crop 裁剪）+ 线性采样；SVG：简化 Fit+Center（差距注释见 ui/image.rs）。
+fn draw_image_content(
+    canvas: &Canvas,
+    rect: Rect,
+    source: &crate::ui::icon::IconSource,
+    content_scale: crate::ui::image::ContentScale,
+    alignment: crate::ui::image::ImageAlignment,
+    alpha: f32,
+    direction: crate::layout::LayoutDirection,
+) {
+    let Some(decoded) = crate::ui::icon::decoded_icon(source) else { return };
+    match decoded.as_ref() {
+        crate::ui::icon::DecodedIcon::Bitmap { image, width, height } => {
+            let dst = crate::ui::image::content_scale_rect(
+                content_scale,
+                rect,
+                *width,
+                *height,
+                alignment,
+                direction == crate::layout::LayoutDirection::Rtl,
+            );
+            if dst.width() <= 0.0 || dst.height() <= 0.0 {
+                return;
+            }
+            // 对齐 Compose Image 的 clipToBounds：内容超出 bounds（Crop/FillWidth/
+            // FillHeight 等比放大）时裁剪到 bounds；Fit/Inside 不超出则零开销
+            let clipped = dst.left < rect.left || dst.top < rect.top
+                || dst.right > rect.right || dst.bottom > rect.bottom;
+            if clipped {
+                canvas.save();
+                canvas.clip_rect(rect, None, Some(false));
+            }
+            let src = Rect::new(0.0, 0.0, *width, *height);
+            let mut paint = Paint::default();
+            paint.set_anti_alias(true);
+            paint.set_alpha_f(alpha.clamp(0.0, 1.0));
+            canvas.draw_image_rect_with_sampling_options(
+                image,
+                Some((&src, skia_safe::canvas::SrcRectConstraint::Strict)),
+                &dst,
+                SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear),
+                &paint,
+            );
+            if clipped {
+                canvas.restore();
+            }
+        }
+        crate::ui::icon::DecodedIcon::Svg { dom, width, height } => {
+            // 简化：Fit + Center（draw_svg_dom 内部 fit；content_scale/alignment
+            // 对 SVG 暂不生效——差距见 ui/image.rs 注释）；alpha 生效
+            draw_svg_dom(canvas, dom, *width, *height, rect, None, alpha);
+        }
+    }
+}
+
 /// 等比缩放居中（ContentScale.Fit 语义）
-fn fit_rect(rect: Rect, iw: f32, ih: f32) -> Rect {
-    if iw <= 0.0 || ih <= 0.0 {
+fn fit_rect(rect: Rect, iw: f32, ih: f32) -> Rect {    if iw <= 0.0 || ih <= 0.0 {
         return rect;
     }
     let scale = (rect.width() / iw).min(rect.height() / ih);
@@ -405,21 +460,28 @@ fn draw_svg_dom(
     vh: f32,
     rect: Rect,
     tint: Option<crate::modifier::Color>,
+    alpha: f32,
 ) {
     let dst = fit_rect(rect, vw, vh);
     if dst.width() <= 0.0 || dst.height() <= 0.0 {
         return;
     }
     // 直接画布渲染（与字体路径一致）：容器尺寸设为目标尺寸后 render。
-    // tint 用 saveLayer 颜色滤镜（SrcIn）在图层合成时统一染色。
+    // tint 用 saveLayer 颜色滤镜（SrcIn）+ alpha 在图层合成时统一应用。
     canvas.save();
     canvas.translate((dst.left, dst.top));
-    let layer = if let Some(tint) = tint {
-        skia_safe::color_filters::blend(skia_color(tint), BlendMode::SrcIn).map(|filter| {
-            let mut paint = Paint::default();
-            paint.set_color_filter(filter);
-            canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default().paint(&paint));
-        })
+    let need_layer = tint.is_some() || alpha < 1.0;
+    let layer = if need_layer {
+        let mut paint = Paint::default();
+        if let Some(tint) = tint {
+            if let Some(filter) = skia_safe::color_filters::blend(skia_color(tint), BlendMode::SrcIn) {
+                paint.set_color_filter(filter);
+            }
+        }
+        if alpha < 1.0 {
+            paint.set_alpha_f(alpha.clamp(0.0, 1.0));
+        }
+        Some(canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default().paint(&paint)))
     } else {
         None
     };
@@ -535,6 +597,18 @@ fn render_pass1(
             // 图标绘制于内容区域（padding 内缩——叶子 padding 渲染偏移）
             ModifierElement::DrawIcon { spec } => {
                 draw_icon(canvas, Rect::new(content_x, content_y, content_x + content_w, content_y + content_h), node.layout_direction, spec);
+            }
+            // 图片（Image 组件）：ContentScale + 对齐 + alpha，绘制于内容区域
+            ModifierElement::ImageContent { source, content_scale, alignment, alpha } => {
+                draw_image_content(
+                    canvas,
+                    Rect::new(content_x, content_y, content_x + content_w, content_y + content_h),
+                    source,
+                    *content_scale,
+                    *alignment,
+                    *alpha,
+                    node.layout_direction,
+                );
             }
             el => {
                 if let Some(tp) = render_modifier_element(

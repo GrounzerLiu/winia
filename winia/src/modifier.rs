@@ -434,6 +434,14 @@ pub(crate) enum ModifierElement {
     Ripple { source: MutableInteractionSource, color: Color, bounded: bool, shape: Option<Shape> },
     /// 图标绘制（Icon 组件内部使用）——source/tint/autoMirror/可变轴
     DrawIcon { spec: crate::ui::icon::IconSpec },
+    /// 图片内容（Image 组件——位图/SVG，ContentScale + 对齐 + alpha；
+    /// 与 DrawIcon 的区别：不染色、按 ContentScale 缩放、对齐可控）
+    ImageContent {
+        source: crate::ui::icon::IconSource,
+        content_scale: crate::ui::image::ContentScale,
+        alignment: crate::ui::image::ImageAlignment,
+        alpha: f32,
+    },
     /// 焦点请求器 ID（与 FocusRequester 关联）
     FocusRequesterId { id: u64 },
     /// 键盘事件
@@ -1029,6 +1037,27 @@ impl Modifier {
     /// 绘制图标（Icon 组件内部使用）——tint/autoMirror/可变轴在渲染期求值
     pub fn draw_icon(self, spec: crate::ui::icon::IconSpec) -> Self {
         self.push(ModifierElement::DrawIcon { spec })
+    }
+
+    /// 图片内容元素（Image 组件用——绘制按 ContentScale/对齐/alpha）
+    pub fn image_content(
+        self,
+        source: crate::ui::icon::IconSource,
+        content_scale: crate::ui::image::ContentScale,
+        alignment: crate::ui::image::ImageAlignment,
+        alpha: f32,
+    ) -> Self {
+        self.push(ModifierElement::ImageContent { source, content_scale, alignment, alpha })
+    }
+
+    /// 图片固有尺寸（位图像素尺寸 / SVG viewBox）——测量期调用
+    pub(crate) fn image_intrinsic_size(&self) -> Option<(f32, f32)> {
+        for el in &self.elements {
+            if let ModifierElement::ImageContent { source, .. } = el {
+                return source.intrinsic_size();
+            }
+        }
+        None
     }
 
     /// 关联 FocusRequester（不消耗所有权）
@@ -1664,6 +1693,12 @@ impl Debug for ModifierElement {
                 .field("bounded", bounded)
                 .finish(),
             Self::DrawIcon { .. } => f.write_str("DrawIcon"),
+            Self::ImageContent { content_scale, alignment, alpha, .. } => f
+                .debug_struct("ImageContent")
+                .field("scale", content_scale)
+                .field("align", alignment)
+                .field("alpha", alpha)
+                .finish(),
             Self::KbEvent { on_key, on_pre_key } => f.debug_struct("KbEvent").field("on_key", &on_key.is_some()).field("on_pre_key", &on_pre_key.is_some()).finish(),
             Self::PointerEvent { on_ptr, on_pre_ptr } => f.debug_struct("PointerEvent").field("on_ptr", &on_ptr.is_some()).field("on_pre_ptr", &on_pre_ptr.is_some()).finish(),
             Self::FocusRequesterId { id } => f.debug_tuple("FocusRequesterId").field(id).finish(),
@@ -2202,6 +2237,10 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
             as_ == bs && ac == bc && abc == bbc && ash == bsh
         }
         (DrawIcon { spec: a }, DrawIcon { spec: b }) => a == b,
+        (ImageContent { source: a, content_scale: as_, alignment: aa, alpha: aal },
+         ImageContent { source: b, content_scale: bs, alignment: ba, alpha: bal }) => {
+            a == b && as_ == bs && aa == ba && aal == bal
+        }
         (FocusRequesterId { id: ai }, FocusRequesterId { id: bi }) => ai == bi,
         (KbEvent { .. }, KbEvent { .. }) => true,
         (PointerEvent { .. }, PointerEvent { .. }) => true,

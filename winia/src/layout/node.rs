@@ -115,6 +115,11 @@ pub(crate) fn modifier_has_richtext(modifier: &Modifier) -> bool {
     modifier.elements().iter().any(|el| matches!(el, ModifierElement::RichTextContent { .. }))
 }
 
+/// 检查 modifier 中是否包含 ImageContent（Image 组件）
+pub(crate) fn modifier_has_image(modifier: &Modifier) -> bool {
+    modifier.elements().iter().any(|el| matches!(el, ModifierElement::ImageContent { .. }))
+}
+
 // ── LayoutNode ──
 
 /// 布局树中的一个节点。
@@ -135,6 +140,8 @@ pub struct LayoutNode {
     pub(crate) has_text_content: bool,
     /// 叶子节点是否包含 RichTextContent
     pub(crate) has_richtext_content: bool,
+    /// 叶子节点是否包含 ImageContent（Image 组件）
+    pub(crate) has_image_content: bool,
     /// 是否获得焦点
     pub focused: bool,
     /// 节点从布局树移除时调用（用于 Window 生命周期管理）
@@ -256,6 +263,7 @@ impl LayoutNode {
             id: NEXT_NODE_ID.fetch_add(1, Ordering::Relaxed),
             has_text_content: modifier_has_text(&modifier),
             has_richtext_content: modifier_has_richtext(&modifier),
+            has_image_content: modifier_has_image(&modifier),
             modifier,
             measured_size: Size::ZERO,
             position: Point::ZERO,
@@ -308,6 +316,7 @@ impl Default for LayoutNode {
             modifier: Modifier::new(),
             measured_size: Size::ZERO,
             position: Point::ZERO,
+            has_image_content: false,
             children: Vec::new(),
             measure_policy: None,
             has_text_content: false,
@@ -1324,6 +1333,13 @@ pub(crate) fn measure_node(
             Size::new(
                 inner_constraints.constrain_width(text_size.width),
                 inner_constraints.constrain_height(text_size.height),
+            )
+        } else if nodes[idx].has_image_content {
+            // Image 叶子：固有尺寸（位图像素 / SVG viewBox），约束钳制
+            let (iw, ih) = nodes[idx].modifier.image_intrinsic_size().unwrap_or((0.0, 0.0));
+            Size::new(
+                inner_constraints.constrain_width(iw),
+                inner_constraints.constrain_height(ih),
             )
         } else {
             // 普通叶子节点

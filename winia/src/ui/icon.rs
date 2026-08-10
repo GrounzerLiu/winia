@@ -195,7 +195,8 @@ impl IconSource {
         !matches!(self, IconSource::File(_))
     }
 
-    /// 固有尺寸（无则回退 24×24）：SVG 文档/文件解析 viewBox，位图取像素尺寸
+    /// 固有尺寸：SvgPath/Symbol 默认 24×24；SVG 文档解析 viewBox、位图取
+    /// 像素尺寸（解析失败返回 None——调用方（如 Image 组件测量）按 0 处理）
     pub(crate) fn intrinsic_size(&self) -> Option<(f32, f32)> {
         match self {
             IconSource::SvgPath { .. } => Some((24.0, 24.0)),
