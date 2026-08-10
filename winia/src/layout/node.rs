@@ -894,6 +894,25 @@ mod tests {
     }
 
     #[test]
+    fn test_leaf_image_svg_without_viewbox_fallback() {
+        // 无 viewBox/width 的 SVG：测量回退 24×24（与解码回退一致——
+        // 否则 Image 测量 0 尺寸空白而 Icon 正常显示的不一致）
+        let m = Modifier::new().image_content(
+            crate::ui::icon::IconSource::svg(
+                "<svg xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M0 0h24v24H0z\"/></svg>",
+            ),
+            crate::ui::image::ContentScale::Fit,
+            crate::ui::image::ImageAlignment::Center,
+            1.0,
+            None,
+            crate::modifier::FilterQuality::Low,
+        );
+        let mut nodes = vec![LayoutNode::leaf(m)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::UNBOUNDED);
+        assert_eq!(size, Size::new(24.0, 24.0));
+    }
+
+    #[test]
     fn test_measure_node_rtl_padding() {
         // RTL + padding_start(10)：start 在右——子内容靠右 10（左侧空隙 0）
         use crate::layout::row::RowLayout;

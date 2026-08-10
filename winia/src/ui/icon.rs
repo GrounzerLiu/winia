@@ -195,12 +195,13 @@ impl IconSource {
         !matches!(self, IconSource::File(_))
     }
 
-    /// 固有尺寸：SvgPath/Symbol 默认 24×24；SVG 文档解析 viewBox、位图取
-    /// 像素尺寸（解析失败返回 None——调用方（如 Image 组件测量）按 0 处理）
+    /// 固有尺寸：SvgPath/Symbol 默认 24×24；SVG 文档解析 viewBox（失败回退
+    /// 24×24——与 `decode_svg_str` 回退一致，避免 Image 测量 0 尺寸空白而
+    /// Icon 正常显示的不一致）；位图取像素尺寸（解码失败 None——调用方按 0 处理）
     pub(crate) fn intrinsic_size(&self) -> Option<(f32, f32)> {
         match self {
             IconSource::SvgPath { .. } => Some((24.0, 24.0)),
-            IconSource::Svg(data) => parse_view_box(data),
+            IconSource::Svg(data) => parse_view_box(data).or(Some((24.0, 24.0))),
             IconSource::File(path) => file_intrinsic_size(path),
             #[cfg(any(
                 feature = "material-symbols-outlined",
@@ -368,6 +369,10 @@ fn decode_file(path: &str) -> Option<DecodedIcon> {
     }
     if matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp" | "bmp") {
         let image = skia_safe::Image::from_encoded(skia_safe::Data::new_copy(&data))?;
+        // 预生成 mipmap 链：FilterQuality::Medium/High 的 MipmapMode 需要
+        //（Skia 对无 mipmap 的 image 会退化为普通线性过滤）；Low 不受影响。
+        // 解码缓存保证只生成一次，不随绘制重复计算。
+        let image = image.with_default_mipmaps().unwrap_or(image);
         let (w, h) = (image.width() as f32, image.height() as f32);
         return Some(DecodedIcon::Bitmap { image, width: w, height: h });
     }

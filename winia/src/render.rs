@@ -522,7 +522,8 @@ fn draw_image_content(
 }
 
 /// 等比缩放居中（ContentScale.Fit 语义）
-fn fit_rect(rect: Rect, iw: f32, ih: f32) -> Rect {    if iw <= 0.0 || ih <= 0.0 {
+fn fit_rect(rect: Rect, iw: f32, ih: f32) -> Rect {
+    if iw <= 0.0 || ih <= 0.0 {
         return rect;
     }
     let scale = (rect.width() / iw).min(rect.height() / ih);
