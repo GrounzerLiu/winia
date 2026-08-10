@@ -41,8 +41,12 @@ winia 没有为每种 M3 变体单独建 composable，而是用 `Button` builder
 - `ButtonColors`：`container / content / disabled_container / disabled_content`。
 - `ButtonElevation`：`default / pressed / focused / hovered / disabled`。
   - `default_elevation()`：全 0（Filled 系）。
-  - `elevated()`：`1 / 1 / 1 / 3 / 0`（对齐 M3 1.4.0 `ElevatedButtonTokens`：
-    rest/focus/press = Level1、hover = Level2、disabled = Level0）。
+  - `elevated()`：`1 / 4 / 1 / 3 / 0`（基础对齐 M3 1.4.0 `ElevatedButtonTokens`：
+    rest/focus = Level1、hover = Level2、disabled = Level0；**pressed 有意偏离 M3 的
+    Level1 回落**——M3"按下压下去"隐喻依赖 hover，触屏无 hover，按下不升高则
+    Elevated 按钮在触屏上无阴影反馈。本框架语义：按下升高（1<3<4）、释放降低，
+    鼠标与触屏一致）。
+  - 按下分支取 `max(pressed, hovered)`：自定义配置 press < hover 时按下也不回落。
 - `ButtonBorder`：`width + color`（对标 `BorderStroke`）。
 - `ButtonDefaults`：
   - `shape()` = 胶囊（对标 `CornerFull`）；
@@ -105,7 +109,8 @@ shadow(graphics_layer) → 用户 modifier → clickable/ripple。
 ### 2.3 阴影（hover 升高动画）
 
 - 阴影值由 `graphics_layer.shadow_elevation` 动态闭包驱动，180ms tween 平滑过渡，
-  悬停 3 / 聚焦 1 / 按下 1 / rest 1（Elevated 系，对齐 M3 token），移出后回落。
+  悬停 3 / 聚焦 1 / 按下 4 / rest 1（Elevated 系——按下最高，触屏无 hover 也能有
+  按下反馈；pressed 偏离 M3 token 的理由见 §1.3），移出后回落。
 - 阴影形状跟随 `Button::shape`；全 0 阴影（Filled 默认）不创建图层。
 - `graphics_layer` 只影响外观，不参与命中测试（语义已注释）。
 
