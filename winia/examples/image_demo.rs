@@ -5,12 +5,23 @@
 //! - 固定尺寸 + ContentScale：Fit / Crop / Inside / None / FillWidth / FillHeight
 //! - 对齐：TopStart / Center / BottomEnd
 //! - alpha 透明度
+//! - colorFilter：Tint 染色 / Matrix 灰度（对标 Compose ColorFilter）
+//! - filterQuality：None 最近邻 vs Low 双线性放大
+//! - SVG 来源完整缩放（与位图统一 content_scale_rect）
 //! - SVG 文件来源（复用 IconSource 解码）
 
 use winia::prelude::*;
 
 const SAMPLE_PNG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/assets/sample.png");
 const HOME_SVG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/assets/home.svg");
+
+/// 灰度颜色矩阵（亮度加权——`ColorMatrix.setToSaturation(0f)` 等效）
+const GRAY_MATRIX: [f32; 20] = [
+    0.2126, 0.7152, 0.0722, 0.0, 0.0,
+    0.2126, 0.7152, 0.0722, 0.0, 0.0,
+    0.2126, 0.7152, 0.0722, 0.0, 0.0,
+    0.0, 0.0, 0.0, 1.0, 0.0,
+];
 
 #[composable]
 fn section_title(ctx: &mut ComposeCtx, text: &str) {
@@ -79,6 +90,53 @@ fn image_demo(ctx: &mut ComposeCtx) {
                     Image::file(SAMPLE_PNG).modifier(Modifier::new().size(64.0, 64.0)).alpha(1.0).build(ctx);
                     Image::file(SAMPLE_PNG).modifier(Modifier::new().size(64.0, 64.0)).alpha(0.6).build(ctx);
                     Image::file(SAMPLE_PNG).modifier(Modifier::new().size(64.0, 64.0)).alpha(0.3).build(ctx);
+                });
+
+            // ── colorFilter ──
+            section_title(ctx, "colorFilter（Tint 染色 / Matrix 灰度）");
+            Row::new()
+                .modifier(Modifier::new().padding_vertical(3.0))
+                .spacing(8.0)
+                .build(ctx, |ctx| {
+                    Image::file(SAMPLE_PNG).modifier(Modifier::new().size(64.0, 64.0)).build(ctx);
+                    Image::file(SAMPLE_PNG)
+                        .modifier(Modifier::new().size(64.0, 64.0))
+                        .color_filter(ColorFilter::Tint {
+                            color: Color::from_argb(255, 220, 60, 60),
+                            blend_mode: BlendMode::SrcIn,
+                        })
+                        .build(ctx);
+                    Image::file(SAMPLE_PNG)
+                        .modifier(Modifier::new().size(64.0, 64.0))
+                        .color_filter(ColorFilter::Matrix(GRAY_MATRIX))
+                        .build(ctx);
+                });
+
+            // ── filterQuality ──
+            section_title(ctx, "filterQuality（None 最近邻 / Low 双线性放大）");
+            Row::new()
+                .modifier(Modifier::new().padding_vertical(3.0))
+                .spacing(8.0)
+                .build(ctx, |ctx| {
+                    Image::file(SAMPLE_PNG)
+                        .modifier(Modifier::new().size(128.0, 128.0))
+                        .filter_quality(FilterQuality::None)
+                        .build(ctx);
+                    Image::file(SAMPLE_PNG)
+                        .modifier(Modifier::new().size(128.0, 128.0))
+                        .filter_quality(FilterQuality::Low)
+                        .build(ctx);
+                });
+
+            // ── SVG 完整缩放（与位图统一）──
+            section_title(ctx, "SVG 缩放（Fit / Crop / FillWidth）");
+            Row::new()
+                .modifier(Modifier::new().padding_vertical(3.0))
+                .spacing(8.0)
+                .build(ctx, |ctx| {
+                    Image::file(HOME_SVG).modifier(Modifier::new().size(64.0, 64.0)).content_scale(ContentScale::Fit).build(ctx);
+                    Image::file(HOME_SVG).modifier(Modifier::new().size(64.0, 64.0)).content_scale(ContentScale::Crop).build(ctx);
+                    Image::file(HOME_SVG).modifier(Modifier::new().size(64.0, 64.0)).content_scale(ContentScale::FillWidth).build(ctx);
                 });
 
             // ── SVG 文件来源 ──

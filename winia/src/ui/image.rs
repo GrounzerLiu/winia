@@ -7,12 +7,10 @@
 //!
 //! 差距（对标 Compose foundation Image）：
 //! - `contentDescription`：winia 无 semantics 树（全框架缺口），参数保留预留；
-//! - `colorFilter` / `filterQuality`：未实现（线性采样固定，无染色）；
-//! - SVG 来源暂按 Fit + Center 绘制（`draw_svg_dom` 内部 fit），
-//!   content_scale/alignment 仅对位图完整生效。
+//! - SVG 来源与位图统一走 `content_scale_rect`（完整缩放/对齐/RTL + clipToBounds）。
 
 use crate::core::composer::ComposeCtx;
-use crate::modifier::{Modifier, ModifierElement};
+use crate::modifier::{ColorFilter, FilterQuality, Modifier, ModifierElement};
 use crate::ui::icon::IconSource;
 use skia_safe::Rect;
 
@@ -130,6 +128,8 @@ pub struct Image {
     alignment: ImageAlignment,
     content_scale: ContentScale,
     alpha: f32,
+    color_filter: Option<ColorFilter>,
+    filter_quality: FilterQuality,
     /// a11y 描述（winia 无 semantics 树——预留；不影响渲染）
     content_description: Option<String>,
 }
@@ -143,6 +143,8 @@ impl Image {
             alignment: ImageAlignment::Center,
             content_scale: ContentScale::Fit,
             alpha: 1.0,
+            color_filter: None,
+            filter_quality: FilterQuality::Low,
             content_description: None,
         }
     }
@@ -181,6 +183,19 @@ impl Image {
         self
     }
 
+    /// 颜色滤镜（默认无——对标 Compose `colorFilter`：Tint 染色/
+    /// Matrix 矩阵/Lighting 光照）
+    pub fn color_filter(mut self, filter: ColorFilter) -> Self {
+        self.color_filter = Some(filter);
+        self
+    }
+
+    /// 位图采样质量（默认 Low 双线性——对标 Compose `filterQuality`）
+    pub fn filter_quality(mut self, quality: FilterQuality) -> Self {
+        self.filter_quality = quality;
+        self
+    }
+
     /// a11y 描述（winia 无 semantics 树——预留参数，不影响渲染）
     pub fn content_description(mut self, desc: impl Into<String>) -> Self {
         self.content_description = Some(desc.into());
@@ -189,13 +204,18 @@ impl Image {
 
     /// 构建图片节点（叶子——布局按固有尺寸，绘制经 ImageContent modifier）
     pub fn build(self, ctx: &mut ComposeCtx) {
-        // 参数暂存（source 变化 → 重测；content_scale/alignment/alpha 仅影响
-        // 绘制——渲染每帧全量执行，无需声明 changed）
+        // 参数暂存（source 变化 → 重测；content_scale/alignment/alpha/color_filter/
+        // filter_quality 仅影响绘制——渲染每帧全量执行，无需声明 changed）
         ctx.changed(&self.source);
         let key = ctx.next_key();
-        let modifier = self
-            .modifier
-            .image_content(self.source, self.content_scale, self.alignment, self.alpha);
+        let modifier = self.modifier.image_content(
+            self.source,
+            self.content_scale,
+            self.alignment,
+            self.alpha,
+            self.color_filter,
+            self.filter_quality,
+        );
         ctx.start_leaf(key, modifier);
         ctx.end_node();
     }
@@ -205,6 +225,8 @@ impl Image {
     pub fn get_content_scale(&self) -> ContentScale { self.content_scale }
     pub fn get_alignment(&self) -> ImageAlignment { self.alignment }
     pub fn get_alpha(&self) -> f32 { self.alpha }
+    pub fn get_color_filter(&self) -> Option<&ColorFilter> { self.color_filter.as_ref() }
+    pub fn get_filter_quality(&self) -> FilterQuality { self.filter_quality }
     pub fn get_modifier(&self) -> &Modifier { &self.modifier }
 }
 
@@ -283,8 +305,30 @@ mod tests {
         assert_eq!(img.get_content_scale(), ContentScale::Fit);
         assert_eq!(img.get_alignment(), ImageAlignment::Center);
         assert_eq!(img.get_alpha(), 1.0);
+        assert_eq!(img.get_color_filter(), None, "默认无滤镜");
+        assert_eq!(img.get_filter_quality(), FilterQuality::Low, "默认双线性");
         assert!(matches!(img.get_source(), IconSource::File(_)));
         let img2 = Image::svg("<svg viewBox=\"0 0 24 24\"/>");
         assert!(matches!(img2.get_source(), IconSource::Svg(_)));
+    }
+
+    #[test]
+    fn test_image_builder_color_filter_and_quality() {
+        use crate::modifier::{BlendMode, Color};
+        let img = Image::file("a.png")
+            .color_filter(ColorFilter::Tint { color: Color::RED, blend_mode: BlendMode::SrcIn })
+            .filter_quality(FilterQuality::High);
+        assert!(matches!(img.get_color_filter(), Some(ColorFilter::Tint { color: c, blend_mode: b }) if *c == Color::RED && *b == BlendMode::SrcIn));
+        assert_eq!(img.get_filter_quality(), FilterQuality::High);
+
+        let gray = ColorFilter::Matrix([
+            0.2126, 0.7152, 0.0722, 0.0, 0.0,
+            0.2126, 0.7152, 0.0722, 0.0, 0.0,
+            0.2126, 0.7152, 0.0722, 0.0, 0.0,
+            0.0, 0.0, 0.0, 1.0, 0.0,
+        ]);
+        let img2 = Image::file("a.png").color_filter(gray.clone());
+        assert_eq!(img2.get_color_filter(), Some(&gray));
+        assert_ne!(img.get_color_filter(), Some(&gray), "Tint 与 Matrix 是不同滤镜");
     }
 }

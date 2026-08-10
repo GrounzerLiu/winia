@@ -47,30 +47,37 @@
 
 ### 2.2 渲染
 
-- 位图：`content_scale_rect`（缩放 + 对齐，单一事实来源）→ 线性采样
-  （`draw_image_rect_with_sampling_options`，三线性防锯齿/摩尔纹）→ alpha。
+- 位图/SVG 统一走 `content_scale_rect`（缩放 + 对齐，单一事实来源）→
+  采样质量（`filterQuality`）→ alpha → colorFilter。
 - **clipToBounds**：内容超出 bounds（Crop/FillWidth/FillHeight 等比放大）
-  时按几何判断裁剪（Fit/Inside 不超出则零开销）——对齐 Compose `clipToBounds()`。
-- SVG：简化 Fit + Center（`draw_svg_dom` 内部 fit；content_scale/alignment
-  暂不生效）；alpha 生效（saveLayer）。
+  时按几何判断裁剪（Fit/Inside 不超出则零开销）——对齐 Compose `clipToBounds()`；
+  位图与 SVG 一致。
+- **colorFilter**：Tint（`color_filters::blend`，BlendMode 全 29 值）/ Matrix
+  （`matrix_row_major`，clamp 关闭——对齐 Compose colorMatrix）/ Lighting
+  （`color_filters::lighting`）。位图直接挂 paint；SVG 经 saveLayer 颜色滤镜
+  （与 alpha 合并图层）。
+- **filterQuality**：None（最近邻）/ Low（双线性，默认）/ Medium（+最近
+  mipmap）/ High（三线性）→ `SamplingOptions`。
 - 绘制于内容区域（padding 内缩——与其他叶子内容一致）。
 
 ### 2.3 增量重组
 
 - `ctx.changed(&self.source)`：source 变化 → 重测；content_scale/alignment/
-  alpha 仅影响绘制（渲染每帧全量执行），不声明 changed。
-- `ImageContent` 参与 `param_eq`（四字段全比较）与 Debug。
+  alpha/color_filter/filter_quality 仅影响绘制（渲染每帧全量执行），不声明
+  changed。
+- `ImageContent` 参与 `param_eq`（六字段全比较）与 Debug。
 
 ## 3. 与 Compose foundation Image 的差距
 
-- **`colorFilter`**：未实现（Compose 支持染色）。
-- **`filterQuality`**：未实现（固定线性采样，Compose 默认 Low 可配置）。
-- **SVG 来源的 content_scale/alignment**：暂按 Fit + Center（位图完整支持）。
 - **`contentDescription`**：winia 无 semantics 树（全框架缺口），参数预留。
 - **Painter 抽象**：无（Compose 的 Painter 接口）；winia 用 `IconSource` 表达。
+- **Icon 复用**：`draw_icon` 的 SVG tint 现通过 `ColorFilter::Tint`（SrcIn）表达
+  （行为不变）。
 
 ## 4. 维护约定
 
-- 新增参数：默认值放 builder；绘制类参数（scale/alignment/alpha）不声明
-  `changed`；同步补 getter、单元测试与本文档。
+- 新增参数：默认值放 builder；绘制类参数（scale/alignment/alpha/color_filter/
+  filter_quality）不声明 `changed`；同步补 getter、单元测试与本文档。
 - 修改缩放/裁剪语义时保持"对齐 Compose `ContentScale`/`clipToBounds` 优先"。
+- 新增 `BlendMode`/`ColorFilter`/`FilterQuality` 枚举变体时同步 `render.rs`
+  映射（`to_skia_blend_mode`/`to_skia_color_filter`/`sampling_options_for`）。

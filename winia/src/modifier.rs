@@ -317,6 +317,46 @@ pub struct PointerEvent {
     pub is_meta_pressed: bool,
 }
 
+// ── 图片绘制类型（ColorFilter / FilterQuality / BlendMode——对齐 Compose ui.graphics）──
+
+/// 混合模式（对标 Compose `BlendMode`，与 skia 同源 29 值——
+/// 渲染期映射 `skia_safe::BlendMode`）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlendMode {
+    Clear, Src, Dst, SrcOver, DstOver, SrcIn, DstIn, SrcOut, DstOut,
+    SrcATop, DstATop, Xor, Plus, Modulate, Screen, Overlay, Darken, Lighten,
+    ColorDodge, ColorBurn, HardLight, SoftLight, Difference, Exclusion, Multiply,
+    Hue, Saturation, Color, Luminosity,
+}
+
+/// 颜色滤镜（对标 Compose `ColorFilter`——Image/Icon 渲染期挂到 paint）
+#[derive(Debug, Clone, PartialEq)]
+pub enum ColorFilter {
+    /// 染色（对标 `ColorFilter.tint`——默认 SrcIn 保留形状 alpha）
+    Tint { color: Color, blend_mode: BlendMode },
+    /// 颜色矩阵（20 值行主序——对标 `ColorFilter.colorMatrix`）
+    Matrix([f32; 20]),
+    /// 光照效果（像素 × multiply + add——对标 `ColorFilter.lighting`）
+    Lighting { multiply: Color, add: Color },
+}
+
+/// 采样质量（对标 Compose `FilterQuality`）——缩放位图时的过滤策略
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterQuality {
+    /// 最近邻（无过滤——像素风/精确采样）
+    None,
+    /// 双线性（默认——缩小放大平滑）
+    Low,
+    /// 双线性 + 最近 mipmap（缩小更平滑）
+    Medium,
+    /// 三线性（双线性 + 线性 mipmap——最高质量）
+    High,
+}
+
+impl Default for FilterQuality {
+    fn default() -> Self { Self::Low }
+}
+
 // ── ModifierElement ──
 
 /// Modifier 链中的单个元素。
@@ -441,6 +481,8 @@ pub(crate) enum ModifierElement {
         content_scale: crate::ui::image::ContentScale,
         alignment: crate::ui::image::ImageAlignment,
         alpha: f32,
+        color_filter: Option<ColorFilter>,
+        filter_quality: FilterQuality,
     },
     /// 焦点请求器 ID（与 FocusRequester 关联）
     FocusRequesterId { id: u64 },
@@ -1046,8 +1088,10 @@ impl Modifier {
         content_scale: crate::ui::image::ContentScale,
         alignment: crate::ui::image::ImageAlignment,
         alpha: f32,
+        color_filter: Option<ColorFilter>,
+        filter_quality: FilterQuality,
     ) -> Self {
-        self.push(ModifierElement::ImageContent { source, content_scale, alignment, alpha })
+        self.push(ModifierElement::ImageContent { source, content_scale, alignment, alpha, color_filter, filter_quality })
     }
 
     /// 图片固有尺寸（位图像素尺寸 / SVG viewBox）——测量期调用
@@ -1693,11 +1737,13 @@ impl Debug for ModifierElement {
                 .field("bounded", bounded)
                 .finish(),
             Self::DrawIcon { .. } => f.write_str("DrawIcon"),
-            Self::ImageContent { content_scale, alignment, alpha, .. } => f
+            Self::ImageContent { content_scale, alignment, alpha, color_filter, filter_quality, .. } => f
                 .debug_struct("ImageContent")
                 .field("scale", content_scale)
                 .field("align", alignment)
                 .field("alpha", alpha)
+                .field("color_filter", color_filter)
+                .field("filter_quality", filter_quality)
                 .finish(),
             Self::KbEvent { on_key, on_pre_key } => f.debug_struct("KbEvent").field("on_key", &on_key.is_some()).field("on_pre_key", &on_pre_key.is_some()).finish(),
             Self::PointerEvent { on_ptr, on_pre_ptr } => f.debug_struct("PointerEvent").field("on_ptr", &on_ptr.is_some()).field("on_pre_ptr", &on_pre_ptr.is_some()).finish(),
@@ -2237,9 +2283,9 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
             as_ == bs && ac == bc && abc == bbc && ash == bsh
         }
         (DrawIcon { spec: a }, DrawIcon { spec: b }) => a == b,
-        (ImageContent { source: a, content_scale: as_, alignment: aa, alpha: aal },
-         ImageContent { source: b, content_scale: bs, alignment: ba, alpha: bal }) => {
-            a == b && as_ == bs && aa == ba && aal == bal
+        (ImageContent { source: a, content_scale: as_, alignment: aa, alpha: aal, color_filter: acf, filter_quality: afq },
+         ImageContent { source: b, content_scale: bs, alignment: ba, alpha: bal, color_filter: bcf, filter_quality: bfq }) => {
+            a == b && as_ == bs && aa == ba && aal == bal && acf == bcf && afq == bfq
         }
         (FocusRequesterId { id: ai }, FocusRequesterId { id: bi }) => ai == bi,
         (KbEvent { .. }, KbEvent { .. }) => true,

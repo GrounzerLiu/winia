@@ -846,6 +846,53 @@ mod tests {
         assert_eq!(size2, Size::new(10.0, 5.0));
     }
 
+    // ── Image 叶子测量（固有尺寸布局——对齐 Compose：未指定维度以固有尺寸为基准）──
+
+    fn image_modifier() -> Modifier {
+        use crate::ui::image::{ContentScale, ImageAlignment};
+        Modifier::new().image_content(
+            crate::ui::icon::IconSource::svg("<svg viewBox=\"0 0 48 24\"/>"),
+            ContentScale::Fit,
+            ImageAlignment::Center,
+            1.0,
+            None,
+            crate::modifier::FilterQuality::Low,
+        )
+    }
+
+    #[test]
+    fn test_leaf_image_intrinsic_size() {
+        // 固有尺寸来自 SVG viewBox（纯内存，无需文件）
+        let mut nodes = vec![LayoutNode::leaf(image_modifier())];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::UNBOUNDED);
+        assert_eq!(size, Size::new(48.0, 24.0), "UNBOUNDED 下按固有尺寸");
+        assert_eq!(nodes[0].measured_size, Size::new(48.0, 24.0));
+    }
+
+    #[test]
+    fn test_leaf_image_tight_constraints_clamped() {
+        // tight 100x50：无 size modifier 时被约束钳制
+        let mut nodes = vec![LayoutNode::leaf(image_modifier())];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(100.0, 100.0, 50.0, 50.0));
+        assert_eq!(size, Size::new(100.0, 50.0));
+    }
+
+    #[test]
+    fn test_leaf_image_size_modifier_overrides() {
+        // modifier size 覆盖固有尺寸（Compose 语义：size 指定即以此为准）
+        let m = Modifier::new().size(64.0, 32.0).image_content(
+            crate::ui::icon::IconSource::svg("<svg viewBox=\"0 0 48 24\"/>"),
+            crate::ui::image::ContentScale::Fit,
+            crate::ui::image::ImageAlignment::Center,
+            1.0,
+            None,
+            crate::modifier::FilterQuality::Low,
+        );
+        let mut nodes = vec![LayoutNode::leaf(m)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::UNBOUNDED);
+        assert_eq!(size, Size::new(64.0, 32.0));
+    }
+
     #[test]
     fn test_measure_node_rtl_padding() {
         // RTL + padding_start(10)：start 在右——子内容靠右 10（左侧空隙 0）

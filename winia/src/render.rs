@@ -349,7 +349,11 @@ fn draw_icon(canvas: &Canvas, rect: Rect, direction: LayoutDirection, spec: &Ico
                         );
                     }
                     DecodedIcon::Svg { dom, width, height } => {
-                        draw_svg_dom(canvas, dom, *width, *height, rect, spec.tint, 1.0);
+                        let cf = spec.tint.map(|c| crate::modifier::ColorFilter::Tint {
+                            color: c,
+                            blend_mode: crate::modifier::BlendMode::SrcIn,
+                        });
+                        draw_svg_dom(canvas, dom, fit_rect(rect, *width, *height), cf.as_ref(), 1.0);
                     }
                 }
             }
@@ -382,8 +386,70 @@ fn skia_color(c: crate::modifier::Color) -> skia_safe::Color {
     skia_safe::Color::from_argb(c.a, c.r, c.g, c.b)
 }
 
-/// Image 组件绘制：ContentScale 缩放 + 对齐 + alpha（内容区域 rect）。
-/// 位图：缩放矩形（含 Crop 裁剪）+ 线性采样；SVG：简化 Fit+Center（差距注释见 ui/image.rs）。
+/// 映射 winia BlendMode → skia BlendMode（同源 29 值）
+fn to_skia_blend_mode(bm: crate::modifier::BlendMode) -> BlendMode {
+    use crate::modifier::BlendMode as BM;
+    match bm {
+        BM::Clear => BlendMode::Clear,
+        BM::Src => BlendMode::Src,
+        BM::Dst => BlendMode::Dst,
+        BM::SrcOver => BlendMode::SrcOver,
+        BM::DstOver => BlendMode::DstOver,
+        BM::SrcIn => BlendMode::SrcIn,
+        BM::DstIn => BlendMode::DstIn,
+        BM::SrcOut => BlendMode::SrcOut,
+        BM::DstOut => BlendMode::DstOut,
+        BM::SrcATop => BlendMode::SrcATop,
+        BM::DstATop => BlendMode::DstATop,
+        BM::Xor => BlendMode::Xor,
+        BM::Plus => BlendMode::Plus,
+        BM::Modulate => BlendMode::Modulate,
+        BM::Screen => BlendMode::Screen,
+        BM::Overlay => BlendMode::Overlay,
+        BM::Darken => BlendMode::Darken,
+        BM::Lighten => BlendMode::Lighten,
+        BM::ColorDodge => BlendMode::ColorDodge,
+        BM::ColorBurn => BlendMode::ColorBurn,
+        BM::HardLight => BlendMode::HardLight,
+        BM::SoftLight => BlendMode::SoftLight,
+        BM::Difference => BlendMode::Difference,
+        BM::Exclusion => BlendMode::Exclusion,
+        BM::Multiply => BlendMode::Multiply,
+        BM::Hue => BlendMode::Hue,
+        BM::Saturation => BlendMode::Saturation,
+        BM::Color => BlendMode::Color,
+        BM::Luminosity => BlendMode::Luminosity,
+    }
+}
+
+/// 映射 winia ColorFilter → skia ColorFilter（Tint/Matrix/Lighting）
+fn to_skia_color_filter(cf: &crate::modifier::ColorFilter) -> Option<skia_safe::ColorFilter> {
+    use crate::modifier::ColorFilter as CF;
+    match cf {
+        CF::Tint { color, blend_mode } => {
+            skia_safe::color_filters::blend(skia_color(*color), to_skia_blend_mode(*blend_mode))
+        }
+        CF::Matrix(m) => Some(skia_safe::color_filters::matrix_row_major(m, None)),
+        CF::Lighting { multiply, add } => {
+            skia_safe::color_filters::lighting(skia_color(*multiply), skia_color(*add))
+        }
+    }
+}
+
+/// FilterQuality → SamplingOptions（None/Low/Medium/High）
+fn sampling_options_for(q: crate::modifier::FilterQuality) -> SamplingOptions {
+    use crate::modifier::FilterQuality as FQ;
+    match q {
+        FQ::None => SamplingOptions::new(FilterMode::Nearest, MipmapMode::None),
+        FQ::Low => SamplingOptions::new(FilterMode::Linear, MipmapMode::None),
+        FQ::Medium => SamplingOptions::new(FilterMode::Linear, MipmapMode::Nearest),
+        FQ::High => SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear),
+    }
+}
+
+/// Image 组件绘制：ContentScale 缩放 + 对齐 + alpha + colorFilter + filterQuality
+///（内容区域 rect）。位图/SVG 统一走 content_scale_rect（完整缩放/对齐/RTL），
+/// 超出 bounds 时 clipToBounds（Crop/FillWidth/FillHeight 裁剪）。
 fn draw_image_content(
     canvas: &Canvas,
     rect: Rect,
@@ -391,18 +457,16 @@ fn draw_image_content(
     content_scale: crate::ui::image::ContentScale,
     alignment: crate::ui::image::ImageAlignment,
     alpha: f32,
+    color_filter: Option<&crate::modifier::ColorFilter>,
+    filter_quality: crate::modifier::FilterQuality,
     direction: crate::layout::LayoutDirection,
 ) {
     let Some(decoded) = crate::ui::icon::decoded_icon(source) else { return };
+    let rtl = direction == crate::layout::LayoutDirection::Rtl;
     match decoded.as_ref() {
         crate::ui::icon::DecodedIcon::Bitmap { image, width, height } => {
             let dst = crate::ui::image::content_scale_rect(
-                content_scale,
-                rect,
-                *width,
-                *height,
-                alignment,
-                direction == crate::layout::LayoutDirection::Rtl,
+                content_scale, rect, *width, *height, alignment, rtl,
             );
             if dst.width() <= 0.0 || dst.height() <= 0.0 {
                 return;
@@ -419,11 +483,16 @@ fn draw_image_content(
             let mut paint = Paint::default();
             paint.set_anti_alias(true);
             paint.set_alpha_f(alpha.clamp(0.0, 1.0));
+            if let Some(cf) = color_filter {
+                if let Some(filter) = to_skia_color_filter(cf) {
+                    paint.set_color_filter(filter);
+                }
+            }
             canvas.draw_image_rect_with_sampling_options(
                 image,
                 Some((&src, skia_safe::canvas::SrcRectConstraint::Strict)),
                 &dst,
-                SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear),
+                sampling_options_for(filter_quality),
                 &paint,
             );
             if clipped {
@@ -431,9 +500,23 @@ fn draw_image_content(
             }
         }
         crate::ui::icon::DecodedIcon::Svg { dom, width, height } => {
-            // 简化：Fit + Center（draw_svg_dom 内部 fit；content_scale/alignment
-            // 对 SVG 暂不生效——差距见 ui/image.rs 注释）；alpha 生效
-            draw_svg_dom(canvas, dom, *width, *height, rect, None, alpha);
+            // 与位图同一事实来源：content_scale_rect 完整缩放/对齐 + clipToBounds
+            let dst = crate::ui::image::content_scale_rect(
+                content_scale, rect, *width, *height, alignment, rtl,
+            );
+            if dst.width() <= 0.0 || dst.height() <= 0.0 {
+                return;
+            }
+            let clipped = dst.left < rect.left || dst.top < rect.top
+                || dst.right > rect.right || dst.bottom > rect.bottom;
+            if clipped {
+                canvas.save();
+                canvas.clip_rect(rect, None, Some(false));
+            }
+            draw_svg_dom(canvas, dom, dst, color_filter, alpha);
+            if clipped {
+                canvas.restore();
+            }
         }
     }
 }
@@ -456,25 +539,22 @@ fn fit_rect(rect: Rect, iw: f32, ih: f32) -> Rect {    if iw <= 0.0 || ih <= 0.0
 fn draw_svg_dom(
     canvas: &Canvas,
     dom: &RefCell<svg::Dom>,
-    vw: f32,
-    vh: f32,
-    rect: Rect,
-    tint: Option<crate::modifier::Color>,
+    dst: Rect,
+    color_filter: Option<&crate::modifier::ColorFilter>,
     alpha: f32,
 ) {
-    let dst = fit_rect(rect, vw, vh);
     if dst.width() <= 0.0 || dst.height() <= 0.0 {
         return;
     }
     // 直接画布渲染（与字体路径一致）：容器尺寸设为目标尺寸后 render。
-    // tint 用 saveLayer 颜色滤镜（SrcIn）+ alpha 在图层合成时统一应用。
+    // colorFilter 用 saveLayer 颜色滤镜 + alpha 在图层合成时统一应用。
     canvas.save();
     canvas.translate((dst.left, dst.top));
-    let need_layer = tint.is_some() || alpha < 1.0;
+    let need_layer = color_filter.is_some() || alpha < 1.0;
     let layer = if need_layer {
         let mut paint = Paint::default();
-        if let Some(tint) = tint {
-            if let Some(filter) = skia_safe::color_filters::blend(skia_color(tint), BlendMode::SrcIn) {
+        if let Some(cf) = color_filter {
+            if let Some(filter) = to_skia_color_filter(cf) {
                 paint.set_color_filter(filter);
             }
         }
@@ -598,8 +678,8 @@ fn render_pass1(
             ModifierElement::DrawIcon { spec } => {
                 draw_icon(canvas, Rect::new(content_x, content_y, content_x + content_w, content_y + content_h), node.layout_direction, spec);
             }
-            // 图片（Image 组件）：ContentScale + 对齐 + alpha，绘制于内容区域
-            ModifierElement::ImageContent { source, content_scale, alignment, alpha } => {
+            // 图片（Image 组件）：ContentScale + 对齐 + alpha + colorFilter + filterQuality
+            ModifierElement::ImageContent { source, content_scale, alignment, alpha, color_filter, filter_quality } => {
                 draw_image_content(
                     canvas,
                     Rect::new(content_x, content_y, content_x + content_w, content_y + content_h),
@@ -607,6 +687,8 @@ fn render_pass1(
                     *content_scale,
                     *alignment,
                     *alpha,
+                    color_filter.as_ref(),
+                    *filter_quality,
                     node.layout_direction,
                 );
             }
