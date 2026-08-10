@@ -5,6 +5,7 @@
 
 pub mod text;
 pub mod button;
+pub mod card;
 pub mod layout_components;
 pub mod window;
 pub mod theme;
@@ -43,6 +44,7 @@ pub use button::ButtonDefaults;
 pub use button::ButtonElevation;
 pub use button::ButtonSize;
 pub use button::ButtonStyle;
+pub use card::{Card, CardBorder, CardColors, CardDefaults, CardElevation, CardStyle};
 pub use layout_components::{Column, Row, Stack};
 pub use window::Window;
 pub use theme::WiniaTheme;
