@@ -213,22 +213,27 @@ fn checkbox_impl(
     // 也是随 checkDrawFraction 过渡的）。
     let check_color = colors.checked_checkmark;
 
-    // 容器/边框颜色过渡（M3 animateColorAsState + CheckAnimationSpec）：
-    // 选中/取消选中都从当前颜色动画到目标色，而不是瞬间跳变。
-    let color_spec =
-        crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::default());
-    let box_color_anim = ctx.animate_color_as_state(box_color, color_spec.clone());
-    let border_color_anim = ctx.animate_color_as_state(border_color, color_spec);
+    // 动画规格：Compose/M3 默认级 Spring（StiffnessMedium=400、NoBouncy）。
+    // 注意 winia 的 SpringSpec::default() 是 StiffnessLow(200)——比 M3 基准
+    // 软一档，过渡尾巴偏长（“动画有点慢”）。
+    let check_spec = crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec {
+        stiffness: crate::animation::SpringSpec::STIFFNESS_MEDIUM,
+        ..crate::animation::SpringSpec::default()
+    });
+    // 容器/边框颜色过渡（M3 animateColorAsState）：选中/取消选中都从当前
+    // 颜色动画到目标色，而不是瞬间跳变。
+    let box_color_anim = ctx.animate_color_as_state(box_color, check_spec.clone());
+    let border_color_anim = ctx.animate_color_as_state(border_color, check_spec.clone());
 
     // On→check 缩放 1、Indeterminate→dash 缩放 1、Off→都 0（Spring 近似
     // M3 checkDrawFraction + crossCenterGravitation 过渡）
     let check_scale = ctx.animate_float_as_state(
         if state == ToggleableState::On { 1.0 } else { 0.0 },
-        crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::default()),
+        check_spec.clone(),
     );
     let dash_scale = ctx.animate_float_as_state(
         if state == ToggleableState::Indeterminate { 1.0 } else { 0.0 },
-        crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::default()),
+        check_spec,
     );
 
     let shape = CheckboxDefaults::shape();

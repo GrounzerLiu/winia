@@ -73,6 +73,8 @@ TriStateCheckbox::new(state: ToggleableState)    // 对标 TriStateCheckbox(stat
   渲染期 `peek()` 读取动画值不触发重组。
 - 边框色 = 容器色时渲染层跳过描边（合并为纯填充）——半透明色若再叠
   stroke 会双重混合，边框带明显深于内部（禁用已选中态可见）。
+- 动画规格统一为 Spring `StiffnessMedium(400)`/NoBouncy（Compose/M3 默认
+  级）；winia `SpringSpec::default()` 是 `StiffnessLow(200)`，过渡尾巴偏长。
 - 勾号：Material Icons “check” 填充路径（20×20），外层 `graphics_layer`
   缩放动画（checked=1 / unchecked=0，Spring 近似 M3 `checkDrawFraction`
   过渡）。勾号 tint 固定为选中色（OnPrimary），未选中静止态由 scale=0
