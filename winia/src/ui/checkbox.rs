@@ -208,7 +208,17 @@ fn checkbox_impl(
         .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
     let box_color = colors.box_color(enabled, state);
     let border_color = colors.border_color(enabled, state);
-    let check_color = colors.checkmark_color(state);
+    // 勾号保持选中色常量：Off 静止态由 scale=0 隐藏；取消选中过渡期（1→0）
+    // 仍可见，否则 tint 瞬时切透明会把退出动画吞掉（M3 checkmarkColor 本身
+    // 也是随 checkDrawFraction 过渡的）。
+    let check_color = colors.checked_checkmark;
+
+    // 容器/边框颜色过渡（M3 animateColorAsState + CheckAnimationSpec）：
+    // 选中/取消选中都从当前颜色动画到目标色，而不是瞬间跳变。
+    let color_spec =
+        crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::default());
+    let box_color_anim = ctx.animate_color_as_state(box_color, color_spec.clone());
+    let border_color_anim = ctx.animate_color_as_state(border_color, color_spec);
 
     // On→check 缩放 1、Indeterminate→dash 缩放 1、Off→都 0（Spring 近似
     // M3 checkDrawFraction + crossCenterGravitation 过渡）
@@ -248,8 +258,12 @@ fn checkbox_impl(
             // 纯填充），Off 时透明底 + 2dp 边框——对标 M3 drawBox 分支
             let visual = Modifier::new()
                 .size(CHECKBOX_SIZE, CHECKBOX_SIZE)
-                .background(box_color, shape)
-                .border(CHECKBOX_STROKE_WIDTH, border_color, shape);
+                .background(move || box_color_anim.peek(), shape)
+                .border_dynamic(
+                    CHECKBOX_STROKE_WIDTH,
+                    move || border_color_anim.peek(),
+                    shape,
+                );
             let vkey = ctx.next_key();
             match ctx.start_restartable_group(
                 vkey,
@@ -625,5 +639,78 @@ mod tests {
         assert_eq!(colors.unchecked_box.a, 0);
         assert_eq!(colors.checkmark_color(ToggleableState::Off).a, 0);
         assert_eq!(colors.checked_box, theme.primary);
+    }
+
+    #[test]
+    fn uncheck_keeps_primary_pixels_during_transition() {
+        // 回归：取消选中时容器/勾号必须从 Primary 渐变消失（状态切换后的
+        // 第一个渲染帧仍可见），而不是瞬间切透明——否则勾号缩放退出动画
+        // 被吞掉，表现为“取消选中没有动画”。
+        use skia_safe::{Color, surfaces};
+        use std::time::Duration;
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let mut composer = crate::core::composer::Composer::new();
+        let holder = std::cell::RefCell::new(None::<crate::core::state::State<bool>>);
+        let build_scene = |ctx: &mut ComposeCtx| {
+            WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                let c = ctx.remember(|| true);
+                holder.replace(Some(c.clone()));
+                Checkbox::new(c.get()).on_checked_change(|_| {}).build(ctx);
+            });
+        };
+        let mut render = |composer: &mut crate::core::composer::Composer| -> Vec<u8> {
+            composer.compose(build_scene);
+            composer.compose(build_scene);
+            composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+            let mut surface = surfaces::raster_n32_premul((300, 300)).unwrap();
+            let canvas = surface.canvas();
+            canvas.clear(Color::WHITE);
+            let root = composer.layout_root_idx().expect("root");
+            let nodes = composer.arena_nodes();
+            crate::render::render(nodes, root, canvas);
+            let pm = surface.peek_pixels().expect("pixmap");
+            let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+            px.iter()
+                .flat_map(|p| [p[0], p[1], p[2]])
+                .collect::<Vec<_>>()
+        };
+        let count_primary = |px: &[u8]| {
+            px.chunks_exact(3)
+                // skia N32 premul 内存序为 BGRA：flat_map 取前 3 字节 = B,G,R
+                .filter(|rgb| rgb[2] > 80 && rgb[0] as i32 > rgb[2] as i32 + 20)
+                .count()
+        };
+        composer.compose(build_scene);
+        composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let c = holder.borrow().clone().expect("state");
+        let checked_px = render(&mut composer);
+        assert!(
+            count_primary(&checked_px) > 50,
+            "选中态应有 Primary 容器像素"
+        );
+        // 取消选中：状态立即切 Off，但颜色/勾号动画尚未推进——过渡帧必须
+        // 仍保留 Primary 像素（修复前容器/勾号瞬切透明 → 这里为 0）
+        c.update(|s| *s = false);
+        let transition_px = render(&mut composer);
+        let transition_primary = count_primary(&transition_px);
+        assert!(
+            transition_primary > 50,
+            "取消选中过渡帧应保留 Primary 像素（实际 {transition_primary}）——颜色瞬切透明吞掉退出动画"
+        );
+        // 动画推完 → 回到未选中静止态：不再有 Primary 像素
+        for _ in 0..400 {
+            if !crate::animation::update_animations() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let settled_px = render(&mut composer);
+        assert!(
+            count_primary(&settled_px) < 5,
+            "未选中静止态不应再有 Primary 像素"
+        );
     }
 }

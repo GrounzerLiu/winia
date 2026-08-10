@@ -68,9 +68,13 @@ TriStateCheckbox::new(state: ToggleableState)    // 对标 TriStateCheckbox(stat
 - 组合结构：外层 40×40 节点（clip Circle 供焦点环推断形状）→
   `clickable_with_source` + unbounded ripple → 内层 20×20 视觉盒
   （`background` + `border`，checked 时边框色=容器色合并为纯填充）。
+- 容器/边框颜色：`animate_color_as_state` Spring 过渡（对标 M3
+  `animateColorAsState`），Off/On/Indeterminate 切换时渐变而非跳变；
+  渲染期 `peek()` 读取动画值不触发重组。
 - 勾号：Material Icons “check” 填充路径（20×20），外层 `graphics_layer`
   缩放动画（checked=1 / unchecked=0，Spring 近似 M3 `checkDrawFraction`
-  过渡）；渲染期读动画值不触发重组。
+  过渡）。勾号 tint 固定为选中色（OnPrimary），未选中静止态由 scale=0
+  隐藏——保证取消选中时缩放退出动画可见（tint 若瞬切透明会吞掉动画）。
 - Indeterminate：横线路径（M3 drawCheck 中段 0.2w..0.8w、y=0.5h），与 check
   图标各持一个缩放动画（On=1/0、Indeterminate=0/1），近似 M3
   `crossCenterGravitation` 形态过渡（v1 为交叉缩放而非路径形变）。
@@ -80,8 +84,6 @@ TriStateCheckbox::new(state: ToggleableState)    // 对标 TriStateCheckbox(stat
 ## 4. 未实现 / 后续
 
 - `Checkbox` 高级重载（`checkmarkStroke` / `outlineStroke` 自定义）。
-- 容器/边框颜色过渡动画（M3 `animateColorAsState`；当前仅勾号缩放动画，
-  与现有 Button/IconButton 的静态取色实现一致）。
 - On ↔ Indeterminate 的路径形变过渡（当前为两个图标的交叉缩放，
   需 Canvas/pathMeasure 才能做 M3 的连续形变）。
 - 键盘 Space 触发切换（依赖框架全局按键语义，聚焦后回车/空格触发 click
