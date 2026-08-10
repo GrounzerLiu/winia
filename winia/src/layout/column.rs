@@ -96,6 +96,49 @@ mod tests {
     }
 
     #[test]
+    fn test_column_cross_axis_loose_in_tight_parent() {
+        // tight 交叉轴父（如 fill_max_size+padding 的 Column）：子节点交叉轴
+        // 松约束（min=0）——自然宽，不继承父 tight（Compose Column 语义）
+        let mut nodes = vec![make_leaf(100.0, 20.0)];
+        let children: Vec<usize> = vec![0];
+        let (size, placements) = ColumnLayout::new().measure(
+            &mut nodes, &[], &children,
+            Constraints::new(432.0, 432.0, 0.0, 1000.0),
+        );
+        assert_eq!(placements[0].size.width, 100.0, "子节点自然宽（不撑满 tight 父）");
+        assert_eq!(size.width, 432.0, "Column 自身受 tight 父约束（432），松的只是子节点");
+    }
+
+    #[test]
+    fn test_column_child_fill_max_width_in_tight_parent() {
+        // tight 父下 fill_max_width 子节点仍撑满（显式 fill 优先于松约束）
+        use crate::modifier::Modifier;
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new().fill_max_width().height(20.0)),
+        ];
+        let children: Vec<usize> = vec![0];
+        let (size, placements) = ColumnLayout::new().measure(
+            &mut nodes, &[], &children,
+            Constraints::new(432.0, 432.0, 0.0, 1000.0),
+        );
+        assert_eq!(placements[0].size.width, 432.0, "fill_max_width 撑满");
+        assert_eq!(size.width, 432.0);
+    }
+
+    #[test]
+    fn test_column_stretch_child_in_tight_parent() {
+        // Stretch 对齐：子节点拉伸到容器宽（放置期拉伸——stretch 语义不受松约束影响）
+        let mut nodes = vec![make_leaf(100.0, 20.0)];
+        let children: Vec<usize> = vec![0];
+        let (size, placements) = ColumnLayout::new().alignment(Alignment::Stretch).measure(
+            &mut nodes, &[], &children,
+            Constraints::new(432.0, 432.0, 0.0, 1000.0),
+        );
+        assert_eq!(placements[0].size.width, 432.0, "Stretch 子节点撑满容器宽");
+        assert_eq!(size.width, 432.0);
+    }
+
+    #[test]
     fn test_column_spacing() {
         let column = ColumnLayout::new().spacing(5.0);
         let mut nodes = vec![make_leaf(100.0, 20.0), make_leaf(80.0, 30.0)];

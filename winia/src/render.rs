@@ -274,7 +274,6 @@ fn render_modifier_element<'a>(
     el: &'a ModifierElement,
     rect: Rect,
     x: f32, y: f32, w: f32, h: f32,
-    direction: LayoutDirection,
     last_background: &mut Option<(crate::modifier::Color, crate::modifier::Shape)>,
 ) -> Option<TextParams<'a>> {
     match el {
@@ -308,10 +307,7 @@ fn render_modifier_element<'a>(
                 letter_spacing: *letter_spacing, line_height: *line_height,
             })
         }
-        ModifierElement::DrawIcon { spec } => {
-            draw_icon(canvas, rect, direction, spec);
-            None
-        }
+        // DrawIcon 由 render_pass1 主循环显式分支绘制（内容区域 rect——含 padding 偏移）
         _ => None,
     }
 }
@@ -490,6 +486,15 @@ fn render_pass1(
     let mut scroll_offset_v: Option<f32> = None;
     let mut scroll_offset_h: Option<f32> = None;
 
+    // 叶子 padding 渲染偏移（测量已回加尺寸——绘制内容按内边距内缩；
+    // 解析与测量期 get_padding_sides 一致：静态/动态统一，RTL 时 start 在右）
+    let (pad_s, pad_t, pad_e, pad_b) = node.modifier.get_padding_sides();
+    let pad_rtl = node.layout_direction == crate::layout::LayoutDirection::Rtl;
+    let content_x = x + if pad_rtl { pad_e } else { pad_s };
+    let content_y = y + pad_t;
+    let content_w = (w - pad_s - pad_e).max(0.0);
+    let content_h = (h - pad_t - pad_b).max(0.0);
+
     // ⚠ 阴影必须**垫底**（主循环绘制背景之前——无论链序）：Compose shadow
     // 是 graphicsLayer 独立层（垫底）。此前预扫描代码误放在主循环之后——
     // 阴影画在背景之上 → 卡片被压暗（绿卡 ×(1-0.43)≈0.6——实测 bug）
@@ -527,6 +532,10 @@ fn render_pass1(
             ModifierElement::HorizontalScroll { state } if !backdrop_pass => {
                 scroll_offset_h = Some(state.get());
             }
+            // 图标绘制于内容区域（padding 内缩——叶子 padding 渲染偏移）
+            ModifierElement::DrawIcon { spec } => {
+                draw_icon(canvas, Rect::new(content_x, content_y, content_x + content_w, content_y + content_h), node.layout_direction, spec);
+            }
             el => {
                 if let Some(tp) = render_modifier_element(
                     canvas,
@@ -536,7 +545,6 @@ fn render_pass1(
                     y,
                     w,
                     h,
-                    node.layout_direction,
                     &mut last_background,
                 ) {
                     text = Some((tp.content, tp.font_size, tp.color, tp.max_lines, tp.align, tp.overflow, tp.font_weight, tp.font_style, tp.soft_wrap, tp.letter_spacing, tp.line_height));
@@ -578,11 +586,11 @@ fn render_pass1(
     if let Some((content, font_size, color, max_lines, align, overflow, font_weight, font_style, soft_wrap, letter_spacing, line_height)) = text {
         // 优先用测量阶段缓存的 Paragraph（避免重建）
         if let Some(para) = node.cached_paragraph.borrow_mut().as_mut() {
-            para.layout(w);
+            para.layout(content_w);
             let x_off = match align {
-                crate::ui::TextAlign::Left | crate::ui::TextAlign::Justify => x,
-                crate::ui::TextAlign::Center => x + (w - para.max_intrinsic_width()).max(0.0) / 2.0,
-                crate::ui::TextAlign::Right => x + (w - para.max_intrinsic_width()).max(0.0),
+                crate::ui::TextAlign::Left | crate::ui::TextAlign::Justify => content_x,
+                crate::ui::TextAlign::Center => content_x + (content_w - para.max_intrinsic_width()).max(0.0) / 2.0,
+                crate::ui::TextAlign::Right => content_x + (content_w - para.max_intrinsic_width()).max(0.0),
             };
             // 选中高亮
             if let Some(range) = node.registrar.borrow().as_ref().cloned().unwrap_or_else(|| crate::ui::selection_container::active_registrar()).selected_range(node.slot_key) {
@@ -592,10 +600,10 @@ fn render_pass1(
                 let mut paint = skia_safe::Paint::default();
                 paint.set_color(skia_safe::Color::from_argb(80, 100, 150, 255));
                 for tb in &rects {
-                    canvas.draw_rect(skia_safe::Rect::new(x_off + tb.rect.left, y + tb.rect.top, x_off + tb.rect.right, y + tb.rect.bottom), &paint);
+                    canvas.draw_rect(skia_safe::Rect::new(x_off + tb.rect.left, content_y + tb.rect.top, x_off + tb.rect.right, content_y + tb.rect.bottom), &paint);
                 }
             }
-            para.paint(canvas, x_off, y);
+            para.paint(canvas, x_off, content_y);
             // 绘制选中高亮（selection.start != selection.end）
             let sel_range = node.selection_range.borrow().clone()
                 .filter(|r| r.start < r.end);
@@ -606,7 +614,7 @@ fn render_pass1(
                     let tc = crate::ui::theme::WiniaTheme::colors().primary;
                     sel_paint.set_color(skia_safe::Color::from_argb(60, tc.r, tc.g, tc.b));
                     for tb in &rects {
-                        canvas.draw_rect(skia_safe::Rect::new(x_off + tb.rect.left, y + tb.rect.top, x_off + tb.rect.right, y + tb.rect.bottom), &sel_paint);
+                        canvas.draw_rect(skia_safe::Rect::new(x_off + tb.rect.left, content_y + tb.rect.top, x_off + tb.rect.right, content_y + tb.rect.bottom), &sel_paint);
                     }
                 }
             }
@@ -622,7 +630,7 @@ fn render_pass1(
                         let mut cp = skia_safe::Paint::default();
                         cp.set_color(skia_safe::Color::from_argb(255, color.r, color.g, color.b));
                         cp.set_stroke_width(1.5);
-                        canvas.draw_line(skia_safe::Point::new(x_off + cx, y + cy), skia_safe::Point::new(x_off + cx, y + cy + ch), &cp);
+                        canvas.draw_line(skia_safe::Point::new(x_off + cx, content_y + cy), skia_safe::Point::new(x_off + cx, content_y + cy + ch), &cp);
                     } else { debug_log!("[render] get_cursor_position returned None for idx={}", node.cursor_index.get()); }
                 } else { debug_log!("[render] cursor_visible is false"); }
             }
@@ -636,19 +644,19 @@ fn render_pass1(
                     und_paint.set_stroke_width(1.0);
                     for tb in &rects {
                         let r = tb.rect;
-                        canvas.draw_line(skia_safe::Point::new(x_off + r.left, y + r.bottom), skia_safe::Point::new(x_off + r.right, y + r.bottom), &und_paint);
+                        canvas.draw_line(skia_safe::Point::new(x_off + r.left, content_y + r.bottom), skia_safe::Point::new(x_off + r.right, content_y + r.bottom), &und_paint);
                     }
                 }
             }
         } else {
-            draw_text_with_selection(canvas, content, font_size, color, font_weight, font_style, x, y, w, max_lines, align, overflow, soft_wrap, letter_spacing, line_height, node.slot_key);
+            draw_text_with_selection(canvas, content, font_size, color, font_weight, font_style, content_x, content_y, content_w, max_lines, align, overflow, soft_wrap, letter_spacing, line_height, node.slot_key);
         }
     }
 
     // ═══ 富文本（RichText）渲染 ═══
     if node.has_richtext_content {
         if let Some(para) = node.cached_paragraph.borrow_mut().as_mut() {
-            para.layout(w);
+            para.layout(content_w);
             // 选中高亮
             if let Some(range) = node.registrar.borrow().as_ref().cloned().unwrap_or_else(|| crate::ui::selection_container::active_registrar()).selected_range(node.slot_key) {
                 let rects: Vec<_> = if range.start < range.end {
@@ -656,10 +664,10 @@ fn render_pass1(
                 let mut paint = skia_safe::Paint::default();
                 paint.set_color(skia_safe::Color::from_argb(80, 100, 150, 255));
                 for tb in &rects {
-                    canvas.draw_rect(skia_safe::Rect::new(x + tb.rect.left, y + tb.rect.top, x + tb.rect.right, y + tb.rect.bottom), &paint);
+                    canvas.draw_rect(skia_safe::Rect::new(content_x + tb.rect.left, content_y + tb.rect.top, content_x + tb.rect.right, content_y + tb.rect.bottom), &paint);
                 }
             }
-            para.paint(canvas, x, y);
+            para.paint(canvas, content_x, content_y);
         }
     }
 

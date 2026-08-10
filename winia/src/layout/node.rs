@@ -812,6 +812,32 @@ mod tests {
     }
 
     #[test]
+    fn test_leaf_padding_included_in_measured_size() {
+        // 叶子节点（无 policy）尺寸回加 padding（此前丢失：测量不含内边距，
+        // Text+padding 高度塌陷、内容贴边）
+        let mut nodes = vec![LayoutNode::leaf(Modifier::new().size(100.0, 50.0).padding(10.0))];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 200.0, 0.0, 200.0));
+        // size(100,50) 经 padding(10) 内缩 → 内容 80x30，回加后 100x50
+        assert_eq!(size, Size::new(100.0, 50.0));
+        assert_eq!(nodes[0].measured_size, Size::new(100.0, 50.0));
+    }
+
+    #[test]
+    fn test_leaf_asymmetric_padding_included() {
+        // 非对称 padding：start(10)+bottom(5) + 固定 size(60,40)
+        // → 内容区 50x35 + padding 回加 = 总尺寸 60x40（修改前返回 50x35 丢失 padding）
+        let mut nodes = vec![LayoutNode::leaf(
+            Modifier::new().size(60.0, 40.0).padding_start(10.0).padding_bottom(5.0),
+        )];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 200.0, 0.0, 200.0));
+        assert_eq!(size, Size::new(60.0, 40.0));
+        // 无固定尺寸的纯 padding 叶子：内容 0 + padding 回加
+        let mut nodes2 = vec![LayoutNode::leaf(Modifier::new().padding_start(10.0).padding_bottom(5.0))];
+        let (size2, _) = measure_node(&mut nodes2, &[], 0, Constraints::new(0.0, 200.0, 0.0, 200.0));
+        assert_eq!(size2, Size::new(10.0, 5.0));
+    }
+
+    #[test]
     fn test_measure_node_rtl_padding() {
         // RTL + padding_start(10)：start 在右——子内容靠右 10（左侧空隙 0）
         use crate::layout::row::RowLayout;
@@ -1319,7 +1345,11 @@ pub(crate) fn measure_node(
         };
 
         nodes[idx].measured_size = size;
-        (size, Vec::new())
+        // 叶子尺寸回加 padding（容器路径 1279 同语义——叶子此前丢失：
+        // 测量尺寸不含内边距 → Text+padding 高度塌陷、内容贴边）
+        let outer_size = Size::new(size.width + pad_x, size.height + pad_y);
+        nodes[idx].measured_size = outer_size;
+        (outer_size, Vec::new())
     };
 
     // aspectRatio：测量后按 inner_constraints（含 size/required 链内收紧）

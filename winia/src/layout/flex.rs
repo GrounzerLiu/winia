@@ -55,7 +55,9 @@ impl FlexAxis for VerticalAxis {
     #[inline]
     fn build_phase1(c: &Constraints, main_remaining: f32) -> Constraints {
         Constraints {
-            min_width: c.min_width,
+            // 交叉轴松 min（对齐 Compose Column：子节点不继承父 tight 宽度——
+            // 否则 fill_max_size 父把 tight 传给所有子，子宽度被强制撑满）
+            min_width: 0.0,
             max_width: c.max_width,
             min_height: 0.0,
             max_height: main_remaining.max(0.0),
@@ -100,7 +102,8 @@ impl FlexAxis for HorizontalAxis {
         Constraints {
             min_width: 0.0,
             max_width: main_remaining.max(0.0),
-            min_height: c.min_height,
+            // 交叉轴松 min（对齐 Compose Row：子节点不继承父 tight 高度）
+            min_height: 0.0,
             max_height: c.max_height,
         }
     }
