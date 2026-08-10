@@ -275,19 +275,28 @@ fn render_modifier_element<'a>(
     rect: Rect,
     x: f32, y: f32, w: f32, h: f32,
     direction: LayoutDirection,
+    last_background: &mut Option<crate::modifier::Color>,
 ) -> Option<TextParams<'a>> {
     match el {
         ModifierElement::Background { color_fn, shape } => {
-            draw_background(canvas, rect, &(color_fn)(), shape);
+            let color = (color_fn)();
+            *last_background = Some(color);
+            draw_background(canvas, rect, &color, shape);
             None
         }
         ModifierElement::Border { width, color, shape } => {
-            draw_border(canvas, x, y, w, h, *width, color, shape);
+            // 边框色 = 容器色时合并为纯填充（M3 drawBox 语义）：半透明色
+            // 在填充上再叠一层 stroke 会双重混合，边框带明显深于内部
+            if *last_background != Some(*color) {
+                draw_border(canvas, x, y, w, h, *width, color, shape);
+            }
             None
         }
         ModifierElement::BorderDynamic { width, color_fn, shape } => {
             let color = (color_fn)();
-            draw_border(canvas, x, y, w, h, *width, &color, shape);
+            if *last_background != Some(color) {
+                draw_border(canvas, x, y, w, h, *width, &color, shape);
+            }
             None
         }
         ModifierElement::TextContent { content, font_size, color, font_weight, font_style, max_lines, align, overflow, soft_wrap, letter_spacing, line_height } => {
@@ -492,6 +501,8 @@ fn render_pass1(
         }
     }
 
+    // 同节点链序中最后绘制的背景色——边框色等于它时跳过（合并为纯填充）
+    let mut last_background: Option<crate::modifier::Color> = None;
     for el in node.modifier.elements() {
         match el {
             ModifierElement::Blur { radius } if !backdrop_pass => {
@@ -516,7 +527,17 @@ fn render_pass1(
                 scroll_offset_h = Some(state.get());
             }
             el => {
-                if let Some(tp) = render_modifier_element(canvas, el, rect, x, y, w, h, node.layout_direction) {
+                if let Some(tp) = render_modifier_element(
+                    canvas,
+                    el,
+                    rect,
+                    x,
+                    y,
+                    w,
+                    h,
+                    node.layout_direction,
+                    &mut last_background,
+                ) {
                     text = Some((tp.content, tp.font_size, tp.color, tp.max_lines, tp.align, tp.overflow, tp.font_weight, tp.font_style, tp.soft_wrap, tp.letter_spacing, tp.line_height));
                 }
             }

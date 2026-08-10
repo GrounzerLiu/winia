@@ -713,4 +713,69 @@ mod tests {
             "未选中静止态不应再有 Primary 像素"
         );
     }
+
+    #[test]
+    fn disabled_checked_border_merges_with_fill() {
+        // 回归：禁用已选中时边框色 = 容器色（半透明），渲染层应合并为
+        // 纯填充；若边框再叠一层 stroke 会双重混合，边框带明显深于内部。
+        use skia_safe::{Color as SkColor, surfaces};
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let fill = crate::modifier::Color::from_argb(96, 40, 80, 220);
+        let mut composer = crate::core::composer::Composer::new();
+        let scene = |ctx: &mut ComposeCtx| {
+            Checkbox::new(true)
+                .enabled(false)
+                .colors(CheckboxColors::new(
+                    fill, fill, fill, fill, fill, fill, fill, fill, fill, fill, fill, fill,
+                ))
+                .on_checked_change(|_| {})
+                .build(ctx);
+        };
+        composer.compose(scene);
+        composer.compose(scene);
+        composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let mut surface = surfaces::raster_n32_premul((300, 300)).unwrap();
+        let canvas = surface.canvas();
+        canvas.clear(SkColor::WHITE);
+        let root = composer.layout_root_idx().expect("root");
+        let nodes = composer.arena_nodes();
+        crate::render::render(nodes, root, canvas);
+        let pm = surface.peek_pixels().expect("pixmap");
+        let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+        // 40×40 触摸目标内居中 20×20 视觉盒
+        let (mut bx, mut by) = (0.0f32, 0.0f32);
+        let mut found = false;
+        for node in nodes {
+            if node.measured_size.width == CHECKBOX_TOUCH_TARGET
+                && node.measured_size.height == CHECKBOX_TOUCH_TARGET
+            {
+                bx = node.position.x + (CHECKBOX_TOUCH_TARGET - CHECKBOX_SIZE) / 2.0;
+                by = node.position.y + (CHECKBOX_TOUCH_TARGET - CHECKBOX_SIZE) / 2.0;
+                found = true;
+                break;
+            }
+        }
+        assert!(found, "应有 40×40 触摸目标");
+        let at = |x: f32, y: f32| {
+            let p = px[(y as usize) * 300 + (x as usize)];
+            (p[0] as i32, p[1] as i32, p[2] as i32)
+        };
+        // 内部参考点选在勾号路径上方（y+3），避免勾号覆盖
+        let interior = at(bx + 10.0, by + 3.0);
+        let edges = [
+            at(bx + 1.0, by + 10.0),
+            at(bx + 18.0, by + 10.0),
+            at(bx + 10.0, by + 1.0),
+            at(bx + 10.0, by + 18.0),
+        ];
+        for (i, e) in edges.iter().enumerate() {
+            let d = (e.0 - interior.0).abs() + (e.1 - interior.1).abs() + (e.2 - interior.2).abs();
+            assert!(
+                d < 40,
+                "边框应合并为纯填充（edge[{i}]={e:?} interior={interior:?} diff={d}）"
+            );
+        }
+    }
 }
