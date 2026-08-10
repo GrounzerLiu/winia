@@ -1,6 +1,6 @@
 # 动画系统 — 实现与进度
 
-> ⚠ 部分内容过时（"缺失"清单与"下一步计划"已完成）。实现细节以代码为准；最新差距分析见 `docs/animation-gap-analysis.md`；架构现状见 `docs/handover.md`。
+> ⚠ 部分内容过时（"缺失"清单与"下一步计划"已完成）。实现细节以代码为准；最新差距分析见 `docs/animation-gap-analysis.md`。
 > 更新日期：2026-07-31 · 分支：text-field
 
 ## 一、总体架构
