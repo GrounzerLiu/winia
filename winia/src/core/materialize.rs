@@ -72,9 +72,6 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
         // 结构签名（P3-1）：本帧 desc 直接子数 vs 缓存节点直接子数——子树结构
         // 增删（if 分支/列表项）后同位置 slot_key 仍相同，签名不等则放弃恢复
         // （走 None 降级 → Enter 重建），防旧内容缓存张冠李戴（塌缩类 bug 根因）。
-        // 结构签名（P3-1）：本帧 desc 直接子数 vs 缓存节点直接子数——子树结构
-        // 增删（if 分支/列表项）后同位置 slot_key 仍相同，签名不等则放弃恢复
-        // （走 None 降级 → Enter 重建），防旧内容缓存张冠李戴（塌缩类 bug 根因）。
         // 注意：签名不等时**不 remove**——key 留待 compose 末尾回收（free），
         // 否则旧节点成为 arena 孤儿（泄漏）。
         match composer.prev_node_by_key.get(&key) {
@@ -103,7 +100,12 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
                         })
                     );
                 }
-                n.dirty = false; // 恢复缓存——测量折叠（保留测量）
+                // 恢复缓存——测量折叠（保留测量）。⚠ 不能无条件清 dirty：
+                // 同帧二次 compose 时（动画/交互状态 pending 触发），父容器
+                // Skip 恢复会覆盖第一次物化刚设置的 dirty=true（文本内容已变需
+                // 重测）→ cached_paragraph 保留旧内容 → 渲染画旧文本，直到外部
+                // 事件触发重组。正常 Skip 的节点来自上帧 layout（dirty 恒 false），
+                // 保留现状即可；同帧二次物化则保留第一次设置的 dirty。
                 Some(idx)
             }
             _ => {

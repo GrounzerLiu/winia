@@ -954,6 +954,14 @@ impl ApplicationHandler for AppState {
                     Ok(()) => {
                         pw.force_redraw = false; // 渲染成功后才清除强制帧（中途异常保留）
                         pw.consecutive_panics = 0;
+                        // 动画自驱动兜底：渲染中注册的动画依赖 wake_up 启动下一轮，
+                        // 但 Windows 上从事件处理内调用 EventLoopProxy::wake_up 偶发丢失
+                        // （winit 已知竞态）→ 动画冻结在起始值，直到下一个外部事件
+                        // （鼠标移动）才用大 dt 一次收敛。显式 request_redraw 保证
+                        // 动画帧持续推进，不依赖那次可能丢失的唤醒。
+                        if crate::animation::is_animating() {
+                            if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                        }
                     }
                     Err(e) => {
                         pw.consecutive_panics += 1;
@@ -1673,7 +1681,45 @@ fn press_interaction_down(pw: &mut PerWindow, path: &[usize], scene_pos: (f32, f
     // 若存场景坐标，按下后滚动/动画会脱离按钮。
     let local = {
         let nodes = pw.composer.arena_nodes();
-        crate::layout::node::scene_to_node_local(nodes, path, idx, scene_pos.0, scene_pos.1)
+        let clickable_local =
+            crate::layout::node::scene_to_node_local(nodes, path, idx, scene_pos.0, scene_pos.1);
+        // Ripple 与 clickable 不同节点时（如 Switch 的 Handle 容器）：
+        // 按压坐标要换算到 Ripple 节点本地空间，否则波纹锚点偏移。
+        // 本地坐标差 = 两节点绝对位置差（无滚动/变换时等价于 scene 换算）。
+        let ripple_adjust = pw.composer.layout_root_idx().and_then(|r| {
+            // 优先在命中路径内定位（同一 source 复用时避免锚点错位）；Switch 的
+            // ripple 挂在 Handle 子节点上，点击轨道空白处时不在 path 内——回退
+            // 全树搜索。已知限制：同一 source 复用于多个组件时全树搜索可能取到
+            // 错误节点（当前 Switch 均为每组件独立 source，不受影响）。
+            let ridx = path
+                .iter()
+                .copied()
+                .find(|&i| {
+                    nodes[i]
+                        .modifier
+                        .ripple_interaction()
+                        .map(|s| s == &src)
+                        .unwrap_or(false)
+                })
+                .or_else(|| {
+                    nodes.iter().position(|n| {
+                        n.modifier
+                            .ripple_interaction()
+                            .map(|s| s == &src)
+                            .unwrap_or(false)
+                    })
+                })?;
+            if ridx == idx {
+                return None;
+            }
+            let (ax, ay) = node_abs_position(nodes, r, nodes[idx].id);
+            let (rx, ry) = node_abs_position(nodes, r, nodes[ridx].id);
+            Some((ax - rx, ay - ry))
+        });
+        match ripple_adjust {
+            Some((dx, dy)) => (clickable_local.0 + dx, clickable_local.1 + dy),
+            None => clickable_local,
+        }
     };
     src.emit_press_at(local);
     pw.pressed_interaction = Some((slot, src));

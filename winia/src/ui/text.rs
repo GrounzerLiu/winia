@@ -204,6 +204,11 @@ impl Text {
                 eprintln!("[text-build] content={:?}", self.content.get(..16.min(self.content.len())));
             }
         }
+        // 参数声明（对标 Switch::build 的 ctx.changed）：父作用域读 State 会触发
+        // 父重组并重新调用 build，但叶子槽的 dirty 由本节点参数决定——不声明
+        // content 变化，物化可能走 Clean/折叠路径，cached_paragraph 保留旧文本，
+        // 渲染一直画旧内容，直到下一次外部事件触发重绘。
+        ctx.changed(&self.content);
         let key = ctx.next_key();
 
         let base = LOCAL_TEXT_STYLE.current();

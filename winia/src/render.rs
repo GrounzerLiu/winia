@@ -285,6 +285,11 @@ fn render_modifier_element<'a>(
             draw_border(canvas, x, y, w, h, *width, color, shape);
             None
         }
+        ModifierElement::BorderDynamic { width, color_fn, shape } => {
+            let color = (color_fn)();
+            draw_border(canvas, x, y, w, h, *width, &color, shape);
+            None
+        }
         ModifierElement::TextContent { content, font_size, color, font_weight, font_style, max_lines, align, overflow, soft_wrap, letter_spacing, line_height } => {
             Some(TextParams {
                 content, font_size: *font_size, color,
@@ -647,6 +652,7 @@ fn render_pass1(
         let focus_shape = node.modifier.elements().iter().rev().find_map(|el| match el {
             ModifierElement::Background { shape, .. }
             | ModifierElement::Border { shape, .. }
+            | ModifierElement::BorderDynamic { shape, .. }
             | ModifierElement::Clip { shape } => Some(*shape),
             _ => None,
         }).unwrap_or(crate::modifier::Shape::Rectangle);
@@ -715,13 +721,14 @@ fn render_pass1(
 }
 
 /// 水波纹（按旧版 D:\winia ripple.rs 的绘制方式）：
-/// - 实心圆（非径向渐变）：状态层 = 节点中心大圆（半径=对角线/2），
-///   波纹层 = 按压点实心圆（半径=对角线×progress）
-/// - 绘制前裁剪到节点背景形状（bounded）——避免圆溢出圆角按钮
+/// - 两层模型：背景层（hover/focus 状态层）= 节点中心圆（半径=对角线/2，
+///   直径=对角线）；前景层 = 按压点实心圆（半径=对角线×progress）
+/// - 前景层裁剪到背景的范围和形状：bounded → 节点形状；unbounded →
+///   背景圆（直径=对角线）——波纹不会超出背景层
 /// - hover/focus 状态层透明度动画值；每层扩散/淡出由动画系统驱动
 fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f32) {
     for el in node.modifier.elements() {
-        let ModifierElement::Ripple { source, color, bounded, shape, radius } = el else { continue };
+        let ModifierElement::Ripple { source, color, bounded, shape } = el else { continue };
 
         let diagonal = (w * w + h * h).sqrt();
         let rect = Rect::new(x, y, x + w, y + h);
@@ -733,7 +740,9 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
         if *bounded {
             let clip_shape = (*shape).or_else(|| {
                 node.modifier.elements().iter().rev().find_map(|el| match el {
-                    ModifierElement::Background { shape, .. } | ModifierElement::Border { shape, .. } => {
+                    ModifierElement::Background { shape, .. }
+                    | ModifierElement::Border { shape, .. }
+                    | ModifierElement::BorderDynamic { shape, .. } => {
                         Some(*shape)
                     }
                     _ => None,
@@ -766,6 +775,21 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
                 }
             }
             clipped = true;
+        } else {
+            // unbounded：前景裁剪到背景圆（直径=对角线，节点中心）
+            let r = diagonal / 2.0;
+            canvas.save();
+            canvas.clip_rrect(
+                skia_safe::RRect::new_oval(Rect::from_xywh(
+                    x + w / 2.0 - r,
+                    y + h / 2.0 - r,
+                    r * 2.0,
+                    r * 2.0,
+                )),
+                None,
+                Some(false),
+            );
+            clipped = true;
         }
 
         // ── 状态层：节点中心实心圆（半径=对角线/2，旧版 draw_circle）──
@@ -786,7 +810,8 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
             );
         }
 
-        // ── 波纹层：按压点实心圆（半径=对角线×progress，旧版 draw_circle）──
+        // ── 前景波纹层：按压点实心圆（半径=对角线×progress——旧版 draw_circle；
+        //    直径=2×对角线——按压点靠角落时圆足以覆盖整个组件）──
         // 中心存的是节点本地坐标（press_interaction_down 已从场景坐标换算）；
         // 画布坐标 = 布局原点 + 本地坐标——祖先 scroll translate 与自身
         // graphics_layer 变换都已作用在画布上，波纹视觉位置自动跟随节点
@@ -794,10 +819,7 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
         for layer in source.ripple_layers() {
             let progress = layer.progress.get();
             let opacity = layer.opacity.get();
-            // 显式 radius（如 M3 Switch ripple=20dp）按 progress 缩放；
-            // 否则默认按节点对角线扩散
-            let max_radius = radius.unwrap_or(diagonal);
-            let r = max_radius * progress;
+            let r = diagonal * progress;
             if r <= 0.0 || opacity <= 0.0 {
                 continue;
             }
@@ -919,7 +941,9 @@ fn draw_border(canvas: &Canvas, x: f32, y: f32, w: f32, h: f32, width: f32, colo
             canvas.draw_rrect(RRect::new_rect_xy(sr, (*corner_radius - inset).max(0.0), (*corner_radius - inset).max(0.0)), &paint);
         }
         crate::modifier::Shape::Pill => {
-            let r = (sr.width().min(sr.height()) / 2.0 - inset).max(0.0);
+            // 路径圆角 = 节点 pill 半径 - inset（不要对 sr 再减一次——
+            // 否则外缘在圆角处比背景内缩 1px，边框不像内边框）
+            let r = (w.min(h) / 2.0 - inset).max(0.0);
             canvas.draw_rrect(RRect::new_rect_xy(sr, r, r), &paint);
         }
         crate::modifier::Shape::Circle => {

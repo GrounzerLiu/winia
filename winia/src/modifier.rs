@@ -380,6 +380,7 @@ pub(crate) enum ModifierElement {
     Background { color_fn: Arc<dyn Fn() -> Color + Send + Sync>, shape: Shape },
     /// 边框
     Border { width: f32, color: Color, shape: Shape },
+    BorderDynamic { width: f32, color_fn: Arc<dyn Fn() -> Color + Send + Sync>, shape: Shape },
     /// 裁剪
     Clip { shape: Shape },
     /// 内容模糊（GPU 原生，零回读）
@@ -430,7 +431,7 @@ pub(crate) enum ModifierElement {
     /// 径向渐变圆，释放后淡出；渲染期按时间计算，无额外动画状态。
     /// `shape = Some` 时波纹裁剪到该形状（Button 传入容器 shape——
     /// Outlined/Text 无背景元素时也能正确裁剪）；None 则从 Background/Border 推断。
-    Ripple { source: MutableInteractionSource, color: Color, bounded: bool, shape: Option<Shape>, radius: Option<f32> },
+    Ripple { source: MutableInteractionSource, color: Color, bounded: bool, shape: Option<Shape> },
     /// 图标绘制（Icon 组件内部使用）——source/tint/autoMirror/可变轴
     DrawIcon { spec: crate::ui::icon::IconSpec },
     /// 焦点请求器 ID（与 FocusRequester 关联）
@@ -878,6 +879,21 @@ impl Modifier {
         })
     }
 
+    /// 动态颜色边框（对标 background 的动态闭包语义——渲染期每帧求值，
+    /// 供颜色过渡动画使用；`peek()` 读取动画值）
+    pub fn border_dynamic(
+        self,
+        width: f32,
+        color_fn: impl Fn() -> Color + Send + Sync + 'static,
+        shape: impl Into<Shape>,
+    ) -> Self {
+        self.push(ModifierElement::BorderDynamic {
+            width,
+            color_fn: Arc::new(color_fn),
+            shape: shape.into(),
+        })
+    }
+
     /// 设置裁剪形状
     pub fn clip(self, shape: impl Into<Shape>) -> Self {
         self.push(ModifierElement::Clip {
@@ -989,7 +1005,6 @@ impl Modifier {
             color,
             bounded,
             shape: None,
-            radius: None,
         })
     }
 
@@ -1008,26 +1023,6 @@ impl Modifier {
             color,
             bounded,
             shape: Some(shape),
-            radius: None,
-        })
-    }
-
-    /// 水波纹指示——固定最大半径（对标 M3 `ripple(bounded = false,
-    /// radius = 20.dp)` 等显式半径用法；默认按节点对角线扩散时不需要）。
-    /// 半径仍按 progress 缩放：`绘制半径 = radius × progress`。
-    pub fn ripple_with_radius(
-        self,
-        source: &MutableInteractionSource,
-        color: Color,
-        bounded: bool,
-        radius: f32,
-    ) -> Self {
-        self.push(ModifierElement::Ripple {
-            source: source.clone(),
-            color,
-            bounded,
-            shape: None,
-            radius: Some(radius),
         })
     }
 
@@ -1472,6 +1467,18 @@ impl Modifier {
         })
     }
 
+    /// Ripple 绑定的交互源（首个 Ripple 元素——Switch 的 Handle 容器等
+    /// ripple 与 clickable 不同节点时，按压坐标要换算到该节点本地空间）
+    pub fn ripple_interaction(&self) -> Option<&MutableInteractionSource> {
+        self.elements.iter().find_map(|el| {
+            if let ModifierElement::Ripple { source, .. } = el {
+                Some(source)
+            } else {
+                None
+            }
+        })
+    }
+
     /// 是否声明了悬停交互（hover 路由判定）
     pub fn has_hoverable(&self) -> bool {
         self.elements.iter().any(|el| matches!(el, ModifierElement::Hoverable { .. }))
@@ -1624,6 +1631,11 @@ impl Debug for ModifierElement {
             Self::Shadow { params, .. } => f.debug_struct("Shadow").field("radius", &params.radius).field("spread", &params.spread).finish(),
             Self::Background { .. } => f.debug_struct("Background").finish(),
             Self::Border { width, color, shape } => f.debug_struct("Border").field("width", width).field("color", color).field("shape", shape).finish(),
+            Self::BorderDynamic { width, shape, .. } => f
+                .debug_struct("BorderDynamic")
+                .field("width", width)
+                .field("shape", shape)
+                .finish(),
             Self::Clip { shape } => f.debug_struct("Clip").field("shape", shape).finish(),
             Self::TextContent { content, font_size, .. } => f
                 .debug_struct("TextContent")
@@ -2158,6 +2170,10 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (Border { width: aw, color: ac, shape: as_ }, Border { width: bw, color: bc, shape: bs }) => {
             aw == bw && ac == bc && as_ == bs
         }
+        // 动态颜色视为相同（渲染期求值——动画不触发 Enter）
+        (BorderDynamic { width: aw, shape: as_, .. }, BorderDynamic { width: bw, shape: bs, .. }) => {
+            aw == bw && as_ == bs
+        }
         (Clip { shape: as_ }, Clip { shape: bs }) => as_ == bs,
         (Blur { radius: ar }, Blur { radius: br }) => ar == br,
         (BackdropBlur { radius: ar }, BackdropBlur { radius: br }) => ar == br,
@@ -2182,8 +2198,8 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (DragOnCancel { .. }, DragOnCancel { .. }) => true,
         (Focusable { interaction: ai }, Focusable { interaction: bi }) => ai == bi,
         (Hoverable { interaction: ai }, Hoverable { interaction: bi }) => ai == bi,
-        (Ripple { source: as_, color: ac, bounded: abc, shape: ash, radius: ar }, Ripple { source: bs, color: bc, bounded: bbc, shape: bsh, radius: br }) => {
-            as_ == bs && ac == bc && abc == bbc && ash == bsh && ar == br
+        (Ripple { source: as_, color: ac, bounded: abc, shape: ash }, Ripple { source: bs, color: bc, bounded: bbc, shape: bsh }) => {
+            as_ == bs && ac == bc && abc == bbc && ash == bsh
         }
         (DrawIcon { spec: a }, DrawIcon { spec: b }) => a == b,
         (FocusRequesterId { id: ai }, FocusRequesterId { id: bi }) => ai == bi,

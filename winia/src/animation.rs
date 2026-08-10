@@ -113,8 +113,23 @@ pub fn push_infinite<T: AnimatableValue + Send + Sync + 'static>(
 /// 注册一个动画到全局活跃列表
 /// 注册一个 Animatable<T> 到全局活跃列表（由 animate_*_as_state 调用）
 pub fn push_animatable<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(state: State<T>, target: T, spec: AnimationSpec) {
-    if state.peek() == target { return; }
     let sid = state.id();
+    if state.peek() == target {
+        // 当前值已等于目标：仅当无进行中动画（或动画目标相同）时才可直接返回。
+        // 若存在目标不同的旧动画，必须取消它——否则旧动画会继续把值拉向旧目标
+        // （快速切换 + set_silent 场景：peek 恰好等于新目标，旧弹簧 22→2 存活，
+        // 最终把容器写回 2 而状态已是 true）。
+        let conflicting = {
+            let list = ACTIVE_ANIMATIONS.lock().unwrap();
+            list.iter().any(|a| a.state_id() == sid && !a.same_target(&target))
+        };
+        if !conflicting {
+            return;
+        }
+        // 取消旧动画后继续走注册路径：零位移动画会立即完成并精确写回 target，
+        // 避免“取消后直接返回”在极端时序下残留中间值/1 帧回弹。
+        cancel_animation(&state);
+    }
     let mut inherited_velocity = 0.0f32;
     // 非标量类型（Offset/Size/Color 等）Spring 无单值物理，强制降级 Tween
     let spec = if T::supports_spring() {
@@ -148,7 +163,23 @@ pub fn push_animatable<T: Clone + PartialEq + AnimatableValue + Send + Sync + 's
 /// 注册一个 Animatable<Color> 到全局活跃列表（由 animate_color_as_state 调用）
 pub fn push_animatable_color(state: State<crate::modifier::Color>, target: crate::modifier::Color, spec: AnimationSpec) {
     use crate::modifier::Color;
-    if state.peek() == target { return; }
+    if state.peek() == target {
+        // 与 push_animatable 相同：存在目标不同的旧颜色动画时必须取消，
+        // 否则旧动画会把值继续拉向旧目标
+        let sid = state.id();
+        let conflicting = {
+            let list = ACTIVE_COLOR_ANIMATIONS.lock().unwrap();
+            list.iter().any(|anim| {
+                anim.state.id() == sid
+                    && !anim.anim_state.as_ref().map(|s| s.to == target).unwrap_or(false)
+            })
+        };
+        if !conflicting {
+            return;
+        }
+        ACTIVE_COLOR_ANIMATIONS.lock().unwrap().retain(|anim| anim.state.id() != sid);
+        return;
+    }
     let sid = state.id();
     {
         let mut list = ACTIVE_COLOR_ANIMATIONS.lock().unwrap();
