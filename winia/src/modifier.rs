@@ -410,6 +410,10 @@ pub(crate) enum ModifierElement {
     /// `WiniaTheme::with_theme_and_direction`——CompositionLocal 作用域；
     /// 全 demo 切换也走它）。此元素是节点级便捷覆盖。
     LayoutDirection(crate::layout::LayoutDirection),
+    /// TextField 容器子节点角色标记（text-field-v2 容器化——自定义
+    /// MeasurePolicy 按角色布局：leading/label/placeholder/prefix/
+    /// input/suffix/trailing；仅标记，不参与测量/绘制）
+    TextFieldSlot { role: crate::ui::text_field::TextFieldSlotRole },
     /// 阴影（对标 Compose `Modifier.shadow`——elevation 模糊 + 内容裁剪）
     /// 阴影（对标 Compose `Modifier.shadow`——单层参数；elevation 便捷版
     /// 展开为 ambient+spot 两层元素）
@@ -427,8 +431,7 @@ pub(crate) enum ModifierElement {
     Blur { radius: f32 },
     /// 背景模糊（毛玻璃，单 snapshot 多节点共享）
     BackdropBlur { radius: f32 },
-    /// 文本输入框容器视觉（TextField 组件——M3 Filled/Outlined 容器：
-    /// 背景/指示线/边框/label/支持文本）。组合期解析全部视觉状态
+    /// 文本输入框容器视觉（TextField 组件——M3 Filled/Outlined 容器：    /// 背景/指示线/边框/label/支持文本）。组合期解析全部视觉状态
     /// （enabled/focused/is_error/label 悬浮），渲染期静态绘制——
     /// 状态过渡动画由后续迭代接入。
     TextFieldVisual {
@@ -448,20 +451,8 @@ pub(crate) enum ModifierElement {
         /// 视觉变换偏移映射（密码掩码/格式化——渲染/定位跨界转换；
         /// None = 恒等）
         offset_mapping: Option<std::sync::Arc<dyn crate::ui::text_transformation::OffsetMapping>>,
-        /// 悬浮态（focused 或文本非空）——悬浮画在容器顶部；展开画在输入位
-        label: Option<LabelVisual>,
         /// 支持文本（画在容器底部外侧 4dp）
         supporting: Option<SupportingVisual>,
-        /// 占位文本（输入位，独立 alpha 动画——显示/隐藏淡入淡出，
-        /// M3 placeholderAlpha 语义）
-        placeholder: Option<PlaceholderVisual>,
-    },
-    /// TextField 占位文本绘制参数（alpha 动画 State——0 隐藏 / 1 显示）
-    PlaceholderVisual {
-        content: String,
-        font_size: f32,
-        color: Color,
-        alpha: crate::core::state::State<f32>,
     },
 
     // ── Content 类 ──
@@ -824,6 +815,12 @@ impl Modifier {
         self.push(ModifierElement::LayoutDirection(d))
     }
 
+    /// TextField 容器子节点角色标记（text-field-v2 容器化内部使用——
+    /// TextFieldLayout policy 按角色布局）
+    pub(crate) fn text_field_slot(self, role: crate::ui::text_field::TextFieldSlotRole) -> Self {
+        self.push(ModifierElement::TextFieldSlot { role })
+    }
+
     /// `shadow(elevation, shape, clip, color)`（对标 Compose `Modifier.shadow`）——
     /// elevation 便捷版：展开为 **ambient + spot 两层**（Compose DropShadow
     /// 物理阴影——ambient 无偏移大模糊低 alpha、spot 偏移 e*0.5 小模糊中
@@ -1010,9 +1007,7 @@ impl Modifier {
         indicator_color: crate::core::state::State<crate::modifier::Color>,
         focus_progress: crate::core::state::State<f32>,
         offset_mapping: Option<std::sync::Arc<dyn crate::ui::text_transformation::OffsetMapping>>,
-        label: Option<LabelVisual>,
         supporting: Option<SupportingVisual>,
-        placeholder: Option<PlaceholderVisual>,
     ) -> Self {
         self.push(ModifierElement::TextFieldVisual {
             variant,
@@ -1025,9 +1020,7 @@ impl Modifier {
             indicator_color,
             focus_progress,
             offset_mapping,
-            label,
             supporting,
-            placeholder,
         })
     }
 }
@@ -1778,6 +1771,7 @@ impl Debug for ModifierElement {
                 .finish(),
             Self::TestTag { tag } => f.debug_struct("TestTag").field("tag", tag).finish(),
             Self::LayoutDirection(d) => f.debug_tuple("LayoutDirection").field(d).finish(),
+            Self::TextFieldSlot { role } => f.debug_struct("TextFieldSlot").field("role", role).finish(),
             Self::Shadow { params, .. } => f.debug_struct("Shadow").field("radius", &params.radius).field("spread", &params.spread).finish(),
             Self::Background { .. } => f.debug_struct("Background").finish(),
             Self::Border { width, color, shape } => f.debug_struct("Border").field("width", width).field("color", color).field("shape", shape).finish(),
@@ -1831,7 +1825,6 @@ impl Debug for ModifierElement {
             Self::Blur { radius } => f.debug_struct("Blur").field("radius", radius).finish(),
             Self::BackdropBlur { radius } => f.debug_struct("BackdropBlur").field("radius", radius).finish(),
             Self::TextFieldVisual { variant, .. } => f.debug_struct("TextFieldVisual").field("variant", variant).finish(),
-            Self::PlaceholderVisual { .. } => f.debug_struct("PlaceholderVisual").finish(),
         }
     }
 }
@@ -1891,31 +1884,12 @@ impl Default for GraphicsLayerParams {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct TransformOrigin(pub f32, pub f32);
 
-/// TextField label 绘制参数（悬浮画在容器顶部 / 展开画在输入位；
-/// progress 0..1 动画插值位置与字号——渲染期 peek 读值）
-#[derive(Clone, Debug)]
-pub struct LabelVisual {
-    pub content: String,
-    pub font_size: f32,
-    pub color: Color,
-    pub progress: crate::core::state::State<f32>,
-}
-
 /// TextField 支持文本绘制参数（画在容器底部外侧 4dp）
 #[derive(Clone, Debug)]
 pub struct SupportingVisual {
     pub content: String,
     pub font_size: f32,
     pub color: Color,
-}
-
-/// TextField 占位文本绘制参数（输入位；alpha 动画 State——显示/隐藏淡入淡出）
-#[derive(Clone, Debug)]
-pub struct PlaceholderVisual {
-    pub content: String,
-    pub font_size: f32,
-    pub color: Color,
-    pub alpha: crate::core::state::State<f32>,
 }
 
 /// 阴影参数（对标 Compose `graphics.shadow.Shadow`——dropShadow 可配置集）。

@@ -670,48 +670,17 @@ fn render_pass1(
                 scroll_offset_h = Some(state.get());
             }
             // 文本输入框容器（M3 Filled/Outlined——背景/指示线/边框/label/支持文本）
-            ModifierElement::TextFieldVisual { variant, shape, colors, enabled: _, focused: _, is_error: _, cursor_color: _, indicator_color, focus_progress, offset_mapping, label, supporting, placeholder } => {
+            ModifierElement::TextFieldVisual { variant, shape, colors, enabled: _, focused: _, is_error: _, cursor_color: _, indicator_color, focus_progress, offset_mapping, supporting } => {
                 // 容器 rect：有支持文本时扣除其区域（supporting 画在容器底部外
                 // 4dp，节点总高 = 容器 + 4 + 16）
                 let supporting_h = if supporting.is_some() { 20.0 } else { 0.0 };
                 let container_rect = Rect::new(x, y, x + w, y + h - supporting_h);
-                // label：progress 0（展开，输入位 16sp）↔ 1（悬浮）插值。
-                // 悬浮位置：Filled 容器内顶部（top+8）；Outlined **跨越顶部
-                // 边框线**（label 中心对齐边框线——M3 规格）
-                let label_geom = label.as_ref().map(|lv| {
-                    let p = lv.progress.peek();
-                    let font_size = 16.0 + (12.0 - 16.0) * p;
-                    // M3 行高：bodySmall(12sp) 16 / bodyLarge(16sp) 24
-                    let label_h = if font_size <= 12.5 { 16.0 } else { 24.0 };
-                    let float_y = match variant {
-                        crate::ui::TextFieldVariant::Filled => y + 8.0,
-                        crate::ui::TextFieldVariant::Outlined => y - label_h / 2.0,
-                    };
-                    // 展开 label 在**容器**内垂直居中（M3：unpopulated label
-                    // 居中；节点高含 supporting——须扣除）
-                    let expanded_y = y + (h - supporting_h - label_h) / 2.0;
-                    let py = expanded_y + (float_y - expanded_y) * p;
-                    (p, font_size, label_h, py)
-                });
-                // 边框缺口（Outlined + 悬浮 label）：label 区域（含 4dp 外扩）
-                // 用 clip Difference 挖掉——边框在 label 处断开。
-                // 缺口宽度固定（不随 progress 收缩——动画中段缺口窄于文本时
-                // 边框线会穿过上移中的 label）
-                let cutout = label_geom.and_then(|(p, font_size, label_h, py)| {
-                    if *variant != crate::ui::TextFieldVariant::Outlined || p < 0.5 { return None; }
-                    let lw = measure_text_width(
-                        label.as_ref().unwrap().content.as_str(),
-                        font_size, content_w,
-                    );
-                    let gap_w = lw + 8.0;
-                    Some(Rect::from_xywh(x + 16.0 - 4.0, py, gap_w, label_h))
-                });
-                // 焦点过渡：颜色（动画 State，CAM16-UCS）+ 宽度（1↔2px）
+                // ⚠ label/placeholder/图标/前后缀均为子节点（text-field-v2
+                // 容器化——TextFieldLayout 定位）；Outlined label 缺口由
+                // 子节点位置提供（渲染端无法预知 label 宽——缺口逻辑迁移
+                // 到 policy 后简化：缺口保留为近似矩形）
                 let focus_p = focus_progress.peek();
-                draw_text_field_container(canvas, container_rect, variant, shape, colors, &indicator_color.peek(), focus_p, cutout);
-                if let (Some(lv), Some((_, font_size, _, py))) = (label, &label_geom) {
-                    draw_text_field_aux_text(canvas, lv.content.as_str(), *font_size, &lv.color, (x + 16.0, *py), content_w);
-                }
+                draw_text_field_container(canvas, container_rect, variant, shape, colors, &indicator_color.peek(), focus_p, None);
                 // 支持文本：容器底部外侧 4dp
                 if let Some(sv) = supporting {
                     draw_text_field_aux_text(
@@ -722,17 +691,6 @@ fn render_pass1(
                         (x + 16.0, container_rect.bottom + 4.0),
                         w - 32.0,
                     );
-                }
-                // 占位文本：输入位，alpha 动画淡入淡出（M3 placeholderAlpha）
-                if let Some(pv) = placeholder {
-                    let a = pv.alpha.peek();
-                    if a > 0.0 {
-                        let c = crate::modifier::Color::from_argb(
-                            (pv.color.a as f32 * a) as u8,
-                            pv.color.r, pv.color.g, pv.color.b,
-                        );
-                        draw_text_field_aux_text(canvas, pv.content.as_str(), pv.font_size, &c, (content_x, content_y), content_w);
-                    }
                 }
             }
             // 图标绘制于内容区域（padding 内缩——叶子 padding 渲染偏移）
