@@ -956,7 +956,7 @@ impl Modifier {
         self.push(ModifierElement::Blur { radius })
     }
 
-    /// 背景模糊（毛玻璃，单 snapshot 多节点共享）
+    /// 背景模糊（毛玻璃）——渲染期在节点内容绘制前即时 snapshot+blur
     pub fn backdrop_blur(self, radius: f32) -> Self {
         self.push(ModifierElement::BackdropBlur { radius })
     }
@@ -1593,6 +1593,13 @@ impl Modifier {
     pub fn graphics_layer_params(&self) -> Option<GraphicsLayerParams> {
         self.elements.iter().find_map(|el| {
             if let ModifierElement::GraphicsLayer { params_fn } = el { Some((params_fn)()) } else { None }
+        })
+    }
+
+    /// 背景模糊半径（渲染期在节点内容绘制前即时处理）
+    pub fn backdrop_blur_radius(&self) -> Option<f32> {
+        self.elements.iter().find_map(|el| {
+            if let ModifierElement::BackdropBlur { radius } = el { Some(*radius) } else { None }
         })
     }
 

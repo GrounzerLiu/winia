@@ -1,15 +1,15 @@
 //! 渲染管线 — 遍历 LayoutNode 树绘制到 Skia Canvas
 //!
-//! 两阶段渲染：
-//!   Phase 1: 非 BackdropBlur 内容 + 收集背景模糊区域
-//!   Phase 2: snapshot → 每个模糊区域 crop → blur → 画回 + 画子节点
+//! 单阶段深度遍历：节点级修饰符（阴影/背景/边框/文本/子节点）按序绘制；
+//! BackdropBlur 在节点自身内容绘制前即时 snapshot→blur→画回（见
+//! `draw_backdrop_blur`）——语义对齐 Compose：只模糊"位于其下"的内容。
 
 use crate::debug_log;
 use crate::layout::LayoutDirection;
 use crate::layout::node::LayoutNode;
 use crate::modifier::ModifierElement;
 use crate::ui::icon::{DecodedIcon, IconSource, IconSpec, decoded_icon};
-use skia_safe::{BlendMode, Canvas, Color4f, Paint, RRect, Rect, SamplingOptions};
+use skia_safe::{BlendMode, Canvas, Color4f, IRect, Paint, RRect, Rect, SamplingOptions};
 use skia_safe::sampling_options::{FilterMode, MipmapMode};
 use skia_safe::image_filters;
 use skia_safe::svg;
@@ -18,13 +18,7 @@ use std::cell::RefCell;
 // ── 入口 ──
 
 pub fn render(nodes: &[LayoutNode], root_idx: usize, canvas: &Canvas) {
-    let mut backdrop_regions = Vec::new();
-    // Phase 1: 非背景模糊内容 + 收集模糊区域
-    render_pass1(nodes, root_idx, canvas, 0.0, 0.0, &mut backdrop_regions, false);
-    // Phase 2: 背景模糊
-    if !backdrop_regions.is_empty() {
-        render_backdrop_blur(canvas, nodes, &backdrop_regions);
-    }
+    render_pass1(nodes, root_idx, canvas, 0.0, 0.0);
 }
 
 // ── 视觉 Modifier 渲染（Background / Border / TextContent）──
@@ -575,15 +569,13 @@ fn draw_svg_dom(
     canvas.restore();
 }
 
-// ── Phase 1: 正常渲染（非 BackdropBlur 节点）──
+// ── 渲染遍历（含 BackdropBlur 即时处理）──
 
 fn render_pass1(
     nodes: &[LayoutNode],
     idx: usize,
     canvas: &Canvas,
     parent_x: f32, parent_y: f32,
-    backdrop_regions: &mut Vec<(f32, f32, f32, f32, f32, usize)>,
-    backdrop_pass: bool,
 ) {
     let node = &nodes[idx];
     let x = parent_x + node.position.x;
@@ -593,6 +585,15 @@ fn render_pass1(
     if w <= 0.0 || h <= 0.0 { return; }
 
     let rect = Rect::new(x, y, x + w, y + h);
+
+    // 背景模糊：在节点**自身任何内容（背景/文本/子节点）绘制之前**处理——
+    // snapshot 只含"位于其下"的已画内容（祖先 + 前面的兄弟），对齐 Compose
+    // backdropBlur 语义。参考 v1 item.rs 实现：物理像素 snapshot + CropRect
+    // blur + clip 到节点 + 像素网格对齐画回（draw_image 无采样缩放）。
+    if let Some(radius) = node.modifier.backdrop_blur_radius() {
+        draw_backdrop_blur(canvas, x, y, w, h, radius);
+    }
+
     // 图形层：包住整个节点（background + text + children），应用 alpha/变换
     let gl_params = node.modifier.graphics_layer_params();
     let gl_saved = if let Some(gl) = gl_params {
@@ -603,7 +604,7 @@ fn render_pass1(
         }
         // graphicsLayer shadowElevation：独立“变换 → 绘制 → 恢复”——阴影
         // 随 3D 形变，且不参与内容 clip（对标 Compose：层阴影在边界外）
-        if gl.shadow_elevation > 0.0 && !backdrop_pass {
+        if gl.shadow_elevation > 0.0 {
             canvas.save();
             apply_gl_transform(canvas, &gl, x, y, w, h);
             let shape = gl.shadow_shape.clone().unwrap_or(crate::modifier::Shape::Rectangle);
@@ -620,7 +621,6 @@ fn render_pass1(
         true
     } else { false };
     let mut blur_radius: Option<f32> = None;
-    let mut is_backdrop = false;
     let mut clip_shape: Option<crate::modifier::Shape> = None;
     // 阴影（elevation, shape, color）——链序中与 background 同层绘制；
     // clip=true 时并入 clip_shape（内容裁剪，阴影不受裁——Compose 语义）
@@ -641,11 +641,9 @@ fn render_pass1(
     // ⚠ 阴影必须**垫底**（主循环绘制背景之前——无论链序）：Compose shadow
     // 是 graphicsLayer 独立层（垫底）。此前预扫描代码误放在主循环之后——
     // 阴影画在背景之上 → 卡片被压暗（绿卡 ×(1-0.43)≈0.6——实测 bug）
-    if !backdrop_pass {
-        for el in node.modifier.elements() {
-            if let ModifierElement::Shadow { params, shape, .. } = el {
-                draw_shadow_layer(canvas, rect, shape, params);
-            }
+    for el in node.modifier.elements() {
+        if let ModifierElement::Shadow { params, shape, .. } = el {
+            draw_shadow_layer(canvas, rect, shape, params);
         }
     }
 
@@ -654,25 +652,21 @@ fn render_pass1(
     let mut last_background: Option<(crate::modifier::Color, crate::modifier::Shape)> = None;
     for el in node.modifier.elements() {
         match el {
-            ModifierElement::Blur { radius } if !backdrop_pass => {
+            ModifierElement::Blur { radius } => {
                 blur_radius = Some(*radius);
             }
-            ModifierElement::BackdropBlur { radius } if !backdrop_pass => {
-                is_backdrop = true;
-                backdrop_regions.push((x, y, w, h, *radius, idx));
-            }
-            ModifierElement::Clip { shape } if !backdrop_pass => {
+            ModifierElement::Clip { shape } => {
                 clip_shape = Some(shape.clone());
             }
-            ModifierElement::Shadow { shape, clip, .. } if !backdrop_pass => {
+            ModifierElement::Shadow { shape, clip, .. } => {
                 if *clip {
                     clip_shape = Some(shape.clone());
                 }
             }
-            ModifierElement::VerticalScroll { state } if !backdrop_pass => {
+            ModifierElement::VerticalScroll { state } => {
                 scroll_offset_v = Some(state.get());
             }
-            ModifierElement::HorizontalScroll { state } if !backdrop_pass => {
+            ModifierElement::HorizontalScroll { state } => {
                 scroll_offset_h = Some(state.get());
             }
             // 图标绘制于内容区域（padding 内缩——叶子 padding 渲染偏移）
@@ -711,13 +705,11 @@ fn render_pass1(
     }
 
     // 内容模糊：saveLayer
-    if !backdrop_pass {
-        if let Some(r) = blur_radius {
+    if let Some(r) = blur_radius {
         let mut paint = Paint::default();
         paint.set_image_filter(image_filters::blur((r, r), skia_safe::TileMode::Clamp, None, None));
         let rec = skia_safe::canvas::SaveLayerRec::default().paint(&paint);
         canvas.save_layer(&rec);
-    }
     }
 
     // Clip：在绘制内容前设置裁剪区域
@@ -880,11 +872,9 @@ fn render_pass1(
         scrolled = true;
     }
 
-    // 穿行子节点（背景模糊节点跳过子节点——Phase 2 处理）
-    if !is_backdrop {
-        for &child in &node.children {
-            render_pass1(nodes, child, canvas, x, y, backdrop_regions, false);
-        }
+    // 穿行子节点（backdrop 节点自身内容照常绘制在模糊层之上）
+    for &child in &node.children {
+        render_pass1(nodes, child, canvas, x, y);
     }
 
     // 水波纹（indication ripple）——覆盖内容之上、受 shape/scroll 裁剪
@@ -1031,54 +1021,133 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
     }
 }
 
-// ── Phase 2: 背景模糊 ──
+// ── 背景模糊（BackdropBlur）──
 
-fn render_backdrop_blur(
+/// 背景模糊采样区：blur sigma = radius（3σ 采样范围），快照扩展必须覆盖
+/// 3σ 才不触及 snapshot 边界（Clamp 重复像素产生边缘条纹）。
+const BACKDROP_BLUR_MARGIN: f32 = 3.0;
+
+/// 节点背景模糊——参考 v1 `item.rs` 实现，关键点：
+/// 1. **物理像素 snapshot**：节点四角经当前画布矩阵（含全局 HiDPI scale、
+///    祖先 scroll/overlay 平移）映射为屏幕物理坐标，取 AABB + margin 扩展，
+///    clamp 到 surface 边界（跨顶/左边缘时以相交原点锚定，防内容偏移；
+///    仅用裸逻辑坐标 ×sf 会在滚动容器/overlay 中错位）
+/// 2. **CropRect 限定滤镜输出** = 快照尺寸（防滤镜越界处理）
+/// 3. **clip 到节点矩形**：只显示节点内部，边缘带不参与合成（无白雾晕开）
+/// 4. **draw_image 画回**：逆矩阵把快照原点（物理像素）映射回画布逻辑坐标，
+///    scale(1/矩阵缩放) —— 快照像素与物理像素严格 1:1，无采样缩放，
+///    移动时边缘不闪烁
+/// 语义：在节点自身内容（背景/文本/子节点）绘制**之前**执行——snapshot
+/// 只含"位于其下"的已画内容（祖先 + 前面的兄弟），对齐 Compose。
+/// 已知限制（与 v1 一致）：blur 绘制在 graphicsLayer 变换/alpha 之前——
+/// 节点自身 alpha/scale/rotation 不作用于模糊层；旋转祖先下画回仅
+/// translate+scale 为近似。这些场景未在 demo 覆盖。
+fn draw_backdrop_blur(
     canvas: &Canvas,
-    nodes: &[LayoutNode],
-    regions: &[(f32, f32, f32, f32, f32, usize)],
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    radius: f32,
 ) {
-    // 取整张 surface snapshot（只回读一次）
-    let mut snap_bounds: Option<Rect> = None;
-    for &(x, y, w, h, r, _) in regions {
-        let m = r * 2.0;
-        let b = Rect::new((x - m).max(0.0), (y - m).max(0.0), x + w + m, y + h + m);
-        snap_bounds = Some(match snap_bounds {
-            Some(prev) => Rect::new(
-                prev.left.min(b.left), prev.top.min(b.top),
-                prev.right.max(b.right), prev.bottom.max(b.bottom),
-            ),
-            None => b,
-        });
+    if w <= 0.0 || h <= 0.0 {
+        return;
+    }
+    let margin = radius * BACKDROP_BLUR_MARGIN;
+
+    // 节点屏幕物理位置：当前画布矩阵映射（含全局 sf 与祖先 scroll/gl/overlay）
+    let m = canvas.local_to_device_as_3x3();
+    let corners = [
+        m.map_xy(x, y),
+        m.map_xy(x + w, y),
+        m.map_xy(x, y + h),
+        m.map_xy(x + w, y + h),
+    ];
+    let (sx0, sy0) = corners.iter().fold((f32::MAX, f32::MAX), |acc, p| {
+        (acc.0.min(p.x), acc.1.min(p.y))
+    });
+    let (sx1, sy1) = corners.iter().fold((f32::MIN, f32::MIN), |acc, p| {
+        (acc.0.max(p.x), acc.1.max(p.y))
+    });
+    if !sx1.is_finite() || !sy1.is_finite() {
+        return;
+    }
+    // 物理像素边界（floor/ceil——截断会丢边缘像素），并 clamp 到 surface：
+    // `image_snapshot_with_bounds` 会与 surface 相交——若节点（或其 3σ
+    // 采样区）跨出顶/左边缘，返回图像锚定在相交原点 (0,0)，画回若按未
+    // clamp 的 (left,top) 锚定会整体偏移 (-left,-top) 物理像素（回归：
+    // 旧两阶段实现有 `.max(0.0)`）。clamp 后以 clamp 原点锚定即对齐。
+    let Some(surface) = (unsafe { canvas.surface() }) else { return; };
+    let (sw_s, sh_s) = (surface.width(), surface.height());
+    let Some(bounds) = backdrop_snapshot_irect(sx0, sy0, sx1, sy1, margin, sw_s, sh_s) else {
+        return;
+    };
+    let (left, top, right, bottom) = (bounds.left, bounds.top, bounds.right, bounds.bottom);
+
+    let Some(snap) = surface_snapshot(canvas, IRect::from_ltrb(left, top, right, bottom)) else {
+        return;
+    };
+    let (sw, sh) = {
+        let info = snap.image_info();
+        (info.width(), info.height())
+    };
+    if sw <= 0 || sh <= 0 {
+        return;
     }
 
-    let snapshot = if let Some(bounds) = snap_bounds {
-        let bi = skia_safe::IRect::from_ltrb(
-            bounds.left as i32, bounds.top as i32,
-            bounds.right as i32, bounds.bottom as i32,
-        );
-        if bi.width() > 0 && bi.height() > 0 {
-            surface_snapshot(canvas, bi)
-        } else {
-            None
-        }
+    // CropRect 限定模糊输出 = 快照范围（参考 v1：防滤镜对越界区域采样）
+    let mut paint = Paint::default();
+    paint.set_image_filter(image_filters::blur(
+        (radius, radius),
+        skia_safe::TileMode::Clamp,
+        None,
+        image_filters::CropRect::from(Rect::from_wh(sw as f32, sh as f32)),
+    ));
+
+    // 画回：快照原点物理 (left,top) → 画布逻辑坐标（逆矩阵）
+    let Some(inv) = m.invert() else { return };
+    let origin = inv.map_xy(left as f32, top as f32);
+    // 矩阵缩放（无旋转/斜切时直接取对角线；否则均匀 scale = 1/√|det| 近似）
+    let (rc00, rc01, rc10, rc11) = (m.rc(0, 0), m.rc(0, 1), m.rc(1, 0), m.rc(1, 1));
+    let det = rc00 * rc11 - rc01 * rc10;
+    if !det.is_finite() || det.abs() < 1e-9 {
+        return;
+    }
+    let (sc_x, sc_y) = if rc01.abs() < 1e-4 && rc10.abs() < 1e-4 && rc00.abs() > 1e-4 && rc11.abs() > 1e-4 {
+        (1.0 / rc00, 1.0 / rc11)
     } else {
-        None
+        let s = 1.0 / det.abs().sqrt();
+        (s, s)
     };
 
-    // 为每个背景模糊区域画回
-    for &(x, y, w, h, radius, backdrop_idx) in regions {
-        if let Some(ref snap) = snapshot {
-            let mut paint = Paint::default();
-            paint.set_image_filter(image_filters::blur((radius, radius), skia_safe::TileMode::Clamp, None, None));
-            let m = radius * 2.0;
-            let src = Rect::new((x - m).max(0.0), (y - m).max(0.0), x + w + m, y + h + m);
-            canvas.draw_image_rect(snap, None, &src, &paint);
-        }
-        // 画回模糊节点自己的子节点
-        for &child in &nodes[backdrop_idx].children {
-            render_pass1(nodes, child, canvas, x, y, &mut Vec::new(), true);
-        }
+    canvas.save();
+    // clip 到节点矩形（逻辑坐标——被画布矩阵自动变换）
+    canvas.clip_rect(Rect::from_xywh(x, y, w, h), None, None);
+    canvas.translate((origin.x, origin.y));
+    canvas.scale((sc_x, sc_y));
+    canvas.draw_image(&snap, skia_safe::Point::new(0.0, 0.0), Some(&paint));
+    canvas.restore();
+}
+
+/// 快照物理像素边界：AABB + margin 扩展，floor/ceil 取整后 clamp 到
+/// surface 范围。返回 None 表示与 surface 无交集（无需模糊）。
+fn backdrop_snapshot_irect(
+    sx0: f32,
+    sy0: f32,
+    sx1: f32,
+    sy1: f32,
+    margin: f32,
+    sw_s: i32,
+    sh_s: i32,
+) -> Option<IRect> {
+    let left = ((sx0 - margin).floor() as i32).clamp(0, sw_s);
+    let top = ((sy0 - margin).floor() as i32).clamp(0, sh_s);
+    let right = ((sx1 + margin).ceil() as i32).clamp(0, sw_s);
+    let bottom = ((sy1 + margin).ceil() as i32).clamp(0, sh_s);
+    if right <= left || bottom <= top {
+        None
+    } else {
+        Some(IRect::from_ltrb(left, top, right, bottom))
     }
 }
 
@@ -1261,6 +1330,84 @@ mod tests {
         let r = fit_rect(skia_safe::Rect::new(0.0, 0.0, 100.0, 50.0), 24.0, 24.0);
         assert_eq!((r.width(), r.height()), (50.0, 50.0), "等比缩放到短边");
         assert_eq!((r.left, r.top), (25.0, 0.0), "水平居中");
+    }
+
+    #[test]
+    fn backdrop_snapshot_bounds_cover_3sigma() {
+        // 快照物理像素边界必须覆盖 3σ 采样范围（blur sigma = radius，
+        // 边缘像素采样 ±3r）——不足则 Clamp 重复像素产生边缘条纹。
+        // 画布矩阵 = scale(1.5)（主画布 HiDPI 场景）。
+        use skia_safe::Matrix;
+        let mut m = Matrix::default();
+        m.set_scale_x(1.5); m.set_scale_y(1.5);
+        let (x, y, w, h, r) = (300.0f32, 250.0f32, 260.0f32, 170.0f32, 12.0f32);
+        let corners = [
+            m.map_xy(x, y), m.map_xy(x + w, y),
+            m.map_xy(x, y + h), m.map_xy(x + w, y + h),
+        ];
+        let (sx0, sy0) = corners.iter().fold((f32::MAX, f32::MAX), |acc, p| (acc.0.min(p.x), acc.1.min(p.y)));
+        let (sx1, sy1) = corners.iter().fold((f32::MIN, f32::MIN), |acc, p| (acc.0.max(p.x), acc.1.max(p.y)));
+        let left = (sx0 - r * 3.0).floor() as i32;
+        let top = (sy0 - r * 3.0).floor() as i32;
+        let right = (sx1 + r * 3.0).ceil() as i32;
+        let bottom = (sy1 + r * 3.0).ceil() as i32;
+        assert!(sx0 - left as f32 >= r * 3.0 - 1.0, "左侧扩展覆盖 3σ");
+        assert!(right as f32 - sx1 >= r * 3.0 - 1.0, "右侧扩展覆盖 3σ");
+        assert!(sy0 - top as f32 >= r * 3.0 - 1.0, "顶部扩展覆盖 3σ");
+        assert!(bottom as f32 - sy1 >= r * 3.0 - 1.0, "底部扩展覆盖 3σ");
+    }
+
+    #[test]
+    fn backdrop_snapshot_irect_clamps_to_surface() {
+        // 节点跨出顶/左边缘（如滚动内容滚出顶部）：快照边界必须 clamp
+        // 到 surface——image_snapshot_with_bounds 返回图像锚定在相交原点，
+        // 画回按 clamp 后原点锚定才不错位（旧实现 .max(0.0) 语义回归点）
+        // 节点物理 AABB 在 (-50,-30)..(200,150)，surface 1350x960
+        let b = backdrop_snapshot_irect(-50.0, -30.0, 200.0, 150.0, 36.0, 1350, 960).expect("有交集");
+        assert_eq!((b.left, b.top), (0, 0), "顶/左边缘 clamp 到 0（相交原点锚定）");
+        assert_eq!((b.right, b.bottom), (236, 186), "右侧/底部保持完整扩展");
+        // 完全在 surface 外 → None
+        assert!(backdrop_snapshot_irect(2000.0, 2000.0, 3000.0, 3000.0, 36.0, 1350, 960).is_none());
+        // 右/下边缘 clamp
+        let b2 = backdrop_snapshot_irect(1300.0, 900.0, 1360.0, 980.0, 36.0, 1350, 960).expect("有交集");
+        assert_eq!((b2.right, b2.bottom), (1350, 960), "右/下边缘 clamp 到 surface 尺寸");
+    }
+
+    #[test]
+    fn backdrop_draw_back_alignment_is_pixel_exact() {
+        // 画回：快照原点经逆矩阵映射回画布逻辑坐标——再经画布矩阵后精确
+        // 等于物理像素边界（像素网格对齐 → draw_image 零插值，移动不闪烁）
+        use skia_safe::Matrix;
+        let mut m = Matrix::default();
+        m.set_scale_x(1.5); m.set_scale_y(1.5);
+        let (x, y, r) = (300.0f32, 250.0f32, 12.0f32);
+        let left = (x * 1.5 - r * 3.0).floor() as i32;
+        let top = (y * 1.5 - r * 3.0).floor() as i32;
+        let inv = m.invert().expect("invert");
+        let origin = inv.map_xy(left as f32, top as f32);
+        let back = m.map_xy(origin.x, origin.y);
+        let (bdx, bdy) = (back.x, back.y);
+        assert!((bdx - left as f32).abs() < 1e-3, "像素网格精确对齐：{bdx} vs {left}");
+        assert!((bdy - top as f32).abs() < 1e-3, "像素网格精确对齐：{bdy} vs {top}");
+    }
+
+    #[test]
+    fn backdrop_matrix_handles_ancestor_translate() {
+        // 滚动容器/overlay 场景：画布含 translate（如 overlay 定位或 scroll
+        // 偏移）——快照与画回必须基于矩阵映射的屏幕物理位置，裸逻辑坐标×sf
+        // 会错位。验证：translate 下逆矩阵画回仍精确回到物理像素。
+        use skia_safe::Matrix;
+        let mut m = Matrix::default();
+        m.set_scale_x(1.5); m.set_scale_y(1.5);
+        m.set_translate_x(120.0); m.set_translate_y(80.0);
+        let inv = m.invert().expect("invert");
+        // 快照边界（矩阵映射后取整）
+        let left = 450i32; let top = 300i32;
+        let origin = inv.map_xy(left as f32, top as f32);
+        let back = m.map_xy(origin.x, origin.y);
+        let (bdx, bdy) = (back.x, back.y);
+        assert!((bdx - left as f32).abs() < 1e-3, "translate 场景像素精确对齐：{bdx} vs {left}");
+        assert!((bdy - top as f32).abs() < 1e-3, "translate 场景像素精确对齐：{bdy} vs {top}");
     }
     use crate::modifier::GraphicsLayerParams;
 

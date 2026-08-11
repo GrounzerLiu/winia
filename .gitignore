@@ -8,3 +8,5 @@
 .idea/
 dbg_win.png
 .tasks/
+
+.cargo/
