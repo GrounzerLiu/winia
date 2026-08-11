@@ -445,6 +445,9 @@ pub(crate) enum ModifierElement {
         indicator_color: crate::core::state::State<crate::modifier::Color>,
         /// 焦点过渡进度（0 = unfocused，1 = focused——宽度 1↔2px 动画）
         focus_progress: crate::core::state::State<f32>,
+        /// 视觉变换偏移映射（密码掩码/格式化——渲染/定位跨界转换；
+        /// None = 恒等）
+        offset_mapping: Option<std::sync::Arc<dyn crate::ui::text_transformation::OffsetMapping>>,
         /// 悬浮态（focused 或文本非空）——悬浮画在容器顶部；展开画在输入位
         label: Option<LabelVisual>,
         /// 支持文本（画在容器底部外侧 4dp）
@@ -1006,6 +1009,7 @@ impl Modifier {
         cursor_color: Color,
         indicator_color: crate::core::state::State<crate::modifier::Color>,
         focus_progress: crate::core::state::State<f32>,
+        offset_mapping: Option<std::sync::Arc<dyn crate::ui::text_transformation::OffsetMapping>>,
         label: Option<LabelVisual>,
         supporting: Option<SupportingVisual>,
         placeholder: Option<PlaceholderVisual>,
@@ -1020,6 +1024,7 @@ impl Modifier {
             cursor_color,
             indicator_color,
             focus_progress,
+            offset_mapping,
             label,
             supporting,
             placeholder,

@@ -40,6 +40,13 @@ fn text_field_ui(ctx: &mut ComposeCtx) {
                 .supporting_text("Password must be at least 8 characters")
                 .build(ctx);
 
+            Text::new("TextField (password mask):").font_size(14.0).build(ctx);
+            TextField::new(ctx.remember(|| TextFieldValue::new("secret123")), |_| {})
+                .filled()
+                .label("Secret")
+                .visual_transformation(winia::ui::PasswordTransformation::default())
+                .build(ctx);
+
             Text::new("TextField (disabled):").font_size(14.0).build(ctx);
             TextField::new(ctx.remember(|| TextFieldValue::new("Locked")), |_| {})
                 .filled()

@@ -993,6 +993,12 @@ impl ApplicationHandler for AppState {
                                         // 空文本：无 glyph 可定位——IME 区域放内容
                                         // 起点（行高近似；与渲染端空文本光标一致）
                                         let empty = nodes[pidx].modifier.content_len() == 0;
+                                        // 光标索引是编辑偏移——经映射转显示偏移
+                                        let caret_idx = nodes[pidx].modifier.elements().iter().find_map(|el| {
+                                            if let crate::modifier::ModifierElement::TextFieldVisual { offset_mapping, .. } = el {
+                                                Some(offset_mapping.as_ref().map(|m| m.original_to_transformed(nodes[pidx].cursor_index.get())).unwrap_or_else(|| nodes[pidx].cursor_index.get()))
+                                            } else { None }
+                                        }).unwrap_or_else(|| nodes[pidx].cursor_index.get());
                                         let (cx, cy, ch) = if empty {
                                             (0.0, 0.0, 20.0)
                                         } else {
@@ -1000,7 +1006,7 @@ impl ApplicationHandler for AppState {
                                                 p,
                                                 p.paragraph_byte_to_real_indices.len(),
                                             );
-                                            match tl.get_cursor_position(nodes[pidx].cursor_index.get()) {
+                                            match tl.get_cursor_position(caret_idx) {
                                                 Some(v) => v,
                                                 None => (0.0, 0.0, 20.0),
                                             }
@@ -1866,7 +1872,14 @@ fn handle_pointer_down(
             let (pad_s, pad_t, pad_e, _) = nodes[innermost].modifier.get_padding_sides();
             let pad_x = if nodes[innermost].layout_direction == crate::layout::LayoutDirection::Rtl { pad_e } else { pad_s };
             let tl = crate::text::TextLayout::new(para, 0);
-            tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(scene_pos.0 - ax - pad_x, scene_pos.1 - ay - pad_t))
+            let hit = tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(scene_pos.0 - ax - pad_x, scene_pos.1 - ay - pad_t));
+            // 定位结果是显示文本偏移（paragraph = 显示文本）——经 OffsetMapping
+            // 转回编辑偏移（密码掩码/格式化输入）
+            nodes[innermost].modifier.elements().iter().find_map(|el| {
+                if let crate::modifier::ModifierElement::TextFieldVisual { offset_mapping, .. } = el {
+                    Some(offset_mapping.as_ref().map(|m| m.transformed_to_original(hit)).unwrap_or(hit))
+                } else { None }
+            }).unwrap_or(hit)
         })
     } else {
         None
@@ -1993,13 +2006,28 @@ fn handle_pointer_move(
                             if let Some(reg) = nodes[innermost].registrar.borrow().as_ref().cloned() {
                                 let current_index = tl.get_closest_grapheme_cluster_cluster_at(
                                     skia_safe::Point::new(scene_pos.0 - x_off - pad_x, scene_pos.1 - abs_y - pad_t));
+                                // 显示偏移 → 编辑偏移（密码掩码/格式化输入）
+                                let current_index = nodes[innermost].modifier.elements().iter().find_map(|el| {
+                                    if let crate::modifier::ModifierElement::TextFieldVisual { offset_mapping, .. } = el {
+                                        Some(offset_mapping.as_ref().map(|m| m.transformed_to_original(current_index)).unwrap_or(current_index))
+                                    } else { None }
+                                }).unwrap_or(current_index);
                                 let cur_off = reg.segment_info(nodes[innermost].slot_key).map(|(off, _)| off);
                                 if let Some((target, s, e)) = crate::ui::selection_container::compute_selection(
                                     down.anchor_registrar.as_ref(), down.selection_anchor,
                                     &reg, cur_off, current_index,
                                     scene_pos.1, down.position.1, abs_y,
                                 ) {
-                                    target.set_selection(s, e);
+                                    // 范围是编辑偏移（anchor/current 已转回）——
+                                    // reg 空间 = 显示偏移，写入选区前转换
+                                    let (ts, te) = nodes[innermost].modifier.elements().iter().find_map(|el| {
+                                        if let crate::modifier::ModifierElement::TextFieldVisual { offset_mapping, .. } = el {
+                                            Some(offset_mapping.as_ref().map(|m| {
+                                                (m.original_to_transformed(s), m.original_to_transformed(e))
+                                            }).unwrap_or((s, e)))
+                                        } else { None }
+                                    }).unwrap_or((s, e));
+                                    target.set_selection(ts, te);
                                     handled = true;
                                 }
                             } // end if let Some(reg)

@@ -359,6 +359,9 @@ pub struct TextField {
     label: Option<String>,
     /// 支持文本（容器底部外侧 12sp）
     supporting_text: Option<String>,
+    /// 视觉变换（密码掩码/格式化输入——对标 Compose visualTransformation；
+    /// None = 恒等）
+    visual_transformation: Option<std::sync::Arc<dyn crate::ui::text_transformation::VisualTransformation>>,
 }
 
 impl TextField {
@@ -383,6 +386,7 @@ impl TextField {
             colors: None,
             label: None,
             supporting_text: None,
+            visual_transformation: None,
         }
     }
 
@@ -480,6 +484,14 @@ impl TextField {
         self
     }
 
+    /// 视觉变换（对标 Compose `visualTransformation`）——密码掩码
+    /// `PasswordTransformation`、格式化输入（自定义 OffsetMapping）。
+    /// 显示文本 ≠ 编辑文本；光标/选区/定位自动经 OffsetMapping 转换
+    pub fn visual_transformation(mut self, t: impl Into<std::sync::Arc<dyn crate::ui::text_transformation::VisualTransformation>>) -> Self {
+        self.visual_transformation = Some(t.into());
+        self
+    }
+
     pub fn build(self, ctx: &mut ComposeCtx) {
         let key = ctx.next_key();
         let current = self.value.get();
@@ -527,11 +539,20 @@ impl TextField {
         let show_placeholder = content.is_empty()
             && self.placeholder.is_some()
             && (focused || self.label.is_none());
+        // 视觉变换（密码掩码/格式化输入——对标 Compose visualTransformation）：
+        // 显示文本 = transform(原始文本)，偏移映射跨界转换（光标/选区绘制用
+        // original→transformed，点击/拖动定位用 transformed→original）。
+        // ⚠ placeholder 不经过变换（显示原样）
+        let transformation = self.visual_transformation.clone()
+            .unwrap_or_else(|| std::sync::Arc::new(crate::ui::text_transformation::IdentityTransformation::new()));
+        let transformed = transformation.filter(&content);
+        let offset_mapping: std::sync::Arc<dyn crate::ui::text_transformation::OffsetMapping> = transformed.offset_mapping;
         // 真实文本：有容器视觉时始终是输入内容（placeholder 独立层渲染）；
-        // 无容器视觉保持旧行为（placeholder 直接进 text_content）
+        // 无容器视觉保持旧行为（placeholder 直接进 text_content）。
+        // 显示文本用变换结果（无变换时 == 原始）
         let has_visual = visual.is_some();
         let display_content = if has_visual {
-            content.clone()
+            transformed.text.clone()
         } else if show_placeholder {
             self.placeholder.as_deref().unwrap_or("").to_string()
         } else {
@@ -616,18 +637,21 @@ impl TextField {
         let registrar = ctx.remember(|| crate::ui::selection_container::SelectionRegistrar::new()).get();
         {
             let v = value.clone();
+            let mapping = offset_mapping.clone();
             registrar.set_on_change(move |sel: &crate::ui::selection_container::Selection| {
                 v.update(|val| {
-                    // 单段（TextField 独占 registrar，global_offset=0）——
-                    // Selection 的 start/end 即文本局部范围，clamp 防越界
-                    let s = sel.start().min(val.text.len());
-                    let e = sel.end().min(val.text.len());
+                    // reg 空间 = 显示文本（global_offset=0 单段）——转换回
+                    // 编辑偏移写入 value
+                    let len = val.text.len();
+                    let s = mapping.transformed_to_original(sel.start()).min(len);
+                    let e = mapping.transformed_to_original(sel.end()).min(len);
                     val.selection = s..e;
                 });
             });
         }
-        // 注册本段（content 变化时 register 同步更新文本/长度）
-        registrar.register(key, &content);
+        // 注册本段（显示文本——reg 空间 = 显示；content 变化时 register
+        // 同步更新文本/长度）
+        registrar.register(key, &transformed.text);
         // UndoManager（组合点 remember——跨帧持久，键位处理共享）
         let undo = ctx.remember(|| std::sync::Arc::new(parking_lot::Mutex::new(UndoManager::new()))).get();
         let kb_handler = {
@@ -635,12 +659,17 @@ impl TextField {
             let cb = on_change.clone();
             let undo = undo.clone();
             let registrar = registrar.clone();
+            let mapping = offset_mapping.clone();
             let blink_reset = blink_reset.clone();
             // 编辑提交：value 更新后同步 reg（防 build 的 reg_leads 用旧选区
             // 拉回——Preedit/键盘删选区后 reg 残留旧选区 → 组合期间误删）
             macro_rules! commit {
                 ($val:expr) => {{
-                    registrar.set_selection($val.selection.start, $val.selection.end);
+                    // value（编辑偏移）→ reg（显示偏移）
+                    registrar.set_selection(
+                        mapping.original_to_transformed($val.selection.start),
+                        mapping.original_to_transformed($val.selection.end),
+                    );
                     v.set($val);
                 }};
             }
@@ -1083,6 +1112,7 @@ impl TextField {
                     if self.is_error { colors.error_cursor } else { colors.cursor },
                     indicator_anim,
                     focus_progress,
+                    Some(offset_mapping.clone()),
                     label_visual,
                     supporting_visual,
                     placeholder_visual,
@@ -1161,6 +1191,7 @@ impl TextField {
         {
             let v = value.clone();
             let registrar = registrar.clone();
+            let mapping = offset_mapping.clone();
             ctx.set_current_node_ime_callback(Box::new(move |text, cursor| {
                 let mut val = v.get();
                 // 首次 Preedit（进入新组合，此前无 composing）：删用户选区
@@ -1203,8 +1234,12 @@ impl TextField {
                     val.composing_range = None;
                 }
                 // 同步 reg（防 build 的 reg_leads 用旧选区拉回——Preedit
-                // 删选区/组合后 reg 残留旧选区会导致组合期间误删）
-                registrar.set_selection(val.selection.start, val.selection.end);
+                // 删选区/组合后 reg 残留旧选区会导致组合期间误删；
+                // value（编辑偏移）→ reg（显示偏移））
+                registrar.set_selection(
+                    mapping.original_to_transformed(val.selection.start),
+                    mapping.original_to_transformed(val.selection.end),
+                );
                 v.set(val);
             }));
         }
@@ -1221,12 +1256,17 @@ impl TextField {
             current.selection.start.min(current.selection.end),
             current.selection.start.max(current.selection.end),
         );
+        // reg 空间 = 显示偏移——与 value（编辑偏移）比较/转换须经映射
+        let (vts, vte) = (
+            offset_mapping.original_to_transformed(vs),
+            offset_mapping.original_to_transformed(ve),
+        );
         // reg 有真实选区（非零宽）时领先——包括 value 仍是单点（拖动中
         // 点击定位后 value 未更新）：此时必须拉回 value，否则 `_` 分支
         // 会用单点覆盖拖动选区（选区随闪烁翻转消失）
         let reg_leads = match &reg_sel {
             Some(r) if r.start < r.end => match val_nonzero {
-                true => (r.start, r.end) != (vs, ve),
+                true => (r.start, r.end) != (vts, vte),
                 false => true,
             },
             _ => false,
@@ -1234,10 +1274,15 @@ impl TextField {
         if reg_leads {
             if let Some(r) = reg_sel {
                 let (s, e) = (r.start, r.end);
-                value.update(|val| { val.selection = s..e; });
+                value.update(|val| {
+                    let len = val.text.len();
+                    let s = offset_mapping.transformed_to_original(s).min(len);
+                    let e = offset_mapping.transformed_to_original(e).min(len);
+                    val.selection = s..e;
+                });
             }
         } else {
-            registrar.set_selection(current.selection.start, current.selection.end);
+            registrar.set_selection(vts, vte);
         }
         ctx.end_node();
     }

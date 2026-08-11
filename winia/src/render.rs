@@ -670,7 +670,7 @@ fn render_pass1(
                 scroll_offset_h = Some(state.get());
             }
             // 文本输入框容器（M3 Filled/Outlined——背景/指示线/边框/label/支持文本）
-            ModifierElement::TextFieldVisual { variant, shape, colors, enabled: _, focused: _, is_error: _, cursor_color: _, indicator_color, focus_progress, label, supporting, placeholder } => {
+            ModifierElement::TextFieldVisual { variant, shape, colors, enabled: _, focused: _, is_error: _, cursor_color: _, indicator_color, focus_progress, offset_mapping, label, supporting, placeholder } => {
                 // 容器 rect：有支持文本时扣除其区域（supporting 画在容器底部外
                 // 4dp，节点总高 = 容器 + 4 + 16）
                 let supporting_h = if supporting.is_some() { 20.0 } else { 0.0 };
@@ -865,7 +865,16 @@ fn render_pass1(
                         // 映射表长度恒 ≥1（含 end-of-text 映射），传它空文本
                         // 时走主路径 get_by_right(0) 失败 → 光标不显示
                         let tl = crate::text::TextLayout::new(para, content.len());
-                        let idx = node.cursor_index.get();
+                        // 光标索引是编辑偏移——经 OffsetMapping 转显示偏移
+                        // （密码掩码/格式化输入显示文本 ≠ 编辑文本）
+                        let offset_mapping = node.modifier.elements().iter().find_map(|el| {
+                            if let ModifierElement::TextFieldVisual { offset_mapping, .. } = el {
+                                offset_mapping.clone()
+                            } else { None }
+                        });
+                        let idx = offset_mapping.as_ref()
+                            .map(|m| m.original_to_transformed(node.cursor_index.get()))
+                            .unwrap_or_else(|| node.cursor_index.get());
                         if let Some((cx, cy, ch)) = tl.get_cursor_position(idx) {
                             debug_log!("[render] cursor pos=({:.0},{:.0}) h={:.0}", cx, cy, ch);
                             canvas.draw_line(skia_safe::Point::new(x_off + cx, content_y + cy), skia_safe::Point::new(x_off + cx, content_y + cy + ch), &cp);
@@ -873,10 +882,18 @@ fn render_pass1(
                     }
                 } else { debug_log!("[render] cursor_visible is false"); }
             }
-            // IME 组合文本下划线
+            // IME 组合文本下划线（编辑偏移 → 显示偏移）
             if let Some(comp_range) = node.composing_range.borrow().as_ref() {
                 if comp_range.start < comp_range.end {
-                    let rects = para.get_rects_for_range(comp_range.start..comp_range.end, skia_safe::textlayout::RectHeightStyle::Max, skia_safe::textlayout::RectWidthStyle::Max);
+                    let offset_mapping = node.modifier.elements().iter().find_map(|el| {
+                        if let ModifierElement::TextFieldVisual { offset_mapping, .. } = el {
+                            offset_mapping.clone()
+                        } else { None }
+                    });
+                    let (cs, ce) = offset_mapping.as_ref().map(|m| {
+                        (m.original_to_transformed(comp_range.start), m.original_to_transformed(comp_range.end))
+                    }).unwrap_or((comp_range.start, comp_range.end));
+                    let rects = para.get_rects_for_range(cs..ce, skia_safe::textlayout::RectHeightStyle::Max, skia_safe::textlayout::RectWidthStyle::Max);
                     let mut und_paint = skia_safe::Paint::default();
                     let c = crate::ui::theme::WiniaTheme::colors().primary;
                     und_paint.set_color(skia_safe::Color::from_argb(c.a, c.r, c.g, c.b));
