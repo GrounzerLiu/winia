@@ -1,0 +1,14 @@
+# 统一 LF 行尾（Windows 项目惯例差异——历史文件混有 CRLF，此文件强制 LF）
+* text=auto eol=lf
+
+# 二进制（不受行尾影响，显式排除防误判）
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ttf binary
+*.otf binary
+*.woff binary
+*.woff2 binary
+*.ico binary
