@@ -42,7 +42,7 @@ fn main() {
 - **Modifier**：布局（size / padding / offset / align / aspectRatio / requiredSize / 权重 / 滚动）、绘制（background / border / clip / shadow / blur / backdropBlur）、图形层（alpha / scale / rotate / rotationX/Y / cameraDistance / shadowElevation / transformOrigin / clip）、交互（clickable / focusable / hoverable / tap / double-tap / long-press / drag / key / pointer）、水波纹 `ripple`
 - **交互源**：`MutableInteractionSource` + `ComponentState`（press / focus / hover / drag），Button 状态取色与阴影
 - **动画**：Tween / Spring / Keyframes / Repeatable / Decay + `animate_*AsState` 族 + AnimatedVisibility / AnimatedContent / AnimatedSize / Crossfade
-- **渲染**：Skia（Vulkan/GL/CPU）、GraphicsLayer 2D/3D 透视、HiDPI、两阶段背景模糊
+- **渲染**：Skia（Vulkan/GL/CPU）、GraphicsLayer 2D/3D 透视、HiDPI、背景模糊（即时 snapshot，对齐 Compose 语义）
 - **调试**：`debug-server` 特性——WebSocket 调试通道（模拟点击/滚动/截图/读布局树）
 
 ## 运行与测试

@@ -118,11 +118,11 @@ pw.composer.layout(Constraints::new(0, w, 0, h))
 sw.draw(|surface| {
     canvas.clear(WHITE);
     canvas.scale(sf, sf);          // HiDPI 缩放
-    render::render(root, canvas);   // 两阶段渲染
+    render::render(root, canvas);   // 单阶段渲染
 })
   │  render.rs L34
-  │  Phase 1: 背景 → 边框 → 文本 → 焦点环 → 子节点
-  │  Phase 2: backdrop blur (snapshot + blur + blit)
+  │  BackdropBlur 在节点内容前即时 snapshot→blur→画回（draw_backdrop_blur）
+  │  其余：背景 → 边框 → 文本 → 焦点环 → 子节点
   ▼
 检查 DevTools 事件 / 动画 tick / pending close
 ```
@@ -167,18 +167,18 @@ render(root, canvas)
        ├── 处理 Border → draw_border()
        ├── 记录 TextContent → 绘制文字
        ├── 记录 Blur → saveLayer + 模糊 paint
-       ├── 记录 BackdropBlur → 收集 region
+       ├── 记录 BackdropBlur → 节点内容前即时处理（draw_backdrop_blur）
        ├── 绘制焦点环 → draw_focus() 蓝色边框
        ├── scroll clip → canvas.clipRect
        └── 递归子节点
             │
-  └─ render_backdrop_blur: 单次 snapshot + 逐 region blur
+  └─ draw_backdrop_blur: 节点级即时 snapshot → blur → 画回
        │
-       ├── 计算所有模糊区域的并集 bounds
-       ├── surface.image_snapshot_with_bounds(bounds)
-       ├── 对每个 region:
-       │     draw_image_rect(blurred) + 递归子节点
-       └── restore canvas
+       ├── 节点四角经画布矩阵 → 屏幕物理 AABB + 3σ 扩展（clamp 到 surface）
+       ├── surface.image_snapshot_with_bounds(IRect)
+       ├── CropRect 限定滤镜输出 = 快照尺寸
+       ├── clip 到节点矩形（只显示节点内部）
+       └── 逆矩阵 + scale(1/缩放) + draw_image —— 像素网格 1:1 画回
 ```
 
 ---
@@ -535,7 +535,7 @@ eprintln!("[tag] value={}", value);
 | hit_test | `layout/node.rs` | L180 |
 | State::get/set | `core/state.rs` | L98 / L108 |
 | render | `render.rs` | L34 |
-| backdrop blur | `render.rs` | L147 |
+| backdrop blur | `render.rs` | L1045 (draw_backdrop_blur) |
 | Window::build | `ui/window.rs` | L91 |
 | process_detached | `ui/window.rs` | L65 |
 | modifier 链 | `modifier.rs` | L164 |
