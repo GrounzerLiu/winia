@@ -651,18 +651,6 @@ impl TextField {
                 // 任何按键处理前：光标立即可见 + 闪烁计时器重置
                 // （用户交互时光标不消失——对齐 Compose snapToVisibleAndAnimate）
                 blink_reset();
-                // 键盘编辑前结束组合（对齐 Compose FinishComposingTextCommand：
-                // 拼音 Commit 走逐字符 KbEvent——组合文本须先移除，否则残留
-                // 在正文；结束组合本身是编辑 → 快照 + 通知）
-                {
-                    let mut val = v.get();
-                    if val.composing_range.is_some() {
-                        end_composition(&mut val);
-                        undo.lock().push(&val.text, &val.selection);
-                        commit!(val.clone());
-                        if let Ok(cb) = cb.lock() { cb(val); }
-                    }
-                }
                 let key = &e.key;
                 // 桌面修饰键：Ctrl（macOS 用 Cmd——Compose commonKeyMapping 同款）。
                 // ⚠ Meta（⊞ Win）仅 macOS 并入——Windows 上 Win+Z/V/A/← 是系统
@@ -681,7 +669,7 @@ impl TextField {
                     | winit::keyboard::Key::Named(winit::keyboard::NamedKey::End)
                     | winit::keyboard::Key::Named(winit::keyboard::NamedKey::Tab)
                 );
-                // 剪贴板/全选/撤销重做（editsText=false 命令——read_only 也允许）
+                // 剪贴板/全选（editsText=false 命令——read_only 也允许）
                 // Ctrl+A 全选
                 if ctrl && matches!(key, winit::keyboard::Key::Character(c) if c.eq_ignore_ascii_case("a")) {
                     let mut val = v.get();
@@ -702,6 +690,24 @@ impl TextField {
                 // 只读：编辑类键（含 Ctrl+Z/V/X/词删除）直接消耗；导航保留
                 if read_only && !is_nav {
                     return true;
+                }
+                // 键盘编辑前结束组合（对齐 Compose FinishComposingTextCommand：
+                // 拼音 Commit 走逐字符 KbEvent——组合文本须先移除，否则残留
+                // 在正文；结束组合本身是编辑 → 快照 + 通知）。
+                // ⚠ 放在 read_only 检查之后（只读不得编辑——结束组合会删文本）；
+                // ⚠ Ctrl+A/C（复制/全选，editsText=false）不结束组合
+                {
+                    let copy_like = ctrl && matches!(key, winit::keyboard::Key::Character(c)
+                        if c.eq_ignore_ascii_case("a") || c.eq_ignore_ascii_case("c"));
+                    if !copy_like {
+                        let mut val = v.get();
+                        if val.composing_range.is_some() {
+                            end_composition(&mut val);
+                            undo.lock().push(&val.text, &val.selection);
+                            commit!(val.clone());
+                            if let Ok(cb) = cb.lock() { cb(val); }
+                        }
+                    }
                 }
                 // Ctrl+Z 撤销 / Ctrl+Shift+Z、Ctrl+Y 重做
                 if ctrl && matches!(key, winit::keyboard::Key::Character(c) if c.eq_ignore_ascii_case("z")) {
