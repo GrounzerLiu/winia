@@ -669,6 +669,58 @@ fn render_pass1(
             ModifierElement::HorizontalScroll { state } => {
                 scroll_offset_h = Some(state.get());
             }
+            // 文本输入框容器（M3 Filled/Outlined——背景/指示线/边框/label/支持文本）
+            ModifierElement::TextFieldVisual { variant, shape, colors, enabled, focused, is_error, cursor_color: _, label, supporting } => {
+                // 容器 rect：有支持文本时扣除其区域（supporting 画在容器底部外
+                // 4dp，节点总高 = 容器 + 4 + 16）
+                let supporting_h = if supporting.is_some() { 20.0 } else { 0.0 };
+                let container_rect = Rect::new(x, y, x + w, y + h - supporting_h);
+                // 容器 rect：有支持文本时扣除其区域（supporting 画在容器底部外
+                // 4dp，节点总高 = 容器 + 4 + 16）
+                let supporting_h = if supporting.is_some() { 20.0 } else { 0.0 };
+                let container_rect = Rect::new(x, y, x + w, y + h - supporting_h);
+                // label：progress 0（展开，输入位 16sp）↔ 1（悬浮）插值。
+                // 悬浮位置：Filled 容器内顶部（top+8）；Outlined **跨越顶部
+                // 边框线**（label 中心对齐边框线——M3 规格）
+                let label_geom = label.as_ref().map(|lv| {
+                    let p = lv.progress.peek();
+                    let font_size = 16.0 + (12.0 - 16.0) * p;
+                    // M3 行高：bodySmall(12sp) 16 / bodyLarge(16sp) 24
+                    let label_h = if font_size <= 12.5 { 16.0 } else { 24.0 };
+                    let float_y = match variant {
+                        crate::ui::TextFieldVariant::Filled => y + 8.0,
+                        crate::ui::TextFieldVariant::Outlined => y - label_h / 2.0,
+                    };
+                    let py = content_y + (float_y - content_y) * p;
+                    (p, font_size, label_h, py)
+                });
+                // 边框缺口（Outlined + 悬浮 label）：label 区域（含 4dp 外扩）
+                // 用 clip Difference 挖掉——边框在 label 处断开
+                let cutout = label_geom.and_then(|(p, font_size, label_h, py)| {
+                    if *variant != crate::ui::TextFieldVariant::Outlined || p < 0.5 { return None; }
+                    let lw = measure_text_width(
+                        label.as_ref().unwrap().content.as_str(),
+                        font_size, content_w,
+                    );
+                    let gap_w = (lw + 8.0) * p;
+                    Some(Rect::from_xywh(x + 16.0 - 4.0, py, gap_w, label_h))
+                });
+                draw_text_field_container(canvas, container_rect, variant, shape, colors, *enabled, *focused, *is_error, cutout);
+                if let (Some(lv), Some((_, font_size, _, py))) = (label, &label_geom) {
+                    draw_text_field_aux_text(canvas, lv.content.as_str(), *font_size, &lv.color, (x + 16.0, *py), content_w);
+                }
+                // 支持文本：容器底部外侧 4dp
+                if let Some(sv) = supporting {
+                    draw_text_field_aux_text(
+                        canvas,
+                        sv.content.as_str(),
+                        sv.font_size,
+                        &sv.color,
+                        (x + 16.0, container_rect.bottom + 4.0),
+                        w - 32.0,
+                    );
+                }
+            }
             // 图标绘制于内容区域（padding 内缩——叶子 padding 渲染偏移）
             ModifierElement::DrawIcon { spec } => {
                 draw_icon(canvas, Rect::new(content_x, content_y, content_x + content_w, content_y + content_h), node.layout_direction, spec);
@@ -767,17 +819,22 @@ fn render_pass1(
                     }
                 }
             }
-            // 绘制光标（聚焦的 TextField 节点）
+            // 绘制光标（聚焦的 TextField 节点；色 = M3 cursor（primary/error））
             if node.focused {
-                debug_log!("[render] cursor focused=true idx={} cursor_visible={}", node.cursor_index.get(), node.cursor_visible.get());
                 if node.cursor_visible.get() {
                     let length = para.paragraph_byte_to_real_indices.len();
                     let tl = crate::text::TextLayout::new(para, length);
                     let idx = node.cursor_index.get();
                     if let Some((cx, cy, ch)) = tl.get_cursor_position(idx) {
                         debug_log!("[render] cursor pos=({:.0},{:.0}) h={:.0}", cx, cy, ch);
+                        // 光标色：TextFieldVisual 的 cursor_color（组合期解析 error/primary）
+                        let cursor = node.modifier.elements().iter().find_map(|el| {
+                            if let ModifierElement::TextFieldVisual { cursor_color, .. } = el {
+                                Some(*cursor_color)
+                            } else { None }
+                        }).unwrap_or(*color);
                         let mut cp = skia_safe::Paint::default();
-                        cp.set_color(skia_safe::Color::from_argb(255, color.r, color.g, color.b));
+                        cp.set_color(skia_safe::Color::from_argb(255, cursor.r, cursor.g, cursor.b));
                         cp.set_stroke_width(1.5);
                         canvas.draw_line(skia_safe::Point::new(x_off + cx, content_y + cy), skia_safe::Point::new(x_off + cx, content_y + cy + ch), &cp);
                     } else { debug_log!("[render] get_cursor_position returned None for idx={}", node.cursor_index.get()); }
@@ -821,11 +878,14 @@ fn render_pass1(
     }
 
     // 焦点环：聚焦淡入、失焦淡出——透明度来自交互源 focus_indicator_alpha
-    // （失焦后动画期间 alpha>0 继续绘制，实现平滑淡出）
+    // （失焦后动画期间 alpha>0 继续绘制，实现平滑淡出）。
+    // ⚠ TextField 容器（M3）不用焦点环——用指示线/边框色变化提示焦点
+    let has_tf_container = node.modifier.elements().iter()
+        .any(|el| matches!(el, ModifierElement::TextFieldVisual { .. }));
     let focus_alpha = node.modifier.focusable_interaction()
         .map(|src| src.focus_indicator_alpha_value())
         .unwrap_or(if node.focused { 1.0 } else { 0.0 });
-    if node.focused || focus_alpha > 0.001 {
+    if !has_tf_container && (node.focused || focus_alpha > 0.001) {
         // 焦点环形状跟随组件（最近 Background/Border/Clip 形状，回退矩形）；
         // 颜色由组件组合期从主题捕获（node.focus_color）
         let focus_shape = node.modifier.elements().iter().rev().find_map(|el| match el {
@@ -1183,6 +1243,129 @@ fn draw_background(canvas: &Canvas, rect: Rect, color: &crate::modifier::Color, 
     }
 }
 
+// ── TextField 容器视觉（M3 Filled/Outlined）──
+
+/// M3 文本输入框容器：Filled = 容器色背景 + 底部指示线
+/// （focused 2px / unfocused 1px，色 indicator_color）；
+/// Outlined = 边框（focused 2px / unfocused 1px）。
+/// 状态优先级 disabled > error > focused > unfocused（组合期已解析）。
+/// M3 文本输入框容器：Filled = 容器色背景 + 底部指示线
+/// （focused 2px / unfocused 1px，色 indicator_color）；
+/// Outlined = 边框（focused 2px / unfocused 1px，圆角 4dp；
+/// `cutout` 为悬浮 label 缺口区域——边框在该处断开）。
+/// 状态优先级 disabled > error > focused > unfocused（组合期已解析）。
+fn draw_text_field_container(
+    canvas: &Canvas,
+    rect: Rect,
+    variant: &crate::ui::TextFieldVariant,
+    shape: &crate::modifier::Shape,
+    colors: &crate::ui::TextFieldColors,
+    enabled: bool,
+    focused: bool,
+    is_error: bool,
+    cutout: Option<Rect>,
+) {
+    let indicator = colors.indicator_color(enabled, is_error, focused);
+    match variant {
+        crate::ui::TextFieldVariant::Filled => {
+            // 容器背景（surfaceContainerHighest；M3 top 4dp 圆角）
+            if colors.container.a > 0 {
+                let mut bg = Paint::default();
+                bg.set_color4f(Color4f::from(&colors.container), None);
+                bg.set_anti_alias(true);
+                canvas.draw_rrect(RRect::new_rect_xy(rect, 4.0, 4.0), &bg);
+            }
+            // 底部指示线（贴底 1/2px 高，focused 加粗）
+            let w = if focused { 2.0 } else { 1.0 };
+            let mut lp = Paint::default();
+            lp.set_color4f(Color4f::from(&indicator), None);
+            lp.set_anti_alias(true);
+            canvas.draw_rect(Rect::new(
+                rect.left, rect.bottom - w,
+                rect.right, rect.bottom,
+            ), &lp);
+        }
+        crate::ui::TextFieldVariant::Outlined => {
+            // 边框（stroke 居中——1/2px，四角 4dp 圆角；label 缺口处断开）
+            let w = if focused { 2.0 } else { 1.0 };
+            let mut bp = Paint::default();
+            bp.set_color4f(Color4f::from(&indicator), None);
+            bp.set_anti_alias(true);
+            bp.set_style(skia_safe::paint::Style::Stroke);
+            bp.set_stroke_width(w);
+            let inset = w / 2.0;
+            let border_rect = Rect::new(
+                rect.left + inset, rect.top + inset,
+                rect.right - inset, rect.bottom - inset,
+            );
+            if let Some(cut) = cutout {
+                // 缺口：clip Difference 挖掉 label 区域再画边框
+                canvas.save();
+                canvas.clip_rect(cut, Some(skia_safe::ClipOp::Difference), None);
+                canvas.draw_rrect(RRect::new_rect_xy(border_rect, 4.0, 4.0), &bp);
+                canvas.restore();
+            } else {
+                canvas.draw_rrect(RRect::new_rect_xy(border_rect, 4.0, 4.0), &bp);
+            }
+        }
+    }
+}
+
+/// 量文本宽度（label 边框缺口用——一次 layout）
+fn measure_text_width(content: &str, font_size: f32, max_width: f32) -> f32 {
+    if content.is_empty() || max_width <= 0.0 {
+        return 0.0;
+    }
+    let mut para = crate::layout::node::build_plain_paragraph(
+        content,
+        font_size,
+        &crate::modifier::Color::BLACK,
+        crate::ui::text::FontWeight::NORMAL,
+        crate::ui::text::FontSlant::Upright,
+        usize::MAX,
+        crate::ui::TextAlign::Left,
+        crate::ui::TextOverflow::Clip,
+        true,
+        0.0,
+        None,
+        max_width,
+    );
+    para.layout(max_width);
+    para.max_intrinsic_width()
+}
+
+/// TextField label/支持文本绘制（无布局缓存的独立小段文本——
+/// build_plain_paragraph 每次构建；辅助文本量小，开销可接受）
+fn draw_text_field_aux_text(
+    canvas: &Canvas,
+    content: &str,
+    font_size: f32,
+    color: &crate::modifier::Color,
+    pos: (f32, f32),
+    max_width: f32,
+) {
+    if content.is_empty() || max_width <= 0.0 {
+        return;
+    }
+    let mut para = crate::layout::node::build_plain_paragraph(
+        content,
+        font_size,
+        color,
+        crate::ui::text::FontWeight::NORMAL,
+        crate::ui::text::FontSlant::Upright,
+        usize::MAX,
+        crate::ui::TextAlign::Left,
+        crate::ui::TextOverflow::Clip,
+        true,
+        0.0,
+        None,
+        max_width,
+    );
+    // ⚠ 必须 layout 后才能 paint（skia Paragraph 未布局时绘制为空）
+    para.layout(max_width);
+    para.paint(canvas, pos.0, pos.1);
+}
+
 fn draw_border(canvas: &Canvas, x: f32, y: f32, w: f32, h: f32, width: f32, color: &crate::modifier::Color, shape: &crate::modifier::Shape) {
     let mut paint = Paint::default();
     paint.set_color4f(Color4f::from(color), None);
@@ -1324,6 +1507,34 @@ fn surface_snapshot(canvas: &Canvas, bounds: skia_safe::IRect) -> Option<skia_sa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tf_aux_text_paints() {
+        // label/支持文本绘制路径：build_plain_paragraph + layout + paint
+        let mut surface = skia_safe::surfaces::raster_n32_premul((200, 40)).unwrap();
+        let canvas = surface.canvas();
+        canvas.clear(skia_safe::Color::WHITE);
+        draw_text_field_aux_text(
+            canvas,
+            "Name",
+            12.0,
+            &crate::modifier::Color::from_argb(255, 255, 0, 0),
+            (10.0, 10.0),
+            100.0,
+        );
+        let pm = surface.peek_pixels().expect("pixmap");
+        let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+        // 文本区域应出现非白像素（红色文本）
+        let mut found = 0;
+        for y in 10..30 {
+            for x in 10..60 {
+                if px[y * 200 + x][2] > 200 { // R 通道（BGRA）
+                    found += 1;
+                }
+            }
+        }
+        assert!(found > 20, "aux 文本必须可见（红色像素 {found} 个）");
+    }
 
     #[test]
     fn fit_rect_preserves_aspect_and_centers() {

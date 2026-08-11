@@ -427,6 +427,24 @@ pub(crate) enum ModifierElement {
     Blur { radius: f32 },
     /// 背景模糊（毛玻璃，单 snapshot 多节点共享）
     BackdropBlur { radius: f32 },
+    /// 文本输入框容器视觉（TextField 组件——M3 Filled/Outlined 容器：
+    /// 背景/指示线/边框/label/支持文本）。组合期解析全部视觉状态
+    /// （enabled/focused/is_error/label 悬浮），渲染期静态绘制——
+    /// 状态过渡动画由后续迭代接入。
+    TextFieldVisual {
+        variant: crate::ui::TextFieldVariant,
+        shape: Shape,
+        colors: crate::ui::TextFieldColors,
+        enabled: bool,
+        focused: bool,
+        is_error: bool,
+        /// 光标色（组合期解析：error → error_cursor，否则 primary）
+        cursor_color: Color,
+        /// 悬浮态（focused 或文本非空）——悬浮画在容器顶部；展开画在输入位
+        label: Option<LabelVisual>,
+        /// 支持文本（画在容器底部外侧 4dp）
+        supporting: Option<SupportingVisual>,
+    },
 
     // ── Content 类 ──
     /// 文本内容（由 Text 组件设置，渲染阶段消费）
@@ -959,6 +977,32 @@ impl Modifier {
     /// 背景模糊（毛玻璃）——渲染期在节点内容绘制前即时 snapshot+blur
     pub fn backdrop_blur(self, radius: f32) -> Self {
         self.push(ModifierElement::BackdropBlur { radius })
+    }
+
+    /// 文本输入框容器视觉（TextField 组件内部使用——M3 容器绘制参数）
+    pub fn text_field_visual(
+        self,
+        variant: crate::ui::TextFieldVariant,
+        shape: Shape,
+        colors: crate::ui::TextFieldColors,
+        enabled: bool,
+        focused: bool,
+        is_error: bool,
+        cursor_color: Color,
+        label: Option<LabelVisual>,
+        supporting: Option<SupportingVisual>,
+    ) -> Self {
+        self.push(ModifierElement::TextFieldVisual {
+            variant,
+            shape,
+            colors,
+            enabled,
+            focused,
+            is_error,
+            cursor_color,
+            label,
+            supporting,
+        })
     }
 }
 
@@ -1760,6 +1804,7 @@ impl Debug for ModifierElement {
             Self::GraphicsLayer { .. } => f.debug_struct("GraphicsLayer").finish(),
             Self::Blur { radius } => f.debug_struct("Blur").field("radius", radius).finish(),
             Self::BackdropBlur { radius } => f.debug_struct("BackdropBlur").field("radius", radius).finish(),
+            Self::TextFieldVisual { variant, .. } => f.debug_struct("TextFieldVisual").field("variant", variant).finish(),
         }
     }
 }
@@ -1818,6 +1863,24 @@ impl Default for GraphicsLayerParams {
 /// 相对节点宽高（0.0 = 左/上，0.5 = 中心，1.0 = 右/下）
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct TransformOrigin(pub f32, pub f32);
+
+/// TextField label 绘制参数（悬浮画在容器顶部 / 展开画在输入位；
+/// progress 0..1 动画插值位置与字号——渲染期 peek 读值）
+#[derive(Clone, Debug)]
+pub struct LabelVisual {
+    pub content: String,
+    pub font_size: f32,
+    pub color: Color,
+    pub progress: crate::core::state::State<f32>,
+}
+
+/// TextField 支持文本绘制参数（画在容器底部外侧 4dp）
+#[derive(Clone, Debug)]
+pub struct SupportingVisual {
+    pub content: String,
+    pub font_size: f32,
+    pub color: Color,
+}
 
 /// 阴影参数（对标 Compose `graphics.shadow.Shadow`——dropShadow 可配置集）。
 /// 绘制对齐 DropShadowPainter：扩边画布 → 形状路径（模糊）画进离屏 mask →
