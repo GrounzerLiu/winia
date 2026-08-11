@@ -483,9 +483,14 @@ impl TextField {
             colors.text
         };
 
-        // 占位/展开 label：空内容时显示。有 label 时展开 label 占据输入位
-        // （placeholder 隐藏——M3 语义）；无 label 才显示 placeholder
-        let show_placeholder = content.is_empty() && !label_float && self.label.is_none();
+        // 占位/展开 label（对齐 M3 TextFieldImpl placeholderAlpha 语义）：
+        // - 聚焦 + 空：placeholder 显示（label 悬浮）
+        // - 未聚焦 + 空 + 有 label：placeholder 隐藏（展开 label 占据输入位）
+        // - 空 + 无 label：placeholder 显示
+        // - 非空：隐藏
+        let show_placeholder = content.is_empty()
+            && self.placeholder.is_some()
+            && (focused || self.label.is_none());
         let display_content = if show_placeholder {
             self.placeholder.as_deref().unwrap_or("").to_string()
         } else {
@@ -854,12 +859,19 @@ impl TextField {
             }
         };
 
-        // M3 容器视觉 + 文本内容。padding：有 label 用悬浮布局
-        // （顶 24 = label 区 8..24 + 文本起始；底 8；水平 16——M3 Filled
-        // 规格）；无 label 四边 16；无容器视觉保持 8（向后兼容）
+        // M3 容器视觉 + 文本内容。padding 按变体（M3 specs）：
+        // - Filled + label：顶 24（悬浮 label 区 8..24）+ 底 8（Filled 上下
+        //   padding 8dp 规格，文本从 label 下开始）
+        // - Outlined + label：四边 16（label 跨边框不占容器内空间——
+        //   Outlined 无上下 padding 规格，文本垂直居中）
+        // - 无 label：四边 16（文本垂直居中近似）
+        // - 无容器视觉：保持 8（向后兼容）
         let modifier = self.modifier;
         let modifier = if let Some(variant) = visual {
-            let (pad_h, pad_top, pad_bottom) = if self.label.is_some() { (16.0, 24.0, 8.0) } else { (16.0, 16.0, 16.0) };
+            let (pad_h, pad_top, pad_bottom) = match (variant, self.label.is_some()) {
+                (TextFieldVariant::Filled, true) => (16.0, 24.0, 8.0),
+                _ => (16.0, 16.0, 16.0),
+            };
             let shape = crate::modifier::Shape::RoundedRect {
                 corner_radius: 4.0,
             };
