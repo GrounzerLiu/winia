@@ -691,7 +691,9 @@ fn render_pass1(
                         crate::ui::TextFieldVariant::Filled => y + 8.0,
                         crate::ui::TextFieldVariant::Outlined => y - label_h / 2.0,
                     };
-                    let py = content_y + (float_y - content_y) * p;
+                    // 展开 label 容器垂直居中（M3：unpopulated label 居中）
+                    let expanded_y = y + (h - label_h) / 2.0;
+                    let py = expanded_y + (float_y - expanded_y) * p;
                     (p, font_size, label_h, py)
                 });
                 // 边框缺口（Outlined + 悬浮 label）：label 区域（含 4dp 外扩）
