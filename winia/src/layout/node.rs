@@ -533,8 +533,11 @@ fn hit_test_recursive(
     let child_px = nx - scroll_dx;
     let child_py = ny - scroll_dy;
 
-    // 深度优先：先检查子节点（子节点在父节点上方）
-    for &c in &node.children {
+    // 深度优先：先检查子节点（子节点在父节点上方）；
+    // ⚠ 兄弟节点**倒序**遍历——绘制按 children 正序（后画在上层），
+    // 命中必须后画的优先（z-order 语义）；此前正序导致上层兄弟
+    // （如全屏图片上的矩形）永远命中底层兄弟（Image 铺满遮挡）
+    for &c in node.children.iter().rev() {
         if hit_test_recursive(nodes, c, x, y, child_px, child_py, path) {
             return true;
         }
@@ -599,6 +602,30 @@ mod tests {
 
         let path = hit_test(&nodes, 0, 50.0, 50.0);
         assert_eq!(path, vec![0]);
+    }
+
+    #[test]
+    fn test_hit_test_z_order_topmost_first() {
+        // 兄弟节点：绘制按 children 正序（后画在上层）——命中必须倒序优先
+        // 底层铺满（leaf1）+ 上层局部矩形（leaf2）重叠点 → 应命中 leaf2
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new().size(200.0, 200.0)),
+            LayoutNode::leaf(Modifier::new().size(100.0, 100.0)),
+            LayoutNode::leaf(Modifier::new().size(40.0, 40.0)),
+        ];
+        nodes[0].measured_size = Size::new(200.0, 200.0);
+        nodes[1].measured_size = Size::new(100.0, 100.0);
+        nodes[2].measured_size = Size::new(40.0, 40.0);
+        nodes[1].position = Point::new(0.0, 0.0);
+        nodes[2].position = Point::new(30.0, 30.0);
+        nodes[0].children = vec![1, 2];
+
+        // (40,40) 同时落在 leaf1 与 leaf2 内——上层（后画 leaf2）优先
+        let path = hit_test(&nodes, 0, 40.0, 40.0);
+        assert_eq!(path, vec![0, 2], "上层兄弟优先命中（z-order）");
+        // (20,20) 只落 leaf1（leaf2 范围外）
+        let path2 = hit_test(&nodes, 0, 20.0, 20.0);
+        assert_eq!(path2, vec![0, 1]);
     }
 
     #[test]
