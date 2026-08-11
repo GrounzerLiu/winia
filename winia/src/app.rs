@@ -1838,8 +1838,13 @@ fn handle_pointer_down(
     let anchor = if let Ok(borrow) = nodes[innermost].cached_paragraph.try_borrow() {
         borrow.as_ref().map(|para| {
             let (ax, ay) = node_abs_position(nodes, r, nodes[innermost].id);
+            // 段落局部坐标须扣除节点 padding（渲染侧文本画在 content 区 =
+            // 节点原点 + padding——不扣则点击位置整体偏 padding 偏移，
+            // 光标跳错位置）
+            let (pad_s, pad_t, pad_e, _) = nodes[innermost].modifier.get_padding_sides();
+            let pad_x = if nodes[innermost].layout_direction == crate::layout::LayoutDirection::Rtl { pad_e } else { pad_s };
             let tl = crate::text::TextLayout::new(para, 0);
-            tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(scene_pos.0 - ax, scene_pos.1 - ay))
+            tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(scene_pos.0 - ax - pad_x, scene_pos.1 - ay - pad_t))
         })
     } else {
         None
@@ -1949,6 +1954,10 @@ fn handle_pointer_move(
                             crate::ui::TextAlign::Right => abs_x + (node_w - para.max_intrinsic_width()).max(0.0),
                             _ => abs_x,
                         };
+                        // 段落局部坐标：扣节点 padding（与渲染侧 content 区一致——
+                        // 否则拖动选区整体偏 padding 偏移）
+                        let (pad_s, pad_t, pad_e, _) = nodes[innermost].modifier.get_padding_sides();
+                        let pad_x = if nodes[innermost].layout_direction == crate::layout::LayoutDirection::Rtl { pad_e } else { pad_s };
                         let tl = crate::text::TextLayout::new(para, 0);
                         {
                             let down = pw.pointer_down_state.as_ref().unwrap();
@@ -1956,7 +1965,7 @@ fn handle_pointer_move(
                             // （用 if let 包裹而非 else return——return 会跳过 dispatch_ptr_event/request_redraw）
                             if let Some(reg) = nodes[innermost].registrar.borrow().as_ref().cloned() {
                                 let current_index = tl.get_closest_grapheme_cluster_cluster_at(
-                                    skia_safe::Point::new(scene_pos.0 - x_off, scene_pos.1 - abs_y));
+                                    skia_safe::Point::new(scene_pos.0 - x_off - pad_x, scene_pos.1 - abs_y - pad_t));
                                 let cur_off = reg.segment_info(nodes[innermost].slot_key).map(|(off, _)| off);
                                 if let Some((target, s, e)) = crate::ui::selection_container::compute_selection(
                                     down.anchor_registrar.as_ref(), down.selection_anchor,

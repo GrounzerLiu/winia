@@ -537,16 +537,38 @@ impl TextField {
         let cursor_visible = ctx.remember(|| true);
         let cursor_visible_now = cursor_visible.get();
         let cv = cursor_visible.clone();
+        // 最后交互时刻（点击/按键）——光标立即显示并重置闪烁周期
+        // （对齐 Compose `snapToVisibleAndAnimate`：文本/选区变化时光标
+        // 闪到可见并重启周期，打字时不消失）
+        let last_blink = ctx.remember(|| std::sync::Arc::new(parking_lot::Mutex::new(std::time::Instant::now()))).get();
         let blink_started = ctx.remember(|| false);
         if !blink_started.get() {
             blink_started.set(true);
+            let cv2 = cv.clone();
+            let last2 = last_blink.clone();
             tokio::spawn(async move {
                 loop {
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                    cv.update(|v| *v = !*v);
+                    // 100ms 轮询（500ms 相位粒度——交互重置精度 ±100ms）
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    let due = last2.lock().elapsed() >= std::time::Duration::from_millis(500);
+                    if due {
+                        // ⚠ 翻转后必须重置计时器——否则下一次 tick（100ms 后）
+                        // elapsed 仍 >= 500ms 再次翻转 → 光标每 100ms 狂闪
+                        *last2.lock() = std::time::Instant::now();
+                        cv2.update(|v| *v = !*v);
+                    }
                 }
             });
         }
+        // 光标立即可见 + 计时器重置（点击定位/键盘操作后调用）
+        let blink_reset = {
+            let cv2 = cv.clone();
+            let last2 = last_blink.clone();
+            move || {
+                *last2.lock() = std::time::Instant::now();
+                cv2.set(true); // 相等时 set 跳过通知（无多余重组）
+            }
+        };
 
         // 键盘事件处理（read_only：编辑键吞掉不生效；enabled=false：不注册）
         let value = self.value.clone();
@@ -557,10 +579,14 @@ impl TextField {
             let v = value.clone();
             let cb = on_change.clone();
             let undo = undo.clone();
+            let blink_reset = blink_reset.clone();
             let read_only = self.read_only;
             let single_line = self.single_line;
             move |e: &crate::modifier::KbEvent| -> bool {
                 if e.event_type != crate::modifier::KbEventType::KeyDown { return false; }
+                // 任何按键处理前：光标立即可见 + 闪烁计时器重置
+                // （用户交互时光标不消失——对齐 Compose snapToVisibleAndAnimate）
+                blink_reset();
                 let key = &e.key;
                 // 桌面修饰键：Ctrl（macOS 用 Cmd——Compose commonKeyMapping 同款）。
                 // ⚠ Meta（⊞ Win）仅 macOS 并入——Windows 上 Win+Z/V/A/← 是系统
@@ -1047,7 +1073,9 @@ impl TextField {
             cursor_visible_now,
             Box::new({
                 let v = value.clone();
+                let blink_reset = blink_reset.clone();
                 move |idx| {
+                    blink_reset(); // 点击定位：光标立即可见 + 计时重置
                     v.update(|val| { val.selection.start = idx; val.selection.end = idx; });
                 }
             }),
