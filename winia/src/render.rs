@@ -675,10 +675,6 @@ fn render_pass1(
                 // 4dp，节点总高 = 容器 + 4 + 16）
                 let supporting_h = if supporting.is_some() { 20.0 } else { 0.0 };
                 let container_rect = Rect::new(x, y, x + w, y + h - supporting_h);
-                // 容器 rect：有支持文本时扣除其区域（supporting 画在容器底部外
-                // 4dp，节点总高 = 容器 + 4 + 16）
-                let supporting_h = if supporting.is_some() { 20.0 } else { 0.0 };
-                let container_rect = Rect::new(x, y, x + w, y + h - supporting_h);
                 // label：progress 0（展开，输入位 16sp）↔ 1（悬浮）插值。
                 // 悬浮位置：Filled 容器内顶部（top+8）；Outlined **跨越顶部
                 // 边框线**（label 中心对齐边框线——M3 规格）
@@ -691,20 +687,23 @@ fn render_pass1(
                         crate::ui::TextFieldVariant::Filled => y + 8.0,
                         crate::ui::TextFieldVariant::Outlined => y - label_h / 2.0,
                     };
-                    // 展开 label 容器垂直居中（M3：unpopulated label 居中）
-                    let expanded_y = y + (h - label_h) / 2.0;
+                    // 展开 label 在**容器**内垂直居中（M3：unpopulated label
+                    // 居中；节点高含 supporting——须扣除）
+                    let expanded_y = y + (h - supporting_h - label_h) / 2.0;
                     let py = expanded_y + (float_y - expanded_y) * p;
                     (p, font_size, label_h, py)
                 });
                 // 边框缺口（Outlined + 悬浮 label）：label 区域（含 4dp 外扩）
-                // 用 clip Difference 挖掉——边框在 label 处断开
+                // 用 clip Difference 挖掉——边框在 label 处断开。
+                // 缺口宽度固定（不随 progress 收缩——动画中段缺口窄于文本时
+                // 边框线会穿过上移中的 label）
                 let cutout = label_geom.and_then(|(p, font_size, label_h, py)| {
                     if *variant != crate::ui::TextFieldVariant::Outlined || p < 0.5 { return None; }
                     let lw = measure_text_width(
                         label.as_ref().unwrap().content.as_str(),
                         font_size, content_w,
                     );
-                    let gap_w = (lw + 8.0) * p;
+                    let gap_w = lw + 8.0;
                     Some(Rect::from_xywh(x + 16.0 - 4.0, py, gap_w, label_h))
                 });
                 draw_text_field_container(canvas, container_rect, variant, shape, colors, *enabled, *focused, *is_error, cutout);

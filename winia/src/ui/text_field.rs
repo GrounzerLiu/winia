@@ -530,8 +530,10 @@ impl TextField {
             move |e: &crate::modifier::KbEvent| -> bool {
                 if e.event_type != crate::modifier::KbEventType::KeyDown { return false; }
                 let key = &e.key;
-                // 桌面修饰键：Ctrl（macOS 用 Cmd——Compose commonKeyMapping 同款）
-                let ctrl = e.is_ctrl_pressed || e.is_meta_pressed;
+                // 桌面修饰键：Ctrl（macOS 用 Cmd——Compose commonKeyMapping 同款）。
+                // ⚠ Meta（⊞ Win）仅 macOS 并入——Windows 上 Win+Z/V/A/← 是系统
+                // 快捷键（剪贴板历史/窗口贴靠），并入会导致编辑与系统冲突
+                let ctrl = e.is_ctrl_pressed || (cfg!(target_os = "macos") && e.is_meta_pressed);
                 let shift = e.is_shift_pressed;
                 let alt = e.is_alt_pressed;
                 // 导航键（只读时仍允许——对标 Compose readOnly 可选中；
@@ -939,47 +941,32 @@ impl TextField {
                 crate::ui::TextOverflow::Clip,
                 true, // allow text wrapping
             );
-        // 支持文本：容器下方 +4dp 间距 + 12sp 行高（约 20px）——
-        // 动态高度保证下方元素不重叠；基础高度 = max(容器最小 56, 内容) + 20
-        let modifier = if self.supporting_text.is_some() {
+        // 动态高度：supporting（容器下 +20）与 min_lines（至少 N 行）合并为
+        // 一个 height 闭包——分开 push 会被 resolved_size 的后 push 覆盖
+        // （supporting 的 +20 丢失，容器被压矮、supporting 与下方元素重叠）
+        let modifier = if self.supporting_text.is_some() || self.min_lines > 1 {
             let v = value.clone();
             let line_h = font_size * 1.4;
             let (pt, pb) = modifier.get_padding_vertical();
             let pad_y = pt + pb;
-            let supporting_h = 4.0 + 16.0;
-            let min_h = 56.0 + supporting_h;
+            let supporting_h = if self.supporting_text.is_some() { 4.0 + 16.0 } else { 0.0 };
+            let min_content_h = self.min_lines as f32 * line_h;
+            // 容器最小 56（外尺寸含 padding）仅在容器视觉时应用
+            let has_visual = visual.is_some();
             modifier.height(move || {
                 let text = v.get().text;
-                let base = if text.is_empty() {
-                    min_h
+                // 空：min_lines 占位；非空：按显式换行数（近似）。
+                // ⚠ 非空不能返回 0（tighten_height(0) → 节点消失）
+                let content_h = if text.is_empty() {
+                    min_content_h
                 } else {
-                    ((text.matches('\n').count() as f32 + 1.0) * line_h + pad_y).max(56.0) + supporting_h
+                    (text.matches('\n').count() as f32 + 1.0) * line_h
                 };
-                base
-            })
-        } else {
-            modifier
-        };
-        // minLines：高度至少 min_lines 行——动态高度闭包（内容变化时重测）。
-        // ⚠ 非空时不能返回 0（0 是合法固定尺寸 → tighten_height(0) → 节点高度 0
-        // → 输入后整个 TextField 消失）。按显式换行数 × 行高近似——折行
-        // （无 \n 的长文本自动换行）高度不精确，会裁剪——精确需容器 policy。
-        // ⚠ 必须加 padding：measure_node 把 padding 从约束中扣除（内尺寸），
-        // 动态高度返回的是外尺寸——不加 pad 时内高 = 外高 - pad，3 行文本
-        // （~50.4）超出内高（42.8）→ 末行溢出与下一元素重叠（实测 bug）
-        let modifier = if self.min_lines > 1 {
-            let v = value.clone();
-            let line_h = font_size * 1.4;
-            let (pt, pb) = modifier.get_padding_vertical();
-            let pad_y = pt + pb;
-            let min_h = self.min_lines as f32 * line_h + pad_y;
-            modifier.height(move || {
-                let text = v.get().text;
-                if text.is_empty() {
-                    min_h
-                } else {
-                    (text.matches('\n').count() as f32 + 1.0) * line_h + pad_y
+                let mut h = content_h + pad_y;
+                if has_visual {
+                    h = h.max(56.0);
                 }
+                h + supporting_h
             })
         } else {
             modifier
