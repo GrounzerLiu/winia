@@ -5,6 +5,12 @@
 use winia::prelude::*;
 use winia::ui::{TextField, TextFieldValue};
 
+// label 悬浮字号动画：展开 16sp（bodyLarge）↔ 悬浮 12sp（bodySmall）——
+// M3 specs：label 展开 16 / 悬浮 12，progress 闭包参数驱动
+fn label_size(p: f32) -> f32 {
+    16.0 + (12.0 - 16.0) * p
+}
+
 #[composable]
 fn text_field_ui(ctx: &mut ComposeCtx) {
     // Filled + 悬浮 label + placeholder（闭包内容）
@@ -20,11 +26,14 @@ fn text_field_ui(ctx: &mut ComposeCtx) {
             Text::new("TextField (Filled + label + leading icon):").font_size(14.0).build(ctx);
             TextField::new(name, |_| {})
                 .filled()
-                .label(|ctx| {
-                    Text::new("Name").font_size(16.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
+                .label(|ctx, p| {
+                    Text::new("Name").font_size(label_size(p.get())).color(WiniaTheme::colors().on_surface_variant).build(ctx);
                 })
-                .placeholder(|ctx| {
-                    Text::new("Enter your name").font_size(16.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
+                .placeholder(|ctx, alpha| {
+                    let c = WiniaTheme::colors().on_surface_variant;
+                    Text::new("Enter your name").font_size(16.0)
+                        .color(winia::modifier::Color::from_argb((255.0 * alpha.get()) as u8, c.r, c.g, c.b))
+                        .build(ctx);
                 })
                 .leading_icon(|ctx| {
                     Icon::new(IconSource::svg_path("M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"))
@@ -36,8 +45,8 @@ fn text_field_ui(ctx: &mut ComposeCtx) {
             Text::new("TextField (Outlined + prefix/suffix + trailing icon):").font_size(14.0).build(ctx);
             TextField::new(email, |_| {})
                 .outlined()
-                .label(|ctx| {
-                    Text::new("Phone").font_size(16.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
+                .label(|ctx, p| {
+                    Text::new("Phone").font_size(label_size(p.get())).color(WiniaTheme::colors().on_surface_variant).build(ctx);
                 })
                 .prefix(|ctx| {
                     Text::new("+86 ").font_size(16.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
@@ -56,8 +65,8 @@ fn text_field_ui(ctx: &mut ComposeCtx) {
             Text::new("TextField (error state):").font_size(14.0).build(ctx);
             TextField::new(err, |_| {})
                 .outlined()
-                .label(|ctx| {
-                    Text::new("Password").font_size(16.0).color(WiniaTheme::colors().error).build(ctx);
+                .label(|ctx, p| {
+                    Text::new("Password").font_size(label_size(p.get())).color(WiniaTheme::colors().error).build(ctx);
                 })
                 .is_error(true)
                 .supporting_text("Password must be at least 8 characters")
@@ -66,8 +75,8 @@ fn text_field_ui(ctx: &mut ComposeCtx) {
             Text::new("TextField (password mask):").font_size(14.0).build(ctx);
             TextField::new(ctx.remember(|| TextFieldValue::new("secret123")), |_| {})
                 .filled()
-                .label(|ctx| {
-                    Text::new("Secret").font_size(16.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
+                .label(|ctx, p| {
+                    Text::new("Secret").font_size(label_size(p.get())).color(WiniaTheme::colors().on_surface_variant).build(ctx);
                 })
                 .visual_transformation(winia::ui::PasswordTransformation::default())
                 .build(ctx);
@@ -75,8 +84,8 @@ fn text_field_ui(ctx: &mut ComposeCtx) {
             Text::new("TextField (disabled):").font_size(14.0).build(ctx);
             TextField::new(ctx.remember(|| TextFieldValue::new("Locked")), |_| {})
                 .filled()
-                .label(|ctx| {
-                    Text::new("Readonly").font_size(16.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
+                .label(|ctx, p| {
+                    Text::new("Readonly").font_size(label_size(p.get())).color(WiniaTheme::colors().on_surface_variant).build(ctx);
                 })
                 .enabled(false)
                 .build(ctx);

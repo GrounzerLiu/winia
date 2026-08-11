@@ -377,11 +377,15 @@ pub(crate) struct TextFieldLayout {
     /// label 悬浮动画进度（0 = 展开 / 1 = 悬浮）——measure 期 peek 注册
     /// layout_dep，位置随动画每帧重测
     pub(crate) label_progress: crate::core::state::State<f32>,
-    }
+    /// 容器视觉变体（决定悬浮 label 的锚点——M3 specs）：
+    /// - Filled：label 顶在容器 8dp（悬浮区 8..24，中心 16）
+    /// - Outlined：label 中心跨边框线（容器顶 0）
+    pub(crate) variant: Option<TextFieldVariant>,
+}
 
 impl TextFieldLayout {
-    pub(crate) fn new(label_progress: crate::core::state::State<f32>) -> Self {
-        Self { label_progress }
+    pub(crate) fn new(label_progress: crate::core::state::State<f32>, variant: Option<TextFieldVariant>) -> Self {
+        Self { label_progress, variant }
     }
 }
 
@@ -455,12 +459,19 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
             match roles[i] {
                 TextFieldSlotRole::Label => {
                     let (s, _) = measure_node(nodes, policies, c, text_c(constraints.max_width));
-                    // 展开：输入位垂直居中；悬浮：内容区顶部**上方**（跨容器
-                    // 顶部边界——Outlined 跨边框 / Filled 顶部 padding 区）。
+                    // 展开：输入位垂直居中；悬浮：内容区顶部**上方**——
+                    // 锚点按变体（M3 specs）：
+                    // - Filled：label 顶对齐容器 8dp（内容区顶 24 → 偏移 -16）
+                    // - Outlined：label 中心跨边框线（顶对齐容器 -8 → 偏移 -24）
                     // ⚠ policy 收到的是扣除 padding 后的约束——内容区顶部即
-                    // 容器 padding 边界；悬浮 label 中心对齐该边界
+                    // 容器 padding 边界
                     let expanded_y = (input_size.height - s.height).max(0.0) / 2.0;
-                    let float_y = -(s.height / 2.0);
+                    let float_y = -(s.height / 2.0)
+                        - match self.variant {
+                            Some(TextFieldVariant::Filled) => 8.0,
+                            Some(TextFieldVariant::Outlined) => 16.0,
+                            None => 0.0,
+                        };
                     let y = expanded_y + (float_y - expanded_y) * progress;
                     placements[i] = crate::layout::Placement { size: s, position: crate::layout::Point::new(input_pos_x, y) };
                 }
@@ -516,8 +527,9 @@ pub struct TextField {
     /// 只读（可聚焦/选中，不可编辑——编辑键吞掉不生效，导航键保留）
     read_only: bool,
     /// 占位文字（值空时显示——组合内容闭包，如
-    /// `|ctx| { Text::new("Enter name").build(ctx); }`；仅显示条件满足时构建）
-    placeholder: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
+    /// `|ctx| { Text::new("Enter name").build(ctx); }`；仅显示条件满足时构建）。
+    /// 闭包第二参数：淡入透明度动画 State（0..1——get 注册依赖，驱动重组）
+    placeholder: Option<Box<dyn FnOnce(&mut ComposeCtx, &crate::core::state::State<f32>) + Send + Sync>>,
     /// 单行模式（Enter 吞掉不换行——对标 Compose singleLine）
     single_line: bool,
     /// 最大行数（对标 Compose maxLines，默认无限）
@@ -533,8 +545,10 @@ pub struct TextField {
     /// 状态色（None = 按 variant 从主题生成——M3 默认）
     colors: Option<TextFieldColors>,
     /// 浮动 label（聚焦或非空时悬浮到容器顶部；组合内容闭包——text-field-v2
-    /// 容器化：子节点由 TextFieldLayout 定位，悬浮/展开位置动画内部控制）
-    label: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
+    /// 容器化：子节点由 TextFieldLayout 定位，悬浮/展开位置动画内部控制）。
+    /// 闭包第二参数：悬浮进度 State（0 = 展开 / 1 = 悬浮——get 注册依赖，
+    /// 驱动重组——字号动画（16sp ↔ 12sp）等需每帧重跑的视觉效果用）
+    label: Option<Box<dyn FnOnce(&mut ComposeCtx, &crate::core::state::State<f32>) + Send + Sync>>,
     /// 支持文本（容器底部外侧 12sp）
     supporting_text: Option<String>,
     /// 视觉变换（密码掩码/格式化输入——对标 Compose visualTransformation；
@@ -604,8 +618,9 @@ impl TextField {
         self
     }
 
-    /// 占位文字（值空时显示——组合内容闭包；仅显示条件满足时构建）
-    pub fn placeholder(mut self, placeholder: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
+    /// 占位文字（值空时显示——组合内容闭包；仅显示条件满足时构建）。
+    /// 闭包第二参数：淡入透明度动画 State（0..1——get 注册依赖）
+    pub fn placeholder(mut self, placeholder: impl FnOnce(&mut ComposeCtx, &crate::core::state::State<f32>) + Send + Sync + 'static) -> Self {
         self.placeholder = Some(Box::new(placeholder));
         self
     }
@@ -665,7 +680,9 @@ impl TextField {
     /// 浮动 label（聚焦或非空时悬浮到容器顶部——组合内容闭包，如
     /// `|ctx| { Text::new("Name").font_size(16.0).build(ctx); }`；
     /// 悬浮/展开位置动画由 TextFieldLayout 内部控制）
-    pub fn label(mut self, label: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
+    /// 闭包第二参数：悬浮进度 State（0 = 展开 / 1 = 悬浮——get 注册依赖驱动
+    /// 重组，可做字号动画：`Text::new("Name").font_size(16.0 + (12.0 - 16.0) * p.get())`）
+    pub fn label(mut self, label: impl FnOnce(&mut ComposeCtx, &crate::core::state::State<f32>) + Send + Sync + 'static) -> Self {
         self.label = Some(Box::new(label));
         self
     }
@@ -1234,13 +1251,22 @@ impl TextField {
         // - 无 label：四边 16（文本垂直居中近似）
         // - 无容器视觉：保持 8（向后兼容）
         // ═══ text-field-v2 容器化：容器 modifier（背景/指示线/边框/padding）
-        // + 输入子节点（文本/光标/选区/IME/交互）+ 闭包子节点（图标/label/
+        // + 输入子节点（文本/光标/选区/IME）+ 闭包子节点（图标/label/
         // placeholder/前后缀）——TextFieldLayout policy 按角色布局 ═══
+        // M3 specs（m3.material.io/components/text-fields/specs）：
+        // - 左右 padding：无图标 16 / 有图标 12（图标垂直居中、与文本间距 16）
+        // - Filled + label：文本顶 24（label 悬浮区 8..24，label 顶 8）+ 底 8
+        // - Filled 无 label：顶 16 + 底 8
+        // - Outlined：四边 16（label 跨边框不占容器内空间）
+        let has_leading_icon = self.leading_icon.is_some();
+        let has_trailing_icon = self.trailing_icon.is_some();
         let container_modifier = self.modifier;
         let container_modifier = if let Some(variant) = visual {
-            let (pad_h, pad_top, pad_bottom) = match (variant, self.label.is_some()) {
-                (TextFieldVariant::Filled, true) => (16.0, 24.0, 8.0),
-                _ => (16.0, 16.0, 16.0),
+            let pad_h = if has_leading_icon || has_trailing_icon { 12.0 } else { 16.0 };
+            let (pad_top, pad_bottom) = match variant {
+                TextFieldVariant::Filled if self.label.is_some() => (24.0, 8.0),
+                TextFieldVariant::Filled => (16.0, 8.0),
+                _ => (16.0, 16.0),
             };
             let shape = crate::modifier::Shape::RoundedRect {
                 corner_radius: 4.0,
@@ -1311,8 +1337,11 @@ impl TextField {
         } else {
             container_modifier
         };
-        // 输入子节点 modifier：文本 + 交互（焦点/点击/键盘）+ 角色标记。
-        // ⚠ padding 在容器（输入节点原点 = 容器内容区 + policy 偏移）
+        // 输入子节点 modifier：文本 + 点击定位 + 角色标记。
+        // ⚠ 焦点/键盘在**容器**（焦点语义：点击容器任意处聚焦——padding/
+        // 图标区也命中，对标 Compose 全容器可交互）；输入子节点 on_press
+        // 定位光标（点击文本区域）
+        let fr = ctx.remember(|| crate::modifier::FocusRequester::new()).get();
         let input_modifier = Modifier::new()
             .text_field_slot(TextFieldSlotRole::Input)
             .text_content(
@@ -1326,24 +1355,31 @@ impl TextField {
                 crate::ui::TextOverflow::Clip,
                 true, // allow text wrapping
             );
-        let input_modifier = if let Some(interaction) = interaction {
-            // 点击聚焦由组件自己请求（对标 Compose BasicTextField）
-            let fr = ctx.remember(|| crate::modifier::FocusRequester::new()).get();
+        let input_modifier = if interaction.is_some() {
             let fr_click = fr.clone();
             input_modifier
+                .on_press(move |_| { fr_click.request_focus(); })
+        } else {
+            input_modifier
+        };
+        // 焦点/键盘在容器（点击容器任意处聚焦——全容器可交互，对标
+        // Compose BasicTextField 的 interactionSource + focus 语义）
+        let container_modifier = if let Some(interaction) = interaction.as_ref() {
+            let fr_click = fr.clone();
+            container_modifier
                 .focusable_with_source(&interaction)
                 .focus_requester(&fr)
                 .on_press(move |_| { fr_click.request_focus(); })
                 .on_key_event(kb_handler)
         } else {
-            input_modifier
+            container_modifier
         };
 
         // ═══ 容器组：闭包子节点 + 输入子节点 ═══
         ctx.start_restartable_group(
             key,
             container_modifier,
-            TextFieldLayout::new(label_progress.clone()),
+            TextFieldLayout::new(label_progress.clone(), visual),
         );
         // 闭包子节点包装（角色标记 + Box 层叠——内容由闭包构建）
         macro_rules! slot_wrap {
@@ -1362,11 +1398,39 @@ impl TextField {
             slot_wrap!(TextFieldSlotRole::Leading, icon);
         }
         if let Some(label) = self.label {
-            slot_wrap!(TextFieldSlotRole::Label, label);
+            let sk = ctx.next_key();
+            ctx.start_restartable_group(
+                sk,
+                Modifier::new().text_field_slot(TextFieldSlotRole::Label),
+                crate::layout::BoxLayout::new(),
+            );
+            label(ctx, &label_progress);
+            ctx.end_restartable_group();
         }
         if show_placeholder && has_visual {
             if let Some(ph) = self.placeholder {
-                slot_wrap!(TextFieldSlotRole::Placeholder, ph);
+                // 淡入透明度动画（0 → 1，M3 placeholderAlpha 语义：聚焦空内容
+                // 时淡入——每次显示都从 0 起跑；闭包 get 注册依赖驱动重组。
+                // ⚠ 淡出（show_placeholder → false）闭包不再构建，直接消失）
+                let alpha = ctx.remember(|| crate::core::state::State::new(0.0)).get();
+                crate::animation::push_animatable(
+                    alpha.clone(),
+                    1.0,
+                    crate::animation::AnimationSpec::Tween(
+                        crate::animation::TweenSpec::new(
+                            std::time::Duration::from_millis(150),
+                            crate::animation::interpolator::EaseOutCubic::new(),
+                        )
+                    ),
+                );
+                let sk = ctx.next_key();
+                ctx.start_restartable_group(
+                    sk,
+                    Modifier::new().text_field_slot(TextFieldSlotRole::Placeholder),
+                    crate::layout::BoxLayout::new(),
+                );
+                ph(ctx, &alpha);
+                ctx.end_restartable_group();
             }
         }
         if let Some(prefix) = self.prefix {
@@ -1390,6 +1454,9 @@ impl TextField {
                 }
             }),
         );
+        // 显示聚焦标记：焦点在容器（交互移容器后本节点 focused=false）——
+        // 渲染端用此标记画光标/选区（组合期聚焦状态经 interaction 源可得）
+        ctx.set_current_node_display_focused(focused);
         // 注册到节点（app.rs 拖动选区定位依赖 node.registrar）
         ctx.set_current_node_registrar(registrar.clone());
         // 焦点环颜色：主题 primary（组合期捕获——渲染期 CompositionLocal 已退出）
@@ -1600,19 +1667,40 @@ mod tests {
         walk(nodes, root, role)
     }
 
+    /// 容器节点 modifier（TextField build 的根——start_restartable_group 即
+    /// 容器本身，无角色标记；子节点带 TextFieldSlot 标记）
+    fn container_modifier(field: TextField) -> Option<Modifier> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = rt.enter();
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            field.build(ctx);
+        });
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        Some(nodes[root].modifier.clone())
+    }
+
     #[test]
     fn disabled_field_has_no_focusable() {
         let value = State::new(TextFieldValue::new("hi"));
-        let m = find_slot_modifier(TextField::new(value.clone(), |_| {}).enabled(false), TextFieldSlotRole::Input).unwrap();
+        let m = container_modifier(TextField::new(value.clone(), |_| {}).enabled(false)).unwrap();
         assert!(!has_focusable(&m), "禁用字段不应可聚焦");
-        assert!(find_text_content(&m).is_some(), "禁用字段仍显示内容");
+        let input = find_slot_modifier(TextField::new(value.clone(), |_| {}).enabled(false), TextFieldSlotRole::Input).unwrap();
+        assert!(find_text_content(&input).is_some(), "禁用字段仍显示内容");
     }
 
     #[test]
     fn enabled_field_has_focusable() {
+        // text-field-v2 容器化：焦点/键盘在容器（点击容器任意处聚焦）
         let value = State::new(TextFieldValue::new("hi"));
-        let m = find_slot_modifier(TextField::new(value.clone(), |_| {}), TextFieldSlotRole::Input).unwrap();
-        assert!(has_focusable(&m), "启用字段应可聚焦");
+        let m = container_modifier(TextField::new(value.clone(), |_| {})).unwrap();
+        assert!(has_focusable(&m), "启用字段容器应可聚焦");
+        let input = find_slot_modifier(TextField::new(value.clone(), |_| {}), TextFieldSlotRole::Input).unwrap();
+        assert!(!has_focusable(&input), "输入子节点不再可聚焦（焦点在容器）");
     }
 
     fn find_placeholder(modifier: &Modifier) -> Option<String> {
@@ -1631,7 +1719,7 @@ mod tests {
     #[test]
     fn placeholder_shown_when_empty() {
         let value = State::new(TextFieldValue::new(""));
-        let m = find_slot_modifier(TextField::new(value.clone(), |_| {}).filled().placeholder(|ctx| { crate::ui::Text::new("请输入").build(ctx); }), TextFieldSlotRole::Placeholder);
+        let m = find_slot_modifier(TextField::new(value.clone(), |_| {}).filled().placeholder(|_ctx, _alpha| { crate::ui::Text::new("请输入").build(_ctx); }), TextFieldSlotRole::Placeholder);
         assert!(m.is_some(), "空值构建 placeholder 子节点");
     }
 
@@ -1640,7 +1728,7 @@ mod tests {
         // text-field-v2：placeholder 为闭包子节点（构建条件 show_placeholder）——
         // 非空时不构建（无 Placeholder 槽位标记）
         let value = State::new(TextFieldValue::new("已有内容"));
-        let m = build_field(TextField::new(value.clone(), |_| {}).filled().placeholder(|ctx| { crate::ui::Text::new("请输入").build(ctx); }));
+        let m = build_field(TextField::new(value.clone(), |_| {}).filled().placeholder(|_ctx, _alpha| { crate::ui::Text::new("请输入").build(_ctx); }));
         assert!(find_placeholder(&m).is_none(), "非空时 placeholder 不构建");
     }
 
@@ -1649,14 +1737,14 @@ mod tests {
         // text-field-v2：placeholder 为闭包子节点（仅 has_visual 时构建）——
         // 无容器视觉时不构建（无 Placeholder 槽位）
         let value = State::new(TextFieldValue::new(""));
-        let m = find_slot_modifier(TextField::new(value.clone(), |_| {}).placeholder(|ctx| { crate::ui::Text::new("请输入").build(ctx); }), TextFieldSlotRole::Placeholder);
+        let m = find_slot_modifier(TextField::new(value.clone(), |_| {}).placeholder(|_ctx, _alpha| { crate::ui::Text::new("请输入").build(_ctx); }), TextFieldSlotRole::Placeholder);
         assert!(m.is_none(), "无视觉时 placeholder 不构建（子节点化）");
     }
 
     #[test]
     fn placeholder_hidden_when_has_content() {
         let value = State::new(TextFieldValue::new("已有内容"));
-        let m = find_slot_modifier(TextField::new(value.clone(), |_| {}).filled().placeholder(|ctx| { crate::ui::Text::new("请输入").build(ctx); }), TextFieldSlotRole::Placeholder);
+        let m = find_slot_modifier(TextField::new(value.clone(), |_| {}).filled().placeholder(|_ctx, _alpha| { crate::ui::Text::new("请输入").build(_ctx); }), TextFieldSlotRole::Placeholder);
         assert!(m.is_none(), "非空时 placeholder 不构建");
         let mi = find_slot_modifier(TextField::new(value.clone(), |_| {}).filled(), TextFieldSlotRole::Input).unwrap();
         let content = find_text_content(&mi).unwrap_or_default();
@@ -1867,5 +1955,151 @@ mod tests {
         um.push("ac", &(2..2));
         assert!(um.redo_stack.is_empty(), "undo 后编辑丢弃 redo 分支");
         assert_eq!(um.undo_stack.len(), 2);
+    }
+
+    /// 验证：restartable group 内读取 State → 更新后该 group 重组重跑
+    /// （label 字号动画的依赖路径——闭包 get() 注册到 label 包装 group）
+    #[test]
+    fn state_read_in_group_triggers_recompose() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = rt.enter();
+        let mut composer = Composer::new();
+        let s = crate::core::state::State::new(0.0f32);
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen2 = seen.clone();
+        composer.compose(|ctx| {
+            ctx.start_restartable_group(0x1111, Modifier::new(), crate::layout::BoxLayout::new());
+            let v = s.get();
+            seen2.lock().unwrap().push(v);
+            ctx.end_restartable_group();
+        });
+        assert_eq!(seen.lock().unwrap().clone(), vec![0.0]);
+        s.set(1.0);
+        composer.compose(|ctx| {
+            let s2 = seen.clone();
+            ctx.start_restartable_group(0x1111, Modifier::new(), crate::layout::BoxLayout::new());
+            let v = s.get();
+            s2.lock().unwrap().push(v);
+            ctx.end_restartable_group();
+        });
+        let vals = seen.lock().unwrap().clone();
+        assert!(vals.contains(&1.0), "State 更新后 group 应重组重跑（读到 1.0），实际 {:?}", vals);
+    }
+
+    /// 模拟 demo 循环：聚焦 → label_progress 动画驱动 → 组合重组 →
+    /// label 闭包重跑（get 注册依赖）→ 字号随 progress 插值。
+    /// 验证"字号动画"链路端到端（demo 截图里字号未变的问题回归）。
+    #[test]
+    fn label_font_size_animates_with_progress() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = rt.enter();
+        let mut composer = Composer::new();
+        let value = crate::core::state::State::new(TextFieldValue::new(""));
+        let focus_src = crate::ui::interaction::MutableInteractionSource::new();
+        let progress_log: std::sync::Arc<std::sync::Mutex<Vec<f32>>> = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        // 首帧：未聚焦（label 展开，progress 目标 0）
+        for frame in 0..3 {
+            let log = progress_log.clone();
+            let field = TextField::new(value.clone(), |_| {})
+                .filled()
+                .interaction_source(focus_src.clone())
+                .label(move |ctx, p| {
+                    log.lock().unwrap().push(p.peek());
+                    crate::ui::Text::new("Name")
+                        .font_size(16.0 - 4.0 * p.get())
+                        .build(ctx);
+                });
+            composer.compose(|ctx| {
+                field.build(ctx);
+            });
+            crate::animation::update_animations();
+        }
+        // 聚焦：label 悬浮（progress 目标 1）
+        focus_src.emit_focus();
+        for frame in 0..20 {
+            let log = progress_log.clone();
+            let field = TextField::new(value.clone(), |_| {})
+                .filled()
+                .interaction_source(focus_src.clone())
+                .label(move |ctx, p| {
+                    log.lock().unwrap().push(p.peek());
+                    crate::ui::Text::new("Name")
+                        .font_size(16.0 - 4.0 * p.get())
+                        .build(ctx);
+                });
+            composer.compose(|ctx| {
+                field.build(ctx);
+            });
+            std::thread::sleep(std::time::Duration::from_millis(8));
+            crate::animation::update_animations();
+        }
+        let log = progress_log.lock().unwrap();
+        let last = *log.last().unwrap();
+        // 动画完成后 progress ≈ 1 → 字号 ≈ 12（闭包确实随动画重跑——若
+        // 闭包只跑首帧（重组未触发），log 里只有 0.0）
+        assert!(
+            log.len() > 3 && last > 0.9,
+            "label 闭包应随 progress 动画多次重跑并收敛到 1.0（实际 len={} last={} log={:?}）",
+            log.len(), last, &log[..log.len().min(8)]
+        );
+    }
+
+    /// 复现 demo 结构（Column 嵌套 TextField）：子 slot dirty 必须向上传播
+    /// 到 Column 才能触发重跑——label 闭包随动画重跑（demo 截图字号未变的回归）
+    #[test]
+    fn label_font_size_animates_nested_in_column() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = rt.enter();
+        let mut composer = Composer::new();
+        let value = crate::core::state::State::new(TextFieldValue::new(""));
+        let focus_src = crate::ui::interaction::MutableInteractionSource::new();
+        let progress_log: std::sync::Arc<std::sync::Mutex<Vec<f32>>> = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mk_field = |log: std::sync::Arc<std::sync::Mutex<Vec<f32>>>| {
+            TextField::new(value.clone(), |_| {})
+                .filled()
+                .interaction_source(focus_src.clone())
+                .label(move |ctx, p| {
+                    log.lock().unwrap().push(p.peek());
+                    crate::ui::Text::new("Name")
+                        .font_size(16.0 - 4.0 * p.get())
+                        .build(ctx);
+                })
+        };
+        for _frame in 0..3 {
+            let field = mk_field(progress_log.clone());
+            composer.compose(|ctx| {
+                crate::ui::Column::new().build(ctx, |ctx| {
+                    field.build(ctx);
+                });
+            });
+            crate::animation::update_animations();
+        }
+        focus_src.emit_focus();
+        for _frame in 0..20 {
+            let field = mk_field(progress_log.clone());
+            composer.compose(|ctx| {
+                crate::ui::Column::new().build(ctx, |ctx| {
+                    field.build(ctx);
+                });
+            });
+            std::thread::sleep(std::time::Duration::from_millis(8));
+            crate::animation::update_animations();
+        }
+        let log = progress_log.lock().unwrap();
+        let last = *log.last().unwrap();
+        assert!(
+            log.len() > 3 && last > 0.9,
+            "嵌套 Column 下 label 闭包应随动画重跑收敛 1.0（实际 len={} last={} log={:?}）",
+            log.len(), last, &log[..log.len().min(8)]
+        );
     }
 }

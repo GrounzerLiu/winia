@@ -30,6 +30,8 @@ pub(crate) struct DescNode {
     pub(crate) cursor_index: Option<usize>,
     pub(crate) cursor_visible: Option<bool>,
     pub(crate) cursor_callback: Option<Box<dyn Fn(usize) + Send>>,
+    /// 显示聚焦标记（text-field-v2 容器化——渲染光标/选区用，回退 node.focused）
+    pub(crate) display_focused: Option<bool>,
     pub(crate) ime_callback: Option<Box<dyn Fn(&str, Option<(usize, usize)>) + Send>>,
     /// 外层 Option：None = 非 TextField 未设置；Some(r) = 渲染值（r 可为 None 清空）
     pub(crate) composing_range: Option<Option<std::ops::Range<usize>>>,
@@ -72,7 +74,7 @@ pub(crate) fn materialize(composer: &mut Composer) {
 
 /// 物化单个 desc 节点（递归子节点）——Skip 恢复 / 节点复用 / 降级重建。
 pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: Option<usize>) -> Option<usize> {
-    let DescNode { key, skip, modifier, preserve_modifier, policy, on_remove, dirty, registrar, focus_color, cursor_index, cursor_visible, cursor_callback, ime_callback, composing_range, selection_range, direction, children } = desc;
+    let DescNode { key, skip, modifier, preserve_modifier, policy, on_remove, dirty, registrar, focus_color, cursor_index, cursor_visible, cursor_callback, display_focused, ime_callback, composing_range, selection_range, direction, children } = desc;
     let index = if skip {
         // Skip：恢复上帧节点（key 匹配——保留测量/内容；children 清空后
         // 按 slot 树结构重新挂接（子节点逐个从 prev_node_by_key 恢复——
@@ -239,6 +241,9 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
     }
     if let Some(cb) = cursor_callback {
         *composer.arena.nodes[index].cursor_callback.borrow_mut() = Some(cb);
+    }
+    if let Some(df) = display_focused {
+        composer.arena.nodes[index].display_focused.set(df);
     }
     if let Some(icb) = ime_callback {
         *composer.arena.nodes[index].ime_callback.borrow_mut() = Some(icb);

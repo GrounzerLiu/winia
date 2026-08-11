@@ -676,11 +676,27 @@ fn render_pass1(
                 let supporting_h = if supporting.is_some() { 20.0 } else { 0.0 };
                 let container_rect = Rect::new(x, y, x + w, y + h - supporting_h);
                 // ⚠ label/placeholder/图标/前后缀均为子节点（text-field-v2
-                // 容器化——TextFieldLayout 定位）；Outlined label 缺口由
-                // 子节点位置提供（渲染端无法预知 label 宽——缺口逻辑迁移
-                // 到 policy 后简化：缺口保留为近似矩形）
+                // 容器化——TextFieldLayout 定位）；Outlined label 缺口由子节点
+                // Label 的 placement 构造（跨边框悬浮时——label 顶越出容器顶，
+                // 缺口 = label 水平范围 ± 4dp（M3 populated label padding））
+                let cutout = if *variant == crate::ui::TextFieldVariant::Outlined {
+                    node.children.iter().find_map(|&ci| {
+                        let cn = &nodes[ci];
+                        let is_label = cn.modifier.elements().iter().any(|el| {
+                            matches!(el, ModifierElement::TextFieldSlot { role }
+                                if *role == crate::ui::text_field::TextFieldSlotRole::Label)
+                        });
+                        if !is_label { return None; }
+                        let (lx, ly) = (parent_x + cn.position.x, parent_y + cn.position.y);
+                        if ly >= container_rect.top { return None; } // 展开态：无缺口
+                        Some(Rect::new(
+                            lx - 4.0, ly,
+                            lx + cn.measured_size.width + 4.0, ly + cn.measured_size.height,
+                        ))
+                    })
+                } else { None };
                 let focus_p = focus_progress.peek();
-                draw_text_field_container(canvas, container_rect, variant, shape, colors, &indicator_color.peek(), focus_p, None);
+                draw_text_field_container(canvas, container_rect, variant, shape, colors, &indicator_color.peek(), focus_p, cutout);
                 // 支持文本：容器底部外侧 4dp
                 if let Some(sv) = supporting {
                     draw_text_field_aux_text(
@@ -798,7 +814,10 @@ fn render_pass1(
                 .and_then(|reg| reg.selected_range(node.slot_key))
                 .map(|r| r.start < r.end)
                 .unwrap_or(false);
-            if node.focused && !has_selection {
+            // 聚焦判定：优先组合期标记（text-field-v2 容器化——焦点在容器，
+            // 输入子节点用 display_focused），回退节点自身 focused
+            let focused = node.display_focused.get() || node.focused;
+            if focused && !has_selection {
                 if node.cursor_visible.get() {
                     let cursor = node.modifier.elements().iter().find_map(|el| {
                         if let ModifierElement::TextFieldVisual { cursor_color, .. } = el {

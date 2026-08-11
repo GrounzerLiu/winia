@@ -349,6 +349,14 @@ impl<'a> ComposeCtx<'a> {
         }
     }
 
+    /// 设置当前节点的显示聚焦标记（text-field-v2 容器化：焦点在容器，
+    /// 输入子节点用此标记渲染光标/选区）
+    pub fn set_current_node_display_focused(&mut self, focused: bool) {
+        if let Some(desc) = &mut self.composer.slot_table.current_slot().desc {
+            desc.display_focused = Some(focused);
+        }
+    }
+
     /// animateFloatAsState — 动画浮点值到目标值
     pub fn animate_float_as_state(&mut self, target: f32, spec: crate::animation::AnimationSpec) -> State<f32> {
         let remember_key = self.next_remember_key();
@@ -549,6 +557,9 @@ struct NodeDesc {
     cursor_index: Option<usize>,
     cursor_visible: Option<bool>,
     cursor_callback: Option<Box<dyn Fn(usize) + Send>>,
+    /// 显示聚焦标记（text-field-v2 容器化：焦点/交互在容器节点，输入
+    /// 子节点渲染光标/选区需组合期标记——渲染端优先用此，回退 node.focused）
+    display_focused: Option<bool>,
     /// IME 预输入回调（TextField——app.rs 的 Ime::Preedit 直接调用）
     ime_callback: Option<Box<dyn Fn(&str, Option<(usize, usize)>) + Send>>,
     /// IME 组合范围（渲染画下划线用）——外层 Option 区分"未设置"与"清空"
@@ -751,6 +762,7 @@ impl SlotTable {
                     cursor_index: desc.cursor_index,
                     cursor_visible: desc.cursor_visible,
                     cursor_callback: desc.cursor_callback,
+                    display_focused: desc.display_focused,
                     ime_callback: desc.ime_callback,
                     composing_range: desc.composing_range,
                     selection_range: desc.selection_range,
@@ -782,6 +794,7 @@ impl SlotTable {
                     cursor_index: None,
                     cursor_visible: None,
                     cursor_callback: None,
+                    display_focused: None,
                     ime_callback: None,
                     composing_range: None,
                     selection_range: None,
@@ -1178,6 +1191,7 @@ impl Composer {
             cursor_index: None,
             cursor_visible: None,
             cursor_callback: None,
+            display_focused: None,
             ime_callback: None,
             composing_range: None,
             selection_range: None,
@@ -1265,7 +1279,8 @@ impl Composer {
             // Enter：组合期捕获方向（provides 作用域内）——先算再 move
             let direction = modifier.get_layout_direction()
                 .unwrap_or(crate::ui::theme::WiniaTheme::direction());
-            self.slot_table.set_current_desc(Some(NodeDesc {
+        self.slot_table.set_current_desc(Some(NodeDesc {
+
                 key,
                 modifier,
                 policy,
@@ -1273,10 +1288,11 @@ impl Composer {
                 dirty: true, // Enter 即重测（content 重跑——参数/内容可能变；Skip 恢复不受影响）
                 registrar: None,
                 focus_color: None,
-                cursor_index: None,
-                cursor_visible: None,
-                cursor_callback: None,
-                ime_callback: None,
+            cursor_index: None,
+            cursor_visible: None,
+            cursor_callback: None,
+            display_focused: None,
+            ime_callback: None,
                 composing_range: None,
                 selection_range: None,
                 direction,
@@ -3625,10 +3641,11 @@ fn test_skip_recovery_sig_mismatch_direct() {
         dirty: false,
         registrar: None,
         focus_color: None,
-        cursor_index: None,
-        cursor_visible: None,
-        cursor_callback: None,
-        ime_callback: None,
+            cursor_index: None,
+            cursor_visible: None,
+            cursor_callback: None,
+            display_focused: None,
+            ime_callback: None,
         composing_range: None,
         selection_range: None,
         direction: crate::layout::LayoutDirection::Ltr,
@@ -3645,6 +3662,7 @@ fn test_skip_recovery_sig_mismatch_direct() {
             cursor_index: None,
             cursor_visible: None,
             cursor_callback: None,
+            display_focused: None,
             ime_callback: None,
             composing_range: None,
             selection_range: None,

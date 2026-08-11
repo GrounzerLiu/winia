@@ -96,14 +96,19 @@ pub(crate) fn modifier_has_text(modifier: &Modifier) -> bool {
 }
 
 /// 比较两个 modifier 的文本内容（TextContent/RichTextContent 的 content）——
-/// 文本内容变化但 slot Clean（依赖注册在父容器）时，复用节点需重测
-/// （否则常量折叠 + cached_paragraph 旧内容 → 渲染画旧文本，输入不显示）。
+/// 文本内容变化但 slot Clean（依赖注册在父容器）时，复用节点需重测。
+/// 检查 modifier 文本内容差异（决定"折叠测量是否失效"）：
+/// 内容、对齐、字号、字重、行数、字间距、行高、溢出——**所有影响文本
+/// 测量结果的属性**（font_size 变化必须触发重测——否则字号动画后布局
+/// 尺寸/位置沿用旧测量：label 悬浮位置/占位高度失真）
 pub(crate) fn modifier_text_content_differs(a: &Modifier, b: &Modifier) -> bool {
-    let text_of = |m: &Modifier| -> Option<(String, crate::ui::TextAlign)> {
+    let text_of = |m: &Modifier| -> Option<(String, crate::ui::TextAlign, f32, crate::ui::text::FontWeight, usize, f32, Option<f32>, crate::ui::TextOverflow)> {
         m.elements().iter().find_map(|el| match el {
-            ModifierElement::TextContent { content, align, .. } => Some((content.clone(), *align)),
+            ModifierElement::TextContent { content, align, font_size, font_weight, max_lines, letter_spacing, line_height, overflow, .. } => {
+                Some((content.clone(), *align, *font_size, *font_weight, *max_lines, *letter_spacing, *line_height, *overflow))
+            }
             // RichText 变化保守视为不同
-            ModifierElement::RichTextContent { .. } => Some(("<richtext>".to_string(), crate::ui::TextAlign::Left)),
+            ModifierElement::RichTextContent { .. } => Some(("<richtext>".to_string(), crate::ui::TextAlign::Left, 0.0, crate::ui::text::FontWeight::NORMAL, 0, 0.0, None, crate::ui::TextOverflow::Clip)),
             _ => None,
         })
     };
@@ -172,6 +177,9 @@ pub struct LayoutNode {
     pub(crate) cursor_index: std::cell::Cell<usize>,
     /// 光标是否可见（闪烁 toggle，TextField 设置）
     pub(crate) cursor_visible: std::cell::Cell<bool>,
+    /// 显示聚焦标记（text-field-v2 容器化：焦点在容器节点，输入子节点
+    /// 渲染光标/选区用此标记——组合期写入，回退 node.focused）
+    pub(crate) display_focused: std::cell::Cell<bool>,
     /// 光标位置回调（TextField 点击后更新 selection 用）
     pub(crate) cursor_callback: std::cell::RefCell<Option<Box<dyn Fn(usize) + Send>>>,
     /// IME 预输入回调（TextField 处理 Preedit 用）
@@ -283,6 +291,7 @@ impl LayoutNode {
             cursor_height: std::cell::Cell::new(0.0),
             cursor_index: std::cell::Cell::new(0),
             cursor_visible: std::cell::Cell::new(false),
+            display_focused: std::cell::Cell::new(false),
             cursor_callback: std::cell::RefCell::new(None),
             ime_callback: std::cell::RefCell::new(None),
             composing_range: std::cell::RefCell::new(None),
@@ -335,6 +344,7 @@ impl Default for LayoutNode {
             cursor_height: std::cell::Cell::new(0.0),
             cursor_index: std::cell::Cell::new(0),
             cursor_visible: std::cell::Cell::new(false),
+            display_focused: std::cell::Cell::new(false),
             cursor_callback: std::cell::RefCell::new(None),
             ime_callback: std::cell::RefCell::new(None),
             composing_range: std::cell::RefCell::new(None),

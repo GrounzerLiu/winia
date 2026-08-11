@@ -352,4 +352,27 @@ mod tests {
         assert_eq!(ls, 1.5, "letter_spacing 传入 TextContent 元素");
         assert_eq!(lh, Some(30.0), "line_height 传入 TextContent 元素");
     }
+
+    /// 测量高随字号线性变化（验证 label 字号动画后测量正确——12sp 高
+    /// 约为 16sp 的 3/4，若测量不随字号变则字号动画视觉无效）
+    #[test]
+    fn test_measured_height_scales_with_font_size() {
+        use crate::modifier::ModifierElement;
+        let measure = |font_size: f32| {
+            let mut composer = crate::core::composer::Composer::new();
+            composer.compose(|ctx| {
+                Text::new("Name").font_size(font_size).build(ctx);
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 500.0, 0.0, 500.0));
+            let root = composer.layout_root_idx().unwrap();
+            composer.arena_nodes()[root].measured_size.height
+        };
+        let h16 = measure(16.0);
+        let h12 = measure(12.0);
+        assert!(
+            h12 < h16 && (h12 / h16 - 0.75).abs() < 0.15,
+            "12sp 高度应约为 16sp 的 3/4（实际 h16={} h12={}）",
+            h16, h12
+        );
+    }
 }
