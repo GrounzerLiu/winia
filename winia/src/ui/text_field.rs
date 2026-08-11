@@ -502,8 +502,12 @@ impl TextField {
             color
         };
 
-        // 光标闪烁状态（旧版风格）
+        // 光标闪烁状态。⚠ `cursor_visible.get()` 必须在 start_leaf **之前**
+        // 读取——此刻依赖注册到父 scope，闪烁翻转 → 父重组 → build 重跑 →
+        // desc 更新 → 节点同步（start_leaf 后读取会注册到 leaf——leaf 不
+        // 触发 build 重跑，光标永远停留在 build 时的值）
         let cursor_visible = ctx.remember(|| true);
+        let cursor_visible_now = cursor_visible.get();
         let cv = cursor_visible.clone();
         let blink_started = ctx.remember(|| false);
         if !blink_started.get() {
@@ -988,10 +992,10 @@ impl TextField {
 
         ctx.start_leaf(key, modifier);
 
-        // 设置光标位置和回调（用 node_stack 直接访问，find_node_by_id 因树未建立无效）
+        // 设置光标位置和回调（desc 通道——组合期捕获，物化时应用到节点）
         ctx.set_current_node_cursor_and_callback(
             current.selection.start,
-            cursor_visible.get(),
+            cursor_visible_now,
             Box::new({
                 let v = value.clone();
                 move |idx| {

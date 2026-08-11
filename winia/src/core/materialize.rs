@@ -26,6 +26,14 @@ pub(crate) struct DescNode {
     pub(crate) registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
     /// 焦点环颜色（物化时写入节点——组合期捕获，渲染期读取）
     pub(crate) focus_color: Option<crate::modifier::Color>,
+    /// 光标（TextField）——组合期写入 desc，物化时应用到节点
+    pub(crate) cursor_index: Option<usize>,
+    pub(crate) cursor_visible: Option<bool>,
+    pub(crate) cursor_callback: Option<Box<dyn Fn(usize) + Send>>,
+    pub(crate) ime_callback: Option<Box<dyn Fn(&str, Option<(usize, usize)>) + Send>>,
+    /// 外层 Option：None = 非 TextField 未设置；Some(r) = 渲染值（r 可为 None 清空）
+    pub(crate) composing_range: Option<Option<std::ops::Range<usize>>>,
+    pub(crate) selection_range: Option<Option<std::ops::Range<usize>>>,
     /// 布局方向（组合期捕获——物化直接用，不读 CompositionLocal）
     pub(crate) direction: crate::layout::LayoutDirection,
     pub(crate) children: Vec<DescNode>,
@@ -64,7 +72,7 @@ pub(crate) fn materialize(composer: &mut Composer) {
 
 /// 物化单个 desc 节点（递归子节点）——Skip 恢复 / 节点复用 / 降级重建。
 pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: Option<usize>) -> Option<usize> {
-    let DescNode { key, skip, modifier, preserve_modifier, policy, on_remove, dirty, registrar, focus_color, direction, children } = desc;
+    let DescNode { key, skip, modifier, preserve_modifier, policy, on_remove, dirty, registrar, focus_color, cursor_index, cursor_visible, cursor_callback, ime_callback, composing_range, selection_range, direction, children } = desc;
     let index = if skip {
         // Skip：恢复上帧节点（key 匹配——保留测量/内容；children 清空后
         // 按 slot 树结构重新挂接（子节点逐个从 prev_node_by_key 恢复——
@@ -221,6 +229,26 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
     // 应用焦点环颜色（组合期捕获——Enter 路径写入；Skip 恢复保留缓存值）
     if let Some(color) = focus_color {
         composer.arena.nodes[index].focus_color.set(color);
+    }
+    // 应用光标/IME/选区（组合期写入 desc——Enter 路径；Skip 恢复保留缓存值）
+    if let Some(ci) = cursor_index {
+        composer.arena.nodes[index].cursor_index.set(ci);
+    }
+    if let Some(cv) = cursor_visible {
+        composer.arena.nodes[index].cursor_visible.set(cv);
+    }
+    if let Some(cb) = cursor_callback {
+        *composer.arena.nodes[index].cursor_callback.borrow_mut() = Some(cb);
+    }
+    if let Some(icb) = ime_callback {
+        *composer.arena.nodes[index].ime_callback.borrow_mut() = Some(icb);
+    }
+    // 组合/选区范围：Some(r) 即应用（r=None 清空；None = 非 TextField 不碰）
+    if let Some(r) = composing_range {
+        *composer.arena.nodes[index].composing_range.borrow_mut() = r;
+    }
+    if let Some(r) = selection_range {
+        *composer.arena.nodes[index].selection_range.borrow_mut() = r;
     }
     if let Some(p) = parent {
         composer.arena.add_child(p, index);

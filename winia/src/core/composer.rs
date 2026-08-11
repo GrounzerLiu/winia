@@ -323,18 +323,19 @@ impl<'a> ComposeCtx<'a> {
         }
     }
 
-    /// 设置当前节点的光标位置和可见性，同时设置光标回调
+    /// 设置当前节点的光标位置和可见性，同时设置光标回调。
+    /// ⚠ 组合/布局分离：组合期没有 arena 节点（node_stack 已废弃）——
+    /// 写入当前 slot 的 desc，物化时应用到节点（与 focus_color 同一通道）。
     pub fn set_current_node_cursor_and_callback(
-        &self,
+        &mut self,
         cursor_index: usize,
         visible: bool,
         callback: Box<dyn Fn(usize) + Send>,
     ) {
-        if let Some(&idx) = self.composer.node_stack.last() {
-            let node = &self.composer.arena.nodes[idx];
-            node.cursor_index.set(cursor_index);
-            node.cursor_visible.set(visible);
-            *node.cursor_callback.borrow_mut() = Some(callback);
+        if let Some(desc) = &mut self.composer.slot_table.current_slot().desc {
+            desc.cursor_index = Some(cursor_index);
+            desc.cursor_visible = Some(visible);
+            desc.cursor_callback = Some(callback);
         }
     }
 
@@ -407,48 +408,26 @@ impl<'a> ComposeCtx<'a> {
     }
 
     /// 设置当前节点的 IME 预输入回调
-    pub fn set_current_node_ime_callback(&self, callback: Box<dyn Fn(&str, Option<(usize, usize)>) + Send>) {
-        if let Some(&idx) = self.composer.node_stack.last() {
-            let node = &self.composer.arena.nodes[idx];
-            *node.ime_callback.borrow_mut() = Some(callback);
+    /// 设置当前节点的 IME 预输入回调（app.rs 的 Ime::Preedit 直接调用）。
+    /// desc 通道（组合期无 arena 节点）
+    pub fn set_current_node_ime_callback(&mut self, callback: Box<dyn Fn(&str, Option<(usize, usize)>) + Send>) {
+        if let Some(desc) = &mut self.composer.slot_table.current_slot().desc {
+            desc.ime_callback = Some(callback);
         }
     }
 
-    /// 同步 composing_range 到当前节点（渲染画下划线用）
-    pub fn sync_composing_range(&self, range: Option<std::ops::Range<usize>>) {
-        if let Some(&idx) = self.composer.node_stack.last() {
-            let node = &self.composer.arena.nodes[idx];
-            *node.composing_range.borrow_mut() = range;
+    /// 同步 composing_range 到当前节点（渲染画下划线用）。desc 通道——
+    /// 外层 Option 区分"未设置"（非 TextField）与"清空"（组合结束）
+    pub fn sync_composing_range(&mut self, range: Option<std::ops::Range<usize>>) {
+        if let Some(desc) = &mut self.composer.slot_table.current_slot().desc {
+            desc.composing_range = Some(range);
         }
     }
 
-    /// 同步 selection_range 到当前节点（渲染高亮选区用）
-    pub fn sync_selection_range(&self, range: Option<std::ops::Range<usize>>) {
-        if let Some(&idx) = self.composer.node_stack.last() {
-            let node = &self.composer.arena.nodes[idx];
-            *node.selection_range.borrow_mut() = range;
-        }
-    }
-
-    /// 获取当前节点缓存段落中的索引映射（供方向键按 glyph 边界移动）
-    pub fn cached_paragraph_maps(&self) -> (crate::text::IndexBiMap, crate::text::IndexBiMap) {
-        if let Some(&idx) = self.composer.node_stack.last() {
-            if let Some(node) = self.composer.arena.nodes.get(idx) {
-                if let Some(p) = node.cached_paragraph.borrow().as_ref() {
-                    return (p.paragraph_byte_to_real_indices.clone(), p.byte_to_utf16_indices.clone());
-                }
-            }
-        }
-        // 返回空映射作为后备
-        (crate::text::IndexBiMap::new(), crate::text::IndexBiMap::new())
-    }
-
-    /// 设置当前节点的光标位置
-    pub fn set_current_node_cursor(&self, cursor_index: usize, visible: bool) {
-        if let Some(idx) = self.composer.node_stack.last() {
-            let node = &self.composer.arena.nodes[*idx];
-            node.cursor_index.set(cursor_index);
-            node.cursor_visible.set(visible);
+    /// 同步 selection_range 到当前节点（渲染高亮选区用）。desc 通道
+    pub fn sync_selection_range(&mut self, range: Option<std::ops::Range<usize>>) {
+        if let Some(desc) = &mut self.composer.slot_table.current_slot().desc {
+            desc.selection_range = Some(range);
         }
     }
 
@@ -565,6 +544,17 @@ struct NodeDesc {
     /// 焦点环颜色（组合期 set_current_node_focus_color 写入——物化时应用；
     /// 渲染期 CompositionLocal 已退出，必须组合期捕获）
     focus_color: Option<crate::modifier::Color>,
+    /// 光标（TextField）——组合期写入，物化时应用（node_stack 已废弃——
+    /// 组合期无 arena 节点，直接写节点会静默失效）
+    cursor_index: Option<usize>,
+    cursor_visible: Option<bool>,
+    cursor_callback: Option<Box<dyn Fn(usize) + Send>>,
+    /// IME 预输入回调（TextField——app.rs 的 Ime::Preedit 直接调用）
+    ime_callback: Option<Box<dyn Fn(&str, Option<(usize, usize)>) + Send>>,
+    /// IME 组合范围（渲染画下划线用）——外层 Option 区分"未设置"与"清空"
+    composing_range: Option<Option<std::ops::Range<usize>>>,
+    /// 选区范围（渲染高亮用）——同上
+    selection_range: Option<Option<std::ops::Range<usize>>>,
     /// 布局方向（组合期捕获——provides 作用域内读 CompositionLocal；
     /// 物化在组合回调后执行——届时 WiniaTheme::direction() 已退出作用域，
     /// 必须从 desc 携带，否则 RTL 下节点快照恒 Ltr → offset/padding 镜像失效）
@@ -758,6 +748,12 @@ impl SlotTable {
                     dirty: desc.dirty, // start_slot 的 Dirty 状态（slot.dirty 已消费）
                     registrar: desc.registrar,
                     focus_color: desc.focus_color,
+                    cursor_index: desc.cursor_index,
+                    cursor_visible: desc.cursor_visible,
+                    cursor_callback: desc.cursor_callback,
+                    ime_callback: desc.ime_callback,
+                    composing_range: desc.composing_range,
+                    selection_range: desc.selection_range,
                     direction: desc.direction,
                     children: Vec::new(),
                 };
@@ -783,6 +779,12 @@ impl SlotTable {
                     dirty: false,
                     registrar: None,
                     focus_color: None,
+                    cursor_index: None,
+                    cursor_visible: None,
+                    cursor_callback: None,
+                    ime_callback: None,
+                    composing_range: None,
+                    selection_range: None,
                     direction: slot.direction,
                     children: Vec::new(),
                 };
@@ -1173,6 +1175,12 @@ impl Composer {
             dirty: slot_status != SlotStatus::Clean, // 重测标记（slot.dirty 已消费）
             registrar: None,
             focus_color: None,
+            cursor_index: None,
+            cursor_visible: None,
+            cursor_callback: None,
+            ime_callback: None,
+            composing_range: None,
+            selection_range: None,
             direction,
         }));
         // 统一依赖栈：节点 push（组件 build 期间 State 读取注册到最内层 Group——
@@ -1265,6 +1273,12 @@ impl Composer {
                 dirty: true, // Enter 即重测（content 重跑——参数/内容可能变；Skip 恢复不受影响）
                 registrar: None,
                 focus_color: None,
+                cursor_index: None,
+                cursor_visible: None,
+                cursor_callback: None,
+                ime_callback: None,
+                composing_range: None,
+                selection_range: None,
                 direction,
             }));
         }
@@ -3611,6 +3625,12 @@ fn test_skip_recovery_sig_mismatch_direct() {
         dirty: false,
         registrar: None,
         focus_color: None,
+        cursor_index: None,
+        cursor_visible: None,
+        cursor_callback: None,
+        ime_callback: None,
+        composing_range: None,
+        selection_range: None,
         direction: crate::layout::LayoutDirection::Ltr,
         children: vec![crate::core::materialize::DescNode {
             key: leaf0_key,
@@ -3622,6 +3642,12 @@ fn test_skip_recovery_sig_mismatch_direct() {
             dirty: false,
             registrar: None,
             focus_color: None,
+            cursor_index: None,
+            cursor_visible: None,
+            cursor_callback: None,
+            ime_callback: None,
+            composing_range: None,
+            selection_range: None,
             direction: crate::layout::LayoutDirection::Ltr,
             children: vec![],
         }],
