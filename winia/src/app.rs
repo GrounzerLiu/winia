@@ -984,32 +984,54 @@ impl ApplicationHandler for AppState {
                             if let Some(pidx) = crate::layout::node::find_node_by_id(nodes, r, fid) {
                                 if let Ok(borrow) = nodes[pidx].cached_paragraph.try_borrow() {
                                     if let Some(p) = borrow.as_ref() {
-                                        let tl = crate::text::TextLayout::new(
-                                            p,
-                                            p.paragraph_byte_to_real_indices.len(),
-                                        );
-                                        if let Some((cx, cy, ch)) = tl.get_cursor_position(nodes[pidx].cursor_index.get()) {
-                                            let abs = node_abs_position(nodes, r, fid);
-                                            let align = nodes[pidx].modifier.align().unwrap_or(crate::ui::TextAlign::Left);
-                                            let node_w = nodes[pidx].measured_size.width;
-                                            let intrinsic_w = p.max_intrinsic_width();
+                                        let abs = node_abs_position(nodes, r, fid);
+                                        // 内容区偏移（渲染侧 content_x = 节点原点 +
+                                        // padding——IME 区域须与其对称，否则预选
+                                        // 窗口整体偏 padding 偏移）
+                                        let (pad_s, pad_t, pad_e, _) = nodes[pidx].modifier.get_padding_sides();
+                                        let pad_x = if nodes[pidx].layout_direction == crate::layout::LayoutDirection::Rtl { pad_e } else { pad_s };
+                                        // 空文本：无 glyph 可定位——IME 区域放内容
+                                        // 起点（行高近似；与渲染端空文本光标一致）
+                                        let empty = nodes[pidx].modifier.content_len() == 0;
+                                        let (cx, cy, ch) = if empty {
+                                            (0.0, 0.0, 20.0)
+                                        } else {
+                                            let tl = crate::text::TextLayout::new(
+                                                p,
+                                                p.paragraph_byte_to_real_indices.len(),
+                                            );
+                                            match tl.get_cursor_position(nodes[pidx].cursor_index.get()) {
+                                                Some(v) => v,
+                                                None => (0.0, 0.0, 20.0),
+                                            }
+                                        };
+                                        let align = nodes[pidx].modifier.align().unwrap_or(crate::ui::TextAlign::Left);
+                                        let node_w = nodes[pidx].measured_size.width;
+                                        let intrinsic_w = p.max_intrinsic_width();
+                                        // ⚠ 空文本：渲染端光标画在内容起点（左对齐，
+                                        // 不随 align 偏移）——IME 区域须一致（否则
+                                        // Center/Right 对齐时空文本输入候选框在容器
+                                        // 中央而非光标处）
+                                        let x = if empty {
+                                            (abs.0 + pad_x) as f64
+                                        } else {
                                             let x_off = match align {
                                                 crate::ui::TextAlign::Left | crate::ui::TextAlign::Justify => abs.0,
                                                 crate::ui::TextAlign::Center => abs.0 + (node_w - intrinsic_w).max(0.0) / 2.0,
                                                 crate::ui::TextAlign::Right => abs.0 + (node_w - intrinsic_w).max(0.0),
                                             };
-                                            let x = (x_off + cx) as f64;
-                                            let y = (abs.1 + cy) as f64;
-                                            let _ = sw.request_ime_update(
-                                                winit::window::ImeRequest::Update(
-                                                    winit::window::ImeRequestData::default()
-                                                        .with_cursor_area(
-                                                            winit::dpi::Position::Logical(winit::dpi::LogicalPosition::new(x, y)),
-                                                            winit::dpi::Size::Logical(winit::dpi::LogicalSize::new(2.0, ch as f64)),
-                                                        )
-                                                )
-                                            );
-                                        }
+                                            (x_off + pad_x + cx) as f64
+                                        };
+                                        let y = (abs.1 + pad_t + cy) as f64;
+                                        let _ = sw.request_ime_update(
+                                            winit::window::ImeRequest::Update(
+                                                winit::window::ImeRequestData::default()
+                                                    .with_cursor_area(
+                                                        winit::dpi::Position::Logical(winit::dpi::LogicalPosition::new(x, y)),
+                                                        winit::dpi::Size::Logical(winit::dpi::LogicalSize::new(2.0, ch as f64)),
+                                                    )
+                                            )
+                                        );
                                     }
                                 }
                             }
