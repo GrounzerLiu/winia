@@ -833,25 +833,44 @@ fn render_pass1(
                     }
                 }
             }
-            // 绘制光标（聚焦的 TextField 节点；色 = M3 cursor（primary/error））
-            if node.focused {
+            // 绘制光标（聚焦的 TextField 节点；色 = M3 cursor（primary/error））。
+            // ⚠ 有选区（非零宽）时不显示——对齐 Compose：光标仅 collapsed
+            // selection 时绘制
+            let has_selection = node.registrar.borrow().as_ref()
+                .and_then(|reg| reg.selected_range(node.slot_key))
+                .map(|r| r.start < r.end)
+                .unwrap_or(false);
+            if node.focused && !has_selection {
                 if node.cursor_visible.get() {
-                    let length = para.paragraph_byte_to_real_indices.len();
-                    let tl = crate::text::TextLayout::new(para, length);
-                    let idx = node.cursor_index.get();
-                    if let Some((cx, cy, ch)) = tl.get_cursor_position(idx) {
-                        debug_log!("[render] cursor pos=({:.0},{:.0}) h={:.0}", cx, cy, ch);
-                        // 光标色：TextFieldVisual 的 cursor_color（组合期解析 error/primary）
-                        let cursor = node.modifier.elements().iter().find_map(|el| {
-                            if let ModifierElement::TextFieldVisual { cursor_color, .. } = el {
-                                Some(*cursor_color)
-                            } else { None }
-                        }).unwrap_or(*color);
-                        let mut cp = skia_safe::Paint::default();
-                        cp.set_color(skia_safe::Color::from_argb(255, cursor.r, cursor.g, cursor.b));
-                        cp.set_stroke_width(1.5);
-                        canvas.draw_line(skia_safe::Point::new(x_off + cx, content_y + cy), skia_safe::Point::new(x_off + cx, content_y + cy + ch), &cp);
-                    } else { debug_log!("[render] get_cursor_position returned None for idx={}", node.cursor_index.get()); }
+                    let cursor = node.modifier.elements().iter().find_map(|el| {
+                        if let ModifierElement::TextFieldVisual { cursor_color, .. } = el {
+                            Some(*cursor_color)
+                        } else { None }
+                    }).unwrap_or(*color);
+                    let mut cp = skia_safe::Paint::default();
+                    cp.set_color(skia_safe::Color::from_argb(255, cursor.r, cursor.g, cursor.b));
+                    cp.set_stroke_width(1.5);
+                    // 空文本：无 glyph 可定位——光标画在内容起点（M3 光标高度
+                    // 用行高近似；TextLayout 空特判内部 get_glyph_cluster_at(0)
+                    // 同样失败）
+                    if content.is_empty() {
+                        let ch = font_size * 1.4;
+                        canvas.draw_line(
+                            skia_safe::Point::new(content_x, content_y),
+                            skia_safe::Point::new(content_x, content_y + ch),
+                            &cp,
+                        );
+                    } else {
+                        // ⚠ length = 文本真实字节数（空文本为 0 → 空特判）——
+                        // 映射表长度恒 ≥1（含 end-of-text 映射），传它空文本
+                        // 时走主路径 get_by_right(0) 失败 → 光标不显示
+                        let tl = crate::text::TextLayout::new(para, content.len());
+                        let idx = node.cursor_index.get();
+                        if let Some((cx, cy, ch)) = tl.get_cursor_position(idx) {
+                            debug_log!("[render] cursor pos=({:.0},{:.0}) h={:.0}", cx, cy, ch);
+                            canvas.draw_line(skia_safe::Point::new(x_off + cx, content_y + cy), skia_safe::Point::new(x_off + cx, content_y + cy + ch), &cp);
+                        } else { debug_log!("[render] get_cursor_position returned None for idx={}", node.cursor_index.get()); }
+                    }
                 } else { debug_log!("[render] cursor_visible is false"); }
             }
             // IME 组合文本下划线

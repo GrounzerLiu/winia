@@ -1942,7 +1942,12 @@ fn handle_pointer_move(
             let dx = scene_pos.0 - down.position.0;
             let dy = scene_pos.1 - down.position.1;
             const CLICK_SLOP: f32 = 18.0;
-            if (dx * dx + dy * dy).sqrt() > CLICK_SLOP {
+            // 文本选择：按下在可选中文本（anchor 有值）→ **任意移动即更新
+            // 选区**（单字母 ~7px < CLICK_SLOP——slop 门槛导致无法选中单
+            // 字母/小范围文本；对齐 Compose：按下即进入拖选）。其余场景
+            // 保持 slop 判定（clickable/拖拽手势）
+            let text_selection = down.selection_anchor.is_some();
+            if text_selection || (dx * dx + dy * dy).sqrt() > CLICK_SLOP {
                 let (abs_x, abs_y) = node_abs_position(nodes, r, nodes[innermost].id);
                 if let Ok(borrow) = nodes[innermost].cached_paragraph.try_borrow() {
                     if let Some(para) = borrow.as_ref() {
