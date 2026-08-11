@@ -670,7 +670,7 @@ fn render_pass1(
                 scroll_offset_h = Some(state.get());
             }
             // 文本输入框容器（M3 Filled/Outlined——背景/指示线/边框/label/支持文本）
-            ModifierElement::TextFieldVisual { variant, shape, colors, enabled, focused, is_error, cursor_color: _, label, supporting } => {
+            ModifierElement::TextFieldVisual { variant, shape, colors, enabled: _, focused: _, is_error: _, cursor_color: _, indicator_color, focus_progress, label, supporting, placeholder } => {
                 // 容器 rect：有支持文本时扣除其区域（supporting 画在容器底部外
                 // 4dp，节点总高 = 容器 + 4 + 16）
                 let supporting_h = if supporting.is_some() { 20.0 } else { 0.0 };
@@ -706,7 +706,9 @@ fn render_pass1(
                     let gap_w = lw + 8.0;
                     Some(Rect::from_xywh(x + 16.0 - 4.0, py, gap_w, label_h))
                 });
-                draw_text_field_container(canvas, container_rect, variant, shape, colors, *enabled, *focused, *is_error, cutout);
+                // 焦点过渡：颜色（动画 State，CAM16-UCS）+ 宽度（1↔2px）
+                let focus_p = focus_progress.peek();
+                draw_text_field_container(canvas, container_rect, variant, shape, colors, &indicator_color.peek(), focus_p, cutout);
                 if let (Some(lv), Some((_, font_size, _, py))) = (label, &label_geom) {
                     draw_text_field_aux_text(canvas, lv.content.as_str(), *font_size, &lv.color, (x + 16.0, *py), content_w);
                 }
@@ -720,6 +722,17 @@ fn render_pass1(
                         (x + 16.0, container_rect.bottom + 4.0),
                         w - 32.0,
                     );
+                }
+                // 占位文本：输入位，alpha 动画淡入淡出（M3 placeholderAlpha）
+                if let Some(pv) = placeholder {
+                    let a = pv.alpha.peek();
+                    if a > 0.0 {
+                        let c = crate::modifier::Color::from_argb(
+                            (pv.color.a as f32 * a) as u8,
+                            pv.color.r, pv.color.g, pv.color.b,
+                        );
+                        draw_text_field_aux_text(canvas, pv.content.as_str(), pv.font_size, &c, (content_x, content_y), content_w);
+                    }
                 }
             }
             // 图标绘制于内容区域（padding 内缩——叶子 padding 渲染偏移）
@@ -1251,22 +1264,20 @@ fn draw_background(canvas: &Canvas, rect: Rect, color: &crate::modifier::Color, 
 /// Outlined = 边框（focused 2px / unfocused 1px）。
 /// 状态优先级 disabled > error > focused > unfocused（组合期已解析）。
 /// M3 文本输入框容器：Filled = 容器色背景 + 底部指示线
-/// （focused 2px / unfocused 1px，色 indicator_color）；
-/// Outlined = 边框（focused 2px / unfocused 1px，圆角 4dp；
-/// `cutout` 为悬浮 label 缺口区域——边框在该处断开）。
-/// 状态优先级 disabled > error > focused > unfocused（组合期已解析）。
+/// （focused 2px / unfocused 1px）；Outlined = 边框（圆角 4dp，
+/// `cutout` 为悬浮 label 缺口区域）。颜色来自动画 State
+/// （`animate_color_as_state`——状态切换过渡）；`focus_p` 0..1 插值宽度。
 fn draw_text_field_container(
     canvas: &Canvas,
     rect: Rect,
     variant: &crate::ui::TextFieldVariant,
     shape: &crate::modifier::Shape,
     colors: &crate::ui::TextFieldColors,
-    enabled: bool,
-    focused: bool,
-    is_error: bool,
+    indicator: &crate::modifier::Color,
+    focus_p: f32,
     cutout: Option<Rect>,
 ) {
-    let indicator = colors.indicator_color(enabled, is_error, focused);
+    let stroke_w = 1.0 + focus_p.clamp(0.0, 1.0);
     match variant {
         crate::ui::TextFieldVariant::Filled => {
             // 容器背景（surfaceContainerHighest；M3 top 4dp 圆角）
@@ -1277,9 +1288,9 @@ fn draw_text_field_container(
                 canvas.draw_rrect(RRect::new_rect_xy(rect, 4.0, 4.0), &bg);
             }
             // 底部指示线（贴底 1/2px 高，focused 加粗）
-            let w = if focused { 2.0 } else { 1.0 };
+            let w = stroke_w;
             let mut lp = Paint::default();
-            lp.set_color4f(Color4f::from(&indicator), None);
+            lp.set_color4f(Color4f::from(indicator), None);
             lp.set_anti_alias(true);
             canvas.draw_rect(Rect::new(
                 rect.left, rect.bottom - w,
@@ -1288,9 +1299,9 @@ fn draw_text_field_container(
         }
         crate::ui::TextFieldVariant::Outlined => {
             // 边框（stroke 居中——1/2px，四角 4dp 圆角；label 缺口处断开）
-            let w = if focused { 2.0 } else { 1.0 };
+            let w = stroke_w;
             let mut bp = Paint::default();
-            bp.set_color4f(Color4f::from(&indicator), None);
+            bp.set_color4f(Color4f::from(indicator), None);
             bp.set_anti_alias(true);
             bp.set_style(skia_safe::paint::Style::Stroke);
             bp.set_stroke_width(w);

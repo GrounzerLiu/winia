@@ -440,10 +440,25 @@ pub(crate) enum ModifierElement {
         is_error: bool,
         /// 光标色（组合期解析：error → error_cursor，否则 primary）
         cursor_color: Color,
+        /// 指示线/边框颜色（动画 State——`animate_color_as_state` 驱动，
+        /// CAM16-UCS 插值；渲染期 peek 读取）
+        indicator_color: crate::core::state::State<crate::modifier::Color>,
+        /// 焦点过渡进度（0 = unfocused，1 = focused——宽度 1↔2px 动画）
+        focus_progress: crate::core::state::State<f32>,
         /// 悬浮态（focused 或文本非空）——悬浮画在容器顶部；展开画在输入位
         label: Option<LabelVisual>,
         /// 支持文本（画在容器底部外侧 4dp）
         supporting: Option<SupportingVisual>,
+        /// 占位文本（输入位，独立 alpha 动画——显示/隐藏淡入淡出，
+        /// M3 placeholderAlpha 语义）
+        placeholder: Option<PlaceholderVisual>,
+    },
+    /// TextField 占位文本绘制参数（alpha 动画 State——0 隐藏 / 1 显示）
+    PlaceholderVisual {
+        content: String,
+        font_size: f32,
+        color: Color,
+        alpha: crate::core::state::State<f32>,
     },
 
     // ── Content 类 ──
@@ -989,8 +1004,11 @@ impl Modifier {
         focused: bool,
         is_error: bool,
         cursor_color: Color,
+        indicator_color: crate::core::state::State<crate::modifier::Color>,
+        focus_progress: crate::core::state::State<f32>,
         label: Option<LabelVisual>,
         supporting: Option<SupportingVisual>,
+        placeholder: Option<PlaceholderVisual>,
     ) -> Self {
         self.push(ModifierElement::TextFieldVisual {
             variant,
@@ -1000,8 +1018,11 @@ impl Modifier {
             focused,
             is_error,
             cursor_color,
+            indicator_color,
+            focus_progress,
             label,
             supporting,
+            placeholder,
         })
     }
 }
@@ -1805,6 +1826,7 @@ impl Debug for ModifierElement {
             Self::Blur { radius } => f.debug_struct("Blur").field("radius", radius).finish(),
             Self::BackdropBlur { radius } => f.debug_struct("BackdropBlur").field("radius", radius).finish(),
             Self::TextFieldVisual { variant, .. } => f.debug_struct("TextFieldVisual").field("variant", variant).finish(),
+            Self::PlaceholderVisual { .. } => f.debug_struct("PlaceholderVisual").finish(),
         }
     }
 }
@@ -1880,6 +1902,15 @@ pub struct SupportingVisual {
     pub content: String,
     pub font_size: f32,
     pub color: Color,
+}
+
+/// TextField 占位文本绘制参数（输入位；alpha 动画 State——显示/隐藏淡入淡出）
+#[derive(Clone, Debug)]
+pub struct PlaceholderVisual {
+    pub content: String,
+    pub font_size: f32,
+    pub color: Color,
+    pub alpha: crate::core::state::State<f32>,
 }
 
 /// 阴影参数（对标 Compose `graphics.shadow.Shadow`——dropShadow 可配置集）。

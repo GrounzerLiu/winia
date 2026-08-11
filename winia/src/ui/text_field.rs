@@ -491,12 +491,40 @@ impl TextField {
         let show_placeholder = content.is_empty()
             && self.placeholder.is_some()
             && (focused || self.label.is_none());
-        let display_content = if show_placeholder {
+        // 真实文本：有容器视觉时始终是输入内容（placeholder 独立层渲染）；
+        // 无容器视觉保持旧行为（placeholder 直接进 text_content）
+        let has_visual = visual.is_some();
+        let display_content = if has_visual {
+            content.clone()
+        } else if show_placeholder {
             self.placeholder.as_deref().unwrap_or("").to_string()
         } else {
             content
         };
-        let display_color = if show_placeholder {
+        // 占位文本 alpha 动画（M3 placeholderAlpha：显示/隐藏淡入淡出）。
+        // ⚠ 无条件调用 animate（条件调用会漂移其后续所有 remember 的 key——
+        // cursor_visible/blink_started/undo 全部重建）；结果按需包装
+        let placeholder_alpha = ctx.animate_float_as_state(
+            if has_visual && show_placeholder { 1.0 } else { 0.0 },
+            crate::animation::AnimationSpec::Tween(
+                crate::animation::TweenSpec::new(
+                    std::time::Duration::from_millis(100),
+                    crate::animation::interpolator::EaseOutCubic::new(),
+                )
+            ),
+        );
+        // placeholder 绘制参数（独立层——渲染端按 alpha 插值透明度）
+        let placeholder_visual = if has_visual {
+            self.placeholder.as_ref().map(|p| crate::modifier::PlaceholderVisual {
+                content: p.clone(),
+                font_size,
+                color: if disabled { colors.disabled_placeholder } else { colors.placeholder },
+                alpha: placeholder_alpha.clone(),
+            })
+        } else {
+            None
+        };
+        let display_color = if !has_visual && show_placeholder {
             if disabled { colors.disabled_placeholder } else { colors.placeholder }
         } else {
             color
@@ -882,29 +910,25 @@ impl TextField {
                 corner_radius: 4.0,
             };
             // label 悬浮动画（0 = 展开（输入位 16sp），1 = 悬浮（顶部 12sp）——
-            // M3 FastSpatial 150ms 近似；渲染端按 progress 插值位置/字号）
-            let label_progress = self.label.as_ref().map(|_| {
-                ctx.animate_float_as_state(
-                    if label_float { 1.0 } else { 0.0 },
-                    crate::animation::AnimationSpec::Tween(
-                        crate::animation::TweenSpec::new(
-                            std::time::Duration::from_millis(150),
-                            // M3 FastSpatial 强调加速曲线近似
-                            crate::animation::interpolator::EaseInOutCubic::new(),
-                        )
-                    ),
-                )
-            });
+            // M3 FastSpatial 150ms 近似；渲染端按 progress 插值位置/字号）。
+            // ⚠ 无条件调用（label 有无切换不漂移其后 indicator/focus 动画 key）
+            let label_progress = ctx.animate_float_as_state(
+                if label_float { 1.0 } else { 0.0 },
+                crate::animation::AnimationSpec::Tween(
+                    crate::animation::TweenSpec::new(
+                        std::time::Duration::from_millis(150),
+                        // M3 FastSpatial 强调加速曲线近似
+                        crate::animation::interpolator::EaseInOutCubic::new(),
+                    )
+                ),
+            );
             // label 绘制参数：悬浮 12sp（顶部）/ 展开 16sp（输入位）
-            let label_visual = match (self.label.as_ref(), &label_progress) {
-                (Some(l), Some(progress)) => Some(crate::modifier::LabelVisual {
-                    content: l.clone(),
-                    font_size: if label_float { 12.0 } else { 16.0 },
-                    color: colors.label_color(self.enabled, self.is_error, focused),
-                    progress: progress.clone(),
-                }),
-                _ => None,
-            };
+            let label_visual = self.label.as_ref().map(|l| crate::modifier::LabelVisual {
+                content: l.clone(),
+                font_size: if label_float { 12.0 } else { 16.0 },
+                color: colors.label_color(self.enabled, self.is_error, focused),
+                progress: label_progress.clone(),
+            });
             // 支持文本：容器底部外侧 12sp（M3 supporting 色）
             let supporting_visual = self.supporting_text.as_ref().map(|s| crate::modifier::SupportingVisual {
                 content: s.clone(),
@@ -913,6 +937,28 @@ impl TextField {
                     else if self.is_error { colors.error_supporting }
                     else { colors.supporting },
             });
+            // 焦点过渡动画（M3：颜色 FastEffects 100ms / 宽度 FastSpatial 150ms）。
+            // 颜色走 animate_color_as_state（CAM16-UCS 感知均匀插值）；
+            // 宽度用 float progress（1↔2px）。disabled/error 目标不变时
+            // push_animatable 同目标去重——无多余动画
+            let indicator_anim = ctx.animate_color_as_state(
+                colors.indicator_color(self.enabled, self.is_error, focused),
+                crate::animation::AnimationSpec::Tween(
+                    crate::animation::TweenSpec::new(
+                        std::time::Duration::from_millis(100),
+                        crate::animation::interpolator::EaseOutCubic::new(),
+                    )
+                ),
+            );
+            let focus_progress = ctx.animate_float_as_state(
+                if focused { 1.0 } else { 0.0 },
+                crate::animation::AnimationSpec::Tween(
+                    crate::animation::TweenSpec::new(
+                        std::time::Duration::from_millis(150),
+                        crate::animation::interpolator::EaseInOutCubic::new(),
+                    )
+                ),
+            );
             modifier
                 .padding_horizontal(pad_h)
                 .padding_top(pad_top)
@@ -927,8 +973,11 @@ impl TextField {
                     focused,
                     self.is_error,
                     if self.is_error { colors.error_cursor } else { colors.cursor },
+                    indicator_anim,
+                    focus_progress,
                     label_visual,
                     supporting_visual,
+                    placeholder_visual,
                 )
         } else {
             modifier.padding(8.0)
@@ -1134,12 +1183,44 @@ mod tests {
         assert!(has_focusable(&m), "启用字段应可聚焦");
     }
 
+    fn find_placeholder(modifier: &Modifier) -> Option<String> {
+        modifier.elements().iter().find_map(|el| {
+            if let ModifierElement::TextFieldVisual { placeholder, .. } = el {
+                placeholder.as_ref().map(|p| p.content.clone())
+            } else {
+                None
+            }
+        })
+    }
+
     #[test]
     fn placeholder_shown_when_empty() {
         let value = State::new(TextFieldValue::new(""));
+        let m = build_field(TextField::new(value.clone(), |_| {}).filled().placeholder("请输入"));
+        assert_eq!(find_placeholder(&m).as_deref(), Some("请输入"), "空值显示 placeholder");
+    }
+
+    #[test]
+    fn placeholder_alpha_zero_when_content_present() {
+        // 视觉路径 + 非空：placeholder 层存在但 alpha 目标为 0（不显示）
+        let value = State::new(TextFieldValue::new("已有内容"));
+        let m = build_field(TextField::new(value.clone(), |_| {}).filled().placeholder("请输入"));
+        let alpha = m.elements().iter().find_map(|el| {
+            if let ModifierElement::TextFieldVisual { placeholder, .. } = el {
+                placeholder.as_ref().map(|p| p.alpha.peek())
+            } else { None }
+        });
+        assert_eq!(alpha, Some(0.0), "非空时 placeholder alpha 为 0");
+    }
+
+    #[test]
+    fn placeholder_fallback_to_text_content_without_visual() {
+        // 无容器视觉回退：placeholder 进 text_content（旧行为）
+        let value = State::new(TextFieldValue::new(""));
         let m = build_field(TextField::new(value.clone(), |_| {}).placeholder("请输入"));
+        assert!(find_placeholder(&m).is_none(), "无视觉时无独立 placeholder 层");
         let content = find_text_content(&m).unwrap_or_default();
-        assert_eq!(content, "请输入", "空值显示 placeholder");
+        assert_eq!(content, "请输入", "无视觉回退：placeholder 进 text_content");
     }
 
     #[test]
