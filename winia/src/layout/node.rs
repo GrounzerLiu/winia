@@ -1415,10 +1415,17 @@ pub(crate) fn measure_node(
             // 对于可滚动容器，inner_constraints.max_width 已被设为 f32::MAX。
             let layout_width = inner_constraints.max_width;
             let text_size = measure_and_cache_text(&nodes[idx], layout_width);
-            // 用约束 clamping 最终尺寸（fill_max_width 时约束收紧，文本应填满可用宽度）
+            // 支持文本（TextField supporting——渲染画在容器底部外 4dp，
+            // 高度 +20 预留，防与下方元素重叠）
+            let supporting_h = if nodes[idx].modifier.elements().iter().any(|el| {
+                matches!(el, crate::modifier::ModifierElement::TextFieldVisual { supporting: Some(_), .. })
+            }) { 4.0 + 16.0 } else { 0.0 };
+            // 用约束 clamping 最终尺寸（fill_max_width 时约束收紧，文本应填满可用宽度）。
+            // ⚠ 高度 = paragraph 实际高度（含自动折行）+ supporting——不得按
+            // 显式换行数近似（折行文本高度会裁剪）；min_height 提升兜底占位
             Size::new(
                 inner_constraints.constrain_width(text_size.width),
-                inner_constraints.constrain_height(text_size.height),
+                inner_constraints.constrain_height(text_size.height + supporting_h),
             )
         } else if nodes[idx].has_richtext_content {
             let layout_width = inner_constraints.max_width;

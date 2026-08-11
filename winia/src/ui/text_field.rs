@@ -1102,11 +1102,12 @@ impl TextField {
                 crate::ui::TextOverflow::Clip,
                 true, // allow text wrapping
             );
-        // 动态高度：supporting（容器下 +20）与 min_lines（至少 N 行）合并为
-        // 一个 height 闭包——分开 push 会被 resolved_size 的后 push 覆盖
-        // （supporting 的 +20 丢失，容器被压矮、supporting 与下方元素重叠）
+        // 最小高度：supporting（容器下 +20，measure 期已加——此处 min 兜底
+        // 空内容占位）与 min_lines（至少 N 行）合并为一个 min_height。
+        // ⚠ 不用 height 闭包——此前按显式换行数（\n）计数近似，自动折行
+        // 的长文本（无 \n）高度不变 → 文本被裁剪；测量用 paragraph 实际
+        // 高度（含折行），min_height 只兜底占位/最小容器
         let modifier = if self.supporting_text.is_some() || self.min_lines > 1 {
-            let v = value.clone();
             let line_h = font_size * 1.4;
             let (pt, pb) = modifier.get_padding_vertical();
             let pad_y = pt + pb;
@@ -1114,21 +1115,11 @@ impl TextField {
             let min_content_h = self.min_lines as f32 * line_h;
             // 容器最小 56（外尺寸含 padding）仅在容器视觉时应用
             let has_visual = visual.is_some();
-            modifier.height(move || {
-                let text = v.get().text;
-                // 空：min_lines 占位；非空：按显式换行数（近似）。
-                // ⚠ 非空不能返回 0（tighten_height(0) → 节点消失）
-                let content_h = if text.is_empty() {
-                    min_content_h
-                } else {
-                    (text.matches('\n').count() as f32 + 1.0) * line_h
-                };
-                let mut h = content_h + pad_y;
-                if has_visual {
-                    h = h.max(56.0);
-                }
-                h + supporting_h
-            })
+            let mut min_h = min_content_h + pad_y + supporting_h;
+            if has_visual {
+                min_h = min_h.max(56.0 + supporting_h);
+            }
+            modifier.min_height(min_h)
         } else {
             modifier
         };
@@ -1405,9 +1396,9 @@ mod tests {
         // min_h 58.8 被 build 内 padding(8) 扣减 → 内容区 42.8（近似 3 行）
         assert!(h0 > 30.0, "空内容高度 = min_lines 占位（实际 {h0}）");
 
-        // 输入 2 行（显式换行）→ 高度按行数增长（非 0——修复前输入后消失）
+        // 输入 2 行（显式换行）→ 高度 ≥ min_lines 占位（min_height 恒占位——
+        // M3 minLines 语义：内容不足也占位；非 0——修复前输入后消失）
         value.set(TextFieldValue::new("a\nb"));
-        // 重新组合（消费 pending + 同 key 复用节点 → dirty → 重测）
         composer.compose(|ctx| {
             TextField::new(value.clone(), |_| {})
                 .min_lines(3)
@@ -1417,7 +1408,38 @@ mod tests {
         composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
         let h1 = composer.arena_nodes()[root].measured_size.height;
         assert!(h1 > 0.0, "输入后高度必须 > 0（修复前为 0——TextField 消失）");
-        assert!(h1 < h0, "2 行高度 < 3 行占位（{h1} < {h0}）");
+        assert!((h1 - h0).abs() < 0.5, "2 行内容高度 = 3 行占位（minLines 恒占位：{h1} ≈ {h0}）");
+    }
+
+    #[test]
+    fn wrapped_text_grows_height() {
+        // 折行高度：长文本（无显式 \n）自动换行 → 高度按 paragraph 实际
+        // 行数增长（修复前 height 闭包按 \n 计数 → 高度不变、文本裁剪）
+        let value = State::new(TextFieldValue::new(""));
+        let mut composer = Composer::new();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let _guard = rt.enter();
+        composer.compose(|ctx| {
+            TextField::new(value.clone(), |_| {})
+                .filled()
+                .modifier(Modifier::new().width(100.0))
+                .build(ctx);
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.layout_root_idx().unwrap();
+        let h0 = composer.arena_nodes()[root].measured_size.height;
+
+        // 输入 60 个 '1'（100px 宽下折成多行）
+        value.set(TextFieldValue::new("1".repeat(60)));
+        composer.compose(|ctx| {
+            TextField::new(value.clone(), |_| {})
+                .filled()
+                .modifier(Modifier::new().width(100.0))
+                .build(ctx);
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let h1 = composer.arena_nodes()[root].measured_size.height;
+        assert!(h1 > h0 + 15.0, "折行文本高度必须增长（{h1} > {h0} + 15）");
     }
 
     #[test]
