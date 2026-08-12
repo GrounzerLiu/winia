@@ -132,6 +132,22 @@ fn light_ui(ctx: &mut ComposeCtx) {
 - 技术限制：**Rust 语句级 attribute 宏不可行**（attribute 宏只能用于 item）——用 function-like 宏 `keyed_stmt!` 包裹
 - attribute 宏先展开，能看见未展开的 `keyed_stmt!(...)` 节点并替换
 
+**可指定 ctx 参数名**：`#[composable]` 支持可选参数 `#[composable(c)]`——指定组合参数标识符（默认 `ctx`）：
+
+```rust
+#[composable(c)]                     // 指定参数名 c
+fn my_ui(c: &mut ComposeCtx) {
+    c.remember(|| 0);
+    Column::new().build(c, |c| { ... });   // content 闭包参数名也必须跟随 c
+}
+```
+
+**content 闭包识别 = 闭包参数名 == 当前宏的 ctx_ident**（显式契约，不猜测）：
+
+- `#[composable]` → content 闭包必须是 `|ctx|`；`#[composable(c)]` → 必须是 `|c|`
+- 不匹配（`|x|`）或间接调用（`fn wrap(c) { ... }` 非宏函数内 build）→ 闭包体不注入 → 内部 next_key 无稳定源 → **运行期 panic**（fail-fast，带可操作信息）
+- 放弃"按 build 方法识别闭包"的方案：依赖方法名约定、可能误判——ctx 识别是显式契约，用户知道要求，不满足即 panic
+
 ### 4.4 组件方法宏化 + RAII scope（支持返回值）
 
 **组件 build 方法加 `#[composable]`**（attribute 宏可用于方法）：
@@ -170,7 +186,21 @@ fn pick_label(ctx: &mut ComposeCtx, flag: bool) -> String {
 
 ### 4.5 编译期检查（宏层）
 
-`#[composable_keyed]` 宏扫描函数体——递归找所有 `.build(ctx)` 方法调用（疑似组件调用）——不在 `keyed_stmt!` 内的 → `syn::Error::compile_error!()`（编译期报错，早于运行期 panic）。
+`#[composable_keyed]` 宏扫描函数体——找 `keyed_stmt!` 未覆盖的**含 ctx 调用语句**（语句 AST 中出现 ctx_ident 的方法调用/参数）——未标记且含 ctx → `syn::Error::compile_error!()`（编译期报错，早于运行期 panic）。纯计算语句（不含 ctx）不检查、不注入。
+
+### 4.6 panic 语义（fail-fast）
+
+无法获得稳定 key 的调用点 **panic** 是特性而非缺陷：
+
+| 用户写法 | 结果 |
+|---|---|
+| 宏函数内（参数名匹配） | ✅ 编译期注入（稳定） |
+| `#[composable(c)]` + content 闭包 `|c|` | ✅ 编译期注入 |
+| `#[composable(c)]` + content 闭包 `|x|`（不匹配） | **运行期 panic**（无法获得稳定 key） |
+| 间接调用（`fn wrap(c){...}` 非宏函数） | **运行期 panic** |
+| 普通闭包（`list.map(|x|...)`——非组合内容） | 不注入 ✓ |
+
+**panic 信息必须可操作**：指明调用点不在稳定 key 链上，给出修复选项（①放回宏函数内 ②用 `ctx.key()` 包裹 ③content 闭包参数名与 `#[composable(x)]` 一致）。fail-fast 优于静默漂移（text-field-v2 的 placeholder 0×0 即静默漂移后果）。
 
 ---
 
