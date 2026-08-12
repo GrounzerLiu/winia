@@ -83,6 +83,37 @@ remember key = fnv(调用链, remember 宏序号)          // 宏扫描编号
 组件实例 key = 调用点 key                            // build 第一条 next_key
 ```
 
+### 4.1.1 需要稳定 key 的 API 全集（宏扫描目标）
+
+**A. remember 类**（内部 `next_remember_key`——宏替换为显式 key 版本）：
+
+| API | 宏扫描后 |
+|---|---|
+| `ctx.remember(init)` | `remember_at_key(fnv, init)`（**运行时 API 已存在**） |
+| `ctx.animate_float_as_state` | `animate_float_at_state(fnv, ...)`（新增 `_at` 变体） |
+| `ctx.animate_color_as_state` | ↑ |
+| `ctx.animate_dp_as_state` | ↑ |
+| `ctx.animate_offset_as_state` | ↑ |
+| `ctx.animate_size_as_state` | ↑ |
+| `ctx.animate_int_as_state` | ↑ |
+| `ctx.animate_value_as_state` | ↑ |
+
+**B. 节点/scope 类**：
+
+| API | 说明 |
+|---|---|
+| `ctx.next_key()` | 节点 key（组件容器组）→ `next_key_at(fnv)`（新增） |
+| `ctx.start_scope()` / `start_scope_keyed(hash)` | scope key——已显式传 hash ✓ |
+| `start_leaf(key)` / `start_container(key)` / `start_restartable_group(key)` | 已显式 key 参数（调用方 next_key 提供）✓ |
+
+**C. 不需要 key 的（确认排除）**：
+
+- `ctx.changed(param)`——值比较（Skip 参数判定）——不生成 key
+- `set_current_node_*` / `sync_*` / `selection_registrar`——写入当前节点——不生成 key
+- `open_overlay` / `composer_slot_key`——非身份 key
+
+**调用形态**：以上需要替换的 API 全部是 receiver=ctx 的 MethodCall（`ctx.remember(...)`、`ctx.animate_float_as_state(...)`、`ctx.next_key()`）——`stmt_uses_ctx` 自动识别语句注入 ✓——宏替换调用本身为编译期编号版本。动画 State 的跨帧稳定（动画推进 → 重组 → build 重跑 → 再次 animate_*_as_state 拿到同一 State）依赖此替换——text-field-v2 的 placeholder alpha 动画每帧从 0 重启即 remember key 漂移所致。
+
 ### 4.2 宏扫描替换（#[composable] 升级）
 
 宏扫描函数体 AST，把运行时调用替换为编译期编号版本：
