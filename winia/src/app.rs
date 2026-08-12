@@ -2183,6 +2183,40 @@ mod frame_throttle_tests {
         let interval = Duration::from_millis(16);
         assert!(should_request_redraw(t0, t0 + interval + Duration::from_millis(1), interval));
     }
+
+    /// 滚动 delta 应用到 Column（scroll 节点查找 + offset 更新 + clamp）
+    #[test]
+    fn scroll_delta_applies_to_column() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = rt.enter();
+        let mut composer = crate::core::composer::Composer::new();
+        let scroll = crate::modifier::ScrollState::new();
+        let scroll2 = scroll.clone();
+        composer.compose(|ctx| {
+            crate::ui::Column::new()
+                .modifier(crate::modifier::Modifier::new().fill_max_size().vertical_scroll(scroll2))
+                .build(ctx, |ctx| {
+                    // 内容总高 > 视口 600（每行 ~19px × 40 行 ≈ 760）
+                    for _ in 0..40 {
+                        crate::ui::Text::new("line content line content").build(ctx);
+                    }
+                });
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 600.0));
+        let root = composer.layout_root_idx().unwrap();
+        assert_eq!(scroll.offset.get(), 0.0);
+        let ok = super::apply_scroll_delta(
+            composer.arena_nodes_mut(),
+            root,
+            -200.0, // 负 dy = 向下滚动（内容上移——与 winit 滚轮语义一致）
+            crate::unit::Density::from_density(1.0),
+        );
+        assert!(ok, "应找到 scroll 节点");
+        assert!(scroll.offset.get() > 0.0, "滚动后 offset 应 > 0（实际 {}）", scroll.offset.get());
+    }
 }
 
 pub fn run_app(app: impl FnOnce(&mut ComposeCtx) + 'static) {

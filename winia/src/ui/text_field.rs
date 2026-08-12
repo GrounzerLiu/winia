@@ -538,8 +538,9 @@ pub struct TextField {
     read_only: bool,
     /// 占位文字（值空时显示——组合内容闭包，如
     /// `|ctx| { Text::new("Enter name").build(ctx); }`；仅显示条件满足时构建）。
-    /// 闭包第二参数：淡入透明度动画 State（0..1——get 注册依赖，驱动重组）
-    placeholder: Option<Box<dyn FnOnce(&mut ComposeCtx, &crate::core::state::State<f32>) + Send + Sync>>,
+    /// 默认文字样式由 TextField 提供（LOCAL_TEXT_STYLE：on_surface_variant
+    /// 色 + 淡入 alpha）——闭包内 Text 无需显式样式，可自行覆盖
+    placeholder: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
     /// 单行模式（Enter 吞掉不换行——对标 Compose singleLine）
     single_line: bool,
     /// 最大行数（对标 Compose maxLines，默认无限）
@@ -556,9 +557,9 @@ pub struct TextField {
     colors: Option<TextFieldColors>,
     /// 浮动 label（聚焦或非空时悬浮到容器顶部；组合内容闭包——text-field-v2
     /// 容器化：子节点由 TextFieldLayout 定位，悬浮/展开位置动画内部控制）。
-    /// 闭包第二参数：悬浮进度 State（0 = 展开 / 1 = 悬浮——get 注册依赖，
-    /// 驱动重组——字号动画（16sp ↔ 12sp）等需每帧重跑的视觉效果用）
-    label: Option<Box<dyn FnOnce(&mut ComposeCtx, &crate::core::state::State<f32>) + Send + Sync>>,
+    /// 默认文字样式由 TextField 提供（LOCAL_TEXT_STYLE：展开 16sp ↔ 悬浮 12sp
+    /// 动画字号 + on_surface_variant 色）——闭包内 Text 无需显式字号
+    label: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
     /// 支持文本（容器底部外侧 12sp）
     supporting_text: Option<String>,
     /// 视觉变换（密码掩码/格式化输入——对标 Compose visualTransformation；
@@ -629,8 +630,9 @@ impl TextField {
     }
 
     /// 占位文字（值空时显示——组合内容闭包；仅显示条件满足时构建）。
-    /// 闭包第二参数：淡入透明度动画 State（0..1——get 注册依赖）
-    pub fn placeholder(mut self, placeholder: impl FnOnce(&mut ComposeCtx, &crate::core::state::State<f32>) + Send + Sync + 'static) -> Self {
+    /// 默认文字样式由 TextField 提供（LOCAL_TEXT_STYLE：on_surface_variant
+    /// 色 + 淡入 alpha）——闭包内 Text 无需显式样式
+    pub fn placeholder(mut self, placeholder: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
         self.placeholder = Some(Box::new(placeholder));
         self
     }
@@ -690,9 +692,9 @@ impl TextField {
     /// 浮动 label（聚焦或非空时悬浮到容器顶部——组合内容闭包，如
     /// `|ctx| { Text::new("Name").font_size(16.0).build(ctx); }`；
     /// 悬浮/展开位置动画由 TextFieldLayout 内部控制）
-    /// 闭包第二参数：悬浮进度 State（0 = 展开 / 1 = 悬浮——get 注册依赖驱动
-    /// 重组，可做字号动画：`Text::new("Name").font_size(16.0 + (12.0 - 16.0) * p.get())`）
-    pub fn label(mut self, label: impl FnOnce(&mut ComposeCtx, &crate::core::state::State<f32>) + Send + Sync + 'static) -> Self {
+    /// 默认文字样式由 TextField 提供（LOCAL_TEXT_STYLE：展开 16sp ↔ 悬浮
+    /// 12sp 动画字号 + 状态色）——闭包内 Text 无需显式字号
+    pub fn label(mut self, label: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
         self.label = Some(Box::new(label));
         self
     }
@@ -1343,6 +1345,11 @@ impl TextField {
             if has_visual {
                 min_h = min_h.max(56.0 + supporting_h);
             }
+            if std::env::var("WINIA_TF_DEBUG").is_ok() {
+                std::fs::write("C:/Users/grounzer/AppData/Local/Temp/opencode/tf_minlines.txt",
+                    format!("min_lines={} font_size={} line_h={} pad_y={} min_h={} support={}\n",
+                        self.min_lines, font_size, line_h, pad_y, min_h, self.supporting_text.is_some())).unwrap();
+            }
             container_modifier.min_height(min_h)
         } else {
             container_modifier
@@ -1391,7 +1398,12 @@ impl TextField {
             container_modifier,
             TextFieldLayout::new(label_progress.clone(), visual),
         );
-        // 闭包子节点包装（角色标记 + Box 层叠——内容由闭包构建）
+        // 闭包子节点包装（角色标记 + Box 层叠——内容由闭包构建）。
+        // 每个槽位提供 M3 默认样式（LOCAL_TEXT_STYLE / LOCAL_CONTENT_COLOR
+        // 经 CompositionLocal 传递——闭包内组件默认即 M3 规格；显式参数覆盖）：
+        // - prefix/suffix：16sp + affix 色（disabled 38%）
+        // - leading/trailing icon：内容色 = on_surface_variant（disabled 38%；
+        //   trailing 错误态 error 色）
         macro_rules! slot_wrap {
             ($role:expr, $content:expr) => {{
                 let sk = ctx.next_key();
@@ -1400,7 +1412,27 @@ impl TextField {
                     Modifier::new().text_field_slot($role),
                     crate::layout::BoxLayout::new(),
                 );
-                $content(ctx);
+                match $role {
+                    TextFieldSlotRole::Prefix | TextFieldSlotRole::Suffix => {
+                        let affix_color = if !self.enabled { colors.disabled_affix } else { colors.affix };
+                        let style = crate::ui::text::TextStyle::new()
+                            .font_size(crate::unit::TextUnit::Sp(crate::unit::Sp(16.0)))
+                            .color(affix_color);
+                        crate::ui::text::LOCAL_TEXT_STYLE.provides(style, || $content(ctx));
+                    }
+                    TextFieldSlotRole::Leading | TextFieldSlotRole::Trailing => {
+                        let icon_color = if !self.enabled {
+                            if $role == TextFieldSlotRole::Leading { colors.leading_icon_disabled }
+                            else { colors.trailing_icon_disabled }
+                        } else if $role == TextFieldSlotRole::Trailing && self.is_error {
+                            colors.trailing_icon_error
+                        } else {
+                            colors.leading_icon_focused
+                        };
+                        crate::ui::theme::WiniaTheme::with_content_color(icon_color, ctx, |c| $content(c));
+                    }
+                    _ => $content(ctx),
+                }
                 ctx.end_restartable_group();
             }};
         }
@@ -1414,14 +1446,28 @@ impl TextField {
                 Modifier::new().text_field_slot(TextFieldSlotRole::Label),
                 crate::layout::BoxLayout::new(),
             );
-            label(ctx, &label_progress);
+            // M3 默认 label 样式经 LOCAL_TEXT_STYLE 提供（闭包内 Text 默认
+            // 字号 = 展开 16sp ↔ 悬浮 12sp 动画插值；色 = 状态色）：
+            // - `label_progress.get()` 在组内注册组合依赖——动画推进 →
+            //   组重组 → 闭包重跑 → current() 读到新字号（字号动画）
+            // - 闭包内 Text 显式 .font_size()/.color() 可覆盖
+            let p = label_progress.get();
+            let label_size = 16.0 + (12.0 - 16.0) * p;
+            let label_color = if !self.enabled { colors.label_disabled }
+                else if self.is_error { colors.label_error }
+                else { colors.label_unfocused };
+            let label_style = crate::ui::text::TextStyle::new()
+                .font_size(crate::unit::TextUnit::Sp(crate::unit::Sp(label_size)))
+                .color(label_color);
+            crate::ui::text::LOCAL_TEXT_STYLE.provides(label_style, || label(ctx));
             ctx.end_restartable_group();
         }
         if show_placeholder && has_visual {
             if let Some(ph) = self.placeholder {
                 // 淡入透明度动画（0 → 1，M3 placeholderAlpha 语义：聚焦空内容
-                // 时淡入——每次显示都从 0 起跑；闭包 get 注册依赖驱动重组。
-                // ⚠ 淡出（show_placeholder → false）闭包不再构建，直接消失）
+                // 时淡入——每次显示都从 0 起跑；alpha.get() 在组内注册依赖
+                // 驱动重组。⚠ 淡出（show_placeholder → false）闭包不再构建，
+                // 直接消失）
                 let alpha = ctx.remember(|| crate::core::state::State::new(0.0)).get();
                 crate::animation::push_animatable(
                     alpha.clone(),
@@ -1439,7 +1485,14 @@ impl TextField {
                     Modifier::new().text_field_slot(TextFieldSlotRole::Placeholder),
                     crate::layout::BoxLayout::new(),
                 );
-                ph(ctx, &alpha);
+                // M3 默认 placeholder 样式：16sp + on_surface_variant（disabled
+                // 38%）+ 淡入 alpha（M3 placeholderAlpha 语义）
+                let a = alpha.get();
+                let pc = if !self.enabled { colors.disabled_placeholder } else { colors.placeholder };
+                let style = crate::ui::text::TextStyle::new()
+                    .font_size(crate::unit::TextUnit::Sp(crate::unit::Sp(16.0)))
+                    .color(crate::modifier::Color::from_argb((255.0 * a) as u8, pc.r, pc.g, pc.b));
+                crate::ui::text::LOCAL_TEXT_STYLE.provides(style, || ph(ctx));
                 ctx.end_restartable_group();
             }
         }
@@ -1729,7 +1782,7 @@ mod tests {
     #[test]
     fn placeholder_shown_when_empty() {
         let value = State::new(TextFieldValue::new(""));
-        let m = find_slot_modifier(TextField::new(value.clone(), |_| {}).filled().placeholder(|_ctx, _alpha| { crate::ui::Text::new("请输入").build(_ctx); }), TextFieldSlotRole::Placeholder);
+        let m = find_slot_modifier(TextField::new(value.clone(), |_| {}).filled().placeholder(|_ctx| { crate::ui::Text::new("请输入").build(_ctx); }), TextFieldSlotRole::Placeholder);
         assert!(m.is_some(), "空值构建 placeholder 子节点");
     }
 
@@ -1738,7 +1791,7 @@ mod tests {
         // text-field-v2：placeholder 为闭包子节点（构建条件 show_placeholder）——
         // 非空时不构建（无 Placeholder 槽位标记）
         let value = State::new(TextFieldValue::new("已有内容"));
-        let m = build_field(TextField::new(value.clone(), |_| {}).filled().placeholder(|_ctx, _alpha| { crate::ui::Text::new("请输入").build(_ctx); }));
+        let m = build_field(TextField::new(value.clone(), |_| {}).filled().placeholder(|_ctx| { crate::ui::Text::new("请输入").build(_ctx); }));
         assert!(find_placeholder(&m).is_none(), "非空时 placeholder 不构建");
     }
 
@@ -1747,14 +1800,14 @@ mod tests {
         // text-field-v2：placeholder 为闭包子节点（仅 has_visual 时构建）——
         // 无容器视觉时不构建（无 Placeholder 槽位）
         let value = State::new(TextFieldValue::new(""));
-        let m = find_slot_modifier(TextField::new(value.clone(), |_| {}).placeholder(|_ctx, _alpha| { crate::ui::Text::new("请输入").build(_ctx); }), TextFieldSlotRole::Placeholder);
+        let m = find_slot_modifier(TextField::new(value.clone(), |_| {}).placeholder(|_ctx| { crate::ui::Text::new("请输入").build(_ctx); }), TextFieldSlotRole::Placeholder);
         assert!(m.is_none(), "无视觉时 placeholder 不构建（子节点化）");
     }
 
     #[test]
     fn placeholder_hidden_when_has_content() {
         let value = State::new(TextFieldValue::new("已有内容"));
-        let m = find_slot_modifier(TextField::new(value.clone(), |_| {}).filled().placeholder(|_ctx, _alpha| { crate::ui::Text::new("请输入").build(_ctx); }), TextFieldSlotRole::Placeholder);
+        let m = find_slot_modifier(TextField::new(value.clone(), |_| {}).filled().placeholder(|_ctx| { crate::ui::Text::new("请输入").build(_ctx); }), TextFieldSlotRole::Placeholder);
         assert!(m.is_none(), "非空时 placeholder 不构建");
         let mi = find_slot_modifier(TextField::new(value.clone(), |_| {}).filled(), TextFieldSlotRole::Input).unwrap();
         let content = find_text_content(&mi).unwrap_or_default();
@@ -2019,11 +2072,12 @@ mod tests {
             let field = TextField::new(value.clone(), |_| {})
                 .filled()
                 .interaction_source(focus_src.clone())
-                .label(move |ctx, p| {
-                    log.lock().unwrap().push(p.peek());
-                    crate::ui::Text::new("Name")
-                        .font_size(16.0 - 4.0 * p.get())
-                        .build(ctx);
+                .label(move |ctx| {
+                    // TextField 经 LOCAL_TEXT_STYLE 提供动画字号——闭包内
+                    // Text 默认字号随动画（16sp ↔ 12sp）
+                    let fs = crate::ui::text::LOCAL_TEXT_STYLE.current().font_size;
+                    log.lock().unwrap().push(fs.map(|f| f.to_logical_px()).unwrap_or(0.0));
+                    crate::ui::Text::new("Name").build(ctx);
                 });
             composer.compose(|ctx| {
                 field.build(ctx);
@@ -2037,11 +2091,10 @@ mod tests {
             let field = TextField::new(value.clone(), |_| {})
                 .filled()
                 .interaction_source(focus_src.clone())
-                .label(move |ctx, p| {
-                    log.lock().unwrap().push(p.peek());
-                    crate::ui::Text::new("Name")
-                        .font_size(16.0 - 4.0 * p.get())
-                        .build(ctx);
+                .label(move |ctx| {
+                    let fs = crate::ui::text::LOCAL_TEXT_STYLE.current().font_size;
+                    log.lock().unwrap().push(fs.map(|f| f.to_logical_px()).unwrap_or(0.0));
+                    crate::ui::Text::new("Name").build(ctx);
                 });
             composer.compose(|ctx| {
                 field.build(ctx);
@@ -2051,11 +2104,11 @@ mod tests {
         }
         let log = progress_log.lock().unwrap();
         let last = *log.last().unwrap();
-        // 动画完成后 progress ≈ 1 → 字号 ≈ 12（闭包确实随动画重跑——若
-        // 闭包只跑首帧（重组未触发），log 里只有 0.0）
+        // 动画完成后字号 ≈ 12sp（闭包确实随动画重跑——若闭包只跑首帧
+        // （重组未触发），log 里只有 16.0）
         assert!(
-            log.len() > 3 && last > 0.9,
-            "label 闭包应随 progress 动画多次重跑并收敛到 1.0（实际 len={} last={} log={:?}）",
+            log.len() > 3 && (12.0 - last).abs() < 0.5,
+            "label 闭包应随 progress 动画多次重跑且默认字号收敛 12sp（实际 len={} last={} log={:?}）",
             log.len(), last, &log[..log.len().min(8)]
         );
     }
@@ -2077,11 +2130,10 @@ mod tests {
             TextField::new(value.clone(), |_| {})
                 .filled()
                 .interaction_source(focus_src.clone())
-                .label(move |ctx, p| {
-                    log.lock().unwrap().push(p.peek());
-                    crate::ui::Text::new("Name")
-                        .font_size(16.0 - 4.0 * p.get())
-                        .build(ctx);
+                .label(move |ctx| {
+                    let fs = crate::ui::text::LOCAL_TEXT_STYLE.current().font_size;
+                    log.lock().unwrap().push(fs.map(|f| f.to_logical_px()).unwrap_or(0.0));
+                    crate::ui::Text::new("Name").build(ctx);
                 })
         };
         for _frame in 0..3 {
