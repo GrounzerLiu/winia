@@ -387,6 +387,23 @@ pub(crate) struct TextFieldLayout {
     pub(crate) pad_bottom: f32,
 }
 
+/// 内容区高度推导（label/图标容器居中锚点用）：
+/// - 约束高有限（非滚动容器）→ 直接用
+/// - 滚动容器内约束高 = f32::MAX → 用约束 min 高（modifier 层
+///   min_height(56) 经 padding offset 后 = **内容区** min 高（如 24）——
+///   ⚠ 已扣 padding，不能再减）；空字段输入节点测量高 0（空文本
+///   paragraph），降级 input_size.height 会算负中心
+/// - 兜底输入区高
+fn text_field_content_height(constraints: &crate::layout::Constraints, pad_top: f32, pad_bottom: f32, input_height: f32) -> f32 {
+    if constraints.max_height < 1.0e9 {
+        constraints.max_height
+    } else if constraints.min_height > 0.0 && constraints.min_height < 1.0e9 {
+        constraints.min_height
+    } else {
+        input_height
+    }
+}
+
 impl TextFieldLayout {
     pub(crate) fn new(
         label_progress: crate::core::state::State<f32>,
@@ -489,7 +506,7 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
                     // - Outlined：label 中心跨边框线（顶对齐容器 -8 → 偏移 -24）
                     // ⚠ policy 收到的是扣除 padding 后的约束——内容区顶部即
                     // 容器 padding 边界
-                    let content_h = if constraints.max_height < 1.0e9 { constraints.max_height } else { input_size.height };
+                    let content_h = text_field_content_height(&constraints, self.pad_top, self.pad_bottom, input_size.height);
                     let container_center = (content_h + self.pad_bottom - self.pad_top) / 2.0;
                     let expanded_y = container_center - s.height / 2.0;
                     let float_y = -(s.height / 2.0)
@@ -511,9 +528,8 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
                     // Outlined 居中），居中于输入区会偏下）。容器中心（内容区
                     // 坐标）= (内容区高 + pad_bottom - pad_top)/2；允许负 y
                     //（Filled 图标跨 16..40 区）。⚠ 滚动容器内约束高 =
-                    // f32::MAX（有限但巨大）——超过合理阈值视为无限，降级
-                    // 输入区高
-                    let content_h = if constraints.max_height < 1.0e9 { constraints.max_height } else { input_size.height };
+                    // f32::MAX（有限但巨大）——降级见 text_field_content_height
+                    let content_h = text_field_content_height(&constraints, self.pad_top, self.pad_bottom, input_size.height);
                     let container_center = (content_h + self.pad_bottom - self.pad_top) / 2.0;
                     placements[i].position = crate::layout::Point::new(
                         0.0,
@@ -521,7 +537,7 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
                     );
                 }
                 TextFieldSlotRole::Trailing => {
-                    let content_h = if constraints.max_height < 1.0e9 { constraints.max_height } else { input_size.height };
+                    let content_h = text_field_content_height(&constraints, self.pad_top, self.pad_bottom, input_size.height);
                     let container_center = (content_h + self.pad_bottom - self.pad_top) / 2.0;
                     placements[i].position = crate::layout::Point::new(
                         (width - placements[i].size.width).max(0.0),

@@ -1077,12 +1077,16 @@ impl AppState {
                         if let Some(r) = root_idx {
                             let path = hit_test(arena, r, x, y);
                             let mut click_handled = false;
-                            // 与组件自决语义一致：仅"声明了 IME/输入需求"的组件
-                            // （TextField 设置过 ime_callback）在 debug 点击时聚焦
-                            let (fid, sk) = path.last()
-                                .filter(|&&i| arena[i].ime_callback.borrow().is_some())
-                                .map(|&i| (arena[i].id, arena[i].slot_key))
-                                .unwrap_or((0, 0));
+                            // debug 点击聚焦：path 中最深的 focusable 节点
+                            // （text-field-v2 容器化后焦点/交互在容器——空字段
+                            // 输入子节点 0 宽点不中；旧逻辑只看 ime_callback
+                            // 已失效）；兼容声明 IME 的节点（旧 leaf 语义）
+                            let (fid, sk) = path.iter().rev().find_map(|&i| {
+                                let has_focusable = arena[i].modifier.elements().iter()
+                                    .any(|el| matches!(el, crate::modifier::ModifierElement::Focusable { .. }));
+                                let wants_ime = arena[i].ime_callback.borrow().is_some();
+                                (has_focusable || wants_ime).then_some((arena[i].id, arena[i].slot_key))
+                            }).unwrap_or((0, 0));
                             let path_len = path.len();
                             // Click 检测（消耗 path 前做）
                             for &i in path.iter().rev() {
