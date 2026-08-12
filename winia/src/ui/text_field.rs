@@ -1401,11 +1401,6 @@ impl TextField {
             if has_visual {
                 min_h = min_h.max(56.0 + supporting_h);
             }
-            if std::env::var("WINIA_TF_DEBUG").is_ok() {
-                std::fs::write("C:/Users/grounzer/AppData/Local/Temp/opencode/tf_minlines.txt",
-                    format!("min_lines={} font_size={} line_h={} pad_y={} min_h={} support={}\n",
-                        self.min_lines, font_size, line_h, pad_y, min_h, self.supporting_text.is_some())).unwrap();
-            }
             container_modifier.min_height(min_h)
         } else {
             container_modifier
@@ -1530,24 +1525,27 @@ impl TextField {
                 // M3 placeholderAlpha：淡入**淡出**双向（150ms）——alpha 目标
                 // 随显示状态（显示 1 / 隐藏 0）；构建条件 = 显示中或淡出中
                 // （alpha > 0）——淡出动画期间仍构建（透明度渐低），alpha
-                // 归零后移除。⚠ remember 位置固定（has_visual 恒定不移位）、
-                // 组用显式 ctx.key——key 稳定
-                let alpha = ctx.remember(|| crate::core::state::State::new(0.0)).get();
-                crate::animation::push_animatable(
-                    alpha.clone(),
-                    if show_placeholder { 1.0 } else { 0.0 },
-                    crate::animation::AnimationSpec::Tween(
-                        crate::animation::TweenSpec::new(
-                            std::time::Duration::from_millis(150),
-                            crate::animation::interpolator::EaseOutCubic::new(),
-                        )
-                    ),
-                );
-                // 构建条件：alpha.get() 注册依赖——淡出动画推进 → 重组 →
-                // 条件重评估（alpha=0 时停止构建移除节点）
-                let alpha_now = alpha.get();
-                if show_placeholder || alpha_now > 0.001 {
-                    ctx.key(TextFieldSlotRole::Placeholder, |ctx| {
+                // 归零后移除。
+                // ⚠ remember + push + 组全部包在显式 ctx.key 内——remember
+                // 的 key base 固定为 role 哈希（不随帧内序号流漂移——实测
+                // 无 label 字段（恒显示）alpha State 每帧新建 → 动画每帧
+                // 从 0 重启永不完成 → 持续重组）
+                ctx.key(TextFieldSlotRole::Placeholder, |ctx| {
+                    let alpha = ctx.remember(|| 0.0f32);
+                    crate::animation::push_animatable(
+                        alpha.clone(),
+                        if show_placeholder { 1.0 } else { 0.0 },
+                        crate::animation::AnimationSpec::Tween(
+                            crate::animation::TweenSpec::new(
+                                std::time::Duration::from_millis(150),
+                                crate::animation::interpolator::EaseOutCubic::new(),
+                            )
+                        ),
+                    );
+                    // 构建条件：alpha.get() 注册依赖——淡出动画推进 → 重组 →
+                    // 条件重评估（alpha=0 时停止构建移除节点）
+                    let alpha_now = alpha.get();
+                    if show_placeholder || alpha_now > 0.001 {
                         let sk = ctx.next_key();
                         ctx.start_restartable_group(
                             sk,
@@ -1563,8 +1561,8 @@ impl TextField {
                             .color(crate::modifier::Color::from_argb((255.0 * a) as u8, pc.r, pc.g, pc.b));
                         crate::ui::text::LOCAL_TEXT_STYLE.provides(style, || ph(ctx));
                         ctx.end_restartable_group();
-                    });
-                }
+                    }
+                });
             }
         }
         if let Some(prefix) = self.prefix {
