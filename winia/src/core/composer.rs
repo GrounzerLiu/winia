@@ -31,6 +31,19 @@ impl Drop for StmtGuard {
     }
 }
 
+/// RAII 组合 scope guard——Drop 时调用 end_scope（配对 start_scope_guarded）。
+/// 持有 composer 裸指针：guard 生命周期内 composer 必须存活且无并发访问
+/// （组合单线程）；guard 由 #[composable] 宏注入声明在函数开头、函数返回
+/// 时最后 drop——end_scope 在所有语句 guard pop 之后执行，配对正确。
+pub struct ScopeGuard {
+    composer: *mut Composer,
+}
+impl Drop for ScopeGuard {
+    fn drop(&mut self) {
+        unsafe { (*self.composer).end_scope(); }
+    }
+}
+
 thread_local! { static ACTIVE_SLOT_KEY: Cell<u64> = const { Cell::new(0) }; }
 /// 依赖注册目标栈（统一）：scope（容器组件/组合函数）与节点（leaf 组件）共用——
 /// 读取 State 注册到栈顶（最内层 Group）。组合外（测量阶段）栈空 → 回退 ACTIVE_SLOT_KEY。
@@ -180,6 +193,27 @@ impl<'a> ComposeCtx<'a> {
         let key = source_hash;
         self.composer.slot_table.start_scope(key);
         GROUP_STACK.with(|s| s.borrow_mut().push(key));
+        key
+    }
+
+    /// RAII 版 scope 开始（Drop 时自动 end_scope）——支持返回值函数与提前
+    /// return（显式 end_scope 在提前退出时泄漏 scope 栈——新 key 系统
+    /// #[composable] 宏展开使用此版本；guard 声明在函数开头、存活到函数
+    /// 返回——end_scope 在所有语句 guard pop 之后执行，配对正确）。
+    /// ⚠ guard 内持有 composer 裸指针——调用方必须保证 guard 生命周期内
+    /// composer 存活且无并发访问（组合单线程——成立）。
+    pub fn start_scope_guarded(&mut self, source_hash: u64) -> ScopeGuard {
+        self.composer.scope_source_stack.push(Some(source_hash));
+        SCOPE_SRC_STACK.with(|s| s.borrow_mut().push(source_hash)); // 镜像（enter_stmt 读）
+        let key = source_hash;
+        self.composer.slot_table.start_scope(key);
+        GROUP_STACK.with(|s| s.borrow_mut().push(key));
+        ScopeGuard { composer: self.composer as *mut Composer }
+    }
+
+    /// 显式 key 版 next_key（宏扫描替换 ctx.next_key() 用）——key 已含
+    /// 编译期序号，直接使用（不再生成运行时序号）
+    pub fn next_key_at(&mut self, key: u64) -> u64 {
         key
     }
 
@@ -449,35 +483,22 @@ impl<'a> ComposeCtx<'a> {
     /// 位置 key 编码方式: 基于 slot 树路径（结构稳定——不随 Enter/Skip 的
     /// next_key 序列漂移，保证同一组合位置跨重组复用同一 State）。
     fn next_remember_key(&mut self) -> u64 {
-        // key 基与 next_group_key 一致：显式 key() > 语句 id（源码位置）> 路径哈希。
+        // key 基与 next_group_key 一致：显式 key() > 语句 id（源码位置）。
         // remember 的 State 跨帧稳定依赖 key 稳定——结构变化时语句 id 不动 → State 保留。
-        let base = if let Some(&k) = self.composer.key_override_stack.last() {
-            k
-        } else if let Some((sid, seq)) = STMT_STACK.with(|s| s.borrow().last().copied()) {
-            let scope_src = self.composer.scope_source_stack.last().and_then(|s| *s).unwrap_or(0);
-            // FNV 混合 scope 源码哈希 + 语句 id + 调用序号（for 循环迭代索引分量）
-            let mut h: u64 = 0xcbf29ce484222325;
-            h ^= scope_src; h = h.wrapping_mul(0x100000001b3);
-            h ^= sid as u64; h = h.wrapping_mul(0x100000001b3);
-            h ^= (seq as u64).wrapping_mul(0x9E3779B97F4A7C15);
-            h
-        } else if cfg!(test) {
-            // 测试路径：路径哈希 fallback（同 next_group_key——测试自控结构）
-            let path = self.composer.slot_table.current_path().to_vec();
-            let mut h: u64 = 0xcbf29ce484222325;
-            for &idx in &path {
-                h ^= idx as u64;
-                h = h.wrapping_mul(0x100000001b3);
+        // 无稳定源 → panic（fail-fast）。
+        let base = match self.composer.try_stable_base() {
+            Some(b) => b,
+            None if cfg!(test) => {
+                // 测试路径：路径哈希 fallback（同 next_group_key——测试自控结构）
+                let path = self.composer.slot_table.current_path().to_vec();
+                let mut h: u64 = 0xcbf29ce484222325;
+                for &idx in &path {
+                    h ^= idx as u64;
+                    h = h.wrapping_mul(0x100000001b3);
+                }
+                h
             }
-            h
-        } else {
-            // 快速失败（与 next_group_key 一致）：remember 的 State 跨帧稳定
-            // 依赖 key 稳定——无语句级 key 则路径哈希在结构变化时漂移
-            // → remember 状态错位。修复：调用点在 #[composable]/app_root! 内。
-            panic!(
-                "remember 调用点缺少稳定 key：ctx.remember() 必须位于 #[composable] \
-                 函数内（或根闭包用 winia::app_root!），或用 ctx.key() 显式指定。"
-            );
+            None => self.composer.panic_no_stable_key("remember"),
         };
         let counter = self.composer.remember_path_counters.entry(base).or_insert(0);
         let c = *counter;
@@ -1082,41 +1103,58 @@ impl Composer {
     /// 基于 slot 路径编码：结构稳定——Enter/Skip 的执行顺序不影响 key，
     /// 保证同一组合位置跨重组得到相同 slot（否则 slot 树 truncate 重建，
     /// 导致 remember 的 State 全部丢失重建）。
+    /// 能否获得稳定 key 的 base（新 key 系统核心判定）：
+    /// - 显式 ctx.key(id, f) 作用域内 → 稳定（用户保证唯一）
+    /// - STMT_STACK 有宏注入的语句（#[composable]/keyed_stmt! 展开）→ 稳定
+    ///   （base = fnv(scope_src, 语句id, 迭代seq)——编译期固定）
+    /// - 都不是 → None（调用方 panic 兜底——fail-fast，不静默降级）
+    pub(crate) fn try_stable_base(&self) -> Option<u64> {
+        if let Some(&k) = self.key_override_stack.last() {
+            return Some(k);
+        }
+        STMT_STACK.with(|s| {
+            let s = s.borrow();
+            s.last().map(|&(sid, seq)| {
+                let scope_src = self.scope_source_stack.last().and_then(|s| *s).unwrap_or(0);
+                let mut h: u64 = 0xcbf29ce484222325;
+                h ^= scope_src; h = h.wrapping_mul(0x100000001b3);
+                h ^= sid as u64; h = h.wrapping_mul(0x100000001b3);
+                h ^= (seq as u64).wrapping_mul(0x9E3779B97F4A7C15);
+                h
+            })
+        })
+    }
+
+    /// 没有稳定 key 源时的 panic（fail-fast——不静默降级为路径哈希）
+    pub(crate) fn panic_no_stable_key(&self, api: &str) -> ! {
+        panic!(
+            "无法获得稳定 key（{}）：调用点不在 #[composable]/keyed_stmt! 注入内，\
+             也无 ctx.key() 包裹——key 会在结构变化时漂移。修复：①将调用点放入 \
+             #[composable] 函数内 ②用 ctx.key() 包裹 ③content 闭包参数名与 \
+             #[composable(x)] 指定的标识符一致",
+            api
+        )
+    }
+
     pub fn next_group_key(&mut self) -> u64 {
-        // key 基优先级：显式 ctx.key() > #[composable] 语句 id（源码位置）> 路径哈希。
+        // key 基优先级：显式 ctx.key() > #[composable] 语句 id（源码位置）。
         // 语句 id 由宏注入（编译期按源码结构固定编号）——结构变化（前面插入/移除兄弟
         // 节点）不影响语句 id → key 不漂移 → remember/复用稳定（对标 Compose 编译器
-        // 的调用点 key）。宏外（测试/手动组合）退化为路径哈希（现状）。
-        let base = if let Some(&k) = self.key_override_stack.last() {
-            k
-        } else if let Some((sid, seq)) = STMT_STACK.with(|s| s.borrow().last().copied()) {
-            let scope_src = self.scope_source_stack.last().and_then(|s| *s).unwrap_or(0);
-            // FNV 混合 scope 源码哈希 + 语句 id + 调用序号（for 循环迭代索引分量）
-            let mut h: u64 = 0xcbf29ce484222325;
-            h ^= scope_src; h = h.wrapping_mul(0x100000001b3);
-            h ^= sid as u64; h = h.wrapping_mul(0x100000001b3);
-            h ^= (seq as u64).wrapping_mul(0x9E3779B97F4A7C15);
-            h
-        } else if cfg!(test) {
-            // 测试路径：无语句级 key 时退化为路径哈希（测试自控结构——漂移由
-            // 测试自己负责；生产代码禁止——见下方 panic）
-            let path = self.slot_table.current_path().to_vec();
-            let mut h: u64 = 0xcbf29ce484222325;
-            for &idx in &path {
-                h ^= idx as u64;
-                h = h.wrapping_mul(0x100000001b3);
+        // 的调用点 key）。无稳定源 → panic（fail-fast）。
+        let base = match self.try_stable_base() {
+            Some(b) => b,
+            None if cfg!(test) => {
+                // 测试路径：无语句级 key 时退化为路径哈希（测试自控结构——漂移由
+                // 测试自己负责；生产代码禁止——见下方 panic）
+                let path = self.slot_table.current_path().to_vec();
+                let mut h: u64 = 0xcbf29ce484222325;
+                for &idx in &path {
+                    h ^= idx as u64;
+                    h = h.wrapping_mul(0x100000001b3);
+                }
+                h
             }
-            h
-        } else {
-            // 快速失败（用户要求）：组件调用点必须能获得稳定 key——无法保证则
-            // panic 而非静默降级（路径哈希在结构变化时漂移 → remember 状态错位/
-            // 节点复用串位等难查 bug）。修复：调用点包在 #[composable] 函数内
-            // （或根闭包用 winia::app_root!）获得语句级 key；或显式 ctx.key()。
-            panic!(
-                "组合调用点缺少稳定 key：组件调用必须位于 #[composable] 函数内 \
-                 （或根闭包用 winia::app_root!），或用 ctx.key() 显式指定。\
-                 当前调用点在宏覆盖之外——key 会在结构变化时漂移。"
-            );
+            None => self.panic_no_stable_key("next_key"),
         };
         // 每路径独立 counter：同 key 基第 N 次调用跨帧恒定（Skip 的 content 不执行
         // 不平移——节点复用错位 + 常量折叠冻结的防护）

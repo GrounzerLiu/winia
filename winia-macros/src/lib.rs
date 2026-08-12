@@ -39,11 +39,218 @@ fn fnv64(s: &str) -> u64 {
     h
 }
 
+/// 组合哈希：fnv(scope_hash, 语句id, 语句内序号)——宏展开时计算（编译期固定），
+/// 用于 remember/next_key 的显式 key（新 key 系统：编译期编号，运行时零序号）
+fn key_for(scope_hash: u64, stmt_id: u32, idx: u32) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    h ^= scope_hash; h = h.wrapping_mul(0x100000001b3);
+    h ^= stmt_id as u64; h = h.wrapping_mul(0x100000001b3);
+    h ^= (idx as u64).wrapping_mul(0x9E3779B97F4A7C15);
+    h
+}
+
+/// 语句是否含 ctx 组合调用（智能注入判定——决定是否注入 enter_stmt）：
+/// 递归检查表达式树——方法 receiver 是 ctx_ident（ctx.remember/ctx.next_key/
+/// ctx.animate_*）、调用参数含 ctx（foo(ctx)、build(ctx, ...)）、content 闭包
+/// （参数名 == ctx_ident）。纯计算语句（不含）不注入——零 guard 零展开。
+fn stmt_uses_ctx(stmt: &Stmt, ctx: &syn::Ident) -> bool {
+    match stmt {
+        Stmt::Local(l) => l.init.as_ref().map(|i| expr_uses_ctx(&i.expr, ctx)).unwrap_or(false),
+        Stmt::Expr(e, _) => expr_uses_ctx(e, ctx),
+        _ => false,
+    }
+}
+
+fn expr_uses_ctx(expr: &syn::Expr, ctx: &syn::Ident) -> bool {
+    match expr {
+        syn::Expr::MethodCall(m) => {
+            let recv_is_ctx = matches!(&*m.receiver, syn::Expr::Path(p) if p.path.is_ident(ctx));
+            if recv_is_ctx { return true; }
+            if expr_uses_ctx(&m.receiver, ctx) { return true; }
+            m.args.iter().any(|a| expr_uses_ctx(a, ctx))
+        }
+        syn::Expr::Call(c) => {
+            if expr_uses_ctx(&c.func, ctx) { return true; }
+            c.args.iter().any(|a| expr_uses_ctx(a, ctx))
+        }
+        syn::Expr::Closure(cl) => {
+            // content 闭包（参数名 == ctx_ident）→ 其体在语句级注入时单独处理——
+            // 此处只标记"含 ctx"（其体随后由注入递归覆盖）
+            if cl.inputs.iter().any(|p| closure_pat_is_ctx(p, ctx)) { return true; }
+            expr_uses_ctx(&cl.body, ctx)
+        }
+        syn::Expr::If(e) => {
+            expr_uses_ctx(&e.cond, ctx)
+                || e.then_branch.stmts.iter().any(|s| stmt_uses_ctx(s, ctx))
+                || e.else_branch.as_ref().map(|(_, b)| expr_uses_ctx(b, ctx)).unwrap_or(false)
+        }
+        syn::Expr::Block(b) => b.block.stmts.iter().any(|s| stmt_uses_ctx(s, ctx)),
+        syn::Expr::Match(m) => {
+            expr_uses_ctx(&m.expr, ctx)
+                || m.arms.iter().any(|arm| match &*arm.body {
+                    syn::Expr::Block(b) => b.block.stmts.iter().any(|s| stmt_uses_ctx(s, ctx)),
+                    body => expr_uses_ctx(body, ctx),
+                })
+        }
+        syn::Expr::ForLoop(f) => expr_uses_ctx(&f.expr, ctx) || f.body.stmts.iter().any(|s| stmt_uses_ctx(s, ctx)),
+        syn::Expr::While(w) => expr_uses_ctx(&w.cond, ctx) || w.body.stmts.iter().any(|s| stmt_uses_ctx(s, ctx)),
+        syn::Expr::Paren(p) => expr_uses_ctx(&p.expr, ctx),
+        syn::Expr::Reference(r) => expr_uses_ctx(&r.expr, ctx),
+        syn::Expr::Unary(u) => expr_uses_ctx(&u.expr, ctx),
+        syn::Expr::Path(p) => p.path.is_ident(ctx),
+        syn::Expr::Tuple(t) => t.elems.iter().any(|e| expr_uses_ctx(e, ctx)),
+        _ => false,
+    }
+}
+
+fn closure_pat_is_ctx(pat: &syn::Pat, ctx: &syn::Ident) -> bool {
+    match pat {
+        syn::Pat::Ident(pi) => pi.ident == *ctx,
+        syn::Pat::Type(pt) => matches!(&*pt.pat, syn::Pat::Ident(pi) if pi.ident == *ctx),
+        _ => false,
+    }
+}
+
+/// 语句级入口：扫描替换语句内的 `ctx.remember`/`ctx.next_key` 为编译期 key
+/// 版本（remember_at_key/next_key_at）——key = fnv(scope, 语句id, 语句内序号)。
+/// 不进入 content 闭包体（参数名 == ctx_ident——其体由递归 inject_stmt_ids
+/// 用各自语句 id 处理，避免双重替换）。
+fn replace_keyed_calls_stmt(
+    stmt: &mut Stmt,
+    ctx: &syn::Ident,
+    scope_hash: u64,
+    stmt_id: u32,
+    rem_idx: &mut u32,
+    key_idx: &mut u32,
+) {
+    match stmt {
+        Stmt::Local(l) => {
+            if let Some(init) = &mut l.init {
+                replace_keyed_calls(&mut *init.expr, ctx, scope_hash, stmt_id, rem_idx, key_idx);
+            }
+        }
+        Stmt::Expr(e, _) => {
+            replace_keyed_calls(e, ctx, scope_hash, stmt_id, rem_idx, key_idx);
+        }
+        _ => {}
+    }
+}
+
+/// 表达式递归替换（新 key 系统：remember/next_key 编译期编号）。
+/// ⚠ 不进入 content 闭包体（参数名 == ctx_ident）——由语句级处理。
+fn replace_keyed_calls(
+    expr: &mut syn::Expr,
+    ctx: &syn::Ident,
+    scope_hash: u64,
+    stmt_id: u32,
+    rem_idx: &mut u32,
+    key_idx: &mut u32,
+) {
+    match expr {
+        syn::Expr::MethodCall(m) => {
+            let recv_is_ctx = matches!(&*m.receiver, syn::Expr::Path(p) if p.path.is_ident(ctx));
+            if recv_is_ctx && m.method == "remember" {
+                // ctx.remember(init) → ctx.remember_at_key(KEY, init)
+                let key = key_for(scope_hash, stmt_id, *rem_idx);
+                *rem_idx += 1;
+                m.method = syn::Ident::new("remember_at_key", m.method.span());
+                m.args.insert(0, syn::parse_quote!(#key));
+                // 递归其余参数（init 闭包——content 闭包跳过）
+                for a in m.args.iter_mut().skip(1) {
+                    replace_keyed_calls(a, ctx, scope_hash, stmt_id, rem_idx, key_idx);
+                }
+                return;
+            }
+            if recv_is_ctx && m.method == "next_key" && m.args.is_empty() {
+                // ctx.next_key() → ctx.next_key_at(KEY)
+                let key = key_for(scope_hash, stmt_id, *key_idx);
+                *key_idx += 1;
+                m.method = syn::Ident::new("next_key_at", m.method.span());
+                m.args.insert(0, syn::parse_quote!(#key));
+                return;
+            }
+            replace_keyed_calls(&mut *m.receiver, ctx, scope_hash, stmt_id, rem_idx, key_idx);
+            for a in &mut m.args {
+                replace_keyed_calls(a, ctx, scope_hash, stmt_id, rem_idx, key_idx);
+            }
+        }
+        syn::Expr::Call(c) => {
+            replace_keyed_calls(&mut *c.func, ctx, scope_hash, stmt_id, rem_idx, key_idx);
+            for a in &mut c.args {
+                replace_keyed_calls(a, ctx, scope_hash, stmt_id, rem_idx, key_idx);
+            }
+        }
+        syn::Expr::Closure(cl) => {
+            // content 闭包（参数名 == ctx_ident）——体由语句级处理，跳过
+            if cl.inputs.iter().any(|p| closure_pat_is_ctx(p, ctx)) { return; }
+            replace_keyed_calls(&mut cl.body, ctx, scope_hash, stmt_id, rem_idx, key_idx);
+        }
+        syn::Expr::If(e) => {
+            replace_keyed_calls(&mut *e.cond, ctx, scope_hash, stmt_id, rem_idx, key_idx);
+            for s in &mut e.then_branch.stmts {
+                replace_keyed_calls_stmt(s, ctx, scope_hash, stmt_id, rem_idx, key_idx);
+            }
+            if let Some((_, b)) = &mut e.else_branch {
+                if let syn::Expr::Block(eb) = &mut **b {
+                    for s in &mut eb.block.stmts {
+                        replace_keyed_calls_stmt(s, ctx, scope_hash, stmt_id, rem_idx, key_idx);
+                    }
+                } else {
+                    replace_keyed_calls(b, ctx, scope_hash, stmt_id, rem_idx, key_idx);
+                }
+            }
+        }
+        syn::Expr::Block(b) => {
+            for s in &mut b.block.stmts {
+                replace_keyed_calls_stmt(s, ctx, scope_hash, stmt_id, rem_idx, key_idx);
+            }
+        }
+        syn::Expr::Paren(p) => replace_keyed_calls(&mut *p.expr, ctx, scope_hash, stmt_id, rem_idx, key_idx),
+        syn::Expr::Reference(r) => replace_keyed_calls(&mut *r.expr, ctx, scope_hash, stmt_id, rem_idx, key_idx),
+        syn::Expr::Unary(u) => replace_keyed_calls(&mut *u.expr, ctx, scope_hash, stmt_id, rem_idx, key_idx),
+        syn::Expr::Match(m) => {
+            replace_keyed_calls(&mut *m.expr, ctx, scope_hash, stmt_id, rem_idx, key_idx);
+            for arm in &mut m.arms {
+                match &mut *arm.body {
+                    syn::Expr::Block(ab) => {
+                        for s in &mut ab.block.stmts {
+                            replace_keyed_calls_stmt(s, ctx, scope_hash, stmt_id, rem_idx, key_idx);
+                        }
+                    }
+                    body => replace_keyed_calls(body, ctx, scope_hash, stmt_id, rem_idx, key_idx),
+                }
+            }
+        }
+        syn::Expr::ForLoop(f) => {
+            replace_keyed_calls(&mut *f.expr, ctx, scope_hash, stmt_id, rem_idx, key_idx);
+            for s in &mut f.body.stmts {
+                replace_keyed_calls_stmt(s, ctx, scope_hash, stmt_id, rem_idx, key_idx);
+            }
+        }
+        syn::Expr::While(w) => {
+            replace_keyed_calls(&mut *w.cond, ctx, scope_hash, stmt_id, rem_idx, key_idx);
+            for s in &mut w.body.stmts {
+                replace_keyed_calls_stmt(s, ctx, scope_hash, stmt_id, rem_idx, key_idx);
+            }
+        }
+        syn::Expr::Tuple(t) => {
+            for e in &mut t.elems {
+                replace_keyed_calls(e, ctx, scope_hash, stmt_id, rem_idx, key_idx);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// 语句 id 注入：每条语句包裹 `ctx.push_stmt(id) / ctx.pop_stmt()`——
 /// id 为编译期按源码结构固定的序号（结构变化不漂移——对标 Compose 调用点 key）。
 /// 递归进入控制流体（if/for/while/block/match 的语句块）继续注入；闭包体跳过
 /// （content 执行时机不定，由外层调用点管理）。
-fn inject_stmt_ids(stmts: Vec<Stmt>, ctx: &syn::Ident, counter: &mut u32) -> Vec<Stmt> {
+/// 同时扫描替换语句内的 `ctx.remember`/`ctx.next_key` 为编译期 key 版本
+/// （remember_at_key/next_key_at——新 key 系统：编译期编号，运行时零序号）。
+/// ⚠ 智能注入：只对含 ctx 组合调用的语句注入（stmt_uses_ctx）——纯计算语句
+/// 零 guard 零展开（展开体积随实际组合调用数而非语句数）。
+fn inject_stmt_ids(stmts: Vec<Stmt>, ctx: &syn::Ident, counter: &mut u32, scope_hash: u64) -> Vec<Stmt> {
     let mut out = Vec::new();
     for stmt in stmts {
         let id = *counter;
@@ -52,7 +259,17 @@ fn inject_stmt_ids(stmts: Vec<Stmt>, ctx: &syn::Ident, counter: &mut u32) -> Vec
         // content 闭包）——再按语句形态决定包裹方式（尾表达式不包 / let init guard
         // 块包 / 其他 guard 块包）。⚠ 此注入点必须对每条语句执行——漏掉会导致
         // 嵌套闭包体 key 退化路径哈希（结构变化漂移复发）
-        let stmt = inject_nested(stmt, ctx, counter);
+        let mut stmt = inject_nested(stmt, ctx, counter, scope_hash);
+        // 智能注入：语句不含 ctx 组合调用 → 原样放回（不注入、不替换）
+        if !stmt_uses_ctx(&stmt, ctx) {
+            out.push(stmt);
+            continue;
+        }
+        // 扫描替换本语句内的 remember/next_key（语句内序号从 0 起——
+        // 闭包体内语句由递归 inject_stmt_ids 用各自语句 id 处理）
+        let mut rem_idx = 0u32;
+        let mut key_idx = 0u32;
+        replace_keyed_calls_stmt(&mut stmt, ctx, scope_hash, id, &mut rem_idx, &mut key_idx);
         match stmt {
             // 尾表达式（无分号）不包裹 push/pop——包裹会吞掉尾值
             // （`{ 300.0 }` 变 `{ push; 300.0; pop }` → 块值变 ()，if/块表达式类型错）。
@@ -68,7 +285,7 @@ fn inject_stmt_ids(stmts: Vec<Stmt>, ctx: &syn::Ident, counter: &mut u32) -> Vec
                     let pat = l.pat;
                     let init_expr = *init.expr;
                     let diverge = init.diverge.map(|(else_tok, else_expr)| {
-                        (else_tok, Box::new(inject_expr_blocks(*else_expr, ctx, counter)))
+                        (else_tok, Box::new(inject_expr_blocks(*else_expr, ctx, counter, scope_hash)))
                     });
                     let mut new_l = syn::Local { attrs: l.attrs, let_token: l.let_token, pat, init: None, semi_token: l.semi_token };
                     new_l.init = Some(syn::LocalInit {
@@ -97,17 +314,17 @@ fn inject_stmt_ids(stmts: Vec<Stmt>, ctx: &syn::Ident, counter: &mut u32) -> Vec
 }
 
 /// 递归注入嵌套语句块（控制流体），重建 AST
-fn inject_nested(stmt: Stmt, ctx: &syn::Ident, counter: &mut u32) -> Stmt {
+fn inject_nested(stmt: Stmt, ctx: &syn::Ident, counter: &mut u32, scope_hash: u64) -> Stmt {
     match stmt {
         Stmt::Expr(expr, semi) => {
-            let e = inject_expr_blocks(expr, ctx, counter);
+            let e = inject_expr_blocks(expr, ctx, counter, scope_hash);
             Stmt::Expr(e, semi)
         }
         // let 的 init 表达式也递归注入（`let x = if a { build } else {...}` 的
         // 分支内 build 获得语句级 key——与"语句级 key 不漂移"承诺一致）
         Stmt::Local(mut l) => {
             if let Some(init) = l.init.take() {
-                let injected = inject_expr_blocks(*init.expr, ctx, counter);
+                let injected = inject_expr_blocks(*init.expr, ctx, counter, scope_hash);
                 l.init = Some(syn::LocalInit {
                     eq_token: init.eq_token,
                     expr: Box::new(injected),
@@ -120,49 +337,49 @@ fn inject_nested(stmt: Stmt, ctx: &syn::Ident, counter: &mut u32) -> Stmt {
     }
 }
 
-fn inject_block(block: syn::Block, ctx: &syn::Ident, counter: &mut u32) -> syn::Block {
-    let stmts = inject_stmt_ids(block.stmts, ctx, counter);
+fn inject_block(block: syn::Block, ctx: &syn::Ident, counter: &mut u32, scope_hash: u64) -> syn::Block {
+    let stmts = inject_stmt_ids(block.stmts, ctx, counter, scope_hash);
     syn::Block {
         brace_token: block.brace_token,
         stmts,
     }
 }
 
-fn inject_expr_blocks(expr: syn::Expr, ctx: &syn::Ident, counter: &mut u32) -> syn::Expr {
+fn inject_expr_blocks(expr: syn::Expr, ctx: &syn::Ident, counter: &mut u32, scope_hash: u64) -> syn::Expr {
     match expr {
         syn::Expr::If(mut e) => {
-            e.cond = Box::new(inject_expr_blocks(*e.cond, ctx, counter));
-            e.then_branch = inject_block(e.then_branch, ctx, counter);
+            e.cond = Box::new(inject_expr_blocks(*e.cond, ctx, counter, scope_hash));
+            e.then_branch = inject_block(e.then_branch, ctx, counter, scope_hash);
             if let Some((_, else_expr)) = e.else_branch.take() {
-                let else_expr = inject_expr_blocks(*else_expr, ctx, counter);
+                let else_expr = inject_expr_blocks(*else_expr, ctx, counter, scope_hash);
                 e.else_branch = Some((syn::token::Else::default(), Box::new(else_expr)));
             }
             syn::Expr::If(e)
         }
         syn::Expr::ForLoop(mut e) => {
-            e.expr = Box::new(inject_expr_blocks(*e.expr, ctx, counter)); // iterable
-            e.body = inject_block(e.body, ctx, counter);
+            e.expr = Box::new(inject_expr_blocks(*e.expr, ctx, counter, scope_hash)); // iterable
+            e.body = inject_block(e.body, ctx, counter, scope_hash);
             syn::Expr::ForLoop(e)
         }
         syn::Expr::While(mut e) => {
-            e.cond = Box::new(inject_expr_blocks(*e.cond, ctx, counter));
-            e.body = inject_block(e.body, ctx, counter);
+            e.cond = Box::new(inject_expr_blocks(*e.cond, ctx, counter, scope_hash));
+            e.body = inject_block(e.body, ctx, counter, scope_hash);
             syn::Expr::While(e)
         }
         syn::Expr::Block(mut e) => {
-            e.block = inject_block(e.block, ctx, counter);
+            e.block = inject_block(e.block, ctx, counter, scope_hash);
             syn::Expr::Block(e)
         }
         syn::Expr::Match(mut e) => {
-            e.expr = Box::new(inject_expr_blocks(*e.expr, ctx, counter)); // scrutinee
+            e.expr = Box::new(inject_expr_blocks(*e.expr, ctx, counter, scope_hash)); // scrutinee
             for arm in e.arms.iter_mut() {
                 if let Some((_, guard)) = &mut arm.guard {
                     let g = std::mem::replace(guard, Box::new(syn::parse_quote!(true)));
-                    *guard = Box::new(inject_expr_blocks(*g, ctx, counter));
+                    *guard = Box::new(inject_expr_blocks(*g, ctx, counter, scope_hash));
                 }
                 let body = std::mem::replace(&mut arm.body, Box::new(syn::parse_quote!(())));
                 if let syn::Expr::Block(b) = *body {
-                    let injected = inject_block(b.block, ctx, counter);
+                    let injected = inject_block(b.block, ctx, counter, scope_hash);
                     arm.body = Box::new(syn::Expr::Block(syn::ExprBlock {
                         attrs: b.attrs,
                         label: b.label,
@@ -170,7 +387,7 @@ fn inject_expr_blocks(expr: syn::Expr, ctx: &syn::Ident, counter: &mut u32) -> s
                     }));
                 } else {
                     // 非 Block 臂体（表达式臂）也递归
-                    arm.body = Box::new(inject_expr_blocks(*body, ctx, counter));
+                    arm.body = Box::new(inject_expr_blocks(*body, ctx, counter, scope_hash));
                 }
             }
             syn::Expr::Match(e)
@@ -178,20 +395,20 @@ fn inject_expr_blocks(expr: syn::Expr, ctx: &syn::Ident, counter: &mut u32) -> s
         // 函数调用：func + 参数都遍历（content 闭包通常在 build(...) 参数位）
         syn::Expr::Call(mut e) => {
             let f = std::mem::replace(&mut *e.func, syn::parse_quote!(0));
-            *e.func = inject_expr_blocks(f, ctx, counter);
+            *e.func = inject_expr_blocks(f, ctx, counter, scope_hash);
             for arg in e.args.iter_mut() {
                 let a = std::mem::replace(arg, syn::parse_quote!(0));
-                *arg = inject_expr_blocks(a, ctx, counter);
+                *arg = inject_expr_blocks(a, ctx, counter, scope_hash);
             }
             syn::Expr::Call(e)
         }
         // 方法调用（build(ctx, |ctx| {...})）：receiver + 参数都遍历（链式 receiver 漏注入修复）
         syn::Expr::MethodCall(mut e) => {
             let recv = std::mem::replace(&mut *e.receiver, syn::parse_quote!(0));
-            *e.receiver = inject_expr_blocks(recv, ctx, counter);
+            *e.receiver = inject_expr_blocks(recv, ctx, counter, scope_hash);
             for arg in e.args.iter_mut() {
                 let a = std::mem::replace(arg, syn::parse_quote!(0));
-                *arg = inject_expr_blocks(a, ctx, counter);
+                *arg = inject_expr_blocks(a, ctx, counter, scope_hash);
             }
             syn::Expr::MethodCall(e)
         }
@@ -209,7 +426,7 @@ fn inject_expr_blocks(expr: syn::Expr, ctx: &syn::Ident, counter: &mut u32) -> s
                 // async 闭包排除（延迟执行——注入的 guard 会在错误时机执行）
                 if !e.asyncness.is_some() {
                     let body = std::mem::replace(&mut e.body, Box::new(syn::parse_quote!(())));
-                    let injected = inject_expr_blocks(*body, ctx, counter);
+                    let injected = inject_expr_blocks(*body, ctx, counter, scope_hash);
                     e.body = Box::new(injected);
                 }
             }
@@ -217,79 +434,79 @@ fn inject_expr_blocks(expr: syn::Expr, ctx: &syn::Ident, counter: &mut u32) -> s
         }
         // 括号/引用/解引用/一元：子表达式递归
         syn::Expr::Paren(mut e) => {
-            *e.expr = inject_expr_blocks(*e.expr, ctx, counter);
+            *e.expr = inject_expr_blocks(*e.expr, ctx, counter, scope_hash);
             syn::Expr::Paren(e)
         }
         syn::Expr::Reference(mut e) => {
-            *e.expr = inject_expr_blocks(*e.expr, ctx, counter);
+            *e.expr = inject_expr_blocks(*e.expr, ctx, counter, scope_hash);
             syn::Expr::Reference(e)
         }
         syn::Expr::Unary(mut e) => {
-            *e.expr = inject_expr_blocks(*e.expr, ctx, counter);
+            *e.expr = inject_expr_blocks(*e.expr, ctx, counter, scope_hash);
             syn::Expr::Unary(e)
         }
         // 二元/赋值：左右递归
         syn::Expr::Binary(mut e) => {
-            *e.left = inject_expr_blocks(*e.left, ctx, counter);
-            *e.right = inject_expr_blocks(*e.right, ctx, counter);
+            *e.left = inject_expr_blocks(*e.left, ctx, counter, scope_hash);
+            *e.right = inject_expr_blocks(*e.right, ctx, counter, scope_hash);
             syn::Expr::Binary(e)
         }
         syn::Expr::Assign(mut e) => {
-            *e.left = inject_expr_blocks(*e.left, ctx, counter);
-            *e.right = inject_expr_blocks(*e.right, ctx, counter);
+            *e.left = inject_expr_blocks(*e.left, ctx, counter, scope_hash);
+            *e.right = inject_expr_blocks(*e.right, ctx, counter, scope_hash);
             syn::Expr::Assign(e)
         }
         // 字面量集合：元素/字段递归
         syn::Expr::Array(mut e) => {
             for el in e.elems.iter_mut() {
                 let a = std::mem::replace(el, syn::parse_quote!(0));
-                *el = inject_expr_blocks(a, ctx, counter);
+                *el = inject_expr_blocks(a, ctx, counter, scope_hash);
             }
             syn::Expr::Array(e)
         }
         syn::Expr::Tuple(mut e) => {
             for el in e.elems.iter_mut() {
                 let a = std::mem::replace(el, syn::parse_quote!(0));
-                *el = inject_expr_blocks(a, ctx, counter);
+                *el = inject_expr_blocks(a, ctx, counter, scope_hash);
             }
             syn::Expr::Tuple(e)
         }
         syn::Expr::Repeat(mut e) => {
-            *e.expr = inject_expr_blocks(*e.expr, ctx, counter);
-            *e.len = inject_expr_blocks(*e.len, ctx, counter);
+            *e.expr = inject_expr_blocks(*e.expr, ctx, counter, scope_hash);
+            *e.len = inject_expr_blocks(*e.len, ctx, counter, scope_hash);
             syn::Expr::Repeat(e)
         }
         syn::Expr::Struct(mut e) => {
             for f in e.fields.iter_mut() {
                 let fe = std::mem::replace(&mut f.expr, syn::parse_quote!(0));
-                f.expr = inject_expr_blocks(fe, ctx, counter);
+                f.expr = inject_expr_blocks(fe, ctx, counter, scope_hash);
             }
             syn::Expr::Struct(e)
         }
         // 索引/字段访问：base 递归
         syn::Expr::Index(mut e) => {
-            *e.expr = inject_expr_blocks(*e.expr, ctx, counter);
-            *e.index = inject_expr_blocks(*e.index, ctx, counter);
+            *e.expr = inject_expr_blocks(*e.expr, ctx, counter, scope_hash);
+            *e.index = inject_expr_blocks(*e.index, ctx, counter, scope_hash);
             syn::Expr::Index(e)
         }
         syn::Expr::Field(mut e) => {
-            *e.base = inject_expr_blocks(*e.base, ctx, counter);
+            *e.base = inject_expr_blocks(*e.base, ctx, counter, scope_hash);
             syn::Expr::Field(e)
         }
         // 循环/块变体：体注入
         syn::Expr::Loop(mut e) => {
-            e.body = inject_block(e.body, ctx, counter);
+            e.body = inject_block(e.body, ctx, counter, scope_hash);
             syn::Expr::Loop(e)
         }
         // async 块排除（延迟恢复——await 期间事件循环继续，guard 会悬挂在
         // thread_local 栈上串扰其他窗口组合；与 async 闭包排除一致）
         syn::Expr::Async(e) => syn::Expr::Async(e),
         syn::Expr::Unsafe(mut e) => {
-            e.block = inject_block(e.block, ctx, counter);
+            e.block = inject_block(e.block, ctx, counter, scope_hash);
             syn::Expr::Unsafe(e)
         }
         syn::Expr::TryBlock(mut e) => {
-            e.block = inject_block(e.block, ctx, counter);
+            e.block = inject_block(e.block, ctx, counter, scope_hash);
             syn::Expr::TryBlock(e)
         }
         _ => expr, // 字面量/路径/宏调用等无子或不可见（宏内容不注入——接受）
@@ -321,54 +538,32 @@ pub fn composable(_attr: TokenStream, item: TokenStream) -> TokenStream {
         })
         .expect("#[composable] 函数必须有一个名为 `ctx` 的参数（如 `ctx: &mut ComposeCtx`）");
 
-    // 限制：v1 不支持提前 return
-    if let ReturnType::Default = sig.output {
-        // ok（无返回）
-    } else {
-        // 有返回类型：仅当返回 ()（impl Trait 等复杂情况不支持）
-        // 简化：非 () 返回 → panic（组合函数应为副作用）
-        match &sig.output {
-            ReturnType::Type(_, ty) => {
-                let is_unit = matches!(&**ty, syn::Type::Tuple(t) if t.elems.is_empty());
-                if !is_unit {
-                    panic!("#[composable] 函数暂不支持返回值（v1：组合函数应为副作用，返回 ()）");
-                }
-            }
-            _ => {}
-        }
-    }
-
-    // 提取函数体语句：尾表达式（含分号的普通语句）统一转带分号语句，
-    // 保证 end_scope 能安全插在所有语句之后（scope 覆盖整个函数体，含原尾表达式）。
+    // 提取函数体语句（RAII scope guard 支持返回值——函数体保持原样，
+    // 尾表达式自然返回；guard 声明在开头、函数返回时最后 drop）
     let mut stmts: Vec<Stmt> = block.stmts.clone();
-    // pop 最后一条：表达式（Stmt::Expr，可能带分号）或 let/item 语句
     let tail = stmts.pop();
 
-    // 函数级源码哈希：完整签名 token（含参数类型）+ 源码行号——降低跨模块
+    // 函数级源码哈希：完整签名 token（含参数类型）——降低跨模块
     // 同名 composable 的 scope key 碰撞（仅函数名哈希在组件库多模块场景易冲突）
     let sig_str = quote!(#sig).to_string();
     // proc_macro2 的 Span 无 line()（stable）——仅用签名 token（含参数类型）
     // 区分：不同模块同签名同名的 composable 仍可能碰撞（罕见——slot 位置兜底）
     let scope_hash = fnv64(&sig_str);
-    // 开头注入 start_scope_keyed（函数级 key 稳定）
-    let start = quote! { let __composable_scope = #ctx_ident.start_scope_keyed(#scope_hash); };
-    // 结尾注入 end_scope（在所有语句之后——scope 覆盖整个函数体）
-    let end = quote! { #ctx_ident.end_scope(); };
+    // 开头注入 RAII scope guard（Drop 自动 end_scope——支持返回值/提前 return）
+    let start = quote! { let __composable_scope = #ctx_ident.start_scope_guarded(#scope_hash); };
 
     let mut body_stmts = stmts;
-    if let Some(Stmt::Expr(expr, _)) = tail {
-        // 尾表达式补分号转普通语句（组合函数返回 ()，丢弃尾值合法）
-        body_stmts.push(Stmt::Expr(expr, Some(Default::default())));
-    } else if let Some(o) = tail {
-        body_stmts.push(o); // let/item 原样放回
+    if let Some(o) = tail {
+        body_stmts.push(o); // 尾表达式/let/item 原样放回——返回值自然保留
     }
-    // 语句 id 注入（每条语句 push_stmt/pop_stmt——语句级 key 稳定）
+    // 语句 id 注入（每条语句 push_stmt/pop_stmt——语句级 key 稳定；
+    // 智能注入：只注入含 ctx 组合调用的语句；remember/next_key 编译期替换）
     let mut stmt_counter: u32 = 0;
-    let injected = inject_stmt_ids(body_stmts, &ctx_ident, &mut stmt_counter);
+    let injected = inject_stmt_ids(body_stmts, &ctx_ident, &mut stmt_counter, scope_hash);
 
     let mut new_stmts = vec![syn::parse2::<Stmt>(start).unwrap()];
     new_stmts.extend(injected);
-    new_stmts.push(syn::parse2::<Stmt>(end).unwrap());
+    // 不再注入 end_scope——由 __composable_scope guard drop 自动执行
 
     let new_block = syn::Block {
         brace_token: block.brace_token,
@@ -442,17 +637,14 @@ fn transform_root_closure(input: proc_macro::TokenStream) -> proc_macro2::TokenS
     /// 已知限制：scope hash = fnv64(签名 token)（不含模块路径）——跨模块同名同签名
     /// #[composable] 函数在**同一组合位置交替调用**（if 分支 A/B）时 key 确定性碰撞。
     /// 位置隔离（不同调用位置不串位）兜底大部分场景；该交替场景罕见，文档化接受。
-    let mut stmt_counter: u32 = 0;
-    let injected = inject_stmt_ids(body_stmts, &ctx_ident, &mut stmt_counter);
-
     // 根 scope key：固定常量（应用唯一根入口——无跨模块碰撞问题）
     let root_hash = 0xA11C_E0F0_0000_0001u64; // app_root 根入口专用（完整 64 位）
-    let start = quote! { let __app_root_scope = #ctx_ident.start_scope_keyed(#root_hash); };
-    let end = quote! { #ctx_ident.end_scope(); };
+    let mut stmt_counter: u32 = 0;
+    let injected = inject_stmt_ids(body_stmts, &ctx_ident, &mut stmt_counter, root_hash);
+    let start = quote! { let __app_root_scope = #ctx_ident.start_scope_guarded(#root_hash); };
 
     let mut new_stmts = vec![syn::parse2::<Stmt>(start).unwrap()];
     new_stmts.extend(injected);
-    new_stmts.push(syn::parse2::<Stmt>(end).unwrap());
 
     let new_block = syn::Block {
         brace_token,
@@ -485,7 +677,7 @@ mod inject_tests {
             Column::new().build(ctx, |ctx| { Text::new("a").build(ctx); });
         });
         let mut counter = 0;
-        let stmts = inject_stmt_ids(body.stmts, &ctx_ident(), &mut counter);
+        let stmts = inject_stmt_ids(body.stmts, &ctx_ident(), &mut counter, 0x1234);
         let out = quote!(#(#stmts)*).to_string();
         let n = out.matches("enter_stmt").count();
         assert!(n >= 2, "顶层 + content 闭包体都应注入 enter_stmt（实际 {n}）——嵌套注入丢失");
@@ -502,7 +694,7 @@ mod inject_tests {
             };
         });
         let mut counter = 0;
-        let stmts = inject_stmt_ids(body.stmts, &ctx_ident(), &mut counter);
+        let stmts = inject_stmt_ids(body.stmts, &ctx_ident(), &mut counter, 0x1234);
         let out = quote!(#(#stmts)*).to_string();
         let n = out.matches("enter_stmt").count();
         assert!(n >= 3, "顶层（带分号非尾）+ if 两分支都应注入（实际 {n}）");
@@ -515,7 +707,7 @@ mod inject_tests {
             let x = Column::new().build(ctx, |ctx| { Text::new("a").build(ctx); });
         });
         let mut counter = 0;
-        let stmts = inject_stmt_ids(body.stmts, &ctx_ident(), &mut counter);
+        let stmts = inject_stmt_ids(body.stmts, &ctx_ident(), &mut counter, 0x1234);
         let out = quote!(#(#stmts)*).to_string();
         let n = out.matches("enter_stmt").count();
         assert!(n >= 2, "let init 内 content 闭包应注入（实际 {n}）");
@@ -529,15 +721,31 @@ mod inject_tests {
             v
         });
         let mut counter = 0;
-        let stmts = inject_stmt_ids(body.stmts, &ctx_ident(), &mut counter);
+        let stmts = inject_stmt_ids(body.stmts, &ctx_ident(), &mut counter, 0x1234);
         let out = quote!(#(#stmts)*).to_string();
-        // 尾表达式 v 不包裹——但 let 的 init 有 guard
-        assert!(out.contains("enter_stmt"), "let init 应有 guard");
+        // 智能注入：let v = if c {...} 为纯计算（无 ctx）——不注入（零 guard）
+        assert!(!out.contains("enter_stmt"), "纯计算语句不应注入（实际含 enter_stmt）");
     }
 }
 
 #[cfg(test)]
 mod inject_tests_extra {
+
+    /// 从展开输出提取 remember_at_key 的编译期 key（quote 美化带空格——
+    /// split "remember_at_key" 后每段以 " (数字" 开头）
+    fn extract_keys(out: &str) -> Vec<u64> {
+        out.split("remember_at_key")
+            .skip(1)
+            .filter_map(|seg| {
+                let digits: String = seg.chars()
+                    .skip_while(|c| !c.is_ascii_digit())
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect();
+                digits.parse().ok()
+            })
+            .collect()
+    }
+
     use super::*;
 
     fn ctx_ident() -> syn::Ident {
@@ -546,7 +754,7 @@ mod inject_tests_extra {
 
     fn enter_count(body: syn::Block) -> usize {
         let mut counter = 0;
-        let stmts = inject_stmt_ids(body.stmts, &ctx_ident(), &mut counter);
+        let stmts = inject_stmt_ids(body.stmts, &ctx_ident(), &mut counter, 0x1234);
         quote!(#(#stmts)*).to_string().matches("enter_stmt").count()
     }
 
@@ -591,6 +799,70 @@ mod inject_tests_extra {
             let Some(x) = opt else { return; };
         });
         let n = enter_count(body);
-        assert!(n >= 1, "let init 应有 guard（实际 {n}）");
+        // 智能注入：let-else 纯计算（无 ctx）——不注入
+        assert_eq!(n, 0, "纯计算 let-else 不应注入（实际 {n}）");
+    }
+
+    /// 智能注入：纯计算语句不注入（零 guard）——只注入含 ctx 组合调用的语句
+    #[test]
+    fn test_smart_inject_skips_pure_calc() {
+        let body: syn::Block = syn::parse_quote!({
+            let doubled = w * 2.0;
+            let label = format!("{:.1}", doubled);
+            Text::new("x").build(ctx);
+            let a = ctx.remember(|| 0);
+        });
+        let mut counter = 0;
+        let stmts = inject_stmt_ids(body.stmts, &ctx_ident(), &mut counter, 0x1234);
+        let out = quote!(#(#stmts)*).to_string();
+        assert_eq!(out.matches("enter_stmt").count(), 2,
+            "纯计算语句不应注入——只注入含 ctx 的语句（实际 enter_stmt={}）", out.matches("enter_stmt").count());
+        assert!(!out.contains("let doubled = {"), "纯计算 let 不应被 guard 块包裹");
+    }
+
+    /// remember 替换为编译期 key 版本（remember_at_key——不同语句不同 key）
+    #[test]
+    fn test_remember_replaced_with_compile_key() {
+        let body: syn::Block = syn::parse_quote!({
+            ctx.remember(|| 0);
+            ctx.remember(|| 1);
+        });
+        let mut counter = 0;
+        let stmts = inject_stmt_ids(body.stmts, &ctx_ident(), &mut counter, 0x1234);
+        let out = quote!(#(#stmts)*).to_string();
+        assert_eq!(out.matches("remember_at_key").count(), 2, "两个 remember 都应替换");
+        assert!(!out.contains("ctx.remember("), "不应残留未替换的 ctx.remember(");
+        // 两个 key 不同（不同语句 id）
+        let keys = extract_keys(&out);
+        assert_eq!(keys.len(), 2, "应解析出 2 个 key（实际 {:?}）", keys);
+        assert_ne!(keys[0], keys[1], "不同语句的 remember key 必须不同");
+    }
+
+    /// 同语句内两个 remember——key 不同（语句内序号区分）
+    #[test]
+    fn test_same_stmt_remember_keys_distinct() {
+        let body: syn::Block = syn::parse_quote!({
+            let (a, b) = (ctx.remember(|| 0), ctx.remember(|| 1));
+        });
+        let mut counter = 0;
+        let stmts = inject_stmt_ids(body.stmts, &ctx_ident(), &mut counter, 0x1234);
+        let out = quote!(#(#stmts)*).to_string();
+        let keys = extract_keys(&out);
+        assert_eq!(keys.len(), 2, "应解析出 2 个 key（实际 {:?}）", keys);
+        assert_ne!(keys[0], keys[1], "同语句内两个 remember 序号不同 → key 不同");
+    }
+
+    /// content 闭包内的 remember 也替换（用闭包体语句 id——与顶层 key 不同）
+    #[test]
+    fn test_closure_remember_replaced() {
+        let body: syn::Block = syn::parse_quote!({
+            Column::new().build(ctx, |ctx| {
+                ctx.remember(|| 0);
+            });
+        });
+        let mut counter = 0;
+        let stmts = inject_stmt_ids(body.stmts, &ctx_ident(), &mut counter, 0x1234);
+        let out = quote!(#(#stmts)*).to_string();
+        assert!(out.contains("remember_at_key"), "content 闭包内的 remember 也应替换");
     }
 }
