@@ -184,11 +184,59 @@ fn pick_label(ctx: &mut ComposeCtx, flag: bool) -> String {
 - 现有宏限制"不支持返回值"（lib.rs:324）被解除
 - 顺带修复：显式 `end_scope` 在提前 return 时泄漏 scope 的隐患
 
-### 4.5 编译期检查（宏层）
+### 4.5 智能注入（减少注入数量/展开膨胀）
+
+**原则：只对"含 ctx 组合调用"的语句注入 `enter_stmt`**——纯计算语句零 guard、零展开：
+
+```rust
+fn stmt_uses_ctx(stmt: &Stmt, ctx_ident: &Ident) -> bool {
+    // 递归遍历语句 AST：
+    //  - Expr::MethodCall: receiver 是 ctx_ident（ctx.remember(...)）✓
+    //  - Expr::Call: 参数含 ctx_ident（foo(ctx)、build(ctx, ...)）✓
+    //  - Expr::Closure: 参数名 == ctx_ident（content 闭包——体内递归检测）✓
+    //  - 递归进 if/for/while/match/block 分支
+}
+```
+
+```rust
+// 注入（含 ctx）——enter_stmt(id)
+{
+    let __g = ctx.enter_stmt(3);
+    TextField::new(...).build(ctx);
+}
+{
+    let __g = ctx.enter_stmt(9);
+    let a = ctx.remember(|| 0);      // let init 内含 ctx → 注入
+}
+
+// 不注入（纯计算）——零 guard、零展开
+let w = width - 32.0;
+let label = format!("{} items", count);
+let cfg = Config::new();
+```
+
+**收益**：纯计算密集函数（数据准备）零注入；UI 密集函数全注入（语句都含 build/remember）——展开体积与运行时开销随"实际组合调用数"而非"语句数"。
+
+**边界与风险**（判定偏保守，方向安全）：
+
+| 情况 | 判定 | 结果 |
+|---|---|---|
+| `let c = ctx; c.remember(...)`（别名） | 漏判（`c.remember` 无 ctx_ident 名） | 无语句 id → 运行期 `try_stable_base` **panic 兜底**（不静默错位） |
+| `foo(ctx)`（自定义函数内部调组合 API） | 参数含 ctx → 注入 ✓（保守） | 无害（多一个 guard） |
+| `let g = || { ctx.remember(...) }` | 闭包体含 ctx → 注入 ✓（递归） | 无害 |
+| 普通同名变量（非 ComposeCtx） | 名匹配 → 注入 | 无害（多一个 guard） |
+
+**方向性**：**漏判方向是 panic（安全），多注入方向无害（性能）**——判定无需精确。
+
+**与两种模式结合**：
+- `#[composable]`：智能全量——scope + 含 ctx 语句注入 + remember/next_key 扫描替换（替换只发生在含 ctx 的语句，天然对齐）
+- `#[composable_keyed]` + `keyed_stmt!`：显式标记为主——可加自动检测选项（`#[composable_keyed(auto)]`：含 ctx 语句自动注入）
+
+### 4.6 编译期检查（宏层）
 
 `#[composable_keyed]` 宏扫描函数体——找 `keyed_stmt!` 未覆盖的**含 ctx 调用语句**（语句 AST 中出现 ctx_ident 的方法调用/参数）——未标记且含 ctx → `syn::Error::compile_error!()`（编译期报错，早于运行期 panic）。纯计算语句（不含 ctx）不检查、不注入。
 
-### 4.6 panic 语义（fail-fast）
+### 4.7 panic 语义（fail-fast）
 
 无法获得稳定 key 的调用点 **panic** 是特性而非缺陷：
 
