@@ -310,7 +310,13 @@ impl<T: ...> LaunchedEffect<T> {
 | effect（`LaunchedEffect::build`/`DisposableEffect::build`/`remember_coroutine_scope`/`observe_watch`/`attach_cleanup`） | 内部 remember/next_key |
 | 用户自定义的"组合辅助函数"（内部用 ctx API） | 建议标记 |
 
-**用户可见差异**：Compose 不标 = 编译错；winia 不标 = 能跑但 key 链不完整（漂移风险）——新设计下推荐标，最终（可选）收紧为"组合函数必须标记"（编译期强制，对齐 Compose）。
+**用户可见差异**：Compose 不标 = 编译错；winia 不标 = 能跑但 key 链不完整（漂移风险）——新设计下推荐标。
+
+**"必须标记"的强制力度（定稿）**：
+- **不采用编译期强制**（Rust 无 Compose 编译器插件；token 类型级机制 API 破坏大、报错不友好——评估为过度设计）
+- **运行时强制**：ctx API 检测 STMT_STACK 空 → panic（fail-fast，可操作信息）——现有机制
+- **宏内静态检查**：`#[composable]` 宏检查自身函数体内未注入语句的 ctx API 调用 → `compile_error!()`——覆盖宏函数内场景（被调用的普通函数内部由运行时兜底）
+- "组合函数必须标记"作为**规范与文档约定**，配合运行时 panic 兜底
 
 ---
 
