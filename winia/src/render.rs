@@ -687,7 +687,9 @@ fn render_pass1(
                                 if *role == crate::ui::text_field::TextFieldSlotRole::Label)
                         });
                         if !is_label { return None; }
-                        let (lx, ly) = (parent_x + cn.position.x, parent_y + cn.position.y);
+                        // ⚠ 子节点 position 相对**容器**（本节点）——用本节点
+                        // 绝对坐标 x/y（parent_x 是父层坐标——用错缺口画偏）
+                        let (lx, ly) = (x + cn.position.x, y + cn.position.y);
                         if ly >= container_rect.top { return None; } // 展开态：无缺口
                         Some(Rect::new(
                             lx - 4.0, ly,
