@@ -481,13 +481,17 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
             match roles[i] {
                 TextFieldSlotRole::Label => {
                     let (s, _) = measure_node(nodes, policies, c, text_c(constraints.max_width));
-                    // 展开：输入位垂直居中；悬浮：内容区顶部**上方**——
-                    // 锚点按变体（M3 specs）：
+                    // 展开：**垂直居中于容器**（M3 specs：Label alignment
+                    // (unpopulated) = vertically centered——容器中心；源码
+                    // startY = CenterVertically.align(label.height, height)）；
+                    // 悬浮：内容区顶部**上方**——锚点按变体：
                     // - Filled：label 顶对齐容器 8dp（内容区顶 24 → 偏移 -16）
                     // - Outlined：label 中心跨边框线（顶对齐容器 -8 → 偏移 -24）
                     // ⚠ policy 收到的是扣除 padding 后的约束——内容区顶部即
                     // 容器 padding 边界
-                    let expanded_y = (input_size.height - s.height).max(0.0) / 2.0;
+                    let content_h = if constraints.max_height < 1.0e9 { constraints.max_height } else { input_size.height };
+                    let container_center = (content_h + self.pad_bottom - self.pad_top) / 2.0;
+                    let expanded_y = container_center - s.height / 2.0;
                     let float_y = -(s.height / 2.0)
                         - match self.variant {
                             Some(TextFieldVariant::Filled) => 8.0,
