@@ -324,20 +324,26 @@ let base = match self.try_stable_base() {
 ## 9. 收益 / 代价 / 已知限制
 
 ### 收益
-- 运行时零 key 身份分配——"帧内序号漂移冲突"类 bug 根除
+- 运行时零 key 身份分配——"帧内序号漂移冲突"类 bug 根除（text-field-v2 持续重组/placeholder 0×0 即此类）
 - 结构变化 = 状态重置（Compose 语义，可预测、不冲突）
-- 未覆盖场景立即 panic（编译期或运行期），不静默错位
+- 未覆盖场景立即 panic（编译期或运行期），不静默错位——fail-fast 带可操作信息
 - 编译期 key 可审计/缓存（同一源码产物固定）
+- **智能注入**：展开体积/运行时开销随"实际组合调用数"而非"语句数"——纯计算函数零注入
+- **单语句模式**（`#[composable_keyed]` + `keyed_stmt!`）：轻量函数按需标记，不强制全量注入
+- **支持返回值函数**（RAII scope guard）：现有宏"不支持返回值"限制解除，顺带修复提前 return 的 scope 泄漏
 
 ### 代价
-- 宏复杂度上升（扫描替换 remember/next_key）
+- 宏复杂度上升：扫描替换 remember/next_key + `stmt_uses_ctx` 判定 + 两种注入模式（`#[composable]` / `#[composable_keyed]` + `keyed_stmt!`）
 - 组件方法宏化——展开膨胀、编译时间上升
-- 所有组件 build 需加 `#[composable]`（迁移工作）
+- 所有组件 build 需加 `#[composable]`（迁移工作：Button/Card/Checkbox/TextField 等）
+- content 闭包参数名成为显式契约（`#[composable(c)]` 要求 `|c|`）——用户需按规范写，否则 panic
 
 ### 已知限制
-- 运行时动态调用 `ctx.remember`/`next_key`（如闭包内间接调用、函数指针）无法被宏扫描——必须 `ctx.key()` 包裹或进宏函数
+- 运行时动态调用 `ctx.remember`/`next_key`（闭包内间接调用、函数指针、别名 `let c = ctx`）无法被宏扫描——**运行期 panic 兜底**（fail-fast，不静默错位）
 - `keyed_stmt!` 的 id 用扫描顺序——插入/删除标记语句平移后续 id（漂移 = 状态重置，不冲突）
 - 嵌套循环内层语句的 seq 混淆（现有文档化限制）——需显式 `ctx.key()`
+- content 闭包识别依赖参数名匹配——`#[composable]` 内写 `|x|` 的非 build 闭包不被注入（误写 → panic，符合 fail-fast 语义）
+- 智能注入的别名漏判（`let c = ctx; c.remember(...)`）→ panic——建议规范写法避免
 
 ---
 
