@@ -317,27 +317,42 @@ Composer::compose()
     └── take_recorded_deps() → 更新 slot_deps
 ```
 
-### 5.3 remember 的持久化陷阱
+### 5.3 稳定 Key — remember 与节点复用的生命线
 
-`remember` 的 key 由 `remember_counter` 自动递增生成。如果同一 composable 在不同分支中的 remember 次数不同：
+**key 的生成机制**（`composer.rs` `next_group_key` / `next_remember_key`）：
+
+- **base = 语句 id**：`#[composable]` 宏在编译期按源码结构注入语句编号（`STMT_STACK`）——同一调用点在结构变化时 key 不漂移（对标 Compose 编译器调用点 key）。
+- **序号（counter）**：同 base 的第 N 次调用（for 循环迭代 / 同一语句多次调用）用帧内计数器区分——**每帧重置**，跨帧同结构 key 恒定。
+- **组 key 与 remember key 使用独立计数器**（`path_counters` vs `remember_path_counters`）。
+
+**⚠ 非宏组件的致命陷阱**：`TextField::build` 等**不是** `#[composable]` 函数的组件，内部 `ctx.next_key()` / `ctx.remember()` 的 base 来自**调用点**（外层宏函数的语句 id）——所有内部调用共享同一 base，仅靠**序号**区分。**条件分支（if）切换会平移序号流**：
 
 ```rust
-// ❌ 每次 show_alt 变化，这个 remember 的 key 偏移
-fn my_composable(ctx: &mut ComposeCtx) {
-    let show_window = ctx.remember(|| false);
-    if show_alt.get() {
-        ctx.remember(|| "alt");  // 消耗 key
-    }
-    // 这里 remember 的 key 在 show_alt=true/false 时不同！
-    let created_id = ctx.remember(|| 0u64);
+// ❌ show_placeholder 变化时，后续所有 key 序号平移
+if show_placeholder {
+    ctx.remember(|| State::new(0.0));   // 消耗序号
+    ctx.start_restartable_group(ctx.next_key(), ...);  // 消耗序号
 }
+ctx.start_restartable_group(ctx.next_key(), ...);  // ← key 在 show_placeholder 切换时不同！
 ```
 
-**修复**: `remember_at_key(key, init)` 使用固定 key：
+key 漂移的后果：remember 状态错位（拿到别的 State）、节点复用串位（复用了错误槽位的缓存——**测量缓存折叠返回旧尺寸，渲染不可见**）。
+
+**✅ 修复：显式 `ctx.key(id, f)`** ——在闭包内所有 key 的 base 固定为 id 的哈希：
 
 ```rust
-let created_id = ctx.remember_at_key(u64::MAX, || 0u64);
+ctx.key(TextFieldSlotRole::Placeholder, |ctx| {
+    let alpha = ctx.remember(|| State::new(0.0)).get();  // key 稳定
+    ctx.start_restartable_group(ctx.next_key(), ...);    // key 稳定
+});
 ```
+
+**实战教训**（text-field-v2）：placeholder 的 `show_placeholder` 条件切换平移序号流 → 槽位组 key 漂移 → placeholder 组复用了空输入节点的 `[0,0]` 测量缓存 → 快速焦点切换后 placeholder 渲染不可见。修复：TextField 内部**所有槽位**（label/placeholder/prefix/suffix/leading/trailing/input）用 `ctx.key(role, ...)` 包裹。
+
+**规则**：
+1. 非宏组件内部、可能随条件切换的 `next_key`/`remember` 一律用 `ctx.key(id, ...)` 包裹
+2. 分支内 remember 的 State 跨分支保留时，remember 调用点必须位置固定（无 if 包裹）或显式 key
+3. 宏函数（`#[composable]`）内普通顺序调用无需显式 key（语句 id 已稳定）
 
 ---
 

@@ -350,7 +350,7 @@ impl TextFieldColors {
 /// TextField 容器子节点角色（text-field-v2 容器化——TextFieldLayout
 /// policy 按角色布局；构建顺序固定：leading → label → placeholder →
 /// prefix → input → suffix → trailing，缺省跳过）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TextFieldSlotRole {
     /// 前置图标（M3 leadingIcon——12dp 边距垂直居中，与文本 16dp）
     Leading,
@@ -1457,74 +1457,82 @@ impl TextField {
         // - prefix/suffix：16sp + affix 色（disabled 38%）
         // - leading/trailing icon：内容色 = on_surface_variant（disabled 38%；
         //   trailing 错误态 error 色）
+        // ⚠ 全部槽位用**显式 ctx.key**（不依赖共享序号流）：show_placeholder
+        // 条件切换（if 分支插入/移除 remember+组）会平移后续 next_key 序号——
+        // 槽位组 key 漂移 → 复用错误缓存（placeholder 测量 0×0 渲染不可见）
         macro_rules! slot_wrap {
             ($role:expr, $content:expr) => {{
-                let sk = ctx.next_key();
-                ctx.start_restartable_group(
-                    sk,
-                    Modifier::new().text_field_slot($role),
-                    crate::layout::BoxLayout::new(),
-                );
-                match $role {
-                    TextFieldSlotRole::Prefix | TextFieldSlotRole::Suffix => {
-                        let affix_color = if !self.enabled { colors.disabled_affix } else { colors.affix };
-                        let style = crate::ui::text::TextStyle::new()
-                            .font_size(crate::unit::TextUnit::Sp(crate::unit::Sp(16.0)))
-                            .color(affix_color);
-                        crate::ui::text::LOCAL_TEXT_STYLE.provides(style, || $content(ctx));
+                ctx.key($role, |ctx| {
+                    let sk = ctx.next_key();
+                    ctx.start_restartable_group(
+                        sk,
+                        Modifier::new().text_field_slot($role),
+                        crate::layout::BoxLayout::new(),
+                    );
+                    match $role {
+                        TextFieldSlotRole::Prefix | TextFieldSlotRole::Suffix => {
+                            let affix_color = if !self.enabled { colors.disabled_affix } else { colors.affix };
+                            let style = crate::ui::text::TextStyle::new()
+                                .font_size(crate::unit::TextUnit::Sp(crate::unit::Sp(16.0)))
+                                .color(affix_color);
+                            crate::ui::text::LOCAL_TEXT_STYLE.provides(style, || $content(ctx));
+                        }
+                        TextFieldSlotRole::Leading | TextFieldSlotRole::Trailing => {
+                            let icon_color = if !self.enabled {
+                                if $role == TextFieldSlotRole::Leading { colors.leading_icon_disabled }
+                                else { colors.trailing_icon_disabled }
+                            } else if $role == TextFieldSlotRole::Trailing && self.is_error {
+                                colors.trailing_icon_error
+                            } else {
+                                colors.leading_icon_focused
+                            };
+                            crate::ui::theme::WiniaTheme::with_content_color(icon_color, ctx, |c| $content(c));
+                        }
+                        _ => $content(ctx),
                     }
-                    TextFieldSlotRole::Leading | TextFieldSlotRole::Trailing => {
-                        let icon_color = if !self.enabled {
-                            if $role == TextFieldSlotRole::Leading { colors.leading_icon_disabled }
-                            else { colors.trailing_icon_disabled }
-                        } else if $role == TextFieldSlotRole::Trailing && self.is_error {
-                            colors.trailing_icon_error
-                        } else {
-                            colors.leading_icon_focused
-                        };
-                        crate::ui::theme::WiniaTheme::with_content_color(icon_color, ctx, |c| $content(c));
-                    }
-                    _ => $content(ctx),
-                }
-                ctx.end_restartable_group();
+                    ctx.end_restartable_group();
+                });
             }};
         }
         if let Some(icon) = self.leading_icon {
             slot_wrap!(TextFieldSlotRole::Leading, icon);
         }
         if let Some(label) = self.label {
-            let sk = ctx.next_key();
-            ctx.start_restartable_group(
-                sk,
-                Modifier::new().text_field_slot(TextFieldSlotRole::Label),
-                crate::layout::BoxLayout::new(),
-            );
-            // M3 默认 label 样式经 LOCAL_TEXT_STYLE 提供（闭包内 Text 默认
-            // 字号 = 展开 16sp ↔ 悬浮 12sp 动画插值；色 = 状态色）：
-            // - `label_progress.get()` 在组内注册组合依赖——动画推进 →
-            //   组重组 → 闭包重跑 → current() 读到新字号（字号动画）
-            // - 闭包内 Text 显式 .font_size()/.color() 可覆盖
-            let p = label_progress.get();
-            let label_size = 16.0 + (12.0 - 16.0) * p;
-            let label_color = if !self.enabled { colors.label_disabled }
-                else if self.is_error { colors.label_error }
-                else { colors.label_unfocused };
-            let label_style = crate::ui::text::TextStyle::new()
-                .font_size(crate::unit::TextUnit::Sp(crate::unit::Sp(label_size)))
-                .color(label_color);
-            crate::ui::text::LOCAL_TEXT_STYLE.provides(label_style, || label(ctx));
-            ctx.end_restartable_group();
+            ctx.key(TextFieldSlotRole::Label, |ctx| {
+                let sk = ctx.next_key();
+                ctx.start_restartable_group(
+                    sk,
+                    Modifier::new().text_field_slot(TextFieldSlotRole::Label),
+                    crate::layout::BoxLayout::new(),
+                );
+                // M3 默认 label 样式经 LOCAL_TEXT_STYLE 提供（闭包内 Text 默认
+                // 字号 = 展开 16sp ↔ 悬浮 12sp 动画插值；色 = 状态色）：
+                // - `label_progress.get()` 在组内注册组合依赖——动画推进 →
+                //   组重组 → 闭包重跑 → current() 读到新字号（字号动画）
+                // - 闭包内 Text 显式 .font_size()/.color() 可覆盖
+                let p = label_progress.get();
+                let label_size = 16.0 + (12.0 - 16.0) * p;
+                let label_color = if !self.enabled { colors.label_disabled }
+                    else if self.is_error { colors.label_error }
+                    else { colors.label_unfocused };
+                let label_style = crate::ui::text::TextStyle::new()
+                    .font_size(crate::unit::TextUnit::Sp(crate::unit::Sp(label_size)))
+                    .color(label_color);
+                crate::ui::text::LOCAL_TEXT_STYLE.provides(label_style, || label(ctx));
+                ctx.end_restartable_group();
+            });
         }
-        if show_placeholder && has_visual {
+        if has_visual {
             if let Some(ph) = self.placeholder {
-                // 淡入透明度动画（0 → 1，M3 placeholderAlpha 语义：聚焦空内容
-                // 时淡入——每次显示都从 0 起跑；alpha.get() 在组内注册依赖
-                // 驱动重组。⚠ 淡出（show_placeholder → false）闭包不再构建，
-                // 直接消失）
+                // M3 placeholderAlpha：淡入**淡出**双向（150ms）——alpha 目标
+                // 随显示状态（显示 1 / 隐藏 0）；构建条件 = 显示中或淡出中
+                // （alpha > 0）——淡出动画期间仍构建（透明度渐低），alpha
+                // 归零后移除。⚠ remember 位置固定（has_visual 恒定不移位）、
+                // 组用显式 ctx.key——key 稳定
                 let alpha = ctx.remember(|| crate::core::state::State::new(0.0)).get();
                 crate::animation::push_animatable(
                     alpha.clone(),
-                    1.0,
+                    if show_placeholder { 1.0 } else { 0.0 },
                     crate::animation::AnimationSpec::Tween(
                         crate::animation::TweenSpec::new(
                             std::time::Duration::from_millis(150),
@@ -1532,27 +1540,36 @@ impl TextField {
                         )
                     ),
                 );
-                let sk = ctx.next_key();
-                ctx.start_restartable_group(
-                    sk,
-                    Modifier::new().text_field_slot(TextFieldSlotRole::Placeholder),
-                    crate::layout::BoxLayout::new(),
-                );
-                // M3 默认 placeholder 样式：16sp + on_surface_variant（disabled
-                // 38%）+ 淡入 alpha（M3 placeholderAlpha 语义）
-                let a = alpha.get();
-                let pc = if !self.enabled { colors.disabled_placeholder } else { colors.placeholder };
-                let style = crate::ui::text::TextStyle::new()
-                    .font_size(crate::unit::TextUnit::Sp(crate::unit::Sp(16.0)))
-                    .color(crate::modifier::Color::from_argb((255.0 * a) as u8, pc.r, pc.g, pc.b));
-                crate::ui::text::LOCAL_TEXT_STYLE.provides(style, || ph(ctx));
-                ctx.end_restartable_group();
+                // 构建条件：alpha.get() 注册依赖——淡出动画推进 → 重组 →
+                // 条件重评估（alpha=0 时停止构建移除节点）
+                let alpha_now = alpha.get();
+                if show_placeholder || alpha_now > 0.001 {
+                    ctx.key(TextFieldSlotRole::Placeholder, |ctx| {
+                        let sk = ctx.next_key();
+                        ctx.start_restartable_group(
+                            sk,
+                            Modifier::new().text_field_slot(TextFieldSlotRole::Placeholder),
+                            crate::layout::BoxLayout::new(),
+                        );
+                        // M3 默认 placeholder 样式：16sp + on_surface_variant
+                        // （disabled 38%）+ 淡入/淡出 alpha
+                        let a = alpha.get();
+                        let pc = if !self.enabled { colors.disabled_placeholder } else { colors.placeholder };
+                        let style = crate::ui::text::TextStyle::new()
+                            .font_size(crate::unit::TextUnit::Sp(crate::unit::Sp(16.0)))
+                            .color(crate::modifier::Color::from_argb((255.0 * a) as u8, pc.r, pc.g, pc.b));
+                        crate::ui::text::LOCAL_TEXT_STYLE.provides(style, || ph(ctx));
+                        ctx.end_restartable_group();
+                    });
+                }
             }
         }
         if let Some(prefix) = self.prefix {
             slot_wrap!(TextFieldSlotRole::Prefix, prefix);
         }
-        // 输入子节点（原 leaf 逻辑）
+        // 输入子节点（原 leaf 逻辑）——显式 ctx.key 稳定（show_placeholder
+        // 切换不平移 key 流——输入节点/光标状态不因结构变化重建）
+        ctx.key(TextFieldSlotRole::Input, |ctx| {
         let input_key = ctx.next_key();
         ctx.start_leaf(input_key, input_modifier);
 
@@ -1676,6 +1693,7 @@ impl TextField {
         }
         // 输入节点结束
         ctx.end_node();
+        });
         // 后缀 / 后置图标（右对齐）
         if let Some(suffix) = self.suffix {
             slot_wrap!(TextFieldSlotRole::Suffix, suffix);
