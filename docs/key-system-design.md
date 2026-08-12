@@ -281,6 +281,37 @@ let cfg = Config::new();
 
 **panic 信息必须可操作**：指明调用点不在稳定 key 链上，给出修复选项（①放回宏函数内 ②用 `ctx.key()` 包裹 ③content 闭包参数名与 `#[composable(x)]` 一致）。fail-fast 优于静默漂移（text-field-v2 的 placeholder 0×0 即静默漂移后果）。
 
+### 4.8 函数级标记 vs 语句级注入（与 Compose 的关键差异）
+
+**Compose**：`@Composable` 是**编译器契约**——函数必须标注，编译器才能在调用点生成组管理代码（调用点 group key）。不标注 → 编译错误。
+
+**winia 现状**：key 注入是**语句级**（`enter_stmt` 打在调用语句上）——**函数本身不用标记**——只要调用点在 `#[composable]` 函数内（父语句注入在栈中），任何函数内部的 `ctx.remember` 都有 base（父语句）——`LaunchedEffect::build`、`TextField::build` 等不标记也能工作。
+
+**"不标记"的代价**：函数内部 remember/next_key 的 key = `fnv(父语句)` + **帧内序号**——**函数自身的身份不在链中**——内部序号运行时累计（漂移风险）。
+
+**新设计推荐：函数级标记（方法宏化）**——与 Compose 对齐：
+
+```rust
+impl<T: ...> LaunchedEffect<T> {
+    #[composable]                       // 标记 = 组合单元声明
+    pub fn build<F>(self, ctx: &mut ComposeCtx, block: F) { ... }
+}
+```
+
+- 标记后：函数内部语句注入 + remember/next_key 编译期编号——链 = `[父语句, 函数内语句]`——**完整、稳定**
+- 组件/effect 成为完整的组合单元（内部 key 由自身管理）
+- 不标记则退化为"调用点 + 运行时序号"（能工作但有漂移风险，未来可能 panic 兜底）
+
+**需要函数级标记的清单**（内部用 ctx.remember/next_key 的普通函数）：
+
+| 函数 | 说明 |
+|---|---|
+| 组件 build 方法（TextField/Button/Card/Checkbox/...） | 4.4 |
+| effect（`LaunchedEffect::build`/`DisposableEffect::build`/`remember_coroutine_scope`/`observe_watch`/`attach_cleanup`） | 内部 remember/next_key |
+| 用户自定义的"组合辅助函数"（内部用 ctx API） | 建议标记 |
+
+**用户可见差异**：Compose 不标 = 编译错；winia 不标 = 能跑但 key 链不完整（漂移风险）——新设计下推荐标，最终（可选）收紧为"组合函数必须标记"（编译期强制，对齐 Compose）。
+
 ---
 
 ## 5. 稳定 key 的判定
