@@ -2266,4 +2266,120 @@ mod tests {
             log.len(), last, &log[..log.len().min(8)]
         );
     }
+
+    /// 快速焦点切换（动画未完成）：聚焦 → 动画中失焦 → 动画中再聚焦——
+    /// placeholder 最终应显示（alpha 收敛 1）——回归：切换后 placeholder
+    /// 不可见（remember key 漂移/alpha 卡 0）
+    #[test]
+    fn placeholder_alpha_survives_rapid_focus_toggle() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = rt.enter();
+        let mut composer = Composer::new();
+        let value = crate::core::state::State::new(TextFieldValue::new(""));
+        let focus_src = crate::ui::interaction::MutableInteractionSource::new();
+        let alpha_log: std::sync::Arc<std::sync::Mutex<Vec<f32>>> = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mk_field = |log: std::sync::Arc<std::sync::Mutex<Vec<f32>>>| {
+            TextField::new(value.clone(), |_| {})
+                .filled()
+                .interaction_source(focus_src.clone())
+                .label(|ctx| { crate::ui::Text::new("Name").build(ctx); })
+                .placeholder(move |ctx| {
+                    let a = crate::ui::text::LOCAL_TEXT_STYLE.current().color
+                        .map(|c| c.a as f32 / 255.0)
+                        .unwrap_or(0.0);
+                    log.lock().unwrap().push(a);
+                    crate::ui::Text::new("ph").build(ctx);
+                })
+        };
+        let mut frames = |n: usize| {
+            for _ in 0..n {
+                let field = mk_field(alpha_log.clone());
+                composer.compose(|ctx| { field.build(ctx); });
+                std::thread::sleep(std::time::Duration::from_millis(8));
+                crate::animation::update_animations();
+            }
+        };
+        frames(2);                      // 未聚焦
+        focus_src.emit_focus();
+        frames(4);                      // 聚焦——动画刚开始（未完成）
+        focus_src.emit_unfocus();
+        frames(4);                      // 动画中失焦
+        focus_src.emit_focus();
+        frames(30);                     // 动画中再聚焦——等动画完成
+        let log = alpha_log.lock().unwrap();
+        let last = *log.last().unwrap();
+        assert!(
+            log.len() > 3 && last > 0.8,
+            "快速切换后 placeholder alpha 应收敛 >0.8（实际 len={} last={} log={:?}）",
+            log.len(), last, &log[..log.len().min(10)]
+        );
+    }
+
+    /// 完整 UI 流程回归：滚动容器内聚焦 → 动画中失焦 → 动画中再聚焦——
+    /// placeholder 节点最终 measured_size 非 0（渲染可见）——demo 里
+    /// "快速切换后 placeholder 不显示"（树 [0,0]）的回归
+    #[test]
+    fn placeholder_visible_after_rapid_focus_toggle_in_scroll() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = rt.enter();
+        let mut composer = Composer::new();
+        let value = crate::core::state::State::new(TextFieldValue::new(""));
+        let focus_src = crate::ui::interaction::MutableInteractionSource::new();
+        let scroll = crate::modifier::ScrollState::new();
+        let scroll2 = scroll.clone();
+        let mk = || {
+            TextField::new(value.clone(), |_| {})
+                .filled()
+                .interaction_source(focus_src.clone())
+                .label(|ctx| { crate::ui::Text::new("Name").build(ctx); })
+                .placeholder(|ctx| { crate::ui::Text::new("ph placeholder text").build(ctx); })
+        };
+        let mut frames = |n: usize| {
+            for _ in 0..n {
+                let field = mk();
+                let sc = scroll2.clone();
+                composer.compose(|ctx| {
+                    crate::ui::Column::new()
+                        .modifier(crate::modifier::Modifier::new().fill_max_size().vertical_scroll(sc))
+                        .build(ctx, |ctx| { field.build(ctx); });
+                });
+                std::thread::sleep(std::time::Duration::from_millis(8));
+                crate::animation::update_animations();
+            }
+        };
+        frames(2);
+        focus_src.emit_focus();
+        frames(4);      // 聚焦——动画中
+        focus_src.emit_unfocus();
+        frames(4);      // 动画中失焦
+        focus_src.emit_focus();
+        frames(30);     // 动画中再聚焦——等动画完成
+        composer.layout(crate::layout::Constraints::new(0.0, 500.0, 0.0, 600.0));
+        // 找 placeholder 节点（TextFieldSlotRole::Placeholder 标记或 text 内容）
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        fn find_placeholder(nodes: &[crate::layout::node::LayoutNode], idx: usize) -> Option<(f32, f32)> {
+            let has = nodes[idx].modifier.elements().iter().any(|el| {
+                matches!(el, crate::modifier::ModifierElement::TextFieldSlot { role }
+                    if *role == TextFieldSlotRole::Placeholder)
+            });
+            if has { return Some((nodes[idx].measured_size.width, nodes[idx].measured_size.height)); }
+            for &c in &nodes[idx].children {
+                if let Some(s) = find_placeholder(nodes, c) { return Some(s); }
+            }
+            None
+        }
+        let ph = find_placeholder(nodes, root);
+        assert!(
+            ph.map(|(w, h)| w > 0.0 && h > 0.0).unwrap_or(false),
+            "快速切换后 placeholder 节点尺寸应为非 0（实际 {:?}）——渲染不可见",
+            ph
+        );
+    }
 }
