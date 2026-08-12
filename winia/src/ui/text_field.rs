@@ -2201,4 +2201,53 @@ mod tests {
             log.len(), last, &log[..log.len().min(8)]
         );
     }
+
+    /// placeholder 淡入：聚焦后 alpha 动画 0 → 1——闭包多次重跑且 alpha
+    /// 收敛（demo 点击聚焦后 placeholder 不可见的回归）
+    #[test]
+    fn placeholder_alpha_animates_on_focus() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = rt.enter();
+        let mut composer = Composer::new();
+        let value = crate::core::state::State::new(TextFieldValue::new(""));
+        let focus_src = crate::ui::interaction::MutableInteractionSource::new();
+        let alpha_log: std::sync::Arc<std::sync::Mutex<Vec<f32>>> = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mk_field = |log: std::sync::Arc<std::sync::Mutex<Vec<f32>>>| {
+            TextField::new(value.clone(), |_| {})
+                .filled()
+                .interaction_source(focus_src.clone())
+                .label(|ctx| { crate::ui::Text::new("Name").build(ctx); })
+                .placeholder(move |ctx| {
+                    // placeholder 默认样式经 LOCAL_TEXT_STYLE（16sp + 淡入 alpha）
+                    let a = crate::ui::text::LOCAL_TEXT_STYLE.current().color
+                        .map(|c| c.a as f32 / 255.0)
+                        .unwrap_or(0.0);
+                    log.lock().unwrap().push(a);
+                    crate::ui::Text::new("ph").build(ctx);
+                })
+        };
+        // 首帧：未聚焦（placeholder 不构建）
+        for _frame in 0..2 {
+            let field = mk_field(alpha_log.clone());
+            composer.compose(|ctx| { field.build(ctx); });
+            crate::animation::update_animations();
+        }
+        focus_src.emit_focus();
+        for _frame in 0..25 {
+            let field = mk_field(alpha_log.clone());
+            composer.compose(|ctx| { field.build(ctx); });
+            std::thread::sleep(std::time::Duration::from_millis(8));
+            crate::animation::update_animations();
+        }
+        let log = alpha_log.lock().unwrap();
+        let last = *log.last().unwrap();
+        assert!(
+            log.len() > 3 && last > 0.8,
+            "placeholder 闭包应随 alpha 动画重跑且收敛 >0.8（实际 len={} last={} log={:?}）",
+            log.len(), last, &log[..log.len().min(8)]
+        );
+    }
 }

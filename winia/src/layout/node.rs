@@ -98,17 +98,17 @@ pub(crate) fn modifier_has_text(modifier: &Modifier) -> bool {
 /// 比较两个 modifier 的文本内容（TextContent/RichTextContent 的 content）——
 /// 文本内容变化但 slot Clean（依赖注册在父容器）时，复用节点需重测。
 /// 检查 modifier 文本内容差异（决定"折叠测量是否失效"）：
-/// 内容、对齐、字号、字重、行数、字间距、行高、溢出——**所有影响文本
-/// 测量结果的属性**（font_size 变化必须触发重测——否则字号动画后布局
-/// 尺寸/位置沿用旧测量：label 悬浮位置/占位高度失真）
+/// 内容、对齐、**颜色**、字号、字重、行数、字间距、行高、溢出——**所有
+/// 影响测量/渲染结果的属性**（color 变化必须触发重测——否则淡入动画
+/// （alpha 0→1）后 cached_paragraph 仍是透明色，渲染画不出文字）
 pub(crate) fn modifier_text_content_differs(a: &Modifier, b: &Modifier) -> bool {
-    let text_of = |m: &Modifier| -> Option<(String, crate::ui::TextAlign, f32, crate::ui::text::FontWeight, usize, f32, Option<f32>, crate::ui::TextOverflow)> {
+    let text_of = |m: &Modifier| -> Option<(String, crate::ui::TextAlign, crate::modifier::Color, f32, crate::ui::text::FontWeight, usize, f32, Option<f32>, crate::ui::TextOverflow)> {
         m.elements().iter().find_map(|el| match el {
-            ModifierElement::TextContent { content, align, font_size, font_weight, max_lines, letter_spacing, line_height, overflow, .. } => {
-                Some((content.clone(), *align, *font_size, *font_weight, *max_lines, *letter_spacing, *line_height, *overflow))
+            ModifierElement::TextContent { content, align, color, font_size, font_weight, max_lines, letter_spacing, line_height, overflow, .. } => {
+                Some((content.clone(), *align, *color, *font_size, *font_weight, *max_lines, *letter_spacing, *line_height, *overflow))
             }
             // RichText 变化保守视为不同
-            ModifierElement::RichTextContent { .. } => Some(("<richtext>".to_string(), crate::ui::TextAlign::Left, 0.0, crate::ui::text::FontWeight::NORMAL, 0, 0.0, None, crate::ui::TextOverflow::Clip)),
+            ModifierElement::RichTextContent { .. } => Some(("<richtext>".to_string(), crate::ui::TextAlign::Left, crate::modifier::Color::TRANSPARENT, 0.0, crate::ui::text::FontWeight::NORMAL, 0, 0.0, None, crate::ui::TextOverflow::Clip)),
             _ => None,
         })
     };
