@@ -381,11 +381,20 @@ pub(crate) struct TextFieldLayout {
     /// - Filled：label 顶在容器 8dp（悬浮区 8..24，中心 16）
     /// - Outlined：label 中心跨边框线（容器顶 0）
     pub(crate) variant: Option<TextFieldVariant>,
+    /// 容器 padding（M3 specs：图标垂直居中于**容器**（56dp）——内容区
+    /// 顶部即 pad_top——图标锚点 = 容器中心）
+    pub(crate) pad_top: f32,
+    pub(crate) pad_bottom: f32,
 }
 
 impl TextFieldLayout {
-    pub(crate) fn new(label_progress: crate::core::state::State<f32>, variant: Option<TextFieldVariant>) -> Self {
-        Self { label_progress, variant }
+    pub(crate) fn new(
+        label_progress: crate::core::state::State<f32>,
+        variant: Option<TextFieldVariant>,
+        pad_top: f32,
+        pad_bottom: f32,
+    ) -> Self {
+        Self { label_progress, variant, pad_top, pad_bottom }
     }
 }
 
@@ -488,12 +497,26 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
                     placements[i] = crate::layout::Placement { size: s, position: crate::layout::Point::new(input_pos_x, 0.0) };
                 }
                 TextFieldSlotRole::Leading => {
-                    placements[i].position = crate::layout::Point::new(0.0, (input_size.height - placements[i].size.height).max(0.0) / 2.0);
+                    // 垂直居中于**容器**（M3 specs：Icon alignment = vertically
+                    // centered——容器中心；输入文本区在容器下部（Filled 底 8 /
+                    // Outlined 居中），居中于输入区会偏下）。容器中心（内容区
+                    // 坐标）= (内容区高 + pad_bottom - pad_top)/2；允许负 y
+                    //（Filled 图标跨 16..40 区）。⚠ 滚动容器内约束高 =
+                    // f32::MAX（有限但巨大）——超过合理阈值视为无限，降级
+                    // 输入区高
+                    let content_h = if constraints.max_height < 1.0e9 { constraints.max_height } else { input_size.height };
+                    let container_center = (content_h + self.pad_bottom - self.pad_top) / 2.0;
+                    placements[i].position = crate::layout::Point::new(
+                        0.0,
+                        container_center - placements[i].size.height / 2.0,
+                    );
                 }
                 TextFieldSlotRole::Trailing => {
+                    let content_h = if constraints.max_height < 1.0e9 { constraints.max_height } else { input_size.height };
+                    let container_center = (content_h + self.pad_bottom - self.pad_top) / 2.0;
                     placements[i].position = crate::layout::Point::new(
                         (width - placements[i].size.width).max(0.0),
-                        (input_size.height - placements[i].size.height).max(0.0) / 2.0,
+                        container_center - placements[i].size.height / 2.0,
                     );
                 }
                 TextFieldSlotRole::Prefix => {
@@ -1273,9 +1296,11 @@ impl TextField {
         let has_leading_icon = self.leading_icon.is_some();
         let has_trailing_icon = self.trailing_icon.is_some();
         let container_modifier = self.modifier;
+        // M3 padding（TextFieldLayout 用 pad_top/bottom 计算图标容器居中锚点）
+        let (mut pad_top, mut pad_bottom) = (8.0, 8.0);
         let container_modifier = if let Some(variant) = visual {
             let pad_h = if has_leading_icon || has_trailing_icon { 12.0 } else { 16.0 };
-            let (pad_top, pad_bottom) = match variant {
+            (pad_top, pad_bottom) = match variant {
                 TextFieldVariant::Filled if self.label.is_some() => (24.0, 8.0),
                 TextFieldVariant::Filled => (16.0, 8.0),
                 _ => (16.0, 16.0),
@@ -1396,7 +1421,7 @@ impl TextField {
         ctx.start_restartable_group(
             key,
             container_modifier,
-            TextFieldLayout::new(label_progress.clone(), visual),
+            TextFieldLayout::new(label_progress.clone(), visual, pad_top, pad_bottom),
         );
         // 闭包子节点包装（角色标记 + Box 层叠——内容由闭包构建）。
         // 每个槽位提供 M3 默认样式（LOCAL_TEXT_STYLE / LOCAL_CONTENT_COLOR
