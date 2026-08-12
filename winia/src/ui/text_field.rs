@@ -6,6 +6,7 @@
 use crate::core::composer::ComposeCtx;
 use crate::core::state::State;
 use crate::modifier::Modifier;
+use crate::composable;
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -793,6 +794,11 @@ impl TextField {
         self
     }
 
+    /// 组件方法宏化（新 key 系统）：scope key = 调用链（16 字段实例隔离）——
+    /// 内部 remember/next_key 编译期编号（fnv(调用链, 语句id, 序号)）；
+    /// slot_wrap!（macro_rules——宏扫描不深入）内部 next_key 走运行时
+    /// （build 语句注入提供稳定 base）
+    #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
         let key = ctx.next_key();
         let current = self.value.get();

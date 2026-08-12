@@ -211,10 +211,49 @@ impl<'a> ComposeCtx<'a> {
         ScopeGuard { composer: self.composer as *mut Composer }
     }
 
-    /// 显式 key 版 next_key（宏扫描替换 ctx.next_key() 用）——key 已含
-    /// 编译期序号，直接使用（不再生成运行时序号）
-    pub fn next_key_at(&mut self, key: u64) -> u64 {
-        key
+    /// 调用链版 RAII scope 开始：scope key = 当前调用链哈希（try_stable_base）
+    /// 或 fallback 哈希（调用链空——测试/组合顶层）。组件方法宏化用——
+    /// 同一方法多次实例化（16 字段）靠调用点链隔离；独立组合函数多实例
+    /// （列表）同样隔离。⚠ scope 在函数开头创建——此刻 STMT_STACK 栈顶
+    /// 即调用点（父语句），函数内部语句注入在其后——链不含自身。
+    pub fn start_scope_callchain(&mut self, fallback_hash: u64) -> ScopeGuard {
+        let key = self.composer.try_stable_base().unwrap_or(fallback_hash);
+        self.composer.scope_source_stack.push(Some(key));
+        SCOPE_SRC_STACK.with(|s| s.borrow_mut().push(key)); // 镜像（enter_stmt 读）
+        self.composer.slot_table.start_scope(key);
+        GROUP_STACK.with(|s| s.borrow_mut().push(key));
+        ScopeGuard { composer: self.composer as *mut Composer }
+    }
+
+    /// 宏替换版 remember（ctx.remember → ctx.remember_at(SID, SEQ, init)）：
+    /// key = fnv(当前 scope 的调用链哈希, SID, SEQ)——编译期编号 + 运行时调用链
+    /// ——同一函数多处实例化（16 字段/列表）靠调用链隔离；调用链为空
+    /// （测试/组合顶层）时 scope 回退签名哈希——key 仍稳定。
+    pub fn remember_at<T: Clone + 'static>(&mut self, sid: u32, seq: u32, init: impl FnOnce() -> T) -> State<T> {
+        let key = self.stmt_key(sid, seq);
+        let pq = Arc::downgrade(&self.composer.pending_states);
+        self.composer.slot_table.remember(key, || {
+            crate::core::state::STATE_OWNER_QUEUE.with(|q| *q.borrow_mut() = Some(pq.clone()));
+            State::new(init())
+        })
+    }
+
+    /// 宏替换版 next_key（ctx.next_key → ctx.next_key_at(SID, SEQ)）——
+    /// key = fnv(当前 scope 调用链, SID, SEQ)——同 remember_at 语义
+    pub fn next_key_at(&mut self, sid: u32, seq: u32) -> u64 {
+        self.stmt_key(sid, seq)
+    }
+
+    /// 编译期编号 → 稳定 key：fnv(scope_src(调用链), sid, seq)
+    /// 与 try_stable_base 同公式——运行时 next_key（slot_wrap! 等宏内部
+    /// 未替换路径）与宏替换路径共享同一 scope 基，互不冲突。
+    fn stmt_key(&self, sid: u32, seq: u32) -> u64 {
+        let scope_src = self.composer.scope_source_stack.last().and_then(|s| *s).unwrap_or(0);
+        let mut h: u64 = 0xcbf29ce484222325;
+        h ^= scope_src; h = h.wrapping_mul(0x100000001b3);
+        h ^= sid as u64; h = h.wrapping_mul(0x100000001b3);
+        h ^= (seq as u64).wrapping_mul(0x9E3779B97F4A7C15);
+        h
     }
 
     /// #[composable] 宏注入：进入一条语句（id 为编译期固定的源码位置序号）。

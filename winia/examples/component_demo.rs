@@ -171,7 +171,7 @@ fn component_demo(ctx: &mut ComposeCtx) {
             // 单行 + placeholder
             let v1 = ctx.remember(|| winia::ui::text_field::TextFieldValue::new(""));
             TextField::new(v1.clone(), |_| {})
-                .placeholder("请输入内容…")
+                .placeholder(|ctx| { winia::ui::Text::new("请输入内容…").build(ctx); })
                 .single_line(true)
                 .modifier(Modifier::new().size(300.0, 36.0))
                 .build(ctx);
