@@ -603,6 +603,93 @@ pub fn run_app(input: TokenStream) -> TokenStream {
     TokenStream::from(quote!(::winia::app::run_app(#closure)))
 }
 
+/// 单语句 key 标记（`#[composable_keyed]` 轻量模式下使用）：
+/// 展开为 `{ let __stmt_guard = ctx.enter_stmt(位置哈希); <语句> }`——
+/// 语句 id 由**调用位置**（line:column 哈希）派生——全局唯一（编译期固定），
+/// 无需宏扫描序号。语句块内可直接使用外层 `ctx`。
+///
+/// ```rust,ignore
+/// #[composable_keyed]
+/// fn light_ui(ctx: &mut ComposeCtx) {
+///     keyed_stmt!({ Text::new("x").build(ctx); });   // 注入 enter_stmt
+/// }
+/// ```
+#[proc_macro]
+pub fn keyed_stmt(input: TokenStream) -> TokenStream {
+    // proc_macro::Span（非 proc_macro2）stable 提供 line()/column()——
+    // 调用位置全局唯一（文件+行+列由编译器保证）
+    let span = proc_macro::Span::call_site();
+    let loc = format!("{}:{}", span.line(), span.column());
+    let id = fnv64(&loc) as u32;
+    let stmts: syn::Block = syn::parse_macro_input!(input as syn::Block);
+    TokenStream::from(quote!({
+        let __stmt_guard = ctx.enter_stmt(#id);
+        #stmts
+    }))
+}
+
+/// 轻量组合函数宏：**不注入语句 id**（区别于 #[composable] 全量注入）——
+/// 只注入 RAII scope guard（remember/next_key 有稳定 base）+ 编译期替换
+/// remember/next_key（fnv(scope, 扫描序号, 语句内序号)）。
+/// 组件调用（build）需用 `keyed_stmt!` 标记获得语句 id——未标记的组件
+/// 调用内部 next_key 无稳定源 → 运行期 panic（fail-fast）。
+#[proc_macro_attribute]
+pub fn composable_keyed(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as ItemFn);
+    let ItemFn { attrs, vis, sig, block } = input;
+
+    let ctx_ident = sig
+        .inputs
+        .iter()
+        .find_map(|arg| match arg {
+            syn::FnArg::Typed(pat_type) => match &*pat_type.pat {
+                syn::Pat::Ident(pat_ident) if pat_ident.ident == "ctx" => Some(pat_ident.ident.clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("#[composable_keyed] 函数必须有一个名为 `ctx` 的参数");
+
+    let sig_str = quote!(#sig).to_string();
+    let scope_hash = fnv64(&sig_str);
+    let start = quote! { let __composable_scope = #ctx_ident.start_scope_guarded(#scope_hash); };
+
+    // 遍历语句：编译期替换 remember/next_key（扫描序号——函数内语句顺序）
+    // 不包裹 enter_stmt（智能注入不做——轻量模式由 keyed_stmt! 显式标记）
+    let mut stmt_counter: u32 = 0;
+    let stmts = replace_keyed_stmts(block.stmts.clone(), &ctx_ident, scope_hash, &mut stmt_counter);
+
+    let mut new_stmts = vec![syn::parse2::<Stmt>(start).unwrap()];
+    new_stmts.extend(stmts);
+
+    let new_block = syn::Block { brace_token: block.brace_token, stmts: new_stmts };
+    let output = quote! {
+        #(#attrs)*
+        #vis #sig #new_block
+    };
+    TokenStream::from(output)
+}
+
+/// 语句级 remember/next_key 替换（composable_keyed 用——不注入 enter_stmt；
+/// 扫描序号 stmt_idx 代替语句 id——函数内语句顺序编译期固定）
+fn replace_keyed_stmts(
+    stmts: Vec<Stmt>,
+    ctx: &syn::Ident,
+    scope_hash: u64,
+    stmt_idx: &mut u32,
+) -> Vec<Stmt> {
+    let mut out = Vec::new();
+    for mut stmt in stmts {
+        let mut rem_idx = 0u32;
+        let mut key_idx = 0u32;
+        let idx = *stmt_idx;
+        *stmt_idx += 1;
+        replace_keyed_calls_stmt(&mut stmt, ctx, scope_hash, idx, &mut rem_idx, &mut key_idx);
+        out.push(stmt);
+    }
+    out
+}
+
 /// 根闭包变换共享逻辑：注入 start_scope_keyed + 语句级 key + end_scope。
 fn transform_root_closure(input: proc_macro::TokenStream) -> proc_macro2::TokenStream {
     let closure = syn::parse::<syn::ExprClosure>(input)
