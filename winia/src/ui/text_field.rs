@@ -385,20 +385,22 @@ pub(crate) struct TextFieldLayout {
     /// 顶部即 pad_top——图标锚点 = 容器中心）
     pub(crate) pad_top: f32,
     pub(crate) pad_bottom: f32,
+    /// supporting 区高（4+16=20——容器 min_height 含此，居中推导须扣除）
+    pub(crate) supporting_h: f32,
 }
 
 /// 内容区高度推导（label/图标容器居中锚点用）：
 /// - 约束高有限（非滚动容器）→ 直接用
 /// - 滚动容器内约束高 = f32::MAX → 用约束 min 高（modifier 层
-///   min_height(56) 经 padding offset 后 = **内容区** min 高（如 24）——
-///   ⚠ 已扣 padding，不能再减）；空字段输入节点测量高 0（空文本
-///   paragraph），降级 input_size.height 会算负中心
+///   min_height 经 padding offset 后 = **内容区 + supporting** min 高——
+///   ⚠ 含 supporting（4+16=20），须扣除；空字段输入节点测量高 0
+///   （空文本 paragraph），降级 input_size.height 会算负中心
 /// - 兜底输入区高
-fn text_field_content_height(constraints: &crate::layout::Constraints, pad_top: f32, pad_bottom: f32, input_height: f32) -> f32 {
+fn text_field_content_height(constraints: &crate::layout::Constraints, pad_top: f32, pad_bottom: f32, supporting_h: f32, input_height: f32) -> f32 {
     if constraints.max_height < 1.0e9 {
         constraints.max_height
     } else if constraints.min_height > 0.0 && constraints.min_height < 1.0e9 {
-        constraints.min_height
+        (constraints.min_height - supporting_h).max(0.0)
     } else {
         input_height
     }
@@ -410,8 +412,9 @@ impl TextFieldLayout {
         variant: Option<TextFieldVariant>,
         pad_top: f32,
         pad_bottom: f32,
+        supporting_h: f32,
     ) -> Self {
-        Self { label_progress, variant, pad_top, pad_bottom }
+        Self { label_progress, variant, pad_top, pad_bottom, supporting_h }
     }
 }
 
@@ -506,7 +509,7 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
                     // - Outlined：label 中心跨边框线（顶对齐容器 -8 → 偏移 -24）
                     // ⚠ policy 收到的是扣除 padding 后的约束——内容区顶部即
                     // 容器 padding 边界
-                    let content_h = text_field_content_height(&constraints, self.pad_top, self.pad_bottom, input_size.height);
+                    let content_h = text_field_content_height(&constraints, self.pad_top, self.pad_bottom, self.supporting_h, input_size.height);
                     let container_center = (content_h + self.pad_bottom - self.pad_top) / 2.0;
                     let expanded_y = container_center - s.height / 2.0;
                     let float_y = -(s.height / 2.0)
@@ -529,7 +532,7 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
                     // 坐标）= (内容区高 + pad_bottom - pad_top)/2；允许负 y
                     //（Filled 图标跨 16..40 区）。⚠ 滚动容器内约束高 =
                     // f32::MAX（有限但巨大）——降级见 text_field_content_height
-                    let content_h = text_field_content_height(&constraints, self.pad_top, self.pad_bottom, input_size.height);
+                    let content_h = text_field_content_height(&constraints, self.pad_top, self.pad_bottom, self.supporting_h, input_size.height);
                     let container_center = (content_h + self.pad_bottom - self.pad_top) / 2.0;
                     placements[i].position = crate::layout::Point::new(
                         0.0,
@@ -537,7 +540,7 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
                     );
                 }
                 TextFieldSlotRole::Trailing => {
-                    let content_h = text_field_content_height(&constraints, self.pad_top, self.pad_bottom, input_size.height);
+                    let content_h = text_field_content_height(&constraints, self.pad_top, self.pad_bottom, self.supporting_h, input_size.height);
                     let container_center = (content_h + self.pad_bottom - self.pad_top) / 2.0;
                     placements[i].position = crate::layout::Point::new(
                         (width - placements[i].size.width).max(0.0),
@@ -1387,11 +1390,11 @@ impl TextField {
         };
         // 容器最小高度（supporting + min_lines + 56）——min_height 兜底
         // 占位；测量用 paragraph 实际高度（含折行）
+        let supporting_h = if self.supporting_text.is_some() { 4.0 + 16.0 } else { 0.0 };
         let container_modifier = if self.supporting_text.is_some() || self.min_lines > 1 {
             let line_h = font_size * 1.4;
             let (pt, pb) = container_modifier.get_padding_vertical();
             let pad_y = pt + pb;
-            let supporting_h = if self.supporting_text.is_some() { 4.0 + 16.0 } else { 0.0 };
             let min_content_h = self.min_lines as f32 * line_h;
             let has_visual = visual.is_some();
             let mut min_h = min_content_h + pad_y + supporting_h;
@@ -1449,7 +1452,7 @@ impl TextField {
         ctx.start_restartable_group(
             key,
             container_modifier,
-            TextFieldLayout::new(label_progress.clone(), visual, pad_top, pad_bottom),
+            TextFieldLayout::new(label_progress.clone(), visual, pad_top, pad_bottom, supporting_h),
         );
         // 闭包子节点包装（角色标记 + Box 层叠——内容由闭包构建）。
         // 每个槽位提供 M3 默认样式（LOCAL_TEXT_STYLE / LOCAL_CONTENT_COLOR
