@@ -557,7 +557,17 @@ fn hit_test_recursive(
     true
 }
 
-fn scroll_offset_for_node(node: &LayoutNode) -> (f32, f32) {
+/// 场景坐标 → 目标节点的本地坐标（相对节点左上角）。
+///
+/// 与 `hit_test_recursive` 走同一条路径：从根累加 position，并减去
+/// 祖先 scroll 偏移（渲染时 scroll 容器 translate(-offset)）。用于
+/// 波纹按压点存储——对标 Compose `PressInteraction.Press.pressPosition`
+/// 的本地坐标语义（绘制时加回布局原点，滚动/图形层变换后波纹跟随节点）。
+/// graphics_layer 变换暂不计——与命中测试行为一致（命中本身未反变换 GL）。
+///
+/// ⚠ `node_abs_position`（app.rs）与 `hit_test` 也走同一坐标空间——修 scroll
+/// 时须同步（多行 TextField 点击定位依赖一致的"滚动画布坐标"）。
+pub(crate) fn scroll_offset_for_node(node: &LayoutNode) -> (f32, f32) {
     let mut dx = 0.0;
     let mut dy = 0.0;
     if let Some(state) = node.modifier.vertical_scroll_state() {
@@ -570,12 +580,6 @@ fn scroll_offset_for_node(node: &LayoutNode) -> (f32, f32) {
 }
 
 /// 场景坐标 → 目标节点的本地坐标（相对节点左上角）。
-///
-/// 与 `hit_test_recursive` 走同一条路径：从根累加 position，并减去
-/// 祖先 scroll 偏移（渲染时 scroll 容器 translate(-offset)）。用于
-/// 波纹按压点存储——对标 Compose `PressInteraction.Press.pressPosition`
-/// 的本地坐标语义（绘制时加回布局原点，滚动/图形层变换后波纹跟随节点）。
-/// graphics_layer 变换暂不计——与命中测试行为一致（命中本身未反变换 GL）。
 pub(crate) fn scene_to_node_local(
     nodes: &[LayoutNode],
     path: &[usize],
@@ -677,6 +681,47 @@ mod tests {
         // 点击父节点但不在子节点范围内
         let path = hit_test(&nodes, 0, 80.0, 75.0);
         assert_eq!(path, vec![0], "should only hit parent");
+    }
+
+    /// 回归：滚动容器内 scene 坐标（hit_test 输入）与 node_abs_position
+    /// （app.rs 点击/拖拽定位用）必须同一空间——都减祖先 scroll 偏移。
+    /// 此前 node_abs_position 纯累加 layout position，滚动后局部 y 被
+    /// 滚动量污染 → 多行 TextField 点击/拖拽只能定位到第一行。
+    #[test]
+    fn test_scroll_scene_coords_consistent() {
+        // 滚动容器（y=0，滚动 50px）内含子节点（y=100，内容高 60）
+        let scroll = crate::modifier::ScrollState::new();
+        scroll.offset.set(50.0);
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new().vertical_scroll(scroll.clone()).size(100.0, 200.0)),
+            LayoutNode::leaf(Modifier::new().size(100.0, 60.0)),
+        ];
+        nodes[0].measured_size = Size::new(100.0, 200.0);
+        nodes[1].measured_size = Size::new(100.0, 60.0);
+        nodes[1].position = Point::new(0.0, 100.0);
+        nodes[0].children.push(1);
+
+        // 渲染时画布 translate(0, -50) → 子节点视觉顶边在场景 y=50
+        let path = hit_test(&nodes, 0, 50.0, 60.0);
+        assert_eq!(path, vec![0, 1], "滚动后子节点视觉范围 (50,50)-(50,110) 应命中");
+        // 子节点本地坐标 = 场景 - 视觉顶边 = (50-0, 60-50) = (50, 10)
+        let (x, y) = scene_to_node_local(&nodes, &path, 1, 50.0, 60.0);
+        assert_eq!((x, y), (50.0, 10.0), "本地坐标须扣除滚动偏移");
+
+        // 未滚动点（y=140 → 场景 140-50=90，仍命中子节点本地 y=40）
+        let path2 = hit_test(&nodes, 0, 50.0, 90.0);
+        assert_eq!(path2, vec![0, 1]);
+        let (_, y2) = scene_to_node_local(&nodes, &path2, 1, 50.0, 90.0);
+        assert_eq!(y2, 40.0);
+
+        // 滚动偏移变化 → 同一场景点对应不同本地坐标（偏移已消耗）。
+        // offset=50：视觉顶边 y=50，场景 (50,50) → 本地 y=0；
+        // offset=100：视觉顶边 y=0，场景 (50,50) → 本地 y=50（仍在可视范围）
+        scroll.offset.set(100.0);
+        let path3 = hit_test(&nodes, 0, 50.0, 50.0);
+        assert_eq!(path3, vec![0, 1]);
+        let (_, y3) = scene_to_node_local(&nodes, &path3, 1, 50.0, 50.0);
+        assert_eq!(y3, 50.0, "本地坐标随滚动偏移同步变化");
     }
 
     // ── scene_to_node_local（波纹按压点本地坐标）──

@@ -2073,15 +2073,23 @@ fn handle_pointer_move(
 }
 
 /// 分发指针事件到 hit_test 路径（pre: outer→inner, bubble: inner→outer）
-/// 计算节点在布局树中的绝对位置（从根累加 position）
+/// 计算节点在布局树中的绝对位置（从根累加 position）。
+///
+/// ⚠ 与 `hit_test`/`scene_to_node_local` 同空间：累加时**减去祖先 scroll 偏移**
+/// （渲染时滚动容器 `canvas.translate(-offset)` → 命中测试的 scene 坐标就是
+/// 减过滚动量的"滚动画布坐标"）。此前纯累加 layout position，滚动容器内
+/// 节点绝对 y 被滚动量污染 → 段落局部坐标（scene - abs）偏负 → skia 最近
+/// glyph 恒为第一行——多行 TextField 点击/拖拽只能定位到第一行。
 fn node_abs_position(nodes: &[LayoutNode], root: usize, id: u64) -> (f32, f32) {
     fn walk(nodes: &[LayoutNode], idx: usize, target: u64, abs_x: f32, abs_y: f32) -> Option<(f32, f32)> {
         let node = &nodes[idx];
         let nx = abs_x + node.position.x;
         let ny = abs_y + node.position.y;
         if node.id == target { return Some((nx, ny)); }
+        // 命中测试同路径：子节点坐标 = 本节点坐标 - 本节点 scroll 偏移
+        let (dx, dy) = crate::layout::node::scroll_offset_for_node(node);
         for &c in &node.children {
-            if let Some(r) = walk(nodes, c, target, nx, ny) { return Some(r); }
+            if let Some(r) = walk(nodes, c, target, nx - dx, ny - dy) { return Some(r); }
         }
         None
     }
