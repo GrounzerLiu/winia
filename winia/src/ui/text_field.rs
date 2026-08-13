@@ -401,12 +401,15 @@ pub(crate) struct TextFieldLayout {
 ///   min_height 经 padding offset 后 = **内容区 + supporting** min 高——
 ///   ⚠ 含 supporting（4+16=20），须扣除；空字段输入节点测量高 0
 ///   （空文本 paragraph），降级 input_size.height 会算负中心
+/// - 多行：input_size.height 超过 min_height 兜底（24）时取 input 高——
+///   否则 label/图标居中锚点恒为单行高，容器长高后图标/展开 label 不
+///   跟随中心下移
 /// - 兜底输入区高
 fn text_field_content_height(constraints: &crate::layout::Constraints, pad_top: f32, pad_bottom: f32, supporting_h: f32, input_height: f32) -> f32 {
     if constraints.max_height < 1.0e9 {
         constraints.max_height
     } else if constraints.min_height > 0.0 && constraints.min_height < 1.0e9 {
-        (constraints.min_height - supporting_h).max(0.0)
+        (constraints.min_height - supporting_h).max(input_height).max(0.0)
     } else {
         input_height
     }
@@ -581,9 +584,13 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
         }
         let _ = progress;
         // 容器尺寸：宽 = 内容（输入+前后缀+间距+图标区）受约束夹取（min_width
-        // 280 兜底——超长输入撑宽）；高 = input 高
+        // 280 兜底——超长输入撑宽）；高 = input 高 + supporting 区。
+        // ⚠ supporting 恒在输入内容区外（渲染端画在容器底部 4dp 外侧，且
+        // container_rect = 节点高 - supporting_h）——measure 高度必须含
+        // supporting_h，否则多行换行（input 高超过 min_height 兜底）时
+        // 节点总高缺 supporting 20px → 指示线/边框上移 → 穿过末行文字
         let width = constraints.constrain_width(input_size.width + left + prefix_w + AFFIX_GAP + suffix_w + right);
-        let height = constraints.constrain_height(input_size.height);
+        let height = constraints.constrain_height(input_size.height + self.supporting_h);
         (crate::layout::Size::new(width, height), placements)
     }
 
