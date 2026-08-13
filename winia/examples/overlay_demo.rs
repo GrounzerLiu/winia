@@ -49,9 +49,12 @@ fn overlay_ui(ctx: &mut ComposeCtx) {
                 .build(ctx, |ctx| {
                     Text::new("1. Popup（锚点下方）").font_size(13.0).build(ctx);
                 });
-            if popup_open.get() {
+            // ⚠ Popup 参数化（visible）：build 总执行并记录 active——主动关闭
+            // visible=false → sync 删除 overlay；注册方 Skip → 保留。若用 if
+            // 包裹（build 不执行），Skip 帧与主动关闭无法区分。
+            {
                 let popup_open = popup_open.clone();
-                Popup::new()
+                Popup::new(popup_open.get())
                     .position(PopupPosition::BottomLeft)
                     .offset(0.0, 6.0)
                     .on_dismiss_request(move || popup_open.set(false))
@@ -157,10 +160,11 @@ fn overlay_ui(ctx: &mut ComposeCtx) {
                 .build(ctx, |ctx| {
                     Text::new("3. Dialog（模态）").font_size(13.0).build(ctx);
                 });
-            if dialog_open.get() {
+            // ⚠ Dialog 参数化（visible）——同 Popup：build 总执行记录 active
+            {
                 let dialog_open = dialog_open.clone();
                 let last = last_dialog.clone();
-                Dialog::new()
+                Dialog::new(dialog_open.get())
                     .on_dismiss_request({
                         let dialog_open = dialog_open.clone();
                         move || dialog_open.set(false)

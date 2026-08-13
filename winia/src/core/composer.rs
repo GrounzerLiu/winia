@@ -137,6 +137,14 @@ impl<'a> ComposeCtx<'a> {
         self.composer.overlays.push(desc);
     }
 
+    /// 组合期记录 overlay 的 active 状态（Popup/Dialog build 总执行时调用——
+    /// 无论 visible 都记录；Skip 帧 build 不执行 → 本帧无记录 → sync 保留上帧）。
+    /// sync_overlays 用此区分"注册方 Skip"（保留）与"主动关闭 visible=false"
+    /// （记录 false → 删除）——slot 层无法区分，组合期显式记录是唯一正解。
+    pub fn record_overlay_active(&mut self, id: u64, active: bool) {
+        self.composer.overlay_active.insert(id, active);
+    }
+
     /// 当前组合节点的 slot_key（DropdownMenu 锚点用）
     pub fn composer_slot_key(&self) -> u64 {
         self.composer.slot_table.active_slot_key()
@@ -1028,6 +1036,11 @@ pub struct Composer {
     /// 顶层弹出层（Popup/Dialog/DropdownMenu——组合期注册，compose 后取走；
     /// 内容为独立组合单元——独立 Composer 物化/布局/渲染，不参与主树布局）
     pub(crate) overlays: Vec<crate::ui::overlay::OverlayDesc>,
+    /// 本帧组合期各 overlay 的 active 状态（Popup/Dialog build 总执行时记录——
+    /// Skip 帧不记录 → sync 保留上帧；主动关闭 visible=false → 记录 false →
+    /// sync 删除）。区分"注册方 Skip"（保留）与"主动关闭"（删除）——
+    /// slot 层不可区分，需此组合期显式记录。
+    pub(crate) overlay_active: HashMap<u64, bool>,
     /// state_id -> slot_keys 依赖映射
     slot_deps: HashMap<u32, HashSet<u64>>,
     /// 布局依赖表（state_id → slot_key；上帧布局注册的持久表，供下帧 pending 消费）
@@ -1078,6 +1091,7 @@ impl Composer {
             node_stack: Vec::new(),
             group_skip_stack: Vec::new(),
             overlays: Vec::new(),
+            overlay_active: HashMap::new(),
             slot_deps: HashMap::new(),
             layout_deps: HashMap::new(),
             layout_dirty_keys: HashSet::new(),
@@ -1387,6 +1401,7 @@ impl Composer {
         #[cfg(test)] { self.compose_clean_count = 0; self.compose_dirty_count = 0; }
         self.compose_count += 1;
         self.slot_table.reset();
+        self.overlay_active.clear(); // 每帧组合期重记录（Skip 帧不记录）
         self.current_group_key = 0;
         self.path_counters.clear();
         self.remember_path_counters.clear();
@@ -3913,4 +3928,32 @@ fn test_same_stmt_remember_count_change_resets() {
     let id2 = first_holder.borrow().clone().unwrap().id();
     assert_ne!(id1, id2,
         "同语句内 remember 数量变化 = 序号平移 = 重置（Compose 语义，非漂移 bug——明确记录）");
+}
+/// 复现 overlay 闪烁：独立 composer + 无宏注入的 content 闭包（Popup 场景）——
+/// 内容组件（宏化 build）在独立 composer 执行，节点 key 是否跨帧稳定（复用）？
+#[test]
+fn overlay_composer_nodes_stable_across_frames() {
+    let mut composer = Composer::new();
+    // 模拟 overlay content：无宏注入的闭包，内部 Column + Text（宏化组件）
+    let content = |ctx: &mut ComposeCtx| {
+        crate::ui::Column::new()
+            .spacing(6.0)
+            .modifier(Modifier::new().size(200.0, 90.0))
+            .build(ctx, |ctx| {
+                crate::ui::Text::new("这是一个 Popup").build(ctx);
+                crate::ui::Text::new("内容").build(ctx);
+            });
+    };
+    let mut sizes = Vec::new();
+    for frame in 0..10 {
+        composer.recompose(|ctx| content(ctx));
+        composer.layout(crate::layout::constraints::Constraints::new(0.0, 400.0, 0.0, 300.0));
+        sizes.push(composer.arena.nodes.len());
+        // 每帧改动触发 recompose（模拟 overlay 每帧重建）
+        composer.request_recomposition(0);
+    }
+    // 节点数应稳定（复用）——若每帧增长 = 全量重建（闪烁根因）
+    eprintln!("[ovl-repro] 节点数序列: {sizes:?}");
+    assert!(sizes.iter().all(|&n| n == sizes[0]),
+        "overlay 内容节点应跨帧稳定（复用）——实际 {sizes:?}");
 }

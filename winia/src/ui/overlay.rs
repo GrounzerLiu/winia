@@ -63,14 +63,20 @@ pub(crate) fn next_overlay_id() -> u64 {
 ///     .build(ctx, |ctx| { /* 弹出内容 */ });
 /// ```
 pub struct Popup {
+    visible: bool,
     position: PopupPosition,
     offset: (f32, f32),
     on_dismiss: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl Popup {
-    pub fn new() -> Self {
+    /// ⚠ visible 参数化（对齐 DropdownMenu::new(expanded)）：build **总执行**
+    /// 并记录 active 状态——sync_overlays 用"active=false"删除 overlay（主动
+    /// 关闭），用"本帧无记录"保留（注册方 Skip）。若调用方用 `if` 包裹（build
+    /// 不执行），Skip 帧与主动关闭在 slot 层不可区分 → 无法正确删除/保留。
+    pub fn new(visible: bool) -> Self {
         Self {
+            visible,
             position: PopupPosition::BottomLeft,
             offset: (0.0, 4.0),
             on_dismiss: None,
@@ -92,10 +98,15 @@ impl Popup {
         self
     }
 
-    /// #[composable]：内部 remember（overlay id）从 build 调用点取稳定 base
+    /// #[composable]：内部 remember（overlay id）从 build 调用点取稳定 base。
+    /// build 总执行（visible=false 也执行）——记录 active=false 供 sync 删除。
     #[composable]
     pub fn build(self, ctx: &mut crate::core::composer::ComposeCtx, content: impl Fn(&mut crate::core::composer::ComposeCtx) + 'static) {
         let id = ctx.remember(|| next_overlay_id());
+        ctx.record_overlay_active(id.get(), self.visible);
+        if !self.visible {
+            return; // 关闭：不注册 overlay——sync 按 active=false 删除
+        }
         ctx.open_overlay(crate::ui::overlay::OverlayDesc {
             id: id.get(),
             // 锚点 = 当前作用域最后一个兄弟（紧跟其组合位置——Compose Popup 语义）；
@@ -111,20 +122,24 @@ impl Popup {
     }
 }
 
-impl Default for Popup { fn default() -> Self { Self::new() } }
+impl Default for Popup { fn default() -> Self { Self::new(false) } }
 
 // ═══════════════ Dialog ═══════════════
 
 /// 模态对话框（对标 Compose `Dialog`）——居中 + 遮罩，点击遮罩触发
 /// `on_dismiss_request`。
 pub struct Dialog {
+    visible: bool,
     on_dismiss: Option<Arc<dyn Fn() + Send + Sync>>,
     dismiss_on_outside: bool,
 }
 
 impl Dialog {
-    pub fn new() -> Self {
+    /// ⚠ visible 参数化（同 Popup）：build 总执行并记录 active——sync 按
+    /// active=false 删除（主动关闭），无记录保留（注册方 Skip）。
+    pub fn new(visible: bool) -> Self {
         Self {
+            visible,
             on_dismiss: None,
             dismiss_on_outside: true,
         }
@@ -141,10 +156,15 @@ impl Dialog {
         self
     }
 
-    /// #[composable]：内部 remember（overlay id）从 build 调用点取稳定 base
+    /// #[composable]：内部 remember（overlay id）从 build 调用点取稳定 base。
+    /// build 总执行（visible=false 也执行）——记录 active=false 供 sync 删除。
     #[composable]
     pub fn build(self, ctx: &mut crate::core::composer::ComposeCtx, content: impl Fn(&mut crate::core::composer::ComposeCtx) + 'static) {
         let id = ctx.remember(|| next_overlay_id());
+        ctx.record_overlay_active(id.get(), self.visible);
+        if !self.visible {
+            return; // 关闭：不注册 overlay——sync 按 active=false 删除
+        }
         ctx.open_overlay(crate::ui::overlay::OverlayDesc {
             id: id.get(),
             anchor_slot: None,
@@ -158,7 +178,7 @@ impl Dialog {
     }
 }
 
-impl Default for Dialog { fn default() -> Self { Self::new() } }
+impl Default for Dialog { fn default() -> Self { Self::new(false) } }
 
 // ═══════════════ DropdownMenu ═══════════════
 
@@ -215,6 +235,9 @@ impl DropdownMenu {
         let anchor_slot = ctx.composer_slot_key(); // 容器 slot_key（锚点）
         ctx.end_restartable_group();
 
+        // build 总执行（expanded 参数化）——记录 active 供 sync 删除（对齐
+        // Popup/Dialog 的 visible 参数化：expanded=false 时记录 false → 删除）
+        ctx.record_overlay_active(id.get(), expanded);
         if expanded {
             ctx.open_overlay(crate::ui::overlay::OverlayDesc {
                 id: id.get(),

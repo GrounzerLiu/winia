@@ -1521,22 +1521,35 @@ impl OverlayWindow {
     }
 }
 
-/// 主树 compose 后同步 overlay：按 id 匹配（保留 State）——新增/更新/移除
-fn sync_overlays(pw: &mut PerWindow, recomposed: bool) {
+/// 主树 compose 后同步 overlay：按 id 匹配（保留 State）——新增/更新/删除。
+/// 删除依据 = 组合期显式记录的 active=false（Popup/Dialog/DropdownMenu build
+/// 总执行时 record_overlay_active）——主动关闭（visible/expanded=false）→ 删；
+/// 注册方 Skip（build 未执行 → 本帧无记录）→ 保留（闪烁根因：旧 retain 把
+/// Skip 帧误判为主动关闭）。
+fn sync_overlays(pw: &mut PerWindow, _recomposed: bool) {
     let descs = pw.composer.take_overlays();
-    let mut alive = std::collections::HashSet::new();
     for desc in descs {
-        alive.insert(desc.id);
         if let Some(ov) = pw.overlays.iter_mut().find(|o| o.id == desc.id) {
             ov.update(desc);
         } else {
             pw.overlays.push(OverlayWindow::new(desc));
         }
     }
-    if recomposed {
-        // 本次组合的 desc 是权威——未注册的 overlay 已关闭（如 Dialog 确定按钮
-        // set(false)）→ 移除；跳过的帧保留（组合未跑不代表 overlay 该消失）
-        pw.overlays.retain(|o| alive.contains(&o.id));
+    // 组合期记录 active=false 的 overlay → 主动关闭 → 删除（先触发 on_dismiss
+    // 再 retain——删除后 find 不到）
+    let to_close: Vec<u64> = pw.composer.overlay_active.iter()
+        .filter(|(_, active)| !**active)
+        .map(|(&id, _)| id)
+        .collect();
+    if !to_close.is_empty() {
+        for id in &to_close {
+            if let Some(ov) = pw.overlays.iter_mut().find(|o| o.id == *id) {
+                if let Some(cb) = ov.on_dismiss.take() {
+                    (cb)();
+                }
+            }
+        }
+        pw.overlays.retain(|o| !to_close.contains(&o.id));
     }
 }
 
