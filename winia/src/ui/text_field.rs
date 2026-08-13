@@ -604,6 +604,32 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
     }
 }
 
+/// 从节点（TextField 输入 leaf）向上找 OffsetMapping。
+///
+/// ⚠ TextFieldVisual（含 offset_mapping）挂在**容器** modifier 上
+/// （text_field_visual），输入 leaf 无此元素——点击定位/拖拽/IME 区域/
+/// 渲染光标从 leaf 查找 TextFieldVisual 会得到 None → 显示偏移直接当
+/// 编辑偏移写 selection（掩码字符 '•' 3 字节 → replace_range 越界 panic）
+/// 或光标画错位置。沿 parent_id 链向上找第一个 TextFieldVisual。
+pub(crate) fn offset_mapping_for_node(
+    nodes: &[crate::layout::node::LayoutNode],
+    root: usize,
+    idx: usize,
+) -> Option<std::sync::Arc<dyn crate::ui::text_transformation::OffsetMapping>> {
+    use crate::modifier::ModifierElement;
+    let mut cur = Some(idx);
+    while let Some(i) = cur {
+        for el in nodes[i].modifier.elements() {
+            if let ModifierElement::TextFieldVisual { offset_mapping, .. } = el {
+                return offset_mapping.clone();
+            }
+        }
+        cur = nodes[i].parent_id
+            .and_then(|pid| crate::layout::node::find_node_by_id(nodes, root, pid));
+    }
+    None
+}
+
 pub struct TextField {
     value: State<TextFieldValue>,
     on_value_change: Box<dyn Fn(TextFieldValue) + Send + Sync>,

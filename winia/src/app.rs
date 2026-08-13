@@ -735,66 +735,7 @@ impl ApplicationHandler for AppState {
                     consumed = true;
                 }
                 if !consumed {
-                    if let Some(fid) = pw.focused_id {
-                        let nodes = pw.composer.arena_nodes();
-                        if let Some(r) = pw.composer.layout_root_idx() {
-                            // 收集焦点路径：root → ... → focused
-                            let mut path: Vec<usize> = Vec::new();
-                            if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, fid) {
-                                path.push(idx);
-                                // 向上收集父链
-                                let mut pid = nodes[idx].parent_id;
-                                while let Some(id) = pid {
-                                    if let Some(anc) = crate::layout::node::find_node_by_id(nodes, r, id) {
-                                        path.push(anc);
-                                        pid = nodes[anc].parent_id;
-                                    } else { break; }
-                                }
-                                path.reverse(); // 现在 path[0] == root, path[last] == focused
-                            }
-
-                            // Preview: root → focused（对齐 onPreviewKeyEvent）
-                            for &ni in &path {
-                                for el in nodes[ni].modifier.elements() {
-                                    if let crate::modifier::ModifierElement::KbEvent { on_pre_key: Some(handler), .. } = el {
-                                        if handler(&ke) { consumed = true; break; }
-                                    }
-                                }
-                                if consumed { break; }
-                            }
-                            if !consumed {
-                                // Bubble: focused → root（对齐 onKeyEvent）
-                                for &ni in path.iter().rev() {
-                                    for el in nodes[ni].modifier.elements().iter().rev() {
-                                        if let crate::modifier::ModifierElement::KbEvent { on_key: Some(handler), .. } = el {
-                                            if handler(&ke) { consumed = true; break; }
-                                        }
-                                    }
-                                    if consumed { break; }
-                                }
-                            }
-                        }
-                    }
-                }
-                // 聚焦组件的键盘激活（对标 Compose clickable：聚焦时按
-                // Enter/Space 触发 onClick——仅聚焦节点自身的 clickable 响应，
-                // 不向祖先冒泡：clickable 容器内的子组件聚焦时不应触发容器点击）
-                let is_activate = matches!(&event.logical_key, Key::Named(NamedKey::Enter))
-                    || matches!(&event.logical_key, Key::Character(c) if c == " ");
-                if !consumed && event.state.is_pressed() && !event.repeat
-                    && is_activate
-                {
-                    if let Some(fid) = pw.focused_id {
-                        let nodes = pw.composer.arena_nodes();
-                        if let Some(r) = pw.composer.layout_root_idx() {
-                            if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, fid) {
-                                if let Some(on_click) = nodes[idx].modifier.on_click() {
-                                    on_click();
-                                    consumed = true;
-                                }
-                            }
-                        }
-                    }
+                    consumed = dispatch_key_to_focus(pw, &ke);
                 }
                 // 方向键焦点导航（对标 Compose Desktop arrow-key navigation）——
                 // 在目标方向半平面内选"方向距离 + 垂直偏离×2"最小的可聚焦节点
@@ -1006,11 +947,10 @@ impl ApplicationHandler for AppState {
                                         // 起点（行高近似；与渲染端空文本光标一致）
                                         let empty = nodes[pidx].modifier.content_len() == 0;
                                         // 光标索引是编辑偏移——经映射转显示偏移
-                                        let caret_idx = nodes[pidx].modifier.elements().iter().find_map(|el| {
-                                            if let crate::modifier::ModifierElement::TextFieldVisual { offset_mapping, .. } = el {
-                                                Some(offset_mapping.as_ref().map(|m| m.original_to_transformed(nodes[pidx].cursor_index.get())).unwrap_or_else(|| nodes[pidx].cursor_index.get()))
-                                            } else { None }
-                                        }).unwrap_or_else(|| nodes[pidx].cursor_index.get());
+                                        // （TextFieldVisual 挂在容器——向上找）
+                                        let caret_idx = crate::ui::text_field::offset_mapping_for_node(nodes, r, pidx)
+                                            .map(|m| m.original_to_transformed(nodes[pidx].cursor_index.get()))
+                                            .unwrap_or_else(|| nodes[pidx].cursor_index.get());
                                         let (cx, cy, ch) = if empty {
                                             (0.0, 0.0, 20.0)
                                         } else {
@@ -1133,9 +1073,24 @@ impl AppState {
                             pw.focused_id = crate::layout::node::get_focus_id(nodes, r);
                             pw.focused_slot_key = pw.focused_id.and_then(|id| crate::layout::node::find_node_by_id(nodes, r, id).map(|idx| nodes[idx].slot_key));
                             pw.apply_ime_for_focus(pw.focused_id);
-                            handled = true;
                         }
+                    } else if let Some(k) = parse_debug_key(&key) {
+                        // 任意按键：复用真实键盘派发路径（Preview/Bubble/激活）——
+                        // WS 可模拟字符输入/删除/方向键。修饰键默认无（Ctrl 等
+                        // 组合暂不支持——如需可扩展 KbEvent 修饰字段）
+                        let ke = crate::modifier::KbEvent {
+                            key: k,
+                            event_type: crate::modifier::KbEventType::KeyDown,
+                            is_alt_pressed: self.modifiers.alt_key(),
+                            is_ctrl_pressed: self.modifiers.control_key(),
+                            is_shift_pressed: self.modifiers.shift_key(),
+                            is_meta_pressed: self.modifiers.meta_key(),
+                            repeat: false,
+                        };
+                        dispatch_key_to_focus(pw, &ke);
                     }
+                    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                    handled = true;
                 }
                 debug::DebugEvent::FocusNext => {
                     if let Some(r) = pw.composer.layout_root_idx() {
@@ -1863,6 +1818,80 @@ fn detect_click(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
     false
 }
 
+/// 键盘事件派发到焦点路径（Preview: root→focused；Bubble: focused→root，
+/// 对齐 onPreviewKeyEvent/onKeyEvent）+ 聚焦组件激活（Enter/Space 触发
+/// onClick——仅聚焦节点自身的 clickable）。
+///
+/// 真实 KeyboardInput 与 debug 模拟共用（防行为分叉）：Escape/Tab 等
+/// 框架级按键由调用方前置处理（聚焦导航/清焦），不进入本函数。
+fn dispatch_key_to_focus(pw: &PerWindow, ke: &crate::modifier::KbEvent) -> bool {
+    let Some(fid) = pw.focused_id else { return false };
+    let Some(r) = pw.composer.layout_root_idx() else { return false };
+    let nodes = pw.composer.arena_nodes();
+    // 收集焦点路径：root → ... → focused
+    let mut path: Vec<usize> = Vec::new();
+    if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, fid) {
+        path.push(idx);
+        let mut pid = nodes[idx].parent_id;
+        while let Some(id) = pid {
+            if let Some(anc) = crate::layout::node::find_node_by_id(nodes, r, id) {
+                path.push(anc);
+                pid = nodes[anc].parent_id;
+            } else { break; }
+        }
+        path.reverse(); // path[0] == root, path[last] == focused
+    }
+    // Preview: root → focused（对齐 onPreviewKeyEvent）
+    for &ni in &path {
+        for el in nodes[ni].modifier.elements() {
+            if let crate::modifier::ModifierElement::KbEvent { on_pre_key: Some(handler), .. } = el {
+                if handler(ke) { return true; }
+            }
+        }
+    }
+    // Bubble: focused → root（对齐 onKeyEvent）
+    for &ni in path.iter().rev() {
+        for el in nodes[ni].modifier.elements().iter().rev() {
+            if let crate::modifier::ModifierElement::KbEvent { on_key: Some(handler), .. } = el {
+                if handler(ke) { return true; }
+            }
+        }
+    }
+    // 聚焦组件的键盘激活（对标 Compose clickable：聚焦时按 Enter/Space
+    // 触发 onClick——仅聚焦节点自身的 clickable 响应，不向祖先冒泡）
+    let is_activate = matches!(&ke.key, winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter))
+        || matches!(&ke.key, winit::keyboard::Key::Character(c) if c == " ");
+    if ke.event_type == crate::modifier::KbEventType::KeyDown && !ke.repeat && is_activate {
+        if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, fid) {
+            if let Some(on_click) = nodes[idx].modifier.on_click() {
+                on_click();
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// 解析 debug `k` 命令的按键字符串为 winit Key（单字符 → Character；
+/// 特殊名 → NamedKey）。无法解析返回 None（忽略）。
+fn parse_debug_key(s: &str) -> Option<winit::keyboard::Key> {
+    use winit::keyboard::{Key, NamedKey};
+    match s {
+        "Backspace" => Some(Key::Named(NamedKey::Backspace)),
+        "Delete" => Some(Key::Named(NamedKey::Delete)),
+        "Enter" => Some(Key::Named(NamedKey::Enter)),
+        "Escape" => Some(Key::Named(NamedKey::Escape)),
+        "ArrowLeft" => Some(Key::Named(NamedKey::ArrowLeft)),
+        "ArrowRight" => Some(Key::Named(NamedKey::ArrowRight)),
+        "ArrowUp" => Some(Key::Named(NamedKey::ArrowUp)),
+        "ArrowDown" => Some(Key::Named(NamedKey::ArrowDown)),
+        "Home" => Some(Key::Named(NamedKey::Home)),
+        "End" => Some(Key::Named(NamedKey::End)),
+        _ if s.chars().count() == 1 => Some(Key::Character(s.to_string().into())),
+        _ => None,
+    }
+}
+
 /// 查找 grapheme anchor 定位用的文本节点（有 cached_paragraph 的节点）。
 ///
 /// 策略分两步：
@@ -1983,12 +2012,11 @@ fn handle_pointer_down(
             let tl = crate::text::TextLayout::new(para, 0);
             let hit = tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(scene_pos.0 - ax - pad_x, scene_pos.1 - ay - pad_t));
             // 定位结果是显示文本偏移（paragraph = 显示文本）——经 OffsetMapping
-            // 转回编辑偏移（密码掩码/格式化输入）
-            nodes[ai].modifier.elements().iter().find_map(|el| {
-                if let crate::modifier::ModifierElement::TextFieldVisual { offset_mapping, .. } = el {
-                    Some(offset_mapping.as_ref().map(|m| m.transformed_to_original(hit)).unwrap_or(hit))
-                } else { None }
-            }).unwrap_or(hit)
+            // 转回编辑偏移（密码掩码/格式化输入）。
+            // ⚠ TextFieldVisual 挂在**容器**——须向上找（offset_mapping_for_node）
+            crate::ui::text_field::offset_mapping_for_node(nodes, r, ai)
+                .map(|m| m.transformed_to_original(hit))
+                .unwrap_or(hit)
         })
     });
     // reg 只用 anchor 节点自己的 registrar（不 fallback active_registrar）——
@@ -2116,12 +2144,11 @@ fn handle_pointer_move(
                             if let Some(reg) = nodes[innermost].registrar.borrow().as_ref().cloned() {
                                 let current_index = tl.get_closest_grapheme_cluster_cluster_at(
                                     skia_safe::Point::new(scene_pos.0 - x_off - pad_x, scene_pos.1 - abs_y - pad_t));
-                                // 显示偏移 → 编辑偏移（密码掩码/格式化输入）
-                                let current_index = nodes[innermost].modifier.elements().iter().find_map(|el| {
-                                    if let crate::modifier::ModifierElement::TextFieldVisual { offset_mapping, .. } = el {
-                                        Some(offset_mapping.as_ref().map(|m| m.transformed_to_original(current_index)).unwrap_or(current_index))
-                                    } else { None }
-                                }).unwrap_or(current_index);
+                                // 显示偏移 → 编辑偏移（密码掩码/格式化输入；
+                                // TextFieldVisual 在容器——向上找）
+                                let current_index = crate::ui::text_field::offset_mapping_for_node(nodes, r, innermost)
+                                    .map(|m| m.transformed_to_original(current_index))
+                                    .unwrap_or(current_index);
                                 let cur_off = reg.segment_info(nodes[innermost].slot_key).map(|(off, _)| off);
                                 if let Some((target, s, e)) = crate::ui::selection_container::compute_selection(
                                     down.anchor_registrar.as_ref(), down.selection_anchor,
@@ -2130,13 +2157,9 @@ fn handle_pointer_move(
                                 ) {
                                     // 范围是编辑偏移（anchor/current 已转回）——
                                     // reg 空间 = 显示偏移，写入选区前转换
-                                    let (ts, te) = nodes[innermost].modifier.elements().iter().find_map(|el| {
-                                        if let crate::modifier::ModifierElement::TextFieldVisual { offset_mapping, .. } = el {
-                                            Some(offset_mapping.as_ref().map(|m| {
-                                                (m.original_to_transformed(s), m.original_to_transformed(e))
-                                            }).unwrap_or((s, e)))
-                                        } else { None }
-                                    }).unwrap_or((s, e));
+                                    let (ts, te) = crate::ui::text_field::offset_mapping_for_node(nodes, r, innermost)
+                                        .map(|m| (m.original_to_transformed(s), m.original_to_transformed(e)))
+                                        .unwrap_or((s, e));
                                     target.set_selection(ts, te);
                                     handled = true;
                                 }

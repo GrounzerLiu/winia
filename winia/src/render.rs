@@ -18,7 +18,7 @@ use std::cell::RefCell;
 // ── 入口 ──
 
 pub fn render(nodes: &[LayoutNode], root_idx: usize, canvas: &Canvas) {
-    render_pass1(nodes, root_idx, canvas, 0.0, 0.0);
+    render_pass1(nodes, root_idx, root_idx, canvas, 0.0, 0.0);
 }
 
 // ── 视觉 Modifier 渲染（Background / Border / TextContent）──
@@ -573,6 +573,7 @@ fn draw_svg_dom(
 
 fn render_pass1(
     nodes: &[LayoutNode],
+    root_idx: usize,
     idx: usize,
     canvas: &Canvas,
     parent_x: f32, parent_y: f32,
@@ -845,12 +846,9 @@ fn render_pass1(
                         // 时走主路径 get_by_right(0) 失败 → 光标不显示
                         let tl = crate::text::TextLayout::new(para, content.len());
                         // 光标索引是编辑偏移——经 OffsetMapping 转显示偏移
-                        // （密码掩码/格式化输入显示文本 ≠ 编辑文本）
-                        let offset_mapping = node.modifier.elements().iter().find_map(|el| {
-                            if let ModifierElement::TextFieldVisual { offset_mapping, .. } = el {
-                                offset_mapping.clone()
-                            } else { None }
-                        });
+                        // （密码掩码/格式化输入显示文本 ≠ 编辑文本；
+                        // TextFieldVisual 在容器——向上找）
+                        let offset_mapping = crate::ui::text_field::offset_mapping_for_node(nodes, root_idx, idx);
                         let idx = offset_mapping.as_ref()
                             .map(|m| m.original_to_transformed(node.cursor_index.get()))
                             .unwrap_or_else(|| node.cursor_index.get());
@@ -864,11 +862,7 @@ fn render_pass1(
             // IME 组合文本下划线（编辑偏移 → 显示偏移）
             if let Some(comp_range) = node.composing_range.borrow().as_ref() {
                 if comp_range.start < comp_range.end {
-                    let offset_mapping = node.modifier.elements().iter().find_map(|el| {
-                        if let ModifierElement::TextFieldVisual { offset_mapping, .. } = el {
-                            offset_mapping.clone()
-                        } else { None }
-                    });
+                    let offset_mapping = crate::ui::text_field::offset_mapping_for_node(nodes, root_idx, idx);
                     let (cs, ce) = offset_mapping.as_ref().map(|m| {
                         (m.original_to_transformed(comp_range.start), m.original_to_transformed(comp_range.end))
                     }).unwrap_or((comp_range.start, comp_range.end));
@@ -963,7 +957,7 @@ fn render_pass1(
 
     // 穿行子节点（backdrop 节点自身内容照常绘制在模糊层之上）
     for &child in &node.children {
-        render_pass1(nodes, child, canvas, x, y);
+        render_pass1(nodes, root_idx, child, canvas, x, y);
     }
 
     // 水波纹（indication ripple）——覆盖内容之上、受 shape/scroll 裁剪
