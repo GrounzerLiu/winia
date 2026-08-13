@@ -1,8 +1,8 @@
 # Winia Key 系统设计（定稿）
 
 > 分支：`key-stability-research`
-> 状态：**已实施**（386 个单元测试全绿）
-> 设计演变：初稿主张"编译期替换 remember/next_key/animate 为编号版本"——实施中发现 per-base 独立计数已解决漂移根因，**砍掉替换机制，只保留语句注入**（定稿，见 §9 演变记录）。
+> 状态：**已实施**（396 个单元测试全绿 + 29 个 demo 实测通过）
+> 设计演变：初稿主张"编译期替换 remember/next_key/animate 为编号版本"——实施中发现 per-base 独立计数已解决漂移根因，**砍掉替换机制，只保留语句注入**（定稿，见 §9 演变记录）；后续补 seq 链哈希（修滚动卡死）与 overlay active 参数化（修闪烁/无法关闭）。
 
 ---
 
@@ -43,8 +43,8 @@ key 是组合系统**跨帧身份**——组合、物化、布局三阶段靠 ke
 ## 2. 核心原则
 
 1. **一切 key 派生自"调用点 key"**——组件实例不自己生成 key，由调用它的位置决定（Compose 同语义）
-2. **调用点 base 编译期固定**：`fnv(scope哈希, 语句id, 迭代seq)`——宏注入语句 id
-3. **语句内序号运行时分配，但按 base 独立**（per-base counter）——跨语句互不漂移
+2. **调用点 base 编译期固定**：`fnv(scope哈希, 语句id, 迭代seq)`——宏注入语句 id；迭代 seq = **slot 树完整 child_counters 链哈希**（位置而非执行次数——start_slot 每帧无条件执行，滚动时 Skip/Enter 交替不漂移）
+3. **语句内序号按 base 独立分配**（per-base counter）——跨语句互不漂移；同语句多实例由 per-base 序号 + 迭代 seq 共同区分
 4. **无稳定 key 源即 panic**——不允许静默降级
 5. **列表/动态结构**：用户 `ctx.key()` 显式兜底（Compose 语义）
 
@@ -53,10 +53,14 @@ key 是组合系统**跨帧身份**——组合、物化、布局三阶段靠 ke
 ## 3. key 的构成
 
 ```
-最终 key = (base << 32) | per-base序号
+最终 key = (base 高 32 位) | per-base序号
 base     = 调用点链哈希（编译期固定）    ← 身份来源
 序号     = 该 base 下第 N 次调用（运行时，per-base 独立计数） ← 同语句多实例区分
 ```
+
+⚠ 不能用 `(base << 32) | 序号`：64 位 base 左移 32 会把高 32 位移出丢弃 → 身份只剩 base 低 32 位（2^32 碰撞空间——checkbox 循环子项 label 碰撞 → dup-key）。用 `base & 0xFFFF_FFFF_0000_0000` 保留高 32 位身份。
+
+**迭代 seq（for 循环多实例）**：`enter_stmt` 的 seq 分量 = slot 树完整 `child_counters` 链的 fnv 哈希（`sibling_position`）。链含父层 index——content 闭包内语句不同行实例哈希不同 → 行间不冲突。位置跨帧稳定（start_slot 每帧无条件执行），滚动时部分行 Skip/Enter 交替不漂移（替代旧执行计数——计数每 compose 清空 + Skip 帧不执行 → 漂移 → dup-key，animation_demo 滚动卡死根因）。
 
 **base 的三个来源（优先级）**：
 
@@ -220,6 +224,15 @@ pub(crate) fn try_stable_base(&self) -> Option<u64> {
 
 **经验教训**：容器类组件（有 content 闭包、内部状态依赖需冒泡给父）**不能宏化**；叶子/自包含组件（内部状态只自己消费）**宏化收益大**。已宏化的 16 组件 + effect + overlay 均满足两条件。
 
+### 7.3 overlay 生命周期（Popup/Dialog 参数化）
+
+**Popup/Dialog 必须 `new(visible)` 参数化**（对齐 `DropdownMenu::new(expanded)`）——build **总执行**并调用 `ctx.record_overlay_active(id, visible)` 记录 active 状态：
+
+- **主动关闭**（`visible=false`）→ sync_overlays 按 active=false **删除**（先触发 on_dismiss）
+- **注册方 Skip**（主树无变化帧，build 未执行 → 本帧无记录）→ **保留**
+
+**为什么不能 `if visible { Popup::new()...build() }` 包裹**：build 不执行时，主树 Skip 帧与主动关闭在 slot 层**无法区分**——旧实现用 recomposed+alive 推断关闭，Skip 帧被误判为关闭 → 删掉 → 下帧重建 → **闪烁**（overlay_demo Popup 闪烁根因）。组合期显式记录 active 是唯一正解。
+
 ---
 
 ## 8. 与 Compose 对标
@@ -228,6 +241,7 @@ pub(crate) fn try_stable_base(&self) -> Option<u64> {
 |---|---|---|
 | 调用点 key | 编译器生成（源码位置哈希） | 宏注入语句 id（fnv 调用链） |
 | 语句内序号 | 编译器组栈 | per-base 运行时计数（独立不漂移） |
+| 迭代 seq（循环多实例） | 编译器组栈位置 | **slot 树 child_counters 链哈希**（位置，跨帧稳定） |
 | 列表实例 | `key(index)` 用户显式 | `ctx.key()` 用户显式 |
 | 状态重置（结构变化） | 是（可预测） | 是（可预测） |
 | 未覆盖场景 | 编译期 | 运行期 panic（fail-fast） |
@@ -257,6 +271,14 @@ pub(crate) fn try_stable_base(&self) -> Option<u64> {
 | `ctx.key()` 混合调用链 | 同 id 跨调用点（16 字段同 role Label）不碰撞 |
 | `compose!` 宏 | 测试/嵌套场景根闭包（line:column 哈希） |
 | dup-key 物化 panic | debug 告警升级为 hard panic（fail-fast） |
+
+**2026-08-13 补充（滚动卡死 + overlay 修复后的演进）**：
+
+| 演进 | 说明 |
+|---|---|
+| **迭代 seq = slot 树链哈希** | `enter_stmt` 的 seq 从"执行计数"（STMT_SEQ，每 compose 清空 + Skip 帧不执行 → 滚动漂移 → dup-key）改为**完整 child_counters 链的 fnv**（`sibling_position`）——start_slot 每帧无条件执行 → 位置跨帧稳定。删除 STMT_SEQ/SCOPE_SRC_STACK。修 animation_demo 滚动卡死（WS 复现 60 滚动 → 0 dup-key） |
+| **base 高 32 位拼接** | key = `(base & 0xFFFF_FFFF_0000_0000) \| 序号` 而非 `(base << 32) \| 序号`——后者把 base 高 32 位移出丢弃（2^32 碰撞空间，checkbox 循环子项碰撞） |
+| **overlay active 参数化** | Popup/Dialog 改 `new(visible)`（对齐 DropdownMenu::new(expanded)）——build 总执行 + `record_overlay_active` 组合期记录 active；sync 按 active=false 删除（主动关闭），无记录保留（Skip 帧）。修 overlay 闪烁（retain 误删）+ Dialog 无法关闭 |
 
 ---
 
