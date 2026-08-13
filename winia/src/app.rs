@@ -182,7 +182,7 @@ impl PerWindow {
             if let Some(r) = self.composer.layout_root_idx() {
                 let nodes = self.composer.arena_nodes();
                 crate::layout::node::find_node_by_id(nodes, r, fid)
-                    .map(|idx| nodes[idx].ime_callback.borrow().is_some())
+                    .map(|idx| node_or_descendant_wants_ime(nodes, idx))
                     .unwrap_or(false)
             } else {
                 false
@@ -910,7 +910,9 @@ impl ApplicationHandler for AppState {
                                 // set_current_node_ime_callback 主动声明 IME 需求；
                                 // 框架只做机械转发，不判断组件类型。Button 等未声明
                                 // ime_callback 的 focusable 聚焦时不开启输入法。
-                                let wants_ime = nodes[found].ime_callback.borrow().is_some();
+                                // ⚠ TextField 容器化：焦点在容器、ime_callback 在输入
+                                // leaf——须向下找子树（node_or_descendant_wants_ime）
+                                let wants_ime = node_or_descendant_wants_ime(nodes, found);
                                 if let Some(ref sw) = pw.skia_window {
                                     sw.set_ime_allowed(wants_ime);
                                 }
@@ -1888,6 +1890,25 @@ fn find_anchor_text_node(nodes: &[LayoutNode], path: &[usize], innermost: usize)
         None
     }
     dfs(nodes, innermost)
+}
+
+/// 节点或其子树中是否有节点声明 IME 需求（ime_callback 非空）。
+///
+/// ⚠ TextField 容器化：焦点/键盘在容器（focusable 挂在容器 modifier），而
+/// ime_callback 在**输入 leaf**（set_current_node_ime_callback）——只查焦点
+/// 节点自身则 TextField 聚焦时 IME 永不开启。DFS 向下找子树（与
+/// find_anchor_text_node 同策略）；Button 等无 ime_callback 的 focusable
+/// 子树不匹配 → 聚焦不开启输入法。
+fn node_or_descendant_wants_ime(nodes: &[LayoutNode], idx: usize) -> bool {
+    if nodes[idx].ime_callback.borrow().is_some() {
+        return true;
+    }
+    for &c in &nodes[idx].children {
+        if node_or_descendant_wants_ime(nodes, c) {
+            return true;
+        }
+    }
+    false
 }
 
 /// 指针按下核心（真实 PointerButton 与 debug 模拟共用——防行为分叉）。
