@@ -30,12 +30,6 @@ fn section_title(ctx: &mut ComposeCtx, title: &str) {
 #[composable]
 fn text_field_ui(ctx: &mut ComposeCtx) {
     // ── 状态值 ──
-    let empty = ctx.remember(|| TextFieldValue::new(""));
-    let phone = ctx.remember(|| TextFieldValue::new("13812345678"));
-    let long_text = ctx.remember(|| TextFieldValue::new("A very long input value that should wrap or overflow the container to test layout behavior"));
-    let name = ctx.remember(|| TextFieldValue::new("Alice"));
-    let amount = ctx.remember(|| TextFieldValue::new("1234.56"));
-    let multiline = ctx.remember(|| TextFieldValue::new("Line one\nLine two\nLine three"));
     // 垂直滚动（内容超出窗口高度时滚动查看）
     let scroll_y = ctx.remember(|| ScrollState::new()).get();
 
@@ -44,14 +38,14 @@ fn text_field_ui(ctx: &mut ComposeCtx) {
         .build(ctx, |ctx| {
             // ═══ 1. 基础：label 展开（未聚焦空值）═══
             section_title(ctx, "1. Filled + label（展开态——空值未聚焦）");
-            TextField::new(empty.clone(), |_| {})
+            TextField::new(ctx.remember(|| TextFieldValue::new("")), |_| {})
                 .filled()
                 .label(|ctx| { Text::new("Username").build(ctx); })
                 .placeholder(|ctx| { Text::new("Enter username").build(ctx); })
                 .build(ctx);
 
             section_title(ctx, "2. Outlined + label（展开态）");
-            TextField::new(empty.clone(), |_| {})
+            TextField::new(ctx.remember(|| TextFieldValue::new("")), |_| {})
                 .outlined()
                 .label(|ctx| { Text::new("Email").build(ctx); })
                 .placeholder(|ctx| { Text::new("you@example.com").build(ctx); })
@@ -59,7 +53,7 @@ fn text_field_ui(ctx: &mut ComposeCtx) {
 
             // ═══ 3. 只有 leading 图标 ═══
             section_title(ctx, "3. Filled + leading icon only");
-            TextField::new(empty.clone(), |_| {})
+            TextField::new(ctx.remember(|| TextFieldValue::new("")), |_| {})
                 .filled()
                 .label(|ctx| { Text::new("Search").build(ctx); })
                 .placeholder(|ctx| { Text::new("Search anything").build(ctx); })
@@ -72,7 +66,7 @@ fn text_field_ui(ctx: &mut ComposeCtx) {
 
             // ═══ 4. 只有 trailing 图标 ═══
             section_title(ctx, "4. Outlined + trailing icon only");
-            TextField::new(name.clone(), |_| {})
+            TextField::new(ctx.remember(|| TextFieldValue::new("Alice")), |_| {})
                 .outlined()
                 .label(|ctx| { Text::new("Name").build(ctx); })
                 .trailing_icon(|ctx| {
@@ -84,7 +78,7 @@ fn text_field_ui(ctx: &mut ComposeCtx) {
 
             // ═══ 5. leading + trailing（无前后缀）═══
             section_title(ctx, "5. Filled + leading + trailing icons");
-            TextField::new(phone.clone(), |_| {})
+            TextField::new(ctx.remember(|| TextFieldValue::new("13812345678")), |_| {})
                 .filled()
                 .label(|ctx| { Text::new("Phone").build(ctx); })
                 .leading_icon(|ctx| {
@@ -101,7 +95,7 @@ fn text_field_ui(ctx: &mut ComposeCtx) {
 
             // ═══ 6. 只有 prefix ═══
             section_title(ctx, "6. Outlined + prefix only");
-            TextField::new(empty.clone(), |_| {})
+            TextField::new(ctx.remember(|| TextFieldValue::new("")), |_| {})
                 .outlined()
                 .label(|ctx| { Text::new("Amount").build(ctx); })
                 .placeholder(|ctx| { Text::new("0.00").build(ctx); })
@@ -112,7 +106,7 @@ fn text_field_ui(ctx: &mut ComposeCtx) {
 
             // ═══ 7. 只有 suffix ═══
             section_title(ctx, "7. Filled + suffix only");
-            TextField::new(amount.clone(), |_| {})
+            TextField::new(ctx.remember(|| TextFieldValue::new("1234.56")), |_| {})
                 .filled()
                 .label(|ctx| { Text::new("Total").build(ctx); })
                 .suffix(|ctx| {
@@ -122,7 +116,7 @@ fn text_field_ui(ctx: &mut ComposeCtx) {
 
             // ═══ 8. prefix + suffix（无图标）═══
             section_title(ctx, "8. Outlined + prefix + suffix");
-            TextField::new(empty.clone(), |_| {})
+            TextField::new(ctx.remember(|| TextFieldValue::new("")), |_| {})
                 .outlined()
                 .label(|ctx| { Text::new("Range").build(ctx); })
                 .placeholder(|ctx| { Text::new("0 - 100").build(ctx); })
@@ -136,7 +130,7 @@ fn text_field_ui(ctx: &mut ComposeCtx) {
 
             // ═══ 9. 全组合：leading + prefix + input + suffix + trailing ═══
             section_title(ctx, "9. Filled + leading + prefix + suffix + trailing");
-            TextField::new(phone.clone(), |_| {})
+            TextField::new(ctx.remember(|| TextFieldValue::new("13812345678")), |_| {})
                 .filled()
                 .label(|ctx| { Text::new("Phone").build(ctx); })
                 .leading_icon(|ctx| {
@@ -159,14 +153,14 @@ fn text_field_ui(ctx: &mut ComposeCtx) {
 
             // ═══ 10. 无 label（placeholder 直接显示）═══
             section_title(ctx, "10. 无 label——placeholder 恒显示（空值时）");
-            TextField::new(empty.clone(), |_| {})
+            TextField::new(ctx.remember(|| TextFieldValue::new("")), |_| {})
                 .filled()
                 .placeholder(|ctx| { Text::new("No label, just placeholder").build(ctx); })
                 .build(ctx);
 
             // ═══ 11. 长内容（折行/超宽）═══
             section_title(ctx, "11. 长内容 + suffix（折行）");
-            TextField::new(long_text.clone(), |_| {})
+            TextField::new(ctx.remember(|| TextFieldValue::new("A very long input value that should wrap or overflow the container to test layout behavior")), |_| {})
                 .filled()
                 .label(|ctx| { Text::new("Description").build(ctx); })
                 .suffix(|ctx| {
@@ -176,7 +170,9 @@ fn text_field_ui(ctx: &mut ComposeCtx) {
 
             // ═══ 12. 多行 ═══
             section_title(ctx, "12. 多行（min_lines 3）");
-            TextField::new(multiline.clone(), |_| {})
+            TextField::new(ctx.remember(|| TextFieldValue::new("Line one
+Line two
+Line three")), |_| {})
                 .filled()
                 .label(|ctx| { Text::new("Notes").build(ctx); })
                 .min_lines(3)
@@ -184,7 +180,7 @@ fn text_field_ui(ctx: &mut ComposeCtx) {
 
             // ═══ 13. 只读 ═══
             section_title(ctx, "13. Outlined + 只读");
-            TextField::new(empty.clone(), |_| {})
+            TextField::new(ctx.remember(|| TextFieldValue::new("")), |_| {})
                 .outlined()
                 .read_only(true)
                 .label(|ctx| { Text::new("Readonly").build(ctx); })
@@ -198,7 +194,7 @@ fn text_field_ui(ctx: &mut ComposeCtx) {
 
             // ═══ 14. 错误 + 支持文本 ═══
             section_title(ctx, "14. Outlined 错误 + supporting");
-            TextField::new(empty.clone(), |_| {})
+            TextField::new(ctx.remember(|| TextFieldValue::new("")), |_| {})
                 .outlined()
                 .label(|ctx| { Text::new("Password").build(ctx); })
                 .placeholder(|ctx| { Text::new("8+ characters").build(ctx); })
@@ -208,7 +204,7 @@ fn text_field_ui(ctx: &mut ComposeCtx) {
 
             // ═══ 15. Filled 错误 + 图标 + 支持文本（全状态）═══
             section_title(ctx, "15. Filled 错误 + leading + supporting");
-            TextField::new(empty.clone(), |_| {})
+            TextField::new(ctx.remember(|| TextFieldValue::new("")), |_| {})
                 .filled()
                 .label(|ctx| { Text::new("Card number").build(ctx); })
                 .placeholder(|ctx| { Text::new("1234 5678 9012 3456").build(ctx); })

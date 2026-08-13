@@ -388,6 +388,11 @@ pub(crate) struct TextFieldLayout {
     pub(crate) pad_bottom: f32,
     /// supporting 区高（4+16=20——容器 min_height 含此，居中推导须扣除）
     pub(crate) supporting_h: f32,
+    /// 文本字号（px）——空文本输入子节点最小尺寸用（行高 ≈ font_size*1.4）。
+    /// ⚠ 空文本 paragraph 测量 0×0 → 输入节点尺寸 0 → render_pass1 直接
+    /// return → 光标不绘制。强制最小尺寸（高=行高、宽≥1）让空字段也能
+    /// 进入渲染画光标。
+    pub(crate) font_size: f32,
 }
 
 /// 内容区高度推导（label/图标容器居中锚点用）：
@@ -414,8 +419,9 @@ impl TextFieldLayout {
         pad_top: f32,
         pad_bottom: f32,
         supporting_h: f32,
+        font_size: f32,
     ) -> Self {
-        Self { label_progress, variant, pad_top, pad_bottom, supporting_h }
+        Self { label_progress, variant, pad_top, pad_bottom, supporting_h, font_size }
     }
 }
 
@@ -489,6 +495,15 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
         for (i, &c) in children.iter().enumerate() {
             if roles[i] == TextFieldSlotRole::Input {
                 let (s, _) = measure_node(nodes, policies, c, crate::layout::Constraints::new(0.0, input_w, 0.0, constraints.max_height));
+                // ⚠ 空文本 paragraph 测量 0×0 → 输入节点尺寸 0 → render_pass1
+                // `w<=0 || h<=0 return` → 光标不绘制（空字段聚焦无光标）。
+                // 强制最小尺寸：高 ≥ 行高（font_size*1.4）、宽 ≥ 1（渲染进入 +
+                // 光标绘制在内容起点）。
+                let line_h = self.font_size * 1.4;
+                let s = crate::layout::Size::new(
+                    if s.width < 1.0 { 1.0 } else { s.width },
+                    if s.height < line_h { line_h } else { s.height },
+                );
                 input_size = s;
                 // prefix 与输入 2dp（PrefixSuffixTextPadding）
                 input_pos_x = left + prefix_w + AFFIX_GAP;
@@ -1464,7 +1479,7 @@ impl TextField {
         ctx.start_restartable_group(
             key,
             container_modifier,
-            TextFieldLayout::new(label_progress.clone(), visual, pad_top, pad_bottom, supporting_h),
+            TextFieldLayout::new(label_progress.clone(), visual, pad_top, pad_bottom, supporting_h, font_size),
         );
         // 闭包子节点包装（角色标记 + Box 层叠——内容由闭包构建）。
         // 每个槽位提供 M3 默认样式（LOCAL_TEXT_STYLE / LOCAL_CONTENT_COLOR
