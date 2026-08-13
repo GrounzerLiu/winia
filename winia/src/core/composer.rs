@@ -1452,6 +1452,11 @@ impl Composer {
         // 同时收集受影响的 slot key（用于增量更新 slot_deps）
         let mut affected_slot_keys = HashSet::new();
         let mut pending = self.pending_states.lock();
+        #[cfg(debug_assertions)]
+        if std::env::var("WINIA_RECOMPOSE_TRACE").is_ok() {
+            // 触发本次重组的 State id 列表（对应 State::set/update 调用）
+            eprintln!("[recompose] 触发 State: {:?}", pending.iter().collect::<Vec<_>>());
+        }
         for state_id in pending.drain(..) {
             if let Some(keys) = self.slot_deps.get(&state_id) {
                 for &k in keys {
@@ -1637,8 +1642,18 @@ impl Composer {
     /// 若无待处理则跳过，保留上一帧的布局树。
     pub fn recompose(&mut self, content: impl FnOnce(&mut ComposeCtx)) -> bool {
         let has_pending = !self.pending_states.lock().is_empty();
+        let will_run = self.needs_recomposition || has_pending || !self.pending_recomposition.is_empty();
+        #[cfg(debug_assertions)]
+        if std::env::var("WINIA_RECOMPOSE_TRACE").is_ok() {
+            // 重组触发诊断：何时执行/跳过 + 触发原因（pending=State 变化数）
+            eprintln!(
+                "[recompose] pending={} needs={} q={} → {}",
+                has_pending, self.needs_recomposition, self.pending_recomposition.len(),
+                if will_run { "COMPOSE" } else { "SKIP（无变化）" }
+            );
+        }
 
-        if !self.needs_recomposition && !has_pending && self.pending_recomposition.is_empty() {
+        if !will_run {
             return false;
         }
 
