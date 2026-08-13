@@ -99,9 +99,9 @@ fn my_ui(ctx: &mut ComposeCtx) {
 }
 ```
 
-- **`ctx.remember` / `ctx.next_key` / `ctx.animate_*_as_state` 原样保留**——不替换、无 `_at` 变体（定稿：per-base 计数已解决漂移，见 §9）
+- **`ctx.remember` / `ctx.next_key` / `ctx.animate_*_as_state` 原样保留**——不替换、无 `_at` 变体（定稿：见 §9）
 - 语句 id（0/1/2/3...）编译期按源码顺序固定——结构变化不漂移
-- 迭代 seq：`enter_stmt` 用 max(自身执行计数, 外层迭代位置)——for 循环每迭代 key 不同；content 闭包内语句继承外层行语句的迭代位置
+- 迭代 seq：`enter_stmt` 用 **slot 树完整 child_counters 链哈希**（`sibling_position`）——start_slot 每帧无条件执行（Skip 帧也执行）→ 位置跨帧稳定，**不随执行次数漂移**（替代旧执行计数——滚动时 Skip/Enter 交替导致执行计数漂移 → seq≠迭代位置 → key 漂移 → dup-key panic，animation_demo 滚动卡死根因）。链含父层 index：content 闭包内语句不同行实例哈希不同 → 行间不冲突
 
 ### 4.2 两种注入模式
 
