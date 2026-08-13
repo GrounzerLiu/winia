@@ -53,12 +53,12 @@ key 是组合系统**跨帧身份**——组合、物化、布局三阶段靠 ke
 ## 3. key 的构成
 
 ```
-最终 key = (base 高 32 位) | per-base序号
+最终 key = mix_key(base, per-base序号)     = fnv(base, 序号) 全 64 位混合
 base     = 调用点链哈希（编译期固定）    ← 身份来源
 序号     = 该 base 下第 N 次调用（运行时，per-base 独立计数） ← 同语句多实例区分
 ```
 
-⚠ 不能用 `(base << 32) | 序号`：64 位 base 左移 32 会把高 32 位移出丢弃 → 身份只剩 base 低 32 位（2^32 碰撞空间——checkbox 循环子项 label 碰撞 → dup-key）。用 `base & 0xFFFF_FFFF_0000_0000` 保留高 32 位身份。
+⚠ 不能用拼接方案：`(base << 32) | 序号` 丢弃 base 高 32 位、`base 高 32 位 | 序号` 丢弃低 32 位——身份空间只剩 2^32（生日悖论 ~4300 调用点后 50% 碰撞概率，checkbox 循环子项即碰撞）。`mix_key = fnv(base, 序号)` 全 64 位混合，不丢熵。
 
 **迭代 seq（for 循环多实例）**：`enter_stmt` 的 seq 分量 = slot 树完整 `child_counters` 链的 fnv 哈希（`sibling_position`）。链含父层 index——content 闭包内语句不同行实例哈希不同 → 行间不冲突。位置跨帧稳定（start_slot 每帧无条件执行），滚动时部分行 Skip/Enter 交替不漂移（替代旧执行计数——计数每 compose 清空 + Skip 帧不执行 → 漂移 → dup-key，animation_demo 滚动卡死根因）。
 
@@ -277,7 +277,7 @@ pub(crate) fn try_stable_base(&self) -> Option<u64> {
 | 演进 | 说明 |
 |---|---|
 | **迭代 seq = slot 树链哈希** | `enter_stmt` 的 seq 从"执行计数"（STMT_SEQ，每 compose 清空 + Skip 帧不执行 → 滚动漂移 → dup-key）改为**完整 child_counters 链的 fnv**（`sibling_position`）——start_slot 每帧无条件执行 → 位置跨帧稳定。删除 STMT_SEQ/SCOPE_SRC_STACK。修 animation_demo 滚动卡死（WS 复现 60 滚动 → 0 dup-key） |
-| **base 高 32 位拼接** | key = `(base & 0xFFFF_FFFF_0000_0000) \| 序号` 而非 `(base << 32) \| 序号`——后者把 base 高 32 位移出丢弃（2^32 碰撞空间，checkbox 循环子项碰撞） |
+| **mix_key 全 64 位混合** | key = `fnv(base, 序号)`（`mix_key`）——拼接方案（`<< 32` 或 `高 32 位 |`）都把 base 截到 32 位身份空间（2^32 碰撞概率高），混合不丢熵（review 发现，`acf3e6a`） |
 | **overlay active 参数化** | Popup/Dialog 改 `new(visible)`（对齐 DropdownMenu::new(expanded)）——build 总执行 + `record_overlay_active` 组合期记录 active；sync 按 active=false 删除（主动关闭），无记录保留（Skip 帧）。修 overlay 闪烁（retain 误删）+ Dialog 无法关闭 |
 
 ---
