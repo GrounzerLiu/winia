@@ -822,11 +822,11 @@ fn render_pass1(
             let focused = node.display_focused.get() || node.focused;
             if focused && !has_selection {
                 if node.cursor_visible.get() {
-                    let cursor = node.modifier.elements().iter().find_map(|el| {
-                        if let ModifierElement::TextFieldVisual { cursor_color, .. } = el {
-                            Some(*cursor_color)
-                        } else { None }
-                    }).unwrap_or(*color);
+                    // ⚠ cursor_color 在容器 TextFieldVisual（组合期解析 primary/
+                    // error）——输入 leaf 无此元素，从 leaf 找会回退文本色。
+                    // 沿 parent 链向上找容器（offset_mapping_for_node 同路径）
+                    let cursor = crate::ui::text_field::text_field_visual_color(nodes, root_idx, idx)
+                        .unwrap_or(*color);
                     let mut cp = skia_safe::Paint::default();
                     cp.set_color(skia_safe::Color::from_argb(255, cursor.r, cursor.g, cursor.b));
                     cp.set_stroke_width(1.5);

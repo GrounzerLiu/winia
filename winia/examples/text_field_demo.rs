@@ -316,6 +316,11 @@ Line three")), |_| {})
                 .visual_transformation(GroupedDigitTransformation)
                 .supporting_text("自定义：每 4 位自动分组（非数字丢弃）")
                 .build(ctx);
+            TextField::new(ctx.remember(|| TextFieldValue::new("")), |_| {})
+                .label(|ctx| { Text::new("PIN").build(ctx); })
+                .visual_transformation(PasswordTransformation::new('•'))
+                .supporting_text("裸输入（无容器视觉）+ 掩码——变换不依赖 M3 变体")
+                .build(ctx);
         });
 }
 

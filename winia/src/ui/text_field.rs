@@ -610,7 +610,8 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
 /// （text_field_visual），输入 leaf 无此元素——点击定位/拖拽/IME 区域/
 /// 渲染光标从 leaf 查找 TextFieldVisual 会得到 None → 显示偏移直接当
 /// 编辑偏移写 selection（掩码字符 '•' 3 字节 → replace_range 越界 panic）
-/// 或光标画错位置。沿 parent_id 链向上找第一个 TextFieldVisual。
+/// 或光标画错位置。沿 parent_id 链向上找第一个 TextFieldVisual
+/// （裸 TextField 无 variant → TextFieldOffsetMapping 元素）。
 pub(crate) fn offset_mapping_for_node(
     nodes: &[crate::layout::node::LayoutNode],
     root: usize,
@@ -620,8 +621,38 @@ pub(crate) fn offset_mapping_for_node(
     let mut cur = Some(idx);
     while let Some(i) = cur {
         for el in nodes[i].modifier.elements() {
-            if let ModifierElement::TextFieldVisual { offset_mapping, .. } = el {
-                return offset_mapping.clone();
+            match el {
+                ModifierElement::TextFieldVisual { offset_mapping, .. } if offset_mapping.is_some() => {
+                    return offset_mapping.clone();
+                }
+                ModifierElement::TextFieldOffsetMapping { offset_mapping } => {
+                    return Some(offset_mapping.clone());
+                }
+                _ => {}
+            }
+        }
+        cur = nodes[i].parent_id
+            .and_then(|pid| crate::layout::node::find_node_by_id(nodes, root, pid));
+    }
+    None
+}
+
+/// 从节点（TextField 输入 leaf）向上找容器 TextFieldVisual 的光标色。
+///
+/// ⚠ cursor_color 在容器 TextFieldVisual（组合期解析 primary/error），
+/// 输入 leaf 无此元素——渲染光标从 leaf 查找会回退文本色（非 M3 光标色）。
+/// 与 offset_mapping_for_node 同路径沿 parent 链向上找。
+pub(crate) fn text_field_visual_color(
+    nodes: &[crate::layout::node::LayoutNode],
+    root: usize,
+    idx: usize,
+) -> Option<crate::modifier::Color> {
+    use crate::modifier::ModifierElement;
+    let mut cur = Some(idx);
+    while let Some(i) = cur {
+        for el in nodes[i].modifier.elements() {
+            if let ModifierElement::TextFieldVisual { cursor_color, .. } = el {
+                return Some(*cursor_color);
             }
         }
         cur = nodes[i].parent_id
@@ -1451,7 +1482,13 @@ impl TextField {
                     supporting_visual,
                 )
         } else {
-            container_modifier.padding(8.0)
+            // 裸 TextField（无 variant）：无 TextFieldVisual 挂载点——offset_mapping
+            // 挂到容器（TextFieldOffsetMapping 元素；offset_mapping_for_node 沿
+            // parent 链向上查找命中），否则 visual_transformation 的显示/编辑
+            // 偏移转换在点击定位/渲染光标处查不到（显示偏移直写 selection 越界）
+            container_modifier
+                .padding(8.0)
+                .text_field_offset_mapping(offset_mapping.clone())
         };
         // 容器最小高度（supporting + min_lines + 56）——min_height 兜底
         // 占位；测量用 paragraph 实际高度（含折行）

@@ -454,6 +454,14 @@ pub(crate) enum ModifierElement {
         /// 支持文本（画在容器底部外侧 4dp）
         supporting: Option<SupportingVisual>,
     },
+    /// 文本输入框偏移映射（TextField 组件内部使用——**无 M3 容器视觉**的
+    /// 裸 TextField 挂载点）。TextFieldVisual 只在有 variant（Filled/Outlined）
+    /// 时挂载；裸 TextField + visual_transformation 时 offset_mapping 无处
+    /// 可达（点击定位/渲染光标查找 None → 显示偏移直写 selection 越界）。
+    /// 仅存映射、无渲染/绘制副作用（render 各 match 走 `_ =>` 兜底）。
+    TextFieldOffsetMapping {
+        offset_mapping: std::sync::Arc<dyn crate::ui::text_transformation::OffsetMapping>,
+    },
 
     // ── Content 类 ──
     /// 文本内容（由 Text 组件设置，渲染阶段消费）
@@ -1022,6 +1030,16 @@ impl Modifier {
             offset_mapping,
             supporting,
         })
+    }
+
+    /// 文本输入框偏移映射（TextField 组件内部使用——裸 TextField 无
+    /// TextFieldVisual 时挂载；`offset_mapping_for_node` 沿 parent 链向上
+    /// 查找 TextFieldVisual.offset_mapping 或本元素）
+    pub fn text_field_offset_mapping(
+        self,
+        offset_mapping: std::sync::Arc<dyn crate::ui::text_transformation::OffsetMapping>,
+    ) -> Self {
+        self.push(ModifierElement::TextFieldOffsetMapping { offset_mapping })
     }
 }
 
@@ -1825,6 +1843,7 @@ impl Debug for ModifierElement {
             Self::Blur { radius } => f.debug_struct("Blur").field("radius", radius).finish(),
             Self::BackdropBlur { radius } => f.debug_struct("BackdropBlur").field("radius", radius).finish(),
             Self::TextFieldVisual { variant, .. } => f.debug_struct("TextFieldVisual").field("variant", variant).finish(),
+            Self::TextFieldOffsetMapping { .. } => f.write_str("TextFieldOffsetMapping"),
         }
     }
 }
