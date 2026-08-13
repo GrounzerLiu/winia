@@ -263,14 +263,23 @@ Line three")))
                 })
                 .build(ctx);
 
-            // ═══ 14. 错误 + 支持文本 ═══
-            section_title(ctx, "14. Outlined 错误 + supporting");
-            TextField::new(ctx.remember(|| TextFieldValue::new("")))
+            // ═══ 14. 错误 + 支持文本（响应式 is_error——按长度校验）═══
+            section_title(ctx, "14. Outlined 错误 + supporting（<8 字符自动错误态）");
+            // value 是 State——build 里 .get() 注册依赖，编辑文本 → 重组 →
+            // is_error 重推导 → 边框/文字自动变色（无需手动切换）
+            let pw_val = ctx.remember(|| TextFieldValue::new(""));
+            let pw_len = pw_val.get().text.chars().count();
+            let pw_err = pw_len < 8;
+            TextField::new(pw_val)
                 .outlined()
                 .label(|ctx| { Text::new("Password").build(ctx); })
                 .placeholder(|ctx| { Text::new("8+ characters").build(ctx); })
-                .is_error(true)
-                .supporting_text("Password must be at least 8 characters")
+                .is_error(pw_err)
+                .supporting_text(if pw_err {
+                    format!("Password must be at least 8 characters (current: {})", pw_len)
+                } else {
+                    format!("✓ Password OK ({})", pw_len)
+                })
                 .build(ctx);
 
             // ═══ 15. Filled 错误 + 图标 + 支持文本（全状态）═══

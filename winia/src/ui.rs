@@ -47,7 +47,7 @@ pub use button::ButtonElevation;
 pub use button::ButtonSize;
 pub use button::ButtonStyle;
 pub use card::{Card, CardBorder, CardColors, CardDefaults, CardElevation, CardStyle};
-pub use layout_components::{Column, Row, Stack};
+pub use layout_components::{Column, Row, Stack, Spacer};
 pub use window::Window;
 pub use theme::WiniaTheme;
 pub use theme::ThemeColors;
