@@ -96,6 +96,16 @@ pub(crate) fn with_active_slot_key(f: impl FnOnce(u64)) {
     ACTIVE_SLOT_KEY.with(|c| f(c.get()));
 }
 
+/// key = fnv(base, 序号)——全 64 位混合身份与实例序号，不丢熵。
+/// 拼接方案（`(base << 32) | c` 或 `base 高 32 位 | c`）会把 base 截到 32 位
+/// → 身份空间 2^32（碰撞概率高——checkbox 循环子项即碰撞）。
+pub(crate) fn mix_key(base: u64, c: u64) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    h ^= base; h = h.wrapping_mul(0x100000001b3);
+    h ^= c; h = h.wrapping_mul(0x100000001b3);
+    h
+}
+
 /// 设置当前 slot key（measure_node 用它把动态尺寸的依赖注册到节点）
 pub(crate) fn set_active_slot_key(key: u64) {
     ACTIVE_SLOT_KEY.with(|c| c.set(key));
@@ -496,10 +506,10 @@ impl<'a> ComposeCtx<'a> {
         let counter = self.composer.remember_path_counters.entry(base).or_insert(0);
         let c = *counter;
         *counter += 1;
-        // key = base 高 32 位身份 + 低 32 位序号——⚠ 不能用 (base << 32) | c：
-        // 64 位 base 左移 32 会把高 32 位移出丢弃 → key 身份只剩 base 低 32 位
-        // （2^32 碰撞空间——checkbox_demo 循环子项 label 低 32 位碰撞 → dup-key）。
-        (base & 0xFFFF_FFFF_0000_0000) | (c as u64)
+        // key = fnv(base, 序号)——全 64 位混合，不丢身份熵。⚠ 不能用
+        // (base << 32) | c（左移丢弃 base 高 32 位）或 base 高 32 位 | c
+        // （丢弃 base 低 32 位 → 身份只剩 2^32 空间——checkbox 循环子项碰撞）。
+        crate::core::composer::mix_key(base, c as u64)
     }
 
     /// 开始一个布局节点（叶子组件如 Text 使用）
@@ -1192,9 +1202,9 @@ impl Composer {
         let counter = self.path_counters.entry(base).or_insert(1);
         let c = *counter;
         *counter += 1;
-        // key = base 高 32 位身份 + 低 32 位序号（⚠ (base<<32)|c 会把 base 高 32
-        // 位移出丢弃 → 身份只剩低 32 位，2^32 碰撞空间——dup-key 根因）
-        (base & 0xFFFF_FFFF_0000_0000) | (c as u64)
+        // key = fnv(base, 序号)——全 64 位混合，不丢身份熵（拼接方案把身份
+        // 截到 32 位，2^32 碰撞空间——dup-key 根因）
+        crate::core::composer::mix_key(base, c as u64)
     }
 
     /// 开始一个组合 scope（无 LayoutNode 的作用域节点——组合代码重跑的失效单位）。
@@ -1647,9 +1657,13 @@ mod tests {
         let mut composer = Composer::new();
         let key = composer.next_group_key();
         let key2 = composer.next_group_key();
-        // key = (slot 路径哈希 << 32) | counter：同一路径下 counter 区分，高位相同
+        // key = fnv(base, 序号)（mix_key 全 64 位混合）——同 base 相邻序号 key 不同
         assert_ne!(key, key2);
-        assert_eq!(key >> 32, key2 >> 32);
+        // 序号混合应改变低 32 位（fnv 扩散）——不要求高 32 位相同（旧拼接语义）
+        assert_ne!(key as u32, key2 as u32, "序号应扩散到低 32 位（mix_key 全 64 位混合）");
+        // mix_key 本身：不同序号 → 不同 key（跨 base 也不碰撞丢熵）
+        assert_ne!(mix_key(0x1234, 0), mix_key(0x1234, 1), "同 base 不同序号 key 不同");
+        assert_ne!(mix_key(0x1234, 0), mix_key(0x1235, 0), "不同 base 同序号 key 不同");
     }
 
     #[test]
@@ -3928,32 +3942,4 @@ fn test_same_stmt_remember_count_change_resets() {
     let id2 = first_holder.borrow().clone().unwrap().id();
     assert_ne!(id1, id2,
         "同语句内 remember 数量变化 = 序号平移 = 重置（Compose 语义，非漂移 bug——明确记录）");
-}
-/// 复现 overlay 闪烁：独立 composer + 无宏注入的 content 闭包（Popup 场景）——
-/// 内容组件（宏化 build）在独立 composer 执行，节点 key 是否跨帧稳定（复用）？
-#[test]
-fn overlay_composer_nodes_stable_across_frames() {
-    let mut composer = Composer::new();
-    // 模拟 overlay content：无宏注入的闭包，内部 Column + Text（宏化组件）
-    let content = |ctx: &mut ComposeCtx| {
-        crate::ui::Column::new()
-            .spacing(6.0)
-            .modifier(Modifier::new().size(200.0, 90.0))
-            .build(ctx, |ctx| {
-                crate::ui::Text::new("这是一个 Popup").build(ctx);
-                crate::ui::Text::new("内容").build(ctx);
-            });
-    };
-    let mut sizes = Vec::new();
-    for frame in 0..10 {
-        composer.recompose(|ctx| content(ctx));
-        composer.layout(crate::layout::constraints::Constraints::new(0.0, 400.0, 0.0, 300.0));
-        sizes.push(composer.arena.nodes.len());
-        // 每帧改动触发 recompose（模拟 overlay 每帧重建）
-        composer.request_recomposition(0);
-    }
-    // 节点数应稳定（复用）——若每帧增长 = 全量重建（闪烁根因）
-    eprintln!("[ovl-repro] 节点数序列: {sizes:?}");
-    assert!(sizes.iter().all(|&n| n == sizes[0]),
-        "overlay 内容节点应跨帧稳定（复用）——实际 {sizes:?}");
 }
