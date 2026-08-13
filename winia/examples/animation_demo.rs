@@ -342,13 +342,14 @@ fn section8(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
         ..Default::default()
     };
     let done_flag = ctx.remember(|| false);
-    let alpha = ctx.animate_float_as_state(
-        if clicked.get() { 0.2 } else { 1.0 },
-        AnimationSpec::Spring(spring.clone()),
-    );
-    // 演示 on_finish：动画完成时翻转标记（展示 finishedListener 语义）
+    // ⚠ 只用 push_animatable_with_done 管理动画（内含动画 + done 回调）——
+    // 若先 animate_float_as_state 再 push_with_done 同 target，去重检查发现
+    // 同 state 同 target 已存在 → done 动画永不注册 → 回调不触发（一直显示
+    // "未完成"）。State 初始值须 ≠ 首帧 target（否则 peek==target 直接 return，
+    // 无动画也永不回调）。
+    let alpha_state = ctx.remember(|| 0.2);
     winia::animation::push_animatable_with_done(
-        alpha.clone(),
+        alpha_state.clone(),
         if clicked.get() { 0.2 } else { 1.0 },
         AnimationSpec::Spring(spring.clone()),
         { let d = done_flag.clone(); move || { d.set(true); } },
@@ -357,7 +358,7 @@ fn section8(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
         .modifier(Modifier::new()
             .size(220.0, 40.0)
             .background(
-                Color::from_argb((alpha.get() * 255.0) as u8, 63, 81, 181),
+                Color::from_argb((alpha_state.get() * 255.0) as u8, 63, 81, 181),
                 Shape::rounded(4.0),
             ))
         .build(ctx, |_| {});
