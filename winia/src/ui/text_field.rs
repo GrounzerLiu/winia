@@ -888,10 +888,21 @@ impl TextField {
             blink_started.set(true);
             let cv2 = cv.clone();
             let last2 = last_blink.clone();
+            // ⚠ 聚焦检查：光标只在聚焦时闪烁（对齐 Compose——非聚焦不显示
+            // 光标、不触发重组）。闪烁任务捕获 interaction source——翻转前
+            // 检查 is_focused()，非聚焦直接跳过（不翻转 cursor_visible →
+            // 不 notify → 无重组）。修复：text_field_demo 17 字段每 ~500ms
+            // 全量重组（每字段一个闪烁任务同步翻转）。
+            let interaction2 = interaction.clone();
             tokio::spawn(async move {
                 loop {
                     // 100ms 轮询（500ms 相位粒度——交互重置精度 ±100ms）
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    // 非聚焦：不翻转（光标不可见且不触发重组）
+                    let focused_now = interaction2.as_ref().map(|s| s.is_focused()).unwrap_or(false);
+                    if !focused_now {
+                        continue;
+                    }
                     let due = last2.lock().elapsed() >= std::time::Duration::from_millis(500);
                     if due {
                         // ⚠ 翻转后必须重置计时器——否则下一次 tick（100ms 后）
