@@ -85,7 +85,7 @@ fn interaction_ui(ctx: &mut ComposeCtx) {
             } else {
                 theme.outline
             };
-            TextField::new(field.clone(), |_| {})
+            TextField::new(field.clone())
                 .no_container()
                 .interaction_source(tf_src.clone())
                 .is_error(error)

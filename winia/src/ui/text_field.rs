@@ -711,13 +711,14 @@ pub struct TextField {
 }
 
 impl TextField {
-    pub fn new(
-        value: State<TextFieldValue>,
-        on_value_change: impl Fn(TextFieldValue) + Send + Sync + 'static,
-    ) -> Self {
+    /// 创建文本输入框（仅绑定文本状态）。
+    ///
+    /// 值变化回调默认忽略（`|_| {}`）；需要监听编辑结果（受控更新外部
+    /// 状态）时用 `.on_value_change(f)` 单独设置。
+    pub fn new(value: State<TextFieldValue>) -> Self {
         Self {
             value,
-            on_value_change: Box::new(on_value_change),
+            on_value_change: Box::new(|_| {}),
             modifier: Modifier::new(),
             font_size: None,
             enabled: true,
@@ -740,6 +741,13 @@ impl TextField {
             prefix: None,
             suffix: None,
         }
+    }
+
+    /// 值变化回调（受控更新——编辑后同步外部状态；new 默认忽略）。
+    /// 参数为编辑后的新 TextFieldValue（text/selection）
+    pub fn on_value_change(mut self, f: impl Fn(TextFieldValue) + Send + Sync + 'static) -> Self {
+        self.on_value_change = Box::new(f);
+        self
     }
 
     pub fn modifier(mut self, modifier: Modifier) -> Self {
@@ -1854,10 +1862,7 @@ fn caret_next_line(text: &str, pos: usize) -> usize {
 
 impl Default for TextField {
     fn default() -> Self {
-        Self::new(
-            State::new(TextFieldValue::new("")),
-            |_| {},
-        )
+        Self::new(State::new(TextFieldValue::new("")))
     }
 }
 
@@ -1943,9 +1948,9 @@ mod tests {
     #[test]
     fn disabled_field_has_no_focusable() {
         let value = State::new(TextFieldValue::new("hi"));
-        let m = container_modifier(TextField::new(value.clone(), |_| {}).enabled(false)).unwrap();
+        let m = container_modifier(TextField::new(value.clone()).enabled(false)).unwrap();
         assert!(!has_focusable(&m), "禁用字段不应可聚焦");
-        let input = find_slot_modifier(TextField::new(value.clone(), |_| {}).enabled(false), TextFieldSlotRole::Input).unwrap();
+        let input = find_slot_modifier(TextField::new(value.clone()).enabled(false), TextFieldSlotRole::Input).unwrap();
         assert!(find_text_content(&input).is_some(), "禁用字段仍显示内容");
     }
 
@@ -1953,9 +1958,9 @@ mod tests {
     fn enabled_field_has_focusable() {
         // text-field-v2 容器化：焦点/键盘在容器（点击容器任意处聚焦）
         let value = State::new(TextFieldValue::new("hi"));
-        let m = container_modifier(TextField::new(value.clone(), |_| {})).unwrap();
+        let m = container_modifier(TextField::new(value.clone())).unwrap();
         assert!(has_focusable(&m), "启用字段容器应可聚焦");
-        let input = find_slot_modifier(TextField::new(value.clone(), |_| {}), TextFieldSlotRole::Input).unwrap();
+        let input = find_slot_modifier(TextField::new(value.clone()), TextFieldSlotRole::Input).unwrap();
         assert!(!has_focusable(&input), "输入子节点不再可聚焦（焦点在容器）");
     }
 
@@ -1975,7 +1980,7 @@ mod tests {
     #[test]
     fn placeholder_shown_when_empty() {
         let value = State::new(TextFieldValue::new(""));
-        let m = find_slot_modifier(TextField::new(value.clone(), |_| {}).filled().placeholder(|_ctx| { crate::ui::Text::new("请输入").build(_ctx); }), TextFieldSlotRole::Placeholder);
+        let m = find_slot_modifier(TextField::new(value.clone()).filled().placeholder(|_ctx| { crate::ui::Text::new("请输入").build(_ctx); }), TextFieldSlotRole::Placeholder);
         assert!(m.is_some(), "空值构建 placeholder 子节点");
     }
 
@@ -1984,7 +1989,7 @@ mod tests {
         // text-field-v2：placeholder 为闭包子节点（构建条件 show_placeholder）——
         // 非空时不构建（无 Placeholder 槽位标记）
         let value = State::new(TextFieldValue::new("已有内容"));
-        let m = build_field(TextField::new(value.clone(), |_| {}).filled().placeholder(|_ctx| { crate::ui::Text::new("请输入").build(_ctx); }));
+        let m = build_field(TextField::new(value.clone()).filled().placeholder(|_ctx| { crate::ui::Text::new("请输入").build(_ctx); }));
         assert!(find_placeholder(&m).is_none(), "非空时 placeholder 不构建");
     }
 
@@ -1993,16 +1998,16 @@ mod tests {
         // text-field-v2：placeholder 为闭包子节点（仅 has_visual 时构建）——
         // 无容器视觉（no_container）时不构建（无 Placeholder 槽位）
         let value = State::new(TextFieldValue::new(""));
-        let m = find_slot_modifier(TextField::new(value.clone(), |_| {}).no_container().placeholder(|_ctx| { crate::ui::Text::new("请输入").build(_ctx); }), TextFieldSlotRole::Placeholder);
+        let m = find_slot_modifier(TextField::new(value.clone()).no_container().placeholder(|_ctx| { crate::ui::Text::new("请输入").build(_ctx); }), TextFieldSlotRole::Placeholder);
         assert!(m.is_none(), "无视觉时 placeholder 不构建（子节点化）");
     }
 
     #[test]
     fn placeholder_hidden_when_has_content() {
         let value = State::new(TextFieldValue::new("已有内容"));
-        let m = find_slot_modifier(TextField::new(value.clone(), |_| {}).filled().placeholder(|_ctx| { crate::ui::Text::new("请输入").build(_ctx); }), TextFieldSlotRole::Placeholder);
+        let m = find_slot_modifier(TextField::new(value.clone()).filled().placeholder(|_ctx| { crate::ui::Text::new("请输入").build(_ctx); }), TextFieldSlotRole::Placeholder);
         assert!(m.is_none(), "非空时 placeholder 不构建");
-        let mi = find_slot_modifier(TextField::new(value.clone(), |_| {}).filled(), TextFieldSlotRole::Input).unwrap();
+        let mi = find_slot_modifier(TextField::new(value.clone()).filled(), TextFieldSlotRole::Input).unwrap();
         let content = find_text_content(&mi).unwrap_or_default();
         assert_eq!(content, "已有内容", "有值时输入节点显示真实内容");
     }
@@ -2015,7 +2020,7 @@ mod tests {
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let _guard = rt.enter();
         composer.compose(|ctx| {
-            TextField::new(value.clone(), |_| {})
+            TextField::new(value.clone())
                 .min_lines(3)
                 .modifier(Modifier::new().width(300.0))
                 .build(ctx);
@@ -2030,7 +2035,7 @@ mod tests {
         // M3 minLines 语义：内容不足也占位；非 0——修复前输入后消失）
         value.set(TextFieldValue::new("a\nb"));
         composer.compose(|ctx| {
-            TextField::new(value.clone(), |_| {})
+            TextField::new(value.clone())
                 .min_lines(3)
                 .modifier(Modifier::new().width(300.0))
                 .build(ctx);
@@ -2050,7 +2055,7 @@ mod tests {
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let _guard = rt.enter();
         composer.compose(|ctx| {
-            TextField::new(value.clone(), |_| {})
+            TextField::new(value.clone())
                 .filled()
                 .modifier(Modifier::new().width(100.0))
                 .build(ctx);
@@ -2062,7 +2067,7 @@ mod tests {
         // 输入 60 个 '1'（100px 宽下折成多行）
         value.set(TextFieldValue::new("1".repeat(60)));
         composer.compose(|ctx| {
-            TextField::new(value.clone(), |_| {})
+            TextField::new(value.clone())
                 .filled()
                 .modifier(Modifier::new().width(100.0))
                 .build(ctx);
@@ -2262,7 +2267,7 @@ mod tests {
         // 首帧：未聚焦（label 展开，progress 目标 0）
         for frame in 0..3 {
             let log = progress_log.clone();
-            let field = TextField::new(value.clone(), |_| {})
+            let field = TextField::new(value.clone())
                 .filled()
                 .interaction_source(focus_src.clone())
                 .label(move |ctx| {
@@ -2281,7 +2286,7 @@ mod tests {
         focus_src.emit_focus();
         for frame in 0..20 {
             let log = progress_log.clone();
-            let field = TextField::new(value.clone(), |_| {})
+            let field = TextField::new(value.clone())
                 .filled()
                 .interaction_source(focus_src.clone())
                 .label(move |ctx| {
@@ -2320,7 +2325,7 @@ mod tests {
         let focus_src = crate::ui::interaction::MutableInteractionSource::new();
         let progress_log: std::sync::Arc<std::sync::Mutex<Vec<f32>>> = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let mk_field = |log: std::sync::Arc<std::sync::Mutex<Vec<f32>>>| {
-            TextField::new(value.clone(), |_| {})
+            TextField::new(value.clone())
                 .filled()
                 .interaction_source(focus_src.clone())
                 .label(move |ctx| {
@@ -2372,7 +2377,7 @@ mod tests {
         let focus_src = crate::ui::interaction::MutableInteractionSource::new();
         let alpha_log: std::sync::Arc<std::sync::Mutex<Vec<f32>>> = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let mk_field = |log: std::sync::Arc<std::sync::Mutex<Vec<f32>>>| {
-            TextField::new(value.clone(), |_| {})
+            TextField::new(value.clone())
                 .filled()
                 .interaction_source(focus_src.clone())
                 .label(|ctx| { crate::ui::Text::new("Name").build(ctx); })
@@ -2422,7 +2427,7 @@ mod tests {
         let focus_src = crate::ui::interaction::MutableInteractionSource::new();
         let alpha_log: std::sync::Arc<std::sync::Mutex<Vec<f32>>> = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let mk_field = |log: std::sync::Arc<std::sync::Mutex<Vec<f32>>>| {
-            TextField::new(value.clone(), |_| {})
+            TextField::new(value.clone())
                 .filled()
                 .interaction_source(focus_src.clone())
                 .label(|ctx| { crate::ui::Text::new("Name").build(ctx); })
@@ -2474,7 +2479,7 @@ mod tests {
         let scroll = crate::modifier::ScrollState::new();
         let scroll2 = scroll.clone();
         let mk = || {
-            TextField::new(value.clone(), |_| {})
+            TextField::new(value.clone())
                 .filled()
                 .interaction_source(focus_src.clone())
                 .label(|ctx| { crate::ui::Text::new("Name").build(ctx); })
