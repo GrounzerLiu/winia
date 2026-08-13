@@ -821,13 +821,18 @@ impl ApplicationHandler for AppState {
                 use winit::event::Ime;
                 match ime {
                     Ime::Preedit(text, cursor) => {
-                        // 通过 focused node 的 ime_callback 通知 TextField
+                        // 通过 focused node 的 ime_callback 通知 TextField。
+                        // ⚠ TextField 容器化：焦点在容器、ime_callback 在输入 leaf——
+                        // 只查焦点节点自身则 Preedit 永远到不了（预输入不显示）。
+                        // 从焦点节点向下找第一个 ime_callback。
                         if let Some(fid) = pw.focused_id {
                             let nodes = pw.composer.arena_nodes();
                             if let Some(r) = pw.composer.layout_root_idx() {
                                 if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, fid) {
-                                    if let Some(cb) = nodes[idx].ime_callback.borrow_mut().as_mut() {
-                                        cb(&text, cursor);
+                                    if let Some(ime_idx) = find_descendant_ime_callback(nodes, idx) {
+                                        if let Some(cb) = nodes[ime_idx].ime_callback.borrow_mut().as_mut() {
+                                            cb(&text, cursor);
+                                        }
                                     }
                                 }
                             }
@@ -983,10 +988,15 @@ impl ApplicationHandler for AppState {
                     if let Some(fid) = pw.focused_id {
                         let nodes = pw.composer.arena_nodes();
                         if let Some(r) = pw.composer.layout_root_idx() {
-                            if let Some(pidx) = crate::layout::node::find_node_by_id(nodes, r, fid) {
+                            // ⚠ TextField 容器化：焦点在容器、paragraph/cursor 在输入
+                            // leaf——须向下找 ime_callback 节点（find_descendant_ime_callback）；
+                            // 只查焦点节点则容器无 paragraph → 候选框区域从不更新
+                            let pidx = crate::layout::node::find_node_by_id(nodes, r, fid)
+                                .and_then(|idx| find_descendant_ime_callback(nodes, idx));
+                            if let Some(pidx) = pidx {
                                 if let Ok(borrow) = nodes[pidx].cached_paragraph.try_borrow() {
                                     if let Some(p) = borrow.as_ref() {
-                                        let abs = node_abs_position(nodes, r, fid);
+                                        let abs = node_abs_position(nodes, r, nodes[pidx].id);
                                         // 内容区偏移（渲染侧 content_x = 节点原点 +
                                         // padding——IME 区域须与其对称，否则预选
                                         // 窗口整体偏 padding 偏移）
@@ -1909,6 +1919,22 @@ fn node_or_descendant_wants_ime(nodes: &[LayoutNode], idx: usize) -> bool {
         }
     }
     false
+}
+
+/// 从节点子树中找第一个声明 ime_callback 的节点（TextField 输入 leaf）。
+///
+/// ⚠ 与 node_or_descendant_wants_ime 同根因：焦点在容器、ime_callback 在
+/// 输入 leaf——Preedit 事件须派发到实际持有 ime_callback 的节点。
+fn find_descendant_ime_callback(nodes: &[LayoutNode], idx: usize) -> Option<usize> {
+    if nodes[idx].ime_callback.borrow().is_some() {
+        return Some(idx);
+    }
+    for &c in &nodes[idx].children {
+        if let Some(f) = find_descendant_ime_callback(nodes, c) {
+            return Some(f);
+        }
+    }
+    None
 }
 
 /// 指针按下核心（真实 PointerButton 与 debug 模拟共用——防行为分叉）。
