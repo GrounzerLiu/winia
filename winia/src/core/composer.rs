@@ -1140,14 +1140,34 @@ impl Composer {
             // ctx.key(id) 语义：显式 id 替代位置——但**同一 id 跨调用点**（多
             // 字段同 role：16 个 field 的 label 都是 TextFieldSlotRole::Label）
             // 会碰撞——混合调用链隔离实例（同 id 不同调用点 → 不同 base）；
-            // 链空（非宏顶层）时退化纯 id（兼容旧行为）
-            let chain = self.chain_hash().unwrap_or(0);
+            // 链空（非宏顶层）时退化纯 id（兼容旧行为）。
+            // ⚠ 只混合 scope_src+sid（不含迭代 seq）：ctx.key 是列表/重排的
+            // 显式兜底（Compose 语义）——若混入 seq，重排后同 id 位置变 →
+            // base 变 → key 漂移 → 兜底失效（P1-1，探针证实）。多实例区分
+            // 由 per-base counter（path_counters/remember_path_counters）完成。
+            let chain = self.chain_hash_no_seq().unwrap_or(0);
             let mut h: u64 = 0xcbf29ce484222325;
             h ^= k; h = h.wrapping_mul(0x100000001b3);
             h ^= chain; h = h.wrapping_mul(0x100000001b3);
             return Some(h);
         }
         self.chain_hash()
+    }
+
+    /// 调用链哈希（不含迭代 seq）：fnv(scope_src, STMT栈顶语句id)——编译期
+    /// 固定的组合位置身份。ctx.key(id) 混合用——同 id 跨位置（列表重排）base
+    /// 不变（兜底稳定），不同调用点（16 字段）靠 scope_src/sid 隔离。
+    fn chain_hash_no_seq(&self) -> Option<u64> {
+        STMT_STACK.with(|s| {
+            let s = s.borrow();
+            s.last().map(|&(sid, _seq)| {
+                let scope_src = self.scope_source_stack.last().and_then(|s| *s).unwrap_or(0);
+                let mut h: u64 = 0xcbf29ce484222325;
+                h ^= scope_src; h = h.wrapping_mul(0x100000001b3);
+                h ^= sid as u64; h = h.wrapping_mul(0x100000001b3);
+                h
+            })
+        })
     }
 
     /// 调用链哈希：fnv(scope_src, STMT栈顶语句id, 迭代seq)——编译期固定

@@ -177,8 +177,10 @@ let label = format!("{} items", count);
 ```rust
 pub(crate) fn try_stable_base(&self) -> Option<u64> {
     if let Some(&k) = self.key_override_stack.last() {
-        // ctx.key(id)：显式 id 混合调用链——同 id 跨调用点（16 字段同 role）不碰撞
-        Some(fnv(k, chain_hash().unwrap_or(0)))
+        // ctx.key(id)：显式 id 混合调用链（**不含迭代 seq**——列表重排时
+        // 同 id 位置变但 base 不变，兜底稳定；16 字段同 role 靠 scope_src/sid
+        // 隔离，多实例靠 per-base counter 区分）
+        Some(fnv(k, chain_hash_no_seq().unwrap_or(0)))
     } else {
         chain_hash()   // STMT_STACK 栈顶（宏注入语句）→ fnv(scope, 语句id, 迭代seq)
     }
