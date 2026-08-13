@@ -728,7 +728,9 @@ impl TextField {
             min_lines: 1,
             interaction_source: None,
             is_error: false,
-            variant: None,
+            // 默认 M3 Filled 容器（对齐 material3 TextField 默认变体）——
+            // 裸输入（无容器视觉）用 .no_container() 显式选择
+            variant: Some(TextFieldVariant::Filled),
             colors: None,
             label: None,
             supporting_text: None,
@@ -814,6 +816,15 @@ impl TextField {
     /// M3 Outlined 容器（边框——对齐 material3 OutlinedTextField）
     pub fn outlined(mut self) -> Self {
         self.variant = Some(TextFieldVariant::Outlined);
+        self
+    }
+
+    /// 无容器视觉（裸输入——无背景/边框/指示线，仅文本 + padding）。
+    /// 默认是 Filled；`.no_container()` 显式选择裸输入（如嵌入卡片/
+    /// 自定义容器内不想画 M3 容器时）。视觉变换（visual_transformation）
+    /// 不受影响（offset_mapping 经 TextFieldOffsetMapping 挂载）
+    pub fn no_container(mut self) -> Self {
+        self.variant = None;
         self
     }
 
@@ -1980,9 +1991,9 @@ mod tests {
     #[test]
     fn placeholder_fallback_to_text_content_without_visual() {
         // text-field-v2：placeholder 为闭包子节点（仅 has_visual 时构建）——
-        // 无容器视觉时不构建（无 Placeholder 槽位）
+        // 无容器视觉（no_container）时不构建（无 Placeholder 槽位）
         let value = State::new(TextFieldValue::new(""));
-        let m = find_slot_modifier(TextField::new(value.clone(), |_| {}).placeholder(|_ctx| { crate::ui::Text::new("请输入").build(_ctx); }), TextFieldSlotRole::Placeholder);
+        let m = find_slot_modifier(TextField::new(value.clone(), |_| {}).no_container().placeholder(|_ctx| { crate::ui::Text::new("请输入").build(_ctx); }), TextFieldSlotRole::Placeholder);
         assert!(m.is_none(), "无视觉时 placeholder 不构建（子节点化）");
     }
 

@@ -171,6 +171,7 @@ fn component_demo(ctx: &mut ComposeCtx) {
             // 单行 + placeholder
             let v1 = ctx.remember(|| winia::ui::text_field::TextFieldValue::new(""));
             TextField::new(v1.clone(), |_| {})
+                .no_container()
                 .placeholder(|ctx| { winia::ui::Text::new("请输入内容…").build(ctx); })
                 .single_line(true)
                 .modifier(Modifier::new().size(300.0, 36.0))
@@ -178,12 +179,14 @@ fn component_demo(ctx: &mut ComposeCtx) {
             // 只读
             let v2 = ctx.remember(|| winia::ui::text_field::TextFieldValue::new("只读文本"));
             TextField::new(v2.clone(), |_| {})
+                .no_container()
                 .read_only(true)
                 .modifier(Modifier::new().size(300.0, 36.0))
                 .build(ctx);
             // 禁用
             let v3 = ctx.remember(|| winia::ui::text_field::TextFieldValue::new("禁用"));
             TextField::new(v3.clone(), |_| {})
+                .no_container()
                 .enabled(false)
                 .modifier(Modifier::new().size(300.0, 36.0))
                 .build(ctx);
@@ -191,6 +194,7 @@ fn component_demo(ctx: &mut ComposeCtx) {
             // minLines 动态高度）
             let v4 = ctx.remember(|| winia::ui::text_field::TextFieldValue::new("多行输入\n第二行\n第三行"));
             TextField::new(v4.clone(), |_| {})
+                .no_container()
                 .min_lines(3)
                 .modifier(Modifier::new().width(300.0))
                 .build(ctx);
