@@ -1851,6 +1851,34 @@ fn detect_click(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
     false
 }
 
+/// 查找 grapheme anchor 定位用的文本节点（有 cached_paragraph 的节点）。
+///
+/// 策略分两步：
+/// 1. **向上**：沿命中路径从 innermost 起找第一个有 paragraph 的节点——
+///    命中文本本身（输入 leaf / label / 输出 Text）时直接命中。
+/// 2. **向下**（向上失败）：命中 TextField 容器空白（文本右侧/padding/
+///    后缀区）时输入 leaf 不在命中路径——DFS 容器子树找第一个
+///    「有 paragraph + 有 registrar」的后代（TextField 输入 leaf；
+///    label/placeholder 有 para 无 reg，排除）。
+///
+/// 返回 None = 点击处无可定位文本（空区域点击 → 不设光标/不开始拖选）。
+fn find_anchor_text_node(nodes: &[LayoutNode], path: &[usize], innermost: usize) -> Option<usize> {
+    if let Some(&i) = path.iter().rev().find(|&&i| nodes[i].cached_paragraph.borrow().is_some()) {
+        return Some(i);
+    }
+    // 向下找：TextField 容器子树中的输入 leaf（para + registrar 双条件）
+    fn dfs(nodes: &[LayoutNode], idx: usize) -> Option<usize> {
+        if nodes[idx].cached_paragraph.borrow().is_some() && nodes[idx].registrar.borrow().is_some() {
+            return Some(idx);
+        }
+        for &c in &nodes[idx].children {
+            if let Some(f) = dfs(nodes, c) { return Some(f); }
+        }
+        None
+    }
+    dfs(nodes, innermost)
+}
+
 /// 指针按下核心（真实 PointerButton 与 debug 模拟共用——防行为分叉）。
 ///
 /// 统一：hit_test → 清除旧选区 → grapheme anchor 定位 → PtrDownState 记录 →
@@ -1884,9 +1912,12 @@ fn handle_pointer_down(
     // cached_paragraph——点击容器 padding 区/文本空隙命中容器 → innermost
     // 无 para → anchor=None → 拖动永远无法开始选择。须沿 path 向上找
     // 第一个有 paragraph 的祖先（输入 leaf）作为 anchor 定位节点。
-    let anchor_node = path.iter().rev()
-        .find(|&&i| nodes[i].cached_paragraph.borrow().is_some())
-        .copied();
+    //
+    // ⚠⚠ 向上查找只覆盖「输入 leaf 在命中路径内」（点击文本本身）。点击
+    // 容器空白（文本右侧/padding/后缀区）时命中停在容器、**输入 leaf 不在
+    // path 中**——须向下找 TextField 容器子树中的输入 leaf（有 paragraph +
+    // registrar 的后代；label/placeholder 有 para 无 reg 排除）。
+    let anchor_node = find_anchor_text_node(nodes, &path, innermost);
     let anchor = anchor_node.and_then(|ai| {
         let borrow = nodes[ai].cached_paragraph.try_borrow().ok()?;
         borrow.as_ref().map(|para| {
