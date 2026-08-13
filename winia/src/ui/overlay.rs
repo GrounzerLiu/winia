@@ -37,6 +37,9 @@ pub struct OverlayDesc {
     pub(crate) modal: bool,
     /// 点击外部时触发 on_dismiss_request（非模态 Popup 默认 true）
     pub(crate) dismiss_on_outside: bool,
+    /// 命中 overlay 内容时**放行主树**（不消费事件）——Tooltip 用：浮层盖住
+    /// 锚点时点击锚点仍生效（否则 tooltip 挡住锚点按钮 → 关不了）
+    pub(crate) click_passthrough: bool,
     /// 外部点击回调
     pub(crate) on_dismiss: Option<Arc<dyn Fn() + Send + Sync>>,
     /// 弹出内容（独立组合单元）
@@ -116,6 +119,7 @@ impl Popup {
             offset: self.offset,
             modal: false,
             dismiss_on_outside: true,
+            click_passthrough: false,
             on_dismiss: self.on_dismiss,
             content: Box::new(content),
         });
@@ -172,6 +176,7 @@ impl Dialog {
             offset: (0.0, 0.0),
             modal: true,
             dismiss_on_outside: self.dismiss_on_outside,
+            click_passthrough: false,
             on_dismiss: self.on_dismiss,
             content: Box::new(content),
         });
@@ -246,6 +251,7 @@ impl DropdownMenu {
                 offset: (0.0, 4.0),
                 modal: false,
                 dismiss_on_outside: true,
+                click_passthrough: false,
                 on_dismiss: self.on_dismiss,
                 content: Box::new(menu),
             });

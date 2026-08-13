@@ -30,8 +30,10 @@ fn tooltip_ui(ctx: &mut ComposeCtx) {
                 .modifier(Modifier::new().padding_top(16.0))
                 .build(ctx);
             let show = ctx.remember(|| false);
+            // content 闭包需 'static——move 捕获 State 克隆（Arc 共享）
+            let show_content = show.clone();
             Tooltip::new("")
-                .content(|ctx: &mut ComposeCtx| {
+                .content(move |ctx: &mut ComposeCtx| {
                 // M3 rich tooltip：surface_container 容器 + on_surface_variant
                 Column::new()
                     .modifier(Modifier::new()
@@ -48,9 +50,12 @@ fn tooltip_ui(ctx: &mut ComposeCtx) {
                             .modifier(Modifier::new().padding_top(4.0))
                             .build(ctx);
                         Button::new()
-                            .on_click(|| {})
+                            .on_click({
+                                let s = show_content.clone();
+                                move || s.set(false)
+                            })
                             .modifier(Modifier::new().padding_top(8.0))
-                            .build(ctx, |ctx| { Text::new("Action").build(ctx); });
+                            .build(ctx, |ctx| { Text::new("Close").build(ctx); });
                     });
             })
             .visible(show.clone())

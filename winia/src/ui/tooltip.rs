@@ -28,6 +28,8 @@ pub struct Tooltip {
     offset: (f32, f32),
     /// 是否启用 hover 触发（默认 true）
     hover_trigger: bool,
+    /// 点击外部是否关闭（默认 true——对齐 Compose RichTooltip 默认点击外部 dismiss）
+    dismiss_on_outside: bool,
 }
 
 impl Tooltip {
@@ -40,6 +42,7 @@ impl Tooltip {
             position: crate::ui::overlay::PopupPosition::TopCenter,
             offset: (0.0, 8.0),
             hover_trigger: true,
+            dismiss_on_outside: true,
         }
     }
 
@@ -71,6 +74,12 @@ impl Tooltip {
     /// 禁用 hover 触发（仅外部 visible 控制）
     pub fn no_hover(mut self) -> Self {
         self.hover_trigger = false;
+        self
+    }
+
+    /// 点击 tooltip 外部是否关闭（默认 true；设 false 则仅外部 visible 控制关闭）
+    pub fn dismiss_on_outside(mut self, v: bool) -> Self {
+        self.dismiss_on_outside = v;
         self
     }
 
@@ -121,8 +130,15 @@ impl Tooltip {
                 position: self.position,
                 offset: self.offset,
                 modal: false,
-                dismiss_on_outside: false,
-                on_dismiss: None,
+                dismiss_on_outside: self.dismiss_on_outside,
+                // ⚠ Tooltip 浮层必须放行主树点击——浮层盖住锚点（锚点上方
+                // tooltip 与锚点重叠）时点击锚点仍生效（否则 tooltip 挡住
+                // 锚点按钮 → 外部 visible 控制关不了）
+                click_passthrough: true,
+                on_dismiss: self.external_visible.as_ref().map(|s| {
+                    let s = s.clone();
+                    std::sync::Arc::new(move || s.set(false)) as std::sync::Arc<dyn Fn() + Send + Sync>
+                }),
                 content: Box::new(content),
             });
         }

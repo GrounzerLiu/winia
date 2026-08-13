@@ -121,6 +121,7 @@ struct OverlayWindow {
     offset: (f32, f32),
     modal: bool,
     dismiss_on_outside: bool,
+    click_passthrough: bool,
     on_dismiss: Option<Arc<dyn Fn() + Send + Sync>>,
     content: Box<dyn Fn(&mut ComposeCtx)>,
     /// 渲染/命中用的屏幕位置（逻辑坐标——每帧布局后更新）
@@ -1475,6 +1476,7 @@ impl OverlayWindow {
             offset: desc.offset,
             modal: desc.modal,
             dismiss_on_outside: desc.dismiss_on_outside,
+            click_passthrough: desc.click_passthrough,
             on_dismiss: desc.on_dismiss,
             content: desc.content,
             screen_pos: (0.0, 0.0),
@@ -1487,6 +1489,7 @@ impl OverlayWindow {
         self.offset = desc.offset;
         self.modal = desc.modal;
         self.dismiss_on_outside = desc.dismiss_on_outside;
+        self.click_passthrough = desc.click_passthrough;
         self.on_dismiss = desc.on_dismiss;
         self.content = desc.content;
     }
@@ -1653,6 +1656,12 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
     if let Some((i, local)) = hit_overlay(pw, scene_pos) {
         // 命中 overlay 内容——记录点击目标（v1：仅 clickable——up 时执行）
         let ov = &pw.overlays[i];
+        // ⚠ click_passthrough（Tooltip）：命中浮层但**放行主树**——浮层盖住
+        // 锚点（锚点上方 tooltip 与锚点本身重叠）时点击锚点仍生效（否则
+        // tooltip 挡住锚点按钮 → 外部 visible 控制关不了）
+        if ov.click_passthrough {
+            return false;
+        }
         let nid = ov.composer.layout_root_idx().and_then(|r| {
             let nodes = ov.composer.arena_nodes();
             hit_test(nodes, r, local.0, local.1).last().map(|&idx| nodes[idx].id)
