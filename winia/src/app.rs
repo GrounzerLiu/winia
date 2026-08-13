@@ -2199,7 +2199,7 @@ mod frame_throttle_tests {
         let mut composer = crate::core::composer::Composer::new();
         let scroll = crate::modifier::ScrollState::new();
         let scroll2 = scroll.clone();
-        composer.compose(|ctx| {
+        composer.compose(crate::compose!(|ctx| {
             crate::ui::Column::new()
                 .modifier(crate::modifier::Modifier::new().fill_max_size().vertical_scroll(scroll2))
                 .build(ctx, |ctx| {
@@ -2208,7 +2208,7 @@ mod frame_throttle_tests {
                         crate::ui::Text::new("line content line content").build(ctx);
                     }
                 });
-        });
+        }));
         composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 600.0));
         let root = composer.layout_root_idx().unwrap();
         assert_eq!(scroll.offset.get(), 0.0);

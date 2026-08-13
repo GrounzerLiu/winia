@@ -218,42 +218,17 @@ impl<'a> ComposeCtx<'a> {
     /// 即调用点（父语句），函数内部语句注入在其后——链不含自身。
     pub fn start_scope_callchain(&mut self, fallback_hash: u64) -> ScopeGuard {
         let key = self.composer.try_stable_base().unwrap_or(fallback_hash);
+        #[cfg(debug_assertions)]
+        if std::env::var("WINIA_SCOPE_TRACE").is_ok() {
+            let stack = STMT_STACK.with(|s| s.borrow().clone());
+            let src = self.composer.scope_source_stack.last().and_then(|s| *s);
+            eprintln!("[scope] fallback={:#x} key={:#x} src={:?} stmt_stack={:?}", fallback_hash, key, src, stack);
+        }
         self.composer.scope_source_stack.push(Some(key));
         SCOPE_SRC_STACK.with(|s| s.borrow_mut().push(key)); // 镜像（enter_stmt 读）
         self.composer.slot_table.start_scope(key);
         GROUP_STACK.with(|s| s.borrow_mut().push(key));
         ScopeGuard { composer: self.composer as *mut Composer }
-    }
-
-    /// 宏替换版 remember（ctx.remember → ctx.remember_at(SID, SEQ, init)）：
-    /// key = fnv(当前 scope 的调用链哈希, SID, SEQ)——编译期编号 + 运行时调用链
-    /// ——同一函数多处实例化（16 字段/列表）靠调用链隔离；调用链为空
-    /// （测试/组合顶层）时 scope 回退签名哈希——key 仍稳定。
-    pub fn remember_at<T: Clone + 'static>(&mut self, sid: u32, seq: u32, init: impl FnOnce() -> T) -> State<T> {
-        let key = self.stmt_key(sid, seq);
-        let pq = Arc::downgrade(&self.composer.pending_states);
-        self.composer.slot_table.remember(key, || {
-            crate::core::state::STATE_OWNER_QUEUE.with(|q| *q.borrow_mut() = Some(pq.clone()));
-            State::new(init())
-        })
-    }
-
-    /// 宏替换版 next_key（ctx.next_key → ctx.next_key_at(SID, SEQ)）——
-    /// key = fnv(当前 scope 调用链, SID, SEQ)——同 remember_at 语义
-    pub fn next_key_at(&mut self, sid: u32, seq: u32) -> u64 {
-        self.stmt_key(sid, seq)
-    }
-
-    /// 编译期编号 → 稳定 key：fnv(scope_src(调用链), sid, seq)
-    /// 与 try_stable_base 同公式——运行时 next_key（slot_wrap! 等宏内部
-    /// 未替换路径）与宏替换路径共享同一 scope 基，互不冲突。
-    fn stmt_key(&self, sid: u32, seq: u32) -> u64 {
-        let scope_src = self.composer.scope_source_stack.last().and_then(|s| *s).unwrap_or(0);
-        let mut h: u64 = 0xcbf29ce484222325;
-        h ^= scope_src; h = h.wrapping_mul(0x100000001b3);
-        h ^= sid as u64; h = h.wrapping_mul(0x100000001b3);
-        h ^= (seq as u64).wrapping_mul(0x9E3779B97F4A7C15);
-        h
     }
 
     /// #[composable] 宏注入：进入一条语句（id 为编译期固定的源码位置序号）。
@@ -284,7 +259,7 @@ impl<'a> ComposeCtx<'a> {
         let seq = self_seq.max(outer_seq);
         #[cfg(debug_assertions)]
         if std::env::var("WINIA_STMT_TRACE").is_ok() {
-            eprintln!("[stmt] id={} seq={} self={} outer={}", id, seq, self_seq, outer_seq);
+            eprintln!("[stmt] compose={} id={} seq={} self={} outer={} src={:#x}", self.composer.compose_count, id, seq, self_seq, outer_seq, scope_src);
         }
         STMT_STACK.with(|s| s.borrow_mut().push((id, seq)));
         StmtGuard
@@ -542,7 +517,10 @@ impl<'a> ComposeCtx<'a> {
         let counter = self.composer.remember_path_counters.entry(base).or_insert(0);
         let c = *counter;
         *counter += 1;
-        (base << 32) | (c as u64)
+        // key = base 高 32 位身份 + 低 32 位序号——⚠ 不能用 (base << 32) | c：
+        // 64 位 base 左移 32 会把高 32 位移出丢弃 → key 身份只剩 base 低 32 位
+        // （2^32 碰撞空间——checkbox_demo 循环子项 label 低 32 位碰撞 → dup-key）。
+        (base & 0xFFFF_FFFF_0000_0000) | (c as u64)
     }
 
     /// 开始一个布局节点（叶子组件如 Text 使用）
@@ -1149,8 +1127,22 @@ impl Composer {
     /// - 都不是 → None（调用方 panic 兜底——fail-fast，不静默降级）
     pub(crate) fn try_stable_base(&self) -> Option<u64> {
         if let Some(&k) = self.key_override_stack.last() {
-            return Some(k);
+            // ctx.key(id) 语义：显式 id 替代位置——但**同一 id 跨调用点**（多
+            // 字段同 role：16 个 field 的 label 都是 TextFieldSlotRole::Label）
+            // 会碰撞——混合调用链隔离实例（同 id 不同调用点 → 不同 base）；
+            // 链空（非宏顶层）时退化纯 id（兼容旧行为）
+            let chain = self.chain_hash().unwrap_or(0);
+            let mut h: u64 = 0xcbf29ce484222325;
+            h ^= k; h = h.wrapping_mul(0x100000001b3);
+            h ^= chain; h = h.wrapping_mul(0x100000001b3);
+            return Some(h);
         }
+        self.chain_hash()
+    }
+
+    /// 调用链哈希：fnv(scope_src, STMT栈顶语句id, 迭代seq)——编译期固定
+    /// 的组合位置（#[composable]/keyed_stmt! 注入的语句）
+    fn chain_hash(&self) -> Option<u64> {
         STMT_STACK.with(|s| {
             let s = s.borrow();
             s.last().map(|&(sid, seq)| {
@@ -1200,7 +1192,9 @@ impl Composer {
         let counter = self.path_counters.entry(base).or_insert(1);
         let c = *counter;
         *counter += 1;
-        (base << 32) | (c as u64)
+        // key = base 高 32 位身份 + 低 32 位序号（⚠ (base<<32)|c 会把 base 高 32
+        // 位移出丢弃 → 身份只剩低 32 位，2^32 碰撞空间——dup-key 根因）
+        (base & 0xFFFF_FFFF_0000_0000) | (c as u64)
     }
 
     /// 开始一个组合 scope（无 LayoutNode 的作用域节点——组合代码重跑的失效单位）。
@@ -2138,7 +2132,6 @@ fn test_same_frame_second_compose_retains_tree() {
         }
         ctx.end_restartable_group();
     });
-    composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
 
     // 帧 2 同帧两次 compose（模拟 recompose 循环——中间无 layout）：
     // 第一次 compose 物化并 drain prev_node_by_key；第二次 materialize
@@ -2186,7 +2179,6 @@ fn test_same_frame_second_compose_retains_tree() {
         }
         ctx.end_restartable_group();
     });
-    composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
     let nodes3 = composer.arena_nodes().len();
     let root3 = composer.layout_root_idx().expect("帧3 root");
     assert!(composer.arena_nodes()[root3].children.len() == 1, "帧3 重建后树完整");
@@ -2203,7 +2195,6 @@ fn test_same_frame_second_compose_retains_tree() {
         }
         ctx.end_restartable_group();
     });
-    composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
     let nodes4 = composer.arena_nodes().len();
     assert_eq!(nodes3, nodes4, "帧4 应恢复 Skip 复用（节点数不变）");
 }
@@ -2253,7 +2244,6 @@ fn test_is_skip_with_scope_layer() {
     assert!(skip_happened,
         "含 scope 层的 clean group 应 Skip（slot_key 键修复后两棵树路径错位不再导致 miss）——若 Enter 说明回归");
     // 自清洁：帧2 后 layout（复位依赖记录模式——take_deps 等价）
-    composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
 }
 
 /// 阶段5：changed 参数比较机制——帧1 参数写入 slot.params，帧2 同参数比较返回 false（未变）。
@@ -2359,7 +2349,6 @@ fn test_changed_count_change_enters() {
         if let GroupStatus::Enter = s { ctx.end_node(); }
         ctx.end_restartable_group();
     });
-    composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
 
     // 帧2：1 个参数（次数变化）→ 与上帧 2 参比较 → 数量不等 → Enter（保守）
     composer.compose(|ctx| {
@@ -2401,7 +2390,6 @@ fn test_param_to_plain_switch_enters() {
         if let GroupStatus::Enter = s { ctx.end_node(); }
         ctx.end_restartable_group();
     });
-    composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
 
     // 帧2：同位置换成无参数容器（不调 changed）→ pending 空 vs 上帧 params 非空 → 不等 → Enter
     composer.compose(|ctx| {
@@ -2447,8 +2435,7 @@ fn test_quantify_reuse_ratio() {
             ctx.end_restartable_group();
             ctx.end_scope();
         });
-        composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
-    };
+        };
 
     build_tree(&mut composer);
     let clean1 = composer.compose_clean_count;
@@ -2495,8 +2482,7 @@ fn test_arena_reuse_stabilizes() {
             ctx.end_restartable_group();
             ctx.end_scope();
         });
-        composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
-    };
+        };
 
     build(&mut composer);
     let n1 = composer.arena.nodes.len();
@@ -2528,8 +2514,7 @@ fn test_policy_pool_growth() {
             }
             ctx.end_restartable_group();
         });
-        composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
-    };
+        };
     build(&mut composer);
     let p1 = composer.arena.policies.len();
     for _ in 0..20 { build(&mut composer); }
@@ -2857,8 +2842,7 @@ fn test_data_driven_structure_change() {
             ctx.end_restartable_group();
             ctx.end_scope();
         });
-        composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
-    };
+        };
 
     // 帧1：1 leaf（Enter）
     build(&mut composer, false);
@@ -2943,8 +2927,7 @@ fn test_key_stable_across_skip_enter() {
             ctx.end_restartable_group();
             ctx.end_scope();
         });
-        composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
-    };
+        };
 
     // 帧1：全 Enter（count + row_state 首次 → dirty）
     build(&mut composer);
@@ -3098,7 +3081,7 @@ fn test_key_override_stable() {
             ctx.end_scope();
             keys.push(k);
         });
-    }
+        }
     assert_eq!(keys[0], keys[1], "显式 key() 跨帧稳定");
 }
 
@@ -3336,22 +3319,22 @@ fn test_param_change_updates_layout() {
     let root_id = std::cell::Cell::new(0u64);
 
     // 帧 1：spacing 0，两个子 Text
-    composer.compose(|ctx| {
+    composer.compose(crate::compose!(|ctx| {
         Column::new().spacing(0.0).build(ctx, |ctx| {
             crate::ui::text::Text::new("a").build(ctx);
             crate::ui::text::Text::new("b").build(ctx);
         });
-    });
+    }));
     let c = crate::layout::constraints::Constraints::new(0.0, 800.0, 0.0, 600.0);
     composer.layout(c);
 
     // 帧 2：spacing 10——参数变化 → Enter + dirty → 布局更新
-    composer.compose(|ctx| {
+    composer.compose(crate::compose!(|ctx| {
         Column::new().spacing(10.0).build(ctx, |ctx| {
             crate::ui::text::Text::new("a").build(ctx);
             crate::ui::text::Text::new("b").build(ctx);
         });
-    });
+    }));
     composer.layout(c);
     let nodes = &composer.arena.nodes;
     // b 的 position（相对 Column——spacing 10 后应 > spacing 0 时）
@@ -3376,7 +3359,7 @@ fn test_arena_recycles_freed_slots() {
 
     // 帧 1：show=true——含 extra 分支（3 个 Text）
     let mut cap1 = 0;
-    composer.compose(|ctx| {
+    composer.compose(crate::compose!(|ctx| {
         Column::new().build(ctx, |ctx| {
             Text::new("a").build(ctx);
             if show.get() {
@@ -3384,14 +3367,14 @@ fn test_arena_recycles_freed_slots() {
                 Text::new("c").build(ctx);
             }
         });
-    });
+    }));
     composer.layout(c);
     cap1 = composer.arena.nodes.len();
     assert!(cap1 >= 4, "帧1 应有 4+ 节点（根+3 Text）");
 
     // 帧 2：show=false——extra 分支删除（2 节点 free）
     show.set(false);
-    composer.compose(|ctx| {
+    composer.compose(crate::compose!(|ctx| {
         Column::new().build(ctx, |ctx| {
             Text::new("a").build(ctx);
             if show.get() {
@@ -3399,12 +3382,12 @@ fn test_arena_recycles_freed_slots() {
                 Text::new("c").build(ctx);
             }
         });
-    });
+    }));
     composer.layout(c);
 
     // 帧 3：show=true——重新创建分支——槽位应复用（容量不持续增长）
     show.set(true);
-    composer.compose(|ctx| {
+    composer.compose(crate::compose!(|ctx| {
         Column::new().build(ctx, |ctx| {
             Text::new("a").build(ctx);
             if show.get() {
@@ -3412,7 +3395,7 @@ fn test_arena_recycles_freed_slots() {
                 Text::new("c").build(ctx);
             }
         });
-    });
+    }));
     composer.layout(c);
     let cap3 = composer.arena.nodes.len();
     assert!(cap3 <= cap1 + 2, "槽位应复用（帧3 容量 {cap3} 不应远超帧1 {cap1}——free 池回收）");
@@ -3440,7 +3423,6 @@ fn test_materialize_structure_change_window_insert() {
         }
         ctx.end_restartable_group();
     });
-    composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
     let r = composer.layout_root_idx().unwrap();
     assert_eq!(composer.arena_nodes()[r].children.len(), 2, "帧1 应 2 leaf");
 
@@ -3460,7 +3442,6 @@ fn test_materialize_structure_change_window_insert() {
         }
         ctx.end_restartable_group();
     });
-    composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
     let r = composer.layout_root_idx().unwrap();
     assert_eq!(composer.arena_nodes()[r].children.len(), 2, "帧2 应 2 leaf（if 插入后）");
 
@@ -3477,7 +3458,6 @@ fn test_materialize_structure_change_window_insert() {
         }
         ctx.end_restartable_group();
     });
-    composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
     let r = composer.layout_root_idx().unwrap();
     eprintln!("[t3] root children={} nodes={}", composer.arena_nodes()[r].children.len(), composer.arena_nodes().len());
     for c in composer.arena_nodes()[r].children.clone() {
@@ -3857,4 +3837,82 @@ fn test_app_root_stable_keys_across_structure_change() {
     // remember 状态（show）跨结构变化保留（同一 State id）
     assert_eq!(show_holder.borrow().as_ref().unwrap().id(), show_id,
         "remember 状态应跨结构变化保留（语句级 key 稳定）");
+}
+
+/// 回归（文档 1.3 原始 bug 的直接验证）：**条件分支内的 remember 增删不影响
+/// 分支外语句的 remember**——语句 id 编译期固定 + per-base 独立计数：
+/// if 分支（语句 1）的 remember 在自己的 base 下计数，a（语句 0）/c（语句 2）
+/// 的 base 独立——show 切换平移 if 内序号，不触碰 a/c 的 key。
+#[test]
+fn test_conditional_branch_remember_does_not_drift_siblings() {
+    let mut composer = Composer::new();
+    let show = crate::core::state::State::new(true);
+    let a_holder = std::cell::RefCell::new(None::<crate::core::state::State<i32>>);
+    let c_holder = std::cell::RefCell::new(None::<crate::core::state::State<i32>>);
+
+    let build = |composer: &mut Composer| {
+        composer.compose(crate::compose!(|ctx| {
+            let a = ctx.remember(|| 0i32); // 语句 0
+            *a_holder.borrow_mut() = Some(a.clone());
+            if show.get() {
+                // 语句 1（if 注入）内 remember——show 切换时整个分支增删
+                let _b = ctx.remember(|| 1i32);
+            }
+            let c = ctx.remember(|| 2i32); // 语句 2——独立 base
+            *c_holder.borrow_mut() = Some(c.clone());
+        }));
+        };
+
+    // 帧1：show=true——a/c + if 内 b 全部创建
+    build(&mut composer);
+    let a1 = a_holder.borrow().clone().unwrap().id();
+    let c1 = c_holder.borrow().clone().unwrap().id();
+
+    // 帧2：show=false——if 分支 remember 消失（结构变化）→ 平移 if 内序号
+    show.set(false);
+    build(&mut composer);
+    let a2 = a_holder.borrow().clone().unwrap().id();
+    let c2 = c_holder.borrow().clone().unwrap().id();
+    assert_eq!(a1, a2, "a（语句 0）的 State 应跨 if 分支增删保留——跨语句不漂移");
+    assert_eq!(c1, c2, "c（语句 2）的 State 应跨 if 分支增删保留——跨语句不漂移");
+
+    // 帧3：show=true——b 恢复（新 State——结构变化 = 重置，符合语义）
+    show.set(true);
+    build(&mut composer);
+    let a3 = a_holder.borrow().clone().unwrap().id();
+    let c3 = c_holder.borrow().clone().unwrap().id();
+    assert_eq!(a1, a3, "a 恢复帧仍应保留");
+    assert_eq!(c1, c3, "c 恢复帧仍应保留");
+}
+
+/// 语义边界验证（非 bug——Compose 同语义）：**同语句内** remember 数量变化
+/// → 序号平移 → 状态重置（可预测）。明确记录该行为，防止被误当漂移 bug 报。
+#[test]
+fn test_same_stmt_remember_count_change_resets() {
+    let mut composer = Composer::new();
+    let show_extra = crate::core::state::State::new(true);
+    let first_holder = std::cell::RefCell::new(None::<crate::core::state::State<i32>>);
+
+    let build = |composer: &mut Composer| {
+        composer.compose(crate::compose!(|ctx| {
+            if show_extra.get() {
+                // 同语句内两个 remember——数量随 show_extra 变化
+                let _x = ctx.remember(|| 1i32); // seq 0
+                let y = ctx.remember(|| 2i32);  // seq 1
+                *first_holder.borrow_mut() = Some(y.clone());
+            } else {
+                let y = ctx.remember(|| 2i32);  // 只剩一个——seq 0（原 x 的槽）
+                *first_holder.borrow_mut() = Some(y.clone());
+            }
+        }));
+        };
+
+    build(&mut composer);
+    let id1 = first_holder.borrow().clone().unwrap().id();
+    // 同语句内 remember 数量 2→1 → 序号平移 → y 拿到原 x 的 key → State 重置
+    show_extra.set(false);
+    build(&mut composer);
+    let id2 = first_holder.borrow().clone().unwrap().id();
+    assert_ne!(id1, id2,
+        "同语句内 remember 数量变化 = 序号平移 = 重置（Compose 语义，非漂移 bug——明确记录）");
 }

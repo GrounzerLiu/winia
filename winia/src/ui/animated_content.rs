@@ -23,6 +23,7 @@
 //!   notify → 调用方组件闭包重跑；容器槽仅 current 变化时 Enter（内容重建）
 
 use crate::animation::{push_animatable, AnimationSpec};
+use crate::composable;
 use crate::core::composer::{ComposeCtx, GroupStatus};
 use crate::core::state::State;
 use crate::layout::{MeasurePolicy, Placement, Size};
@@ -106,6 +107,10 @@ impl<T: Clone + PartialEq + 'static> AnimatedContent<T> {
         self
     }
 
+    /// 构建内容切换容器。
+    /// ⚠ 不宏化：内部 progress.get() 依赖必须注册到**调用点 scope**（父容器
+    /// 每帧重跑 → 淡出完成检测执行）——宏化封闭内部 scope 会切断失效传播
+    /// （同 animated_visibility/crossfade 宏化回归）。
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx, T)) {
         // 依赖注册：target 变化 → 外层 scope 重组 → 本 build 重跑（切换启动）
         let target = self.target.get();

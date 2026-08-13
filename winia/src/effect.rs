@@ -7,6 +7,7 @@
 //!
 //! 依赖 tokio 运行时（已作为项目依赖）。
 
+use crate::composable;
 use crate::core::composer::ComposeCtx;
 use crate::core::state::State;
 use std::sync::Arc;
@@ -20,6 +21,8 @@ use tokio::task::JoinHandle;
 
 /// 挂载一个组合点移除时的清理回调（P2-5 样板合并——
 /// LaunchedEffect/DisposableEffect 共用：隐式 leaf + on_remove + end 配对）。
+/// #[composable]：内部 next_key 从调用点（effect build 内语句）取稳定 base
+#[composable]
 fn attach_cleanup(ctx: &mut ComposeCtx, cleanup: impl FnOnce() + Send + 'static) {
     let key = ctx.next_key();
     ctx.start_leaf_with_remove(key, crate::modifier::Modifier::new(), Box::new(cleanup));
@@ -66,6 +69,8 @@ impl CoroutineScope {
 /// 获取当前组合生命周期绑定的协程作用域。
 /// 重组安全——remember 保证同一组合位置返回同一个 scope。
 /// 当组合点被移除时，ScopeState::drop 自动 abort 所有未完成协程。
+/// #[composable]：内部 remember 从调用点语句取稳定 base
+#[composable]
 pub fn remember_coroutine_scope(ctx: &mut ComposeCtx) -> CoroutineScope {
     ctx.remember(|| {
         let rt = Handle::try_current().expect(
@@ -92,8 +97,11 @@ pub struct LaunchedEffect<T: PartialEq + Clone + Send + 'static> {
 }
 
 impl<T: PartialEq + Clone + Send + 'static> LaunchedEffect<T> {
+    /// 组合生命周期绑定的协程作用域——dispose 时自动取消所有未完成任务。
     pub fn new(key: T) -> Self { Self { key } }
 
+    /// #[composable]：内部 remember/attach_cleanup 从 build 调用点取稳定 base
+    #[composable]
     pub fn build<F: std::future::Future<Output = ()> + Send + 'static>(
         self,
         ctx: &mut ComposeCtx,
@@ -155,6 +163,8 @@ pub struct DisposableEffect<T: PartialEq + Clone + Send + 'static> {
 impl<T: PartialEq + Clone + Send + 'static> DisposableEffect<T> {
     pub fn new(key: T) -> Self { Self { key } }
 
+    /// #[composable]：内部 remember/attach_cleanup 从 build 调用点取稳定 base
+    #[composable]
     pub fn build<F: FnOnce() + Send + 'static>(
         self,
         ctx: &mut ComposeCtx,
@@ -196,6 +206,8 @@ impl<T: PartialEq + Clone + Send + 'static> DisposableEffect<T> {
 // ═══════════════════════════════════════════════════════════
 
 /// 将 watch::Receiver 直接转为 State（不经过 WatchStream，send 始终可靠）
+/// #[composable]：内部 remember×2 + remember_coroutine_scope 从调用点取稳定 base
+#[composable]
 pub fn observe_watch<T: Clone + Send + Sync + PartialEq + 'static>(
     ctx: &mut ComposeCtx,
     rx: tokio::sync::watch::Receiver<T>,

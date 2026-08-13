@@ -2,6 +2,7 @@
 //!
 //! 这些是用户面组件，内部使用 layout 模块的 MeasurePolicy
 
+use crate::composable;
 use crate::core::composer::{ComposeCtx, GroupStatus};
 use crate::layout::{Arrangement, Alignment, ColumnLayout, RowLayout, BoxLayout, MeasurePolicy};
 use crate::modifier::Modifier;
@@ -48,6 +49,8 @@ impl Column {
     pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
     pub fn spacing(mut self, s: f32) -> Self { self.spacing = s; self }
 
+    /// ⚠ 不宏化：宏化引入内部 scope 会拦截 content 顶层 State.get() 的依赖注册
+    /// （content 依赖注册到内部 scope → 父容器感知不到 → 内容不重跑 → 联动断）
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         // 参数暂存（阶段 5：参数相等跳过——下帧 is_skip 比较 slot.params：
         // spacing/arrangement/alignment 未变 → 容器 Skip（content 不重跑）；

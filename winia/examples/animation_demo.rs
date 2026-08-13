@@ -286,12 +286,15 @@ fn section8(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
         .modifier(Modifier::new().padding_vertical(8.0))
         .build(ctx);
     AnimatedSize::new(TweenSpec::default())
+        // 背景画在容器层——跟随尺寸动画平滑过渡（内容自身宽度立即变，
+        // 容器外观 220→80 动画：对齐 Compose animateContentSize 语义）
+        .modifier(Modifier::new()
+            .width(if clicked.get() { 80.0 } else { 220.0 })
+            .height(40.0)
+            .background(Color::from_argb(255, 63, 81, 181), Shape::rounded(4.0)))
         .build(ctx, |ctx| {
             Column::new()
-                .modifier(Modifier::new()
-                    .width(if clicked.get() { 80.0 } else { 220.0 })
-                    .height(40.0)
-                    .background(Color::from_argb(255, 63, 81, 181), Shape::rounded(4.0)))
+                .modifier(Modifier::new().width(if clicked.get() { 80.0 } else { 220.0 }).height(40.0))
                 .build(ctx, |_| {});
         });
 

@@ -1,6 +1,7 @@
 //! SelectionContainer — 文本选中容器（对齐 Jetpack Compose）
 
 use crate::core::composition_local::CompositionLocal;
+use crate::composable;
 use crate::core::composer::ComposeCtx;
 use crate::modifier::Modifier;
 use crate::layout::BoxLayout;
@@ -240,6 +241,7 @@ impl SelectionContainer {
         self
     }
 
+    #[composable]
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         let key = ctx.next_key();
         // 持久化同一个 Registrar（重组时不新建，segments 跨重组保留）

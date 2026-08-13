@@ -3,6 +3,7 @@
 //! `OutlinedIconToggleButton`
 
 use crate::core::composer::{ComposeCtx, GroupStatus};
+use crate::composable;
 use crate::layout::BoxLayout;
 use crate::modifier::{Color, Modifier, Shape};
 use crate::ui::button::ButtonBorder;
@@ -256,6 +257,7 @@ impl IconToggleButton {
         self
     }
 
+    #[composable]
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         ctx.changed(&self.style);
         ctx.changed(&self.enabled);

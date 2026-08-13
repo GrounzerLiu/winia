@@ -10,6 +10,7 @@
 //! `WiniaTheme::with_content_color` 下传（Icon tint Auto 自动取卡片内容色）。
 
 use crate::core::composer::{ComposeCtx, GroupStatus};
+use crate::composable;
 use crate::modifier::{Color, Modifier, Shape};
 use crate::ui::interaction::{ComponentState, MutableInteractionSource};
 use std::sync::Arc;
@@ -350,6 +351,7 @@ impl Card {
     }
 
     /// 构建卡片。内容自动包在顶部对齐 Column 中（对标 M3 Surface { Column }）。
+    #[composable]
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         // 参数暂存（参数相等跳过——style/enabled 未变 → 容器 Skip）
         ctx.changed(&self.style);

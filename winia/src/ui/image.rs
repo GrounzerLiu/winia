@@ -9,6 +9,7 @@
 //! - `contentDescription`：winia 无 semantics 树（全框架缺口），参数保留预留；
 //! - SVG 来源与位图统一走 `content_scale_rect`（完整缩放/对齐/RTL + clipToBounds）。
 
+use crate::composable;
 use crate::core::composer::ComposeCtx;
 use crate::modifier::{ColorFilter, FilterQuality, Modifier, ModifierElement};
 use crate::ui::icon::IconSource;
@@ -203,6 +204,7 @@ impl Image {
     }
 
     /// 构建图片节点（叶子——布局按固有尺寸，绘制经 ImageContent modifier）
+    #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
         // 参数暂存（source 变化 → 重测；content_scale/alignment/alpha/color_filter/
         // filter_quality 仅影响绘制——渲染每帧全量执行，无需声明 changed）

@@ -2,6 +2,7 @@
 //! `FilledTonalIconButton` / `OutlinedIconButton`
 
 use crate::core::composer::{ComposeCtx, GroupStatus};
+use crate::composable;
 use crate::layout::BoxLayout;
 use crate::modifier::{Color, Modifier, Shape};
 use crate::ui::button::ButtonBorder;
@@ -266,6 +267,7 @@ impl IconButton {
 
     /// 注册到组合树并执行子内容（内容通常是一个 `Icon`——tint Auto 会取
     /// IconButton 提供的内容色）
+    #[composable]
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         ctx.changed(&self.style);
         ctx.changed(&self.enabled);

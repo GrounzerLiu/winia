@@ -12,6 +12,7 @@
 //! - 拖拽：容器跟随手指（2..22），释放按中点 12 判定切换。
 
 use crate::core::composer::{ComposeCtx, GroupStatus};
+use crate::composable;
 use crate::layout::BoxLayout;
 use crate::modifier::{Color, Modifier, Shape};
 use crate::ui::interaction::MutableInteractionSource;
@@ -241,6 +242,7 @@ impl Switch {
         self
     }
 
+    #[composable]
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         ctx.changed(&self.checked);
         ctx.changed(&self.enabled);
@@ -1218,7 +1220,7 @@ mod tests {
         custom_colors.unchecked_thumb = crate::modifier::Color::from_argb(255, 100, 100, 100);
         custom_colors.unchecked_border = custom_colors.unchecked_thumb;
         let scene_custom = custom_colors.clone();
-        let scene = |ctx: &mut ComposeCtx| {
+        let scene = crate::compose!(|ctx: &mut ComposeCtx| {
             WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
                 let c = ctx.remember(|| false);
                 holder.replace(Some(c.clone()));
@@ -1255,7 +1257,7 @@ mod tests {
                     crate::ui::Text::new(if c.get() { "已开启" } else { "已关闭" }).build(ctx);
                 });
             });
-        };
+        });
         let frame = |composer: &mut crate::core::composer::Composer| {
             crate::animation::update_animations();
             composer.compose(scene);

@@ -21,6 +21,7 @@
 //!   Enter（内容重建），动画期间内容子树保持 Skip 不重建
 
 use crate::animation::{push_animatable, AnimationSpec};
+use crate::composable;
 use crate::core::composer::{ComposeCtx, GroupStatus};
 use crate::core::state::State;
 use crate::layout::box_layout::BoxLayout;
@@ -46,6 +47,11 @@ impl<T: Clone + PartialEq + 'static> Crossfade<T> {
         self
     }
 
+    /// 构建交叉淡入淡出容器。
+    /// ⚠ 不宏化：内部 progress.get() 依赖必须注册到**调用点 scope**（父容器
+    /// 每帧重跑 → 淡出完成检测执行）——宏化会封闭内部 scope，父容器感知不到
+    /// 进度变化 → Column Skip → 检测冻结 → 内容残留（animated_visibility
+    /// 宏化回归同因）。内部 remember 靠调用点语句 base（稳定）。
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx, T)) {
         // 依赖注册：target 变化 → 外层 scope 重组 → 本 build 重跑（切换启动）
         let target = self.target.get();

@@ -63,7 +63,7 @@ pub mod debug {
 // 公开核心类型
 pub use core::composer::{ComposeCtx, Composer};
 pub use core::state::{DerivedFloat, DerivedValue, State};
-pub use winia_macros::{app_root, composable, composable_keyed, keyed_stmt, run_app};
+pub use winia_macros::{app_root, compose, composable, composable_keyed, keyed_stmt, run_app};
 
 /// Prelude: 使用 Winia 时通常需要的所有导入
 pub mod prelude {
@@ -77,7 +77,7 @@ pub mod prelude {
     pub use crate::ui::animated_content::AnimatedContent;
     pub use crate::ui::crossfade::Crossfade;
     pub use crate::ui::theme::is_system_dark_theme;
-    pub use crate::{app_root, composable, composable_keyed, keyed_stmt, run_app};
+    pub use crate::{app_root, compose, composable, composable_keyed, keyed_stmt, run_app};
     pub use crate::ui::rich_text::RichText;
     pub use crate::text::{InlineDrawable, ImageDrawable, SvgDrawable};
     pub use crate::layout::{Arrangement, Alignment, Constraints, LayoutDirection};

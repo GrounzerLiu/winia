@@ -11,6 +11,7 @@
 //! });
 //! ```
 
+use crate::composable;
 use crate::core::composer::ComposeCtx;
 use crate::modifier::{Modifier, ModifierElement, RichSpanStyle, Color};
 use crate::text::InlineDrawable;
@@ -352,6 +353,7 @@ impl RichText {
     }
 
     /// 构建富文本。`f` 接收一个 `RichTextScope`，在其上调用 `.text()` / `.bold()` 等。
+    #[composable]
     pub fn build(self, ctx: &mut ComposeCtx, f: impl FnOnce(&mut RichTextScope)) {
         let mut content = String::new();
         let mut drawables: Vec<Arc<dyn InlineDrawable>> = Vec::new();

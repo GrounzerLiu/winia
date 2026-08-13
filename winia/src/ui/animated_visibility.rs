@@ -23,6 +23,7 @@
 //!   槽回收（内容消失）
 
 use crate::animation::{push_animatable, AnimationSpec};
+use crate::composable;
 use crate::core::composer::{ComposeCtx, GroupStatus};
 use crate::core::state::State;
 use crate::layout::constraints::Constraints;
@@ -141,6 +142,7 @@ impl AnimatedVisibility {
         self
     }
 
+    /// 构建动画容器（对比测试：临时去掉 #[composable]）
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         let visible = self.visible;
         let enter = self.enter;
@@ -329,7 +331,79 @@ mod tests {
         assert_eq!(present[3], 0, "exit 完成：内容移除");
     }
 
-    /// 测试用简单叶子（Text 需字体环境——用固定尺寸盒子代替）
+    /// 复现 demo（animated_visibility_demo panel_c）回归：Column 内
+    /// [兄弟A, AnimatedVisibility, 兄弟B]——toggle AV 后兄弟 A（按钮位置）必须
+    /// 保留。用户反馈：点第三个按钮后按钮本身消失。
+    /// ⚠ visible 必须用 remember 创建（绑定 owner queue——State::new 外部
+    /// 创建的 notify 不入队，不会触发重组——测试环境的既有陷阱）。
+    #[test]
+    fn siblings_survive_visibility_toggle() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut composer = Composer::new();
+        let visible_holder = std::cell::RefCell::new(None::<State<bool>>);
+        let mut counts = Vec::new();
+        // AV content 执行计数——区分「Column Skip 冻结 AV」vs「动画未推进」
+        let content_runs = std::rc::Rc::new(std::cell::Cell::new(0u32));
+        let cr = content_runs.clone();
+
+        let mut recompose = |composer: &mut Composer| {
+            composer.compose(crate::compose!(|ctx| {
+                Column::new().build(ctx, |ctx| {
+                    // 兄弟 A（模拟 toggle 按钮——AV 的兄弟，应始终保留）
+                    LeafBox::new(40.0, 24.0).build(ctx);
+                    // AV：show 变化 → exit 动画 → removed → 子树回收
+                    let visible = ctx.remember(|| true); // remember 绑定 owner queue
+                    *visible_holder.borrow_mut() = Some(visible.clone());
+                    AnimatedVisibility::new(visible.clone())
+                        .enter(VisibilityTransition::fade_in(crate::animation::TweenSpec::default()))
+                        .exit(VisibilityTransition::fade_out(crate::animation::TweenSpec::default()))
+                        .build(ctx, |ctx| {
+                            cr.set(cr.get() + 1);
+                            LeafBox::new(80.0, 40.0).build(ctx);
+                        });
+                    // 兄弟 B（固定锚点——AV 收缩后应保留）
+                    LeafBox::new(20.0, 20.0).build(ctx);
+                });
+            }));
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 600.0));
+        };
+        // 推进动画帧
+        let mut advance = |composer: &mut Composer| {
+            for _ in 0..8 {
+                crate::animation::update_animations();
+                std::thread::sleep(std::time::Duration::from_millis(60));
+                recompose(composer);
+            }
+        };
+        // 单次 toggle：翻转 visible → 逐帧推进 → 断言 AV 子树被回收（A/B 保留）
+        let mut toggle = |composer: &mut Composer| {
+            let v = visible_holder.borrow().clone().unwrap();
+            v.set(!v.get()); // notify → 下帧重组（remember 创建的 State 绑定队列）
+            recompose(composer);
+            advance(composer);
+            node_count(composer)
+        };
+
+        // 首帧：全显示 + enter 动画完成（progress 0→1——用户场景 toggle 时动画已就绪）
+        recompose(&mut composer);
+        advance(&mut composer);
+        let n0 = node_count(&composer);
+        counts.push(n0);
+        assert!(n0 >= 4, "首帧应含 Column+A+B+AV内容（实际 {n0}）");
+
+        // toggle(false)：exit 动画 → removed → AV 子树回收（Column+A+B=3；A 不应消失）
+        let n1 = toggle(&mut composer);
+        counts.push(n1);
+        assert_eq!(n1, 3, "AV 移除后应剩 Column+A+B（实际 {n1}，序列 {counts:?}）——兄弟 A 不应消失");
+
+        // toggle(true)：enter 动画 → AV 内容恢复（A/B 仍保留）
+        let n2 = toggle(&mut composer);
+        counts.push(n2);
+        assert!(n2 >= 4, "AV 恢复后应含 Column+A+B+AV内容（实际 {n2}，序列 {counts:?}）");
+        eprintln!("[diag] 序列 {counts:?} content_runs={}", content_runs.get());
+    }
+
+    /// 测试用固定尺寸叶子（Text 需字体环境——用固定尺寸盒子代替）
     struct TextLeaf {
         label: &'static str,
     }
@@ -348,7 +422,31 @@ mod tests {
         }
     }
 
+    /// 指定尺寸的叶子（siblings_survive_visibility_toggle 用）
+    struct LeafBox {
+        w: f32,
+        h: f32,
+    }
+    impl LeafBox {
+        fn new(w: f32, h: f32) -> Self {
+            Self { w, h }
+        }
+        fn build(&self, ctx: &mut ComposeCtx) {
+            let key = ctx.next_key();
+            ctx.start_restartable_group(
+                key,
+                Modifier::new().size(self.w, self.h),
+                crate::layout::column::ColumnLayout::default(),
+            );
+            ctx.end_restartable_group();
+        }
+    }
+
     fn count_text(composer: &Composer) -> usize {
+        node_count(composer)
+    }
+
+    fn node_count(composer: &Composer) -> usize {
         let Some(root) = composer.layout_root_idx() else { return 0 };
         let nodes = composer.arena_nodes();
         let mut count = 0;

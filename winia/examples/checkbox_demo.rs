@@ -66,18 +66,22 @@ fn checkbox_demo(ctx: &mut ComposeCtx) {
             let c1 = ctx.remember(|| true);
             let c2 = ctx.remember(|| true);
             let c3 = ctx.remember(|| false);
-            let all = c1.get() && c2.get() && c3.get();
-            let none = !c1.get() && !c2.get() && !c3.get();
-            let parent_state = if all {
-                ToggleableState::On
-            } else if none {
-                ToggleableState::Off
-            } else {
-                ToggleableState::Indeterminate
-            };
             Row::new()
                 .modifier(Modifier::new().padding_vertical(3.0))
                 .build(ctx, |ctx| {
+                    // ps 计算必须在 Row content 内：c1/c2/c3.get() 依赖注册到
+                    // Row scope——子项变化 → Row Enter → 全选重算。
+                    // 若在 Row 外（Column 顶层）计算，Row 参数未变 → Skip →
+                    // 全选不随子项联动（视觉停在旧状态）。
+                    let all = c1.get() && c2.get() && c3.get();
+                    let none = !c1.get() && !c2.get() && !c3.get();
+                    let parent_state = if all {
+                        ToggleableState::On
+                    } else if none {
+                        ToggleableState::Off
+                    } else {
+                        ToggleableState::Indeterminate
+                    };
                     Text::new("全选")
                         .font_size(13.0)
                         .modifier(Modifier::new().width(150.0).padding_top(10.0))
@@ -97,18 +101,23 @@ fn checkbox_demo(ctx: &mut ComposeCtx) {
                 ("子项 2", c2.clone()),
                 ("子项 3", c3.clone()),
             ] {
-                Row::new()
-                    .modifier(Modifier::new().padding_sides(20.0, 3.0, 0.0, 3.0))
-                    .build(ctx, |ctx| {
-                        Text::new(label)
-                            .font_size(13.0)
-                            .modifier(Modifier::new().width(130.0).padding_top(10.0))
-                            .build(ctx);
-                        let cc = c.clone();
-                        Checkbox::new(c.get())
-                            .on_checked_change(move |v| cc.update(|s| *s = v))
-                            .build(ctx);
-                    });
+                // 列表必须显式 key：循环内 remember/next_key 的 per-base 序号按
+                // "执行次数"分配——部分迭代 Skip 时序号前移 → 与历史 key 碰撞
+                // （dup-key panic——Compose 同语义：列表项显式 key）
+                ctx.key(label, |ctx| {
+                    Row::new()
+                        .modifier(Modifier::new().padding_sides(20.0, 3.0, 0.0, 3.0))
+                        .build(ctx, |ctx| {
+                            Text::new(label)
+                                .font_size(13.0)
+                                .modifier(Modifier::new().width(130.0).padding_top(10.0))
+                                .build(ctx);
+                            let cc = c.clone();
+                            Checkbox::new(c.get())
+                                .on_checked_change(move |v| cc.update(|s| *s = v))
+                                .build(ctx);
+                        });
+                });
             }
 
             section_title(ctx, "点击切换");

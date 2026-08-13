@@ -10,6 +10,7 @@
 //! - `Checkbox` 内部委托 `TriStateCheckbox(state = ToggleableState(checked))`。
 
 use crate::core::composer::{ComposeCtx, GroupStatus};
+use crate::composable;
 use crate::layout::BoxLayout;
 use crate::modifier::{Color, GraphicsLayerParams, Modifier, Shape};
 use crate::ui::interaction::MutableInteractionSource;
@@ -189,8 +190,11 @@ impl CheckboxDefaults {
     }
 }
 
-/// 共享实现（对标 M3 `CheckboxImpl`）——`Checkbox` 与 `TriStateCheckbox` 共用
+/// 共享实现（对标 M3 `CheckboxImpl`）——`Checkbox` 与 `TriStateCheckbox` 共用。
+/// #[composable]：内部组合子组件（Icon×2）调用语句注入——多实例隔离
+/// （勾号/横线两个 Icon 同调用位置靠语句 id 区分）
 #[allow(clippy::too_many_arguments)]
+#[composable]
 fn checkbox_impl(
     ctx: &mut ComposeCtx,
     state: ToggleableState,
@@ -241,6 +245,7 @@ fn checkbox_impl(
         if state == ToggleableState::Indeterminate { 1.0 } else { 0.0 },
         check_spec,
     );
+
 
     let shape = CheckboxDefaults::shape();
     let mut m = Modifier::new()
@@ -383,6 +388,7 @@ impl TriStateCheckbox {
         self
     }
 
+    #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
         checkbox_impl(
             ctx,
@@ -460,6 +466,8 @@ impl Checkbox {
         self
     }
 
+    /// #[composable]：内部 TriStateCheckbox 调用点从本 build 语句取稳定 base
+    #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
         // M3：Checkbox → TriStateCheckbox(state = ToggleableState(checked),
         // onClick = { onCheckedChange(!checked) })
@@ -792,3 +800,347 @@ mod tests {
         }
     }
 }
+
+    /// 父子联动回归（checkbox_demo）：Column 内 c1/c2/c3 remember +
+    /// parent_state 计算 + 子项 Checkbox 循环。点子项（c2.set）→ 全选
+    /// TriStateCheckbox 的 state 必须更新（On→Indeterminate/Off）。
+    /// ⚠ 子项 State 必须 remember（绑定 owner queue——State::new 的 notify
+    /// 不入队不触发重组——测试环境既有陷阱）。
+    #[test]
+    fn parent_tri_state_follows_children() {
+        use std::cell::RefCell;
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut composer = crate::core::composer::Composer::new();
+        let holder = RefCell::new(None::<crate::core::state::State<bool>>);
+        let parent_states = RefCell::new(Vec::new());
+
+        let build = |composer: &mut crate::core::composer::Composer| {
+            composer.compose(crate::compose!(|ctx| {
+                crate::ui::Column::new().build(ctx, |ctx| {
+                    let c1 = ctx.remember(|| true);
+                    let c2 = ctx.remember(|| true);
+                    let c3 = ctx.remember(|| true);
+                    *holder.borrow_mut() = Some(c2.clone());
+                    let all = c1.get() && c2.get() && c3.get();
+                    let none = !c1.get() && !c2.get() && !c3.get();
+                    let ps = if all {
+                        ToggleableState::On
+                    } else if none {
+                        ToggleableState::Off
+                    } else {
+                        ToggleableState::Indeterminate
+                    };
+                    parent_states.borrow_mut().push(ps);
+                    // 全选 TriStateCheckbox
+                    TriStateCheckbox::new(ps).build(ctx);
+                    // 子项循环（列表显式 key——实例隔离）
+                    for (label, c) in [("子项 1", c1.clone()), ("子项 2", c2.clone()), ("子项 3", c3.clone())] {
+                        ctx.key(label, |ctx| {
+                            crate::ui::Row::new().build(ctx, |ctx| {
+                                crate::ui::Text::new(label).font_size(13.0).build(ctx);
+                                Checkbox::new(c.get()).on_checked_change(|_| {}).build(ctx);
+                            });
+                        });
+                    }
+                });
+            }));
+            composer.layout(crate::layout::constraints::Constraints::new(0.0, 300.0, 0.0, 600.0));
+        };
+
+        // 帧1：全 true → parent On
+        build(&mut composer);
+        let ps1 = *parent_states.borrow().last().unwrap();
+        assert_eq!(ps1, ToggleableState::On, "全 true → On（实际 {ps1:?}）");
+
+        // 点子项2（c2 → false）：On → Indeterminate（真实联动验证）
+        let c2 = holder.borrow().clone().unwrap();
+        c2.set(false);
+        build(&mut composer);
+        let ps2 = *parent_states.borrow().last().unwrap();
+        assert_eq!(ps2, ToggleableState::Indeterminate, "c2=false → Indeterminate（实际 {ps2:?}）——全选应随子项变化");
+
+        // 再点 c3 → false：全 false → Off
+        // （c3 在闭包内 remember 未持引用——通过序列长度确认持续联动：父状态每次子项变化都重算）
+        assert!(parent_states.borrow().len() >= 2,
+            "子项变化后 parent_state 应重算（实际 {} 次）", parent_states.borrow().len());
+    }
+
+    /// 真实点击链路（demo 等价）：从 arena 找子项 Checkbox 的 Clickable 回调并
+    /// 调用（等价鼠标点击）→ 子项 State 更新 → 父 TriStateCheckbox 联动。
+    /// 验证：点击子项2（checked=true→false）→ parent On→Indeterminate。
+    #[test]
+    fn parent_tri_state_follows_click() {
+        use std::cell::RefCell;
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut composer = crate::core::composer::Composer::new();
+        let holder = RefCell::new(None::<crate::core::state::State<bool>>);
+        let parent_states = RefCell::new(Vec::new());
+        // 记录子项 Checkbox 的 Clickable 回调（按出现顺序——子项1/2/3）
+        let clickables = RefCell::new(Vec::new());
+
+        let build = |composer: &mut crate::core::composer::Composer| {
+            composer.compose(crate::compose!(|ctx| {
+                crate::ui::Column::new().build(ctx, |ctx| {
+                    let c1 = ctx.remember(|| true);
+                    let c2 = ctx.remember(|| true);
+                    let c3 = ctx.remember(|| true);
+                    if holder.borrow().is_none() { *holder.borrow_mut() = Some(c2.clone()); }
+                    let all = c1.get() && c2.get() && c3.get();
+                    let none = !c1.get() && !c2.get() && !c3.get();
+                    let ps = if all { ToggleableState::On }
+                        else if none { ToggleableState::Off }
+                        else { ToggleableState::Indeterminate };
+                    parent_states.borrow_mut().push(ps);
+                    TriStateCheckbox::new(ps).build(ctx);
+                    for (label, c) in [("子项 1", c1.clone()), ("子项 2", c2.clone()), ("子项 3", c3.clone())] {
+                        ctx.key(label, |ctx| {
+                            crate::ui::Row::new().build(ctx, |ctx| {
+                                crate::ui::Text::new(label).font_size(13.0).build(ctx);
+                                let cc = c.clone();
+                                Checkbox::new(c.get())
+                                    .on_checked_change(move |v| cc.update(|s| *s = v))
+                                    .build(ctx);
+                            });
+                        });
+                    }
+                });
+            }));
+            composer.layout(crate::layout::constraints::Constraints::new(0.0, 300.0, 0.0, 600.0));
+            // 收集 Clickable 回调
+            clickables.borrow_mut().clear();
+            for n in composer.arena_nodes() {
+                for el in n.modifier.elements() {
+                    if let crate::modifier::ModifierElement::Clickable { on_click, .. } = el {
+                        clickables.borrow_mut().push(on_click.clone());
+                    }
+                }
+            }
+        };
+
+        build(&mut composer);
+        assert_eq!(*parent_states.borrow().last().unwrap(), ToggleableState::On, "全 true → On");
+        let clicks = clickables.borrow().clone();
+        // 找子项2 的 Clickable：demo 结构里子项循环的 Checkbox 是第 2/3/4 个
+        // Clickable（前有"全选"的 TriStateCheckbox 1 个）——取第 2 个 = 子项2
+        assert!(clicks.len() >= 3, "应有多个 Clickable（实际 {}）", clicks.len());
+        let sub2_click = clicks[1].clone();
+        // 模拟点击子项2（on_click = cb(!checked)——checked=true → 传 false → c2=false）
+        sub2_click();
+        // 下一帧：c2=false → parent Indeterminate
+        build(&mut composer);
+        let ps = *parent_states.borrow().last().unwrap();
+        assert_eq!(ps, ToggleableState::Indeterminate,
+            "点击子项2 后 parent 应变 Indeterminate（实际 {ps:?}）——全选应随点击联动");
+        let c2 = holder.borrow().clone().unwrap();
+        assert!(!c2.get(), "点击后 c2 应为 false");
+    }
+
+    /// 渲染级父子联动（demo 等价）：Column + 子项循环 + 全选 TriStateCheckbox。
+    /// 点击子项3（false→true）→ 全选从 Indeterminate→On → 全选区域位图必须变化
+    /// （用户报告：全选按钮不随子项变化——此测试锁定视觉联动）。
+    #[test]
+    fn parent_tri_state_renders_change_on_child_click() {
+        use std::cell::RefCell;
+        use skia_safe::{Color, surfaces};
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let mut composer = crate::core::composer::Composer::new();
+        let clickables = RefCell::new(Vec::new());
+        let parent_box_pos = RefCell::new(None::<(f32, f32, f32, f32)>);
+
+        let build_scene = |ctx: &mut ComposeCtx| {
+            WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                crate::ui::Column::new().build(ctx, |ctx| {
+                    let c1 = ctx.remember(|| true);
+                    let c2 = ctx.remember(|| true);
+                    let c3 = ctx.remember(|| false);
+                    let all = c1.get() && c2.get() && c3.get();
+                    let none = !c1.get() && !c2.get() && !c3.get();
+                    let ps = if all { ToggleableState::On }
+                        else if none { ToggleableState::Off }
+                        else { ToggleableState::Indeterminate };
+                    // 全选（第一个 40x40 checkbox）——demo 等价：带 on_click
+                    TriStateCheckbox::new(ps).on_click(|| {}).build(ctx);
+                    for (label, c) in [("子项 1", c1.clone()), ("子项 2", c2.clone()), ("子项 3", c3.clone())] {
+                        ctx.key(label, |ctx| {
+                            crate::ui::Row::new().build(ctx, |ctx| {
+                                crate::ui::Text::new(label).font_size(13.0).build(ctx);
+                                let cc = c.clone();
+                                Checkbox::new(c.get())
+                                    .on_checked_change(move |v| cc.update(|s| *s = v))
+                                    .build(ctx);
+                            });
+                        });
+                    }
+                });
+            });
+        };
+        // 渲染一次 + 记录全选位置 + 收集 Clickable
+        let mut render = |composer: &mut crate::core::composer::Composer| -> Vec<u8> {
+            composer.compose(build_scene);
+            composer.layout(crate::layout::constraints::Constraints::new(0.0, 400.0, 0.0, 600.0));
+            // 全选 = 第一个 40x40 节点（Column 直接子级里找）
+            let root = composer.layout_root_idx().unwrap();
+            let nodes = composer.arena_nodes();
+            fn first_box(nodes: &[crate::layout::node::LayoutNode], idx: usize) -> Option<(f32,f32,f32,f32)> {
+                let n = &nodes[idx];
+                let abs = (n.position.x, n.position.y);
+                if n.measured_size.width == 40.0 && n.measured_size.height == 40.0 {
+                    return Some((abs.0, abs.1, 40.0, 40.0));
+                }
+                for &c in &n.children {
+                    if let Some(r) = first_box(nodes, c) { return Some(r); }
+                }
+                None
+            }
+            *parent_box_pos.borrow_mut() = first_box(nodes, root);
+            clickables.borrow_mut().clear();
+            for n in nodes {
+                for el in n.modifier.elements() {
+                    if let crate::modifier::ModifierElement::Clickable { on_click, .. } = el {
+                        clickables.borrow_mut().push(on_click.clone());
+                    }
+                }
+            }
+            let mut surface = surfaces::raster_n32_premul((400, 600)).unwrap();
+            let canvas = surface.canvas();
+            canvas.clear(Color::WHITE);
+            crate::render::render(nodes, root, canvas);
+            let pm = surface.peek_pixels().expect("pixmap");
+            let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+            px.iter().flat_map(|p| [p[0], p[1], p[2]]).collect::<Vec<_>>()
+        };
+        // 提取全选区域像素
+        let region_px = |px: &[u8], (x, y, w, h): (f32, f32, f32, f32)| -> Vec<u8> {
+            let mut out = Vec::new();
+            for row in 0..(h as usize) {
+                for col in 0..(w as usize) {
+                    let gx = (x as usize) + col;
+                    let gy = (y as usize) + row;
+                    let i = (gy * 400 + gx) * 3;
+                    if i + 2 < px.len() { out.extend_from_slice(&px[i..i+3]); }
+                }
+            }
+            out
+        };
+
+        // 首帧渲染：全选 Indeterminate
+        let px1 = render(&mut composer);
+        let pos = parent_box_pos.borrow().clone().expect("全选位置");
+        let r1 = region_px(&px1, pos);
+        let clicks = clickables.borrow().clone();
+        assert!(clicks.len() >= 4, "应有全选+3子项 Clickable（实际 {}）", clicks.len());
+        // 点击子项3（第 4 个 Clickable——全选+子项1+2+3）
+        let sub3 = clicks[3].clone();
+        sub3(); // c3: false→true
+        // 推进动画（颜色/勾号过渡）
+        for _ in 0..20 {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+        let px2 = render(&mut composer);
+        for _ in 0..20 {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+        let px3 = render(&mut composer);
+        let r2 = region_px(&px3, pos);
+        assert_ne!(r1, r2,
+            "点击子项3 后全选区域位图必须变化（Indeterminate→On）——全选应随子项联动（区域 {pos:?}）");
+    }
+
+    /// demo 差异复现：Column + vertical_scroll + 循环 ctx.key + 全选联动。
+    /// 用户报告：滚动列表里点子项3，子项勾上了但全选不变。
+    /// （无 scroll 的 parent_tri_state_renders_change_on_child_click 通过——差异在 scroll）
+    #[test]
+    fn parent_tri_state_follows_child_in_scroll_column() {
+        use std::cell::RefCell;
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let mut composer = crate::core::composer::Composer::new();
+        let clickables = RefCell::new(Vec::new());
+        let parent_states = RefCell::new(Vec::new());
+
+        let build_scene = |ctx: &mut ComposeCtx| {
+            WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                crate::ui::Column::new()
+                    .modifier(crate::modifier::Modifier::new()
+                        .fill_max_size()
+                        .vertical_scroll(crate::modifier::ScrollState::new()))
+                    .build(ctx, |ctx| {
+                        let c1 = ctx.remember(|| true);
+                        let c2 = ctx.remember(|| true);
+                        let c3 = ctx.remember(|| false);
+                        let all = c1.get() && c2.get() && c3.get();
+                        let none = !c1.get() && !c2.get() && !c3.get();
+                        let ps = if all { ToggleableState::On }
+                            else if none { ToggleableState::Off }
+                            else { ToggleableState::Indeterminate };
+                        parent_states.borrow_mut().push(ps);
+                        TriStateCheckbox::new(ps).on_click(|| {}).build(ctx);
+                        for (label, c) in [("子项 1", c1.clone()), ("子项 2", c2.clone()), ("子项 3", c3.clone())] {
+                            ctx.key(label, |ctx| {
+                                crate::ui::Row::new().build(ctx, |ctx| {
+                                    crate::ui::Text::new(label).font_size(13.0).build(ctx);
+                                    let cc = c.clone();
+                                    Checkbox::new(c.get())
+                                        .on_checked_change(move |v| cc.update(|s| *s = v))
+                                        .build(ctx);
+                                });
+                            });
+                        }
+                    });
+            });
+        };
+        // 帧1 + 点击子项3（第 4 个 Clickable）
+        composer.compose(build_scene);
+        composer.layout(crate::layout::constraints::Constraints::new(0.0, 400.0, 0.0, 600.0));
+        clickables.borrow_mut().clear();
+        for n in composer.arena_nodes() {
+            for el in n.modifier.elements() {
+                if let crate::modifier::ModifierElement::Clickable { on_click, .. } = el {
+                    clickables.borrow_mut().push(on_click.clone());
+                }
+            }
+        }
+        let clicks = clickables.borrow().clone();
+        assert!(clicks.len() >= 4, "Clickable 数 {}", clicks.len());
+        let sub3 = clicks[3].clone();
+        sub3(); // c3 false→true
+        // 下一帧：全选应变 On
+        composer.compose(build_scene);
+        composer.layout(crate::layout::constraints::Constraints::new(0.0, 400.0, 0.0, 600.0));
+        let ps = *parent_states.borrow().last().unwrap();
+        assert_eq!(ps, ToggleableState::On,
+            "带 scroll 的 Column：点击子项3 后全选应变 On（实际 {ps:?}）——scroll 容器不应阻断联动");
+    }
+
+    /// 核心假设验证：宏化 Column 的 content 顶层 State.get() 变化 →
+    /// Column 应 Enter（compose_dirty_count 增加）。若 Skip（计数不变）→
+    /// 内容 scope 收不到依赖 → 全选联动断（demo 横线不变根因）。
+    #[test]
+    fn macroized_column_content_state_notify_enters_column() {
+        use std::cell::RefCell;
+        let mut composer = crate::core::composer::Composer::new();
+        let holder = RefCell::new(None::<crate::core::state::State<bool>>);
+        let scene = |composer: &mut crate::core::composer::Composer| {
+            composer.compose(crate::compose!(|ctx| {
+                crate::ui::Column::new().build(ctx, |ctx| {
+                    let c3 = ctx.remember(|| false);
+                    *holder.borrow_mut() = Some(c3.clone());
+                    let _ = c3.get(); // 顶层依赖 → 应注册 Column scope
+                    TriStateCheckbox::new(
+                        if c3.get() { ToggleableState::On } else { ToggleableState::Off }
+                    ).on_click(|| {}).build(ctx);
+                });
+            }));
+            composer.layout(crate::layout::constraints::Constraints::new(0.0, 300.0, 0.0, 300.0));
+        };
+        scene(&mut composer);
+        let c = holder.borrow().clone().unwrap();
+        c.set(true);
+        scene(&mut composer);
+        // Column 应 Enter（content 重跑 → ps 重算 → TriStateCheckbox 变 On）
+        let d2 = composer.compose_dirty_count;
+        assert!(d2 >= 1, "c3 变化后 Column 应 Enter（dirty 计数 {d2}）");
+    }

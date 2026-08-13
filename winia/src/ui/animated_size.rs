@@ -27,14 +27,28 @@ use crate::unit::Size;
 /// 尺寸变化自动动画容器
 pub struct AnimatedSize {
     spec: AnimationSpec,
+    modifier: Modifier,
 }
 
 impl AnimatedSize {
     /// 尺寸动画规格（默认 300ms 线性 tween）
     pub fn new(spec: impl Into<AnimationSpec>) -> Self {
-        Self { spec: spec.into() }
+        Self { spec: spec.into(), modifier: Modifier::new() }
     }
 
+    /// 容器层外观修饰符（background/border 等）——**画在容器上跟随尺寸动画**：
+    /// 内容尺寸变化时外观平滑过渡（对齐 Compose `Modifier.animateContentSize`——
+    /// 动画的是容器边界，外观修饰属容器）。内容自身的尺寸/背景不参与动画。
+    pub fn modifier(mut self, m: Modifier) -> Self {
+        self.modifier = self.modifier.then(m);
+        self
+    }
+
+    /// 构建尺寸动画容器。
+    /// ⚠ 不宏化：尺寸动画靠 measure 期 `size.get()` 注册 layout_dep + 动画推进
+    /// set_no_wake 驱动每帧重测——宏化封闭 scope 后父容器 Skip，重测链路
+    /// 可能被切断（同 animated_visibility/crossfade/animated_content 宏化回归）。
+    /// 内部 remember 靠调用点语句 base（稳定）。
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         // 动画尺寸 + 上次目标（remember——语句级 key 稳定，跨重组保留）
         // target 不能放 policy 实例（每次 build 重建→Enter 时重置为 None→首帧
@@ -47,7 +61,7 @@ impl AnimatedSize {
             spec: self.spec,
         };
         let key = ctx.next_key();
-        match ctx.start_restartable_group(key, Modifier::new(), policy) {
+        match ctx.start_restartable_group(key, self.modifier, policy) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
                 content(ctx);

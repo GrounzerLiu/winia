@@ -9,6 +9,7 @@
 //! - 单层弹出（嵌套弹出后续）
 
 use std::sync::Arc;
+use crate::composable;
 
 /// 弹出定位（对标 Compose `PopupPosition`——相对锚点/窗口）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +92,8 @@ impl Popup {
         self
     }
 
+    /// #[composable]：内部 remember（overlay id）从 build 调用点取稳定 base
+    #[composable]
     pub fn build(self, ctx: &mut crate::core::composer::ComposeCtx, content: impl Fn(&mut crate::core::composer::ComposeCtx) + 'static) {
         let id = ctx.remember(|| next_overlay_id());
         ctx.open_overlay(crate::ui::overlay::OverlayDesc {
@@ -138,6 +141,8 @@ impl Dialog {
         self
     }
 
+    /// #[composable]：内部 remember（overlay id）从 build 调用点取稳定 base
+    #[composable]
     pub fn build(self, ctx: &mut crate::core::composer::ComposeCtx, content: impl Fn(&mut crate::core::composer::ComposeCtx) + 'static) {
         let id = ctx.remember(|| next_overlay_id());
         ctx.open_overlay(crate::ui::overlay::OverlayDesc {
@@ -187,6 +192,9 @@ impl DropdownMenu {
         self
     }
 
+    /// #[composable]：内部 remember（overlay id）/next_key（锚点容器）
+    /// 从 build 调用点取稳定 base
+    #[composable]
     pub fn build(
         self,
         ctx: &mut crate::core::composer::ComposeCtx,
@@ -250,6 +258,8 @@ impl DropdownMenuItem {
         self
     }
 
+    /// #[composable]：与 Popup/Dialog 同契约（组合单元统一标记）
+    #[composable]
     pub fn build(self, ctx: &mut crate::core::composer::ComposeCtx) {
         let modifier = crate::modifier::Modifier::new()
             .size(160.0, 36.0)

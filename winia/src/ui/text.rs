@@ -5,6 +5,7 @@
 //! - 单独参数（font_size 等）优先级高于 style 参数
 
 use crate::debug_log;
+use crate::composable;
 use crate::core::composer::ComposeCtx;
 use crate::core::composition_local::CompositionLocal;
 use crate::modifier::{Color, Modifier, ModifierElement};
@@ -198,6 +199,7 @@ impl Text {
         self
     }
 
+    #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
         #[cfg(debug_assertions)] {
             if std::env::var("WINIA_TEXT_TRACE").is_ok() {

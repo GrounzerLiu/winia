@@ -1,4 +1,5 @@
 use crate::app;
+use crate::composable;
 use crate::prelude::*;
 use std::cell::Cell;
 use std::collections::HashSet;
@@ -108,6 +109,7 @@ impl Window {
         }
     }
 
+    #[composable]
     pub fn build(self, ctx: &mut ComposeCtx, content: impl Fn(&mut ComposeCtx) + Send + 'static) {
         // 占位 leaf 与 created_id 共用同一个加盐 key：① 与内容节点 key 空间隔离
         // （结构变化时不误复用旧槽）；② 每 Window 独立（remember_at_key(u64::MAX)

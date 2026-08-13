@@ -10,6 +10,7 @@
 //!     });
 //! ```
 
+use crate::composable;
 use crate::core::composer::ComposeCtx;
 use crate::layout::BoxLayout;
 use crate::modifier::{Modifier, Shape, SizeValue};
@@ -551,6 +552,7 @@ impl Button {
 
     /// 注册到组合树并执行子内容。
     /// 根据 style 自动从 WiniaTheme 读取默认颜色（用户 modifier 可覆盖）。
+    #[composable]
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         // 参数暂存（参数相等跳过——style/enabled 未变 → 容器 Skip）
         ctx.changed(&self.style);

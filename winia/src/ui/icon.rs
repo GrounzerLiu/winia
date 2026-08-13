@@ -10,6 +10,7 @@
 //! 所有 SVG 渲染统一走 Skia 内置 `svg::Dom`（不自研路径解析）：
 //! 裸 path 数据会被包成最小 `<svg viewBox="0 0 24 24">` 文档后交给 Dom。
 
+use crate::composable;
 use crate::core::composer::{ComposeCtx, GroupStatus};
 use crate::core::state::State;
 use crate::layout::BoxLayout;
@@ -655,6 +656,7 @@ impl Icon {
         self
     }
 
+    #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
         ctx.changed(&self.source);
         ctx.changed(&self.tint);

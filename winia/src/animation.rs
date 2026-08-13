@@ -1700,6 +1700,86 @@ pub(crate) mod tests {
         assert!(fired.load(Ordering::SeqCst), "动画完成应触发 on_finish");
         assert_eq!(st.peek(), 1.0, "动画值应到达目标");
     }
+    /// 复现 animation_demo 滚动卡死（dup-key）：Column + vertical_scroll +
+    /// Crossfade + 多 section。滚动 → Skip/Enter 交替 + 动画 notify → 每帧
+    /// 2 次 compose（recompose loop）→ 节点不应泄漏/dup-key。
+    #[test]
+    fn scroll_with_animation_no_dup_key() {
+        use std::cell::RefCell;
+        let _g = TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut composer = crate::core::composer::Composer::new();
+        let scroll = RefCell::new(None::<crate::modifier::ScrollState>);
+        let page = RefCell::new(None::<crate::core::state::State<u32>>);
+        let frame_parity = RefCell::new(std::rc::Rc::new(std::cell::Cell::new(false)));
+        let theme = crate::ui::theme::ThemeColors::light_from_seed(0x6750A4);
+
+        let scene = |composer: &mut crate::core::composer::Composer| {
+            composer.compose(crate::compose!(|ctx| {
+                crate::ui::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    crate::ui::Column::new()
+                        .modifier(crate::modifier::Modifier::new()
+                            .fill_max_size()
+                            .vertical_scroll({
+                                // 先取 clone 再判断——borrow_mut 与外层 borrow 冲突
+                                let cur = scroll.borrow().clone();
+                                if let Some(s) = cur {
+                                    s
+                                } else {
+                                    let s = ctx.remember(|| crate::modifier::ScrollState::new()).get();
+                                    *scroll.borrow_mut() = Some(s.clone());
+                                    s
+                                }
+                            }))
+                        .build(ctx, |ctx| {
+                            for i in 0..10 {
+                                crate::ui::Text::new(format!("section {i}")).font_size(14.0).build(ctx);
+                                crate::ui::Row::new().build(ctx, |ctx| {
+                                    crate::ui::Text::new(format!("内容 {i} —— 撑高内容")).build(ctx);
+                                });
+                            }
+                            // 动画 section（每帧 notify——demo 8a/8b 等价）
+                            let a = ctx.animate_float_as_state(
+                                if frame_parity.borrow().get() { 200.0 } else { 40.0 },
+                                crate::animation::TweenSpec::default().into(),
+                            );
+                            crate::ui::Text::new(format!("w={}", a.peek())).build(ctx);
+                            let p = ctx.remember(|| 0u32);
+                            *page.borrow_mut() = Some(p.clone());
+                            crate::ui::crossfade::Crossfade::new(p.clone())
+                                .animation(crate::animation::TweenSpec::default())
+                                .build(ctx, |ctx, pg| {
+                                    crate::ui::Text::new(format!("page {pg}")).build(ctx);
+                                });
+                        });
+                });
+            }));
+            composer.layout(crate::layout::constraints::Constraints::new(0.0, 400.0, 0.0, 600.0));
+        };
+
+        scene(&mut composer);
+        let nodes1 = composer.arena.nodes.len();
+        for frame in 0..30 {
+            if let Some(s) = scroll.borrow().clone() {
+                s.scroll_to((frame % 5) as f32 * 150.0, 2000.0);
+            }
+            if frame % 10 == 0 {
+                if let Some(p) = page.borrow().clone() {
+                    p.set((p.get() + 1) % 3);
+                }
+            }
+            frame_parity.borrow().set(!frame_parity.borrow().get());
+            for _ in 0..5 {
+                crate::animation::update_animations();
+                std::thread::sleep(std::time::Duration::from_millis(8));
+            }
+            scene(&mut composer);
+            scene(&mut composer);
+            let n = composer.arena.nodes.len();
+            assert!(n <= nodes1 + 20,
+                "帧 {frame}: 节点数不应持续增长（{n} vs 初始 {nodes1}）——泄漏/dup");
+        }
+    }
+
 }
 
 #[cfg(test)]

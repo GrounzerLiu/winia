@@ -284,21 +284,42 @@ pub(crate) fn collect_nodes(
     map.insert(arena.nodes[idx].slot_key, arena.nodes[idx].to_cached());
 }
 
-/// 收集 arena 树中所有节点的 slot_key → 索引映射（阶段D 节点复用用）
+/// 收集 arena 树中所有节点的 slot_key → 索引映射（阶段D 节点复用用）。
+/// 同 slot_key 两节点 = key 冲突（fail-fast panic——不静默覆盖：
+/// 覆盖意味着前一节点状态丢失 + 节点身份错位——dup-key 是组合 bug
+/// 的最终防线，调试信息含 key/节点索引/被覆盖位置）。
 pub(crate) fn collect_node_keys(
     arena: &NodeArena,
     idx: usize,
     map: &mut std::collections::HashMap<u64, usize>,
 ) {
+    collect_node_keys_with_parent(arena, idx, None, map, 0);
+}
+
+fn collect_node_keys_with_parent(
+    arena: &NodeArena,
+    idx: usize,
+    parent: Option<usize>,
+    map: &mut std::collections::HashMap<u64, usize>,
+    depth: usize,
+) {
     if let Some(prev) = map.insert(arena.nodes[idx].slot_key, idx) {
-        #[cfg(debug_assertions)] {
-            if std::env::var("WINIA_KEY_TRACE").is_ok() {
-                eprintln!("[dup-key] sk={} idx={} 被 {} 覆盖", arena.nodes[idx].slot_key >> 32, prev, idx);
-            }
-        }
+        let (a, b) = (&arena.nodes[idx], &arena.nodes[prev]);
+        let parent_desc = parent
+            .map(|p| format!("父 idx={} sk={:#x}", p, arena.nodes[p].slot_key))
+            .unwrap_or_else(|| "根".to_string());
+        panic!(
+            "[dup-key] slot_key 冲突：sk={:#x} 节点 idx={} pos={:?} size={:?} {}（depth={}）\
+             覆盖了已有节点 idx={} pos={:?} size={:?}\
+             ——同一组合位置出现两个节点（key 漂移/结构变化漏配 ctx.key？）。\
+             修复：①结构变化处加 ctx.key() ②检查列表实例隔离 ③组件调用点在 \
+             #[composable] 内",
+            arena.nodes[idx].slot_key, idx, a.position, a.measured_size, parent_desc, depth,
+            prev, b.position, b.measured_size
+        );
     }
     let children = arena.nodes[idx].children.clone();
     for c in children {
-        collect_node_keys(arena, c, map);
+        collect_node_keys_with_parent(arena, c, Some(idx), map, depth + 1);
     }
 }
