@@ -40,7 +40,10 @@ impl Tooltip {
             text: Some(text.into()),
             content: None,
             position: crate::ui::overlay::PopupPosition::TopCenter,
-            offset: (0.0, 8.0),
+            // ⚠ offset y 必须为负（向上）：TopCenter 定位 = tooltip 底贴锚点顶，
+            // offset 是加在定位上的位移——(0, 8) 向下 8px → tooltip 压住锚点
+            // 顶部 8px（挡住按钮）。M3 间距 8dp = tooltip 在锚点上方留 8dp
+            offset: (0.0, -8.0),
             hover_trigger: true,
             dismiss_on_outside: true,
         }
@@ -65,7 +68,8 @@ impl Tooltip {
         self
     }
 
-    /// 定位后偏移（默认 (0, 8)——与锚点 8dp 间距）
+    /// 定位后偏移（默认 (0, -8)——锚点上方 8dp 间距；offset 加在定位上，
+    /// TopCenter 定位 tooltip 底贴锚点顶，y 负值向上留间距）
     pub fn offset(mut self, x: f32, y: f32) -> Self {
         self.offset = (x, y);
         self
@@ -112,6 +116,15 @@ impl Tooltip {
         let hovered = interaction.is_hovered();
         let external = self.external_visible.as_ref().map(|s| s.get()).unwrap_or(false);
         let show = self.hover_trigger && hovered || external;
+        // ⚠ 外部 dismiss 仅对**外部 visible 控制**的 tooltip（rich）生效——
+        // 纯 hover 触发的（无 external_visible）不参与：点击应完全穿透到
+        // 下层（tooltip 关闭 = 指针离开，无 dismiss 语义；否则点按钮第一次
+        // 被当"外部点击"消耗——需点两次）
+        let dismiss_outside = if self.external_visible.is_some() {
+            self.dismiss_on_outside
+        } else {
+            false
+        };
 
         // build 总执行（show 参数化）——记录 active 供 sync 删除（对齐
         // Popup/Dialog：show=false 记录 false → 删除；true 注册 overlay）
@@ -130,7 +143,7 @@ impl Tooltip {
                 position: self.position,
                 offset: self.offset,
                 modal: false,
-                dismiss_on_outside: self.dismiss_on_outside,
+                dismiss_on_outside: dismiss_outside,
                 // ⚠ Tooltip 浮层必须放行主树点击——浮层盖住锚点（锚点上方
                 // tooltip 与锚点重叠）时点击锚点仍生效（否则 tooltip 挡住
                 // 锚点按钮 → 外部 visible 控制关不了）

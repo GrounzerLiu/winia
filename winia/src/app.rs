@@ -1674,10 +1674,16 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
     // 紧接着的点击（用户"点两次才打开"）且多渲染一帧（视觉闪烁）
     for i in (0..pw.overlays.len()).rev() {
         if pw.overlays[i].modal || pw.overlays[i].dismiss_on_outside {
+            let passthrough = pw.overlays[i].click_passthrough;
             let cb = pw.overlays[i].on_dismiss.take();
             pw.overlays.remove(i);
             if let Some(cb) = cb {
                 (cb)();
+            }
+            // ⚠ Tooltip（passthrough）：dismiss 后**放行主树**——点击不消费
+            // （否则点按钮第一次只关 tooltip、按钮收不到——需点两次）
+            if passthrough {
+                continue;
             }
             return true;
         }
