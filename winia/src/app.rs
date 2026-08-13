@@ -1879,36 +1879,44 @@ fn handle_pointer_down(
             .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
         reg.clear_selection();
     }
-    // grapheme anchor 定位
-    let anchor = if let Ok(borrow) = nodes[innermost].cached_paragraph.try_borrow() {
+    // grapheme anchor 定位。
+    // ⚠ TextField 容器化后：paragraph 只缓存在**输入 leaf**，容器节点无
+    // cached_paragraph——点击容器 padding 区/文本空隙命中容器 → innermost
+    // 无 para → anchor=None → 拖动永远无法开始选择。须沿 path 向上找
+    // 第一个有 paragraph 的祖先（输入 leaf）作为 anchor 定位节点。
+    let anchor_node = path.iter().rev()
+        .find(|&&i| nodes[i].cached_paragraph.borrow().is_some())
+        .copied();
+    let anchor = anchor_node.and_then(|ai| {
+        let borrow = nodes[ai].cached_paragraph.try_borrow().ok()?;
         borrow.as_ref().map(|para| {
-            let (ax, ay) = node_abs_position(nodes, r, nodes[innermost].id);
+            let (ax, ay) = node_abs_position(nodes, r, nodes[ai].id);
             // 段落局部坐标须扣除节点 padding（渲染侧文本画在 content 区 =
             // 节点原点 + padding——不扣则点击位置整体偏 padding 偏移，
             // 光标跳错位置）
-            let (pad_s, pad_t, pad_e, _) = nodes[innermost].modifier.get_padding_sides();
-            let pad_x = if nodes[innermost].layout_direction == crate::layout::LayoutDirection::Rtl { pad_e } else { pad_s };
+            let (pad_s, pad_t, pad_e, _) = nodes[ai].modifier.get_padding_sides();
+            let pad_x = if nodes[ai].layout_direction == crate::layout::LayoutDirection::Rtl { pad_e } else { pad_s };
             let tl = crate::text::TextLayout::new(para, 0);
             let hit = tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(scene_pos.0 - ax - pad_x, scene_pos.1 - ay - pad_t));
             // 定位结果是显示文本偏移（paragraph = 显示文本）——经 OffsetMapping
             // 转回编辑偏移（密码掩码/格式化输入）
-            nodes[innermost].modifier.elements().iter().find_map(|el| {
+            nodes[ai].modifier.elements().iter().find_map(|el| {
                 if let crate::modifier::ModifierElement::TextFieldVisual { offset_mapping, .. } = el {
                     Some(offset_mapping.as_ref().map(|m| m.transformed_to_original(hit)).unwrap_or(hit))
                 } else { None }
             }).unwrap_or(hit)
         })
-    } else {
-        None
-    };
-    // reg 只用节点自己的 registrar（不 fallback active_registrar）——
+    });
+    // reg 只用 anchor 节点自己的 registrar（不 fallback active_registrar）——
     // 不可选节点（输出 Text 等未注册）的 node.registrar 为 None，
     // fallback 会取到全局残留（如 Container B 的）→ anchor_registrar
     // 错绑 B → 拖动到 B 时 same_reg=true → 混合偏移 → B 被选
-    let own_reg = nodes[innermost].registrar.borrow().as_ref().cloned();
+    let own_reg = anchor_node.and_then(|ai| nodes[ai].registrar.borrow().as_ref().cloned());
     let anchor_global = anchor.and_then(|a| {
-        own_reg.as_ref()
-            .and_then(|reg| reg.segment_info(nodes[innermost].slot_key).map(|(off, _)| off + a))
+        anchor_node.and_then(|ai| {
+            own_reg.as_ref()
+                .and_then(|reg| reg.segment_info(nodes[ai].slot_key).map(|(off, _)| off + a))
+        })
     });
     pw.pointer_down_state = Some(PtrDownState {
         node_id: nodes[innermost].id,
@@ -1924,9 +1932,10 @@ fn handle_pointer_down(
         // ⚠ 点击聚焦由组件自己决定（TextField 内部 requestFocus）——
         // 框架层不自动聚焦（对标 Compose：clickable/focusable 点击不请求焦点，
         // 焦点由 Tab 导航或显式 requestFocus 获得）。
-        if let Some(a) = anchor {
-            nodes[innermost].cursor_index.set(a);
-            if let Some(cb) = nodes[innermost].cursor_callback.borrow_mut().as_mut() {
+        // 光标设置在 anchor 节点（输入 leaf）上——光标绘制/回调都在 leaf
+        if let (Some(a), Some(ai)) = (anchor, anchor_node) {
+            nodes[ai].cursor_index.set(a);
+            if let Some(cb) = nodes[ai].cursor_callback.borrow_mut().as_mut() {
                 cb(a);
             }
         }

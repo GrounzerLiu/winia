@@ -960,9 +960,9 @@ impl TextField {
                 });
             });
         }
-        // 注册本段（显示文本——reg 空间 = 显示；content 变化时 register
-        // 同步更新文本/长度）
-        registrar.register(key, &transformed.text);
+        // 注册本段移到输入 leaf 构建处（须用 leaf 的 slot_key——见输入子
+        // 节点注释）。此处容器 key 注册会导致拖动定位/渲染高亮查不到段
+        // （节点 slot_key ≠ 容器 key）。
         // UndoManager（组合点 remember——跨帧持久，键位处理共享）
         let undo = ctx.remember(|| std::sync::Arc::new(parking_lot::Mutex::new(UndoManager::new()))).get();
         let kb_handler = {
@@ -1606,6 +1606,14 @@ impl TextField {
         let input_key = ctx.next_key();
         ctx.start_leaf(input_key, input_modifier);
 
+        // 注册本段（显示文本——reg 空间 = 显示；content 变化时 register
+        // 同步更新文本/长度）。
+        // ⚠ 必须用**输入 leaf 的 slot_key**（input_key）而非容器 key：渲染
+        // 高亮（selected_range(node.slot_key)）与拖动定位
+        // （segment_info(node.slot_key)）都按 leaf 的 slot_key 查询——
+        // 注册在容器 key 上则查不到 → 选区永不显示/拖动无法开始
+        registrar.register(input_key, &transformed.text);
+
 
         // 设置光标位置和回调（desc 通道——组合期捕获，物化时应用到节点）
         ctx.set_current_node_cursor_and_callback(
@@ -1690,7 +1698,7 @@ impl TextField {
         //   重组（闪烁翻转/其他）时若 reg ≠ value 则把 reg 拉回 value，
         //   否则 build 用旧 value 覆盖 reg → 拖动选区随光标闪烁被重置
         // - 其余情况（点击/键盘/外部）value → reg（渲染 registrar 高亮）
-        let reg_sel = registrar.selected_range(key);
+        let reg_sel = registrar.selected_range(input_key);
         let val_nonzero = current.selection.start != current.selection.end;
         let (vs, ve) = (
             current.selection.start.min(current.selection.end),
