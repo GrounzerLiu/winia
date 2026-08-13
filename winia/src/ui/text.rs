@@ -230,9 +230,15 @@ impl Text {
         let final_overflow = self.overflow.or(style.overflow).unwrap_or_default();
         let final_max_lines = self.max_lines.or(style.max_lines).unwrap_or(usize::MAX);
 
+        // ⚠ 颜色优先级：显式 color > LOCAL_TEXT_STYLE > **内容色**
+        // （WiniaTheme::content_color——对标 Compose LocalContentColor：Text 默认色
+        // 就是 LocalContentColor，with_content_color 作用域内自动跟随）> 主题
+        // on_surface。此前缺 content_color 一步——Tooltip 用
+        // with_content_color(inverse_on_surface) 提供文字色，Text 却落到 on_surface
+        // （配色错误）；Button/Chip 的 with_content_color 传内容色对 Text 同样无效
         let final_color = self.color
             .or(style.color)
-            .unwrap_or_else(|| crate::ui::theme::WiniaTheme::colors().on_surface);
+            .unwrap_or_else(|| crate::ui::theme::WiniaTheme::content_color());
 
         let content_len = self.content.len();
         // 注册到选区容器（供文本拖动选中使用）——仅在 SelectionContainer 的
