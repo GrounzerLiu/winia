@@ -101,7 +101,10 @@ pub(crate) struct PerWindow {
     /// 上次刷新率查询时刻（Moved/ScaleFactorChanged 高频触发——300ms 去抖）
     last_refresh_check: std::time::Instant,
     /// 当前悬停节点的 slot_key（指针移入/移出时发射 Hover Enter/Exit）
-    hovered_slot: Option<u64>,
+    /// 当前 hover 的 hoverable 节点 slot 集合（**支持嵌套**——Tooltip 锚点
+    /// 容器与内部 Button 等可同时 hover；修复前只存最内层 → 嵌套 hoverable
+    /// 外层收不到 Enter（Tooltip 锚点挂 hoverable 时内部 Button 抢走事件））
+    hovered_slots: std::collections::HashSet<u64>,
     /// 当前按下交互（clickable 绑定源 + 按下节点 slot——Up/越界 slop 时释放）
     pressed_interaction: Option<(u64, crate::ui::interaction::MutableInteractionSource)>,
     /// 已发射 Focus 的节点 slot（focus 变化时对旧节点补发 Unfocus）
@@ -137,7 +140,7 @@ struct PtrDownState {
 
 impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::ui::theme::ThemeColors) -> Self {
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, overlays: Vec::new(), overlay_click: None, pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), hovered_slot: None, pressed_interaction: None, focused_interaction_slot: None }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, overlays: Vec::new(), overlay_click: None, pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -682,9 +685,10 @@ impl ApplicationHandler for AppState {
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 }
             }
-            // 指针离开窗口：清 hover（对最后一个 hoverable 补发 Exit）
+            // 指针离开窗口：清所有 hover（对每个 hoverable 补发 Exit）
             WindowEvent::PointerLeft { .. } => {
-                if let Some(old) = pw.hovered_slot.take() {
+                let olds: Vec<u64> = pw.hovered_slots.drain().collect();
+                for old in olds {
                     exit_hover_at(pw, old);
                 }
             }
@@ -1744,33 +1748,35 @@ fn release_pressed_interaction(pw: &mut PerWindow) {
     }
 }
 
-/// 悬停更新：最内层 hoverable 节点进入/离开 → 发射 Hover Enter/Exit
-/// （对标 Compose hoverable：Enter/Exit 成对；节点移除时自动补 Exit）
+/// 悬停更新：**路径上所有 hoverable** 节点进入/离开 → 发射 Hover Enter/Exit
+/// （对标 Compose hoverable：每个 hoverable 独立收到 Enter/Exit；修复前只
+/// 发射最内层——嵌套 hoverable（如 Tooltip 锚点容器 + 内部 Button）外层
+/// 收不到 Enter → Tooltip 不显示）。节点移除时自动补 Exit。
 fn update_hover(pw: &mut PerWindow, scene_pos: (f32, f32)) {
-    let hit = {
+    // 当前路径上所有 hoverable 的 (slot, interaction)
+    let hit: Vec<(u64, crate::ui::interaction::MutableInteractionSource)> = {
         let nodes = pw.composer.arena_nodes();
         let Some(r) = pw.composer.layout_root_idx() else { return; };
         let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
-        path.iter().rev()
-            .find(|&&i| nodes[i].modifier.has_hoverable())
-            .copied()
-            .map(|i| (nodes[i].slot_key, nodes[i].modifier.hoverable_interaction().map(|s| s.clone())))
+        path.iter()
+            .filter(|&&i| nodes[i].modifier.has_hoverable())
+            .filter_map(|&i| nodes[i].modifier.hoverable_interaction().map(|s| (nodes[i].slot_key, s.clone())))
+            .collect()
     };
-    let Some((slot, Some(src))) = hit else {
-        // 不在任何 hoverable 上：退出旧的
-        if let Some(old) = pw.hovered_slot.take() {
-            exit_hover_at(pw, old);
+    let hit_slots: std::collections::HashSet<u64> = hit.iter().map(|(s, _)| *s).collect();
+    // 仍在 hover 的：跳过（已 enter）
+    // 新进入：emit enter + 记录
+    for (slot, src) in &hit {
+        if pw.hovered_slots.insert(*slot) {
+            src.emit_hover_enter();
         }
-        return;
-    };
-    if pw.hovered_slot == Some(slot) {
-        return;
     }
-    if let Some(old) = pw.hovered_slot.take() {
-        exit_hover_at(pw, old);
+    // 已退出：补 Exit + 移除
+    let gone: Vec<u64> = pw.hovered_slots.iter().copied().filter(|s| !hit_slots.contains(s)).collect();
+    for slot in gone {
+        pw.hovered_slots.remove(&slot);
+        exit_hover_at(pw, slot);
     }
-    src.emit_hover_enter();
-    pw.hovered_slot = Some(slot);
 }
 
 /// 对指定 slot 的节点补发 Hover Exit（节点已移除则跳过——hover 状态自然清理）

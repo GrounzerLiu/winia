@@ -26,6 +26,7 @@ pub mod icon_toggle_button;
 pub mod checkbox;
 pub mod switch;
 pub mod chip;
+pub mod tooltip;
 
 pub use animated_visibility::{AnimatedVisibility, VisibilityTransition, SlideDirection};
 pub use animated_size::AnimatedSize;
@@ -68,3 +69,4 @@ pub use icon_toggle_button::{IconToggleButton, IconToggleButtonColors, IconToggl
 pub use checkbox::{Checkbox, CheckboxColors, CheckboxDefaults, TriStateCheckbox, ToggleableState};
 pub use switch::{Switch, SwitchColors, SwitchDefaults};
 pub use chip::{Chip, ChipVariant, ChipColors, SelectableChipColors, ChipDefaults};
+pub use tooltip::Tooltip;
