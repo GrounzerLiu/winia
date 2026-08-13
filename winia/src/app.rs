@@ -1856,15 +1856,26 @@ fn detect_click(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
 /// 策略分两步：
 /// 1. **向上**：沿命中路径从 innermost 起找第一个有 paragraph 的节点——
 ///    命中文本本身（输入 leaf / label / 输出 Text）时直接命中。
-/// 2. **向下**（向上失败）：命中 TextField 容器空白（文本右侧/padding/
-///    后缀区）时输入 leaf 不在命中路径——DFS 容器子树找第一个
-///    「有 paragraph + 有 registrar」的后代（TextField 输入 leaf；
+/// 2. **向下**（向上失败，且 innermost 是 TextField 容器）：点击容器空白
+///    （文本右侧/padding/后缀区）时输入 leaf 不在命中路径——DFS 容器子树
+///    找第一个「有 paragraph + 有 registrar」的后代（TextField 输入 leaf；
 ///    label/placeholder 有 para 无 reg，排除）。
+///
+/// ⚠ 向下分支必须**限定 TextField 容器**（modifier 含 TextFieldVisual；
+/// 输入 leaf 无此标记）：非 TextField 空白（页面空隙/Column 空白/
+/// SelectionContainer 空白）绝不向下找——否则 DFS 会误命中子树中任意
+/// 「有 para+reg」的文本（如远处 TextField 的输入 leaf），从空白按下的
+/// 拖动会错误选中/错绑 anchor。
 ///
 /// 返回 None = 点击处无可定位文本（空区域点击 → 不设光标/不开始拖选）。
 fn find_anchor_text_node(nodes: &[LayoutNode], path: &[usize], innermost: usize) -> Option<usize> {
     if let Some(&i) = path.iter().rev().find(|&&i| nodes[i].cached_paragraph.borrow().is_some()) {
         return Some(i);
+    }
+    let is_tf_container = nodes[innermost].modifier.elements().iter()
+        .any(|el| matches!(el, crate::modifier::ModifierElement::TextFieldVisual { .. }));
+    if !is_tf_container {
+        return None;
     }
     // 向下找：TextField 容器子树中的输入 leaf（para + registrar 双条件）
     fn dfs(nodes: &[LayoutNode], idx: usize) -> Option<usize> {
@@ -1909,14 +1920,9 @@ fn handle_pointer_down(
     }
     // grapheme anchor 定位。
     // ⚠ TextField 容器化后：paragraph 只缓存在**输入 leaf**，容器节点无
-    // cached_paragraph——点击容器 padding 区/文本空隙命中容器 → innermost
-    // 无 para → anchor=None → 拖动永远无法开始选择。须沿 path 向上找
-    // 第一个有 paragraph 的祖先（输入 leaf）作为 anchor 定位节点。
-    //
-    // ⚠⚠ 向上查找只覆盖「输入 leaf 在命中路径内」（点击文本本身）。点击
-    // 容器空白（文本右侧/padding/后缀区）时命中停在容器、**输入 leaf 不在
-    // path 中**——须向下找 TextField 容器子树中的输入 leaf（有 paragraph +
-    // registrar 的后代；label/placeholder 有 para 无 reg 排除）。
+    // cached_paragraph——点击容器空白命中容器 → innermost 无 para。由
+    // find_anchor_text_node 处理：向上找有 paragraph 的祖先（命中文本本身），
+    // 失败且命中 TextField 容器时向下找子树中的输入 leaf。
     let anchor_node = find_anchor_text_node(nodes, &path, innermost);
     let anchor = anchor_node.and_then(|ai| {
         let borrow = nodes[ai].cached_paragraph.try_borrow().ok()?;
