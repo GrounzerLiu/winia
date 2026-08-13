@@ -19,6 +19,77 @@
 
 use winia::prelude::*;
 use winia::ui::{TextField, TextFieldValue};
+use winia::ui::text_transformation::{OffsetMapping, PasswordTransformation, TransformedText, VisualTransformation};
+
+/// 自定义视觉变换：仅保留数字，每 4 位加空格分组（123456789012 → 1234 5678 9012）。
+///
+/// 展示 `VisualTransformation` + `OffsetMapping` 自定义实现（对标 Compose
+/// 自定义变换）：显示文本 ≠ 编辑文本，光标/选区/点击定位经 OffsetMapping
+/// 自动转换（文本仍存原始数字，显示为分组格式）。
+#[derive(Debug)]
+struct GroupedDigitTransformation;
+
+impl VisualTransformation for GroupedDigitTransformation {
+    fn filter(&self, text: &str) -> TransformedText {
+        // 原始文本中每个数字的字节起点（非数字被丢弃——演示"只接受数字"）
+        let digit_offsets: Vec<usize> = text
+            .char_indices()
+            .filter(|(_, c)| c.is_ascii_digit())
+            .map(|(i, _)| i)
+            .collect();
+        // 每 4 位分组加空格
+        let mut grouped = String::new();
+        for (i, &off) in digit_offsets.iter().enumerate() {
+            if i > 0 && i % 4 == 0 {
+                grouped.push(' ');
+            }
+            grouped.push(text[off..].chars().next().unwrap());
+        }
+        TransformedText {
+            text: grouped,
+            offset_mapping: std::sync::Arc::new(GroupedDigitMapping {
+                digit_offsets,
+                orig_len: text.len(),
+            }),
+        }
+    }
+}
+
+impl From<GroupedDigitTransformation> for std::sync::Arc<dyn VisualTransformation> {
+    fn from(t: GroupedDigitTransformation) -> Self {
+        std::sync::Arc::new(t)
+    }
+}
+
+/// 分组偏移映射：显示偏移 ↔ 编辑偏移。
+/// - 编辑偏移 o → 显示：o 前 n 个数字 → 每 4 个数字后 1 空格
+///   （第 4k 个后，光标在末尾时最后组无空格 → (n-1)/4）
+/// - 显示偏移 d → 编辑：每 5 显示字节 = 4 数字 + 1 空格（除末尾组）→ d - d/5
+#[derive(Debug)]
+struct GroupedDigitMapping {
+    /// 原始文本每个数字的字节起点
+    digit_offsets: Vec<usize>,
+    /// 原始文本总字节
+    orig_len: usize,
+}
+
+impl OffsetMapping for GroupedDigitMapping {
+    fn original_to_transformed(&self, offset: usize) -> usize {
+        let n = self.digit_offsets.partition_point(|&d| d < offset.min(self.orig_len));
+        n + n.saturating_sub(1) / 4
+    }
+
+    fn transformed_to_original(&self, offset: usize) -> usize {
+        let digits = offset - offset / 5;
+        if digits == 0 {
+            0
+        } else if digits >= self.digit_offsets.len() {
+            self.orig_len
+        } else {
+            self.digit_offsets[digits]
+        }
+    }
+}
 
 fn section_title(ctx: &mut ComposeCtx, title: &str) {
     Text::new(title)
@@ -228,6 +299,22 @@ Line three")), |_| {})
                 .outlined()
                 .label(|ctx| { Text::new("Outlined disabled").build(ctx); })
                 .enabled(false)
+                .build(ctx);
+
+            // ═══ 17. 视觉变换（visual_transformation）═══
+            section_title(ctx, "17. 视觉变换（密码掩码 + 格式化分组）");
+            TextField::new(ctx.remember(|| TextFieldValue::new("")), |_| {})
+                .outlined()
+                .label(|ctx| { Text::new("Password").build(ctx); })
+                .placeholder(|ctx| { Text::new("Hidden input").build(ctx); })
+                .visual_transformation(PasswordTransformation::new('•'))
+                .supporting_text("内置：输入显示为圆点掩码（编辑内容保留）")
+                .build(ctx);
+            TextField::new(ctx.remember(|| TextFieldValue::new("1234567890123456")), |_| {})
+                .filled()
+                .label(|ctx| { Text::new("Card number").build(ctx); })
+                .visual_transformation(GroupedDigitTransformation)
+                .supporting_text("自定义：每 4 位自动分组（非数字丢弃）")
                 .build(ctx);
         });
 }
