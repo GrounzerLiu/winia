@@ -56,14 +56,33 @@ pub(crate) enum RepeatMode {
 pub struct InfiniteRepeatableSpec {
     pub duration: Duration,
     pub(crate) mode: RepeatMode,
+    /// 循环周期内的取值曲线（None = 线性 from→to）；
+    /// 对标 Compose `infiniteRepeatable(tween{...}/keyframes{...})`
+    pub(crate) base: Option<AnimationSpec>,
 }
 
 impl InfiniteRepeatableSpec {
     pub fn restart(duration: Duration) -> Self {
-        Self { duration, mode: RepeatMode::Restart }
+        Self { duration, mode: RepeatMode::Restart, base: None }
     }
     pub fn reverse(duration: Duration) -> Self {
-        Self { duration, mode: RepeatMode::Reverse }
+        Self { duration, mode: RepeatMode::Reverse, base: None }
+    }
+    /// 周期内按 tween 曲线取值（对标 Compose `infiniteRepeatable(tween(...))`）
+    pub fn restart_tween(duration: Duration, tween: TweenSpec) -> Self {
+        Self { duration, mode: RepeatMode::Restart, base: Some(AnimationSpec::Tween(tween)) }
+    }
+    /// 周期内按 keyframes 曲线取值（对标 Compose `infiniteRepeatable(keyframes{...})`）——
+    /// frames = (周期内进度 0..1, 值 0..1，段间插值器)
+    pub fn restart_keyframes(
+        duration: Duration,
+        frames: Vec<(f32, f32, std::sync::Arc<dyn interpolator::Interpolator>)>,
+    ) -> Self {
+        Self {
+            duration,
+            mode: RepeatMode::Restart,
+            base: Some(AnimationSpec::Keyframes(KeyframesSpec { duration, frames })),
+        }
     }
 }
 
@@ -82,7 +101,14 @@ impl<T: AnimatableValue + Send + Sync + 'static> AnimationInstance for Infinite<
         match self.spec.mode {
             RepeatMode::Restart => {
                 let t = (elapsed.as_secs_f32() / self.spec.duration.as_secs_f32().max(0.001)).min(1.0);
-                self.state.set_visual(self.from.lerp(&self.to, t));
+                // 曲线取值：Tween/Keyframes base 时用曲线进度（对标 Compose
+                // infiniteRepeatable(keyframes{...})——周期内按关键帧插值）；None = 线性
+                let eased = match &self.spec.base {
+                    Some(AnimationSpec::Tween(tw)) => tw.interpolator.interpolate(t),
+                    Some(AnimationSpec::Keyframes(kf)) => interpolate_keyframes(&kf.frames, t),
+                    _ => t,
+                };
+                self.state.set_visual(self.from.lerp(&self.to, eased));
                 if elapsed >= self.spec.duration { self.start = Instant::now(); }
             }
             RepeatMode::Reverse => {
@@ -384,6 +410,13 @@ pub fn update_animations() -> bool {
 pub fn remove_animation_by_state(state_id: u32) {
     ACTIVE_ANIMATIONS.lock().unwrap().retain(|a| a.state_id() != state_id);
     ACTIVE_COLOR_ANIMATIONS.lock().unwrap().retain(|a| a.state.id() != state_id);
+}
+
+/// 清空全部活跃动画（测试隔离用——跨测试清理全局表）
+#[cfg(test)]
+pub(crate) fn clear_all_animations() {
+    ACTIVE_ANIMATIONS.lock().unwrap().clear();
+    ACTIVE_COLOR_ANIMATIONS.lock().unwrap().clear();
 }
 
 /// 指定 state 是否已在任一动画列表（跨列表去重，防双倍推进）
@@ -1915,10 +1948,7 @@ fn test_infinite_transition_auto_dispose() {
                             ctx,
                             0.0,
                             1.0,
-                            InfiniteRepeatableSpec {
-                                duration: Duration::from_millis(100),
-                                mode: RepeatMode::Restart,
-                            },
+                            InfiniteRepeatableSpec::restart(Duration::from_millis(100)),
                         );
                         *sid_holder.borrow_mut() = Some(s.id());
                     }
@@ -1976,10 +2006,7 @@ fn test_infinite_transition_manual_dispose_idempotent() {
                             ctx,
                             0.0,
                             1.0,
-                            InfiniteRepeatableSpec {
-                                duration: Duration::from_millis(100),
-                                mode: RepeatMode::Restart,
-                            },
+                            InfiniteRepeatableSpec::restart(Duration::from_millis(100)),
                         );
                         *inf_holder.borrow_mut() = Some(inf);
                     }

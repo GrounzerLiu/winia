@@ -30,6 +30,7 @@ pub mod tooltip;
 pub mod radio_button;
 pub mod badge;
 pub mod slider;
+pub mod progress_indicator;
 
 pub use animated_visibility::{AnimatedVisibility, VisibilityTransition, SlideDirection};
 pub use animated_size::AnimatedSize;
@@ -74,5 +75,12 @@ pub use switch::{Switch, SwitchColors, SwitchDefaults};
 pub use radio_button::{RadioButton, RadioButtonColors, RadioButtonDefaults};
 pub use badge::{Badge, BadgedBox};
 pub use slider::{Slider, SliderColors, SliderDefaults};
+pub use progress_indicator::{
+    LinearProgressIndicator, CircularProgressIndicator,
+    ProgressIndicatorDefaults, ProgressIndicatorStrokeCap,
+    LINEAR_INDICATOR_WIDTH, LINEAR_INDICATOR_HEIGHT, LINEAR_STOP_SIZE,
+    STOP_INDICATOR_TRAILING_SPACE, CIRCULAR_INDICATOR_DIAMETER,
+    CIRCULAR_STROKE_WIDTH, TRACK_ACTIVE_SPACE,
+};
 pub use chip::{Chip, ChipVariant, ChipColors, SelectableChipColors, ChipDefaults};
 pub use tooltip::Tooltip;
