@@ -1,6 +1,6 @@
 # LazyColumn / LazyRow 组件（material3 对齐）
 
-> 分支：`lazy-row`（从 v2 分出，含 LazyColumn 全部机制）
+> 分支：`lazy-sticky`（从 v2 分出，含 LazyColumn/LazyRow 全部机制 + stickyHeader）
 > 对标：Compose foundation `LazyColumn` / `LazyRow`（LazyDsl.kt / LazyListState.kt / LazyListMeasure.kt / LazyListScrollPosition.kt）
 
 ## 1. API
@@ -47,6 +47,11 @@ LazyColumn::new()
     // 单一项 / 带 key 单一项
     .item(|ctx| { ... })
     .item_keyed(42, |ctx| { ... })
+
+    // 吸顶 header（对齐 Compose stickyHeader）：
+    // 滚动时钉在视口顶、内容从它下面滑过；下一个 header 到来时把前一个
+    // 推上去。key 必须全列表唯一；注册顺序不限（内部自动置顶绘制）
+    .sticky_header(1001, |ctx| { ... })  // 通常：Text + background
     .build(ctx);
 
 // 读取滚动位置
@@ -118,6 +123,26 @@ state.scroll_to_item(50, 0.0);
   指针，松手按最小二乘速度 fling，对齐 Compose scrollable 拖拽 + fling）；
   滚轮保持离散（不 fling）；手动输入自动取消进行中的 fling。
 
+### 2.5 吸顶 header（stickyHeader，对齐 Compose LazyListMeasure 的 pinned 处理）
+
+- **钉住**：header 的视口位置 `final(i) = max(C(i) - s, 0)`——滚过视口顶后
+  钉在 0（内容坐标放置 = final + s，滚动 translate 负责视口位移）；
+- **推出**：相邻 header 对反向约束 `final(prev) = min(final(prev), final(next) - h(prev))`
+  ——下一个 header 距顶 h(prev) 内时前一个开始滑出，到位后完全推出
+  （两 header 无缝相邻，视觉为合并带）；
+- **绘制层级**：钉住 header 需盖住从下面滑过的内容——注册顺序把 sticky
+  项排在普通项之后（子节点渲染顺序 = 注册顺序）；children↔全局 index 用
+  显式 `globals[i]` 映射（不再能 start+i 位置映射）；
+- **窗口包含钉住 header**：build 从锚点向下回溯最后一个 C(i) ≤ s 的 sticky
+  （pin，深滚动时回溯距离 = 当前 section 长度）；再向上找 prev——仅当其
+  底部仍低于视口顶（C(prev)+h(prev) > s，即处于被推出的过渡期）才纳入
+  窗口；回溯提前终止（更上方不可能可见）；
+- **锚点语义对齐 Compose**：钉住时 `first_visible_index = pin`、
+  `first_visible_offset = 0`（policy 测量期写回——Compose 的
+  firstVisibleItemIndex 就是钉住的 header）；未钉住时自然锚点；
+- **组合数量**：仅窗口内项 + 钉住/过渡 header，不拉全列表（100 项列表
+  深滚动组合数仍 ~50）。
+
 ## 3. 框架扩展（本组件新增）
 
 | 项 | 位置 | 说明 |
@@ -139,7 +164,7 @@ state.scroll_to_item(50, 0.0);
 - winia 组合为命令式（build 直接注册节点），无 Compose 的 LazyLayout 测量期
   组合——用"组合期预估 + 测量期校正"两阶段模型（两帧收敛）；
 - key 类型为 `u64`（Compose `Any`）；无 contentType/复用优化；
-- 无 stickyHeader / 动画项放置（后续扩展）；LazyRow 已实现（同一
+- stickyHeader 已实现（2.5 节）；无动画项放置（后续扩展）；LazyRow 已实现（同一
   `LazyList<A: LazyAxis>` 构建器 + 轴无关 `LazyListPolicy`——主轴抽象对齐
   Compose 同一套 LazyListMeasure 换轴）；
 - `index_of_key` 已 O(1) HashMap（rebuild 构建）；
@@ -153,6 +178,7 @@ state.scroll_to_item(50, 0.0);
 ```bash
 cargo run -p winia --example lazy_column_demo
 cargo run -p winia --example lazy_row_demo
+cargo run -p winia --example sticky_header_demo
 cargo test -p winia --lib ui::lazy_column
 # 集成（fixture 需 debug-server feature 构建）：
 cargo test -p winia --features debug-server --test ui_test
@@ -160,5 +186,6 @@ cargo test -p winia --features debug-server --test ui_test
 
 测试覆盖：IntervalList 定位/key 映射、高度缓存预估/记录、锚点转换、
 可见范围预取、稳定 key 数据变化滚动保持；LazyRow 像素测试
-（横向只渲染可见项、横向滚动后内容变化）；集成：横向滚轮
-（`s dx dy`）与横向拖拽 + fling（fixture_scroll）。
+（横向只渲染可见项、横向滚动后内容变化）；stickyHeader 像素测试
+（滚动钉顶 + 锚点 = pin、过渡期合并带/推出、深滚动无界回溯、组合数量
+有界）；集成：横向滚轮（`s dx dy`）与横向拖拽 + fling（fixture_scroll）。

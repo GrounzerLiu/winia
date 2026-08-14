@@ -189,6 +189,8 @@ pub(crate) struct Interval {
     pub count: usize,
     pub key: Option<Arc<dyn Fn(usize) -> u64 + Send + Sync>>,
     pub content: Arc<dyn Fn(&mut ComposeCtx, usize) + Send + Sync>,
+    /// sticky header 区间（对标 Compose `stickyHeader`——滚动时钉在视口顶）
+    pub is_sticky_header: bool,
 }
 
 impl Interval {
@@ -209,6 +211,8 @@ pub(crate) struct IntervalList {
     total: usize,
     /// key → 全局 index 映射（rebuild 时构建；无 key 工厂的段用索引自身）
     key_index: std::collections::HashMap<u64, usize>,
+    /// 是否存在 sticky header 区间（rebuild 时构建——build 回溯据此跳过）
+    has_sticky: bool,
 }
 
 impl IntervalList {
@@ -216,20 +220,33 @@ impl IntervalList {
         Self {
             intervals: Vec::new(), starts: Vec::new(), total: 0,
             key_index: std::collections::HashMap::new(),
+            has_sticky: false,
         }
     }
 
-    pub fn add(&mut self, count: usize, key: Option<Arc<dyn Fn(usize) -> u64 + Send + Sync>>, content: Arc<dyn Fn(&mut ComposeCtx, usize) + Send + Sync>) {
-        self.intervals.push(Interval { count, key, content });
+    pub fn add(&mut self, count: usize, key: Option<Arc<dyn Fn(usize) -> u64 + Send + Sync>>, content: Arc<dyn Fn(&mut ComposeCtx, usize) + Send + Sync>, sticky: bool) {
+        self.intervals.push(Interval { count, key, content, is_sticky_header: sticky });
     }
+
+    /// 全局 index 是否为 sticky header（区间标志——O(区间数)）
+    pub fn is_sticky(&self, global: usize) -> bool {
+        self.locate(global)
+            .map(|(iv, _)| self.intervals[iv].is_sticky_header)
+            .unwrap_or(false)
+    }
+
+    /// 列表是否含 sticky header（rebuild 缓存）
+    pub fn has_sticky_headers(&self) -> bool { self.has_sticky }
 
     /// 重建每段起始索引与总数，并构建 key → index 映射
     pub fn rebuild(&mut self) {
         self.starts.clear();
         self.total = 0;
+        self.has_sticky = false;
         for iv in &self.intervals {
             self.starts.push(self.total);
             self.total += iv.count;
+            self.has_sticky |= iv.is_sticky_header;
         }
         // key 映射（key 需唯一——重复时保留第一个，对齐 Compose 约束）
         self.key_index.clear();
@@ -344,14 +361,14 @@ impl<A: LazyAxis> LazyList<A> {
     /// 单个固定项（对标 `item(key, content)`）
     pub fn item(mut self, content: impl Fn(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
         let c = Arc::new(move |ctx: &mut ComposeCtx, _local: usize| content(ctx));
-        self.intervals.add(1, None, c);
+        self.intervals.add(1, None, c, false);
         self
     }
 
     /// 带 key 的单一项
     pub fn item_keyed(mut self, key: u64, content: impl Fn(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
         let c = Arc::new(move |ctx: &mut ComposeCtx, _local: usize| content(ctx));
-        self.intervals.add(1, Some(Arc::new(move |_| key)), c);
+        self.intervals.add(1, Some(Arc::new(move |_| key)), c, false);
         self
     }
 
@@ -364,7 +381,7 @@ impl<A: LazyAxis> LazyList<A> {
     ) -> Self {
         let k = Arc::new(key);
         let c = Arc::new(content);
-        self.intervals.add(count, Some(k), c);
+        self.intervals.add(count, Some(k), c, false);
         self
     }
 
@@ -375,7 +392,7 @@ impl<A: LazyAxis> LazyList<A> {
         content: impl Fn(&mut ComposeCtx, usize) + Send + Sync + 'static,
     ) -> Self {
         let c = Arc::new(content);
-        self.intervals.add(count, None, c);
+        self.intervals.add(count, None, c, false);
         self
     }
 
@@ -399,7 +416,16 @@ impl<A: LazyAxis> LazyList<A> {
         let cc: Arc<dyn Fn(&mut ComposeCtx, usize) + Send + Sync> = Arc::new(move |ctx, g| {
             c(ctx, g, &lc[g]);
         });
-        self.intervals.add(n, Some(kk), cc);
+        self.intervals.add(n, Some(kk), cc, false);
+        self
+    }
+
+    /// sticky header 区间（对标 Compose `stickyHeader(key, content)`）——
+    /// 滚动时钉在视口主轴起始端，内容从它下面滑过；下一个 sticky header
+    /// 到来时把前一个推上去。key 必须全列表唯一。
+    pub fn sticky_header(mut self, key: u64, content: impl Fn(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
+        let c = Arc::new(move |ctx: &mut ComposeCtx, _local: usize| content(ctx));
+        self.intervals.add(1, Some(Arc::new(move |_| key)), c, true);
         self
     }
 }
@@ -548,10 +574,57 @@ impl<A: LazyAxis> LazyList<A> {
         // 组合期窗口高度：用固定大值（真实视口测量期回写，但 build 不依赖——
         // 避免约束振荡（Column 内容驱动给 ∞ → 回写 ∞ → build 读 ∞ 的循环））
         let viewport_h = 2000.0f32;
-        let (start, end) = visible_range(
+        let (mut start, end) = visible_range(
             &cache_ref, first_index, first_item_offset,
             viewport_h, self.spacing, total,
         );
+
+        // sticky header 回溯（对齐 Compose：钉住的 header 即使自然位置远在视口
+        // 上方也必须留在窗口内）：
+        // - pin  = 最后一个 C(i) ≤ offset 的 sticky header（锚点上方第一个 sticky，
+        //   深滚动时回溯距离 = 当前 section 长度；无 sticky 列表时跳过）
+        // - prev = pin 上方一个 sticky header，仅当其底部仍低于视口顶
+        //   （C(prev)+h(prev) > offset，即正处于被推出的过渡期）才纳入窗口
+        let mut pin: Option<usize> = None;
+        let mut prev_pin: Option<usize> = None;
+        if intervals.has_sticky_headers() {
+            let c_anchor = prefix_height(&cache_ref, first_index, self.spacing);
+            if intervals.is_sticky(first_index) && c_anchor <= offset + 0.01 {
+                pin = Some(first_index);
+            } else {
+                let mut c = c_anchor;
+                let mut i = first_index;
+                while i > 0 {
+                    i -= 1;
+                    c -= cache_ref.height(i) + self.spacing;
+                    if intervals.is_sticky(i) && c <= offset + 0.01 {
+                        pin = Some(i);
+                        break;
+                    }
+                }
+            }
+            if let Some(p) = pin {
+                // prev：pin 上方最近的 sticky；走到底部 ≤ 视口顶即停（更上方不可见）
+                let mut c2 = prefix_height(&cache_ref, p, self.spacing);
+                let mut j = p;
+                while j > 0 {
+                    j -= 1;
+                    c2 -= cache_ref.height(j) + self.spacing;
+                    if intervals.is_sticky(j) {
+                        if c2 + cache_ref.height(j) > offset {
+                            prev_pin = Some(j);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some(p) = pin {
+            start = start.min(p);
+        }
+        if let Some(pp) = prev_pin {
+            start = start.min(pp);
+        }
 
         // 挂自定义测量策略（真实测量 + 写回高度 + 放置 + 视口回写）
         let scroll = crate::modifier::ScrollState {
@@ -559,6 +632,23 @@ impl<A: LazyAxis> LazyList<A> {
             is_scroll_in_progress: is_scrolling.clone(),
             fling_limit: fling_limit.clone(),
         };
+        // 注册顺序：普通项在前、sticky header 在后（子节点渲染顺序 = 注册顺序，
+        // 后者画在最上层——钉住的 header 需盖住从它下面滑过的内容）。
+        // globals[i] = 第 i 个子节点的全局 index（policy 放置/写回用，不能再
+        // 用 start+i 位置映射）
+        let mut globals: Vec<usize> = Vec::with_capacity(end - start);
+        let mut sticky_children: Vec<usize> = Vec::new();
+        for g in start..end {
+            if !intervals.is_sticky(g) {
+                globals.push(g);
+            }
+        }
+        for g in start..end {
+            if intervals.is_sticky(g) {
+                sticky_children.push(globals.len());
+                globals.push(g);
+            }
+        }
         let policy = LazyListPolicy::<A> {
             axis: PhantomData,
             cache: cache.clone(),
@@ -568,7 +658,9 @@ impl<A: LazyAxis> LazyList<A> {
             is_scroll_in_progress: is_scrolling.clone(),
             spacing: self.spacing,
             total,
-            start,
+            globals,
+            sticky_children,
+            pin,
             state: state.clone(),
         };
         let m = Modifier::new()
@@ -577,6 +669,8 @@ impl<A: LazyAxis> LazyList<A> {
             .then(A::scroll(scroll))
             .lazy_scroll(content_height.clone());
         let m = m.then(self.modifier);
+        // 注册顺序（policy 移动进 group 后不可再读——先取出）
+        let child_globals = policy.globals.clone();
         // ⚠ item 子节点必须在 start_restartable_group **之后**注册（挂到
         // LazyColumn 节点下）——组合顺序决定父子关系
         match ctx.start_restartable_group(key, m, policy) {
@@ -586,9 +680,10 @@ impl<A: LazyAxis> LazyList<A> {
                 // 会 Enter），此处安全。
             }
             GroupStatus::Enter => {
-                // 注册可见项子节点：slot key 混合 item key（跨帧复用/回收）
+                // 注册可见项子节点（按 globals 顺序——sticky 在后）：slot key
+                // 混合 item key（跨帧复用/回收）
                 const MIX: u64 = 0x9E37_79B9_7F4A_7C15;
-                for g in start..end {
+                for g in child_globals {
                     let item_key = intervals.key_of(g).unwrap_or(g as u64);
                     let ik = ctx.next_key() ^ (item_key.wrapping_mul(MIX));
                     if let Some((iv_idx, _local)) = intervals.locate(g) {
@@ -623,7 +718,12 @@ pub(crate) struct LazyListPolicy<A: LazyAxis> {
     pub is_scroll_in_progress: crate::core::state::State<bool>,
     pub spacing: f32,
     pub total: usize,
-    pub start: usize,          // 注册项全局起点
+    /// 注册顺序 → 全局 index（sticky 项排在最后——画在最上层）
+    pub globals: Vec<usize>,
+    /// 注册序中 sticky 子节点的 child 下标（全局升序）
+    pub sticky_children: Vec<usize>,
+    /// 钉住的 sticky header 全局 index（build 期回溯；钉住时锚点 = (pin, 0)）
+    pub pin: Option<usize>,
     pub state: LazyListState,  // 派生锚点回写（测量后精确值）
 }
 
@@ -668,8 +768,7 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         // 实际实现：build 把 (start, end) 传给 policy，这里按序写回
         let mut cache = self.cache.get();
         for (i, (h, _)) in measured.iter().enumerate() {
-            let global = (self.start + i).min(self.total.saturating_sub(1));
-            cache.record(global, *h);
+            cache.record(self.globals[i], *h);
         }
         // 内容总高：注册项实测 + 未注册项预估（供 apply_scroll_delta 算 max_offset）
         let mut content_h = 0.0;
@@ -707,22 +806,56 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         // 精确锚点回写：用真实高度（cache 已写回）反推 first_visible_index/offset——
         // build 期用的是预估高度，这里给出精确值（对齐 Compose 从 measure result 更新）
         let offset = self.state.offset.get();
-        let (real_first, real_off) = anchor_from_offset(&cache, offset, self.spacing);
+        // 钉住时锚点 = (pin, 0)（对齐 Compose：firstVisibleItemIndex 就是钉住的
+        // header）；否则自然锚点（像素反推）
+        let (real_first, real_off) = match self.pin {
+            Some(p) if offset >= prefix_height(&cache, p, self.spacing) => (p, 0.0),
+            _ => anchor_from_offset(&cache, offset, self.spacing),
+        };
         self.state.first_visible_index.set(real_first);
         self.state.first_visible_offset.set(real_off);
 
         // 锚点排布：**内容坐标**（主轴 = 项在内容中的累计位置，不含 offset）——
         // 滚动由框架 scroll translate(-offset) 处理。若 placement 也含 offset 会
         // 双重偏移（实测：滚动 3000 后内容完全滚出视口）。
-        // first item 在内容中的位置 = prefix(start) 起，逐项 +h+spacing
-        let mut main_pos = prefix_height(&cache, self.start, self.spacing);
+        // sticky pass（对齐 Compose LazyListMeasure）：
+        //   正向 final(i) = max(C(i) - offset, 0)   —— 滚过顶钉在 0
+        //   反向 final(prev) = min(final(prev), final(next) - h(prev))
+        //     —— 下一个 header 距顶 h(prev) 内时前一个开始滑出
+        // 放置内容坐标 = final + offset；普通项保持自然位置（累计）
+        let mut fin: std::collections::HashMap<usize, f32> = std::collections::HashMap::new();
+        for &ci in &self.sticky_children {
+            let v = prefix_height(&cache, self.globals[ci], self.spacing) - offset;
+            fin.insert(ci, v.max(0.0));
+        }
+        for k in (1..self.sticky_children.len()).rev() {
+            let prev = self.sticky_children[k - 1];
+            let next = self.sticky_children[k];
+            let nf = fin[&next];
+            let pf = fin[&prev];
+            let h_prev = measured[prev].0;
+            fin.insert(prev, pf.min(nf - h_prev));
+        }
+        let mut main_pos = 0.0f32;
+        let mut main_init = false;
         for (i, _c) in children.iter().enumerate() {
             let (h, w) = measured[i];
+            let pos = match fin.get(&i) {
+                Some(f) => *f + offset,
+                None => {
+                    if !main_init {
+                        main_pos = prefix_height(&cache, self.globals[i], self.spacing);
+                        main_init = true;
+                    }
+                    let p = main_pos;
+                    main_pos += h + self.spacing;
+                    p
+                }
+            };
             placements.push(crate::layout::node::Placement {
-                position: A::point(0.0, main_pos),
+                position: A::point(0.0, pos),
                 size: A::size(w, h),
             });
-            main_pos += h + self.spacing;
         }
 
         // 自身尺寸：交叉轴填满父，主轴 = 视口（滚动容器）；子项超出部分由 scroll clip
@@ -750,8 +883,8 @@ mod tests {
         let mut il = IntervalList::new();
         let c1: Arc<dyn Fn(&mut ComposeCtx, usize) + Send + Sync> = Arc::new(|_, _| {});
         let c2: Arc<dyn Fn(&mut ComposeCtx, usize) + Send + Sync> = Arc::new(|_, _| {});
-        il.add(3, None, c1);
-        il.add(2, Some(Arc::new(|g| 100 + g as u64)), c2);
+        il.add(3, None, c1, false);
+        il.add(2, Some(Arc::new(|g| 100 + g as u64)), c2, false);
         il.rebuild();
         assert_eq!(il.total(), 5);
         assert_eq!(il.locate(0), Some((0, 0)));
@@ -823,7 +956,7 @@ mod tests {
         let mut il = IntervalList::new();
         // 数据 1：0..100（key = 自身）
         let c: Arc<dyn Fn(&mut ComposeCtx, usize) + Send + Sync> = Arc::new(|_, _| {});
-        il.add(100, Some(Arc::new(|g| g as u64)), c.clone());
+        il.add(100, Some(Arc::new(|g| g as u64)), c.clone(), false);
         il.rebuild();
         assert_eq!(il.total(), 100);
         // 记录锚点 key（模拟 build 中的行为）：offset=2400 → 项 50。
@@ -840,8 +973,8 @@ mod tests {
         let mut il2 = IntervalList::new();
         // 前插 10 项（key 100..109），原 100 项后移（key = 数据 id = 0..99，
         // 全局 index 10..109）——原 key=50 的项现在全局 index 60
-        il2.add(10, Some(Arc::new(|g| (100 + g) as u64)), c.clone());
-        il2.add(100, Some(Arc::new(|g| (g - 10) as u64)), c.clone());
+        il2.add(10, Some(Arc::new(|g| (100 + g) as u64)), c.clone(), false);
+        il2.add(100, Some(Arc::new(|g| (g - 10) as u64)), c.clone(), false);
         il2.rebuild();
         assert_eq!(il2.total(), 110);
         // 原 key=50 的项现在在 index 60
@@ -1305,5 +1438,238 @@ mod tests {
         let frames = step_animations_until_done(&state, 300);
         assert!(frames < 300, "反向 fling 应收敛（{frames} 帧）");
         assert_eq!(state.offset(), 0.0, "反向 fling 应停在顶部");
+    }
+
+    // ═══════════════════════════════════════════════════
+    // sticky header（对齐 Compose stickyHeader）
+    // ═══════════════════════════════════════════════════
+
+    /// 5 个 section：sticky header（红色背景 + HEAD n 文本）后跟 19 个普通项。
+    /// header 全局 index = n*20；普通项 key = 200 + n*19 + i（全列表唯一）。
+    fn sticky_build(ctx: &mut ComposeCtx, state: LazyListState) {
+        use crate::modifier::{Color, Shape};
+        let mut lb = LazyColumn::new()
+            .state(state)
+            .modifier(Modifier::new().fill_max_width().fill_max_height());
+        for s in 0..5u64 {
+            lb = lb.sticky_header(s, move |ctx| {
+                crate::ui::text::Text::new(format!("HEAD {s}"))
+                    .font_size(18.0)
+                    .modifier(Modifier::new().padding(12.0).background(
+                        Color::from_argb(255, 0xC6, 0x28, 0x28),
+                        Shape::rounded(2.0),
+                    ))
+                    .build(ctx);
+            });
+            lb = lb.items(
+                19,
+                move |i| 200 + s * 19 + i as u64,
+                move |ctx, i| {
+                    crate::ui::text::Text::new(format!("Item {}", s * 19 + i as u64))
+                        .font_size(14.0)
+                        .modifier(Modifier::new().padding(12.0))
+                        .build(ctx);
+                },
+            );
+        }
+        lb.build(ctx);
+    }
+
+    /// 顶部红色 header 带数量：连续红色行段（header 背景）计数
+    fn red_bands(px: &[[u8; 4]], w: usize, h: usize, limit: usize) -> usize {
+        let mut bands = 0;
+        let mut in_band = false;
+        for y in 0..limit.min(h) {
+            let mut red = false;
+            for x in (0..w).step_by(2) {
+                let p = px[y * w + x];
+                // ⚠ raster 是 BGRA8888（n32_premul 小端）：p[2] 才是红通道
+                if p[2] > 150 && p[0] < 100 && p[1] < 100 {
+                    red = true;
+                    break;
+                }
+            }
+            if red && !in_band {
+                bands += 1;
+                in_band = true;
+            } else if !red {
+                in_band = false;
+            }
+        }
+        bands
+    }
+
+    /// 视口顶连续红色行数（钉住 header 的可见高度；BGRA 字节序）
+    fn top_band_height(px: &[[u8; 4]], w: usize, h: usize) -> usize {
+        let mut rows = 0;
+        for y in 0..h {
+            let mut red = false;
+            for x in (0..w).step_by(2) {
+                let p = px[y * w + x];
+                if p[2] > 150 && p[0] < 100 && p[1] < 100 {
+                    red = true;
+                    break;
+                }
+            }
+            if red {
+                rows += 1;
+            } else {
+                break;
+            }
+        }
+        rows
+    }
+
+    #[test]
+    fn sticky_header_pins_to_top_while_scrolling() {
+        // 深滚动后：钉住的 header 成为锚点（first_visible = header index），
+        // 红色带仍在视口顶，普通项内容从 header 下面滑过（下方仍有文本像素）
+        let state = LazyListState::new();
+        let (px0, w0) = render_lazy(|ctx| sticky_build(ctx, state.clone()));
+        assert_eq!(state.first_visible(), 0, "初始锚点 = header 0");
+        assert_eq!(state.first_visible_offset.get(), 0.0);
+
+        // 滚动进 section 3（offset 2000：C(40)≈1900 ≤ 2000 → header 2 钉住）
+        state.offset.set(2000.0);
+        let (px1, w1) = render_lazy(|ctx| sticky_build(ctx, state.clone()));
+        assert_eq!(w0, w1);
+        assert_eq!(
+            state.first_visible(),
+            40,
+            "钉住的 header 成为锚点（对齐 Compose firstVisibleItemIndex）"
+        );
+        assert_eq!(state.first_visible_offset.get(), 0.0);
+        // 红色带：恰一个，且在视口顶（钉住）
+        assert_eq!(red_bands(&px1, w1, 600, 300), 1, "钉住时视口顶恰一个 header");
+        let mut top_red = false;
+        for x in (0..w1).step_by(2) {
+            let p = px1[x];
+            if p[2] > 150 && p[0] < 100 && p[1] < 100 {
+                top_red = true;
+            }
+        }
+        assert!(top_red, "钉住的 header 在视口最顶行");
+        // 内容从 header 下滑过：header 带下方仍有普通项文本
+        let mut below_text = false;
+        for y in (70..600).step_by(2) {
+            for x in (0..w1).step_by(2) {
+                let p = px1[y * w1 + x];
+                if p[0] < 120 && p[1] < 120 && p[2] < 120 {
+                    below_text = true;
+                }
+            }
+        }
+        assert!(below_text, "普通项内容应继续渲染在钉住 header 之下");
+        // 与初始帧内容不同（滚动到不同 section）
+        let mut diff_rows = 0;
+        for y in 0..600usize {
+            let mut has0 = false;
+            let mut has1 = false;
+            for x in (0..w0).step_by(8) {
+                let p0 = px0[y * w0 + x];
+                let p1 = px1[y * w0 + x];
+                has0 |= p0[0] < 120 && p0[1] < 120 && p0[2] < 120;
+                has1 |= p1[0] < 120 && p1[1] < 120 && p1[2] < 120;
+            }
+            if has0 != has1 {
+                diff_rows += 1;
+            }
+        }
+        assert!(diff_rows > 10, "滚动后内容变化，diff_rows={diff_rows}");
+
+        // 深滚动（超界 → clamp 到 4150 ≈ 末尾）：header 4 钉住——验证无界回溯
+        state.offset.set(100_000.0);
+        let (_px2, _w2) = render_lazy(|ctx| sticky_build(ctx, state.clone()));
+        assert!(
+            state.offset() < 4500.0,
+            "越界应 clamp，实际 {}",
+            state.offset()
+        );
+        assert_eq!(
+            state.first_visible(),
+            80,
+            "深滚动后 header 4（全局 80）钉住——无界回溯",
+        );
+    }
+
+    #[test]
+    fn sticky_header_pushes_previous_on_approach() {
+        // 下一个 header 距顶 h(prev) 内时，前一个开始滑出（两 header 无缝相邻，
+        // 视觉上是一条连续红带）→ 断言**顶带高度变矮**；到位后前一个完全推出
+        let state = LazyListState::new();
+        let (px0, w0) = render_lazy(|ctx| sticky_build(ctx, state.clone()));
+        let h0_full = top_band_height(&px0, w0, 600);
+        assert!(h0_full > 40, "初始 header 0 完整钉在顶，顶带高 {h0_full}");
+
+        // ⚠ header 顶 C(20) 依赖运行时实测高度（字体加载时序不同 → 40 或 47.5），
+        // 过渡窗口 [C(20)-h(0), C(20)] 也随之漂移——用扫描区间断言不变量：
+        // 1) 过渡期：被推的 header 0 与 header 1 无缝相邻 → 顶带"变高"
+        //    （band ∈ (h, 2h)，两 header 合并）
+        // 2) 越过过渡区后 header 1 钉顶（锚点 = 20、单带、顶带恢复 h）
+        let mut saw_merge = false;
+        let mut saw_pinned = false;
+        let mut final_band = 0usize;
+        for off in (800..1010).step_by(5) {
+            state.offset.set(off as f32);
+            let (px, w) = render_lazy(|ctx| sticky_build(ctx, state.clone()));
+            let band = top_band_height(&px, w, 600);
+            if band > h0_full + 8 && band < 2 * h0_full - 8 {
+                saw_merge = true;
+            }
+            if off >= 985 {
+                if state.first_visible() == 20 && red_bands(&px, w, 600, 200) == 1 {
+                    saw_pinned = true;
+                    final_band = band;
+                }
+            }
+        }
+        assert!(saw_merge, "过渡期顶带应变高（两 header 合并，band > 单 header）");
+        assert!(saw_pinned, "越过过渡区后 header 1 应钉顶（锚点 20 + 单带）");
+        let final_diff = if final_band > h0_full { final_band - h0_full } else { h0_full - final_band };
+        assert!(final_diff < 6, "header 1 完整钉顶（顶带 {final_band} ≈ {h0_full}）");
+    }
+
+    #[test]
+    fn sticky_header_composes_only_pinned_and_visible() {
+        // 组合项数：视口 600px ≈ 12 项 + 预取 8 + 钉住 header —— 远小于 total 100
+        // （sticky 回溯不拉全列表）
+        let composed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let state = LazyListState::new();
+        let c0 = composed.clone();
+        let s0 = state.clone();
+        render_lazy(move |ctx| {
+            let mut lb = LazyColumn::new()
+                .state(s0)
+                .modifier(Modifier::new().fill_max_width().fill_max_height());
+            for s in 0..5u64 {
+                let c = c0.clone();
+                lb = lb.sticky_header(s, move |ctx| {
+                    c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    crate::ui::text::Text::new(format!("HEAD {s}"))
+                        .font_size(18.0)
+                        .modifier(Modifier::new().padding(12.0))
+                        .build(ctx);
+                });
+                lb = lb.items(
+                    19,
+                    move |i| 200 + s * 19 + i as u64,
+                    |ctx, i| {
+                        crate::ui::text::Text::new(format!("Item {i}"))
+                            .font_size(14.0)
+                            .modifier(Modifier::new().padding(12.0))
+                            .build(ctx);
+                    },
+                );
+            }
+            lb.build(ctx);
+        });
+        let n0 = composed.load(std::sync::atomic::Ordering::Relaxed);
+        assert!(n0 <= 40, "初始组合应只含可见项+预取，实际 {n0}");
+        // 深滚动：钉住的 header 加入组合但列表不整体组合
+        state.offset.set(2000.0);
+        let (px, w) = render_lazy(|ctx| sticky_build(ctx, state.clone()));
+        let n1 = composed.load(std::sync::atomic::Ordering::Relaxed);
+        assert!(n1 <= 60, "深滚动组合项数应仍远小于 100，实际 {n1}");
+        assert_eq!(red_bands(&px, w, 600, 200), 1);
     }
 }
