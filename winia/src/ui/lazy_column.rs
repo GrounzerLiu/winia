@@ -734,6 +734,26 @@ mod tests {
     }
 
     // ── 组件级像素：懒加载渲染 + 滚动后内容变化 ──
+    fn render_lazy_sized(build: impl FnOnce(&mut ComposeCtx), w: f32, h: f32) -> (Vec<[u8; 4]>, usize) {
+        use skia_safe::{Color as SkColor, surfaces};
+        let theme = crate::ui::theme::ThemeColors::light_from_seed(0x6750A4);
+        let mut composer = Composer::new();
+        let scene = |ctx: &mut ComposeCtx| {
+            crate::ui::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| build(ctx));
+        };
+        composer.compose(scene);
+        composer.layout(Constraints::new(0.0, w, 0.0, h));
+        let mut surface = surfaces::raster_n32_premul((w as i32, h as i32)).unwrap();
+        let canvas = surface.canvas();
+        canvas.clear(SkColor::WHITE);
+        let root = composer.layout_root_idx().expect("root");
+        let nodes = composer.arena_nodes();
+        crate::render::render(nodes, root, canvas);
+        let pm = surface.peek_pixels().expect("pixmap");
+        let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+        (px.to_vec(), pm.width() as usize)
+    }
+
     fn render_lazy(build: impl FnOnce(&mut ComposeCtx)) -> (Vec<[u8; 4]>, usize) {
         use skia_safe::{Color as SkColor, surfaces};
         let theme = crate::ui::theme::ThemeColors::light_from_seed(0x6750A4);
@@ -949,5 +969,61 @@ mod tests {
         state.scroll_to_item(0, 0.0);
         let (_px2, _w2) = render_lazy_state(&state, &items);
         assert_eq!(state.first_visible(), 0, "跳回顶部");
+    }
+
+    #[test]
+    fn jump_to_end_shows_last_item_with_real_viewport() {
+        // 回归（用户实测：跳末尾看不到 Item 999）：measure_node 对 scroll 容器
+        // 一律把 max_height 改写成 f32::MAX → policy 永远拿不到真实视口 → 回退
+        // vh=600，而真实视口 400 → clamp 的 max_offset = content_h - 600 偏大
+        // 100px → 跳末尾滚过头，Item 999 被推出视口底部。
+        // 修复：lazy 容器保留有限 max_height（policy 显式控制子约束）。
+        let state = LazyListState::new();
+        let items: Arc<Vec<u64>> = Arc::new((0..1000).collect());
+        let mk = |state: &LazyListState, items: &Arc<Vec<u64>>| {
+            let s = state.clone();
+            let items = items.clone();
+            render_lazy_sized(
+                move |ctx| {
+                    LazyColumn::new()
+                        .state(s)
+                        .modifier(Modifier::new().fill_max_width().fill_max_height())
+                        .items_from(items, |v: &u64| *v, |ctx, _i, v| {
+                            crate::ui::text::Text::new(format!("Item {}", v))
+                                .font_size(14.0)
+                                .modifier(Modifier::new().padding(12.0))
+                                .build(ctx);
+                        })
+                        .build(ctx);
+                },
+                400.0,
+                400.0,
+            )
+        };
+        let (px0, w0) = mk(&state, &items);
+        state.scroll_to_item(999, 0.0);
+        let (px1, w1) = mk(&state, &items);
+        assert_eq!(w0, w1);
+        // 视口底部 60px 内应有文本（Item 999 完整可见）
+        let h = 400usize;
+        let mut bottom_text_rows = 0;
+        for y in (h - 60)..h {
+            let mut has = false;
+            for x in (0..w0).step_by(4) {
+                let p = px1[y * w0 + x];
+                has |= p[0] < 120 && p[1] < 120 && p[2] < 120;
+            }
+            if has { bottom_text_rows += 1; }
+        }
+        assert!(
+            bottom_text_rows > 10,
+            "末尾项应在视口底部可见，bottom_text_rows={bottom_text_rows}"
+        );
+        // 首项应接近底部：视口 400 / ~47.5 ≈ 8.4 项 → first_visible ≈ 991
+        assert!(
+            state.first_visible() >= 985,
+            "first_visible={}",
+            state.first_visible()
+        );
     }
 }

@@ -78,7 +78,11 @@ state.scroll_to_item(50, 0.0);
 - **测量期**：自定义 `LazyListPolicy` 真实测量子节点、写回高度缓存、
   以**内容坐标**放置（y = prefix 累计——滚动由框架 scroll translate 处理，
   双重偏移会导致内容滚出视口，实测）；
-- **视口高**：有限约束直接回写；无穷（Column 内容驱动）回退缓存，避免振荡；
+- **视口高**：有限约束直接回写；无穷（Column 内容驱动）回退缓存，避免振荡。
+  ⚠ measure_node 对普通 scroll 容器把 max_height 改写成 f32::MAX——lazy 容器
+  **跳过**该改写（policy 显式控制子约束），保留有限 max_height 拿真实视口：
+  否则 clamp 的 max_offset = content_h - vh 偏大（回退 600 vs 真实 ~500），
+  跳末尾滚过头、最后一项被推出视口底部（实测 bug）；
 - **内容总高**：`LazyScroll` modifier 标记 + 测量回写 →
   `apply_scroll_delta` 用它计算 max_offset（框架新增 `scroll_content_height`）。
 - **程序化跳转（锚点权威）**：`scroll_to_item(index, offset)` 只存跳转请求

@@ -1431,7 +1431,14 @@ pub(crate) fn measure_node(
         if let Some(ch) = nodes[idx].modifier.lazy_scroll_content_height() {
             nodes[idx].scroll_content_height = ch.get();
         }
-        inner_constraints.max_height = f32::MAX;
+        // ⚠ lazy 容器**不**改写成无界：policy 自己显式控制子约束（child_constraints
+        // 高度 ∞），保留有限 max_height 让 policy 拿到真实视口高——内部 clamp 的
+        // max_offset = content_h - vh 才正确（实测：回退 vh=600 > 真实视口 ~500，
+        // 跳末尾滚过头，Item 999 被推出视口底部）。普通 scroll 容器仍改写（子内容
+        // wrap）。
+        if nodes[idx].modifier.lazy_scroll_content_height().is_none() {
+            inner_constraints.max_height = f32::MAX;
+        }
     }
     if nodes[idx].modifier.horizontal_scroll_state().is_some() {
         inner_constraints.max_width = f32::MAX;
