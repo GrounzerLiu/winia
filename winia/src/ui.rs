@@ -28,6 +28,7 @@ pub mod switch;
 pub mod chip;
 pub mod tooltip;
 pub mod radio_button;
+pub mod badge;
 
 pub use animated_visibility::{AnimatedVisibility, VisibilityTransition, SlideDirection};
 pub use animated_size::AnimatedSize;
@@ -70,5 +71,6 @@ pub use icon_toggle_button::{IconToggleButton, IconToggleButtonColors, IconToggl
 pub use checkbox::{Checkbox, CheckboxColors, CheckboxDefaults, TriStateCheckbox, ToggleableState};
 pub use switch::{Switch, SwitchColors, SwitchDefaults};
 pub use radio_button::{RadioButton, RadioButtonColors, RadioButtonDefaults};
+pub use badge::{Badge, BadgedBox};
 pub use chip::{Chip, ChipVariant, ChipColors, SelectableChipColors, ChipDefaults};
 pub use tooltip::Tooltip;
