@@ -1304,7 +1304,14 @@ fn apply_scroll_delta(nodes: &mut [LayoutNode], idx: usize, dy: f32, density: cr
                     })
                     .unwrap_or(0.0)
             };
-            let max_offset = (node.measured_size.height - visible_h).max(0.0);
+            // 内容总高：lazy 列表（scroll_content_height > 0）用其真实内容高；
+            // 否则用节点自身高度（普通 scroll 容器）
+            let content_h = if node.scroll_content_height > 0.0 {
+                node.scroll_content_height
+            } else {
+                node.measured_size.height
+            };
+            let max_offset = (content_h - visible_h).max(0.0);
             let new = (current - dy).clamp(0.0, max_offset);
             state.set(new);
             return true;

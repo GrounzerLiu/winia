@@ -166,6 +166,8 @@ pub struct LayoutNode {
     pub(crate) cached_paragraph: std::cell::RefCell<Option<crate::text::Paragraph>>,
     /// scroll 容器的 viewport 高度（由 measure_node 在布局阶段设值，供 apply_scroll_delta 使用）
     pub(crate) scroll_viewport_height: f32,
+    /// scroll 容器的内容总高（lazy 列表用——apply_scroll_delta 计算 max_offset；0 = 未设置）
+    pub(crate) scroll_content_height: f32,
     /// 父节点 ID（键盘事件冒泡用，由 add_child 设置）
     pub(crate) parent_id: Option<u64>,
     /// CompositionLocal 作用域内的 SelectionRegistrar（Text 节点存引用）
@@ -285,7 +287,7 @@ impl LayoutNode {
             layout_direction: LayoutDirection::Ltr,
             slot_key: 0,
             cached_paragraph: std::cell::RefCell::new(None),
-            scroll_viewport_height: 0.0, parent_id: None,
+            scroll_viewport_height: 0.0, scroll_content_height: 0.0, parent_id: None,
             registrar: std::cell::RefCell::new(None),
             cursor_x: std::cell::Cell::new(0.0),
             cursor_height: std::cell::Cell::new(0.0),
@@ -338,7 +340,7 @@ impl Default for LayoutNode {
             layout_direction: LayoutDirection::Ltr,
             slot_key: 0,
             cached_paragraph: std::cell::RefCell::new(None),
-            scroll_viewport_height: 0.0, parent_id: None,
+            scroll_viewport_height: 0.0, scroll_content_height: 0.0, parent_id: None,
             registrar: std::cell::RefCell::new(None),
             cursor_x: std::cell::Cell::new(0.0),
             cursor_height: std::cell::Cell::new(0.0),
@@ -1424,6 +1426,11 @@ pub(crate) fn measure_node(
         }
         // 保存 viewport 高度供滚动 clamping 使用
         nodes[idx].scroll_viewport_height = viewport_height;
+        // lazy 列表：内容总高 State → 节点字段（apply_scroll_delta 用；在测量前读，
+        // 值是上一帧测量回写的——首帧 0 退化到节点自身高度）
+        if let Some(ch) = nodes[idx].modifier.lazy_scroll_content_height() {
+            nodes[idx].scroll_content_height = ch.get();
+        }
         inner_constraints.max_height = f32::MAX;
     }
     if nodes[idx].modifier.horizontal_scroll_state().is_some() {

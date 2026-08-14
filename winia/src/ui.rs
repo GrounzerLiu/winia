@@ -32,6 +32,7 @@ pub mod badge;
 pub mod slider;
 pub mod progress_indicator;
 pub mod divider;
+pub mod lazy_column;
 
 pub use animated_visibility::{AnimatedVisibility, VisibilityTransition, SlideDirection};
 pub use animated_size::AnimatedSize;
@@ -85,4 +86,5 @@ pub use progress_indicator::{
 };
 pub use chip::{Chip, ChipVariant, ChipColors, SelectableChipColors, ChipDefaults};
 pub use divider::{Divider, DividerDefaults, DIVIDER_THICKNESS, DIVIDER_HAIRLINE};
+pub use lazy_column::{LazyColumn, LazyListState};
 pub use tooltip::Tooltip;
