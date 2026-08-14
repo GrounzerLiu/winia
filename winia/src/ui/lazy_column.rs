@@ -36,6 +36,11 @@ pub struct LazyListState {
     pub offset: crate::core::state::State<f32>,
     /// 最近已知的第一个可见项 key（数据变化后按 key 校正位置）
     pub(crate) last_known_first_key: crate::core::state::State<Option<u64>>,
+    /// 上次 build 见到的 total——**状态级**守卫（非组合级 remember）：
+    /// 外部持有 state 跨 Composer 复用时，组合级 remember 会每帧误触发 key 校正
+    /// （实测：第二次 render 把 offset=2000 拉回 0）。放这里与 LazyListState
+    /// 同生命周期，只有数据真的变化（total 变）才校正。
+    pub(crate) known_total: crate::core::state::State<usize>,
     /// 派生：第一个可见项索引（每次 build 后更新）
     pub first_visible_index: crate::core::state::State<usize>,
     /// 派生：第一个可见项的偏移（正 = 该项向上滚出多少）
@@ -47,6 +52,7 @@ impl LazyListState {
         Self {
             offset: crate::core::state::State::new(0.0),
             last_known_first_key: crate::core::state::State::new(None),
+            known_total: crate::core::state::State::new(usize::MAX),
             first_visible_index: crate::core::state::State::new(0),
             first_visible_offset: crate::core::state::State::new(0.0),
         }
@@ -57,6 +63,16 @@ impl LazyListState {
 
     /// 当前第一个可见项偏移
     pub fn offset(&self) -> f32 { self.offset.get() }
+
+    /// 立即滚动到指定索引（项顶部对齐视口顶部）。
+    ///
+    /// 高度缓存（由 LazyColumn 持有）可传实测高度；组件外调用传空缓存会用
+    /// 预估高度，measure 期实测回填。**越界 clamp 在 measure 期**（本方法
+    /// 不知道 total——对齐 Compose scrollToItem + 测量期 clamp 语义）。
+    pub fn scroll_to_item(&self, index: usize, heights: &ItemHeightCache, spacing: f32) {
+        let new_offset = prefix_height(heights, index, spacing);
+        self.offset.set(new_offset);
+    }
 }
 
 impl Default for LazyListState {
@@ -90,24 +106,35 @@ pub(crate) struct IntervalList {
     /// 每段起始全局 index（惰性构建缓存）
     starts: Vec<usize>,
     total: usize,
+    /// key → 全局 index 映射（rebuild 时构建；无 key 工厂的段用索引自身）
+    key_index: std::collections::HashMap<u64, usize>,
 }
 
 impl IntervalList {
     pub fn new() -> Self {
-        Self { intervals: Vec::new(), starts: Vec::new(), total: 0 }
+        Self {
+            intervals: Vec::new(), starts: Vec::new(), total: 0,
+            key_index: std::collections::HashMap::new(),
+        }
     }
 
     pub fn add(&mut self, count: usize, key: Option<Arc<dyn Fn(usize) -> u64 + Send + Sync>>, content: Arc<dyn Fn(&mut ComposeCtx, usize) + Send + Sync>) {
         self.intervals.push(Interval { count, key, content });
     }
 
-    /// 重建每段起始索引与总数
+    /// 重建每段起始索引与总数，并构建 key → index 映射
     pub fn rebuild(&mut self) {
         self.starts.clear();
         self.total = 0;
         for iv in &self.intervals {
             self.starts.push(self.total);
             self.total += iv.count;
+        }
+        // key 映射（key 需唯一——重复时保留第一个，对齐 Compose 约束）
+        self.key_index.clear();
+        for g in 0..self.total {
+            let k = self.key_of_unchecked(g);
+            self.key_index.entry(k).or_insert(g);
         }
     }
 
@@ -127,19 +154,29 @@ impl IntervalList {
         None
     }
 
-    /// 全局 index → key
-    pub fn key_of(&self, global: usize) -> Option<u64> {
-        self.locate(global).map(|(i, _)| self.intervals[i].key_of(global))
-    }
-
-    /// key → 全局 index（线性扫描；Compose 用最近范围缓存优化——winia 先简单）
-    pub fn index_of_key(&self, key: u64) -> Option<usize> {
-        for g in 0..self.total {
-            if let Some(k) = self.key_of(g) {
-                if k == key { return Some(g); }
+    /// 全局 index → key（无工厂段 = 索引自身；越界返回自身——调用方需先查 total）
+    fn key_of_unchecked(&self, global: usize) -> u64 {
+        if global >= self.total { return global as u64; }
+        for i in 0..self.intervals.len() {
+            let start = self.starts[i];
+            let count = self.intervals[i].count;
+            if global >= start && global < start + count {
+                return self.intervals[i].key_of(global);
             }
         }
-        None
+        global as u64
+    }
+
+    /// 全局 index → key
+    pub fn key_of(&self, global: usize) -> Option<u64> {
+        if global >= self.total { return None; }
+        Some(self.key_of_unchecked(global))
+    }
+
+    /// key → 全局 index（rebuild 构建的 HashMap 缓存——O(1)，对齐 Compose
+    /// NearestRangeKeyIndexMap 的目的；大数据量下无线性扫描）
+    pub fn index_of_key(&self, key: u64) -> Option<usize> {
+        self.key_index.get(&key).copied()
     }
 }
 
@@ -253,9 +290,16 @@ impl LazyColumn {
 // ═══════════════════════════════════════════════════════
 
 /// 每项高度缓存（全局 index → 测量高度）；未测项用预估
+///
+/// 公开：`LazyListState::scroll_to_item` 需要它；组件外调用传空缓存即可
+/// （会用预估高度，滚动后实测高度自动回填）。
 #[derive(Debug, Clone, Default, PartialEq)]
-pub(crate) struct ItemHeightCache {
+pub struct ItemHeightCache {
     pub heights: Vec<f32>,
+}
+
+impl ItemHeightCache {
+    pub fn new() -> Self { Self { heights: Vec::new() } }
 }
 
 impl ItemHeightCache {
@@ -280,18 +324,27 @@ pub(crate) fn prefix_height(cache: &ItemHeightCache, index: usize, spacing: f32)
 }
 
 /// 由像素偏移定位第一个可见项（锚点）
+///
+/// 未测项按预估高度继续推算（而非在已知范围末尾截断）——否则滚动超出已测范围时
+/// 锚点错误退回 0（实测：offset=2000 空缓存时恒返回 (0,0)，滚动失效）。
+/// 已知高度部分线性扫描，超出部分用除法直接估算（O(1) 防大 offset 循环）。
 pub(crate) fn anchor_from_offset(cache: &ItemHeightCache, offset: f32, spacing: f32) -> (usize, f32) {
+    let known = cache.heights.len();
     let mut acc = 0.0;
-    for i in 0..cache.heights.len().max(1) {
+    for i in 0..known {
         let h = cache.height(i) + spacing;
         if acc + h > offset {
             return (i, offset - acc);
         }
         acc += h;
     }
-    // offset 超过已知范围：锚定在已知末尾
-    let last = cache.heights.len().saturating_sub(1);
-    (last, 0.0)
+    // 超出已知范围：按预估高度除法估算剩余项数
+    let step = LAZY_ITEM_ESTIMATED_HEIGHT + spacing;
+    if step <= 0.0 { return (known.saturating_sub(1), 0.0); }
+    let remaining = offset - acc;
+    let extra = (remaining / step).floor() as usize;
+    let idx = known + extra;
+    (idx, remaining - extra as f32 * step)
 }
 
 /// 由锚点 + 视口高计算可见范围（含预取窗）
@@ -326,6 +379,10 @@ impl LazyColumn {
             None => ctx.remember(|| LazyListState::new()).get(),
         };
         ctx.changed(&state.offset);
+        // 派生锚点依赖：policy 测量后 set 精确值 → 触发重组收敛（build 用预估高度算的
+        // 锚点与真实值不同时，下一帧以真实缓存重算；相同则无变化不重组）
+        ctx.changed(&state.first_visible_index);
+        ctx.changed(&state.first_visible_offset);
         let key = ctx.next_key();
 
         // 内容注册表（重建——数据变化反映）
@@ -339,13 +396,10 @@ impl LazyColumn {
         let is_scrolling = ctx.remember(|| crate::core::state::State::new(false)).get();
         let content_height = ctx.remember(|| crate::core::state::State::new(0.0f32)).get();
 
-        let offset0 = state.offset.get();
-        let _ = offset0;
-
         // key 校正：数据前部增删后，用 last_known_first_key 找回原 first visible 项。
         // ⚠ 仅当 total 变化（数据增删）时校正——正常滚动时锚点项变化是用户滚动
         // 的结果，绝不能校正回原位置（实测：每帧校正会把滚动拉回 0）
-        let known_total = ctx.remember(|| crate::core::state::State::new(usize::MAX)).get();
+        let known_total = state.known_total.clone();
         let total_changed = known_total.get() != total;
         if total_changed {
             known_total.set(total);
@@ -361,12 +415,10 @@ impl LazyColumn {
         let offset = state.offset.get();
         let cache_ref = cache.get();
         let (first_index, first_item_offset) = anchor_from_offset(&cache_ref, offset, self.spacing);
-        // 记录锚点项 key（供下次数据变化校正）；更新派生锚点
+        // 记录锚点项 key（供下次数据变化校正）——派生锚点由测量期 policy 写回精确值
         if let Some(k) = intervals.key_of(first_index) {
             state.last_known_first_key.set(Some(k));
         }
-        state.first_visible_index.set(first_index);
-        state.first_visible_offset.set(first_item_offset);
 
         // 组合期窗口高度：用固定大值（真实视口测量期回写，但 build 不依赖——
         // 避免约束振荡（Column 内容驱动给 ∞ → 回写 ∞ → build 读 ∞ 的循环））
@@ -388,6 +440,7 @@ impl LazyColumn {
             spacing: self.spacing,
             total,
             start,
+            state: state.clone(),
         };
         let m = Modifier::new()
             .fill_max_width()
@@ -438,6 +491,7 @@ pub(crate) struct LazyListPolicy {
     pub spacing: f32,
     pub total: usize,
     pub start: usize,          // 注册项全局起点
+    pub state: LazyListState,  // 派生锚点回写（测量后精确值）
 }
 
 impl std::fmt::Debug for LazyListPolicy {
@@ -455,9 +509,11 @@ impl crate::layout::node::MeasurePolicy for LazyListPolicy {
         constraints: crate::layout::constraints::Constraints,
     ) -> (crate::layout::node::Size, Vec<crate::layout::node::Placement>) {
         use crate::layout::node::Size;
-        // 视口高：有限约束直接用（回写缓存）；无穷（父内容驱动——Column 无固定
-        // 高度时给子节点无界 max）回退缓存值，避免视口无限膨胀
-        let vh = if constraints.max_height.is_finite() && constraints.max_height > 0.0 {
+        // 视口高：有限约束直接用（回写缓存）；无界（父内容驱动——Column 无
+        // 固定高度时给子节点 f32::MAX；⚠ is_finite() 对 f32::MAX 也返回 true，
+        // 必须用框架惯例 `max_height < f32::MAX` 判定）回退缓存值，避免视口
+        // 无限膨胀（实测：f32::MAX 视口会让 clamp 把 offset 清零）
+        let vh = if constraints.max_height < f32::MAX && constraints.max_height > 0.0 {
             self.viewport.set_silent(constraints.max_height);
             constraints.max_height
         } else {
@@ -493,6 +549,20 @@ impl crate::layout::node::MeasurePolicy for LazyListPolicy {
             content_h += cache.height(g) + self.spacing;
         }
         self.content_height.set_silent(content_h);
+
+        // 越界 clamp：scroll_to_item 无 total 信息，程序化滚动超出内容边界时
+        // 在这里收回到末尾（对齐 Compose：scroll position 在 measure 期 clamp）
+        let clamped = self.state.offset.get().clamp(0.0, (content_h - vh).max(0.0));
+        if clamped != self.state.offset.get() {
+            self.state.offset.set(clamped);
+        }
+
+        // 精确锚点回写：用真实高度（cache 已写回）反推 first_visible_index/offset——
+        // build 期用的是预估高度，这里给出精确值（对齐 Compose 从 measure result 更新）
+        let offset = self.state.offset.get();
+        let (real_first, real_off) = anchor_from_offset(&cache, offset, self.spacing);
+        self.state.first_visible_index.set(real_first);
+        self.state.first_visible_offset.set(real_off);
 
         // 锚点排布：**内容坐标**（y = 项在内容中的累计位置，不含 offset）——
         // 滚动由框架 scroll translate(-offset) 处理。若 placement 也含 offset 会
@@ -575,8 +645,12 @@ mod tests {
         assert_eq!(anchor_from_offset(&c, 49.0, 0.0), (0, 49.0));
         assert_eq!(anchor_from_offset(&c, 50.0, 0.0), (1, 0.0));
         assert_eq!(anchor_from_offset(&c, 120.0, 0.0), (2, 20.0));
-        // 超出已知范围 → 锚定末尾
-        assert_eq!(anchor_from_offset(&c, 99999.0, 0.0), (9, 0.0));
+        // 超出已知范围（10 项已知）→ 按预估 48 继续扩展：99999 / 48 ≈ 2082
+        let (far_idx, far_off) = anchor_from_offset(&c, 99999.0, 0.0);
+        assert!(far_idx > 2000, "预估扩展：实际 {far_idx}");
+        // 已知 10 项 ×50 先扣掉，剩余按预估 48 继续：99999 - 500 - (idx-10)*48
+        let expected = 99999.0 - 500.0 - (far_idx - 10) as f32 * 48.0;
+        assert!((far_off - expected).abs() < 0.001);
     }
 
     // ── 可见范围 ──
@@ -592,7 +666,6 @@ mod tests {
         let (_, e2) = visible_range(&c, 5, 0.0, 99999.0, 0.0, 100);
         assert_eq!(e2, 100);
     }
-}
 
     // ── 组件级：稳定 key 数据变化保持滚动位置 ──
     #[test]
@@ -635,3 +708,134 @@ mod tests {
         state.last_known_first_key.set(Some(50));
         assert_eq!(state.last_known_first_key.get(), Some(50));
     }
+
+    // ── 组件级像素：懒加载渲染 + 滚动后内容变化 ──
+    fn render_lazy(build: impl FnOnce(&mut ComposeCtx)) -> (Vec<[u8; 4]>, usize) {
+        use skia_safe::{Color as SkColor, surfaces};
+        let theme = crate::ui::theme::ThemeColors::light_from_seed(0x6750A4);
+        let mut composer = Composer::new();
+        let scene = |ctx: &mut ComposeCtx| {
+            crate::ui::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| build(ctx));
+        };
+        composer.compose(scene);
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 600.0));
+        let mut surface = surfaces::raster_n32_premul((400, 600)).unwrap();
+        let canvas = surface.canvas();
+        canvas.clear(SkColor::WHITE);
+        let root = composer.layout_root_idx().expect("root");
+        let nodes = composer.arena_nodes();
+        crate::render::render(nodes, root, canvas);
+        let pm = surface.peek_pixels().expect("pixmap");
+        let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+        (px.to_vec(), pm.width() as usize)
+    }
+
+    fn count_text_clusters(px: &[[u8; 4]], w: usize, h: usize) -> usize {
+        // 深色文本像素行聚类
+        let mut rows = vec![false; h];
+        for y in 0..h {
+            let mut n = 0;
+            for x in 0..w {
+                let p = px[y * w + x];
+                // BGRA → (b,g,r) 语义（raster_n32_premul 小端）
+                if p[0] < 120 && p[1] < 120 && p[2] < 120 { n += 1; }
+            }
+            rows[y] = n > 3;
+        }
+        let mut clusters = 0;
+        let mut prev = -100;
+        for (y, &r) in rows.iter().enumerate() {
+            if r {
+                if y as i32 - prev > 20 { clusters += 1; }
+                prev = y as i32;
+            }
+        }
+        clusters
+    }
+
+    #[test]
+    fn lazy_renders_only_visible_items() {
+        // 1000 项列表：只渲染视口内的 ~12 项（600px / 40px），而非全部
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let composed = Arc::new(AtomicUsize::new(0));
+        let composed2 = composed.clone();
+        let items: Arc<Vec<u64>> = Arc::new((0..1000).collect());
+        let items2 = items.clone();
+        let (px, w) = render_lazy(move |ctx| {
+            let c2 = composed2.clone();
+            LazyColumn::new()
+                .modifier(Modifier::new().fill_max_width().fill_max_height())
+                .items_from(
+                    items2,
+                    |v: &u64| *v,
+                    move |ctx, _i, v| {
+                        c2.fetch_add(1, Ordering::Relaxed);
+                        crate::ui::text::Text::new(format!("Item {}", v))
+                            .font_size(14.0)
+                            .modifier(Modifier::new().padding(12.0))
+                            .build(ctx);
+                    },
+                )
+                .build(ctx);
+        });
+        let h = 600usize;
+        let clusters = count_text_clusters(&px, w, h);
+        // 视口 600 / 项高 ~38 = ~15 项可见；注册窗含预取但渲染仅可见
+        assert!(clusters >= 8 && clusters <= 30, "只渲染可见项，clusters={clusters}");
+        // 组合次数 << 1000（懒加载核心断言）
+        let n = composed.load(Ordering::Relaxed);
+        assert!(n <= 60, "组合项数应远小于总数 1000，实际 {n}");
+    }
+
+    #[test]
+    fn lazy_scroll_changes_visible_items() {
+        // 滚动到 offset=2000 后，渲染的 Item 文本应变化（不同项）
+        let state = LazyListState::new();
+        let items: Arc<Vec<u64>> = Arc::new((0..1000).collect());
+        let (px0, w0) = render_lazy(|ctx| {
+            LazyColumn::new()
+                .state(state.clone())
+                .modifier(Modifier::new().fill_max_width().fill_max_height())
+                .items_from(items.clone(), |v: &u64| *v, |ctx, _i, v| {
+                    crate::ui::text::Text::new(format!("Item {}", v))
+                        .font_size(14.0)
+                        .modifier(Modifier::new().padding(12.0))
+                        .build(ctx);
+                })
+                .build(ctx);
+        });
+        // 滚动：模拟 apply_scroll_delta 效果
+        state.offset.set(2000.0);
+        let (px1, w1) = render_lazy(|ctx| {
+            LazyColumn::new()
+                .state(state.clone())
+                .modifier(Modifier::new().fill_max_width().fill_max_height())
+                .items_from(items.clone(), |v: &u64| *v, |ctx, _i, v| {
+                    crate::ui::text::Text::new(format!("Item {}", v))
+                        .font_size(14.0)
+                        .modifier(Modifier::new().padding(12.0))
+                        .build(ctx);
+                })
+                .build(ctx);
+        });
+        assert_eq!(w0, w1);
+        // 帧间内容应不同（滚动后渲染不同项）：按行比较文本像素出现与否。
+        // 偏移 2000/38 ≈ 52 项 → 文本行整体平移 ~2000px，diff_rows 应为数百。
+        let h = 600usize;
+        let mut diff_rows = 0;
+        for y in 0..h {
+            let mut has0 = false;
+            let mut has1 = false;
+            for x in (0..w0).step_by(8) {
+                let p0 = px0[y * w0 + x];
+                let p1 = px1[y * w0 + x];
+                has0 |= p0[0] < 120 && p0[1] < 120 && p0[2] < 120;
+                has1 |= p1[0] < 120 && p1[1] < 120 && p1[2] < 120;
+            }
+            if has0 != has1 { diff_rows += 1; }
+        }
+        assert!(diff_rows > 10, "滚动后内容变化，diff_rows={diff_rows}");
+        // 派生锚点应为滚动后的精确值（约 2000/38 ≈ 52）
+        assert!(state.first_visible() >= 40, "first_visible={}", state.first_visible());
+    }
+}

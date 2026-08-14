@@ -46,6 +46,24 @@ fn lazy_demo(ctx: &mut ComposeCtx) {
                 .modifier(Modifier::new().padding(8.0))
                 .build(ctx);
 
+            // 程序化滚动：scroll_to_item（空缓存 = 预估高度，实测后自动回填）
+            Row::new()
+                .modifier(Modifier::new().padding(8.0))
+                .build(ctx, |ctx| {
+                    let s0 = state.clone();
+                    Button::text()
+                        .on_click(move || s0.scroll_to_item(0, &ItemHeightCache::new(), 0.0))
+                        .build(ctx, |ctx| Text::new("顶部").build(ctx));
+                    let s1 = state.clone();
+                    Button::text()
+                        .on_click(move || s1.scroll_to_item(500, &ItemHeightCache::new(), 0.0))
+                        .build(ctx, |ctx| Text::new("跳转 500").build(ctx));
+                    let s2 = state.clone();
+                    Button::text()
+                        .on_click(move || s2.scroll_to_item(999, &ItemHeightCache::new(), 0.0))
+                        .build(ctx, |ctx| Text::new("末尾").build(ctx));
+                });
+
             // LazyColumn：稳定 key 迭代
             let items_clone = items.clone();
             LazyColumn::new()

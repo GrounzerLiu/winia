@@ -34,6 +34,10 @@ LazyColumn::new()
 // 读取滚动位置
 state.first_visible();   // 第一个可见项索引
 state.offset();          // 像素偏移
+
+// 程序化滚动到指定索引（项顶部对齐视口；越界 clamp 到末尾）
+// 第二参数：高度缓存（组件持有）——组件外调用传空缓存会用预估高度
+state.scroll_to_item(50, &ItemHeightCache::default(), 8.0);
 ```
 
 ## 2. 核心机制（对齐 Compose lazy 架构）
@@ -53,14 +57,18 @@ state.offset();          // 像素偏移
   前部插入/删除后原可见项保持在视口（对齐 Compose
   `LazyListScrollPosition.updateScrollPositionIfTheFirstItemWasMoved`）；
 - ⚠ 仅 total 变化时校正——正常滚动时锚点变化是用户滚动结果，绝不校正
-  （实测：每帧校正会把滚动拉回 0）。
+  （实测：每帧校正会把滚动拉回 0）；
+- total 守卫（`known_total`）存在 **LazyListState 内部**而非组合级 remember——
+  外部持有 state 跨 Composer 复用（测试/多窗口）时，组合级守卫每帧误触发
+  校正把滚动拉回 0（实测：二次 render 后 offset=2000 → 0）。
 
 ### 2.3 区间内容（IntervalList）
 
 - `item/items/items_from` 注册为区间（count + key 工厂 + 内容闭包）；
 - 全局 index 经区间定位转段内局部 index（对齐 Compose LazyListIntervalContent）；
-- key 查询：`key_of(global)` / `index_of_key(key)`（线性扫描——Compose 用
-  最近范围缓存优化，winia 先简单实现）。
+- key 查询：`key_of(global)` / `index_of_key(key)`——rebuild 时构建
+  key→index HashMap，O(1) 反查（对齐 Compose NearestRangeKeyIndexMap 的
+  查询语义）。
 
 ### 2.4 懒测量（组合期预估 + 测量期校正）
 

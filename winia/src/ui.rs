@@ -86,5 +86,5 @@ pub use progress_indicator::{
 };
 pub use chip::{Chip, ChipVariant, ChipColors, SelectableChipColors, ChipDefaults};
 pub use divider::{Divider, DividerDefaults, DIVIDER_THICKNESS, DIVIDER_HAIRLINE};
-pub use lazy_column::{LazyColumn, LazyListState};
+pub use lazy_column::{ItemHeightCache, LazyColumn, LazyListState};
 pub use tooltip::Tooltip;

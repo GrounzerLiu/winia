@@ -298,7 +298,6 @@ pub(crate) fn notify_state_changed_inner(state_id: u32, wake: bool) {
     } else {
         false
     };
-    #[cfg(test)] { eprintln!("[notify-inner] state={} pushed={} map={:?}", state_id, pushed, STATE_QUEUE_MAP.lock().keys().collect::<Vec<_>>()); }
     if wake {
         if let Some(ref f) = *WAKE_FN.lock().unwrap() { f(); }
     }
