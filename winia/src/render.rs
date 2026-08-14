@@ -712,6 +712,10 @@ fn render_pass1(
                     );
                 }
             }
+            // 自定义绘制（Slider 轨道/thumb 等动态图形——闭包以节点 rect 调用）
+            ModifierElement::CustomDraw { f } => {
+                f(canvas, rect);
+            }
             // 图标绘制于内容区域（padding 内缩——叶子 padding 渲染偏移）
             ModifierElement::DrawIcon { spec } => {
                 draw_icon(canvas, Rect::new(content_x, content_y, content_x + content_w, content_y + content_h), node.layout_direction, spec);
@@ -905,10 +909,13 @@ fn render_pass1(
     // ⚠ TextField 容器（M3）不用焦点环——用指示线/边框色变化提示焦点
     let has_tf_container = node.modifier.elements().iter()
         .any(|el| matches!(el, ModifierElement::TextFieldVisual { .. }));
+    // NoFocusRing：组件自绘焦点环（Slider 焦点环包围 thumb 而非整组件）
+    let no_focus_ring = node.modifier.elements().iter()
+        .any(|el| matches!(el, ModifierElement::NoFocusRing));
     let focus_alpha = node.modifier.focusable_interaction()
         .map(|src| src.focus_indicator_alpha_value())
         .unwrap_or(if node.focused { 1.0 } else { 0.0 });
-    if !has_tf_container && (node.focused || focus_alpha > 0.001) {
+    if !has_tf_container && !no_focus_ring && (node.focused || focus_alpha > 0.001) {
         // 焦点环形状跟随组件（最近 Background/Border/Clip 形状，回退矩形）；
         // 颜色由组件组合期从主题捕获（node.focus_color）
         let focus_shape = node.modifier.elements().iter().rev().find_map(|el| match el {
@@ -918,7 +925,7 @@ fn render_pass1(
             | ModifierElement::Clip { shape } => Some(*shape),
             _ => None,
         }).unwrap_or(crate::modifier::Shape::Rectangle);
-        draw_focus(canvas, rect, &focus_shape, node.focus_color.get(), focus_alpha);
+        draw_focus(canvas, rect, &focus_shape, node.focus_color.get(), focus_alpha, 2.0);
     }
 
     // Scroll clip + translate
@@ -1414,18 +1421,18 @@ fn draw_border(canvas: &Canvas, x: f32, y: f32, w: f32, h: f32, width: f32, colo
 
 /// 焦点环（M3 focus indicator）——宽 3、完全位于组件**外部**（环内侧距
 /// 组件边缘 2）、形状跟随组件、颜色来自组件组合期捕获的主题色。
-fn draw_focus(
+pub(crate) fn draw_focus(
     canvas: &Canvas,
     rect: Rect,
     shape: &crate::modifier::Shape,
     color: crate::modifier::Color,
     alpha: f32,
+    gap: f32,
 ) {
-    const FOCUS_GAP: f32 = 2.0;   // 环内侧与组件边缘的距离
     const FOCUS_WIDTH: f32 = 3.0;
     const FOCUS_SCALE_AMOUNT: f32 = 0.15; // 淡入起点放大倍数（大环收缩到贴合）
     // 环中心线在组件外 gap + 半宽处——stroke 居中绘制时环完全在外侧
-    let inset = FOCUS_GAP + FOCUS_WIDTH / 2.0;
+    let inset = gap + FOCUS_WIDTH / 2.0;
     let mut sr = Rect::new(
         rect.left - inset,
         rect.top - inset,

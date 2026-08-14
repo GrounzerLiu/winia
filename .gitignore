@@ -11,3 +11,4 @@ dbg_win.png
 
 .cargo/
 .zcode/plans/
+*.log

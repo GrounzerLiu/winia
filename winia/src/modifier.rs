@@ -508,6 +508,9 @@ pub(crate) enum ModifierElement {
     /// Outlined/Text 无背景元素时也能正确裁剪）；None 则从 Background/Border 推断。
     Ripple { source: MutableInteractionSource, color: Color, bounded: bool, shape: Option<Shape> },
     /// 图标绘制（Icon 组件内部使用）——source/tint/autoMirror/可变轴
+    CustomDraw { f: Arc<dyn Fn(&skia_safe::Canvas, skia_safe::Rect) + Send + Sync> },
+    /// 禁用框架焦点环（组件自绘焦点环时用——如 Slider 焦点环包围 thumb 而非整组件）
+    NoFocusRing,
     DrawIcon { spec: crate::ui::icon::IconSpec },
     /// 图片内容（Image 组件——位图/SVG，ContentScale + 对齐 + alpha；
     /// 与 DrawIcon 的区别：不染色、按 ContentScale 缩放、对齐可控）
@@ -1158,7 +1161,20 @@ impl Modifier {
     }
 
     /// 绘制图标（Icon 组件内部使用）——tint/autoMirror/可变轴在渲染期求值
-    pub fn draw_icon(self, spec: crate::ui::icon::IconSpec) -> Self {
+    /// 自定义绘制：渲染期以节点 rect 调用闭包（Canvas 原语——轨道/刻度/
+/// thumb 等动态绘制；对齐 Compose Canvas/drawWithCache 的轻量替代）。
+/// 闭包在渲染期调用——读 State::peek() 不触发重组（值变化由外部 notify 驱动重绘）。
+pub fn draw(self, f: impl Fn(&skia_safe::Canvas, skia_safe::Rect) + Send + Sync + 'static) -> Self {
+    self.push(ModifierElement::CustomDraw { f: Arc::new(f) })
+}
+
+/// 禁用框架自动焦点环（组件自绘焦点环时用——如 Slider 焦点环包围 thumb 胶囊，
+/// 而非整个组件 rect）
+pub fn no_focus_ring(self) -> Self {
+    self.push(ModifierElement::NoFocusRing)
+}
+
+pub fn draw_icon(self, spec: crate::ui::icon::IconSpec) -> Self {
         self.push(ModifierElement::DrawIcon { spec })
     }
 
@@ -1825,7 +1841,9 @@ impl Debug for ModifierElement {
                 .field("color", color)
                 .field("bounded", bounded)
                 .finish(),
-            Self::DrawIcon { .. } => f.write_str("DrawIcon"),
+            Self::CustomDraw { .. } => f.write_str("CustomDraw"),
+Self::NoFocusRing => f.write_str("NoFocusRing"),
+Self::DrawIcon { .. } => f.write_str("DrawIcon"),
             Self::ImageContent { content_scale, alignment, alpha, color_filter, filter_quality, .. } => f
                 .debug_struct("ImageContent")
                 .field("scale", content_scale)
