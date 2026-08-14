@@ -158,6 +158,62 @@ fn read_offset(app: &mut UiTest) -> f32 {
         .unwrap_or(-1.0)
 }
 
+/// 读取 `hoffset: X` 文本（横向滚动偏移）
+fn read_hoffset(app: &mut UiTest) -> f32 {
+    app.refresh();
+    app.all_texts()
+        .iter()
+        .find_map(|s| {
+            s.find("hoffset: ").and_then(|i| {
+                s[i + "hoffset: ".len()..]
+                    .trim_end_matches(')')
+                    .trim()
+                    .parse::<f32>()
+                    .ok()
+            })
+        })
+        .unwrap_or(-1.0)
+}
+
+/// Given 40 列内容在 300px 横向滚动容器内 + `hoffset:` 实时文本
+/// When  横向滚动（dx 负 = 内容左移——与垂直"负 dy = 下滚"对称）再反向滚回
+/// Then  hoffset 先 300 后回 0（horizontal_scroll 与垂直对称；内容 = 偏移不是移除）
+#[test]
+fn horizontal_scroll_container_keeps_content() {
+    let mut app = UiTest::launch("scroll");
+    app.expect_text("hoffset: 0"); // 等首帧就绪
+    app.expect_text("C0");
+    // 向右滚（dx -300）：offset 增大
+    app.scroll_delta(-300.0, 0.0);
+    app.expect_text_timeout("hoffset: 300", Duration::from_secs(5));
+    // 向左滚回：offset 归零
+    app.scroll_delta(600.0, 0.0);
+    app.expect_text_timeout("hoffset: 0", Duration::from_secs(5));
+    app.expect_text("C0");
+    app.expect_text("C39");
+}
+
+/// Given 横向滚动容器（40 列 × 60px = 2400px，视口 300px，极限 2100）
+/// When  在滚动区向左拖 100px（内容跟随手指）后松手
+/// Then  hoffset 先随拖拽增大；松手后惯性 fling 继续推进（不超过极限 2100）
+#[test]
+fn horizontal_drag_scroll_follows_pointer_and_flings() {
+    let mut app = UiTest::launch("scroll");
+    app.expect_text("hoffset: 0");
+    // 横向区约在 y 94..154（标题 ~32 + offset 文本 ~19 + hoffset 文本 ~19）
+    app.drag(250.0, 120.0, 150.0, 120.0);
+    let o1 = read_hoffset(&mut app);
+    assert!(o1 > 30.0, "拖拽后 hoffset 应 > 0（内容跟随手指），实际 {o1}");
+    // 松手后惯性 fling 继续推进
+    std::thread::sleep(Duration::from_millis(300));
+    let o2 = read_hoffset(&mut app);
+    std::thread::sleep(Duration::from_millis(300));
+    let o3 = read_hoffset(&mut app);
+    assert!(o3 > o1, "fling 应继续推进 hoffset（{o1} -> {o3}）");
+    assert!(o3 >= o2, "fling 应单调推进（{o2} -> {o3}）");
+    assert!(o3 < 2100.0, "fling 不应越过滚动极限 2100，实际 {o3}");
+}
+
 // ═══════════════════════════════════════════════════════════════
 // fixture_nest：多级 if/else 结构切换（3 态循环）
 // ═══════════════════════════════════════════════════════════════

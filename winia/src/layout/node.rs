@@ -166,8 +166,12 @@ pub struct LayoutNode {
     pub(crate) cached_paragraph: std::cell::RefCell<Option<crate::text::Paragraph>>,
     /// scroll 容器的 viewport 高度（由 measure_node 在布局阶段设值，供 apply_scroll_delta 使用）
     pub(crate) scroll_viewport_height: f32,
+    /// scroll 容器的 viewport 宽度（水平滚动用——同 scroll_viewport_height）
+    pub(crate) scroll_viewport_width: f32,
     /// scroll 容器的内容总高（lazy 列表用——apply_scroll_delta 计算 max_offset；0 = 未设置）
     pub(crate) scroll_content_height: f32,
+    /// scroll 容器的内容总宽（水平滚动用——同 scroll_content_height）
+    pub(crate) scroll_content_width: f32,
     /// 父节点 ID（键盘事件冒泡用，由 add_child 设置）
     pub(crate) parent_id: Option<u64>,
     /// CompositionLocal 作用域内的 SelectionRegistrar（Text 节点存引用）
@@ -287,7 +291,7 @@ impl LayoutNode {
             layout_direction: LayoutDirection::Ltr,
             slot_key: 0,
             cached_paragraph: std::cell::RefCell::new(None),
-            scroll_viewport_height: 0.0, scroll_content_height: 0.0, parent_id: None,
+            scroll_viewport_height: 0.0, scroll_viewport_width: 0.0, scroll_content_height: 0.0, scroll_content_width: 0.0, parent_id: None,
             registrar: std::cell::RefCell::new(None),
             cursor_x: std::cell::Cell::new(0.0),
             cursor_height: std::cell::Cell::new(0.0),
@@ -340,7 +344,7 @@ impl Default for LayoutNode {
             layout_direction: LayoutDirection::Ltr,
             slot_key: 0,
             cached_paragraph: std::cell::RefCell::new(None),
-            scroll_viewport_height: 0.0, scroll_content_height: 0.0, parent_id: None,
+            scroll_viewport_height: 0.0, scroll_viewport_width: 0.0, scroll_content_height: 0.0, scroll_content_width: 0.0, parent_id: None,
             registrar: std::cell::RefCell::new(None),
             cursor_x: std::cell::Cell::new(0.0),
             cursor_height: std::cell::Cell::new(0.0),
@@ -576,7 +580,7 @@ pub(crate) fn scroll_offset_for_node(node: &LayoutNode) -> (f32, f32) {
         dy += state.offset.get();
     }
     if let Some(state) = node.modifier.horizontal_scroll_state() {
-        dx += state.get();
+        dx += state.offset.get();
     }
     (dx, dy)
 }
@@ -1409,6 +1413,7 @@ pub(crate) fn measure_node(
 
     // 3. 应用 FillMax 约束（在 scroll 修改 max 之前，保存 viewport 约束）
     let viewport_height = inner_constraints.max_height;
+    let viewport_width = inner_constraints.max_width;
     if nodes[idx].modifier.is_fill_max_width() {
         inner_constraints.min_width = inner_constraints.max_width;
     }
@@ -1441,7 +1446,20 @@ pub(crate) fn measure_node(
         }
     }
     if nodes[idx].modifier.horizontal_scroll_state().is_some() {
-        inner_constraints.max_width = f32::MAX;
+        // scroll 容器自身填 viewport（fill_max_width 在无限 max 时跳过，这里补上）
+        if nodes[idx].modifier.is_fill_max_width() && inner_constraints.max_width >= f32::MAX {
+            inner_constraints.min_width = viewport_width;
+        }
+        // 保存 viewport 宽度供滚动 clamping 使用
+        nodes[idx].scroll_viewport_width = viewport_width;
+        // lazy 横向列表：内容总宽 State → 节点字段（与垂直同语义）
+        if let Some(cw) = nodes[idx].modifier.lazy_scroll_content_height() {
+            nodes[idx].scroll_content_width = cw.get();
+        }
+        // ⚠ lazy 容器不改写成无界：保留有限 max_width 让 policy 拿真实视口宽
+        if nodes[idx].modifier.lazy_scroll_content_height().is_none() {
+            inner_constraints.max_width = f32::MAX;
+        }
     }
 
     // 实际测量
@@ -1489,6 +1507,24 @@ pub(crate) fn measure_node(
                 nodes[idx].scroll_content_height = content_h;
                 let max_off = (content_h - nodes[idx].scroll_viewport_height).max(0.0);
                 if let Some(ss) = nodes[idx].modifier.vertical_scroll_state() {
+                    ss.fling_limit.set_silent(max_off);
+                }
+            }
+        }
+        // 非 lazy 水平滚动容器：内容总宽 = 子节点右侧最大值（含尾部 padding）
+        if nodes[idx].modifier.horizontal_scroll_state().is_some()
+            && nodes[idx].modifier.lazy_scroll_content_height().is_none()
+        {
+            let mut content_w = 0.0f32;
+            for &c in &children {
+                let right = nodes[c].position.x + nodes[c].measured_size.width;
+                if right > content_w { content_w = right; }
+            }
+            if content_w > 0.0 {
+                content_w += pad_end;
+                nodes[idx].scroll_content_width = content_w;
+                let max_off = (content_w - nodes[idx].scroll_viewport_width).max(0.0);
+                if let Some(ss) = nodes[idx].modifier.horizontal_scroll_state() {
                     ss.fling_limit.set_silent(max_off);
                 }
             }

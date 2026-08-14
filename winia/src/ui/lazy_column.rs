@@ -1,4 +1,4 @@
-//! LazyColumn 组件 — 对标 Compose material3 `LazyColumn`（foundation lazy）
+//! LazyColumn / LazyRow 组件 — 对标 Compose foundation lazy `LazyColumn` / `LazyRow`
 //!
 //! 核心机制（对齐 Compose lazy 架构）：
 //! - **锚点滚动模型**：`LazyListState.first_visible_index + first_visible_offset`
@@ -17,13 +17,83 @@
 use crate::core::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::layout::BoxLayout;
+use crate::layout::constraints::Constraints;
+use crate::layout::node::{Point, Size};
 use crate::modifier::Modifier;
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 /// 未测量项的预估高度（首次进入视口时用，测量后写回缓存）
 pub const LAZY_ITEM_ESTIMATED_HEIGHT: f32 = 48.0;
 /// 超出视口后仍注册的额外项数（上下各预取，减少滚动时补注册抖动）
 pub const LAZY_BEYOND_BOUNDS: usize = 4;
+
+mod sealed_axis {
+    pub trait Sealed {}
+}
+
+/// 懒列表主轴——类型级参数：`LazyColumn = LazyList<VerticalAxis>`（垂直）、
+/// `LazyRow = LazyList<HorizontalAxis>`（水平）。
+///
+/// ⚠ 密封 trait：不要为自定义类型实现。两种标记类型即全部实例化。
+pub trait LazyAxis: sealed_axis::Sealed + 'static {
+    #[doc(hidden)]
+    fn main_max(c: Constraints) -> f32;
+    #[doc(hidden)]
+    fn cross_max(c: Constraints) -> f32;
+    #[doc(hidden)]
+    fn main_size(s: Size) -> f32;
+    #[doc(hidden)]
+    fn cross_size(s: Size) -> f32;
+    /// 子项约束：交叉轴继承父 max，主轴无界（wrap content）
+    #[doc(hidden)]
+    fn child_constraints(c: Constraints) -> Constraints;
+    /// (交叉轴, 主轴) → 位置
+    #[doc(hidden)]
+    fn point(cross: f32, main: f32) -> Point;
+    /// (交叉轴, 主轴) → 尺寸
+    #[doc(hidden)]
+    fn size(cross: f32, main: f32) -> Size;
+    /// 滚动 modifier（垂直/水平）
+    #[doc(hidden)]
+    fn scroll(state: crate::modifier::ScrollState) -> Modifier;
+}
+
+/// 垂直主轴标记（`LazyColumn = LazyList<VerticalAxis>`）
+pub enum VerticalAxis {}
+impl sealed_axis::Sealed for VerticalAxis {}
+impl LazyAxis for VerticalAxis {
+    fn main_max(c: Constraints) -> f32 { c.max_height }
+    fn cross_max(c: Constraints) -> f32 { c.max_width }
+    fn main_size(s: Size) -> f32 { s.height }
+    fn cross_size(s: Size) -> f32 { s.width }
+    fn child_constraints(c: Constraints) -> Constraints {
+        Constraints { min_width: 0.0, max_width: c.max_width, min_height: 0.0, max_height: f32::MAX }
+    }
+    fn point(cross: f32, main: f32) -> Point { Point::new(cross, main) }
+    fn size(cross: f32, main: f32) -> Size { Size::new(cross, main) }
+    fn scroll(state: crate::modifier::ScrollState) -> Modifier {
+        Modifier::new().vertical_scroll(state)
+    }
+}
+
+/// 水平主轴标记（`LazyRow = LazyList<HorizontalAxis>`）
+pub enum HorizontalAxis {}
+impl sealed_axis::Sealed for HorizontalAxis {}
+impl LazyAxis for HorizontalAxis {
+    fn main_max(c: Constraints) -> f32 { c.max_width }
+    fn cross_max(c: Constraints) -> f32 { c.max_height }
+    fn main_size(s: Size) -> f32 { s.width }
+    fn cross_size(s: Size) -> f32 { s.height }
+    fn child_constraints(c: Constraints) -> Constraints {
+        Constraints { min_width: 0.0, max_width: f32::MAX, min_height: 0.0, max_height: c.max_height }
+    }
+    fn point(cross: f32, main: f32) -> Point { Point::new(main, cross) }
+    fn size(cross: f32, main: f32) -> Size { Size::new(main, cross) }
+    fn scroll(state: crate::modifier::ScrollState) -> Modifier {
+        Modifier::new().horizontal_scroll(state)
+    }
+}
 
 /// Lazy 列表滚动状态（winia 像素模型 + 派生锚点）
 ///
@@ -219,16 +289,34 @@ impl IntervalList {
 ///
 /// 只组合/测量可见项（含上下预取窗）。items 支持稳定 key 工厂——
 /// 数据前部增删后按 key 保持滚动位置。
-pub struct LazyColumn {
+/// 懒列表构建器（轴由类型参数决定：`LazyColumn` 垂直 / `LazyRow` 水平）
+pub struct LazyList<A: LazyAxis> {
+    axis: PhantomData<A>,
     state: Option<LazyListState>,
     spacing: f32,
     modifier: Modifier,
     intervals: IntervalList,
 }
 
-impl LazyColumn {
-    pub fn new() -> Self {
+/// 垂直懒列表（对标 Compose `LazyColumn`）
+pub type LazyColumn = LazyList<VerticalAxis>;
+/// 水平懒列表（对标 Compose `LazyRow`）
+pub type LazyRow = LazyList<HorizontalAxis>;
+
+impl LazyList<VerticalAxis> {
+    /// 垂直列表（LazyColumn）
+    pub fn new() -> Self { Self::new_list() }
+}
+
+impl LazyList<HorizontalAxis> {
+    /// 水平列表（LazyRow）
+    pub fn new() -> Self { Self::new_list() }
+}
+
+impl<A: LazyAxis> LazyList<A> {
+    fn new_list() -> Self {
         Self {
+            axis: PhantomData,
             state: None,
             spacing: 0.0,
             modifier: Modifier::new(),
@@ -402,7 +490,7 @@ pub(crate) fn visible_range(
 // build — 组合期注册可见项
 // ═══════════════════════════════════════════════════════
 
-impl LazyColumn {
+impl<A: LazyAxis> LazyList<A> {
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
         let state = match self.state {
@@ -471,7 +559,8 @@ impl LazyColumn {
             is_scroll_in_progress: is_scrolling.clone(),
             fling_limit: fling_limit.clone(),
         };
-        let policy = LazyListPolicy {
+        let policy = LazyListPolicy::<A> {
+            axis: PhantomData,
             cache: cache.clone(),
             viewport: viewport.clone(),
             content_height: content_height.clone(),
@@ -485,7 +574,7 @@ impl LazyColumn {
         let m = Modifier::new()
             .fill_max_width()
             .fill_max_height()
-            .vertical_scroll(scroll)
+            .then(A::scroll(scroll))
             .lazy_scroll(content_height.clone());
         let m = m.then(self.modifier);
         // ⚠ item 子节点必须在 start_restartable_group **之后**注册（挂到
@@ -524,7 +613,9 @@ impl LazyColumn {
 // ═══════════════════════════════════════════════════════
 
 /// 懒列表测量：把已注册子节点按锚点排布，真实高度写回缓存，视口高回写。
-pub(crate) struct LazyListPolicy {
+/// 轴无关（`A: LazyAxis` 决定主轴方向——LazyColumn/LazyRow 共用）。
+pub(crate) struct LazyListPolicy<A: LazyAxis> {
+    pub axis: PhantomData<A>,
     pub cache: crate::core::state::State<ItemHeightCache>,
     pub viewport: crate::core::state::State<f32>,
     pub content_height: crate::core::state::State<f32>,
@@ -536,13 +627,13 @@ pub(crate) struct LazyListPolicy {
     pub state: LazyListState,  // 派生锚点回写（测量后精确值）
 }
 
-impl std::fmt::Debug for LazyListPolicy {
+impl<A: LazyAxis> std::fmt::Debug for LazyListPolicy<A> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("LazyListPolicy")
     }
 }
 
-impl crate::layout::node::MeasurePolicy for LazyListPolicy {
+impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
     fn measure(
         &self,
         nodes: &mut Vec<crate::layout::node::LayoutNode>,
@@ -550,31 +641,26 @@ impl crate::layout::node::MeasurePolicy for LazyListPolicy {
         children: &[usize],
         constraints: crate::layout::constraints::Constraints,
     ) -> (crate::layout::node::Size, Vec<crate::layout::node::Placement>) {
-        use crate::layout::node::Size;
-        // 视口高：有限约束直接用（回写缓存）；无界（父内容驱动——Column 无
+        // 视口主轴尺寸：有限约束直接用（回写缓存）；无界（父内容驱动——Column 无
         // 固定高度时给子节点 f32::MAX；⚠ is_finite() 对 f32::MAX 也返回 true，
-        // 必须用框架惯例 `max_height < f32::MAX` 判定）回退缓存值，避免视口
+        // 必须用框架惯例 `< f32::MAX` 判定）回退缓存值，避免视口
         // 无限膨胀（实测：f32::MAX 视口会让 clamp 把 offset 清零）
-        let vh = if constraints.max_height < f32::MAX && constraints.max_height > 0.0 {
-            self.viewport.set_silent(constraints.max_height);
-            constraints.max_height
+        let main_max = A::main_max(constraints);
+        let vh = if main_max < f32::MAX && main_max > 0.0 {
+            self.viewport.set_silent(main_max);
+            main_max
         } else {
             self.viewport.get()
         };
 
-        // 测量每个子节点：宽度继承父（fill），高度无界（wrap content——
-        // 不能传父约束（max_height=视口高）否则子项被撑满视口）
-        let child_constraints = crate::layout::constraints::Constraints {
-            min_width: 0.0,
-            max_width: constraints.max_width,
-            min_height: 0.0,
-            max_height: f32::MAX,
-        };
+        // 测量每个子节点：交叉轴继承父 max，主轴无界（wrap content——
+        // 不能传父约束（max=视口）否则子项被撑满视口）
+        let child_constraints = A::child_constraints(constraints);
         let mut placements = Vec::with_capacity(children.len());
         let mut measured: Vec<(f32, f32)> = Vec::with_capacity(children.len());
         for &c in children.iter() {
             let (size, _) = crate::layout::node::measure_node(nodes, policies, c, child_constraints);
-            measured.push((size.height, size.width));
+            measured.push((A::main_size(size), A::cross_size(size)));
         }
 
         // 全局 index 映射：注册顺序从 start 到 end，start = first_index - 预取数
@@ -625,25 +711,23 @@ impl crate::layout::node::MeasurePolicy for LazyListPolicy {
         self.state.first_visible_index.set(real_first);
         self.state.first_visible_offset.set(real_off);
 
-        // 锚点排布：**内容坐标**（y = 项在内容中的累计位置，不含 offset）——
+        // 锚点排布：**内容坐标**（主轴 = 项在内容中的累计位置，不含 offset）——
         // 滚动由框架 scroll translate(-offset) 处理。若 placement 也含 offset 会
         // 双重偏移（实测：滚动 3000 后内容完全滚出视口）。
-        // first item 在内容中的 y = prefix(start) 起，逐项 +h+spacing
-        let mut y = prefix_height(&cache, self.start, self.spacing);
+        // first item 在内容中的位置 = prefix(start) 起，逐项 +h+spacing
+        let mut main_pos = prefix_height(&cache, self.start, self.spacing);
         for (i, _c) in children.iter().enumerate() {
             let (h, w) = measured[i];
             placements.push(crate::layout::node::Placement {
-                position: crate::layout::node::Point::new(0.0, y),
-                size: Size::new(w, h),
+                position: A::point(0.0, main_pos),
+                size: A::size(w, h),
             });
-            y += h + self.spacing;
+            main_pos += h + self.spacing;
         }
 
-        // 自身尺寸：宽度填满，高度 = 视口（滚动容器）；子项超出部分由 scroll clip
-        let w = constraints.max_width;
-        let h = vh;
+        // 自身尺寸：交叉轴填满父，主轴 = 视口（滚动容器）；子项超出部分由 scroll clip
         self.cache.set_silent(cache);
-        (Size::new(w, h), placements)
+        (A::size(A::cross_max(constraints), vh), placements)
     }
 
     fn place(&self, nodes: &mut Vec<crate::layout::node::LayoutNode>, children: &[usize], placements: &[crate::layout::node::Placement]) {
@@ -918,6 +1002,107 @@ mod tests {
         assert!(diff_rows > 10, "滚动后内容变化，diff_rows={diff_rows}");
         // 派生锚点应为滚动后的精确值（约 2000/38 ≈ 52）
         assert!(state.first_visible() >= 40, "first_visible={}", state.first_visible());
+    }
+
+    // ── LazyRow 横向：同机制换轴 ──
+    fn count_text_columns(px: &[[u8; 4]], w: usize, h: usize) -> usize {
+        // 深色文本像素列聚类（横向列表用——文本行都挤在少数行，按列数项）
+        let mut cols = vec![false; w];
+        for x in 0..w {
+            let mut n = 0;
+            for y in (0..h).step_by(2) {
+                let p = px[y * w + x];
+                if p[0] < 120 && p[1] < 120 && p[2] < 120 { n += 1; }
+            }
+            cols[x] = n > 3;
+        }
+        let mut clusters = 0;
+        let mut prev = -100;
+        for (x, &c) in cols.iter().enumerate() {
+            if c {
+                if x as i32 - prev > 20 { clusters += 1; }
+                prev = x as i32;
+            }
+        }
+        clusters
+    }
+
+    #[test]
+    fn lazy_row_renders_only_visible_items() {
+        // 1000 项横向列表：只渲染视口内 ~9 项（600px / ~64px），而非全部
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let composed = Arc::new(AtomicUsize::new(0));
+        let composed2 = composed.clone();
+        let items: Arc<Vec<u64>> = Arc::new((0..1000).collect());
+        let items2 = items.clone();
+        let (px, w) = render_lazy_sized(
+            move |ctx| {
+                let c2 = composed2.clone();
+                LazyRow::new()
+                    .modifier(Modifier::new().fill_max_width().fill_max_height())
+                    .items_from(
+                        items2,
+                        |v: &u64| *v,
+                        move |ctx, _i, v| {
+                            c2.fetch_add(1, Ordering::Relaxed);
+                            crate::ui::text::Text::new(format!("Item {}", v))
+                                .font_size(14.0)
+                                .modifier(Modifier::new().padding(12.0))
+                                .build(ctx);
+                        },
+                    )
+                    .build(ctx);
+            },
+            600.0,
+            400.0,
+        );
+        let h = 400usize;
+        let clusters = count_text_columns(&px, w, h);
+        // 视口 600 / 项宽 ~64 = ~9 项可见（含预取与间隙）
+        assert!(clusters >= 5 && clusters <= 20, "只渲染可见项，clusters={clusters}");
+        let n = composed.load(Ordering::Relaxed);
+        // 组合期预取窗固定 2000px（与 LazyColumn 同机制）：2000/56 ≈ 36 + 预取 8
+        assert!(n <= 60, "组合项数应远小于总数 1000，实际 {n}");
+    }
+
+    #[test]
+    fn lazy_row_scroll_changes_visible_items() {
+        // 横向滚动 offset=2000 后，渲染的 Item 文本应变化（不同项）
+        let state = LazyListState::new();
+        let items: Arc<Vec<u64>> = Arc::new((0..1000).collect());
+        let build_row = |ctx: &mut ComposeCtx, s: LazyListState| {
+            LazyRow::new()
+                .state(s)
+                .modifier(Modifier::new().fill_max_width().fill_max_height())
+                .items_from(items.clone(), |v: &u64| *v, |ctx, _i, v| {
+                    crate::ui::text::Text::new(format!("Item {}", v))
+                        .font_size(14.0)
+                        .modifier(Modifier::new().padding(12.0))
+                        .build(ctx);
+                })
+                .build(ctx);
+        };
+        let (px0, w0) = render_lazy_sized(|ctx| build_row(ctx, state.clone()), 600.0, 400.0);
+        state.offset.set(2000.0);
+        let (px1, w1) = render_lazy_sized(|ctx| build_row(ctx, state.clone()), 600.0, 400.0);
+        assert_eq!(w0, w1);
+        // 帧间内容应不同（滚动后渲染不同项）：按列比较文本像素出现与否
+        let h = 400usize;
+        let mut diff_cols = 0;
+        for x in 0..w0 {
+            let mut has0 = false;
+            let mut has1 = false;
+            for y in (0..h).step_by(8) {
+                let p0 = px0[y * w0 + x];
+                let p1 = px1[y * w0 + x];
+                has0 |= p0[0] < 120 && p0[1] < 120 && p0[2] < 120;
+                has1 |= p1[0] < 120 && p1[1] < 120 && p1[2] < 120;
+            }
+            if has0 != has1 { diff_cols += 1; }
+        }
+        assert!(diff_cols > 10, "滚动后内容变化，diff_cols={diff_cols}");
+        // 派生锚点应为滚动后的精确值（约 2000/64 ≈ 31）
+        assert!(state.first_visible() >= 25, "first_visible={}", state.first_visible());
     }
 
     // ── 程序化跳转：锚点权威，落点精确 ──

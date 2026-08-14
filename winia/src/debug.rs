@@ -225,9 +225,14 @@ pub fn start_stdin_channel() {
                     queue_event(DebugEvent::PointerUp { x, y });
                 }
                 "k" if parts.len() >= 2 => queue_event(DebugEvent::Key { key: parts[1..].join(" ") }),
-                "s" if parts.len() == 2 => {
-                    let dy: f32 = parts[1].parse().unwrap_or(0.0);
-                    queue_event(DebugEvent::Scroll { dx: 0.0, dy });
+                "s" if parts.len() >= 2 => {
+                    // s dy（单参）或 s dx dy（双参——横向滚轮/测试）
+                    let (dx, dy) = if parts.len() >= 3 {
+                        (parts[1].parse().unwrap_or(0.0), parts[2].parse().unwrap_or(0.0))
+                    } else {
+                        (0.0, parts[1].parse().unwrap_or(0.0))
+                    };
+                    queue_event(DebugEvent::Scroll { dx, dy });
                 }
                 "r" => { request_screenshot(); wake(); }
                 "t" => {
@@ -310,9 +315,13 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
                 queue_event(DebugEvent::Key { key: parts[1..].join(" ") });
                 let _ = write.send(Message::Text("ok key".into())).await;
             }
-            "s" if parts.len() == 2 => {
-                let dy: f32 = parts[1].parse().unwrap_or(0.0);
-                queue_event(DebugEvent::Scroll { dx: 0.0, dy });
+            "s" if parts.len() >= 2 => {
+                let (dx, dy) = if parts.len() >= 3 {
+                    (parts[1].parse().unwrap_or(0.0), parts[2].parse().unwrap_or(0.0))
+                } else {
+                    (0.0, parts[1].parse().unwrap_or(0.0))
+                };
+                queue_event(DebugEvent::Scroll { dx, dy });
                 let _ = write.send(Message::Text("ok scroll".into())).await;
             }
             "r" => {

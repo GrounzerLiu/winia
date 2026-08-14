@@ -668,7 +668,7 @@ fn render_pass1(
                 scroll_offset_v = Some(state.offset.get());
             }
             ModifierElement::HorizontalScroll { state } => {
-                scroll_offset_h = Some(state.get());
+                scroll_offset_h = Some(state.offset.get());
             }
             // 文本输入框容器（M3 Filled/Outlined——背景/指示线/边框/label/支持文本）
             ModifierElement::TextFieldVisual { variant, shape, colors, enabled: _, focused: _, is_error: _, cursor_color: _, indicator_color, focus_progress, offset_mapping, supporting } => {

@@ -217,9 +217,15 @@ impl UiTest {
         std::thread::sleep(Duration::from_millis(80));
     }
 
-    /// 滚动
+    /// 滚动（dy；横向用 scroll_delta）
     pub fn scroll(&mut self, dy: f32) {
         self.send(&format!("s {}", dy as i32));
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    /// 滚动（双轴：dx dy）
+    pub fn scroll_delta(&mut self, dx: f32, dy: f32) {
+        self.send(&format!("s {} {}", dx as i32, dy as i32));
         std::thread::sleep(Duration::from_millis(100));
     }
 

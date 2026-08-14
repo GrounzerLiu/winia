@@ -542,7 +542,7 @@ pub(crate) enum ModifierElement {
     /// 节点自身高度是视口，内容总高由测量回写到此 State）
     LazyScroll { content_height: crate::core::state::State<f32> },
     /// 水平滚动
-    HorizontalScroll { state: crate::core::state::State<f32> },
+    HorizontalScroll { state: ScrollState },
     /// 图形层变换（scale/alpha/rotation/translation——只触发重绘，不触发布局）
     GraphicsLayer { params_fn: Arc<dyn Fn() -> GraphicsLayerParams + Send + Sync> },
 }
@@ -1380,9 +1380,10 @@ pub fn draw_icon(self, spec: crate::ui::icon::IconSpec) -> Self {
         self.push(ModifierElement::LazyScroll { content_height })
     }
 
+    /// 水平滚动（绑定 ScrollState——对齐 vertical_scroll）
     pub fn horizontal_scroll(self, state: ScrollState) -> Self {
         let _ = state.offset.get();
-        self.push(ModifierElement::HorizontalScroll { state: state.offset })
+        self.push(ModifierElement::HorizontalScroll { state })
     }
 }
 
@@ -1542,7 +1543,7 @@ impl Modifier {
     }
 
     /// 水平滚动状态（如果有 HorizontalScroll modifier）
-    pub fn horizontal_scroll_state(&self) -> Option<&crate::core::state::State<f32>> {
+    pub fn horizontal_scroll_state(&self) -> Option<&ScrollState> {
         for el in &self.elements {
             if let ModifierElement::HorizontalScroll { state } = el {
                 return Some(state);
@@ -1790,7 +1791,7 @@ impl Modifier {
         for el in &self.elements {
             match el {
                 ModifierElement::VerticalScroll { state } => { let _ = state.offset.get(); }
-                ModifierElement::HorizontalScroll { state } => { let _ = state.get(); }
+                ModifierElement::HorizontalScroll { state } => { let _ = state.offset.get(); }
                 _ => {}
             }
         }
@@ -2465,7 +2466,7 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (KbEvent { .. }, KbEvent { .. }) => true,
         (PointerEvent { .. }, PointerEvent { .. }) => true,
         (VerticalScroll { state: as_ }, VerticalScroll { state: bs }) => as_.offset.id() == bs.offset.id(),
-        (HorizontalScroll { state: as_ }, HorizontalScroll { state: bs }) => as_.id() == bs.id(),
+        (HorizontalScroll { state: as_ }, HorizontalScroll { state: bs }) => as_.offset.id() == bs.offset.id(),
         // 图形层动态参数视为相同（渲染期求值——动画不触发 Enter）
         (GraphicsLayer { .. }, GraphicsLayer { .. }) => true,
         _ => false,

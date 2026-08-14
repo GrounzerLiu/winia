@@ -547,13 +547,13 @@ impl ApplicationHandler for AppState {
 
         match event {
             WindowEvent::MouseWheel { delta, .. } => {
-                let dy = match delta {
-                    winit::event::MouseScrollDelta::LineDelta(_, y) => y * 20.0,
-                    winit::event::MouseScrollDelta::PixelDelta(p) => p.y as f32,
+                let (dx, dy) = match delta {
+                    winit::event::MouseScrollDelta::LineDelta(x, y) => (x * 20.0, y * 20.0),
+                    winit::event::MouseScrollDelta::PixelDelta(p) => (p.x as f32, p.y as f32),
                 };
-                if dy != 0.0 {
+                if dx != 0.0 || dy != 0.0 {
                     if let Some(root_idx) = pw.composer.layout_root_idx() {
-                        apply_scroll_delta(pw.composer.arena_nodes_mut(), root_idx, dy, crate::unit::Density::from_density(pw.scale_factor as f32));
+                        apply_scroll_delta(pw.composer.arena_nodes_mut(), root_idx, dx, dy, crate::unit::Density::from_density(pw.scale_factor as f32));
                     }
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 }
@@ -1170,9 +1170,9 @@ impl AppState {
                     pw.pointer_down_state = None;
                     handled = true;
                 }
-                debug::DebugEvent::Scroll { dy, .. } => {
+                debug::DebugEvent::Scroll { dx, dy } => {
                     if let Some(r) = pw.composer.layout_root_idx() {
-                        apply_scroll_delta(pw.composer.arena_nodes_mut(), r, dy, crate::unit::Density::from_density(pw.scale_factor as f32));
+                        apply_scroll_delta(pw.composer.arena_nodes_mut(), r, dx, dy, crate::unit::Density::from_density(pw.scale_factor as f32));
                         handled = true;
                     }
                 }
@@ -1288,24 +1288,26 @@ pub(crate) fn take_pending_windows() -> Vec<PendingWindow> {
     std::mem::take(&mut *GLOBAL_PENDING.lock().unwrap())
 }
 
-/// 拖拽滚动会话：slot key（跨重组稳定）+ 最近位置 + 速度样本（松手 fling 用）
+/// 拖拽滚动会话：slot key（跨重组稳定）+ 最近位置 + 速度样本（松手 fling 用）。
+/// 双轴跟踪（LazyRow 横向拖拽/惯性用 x 轴）——样本 (t, x, y)。
 struct DragScroll {
     slot: u64,
+    last_x: f32,
     last_y: f32,
-    samples: Vec<(std::time::Instant, f32)>,
+    samples: Vec<(std::time::Instant, f32, f32)>,
 }
 
 impl DragScroll {
-    /// 手指速度（px/s，y 向下为正）：最近 ~200ms 窗口的最小二乘斜率。
+    /// 手指速度（px/s）：最近 ~200ms 窗口的最小二乘斜率。
     /// ⚠ x 轴用"距离现在的时长"（越大越早）——回归斜率符号与真实时间相反，
     /// 取负修正（实测：向上拖 100px 得 +650 而非 -650，fling 方向反了）。
-    fn velocity(&self) -> f32 {
+    fn regression(&self, sel: fn(&(std::time::Instant, f32, f32)) -> f32) -> f32 {
         let now = std::time::Instant::now();
         let cutoff = now - std::time::Duration::from_millis(200);
         let pts: Vec<(f32, f32)> = self.samples
             .iter()
-            .filter(|(t, _)| *t >= cutoff)
-            .map(|(t, y)| (now.duration_since(*t).as_secs_f32(), *y))
+            .filter(|(t, _, _)| *t >= cutoff)
+            .map(|s| (now.duration_since(s.0).as_secs_f32(), sel(s)))
             .collect();
         if pts.len() < 2 { return 0.0; }
         let n = pts.len() as f32;
@@ -1317,12 +1319,18 @@ impl DragScroll {
         if denom.abs() < 1e-6 { return 0.0; }
         -(n * sxy - sx * sy) / denom
     }
+    fn velocity_x(&self) -> f32 { self.regression(|s| s.1) }
+    fn velocity_y(&self) -> f32 { self.regression(|s| s.2) }
 }
 
-fn apply_scroll_delta(nodes: &mut [LayoutNode], idx: usize, dy: f32, density: crate::unit::Density) -> bool {
+fn apply_scroll_delta(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f32, density: crate::unit::Density) -> bool {
+    // 双轴处理：垂直容器吃 dy、水平容器吃 dx（非零才消费——零 delta 不阻塞
+    // 遍历，否则 DFS 先遇到的垂直容器会吞掉横向滚轮（dx 永远到不了兄弟横向节点）
+    let mut handled = false;
     {
         let node = &nodes[idx];
-        if let Some(state) = node.modifier.vertical_scroll_state() {
+        if dy != 0.0 {
+            if let Some(state) = node.modifier.vertical_scroll_state() {
             // 手动输入接管：取消进行中的 fling + 结束滚动中标记（拖拽路径随后置回）
             crate::animation::cancel_animation(&state.offset);
             state.is_scroll_in_progress.set(false);
@@ -1354,13 +1362,46 @@ fn apply_scroll_delta(nodes: &mut [LayoutNode], idx: usize, dy: f32, density: cr
             let max_offset = (content_h - visible_h).max(0.0);
             let new = (current - dy).clamp(0.0, max_offset);
             state.offset.set(new);
-            return true;
+            handled = true;
+            }
+        }
+        // 水平滚动（LazyRow/横向 scroll 容器）——与垂直对称：dx 正 = 内容左移
+        if dx != 0.0 {
+        if let Some(state) = node.modifier.horizontal_scroll_state() {
+            crate::animation::cancel_animation(&state.offset);
+            state.is_scroll_in_progress.set(false);
+            let current = state.offset.get();
+            let visible_w = if node.scroll_viewport_width > 0.0 {
+                node.scroll_viewport_width
+            } else {
+                node.modifier.fixed_size()
+                    .and_then(|(w, _)| {
+                        use crate::modifier::Dimension;
+                        match w {
+                            Dimension::Fixed(w) | Dimension::Dp(crate::unit::Dp(w)) => Some(w),
+                            Dimension::Px(p) => Some(p.to_logical(density)),
+                            _ => None,
+                        }
+                    })
+                    .unwrap_or(0.0)
+            };
+            let content_w = if node.scroll_content_width > 0.0 {
+                node.scroll_content_width
+            } else {
+                node.measured_size.width
+            };
+            let max_offset = (content_w - visible_w).max(0.0);
+            let new = (current - dx).clamp(0.0, max_offset);
+            state.offset.set(new);
+            handled = true;
+        }
         }
     }
+    if handled { return true; }
     // 子节点（clone 索引后递归，避免与 nodes 的可变借用冲突）
     let children: Vec<usize> = nodes[idx].children.clone();
     for c in children {
-        if apply_scroll_delta(nodes, c, dy, density) { return true; }
+        if apply_scroll_delta(nodes, c, dx, dy, density) { return true; }
     }
     false
 }
@@ -1473,7 +1514,7 @@ fn gesture_move(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
 /// 内容继续向上 = offset 增大）。速度不足 → 仅结束滚动中标记。
 fn drag_scroll_up(pw: &mut PerWindow) {
     let Some(ds) = pw.drag_scroll.take() else { eprintln!("[DBG-DS] up but no drag_scroll"); return };
-    let v = ds.velocity();
+    let (vx, vy) = (ds.velocity_x(), ds.velocity_y());
     let target: Option<usize> = (|| {
         let nodes = pw.composer.arena_nodes();
         let Some(r) = pw.composer.layout_root_idx() else { return None };
@@ -1482,11 +1523,18 @@ fn drag_scroll_up(pw: &mut PerWindow) {
     })();
     let Some(idx) = target else { return };
     let nodes = pw.composer.arena_nodes();
-    let Some(ss) = nodes[idx].modifier.vertical_scroll_state() else { return };
-    if v.abs() >= 50.0 {
-        ss.fling(-v);
-    } else {
-        ss.is_scroll_in_progress.set(false);
+    if let Some(ss) = nodes[idx].modifier.vertical_scroll_state() {
+        if vy.abs() >= 50.0 {
+            ss.fling(-vy);
+        } else {
+            ss.is_scroll_in_progress.set(false);
+        }
+    } else if let Some(ss) = nodes[idx].modifier.horizontal_scroll_state() {
+        if vx.abs() >= 50.0 {
+            ss.fling(-vx);
+        } else {
+            ss.is_scroll_in_progress.set(false);
+        }
     }
 }
 
@@ -2167,11 +2215,15 @@ fn handle_pointer_down(
             None
         } else {
             path.iter().rev()
-                .find(|&&i| nodes[i].modifier.vertical_scroll_state().is_some())
+                .find(|&&i| {
+                    nodes[i].modifier.vertical_scroll_state().is_some()
+                        || nodes[i].modifier.horizontal_scroll_state().is_some()
+                })
                 .map(|&i| DragScroll {
                     slot: nodes[i].slot_key,
+                    last_x: scene_pos.0,
                     last_y: scene_pos.1,
-                    samples: vec![(std::time::Instant::now(), scene_pos.1)],
+                    samples: vec![(std::time::Instant::now(), scene_pos.0, scene_pos.1)],
                 })
         }
     })();
@@ -2219,22 +2271,36 @@ fn handle_pointer_move(
             let id = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot)?;
             crate::layout::node::find_node_by_id(nodes, r, id)
         })();
-        let dy = {
+        let (dx, dy) = {
             let ds = pw.drag_scroll.as_mut().unwrap();
+            let dx = scene_pos.0 - ds.last_x;
             let dy = scene_pos.1 - ds.last_y;
+            ds.last_x = scene_pos.0;
             ds.last_y = scene_pos.1;
             let now = std::time::Instant::now();
-            ds.samples.push((now, scene_pos.1));
+            ds.samples.push((now, scene_pos.0, scene_pos.1));
             let cutoff = now - std::time::Duration::from_millis(200);
-            ds.samples.retain(|(t, _)| *t >= cutoff);
-            dy
+            ds.samples.retain(|(t, _, _)| *t >= cutoff);
+            (dx, dy)
         };
         if let Some(idx) = target {
-            if dy != 0.0 {
+            // 轴感知：垂直容器吃 dy，水平容器吃 dx（apply_scroll_delta 按节点轴取）
+            let (ax, ay) = {
+                let nodes = pw.composer.arena_nodes();
+                if nodes[idx].modifier.vertical_scroll_state().is_some() {
+                    (0.0, dy)
+                } else if nodes[idx].modifier.horizontal_scroll_state().is_some() {
+                    (dx, 0.0)
+                } else {
+                    (0.0, 0.0)
+                }
+            };
+            if ax != 0.0 || ay != 0.0 {
                 apply_scroll_delta(
                     pw.composer.arena_nodes_mut(),
                     idx,
-                    dy,
+                    ax,
+                    ay,
                     crate::unit::Density::from_density(pw.scale_factor as f32),
                 );
                 handled = true;
@@ -2242,6 +2308,8 @@ fn handle_pointer_move(
             // 拖拽中标记（apply_scroll_delta 内部取消 fling 时置 false——这里覆盖）
             let nodes = pw.composer.arena_nodes();
             if let Some(ss) = nodes[idx].modifier.vertical_scroll_state() {
+                ss.is_scroll_in_progress.set(true);
+            } else if let Some(ss) = nodes[idx].modifier.horizontal_scroll_state() {
                 ss.is_scroll_in_progress.set(true);
             }
         }
@@ -2505,6 +2573,7 @@ mod frame_throttle_tests {
         let ok = super::apply_scroll_delta(
             composer.arena_nodes_mut(),
             root,
+            0.0,
             -200.0, // 负 dy = 向下滚动（内容上移——与 winit 滚轮语义一致）
             crate::unit::Density::from_density(1.0),
         );
