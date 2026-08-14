@@ -50,7 +50,7 @@ impl<T: 'static> State<T> {
             owner_queue: owner_queue.clone(),
         });
         // 注册到全局映射表，供 notify_state_changed 定向推送
-        #[cfg(test)] { if inner.id == 1 { eprintln!("[new-probe] id=1 owner={} bt={:?}", owner_queue.is_some(), std::backtrace::Backtrace::force_capture().to_string().lines().take(30).collect::<Vec<_>>()); } }
+
         if let Some(ref w) = owner_queue {
             STATE_QUEUE_MAP.lock().insert(inner.id, w.clone());
         }

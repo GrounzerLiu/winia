@@ -35,9 +35,10 @@ LazyColumn::new()
 state.first_visible();   // 第一个可见项索引
 state.offset();          // 像素偏移
 
-// 程序化滚动到指定索引（项顶部对齐视口；越界 clamp 到末尾）
-// 第二参数：高度缓存（组件持有）——组件外调用传空缓存会用预估高度
-state.scroll_to_item(50, &ItemHeightCache::default(), 8.0);
+// 程序化滚动到指定索引（项顶部对齐视口；可带偏移——对齐 Compose scrollToItem）
+// 锚点权威：不需要高度缓存/间距；测量期消费请求，从缓存推导像素 offset，
+// 与放置共用同一 prefix 函数 → round-trip 精确（不会漂移）；越界 clamp 到末尾
+state.scroll_to_item(50, 0.0);
 ```
 
 ## 2. 核心机制（对齐 Compose lazy 架构）
@@ -80,6 +81,12 @@ state.scroll_to_item(50, &ItemHeightCache::default(), 8.0);
 - **视口高**：有限约束直接回写；无穷（Column 内容驱动）回退缓存，避免振荡；
 - **内容总高**：`LazyScroll` modifier 标记 + 测量回写 →
   `apply_scroll_delta` 用它计算 max_offset（框架新增 `scroll_content_height`）。
+- **程序化跳转（锚点权威）**：`scroll_to_item(index, offset)` 只存跳转请求
+  （对齐 Compose `requestPositionAndForgetLastKnownKey`——scroll position 就是
+  锚点，测量从锚点开始组合）。build 按请求定组合锚点；测量期用**写回后的
+  高度缓存**推导像素 offset，与放置/锚点解析共用同一 `prefix_height` →
+  round-trip 精确：跳 500 就是 500（旧实现：空缓存预估 48px/项 vs 实测
+  ~47.5px，500 项偏差累积 → 落到 505，实测 bug）。越界 clamp 在测量期。
 
 ## 3. 框架扩展（本组件新增）
 

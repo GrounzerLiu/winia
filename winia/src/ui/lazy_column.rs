@@ -41,6 +41,11 @@ pub struct LazyListState {
     /// （实测：第二次 render 把 offset=2000 拉回 0）。放这里与 LazyListState
     /// 同生命周期，只有数据真的变化（total 变）才校正。
     pub(crate) known_total: crate::core::state::State<usize>,
+    /// 程序化跳转请求 (index, offset-in-item)——锚点权威（对齐 Compose
+    /// `requestPositionAndForgetLastKnownKey`：scroll position 就是锚点，
+    /// 测量从锚点开始组合；像素 offset 由测量期从缓存推导，不做反推）。
+    /// 首次测量消费后清空。
+    pub(crate) jump_request: crate::core::state::State<Option<(usize, f32)>>,
     /// 派生：第一个可见项索引（每次 build 后更新）
     pub first_visible_index: crate::core::state::State<usize>,
     /// 派生：第一个可见项的偏移（正 = 该项向上滚出多少）
@@ -53,6 +58,7 @@ impl LazyListState {
             offset: crate::core::state::State::new(0.0),
             last_known_first_key: crate::core::state::State::new(None),
             known_total: crate::core::state::State::new(usize::MAX),
+            jump_request: crate::core::state::State::new(None),
             first_visible_index: crate::core::state::State::new(0),
             first_visible_offset: crate::core::state::State::new(0.0),
         }
@@ -64,14 +70,15 @@ impl LazyListState {
     /// 当前第一个可见项偏移
     pub fn offset(&self) -> f32 { self.offset.get() }
 
-    /// 立即滚动到指定索引（项顶部对齐视口顶部）。
+    /// 立即滚动到指定索引（项顶部对齐视口顶部，可带偏移）。
     ///
-    /// 高度缓存（由 LazyColumn 持有）可传实测高度；组件外调用传空缓存会用
-    /// 预估高度，measure 期实测回填。**越界 clamp 在 measure 期**（本方法
-    /// 不知道 total——对齐 Compose scrollToItem + 测量期 clamp 语义）。
-    pub fn scroll_to_item(&self, index: usize, heights: &ItemHeightCache, spacing: f32) {
-        let new_offset = prefix_height(heights, index, spacing);
-        self.offset.set(new_offset);
+    /// 签名对齐 Compose `scrollToItem(index, scrollOffset = 0)`：不需要高度
+    /// 缓存/间距——跳转请求由测量期消费：先按锚点组合窗口，再用写回后的高度
+    /// 缓存推导像素 offset（与放置/锚点解析共用同一 prefix 函数，round-trip
+    /// 精确——不会出现预估 48 vs 实测 47.5 的累积偏差导致落点漂移）。
+    /// 越界 clamp 在 measure 期（本方法不知道 total）。
+    pub fn scroll_to_item(&self, index: usize, scroll_offset: f32) {
+        self.jump_request.set(Some((index, scroll_offset)));
     }
 }
 
@@ -291,8 +298,8 @@ impl LazyColumn {
 
 /// 每项高度缓存（全局 index → 测量高度）；未测项用预估
 ///
-/// 公开：`LazyListState::scroll_to_item` 需要它；组件外调用传空缓存即可
-/// （会用预估高度，滚动后实测高度自动回填）。
+/// 公开：可用于外部读取实测高度（如自定义滚动逻辑）；`scroll_to_item`
+/// 不需要它（锚点权威，测量期自动用缓存推导像素）。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ItemHeightCache {
     pub heights: Vec<f32>,
@@ -414,7 +421,12 @@ impl LazyColumn {
 
         let offset = state.offset.get();
         let cache_ref = cache.get();
-        let (first_index, first_item_offset) = anchor_from_offset(&cache_ref, offset, self.spacing);
+        // 锚点：跳转请求权威（对齐 Compose——requestPosition 后直接从请求的
+        // index 开始组合，不经过像素反推）；否则由像素 offset 反推
+        let (first_index, first_item_offset) = match state.jump_request.get() {
+            Some((idx, off)) => (idx.min(total), off),
+            None => anchor_from_offset(&cache_ref, offset, self.spacing),
+        };
         // 记录锚点项 key（供下次数据变化校正）——派生锚点由测量期 policy 写回精确值
         if let Some(k) = intervals.key_of(first_index) {
             state.last_known_first_key.set(Some(k));
@@ -549,6 +561,18 @@ impl crate::layout::node::MeasurePolicy for LazyListPolicy {
             content_h += cache.height(g) + self.spacing;
         }
         self.content_height.set_silent(content_h);
+
+        // 程序化跳转：消费 jump_request，像素 offset 用**写回后的缓存**推导
+        // （实测项真实高度 + 未测项预估）——与下方锚点解析/放置共用同一
+        // prefix_height，round-trip 精确：跳 500 就是 500，不会因预估 vs 实测
+        // 高度差累积漂移（实测：旧实现 500×48 vs 实测 47.5 → 落到 505）
+        if let Some((req_idx, req_off)) = self.state.jump_request.get() {
+            let idx = req_idx.min(self.total.saturating_sub(1));
+            self.state
+                .offset
+                .set(prefix_height(&cache, idx, self.spacing) + req_off);
+            self.state.jump_request.set(None);
+        }
 
         // 越界 clamp：scroll_to_item 无 total 信息，程序化滚动超出内容边界时
         // 在这里收回到末尾（对齐 Compose：scroll position 在 measure 期 clamp）
@@ -837,5 +861,93 @@ mod tests {
         assert!(diff_rows > 10, "滚动后内容变化，diff_rows={diff_rows}");
         // 派生锚点应为滚动后的精确值（约 2000/38 ≈ 52）
         assert!(state.first_visible() >= 40, "first_visible={}", state.first_visible());
+    }
+
+    // ── 程序化跳转：锚点权威，落点精确 ──
+    fn render_lazy_state(
+        state: &LazyListState,
+        items: &Arc<Vec<u64>>,
+    ) -> (Vec<[u8; 4]>, usize) {
+        let s = state.clone();
+        let items = items.clone();
+        render_lazy(move |ctx| {
+            LazyColumn::new()
+                .state(s)
+                .modifier(Modifier::new().fill_max_width().fill_max_height())
+                .items_from(items, |v: &u64| *v, |ctx, _i, v| {
+                    crate::ui::text::Text::new(format!("Item {}", v))
+                        .font_size(14.0)
+                        .modifier(Modifier::new().padding(12.0))
+                        .build(ctx);
+                })
+                .build(ctx);
+        })
+    }
+
+    #[test]
+    fn scroll_to_item_lands_exactly_on_index() {
+        // 回归：跳 500 必须落 500——旧实现用空缓存预估 48px/项算像素 offset，
+        // 实测高度 ~47.5 累积偏差 → 落到 505（用户实测）。新实现锚点权威：
+        // 测量期从写回后的缓存推导像素，round-trip 精确。
+        let state = LazyListState::new();
+        let items: Arc<Vec<u64>> = Arc::new((0..1000).collect());
+        let (px0, w0) = render_lazy_state(&state, &items);
+        state.scroll_to_item(500, 0.0);
+        let (px1, w1) = render_lazy_state(&state, &items);
+        assert_eq!(w0, w1);
+        assert_eq!(
+            state.first_visible(),
+            500,
+            "跳转 500 必须精确落 500（旧实现 505）"
+        );
+        // 像素 offset 是预估混合前缀（未测中段按 48 预估）——但这不影响落点：
+        // 放置与 translate 共用同一 prefix 函数，item 500 视觉上精确在顶部；
+        // 随滚动测量推进，offset 逐步收敛到真实和。只断言合理范围。
+        assert!(
+            state.offset() > 20000.0 && state.offset() < 26000.0,
+            "offset 应在 500 项前缀附近，实际 {}",
+            state.offset()
+        );
+        // 内容确实变化（不同项）
+        let h = 600usize;
+        let mut diff_rows = 0;
+        for y in 0..h {
+            let mut has0 = false;
+            let mut has1 = false;
+            for x in (0..w0).step_by(8) {
+                let p0 = px0[y * w0 + x];
+                let p1 = px1[y * w0 + x];
+                has0 |= p0[0] < 120 && p0[1] < 120 && p0[2] < 120;
+                has1 |= p1[0] < 120 && p1[1] < 120 && p1[2] < 120;
+            }
+            if has0 != has1 { diff_rows += 1; }
+        }
+        assert!(diff_rows > 10, "跳转后内容变化，diff_rows={diff_rows}");
+    }
+
+    #[test]
+    fn scroll_to_item_clamps_to_end() {
+        // 越界跳转 clamp 到末尾（对齐 Compose：scroll position 在 measure 期 clamp）
+        let state = LazyListState::new();
+        let items: Arc<Vec<u64>> = Arc::new((0..1000).collect());
+        let (_px, _w) = render_lazy_state(&state, &items);
+        state.scroll_to_item(99999, 0.0);
+        let (_px1, _w1) = render_lazy_state(&state, &items);
+        // 滚动到底部时首项 = total - 视口容纳项数 ≈ 1000 - 600/48 ≈ 987
+        // （真实高度下同样 ≈987——600px 视口 + ~47.5px 项）
+        assert!(
+            state.first_visible() >= 980,
+            "越界跳转应 clamp 到末尾，实际 {}",
+            state.first_visible()
+        );
+        assert!(
+            state.offset() > 45000.0,
+            "offset 应接近内容底部，实际 {}",
+            state.offset()
+        );
+        // 顶部跳转
+        state.scroll_to_item(0, 0.0);
+        let (_px2, _w2) = render_lazy_state(&state, &items);
+        assert_eq!(state.first_visible(), 0, "跳回顶部");
     }
 }
