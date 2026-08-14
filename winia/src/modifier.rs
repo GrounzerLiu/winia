@@ -535,7 +535,9 @@ pub(crate) enum ModifierElement {
         on_pre_ptr: Option<Arc<dyn Fn(&PointerEvent) -> bool + Send + Sync>>,
     },
     /// 垂直滚动（绑定偏移 State）
-    VerticalScroll { state: crate::core::state::State<f32> },
+    /// 完整 ScrollState（offset + is_scroll_in_progress + fling_limit）——
+    /// 输入路径（app.rs 拖拽/wheel）经节点取整状态做 fling/极限
+    VerticalScroll { state: ScrollState },
     /// Lazy 列表内容高度标记（LazyColumn 用——apply_scroll_delta 计算 max_offset；
     /// 节点自身高度是视口，内容总高由测量回写到此 State）
     LazyScroll { content_height: crate::core::state::State<f32> },
@@ -1369,7 +1371,7 @@ pub fn draw_icon(self, spec: crate::ui::icon::IconSpec) -> Self {
     pub fn vertical_scroll(self, state: ScrollState) -> Self {
         // 读取 offset 以注册 State→Slot 依赖，确保滚动时触发增量重组
         let _ = state.offset.get();
-        self.push(ModifierElement::VerticalScroll { state: state.offset })
+        self.push(ModifierElement::VerticalScroll { state })
     }
 
     /// 水平滚动
@@ -1520,7 +1522,7 @@ impl Modifier {
     }
 
     /// 垂直滚动状态（如果有 VerticalScroll modifier）
-    pub fn vertical_scroll_state(&self) -> Option<&crate::core::state::State<f32>> {
+    pub fn vertical_scroll_state(&self) -> Option<&ScrollState> {
         for el in &self.elements {
             if let ModifierElement::VerticalScroll { state } = el {
                 return Some(state);
@@ -1787,7 +1789,7 @@ impl Modifier {
     pub(crate) fn register_state_deps(&self) {
         for el in &self.elements {
             match el {
-                ModifierElement::VerticalScroll { state } => { let _ = state.get(); }
+                ModifierElement::VerticalScroll { state } => { let _ = state.offset.get(); }
                 ModifierElement::HorizontalScroll { state } => { let _ = state.get(); }
                 _ => {}
             }
@@ -2053,6 +2055,8 @@ pub struct ScrollState {
     pub offset: crate::core::state::State<f32>,
     /// 是否正在滚动
     pub is_scroll_in_progress: crate::core::state::State<bool>,
+    /// fling 滚动极限（布局期回写 = 内容高 - 视口高；0 = 未知 → fling 只拦下限）
+    pub(crate) fling_limit: crate::core::state::State<f32>,
 }
 
 impl ScrollState {
@@ -2060,12 +2064,46 @@ impl ScrollState {
         ScrollState {
             offset: crate::core::state::State::new(0.0),
             is_scroll_in_progress: crate::core::state::State::new(false),
+            fling_limit: crate::core::state::State::new(0.0),
         }
     }
 
     /// 立即滚动到指定位置
     pub fn scroll_to(&self, value: f32, max_offset: f32) {
         self.offset.set(value.clamp(0.0, max_offset));
+    }
+
+    /// 惯性滚动（对标 Compose flingBehavior）：以 `velocity`(px/s) 启动指数衰减
+    /// 滚动，撞到滚动极限立即停止（极限由布局期回写——LazyColumn 精确值、
+    /// 普通容器由 measure_node 计算）。手动滚动（wheel/拖拽）自动取消进行中
+    /// 的 fling（apply_scroll_delta 内 cancel）。滚动期间 `is_scroll_in_progress`
+    /// 为 true，动画结束回 false。
+    pub fn fling(&self, velocity: f32) {
+        if !velocity.is_finite() || velocity.abs() < 1.0 {
+            return;
+        }
+        self.is_scroll_in_progress.set(true);
+        let off = self.offset.clone();
+        let limit = self.fling_limit.clone();
+        let done_flag = self.is_scroll_in_progress.clone();
+        crate::animation::push_fling(
+            off,
+            velocity,
+            crate::animation::exponential_decay(4.2),
+            move |o| {
+                let max = limit.get();
+                let max = if max > 0.0 { max } else { f32::MAX };
+                o.clamp(0.0, max)
+            },
+            move || {
+                done_flag.set(false);
+            },
+        );
+    }
+
+    /// 取消进行中的惯性滚动（手动输入/程序化跳转前调用）
+    pub fn cancel_fling(&self) {
+        crate::animation::cancel_animation(&self.offset);
     }
 }
 
@@ -2426,7 +2464,7 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (FocusRequesterId { id: ai }, FocusRequesterId { id: bi }) => ai == bi,
         (KbEvent { .. }, KbEvent { .. }) => true,
         (PointerEvent { .. }, PointerEvent { .. }) => true,
-        (VerticalScroll { state: as_ }, VerticalScroll { state: bs }) => as_.id() == bs.id(),
+        (VerticalScroll { state: as_ }, VerticalScroll { state: bs }) => as_.offset.id() == bs.offset.id(),
         (HorizontalScroll { state: as_ }, HorizontalScroll { state: bs }) => as_.id() == bs.id(),
         // 图形层动态参数视为相同（渲染期求值——动画不触发 Enter）
         (GraphicsLayer { .. }, GraphicsLayer { .. }) => true,

@@ -119,6 +119,45 @@ fn scroll_container_keeps_content() {
     app.expect_text("Line 29");
 }
 
+/// Given 30 行内容在 150px 滚动容器内 + `offset:` 实时文本
+/// When  按下滚动区向上拖 100px（内容跟随手指）后松手
+/// Then  offset 先随拖拽增大；松手后惯性 fling 继续推进（速度 ~100px/160ms
+///        → 衰减极限 ≈ 拖拽 100 + 625/4.2 ≈ 249px < 滚动极限 570）
+#[test]
+fn drag_scroll_follows_pointer_and_flings() {
+    let mut app = UiTest::launch("scroll");
+    app.expect_text("offset: 0");
+    // 滚动区约在 y 64..214（Column padding 16 + 标题 ~28 + offset 文本 ~20）
+    app.drag(100.0, 190.0, 100.0, 90.0);
+    let o1 = read_offset(&mut app);
+    assert!(o1 > 30.0, "拖拽后 offset 应 > 0（内容跟随手指），实际 {o1}");
+    // 松手后惯性 fling 继续推进（300ms 后读两次）
+    std::thread::sleep(Duration::from_millis(300));
+    let o2 = read_offset(&mut app);
+    std::thread::sleep(Duration::from_millis(300));
+    let o3 = read_offset(&mut app);
+    assert!(o3 > o1, "fling 应继续推进 offset（{o1} -> {o3}）");
+    assert!(o3 >= o2, "fling 应单调推进（{o2} -> {o3}）");
+    assert!(o3 < 570.0, "fling 不应越过滚动极限 570，实际 {o3}");
+}
+
+/// 读取 `offset: X` 文本（树文本带 `text(...)` 描述前缀——子串定位）
+fn read_offset(app: &mut UiTest) -> f32 {
+    app.refresh();
+    app.all_texts()
+        .iter()
+        .find_map(|s| {
+            s.find("offset: ").and_then(|i| {
+                s[i + "offset: ".len()..]
+                    .trim_end_matches(')')
+                    .trim()
+                    .parse::<f32>()
+                    .ok()
+            })
+        })
+        .unwrap_or(-1.0)
+}
+
 // ═══════════════════════════════════════════════════════════════
 // fixture_nest：多级 if/else 结构切换（3 态循环）
 // ═══════════════════════════════════════════════════════════════

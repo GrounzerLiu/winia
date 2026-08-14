@@ -279,6 +279,30 @@ pub fn push_decay(state: State<f32>, initial_velocity: f32, spec: DecaySpec) {
     crate::core::state::wake_loop();
 }
 
+/// fling 惯性滚动：指数衰减 + 边界 clamp（撞边界立即停——对齐 Compose fling
+/// 在 scrollBy 消耗完时停止）。clamp 每帧求值（读最新滚动极限——布局期回写）。
+/// 同 state 已有动画 → 取代（新 fling 接管）。
+pub fn push_fling(
+    state: State<f32>,
+    initial_velocity: f32,
+    spec: DecaySpec,
+    clamp: impl Fn(f32) -> f32 + Send + Sync + 'static,
+    on_finish: impl FnOnce() + Send + 'static,
+) {
+    let sid = state.id();
+    {
+        let mut list = ACTIVE_ANIMATIONS.lock().unwrap();
+        list.retain(|anim| anim.state_id() != sid);
+    }
+    let mut anim = Animatable::new(state);
+    anim.set_clamp(clamp);
+    anim.on_finish(on_finish);
+    anim.animate_decay(initial_velocity, spec);
+    anim.update();
+    ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
+    crate::core::state::wake_loop();
+}
+
 /// `animateIntAsState`（对标 Compose）——target 变化时自动从当前值动画到新值，
 /// 返回的 State 直接用于渲染（组合期 `get()` 或绘制期 `peek()`）。
 ///
@@ -452,6 +476,9 @@ pub(crate) struct Animatable<T: Clone + 'static> {
     anim_state: Option<AnimationState<T>>,
     /// 动画完成回调（done 帧触发一次，take 后释放）
     on_finish: Option<Box<dyn FnOnce() + Send>>,
+    /// fling 边界 clamp（Decay 专用）：每帧求值（读最新滚动极限）；
+    /// 值被 clamp 改变 → 立即完成（对齐 Compose：fling 消耗完即停）
+    clamp: Option<Box<dyn Fn(f32) -> f32 + Send + Sync>>,
 }
 
 struct AnimationState<T> {
@@ -469,7 +496,12 @@ struct AnimationState<T> {
 
 impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
     pub fn new(state: State<T>) -> Self {
-        Self { state, anim_state: None, on_finish: None }
+        Self { state, anim_state: None, on_finish: None, clamp: None }
+    }
+
+    /// fling 边界 clamp（仅 Decay 生效）：值被 clamp 改变 → 写边界值并立即完成
+    pub fn set_clamp(&mut self, f: impl Fn(f32) -> f32 + Send + Sync + 'static) {
+        self.clamp = Some(Box::new(f));
     }
 
     /// 注册动画完成回调（对标 Compose animate*AsState 的 finishedListener——
@@ -680,14 +712,24 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
                 let decay = (-friction * t).exp();
                 let vel_now = v0 * decay;
                 state.last_velocity = vel_now; // 供打断（P2-9 速度延续）使用
-                if vel_now.abs() < spec.threshold {
-                    // 速度低于阈值：写极限值 from + v0/friction（精确停靠）
-                    let limit = state.from.to_f32() + v0 / friction;
-                    (AnimatableValue::from_f32(limit), true)
+                // 解析式极限（速度低于阈值时精确停靠）
+                let raw = if vel_now.abs() < spec.threshold {
+                    state.from.to_f32() + v0 / friction
                 } else {
-                    let disp = v0 / friction * (1.0 - decay);
-                    let val = AnimatableValue::from_f32(state.from.to_f32() + disp);
-                    (val, false)
+                    state.from.to_f32() + v0 / friction * (1.0 - decay)
+                };
+                let done = vel_now.abs() < spec.threshold;
+                match &self.clamp {
+                    // fling：每帧 clamp 到滚动边界——撞边界写边界值并立即完成
+                    Some(clamp) => {
+                        let c = clamp(raw);
+                        if c != raw {
+                            (AnimatableValue::from_f32(c), true)
+                        } else {
+                            (AnimatableValue::from_f32(c), done)
+                        }
+                    }
+                    None => (AnimatableValue::from_f32(raw), done),
                 }
             }
         };
@@ -1648,6 +1690,41 @@ pub(crate) mod tests {
         anim.animate_to(50.0, AnimationSpec::Spring(SpringSpec::default()));
         let final_vel = anim.anim_state.as_ref().unwrap().last_velocity;
         assert_eq!(final_vel, 0.0, "Tween 打断后的 Spring 必须从静止重启（修复前继承过期速度 {spring_vel}）");
+    }
+
+    /// fling：指数衰减 + 边界 clamp——撞边界写边界值并立即完成（对齐 Compose
+    /// fling 消耗完即停）。v0=10000 极限 2380 → 被 clamp 在 100
+    #[test]
+    fn fling_clamps_at_boundary_and_stops() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let st = State::new(0.0f32);
+        let mut anim = Animatable::new(st.clone());
+        anim.set_clamp(|o| o.min(100.0));
+        anim.animate_decay(10000.0, DecaySpec::new(4.2, 0.1));
+        let mut frames = 0;
+        while anim.update() && frames < 300 {
+            std::thread::sleep(Duration::from_millis(20));
+            frames += 1;
+        }
+        assert!(frames < 300, "fling 撞边界应收敛（{frames} 帧）");
+        assert_eq!(st.peek(), 100.0, "clamp 到边界值并停止");
+    }
+
+    /// fling 反向（负速度）：clamp 下限 0——拖拽向下甩回顶部
+    #[test]
+    fn fling_clamps_below_zero() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let st = State::new(50.0f32);
+        let mut anim = Animatable::new(st.clone());
+        anim.set_clamp(|o| o.max(0.0));
+        anim.animate_decay(-500.0, DecaySpec::new(4.2, 0.1));
+        let mut frames = 0;
+        while anim.update() && frames < 300 {
+            std::thread::sleep(Duration::from_millis(20));
+            frames += 1;
+        }
+        assert!(frames < 300, "反向 fling 应收敛（{frames} 帧）");
+        assert_eq!(st.peek(), 0.0, "下限 clamp 到 0");
     }
 
     /// review fix：DecaySpec friction<=0 快速失败（配置错误立即暴露）

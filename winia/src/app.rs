@@ -90,6 +90,8 @@ pub(crate) struct PerWindow {
     gesture_tap_ctx: Option<(u64, std::time::Instant, (f32, f32))>,
     /// 手势节点的 slot_key（跨重组稳定——node_id 会变，find_node_by_id 会失败）
     gesture_slot: Option<u64>,
+    /// 拖拽滚动会话（按下在滚动容器上：内容跟随指针，松手按速度 fling）
+    drag_scroll: Option<DragScroll>,
     /// 顶层弹出层（独立组合单元——渲染在主树之上）
     overlays: Vec<OverlayWindow>,
     /// overlay 点击目标（down 命中 overlay 记录——up 执行 click；v1 仅 clickable）
@@ -141,7 +143,7 @@ struct PtrDownState {
 
 impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::ui::theme::ThemeColors) -> Self {
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, overlays: Vec::new(), overlay_click: None, pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, drag_scroll: None, overlays: Vec::new(), overlay_click: None, pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -624,6 +626,8 @@ impl ApplicationHandler for AppState {
                     if gesture_up(pw, scene_pos) {
                         if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                     }
+                    // 拖拽滚动结束：速度足够 → fling（惯性滚动）
+                    drag_scroll_up(pw);
                     // 释放按下交互（Compose Release 语义——clickable 按下态结束）
                     release_pressed_interaction(pw);
                 }
@@ -1145,6 +1149,8 @@ impl AppState {
                     if gesture_up(pw, (x, y)) {
                         if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                     }
+                    // 拖拽滚动结束：速度足够 → fling（与真实路径一致）
+                    drag_scroll_up(pw);
                     // 释放按下交互（与真实路径一致）
                     release_pressed_interaction(pw);
                     // 通知选区变化 + 清理
@@ -1282,11 +1288,45 @@ pub(crate) fn take_pending_windows() -> Vec<PendingWindow> {
     std::mem::take(&mut *GLOBAL_PENDING.lock().unwrap())
 }
 
+/// 拖拽滚动会话：slot key（跨重组稳定）+ 最近位置 + 速度样本（松手 fling 用）
+struct DragScroll {
+    slot: u64,
+    last_y: f32,
+    samples: Vec<(std::time::Instant, f32)>,
+}
+
+impl DragScroll {
+    /// 手指速度（px/s，y 向下为正）：最近 ~200ms 窗口的最小二乘斜率。
+    /// ⚠ x 轴用"距离现在的时长"（越大越早）——回归斜率符号与真实时间相反，
+    /// 取负修正（实测：向上拖 100px 得 +650 而非 -650，fling 方向反了）。
+    fn velocity(&self) -> f32 {
+        let now = std::time::Instant::now();
+        let cutoff = now - std::time::Duration::from_millis(200);
+        let pts: Vec<(f32, f32)> = self.samples
+            .iter()
+            .filter(|(t, _)| *t >= cutoff)
+            .map(|(t, y)| (now.duration_since(*t).as_secs_f32(), *y))
+            .collect();
+        if pts.len() < 2 { return 0.0; }
+        let n = pts.len() as f32;
+        let sx: f32 = pts.iter().map(|p| p.0).sum();
+        let sy: f32 = pts.iter().map(|p| p.1).sum();
+        let sxy: f32 = pts.iter().map(|p| p.0 * p.1).sum();
+        let sxx: f32 = pts.iter().map(|p| p.0 * p.0).sum();
+        let denom = n * sxx - sx * sx;
+        if denom.abs() < 1e-6 { return 0.0; }
+        -(n * sxy - sx * sy) / denom
+    }
+}
+
 fn apply_scroll_delta(nodes: &mut [LayoutNode], idx: usize, dy: f32, density: crate::unit::Density) -> bool {
     {
         let node = &nodes[idx];
         if let Some(state) = node.modifier.vertical_scroll_state() {
-            let current = state.get();
+            // 手动输入接管：取消进行中的 fling + 结束滚动中标记（拖拽路径随后置回）
+            crate::animation::cancel_animation(&state.offset);
+            state.is_scroll_in_progress.set(false);
+            let current = state.offset.get();
             // 滚动极限 = 内容总高度 - 可视区域高度
             // viewport 高度优先用 scroll_viewport_height（fill_max_height 场景），
             // 降级到 fixed_size()（固定高度场景），再降级到 0（无限制）。
@@ -1313,7 +1353,7 @@ fn apply_scroll_delta(nodes: &mut [LayoutNode], idx: usize, dy: f32, density: cr
             };
             let max_offset = (content_h - visible_h).max(0.0);
             let new = (current - dy).clamp(0.0, max_offset);
-            state.set(new);
+            state.offset.set(new);
             return true;
         }
     }
@@ -1427,6 +1467,27 @@ fn gesture_move(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
     let nodes = pw.composer.arena_nodes();
     let Some(r) = pw.composer.layout_root_idx() else { return false; };
     fire_gesture_action(nodes, r, slot, action)
+}
+
+/// 拖拽滚动结束：速度足够 → 惯性 fling（内容速度 = -手指速度——手指向上甩
+/// 内容继续向上 = offset 增大）。速度不足 → 仅结束滚动中标记。
+fn drag_scroll_up(pw: &mut PerWindow) {
+    let Some(ds) = pw.drag_scroll.take() else { eprintln!("[DBG-DS] up but no drag_scroll"); return };
+    let v = ds.velocity();
+    let target: Option<usize> = (|| {
+        let nodes = pw.composer.arena_nodes();
+        let Some(r) = pw.composer.layout_root_idx() else { return None };
+        let id = crate::layout::node::find_node_id_by_slot_key(nodes, r, ds.slot)?;
+        crate::layout::node::find_node_by_id(nodes, r, id)
+    })();
+    let Some(idx) = target else { return };
+    let nodes = pw.composer.arena_nodes();
+    let Some(ss) = nodes[idx].modifier.vertical_scroll_state() else { return };
+    if v.abs() >= 50.0 {
+        ss.fling(-v);
+    } else {
+        ss.is_scroll_in_progress.set(false);
+    }
 }
 
 /// 指针释放手势入口：up 判定（tap/double-tap/long-press/drag-end）→ 销毁 tracker。
@@ -2088,6 +2149,33 @@ fn handle_pointer_down(
     // 置于 with_focus 块后（nodes 借用结束，避免与 pw mut 冲突）
     gesture_down(pw, scene_pos);
 
+    // 拖拽滚动目标：按下点向上找最近滚动容器。文本选择/组件 drag 手势优先
+    // （拖选文本/组件拖拽不滚动——对齐 Compose 最内层 pointerInput 消费）
+    pw.drag_scroll = (|| {
+        let nodes = pw.composer.arena_nodes();
+        let Some(r) = pw.composer.layout_root_idx() else { return None };
+        let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
+        let Some(&innermost) = path.last() else { return None };
+        let selecting = pw.pointer_down_state.as_ref()
+            .map(|s| s.selection_anchor.is_some())
+            .unwrap_or(false);
+        let child_drag = path.iter().rev()
+            .find(|&&i| nodes[i].modifier.has_gesture())
+            .map(|&i| nodes[i].modifier.has_drag_gesture())
+            .unwrap_or(false);
+        if selecting || child_drag {
+            None
+        } else {
+            path.iter().rev()
+                .find(|&&i| nodes[i].modifier.vertical_scroll_state().is_some())
+                .map(|&i| DragScroll {
+                    slot: nodes[i].slot_key,
+                    last_y: scene_pos.1,
+                    samples: vec![(std::time::Instant::now(), scene_pos.1)],
+                })
+        }
+    })();
+
     // 分发 on_pointer_event（Down）
     let nodes = pw.composer.arena_nodes();
     let ptr_ev = crate::modifier::PointerEvent {
@@ -2120,6 +2208,43 @@ fn handle_pointer_move(
     let mut handled = false;
     if pw.gesture_node.is_some() && gesture_move(pw, scene_pos) {
         handled = true;
+    }
+    // 拖拽滚动：内容跟随指针 + 记录速度样本（松手 fling 用）。放在手势/文本
+    // 选择之前——但按下时已排除组件 drag 手势与文本选择，此处无冲突
+    if pw.drag_scroll.is_some() {
+        let target: Option<usize> = (|| {
+            let nodes = pw.composer.arena_nodes();
+            let Some(r) = pw.composer.layout_root_idx() else { return None };
+            let slot = pw.drag_scroll.as_ref().unwrap().slot;
+            let id = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot)?;
+            crate::layout::node::find_node_by_id(nodes, r, id)
+        })();
+        let dy = {
+            let ds = pw.drag_scroll.as_mut().unwrap();
+            let dy = scene_pos.1 - ds.last_y;
+            ds.last_y = scene_pos.1;
+            let now = std::time::Instant::now();
+            ds.samples.push((now, scene_pos.1));
+            let cutoff = now - std::time::Duration::from_millis(200);
+            ds.samples.retain(|(t, _)| *t >= cutoff);
+            dy
+        };
+        if let Some(idx) = target {
+            if dy != 0.0 {
+                apply_scroll_delta(
+                    pw.composer.arena_nodes_mut(),
+                    idx,
+                    dy,
+                    crate::unit::Density::from_density(pw.scale_factor as f32),
+                );
+                handled = true;
+            }
+            // 拖拽中标记（apply_scroll_delta 内部取消 fling 时置 false——这里覆盖）
+            let nodes = pw.composer.arena_nodes();
+            if let Some(ss) = nodes[idx].modifier.vertical_scroll_state() {
+                ss.is_scroll_in_progress.set(true);
+            }
+        }
     }
     // 悬停更新（自身 hit test——不依赖下方 nodes 借用）
     update_hover(pw, scene_pos);

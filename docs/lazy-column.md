@@ -91,6 +91,13 @@ state.scroll_to_item(50, 0.0);
   高度缓存**推导像素 offset，与放置/锚点解析共用同一 `prefix_height` →
   round-trip 精确：跳 500 就是 500（旧实现：空缓存预估 48px/项 vs 实测
   ~47.5px，500 项偏差累积 → 落到 505，实测 bug）。越界 clamp 在测量期。
+- **惯性滚动（fling）**：`ScrollState::fling(velocity)` / `LazyListState::fling(v)`
+  ——`push_fling`：指数衰减（`exponential_decay(4.2)` 对齐 Compose）+ 每帧
+  clamp 到滚动极限（撞边界立即停——对齐 Compose fling 消耗完即停）。
+  极限由测量期回写（lazy：`fling_limit = content_h - vh`；普通容器：
+  measure_node 用子节点底部计算内容高）；拖拽滚动（按下滚动容器内容跟随
+  指针，松手按最小二乘速度 fling，对齐 Compose scrollable 拖拽 + fling）；
+  滚轮保持离散（不 fling）；手动输入自动取消进行中的 fling。
 
 ## 3. 框架扩展（本组件新增）
 
@@ -100,6 +107,10 @@ state.scroll_to_item(50, 0.0);
 | `Modifier::lazy_scroll(content_height)` | modifier.rs | 便捷构造 |
 | `LayoutNode.scroll_content_height` | layout/node.rs | 内容总高（lazy 滚动 clamp 用） |
 | `apply_scroll_delta` 内容高支持 | app.rs | max_offset 用 lazy 内容高 |
+| `ScrollState` 完整入 modifier | modifier.rs | VerticalScroll 存整个 ScrollState（offset/进度/fling 极限） |
+| `push_fling` + Decay clamp | animation.rs | fling 专用：边界 clamp 撞停 |
+| 拖拽滚动 + fling 触发 | app.rs | DragScroll 会话 + 速度样本 → 松手 fling |
+| 非 lazy 内容高计算 | layout/node.rs | 子节点底部 → scroll_content_height + fling_limit |
 
 ## 4. 与 Compose 的差异
 
@@ -107,7 +118,7 @@ state.scroll_to_item(50, 0.0);
   组合——用"组合期预估 + 测量期校正"两阶段模型（两帧收敛）；
 - key 类型为 `u64`（Compose `Any`）；无 contentType/复用优化；
 - 无 stickyHeader / LazyRow / 动画项放置（后续扩展）；
-- `index_of_key` 线性扫描（大数据可优化为 HashMap 缓存）；
+- `index_of_key` 已 O(1) HashMap（rebuild 构建）；
 - 无 fling 惯性滚动（winia 手势系统未接）；
 - 首帧 viewport 未知用固定窗口 2000px（测量后收敛）。
 

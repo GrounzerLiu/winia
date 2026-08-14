@@ -46,6 +46,8 @@ pub struct LazyListState {
     /// 测量从锚点开始组合；像素 offset 由测量期从缓存推导，不做反推）。
     /// 首次测量消费后清空。
     pub(crate) jump_request: crate::core::state::State<Option<(usize, f32)>>,
+    /// fling 滚动极限（测量期回写 = 内容高 - 视口高；0 = 未知 → 只拦下限）
+    pub(crate) fling_limit: crate::core::state::State<f32>,
     /// 派生：第一个可见项索引（每次 build 后更新）
     pub first_visible_index: crate::core::state::State<usize>,
     /// 派生：第一个可见项的偏移（正 = 该项向上滚出多少）
@@ -59,6 +61,7 @@ impl LazyListState {
             last_known_first_key: crate::core::state::State::new(None),
             known_total: crate::core::state::State::new(usize::MAX),
             jump_request: crate::core::state::State::new(None),
+            fling_limit: crate::core::state::State::new(0.0),
             first_visible_index: crate::core::state::State::new(0),
             first_visible_offset: crate::core::state::State::new(0.0),
         }
@@ -79,6 +82,27 @@ impl LazyListState {
     /// 越界 clamp 在 measure 期（本方法不知道 total）。
     pub fn scroll_to_item(&self, index: usize, scroll_offset: f32) {
         self.jump_request.set(Some((index, scroll_offset)));
+    }
+
+    /// 惯性滚动（对标 Compose flingBehavior）：以 `velocity`(px/s) 启动指数衰减
+    /// 滚动，撞到滚动极限立即停止（极限由测量期回写——`fling_limit`）。
+    pub fn fling(&self, velocity: f32) {
+        if !velocity.is_finite() || velocity.abs() < 1.0 {
+            return;
+        }
+        let off = self.offset.clone();
+        let limit = self.fling_limit.clone();
+        crate::animation::push_fling(
+            off,
+            velocity,
+            crate::animation::exponential_decay(4.2),
+            move |o| {
+                let max = limit.get();
+                let max = if max > 0.0 { max } else { f32::MAX };
+                o.clamp(0.0, max)
+            },
+            || {},
+        );
     }
 }
 
@@ -397,11 +421,12 @@ impl LazyColumn {
         intervals.rebuild();
         let total = intervals.total();
 
-        // 跨帧 remember：高度缓存 / 视口高 / 滚动中标记
+        // 跨帧 remember：高度缓存 / 视口高 / 滚动中标记 / fling 极限
         let cache = ctx.remember(|| crate::core::state::State::new(ItemHeightCache::default())).get();
         let viewport = ctx.remember(|| crate::core::state::State::new(600.0f32)).get();
         let is_scrolling = ctx.remember(|| crate::core::state::State::new(false)).get();
         let content_height = ctx.remember(|| crate::core::state::State::new(0.0f32)).get();
+        let fling_limit = ctx.remember(|| crate::core::state::State::new(0.0f32)).get();
 
         // key 校正：数据前部增删后，用 last_known_first_key 找回原 first visible 项。
         // ⚠ 仅当 total 变化（数据增删）时校正——正常滚动时锚点项变化是用户滚动
@@ -443,12 +468,15 @@ impl LazyColumn {
         // 挂自定义测量策略（真实测量 + 写回高度 + 放置 + 视口回写）
         let scroll = crate::modifier::ScrollState {
             offset: state.offset.clone(),
-            is_scroll_in_progress: is_scrolling,
+            is_scroll_in_progress: is_scrolling.clone(),
+            fling_limit: fling_limit.clone(),
         };
         let policy = LazyListPolicy {
             cache: cache.clone(),
             viewport: viewport.clone(),
             content_height: content_height.clone(),
+            fling_limit: fling_limit.clone(),
+            is_scroll_in_progress: is_scrolling.clone(),
             spacing: self.spacing,
             total,
             start,
@@ -500,6 +528,8 @@ pub(crate) struct LazyListPolicy {
     pub cache: crate::core::state::State<ItemHeightCache>,
     pub viewport: crate::core::state::State<f32>,
     pub content_height: crate::core::state::State<f32>,
+    pub fling_limit: crate::core::state::State<f32>,
+    pub is_scroll_in_progress: crate::core::state::State<bool>,
     pub spacing: f32,
     pub total: usize,
     pub start: usize,          // 注册项全局起点
@@ -568,6 +598,9 @@ impl crate::layout::node::MeasurePolicy for LazyListPolicy {
         // 高度差累积漂移（实测：旧实现 500×48 vs 实测 47.5 → 落到 505）
         if let Some((req_idx, req_off)) = self.state.jump_request.get() {
             let idx = req_idx.min(self.total.saturating_sub(1));
+            // 程序化跳转接管：取消进行中的 fling + 结束滚动中标记
+            crate::animation::cancel_animation(&self.state.offset);
+            self.is_scroll_in_progress.set(false);
             self.state
                 .offset
                 .set(prefix_height(&cache, idx, self.spacing) + req_off);
@@ -576,7 +609,11 @@ impl crate::layout::node::MeasurePolicy for LazyListPolicy {
 
         // 越界 clamp：scroll_to_item 无 total 信息，程序化滚动超出内容边界时
         // 在这里收回到末尾（对齐 Compose：scroll position 在 measure 期 clamp）
-        let clamped = self.state.offset.get().clamp(0.0, (content_h - vh).max(0.0));
+        let max_off = (content_h - vh).max(0.0);
+        // fling 极限回写（输入路径 ScrollState::fling + 程序化 LazyListState::fling）
+        self.fling_limit.set_silent(max_off);
+        self.state.fling_limit.set_silent(max_off);
+        let clamped = self.state.offset.get().clamp(0.0, max_off);
         if clamped != self.state.offset.get() {
             self.state.offset.set(clamped);
         }
@@ -1025,5 +1062,63 @@ mod tests {
             "first_visible={}",
             state.first_visible()
         );
+    }
+
+    // ── fling 惯性滚动：偏移推进 + 撞极限停止 ──
+    /// 泵全局动画直到 offset 收敛（两次读数差 < 0.5）。
+    /// ⚠ 不用 `has_animation_for_state` 做循环条件：并行测试的 update_animations
+    /// 会整表取走动画（短暂空窗）→ 误判结束（实测并行下 fling 停在中途 836）。
+    fn step_animations_until_done(state: &LazyListState, max_frames: usize) -> usize {
+        use std::time::Duration;
+        let mut frames = 0;
+        let mut last = state.offset();
+        loop {
+            crate::animation::update_animations();
+            std::thread::sleep(Duration::from_millis(20));
+            let v = state.offset();
+            frames += 1;
+            let settled = (v - last).abs() < 0.5 && frames > 5;
+            if settled || frames >= max_frames {
+                break;
+            }
+            last = v;
+        }
+        frames
+    }
+
+    #[test]
+    fn fling_animates_offset_and_stops_at_limit() {
+        // 渲染一次让 policy 回写 fling_limit（内容高 - 视口 600）
+        let state = LazyListState::new();
+        let items: Arc<Vec<u64>> = Arc::new((0..1000).collect());
+        let (_px, _w) = render_lazy_state(&state, &items);
+        let limit = state.fling_limit.get();
+        assert!(limit > 10000.0, "1000 项内容高 - 视口应很大，实际 {limit}");
+
+        // 自然停：v0=5000 → 衰减极限 5000/4.2 ≈ 1190 < limit
+        state.fling(5000.0);
+        let frames = step_animations_until_done(&state, 300);
+        assert!(frames < 300, "fling 应收敛（{frames} 帧）");
+        let end = state.offset();
+        assert!(
+            end > 1000.0 && end < 1400.0,
+            "fling 应推进 offset 到衰减极限附近，实际 {end}"
+        );
+
+        // 撞极限：超大速度 → 停在 fling_limit（对齐 Compose：fling 消耗完即停）
+        state.fling(1_000_000.0);
+        let frames = step_animations_until_done(&state, 300);
+        assert!(frames < 300, "撞极限 fling 应收敛（{frames} 帧）");
+        let end2 = state.offset();
+        assert!(
+            (end2 - limit).abs() < 1.0,
+            "撞极限应停在 {limit}，实际 {end2}"
+        );
+
+        // 反向：负速度向下甩 → clamp 回 0
+        state.fling(-1_000_000.0);
+        let frames = step_animations_until_done(&state, 300);
+        assert!(frames < 300, "反向 fling 应收敛（{frames} 帧）");
+        assert_eq!(state.offset(), 0.0, "反向 fling 应停在顶部");
     }
 }

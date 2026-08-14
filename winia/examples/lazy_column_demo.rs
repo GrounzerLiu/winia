@@ -40,6 +40,11 @@ fn lazy_demo(ctx: &mut ComposeCtx) {
                 .font_size(20.0)
                 .modifier(Modifier::new().padding(8.0))
                 .build(ctx);
+            Text::new("拖拽滚动 + 松手惯性 fling（滚轮离散滚动）")
+                .font_size(12.0)
+                .color(Color::from_argb(255, 120, 120, 120))
+                .modifier(Modifier::new().padding(8.0))
+                .build(ctx);
             Text::new(format!("firstVisible = {} (offset {:.0})", state.first_visible(), state.offset()))
                 .font_size(12.0)
                 .color(Color::from_argb(255, 120, 120, 120))

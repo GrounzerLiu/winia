@@ -665,7 +665,7 @@ fn render_pass1(
                 }
             }
             ModifierElement::VerticalScroll { state } => {
-                scroll_offset_v = Some(state.get());
+                scroll_offset_v = Some(state.offset.get());
             }
             ModifierElement::HorizontalScroll { state } => {
                 scroll_offset_h = Some(state.get());

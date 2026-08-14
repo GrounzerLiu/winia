@@ -573,7 +573,7 @@ pub(crate) fn scroll_offset_for_node(node: &LayoutNode) -> (f32, f32) {
     let mut dx = 0.0;
     let mut dy = 0.0;
     if let Some(state) = node.modifier.vertical_scroll_state() {
-        dy += state.get();
+        dy += state.offset.get();
     }
     if let Some(state) = node.modifier.horizontal_scroll_state() {
         dx += state.get();
@@ -1471,6 +1471,26 @@ pub(crate) fn measure_node(
             if let Some((ax, ay)) = nodes[c].modifier.get_absolute_offset() {
                 nodes[c].position.x += ax;
                 nodes[c].position.y += ay;
+            }
+        }
+        // 非 lazy 垂直滚动容器：内容总高 = 子节点底部最大值（含底部 padding）——
+        // 供 apply_scroll_delta 的 max_offset 与 fling 极限。修复 fill 容器场景：
+        // 自身高度 = 视口 → 原 measured_size 高度算 max_offset 恒 0（无法滚动）
+        if nodes[idx].modifier.vertical_scroll_state().is_some()
+            && nodes[idx].modifier.lazy_scroll_content_height().is_none()
+        {
+            let mut content_h = 0.0f32;
+            for &c in &children {
+                let b = nodes[c].position.y + nodes[c].measured_size.height;
+                if b > content_h { content_h = b; }
+            }
+            if content_h > 0.0 {
+                content_h += pad_bottom;
+                nodes[idx].scroll_content_height = content_h;
+                let max_off = (content_h - nodes[idx].scroll_viewport_height).max(0.0);
+                if let Some(ss) = nodes[idx].modifier.vertical_scroll_state() {
+                    ss.fling_limit.set_silent(max_off);
+                }
             }
         }
         let outer_size = Size::new(size.width + pad_x, size.height + pad_y);
