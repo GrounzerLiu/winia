@@ -93,7 +93,7 @@ let animated = ctx.animate_float_as_state(target, ProgressIndicatorDefaults::pro
 | 动画 | 规格 | easing |
 | --- | --- | --- |
 | 全局旋转 | 0→1080° 线性 tween | Linear |
-| 额外旋转 | 90° 步进 keyframes（300ms 到 90°，保持至 1500ms……4800ms 到 360°） | EmphasizedDecelerate (0.05, 0.7, 0.1, 1) |
+| 额外旋转 | 90° 步进 keyframes（300ms 到 90°，保持至 1500ms，随后每 300ms 动画+保持至 4800ms 到 360°） | **仅首段** 0→90° EmphasizedDecelerate (0.05, 0.7, 0.1, 1)；其余动画段 Linear（Compose 无 using → 默认 LinearEasing） |
 | 进度呼吸 | 0.1→0.87→0.1 keyframes（3000ms 峰值） | Standard (0.2, 0, 0, 1) |
 
 绘制：`rotate(global + additional)` 后画 `0°→sweep` 弧（Compose 同）。

@@ -168,18 +168,25 @@ fn circular_global_rotation_spec() -> InfiniteRepeatableSpec {
 }
 
 /// Circular 额外旋转：90°步进 6000ms keyframes（`circularIndeterminateRotationAnimationSpec`）
+///
+/// ⚠ easing 分配严格对齐 Compose：仅 0→300ms（0°→90°）段显式 using
+/// `EmphasizedDecelerate`（起步猛冲后缓降）；其余动画段（90→180/180→270/
+/// 270→360）**无 using → 默认 LinearEasing**。若全部用 Decelerate，每段都会
+/// 从静止以 ~14 倍线性速度（0.7/0.05）突然加速再急停——旋转一顿一顿（实测）。
+/// winia interpolate_keyframes 取【段终点帧】的 easing，故缓动挂在到达帧上。
 fn circular_additional_rotation_spec() -> InfiniteRepeatableSpec {
-    let e = emphasized_decelerate();
+    let decel = emphasized_decelerate();
+    let linear: Arc<dyn interpolator::Interpolator> = Arc::new(interpolator::Linear::new());
     let total = 6000.0f32;
     let frames = vec![
-        (0.0, 0.0, e.clone()),
-        (300.0 / total, 0.25, e.clone()),
-        (1500.0 / total, 0.25, e.clone()),
-        (1800.0 / total, 0.5, e.clone()),
-        (3000.0 / total, 0.5, e.clone()),
-        (3300.0 / total, 0.75, e.clone()),
-        (4500.0 / total, 0.75, e.clone()),
-        (4800.0 / total, 1.0, e.clone()),
+        (0.0, 0.0, linear.clone()),
+        (300.0 / total, 0.25, decel),       // [0, 300ms] 0→90°：EmphasizedDecelerate
+        (1500.0 / total, 0.25, linear.clone()),  // hold 至 1500ms
+        (1800.0 / total, 0.5, linear.clone()),   // [1500, 1800ms] 90→180°：Linear
+        (3000.0 / total, 0.5, linear.clone()),   // hold 至 3000ms
+        (3300.0 / total, 0.75, linear.clone()),  // [3000, 3300ms] 180→270°：Linear
+        (4500.0 / total, 0.75, linear.clone()),  // hold 至 4500ms
+        (4800.0 / total, 1.0, linear.clone()),   // [4500, 4800ms] 270→360°：Linear
     ];
     InfiniteRepeatableSpec::restart_keyframes(Duration::from_millis(6000), frames)
 }
@@ -872,6 +879,16 @@ mod tests {
         assert!(((frames[2].0 - 1250.0 / 1750.0).abs()) < 1e-5);
     }
 
+    fn is_linear(i: &Arc<dyn interpolator::Interpolator>) -> bool {
+        // Linear 恒等：任意 x 返回 x
+        (i.interpolate(0.3) - 0.3).abs() < 1e-6 && (i.interpolate(0.7) - 0.7).abs() < 1e-6
+    }
+
+    fn is_decelerate(i: &Arc<dyn interpolator::Interpolator>) -> bool {
+        // EmphasizedDecelerate(0.05,0.7,0.1,1)：起点猛冲（x=0.1 时 y 已 >0.3）
+        i.interpolate(0.1) > 0.3 && !is_linear(i)
+    }
+
     #[test]
     fn circular_animation_specs_match_compose() {
         // 全局旋转：6000ms 线性 0→1080
@@ -887,6 +904,19 @@ mod tests {
         assert_eq!(frames.len(), 8);
         assert!(((frames[1].0 - 300.0 / 6000.0).abs()) < 1e-5);
         assert_eq!(frames[1].1, 0.25);
+        // ⚠ easing 分配（用户规范：首段猛冲太突兀）——仅 0→90° 段用
+        // EmphasizedDecelerate，其余动画段 Linear（Compose 无 using → LinearEasing）；
+        // winia interpolate_keyframes 取段终点帧 easing，故缓动挂在到达帧上
+        assert!(
+            is_decelerate(&frames[1].2),
+            "[0→300ms] 0°→90° 段应用 EmphasizedDecelerate",
+        );
+        for idx in [3usize, 5, 7] {
+            assert!(
+                is_linear(&frames[idx].2),
+                "90→180/180→270/270→360 段应 Linear（Compose 默认），idx={idx}",
+            );
+        }
         // 进度呼吸：0.5 处到 0.87（值 1.0）
         let p = circular_progress_spec();
         let frames = match &p.base {
