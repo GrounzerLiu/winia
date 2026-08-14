@@ -175,7 +175,7 @@ fn circular_additional_rotation_spec() -> InfiniteRepeatableSpec {
     let total = 6000.0f32;
     let frames = vec![
         (0.0, 0.0, linear.clone()),
-        (300.0 / total, 0.25, linear.clone()),       // [0, 300ms] 0→90°：EmphasizedDecelerate
+        (300.0 / total, 0.25, linear.clone()),       // [0, 300ms] 0°→90°：Linear（Compose 隐式 0ms 帧）
         (1500.0 / total, 0.25, linear.clone()),  // hold 至 1500ms
         (1800.0 / total, 0.5, linear.clone()),   // [1500, 1800ms] 90→180°：Linear
         (3000.0 / total, 0.5, linear.clone()),   // hold 至 3000ms
