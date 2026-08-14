@@ -31,6 +31,7 @@ pub mod radio_button;
 pub mod badge;
 pub mod slider;
 pub mod progress_indicator;
+pub mod divider;
 
 pub use animated_visibility::{AnimatedVisibility, VisibilityTransition, SlideDirection};
 pub use animated_size::AnimatedSize;
@@ -83,4 +84,5 @@ pub use progress_indicator::{
     CIRCULAR_STROKE_WIDTH, TRACK_ACTIVE_SPACE,
 };
 pub use chip::{Chip, ChipVariant, ChipColors, SelectableChipColors, ChipDefaults};
+pub use divider::{Divider, DividerDefaults, DIVIDER_THICKNESS, DIVIDER_HAIRLINE};
 pub use tooltip::Tooltip;
