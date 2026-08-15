@@ -2,8 +2,8 @@
 //!
 //! M3 实现要点（对齐项）：
 //! - **两种配置**：Uncontained（`LoadingIndicator`——无容器，indicator = Primary）与
-//!   Contained（`ContainedLoadingIndicator`——圆形容器，container = PrimaryContainer，
-//!   indicator = OnPrimaryContainer）；
+//!   Container（`.contained(true)`——圆形容器，container = SecondaryContainer，
+//!   indicator = Primary）；
 //! - **尺寸**：容器 48×48dp、active indicator 38dp（`md.comp.loading-indicator.container.width/
 //!   height = 48dp`、`active-indicator.size = 38dp`），容器 shape = Full（圆）；
 //! - **形状序列**：7 个 Material 3 shapes（SoftBurst → Cookie9Sided → Pentagon → Pill →
@@ -61,9 +61,8 @@ static SHAPE_SCALE_FACTOR: LazyLock<f32> = LazyLock::new(|| {
 /// 默认是 **uncontained**（对标 Compose `LoadingIndicator`）：
 /// - 无容器，indicator 色 = `Primary`
 ///
-/// 调用 [`.contained()`](Self::contained) 切换为 **contained**（对标 Compose
-/// `ContainedLoadingIndicator`）：
-/// - 圆形容器 = `PrimaryContainer`，indicator 色 = `OnPrimaryContainer`
+/// 调用 [`.contained()`](Self::contained) 切换为 **Container 模式**（M3 Default 配置）：
+/// - 圆形容器 = `SecondaryContainer`，indicator 色 = `Primary`
 #[derive(Clone)]
 pub struct LoadingIndicator {
     is_contained: bool,
@@ -91,7 +90,12 @@ impl LoadingIndicator {
         }
     }
 
-    /// 切换为 contained 配置（对标 `ContainedLoadingIndicator`）。
+    /// 切换为 Container 模式（带 SecondaryContainer 圆形容器 + Primary indicator）。
+    ///
+    /// 配色按 M3 specs 配图（Primary + SecondaryContainer）；如需 Compose
+    /// `ContainedLoadingIndicator` 的 PrimaryContainer + OnPrimaryContainer，
+    /// 请用 [`indicator_color`](Self::indicator_color) 和
+    /// [`container_color`](Self::container_color) 显式覆盖。
     pub fn contained(mut self, contained: bool) -> Self {
         self.is_contained = contained;
         self
@@ -128,16 +132,10 @@ impl LoadingIndicator {
 
     /// 默认颜色解析（对标 Compose `LoadingIndicatorDefaults`）。
     fn resolve_colors(&self, theme: &ThemeColors) -> (Color, Color) {
-        let indicator_color = self.indicator_color.unwrap_or_else(|| {
-            if self.is_contained {
-                theme.on_primary_container
-            } else {
-                theme.primary
-            }
-        });
+        let indicator_color = self.indicator_color.unwrap_or(theme.primary);
         let container_color = self.container_color.unwrap_or_else(|| {
             if self.is_contained {
-                theme.primary_container
+                theme.secondary_container
             } else {
                 Color::TRANSPARENT
             }
@@ -360,8 +358,8 @@ mod tests {
         let contained = LoadingIndicator::new().contained(true);
         assert!(contained.is_contained());
         let (ic, cc) = contained.resolve_colors(&theme);
-        assert_eq!(ic, theme.on_primary_container);
-        assert_eq!(cc, theme.primary_container);
+        assert_eq!(ic, theme.primary);
+        assert_eq!(cc, theme.secondary_container);
     }
 
     #[test]
@@ -477,8 +475,8 @@ mod tests {
         let (buf, w) = render_loading(|ctx| {
             LoadingIndicator::new().contained(true).build(ctx);
         });
-        let indicator = theme.on_primary_container;
-        let container = theme.primary_container;
+        let indicator = theme.primary;
+        let container = theme.secondary_container;
         let mut found_indicator = false;
         let mut found_container = false;
         for y in 0..300 {

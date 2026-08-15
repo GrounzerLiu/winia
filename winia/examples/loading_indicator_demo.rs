@@ -33,7 +33,7 @@ fn loading_indicator_demo(ctx: &mut ComposeCtx) {
                     .build(ctx);
             });
 
-            section_title(ctx, "Contained（圆形容器）");
+            section_title(ctx, "Container（SecondaryContainer）");
             Row::new().spacing(24.0).build(ctx, |ctx| {
                 LoadingIndicator::new().contained(true).build(ctx);
                 LoadingIndicator::new()
@@ -43,7 +43,7 @@ fn loading_indicator_demo(ctx: &mut ComposeCtx) {
                     .build(ctx);
             });
 
-            section_title(ctx, "Contained 自定义形状（RoundedRect）");
+            section_title(ctx, "Container 自定义形状（RoundedRect）");
             Row::new().spacing(24.0).build(ctx, |ctx| {
                 LoadingIndicator::new()
                     .contained(true)

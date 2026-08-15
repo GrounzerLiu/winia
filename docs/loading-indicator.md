@@ -11,13 +11,13 @@
   动画表达“短等待（<5s）”，替代 indeterminate circular progress indicator。
 - 与 Progress Indicator 的区别：**不能**从 indeterminate 过渡到 determinate，也不表达进度。
 
-## 2. API 面（对齐 Compose `LoadingIndicator` / `ContainedLoadingIndicator`）
+## 2. API 面（对齐 M3 Default / Uncontained 配置）
 
 ```rust
-// Uncontained（默认）——对标 Compose LoadingIndicator()
+// Uncontained（默认）——无容器，Primary indicator
 LoadingIndicator::new().build(ctx);
 
-// Contained——对标 Compose ContainedLoadingIndicator()
+// Container 模式——SecondaryContainer 圆形容器 + Primary indicator
 LoadingIndicator::new().contained(true).build(ctx);
 
 // 自定义
@@ -32,14 +32,36 @@ LoadingIndicator::new()
 
 ### 默认值
 
-| 项 | Uncontained | Contained |
+| 项 | Uncontained | Container |
 | --- | --- | --- |
-| indicator color | Primary | OnPrimaryContainer |
-| container color | Transparent（不绘制） | PrimaryContainer |
+| indicator color | Primary | Primary |
+| container color | Transparent（不绘制） | SecondaryContainer |
 | container shape | Circle | Circle |
 | 容器尺寸 | 48×48dp | 48×48dp |
 | active indicator 尺寸 | 38dp | 38dp |
 | shapes | 7 个 M3 shapes | 同左 |
+
+### 配色说明
+
+M3 specs 页的配图里，带容器的 Loading indicator 视觉上是 **Primary 指示器 + SecondaryContainer 容器**；
+spec 的 token 表也列出了对应关系：
+
+- `Loading indicator active indicator color` = Primary
+- `Loading indicator container color` = SecondaryContainer
+- `Loading indicator contained active indicator color` = OnPrimaryContainer
+- `Loading indicator contained container color` = PrimaryContainer
+
+注意：Compose/MDC 的 `ContainedLoadingIndicator` 源码默认是 **PrimaryContainer + OnPrimaryContainer**，
+与 M3 specs 配图不完全一致。本项目按 M3 specs 配图，将 `.contained(true)`（Container 模式）默认配色设为
+**Primary + SecondaryContainer**。如需 Compose 风格 Contained 配色，可显式传入：
+
+```rust
+LoadingIndicator::new()
+    .contained(true)
+    .indicator_color(theme.on_primary_container)
+    .container_color(theme.primary_container)
+    .build(ctx);
+```
 
 ## 3. 动画实现
 
@@ -64,5 +86,5 @@ cargo test -p winia --lib loading_indicator
 cargo run -p winia --example loading_indicator_demo
 ```
 
-- 单元：默认 uncontained / contained 颜色解析、7 个 Morph、缩放因子、`progress_path` 居中。
-- 像素：uncontained 只画 Primary 不画容器；contained 同时画容器与 OnPrimaryContainer indicator。
+- 单元：默认 uncontained / Container 颜色解析、7 个 Morph、缩放因子、`progress_path` 居中。
+- 像素：uncontained 只画 Primary 不画容器；Container 同时画 SecondaryContainer 容器与 Primary indicator。
