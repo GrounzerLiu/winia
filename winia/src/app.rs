@@ -551,6 +551,9 @@ impl ApplicationHandler for AppState {
                     winit::event::MouseScrollDelta::LineDelta(x, y) => (x * 20.0, y * 20.0),
                     winit::event::MouseScrollDelta::PixelDelta(p) => (p.x as f32, p.y as f32),
                 };
+                // Shift + 垂直滚轮 → 转为水平滚动（兼容 LazyRow 等横向容器；
+                // 多数系统不会自动把 Shift+wheel 翻译成 dx，这里显式处理）
+                let (dx, dy) = scroll_delta_with_shift(dx, dy, self.modifiers.shift_key());
                 if dx != 0.0 || dy != 0.0 {
                     if let Some(root_idx) = pw.composer.layout_root_idx() {
                         apply_scroll_delta(pw.composer.arena_nodes_mut(), root_idx, dx, dy, crate::unit::Density::from_density(pw.scale_factor as f32));
@@ -1321,6 +1324,16 @@ impl DragScroll {
     }
     fn velocity_x(&self) -> f32 { self.regression(|s| s.1) }
     fn velocity_y(&self) -> f32 { self.regression(|s| s.2) }
+}
+
+/// Shift + 滚轮语义：把垂直滚轮 delta 转为水平滚动（保留方向，清除垂直分量）。
+/// 用于兼容 LazyRow 等横向滚动容器——多数平台不会自动把 Shift+wheel 转成 dx。
+fn scroll_delta_with_shift(dx: f32, dy: f32, shift: bool) -> (f32, f32) {
+    if shift {
+        (dy, 0.0)
+    } else {
+        (dx, dy)
+    }
 }
 
 fn apply_scroll_delta(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f32, density: crate::unit::Density) -> bool {
@@ -2544,6 +2557,15 @@ mod frame_throttle_tests {
         let t0 = Instant::now();
         let interval = Duration::from_millis(16);
         assert!(should_request_redraw(t0, t0 + interval + Duration::from_millis(1), interval));
+    }
+
+    /// Shift + 滚轮：垂直 delta 转为水平，且清除垂直分量
+    #[test]
+    fn shift_wheel_delta_becomes_horizontal() {
+        assert_eq!(super::scroll_delta_with_shift(0.0, -20.0, true), (-20.0, 0.0));
+        assert_eq!(super::scroll_delta_with_shift(0.0, 20.0, true), (20.0, 0.0));
+        assert_eq!(super::scroll_delta_with_shift(5.0, 0.0, false), (5.0, 0.0));
+        assert_eq!(super::scroll_delta_with_shift(0.0, 10.0, false), (0.0, 10.0));
     }
 
     /// 滚动 delta 应用到 Column（scroll 节点查找 + offset 更新 + clamp）
