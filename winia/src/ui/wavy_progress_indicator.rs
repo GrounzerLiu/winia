@@ -1377,23 +1377,8 @@ fn process_circular_path(path: &mut skia_safe::Path, width: f32, height: f32, st
     let dx = width / 2.0 - bounds.center_x();
     let dy = height / 2.0 - bounds.center_y();
     *path = path.make_offset((dx, dy));
-
-    // material-shapes 的 RoundedPolygon 首顶点在 0°（最右侧），且当前移植的
-    // `to_path(start_angle=270)` 并没有真正把起点转到 270°（Compose 是 12 点方向）。
-    // 另外 Morph 中间帧的首 cubic 不一定是同一个顶点，直接固定 -90° 会让
-    // 圆→星过渡时起点乱跳。这里统一按“当前路径实际起点”动态旋转到正上方：
-    // 所有 amplitude（0/中间/1）的 progress/track 都从 12 点方向开始。
-    let center = skia_safe::Point::new(width / 2.0, height / 2.0);
-    let mut measure = skia_safe::PathMeasure::new(path, true, None);
-    if let Some((start, _)) = measure.pos_tan(0.0) {
-        let start_angle = (start.y - center.y).atan2(start.x - center.x).to_degrees();
-        // 屏幕坐标 y 向下：正上方在 atan2 里是 -90°。
-        let target_angle = -90.0;
-        let delta = target_angle - start_angle;
-        *path = path.make_offset((-center.x, -center.y));
-        *path = path.make_transform(&skia_safe::Matrix::rotate_deg(delta));
-        *path = path.make_offset((center.x, center.y));
-    }
+    // `to_path(start_angle=270)` 已由 material-shapes 修正为真正旋转到 270°
+    // （12 点方向），这里不再做额外旋转，避免 Morph 中间帧因动态旋转导致相位跳变。
 }
 
 fn draw_circular_wavy_paths(

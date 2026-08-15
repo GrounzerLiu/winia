@@ -177,8 +177,11 @@ fn path_from_cubics(
             (cubics[0].anchor_0_y() - rotation_pivot_y)
                 .atan2(cubics[0].anchor_0_x() - rotation_pivot_x),
         );
-        // Rotate the Path to to start from the given angle.
-        path.transform(&Matrix::rotate_deg(angle_to_first_cubic));
+        // Rotate the Path so it starts from the requested `start_angle`.
+        // 原实现误旋转为 `angle_to_first_cubic`，导致 start_angle 参数不生效；
+        // 正确做法是旋转 `start_angle - angle_to_first_cubic`。
+        let rotation = start_angle as f32 - angle_to_first_cubic;
+        path.transform(&Matrix::rotate_deg(rotation));
     }
 }
 
