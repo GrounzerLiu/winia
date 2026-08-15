@@ -1380,12 +1380,20 @@ fn process_circular_path(path: &mut skia_safe::Path, width: f32, height: f32, st
 
     // material-shapes 的 RoundedPolygon 首顶点在 0°（最右侧），且当前移植的
     // `to_path(start_angle=270)` 并没有真正把起点转到 270°（Compose 是 12 点方向）。
-    // 这里统一绕中心旋转 -90°，让 determinate 从正上方开始，indeterminate 再叠加
-    // Compose 的 `+90°` 后从右侧开始，与参考实现一致。
+    // 另外 Morph 中间帧的首 cubic 不一定是同一个顶点，直接固定 -90° 会让
+    // 圆→星过渡时起点乱跳。这里统一按“当前路径实际起点”动态旋转到正上方：
+    // 所有 amplitude（0/中间/1）的 progress/track 都从 12 点方向开始。
     let center = skia_safe::Point::new(width / 2.0, height / 2.0);
-    *path = path.make_offset((-center.x, -center.y));
-    *path = path.make_transform(&skia_safe::Matrix::rotate_deg(-90.0));
-    *path = path.make_offset((center.x, center.y));
+    let mut measure = skia_safe::PathMeasure::new(path, true, None);
+    if let Some((start, _)) = measure.pos_tan(0.0) {
+        let start_angle = (start.y - center.y).atan2(start.x - center.x).to_degrees();
+        // 屏幕坐标 y 向下：正上方在 atan2 里是 -90°。
+        let target_angle = -90.0;
+        let delta = target_angle - start_angle;
+        *path = path.make_offset((-center.x, -center.y));
+        *path = path.make_transform(&skia_safe::Matrix::rotate_deg(delta));
+        *path = path.make_offset((center.x, center.y));
+    }
 }
 
 fn draw_circular_wavy_paths(
@@ -1557,22 +1565,25 @@ mod tests {
     fn circular_progress_path_starts_at_top() {
         let mut cache = CircularShapesCache::default();
         cache.update(48.0, 48.0, 15.0, 4.0);
-        let mut path = cache.get_progress_path(1.0, false);
-        process_circular_path(&mut path, 48.0, 48.0, 4.0);
-        let mut measure = skia_safe::PathMeasure::new(&path, true, None);
-        let (start, _tangent) = measure.pos_tan(0.0).expect("PathMeasure 应能取到起点");
-        let cx = 24.0;
-        let cy = 24.0;
-        assert!(
-            (start.x - cx).abs() < 2.0,
-            "Circular 起点应在正上方（x≈24），实际 x={}",
-            start.x
-        );
-        assert!(
-            start.y < cy - 10.0,
-            "Circular 起点应在正上方（y<14），实际 y={}",
-            start.y
-        );
+        // 圆、Morph 中间帧、星形都必须从正上方开始，避免振幅过渡时起点/方向跳变。
+        for amp in [0.0f32, 0.5, 1.0] {
+            let mut path = cache.get_progress_path(amp, false);
+            process_circular_path(&mut path, 48.0, 48.0, 4.0);
+            let mut measure = skia_safe::PathMeasure::new(&path, true, None);
+            let (start, _tangent) = measure.pos_tan(0.0).expect("PathMeasure 应能取到起点");
+            let cx = 24.0;
+            let cy = 24.0;
+            assert!(
+                (start.x - cx).abs() < 2.0,
+                "Circular 起点应在正上方（amp={amp}，x≈24），实际 x={}",
+                start.x
+            );
+            assert!(
+                start.y < cy - 10.0,
+                "Circular 起点应在正上方（amp={amp}，y<14），实际 y={}",
+                start.y
+            );
+        }
     }
 
     // ── 像素测试 ──
