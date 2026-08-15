@@ -59,7 +59,7 @@ pub enum ProgressIndicatorStrokeCap {
 }
 
 impl ProgressIndicatorStrokeCap {
-    fn to_skia(self) -> skia_safe::paint::Cap {
+    pub(crate) fn to_skia(self) -> skia_safe::paint::Cap {
         match self {
             Self::Butt => skia_safe::paint::Cap::Butt,
             Self::Round => skia_safe::paint::Cap::Round,
@@ -132,27 +132,27 @@ fn linear_line_spec(delay_ms: u64, duration_ms: u64) -> InfiniteRepeatableSpec {
 }
 
 /// Linear first line head：0ms 起 1000ms 到 1
-fn linear_first_line_head_spec() -> InfiniteRepeatableSpec {
+pub(crate) fn linear_first_line_head_spec() -> InfiniteRepeatableSpec {
     linear_line_spec(0, 1000)
 }
 
 /// Linear first line tail：250ms 起 1000ms 到 1
-fn linear_first_line_tail_spec() -> InfiniteRepeatableSpec {
+pub(crate) fn linear_first_line_tail_spec() -> InfiniteRepeatableSpec {
     linear_line_spec(250, 1000)
 }
 
 /// Linear second line head：650ms 起 850ms 到 1
-fn linear_second_line_head_spec() -> InfiniteRepeatableSpec {
+pub(crate) fn linear_second_line_head_spec() -> InfiniteRepeatableSpec {
     linear_line_spec(650, 850)
 }
 
 /// Linear second line tail：900ms 起 850ms 到 1
-fn linear_second_line_tail_spec() -> InfiniteRepeatableSpec {
+pub(crate) fn linear_second_line_tail_spec() -> InfiniteRepeatableSpec {
     linear_line_spec(900, 850)
 }
 
 /// Circular 全局旋转：0→1080° 线性 6000ms（`circularIndeterminateGlobalRotationAnimationSpec`）
-fn circular_global_rotation_spec() -> InfiniteRepeatableSpec {
+pub(crate) fn circular_global_rotation_spec() -> InfiniteRepeatableSpec {
     InfiniteRepeatableSpec::restart_tween(
         Duration::from_millis(6000),
         crate::animation::TweenSpec::new(
@@ -170,7 +170,7 @@ fn circular_global_rotation_spec() -> InfiniteRepeatableSpec {
 /// 只落在 hold 段 [300, 1500]（值不变，零视觉作用）——**所有动画段实际全为线性**。
 /// 曾误将 0→90° 段设为 Decelerate（起点斜率 0.7/0.05=14 倍线性速度→猛冲，
 /// 实测一顿一顿）。winia 取【段终点帧】easing，故映射为到达帧全 Linear。
-fn circular_additional_rotation_spec() -> InfiniteRepeatableSpec {
+pub(crate) fn circular_additional_rotation_spec() -> InfiniteRepeatableSpec {
     let linear: Arc<dyn interpolator::Interpolator> = Arc::new(interpolator::Linear::new());
     let total = 6000.0f32;
     let frames = vec![
@@ -187,7 +187,7 @@ fn circular_additional_rotation_spec() -> InfiniteRepeatableSpec {
 }
 
 /// Circular 进度呼吸：0.1→0.87→0.1（`circularIndeterminateProgressAnimationSpec`）
-fn circular_progress_spec() -> InfiniteRepeatableSpec {
+pub(crate) fn circular_progress_spec() -> InfiniteRepeatableSpec {
     let standard = standard_easing();
     let linear: Arc<dyn interpolator::Interpolator> = Arc::new(interpolator::Linear::new());
     // Compose 源码语义：段 [0, 3000ms]（0.1→0.87）起点 0ms 隐式帧 → Linear；

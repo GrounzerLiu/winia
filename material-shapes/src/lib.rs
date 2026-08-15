@@ -17,6 +17,7 @@ mod matrix;
 mod offset;
 mod rect;
 
+pub use corner_rounding::*;
 pub use material_shapes::*;
 pub use polygon_measure::*;
 pub use rounded_polygon::*;

@@ -1,9 +1,12 @@
-# Wavy Progress Indicator 实现笔记（待实现）
+# Wavy Progress Indicator 实现笔记
 
-> 状态：**调研完成，未实现**。Compose 源码已通读并归档在 `.reasonix/compose_wavy_ref/`。
+> 状态：**已实现（分支 `progress-indicator-wavy`）**。Compose 源码已通读并归档在
+> `.reasonix/compose_wavy_ref/`。
 > 分支计划：`progress-indicator-wavy`（从 v2 分出）。
 > 前置：Morph/RoundedPolygon 基建已通过 `material-shapes` crate 落地进 workspace
 > （见 [docs/loading-indicator.md](loading-indicator.md)），落地时直接复用即可。
+> 实现：`winia/src/ui/wavy_progress_indicator.rs`；demo：
+> `winia/examples/wavy_progress_indicator_demo.rs`。
 
 ## 1. 背景与定位
 
@@ -76,6 +79,35 @@ CircularWavyProgressIndicator(
 | LinearTrackStopIndicatorSize | 4dp | StopSize |
 | indicatorAmplitude | `progress<=0.1 或 >=0.95 → 0f，否则 1f` | 两端退化为直线 |
 | Increasing/DecreasingAmplitudeAnimationSpec | tween(DurationLong2, Standard) / tween(DurationLong2, EmphasizedAccelerate) | 振幅过渡 |
+
+### winia API（builder 风格，命名贴近 Compose）
+
+```rust
+// Linear determinate
+LinearWavyProgressIndicator::new(0.5)
+    .color(my_color)
+    .track_color(my_track)
+    .stroke_width(4.0)          // active thickness
+    .track_stroke_width(4.0)    // track thickness
+    .gap_size(4.0)
+    .stop_size(4.0)
+    .amplitude_fn(|p| if p <= 0.1 || p >= 0.95 { 0.0 } else { 1.0 })
+    .wavelength(40.0)
+    .wave_speed(40.0)           // 默认 = wavelength
+    .build(ctx);
+
+// Linear indeterminate（amplitude 固定 Float）
+LinearWavyProgressIndicator::indeterminate()
+    .amplitude(1.0)
+    .wavelength(20.0)
+    .build(ctx);
+
+// Circular determinate / indeterminate
+CircularWavyProgressIndicator::new(0.5)
+    .amplitude_fn(|_| 1.0)
+    .build(ctx);
+CircularWavyProgressIndicator::indeterminate().build(ctx);
+```
 
 ## 3. Linear 核心绘制（internal/LinearWavyProgressModifiers.kt）
 
@@ -324,10 +356,11 @@ pub struct LinearWavyProgressIndicator {
 ## 7. TODO（作者备注）
 
 - [x] Morph/RoundedPolygon 移植已复制进 workspace（`material-shapes` crate，见 loading-indicator）
-- [ ] 阶段 A：Linear wavy（分支 `progress-indicator-wavy`）
+- [x] 阶段 A：Linear wavy（分支 `progress-indicator-wavy`）
 - [x] 阶段 B：Morph 基建落地（`material-shapes` 已入 workspace）
-- [ ] 阶段 C：Circular wavy
-- [ ] demo + docs + 测试 + review → 合并 v2
+- [x] 阶段 C：Circular wavy
+- [x] demo + docs + 测试（`wavy_progress_indicator_demo.rs` + 10 个单测）
+- [ ] review → 合并 v2（待用户验收）
 
 ## 8. 参考
 

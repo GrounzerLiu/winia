@@ -32,6 +32,7 @@ pub mod badge;
 pub mod slider;
 pub mod progress_indicator;
 pub mod loading_indicator;
+pub mod wavy_progress_indicator;
 pub mod divider;
 pub mod lazy_column;
 
@@ -89,6 +90,15 @@ pub use loading_indicator::{
     LoadingIndicator,
     LOADING_INDICATOR_SIZE, LOADING_INDICATOR_ACTIVE_SIZE,
     LOADING_INDICATOR_CONTAINER_SHAPE,
+};
+pub use wavy_progress_indicator::{
+    LinearWavyProgressIndicator, CircularWavyProgressIndicator,
+    WavyProgressIndicatorDefaults,
+    WAVY_LINEAR_WIDTH, WAVY_LINEAR_HEIGHT, WAVY_CIRCULAR_SIZE,
+    WAVY_STROKE_WIDTH, WAVY_TRACK_STROKE_WIDTH, WAVY_GAP_SIZE,
+    WAVY_LINEAR_STOP_SIZE, WAVY_LINEAR_DETERMINATE_WAVELENGTH,
+    WAVY_LINEAR_INDETERMINATE_WAVELENGTH, WAVY_CIRCULAR_WAVELENGTH,
+    WAVY_ANIMATION_DURATION_MS,
 };
 pub use chip::{Chip, ChipVariant, ChipColors, SelectableChipColors, ChipDefaults};
 pub use divider::{Divider, DividerDefaults, DIVIDER_THICKNESS, DIVIDER_HAIRLINE};
