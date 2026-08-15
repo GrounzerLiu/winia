@@ -22,6 +22,7 @@ winit = { workspace = true }
 parking_lot = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }
+material-shapes = { workspace = true }
 # svg feature 所有平台启用（Icon 的 SVG 渲染依赖 skia_safe::svg——
 # 不能只在 Windows target 依赖里开，否则 Linux/macOS 编译失败）
 skia-safe = { workspace = true, features = ["svg"] }

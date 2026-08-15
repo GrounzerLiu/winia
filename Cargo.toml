@@ -4,12 +4,14 @@ members = [
     "winia",
     "winia-macros",
     "skiwin",
+    "material-shapes",
 ]
 
 [workspace.dependencies]
 winit = "0.31.0-beta.2"
 skia-safe = "0.99.0"
 skia-bindings = "0.99.0"
+material-shapes = { path = "material-shapes", features = ["shape_util"] }
 parking_lot = "0.12"
 log = "0.4"
 thiserror = "2"

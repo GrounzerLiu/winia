@@ -31,6 +31,7 @@ pub mod radio_button;
 pub mod badge;
 pub mod slider;
 pub mod progress_indicator;
+pub mod loading_indicator;
 pub mod divider;
 pub mod lazy_column;
 
@@ -83,6 +84,11 @@ pub use progress_indicator::{
     LINEAR_INDICATOR_WIDTH, LINEAR_INDICATOR_HEIGHT, LINEAR_STOP_SIZE,
     STOP_INDICATOR_TRAILING_SPACE, CIRCULAR_INDICATOR_DIAMETER,
     CIRCULAR_STROKE_WIDTH, TRACK_ACTIVE_SPACE,
+};
+pub use loading_indicator::{
+    LoadingIndicator,
+    LOADING_INDICATOR_SIZE, LOADING_INDICATOR_ACTIVE_SIZE,
+    LOADING_INDICATOR_CONTAINER_SHAPE,
 };
 pub use chip::{Chip, ChipVariant, ChipColors, SelectableChipColors, ChipDefaults};
 pub use divider::{Divider, DividerDefaults, DIVIDER_THICKNESS, DIVIDER_HAIRLINE};

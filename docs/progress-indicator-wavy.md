@@ -2,8 +2,8 @@
 
 > 状态：**调研完成，未实现**。Compose 源码已通读并归档在 `.reasonix/compose_wavy_ref/`。
 > 分支计划：`progress-indicator-wavy`（从 v2 分出）。
-> 前置：Morph 多边形插值已由作者在另一台设备移植过（公司设备，暂不可得）——
-> 本仓库尚无 Morph/RoundedPolygon 基建，落地时按本文档第 7 节移植或复用。
+> 前置：Morph/RoundedPolygon 基建已通过 `material-shapes` crate 落地进 workspace
+> （见 [docs/loading-indicator.md](loading-indicator.md)），落地时直接复用即可。
 
 ## 1. 背景与定位
 
@@ -323,9 +323,9 @@ pub struct LinearWavyProgressIndicator {
 
 ## 7. TODO（作者备注）
 
-- [ ] 从公司设备取回 Morph/RoundedPolygon 移植实现（作者私有，不在本仓库）
+- [x] Morph/RoundedPolygon 移植已复制进 workspace（`material-shapes` crate，见 loading-indicator）
 - [ ] 阶段 A：Linear wavy（分支 `progress-indicator-wavy`）
-- [ ] 阶段 B：Morph 基建落地
+- [x] 阶段 B：Morph 基建落地（`material-shapes` 已入 workspace）
 - [ ] 阶段 C：Circular wavy
 - [ ] demo + docs + 测试 + review → 合并 v2
 

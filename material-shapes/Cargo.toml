@@ -1,0 +1,13 @@
+[package]
+name = "material-shapes"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+shape_util = ["skia-safe"]
+
+[dependencies]
+regex = "1.12.2"
+lazy_static = "1.5.0"
+
+skia-safe = { workspace = true, optional = true }
