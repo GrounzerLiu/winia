@@ -364,7 +364,7 @@ pub struct LinearWavyProgressIndicator {
 - [x] review 问题修复（wave 动画按需启停、Linear/Circular 路径/Morph 缓存、锁恢复、振幅 token 跟踪）
 - [x] Circular 相位稳定性：Morph 中间帧与 amplitude=1 统一走 Morph，避免波峰角度跳变
 - [x] 移除依赖全局 `is_animating()` 的竞态测试（并行下会互相污染）
-- [ ] review → 合并 v2（待用户验收）
+- [x] review → 合并 v2（已验收）
 
 ## 8. 参考
 
