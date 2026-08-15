@@ -937,6 +937,26 @@ impl InfiniteTransition {
         state
     }
 
+    /// 注册一个保留当前相位的无限浮点动画。
+    ///
+    /// 与 [`animate_float`](Self::animate_float) 不同：如果该 state 之前已运行过、
+    /// 被移除后再次注册，会从**当前值**继续，而不是重置回 `default_from`。
+    /// 用于 wave offset 这类“相位必须连续”的循环动画。
+    pub fn animate_float_preserving(
+        &mut self,
+        ctx: &mut ComposeCtx,
+        default_from: f32,
+        to: f32,
+        spec: InfiniteRepeatableSpec,
+    ) -> State<f32> {
+        let state: State<f32> = ctx.remember(|| default_from);
+        let start = state.peek();
+        let range = to - default_from;
+        self.ids.lock().unwrap().push(state.id());
+        crate::animation::push_infinite(state.clone(), start, start + range, spec);
+        state
+    }
+
     /// 注册一个 from→to 无限循环颜色动画（CAM16-UCS 插值）
     pub fn animate_color(
         &mut self,

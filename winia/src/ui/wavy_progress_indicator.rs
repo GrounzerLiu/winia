@@ -369,8 +369,12 @@ impl LinearWavyProgressIndicator {
         let m = if self.indeterminate {
             let amplitude = self.amplitude.fixed();
             let mut inf = ctx.remember_infinite_transition();
-            let wave_offset =
-                inf.animate_float(ctx, 0.0, 1.0, wave_animation_spec(wavelength, wave_speed));
+            let wave_offset = inf.animate_float_preserving(
+                ctx,
+                0.0,
+                1.0,
+                wave_animation_spec(wavelength, wave_speed),
+            );
             if !enable_motion {
                 crate::animation::remove_animation_by_state(wave_offset.id());
             }
@@ -435,8 +439,12 @@ impl LinearWavyProgressIndicator {
                 decreasing_amplitude_spec()
             };
             let mut inf = ctx.remember_infinite_transition();
-            let wave_offset =
-                inf.animate_float(ctx, 0.0, 1.0, wave_animation_spec(wavelength, wave_speed));
+            let wave_offset = inf.animate_float_preserving(
+                ctx,
+                0.0,
+                1.0,
+                wave_animation_spec(wavelength, wave_speed),
+            );
             // Compose 仅在真正画波时运行 wave offset 动画：motion 关闭或振幅为 0 时
             // 立即移除刚注册的无限动画（保留 State，绘制时读到 0）。
             let wave_active = enable_motion && (target > 0.0 || current > 0.0);
@@ -756,7 +764,7 @@ fn build_linear_wavy_paths(
 
         if (end_fraction - start_fraction).abs() > 0.0 {
             let wave_shift = if amplitude != 0.0 && enable_motion {
-                wave_offset * wavelength
+                wave_offset.rem_euclid(1.0) * wavelength
             } else {
                 0.0
             };
@@ -1036,8 +1044,12 @@ impl CircularWavyProgressIndicator {
             let duration_ms =
                 circular_wave_duration_ms(wavelength, wave_speed, WAVY_CIRCULAR_SIZE, stroke_width);
             let mut inf = ctx.remember_infinite_transition();
-            let wave_offset =
-                inf.animate_float(ctx, 0.0, 1.0, wave_animation_spec_duration(duration_ms));
+            let wave_offset = inf.animate_float_preserving(
+                ctx,
+                0.0,
+                1.0,
+                wave_animation_spec_duration(duration_ms),
+            );
             if !enable_motion {
                 crate::animation::remove_animation_by_state(wave_offset.id());
             }
@@ -1094,8 +1106,12 @@ impl CircularWavyProgressIndicator {
             let duration_ms =
                 circular_wave_duration_ms(wavelength, wave_speed, WAVY_CIRCULAR_SIZE, stroke_width);
             let mut inf = ctx.remember_infinite_transition();
-            let wave_offset =
-                inf.animate_float(ctx, 0.0, 1.0, wave_animation_spec_duration(duration_ms));
+            let wave_offset = inf.animate_float_preserving(
+                ctx,
+                0.0,
+                1.0,
+                wave_animation_spec_duration(duration_ms),
+            );
             // Compose 仅在真正画波时运行 wave offset 动画（同 Linear）。
             let wave_active = enable_motion && (target > 0.0 || current > 0.0);
             if !wave_active {
@@ -1339,7 +1355,7 @@ fn build_circular_wavy_paths(
 
     let mut progress_builder = skia_safe::PathBuilder::new();
     if enable_motion {
-        let coerced_wave_offset = wave_offset.clamp(0.0, 1.0);
+        let coerced_wave_offset = wave_offset.rem_euclid(1.0);
         let shift = coerced_wave_offset * progress_path_length;
         progress_measure.get_segment(p_start + shift, p_stop + shift, &mut progress_builder, true);
         let mut progress_path = progress_builder.detach();
