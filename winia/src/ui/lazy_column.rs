@@ -120,11 +120,11 @@ pub struct LazyListState {
     /// （实测：第二次 render 把 offset=2000 拉回 0）。放这里与 LazyListState
     /// 同生命周期，只有数据真的变化（total 变）才校正。
     pub(crate) known_total: crate::core::state::State<usize>,
-    /// 程序化跳转请求 (index, offset-in-item)——锚点权威（对齐 Compose
+    /// 程序化跳转请求 (index, offset-in-item, animate)——锚点权威（对齐 Compose
     /// `requestPositionAndForgetLastKnownKey`：scroll position 就是锚点，
     /// 测量从锚点开始组合；像素 offset 由测量期从缓存推导，不做反推）。
-    /// 首次测量消费后清空。
-    pub(crate) jump_request: crate::core::state::State<Option<(usize, f32)>>,
+    /// 首次测量消费后清空。animate = 动画滚动（spring，对齐 animateScrollToItem）。
+    pub(crate) jump_request: crate::core::state::State<Option<(usize, f32, bool)>>,
     /// fling 滚动极限（测量期回写 = 内容高 - 视口高；0 = 未知 → 只拦下限）
     pub(crate) fling_limit: crate::core::state::State<f32>,
     /// 派生：第一个可见项索引（每次 build 后更新）
@@ -160,7 +160,15 @@ impl LazyListState {
     /// 精确——不会出现预估 48 vs 实测 47.5 的累积偏差导致落点漂移）。
     /// 越界 clamp 在 measure 期（本方法不知道 total）。
     pub fn scroll_to_item(&self, index: usize, scroll_offset: f32) {
-        self.jump_request.set(Some((index, scroll_offset)));
+        self.jump_request.set(Some((index, scroll_offset, false)));
+    }
+
+    /// 动画滚动到指定索引（对齐 Compose `animateScrollToItem(index, scrollOffset)`）。
+    /// 与 `scroll_to_item` 同一锚点权威：请求由测量期消费并推导像素目标，
+    /// 用 Spring 动画（默认阻尼 1.0 / 刚度 200，收敛 ~300-400ms）从当前 offset
+    /// 平滑滚动到目标；目标 clamp 到 [0, max_offset]。
+    pub fn animate_scroll_to_item(&self, index: usize, scroll_offset: f32) {
+        self.jump_request.set(Some((index, scroll_offset, true)));
     }
 
     /// 惯性滚动（对标 Compose flingBehavior）：以 `velocity`(px/s) 启动指数衰减
@@ -257,11 +265,16 @@ impl IntervalList {
             self.total += iv.count;
             self.has_sticky |= iv.is_sticky_header;
         }
-        // key 映射（key 需唯一——重复时保留第一个，对齐 Compose 约束）
+        // key 映射（key 必须全列表唯一——对齐 Compose：重复 key 抛异常，
+        // LazyLayout 中 key 冲突会导致状态错乱，官方约束 key 唯一）
         self.key_index.clear();
         for g in 0..self.total {
             let k = self.key_of_unchecked(g);
-            self.key_index.entry(k).or_insert(g);
+            if let Some(prev) = self.key_index.insert(k, g) {
+                panic!(
+                    "LazyColumn/LazyRow: duplicate key {k} — global index {g} collides with {prev}.                      Keys must be unique across the whole list (Compose throws IllegalStateException)"
+                );
+            }
         }
     }
 
@@ -326,6 +339,10 @@ pub struct LazyList<A: LazyAxis> {
     content_padding: (f32, f32),
     /// 交叉轴内容内边距 (before, after)——垂直 = start/end；水平 = top/bottom
     cross_padding: (f32, f32),
+    /// 反向布局（对齐 Compose `reverseLayout`）：内容从主轴末端开始排布——
+    /// index 0 在底部/右端，offset=0 显示列表开头（项 0 在视口底），
+    /// 滚动方向与正向一致（offset 增 = 向列表末尾）
+    reverse: bool,
 }
 
 /// 垂直懒列表（对标 Compose `LazyColumn`）
@@ -353,6 +370,7 @@ impl<A: LazyAxis> LazyList<A> {
             intervals: IntervalList::new(),
             content_padding: (0.0, 0.0),
             cross_padding: (0.0, 0.0),
+            reverse: false,
         }
     }
 
@@ -369,6 +387,14 @@ impl<A: LazyAxis> LazyList<A> {
     /// item 从 before 处开始放置（对齐 Compose contentPadding 的交叉轴语义）。
     pub fn content_padding_cross(mut self, before: f32, after: f32) -> Self {
         self.cross_padding = (before, after);
+        self
+    }
+
+    /// 反向布局（对齐 Compose `reverseLayout`）：index 0 在视口主轴末端
+    /// （LazyColumn = 底部），offset=0 时项 0 在视口底；滚动方向与正向
+    /// 一致（offset 增 = 向列表末尾）。典型用途：聊天列表（最新消息在底部）。
+    pub fn reverse_layout(mut self, reverse: bool) -> Self {
+        self.reverse = reverse;
         self
     }
 
@@ -596,8 +622,13 @@ impl<A: LazyAxis> LazyList<A> {
         // index 开始组合，不经过像素反推）；否则由像素 offset 反推
         let pad_before = self.content_padding.0;
         let (first_index, first_item_offset) = match state.jump_request.get() {
-            Some((idx, off)) => (idx.min(total), off),
-            None => anchor_from_offset(&cache_ref, offset, self.spacing, pad_before),
+            Some((idx, off, _)) => (idx.min(total), off),
+            None => {
+                // ⚠ 锚点 index 必须 clamp 到 total 内：offset 超界时 anchor 按预估
+                // 高度外推（可远超 total）→ visible_range 的 end<start → 组合窗溢出
+                let (fi, fo) = anchor_from_offset(&cache_ref, offset, self.spacing, pad_before);
+                (fi.min(total.saturating_sub(1)), fo)
+            }
         };
         // 记录锚点项 key（供下次数据变化校正）——派生锚点由测量期 policy 写回精确值
         if let Some(k) = intervals.key_of(first_index) {
@@ -696,13 +727,15 @@ impl<A: LazyAxis> LazyList<A> {
             globals,
             sticky_children,
             pin,
+            reverse: self.reverse,
             state: state.clone(),
         };
         let m = Modifier::new()
             .fill_max_width()
             .fill_max_height()
             .then(A::scroll(scroll))
-            .lazy_scroll(content_height.clone());
+            .lazy_scroll(content_height.clone())
+            .lazy_scroll_reverse(self.reverse);
         let m = m.then(self.modifier);
         // 注册顺序（policy 移动进 group 后不可再读——先取出）
         let child_globals = policy.globals.clone();
@@ -763,6 +796,8 @@ pub(crate) struct LazyListPolicy<A: LazyAxis> {
     pub sticky_children: Vec<usize>,
     /// 钉住的 sticky header 全局 index（build 期回溯；钉住时锚点 = (pin, 0)）
     pub pin: Option<usize>,
+    /// 反向布局（reverseLayout）：放置内容坐标 = content_h - 镜像位置 - 项高
+    pub reverse: bool,
     pub state: LazyListState,  // 派生锚点回写（测量后精确值）
 }
 
@@ -822,25 +857,36 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         }
         self.content_height.set_silent(content_h);
 
-        // 程序化跳转：消费 jump_request，像素 offset 用**写回后的缓存**推导
-        // （实测项真实高度 + 未测项预估）——与下方锚点解析/放置共用同一
-        // prefix_height，round-trip 精确：跳 500 就是 500，不会因预估 vs 实测
-        // 高度差累积漂移（实测：旧实现 500×48 vs 实测 47.5 → 落到 505）
-        if let Some((req_idx, req_off)) = self.state.jump_request.get() {
-            let idx = req_idx.min(self.total.saturating_sub(1));
-            // 程序化跳转接管：取消进行中的 fling + 结束滚动中标记
-            crate::animation::cancel_animation(&self.state.offset);
-            self.is_scroll_in_progress.set(false);
-            // 含 before padding：scrollToItem 后项顶贴视口顶（对齐 Compose：padding 只在自然滚动边界生效）
-            self.state
-                .offset
-                .set(pad_before + prefix_height(&cache, idx, self.spacing) + req_off);
-            self.state.jump_request.set(None);
-        }
-
         // 越界 clamp：scroll_to_item 无 total 信息，程序化滚动超出内容边界时
         // 在这里收回到末尾（对齐 Compose：scroll position 在 measure 期 clamp）
         let max_off = (content_h - vh).max(0.0);
+
+        // 程序化跳转：消费 jump_request（放在 max_off 之后——动画目标需要 clamp）。
+        // 像素 offset 用**写回后的缓存**推导（实测项真实高度 + 未测项预估）——
+        // 与锚点解析/放置共用同一 prefix_height，round-trip 精确：跳 500 就是
+        // 500，不会因预估 vs 实测高度差累积漂移（实测：旧实现 500×48 vs 47.5
+        // → 落到 505）。reverseLayout 下公式相同（offset = before + prefix + 偏移：
+        // 语义变为项**底**贴视口底——镜像坐标中与正向同构）。
+        if let Some((req_idx, req_off, animate)) = self.state.jump_request.get() {
+            let idx = req_idx.min(self.total.saturating_sub(1));
+            let target = pad_before + prefix_height(&cache, idx, self.spacing) + req_off;
+            self.state.jump_request.set(None);
+            if animate {
+                // 动画滚动（对齐 Compose animateScrollToItem——spring 收敛）；
+                // push_animatable 内部处理同 state 动画替换（retarget 继承速度）
+                self.is_scroll_in_progress.set(false);
+                crate::animation::push_animatable(
+                    self.state.offset.clone(),
+                    target.clamp(0.0, max_off),
+                    crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::default()),
+                );
+            } else {
+                // 立即跳转：取消进行中的 fling + 结束滚动中标记
+                crate::animation::cancel_animation(&self.state.offset);
+                self.is_scroll_in_progress.set(false);
+                self.state.offset.set(target);
+            }
+        }
         // fling 极限回写（输入路径 ScrollState::fling + 程序化 LazyListState::fling）
         self.fling_limit.set_silent(max_off);
         self.state.fling_limit.set_silent(max_off);
@@ -899,9 +945,12 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
                     p
                 }
             };
+            // 反向布局：镜像坐标（从底向上累计）→ 内容坐标 = content_h - pos - h
+            // （index 0 在内容底部；锚点/可见范围/pin 回溯在镜像坐标中公式不变）
+            let content_pos = if self.reverse { content_h - pos - h } else { pos };
             placements.push(crate::layout::node::Placement {
                 // 交叉轴从 cross_before 处开始（contentPadding 交叉轴语义）
-                position: A::point(cb, pos),
+                position: A::point(cb, content_pos),
                 size: A::size(w, h),
             });
         }
@@ -1876,5 +1925,183 @@ mod tests {
             }
         }
         assert!(text_after_pad, "文本应从 x≈54 开始（40 cross + 12 padding）");
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // reverseLayout（对齐 Compose reverseLayout：index 0 在底部）
+    // ═══════════════════════════════════════════════════════
+
+    fn reverse_build(ctx: &mut ComposeCtx, state: LazyListState) {
+        let items: Arc<Vec<u64>> = Arc::new((0..1000).collect());
+        LazyColumn::new()
+            .state(state)
+            .reverse_layout(true)
+            .modifier(Modifier::new().fill_max_width().fill_max_height())
+            .items_from(items, |v: &u64| *v, |ctx, _i, v| {
+                crate::ui::text::Text::new(format!("Item {}", v))
+                    .font_size(14.0)
+                    .modifier(Modifier::new().padding(12.0))
+                    .build(ctx);
+            })
+            .build(ctx);
+    }
+
+    /// 指定行区间内是否有暗色文本像素
+    fn rows_have_text(px: &[[u8; 4]], w: usize, y0: usize, y1: usize) -> bool {
+        for y in y0..y1 {
+            for x in (0..w).step_by(2) {
+                let p = px[y * w + x];
+                if p[0] < 120 && p[1] < 120 && p[2] < 120 { return true; }
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn reverse_layout_starts_at_bottom_and_scrolls_toward_end() {
+        // offset=0：项 0 在屏幕底（first_visible = 0），底部有文本、顶部也有
+        // （视口显示列表开头 ~12 项，index 0 在最下）
+        let state = LazyListState::new();
+        let (px0, w0) = render_lazy(|ctx| reverse_build(ctx, state.clone()));
+        assert_eq!(state.first_visible(), 0, "offset=0 锚点 = 项 0（屏幕底）");
+        assert!(rows_have_text(&px0, w0, 570, 600), "项 0 应在屏幕底部可见");
+        assert!(rows_have_text(&px0, w0, 0, 30), "屏幕顶也应显示列表开头内容（~项 12）");
+
+        // offset 增 = 向列表末尾（index 增）——与正向滚动方向一致
+        state.offset.set(5000.0);
+        let (px1, w1) = render_lazy(|ctx| reverse_build(ctx, state.clone()));
+        let first = state.first_visible();
+        assert!(first >= 90, "offset 5000 后锚点应推进到 ~105，实际 {first}");
+        // 底部项 = 锚点项（屏幕底显示 index ~105），顶部 = index ~117
+        assert!(rows_have_text(&px1, w1, 0, 30), "反向滚动后屏幕顶仍有内容");
+        // 帧间内容变化（滚到不同项）
+        let mut diff_rows = 0;
+        for y in 0..600usize {
+            let mut h0 = false; let mut h1 = false;
+            for x in (0..w0).step_by(8) {
+                let p0 = px0[y * w0 + x];
+                let p1 = px1[y * w0 + x];
+                h0 |= p0[0] < 120 && p0[1] < 120 && p0[2] < 120;
+                h1 |= p1[0] < 120 && p1[1] < 120 && p1[2] < 120;
+            }
+            if h0 != h1 { diff_rows += 1; }
+        }
+        assert!(diff_rows > 10, "反向滚动后内容变化，diff_rows={diff_rows}");
+    }
+
+    #[test]
+    fn reverse_layout_scroll_to_item_lands_at_bottom() {
+        // 跳 500：项 500 **底**贴视口底（与正向"顶贴顶"镜像）→ 底部行有文本；
+        // 锚点 = 500（屏幕底项）
+        let state = LazyListState::new();
+        let items: Arc<Vec<u64>> = Arc::new((0..1000).collect());
+        // 正向对照：项 500 贴屏幕**顶**
+        let fwd = LazyListState::new();
+        let (pf, wf) = render_lazy(|ctx| {
+            let it = items.clone();
+            let s = fwd.clone();
+            LazyColumn::new()
+                .state(s)
+                .modifier(Modifier::new().fill_max_width().fill_max_height())
+                .items_from(it, |v: &u64| *v, |ctx, _i, v| {
+                    crate::ui::text::Text::new(format!("Item {}", v))
+                        .font_size(14.0)
+                        .modifier(Modifier::new().padding(12.0))
+                        .build(ctx);
+                })
+                .build(ctx);
+        });
+        fwd.scroll_to_item(500, 0.0);
+        let (pf2, wf2) = render_lazy(|ctx| {
+            let it = items.clone();
+            let s = fwd.clone();
+            LazyColumn::new()
+                .state(s)
+                .modifier(Modifier::new().fill_max_width().fill_max_height())
+                .items_from(it, |v: &u64| *v, |ctx, _i, v| {
+                    crate::ui::text::Text::new(format!("Item {}", v))
+                        .font_size(14.0)
+                        .modifier(Modifier::new().padding(12.0))
+                        .build(ctx);
+                })
+                .build(ctx);
+        });
+        let _ = (pf, wf, pf2, wf2);
+        assert_eq!(fwd.first_visible(), 500);
+
+        state.scroll_to_item(500, 0.0);
+        let (px, w) = render_lazy(|ctx| reverse_build(ctx, state.clone()));
+        assert_eq!(state.first_visible(), 500, "反向跳 500：锚点 = 500（屏幕底项）");
+        assert!(rows_have_text(&px, w, 570, 600), "项 500 底应贴视口底（底部行有文本）");
+        // 顶部也有内容（项 500 上方 ~12 项）
+        assert!(rows_have_text(&px, w, 0, 40), "项 500 上方的项应在屏幕顶可见");
+        // offset = prefix(500) ≈ 23750（0 spacing + 无 padding）
+        assert!(
+            state.offset() > 20_000.0 && state.offset() < 26_000.0,
+            "反向 jump offset = prefix(500)，实际 {}",
+            state.offset()
+        );
+    }
+
+    #[test]
+    fn reverse_layout_clamps_at_both_ends() {
+        // 越界（offset=100000）→ clamp 到 max_off = content_h - vh ≈ 46900 → 锚点 ≈ 987
+        let state = LazyListState::new();
+        state.offset.set(100_000.0);
+        // 首帧：build 用未 clamp 的 offset 锚定（组合窗偏窄）；第二帧 offset 已被
+        // policy clamp → 组合窗收敛（真实 app 首帧后自然收敛，测试断言收敛帧）
+        let (_px0, _w0) = render_lazy(|ctx| reverse_build(ctx, state.clone()));
+        let (px, w) = render_lazy(|ctx| reverse_build(ctx, state.clone()));
+        let first = state.first_visible();
+        assert!(first >= 970, "越界 clamp 后应接近列表末尾（index 大），实际 {first}");
+        assert!(rows_have_text(&px, w, 570, 600), "末尾项应在屏幕底可见");
+        // 回到开头
+        state.offset.set(0.0);
+        let (_px2, _w2) = render_lazy(|ctx| reverse_build(ctx, state.clone()));
+        assert_eq!(state.first_visible(), 0, "offset=0 回到项 0");
+    }
+
+    // ── animateScrollToItem（对齐 Compose animateScrollToItem——spring 动画）──
+    #[test]
+    fn animate_scroll_to_item_animates_offset() {
+        let state = LazyListState::new();
+        let items: Arc<Vec<u64>> = Arc::new((0..1000).collect());
+        let (_px, _w) = render_lazy_state(&state, &items);
+        let before = state.offset();
+        assert_eq!(before, 0.0);
+
+        // 立即跳转测出精确目标（实测高度：prefix(500)——运行时字体高度不同，
+        // 不能用常数 23750 断言）
+        state.scroll_to_item(500, 0.0);
+        let (_px, _w) = render_lazy_state(&state, &items);
+        let target = state.offset();
+        assert!(target > 15_000.0 && target < 30_000.0, "目标应 ≈ prefix(500)，实际 {target}");
+
+        // 回到 0 再动画滚动到同一目标
+        state.offset.set(0.0);
+        let (_px, _w) = render_lazy_state(&state, &items);
+        state.animate_scroll_to_item(500, 0.0);
+        let (_px, _w) = render_lazy_state(&state, &items);
+        // 测量期消费：注册 spring 动画（push_animatable 立即 update 一帧——
+        // elapsed≈0 位移≈0，之后由 step 循环推进）
+        let frames = step_animations_until_done(&state, 400);
+        assert!(frames < 400, "spring 应收敛（{frames} 帧）");
+        let end = state.offset();
+        assert!(
+            (end - target).abs() < 5.0,
+            "动画应收敛到 scroll_to_item 同一目标 {target}，实际 {end}"
+        );
+    }
+
+    // ── 重复 key 检测（对齐 Compose：key 冲突抛异常）──
+    #[test]
+    #[should_panic(expected = "duplicate key")]
+    fn duplicate_key_detected_in_rebuild() {
+        let mut il = IntervalList::new();
+        let c1: Arc<dyn Fn(&mut ComposeCtx, usize) + Send + Sync> = Arc::new(|_, _| {});
+        let c2: Arc<dyn Fn(&mut ComposeCtx, usize) + Send + Sync> = Arc::new(|_, _| {});
+        il.add(1, Some(Arc::new(|_| 42u64)), c1, false);
+        il.add(1, Some(Arc::new(|_| 42u64)), c2, false);
+        il.rebuild(); // 应 panic
     }
 }

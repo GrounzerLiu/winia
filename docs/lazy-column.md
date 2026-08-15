@@ -1,6 +1,6 @@
 # LazyColumn / LazyRow 组件（material3 对齐）
 
-> 分支：`lazy-sticky`（从 v2 分出，含 LazyColumn/LazyRow 全部机制 + stickyHeader）
+> 分支：`lazy-api`（从 v2 分出，含 LazyColumn/LazyRow 全部机制 + stickyHeader + contentPadding + reverseLayout + animateScrollToItem + 重复 key 检测）
 > 对标：Compose foundation `LazyColumn` / `LazyRow`（LazyDsl.kt / LazyListState.kt / LazyListMeasure.kt / LazyListScrollPosition.kt）
 
 ## 1. API
@@ -55,6 +55,11 @@ LazyColumn::new()
     // 交叉轴内边距：缩小每项约束宽 + 项从 before 处放置
     .content_padding_cross(16.0, 16.0) // (before, after)，默认 (0, 0)
 
+    // 反向布局（对齐 Compose reverseLayout）：index 0 在视口底部/右端——
+    // 聊天风格（最新消息在底部）；offset=0 显示列表开头（项 0 在视口底），
+    // 滚动方向与正向一致（offset 增 = 向列表末尾）；scrollToItem 后项**底**贴视口底
+    .reverse_layout(true)
+
     // 吸顶 header（对齐 Compose stickyHeader）：
     // 滚动时钉在视口顶、内容从它下面滑过；下一个 header 到来时把前一个
     // 推上去。key 必须全列表唯一；注册顺序不限（内部自动置顶绘制）
@@ -69,7 +74,14 @@ state.offset();          // 像素偏移
 // 锚点权威：不需要高度缓存/间距；测量期消费请求，从缓存推导像素 offset，
 // 与放置共用同一 prefix 函数 → round-trip 精确（不会漂移）；越界 clamp 到末尾
 state.scroll_to_item(50, 0.0);
+// 动画滚动（对齐 Compose animateScrollToItem）：Spring（阻尼 1.0 / 刚度 200，
+// 收敛 ~300-400ms）从当前 offset 平滑滚到同一目标（也 clamp 到 [0, max_offset]）
+state.animate_scroll_to_item(50, 0.0);
 ```
+
+> **key 唯一性**：全列表 key 必须唯一——`item_keyed` / `items` / `items_from` /
+> `sticky_header` 的 key 冲突会在 build 时 panic（对齐 Compose：key 冲突抛异常）。
+> 无 key 项（`item` / `items_plain`）用位置作 key，不会冲突。
 
 ## 2. 核心机制（对齐 Compose lazy 架构）
 
@@ -162,11 +174,41 @@ state.scroll_to_item(50, 0.0);
   （`final(i) = max(pad_before + C(i) - s, pad_before)`）；
 - **交叉轴 before/after**：每项约束宽 `max -= cb + ca`（项被压缩），项从
   `cross_before` 处放置（`A::with_cross_max` 轴无关改写约束）。
+### 2.7 反向布局（reverseLayout，对齐 Compose reverseLayout）
+
+- **布局镜像**：index 0 在主轴末端（LazyColumn = 底部）、index 最大在开头。
+  实现 = 镜像坐标模型：锚点/可见范围/pin 回溯/jump/clamp 全部在"镜像坐标"
+  中计算（公式与正向完全相同），仅两处转换：
+  - **放置**：内容坐标 = `content_h - 镜像位置 - 项高`（sticky 同样镜像）；
+  - **render 平移**：`scroll_origin = content_h - vh - offset`（而非 offset）——
+    `LazyScroll` modifier 增 `reverse` 标志 → `LayoutNode.scroll_reverse` →
+    render 的 scroll translate 分支；
+- **offset 语义不变**：0 = 列表开头（项 0 在视口底）、max = 末尾；滚动方向
+  与正向一致（滚轮/拖拽/fling/scroll_to_item 全部无需改动）；
+- **scroll_to_item 镜像语义**：项**底**贴视口**底**（正向 = 项顶贴视口顶）——
+  公式相同（`offset = before + prefix + 请求偏移`），语义自动镜像；
+- **firstVisible 对齐 Compose**：反向时锚点 = 视口**底**的项（index 0 侧），
+  `first_visible_offset` 从底部量（镜像公式与正向同构）；
+- **首帧一致**：测量后把 `content_height` 同步回节点字段（measure_node 顶部
+  读的是上一帧值）——否则 reverseLayout 首帧平移错误（内容整体被推出视口）。
+
+### 2.8 动画滚动（animateScrollToItem，对齐 Compose animateScrollToItem）
+
+- `LazyListState::animate_scroll_to_item(index, offset)`：与 `scroll_to_item`
+  同一锚点权威（jump_request 增 animate 标志）——测量期消费、从写回后的缓存
+  推导像素目标（`before + prefix + 偏移`，含 reverse 镜像语义），然后
+  `push_animatable(offset, target, Spring)`（默认阻尼 1.0 / 刚度 200，
+  收敛 ~300-400ms，与 Compose scroll 动画同级别）；
+- 目标 clamp 到 `[0, max_offset]`（消费移到 clamp 之后）；动画与进行中的
+  fling/动画互相替换（push_animatable 的 retarget 继承速度）。
 ## 3. 框架扩展（本组件新增）
 
 | 项 | 位置 | 说明 |
 | --- | --- | --- |
-| `ModifierElement::LazyScroll` | modifier.rs | lazy 内容主轴尺寸标记（高/宽共用） |
+| `ModifierElement::LazyScroll` | modifier.rs | lazy 内容主轴尺寸标记（高/宽共用，增 `reverse` 标志） |
+| `Modifier::lazy_scroll_reverse` / `is_lazy_scroll_reverse` | modifier.rs | reverseLayout 标记/查询 |
+| `LayoutNode.scroll_reverse` | layout/node.rs | reverse 平移标志（measure 期回写） |
+| 测量后内容高同步 | layout/node.rs | policy 测量后 content_height → 节点字段（首帧 reverse 平移正确） |
 | `Modifier::lazy_scroll(content_height)` | modifier.rs | 便捷构造 |
 | `LayoutNode.scroll_content_height` | layout/node.rs | 内容总高（lazy 滚动 clamp 用） |
 | `LayoutNode.scroll_viewport_width/scroll_content_width` | layout/node.rs | 横向对称字段 |
@@ -183,7 +225,8 @@ state.scroll_to_item(50, 0.0);
 - winia 组合为命令式（build 直接注册节点），无 Compose 的 LazyLayout 测量期
   组合——用"组合期预估 + 测量期校正"两阶段模型（两帧收敛）；
 - key 类型为 `u64`（Compose `Any`）；无 contentType/复用优化；
-- stickyHeader 已实现（2.5 节）；无动画项放置（后续扩展）；LazyRow 已实现（同一
+- stickyHeader 已实现（2.5 节）；无动画项放置（后续扩展）；reverseLayout 已实现
+  （2.7 节镜像模型）；animateScrollToItem 已实现（2.8 节 spring）；LazyRow 已实现（同一
   `LazyList<A: LazyAxis>` 构建器 + 轴无关 `LazyListPolicy`——主轴抽象对齐
   Compose 同一套 LazyListMeasure 换轴）；
 - `index_of_key` 已 O(1) HashMap（rebuild 构建）；
@@ -198,6 +241,7 @@ state.scroll_to_item(50, 0.0);
 cargo run -p winia --example lazy_column_demo
 cargo run -p winia --example lazy_row_demo
 cargo run -p winia --example sticky_header_demo
+cargo run -p winia --example reverse_list_demo
 cargo test -p winia --lib ui::lazy_column
 # 集成（fixture 需 debug-server feature 构建）：
 cargo test -p winia --features debug-server --test ui_test
@@ -208,5 +252,8 @@ before padding）、可见范围预取、稳定 key 数据变化滚动保持；L
 测试（横向只渲染可见项、横向滚动后内容变化）；stickyHeader 像素测试
 （滚动钉顶 + 锚点 = pin、过渡期合并带/推出、深滚动无界回溯、组合数量
 有界）；contentPadding 像素测试（内容从 before 内边距开始、末尾留出
-pad_after、sticky 钉在 pad_before、交叉轴压缩项）；集成：横向滚轮
-（`s dx dy`）与横向拖拽 + fling（fixture_scroll）。
+pad_after、sticky 钉在 pad_before、交叉轴压缩项）；reverseLayout 像素测试
+（offset=0 项 0 在屏幕底、滚动方向与正向一致、scroll_to_item 项底贴视口底、
+越界 clamp 两端）；animateScrollToItem（spring 收敛到 scroll_to_item 同一目标）；
+重复 key 检测（rebuild panic）；集成：横向滚轮（`s dx dy`）与横向拖拽 +
+fling（fixture_scroll）。

@@ -170,6 +170,8 @@ pub struct LayoutNode {
     pub(crate) scroll_viewport_width: f32,
     /// scroll 容器的内容总高（lazy 列表用——apply_scroll_delta 计算 max_offset；0 = 未设置）
     pub(crate) scroll_content_height: f32,
+    /// lazy 列表反向布局（reverseLayout：render 滚动平移镜像为 content - vh - offset）
+    pub(crate) scroll_reverse: bool,
     /// scroll 容器的内容总宽（水平滚动用——同 scroll_content_height）
     pub(crate) scroll_content_width: f32,
     /// 父节点 ID（键盘事件冒泡用，由 add_child 设置）
@@ -291,7 +293,7 @@ impl LayoutNode {
             layout_direction: LayoutDirection::Ltr,
             slot_key: 0,
             cached_paragraph: std::cell::RefCell::new(None),
-            scroll_viewport_height: 0.0, scroll_viewport_width: 0.0, scroll_content_height: 0.0, scroll_content_width: 0.0, parent_id: None,
+            scroll_viewport_height: 0.0, scroll_viewport_width: 0.0, scroll_content_height: 0.0, scroll_content_width: 0.0, scroll_reverse: false, parent_id: None,
             registrar: std::cell::RefCell::new(None),
             cursor_x: std::cell::Cell::new(0.0),
             cursor_height: std::cell::Cell::new(0.0),
@@ -344,7 +346,7 @@ impl Default for LayoutNode {
             layout_direction: LayoutDirection::Ltr,
             slot_key: 0,
             cached_paragraph: std::cell::RefCell::new(None),
-            scroll_viewport_height: 0.0, scroll_viewport_width: 0.0, scroll_content_height: 0.0, scroll_content_width: 0.0, parent_id: None,
+            scroll_viewport_height: 0.0, scroll_viewport_width: 0.0, scroll_content_height: 0.0, scroll_content_width: 0.0, scroll_reverse: false, parent_id: None,
             registrar: std::cell::RefCell::new(None),
             cursor_x: std::cell::Cell::new(0.0),
             cursor_height: std::cell::Cell::new(0.0),
@@ -1435,6 +1437,7 @@ pub(crate) fn measure_node(
         // 值是上一帧测量回写的——首帧 0 退化到节点自身高度）
         if let Some(ch) = nodes[idx].modifier.lazy_scroll_content_height() {
             nodes[idx].scroll_content_height = ch.get();
+            nodes[idx].scroll_reverse = nodes[idx].modifier.is_lazy_scroll_reverse();
         }
         // ⚠ lazy 容器**不**改写成无界：policy 自己显式控制子约束（child_constraints
         // 高度 ∞），保留有限 max_height 让 policy 拿到真实视口高——内部 clamp 的
@@ -1467,6 +1470,14 @@ pub(crate) fn measure_node(
         // 先拷贝子节点索引（policy.measure 会可变借用整个 nodes，不能持有 nodes[idx] 借用）
         let children = nodes[idx].children.clone();
         let (size, placements) = policies[pidx].measure(nodes, policies, &children, inner_constraints);
+        // 测量后同步 lazy 内容总高/宽到节点字段（render 的 reverse translate 与
+        // apply_scroll_delta 依赖；measure_node 顶部读的是上一帧值——首帧为 0
+        // 会让 reverseLayout 首帧平移错误，内容整体被推出视口）
+        let content_h_state = nodes[idx].modifier.lazy_scroll_content_height().map(|s| s.get());
+        if let Some(v) = content_h_state {
+            nodes[idx].scroll_content_height = v;
+            nodes[idx].scroll_content_width = v;
+        }
         // apply positions
         policies[pidx].place(nodes, &children, &placements);
         // apply padding offset（RTL：start 在右——子靠右偏移）

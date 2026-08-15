@@ -540,7 +540,7 @@ pub(crate) enum ModifierElement {
     VerticalScroll { state: ScrollState },
     /// Lazy 列表内容高度标记（LazyColumn 用——apply_scroll_delta 计算 max_offset；
     /// 节点自身高度是视口，内容总高由测量回写到此 State）
-    LazyScroll { content_height: crate::core::state::State<f32> },
+    LazyScroll { content_height: crate::core::state::State<f32>, reverse: bool },
     /// 水平滚动
     HorizontalScroll { state: ScrollState },
     /// 图形层变换（scale/alpha/rotation/translation——只触发重绘，不触发布局）
@@ -1377,7 +1377,22 @@ pub fn draw_icon(self, spec: crate::ui::icon::IconSpec) -> Self {
     /// 水平滚动
     /// 标记为 lazy 滚动容器（LazyColumn 内部使用——内容总高 State）
     pub fn lazy_scroll(self, content_height: crate::core::state::State<f32>) -> Self {
-        self.push(ModifierElement::LazyScroll { content_height })
+        self.push(ModifierElement::LazyScroll { content_height, reverse: false })
+    }
+
+    /// lazy 列表是否反向布局（reverseLayout：render 滚动平移镜像）
+    pub fn is_lazy_scroll_reverse(&self) -> bool {
+        self.elements.iter().any(|el| matches!(el, ModifierElement::LazyScroll { reverse: true, .. }))
+    }
+
+    /// lazy 列表反向布局标记（reverseLayout：render 侧镜像滚动平移）
+    pub fn lazy_scroll_reverse(mut self, reverse: bool) -> Self {
+        if let Some(el) = self.elements.last_mut() {
+            if let ModifierElement::LazyScroll { reverse: r, .. } = el {
+                *r = reverse;
+            }
+        }
+        self
     }
 
     /// 水平滚动（绑定 ScrollState——对齐 vertical_scroll）
@@ -1535,7 +1550,7 @@ impl Modifier {
     /// lazy 列表内容高度 State（如果有 LazyScroll modifier）
     pub fn lazy_scroll_content_height(&self) -> Option<&crate::core::state::State<f32>> {
         for el in &self.elements {
-            if let ModifierElement::LazyScroll { content_height } = el {
+            if let ModifierElement::LazyScroll { content_height, .. } = el {
                 return Some(content_height);
             }
         }

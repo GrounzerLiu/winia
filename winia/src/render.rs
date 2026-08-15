@@ -665,10 +665,20 @@ fn render_pass1(
                 }
             }
             ModifierElement::VerticalScroll { state } => {
-                scroll_offset_v = Some(state.offset.get());
+                let mut off = state.offset.get();
+                // reverseLayout（LazyColumn 反向）：滚动平移镜像为
+                // scroll_origin = content - vh - offset（内容坐标从底向上排布）
+                if node.scroll_reverse {
+                    off = (node.scroll_content_height - node.scroll_viewport_height - off).max(0.0);
+                }
+                scroll_offset_v = Some(off);
             }
             ModifierElement::HorizontalScroll { state } => {
-                scroll_offset_h = Some(state.offset.get());
+                let mut off = state.offset.get();
+                if node.scroll_reverse {
+                    off = (node.scroll_content_width - node.scroll_viewport_width - off).max(0.0);
+                }
+                scroll_offset_h = Some(off);
             }
             // 文本输入框容器（M3 Filled/Outlined——背景/指示线/边框/label/支持文本）
             ModifierElement::TextFieldVisual { variant, shape, colors, enabled: _, focused: _, is_error: _, cursor_color: _, indicator_color, focus_progress, offset_mapping, supporting } => {
