@@ -359,7 +359,7 @@ pub struct LinearWavyProgressIndicator {
 - [x] 阶段 A：Linear wavy（分支 `progress-indicator-wavy`）
 - [x] 阶段 B：Morph 基建落地（`material-shapes` 已入 workspace）
 - [x] 阶段 C：Circular wavy
-- [x] demo + docs + 测试（`wavy_progress_indicator_demo.rs` + 10 个单测）
+- [x] demo + docs + 测试（`wavy_progress_indicator_demo.rs` + 12 个单测）
 - [ ] review → 合并 v2（待用户验收）
 
 ## 8. 参考

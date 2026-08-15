@@ -481,6 +481,9 @@ fn draw_linear_wavy_determinate(
         cap,
         enable_motion,
     );
+
+    canvas.save();
+    canvas.translate((rect.left, rect.top));
     draw_linear_wavy_paths(
         canvas,
         rect,
@@ -505,6 +508,7 @@ fn draw_linear_wavy_determinate(
             color,
         );
     }
+    canvas.restore();
 }
 
 /// Linear indeterminate wavy 绘制（4 条 head/tail 段）。
@@ -540,6 +544,9 @@ fn draw_linear_wavy_indeterminate(
         cap,
         enable_motion,
     );
+
+    canvas.save();
+    canvas.translate((rect.left, rect.top));
     draw_linear_wavy_paths(
         canvas,
         rect,
@@ -551,6 +558,7 @@ fn draw_linear_wavy_indeterminate(
         track_stroke_width,
         cap,
     );
+    canvas.restore();
 }
 
 /// 构造 Linear wavy 的 track 路径与各 progress 段路径。
@@ -741,7 +749,7 @@ fn draw_linear_stop_indicator(
         let mut paint = skia_safe::Paint::default();
         paint.set_anti_alias(true);
         paint.set_color(skia_color(color));
-        let cy = rect.top + height / 2.0;
+        let cy = height / 2.0;
         if cap == ProgressIndicatorStrokeCap::Round {
             canvas.draw_circle(
                 skia_safe::Point::new(indicator_x + stop_size / 2.0, cy),
@@ -1075,6 +1083,8 @@ fn draw_circular_wavy_determinate(
         wave_offset,
         enable_motion,
     );
+    canvas.save();
+    canvas.translate((rect.left, rect.top));
     draw_circular_wavy_paths(
         canvas,
         rect,
@@ -1086,6 +1096,7 @@ fn draw_circular_wavy_determinate(
         track_stroke_width,
         cap,
     );
+    canvas.restore();
 }
 
 /// Circular indeterminate wavy 绘制。
@@ -1123,9 +1134,10 @@ fn draw_circular_wavy_indeterminate(
         wave_offset,
         enable_motion,
     );
-    let cx = rect.left + rect.width() / 2.0;
-    let cy = rect.top + rect.height() / 2.0;
+    let cx = rect.width() / 2.0;
+    let cy = rect.height() / 2.0;
     canvas.save();
+    canvas.translate((rect.left, rect.top));
     canvas.rotate(
         global_rotation + additional_rotation + 90.0,
         Some(skia_safe::Point::new(cx, cy)),
@@ -1526,5 +1538,74 @@ mod tests {
         // 初始 target=1，amplitude_state 初始为 1 → push_animatable 不会注册动画。
         // 这里仅确保不 panic；振幅动画行为由上面的像素测试覆盖。
         crate::animation::clear_all_animations();
+    }
+
+    #[test]
+    fn linear_draw_respects_rect_offset() {
+        use skia_safe::{Color as SkColor, surfaces};
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let primary = WavyProgressIndicatorDefaults::indicator_color(&theme);
+        let mut surface = surfaces::raster_n32_premul((300, 300)).unwrap();
+        let canvas = surface.canvas();
+        canvas.clear(SkColor::WHITE);
+        let rect = skia_safe::Rect::from_xywh(30.0, 50.0, 240.0, 10.0);
+        draw_linear_wavy_determinate(
+            canvas, rect, primary,
+            WavyProgressIndicatorDefaults::track_color(&theme),
+            4.0, 4.0, ProgressIndicatorStrokeCap::Round, 4.0, 4.0,
+            0.5, 1.0, 40.0, 0.0, true, true,
+        );
+        let pm = surface.peek_pixels().unwrap();
+        let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().unwrap();
+        let w = pm.width() as usize;
+        let mut min_x = usize::MAX;
+        let mut min_y = usize::MAX;
+        for y in 0..300 {
+            for x in 0..300 {
+                let p = px[y * w + x];
+                let rgba = [p[2], p[1], p[0], p[3]];
+                if color_eq(primary, rgba, 6) {
+                    min_x = min_x.min(x);
+                    min_y = min_y.min(y);
+                }
+            }
+        }
+        assert!(min_x >= 28, "Linear 绘制应随 rect.left 偏移，min_x={min_x}");
+        assert!(min_y >= 48, "Linear 绘制应随 rect.top 偏移，min_y={min_y}");
+    }
+
+    #[test]
+    fn circular_draw_respects_rect_offset() {
+        use skia_safe::{Color as SkColor, surfaces};
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let primary = WavyProgressIndicatorDefaults::indicator_color(&theme);
+        let mut surface = surfaces::raster_n32_premul((300, 300)).unwrap();
+        let canvas = surface.canvas();
+        canvas.clear(SkColor::WHITE);
+        let rect = skia_safe::Rect::from_xywh(40.0, 60.0, 48.0, 48.0);
+        let cache = Mutex::new(CircularShapesCache::default());
+        draw_circular_wavy_determinate(
+            canvas, rect, primary,
+            WavyProgressIndicatorDefaults::track_color(&theme),
+            4.0, 4.0, ProgressIndicatorStrokeCap::Round, 4.0,
+            0.5, 1.0, 15.0, true, 0.0, &cache,
+        );
+        let pm = surface.peek_pixels().unwrap();
+        let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().unwrap();
+        let w = pm.width() as usize;
+        let mut min_x = usize::MAX;
+        let mut min_y = usize::MAX;
+        for y in 0..300 {
+            for x in 0..300 {
+                let p = px[y * w + x];
+                let rgba = [p[2], p[1], p[0], p[3]];
+                if color_eq(primary, rgba, 6) {
+                    min_x = min_x.min(x);
+                    min_y = min_y.min(y);
+                }
+            }
+        }
+        assert!(min_x >= 38, "Circular 绘制应随 rect.left 偏移，min_x={min_x}");
+        assert!(min_y >= 58, "Circular 绘制应随 rect.top 偏移，min_y={min_y}");
     }
 }
