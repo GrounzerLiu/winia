@@ -37,6 +37,22 @@ impl<'p> Morph<'p> {
         }
     }
 
+    /// Constructs a [`Morph`] from a previously computed morph match.
+    ///
+    /// The expensive feature-mapping step ([`Morph::new`]) can be cached by callers;
+    /// this constructor reuses that result for cheap per-frame interpolation.
+    pub fn from_morph_match(
+        start: &'p RoundedPolygon,
+        end: &'p RoundedPolygon,
+        morph_match: Vec<(Cubic, Cubic)>,
+    ) -> Self {
+        Self {
+            start,
+            end,
+            morph_match,
+        }
+    }
+
     pub fn morph_match(&self) -> &Vec<(Cubic, Cubic)> {
         &self.morph_match
     }

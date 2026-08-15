@@ -27,7 +27,7 @@ use crate::layout::BoxLayout;
 use crate::modifier::{Color, Modifier, Shape};
 use crate::ui::progress_indicator::{self, ProgressIndicatorStrokeCap};
 use crate::ui::theme::{ThemeColors, WiniaTheme};
-use material_shapes::{CornerRounding, Morph, MorphToPath, PolygonToPath, RoundedPolygon};
+use material_shapes::{CornerRounding, Cubic, Morph, MorphToPath, PolygonToPath, RoundedPolygon};
 use std::f32::consts::PI;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -132,20 +132,37 @@ enum WavyAmplitude {
 
 impl WavyAmplitude {
     fn resolve(&self, progress: f32) -> f32 {
-        match self {
+        let value = match self {
             Self::Indicator => WavyProgressIndicatorDefaults::indicator_amplitude(progress),
             Self::Custom(f) => f(progress),
             Self::Fixed(v) => *v,
-        }
-        .clamp(0.0, 1.0)
+        };
+        sanitize_amplitude(value)
     }
 
     fn fixed(&self) -> f32 {
-        match self {
+        let value = match self {
             Self::Fixed(v) => *v,
             _ => 1.0,
+        };
+        sanitize_amplitude(value)
+    }
+
+    /// 供 `ctx.changed` 使用的可比较 token：固定值按数值、自定义函数按 Arc 指针。
+    fn change_token(&self) -> (u8, u64, usize) {
+        match self {
+            Self::Indicator => (0, 0, 0),
+            Self::Custom(f) => (1, 0, Arc::as_ptr(f) as *const () as usize),
+            Self::Fixed(v) => (2, v.to_bits() as u64, 0),
         }
-        .clamp(0.0, 1.0)
+    }
+}
+
+fn sanitize_amplitude(value: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(0.0, 1.0)
+    } else {
+        0.0
     }
 }
 
@@ -327,6 +344,8 @@ impl LinearWavyProgressIndicator {
         ctx.changed(&self.stop_size);
         ctx.changed(&self.wavelength);
         ctx.changed(&self.wave_speed);
+        let amplitude_token = self.amplitude.change_token();
+        ctx.changed(&amplitude_token);
 
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
@@ -345,11 +364,16 @@ impl LinearWavyProgressIndicator {
         let cap = ProgressIndicatorStrokeCap::Round;
         let enable_motion = wave_speed > 0.0 && wavelength > 0.0;
 
+        let shapes_cache = Arc::new(Mutex::new(LinearShapesCache::default()));
+
         let m = if self.indeterminate {
             let amplitude = self.amplitude.fixed();
             let mut inf = ctx.remember_infinite_transition();
             let wave_offset =
                 inf.animate_float(ctx, 0.0, 1.0, wave_animation_spec(wavelength, wave_speed));
+            if !enable_motion {
+                crate::animation::remove_animation_by_state(wave_offset.id());
+            }
             let fh = inf.animate_float(
                 ctx,
                 0.0,
@@ -374,6 +398,7 @@ impl LinearWavyProgressIndicator {
                 1.0,
                 progress_indicator::linear_second_line_tail_spec(),
             );
+            let cache = shapes_cache.clone();
             Modifier::new()
                 .size(WAVY_LINEAR_WIDTH, WAVY_LINEAR_HEIGHT)
                 .clip(Shape::Rectangle)
@@ -395,6 +420,7 @@ impl LinearWavyProgressIndicator {
                         sh.peek(),
                         st.peek(),
                         wave_offset.peek(),
+                        &cache,
                     );
                 })
         } else {
@@ -408,18 +434,40 @@ impl LinearWavyProgressIndicator {
             } else {
                 decreasing_amplitude_spec()
             };
-            crate::animation::push_animatable(amplitude_state.clone(), target, spec);
-
             let mut inf = ctx.remember_infinite_transition();
             let wave_offset =
                 inf.animate_float(ctx, 0.0, 1.0, wave_animation_spec(wavelength, wave_speed));
+            // Compose 仅在真正画波时运行 wave offset 动画：motion 关闭或振幅为 0 时
+            // 立即移除刚注册的无限动画（保留 State，绘制时读到 0）。
+            let wave_active = enable_motion && (target > 0.0 || current > 0.0);
+            if !wave_active {
+                crate::animation::remove_animation_by_state(wave_offset.id());
+            }
+
+            let wave_for_draw = wave_offset.clone();
+            if target == 0.0 && current != 0.0 {
+                // 振幅从 >0 过渡到 0：动画结束后移除 wave offset 动画，避免持续空转。
+                let wave_for_stop = wave_offset.clone();
+                crate::animation::push_animatable_with_done(
+                    amplitude_state.clone(),
+                    target,
+                    spec,
+                    move || {
+                        crate::animation::remove_animation_by_state(wave_for_stop.id());
+                    },
+                );
+            } else {
+                crate::animation::push_animatable(amplitude_state.clone(), target, spec);
+            }
+
             let draw_stop = true;
+            let cache = shapes_cache.clone();
             Modifier::new()
                 .size(WAVY_LINEAR_WIDTH, WAVY_LINEAR_HEIGHT)
                 .clip(Shape::Rectangle)
                 .draw(move |canvas, rect| {
                     let amplitude = amplitude_state.peek();
-                    let wave = wave_offset.peek();
+                    let wave = wave_for_draw.peek();
                     draw_linear_wavy_determinate(
                         canvas,
                         rect,
@@ -436,6 +484,7 @@ impl LinearWavyProgressIndicator {
                         wave,
                         draw_stop,
                         enable_motion,
+                        &cache,
                     );
                 })
         };
@@ -467,20 +516,25 @@ fn draw_linear_wavy_determinate(
     wave_offset: f32,
     draw_stop: bool,
     enable_motion: bool,
+    cache: &Mutex<LinearShapesCache>,
 ) {
     let fractions = [0.0f32, progress.clamp(0.0, 1.0)];
-    let (track_path, progress_paths) = build_linear_wavy_paths(
-        rect,
-        wavelength,
-        &fractions,
-        amplitude,
-        wave_offset,
-        gap_size,
-        stroke_width,
-        track_stroke_width,
-        cap,
-        enable_motion,
-    );
+    let (track_path, progress_paths) = {
+        let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
+        build_linear_wavy_paths(
+            &mut cache,
+            rect,
+            wavelength,
+            &fractions,
+            amplitude,
+            wave_offset,
+            gap_size,
+            stroke_width,
+            track_stroke_width,
+            cap,
+            enable_motion,
+        )
+    };
 
     canvas.save();
     canvas.translate((rect.left, rect.top));
@@ -530,20 +584,25 @@ fn draw_linear_wavy_indeterminate(
     second_head: f32,
     second_tail: f32,
     wave_offset: f32,
+    cache: &Mutex<LinearShapesCache>,
 ) {
     let fractions = [first_tail, first_head, second_tail, second_head];
-    let (track_path, progress_paths) = build_linear_wavy_paths(
-        rect,
-        wavelength,
-        &fractions,
-        amplitude,
-        wave_offset,
-        gap_size,
-        stroke_width,
-        track_stroke_width,
-        cap,
-        enable_motion,
-    );
+    let (track_path, progress_paths) = {
+        let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
+        build_linear_wavy_paths(
+            &mut cache,
+            rect,
+            wavelength,
+            &fractions,
+            amplitude,
+            wave_offset,
+            gap_size,
+            stroke_width,
+            track_stroke_width,
+            cap,
+            enable_motion,
+        )
+    };
 
     canvas.save();
     canvas.translate((rect.left, rect.top));
@@ -561,8 +620,74 @@ fn draw_linear_wavy_indeterminate(
     canvas.restore();
 }
 
+/// Linear 波路径缓存：按 size/wavelength/stroke/cap/振幅是否为零 重建满幅波路径。
+/// 避免每帧重新构造二次贝塞尔波和 PathMeasure（对标 Compose `LinearProgressDrawingCache`）。
+#[derive(Default)]
+struct LinearShapesCache {
+    key: Option<(f32, f32, f32, f32, f32, ProgressIndicatorStrokeCap, bool)>,
+    full_path: skia_safe::Path,
+    full_path_length: f32,
+    full_bounds_width: f32,
+}
+
+impl LinearShapesCache {
+    fn update(
+        &mut self,
+        width: f32,
+        height: f32,
+        wavelength: f32,
+        stroke_width: f32,
+        track_stroke_width: f32,
+        cap: ProgressIndicatorStrokeCap,
+        amplitude_zero: bool,
+    ) {
+        let key = (
+            width,
+            height,
+            wavelength,
+            stroke_width,
+            track_stroke_width,
+            cap,
+            amplitude_zero,
+        );
+        if self.key == Some(key) {
+            return;
+        }
+
+        let mut full_builder = skia_safe::PathBuilder::new();
+        full_builder.move_to((0.0, 0.0));
+        if amplitude_zero || wavelength <= 0.0 {
+            full_builder.line_to((width, 0.0));
+        } else {
+            let half_wavelength = wavelength / 2.0;
+            let mut anchor_x = half_wavelength;
+            let mut control_x = half_wavelength / 2.0;
+            let mut control_y = height - stroke_width;
+            let width_with_extra = width + wavelength * 2.0;
+            while anchor_x <= width_with_extra {
+                full_builder.quad_to((control_x, control_y), (anchor_x, 0.0));
+                anchor_x += half_wavelength;
+                control_x += half_wavelength;
+                control_y *= -1.0;
+            }
+        }
+        full_builder.offset((0.0, height / 2.0));
+        let full_path = full_builder.detach();
+
+        let mut measure = skia_safe::PathMeasure::new(&full_path, false, None);
+        let full_path_length = measure.length();
+        let full_bounds_width = full_path.bounds().width().max(0.00000001);
+
+        self.key = Some(key);
+        self.full_path = full_path;
+        self.full_path_length = full_path_length;
+        self.full_bounds_width = full_bounds_width;
+    }
+}
+
 /// 构造 Linear wavy 的 track 路径与各 progress 段路径。
 fn build_linear_wavy_paths(
+    cache: &mut LinearShapesCache,
     rect: skia_safe::Rect,
     wavelength: f32,
     progress_fractions: &[f32],
@@ -580,40 +705,25 @@ fn build_linear_wavy_paths(
         return (skia_safe::Path::new(), Vec::new());
     }
 
-    let current_stroke_cap_width = if (cap == ProgressIndicatorStrokeCap::Butt
-        && cap == ProgressIndicatorStrokeCap::Butt)
-        || height > width
-    {
+    let current_stroke_cap_width = if cap == ProgressIndicatorStrokeCap::Butt || height > width {
         0.0
     } else {
         stroke_width.max(track_stroke_width) / 2.0
     };
 
-    // 满幅波路径
-    let mut full_builder = skia_safe::PathBuilder::new();
-    full_builder.move_to((0.0, 0.0));
-    if amplitude == 0.0 {
-        full_builder.line_to((width, 0.0));
-    } else if wavelength > 0.0 {
-        let half_wavelength = wavelength / 2.0;
-        let mut anchor_x = half_wavelength;
-        let mut control_x = half_wavelength / 2.0;
-        let mut control_y = height - stroke_width;
-        let width_with_extra = width + wavelength * 2.0;
-        while anchor_x <= width_with_extra {
-            full_builder.quad_to((control_x, control_y), (anchor_x, 0.0));
-            anchor_x += half_wavelength;
-            control_x += half_wavelength;
-            control_y *= -1.0;
-        }
-    }
-    full_builder.offset((0.0, height / 2.0));
-    let full_path = full_builder.detach();
-
-    let mut measure = skia_safe::PathMeasure::new(&full_path, false, None);
-    let full_path_length = measure.length();
-    let full_bounds = *full_path.bounds();
-    let progress_path_scale = full_path_length / (full_bounds.width().max(0.00000001));
+    // 满幅波路径（按 size/wavelength/stroke/振幅是否为零 缓存，避免每帧重建）
+    cache.update(
+        width,
+        height,
+        wavelength,
+        stroke_width,
+        track_stroke_width,
+        cap,
+        amplitude == 0.0,
+    );
+    let mut measure = skia_safe::PathMeasure::new(&cache.full_path, false, None);
+    let full_path_length = cache.full_path_length;
+    let progress_path_scale = full_path_length / cache.full_bounds_width;
 
     let half_height = height / 2.0;
     let mut track_builder = skia_safe::PathBuilder::new();
@@ -771,9 +881,7 @@ fn stroke_cap_width(
     width: f32,
     height: f32,
 ) -> f32 {
-    if (cap == ProgressIndicatorStrokeCap::Butt && cap == ProgressIndicatorStrokeCap::Butt)
-        || height > width
-    {
+    if cap == ProgressIndicatorStrokeCap::Butt || height > width {
         0.0
     } else {
         stroke_width.max(track_stroke_width) / 2.0
@@ -843,7 +951,7 @@ impl CircularWavyProgressIndicator {
         self
     }
 
-    /// 轨道颜色（默认 SecondaryContainer；indeterminate 无 track）
+    /// 轨道颜色（默认 SecondaryContainer；indeterminate 也会绘制 track，与 Compose 一致）
     pub fn track_color(mut self, color: Color) -> Self {
         self.track_color = Some(color);
         self
@@ -902,6 +1010,8 @@ impl CircularWavyProgressIndicator {
         ctx.changed(&self.gap_size);
         ctx.changed(&self.wavelength);
         ctx.changed(&self.wave_speed);
+        let amplitude_token = self.amplitude.change_token();
+        ctx.changed(&amplitude_token);
 
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
@@ -928,6 +1038,9 @@ impl CircularWavyProgressIndicator {
             let mut inf = ctx.remember_infinite_transition();
             let wave_offset =
                 inf.animate_float(ctx, 0.0, 1.0, wave_animation_spec_duration(duration_ms));
+            if !enable_motion {
+                crate::animation::remove_animation_by_state(wave_offset.id());
+            }
             let global = inf.animate_float(
                 ctx,
                 0.0,
@@ -978,20 +1091,39 @@ impl CircularWavyProgressIndicator {
             } else {
                 decreasing_amplitude_spec()
             };
-            crate::animation::push_animatable(amplitude_state.clone(), target, spec);
-
             let duration_ms =
                 circular_wave_duration_ms(wavelength, wave_speed, WAVY_CIRCULAR_SIZE, stroke_width);
             let mut inf = ctx.remember_infinite_transition();
             let wave_offset =
                 inf.animate_float(ctx, 0.0, 1.0, wave_animation_spec_duration(duration_ms));
+            // Compose 仅在真正画波时运行 wave offset 动画（同 Linear）。
+            let wave_active = enable_motion && (target > 0.0 || current > 0.0);
+            if !wave_active {
+                crate::animation::remove_animation_by_state(wave_offset.id());
+            }
+
+            let wave_for_draw = wave_offset.clone();
+            if target == 0.0 && current != 0.0 {
+                let wave_for_stop = wave_offset.clone();
+                crate::animation::push_animatable_with_done(
+                    amplitude_state.clone(),
+                    target,
+                    spec,
+                    move || {
+                        crate::animation::remove_animation_by_state(wave_for_stop.id());
+                    },
+                );
+            } else {
+                crate::animation::push_animatable(amplitude_state.clone(), target, spec);
+            }
+
             Modifier::new()
                 .size(WAVY_CIRCULAR_SIZE, WAVY_CIRCULAR_SIZE)
                 .draw({
                     let cache = shapes_cache.clone();
                     move |canvas, rect| {
                         let amplitude = amplitude_state.peek();
-                        let wave = wave_offset.peek();
+                        let wave = wave_for_draw.peek();
                         draw_circular_wavy_determinate(
                             canvas,
                             rect,
@@ -1068,7 +1200,7 @@ fn draw_circular_wavy_determinate(
     cache: &Mutex<CircularShapesCache>,
 ) {
     let progress = progress.clamp(0.0, 1.0);
-    let mut shapes = cache.lock().unwrap();
+    let mut shapes = cache.lock().unwrap_or_else(|e| e.into_inner());
     let (track_path, progress_path) = build_circular_wavy_paths(
         &mut shapes,
         rect,
@@ -1119,7 +1251,7 @@ fn draw_circular_wavy_indeterminate(
     progress: f32,
     cache: &Mutex<CircularShapesCache>,
 ) {
-    let mut shapes = cache.lock().unwrap();
+    let mut shapes = cache.lock().unwrap_or_else(|e| e.into_inner());
     let (track_path, progress_path) = build_circular_wavy_paths(
         &mut shapes,
         rect,
@@ -1269,6 +1401,9 @@ fn draw_circular_wavy_paths(
 }
 
 /// 缓存 Circular 使用的 RoundedPolygon（按 size/wavelength 重建）。
+///
+/// 额外缓存 `Morph::morph_match`：`Morph::new` 的 feature-mapping 是昂贵步骤，
+/// 这里只做一次，之后每帧用 `Morph::from_morph_match` 廉价插值。
 #[derive(Default)]
 struct CircularShapesCache {
     size: (f32, f32),
@@ -1277,6 +1412,7 @@ struct CircularShapesCache {
     vertex_count: usize,
     track_polygon: Option<RoundedPolygon>,
     active_polygon: Option<RoundedPolygon>,
+    morph_match: Option<Vec<(Cubic, Cubic)>>,
 }
 
 impl CircularShapesCache {
@@ -1286,6 +1422,7 @@ impl CircularShapesCache {
             && self.stroke_width == stroke_width
             && self.track_polygon.is_some()
             && self.active_polygon.is_some()
+            && self.morph_match.is_some()
         {
             return;
         }
@@ -1305,6 +1442,8 @@ impl CircularShapesCache {
             None,
         )
         .normalized();
+        // 只做一次昂贵的 feature-mapping，缓存 morph_match 供每帧插值复用。
+        let morph_match = Morph::new(&track, &active).morph_match().clone();
 
         self.size = (width, height);
         self.wavelength = wavelength;
@@ -1312,6 +1451,7 @@ impl CircularShapesCache {
         self.vertex_count = num_vertices;
         self.track_polygon = Some(track);
         self.active_polygon = Some(active);
+        self.morph_match = Some(morph_match);
     }
 
     fn get_track_path(&self) -> skia_safe::Path {
@@ -1322,14 +1462,14 @@ impl CircularShapesCache {
     }
 
     fn get_progress_path(&self, amplitude: f32, repeat_path: bool) -> skia_safe::Path {
-        match (&self.track_polygon, &self.active_polygon) {
-            (Some(track), Some(active)) => {
+        match (&self.track_polygon, &self.active_polygon, &self.morph_match) {
+            (Some(track), Some(active), Some(morph_match)) => {
                 if amplitude == 0.0 {
                     track.to_path(Some(270), Some(repeat_path), None)
                 } else if amplitude == 1.0 {
                     active.to_path(Some(270), Some(repeat_path), None)
                 } else {
-                    let morph = Morph::new(track, active);
+                    let morph = Morph::from_morph_match(track, active, morph_match.clone());
                     morph.to_path(
                         amplitude,
                         Some(270),
@@ -1398,10 +1538,20 @@ mod tests {
         assert!(track.bounds().width() > 0.0);
         assert!(star.bounds().width() > 0.0);
         assert!(morph.bounds().width() > 0.0);
+        assert!(
+            cache.morph_match.is_some(),
+            "Morph feature-mapping 应缓存，避免每帧 Morph::new"
+        );
     }
 
     // ── 像素测试 ──
     fn render_wavy(build: impl FnOnce(&mut ComposeCtx)) -> (Vec<[u8; 4]>, usize) {
+        // 像素测试也可能注册无限动画，必须与动画断言测试串行并清理，
+        // 避免并行测试污染全局动画表。
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
         use skia_safe::{Color as SkColor, surfaces};
         let theme = ThemeColors::light_from_seed(0x6750A4);
         let mut composer = Composer::new();
@@ -1418,7 +1568,9 @@ mod tests {
         crate::render::render(nodes, root, canvas);
         let pm = surface.peek_pixels().expect("pixmap");
         let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
-        (px.to_vec(), pm.width() as usize)
+        let result = (px.to_vec(), pm.width() as usize);
+        crate::animation::clear_all_animations();
+        result
     }
 
     fn px_at(buf: &[[u8; 4]], w: usize, x: usize, y: usize) -> [u8; 4] {
@@ -1541,6 +1693,98 @@ mod tests {
     }
 
     #[test]
+    fn linear_determinate_amplitude_zero_does_not_register_wave_animation() {
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let mut composer = Composer::new();
+        let scene = |ctx: &mut ComposeCtx| {
+            WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                LinearWavyProgressIndicator::new(0.0).build(ctx);
+            });
+        };
+        composer.compose(scene);
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+        assert!(
+            !crate::animation::is_animating(),
+            "振幅=0 时不应注册 wave 无限动画"
+        );
+        crate::animation::clear_all_animations();
+    }
+
+    #[test]
+    fn linear_determinate_wave_speed_zero_does_not_register_wave_animation() {
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let mut composer = Composer::new();
+        let scene = |ctx: &mut ComposeCtx| {
+            WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                LinearWavyProgressIndicator::new(0.5)
+                    .wave_speed(0.0)
+                    .build(ctx);
+            });
+        };
+        composer.compose(scene);
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+        assert!(
+            !crate::animation::is_animating(),
+            "wave_speed=0 时不应注册 wave 无限动画"
+        );
+        crate::animation::clear_all_animations();
+    }
+
+    #[test]
+    fn circular_determinate_amplitude_zero_does_not_register_wave_animation() {
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let mut composer = Composer::new();
+        let scene = |ctx: &mut ComposeCtx| {
+            WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                CircularWavyProgressIndicator::new(0.0).build(ctx);
+            });
+        };
+        composer.compose(scene);
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+        assert!(
+            !crate::animation::is_animating(),
+            "Circular 振幅=0 时不应注册 wave 无限动画"
+        );
+        crate::animation::clear_all_animations();
+    }
+
+    #[test]
+    fn circular_determinate_wave_speed_zero_does_not_register_wave_animation() {
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let mut composer = Composer::new();
+        let scene = |ctx: &mut ComposeCtx| {
+            WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                CircularWavyProgressIndicator::new(0.5)
+                    .wave_speed(0.0)
+                    .build(ctx);
+            });
+        };
+        composer.compose(scene);
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+        assert!(
+            !crate::animation::is_animating(),
+            "Circular wave_speed=0 时不应注册 wave 无限动画"
+        );
+        crate::animation::clear_all_animations();
+    }
+
+    #[test]
     fn linear_draw_respects_rect_offset() {
         use skia_safe::{Color as SkColor, surfaces};
         let theme = ThemeColors::light_from_seed(0x6750A4);
@@ -1549,11 +1793,24 @@ mod tests {
         let canvas = surface.canvas();
         canvas.clear(SkColor::WHITE);
         let rect = skia_safe::Rect::from_xywh(30.0, 50.0, 240.0, 10.0);
+        let cache = Mutex::new(LinearShapesCache::default());
         draw_linear_wavy_determinate(
-            canvas, rect, primary,
+            canvas,
+            rect,
+            primary,
             WavyProgressIndicatorDefaults::track_color(&theme),
-            4.0, 4.0, ProgressIndicatorStrokeCap::Round, 4.0, 4.0,
-            0.5, 1.0, 40.0, 0.0, true, true,
+            4.0,
+            4.0,
+            ProgressIndicatorStrokeCap::Round,
+            4.0,
+            4.0,
+            0.5,
+            1.0,
+            40.0,
+            0.0,
+            true,
+            true,
+            &cache,
         );
         let pm = surface.peek_pixels().unwrap();
         let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().unwrap();
@@ -1585,10 +1842,20 @@ mod tests {
         let rect = skia_safe::Rect::from_xywh(40.0, 60.0, 48.0, 48.0);
         let cache = Mutex::new(CircularShapesCache::default());
         draw_circular_wavy_determinate(
-            canvas, rect, primary,
+            canvas,
+            rect,
+            primary,
             WavyProgressIndicatorDefaults::track_color(&theme),
-            4.0, 4.0, ProgressIndicatorStrokeCap::Round, 4.0,
-            0.5, 1.0, 15.0, true, 0.0, &cache,
+            4.0,
+            4.0,
+            ProgressIndicatorStrokeCap::Round,
+            4.0,
+            0.5,
+            1.0,
+            15.0,
+            true,
+            0.0,
+            &cache,
         );
         let pm = surface.peek_pixels().unwrap();
         let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().unwrap();
@@ -1605,7 +1872,13 @@ mod tests {
                 }
             }
         }
-        assert!(min_x >= 38, "Circular 绘制应随 rect.left 偏移，min_x={min_x}");
-        assert!(min_y >= 58, "Circular 绘制应随 rect.top 偏移，min_y={min_y}");
+        assert!(
+            min_x >= 38,
+            "Circular 绘制应随 rect.left 偏移，min_x={min_x}"
+        );
+        assert!(
+            min_y >= 58,
+            "Circular 绘制应随 rect.top 偏移，min_y={min_y}"
+        );
     }
 }

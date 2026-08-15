@@ -113,7 +113,8 @@ CircularWavyProgressIndicator::indeterminate().build(ctx);
 
 架构：`DelegatingNode` + `CacheDrawModifierNode`，绘制缓存 `LinearProgressDrawingCache`
 （波路径/PathMeasure 按 size/wavelength/振幅缓存，避免每帧重建）。winia 对应：
-`Modifier::draw()` 闭包 + 模块级缓存结构。
+`Modifier::draw()` 闭包 + `LinearShapesCache`（满幅波路径/长度缓存）与
+`CircularShapesCache`（RoundedPolygon + `Morph::morph_match` 缓存）。
 
 ### 3.1 满幅波路径构造（updateFullPaths）
 
@@ -359,7 +360,8 @@ pub struct LinearWavyProgressIndicator {
 - [x] 阶段 A：Linear wavy（分支 `progress-indicator-wavy`）
 - [x] 阶段 B：Morph 基建落地（`material-shapes` 已入 workspace）
 - [x] 阶段 C：Circular wavy
-- [x] demo + docs + 测试（`wavy_progress_indicator_demo.rs` + 12 个单测）
+- [x] demo + docs + 测试（`wavy_progress_indicator_demo.rs` + 16 个单测）
+- [x] review 问题修复（wave 动画按需启停、Linear/Circular 路径/Morph 缓存、锁恢复、振幅 token 跟踪）
 - [ ] review → 合并 v2（待用户验收）
 
 ## 8. 参考
