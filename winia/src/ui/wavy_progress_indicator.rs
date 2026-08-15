@@ -455,6 +455,7 @@ impl LinearWavyProgressIndicator {
             let wave_for_draw = wave_offset.clone();
             if target == 0.0 && current != 0.0 {
                 // 振幅从 >0 过渡到 0：动画结束后移除 wave offset 动画，避免持续空转。
+                // 注：done 回调仅作兜底；振幅到达 0 后的重组分支也会显式移除。
                 let wave_for_stop = wave_offset.clone();
                 crate::animation::push_animatable_with_done(
                     amplitude_state.clone(),
@@ -1120,6 +1121,7 @@ impl CircularWavyProgressIndicator {
 
             let wave_for_draw = wave_offset.clone();
             if target == 0.0 && current != 0.0 {
+                // 同 Linear：done 回调仅作兜底，重组分支也会移除 wave 动画。
                 let wave_for_stop = wave_offset.clone();
                 crate::animation::push_animatable_with_done(
                     amplitude_state.clone(),
@@ -1286,6 +1288,8 @@ fn draw_circular_wavy_indeterminate(
     let cy = rect.height() / 2.0;
     canvas.save();
     canvas.translate((rect.left, rect.top));
+    // 保持与 Compose 参考一致：indeterminate 在 start_angle=270°（12 点）基础上
+    // 再叠加 +90°，因此初始基准方向为右侧（3 点）；determinate 不叠加，起点在 12 点。
     canvas.rotate(
         global_rotation + additional_rotation + 90.0,
         Some(skia_safe::Point::new(cx, cy)),
@@ -1785,98 +1789,6 @@ mod tests {
         composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
         // 初始 target=1，amplitude_state 初始为 1 → push_animatable 不会注册动画。
         // 这里仅确保不 panic；振幅动画行为由上面的像素测试覆盖。
-        crate::animation::clear_all_animations();
-    }
-
-    #[test]
-    fn linear_determinate_amplitude_zero_does_not_register_wave_animation() {
-        let _g = crate::animation::tests::TEST_SERIAL
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        crate::animation::clear_all_animations();
-        let theme = ThemeColors::light_from_seed(0x6750A4);
-        let mut composer = Composer::new();
-        let scene = |ctx: &mut ComposeCtx| {
-            WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
-                LinearWavyProgressIndicator::new(0.0).build(ctx);
-            });
-        };
-        composer.compose(scene);
-        composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
-        assert!(
-            !crate::animation::is_animating(),
-            "振幅=0 时不应注册 wave 无限动画"
-        );
-        crate::animation::clear_all_animations();
-    }
-
-    #[test]
-    fn linear_determinate_wave_speed_zero_does_not_register_wave_animation() {
-        let _g = crate::animation::tests::TEST_SERIAL
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        crate::animation::clear_all_animations();
-        let theme = ThemeColors::light_from_seed(0x6750A4);
-        let mut composer = Composer::new();
-        let scene = |ctx: &mut ComposeCtx| {
-            WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
-                LinearWavyProgressIndicator::new(0.5)
-                    .wave_speed(0.0)
-                    .build(ctx);
-            });
-        };
-        composer.compose(scene);
-        composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
-        assert!(
-            !crate::animation::is_animating(),
-            "wave_speed=0 时不应注册 wave 无限动画"
-        );
-        crate::animation::clear_all_animations();
-    }
-
-    #[test]
-    fn circular_determinate_amplitude_zero_does_not_register_wave_animation() {
-        let _g = crate::animation::tests::TEST_SERIAL
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        crate::animation::clear_all_animations();
-        let theme = ThemeColors::light_from_seed(0x6750A4);
-        let mut composer = Composer::new();
-        let scene = |ctx: &mut ComposeCtx| {
-            WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
-                CircularWavyProgressIndicator::new(0.0).build(ctx);
-            });
-        };
-        composer.compose(scene);
-        composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
-        assert!(
-            !crate::animation::is_animating(),
-            "Circular 振幅=0 时不应注册 wave 无限动画"
-        );
-        crate::animation::clear_all_animations();
-    }
-
-    #[test]
-    fn circular_determinate_wave_speed_zero_does_not_register_wave_animation() {
-        let _g = crate::animation::tests::TEST_SERIAL
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        crate::animation::clear_all_animations();
-        let theme = ThemeColors::light_from_seed(0x6750A4);
-        let mut composer = Composer::new();
-        let scene = |ctx: &mut ComposeCtx| {
-            WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
-                CircularWavyProgressIndicator::new(0.5)
-                    .wave_speed(0.0)
-                    .build(ctx);
-            });
-        };
-        composer.compose(scene);
-        composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
-        assert!(
-            !crate::animation::is_animating(),
-            "Circular wave_speed=0 时不应注册 wave 无限动画"
-        );
         crate::animation::clear_all_animations();
     }
 

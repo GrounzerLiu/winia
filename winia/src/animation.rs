@@ -923,6 +923,14 @@ impl ComposeCtx<'_> {
 }
 
 impl InfiniteTransition {
+    /// 记录一个 state id，重复 id 只保留一份（组件重组会反复调用 animate_*）。
+    fn push_id(&self, id: u32) {
+        let mut ids = self.ids.lock().unwrap_or_else(|e| e.into_inner());
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+
     /// 注册一个 from→to 无限循环浮点动画
     pub fn animate_float(
         &mut self,
@@ -932,7 +940,7 @@ impl InfiniteTransition {
         spec: InfiniteRepeatableSpec,
     ) -> State<f32> {
         let state: State<f32> = ctx.remember(|| from);
-        self.ids.lock().unwrap().push(state.id());
+        self.push_id(state.id());
         crate::animation::push_infinite(state.clone(), from, to, spec);
         state
     }
@@ -952,7 +960,7 @@ impl InfiniteTransition {
         let state: State<f32> = ctx.remember(|| default_from);
         let start = state.peek();
         let range = to - default_from;
-        self.ids.lock().unwrap().push(state.id());
+        self.push_id(state.id());
         crate::animation::push_infinite(state.clone(), start, start + range, spec);
         state
     }
@@ -966,7 +974,7 @@ impl InfiniteTransition {
         spec: InfiniteRepeatableSpec,
     ) -> State<crate::modifier::Color> {
         let state: State<crate::modifier::Color> = ctx.remember(|| from);
-        self.ids.lock().unwrap().push(state.id());
+        self.push_id(state.id());
         crate::animation::push_infinite(state.clone(), from, to, spec);
         state
     }
