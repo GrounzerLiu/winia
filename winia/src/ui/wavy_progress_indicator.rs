@@ -1484,9 +1484,10 @@ impl CircularShapesCache {
             (Some(track), Some(active), Some(morph_match)) => {
                 if amplitude == 0.0 {
                     track.to_path(Some(270), Some(repeat_path), None)
-                } else if amplitude == 1.0 {
-                    active.to_path(Some(270), Some(repeat_path), None)
                 } else {
+                    // 统一走 Morph（含 amplitude==1.0）：Compose 在创建 Morph 后也是
+                    // 全部用 Morph.toPath，避免纯 star path 与 Morph 极限相位不一致
+                    // 导致振幅接近 1 时波峰/波谷角度跳变。
                     let morph = Morph::from_morph_match(track, active, morph_match.clone());
                     morph.to_path(
                         amplitude,
@@ -1585,6 +1586,58 @@ mod tests {
                 start.y
             );
         }
+    }
+
+    #[test]
+    fn circular_peak_phase_stable_across_amplitudes() {
+        // 回归：Morph 中间帧与 amplitude=1 的星形必须保持同一组波峰角度，
+        // 否则 0.94→0.95 振幅过渡时波峰/波谷会整体旋转（相位抖动）。
+        let mut cache = CircularShapesCache::default();
+        cache.update(48.0, 48.0, 15.0, 4.0);
+        let mut top_peak_angles = Vec::new();
+        for amp in [0.5f32, 0.9, 1.0] {
+            let mut path = cache.get_progress_path(amp, true);
+            process_circular_path(&mut path, 48.0, 48.0, 4.0);
+            let mut measure = skia_safe::PathMeasure::new(&path, true, None);
+            let half = measure.length() / 2.0;
+            let cx = 24.0;
+            let cy = 24.0;
+            let steps = 2000;
+            let mut pts = Vec::with_capacity(steps + 1);
+            for i in 0..=steps {
+                let d = i as f32 / steps as f32 * half;
+                let (p, _) = measure.pos_tan(d).unwrap();
+                let r = ((p.x - cx).powi(2) + (p.y - cy).powi(2)).sqrt();
+                let a = (p.y - cy).atan2(p.x - cx).to_degrees();
+                pts.push((a, r));
+            }
+            let mut best = f32::MAX;
+            let mut best_angle = f32::NAN;
+            for i in 1..steps {
+                let (a0, r0) = pts[i - 1];
+                let (a1, r1) = pts[i];
+                let (a2, r2) = pts[i + 1];
+                if r1 > r0 && r1 >= r2 {
+                    // 找最靠近正上方（-90°）的外顶点。
+                    let diff = (a1 + 90.0).abs();
+                    if diff < best {
+                        best = diff;
+                        best_angle = a1;
+                    }
+                }
+            }
+            top_peak_angles.push(best_angle);
+        }
+        assert_eq!(top_peak_angles.len(), 3, "每个 amplitude 都应找到顶部波峰");
+        let max_diff = top_peak_angles
+            .iter()
+            .zip(top_peak_angles.iter().skip(1))
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            max_diff <= 2.0,
+            "Circular 波峰角度在振幅过渡时应保持稳定，实际角度={top_peak_angles:?}"
+        );
     }
 
     // ── 像素测试 ──
