@@ -48,6 +48,9 @@ pub trait LazyAxis: sealed_axis::Sealed + 'static {
     /// 子项约束：交叉轴继承父 max，主轴无界（wrap content）
     #[doc(hidden)]
     fn child_constraints(c: Constraints) -> Constraints;
+    /// 交叉轴 max 修改（contentPadding 缩小 item 可用宽度）
+    #[doc(hidden)]
+    fn with_cross_max(c: Constraints, v: f32) -> Constraints;
     /// (交叉轴, 主轴) → 位置
     #[doc(hidden)]
     fn point(cross: f32, main: f32) -> Point;
@@ -70,6 +73,9 @@ impl LazyAxis for VerticalAxis {
     fn child_constraints(c: Constraints) -> Constraints {
         Constraints { min_width: 0.0, max_width: c.max_width, min_height: 0.0, max_height: f32::MAX }
     }
+    fn with_cross_max(c: Constraints, v: f32) -> Constraints {
+        Constraints { min_width: 0.0, max_width: v, min_height: 0.0, max_height: c.max_height }
+    }
     fn point(cross: f32, main: f32) -> Point { Point::new(cross, main) }
     fn size(cross: f32, main: f32) -> Size { Size::new(cross, main) }
     fn scroll(state: crate::modifier::ScrollState) -> Modifier {
@@ -87,6 +93,9 @@ impl LazyAxis for HorizontalAxis {
     fn cross_size(s: Size) -> f32 { s.height }
     fn child_constraints(c: Constraints) -> Constraints {
         Constraints { min_width: 0.0, max_width: f32::MAX, min_height: 0.0, max_height: c.max_height }
+    }
+    fn with_cross_max(c: Constraints, v: f32) -> Constraints {
+        Constraints { min_width: 0.0, max_width: c.max_width, min_height: 0.0, max_height: v }
     }
     fn point(cross: f32, main: f32) -> Point { Point::new(main, cross) }
     fn size(cross: f32, main: f32) -> Size { Size::new(main, cross) }
@@ -313,6 +322,10 @@ pub struct LazyList<A: LazyAxis> {
     spacing: f32,
     modifier: Modifier,
     intervals: IntervalList,
+    /// 主轴内容内边距 (before, after)——垂直 = top/bottom；水平 = start/end
+    content_padding: (f32, f32),
+    /// 交叉轴内容内边距 (before, after)——垂直 = start/end；水平 = top/bottom
+    cross_padding: (f32, f32),
 }
 
 /// 垂直懒列表（对标 Compose `LazyColumn`）
@@ -338,7 +351,25 @@ impl<A: LazyAxis> LazyList<A> {
             spacing: 0.0,
             modifier: Modifier::new(),
             intervals: IntervalList::new(),
+            content_padding: (0.0, 0.0),
+            cross_padding: (0.0, 0.0),
         }
+    }
+
+    /// 主轴内容内边距（对齐 Compose `contentPadding`）：垂直列表 = top/bottom，
+    /// 水平列表 = start/end。内容从 before 处开始放置；滚动到边界时内容
+    /// 停在 padding 处（不贴视口边）；sticky header 钉在 before 处；
+    /// 总内容高 = before + 项 + after（max_offset 含 padding）。
+    pub fn content_padding(mut self, before: f32, after: f32) -> Self {
+        self.content_padding = (before, after);
+        self
+    }
+
+    /// 交叉轴内容内边距（垂直列表 = start/end）：缩小 item 可用宽度并让
+    /// item 从 before 处开始放置（对齐 Compose contentPadding 的交叉轴语义）。
+    pub fn content_padding_cross(mut self, before: f32, after: f32) -> Self {
+        self.cross_padding = (before, after);
+        self
     }
 
     /// 注入外部滚动状态（跨重组保持；不传则内部 remember）
@@ -473,9 +504,10 @@ pub(crate) fn prefix_height(cache: &ItemHeightCache, index: usize, spacing: f32)
 /// 未测项按预估高度继续推算（而非在已知范围末尾截断）——否则滚动超出已测范围时
 /// 锚点错误退回 0（实测：offset=2000 空缓存时恒返回 (0,0)，滚动失效）。
 /// 已知高度部分线性扫描，超出部分用除法直接估算（O(1) 防大 offset 循环）。
-pub(crate) fn anchor_from_offset(cache: &ItemHeightCache, offset: f32, spacing: f32) -> (usize, f32) {
+pub(crate) fn anchor_from_offset(cache: &ItemHeightCache, offset: f32, spacing: f32, before: f32) -> (usize, f32) {
+    // 内容坐标含 before padding：项 i 顶 = before + prefix(i)
     let known = cache.heights.len();
-    let mut acc = 0.0;
+    let mut acc = before;
     for i in 0..known {
         let h = cache.height(i) + spacing;
         if acc + h > offset {
@@ -552,7 +584,7 @@ impl<A: LazyAxis> LazyList<A> {
             if let Some(last_key) = state.last_known_first_key.get() {
                 let cache_ref = cache.get();
                 if let Some(new_index) = intervals.index_of_key(last_key) {
-                    let new_offset = prefix_height(&cache_ref, new_index, self.spacing);
+                    let new_offset = self.content_padding.0 + prefix_height(&cache_ref, new_index, self.spacing);
                     state.offset.set(new_offset);
                 }
             }
@@ -562,9 +594,10 @@ impl<A: LazyAxis> LazyList<A> {
         let cache_ref = cache.get();
         // 锚点：跳转请求权威（对齐 Compose——requestPosition 后直接从请求的
         // index 开始组合，不经过像素反推）；否则由像素 offset 反推
+        let pad_before = self.content_padding.0;
         let (first_index, first_item_offset) = match state.jump_request.get() {
             Some((idx, off)) => (idx.min(total), off),
-            None => anchor_from_offset(&cache_ref, offset, self.spacing),
+            None => anchor_from_offset(&cache_ref, offset, self.spacing, pad_before),
         };
         // 记录锚点项 key（供下次数据变化校正）——派生锚点由测量期 policy 写回精确值
         if let Some(k) = intervals.key_of(first_index) {
@@ -588,7 +621,7 @@ impl<A: LazyAxis> LazyList<A> {
         let mut pin: Option<usize> = None;
         let mut prev_pin: Option<usize> = None;
         if intervals.has_sticky_headers() {
-            let c_anchor = prefix_height(&cache_ref, first_index, self.spacing);
+            let c_anchor = pad_before + prefix_height(&cache_ref, first_index, self.spacing);
             if intervals.is_sticky(first_index) && c_anchor <= offset + 0.01 {
                 pin = Some(first_index);
             } else {
@@ -605,7 +638,7 @@ impl<A: LazyAxis> LazyList<A> {
             }
             if let Some(p) = pin {
                 // prev：pin 上方最近的 sticky；走到底部 ≤ 视口顶即停（更上方不可见）
-                let mut c2 = prefix_height(&cache_ref, p, self.spacing);
+                let mut c2 = pad_before + prefix_height(&cache_ref, p, self.spacing);
                 let mut j = p;
                 while j > 0 {
                     j -= 1;
@@ -658,6 +691,8 @@ impl<A: LazyAxis> LazyList<A> {
             is_scroll_in_progress: is_scrolling.clone(),
             spacing: self.spacing,
             total,
+            content_padding: self.content_padding,
+            cross_padding: self.cross_padding,
             globals,
             sticky_children,
             pin,
@@ -718,6 +753,10 @@ pub(crate) struct LazyListPolicy<A: LazyAxis> {
     pub is_scroll_in_progress: crate::core::state::State<bool>,
     pub spacing: f32,
     pub total: usize,
+    /// 主轴内容内边距 (before, after)
+    pub content_padding: (f32, f32),
+    /// 交叉轴内容内边距 (before, after)
+    pub cross_padding: (f32, f32),
     /// 注册顺序 → 全局 index（sticky 项排在最后——画在最上层）
     pub globals: Vec<usize>,
     /// 注册序中 sticky 子节点的 child 下标（全局升序）
@@ -753,9 +792,13 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
             self.viewport.get()
         };
 
-        // 测量每个子节点：交叉轴继承父 max，主轴无界（wrap content——
-        // 不能传父约束（max=视口）否则子项被撑满视口）
-        let child_constraints = A::child_constraints(constraints);
+        // 测量每个子节点：交叉轴继承父 max（扣交叉轴 contentPadding——
+        // 对齐 Compose：item 可用宽度 = 视口 - cross padding），主轴无界
+        // （wrap content——不能传父约束（max=视口）否则子项被撑满视口）
+        let (cb, ca) = self.cross_padding;
+        let mut child_constraints = A::child_constraints(constraints);
+        let cross_max = A::cross_max(child_constraints);
+        child_constraints = A::with_cross_max(child_constraints, (cross_max - cb - ca).max(0.0));
         let mut placements = Vec::with_capacity(children.len());
         let mut measured: Vec<(f32, f32)> = Vec::with_capacity(children.len());
         for &c in children.iter() {
@@ -770,8 +813,10 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         for (i, (h, _)) in measured.iter().enumerate() {
             cache.record(self.globals[i], *h);
         }
-        // 内容总高：注册项实测 + 未注册项预估（供 apply_scroll_delta 算 max_offset）
-        let mut content_h = 0.0;
+        // 内容总高：注册项实测 + 未注册项预估（供 apply_scroll_delta 算 max_offset）；
+        // 含 主轴 contentPadding（对齐 Compose：max_offset = before + 内容 + after - 视口）
+        let (pad_before, pad_after) = self.content_padding;
+        let mut content_h = pad_before + pad_after;
         for g in 0..self.total {
             content_h += cache.height(g) + self.spacing;
         }
@@ -786,9 +831,10 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
             // 程序化跳转接管：取消进行中的 fling + 结束滚动中标记
             crate::animation::cancel_animation(&self.state.offset);
             self.is_scroll_in_progress.set(false);
+            // 含 before padding：scrollToItem 后项顶贴视口顶（对齐 Compose：padding 只在自然滚动边界生效）
             self.state
                 .offset
-                .set(prefix_height(&cache, idx, self.spacing) + req_off);
+                .set(pad_before + prefix_height(&cache, idx, self.spacing) + req_off);
             self.state.jump_request.set(None);
         }
 
@@ -809,8 +855,8 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         // 钉住时锚点 = (pin, 0)（对齐 Compose：firstVisibleItemIndex 就是钉住的
         // header）；否则自然锚点（像素反推）
         let (real_first, real_off) = match self.pin {
-            Some(p) if offset >= prefix_height(&cache, p, self.spacing) => (p, 0.0),
-            _ => anchor_from_offset(&cache, offset, self.spacing),
+            Some(p) if offset >= pad_before + prefix_height(&cache, p, self.spacing) => (p, 0.0),
+            _ => anchor_from_offset(&cache, offset, self.spacing, pad_before),
         };
         self.state.first_visible_index.set(real_first);
         self.state.first_visible_offset.set(real_off);
@@ -818,15 +864,16 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         // 锚点排布：**内容坐标**（主轴 = 项在内容中的累计位置，不含 offset）——
         // 滚动由框架 scroll translate(-offset) 处理。若 placement 也含 offset 会
         // 双重偏移（实测：滚动 3000 后内容完全滚出视口）。
+        // 内容起点 = before 内容内边距（对齐 Compose contentPadding）。
         // sticky pass（对齐 Compose LazyListMeasure）：
-        //   正向 final(i) = max(C(i) - offset, 0)   —— 滚过顶钉在 0
+        //   正向 final(i) = max(C(i) - offset, before)   —— 滚过顶钉在 before 处
         //   反向 final(prev) = min(final(prev), final(next) - h(prev))
         //     —— 下一个 header 距顶 h(prev) 内时前一个开始滑出
         // 放置内容坐标 = final + offset；普通项保持自然位置（累计）
         let mut fin: std::collections::HashMap<usize, f32> = std::collections::HashMap::new();
         for &ci in &self.sticky_children {
-            let v = prefix_height(&cache, self.globals[ci], self.spacing) - offset;
-            fin.insert(ci, v.max(0.0));
+            let v = pad_before + prefix_height(&cache, self.globals[ci], self.spacing) - offset;
+            fin.insert(ci, v.max(pad_before));
         }
         for k in (1..self.sticky_children.len()).rev() {
             let prev = self.sticky_children[k - 1];
@@ -844,7 +891,7 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
                 Some(f) => *f + offset,
                 None => {
                     if !main_init {
-                        main_pos = prefix_height(&cache, self.globals[i], self.spacing);
+                        main_pos = pad_before + prefix_height(&cache, self.globals[i], self.spacing);
                         main_init = true;
                     }
                     let p = main_pos;
@@ -853,7 +900,8 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
                 }
             };
             placements.push(crate::layout::node::Placement {
-                position: A::point(0.0, pos),
+                // 交叉轴从 cross_before 处开始（contentPadding 交叉轴语义）
+                position: A::point(cb, pos),
                 size: A::size(w, h),
             });
         }
@@ -919,12 +967,16 @@ mod tests {
         let mut c = ItemHeightCache::default();
         for i in 0..10 { c.record(i, 50.0); }
         // 每项 50+0 间距：offset 0..50 → 项 0；50..100 → 项 1
-        assert_eq!(anchor_from_offset(&c, 0.0, 0.0), (0, 0.0));
-        assert_eq!(anchor_from_offset(&c, 49.0, 0.0), (0, 49.0));
-        assert_eq!(anchor_from_offset(&c, 50.0, 0.0), (1, 0.0));
-        assert_eq!(anchor_from_offset(&c, 120.0, 0.0), (2, 20.0));
+        assert_eq!(anchor_from_offset(&c, 0.0, 0.0, 0.0), (0, 0.0));
+        assert_eq!(anchor_from_offset(&c, 49.0, 0.0, 0.0), (0, 49.0));
+        assert_eq!(anchor_from_offset(&c, 50.0, 0.0, 0.0), (1, 0.0));
+        assert_eq!(anchor_from_offset(&c, 120.0, 0.0, 0.0), (2, 20.0));
+        // before padding：内容起点下移（offset=50 含 before → 锚点仍在项 0，偏移 0）
+        assert_eq!(anchor_from_offset(&c, 50.0, 0.0, 50.0), (0, 0.0));
+        assert_eq!(anchor_from_offset(&c, 99.0, 0.0, 50.0), (0, 49.0));
+        assert_eq!(anchor_from_offset(&c, 100.0, 0.0, 50.0), (1, 0.0));
         // 超出已知范围（10 项已知）→ 按预估 48 继续扩展：99999 / 48 ≈ 2082
-        let (far_idx, far_off) = anchor_from_offset(&c, 99999.0, 0.0);
+        let (far_idx, far_off) = anchor_from_offset(&c, 99999.0, 0.0, 0.0);
         assert!(far_idx > 2000, "预估扩展：实际 {far_idx}");
         // 已知 10 项 ×50 先扣掉，剩余按预估 48 继续：99999 - 500 - (idx-10)*48
         let expected = 99999.0 - 500.0 - (far_idx - 10) as f32 * 48.0;
@@ -964,7 +1016,7 @@ mod tests {
         // 真实场景 build 有上一帧的高度缓存。这里显式记录前 60 项高度模拟已测状态。
         let mut cache = ItemHeightCache::default();
         for i in 0..60 { cache.record(i, 48.0); }
-        let (first, _) = anchor_from_offset(&cache, 2400.0, 0.0);
+        let (first, _) = anchor_from_offset(&cache, 2400.0, 0.0, 0.0);
         assert_eq!(first, 50, "offset 2400 / 48 = 项 50");
         let key50 = il.key_of(50).unwrap();
         assert_eq!(key50, 50);
@@ -1475,6 +1527,54 @@ mod tests {
         lb.build(ctx);
     }
 
+    /// 带 content_padding 的 1000 项列表（对齐 render_lazy 的 400x600 视口）
+    fn plain_build_padded(ctx: &mut ComposeCtx, state: LazyListState, pad: (f32, f32), cross: (f32, f32)) {
+        let items: Arc<Vec<u64>> = Arc::new((0..1000).collect());
+        LazyColumn::new()
+            .state(state)
+            .content_padding(pad.0, pad.1)
+            .content_padding_cross(cross.0, cross.1)
+            .modifier(Modifier::new().fill_max_width().fill_max_height())
+            .items_from(items, |v: &u64| *v, |ctx, _i, v| {
+                crate::ui::text::Text::new(format!("Item {v}"))
+                    .font_size(14.0)
+                    .modifier(Modifier::new().padding(12.0))
+                    .build(ctx);
+            })
+            .build(ctx);
+    }
+
+    /// 带 content_padding 的 5 sections 红底 sticky 列表（header 全局 index = n*20）
+    fn sticky_build_padded(ctx: &mut ComposeCtx, state: LazyListState, pad: f32) {
+        use crate::modifier::{Color, Shape};
+        let mut lb = LazyColumn::new()
+            .state(state)
+            .content_padding(pad, 0.0)
+            .modifier(Modifier::new().fill_max_width().fill_max_height());
+        for s in 0..5u64 {
+            lb = lb.sticky_header(s, move |ctx| {
+                crate::ui::text::Text::new(format!("HEAD {s}"))
+                    .font_size(18.0)
+                    .modifier(Modifier::new().padding(12.0).background(
+                        Color::from_argb(255, 0xC6, 0x28, 0x28),
+                        Shape::rounded(2.0),
+                    ))
+                    .build(ctx);
+            });
+            lb = lb.items(
+                19,
+                move |i| 200 + s * 19 + i as u64,
+                move |ctx, i| {
+                    crate::ui::text::Text::new(format!("Item {}", s * 19 + i as u64))
+                        .font_size(14.0)
+                        .modifier(Modifier::new().padding(12.0))
+                        .build(ctx);
+                },
+            );
+        }
+        lb.build(ctx);
+    }
+
     /// 顶部红色 header 带数量：连续红色行段（header 背景）计数
     fn red_bands(px: &[[u8; 4]], w: usize, h: usize, limit: usize) -> usize {
         let mut bands = 0;
@@ -1671,5 +1771,110 @@ mod tests {
         let n1 = composed.load(std::sync::atomic::Ordering::Relaxed);
         assert!(n1 <= 60, "深滚动组合项数应仍远小于 100，实际 {n1}");
         assert_eq!(red_bands(&px, w, 600, 200), 1);
+    }
+
+    // ═══════════════════════════════════════════════════
+    // contentPadding（对齐 Compose contentPadding）
+    // ═══════════════════════════════════════════════════
+
+    #[test]
+    fn content_padding_starts_content_after_padding() {
+        // pad_before=50：offset 0 时首项内容从 y≈68 开始（50 + padding 12 + glyph），
+        // 顶部 20..30 行无文本；offset=50（内容滚进 padding）后首项贴顶，文本进入 18..30
+        let state = LazyListState::new();
+        let (px0, w0) = render_lazy(|ctx| plain_build_padded(ctx, state.clone(), (50.0, 0.0), (0.0, 0.0)));
+        let mut top_empty = true;
+        for y in 20..30usize {
+            for x in (0..w0).step_by(2) {
+                let p = px0[y * w0 + x];
+                if p[0] < 120 && p[1] < 120 && p[2] < 120 { top_empty = false; }
+            }
+        }
+        assert!(top_empty, "offset 0 时顶部 20..30 行应为空白（内容从 pad 50 后开始）");
+
+        state.offset.set(50.0);
+        let (px1, w1) = render_lazy(|ctx| plain_build_padded(ctx, state.clone(), (50.0, 0.0), (0.0, 0.0)));
+        let mut top_text = false;
+        for y in 18..30usize {
+            for x in (0..w1).step_by(2) {
+                let p = px1[y * w1 + x];
+                if p[0] < 120 && p[1] < 120 && p[2] < 120 { top_text = true; }
+            }
+        }
+        assert!(top_text, "offset=50 后首项应贴顶（文本进入 y 18..30）");
+        // 滚动前项顶在 y=50：自然边界处内容停在内边距处，不贴视口边
+        assert_eq!(state.first_visible(), 0, "pad 50 + offset 50 → 锚点 index 0");
+    }
+
+    #[test]
+    fn content_padding_max_offset_includes_after() {
+        // pad_after=40：跳末尾时 max_offset = pad_before + Σ项 + pad_after - viewport，
+        // 末项底停在 viewport-40 处 → 底部 35 行无文本
+        let state = LazyListState::new();
+        state.scroll_to_item(99999, 0.0);
+        let (px, w) = render_lazy(|ctx| plain_build_padded(ctx, state.clone(), (0.0, 40.0), (0.0, 0.0)));
+        assert!(state.offset() > 20_000.0, "跳末尾应滚到接近末尾，实际 {}", state.offset());
+        let first = state.first_visible();
+        assert!(first >= 970, "first_visible 应接近末尾，实际 {first}");
+        let mut bottom_empty = true;
+        for y in (600 - 35)..600usize {
+            for x in (0..w).step_by(2) {
+                let p = px[y * w + x];
+                if p[0] < 120 && p[1] < 120 && p[2] < 120 { bottom_empty = false; }
+            }
+        }
+        assert!(bottom_empty, "pad_after=40：底部 35 行应为空白（末项停在 padding 处）");
+    }
+
+    #[test]
+    fn content_padding_sticky_pins_at_padding() {
+        // pad=50：深滚动后 header 4（全局 80）钉在视口 y=50（不是 0）：
+        // 顶部 45 行无红，红带在 y 50..98
+        let state = LazyListState::new();
+        state.offset.set(3900.0); // C(80)=3800（h=47.5）→ header 4 钉住；且 < max_off≈4200 不 clamp
+        let (px, w) = render_lazy(|ctx| sticky_build_padded(ctx, state.clone(), 50.0));
+        let mut top_clear = true;
+        for y in 0..45usize {
+            for x in (0..w).step_by(2) {
+                let p = px[y * w + x];
+                if p[2] > 150 && p[0] < 100 && p[1] < 100 { top_clear = false; }
+            }
+        }
+        assert!(top_clear, "pad=50：顶部 45 行应为空白（header 钉在 y=50）");
+        let mut band_red = false;
+        for y in 50..98usize {
+            for x in (0..w).step_by(2) {
+                let p = px[y * w + x];
+                if p[2] > 150 && p[0] < 100 && p[1] < 100 { band_red = true; }
+            }
+        }
+        assert!(band_red, "y 50..98 应为红色钉住 header");
+        assert_eq!(state.first_visible(), 80, "钉住时锚点 = 钉住的 header（全局 80）");
+        // 红带不再覆盖视口顶 0..40
+        assert_eq!(red_bands(&px, w, 600, 200), 1, "仅一条红带（钉住的 header）");
+    }
+
+    #[test]
+    fn content_padding_cross_axis_shrinks_items() {
+        // cross pad 40/40：item 从 x=40 开始放置且宽被限制在 400-80=320：
+        // x<36 无文本；文本起点 ≈ x 52..92
+        let state = LazyListState::new();
+        let (px, w) = render_lazy(|ctx| plain_build_padded(ctx, state.clone(), (0.0, 0.0), (40.0, 40.0)));
+        let mut left_empty = true;
+        for y in (0..600).step_by(2) {
+            for x in 0..36usize {
+                let p = px[y * w + x];
+                if p[0] < 120 && p[1] < 120 && p[2] < 120 { left_empty = false; }
+            }
+        }
+        assert!(left_empty, "交叉轴 padding 40：x<36 应无文本");
+        let mut text_after_pad = false;
+        for y in (0..600).step_by(2) {
+            for x in 56..70usize {
+                let p = px[y * w + x];
+                if p[0] < 120 && p[1] < 120 && p[2] < 120 { text_after_pad = true; }
+            }
+        }
+        assert!(text_after_pad, "文本应从 x≈54 开始（40 cross + 12 padding）");
     }
 }

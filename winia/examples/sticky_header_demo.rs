@@ -5,6 +5,7 @@
 //! - 滚动时 header 钉在视口顶，内容从它下面滑过
 //! - 下一个 header 到来时把前一个推上去
 //! - 钉住的 header 成为派生锚点（firstVisible = header index）
+//! - content_padding(40, 40)：内容从顶部 40px 内边距开始，滚动到底时停在底部 40px 内边距处
 //!
 //! 运行：cargo run -p winia --example sticky_header_demo
 
@@ -63,6 +64,7 @@ fn sticky_header_demo(ctx: &mut ComposeCtx) {
 
             let mut lb = LazyColumn::new()
                 .state(state.clone())
+                .content_padding(40.0, 40.0)
                 .modifier(Modifier::new().fill_max_width().fill_max_height());
             for s in 0..SECTION_COUNT {
                 lb = lb.sticky_header(s, move |ctx| {

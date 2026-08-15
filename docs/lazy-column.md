@@ -48,6 +48,13 @@ LazyColumn::new()
     .item(|ctx| { ... })
     .item_keyed(42, |ctx| { ... })
 
+    // 主轴内边距（对齐 Compose contentPadding）：内容从 before 开始放置；
+    // 自然滚动边界处内容停在 padding 处（不贴视口边）；scrollToItem 后项仍贴顶；
+    // max_offset = before + Σ项 + after - 视口（跳末尾时底部留出 after）
+    .content_padding(40.0, 40.0)      // (before, after)，默认 (0, 0)
+    // 交叉轴内边距：缩小每项约束宽 + 项从 before 处放置
+    .content_padding_cross(16.0, 16.0) // (before, after)，默认 (0, 0)
+
     // 吸顶 header（对齐 Compose stickyHeader）：
     // 滚动时钉在视口顶、内容从它下面滑过；下一个 header 到来时把前一个
     // 推上去。key 必须全列表唯一；注册顺序不限（内部自动置顶绘制）
@@ -143,6 +150,18 @@ state.scroll_to_item(50, 0.0);
 - **组合数量**：仅窗口内项 + 钉住/过渡 header，不拉全列表（100 项列表
   深滚动组合数仍 ~50）。
 
+### 2.6 主轴/交叉轴内边距（contentPadding，对齐 Compose contentPadding）
+
+- **主轴 before/after**：内容从 `pad_before` 开始放置（所有 prefix 计算从
+  pad_before 起算，锚点解析/header 钉住判定同样含 before）；
+- **边界语义对齐 Compose**：自然滚动到边界时内容停在 padding 处（不贴
+  视口边）——`max_offset = pad_before + Σ项+间距 + pad_after - viewport`；
+  而 `scroll_to_item` 的 jump offset 含 before（`pad_before + prefix + 请求偏移`），
+  跳转后项仍贴视口顶——padding 只在自然滚动边界生效；
+- **sticky 交互**：钉住 header 钉在 `pad_before` 处（视口坐标），不是 0
+  （`final(i) = max(pad_before + C(i) - s, pad_before)`）；
+- **交叉轴 before/after**：每项约束宽 `max -= cb + ca`（项被压缩），项从
+  `cross_before` 处放置（`A::with_cross_max` 轴无关改写约束）。
 ## 3. 框架扩展（本组件新增）
 
 | 项 | 位置 | 说明 |
@@ -184,8 +203,10 @@ cargo test -p winia --lib ui::lazy_column
 cargo test -p winia --features debug-server --test ui_test
 ```
 
-测试覆盖：IntervalList 定位/key 映射、高度缓存预估/记录、锚点转换、
-可见范围预取、稳定 key 数据变化滚动保持；LazyRow 像素测试
-（横向只渲染可见项、横向滚动后内容变化）；stickyHeader 像素测试
+测试覆盖：IntervalList 定位/key 映射、高度缓存预估/记录、锚点转换（含
+before padding）、可见范围预取、稳定 key 数据变化滚动保持；LazyRow 像素
+测试（横向只渲染可见项、横向滚动后内容变化）；stickyHeader 像素测试
 （滚动钉顶 + 锚点 = pin、过渡期合并带/推出、深滚动无界回溯、组合数量
-有界）；集成：横向滚轮（`s dx dy`）与横向拖拽 + fling（fixture_scroll）。
+有界）；contentPadding 像素测试（内容从 before 内边距开始、末尾留出
+pad_after、sticky 钉在 pad_before、交叉轴压缩项）；集成：横向滚轮
+（`s dx dy`）与横向拖拽 + fling（fixture_scroll）。
