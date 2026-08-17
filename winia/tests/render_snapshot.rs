@@ -6,7 +6,7 @@
 use winia::core::composer::{Composer, ComposeCtx};
 use winia::layout::constraints::Constraints;
 use winia::modifier::{Modifier, Color, Shape};
-use winia::ui::{Text, Button, Column, Row};
+use winia::ui::{Text, Button, Column, Row, FloatingActionButton, FloatingActionButtonSize, Icon};
 use winia::render;
 
 // ── 辅助 ──
@@ -158,6 +158,67 @@ fn button_with_text_does_not_crash() {
                 Text::new("Click").color(Color::WHITE).font_size(14.0).build(ctx);
             });
     }));
+}
+
+#[test]
+fn floating_action_button_renders_rounded_shape_and_content() {
+    let (mut surface, _) = render_ui(120.0, 120.0, winia::app_root!(|ctx| {
+        FloatingActionButton::new().build(ctx, |ctx| {
+            Icon::svg_path("M12 5v14M5 12h14")
+                .size(FloatingActionButtonSize::Regular.icon_size())
+                .build(ctx);
+        });
+    }));
+
+    let theme = winia::ui::theme::ThemeColors::default_light();
+    let center = pixel(&mut surface, 28, 28);
+    assert!(color_close(
+        (center.0, center.1, center.2),
+        (theme.primary_container.r, theme.primary_container.g, theme.primary_container.b),
+        12,
+    ), "FAB center should use primary-container, got {center:?}");
+
+    let corner = pixel(&mut surface, 0, 0);
+    assert!(color_close((corner.0, corner.1, corner.2), (255, 255, 255), 12),
+        "rounded corner should remain background, got {corner:?}");
+
+    let mut non_white = 0;
+    for y in 12..44 {
+        for x in 12..44 {
+            let (r, g, b, _) = pixel(&mut surface, x, y);
+            if r < 240 || g < 240 || b < 240 { non_white += 1; }
+        }
+    }
+    assert!(non_white > 20, "FAB should contain rendered content and container pixels");
+}
+
+#[test]
+fn floating_action_button_medium_uses_rounded_container() {
+    let (mut surface, _) = render_ui(140.0, 120.0, winia::app_root!(|ctx| {
+        FloatingActionButton::medium().build(ctx, |_ctx| {});
+    }));
+
+    let center = pixel(&mut surface, 40, 40);
+    assert!(center.0 < 255 || center.1 < 255 || center.2 < 255);
+    let outer_corner = pixel(&mut surface, 0, 0);
+    assert!(color_close((outer_corner.0, outer_corner.1, outer_corner.2), (255, 255, 255), 12),
+        "rounded FAB corner should remain background, got {outer_corner:?}");
+}
+
+#[test]
+fn disabled_floating_action_button_still_renders_without_interaction() {
+    let mut composer = Composer::new();
+    composer.compose(|ctx| {
+        FloatingActionButton::new()
+            .enabled(false)
+            .on_click(|| panic!("disabled FAB must not invoke callback"))
+            .build(ctx, |_ctx| {});
+    });
+    let root = composer.layout_root().expect("FAB root");
+    assert_eq!(root.children.len(), 0);
+    assert!(root.modifier.clickable_interaction().is_none());
+    assert!(root.modifier.focusable_interaction().is_none());
+    assert!(root.modifier.ripple_interaction().is_none());
 }
 
 #[test]

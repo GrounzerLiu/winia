@@ -33,6 +33,7 @@ pub mod slider;
 pub mod progress_indicator;
 pub mod loading_indicator;
 pub mod wavy_progress_indicator;
+pub mod floating_action_button;
 pub mod divider;
 pub mod lazy_column;
 
@@ -99,6 +100,12 @@ pub use wavy_progress_indicator::{
     WAVY_LINEAR_STOP_SIZE, WAVY_LINEAR_DETERMINATE_WAVELENGTH,
     WAVY_LINEAR_INDETERMINATE_WAVELENGTH, WAVY_CIRCULAR_WAVELENGTH,
     WAVY_ANIMATION_DURATION_MS,
+};
+pub use floating_action_button::{
+    FloatingActionButton, FloatingActionButtonColors, FloatingActionButtonDefaults,
+    FloatingActionButtonElevation, FloatingActionButtonSize,
+    FAB_SMALL_SIZE, FAB_REGULAR_SIZE, FAB_MEDIUM_SIZE, FAB_LARGE_SIZE,
+    FAB_ICON_SIZE, FAB_MEDIUM_ICON_SIZE, FAB_LARGE_ICON_SIZE,
 };
 pub use chip::{Chip, ChipVariant, ChipColors, SelectableChipColors, ChipDefaults};
 pub use divider::{Divider, DividerDefaults, DIVIDER_THICKNESS, DIVIDER_HAIRLINE};
