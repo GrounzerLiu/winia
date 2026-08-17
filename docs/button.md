@@ -108,9 +108,9 @@ shadow(graphics_layer) → 用户 modifier → clickable/ripple。
 
 ### 2.3 阴影（hover 升高动画）
 
-- 阴影值由 `graphics_layer.shadow_elevation` 动态闭包驱动，180ms tween 平滑过渡，
-  悬停 3 / 聚焦 1 / 按下 4 / rest 1（Elevated 系——按下最高，触屏无 hover 也能有
-  按下反馈；pressed 偏离 M3 token 的理由见 §1.3），移出后回落。
+- 阴影值由 `graphics_layer.shadow_elevation` 动态闭包驱动，180ms tween 平滑过渡。
+  Filled 默认全 0；Elevated 对齐 M3 token：悬停 2 / 聚焦 1 / 按下 1 / rest 1 / disabled 0，
+  移出后回落。
 - 阴影形状跟随 `Button::shape`；全 0 阴影（Filled 默认）不创建图层。
 - `graphics_layer` 只影响外观，不参与命中测试（语义已注释）。
 

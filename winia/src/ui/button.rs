@@ -199,26 +199,20 @@ impl ButtonElevation {
         Self::new(0.0, 0.0, 0.0, 0.0, 0.0)
     }
 
-    /// ElevatedButton 默认阴影（基础对齐 M3 1.4.0 `ElevatedButtonTokens`：
-    /// rest 1 / focused 1 / hovered 3 / disabled 0；**pressed 4 有意偏离 M3 的
-    /// pressed=Level1（回落）**——M3 的"按下压下去"隐喻依赖 hover 状态存在，
-    /// 触屏无 hover，按下若不升高则 Elevated 按钮在触屏上无任何阴影反馈。
-    /// 本框架语义：按下升高（rest 1 < hover 3 < press 4）、释放降低，鼠标与触屏一致；
-    /// 变化经动画平滑过渡）
+    /// ElevatedButton 默认阴影（对齐 M3 `ElevatedButtonTokens`）：
+    /// rest 1 / pressed 1 / focused 1 / hovered 2 / disabled 0。
     pub fn elevated() -> Self {
-        Self::new(1.0, 4.0, 1.0, 3.0, 0.0)
+        Self::new(1.0, 1.0, 1.0, 2.0, 0.0)
     }
 
-    /// 按状态取 elevation（优先级 disabled > pressed > dragged > hovered > focused > default——
-    /// 与 material3 的"最近交互优先"一致；pressed 分支取 `max(pressed, hovered)`——
-    /// 按下至少保持 hover 高度，自定义配置 press < hover 时按下也不会回落）
+    /// 按状态取 elevation（优先级 disabled > pressed > dragged > hovered > focused > default）。
     pub fn for_state(&self, state: &ComponentState) -> f32 {
         if !state.enabled {
             self.disabled
         } else if state.pressed {
-            self.pressed.max(self.hovered)
+            self.pressed
         } else if state.dragged {
-            self.pressed.max(self.hovered)
+            self.pressed
         } else if state.hovered {
             self.hovered
         } else if state.focused {
@@ -974,29 +968,28 @@ mod tests {
             e.for_state(&ComponentState { pressed: true, hovered: true, ..ComponentState::idle() }),
             8.0
         );
-        // pressed < hovered 的自定义配置：按下取 max(pressed, hovered)——按下不回落
+        // pressed < hovered 时，按下按官方语义取 pressed，不抬高到 hover
         let low_press = ButtonElevation::new(1.0, 1.0, 1.0, 3.0, 0.0);
         assert_eq!(
             low_press.for_state(&ComponentState { pressed: true, hovered: true, ..ComponentState::idle() }),
-            3.0,
-            "按下至少保持 hover 高度（触屏兼容：按下升高释放降低）"
+            1.0,
+            "按下使用 pressed elevation"
         );
-        // Elevated 默认：rest 1 < hover 3 < press 4（pressed 有意偏离 M3 Level1 回落——
-        // 触屏无 hover，按下升高才有阴影反馈）
-        assert_eq!(ButtonElevation::elevated(), ButtonElevation::new(1.0, 4.0, 1.0, 3.0, 0.0));
+        // ElevatedButton 官方 token：rest 1 / pressed 1 / focused 1 / hovered 2 / disabled 0
+        assert_eq!(ButtonElevation::elevated(), ButtonElevation::new(1.0, 1.0, 1.0, 2.0, 0.0));
         assert_eq!(ButtonElevation::elevated().for_state(&ComponentState::idle()), 1.0);
         assert_eq!(
             ButtonElevation::elevated().for_state(&ComponentState { hovered: true, ..ComponentState::idle() }),
-            3.0
+            2.0
         );
         assert_eq!(
             ButtonElevation::elevated().for_state(&ComponentState { pressed: true, hovered: true, ..ComponentState::idle() }),
-            4.0
+            1.0
         );
-        // 触屏场景：pressed-only（无 hover）同样升高——按下反馈不依赖 hover 状态
+        // 触屏场景：pressed-only 与官方 token 相同
         assert_eq!(
             ButtonElevation::elevated().for_state(&ComponentState { pressed: true, ..ComponentState::idle() }),
-            4.0
+            1.0
         );
         assert_eq!(ButtonElevation::default_elevation().for_state(&ComponentState::idle()), 0.0);
     }
