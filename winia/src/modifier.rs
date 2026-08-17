@@ -1925,8 +1925,8 @@ Self::DrawIcon { .. } => f.write_str("DrawIcon"),
 
 // Skia's native shadow utility consumes the alpha directly. These values match
 // the low-opacity ambient/spot defaults used by Skia's shadow examples.
-const DEFAULT_AMBIENT_SHADOW_COLOR: Color = Color { r: 0, g: 0, b: 0, a: 0x19 };
-const DEFAULT_SPOT_SHADOW_COLOR: Color = Color { r: 0, g: 0, b: 0, a: 0x40 };
+const DEFAULT_AMBIENT_SHADOW_COLOR: Color = Color { r: 0, g: 0, b: 0, a: 0x20 };
+const DEFAULT_SPOT_SHADOW_COLOR: Color = Color { r: 0, g: 0, b: 0, a: 0x50 };
 
 /// 图形层变换参数
 ///

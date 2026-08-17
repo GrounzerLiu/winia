@@ -111,7 +111,9 @@ shadow(graphics_layer) → 用户 modifier → clickable/ripple。
 - 阴影值由 `graphics_layer.shadow_elevation` 动态闭包驱动，180ms tween 平滑过渡。
   Filled 默认全 0；Elevated 对齐 M3 token：悬停 2 / 聚焦 1 / 按下 1 / rest 1 / disabled 0，
   移出后回落。graphics-layer 阴影使用 Skia 原生 ambient/spot 光源，默认颜色约为
-  ambient 10% 黑、spot 25% 黑。阴影颜色可通过 `Modifier::ambient_shadow_color` /
+  ambient 12.5% 黑（`0x20`）、spot 31% 黑（`0x50`）。这是为增强原生 Skia 阴影
+  清晰度的微调；若视觉过重，可在 `modifier.rs` 将默认值恢复为 ambient 10%（`0x19`）/
+  spot 25%（`0x40`）。阴影颜色也可通过 `Modifier::ambient_shadow_color` /
   `spot_shadow_color` 覆盖。
 - 阴影形状跟随 `Button::shape`；全 0 阴影（Filled 默认）不创建图层。
 - `graphics_layer` 只影响外观，不参与命中测试（语义已注释）。
