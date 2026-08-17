@@ -47,7 +47,7 @@ FloatingActionButton::new()
 
 设置 `on_click` 后，组件会注册 `clickable_with_source`、Focusable、Hoverable 和 bounded Ripple。焦点环、Ripple、背景和阴影共用同一 `Shape`。
 
-默认阴影为 3dp，悬停时为 4dp；还提供：
+默认 elevation 为 6dp，按下 12dp，聚焦/悬停 8dp；阴影由 Skia 原生 ambient/spot 光源绘制，默认使用低透明度黑色阴影；可通过 `Modifier::ambient_shadow_color` / `spot_shadow_color` 覆盖颜色；还提供：
 
 - `FloatingActionButtonDefaults::lowered_elevation()`：附着在其他表面时使用
 - `FloatingActionButtonDefaults::bottom_app_bar_elevation()`：底部应用栏场景，所有阴影为 0dp

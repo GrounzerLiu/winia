@@ -96,11 +96,8 @@ winia 没有为每种 M3 变体单独建 composable，而是用 `Card` builder �
 - 阴影值由 `graphics_layer.shadow_elevation` 动态闭包驱动，180ms tween 平滑过渡。
 - `for_state` 优先级：disabled > pressed > dragged > hovered > focused > default
   （与 material3 的"最近交互优先"一致；各状态取独立配置值）。
-- **pressed 分支取 `max(pressed, hovered)`**（与 Button 同一语义）：
-  按下不低于 hover 高度——触屏无 hover，按下升高才有阴影反馈
-  （Elevated 默认 pressed=1 低于 hovered=2，按下若回落则触屏按下无反馈）。
-- 阴影形状跟随 `Card::shape`；`elevation` 为 None（Filled/Outlined 默认）时不创建
-  图层；显式配置全 0 阴影同样不创建。
+- 阴影由 Skia 原生 ambient/spot 光源绘制，默认颜色约为 ambient 10% 黑、spot 25% 黑；
+  阴影形状跟随 `Card::shape`。
 - `graphics_layer` 只影响外观，不参与命中测试（语义已注释）。
 
 ### 2.4 波纹与裁剪

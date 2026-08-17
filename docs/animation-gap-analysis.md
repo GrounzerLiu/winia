@@ -125,7 +125,7 @@
 | 低层 | `with_frame_nanos` 帧时钟 API | ❌ 缺（隐藏在内） |
 | 修饰符 | `animate_content_size` | ❌ 缺（布局层机制可做） |
 | 修饰符 | `animate_item`（列表增删移动） | ❌ 缺（无 LazyList） |
-| graphics_layer | shadow/clip/shape/blur | ❌ 缺（仅 6 个变换属性） |
+| graphics_layer | shadow/clip/shape/blur | ✅ 基础能力已接入（Skia 原生 ShadowUtils；高级 Compose 对齐项仍待完善） |
 | 手势 | fling/settle 联动 | ❌ 缺 |
 
 ### 已知限制（文档 §八，待修）⚠️

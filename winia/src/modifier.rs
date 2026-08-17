@@ -1334,6 +1334,16 @@ pub fn draw_icon(self, spec: crate::ui::icon::IconSpec) -> Self {
         self.merge_graphics_layer(move |p| p.shadow_shape = Some(shape.clone()))
     }
 
+    /// 图层环境光阴影颜色（对标 Compose `ambientShadowColor`）。
+    pub fn ambient_shadow_color(self, color: Color) -> Self {
+        self.merge_graphics_layer(move |p| p.ambient_shadow_color = color)
+    }
+
+    /// 图层投射光阴影颜色（对标 Compose `spotShadowColor`）。
+    pub fn spot_shadow_color(self, color: Color) -> Self {
+        self.merge_graphics_layer(move |p| p.spot_shadow_color = color)
+    }
+
     /// 便捷包装合并：已有 GraphicsLayer 元素 → 包装其 params_fn（叠加）；
     /// 否则 push 新元素。
     fn merge_graphics_layer(mut self, f: impl Fn(&mut GraphicsLayerParams) + Send + Sync + 'static) -> Self {
@@ -1724,9 +1734,17 @@ impl Modifier {
     }
 
     pub fn graphics_layer_params(&self) -> Option<GraphicsLayerParams> {
-        self.elements.iter().find_map(|el| {
-            if let ModifierElement::GraphicsLayer { params_fn } = el { Some((params_fn)()) } else { None }
-        })
+        let mut merged = None;
+        for el in self.elements.iter() {
+            let ModifierElement::GraphicsLayer { params_fn } = el else { continue };
+            let next = (params_fn)();
+            if let Some(current) = &mut merged {
+                merge_graphics_params(current, next);
+            } else {
+                merged = Some(next);
+            }
+        }
+        merged
     }
 
     /// 背景模糊半径（渲染期在节点内容绘制前即时处理）
@@ -1905,6 +1923,11 @@ Self::DrawIcon { .. } => f.write_str("DrawIcon"),
 
 // ── ScrollState ──
 
+// Skia's native shadow utility consumes the alpha directly. These values match
+// the low-opacity ambient/spot defaults used by Skia's shadow examples.
+const DEFAULT_AMBIENT_SHADOW_COLOR: Color = Color { r: 0, g: 0, b: 0, a: 0x19 };
+const DEFAULT_SPOT_SHADOW_COLOR: Color = Color { r: 0, g: 0, b: 0, a: 0x40 };
+
 /// 图形层变换参数
 ///
 /// ⚠ 只影响**绘制**（外观），不参与布局与命中测试（对标 Compose
@@ -1931,11 +1954,15 @@ pub struct GraphicsLayerParams {
     pub rotation_y: f32,
     /// 3D 相机距离（逻辑 px——越大透视越平；Compose 默认 8.dp）
     pub camera_distance: f32,
-    /// 图层阴影高度（逻辑 px——>0 时画 ambient+spot 阴影，对标
-    /// Compose graphicsLayer.shadowElevation）
+    /// 图层阴影高度（逻辑 px——>0 时由 Skia ShadowUtils 绘制 ambient+spot 阴影，
+    /// 对标 Compose graphicsLayer.shadowElevation）
     pub shadow_elevation: f32,
     /// 图层阴影形状（None = 矩形）
     pub shadow_shape: Option<Shape>,
+    /// 环境光阴影颜色（默认约 10% 黑，对标 Compose ambientShadowColor）。
+    pub ambient_shadow_color: Color,
+    /// 投射光阴影颜色（默认约 25% 黑，对标 Compose spotShadowColor）。
+    pub spot_shadow_color: Color,
 }
 
 impl Default for GraphicsLayerParams {
@@ -1949,6 +1976,8 @@ impl Default for GraphicsLayerParams {
             camera_distance: 8.0,
             shadow_elevation: 0.0,
             shadow_shape: None,
+            ambient_shadow_color: DEFAULT_AMBIENT_SHADOW_COLOR,
+            spot_shadow_color: DEFAULT_SPOT_SHADOW_COLOR,
         }
     }
 }
@@ -2488,6 +2517,36 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
     }
 }
 
+fn merge_graphics_params(current: &mut GraphicsLayerParams, next: GraphicsLayerParams) {
+    current.scale_x *= next.scale_x;
+    current.scale_y *= next.scale_y;
+    current.alpha *= next.alpha;
+    current.translation_x += next.translation_x;
+    current.translation_y += next.translation_y;
+    current.rotation_z += next.rotation_z;
+    current.rotation_x += next.rotation_x;
+    current.rotation_y += next.rotation_y;
+    if next.camera_distance != GraphicsLayerParams::default().camera_distance {
+        current.camera_distance = next.camera_distance;
+    }
+    if next.transform_origin != TransformOrigin::CENTER {
+        current.transform_origin = next.transform_origin;
+    }
+    current.clip |= next.clip;
+    if next.shadow_elevation > 0.0 {
+        current.shadow_elevation = next.shadow_elevation;
+    }
+    if next.shadow_shape.is_some() {
+        current.shadow_shape = next.shadow_shape;
+    }
+    if next.ambient_shadow_color != DEFAULT_AMBIENT_SHADOW_COLOR {
+        current.ambient_shadow_color = next.ambient_shadow_color;
+    }
+    if next.spot_shadow_color != DEFAULT_SPOT_SHADOW_COLOR {
+        current.spot_shadow_color = next.spot_shadow_color;
+    }
+}
+
 fn size_value_eq(a: &SizeValue, b: &SizeValue) -> bool {
     match (a, b) {
         (SizeValue::Static(ad), SizeValue::Static(bd)) => ad == bd,
@@ -2533,6 +2592,37 @@ mod param_eq_tests {
         let p = GraphicsLayerParams::default();
         assert_eq!(p.transform_origin, TransformOrigin::CENTER);
         assert!(!p.clip, "graphics_layer 本身默认不 clip（alpha 便捷版才 clip）");
+        assert_eq!(p.ambient_shadow_color, DEFAULT_AMBIENT_SHADOW_COLOR);
+        assert_eq!(p.spot_shadow_color, DEFAULT_SPOT_SHADOW_COLOR);
+    }
+
+    #[test]
+    fn graphics_layers_fold_and_preserve_user_colors() {
+        let custom = GraphicsLayerParams {
+            alpha: 0.5,
+            translation_x: 4.0,
+            ambient_shadow_color: Color::RED,
+            spot_shadow_color: Color::BLUE,
+            ..Default::default()
+        };
+        let p = Modifier::new()
+            .graphics_layer(GraphicsLayerParams {
+                shadow_elevation: 6.0,
+                ..Default::default()
+            })
+            .graphics_layer(custom)
+            .graphics_layer(GraphicsLayerParams {
+                translation_y: 3.0,
+                ..Default::default()
+            })
+            .graphics_layer_params()
+            .unwrap();
+        assert_eq!(p.shadow_elevation, 6.0);
+        assert_eq!(p.alpha, 0.5);
+        assert_eq!(p.translation_x, 4.0);
+        assert_eq!(p.translation_y, 3.0);
+        assert_eq!(p.ambient_shadow_color, Color::RED);
+        assert_eq!(p.spot_shadow_color, Color::BLUE);
     }
 
     #[test]

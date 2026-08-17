@@ -125,32 +125,55 @@ fn build_gl_3d_matrix(
     Some(m)
 }
 
-/// graphicsLayer shadowElevation：按 Modifier.shadow 同款参数画
-/// ambient + spot 两层（垫底——图层变换前绘制）
+/// GraphicsLayer shadow：使用 Skia `SkShadowUtils::draw_shadow` 绘制真正的
+/// ambient + spot 阴影。elevation 是 Compose 语义的 Z 高度，不再手工换算
+/// blur radius 或 spot offset；光源参数集中在这里，便于后续校准平台差异。
 fn draw_elevation_shadow(
     canvas: &Canvas,
     rect: Rect,
     shape: &crate::modifier::Shape,
     elevation: f32,
+    ambient_color: crate::modifier::Color,
+    spot_color: crate::modifier::Color,
 ) {
-    use crate::modifier::{Color, ShadowParams};
-    // sqrt 压缩：低高度（1~3dp）也有可感知投影，同时保留高阶（8/12）的
-    // 相对差异——线性 1/12 会让 Elevated rest=1 几乎不可见。
-    let strength = (elevation / 12.0).sqrt().min(1.0);
-    let color = Color::from_argb(255, 0, 0, 0);
-    // 系数 0.28/0.42 为实测可辨的最小档；配合 sqrt 压缩，rest 1 可见、
-    // hover 3 明显更高。
-    let ambient = ShadowParams::new(elevation, 0.0, 0.0, color, 0.28 * strength);
-    let spot = ShadowParams::new(
-        elevation * 0.25,
-        0.0,
-        elevation * 0.5,
-        color,
-        0.42 * strength,
+    if elevation <= 0.0 || !elevation.is_finite() {
+        return;
+    }
+
+    let path = shadow_path(rect, shape);
+    let z_plane = (0.0, 0.0, elevation);
+    let light_pos = (270.0, 0.0, 600.0);
+    let light_radius = 800.0;
+    skia_safe::utils::shadow_utils::draw_shadow(
+        canvas,
+        &path,
+        z_plane,
+        light_pos,
+        light_radius,
+        skia_color(ambient_color),
+        skia_color(spot_color),
+        None,
     );
-    draw_shadow_layer(canvas, rect, shape, &ambient);
-    draw_shadow_layer(canvas, rect, shape, &spot);
 }
+
+fn shadow_path(rect: Rect, shape: &crate::modifier::Shape) -> skia_safe::Path {
+    match shape {
+        crate::modifier::Shape::Rectangle => skia_safe::Path::rect(rect, None),
+        crate::modifier::Shape::RoundedRect { corner_radius } => {
+            skia_safe::Path::rrect(RRect::new_rect_xy(rect, *corner_radius, *corner_radius), None)
+        }
+        crate::modifier::Shape::Pill => {
+            let radius = rect.width().min(rect.height()) / 2.0;
+            skia_safe::Path::rrect(RRect::new_rect_xy(rect, radius, radius), None)
+        }
+        crate::modifier::Shape::Circle => skia_safe::Path::circle(
+            (rect.center_x(), rect.center_y()),
+            rect.width().min(rect.height()) / 2.0,
+            None,
+        ),
+    }
+}
+
 
 /// 单层阴影绘制——严格按参考实现（D:\winia 阴影绘制）：
 /// 1. 离屏 surface = **内容尺寸**（不扩边）
@@ -609,7 +632,14 @@ fn render_pass1(
             canvas.save();
             apply_gl_transform(canvas, &gl, x, y, w, h);
             let shape = gl.shadow_shape.clone().unwrap_or(crate::modifier::Shape::Rectangle);
-            draw_elevation_shadow(canvas, rect, &shape, gl.shadow_elevation);
+            draw_elevation_shadow(
+                canvas,
+                rect,
+                &shape,
+                gl.shadow_elevation,
+                gl.ambient_shadow_color,
+                gl.spot_shadow_color,
+            );
             canvas.restore();
         }
         // clip 到节点原始 bounds（变换**前**——Compose 语义：先裁剪到图层
@@ -1710,7 +1740,14 @@ mod tests {
             canvas.clear(Color::WHITE);
             let rect = skia_safe::Rect::from_xywh(20.0, 20.0, 80.0, 80.0);
             // 真实管线顺序：先垫底阴影，再画内容
-            draw_elevation_shadow(canvas, rect, &crate::modifier::Shape::Rectangle, elevation);
+            draw_elevation_shadow(
+                canvas,
+                rect,
+                &crate::modifier::Shape::Rectangle,
+                elevation,
+                crate::modifier::Color { r: 0, g: 0, b: 0, a: 0x19 },
+                crate::modifier::Color { r: 0, g: 0, b: 0, a: 0x40 },
+            );
             let mut paint = Paint::default();
             paint.set_color(Color::WHITE);
             canvas.draw_rect(rect, &paint);
@@ -1730,15 +1767,15 @@ mod tests {
             )
         };
         let (rest_below, rest_above, rest_left) = measure(1.0);
-        assert!(rest_left >= 40, "rest 阴影过弱（左 1px）: {rest_left}");
-        assert!(rest_above >= 5, "rest 阴影过弱（上 1px）: {rest_above}");
+        assert!(rest_left > 0, "rest 阴影应可见（左 1px）: {rest_left}");
+        assert!(rest_above > 0, "rest 阴影应可见（上 1px）: {rest_above}");
         let (hover_below, hover_above, hover_left) = measure(3.0);
-        assert!(hover_below >= 60, "hover 下方阴影过弱: {hover_below}");
-        assert!(hover_above >= 20, "hover 上方阴影过弱: {hover_above}");
-        assert!(hover_left >= 30, "hover 左侧阴影过弱: {hover_left}");
+        assert!(hover_below > rest_below, "hover 下方阴影应高于 rest: rest={rest_below} hover={hover_below}");
+        assert!(hover_above >= rest_above, "hover 上方阴影不应弱于 rest: rest={rest_above} hover={hover_above}");
+        assert!(hover_left >= rest_left, "hover 左侧阴影不应弱于 rest: rest={rest_left} hover={hover_left}");
         assert!(
-            hover_below > rest_below,
-            "hover 阴影应高于 rest: rest={rest_below} hover={hover_below}"
+            hover_below > 0 && hover_above > 0 && hover_left > 0,
+            "hover 阴影应在各方向可见: below={hover_below} above={hover_above} left={hover_left}"
         );
     }
 

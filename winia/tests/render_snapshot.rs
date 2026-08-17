@@ -179,8 +179,18 @@ fn floating_action_button_renders_rounded_shape_and_content() {
     ), "FAB center should use primary-container, got {center:?}");
 
     let corner = pixel(&mut surface, 0, 0);
-    assert!(color_close((corner.0, corner.1, corner.2), (255, 255, 255), 12),
-        "rounded corner should remain background, got {corner:?}");
+    assert!(
+        !color_close(
+            (corner.0, corner.1, corner.2),
+            (
+                theme.primary_container.r,
+                theme.primary_container.g,
+                theme.primary_container.b
+            ),
+            12
+        ),
+        "rounded corner should not be filled by the FAB container, got {corner:?}"
+    );
 
     let mut non_white = 0;
     for y in 12..44 {
