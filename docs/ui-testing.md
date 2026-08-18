@@ -95,7 +95,14 @@ cargo test --features debug-server --test ui_test
    fn ui(ctx: &mut ComposeCtx) { /* 最小场景 UI */ }
    fn main() { /* tokio rt + winia::run_app!(Window::new()...) */ }
    ```
-2. `Cargo.toml` 注册：`[[test]] name = "fixture_<name>" path = "tests/ui_fixtures/fixture_<name>.rs" harness = false`
+2. `Cargo.toml` 注册为独立 fixture 二进制：
+   ```toml
+   [[bin]]
+   name = "fixture_<name>"
+   path = "tests/ui_fixtures/fixture_<name>.rs"
+   ```
+   `UiTest::launch("<name>")` 会启动 `target/debug/fixture_<name>`；fixture 不是由
+   `cargo test` 直接执行的测试 target。
 3. `tests/ui_test.rs` 加用例：`launch("<name>")` → `expect_text` 等首帧 → `find` 定位 →
    `click_until` 交互（点击丢失自动重试）→ 断言。
 4. 跑测试 + 检查残留进程（`Get-Process fixture_*` 应为 0）。
@@ -111,6 +118,9 @@ cargo test --features debug-server --test ui_test
 | subwindow_open_close_preserves_main_and_trees | fixture_subwindow | 多窗口开/关 → 两窗口树共存（window_count 1→2→1） |
 | scroll_container_keeps_content | fixture_scroll | 滚动 ± → 内容保持不崩溃 |
 | nest_structure_switch_cycles_stably | fixture_nest | 3 态循环 6 次 → 状态重复进入节点数一致 + 按钮不漂移 |
+| text_field_focus_input_and_backspace_update_state | fixture_text_field | 点击聚焦、逐字符输入、Backspace 与状态文本重组 |
+| text_field_password_and_multiline_states_update | fixture_text_field | 密码掩码状态、长度阈值、Enter 多行与 minLines 几何 |
+| text_field_error_readonly_and_disabled_states_are_enforced | fixture_text_field | error 解除、read-only/disabled 输入约束与焦点语义 |
 
 ### 库行为快照（无窗口，直接驱动 Composer）
 

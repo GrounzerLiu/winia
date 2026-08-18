@@ -260,3 +260,68 @@ fn nest_structure_switch_cycles_stably() {
         std::thread::sleep(Duration::from_millis(200));
     }
 }
+
+// ═══════════════════════════════════════════════════════════════
+// fixture_text_field：真实窗口 TextField 交互
+// ═══════════════════════════════════════════════════════════════
+
+/// 覆盖容器点击聚焦、逐字符输入、删除和状态重组。
+#[test]
+fn text_field_focus_input_and_backspace_update_state() {
+    let mut app = UiTest::launch("text_field");
+    app.expect_text("username:");
+    app.click_tag("username-field");
+    for key in ["a", "b", "c"] { app.key(key); }
+    app.expect_text_timeout("username: abc", Duration::from_secs(5));
+    assert!(app.tag_is_focused("username-field"), "username 应保持焦点");
+    app.key("Backspace");
+    app.expect_text_timeout("username: ab", Duration::from_secs(5));
+}
+
+/// 密码字段只公开长度/有效性，并覆盖 Enter 产生多行的真实键盘路由。
+#[test]
+fn text_field_password_and_multiline_states_update() {
+    let mut app = UiTest::launch("text_field");
+    app.expect_text("password-status: invalid");
+    app.click_tag("password-field");
+    for key in ["p", "a", "s", "s"] { app.key(key); }
+    app.expect_text_timeout("password-length: 4", Duration::from_secs(5));
+    app.expect_text_timeout("password-status: valid", Duration::from_secs(5));
+    app.expect_text("text(••••)");
+    assert!(
+        !app.all_texts().iter().any(|text| text.contains("text(pass)")),
+        "密码输入节点不应暴露明文"
+    );
+
+    let (_, _, _, notes_h) = app.find_tag("notes-field").expect("notes tag");
+    assert!(notes_h >= 56.0, "min_lines 字段应高于单行，实际 {notes_h}");
+    app.click_tag("notes-field");
+    app.key("n");
+    app.key("Enter");
+    app.key("2");
+    app.expect_text_timeout("notes-lines: 2", Duration::from_secs(5));
+    app.refresh();
+    let (_, _, _, notes_h_after) = app.find_tag("notes-field").expect("notes tag after input");
+    assert!(notes_h_after >= notes_h, "新增行后 TextField 不应塌缩：{notes_h} -> {notes_h_after}");
+}
+
+/// error/read-only/disabled 状态在真实输入路由中保持各自约束。
+#[test]
+fn text_field_error_readonly_and_disabled_states_are_enforced() {
+    let mut app = UiTest::launch("text_field");
+    app.expect_text("error-status: required");
+    app.click_tag("error-field");
+    app.key("x");
+    app.expect_text_timeout("error-status: none", Duration::from_secs(5));
+
+    app.click_tag("readonly-field");
+    assert!(app.tag_is_focused("readonly-field"), "只读字段仍应获得焦点");
+    app.key("x");
+    app.key("Backspace");
+    app.expect_text_timeout("readonly-value: Read only", Duration::from_secs(5));
+
+    app.click_tag("disabled-field");
+    app.key("x");
+    app.expect_text_timeout("disabled-value: Locked", Duration::from_secs(5));
+    assert!(!app.tag_is_focused("disabled-field"), "禁用字段不应获得焦点");
+}

@@ -275,6 +275,24 @@ impl UiTest {
             .unwrap_or(0)
     }
 
+    /// 通过稳定的 `Modifier::test_tag` 查找首个窗口节点，返回 (abs_x, abs_y, width, height)。
+    pub fn find_tag(&self, tag: &str) -> Option<(f32, f32, f32, f32)> {
+        find_node_tag(&self.tree, tag)
+    }
+
+    /// 点击稳定 tag 节点。焦点和输入结果由调用方的场景断言验证。
+    pub fn click_tag(&mut self, tag: &str) {
+        let (x, y, w, h) = self.find_tag(tag).unwrap_or_else(|| panic!("找不到 tag `{tag}`"));
+        self.click(x + w / 2.0, y + h / 2.0);
+        std::thread::sleep(Duration::from_millis(120));
+    }
+
+    /// 查询主窗口中 tag 节点的焦点状态。
+    pub fn tag_is_focused(&mut self, tag: &str) -> bool {
+        self.refresh();
+        node_tag_is_focused(&self.tree, tag)
+    }
+
     /// 在树中查找第一个 mod 包含 `label` 的节点，返回 (abs_x, abs_y, width, height)。
     /// ⚠ 仅对主窗口可靠（debug 注入事件只作用于主窗口）——多窗口请用 `find_in_window`。
     pub fn find(&self, label: &str) -> Option<(f32, f32, f32, f32)> {
@@ -456,6 +474,78 @@ fn collect_texts(tree: &Value, out: &mut Vec<String>) {
         }
     }
     for_each_window(tree, |_, root| walk(root, out));
+}
+
+
+/// 查找 tag 精确匹配的节点，并返回绝对位置和尺寸。
+fn find_node_tag(tree: &Value, tag: &str) -> Option<(f32, f32, f32, f32)> {
+    fn walk(n: &Value, ax: f32, ay: f32, tag: &str) -> Option<(f32, f32, f32, f32)> {
+        if let Some(arr) = n.as_array() {
+            return arr.iter().find_map(|child| walk(child, ax, ay, tag));
+        }
+        let pos = n.get("pos").and_then(|value| value.as_array());
+        let (x, y) = match pos {
+            Some(value) if value.len() >= 2 => (
+                ax + value[0].as_f64().unwrap_or(0.0) as f32,
+                ay + value[1].as_f64().unwrap_or(0.0) as f32,
+            ),
+            _ => (ax, ay),
+        };
+        if n.get("tag").and_then(|value| value.as_str()) == Some(tag) {
+            let size = n.get("size").and_then(|value| value.as_array());
+            let (width, height) = match size {
+                Some(value) if value.len() >= 2 => (
+                    value[0].as_f64().unwrap_or(0.0) as f32,
+                    value[1].as_f64().unwrap_or(0.0) as f32,
+                ),
+                _ => (0.0, 0.0),
+            };
+            return Some((x, y, width, height));
+        }
+        n.get("children")
+            .and_then(|value| value.as_array())
+            .and_then(|children| children.iter().find_map(|child| walk(child, x, y, tag)))
+    }
+
+    let mut found = None;
+    for_each_window(tree, |_, root| {
+        if found.is_none() {
+            found = walk(root, 0.0, 0.0, tag);
+        }
+    });
+    found
+}
+
+fn node_tag_is_focused(tree: &Value, tag: &str) -> bool {
+    fn subtree_is_focused(n: &Value) -> bool {
+        if let Some(arr) = n.as_array() {
+            return arr.iter().any(subtree_is_focused);
+        }
+        n.get("focused").and_then(|value| value.as_bool()).unwrap_or(false)
+            || n.get("children")
+                .and_then(|value| value.as_array())
+                .is_some_and(|children| children.iter().any(subtree_is_focused))
+    }
+
+    fn walk(n: &Value, tag: &str) -> Option<bool> {
+        if let Some(arr) = n.as_array() {
+            return arr.iter().find_map(|child| walk(child, tag));
+        }
+        if n.get("tag").and_then(|value| value.as_str()) == Some(tag) {
+            return Some(subtree_is_focused(n));
+        }
+        n.get("children")
+            .and_then(|value| value.as_array())
+            .and_then(|children| children.iter().find_map(|child| walk(child, tag)))
+    }
+
+    let mut found = None;
+    for_each_window(tree, |_, root| {
+        if found.is_none() {
+            found = walk(root, tag);
+        }
+    });
+    found.unwrap_or(false)
 }
 
 fn count_nodes(tree: &Value) -> usize {

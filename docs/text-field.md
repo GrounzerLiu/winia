@@ -151,7 +151,16 @@ Placeholder/Prefix(输入前) | Input(剩余宽) | Suffix(输入后) | Trailing(
   `TextFieldOffsetMapping` 元素挂载）——否则掩码字符（'•' 3 字节）显示偏移
   直写 selection → `replace_range` 越界 panic。
 
-### 3.8 其他
+### 3.8 真实窗口交互回归
+
+`fixture_text_field` 通过 debug-server 的 stdin 协议逐字符发送键盘事件，覆盖容器点击焦点、输入/Backspace、密码 transformation 状态、多行 Enter、error 解除、read-only 与 disabled 约束。运行：
+
+```bash
+cargo test -p winia --features debug-server --test ui_test text_field_
+```
+
+测试以 fixture 根节点的 `Modifier::test_tag` 定位字段，以旁边独立状态文本断言 State 重组；不依赖 debug tree 中未暴露的 TextFieldSlotRole。IME 的真实系统 commit 不属于该 fixture 覆盖范围。
+
 
 - UndoManager：双栈 + 同文本 selection 合并 + 上限 100 条 + 新编辑清 redo。
 - 剪贴板：arboard（临时打开、无长驻句柄）。
