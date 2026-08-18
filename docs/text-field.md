@@ -70,10 +70,12 @@ Placeholder/Prefix(输入前) | Input(剩余宽) | Suffix(输入后) | Trailing(
   （`width - left - prefix - 2 - suffix - right`）；容器宽 = min_width(280) 起步，
   超长输入按内容回算撑宽。
 - **空文本最小尺寸**：空 paragraph 测量 0×0 → 渲染提前 return → 光标不显示。
-  输入节点强制 `宽≥1、高≥行高(font_size×1.4)`。
-- **supporting 高度**：`measure 高 = input + supporting_h(20)`——渲染端
-  `container_rect = 节点高 - supporting_h`（supporting 画在容器底部外侧 4dp），
-  measure 必须供给这 20px，否则多行换行后指示线/边框上移穿过末行文字。
+  输入节点强制 `宽≥1、高≥解析后的 input lineHeight`；默认为 Typography
+  `body_large` 的 24sp 行高，`.font_size()` 仍可覆盖输入字号。
+- **supporting 高度**：`measure 高 = input + supporting_h`——渲染端
+  `container_rect = 节点高 - supporting_h`（supporting 画在容器底部外侧 4dp）。
+  `supporting_h` 取 Typography `body_small` 的固定行高；measure 必须预留该空间，
+  否则多行换行后指示线/边框会上移穿过末行文字。
 - **label/图标居中锚点**：`text_field_content_height` 多行时取
   `max(min_h - supporting, input_h)`——容器长高后图标/展开 label 跟随中心下移。
 - 滚动容器内约束高 = f32::MAX → 用 min_height 兜底推导。
@@ -87,7 +89,7 @@ Placeholder/Prefix(输入前) | Input(剩余宽) | Suffix(输入后) | Trailing(
   空文本画在内容起点（行高近似）；索引经 OffsetMapping 转显示偏移。
 - **选区**：`get_rects_for_range` 高亮，颜色 = primary alpha 60。
 - **组合下划线**：`composing_range` 经映射转显示偏移，行底 1px 线。
-- **supporting**：容器底部外侧 4dp，12sp，error 色。
+- **supporting**：容器底部外侧 4dp，默认 Typography `body_small`（12sp/16sp/Regular/0.4sp），error 时只覆盖颜色。
 
 ### 3.3 键盘（完整映射表，winia/src/ui/text_field.rs kb_handler）
 

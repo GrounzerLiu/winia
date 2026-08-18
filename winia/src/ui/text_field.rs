@@ -7,6 +7,8 @@ use crate::core::composer::ComposeCtx;
 use crate::core::state::State;
 use crate::modifier::Modifier;
 use crate::composable;
+use crate::ui::text::{FontWeight, ProvideTextStyle, TextStyle};
+use crate::ui::theme::WiniaTheme;
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -369,6 +371,40 @@ pub enum TextFieldSlotRole {
     Trailing,
 }
 
+fn text_style_line_height(style: &TextStyle, font_size: f32) -> f32 {
+    style.line_height
+        .map(|height| height.to_logical_px())
+        .unwrap_or(font_size * 1.4)
+}
+
+fn interpolate_text_style(from: &TextStyle, to: &TextStyle, progress: f32, color: crate::modifier::Color) -> TextStyle {
+    let progress = progress.clamp(0.0, 1.0);
+    let from_size = from.font_size.unwrap_or(16.0.into()).to_logical_px();
+    let to_size = to.font_size.unwrap_or(12.0.into()).to_logical_px();
+    let font_size = from_size + (to_size - from_size) * progress;
+    let from_line_height = text_style_line_height(from, from_size);
+    let to_line_height = text_style_line_height(to, to_size);
+    let line_height = from_line_height + (to_line_height - from_line_height) * progress;
+    let from_spacing = from.letter_spacing.unwrap_or(0.0);
+    let to_spacing = to.letter_spacing.unwrap_or(0.0);
+
+    TextStyle::new()
+        .font_size(font_size)
+        .line_height(line_height)
+        .letter_spacing(from_spacing + (to_spacing - from_spacing) * progress)
+        .font_weight(if progress < 0.5 {
+            from.font_weight.unwrap_or_default()
+        } else {
+            to.font_weight.unwrap_or_default()
+        })
+        .font_style(if progress < 0.5 {
+            from.font_style.unwrap_or_default()
+        } else {
+            to.font_style.unwrap_or_default()
+        })
+        .color(color)
+}
+
 /// TextField 容器布局 policy——子节点按角色定位（M3 specs）：
 /// leading(12dp 左，垂直居中) | label(悬浮顶部/展开输入位，progress 插值)
 /// | placeholder/prefix(输入前) | input(剩余宽) | suffix(输入后)
@@ -386,13 +422,10 @@ pub(crate) struct TextFieldLayout {
     /// 顶部即 pad_top——图标锚点 = 容器中心）
     pub(crate) pad_top: f32,
     pub(crate) pad_bottom: f32,
-    /// supporting 区高（4+16=20——容器 min_height 含此，居中推导须扣除）
+    /// supporting 区高（4 + body_small line height——容器 min_height 含此，居中推导须扣除）
     pub(crate) supporting_h: f32,
-    /// 文本字号（px）——空文本输入子节点最小尺寸用（行高 ≈ font_size*1.4）。
-    /// ⚠ 空文本 paragraph 测量 0×0 → 输入节点尺寸 0 → render_pass1 直接
-    /// return → 光标不绘制。强制最小尺寸（高=行高、宽≥1）让空字段也能
-    /// 进入渲染画光标。
-    pub(crate) font_size: f32,
+    /// 输入文本行高（px）——空文本输入子节点最小尺寸用。
+    pub(crate) line_height: f32,
 }
 
 /// 内容区高度推导（label/图标容器居中锚点用）：
@@ -422,9 +455,9 @@ impl TextFieldLayout {
         pad_top: f32,
         pad_bottom: f32,
         supporting_h: f32,
-        font_size: f32,
+        line_height: f32,
     ) -> Self {
-        Self { label_progress, variant, pad_top, pad_bottom, supporting_h, font_size }
+        Self { label_progress, variant, pad_top, pad_bottom, supporting_h, line_height }
     }
 }
 
@@ -500,9 +533,9 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
                 let (s, _) = measure_node(nodes, policies, c, crate::layout::Constraints::new(0.0, input_w, 0.0, constraints.max_height));
                 // ⚠ 空文本 paragraph 测量 0×0 → 输入节点尺寸 0 → render_pass1
                 // `w<=0 || h<=0 return` → 光标不绘制（空字段聚焦无光标）。
-                // 强制最小尺寸：高 ≥ 行高（font_size*1.4）、宽 ≥ 1（渲染进入 +
+                // 强制最小尺寸：高 ≥ token 行高、宽 ≥ 1（渲染进入 +
                 // 光标绘制在内容起点）。
-                let line_h = self.font_size * 1.4;
+                let line_h = self.line_height;
                 let s = crate::layout::Size::new(
                     if s.width < 1.0 { 1.0 } else { s.width },
                     if s.height < line_h { line_h } else { s.height },
@@ -902,10 +935,14 @@ impl TextField {
         let current = self.value.get();
         let content = current.text.clone();
 
-        let theme = crate::ui::theme::WiniaTheme::colors();
-        let font_size = self.font_size
-            .unwrap_or(crate::unit::TextUnit::Sp(crate::unit::Sp(14.0)))
-            .to_logical_px();
+        let theme = WiniaTheme::colors();
+        let typography = WiniaTheme::typography();
+        let mut input_style = typography.body_large.clone();
+        if let Some(font_size) = self.font_size {
+            input_style.font_size = Some(font_size);
+        }
+        let font_size = input_style.font_size.unwrap_or(16.0.into()).to_logical_px();
+        let input_line_height = text_style_line_height(&input_style, font_size);
         // 外观状态（M3 容器）——focused 从交互源组合期读取
         let visual = self.variant;
         let colors = self.colors.clone().unwrap_or_else(|| {
@@ -1457,7 +1494,11 @@ impl TextField {
             // 支持文本：容器底部外侧 12sp（M3 supporting 色）
             let supporting_visual = self.supporting_text.as_ref().map(|s| crate::modifier::SupportingVisual {
                 content: s.clone(),
-                font_size: 12.0,
+                font_size: typography.body_small.font_size.unwrap_or(12.0.into()).to_logical_px(),
+                font_weight: typography.body_small.font_weight.unwrap_or_default(),
+                font_style: typography.body_small.font_style.unwrap_or_default(),
+                letter_spacing: typography.body_small.letter_spacing.unwrap_or(0.0),
+                line_height: typography.body_small.line_height.map(|height| height.to_logical_px()),
                 color: if disabled { colors.disabled_supporting }
                     else if self.is_error { colors.error_supporting }
                     else { colors.supporting },
@@ -1511,9 +1552,13 @@ impl TextField {
         };
         // 容器最小高度（supporting + min_lines + 56）——min_height 兜底
         // 占位；测量用 paragraph 实际高度（含折行）
-        let supporting_h = if self.supporting_text.is_some() { 4.0 + 16.0 } else { 0.0 };
+        let supporting_h = self.supporting_text.as_ref().map_or(0.0, |_| {
+            4.0 + typography.body_small.line_height
+                .map(|height| height.to_logical_px())
+                .unwrap_or_else(|| typography.body_small.font_size.unwrap_or(12.0.into()).to_logical_px() * 1.4)
+        });
         let container_modifier = if self.supporting_text.is_some() || self.min_lines > 1 {
-            let line_h = font_size * 1.4;
+            let line_h = input_line_height;
             let (pt, pb) = container_modifier.get_padding_vertical();
             let pad_y = pt + pb;
             let min_content_h = self.min_lines as f32 * line_h;
@@ -1533,16 +1578,18 @@ impl TextField {
         let fr = ctx.remember(|| crate::modifier::FocusRequester::new()).get();
         let input_modifier = Modifier::new()
             .text_field_slot(TextFieldSlotRole::Input)
-            .text_content(
+            .text_content_full(
                 display_content,
                 font_size,
                 display_color,
-                crate::ui::text::FontWeight::NORMAL,
-                crate::ui::text::FontSlant::Upright,
-                if self.single_line { 1 } else { self.max_lines }, // maxLines（singleLine → 1）
+                input_style.font_weight.unwrap_or_default(),
+                input_style.font_style.unwrap_or_default(),
+                if self.single_line { 1 } else { self.max_lines },
                 crate::ui::TextAlign::Left,
                 crate::ui::TextOverflow::Clip,
-                true, // allow text wrapping
+                input_style.soft_wrap.unwrap_or(true),
+                input_style.letter_spacing.unwrap_or(0.0),
+                input_style.line_height.map(|height| height.to_logical_px()),
             );
         let input_modifier = if interaction.is_some() {
             let fr_click = fr.clone();
@@ -1568,7 +1615,7 @@ impl TextField {
         ctx.start_restartable_group(
             key,
             container_modifier,
-            TextFieldLayout::new(label_progress.clone(), visual, pad_top, pad_bottom, supporting_h, font_size),
+            TextFieldLayout::new(label_progress.clone(), visual, pad_top, pad_bottom, supporting_h, input_line_height),
         );
         // 闭包子节点包装（角色标记 + Box 层叠——内容由闭包构建）。
         // 每个槽位提供 M3 默认样式（LOCAL_TEXT_STYLE / LOCAL_CONTENT_COLOR
@@ -1591,10 +1638,9 @@ impl TextField {
                     match $role {
                         TextFieldSlotRole::Prefix | TextFieldSlotRole::Suffix => {
                             let affix_color = if !self.enabled { colors.disabled_affix } else { colors.affix };
-                            let style = crate::ui::text::TextStyle::new()
-                                .font_size(crate::unit::TextUnit::Sp(crate::unit::Sp(16.0)))
-                                .color(affix_color);
-                            crate::ui::text::LOCAL_TEXT_STYLE.provides(style, || $content(ctx));
+                            let mut style = typography.body_large.clone();
+                            style.color = Some(affix_color);
+                            ProvideTextStyle(style, ctx, $content);
                         }
                         TextFieldSlotRole::Leading | TextFieldSlotRole::Trailing => {
                             let icon_color = if !self.enabled {
@@ -1630,14 +1676,16 @@ impl TextField {
                 //   组重组 → 闭包重跑 → current() 读到新字号（字号动画）
                 // - 闭包内 Text 显式 .font_size()/.color() 可覆盖
                 let p = label_progress.get();
-                let label_size = 16.0 + (12.0 - 16.0) * p;
                 let label_color = if !self.enabled { colors.label_disabled }
                     else if self.is_error { colors.label_error }
                     else { colors.label_unfocused };
-                let label_style = crate::ui::text::TextStyle::new()
-                    .font_size(crate::unit::TextUnit::Sp(crate::unit::Sp(label_size)))
-                    .color(label_color);
-                crate::ui::text::LOCAL_TEXT_STYLE.provides(label_style, || label(ctx));
+                let label_style = interpolate_text_style(
+                    &typography.body_large,
+                    &typography.body_small,
+                    p,
+                    label_color,
+                );
+                ProvideTextStyle(label_style, ctx, label);
                 ctx.end_restartable_group();
             });
         }
@@ -1677,10 +1725,9 @@ impl TextField {
                         // （disabled 38%）+ 淡入/淡出 alpha
                         let a = alpha.get();
                         let pc = if !self.enabled { colors.disabled_placeholder } else { colors.placeholder };
-                        let style = crate::ui::text::TextStyle::new()
-                            .font_size(crate::unit::TextUnit::Sp(crate::unit::Sp(16.0)))
-                            .color(crate::modifier::Color::from_argb((255.0 * a) as u8, pc.r, pc.g, pc.b));
-                        crate::ui::text::LOCAL_TEXT_STYLE.provides(style, || ph(ctx));
+                        let mut style = typography.body_large.clone();
+                        style.color = Some(crate::modifier::Color::from_argb((255.0 * a) as u8, pc.r, pc.g, pc.b));
+                        ProvideTextStyle(style, ctx, ph);
                         ctx.end_restartable_group();
                     }
                 });
@@ -1882,6 +1929,15 @@ mod tests {
         })
     }
 
+    fn text_content_style(modifier: &Modifier) -> Option<(f32, FontWeight, f32, Option<f32>)> {
+        modifier.elements().iter().find_map(|el| {
+            if let ModifierElement::TextContent { font_size, font_weight, letter_spacing, line_height, .. } = el {
+                Some((*font_size, *font_weight, *letter_spacing, *line_height))
+            } else {
+                None
+            }
+        })
+    }
     fn has_focusable(modifier: &Modifier) -> bool {
         modifier.elements().iter().any(|el| matches!(el, ModifierElement::Focusable { .. }))
     }
@@ -1944,6 +2000,86 @@ mod tests {
         let nodes = composer.arena_nodes();
         Some(nodes[root].modifier.clone())
     }
+
+    #[test]
+    fn typography_tokens_reach_input_affix_and_supporting_text() {
+        let custom = crate::ui::theme::Typography {
+            body_large: TextStyle::new()
+                .font_size(18.0)
+                .line_height(26.0)
+                .letter_spacing(0.9)
+                .font_weight(FontWeight::BOLD),
+            body_small: TextStyle::new()
+                .font_size(13.0)
+                .line_height(19.0)
+                .letter_spacing(0.6)
+                .font_weight(FontWeight::MEDIUM),
+            ..crate::ui::theme::Typography::default()
+        };
+        let input = find_slot_modifier_with_typography(custom.clone(), TextFieldSlotRole::Input).unwrap();
+        assert_eq!(text_content_style(&input).unwrap(), (18.0, FontWeight::BOLD, 0.9, Some(26.0)));
+
+        let affix = find_slot_modifier_with_typography(custom.clone(), TextFieldSlotRole::Prefix).unwrap();
+        assert_eq!(text_content_style(&affix).unwrap(), (18.0, FontWeight::BOLD, 0.9, Some(26.0)));
+
+        let supporting = container_modifier_with_typography(custom, TextFieldSlotRole::Input).unwrap();
+        let supporting = supporting.elements().iter().find_map(|element| {
+            if let ModifierElement::TextFieldVisual { supporting, .. } = element {
+                supporting.as_ref()
+            } else {
+                None
+            }
+        }).unwrap();
+        assert_eq!(supporting.font_size, 13.0);
+        assert_eq!(supporting.font_weight, FontWeight::MEDIUM);
+        assert_eq!(supporting.letter_spacing, 0.6);
+        assert_eq!(supporting.line_height, Some(19.0));
+    }
+
+    fn container_modifier_with_typography(typography: crate::ui::theme::Typography, _role: TextFieldSlotRole) -> Option<Modifier> {
+        let value = State::new(TextFieldValue::new("value"));
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let _guard = rt.enter();
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            WiniaTheme::with_typography(typography, ctx, |ctx| {
+                TextField::new(value.clone()).filled().supporting_text("Supporting").build(ctx);
+            });
+        });
+        let root = composer.layout_root_idx().unwrap();
+        Some(composer.arena_nodes()[root].modifier.clone())
+    }
+    fn find_slot_modifier_with_typography(typography: crate::ui::theme::Typography, role: TextFieldSlotRole) -> Option<Modifier> {
+        let value = State::new(TextFieldValue::new("value"));
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let _guard = rt.enter();
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            WiniaTheme::with_typography(typography, ctx, |ctx| {
+                TextField::new(value.clone())
+                    .filled()
+                    .prefix(|ctx| crate::ui::Text::new("$").build(ctx))
+                    .build(ctx);
+            });
+        });
+        let root = composer.layout_root_idx().unwrap();
+        fn walk(nodes: &[crate::layout::node::LayoutNode], idx: usize, role: TextFieldSlotRole) -> Option<Modifier> {
+            if nodes[idx].modifier.elements().iter().any(|el| matches!(el, ModifierElement::TextFieldSlot { role: r } if *r == role)) {
+                for &child in &nodes[idx].children {
+                    if nodes[child].modifier.elements().iter().any(|el| matches!(el, ModifierElement::TextContent { .. })) {
+                        return Some(nodes[child].modifier.clone());
+                    }
+                }
+                return Some(nodes[idx].modifier.clone());
+            }
+            for &child in &nodes[idx].children {
+                if let Some(found) = walk(nodes, child, role) { return Some(found); }
+            }
+            None
+        }
+        walk(composer.arena_nodes(), root, role)
+    }
+
 
     #[test]
     fn disabled_field_has_no_focusable() {

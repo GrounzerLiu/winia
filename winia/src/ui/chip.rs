@@ -14,6 +14,7 @@
 
 use crate::core::composer::{ComposeCtx, GroupStatus};
 use crate::modifier::{Modifier, Shape};
+use crate::ui::text::ProvideTextStyle;
 
 // ═══════════════════════════════════════════════════════════
 // ChipColors — 非选择型配色（Assist/Suggestion）
@@ -368,9 +369,56 @@ fn build_chip(
         GroupStatus::Skip => {}
         GroupStatus::Enter => {
             crate::ui::theme::WiniaTheme::with_content_color(content_color, ctx, |ctx| {
-                content(ctx);
+                let mut text_style = crate::ui::theme::WiniaTheme::typography().label_large;
+                text_style.color = Some(content_color);
+                ProvideTextStyle(text_style, ctx, content);
             });
         }
     }
     ctx.end_restartable_group();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::composer::Composer;
+    use crate::ui::theme::Typography;
+    use crate::ui::text::{FontWeight, TextStyle};
+    use crate::unit::{Sp, TextUnit};
+
+    fn find_text_style(nodes: &[crate::layout::node::LayoutNode], idx: usize) -> Option<(f32, FontWeight, f32, Option<f32>)> {
+        for el in nodes[idx].modifier.elements() {
+            if let crate::modifier::ModifierElement::TextContent { font_size, font_weight, letter_spacing, line_height, .. } = el {
+                return Some((*font_size, *font_weight, *letter_spacing, *line_height));
+            }
+        }
+        for &child in &nodes[idx].children {
+            if let Some(style) = find_text_style(nodes, child) { return Some(style); }
+        }
+        None
+    }
+
+    #[test]
+    fn label_uses_typography_label_large() {
+        let custom = Typography {
+            label_large: TextStyle::new()
+                .font_size(TextUnit::Sp(Sp(19.0)))
+                .line_height(27.0)
+                .letter_spacing(1.3)
+                .font_weight(FontWeight::BOLD),
+            ..Typography::default()
+        };
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            crate::ui::theme::WiniaTheme::with_typography(custom, ctx, |ctx| {
+                Chip::assist(|ctx| crate::ui::Text::new("Label").build(ctx), || {}).build(ctx);
+            });
+        });
+        let root = composer.layout_root_idx().unwrap();
+        let style = find_text_style(composer.arena_nodes(), root).unwrap();
+        assert_eq!(style.0, 19.0);
+        assert_eq!(style.1, FontWeight::BOLD);
+        assert_eq!(style.2, 1.3);
+        assert_eq!(style.3, Some(27.0));
+    }
 }

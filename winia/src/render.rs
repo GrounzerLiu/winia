@@ -714,7 +714,7 @@ fn render_pass1(
             ModifierElement::TextFieldVisual { variant, shape, colors, enabled: _, focused: _, is_error: _, cursor_color: _, indicator_color, focus_progress, offset_mapping, supporting } => {
                 // 容器 rect：有支持文本时扣除其区域（supporting 画在容器底部外
                 // 4dp，节点总高 = 容器 + 4 + 16）
-                let supporting_h = if supporting.is_some() { 20.0 } else { 0.0 };
+                let supporting_h = supporting.as_ref().map_or(0.0, |sv| sv.height());
                 let container_rect = Rect::new(x, y, x + w, y + h - supporting_h);
                 // ⚠ label/placeholder/图标/前后缀均为子节点（text-field-v2
                 // 容器化——TextFieldLayout 定位）；Outlined label 缺口由子节点
@@ -746,6 +746,10 @@ fn render_pass1(
                         canvas,
                         sv.content.as_str(),
                         sv.font_size,
+                        sv.font_weight,
+                        sv.font_style,
+                        sv.letter_spacing,
+                        sv.line_height,
                         &sv.color,
                         (x + 16.0, container_rect.bottom + 4.0),
                         w - 32.0,
@@ -1408,6 +1412,10 @@ fn draw_text_field_aux_text(
     canvas: &Canvas,
     content: &str,
     font_size: f32,
+    font_weight: crate::ui::text::FontWeight,
+    font_style: crate::ui::text::FontSlant,
+    letter_spacing: f32,
+    line_height: Option<f32>,
     color: &crate::modifier::Color,
     pos: (f32, f32),
     max_width: f32,
@@ -1419,14 +1427,14 @@ fn draw_text_field_aux_text(
         content,
         font_size,
         color,
-        crate::ui::text::FontWeight::NORMAL,
-        crate::ui::text::FontSlant::Upright,
+        font_weight,
+        font_style,
         usize::MAX,
         crate::ui::TextAlign::Left,
         crate::ui::TextOverflow::Clip,
         true,
-        0.0,
-        None,
+        letter_spacing,
+        line_height,
         max_width,
     );
     // ⚠ 必须 layout 后才能 paint（skia Paragraph 未布局时绘制为空）
@@ -1586,6 +1594,10 @@ mod tests {
             canvas,
             "Name",
             12.0,
+            crate::ui::text::FontWeight::NORMAL,
+            crate::ui::text::FontSlant::Upright,
+            0.0,
+            None,
             &crate::modifier::Color::from_argb(255, 255, 0, 0),
             (10.0, 10.0),
             100.0,

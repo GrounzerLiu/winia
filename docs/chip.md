@@ -71,7 +71,8 @@ Chip::suggestion(label, on_click)                   // 建议（可选 icon）
   Filter/Input 走 SelectableChipColors（selected 双态）+ selected 0 边框。
 - **内部结构**：容器（背景/边框/clickable/ripple）→ Row（icon → label → trailing，
   间距 8）→ 内容经 `WiniaTheme::with_content_color` 下传各元素颜色（Icon tint Auto
-  跟随）。
+  跟随）。label 默认通过 `ProvideTextStyle(WiniaTheme::typography().label_large)`
+  下传 Material 3 LabelLarge（14sp/20sp/Medium/0.1sp），状态色只覆盖其 color。
 - **宏化判据**：未宏化（与 Column/Row/Button 一致——content 闭包 + 内部 scope
   会拦截依赖注册）。
 

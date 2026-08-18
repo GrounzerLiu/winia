@@ -1992,7 +1992,17 @@ pub struct TransformOrigin(pub f32, pub f32);
 pub struct SupportingVisual {
     pub content: String,
     pub font_size: f32,
+    pub font_weight: crate::ui::text::FontWeight,
+    pub font_style: crate::ui::text::FontSlant,
+    pub letter_spacing: f32,
+    pub line_height: Option<f32>,
     pub color: Color,
+}
+
+impl SupportingVisual {
+    pub fn height(&self) -> f32 {
+        4.0 + self.line_height.unwrap_or(self.font_size * 1.4)
+    }
 }
 
 /// 阴影参数（对标 Compose `graphics.shadow.Shadow`——dropShadow 可配置集）。

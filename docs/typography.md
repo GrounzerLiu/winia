@@ -47,7 +47,19 @@ WiniaTheme::with_typography(custom_typography, ctx, |ctx| {
 `WiniaTheme::with_theme_typography_and_direction` 可同时设置颜色、Typography 与布局方向。
 现有 `with_theme`、`light`、`dark`、`auto` API 保持不变。
 
-## TextStyle 继承
+## 组件映射
+
+| 组件 / slot | Typography role | 说明 |
+|---|---|---|
+| Button 内容 | `label_large` | 状态色覆盖 color，保留 14/20/Medium/0.1sp |
+| Badge label | `label_small` | 保留 11/16/Medium/0.5sp |
+| ListItem headline / supporting / overline | `body_large` / `body_medium` / `label_small` | 对齐 ListTokens |
+| Chip label | `label_large` | 14/20/Medium/0.1sp，selected/disabled 只覆盖颜色 |
+| TextField input / placeholder / prefix / suffix | `body_large` | 默认 16/24/Regular/0.5sp；TextField `.font_size()` 可覆盖输入字号 |
+| TextField floating label | `body_large` → `body_small` | 保留展开到悬浮的 16sp→12sp 动画，并插值行高与字距 |
+| TextField supporting text | `body_small` | 独立渲染路径也携带字重、字距与固定行高 |
+| IconButton / fixed-size FAB | 无 | icon-only 组件只提供 `LocalContentColor`；Extended FAB 另行设计 |
+
 
 `TextStyle` 现在可以继承：
 
