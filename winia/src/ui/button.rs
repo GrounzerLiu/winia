@@ -659,8 +659,10 @@ impl Button {
                 // 内容色下传（LocalContentColor 等价物）——Icon tint Auto
                 // 取按钮内容色（如 Filled 内图标自动 on_primary）
                 crate::ui::theme::WiniaTheme::with_content_color(text_color, ctx, |ctx| {
+                    let mut text_style = crate::ui::theme::WiniaTheme::typography().label_large;
+                    text_style.color = Some(text_color);
                     crate::ui::text::ProvideTextStyle(
-                        crate::ui::text::TextStyle::new().color(text_color),
+                        text_style,
                         ctx,
                         |ctx| {
                             crate::ui::Row::new()

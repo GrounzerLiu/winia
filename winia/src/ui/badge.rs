@@ -114,11 +114,10 @@ impl Badge {
                     // 内容色下传 + 默认 LabelSmall 样式（Compose
                     // `ProvideContentColorTextStyle(LargeLabelTextFont)`）
                     WiniaTheme::with_content_color(content_color, ctx, |ctx| {
+                        let mut text_style = WiniaTheme::typography().label_small;
+                        text_style.color = Some(content_color);
                         crate::ui::text::ProvideTextStyle(
-                            crate::ui::text::TextStyle::new()
-                                .color(content_color)
-                                .font_size(BADGE_LABEL_FONT_SIZE)
-                                .font_weight(crate::ui::text::FontWeight::MEDIUM),
+                            text_style,
                             ctx,
                             |ctx| {
                                 crate::ui::layout_components::Row::new()

@@ -66,6 +66,9 @@ pub struct TextStyle {
     pub text_align: Option<TextAlign>,
     pub overflow: Option<TextOverflow>,
     pub max_lines: Option<usize>,
+    pub soft_wrap: Option<bool>,
+    pub letter_spacing: Option<f32>,
+    pub line_height: Option<TextUnit>,
     /// 下划线（仅 RichText 生效）
     pub underline: bool,
     /// 删除线（仅 RichText 生效）
@@ -76,7 +79,7 @@ pub struct TextStyle {
 
 impl TextStyle {
     pub fn new() -> Self {
-        Self { color: None, font_size: None, font_weight: None, font_style: None, text_align: None, overflow: None, max_lines: None, underline: false, strikethrough: false, background: None }
+        Self { color: None, font_size: None, font_weight: None, font_style: None, text_align: None, overflow: None, max_lines: None, soft_wrap: None, letter_spacing: None, line_height: None, underline: false, strikethrough: false, background: None }
     }
 
     pub fn color(mut self, c: Color) -> Self { self.color = Some(c); self }
@@ -89,6 +92,9 @@ impl TextStyle {
     pub fn align(mut self, a: TextAlign) -> Self { self.text_align = Some(a); self }
     pub fn overflow(mut self, overflow: TextOverflow) -> Self { self.overflow = Some(overflow); self }
     pub fn max_lines(mut self, lines: usize) -> Self { self.max_lines = Some(lines); self }
+    pub fn soft_wrap(mut self, wrap: bool) -> Self { self.soft_wrap = Some(wrap); self }
+    pub fn letter_spacing(mut self, spacing: f32) -> Self { self.letter_spacing = Some(spacing); self }
+    pub fn line_height(mut self, height: impl Into<TextUnit>) -> Self { self.line_height = Some(height.into()); self }
     pub fn underline(mut self) -> Self { self.underline = true; self }
     pub fn strikethrough(mut self) -> Self { self.strikethrough = true; self }
     pub fn background(mut self, c: Color) -> Self { self.background = Some(c); self }
@@ -126,8 +132,11 @@ fn merge_text_styles(base: &TextStyle, override_: &TextStyle) -> TextStyle {
         text_align: override_.text_align.or(base.text_align),
         overflow: override_.overflow.or(base.overflow),
         max_lines: override_.max_lines.or(base.max_lines),
-        underline: override_.underline,
-        strikethrough: override_.strikethrough,
+        soft_wrap: override_.soft_wrap.or(base.soft_wrap),
+        letter_spacing: override_.letter_spacing.or(base.letter_spacing),
+        line_height: override_.line_height.or(base.line_height),
+        underline: override_.underline || base.underline,
+        strikethrough: override_.strikethrough || base.strikethrough,
         background: override_.background.or(base.background),
     }
 }
@@ -148,9 +157,9 @@ pub struct Text {
     text_align: Option<TextAlign>,
     overflow: Option<TextOverflow>,
     style: Option<TextStyle>,
-    soft_wrap: bool,
+    soft_wrap: Option<bool>,
     letter_spacing: Option<f32>,
-    line_height: Option<f32>,
+    line_height: Option<TextUnit>,
 }
 
 impl Text {
@@ -166,7 +175,7 @@ impl Text {
             text_align: None,
             overflow: None,
             style: None,
-            soft_wrap: true,
+            soft_wrap: None,
             letter_spacing: None,
             line_height: None,
         }
@@ -182,13 +191,13 @@ impl Text {
     pub fn max_lines(mut self, lines: usize) -> Self { self.max_lines = Some(lines); self }
     pub fn align(mut self, align: TextAlign) -> Self { self.text_align = Some(align); self }
     pub fn overflow(mut self, overflow: TextOverflow) -> Self { self.overflow = Some(overflow); self }
-    pub fn soft_wrap(mut self, wrap: bool) -> Self { self.soft_wrap = wrap; self }
+    pub fn soft_wrap(mut self, wrap: bool) -> Self { self.soft_wrap = Some(wrap); self }
 
     /// 字间距（逻辑像素，对标 Compose `TextStyle.letterSpacing`）
     pub fn letter_spacing(mut self, spacing: f32) -> Self { self.letter_spacing = Some(spacing); self }
 
-    /// 行高（逻辑像素，对标 Compose `TextStyle.lineHeight`——固定行高）
-    pub fn line_height(mut self, height: f32) -> Self { self.line_height = Some(height); self }
+    /// 行高（`TextUnit`；裸 `f32` 按 Sp 解释，对标 Compose `TextStyle.lineHeight`）
+    pub fn line_height(mut self, height: impl Into<TextUnit>) -> Self { self.line_height = Some(height.into()); self }
 
     /// 设置文字样式（单独参数优先级高于此样式）
     pub fn style(mut self, style: TextStyle) -> Self { self.style = Some(style); self }
@@ -229,6 +238,9 @@ impl Text {
         });
         let final_overflow = self.overflow.or(style.overflow).unwrap_or_default();
         let final_max_lines = self.max_lines.or(style.max_lines).unwrap_or(usize::MAX);
+        let final_soft_wrap = self.soft_wrap.or(style.soft_wrap).unwrap_or(true);
+        let final_letter_spacing = self.letter_spacing.or(style.letter_spacing).unwrap_or(0.0);
+        let final_line_height = self.line_height.or(style.line_height);
 
         // ⚠ 颜色优先级：显式 color > LOCAL_TEXT_STYLE > **内容色**
         // （WiniaTheme::content_color——对标 Compose LocalContentColor：Text 默认色
@@ -261,9 +273,9 @@ impl Text {
             final_max_lines,
             final_align,
             final_overflow,
-            self.soft_wrap,
-            self.letter_spacing.unwrap_or(0.0),
-            self.line_height,
+            final_soft_wrap,
+            final_letter_spacing,
+            final_line_height.map(|u| u.to_logical_px()),
         );
 
         ctx.start_leaf(key, modifier);
@@ -322,6 +334,41 @@ mod tests {
     }
 
     #[test]
+    fn provide_text_style_inherits_and_builder_overrides_typography() {
+        let mut composer = crate::core::composer::Composer::new();
+        composer.compose(|ctx| {
+            ProvideTextStyle(
+                TextStyle::new()
+                    .font_size(16.0)
+                    .letter_spacing(0.5)
+                    .line_height(24.0)
+                    .soft_wrap(false),
+                ctx,
+                |ctx| {
+                    ProvideTextStyle(TextStyle::new().letter_spacing(0.2), ctx, |ctx| {
+                        Text::new("styled")
+                            .letter_spacing(1.0)
+                            .build(ctx);
+                    });
+                },
+            );
+        });
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let (font_size, soft_wrap, letter_spacing, line_height) = nodes[root].modifier.elements().iter().find_map(|el| {
+            if let ModifierElement::TextContent { font_size, soft_wrap, letter_spacing, line_height, .. } = el {
+                Some((*font_size, *soft_wrap, *letter_spacing, *line_height))
+            } else {
+                None
+            }
+        }).unwrap();
+        assert_eq!(font_size, 16.0, "子 provider 应继承父级字号");
+        assert!(!soft_wrap, "子 provider 应继承父级 soft_wrap");
+        assert_eq!(letter_spacing, 1.0, "Text builder 字距优先级最高");
+        assert_eq!(line_height, Some(24.0), "子 provider 应继承父级行高");
+    }
+
+    #[test]
     fn test_text_bold_italic() {
         let text = Text::new("bold italic")
             .bold()
@@ -337,7 +384,7 @@ mod tests {
     fn test_text_letter_spacing_and_line_height() {
         let text = Text::new("spacing").letter_spacing(2.0).line_height(28.0);
         assert_eq!(text.letter_spacing, Some(2.0));
-        assert_eq!(text.line_height, Some(28.0));
+        assert_eq!(text.line_height, Some(TextUnit::Sp(crate::unit::Sp(28.0))));
     }
 
     #[test]

@@ -36,6 +36,7 @@ pub mod wavy_progress_indicator;
 pub mod floating_action_button;
 pub mod divider;
 pub mod lazy_column;
+pub mod list_item;
 
 pub use animated_visibility::{AnimatedVisibility, VisibilityTransition, SlideDirection};
 pub use animated_size::AnimatedSize;
@@ -62,6 +63,7 @@ pub use layout_components::{Column, Row, Stack, Spacer};
 pub use window::Window;
 pub use theme::WiniaTheme;
 pub use theme::ThemeColors;
+pub use theme::Typography;
 pub use theme::is_system_dark_theme;
 pub use rich_text::RichText;
 pub use rich_text::RichTextScope;
@@ -110,4 +112,5 @@ pub use floating_action_button::{
 pub use chip::{Chip, ChipVariant, ChipColors, SelectableChipColors, ChipDefaults};
 pub use divider::{Divider, DividerDefaults, DIVIDER_THICKNESS, DIVIDER_HAIRLINE};
 pub use lazy_column::{ItemHeightCache, LazyColumn, LazyListState, LazyRow};
+pub use list_item::{ListItem, ListItemColors, ListItemDefaults, LIST_ITEM_ONE_LINE_HEIGHT, LIST_ITEM_TWO_LINE_HEIGHT, LIST_ITEM_THREE_LINE_HEIGHT, LIST_ITEM_HORIZONTAL_PADDING, LIST_ITEM_VERTICAL_PADDING, LIST_ITEM_SLOT_GAP, LIST_ITEM_CONTENT_GAP};
 pub use tooltip::Tooltip;

@@ -102,13 +102,13 @@ pub(crate) fn modifier_has_text(modifier: &Modifier) -> bool {
 /// 影响测量/渲染结果的属性**（color 变化必须触发重测——否则淡入动画
 /// （alpha 0→1）后 cached_paragraph 仍是透明色，渲染画不出文字）
 pub(crate) fn modifier_text_content_differs(a: &Modifier, b: &Modifier) -> bool {
-    let text_of = |m: &Modifier| -> Option<(String, crate::ui::TextAlign, crate::modifier::Color, f32, crate::ui::text::FontWeight, usize, f32, Option<f32>, crate::ui::TextOverflow)> {
+    let text_of = |m: &Modifier| -> Option<(String, crate::ui::TextAlign, crate::modifier::Color, f32, crate::ui::text::FontWeight, crate::ui::text::FontSlant, usize, bool, f32, Option<f32>, crate::ui::TextOverflow)> {
         m.elements().iter().find_map(|el| match el {
-            ModifierElement::TextContent { content, align, color, font_size, font_weight, max_lines, letter_spacing, line_height, overflow, .. } => {
-                Some((content.clone(), *align, *color, *font_size, *font_weight, *max_lines, *letter_spacing, *line_height, *overflow))
+            ModifierElement::TextContent { content, align, color, font_size, font_weight, font_style, max_lines, soft_wrap, letter_spacing, line_height, overflow, .. } => {
+                Some((content.clone(), *align, *color, *font_size, *font_weight, *font_style, *max_lines, *soft_wrap, *letter_spacing, *line_height, *overflow))
             }
             // RichText 变化保守视为不同
-            ModifierElement::RichTextContent { .. } => Some(("<richtext>".to_string(), crate::ui::TextAlign::Left, crate::modifier::Color::TRANSPARENT, 0.0, crate::ui::text::FontWeight::NORMAL, 0, 0.0, None, crate::ui::TextOverflow::Clip)),
+            ModifierElement::RichTextContent { .. } => Some(("<richtext>".to_string(), crate::ui::TextAlign::Left, crate::modifier::Color::TRANSPARENT, 0.0, crate::ui::text::FontWeight::NORMAL, crate::ui::text::FontSlant::Upright, 0, true, 0.0, None, crate::ui::TextOverflow::Clip)),
             _ => None,
         })
     };

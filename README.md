@@ -38,7 +38,7 @@ fn main() {
 
 ## 功能
 
-- **组件**：Text / RichText / TextField / Button / FloatingActionButton / Column / Row / Stack / SelectionContainer / Window（多窗口）/ Popup / Dialog / DropdownMenu / AnimatedVisibility / AnimatedContent / AnimatedSize / Crossfade
+- **组件**：Text / RichText / TextField / Button / FloatingActionButton / ListItem / LazyColumn / Column / Row / Stack / SelectionContainer / Window（多窗口）/ Popup / Dialog / DropdownMenu / AnimatedVisibility / AnimatedContent / AnimatedSize / Crossfade
 - **Modifier**：布局（size / padding / offset / align / aspectRatio / requiredSize / 权重 / 滚动）、绘制（background / border / clip / shadow / blur / backdropBlur）、图形层（alpha / scale / rotate / rotationX/Y / cameraDistance / shadowElevation / transformOrigin / clip）、交互（clickable / focusable / hoverable / tap / double-tap / long-press / drag / key / pointer）、水波纹 `ripple`
 - **交互源**：`MutableInteractionSource` + `ComponentState`（press / focus / hover / drag），Button 状态取色与阴影
 - **动画**：Tween / Spring / Keyframes / Repeatable / Decay + `animate_*AsState` 族 + AnimatedVisibility / AnimatedContent / AnimatedSize / Crossfade
@@ -60,6 +60,8 @@ cargo test --test ui_test --features debug-server  # UI 集成测试（真实窗
 - [Button 组件文档](docs/button.md) — Button API、实现细节与未实现项
 - [Icon 组件文档](docs/icon.md) — Icon API、实现细节、可变字体轴与未实现项
 - [Floating Action Button 文档](docs/floating-action-button.md) — M3 图标型 FAB、尺寸、颜色与交互
+- [ListItem 文档](docs/list-item.md) — M3 一行/二行/三行列表项、slots 与 LazyColumn 集成
+- [Typography 文档](docs/typography.md) — M3 字体 token、继承优先级与兼容策略
 - [动画差距分析](docs/animation-gap-analysis.md) — 动画系统全景与实现状态
 - [架构设计文档](docs/architecture.md) — 早期设计稿（部分过时）
 - [UI 测试框架](docs/ui-testing.md) — 集成测试的用法与坑

@@ -11,6 +11,8 @@ use crate::core::composition_local::CompositionLocal;
 use crate::core::composer::ComposeCtx;
 use crate::layout::LayoutDirection;
 use crate::modifier::Color;
+use crate::ui::text::{FontWeight, TextStyle};
+use crate::unit::{Sp, TextUnit};
 use material_colors::color::Argb;
 use material_colors::theme::ThemeBuilder;
 use std::sync::LazyLock;
@@ -184,6 +186,68 @@ pub fn is_system_dark_theme() -> bool {
 }
 
 // ═══════════════════════════════════════════════════════════
+// Material Typography
+// ═══════════════════════════════════════════════════════════
+
+/// Material 3 type scale. Styles intentionally omit color and layout semantics;
+/// components provide those through their own content-color and slot rules.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Typography {
+    pub display_large: TextStyle,
+    pub display_medium: TextStyle,
+    pub display_small: TextStyle,
+    pub headline_large: TextStyle,
+    pub headline_medium: TextStyle,
+    pub headline_small: TextStyle,
+    pub title_large: TextStyle,
+    pub title_medium: TextStyle,
+    pub title_small: TextStyle,
+    pub body_large: TextStyle,
+    pub body_medium: TextStyle,
+    pub body_small: TextStyle,
+    pub label_large: TextStyle,
+    pub label_medium: TextStyle,
+    pub label_small: TextStyle,
+}
+
+impl Typography {
+    fn style(size: f32, line_height: f32, letter_spacing: f32, weight: FontWeight) -> TextStyle {
+        TextStyle::new()
+            .font_size(TextUnit::Sp(Sp(size)))
+            .line_height(line_height)
+            .letter_spacing(letter_spacing)
+            .font_weight(weight)
+    }
+
+    /// Standard Material 3 `TypeScaleTokens` values.
+    pub fn material3_default() -> Self {
+        Self {
+            display_large: Self::style(57.0, 64.0, -0.2, FontWeight::NORMAL),
+            display_medium: Self::style(45.0, 52.0, 0.0, FontWeight::NORMAL),
+            display_small: Self::style(36.0, 44.0, 0.0, FontWeight::NORMAL),
+            headline_large: Self::style(32.0, 40.0, 0.0, FontWeight::NORMAL),
+            headline_medium: Self::style(28.0, 36.0, 0.0, FontWeight::NORMAL),
+            headline_small: Self::style(24.0, 32.0, 0.0, FontWeight::NORMAL),
+            title_large: Self::style(22.0, 28.0, 0.0, FontWeight::NORMAL),
+            title_medium: Self::style(16.0, 24.0, 0.2, FontWeight::MEDIUM),
+            title_small: Self::style(14.0, 20.0, 0.1, FontWeight::MEDIUM),
+            body_large: Self::style(16.0, 24.0, 0.5, FontWeight::NORMAL),
+            body_medium: Self::style(14.0, 20.0, 0.2, FontWeight::NORMAL),
+            body_small: Self::style(12.0, 16.0, 0.4, FontWeight::NORMAL),
+            label_large: Self::style(14.0, 20.0, 0.1, FontWeight::MEDIUM),
+            label_medium: Self::style(12.0, 16.0, 0.5, FontWeight::MEDIUM),
+            label_small: Self::style(11.0, 16.0, 0.5, FontWeight::MEDIUM),
+        }
+    }
+}
+
+impl Default for Typography {
+    fn default() -> Self {
+        Self::material3_default()
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
 // CompositionLocal
 // ═══════════════════════════════════════════════════════════
 
@@ -193,6 +257,10 @@ static LOCAL_COLORS: LazyLock<CompositionLocal<ThemeColors>> = LazyLock::new(|| 
 
 static LOCAL_DIRECTION: LazyLock<CompositionLocal<LayoutDirection>> = LazyLock::new(|| {
     CompositionLocal::new(|| LayoutDirection::Ltr)
+});
+
+static LOCAL_TYPOGRAPHY: LazyLock<CompositionLocal<Typography>> = LazyLock::new(|| {
+    CompositionLocal::new(Typography::default)
 });
 
 /// 内容色（对标 Compose `LocalContentColor`）——Icon 等内容组件默认取
@@ -230,19 +298,47 @@ impl WiniaTheme {
 
     /// 在子树中提供自定义颜色方案 + LTR 方向。
     pub fn with_theme(colors: ThemeColors, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
-        Self::with_theme_and_direction(colors, LayoutDirection::Ltr, ctx, content);
+        Self::with_theme_typography_and_direction(colors, Typography::default(), LayoutDirection::Ltr, ctx, content);
+    }
+
+    /// 在子树中提供自定义颜色方案、Typography 和 LTR 方向。
+    pub fn with_theme_and_typography(
+        colors: ThemeColors,
+        typography: Typography,
+        ctx: &mut ComposeCtx,
+        content: impl FnOnce(&mut ComposeCtx),
+    ) {
+        Self::with_theme_typography_and_direction(colors, typography, LayoutDirection::Ltr, ctx, content);
     }
 
     /// 在子树中提供自定义颜色方案和布局方向。
     pub fn with_theme_and_direction(colors: ThemeColors, direction: LayoutDirection, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
+        Self::with_theme_typography_and_direction(colors, Typography::default(), direction, ctx, content);
+    }
+
+    /// 在子树中提供完整的颜色、Typography 与布局方向主题。
+    pub fn with_theme_typography_and_direction(
+        colors: ThemeColors,
+        typography: Typography,
+        direction: LayoutDirection,
+        ctx: &mut ComposeCtx,
+        content: impl FnOnce(&mut ComposeCtx),
+    ) {
         let on_surface = colors.on_surface;
         LOCAL_DIRECTION.provides(direction, || {
             LOCAL_COLORS.provides(colors, || {
-                LOCAL_CONTENT_COLOR.provides(on_surface, || {
-                    content(ctx);
+                LOCAL_TYPOGRAPHY.provides(typography, || {
+                    LOCAL_CONTENT_COLOR.provides(on_surface, || {
+                        content(ctx);
+                    });
                 });
             });
         });
+    }
+
+    /// 在子树中覆盖 Material Typography token，不改变颜色或布局方向。
+    pub fn with_typography(typography: Typography, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
+        LOCAL_TYPOGRAPHY.provides(typography, || content(ctx));
     }
 
     /// 在子树中覆盖内容色（对标 Compose `CompositionLocalProvider(LocalContentColor)`）
@@ -260,8 +356,66 @@ impl WiniaTheme {
         LOCAL_DIRECTION.current()
     }
 
+    /// 读取当前 Material Typography token。
+    pub fn typography() -> Typography {
+        LOCAL_TYPOGRAPHY.current()
+    }
+
     /// 读取当前子树内容色（默认主题 on_surface）
     pub fn content_color() -> Color {
         LOCAL_CONTENT_COLOR.current()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::text::Text;
+
+    #[test]
+    fn material3_typography_matches_list_item_tokens() {
+        let typography = Typography::default();
+        assert_eq!(typography.body_large.font_size, Some(TextUnit::Sp(Sp(16.0))));
+        assert_eq!(typography.body_large.line_height, Some(TextUnit::Sp(crate::unit::Sp(24.0))));
+        assert_eq!(typography.body_large.letter_spacing, Some(0.5));
+        assert_eq!(typography.body_medium.font_size, Some(TextUnit::Sp(Sp(14.0))));
+        assert_eq!(typography.label_small.font_size, Some(TextUnit::Sp(Sp(11.0))));
+        assert_eq!(typography.label_small.font_weight, Some(FontWeight::MEDIUM));
+    }
+
+    #[test]
+    fn typography_local_nests_and_restores() {
+        let custom = Typography {
+            body_large: TextStyle::new().font_size(20.0),
+            ..Typography::default()
+        };
+        let mut composer = crate::core::composer::Composer::new();
+        composer.compose(|ctx| {
+            let default = WiniaTheme::typography();
+            WiniaTheme::with_typography(custom.clone(), ctx, |ctx| {
+                assert_eq!(WiniaTheme::typography(), custom);
+            });
+            assert_eq!(WiniaTheme::typography(), default);
+        });
+    }
+
+    #[test]
+    fn legacy_theme_keeps_bare_text_default_size() {
+        let mut composer = crate::core::composer::Composer::new();
+        composer.compose(|ctx| {
+            WiniaTheme::light(ctx, |ctx| {
+                Text::new("unchanged").build(ctx);
+            });
+        });
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let size = nodes[root].modifier.elements().iter().find_map(|el| {
+            if let crate::modifier::ModifierElement::TextContent { font_size, .. } = el {
+                Some(*font_size)
+            } else {
+                None
+            }
+        }).unwrap();
+        assert_eq!(size, 14.0, "旧主题入口不得将裸 Text 自动改为 BodyLarge");
     }
 }
