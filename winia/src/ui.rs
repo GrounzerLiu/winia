@@ -37,6 +37,7 @@ pub mod floating_action_button;
 pub mod divider;
 pub mod lazy_column;
 pub mod list_item;
+pub mod top_app_bar;
 
 pub use animated_visibility::{AnimatedVisibility, VisibilityTransition, SlideDirection};
 pub use animated_size::AnimatedSize;
@@ -113,4 +114,5 @@ pub use chip::{Chip, ChipVariant, ChipColors, SelectableChipColors, ChipDefaults
 pub use divider::{Divider, DividerDefaults, DIVIDER_THICKNESS, DIVIDER_HAIRLINE};
 pub use lazy_column::{ItemHeightCache, LazyColumn, LazyListState, LazyRow};
 pub use list_item::{ListItem, ListItemColors, ListItemDefaults, LIST_ITEM_ONE_LINE_HEIGHT, LIST_ITEM_TWO_LINE_HEIGHT, LIST_ITEM_THREE_LINE_HEIGHT, LIST_ITEM_HORIZONTAL_PADDING, LIST_ITEM_VERTICAL_PADDING, LIST_ITEM_SLOT_GAP, LIST_ITEM_CONTENT_GAP};
+pub use top_app_bar::{TopAppBar, TopAppBarColors, TopAppBarScrollBehavior, TopAppBarVariant, TOP_APP_BAR_HEIGHT, TOP_APP_BAR_MEDIUM_HEIGHT, TOP_APP_BAR_LARGE_HEIGHT, TOP_APP_BAR_HORIZONTAL_PADDING};
 pub use tooltip::Tooltip;

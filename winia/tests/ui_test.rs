@@ -325,3 +325,46 @@ fn text_field_error_readonly_and_disabled_states_are_enforced() {
     app.expect_text_timeout("disabled-value: Locked", Duration::from_secs(5));
     assert!(!app.tag_is_focused("disabled-field"), "禁用字段不应获得焦点");
 }
+
+// ═══════════════════════════════════════════════════════════════
+// fixture_top_app_bar：变体高度与共享 offset 折叠
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn top_app_bar_variants_collapse_and_restore_with_scroll() {
+    let mut app = UiTest::launch("top_app_bar");
+    app.expect_text("large-collapsed: false");
+    let (_, appbar_y, _, expanded_h) = app.find_tag("large-appbar").expect("large app bar");
+    let (_, expanded_title_y, _, _) = app.find_tag("top-app-bar-title").expect("large title");
+    assert!(expanded_h >= 140.0, "large 初始应展开：{expanded_h}");
+
+    app.scroll(-24.0);
+    app.expect_text_timeout("large-collapsed: false", Duration::from_secs(5));
+    let (_, _, _, mid_one_h) = app.find_tag("large-appbar").expect("large app bar mid one");
+    let (_, mid_title_y, _, _) = app.find_tag("top-app-bar-title").expect("large title mid one");
+    assert!(mid_one_h > 68.0 && mid_one_h < expanded_h, "第一中间高度应连续：{expanded_h} -> {mid_one_h}");
+    assert!(mid_title_y < expanded_title_y, "标题应向 collapsed row 移动：{expanded_title_y} -> {mid_title_y}");
+
+    app.scroll(-48.0);
+    let (_, _, _, mid_two_h) = app.find_tag("large-appbar").expect("large app bar mid two");
+    assert!(mid_two_h > 68.0 && mid_two_h <= mid_one_h, "第二中间高度不得反向展开：{mid_one_h} -> {mid_two_h}");
+
+    app.scroll(-260.0);
+    app.expect_text_timeout("large-collapsed: true", Duration::from_secs(5));
+    let (_, _, _, collapsed_h) = app.find_tag("large-appbar").expect("collapsed large app bar");
+    let (_, collapsed_title_y, _, collapsed_title_h) = app.find_tag("top-app-bar-title").expect("collapsed title");
+    let (_, navigation_y, _, navigation_h) = app.find_tag("top-app-bar-navigation").expect("collapsed navigation");
+    let (_, actions_y, _, actions_h) = app.find_tag("top-app-bar-actions").expect("collapsed actions");
+    assert!(collapsed_h <= 68.0, "large 折叠高度应接近 standard：{collapsed_h}");
+    let title_center = collapsed_title_y + collapsed_title_h / 2.0;
+    let navigation_center = navigation_y + navigation_h / 2.0;
+    let actions_center = actions_y + actions_h / 2.0;
+    assert!((title_center - (appbar_y + 32.0)).abs() <= 1.0, "collapsed title 应位于 64dp row 中心");
+    assert!((navigation_center - title_center).abs() <= 1.0, "navigation 与 title 应垂直对齐");
+    assert!((actions_center - title_center).abs() <= 1.0, "actions 与 title 应垂直对齐");
+
+    app.scroll(600.0);
+    app.expect_text_timeout("large-collapsed: false", Duration::from_secs(5));
+    let (_, _, _, restored_h) = app.find_tag("large-appbar").expect("restored large app bar");
+    assert!(restored_h >= expanded_h, "回滚后应恢复展开高度：{expanded_h} -> {restored_h}");
+}

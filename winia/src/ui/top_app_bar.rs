@@ -1,0 +1,147 @@
+//! Material 3 TopAppBar with a single moving title slot.
+
+use crate::composable;
+use crate::core::composer::{ComposeCtx, GroupStatus};
+use crate::layout::constraints::Constraints;
+use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement, Point, Size};
+use crate::layout::{Alignment, BoxLayout, LayoutDirection};
+use crate::modifier::{Color, GraphicsLayerParams, Modifier, ScrollState, Shape};
+use crate::ui::text::{ProvideTextStyle, TextOverflow, TextStyle};
+use crate::ui::theme::WiniaTheme;
+
+pub const TOP_APP_BAR_HEIGHT: f32 = 64.0;
+pub const TOP_APP_BAR_MEDIUM_HEIGHT: f32 = 112.0;
+pub const TOP_APP_BAR_LARGE_HEIGHT: f32 = 152.0;
+pub const TOP_APP_BAR_HORIZONTAL_PADDING: f32 = 4.0;
+pub const TOP_APP_BAR_TITLE_INSET: f32 = 12.0;
+pub const TOP_APP_BAR_ICON_SLOT_SIZE: f32 = 48.0;
+pub const TOP_APP_BAR_MEDIUM_TITLE_BOTTOM_INSET: f32 = 24.0;
+pub const TOP_APP_BAR_LARGE_TITLE_BOTTOM_INSET: f32 = 28.0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TopAppBarVariant { Standard, CenterAligned, Medium, Large }
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TopAppBarColors { pub container: Color, pub title: Color, pub subtitle: Color, pub navigation: Color, pub actions: Color }
+impl TopAppBarColors {
+    pub fn new(container: Color, title: Color, subtitle: Color, navigation: Color, actions: Color) -> Self { Self { container, title, subtitle, navigation, actions } }
+    pub fn from_theme(theme: &crate::ui::theme::ThemeColors) -> Self { Self::new(theme.surface, theme.on_surface, theme.on_surface_variant, theme.on_surface_variant, theme.on_surface_variant) }
+}
+
+#[derive(Clone)]
+pub struct TopAppBarScrollBehavior { scroll: ScrollState, expanded_height: f32, collapsed_height: f32 }
+impl TopAppBarScrollBehavior {
+    pub fn new(scroll: ScrollState, expanded_height: f32) -> Self { assert!(expanded_height >= TOP_APP_BAR_HEIGHT, "TopAppBar expanded height ({expanded_height}) must be at least {TOP_APP_BAR_HEIGHT}"); Self { scroll, expanded_height, collapsed_height: TOP_APP_BAR_HEIGHT } }
+    pub fn expanded_height(&self) -> f32 { self.expanded_height }
+    pub fn collapsed_height(&self) -> f32 { self.collapsed_height }
+    pub fn collapse_range(&self) -> f32 { self.expanded_height - self.collapsed_height }
+    pub fn collapse_fraction(&self) -> f32 { let r = self.collapse_range(); if r <= 0.0 { 0.0 } else { (self.scroll.offset.get() / r).clamp(0.0, 1.0) } }
+    pub fn current_height(&self) -> f32 { self.expanded_height - self.collapse_range() * self.collapse_fraction() }
+    pub fn is_collapsed(&self) -> bool { self.collapse_fraction() >= 1.0 }
+    pub fn scroll_state(&self) -> ScrollState { self.scroll.clone() }
+}
+
+pub struct TopAppBar {
+    variant: TopAppBarVariant,
+    title: Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>,
+    subtitle: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
+    navigation_icon: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
+    actions: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
+    colors: Option<TopAppBarColors>, modifier: Modifier, scroll_behavior: Option<TopAppBarScrollBehavior>,
+}
+impl TopAppBar {
+    pub fn new(title: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { Self::with_variant(TopAppBarVariant::Standard, title) }
+    pub fn center_aligned(title: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { Self::with_variant(TopAppBarVariant::CenterAligned, title) }
+    pub fn medium(title: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { Self::with_variant(TopAppBarVariant::Medium, title) }
+    pub fn large(title: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { Self::with_variant(TopAppBarVariant::Large, title) }
+    fn with_variant(variant: TopAppBarVariant, title: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { Self { variant, title: Box::new(title), subtitle: None, navigation_icon: None, actions: None, colors: None, modifier: Modifier::new(), scroll_behavior: None } }
+    pub fn navigation_icon(mut self, f: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { self.navigation_icon = Some(Box::new(f)); self }
+    pub fn actions(mut self, f: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { self.actions = Some(Box::new(f)); self }
+    pub fn subtitle(mut self, f: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { self.subtitle = Some(Box::new(f)); self }
+    pub fn colors(mut self, colors: TopAppBarColors) -> Self { self.colors = Some(colors); self }
+    pub fn modifier(mut self, modifier: Modifier) -> Self { self.modifier = self.modifier.then(modifier); self }
+    pub fn scroll_behavior(mut self, behavior: TopAppBarScrollBehavior) -> Self { self.scroll_behavior = Some(behavior); self }
+    pub fn variant(&self) -> TopAppBarVariant { self.variant }
+
+    #[composable]
+    pub fn build(self, ctx: &mut ComposeCtx) {
+        ctx.changed(&self.variant);
+        if let Some(behavior) = &self.scroll_behavior { ctx.changed(&behavior.scroll.offset); }
+        let key = ctx.next_key();
+        let theme = WiniaTheme::colors();
+        let colors = self.colors.unwrap_or_else(|| TopAppBarColors::from_theme(&theme));
+        let direction = self.modifier.get_layout_direction().unwrap_or(WiniaTheme::direction());
+        ctx.changed(&direction);
+        let expanded = expanded_height(self.variant);
+        let fraction = self.scroll_behavior.as_ref().map(|behavior| { debug_assert!((behavior.expanded_height() - expanded).abs() < f32::EPSILON); behavior.collapse_fraction() }).unwrap_or(0.0);
+        let height = expanded - (expanded - TOP_APP_BAR_HEIGHT) * fraction;
+        let navigation_present = self.navigation_icon.is_some();
+        let actions_present = self.actions.is_some();
+        let subtitle_present = self.subtitle.is_some();
+        let bottom_inset = if self.variant == TopAppBarVariant::Large { TOP_APP_BAR_LARGE_TITLE_BOTTOM_INSET } else { TOP_APP_BAR_MEDIUM_TITLE_BOTTOM_INSET };
+        let policy = TopAppBarLayoutPolicy { variant: self.variant, fraction, direction, navigation_present, actions_present, subtitle_present, expanded_height: expanded, bottom_inset };
+        let title_style = title_style(if matches!(self.variant, TopAppBarVariant::Medium | TopAppBarVariant::Large) { expanded_title_style(self.variant) } else { WiniaTheme::typography().title_large }, colors.title);
+        let root_modifier = Modifier::new().fill_max_width().height(height).background(colors.container, Shape::Rectangle).clip(Shape::Rectangle).then(self.modifier);
+        let title = self.title; let subtitle = self.subtitle; let navigation = self.navigation_icon; let actions = self.actions;
+        match ctx.start_restartable_group(key, root_modifier, policy) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                slot(ctx, Modifier::new().size(TOP_APP_BAR_ICON_SLOT_SIZE, TOP_APP_BAR_ICON_SLOT_SIZE).test_tag("top-app-bar-navigation"), |ctx| { if let Some(navigation) = navigation { WiniaTheme::with_content_color(colors.navigation, ctx, navigation); } });
+                slot(ctx, Modifier::new().test_tag("top-app-bar-title"), |ctx| { ProvideTextStyle(title_style, ctx, title); });
+                slot(ctx, alpha(fraction).test_tag("top-app-bar-subtitle"), |ctx| { if let Some(subtitle) = subtitle { let mut style = WiniaTheme::typography().body_medium; style.color = Some(colors.subtitle); ProvideTextStyle(style, ctx, subtitle); } });
+                slot(ctx, Modifier::new().min_height(TOP_APP_BAR_ICON_SLOT_SIZE).test_tag("top-app-bar-actions"), |ctx| { if let Some(actions) = actions { WiniaTheme::with_content_color(colors.actions, ctx, actions); } });
+            }
+        }
+        ctx.set_current_node_focus_color(theme.primary);
+        ctx.end_restartable_group();
+    }
+}
+
+fn slot(ctx: &mut ComposeCtx, modifier: Modifier, content: impl FnOnce(&mut ComposeCtx)) { let key = ctx.next_key(); match ctx.start_restartable_group(key, modifier, BoxLayout::new().alignment(Alignment::Center)) { GroupStatus::Skip => {}, GroupStatus::Enter => content(ctx) }; ctx.end_restartable_group(); }
+fn alpha(fraction: f32) -> Modifier { Modifier::new().graphics_layer(move || GraphicsLayerParams { alpha: 1.0 - fraction, clip: true, ..Default::default() }) }
+fn expanded_height(v: TopAppBarVariant) -> f32 { match v { TopAppBarVariant::Standard | TopAppBarVariant::CenterAligned => TOP_APP_BAR_HEIGHT, TopAppBarVariant::Medium => TOP_APP_BAR_MEDIUM_HEIGHT, TopAppBarVariant::Large => TOP_APP_BAR_LARGE_HEIGHT } }
+fn expanded_title_style(v: TopAppBarVariant) -> TextStyle { let t = WiniaTheme::typography(); match v { TopAppBarVariant::Medium => t.headline_small, TopAppBarVariant::Large => t.headline_medium, _ => t.title_large } }
+fn title_style(mut s: TextStyle, color: Color) -> TextStyle { s.color = Some(color); s.max_lines = Some(1); s.overflow = Some(TextOverflow::Ellipsis); s }
+
+#[derive(Debug, Clone)]
+struct TopAppBarLayoutPolicy { variant: TopAppBarVariant, fraction: f32, direction: LayoutDirection, navigation_present: bool, actions_present: bool, subtitle_present: bool, expanded_height: f32, bottom_inset: f32 }
+impl MeasurePolicy for TopAppBarLayoutPolicy {
+    fn measure(&self, nodes: &mut Vec<LayoutNode>, policies: &[Box<dyn MeasurePolicy>], children: &[usize], c: Constraints) -> (Size, Vec<Placement>) {
+        let width = c.max_width; let height = if c.max_height < f32::MAX { c.max_height } else { self.expanded_height - (self.expanded_height - TOP_APP_BAR_HEIGHT) * self.fraction };
+        let (nav, _) = measure_node(nodes, policies, children[0], Constraints::fixed(TOP_APP_BAR_ICON_SLOT_SIZE, TOP_APP_BAR_ICON_SLOT_SIZE));
+        let (actions, _) = measure_node(nodes, policies, children[3], Constraints::new(0.0, width, 0.0, TOP_APP_BAR_ICON_SLOT_SIZE));
+        let nav_w = if self.navigation_present { nav.width } else { 0.0 }; let actions_w = if self.actions_present { actions.width } else { 0.0 };
+        let start = TOP_APP_BAR_HORIZONTAL_PADDING + nav_w.max(TOP_APP_BAR_TITLE_INSET); let end = (width - TOP_APP_BAR_HORIZONTAL_PADDING - actions_w).max(start);
+        let title_c = Constraints::new(0.0, (end - start).max(0.0), 0.0, self.expanded_height);
+        let (title, _) = measure_node(nodes, policies, children[1], title_c);
+        let subtitle_c = Constraints::new(0.0, (width - 2.0 * (TOP_APP_BAR_HORIZONTAL_PADDING + TOP_APP_BAR_TITLE_INSET)).max(0.0), 0.0, self.expanded_height);
+        let (subtitle, _) = measure_node(nodes, policies, children[2], subtitle_c);
+        let gap = if self.subtitle_present { 4.0 } else { 0.0 };
+        let collapsed_x_ltr = if self.variant == TopAppBarVariant::CenterAligned { ((width - title.width) / 2.0).clamp(start, (end - title.width).max(start)) } else { start };
+        let expanded_x_ltr = TOP_APP_BAR_HORIZONTAL_PADDING + TOP_APP_BAR_TITLE_INSET;
+        let collapsed_y = (TOP_APP_BAR_HEIGHT - title.height).max(0.0) / 2.0;
+        let expanded_y = (self.expanded_height - self.bottom_inset - title.height - if self.subtitle_present { gap + subtitle.height } else { 0.0 }).max(TOP_APP_BAR_HEIGHT);
+        let x_ltr = if matches!(self.variant, TopAppBarVariant::Medium | TopAppBarVariant::Large) { expanded_x_ltr + (collapsed_x_ltr - expanded_x_ltr) * self.fraction } else { collapsed_x_ltr };
+        let title_x = if self.direction == LayoutDirection::Ltr { x_ltr } else { width - x_ltr - title.width };
+        let title_y = if matches!(self.variant, TopAppBarVariant::Medium | TopAppBarVariant::Large) { expanded_y + (collapsed_y - expanded_y) * self.fraction } else { collapsed_y };
+        let subtitle_x = if self.direction == LayoutDirection::Ltr { expanded_x_ltr } else { width - expanded_x_ltr - subtitle.width };
+        let subtitle_y = expanded_y + title.height + gap;
+        let nav_x = if self.direction == LayoutDirection::Ltr { TOP_APP_BAR_HORIZONTAL_PADDING } else { width - TOP_APP_BAR_HORIZONTAL_PADDING - nav.width };
+        let action_x = if self.direction == LayoutDirection::Ltr { width - TOP_APP_BAR_HORIZONTAL_PADDING - actions.width } else { TOP_APP_BAR_HORIZONTAL_PADDING };
+        let slot_y = (TOP_APP_BAR_HEIGHT - TOP_APP_BAR_ICON_SLOT_SIZE) / 2.0;
+        (Size::new(width, height), vec![Placement { size: nav, position: Point::new(nav_x, slot_y) }, Placement { size: title, position: Point::new(title_x, title_y) }, Placement { size: subtitle, position: Point::new(subtitle_x, subtitle_y) }, Placement { size: actions, position: Point::new(action_x, slot_y) }])
+    }
+    fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]) { for (i, &child) in children.iter().enumerate() { nodes[child].position = placements[i].position; nodes[child].measured_size = placements[i].size; } }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*; use crate::core::composer::Composer;
+    fn layout(bar: TopAppBar, w: f32) -> Composer { let mut c = Composer::new(); c.compose(|ctx| bar.build(ctx)); c.layout(Constraints::new(0.0, w, 0.0, 200.0)); c }
+    fn leaf(ctx: &mut ComposeCtx, w: f32, h: f32) { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new().size(w, h)); ctx.end_node(); }
+    #[test] fn variants_have_expected_heights() { for (bar,h) in [(TopAppBar::new(|_| {}),64.),(TopAppBar::center_aligned(|_| {}),64.),(TopAppBar::medium(|_| {}),112.),(TopAppBar::large(|_| {}),152.)] { let c=layout(bar,400.); assert_eq!(c.arena_nodes()[c.layout_root_idx().unwrap()].measured_size.height,h); } }
+    #[test] fn scroll_behavior_clamps_fraction() { let s=ScrollState::new(); assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| TopAppBarScrollBehavior::new(s.clone(),63.))).is_err()); let b=TopAppBarScrollBehavior::new(s.clone(),152.); s.offset.set(44.); assert!((b.collapse_fraction() - 0.5).abs()< 0.001); assert_eq!(b.current_height(),108.); }
+    #[test] fn single_title_moves_to_collapsed_row_without_subtitle_offset() { let s=ScrollState::new(); s.offset.set(1000.); let with_sub=layout(TopAppBar::large(|ctx| leaf(ctx,100.,20.)).subtitle(|ctx| leaf(ctx,80.,16.)).navigation_icon(|ctx| leaf(ctx,24.,24.)).actions(|ctx| leaf(ctx,72.,24.)).scroll_behavior(TopAppBarScrollBehavior::new(s.clone(),152.)),400.); let without_sub=layout(TopAppBar::large(|ctx| leaf(ctx,100.,20.)).navigation_icon(|ctx| leaf(ctx,24.,24.)).actions(|ctx| leaf(ctx,72.,24.)).scroll_behavior(TopAppBarScrollBehavior::new(s,152.)),400.); let a=with_sub.layout_root_idx().unwrap(); let b=without_sub.layout_root_idx().unwrap(); let an=with_sub.arena_nodes(); let bn=without_sub.arena_nodes(); assert_eq!(an[a].measured_size.height,64.); assert_eq!(an[an[a].children[1]].position.y,22.); assert_eq!(an[an[a].children[1]].position.y,bn[bn[b].children[1]].position.y); assert_eq!(an[an[a].children[0]].position.y,8.); }
+    #[test] fn title_y_moves_continuously_at_mid_fraction() { let s=ScrollState::new(); s.offset.set(44.); let c=layout(TopAppBar::large(|ctx| leaf(ctx,100.,20.)).subtitle(|ctx| leaf(ctx,80.,16.)).scroll_behavior(TopAppBarScrollBehavior::new(s,152.)),400.); let root=c.layout_root_idx().unwrap(); let n=c.arena_nodes(); let y=n[n[root].children[1]].position.y; assert!(y>22. && y<80.); assert_eq!(n[root].measured_size.height,108.); }
+    #[test] fn center_and_long_title_keep_safe_bounds() { let c=layout(TopAppBar::center_aligned(|ctx| leaf(ctx,100.,20.)).navigation_icon(|ctx| leaf(ctx,24.,24.)).actions(|ctx| leaf(ctx,72.,24.)),400.); let r=c.layout_root_idx().unwrap(); let n=c.arena_nodes(); let t=&n[n[r].children[1]]; assert!(((t.position.x+t.measured_size.width/2.)-200.).abs()< 0.01); let c=layout(TopAppBar::large(|ctx| crate::ui::Text::new("A deliberately long title that must not cover actions").build(ctx)).navigation_icon(|ctx| leaf(ctx,24.,24.)).actions(|ctx| leaf(ctx,72.,24.)),240.); let r=c.layout_root_idx().unwrap(); assert_eq!(c.arena_nodes()[r].measured_size.height,152.); }
+}

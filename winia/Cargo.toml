@@ -65,3 +65,7 @@ path = "tests/ui_fixtures/fixture_nest.rs"
 [[bin]]
 name = "fixture_text_field"
 path = "tests/ui_fixtures/fixture_text_field.rs"
+
+[[bin]]
+name = "fixture_top_app_bar"
+path = "tests/ui_fixtures/fixture_top_app_bar.rs"

@@ -11,7 +11,7 @@ use winia::render;
 use winia::unit::{Sp, TextUnit};
 use winia::ui::{
     Button, Chip, FloatingActionButton, FloatingActionButtonSize, Icon, Text, TextField,
-    TextFieldValue, ThemeColors, Typography, WiniaTheme,
+    TextFieldValue, ThemeColors, TopAppBar, Typography, WiniaTheme,
 };
 use winia::State;
 
@@ -153,6 +153,23 @@ fn build_matrix(ctx: &mut ComposeCtx) {
                 .enabled(false)
                 .modifier(Modifier::new().test_tag("fab-disabled"))
                 .build(ctx, |ctx| Icon::svg_path("M12 5v14M5 12h14").build(ctx));
+
+            TopAppBar::new(|ctx| Text::new("Standard").build(ctx))
+                .navigation_icon(|ctx| Text::new("‹").build(ctx))
+                .actions(|ctx| Text::new("•••").build(ctx))
+                .modifier(Modifier::new().test_tag("appbar-standard"))
+                .build(ctx);
+            TopAppBar::center_aligned(|ctx| Text::new("Center").build(ctx))
+                .modifier(Modifier::new().test_tag("appbar-center"))
+                .build(ctx);
+            TopAppBar::medium(|ctx| Text::new("Medium").build(ctx))
+                .subtitle(|ctx| Text::new("Subtitle").build(ctx))
+                .modifier(Modifier::new().test_tag("appbar-medium"))
+                .build(ctx);
+            TopAppBar::large(|ctx| Text::new("Large").build(ctx))
+                .subtitle(|ctx| Text::new("Subtitle").build(ctx))
+                .modifier(Modifier::new().test_tag("appbar-large"))
+                .build(ctx);
         });
 }
 
@@ -169,6 +186,7 @@ fn material_visual_matrix_covers_theme_direction_and_typography() {
                 for tag in [
                     "chip", "chip-selected", "chip-disabled", "field", "field-error",
                     "field-disabled", "button", "button-disabled", "fab", "fab-disabled",
+                    "appbar-standard", "appbar-center", "appbar-medium", "appbar-large",
                 ] {
                     let idx = find_tag(nodes, root, tag).unwrap_or_else(|| panic!("missing {tag}"));
                     assert!(nodes[idx].measured_size.width > 0.0, "{tag} width");
@@ -183,6 +201,16 @@ fn material_visual_matrix_covers_theme_direction_and_typography() {
                 assert!(nodes[button].measured_size.height >= 40.0, "button minimum height");
                 assert_eq!(nodes[fab].measured_size.width, FloatingActionButtonSize::Regular.container_size());
                 assert_eq!(nodes[fab].measured_size.height, FloatingActionButtonSize::Regular.container_size());
+                for (tag, height) in [
+                    ("appbar-standard", 64.0),
+                    ("appbar-center", 64.0),
+                    ("appbar-medium", 112.0),
+                    ("appbar-large", 152.0),
+                ] {
+                    let appbar = find_tag(nodes, root, tag).unwrap();
+                    assert_eq!(nodes[appbar].measured_size.width, WIDTH as f32 - 32.0);
+                    assert_eq!(nodes[appbar].measured_size.height, height, "{tag} height");
+                }
                 assert!(non_white_pixels(&mut surface) > 1000, "matrix case rendered no meaningful pixels");
             }
         }
