@@ -17,7 +17,7 @@ Winia 的视觉回归矩阵位于 `winia/tests/visual_matrix.rs`，使用 CPU Sk
 - enabled Elevated Button、disabled Button
 - enabled Regular FloatingActionButton、disabled FAB
 
-每个组合都检查 tagged 节点存在、有效尺寸和实际绘制像素；RTL 另有不同宽度双子节点的水平镜像断言。TopAppBar 额外覆盖 Standard/CenterAligned/Medium/Large 的 slot 几何、48dp navigation slot、长标题安全宽度、CenterAligned 全宽居中，以及 Medium/Large 的展开、中间和折叠高度。
+每个组合都检查 tagged 节点存在、有效尺寸和实际绘制像素；RTL 另有不同宽度双子节点的水平镜像断言。TopAppBar 基础矩阵覆盖 Standard/CenterAligned/Medium/Large 的高度与存在性；独立 scroll-color probe 精确采样 `container` / `scrolled_container` 背景像素，验证单行栏正 offset 后仍保持 64dp、两行栏按 collapse fraction 变色，以及 custom colors。
 
 ## 为什么不用 golden image
 

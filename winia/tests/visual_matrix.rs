@@ -6,14 +6,14 @@
 use winia::core::composer::{ComposeCtx, Composer};
 use winia::layout::constraints::Constraints;
 use winia::layout::LayoutDirection;
-use winia::modifier::Modifier;
+use winia::modifier::{Color, Modifier, ScrollState};
 use winia::render;
+use winia::State;
 use winia::unit::{Sp, TextUnit};
 use winia::ui::{
     Button, Chip, FloatingActionButton, FloatingActionButtonSize, Icon, Text, TextField,
-    TextFieldValue, ThemeColors, TopAppBar, Typography, WiniaTheme,
+    TextFieldValue, ThemeColors, TopAppBar, TopAppBarColors, TopAppBarScrollBehavior, TopAppBarVariant, Typography, WiniaTheme,
 };
-use winia::State;
 
 const WIDTH: i32 = 520;
 const HEIGHT: i32 = 420;
@@ -56,6 +56,32 @@ fn find_tag(nodes: &[winia::layout::node::LayoutNode], idx: usize, tag: &str) ->
         .children
         .iter()
         .find_map(|&child| find_tag(nodes, child, tag))
+}
+
+fn render_scroll_color_probe(variant: TopAppBarVariant, offset: f32, colors: TopAppBarColors) -> skia_safe::Surface {
+    let scroll = ScrollState::new();
+    scroll.offset.set(offset);
+    let expanded = match variant {
+        TopAppBarVariant::Medium => winia::ui::TOP_APP_BAR_MEDIUM_HEIGHT,
+        TopAppBarVariant::Large => winia::ui::TOP_APP_BAR_LARGE_HEIGHT,
+        _ => winia::ui::TOP_APP_BAR_HEIGHT,
+    };
+    let mut composer = Composer::new();
+    composer.compose(winia::app_root!(|ctx| {
+        let behavior = TopAppBarScrollBehavior::new(scroll.clone(), expanded);
+        match variant {
+            TopAppBarVariant::Standard => TopAppBar::new(|_ctx| {}).scroll_behavior(behavior).colors(colors).modifier(Modifier::new().test_tag("color-probe")).build(ctx),
+            TopAppBarVariant::CenterAligned => TopAppBar::center_aligned(|_ctx| {}).scroll_behavior(behavior).colors(colors).modifier(Modifier::new().test_tag("color-probe")).build(ctx),
+            TopAppBarVariant::Medium => TopAppBar::medium(|_ctx| {}).scroll_behavior(behavior).colors(colors).modifier(Modifier::new().test_tag("color-probe")).build(ctx),
+            TopAppBarVariant::Large => TopAppBar::large(|_ctx| {}).scroll_behavior(behavior).colors(colors).modifier(Modifier::new().test_tag("color-probe")).build(ctx),
+        }
+    }));
+    composer.layout(Constraints::new(0.0, 320.0, 0.0, 180.0));
+    let mut surface = skia_safe::surfaces::raster_n32_premul((320, 180)).expect("scroll color surface");
+    surface.canvas().clear(skia_safe::Color::WHITE);
+    let root = composer.layout_root_idx().unwrap();
+    render::render(composer.arena_nodes(), root, surface.canvas());
+    surface
 }
 
 fn custom_typography() -> Typography {
@@ -259,6 +285,23 @@ fn material_visual_matrix_rtl_mirrors_horizontal_content() {
     assert_eq!(rtl_nodes[rtl_leading].position.x, 170.0);
     assert_eq!(ltr_nodes[ltr_trailing].position.x, 30.0);
     assert_eq!(rtl_nodes[rtl_trailing].position.x, 100.0);
+}
+
+#[test]
+fn top_app_bar_scroll_color_probe_uses_base_and_scrolled_containers() {
+    let base = Color::from_argb(255, 17, 34, 51);
+    let scrolled = Color::from_argb(255, 210, 70, 20);
+    let colors = TopAppBarColors::new(base, Color::WHITE, Color::WHITE, Color::WHITE, Color::WHITE)
+        .scrolled_container(scrolled);
+    for variant in [TopAppBarVariant::Standard, TopAppBarVariant::CenterAligned, TopAppBarVariant::Medium, TopAppBarVariant::Large] {
+        let mut initial = render_scroll_color_probe(variant, 0.0, colors);
+        let p0 = pixel(&mut initial, 2, 2);
+        assert_eq!(p0, (base.r, base.g, base.b, base.a), "{variant:?} initial container");
+        let offset = if matches!(variant, TopAppBarVariant::Medium | TopAppBarVariant::Large) { 1_000.0 } else { 1.0 };
+        let mut scrolled_surface = render_scroll_color_probe(variant, offset, colors);
+        let p1 = pixel(&mut scrolled_surface, 2, 2);
+        assert_eq!(p1, (scrolled.r, scrolled.g, scrolled.b, scrolled.a), "{variant:?} scrolled container");
+    }
 }
 
 #[test]

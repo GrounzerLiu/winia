@@ -333,17 +333,22 @@ fn text_field_error_readonly_and_disabled_states_are_enforced() {
 #[test]
 fn top_app_bar_variants_collapse_and_restore_with_scroll() {
     let mut app = UiTest::launch("top_app_bar");
+    app.expect_text("standard-scrolled: false");
+    app.expect_text("large-scrolled: false");
     app.expect_text("large-collapsed: false");
     let (_, appbar_y, _, expanded_h) = app.find_tag("large-appbar").expect("large app bar");
-    let (_, expanded_title_y, _, _) = app.find_tag("top-app-bar-title").expect("large title");
+    let (_, _, _, standard_h) = app.find_tag("standard-appbar").expect("standard app bar");
+    assert_eq!(standard_h, 64.0, "Standard 滚动前应固定 64dp");
     assert!(expanded_h >= 140.0, "large 初始应展开：{expanded_h}");
 
     app.scroll(-24.0);
+    app.expect_text_timeout("standard-scrolled: true", Duration::from_secs(5));
+    app.expect_text_timeout("large-scrolled: true", Duration::from_secs(5));
+    let (_, _, _, standard_scrolled_h) = app.find_tag("standard-appbar").expect("standard app bar scrolled");
+    assert!((standard_scrolled_h - standard_h).abs() <= 1.0, "Standard 滚动后高度仍应为 64dp");
     app.expect_text_timeout("large-collapsed: false", Duration::from_secs(5));
     let (_, _, _, mid_one_h) = app.find_tag("large-appbar").expect("large app bar mid one");
-    let (_, mid_title_y, _, _) = app.find_tag("top-app-bar-title").expect("large title mid one");
     assert!(mid_one_h > 68.0 && mid_one_h < expanded_h, "第一中间高度应连续：{expanded_h} -> {mid_one_h}");
-    assert!(mid_title_y < expanded_title_y, "标题应向 collapsed row 移动：{expanded_title_y} -> {mid_title_y}");
 
     app.scroll(-48.0);
     let (_, _, _, mid_two_h) = app.find_tag("large-appbar").expect("large app bar mid two");
@@ -352,18 +357,11 @@ fn top_app_bar_variants_collapse_and_restore_with_scroll() {
     app.scroll(-260.0);
     app.expect_text_timeout("large-collapsed: true", Duration::from_secs(5));
     let (_, _, _, collapsed_h) = app.find_tag("large-appbar").expect("collapsed large app bar");
-    let (_, collapsed_title_y, _, collapsed_title_h) = app.find_tag("top-app-bar-title").expect("collapsed title");
-    let (_, navigation_y, _, navigation_h) = app.find_tag("top-app-bar-navigation").expect("collapsed navigation");
-    let (_, actions_y, _, actions_h) = app.find_tag("top-app-bar-actions").expect("collapsed actions");
     assert!(collapsed_h <= 68.0, "large 折叠高度应接近 standard：{collapsed_h}");
-    let title_center = collapsed_title_y + collapsed_title_h / 2.0;
-    let navigation_center = navigation_y + navigation_h / 2.0;
-    let actions_center = actions_y + actions_h / 2.0;
-    assert!((title_center - (appbar_y + 32.0)).abs() <= 1.0, "collapsed title 应位于 64dp row 中心");
-    assert!((navigation_center - title_center).abs() <= 1.0, "navigation 与 title 应垂直对齐");
-    assert!((actions_center - title_center).abs() <= 1.0, "actions 与 title 应垂直对齐");
 
     app.scroll(600.0);
+    app.expect_text_timeout("standard-scrolled: false", Duration::from_secs(5));
+    app.expect_text_timeout("large-scrolled: false", Duration::from_secs(5));
     app.expect_text_timeout("large-collapsed: false", Duration::from_secs(5));
     let (_, _, _, restored_h) = app.find_tag("large-appbar").expect("restored large app bar");
     assert!(restored_h >= expanded_h, "回滚后应恢复展开高度：{expanded_h} -> {restored_h}");

@@ -9,9 +9,20 @@ const MORE_VERT_PATH: &str = "M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm
 fn top_app_bar_fixture(ctx: &mut ComposeCtx) {
     let scroll = ctx.remember(|| ScrollState::new()).get();
     let behavior = TopAppBarScrollBehavior::new(scroll.clone(), TOP_APP_BAR_LARGE_HEIGHT);
+    let standard_behavior = TopAppBarScrollBehavior::new(scroll.clone(), TOP_APP_BAR_HEIGHT);
     let collapsed = behavior.is_collapsed();
+    let standard_scrolled = standard_behavior.scroll_state().offset.get() > 0.0;
+    let large_scrolled = behavior.scroll_state().offset.get() > 0.0;
 
     Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+        TopAppBar::new(|ctx| Text::new("Standard title").build(ctx))
+            .navigation_icon(|ctx| Icon::svg_path(ARROW_BACK_PATH).size(24.0).build(ctx))
+            .actions(|ctx| Icon::svg_path(MORE_VERT_PATH).size(24.0).build(ctx))
+            .scroll_behavior(standard_behavior)
+            .modifier(Modifier::new().test_tag("standard-appbar"))
+            .build(ctx);
+        Text::new(format!("standard-scrolled: {standard_scrolled}")).build(ctx);
+
         TopAppBar::large(|ctx| Text::new("Large title").build(ctx))
             .subtitle(|ctx| Text::new("Large subtitle").build(ctx))
             .navigation_icon(|ctx| Icon::svg_path(ARROW_BACK_PATH).size(24.0).build(ctx))
@@ -20,6 +31,7 @@ fn top_app_bar_fixture(ctx: &mut ComposeCtx) {
             .modifier(Modifier::new().test_tag("large-appbar"))
             .build(ctx);
         Text::new(format!("large-collapsed: {collapsed}")).build(ctx);
+        Text::new(format!("large-scrolled: {large_scrolled}")).build(ctx);
         Text::new(format!("scroll-offset: {:.0}", scroll.offset.get())).build(ctx);
 
         Column::new()

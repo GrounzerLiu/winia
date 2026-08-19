@@ -22,10 +22,20 @@ pub const TOP_APP_BAR_LARGE_TITLE_BOTTOM_INSET: f32 = 28.0;
 pub enum TopAppBarVariant { Standard, CenterAligned, Medium, Large }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TopAppBarColors { pub container: Color, pub title: Color, pub subtitle: Color, pub navigation: Color, pub actions: Color }
+pub struct TopAppBarColors {
+    pub container: Color, pub scrolled_container: Color, pub title: Color,
+    pub subtitle: Color, pub navigation: Color, pub actions: Color,
+}
 impl TopAppBarColors {
-    pub fn new(container: Color, title: Color, subtitle: Color, navigation: Color, actions: Color) -> Self { Self { container, title, subtitle, navigation, actions } }
-    pub fn from_theme(theme: &crate::ui::theme::ThemeColors) -> Self { Self::new(theme.surface, theme.on_surface, theme.on_surface_variant, theme.on_surface_variant, theme.on_surface_variant) }
+    pub fn new(container: Color, title: Color, subtitle: Color, navigation: Color, actions: Color) -> Self { Self { container, scrolled_container: container, title, subtitle, navigation, actions } }
+    pub fn scrolled_container(mut self, color: Color) -> Self { self.scrolled_container = color; self }
+    pub fn from_theme(theme: &crate::ui::theme::ThemeColors) -> Self { Self::new(theme.surface, theme.on_surface, theme.on_surface_variant, theme.on_surface, theme.on_surface_variant).scrolled_container(theme.surface_container) }
+    pub fn container_color(&self, variant: TopAppBarVariant, scroll_offset: f32, collapse_fraction: f32) -> Color {
+        match variant {
+            TopAppBarVariant::Standard | TopAppBarVariant::CenterAligned => if scroll_offset > 0.0 { self.scrolled_container } else { self.container },
+            TopAppBarVariant::Medium | TopAppBarVariant::Large => color_lerp(self.container, self.scrolled_container, fast_out_linear_in(collapse_fraction)),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -81,7 +91,21 @@ impl TopAppBar {
         let bottom_inset = if self.variant == TopAppBarVariant::Large { TOP_APP_BAR_LARGE_TITLE_BOTTOM_INSET } else { TOP_APP_BAR_MEDIUM_TITLE_BOTTOM_INSET };
         let policy = TopAppBarLayoutPolicy { variant: self.variant, fraction, direction, navigation_present, actions_present, subtitle_present, expanded_height: expanded, bottom_inset };
         let title_style = title_style(if matches!(self.variant, TopAppBarVariant::Medium | TopAppBarVariant::Large) { expanded_title_style(self.variant) } else { WiniaTheme::typography().title_large }, colors.title);
-        let root_modifier = Modifier::new().fill_max_width().height(height).background(colors.container, Shape::Rectangle).clip(Shape::Rectangle).then(self.modifier);
+        let scroll_offset = self.scroll_behavior.as_ref().map(|behavior| behavior.scroll.offset.get()).unwrap_or(0.0);
+        let target_container = colors.container_color(self.variant, scroll_offset, fraction);
+        let container_color = if matches!(self.variant, TopAppBarVariant::Standard | TopAppBarVariant::CenterAligned) {
+            ctx.animate_color_as_state(
+                target_container,
+                crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
+                    std::time::Duration::from_millis(180),
+                    crate::animation::interpolator::EaseOutCubic::new(),
+                )),
+            )
+        } else {
+            crate::core::state::State::new(target_container)
+        };
+        let rendered_container = container_color.clone();
+        let root_modifier = Modifier::new().fill_max_width().height(height).background(move || rendered_container.peek(), Shape::Rectangle).clip(Shape::Rectangle).then(self.modifier);
         let title = self.title; let subtitle = self.subtitle; let navigation = self.navigation_icon; let actions = self.actions;
         match ctx.start_restartable_group(key, root_modifier, policy) {
             GroupStatus::Skip => {}
@@ -95,6 +119,17 @@ impl TopAppBar {
         ctx.set_current_node_focus_color(theme.primary);
         ctx.end_restartable_group();
     }
+}
+
+fn fast_out_linear_in(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+fn color_lerp(from: Color, to: Color, fraction: f32) -> Color {
+    let t = fraction.clamp(0.0, 1.0);
+    let lerp = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t).round() as u8;
+    Color::from_argb(lerp(from.a, to.a), lerp(from.r, to.r), lerp(from.g, to.g), lerp(from.b, to.b))
 }
 
 fn slot(ctx: &mut ComposeCtx, modifier: Modifier, content: impl FnOnce(&mut ComposeCtx)) { let key = ctx.next_key(); match ctx.start_restartable_group(key, modifier, BoxLayout::new().alignment(Alignment::Center)) { GroupStatus::Skip => {}, GroupStatus::Enter => content(ctx) }; ctx.end_restartable_group(); }
@@ -144,4 +179,7 @@ mod tests {
     #[test] fn single_title_moves_to_collapsed_row_without_subtitle_offset() { let s=ScrollState::new(); s.offset.set(1000.); let with_sub=layout(TopAppBar::large(|ctx| leaf(ctx,100.,20.)).subtitle(|ctx| leaf(ctx,80.,16.)).navigation_icon(|ctx| leaf(ctx,24.,24.)).actions(|ctx| leaf(ctx,72.,24.)).scroll_behavior(TopAppBarScrollBehavior::new(s.clone(),152.)),400.); let without_sub=layout(TopAppBar::large(|ctx| leaf(ctx,100.,20.)).navigation_icon(|ctx| leaf(ctx,24.,24.)).actions(|ctx| leaf(ctx,72.,24.)).scroll_behavior(TopAppBarScrollBehavior::new(s,152.)),400.); let a=with_sub.layout_root_idx().unwrap(); let b=without_sub.layout_root_idx().unwrap(); let an=with_sub.arena_nodes(); let bn=without_sub.arena_nodes(); assert_eq!(an[a].measured_size.height,64.); assert_eq!(an[an[a].children[1]].position.y,22.); assert_eq!(an[an[a].children[1]].position.y,bn[bn[b].children[1]].position.y); assert_eq!(an[an[a].children[0]].position.y,8.); }
     #[test] fn title_y_moves_continuously_at_mid_fraction() { let s=ScrollState::new(); s.offset.set(44.); let c=layout(TopAppBar::large(|ctx| leaf(ctx,100.,20.)).subtitle(|ctx| leaf(ctx,80.,16.)).scroll_behavior(TopAppBarScrollBehavior::new(s,152.)),400.); let root=c.layout_root_idx().unwrap(); let n=c.arena_nodes(); let y=n[n[root].children[1]].position.y; assert!(y>22. && y<80.); assert_eq!(n[root].measured_size.height,108.); }
     #[test] fn center_and_long_title_keep_safe_bounds() { let c=layout(TopAppBar::center_aligned(|ctx| leaf(ctx,100.,20.)).navigation_icon(|ctx| leaf(ctx,24.,24.)).actions(|ctx| leaf(ctx,72.,24.)),400.); let r=c.layout_root_idx().unwrap(); let n=c.arena_nodes(); let t=&n[n[r].children[1]]; assert!(((t.position.x+t.measured_size.width/2.)-200.).abs()< 0.01); let c=layout(TopAppBar::large(|ctx| crate::ui::Text::new("A deliberately long title that must not cover actions").build(ctx)).navigation_icon(|ctx| leaf(ctx,24.,24.)).actions(|ctx| leaf(ctx,72.,24.)),240.); let r=c.layout_root_idx().unwrap(); assert_eq!(c.arena_nodes()[r].measured_size.height,152.); }
+    #[test] fn colors_use_material_surface_tokens_and_compat_constructor() { let theme=crate::ui::theme::ThemeColors::default_light(); let colors=TopAppBarColors::from_theme(&theme); assert_eq!(colors.container,theme.surface); assert_eq!(colors.scrolled_container,theme.surface_container); assert_eq!(colors.title,theme.on_surface); assert_eq!(colors.navigation,theme.on_surface); let custom=TopAppBarColors::new(Color::RED,Color::WHITE,Color::WHITE,Color::WHITE,Color::WHITE); assert_eq!(custom.scrolled_container,Color::RED); assert_eq!(custom.scrolled_container(Color::BLUE).scrolled_container,Color::BLUE); }
+    #[test] fn standard_scroll_color_is_independent_from_collapse_fraction() { let scroll=ScrollState::new(); let colors=TopAppBarColors::new(Color::RED,Color::WHITE,Color::WHITE,Color::WHITE,Color::WHITE).scrolled_container(Color::BLUE); assert_eq!(colors.container_color(TopAppBarVariant::Standard,0.,0.),Color::RED); assert_eq!(colors.container_color(TopAppBarVariant::Standard,1.,0.),Color::BLUE); let behavior=TopAppBarScrollBehavior::new(scroll,TOP_APP_BAR_HEIGHT); assert_eq!(behavior.collapse_fraction(),0.); }
+    #[test] fn collapsible_colors_interpolate_from_base_to_scrolled() { let colors=TopAppBarColors::new(Color::from_argb(255,0,0,0),Color::WHITE,Color::WHITE,Color::WHITE,Color::WHITE).scrolled_container(Color::from_argb(255,200,100,0)); assert_eq!(colors.container_color(TopAppBarVariant::Large,0.,0.),colors.container); let middle=colors.container_color(TopAppBarVariant::Large,44.,0.5); assert!(middle.r>0 && middle.r<200); assert_eq!(colors.container_color(TopAppBarVariant::Large,88.,1.),colors.scrolled_container); }
 }

@@ -109,7 +109,7 @@ cargo test --features debug-server --test ui_test
 
 ## 测试清单
 
-### UI 集成（fixture 驱动，5 用例）
+### UI 集成（fixture 驱动）
 
 | 用例 | fixture | 覆盖（Given/When/Then） |
 |------|---------|------------------------|
