@@ -76,11 +76,13 @@ impl NestedScrollConnection for TopAppBarNestedConnection {
         let target = (current + available.y).clamp(limit.min(0.0), 0.0);
         let consumed = target - current;
         self.state.height_offset.set(target);
-        self.state.content_offset.update(|value| *value += available.y);
+        // content_offset 改在 on_post_scroll 按子滚动实际消费量累计（保证回滚到顶归零）
         ScrollDelta::new(0.0, consumed)
     }
     fn on_post_scroll(&self, consumed: ScrollDelta, available: ScrollDelta, source: NestedScrollSource) -> ScrollDelta {
         if matches!(self.mode, TopAppBarScrollMode::Pinned) || !matches!(source, NestedScrollSource::Wheel | NestedScrollSource::Drag) { return ScrollDelta::ZERO; }
+        // content_offset 反映子滚动实际消费量：向下滚为负，回滚到顶部 consumed 归零 → 颜色复原
+        self.state.content_offset.update(|value| *value += consumed.y);
         if self.mode == TopAppBarScrollMode::ExitUntilCollapsed && available.y > 0.0 && consumed.y == 0.0 { return self.on_pre_scroll(available, source); }
         ScrollDelta::ZERO
     }
@@ -263,7 +265,19 @@ mod tests {
         let connection=TopAppBarScrollBehavior::enter_always(state.clone(), TOP_APP_BAR_HEIGHT).nested_scroll_connection().unwrap();
         let consumed=connection.on_pre_scroll(ScrollDelta::new(0.0, -40.0), NestedScrollSource::Wheel);
         assert_eq!(consumed.y, 0.0, "Standard 不折叠高度，不应消费滚动");
-        assert_eq!(state.content_offset.get(), -40.0, "但应累计 content_offset 以触发滚动变色");
         assert_eq!(state.height_offset.get(), 0.0);
+        // content_offset 由 on_post_scroll 按子滚动实际消费量累计
+        connection.on_post_scroll(ScrollDelta::new(0.0, -40.0), ScrollDelta::ZERO, NestedScrollSource::Wheel);
+        assert_eq!(state.content_offset.get(), -40.0, "应累计 content_offset 以触发滚动变色");
+    }
+    #[test] fn standard_nested_content_offset_returns_to_zero_on_scroll_up() {
+        let state=TopAppBarState::new(TOP_APP_BAR_HEIGHT);
+        let connection=TopAppBarScrollBehavior::enter_always(state.clone(), TOP_APP_BAR_HEIGHT).nested_scroll_connection().unwrap();
+        connection.on_pre_scroll(ScrollDelta::new(0.0, -40.0), NestedScrollSource::Wheel);
+        connection.on_post_scroll(ScrollDelta::new(0.0, -40.0), ScrollDelta::ZERO, NestedScrollSource::Wheel);
+        assert_eq!(state.content_offset.get(), -40.0);
+        connection.on_pre_scroll(ScrollDelta::new(0.0, 40.0), NestedScrollSource::Wheel);
+        connection.on_post_scroll(ScrollDelta::new(0.0, 40.0), ScrollDelta::ZERO, NestedScrollSource::Wheel);
+        assert_eq!(state.content_offset.get(), 0.0, "向上滚回顶部后 content_offset 应回到 0");
     }
 }
