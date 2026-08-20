@@ -21,7 +21,8 @@ thread_local! {
 /// 无宏覆盖会触发稳定 key panic）
 #[composable]
 fn sub_window_content(ctx: &mut ComposeCtx, content: &impl Fn(&mut ComposeCtx)) {
-    Column::new().modifier(Modifier::new().padding(8.0)).build(ctx, |ctx| {
+    // 内容铺满窗口，不做默认留白（Scaffold 等全屏页面需要 edge-to-edge）。
+    Column::new().build(ctx, |ctx| {
         content(ctx);
     });
 }
