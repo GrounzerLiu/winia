@@ -68,10 +68,12 @@ impl TopAppBarNestedConnection {
 impl NestedScrollConnection for TopAppBarNestedConnection {
     fn on_pre_scroll(&self, available: ScrollDelta, source: NestedScrollSource) -> ScrollDelta {
         if matches!(self.mode, TopAppBarScrollMode::Pinned) || !matches!(source, NestedScrollSource::Wheel | NestedScrollSource::Drag) { return ScrollDelta::ZERO; }
+        if available.y == 0.0 { return ScrollDelta::ZERO; }
         let limit = self.state.height_offset_limit.get();
-        if limit >= 0.0 || available.y == 0.0 { return ScrollDelta::ZERO; }
         let current = self.state.height_offset.get();
-        let target = (current + available.y).clamp(limit, 0.0);
+        // 非折叠（limit>=0）时 height 不变、consumed=0，但仍要累计 content_offset
+        // 供 Standard/CenterAligned 的滚动变色使用。
+        let target = (current + available.y).clamp(limit.min(0.0), 0.0);
         let consumed = target - current;
         self.state.height_offset.set(target);
         self.state.content_offset.update(|value| *value += available.y);
@@ -255,5 +257,13 @@ mod tests {
         assert_eq!(colors.container_color(TopAppBarVariant::Standard, -1.0, 0.0), Color::BLUE);
         assert_eq!(colors.container_color(TopAppBarVariant::Standard, 1.0, 0.0), Color::BLUE);
         assert_eq!(colors.container_color(TopAppBarVariant::Standard, 0.0, 0.0), Color::RED);
+    }
+    #[test] fn standard_nested_connection_tracks_content_offset_without_consuming() {
+        let state=TopAppBarState::new(TOP_APP_BAR_HEIGHT); // limit = 0，非折叠
+        let connection=TopAppBarScrollBehavior::enter_always(state.clone(), TOP_APP_BAR_HEIGHT).nested_scroll_connection().unwrap();
+        let consumed=connection.on_pre_scroll(ScrollDelta::new(0.0, -40.0), NestedScrollSource::Wheel);
+        assert_eq!(consumed.y, 0.0, "Standard 不折叠高度，不应消费滚动");
+        assert_eq!(state.content_offset.get(), -40.0, "但应累计 content_offset 以触发滚动变色");
+        assert_eq!(state.height_offset.get(), 0.0);
     }
 }

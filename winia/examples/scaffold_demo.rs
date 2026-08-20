@@ -10,12 +10,22 @@ fn scaffold_demo(ctx: &mut ComposeCtx) {
     let rtl = ctx.remember(|| false);
     let direction = if rtl.get() { LayoutDirection::Rtl } else { LayoutDirection::Ltr };
 
+    // TopAppBar nested scroll behavior：Standard 不可折叠，但滚动时 content_offset
+    // 会累积，从而触发 scrolled 容器色。
+    let app_bar_state = ctx.remember(|| TopAppBarState::new(TOP_APP_BAR_HEIGHT)).get();
+    let behavior = TopAppBarScrollBehavior::enter_always(app_bar_state, TOP_APP_BAR_HEIGHT);
+    let connection = behavior.nested_scroll_connection().expect("nested behavior connection");
+
     let rtl_for_top_bar = rtl.clone();
     let count_for_fab = count.clone();
+    let behavior_for_top = behavior.clone();
+    let connection_for_content = connection.clone();
+
     WiniaTheme::with_theme_and_direction(ThemeColors::default_light(), direction, ctx, |ctx| {
-        Scaffold::new(|ctx, _padding| {
+        Scaffold::new(move |ctx, _padding| {
             let scroll = ctx.remember(|| ScrollState::new()).get();
-            Column::new().modifier(Modifier::new().fill_max_size().vertical_scroll(scroll)).build(ctx, |ctx| {
+            let conn = connection_for_content.clone();
+            Column::new().modifier(Modifier::new().fill_max_size().vertical_scroll(scroll).nested_scroll(conn)).build(ctx, |ctx| {
                 for index in 0..30 {
                     Text::new(format!("Content item {index}"))
                         .modifier(Modifier::new().padding(16.0).fill_max_width())
@@ -25,6 +35,7 @@ fn scaffold_demo(ctx: &mut ComposeCtx) {
         })
         .top_bar(move |ctx| {
             TopAppBar::new(|ctx| Text::new("Scaffold demo").build(ctx))
+                .scroll_behavior(behavior_for_top.clone())
                 .actions(move |ctx| {
                     Button::text().on_click({ let rtl = rtl_for_top_bar.clone(); move || rtl.update(|value| *value = !*value) }).build(ctx, |ctx| Text::new("RTL").build(ctx));
                 })
