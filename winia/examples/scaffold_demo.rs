@@ -14,16 +14,18 @@ fn scaffold_demo(ctx: &mut ComposeCtx) {
     // 会累积，从而触发 scrolled 容器色。
     let app_bar_state = ctx.remember(|| TopAppBarState::new(TOP_APP_BAR_HEIGHT)).get();
     let behavior = TopAppBarScrollBehavior::enter_always(app_bar_state, TOP_APP_BAR_HEIGHT);
-    let connection = behavior.nested_scroll_connection().expect("nested behavior connection");
+    let scroll = ctx.remember(|| ScrollState::new()).get();
+    let connection = behavior.nested_scroll_connection_with_scroll(scroll.clone()).expect("nested behavior connection");
 
     let rtl_for_top_bar = rtl.clone();
     let count_for_fab = count.clone();
     let behavior_for_top = behavior.clone();
     let connection_for_content = connection.clone();
+    let scroll_for_content = scroll.clone();
 
     WiniaTheme::with_theme_and_direction(ThemeColors::default_light(), direction, ctx, |ctx| {
         Scaffold::new(move |ctx, _padding| {
-            let scroll = ctx.remember(|| ScrollState::new()).get();
+            let scroll = scroll_for_content.clone();
             let conn = connection_for_content.clone();
             Column::new().modifier(Modifier::new().fill_max_size().vertical_scroll(scroll).nested_scroll(conn)).build(ctx, |ctx| {
                 for index in 0..30 {

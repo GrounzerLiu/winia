@@ -7,7 +7,7 @@ fn nested_scroll_fixture(ctx: &mut ComposeCtx) {
     let app_bar_state = ctx.remember(|| TopAppBarState::new(TOP_APP_BAR_LARGE_HEIGHT)).get();
     let behavior = TopAppBarScrollBehavior::enter_always(app_bar_state.clone(), TOP_APP_BAR_LARGE_HEIGHT);
     let scroll = ctx.remember(|| ScrollState::new()).get();
-    let connection = behavior.nested_scroll_connection().expect("nested behavior connection");
+    let connection = behavior.nested_scroll_connection_with_scroll(scroll.clone()).expect("nested behavior connection");
 
     Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
         TopAppBar::large(|ctx| Text::new("Nested scroll").build(ctx))

@@ -20,7 +20,8 @@ Winia 提供 Compose 风格的 nested scroll 基础协议，用于让祖先容�
 - `Modifier::nested_scroll(connection)` 可挂载祖先 connection。
 - wheel、debug scroll 和 drag move 通过 pre → child partial consume → post 顺序分发。
 - 拖拽结束的 fling 通过 `dispatch_nested_scroll_fling` 走 pre-fling → child fling → post-fling 链。
-- `TopAppBarScrollBehavior::{pinned, enter_always, exit_until_collapsed}` 提供独立 `TopAppBarState` connection。
+- `TopAppBarScrollBehavior::{pinned, enter_always, exit_until_collapsed}` 提供独立 `TopAppBarState` connection；
+  通过 `nested_scroll_connection_with_scroll(scroll)` 绑定子滚动状态，`content_offset` 直接镜像真实 offset，避免累加漂移。
 - legacy `TopAppBarScrollBehavior::new(scroll, expanded_height)` 继续保留，供已有共享 offset 页面迁移。
 
 

@@ -60,9 +60,15 @@ impl TopAppBarState {
 pub enum TopAppBarScrollMode { Pinned, EnterAlways, ExitUntilCollapsed }
 
 #[derive(Clone)]
-pub struct TopAppBarNestedConnection { state: TopAppBarState, mode: TopAppBarScrollMode }
+pub struct TopAppBarNestedConnection {
+    state: TopAppBarState,
+    mode: TopAppBarScrollMode,
+    /// 子滚动状态：存在时 content_offset 直接镜像真实 offset，避免 delta 累加漂移。
+    scroll: Option<ScrollState>,
+}
 impl TopAppBarNestedConnection {
-    pub fn new(state: TopAppBarState, mode: TopAppBarScrollMode) -> Self { Self { state, mode } }
+    pub fn new(state: TopAppBarState, mode: TopAppBarScrollMode) -> Self { Self { state, mode, scroll: None } }
+    pub fn with_scroll(state: TopAppBarState, mode: TopAppBarScrollMode, scroll: ScrollState) -> Self { Self { state, mode, scroll: Some(scroll) } }
     pub fn state(&self) -> TopAppBarState { self.state.clone() }
 }
 impl NestedScrollConnection for TopAppBarNestedConnection {
@@ -81,8 +87,13 @@ impl NestedScrollConnection for TopAppBarNestedConnection {
     }
     fn on_post_scroll(&self, consumed: ScrollDelta, available: ScrollDelta, source: NestedScrollSource) -> ScrollDelta {
         if matches!(self.mode, TopAppBarScrollMode::Pinned) || !matches!(source, NestedScrollSource::Wheel | NestedScrollSource::Drag) { return ScrollDelta::ZERO; }
-        // content_offset 反映子滚动实际消费量：向下滚为负，回滚到顶部 consumed 归零 → 颜色复原
-        self.state.content_offset.update(|value| *value += consumed.y);
+        if let Some(scroll) = &self.scroll {
+            // 直接镜像子滚动真实 offset，避免累加漂移（滚回顶部 offset=0 → 颜色复原）
+            self.state.content_offset.set(scroll.offset.get());
+        } else {
+            // 无子滚动引用时退化为按 consumed 累计（兼容旧用法）
+            self.state.content_offset.update(|value| *value += consumed.y);
+        }
         if self.mode == TopAppBarScrollMode::ExitUntilCollapsed && available.y > 0.0 && consumed.y == 0.0 { return self.on_pre_scroll(available, source); }
         ScrollDelta::ZERO
     }
@@ -112,6 +123,7 @@ impl TopAppBarScrollBehavior {
     pub fn is_collapsed(&self) -> bool { self.collapse_fraction() >= 1.0 }
     pub fn state(&self) -> Option<TopAppBarState> { match &self.kind { TopAppBarBehaviorKind::Nested(state, _) => Some(state.clone()), _ => None } }
     pub fn nested_scroll_connection(&self) -> Option<TopAppBarNestedConnection> { match &self.kind { TopAppBarBehaviorKind::Nested(state, mode) => Some(TopAppBarNestedConnection::new(state.clone(), *mode)), _ => None } }
+    pub fn nested_scroll_connection_with_scroll(&self, scroll: ScrollState) -> Option<TopAppBarNestedConnection> { match &self.kind { TopAppBarBehaviorKind::Nested(state, mode) => Some(TopAppBarNestedConnection::with_scroll(state.clone(), *mode, scroll)), _ => None } }
     pub fn scroll_state(&self) -> Option<ScrollState> { match &self.kind { TopAppBarBehaviorKind::Legacy(scroll) => Some(scroll.clone()), _ => None } }
     fn scroll_offset(&self) -> f32 { match &self.kind { TopAppBarBehaviorKind::Legacy(scroll) => scroll.offset.get(), TopAppBarBehaviorKind::Nested(state, _) => state.content_offset.get() } }
 }
@@ -279,5 +291,16 @@ mod tests {
         connection.on_pre_scroll(ScrollDelta::new(0.0, 40.0), NestedScrollSource::Wheel);
         connection.on_post_scroll(ScrollDelta::new(0.0, 40.0), ScrollDelta::ZERO, NestedScrollSource::Wheel);
         assert_eq!(state.content_offset.get(), 0.0, "向上滚回顶部后 content_offset 应回到 0");
+    }
+    #[test] fn nested_connection_mirrors_child_scroll_offset_exactly() {
+        let state=TopAppBarState::new(TOP_APP_BAR_HEIGHT);
+        let scroll=ScrollState::new();
+        let connection=TopAppBarNestedConnection::with_scroll(state.clone(), TopAppBarScrollMode::EnterAlways, scroll.clone());
+        scroll.offset.set(120.0);
+        connection.on_post_scroll(ScrollDelta::ZERO, ScrollDelta::ZERO, NestedScrollSource::Drag);
+        assert_eq!(state.content_offset.get(), 120.0, "应直接镜像子滚动 offset，而非累加 delta");
+        scroll.offset.set(0.0);
+        connection.on_post_scroll(ScrollDelta::ZERO, ScrollDelta::ZERO, NestedScrollSource::Drag);
+        assert_eq!(state.content_offset.get(), 0.0);
     }
 }
