@@ -366,3 +366,41 @@ fn top_app_bar_variants_collapse_and_restore_with_scroll() {
     let (_, _, _, restored_h) = app.find_tag("large-appbar").expect("restored large app bar");
     assert!(restored_h >= expanded_h, "回滚后应恢复展开高度：{expanded_h} -> {restored_h}");
 }
+
+#[test]
+fn scaffold_fab_clicks_and_rtl_mirrors_without_changing_content_inset() {
+    let mut app = UiTest::launch("scaffold");
+    app.expect_text("fab-count: 0");
+    app.expect_text("direction: ltr");
+    let (_, top_y, _, top_h) = app.find_tag("scaffold-top").expect("scaffold top");
+    let (_, content_y, _, content_h) = app.find_tag("scaffold-content-probe").expect("scaffold content");
+    let (fab_x, fab_y, fab_w, fab_h) = app.find_tag("scaffold-fab").expect("scaffold fab");
+    assert!((content_y - (top_y + top_h)).abs() <= 1.0, "content 应从 top bar 下方开始：top=({}, {}) content={}", top_y, top_h, content_y);
+    assert!(content_h > 0.0);
+    assert!((fab_w - 56.0).abs() <= 1.0 && (fab_h - 56.0).abs() <= 1.0, "regular FAB 尺寸");
+
+    app.click_tag("scaffold-fab");
+    app.expect_text_timeout("fab-count: 1", Duration::from_secs(5));
+    app.click_tag("direction-toggle");
+    app.expect_text_timeout("direction: rtl", Duration::from_secs(5));
+    let (rtl_fab_x, rtl_fab_y, _, _) = app.find_tag("scaffold-fab").expect("rtl scaffold fab");
+    let (_, rtl_content_y, _, rtl_content_h) = app.find_tag("scaffold-content-probe").expect("rtl scaffold content");
+    assert!(rtl_fab_x < fab_x, "RTL FAB 应镜像到 start side：{fab_x} -> {rtl_fab_x}");
+    assert!((rtl_fab_y - fab_y).abs() <= 1.0, "RTL 不应改变 FAB 垂直位置");
+    assert!((rtl_content_y - content_y).abs() <= 1.0 && (rtl_content_h - content_h).abs() <= 1.0, "RTL 不应改变内容垂直 inset");
+}
+
+#[test]
+fn nested_scroll_top_app_bar_consumes_before_child_content() {
+    let mut app = UiTest::launch("nested_scroll");
+    app.expect_text("height-offset: 0");
+    app.expect_text("child-offset: 0");
+    app.scroll(-24.0);
+    app.expect_text_timeout("height-offset: -24", Duration::from_secs(5));
+    app.expect_text("child-offset: 0");
+    app.scroll(-120.0);
+    app.expect_text_timeout("height-offset: -88", Duration::from_secs(5));
+    app.expect_text_timeout("child-offset:", Duration::from_secs(5));
+    app.scroll(600.0);
+    app.expect_text_timeout("height-offset: 0", Duration::from_secs(5));
+}

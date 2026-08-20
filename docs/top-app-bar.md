@@ -97,6 +97,20 @@ let colors = TopAppBarColors::new(container, title, subtitle, navigation, action
 
 当前未实现 Compose 的 nested-scroll pre-scroll/post-scroll 消费链，因此顶部栏不会优先消费部分滚动 delta。需要严格 nested-scroll 语义时，应在后续独立切片中扩展滚动分发器。
 
+## Nested scroll behavior
+
+对于需要完整 pre/post 消费的页面，可使用 `TopAppBarState` 和行为工厂，将 connection 挂到内容滚动节点。legacy `TopAppBarScrollBehavior::new(scroll, height)` 仍保留为共享 offset 兼容路径。
+
+```rust
+let state = TopAppBarState::new(TOP_APP_BAR_LARGE_HEIGHT);
+let behavior = TopAppBarScrollBehavior::exit_until_collapsed(state, TOP_APP_BAR_LARGE_HEIGHT);
+let connection = behavior.nested_scroll_connection().unwrap();
+
+Column::new()
+    .modifier(Modifier::new().vertical_scroll(scroll).nested_scroll(connection))
+    .build(ctx, content);
+```
+
 ## 测试
 
 ```bash

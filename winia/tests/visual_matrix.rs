@@ -12,7 +12,7 @@ use winia::State;
 use winia::unit::{Sp, TextUnit};
 use winia::ui::{
     Button, Chip, FloatingActionButton, FloatingActionButtonSize, Icon, Text, TextField,
-    TextFieldValue, ThemeColors, TopAppBar, TopAppBarColors, TopAppBarScrollBehavior, TopAppBarVariant, Typography, WiniaTheme,
+    TextFieldValue, ThemeColors, TopAppBar, TopAppBarColors, TopAppBarScrollBehavior, TopAppBarVariant, Scaffold, Typography, WiniaTheme,
 };
 
 const WIDTH: i32 = 520;
@@ -82,6 +82,43 @@ fn render_scroll_color_probe(variant: TopAppBarVariant, offset: f32, colors: Top
     let root = composer.layout_root_idx().unwrap();
     render::render(composer.arena_nodes(), root, surface.canvas());
     surface
+}
+
+fn render_scaffold_case(direction: LayoutDirection, custom: bool) -> (skia_safe::Surface, Composer) {
+    let theme = ThemeColors::default_light();
+    let typography = if custom { custom_typography() } else { Typography::default() };
+    let mut composer = Composer::new();
+    composer.compose(winia::app_root!(|ctx| {
+        WiniaTheme::with_theme_typography_and_direction(theme, typography, direction, ctx, |ctx| {
+            Scaffold::new(|ctx, _| {
+                let key = ctx.next_key();
+                ctx.start_leaf(key, Modifier::new().fill_max_size().background(Color::from_argb(255, 245, 245, 245), winia::modifier::Shape::Rectangle).test_tag("scaffold-content"));
+                ctx.end_node();
+            })
+            .top_bar(|ctx| {
+                let key = ctx.next_key();
+                ctx.start_leaf(key, Modifier::new().fill_max_width().height(64.0).background(Color::from_argb(255, 220, 220, 225), winia::modifier::Shape::Rectangle).test_tag("scaffold-top"));
+                ctx.end_node();
+            })
+            .bottom_bar(|ctx| {
+                let key = ctx.next_key();
+                ctx.start_leaf(key, Modifier::new().fill_max_width().height(80.0).background(Color::from_argb(255, 230, 225, 235), winia::modifier::Shape::Rectangle).test_tag("scaffold-bottom"));
+                ctx.end_node();
+            })
+            .floating_action_button(|ctx| {
+                let key = ctx.next_key();
+                ctx.start_leaf(key, Modifier::new().size(56.0, 56.0).background(Color::from_argb(255, 103, 80, 164), winia::modifier::Shape::Circle).test_tag("scaffold-fab"));
+                ctx.end_node();
+            })
+            .build(ctx);
+        });
+    }));
+    composer.layout(Constraints::new(0.0, 360.0, 0.0, 640.0));
+    let mut surface = skia_safe::surfaces::raster_n32_premul((360, 640)).expect("scaffold surface");
+    surface.canvas().clear(skia_safe::Color::WHITE);
+    let root = composer.layout_root_idx().unwrap();
+    render::render(composer.arena_nodes(), root, surface.canvas());
+    (surface, composer)
 }
 
 fn custom_typography() -> Typography {
@@ -301,6 +338,31 @@ fn top_app_bar_scroll_color_probe_uses_base_and_scrolled_containers() {
         let mut scrolled_surface = render_scroll_color_probe(variant, offset, colors);
         let p1 = pixel(&mut scrolled_surface, 2, 2);
         assert_eq!(p1, (scrolled.r, scrolled.g, scrolled.b, scrolled.a), "{variant:?} scrolled container");
+    }
+}
+
+#[test]
+fn scaffold_visual_matrix_mirrors_fab_and_preserves_content_geometry() {
+    for custom in [false, true] {
+        let (mut ltr_surface, ltr) = render_scaffold_case(LayoutDirection::Ltr, custom);
+        let (mut rtl_surface, rtl) = render_scaffold_case(LayoutDirection::Rtl, custom);
+        let lr = ltr.layout_root_idx().unwrap();
+        let rr = rtl.layout_root_idx().unwrap();
+        let ln = ltr.arena_nodes();
+        let rn = rtl.arena_nodes();
+        let ltr_content = &ln[find_tag(ln, lr, "scaffold-content").unwrap()];
+        let rtl_content = &rn[find_tag(rn, rr, "scaffold-content").unwrap()];
+        let ltr_fab = &ln[ln[lr].children[3]];
+        let rtl_fab = &rn[rn[rr].children[3]];
+        assert_eq!(ltr_content.position.y, rtl_content.position.y);
+        assert_eq!(ltr_content.measured_size.height, rtl_content.measured_size.height);
+        assert_eq!((ltr_fab.measured_size.width, ltr_fab.measured_size.height), (56.0, 56.0));
+        assert_eq!((rtl_fab.measured_size.width, rtl_fab.measured_size.height), (56.0, 56.0));
+        assert!(rtl_fab.position.x < ltr_fab.position.x);
+        let ltr_px = pixel(&mut ltr_surface, (ltr_fab.position.x + 28.0) as i32, (ltr_fab.position.y + 28.0) as i32);
+        let rtl_px = pixel(&mut rtl_surface, (rtl_fab.position.x + 28.0) as i32, (rtl_fab.position.y + 28.0) as i32);
+        assert!(ltr_px.0 < 240 || ltr_px.1 < 240 || ltr_px.2 < 240, "LTR FAB should render");
+        assert!(rtl_px.0 < 240 || rtl_px.1 < 240 || rtl_px.2 < 240, "RTL FAB should render");
     }
 }
 

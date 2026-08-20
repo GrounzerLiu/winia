@@ -543,6 +543,8 @@ pub(crate) enum ModifierElement {
     LazyScroll { content_height: crate::core::state::State<f32>, reverse: bool },
     /// 水平滚动
     HorizontalScroll { state: ScrollState },
+    /// 嵌套滚动连接（祖先可在 child 前后部分消费 delta/velocity）。
+    NestedScroll { connection: Arc<dyn crate::nested_scroll::NestedScrollConnection> },
     /// 图形层变换（scale/alpha/rotation/translation——只触发重绘，不触发布局）
     GraphicsLayer { params_fn: Arc<dyn Fn() -> GraphicsLayerParams + Send + Sync> },
 }
@@ -1405,6 +1407,11 @@ pub fn draw_icon(self, spec: crate::ui::icon::IconSpec) -> Self {
         self
     }
 
+    /// 绑定嵌套滚动连接。连接会在 descendant scrollable 的 pre/post 阶段被调度。
+    pub fn nested_scroll(self, connection: impl crate::nested_scroll::NestedScrollConnection + 'static) -> Self {
+        self.push(ModifierElement::NestedScroll { connection: Arc::new(connection) })
+    }
+
     /// 水平滚动（绑定 ScrollState——对齐 vertical_scroll）
     pub fn horizontal_scroll(self, state: ScrollState) -> Self {
         let _ = state.offset.get();
@@ -1575,6 +1582,14 @@ impl Modifier {
             }
         }
         None
+    }
+
+    /// 当前节点上的嵌套滚动连接。
+    pub fn nested_scroll_connection(&self) -> Option<Arc<dyn crate::nested_scroll::NestedScrollConnection>> {
+        self.elements.iter().find_map(|el| match el {
+            ModifierElement::NestedScroll { connection } => Some(connection.clone()),
+            _ => None,
+        })
     }
 
     /// 布局权重（供 Column/Row 使用）
@@ -1912,6 +1927,7 @@ Self::DrawIcon { .. } => f.write_str("DrawIcon"),
             Self::VerticalScroll { .. } => f.write_str("VerticalScroll(<state>)"),
             Self::LazyScroll { .. } => f.write_str("LazyScroll(<state>)"),
             Self::HorizontalScroll { .. } => f.write_str("HorizontalScroll(<state>)"),
+            Self::NestedScroll { .. } => f.write_str("NestedScroll(<connection>)"),
             Self::GraphicsLayer { .. } => f.debug_struct("GraphicsLayer").finish(),
             Self::Blur { radius } => f.debug_struct("Blur").field("radius", radius).finish(),
             Self::BackdropBlur { radius } => f.debug_struct("BackdropBlur").field("radius", radius).finish(),
@@ -2521,6 +2537,7 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (PointerEvent { .. }, PointerEvent { .. }) => true,
         (VerticalScroll { state: as_ }, VerticalScroll { state: bs }) => as_.offset.id() == bs.offset.id(),
         (HorizontalScroll { state: as_ }, HorizontalScroll { state: bs }) => as_.offset.id() == bs.offset.id(),
+        (NestedScroll { .. }, NestedScroll { .. }) => true,
         // 图形层动态参数视为相同（渲染期求值——动画不触发 Enter）
         (GraphicsLayer { .. }, GraphicsLayer { .. }) => true,
         _ => false,

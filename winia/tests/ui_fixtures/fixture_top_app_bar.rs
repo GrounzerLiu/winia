@@ -11,8 +11,8 @@ fn top_app_bar_fixture(ctx: &mut ComposeCtx) {
     let behavior = TopAppBarScrollBehavior::new(scroll.clone(), TOP_APP_BAR_LARGE_HEIGHT);
     let standard_behavior = TopAppBarScrollBehavior::new(scroll.clone(), TOP_APP_BAR_HEIGHT);
     let collapsed = behavior.is_collapsed();
-    let standard_scrolled = standard_behavior.scroll_state().offset.get() > 0.0;
-    let large_scrolled = behavior.scroll_state().offset.get() > 0.0;
+    let standard_scrolled = scroll.offset.get() > 0.0;
+    let large_scrolled = scroll.offset.get() > 0.0;
 
     Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
         TopAppBar::new(|ctx| Text::new("Standard title").build(ctx))

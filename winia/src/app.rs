@@ -556,7 +556,10 @@ impl ApplicationHandler for AppState {
                 let (dx, dy) = scroll_delta_with_shift(dx, dy, self.modifiers.shift_key());
                 if dx != 0.0 || dy != 0.0 {
                     if let Some(root_idx) = pw.composer.layout_root_idx() {
-                        apply_scroll_delta(pw.composer.arena_nodes_mut(), root_idx, dx, dy, crate::unit::Density::from_density(pw.scale_factor as f32));
+                        let nodes = pw.composer.arena_nodes();
+                        if let Some(target) = find_scroll_target(nodes, root_idx, dx, dy) {
+                            let _ = dispatch_nested_scroll_delta(pw.composer.arena_nodes_mut(), root_idx, target, crate::nested_scroll::ScrollDelta::new(dx, dy), crate::nested_scroll::NestedScrollSource::Wheel, crate::unit::Density::from_density(pw.scale_factor as f32));
+                        }
                     }
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 }
@@ -1175,8 +1178,11 @@ impl AppState {
                 }
                 debug::DebugEvent::Scroll { dx, dy } => {
                     if let Some(r) = pw.composer.layout_root_idx() {
-                        apply_scroll_delta(pw.composer.arena_nodes_mut(), r, dx, dy, crate::unit::Density::from_density(pw.scale_factor as f32));
-                        handled = true;
+                        let nodes = pw.composer.arena_nodes();
+                        if let Some(target) = find_scroll_target(nodes, r, dx, dy) {
+                            let consumed = dispatch_nested_scroll_delta(pw.composer.arena_nodes_mut(), r, target, crate::nested_scroll::ScrollDelta::new(dx, dy), crate::nested_scroll::NestedScrollSource::Wheel, crate::unit::Density::from_density(pw.scale_factor as f32));
+                            handled = consumed.x != 0.0 || consumed.y != 0.0;
+                        }
                     }
                 }
                 debug::DebugEvent::Resize { w, h } => { pw.width = w; pw.height = h; handled = true; }
@@ -1336,10 +1342,123 @@ fn scroll_delta_with_shift(dx: f32, dy: f32, shift: bool) -> (f32, f32) {
     }
 }
 
-fn apply_scroll_delta(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f32, density: crate::unit::Density) -> bool {
-    // 双轴处理：垂直容器吃 dy、水平容器吃 dx（非零才消费——零 delta 不阻塞
-    // 遍历，否则 DFS 先遇到的垂直容器会吞掉横向滚轮（dx 永远到不了兄弟横向节点）
-    let mut handled = false;
+fn dispatch_nested_scroll_delta(
+    nodes: &mut [LayoutNode],
+    root: usize,
+    target: usize,
+    delta: crate::nested_scroll::ScrollDelta,
+    source: crate::nested_scroll::NestedScrollSource,
+    density: crate::unit::Density,
+) -> crate::nested_scroll::ScrollDelta {
+    fn path_to(nodes: &[LayoutNode], current: usize, target: usize, path: &mut Vec<usize>) -> bool {
+        path.push(current);
+        if current == target { return true; }
+        for &child in &nodes[current].children {
+            if path_to(nodes, child, target, path) { return true; }
+        }
+        path.pop();
+        false
+    }
+    let mut path = Vec::new();
+    if !path_to(nodes, root, target, &mut path) { return crate::nested_scroll::ScrollDelta::ZERO; }
+    let mut remaining = delta;
+    let mut total = crate::nested_scroll::ScrollDelta::ZERO;
+    for &idx in &path {
+        if let Some(connection) = nodes[idx].modifier.nested_scroll_connection() {
+            let part = connection.on_pre_scroll(remaining, source).clamp_to(remaining);
+            total = total + part;
+            remaining = remaining - part;
+        }
+    }
+    let child_consumed = apply_scroll_delta(nodes, target, remaining.x, remaining.y, density);
+    total = total + child_consumed;
+    remaining = remaining - child_consumed;
+    for &idx in path.iter().rev() {
+        if let Some(connection) = nodes[idx].modifier.nested_scroll_connection() {
+            let part = connection.on_post_scroll(child_consumed, remaining, source).clamp_to(remaining);
+            total = total + part;
+            remaining = remaining - part;
+        }
+    }
+    total
+}
+
+fn dispatch_nested_scroll_fling(
+    nodes: &mut [LayoutNode],
+    root: usize,
+    target: usize,
+    velocity: crate::nested_scroll::ScrollVelocity,
+) -> crate::nested_scroll::ScrollVelocity {
+    fn path_to(nodes: &[LayoutNode], current: usize, target: usize, path: &mut Vec<usize>) -> bool {
+        path.push(current);
+        if current == target { return true; }
+        for &child in &nodes[current].children {
+            if path_to(nodes, child, target, path) { return true; }
+        }
+        path.pop();
+        false
+    }
+    let mut path = Vec::new();
+    if !path_to(nodes, root, target, &mut path) { return velocity; }
+
+    let mut remaining = velocity;
+    let mut consumed = crate::nested_scroll::ScrollVelocity::default();
+    // pre-fling：祖先先消费一部分速度
+    for &idx in &path {
+        if let Some(connection) = nodes[idx].modifier.nested_scroll_connection() {
+            let part = connection.on_pre_fling(remaining);
+            let cx = part.x.clamp(-remaining.x.abs(), remaining.x.abs());
+            let cy = part.y.clamp(-remaining.y.abs(), remaining.y.abs());
+            consumed.x += cx;
+            consumed.y += cy;
+            remaining.x -= cx;
+            remaining.y -= cy;
+        }
+    }
+    // child fling：剩余速度交给目标滚动节点启动惯性
+    let child_velocity = remaining;
+    let node = &nodes[target];
+    if let Some(ss) = node.modifier.vertical_scroll_state() {
+        if child_velocity.y.abs() >= 50.0 {
+            ss.fling(child_velocity.y);
+        } else {
+            ss.is_scroll_in_progress.set(false);
+        }
+    } else if let Some(ss) = node.modifier.horizontal_scroll_state() {
+        if child_velocity.x.abs() >= 50.0 {
+            ss.fling(child_velocity.x);
+        } else {
+            ss.is_scroll_in_progress.set(false);
+        }
+    }
+    consumed.x += child_velocity.x;
+    consumed.y += child_velocity.y;
+    // post-fling：反向让祖先消费剩余（当前 mostly no-op，为后续扩展保留）
+    let mut leftover = crate::nested_scroll::ScrollVelocity::default();
+    for &idx in path.iter().rev() {
+        if let Some(connection) = nodes[idx].modifier.nested_scroll_connection() {
+            let part = connection.on_post_fling(child_velocity, leftover);
+            let cx = part.x.clamp(-leftover.x.abs(), leftover.x.abs());
+            let cy = part.y.clamp(-leftover.y.abs(), leftover.y.abs());
+            leftover.x += cx;
+            leftover.y += cy;
+        }
+    }
+    crate::nested_scroll::ScrollVelocity { x: velocity.x - leftover.x, y: velocity.y - leftover.y }
+}
+
+fn find_scroll_target(nodes: &[LayoutNode], idx: usize, dx: f32, dy: f32) -> Option<usize> {
+    for &child in nodes[idx].children.iter().rev() {
+        if let Some(target) = find_scroll_target(nodes, child, dx, dy) { return Some(target); }
+    }
+    if (dy != 0.0 && nodes[idx].modifier.vertical_scroll_state().is_some())
+        || (dx != 0.0 && nodes[idx].modifier.horizontal_scroll_state().is_some()) {
+        Some(idx)
+    } else { None }
+}
+
+fn apply_scroll_delta(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f32, density: crate::unit::Density) -> crate::nested_scroll::ScrollDelta {
+    let mut consumed = crate::nested_scroll::ScrollDelta::ZERO;
     {
         let node = &nodes[idx];
         if dy != 0.0 {
@@ -1375,7 +1494,7 @@ fn apply_scroll_delta(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f32, de
             let max_offset = (content_h - visible_h).max(0.0);
             let new = (current - dy).clamp(0.0, max_offset);
             state.offset.set(new);
-            handled = true;
+            consumed.y = current - new;
             }
         }
         // 水平滚动（LazyRow/横向 scroll 容器）——与垂直对称：dx 正 = 内容左移
@@ -1406,17 +1525,18 @@ fn apply_scroll_delta(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f32, de
             let max_offset = (content_w - visible_w).max(0.0);
             let new = (current - dx).clamp(0.0, max_offset);
             state.offset.set(new);
-            handled = true;
+            consumed.x = current - new;
         }
         }
     }
-    if handled { return true; }
+    if consumed.x != 0.0 || consumed.y != 0.0 { return consumed; }
     // 子节点（clone 索引后递归，避免与 nodes 的可变借用冲突）
     let children: Vec<usize> = nodes[idx].children.clone();
     for c in children {
-        if apply_scroll_delta(nodes, c, dx, dy, density) { return true; }
+        let child = apply_scroll_delta(nodes, c, dx, dy, density);
+        if child.x != 0.0 || child.y != 0.0 { return child; }
     }
-    false
+    consumed
 }
 
 /// 手势动作 → 节点回调（坐标转组件本地——对标 Compose onTap 的本地 offset）。
@@ -1535,20 +1655,10 @@ fn drag_scroll_up(pw: &mut PerWindow) {
         crate::layout::node::find_node_by_id(nodes, r, id)
     })();
     let Some(idx) = target else { return };
-    let nodes = pw.composer.arena_nodes();
-    if let Some(ss) = nodes[idx].modifier.vertical_scroll_state() {
-        if vy.abs() >= 50.0 {
-            ss.fling(-vy);
-        } else {
-            ss.is_scroll_in_progress.set(false);
-        }
-    } else if let Some(ss) = nodes[idx].modifier.horizontal_scroll_state() {
-        if vx.abs() >= 50.0 {
-            ss.fling(-vx);
-        } else {
-            ss.is_scroll_in_progress.set(false);
-        }
-    }
+    let Some(root) = pw.composer.layout_root_idx() else { return };
+    // 手指速度 → 滚动速度（内容速度 = -手指速度），并走 nested scroll pre/post fling 链
+    let velocity = crate::nested_scroll::ScrollVelocity { x: -vx, y: -vy };
+    let _ = dispatch_nested_scroll_fling(pw.composer.arena_nodes_mut(), root, idx, velocity);
 }
 
 /// 指针释放手势入口：up 判定（tap/double-tap/long-press/drag-end）→ 销毁 tracker。
@@ -2309,14 +2419,16 @@ fn handle_pointer_move(
                 }
             };
             if ax != 0.0 || ay != 0.0 {
-                apply_scroll_delta(
+                let root = pw.composer.layout_root_idx();
+                let consumed = root.map(|root| dispatch_nested_scroll_delta(
                     pw.composer.arena_nodes_mut(),
+                    root,
                     idx,
-                    ax,
-                    ay,
+                    crate::nested_scroll::ScrollDelta::new(ax, ay),
+                    crate::nested_scroll::NestedScrollSource::Drag,
                     crate::unit::Density::from_density(pw.scale_factor as f32),
-                );
-                handled = true;
+                )).unwrap_or(crate::nested_scroll::ScrollDelta::ZERO);
+                handled = consumed.x != 0.0 || consumed.y != 0.0;
             }
             // 拖拽中标记（apply_scroll_delta 内部取消 fling 时置 false——这里覆盖）
             let nodes = pw.composer.arena_nodes();
@@ -2592,14 +2704,14 @@ mod frame_throttle_tests {
         composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 600.0));
         let root = composer.layout_root_idx().unwrap();
         assert_eq!(scroll.offset.get(), 0.0);
-        let ok = super::apply_scroll_delta(
+        let consumed = super::apply_scroll_delta(
             composer.arena_nodes_mut(),
             root,
             0.0,
             -200.0, // 负 dy = 向下滚动（内容上移——与 winit 滚轮语义一致）
             crate::unit::Density::from_density(1.0),
         );
-        assert!(ok, "应找到 scroll 节点");
+        assert!(consumed.y != 0.0, "应消费 scroll delta");
         assert!(scroll.offset.get() > 0.0, "滚动后 offset 应 > 0（实际 {}）", scroll.offset.get());
     }
 }

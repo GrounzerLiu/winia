@@ -6,6 +6,7 @@ use crate::layout::constraints::Constraints;
 use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement, Point, Size};
 use crate::layout::{Alignment, BoxLayout, LayoutDirection};
 use crate::modifier::{Color, GraphicsLayerParams, Modifier, ScrollState, Shape};
+use crate::nested_scroll::{NestedScrollConnection, NestedScrollSource, ScrollDelta, ScrollVelocity};
 use crate::ui::text::{ProvideTextStyle, TextOverflow, TextStyle};
 use crate::ui::theme::WiniaTheme;
 
@@ -39,16 +40,76 @@ impl TopAppBarColors {
 }
 
 #[derive(Clone)]
-pub struct TopAppBarScrollBehavior { scroll: ScrollState, expanded_height: f32, collapsed_height: f32 }
+pub struct TopAppBarState {
+    pub height_offset_limit: crate::State<f32>,
+    pub height_offset: crate::State<f32>,
+    pub content_offset: crate::State<f32>,
+}
+impl TopAppBarState {
+    pub fn new(expanded_height: f32) -> Self {
+        Self { height_offset_limit: crate::State::new(-(expanded_height - TOP_APP_BAR_HEIGHT).max(0.0)), height_offset: crate::State::new(0.0), content_offset: crate::State::new(0.0) }
+    }
+    pub fn collapsed_fraction(&self) -> f32 { let limit = self.height_offset_limit.get(); if limit >= 0.0 { 0.0 } else { (self.height_offset.get() / limit).clamp(0.0, 1.0) } }
+    pub fn current_height(&self, expanded_height: f32) -> f32 { (expanded_height + self.height_offset.get()).max(TOP_APP_BAR_HEIGHT) }
+    pub fn is_collapsed(&self) -> bool { self.collapsed_fraction() >= 1.0 }
+    pub fn overlapped_fraction(&self) -> f32 { let limit = self.height_offset_limit.get(); if limit >= 0.0 { 0.0 } else { (1.0 - ((limit + self.content_offset.get().abs()).clamp(limit, 0.0) / limit)).clamp(0.0, 1.0) } }
+    pub fn is_overlapped(&self) -> bool { self.overlapped_fraction() > 0.01 }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TopAppBarScrollMode { Pinned, EnterAlways, ExitUntilCollapsed }
+
+#[derive(Clone)]
+pub struct TopAppBarNestedConnection { state: TopAppBarState, mode: TopAppBarScrollMode }
+impl TopAppBarNestedConnection {
+    pub fn new(state: TopAppBarState, mode: TopAppBarScrollMode) -> Self { Self { state, mode } }
+    pub fn state(&self) -> TopAppBarState { self.state.clone() }
+}
+impl NestedScrollConnection for TopAppBarNestedConnection {
+    fn on_pre_scroll(&self, available: ScrollDelta, source: NestedScrollSource) -> ScrollDelta {
+        if matches!(self.mode, TopAppBarScrollMode::Pinned) || !matches!(source, NestedScrollSource::Wheel | NestedScrollSource::Drag) { return ScrollDelta::ZERO; }
+        let limit = self.state.height_offset_limit.get();
+        if limit >= 0.0 || available.y == 0.0 { return ScrollDelta::ZERO; }
+        let current = self.state.height_offset.get();
+        let target = (current + available.y).clamp(limit, 0.0);
+        let consumed = target - current;
+        self.state.height_offset.set(target);
+        self.state.content_offset.update(|value| *value += available.y);
+        ScrollDelta::new(0.0, consumed)
+    }
+    fn on_post_scroll(&self, consumed: ScrollDelta, available: ScrollDelta, source: NestedScrollSource) -> ScrollDelta {
+        if matches!(self.mode, TopAppBarScrollMode::Pinned) || !matches!(source, NestedScrollSource::Wheel | NestedScrollSource::Drag) { return ScrollDelta::ZERO; }
+        if self.mode == TopAppBarScrollMode::ExitUntilCollapsed && available.y > 0.0 && consumed.y == 0.0 { return self.on_pre_scroll(available, source); }
+        ScrollDelta::ZERO
+    }
+    fn on_pre_fling(&self, available: ScrollVelocity) -> ScrollVelocity { let delta = ScrollDelta::new(0.0, available.y / 60.0); let consumed = self.on_pre_scroll(delta, NestedScrollSource::Fling); ScrollVelocity { x: 0.0, y: consumed.y * 60.0 } }
+}
+
+
+#[derive(Clone)]
+enum TopAppBarBehaviorKind { Legacy(ScrollState), Nested(TopAppBarState, TopAppBarScrollMode) }
+
+#[derive(Clone)]
+pub struct TopAppBarScrollBehavior { kind: TopAppBarBehaviorKind, expanded_height: f32, collapsed_height: f32 }
+
 impl TopAppBarScrollBehavior {
-    pub fn new(scroll: ScrollState, expanded_height: f32) -> Self { assert!(expanded_height >= TOP_APP_BAR_HEIGHT, "TopAppBar expanded height ({expanded_height}) must be at least {TOP_APP_BAR_HEIGHT}"); Self { scroll, expanded_height, collapsed_height: TOP_APP_BAR_HEIGHT } }
+    pub fn new(scroll: ScrollState, expanded_height: f32) -> Self {
+        assert!(expanded_height >= TOP_APP_BAR_HEIGHT, "TopAppBar expanded height ({expanded_height}) must be at least {TOP_APP_BAR_HEIGHT}");
+        Self { kind: TopAppBarBehaviorKind::Legacy(scroll), expanded_height, collapsed_height: TOP_APP_BAR_HEIGHT }
+    }
+    pub fn pinned(state: TopAppBarState, expanded_height: f32) -> Self { Self { kind: TopAppBarBehaviorKind::Nested(state, TopAppBarScrollMode::Pinned), expanded_height, collapsed_height: TOP_APP_BAR_HEIGHT } }
+    pub fn enter_always(state: TopAppBarState, expanded_height: f32) -> Self { Self { kind: TopAppBarBehaviorKind::Nested(state, TopAppBarScrollMode::EnterAlways), expanded_height, collapsed_height: TOP_APP_BAR_HEIGHT } }
+    pub fn exit_until_collapsed(state: TopAppBarState, expanded_height: f32) -> Self { Self { kind: TopAppBarBehaviorKind::Nested(state, TopAppBarScrollMode::ExitUntilCollapsed), expanded_height, collapsed_height: TOP_APP_BAR_HEIGHT } }
     pub fn expanded_height(&self) -> f32 { self.expanded_height }
     pub fn collapsed_height(&self) -> f32 { self.collapsed_height }
     pub fn collapse_range(&self) -> f32 { self.expanded_height - self.collapsed_height }
-    pub fn collapse_fraction(&self) -> f32 { let r = self.collapse_range(); if r <= 0.0 { 0.0 } else { (self.scroll.offset.get() / r).clamp(0.0, 1.0) } }
-    pub fn current_height(&self) -> f32 { self.expanded_height - self.collapse_range() * self.collapse_fraction() }
+    pub fn collapse_fraction(&self) -> f32 { match &self.kind { TopAppBarBehaviorKind::Legacy(scroll) => { let r = self.collapse_range(); if r <= 0.0 { 0.0 } else { (scroll.offset.get() / r).clamp(0.0, 1.0) } }, TopAppBarBehaviorKind::Nested(state, _) => state.collapsed_fraction() } }
+    pub fn current_height(&self) -> f32 { match &self.kind { TopAppBarBehaviorKind::Legacy(_) => self.expanded_height - self.collapse_range() * self.collapse_fraction(), TopAppBarBehaviorKind::Nested(state, _) => state.current_height(self.expanded_height) } }
     pub fn is_collapsed(&self) -> bool { self.collapse_fraction() >= 1.0 }
-    pub fn scroll_state(&self) -> ScrollState { self.scroll.clone() }
+    pub fn state(&self) -> Option<TopAppBarState> { match &self.kind { TopAppBarBehaviorKind::Nested(state, _) => Some(state.clone()), _ => None } }
+    pub fn nested_scroll_connection(&self) -> Option<TopAppBarNestedConnection> { match &self.kind { TopAppBarBehaviorKind::Nested(state, mode) => Some(TopAppBarNestedConnection::new(state.clone(), *mode)), _ => None } }
+    pub fn scroll_state(&self) -> Option<ScrollState> { match &self.kind { TopAppBarBehaviorKind::Legacy(scroll) => Some(scroll.clone()), _ => None } }
+    fn scroll_offset(&self) -> f32 { match &self.kind { TopAppBarBehaviorKind::Legacy(scroll) => scroll.offset.get(), TopAppBarBehaviorKind::Nested(state, _) => state.content_offset.get() } }
 }
 
 pub struct TopAppBar {
@@ -76,7 +137,12 @@ impl TopAppBar {
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
         ctx.changed(&self.variant);
-        if let Some(behavior) = &self.scroll_behavior { ctx.changed(&behavior.scroll.offset); }
+        if let Some(behavior) = &self.scroll_behavior {
+            match &behavior.kind {
+                TopAppBarBehaviorKind::Legacy(scroll) => { ctx.changed(&scroll.offset); }
+                TopAppBarBehaviorKind::Nested(state, _) => { ctx.changed(&state.height_offset); ctx.changed(&state.content_offset); }
+            }
+        }
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
         let colors = self.colors.unwrap_or_else(|| TopAppBarColors::from_theme(&theme));
@@ -91,7 +157,7 @@ impl TopAppBar {
         let bottom_inset = if self.variant == TopAppBarVariant::Large { TOP_APP_BAR_LARGE_TITLE_BOTTOM_INSET } else { TOP_APP_BAR_MEDIUM_TITLE_BOTTOM_INSET };
         let policy = TopAppBarLayoutPolicy { variant: self.variant, fraction, direction, navigation_present, actions_present, subtitle_present, expanded_height: expanded, bottom_inset };
         let title_style = title_style(if matches!(self.variant, TopAppBarVariant::Medium | TopAppBarVariant::Large) { expanded_title_style(self.variant) } else { WiniaTheme::typography().title_large }, colors.title);
-        let scroll_offset = self.scroll_behavior.as_ref().map(|behavior| behavior.scroll.offset.get()).unwrap_or(0.0);
+        let scroll_offset = self.scroll_behavior.as_ref().map(|behavior| behavior.scroll_offset()).unwrap_or(0.0);
         let target_container = colors.container_color(self.variant, scroll_offset, fraction);
         let container_color = if matches!(self.variant, TopAppBarVariant::Standard | TopAppBarVariant::CenterAligned) {
             ctx.animate_color_as_state(
@@ -182,4 +248,6 @@ mod tests {
     #[test] fn colors_use_material_surface_tokens_and_compat_constructor() { let theme=crate::ui::theme::ThemeColors::default_light(); let colors=TopAppBarColors::from_theme(&theme); assert_eq!(colors.container,theme.surface); assert_eq!(colors.scrolled_container,theme.surface_container); assert_eq!(colors.title,theme.on_surface); assert_eq!(colors.navigation,theme.on_surface); let custom=TopAppBarColors::new(Color::RED,Color::WHITE,Color::WHITE,Color::WHITE,Color::WHITE); assert_eq!(custom.scrolled_container,Color::RED); assert_eq!(custom.scrolled_container(Color::BLUE).scrolled_container,Color::BLUE); }
     #[test] fn standard_scroll_color_is_independent_from_collapse_fraction() { let scroll=ScrollState::new(); let colors=TopAppBarColors::new(Color::RED,Color::WHITE,Color::WHITE,Color::WHITE,Color::WHITE).scrolled_container(Color::BLUE); assert_eq!(colors.container_color(TopAppBarVariant::Standard,0.,0.),Color::RED); assert_eq!(colors.container_color(TopAppBarVariant::Standard,1.,0.),Color::BLUE); let behavior=TopAppBarScrollBehavior::new(scroll,TOP_APP_BAR_HEIGHT); assert_eq!(behavior.collapse_fraction(),0.); }
     #[test] fn collapsible_colors_interpolate_from_base_to_scrolled() { let colors=TopAppBarColors::new(Color::from_argb(255,0,0,0),Color::WHITE,Color::WHITE,Color::WHITE,Color::WHITE).scrolled_container(Color::from_argb(255,200,100,0)); assert_eq!(colors.container_color(TopAppBarVariant::Large,0.,0.),colors.container); let middle=colors.container_color(TopAppBarVariant::Large,44.,0.5); assert!(middle.r>0 && middle.r<200); assert_eq!(colors.container_color(TopAppBarVariant::Large,88.,1.),colors.scrolled_container); }
+    #[test] fn nested_behavior_consumes_and_clamps_height_offset() { let state=TopAppBarState::new(TOP_APP_BAR_LARGE_HEIGHT); let connection=TopAppBarScrollBehavior::enter_always(state.clone(), TOP_APP_BAR_LARGE_HEIGHT).nested_scroll_connection().unwrap(); let consumed=connection.on_pre_scroll(ScrollDelta::new(0.0, -60.0), NestedScrollSource::Drag); assert_eq!(consumed.y, -60.0); assert_eq!(state.height_offset.get(), -60.0); let consumed=connection.on_pre_scroll(ScrollDelta::new(0.0, 100.0), NestedScrollSource::Drag); assert_eq!(consumed.y, 60.0); assert_eq!(state.height_offset.get(), 0.0); }
+    #[test] fn top_app_bar_state_reports_overlap_separately() { let state=TopAppBarState::new(TOP_APP_BAR_LARGE_HEIGHT); state.content_offset.set(20.0); assert!(state.overlapped_fraction() > 0.0); assert!(!state.is_collapsed()); }
 }

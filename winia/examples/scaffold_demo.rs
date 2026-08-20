@@ -1,0 +1,55 @@
+//! Scaffold demo with TopAppBar, bottom surface, scroll content, FAB and RTL toggle.
+
+use winia::prelude::*;
+
+const PLUS_PATH: &str = "M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z";
+
+#[composable]
+fn scaffold_demo(ctx: &mut ComposeCtx) {
+    let count = ctx.remember(|| 0i32);
+    let rtl = ctx.remember(|| false);
+    let direction = if rtl.get() { LayoutDirection::Rtl } else { LayoutDirection::Ltr };
+
+    let rtl_for_top_bar = rtl.clone();
+    let count_for_fab = count.clone();
+    WiniaTheme::with_theme_and_direction(ThemeColors::default_light(), direction, ctx, |ctx| {
+        Scaffold::new(|ctx, _padding| {
+            let scroll = ctx.remember(|| ScrollState::new()).get();
+            Column::new().modifier(Modifier::new().fill_max_size().vertical_scroll(scroll)).build(ctx, |ctx| {
+                for index in 0..30 {
+                    Text::new(format!("Content item {index}"))
+                        .modifier(Modifier::new().padding(16.0).fill_max_width())
+                        .build(ctx);
+                }
+            });
+        })
+        .top_bar(move |ctx| {
+            TopAppBar::new(|ctx| Text::new("Scaffold demo").build(ctx))
+                .actions(move |ctx| {
+                    Button::text().on_click({ let rtl = rtl_for_top_bar.clone(); move || rtl.update(|value| *value = !*value) }).build(ctx, |ctx| Text::new("RTL").build(ctx));
+                })
+                .build(ctx);
+        })
+        .bottom_bar(|ctx| {
+            let key = ctx.next_key();
+            ctx.start_leaf(key, Modifier::new().fill_max_width().height(80.0).background(Color::from_argb(255, 235, 230, 240), Shape::Rectangle));
+            ctx.end_node();
+        })
+        .floating_action_button(move |ctx| {
+            FloatingActionButton::new().on_click({ let count = count_for_fab.clone(); move || count.update(|value| *value += 1) }).build(ctx, |ctx| Icon::svg_path(PLUS_PATH).build(ctx));
+        })
+        .build(ctx);
+
+        Text::new(format!("FAB clicks: {} | direction: {:?}", count.get(), direction))
+            .modifier(Modifier::new().absolute_offset(16.0, 96.0))
+            .build(ctx);
+    });
+}
+
+fn main() {
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let _guard = rt.enter();
+    winia::run_app!(|ctx| {
+        Window::new().size(360.0, 640.0).title("Scaffold Demo").build(ctx, scaffold_demo);
+    });
+}

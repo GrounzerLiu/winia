@@ -122,6 +122,7 @@ cargo test --features debug-server --test ui_test
 | text_field_password_and_multiline_states_update | fixture_text_field | 密码掩码状态、长度阈值、Enter 多行与 minLines 几何 |
 | text_field_error_readonly_and_disabled_states_are_enforced | fixture_text_field | error 解除、read-only/disabled 输入约束与焦点语义 |
 | top_app_bar_variants_collapse_and_restore_with_scroll | fixture_top_app_bar | Medium/Large 高度、共享滚动 offset 折叠与回滚恢复 |
+| scaffold_fab_clicks_and_rtl_mirrors_without_changing_content_inset | fixture_scaffold | FAB 点击、content inset 与 RTL BottomEnd 镜像 |
 
 ### 库行为快照（无窗口，直接驱动 Composer）
 
