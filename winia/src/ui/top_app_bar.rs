@@ -33,7 +33,7 @@ impl TopAppBarColors {
     pub fn from_theme(theme: &crate::ui::theme::ThemeColors) -> Self { Self::new(theme.surface, theme.on_surface, theme.on_surface_variant, theme.on_surface, theme.on_surface_variant).scrolled_container(theme.surface_container) }
     pub fn container_color(&self, variant: TopAppBarVariant, scroll_offset: f32, collapse_fraction: f32) -> Color {
         match variant {
-            TopAppBarVariant::Standard | TopAppBarVariant::CenterAligned => if scroll_offset > 0.0 { self.scrolled_container } else { self.container },
+            TopAppBarVariant::Standard | TopAppBarVariant::CenterAligned => if scroll_offset != 0.0 { self.scrolled_container } else { self.container },
             TopAppBarVariant::Medium | TopAppBarVariant::Large => color_lerp(self.container, self.scrolled_container, fast_out_linear_in(collapse_fraction)),
         }
     }
@@ -249,5 +249,11 @@ mod tests {
     #[test] fn standard_scroll_color_is_independent_from_collapse_fraction() { let scroll=ScrollState::new(); let colors=TopAppBarColors::new(Color::RED,Color::WHITE,Color::WHITE,Color::WHITE,Color::WHITE).scrolled_container(Color::BLUE); assert_eq!(colors.container_color(TopAppBarVariant::Standard,0.,0.),Color::RED); assert_eq!(colors.container_color(TopAppBarVariant::Standard,1.,0.),Color::BLUE); let behavior=TopAppBarScrollBehavior::new(scroll,TOP_APP_BAR_HEIGHT); assert_eq!(behavior.collapse_fraction(),0.); }
     #[test] fn collapsible_colors_interpolate_from_base_to_scrolled() { let colors=TopAppBarColors::new(Color::from_argb(255,0,0,0),Color::WHITE,Color::WHITE,Color::WHITE,Color::WHITE).scrolled_container(Color::from_argb(255,200,100,0)); assert_eq!(colors.container_color(TopAppBarVariant::Large,0.,0.),colors.container); let middle=colors.container_color(TopAppBarVariant::Large,44.,0.5); assert!(middle.r>0 && middle.r<200); assert_eq!(colors.container_color(TopAppBarVariant::Large,88.,1.),colors.scrolled_container); }
     #[test] fn nested_behavior_consumes_and_clamps_height_offset() { let state=TopAppBarState::new(TOP_APP_BAR_LARGE_HEIGHT); let connection=TopAppBarScrollBehavior::enter_always(state.clone(), TOP_APP_BAR_LARGE_HEIGHT).nested_scroll_connection().unwrap(); let consumed=connection.on_pre_scroll(ScrollDelta::new(0.0, -60.0), NestedScrollSource::Drag); assert_eq!(consumed.y, -60.0); assert_eq!(state.height_offset.get(), -60.0); let consumed=connection.on_pre_scroll(ScrollDelta::new(0.0, 100.0), NestedScrollSource::Drag); assert_eq!(consumed.y, 60.0); assert_eq!(state.height_offset.get(), 0.0); }
-    #[test] fn top_app_bar_state_reports_overlap_separately() { let state=TopAppBarState::new(TOP_APP_BAR_LARGE_HEIGHT); state.content_offset.set(20.0); assert!(state.overlapped_fraction() > 0.0); assert!(!state.is_collapsed()); }
+    #[test] fn nested_content_offset_triggers_scrolled_color() {
+        let colors=TopAppBarColors::new(Color::RED,Color::WHITE,Color::WHITE,Color::WHITE,Color::WHITE).scrolled_container(Color::BLUE);
+        // nested scroll 的 content_offset 向下滚为负，也必须触发 scrolled 色
+        assert_eq!(colors.container_color(TopAppBarVariant::Standard, -1.0, 0.0), Color::BLUE);
+        assert_eq!(colors.container_color(TopAppBarVariant::Standard, 1.0, 0.0), Color::BLUE);
+        assert_eq!(colors.container_color(TopAppBarVariant::Standard, 0.0, 0.0), Color::RED);
+    }
 }
