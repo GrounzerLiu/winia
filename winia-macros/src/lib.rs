@@ -559,11 +559,12 @@ impl syn::parse::Parse for KeyedStmtInput {
     }
 }
 
-/// 轻量组合函数宏：**不注入语句 id**（区别于 #[composable] 全量注入）——
-/// 只注入 RAII scope guard（remember/next_key 有稳定 base）+ 编译期替换
-/// remember/next_key（fnv(scope, 扫描序号, 语句内序号)）。
-/// 组件调用（build）需用 `keyed_stmt!` 标记获得语句 id——未标记的组件
-/// 调用内部 next_key 无稳定源 → 运行期 panic（fail-fast）。
+/// 轻量组合函数宏：**不注入语句 id、不替换 remember/next_key**（区别于
+/// #[composable] 全量注入；编译期替换机制已在 key-system 定稿中砍掉——
+/// 见 docs/key-system-design.md §9）——只注入 RAII scope guard。
+/// 所有含 ctx 组合调用的语句（remember/next_key/build…）都需用 `keyed_stmt!`
+/// 标记获得语句级稳定 base——未标记的调用无稳定 key 源 → 运行期 panic
+/// （fail-fast，不静默降级）。
 #[proc_macro_attribute]
 pub fn composable_keyed(attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as ItemFn);
