@@ -482,6 +482,7 @@ fn navigation_bar_horizontal_item_pill_wraps_icon_label_group() {
     render::render(composer.arena_nodes(), root, surface.canvas());
 
     // 从布局树取选中项（水平）指示器几何——胶囊应横向包裹 [icon+gap+label] 整组，高 40
+    // （children[0] = 彩色胶囊；最后一个子节点为恒定全尺寸的 ripple 状态层载体）
     let nodes = composer.arena_nodes();
     let item0 = nodes[nodes[root].children[0]].children[0];
     let pill = &nodes[item0];

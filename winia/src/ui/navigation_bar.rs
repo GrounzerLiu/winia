@@ -427,15 +427,18 @@ impl NavigationBarItem {
         // 指示器背景：颜色 x alphaProgress——绘制期每帧求值（peek 不注册依赖）
         let indicator_color = colors.indicator;
         let indicator_alpha = alpha_progress.clone();
-        let mut indicator_modifier = Modifier::new()
-            .background(
-                move || with_alpha_factor(indicator_color, indicator_alpha.peek()),
-                Shape::Pill,
-            );
-        if enabled {
-            indicator_modifier = indicator_modifier
-                .ripple_with_shape(&interaction, ripple_color, true, Shape::Pill);
-        }
+        let indicator_modifier = Modifier::new().background(
+            move || with_alpha_factor(indicator_color, indicator_alpha.peek()),
+            Shape::Pill,
+        );
+        // 指示器 ripple（状态层载体）——**独立节点、恒定全尺寸**：未选中时彩色
+        // 胶囊收拢为 0 宽，但悬浮/按压的状态层仍需以完整胶囊矩形呈现
+        // （对齐 androidx IndicatorRipple 与 Indicator 分离的设计）
+        let ripple_modifier = if enabled {
+            Modifier::new().ripple_with_shape(&interaction, ripple_color, true, Shape::Pill)
+        } else {
+            Modifier::new()
+        };
 
         // label 包装层：垂直 alwaysShowLabel=false 时透明度跟 alphaProgress
         let label_alpha_state = alpha_progress.clone();
@@ -467,8 +470,10 @@ impl NavigationBarItem {
         match ctx.start_restartable_group(key, item_modifier, policy) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
-                // 子节点顺序 = [indicator, icon, label?]——与 policy 的索引约定一致
-                // 1) 指示器（leaf——ripple/background 都在胶囊上）
+                // 子节点顺序 = [indicator, icon, label?, ripple]——ripple 最后放置
+                // （z 序最上层，对齐 androidx placeRelative 顺序：状态层覆盖在
+                // 彩色胶囊与内容之上，选中/未选中悬浮均有状态层）
+                // 1) 彩色指示器胶囊（宽度随 sizeProgress 展开动画）
                 let ind_key = ctx.next_key();
                 ctx.start_leaf(ind_key, indicator_modifier);
                 ctx.end_node();
@@ -485,6 +490,10 @@ impl NavigationBarItem {
                         crate::ui::text::ProvideTextStyle(style, ctx, label);
                     });
                 }
+                // 4) 指示器 ripple（恒定全尺寸 leaf——悬浮/按压状态层载体）
+                let ripple_key = ctx.next_key();
+                ctx.start_leaf(ripple_key, ripple_modifier);
+                ctx.end_node();
             }
         }
         ctx.set_current_node_focus_color(theme.primary);
@@ -505,8 +514,9 @@ fn wrap_slot(ctx: &mut ComposeCtx, modifier: Modifier, content: impl FnOnce(&mut
 /// item 布局：精确复刻 androidx NavigationBarItemLayout 的
 /// placeLabelAndIcon / placeIcon 数学（见模块文档）。
 ///
-/// 子节点索引约定：children[0] = indicator，children[1] = icon，
-/// children[2] = label（仅有 label 时存在）。
+/// 子节点索引约定：children[0] = 彩色指示器胶囊（宽度随 sizeProgress
+/// 收拢/展开），children[1] = icon，children[2] = label（仅有 label 时存在），
+/// 最后一个子节点 = indicator ripple（恒定全尺寸状态层载体，z 序最上层）。
 #[derive(Debug)]
 struct NavigationBarItemLayoutPolicy {
     /// sizeProgress——measure 入口 get() 注册**布局依赖**（两段式：
@@ -533,6 +543,8 @@ impl MeasurePolicy for NavigationBarItemLayoutPolicy {
         let min_h = NAVIGATION_BAR_HEIGHT.max(constraints.min_height);
         let loose = constraints.loosen();
 
+        // ripple 是最后一个子节点（z 序最上层）
+        let ripple_idx = children.len() - 1;
         // 2) 图标先测（loose）——指示器尺寸由它推导
         let (icon_size, _) = measure_node(nodes, policies, children[1], loose);
 
@@ -560,6 +572,14 @@ impl MeasurePolicy for NavigationBarItemLayoutPolicy {
             // indicatorHeight = max(iconH, labelH) + 2x8 (= ActiveIndicatorHeight 40)
             let indicator_h =
                 icon_size.height.max(label_size.height) + H_INDICATOR_VERTICAL_PADDING * 2.0;
+            // ripple：恒定全尺寸（Constraints.fixed(totalW, h)）——未选中不收拢，
+            // 悬浮/按压状态层始终以完整胶囊矩形呈现（androidx IndicatorRipple）
+            let (ripple_size, _) = measure_node(
+                nodes,
+                policies,
+                children[ripple_idx],
+                Constraints::new(total_indicator_w, total_indicator_w, indicator_h, indicator_h),
+            );
             let animated_indicator_w = total_indicator_w * size_p;
             let (indicator_size, _) = measure_node(
                 nodes,
@@ -592,6 +612,7 @@ impl MeasurePolicy for NavigationBarItemLayoutPolicy {
             let icon_x = (container_w - content_w) / 2.0;
 
             let mut placements = Vec::with_capacity(children.len());
+            // 彩色胶囊：居中（宽随 progress 收拢/展开）
             placements.push(Placement {
                 size: indicator_size,
                 position: Point::new(
@@ -610,13 +631,21 @@ impl MeasurePolicy for NavigationBarItemLayoutPolicy {
                     (height - label_size.height) / 2.0,
                 ),
             });
+            // ripple：居中、恒定全尺寸——最后放置（z 序最上层，状态层覆盖胶囊）
+            placements.push(Placement {
+                size: ripple_size,
+                position: Point::new(
+                    (container_w - ripple_size.width) / 2.0,
+                    (height - indicator_h) / 2.0,
+                ),
+            });
             return (Size::new(container_w, height), placements);
         }
 
         let total_indicator_w = icon_size.width + INDICATOR_HORIZONTAL_PADDING * 2.0;
         let animated_indicator_w = total_indicator_w * size_p;
         let indicator_h = icon_size.height + INDICATOR_VERTICAL_PADDING * 2.0;
-        // 3) 指示器 tight（animatedW x indicatorH）
+        // 彩色指示器 tight（animatedW x indicatorH）
         let (indicator_size, _) = measure_node(
             nodes,
             policies,
@@ -630,6 +659,14 @@ impl MeasurePolicy for NavigationBarItemLayoutPolicy {
         } else {
             None
         };
+        // ripple：恒定全尺寸（56x32 基准胶囊）——未选中不收拢，悬浮/按压
+        // 状态层始终以完整胶囊矩形呈现（androidx IndicatorRipple 分离设计）
+        let (ripple_size, _) = measure_node(
+            nodes,
+            policies,
+            children[ripple_idx],
+            Constraints::new(total_indicator_w, total_indicator_w, indicator_h, indicator_h),
+        );
 
         // 容器宽：有界取约束宽；无界回退 iconW + 2x44（NavigationBarItemToIconMinimumPadding）
         let container_w = if constraints.max_width.is_finite() {
@@ -680,6 +717,12 @@ impl MeasurePolicy for NavigationBarItemLayoutPolicy {
                 position: Point::new((container_w - label.width) / 2.0, label_y + offset),
             });
         }
+        // ripple：恒定全尺寸、跟随指示器的动画位置（始终是"胶囊当前所在
+        // 完整矩形"——未选中悬浮时状态层与可见图标对齐），z 序最上层
+        placements.push(Placement {
+            size: ripple_size,
+            position: Point::new((container_w - ripple_size.width) / 2.0, indicator_y),
+        });
 
         (Size::new(container_w, height), placements)
     }
@@ -819,6 +862,7 @@ mod tests {
         let indicator = child(nodes, root, 0);
         let icon = child(nodes, root, 1);
         let label = child(nodes, root, 2);
+        let ripple_node = child(nodes, root, 3);
 
         // contentH = 24 + 4 + 4 + 16(labelMedium 行高) = 48；vPad = (80-48)/2 = 16
         let v_pad = (NAVIGATION_BAR_HEIGHT - 48.0) / 2.0;
@@ -832,6 +876,9 @@ mod tests {
             indicator.position.x,
             "指示器水平居中"
         );
+        // ripple：恒定全尺寸——选中态与胶囊重合
+        assert_eq!(ripple_node.measured_size, indicator.measured_size);
+        assert_eq!(ripple_node.position, indicator.position);
         // 图标：y = vPad（选中顶部位）
         assert_eq!(icon.position.y, v_pad);
         assert_eq!(icon.measured_size, Size::new(24.0, 24.0));
@@ -849,12 +896,19 @@ mod tests {
         let nodes = composer.arena_nodes();
         let indicator = child(nodes, root, 0);
         let icon = child(nodes, root, 1);
+        let ripple = child(nodes, root, 3);
 
         // progress=0：offset = (28-16)x1 = 12 → 图标垂直居中 (80-24)/2 = 28
         assert_eq!(icon.position.y, (NAVIGATION_BAR_HEIGHT - NAVIGATION_BAR_ICON_SIZE) / 2.0);
         assert_eq!(indicator.position.y, icon.position.y - INDICATOR_VERTICAL_PADDING);
-        // 指示器宽度收拢为 0（progress=0）
+        // 彩色指示器宽度收拢为 0（progress=0）
         assert_eq!(indicator.measured_size.width, 0.0);
+        // 状态层载体（ripple 节点）恒定全尺寸——未选中悬浮仍有完整胶囊热区，
+        // 且跟随指示器的动画位置（与可见图标对齐）
+        assert_eq!(ripple.measured_size.width, NAVIGATION_BAR_INDICATOR_WIDTH);
+        assert_eq!(ripple.measured_size.height, NAVIGATION_BAR_INDICATOR_HEIGHT);
+        assert_eq!(ripple.position.x, indicator.position.x, "ripple 与胶囊同 x");
+        assert_eq!(ripple.position.y, indicator.position.y, "ripple 跟随胶囊动画位置");
     }
 
     fn make_horizontal_item(selected: bool) -> NavigationBarItem {
@@ -875,6 +929,7 @@ mod tests {
         let indicator = child(nodes, root, 0);
         let icon = child(nodes, root, 1);
         let label = child(nodes, root, 2);
+        let ripple_node = child(nodes, root, 3);
 
         assert_eq!(nodes[root].measured_size, Size::new(120.0, NAVIGATION_BAR_HEIGHT));
         let label_w = label.measured_size.width;
@@ -894,6 +949,9 @@ mod tests {
             indicator.position,
             Point::new((120.0 - indicator.measured_size.width) / 2.0, (NAVIGATION_BAR_HEIGHT - NAVIGATION_BAR_H_INDICATOR_HEIGHT) / 2.0)
         );
+        // ripple：恒定全尺寸、与选中态胶囊重合（Constraints.fixed(totalW, h)）
+        assert_eq!(ripple_node.measured_size, indicator.measured_size);
+        assert_eq!(ripple_node.position, indicator.position);
     }
 
     #[test]
@@ -930,9 +988,11 @@ mod tests {
         let composer = compose_layout(make_item(true, true));
         let root = composer.layout_root_idx().unwrap();
         let nodes = composer.arena_nodes();
+        // 节点拆分：children[0] = 彩色胶囊、最后一个子节点 = ripple（状态层载体）
         let indicator = child(nodes, root, 0);
-        // ripple 挂在指示器上且为 Pill 形状
-        let ripple = indicator
+        let ripple_node = child(nodes, root, 3);
+        // ripple 挂在独立节点上且为 Pill 形状
+        let ripple = ripple_node
             .modifier
             .elements()
             .iter()
@@ -940,7 +1000,7 @@ mod tests {
                 crate::modifier::ModifierElement::Ripple { shape, .. } => Some(shape),
                 _ => None,
             })
-            .expect("指示器应有 ripple");
+            .expect("ripple 节点应有 ripple");
         assert_eq!(*ripple, Some(Shape::Pill));
         // 背景为动态闭包：progress=1 时输出全 alpha 指示器色
         let theme = crate::ui::theme::ThemeColors::default_light();
@@ -952,8 +1012,17 @@ mod tests {
                 crate::modifier::ModifierElement::Background { color_fn, .. } => Some(color_fn),
                 _ => None,
             })
-            .expect("指示器应有动态背景");
+            .expect("彩色指示器应有动态背景");
         assert_eq!(color_fn(), theme.secondary_container);
+        // 职责分离：ripple 节点无背景、胶囊节点无 ripple
+        assert!(ripple_node.modifier.elements().iter().all(|el| !matches!(
+            el,
+            crate::modifier::ModifierElement::Background { .. }
+        )));
+        assert!(indicator.modifier.elements().iter().all(|el| !matches!(
+            el,
+            crate::modifier::ModifierElement::Ripple { .. }
+        )));
     }
 
     #[test]
@@ -962,7 +1031,10 @@ mod tests {
         let root = composer.layout_root_idx().unwrap();
         let nodes = composer.arena_nodes();
         assert!(nodes[root].modifier.clickable_interaction().is_none());
+        // 禁用项：ripple 节点 Modifier 为空（无状态层载体）、彩色胶囊无 ripple
+        let ripple_node = child(nodes, root, 3);
         let indicator = child(nodes, root, 0);
+        assert!(ripple_node.modifier.ripple_interaction().is_none(), "禁用项无状态层载体");
         assert!(indicator.modifier.ripple_interaction().is_none(), "禁用项指示器无 ripple");
     }
 
