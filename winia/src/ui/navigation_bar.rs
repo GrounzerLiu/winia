@@ -1025,6 +1025,76 @@ mod tests {
         )));
     }
 
+    fn pixel_at(surface: &mut skia_safe::Surface, x: i32, y: i32) -> (u8, u8, u8, u8) {
+        let mut pixels = [0u8; 4];
+        let info = skia_safe::ImageInfo::new(
+            (1, 1),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        surface.read_pixels(&info, &mut pixels, 4, (x, y));
+        (pixels[0], pixels[1], pixels[2], pixels[3])
+    }
+
+    #[test]
+    fn unselected_item_hover_shows_state_layer_on_full_pill_rect() {
+        let _serial = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let theme = crate::ui::theme::ThemeColors::default_light();
+        let container = theme.surface_container;
+        let to_rgba = |c: Color| (c.r, c.g, c.b, c.a);
+
+        // item1（未选中）用自备交互源——测试手动发射 Hover Enter
+        let source = MutableInteractionSource::new();
+        let src_for_item = source.clone();
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            NavigationBar::new(move |ctx| {
+                NavigationBarItem::new(true, |ctx| icon_leaf(ctx, 24.0))
+                    .label(|ctx| crate::ui::Text::new("A").build(ctx))
+                    .on_click(|| {})
+                    .build(ctx);
+                NavigationBarItem::new(false, |ctx| icon_leaf(ctx, 24.0))
+                    .label(|ctx| crate::ui::Text::new("B").build(ctx))
+                    .interaction_source(src_for_item.clone())
+                    .on_click(|| {})
+                    .build(ctx);
+                NavigationBarItem::new(false, |ctx| icon_leaf(ctx, 24.0))
+                    .label(|ctx| crate::ui::Text::new("C").build(ctx))
+                    .on_click(|| {})
+                    .build(ctx);
+            })
+            .build(ctx)
+        });
+        composer.layout(Constraints::new(0.0, 360.0, 0.0, 80.0));
+
+        // 悬浮未选中项 → 状态层透明度动画（500ms tween，真实时钟）——
+        // 轮询推进至收敛（STATE_LAYER_HOVER 0.08）
+        source.emit_hover_enter();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1200);
+        while std::time::Instant::now() < deadline {
+            crate::animation::update_animations();
+            if source.hover_opacity_value() >= 0.079 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(16));
+        }
+
+        let root = composer.layout_root_idx().unwrap();
+        let mut surface = skia_safe::surfaces::raster_n32_premul((360, 80)).expect("navbar surface");
+        surface.canvas().clear(skia_safe::Color::WHITE);
+        crate::render::render(composer.arena_nodes(), root, surface.canvas());
+
+        // 未选中项胶囊矩形内（避开图标 168..192）取色：item1 x 起点 = 114.67+8，
+        // ripple_x = (item_w - 56)/2 → 胶囊左缘全局 ≈152；取 (158, 28)
+        // 像素 = 容器色上叠加 onSurfaceVariant @8% —— 必然偏离纯容器色
+        let mut s = surface;
+        let px = pixel_at(&mut s, 158, 28);
+        assert_ne!(px, to_rgba(container), "悬浮未选中项应显示状态层（完整胶囊热区）");
+        // 无悬浮的 item2 同位置保持纯容器色（对照）
+        assert_eq!(pixel_at(&mut s, 320, 28), to_rgba(container), "无悬浮项不应有状态层");
+    }
+
     #[test]
     fn disabled_item_has_no_interaction_elements() {
         let composer = compose_layout(make_item(true, true).enabled(false));
