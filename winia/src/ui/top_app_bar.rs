@@ -219,7 +219,9 @@ impl TopAppBar {
                 slot(ctx, Modifier::new().size(TOP_APP_BAR_ICON_SLOT_SIZE, TOP_APP_BAR_ICON_SLOT_SIZE).test_tag("top-app-bar-navigation"), |ctx| { if let Some(navigation) = navigation { WiniaTheme::with_content_color(colors.navigation, ctx, navigation); } });
                 slot(ctx, Modifier::new().test_tag("top-app-bar-title"), |ctx| { ProvideTextStyle(title_style, ctx, title); });
                 slot(ctx, alpha(fraction).test_tag("top-app-bar-subtitle"), |ctx| { if let Some(subtitle) = subtitle { let mut style = WiniaTheme::typography().body_medium; style.color = Some(colors.subtitle); ProvideTextStyle(style, ctx, subtitle); } });
-                slot(ctx, Modifier::new().min_height(TOP_APP_BAR_ICON_SLOT_SIZE).test_tag("top-app-bar-actions"), |ctx| { if let Some(actions) = actions { WiniaTheme::with_content_color(colors.actions, ctx, actions); } });
+                // actions 横向排列（Compose 契约：多个 action 并排而非叠放——
+                // 槽位本身是 BoxLayout/Stack 语义，直接放多个子组件会重叠）
+                slot(ctx, Modifier::new().min_height(TOP_APP_BAR_ICON_SLOT_SIZE).test_tag("top-app-bar-actions"), |ctx| { if let Some(actions) = actions { WiniaTheme::with_content_color(colors.actions, ctx, |ctx| { crate::ui::Row::new().build(ctx, actions); }); } });
             }
         }
         ctx.set_current_node_focus_color(theme.primary);

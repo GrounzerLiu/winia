@@ -534,8 +534,16 @@ fn hit_test_recursive(
     let node = &nodes[idx];
     let nx = parent_x + node.position.x;
     let ny = parent_y + node.position.y;
-    let nw = node.measured_size.width;
-    let nh = node.measured_size.height;
+    let mut nw = node.measured_size.width;
+    let mut nh = node.measured_size.height;
+    // scroll 容器：命中范围按可视 viewport 计——measured_size 是内容全高，
+    // 否则滚动内容会在视口外拦截本应命中后续兄弟的点击/滚轮
+    if node.scroll_viewport_height > 0.0 {
+        nh = node.scroll_viewport_height;
+    }
+    if node.scroll_viewport_width > 0.0 {
+        nw = node.scroll_viewport_width;
+    }
 
     // 检查是否在节点范围内
     if x < nx || x > nx + nw || y < ny || y > ny + nh {

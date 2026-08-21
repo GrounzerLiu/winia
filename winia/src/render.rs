@@ -997,6 +997,16 @@ fn render_pass1(
                 _ => {}
             }
         }
+        // scroll 容器的可视尺寸以测量期回写的 viewport 为准——measured_size
+        // 是内容全高（apply_scroll_delta 的 max_offset 依赖它），直接用会把
+        // 裁剪矩形拉到内容末端，滚动内容会越界绘制到后续兄弟（如 Scaffold
+        // bottom bar）之上
+        if node.scroll_viewport_height > 0.0 {
+            ch = node.scroll_viewport_height;
+        }
+        if node.scroll_viewport_width > 0.0 {
+            cw = node.scroll_viewport_width;
+        }
         let clip_rect = Rect::new(x, y, x + cw, y + ch);
         let dx = -scroll_offset_h.unwrap_or(0.0);
         let dy = -scroll_offset_v.unwrap_or(0.0);
