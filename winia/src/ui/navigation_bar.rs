@@ -21,6 +21,15 @@
 //! - ripple 只出现在指示器胶囊区域（bounded Pill），整个 item 可点击
 //! - 布局期读进度走两段式依赖（measure 中 State::get 注册 layout_deps）——
 //!   动画每帧只重测不重组；背景/透明度闭包绘制期 peek——零重组纯重绘
+//!
+//! # 水平 item（NavigationBarItemLayout::Horizontal，中等窗口）
+//!
+//! 对齐 androidx-main ShortNavigationBar.kt + NavigationItem.kt StartIconMeasurePolicy /
+//! placeLabelAndStartIcon（NavigationBarHorizontalItemTokens）：图标在左、label 在右，
+//! 指示器胶囊横向包裹整组——宽 = iconW + gap(4) + labelW + leading+trailing(2x16)，
+//! 高 = max(iconH, labelH) + 2x8 = ActiveIndicatorHeight 40；内容组整体水平居中、
+//! 全部垂直居中；label 恒显示（alwaysShowLabel 淡出/位置插值仅垂直模式）；
+//! 无 label 时退化为垂直模式的圆形指示器（TopIconOrIconOnlyMeasurePolicy）
 
 use crate::composable;
 use crate::core::composer::{ComposeCtx, GroupStatus};
@@ -58,6 +67,30 @@ const INDICATOR_TO_LABEL_PADDING: f32 = 4.0;
 const DISABLED_ALPHA: f32 = 0.38;
 /// 无界约束下的最小 item 宽 = iconW + 2xNavigationBarItemToIconMinimumPadding
 const ITEM_TO_ICON_MINIMUM_PADDING: f32 = 44.0;
+
+// ── 水平 item token（androidx-main ShortNavigationBar.kt /
+//    NavigationBarHorizontalItemTokens / StartIconMeasurePolicy）──
+
+/// 水平 item 指示器高 = NavigationBarHorizontalItemTokens.ActiveIndicatorHeight
+pub const NAVIGATION_BAR_H_INDICATOR_HEIGHT: f32 = 40.0;
+/// (HorizontalActiveIndicatorHeight - IconSize) / 2 = 8 —— 水平指示器纵向内边距
+const H_INDICATOR_VERTICAL_PADDING: f32 =
+    (NAVIGATION_BAR_H_INDICATOR_HEIGHT - NAVIGATION_BAR_ICON_SIZE) / 2.0;
+/// 水平指示器横向内边距 = ActiveIndicatorLeadingSpace（measure 中 x2 = leading+trailing）
+const H_INDICATOR_HORIZONTAL_PADDING: f32 = 16.0;
+/// NavigationBarTokens.ItemActiveIndicatorIconLabelSpace —— 水平 item 图标与 label 间距
+const START_ICON_TO_LABEL_PADDING: f32 = 4.0;
+
+/// NavigationBarItem 的布局方向（对标 NavigationItemIconPosition：
+/// Top = 紧凑窗口垂直 item，Start = 中等窗口水平 item）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NavigationBarItemLayout {
+    /// 图标在上、label 在下（placeLabelAndIcon / placeIcon 数学）
+    Vertical,
+    /// 图标在左、label 在右（placeLabelAndStartIcon 数学；label 恒显示，
+    /// alwaysShowLabel 的位置插值/淡出仅适用于垂直模式）
+    Horizontal,
+}
 
 // ── 颜色 ──
 
@@ -298,6 +331,7 @@ pub struct NavigationBarItem {
     label: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
     enabled: bool,
     always_show_label: bool,
+    layout: NavigationBarItemLayout,
     colors: Option<NavigationBarItemColors>,
     interaction_source: Option<MutableInteractionSource>,
     modifier: Modifier,
@@ -312,6 +346,7 @@ impl NavigationBarItem {
             label: None,
             enabled: true,
             always_show_label: true,
+            layout: NavigationBarItemLayout::Vertical,
             colors: None,
             interaction_source: None,
             modifier: Modifier::new(),
@@ -338,6 +373,12 @@ impl NavigationBarItem {
         self
     }
 
+    /// 布局方向：垂直（默认，紧凑窗口）或水平（中等窗口，图标在左）。
+    pub fn layout(mut self, layout: NavigationBarItemLayout) -> Self {
+        self.layout = layout;
+        self
+    }
+
     pub fn colors(mut self, colors: NavigationBarItemColors) -> Self {
         self.colors = Some(colors);
         self
@@ -358,6 +399,7 @@ impl NavigationBarItem {
         ctx.changed(&self.selected);
         ctx.changed(&self.enabled);
         ctx.changed(&self.always_show_label);
+        ctx.changed(&self.layout);
         ctx.changed(&self.colors);
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
@@ -365,6 +407,8 @@ impl NavigationBarItem {
         let selected = self.selected;
         let enabled = self.enabled;
         let has_label = self.label.is_some();
+        // 水平模式 label 恒显示（M3 Expressive 规范）——alwaysShowLabel 淡出仅垂直模式
+        let horizontal = self.layout == NavigationBarItemLayout::Horizontal;
 
         // 双进度动画（alphaProgress / sizeProgress 分离——见模块文档）
         let alpha_progress =
@@ -393,9 +437,9 @@ impl NavigationBarItem {
                 .ripple_with_shape(&interaction, ripple_color, true, Shape::Pill);
         }
 
-        // label 包装层：alwaysShowLabel=false 时透明度跟 alphaProgress
+        // label 包装层：垂直 alwaysShowLabel=false 时透明度跟 alphaProgress
         let label_alpha_state = alpha_progress.clone();
-        let label_alpha_always = self.always_show_label;
+        let label_alpha_always = self.always_show_label || horizontal;
         let label_slot_modifier = if has_label && !label_alpha_always {
             Modifier::new().graphics_layer(move || GraphicsLayerParams {
                 alpha: label_alpha_state.peek(),
@@ -409,6 +453,7 @@ impl NavigationBarItem {
             size_progress: size_progress.clone(),
             always_show_label: self.always_show_label,
             has_label,
+            horizontal,
         };
 
         let mut item_modifier = Modifier::new();
@@ -469,6 +514,8 @@ struct NavigationBarItemLayoutPolicy {
     size_progress: State<f32>,
     always_show_label: bool,
     has_label: bool,
+    /// 水平 item（StartIconMeasurePolicy 路径）
+    horizontal: bool,
 }
 
 impl MeasurePolicy for NavigationBarItemLayoutPolicy {
@@ -488,6 +535,84 @@ impl MeasurePolicy for NavigationBarItemLayoutPolicy {
 
         // 2) 图标先测（loose）——指示器尺寸由它推导
         let (icon_size, _) = measure_node(nodes, policies, children[1], loose);
+
+        // ── 水平 item（StartIconMeasurePolicy + placeLabelAndStartIcon）──
+        // 指示器胶囊横向包裹 [icon + gap + label] 整组，全部垂直居中
+        if self.horizontal && self.has_label {
+            // label 测量：宽度预算 = 可用宽 - iconW - gap
+            // （androidx: looseConstraints.offset(horizontal = -(iconW + pad))）
+            let label_max_w = if loose.max_width.is_finite() {
+                (loose.max_width - icon_size.width - START_ICON_TO_LABEL_PADDING).max(0.0)
+            } else {
+                f32::INFINITY
+            };
+            let (label_size, _) = measure_node(
+                nodes,
+                policies,
+                children[2],
+                Constraints::new(0.0, label_max_w, 0.0, loose.max_height),
+            );
+            // totalIndicatorWidth = iconW + labelW + gap + (leading+trailing)
+            let total_indicator_w = icon_size.width
+                + label_size.width
+                + START_ICON_TO_LABEL_PADDING
+                + H_INDICATOR_HORIZONTAL_PADDING * 2.0;
+            // indicatorHeight = max(iconH, labelH) + 2x8 (= ActiveIndicatorHeight 40)
+            let indicator_h =
+                icon_size.height.max(label_size.height) + H_INDICATOR_VERTICAL_PADDING * 2.0;
+            let animated_indicator_w = total_indicator_w * size_p;
+            let (indicator_size, _) = measure_node(
+                nodes,
+                policies,
+                children[0],
+                Constraints::new(
+                    animated_indicator_w,
+                    animated_indicator_w,
+                    indicator_h,
+                    indicator_h,
+                ),
+            );
+
+            let container_w = if constraints.max_width.is_finite() {
+                constraints.max_width
+            } else {
+                icon_size.width + ITEM_TO_ICON_MINIMUM_PADDING * 2.0
+            };
+            let max_h = if constraints.max_height.is_finite() {
+                constraints.max_height
+            } else {
+                f32::MAX
+            };
+            let height = min_h.min(max_h);
+
+            // placeLabelAndStartIcon：内容组(icon+gap+label)整体水平居中、
+            // 全部垂直居中；指示器居中（宽含 leading/trailing 后恰好包住内容组）
+            let content_w =
+                icon_size.width + START_ICON_TO_LABEL_PADDING + label_size.width;
+            let icon_x = (container_w - content_w) / 2.0;
+
+            let mut placements = Vec::with_capacity(children.len());
+            placements.push(Placement {
+                size: indicator_size,
+                position: Point::new(
+                    (container_w - indicator_size.width) / 2.0,
+                    (height - indicator_h) / 2.0,
+                ),
+            });
+            placements.push(Placement {
+                size: icon_size,
+                position: Point::new(icon_x, (height - icon_size.height) / 2.0),
+            });
+            placements.push(Placement {
+                size: label_size,
+                position: Point::new(
+                    icon_x + icon_size.width + START_ICON_TO_LABEL_PADDING,
+                    (height - label_size.height) / 2.0,
+                ),
+            });
+            return (Size::new(container_w, height), placements);
+        }
+
         let total_indicator_w = icon_size.width + INDICATOR_HORIZONTAL_PADDING * 2.0;
         let animated_indicator_w = total_indicator_w * size_p;
         let indicator_h = icon_size.height + INDICATOR_VERTICAL_PADDING * 2.0;
@@ -607,6 +732,11 @@ mod tests {
         assert_eq!(INDICATOR_VERTICAL_PADDING, 4.0);
         assert_eq!(INDICATOR_TO_LABEL_PADDING, 4.0, "NavigationBarIndicatorToLabelPadding");
         assert_eq!(DISABLED_ALPHA, 0.38);
+        // 水平 item（NavigationBarHorizontalItemTokens / ShortNavigationBar.kt）
+        assert_eq!(NAVIGATION_BAR_H_INDICATOR_HEIGHT, 40.0, "Horizontal ActiveIndicatorHeight");
+        assert_eq!(H_INDICATOR_VERTICAL_PADDING, 8.0);
+        assert_eq!(H_INDICATOR_HORIZONTAL_PADDING, 16.0, "ActiveIndicatorLeadingSpace");
+        assert_eq!(START_ICON_TO_LABEL_PADDING, 4.0, "ItemActiveIndicatorIconLabelSpace");
     }
 
     #[test]
@@ -725,6 +855,63 @@ mod tests {
         assert_eq!(indicator.position.y, icon.position.y - INDICATOR_VERTICAL_PADDING);
         // 指示器宽度收拢为 0（progress=0）
         assert_eq!(indicator.measured_size.width, 0.0);
+    }
+
+    fn make_horizontal_item(selected: bool) -> NavigationBarItem {
+        NavigationBarItem::new(selected, |ctx| icon_leaf(ctx, NAVIGATION_BAR_ICON_SIZE))
+            .label(|ctx| crate::ui::Text::new("Home").build(ctx))
+            .layout(NavigationBarItemLayout::Horizontal)
+            .on_click(|| {})
+    }
+
+    #[test]
+    fn horizontal_item_geometry_matches_androidx_place_label_and_start_icon() {
+        // 有界宽 120：验证内容组居中 + 指示器包裹整组（StartIconMeasurePolicy 数学）
+        let mut composer = Composer::new();
+        composer.compose(|ctx| make_horizontal_item(true).build(ctx));
+        composer.layout(Constraints::new(0.0, 120.0, 0.0, NAVIGATION_BAR_HEIGHT));
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let indicator = child(nodes, root, 0);
+        let icon = child(nodes, root, 1);
+        let label = child(nodes, root, 2);
+
+        assert_eq!(nodes[root].measured_size, Size::new(120.0, NAVIGATION_BAR_HEIGHT));
+        let label_w = label.measured_size.width;
+        // 内容组宽 = iconW + gap(4) + labelW；iconX = (containerW - contentW)/2
+        let content_w = NAVIGATION_BAR_ICON_SIZE + START_ICON_TO_LABEL_PADDING + label_w;
+        let icon_x = (120.0 - content_w) / 2.0;
+        // 全部垂直居中
+        assert_eq!(icon.position, Point::new(icon_x, (NAVIGATION_BAR_HEIGHT - 24.0) / 2.0));
+        assert_eq!(
+            label.position,
+            Point::new(icon_x + NAVIGATION_BAR_ICON_SIZE + START_ICON_TO_LABEL_PADDING, (NAVIGATION_BAR_HEIGHT - label.measured_size.height) / 2.0)
+        );
+        // 指示器：宽 = contentW + leading+trailing(2x16)，高 = max(24,labelH)+2x8 = 40，居中
+        assert_eq!(indicator.measured_size.width, content_w + H_INDICATOR_HORIZONTAL_PADDING * 2.0);
+        assert_eq!(indicator.measured_size.height, NAVIGATION_BAR_H_INDICATOR_HEIGHT);
+        assert_eq!(
+            indicator.position,
+            Point::new((120.0 - indicator.measured_size.width) / 2.0, (NAVIGATION_BAR_HEIGHT - NAVIGATION_BAR_H_INDICATOR_HEIGHT) / 2.0)
+        );
+    }
+
+    #[test]
+    fn horizontal_item_without_label_falls_back_to_circular_indicator() {
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            NavigationBarItem::new(true, |ctx| icon_leaf(ctx, NAVIGATION_BAR_ICON_SIZE))
+                .layout(NavigationBarItemLayout::Horizontal)
+                .on_click(|| {})
+                .build(ctx)
+        });
+        composer.layout(Constraints::new(0.0, 120.0, 0.0, NAVIGATION_BAR_HEIGHT));
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let indicator = child(nodes, root, 0);
+        // 无 label → TopIconOrIconOnlyMeasurePolicy：56x32 圆形胶囊（同垂直）
+        assert_eq!(indicator.measured_size.width, NAVIGATION_BAR_INDICATOR_WIDTH);
+        assert_eq!(indicator.measured_size.height, NAVIGATION_BAR_INDICATOR_HEIGHT);
     }
 
     #[test]

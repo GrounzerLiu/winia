@@ -120,7 +120,8 @@ pub use top_app_bar::{TopAppBar, TopAppBarColors, TopAppBarScrollBehavior, TopAp
 pub use scaffold::{Scaffold, ScaffoldContentPadding, ScaffoldFabPosition, SCAFFOLD_FAB_MARGIN};
 pub use navigation_bar::{
     NavigationBar, NavigationBarItem, NavigationBarColors, NavigationBarItemColors,
-    NavigationBarDefaults, NAVIGATION_BAR_HEIGHT, NAVIGATION_BAR_ITEM_SPACING,
+    NavigationBarItemLayout, NavigationBarDefaults, NAVIGATION_BAR_HEIGHT,
+    NAVIGATION_BAR_ITEM_SPACING, NAVIGATION_BAR_H_INDICATOR_HEIGHT,
     NAVIGATION_BAR_INDICATOR_WIDTH, NAVIGATION_BAR_INDICATOR_HEIGHT, NAVIGATION_BAR_ICON_SIZE,
 };
 pub use tooltip::Tooltip;

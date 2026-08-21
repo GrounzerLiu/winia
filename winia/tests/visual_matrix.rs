@@ -445,3 +445,62 @@ fn navigation_bar_visual_matrix_pill_container_and_rtl_mirror() {
     assert_eq!(pixel(&mut rtl, 325, 28), to_rgba(indicator), "RTL 下选中项胶囊镜像到最右");
     assert_eq!(pixel(&mut rtl, 35, 28), to_rgba(container), "RTL 下最左三分之一无胶囊");
 }
+
+#[test]
+fn navigation_bar_horizontal_item_pill_wraps_icon_label_group() {
+    let theme = ThemeColors::default_light();
+    let container = theme.surface_container;
+    let indicator = theme.secondary_container;
+    let to_rgba = |c: Color| (c.r, c.g, c.b, c.a);
+
+    let mut composer = Composer::new();
+    composer.compose(winia::app_root!(|ctx| {
+        WiniaTheme::with_theme_and_direction(ThemeColors::default_light(), LayoutDirection::Ltr, ctx, |ctx| {
+            NavigationBar::new(|ctx| {
+                for i in 0..3 {
+                    NavigationBarItem::new(
+                        i == 0,
+                        |ctx| {
+                            let key = ctx.next_key();
+                            ctx.start_leaf(key, Modifier::new().size(24.0, 24.0));
+                            ctx.end_node();
+                        },
+                    )
+                    .label(move |ctx| Text::new(format!("Tab{i}")).build(ctx))
+                    .layout(winia::ui::NavigationBarItemLayout::Horizontal)
+                    .on_click(|| {})
+                    .build(ctx);
+                }
+            })
+            .build(ctx);
+        });
+    }));
+    composer.layout(Constraints::new(0.0, 360.0, 0.0, 80.0));
+    let mut surface = skia_safe::surfaces::raster_n32_premul((360, 80)).expect("navbar surface");
+    surface.canvas().clear(skia_safe::Color::WHITE);
+    let root = composer.layout_root_idx().unwrap();
+    render::render(composer.arena_nodes(), root, surface.canvas());
+
+    // 从布局树取选中项（水平）指示器几何——胶囊应横向包裹 [icon+gap+label] 整组，高 40
+    let nodes = composer.arena_nodes();
+    let item0 = nodes[nodes[root].children[0]].children[0];
+    let pill = &nodes[item0];
+    assert_eq!(pill.measured_size.height, winia::ui::NAVIGATION_BAR_H_INDICATOR_HEIGHT,
+        "水平指示器高应为 40");
+    let px = pill.position.x;
+    let py = pill.position.y;
+    let pw = pill.measured_size.width;
+    // 胶囊内四角附近（避开 CornerFull 圆角）：中心行/列取色
+    let mut s = surface;
+    assert_eq!(pixel(&mut s, (px + 6.0) as i32, (py + 20.0) as i32), to_rgba(indicator),
+        "胶囊左端应为 SecondaryContainer");
+    assert_eq!(pixel(&mut s, (px + pw - 6.0) as i32, (py + 20.0) as i32), to_rgba(indicator),
+        "胶囊右端应包住 label 尾部");
+    assert_eq!(pixel(&mut s, (px + pw / 2.0) as i32, (py + 4.0) as i32), to_rgba(indicator),
+        "胶囊顶部（40 高居中于 80 bar）");
+    // 胶囊外左右应为容器色（leading/trailing 各 16dp 之外）
+    assert_eq!(pixel(&mut s, (px - 8.0) as i32, (py + 20.0) as i32), to_rgba(container),
+        "胶囊左侧之外应为容器色");
+    assert_eq!(pixel(&mut s, (px + pw + 8.0) as i32, (py + 20.0) as i32), to_rgba(container),
+        "胶囊右侧之外应为容器色");
+}
