@@ -2150,6 +2150,11 @@ impl ScrollState {
     /// 的 fling（apply_scroll_delta 内 cancel）。滚动期间 `is_scroll_in_progress`
     /// 为 true，动画结束回 false。
     pub fn fling(&self, velocity: f32) {
+        self.fling_with_boundary(velocity, |_| {});
+    }
+
+    /// 启动 fling，并在 child 撞到边界时把瞬时剩余速度交给调用方。
+    pub fn fling_with_boundary(&self, velocity: f32, on_boundary: impl FnOnce(f32) + Send + 'static) {
         if !velocity.is_finite() || velocity.abs() < 1.0 {
             return;
         }
@@ -2157,7 +2162,7 @@ impl ScrollState {
         let off = self.offset.clone();
         let limit = self.fling_limit.clone();
         let done_flag = self.is_scroll_in_progress.clone();
-        crate::animation::push_fling(
+        crate::animation::push_fling_with_boundary(
             off,
             velocity,
             crate::animation::exponential_decay(4.2),
@@ -2166,6 +2171,7 @@ impl ScrollState {
                 let max = if max > 0.0 { max } else { f32::MAX };
                 o.clamp(0.0, max)
             },
+            on_boundary,
             move || {
                 done_flag.set(false);
             },

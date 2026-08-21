@@ -70,7 +70,7 @@ Column::new()
 (scroll.offset / (expanded_height - 64dp)).clamp(0, 1)
 ```
 
-当前实现是共享 offset 驱动：顶部栏读取外部滚动状态，外框高度与单一 title placement 随 fraction 连续插值，subtitle 作为独立 expanded-only layer 淡出。它不会复制滚动状态，也不会修改 LazyColumn 的测量策略。
+Standard / CenterAligned 的滚动容器色由 nested-scroll 的 `content_offset`/legacy offset 驱动；Medium/Large 仍按 `collapsed_fraction` 插值。新 state-based 路径通过连接消费折叠范围，不复制滚动状态，也不改变 LazyColumn 的测量策略。
 
 ## 滚动容器色
 
@@ -88,14 +88,11 @@ let colors = TopAppBarColors::new(container, title, subtitle, navigation, action
     .scrolled_container(scrolled_container);
 ```
 
-- Standard / CenterAligned：共享 `ScrollState.offset > 0` 时，目标色从 `container` 以时间过渡切换到 `scrolled_container`；高度保持 64dp。
+- Standard / CenterAligned：nested-scroll 的 `content_offset != 0`（legacy 路径为 `ScrollState.offset != 0`）时，目标色从 `container` 以时间过渡切换到 `scrolled_container`；高度保持 64dp。
 - Medium / Large：容器色以 collapse fraction 的 FastOutLinearIn 近似连续插值，因此随折叠位置同步变化。
 - 回到 `offset == 0` 时恢复普通容器色。
 
-这不是 AndroidX `TopAppBarState.overlappedFraction` 的完整等价物：Winia 当前没有 content offset 与 nested-scroll consumption，因此单行栏暂以正 offset 作为“内容已进入 app bar 下方”的明确近似。
-
-
-当前未实现 Compose 的 nested-scroll pre-scroll/post-scroll 消费链，因此顶部栏不会优先消费部分滚动 delta。需要严格 nested-scroll 语义时，应在后续独立切片中扩展滚动分发器。
+`TopAppBarState.overlapped_fraction()` 为状态层提供内容覆盖比例；Standard/CenterAligned 使用 content offset 的非零状态切换滚动容器色，Medium/Large 使用折叠比例插值。`ExitUntilCollapsed` 在 child fling 撞到边界时可通过 post-fling 接管剩余速度展开 app bar。
 
 ## Nested scroll behavior
 

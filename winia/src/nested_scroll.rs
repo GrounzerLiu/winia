@@ -7,8 +7,7 @@ impl ScrollDelta {
     pub const ZERO: Self = Self { x: 0.0, y: 0.0 };
     pub fn new(x: f32, y: f32) -> Self { Self { x, y } }
     pub fn clamp_to(self, available: Self) -> Self {
-        let clamp = |value: f32, limit: f32| value.clamp(-limit.abs(), limit.abs());
-        Self { x: clamp(self.x, available.x), y: clamp(self.y, available.y) }
+        Self { x: clamp_consumption(self.x, available.x), y: clamp_consumption(self.y, available.y) }
     }
 }
 
@@ -24,14 +23,28 @@ impl std::ops::Sub for ScrollDelta {
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct ScrollVelocity { pub x: f32, pub y: f32 }
 
+impl ScrollVelocity {
+    pub fn clamp_to(self, available: Self) -> Self {
+        Self { x: clamp_consumption(self.x, available.x), y: clamp_consumption(self.y, available.y) }
+    }
+}
+
+fn clamp_consumption(value: f32, available: f32) -> f32 {
+    if available.is_sign_negative() {
+        value.clamp(available, 0.0)
+    } else {
+        value.clamp(0.0, available)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NestedScrollSource { Wheel, Drag, Fling, SideEffect }
 
 pub trait NestedScrollConnection: Send + Sync {
     fn on_pre_scroll(&self, available: ScrollDelta, source: NestedScrollSource) -> ScrollDelta { let _ = (available, source); ScrollDelta::ZERO }
     fn on_post_scroll(&self, consumed_by_child: ScrollDelta, available: ScrollDelta, source: NestedScrollSource) -> ScrollDelta { let _ = (consumed_by_child, available, source); ScrollDelta::ZERO }
-    fn on_pre_fling(&self, available: ScrollVelocity) -> ScrollVelocity { available }
-    fn on_post_fling(&self, consumed_by_child: ScrollVelocity, available: ScrollVelocity) -> ScrollVelocity { let _ = consumed_by_child; available }
+    fn on_pre_fling(&self, available: ScrollVelocity) -> ScrollVelocity { let _ = available; ScrollVelocity::default() }
+    fn on_post_fling(&self, consumed_by_child: ScrollVelocity, available: ScrollVelocity) -> ScrollVelocity { let _ = (consumed_by_child, available); ScrollVelocity::default() }
 }
 
 #[derive(Clone, Default)]
@@ -67,24 +80,25 @@ impl NestedScrollDispatcher {
         let mut consumed = ScrollVelocity::default();
         let mut remaining = available;
         for connection in self.ancestors.read().iter() {
-            let part = connection.on_pre_fling(remaining);
-            let consumed_x = part.x.clamp(-remaining.x.abs(), remaining.x.abs());
-            let consumed_y = part.y.clamp(-remaining.y.abs(), remaining.y.abs());
-            consumed.x += consumed_x;
-            consumed.y += consumed_y;
-            remaining.x -= consumed_x;
-            remaining.y -= consumed_y;
+            let part = connection.on_pre_fling(remaining).clamp_to(remaining);
+            consumed.x += part.x;
+            consumed.y += part.y;
+            remaining.x -= part.x;
+            remaining.y -= part.y;
         }
         consumed
     }
     pub fn post_fling(&self, consumed_by_child: ScrollVelocity, available: ScrollVelocity) -> ScrollVelocity {
+        let mut consumed = ScrollVelocity::default();
         let mut remaining = available;
         for connection in self.ancestors.read().iter().rev() {
-            let part = connection.on_post_fling(consumed_by_child, remaining);
-            remaining.x -= part.x.clamp(-remaining.x.abs(), remaining.x.abs());
-            remaining.y -= part.y.clamp(-remaining.y.abs(), remaining.y.abs());
+            let part = connection.on_post_fling(consumed_by_child, remaining).clamp_to(remaining);
+            consumed.x += part.x;
+            consumed.y += part.y;
+            remaining.x -= part.x;
+            remaining.y -= part.y;
         }
-        ScrollVelocity { x: available.x - remaining.x, y: available.y - remaining.y }
+        consumed
     }
 }
 
@@ -93,6 +107,19 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
+    #[test]
+    fn consumption_clamp_preserves_available_direction() {
+        assert_eq!(ScrollDelta::new(8.0, -8.0).clamp_to(ScrollDelta::new(-5.0, 5.0)), ScrollDelta::ZERO);
+        assert_eq!(ScrollDelta::new(-8.0, 8.0).clamp_to(ScrollDelta::new(-5.0, 5.0)), ScrollDelta::new(-5.0, 5.0));
+        assert_eq!(
+            ScrollVelocity { x: 8.0, y: -8.0 }.clamp_to(ScrollVelocity { x: -5.0, y: 5.0 }),
+            ScrollVelocity::default(),
+        );
+        assert_eq!(
+            ScrollVelocity { x: -8.0, y: 8.0 }.clamp_to(ScrollVelocity { x: -5.0, y: 5.0 }),
+            ScrollVelocity { x: -5.0, y: 5.0 },
+        );
+    }
     struct Recorder(Arc<Mutex<Vec<&'static str>>>);
     impl NestedScrollConnection for Recorder {
         fn on_pre_scroll(&self, available: ScrollDelta, _: NestedScrollSource) -> ScrollDelta { self.0.lock().unwrap().push("pre"); ScrollDelta::new(available.x / 2.0, available.y / 2.0) }

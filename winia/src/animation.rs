@@ -289,6 +289,32 @@ pub fn push_fling(
     clamp: impl Fn(f32) -> f32 + Send + Sync + 'static,
     on_finish: impl FnOnce() + Send + 'static,
 ) {
+    push_fling_internal(state, initial_velocity, spec, clamp, None, on_finish);
+}
+
+/// 惯性滚动并报告撞到 clamp 边界时的瞬时剩余速度。
+///
+/// `on_boundary` 最多调用一次；自然衰减到零时不会调用。nested-scroll 使用
+/// 该回调把 child 未消费的速度交给祖先的 post-fling 链。
+pub fn push_fling_with_boundary(
+    state: State<f32>,
+    initial_velocity: f32,
+    spec: DecaySpec,
+    clamp: impl Fn(f32) -> f32 + Send + Sync + 'static,
+    on_boundary: impl FnOnce(f32) + Send + 'static,
+    on_finish: impl FnOnce() + Send + 'static,
+) {
+    push_fling_internal(state, initial_velocity, spec, clamp, Some(Box::new(on_boundary)), on_finish);
+}
+
+fn push_fling_internal(
+    state: State<f32>,
+    initial_velocity: f32,
+    spec: DecaySpec,
+    clamp: impl Fn(f32) -> f32 + Send + Sync + 'static,
+    on_boundary: Option<Box<dyn FnOnce(f32) + Send>>,
+    on_finish: impl FnOnce() + Send + 'static,
+) {
     let sid = state.id();
     {
         let mut list = ACTIVE_ANIMATIONS.lock().unwrap();
@@ -296,6 +322,9 @@ pub fn push_fling(
     }
     let mut anim = Animatable::new(state);
     anim.set_clamp(clamp);
+    if let Some(on_boundary) = on_boundary {
+        anim.on_boundary(on_boundary);
+    }
     anim.on_finish(on_finish);
     anim.animate_decay(initial_velocity, spec);
     anim.update();
@@ -476,6 +505,8 @@ pub(crate) struct Animatable<T: Clone + 'static> {
     anim_state: Option<AnimationState<T>>,
     /// 动画完成回调（done 帧触发一次，take 后释放）
     on_finish: Option<Box<dyn FnOnce() + Send>>,
+    /// fling 撞到 clamp 边界时回调一次，参数为该帧尚未消费的瞬时速度。
+    on_boundary: Option<Box<dyn FnOnce(f32) + Send>>,
     /// fling 边界 clamp（Decay 专用）：每帧求值（读最新滚动极限）；
     /// 值被 clamp 改变 → 立即完成（对齐 Compose：fling 消耗完即停）
     clamp: Option<Box<dyn Fn(f32) -> f32 + Send + Sync>>,
@@ -496,7 +527,7 @@ struct AnimationState<T> {
 
 impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
     pub fn new(state: State<T>) -> Self {
-        Self { state, anim_state: None, on_finish: None, clamp: None }
+        Self { state, anim_state: None, on_finish: None, on_boundary: None, clamp: None }
     }
 
     /// fling 边界 clamp（仅 Decay 生效）：值被 clamp 改变 → 写边界值并立即完成
@@ -508,6 +539,10 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
     /// 动画自然完成/超时强制完成时调用一次）
     pub fn on_finish(&mut self, f: impl FnOnce() + Send + 'static) {
         self.on_finish = Some(Box::new(f));
+    }
+
+    pub fn on_boundary(&mut self, f: impl FnOnce(f32) + Send + 'static) {
+        self.on_boundary = Some(Box::new(f));
     }
 
     /// 启动动画到目标值
@@ -599,6 +634,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
         }
         let dt = now.duration_since(state.last_update);
         state.last_update = now;
+        let mut boundary_velocity = None;
         let (value, done) = match &state.spec {
             AnimationSpec::Spring(spec) => {
                 let to_f32 = AnimatableValue::to_f32(&state.to);
@@ -724,6 +760,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
                     Some(clamp) => {
                         let c = clamp(raw);
                         if c != raw {
+                            boundary_velocity = Some(vel_now);
                             (AnimatableValue::from_f32(c), true)
                         } else {
                             (AnimatableValue::from_f32(c), done)
@@ -734,6 +771,11 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
             }
         };
         self.state.set_no_wake(value);
+        if let Some(velocity) = boundary_velocity {
+            if let Some(f) = self.on_boundary.take() {
+                f(velocity);
+            }
+        }
         if done {
             self.anim_state = None;
             if let Some(f) = self.on_finish.take() {
@@ -1738,7 +1780,31 @@ pub(crate) mod tests {
         assert_eq!(st.peek(), 100.0, "clamp 到边界值并停止");
     }
 
-    /// fling 反向（负速度）：clamp 下限 0——拖拽向下甩回顶部
+    #[test]
+    fn fling_boundary_callback_reports_remaining_velocity_once() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        clear_all_animations();
+        let state = State::new(95.0f32);
+        let boundary_velocity = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let reported = boundary_velocity.clone();
+        push_fling_with_boundary(
+            state.clone(),
+            10_000.0,
+            DecaySpec::new(4.2, 0.1),
+            |offset| offset.min(100.0),
+            move |velocity| reported.lock().unwrap().push(velocity),
+            || {},
+        );
+        for _ in 0..20 {
+            if !update_animations() { break; }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let velocities = boundary_velocity.lock().unwrap();
+        assert_eq!(state.peek(), 100.0);
+        assert_eq!(velocities.len(), 1);
+        assert!(velocities[0] > 0.0);
+    }
+
     #[test]
     fn fling_clamps_below_zero() {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());

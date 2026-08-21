@@ -73,7 +73,7 @@ impl TopAppBarNestedConnection {
 }
 impl NestedScrollConnection for TopAppBarNestedConnection {
     fn on_pre_scroll(&self, available: ScrollDelta, source: NestedScrollSource) -> ScrollDelta {
-        if matches!(self.mode, TopAppBarScrollMode::Pinned) || !matches!(source, NestedScrollSource::Wheel | NestedScrollSource::Drag) { return ScrollDelta::ZERO; }
+        if matches!(self.mode, TopAppBarScrollMode::Pinned) || !matches!(source, NestedScrollSource::Wheel | NestedScrollSource::Drag | NestedScrollSource::Fling) { return ScrollDelta::ZERO; }
         if available.y == 0.0 { return ScrollDelta::ZERO; }
         let limit = self.state.height_offset_limit.get();
         let current = self.state.height_offset.get();
@@ -86,7 +86,7 @@ impl NestedScrollConnection for TopAppBarNestedConnection {
         ScrollDelta::new(0.0, consumed)
     }
     fn on_post_scroll(&self, consumed: ScrollDelta, available: ScrollDelta, source: NestedScrollSource) -> ScrollDelta {
-        if matches!(self.mode, TopAppBarScrollMode::Pinned) || !matches!(source, NestedScrollSource::Wheel | NestedScrollSource::Drag) { return ScrollDelta::ZERO; }
+        if matches!(self.mode, TopAppBarScrollMode::Pinned) || !matches!(source, NestedScrollSource::Wheel | NestedScrollSource::Drag | NestedScrollSource::Fling) { return ScrollDelta::ZERO; }
         if let Some(scroll) = &self.scroll {
             // 直接镜像子滚动真实 offset，避免累加漂移（滚回顶部 offset=0 → 颜色复原）
             self.state.content_offset.set(scroll.offset.get());
@@ -97,7 +97,31 @@ impl NestedScrollConnection for TopAppBarNestedConnection {
         if self.mode == TopAppBarScrollMode::ExitUntilCollapsed && available.y > 0.0 && consumed.y == 0.0 { return self.on_pre_scroll(available, source); }
         ScrollDelta::ZERO
     }
-    fn on_pre_fling(&self, available: ScrollVelocity) -> ScrollVelocity { let delta = ScrollDelta::new(0.0, available.y / 60.0); let consumed = self.on_pre_scroll(delta, NestedScrollSource::Fling); ScrollVelocity { x: 0.0, y: consumed.y * 60.0 } }
+    fn on_pre_fling(&self, available: ScrollVelocity) -> ScrollVelocity {
+        let delta = ScrollDelta::new(0.0, available.y / 60.0);
+        let consumed = self.on_pre_scroll(delta, NestedScrollSource::Fling);
+        let consumed_velocity = consumed.y.signum() * consumed.y.abs().min(available.y.abs());
+        ScrollVelocity { x: 0.0, y: consumed_velocity }
+    }
+    fn on_post_fling(&self, _: ScrollVelocity, available: ScrollVelocity) -> ScrollVelocity {
+        if self.mode != TopAppBarScrollMode::ExitUntilCollapsed
+            || available.y >= -1.0
+            || self.state.height_offset.get() >= 0.0
+        {
+            return ScrollVelocity::default();
+        }
+        let state = self.state.clone();
+        let limit = state.height_offset_limit.clone();
+        crate::animation::push_fling(
+            state.height_offset.clone(),
+            -available.y,
+            crate::animation::exponential_decay(4.2),
+            move |offset| offset.clamp(limit.get().min(0.0), 0.0),
+            || {},
+        );
+        available
+    }
+
 }
 
 
@@ -265,6 +289,44 @@ mod tests {
     #[test] fn standard_scroll_color_is_independent_from_collapse_fraction() { let scroll=ScrollState::new(); let colors=TopAppBarColors::new(Color::RED,Color::WHITE,Color::WHITE,Color::WHITE,Color::WHITE).scrolled_container(Color::BLUE); assert_eq!(colors.container_color(TopAppBarVariant::Standard,0.,0.),Color::RED); assert_eq!(colors.container_color(TopAppBarVariant::Standard,1.,0.),Color::BLUE); let behavior=TopAppBarScrollBehavior::new(scroll,TOP_APP_BAR_HEIGHT); assert_eq!(behavior.collapse_fraction(),0.); }
     #[test] fn collapsible_colors_interpolate_from_base_to_scrolled() { let colors=TopAppBarColors::new(Color::from_argb(255,0,0,0),Color::WHITE,Color::WHITE,Color::WHITE,Color::WHITE).scrolled_container(Color::from_argb(255,200,100,0)); assert_eq!(colors.container_color(TopAppBarVariant::Large,0.,0.),colors.container); let middle=colors.container_color(TopAppBarVariant::Large,44.,0.5); assert!(middle.r>0 && middle.r<200); assert_eq!(colors.container_color(TopAppBarVariant::Large,88.,1.),colors.scrolled_container); }
     #[test] fn nested_behavior_consumes_and_clamps_height_offset() { let state=TopAppBarState::new(TOP_APP_BAR_LARGE_HEIGHT); let connection=TopAppBarScrollBehavior::enter_always(state.clone(), TOP_APP_BAR_LARGE_HEIGHT).nested_scroll_connection().unwrap(); let consumed=connection.on_pre_scroll(ScrollDelta::new(0.0, -60.0), NestedScrollSource::Drag); assert_eq!(consumed.y, -60.0); assert_eq!(state.height_offset.get(), -60.0); let consumed=connection.on_pre_scroll(ScrollDelta::new(0.0, 100.0), NestedScrollSource::Drag); assert_eq!(consumed.y, 60.0); assert_eq!(state.height_offset.get(), 0.0); }
+    #[test] fn nested_state_derives_clamped_fractions() {
+        let state = TopAppBarState::new(TOP_APP_BAR_LARGE_HEIGHT);
+        assert_eq!(state.height_offset_limit.get(), -88.0);
+        state.height_offset.set(-44.0);
+        state.content_offset.set(-20.0);
+        assert!((state.collapsed_fraction() - 0.5).abs() < 0.001);
+        assert_eq!(state.current_height(TOP_APP_BAR_LARGE_HEIGHT), 108.0);
+        assert!(state.overlapped_fraction() > 0.0);
+        state.height_offset.set(-200.0);
+        assert_eq!(state.collapsed_fraction(), 1.0);
+        assert_eq!(state.current_height(TOP_APP_BAR_LARGE_HEIGHT), TOP_APP_BAR_HEIGHT);
+    }
+    #[test] fn pinned_behavior_never_consumes_or_changes_height() {
+        let state = TopAppBarState::new(TOP_APP_BAR_LARGE_HEIGHT);
+        let connection = TopAppBarScrollBehavior::pinned(state.clone(), TOP_APP_BAR_LARGE_HEIGHT).nested_scroll_connection().unwrap();
+        let consumed = connection.on_pre_scroll(ScrollDelta::new(0.0, -80.0), NestedScrollSource::Drag);
+        assert_eq!(consumed, ScrollDelta::ZERO);
+        assert_eq!(state.height_offset.get(), 0.0);
+    }
+    #[test] fn exit_until_collapsed_expands_only_after_child_is_at_boundary() {
+        let state = TopAppBarState::new(TOP_APP_BAR_LARGE_HEIGHT);
+        state.height_offset.set(-60.0);
+        let connection = TopAppBarScrollBehavior::exit_until_collapsed(state.clone(), TOP_APP_BAR_LARGE_HEIGHT).nested_scroll_connection().unwrap();
+        let consumed = connection.on_pre_scroll(ScrollDelta::new(0.0, 20.0), NestedScrollSource::Drag);
+        assert_eq!(consumed.y, 20.0);
+        assert_eq!(state.height_offset.get(), -40.0);
+        let consumed = connection.on_post_scroll(ScrollDelta::ZERO, ScrollDelta::new(0.0, 40.0), NestedScrollSource::Drag);
+        assert_eq!(consumed.y, 40.0);
+        assert_eq!(state.height_offset.get(), 0.0);
+    }
+    #[test] fn nested_pre_fling_consumes_only_available_collapsible_range() {
+        let state = TopAppBarState::new(TOP_APP_BAR_LARGE_HEIGHT);
+        let connection = TopAppBarScrollBehavior::enter_always(state.clone(), TOP_APP_BAR_LARGE_HEIGHT).nested_scroll_connection().unwrap();
+        let consumed = connection.on_pre_fling(ScrollVelocity { x: 0.0, y: -1800.0 });
+        assert!(consumed.y < 0.0);
+        assert!(consumed.y > -1800.0);
+        assert_eq!(state.height_offset.get(), -30.0);
+    }
     #[test] fn nested_content_offset_triggers_scrolled_color() {
         let colors=TopAppBarColors::new(Color::RED,Color::WHITE,Color::WHITE,Color::WHITE,Color::WHITE).scrolled_container(Color::BLUE);
         // nested scroll 的 content_offset 向下滚为负，也必须触发 scrolled 色

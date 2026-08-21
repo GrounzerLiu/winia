@@ -1406,45 +1406,57 @@ fn dispatch_nested_scroll_fling(
     // pre-fling：祖先先消费一部分速度
     for &idx in &path {
         if let Some(connection) = nodes[idx].modifier.nested_scroll_connection() {
-            let part = connection.on_pre_fling(remaining);
-            let cx = part.x.clamp(-remaining.x.abs(), remaining.x.abs());
-            let cy = part.y.clamp(-remaining.y.abs(), remaining.y.abs());
-            consumed.x += cx;
-            consumed.y += cy;
-            remaining.x -= cx;
-            remaining.y -= cy;
+            let part = connection.on_pre_fling(remaining).clamp_to(remaining);
+            consumed.x += part.x;
+            consumed.y += part.y;
+            remaining.x -= part.x;
+            remaining.y -= part.y;
         }
     }
-    // child fling：剩余速度交给目标滚动节点启动惯性
+    // child fling：剩余速度交给目标滚动节点；撞边界时把瞬时速度交给祖先 post-fling。
     let child_velocity = remaining;
-    let node = &nodes[target];
-    if let Some(ss) = node.modifier.vertical_scroll_state() {
-        if child_velocity.y.abs() >= 50.0 {
-            ss.fling(child_velocity.y);
-        } else {
-            ss.is_scroll_in_progress.set(false);
-        }
-    } else if let Some(ss) = node.modifier.horizontal_scroll_state() {
-        if child_velocity.x.abs() >= 50.0 {
-            ss.fling(child_velocity.x);
-        } else {
-            ss.is_scroll_in_progress.set(false);
-        }
+    let connections: Vec<std::sync::Arc<dyn crate::nested_scroll::NestedScrollConnection>> = path.iter().rev()
+        .filter_map(|&idx| nodes[idx].modifier.nested_scroll_connection())
+        .collect();
+    let child_started = {
+        let node = &nodes[target];
+        if let Some(ss) = node.modifier.vertical_scroll_state() {
+            if child_velocity.y.abs() >= 50.0 {
+                let post_connections = connections.clone();
+                ss.fling_with_boundary(child_velocity.y, move |remaining_velocity| {
+                    let mut available = crate::nested_scroll::ScrollVelocity { x: 0.0, y: remaining_velocity };
+                    for connection in &post_connections {
+                        let part = connection.on_post_fling(
+                            crate::nested_scroll::ScrollVelocity { x: 0.0, y: child_velocity.y },
+                            available,
+                        );
+                        available.y -= crate::nested_scroll::ScrollVelocity { x: 0.0, y: part.y }.clamp_to(available).y;
+                    }
+                });
+                true
+            } else { ss.is_scroll_in_progress.set(false); false }
+        } else if let Some(ss) = node.modifier.horizontal_scroll_state() {
+            if child_velocity.x.abs() >= 50.0 {
+                let post_connections = connections.clone();
+                ss.fling_with_boundary(child_velocity.x, move |remaining_velocity| {
+                    let mut available = crate::nested_scroll::ScrollVelocity { x: remaining_velocity, y: 0.0 };
+                    for connection in &post_connections {
+                        let part = connection.on_post_fling(
+                            crate::nested_scroll::ScrollVelocity { x: child_velocity.x, y: 0.0 },
+                            available,
+                        );
+                        available.x -= crate::nested_scroll::ScrollVelocity { x: part.x, y: 0.0 }.clamp_to(available).x;
+                    }
+                });
+                true
+            } else { ss.is_scroll_in_progress.set(false); false }
+        } else { false }
+    };
+    if child_started {
+        consumed.x += child_velocity.x;
+        consumed.y += child_velocity.y;
     }
-    consumed.x += child_velocity.x;
-    consumed.y += child_velocity.y;
-    // post-fling：反向让祖先消费剩余（当前 mostly no-op，为后续扩展保留）
-    let mut leftover = crate::nested_scroll::ScrollVelocity::default();
-    for &idx in path.iter().rev() {
-        if let Some(connection) = nodes[idx].modifier.nested_scroll_connection() {
-            let part = connection.on_post_fling(child_velocity, leftover);
-            let cx = part.x.clamp(-leftover.x.abs(), leftover.x.abs());
-            let cy = part.y.clamp(-leftover.y.abs(), leftover.y.abs());
-            leftover.x += cx;
-            leftover.y += cy;
-        }
-    }
-    crate::nested_scroll::ScrollVelocity { x: velocity.x - leftover.x, y: velocity.y - leftover.y }
+    consumed
 }
 
 fn find_scroll_target(nodes: &[LayoutNode], idx: usize, dx: f32, dy: f32) -> Option<usize> {

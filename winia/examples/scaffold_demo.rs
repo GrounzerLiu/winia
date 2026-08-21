@@ -12,10 +12,13 @@ fn scaffold_demo(ctx: &mut ComposeCtx) {
 
     // TopAppBar nested scroll behavior：Standard 不可折叠，但滚动时 content_offset
     // 会累积，从而触发 scrolled 容器色。
-    let app_bar_state = ctx.remember(|| TopAppBarState::new(TOP_APP_BAR_HEIGHT)).get();
-    let behavior = TopAppBarScrollBehavior::enter_always(app_bar_state, TOP_APP_BAR_HEIGHT);
     let scroll = ctx.remember(|| ScrollState::new()).get();
-    let connection = behavior.nested_scroll_connection_with_scroll(scroll.clone()).expect("nested behavior connection");
+    let app_bar_state = ctx.remember(|| TopAppBarState::new(TOP_APP_BAR_HEIGHT)).get();
+    // Standard app bar 的容器色直接跟随共享 ScrollState；动画 fling 每帧更新
+    // offset，因此回到顶部时颜色会立即恢复，不依赖下一次手势触发 nested callback。
+    let behavior = TopAppBarScrollBehavior::new(scroll.clone(), TOP_APP_BAR_HEIGHT);
+    let nested_behavior = TopAppBarScrollBehavior::enter_always(app_bar_state, TOP_APP_BAR_HEIGHT);
+    let connection = nested_behavior.nested_scroll_connection_with_scroll(scroll.clone()).expect("nested behavior connection");
 
     let rtl_for_top_bar = rtl.clone();
     let count_for_fab = count.clone();

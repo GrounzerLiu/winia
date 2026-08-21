@@ -18,8 +18,8 @@ Winia 提供 Compose 风格的 nested scroll 基础协议，用于让祖先容�
 ## 当前接入范围
 
 - `Modifier::nested_scroll(connection)` 可挂载祖先 connection。
-- wheel、debug scroll 和 drag move 通过 pre → child partial consume → post 顺序分发。
-- 拖拽结束的 fling 通过 `dispatch_nested_scroll_fling` 走 pre-fling → child fling → post-fling 链。
+- wheel、debug scroll 和 drag move 通过 pre → child partial consume → post 顺序分发，连接返回值始终按可用 delta 限制。
+- 拖拽结束的 fling 通过 `dispatch_nested_scroll_fling` 走 pre-fling → child fling → post-fling 链。child decay 撞到 clamp 边界时，动画层回传该帧瞬时剩余速度，沿 inner→outer 顺序交给 ancestor post-fling。
 - `TopAppBarScrollBehavior::{pinned, enter_always, exit_until_collapsed}` 提供独立 `TopAppBarState` connection；
   通过 `nested_scroll_connection_with_scroll(scroll)` 绑定子滚动状态，`content_offset` 直接镜像真实 offset，避免累加漂移。
 - legacy `TopAppBarScrollBehavior::new(scroll, expanded_height)` 继续保留，供已有共享 offset 页面迁移。
@@ -61,5 +61,5 @@ Column::new()
 ## 当前边界
 
 - wheel 和 drag 已使用实际 consumed delta，不再用 bool 表示“命中即消费”。
-- fling 已通过 `dispatch_nested_scroll_fling` 接入 pre/post fling 链（`drag_scroll_up` 触发）；但 `on_pre_fling` 目前用 `velocity/60` 近似换算，完整 snap/decay handoff 仍可继续打磨。
+- fling 通过 pre/post 回调路径调度；TopAppBar 的 pre-fling 会按当前可折叠范围消费速度，child decay 撞到边界时会将瞬时剩余速度交给 ancestor post-fling。
 - WindowInsets、overscroll、scrollbar 和 accessibility semantics 不属于当前切片。
