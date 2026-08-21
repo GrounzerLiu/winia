@@ -5,6 +5,8 @@
 //!
 //! 上方：垂直 item（图标在上、label 在下，56x32 圆形指示器）
 //! 下方：水平 item（图标在左、label 在右，40 高胶囊指示器横向包裹整组）
+//! 徽章：Search 挂圆点徽章、Favorites 挂计数徽章（点击 Favorites 自增，
+//! 对标 androidx NavigationBarItem 图标槽内 BadgedBox 用法）
 
 use winia::prelude::*;
 
@@ -21,10 +23,62 @@ const DESTINATIONS: [(&str, &str); 4] = [
     ("Profile", PERSON_PATH),
 ];
 
+const SEARCH_INDEX: usize = 1;
+const FAVORITES_INDEX: usize = 2;
+
+/// 一条 NavigationBar：selected 决定选中项；favorites 驱动计数徽章。
+#[composable]
+fn nav_bar(ctx: &mut ComposeCtx, selected: State<usize>, favorites: State<i32>, layout: NavigationBarItemLayout) {
+    let sel = selected.clone();
+    let fav = favorites.clone();
+    NavigationBar::new(move |ctx| {
+        for index in 0..DESTINATIONS.len() {
+            let (name, path) = DESTINATIONS[index];
+            let fav_for_icon = fav.clone();
+            let fav_for_click = fav.clone();
+            let sel_for_click = sel.clone();
+            NavigationBarItem::new(sel.get() == index, move |ctx| {
+                // 图标槽内挂徽章（BadgedBox 测量尺寸 = 锚点尺寸——不影响胶囊推导）
+                if index == SEARCH_INDEX {
+                    // 圆点徽章（无 content）
+                    BadgedBox::new(|ctx| { Badge::new().build(ctx); })
+                        .build(ctx, |ctx| {
+                            Icon::svg_path(path).size(NAVIGATION_BAR_ICON_SIZE).build(ctx);
+                        });
+                } else if index == FAVORITES_INDEX {
+                    // 计数徽章
+                    let count = fav_for_icon.get();
+                    BadgedBox::new(move |ctx| {
+                        Badge::new()
+                            .content(move |ctx| Text::new(count.to_string()).build(ctx))
+                            .build(ctx);
+                    })
+                    .build(ctx, |ctx| {
+                        Icon::svg_path(path).size(NAVIGATION_BAR_ICON_SIZE).build(ctx);
+                    });
+                } else {
+                    Icon::svg_path(path).size(NAVIGATION_BAR_ICON_SIZE).build(ctx);
+                }
+            })
+            .label(move |ctx| Text::new(name).build(ctx))
+            .layout(layout)
+            .on_click(move || {
+                sel_for_click.set(index);
+                if index == FAVORITES_INDEX {
+                    fav_for_click.update(|value| *value += 1);
+                }
+            })
+            .build(ctx);
+        }
+    })
+    .build(ctx);
+}
+
 #[composable]
 fn navigation_bar_demo(ctx: &mut ComposeCtx) {
     let v_selected = ctx.remember(|| 0usize);
     let h_selected = ctx.remember(|| 0usize);
+    let favorites = ctx.remember(|| 3i32);
 
     WiniaTheme::with_theme_and_direction(ThemeColors::default_light(), LayoutDirection::Ltr, ctx, |ctx| {
         Column::new()
@@ -33,46 +87,20 @@ fn navigation_bar_demo(ctx: &mut ComposeCtx) {
                 Text::new("Compact windows - vertical items")
                     .modifier(Modifier::new().padding(16.0))
                     .build(ctx);
-                // 垂直 item（默认布局——紧凑窗口）
-                let vs = v_selected.clone();
-                NavigationBar::new(move |ctx| {
-                    for index in 0..DESTINATIONS.len() {
-                        let (name, path) = DESTINATIONS[index];
-                        NavigationBarItem::new(vs.get() == index, move |ctx| {
-                            Icon::svg_path(path).size(NAVIGATION_BAR_ICON_SIZE).build(ctx);
-                        })
-                        .label(move |ctx| Text::new(name).build(ctx))
-                        .on_click({ let vs = vs.clone(); move || vs.set(index) })
-                        .build(ctx);
-                    }
-                })
-                .build(ctx);
+                nav_bar(ctx, v_selected.clone(), favorites.clone(), NavigationBarItemLayout::Vertical);
 
                 Spacer::vertical(24.0);
 
                 Text::new("Medium windows - horizontal items")
                     .modifier(Modifier::new().padding(16.0))
                     .build(ctx);
-                // 水平 item（中等窗口——图标在左、label 在右）
-                let hs = h_selected.clone();
-                NavigationBar::new(move |ctx| {
-                    for index in 0..DESTINATIONS.len() {
-                        let (name, path) = DESTINATIONS[index];
-                        NavigationBarItem::new(hs.get() == index, move |ctx| {
-                            Icon::svg_path(path).size(NAVIGATION_BAR_ICON_SIZE).build(ctx);
-                        })
-                        .label(move |ctx| Text::new(name).build(ctx))
-                        .layout(NavigationBarItemLayout::Horizontal)
-                        .on_click({ let hs = hs.clone(); move || hs.set(index) })
-                        .build(ctx);
-                    }
-                })
-                .build(ctx);
+                nav_bar(ctx, h_selected.clone(), favorites.clone(), NavigationBarItemLayout::Horizontal);
 
                 Text::new(format!(
-                    "vertical tab: {} | horizontal tab: {}",
+                    "vertical tab: {} | horizontal tab: {} | favorites: {} (click to +1)",
                     v_selected.get(),
-                    h_selected.get()
+                    h_selected.get(),
+                    favorites.get()
                 ))
                 .modifier(Modifier::new().padding(16.0))
                 .build(ctx);
