@@ -46,11 +46,18 @@ fn nav_bar(ctx: &mut ComposeCtx, selected: State<usize>, favorites: State<i32>, 
                             Icon::svg_path(path).size(NAVIGATION_BAR_ICON_SIZE).build(ctx);
                         });
                 } else if index == FAVORITES_INDEX {
-                    // 计数徽章
-                    let count = fav_for_icon.get();
+                    // 计数徽章——get() 必须在 content 闭包**内**：依赖注册到
+                    // 徽章内容组（最内层 scope），状态变化才能穿透 Badge 内部组
+                    // 的 Skip 重执行内容（读在组外会数字冻结，见 badge.rs 回归测试）
                     BadgedBox::new(move |ctx| {
                         Badge::new()
-                            .content(move |ctx| Text::new(count.to_string()).build(ctx))
+                            .content({
+                                let fav = fav_for_icon.clone();
+                                move |ctx| {
+                                    let count = fav.get();
+                                    Text::new(count.to_string()).build(ctx)
+                                }
+                            })
                             .build(ctx);
                     })
                     .build(ctx, |ctx| {

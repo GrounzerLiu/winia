@@ -346,6 +346,56 @@ mod tests {
             "大徽章垂直：底边距锚点顶 14dp → y = -h+14 = -2（实际 {:?}）", s.badge);
     }
 
+    // ── 徽章内容响应式（Compose 惯用法：在使用的最近作用域内读 State）──
+
+    /// 正确模式：State::get 在 badge content 闭包**内**调用——依赖注册到
+    /// 徽章内容组（最内层 scope），set 后 mark_dirty 直达该组 + 祖先传播，
+    /// 重组必然穿透 Badge 内部组重执行内容。
+    #[test]
+    fn badge_content_recomposes_when_state_read_inside_content_closure() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let theme = light_theme();
+        let count = crate::core::state::State::new(3i32);
+        let hits = std::sync::Arc::new(AtomicUsize::new(0));
+
+        let make_scene = |count: crate::core::state::State<i32>,
+                          hits: std::sync::Arc<AtomicUsize>,
+                          theme: crate::ui::theme::ThemeColors| {
+            move |ctx: &mut ComposeCtx| {
+                WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    BadgedBox::new(move |ctx| {
+                        Badge::new()
+                            .content(move |ctx| {
+                                hits.fetch_add(1, Ordering::SeqCst);
+                                let n = count.get(); // ← 读在最内层：依赖挂徽章内容组
+                                crate::ui::Text::new(n.to_string()).build(ctx);
+                            })
+                            .build(ctx);
+                    })
+                    .build(ctx, |ctx| {
+                        let k = ctx.next_key();
+                        ctx.start_leaf(k, Modifier::new().size(24.0, 24.0));
+                        ctx.end_node();
+                    });
+                });
+            }
+        };
+
+        let mut composer = crate::core::composer::Composer::new();
+        composer.compose(make_scene(count.clone(), hits.clone(), theme.clone()));
+        assert_eq!(hits.load(Ordering::SeqCst), 1, "首次组合执行一次");
+
+        count.set(4);
+        let ran = composer.recompose(make_scene(count.clone(), hits.clone(), theme));
+        assert!(ran, "状态变化应触发重组");
+        assert_eq!(hits.load(Ordering::SeqCst), 2, "徽章内容组应随状态变化重执行");
+    }
+
+    // 注：读在 content 闭包外（容器组层）的模式在隔离结构下实测也能传播
+    // （mark_dirty 祖先标记 + 容器重执行传入新闭包），但真实组件树层级更深，
+    // 组合依赖落在哪一层随结构变化。Compose 惯用法是**在使用的最近作用域内读**
+    // ——导航栏计数徽章务必采用上面测试锁定的模式。
+
     // ── 像素测试：Badge 渲染 ──
     fn render_badge_px(build: impl FnOnce(&mut ComposeCtx)) -> (Vec<[u8; 4]>, usize) {
         use skia_safe::{Color as SkColor, surfaces};
