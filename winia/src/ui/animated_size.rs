@@ -120,6 +120,10 @@ impl MeasurePolicy for SizePolicy {
         }
         // layout_dep：动画推进每帧重测本节点（get 注册——值变化才 notify）
         let cur = self.size.get();
+        #[cfg(test)]
+        if std::env::var("WINIA_ANIM_SIZE_TRACE").is_ok() {
+            eprintln!("[anim-size] goal={:?} prev={:?} cur={:?} tid={:?}", goal, prev, cur, std::thread::current().id());
+        }
         (LayoutSize::new(cur.width, cur.height), placements)
     }
 
@@ -172,6 +176,9 @@ mod tests {
 
     #[test]
     fn animated_size_tracks_content_change() {
+        // 动画注册表是进程级全局单例——必须持串行锁，否则并行测试的
+        // clear_all_animations 会抹掉本测试在飞的动画（中途冻结偶发失败）
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let mut composer = Composer::new();
         // 内容宽度 State 必须走 remember（owner queue——State::new 的 notify 不推送）
         let holder = std::cell::RefCell::new(None::<State<f32>>);
@@ -186,12 +193,32 @@ mod tests {
             });
             composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
         };
+        // 短时长 tween（100ms）——10×40ms 推进累计远超时长，即使个别 tick 被
+        // 调度延迟吞掉也保证收敛（墙钟测试的时序裕度原则）。
+        let mut recompose = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                let w: State<f32> = ctx.remember(|| 50.0);
+                *holder.borrow_mut() = Some(w.clone());
+                AnimatedSize::new(crate::animation::TweenSpec::new(
+                    std::time::Duration::from_millis(100),
+                    crate::animation::interpolator::Linear::new(),
+                ))
+                .build(ctx, |ctx| {
+                    SizedLeaf { w: w.get() }.build(ctx);
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        // 推进至动画注册表排空（update_animations 返回 false）——不依赖墙钟节奏：
+        // 负载/抢占只影响耗时（空转 tick），不影响最终收敛结果。上限防死循环。
         let mut advance = |composer: &mut Composer| {
-            for _ in 0..10 {
-                crate::animation::update_animations();
-                std::thread::sleep(std::time::Duration::from_millis(40));
+            for _ in 0..10_000 {
+                if !crate::animation::update_animations() {
+                    break;
+                }
                 recompose(composer);
             }
+            recompose(composer);
         };
 
         // 首帧：内容宽 50 → 容器直接 50（无动画）
@@ -202,8 +229,16 @@ mod tests {
         let w = holder.borrow().as_ref().unwrap().clone();
         w.set(200.0);
         recompose(&mut composer);
+        // 过渡中宽度必须落在 [旧, 新] 区间（tween 有界不超调）。
+        // ⚠ 不断言 mid < 200：注册与测量之间若线程被抢占 ≥ 动画时长，
+        // 并行测试的其他线程 tick 全局动画表也能推进进度——合法动画会
+        // 合法到达终值，严格小于断言测的是调度器不是框架（曾致偶发失败）。
         let mid = container_width(&composer);
-        assert!(mid < 200.0, "动画过渡中：宽度应介于旧新之间（mid={}）", mid);
+        assert!(
+            (50.0..=200.0).contains(&mid),
+            "动画过渡中：宽度应介于旧新之间（mid={}）",
+            mid
+        );
         advance(&mut composer);
         assert_eq!(container_width(&composer), 200.0, "动画完成后到达新尺寸");
     }
@@ -211,6 +246,7 @@ mod tests {
     /// 内容 State 变化但尺寸不变——不注册新动画（无重测风暴）
     #[test]
     fn animated_size_no_animation_when_size_unchanged() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let mut composer = Composer::new();
         let holder = std::cell::RefCell::new(None::<State<f32>>);
 

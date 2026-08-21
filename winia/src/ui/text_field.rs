@@ -2391,6 +2391,7 @@ mod tests {
     /// 验证"字号动画"链路端到端（demo 截图里字号未变的问题回归）。
     #[test]
     fn label_font_size_animates_with_progress() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -2451,6 +2452,7 @@ mod tests {
     /// 到 Column 才能触发重跑——label 闭包随动画重跑（demo 截图字号未变的回归）
     #[test]
     fn label_font_size_animates_nested_in_column() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -2503,6 +2505,7 @@ mod tests {
     /// 收敛（demo 点击聚焦后 placeholder 不可见的回归）
     #[test]
     fn placeholder_alpha_animates_on_focus() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -2553,6 +2556,7 @@ mod tests {
     /// 不可见（remember key 漂移/alpha 卡 0）
     #[test]
     fn placeholder_alpha_survives_rapid_focus_toggle() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

@@ -251,12 +251,24 @@ mod tests {
         // 切换 target → 淡出（~300ms）→ 完成 → 内容重建（宽 200）→ 淡入 + 尺寸动画
         target.set(7);
         recompose(&mut composer);
-        // 淡出 ~20 帧（300ms）→ 切换完成 → 淡入开始 2 帧
-        for _ in 0..22 {
+        // 轮询直到宽度离开初始值（淡出完成 + 尺寸动画启动）——固定帧数会因
+        // 并行调度的进度重置/延迟而踩不准窗口（曾致偶发失败），轮询对时序免疫
+        let mut mid_w = container_width(&composer);
+        for _ in 0..80 {
             advance_one(&mut composer);
+            mid_w = container_width(&composer);
+            if mid_w > 50.0 {
+                break;
+            }
         }
         // 尺寸动画中途：容器宽度应在 50..200 之间（从旧尺寸平滑过渡）
-        let mid_w = container_width(&composer);
+        if !(mid_w > 50.0 && mid_w < 200.0) {
+            eprintln!(
+                "[ac-debug] mid_w={} is_animating={}",
+                mid_w,
+                crate::animation::is_animating()
+            );
+        }
         assert!(
             mid_w > 50.0 && mid_w < 200.0,
             "尺寸动画中途容器宽度应在 50..200（实际 {mid_w}）"

@@ -411,6 +411,10 @@ mod tests {
 
     fn render_loading(build: impl FnOnce(&mut ComposeCtx)) -> (Vec<[u8; 4]>, usize) {
         use skia_safe::{Color as SkColor, surfaces};
+        // indeterminate 会注册无限动画（永不完成）——持串行锁并前后清理，
+        // 防止残留污染其他测试的全局注册表断言/排空循环
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
         // LaunchedEffect 需要 tokio 运行时上下文；渲染测试不依赖任务推进，仅需 Handle 存在
         let rt = tokio::runtime::Runtime::new().unwrap();
         let _guard = rt.enter();
@@ -427,6 +431,7 @@ mod tests {
         let root = composer.layout_root_idx().expect("root");
         let nodes = composer.arena_nodes();
         crate::render::render(nodes, root, canvas);
+        crate::animation::clear_all_animations();
         let pm = surface.peek_pixels().expect("pixmap");
         let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
         (px.to_vec(), pm.width() as usize)

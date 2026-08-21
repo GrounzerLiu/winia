@@ -1507,6 +1507,8 @@ mod tests {
 
     #[test]
     fn fling_animates_offset_and_stops_at_limit() {
+        // 动画注册表全局共享——持串行锁防并行 clear/竞态抹掉在飞 fling
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         // 渲染一次让 policy 回写 fling_limit（内容高 - 视口 600）
         let state = LazyListState::new();
         let items: Arc<Vec<u64>> = Arc::new((0..1000).collect());
