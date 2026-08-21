@@ -11,8 +11,9 @@ use winia::render;
 use winia::State;
 use winia::unit::{Sp, TextUnit};
 use winia::ui::{
-    Button, Chip, FloatingActionButton, FloatingActionButtonSize, Icon, Text, TextField,
-    TextFieldValue, ThemeColors, TopAppBar, TopAppBarColors, TopAppBarScrollBehavior, TopAppBarVariant, Scaffold, Typography, WiniaTheme,
+    Button, Chip, FloatingActionButton, FloatingActionButtonSize, Icon, NavigationBar,
+    NavigationBarItem, Text, TextField, TextFieldValue, ThemeColors, TopAppBar, TopAppBarColors,
+    TopAppBarScrollBehavior, TopAppBarVariant, Scaffold, Typography, WiniaTheme,
 };
 
 const WIDTH: i32 = 520;
@@ -375,4 +376,72 @@ fn material_visual_matrix_custom_typography_changes_textfield_geometry() {
     let default_field = find_tag(default_nodes, default_composer.layout_root_idx().unwrap(), "field").unwrap();
     let custom_field = find_tag(custom_nodes, custom_composer.layout_root_idx().unwrap(), "field").unwrap();
     assert!(custom_nodes[custom_field].measured_size.height >= default_nodes[default_field].measured_size.height);
+}
+
+// ── NavigationBar 视觉矩阵 ──
+
+/// 渲染一个 360x80 的 NavigationBar：3 个 item（第 0 个选中，均带 label）。
+fn render_navigation_bar_case(direction: LayoutDirection) -> skia_safe::Surface {
+    let theme = ThemeColors::default_light();
+    let mut composer = Composer::new();
+    composer.compose(winia::app_root!(|ctx| {
+        WiniaTheme::with_theme_and_direction(theme, direction, ctx, |ctx| {
+            NavigationBar::new(|ctx| {
+                for i in 0..3 {
+                    NavigationBarItem::new(
+                        i == 0,
+                        |ctx| {
+                            let key = ctx.next_key();
+                            ctx.start_leaf(key, Modifier::new().size(24.0, 24.0));
+                            ctx.end_node();
+                        },
+                    )
+                    .label(move |ctx| {
+                        Text::new(format!("Tab{i}")).build(ctx);
+                    })
+                    .on_click(|| {})
+                    .build(ctx);
+                }
+            })
+            .build(ctx);
+        });
+    }));
+    composer.layout(Constraints::new(0.0, 360.0, 0.0, 80.0));
+    let mut surface = skia_safe::surfaces::raster_n32_premul((360, 80)).expect("navbar surface");
+    surface.canvas().clear(skia_safe::Color::WHITE);
+    let root = composer.layout_root_idx().unwrap();
+    render::render(composer.arena_nodes(), root, surface.canvas());
+    surface
+}
+
+#[test]
+fn navigation_bar_visual_matrix_pill_container_and_rtl_mirror() {
+    let theme = ThemeColors::default_light();
+    let container = theme.surface_container;
+    let indicator = theme.secondary_container;
+    let to_rgba = |c: Color| (c.r, c.g, c.b, c.a);
+
+    let mut ltr = render_navigation_bar_case(LayoutDirection::Ltr);
+    // 容器底色（左下角背景区）
+    assert_eq!(pixel(&mut ltr, 5, 75), to_rgba(container), "容器应为 surfaceContainer");
+    // 选中项指示器胶囊：item0 中心 x≈57.3，胶囊横跨 29.3..85.3、y 12..44；
+    // 取 (35, 28)——在胶囊内且避开图标（图标占 45.3..69.3）
+    assert_eq!(pixel(&mut ltr, 35, 28), to_rgba(indicator), "选中项应有 SecondaryContainer 胶囊");
+    // 未选中项无胶囊：item1 中心 x≈180，取 (155, 28)（避开其图标 168..192）
+    assert_eq!(pixel(&mut ltr, 155, 28), to_rgba(container), "未选中项不应有胶囊");
+    // 选中项 label 已渲染（y 48..64 区域存在非容器色像素）
+    let mut label_pixels = 0;
+    for y in 50..62 {
+        for x in 38..78 {
+            if pixel(&mut ltr, x, y) != to_rgba(container) {
+                label_pixels += 1;
+            }
+        }
+    }
+    assert!(label_pixels > 0, "选中项 label 应可见");
+
+    // RTL：选中项镜像到最右三分之一，胶囊跟随
+    let mut rtl = render_navigation_bar_case(LayoutDirection::Rtl);
+    assert_eq!(pixel(&mut rtl, 325, 28), to_rgba(indicator), "RTL 下选中项胶囊镜像到最右");
+    assert_eq!(pixel(&mut rtl, 35, 28), to_rgba(container), "RTL 下最左三分之一无胶囊");
 }
