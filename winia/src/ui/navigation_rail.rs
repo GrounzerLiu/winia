@@ -32,7 +32,8 @@
 //!   [NavigationRail::window_insets]），未来 Android 支持或自定义窗口装饰
 //!   （标题栏模拟状态栏）时由平台层填充真实尺寸
 //! - PredictiveBack 缩放效果：依赖 Android 返回手势进度输入，桌面无此源
-//! - ModalWideNavigationRail / Expanded 宽轨见文件末尾阶段实现
+//! - ModalWideNavigationRail 与 Expanded 宽轨已实现（见本文件后半部分）；
+//!   组件文档：docs/navigation-rail.md
 
 use crate::composable;
 use crate::core::composer::{ComposeCtx, GroupStatus};
