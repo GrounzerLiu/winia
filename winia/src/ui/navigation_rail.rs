@@ -852,6 +852,40 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn wide_rail_item_target_width_expands_when_expanded() {
+        // 收起：拥抱内容 min 96；展开：轨宽(220) - 2x20 = 180（M3 目标区横跨全宽）
+        let cases: [(bool, f32); 2] = [(false, WIDE_RAIL_COLLAPSED_WIDTH), (true, 180.0)];
+        for (expanded, expected_w) in cases {
+            let mut composer = Composer::new();
+            composer.compose(|ctx| {
+                let progress = ctx.animate_float_as_state(
+                    if expanded { 1.0 } else { 0.0 },
+                    crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec {
+                        damping_ratio: 1.0, stiffness: 400.0, mass: 1.0, threshold: 0.01,
+                    }),
+                );
+                WideNavigationRailItem::new(
+                    true,
+                    |ctx| icon_leaf(ctx, 24.0),
+                    |ctx| crate::ui::Text::new("Home").build(ctx),
+                )
+                .progress(progress)
+                .on_click(|| {})
+                .build(ctx);
+            });
+            composer.layout(Constraints::new(0.0, 220.0, 0.0, f32::MAX));
+            let root = composer.layout_root_idx().unwrap();
+            let nodes = composer.arena_nodes();
+            assert_eq!(
+                nodes[root].measured_size.width,
+                expected_w,
+                "expanded={}",
+                expanded
+            );
+        }
+    }
+
     fn wide_rail_state_toggles_expansion() {
         let mut composer = Composer::new();
         let mut state_ref = None;
@@ -1286,14 +1320,22 @@ impl MeasurePolicy for WideNavigationRailItemLayoutPolicy {
         );
 
         let min_h = NAVIGATION_RAIL_ITEM_HEIGHT.max(constraints.min_height);
-        // 拥抱内容、至少收起轨宽 96（CollapsedTokens.ContainerWidth）
-        let container_w = if constraints.max_width < f32::MAX {
+        // 收起：拥抱内容、至少 96（CollapsedTokens.ContainerWidth）；
+        // 展开：目标区域横跨轨宽减去两侧 20dp（M3：item 目标区横跨全宽），
+        // 内容行在更宽容器内居中
+        let container_w = if constraints.max_width >= f32::MAX {
+            icon_size.width.max(full_w)
+        } else {
             let content_w = icon_size.width
                 .max(full_w)
                 .max(label_size.width);
-            content_w.max(WIDE_RAIL_COLLAPSED_WIDTH).min(constraints.max_width)
-        } else {
-            icon_size.width.max(full_w)
+            if p > 0.0 {
+                ((constraints.max_width - WIDE_RAIL_ITEM_H_PADDING * 2.0)
+                    .max(content_w))
+                .min(constraints.max_width)
+            } else {
+                content_w.max(WIDE_RAIL_COLLAPSED_WIDTH).min(constraints.max_width)
+            }
         };
         let max_h = if constraints.max_height.is_finite() { constraints.max_height } else { f32::MAX };
 
