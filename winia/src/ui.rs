@@ -126,8 +126,10 @@ pub use navigation_bar::{
     NAVIGATION_BAR_INDICATOR_WIDTH, NAVIGATION_BAR_INDICATOR_HEIGHT, NAVIGATION_BAR_ICON_SIZE,
 };
 pub use navigation_rail::{
-    NavigationRail, NavigationRailItem, NavigationRailItemColors, WindowInsets,
+    NavigationRail, NavigationRailItem, NavigationRailItemColors, WideNavigationRail,
+    WideNavigationRailItem, WideNavigationRailState, WindowInsets,
     NAVIGATION_RAIL_INDICATOR_HEIGHT, NAVIGATION_RAIL_INDICATOR_WIDTH, NAVIGATION_RAIL_ITEM_HEIGHT,
-    NAVIGATION_RAIL_ICON_SIZE, NAVIGATION_RAIL_WIDTH,
+    NAVIGATION_RAIL_ICON_SIZE, NAVIGATION_RAIL_WIDTH, WIDE_RAIL_COLLAPSED_WIDTH,
+    WIDE_RAIL_EXPANDED_MIN_WIDTH,
 };
 pub use tooltip::Tooltip;

@@ -77,6 +77,8 @@ const RAIL_VERTICAL_PADDING: f32 = 4.0;
 const HEADER_SPACER: f32 = 8.0;
 /// Material DisabledAlpha
 const DISABLED_ALPHA: f32 = 0.38;
+/// 宽轨 Start 态指示器横向内边距（leading/trailing 各 16，与导航栏水平 item 一致）
+const WIDE_INDICATOR_H_PADDING: f32 = 16.0;
 
 /// 窗口避让尺寸（对标 androidx WindowInsets 的桌面简化版）。
 ///
@@ -720,5 +722,582 @@ mod tests {
         );
         surface.read_pixels(&info, &mut pixels, 4, (x, y));
         (pixels[0], pixels[1], pixels[2], pixels[3])
+    }
+    // ── WideNavigationRail ──
+
+    #[test]
+    fn wide_rail_width_endpoints_match_tokens() {
+        // 收起：容器宽 96（CollapsedTokens.ContainerWidth）
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            let state = WideNavigationRailState::new(ctx);
+            assert!(!state.is_expanded(), "默认收起");
+            WideNavigationRail::new(state, |ctx| {
+                NavigationRailItem::new(true, |ctx| icon_leaf(ctx, 24.0))
+                    .label(|ctx| crate::ui::Text::new("A").build(ctx))
+                    .on_click(|| {})
+                    .build(ctx);
+            })
+            .header(|ctx| icon_leaf(ctx, 24.0))
+            .build(ctx);
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        assert_eq!(nodes[root].measured_size.width, WIDE_RAIL_COLLAPSED_WIDTH);
+
+        // 展开：容器宽 220（ExpandedTokens.ContainerWidthMinimum）
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            let state = WideNavigationRailState::new(ctx);
+            state.expand();
+            WideNavigationRail::new(state, |ctx| {
+                NavigationRailItem::new(true, |ctx| icon_leaf(ctx, 24.0))
+                    .label(|ctx| crate::ui::Text::new("A").build(ctx))
+                    .on_click(|| {})
+                    .build(ctx);
+            })
+            .header(|ctx| icon_leaf(ctx, 24.0))
+            .build(ctx);
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        assert_eq!(nodes[root].measured_size.width, WIDE_RAIL_EXPANDED_MIN_WIDTH);
+    }
+
+    #[test]
+    fn wide_rail_item_morphs_between_top_and_start_layouts() {
+        // p=0（收起）：Top 布局——胶囊 56x32 在图标后、图标标签垂直堆叠
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            WideNavigationRailItem::new(
+                true,
+                |ctx| icon_leaf(ctx, 24.0),
+                |ctx| crate::ui::Text::new("Home").build(ctx),
+            )
+            .progress(State::new(0.0))
+            .on_click(|| {})
+            .build(ctx);
+        });
+        composer.layout(Constraints::new(0.0, 220.0, 0.0, f32::MAX));
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let indicator = child(nodes, root, 0);
+        let icon = child(nodes, root, 1);
+        let label = child(nodes, root, 2);
+        assert_eq!(indicator.measured_size.width, NAVIGATION_RAIL_INDICATOR_WIDTH);
+        assert_eq!(indicator.measured_size.height, NAVIGATION_RAIL_INDICATOR_HEIGHT);
+        // 图标在标签上方（垂直堆叠）
+        assert!(icon.position.y < label.position.y);
+        // 中心点对齐（居中排列——宽度不同 x 不同）
+        assert_eq!(icon.position.x + icon.measured_size.width / 2.0, label.position.x + label.measured_size.width / 2.0);
+
+        // p=1（展开）：Start 布局——胶囊包裹 [icon+gap+label]，高 40，水平排列
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            WideNavigationRailItem::new(
+                true,
+                |ctx| icon_leaf(ctx, 24.0),
+                |ctx| crate::ui::Text::new("Home").build(ctx),
+            )
+            .progress(State::new(1.0))
+            .on_click(|| {})
+            .build(ctx);
+        });
+        composer.layout(Constraints::new(0.0, 220.0, 0.0, f32::MAX));
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let ripple = child(nodes, root, 3);
+        let indicator = child(nodes, root, 0);
+        let icon = child(nodes, root, 1);
+        let label = child(nodes, root, 2);
+        // 水平排列：label 在 icon 右侧、同垂直中心
+        assert!(icon.position.x < label.position.x, "Start 布局图标在左");
+        assert_eq!(
+            icon.position.y + icon.measured_size.height / 2.0,
+            label.position.y + label.measured_size.height / 2.0,
+        );
+        // 胶囊高 40（max(24,labelH)+16）、宽包住整组
+        assert_eq!(ripple.measured_size.height, 40.0);
+        let content_w = 24.0 + ITEM_ICON_LABEL_GAP + label.measured_size.width;
+        assert_eq!(
+            ripple.measured_size.width,
+            content_w + WIDE_INDICATOR_H_PADDING * 2.0,
+        );
+        // 选中态彩色胶囊与 ripple 重合
+        assert_eq!(indicator.position, ripple.position);
+    }
+
+    #[test]
+    fn wide_rail_state_toggles_expansion() {
+        let mut composer = Composer::new();
+        let mut state_ref = None;
+        composer.compose(|ctx| {
+            let state = WideNavigationRailState::new(ctx);
+            state.toggle();
+            state_ref = Some(state);
+        });
+        let state = state_ref.unwrap();
+        assert!(state.is_expanded(), "toggle 后应展开");
+        state.collapse();
+        assert!(!state.is_expanded());
+        state.expand();
+        assert!(state.is_expanded());
+    }
+
+}
+
+// ── WideNavigationRail（M3 Expressive 宽轨）──
+//
+// 对齐 androidx-main WideNavigationRail.kt 的核心行为：
+// - 容器宽 Collapsed 96dp ↔ Expanded min 220dp 动画过渡
+// - item 图标位置随展开态 Top(收起)↔Start(展开) 变形
+// - label 必选且恒显示；item 横向 padding 20dp、容器顶部 padding 44dp
+//
+// 简化（有意为之，文档注明）：指示器/内容几何在两端点间线性 lerp
+// （androidx 用动态 PaddingValues + 分段 label 公式；端点视觉一致，
+//  中间过渡为对角滑入而非淡出跳变）。
+
+/// 宽轨收起宽度 = NavigationRailCollapsedTokens.ContainerWidth
+pub const WIDE_RAIL_COLLAPSED_WIDTH: f32 = 96.0;
+/// 宽轨展开最小宽 = NavigationRailExpandedTokens.ContainerWidthMinimum
+pub const WIDE_RAIL_EXPANDED_MIN_WIDTH: f32 = 220.0;
+/// 宽轨容器顶部 padding = NavigationRailCollapsedTokens.TopSpace
+pub const WIDE_RAIL_TOP_PADDING: f32 = 44.0;
+/// 宽轨 item 横向 padding
+pub const WIDE_RAIL_ITEM_H_PADDING: f32 = 20.0;
+
+/// 宽轨展开状态机（对标 WideNavigationRailState 的同步简化版）。
+/// 持有展开目标 bool；动画由组件内部 animate_float_as_state 驱动。
+#[derive(Clone)]
+pub struct WideNavigationRailState {
+    expanded: State<bool>,
+}
+
+impl WideNavigationRailState {
+    pub fn new(ctx: &mut ComposeCtx) -> Self {
+        Self { expanded: ctx.remember(|| false) }
+    }
+
+    pub fn is_expanded(&self) -> bool {
+        self.expanded.get()
+    }
+
+    pub fn expand(&self) {
+        self.expanded.set(true);
+    }
+
+    pub fn collapse(&self) {
+        self.expanded.set(false);
+    }
+
+    pub fn toggle(&self) {
+        let e = self.expanded.get();
+        self.expanded.set(!e);
+    }
+}
+
+/// 宽轨容器布局：宽度 = lerp(96, 220, progress)，子项垂直堆叠居中。
+/// measure 期读展开进度（注册 layout_deps——动画帧只重测不重组）。
+#[derive(Debug)]
+struct WideNavigationRailLayoutPolicy {
+    progress: State<f32>,
+}
+
+impl MeasurePolicy for WideNavigationRailLayoutPolicy {
+    fn measure(
+        &self,
+        nodes: &mut Vec<LayoutNode>,
+        policies: &[Box<dyn MeasurePolicy>],
+        children: &[usize],
+        c: Constraints,
+    ) -> (Size, Vec<Placement>) {
+        let p = self.progress.get().max(0.0).min(1.0);
+        let width = (WIDE_RAIL_COLLAPSED_WIDTH
+            + (WIDE_RAIL_EXPANDED_MIN_WIDTH - WIDE_RAIL_COLLAPSED_WIDTH) * p)
+            .min(c.max_width);
+
+        // 子项垂直堆叠：每项宽 = rail 宽，高松约束；水平居中由 item min 宽保证
+        let mut y = WIDE_RAIL_TOP_PADDING;
+        let mut placements = Vec::with_capacity(children.len());
+        for &child in children {
+            let (size, _) = measure_node(
+                nodes,
+                policies,
+                child,
+                Constraints::new(0.0, width, 0.0, c.max_height),
+            );
+            placements.push(Placement {
+                size,
+                position: Point::new((width - size.width) / 2.0, y),
+            });
+            y += size.height + RAIL_VERTICAL_PADDING;
+        }
+        let height = (y + RAIL_VERTICAL_PADDING).min(c.max_height);
+        (Size::new(width, height), placements)
+    }
+
+    fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]) {
+        for (index, &child) in children.iter().enumerate() {
+            nodes[child].position = placements[index].position;
+            nodes[child].measured_size = placements[index].size;
+        }
+    }
+}
+
+// ── WideNavigationRail 组件 ──
+
+pub struct WideNavigationRail {
+    state: WideNavigationRailState,
+    content: Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>,
+    header: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
+    container_color: Option<Color>,
+    modifier: Modifier,
+}
+
+impl WideNavigationRail {
+    pub fn new(
+        state: WideNavigationRailState,
+        content: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            state,
+            content: Box::new(content),
+            header: None,
+            container_color: None,
+            modifier: Modifier::new(),
+        }
+    }
+
+    pub fn container_color(mut self, c: Color) -> Self {
+        self.container_color = Some(c);
+        self
+    }
+
+    pub fn header(mut self, h: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
+        self.header = Some(Box::new(h));
+        self
+    }
+
+    pub fn modifier(mut self, modifier: Modifier) -> Self {
+        self.modifier = self.modifier.then(modifier);
+        self
+    }
+
+    #[composable]
+    pub fn build(self, ctx: &mut ComposeCtx) {
+        ctx.changed(&self.container_color);
+        ctx.changed(&self.state.is_expanded());
+        let theme = WiniaTheme::colors();
+        let container = self.container_color.unwrap_or(theme.surface);
+        let progress = ctx.animate_float_as_state(
+            if self.state.is_expanded() { 1.0 } else { 0.0 },
+            rail_spring(SIZE_SPRING_STIFFNESS),
+        );
+        let policy = WideNavigationRailLayoutPolicy { progress };
+        let header = self.header;
+        let content = self.content;
+        let key = ctx.next_key();
+        let root_modifier = Modifier::new()
+            .fill_max_height()
+            .background(container, Shape::Rectangle);
+        match ctx.start_restartable_group(key, root_modifier, policy) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                WiniaTheme::with_content_color(theme.on_surface, ctx, |ctx| {
+                    if let Some(header) = header {
+                        header(ctx);
+                    }
+                    content(ctx);
+                });
+            }
+        }
+        ctx.end_restartable_group();
+    }
+}
+
+// ── WideNavigationRailItem ──
+
+pub struct WideNavigationRailItem {
+    selected: bool,
+    on_click: Option<Arc<dyn Fn() + Send + Sync>>,
+    icon: Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>,
+    label: Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>,
+    enabled: bool,
+    colors: Option<NavigationRailItemColors>,
+    interaction_source: Option<MutableInteractionSource>,
+    /// rail 的展开进度（0=收起 Top 布局，1=展开 Start 布局）——由容器传入
+    progress: Option<State<f32>>,
+    modifier: Modifier,
+}
+
+impl WideNavigationRailItem {
+    pub fn new(
+        selected: bool,
+        icon: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static,
+        label: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            selected,
+            on_click: None,
+            icon: Box::new(icon),
+            label: Box::new(label),
+            enabled: true,
+            colors: None,
+            interaction_source: None,
+            progress: None,
+            modifier: Modifier::new(),
+        }
+    }
+
+    pub fn on_click(mut self, callback: impl Fn() + Send + Sync + 'static) -> Self {
+        self.on_click = Some(Arc::new(callback));
+        self
+    }
+
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    pub fn colors(mut self, colors: NavigationRailItemColors) -> Self {
+        self.colors = Some(colors);
+        self
+    }
+
+    pub fn interaction_source(mut self, source: MutableInteractionSource) -> Self {
+        self.interaction_source = Some(source);
+        self
+    }
+
+    /// 绑定容器的展开进度（WideNavigationRail 自动传入）
+    pub fn progress(mut self, progress: State<f32>) -> Self {
+        self.progress = Some(progress);
+        self
+    }
+
+    pub fn modifier(mut self, modifier: Modifier) -> Self {
+        self.modifier = self.modifier.then(modifier);
+        self
+    }
+
+    #[composable]
+    pub fn build(self, ctx: &mut ComposeCtx) {
+        ctx.changed(&self.selected);
+        ctx.changed(&self.enabled);
+        ctx.changed(&self.colors);
+        let key = ctx.next_key();
+        let theme = WiniaTheme::colors();
+        let colors = self.colors.unwrap_or_else(|| rail_item_colors(&theme));
+        let selected = self.selected;
+        let enabled = self.enabled;
+        // 变形进度：优先绑定容器进度；未绑定时按 selected 自身动画（独立使用）
+        let position_progress = match &self.progress {
+            Some(p) => p.clone(),
+            None => ctx.animate_float_as_state(
+                if selected { 1.0 } else { 0.0 },
+                rail_spring(SIZE_SPRING_STIFFNESS),
+            ),
+        };
+        // 胶囊展开进度（选中态）——与变形进度相互独立
+        let size_progress =
+            ctx.animate_float_as_state(if selected { 1.0 } else { 0.0 }, rail_spring(SIZE_SPRING_STIFFNESS));
+
+        let icon_color = colors.icon_color(selected, enabled);
+        let label_color = colors.text_color(selected, enabled);
+        let ripple_color = icon_color;
+
+        let interaction = self.interaction_source.clone()
+            .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
+
+        let indicator_color = colors.indicator;
+        let indicator_alpha = size_progress.clone();
+        let indicator_modifier = Modifier::new().background(
+            move || with_alpha_factor(indicator_color, indicator_alpha.peek()),
+            Shape::Pill,
+        );
+        let ripple_modifier = if enabled {
+            Modifier::new().ripple_with_shape(&interaction, ripple_color, true, Shape::Pill)
+        } else {
+            Modifier::new()
+        };
+
+        let policy = WideNavigationRailItemLayoutPolicy {
+            position_progress: position_progress.clone(),
+            size_progress: size_progress.clone(),
+        };
+
+        let mut item_modifier = Modifier::new().min_width(NAVIGATION_RAIL_WIDTH);
+        if enabled {
+            if let Some(callback) = self.on_click.clone() {
+                item_modifier = item_modifier.clickable_with_source(&interaction, move || callback());
+            }
+        }
+        let item_modifier = item_modifier.then(self.modifier);
+
+        match ctx.start_restartable_group(key, item_modifier, policy) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                // 子节点顺序 = [indicator, icon, label, ripple]
+                let ind_key = ctx.next_key();
+                ctx.start_leaf(ind_key, indicator_modifier);
+                ctx.end_node();
+                let icon = self.icon;
+                wrap_slot(ctx, Modifier::new(), |ctx| {
+                    WiniaTheme::with_content_color(icon_color, ctx, icon);
+                });
+                // 宽轨 label 必选且恒显示
+                let label = self.label;
+                wrap_slot(ctx, Modifier::new(), |ctx| {
+                    let mut style = crate::ui::navigation_bar::NavigationBarDefaults::label_style();
+                    style.color = Some(label_color);
+                    crate::ui::text::ProvideTextStyle(style, ctx, label);
+                });
+                let ripple_key = ctx.next_key();
+                ctx.start_leaf(ripple_key, ripple_modifier);
+                ctx.end_node();
+            }
+        }
+        ctx.set_current_node_focus_color(theme.primary);
+        ctx.end_restartable_group();
+    }
+}
+
+/// 宽轨 item 布局：Top（收起）↔ Start（展开）两套几何按进度 lerp。
+///
+/// 端点数学：
+/// - Top(p=0)：同基础 rail item 有标签路径——胶囊 56×32 在图标后方，
+///   图标/标签垂直堆叠居中
+/// - Start(p=1)：横向 item——胶囊包裹 [icon + gap(4) + label] 整组，
+///   高 = max(iconH,labelH)+2×8 = 40；内容行整体居中
+///
+/// 子节点顺序 [indicator, icon, label, ripple]。
+#[derive(Debug)]
+struct WideNavigationRailItemLayoutPolicy {
+    position_progress: State<f32>,
+    size_progress: State<f32>,
+}
+
+impl MeasurePolicy for WideNavigationRailItemLayoutPolicy {
+    fn measure(
+        &self,
+        nodes: &mut Vec<LayoutNode>,
+        policies: &[Box<dyn MeasurePolicy>],
+        children: &[usize],
+        constraints: Constraints,
+    ) -> (Size, Vec<Placement>) {
+        // 进度最先读（layout_deps）
+        let p = self.position_progress.get().max(0.0).min(1.0);
+        let size_p = self.size_progress.get().max(0.0);
+
+        let loose = constraints.loosen();
+        let (icon_size, _) = measure_node(nodes, policies, children[1], loose);
+        let (label_size, _) = measure_node(nodes, policies, children[2], loose);
+
+        // ── 端点指标 ──
+        // Top：胶囊 56×32 在图标后
+        let top_total_w = icon_size.width + INDICATOR_H_PADDING * 2.0;
+        let top_ind_h = icon_size.height + INDICATOR_V_PADDING_WITH_LABEL * 2.0;
+        // Start：胶囊包裹 [icon+gap+label]，高 40
+        let start_content_w = icon_size.width + ITEM_ICON_LABEL_GAP + label_size.width;
+        let start_total_w = start_content_w + WIDE_INDICATOR_H_PADDING * 2.0;
+        let start_ind_h = icon_size.height.max(label_size.height) + 8.0 * 2.0;
+
+        let full_w = top_total_w + (start_total_w - top_total_w) * p;
+        let full_h = top_ind_h + (start_ind_h - top_ind_h) * p;
+        let animated_w = full_w * size_p;
+
+        let ripple_idx = children.len() - 1;
+        let (ripple_size, _) = measure_node(
+            nodes,
+            policies,
+            children[ripple_idx],
+            Constraints::new(full_w, full_w, full_h, full_h),
+        );
+        let (indicator_size, _) = measure_node(
+            nodes,
+            policies,
+            children[0],
+            Constraints::new(animated_w, animated_w, full_h, full_h),
+        );
+
+        let min_h = NAVIGATION_RAIL_ITEM_HEIGHT.max(constraints.min_height);
+        let container_w = if constraints.max_width.is_finite() {
+            constraints.max_width
+        } else {
+            icon_size.width.max(full_w)
+        };
+        let max_h = if constraints.max_height.is_finite() { constraints.max_height } else { f32::MAX };
+
+        // ── Top 端点放置 ──
+        let top_content_h = icon_size.height
+            + INDICATOR_V_PADDING_WITH_LABEL
+            + ITEM_ICON_LABEL_GAP
+            + label_size.height;
+        let top_v_pad = ((min_h - top_content_h) / 2.0).max(INDICATOR_V_PADDING_WITH_LABEL);
+        let top_height = top_content_h + top_v_pad * 2.0;
+        let cx = container_w / 2.0;
+        let top_icon = Point::new(cx - icon_size.width / 2.0, top_v_pad);
+        let top_label = Point::new(
+            cx - label_size.width / 2.0,
+            top_v_pad + icon_size.height + INDICATOR_V_PADDING_WITH_LABEL + ITEM_ICON_LABEL_GAP,
+        );
+        let top_pill = Point::new(cx - top_total_w / 2.0, top_v_pad - INDICATOR_V_PADDING_WITH_LABEL);
+
+        // ── Start 端点放置 ──
+        let start_height = min_h.max(start_ind_h);
+        let row_x = (container_w - start_content_w) / 2.0;
+        let start_icon = Point::new(row_x, (start_height - icon_size.height) / 2.0);
+        let start_label = Point::new(
+            row_x + icon_size.width + ITEM_ICON_LABEL_GAP,
+            (start_height - label_size.height) / 2.0,
+        );
+        let start_pill = Point::new(
+            (container_w - start_total_w) / 2.0,
+            (start_height - start_ind_h) / 2.0,
+        );
+
+        // ── lerp 合成 ──
+        let height = top_height + (start_height - top_height) * p;
+        let icon_pos = Point::new(
+            top_icon.x + (start_icon.x - top_icon.x) * p,
+            top_icon.y + (start_icon.y - top_icon.y) * p,
+        );
+        let label_pos = Point::new(
+            top_label.x + (start_label.x - top_label.x) * p,
+            top_label.y + (start_label.y - top_label.y) * p,
+        );
+        let pill_pos = Point::new(
+            top_pill.x + (start_pill.x - top_pill.x) * p,
+            top_pill.y + (start_pill.y - top_pill.y) * p,
+        );
+
+        let mut placements = Vec::with_capacity(children.len());
+        placements.push(Placement {
+            size: indicator_size,
+            position: pill_pos,
+        });
+        placements.push(Placement {
+            size: icon_size,
+            position: icon_pos,
+        });
+        placements.push(Placement {
+            size: label_size,
+            position: label_pos,
+        });
+        placements.push(Placement {
+            size: ripple_size,
+            position: pill_pos,
+        });
+
+        (Size::new(container_w, height.min(max_h)), placements)
+    }
+
+    fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]) {
+        for (index, &child) in children.iter().enumerate() {
+            nodes[child].position = placements[index].position;
+            nodes[child].measured_size = placements[index].size;
+        }
     }
 }
