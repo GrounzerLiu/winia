@@ -465,10 +465,13 @@ impl MeasurePolicy for NavigationRailItemLayoutPolicy {
             None
         };
 
-        // 容器宽：有界取约束宽；无界回退 max(iconW, 胶囊全宽)
-        // （androidx：constrain(max(iconW, labelW, indW))）
-        let container_w = if constraints.max_width.is_finite() {
-            constraints.max_width
+        // 容器宽：拥抱内容、至少 rail 宽 80（androidx widthIn(min=80)，
+        // item 不横向填满——M3 规范视觉胶囊居中于 rail）
+        let container_w = if constraints.max_width < f32::MAX {
+            let content_w = icon_size.width
+                .max(total_indicator_w)
+                .max(label_size.as_ref().map(|l| l.width).unwrap_or(0.0));
+            content_w.max(NAVIGATION_RAIL_WIDTH).min(constraints.max_width)
         } else {
             icon_size.width.max(total_indicator_w)
         };
@@ -640,7 +643,10 @@ mod tests {
         // ripple 恒定全尺寸且跟随动画位置
         assert_eq!(ripple.measured_size.width, NAVIGATION_RAIL_INDICATOR_WIDTH);
         assert_eq!(ripple.measured_size.height, NAVIGATION_RAIL_INDICATOR_HEIGHT);
-        assert_eq!(ripple.position.x, indicator.position.x);
+        assert_eq!(
+            ripple.position.x + ripple.measured_size.width / 2.0,
+            indicator.position.x + indicator.measured_size.width / 2.0,
+            "ripple 与胶囊中心对齐");
         assert_eq!(ripple.position.y, indicator.position.y);
     }
 
@@ -658,6 +664,17 @@ mod tests {
         assert_eq!(nodes[root].measured_size.height, NAVIGATION_RAIL_ITEM_HEIGHT);
         assert_eq!(indicator.measured_size.width, NAVIGATION_RAIL_INDICATOR_WIDTH);
         assert_eq!(indicator.measured_size.height, NAVIGATION_RAIL_ITEM_HEIGHT);
+    }
+
+    #[test]
+    fn bounded_item_hugs_content_instead_of_filling_width() {
+        // androidx：Box(widthIn(min=80)) 内容居中——item 不横向填满约束
+        let mut composer = Composer::new();
+        composer.compose(|ctx| make_item(true, true).build(ctx));
+        composer.layout(Constraints::new(0.0, 220.0, 0.0, NAVIGATION_RAIL_ITEM_HEIGHT));
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        assert_eq!(nodes[root].measured_size.width, NAVIGATION_RAIL_WIDTH);
     }
 
     #[test]
@@ -1268,8 +1285,12 @@ impl MeasurePolicy for WideNavigationRailItemLayoutPolicy {
         );
 
         let min_h = NAVIGATION_RAIL_ITEM_HEIGHT.max(constraints.min_height);
-        let container_w = if constraints.max_width.is_finite() {
-            constraints.max_width
+        // 拥抱内容、至少收起轨宽 96（CollapsedTokens.ContainerWidth）
+        let container_w = if constraints.max_width < f32::MAX {
+            let content_w = icon_size.width
+                .max(full_w)
+                .max(label_size.width);
+            content_w.max(WIDE_RAIL_COLLAPSED_WIDTH).min(constraints.max_width)
         } else {
             icon_size.width.max(full_w)
         };
