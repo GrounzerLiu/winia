@@ -40,6 +40,7 @@ pub mod list_item;
 pub mod top_app_bar;
 pub mod scaffold;
 pub mod navigation_bar;
+pub mod navigation_rail;
 
 pub use animated_visibility::{AnimatedVisibility, VisibilityTransition, SlideDirection};
 pub use animated_size::AnimatedSize;
@@ -123,5 +124,10 @@ pub use navigation_bar::{
     NavigationBarItemLayout, NavigationBarDefaults, NAVIGATION_BAR_HEIGHT,
     NAVIGATION_BAR_ITEM_SPACING, NAVIGATION_BAR_H_INDICATOR_HEIGHT,
     NAVIGATION_BAR_INDICATOR_WIDTH, NAVIGATION_BAR_INDICATOR_HEIGHT, NAVIGATION_BAR_ICON_SIZE,
+};
+pub use navigation_rail::{
+    NavigationRail, NavigationRailItem, NavigationRailItemColors, WindowInsets,
+    NAVIGATION_RAIL_INDICATOR_HEIGHT, NAVIGATION_RAIL_INDICATOR_WIDTH, NAVIGATION_RAIL_ITEM_HEIGHT,
+    NAVIGATION_RAIL_ICON_SIZE, NAVIGATION_RAIL_WIDTH,
 };
 pub use tooltip::Tooltip;
