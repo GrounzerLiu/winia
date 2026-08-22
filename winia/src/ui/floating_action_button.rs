@@ -8,6 +8,7 @@ use crate::composable;
 use crate::core::composer::{ComposeCtx, GroupStatus};
 use crate::core::state::State;
 use crate::layout::constraints::Constraints;
+use crate::layout::LayoutDirection;
 use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement, Point, Size};
 use crate::layout::BoxLayout;
 use crate::modifier::{Color, Modifier, Shape};
@@ -646,6 +647,54 @@ mod tests {
             (EXTENDED_FAB_HEIGHT - text_slot.measured_size.height) / 2.0,
         );
     }
+
+    #[test]
+    fn extended_fab_rtl_mirrors_icon_and_text_positions() {
+        // RTL 展开态：图标贴右缘（width-16-iconW），文本在图标左侧（gap 12）
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            ExtendedFloatingActionButton::new(
+                |ctx| Text::new("Create").build(ctx),
+                |ctx| icon_leaf(ctx, 24.0),
+                State::new(true),
+            )
+            .modifier(Modifier::new().layout_direction(LayoutDirection::Rtl))
+            .on_click(|| {})
+            .build(ctx);
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let width = nodes[root].measured_size.width;
+        let icon = child(&nodes, root, 0);
+        let text_slot = child(&nodes, root, 1);
+        // 图标右缘距容器右缘 16（LTR 时是左缘距左缘 16）
+        assert_eq!(
+            icon.position.x + icon.measured_size.width,
+            width - EXT_START_ICON_PADDING,
+            "RTL 下图标应镜像到右侧"
+        );
+        // 文本右缘 = 图标左缘 - 12dp 间距
+        assert_eq!(
+            text_slot.position.x + text_slot.measured_size.width,
+            icon.position.x - EXT_END_ICON_PADDING,
+        );
+        // LTR 对照：同结构方向相反
+        let mut ltr = Composer::new();
+        ltr.compose(|ctx| {
+            ExtendedFloatingActionButton::new(
+                |ctx| Text::new("Create").build(ctx),
+                |ctx| icon_leaf(ctx, 24.0),
+                State::new(true),
+            )
+            .on_click(|| {})
+            .build(ctx);
+        });
+        ltr.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let nodes2 = ltr.arena_nodes();
+        let icon_ltr = child(&nodes2, ltr.layout_root_idx().unwrap(), 0);
+        assert_eq!(icon_ltr.position.x, EXT_START_ICON_PADDING, "LTR 图标在左侧");
+    }
 }
 
 // ── ExtendedFloatingActionButton（M3 扩展 FAB）──
@@ -777,7 +826,9 @@ impl ExtendedFloatingActionButton {
         // 高程动画（同 FAB）
         let elevation_value = self.elevation.map(|e| e.for_state(&state));
 
-        let policy = ExtendedFabLayoutPolicy { progress: progress.clone() };
+        let direction = self.modifier.get_layout_direction().unwrap_or(WiniaTheme::direction());
+        ctx.changed(&direction);
+        let policy = ExtendedFabLayoutPolicy { progress: progress.clone(), direction };
 
         let mut modifier = Modifier::new().background(container, shape);
         if let Some(elev) = elevation_value {
@@ -817,7 +868,6 @@ impl ExtendedFloatingActionButton {
                     WiniaTheme::with_content_color(content_color, ctx, |ctx| {
                         crate::ui::text::ProvideTextStyle(WiniaTheme::typography().label_large.clone(), ctx, |ctx| {
                             // 图标-文本间距 12dp（ExtendedFabEndIconPadding）
-                            crate::ui::Spacer::horizontal(EXT_END_ICON_PADDING).build(ctx);
                             text(ctx);
                         });
                     });
@@ -857,6 +907,7 @@ fn wrap_fab_slot_with(
 #[derive(Debug)]
 struct ExtendedFabLayoutPolicy {
     progress: State<f32>,
+    direction: LayoutDirection,
 }
 
 impl MeasurePolicy for ExtendedFabLayoutPolicy {
@@ -885,13 +936,21 @@ impl MeasurePolicy for ExtendedFabLayoutPolicy {
         let width = collapsed_w + (expanded_w - collapsed_w) * p;
         let height = EXTENDED_FAB_HEIGHT.max(icon_size.height).max(text_size.height);
 
-        // 图标 x：居中 → start padding 16
+        // icon x: centered -> start padding 16; RTL mirrors to right edge
         let icon_x_collapsed = (width - icon_size.width) / 2.0;
-        let icon_x_expanded = EXT_START_ICON_PADDING;
+        let (icon_x_expanded, text_x_expanded) = if self.direction == LayoutDirection::Rtl {
+            let ix = width - EXT_START_ICON_PADDING - icon_size.width;
+            let tx = ix - EXT_END_ICON_PADDING - text_size.width;
+            (ix, tx)
+        } else {
+            (
+                EXT_START_ICON_PADDING,
+                EXT_START_ICON_PADDING + icon_size.width + EXT_END_ICON_PADDING,
+            )
+        };
         let icon_x = icon_x_collapsed + (icon_x_expanded - icon_x_collapsed) * p;
-        // 文本 x：收起时居中隐藏，展开时紧跟图标
+        // text x: hidden centered when collapsed, hugs icon side when expanded
         let text_x_collapsed = (width - text_size.width) / 2.0;
-        let text_x_expanded = EXT_START_ICON_PADDING + icon_size.width + EXT_END_ICON_PADDING;
         let text_x = text_x_collapsed + (text_x_expanded - text_x_collapsed) * p;
 
         let mut placements = Vec::with_capacity(children.len());
