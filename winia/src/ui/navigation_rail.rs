@@ -981,6 +981,11 @@ impl WideNavigationRailState {
         self.expanded.get()
     }
 
+    /// 内部展开状态（供 Extended FAB 等组件直接绑定）
+    pub fn expanded_state(&self) -> State<bool> {
+        self.expanded.clone()
+    }
+
     pub fn expand(&self) {
         self.expanded.set(true);
     }

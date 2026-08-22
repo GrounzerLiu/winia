@@ -83,21 +83,16 @@ fn navigation_rail_demo(ctx: &mut ComposeCtx) {
                     .build(ctx);
                 }
             })
+            // M3 模式：header 恒用 Extended FAB，expanded 绑定轨状态——
+            // 收起时 56×56 仅图标（视觉同 FAB），展开时滑出 "Create" 文本（带动画）
             .header({ let ws = wide_state.clone(); move |ctx| {
-                if ws.is_expanded() {
-                    // M3 模式：展开态 header 用 Extended FAB（图标+文本）
-                    ExtendedFloatingActionButton::new(
-                        |ctx| Text::new("Create").build(ctx),
-                        |ctx| Icon::svg_path(PLUS_PATH).size(24.0).build(ctx),
-                        ctx.remember(|| true),
-                    )
-                    .on_click(|| {})
-                    .build(ctx);
-                } else {
-                    FloatingActionButton::new().build(ctx, |ctx| {
-                        Icon::svg_path(PLUS_PATH).build(ctx);
-                    });
-                }
+                ExtendedFloatingActionButton::new(
+                    |ctx| Text::new("Create").build(ctx),
+                    |ctx| Icon::svg_path(PLUS_PATH).size(24.0).build(ctx),
+                    ws.expanded_state(),
+                )
+                .on_click(|| {})
+                .build(ctx);
             } })
             .build(ctx);
             // ── Modal 宽轨（点击 scrim 或菜单按钮关闭）──
