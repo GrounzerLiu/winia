@@ -108,6 +108,7 @@ pub use wavy_progress_indicator::{
     WAVY_ANIMATION_DURATION_MS,
 };
 pub use floating_action_button::{
+    ExtendedFloatingActionButton, EXTENDED_FAB_COLLAPSED_WIDTH, EXTENDED_FAB_HEIGHT, EXTENDED_FAB_MIN_EXPANDED_WIDTH,
     FloatingActionButton, FloatingActionButtonColors, FloatingActionButtonDefaults,
     FloatingActionButtonElevation, FloatingActionButtonSize,
     FAB_SMALL_SIZE, FAB_REGULAR_SIZE, FAB_MEDIUM_SIZE, FAB_LARGE_SIZE,

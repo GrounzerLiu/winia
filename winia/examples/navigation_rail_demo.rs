@@ -83,11 +83,22 @@ fn navigation_rail_demo(ctx: &mut ComposeCtx) {
                     .build(ctx);
                 }
             })
-            .header(|ctx| {
-                FloatingActionButton::new().build(ctx, |ctx| {
-                    Icon::svg_path(PLUS_PATH).build(ctx);
-                });
-            })
+            .header({ let ws = wide_state.clone(); move |ctx| {
+                if ws.is_expanded() {
+                    // M3 模式：展开态 header 用 Extended FAB（图标+文本）
+                    ExtendedFloatingActionButton::new(
+                        |ctx| Text::new("Create").build(ctx),
+                        |ctx| Icon::svg_path(PLUS_PATH).size(24.0).build(ctx),
+                        ctx.remember(|| true),
+                    )
+                    .on_click(|| {})
+                    .build(ctx);
+                } else {
+                    FloatingActionButton::new().build(ctx, |ctx| {
+                        Icon::svg_path(PLUS_PATH).build(ctx);
+                    });
+                }
+            } })
             .build(ctx);
             // ── Modal 宽轨（点击 scrim 或菜单按钮关闭）──
             let ms = modal_state.clone();

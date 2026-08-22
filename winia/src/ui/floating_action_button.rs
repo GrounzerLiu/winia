@@ -6,6 +6,9 @@
 
 use crate::composable;
 use crate::core::composer::{ComposeCtx, GroupStatus};
+use crate::core::state::State;
+use crate::layout::constraints::Constraints;
+use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement, Point, Size};
 use crate::layout::BoxLayout;
 use crate::modifier::{Color, Modifier, Shape};
 use crate::ui::interaction::{ComponentState, MutableInteractionSource};
@@ -53,6 +56,8 @@ pub const FAB_LARGE_SIZE: f32 = 96.0;
 pub const FAB_ICON_SIZE: f32 = 24.0;
 pub const FAB_MEDIUM_ICON_SIZE: f32 = 28.0;
 pub const FAB_LARGE_ICON_SIZE: f32 = 32.0;
+/// sizeProgress 规格（FastSpatial 近似）——Extended FAB 展开/收起用
+const SIZE_SPRING_STIFFNESS: f32 = 400.0;
 
 /// Container/content colors for a FAB, including disabled colors.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -424,6 +429,11 @@ impl Default for FloatingActionButton {
 mod tests {
     use super::*;
     use crate::core::composer::Composer;
+    use crate::ui::Text;
+
+    fn child<'a>(nodes: &'a [LayoutNode], parent: usize, index: usize) -> &'a LayoutNode {
+        &nodes[nodes[parent].children[index]]
+    }
 
     #[test]
     fn size_tokens_match_m3_fab_variants() {
@@ -554,4 +564,354 @@ mod tests {
             Some(FloatingActionButtonElevation::bottom_app_bar())
         );
     }
+    // ── ExtendedFloatingActionButton ──
+
+    fn icon_leaf(ctx: &mut ComposeCtx, size: f32) {
+        let key = ctx.next_key();
+        ctx.start_leaf(key, Modifier::new().size(size, size));
+        ctx.end_node();
+    }
+
+    #[test]
+    fn extended_fab_tokens_match_androidx_main() {
+        assert_eq!(EXTENDED_FAB_HEIGHT, 56.0, "ExtendedFabPrimaryTokens.ContainerHeight");
+        assert_eq!(EXTENDED_FAB_COLLAPSED_WIDTH, 56.0, "FabBaselineTokens.ContainerWidth");
+        assert_eq!(EXTENDED_FAB_MIN_EXPANDED_WIDTH, 80.0, "ExtendedFabMinimumWidth");
+    }
+
+    #[test]
+    fn extended_fab_collapsed_is_56_square_icon_centered() {
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            ExtendedFloatingActionButton::new(
+                |ctx| Text::new("Create").build(ctx),
+                |ctx| icon_leaf(ctx, 24.0),
+                State::new(false),
+            )
+            .on_click(|| {})
+            .build(ctx);
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        // 收起态：56×56（同普通 FAB），图标居中
+        assert_eq!(nodes[root].measured_size.width, EXTENDED_FAB_COLLAPSED_WIDTH);
+        assert_eq!(nodes[root].measured_size.height, EXTENDED_FAB_HEIGHT);
+        let icon = child(&nodes, root, 0);
+        assert_eq!(
+            icon.position,
+            Point::new(
+                (EXTENDED_FAB_COLLAPSED_WIDTH - 24.0) / 2.0,
+                (EXTENDED_FAB_HEIGHT - 24.0) / 2.0,
+            ),
+            "收起态图标居中"
+        );
+    }
+
+    #[test]
+    fn extended_fab_expanded_shows_icon_then_text_with_spec_paddings() {
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            ExtendedFloatingActionButton::new(
+                |ctx| Text::new("Create").build(ctx),
+                |ctx| icon_leaf(ctx, 24.0),
+                State::new(true),
+            )
+            .on_click(|| {})
+            .build(ctx);
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let icon = child(&nodes, root, 0);
+        let text_slot = child(&nodes, root, 1);
+        // 展开态：宽 = 16 + 24 + 12 + textW + 20（≥80）；高 56
+        let expected_w = EXT_START_ICON_PADDING
+            + 24.0
+            + EXT_END_ICON_PADDING
+            + text_slot.measured_size.width
+            + EXT_TEXT_PADDING;
+        assert_eq!(nodes[root].measured_size.height, EXTENDED_FAB_HEIGHT);
+        assert_eq!(nodes[root].measured_size.width, expected_w);
+        // 图标 x=16（start padding）垂直居中
+        assert_eq!(icon.position.x, EXT_START_ICON_PADDING);
+        assert_eq!(icon.position.y, (EXTENDED_FAB_HEIGHT - 24.0) / 2.0);
+        // 文本槽紧跟 icon+12dp 间距，垂直居中
+        assert_eq!(
+            text_slot.position.x,
+            EXT_START_ICON_PADDING + 24.0 + EXT_END_ICON_PADDING,
+        );
+        assert_eq!(
+            text_slot.position.y,
+            (EXTENDED_FAB_HEIGHT - text_slot.measured_size.height) / 2.0,
+        );
+    }
+}
+
+// ── ExtendedFloatingActionButton（M3 扩展 FAB）──
+//
+// 对齐 androidx-main ExtendedFloatingActionButton：
+// - 高 56dp；收起态 56×56（同 FAB，仅图标居中）；展开态 min 宽 80dp，
+///  内容 [icon 前 16dp | icon | 图标-文本 12dp | text | 后 20dp]
+// - 形状 CornerLarge（16dp 圆角）；容器 PrimaryContainer、内容 OnPrimaryContainer
+// - 展开/收起：宽度与内容位置按进度插值（FastSpatial 近似 stiffness400），
+///  文本透明度随进度淡入淡出（FastEffects）
+// - 高程默认 Level3 / hover Level4（同 FAB）——复用 FloatingActionButtonElevation
+
+/// 高度 = ExtendedFabPrimaryTokens.ContainerHeight
+pub const EXTENDED_FAB_HEIGHT: f32 = 56.0;
+/// 收起态宽 = FabBaselineTokens.ContainerWidth（同普通 FAB）
+pub const EXTENDED_FAB_COLLAPSED_WIDTH: f32 = 56.0;
+/// 展开态最小宽
+pub const EXTENDED_FAB_MIN_EXPANDED_WIDTH: f32 = 80.0;
+const EXT_START_ICON_PADDING: f32 = 16.0;
+const EXT_END_ICON_PADDING: f32 = 12.0;
+const EXT_TEXT_PADDING: f32 = 20.0;
+
+pub struct ExtendedFloatingActionButton {
+    text: Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>,
+    icon: Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>,
+    expanded: State<bool>,
+    on_click: Option<Arc<dyn Fn() + Send + Sync>>,
+    enabled: bool,
+    colors: Option<FloatingActionButtonColors>,
+    interaction_source: Option<MutableInteractionSource>,
+    elevation: Option<FloatingActionButtonElevation>,
+    shape: Option<Shape>,
+    modifier: Modifier,
+}
+
+impl ExtendedFloatingActionButton {
+    /// text/icon 为内容槽；expanded 绑定开合状态（State 驱动动画）
+    pub fn new(
+        text: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static,
+        icon: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static,
+        expanded: State<bool>,
+    ) -> Self {
+        Self {
+            text: Box::new(text),
+            icon: Box::new(icon),
+            expanded,
+            on_click: None,
+            enabled: true,
+            colors: None,
+            interaction_source: None,
+            elevation: Some(FloatingActionButtonDefaults::elevation()),
+            shape: None,
+            modifier: Modifier::new(),
+        }
+    }
+
+    pub fn on_click(mut self, f: impl Fn() + Send + Sync + 'static) -> Self {
+        self.on_click = Some(Arc::new(f));
+        self
+    }
+
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    pub fn colors(mut self, colors: FloatingActionButtonColors) -> Self {
+        self.colors = Some(colors);
+        self
+    }
+
+    pub fn interaction_source(mut self, source: MutableInteractionSource) -> Self {
+        self.interaction_source = Some(source);
+        self
+    }
+
+    pub fn elevation(mut self, elevation: FloatingActionButtonElevation) -> Self {
+        self.elevation = Some(elevation);
+        self
+    }
+
+    /// 默认 CornerLarge（16dp 圆角）
+    pub fn shape(mut self, shape: Shape) -> Self {
+        self.shape = Some(shape);
+        self
+    }
+
+    pub fn modifier(mut self, modifier: Modifier) -> Self {
+        self.modifier = self.modifier.then(modifier);
+        self
+    }
+
+    #[composable]
+    pub fn build(self, ctx: &mut ComposeCtx) {
+        ctx.changed(&self.enabled);
+        ctx.changed(&self.colors);
+        ctx.changed(&self.shape);
+        ctx.changed(&self.expanded.get());
+        let key = ctx.next_key();
+        let theme = WiniaTheme::colors();
+        let colors = self.colors.unwrap_or_else(|| {
+            FloatingActionButtonColors::from_pair(
+                &theme,
+                theme.primary_container,
+                theme.on_primary_container,
+            )
+        });
+        let interaction = self
+            .interaction_source
+            .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
+        let state = interaction.state(self.enabled);
+        let container = colors.container_color(self.enabled);
+        let content_color = colors.content_color(self.enabled);
+        let ripple_color = colors.ripple_color(self.enabled);
+        // ExtendedFabPrimaryTokens.ContainerShape = CornerLarge（16dp 圆角）
+        let shape = self.shape.unwrap_or_else(|| Shape::rounded(16.0));
+
+        // 展开/收起进度（FastSpatial 近似 stiffness400）
+        let progress = ctx.animate_float_as_state(
+            if self.expanded.get() { 1.0 } else { 0.0 },
+            crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec {
+                damping_ratio: 1.0,
+                stiffness: SIZE_SPRING_STIFFNESS,
+                mass: 1.0,
+                threshold: 0.01,
+            }),
+        );
+
+        // 高程动画（同 FAB）
+        let elevation_value = self.elevation.map(|e| e.for_state(&state));
+
+        let policy = ExtendedFabLayoutPolicy { progress: progress.clone() };
+
+        let mut modifier = Modifier::new().background(container, shape);
+        if let Some(elev) = elevation_value {
+            modifier = modifier.graphics_layer(move || crate::modifier::GraphicsLayerParams {
+                shadow_elevation: elev,
+                shadow_shape: Some(shape),
+                ..Default::default()
+            });
+        }
+        modifier = modifier.then(self.modifier);
+
+        if self.enabled {
+            if let Some(on_click) = &self.on_click {
+                let callback = on_click.clone();
+                modifier = modifier
+                    .clickable_with_source(&interaction, move || callback())
+                    .ripple_with_shape(&interaction, ripple_color, true, shape);
+            }
+        }
+
+        match ctx.start_restartable_group(key, modifier, policy) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                // 子节点顺序 [icon, text]——放置由 ExtendedFabLayoutPolicy 负责
+                let icon = self.icon;
+                wrap_fab_slot(ctx, icon);
+                // 文本槽：透明度随进度淡入淡出（FastEffects 近似 stiffness200 淡入）
+                let alpha_progress = progress.clone();
+                let text_alpha = Modifier::new().graphics_layer(move || {
+                    crate::modifier::GraphicsLayerParams {
+                        alpha: alpha_progress.peek(),
+                        ..Default::default()
+                    }
+                });
+                let text = self.text;
+                wrap_fab_slot_with(ctx, text_alpha, |ctx| {
+                    WiniaTheme::with_content_color(content_color, ctx, |ctx| {
+                        crate::ui::text::ProvideTextStyle(WiniaTheme::typography().label_large.clone(), ctx, |ctx| {
+                            // 图标-文本间距 12dp（ExtendedFabEndIconPadding）
+                            crate::ui::Spacer::horizontal(EXT_END_ICON_PADDING).build(ctx);
+                            text(ctx);
+                        });
+                    });
+                });
+            }
+        }
+        ctx.set_current_node_focus_color(theme.primary);
+        ctx.end_restartable_group();
+    }
+}
+
+fn wrap_fab_slot(ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
+    let key = ctx.next_key();
+    match ctx.start_restartable_group(key, Modifier::new(), BoxLayout::new()) {
+        GroupStatus::Skip => {}
+        GroupStatus::Enter => content(ctx),
+    }
+    ctx.end_restartable_group();
+}
+
+fn wrap_fab_slot_with(
+    ctx: &mut ComposeCtx,
+    modifier: Modifier,
+    content: impl FnOnce(&mut ComposeCtx),
+) {
+    let key = ctx.next_key();
+    match ctx.start_restartable_group(key, modifier, BoxLayout::new()) {
+        GroupStatus::Skip => {}
+        GroupStatus::Enter => content(ctx),
+    }
+    ctx.end_restartable_group();
+}
+
+/// Extended FAB 布局：宽度在收起（56×56 仅图标居中）与展开
+/// （[16 | icon | 12 | text | 20]，min 宽 80）之间按进度插值；
+/// 文本透明度同步淡入淡出。measure 期读进度注册 layout_deps。
+#[derive(Debug)]
+struct ExtendedFabLayoutPolicy {
+    progress: State<f32>,
+}
+
+impl MeasurePolicy for ExtendedFabLayoutPolicy {
+    fn measure(
+        &self,
+        nodes: &mut Vec<LayoutNode>,
+        policies: &[Box<dyn MeasurePolicy>],
+        children: &[usize],
+        constraints: Constraints,
+    ) -> (Size, Vec<Placement>) {
+        let p = self.progress.get().max(0.0).min(1.0);
+        let loose = constraints.loosen();
+
+        let (icon_size, _) = measure_node(nodes, policies, children[0], loose);
+        let (text_size, _) = measure_node(nodes, policies, children[1], loose);
+
+        // 收起：56×56 仅图标居中（FabBaselineTokens.ContainerWidth）；
+        // 展开：16 + icon + 12 + text + 20，且不小于 min 宽 80
+        let collapsed_w = EXTENDED_FAB_COLLAPSED_WIDTH;
+        let expanded_w = (EXT_START_ICON_PADDING
+            + icon_size.width
+            + EXT_END_ICON_PADDING
+            + text_size.width
+            + EXT_TEXT_PADDING)
+            .max(EXTENDED_FAB_MIN_EXPANDED_WIDTH);
+        let width = collapsed_w + (expanded_w - collapsed_w) * p;
+        let height = EXTENDED_FAB_HEIGHT.max(icon_size.height).max(text_size.height);
+
+        // 图标 x：居中 → start padding 16
+        let icon_x_collapsed = (width - icon_size.width) / 2.0;
+        let icon_x_expanded = EXT_START_ICON_PADDING;
+        let icon_x = icon_x_collapsed + (icon_x_expanded - icon_x_collapsed) * p;
+        // 文本 x：收起时居中隐藏，展开时紧跟图标
+        let text_x_collapsed = (width - text_size.width) / 2.0;
+        let text_x_expanded = EXT_START_ICON_PADDING + icon_size.width + EXT_END_ICON_PADDING;
+        let text_x = text_x_collapsed + (text_x_expanded - text_x_collapsed) * p;
+
+        let mut placements = Vec::with_capacity(children.len());
+        placements.push(Placement {
+            size: icon_size,
+            position: Point::new(icon_x, (height - icon_size.height) / 2.0),
+        });
+        placements.push(Placement {
+            size: text_size,
+            position: Point::new(text_x, (height - text_size.height) / 2.0),
+        });
+
+        (Size::new(width, height), placements)
+    }
+
+    fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]) {
+        for (index, &child) in children.iter().enumerate() {
+            nodes[child].position = placements[index].position;
+            nodes[child].measured_size = placements[index].size;
+        }
+    }
+
 }

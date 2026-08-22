@@ -1,6 +1,6 @@
 # Floating Action Button
 
-Winia 的 `FloatingActionButton` 对齐 Material 3 的图标型 FAB 家族，使用 Builder + 内容闭包 API。
+Winia 的 `FloatingActionButton` / `ExtendedFloatingActionButton` 对齐 Material 3 的 FAB 家族（图标型 + 扩展型），使用 Builder + 内容闭包 API。
 
 ## 使用
 
@@ -59,7 +59,6 @@ FloatingActionButton::new()
 
 ## 当前差异
 
-- 本次只实现图标型 FAB；`ExtendedFloatingActionButton`（图标 + 文本、展开/收起动画）留待后续组件切片。
 - 项目尚无 semantics 树，因此 `contentDescription`/无障碍语义仍由上层能力补齐。
 - FAB 的默认视觉形状、Ripple 和焦点环是 M3 四角圆角矩形；当前框架的 hit-test 仍使用布局矩形边界。
 - 默认 shape 近似 M3 token：Small=CornerMedium（12dp）、Regular=CornerLarge（16dp）、Medium=LargeIncreased（20dp）、Large=CornerExtraLarge（28dp）。
@@ -72,3 +71,44 @@ cargo run -p winia --example floating_action_button_demo
 cargo test -p winia floating_action_button
 cargo test -p winia --test render_snapshot
 ```
+
+## ExtendedFloatingActionButton（M3 扩展 FAB，已实现）
+
+```rust
+// expanded 绑定 State<bool>——收起 56×56（仅图标居中，同 FAB）；展开显示 [icon|文本]
+let expanded = ctx.remember(|| true);
+ExtendedFloatingActionButton::new(
+    |ctx| Text::new("Create").build(ctx),      // 文本槽（LabelLarge）
+    |ctx| Icon::svg_path(PLUS).size(24.0).build(ctx),
+    expanded.clone(),
+)
+.on_click(|| {})
+.colors(...)            // 默认 PrimaryContainer / OnPrimaryContainer
+.elevation(FloatingActionButtonDefaults::elevation())  // L3 / hover L4
+.build(ctx);
+```
+
+### Token（androidx-main ExtendedFabPrimaryTokens / FabBaselineTokens）
+
+| 项 | 值 | winia 常量 |
+|---|---|---|
+| 高度 | 56 | `EXTENDED_FAB_HEIGHT` |
+| 收起宽 | 56（= FabBaseline.ContainerWidth） | `EXTENDED_FAB_COLLAPSED_WIDTH` |
+| 展开最小宽 | 80 | `EXTENDED_FAB_MIN_EXPANDED_WIDTH` |
+| 形状 | CornerLarge（16dp 圆角） | `Shape::rounded(16.0)` |
+| 展开态 padding | start 16 / 图标-文本 12 / end 20 | 私有常量 |
+| 容器/内容色 | PrimaryContainer / OnPrimaryContainer | theme 直取 |
+| 文本样式 | LabelLarge | theme.typography().label_large |
+
+### 动画语义（对齐 androidx）
+
+- 进度 p = animate_float_as_state(expanded, FastSpatial≈stiffness400)
+- 宽度 = lerp(56, max(80, 16+icon+12+text+20), p)
+- 图标 x：从居中滑至 start padding 16；文本透明度 = p（FastEffects 淡入淡出）、
+  位置从居中滑至图标右侧
+- measure 期读进度注册 layout_deps——动画帧只重测不重组
+
+### 典型用法：宽轨 header
+
+M3 模式——WideNavigationRail 展开时 header 用 Extended FAB，收起时用普通 FAB
+（见 examples/navigation_rail_demo.rs）。
