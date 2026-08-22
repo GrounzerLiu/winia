@@ -19,6 +19,7 @@ const DESTINATIONS: [(&str, &str); 4] = [
 fn navigation_rail_demo(ctx: &mut ComposeCtx) {
     let selected = ctx.remember(|| 0usize);
     let wide_state = WideNavigationRailState::new(ctx);
+    let modal_state = ModalWideNavigationRailState::new(ctx);
     let wide_sel = ctx.remember(|| 0usize);
 
     Row::new()
@@ -48,6 +49,9 @@ fn navigation_rail_demo(ctx: &mut ComposeCtx) {
                 .modifier(Modifier::new().fill_max_height().padding(24.0))
                 .build(ctx, |ctx| {
                     Text::new(format!("目的地：{}", DESTINATIONS[selected.get()].0)).build(ctx);
+                    Button::text()
+                        .on_click({ let m = modal_state.clone(); move || m.open() })
+                        .build(ctx, |ctx| Text::new("Open modal rail").build(ctx));
                 });
 
             // ── Expressive 宽轨（点击按钮收起/展开）──
@@ -84,6 +88,22 @@ fn navigation_rail_demo(ctx: &mut ComposeCtx) {
                     Icon::svg_path(PLUS_PATH).build(ctx);
                 });
             })
+            .build(ctx);
+            // ── Modal 宽轨（点击 scrim 或菜单按钮关闭）──
+            let ms = modal_state.clone();
+            let sel_modal = wide_sel.clone();
+            ModalWideNavigationRail::new(modal_state.clone(), move |ctx| {
+                for index in 0..DESTINATIONS.len() {
+                    let (name, path) = DESTINATIONS[index];
+                    NavigationRailItem::new(sel_modal.get() == index, move |ctx| {
+                        Icon::svg_path(path).size(NAVIGATION_RAIL_ICON_SIZE).build(ctx);
+                    })
+                    .label(move |ctx| Text::new(name).build(ctx))
+                    .on_click({ let s = sel_modal.clone(); let c = ms.clone(); move || { s.set(index); c.close(); } })
+                    .build(ctx);
+                }
+            })
+            .modifier(Modifier::new())
             .build(ctx);
         });
 }

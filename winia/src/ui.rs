@@ -127,7 +127,7 @@ pub use navigation_bar::{
 };
 pub use navigation_rail::{
     NavigationRail, NavigationRailItem, NavigationRailItemColors, WideNavigationRail,
-    WideNavigationRailItem, WideNavigationRailState, WindowInsets,
+    WideNavigationRailItem, WideNavigationRailState, ModalWideNavigationRail, ModalWideNavigationRailState, WindowInsets,
     NAVIGATION_RAIL_INDICATOR_HEIGHT, NAVIGATION_RAIL_INDICATOR_WIDTH, NAVIGATION_RAIL_ITEM_HEIGHT,
     NAVIGATION_RAIL_ICON_SIZE, NAVIGATION_RAIL_WIDTH, WIDE_RAIL_COLLAPSED_WIDTH,
     WIDE_RAIL_EXPANDED_MIN_WIDTH,

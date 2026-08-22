@@ -40,7 +40,9 @@ use crate::core::state::State;
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement, Point, Size};
 use crate::layout::{Alignment, BoxLayout};
-use crate::ui::layout_components::Column;
+use crate::ui::icon_button::IconButton;
+use crate::ui::icon::Icon;
+use crate::ui::layout_components::{Column, Row};
 use crate::modifier::{Color, GraphicsLayerParams, Modifier, Shape};
 use crate::ui::interaction::MutableInteractionSource;
 use crate::ui::theme::WiniaTheme;
@@ -79,6 +81,8 @@ const HEADER_SPACER: f32 = 8.0;
 const DISABLED_ALPHA: f32 = 0.38;
 /// 宽轨 Start 态指示器横向内边距（leading/trailing 各 16，与导航栏水平 item 一致）
 const WIDE_INDICATOR_H_PADDING: f32 = 16.0;
+/// 模态面板圆角半径（androidx CornerLarge 简化为全角）
+const WIDE_PANEL_CORNER_RADIUS: f32 = 16.0;
 
 /// 窗口避让尺寸（对标 androidx WindowInsets 的桌面简化版）。
 ///
@@ -846,6 +850,47 @@ mod tests {
         assert!(state.is_expanded());
     }
 
+
+    #[test]
+    fn modal_rail_state_open_close_toggles() {
+        let mut composer = Composer::new();
+        let mut state_ref = None;
+        composer.compose(|ctx| {
+            let state = ModalWideNavigationRailState::new(ctx);
+            state_ref = Some(state);
+        });
+        let state = state_ref.unwrap();
+        assert!(!state.is_open(), "默认关闭");
+        state.open();
+        assert!(state.is_open());
+        state.close();
+        assert!(!state.is_open());
+        state.toggle();
+        assert!(state.is_open());
+    }
+
+    #[test]
+    fn modal_rail_build_smoke_both_visibility_states() {
+        // 冒烟：visible 开/关两态组合均不 panic（overlay 注册走运行时管线，
+        // 单元层只验证组合期行为）
+        for open in [false, true] {
+            let mut composer = Composer::new();
+            composer.compose(|ctx| {
+                let state = ModalWideNavigationRailState::new(ctx);
+                if open {
+                    state.open();
+                }
+                ModalWideNavigationRail::new(state, |ctx| {
+                    NavigationRailItem::new(true, |ctx| icon_leaf(ctx, 24.0))
+                        .label(|ctx| crate::ui::Text::new("A").build(ctx))
+                        .on_click(|| {})
+                        .build(ctx);
+                })
+                .build(ctx);
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        }
+    }
 }
 
 // ── WideNavigationRail（M3 Expressive 宽轨）──
@@ -1299,5 +1344,122 @@ impl MeasurePolicy for WideNavigationRailItemLayoutPolicy {
             nodes[child].position = placements[index].position;
             nodes[child].measured_size = placements[index].size;
         }
+    }
+
+}
+// ── ModalWideNavigationRail（模态宽轨）──
+//
+// 基于 ui::Dialog 的模态呈现：scrim 遮罩点击关闭、面板 SurfaceContainer 底色。
+// 简化注明：容器形状全角圆角（androidx 为 end-side CornerLarge）。
+
+/// 模态宽轨开合状态机
+#[derive(Clone)]
+pub struct ModalWideNavigationRailState {
+    open: State<bool>,
+}
+
+impl ModalWideNavigationRailState {
+    pub fn new(ctx: &mut ComposeCtx) -> Self {
+        Self { open: ctx.remember(|| false) }
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.open.get()
+    }
+
+    pub fn open(&self) {
+        self.open.set(true);
+    }
+
+    pub fn close(&self) {
+        self.open.set(false);
+    }
+
+    pub fn toggle(&self) {
+        let o = self.open.get();
+        self.open.set(!o);
+    }
+}
+
+pub struct ModalWideNavigationRail {
+    state: ModalWideNavigationRailState,
+    content: Box<dyn Fn(&mut ComposeCtx) + Send + Sync>,
+    modifier: Modifier,
+}
+
+impl ModalWideNavigationRail {
+    pub fn new(
+        state: ModalWideNavigationRailState,
+        content: impl Fn(&mut ComposeCtx) + Send + Sync + 'static,
+    ) -> Self {
+        Self { state, content: Box::new(content), modifier: Modifier::new() }
+    }
+
+    pub fn modifier(mut self, modifier: Modifier) -> Self {
+        self.modifier = self.modifier.then(modifier);
+        self
+    }
+
+    #[composable]
+    pub fn build(self, ctx: &mut ComposeCtx) {
+        ctx.changed(&self.state.is_open());
+        let state = self.state;
+        let content = self.content;
+        let theme = WiniaTheme::colors();
+        // scrim 色 = 黑 @32%（M3 Scrim 规范值）；modal 面板底色 = SurfaceContainer
+        let scrim = Color::from_argb(82, 0, 0, 0);
+        let panel_container = theme.surface_container;
+        let key = ctx.next_key();
+        match ctx.start_restartable_group(key, Modifier::new(), BoxLayout::new()) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                let d_state = state.clone();
+                crate::ui::Dialog::new(state.is_open())
+                    .on_dismiss_request(move || d_state.close())
+                    .dismiss_on_outside(false)
+                    .build(ctx, move |ctx| {
+                        Row::new()
+                            .modifier(Modifier::new().fill_max_size())
+                            .build(ctx, |ctx| {
+                                // scrim：占满剩余空间，点击关闭
+                                let s_close = state.clone();
+                                Column::new()
+                                    .modifier(
+                                        Modifier::new()
+                                            .fill_max_height()
+                                            .background(scrim, Shape::Rectangle)
+                                            .clickable(move || s_close.close()),
+                                    )
+                                    .build(ctx, |_| {});
+                                // 面板：左缘全高 SurfaceContainer
+                                let p_close = state.clone();
+                                Column::new()
+                                    .alignment(Alignment::Center)
+                                    .spacing(RAIL_VERTICAL_PADDING)
+                                    .modifier(
+                                        Modifier::new()
+                                            .fill_max_height()
+                                            .width(WIDE_RAIL_EXPANDED_MIN_WIDTH)
+                                            .background(panel_container, Shape::rounded(WIDE_PANEL_CORNER_RADIUS))
+                                            .padding_top(WIDE_RAIL_TOP_PADDING)
+                                            .padding_vertical(RAIL_VERTICAL_PADDING),
+                                    )
+                                    .build(ctx, |ctx| {
+                                        WiniaTheme::with_content_color(theme.on_surface, ctx, |ctx| {
+                                            let c_close = state.clone();
+                                            // 面板顶部关闭按钮位（菜单语义——点击收起）
+                                            IconButton::new()
+                                                .on_click(move || c_close.close())
+                                                .build(ctx, |ctx| {
+                                                    Icon::svg_path("M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z").size(24.0).build(ctx);
+                                                });
+                                            content(ctx);
+                                        });
+                                    });
+                            });
+                    });
+            }
+        }
+        ctx.end_restartable_group();
     }
 }
