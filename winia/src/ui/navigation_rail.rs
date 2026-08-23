@@ -1528,9 +1528,8 @@ impl ModalWideNavigationRail {
                 let p_scrim = p_for_content.clone();
                 let p_panel = p_for_content.clone();
 
-                Row::new()
-                    .modifier(Modifier::new().fill_max_size())
-                    .build(ctx, |ctx| {
+                // Stack 层叠：scrim 打底、面板覆盖其上（Row 会把面板水平排到右侧）
+                crate::ui::Stack::new().build(ctx, |ctx| {
                         // scrim：黑 @32%×p，点击关闭（alpha 渲染期闭包逐帧求值）
                         let close = s_for_scrim.clone();
                         Column::new()
