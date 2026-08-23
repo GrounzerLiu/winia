@@ -1417,6 +1417,7 @@ impl MeasurePolicy for WideNavigationRailItemLayoutPolicy {
 
 }
 
+
 // ── ModalWideNavigationRail（模态宽轨，带开合动画）──
 //
 // 对齐 androidx ModalWideNavigationRail 的呈现语义：
@@ -1522,22 +1523,30 @@ impl ModalWideNavigationRail {
             click_passthrough: false,
             on_dismiss: None,
             content: Box::new(move |ctx| {
-                // 进度读进 overlay composer——每帧重测位移/scrim
-                let p = p_for_content.get().max(0.0).min(1.0);
-                let scrim_alpha = (0.32 * p * 255.0).round() as u8;
-                let panel_offset_x = -(WIDE_RAIL_EXPANDED_MIN_WIDTH) * (1.0 - p);
+                // ⚠ 全部用 peek——State 失效定向通知只达创建者（主 composer），
+                // overlay composer 不重组；动画由渲染期闭包逐帧求值完成
+                let p_scrim = p_for_content.clone();
+                let p_panel = p_for_content.clone();
 
                 Row::new()
                     .modifier(Modifier::new().fill_max_size())
                     .build(ctx, |ctx| {
-                        // scrim：黑 @32%×p，点击关闭
+                        // scrim：黑 @32%×p，点击关闭（alpha 渲染期闭包逐帧求值）
                         let close = s_for_scrim.clone();
                         Column::new()
                             .modifier(
                                 Modifier::new()
                                     .fill_max_size()
                                     .background(
-                                        Color::from_argb(scrim_alpha, 0, 0, 0),
+                                        move || {
+                                            let p = p_scrim.peek().max(0.0).min(1.0);
+                                            Color::from_argb(
+                                                (0.32 * p * 255.0).round() as u8,
+                                                0,
+                                                0,
+                                                0,
+                                            )
+                                        },
                                         Shape::Rectangle,
                                     )
                                     .clickable(move || close.close()),
@@ -1558,10 +1567,15 @@ impl ModalWideNavigationRail {
                                     )
                                     .padding_top(WIDE_RAIL_TOP_PADDING)
                                     .padding_vertical(RAIL_VERTICAL_PADDING)
-                                    .graphics_layer(move || {
-                                        crate::modifier::GraphicsLayerParams {
-                                            translation_x: panel_offset_x,
-                                            ..Default::default()
+                                    .graphics_layer({
+                                        let p_state = p_for_content.clone();
+                                        move || {
+                                            let p = p_state.peek().max(0.0).min(1.0);
+                                            crate::modifier::GraphicsLayerParams {
+                                                translation_x: -(WIDE_RAIL_EXPANDED_MIN_WIDTH)
+                                                    * (1.0 - p),
+                                                ..Default::default()
+                                            }
                                         }
                                     }),
                             )
