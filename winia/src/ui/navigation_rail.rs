@@ -1416,10 +1416,17 @@ impl MeasurePolicy for WideNavigationRailItemLayoutPolicy {
     }
 
 }
-// ── ModalWideNavigationRail（模态宽轨）──
+
+// ── ModalWideNavigationRail（模态宽轨，带开合动画）──
 //
-// 基于 ui::Dialog 的模态呈现：scrim 遮罩点击关闭、面板 SurfaceContainer 底色。
-// 简化注明：容器形状全角圆角（androidx 为 end-side CornerLarge）。
+// 对齐 androidx ModalWideNavigationRail 的呈现语义：
+// - 打开：面板从左缘滑入（FastSpatial 近似 stiffness400）、scrim 淡入至黑 @32%
+// - 关闭：反向播放——overlay 在进度归零后才移除（退场动画完整）
+// - 面板 SurfaceContainer 底色、16dp 圆角；顶部菜单按钮收起
+//
+// 实现说明：不走 ui::Dialog（其 visible=false 直接不注册 overlay——无法播
+// 放退场动画）。自行注册 overlay：存活条件 = open || progress > 0；内容闭包
+// 内读进度 State（注册到 overlay composer）→ 动画帧逐帧重测面板位移与 scrim。
 
 /// 模态宽轨开合状态机
 #[derive(Clone)]
@@ -1472,63 +1479,112 @@ impl ModalWideNavigationRail {
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
         ctx.changed(&self.state.is_open());
-        let state = self.state;
-        let content = self.content;
         let theme = WiniaTheme::colors();
-        // scrim 色 = 黑 @32%（M3 Scrim 规范值）；modal 面板底色 = SurfaceContainer
-        let scrim = Color::from_argb(82, 0, 0, 0);
-        let panel_container = theme.surface_container;
-        let key = ctx.next_key();
-        match ctx.start_restartable_group(key, Modifier::new(), BoxLayout::new()) {
-            GroupStatus::Skip => {}
-            GroupStatus::Enter => {
-                let d_state = state.clone();
-                crate::ui::Dialog::new(state.is_open())
-                    .on_dismiss_request(move || d_state.close())
-                    .dismiss_on_outside(false)
-                    .build(ctx, move |ctx| {
-                        Row::new()
-                            .modifier(Modifier::new().fill_max_size())
+        let state = self.state;
+
+        // 开合进度：目标随 open 翻转，spring 插值（FastSpatial 近似）。
+        // 进度在组件 build（主树）创建——open 翻转后主树重组驱动动画帧，
+        // overlay 内容每帧经 layout_overlays 重测拿到新进度。
+        let progress = ctx.animate_float_as_state(
+            if state.is_open() { 1.0 } else { 0.0 },
+            crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec {
+                damping_ratio: 1.0,
+                stiffness: SIZE_SPRING_STIFFNESS,
+                mass: 1.0,
+                threshold: 0.01,
+            }),
+        );
+
+        // overlay 存活条件：打开中，或关闭退场动画尚未归零
+        let visible = state.is_open() || progress.peek() > 0.0;
+
+        // 稳定 overlay id（跨帧匹配复用独立 Composer）
+        let id = ctx.remember(|| crate::ui::overlay::next_overlay_id());
+        ctx.record_overlay_active(id.get(), visible);
+
+        if !visible {
+            return; // 已完全关闭：不注册 overlay（sync 按 active=false 移除）
+        }
+
+        let content = self.content;
+        let modifier = self.modifier;
+        let p_for_content = progress.clone();
+        let s_for_scrim = state.clone();
+        let s_for_menu = state.clone();
+
+        ctx.open_overlay(crate::ui::overlay::OverlayDesc {
+            id: id.get(),
+            anchor_slot: None,
+            position: crate::ui::overlay::PopupPosition::TopLeft,
+            offset: (0.0, 0.0),
+            modal: true,
+            dismiss_on_outside: false, // scrim 自身处理点击关闭
+            click_passthrough: false,
+            on_dismiss: None,
+            content: Box::new(move |ctx| {
+                // 进度读进 overlay composer——每帧重测位移/scrim
+                let p = p_for_content.get().max(0.0).min(1.0);
+                let scrim_alpha = (0.32 * p * 255.0).round() as u8;
+                let panel_offset_x = -(WIDE_RAIL_EXPANDED_MIN_WIDTH) * (1.0 - p);
+
+                Row::new()
+                    .modifier(Modifier::new().fill_max_size())
+                    .build(ctx, |ctx| {
+                        // scrim：黑 @32%×p，点击关闭
+                        let close = s_for_scrim.clone();
+                        Column::new()
+                            .modifier(
+                                Modifier::new()
+                                    .fill_max_size()
+                                    .background(
+                                        Color::from_argb(scrim_alpha, 0, 0, 0),
+                                        Shape::Rectangle,
+                                    )
+                                    .clickable(move || close.close()),
+                            )
+                            .build(ctx, |_| {});
+                        // 面板：左缘全高，translationX 随进度滑入
+                        let menu_close = s_for_menu.clone();
+                        Column::new()
+                            .alignment(Alignment::Center)
+                            .spacing(RAIL_VERTICAL_PADDING)
+                            .modifier(
+                                Modifier::new()
+                                    .fill_max_height()
+                                    .width(WIDE_RAIL_EXPANDED_MIN_WIDTH)
+                                    .background(
+                                        theme.surface_container,
+                                        Shape::rounded(WIDE_PANEL_CORNER_RADIUS),
+                                    )
+                                    .padding_top(WIDE_RAIL_TOP_PADDING)
+                                    .padding_vertical(RAIL_VERTICAL_PADDING)
+                                    .graphics_layer(move || {
+                                        crate::modifier::GraphicsLayerParams {
+                                            translation_x: panel_offset_x,
+                                            ..Default::default()
+                                        }
+                                    }),
+                            )
                             .build(ctx, |ctx| {
-                                // scrim：占满剩余空间，点击关闭
-                                let s_close = state.clone();
-                                Column::new()
-                                    .modifier(
-                                        Modifier::new()
-                                            .fill_max_height()
-                                            .background(scrim, Shape::Rectangle)
-                                            .clickable(move || s_close.close()),
-                                    )
-                                    .build(ctx, |_| {});
-                                // 面板：左缘全高 SurfaceContainer
-                                let p_close = state.clone();
-                                Column::new()
-                                    .alignment(Alignment::Center)
-                                    .spacing(RAIL_VERTICAL_PADDING)
-                                    .modifier(
-                                        Modifier::new()
-                                            .fill_max_height()
-                                            .width(WIDE_RAIL_EXPANDED_MIN_WIDTH)
-                                            .background(panel_container, Shape::rounded(WIDE_PANEL_CORNER_RADIUS))
-                                            .padding_top(WIDE_RAIL_TOP_PADDING)
-                                            .padding_vertical(RAIL_VERTICAL_PADDING),
-                                    )
-                                    .build(ctx, |ctx| {
-                                        WiniaTheme::with_content_color(theme.on_surface, ctx, |ctx| {
-                                            let c_close = state.clone();
-                                            // 面板顶部关闭按钮位（菜单语义——点击收起）
-                                            IconButton::new()
-                                                .on_click(move || c_close.close())
-                                                .build(ctx, |ctx| {
-                                                    Icon::svg_path("M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z").size(24.0).build(ctx);
-                                                });
-                                            content(ctx);
-                                        });
+                                WiniaTheme::with_content_color(
+                                    theme.on_surface,
+                                    ctx,
+                                    |ctx| {
+                                        let m_close = menu_close.clone();
+                                        IconButton::new()
+                                            .on_click(move || m_close.close())
+                                            .build(ctx, |ctx| {
+                                                Icon::svg_path(
+                                                    "M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z",
+                                                )
+                                                .size(24.0)
+                                                .build(ctx);
+                                            });
+                                        content(ctx);
                                     });
                             });
                     });
-            }
-        }
-        ctx.end_restartable_group();
+            }),
+        });
     }
 }
