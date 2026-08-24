@@ -267,11 +267,20 @@ impl UiTest {
         out
     }
 
-    /// 当前树中的窗口数量（多窗口树）
+    /// 当前树中的窗口数量（多窗口树；仅主窗口——overlay 条目不计入，
+    /// 断言弹层用 overlay_count）
     pub fn window_count(&self) -> usize {
         self.tree
             .as_array()
-            .map(|arr| arr.iter().filter(|w| w.get("root").is_some()).count())
+            .map(|arr| arr.iter().filter(|w| w.get("root").is_some() && w.get("overlay").is_none()).count())
+            .unwrap_or(0)
+    }
+
+    /// 当前打开的顶层弹出层数量（全部窗口累计；0 = 无 Popup/Dialog 残留）
+    pub fn overlay_count(&self) -> usize {
+        self.tree
+            .as_array()
+            .map(|arr| arr.iter().filter(|w| w.get("root").is_some() && w.get("overlay").is_some()).count())
             .unwrap_or(0)
     }
 
@@ -417,6 +426,11 @@ impl UiTest {
 fn for_each_window(tree: &Value, mut f: impl FnMut(u64, &Value)) {
     if let Some(arr) = tree.as_array() {
         for w in arr {
+            // 跳过弹出层条目（带 "overlay" 字段）——主树断言不应被浮层内容干扰
+            // （expect_no_text 等语义针对主窗口；弹层断言用 overlay_count）
+            if w.get("overlay").is_some() {
+                continue;
+            }
             if let Some(root) = w.get("root") {
                 let id = w.get("window").and_then(|v| v.as_u64()).unwrap_or(0);
                 f(id, root);

@@ -12,7 +12,6 @@
 |---|---|---|---|---|
 | `NavigationRail` | Collapsed 基线 | 80dp | 上（Top） | 可选，alwaysShowLabel 控制 |
 | `WideNavigationRail` | Expressive 宽轨 | **96 ↔ 220dp 动画** | 收起上/展开左（变形） | **必选恒显示** |
-| `ModalWideNavigationRail` | 宽轨模态呈现 | 220dp 面板 + scrim | 同展开态 | 同上 |
 
 ## 2. NavigationRail API
 
@@ -89,23 +88,11 @@ WideNavigationRailItem::new(selected, |ctx| { Icon... }, |ctx| { Text... })
   图标/标签位置随之滑移。
 - **简化注明**：androidx 用动态 PaddingValues + 分段 label 公式（p>0.5 切换 x
   公式并淡出标签）；本实现为连续 lerp，端点视觉一致。
-- 容器顶部 padding 44dp（TopSpace）；item 横向 padding 20dp。
+- 容器顶部 padding 44dp（TopSpace）；展开态 item 填满轨宽（全宽命中目标），
+  内容起始对齐（前导缩进 16，对齐 androidx FullWidthLeadingSpace）。
 - item 同样拥抱内容、最小宽 96（CollapsedTokens.ContainerWidth）。
 
-## 6. ModalWideNavigationRail
-
-```rust
-let state = ModalWideNavigationRailState::new(ctx);  // open/close/toggle
-Button::text().on_click({ let s = state.clone(); move || s.open() }).build(...);
-ModalWideNavigationRail::new(state.clone(), |ctx| { /* 面板内容（items） */ })
-    .build(ctx);   // 组合顺序放最后——覆盖在兄弟之上
-```
-
-- 基于 `ui::Dialog`：modal 遮罩点击关闭（scrim 黑 @32%）、面板 SurfaceContainer
-  底色 + 16dp 圆角（androidx 为 end-side CornerLarge，简化为全角）、顶部菜单
-  按钮收起。
-
-## 7. Token 对照表
+## 6. Token 对照表
 
 | Token | 值 | winia 常量 |
 |---|---|---|
@@ -121,15 +108,14 @@ ModalWideNavigationRail::new(state.clone(), |ctx| { /* 面板内容（items） *
 | ItemActiveIndicatorIconLabelSpace | 4 | 私有常量 `ITEM_ICON_LABEL_GAP` |
 | 颜色 7 token | 同导航栏 | `rail_item_colors(&theme)` |
 
-## 8. 平台差异与有意简化
+## 7. 平台差异与有意简化
 
 - **windowInsets**：桌面默认零值。API 已预留（`WindowInsets` 结构体 +
   `.window_insets()`），未来 Android 支持或自定义窗口装饰（标题栏模拟状态栏）
   时由平台层填充真实尺寸。
 - **PredictiveBack 缩放**：依赖 Android 返回手势进度输入，桌面无此源。
 - **宽轨变形中间态**：连续 lerp 替代 androidx 分段公式（见 §5）。
-- **Modal 面板圆角**：全角 16dp 替代 end-side CornerLarge。
-- **Wide/Modal 状态机**：同步简化版（androidx 为 suspend + Animatable + Saver）。
+- **宽轨状态机**：同步简化版（androidx 为 suspend + Animatable + Saver）。
 
 ## 9. 测试
 
@@ -144,4 +130,5 @@ ModalWideNavigationRail::new(state.clone(), |ctx| { /* 面板内容（items） *
 | `unselected_item_hover_shows_state_layer_on_full_pill_rect` | 悬浮状态层像素 |
 | `wide_rail_width_endpoints_match_tokens` | 宽度端点 96/220 |
 | `wide_rail_item_morphs_between_top_and_start_layouts` | 变形两布局端点 |
-| `wide_rail_state_toggles_expansion` / modal 冒烟 ×2 | 状态机与构建 |
+| `wide_rail_state_toggles_expansion` | 状态机 |
+| `wide_rail_item_target_width_expands_when_expanded` | 展开态目标区全宽（M3） |

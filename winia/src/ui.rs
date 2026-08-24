@@ -41,6 +41,8 @@ pub mod top_app_bar;
 pub mod scaffold;
 pub mod navigation_bar;
 pub mod navigation_rail;
+pub mod navigation_suite;
+pub mod short_navigation_bar;
 
 pub use animated_visibility::{AnimatedVisibility, VisibilityTransition, SlideDirection};
 pub use animated_size::AnimatedSize;
@@ -122,13 +124,21 @@ pub use top_app_bar::{TopAppBar, TopAppBarColors, TopAppBarScrollBehavior, TopAp
 pub use scaffold::{Scaffold, ScaffoldContentPadding, ScaffoldFabPosition, SCAFFOLD_FAB_MARGIN};
 pub use navigation_bar::{
     NavigationBar, NavigationBarItem, NavigationBarColors, NavigationBarItemColors,
-    NavigationBarItemLayout, NavigationBarDefaults, NAVIGATION_BAR_HEIGHT,
+    NavigationItemIconPosition, NavigationBarDefaults, NAVIGATION_BAR_HEIGHT,
     NAVIGATION_BAR_ITEM_SPACING, NAVIGATION_BAR_H_INDICATOR_HEIGHT,
     NAVIGATION_BAR_INDICATOR_WIDTH, NAVIGATION_BAR_INDICATOR_HEIGHT, NAVIGATION_BAR_ICON_SIZE,
 };
+pub use short_navigation_bar::{
+    ShortNavigationBar, ShortNavigationBarItem, ShortNavigationBarArrangement,
+};
+pub use navigation_suite::{
+    NavigationSuiteScaffold, NavigationSuiteType, NavigationSuiteItems,
+};
+pub mod adaptive;
+pub use adaptive::{set_window_size, window_size, WidthSizeClass, HeightSizeClass};
 pub use navigation_rail::{
     NavigationRail, NavigationRailItem, NavigationRailItemColors, WideNavigationRail,
-    WideNavigationRailItem, WideNavigationRailState, ModalWideNavigationRail, ModalWideNavigationRailState, WindowInsets,
+    WideNavigationRailItem, WideNavigationRailState, WindowInsets,
     NAVIGATION_RAIL_INDICATOR_HEIGHT, NAVIGATION_RAIL_INDICATOR_WIDTH, NAVIGATION_RAIL_ITEM_HEIGHT,
     NAVIGATION_RAIL_ICON_SIZE, NAVIGATION_RAIL_WIDTH, WIDE_RAIL_COLLAPSED_WIDTH,
     WIDE_RAIL_EXPANDED_MIN_WIDTH,

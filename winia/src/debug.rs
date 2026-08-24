@@ -55,6 +55,10 @@ struct DebugData {
     pixels: Vec<u8>, width: u32, height: u32,
     /// 每个窗口的树 JSON（单行、合法 JSON）——window_id → 树根数组
     trees: std::collections::HashMap<u64, String>,
+    /// 每个窗口的顶层弹出层树（overlay 独立 Composer 的 arena）——
+    /// window_id → [(overlay_id, JSON)]，按 z 序（栈序）排列；
+    /// 每帧整体替换（overlay 关闭后条目自动消失，无残留）
+    overlay_trees: std::collections::HashMap<u64, Vec<(u64, String)>>,
 }
 
 pub fn update_pixels(pixels: &[u8], width: u32, height: u32) {
@@ -66,10 +70,27 @@ pub fn update_pixels(pixels: &[u8], width: u32, height: u32) {
 pub fn update_tree(window_id: u64, json: &str) {
     let mut data = DEBUG_STATE.lock().unwrap();
     if data.is_none() {
-        *data = Some(DebugData { pixels: Vec::new(), width: 0, height: 0, trees: Default::default() });
+        *data = Some(DebugData { pixels: Vec::new(), width: 0, height: 0, trees: Default::default(), overlay_trees: Default::default() });
     }
     if let Some(ref mut d) = *data {
         d.trees.insert(window_id, json.to_string());
+    }
+}
+
+/// 整体替换指定窗口的弹出层树（每帧调用；空 vec = 无弹出层——清除残留）。
+/// trees 元素 = (overlay_id, 树 JSON)，按渲染 z 序排列。
+pub fn set_overlay_trees(window_id: u64, trees: Vec<(u64, String)>) {
+    let mut data = DEBUG_STATE.lock().unwrap();
+    if data.is_none() {
+        if trees.is_empty() { return; }
+        *data = Some(DebugData { pixels: Vec::new(), width: 0, height: 0, trees: Default::default(), overlay_trees: Default::default() });
+    }
+    if let Some(ref mut d) = *data {
+        if trees.is_empty() {
+            d.overlay_trees.remove(&window_id);
+        } else {
+            d.overlay_trees.insert(window_id, trees);
+        }
     }
 }
 
@@ -77,20 +98,37 @@ pub fn update_tree(window_id: u64, json: &str) {
 pub fn remove_tree(window_id: u64) {
     if let Some(ref mut d) = *DEBUG_STATE.lock().unwrap() {
         d.trees.remove(&window_id);
+        d.overlay_trees.remove(&window_id);
     }
 }
 
-/// 全部窗口树 → 多窗口 JSON：`[{"window":0,"root":[...]},{"window":1,"root":[...]}]`
-/// （按 window id 排序——顺序稳定；空树列表输出 `[]`）
+/// 全部窗口树 → 多窗口 JSON：主窗口条目 + 紧随其后的弹出层条目——
+///
+/// ```json
+/// [{"window":0,"root":[...]},
+///  {"window":0,"overlay":0,"id":7,"root":[...]}]
+/// ```
+///
+/// - 主条目无 "overlay" 字段（既有解析兼容——零弹窗时输出与旧版完全一致）
+/// - 弹出层条目：`overlay` = z 序索引（0 最底）、`id` = OverlayDesc 稳定 id
+/// - 按 window id 排序；弹层跟随其宿主窗口
 fn all_trees_json() -> String {
     let data = DEBUG_STATE.lock().unwrap();
     let Some(d) = data.as_ref() else { return "[]".to_string() };
     let mut entries: Vec<(u64, &String)> = d.trees.iter().map(|(id, j)| (*id, j)).collect();
     entries.sort_by_key(|(id, _)| *id);
     let mut out = String::from("[");
-    for (i, (id, json)) in entries.iter().enumerate() {
-        if i > 0 { out.push(','); }
+    let mut first = true;
+    for (id, json) in entries {
+        if !first { out.push(','); }
+        first = false;
         out.push_str(&format!(r#"{{"window":{id},"root":{json}}}"#));
+        if let Some(ovs) = d.overlay_trees.get(&id) {
+            for (i, (oid, oj)) in ovs.iter().enumerate() {
+                out.push(',');
+                out.push_str(&format!(r#"{{"window":{id},"overlay":{i},"id":{oid},"root":{oj}}}"#));
+            }
+        }
     }
     out.push(']');
     out
@@ -234,6 +272,12 @@ pub fn start_stdin_channel() {
                     };
                     queue_event(DebugEvent::Scroll { dx, dy });
                 }
+                // w <width> <height>：模拟窗口 resize（逻辑像素——驱动自适应组件）
+                "w" if parts.len() >= 3 => {
+                    let w: f32 = parts[1].parse().unwrap_or(0.0);
+                    let h: f32 = parts[2].parse().unwrap_or(0.0);
+                    queue_event(DebugEvent::Resize { w, h });
+                }
                 "r" => { request_screenshot(); wake(); }
                 "t" => {
                     // 树响应走 stdout（前缀 TREE:——UI 测试读管道；其他 demo
@@ -323,6 +367,13 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
                 };
                 queue_event(DebugEvent::Scroll { dx, dy });
                 let _ = write.send(Message::Text("ok scroll".into())).await;
+            }
+            // w <width> <height>：模拟窗口 resize（逻辑像素——驱动自适应组件）
+            "w" if parts.len() >= 3 => {
+                let w: f32 = parts[1].parse().unwrap_or(0.0);
+                let h: f32 = parts[2].parse().unwrap_or(0.0);
+                queue_event(DebugEvent::Resize { w, h });
+                let _ = write.send(Message::Text("ok resize".into())).await;
             }
             "r" => {
                 request_screenshot(); wake();

@@ -67,6 +67,7 @@ cargo test --test ui_test --features debug-server  # UI 集成测试（真实窗
 - [Scaffold 文档](docs/scaffold.md) — top/bottom/content/FAB 页面布局与 RTL 定位
 - [Nested Scroll 文档](docs/nested-scroll.md) — pre/post scroll、TopAppBarState 与行为工厂
 - [动画差距分析](docs/animation-gap-analysis.md) — 动画系统全景与实现状态
+- [Debug Server 指南](docs/debug-server.md) — WS/stdin 调试通道：事件注入、布局树（含 overlay）、帧抓取
 - [架构设计文档](docs/architecture.md) — 早期设计稿（部分过时）
 - [UI 测试框架](docs/ui-testing.md) — 集成测试的用法与坑
 

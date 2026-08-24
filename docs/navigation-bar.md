@@ -12,7 +12,7 @@
 | 变体 | 对应 | item 布局 | 使用场景 |
 |---|---|---|---|
 | 默认（垂直 item） | M3 基线 | 图标上/标签下 | 紧凑窗口 |
-| 水平 item（`.layout(Horizontal)`） | M3 Expressive ShortNavigationBar | 图标左/标签右，胶囊包裹整组 | 中等窗口 |
+| 水平 item（`.icon_position(Horizontal)`） | M3 Expressive ShortNavigationBar | 图标左/标签右，胶囊包裹整组 | 中等窗口 |
 
 M3 规范：紧凑窗口用垂直 item；中等窗口用水平 item。
 
@@ -40,7 +40,7 @@ NavigationBarItem::new(selected, |ctx| { Icon... })
 // item（水平，Expressive）——图标在左、胶囊横向包裹 [icon+gap4+label]
 NavigationBarItem::new(selected, |ctx| { Icon... })
     .label(...)
-    .layout(NavigationBarItemLayout::Horizontal)
+    .icon_position(NavigationItemIconPosition::Start)
     .build(ctx);
 ```
 
@@ -108,7 +108,7 @@ NavigationBarItem::new(selected, |ctx| { Icon... })
 
 - 无 badge 专用参数（androidx item 内也是 BadgedBox 组合——用法见 §2）。
 - 水平/垂直变形过渡（ShortNavigationBar 的 iconPosition 动画）未做——两种布局
-  通过 `.layout()` 显式选择（宽轨 WideNavigationRail 有连续变形版本）。
+  通过 `.icon_position()` 显式选择（宽轨 WideNavigationRail 有连续变形版本）。
 - windowInsets 不适用（桌面无系统栏叠加）。
 
 ## 8. 测试

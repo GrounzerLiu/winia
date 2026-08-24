@@ -1473,8 +1473,9 @@ impl Composer {
         }
         drop(pending);
 
-        // 开始组合期依赖记录（thread_local 缓冲——State::get 写入，末尾 take_deps 取走）
-        crate::core::state::begin_compose_deps();
+        // 开始组合期依赖记录（thread_local 缓冲——State::get 写入，末尾 take_deps 取走）。
+        // 同时登记通知队列：record_dep 据此为跨 Composer 读取建立订阅（overlay 响应主树）
+        crate::core::state::begin_compose_deps_with_queue(std::sync::Arc::downgrade(&self.pending_states));
 
         {
             let ctx = &mut ComposeCtx::new(self);
@@ -1506,6 +1507,8 @@ impl Composer {
         for (state_id, slot_key) in crate::core::state::take_deps() {
             self.slot_deps.entry(state_id).or_default().insert(slot_key);
         }
+        // 记录结束：清除 recorder 队列引用（measure 期 layout_deps 不做跨 Composer 订阅）
+        crate::core::state::end_recorder_queue();
         // 回收本帧未复用的上帧节点（结构变化移除的子树——on_remove 触发）；
         // 跳过已复用节点（已挂入本帧树，free 会递归进本帧树形成环）
         let mut visited = std::collections::HashSet::new();
@@ -2784,6 +2787,60 @@ fn test_layout_dep_survives_const_fold() {
     let m3 = MEASURE_COUNT.with(|c| c.get());
     assert!(m3 > m2, "notify 后应重新 measure（布局失效生效）");
     assert!(composer.layout_deps.contains_key(&sid), "重测后依赖应续期");
+}
+
+/// 跨 Composer 订阅（端到端）：overlay 独立 Composer 组合期读主树 State →
+/// 主树 set 后 overlay Composer 的 pending 队列收到失效 → recompose 读到新值。
+/// 这是 Popup / 浮层内容响应主树变化的通路。
+#[test]
+fn test_overlay_composer_invalidated_by_main_tree_state() {
+    let mut main = Composer::new();
+    let holder = std::cell::RefCell::new(None::<crate::core::state::State<Vec<String>>>);
+    main.compose(|ctx| {
+        let items = ctx.remember(|| vec!["a".to_string()]);
+        *holder.borrow_mut() = Some(items.clone());
+        let k = ctx.next_key();
+        ctx.start_leaf(k, Modifier::new());
+        ctx.end_node();
+    });
+    let items = holder.borrow().clone().unwrap();
+
+    // overlay：独立 Composer，content 读主树 State
+    let mut ov = Composer::new();
+    let seen = std::cell::RefCell::new(None::<usize>);
+    {
+        let seen_ref = &seen;
+        ov.compose(|ctx| {
+            *seen_ref.borrow_mut() = Some(items.get().len());
+            let k = ctx.next_key();
+            ctx.start_leaf(k, Modifier::new());
+            ctx.end_node();
+        });
+    }
+    assert_eq!(seen.borrow().as_ref(), Some(&1), "首帧读到初值");
+
+    // 主树 set：两个队列都应入队（fan-out）
+    items.set(vec!["x".into(), "y".into(), "z".into()]);
+    assert!(main.has_pending_states());
+    assert!(ov.has_pending_states(), "跨 Composer 读取应建立订阅——否则 overlay 永不更新");
+
+    // overlay recompose：消费 pending、读到新值、依赖续期
+    let ran = {
+        let seen_ref = &seen;
+        ov.recompose(|ctx| {
+            *seen_ref.borrow_mut() = Some(items.get().len());
+            let k = ctx.next_key();
+            ctx.start_leaf(k, Modifier::new());
+            ctx.end_node();
+        })
+    };
+    assert!(ran, "overlay 应因订阅通知执行重组");
+    assert_eq!(seen.borrow().as_ref(), Some(&3));
+    assert!(!ov.has_pending_states(), "recompose 后 pending 清空");
+
+    // 再次 set：订阅仍在（重组时 record_dep 续订）→ 持续响应
+    items.set(Vec::new());
+    assert!(ov.has_pending_states(), "重组后依赖续期——持续响应后续变化");
 }
 
 /// 回归测试（review 发现）：register_modifier_deps_recursive（scroll 等 modifier 内

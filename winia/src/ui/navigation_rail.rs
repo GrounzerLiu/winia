@@ -32,8 +32,7 @@
 //!   [NavigationRail::window_insets]），未来 Android 支持或自定义窗口装饰
 //!   （标题栏模拟状态栏）时由平台层填充真实尺寸
 //! - PredictiveBack 缩放效果：依赖 Android 返回手势进度输入，桌面无此源
-//! - ModalWideNavigationRail 与 Expanded 宽轨已实现（见本文件后半部分）；
-//!   组件文档：docs/navigation-rail.md
+//! - Expanded 宽轨已实现（见本文件后半部分）；组件文档：docs/navigation-rail.md
 
 use crate::composable;
 use crate::core::composer::{ComposeCtx, GroupStatus};
@@ -82,8 +81,6 @@ const HEADER_SPACER: f32 = 8.0;
 const DISABLED_ALPHA: f32 = 0.38;
 /// 宽轨 Start 态指示器横向内边距（leading/trailing 各 16，与导航栏水平 item 一致）
 const WIDE_INDICATOR_H_PADDING: f32 = 16.0;
-/// 模态面板圆角半径（androidx CornerLarge 简化为全角）
-const WIDE_PANEL_CORNER_RADIUS: f32 = 16.0;
 
 /// 窗口避让尺寸（对标 androidx WindowInsets 的桌面简化版）。
 ///
@@ -836,6 +833,11 @@ mod tests {
         let label = child(nodes, root, 2);
         // 水平排列：label 在 icon 右侧、同垂直中心
         assert!(icon.position.x < label.position.x, "Start 布局图标在左");
+        // 展开态起始对齐（androidx FullWidthLeadingSpace）：icon/label/胶囊 x
+        // 为固定值，不随容器加宽漂移（回归：居中实现会使图标 x 随展开 +20）
+        assert_eq!(indicator.position.x, WIDE_INDICATOR_H_PADDING);
+        assert_eq!(icon.position.x, WIDE_INDICATOR_H_PADDING * 2.0);
+        assert_eq!(label.position.x, WIDE_INDICATOR_H_PADDING * 2.0 + NAVIGATION_RAIL_ICON_SIZE + ITEM_ICON_LABEL_GAP);
         assert_eq!(
             icon.position.y + icon.measured_size.height / 2.0,
             label.position.y + label.measured_size.height / 2.0,
@@ -852,10 +854,9 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn wide_rail_item_target_width_expands_when_expanded() {
-        // 收起：拥抱内容 min 96；展开：轨宽(220) - 2x20 = 180（M3 目标区横跨全宽）
-        let cases: [(bool, f32); 2] = [(false, WIDE_RAIL_COLLAPSED_WIDTH), (true, 180.0)];
+        // 收起：拥抱内容 min 96；展开：填满轨宽（androidx item 为全宽命中目标）
+        let cases: [(bool, f32); 2] = [(false, WIDE_RAIL_COLLAPSED_WIDTH), (true, 220.0)];
         for (expanded, expected_w) in cases {
             let mut composer = Composer::new();
             composer.compose(|ctx| {
@@ -886,6 +887,66 @@ mod tests {
         }
     }
 
+    /// icon_position 覆盖：progress=0（收起）但钉死 Start——布局应为横排位形
+    /// （图标左 label 右、胶囊高 40），不随容器变形进度插值
+    #[test]
+    fn wide_rail_item_icon_position_override_pins_start_layout() {
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            WideNavigationRailItem::new(
+                true,
+                |ctx| icon_leaf(ctx, 24.0),
+                |ctx| crate::ui::Text::new("Home").build(ctx),
+            )
+            .progress(State::new(0.0))
+            .icon_position(crate::ui::navigation_bar::NavigationItemIconPosition::Start)
+            .on_click(|| {})
+            .build(ctx);
+        });
+        composer.layout(Constraints::new(0.0, 220.0, 0.0, f32::MAX));
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let icon = child(nodes, root, 1);
+        let label = child(nodes, root, 2);
+        let ripple = child(nodes, root, 3);
+        assert!(icon.position.x < label.position.x, "钉死 Start：图标在 label 左");
+        assert_eq!(icon.position.y + 12.0, label.position.y + label.measured_size.height / 2.0,
+            "同垂直中心");
+        assert_eq!(ripple.measured_size.height, 40.0, "Start 指示器高 40");
+    }
+
+    /// 三态语义：target 立即翻转 / current 跟随进度收敛侧 / is_animating 中段为真
+    #[test]
+    fn wide_rail_state_target_current_is_animating() {
+        let mut composer = Composer::new();
+        let mut state_ref = None;
+        composer.compose(|ctx| {
+            let state = WideNavigationRailState::new(ctx);
+            state_ref = Some(state);
+        });
+        let state = state_ref.unwrap();
+        assert!(!state.target() && !state.current() && !state.is_animating(), "初始全收起");
+
+        state.expand();
+        assert!(state.target(), "target 立即翻转");
+        assert!(state.current(), "进度未挂载时 current 退化为 target");
+        assert!(!state.is_animating());
+
+        // 模拟组件挂载进度 + 动画中间帧
+        let progress = State::new(0.5);
+        state.attach_progress(progress.clone());
+        assert!(state.is_animating(), "进度 0.5 → 动画中");
+        assert!(!state.current(), "进度 0.5 → 视觉仍收起");
+
+        progress.set(1.0);
+        assert!(state.current(), "进度 1.0 → 视觉展开");
+        assert!(!state.is_animating(), "进度收敛 → 动画结束");
+
+        state.collapse();
+        assert!(!state.target() && state.current(), "target 翻转、current 尚未跟随");
+    }
+
+    #[test]
     fn wide_rail_state_toggles_expansion() {
         let mut composer = Composer::new();
         let mut state_ref = None;
@@ -903,46 +964,6 @@ mod tests {
     }
 
 
-    #[test]
-    fn modal_rail_state_open_close_toggles() {
-        let mut composer = Composer::new();
-        let mut state_ref = None;
-        composer.compose(|ctx| {
-            let state = ModalWideNavigationRailState::new(ctx);
-            state_ref = Some(state);
-        });
-        let state = state_ref.unwrap();
-        assert!(!state.is_open(), "默认关闭");
-        state.open();
-        assert!(state.is_open());
-        state.close();
-        assert!(!state.is_open());
-        state.toggle();
-        assert!(state.is_open());
-    }
-
-    #[test]
-    fn modal_rail_build_smoke_both_visibility_states() {
-        // 冒烟：visible 开/关两态组合均不 panic（overlay 注册走运行时管线，
-        // 单元层只验证组合期行为）
-        for open in [false, true] {
-            let mut composer = Composer::new();
-            composer.compose(|ctx| {
-                let state = ModalWideNavigationRailState::new(ctx);
-                if open {
-                    state.open();
-                }
-                ModalWideNavigationRail::new(state, |ctx| {
-                    NavigationRailItem::new(true, |ctx| icon_leaf(ctx, 24.0))
-                        .label(|ctx| crate::ui::Text::new("A").build(ctx))
-                        .on_click(|| {})
-                        .build(ctx);
-                })
-                .build(ctx);
-            });
-            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
-        }
-    }
 }
 
 // ── WideNavigationRail（M3 Expressive 宽轨）──
@@ -962,28 +983,67 @@ pub const WIDE_RAIL_COLLAPSED_WIDTH: f32 = 96.0;
 pub const WIDE_RAIL_EXPANDED_MIN_WIDTH: f32 = 220.0;
 /// 宽轨容器顶部 padding = NavigationRailCollapsedTokens.TopSpace
 pub const WIDE_RAIL_TOP_PADDING: f32 = 44.0;
-/// 宽轨 item 横向 padding
-pub const WIDE_RAIL_ITEM_H_PADDING: f32 = 20.0;
 
 /// 宽轨展开状态机（对标 WideNavigationRailState 的同步简化版）。
-/// 持有展开目标 bool；动画由组件内部 animate_float_as_state 驱动。
+///
+/// 三态语义（对齐 androidx currentValue/targetValue/isAnimating）：
+/// - [`target`](Self::target)：目标状态——expand/collapse/toggle 立即翻转
+/// - [`current`](Self::current)：当前视觉状态——变形动画收敛侧（组件挂载
+///   进度后可用；读取注册依赖，动画完成帧驱动 UI 响应）
+/// - [`is_animating`](Self::is_animating)：变形是否进行中（peek，不注册依赖）
 #[derive(Clone)]
 pub struct WideNavigationRailState {
     expanded: State<bool>,
+    /// 组件 build 挂载的变形进度（0=收起 1=展开）——current/is_animating 的数据源
+    progress: std::sync::Arc<parking_lot::Mutex<Option<State<f32>>>>,
 }
 
 impl WideNavigationRailState {
     pub fn new(ctx: &mut ComposeCtx) -> Self {
-        Self { expanded: ctx.remember(|| false) }
+        Self {
+            expanded: ctx.remember(|| false),
+            progress: std::sync::Arc::new(parking_lot::Mutex::new(None)),
+        }
     }
 
-    pub fn is_expanded(&self) -> bool {
+    /// 目标状态（对齐 targetValue——toggle/expand/collapse 立即翻转）
+    pub fn target(&self) -> bool {
         self.expanded.get()
+    }
+
+    /// 当前视觉状态（对齐 currentValue）：进度 >0.5 视为展开。
+    /// 需组件已挂载进度（build 后可用）；未挂载时退化为 target。
+    /// 读取注册依赖——动画完成帧驱动读取方重组。
+    pub fn current(&self) -> bool {
+        match &*self.progress.lock() {
+            Some(p) => p.get() > 0.5,
+            None => self.expanded.get(),
+        }
+    }
+
+    /// 变形动画是否进行中（对齐 isAnimating；peek——不注册依赖）
+    pub fn is_animating(&self) -> bool {
+        match &*self.progress.lock() {
+            Some(p) => {
+                let v = p.peek();
+                v > 0.01 && v < 0.99
+            }
+            None => false,
+        }
+    }
+
+    /// 组件 build 时挂载变形进度（current/is_animating 的数据源）
+    pub(crate) fn attach_progress(&self, p: State<f32>) {
+        *self.progress.lock() = Some(p);
     }
 
     /// 内部展开状态（供 Extended FAB 等组件直接绑定）
     pub fn expanded_state(&self) -> State<bool> {
         self.expanded.clone()
+    }
+
+    pub fn is_expanded(&self) -> bool {
+        self.expanded.get()
     }
 
     pub fn expand(&self) {
@@ -1005,6 +1065,8 @@ impl WideNavigationRailState {
 #[derive(Debug)]
 struct WideNavigationRailLayoutPolicy {
     progress: State<f32>,
+    /// children[0] 是否为 header 槽（FAB/logo）——header 水平位置随展开态迁移
+    has_header: bool,
 }
 
 impl MeasurePolicy for WideNavigationRailLayoutPolicy {
@@ -1020,23 +1082,36 @@ impl MeasurePolicy for WideNavigationRailLayoutPolicy {
             + (WIDE_RAIL_EXPANDED_MIN_WIDTH - WIDE_RAIL_COLLAPSED_WIDTH) * p)
             .min(c.max_width);
 
-        // 子项垂直堆叠：每项宽 = rail 宽，高松约束；水平居中由 item min 宽保证
+        // 子项垂直堆叠。水平位置：
+        // - item：x=0（收起 item 宽=rail 宽；展开 item 填满轨宽——居中恒等）
+        // - header（androidx 放 x=0、对齐由内容自理；M3 视觉为收起居中 ↔
+        //   展开与 item 胶囊前导对齐）：x = lerp(居中, 16, p)——FAB 图标展开后
+        //   与 item 图标（前导缩进 16 + 内边距 16 = 32）同 x，不随变宽漂移
         let mut y = WIDE_RAIL_TOP_PADDING;
         let mut placements = Vec::with_capacity(children.len());
-        for &child in children {
+        for (index, &child) in children.iter().enumerate() {
             let (size, _) = measure_node(
                 nodes,
                 policies,
                 child,
                 Constraints::new(0.0, width, 0.0, c.max_height),
             );
+            let mut x = (width - size.width) / 2.0;
+            if index == 0 && self.has_header {
+                let leading = WIDE_INDICATOR_H_PADDING;
+                x += (leading - x) * p;
+            }
             placements.push(Placement {
                 size,
-                position: Point::new((width - size.width) / 2.0, y),
+                position: Point::new(x, y),
             });
             y += size.height + RAIL_VERTICAL_PADDING;
         }
-        let height = (y + RAIL_VERTICAL_PADDING).min(c.max_height);
+        // 高度：内容拥抱，但尊重约束下限（fill_max_height → min=max——
+        // 套件 Row 中须撑满窗口高，否则轨底色只到内容底）
+        let height = (y + RAIL_VERTICAL_PADDING)
+            .max(c.min_height)
+            .min(c.max_height);
         (Size::new(width, height), placements)
     }
 
@@ -1097,7 +1172,9 @@ impl WideNavigationRail {
             if self.state.is_expanded() { 1.0 } else { 0.0 },
             rail_spring(SIZE_SPRING_STIFFNESS),
         );
-        let policy = WideNavigationRailLayoutPolicy { progress };
+        // 挂载进度到状态机——current()/is_animating() 的数据源
+        self.state.attach_progress(progress.clone());
+        let policy = WideNavigationRailLayoutPolicy { progress, has_header: self.header.is_some() };
         let header = self.header;
         let content = self.content;
         let key = ctx.next_key();
@@ -1131,6 +1208,8 @@ pub struct WideNavigationRailItem {
     interaction_source: Option<MutableInteractionSource>,
     /// rail 的展开进度（0=收起 Top 布局，1=展开 Start 布局）——由容器传入
     progress: Option<State<f32>>,
+    /// 图标位置覆盖（对齐 androidx iconPosition——None = 跟随容器变形进度）
+    icon_position: Option<crate::ui::navigation_bar::NavigationItemIconPosition>,
     modifier: Modifier,
 }
 
@@ -1149,6 +1228,7 @@ impl WideNavigationRailItem {
             colors: None,
             interaction_source: None,
             progress: None,
+            icon_position: None,
             modifier: Modifier::new(),
         }
     }
@@ -1176,6 +1256,16 @@ impl WideNavigationRailItem {
     /// 绑定容器的展开进度（WideNavigationRail 自动传入）
     pub fn progress(mut self, progress: State<f32>) -> Self {
         self.progress = Some(progress);
+        self
+    }
+
+    /// 图标位置覆盖（对齐 androidx `iconPosition`）：Top 钉死竖排位形、
+    /// Start 钉死横排位形——不随容器变形进度插值（默认 None = 跟随进度）。
+    pub fn icon_position(
+        mut self,
+        position: crate::ui::navigation_bar::NavigationItemIconPosition,
+    ) -> Self {
+        self.icon_position = Some(position);
         self
     }
 
@@ -1228,6 +1318,10 @@ impl WideNavigationRailItem {
         let policy = WideNavigationRailItemLayoutPolicy {
             position_progress: position_progress.clone(),
             size_progress: size_progress.clone(),
+            position_override: self.icon_position.map(|pos| match pos {
+                crate::ui::navigation_bar::NavigationItemIconPosition::Top => 0.0,
+                crate::ui::navigation_bar::NavigationItemIconPosition::Start => 1.0,
+            }),
         };
 
         let mut item_modifier = Modifier::new().min_width(NAVIGATION_RAIL_WIDTH);
@@ -1272,13 +1366,16 @@ impl WideNavigationRailItem {
 /// - Top(p=0)：同基础 rail item 有标签路径——胶囊 56×32 在图标后方，
 ///   图标/标签垂直堆叠居中
 /// - Start(p=1)：横向 item——胶囊包裹 [icon + gap(4) + label] 整组，
-///   高 = max(iconH,labelH)+2×8 = 40；内容行整体居中
+///   高 = max(iconH,labelH)+2×8 = 40；内容行起始对齐（前导缩进 16）
 ///
 /// 子节点顺序 [indicator, icon, label, ripple]。
 #[derive(Debug)]
 struct WideNavigationRailItemLayoutPolicy {
     position_progress: State<f32>,
     size_progress: State<f32>,
+    /// 图标位置覆盖（Some = 钉死 Top(0.0)/Start(1.0)，不读进度——静态 item
+    /// 不因容器动画帧重测；None = 跟随 position_progress）
+    position_override: Option<f32>,
 }
 
 impl MeasurePolicy for WideNavigationRailItemLayoutPolicy {
@@ -1289,8 +1386,8 @@ impl MeasurePolicy for WideNavigationRailItemLayoutPolicy {
         children: &[usize],
         constraints: Constraints,
     ) -> (Size, Vec<Placement>) {
-        // 进度最先读（layout_deps）
-        let p = self.position_progress.get().max(0.0).min(1.0);
+        // 进度最先读（layout_deps）。位置覆盖时跳过——钉死位形不因动画帧重测
+        let p = self.position_override.unwrap_or_else(|| self.position_progress.get().max(0.0).min(1.0));
         let size_p = self.size_progress.get().max(0.0);
 
         let loose = constraints.loosen();
@@ -1326,18 +1423,15 @@ impl MeasurePolicy for WideNavigationRailItemLayoutPolicy {
 
         let min_h = NAVIGATION_RAIL_ITEM_HEIGHT.max(constraints.min_height);
         // 收起：拥抱内容、至少 96（CollapsedTokens.ContainerWidth）；
-        // 展开：目标区域横跨轨宽减去两侧 20dp（M3：item 目标区横跨全宽），
-        // 内容行在更宽容器内居中
+        // 展开：item 填满轨宽（androidx item 为全宽命中目标——若取"轨宽-内边距"
+        // 再被容器居中，item x 会随展开漂移，图标绝对坐标跟着动）。
+        // 视觉边距由指示器前导缩进承担（见 Start 端点放置——FullWidthLeadingSpace）
         let container_w = if constraints.max_width >= f32::MAX {
             icon_size.width.max(full_w)
         } else {
-            let content_w = icon_size.width
-                .max(full_w)
-                .max(label_size.width);
+            let content_w = icon_size.width.max(full_w).max(label_size.width);
             if p > 0.0 {
-                ((constraints.max_width - WIDE_RAIL_ITEM_H_PADDING * 2.0)
-                    .max(content_w))
-                .min(constraints.max_width)
+                constraints.max_width.max(content_w)
             } else {
                 content_w.max(WIDE_RAIL_COLLAPSED_WIDTH).min(constraints.max_width)
             }
@@ -1360,17 +1454,18 @@ impl MeasurePolicy for WideNavigationRailItemLayoutPolicy {
         let top_pill = Point::new(cx - top_total_w / 2.0, top_v_pad - INDICATOR_V_PADDING_WITH_LABEL);
 
         // ── Start 端点放置 ──
+        // androidx 展开态内容起始对齐（IndicatorExpandedPadding.horizontal =
+        // FullWidthLeadingSpace）：胶囊锚定前导缩进、icon/label 固定 x——
+        // 不可随容器居中：组含 label，居中会把图标左缘右推（container 越宽
+        // 偏移越大 → 展开动画中图标向右漂移，androidx 行为是图标横向不动）
+        let start_icon_x = WIDE_INDICATOR_H_PADDING * 2.0; // 胶囊(16) + 胶囊内边距(16)
         let start_height = min_h.max(start_ind_h);
-        let row_x = (container_w - start_content_w) / 2.0;
-        let start_icon = Point::new(row_x, (start_height - icon_size.height) / 2.0);
+        let start_icon = Point::new(start_icon_x, (start_height - icon_size.height) / 2.0);
         let start_label = Point::new(
-            row_x + icon_size.width + ITEM_ICON_LABEL_GAP,
+            start_icon_x + icon_size.width + ITEM_ICON_LABEL_GAP,
             (start_height - label_size.height) / 2.0,
         );
-        let start_pill = Point::new(
-            (container_w - start_total_w) / 2.0,
-            (start_height - start_ind_h) / 2.0,
-        );
+        let start_pill = Point::new(WIDE_INDICATOR_H_PADDING, (start_height - start_ind_h) / 2.0);
 
         // ── lerp 合成 ──
         let height = top_height + (start_height - top_height) * p;
@@ -1415,189 +1510,4 @@ impl MeasurePolicy for WideNavigationRailItemLayoutPolicy {
         }
     }
 
-}
-
-
-// ── ModalWideNavigationRail（模态宽轨，带开合动画）──
-//
-// 对齐 androidx ModalWideNavigationRail 的呈现语义：
-// - 打开：面板从左缘滑入（FastSpatial 近似 stiffness400）、scrim 淡入至黑 @32%
-// - 关闭：反向播放——overlay 在进度归零后才移除（退场动画完整）
-// - 面板 SurfaceContainer 底色、16dp 圆角；顶部菜单按钮收起
-//
-// 实现说明：不走 ui::Dialog（其 visible=false 直接不注册 overlay——无法播
-// 放退场动画）。自行注册 overlay：存活条件 = open || progress > 0；内容闭包
-// 内读进度 State（注册到 overlay composer）→ 动画帧逐帧重测面板位移与 scrim。
-
-/// 模态宽轨开合状态机
-#[derive(Clone)]
-pub struct ModalWideNavigationRailState {
-    open: State<bool>,
-}
-
-impl ModalWideNavigationRailState {
-    pub fn new(ctx: &mut ComposeCtx) -> Self {
-        Self { open: ctx.remember(|| false) }
-    }
-
-    pub fn is_open(&self) -> bool {
-        self.open.get()
-    }
-
-    pub fn open(&self) {
-        self.open.set(true);
-    }
-
-    pub fn close(&self) {
-        self.open.set(false);
-    }
-
-    pub fn toggle(&self) {
-        let o = self.open.get();
-        self.open.set(!o);
-    }
-}
-
-pub struct ModalWideNavigationRail {
-    state: ModalWideNavigationRailState,
-    content: Box<dyn Fn(&mut ComposeCtx) + Send + Sync>,
-    modifier: Modifier,
-}
-
-impl ModalWideNavigationRail {
-    pub fn new(
-        state: ModalWideNavigationRailState,
-        content: impl Fn(&mut ComposeCtx) + Send + Sync + 'static,
-    ) -> Self {
-        Self { state, content: Box::new(content), modifier: Modifier::new() }
-    }
-
-    pub fn modifier(mut self, modifier: Modifier) -> Self {
-        self.modifier = self.modifier.then(modifier);
-        self
-    }
-
-    #[composable]
-    pub fn build(self, ctx: &mut ComposeCtx) {
-        ctx.changed(&self.state.is_open());
-        let theme = WiniaTheme::colors();
-        let state = self.state;
-
-        // 开合进度：目标随 open 翻转，spring 插值（FastSpatial 近似）。
-        // 进度在组件 build（主树）创建——open 翻转后主树重组驱动动画帧，
-        // overlay 内容每帧经 layout_overlays 重测拿到新进度。
-        let progress = ctx.animate_float_as_state(
-            if state.is_open() { 1.0 } else { 0.0 },
-            crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec {
-                damping_ratio: 1.0,
-                stiffness: SIZE_SPRING_STIFFNESS,
-                mass: 1.0,
-                threshold: 0.01,
-            }),
-        );
-
-        // overlay 存活条件：打开中，或关闭退场动画尚未归零
-        let visible = state.is_open() || progress.peek() > 0.0;
-
-        // 稳定 overlay id（跨帧匹配复用独立 Composer）
-        let id = ctx.remember(|| crate::ui::overlay::next_overlay_id());
-        ctx.record_overlay_active(id.get(), visible);
-
-        if !visible {
-            return; // 已完全关闭：不注册 overlay（sync 按 active=false 移除）
-        }
-
-        let content = self.content;
-        let modifier = self.modifier;
-        let p_for_content = progress.clone();
-        let s_for_scrim = state.clone();
-        let s_for_menu = state.clone();
-
-        ctx.open_overlay(crate::ui::overlay::OverlayDesc {
-            id: id.get(),
-            anchor_slot: None,
-            position: crate::ui::overlay::PopupPosition::TopLeft,
-            offset: (0.0, 0.0),
-            modal: true,
-            dismiss_on_outside: false, // scrim 自身处理点击关闭
-            click_passthrough: false,
-            on_dismiss: None,
-            content: Box::new(move |ctx| {
-                // ⚠ 全部用 peek——State 失效定向通知只达创建者（主 composer），
-                // overlay composer 不重组；动画由渲染期闭包逐帧求值完成
-                let p_scrim = p_for_content.clone();
-                let p_panel = p_for_content.clone();
-
-                // Stack 层叠：scrim 打底、面板覆盖其上（Row 会把面板水平排到右侧）
-                crate::ui::Stack::new().build(ctx, |ctx| {
-                        // scrim：黑 @32%×p，点击关闭（alpha 渲染期闭包逐帧求值）
-                        let close = s_for_scrim.clone();
-                        Column::new()
-                            .modifier(
-                                Modifier::new()
-                                    .fill_max_size()
-                                    .background(
-                                        move || {
-                                            let p = p_scrim.peek().max(0.0).min(1.0);
-                                            Color::from_argb(
-                                                (0.32 * p * 255.0).round() as u8,
-                                                0,
-                                                0,
-                                                0,
-                                            )
-                                        },
-                                        Shape::Rectangle,
-                                    )
-                                    .clickable(move || close.close()),
-                            )
-                            .build(ctx, |_| {});
-                        // 面板：左缘全高，translationX 随进度滑入
-                        let menu_close = s_for_menu.clone();
-                        Column::new()
-                            .alignment(Alignment::Center)
-                            .spacing(RAIL_VERTICAL_PADDING)
-                            .modifier(
-                                Modifier::new()
-                                    .fill_max_height()
-                                    .width(WIDE_RAIL_EXPANDED_MIN_WIDTH)
-                                    .background(
-                                        theme.surface_container,
-                                        Shape::rounded(WIDE_PANEL_CORNER_RADIUS),
-                                    )
-                                    .padding_top(WIDE_RAIL_TOP_PADDING)
-                                    .padding_vertical(RAIL_VERTICAL_PADDING)
-                                    .graphics_layer({
-                                        let p_state = p_for_content.clone();
-                                        move || {
-                                            let p = p_state.peek().max(0.0).min(1.0);
-                                            crate::modifier::GraphicsLayerParams {
-                                                translation_x: -(WIDE_RAIL_EXPANDED_MIN_WIDTH)
-                                                    * (1.0 - p),
-                                                ..Default::default()
-                                            }
-                                        }
-                                    }),
-                            )
-                            .build(ctx, |ctx| {
-                                WiniaTheme::with_content_color(
-                                    theme.on_surface,
-                                    ctx,
-                                    |ctx| {
-                                        let m_close = menu_close.clone();
-                                        IconButton::new()
-                                            .on_click(move || m_close.close())
-                                            .build(ctx, |ctx| {
-                                                Icon::svg_path(
-                                                    "M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z",
-                                                )
-                                                .size(24.0)
-                                                .build(ctx);
-                                            });
-                                        content(ctx);
-                                    });
-                            });
-                    });
-            }),
-        });
-    }
 }

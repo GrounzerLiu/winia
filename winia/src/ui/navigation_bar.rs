@@ -22,7 +22,7 @@
 //! - 布局期读进度走两段式依赖（measure 中 State::get 注册 layout_deps）——
 //!   动画每帧只重测不重组；背景/透明度闭包绘制期 peek——零重组纯重绘
 //!
-//! # 水平 item（NavigationBarItemLayout::Horizontal，中等窗口）
+//! # 水平 item（NavigationItemIconPosition::Start，中等窗口）
 //!
 //! 对齐 androidx-main ShortNavigationBar.kt + NavigationItem.kt StartIconMeasurePolicy /
 //! placeLabelAndStartIcon（NavigationBarHorizontalItemTokens）：图标在左、label 在右，
@@ -81,15 +81,15 @@ const H_INDICATOR_HORIZONTAL_PADDING: f32 = 16.0;
 /// NavigationBarTokens.ItemActiveIndicatorIconLabelSpace —— 水平 item 图标与 label 间距
 const START_ICON_TO_LABEL_PADDING: f32 = 4.0;
 
-/// NavigationBarItem 的布局方向（对标 NavigationItemIconPosition：
-/// Top = 紧凑窗口垂直 item，Start = 中等窗口水平 item）。
+/// 导航 item 图标位置（对齐 androidx NavigationItemIconPosition——
+/// ShortNavigationBarItem / WideNavigationRailItem 共享的统一概念）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NavigationBarItemLayout {
-    /// 图标在上、label 在下（placeLabelAndIcon / placeIcon 数学）
-    Vertical,
+pub enum NavigationItemIconPosition {
+    /// 图标在上、label 在下（placeLabelAndIcon / placeIcon 数学；紧凑窗口）
+    Top,
     /// 图标在左、label 在右（placeLabelAndStartIcon 数学；label 恒显示，
-    /// alwaysShowLabel 的位置插值/淡出仅适用于垂直模式）
-    Horizontal,
+    /// alwaysShowLabel 的位置插值/淡出仅适用于 Top 模式；中等窗口）
+    Start,
 }
 
 // ── 颜色 ──
@@ -331,7 +331,7 @@ pub struct NavigationBarItem {
     label: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
     enabled: bool,
     always_show_label: bool,
-    layout: NavigationBarItemLayout,
+    icon_position: NavigationItemIconPosition,
     colors: Option<NavigationBarItemColors>,
     interaction_source: Option<MutableInteractionSource>,
     modifier: Modifier,
@@ -346,7 +346,7 @@ impl NavigationBarItem {
             label: None,
             enabled: true,
             always_show_label: true,
-            layout: NavigationBarItemLayout::Vertical,
+            icon_position: NavigationItemIconPosition::Top,
             colors: None,
             interaction_source: None,
             modifier: Modifier::new(),
@@ -373,9 +373,9 @@ impl NavigationBarItem {
         self
     }
 
-    /// 布局方向：垂直（默认，紧凑窗口）或水平（中等窗口，图标在左）。
-    pub fn layout(mut self, layout: NavigationBarItemLayout) -> Self {
-        self.layout = layout;
+    /// 图标位置：Top（默认，紧凑窗口）或 Start（中等窗口，图标在左）。
+    pub fn icon_position(mut self, position: NavigationItemIconPosition) -> Self {
+        self.icon_position = position;
         self
     }
 
@@ -399,7 +399,7 @@ impl NavigationBarItem {
         ctx.changed(&self.selected);
         ctx.changed(&self.enabled);
         ctx.changed(&self.always_show_label);
-        ctx.changed(&self.layout);
+        ctx.changed(&self.icon_position);
         ctx.changed(&self.colors);
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
@@ -408,7 +408,7 @@ impl NavigationBarItem {
         let enabled = self.enabled;
         let has_label = self.label.is_some();
         // 水平模式 label 恒显示（M3 Expressive 规范）——alwaysShowLabel 淡出仅垂直模式
-        let horizontal = self.layout == NavigationBarItemLayout::Horizontal;
+        let horizontal = self.icon_position == NavigationItemIconPosition::Start;
 
         // 双进度动画（alphaProgress / sizeProgress 分离——见模块文档）
         let alpha_progress =
@@ -511,7 +511,7 @@ fn wrap_slot(ctx: &mut ComposeCtx, modifier: Modifier, content: impl FnOnce(&mut
     ctx.end_restartable_group();
 }
 
-/// item 布局：精确复刻 androidx NavigationBarItemLayout 的
+/// item 布局：精确复刻 androidx NavigationItem（Top/Start icon position）的
 /// placeLabelAndIcon / placeIcon 数学（见模块文档）。
 ///
 /// 子节点索引约定：children[0] = 彩色指示器胶囊（宽度随 sizeProgress
@@ -914,7 +914,7 @@ mod tests {
     fn make_horizontal_item(selected: bool) -> NavigationBarItem {
         NavigationBarItem::new(selected, |ctx| icon_leaf(ctx, NAVIGATION_BAR_ICON_SIZE))
             .label(|ctx| crate::ui::Text::new("Home").build(ctx))
-            .layout(NavigationBarItemLayout::Horizontal)
+            .icon_position(NavigationItemIconPosition::Start)
             .on_click(|| {})
     }
 
@@ -959,7 +959,7 @@ mod tests {
         let mut composer = Composer::new();
         composer.compose(|ctx| {
             NavigationBarItem::new(true, |ctx| icon_leaf(ctx, NAVIGATION_BAR_ICON_SIZE))
-                .layout(NavigationBarItemLayout::Horizontal)
+                .icon_position(NavigationItemIconPosition::Start)
                 .on_click(|| {})
                 .build(ctx)
         });

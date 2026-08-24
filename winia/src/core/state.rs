@@ -229,15 +229,36 @@ thread_local! {
 }
 
 /// Composer 调用：开始组合期依赖记录（清空缓冲——上一帧残留丢弃）
+thread_local! {
+    /// 当前记录依赖的 Composer 队列（弱引用）——组合/测量期读取外部 State 时，
+    /// 订阅该 State 的失效通知（overlay/子 Composer 响应外部变化的关键）
+    pub(crate) static RECORDER_QUEUE: std::cell::RefCell<Option<Weak<parking_lot::Mutex<Vec<u32>>>>> = const { std::cell::RefCell::new(None) };
+}
+
 pub(crate) fn begin_compose_deps() {
     DEP_BUFFER.with(|b| b.borrow_mut().clear());
     DEP_MODE.with(|m| m.set(DepMode::Compose));
 }
 
+/// Composer 组合入口调用：同时登记通知队列——record_dep 据此为跨 Composer
+/// 读取建立订阅（失效 fan-out）
+pub(crate) fn begin_compose_deps_with_queue(queue: std::sync::Weak<parking_lot::Mutex<Vec<u32>>>) {
+    RECORDER_QUEUE.with(|q| *q.borrow_mut() = Some(queue));
+    begin_compose_deps();
+}
+
+/// take_deps 后清除记录队列引用
+pub(crate) fn end_recorder_queue() {
+    RECORDER_QUEUE.with(|q| *q.borrow_mut() = None);
+}
+
 /// Composer 调用：开始布局期依赖记录（measure 中 State::get 写入——两段式分流）
+/// 同时清 recorder 队列引用：组合期 panic 时 end_recorder_queue 未执行，
+/// 残留队列会让 measure 期 record_dep 建立错误订阅（begin 处防御性清除）
 pub(crate) fn begin_layout_deps() {
     DEP_BUFFER.with(|b| b.borrow_mut().clear());
     DEP_MODE.with(|m| m.set(DepMode::Layout));
+    RECORDER_QUEUE.with(|q| *q.borrow_mut() = None);
 }
 
 /// Composer 调用：结束记录并取走缓冲（O(1) Vec 移动）
@@ -252,6 +273,21 @@ pub(crate) fn record_dep(state_id: u32, slot_key: u64) {
         return;
     }
     DEP_BUFFER.with(|b| b.borrow_mut().push((state_id, slot_key)));
+
+    // 跨 Composer 订阅：记录者队列 ≠ State 创建者队列时，订阅失效通知
+    // （overlay/子 Composer 响应主树 State 变化的关键通路）
+    RECORDER_QUEUE.with(|q| {
+        if let Some(recorder) = q.borrow().clone() {
+            let owner = STATE_QUEUE_MAP.lock().get(&state_id).and_then(|w| w.upgrade());
+            let same = match owner {
+                Some(ref o) => std::sync::Arc::as_ptr(o) == std::sync::Weak::as_ptr(&recorder),
+                None => false,
+            };
+            if !same {
+                subscribe_state(state_id, recorder);
+            }
+        }
+    });
 }
 
 // ── Composer 注册表：每个 Composer 注册自己的通知队列 ──
@@ -272,12 +308,29 @@ static COMPOSER_REGISTRY: LazyLock<Mutex<Vec<Weak<Mutex<Vec<u32>>>>>> =
 static STATE_QUEUE_MAP: LazyLock<Mutex<HashMap<u32, Weak<parking_lot::Mutex<Vec<u32>>>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// 跨 Composer 订阅注册表：state_id → 依赖该 State 的非创建者 Composer 队列。
+/// 失效时 fan-out（overlay 内容响应主树 State 变化的关键通路）
+static STATE_SUBSCRIBERS: LazyLock<Mutex<HashMap<u32, Vec<Weak<parking_lot::Mutex<Vec<u32>>>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// 非 Creator Composer 订阅 state_id 的失效通知（惰性清理死引用后去重）。
+/// ⚠ 必须 retain 先行：若先对原始指针查重，死弱引用的堆地址可能被新
+/// Composer 的队列分配复用（ABA）——dup 误判命中 → 新订阅被静默丢弃，
+/// fan-out 永不通知该 Composer（overlay 内容永久陈旧）。
+fn subscribe_state(state_id: u32, queue: Weak<parking_lot::Mutex<Vec<u32>>>) {
+    let mut m = STATE_SUBSCRIBERS.lock();
+    let list = m.entry(state_id).or_default();
+    list.retain(|w| w.upgrade().is_some());
+    let dup = list.iter().any(|w| w.as_ptr() == queue.as_ptr());
+    if !dup { list.push(queue); }
+}
+
 /// Composer 启动时注册自己的队列（传入 Weak 引用，Composer drop 后自动清理）
 pub(crate) fn register_composer_queue(queue: Weak<Mutex<Vec<u32>>>) {
     COMPOSER_REGISTRY.lock().push(queue);
 }
 
-/// State 值变化时调用：定向通知创建此 State 的 Composer
+/// State 值变化时调用：定向通知创建者 + fan-out 订阅者
 pub(crate) fn notify_state_changed(state_id: u32) {
     notify_state_changed_inner(state_id, true);
 }
@@ -291,13 +344,22 @@ pub(crate) fn wake_loop() {
 }
 
 pub(crate) fn notify_state_changed_inner(state_id: u32, wake: bool) {
-    // 定向通知：只推送到创建此 State 的 Composer 队列，避免跨窗口污染
-    let pushed = if let Some(q) = STATE_QUEUE_MAP.lock().get(&state_id).and_then(|w| w.upgrade()) {
+    // 定向通知创建者 + fan-out 到订阅了该 State 的其他 Composer
+    // （overlay/子 Composer——精准投递：只推给真正读过该 State 的队列）
+    if let Some(q) = STATE_QUEUE_MAP.lock().get(&state_id).and_then(|w| w.upgrade()) {
         q.lock().push(state_id);
-        true
-    } else {
-        false
-    };
+    }
+    {
+        let mut subs = STATE_SUBSCRIBERS.lock();
+        if let Some(list) = subs.get_mut(&state_id) {
+            for w in list.iter() {
+                if let Some(q) = w.upgrade() {
+                    q.lock().push(state_id);
+                }
+            }
+            list.retain(|w| w.upgrade().is_some());
+        }
+    }
     if wake {
         if let Some(ref f) = *WAKE_FN.lock().unwrap() { f(); }
     }
@@ -404,5 +466,54 @@ mod tests {
             STATE_OWNER_QUEUE.with(|o| *o.borrow_mut() = None);
         }
         let _ = s.get();
+    }
+
+    /// 跨 Composer 订阅：记录者队列 ≠ 创建者队列时（overlay 读主树 State），
+    /// record_dep 建立订阅 → notify fan-out 到两个队列；重复订阅去重；
+    /// 队列 drop 后惰性清理（不 panic）
+    #[test]
+    fn cross_composer_subscription_fan_out_and_dedup() {
+        let owner_q = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let s = {
+            STATE_OWNER_QUEUE.with(|o| *o.borrow_mut() = Some(std::sync::Arc::downgrade(&owner_q)));
+            let s = State::new(0i32);
+            STATE_OWNER_QUEUE.with(|o| *o.borrow_mut() = None);
+            s
+        };
+
+        // 另一个 Composer（模拟 overlay）组合期读取该 State → 建立订阅
+        let overlay_q = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+        begin_compose_deps_with_queue(std::sync::Arc::downgrade(&overlay_q));
+        record_dep(s.id(), 7); // 组合期 get 的等价路径
+        assert_eq!(take_deps().len(), 1, "组合期依赖应入缓冲");
+        end_recorder_queue();
+
+        s.set(1);
+        assert_eq!(owner_q.lock().len(), 1, "创建者队列收到通知");
+        assert_eq!(overlay_q.lock().len(), 1, "订阅者队列 fan-out 收到通知");
+
+        // 再次组合期读取（每帧都会发生）→ 重复订阅必须去重，否则通知翻倍
+        begin_compose_deps_with_queue(std::sync::Arc::downgrade(&overlay_q));
+        record_dep(s.id(), 7);
+        take_deps();
+        end_recorder_queue();
+
+        s.set(2);
+        assert_eq!(owner_q.lock().len(), 2);
+        assert_eq!(overlay_q.lock().len(), 2, "重复订阅应去重（仍只 +1）");
+
+        // 订阅者 drop：notify 惰性清理死弱引用，不 panic、创建者照常收通知
+        drop(overlay_q);
+        s.set(3);
+        assert_eq!(owner_q.lock().len(), 3);
+
+        // 布局期（RECORDER_QUEUE 已清）record_dep 只进缓冲、不建立订阅：
+        let other_q = std::sync::Arc::new(parking_lot::Mutex::new(Vec::<u32>::new()));
+        begin_layout_deps();
+        record_dep(s.id(), 9);
+        end_recorder_queue(); // 无害——begin_layout_deps 未登记队列
+        take_deps();
+        s.set(4);
+        assert!(other_q.lock().is_empty(), "布局期不得建立跨 Composer 订阅");
     }
 }

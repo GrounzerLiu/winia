@@ -52,6 +52,9 @@ pub(crate) struct PerWindow {
     pub(crate) scale_factor: f64,
     pub(crate) focused_id: Option<u64>,
     pub(crate) content: Box<dyn Fn(&mut ComposeCtx)>,
+    /// 窗口尺寸的响应式 State（首次组合时 ctx.remember 创建并挂载到
+    /// ui::adaptive——resize set() → 依赖方（套件脚手架）slot dirty）
+    window_size_state: std::cell::RefCell<Option<crate::core::state::State<(f32, f32)>>>,
     pub(crate) on_close: Option<Box<dyn FnMut() + Send>>,
     pub(crate) created_id: Option<u64>,
     theme: crate::ui::theme::ThemeColors,
@@ -143,7 +146,7 @@ struct PtrDownState {
 
 impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::ui::theme::ThemeColors) -> Self {
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, drag_scroll: None, overlays: Vec::new(), overlay_click: None, pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, drag_scroll: None, overlays: Vec::new(), overlay_click: None, pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -315,12 +318,31 @@ impl PerWindow {
         // 保证 Dimension::Px / TextUnit::Px 在布局/渲染期使用窗口 sf 而非 standard(1.0)
         let density = crate::unit::Density::from_density(self.scale_factor as f32);
         crate::unit::with_density(density, || {
+        // 注入窗口逻辑尺寸——自适应组件（WindowSizeClass）组合期读取
+        crate::ui::adaptive::set_window_size(self.width, self.height);
         // 循环 compose 直到没有新的 pending state——处理并发 task 在 compose 期间
         // 完成的 case（第二个 notify 的 state 在第一次 compose 之后才入队）
         // 循环 compose 直到没有新的 pending state
         let mut any_composed = false;
         loop {
-            let did_compose = self.composer.recompose(|ctx| (self.content)(ctx));
+            let did_compose = self.composer.recompose(|ctx| {
+                // 窗口尺寸响应式 State：首帧 remember 创建（owner=本 Composer），
+                // 每帧挂载到 adaptive + set_silent 同步值；resize 时由事件路径 set() 通知
+                let slot = &self.window_size_state;
+                let existing = slot.borrow().clone();
+                let size_state = existing.unwrap_or_else(|| {
+                    // remember 需稳定 key 上下文——裸重组闭包无语句注入，用 ctx.key 包裹
+                    ctx.key("winia_window_size_state", |ctx| {
+                        let s = ctx.remember(|| (self.width, self.height));
+                        *slot.borrow_mut() = Some(s.clone());
+                        s
+                    })
+                });
+                size_state.set_silent((self.width, self.height));
+                crate::ui::adaptive::set_window_size(self.width, self.height);
+                crate::ui::adaptive::set_window_size_state(size_state);
+                (self.content)(ctx);
+            });
             any_composed |= did_compose;
             if let Some(slot_key) = self.focused_slot_key {
                 if let Some(r) = self.composer.layout_root_idx() {
@@ -840,19 +862,45 @@ impl ApplicationHandler for AppState {
                 }
             }
             WindowEvent::SurfaceResized(s) => {
+                // 直接采纳事件尺寸。旧版对 >50% 变化做忽略（防 winit #2094 陈旧
+                // 事件）——但最大化必然 >50%，整个最大化路径被吞（尺寸/布局全部
+                // 卡旧值）。陈旧事件改由 RedrawRequested 的每帧 inner_size 校准自愈。
                 let l = s.to_logical::<f32>(pw.scale_factor);
-                if (l.width - pw.width).abs() > pw.width * 0.5
-                    || (l.height - pw.height).abs() > pw.height * 0.5 { /* winit bug #2094 */ }
-                else { pw.width = l.width; pw.height = l.height; }
+                pw.width = l.width; pw.height = l.height;
                 if let Some(ref mut sw) = pw.skia_window { sw.resize(); }
-                // 确保下一帧以新尺寸重新布局（有些平台 resize 后不自动触发 RedrawRequested）
-                pw.force_redraw = true; // resize 重绘不因帧率限制跳过而丢失
+                // 不设 force_redraw：拖拽时 SurfaceResized 以鼠标速率（~125Hz）到达，
+                // 无条件渲染会绕过帧节流（实测 3.6ms/帧）。帧节流的"渲染欠账"机制
+                // （跳过时自设 force_redraw）保证更新不丢；request_redraw 保持链路
+                // （OS 拖拽期间持续 WM_PAINT + 自驱，帧距 ≥16ms）
+                // 尺寸 State set() 通知——依赖方（NavigationSuiteScaffold 等
+                // 读 window_size() 的 slot）标记 dirty，增量重组切换形态
+                if let Some(s) = pw.window_size_state.borrow().as_ref() {
+                    s.set((l.width, l.height));
+                }
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
             }
             WindowEvent::RedrawRequested => {
                 // 帧时钟 tick（P3-12：with_frame_nanos 的驱动源——每帧广播时间戳）
                 crate::effect::frame_tick();
-                                // 动画推进已移到 new_events（每轮一次，与窗口解耦）
+                // 尺寸自愈校准：以 winit 实际 surface 尺寸为准。winit #2094 类
+                // 陈旧事件（最大化时旧尺寸事件可能后到）由此在下一帧纠正——
+                // 偏差 >0.5 逻辑像素即更新 pw + 通知尺寸 State（套件形态随之刷新）
+                if let Some(ref sw) = pw.skia_window {
+                    let phys = sw.surface_size();
+                    let l = phys.to_logical::<f32>(pw.scale_factor);
+                    if (l.width - pw.width).abs() > 0.5 || (l.height - pw.height).abs() > 0.5 {
+                        pw.width = l.width;
+                        pw.height = l.height;
+                        if let Some(s) = pw.window_size_state.borrow().as_ref() {
+                            s.set((l.width, l.height));
+                        }
+                    }
+                }
+                // 动画推进（冗余于 new_events——Windows 拖拽 resize 是模态循环，
+                // new_events/AboutToWait 被阻塞不触发；WM_PAINT 驱动的 RedrawRequested
+                // 是拖拽中唯一持续到达的事件——在此 tick 才有"边拖边动"的动画。
+                // 与 new_events 双 tick 无害：Animatable 按实际 dt 推进）
+                crate::animation::update_animations();
                 // 消费焦点请求（在 compose 前处理，避免丢失）
                 for id in crate::modifier::take_focus_requests() {
                     if let Some(r) = pw.composer.layout_root_idx() {
@@ -912,6 +960,14 @@ impl ApplicationHandler for AppState {
                     pw.recompose_layout_render(|nodes, root_idx, surface| {
                         debug::update_tree(wid, &debug::build_tree_json(nodes, root_idx));
                     });
+                    // overlay 独立 Composer 的 arena 同样进调试树（modal/popup 可观测；
+                    // 每帧整体替换——overlay 关闭后条目自动消失）。z 序 = pw.overlays
+                    // 栈序，与 render_overlays 绘制顺序一致。
+                    let ov_trees: Vec<(u64, String)> = pw.overlays.iter().filter_map(|ov| {
+                        ov.composer.layout_root_idx()
+                            .map(|r| (ov.id, debug::build_tree_json(ov.composer.arena_nodes(), r)))
+                    }).collect();
+                    debug::set_overlay_trees(wid, ov_trees);
                 }));
                 match panic_result {
                     Ok(()) => {
@@ -1185,7 +1241,17 @@ impl AppState {
                         }
                     }
                 }
-                debug::DebugEvent::Resize { w, h } => { pw.width = w; pw.height = h; handled = true; }
+                debug::DebugEvent::Resize { w, h } => {
+                    // 真实 resize：request_inner_size → WM_SIZE → SurfaceResized
+                    // 事件自然回流——与拖拽/最大化完全同通路（pw 字段与尺寸 State
+                    // 均由事件处理器统一更新，避免与 surface_size 自愈互相打架）
+                    if let Some(ref sw) = pw.skia_window {
+                        let _ = sw.request_surface_size(
+                            winit::dpi::LogicalSize::new(w as f64, h as f64).into(),
+                        );
+                    }
+                    handled = true;
+                }
                 _ => {}
             }
         }
@@ -1251,7 +1317,23 @@ impl AppState {
         // 首次 compose+layout+draw 也提供 Density（Px 单位首帧即正确）
         let density = crate::unit::Density::from_density(sf as f32);
         crate::unit::with_density(density, || {
-        pw.composer.compose(|ctx| (pw.content)(ctx));
+        // 首帧同样注入窗口尺寸（自适应组件首帧即正确形态）+ 挂载响应式 State
+        crate::ui::adaptive::set_window_size(pending.width, pending.height);
+        let slot = &pw.window_size_state;
+        let (w0, h0) = (pending.width, pending.height);
+        pw.composer.compose(|ctx| {
+            let existing = slot.borrow().clone();
+            let size_state = existing.unwrap_or_else(|| {
+                ctx.key("winia_window_size_state", |ctx| {
+                    let s = ctx.remember(|| (w0, h0));
+                    *slot.borrow_mut() = Some(s.clone());
+                    s
+                })
+            });
+            size_state.set_silent((w0, h0));
+            crate::ui::adaptive::set_window_size_state(size_state);
+            (pw.content)(ctx);
+        });
         pw.composer.layout(Constraints::new(0.0, pending.width, 0.0, pending.height));
         let bg = pw.theme.background;
         if let Some(root_idx) = pw.composer.layout_root_idx() {

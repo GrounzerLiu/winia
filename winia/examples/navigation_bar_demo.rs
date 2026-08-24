@@ -28,7 +28,7 @@ const FAVORITES_INDEX: usize = 2;
 
 /// 一条 NavigationBar：selected 决定选中项；favorites 驱动计数徽章。
 #[composable]
-fn nav_bar(ctx: &mut ComposeCtx, selected: State<usize>, favorites: State<i32>, layout: NavigationBarItemLayout) {
+fn nav_bar(ctx: &mut ComposeCtx, selected: State<usize>, favorites: State<i32>, layout: NavigationItemIconPosition) {
     let sel = selected.clone();
     let fav = favorites.clone();
     NavigationBar::new(move |ctx| {
@@ -94,14 +94,14 @@ fn navigation_bar_demo(ctx: &mut ComposeCtx) {
                 Text::new("Compact windows - vertical items")
                     .modifier(Modifier::new().padding(16.0))
                     .build(ctx);
-                nav_bar(ctx, v_selected.clone(), favorites.clone(), NavigationBarItemLayout::Vertical);
+                nav_bar(ctx, v_selected.clone(), favorites.clone(), NavigationItemIconPosition::Top);
 
                 Spacer::vertical(24.0);
 
                 Text::new("Medium windows - horizontal items")
                     .modifier(Modifier::new().padding(16.0))
                     .build(ctx);
-                nav_bar(ctx, h_selected.clone(), favorites.clone(), NavigationBarItemLayout::Horizontal);
+                nav_bar(ctx, h_selected.clone(), favorites.clone(), NavigationItemIconPosition::Start);
 
                 Text::new(format!(
                     "vertical tab: {} | horizontal tab: {} | favorites: {} (click to +1)",
