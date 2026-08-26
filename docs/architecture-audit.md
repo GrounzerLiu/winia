@@ -2,7 +2,7 @@
 
 > 状态：架构审计与增量修复跟踪。本轮只修改 ownerless State/frame 目标文件和本审计文档，不回滚既有 dirty worktree。
 > 范围：D:/Projects/winia，v2 分支；当前工作树观测为 origin/v2 ahead 41。
-> 结论：3.1 owner TLS 泄漏已由 ownerless StateSignal 基础切片修复；3.2/3.4 已有 RuntimeFrame、layout-only 和布局事务 retry 基础切片；3.9/6.1/6.2/6.3 已由多窗口上下文隔离修复；3.10/6.4/6.5 已部分修复；Phase 1（所有权与恢复边界）三项中第 2 项（guard 体系）与第 3 项（依赖收敛）已完成，第 1 项（per-Window context）仍有 debug 事件/动画表/事件循环三处全局单态残留；剩余 Phase 2（坐标/复用/LayoutNode）、Phase 3（LazyList/TextField）、Phase 4（CompositionLocal/Theme/E2E）和其他风险仍开放。
+> 结论：3.1 owner TLS 泄漏已由 ownerless StateSignal 基础切片修复；3.2/3.4 已有 RuntimeFrame、layout-only 和布局事务 retry 基础切片；3.9/6.1/6.2/6.3 已由多窗口上下文隔离修复；3.10/6.4/6.5 已部分修复；Phase 1（所有权与恢复边界）三项中第 2 项（guard 体系）与第 3 项（依赖收敛）已完成，第 1 项（per-Window context）仍有 debug 事件/动画表/事件循环三处全局单态残留——经评估 2 处为本质全局、1 处为代码美化，均已决策不继续清理（原因见 §11 checklist）；剩余 Phase 2（坐标/复用/LayoutNode）、Phase 3（LazyList/TextField）、Phase 4（CompositionLocal/Theme/E2E）和其他风险仍开放。
 
 ## 1. 基线与验证状态
 
@@ -352,8 +352,11 @@ UI tree 由 winia/src/debug.rs:168-228 手工拼接。TextContent 做了转义�
 
    **残留缺口**（未收拢的全局单态）：
    - [~] debug event：`DEBUG_RUNTIME`（debug.rs:28）、`DEBUG_STATE`（debug.rs:17）、`LEGACY_TARGET`（debug.rs:19）、`SCREENSHOT_TARGET`（debug.rs:20）仍为全局 `LazyLock<Mutex>`/`static Mutex`，`DebugRuntime` 无 per-window 字段。
+       **不继续清理的原因**：`DEBUG_RUNTIME`（wake_callback/event_loop_proxy）为单进程单事件循环，本质全局。`DEBUG_STATE` 已按 `window_id` 在 HashMap 内部分区（debug.rs:138-144）。`LEGACY_TARGET`/`SCREENSHOT_TARGET` 可合入 `DebugRuntime` 但仅是代码美化，不影响正确性。
    - [~] 动画表：`ACTIVE_ANIMATIONS`（animation.rs:35）、`ACTIVE_COLOR_ANIMATIONS`（animation.rs:38）为全局 `LazyLock<Mutex<Vec<..>>>`，并行测试互相干扰。
+       **不继续清理的原因**：全局唯一 `StateId`（u64）使动画表本质上可跨窗口安全查找；`Composer.animation_state_ids`（composer.rs:1599）已实现 Composer drop 时只清理自有动画（`clear_animations_for_states`），达成语义隔离。per-window 物理收拢需改动画注册/调度/全局表查询接口，影响面大、收益低。并行测试干扰是全局测试表固有现象，不属生产问题。
    - [~] 事件循环/窗口路由：`GLOBAL_PENDING`（app.rs:1375）、`APP_PROXY`（app.rs:1376）、`CREATED`（window.rs:57）全局 HashSet、`NEXT_ID`（window.rs:58）全局 AtomicU64。
+       **不继续清理的原因**：`APP_PROXY` 是 winit 单事件循环代理，天然全局。`GLOBAL_PENDING` 是窗口创建/关闭的进程级队列，需要全局可见。`CREATED` 是窗口注册表、`NEXT_ID` 是 ID 分配器——两者改为 per-window 反而有害（窗口 ID 必须在全局范围内唯一）。这些是设计上正确的全局，不属架构缺陷。
    - [x] TLS 框架隔离：`ACTIVE_SLOT_KEY`/`GROUP_STACK`/`STMT_STACK`（composer.rs:47-49）、`DEP_BUFFER`/`DEP_MODE`/`RECORDER_QUEUE`（state.rs:533-535）有 `RuntimeFrameGuard`/`DependencyFrameGuard` 兜底，已隔离。
 
 2. [x] 用 guard 或统一 compose transaction 清理所有 TLS/依赖模式，覆盖 panic 与 nested/reentrant compose 契约。
