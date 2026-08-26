@@ -400,13 +400,13 @@ UI tree 由 winia/src/debug.rs:168-228 手工拼接。TextContent 做了转义�
 
    **涉及文件**：`core/materialize.rs`（复用路径）、`layout/node.rs`（LayoutNode 字段定义）
 
-2. [ ] 统一 scroll-aware path transform（对应 §3.6 PointerEvent + §3.7 MouseWheel）
+2. [~] 统一 scroll-aware path transform（对应 §3.6 PointerEvent + §3.7 MouseWheel）
 
    **目标**：修正滚动容器内指针事件、命中测试、capture 和滚轮操作的坐标系统，确保所有坐标变换路径一致。
 
    **子项**：
-   - [ ] `dispatch_ptr_event` 坐标修正：`app.rs:2668-2708` 当前只累加 `node.position`，未扣除祖先 scroll offset。改为使用 `scroll_offset_for_node`（`layout/node.rs:586-593`）的坐标、与 `hit_test`/`node_abs_position` 保持一致。
-   - [ ] MouseWheel 按命中位置选目标：`app.rs:571-587`/`app.rs:1540-1547` 的 `find_scroll_target` 当前丢弃 cursor position。改为记录每个窗口最后 `PointerMoved` 的逻辑坐标，wheel 时先 hit-test，再在命中路径上执行 nested scroll。
+   - [x] `dispatch_ptr_event` 坐标修正：`app.rs:2668-2708` 当前只累加 `node.position`，未扣除祖先 scroll offset。改为使用 `scroll_offset_for_node`（`layout/node.rs:586-593`）的坐标、与 `hit_test`/`node_abs_position` 保持一致。
+   - [x] MouseWheel 按命中位置选目标：`app.rs:571-587`/`app.rs:1540-1547` 的 `find_scroll_target` 当前丢弃 cursor position。改为记录每个窗口最后 `PointerMoved` 的逻辑坐标，wheel 时先 hit-test，再在命中路径上执行 nested scroll。
    - [ ] 坐标一致性测试：新增 `test_scroll_pointer_event_coordinates_match_hit_test`，验证滚动容器内点击的局部坐标在 hit-test / dispatch / render 三阶段一致。
 
    **验证**：`hit_test`、`scene_to_node_local`、`node_abs_position`、`dispatch_ptr_event` 坐标一致；并排滚动容器各自正确响应滚轮。
