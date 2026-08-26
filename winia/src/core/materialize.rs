@@ -229,6 +229,19 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
             n.on_remove = on_remove;
             n.slot_key = key;
             n.dirty = dirty; // Dirty → 重测；Clean → 折叠（保留测量）
+            // 重置 scroll metadata：新 modifier 无 scroll state 时清空旧值
+            // （场景：节点从 scroll 容器变为非 scroll 容器，旧 viewport 残留）
+            if n.modifier.vertical_scroll_state().is_none()
+                && n.modifier.horizontal_scroll_state().is_none()
+            {
+                n.scroll_viewport_height = 0.0;
+                n.scroll_viewport_width = 0.0;
+                n.scroll_content_height = 0.0;
+                n.scroll_content_width = 0.0;
+                n.scroll_reverse = false;
+            }
+            // 防御性重置 parent_id（add_child 在末尾重新设置正确的值）
+            n.parent_id = None;
             // 文本内容变化检测：依赖注册在父容器 → leaf Slot Clean 但 TextContent 变了
             // （输入/选择）——不重测则 cached_paragraph 旧内容（输入不显示）
             if !dirty {
