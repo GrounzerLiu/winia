@@ -467,7 +467,7 @@ fn navigation_bar_horizontal_item_pill_wraps_icon_label_group() {
                         },
                     )
                     .label(move |ctx| Text::new(format!("Tab{i}")).build(ctx))
-                    .layout(winia::ui::NavigationItemIconPosition::Start)
+                    .icon_position(winia::ui::NavigationItemIconPosition::Start)
                     .on_click(|| {})
                     .build(ctx);
                 }
