@@ -376,7 +376,7 @@ impl LinearWavyProgressIndicator {
                 wave_animation_spec(wavelength, wave_speed),
             );
             if !enable_motion {
-                crate::animation::remove_animation_by_state(wave_offset.id());
+                crate::animation::remove_animation_by_state(wave_offset.state_id());
             }
             let fh = inf.animate_float(
                 ctx,
@@ -449,7 +449,7 @@ impl LinearWavyProgressIndicator {
             // 立即移除刚注册的无限动画（保留 State，绘制时读到 0）。
             let wave_active = enable_motion && (target > 0.0 || current > 0.0);
             if !wave_active {
-                crate::animation::remove_animation_by_state(wave_offset.id());
+                crate::animation::remove_animation_by_state(wave_offset.state_id());
             }
 
             let wave_for_draw = wave_offset.clone();
@@ -462,7 +462,7 @@ impl LinearWavyProgressIndicator {
                     target,
                     spec,
                     move || {
-                        crate::animation::remove_animation_by_state(wave_for_stop.id());
+                        crate::animation::remove_animation_by_state(wave_for_stop.state_id());
                     },
                 );
             } else {
@@ -1052,7 +1052,7 @@ impl CircularWavyProgressIndicator {
                 wave_animation_spec_duration(duration_ms),
             );
             if !enable_motion {
-                crate::animation::remove_animation_by_state(wave_offset.id());
+                crate::animation::remove_animation_by_state(wave_offset.state_id());
             }
             let global = inf.animate_float(
                 ctx,
@@ -1116,7 +1116,7 @@ impl CircularWavyProgressIndicator {
             // Compose 仅在真正画波时运行 wave offset 动画（同 Linear）。
             let wave_active = enable_motion && (target > 0.0 || current > 0.0);
             if !wave_active {
-                crate::animation::remove_animation_by_state(wave_offset.id());
+                crate::animation::remove_animation_by_state(wave_offset.state_id());
             }
 
             let wave_for_draw = wave_offset.clone();
@@ -1128,7 +1128,7 @@ impl CircularWavyProgressIndicator {
                     target,
                     spec,
                     move || {
-                        crate::animation::remove_animation_by_state(wave_for_stop.id());
+                        crate::animation::remove_animation_by_state(wave_for_stop.state_id());
                     },
                 );
             } else {

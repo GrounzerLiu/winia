@@ -935,12 +935,12 @@ mod tests {
         use crate::animation::push_infinite;
         let state = crate::core::state::State::new(0.0f32);
         push_infinite(state.clone(), 0.0, 1.0, linear_first_line_head_spec());
-        assert!(crate::animation::has_animation_for_state(state.id()));
+        assert!(crate::animation::has_animation_for_state(state.state_id()));
         // 更新一帧：Restart 模式下 t≈0 → 曲线起点 0
         crate::animation::update_animations();
         assert!(state.peek().abs() < 0.01, "t≈0 时 keyframes 首帧值=0");
-        crate::animation::remove_animation_by_state(state.id());
-        assert!(!crate::animation::has_animation_for_state(state.id()));
+        crate::animation::remove_animation_by_state(state.state_id());
+        assert!(!crate::animation::has_animation_for_state(state.state_id()));
     }
 
     // ── 像素测试：determinate 渲染 ──

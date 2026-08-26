@@ -12,7 +12,7 @@
 
 pub mod interpolator;
 
-use crate::core::state::State;
+use crate::core::state::{State, StateId};
 use crate::core::composer::Composer;
 use std::time::{Duration, Instant};
 
@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex, LazyLock};
 /// 动画实例 trait（擦除类型后存储在全局列表）
 pub trait AnimationInstance: Send {
     fn update(&mut self) -> bool;
-    fn state_id(&self) -> u32;
+    fn state_id(&self) -> StateId;
     /// 类型安全的精确目标比较（跨类型返回 false）
     fn same_target(&self, target: &dyn std::any::Any) -> bool;
     /// 当前速度（px/s）——供 retarget 速度延续（P2-9）
@@ -40,12 +40,12 @@ static ACTIVE_COLOR_ANIMATIONS: LazyLock<Mutex<Vec<Animatable<crate::modifier::C
 
 /// Drop all animations owned by a Composer. State IDs remain globally unique,
 /// so this is safe even when another Composer owns a different animation.
-pub fn clear_animations_for_states(state_ids: &[u32]) {
+pub fn clear_animations_for_states(state_ids: &[StateId]) {
     if state_ids.is_empty() {
         return;
     }
     ACTIVE_ANIMATIONS.lock().unwrap().retain(|anim| !state_ids.contains(&anim.state_id()));
-    ACTIVE_COLOR_ANIMATIONS.lock().unwrap().retain(|anim| !state_ids.contains(&anim.state.id()));
+    ACTIVE_COLOR_ANIMATIONS.lock().unwrap().retain(|anim| !state_ids.contains(&anim.state.state_id()));
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -132,7 +132,7 @@ impl<T: AnimatableValue + Send + Sync + 'static> AnimationInstance for Infinite<
         true // 永远运行
     }
     fn same_target(&self, _target: &dyn std::any::Any) -> bool { false }
-    fn state_id(&self) -> u32 { self.state.id() }
+    fn state_id(&self) -> StateId { self.state.state_id() }
     fn last_velocity(&self) -> f32 { 0.0 } // 无限循环无速度延续语义
 }
 
@@ -140,7 +140,7 @@ impl<T: AnimatableValue + Send + Sync + 'static> AnimationInstance for Infinite<
 pub fn push_infinite<T: AnimatableValue + Send + Sync + 'static>(
     state: State<T>, from: T, to: T, spec: InfiniteRepeatableSpec,
 ) {
-    let sid = state.id();
+    let sid = state.state_id();
     if has_animation_for_state(sid) { return; } // 跨列表去重
     let anim = Infinite { state, from, to, spec, start: Instant::now() };
     ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
@@ -149,7 +149,7 @@ pub fn push_infinite<T: AnimatableValue + Send + Sync + 'static>(
 /// 注册一个动画到全局活跃列表
 /// 注册一个 Animatable<T> 到全局活跃列表（由 animate_*_as_state 调用）
 pub fn push_animatable<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(state: State<T>, target: T, spec: AnimationSpec) {
-    let sid = state.id();
+    let sid = state.state_id();
     if state.peek() == target {
         // 当前值已等于目标：仅当无进行中动画（或动画目标相同）时才可直接返回。
         // 若存在目标不同的旧动画，必须取消它——否则旧动画会继续把值拉向旧目标
@@ -202,25 +202,25 @@ pub fn push_animatable_color(state: State<crate::modifier::Color>, target: crate
     if state.peek() == target {
         // 与 push_animatable 相同：存在目标不同的旧颜色动画时必须取消，
         // 否则旧动画会把值继续拉向旧目标
-        let sid = state.id();
+        let sid = state.state_id();
         let conflicting = {
             let list = ACTIVE_COLOR_ANIMATIONS.lock().unwrap();
             list.iter().any(|anim| {
-                anim.state.id() == sid
+                anim.state.state_id() == sid
                     && !anim.anim_state.as_ref().map(|s| s.to == target).unwrap_or(false)
             })
         };
         if !conflicting {
             return;
         }
-        ACTIVE_COLOR_ANIMATIONS.lock().unwrap().retain(|anim| anim.state.id() != sid);
+        ACTIVE_COLOR_ANIMATIONS.lock().unwrap().retain(|anim| anim.state.state_id() != sid);
         return;
     }
-    let sid = state.id();
+    let sid = state.state_id();
     {
         let mut list = ACTIVE_COLOR_ANIMATIONS.lock().unwrap();
-        if list.iter().any(|anim| anim.state.id() == sid && anim.anim_state.as_ref().map(|s| s.to == target).unwrap_or(false)) { return; }
-        list.retain(|anim| anim.state.id() != sid);
+        if list.iter().any(|anim| anim.state.state_id() == sid && anim.anim_state.as_ref().map(|s| s.to == target).unwrap_or(false)) { return; }
+        list.retain(|anim| anim.state.state_id() != sid);
     }
     let mut anim = Animatable::new(state);
     // Color 弹簧无意义（无单一 f32 值），强制 Tween
@@ -276,7 +276,7 @@ pub fn exponential_decay(friction: f32) -> DecaySpec {
 /// 便捷注册指数衰减（fling/惯性滚动）：`push_decay(state, v0, exponential_decay(4.2))`。
 /// 语义：同 state 已有动画 → 取代（新 fling 接管，与 retarget 一致）。
 pub fn push_decay(state: State<f32>, initial_velocity: f32, spec: DecaySpec) {
-    let sid = state.id();
+    let sid = state.state_id();
     {
         let mut list = ACTIVE_ANIMATIONS.lock().unwrap();
         list.retain(|anim| anim.state_id() != sid);
@@ -325,7 +325,7 @@ fn push_fling_internal(
     on_boundary: Option<Box<dyn FnOnce(f32) + Send>>,
     on_finish: impl FnOnce() + Send + 'static,
 ) {
-    let sid = state.id();
+    let sid = state.state_id();
     {
         let mut list = ACTIVE_ANIMATIONS.lock().unwrap();
         list.retain(|anim| anim.state_id() != sid);
@@ -399,7 +399,7 @@ pub fn push_animatable_with_done<T: Clone + PartialEq + AnimatableValue + Send +
         // 立即到达也会回调；这里保持简单：无动画不回调，调用方自查）
         return;
     }
-    let sid = state.id();
+    let sid = state.state_id();
     let spec = if T::supports_spring() {
         spec
     } else {
@@ -426,8 +426,8 @@ impl<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static> AnimationIn
     fn update(&mut self) -> bool {
         Animatable::update(self)
     }
-    fn state_id(&self) -> u32 {
-        self.state.id()
+    fn state_id(&self) -> StateId {
+        self.state.state_id()
     }
     fn same_target(&self, target: &dyn std::any::Any) -> bool {
         target.downcast_ref::<T>()
@@ -462,7 +462,7 @@ pub fn update_animations() -> bool {
     }
     let mut clist = ACTIVE_COLOR_ANIMATIONS.lock().unwrap();
     for c in cstill {
-        if !clist.iter().any(|x| x.state.id() == c.state.id()) {
+        if !clist.iter().any(|x| x.state.state_id() == c.state.state_id()) {
             clist.push(c);
         }
     }
@@ -470,9 +470,9 @@ pub fn update_animations() -> bool {
 }
 
 /// 从所有动画列表移除指定 state 的动画（InfiniteTransition::dispose 用）
-pub fn remove_animation_by_state(state_id: u32) {
+pub fn remove_animation_by_state(state_id: StateId) {
     ACTIVE_ANIMATIONS.lock().unwrap().retain(|a| a.state_id() != state_id);
-    ACTIVE_COLOR_ANIMATIONS.lock().unwrap().retain(|a| a.state.id() != state_id);
+    ACTIVE_COLOR_ANIMATIONS.lock().unwrap().retain(|a| a.state.state_id() != state_id);
 }
 
 /// 清空全部活跃动画（测试隔离用——跨测试清理全局表）
@@ -483,9 +483,9 @@ pub(crate) fn clear_all_animations() {
 }
 
 /// 指定 state 是否已在任一动画列表（跨列表去重，防双倍推进）
-pub fn has_animation_for_state(state_id: u32) -> bool {
+pub fn has_animation_for_state(state_id: StateId) -> bool {
     ACTIVE_ANIMATIONS.lock().unwrap().iter().any(|a| a.state_id() == state_id)
-        || ACTIVE_COLOR_ANIMATIONS.lock().unwrap().iter().any(|a| a.state.id() == state_id)
+        || ACTIVE_COLOR_ANIMATIONS.lock().unwrap().iter().any(|a| a.state.state_id() == state_id)
 }
 
 /// 取消指定 state 的进行中动画（值保持当前，不再被动画覆盖）。
@@ -494,9 +494,9 @@ pub fn has_animation_for_state(state_id: u32) -> bool {
 /// update_animations 仍会把动画值写回。要"立即停下并设为目标值"请先
 /// `cancel_animation(&state)` 再 `state.set(v)`（或直接用 Snap push）。
 pub fn cancel_animation<T: 'static>(state: &State<T>) {
-    let sid = state.id();
+    let sid = state.state_id();
     ACTIVE_ANIMATIONS.lock().unwrap().retain(|a| a.state_id() != sid);
-    ACTIVE_COLOR_ANIMATIONS.lock().unwrap().retain(|a| a.state.id() != sid);
+    ACTIVE_COLOR_ANIMATIONS.lock().unwrap().retain(|a| a.state.state_id() != sid);
 }
 
 /// 是否有动画在运行（用于控制事件循环 Poll/Wait）
@@ -948,7 +948,7 @@ impl<T: Clone + PartialEq + 'static> Transition<T> {
 
 /// 无限循环动画作用域：记录其创建的动画 state_id，可 dispose 统一移除
 pub struct InfiniteTransition {
-    ids: std::sync::Arc<std::sync::Mutex<Vec<u32>>>,
+    ids: std::sync::Arc<std::sync::Mutex<Vec<StateId>>>,
 }
 
 impl ComposeCtx<'_> {
@@ -964,7 +964,7 @@ impl ComposeCtx<'_> {
         let key = self.next_key();
         let ids2 = std::sync::Arc::clone(&ids);
         self.start_leaf_with_remove(key, crate::modifier::Modifier::new(), Box::new(move || {
-            let ids: Vec<u32> = ids2.lock().unwrap().drain(..).collect();
+            let ids: Vec<StateId> = ids2.lock().unwrap().drain(..).collect();
             for sid in ids {
                 crate::animation::remove_animation_by_state(sid);
             }
@@ -976,7 +976,7 @@ impl ComposeCtx<'_> {
 
 impl InfiniteTransition {
     /// 记录一个 state id，重复 id 只保留一份（组件重组会反复调用 animate_*）。
-    fn push_id(&self, id: u32) {
+    fn push_id(&self, id: StateId) {
         let mut ids = self.ids.lock().unwrap_or_else(|e| e.into_inner());
         if !ids.contains(&id) {
             ids.push(id);
@@ -992,7 +992,7 @@ impl InfiniteTransition {
         spec: InfiniteRepeatableSpec,
     ) -> State<f32> {
         let state: State<f32> = ctx.remember(|| from);
-        self.push_id(state.id());
+        self.push_id(state.state_id());
         crate::animation::push_infinite(state.clone(), from, to, spec);
         state
     }
@@ -1012,7 +1012,7 @@ impl InfiniteTransition {
         let state: State<f32> = ctx.remember(|| default_from);
         let start = state.peek();
         let range = to - default_from;
-        self.push_id(state.id());
+        self.push_id(state.state_id());
         crate::animation::push_infinite(state.clone(), start, start + range, spec);
         state
     }
@@ -1026,14 +1026,14 @@ impl InfiniteTransition {
         spec: InfiniteRepeatableSpec,
     ) -> State<crate::modifier::Color> {
         let state: State<crate::modifier::Color> = ctx.remember(|| from);
-        self.push_id(state.id());
+        self.push_id(state.state_id());
         crate::animation::push_infinite(state.clone(), from, to, spec);
         state
     }
 
     /// 取消此作用域创建的所有动画（组件离开组合/不再需要时手动调用）
     pub fn dispose(&self) {
-        let ids: Vec<u32> = self.ids.lock().unwrap().drain(..).collect();
+        let ids: Vec<StateId> = self.ids.lock().unwrap().drain(..).collect();
         for sid in ids {
             crate::animation::remove_animation_by_state(sid);
         }
@@ -1404,13 +1404,13 @@ pub(crate) mod tests {
 
         let composer = {
             let mut composer = Composer::new();
-            composer.animation_state_ids.insert(owned.id());
+            composer.animation_state_ids.insert(owned.state_id());
             composer
         };
         drop(composer);
-        assert!(!has_animation_for_state(owned.id()));
-        assert!(has_animation_for_state(foreign.id()));
-        remove_animation_by_state(foreign.id());
+        assert!(!has_animation_for_state(owned.state_id()));
+        assert!(has_animation_for_state(foreign.state_id()));
+        remove_animation_by_state(foreign.state_id());
     }
 
     #[test]
@@ -1427,12 +1427,12 @@ pub(crate) mod tests {
         assert!(is_animating(), "animations should be registered");
 
         // 移除 s1 和 s3 对应的动画
-        remove_animation_by_state(s1.id());
-        remove_animation_by_state(s3.id());
+        remove_animation_by_state(s1.state_id());
+        remove_animation_by_state(s3.state_id());
         // s2 仍在
-        assert!(has_animation_for_state(s2.id()), "s2 color animation should remain");
-        remove_animation_by_state(s2.id());
-        assert!(!has_animation_for_state(s2.id()), "s2 should be removed");
+        assert!(has_animation_for_state(s2.state_id()), "s2 color animation should remain");
+        remove_animation_by_state(s2.state_id());
+        assert!(!has_animation_for_state(s2.state_id()), "s2 should be removed");
     }
 
     #[test]
@@ -1510,7 +1510,7 @@ pub(crate) mod tests {
         let s = State::new(Offset::new(0.0, 0.0));
         push_animatable(s.clone(), Offset::new(10.0, 0.0), AnimationSpec::Tween(TweenSpec::default()));
         // 移除第一个动画（避免跨列表拦截），再注册同范数不同目标
-        remove_animation_by_state(s.id());
+        remove_animation_by_state(s.state_id());
         push_animatable(s.clone(), Offset::new(0.0, 10.0), AnimationSpec::Tween(TweenSpec::default()));
         assert!(is_animating(), "new offset animation should be registered (norm collision must not block)");
         // 目标精确是 (0,10) 而非 (10,0)
@@ -1529,9 +1529,9 @@ pub(crate) mod tests {
         let s = State::new(Offset::new(0.0, 0.0));
         push_animatable(s.clone(), Offset::new(3.0, 4.0), AnimationSpec::Spring(SpringSpec::default()));
         // 验证动画注册（Spring 被降级为 Tween 后仍正常运行）
-        assert!(has_animation_for_state(s.id()), "Offset animation should be registered");
-        remove_animation_by_state(s.id());
-        assert!(!has_animation_for_state(s.id()), "own animation should be removed");
+        assert!(has_animation_for_state(s.state_id()), "Offset animation should be registered");
+        remove_animation_by_state(s.state_id());
+        assert!(!has_animation_for_state(s.state_id()), "own animation should be removed");
     }
 
     #[test]
@@ -1895,14 +1895,14 @@ pub(crate) mod tests {
         }
         let vel_before = {
             let list = ACTIVE_ANIMATIONS.lock().unwrap();
-            list.iter().find(|a| a.state_id() == st.id()).map(|a| a.last_velocity()).unwrap_or(0.0)
+            list.iter().find(|a| a.state_id() == st.state_id()).map(|a| a.last_velocity()).unwrap_or(0.0)
         };
         assert!(vel_before > 100.0, "Decay 推进后速度应显著（实际 {vel_before}）");
         // retarget：同 state 推新目标（Spring）
         push_animatable(st.clone(), 200.0, AnimationSpec::Spring(SpringSpec::default()));
         let vel_after = {
             let list = ACTIVE_ANIMATIONS.lock().unwrap();
-            list.iter().find(|a| a.state_id() == st.id()).map(|a| a.last_velocity()).unwrap_or(0.0)
+            list.iter().find(|a| a.state_id() == st.state_id()).map(|a| a.last_velocity()).unwrap_or(0.0)
         };
         assert!(
             (vel_after - vel_before).abs() < 1.0,
@@ -2130,11 +2130,11 @@ fn test_infinite_transition_auto_dispose() {
     let mut composer = Composer::new();
     let holder = std::cell::RefCell::new(None::<State<bool>>);
     // 记录自己动画的 state_id（跨测试并行隔离——只断言自己的动画状态）
-    let sid_holder = std::cell::RefCell::new(None::<u32>);
+    let sid_holder = std::cell::RefCell::new(None::<StateId>);
 
     let build = |composer: &mut Composer,
                  holder: &std::cell::RefCell<Option<State<bool>>>,
-                 sid_holder: &std::cell::RefCell<Option<u32>>| {
+                 sid_holder: &std::cell::RefCell<Option<StateId>>| {
         composer.compose(|ctx| {
             let show = ctx.remember(|| true);
             *holder.borrow_mut() = Some(show.clone());
@@ -2151,7 +2151,7 @@ fn test_infinite_transition_auto_dispose() {
                             1.0,
                             InfiniteRepeatableSpec::restart(Duration::from_millis(100)),
                         );
-                        *sid_holder.borrow_mut() = Some(s.id());
+                        *sid_holder.borrow_mut() = Some(s.state_id());
                     }
                 }
             }

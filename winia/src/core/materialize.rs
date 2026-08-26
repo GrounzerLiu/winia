@@ -184,6 +184,23 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
             composer.reused_nodes.insert(idx);
             let n = &mut composer.arena.nodes[idx];
             n.children.clear();
+            // 按新 modifier 重新判定内容类型（复用路径不重建节点——必须同步
+            // content-kind 标记，否则 measure_node 按旧标记走错路径：
+            // 文本→普通叶子（宽度塌缩）或普通→文本（误走文本排版））
+            let old_has_text = n.has_text_content;
+            let old_has_richtext = n.has_richtext_content;
+            let old_has_image = n.has_image_content;
+            n.has_text_content = crate::layout::node::modifier_has_text(&modifier);
+            n.has_richtext_content = crate::layout::node::modifier_has_richtext(&modifier);
+            n.has_image_content = crate::layout::node::modifier_has_image(&modifier);
+            // 仅当内容类型变化时清空缓存段落（静态文本跨帧复用保留缓存——
+            // 每帧清空会导致渲染时每帧重建 Skia Paragraph，影响性能）
+            if n.has_text_content != old_has_text
+                || n.has_richtext_content != old_has_richtext
+                || n.has_image_content != old_has_image
+            {
+                *n.cached_paragraph.borrow_mut() = None;
+            }
             n.modifier = modifier;
             // 刷新方向快照（复用节点与新建路径一致——组合期捕获值）
             n.layout_direction = desc.direction;

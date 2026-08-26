@@ -484,7 +484,7 @@ impl<'a> ComposeCtx<'a> {
     /// animateFloatAsState — 动画浮点值到目标值
     pub fn animate_float_as_state(&mut self, target: f32, spec: crate::animation::AnimationSpec) -> State<f32> {
         let state = self.remember(|| target);
-        self.composer.animation_state_ids.insert(state.id());
+        self.composer.animation_state_ids.insert(state.state_id());
         crate::animation::push_animatable(state.clone(), target, spec);
         state
     }
@@ -492,7 +492,7 @@ impl<'a> ComposeCtx<'a> {
     /// animateColorAsState — 动画颜色值到目标值（RGBA 插值，Tween 驱动）
     pub fn animate_color_as_state(&mut self, target: crate::modifier::Color, spec: crate::animation::AnimationSpec) -> State<crate::modifier::Color> {
         let state = self.remember(|| target);
-        self.composer.animation_state_ids.insert(state.id());
+        self.composer.animation_state_ids.insert(state.state_id());
         crate::animation::push_animatable_color(state.clone(), target, spec);
         state
     }
@@ -500,7 +500,7 @@ impl<'a> ComposeCtx<'a> {
     /// animateDpAsState — 动画 Dp 值（对标 Compose animateDpAsState）
     pub fn animate_dp_as_state(&mut self, target: crate::unit::Dp, spec: crate::animation::AnimationSpec) -> State<crate::unit::Dp> {
         let state = self.remember(|| target);
-        self.composer.animation_state_ids.insert(state.id());
+        self.composer.animation_state_ids.insert(state.state_id());
         crate::animation::push_animatable(state.clone(), target, spec);
         state
     }
@@ -508,7 +508,7 @@ impl<'a> ComposeCtx<'a> {
     /// animateOffsetAsState — 动画 Offset 值（对标 Compose animateOffsetAsState）
     pub fn animate_offset_as_state(&mut self, target: crate::unit::Offset, spec: crate::animation::AnimationSpec) -> State<crate::unit::Offset> {
         let state = self.remember(|| target);
-        self.composer.animation_state_ids.insert(state.id());
+        self.composer.animation_state_ids.insert(state.state_id());
         crate::animation::push_animatable(state.clone(), target, spec);
         state
     }
@@ -516,7 +516,7 @@ impl<'a> ComposeCtx<'a> {
     /// animateSizeAsState — 动画 Size 值（对标 Compose animateSizeAsState）
     pub fn animate_size_as_state(&mut self, target: crate::unit::Size, spec: crate::animation::AnimationSpec) -> State<crate::unit::Size> {
         let state = self.remember(|| target);
-        self.composer.animation_state_ids.insert(state.id());
+        self.composer.animation_state_ids.insert(state.state_id());
         crate::animation::push_animatable(state.clone(), target, spec);
         state
     }
@@ -524,7 +524,7 @@ impl<'a> ComposeCtx<'a> {
     /// animateIntAsState — 动画整数值（对标 Compose animateIntAsState）
     pub fn animate_int_as_state(&mut self, target: i32, spec: crate::animation::AnimationSpec) -> State<i32> {
         let state = self.remember(|| target);
-        self.composer.animation_state_ids.insert(state.id());
+        self.composer.animation_state_ids.insert(state.state_id());
         crate::animation::push_animatable(state.clone(), target, spec);
         state
     }
@@ -537,7 +537,7 @@ impl<'a> ComposeCtx<'a> {
         spec: crate::animation::AnimationSpec,
     ) -> State<T> {
         let state = self.remember(|| target.clone());
-        self.composer.animation_state_ids.insert(state.id());
+        self.composer.animation_state_ids.insert(state.state_id());
         crate::animation::push_animatable(state.clone(), target, spec);
         state
     }
@@ -1096,8 +1096,12 @@ impl SlotTable {
         self.child_counters = vec![0];
         self.active_slot_key = 0;
         // 每帧清 visited——物化只收集本帧活跃 slot（结构回退的残留不收集）
+        // 同时清空未消费的 desc（panic 残留帧产物），避免下一帧 Clean 复用
+        // slot 时 collect_desc_tree 误收集旧 desc 物化错误节点。
+        // 正常成功帧的 desc 已被 collect_desc_tree take（=None），此操作无副作用。
         fn clear_visited(slot: &mut Slot) {
             slot.visited = false;
+            let _ = slot.desc.take(); // 丢弃 panic 残留的帧产物 desc
             for child in &mut slot.children {
                 clear_visited(child);
             }
@@ -1467,6 +1471,23 @@ impl Drop for ComposeDependencyTransaction {
 /// Keeps compose-triggering invalidations queued until the compose transaction
 /// reaches its final cleanup. A panic restores only the consumed batch; other
 /// Composer mutations remain governed by the existing self-healing path.
+///
+/// # 不变量（形式化，2026-08-26）
+///
+/// 1. **帧内新通知只进入下一批**：`drain_matching`（state.rs:159）在队列锁内
+///    原子消费匹配的 IDs，未匹配的 IDs 留在队列。帧内 `State::set` → `enqueue`
+///    （state.rs:126）在锁内追加新 ID → 新通知一定在队列中等待下帧，不会在当前帧
+///    被消费。请勿在 `drain_matching` 锁外修改 pending 队列。
+///
+/// 2. **panic 恢复不重复**：`Drop` 未 commit 时调用 `restore_pending`
+///    （state.rs:147），在锁内**去重**追加——帧内已到来的新通知不会被重复添加。
+///
+/// 3. **commit 后不再回滚**：commit 后 `ids` 清空、`committed=true`，`Drop` 不
+///    做任何操作——已消费的批被视为已提交。
+///
+/// 4. **布局 pending 不被 compose 误消费**：`drain_matching` 只取出 `slot_deps`
+///    中存在的 IDs（composeIds），layout-only 的 IDs 留在队列，由 `layout()`
+///    通过 `drain_non_compose_collect_layout`（state.rs:175）原子消费。
 struct PendingBatchGuard {
     queue: Arc<ComposerSubscription>,
     ids: Vec<StateId>,
@@ -1575,7 +1596,7 @@ pub struct Composer {
     /// Adaptive window size context owned by this Composer.
     pub(crate) adaptive: crate::ui::adaptive::AdaptiveContext,
     /// State IDs used by this Composer's animation registrations.
-    pub(crate) animation_state_ids: HashSet<u32>,
+    pub(crate) animation_state_ids: HashSet<StateId>,
 
     #[cfg(test)]
     pub(crate) compose_clean_count: usize,
@@ -4286,6 +4307,121 @@ fn test_compose_pending_batch_restored_after_panic() {
         let _ = state.get();
     }));
     assert!(!composer.has_pending_states(), "retry should consume the restored batch");
+}
+
+/// 组合场景：drain 后帧内新到的通知与已消费批在 panic 恢复时同时保留——
+/// 已消费的 ID 恢复（去重），新通知留在队列等下一批（不丢不重）。
+#[test]
+fn test_panic_restore_keeps_both_consumed_batch_and_in_frame_notification() {
+    use std::panic::AssertUnwindSafe;
+
+    let mut composer = Composer::new();
+    let state_a = State::new(0i32);
+    let state_b = State::new(0i32);
+    // 建立依赖：state_a 和 state_b 都被 compose 读取
+    composer.compose(|_ctx| {
+        let _ = state_a.get();
+        let _ = state_b.get();
+    });
+
+    // 进入下一帧前：激活两个 state
+    state_a.set_no_wake(1);
+    state_b.set_no_wake(1);
+    let id_a = state_a.signal_id();
+    let id_b = state_b.signal_id();
+    let pending = composer.pending_states.pending_ids();
+    assert!(pending.contains(&id_a) && pending.contains(&id_b));
+
+    // 帧内：drain 消费 id_a（假设 id_a 先被消费），随后帧中新通知 id_b；
+    // 帧尾 panic → Drop 恢复已消费的 id_a，同时 id_b 仍在队列
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        composer.compose(|_ctx| {
+            let _ = state_a.get();
+            let _ = state_b.get();
+            // 模拟帧内新通知：在 drain 后、panic 前 set state_b
+            // （真实帧内 set 由用户回调触发，这里直接模拟）
+            if std::cell::Cell::new(true).take() {
+                state_b.set_no_wake(2);
+            }
+            panic!("compose panic after in-frame notification");
+        });
+    }));
+    assert!(result.is_err());
+
+    // 恢复后：id_a（已消费的批）被 restore，id_b（帧内新通知）保留——
+    // 两者都在队列中（去重后各一次）
+    let recovered = composer.pending_states.pending_ids();
+    assert!(recovered.contains(&id_a), "consumed batch must be restored");
+    assert!(recovered.contains(&id_b), "in-frame notification must remain queued");
+    assert_eq!(
+        recovered.iter().filter(|&&id| id == id_a).count(),
+        1,
+        "restore must not duplicate restored IDs"
+    );
+}
+
+/// Helper: 深度优先检查 Slot 树上是否有残留 desc（panic 帧产物）。
+fn slot_tree_has_residual_desc(slot: &Slot) -> bool {
+    if slot.desc.is_some() {
+        return true;
+    }
+    slot.children.iter().any(slot_tree_has_residual_desc)
+}
+
+/// A panic after a slot wrote its desc (Enter path) but before collect_desc_tree
+/// must not let the residual desc leak into the next compose frame: reset() at the
+/// start of compose discards unconsumed descs, so a Clean-reused slot cannot be
+/// materialized from a stale desc.
+#[test]
+fn test_panic_residual_desc_cleared_by_next_compose_reset() {
+    use std::panic::AssertUnwindSafe;
+
+    let mut composer = Composer::new();
+
+    // 帧1：start_restartable_group Enter 路径写入 desc 后 panic（模拟渲染路径崩溃边界）
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        composer.compose(|ctx| {
+            let root_key = ctx.next_key();
+            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, Modifier::new());
+                    ctx.end_node();
+                    panic!("panic after desc write");
+                }
+            }
+            ctx.end_restartable_group();
+        });
+    }));
+    assert!(result.is_err(), "帧1 应 panic");
+
+    // panic 后：Enter 已写入的 desc 残留在 slot 树上（collect_desc_tree 未执行）
+    assert!(
+        slot_tree_has_residual_desc(&composer.slot_table.root_slot),
+        "panic 后应存在残留 desc（本修复的触发条件）"
+    );
+
+    // 帧2：compose 开头 reset() 清空残留 desc → Clean 复用不再误收集
+    composer.compose(|ctx| {
+        let root_key = ctx.next_key();
+        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                let k = ctx.next_key();
+                ctx.start_leaf(k, Modifier::new());
+                ctx.end_node();
+            }
+        }
+        ctx.end_restartable_group();
+    });
+
+    // 成功帧结束后所有 desc 被 collect take 或 reset 清空——树上不应再有残留
+    assert!(
+        !slot_tree_has_residual_desc(&composer.slot_table.root_slot),
+        "成功帧后不应残留 desc"
+    );
+    assert!(composer.layout_root_idx().is_some(), "帧2 应成功物化");
 }
 
 /// A notification for a read removed during compose must not leave a stale
