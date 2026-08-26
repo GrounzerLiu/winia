@@ -72,6 +72,24 @@ pub(crate) fn materialize(composer: &mut Composer) {
     }
 }
 
+/// 清除 LayoutNode 上残留的 TextField 专用字段（内容类型切换时调用）。
+/// 当节点从 TextField 输入叶子切为普通 Text/Image/RichText 时，旧 cursor/IME/
+/// selection/registrar 值会污染新节点的渲染路径。
+fn clear_textfield_state(n: &mut crate::layout::node::LayoutNode) {
+    *n.cursor_callback.borrow_mut() = None;
+    *n.ime_callback.borrow_mut() = None;
+    *n.composing_range.borrow_mut() = None;
+    *n.selection_range.borrow_mut() = None;
+    *n.registrar.borrow_mut() = None;
+    n.cursor_x.set(0.0);
+    n.cursor_height.set(0.0);
+    n.cursor_index.set(0);
+    n.cursor_visible.set(false);
+    n.display_focused.set(false);
+    n.focus_color.set(crate::modifier::Color::TRANSPARENT);
+    n.focused = false;
+}
+
 /// 物化单个 desc 节点（递归子节点）——Skip 恢复 / 节点复用 / 降级重建。
 pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: Option<usize>) -> Option<usize> {
     let DescNode { key, skip, modifier, preserve_modifier, policy, on_remove, dirty, registrar, focus_color, cursor_index, cursor_visible, cursor_callback, display_focused, ime_callback, composing_range, selection_range, direction, children } = desc;
@@ -200,6 +218,9 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
                 || n.has_image_content != old_has_image
             {
                 *n.cached_paragraph.borrow_mut() = None;
+                // 内容类型切换时重置 TextField 专用字段（旧语义残留不适用新类型；
+                // 新类型若需要这些字段，由 desc 条件覆盖写回正确值）
+                clear_textfield_state(n);
             }
             n.modifier = modifier;
             // 刷新方向快照（复用节点与新建路径一致——组合期捕获值）
@@ -250,6 +271,9 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
         composer.arena.nodes[index].focus_color.set(color);
     }
     // 应用光标/IME/选区（组合期写入 desc——Enter 路径；Skip 恢复保留缓存值）
+    // 先记录 desc 是否提供这些字段（条件式会 move 值，需提前缓存）
+    let desc_has_ime = ime_callback.is_some();
+    let desc_has_cursor = cursor_callback.is_some();
     if let Some(ci) = cursor_index {
         composer.arena.nodes[index].cursor_index.set(ci);
     }
@@ -271,6 +295,14 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
     }
     if let Some(r) = selection_range {
         *composer.arena.nodes[index].selection_range.borrow_mut() = r;
+    }
+    // Enter 路径且 desc 不提供 IME/cursor 回调时，若旧节点有残留 TextField 状态，
+    // 清理之（语义角色切换：TextField 输入叶子→普通 Text）。Skip 路径保留旧值。
+    if !skip && !desc_has_ime && !desc_has_cursor {
+        let n = &mut composer.arena.nodes[index];
+        if n.ime_callback.borrow().is_some() || n.cursor_callback.borrow().is_some() {
+            clear_textfield_state(n);
+        }
     }
     if let Some(p) = parent {
         composer.arena.add_child(p, index);

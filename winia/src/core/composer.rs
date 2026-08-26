@@ -5204,6 +5204,82 @@ fn test_materialize_reuse_refreshes_layout_direction() {
     );
 }
 
+/// 语义角色切换回归（audit §3.5 残留场景）：TextField 输入叶子（有 IME/cursor
+/// 回调）→ 普通 Text（无回调）切换时，残留的 IME/cursor 状态必须被清理——
+/// 否则新 Text 节点仍持有旧 IME 回调，渲染/输入路径污染。
+#[test]
+fn test_materialize_reuse_clears_stale_textfield_state_on_role_switch() {
+    let mut composer = Composer::new();
+    let c = crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0);
+
+    // 帧1：TextField 输入叶子——挂 IME 回调（对标 text_field.rs 的 set_current_node_ime_callback）
+    let mut leaf_key = 0u64;
+    composer.compose(|ctx| {
+        let root_key = ctx.next_key();
+        match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                let k = ctx.next_key();
+                leaf_key = k;
+                ctx.start_leaf(k, Modifier::new());
+                ctx.set_current_node_ime_callback(Box::new(|_text: &str, _c: Option<(usize, usize)>| {}));
+                ctx.set_current_node_cursor_and_callback(0, false, Box::new(|_i: usize| {}));
+                ctx.end_node();
+            }
+        }
+        ctx.end_restartable_group();
+    });
+    composer.layout(c);
+    let root = composer.layout_root_idx().unwrap();
+    let leaf = composer.arena_nodes()[root].children[0];
+    assert!(composer.arena_nodes()[leaf].ime_callback.borrow().is_some(),
+        "帧1 应有 IME 回调（TextField 场景）");
+
+    // 帧2：同位置变成普通 Text——无 IME/cursor 回调 → 复用节点应清理残留
+    // 根容器加 size 参数强制 Enter（否则参数/结构不变 → Skip 导致 build 不执行）
+    composer.compose(|ctx| {
+        let root_key = ctx.next_key();
+        match ctx.start_restartable_group(root_key, Modifier::new().size(100.0, 100.0), crate::layout::BoxLayout::new()) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                let k = ctx.next_key();
+                assert_eq!(k, leaf_key, "同位置 leaf key 应稳定");
+                // 普通 Text 叶子：仅 TextContent，无 IME/cursor 回调
+                let modifier = Modifier::new().push(crate::modifier::ModifierElement::TextContent {
+                    content: "plain".to_string(),
+                    font_size: 14.0,
+                    color: crate::modifier::Color::from_argb(255, 0, 0, 0),
+                    font_weight: crate::ui::text::FontWeight::NORMAL,
+                    font_style: crate::ui::text::FontSlant::Upright,
+                    max_lines: usize::MAX,
+                    align: crate::ui::TextAlign::Left,
+                    overflow: crate::ui::TextOverflow::Clip,
+                    soft_wrap: true,
+                    letter_spacing: 0.0,
+                    line_height: None,
+                });
+                ctx.start_leaf(k, modifier);
+                ctx.end_node();
+            }
+        }
+        ctx.end_restartable_group();
+    });
+    composer.layout(c);
+
+    let root = composer.layout_root_idx().unwrap();
+    let leaf = composer.arena_nodes()[root].children[0];
+    let has_text = composer.arena_nodes()[leaf].has_text_content;
+    assert!(has_text, "帧2 leaf 应有 has_text_content=true（modifier 含 TextContent）");
+    assert!(
+        composer.arena_nodes()[leaf].ime_callback.borrow().is_none(),
+        "角色切换后 IME 回调应被清理（残留会污染普通 Text）"
+    );
+    assert!(
+        composer.arena_nodes()[leaf].cursor_callback.borrow().is_none(),
+        "角色切换后 cursor 回调应被清理"
+    );
+}
+
 /// RTL 全局切换修复回归：组合期 provides 作用域内捕获方向到 desc——
 /// 物化在组合回调后执行（WiniaTheme::direction() 已退出作用域），
 /// 修复前物化期读 theme 恒 Ltr → offset/padding 镜像全部失效（用户实测

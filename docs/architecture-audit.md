@@ -392,9 +392,9 @@ UI tree 由 winia/src/debug.rs:168-228 手工拼接。TextContent 做了转义�
 
    **子项**：
    - [x] content-kind 标记同步：materialize 复用路径按新 modifier 调用 `modifier_has_text`/`modifier_has_richtext`/`modifier_has_image` 更新 `has_*_content`，内容类型切换时清空 `cached_paragraph`（materialize.rs:187-202）。`edd4827` 已落地。
-   - [ ] IME/cursor/selection/registrar 的 reset：复用节点时统一清空 `cursor_callback`/`ime_callback`/`composing_range`/`selection_range`/`display_focused`/`registrar`/`cursor_x`/`cursor_y`/`cursor_visible`/`focus_color` 为默认值；desc 条件覆盖写回正确值。
+   - [x] IME/cursor/selection/registrar 的 reset：复用路径在**内容类型切换**时调用 `clear_textfield_state` 清理（cursor_callback/ime_callback/composing_range/selection_range/registrar/display_focused/focus_color/focused）；**Enter 路径且 desc 不提供 IME/cursor 回调**（语义角色切换 TextField→普通 Text）时也清理，覆盖 content-kind 不变的场景。新测试 `test_materialize_reuse_clears_stale_textfield_state_on_role_switch`。
    - [ ] scroll metadata 的 reset：`scroll_viewport_height/width`、`scroll_content_height/width`、`scroll_reverse` 在复用路径重置为 0（measure_node 重新计算）。
-   - [ ] parent_id 的 reset：复用路径重置为 `None`（`add_child` 重新设置）。
+   - [ ] parent_id 的 reset：复用路径重置为 `None`（`add_child` 重新设置）——待实施（`add_child` 每次都会覆盖，但中间态可能被读取）。
 
    **验证**：`test_text_content_change_remeasures` 通过；新增 `test_layout_node_reuse_resets_ime_selection_registrar` 覆盖 IME/selection 残留场景。
 
