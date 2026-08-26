@@ -1,20 +1,12 @@
 use crate::app;
 use crate::composable;
 use crate::prelude::*;
-use std::cell::Cell;
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{LazyLock, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
 
 /// Window 占位 leaf / created_id 的 key 盐（黄金比例——与内容节点 next_key 空间隔离）
 const WINDOW_KEY_SALT: u64 = 0x9E37_79B9_7F4A_7C15;
-
-thread_local! {
-    /// compose 末尾检测 Window::build 是否被调用
-    static WINDOW_REBUILT: Cell<bool> = const { Cell::new(false) };
-    /// on_remove 推入的待关闭窗口 id
-    static PENDING_REMOVE_ID: Cell<u64> = const { Cell::new(0) };
-}
 
 /// 子窗口内容包装（#[composable]——框架内部组合点也遵守稳定 key 规则：
 /// app.rs 的 process_pending_windows 直接 compose 此闭包——STMT_STACK 空，
@@ -27,15 +19,38 @@ fn sub_window_content(ctx: &mut ComposeCtx, content: &impl Fn(&mut ComposeCtx)) 
     });
 }
 
-/// 在 compose 开头调用，重置生命周期标志
-pub(crate) fn reset_lifecycle_flags() {
-    WINDOW_REBUILT.with(|r| r.set(false));
-    PENDING_REMOVE_ID.with(|p| p.set(0));
+/// Per-Composer lifecycle state for declarative Window nodes.
+///
+/// Keeping these flags with the Composer prevents one window's compose pass
+/// from consuming another window's pending close request.
+#[derive(Clone, Default)]
+pub(crate) struct LifecycleState {
+    rebuilt: Arc<AtomicBool>,
+    pending_remove_id: Arc<AtomicU64>,
 }
 
-/// 仅清除待关闭标志（跨窗口重组时防止误清理 WINDOW_REBUILT）
-pub(crate) fn reset_pending_remove() {
-    PENDING_REMOVE_ID.with(|p| p.set(0));
+impl LifecycleState {
+    pub(crate) fn reset_for_compose(&self) {
+        self.rebuilt.store(false, Ordering::Release);
+        self.pending_remove_id.store(0, Ordering::Release);
+    }
+
+    pub(crate) fn reset_pending_remove(&self) {
+        self.pending_remove_id.store(0, Ordering::Release);
+    }
+
+    pub(crate) fn mark_rebuilt(&self) {
+        self.rebuilt.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn set_pending_remove(&self, id: u64) {
+        self.pending_remove_id.store(id, Ordering::Release);
+    }
+
+    pub(crate) fn pending_close_id(&self) -> Option<u64> {
+        let id = self.pending_remove_id.load(Ordering::Acquire);
+        (id != 0 && !self.rebuilt.load(Ordering::Acquire)).then_some(id)
+    }
 }
 
 /// 全局已创建窗口 ID 集合。
@@ -85,12 +100,24 @@ impl Window {
     pub(crate) fn process_detached(windows: &mut std::collections::HashMap<winit::window::WindowId, crate::app::PerWindow>,
                                    event_loop: &dyn winit::event_loop::ActiveEventLoop,
                                    force_shutdown: &dyn Fn()) {
-        let wid = PENDING_REMOVE_ID.get();
-        if wid == 0 { return; }
-        let rebuilt = WINDOW_REBUILT.get();
-        if rebuilt { return; } // Window::build 被调用了 → 不关闭
+        let pending: Vec<(winit::window::WindowId, u64)> = windows
+            .iter()
+            .filter_map(|(window_id, pw)| {
+                pw.composer.pending_window_close_id().map(|id| (*window_id, id))
+            })
+            .collect();
+        for (owner_window_id, wid) in pending {
+            let Some(pw) = windows.get(&owner_window_id) else { continue };
+            pw.composer.reset_pending_window_remove();
+            Self::close_detached_window(windows, event_loop, force_shutdown, wid);
+        }
+    }
 
-        // Window::build 没被调用 → 关闭
+    fn close_detached_window(windows: &mut std::collections::HashMap<winit::window::WindowId, crate::app::PerWindow>,
+                             event_loop: &dyn winit::event_loop::ActiveEventLoop,
+                             force_shutdown: &dyn Fn(),
+                             wid: u64) {
+        // Window::build was not called for the Composer that owns this request.
         if !CREATED.lock().unwrap().contains(&wid) { return; }
         CREATED.lock().unwrap().remove(&wid);
         let to_close: Vec<winit::window::WindowId> = windows.iter()
@@ -120,12 +147,16 @@ impl Window {
         let _wid = created_id.get();
 
         // 创建仅用于 layout + on_remove 的 leaf slot
-        // on_remove 中读取 State 最新值（以应对已创建窗口的 id）
+        // on_remove 中读取 State 最新值（以应对已创建窗口的 id）。
+        // The request is stored on this Composer's lifecycle context so a
+        // different window cannot consume it.
         let cid = created_id.clone();
+        let lifecycle = ctx.window_lifecycle();
+        let remove_lifecycle = lifecycle.clone();
         ctx.start_leaf_with_remove(key, Modifier::new(), Box::new(move || {
             let wid = cid.get();
             if wid != 0 && CREATED.lock().unwrap().contains(&wid) {
-                PENDING_REMOVE_ID.with(|p| p.set(wid));
+                remove_lifecycle.set_pending_remove(wid);
             }
         }));
 
@@ -157,13 +188,8 @@ impl Window {
         ctx.end_node();
 
         // end_node 后：标记 Window::build 已被调用
-        WINDOW_REBUILT.with(|r| r.set(true));
+        lifecycle.mark_rebuilt();
     }
 
-    /// 检查 compose 后是否有待关闭窗口（Window::build 未调用）
-    pub(crate) fn has_pending_close() -> bool {
-        let wid = PENDING_REMOVE_ID.get();
-        wid != 0 && !WINDOW_REBUILT.get()
-    }
 }
 

@@ -9,14 +9,14 @@
 //! - 重组调度: 批处理状态变化，在下一帧重组
 //! - Key 管理: 全局唯一 key 计数器
 
-use crate::core::state::State;
-use crate::debug_log;
+use crate::core::state::{ComposerSubscription, State, StateId, StateSignal};
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{LayoutNode, MeasurePolicy, CachedNode};
 use crate::modifier::Modifier;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::any::Any;
 use std::cell::Cell;
 use std::cell::RefCell;
@@ -45,13 +45,82 @@ impl Drop for ScopeGuard {
 }
 
 thread_local! { static ACTIVE_SLOT_KEY: Cell<u64> = const { Cell::new(0) }; }
-/// 依赖注册目标栈（统一）：scope（容器组件/组合函数）与节点（leaf 组件）共用——
-/// 读取 State 注册到栈顶（最内层 Group）。组合外（测量阶段）栈空 → 回退 ACTIVE_SLOT_KEY。
 thread_local! { static GROUP_STACK: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) }; }
-/// 语句 id 栈（#[composable] 宏注入——RAII guard 写入/弹出；thread_local 使
-/// guard 的 Drop 无需持有 &mut ctx——闭包/循环体内 return/break/continue 提前
-/// 退出时自动 pop，不泄漏。多窗口安全：组合按窗口顺序执行，compose 开头 clear）
 thread_local! { static STMT_STACK: RefCell<Vec<(u32, u32)>> = const { RefCell::new(Vec::new()) }; }
+
+/// A saved outer runtime context. The current TLS values are replaced with
+/// empty values while a nested Composer compose/layout call is active.
+struct RuntimeFrame {
+    id: u64,
+    active_slot_key: u64,
+    group_stack: Vec<u64>,
+    stmt_stack: Vec<(u32, u32)>,
+    measured_layout_keys: Option<HashSet<u64>>,
+}
+
+/// Restores the surrounding runtime context on normal return and panic.
+pub(crate) struct RuntimeFrameGuard {
+    id: u64,
+    active: bool,
+}
+
+static NEXT_RUNTIME_FRAME_ID: AtomicU64 = AtomicU64::new(1);
+
+thread_local! {
+    /// Saved outer runtime contexts, kept in strict LIFO order.
+    static RUNTIME_FRAME_STACK: RefCell<Vec<RuntimeFrame>> = const { RefCell::new(Vec::new()) };
+    /// Set only while layout measurement is traversing nodes.
+    static MEASURED_LAYOUT_KEYS: RefCell<Option<HashSet<u64>>> = const { RefCell::new(None) };
+}
+
+fn begin_runtime_frame() -> RuntimeFrameGuard {
+    let id = NEXT_RUNTIME_FRAME_ID.fetch_add(1, Ordering::Relaxed);
+    let previous = RuntimeFrame {
+        id,
+        active_slot_key: ACTIVE_SLOT_KEY.with(|slot| {
+            let previous = slot.get();
+            slot.set(0);
+            previous
+        }),
+        group_stack: GROUP_STACK.with(|groups| std::mem::take(&mut *groups.borrow_mut())),
+        stmt_stack: STMT_STACK.with(|stmts| std::mem::take(&mut *stmts.borrow_mut())),
+        measured_layout_keys: MEASURED_LAYOUT_KEYS.with(|keys| {
+            std::mem::replace(&mut *keys.borrow_mut(), None)
+        }),
+    };
+    RUNTIME_FRAME_STACK.with(|frames| frames.borrow_mut().push(previous));
+    RuntimeFrameGuard { id, active: true }
+}
+
+fn restore_runtime_frame(id: u64) -> bool {
+    let previous = RUNTIME_FRAME_STACK.with(|frames| {
+        let mut frames = frames.borrow_mut();
+        if frames.last().map(|frame| frame.id) != Some(id) {
+            return None;
+        }
+        frames.pop()
+    });
+    let Some(previous) = previous else {
+        // Drop must not panic while unwinding. A non-LIFO guard is a caller
+        // error; leave the active frame untouched rather than corrupting it.
+        return false;
+    };
+
+    ACTIVE_SLOT_KEY.with(|slot| slot.set(previous.active_slot_key));
+    GROUP_STACK.with(|groups| *groups.borrow_mut() = previous.group_stack);
+    STMT_STACK.with(|stmts| *stmts.borrow_mut() = previous.stmt_stack);
+    MEASURED_LAYOUT_KEYS.with(|keys| *keys.borrow_mut() = previous.measured_layout_keys);
+    true
+}
+
+impl Drop for RuntimeFrameGuard {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = restore_runtime_frame(self.id);
+            self.active = false;
+        }
+    }
+}
 
 
 /// 参数值（阶段5 参数相等跳过用）——`ComposeCtx::changed` 暂存的参数，
@@ -109,6 +178,20 @@ pub(crate) fn mix_key(base: u64, c: u64) -> u64 {
 /// 设置当前 slot key（measure_node 用它把动态尺寸的依赖注册到节点）
 pub(crate) fn set_active_slot_key(key: u64) {
     ACTIVE_SLOT_KEY.with(|c| c.set(key));
+    MEASURED_LAYOUT_KEYS.with(|keys| {
+        if let Some(keys) = keys.borrow_mut().as_mut() {
+            keys.insert(key);
+        }
+    });
+}
+
+fn begin_layout_measure_tracking() {
+    MEASURED_LAYOUT_KEYS.with(|keys| *keys.borrow_mut() = Some(HashSet::new()));
+}
+
+fn take_layout_measure_keys() -> HashSet<u64> {
+    MEASURED_LAYOUT_KEYS
+        .with(|keys| keys.borrow_mut().take().unwrap_or_default())
 }
 
 // ── ComposeCtx ──
@@ -131,14 +214,19 @@ impl<'a> ComposeCtx<'a> {
         }
     }
 
+    /// Return the Window lifecycle context owned by this Composer.
+    pub(crate) fn window_lifecycle(&self) -> crate::ui::window::LifecycleState {
+        self.composer.lifecycle.clone()
+    }
+
+    pub(crate) fn focus_window(&self, window_id: u64) -> crate::modifier::FocusWindowGuard {
+        self.composer.focus_window(window_id)
+    }
+
     /// 在组合中记住一个状态。初次调用时执行 init 创建 State，后续重组时返回上次的同一个 State 实例。
     pub fn remember<T: Clone + 'static>(&mut self, init: impl FnOnce() -> T) -> State<T> {
         let slot_key = self.next_remember_key();
-        let pq = Arc::downgrade(&self.composer.pending_states);
-        self.composer.slot_table.remember(slot_key, || {
-            crate::core::state::STATE_OWNER_QUEUE.with(|q| *q.borrow_mut() = Some(pq.clone()));
-            State::new(init())
-        })
+        self.composer.slot_table.remember(slot_key, || State::new(init()))
     }
 
     /// 注册顶层弹出层（Popup/Dialog/DropdownMenu 内部调用）——组合期收集，
@@ -169,11 +257,7 @@ impl<'a> ComposeCtx<'a> {
 
     /// 使用固定 key 记住一个状态（不受 remember_counter 影响，适合跨分支持久化的值）
     pub fn remember_at_key<T: Clone + 'static>(&mut self, key: u64, init: impl FnOnce() -> T) -> State<T> {
-        let pq = Arc::downgrade(&self.composer.pending_states);
-        self.composer.slot_table.remember(key, || {
-            crate::core::state::STATE_OWNER_QUEUE.with(|q| *q.borrow_mut() = Some(pq.clone()));
-            State::new(init())
-        })
+        self.composer.slot_table.remember(key, || State::new(init()))
     }
 
     /// 生成下一个组合 key（公开 API，用于 start_node）
@@ -199,6 +283,7 @@ impl<'a> ComposeCtx<'a> {
         // 触发稳定 key panic；且路径哈希在结构变化时漂移——hash 反而更稳）
         let key = source_hash;
         self.composer.slot_table.start_scope(key);
+        self.composer.entered_compose_keys.insert(key);
         GROUP_STACK.with(|s| s.borrow_mut().push(key));
         key
     }
@@ -213,6 +298,7 @@ impl<'a> ComposeCtx<'a> {
         self.composer.scope_source_stack.push(Some(source_hash));
         let key = source_hash;
         self.composer.slot_table.start_scope(key);
+        self.composer.entered_compose_keys.insert(key);
         GROUP_STACK.with(|s| s.borrow_mut().push(key));
         ScopeGuard { composer: self.composer as *mut Composer }
     }
@@ -232,6 +318,7 @@ impl<'a> ComposeCtx<'a> {
         }
         self.composer.scope_source_stack.push(Some(key));
         self.composer.slot_table.start_scope(key);
+        self.composer.entered_compose_keys.insert(key);
         GROUP_STACK.with(|s| s.borrow_mut().push(key));
         ScopeGuard { composer: self.composer as *mut Composer }
     }
@@ -396,11 +483,8 @@ impl<'a> ComposeCtx<'a> {
 
     /// animateFloatAsState — 动画浮点值到目标值
     pub fn animate_float_as_state(&mut self, target: f32, spec: crate::animation::AnimationSpec) -> State<f32> {
-        let remember_key = self.next_remember_key();
-        let state = self.composer.slot_table.remember(remember_key, || {
-            crate::core::state::STATE_OWNER_QUEUE.with(|q| *q.borrow_mut() = Some(Arc::downgrade(&self.composer.pending_states)));
-            crate::core::state::State::new(target)
-        });
+        let state = self.remember(|| target);
+        self.composer.animation_state_ids.insert(state.id());
         crate::animation::push_animatable(state.clone(), target, spec);
         state
     }
@@ -408,6 +492,7 @@ impl<'a> ComposeCtx<'a> {
     /// animateColorAsState — 动画颜色值到目标值（RGBA 插值，Tween 驱动）
     pub fn animate_color_as_state(&mut self, target: crate::modifier::Color, spec: crate::animation::AnimationSpec) -> State<crate::modifier::Color> {
         let state = self.remember(|| target);
+        self.composer.animation_state_ids.insert(state.id());
         crate::animation::push_animatable_color(state.clone(), target, spec);
         state
     }
@@ -415,6 +500,7 @@ impl<'a> ComposeCtx<'a> {
     /// animateDpAsState — 动画 Dp 值（对标 Compose animateDpAsState）
     pub fn animate_dp_as_state(&mut self, target: crate::unit::Dp, spec: crate::animation::AnimationSpec) -> State<crate::unit::Dp> {
         let state = self.remember(|| target);
+        self.composer.animation_state_ids.insert(state.id());
         crate::animation::push_animatable(state.clone(), target, spec);
         state
     }
@@ -422,6 +508,7 @@ impl<'a> ComposeCtx<'a> {
     /// animateOffsetAsState — 动画 Offset 值（对标 Compose animateOffsetAsState）
     pub fn animate_offset_as_state(&mut self, target: crate::unit::Offset, spec: crate::animation::AnimationSpec) -> State<crate::unit::Offset> {
         let state = self.remember(|| target);
+        self.composer.animation_state_ids.insert(state.id());
         crate::animation::push_animatable(state.clone(), target, spec);
         state
     }
@@ -429,6 +516,7 @@ impl<'a> ComposeCtx<'a> {
     /// animateSizeAsState — 动画 Size 值（对标 Compose animateSizeAsState）
     pub fn animate_size_as_state(&mut self, target: crate::unit::Size, spec: crate::animation::AnimationSpec) -> State<crate::unit::Size> {
         let state = self.remember(|| target);
+        self.composer.animation_state_ids.insert(state.id());
         crate::animation::push_animatable(state.clone(), target, spec);
         state
     }
@@ -436,6 +524,7 @@ impl<'a> ComposeCtx<'a> {
     /// animateIntAsState — 动画整数值（对标 Compose animateIntAsState）
     pub fn animate_int_as_state(&mut self, target: i32, spec: crate::animation::AnimationSpec) -> State<i32> {
         let state = self.remember(|| target);
+        self.composer.animation_state_ids.insert(state.id());
         crate::animation::push_animatable(state.clone(), target, spec);
         state
     }
@@ -448,6 +537,7 @@ impl<'a> ComposeCtx<'a> {
         spec: crate::animation::AnimationSpec,
     ) -> State<T> {
         let state = self.remember(|| target.clone());
+        self.composer.animation_state_ids.insert(state.id());
         crate::animation::push_animatable(state.clone(), target, spec);
         state
     }
@@ -664,6 +754,7 @@ impl Slot {
         self.remembered.insert(slot_key, Box::new(state.clone()));
         state
     }
+
 }
 
 /// 可重启分组状态 — start_restartable_group() 返回
@@ -698,7 +789,74 @@ pub(crate) struct SlotTable {
     dirty_keys: std::collections::HashSet<u64>,
 }
 
+struct SlotTableRuntimeSnapshot {
+    path: Vec<usize>,
+    child_counters: Vec<usize>,
+    active_slot_key: u64,
+    dirty_keys: std::collections::HashSet<u64>,
+}
+
+struct ComposeRuntimeSnapshot {
+    slot_table: SlotTableRuntimeSnapshot,
+    current_group_key: u32,
+    path_counters: std::collections::HashMap<u64, u32>,
+    remember_path_counters: std::collections::HashMap<u64, u32>,
+    scope_source_stack: Vec<Option<u64>>,
+    key_override_stack: Vec<u64>,
+    pending_recomposition: VecDeque<u64>,
+    needs_recomposition: bool,
+    node_stack: Vec<usize>,
+    group_skip_stack: Vec<bool>,
+    overlay_active: HashMap<u64, bool>,
+    entered_compose_keys: HashSet<u64>,
+    reused_nodes: std::collections::HashSet<usize>,
+}
+
+/// Restores the small, non-owning compose runtime context on panic. The full
+/// SlotTable/arena transaction remains deliberately separate because it owns
+/// `Box<dyn Any>` and user callbacks.
+struct ComposeRuntimeTransaction {
+    composer: *mut Composer,
+    committed: bool,
+}
+
+impl ComposeRuntimeTransaction {
+    fn new(composer: &mut Composer) -> Self {
+        composer.compose_transaction = Some(composer.capture_compose_runtime());
+        Self { composer, committed: false }
+    }
+
+    fn commit(&mut self) {
+        self.committed = true;
+        unsafe { (*self.composer).compose_transaction = None; }
+    }
+}
+
+impl Drop for ComposeRuntimeTransaction {
+    fn drop(&mut self) {
+        if !self.committed {
+            unsafe { (*self.composer).rollback_compose_runtime(); }
+        }
+    }
+}
+
 impl SlotTable {
+    fn runtime_snapshot(&self) -> SlotTableRuntimeSnapshot {
+        SlotTableRuntimeSnapshot {
+            path: self.path.clone(),
+            child_counters: self.child_counters.clone(),
+            active_slot_key: self.active_slot_key,
+            dirty_keys: self.dirty_keys.clone(),
+        }
+    }
+
+    fn restore_runtime(&mut self, snapshot: SlotTableRuntimeSnapshot) {
+        self.path = snapshot.path;
+        self.child_counters = snapshot.child_counters;
+        self.active_slot_key = snapshot.active_slot_key;
+        self.dirty_keys = snapshot.dirty_keys;
+    }
+
     fn new() -> Self {
         Self {
             path: Vec::new(),
@@ -1012,6 +1170,334 @@ impl SlotTable {
     fn current_path(&self) -> &[usize] {
         &self.path
     }
+
+    /// Collect slot keys that remain part of the current composition. A skipped
+    /// subtree is retained structurally even though its descendants were not visited.
+    fn collect_live_keys(&self, out: &mut HashSet<u64>) {
+        fn visit(slot: &Slot, out: &mut HashSet<u64>, in_skip: bool) {
+            if !slot.visited && !in_skip {
+                return;
+            }
+            out.insert(slot.key);
+            let child_in_skip = in_skip
+                || (slot.desc.is_none() && !slot.is_scope && slot.skip_modifier.is_some());
+            for child in &slot.children {
+                visit(child, out, child_in_skip);
+            }
+        }
+
+        for child in &self.root_slot.children {
+            visit(child, out, false);
+        }
+    }
+}
+
+/// Snapshot of mutable Composer state touched by layout. A measurement policy
+/// can execute user code, so panic must preserve the last committed graph and
+/// the invalidation batch for a retry.
+struct LayoutTransactionSnapshot {
+    pending: Vec<StateId>,
+    layout_dirty_keys: HashSet<u64>,
+    prev_nodes: HashMap<u64, CachedNode>,
+    prev_node_by_key: HashMap<u64, usize>,
+    layout_slot_reads: HashMap<u64, HashSet<StateId>>,
+    layout_deps: HashMap<StateId, HashSet<u64>>,
+    layout_signal_handles: HashMap<StateId, Arc<StateSignal>>,
+    removed_slot_keys: HashSet<u64>,
+    root: Option<usize>,
+    nodes_len: usize,
+    free_nodes: Vec<usize>,
+    free_policies: Vec<usize>,
+    node_state: Vec<LayoutNodeTransactionState>,
+    scroll_limits: Vec<(State<f32>, f32)>,
+}
+
+#[derive(Clone)]
+struct LayoutNodeTransactionState {
+    idx: usize,
+    id: u64,
+    modifier: Modifier,
+    measure_policy: Option<usize>,
+    has_text_content: bool,
+    has_richtext_content: bool,
+    has_image_content: bool,
+    focused: bool,
+    layout_direction: crate::layout::LayoutDirection,
+    slot_key: u64,
+    parent_id: Option<u64>,
+    measured_size: crate::layout::node::Size,
+    position: crate::layout::node::Point,
+    children: Vec<usize>,
+    scroll_viewport_height: f32,
+    scroll_viewport_width: f32,
+    scroll_content_height: f32,
+    scroll_content_width: f32,
+    scroll_reverse: bool,
+}
+
+struct LayoutTransaction {
+    composer: *mut Composer,
+    snapshot: Option<LayoutTransactionSnapshot>,
+    committed: bool,
+}
+
+impl LayoutTransaction {
+    fn new(composer: &Composer) -> Self {
+        let node_state = composer
+            .arena
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(idx, node)| LayoutNodeTransactionState {
+                idx,
+                id: node.id,
+                modifier: node.modifier.clone(),
+                measure_policy: node.measure_policy,
+                has_text_content: node.has_text_content,
+                has_richtext_content: node.has_richtext_content,
+                has_image_content: node.has_image_content,
+                focused: node.focused,
+                layout_direction: node.layout_direction,
+                slot_key: node.slot_key,
+                parent_id: node.parent_id,
+                measured_size: node.measured_size,
+                position: node.position,
+                children: node.children.clone(),
+                scroll_viewport_height: node.scroll_viewport_height,
+                scroll_viewport_width: node.scroll_viewport_width,
+                scroll_content_height: node.scroll_content_height,
+                scroll_content_width: node.scroll_content_width,
+                scroll_reverse: node.scroll_reverse,
+            })
+            .collect();
+        let mut scroll_limits = Vec::new();
+        for node in &composer.arena.nodes {
+            if let Some(scroll) = node.modifier.vertical_scroll_state() {
+                scroll_limits.push((scroll.fling_limit.clone(), scroll.fling_limit.peek()));
+            }
+            if let Some(scroll) = node.modifier.horizontal_scroll_state() {
+                scroll_limits.push((scroll.fling_limit.clone(), scroll.fling_limit.peek()));
+            }
+        }
+
+        Self {
+            composer: composer as *const Composer as *mut Composer,
+            snapshot: Some(LayoutTransactionSnapshot {
+                pending: composer.pending_states.pending_ids(),
+                layout_dirty_keys: composer.layout_dirty_keys.clone(),
+                prev_nodes: composer.prev_nodes.clone(),
+                prev_node_by_key: composer.prev_node_by_key.clone(),
+                layout_slot_reads: composer.layout_slot_reads.clone(),
+                layout_deps: composer.layout_deps.clone(),
+                layout_signal_handles: composer.layout_signal_handles.clone(),
+                removed_slot_keys: composer.removed_slot_keys.clone(),
+                root: composer.arena.root,
+                nodes_len: composer.arena.nodes.len(),
+                free_nodes: composer.arena.free.clone(),
+                free_policies: composer.arena.free_policies.clone(),
+                node_state,
+                scroll_limits,
+            }),
+            committed: false,
+        }
+    }
+
+    fn commit(&mut self) {
+        self.committed = true;
+        self.snapshot = None;
+    }
+
+    unsafe fn rollback(&mut self) {
+        let Some(snapshot) = self.snapshot.take() else { return };
+        let composer = unsafe { &mut *self.composer };
+
+        composer.pending_states.restore_pending(&snapshot.pending);
+        composer.layout_dirty_keys = snapshot.layout_dirty_keys;
+        composer.prev_nodes = snapshot.prev_nodes;
+        composer.prev_node_by_key = snapshot.prev_node_by_key;
+        composer.layout_slot_reads = snapshot.layout_slot_reads;
+        composer.layout_deps = snapshot.layout_deps;
+        composer.layout_signal_handles = snapshot.layout_signal_handles;
+        composer.removed_slot_keys = snapshot.removed_slot_keys;
+        composer.arena.root = snapshot.root;
+        composer.arena.nodes.truncate(snapshot.nodes_len);
+        composer.arena.free = snapshot.free_nodes;
+        composer.arena.free_policies = snapshot.free_policies;
+
+        for state in snapshot.node_state {
+            if let Some(node) = composer.arena.nodes.get_mut(state.idx) {
+                node.id = state.id;
+                node.modifier = state.modifier;
+                node.measure_policy = state.measure_policy;
+                node.has_text_content = state.has_text_content;
+                node.has_richtext_content = state.has_richtext_content;
+                node.has_image_content = state.has_image_content;
+                node.focused = state.focused;
+                node.layout_direction = state.layout_direction;
+                node.slot_key = state.slot_key;
+                node.parent_id = state.parent_id;
+                node.measured_size = state.measured_size;
+                node.position = state.position;
+                node.children = state.children;
+                node.scroll_viewport_height = state.scroll_viewport_height;
+                node.scroll_viewport_width = state.scroll_viewport_width;
+                node.scroll_content_height = state.scroll_content_height;
+                node.scroll_content_width = state.scroll_content_width;
+                node.scroll_reverse = state.scroll_reverse;
+                // Force a complete retry. This is safer than restoring a
+                // partially rebuilt paragraph or measurement cache.
+                node.dirty = true;
+                node.layout_dirty = false;
+                node.cached_constraints = None;
+                if let Ok(mut paragraph) = node.cached_paragraph.try_borrow_mut() {
+                    *paragraph = None;
+                }
+            }
+        }
+        for (state, value) in snapshot.scroll_limits {
+            state.set_silent(value);
+        }
+    }
+}
+
+impl Drop for LayoutTransaction {
+    fn drop(&mut self) {
+        if !self.committed {
+            // Rollback must not panic while an application panic is unwinding.
+            unsafe { self.rollback(); }
+        }
+    }
+}
+
+/// Snapshot of the dependency graph committed by the last successful compose.
+/// This is intentionally narrower than a SlotTable/arena transaction: it restores
+/// only graph state and subscriptions after a late compose panic.
+struct ComposeDependencySnapshot {
+    compose_slot_reads: HashMap<u64, HashSet<StateId>>,
+    slot_deps: HashMap<StateId, HashSet<u64>>,
+    signal_handles: HashMap<StateId, Arc<StateSignal>>,
+    layout_slot_reads: HashMap<u64, HashSet<StateId>>,
+    layout_deps: HashMap<StateId, HashSet<u64>>,
+    layout_signal_handles: HashMap<StateId, Arc<StateSignal>>,
+    pending: Vec<StateId>,
+    layout_dirty_keys: HashSet<u64>,
+    removed_slot_keys: HashSet<u64>,
+}
+
+/// Restores dependency maps and live signal subscriptions if compose panics
+/// after reconciliation but before its cleanup completes.
+struct ComposeDependencyTransaction {
+    composer: *mut Composer,
+    snapshot: Option<ComposeDependencySnapshot>,
+    committed: bool,
+}
+
+impl ComposeDependencyTransaction {
+    fn new(composer: &Composer) -> Self {
+        Self {
+            composer: composer as *const Composer as *mut Composer,
+            snapshot: Some(ComposeDependencySnapshot {
+                compose_slot_reads: composer.compose_slot_reads.clone(),
+                slot_deps: composer.slot_deps.clone(),
+                signal_handles: composer.signal_handles.clone(),
+                layout_slot_reads: composer.layout_slot_reads.clone(),
+                layout_deps: composer.layout_deps.clone(),
+                layout_signal_handles: composer.layout_signal_handles.clone(),
+                pending: composer.pending_states.pending_ids(),
+                layout_dirty_keys: composer.layout_dirty_keys.clone(),
+                removed_slot_keys: composer.removed_slot_keys.clone(),
+            }),
+            committed: false,
+        }
+    }
+
+    fn commit(&mut self) {
+        self.snapshot = None;
+        self.committed = true;
+    }
+
+    unsafe fn rollback(&mut self) {
+        let Some(snapshot) = self.snapshot.take() else { return };
+        let composer = unsafe { &mut *self.composer };
+        composer.compose_slot_reads = snapshot.compose_slot_reads;
+        composer.slot_deps = snapshot.slot_deps;
+        composer.signal_handles = snapshot.signal_handles;
+        composer.layout_slot_reads = snapshot.layout_slot_reads;
+        composer.layout_deps = snapshot.layout_deps;
+        composer.layout_signal_handles = snapshot.layout_signal_handles;
+        composer.layout_dirty_keys = snapshot.layout_dirty_keys;
+        composer.removed_slot_keys = snapshot.removed_slot_keys;
+
+        // Remove every live subscription created or retained by the failed
+        // frame before restoring the committed signal set. Otherwise a signal
+        // that only appeared in the failed graph can still enqueue the queue.
+        composer.pending_states.retain_signals(&HashSet::new());
+
+        // Restore the exact pending batch from before this compose began.
+        // Notifications produced by the failed frame must not leak into the
+        // restored dependency graph.
+        composer.pending_states.drain();
+        composer.pending_states.restore_pending(&snapshot.pending);
+
+        // Replace the queue's signal set with the last committed handles.
+        let mut restored = HashSet::new();
+        for signal in composer
+            .signal_handles
+            .values()
+            .chain(composer.layout_signal_handles.values())
+        {
+            if restored.insert(signal.id()) {
+                composer.pending_states.subscribe_signal(signal);
+            }
+        }
+
+        composer.debug_assert_dependency_graphs();
+    }
+}
+
+impl Drop for ComposeDependencyTransaction {
+    fn drop(&mut self) {
+        if !self.committed {
+            // Rollback must not panic while another application panic unwinds.
+            unsafe { self.rollback(); }
+        }
+    }
+}
+
+/// Keeps compose-triggering invalidations queued until the compose transaction
+/// reaches its final cleanup. A panic restores only the consumed batch; other
+/// Composer mutations remain governed by the existing self-healing path.
+struct PendingBatchGuard {
+    queue: Arc<ComposerSubscription>,
+    ids: Vec<StateId>,
+    committed: bool,
+}
+
+impl PendingBatchGuard {
+    fn new(queue: Arc<ComposerSubscription>, ids: Vec<StateId>) -> Self {
+        Self {
+            queue,
+            ids,
+            committed: false,
+        }
+    }
+
+    fn ids(&self) -> &[StateId] {
+        &self.ids
+    }
+
+    fn commit(&mut self) {
+        self.ids.clear();
+        self.committed = true;
+    }
+}
+
+impl Drop for PendingBatchGuard {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.queue.restore_pending(&self.ids);
+        }
+    }
 }
 
 // ── Composer ──
@@ -1026,6 +1512,7 @@ impl SlotTable {
 pub struct Composer {
     pub(crate) slot_table: SlotTable,
     pub(crate) current_group_key: u32,
+    compose_transaction: Option<ComposeRuntimeSnapshot>,
     /// 每路径独立 counter（next_group_key 用）——同组合位置跨帧 counter 恒定，
     /// key 不随 Skip/Enter 的 next_key 调用序变化（全局 counter 会因 Skip 的
     /// content 不执行而平移 → key 漂移 → 节点复用错位 + 常量折叠冻结）
@@ -1052,15 +1539,25 @@ pub struct Composer {
     /// slot 层不可区分，需此组合期显式记录。
     pub(crate) overlay_active: HashMap<u64, bool>,
     /// state_id -> slot_keys 依赖映射
-    slot_deps: HashMap<u32, HashSet<u64>>,
-    /// 布局依赖表（state_id → slot_key；上帧布局注册的持久表，供下帧 pending 消费）
-    layout_deps: HashMap<u32, HashSet<u64>>,
+    slot_deps: HashMap<StateId, HashSet<u64>>,
+    /// compose 期每个 slot 的完整读取集合；Enter 时替换，Skip 时保留。
+    compose_slot_reads: HashMap<u64, HashSet<StateId>>,
+    /// compose 依赖对应的 signal handle，用于移除 stale Composer 订阅。
+    signal_handles: HashMap<StateId, Arc<StateSignal>>,
+    /// layout 依赖对应的 signal handle；compose 与 layout 共享一个队列但独立收敛。
+    layout_signal_handles: HashMap<StateId, Arc<StateSignal>>,
+    /// 帧内实际执行过的 compose slot；用于按 Enter/Skip 语义收敛读取集合。
+    entered_compose_keys: HashSet<u64>,
+    /// 布局期每个 slot 的读取集合；测量命中时替换，常量折叠时保留。
+    layout_slot_reads: HashMap<u64, HashSet<StateId>>,
+    /// 布局依赖反向表（state_id → slot_key；由 layout_slot_reads 重建）
+    layout_deps: HashMap<StateId, HashSet<u64>>,
     /// 本帧 pending 消费收集的布局失效 key（layout() 应用后清空）
     layout_dirty_keys: HashSet<u64>,
     /// 本帧确认移除的 slot_key（compose 末尾回收未复用节点时收集——layout_deps 死 key 清理用）
     removed_slot_keys: HashSet<u64>,
     /// 本 Composer 实例的 pending state 通知队列
-    pending_states: Arc<parking_lot::Mutex<Vec<u32>>>,
+    pending_states: Arc<crate::core::state::ComposerSubscription>,
     /// 上一帧各 slot_key → 节点缓存（用于 clean slot 跳过和子树重放；
     /// 用 slot_key 而非 slot 路径作键——scope 层不产生 LayoutNode，路径在两棵树不一致，
     /// key 是稳定位置标识（路径哈希 + counter），两侧天然对齐）
@@ -1073,6 +1570,12 @@ pub struct Composer {
     pub(crate) reused_nodes: std::collections::HashSet<usize>,
     /// 当前选区注册表（SelectionContainer compose 时注入，供事件处理访问）
     pub(crate) selection_registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
+    /// Window lifecycle flags are scoped to this Composer, not the thread.
+    pub(crate) lifecycle: crate::ui::window::LifecycleState,
+    /// Adaptive window size context owned by this Composer.
+    pub(crate) adaptive: crate::ui::adaptive::AdaptiveContext,
+    /// State IDs used by this Composer's animation registrations.
+    pub(crate) animation_state_ids: HashSet<u32>,
 
     #[cfg(test)]
     pub(crate) compose_clean_count: usize,
@@ -1086,11 +1589,11 @@ impl Composer {
 /// 选区注册表（由 SelectionContainer 在 compose 时注入，供事件处理访问）
 
     pub fn new() -> Self {
-        let pending_states = Arc::new(parking_lot::Mutex::new(Vec::new()));
-        crate::core::state::register_composer_queue(Arc::downgrade(&pending_states));
+        let pending_states = crate::core::state::ComposerSubscription::new();
         Self {
             slot_table: SlotTable::new(),
             current_group_key: 0,
+            compose_transaction: None,
             path_counters: std::collections::HashMap::new(),
             remember_path_counters: std::collections::HashMap::new(),
             scope_source_stack: Vec::new(),
@@ -1103,6 +1606,11 @@ impl Composer {
             overlays: Vec::new(),
             overlay_active: HashMap::new(),
             slot_deps: HashMap::new(),
+            compose_slot_reads: HashMap::new(),
+            signal_handles: HashMap::new(),
+            layout_signal_handles: HashMap::new(),
+            entered_compose_keys: HashSet::new(),
+            layout_slot_reads: HashMap::new(),
             layout_deps: HashMap::new(),
             layout_dirty_keys: HashSet::new(),
             removed_slot_keys: HashSet::new(),
@@ -1112,6 +1620,9 @@ impl Composer {
             prev_node_by_key: HashMap::new(),
             reused_nodes: std::collections::HashSet::new(),
             selection_registrar: None,
+            lifecycle: crate::ui::window::LifecycleState::default(),
+            adaptive: crate::ui::adaptive::AdaptiveContext::new(),
+            animation_state_ids: HashSet::new(),
             #[cfg(test)]
             compose_clean_count: 0,
             #[cfg(test)]
@@ -1123,6 +1634,26 @@ impl Composer {
     /// 获取当前正在构建的节点 ID（node_stack 栈顶）
     pub fn current_node_id(&self) -> Option<u64> {
         self.node_stack.last().map(|&idx| self.arena.nodes[idx].id)
+    }
+
+    pub(crate) fn pending_window_close_id(&self) -> Option<u64> {
+        self.lifecycle.pending_close_id()
+    }
+
+    pub(crate) fn reset_pending_window_remove(&self) {
+        self.lifecycle.reset_pending_remove();
+    }
+
+    pub(crate) fn set_adaptive_window_size(&self, width: f32, height: f32) {
+        self.adaptive.set_size(width, height);
+    }
+
+    pub(crate) fn focus_window(&self, window_id: u64) -> crate::modifier::FocusWindowGuard {
+        crate::modifier::focus_window(window_id)
+    }
+
+    pub(crate) fn take_focus_requests(&self) -> Vec<u64> {
+        crate::modifier::take_focus_requests()
     }
 
     /// 分配下一个 group key。
@@ -1238,6 +1769,7 @@ impl Composer {
         self.scope_source_stack.push(None);
         let key = self.next_group_key();
         self.slot_table.start_scope(key);
+        self.entered_compose_keys.insert(key);
         GROUP_STACK.with(|s| s.borrow_mut().push(key));
         key
     }
@@ -1262,6 +1794,7 @@ impl Composer {
     /// 在组合树中开始一个节点（由组件的 build 方法调用）
     pub fn start_node(&mut self, key: u64, modifier: Modifier, policy: Option<Box<dyn MeasurePolicy>>, on_remove: Option<Box<dyn FnOnce() + Send>>) {
         self.current_group_key = key as u32;
+        self.entered_compose_keys.insert(key);
         let slot_status = self.slot_table.start_slot(key);
         // 普通节点：复用 scope slot 时重置为普通（同路径类型切换场景）
         self.slot_table.set_current_scope(false);
@@ -1352,6 +1885,10 @@ impl Composer {
         } else {
             false
         };
+        // Enter 重新执行 content；Skip 保留上帧子树的读取集合。
+        if !is_skip {
+            self.entered_compose_keys.insert(key);
+        }
         // 写入本帧参数（在 is_skip 比较之后——比较用上帧 slot.params）
         // 仅当 pending 非空（有 changed 声明）；空则保留上帧 params（replay stub 场景）
         if !self.pending_params.is_empty() {
@@ -1426,56 +1963,230 @@ impl Composer {
         self.end_node();
     }
 
+    /// Rebuild reverse compose dependencies from the forward per-slot read graph.
+    /// Keeping one canonical source prevents stale reverse edges after slot removal.
+    fn rebuild_compose_reverse_deps(&mut self) {
+        self.slot_deps.clear();
+        for (&slot_key, state_ids) in &self.compose_slot_reads {
+            for &state_id in state_ids {
+                self.slot_deps.entry(state_id).or_default().insert(slot_key);
+            }
+        }
+    }
+
+    /// Rebuild reverse layout dependencies from the forward per-slot read graph.
+    fn rebuild_layout_reverse_deps(&mut self) {
+        self.layout_deps.clear();
+        for (&slot_key, state_ids) in &self.layout_slot_reads {
+            for &state_id in state_ids {
+                self.layout_deps.entry(state_id).or_default().insert(slot_key);
+            }
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    fn debug_assert_dependency_graphs(&self) {
+        let mut expected_compose = HashMap::<StateId, HashSet<u64>>::new();
+        for (&slot_key, state_ids) in &self.compose_slot_reads {
+            for &state_id in state_ids {
+                expected_compose.entry(state_id).or_default().insert(slot_key);
+            }
+        }
+        debug_assert_eq!(self.slot_deps, expected_compose, "compose dependency reverse graph drifted");
+
+        let mut expected_layout = HashMap::<StateId, HashSet<u64>>::new();
+        for (&slot_key, state_ids) in &self.layout_slot_reads {
+            for &state_id in state_ids {
+                expected_layout.entry(state_id).or_default().insert(slot_key);
+            }
+        }
+        debug_assert_eq!(self.layout_deps, expected_layout, "layout dependency reverse graph drifted");
+    }
+
+    #[cfg(not(debug_assertions))]
+    #[inline]
+    fn debug_assert_dependency_graphs(&self) {}
+
+    fn reconcile_compose_deps(
+        &mut self,
+        recorded: Vec<(Arc<StateSignal>, u64)>,
+        live_keys: &HashSet<u64>,
+    ) {
+        let mut reads_by_slot: HashMap<u64, HashSet<StateId>> = HashMap::new();
+        let mut current_signals: HashMap<StateId, Arc<StateSignal>> = HashMap::new();
+        for (signal, slot_key) in recorded {
+            current_signals.entry(signal.id()).or_insert_with(|| signal.clone());
+            if live_keys.contains(&slot_key) {
+                reads_by_slot.entry(slot_key).or_default().insert(signal.id());
+            }
+        }
+
+        // A skipped subtree keeps its previous read set; an Entered slot gets
+        // the exact set observed in this frame, including an empty set.
+        self.compose_slot_reads.retain(|key, _| live_keys.contains(key));
+        let entered = self.entered_compose_keys.clone();
+        for key in entered {
+            match reads_by_slot.remove(&key) {
+                Some(reads) if !reads.is_empty() => {
+                    self.compose_slot_reads.insert(key, reads);
+                }
+                _ => {
+                    self.compose_slot_reads.remove(&key);
+                }
+            }
+        }
+        // Be tolerant of a read recorded by a node whose entry marker was not
+        // reached (for example, a modifier callback during materialization).
+        for (key, reads) in reads_by_slot {
+            self.compose_slot_reads.entry(key).or_default().extend(reads);
+        }
+
+        self.rebuild_compose_reverse_deps();
+        self.signal_handles.extend(current_signals);
+        self.cleanup_signal_subscriptions();
+        self.debug_assert_dependency_graphs();
+    }
+
+    fn cleanup_signal_subscriptions(&mut self) {
+        let mut live_ids = HashSet::new();
+        for state_ids in self.compose_slot_reads.values() {
+            live_ids.extend(state_ids.iter().copied());
+        }
+        live_ids.extend(self.layout_deps.keys().copied());
+
+        let mut removed = HashMap::<StateId, Arc<StateSignal>>::new();
+        let mut compose_handles = std::mem::take(&mut self.signal_handles);
+        compose_handles.retain(|id, signal| {
+            if live_ids.contains(id) {
+                true
+            } else {
+                removed.insert(*id, signal.clone());
+                false
+            }
+        });
+        self.signal_handles = compose_handles;
+
+        let mut layout_handles = std::mem::take(&mut self.layout_signal_handles);
+        layout_handles.retain(|id, signal| {
+            if live_ids.contains(id) {
+                true
+            } else {
+                removed.entry(*id).or_insert_with(|| signal.clone());
+                false
+            }
+        });
+        self.layout_signal_handles = layout_handles;
+
+        for signal in removed.values() {
+            signal.unsubscribe(self.pending_states.id());
+        }
+        self.pending_states.retain_signals(&live_ids);
+    }
+
+    fn capture_compose_runtime(&self) -> ComposeRuntimeSnapshot {
+        ComposeRuntimeSnapshot {
+            slot_table: self.slot_table.runtime_snapshot(),
+            current_group_key: self.current_group_key,
+            path_counters: self.path_counters.clone(),
+            remember_path_counters: self.remember_path_counters.clone(),
+            scope_source_stack: self.scope_source_stack.clone(),
+            key_override_stack: self.key_override_stack.clone(),
+            pending_recomposition: self.pending_recomposition.clone(),
+            needs_recomposition: self.needs_recomposition,
+            node_stack: self.node_stack.clone(),
+            group_skip_stack: self.group_skip_stack.clone(),
+            overlay_active: self.overlay_active.clone(),
+            entered_compose_keys: self.entered_compose_keys.clone(),
+            reused_nodes: self.reused_nodes.clone(),
+        }
+    }
+
+    fn rollback_compose_runtime(&mut self) {
+        let Some(snapshot) = self.compose_transaction.take() else { return };
+        self.slot_table.restore_runtime(snapshot.slot_table);
+        self.current_group_key = snapshot.current_group_key;
+        self.path_counters = snapshot.path_counters;
+        self.remember_path_counters = snapshot.remember_path_counters;
+        self.scope_source_stack = snapshot.scope_source_stack;
+        self.key_override_stack = snapshot.key_override_stack;
+        self.pending_recomposition = snapshot.pending_recomposition;
+        self.needs_recomposition = snapshot.needs_recomposition;
+        self.node_stack = snapshot.node_stack;
+        self.group_skip_stack = snapshot.group_skip_stack;
+        self.overlay_active = snapshot.overlay_active;
+        self.entered_compose_keys = snapshot.entered_compose_keys;
+        self.reused_nodes = snapshot.reused_nodes;
+    }
+
     /// 执行组合：运行 content 闭包，构建/更新组合树和布局树。
     pub fn compose(&mut self, content: impl FnOnce(&mut ComposeCtx)) {
+        // Isolate shared TLS so a nested Composer can compose without replacing
+        // the caller's active slot/group/statement context.
+        let _runtime_frame = begin_runtime_frame();
+        let mut compose_runtime_transaction = ComposeRuntimeTransaction::new(self);
+        let _adaptive_context = crate::ui::adaptive::enter_context(self.adaptive.clone());
+        let mut dependency_transaction = ComposeDependencyTransaction::new(self);
         #[cfg(test)] { self.compose_clean_count = 0; self.compose_dirty_count = 0; }
         self.compose_count += 1;
         self.slot_table.reset();
         self.overlay_active.clear(); // 每帧组合期重记录（Skip 帧不记录）
         self.current_group_key = 0;
+        self.lifecycle.reset_for_compose();
         self.path_counters.clear();
         self.remember_path_counters.clear();
         STMT_STACK.with(|s| s.borrow_mut().clear());
+        // The runtime frame starts empty; these clears also self-heal any state
+        // left by an older caller that entered before frame isolation was added.
+        GROUP_STACK.with(|s| s.borrow_mut().clear());
+        ACTIVE_SLOT_KEY.with(|c| c.set(0));
         self.scope_source_stack.clear();
         self.key_override_stack.clear();
         // 注意：不在 compose 开头清 arena.root——materialize 管理 root
         // （开头清 + 末尾设）。此处若清，同帧第二次 compose 的 materialize
         // 守卫（prev 空 + root 有）失效 → 空 prev 重建 → 树塌缩。
-        // 重置 Window 生命周期标志（先于未复用节点回收，on_remove 再设置新值）
-        crate::ui::window::reset_lifecycle_flags();
+        // Reset only this Composer's Window lifecycle state before old node
+        // cleanup; its on_remove callbacks may set a pending close request.
         // 阶段D：保留上帧树（prev_node_by_key 由上帧 layout 构建）——
         // start_node 按 slot_key 复用节点槽位；本帧未复用的旧节点在
         // compose 末尾统一 free（见下方 drain）
         self.node_stack.clear();
+        self.group_skip_stack.clear();
+        self.pending_params.clear();
+        self.entered_compose_keys.clear();
+        // Slot key 0 is the fallback target for top-level State::get().
+        self.entered_compose_keys.insert(0);
 
-        // 消费本 Composer 实例的 pending states → 标记对应 slot 为脏
-        // 同时收集受影响的 slot key（用于增量更新 slot_deps）
-        let mut affected_slot_keys = HashSet::new();
-        let mut pending = self.pending_states.lock();
+        // Consume only invalidations that currently have compose dependencies.
+        // Layout-only IDs stay queued for layout() to consume.
+        let compose_ids: HashSet<StateId> = self.slot_deps.keys().copied().collect();
+        let mut pending_batch = PendingBatchGuard::new(
+            self.pending_states.clone(),
+            self.pending_states.drain_matching(|id| compose_ids.contains(&id)),
+        );
         #[cfg(debug_assertions)]
         if std::env::var("WINIA_RECOMPOSE_TRACE").is_ok() {
             // 触发本次重组的 State id 列表（对应 State::set/update 调用）
-            eprintln!("[recompose] 触发 State: {:?}", pending.iter().collect::<Vec<_>>());
+            eprintln!("[recompose] 触发 State: {:?}", pending_batch.ids());
         }
-        for state_id in pending.drain(..) {
-            if let Some(keys) = self.slot_deps.get(&state_id) {
+        for state_id in pending_batch.ids() {
+            if let Some(keys) = self.slot_deps.get(state_id) {
                 for &k in keys {
                     self.slot_table.mark_dirty(k);
-                    affected_slot_keys.insert(k);
                 }
             }
             // 两段式依赖：布局期注册的依赖 → 只标布局失效（重测不重组）
-            if let Some(keys) = self.layout_deps.get(&state_id) {
+            if let Some(keys) = self.layout_deps.get(state_id) {
                 for &k in keys {
                     self.layout_dirty_keys.insert(k);
                 }
             }
         }
-        drop(pending);
-
-        // 开始组合期依赖记录（thread_local 缓冲——State::get 写入，末尾 take_deps 取走）。
-        // 同时登记通知队列：record_dep 据此为跨 Composer 读取建立订阅（overlay 响应主树）
-        crate::core::state::begin_compose_deps_with_queue(std::sync::Arc::downgrade(&self.pending_states));
+        // Begin an isolated dependency frame. State::get() writes to its active
+        // buffer, while nested Composer calls temporarily own their own frame.
+        // The frame remains open through materialization and modifier reads.
+        let mut dependency_frame = crate::core::state::begin_compose_deps_with_queue(
+            std::sync::Arc::downgrade(&self.pending_states),
+        );
 
         {
             let ctx = &mut ComposeCtx::new(self);
@@ -1489,6 +2200,9 @@ impl Composer {
         // SizeDynamic 闭包内 State::get() 也要记录依赖（kf/dp 尺寸动画），
         // 由 layout() 末尾统一 clear + drain（见 layout()）。
         self.slot_table.truncate();
+        let mut live_compose_keys = HashSet::new();
+        self.slot_table.collect_live_keys(&mut live_compose_keys);
+        live_compose_keys.insert(0);
         // 防御：scope 配对完整性（漏配 end_scope 会导致 SCOPE_STACK 残留跨帧，
         // 使下帧组件外读取注册到失效 scope → 失效静默丢失）
         debug_assert_eq!(GROUP_STACK.with(|s| s.borrow().len()), 0,
@@ -1503,12 +2217,13 @@ impl Composer {
         if let Some(root_idx) = self.arena.root {
             register_modifier_deps_recursive(&self.arena, root_idx);
         }
-        // 依赖注册（组合期 + modifier 期收集的 State 依赖 → slot_deps）
-        for (state_id, slot_key) in crate::core::state::take_deps() {
-            self.slot_deps.entry(state_id).or_default().insert(slot_key);
-        }
-        // 记录结束：清除 recorder 队列引用（measure 期 layout_deps 不做跨 Composer 订阅）
-        crate::core::state::end_recorder_queue();
+        // 依赖注册（组合期 + modifier 期收集的 State 依赖 → 按 slot 收敛）。
+        let recorded = crate::core::state::take_deps();
+        self.reconcile_compose_deps(recorded, &live_compose_keys);
+        // Commit only after the read graph is reconciled. If content/materialize
+        // panics first, the guard restores the outer dependency frame and rolls
+        // back subscriptions learned by this failed compose.
+        dependency_frame.commit();
         // 回收本帧未复用的上帧节点（结构变化移除的子树——on_remove 触发）；
         // 跳过已复用节点（已挂入本帧树，free 会递归进本帧树形成环）
         let mut visited = std::collections::HashSet::new();
@@ -1519,6 +2234,13 @@ impl Composer {
         }
         self.prev_node_by_key.clear();
         self.reused_nodes.clear();
+        // A notification that arrived after the batch was drained may belong to
+        // a read removed by this frame. Drop only IDs with no live channel.
+        self.pending_states
+            .drain_matching(|id| !self.slot_deps.contains_key(&id) && !self.layout_deps.contains_key(&id));
+        pending_batch.commit();
+        dependency_transaction.commit();
+        compose_runtime_transaction.commit();
     }
 
     /// 返回 LayoutNode 树的根节点引用
@@ -1553,6 +2275,14 @@ impl Composer {
 
     /// 执行整棵布局树的 measure + place，并缓存测量结果供下帧复用
     pub fn layout(&mut self, root_constraints: Constraints) {
+        // Measure callbacks can read State and invoke another Composer. Keep
+        // their active slot/group/statement context isolated as well.
+        let _runtime_frame = begin_runtime_frame();
+        let _adaptive_context = crate::ui::adaptive::enter_context(self.adaptive.clone());
+        let mut layout_transaction = LayoutTransaction::new(self);
+        // Layout can be called without a preceding compose; consume layout-only
+        // invalidations here so measure sees the dirty path directly.
+        self.consume_layout_pending();
         // 应用布局失效：清全树旧标记 → 按 layout_dirty_keys 标节点 + 祖先传播
         // （保守超集：祖先全链标脏——布局动画场景父必然依赖子尺寸，Compose 精确传播留待优化）
         if let Some(root_idx) = self.arena.root {
@@ -1569,7 +2299,10 @@ impl Composer {
         // 物化只在 compose 末尾（完整分离：组合完成即建树）——layout 只测量。
         // 单独调 layout（无 compose）时树为空——measure 无操作（无害）
         // 开始布局期依赖记录（measure 中 State::get → 两段式分流）
-        crate::core::state::begin_layout_deps();
+        let mut dependency_frame = crate::core::state::begin_layout_deps_with_queue(
+            Arc::downgrade(&self.pending_states),
+        );
+        begin_layout_measure_tracking();
         if let Some(root_idx) = self.arena.root {
             let (_size, _placements) = crate::layout::measure_node(
                 &mut self.arena.nodes, &self.arena.policies, root_idx, root_constraints);
@@ -1580,35 +2313,59 @@ impl Composer {
             // 阶段D：重建 slot_key → 节点索引映射（供下帧 start_node 复用）
             self.prev_node_by_key.clear();
             crate::core::materialize::collect_node_keys(&self.arena, root_idx, &mut self.prev_node_by_key);
-            // 布局依赖增量更新（两段式依赖）：
-            // 本帧 measure 过的 slot_key（touched）→ 清旧写新（依赖集收敛）；
-            // 未 measure 的（常量折叠命中）→ 保留旧项（折叠前提=依赖无 notify，闭环成立）。
-            let recorded: Vec<(u32, u64)> = crate::core::state::take_deps();
-            let touched: HashSet<u64> = recorded.iter().map(|&(_, k)| k).collect();
-            if !touched.is_empty() {
-                for set in self.layout_deps.values_mut() {
-                    set.retain(|k| !touched.contains(k));
-                }
-            }
-            // 顺手清理死 key：本帧确认移除的节点（compose 末尾回收时收集）
-            if !self.removed_slot_keys.is_empty() {
-                for set in self.layout_deps.values_mut() {
-                    set.retain(|k| !self.removed_slot_keys.contains(k));
-                }
-                self.removed_slot_keys.clear();
-            }
-            // 空条目清理（节点不再依赖任何 state 或已移除）
-            self.layout_deps.retain(|_, set| !set.is_empty());
-            // 写入本帧新注册
-            for (state_id, slot_key) in recorded {
-                self.layout_deps.entry(state_id).or_default().insert(slot_key);
-            }
         } else {
-            // 无根节点（空内容帧）：布局依赖缓冲无 measure 期新增，直接取走丢弃
-            //（防御性对称——未来若在无 root 路径写入 measure 依赖，不会残留跨帧）
-            crate::core::state::take_deps();
+            // No root means every old layout dependency is stale.
+            self.prev_nodes.clear();
+            self.prev_node_by_key.clear();
         }
-        // 组合 + 测量全部完成：记录模式已由 take_deps 复位（无指针残留——无悬垂风险）
+
+        let recorded = crate::core::state::take_deps();
+        let measured_keys = take_layout_measure_keys();
+        // A Composer with no root has no live layout readers. Clear the forward
+        // graph before rebuilding the reverse index so direct layout() calls
+        // cannot retain subscriptions after the tree disappeared.
+        if self.arena.root.is_none() {
+            self.layout_slot_reads.clear();
+            self.layout_deps.clear();
+        }
+        let mut reads_by_slot: HashMap<u64, HashSet<StateId>> = HashMap::new();
+        for (signal, slot_key) in &recorded {
+            reads_by_slot.entry(*slot_key).or_default().insert(signal.id());
+            self.layout_signal_handles
+                .entry(signal.id())
+                .or_insert_with(|| signal.clone());
+        }
+
+        // Replace only slots that actually ran measure. A cached slot is absent
+        // from measured_keys and therefore keeps its last successful reads.
+        for slot_key in measured_keys {
+            match reads_by_slot.remove(&slot_key) {
+                Some(reads) if !reads.is_empty() => {
+                    self.layout_slot_reads.insert(slot_key, reads);
+                }
+                _ => {
+                    self.layout_slot_reads.remove(&slot_key);
+                }
+            }
+        }
+        // Compose confirmed removals before rebuilding the reverse index so a
+        // dead slot cannot reappear from an old forward edge.
+        for &slot_key in &self.removed_slot_keys {
+            self.layout_slot_reads.remove(&slot_key);
+            self.layout_dirty_keys.remove(&slot_key);
+        }
+        self.removed_slot_keys.clear();
+
+        self.rebuild_layout_reverse_deps();
+
+        self.cleanup_signal_subscriptions();
+        self.debug_assert_dependency_graphs();
+        self.pending_states
+            .drain_matching(|id| !self.slot_deps.contains_key(&id) && !self.layout_deps.contains_key(&id));
+        // Normal layout completion restores the outer dependency frame. A panic
+        // before this point drops the guard and rolls back partial subscriptions.
+        dependency_frame.commit();
+        layout_transaction.commit();
     }
 
     /// 请求重组（由 State 变化触发）。
@@ -1616,9 +2373,33 @@ impl Composer {
         self.needs_recomposition = true;
     }
 
+    fn has_pending_compose_states(&self) -> bool {
+        let compose_ids: HashSet<StateId> = self.slot_deps.keys().copied().collect();
+        self.pending_states
+            .pending_ids()
+            .into_iter()
+            .any(|id| compose_ids.contains(&id))
+    }
+
+    /// Move layout-only invalidations into layout_dirty_keys without consuming
+    /// an ID that also requires composition. This makes direct layout() calls
+    /// correct while preserving a mixed compose/layout notification for compose().
+    fn consume_layout_pending(&mut self) {
+        let compose_ids: HashSet<StateId> = self.slot_deps.keys().copied().collect();
+        let layout_ids: HashSet<StateId> = self.layout_deps.keys().copied().collect();
+        let layout_pending = self
+            .pending_states
+            .drain_non_compose_collect_layout(&compose_ids, &layout_ids);
+        for state_id in layout_pending {
+            if let Some(keys) = self.layout_deps.get(&state_id) {
+                self.layout_dirty_keys.extend(keys.iter().copied());
+            }
+        }
+    }
+
     /// 是否有待处理的 state 变化
     pub fn has_pending_states(&self) -> bool {
-        !self.pending_states.lock().is_empty()
+        !self.pending_states.is_empty()
     }
 
     /// 取走本帧注册的顶层弹出层（compose 后调用——清空收集）
@@ -1638,13 +2419,17 @@ impl Composer {
 
     /// 待消费 State 数（vsync 研究——渲染时刻的 pending 积压）
     pub fn pending_state_count(&self) -> usize {
-        self.pending_states.lock().len()
+        self.pending_states.len()
     }
 
     /// 执行待处理的重组。返回 true 表示实际执行了 compose。
     /// 若无待处理则跳过，保留上一帧的布局树。
     pub fn recompose(&mut self, content: impl FnOnce(&mut ComposeCtx)) -> bool {
-        let has_pending = !self.pending_states.lock().is_empty();
+        // Resolve layout-only notifications before deciding whether composition
+        // is needed. This prevents the app frame loop from spinning on a pending
+        // ID that belongs only to layout_deps.
+        self.consume_layout_pending();
+        let has_pending = self.has_pending_compose_states();
         let will_run = self.needs_recomposition || has_pending || !self.pending_recomposition.is_empty();
         #[cfg(debug_assertions)]
         if std::env::var("WINIA_RECOMPOSE_TRACE").is_ok() {
@@ -1671,6 +2456,9 @@ impl Composer {
 /// Compose 末尾：递归遍历 LayoutNode 树（arena），为所有 modifier 注册 State 依赖。
 /// 模块级函数（impl 外）——impl 内直接调用。
 fn register_modifier_deps_recursive(arena: &crate::layout::node::NodeArena, idx: usize) {
+    // Modifier reads happen after GROUP_STACK is cleared; restore the node target
+    // explicitly so scroll State dependencies do not all attach to the last node.
+    set_active_slot_key(arena.nodes[idx].slot_key);
     arena.nodes[idx].modifier.register_state_deps();
     let children = arena.nodes[idx].children.clone();
     for c in children {
@@ -1681,6 +2469,18 @@ fn register_modifier_deps_recursive(arena: &crate::layout::node::NodeArena, idx:
 impl Default for Composer {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Drop for Composer {
+    fn drop(&mut self) {
+        if self.compose_transaction.is_some() {
+            self.rollback_compose_runtime();
+        }
+        crate::animation::clear_animations_for_states(
+            &self.animation_state_ids.iter().copied().collect::<Vec<_>>(),
+        );
+        self.pending_states.unsubscribe_all();
     }
 }
 
@@ -1702,6 +2502,24 @@ mod tests {
         // mix_key 本身：不同序号 → 不同 key（跨 base 也不碰撞丢熵）
         assert_ne!(mix_key(0x1234, 0), mix_key(0x1234, 1), "同 base 不同序号 key 不同");
         assert_ne!(mix_key(0x1234, 0), mix_key(0x1235, 0), "不同 base 同序号 key 不同");
+    }
+
+    #[test]
+    fn test_window_lifecycle_isolation_per_composer() {
+        let composer_a = Composer::new();
+        let composer_b = Composer::new();
+
+        composer_a.lifecycle.set_pending_remove(7);
+        assert_eq!(composer_a.pending_window_close_id(), Some(7));
+        assert_eq!(composer_b.pending_window_close_id(), None, "window close request must stay scoped to the owning Composer");
+
+        composer_b.lifecycle.set_pending_remove(9);
+        composer_b.lifecycle.mark_rebuilt();
+        assert_eq!(composer_b.pending_window_close_id(), None, "rebuilt window should not report pending close");
+        assert_eq!(composer_a.pending_window_close_id(), Some(7));
+
+        composer_a.reset_pending_window_remove();
+        assert_eq!(composer_a.pending_window_close_id(), None);
     }
 
     #[test]
@@ -2623,6 +3441,26 @@ fn test_reused_node_remeasures_on_state_change() {
 // 两段式依赖测试（P2-1：布局期读动画值只重测不重组）
 // ═══════════════════════════════════════════════════════════
 
+#[test]
+fn test_dependency_reverse_graph_rebuilds_from_forward_reads() {
+    let mut composer = Composer::new();
+    let first = StateId::new(1);
+    let second = StateId::new(2);
+
+    composer.compose_slot_reads.insert(10, HashSet::from([first, second]));
+    composer.compose_slot_reads.insert(20, HashSet::from([first]));
+    composer.rebuild_compose_reverse_deps();
+    assert_eq!(composer.slot_deps.get(&first), Some(&HashSet::from([10, 20])));
+    assert_eq!(composer.slot_deps.get(&second), Some(&HashSet::from([10])));
+
+    composer.layout_slot_reads.insert(30, HashSet::from([second]));
+    composer.layout_slot_reads.insert(40, HashSet::from([first, second]));
+    composer.rebuild_layout_reverse_deps();
+    assert_eq!(composer.layout_deps.get(&first), Some(&HashSet::from([40])));
+    assert_eq!(composer.layout_deps.get(&second), Some(&HashSet::from([30, 40])));
+    composer.debug_assert_dependency_graphs();
+}
+
 /// T1 记录分流：组合期 get() 进 slot_deps；布局期（measure 中 SizeDynamic）get() 进 layout_deps
 #[test]
 fn test_layout_dep_recording_split() {
@@ -2647,7 +3485,7 @@ fn test_layout_dep_recording_split() {
     composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
 
     let s = holder.borrow().clone().unwrap();
-    let sid = s.id();
+    let sid = s.signal_id();
     assert!(composer.slot_deps.contains_key(&sid),
         "组合期 get() 应注册进 slot_deps");
     assert!(composer.layout_deps.contains_key(&sid),
@@ -2655,6 +3493,224 @@ fn test_layout_dep_recording_split() {
     // 同一 State 双通道（组合+布局）各自记录
     let keys_layout = composer.layout_deps.get(&sid).unwrap();
     assert_eq!(keys_layout.len(), 1, "layout_deps 应含叶子节点 key");
+    let leaf_key = *keys_layout.iter().next().unwrap();
+    assert_eq!(composer.layout_slot_reads.get(&leaf_key).unwrap(), &std::collections::HashSet::from([sid]));
+}
+
+/// A measured slot with no dynamic read must replace its previous forward reads.
+#[test]
+fn test_layout_slot_reads_remove_empty_remeasure() {
+    let mut composer = Composer::new();
+    let holder = std::cell::RefCell::new(None::<State<f32>>);
+    let use_dynamic = std::cell::Cell::new(true);
+
+    let build = |composer: &mut Composer| {
+        composer.compose(|ctx| {
+            let state = ctx.remember(|| 10.0f32);
+            *holder.borrow_mut() = Some(state.clone());
+            let key = ctx.next_key();
+            ctx.start_leaf(key, if use_dynamic.get() {
+                Modifier::new().size(&state, 10.0)
+            } else {
+                Modifier::new().size(20.0, 10.0)
+            });
+            ctx.end_node();
+        });
+        composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+    };
+
+    build(&mut composer);
+    let state_id = holder.borrow().as_ref().unwrap().signal_id();
+    assert!(composer.layout_deps.contains_key(&state_id));
+    assert!(!composer.layout_slot_reads.is_empty());
+
+    use_dynamic.set(false);
+    // The external mode switch itself is not reactive. Queue a layout-only
+    // invalidation so the next layout pass really measures this slot.
+    holder.borrow().as_ref().unwrap().set_no_wake(11.0);
+    build(&mut composer);
+    assert!(!composer.layout_deps.contains_key(&state_id), "空读取重测应移除 reverse edge");
+    assert!(composer.layout_slot_reads.values().all(|reads| !reads.contains(&state_id)));
+
+    holder.borrow().as_ref().unwrap().set_no_wake(300.0);
+    assert!(!composer.has_pending_states(), "移除布局读取后 State 不应继续入队");
+}
+
+/// A cached sibling that is not remeasured must retain its forward layout reads.
+#[test]
+fn test_layout_slot_reads_preserve_untouched_cached_slot() {
+    let mut composer = Composer::new();
+    let first_holder = std::cell::RefCell::new(None::<State<f32>>);
+    let second_holder = std::cell::RefCell::new(None::<State<f32>>);
+
+    let build = |composer: &mut Composer| {
+        composer.compose(|ctx| {
+            let first = ctx.remember(|| 10.0f32);
+            let second = ctx.remember(|| 20.0f32);
+            *first_holder.borrow_mut() = Some(first.clone());
+            *second_holder.borrow_mut() = Some(second.clone());
+            let root_key = ctx.next_key();
+            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    let first_key = ctx.next_key();
+                    ctx.start_leaf(first_key, Modifier::new().width(&first).height(10.0));
+                    ctx.end_node();
+                    let second_key = ctx.next_key();
+                    ctx.start_leaf(second_key, Modifier::new().width(&second).height(10.0));
+                    ctx.end_node();
+                }
+            }
+            ctx.end_restartable_group();
+        });
+        composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+    };
+
+    build(&mut composer);
+    let first_id = first_holder.borrow().as_ref().unwrap().signal_id();
+    let second_id = second_holder.borrow().as_ref().unwrap().signal_id();
+    let second_key = *composer.layout_deps.get(&second_id).unwrap().iter().next().unwrap();
+    let second_reads = composer.layout_slot_reads.get(&second_key).unwrap().clone();
+
+    // Only the first leaf is dirty. The second leaf hits the measure cache and
+    // must keep its previous forward edge instead of being treated as empty.
+    first_holder.borrow().as_ref().unwrap().set_no_wake(300.0);
+    build(&mut composer);
+
+    assert_eq!(composer.layout_slot_reads.get(&second_key), Some(&second_reads));
+    assert!(composer.layout_deps.get(&second_id).unwrap().contains(&second_key));
+    assert!(composer.layout_deps.get(&first_id).is_some_and(|keys| !keys.is_empty()));
+}
+
+/// Removing a composed node must remove its layout forward and reverse edges.
+#[test]
+fn test_layout_slot_reads_remove_removed_slot() {
+    let mut composer = Composer::new();
+    let show_holder = std::cell::RefCell::new(None::<State<bool>>);
+    let first_holder = std::cell::RefCell::new(None::<State<f32>>);
+    let removed_holder = std::cell::RefCell::new(None::<State<f32>>);
+
+    let build = |composer: &mut Composer| {
+        composer.compose(|ctx| {
+            let show = ctx.remember(|| true);
+            let first = ctx.remember(|| 10.0f32);
+            let removed = ctx.remember(|| 20.0f32);
+            *show_holder.borrow_mut() = Some(show.clone());
+            *first_holder.borrow_mut() = Some(first.clone());
+            *removed_holder.borrow_mut() = Some(removed.clone());
+            let root_key = ctx.next_key();
+            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    if show.get() {
+                        let first_key = ctx.next_key();
+                        ctx.start_leaf(first_key, Modifier::new().width(&first).height(10.0));
+                        ctx.end_node();
+                        let removed_key = ctx.next_key();
+                        ctx.start_leaf(removed_key, Modifier::new().width(&removed).height(10.0));
+                        ctx.end_node();
+                    }
+                }
+            }
+            ctx.end_restartable_group();
+        });
+        composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+    };
+
+    build(&mut composer);
+    let removed_id = removed_holder.borrow().as_ref().unwrap().signal_id();
+    let removed_key = *composer.layout_deps.get(&removed_id).unwrap().iter().next().unwrap();
+    assert!(composer.layout_slot_reads.contains_key(&removed_key));
+
+    show_holder.borrow().as_ref().unwrap().set(false);
+    build(&mut composer);
+
+    assert!(!composer.layout_slot_reads.contains_key(&removed_key));
+    assert!(!composer.layout_deps.contains_key(&removed_id));
+    removed_holder.borrow().as_ref().unwrap().set_no_wake(300.0);
+    assert!(!composer.has_pending_states(), "removed layout signal must be unsubscribed");
+    assert!(composer.layout_deps.contains_key(&first_holder.borrow().as_ref().unwrap().signal_id()) == false,
+        "the branch removes both dynamic leaves");
+}
+
+/// An empty composition clears the forward graph and all reverse subscriptions.
+#[test]
+fn test_layout_slot_reads_clear_when_root_removed() {
+    let mut composer = Composer::new();
+    let watched = State::new(10.0f32);
+
+    composer.compose(|ctx| {
+        let key = ctx.next_key();
+        ctx.start_leaf(key, Modifier::new().width(&watched).height(10.0));
+        ctx.end_node();
+    });
+    composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+    assert!(!composer.layout_slot_reads.is_empty());
+
+    composer.compose(|_ctx| {});
+    watched.set_no_wake(200.0);
+    assert!(composer.has_pending_states(), "empty root test must start with a queued layout notification");
+    composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+
+    assert!(composer.layout_slot_reads.is_empty());
+    assert!(composer.layout_deps.is_empty());
+    assert!(composer.layout_signal_handles.is_empty());
+    assert!(!composer.has_pending_states(), "empty root must consume stale layout notification");
+}
+
+/// A panic while measuring must roll back subscriptions learned by that layout frame.
+#[test]
+fn test_layout_dependency_panic_rolls_back_new_subscription() {
+    use std::panic::AssertUnwindSafe;
+    use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+
+    let mut composer = Composer::new();
+    let stable = State::new(10.0f32);
+    let panic_state = State::new(20.0f32);
+    let should_panic = Arc::new(AtomicBool::new(true));
+    let constraints = crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0);
+
+    composer.compose(|ctx| {
+        let key = ctx.next_key();
+        ctx.start_leaf(key, Modifier::new().width(&stable).height(10.0));
+        ctx.end_node();
+    });
+    composer.layout(constraints);
+    let stable_id = stable.signal_id();
+    let stable_key = *composer.layout_deps.get(&stable_id).unwrap().iter().next().unwrap();
+
+    let panic_signal = panic_state.clone();
+    let panic_flag = should_panic.clone();
+    composer.compose(|ctx| {
+        let key = ctx.next_key();
+        ctx.start_leaf(key, Modifier::new().width(move || {
+            let _ = panic_signal.get();
+            if panic_flag.load(AtomicOrdering::Relaxed) {
+                panic!("layout dependency panic");
+            }
+            20.0
+        }).height(10.0));
+        ctx.end_node();
+    });
+    stable.set_no_wake(11.0);
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| composer.layout(constraints)));
+    assert!(result.is_err());
+
+    assert!(composer.layout_deps.get(&stable_id).is_some_and(|keys| keys.contains(&stable_key)),
+        "panic must preserve the last committed layout graph");
+    assert!(!composer.layout_signal_handles.contains_key(&panic_state.signal_id()),
+        "panic-only signal handle must not survive the failed layout");
+    assert!(!composer.layout_deps.contains_key(&panic_state.signal_id()),
+        "panic-only signal must not remain subscribed");
+    assert!(composer.pending_states.pending_ids().contains(&stable_id),
+        "the consumed layout invalidation must be retained for retry");
+    panic_state.set_no_wake(21.0);
+    assert!(!composer.pending_states.pending_ids().contains(&panic_state.signal_id()),
+        "rolled-back signal must not enqueue Composer");
+
+    should_panic.store(false, AtomicOrdering::Relaxed);
+    composer.layout(constraints);
+    assert!(!composer.has_pending_states(), "retry should consume the retained invalidation");
 }
 
 /// T2 布局失效传播：layout_dirty_keys 命中的节点 + 祖先链全部标 layout_dirty
@@ -2760,7 +3816,7 @@ fn test_layout_dep_survives_const_fold() {
     };
 
     build(&mut composer);
-    let sid = holder.borrow().clone().unwrap().id();
+    let sid = holder.borrow().clone().unwrap().signal_id();
     assert!(composer.layout_deps.contains_key(&sid), "帧1 应注册布局依赖");
 
     // 帧2：无 notify 的重复 build——compose 全 Skip、measure 常量折叠命中
@@ -2799,6 +3855,8 @@ fn test_overlay_composer_invalidated_by_main_tree_state() {
     main.compose(|ctx| {
         let items = ctx.remember(|| vec!["a".to_string()]);
         *holder.borrow_mut() = Some(items.clone());
+        // Ownerless State only notifies Composer instances that actually read it.
+        let _ = items.get();
         let k = ctx.next_key();
         ctx.start_leaf(k, Modifier::new());
         ctx.end_node();
@@ -2843,6 +3901,191 @@ fn test_overlay_composer_invalidated_by_main_tree_state() {
     assert!(ov.has_pending_states(), "重组后依赖续期——持续响应后续变化");
 }
 
+/// Compose dependency edges are replaced when an Entered scope stops reading a State.
+#[test]
+fn test_compose_read_removal_unsubscribes_stale_state() {
+    let mut composer = Composer::new();
+    let gate = State::new(true);
+    let watched = State::new(0i32);
+    let constraints = crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0);
+
+    let build = |composer: &mut Composer| {
+        composer.compose(|ctx| {
+            let root_key = ctx.next_key();
+            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    if gate.get() {
+                        let _ = watched.get();
+                    }
+                    let leaf_key = ctx.next_key();
+                    ctx.start_leaf(leaf_key, Modifier::new());
+                    ctx.end_node();
+                }
+            }
+            ctx.end_restartable_group();
+        });
+        composer.layout(constraints);
+    };
+
+    build(&mut composer);
+    let watched_id = watched.signal_id();
+    assert!(composer.slot_deps.contains_key(&watched_id));
+
+    gate.set(false);
+    build(&mut composer);
+    assert!(!composer.slot_deps.contains_key(&watched_id), "旧读取边应被移除");
+
+    watched.set(1);
+    assert!(!composer.has_pending_states(), "移除读取后 State 不应再使 Composer 入队");
+}
+
+/// Composer drop removes its queue from every StateSignal it read.
+#[test]
+fn test_composer_drop_unsubscribes_state_signals() {
+    let watched = State::new(0i32);
+    let pending = {
+        let mut composer = Composer::new();
+        let pending = composer.pending_states.clone();
+        composer.compose(|ctx| {
+            let _ = watched.get();
+            let key = ctx.next_key();
+            ctx.start_leaf(key, Modifier::new());
+            ctx.end_node();
+        });
+        pending
+    };
+
+    watched.set(1);
+    assert!(pending.is_empty(), "Composer drop 后不应收到 State 通知");
+}
+
+#[test]
+fn test_runtime_frame_restores_tls_after_panic_and_nested_drop() {
+    let baseline_active = ACTIVE_SLOT_KEY.with(|slot| slot.get());
+    let baseline_groups = GROUP_STACK.with(|groups| groups.borrow().clone());
+    let baseline_stmts = STMT_STACK.with(|stmts| stmts.borrow().clone());
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _frame = begin_runtime_frame();
+        assert_eq!(ACTIVE_SLOT_KEY.with(|slot| slot.get()), 0);
+        assert!(GROUP_STACK.with(|groups| groups.borrow().is_empty()));
+        assert!(STMT_STACK.with(|stmts| stmts.borrow().is_empty()));
+        set_active_slot_key(99);
+        GROUP_STACK.with(|groups| groups.borrow_mut().push(99));
+        STMT_STACK.with(|stmts| stmts.borrow_mut().push((99, 99)));
+        panic!("runtime frame rollback");
+    }));
+    assert!(result.is_err());
+    assert_eq!(ACTIVE_SLOT_KEY.with(|slot| slot.get()), baseline_active);
+    assert_eq!(GROUP_STACK.with(|groups| groups.borrow().clone()), baseline_groups);
+    assert_eq!(STMT_STACK.with(|stmts| stmts.borrow().clone()), baseline_stmts);
+
+    let outer = begin_runtime_frame();
+    set_active_slot_key(21);
+    GROUP_STACK.with(|groups| groups.borrow_mut().push(21));
+    STMT_STACK.with(|stmts| stmts.borrow_mut().push((21, 21)));
+    {
+        let _inner = begin_runtime_frame();
+        set_active_slot_key(22);
+        GROUP_STACK.with(|groups| groups.borrow_mut().push(22));
+        STMT_STACK.with(|stmts| stmts.borrow_mut().push((22, 22)));
+    }
+    assert_eq!(ACTIVE_SLOT_KEY.with(|slot| slot.get()), 21);
+    assert_eq!(GROUP_STACK.with(|groups| groups.borrow().clone()), vec![21]);
+    assert_eq!(STMT_STACK.with(|stmts| stmts.borrow().clone()), vec![(21, 21)]);
+    drop(outer);
+    assert_eq!(ACTIVE_SLOT_KEY.with(|slot| slot.get()), baseline_active);
+    assert_eq!(GROUP_STACK.with(|groups| groups.borrow().clone()), baseline_groups);
+    assert_eq!(STMT_STACK.with(|stmts| stmts.borrow().clone()), baseline_stmts);
+}
+
+#[test]
+fn test_nested_composer_compose_preserves_outer_dependencies() {
+    let outer_state = State::new(1i32);
+    let inner_state = State::new(2i32);
+    let mut outer = Composer::new();
+    let mut inner = Composer::new();
+
+    outer.compose(|_ctx| {
+        assert_eq!(outer_state.get(), 1);
+        inner.compose(|_ctx| {
+            assert_eq!(inner_state.get(), 2);
+        });
+        assert_eq!(outer_state.get(), 1);
+    });
+
+    assert!(outer.slot_deps.contains_key(&outer_state.signal_id()));
+    assert!(!outer.slot_deps.contains_key(&inner_state.signal_id()));
+    assert!(inner.slot_deps.contains_key(&inner_state.signal_id()));
+    assert!(!inner.slot_deps.contains_key(&outer_state.signal_id()));
+
+    outer_state.set(3);
+    assert!(outer.has_pending_states());
+    assert!(!inner.has_pending_states());
+    inner_state.set(4);
+    assert!(inner.has_pending_states());
+}
+
+/// Layout-only invalidation can be consumed directly by layout() without compose().
+#[test]
+fn test_layout_only_pending_consumed_without_recompose() {
+    let mut composer = Composer::new();
+    let size = State::new(10.0f32);
+    let constraints = crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0);
+
+    composer.compose(|ctx| {
+        let key = ctx.next_key();
+        ctx.start_leaf(key, Modifier::new().size(&size, 10.0));
+        ctx.end_node();
+    });
+    composer.layout(constraints);
+    let root = composer.layout_root_idx().unwrap();
+    let before = composer.arena_nodes()[root].measured_size.width;
+
+    size.set_no_wake(300.0);
+    assert!(composer.has_pending_states());
+    composer.layout(constraints);
+    let root = composer.layout_root_idx().unwrap();
+    let after = composer.arena_nodes()[root].measured_size.width;
+    assert!(after > before + 10.0, "layout-only State 应直接触发重测：{} -> {}", before, after);
+    assert!(!composer.has_pending_states());
+}
+
+/// A State read by both composition and layout must remain queued for compose
+/// after layout-only classification marks its layout path dirty.
+#[test]
+fn test_mixed_compose_layout_pending_reaches_recompose() {
+    let mut composer = Composer::new();
+    let size = State::new(10.0f32);
+    let constraints = crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0);
+
+    composer.compose(|ctx| {
+        assert_eq!(size.get(), 10.0);
+        let key = ctx.next_key();
+        ctx.start_leaf(key, Modifier::new().size(&size, 10.0));
+        ctx.end_node();
+    });
+    composer.layout(constraints);
+    let root = composer.layout_root_idx().unwrap();
+    let before = composer.arena_nodes()[root].measured_size.width;
+
+    size.set_no_wake(300.0);
+    assert!(composer.has_pending_states());
+    assert!(composer.recompose(|ctx| {
+        assert_eq!(size.get(), 300.0);
+        let key = ctx.next_key();
+        ctx.start_leaf(key, Modifier::new().size(&size, 10.0));
+        ctx.end_node();
+    }));
+    assert!(!composer.has_pending_states(), "mixed invalidation should be consumed by recompose");
+
+    composer.layout(constraints);
+    let root = composer.layout_root_idx().unwrap();
+    let after = composer.arena_nodes()[root].measured_size.width;
+    assert!(after > before + 10.0, "mixed State should still drive layout: {before} -> {after}");
+}
+
 /// 回归测试（review 发现）：register_modifier_deps_recursive（scroll 等 modifier 内
 /// State::get）必须在 take_deps 之前执行——否则依赖被静默丢弃、滚动不刷新。
 #[test]
@@ -2869,7 +4112,7 @@ fn test_modifier_scroll_dep_registered() {
     };
 
     build(&mut composer);
-    let sid = holder.borrow().as_ref().unwrap().offset.id();
+    let sid = holder.borrow().as_ref().unwrap().offset.signal_id();
     assert!(composer.slot_deps.contains_key(&sid),
         "scroll offset 应注册组合依赖（register_modifier_deps_recursive）——丢失则滚动不刷新");
 
@@ -2880,9 +4123,81 @@ fn test_modifier_scroll_dep_registered() {
         "scroll 变化应触发组合级 dirty（dirty_count={}）", composer.compose_dirty_count);
 }
 
+/// A panic from late node cleanup must restore the last committed dependency graph.
+/// This is narrower than a SlotTable transaction: only dependency maps and signal
+/// subscriptions are rolled back here.
+#[test]
+fn test_compose_late_cleanup_panic_restores_dependency_graph() {
+    let mut composer = Composer::new();
+    let committed = State::new(1i32);
+    let failed = State::new(2i32);
+    let committed_for_remove = committed.clone();
+
+    composer.compose(|ctx| {
+        let _ = committed.get();
+        ctx.start_leaf_with_remove(
+            1,
+            Modifier::new(),
+            Box::new(move || {
+                committed_for_remove.set_no_wake(3);
+                panic!("late compose cleanup panic");
+            }),
+        );
+        ctx.end_node();
+    });
+    composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+    assert!(composer.slot_deps.contains_key(&committed.signal_id()));
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        composer.compose(|ctx| {
+            let _ = failed.get();
+            ctx.start_leaf(2, Modifier::new());
+            ctx.end_node();
+        });
+    }));
+    assert!(result.is_err(), "late cleanup should panic");
+    assert!(composer.slot_deps.contains_key(&committed.signal_id()),
+        "panic must restore the committed compose dependency");
+    assert!(!composer.slot_deps.contains_key(&failed.signal_id()),
+        "failed compose dependency must not remain committed");
+    assert!(!composer.has_pending_states(),
+        "failed-frame notifications must be removed during dependency rollback");
+
+    committed.set_no_wake(4);
+    assert!(composer.has_pending_states(), "restored signal must remain subscribed");
+    composer.pending_states.drain();
+    failed.set_no_wake(4);
+    assert!(!composer.has_pending_states(), "failed signal must be unsubscribed after rollback");
+}
+
 /// 崩溃边界（P3-3）前提验证：content panic 后（catch_unwind 捕获），
 /// 下帧恢复正常内容应自愈——slot 表/依赖缓冲（DEP_MODE 残留由 begin 清空）
 /// 从半状态重建，不残留垃圾。
+#[test]
+fn test_compose_runtime_snapshot_restores_key_context_after_panic() {
+    let mut composer = Composer::new();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        composer.compose(|ctx| {
+            ctx.key("failed-key", |ctx| {
+                let _ = ctx.next_key();
+                panic!("runtime snapshot panic");
+            });
+        });
+    }));
+    assert!(result.is_err());
+    assert!(composer.scope_source_stack.is_empty());
+    assert!(composer.key_override_stack.is_empty());
+    assert!(composer.slot_table.path.is_empty());
+    assert!(composer.slot_table.child_counters.len() == 1);
+
+    composer.compose(|ctx| {
+        let key = ctx.key("recovered-key", |ctx| ctx.next_key());
+        ctx.start_leaf(key, Modifier::new());
+        ctx.end_node();
+    });
+    assert!(composer.layout_root_idx().is_some(), "next compose should rebuild after rollback");
+}
+
 #[test]
 fn test_compose_panic_recovers_next_frame() {
     let mut composer = Composer::new();
@@ -2917,6 +4232,82 @@ fn test_compose_panic_recovers_next_frame() {
     assert!(composer.layout_root_idx().is_some(), "panic 后下帧应自愈（树重建）");
     let root_idx = composer.layout_root_idx().unwrap();
     assert_eq!(composer.arena_nodes()[root_idx].children.len(), 1, "自愈后结构正确");
+}
+
+
+/// A notification generated after compose drains its batch remains queued for the
+/// next batch instead of being consumed by the current frame.
+#[test]
+fn test_compose_notification_during_frame_is_next_batch() {
+    let mut composer = Composer::new();
+    let state = State::new(0i32);
+    let notify_once = std::cell::Cell::new(true);
+
+    composer.compose(|_ctx| {
+        let _ = state.get();
+        if notify_once.replace(false) {
+            state.set_no_wake(1);
+        }
+    });
+
+    assert!(composer.has_pending_states(), "in-frame notification must remain pending");
+    assert!(composer.recompose(|_ctx| {
+        let _ = state.get();
+    }));
+    assert!(!composer.has_pending_states(), "the next batch should consume the notification");
+}
+
+/// A panic after compose consumes its pending batch must restore that batch for
+/// a retry; this guard does not attempt the larger SlotTable transaction.
+#[test]
+fn test_compose_pending_batch_restored_after_panic() {
+    use std::panic::AssertUnwindSafe;
+
+    let mut composer = Composer::new();
+    let state = State::new(0i32);
+    composer.compose(|_ctx| {
+        let _ = state.get();
+    });
+    state.set_no_wake(1);
+    let state_id = state.signal_id();
+    assert!(composer.pending_states.pending_ids().contains(&state_id));
+
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        composer.compose(|_ctx| {
+            let _ = state.get();
+            panic!("compose batch panic");
+        });
+    }));
+    assert!(result.is_err());
+    assert!(composer.pending_states.pending_ids().contains(&state_id),
+        "panic must restore the consumed compose batch");
+
+    assert!(composer.recompose(|_ctx| {
+        let _ = state.get();
+    }));
+    assert!(!composer.has_pending_states(), "retry should consume the restored batch");
+}
+
+/// A notification for a read removed during compose must not leave a stale
+/// pending ID that keeps the Composer awake forever.
+#[test]
+fn test_removed_read_notification_during_compose_is_dropped() {
+    let mut composer = Composer::new();
+    let watched = State::new(0i32);
+    let trigger = State::new(false);
+
+    composer.compose(|_ctx| {
+        let _ = watched.get();
+        let _ = trigger.get();
+    });
+
+    trigger.set_no_wake(true);
+    composer.compose(|_ctx| {
+        let _ = trigger.get();
+        watched.set_no_wake(1);
+    });
+
+    assert!(!composer.has_pending_states(), "removed read must not leave a stale pending ID");
 }
 
 /// 数据驱动的结构变化：State 变 → root Enter → 新增 leaf 生效。

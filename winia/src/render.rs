@@ -833,7 +833,7 @@ fn render_pass1(
                 crate::ui::TextAlign::Right => content_x + (content_w - para.max_intrinsic_width()).max(0.0),
             };
             // 选中高亮
-            if let Some(range) = node.registrar.borrow().as_ref().cloned().unwrap_or_else(|| crate::ui::selection_container::active_registrar()).selected_range(node.slot_key) {
+            if let Some(range) = node.registrar.borrow().as_ref().cloned().and_then(|reg| reg.selected_range(node.slot_key)) {
                 debug_log!("[selection] render node={} range={}..{}", node.id, range.start, range.end);
                 let rects: Vec<_> = if range.start < range.end {
                 para.get_rects_for_range(range.start..range.end, skia_safe::textlayout::RectHeightStyle::Max, skia_safe::textlayout::RectWidthStyle::Max) } else { Vec::new() };
@@ -926,7 +926,7 @@ fn render_pass1(
                 }
             }
         } else {
-            draw_text_with_selection(canvas, content, font_size, color, font_weight, font_style, content_x, content_y, content_w, max_lines, align, overflow, soft_wrap, letter_spacing, line_height, node.slot_key);
+            draw_text_with_selection(canvas, content, font_size, color, font_weight, font_style, content_x, content_y, content_w, max_lines, align, overflow, soft_wrap, letter_spacing, line_height, node.registrar.borrow().as_ref().cloned(), node.slot_key);
         }
     }
 
@@ -935,7 +935,7 @@ fn render_pass1(
         if let Some(para) = node.cached_paragraph.borrow_mut().as_mut() {
             para.layout(content_w);
             // 选中高亮
-            if let Some(range) = node.registrar.borrow().as_ref().cloned().unwrap_or_else(|| crate::ui::selection_container::active_registrar()).selected_range(node.slot_key) {
+            if let Some(range) = node.registrar.borrow().as_ref().cloned().and_then(|reg| reg.selected_range(node.slot_key)) {
                 let rects: Vec<_> = if range.start < range.end {
                 para.get_rects_for_range(range.start..range.end, skia_safe::textlayout::RectHeightStyle::Max, skia_safe::textlayout::RectWidthStyle::Max) } else { Vec::new() };
                 let mut paint = skia_safe::Paint::default();
@@ -1552,9 +1552,10 @@ fn draw_text_with_selection(
     x: f32, y: f32, w: f32,
     max_lines: usize, align: crate::ui::TextAlign, overflow: crate::ui::TextOverflow, soft_wrap: bool,
     letter_spacing: f32, line_height: Option<f32>,
+    registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
     slot_key: u64,
 ) {
-    if crate::ui::selection_container::active_registrar().selected_range(slot_key).is_some() {
+    if registrar.and_then(|reg| reg.selected_range(slot_key)).is_some() {
         let mut paint = skia_safe::Paint::default();
         paint.set_color(skia_safe::Color::from_argb(80, 100, 150, 255));
         canvas.draw_rect(skia_safe::Rect::new(x, y, x + w, y + font_size * 1.2), &paint);

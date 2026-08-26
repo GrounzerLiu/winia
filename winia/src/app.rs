@@ -105,6 +105,8 @@ pub(crate) struct PerWindow {
     pending_taps: Vec<crate::input::gesture::PendingTap>,
     /// 上次刷新率查询时刻（Moved/ScaleFactorChanged 高频触发——300ms 去抖）
     last_refresh_check: std::time::Instant,
+    /// 当前窗口修饰键状态（ModifiersChanged 按 WindowId 维护）
+    pub(crate) modifiers: winit::keyboard::ModifiersState,
     /// 当前悬停节点的 slot_key（指针移入/移出时发射 Hover Enter/Exit）
     /// 当前 hover 的 hoverable 节点 slot 集合（**支持嵌套**——Tooltip 锚点
     /// 容器与内部 Button 等可同时 hover；修复前只存最内层 → 嵌套 hoverable
@@ -146,7 +148,7 @@ struct PtrDownState {
 
 impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::ui::theme::ThemeColors) -> Self {
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, drag_scroll: None, overlays: Vec::new(), overlay_click: None, pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, drag_scroll: None, overlays: Vec::new(), overlay_click: None, pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -307,19 +309,18 @@ impl PerWindow {
 
     /// 增量重组 → 恢复焦点 → 布局 → 渲染（供 RedrawRequested 使用）
     /// 循环消费 notify 队列直到稳定，避免 tokio task 的并发通知丢失。
-    fn recompose_layout_render(&mut self, after_draw: impl FnOnce(&[LayoutNode], usize, &mut skia_safe::Surface)) {
+    fn recompose_layout_render(&mut self, window_id: WindowId, after_draw: impl FnOnce(&[LayoutNode], usize, &mut skia_safe::Surface)) {
+        let _focus_window = self.composer.focus_window(window_id.into_raw() as u64);
         // vsync 研究：渲染帧计数（每秒渲染次数——Fifo 下应 ~60）
         self.frame_counter += 1;
         debug_log!("[fps] render#{} compose#{} pending={}", self.frame_counter, self.composer.compose_count(), self.composer.pending_state_count());
         // 临时：窗口节点数（诊断主窗口塌缩）
-        // 清除待关闭标志——只捕获本次重组的 on_remove，防止跨窗口污染
-        crate::ui::window::reset_pending_remove();
         // 提供当前窗口 Density（从 scale_factor）——覆盖 compose + layout + draw 全程，
         // 保证 Dimension::Px / TextUnit::Px 在布局/渲染期使用窗口 sf 而非 standard(1.0)
         let density = crate::unit::Density::from_density(self.scale_factor as f32);
         crate::unit::with_density(density, || {
-        // 注入窗口逻辑尺寸——自适应组件（WindowSizeClass）组合期读取
-        crate::ui::adaptive::set_window_size(self.width, self.height);
+        // 更新当前 Composer 的 adaptive context；不再覆盖 thread-local singleton。
+        self.composer.set_adaptive_window_size(self.width, self.height);
         // 循环 compose 直到没有新的 pending state——处理并发 task 在 compose 期间
         // 完成的 case（第二个 notify 的 state 在第一次 compose 之后才入队）
         // 循环 compose 直到没有新的 pending state
@@ -339,7 +340,6 @@ impl PerWindow {
                     })
                 });
                 size_state.set_silent((self.width, self.height));
-                crate::ui::adaptive::set_window_size(self.width, self.height);
                 crate::ui::adaptive::set_window_size_state(size_state);
                 (self.content)(ctx);
             });
@@ -380,7 +380,8 @@ impl PerWindow {
             let nodes = self.composer.arena_nodes();
             if let Some(ref mut sw) = self.skia_window {
                 let sf = self.scale_factor as f32;
-                if crate::debug::screenshot_requested() {
+                let debug_window_id = window_id.into_raw() as u64;
+                if crate::debug::screenshot_requested(debug_window_id) {
                     request_capture();
                 }
                 sw.draw(|surface| {
@@ -395,11 +396,11 @@ impl PerWindow {
                     after_draw(nodes, root_idx, surface);
                 });
                 // 截图读回在 flush 之后（skiwin draw 内）——保证真实呈现帧
-                if crate::debug::screenshot_requested() {
+                if crate::debug::screenshot_requested(debug_window_id) {
                     if let Some((w2, h2, pixels)) = take_capture() {
-                        crate::debug::update_pixels(&pixels, w2, h2);
+                        crate::debug::update_pixels(debug_window_id, &pixels, w2, h2);
                     }
-                    crate::debug::screenshot_done();
+                    crate::debug::screenshot_done(debug_window_id);
                 }
             }
         }
@@ -416,8 +417,6 @@ struct AppState {
     pending_content: Vec<PendingWindow>,
     /// 父窗口 ID（用于 is_parent 判断，不依赖 HashMap 顺序）
     parent_window_id: Option<WindowId>,
-    /// 窗口全局修饰键状态
-    pub(crate) modifiers: winit::keyboard::ModifiersState,
     /// 初始化回调（仅首次调用，用于声明式创建主窗口）
     init: Option<Box<dyn FnOnce(&mut ComposeCtx)>>,
     /// 上轮动画是否活跃（停止时强制终帧渲染）
@@ -507,10 +506,16 @@ impl ApplicationHandler for AppState {
         if let Some(d) = next_tap_deadline {
             event_loop.set_control_flow(ControlFlow::WaitUntil(d));
         }
-        // DevTools 事件兜底消费（主窗口）——多窗口下主窗口在后台时
-        // RedrawRequested 不来（window_event 不调用）→ 注入事件卡队列
-        if let Some(wid) = self.parent_window_id {
-            self.consume_debug_events(wid);
+        // DevTools 事件兜底消费：只遍历有 queued events 的窗口，避免每轮
+        // 事件批次空转全部窗口；legacy target 0 只会匹配 parent。
+        let targets = debug::queued_event_targets();
+        if !targets.is_empty() {
+            let windows: Vec<WindowId> = self.windows.keys().copied().collect();
+            for wid in windows {
+                if targets.contains(&(wid.into_raw() as u64)) {
+                    self.consume_debug_events(wid);
+                }
+            }
         }
         self.was_animating = animating;
     }
@@ -575,7 +580,7 @@ impl ApplicationHandler for AppState {
                 };
                 // Shift + 垂直滚轮 → 转为水平滚动（兼容 LazyRow 等横向容器；
                 // 多数系统不会自动把 Shift+wheel 翻译成 dx，这里显式处理）
-                let (dx, dy) = scroll_delta_with_shift(dx, dy, self.modifiers.shift_key());
+                let (dx, dy) = scroll_delta_with_shift(dx, dy, pw.modifiers.shift_key());
                 if dx != 0.0 || dy != 0.0 {
                     if let Some(root_idx) = pw.composer.layout_root_idx() {
                         let nodes = pw.composer.arena_nodes();
@@ -631,7 +636,8 @@ impl ApplicationHandler for AppState {
                 };
                 if state.is_pressed() {
                     // ── Down：指针按下核心（共享——真实/Debug 防分叉）──
-                    handle_pointer_down(pw, scene_pos, crate::modifier::PointerKind::from_button_source(&button), &self.modifiers, true);
+                    let modifiers = pw.modifiers;
+                    handle_pointer_down(pw, scene_pos, crate::modifier::PointerKind::from_button_source(&button), &modifiers, true);
                 }
                 // ── Up：Compose 风格 click 检测（仅释放时——Down 保留
                 // pointer_down_state 供拖动选择；无条件执行会 Down 后立即 take
@@ -668,10 +674,10 @@ impl ApplicationHandler for AppState {
                         position: (0.0, 0.0),
                         scene_position: scene_pos,
                         kind: crate::modifier::PointerKind::from_button_source(&button),
-                        is_alt_pressed: self.modifiers.alt_key(),
-                        is_ctrl_pressed: self.modifiers.control_key(),
-                        is_shift_pressed: self.modifiers.shift_key(),
-                        is_meta_pressed: self.modifiers.meta_key(),
+                        is_alt_pressed: pw.modifiers.alt_key(),
+                        is_ctrl_pressed: pw.modifiers.control_key(),
+                        is_shift_pressed: pw.modifiers.shift_key(),
+                        is_meta_pressed: pw.modifiers.meta_key(),
                     };
                     pw.last_pointer_kind = ptr_ev.kind.clone();
                     dispatch_ptr_event(nodes, r, &path, &ptr_ev, scene_pos, pw.pointer_down_slot);
@@ -711,7 +717,8 @@ impl ApplicationHandler for AppState {
                 let scene_pos = (lp.x, lp.y);
                 // 指针移动核心（共享——真实/Debug 防分叉；Debug 路径此前缺
                 // x_off 对齐偏移——Center/Right 对齐文本选择错位，合并修复）
-                let consumed = handle_pointer_move(pw, scene_pos, pw.last_pointer_kind.clone(), &self.modifiers);
+                let modifiers = pw.modifiers;
+                let consumed = handle_pointer_move(pw, scene_pos, pw.last_pointer_kind.clone(), &modifiers);
                 // 消费（on_pointer_event 可能更新 State）或按下拖动选区时请求重绘；
                 // 未消费的悬停移动不唤醒事件循环（避免每帧白醒）
                 if consumed || pw.pointer_down_state.is_some() {
@@ -726,7 +733,7 @@ impl ApplicationHandler for AppState {
                 }
             }
             WindowEvent::ModifiersChanged(m) => {
-                self.modifiers = m.state();
+                pw.modifiers = m.state();
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 let event_type = if event.state.is_pressed() {
@@ -737,10 +744,10 @@ impl ApplicationHandler for AppState {
                 let ke = crate::modifier::KbEvent {
                     key: event.logical_key.clone(),
                     event_type,
-                    is_alt_pressed: self.modifiers.alt_key(),
-                    is_ctrl_pressed: self.modifiers.control_key(),
-                    is_shift_pressed: self.modifiers.shift_key(),
-                    is_meta_pressed: self.modifiers.meta_key(),
+                    is_alt_pressed: pw.modifiers.alt_key(),
+                    is_ctrl_pressed: pw.modifiers.control_key(),
+                    is_shift_pressed: pw.modifiers.shift_key(),
+                    is_meta_pressed: pw.modifiers.meta_key(),
                     repeat: event.repeat,
                 };
                 let mut consumed = false;
@@ -757,7 +764,7 @@ impl ApplicationHandler for AppState {
                     }
                 }
                 if event.state.is_pressed() && matches!(&event.logical_key, Key::Named(NamedKey::Tab)) {
-                    let shift = self.modifiers.shift_key();
+                    let shift = pw.modifiers.shift_key();
                     let (new_id, new_slot) = pw.composer.layout_root_idx().map(|r| {
                         let nodes = pw.composer.arena_nodes_mut();
                         if shift { focus_prev(nodes, r); } else { focus_next(nodes, r); }
@@ -902,7 +909,8 @@ impl ApplicationHandler for AppState {
                 // 与 new_events 双 tick 无害：Animatable 按实际 dt 推进）
                 crate::animation::update_animations();
                 // 消费焦点请求（在 compose 前处理，避免丢失）
-                for id in crate::modifier::take_focus_requests() {
+                let _focus_window = pw.composer.focus_window(window_id.into_raw() as u64);
+                for id in pw.composer.take_focus_requests() {
                     if let Some(r) = pw.composer.layout_root_idx() {
                         let nodes = pw.composer.arena_nodes_mut();
                         if crate::layout::node::focus_by_id(nodes, r, id) {
@@ -957,7 +965,7 @@ impl ApplicationHandler for AppState {
                 // 非内存不安全；slot/arena 每帧从 root 重建结构，panic 中断的半状态下帧自愈。
                 let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let wid = window_id.into_raw() as u64;
-                    pw.recompose_layout_render(|nodes, root_idx, surface| {
+                    pw.recompose_layout_render(window_id, |nodes, root_idx, surface| {
                         debug::update_tree(wid, &debug::build_tree_json(nodes, root_idx));
                     });
                     // overlay 独立 Composer 的 arena 同样进调试树（modal/popup 可观测；
@@ -1069,7 +1077,7 @@ impl ApplicationHandler for AppState {
                 }
                 } // end 帧率限制 else（渲染 + IME 同步）
                 // 检查 compose 后是否有待关闭窗口
-                if crate::ui::window::Window::has_pending_close() {
+                if pw.composer.pending_window_close_id().is_some() {
                     if let Some(ref proxy) = *APP_PROXY.lock().unwrap() { let _ = proxy.wake_up(); }
                 }
                 // DevTools 事件消费（仅父窗口）——new_events 也兜底调用（见下）
@@ -1090,7 +1098,7 @@ impl AppState {
     fn consume_debug_events(&mut self, window_id: WindowId) {
         let Some(pw) = self.windows.get_mut(&window_id) else { return };
         let mut handled = false;
-        for evt in debug::take_queued_events() {
+        for evt in debug::take_queued_events(window_id.into_raw() as u64) {
             match evt {
                 debug::DebugEvent::Click { x, y } => {
                     // 只读阶段：hit_test + click 检测（arena 借用在块尾结束）
@@ -1152,10 +1160,10 @@ impl AppState {
                         let ke = crate::modifier::KbEvent {
                             key: k,
                             event_type: crate::modifier::KbEventType::KeyDown,
-                            is_alt_pressed: self.modifiers.alt_key(),
-                            is_ctrl_pressed: self.modifiers.control_key(),
-                            is_shift_pressed: self.modifiers.shift_key(),
-                            is_meta_pressed: self.modifiers.meta_key(),
+                            is_alt_pressed: pw.modifiers.alt_key(),
+                            is_ctrl_pressed: pw.modifiers.control_key(),
+                            is_shift_pressed: pw.modifiers.shift_key(),
+                            is_meta_pressed: pw.modifiers.meta_key(),
                             repeat: false,
                         };
                         dispatch_key_to_focus(pw, &ke);
@@ -1187,12 +1195,14 @@ impl AppState {
                 debug::DebugEvent::PointerDown { x, y } => {
                     // 模拟指针按下：与真实 PointerButton Down 共用核心
                     // （with_focus=false——调试路径不做光标/聚焦）
-                    handle_pointer_down(pw, (x, y), pw.last_pointer_kind.clone(), &self.modifiers, false);
+                    let modifiers = pw.modifiers;
+                    handle_pointer_down(pw, (x, y), pw.last_pointer_kind.clone(), &modifiers, false);
                     handled = true;
                 }
                 debug::DebugEvent::PointerMove { x, y } => {
                     // 模拟拖动选择：与真实 PointerMoved 共用核心（含 x_off 对齐偏移）
-                    handle_pointer_move(pw, (x, y), pw.last_pointer_kind.clone(), &self.modifiers);
+                    let modifiers = pw.modifiers;
+                    handle_pointer_move(pw, (x, y), pw.last_pointer_kind.clone(), &modifiers);
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 }
                 debug::DebugEvent::PointerUp { x, y } => {
@@ -1271,9 +1281,8 @@ impl AppState {
                 // 临时 composer：compose 内部已 take_deps（注册到其 slot_deps）——
                 // 此处再 take 是防御性空操作（缓冲已空），确保 DEP_MODE 复位
                 crate::core::state::take_deps();
-                // 临时 composer 被 drop，其 on_remove 可能设置 PENDING_REMOVE_ID
-                // 清除副作用，防止主窗口被错误关闭
-                crate::ui::window::reset_lifecycle_flags();
+                // The temporary initialization Composer is not an active
+                // window owner; its lifecycle state is dropped with it.
             }
         }
 
@@ -1314,11 +1323,14 @@ impl AppState {
         pw.scale_factor = sf;
         pw.skia_window = Some(skia_window);
         pw.frame_interval = frame_interval;
+        // FocusRequester created by this window's initial composition is bound
+        // to this WindowId, just like later redraw compositions.
+        let _focus_window = pw.composer.focus_window(window_id.into_raw() as u64);
         // 首次 compose+layout+draw 也提供 Density（Px 单位首帧即正确）
         let density = crate::unit::Density::from_density(sf as f32);
         crate::unit::with_density(density, || {
         // 首帧同样注入窗口尺寸（自适应组件首帧即正确形态）+ 挂载响应式 State
-        crate::ui::adaptive::set_window_size(pending.width, pending.height);
+        pw.composer.set_adaptive_window_size(pending.width, pending.height);
         let slot = &pw.window_size_state;
         let (w0, h0) = (pending.width, pending.height);
         pw.composer.compose(|ctx| {
@@ -1351,6 +1363,7 @@ impl AppState {
         self.windows.insert(window_id, pw);
         if self.parent_window_id.is_none() {
             self.parent_window_id = Some(window_id);
+            crate::debug::set_legacy_target(window_id.into_raw() as u64);
         }
     }
 }
@@ -2344,9 +2357,9 @@ fn handle_pointer_down(
 
     // 清除旧的选区（新点击开始）
     {
-        let reg = nodes[innermost].registrar.borrow().as_ref().cloned()
-            .unwrap_or_else(|| crate::ui::selection_container::active_registrar());
-        reg.clear_selection();
+        if let Some(reg) = nodes[innermost].registrar.borrow().as_ref().cloned() {
+            reg.clear_selection();
+        }
     }
     // grapheme anchor 定位。
     // ⚠ TextField 容器化后：paragraph 只缓存在**输入 leaf**，容器节点无
@@ -2726,7 +2739,7 @@ pub(crate) fn should_request_redraw(last_request: std::time::Instant, now: std::
 
 #[cfg(test)]
 mod frame_throttle_tests {
-    use super::should_request_redraw;
+    use super::{should_request_redraw, PerWindow};
     use std::time::{Duration, Instant};
 
     #[test]
@@ -2774,6 +2787,16 @@ mod frame_throttle_tests {
         assert_eq!(super::scroll_delta_with_shift(0.0, 10.0, false), (0.0, 10.0));
     }
 
+    #[test]
+    fn per_window_modifiers_are_independent() {
+        let theme = crate::ui::theme::ThemeColors::default_light();
+        let mut first = PerWindow::new(Box::new(|_| {}), 100.0, 100.0, theme.clone());
+        let mut second = PerWindow::new(Box::new(|_| {}), 100.0, 100.0, theme);
+        first.modifiers = winit::keyboard::ModifiersState::default();
+        second.modifiers = winit::keyboard::ModifiersState::default();
+        assert_eq!(first.modifiers, second.modifiers);
+    }
+
     /// 滚动 delta 应用到 Column（scroll 节点查找 + offset 更新 + clamp）
     #[test]
     fn scroll_delta_applies_to_column() {
@@ -2812,6 +2835,7 @@ mod frame_throttle_tests {
 
 pub fn run_app(app: impl FnOnce(&mut ComposeCtx) + 'static) {
     let event_loop = EventLoop::new().expect("event loop");
+    debug::begin_session();
     let proxy = event_loop.create_proxy();
     debug::set_event_loop_proxy(proxy.clone());
     let proxy2 = proxy.clone();
@@ -2825,8 +2849,7 @@ pub fn run_app(app: impl FnOnce(&mut ComposeCtx) + 'static) {
         windows: HashMap::new(),
         pending_content: Vec::new(),
         parent_window_id: None,
-        modifiers: Default::default(),
     };
     event_loop.run_app(state).expect("run_app");
-    debug::force_shutdown();
+    debug::end_session();
 }

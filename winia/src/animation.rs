@@ -38,6 +38,16 @@ static ACTIVE_ANIMATIONS: LazyLock<Mutex<Vec<Box<dyn AnimationInstance>>>> =
 static ACTIVE_COLOR_ANIMATIONS: LazyLock<Mutex<Vec<Animatable<crate::modifier::Color>>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
 
+/// Drop all animations owned by a Composer. State IDs remain globally unique,
+/// so this is safe even when another Composer owns a different animation.
+pub fn clear_animations_for_states(state_ids: &[u32]) {
+    if state_ids.is_empty() {
+        return;
+    }
+    ACTIVE_ANIMATIONS.lock().unwrap().retain(|anim| !state_ids.contains(&anim.state_id()));
+    ACTIVE_COLOR_ANIMATIONS.lock().unwrap().retain(|anim| !state_ids.contains(&anim.state.id()));
+}
+
 // ═══════════════════════════════════════════════════════════
 // InfiniteTransition — 无限循环动画（对标 Compose rememberInfiniteTransition）
 // ═══════════════════════════════════════════════════════════
@@ -1381,6 +1391,26 @@ pub(crate) mod tests {
         }
         assert!(saw_blue, "should reach blue");
         assert!(saw_red, "should return to red");
+    }
+
+    #[test]
+    fn composer_drop_cleans_owned_animation_without_touching_other_composer() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        clear_all_animations();
+        let owned = State::new(0.0f32);
+        let foreign = State::new(0.0f32);
+        push_animatable(owned.clone(), 10.0, AnimationSpec::Tween(TweenSpec::default()));
+        push_animatable(foreign.clone(), 10.0, AnimationSpec::Tween(TweenSpec::default()));
+
+        let composer = {
+            let mut composer = Composer::new();
+            composer.animation_state_ids.insert(owned.id());
+            composer
+        };
+        drop(composer);
+        assert!(!has_animation_for_state(owned.id()));
+        assert!(has_animation_for_state(foreign.id()));
+        remove_animation_by_state(foreign.id());
     }
 
     #[test]

@@ -200,17 +200,11 @@ impl Default for SelectionRegistrar {
 }
 
 // ═══════════════════════════════════════════════════════════
-// LOCAL_SELECTION_REGISTRAR + ACTIVE_REGISTRAR
+// LOCAL_SELECTION_REGISTRAR
 // ═══════════════════════════════════════════════════════════
 
 pub static LOCAL_SELECTION_REGISTRAR: std::sync::LazyLock<CompositionLocal<SelectionRegistrar>> =
     std::sync::LazyLock::new(|| CompositionLocal::new(|| SelectionRegistrar::new()));
-
-static ACTIVE_REGISTRAR: std::sync::LazyLock<Mutex<Option<SelectionRegistrar>>> = std::sync::LazyLock::new(|| Mutex::new(None));
-
-pub(crate) fn active_registrar() -> SelectionRegistrar {
-    ACTIVE_REGISTRAR.lock().unwrap().clone().unwrap_or_else(|| SelectionRegistrar::new())
-}
 // ═══════════════════════════════════════════════════════════
 // SelectionContainer
 // ═══════════════════════════════════════════════════════════
@@ -251,7 +245,6 @@ impl SelectionContainer {
         }
         {
             let reg = registrar.clone();
-            *ACTIVE_REGISTRAR.lock().unwrap() = Some(reg.clone());
             LOCAL_SELECTION_REGISTRAR.provides(reg, || {
                 ctx.set_selection_registrar(registrar.clone());
                 // content 闭包自动成为组合 scope（与 Column/Row/Stack/Button 一致）
@@ -338,6 +331,17 @@ mod tests {
     fn test_new_registrar_no_selection() {
         let reg = SelectionRegistrar::new();
         assert!(reg.selected_range(1).is_none());
+    }
+
+    #[test]
+    fn test_local_selection_registrar_scopes_to_provides() {
+        assert!(LOCAL_SELECTION_REGISTRAR.try_current().is_none());
+        let reg = SelectionRegistrar::new();
+        LOCAL_SELECTION_REGISTRAR.provides(reg.clone(), || {
+            let current = LOCAL_SELECTION_REGISTRAR.try_current().expect("registrar should be visible inside provides");
+            assert!(current.is_same(&reg));
+        });
+        assert!(LOCAL_SELECTION_REGISTRAR.try_current().is_none());
     }
 
     #[test]

@@ -257,9 +257,7 @@ impl Text {
         // provides 作用域内注册；须在 move self.content 之前调用（借用）。
         // set_current_node_registrar 必须在 start_leaf 之后（desc 已创建）。
         let (reg_for_node, registered_off) = {
-            if let Some(reg) = ctx.selection_registrar()
-                .or_else(|| crate::ui::selection_container::LOCAL_SELECTION_REGISTRAR.try_current())
-            {
+            if let Some(reg) = ctx.selection_registrar().or_else(|| crate::ui::selection_container::LOCAL_SELECTION_REGISTRAR.try_current()) {
                 let off = reg.register(key, &self.content);
                 (Some(reg), Some((key, content_len, off)))
             } else { (None, None) }

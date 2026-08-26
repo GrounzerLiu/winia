@@ -9,50 +9,133 @@
 use crate::layout::node::LayoutNode;
 use crate::modifier::ModifierElement;
 use std::net::TcpStream;
-use std::sync::Mutex;
+use std::sync::{Arc, LazyLock, Mutex};
 use std::thread;
 
 // ── 全局状态 ──
 
 static DEBUG_STATE: Mutex<Option<DebugData>> = Mutex::new(None);
-static SCREENSHOT_FLAG: Mutex<bool> = Mutex::new(false);
-static WAKE_CALLBACK: Mutex<Option<Box<dyn Fn() + Send + Sync>>> = Mutex::new(None);
-static EVENT_LOOP_PROXY: Mutex<Option<winit::event_loop::EventLoopProxy>> = Mutex::new(None);
-use std::sync::atomic::{AtomicBool, Ordering};
+/// WindowId used for legacy stdin/WebSocket requests with target 0.
+static LEGACY_TARGET: Mutex<Option<u64>> = Mutex::new(None);
+static SCREENSHOT_TARGET: Mutex<Option<u64>> = Mutex::new(None);
 
-static SHUTDOWN: AtomicBool = AtomicBool::new(false);
+struct DebugRuntime {
+    wake_callback: Option<Arc<dyn Fn() + Send + Sync>>,
+    event_loop_proxy: Option<winit::event_loop::EventLoopProxy>,
+    shutdown: bool,
+}
+
+static DEBUG_RUNTIME: LazyLock<Mutex<DebugRuntime>> = LazyLock::new(|| {
+    Mutex::new(DebugRuntime {
+        wake_callback: None,
+        event_loop_proxy: None,
+        shutdown: false,
+    })
+});
+
+/// Start one application debug session and discard state left by an older run.
+pub fn begin_session() {
+    {
+        let mut runtime = DEBUG_RUNTIME.lock().unwrap();
+        runtime.wake_callback = None;
+        runtime.event_loop_proxy = None;
+        runtime.shutdown = false;
+    }
+    *LEGACY_TARGET.lock().unwrap() = None;
+    *SCREENSHOT_TARGET.lock().unwrap() = None;
+    QUEUED_EVENTS.lock().unwrap().clear();
+    *DEBUG_STATE.lock().unwrap() = None;
+}
+
+/// Stop the current debug session and release its event-loop hooks.
+pub fn end_session() {
+    {
+        DEBUG_RUNTIME.lock().unwrap().shutdown = true;
+    }
+    wake();
+    let mut runtime = DEBUG_RUNTIME.lock().unwrap();
+    runtime.wake_callback = None;
+    runtime.event_loop_proxy = None;
+}
 
 pub fn force_shutdown() {
-    SHUTDOWN.store(true, Ordering::SeqCst);
+    DEBUG_RUNTIME.lock().unwrap().shutdown = true;
     let _ = TcpStream::connect("127.0.0.1:9998");
     wake();
 }
 
-pub fn is_shutdown() -> bool { SHUTDOWN.load(Ordering::SeqCst) }
+pub fn is_shutdown() -> bool { DEBUG_RUNTIME.lock().unwrap().shutdown }
 
-pub fn request_screenshot() { *SCREENSHOT_FLAG.lock().unwrap() = true; }
-pub fn screenshot_requested() -> bool { *SCREENSHOT_FLAG.lock().unwrap() }
-pub fn screenshot_done() { *SCREENSHOT_FLAG.lock().unwrap() = false; }
+/// Bind legacy stdin/WebSocket requests to the parent window once it exists.
+pub fn set_legacy_target(window_id: u64) {
+    *LEGACY_TARGET.lock().unwrap() = Some(window_id);
+    let mut screenshot = SCREENSHOT_TARGET.lock().unwrap();
+    if *screenshot == Some(0) {
+        *screenshot = Some(window_id);
+    }
+}
+
+pub fn legacy_target() -> Option<u64> {
+    *LEGACY_TARGET.lock().unwrap()
+}
+
+fn target_matches(target: u64, window_id: u64, legacy: Option<u64>) -> bool {
+    if target == 0 {
+        legacy == Some(window_id)
+    } else {
+        target == window_id
+    }
+}
+
+pub fn request_screenshot(window_id: u64) {
+    let target = if window_id == 0 { legacy_target().unwrap_or(0) } else { window_id };
+    *SCREENSHOT_TARGET.lock().unwrap() = Some(target);
+}
+pub fn screenshot_requested(window_id: u64) -> bool {
+    let legacy = legacy_target();
+    let target = *SCREENSHOT_TARGET.lock().unwrap();
+    target.is_some_and(|target| target_matches(target, window_id, legacy))
+}
+pub fn screenshot_done(window_id: u64) {
+    let legacy = legacy_target();
+    let target = *SCREENSHOT_TARGET.lock().unwrap();
+    if target.is_some_and(|target| target_matches(target, window_id, legacy)) {
+        *SCREENSHOT_TARGET.lock().unwrap() = None;
+    }
+}
 
 pub fn has_pending() -> bool {
-    *SCREENSHOT_FLAG.lock().unwrap() || !QUEUED_EVENTS.lock().unwrap().is_empty()
+    SCREENSHOT_TARGET.lock().unwrap().is_some() || !QUEUED_EVENTS.lock().unwrap().is_empty()
 }
 
 pub fn set_wake_callback(cb: impl Fn() + Send + Sync + 'static) {
-    *WAKE_CALLBACK.lock().unwrap() = Some(Box::new(cb));
+    DEBUG_RUNTIME.lock().unwrap().wake_callback = Some(Arc::new(cb));
 }
 
 pub fn set_event_loop_proxy(proxy: winit::event_loop::EventLoopProxy) {
-    *EVENT_LOOP_PROXY.lock().unwrap() = Some(proxy);
+    DEBUG_RUNTIME.lock().unwrap().event_loop_proxy = Some(proxy);
 }
 
 pub fn wake() {
-    if let Some(ref proxy) = *EVENT_LOOP_PROXY.lock().unwrap() { let _ = proxy.wake_up(); return; }
-    if let Some(ref cb) = *WAKE_CALLBACK.lock().unwrap() { cb(); }
+    let (proxy, callback) = {
+        let runtime = DEBUG_RUNTIME.lock().unwrap();
+        (runtime.event_loop_proxy.clone(), runtime.wake_callback.clone())
+    };
+    if let Some(proxy) = proxy {
+        let _ = proxy.wake_up();
+    } else if let Some(callback) = callback {
+        callback();
+    }
+}
+
+struct PixelFrame {
+    pixels: Vec<u8>,
+    width: u32,
+    height: u32,
 }
 
 struct DebugData {
-    pixels: Vec<u8>, width: u32, height: u32,
+    pixel_frames: std::collections::HashMap<u64, PixelFrame>,
     /// 每个窗口的树 JSON（单行、合法 JSON）——window_id → 树根数组
     trees: std::collections::HashMap<u64, String>,
     /// 每个窗口的顶层弹出层树（overlay 独立 Composer 的 arena）——
@@ -61,16 +144,118 @@ struct DebugData {
     overlay_trees: std::collections::HashMap<u64, Vec<(u64, String)>>,
 }
 
-pub fn update_pixels(pixels: &[u8], width: u32, height: u32) {
+pub fn update_pixels(window_id: u64, pixels: &[u8], width: u32, height: u32) {
     let mut data = DEBUG_STATE.lock().unwrap();
-    if let Some(ref mut d) = *data { d.pixels = pixels.to_vec(); d.width = width; d.height = height; }
+    let state = data.get_or_insert_with(|| DebugData {
+        pixel_frames: Default::default(),
+        trees: Default::default(),
+        overlay_trees: Default::default(),
+    });
+    state.pixel_frames.insert(window_id, PixelFrame {
+        pixels: pixels.to_vec(),
+        width,
+        height,
+    });
+}
+
+fn pixel_frame(window_id: u64) -> Option<(u32, u32, Vec<u8>)> {
+    let data = DEBUG_STATE.lock().ok()?;
+    let frame = data.as_ref()?.pixel_frames.get(&window_id)?;
+    Some((frame.width, frame.height, frame.pixels.clone()))
+}
+
+#[cfg(test)]
+fn reset_debug_requests() {
+    *LEGACY_TARGET.lock().unwrap() = None;
+    *SCREENSHOT_TARGET.lock().unwrap() = None;
+    QUEUED_EVENTS.lock().unwrap().clear();
+    *DEBUG_STATE.lock().unwrap() = None;
+    reset_debug_runtime();
+}
+
+#[cfg(test)]
+fn reset_debug_runtime() {
+    let mut runtime = DEBUG_RUNTIME.lock().unwrap();
+    runtime.wake_callback = None;
+    runtime.event_loop_proxy = None;
+    runtime.shutdown = false;
+}
+
+#[cfg(test)]
+mod request_tests {
+    use super::*;
+
+    #[test]
+    fn debug_session_resets_shutdown_and_requests() {
+        reset_debug_requests();
+        force_shutdown();
+        assert!(is_shutdown());
+        request_screenshot(22);
+        begin_session();
+        assert!(!is_shutdown());
+        assert!(!screenshot_requested(22));
+        assert!(take_queued_events(22).is_empty());
+    }
+
+    #[test]
+    fn screenshot_target_is_consumed_only_by_matching_window() {
+        reset_debug_requests();
+        request_screenshot(22);
+        assert!(!screenshot_requested(11));
+        assert!(screenshot_requested(22));
+        screenshot_done(11);
+        assert!(screenshot_requested(22));
+        screenshot_done(22);
+        assert!(!screenshot_requested(22));
+    }
+
+    #[test]
+    fn debug_events_remain_queued_for_their_target_window() {
+        reset_debug_requests();
+        queue_event_for_window(22, DebugEvent::FocusNext);
+        queue_event_for_window(11, DebugEvent::Click { x: 1.0, y: 2.0 });
+        assert!(matches!(take_queued_events(11).as_slice(), [DebugEvent::Click { .. }]));
+        assert!(matches!(take_queued_events(22).as_slice(), [DebugEvent::FocusNext]));
+    }
+
+    #[test]
+    fn legacy_target_zero_resolves_to_parent_window() {
+        reset_debug_requests();
+        set_legacy_target(22);
+        queue_event(DebugEvent::FocusNext);
+        assert!(take_queued_events(11).is_empty());
+        assert!(matches!(take_queued_events(22).as_slice(), [DebugEvent::FocusNext]));
+        request_screenshot(0);
+        assert!(!screenshot_requested(11));
+        assert!(screenshot_requested(22));
+    }
+
+    #[test]
+    fn queued_event_targets_reports_matching_windows() {
+        reset_debug_requests();
+        assert!(queued_event_targets().is_empty());
+        set_legacy_target(22);
+        queue_event(DebugEvent::FocusNext);
+        assert_eq!(queued_event_targets(), std::collections::HashSet::from([22]));
+        queue_event_for_window(33, DebugEvent::Click { x: 0.0, y: 0.0 });
+        assert_eq!(queued_event_targets(), std::collections::HashSet::from([22, 33]));
+    }
+
+    #[test]
+    fn pixel_frames_are_owned_by_window() {
+        reset_debug_requests();
+        update_pixels(11, &[1, 2, 3, 4], 1, 1);
+        update_pixels(22, &[5, 6, 7, 8], 2, 1);
+        assert_eq!(pixel_frame(11), Some((1, 1, vec![1, 2, 3, 4])));
+        assert_eq!(pixel_frame(22), Some((2, 1, vec![5, 6, 7, 8])));
+    }
 }
 
 /// 更新指定窗口的树 JSON（多窗口：各窗口独立存储——不再互相覆盖）
 pub fn update_tree(window_id: u64, json: &str) {
     let mut data = DEBUG_STATE.lock().unwrap();
     if data.is_none() {
-        *data = Some(DebugData { pixels: Vec::new(), width: 0, height: 0, trees: Default::default(), overlay_trees: Default::default() });
+        *data = Some(DebugData { pixel_frames: Default::default(), trees: Default::default(), overlay_trees: Default::default() });
     }
     if let Some(ref mut d) = *data {
         d.trees.insert(window_id, json.to_string());
@@ -83,7 +268,7 @@ pub fn set_overlay_trees(window_id: u64, trees: Vec<(u64, String)>) {
     let mut data = DEBUG_STATE.lock().unwrap();
     if data.is_none() {
         if trees.is_empty() { return; }
-        *data = Some(DebugData { pixels: Vec::new(), width: 0, height: 0, trees: Default::default(), overlay_trees: Default::default() });
+        *data = Some(DebugData { pixel_frames: Default::default(), trees: Default::default(), overlay_trees: Default::default() });
     }
     if let Some(ref mut d) = *data {
         if trees.is_empty() {
@@ -99,6 +284,7 @@ pub fn remove_tree(window_id: u64) {
     if let Some(ref mut d) = *DEBUG_STATE.lock().unwrap() {
         d.trees.remove(&window_id);
         d.overlay_trees.remove(&window_id);
+        d.pixel_frames.remove(&window_id);
     }
 }
 
@@ -136,7 +322,7 @@ fn all_trees_json() -> String {
 
 // ── 事件队列 ──
 
-static QUEUED_EVENTS: Mutex<Vec<DebugEvent>> = Mutex::new(Vec::new());
+static QUEUED_EVENTS: Mutex<Vec<(u64, DebugEvent)>> = Mutex::new(Vec::new());
 
 #[derive(Debug, Clone)]
 pub enum DebugEvent {
@@ -155,8 +341,49 @@ pub enum DebugEvent {
     PointerUp { x: f32, y: f32 },
 }
 
-pub fn queue_event(event: DebugEvent) { QUEUED_EVENTS.lock().unwrap().push(event); wake(); }
-pub fn take_queued_events() -> Vec<DebugEvent> { std::mem::take(&mut *QUEUED_EVENTS.lock().unwrap()) }
+pub fn queue_event(event: DebugEvent) { queue_event_for_window(0, event); }
+pub fn queue_event_for_window(window_id: u64, event: DebugEvent) {
+    QUEUED_EVENTS.lock().unwrap().push((window_id, event));
+    wake();
+}
+pub fn take_queued_events(window_id: u64) -> Vec<DebugEvent> {
+    let legacy = legacy_target();
+    let mut queue = QUEUED_EVENTS.lock().unwrap();
+    let mut drained = Vec::new();
+    let mut kept = Vec::new();
+    for (target, event) in queue.drain(..) {
+        let matches = if target == 0 {
+            legacy == Some(window_id)
+        } else {
+            target == window_id
+        };
+        if matches {
+            drained.push(event);
+        } else {
+            kept.push((target, event));
+        }
+    }
+    *queue = kept;
+    drained
+}
+
+/// Set of WindowIds that currently have queued debug events. An empty set
+/// means no window needs to consume debug events this frame.
+pub fn queued_event_targets() -> std::collections::HashSet<u64> {
+    let legacy = legacy_target();
+    let queue = QUEUED_EVENTS.lock().unwrap();
+    let mut targets = std::collections::HashSet::new();
+    for (target, _) in queue.iter() {
+        if *target == 0 {
+            if let Some(parent) = legacy {
+                targets.insert(parent);
+            }
+        } else {
+            targets.insert(*target);
+        }
+    }
+    targets
+}
 
 pub fn simulate_native_click(x: f32, y: f32) {
     queue_event(DebugEvent::Click { x, y });
@@ -237,7 +464,7 @@ pub fn start_stdin_channel() {
         let stdin = io::stdin();
         eprintln!("[DevTools] stdin ready — try: echo 'c 190 130'");
         for line in stdin.lock().lines() {
-            if SHUTDOWN.load(Ordering::SeqCst) { break; }
+            if is_shutdown() { break; }
             let line = match line { Ok(l) => l, Err(_) => break };
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.is_empty() { continue; }
@@ -278,7 +505,8 @@ pub fn start_stdin_channel() {
                     let h: f32 = parts[2].parse().unwrap_or(0.0);
                     queue_event(DebugEvent::Resize { w, h });
                 }
-                "r" => { request_screenshot(); wake(); }
+                // Screenshot target is selected by the app's parent window.
+                "r" => { request_screenshot(0); wake(); }
                 "t" => {
                     // 树响应走 stdout（前缀 TREE:——UI 测试读管道；其他 demo
                     // 输出可能污染 stdout——测试按前缀过滤）。无条件响应
@@ -314,7 +542,7 @@ pub fn start_ws_server() {
         };
         eprintln!("[DevTools] WebSocket → ws://localhost:{port}");
         while let Ok((stream, _)) = listener.accept().await {
-            if SHUTDOWN.load(Ordering::SeqCst) { break; }
+            if is_shutdown() { break; }
             tokio::spawn(handle_ws(stream));
         }
     });
@@ -326,7 +554,7 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
     let ws = match tokio_tungstenite::accept_async(stream).await { Ok(w) => w, Err(_) => return };
     let (mut write, mut read) = ws.split();
     while let Some(msg) = read.next().await {
-        if SHUTDOWN.load(Ordering::SeqCst) { break; }
+        if is_shutdown() { break; }
         let text = match msg { Ok(Message::Text(t)) => t.to_string(), _ => continue };
         let parts: Vec<&str> = text.split_whitespace().collect();
         if parts.is_empty() { continue; }
@@ -376,15 +604,12 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
                 let _ = write.send(Message::Text("ok resize".into())).await;
             }
             "r" => {
-                request_screenshot(); wake();
+                request_screenshot(0); wake();
                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                let s = match DEBUG_STATE.lock() {
-                    Ok(guard) => match guard.as_ref() {
-                        Some(d) => format!("screenshot {}x{}", d.width, d.height),
-                        None => "no frame".into(),
-                    },
-                    Err(_) => "lock error".into(),
-                };
+                let s = legacy_target()
+                    .and_then(pixel_frame)
+                    .map(|(w, h, _)| format!("screenshot {w}x{h}"))
+                    .unwrap_or_else(|| "no frame".into());
                 let _ = write.send(Message::text(s)).await;
             }
             "t" => {
@@ -392,8 +617,7 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
             }
             "p" => {
                 // 像素转储（调试截图分析）：二进制帧 = 8 字节 header(WxH u32 LE) + RGBA
-                let shot: Option<(u32, u32, Vec<u8>)> = DEBUG_STATE.lock().ok()
-                    .and_then(|g| g.as_ref().map(|d| (d.width, d.height, d.pixels.clone())));
+                let shot = legacy_target().and_then(pixel_frame);
                 match shot {
                     Some((w, h, pixels)) => {
                         let mut raw = Vec::with_capacity(8 + pixels.len());

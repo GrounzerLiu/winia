@@ -381,9 +381,7 @@ impl RichText {
         // set_current_node_registrar 必须在 start_leaf 之后（desc 已创建）。
         let key = ctx.next_key();
         let reg_for_node = {
-            if let Some(reg) = ctx.selection_registrar()
-                .or_else(|| crate::ui::selection_container::LOCAL_SELECTION_REGISTRAR.try_current())
-            {
+            if let Some(reg) = ctx.selection_registrar().or_else(|| crate::ui::selection_container::LOCAL_SELECTION_REGISTRAR.try_current()) {
                 reg.register(key, &content);
                 Some(reg)
             } else { None }
