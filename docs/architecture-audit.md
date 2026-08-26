@@ -2,7 +2,7 @@
 
 > 状态：架构审计与增量修复跟踪。本轮只修改 ownerless State/frame 目标文件和本审计文档，不回滚既有 dirty worktree。
 > 范围：D:/Projects/winia，v2 分支；当前工作树观测为 origin/v2 ahead 41。
-> 结论：3.1 owner TLS 泄漏已由 ownerless StateSignal 基础切片修复；3.2/3.4 已有 RuntimeFrame、layout-only 和布局事务 retry 基础切片；3.9/6.1/6.2/6.3 已由多窗口上下文隔离修复；3.10/6.4/6.5 已部分修复；剩余 compose 事务、批次语义、递归 measure attribution、LayoutNode 复用、坐标/滚动、TextField/IME、LazyList 和其他风险仍开放。
+> 结论：3.1 owner TLS 泄漏已由 ownerless StateSignal 基础切片修复；3.2/3.4 已有 RuntimeFrame、layout-only 和布局事务 retry 基础切片；3.9/6.1/6.2/6.3 已由多窗口上下文隔离修复；3.10/6.4/6.5 已部分修复；Phase 1（所有权与恢复边界）三项中第 2 项（guard 体系）与第 3 项（依赖收敛）已完成，第 1 项（per-Window context）仍有 debug 事件/动画表/事件循环三处全局单态残留；剩余 Phase 2（坐标/复用/LayoutNode）、Phase 3（LazyList/TextField）、Phase 4（CompositionLocal/Theme/E2E）和其他风险仍开放。
 
 ## 1. 基线与验证状态
 
@@ -339,17 +339,63 @@ UI tree 由 winia/src/debug.rs:168-228 手工拼接。TextContent 做了转义�
 
 ## 11. 推荐处理顺序
 
-### Phase 1：所有权与恢复边界
+### Phase 1：所有权与恢复边界（当前状态：🔶 部分完成）
 
-1. 引入 per-Composer/per-Window context，收拢 State owner、adaptive、focus、selection、debug event 和 Window lifecycle。
-2. 用 guard 或统一 compose transaction 清理所有 TLS/依赖模式，覆盖 panic 与 nested/reentrant compose 契约。
-3. 让 slot_deps 按实际读取收敛，并把节点移除与依赖注销统一起来。
+1. [x] 引入 per-Composer/per-Window context，收拢 State owner、adaptive、focus、selection、debug event 和 Window lifecycle。
 
-### Phase 2：节点复用与坐标
+   **完成项**：
+   - State owner：`ComposerSubscription` 每 Composer 独立持有（state.rs:37），`compose_slot_reads`/`layout_slot_reads`/`slot_deps`/`layout_deps`（composer.rs:1563-1575）均为 Composer 字段。
+   - adaptive：`Composer::adaptive`（composer.rs:1597）+ `AdaptiveContext`（adaptive.rs:17），compose/layout 期经 `enter_context` 注入/弹出。
+   - focus：`FocusRequester` 携带 `window_id`（modifier.rs:2248），`CURRENT_FOCUS_WINDOW` TLS 隔离，`take_focus_requests` 按窗口过滤。
+   - selection：`LOCAL_SELECTION_REGISTRAR`（selection_container.rs:206）为 CompositionLocal，由 `ctx.remember_at_key` 创建，等效 per-composer。
+   - Window lifecycle：`Composer::lifecycle`（composer.rs:1595）+ `LifecycleState`（window.rs:27），测试 `test_window_lifecycle_isolation_per_composer`。
 
-1. 建立 LayoutNode::update_from_desc/reset_from_desc，覆盖 content-kind、IME、cursor、selection、registrar、scroll metadata、parent_id。
-2. 统一 scroll-aware path transform，修正 pointer local、wheel hit-test、capture、ripple、text selection 和 absolute position。
-3. 锁定 nested scroll delta/fling 的 target/ancestor 顺序和消费语义。
+   **残留缺口**（未收拢的全局单态）：
+   - [~] debug event：`DEBUG_RUNTIME`（debug.rs:28）、`DEBUG_STATE`（debug.rs:17）、`LEGACY_TARGET`（debug.rs:19）、`SCREENSHOT_TARGET`（debug.rs:20）仍为全局 `LazyLock<Mutex>`/`static Mutex`，`DebugRuntime` 无 per-window 字段。
+   - [~] 动画表：`ACTIVE_ANIMATIONS`（animation.rs:35）、`ACTIVE_COLOR_ANIMATIONS`（animation.rs:38）为全局 `LazyLock<Mutex<Vec<..>>>`，并行测试互相干扰。
+   - [~] 事件循环/窗口路由：`GLOBAL_PENDING`（app.rs:1375）、`APP_PROXY`（app.rs:1376）、`CREATED`（window.rs:57）全局 HashSet、`NEXT_ID`（window.rs:58）全局 AtomicU64。
+   - [x] TLS 框架隔离：`ACTIVE_SLOT_KEY`/`GROUP_STACK`/`STMT_STACK`（composer.rs:47-49）、`DEP_BUFFER`/`DEP_MODE`/`RECORDER_QUEUE`（state.rs:533-535）有 `RuntimeFrameGuard`/`DependencyFrameGuard` 兜底，已隔离。
+
+2. [x] 用 guard 或统一 compose transaction 清理所有 TLS/依赖模式，覆盖 panic 与 nested/reentrant compose 契约。
+
+   **完成项**（6 个 guard 分层串联，非单一大事务但已覆盖所有 panic/nested 路径）：
+   - `RuntimeFrameGuard`（composer.rs:62）：隔离 compose/layout 的 TLS，`restore_runtime_frame` 正常与 panic 都恢复。
+   - `ComposeRuntimeTransaction`（composer.rs:818）+ `rollback_compose_runtime`（composer.rs:2125）：回滚 SlotTable 运行时上下文（key 栈/计数器等）。
+   - `ComposeDependencyTransaction`（composer.rs:1393）+ `rollback`（composer.rs:1423）：回滚完整依赖图 + 清失败帧订阅 + 恢复 pending 批。
+   - `PendingBatchGuard`（composer.rs:1491）+ Drop（composer.rs:1516）：panic 时 `restore_pending` 把未提交批放回队列。
+   - `LayoutTransaction`（composer.rs:1242）+ rollback（composer.rs:1314）：回滚 arena 节点/依赖图/prev 节点/pending。
+   - `DependencyFrameGuard`（state.rs:521）+ Drop（state.rs:602）：嵌套 compose/layout 隔离 recorder，panic 清除失败帧订阅。
+
+   **测试覆盖**：`test_runtime_frame_restores_tls_after_panic_and_nested_drop`、`test_nested_composer_compose_preserves_outer_dependencies`、`test_compose_late_cleanup_panic_restores_dependency_graph`、`test_compose_runtime_snapshot_restores_key_context_after_panic`、`test_compose_panic_recovers_next_frame`、`test_compose_pending_batch_restored_after_panic`、`test_panic_restore_keeps_both_consumed_batch_and_in_frame_notification`、`test_layout_dependency_panic_rolls_back_new_subscription`、`test_mixed_compose_layout_pending_reaches_recompose` 等 14 个 panic/nested/reentrant 测试。
+
+   **残留缺口**：
+   - `Slot.remembered`（`HashMap<u64, Box<dyn Any>>`）未纳入任何事务——不属于任何 guard 的 snapshot/restore 范围；但现有测试验证 panic 后下帧自愈（`test_compose_panic_recovers_next_frame`）。此缺口是设计取舍（`Box<dyn Any>` 不可 Clone，见 §3.2 comments）。
+
+3. [x] 让 slot_deps 按实际读取收敛，并把节点移除与依赖注销统一起来。
+
+   **完成项**：
+   - 按实际读取收敛：`reconcile_compose_deps`（composer.rs:2031-2069）——`retain(live_keys)` 清死 key（2047），Enter 用本帧实际读取替换（2048-2058），Skip 保留旧读取，无读取的 Enter slot 移除。
+   - 节点移除与依赖注销统一：compose 末尾死 key 写入 `removed_slot_keys`（composer.rs:2250-2253）；layout 末尾对每个 removed key 从 `layout_slot_reads`/`layout_dirty_keys` 删除（composer.rs:2374-2377）；订阅注销统一走 `cleanup_signal_subscriptions`（composer.rs:2071-2105）→ `signal.unsubscribe` + `retain_signals`。
+   - 反向图权威：`rebuild_compose_reverse_deps`（composer.rs:1989-1996）与 `rebuild_layout_reverse_deps`（composer.rs:1999-2006）从正向图 clear+rebuild（单一权威源防 stale 边），`debug_assert_dependency_graphs`（composer.rs:2009-2029）校验正反向一致性。
+   - 测试：`test_dependency_reverse_graph_rebuilds_from_forward_reads`、`test_layout_slot_reads_remove_empty_remeasure`、`test_layout_slot_reads_remove_removed_slot`、`test_compose_read_removal_unsubscribes_stale_state`、`test_composer_drop_unsubscribes_state_signals`、`test_removed_read_notification_during_compose_is_dropped`、`test_layout_dep_remesures_without_recompose` 等。
+
+   **残留缺口**：反向图是 clear+rebuild 而非逐边增量 patch——此为设计取舍（注释 composer.rs:1988 明示），`debug_assert` 担保一致性，不作为缺口。
+
+### Phase 2：节点复用与坐标（当前状态：🔶 进行中）
+
+1. [~] 建立 LayoutNode::update_from_desc/reset_from_desc，覆盖 content-kind、IME、cursor、selection、registrar、scroll metadata、parent_id。
+
+   **已完成部分**（edd4827）：
+   - content-kind 标记同步：materialize 复用路径按新 modifier 调用 `modifier_has_text`/`modifier_has_richtext`/`modifier_has_image` 更新 `has_*_content`，并在内容类型切换时清空 `cached_paragraph`（materialize.rs:187-202）。
+   - 修复效果：`test_text_content_change_remeasures` 通过（文本→非文本切换不再残留旧 content 路径）。
+
+   **未完成部分**：
+   - IME/cursor/selection/registrar 的统一 reset 尚未并入该路径（desc 条件管理，无 desc 时保留旧值——6.x audit 已述）。
+   - scroll metadata（viewport/content 尺寸、reverse）与 parent_id 的统一重置未落地。
+
+2. [ ] 统一 scroll-aware path transform，修正 pointer local、wheel hit-test、capture、ripple、text selection 和 absolute position。
+
+3. [ ] 锁定 nested scroll delta/fling 的 target/ancestor 顺序和消费语义。
 
 ### Phase 3：LazyList 与 TextField
 
