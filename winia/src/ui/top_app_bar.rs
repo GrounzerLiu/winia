@@ -73,6 +73,12 @@ impl TopAppBarNestedConnection {
 }
 impl NestedScrollConnection for TopAppBarNestedConnection {
     fn on_pre_scroll(&self, available: ScrollDelta, source: NestedScrollSource) -> ScrollDelta {
+        #[cfg(debug_assertions)]
+        if crate::app::drag_trace_enabled() {
+            eprintln!("[topbar-pre] mode={:?} source={:?} available.y={} height_offset={} limit={}",
+                self.mode, source, available.y,
+                self.state.height_offset.get(), self.state.height_offset_limit.get());
+        }
         if matches!(self.mode, TopAppBarScrollMode::Pinned) || !matches!(source, NestedScrollSource::Wheel | NestedScrollSource::Drag | NestedScrollSource::Fling) { return ScrollDelta::ZERO; }
         if available.y == 0.0 { return ScrollDelta::ZERO; }
         let limit = self.state.height_offset_limit.get();

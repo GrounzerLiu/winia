@@ -8,6 +8,18 @@ use crate::layout::constraints::Constraints;
 use crate::debug_log;
 use crate::layout::node::{hit_test, focus_next, focus_prev, LayoutNode};
 use crate::render;
+
+/// 拖拽/嵌套滚动调试 trace 开关（debug_assertions 下 + 环境变量 WINIA_DRAG_TRACE）。
+/// 收敛 7 处重复判断（review E1）——release 构建零成本。
+#[cfg(debug_assertions)]
+pub(crate) fn drag_trace_enabled() -> bool {
+    std::env::var("WINIA_DRAG_TRACE").is_ok()
+}
+#[cfg(not(debug_assertions))]
+pub(crate) fn drag_trace_enabled() -> bool {
+    false
+}
+
 pub(crate) struct PendingWindow {
     pub width: f32,
     pub height: f32,
@@ -1481,14 +1493,21 @@ fn dispatch_nested_scroll_delta(
     let mut total = crate::nested_scroll::ScrollDelta::ZERO;
     for &idx in &path {
         if let Some(connection) = nodes[idx].modifier.nested_scroll_connection() {
+            #[cfg(debug_assertions)]
+            if drag_trace_enabled() {
+                eprintln!("[pre-scroll] idx={} connection=有", idx);
+            }
             let part = connection.on_pre_scroll(remaining, source).clamp_to(remaining);
             total = total + part;
             remaining = remaining - part;
         }
     }
-    let child_consumed = apply_scroll_delta(nodes, target, remaining.x, remaining.y, density);
+    let child_consumed = apply_scroll_delta_inner(nodes, target, remaining.x, remaining.y, density, false);
     total = total + child_consumed;
     remaining = remaining - child_consumed;
+    // post-scroll：祖先从内到外（**含 target 自身**——TopAppBar 等 connection
+    // 挂在 scroll 容器节点上，依赖 on_post_scroll 更新 content_offset 变色；
+    // 排除 target 会破坏该行为，见 scaffold_demo/fixture_nested_scroll）
     for &idx in path.iter().rev() {
         if let Some(connection) = nodes[idx].modifier.nested_scroll_connection() {
             let part = connection.on_post_scroll(child_consumed, remaining, source).clamp_to(remaining);
@@ -1519,7 +1538,8 @@ fn dispatch_nested_scroll_fling(
 
     let mut remaining = velocity;
     let mut consumed = crate::nested_scroll::ScrollVelocity::default();
-    // pre-fling：祖先先消费一部分速度
+    // pre-fling：祖先（含 target）先消费一部分速度——正序 path，target 自身
+    // connection 也参与 pre（对标 Compose：目标自身的 connection 参与 pre）
     for &idx in &path {
         if let Some(connection) = nodes[idx].modifier.nested_scroll_connection() {
             let part = connection.on_pre_fling(remaining).clamp_to(remaining);
@@ -1529,23 +1549,33 @@ fn dispatch_nested_scroll_fling(
             remaining.y -= part.y;
         }
     }
-    // child fling：剩余速度交给目标滚动节点；撞边界时把瞬时速度交给祖先 post-fling。
+    // child fling：剩余速度交给目标滚动节点；撞边界时把瞬时剩余速度交给
+    // post-fling 链。post 链 = path 逆序（**含 target 自身**——TopAppBar 等
+    // connection 挂在 scroll 容器节点上，依赖 on_post_fling 弹回/复位；
+    // 排除 target 会破坏该行为，见 scaffold_demo/fixture_nested_scroll）。
     let child_velocity = remaining;
-    let connections: Vec<std::sync::Arc<dyn crate::nested_scroll::NestedScrollConnection>> = path.iter().rev()
-        .filter_map(|&idx| nodes[idx].modifier.nested_scroll_connection())
-        .collect();
+    // child 实际消费量 = 起始速度 − 边界剩余速度（在 boundary 回调内计算——
+    // fling_with_boundary 回调传入的是撞边界时的瞬时剩余速度）。
+    // ⚠ 不能传起始速度：on_post_fling 的 consumed_by_child 语义是"child 实际
+    // 消费了多少"，TopAppBar 依赖它做回弹幅度（review C1）。
+    let post_connections: Vec<std::sync::Arc<dyn crate::nested_scroll::NestedScrollConnection>> =
+        path.iter().rev()
+            .filter_map(|&idx| nodes[idx].modifier.nested_scroll_connection())
+            .collect();
     let child_started = {
         let node = &nodes[target];
         if let Some(ss) = node.modifier.vertical_scroll_state() {
             if child_velocity.y.abs() >= 50.0 {
-                let post_connections = connections.clone();
+                let post_connections = post_connections.clone();
                 ss.fling_with_boundary(child_velocity.y, move |remaining_velocity| {
+                    // child 实际消费 = 起始 − 边界剩余（剩余为 0 时全消费）
+                    let consumed_by_child = crate::nested_scroll::ScrollVelocity {
+                        x: 0.0,
+                        y: child_velocity.y - remaining_velocity,
+                    };
                     let mut available = crate::nested_scroll::ScrollVelocity { x: 0.0, y: remaining_velocity };
                     for connection in &post_connections {
-                        let part = connection.on_post_fling(
-                            crate::nested_scroll::ScrollVelocity { x: 0.0, y: child_velocity.y },
-                            available,
-                        );
+                        let part = connection.on_post_fling(consumed_by_child, available);
                         available.y -= crate::nested_scroll::ScrollVelocity { x: 0.0, y: part.y }.clamp_to(available).y;
                     }
                 });
@@ -1553,14 +1583,16 @@ fn dispatch_nested_scroll_fling(
             } else { ss.is_scroll_in_progress.set(false); false }
         } else if let Some(ss) = node.modifier.horizontal_scroll_state() {
             if child_velocity.x.abs() >= 50.0 {
-                let post_connections = connections.clone();
+                let post_connections = post_connections.clone();
                 ss.fling_with_boundary(child_velocity.x, move |remaining_velocity| {
+                    // child 实际消费 = 起始 − 边界剩余
+                    let consumed_by_child = crate::nested_scroll::ScrollVelocity {
+                        x: child_velocity.x - remaining_velocity,
+                        y: 0.0,
+                    };
                     let mut available = crate::nested_scroll::ScrollVelocity { x: remaining_velocity, y: 0.0 };
                     for connection in &post_connections {
-                        let part = connection.on_post_fling(
-                            crate::nested_scroll::ScrollVelocity { x: child_velocity.x, y: 0.0 },
-                            available,
-                        );
+                        let part = connection.on_post_fling(consumed_by_child, available);
                         available.x -= crate::nested_scroll::ScrollVelocity { x: part.x, y: 0.0 }.clamp_to(available).x;
                     }
                 });
@@ -1586,15 +1618,35 @@ fn find_scroll_target(nodes: &[LayoutNode], idx: usize, dx: f32, dy: f32) -> Opt
 }
 
 fn apply_scroll_delta(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f32, density: crate::unit::Density) -> crate::nested_scroll::ScrollDelta {
+    apply_scroll_delta_inner(nodes, idx, dx, dy, density, true)
+}
+
+/// `apply_scroll_delta` 实现。`recursive=true` 时，若节点自身未消费（已到
+/// 边界），回退递归子节点（旧行为——wheel/拖拽的 fallback 语义，让内层
+/// 子 scroll 消费）。`recursive=false` 时**只滚目标自身**——`dispatch_nested
+/// _scroll_delta` 的显式 target 语义：target 滚不动应留给 post 链的祖先
+/// connection 处理，**不能**偷偷滚子节点（否则"在外层顶部向下拖"会错误地
+/// 滚动内层子列表——用户报告的 bug：外层已到顶，delta 递归到内层）。
+fn apply_scroll_delta_inner(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f32, density: crate::unit::Density, recursive: bool) -> crate::nested_scroll::ScrollDelta {
     let mut consumed = crate::nested_scroll::ScrollDelta::ZERO;
     {
         let node = &nodes[idx];
+        #[cfg(debug_assertions)]
+        if drag_trace_enabled() {
+            eprintln!("[apply-scroll] idx={} dy={} vp_h={} content_h={} has_vscroll={}",
+                idx, dy, node.scroll_viewport_height, node.scroll_content_height,
+                node.modifier.vertical_scroll_state().is_some());
+        }
         if dy != 0.0 {
             if let Some(state) = node.modifier.vertical_scroll_state() {
             // 手动输入接管：取消进行中的 fling + 结束滚动中标记（拖拽路径随后置回）
             crate::animation::cancel_animation(&state.offset);
             state.is_scroll_in_progress.set(false);
             let current = state.offset.get();
+            #[cfg(debug_assertions)]
+            if drag_trace_enabled() {
+                eprintln!("[apply-scroll] → state.offset 应用前 = {}", current);
+            }
             // 滚动极限 = 内容总高度 - 可视区域高度
             // viewport 高度优先用 scroll_viewport_height（fill_max_height 场景），
             // 降级到 fixed_size()（固定高度场景），再降级到 0（无限制）。
@@ -1658,10 +1710,13 @@ fn apply_scroll_delta(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f32, de
         }
     }
     if consumed.x != 0.0 || consumed.y != 0.0 { return consumed; }
+    // 自身未消费：recursive 模式回退递归子节点（旧 fallback 语义）；
+    // 非 recursive（dispatch 路径）不递归——target 滚不动交给 post 链
+    if !recursive { return consumed; }
     // 子节点（clone 索引后递归，避免与 nodes 的可变借用冲突）
     let children: Vec<usize> = nodes[idx].children.clone();
     for c in children {
-        let child = apply_scroll_delta(nodes, c, dx, dy, density);
+        let child = apply_scroll_delta_inner(nodes, c, dx, dy, density, true);
         if child.x != 0.0 || child.y != 0.0 { return child; }
     }
     consumed
@@ -1782,6 +1837,11 @@ fn drag_scroll_up(pw: &mut PerWindow) {
         let id = crate::layout::node::find_node_id_by_slot_key(nodes, r, ds.slot)?;
         crate::layout::node::find_node_by_id(nodes, r, id)
     })();
+    #[cfg(debug_assertions)]
+    if drag_trace_enabled() {
+        eprintln!("[drag-up] slot={:?} target_idx={:?} v=({},{})",
+            ds.slot, target, vx, vy);
+    }
     let Some(idx) = target else { return };
     let Some(root) = pw.composer.layout_root_idx() else { return };
     // 手指速度 → 滚动速度（内容速度 = -手指速度），并走 nested scroll pre/post fling 链
@@ -2454,6 +2514,19 @@ fn handle_pointer_down(
         let nodes = pw.composer.arena_nodes();
         let Some(r) = pw.composer.layout_root_idx() else { return None };
         let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
+        #[cfg(debug_assertions)]
+        if drag_trace_enabled() {
+            eprintln!("[drag-down] scene=({},{}) path_len={} path={:?}",
+                scene_pos.0, scene_pos.1, path.len(),
+                path.iter().map(|&i| (i, nodes[i].slot_key, nodes[i].modifier.vertical_scroll_state().is_some())).collect::<Vec<_>>());
+            for &i in &path {
+                let n = &nodes[i];
+                eprintln!("  [drag-node] idx={} pos=({},{}) size=({},{}) vp_h={} scroll={}",
+                    i, n.position.x, n.position.y, n.measured_size.width, n.measured_size.height,
+                    n.scroll_viewport_height,
+                    n.modifier.vertical_scroll_state().is_some());
+            }
+        }
         let Some(&innermost) = path.last() else { return None };
         let selecting = pw.pointer_down_state.as_ref()
             .map(|s| s.selection_anchor.is_some())
@@ -2535,6 +2608,15 @@ fn handle_pointer_move(
             (dx, dy)
         };
         if let Some(idx) = target {
+            #[cfg(debug_assertions)]
+            if drag_trace_enabled() {
+                let nodes = pw.composer.arena_nodes();
+                eprintln!("[drag-move] target_idx={} scroll_v={} scroll_h={} slot={:?}",
+                    idx,
+                    nodes[idx].modifier.vertical_scroll_state().is_some(),
+                    nodes[idx].modifier.horizontal_scroll_state().is_some(),
+                    pw.drag_scroll.as_ref().map(|d| d.slot));
+            }
             // 轴感知：垂直容器吃 dy，水平容器吃 dx（apply_scroll_delta 按节点轴取）
             let (ax, ay) = {
                 let nodes = pw.composer.arena_nodes();
@@ -2960,6 +3042,369 @@ mod pointer_dispatch_coord_tests {
         let got = *container_recv.lock().unwrap();
         assert_eq!(got, Some((20.0, 30.0)),
             "scroll 容器自身局部坐标不应减自身 offset（offset 只影响子节点）");
+    }
+}
+
+/// §3.8 nested scroll 链级集成测试：dispatch_nested_scroll_delta 的 pre/post
+/// 顺序与 target 参与。树结构 root(connection R) → mid(connection M) →
+/// target(scroll + connection T)。验证：
+/// 1. pre 按 R→M→T 正序
+/// 2. child 消费后 post 按 M→T→R 逆序（**含 target T**——TopAppBar 等
+///    connection 挂在 scroll 容器节点上，排除 target 会破坏 post 回调）
+#[cfg(test)]
+mod nested_scroll_chain_tests {
+    use super::dispatch_nested_scroll_delta;
+    use crate::layout::node::LayoutNode;
+    use crate::layout::{Point, Size};
+    use crate::modifier::{Modifier, ScrollState};
+    use crate::nested_scroll::{NestedScrollConnection, NestedScrollSource, ScrollDelta, ScrollVelocity};
+
+    /// 记录器 connection：记录 on_pre_scroll/on_post_scroll 的调用顺序。
+    /// pre 消费一半，post 消费全部 available——便于验证顺序与消费量。
+    /// `global_log`（可选）记录**跨节点**顺序（如 "pre-R" "post-T"）——
+    /// 独立 log 只能验证单节点内部顺序，无法捕获 pre-R→M→T→post-T→M→R。
+    struct Recorder {
+        name: String,
+        log: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        global_log: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
+        order: std::sync::atomic::AtomicUsize,
+    }
+    impl Recorder {
+        fn new(name: &str, log: std::sync::Arc<std::sync::Mutex<Vec<String>>>) -> Self {
+            Self { name: name.to_string(), log, global_log: None, order: std::sync::atomic::AtomicUsize::new(0) }
+        }
+        fn with_global(name: &str, log: std::sync::Arc<std::sync::Mutex<Vec<String>>>, global: std::sync::Arc<std::sync::Mutex<Vec<String>>>) -> Self {
+            Self { name: name.to_string(), log, global_log: Some(global), order: std::sync::atomic::AtomicUsize::new(0) }
+        }
+    }
+    impl NestedScrollConnection for Recorder {
+        fn on_pre_scroll(&self, available: ScrollDelta, _: NestedScrollSource) -> ScrollDelta {
+            let n = self.order.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.log.lock().unwrap().push(format!("pre-{}-{}", self.name, n));
+            if let Some(g) = &self.global_log {
+                g.lock().unwrap().push(format!("pre-{}", self.name));
+            }
+            ScrollDelta::new(available.x / 2.0, available.y / 2.0)
+        }
+        fn on_post_scroll(&self, _: ScrollDelta, available: ScrollDelta, _: NestedScrollSource) -> ScrollDelta {
+            let n = self.order.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.log.lock().unwrap().push(format!("post-{}-{}", self.name, n));
+            if let Some(g) = &self.global_log {
+                g.lock().unwrap().push(format!("post-{}", self.name));
+            }
+            ScrollDelta::new(available.x, available.y)
+        }
+        fn on_pre_fling(&self, _: ScrollVelocity) -> ScrollVelocity { ScrollVelocity::default() }
+        fn on_post_fling(&self, _: ScrollVelocity, _: ScrollVelocity) -> ScrollVelocity { ScrollVelocity::default() }
+    }
+
+    #[test]
+    fn delta_chain_pre_post_order_includes_target() {
+        // 构造 root(connection R) → mid(connection M) → target(scroll + connection T)
+        let r_log = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let m_log = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let t_log = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        // 共享全局 log：验证跨节点顺序 pre-R→M→T→post-T→M→R
+        let global = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+
+        let conn_r = Recorder::with_global("R", r_log.clone(), global.clone());
+        let conn_m = Recorder::with_global("M", m_log.clone(), global.clone());
+        let conn_t = Recorder::with_global("T", t_log.clone(), global.clone());
+
+        let scroll = ScrollState::new();
+        scroll.offset.set(0.0);
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new().nested_scroll(conn_r).size(200.0, 200.0)),
+            LayoutNode::leaf(Modifier::new().nested_scroll(conn_m).size(200.0, 200.0)),
+            LayoutNode::leaf(Modifier::new().vertical_scroll(scroll.clone()).nested_scroll(conn_t).size(100.0, 100.0)),
+        ];
+        nodes[0].measured_size = Size::new(200.0, 200.0);
+        nodes[1].measured_size = Size::new(200.0, 200.0);
+        nodes[1].position = Point::new(0.0, 0.0);
+        nodes[2].measured_size = Size::new(100.0, 100.0);
+        nodes[2].position = Point::new(0.0, 100.0);
+        nodes[2].scroll_viewport_height = 100.0;
+        nodes[2].scroll_content_height = 200.0; // 可滚动 100
+        nodes[0].children.push(1);
+        nodes[1].children.push(2);
+
+        let density = crate::unit::Density::from_density(1.0);
+        // 消费推演（dy=-20，负 delta = 内容上移 = offset 增加；每个 pre 吃一半）：
+        //   R pre -10 → M pre -5 → T pre -2.5 → child 剩余 -2.5 → child 消费 2.5
+        //   post 链（含 T）：M post 全吃 available → T post 全吃 → R post 全吃剩余
+        let consumed = dispatch_nested_scroll_delta(
+            &mut nodes, 0, 2,
+            ScrollDelta::new(0.0, -20.0),
+            NestedScrollSource::Wheel,
+            density,
+        );
+
+        // R：pre 一次（吃 10）+ post 一次（child 消费后，吃剩余）——R 是最后 post
+        assert_eq!(*r_log.lock().unwrap(), vec!["pre-R-0", "post-R-1"], "R pre 后 post");
+        // M：pre 一次 + post 一次（在 T/R 之前——逆序 M→T→R）
+        assert_eq!(*m_log.lock().unwrap(), vec!["pre-M-0", "post-M-1"], "M pre 后 post");
+        // T：pre + post（TopAppBar 类 connection 挂在 target 上，post 必须被调用——
+        // 修复前的关键回归点：排除 target 会破坏 content_offset 变色/回弹）
+        assert_eq!(*t_log.lock().unwrap(), vec!["pre-T-0", "post-T-1"], "T 也参与 post（TopAppBar 依赖）");
+
+        // consumed 应为负（负 delta 方向消费），且 child 已实际滚动 offset>0
+        assert!(consumed.y < 0.0, "应沿 delta 方向消费，实际 {:?}", consumed);
+        assert!(scroll.offset.get() > 0.0, "child 应实际滚动（pre 只吃一半），实际 {}", scroll.offset.get());
+
+        // 跨节点全局顺序：pre 正序 R→M→T，post 逆序 T→M→R（含 target T）
+        let g = global.lock().unwrap().clone();
+        assert_eq!(g, vec!["pre-R", "pre-M", "pre-T", "post-T", "post-M", "post-R"],
+            "全局顺序应为 pre-R→M→T→post-T→M→R（含 target T 参与 post）——实际 {g:?}");
+    }
+}
+
+/// 拖拽滚动目标复现（用户报告：鼠标在外层内容上按下拖拽，内层却滚动了）。
+/// 构造与 nested_scroll_demo 同几何的树：外层 scroll 视口 536（y=184..720），
+/// 内层 scroll 视口 180（内容流 y=296，视觉 480..660，scroll_viewport 已设）。
+/// 验证：鼠标在外层内容 0-7 区域（如 y=250）按下时，hit_test 命中的是外层
+/// 内容节点而非内层——drag_scroll 目标选择（path 逆序找 scroll）应选外层。
+#[cfg(test)]
+mod drag_target_selection_tests {
+    use crate::layout::node::{hit_test, LayoutNode};
+    use crate::layout::{Point, Size};
+    use crate::modifier::{Modifier, ScrollState};
+
+    /// 构造：root(Column) → outer_scroll(0,184,420×536) → [内容0..7, 内层scroll, 内容8..]
+    fn build_demo_tree() -> (Vec<LayoutNode>, usize) {
+        let outer = ScrollState::new();
+        let inner = ScrollState::new();
+        let mut nodes = Vec::new();
+        // idx 0: root Column（全窗口 420×720）
+        nodes.push(LayoutNode::leaf(Modifier::new().size(420.0, 720.0)));
+        nodes[0].measured_size = Size::new(420.0, 720.0);
+        // idx 1: 外层 scroll（视口 536，顶部 y=184）
+        nodes.push(LayoutNode::leaf(Modifier::new().vertical_scroll(outer).size(420.0, 536.0)));
+        nodes[1].position = Point::new(0.0, 184.0);
+        nodes[1].measured_size = Size::new(420.0, 536.0);
+        nodes[1].scroll_viewport_height = 536.0;
+        nodes[0].children.push(1); // 外层 scroll 挂到 root
+        // 内容 0..7：每行 37 高
+        for i in 0..8 {
+            let idx = nodes.len();
+            nodes.push(LayoutNode::leaf(Modifier::new().size(420.0, 37.0)));
+            nodes[idx].position = Point::new(0.0, i as f32 * 37.0);
+            nodes[idx].measured_size = Size::new(420.0, 37.0);
+            nodes[1].children.push(idx);
+        }
+        // 内层 scroll：内容流 y = 8*37 = 296，视口 180
+        let inner_idx = nodes.len();
+        nodes.push(LayoutNode::leaf(Modifier::new().vertical_scroll(inner).size(420.0, 180.0)));
+        nodes[inner_idx].position = Point::new(0.0, 296.0);
+        nodes[inner_idx].measured_size = Size::new(420.0, 180.0);
+        nodes[inner_idx].scroll_viewport_height = 180.0;
+        // 内层子项：一列（可滚动内容）
+        let item_idx = nodes.len();
+        nodes.push(LayoutNode::leaf(Modifier::new().size(420.0, 32.0)));
+        nodes[item_idx].position = Point::new(0.0, 0.0);
+        nodes[item_idx].measured_size = Size::new(420.0, 32.0);
+        nodes[inner_idx].children.push(item_idx);
+        nodes[1].children.push(inner_idx);
+        (nodes, 1) // 返回 outer_scroll idx
+    }
+
+    #[test]
+    fn drag_target_on_outer_content_is_outer_not_inner() {
+        let (nodes, outer_idx) = build_demo_tree();
+        // 鼠标在外层内容区域：屏幕 y=250（外层顶部 184 + 内容 y=66 → 内容 1）
+        let path = hit_test(&nodes, 0, 210.0, 250.0);
+        assert!(!path.is_empty(), "应命中某节点");
+        // 命中路径应包含外层 scroll，且**不含内层 scroll**
+        assert!(path.contains(&outer_idx), "外层 scroll 应在命中路径");
+        // 内层 scroll 视觉位置 y=480..660——y=250 不应命中
+        let inner_idx = nodes[outer_idx].children[8]; // 内容 0..7 之后是内层
+        assert!(!path.contains(&inner_idx), "鼠标在外层内容区域不应命中内层 scroll");
+        // drag_scroll 目标选择：path 逆序找第一个 scroll → 应为外层
+        let target = path.iter().rev().find(|&&i| {
+            nodes[i].modifier.vertical_scroll_state().is_some()
+                || nodes[i].modifier.horizontal_scroll_state().is_some()
+        });
+        assert_eq!(target, Some(&outer_idx), "drag 目标应是外层 scroll");
+    }
+
+    #[test]
+    fn drag_target_on_inner_list_is_inner() {
+        let (nodes, outer_idx) = build_demo_tree();
+        // 鼠标在内层列表视觉区域：屏幕 y=500（内层 480..660）
+        let path = hit_test(&nodes, 0, 210.0, 500.0);
+        let inner_idx = nodes[outer_idx].children[8];
+        assert!(path.contains(&inner_idx), "内层 scroll 应在命中路径");
+        let target = path.iter().rev().find(|&&i| {
+            nodes[i].modifier.vertical_scroll_state().is_some()
+                || nodes[i].modifier.horizontal_scroll_state().is_some()
+        });
+        assert_eq!(target, Some(&inner_idx), "drag 目标应是内层 scroll");
+    }
+
+    /// 用户复现场景：外层已滚动（offset>0），内层列表视觉上移到外层内容
+    /// 0-7 区域。此时鼠标在外层顶部内容区域按下——期望滚外层（鼠标视觉
+    /// 在"外层内容"上），但若命中内层则 bug。
+    #[test]
+    fn drag_target_after_outer_scrolled_uses_visual_position() {
+        let (mut nodes, outer_idx) = build_demo_tree();
+        // 外层滚 offset=300：内层视觉 y = 184 + 296 - 300 = 180（上移到顶部区域）
+        let outer = nodes[outer_idx].modifier.vertical_scroll_state().unwrap().clone();
+        outer.offset.set(300.0);
+        let inner_idx = nodes[outer_idx].children[8];
+        // 内层视觉位置（渲染）应在 180..360——覆盖"外层内容 0-7"区域
+        let (_, sdy) = crate::layout::node::scroll_offset_for_node(&nodes[outer_idx]);
+        let inner_visual_y = 184.0 + nodes[inner_idx].position.y - sdy;
+        assert!(inner_visual_y < 400.0, "内层应上移到顶部区域（视觉 y={}）", inner_visual_y);
+
+        // 情形 1：鼠标在 y=250（内层视觉覆盖区）——应命中内层（z-order）
+        let path = hit_test(&nodes, 0, 210.0, 250.0);
+        let contains_inner = path.contains(&inner_idx);
+        assert!(contains_inner,
+            "内层视觉覆盖 y=250（视觉 y={inner_visual_y}..{:.0}）应命中内层——z-order 语义",
+            inner_visual_y + 180.0);
+        let target = path.iter().rev().find(|&&i| {
+            nodes[i].modifier.vertical_scroll_state().is_some()
+                || nodes[i].modifier.horizontal_scroll_state().is_some()
+        });
+        assert_eq!(target, Some(&inner_idx), "drag 目标应是内层（视觉覆盖区）");
+
+        // 情形 2：鼠标在 y=440（内层视觉区下方，仍在外层视口内）——应命中
+        // 外层内容（内层不覆盖该点）
+        let path2 = hit_test(&nodes, 0, 210.0, 440.0);
+        assert!(!path2.contains(&inner_idx),
+            "y=440 在内层视觉区（{inner_visual_y}..{:.0}）下方，不应命中内层",
+            inner_visual_y + 180.0);
+        let target2 = path2.iter().rev().find(|&&i| {
+            nodes[i].modifier.vertical_scroll_state().is_some()
+                || nodes[i].modifier.horizontal_scroll_state().is_some()
+        });
+        assert_eq!(target2, Some(&outer_idx), "drag 目标应是外层（内层不覆盖处）");
+    }
+
+    /// 验证：真实 Composer 两次 compose（状态行文本变化触发重组）后，
+    /// 外层/内层 scroll 容器的 slot_key 保持稳定（drag_scroll 依赖 slot_key
+    /// 在 move 阶段定位节点——key 漂移会滚错目标）。
+    #[test]
+    fn scroll_slot_keys_stable_across_recompose() {
+        use crate::core::composer::Composer;
+        use crate::layout::Constraints;
+        use crate::ui::{Column, Text};
+        let mut composer = Composer::new();
+        let outer = ScrollState::new();
+        let inner = ScrollState::new();
+
+        let build = |composer: &mut Composer, outer: &ScrollState, inner: &ScrollState| {
+            composer.compose(|ctx| {
+                crate::ui::Column::new()
+                    .modifier(Modifier::new().fill_max_size())
+                    .build(ctx, |ctx| {
+                        // 状态行（文本随 offset 变化 → 触发重组）
+                        Text::new(format!("outer: {:.0} inner: {:.0}", outer.offset.get(), inner.offset.get()))
+                            .font_size(12.0).build(ctx);
+                        // 外层滚动区
+                        Column::new()
+                            .modifier(Modifier::new().fill_max_width().fill_max_height().vertical_scroll(outer.clone()))
+                            .build(ctx, |ctx| {
+                                for i in 0..8 {
+                                    Text::new(format!("页面内容 {i}"))
+                                        .modifier(Modifier::new().padding(10.0).fill_max_width())
+                                        .build(ctx);
+                                }
+                                // 内层列表
+                                Column::new()
+                                    .modifier(Modifier::new().fill_max_width().height(180.0).vertical_scroll(inner.clone()))
+                                    .build(ctx, |ctx| {
+                                        for i in 0..30 {
+                                            Text::new(format!("内层列表项 {i}"))
+                                                .modifier(Modifier::new().padding(8.0).fill_max_width())
+                                                .build(ctx);
+                                        }
+                                    });
+                            });
+                    });
+            });
+        };
+
+        // 帧 1
+        build(&mut composer, &outer, &inner);
+        composer.layout(Constraints::new(0.0, 420.0, 0.0, 720.0));
+        let collect_keys = |composer: &Composer| -> Vec<u64> {
+            composer.arena_nodes().iter()
+                .filter(|n| n.modifier.vertical_scroll_state().is_some())
+                .map(|n| n.slot_key)
+                .collect()
+        };
+        let keys1 = collect_keys(&composer);
+        assert_eq!(keys1.len(), 2, "应有外层+内层两个 scroll 节点");
+        // ⚠ 关键：两个 scroll 节点的 slot_key 必须**互不相同**——若碰撞，
+        // drag_scroll move 阶段 find_node_id_by_slot_key 会返回第一个匹配
+        // （可能滚错目标：按下外层、move 滚内层——用户报告的 bug）
+        assert_ne!(keys1[0], keys1[1],
+            "外层与内层 scroll 的 slot_key 碰撞！{keys1:?}——drag_scroll 会定位到错误节点");
+        eprintln!("[keys] 帧1 scroll keys = {keys1:?}（互不相同 ✅）");
+
+        // 帧 2：内层滚动（状态行文本变化 → 重组）
+        inner.offset.set(29.0);
+        build(&mut composer, &outer, &inner);
+        composer.layout(Constraints::new(0.0, 420.0, 0.0, 720.0));
+        let keys2 = collect_keys(&composer);
+        assert_eq!(keys1, keys2,
+            "scroll 容器 slot_key 跨重组必须稳定（drag_scroll move 阶段依赖）——\n帧1={keys1:?} 帧2={keys2:?}");
+    }
+
+    /// scroll 容器高度 clamp 回归（review B1）：`.height(180)` + padding 的
+    /// 滚动容器，measured_size 必须精确为 180（内容再多也不撑开）。
+    #[test]
+    fn scroll_container_height_clamps_to_fixed_height() {
+        use crate::core::composer::Composer;
+        use crate::layout::Constraints;
+        use crate::ui::{Column, Text};
+        let mut composer = Composer::new();
+        let inner = ScrollState::new();
+        composer.compose(|ctx| {
+            Column::new()
+                .modifier(Modifier::new().fill_max_width().height(180.0).padding(4.0).vertical_scroll(inner.clone()))
+                .build(ctx, |ctx| {
+                    // 30 项内容——总高远超 180
+                    for i in 0..30 {
+                        Text::new(format!("列表项 {i}"))
+                            .modifier(Modifier::new().padding(8.0).fill_max_width())
+                            .build(ctx);
+                    }
+                });
+        });
+        composer.layout(Constraints::new(0.0, 420.0, 0.0, 720.0));
+        let root = composer.layout_root_idx().unwrap();
+        let n = &composer.arena_nodes()[root];
+        assert_eq!(n.measured_size.height, 180.0,
+            "scroll 容器高度必须 clamp 回 .height(180)，实际 {}", n.measured_size.height);
+        assert!(n.scroll_viewport_height > 0.0, "viewport 应已回写（供滚动 clamp）");
+    }
+
+    /// scroll 容器无固定高度 + 无限父约束：随内容撑开（clamp 是 no-op）。
+    #[test]
+    fn scroll_container_grows_with_unbounded_parent() {
+        use crate::core::composer::Composer;
+        use crate::layout::Constraints;
+        use crate::ui::{Column, Text};
+        let mut composer = Composer::new();
+        let inner = ScrollState::new();
+        composer.compose(|ctx| {
+            Column::new()
+                .modifier(Modifier::new().fill_max_width().vertical_scroll(inner.clone()))
+                .build(ctx, |ctx| {
+                    for i in 0..5 {
+                        Text::new(format!("列表项 {i}"))
+                            .modifier(Modifier::new().padding(8.0).fill_max_width())
+                            .build(ctx);
+                    }
+                });
+        });
+        // 父约束高度无限（f32::MAX）——容器应随内容撑开
+        composer.layout(Constraints::new(0.0, 420.0, 0.0, f32::MAX));
+        let root = composer.layout_root_idx().unwrap();
+        let n = &composer.arena_nodes()[root];
+        assert!(n.measured_size.height > 0.0,
+            "无固定高度 + 无限约束应随内容撑开（>0），实际 {}", n.measured_size.height);
     }
 }
 

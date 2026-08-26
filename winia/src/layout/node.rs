@@ -1548,7 +1548,21 @@ pub(crate) fn measure_node(
                 }
             }
         }
-        let outer_size = Size::new(size.width + pad_x, size.height + pad_y);
+        let mut outer_size = Size::new(size.width + pad_x, size.height + pad_y);
+        // scroll 容器自身尺寸 clamp 回视口——第 4 步为子节点把约束改成了无界
+        // （max=f32::MAX），若不做 clamp，自身高度/宽度会被内容撑开（如
+        // `.height(180.0)` 的滚动列表实测 991 高）。viewport_* 保存于第 3 步
+        // （padding 已扣、size 约束已收窄），故完整视口高 = viewport + pad。
+        // lazy 容器不改写约束（见第 4 步注释），其 policy 已按有限视口测量，
+        // 此处 clamp 对它们是无操作（内容本来就 ≤ 视口）。若父约束无限
+        // （viewport=f32::MAX），min 无效果，仍按内容撑开（语义：无固定高度
+        // 的滚动容器随内容增长）。
+        if nodes[idx].modifier.vertical_scroll_state().is_some() && viewport_height < f32::MAX {
+            outer_size.height = outer_size.height.min(viewport_height + pad_y);
+        }
+        if nodes[idx].modifier.horizontal_scroll_state().is_some() && viewport_width < f32::MAX {
+            outer_size.width = outer_size.width.min(viewport_width + pad_x);
+        }
         nodes[idx].measured_size = outer_size;
         (outer_size, placements)
     } else {
