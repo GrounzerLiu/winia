@@ -73,8 +73,10 @@ pub(crate) fn materialize(composer: &mut Composer) {
 }
 
 /// 清除 LayoutNode 上残留的 TextField 专用字段（内容类型切换时调用）。
-/// 当节点从 TextField 输入叶子切为普通 Text/Image/RichText 时，旧 cursor/IME/
-/// selection/registrar 值会污染新节点的渲染路径。
+/// 内容类型切换时的**全量**清理：节点从 TextField 输入叶子切为普通
+/// Text/Image/RichText 时，旧 cursor/IME/selection/registrar/focus 值都会污染
+/// 新节点的渲染路径。此函数在 desc 字段应用**之前**调用（reuse 块内），
+/// desc 若有新值会随后覆盖，因此清空 registrar/focus_color 是安全的。
 fn clear_textfield_state(n: &mut crate::layout::node::LayoutNode) {
     *n.cursor_callback.borrow_mut() = None;
     *n.ime_callback.borrow_mut() = None;
@@ -87,6 +89,23 @@ fn clear_textfield_state(n: &mut crate::layout::node::LayoutNode) {
     n.cursor_visible.set(false);
     n.display_focused.set(false);
     n.focus_color.set(crate::modifier::Color::TRANSPARENT);
+    n.focused = false;
+}
+
+/// Enter 兜底（语义角色切换）的**轻量**清理：只清 TextField 专用 IME/cursor/
+/// selection 字段，**保留** `registrar`/`focus_color`——此清理在 desc 字段
+/// 应用之后执行（review 2026-08：误清 registrar 会丢失 SelectionContainer
+/// 内普通 Text 的选择功能；focus_color 同理由 desc 维护）。
+fn clear_textfield_input_state(n: &mut crate::layout::node::LayoutNode) {
+    *n.cursor_callback.borrow_mut() = None;
+    *n.ime_callback.borrow_mut() = None;
+    *n.composing_range.borrow_mut() = None;
+    *n.selection_range.borrow_mut() = None;
+    n.cursor_x.set(0.0);
+    n.cursor_height.set(0.0);
+    n.cursor_index.set(0);
+    n.cursor_visible.set(false);
+    n.display_focused.set(false);
     n.focused = false;
 }
 
@@ -229,15 +248,20 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
             n.on_remove = on_remove;
             n.slot_key = key;
             n.dirty = dirty; // Dirty → 重测；Clean → 折叠（保留测量）
-            // 重置 scroll metadata：新 modifier 无 scroll state 时清空旧值
-            // （场景：节点从 scroll 容器变为非 scroll 容器，旧 viewport 残留）
-            if n.modifier.vertical_scroll_state().is_none()
-                && n.modifier.horizontal_scroll_state().is_none()
-            {
+            // 重置 scroll metadata：按轴分别判断（垂直/水平轴 viewport 独立）——
+            // vertical↔horizontal 单轴切换时，被移除轴的值也须清零
+            // （场景：节点从垂直 scroll 切为水平 scroll，旧垂直 viewport 残留）
+            let has_vscroll = n.modifier.vertical_scroll_state().is_some();
+            let has_hscroll = n.modifier.horizontal_scroll_state().is_some();
+            if !has_vscroll {
                 n.scroll_viewport_height = 0.0;
-                n.scroll_viewport_width = 0.0;
                 n.scroll_content_height = 0.0;
+            }
+            if !has_hscroll {
+                n.scroll_viewport_width = 0.0;
                 n.scroll_content_width = 0.0;
+            }
+            if !has_vscroll && !has_hscroll {
                 n.scroll_reverse = false;
             }
             // 防御性重置 parent_id（add_child 在末尾重新设置正确的值）
@@ -311,10 +335,12 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
     }
     // Enter 路径且 desc 不提供 IME/cursor 回调时，若旧节点有残留 TextField 状态，
     // 清理之（语义角色切换：TextField 输入叶子→普通 Text）。Skip 路径保留旧值。
+    // ⚠ 用轻量版（不清 registrar/focus_color）——此处在 desc 字段应用之后，
+    // 误清 registrar 会丢失 SelectionContainer 内普通 Text 的选择功能（review 2026-08）。
     if !skip && !desc_has_ime && !desc_has_cursor {
         let n = &mut composer.arena.nodes[index];
         if n.ime_callback.borrow().is_some() || n.cursor_callback.borrow().is_some() {
-            clear_textfield_state(n);
+            clear_textfield_input_state(n);
         }
     }
     if let Some(p) = parent {

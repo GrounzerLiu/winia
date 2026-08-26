@@ -83,7 +83,8 @@ pub(crate) struct PerWindow {
     /// 最近的 PointerKind（Move 事件继承自上一个 Down）
     last_pointer_kind: crate::modifier::PointerKind,
     /// 最后一次 PointerMoved 的 scene 坐标（逻辑像素）——MouseWheel 命中
-    /// 滚动目标用（§3.7：wheel 不再按反向 child 顺序盲找，先按鼠标位置 hit-test）
+    /// 滚动目标用（§3.7：winit 0.31 MouseWheel 事件不带 cursor position，
+    /// 需记录指针位置；PointerLeft 时由调用方清空）
     last_pointer_pos: Option<(f32, f32)>,
     /// Down 时的最内层节点 ID（后续 Move/Up 优先发给此节点，而非 hit_test）
     pointer_down_slot: Option<u64>,
@@ -590,7 +591,9 @@ impl ApplicationHandler for AppState {
                         // §3.7 修复：优先按鼠标位置 hit-test，在命中路径上找滚动
                         // 目标——两个并排滚动区域只滚鼠标悬停的那一个（旧实现
                         // find_scroll_target 按反向 child 顺序盲找，可能滚错）。
-                        // 鼠标不在任何滚动节点上时回退旧逻辑（兜底）。
+                        // 用最后 PointerMoved 位置（winit 0.31 MouseWheel 事件
+                        // 不携带 cursor position）。鼠标不在任何滚动节点上时
+                        // 回退旧逻辑（兜底）。
                         let target = pw.last_pointer_pos.and_then(|(px, py)| {
                             let path = crate::layout::node::hit_test(nodes, root_idx, px, py);
                             // 命中路径从根到叶——从内向外找第一个轴匹配的 scroll 节点
@@ -730,7 +733,8 @@ impl ApplicationHandler for AppState {
             WindowEvent::PointerMoved { position, .. } => {
                 let lp = position.to_logical::<f32>(pw.scale_factor);
                 let scene_pos = (lp.x, lp.y);
-                // 记录最后指针位置（MouseWheel 命中滚动目标用——§3.7）
+                // 记录最后指针位置（MouseWheel 命中滚动目标用——§3.7；
+                // winit 0.31 MouseWheel 事件不带 cursor position）
                 pw.last_pointer_pos = Some(scene_pos);
                 // 指针移动核心（共享——真实/Debug 防分叉；Debug 路径此前缺
                 // x_off 对齐偏移——Center/Right 对齐文本选择错位，合并修复）
@@ -2709,15 +2713,23 @@ fn dispatch_ptr_event(
         }
     } else { path.to_vec() };
     let use_path = &captured_path;
-    // 计算路径累积偏移（每个节点的 position 是相对于父节点的偏移）
+    // 计算路径累积偏移（每个节点的 position 是相对于父节点的偏移）。
+    // 与 hit_test_recursive 一致：节点 i 的视觉坐标 = Σposition[0..=i]
+    // − Σscroll[0..i-1]（祖先的 scroll offset；节点自身 offset 只影响子节点，
+    // 不影响自身左上角——见 node.rs hit_test_recursive 的 child_px/nx 逻辑）。
     let mut abs_x = 0.0f32;
     let mut abs_y = 0.0f32;
+    let mut scroll_x = 0.0f32;
+    let mut scroll_y = 0.0f32;
     let abs_positions: Vec<(f32, f32)> = use_path.iter().map(|&i| {
         abs_x += nodes[i].position.x;
         abs_y += nodes[i].position.y;
-        // 扣除祖先 scroll offset（与 hit_test_recursive 一致——渲染时 canvas.translate(-offset)）
+        // 当前节点坐标 = 累积位置 − 祖先 scroll 累积（自身 offset 稍后累加）
+        let pos = (abs_x - scroll_x, abs_y - scroll_y);
         let (sdx, sdy) = crate::layout::node::scroll_offset_for_node(&nodes[i]);
-        (abs_x - sdx, abs_y - sdy)
+        scroll_x += sdx;
+        scroll_y += sdy;
+        pos
     }).collect();
 
     // on_pre_ptr: outer → inner
