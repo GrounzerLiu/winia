@@ -386,19 +386,44 @@ UI tree 由 winia/src/debug.rs:168-228 手工拼接。TextContent 做了转义�
 
 ### Phase 2：节点复用与坐标（当前状态：🔶 进行中）
 
-1. [~] 建立 LayoutNode::update_from_desc/reset_from_desc，覆盖 content-kind、IME、cursor、selection、registrar、scroll metadata、parent_id。
+1. [~] 建立 LayoutNode::update_from_desc/reset_from_desc（对应 §3.5）
 
-   **已完成部分**（edd4827）：
-   - content-kind 标记同步：materialize 复用路径按新 modifier 调用 `modifier_has_text`/`modifier_has_richtext`/`modifier_has_image` 更新 `has_*_content`，并在内容类型切换时清空 `cached_paragraph`（materialize.rs:187-202）。
-   - 修复效果：`test_text_content_change_remeasures` 通过（文本→非文本切换不再残留旧 content 路径）。
+   **目标**：复用节点时统一重置所有语义字段，防止残留旧值污染测量/渲染路径。
 
-   **未完成部分**：
-   - IME/cursor/selection/registrar 的统一 reset 尚未并入该路径（desc 条件管理，无 desc 时保留旧值——6.x audit 已述）。
-   - scroll metadata（viewport/content 尺寸、reverse）与 parent_id 的统一重置未落地。
+   **子项**：
+   - [x] content-kind 标记同步：materialize 复用路径按新 modifier 调用 `modifier_has_text`/`modifier_has_richtext`/`modifier_has_image` 更新 `has_*_content`，内容类型切换时清空 `cached_paragraph`（materialize.rs:187-202）。`edd4827` 已落地。
+   - [ ] IME/cursor/selection/registrar 的 reset：复用节点时统一清空 `cursor_callback`/`ime_callback`/`composing_range`/`selection_range`/`display_focused`/`registrar`/`cursor_x`/`cursor_y`/`cursor_visible`/`focus_color` 为默认值；desc 条件覆盖写回正确值。
+   - [ ] scroll metadata 的 reset：`scroll_viewport_height/width`、`scroll_content_height/width`、`scroll_reverse` 在复用路径重置为 0（measure_node 重新计算）。
+   - [ ] parent_id 的 reset：复用路径重置为 `None`（`add_child` 重新设置）。
 
-2. [ ] 统一 scroll-aware path transform，修正 pointer local、wheel hit-test、capture、ripple、text selection 和 absolute position。
+   **验证**：`test_text_content_change_remeasures` 通过；新增 `test_layout_node_reuse_resets_ime_selection_registrar` 覆盖 IME/selection 残留场景。
 
-3. [ ] 锁定 nested scroll delta/fling 的 target/ancestor 顺序和消费语义。
+   **涉及文件**：`core/materialize.rs`（复用路径）、`layout/node.rs`（LayoutNode 字段定义）
+
+2. [ ] 统一 scroll-aware path transform（对应 §3.6 PointerEvent + §3.7 MouseWheel）
+
+   **目标**：修正滚动容器内指针事件、命中测试、capture 和滚轮操作的坐标系统，确保所有坐标变换路径一致。
+
+   **子项**：
+   - [ ] `dispatch_ptr_event` 坐标修正：`app.rs:2668-2708` 当前只累加 `node.position`，未扣除祖先 scroll offset。改为使用 `scroll_offset_for_node`（`layout/node.rs:586-593`）的坐标、与 `hit_test`/`node_abs_position` 保持一致。
+   - [ ] MouseWheel 按命中位置选目标：`app.rs:571-587`/`app.rs:1540-1547` 的 `find_scroll_target` 当前丢弃 cursor position。改为记录每个窗口最后 `PointerMoved` 的逻辑坐标，wheel 时先 hit-test，再在命中路径上执行 nested scroll。
+   - [ ] 坐标一致性测试：新增 `test_scroll_pointer_event_coordinates_match_hit_test`，验证滚动容器内点击的局部坐标在 hit-test / dispatch / render 三阶段一致。
+
+   **验证**：`hit_test`、`scene_to_node_local`、`node_abs_position`、`dispatch_ptr_event` 坐标一致；并排滚动容器各自正确响应滚轮。
+
+   **涉及文件**：`layout/node.rs`（`scroll_offset_for_node`、`hit_test`、`scene_to_node_local`）、`app.rs`（`dispatch_ptr_event`、`find_scroll_target`、`apply_scroll_delta`）、`render.rs`（scroll clip/translate）
+
+3. [ ] 锁定 nested scroll delta/fling 的 target/ancestor 顺序和消费语义（对应 §3.8）
+
+   **目标**：修正 nested fling 的回调链和消费量计算，确保 pre/post 顺序、ancestor handoff、consumed_by_child 语义正确。
+
+   **子项**：
+   - [ ] 修正 `dispatch_nested_scroll_fling`（`app.rs:1464-1537`）：目标自身 NestedScrollConnection 不应放入 post 链；`child_velocity` 应为实际消费后的余量而非原始值；child 撞边界后的 handoff 应将剩余 velocity 传给 post 链而非 pre。
+   - [ ] 新增测试：`test_nested_fling_consumption_order` 验证三层嵌套 fling 的 pre/post identity 和 consumed_by_child 正确。
+
+   **验证**：三层嵌套 scroll 容器 + TopAppBar 的 fling 消费量、回调顺序、边界 handoff 符合预期。
+
+   **涉及文件**：`app.rs`（`dispatch_nested_scroll_fling`、`apply_scroll_delta`）、`nested_scroll.rs`（`NestedScrollConnection` trait 定义）
 
 ### Phase 3：LazyList 与 TextField
 
