@@ -26,6 +26,9 @@ pub(crate) struct DescNode {
     pub(crate) registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
     /// 焦点环颜色（物化时写入节点——组合期捕获，渲染期读取）
     pub(crate) focus_color: Option<crate::modifier::Color>,
+    /// IME 组合下划线颜色（物化时写入节点——组合期捕获主题 primary，渲染期
+    /// 不能读 CompositionLocal，Phase 4.2）
+    pub(crate) composing_color: Option<crate::modifier::Color>,
     /// 光标（TextField）——组合期写入 desc，物化时应用到节点
     pub(crate) cursor_index: Option<usize>,
     pub(crate) cursor_visible: Option<bool>,
@@ -87,6 +90,7 @@ fn clear_textfield_state(n: &mut crate::layout::node::LayoutNode) {
     n.cursor_visible.set(false);
     n.display_focused.set(false);
     n.focus_color.set(crate::modifier::Color::TRANSPARENT);
+    n.composing_color.set(crate::modifier::Color::TRANSPARENT);
     n.focused = false;
 }
 
@@ -108,7 +112,7 @@ fn clear_textfield_input_state(n: &mut crate::layout::node::LayoutNode) {
 
 /// 物化单个 desc 节点（递归子节点）——Skip 恢复 / 节点复用 / 降级重建。
 pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: Option<usize>) -> Option<usize> {
-    let DescNode { key, skip, modifier, preserve_modifier, policy, on_remove, dirty, registrar, focus_color, cursor_index, cursor_visible, cursor_callback, display_focused, ime_callback, composing_range, direction, children } = desc;
+    let DescNode { key, skip, modifier, preserve_modifier, policy, on_remove, dirty, registrar, focus_color, composing_color, cursor_index, cursor_visible, cursor_callback, display_focused, ime_callback, composing_range, direction, children } = desc;
     let index = if skip {
         // Skip：恢复上帧节点（key 匹配——保留测量/内容；children 清空后
         // 按 slot 树结构重新挂接（子节点逐个从 prev_node_by_key 恢复——
@@ -303,6 +307,10 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
     // 应用焦点环颜色（组合期捕获——Enter 路径写入；Skip 恢复保留缓存值）
     if let Some(color) = focus_color {
         composer.arena.nodes[index].focus_color.set(color);
+    }
+    // 应用 IME 组合下划线颜色（组合期捕获——Enter 路径写入；Skip 恢复保留缓存值）
+    if let Some(color) = composing_color {
+        composer.arena.nodes[index].composing_color.set(color);
     }
     // 应用光标/IME/选区（组合期写入 desc——Enter 路径；Skip 恢复保留缓存值）
     // 先记录 desc 是否提供这些字段（条件式会 move 值，需提前缓存）

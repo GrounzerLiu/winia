@@ -1787,6 +1787,9 @@ impl TextField {
         ctx.set_current_node_registrar(registrar.clone());
         // 焦点环颜色：主题 primary（组合期捕获——渲染期 CompositionLocal 已退出）
         ctx.set_current_node_focus_color(crate::ui::theme::WiniaTheme::colors().primary);
+        // IME 组合下划线颜色：主题 primary（组合期捕获——Phase 4.2：render 阶段
+        // 不能读 CompositionLocal，否则自定义主题下下划线用默认色）
+        ctx.set_current_node_composing_color(crate::ui::theme::WiniaTheme::colors().primary);
         // IME 预输入回调（旧版风格——直接修改 text 内容）
         {
             let v = value.clone();

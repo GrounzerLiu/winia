@@ -504,9 +504,38 @@ UI tree 由 winia/src/debug.rs:168-228 手工拼接。TextContent 做了转义�
 
 ### Phase 4：窗口平台与 E2E
 
-1. ScaleFactorChanged 标记需要重新组合/重新解析 density-sensitive modifier。
-2. 将主题颜色捕获到 node/descriptor，禁止 render 阶段读取已退出的 CompositionLocal。
-3. 增加真实窗口 E2E：focus、IME、pointer drag、wheel、resize、DPI、overlay、debug tree、screenshot、panic recovery 和多窗口。
-4. 最后处理 navigation suite 的旧 API 调用点和组件集成覆盖。
+1. [x] ScaleFactorChanged 标记需要重新组合/重新解析 density-sensitive modifier（已实施）
+
+   **问题**：`app.rs` ScaleFactorChanged 只更新 scale_factor + request_redraw，不触发重组——`TextUnit::Px`/`Dimension::Px` 在组合期用 `current_density()` 转换写入 modifier，DPI 变化后 build 不重跑 → px 值保留旧 density 结果（文本/尺寸不随 DPI 缩放）。
+
+   **修复**：ScaleFactorChanged 调 `pw.composer.request_recomposition(0)`（设置 `needs_recomposition` → 下一帧全量重组，build 用 `with_density` 注入的新 density 重新解析）。DPI 变化罕见，全量重组代价可接受。
+
+   **验证**：新增测试 `test_request_recomposition_reruns_build_with_new_density`（composer.rs）——request_recomposition 驱动 build 重跑并读到新 density。
+
+2. [x] 将主题颜色捕获到 node/descriptor，禁止 render 阶段读取已退出的 CompositionLocal（已实施）
+
+   **问题**：`render.rs` composing underline 用 `WiniaTheme::colors().primary`（render 阶段 provider 已退出 → 默认主题）——自定义主题下下划线颜色错误。
+
+   **修复**：沿用 focus_color 先例——新增 `composing_color` desc/node 通道：TextField 组合期 `set_current_node_composing_color(theme.primary)` 捕获 → 物化应用 → render 用 `node.composing_color`。清理函数（clear_textfield_state）同步清 composing_color。
+
+   **涉及文件**：`render.rs`、`core/composer.rs`、`core/materialize.rs`、`layout/node.rs`、`ui/text_field.rs`
+
+3. [~] 增加真实窗口 E2E（已补 3 项，仍缺 IME/DPI/screenshot）
+
+   **已新增**（tests/ui_test.rs + fixtures）：
+   - `fixture_resize` + `resize_updates_adaptive_window_size_content`：窗口 resize 后 `window_size()` 内容更新（400x300→600x400→320x240）。UiTest 新增 `resize(w,h)` 方法（`w` 命令）。
+   - `fixture_overlay` + `popup_overlay_appears_and_disappears_with_visible`：Popup overlay 树条目随 visible 出现/消失（overlay_count 0→1→0）。**顺带修复**：`DebugEvent::Click` 此前不走 overlay 逻辑（点外部不 dismiss）——现在对齐真实指针路径先调 `overlay_down`。
+   - `fixture_panic` + `panic_in_build_is_caught_and_window_survives`：build 内 panic 被 catch_unwind 捕获，窗口存活、后续交互正常。
+   - ui_test 总数 14 → 17。
+
+   **仍缺**（记录）：IME preedit、DPI/scale 事件、screenshot 的自动化 E2E（debug-server 手动验证可行）。
+
+4. [x] 最后处理 navigation suite 的旧 API 调用点和组件集成覆盖（已实施）
+
+   - `examples/navigation_bar_demo.rs:71`：`.layout(layout)` → `.icon_position(layout)`（NavigationItemIconPosition 参数）
+   - `docs/navigation-bar.md:15`：`.icon_position(Horizontal)` → `.icon_position(Start)`（枚举名更新）
+   - visual_matrix.rs 已由 `6faf792` 修复，无残留
+
+   验证：`cargo test -p winia --lib` 639 通过；`cargo test --test ui_test --features debug-server` 17 通过。
 
 本审计是架构风险和验证顺序记录，不代表所有问题都必须立即修复。建议先用最小验证矩阵锁定语义，再进行实现调整。

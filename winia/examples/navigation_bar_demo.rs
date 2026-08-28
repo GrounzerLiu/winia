@@ -68,7 +68,7 @@ fn nav_bar(ctx: &mut ComposeCtx, selected: State<usize>, favorites: State<i32>, 
                 }
             })
             .label(move |ctx| Text::new(name).build(ctx))
-            .layout(layout)
+            .icon_position(layout)
             .on_click(move || {
                 sel_for_click.set(index);
                 if index == FAVORITES_INDEX {

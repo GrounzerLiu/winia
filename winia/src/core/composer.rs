@@ -473,6 +473,14 @@ impl<'a> ComposeCtx<'a> {
         }
     }
 
+    /// 设置当前节点的 IME 组合下划线颜色（组合期调用——主题 primary 在此捕获；
+    /// 渲染期 CompositionLocal 已退出，不能读主题，Phase 4.2）
+    pub fn set_current_node_composing_color(&mut self, color: crate::modifier::Color) {
+        if let Some(desc) = &mut self.composer.slot_table.current_slot().desc {
+            desc.composing_color = Some(color);
+        }
+    }
+
     /// 设置当前节点的显示聚焦标记（text-field-v2 容器化：焦点在容器，
     /// 输入子节点用此标记渲染光标/选区）
     pub fn set_current_node_display_focused(&mut self, focused: bool) {
@@ -662,6 +670,9 @@ struct NodeDesc {
     /// 焦点环颜色（组合期 set_current_node_focus_color 写入——物化时应用；
     /// 渲染期 CompositionLocal 已退出，必须组合期捕获）
     focus_color: Option<crate::modifier::Color>,
+    /// IME 组合下划线颜色（组合期 set_current_node_composing_color 写入——
+    /// 物化时应用；渲染期不能读 CompositionLocal（Phase 4.2），组合期捕获主题 primary）
+    composing_color: Option<crate::modifier::Color>,
     /// 光标（TextField）——组合期写入，物化时应用（node_stack 已废弃——
     /// 组合期无 arena 节点，直接写节点会静默失效）
     cursor_index: Option<usize>,
@@ -950,6 +961,7 @@ impl SlotTable {
                     dirty: desc.dirty, // start_slot 的 Dirty 状态（slot.dirty 已消费）
                     registrar: desc.registrar,
                     focus_color: desc.focus_color,
+                    composing_color: desc.composing_color,
                     cursor_index: desc.cursor_index,
                     cursor_visible: desc.cursor_visible,
                     cursor_callback: desc.cursor_callback,
@@ -981,6 +993,7 @@ impl SlotTable {
                     dirty: false,
                     registrar: None,
                     focus_color: None,
+                    composing_color: None,
                     cursor_index: None,
                     cursor_visible: None,
                     cursor_callback: None,
@@ -1830,6 +1843,7 @@ impl Composer {
             dirty: slot_status != SlotStatus::Clean, // 重测标记（slot.dirty 已消费）
             registrar: None,
             focus_color: None,
+            composing_color: None,
             cursor_index: None,
             cursor_visible: None,
             cursor_callback: None,
@@ -1933,6 +1947,7 @@ impl Composer {
                 dirty: true, // Enter 即重测（content 重跑——参数/内容可能变；Skip 恢复不受影响）
                 registrar: None,
                 focus_color: None,
+                composing_color: None,
             cursor_index: None,
             cursor_visible: None,
             cursor_callback: None,
@@ -2510,6 +2525,37 @@ mod tests {
         // mix_key 本身：不同序号 → 不同 key（跨 base 也不碰撞丢熵）
         assert_ne!(mix_key(0x1234, 0), mix_key(0x1234, 1), "同 base 不同序号 key 不同");
         assert_ne!(mix_key(0x1234, 0), mix_key(0x1235, 0), "不同 base 同序号 key 不同");
+    }
+
+    /// Phase 4.1：ScaleFactorChanged → request_recomposition → build 重跑并读到
+    /// 新 density（TextUnit::Px 组合期转换随 DPI 变化刷新，而非保留旧值）。
+    #[test]
+    fn test_request_recomposition_reruns_build_with_new_density() {
+        let mut composer = Composer::new();
+        // build 读 density（模拟 Text font_size Px 组合期转换）存入外部 State
+        let seen = State::new(0.0f32);
+        let build = |ctx: &mut ComposeCtx| {
+            let d = crate::unit::current_density();
+            seen.set(d.density);
+            let key = ctx.next_key();
+            ctx.start_leaf(key, Modifier::new());
+            ctx.end_node();
+        };
+        // 帧 1：density 2.0
+        crate::unit::with_density(crate::unit::Density::from_density(2.0), || {
+            composer.compose(build);
+        });
+        assert_eq!(seen.get(), 2.0, "首帧 density 2.0");
+        // 模拟 ScaleFactorChanged：request_recomposition + density 变为 1.0
+        composer.request_recomposition(0);
+        crate::unit::with_density(crate::unit::Density::from_density(1.0), || {
+            assert!(composer.recompose(build), "request_recomposition 应驱动重组");
+        });
+        assert_eq!(seen.get(), 1.0, "重组后 build 读到新 density 1.0");
+        // 无 request 时 recompose 应跳过（needs_recomposition 已消费）
+        crate::unit::with_density(crate::unit::Density::from_density(1.0), || {
+            assert!(!composer.recompose(build), "无变化时 recompose 应跳过");
+        });
     }
 
     #[test]
@@ -5402,6 +5448,7 @@ fn test_skip_recovery_sig_mismatch_direct() {
         dirty: false,
         registrar: None,
         focus_color: None,
+        composing_color: None,
             cursor_index: None,
             cursor_visible: None,
             cursor_callback: None,
@@ -5419,6 +5466,7 @@ fn test_skip_recovery_sig_mismatch_direct() {
             dirty: false,
             registrar: None,
             focus_color: None,
+            composing_color: None,
             cursor_index: None,
             cursor_visible: None,
             cursor_callback: None,

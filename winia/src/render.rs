@@ -902,7 +902,9 @@ fn render_pass1(
                     }).unwrap_or((comp_range.start, comp_range.end));
                     let rects = para.get_rects_for_range(cs..ce, skia_safe::textlayout::RectHeightStyle::Max, skia_safe::textlayout::RectWidthStyle::Max);
                     let mut und_paint = skia_safe::Paint::default();
-                    let c = crate::ui::theme::WiniaTheme::colors().primary;
+                    // Phase 4.2：组合期捕获的主题 primary（render 阶段 CompositionLocal
+                    // 已退出，读 WiniaTheme::colors() 会得到默认主题）
+                    let c = node.composing_color.get();
                     und_paint.set_color(skia_safe::Color::from_argb(c.a, c.r, c.g, c.b));
                     und_paint.set_stroke_width(1.0);
                     for tb in &rects {

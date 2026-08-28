@@ -654,6 +654,11 @@ impl ApplicationHandler for AppState {
                 pw.scale_factor = scale_factor;
                 // 换显示器可能伴随缩放变化——顺带刷新帧间隔（去抖在方法内）
                 pw.refresh_frame_interval();
+                // Phase 4.1：scale 变化必须触发重组——TextUnit::Px/Dimension::Px
+                // 在组合期用 current_density() 转换写入 modifier，若 build 不重跑
+                // 则 px 值保留旧 density 结果（文本/尺寸不随 DPI 缩放）。
+                // 全量重组（needs_recomposition=true）——DPI 变化罕见，代价可接受。
+                pw.composer.request_recomposition(0);
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
             }
             WindowEvent::PointerButton { position, state, button, .. } => {
@@ -1134,6 +1139,12 @@ impl AppState {
         for evt in debug::take_queued_events(window_id.into_raw() as u64) {
             match evt {
                 debug::DebugEvent::Click { x, y } => {
+                    // overlay 优先（对齐真实指针路径 handle_pointer_down）：
+                    // 命中 overlay → 消费（不进主树）；外部点击 → dismiss
+                    if overlay_down(pw, (x, y)) {
+                        handled = true;
+                        continue;
+                    }
                     // 只读阶段：hit_test + click 检测（arena 借用在块尾结束）
                     let (fid, sk, path_len, click_handled) = {
                         let arena = pw.composer.arena_nodes();

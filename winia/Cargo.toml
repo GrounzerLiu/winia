@@ -77,3 +77,15 @@ path = "tests/ui_fixtures/fixture_scaffold.rs"
 [[bin]]
 name = "fixture_nested_scroll"
 path = "tests/ui_fixtures/fixture_nested_scroll.rs"
+
+[[bin]]
+name = "fixture_resize"
+path = "tests/ui_fixtures/fixture_resize.rs"
+
+[[bin]]
+name = "fixture_overlay"
+path = "tests/ui_fixtures/fixture_overlay.rs"
+
+[[bin]]
+name = "fixture_panic"
+path = "tests/ui_fixtures/fixture_panic.rs"

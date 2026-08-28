@@ -12,7 +12,7 @@
 | 变体 | 对应 | item 布局 | 使用场景 |
 |---|---|---|---|
 | 默认（垂直 item） | M3 基线 | 图标上/标签下 | 紧凑窗口 |
-| 水平 item（`.icon_position(Horizontal)`） | M3 Expressive ShortNavigationBar | 图标左/标签右，胶囊包裹整组 | 中等窗口 |
+| 水平 item（`.icon_position(Start)`） | M3 Expressive ShortNavigationBar | 图标左/标签右，胶囊包裹整组 | 中等窗口 |
 
 M3 规范：紧凑窗口用垂直 item；中等窗口用水平 item。
 

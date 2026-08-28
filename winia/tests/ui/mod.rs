@@ -229,6 +229,13 @@ impl UiTest {
         std::thread::sleep(Duration::from_millis(100));
     }
 
+    /// 模拟窗口 resize（w <width> <height> 命令——逻辑像素，走真实
+    /// request_surface_size → SurfaceResized 事件通路）
+    pub fn resize(&mut self, w: f32, h: f32) {
+        self.send(&format!("w {} {}", w as i32, h as i32));
+        std::thread::sleep(Duration::from_millis(250));
+    }
+
     /// 查询最新树 JSON（写 t → 读 TREE: 响应；超时/无窗口返回 None）
     pub fn tree(&mut self) -> Option<Value> {
         let (t, _) = query_tree(&mut self.child_stdin, &self.stdout_rx, Duration::from_secs(2));

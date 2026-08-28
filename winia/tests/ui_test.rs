@@ -404,3 +404,89 @@ fn nested_scroll_top_app_bar_consumes_before_child_content() {
     app.scroll(600.0);
     app.expect_text_timeout("height-offset: 0", Duration::from_secs(5));
 }
+
+// ═══════════════════════════════════════════════════════════════
+// fixture_resize：窗口 resize 后自适应内容更新（Phase 4.3 E2E）
+// ═══════════════════════════════════════════════════════════════
+
+/// Given 初始窗口 400x300（window-size: 400x300）
+/// When  通过 debug 命令 resize 到 600x400
+/// Then  window-size 文本更新为 600x400（SurfaceResized → window_size_state → 重组）
+#[test]
+fn resize_updates_adaptive_window_size_content() {
+    let mut app = UiTest::launch("resize");
+    app.expect_text_timeout("window-size: 400x300", Duration::from_secs(5));
+    app.resize(600.0, 400.0);
+    app.expect_text_timeout("window-size: 600x400", Duration::from_secs(5));
+    // 再 resize 一次（缩小）——确认不是一次性更新
+    app.resize(320.0, 240.0);
+    app.expect_text_timeout("window-size: 320x240", Duration::from_secs(5));
+}
+
+// ═══════════════════════════════════════════════════════════════
+// fixture_overlay：Popup overlay 树条目随 visible 出现/消失（Phase 4.3 E2E）
+// ═══════════════════════════════════════════════════════════════
+
+/// Given Popup 初始关闭（popup-open: no，overlay 条目 0）
+/// When  点击 Toggle Popup 按钮打开
+/// Then  popup-open: yes 且 overlay 树条目出现（overlay_count 1）
+/// When  点击 overlay 外部区域（Popup 默认 dismiss_on_outside——dismiss + 状态同步）
+/// Then  popup-open: no 且 overlay 条目消失（overlay_count 0）
+#[test]
+fn popup_overlay_appears_and_disappears_with_visible() {
+    let mut app = UiTest::launch("overlay");
+    app.expect_text_timeout("popup-open: no", Duration::from_secs(5));
+    // 初始无 overlay 条目
+    app.refresh();
+    assert_eq!(app.overlay_count(), 0, "初始无 overlay 条目");
+    // 打开（按钮在窗口左上 (16,51)——点中心）
+    let (x, y, w, h) = app.find_tag("toggle-overlay").expect("找不到 toggle 按钮");
+    app.click(x + w / 2.0, y + h / 2.0);
+    app.expect_text_timeout("popup-open: yes", Duration::from_secs(5));
+    // 轮询 overlay 条目出现
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        app.refresh();
+        if app.overlay_count() == 1 { break; }
+        assert!(std::time::Instant::now() < deadline, "overlay 条目应出现");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    // 点击 overlay 外部（窗口右下 (200,250)——远离按钮与 popup）
+    // ⚠ Popup dismiss_on_outside=true：外部点击 → dismiss + on_dismiss 同步 show=false
+    app.click(200.0, 250.0);
+    app.expect_text_timeout("popup-open: no", Duration::from_secs(5));
+    // 轮询 overlay 条目消失
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        app.refresh();
+        if app.overlay_count() == 0 { break; }
+        assert!(std::time::Instant::now() < deadline, "overlay 条目应消失");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// fixture_panic：build 内 panic 被捕获后窗口存活（Phase 4.3 E2E）
+// ═══════════════════════════════════════════════════════════════
+
+/// Given 窗口正常渲染（count: 0）
+/// When  点击 Panic（build 内触发一次性 panic——catch_unwind 捕获，本帧跳过）
+/// Then  窗口存活（树可查、count 按钮仍可点）——状态复位后下一帧恢复
+#[test]
+fn panic_in_build_is_caught_and_window_survives() {
+    let mut app = UiTest::launch("panic");
+    app.expect_text_timeout("count: 0", Duration::from_secs(5));
+    // 点 Panic——panic 被 catch_unwind 捕获（本帧跳过），窗口不应崩
+    let (px, py, pw, ph) = app.find_tag("panic-btn").expect("找不到 panic 按钮");
+    app.click(px + pw / 2.0, py + ph / 2.0);
+    // 等待 panic 处理（catch_unwind → 下帧恢复）——树仍可查即窗口存活
+    std::thread::sleep(Duration::from_millis(500));
+    app.refresh();
+    assert!(app.tree().is_some(), "panic 后窗口应存活（树可查）");
+    // 后续交互正常：点 Count 两次
+    let (cx, cy, cw, ch) = app.find_tag("count-btn").expect("找不到 count 按钮");
+    app.click(cx + cw / 2.0, cy + ch / 2.0);
+    app.expect_text_timeout("count: 1", Duration::from_secs(5));
+    app.click(cx + cw / 2.0, cy + ch / 2.0);
+    app.expect_text_timeout("count: 2", Duration::from_secs(5));
+}
