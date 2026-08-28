@@ -497,11 +497,17 @@ impl<A: LazyAxis> LazyList<A> {
 /// 不需要它（锚点权威，测量期自动用缓存推导像素）。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ItemHeightCache {
+    /// index 视图（index → 高度）：供连续扫描（prefix/anchor/visible_range）
+    /// 与越界预估使用；数据前部增删/重排后此视图会错位，由 [`rebase`] 校正。
     pub heights: Vec<f32>,
+    /// key 视图（item key → 高度）：跨数据变化保持"项身份 → 高度"——
+    /// 数据增删/重排后，同一 key 的项高度不因 index 平移而丢失。私有，
+    /// 由 `record_keyed` 写入、`rebase` 读回迁移到 index 视图。
+    keyed: std::collections::HashMap<u64, f32>,
 }
 
 impl ItemHeightCache {
-    pub fn new() -> Self { Self { heights: Vec::new() } }
+    pub fn new() -> Self { Self { heights: Vec::new(), keyed: std::collections::HashMap::new() } }
 }
 
 impl ItemHeightCache {
@@ -513,6 +519,44 @@ impl ItemHeightCache {
     pub fn record(&mut self, index: usize, h: f32) {
         if self.heights.len() <= index { self.heights.resize(index + 1, 0.0); }
         self.heights[index] = h;
+    }
+
+    /// 按 item key 记录高度（写入 key 视图）。测量侧在写 index 视图的同时
+    /// 调用，使跨数据变化时项身份 → 高度 的关系得以保留。
+    pub fn record_keyed(&mut self, key: u64, h: f32) {
+        self.keyed.insert(key, h);
+    }
+
+    /// 按 item key 读高度（无记录 → None）。跨数据变化时用于在迁移前确认
+    /// 某项是否有已知高度。
+    pub fn height_keyed(&self, key: u64) -> Option<f32> {
+        self.keyed.get(&key).copied()
+    }
+
+    /// 数据变化后的校正：把 key 视图中仍存在的项高度迁移到当前 index 视图
+    /// 的正确位置（`keys[i]` = 当前数据第 i 项的 key）。
+    ///
+    /// - 同 key 项：从 `keyed` 迁移到 `heights[新 index]`（数据增删/重排后
+    ///   高度跟随项身份，不因位置漂移而丢失）。
+    /// - 无 key 记录的项：`heights` 置 0 → 走预估/重测。
+    /// - 数据变短：清空超出 `keys.len()` 的残留高度。
+    ///
+    /// 幂等：key 没变的项高度保持，key 变化的项由新 key 的 `keyed` 决定。
+    /// 可见项随后由测量重新填充（Enter 路径 record 覆盖），此处只保证
+    /// 不可见项的缓存高度在数据变化后仍与正确项对应。
+    pub fn rebase(&mut self, keys: &[u64]) {
+        self.heights.clear();
+        self.heights.resize(keys.len(), 0.0);
+        for (i, &k) in keys.iter().enumerate() {
+            if let Some(&h) = self.keyed.get(&k) {
+                self.heights[i] = h;
+            }
+        }
+        // 清理已从数据中消失的 key 记录（防 keyed 无限膨胀；项后续可能
+        // 复用新 key 重建——旧记录无意义）。用 HashSet 加速 contain 查询，
+        // 避免 `keys.contains` 对每个 keyed 键做 O(n) 线性扫描（O(n²)）。
+        let live: std::collections::HashSet<u64> = keys.iter().copied().collect();
+        self.keyed.retain(|k, _| live.contains(k));
     }
 }
 
@@ -599,10 +643,32 @@ impl<A: LazyAxis> LazyList<A> {
         let is_scrolling = ctx.remember(|| crate::core::state::State::new(false)).get();
         let content_height = ctx.remember(|| crate::core::state::State::new(0.0f32)).get();
         let fling_limit = ctx.remember(|| crate::core::state::State::new(0.0f32)).get();
+        // 数据 key 序列签名（方案 A：检测数据变化——total 变或同 total 重排/
+        // 替换。签名变化 → 高度缓存按 item key 迁移到正确 index，避免 index
+        // 平移导致旧高度错位）
+        let data_sig = ctx.remember(|| crate::core::state::State::new(0u64)).get();
+
+        // 当前数据全局 index → item key（供 policy 写 key 视图 + 数据变化迁移）。
+        // 无 key 工厂的段（items_plain）用索引自身作 key——同 key 段内容替换
+        // 时无法区分（固有局限，见文档）；有 key 段（items_from/item_keyed）
+        // 身份精确追踪。
+        let keys: Vec<u64> = (0..total).map(|g| intervals.key_of(g).unwrap_or(g as u64)).collect();
+        // 数据签名（FNV-1a 折叠 key 序列）——检测数据变化：total 变或同 total
+        // 重排/替换（key 序列变）。变化时按 item key 迁移高度缓存。
+        let mut sig = 0xcbf29ce484222325u64;
+        for &k in &keys { sig ^= k; sig = sig.wrapping_mul(0x100000001b3); }
+        if data_sig.get() != sig {
+            data_sig.set(sig);
+            let mut c = cache.get();
+            c.rebase(&keys);
+            cache.set_silent(c);
+        }
 
         // key 校正：数据前部增删后，用 last_known_first_key 找回原 first visible 项。
         // ⚠ 仅当 total 变化（数据增删）时校正——正常滚动时锚点项变化是用户滚动
-        // 的结果，绝不能校正回原位置（实测：每帧校正会把滚动拉回 0）
+        // 的结果，绝不能校正回原位置（实测：每帧校正会把滚动拉回 0）。
+        // ⚠ 必须在 rebase 之后：offset 校正用 prefix_height 依赖**按 key 迁移后**
+        // 的高度缓存（rebase 前 index 视图还是旧数据，prefix 算错 → offset 错位）。
         let known_total = state.known_total.clone();
         let total_changed = known_total.get() != total;
         if total_changed {
@@ -725,6 +791,7 @@ impl<A: LazyAxis> LazyList<A> {
             content_padding: self.content_padding,
             cross_padding: self.cross_padding,
             globals,
+            keys,
             sticky_children,
             pin,
             reverse: self.reverse,
@@ -792,6 +859,9 @@ pub(crate) struct LazyListPolicy<A: LazyAxis> {
     pub cross_padding: (f32, f32),
     /// 注册顺序 → 全局 index（sticky 项排在最后——画在最上层）
     pub globals: Vec<usize>,
+    /// 当前数据全局 index → item key（build 期从 intervals 提取；
+    /// measure 用其写 cache 的 key 视图——跨数据变化保持项身份高度）
+    pub keys: Vec<u64>,
     /// 注册序中 sticky 子节点的 child 下标（全局升序）
     pub sticky_children: Vec<usize>,
     /// 钉住的 sticky header 全局 index（build 期回溯；钉住时锚点 = (pin, 0)）
@@ -846,7 +916,13 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         // 实际实现：build 把 (start, end) 传给 policy，这里按序写回
         let mut cache = self.cache.get();
         for (i, (h, _)) in measured.iter().enumerate() {
-            cache.record(self.globals[i], *h);
+            let global = self.globals[i];
+            cache.record(global, *h);
+            // 同步写 key 视图（keys[global] = 该全局项的 item key）——跨数据
+            // 变化保持"项身份 → 高度"，rebase 据此迁移到正确的 index
+            if let Some(&k) = self.keys.get(global) {
+                cache.record_keyed(k, *h);
+            }
         }
         // 内容总高：注册项实测 + 未注册项预估（供 apply_scroll_delta 算 max_offset）；
         // 含 主轴 contentPadding（对齐 Compose：max_offset = before + 内容 + after - 视口）
@@ -1008,6 +1084,64 @@ mod tests {
         // 记录越界自动扩展
         c.record(5, 20.0);
         assert_eq!(c.height(5), 20.0);
+    }
+
+    // ── 高度缓存：按 item key 迁移（方案 A——数据变化不因 index 平移错位）──
+    #[test]
+    fn height_cache_keyed_rebase_follows_identity() {
+        // 场景：原数据 0..6（key = 自身），index 2（key=2）实测高 30、index 5（key=5）
+        // 实测高 20。随后数据前部插入 1 项（key=100）→ 原 key 2 移到 index 3、key 5
+        // 移到 index 6。rebase 后高度应跟随 key 而非旧 index。
+        let mut c = ItemHeightCache::default();
+        c.record(2, 30.0);
+        c.record_keyed(2, 30.0);
+        c.record(5, 20.0);
+        c.record_keyed(5, 20.0);
+        // 新数据：key 序列 = [100, 0, 1, 2, 3, 4, 5]
+        let new_keys = [100u64, 0, 1, 2, 3, 4, 5];
+        c.rebase(&new_keys);
+        // key=2 现在 index 3 → 高度 30 迁移过去
+        assert_eq!(c.height(3), 30.0, "key=2 项应迁到 index 3");
+        // key=5 现在 index 6 → 高度 20 迁移过去
+        assert_eq!(c.height(6), 20.0, "key=5 项应迁到 index 6");
+        // 新插入项 key=100（index 0）无记录 → 预估
+        assert_eq!(c.height(0), LAZY_ITEM_ESTIMATED_HEIGHT, "新项走预估");
+        // 原 index 2 处现在对应 key=1（无记录）→ 预估（不再残留 30）
+        assert_eq!(c.height(2), LAZY_ITEM_ESTIMATED_HEIGHT, "旧 index 处不残留旧高度");
+        // 数据变短：截断后越界高度清除
+        c.record_keyed(9, 55.0); // 模拟曾测过 key=9（现不在数据中）
+        c.rebase(&[100u64, 0, 1, 2, 3, 4]); // 新 total 6
+        assert_eq!(c.heights.len(), 6, "数据变短清空越界高度");
+        assert_eq!(c.height_keyed(9), None, "消失的 key 记录被清理");
+    }
+
+    // 同 total 数据变化（方案 A 核心动机）：total 不变但 key 序列变化（重排/
+    // 中段删除/替换）时，高度仍按 key 跟随而非 index。
+    #[test]
+    fn height_cache_keyed_rebase_same_total_reorder_and_delete() {
+        // 原数据 [a=30, b=40, c=50]（key = a/b/c 映射）
+        let mut c = ItemHeightCache::default();
+        c.record_keyed(10, 30.0); // a
+        c.record_keyed(20, 40.0); // b
+        c.record_keyed(30, 50.0); // c
+        // 场景 1：同 total 重排 [a,b,c] → [c,a,b]（key 序列 [30,10,20]，total 均 3）
+        c.rebase(&[30u64, 10, 20]);
+        assert_eq!(c.heights.len(), 3, "同 total 重排不改变长度");
+        assert_eq!(c.height(0), 50.0, "index 0 现在是 c(30) 高 50");
+        assert_eq!(c.height(1), 30.0, "index 1 现在是 a(10) 高 30");
+        assert_eq!(c.height(2), 40.0, "index 2 现在是 b(20) 高 40");
+        // 场景 2：中段删除 [a,b,c] → [a,c]（total 3→2，key 序列 [10,30]）
+        c.rebase(&[10u64, 30]);
+        assert_eq!(c.heights.len(), 2, "删除后长度收缩");
+        assert_eq!(c.height(0), 30.0, "index 0 是 a(10) 高 30 保持");
+        assert_eq!(c.height(1), 50.0, "index 1 是 c(30) 高 50 迁移到位");
+        assert_eq!(c.height_keyed(20), None, "被删的 b 高度记录清除");
+        // 场景 3：替换（同 key 段内容变化——文档承认的局限：key 不变则不失效，
+        // 此处 key 变才正确迁移）。[a,c] → [a,x,c]（前部插入 x）
+        c.rebase(&[10u64, 99, 30]);
+        assert_eq!(c.height(0), 30.0, "a 保持");
+        assert_eq!(c.height(1), LAZY_ITEM_ESTIMATED_HEIGHT, "新 key 99 走预估");
+        assert_eq!(c.height(2), 50.0, "c 迁移到 index 2");
     }
 
     // ── 锚点转换 ──

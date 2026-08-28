@@ -2,7 +2,7 @@
 
 > 状态：架构审计与增量修复跟踪。本轮只修改 ownerless State/frame 目标文件和本审计文档，不回滚既有 dirty worktree。
 > 范围：D:/Projects/winia，v2 分支；当前工作树观测为 origin/v2 ahead 41。
-> 结论：3.1 owner TLS 泄漏已由 ownerless StateSignal 基础切片修复；3.2/3.4 已有 RuntimeFrame、layout-only 和布局事务 retry 基础切片；3.9/6.1/6.2/6.3 已由多窗口上下文隔离修复；3.10/6.4/6.5 已部分修复；Phase 1（所有权与恢复边界）三项中第 2 项（guard 体系）与第 3 项（依赖收敛）已完成，第 1 项（per-Window context）仍有 debug 事件/动画表/事件循环三处全局单态残留——经评估 2 处为本质全局、1 处为代码美化，均已决策不继续清理（原因见 §11 checklist）；剩余 Phase 2（坐标/复用/LayoutNode）、Phase 3（LazyList/TextField）、Phase 4（CompositionLocal/Theme/E2E）和其他风险仍开放。
+> 结论：3.1 owner TLS 泄漏已由 ownerless StateSignal 基础切片修复；3.2/3.4 已有 RuntimeFrame、layout-only 和布局事务 retry 基础切片；3.9/6.1/6.2/6.3 已由多窗口上下文隔离修复；3.10/6.4/6.5 已部分修复；Phase 1（所有权与恢复边界）三项中第 2 项（guard 体系）与第 3 项（依赖收敛）已完成，第 1 项（per-Window context）仍有 debug 事件/动画表/事件循环三处全局单态残留——经评估 2 处为本质全局、1 处为代码美化，均已决策不继续清理（原因见 §11 checklist）；剩余 Phase 2（坐标/复用/LayoutNode）、Phase 3（LazyList/TextField——其中 height cache 按 key 缓存已实施，见 §Phase 3.1）、Phase 4（CompositionLocal/Theme/E2E）和其他风险仍开放。
 
 ## 1. 基线与验证状态
 
@@ -427,7 +427,32 @@ UI tree 由 winia/src/debug.rs:168-228 手工拼接。TextContent 做了转义�
 
 ### Phase 3：LazyList 与 TextField
 
-1. 用 stable item key 或内容 generation 管理 LazyList height cache，保证同 total 数据变化也能失效。
+1. [x] 用 stable item key 管理 LazyList height cache，保证同 total 数据变化也能失效（方案 A——按 item key 缓存高度，已实施）
+
+   **目标**：`ItemHeightCache` 此前按 global index 缓存高度（`Vec<f32>`），数据前部增删/重排导致 index 平移时旧高度错位（同 key 的项高度被错误继承到别的位置）；"同 total 但内容变化"无任何失效机制。改为让高度缓存跟随**项身份（item key）**而非位置。
+
+   **子项**：
+   - [x] `ItemHeightCache` 增加 key 视图：新增私有 `keyed: HashMap<u64, f32>`（item key → 高度），公开方法 `record_keyed(key, h)` / `height_keyed(key)` / `rebase(&[u64])`；保留 `heights: Vec<f32>` index 视图与 `record`/`height` 接口（向后兼容，公开 API 签名不变，`PartialEq`/`Clone`/`Default` 仍可用）。
+   - [x] `LazyListPolicy` 增加 `keys: Vec<u64>` 字段（当前数据 global index → item key），measure 阶段在写 index 视图的同时 `record_keyed(keys[global], h)` 写 key 视图。
+   - [x] `LazyList::build` 每次从 `intervals` 提取 `keys`（`(0..total).map(|g| key_of(g))`，无 key 段用索引自身）；用 FNV-1a 折叠 key 序列作数据签名（`data_sig` State），签名变化（total 变或同 total 重排/替换）时调 `cache.rebase(&keys)`——把 key 视图里仍存在的项高度迁移到正确 index，清空越界高度与消失的 key 记录。
+   - [x] **rebase 必须位于 `total_changed` 的 offset 校正之前**（debug-server 验证发现）：`total_changed` 用 `last_known_first_key` + `prefix_height` 重算 offset，若此刻 cache 仍是旧 index 视图（未 rebase），prefix 按旧数据 index 算错 → offset 错位（实测插入 10 项后 firstVisible=62 offset=3840，应为 firstVisible=60 offset=3696，差 144）。先 rebase 再校正则精确。
+
+   **效果**：数据前部增删/重排后，同一 item key 的项高度精确跟随（不因 index 平移丢失或错位）；新插入项走预估后由测量填充；数据变短时越界高度清除。滚动位置与已测高度同时稳定。
+
+   **局限**（方案 A 固有，非本实现缺陷）：
+   - **同 key 内容变化**（item id 没变但内容高度变了，如某行文本更新且 key 仍是数据 id）：key 相同 → 高度缓存复用旧值（一帧陈旧）。根因是信息论局限——框架无法自动区分"项没变"与"项内容变了但身份没变"。Compose 语义同样如此，靠约定"内容变化应伴随 key 变化"（key = 内容哈希 或数据版本）。
+   - **无 key 段（`items_plain`，index 即 key）**：无法追踪项身份，数据前部增删仍会错位（这是放弃 key 的固有代价，Compose 同理）。建议使用 `items_from`/`item_keyed` 提供稳定 key。
+   - **数据签名用 key 序列 FNV 折叠**：不同 key 序列可能碰撞（64 位 FNV 碰撞概率极低，理论存在）；碰撞会导致漏触发 rebase（连带 `total_changed` 的 offset 校正读到未 rebase 的旧 cache，同样受影响），实际可忽略。
+
+   **提升方案**（如需彻底解决"同 key 内容变化"）：
+   - 方向 B：增加显式 `.data_version(n)`（内容 generation）参数，用户数据内容变化但 key 不变时递增，build 检测到 generation 变化即强制重测受影响项（或清空缓存）。与方案 A 可叠加：key 决定身份迁移，generation 决定内容失效。
+   - 更细：rebase 只对 `keyed` 中缺失的项（新 key 或无 key 段）强制重测，而非整表清空——已由 `record` 逐项覆盖达成。
+   - 性能：当前 `rebase` 每次数据变化 O(n) 重建 index 视图；若列表极大且变化频繁，可改为按 key 直接读写（彻底弃用 index 视图），但 `prefix_height`/`anchor_from_offset`/`visible_range` 依赖 index 连续扫描与越界预估，改动面大，未做。
+
+   **验证**：新增单元测试 `height_cache_keyed_rebase_follows_identity`（前插 1 项后 key=2→index 3、key=5→index 6 高度迁移正确；新项走预估；旧 index 不残留；数据变短清越界 + 清消失 key）；既有 lazy 测试 27 项全通过；完整 `cargo test -p winia --lib` 634 项通过。另用 debug-server 交互验证 demo `winia/examples/hc_verify_demo.rs`：100 项（48/96 混合高，key=id）滚动到项 50 → 连续前部插入 10 项三次，`firstVisible` 精确 50→60→70→80、`offset` 3216→3696→4176→4656（每次 +480 = 10×48），可见项始终保持 Item 50 在视口——高度缓存与滚动位置按 key 精确跟随。
+
+   **涉及文件**：`winia/src/ui/lazy_column.rs`（`ItemHeightCache`、`LazyListPolicy`、`LazyList::build`）
+
 2. 为 measure/build convergence 增加显式的窗口变化重组通道。
 3. 将 TextField blink 纳入 effect 生命周期，统一 UTF-8 byte offset、IME cursor 单位和 composing undo 快照。
 4. 清理 dual selection source，明确 registrar 与 TextFieldValue 的单一事实来源。
