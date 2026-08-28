@@ -701,9 +701,13 @@ impl<A: LazyAxis> LazyList<A> {
             state.last_known_first_key.set(Some(k));
         }
 
-        // 组合期窗口高度：用固定大值（真实视口测量期回写，但 build 不依赖——
-        // 避免约束振荡（Column 内容驱动给 ∞ → 回写 ∞ → build 读 ∞ 的循环））
-        let viewport_h = 2000.0f32;
+        // 组合期窗口高度：读上一帧 measure 回写的真实视口（方向一——build 感知
+        // 真实视口，resize 后按新视口组合足够项）。此前用固定 2000，resize 放大
+        // 超过 2000 时 build 组合不足、底部可见项缺失。
+        // ⚠ 约束振荡：fill_max_height 时 viewport 由外部约束决定（稳定，不振荡）；
+        // wrap-content 时 measure 用 `< f32::MAX` 判定回退缓存（不写 ∞），build 读
+        // 缓存稳定。故 build 读 viewport 安全。下限 1.0 防 0/负值。
+        let viewport_h = viewport.get().max(1.0);
         let (mut start, end) = visible_range(
             &cache_ref, first_index, first_item_offset,
             viewport_h, self.spacing, total,
@@ -891,7 +895,9 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         // 无限膨胀（实测：f32::MAX 视口会让 clamp 把 offset 清零）
         let main_max = A::main_max(constraints);
         let vh = if main_max < f32::MAX && main_max > 0.0 {
-            self.viewport.set_silent(main_max);
+            // 非 silent set：viewport 变化（resize）→ 通知 build 重组，用新视口
+            // 补组合可见项（方向一）。值稳定时 PartialEq 去重不通知（无振荡）。
+            self.viewport.set(main_max);
             main_max
         } else {
             self.viewport.get()
@@ -2239,5 +2245,68 @@ mod tests {
         il.add(1, Some(Arc::new(|_| 42u64)), c1, false);
         il.add(1, Some(Arc::new(|_| 42u64)), c2, false);
         il.rebuild(); // 应 panic
+    }
+
+    // ── measure/build convergence（审计 Phase 3.2）：窗口 resize 放大后，build
+    //    是否按真实视口收敛可见范围？──
+    /// 同一 Composer 跨多帧渲染（模拟窗口 resize 后同一列表的收敛）。
+    /// 每帧对 `heights[i]` 做 compose+layout；渲染最后帧，返回视口底部 60px
+    /// 内是否有文本（判断可见项是否被 build 组合覆盖）。
+    fn render_lazy_frames_bottom_text(build: impl Fn(&mut ComposeCtx, &LazyListState) + Send, heights: &[f32]) -> bool {
+        use skia_safe::{Color as SkColor, surfaces};
+        let theme = crate::ui::theme::ThemeColors::light_from_seed(0x6750A4);
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        let last_h = *heights.last().unwrap_or(&400.0);
+        for &h in heights {
+            composer.compose(|ctx| crate::ui::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| build(ctx, &state)));
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, h));
+        }
+        let mut surface = surfaces::raster_n32_premul((400, last_h as i32)).unwrap();
+        let canvas = surface.canvas();
+        canvas.clear(SkColor::WHITE);
+        let root = composer.layout_root_idx().expect("root");
+        let nodes = composer.arena_nodes();
+        crate::render::render(nodes, root, canvas);
+        let pm = surface.peek_pixels().expect("pixmap");
+        let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+        let w = 400usize;
+        let h = last_h as usize;
+        // 检查视口底部 60px 是否有文本行（可见项若被 build 组合覆盖则有文本）
+        let mut text_rows = 0;
+        for y in (h.saturating_sub(60))..h {
+            let mut has = false;
+            for x in (0..w).step_by(4) {
+                let p = px[y * w + x];
+                has |= p[0] < 120 && p[1] < 120 && p[2] < 120;
+            }
+            if has { text_rows += 1; }
+        }
+        text_rows > 5
+    }
+
+    #[test]
+    fn resize_to_larger_viewport_converges_to_cover_visible_items() {
+        // 视口从 400 放大到 2500（超过原固定 2000 估算窗）。方向一后 build 感知
+        // 真实视口（跨帧信号），经多帧收敛后底部可见项应被组合覆盖。
+        // 帧序：400（初始）→ 2500（resize）→ 2500（收敛帧——build 读到 2500）。
+        let items: Arc<Vec<u64>> = Arc::new((0..200).collect());
+        let covered = render_lazy_frames_bottom_text(
+            |ctx, _state| {
+                LazyColumn::new()
+                    .modifier(Modifier::new().fill_max_width().fill_max_height())
+                    .items_from(items.clone(), |v: &u64| *v, |ctx, _i, v| {
+                        crate::ui::text::Text::new(format!("Item {}", v))
+                            .font_size(14.0)
+                            .modifier(Modifier::new().padding(12.0))
+                            .build(ctx);
+                    })
+                    .build(ctx);
+            },
+            &[400.0, 2500.0, 2500.0],
+        );
+        eprintln!("resize 到 2500 并收敛后视口底部是否被可见项覆盖: {covered}");
+        // 方向一实现后：build 感知真实视口，跨帧收敛，底部项应被组合覆盖。
+        assert!(covered, "方向一后放大视口应收敛覆盖底部可见项（covered={covered}）");
     }
 }

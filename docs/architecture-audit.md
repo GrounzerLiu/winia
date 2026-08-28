@@ -453,7 +453,24 @@ UI tree 由 winia/src/debug.rs:168-228 手工拼接。TextContent 做了转义�
 
    **涉及文件**：`winia/src/ui/lazy_column.rs`（`ItemHeightCache`、`LazyListPolicy`、`LazyList::build`）
 
-2. 为 measure/build convergence 增加显式的窗口变化重组通道。
+2. [x] 为 measure/build convergence 增加显式的窗口变化重组通道（方向一——build 感知真实视口，跨帧收敛；已在 `lazy-convergence` 分支实施）
+
+   **目标**：`LazyColumn/LazyRow` build 此前用固定 `viewport_h = 2000.0` 估算可见范围（`lazy_column.rs` 组合期），不感知真实视口。窗口 resize 放大超过 2000px 时，build 组合不足 → 底部可见项不被组合 → 渲染空白（**实测确认**：跨帧测试视口 400→2500，底部 `covered=false`）。
+
+   **根因**：winia 命令式组合架构——build 立即注册节点，**无 Compose 的 LazyLayout 测量期组合**（`lazy_column.rs:14-15` 作者已注明差异）。measure 只放置 build 已注册的项，不能新增，故 build 必须感知真实视口才能组合足够项。
+
+   **方案（方向一）**：
+   - build 读 `viewport` State（上一帧 measure 写回的真实视口）替代固定 2000：`let viewport_h = viewport.get().max(1.0)`。
+   - measure 的 `viewport.set_silent(main_max)` 改为非 silent `set`——viewport 变化（resize）时通知 build 重组；值稳定时 `PartialEq` 去重不通知（无振荡）。
+   - **约束振荡安全**：fill_max_height 时 viewport 由外部约束决定（稳定）；wrap-content 时 measure 用 `< f32::MAX` 判定回退缓存（不写 ∞），build 读缓存稳定。
+   - **收敛时序**：resize 帧 build 读旧视口（可能不足）→ measure 写回新视口（非 silent 通知 → pending）→ **下一帧** `recompose_layout_render` 的循环 compose 消费通知（app.rs:378-380 循环在 `layout()` 之前——measure 阶段的 set 通知不在同帧循环内处理，而是下一帧循环起点消费）→ build 用新视口补足。故收敛是**跨帧**（resize 帧 + 1 收敛帧），非同帧。较 Compose 的同帧测量期组合有至多 1 帧延迟，但优于"永不收敛"。
+
+   **验证**：新增跨帧测试 `resize_to_larger_viewport_converges_to_cover_visible_items`（同一 Composer 视口 400→2500→2500，底部可见项应被组合覆盖）——方向一前 `covered=false`，方向一后 `covered=true`。完整 `cargo test -p winia --lib` 636 项通过。debug-server 实操 demo `winia/examples/hc_conv_demo.rs`：LazyColumn 视口从 400 切到 2500，build 组合覆盖 Item 0..57（58 项）填满整个 2500 视口（此前固定 2000 只组合 ~46 项，底部缺失）。
+
+   **局限**：跨帧收敛有至多 1 帧的可见项短暂不足（resize 放大瞬间）；build 读的是上一帧视口，无法同帧感知（命令式架构限制）。Compose 的测量期组合能同帧规避，winia 需更大架构改动（延迟组合/measure 期补注册）才能对标。
+
+   **涉及文件**：`winia/src/ui/lazy_column.rs`（`LazyList::build` 读 viewport、`LazyListPolicy::measure` 非 silent set）
+
 3. 将 TextField blink 纳入 effect 生命周期，统一 UTF-8 byte offset、IME cursor 单位和 composing undo 快照。
 4. 清理 dual selection source，明确 registrar 与 TextFieldValue 的单一事实来源。
 
