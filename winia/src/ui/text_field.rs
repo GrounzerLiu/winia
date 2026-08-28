@@ -70,8 +70,16 @@ impl TextChange {
                 value.selection = (pos + text.len())..(pos + text.len());
             }
             TextChange::Deleted { range } => {
-                value.text.drain(range.clone());
-                value.selection = range.start..range.start;
+                // 防御 clamp（§5.4）：stale selection/IME/registrar range 可能越界
+                // 或落在多字节字符中间——drain 前对齐 char 边界 + 限制在文本长度内，
+                // 否则字符串边界 panic
+                let len = value.text.len();
+                let s = value.text.floor_char_boundary(range.start.min(len));
+                let e = value.text.floor_char_boundary(range.end.min(len).max(s));
+                if s < e {
+                    value.text.drain(s..e);
+                }
+                value.selection = s..s;
             }
         }
     }
@@ -89,8 +97,8 @@ impl TextChange {
 /// - 上限 100 条，超出丢最旧）
 #[derive(Default)]
 struct UndoManager {
-    undo_stack: Vec<(String, Range<usize>)>,
-    redo_stack: Vec<(String, Range<usize>)>,
+    undo_stack: Vec<(String, Range<usize>, Option<Range<usize>>)>,
+    redo_stack: Vec<(String, Range<usize>, Option<Range<usize>>)>,
 }
 
 const UNDO_MAX_SNAPSHOTS: usize = 100;
@@ -100,16 +108,17 @@ impl UndoManager {
         Self::default()
     }
 
-    /// 编辑前调用：记录 (text, selection) 快照；新编辑丢弃 redo 分支
-    fn push(&mut self, text: &str, selection: &Range<usize>) {
+    /// 编辑前调用：记录 (text, selection, composing_range) 快照；新编辑丢弃 redo 分支
+    fn push(&mut self, text: &str, selection: &Range<usize>, composing: Option<Range<usize>>) {
         if let Some(last) = self.undo_stack.last_mut() {
             if last.0 == text {
-                // 同文本：只更新 selection（光标移动不产生新条目）
+                // 同文本：只更新 selection 与 composing（光标移动/组合态变化不产生新条目）
                 last.1 = selection.clone();
+                last.2 = composing;
                 return;
             }
         }
-        self.undo_stack.push((text.to_string(), selection.clone()));
+        self.undo_stack.push((text.to_string(), selection.clone(), composing));
         self.redo_stack.clear();
         if self.undo_stack.len() > UNDO_MAX_SNAPSHOTS {
             self.undo_stack.remove(0);
@@ -117,14 +126,14 @@ impl UndoManager {
     }
 
     /// 撤销：当前状态入 redo 栈，返回上一快照
-    fn undo(&mut self, current: (String, Range<usize>)) -> Option<(String, Range<usize>)> {
+    fn undo(&mut self, current: (String, Range<usize>, Option<Range<usize>>)) -> Option<(String, Range<usize>, Option<Range<usize>>)> {
         let s = self.undo_stack.pop()?;
         self.redo_stack.push(current);
         Some(s)
     }
 
     /// 重做：当前状态入 undo 栈，返回 redo 快照
-    fn redo(&mut self, current: (String, Range<usize>)) -> Option<(String, Range<usize>)> {
+    fn redo(&mut self, current: (String, Range<usize>, Option<Range<usize>>)) -> Option<(String, Range<usize>, Option<Range<usize>>)> {
         let s = self.redo_stack.pop()?;
         self.undo_stack.push(current);
         Some(s)
@@ -1019,6 +1028,11 @@ impl TextField {
         // 闪到可见并重启周期，打字时不消失）
         let last_blink = ctx.remember(|| std::sync::Arc::new(parking_lot::Mutex::new(std::time::Instant::now()))).get();
         let blink_started = ctx.remember(|| false);
+        // 组合生命周期协程作用域（§3.11 修复）：blink 任务纳入 effect 生命周期——
+        // TextField 移除时 ScopeState::drop 自动 abort，不再裸 tokio::spawn 泄漏。
+        // ⚠ 必须在 if 外无条件调用（内部 remember 需要稳定的组合位置 key——
+        // 放进条件分支会让后续 remember 错位）
+        let scope = crate::effect::remember_coroutine_scope(ctx);
         if !blink_started.get() {
             blink_started.set(true);
             let cv2 = cv.clone();
@@ -1029,7 +1043,7 @@ impl TextField {
             // 不 notify → 无重组）。修复：text_field_demo 17 字段每 ~500ms
             // 全量重组（每字段一个闪烁任务同步翻转）。
             let interaction2 = interaction.clone();
-            tokio::spawn(async move {
+            scope.spawn(async move {
                 loop {
                     // 100ms 轮询（500ms 相位粒度——交互重置精度 ±100ms）
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -1133,7 +1147,7 @@ impl TextField {
                 // Ctrl+A 全选
                 if ctrl && matches!(key, winit::keyboard::Key::Character(c) if c.eq_ignore_ascii_case("a")) {
                     let mut val = v.get();
-                    undo.lock().push(&val.text, &val.selection);
+                    undo.lock().push(&val.text, &val.selection, val.composing_range.clone());
                     val.selection = 0..val.text.len();
                     commit!(val);
                     return true;
@@ -1163,7 +1177,7 @@ impl TextField {
                         let mut val = v.get();
                         if val.composing_range.is_some() {
                             end_composition(&mut val);
-                            undo.lock().push(&val.text, &val.selection);
+                            undo.lock().push(&val.text, &val.selection, val.composing_range.clone());
                             commit!(val.clone());
                             if let Ok(cb) = cb.lock() { cb(val); }
                         }
@@ -1172,15 +1186,16 @@ impl TextField {
                 // Ctrl+Z 撤销 / Ctrl+Shift+Z、Ctrl+Y 重做
                 if ctrl && matches!(key, winit::keyboard::Key::Character(c) if c.eq_ignore_ascii_case("z")) {
                     let mut val = v.get();
-                    let cur = (val.text.clone(), val.selection.clone());
+                    let cur = (val.text.clone(), val.selection.clone(), val.composing_range.clone());
                     let restored = if shift || e.is_meta_pressed {
                         undo.lock().redo(cur)
                     } else {
                         undo.lock().undo(cur)
                     };
-                    if let Some((text, sel)) = restored {
+                    if let Some((text, sel, composing)) = restored {
                         val.text = text;
                         val.selection = sel;
+                        val.composing_range = composing;
                         commit!(val.clone());
                         if let Ok(cb) = cb.lock() { cb(val); }
                     }
@@ -1188,10 +1203,11 @@ impl TextField {
                 }
                 if ctrl && matches!(key, winit::keyboard::Key::Character(c) if c.eq_ignore_ascii_case("y")) {
                     let mut val = v.get();
-                    let cur = (val.text.clone(), val.selection.clone());
-                    if let Some((text, sel)) = undo.lock().redo(cur) {
+                    let cur = (val.text.clone(), val.selection.clone(), val.composing_range.clone());
+                    if let Some((text, sel, composing)) = undo.lock().redo(cur) {
                         val.text = text;
                         val.selection = sel;
+                        val.composing_range = composing;
                         commit!(val.clone());
                         if let Ok(cb) = cb.lock() { cb(val); }
                     }
@@ -1200,7 +1216,7 @@ impl TextField {
                 // Ctrl+X 剪切
                 if ctrl && matches!(key, winit::keyboard::Key::Character(c) if c.eq_ignore_ascii_case("x")) {
                     let mut val = v.get();
-                    undo.lock().push(&val.text, &val.selection);
+                    undo.lock().push(&val.text, &val.selection, val.composing_range.clone());
                     let (s, e) = (val.selection.start.min(val.selection.end), val.selection.start.max(val.selection.end));
                     if s != e {
                         clipboard_set_text(&val.text[s..e]);
@@ -1216,7 +1232,7 @@ impl TextField {
                     let Some(clip) = clipboard_get_text() else { return true; };
                     let clip = if single_line { clip.replace(['\n', '\r'], " ") } else { clip };
                     let mut val = v.get();
-                    undo.lock().push(&val.text, &val.selection);
+                    undo.lock().push(&val.text, &val.selection, val.composing_range.clone());
                     let (s, e) = (val.selection.start.min(val.selection.end), val.selection.start.max(val.selection.end));
                     val.text.replace_range(s..e, &clip);
                     let caret = s + clip.len();
@@ -1228,7 +1244,7 @@ impl TextField {
                 let mut val = v.get();
                 // 每次键处理前快照（对齐 Compose forceNextSnapshot：
                 // 编辑与移动都会记录——同文本合并 selection）
-                undo.lock().push(&val.text, &val.selection);
+                undo.lock().push(&val.text, &val.selection, val.composing_range.clone());
                 // 词级移动（Ctrl+←/→；Shift 扩展选区）
                 match key {
                     winit::keyboard::Key::Named(named) if ctrl => match named {
@@ -1776,12 +1792,19 @@ impl TextField {
             let v = value.clone();
             let registrar = registrar.clone();
             let mapping = offset_mapping.clone();
+            let undo = undo.clone();
             ctx.set_current_node_ime_callback(Box::new(move |text, cursor| {
                 let mut val = v.get();
                 // 首次 Preedit（进入新组合，此前无 composing）：删用户选区
                 // （替换语义——选中文本输入拼音时立即移除，Compose 行为）；
                 // 组合更新（已有 composing）不删（组合文本替换自身）
                 let first_preedit = val.composing_range.is_none();
+                // §5.2：首次 Preedit 进入新组合——**修改前**快照（含当前 composing
+                // =None 状态），使 Ctrl+Z 能回退到组合输入前。组合更新不 push
+                // （同文本合并可吸收光标变化——避免组合期间每帧产生 undo 条目）。
+                if first_preedit {
+                    undo.lock().push(&val.text, &val.selection, val.composing_range.clone());
+                }
                 // 删除旧的 composing range（组合更新——收拢 selection，防越界）
                 end_composition(&mut val);
                 if first_preedit && val.selection.start != val.selection.end {
@@ -1800,7 +1823,9 @@ impl TextField {
                 }
                 // 插入新的预输入文本
                 if !text.is_empty() {
-                    let pos = val.selection.start;
+                    // P2（review）：pos 来自 selection——undo 恢复/registrar 拉回可能
+                    // 落在非字符边界，insert_str 前对齐（防 panic）
+                    let pos = val.text.floor_char_boundary(val.selection.start.min(val.text.len()));
                     val.text.insert_str(pos, text);
                     let new_len = text.len();
                     val.composing_range = Some(pos..(pos + new_len));
@@ -1809,7 +1834,10 @@ impl TextField {
                     // 非零宽 → 渲染隐藏光标、且删除/替换语义混乱。Compose 中
                     // 组合文本的选中态由 composing underline 表达
                     let caret = if let Some((start, end)) = cursor {
-                        (pos + start.max(end)).min(val.text.len())
+                        // §5.3：IME cursor 是**字节索引**（winit 契约），可能落在
+                        // 多字节字符（CJK/emoji）中间——对齐 char 边界防止 selection
+                        // 落在非字符边界（后续 replace/drain/光标渲染错乱）
+                        val.text.floor_char_boundary((pos + start.max(end)).min(val.text.len()))
                     } else {
                         pos + new_len
                     };
@@ -2234,6 +2262,34 @@ mod tests {
         assert_eq!(val3.text, "aXb");
     }
 
+    // §5.4：Deleted range 防御 clamp——stale/越界/半字符 range 不 panic
+    #[test]
+    fn deleted_clamps_stale_and_half_char_ranges() {
+        // 正常删除
+        let mut val = TextFieldValue::new("hello");
+        TextChange::Deleted { range: 1..3 }.apply_to(&mut val);
+        assert_eq!(val.text, "hlo", "正常删除");
+        assert_eq!(val.selection, 1..1, "光标在删除起点");
+        // stale range 越界（start > len）：clamp 到末尾，不 panic
+        let mut val2 = TextFieldValue::new("abc");
+        TextChange::Deleted { range: 5..9 }.apply_to(&mut val2);
+        assert_eq!(val2.text, "abc", "越界 range 无操作（s==e==len）");
+        assert_eq!(val2.selection, 3..3);
+        // 半字符 range（CJK "你好" = 6 字节，range 落在字符中间）：对齐后删除整字符
+        let mut val3 = TextFieldValue::new("你好");
+        TextChange::Deleted { range: 1..4 }.apply_to(&mut val3);
+        assert_eq!(val3.text, "好", "1..4 对齐到 0..3 删 '你'");
+        assert_eq!(val3.selection, 0..0);
+        // end 越界：clamp 到 len
+        let mut val4 = TextFieldValue::new("abcd");
+        TextChange::Deleted { range: 2..99 }.apply_to(&mut val4);
+        assert_eq!(val4.text, "ab", "end 越界 clamp 到 len");
+        // 空文本：无操作
+        let mut val5 = TextFieldValue::new("");
+        TextChange::Deleted { range: 0..3 }.apply_to(&mut val5);
+        assert_eq!(val5.text, "");
+    }
+
     #[test]
     fn caret_up_down_line_targets() {
         let text = "ab\ncd\nef";
@@ -2306,52 +2362,85 @@ mod tests {
     fn undo_redo_basic_flow() {
         let mut um = UndoManager::new();
         // 每次编辑前 push 当前状态（与 kb_handler 调用方式一致）
-        um.push("", &(0..0));   // 输入 'h' 前
-        um.push("h", &(1..1));  // 输入 'e' 前
-        um.push("he", &(2..2)); // 输入 'x' 前
+        um.push("", &(0..0), None);   // 输入 'h' 前
+        um.push("h", &(1..1), None);  // 输入 'e' 前
+        um.push("he", &(2..2), None); // 输入 'x' 前
         // 当前状态 "hex"
-        let (t1, s1) = um.undo(("hex".into(), 3..3)).expect("undo1");
-        assert_eq!((t1.as_str(), s1.start), ("he", 2));
-        let (t2, s2) = um.undo((t1.clone(), s1.clone())).expect("undo2");
+        let (t1, s1, c1) = um.undo(("hex".into(), 3..3, None)).expect("undo1");
+        assert_eq!((t1.as_str(), s1.start, c1), ("he", 2, None));
+        let (t2, s2, _) = um.undo((t1.clone(), s1.clone(), None)).expect("undo2");
         assert_eq!((t2.as_str(), s2.start), ("h", 1));
         // redo 精确回到 undo 前的状态（当前状态入 redo 栈）
-        let (t3, _) = um.redo((t2.clone(), s2.clone())).expect("redo1");
+        let (t3, _, _) = um.redo((t2.clone(), s2.clone(), None)).expect("redo1");
         assert_eq!(t3, "he");
-        let (t4, _) = um.redo((t3.clone(), s1)).expect("redo2");
+        let (t4, _, _) = um.redo((t3.clone(), s1, None)).expect("redo2");
         assert_eq!(t4, "hex", "redo 回到当前状态（含未入栈的最新编辑）");
-        assert!(um.redo(("hex".into(), 3..3)).is_none(), "已回最新，无 redo");
+        assert!(um.redo(("hex".into(), 3..3, None)).is_none(), "已回最新，无 redo");
         // 栈底无 undo
         let mut um2 = UndoManager::new();
-        assert!(um2.undo(("x".into(), 1..1)).is_none(), "无快照时 undo 为 None");
+        assert!(um2.undo(("x".into(), 1..1, None)).is_none(), "无快照时 undo 为 None");
     }
 
     #[test]
     fn undo_merges_same_text_selection() {
         // 对齐 Compose：同文本只更新 selection（光标移动不产生新条目）
         let mut um = UndoManager::new();
-        um.push("abc", &(1..1));
-        um.push("abc", &(2..2)); // 同文本 → 合并
-        um.push("abc", &(3..3));
+        um.push("abc", &(1..1), None);
+        um.push("abc", &(2..2), None); // 同文本 → 合并
+        um.push("abc", &(3..3), None);
         assert_eq!(um.undo_stack.len(), 1, "三次同文本快照合并为一条");
         assert_eq!(um.undo_stack[0].1, 3..3, "selection 取最新");
         // 文本变化产生新条目；undo 回退文本与 selection
-        um.push("abc", &(3..3)); // 输入 'd' 前（与 base 同文本 → 合并）
-        let (t, s) = um.undo(("abcd".into(), 4..4)).unwrap();
+        um.push("abc", &(3..3), None); // 输入 'd' 前（与 base 同文本 → 合并）
+        let (t, s, _) = um.undo(("abcd".into(), 4..4, None)).unwrap();
         assert_eq!((t.as_str(), s.clone()), ("abc", 3..3));
         // 快照耗尽（同文本合并只有一条）
-        assert!(um.undo((t, s)).is_none(), "合并后仅一条快照");
+        assert!(um.undo((t, s, None)).is_none(), "合并后仅一条快照");
     }
 
     #[test]
     fn undo_truncates_redo_branch_on_new_edit() {
         let mut um = UndoManager::new();
-        um.push("a", &(1..1));
-        um.push("ab", &(2..2));
-        let _ = um.undo(("ab".into(), 2..2)); // 回到 "a"
+        um.push("a", &(1..1), None);
+        um.push("ab", &(2..2), None);
+        let _ = um.undo(("ab".into(), 2..2, None)); // 回到 "a"
         // 新编辑（undo 后输入 'c' → 当前 "a"）→ redo 分支丢弃
-        um.push("ac", &(2..2));
+        um.push("ac", &(2..2), None);
         assert!(um.redo_stack.is_empty(), "undo 后编辑丢弃 redo 分支");
         assert_eq!(um.undo_stack.len(), 2);
+    }
+
+    // §5.2：Undo 快照含 composing_range——preedit/undo 交错时组合范围可恢复
+    #[test]
+    fn undo_restores_composing_range() {
+        let mut um = UndoManager::new();
+        // 输入 'a' 前（无组合）
+        um.push("", &(0..0), None);
+        // 拼音组合态：文本 "你"（组合范围 0..3）
+        um.push("你", &(0..0), Some(0..3));
+        // 当前态："你好"（组合 0..3，光标在组合尾）
+        let cur = ("你好".to_string(), 3..3, Some(0..3));
+        let (t, s, c) = um.undo(cur).expect("undo");
+        assert_eq!((t.as_str(), s), ("你", 0..0));
+        assert_eq!(c, Some(0..3), "undo 恢复 composing_range");
+        // 同文本合并：composing 变化也合并更新（光标移动/组合态变化不产生新条目）
+        let mut um2 = UndoManager::new();
+        um2.push("ab", &(1..1), Some(1..2));
+        um2.push("ab", &(1..1), Some(1..1)); // 同文本 → 合并，composing 取最新
+        assert_eq!(um2.undo_stack.len(), 1, "同文本 composing 变化合并");
+        assert_eq!(um2.undo_stack[0].2, Some(1..1), "composing 取最新");
+        // redo 恢复 composing（与 undo 对称——review 补）
+        // 场景：文本 "a"（光标 1）→ 拼音组合为 "a你"（composing 1..4）
+        let mut um3 = UndoManager::new();
+        um3.push("a", &(1..1), None); // first_preedit 修改前快照（无组合）
+        let cur = ("a你".to_string(), 2..2, Some(1..4));
+        let (t, s, c) = um3.undo(cur).expect("undo");
+        assert_eq!((t.as_str(), s.clone()), ("a", 1..1));
+        assert_eq!(c, None, "undo 回到组合前（无 composing）");
+        // 当前态回到 "a"（无组合）——redo 应恢复 "a你" 及其 composing
+        let (t2, s2, c2) = um3.redo((t.clone(), s.clone(), None)).expect("redo");
+        assert_eq!((t2.as_str(), s2), ("a你", 2..2));
+        assert_eq!(c2, Some(1..4), "redo 恢复 composing_range");
     }
 
     /// 验证：restartable group 内读取 State → 更新后该 group 重组重跑

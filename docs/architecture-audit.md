@@ -471,7 +471,20 @@ UI tree 由 winia/src/debug.rs:168-228 手工拼接。TextContent 做了转义�
 
    **涉及文件**：`winia/src/ui/lazy_column.rs`（`LazyList::build` 读 viewport、`LazyListPolicy::measure` 非 silent set）
 
-3. 将 TextField blink 纳入 effect 生命周期，统一 UTF-8 byte offset、IME cursor 单位和 composing undo 快照。
+3. [x] 将 TextField blink 纳入 effect 生命周期，统一 UTF-8 byte offset、IME cursor 单位和 composing undo 快照（已实施）
+
+   **目标**：修复 §3.11（blink 裸 `tokio::spawn` 绕过生命周期）、§5.2（Undo 快照缺 composing_range）、§5.3（Preedit cursor 字节偏移可能非字符边界）、§5.4（Deleted range 无防御 clamp）。
+
+   **子项**：
+   - [x] **blink 纳入 effect 生命周期（§3.11）**：`text_field.rs` 的 `tokio::spawn` 改为 `remember_coroutine_scope(ctx).spawn(...)` + `blink_started` 守卫（只首次 spawn）。TextField 移除时 `ScopeState::drop` 自动 abort 任务，不再泄漏。⚠ `remember_coroutine_scope` 必须在 `if` 外无条件调用（内部 remember 需稳定组合位置 key——放进条件分支会让后续 remember 错位）。
+   - [x] **Deleted range 防御 clamp（§5.4）**：`TextChange::Deleted` 的 `text.drain(range)` 前用 `floor_char_boundary` 对齐 char 边界 + clamp 到文本长度，stale range 不再 panic。
+   - [x] **Preedit cursor 对齐 char 边界（§5.3）**：IME caret 计算 `(pos + start.max(end)).min(len)` 后用 `floor_char_boundary` 对齐——winit cursor 是字节索引，CJK/emoji 时可能落在多字节字符中间。
+   - [x] **Undo 快照含 composing_range（§5.2）**：`UndoManager` 栈类型 `(String, Range)` → `(String, Range, Option<Range>)`；`push` 加 composing 参数，`undo`/`redo` 返回三元组；5 个 push 调用点 + 2 组 undo/redo 调用点 + 测试全部更新。**IME Preedit 首次进入组合时在修改前 push**（`ime_callback` 的 `first_preedit` 分支，review 补）——组合输入可 undo 回退到组合前；组合更新不 push（同文本合并吸收光标变化）。preedit/commit/undo 交错时组合范围可恢复。
+
+   **验证**：新增测试 `undo_restores_composing_range`（undo 恢复 composing_range + 同文本 composing 变化合并）；`cargo test -p winia --lib` 637 项通过。debug-server 实操 text_field_demo：聚焦第一个字段后 `cursor_visible` 与 `node.cursor_visible` 均 ~500ms 周期交替（build 端 + 渲染端探针确认闪烁正常），空文本字段走 render 空文本分支 `draw_line` 画光标。
+
+   **涉及文件**：`winia/src/ui/text_field.rs`（blink scope、UndoManager、Deleted clamp、Preedit caret）
+
 4. 清理 dual selection source，明确 registrar 与 TextFieldValue 的单一事实来源。
 
 ### Phase 4：窗口平台与 E2E
