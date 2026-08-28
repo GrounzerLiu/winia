@@ -29,6 +29,7 @@ pub mod text;
 pub mod render;
 pub mod animation;
 pub mod nested_scroll;
+pub mod nav;
 pub mod app;
 pub mod effect;
 pub(crate) mod input;
