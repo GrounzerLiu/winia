@@ -139,7 +139,7 @@ LayoutNode.position 是父相对坐标。render 在 winia/src/render.rs:597-603 
 
 ### 3.5 HIGH：LayoutNode 复用留下旧语义字段
 
-位置：winia/src/core/materialize.rs:167-219、winia/src/core/materialize.rs:226-257、winia/src/layout/node.rs:145-202。复用节点会更新 modifier、direction、policy、on_remove、slot_key、dirty，但 cursor_callback、ime_callback、composing_range、selection_range、display_focused、registrar 等字段不是每次都清空。
+位置：winia/src/core/materialize.rs:167-219、winia/src/core/materialize.rs:226-257、winia/src/layout/node.rs:145-202。复用节点会更新 modifier、direction、policy、on_remove、slot_key、dirty，但 cursor_callback、ime_callback、composing_range、display_focused、registrar 等字段不是每次都清空。（`selection_range` 字段已于 Phase 3.4 删除——死代码清理，见 §Phase 3.4。）
 
 has_text_content、has_richtext_content、has_image_content 只在 LayoutNode::new 和 restore_from() 中初始化；materialize 当前直接赋值 n.modifier，却没有同步这些标记。measure_node 在 winia/src/layout/node.rs:1554-1605 依赖它们选择文本、图片或普通叶子路径。parent_id、scroll metadata 也应在统一更新路径中显式重置。
 
@@ -217,7 +217,7 @@ has_text_content、has_richtext_content、has_image_content 只在 LayoutNode::n
 
 ### 5.5 选区存在两个状态源
 
-位置：winia/src/render.rs:836-859、winia/src/ui/text_field.rs:1832-1869。registrar selection 在拖动中先更新，value/selection_range 通常 pointer-up 才同步；render 同时绘制两套高亮，重组或 blink tick 期间可能重复或回退。
+位置：winia/src/render.rs:836-859、winia/src/ui/text_field.rs:1832-1869。registrar selection 在拖动中先更新，value/selection_range 通常 pointer-up 才同步；render 同时绘制两套高亮，重组或 blink tick 期间可能重复或回退。（⚠ 此条"两套高亮"描述**不准确**——第二套高亮（读 `node.selection_range`）是死代码、永不执行，已于 Phase 3.4 删除；状态侧双源（value vs registrar）仍存在，见 §Phase 3.4。）
 
 ### 5.6 Focus restore 可能保留 stale focused_id
 
@@ -392,7 +392,7 @@ UI tree 由 winia/src/debug.rs:168-228 手工拼接。TextContent 做了转义�
 
    **子项**：
    - [x] content-kind 标记同步：materialize 复用路径按新 modifier 调用 `modifier_has_text`/`modifier_has_richtext`/`modifier_has_image` 更新 `has_*_content`，内容类型切换时清空 `cached_paragraph`（materialize.rs:187-202）。`edd4827` 已落地。
-   - [x] IME/cursor/selection/registrar 的 reset：复用路径在**内容类型切换**时调用 `clear_textfield_state` 清理（cursor_callback/ime_callback/composing_range/selection_range/registrar/display_focused/focus_color/focused）；**Enter 路径且 desc 不提供 IME/cursor 回调**（语义角色切换 TextField→普通 Text）时也清理，覆盖 content-kind 不变的场景。新测试 `test_materialize_reuse_clears_stale_textfield_state_on_role_switch`。
+   - [x] IME/cursor/selection/registrar 的 reset：复用路径在**内容类型切换**时调用 `clear_textfield_state` 清理（cursor_callback/ime_callback/composing_range/registrar/display_focused/focus_color/focused）；**Enter 路径且 desc 不提供 IME/cursor 回调**（语义角色切换 TextField→普通 Text）时也清理，覆盖 content-kind 不变的场景。新测试 `test_materialize_reuse_clears_stale_textfield_state_on_role_switch`。（`selection_range` 已于 Phase 3.4 删除。）
    - [x] scroll metadata 的 reset：`scroll_viewport_height/width`、`scroll_content_height/width`、`scroll_reverse` 在复用路径若新 modifier 无 scroll state 则重置为 0（measure_node 重新计算）。
    - [x] parent_id 的 reset：复用路径防御性重置为 `None`（`add_child` 在末尾重新设置正确的值）。
 
@@ -481,11 +481,26 @@ UI tree 由 winia/src/debug.rs:168-228 手工拼接。TextContent 做了转义�
    - [x] **Preedit cursor 对齐 char 边界（§5.3）**：IME caret 计算 `(pos + start.max(end)).min(len)` 后用 `floor_char_boundary` 对齐——winit cursor 是字节索引，CJK/emoji 时可能落在多字节字符中间。
    - [x] **Undo 快照含 composing_range（§5.2）**：`UndoManager` 栈类型 `(String, Range)` → `(String, Range, Option<Range>)`；`push` 加 composing 参数，`undo`/`redo` 返回三元组；5 个 push 调用点 + 2 组 undo/redo 调用点 + 测试全部更新。**IME Preedit 首次进入组合时在修改前 push**（`ime_callback` 的 `first_preedit` 分支，review 补）——组合输入可 undo 回退到组合前；组合更新不 push（同文本合并吸收光标变化）。preedit/commit/undo 交错时组合范围可恢复。
 
-   **验证**：新增测试 `undo_restores_composing_range`（undo 恢复 composing_range + 同文本 composing 变化合并）；`cargo test -p winia --lib` 637 项通过。debug-server 实操 text_field_demo：聚焦第一个字段后 `cursor_visible` 与 `node.cursor_visible` 均 ~500ms 周期交替（build 端 + 渲染端探针确认闪烁正常），空文本字段走 render 空文本分支 `draw_line` 画光标。
+   **验证**：新增测试 `undo_restores_composing_range`（undo 恢复 composing_range + 同文本 composing 变化合并）；`cargo test -p winia --lib` 638 项通过。debug-server 实操 text_field_demo：聚焦第一个字段后 `cursor_visible` 与 `node.cursor_visible` 均 ~500ms 周期交替（build 端 + 渲染端探针确认闪烁正常），空文本字段走 render 空文本分支 `draw_line` 画光标。
 
    **涉及文件**：`winia/src/ui/text_field.rs`（blink scope、UndoManager、Deleted clamp、Preedit caret）
 
-4. 清理 dual selection source，明确 registrar 与 TextFieldValue 的单一事实来源。
+4. [x] 清理 dual selection source，明确 registrar 与 TextFieldValue 的单一事实来源（方向 B——清理死代码，已实施；方向 A——value 唯一源，待办）
+
+   **研究结论（与审计 §5.5 描述有出入）**：深入核查后发现，§5.5 声称"render 同时绘制两套高亮，重组或 blink tick 期间可能重复或回退"**不准确**——render 实际只有一套高亮生效（`render.rs` 文本/富文本高亮均只读 `registrar`）。第二套高亮（读 `node.selection_range`）是**死代码**：`sync_selection_range`（composer.rs）**无任何调用者**，`node.selection_range` 恒为 None，第二套高亮永不执行。但**状态侧双源真实存在**：`TextFieldValue.selection`（编辑偏移，键盘/点击/IME/undo 维护）与 `registrar`（显示偏移，拖动直写 + build 同步）靠 `reg_leads` 双向同步 + OffsetMapping 跨界转换维持，复杂度高。
+
+   **方向 B（已实施——清理死代码，零行为变化）**：
+   - 删除 render 第二套高亮（`render.rs` 原 847-860，读 `node.selection_range`）
+   - 删除 `sync_selection_range`（composer.rs）与 `desc.selection_range` / `LayoutNode.selection_range` 字段及全部链路（composer.rs 物化应用/初始化、materialize.rs 字段/清理/应用、layout/node.rs 字段/初始化）
+   - 删除后 `cargo test -p winia --lib` 638 项通过（测试数不变——删的是无调用者代码，正确）
+
+   **方向 A（待办——TextFieldValue.selection 为唯一事实来源，registrar 降级为纯渲染投影）**：
+   - 拖动选择改为直写 `value.selection`（经 OffsetMapping 转编辑偏移），而非直写 reg
+   - 删除 `reg_leads` 双向同步（reg 不再"领先"）；build 单向 value → reg
+   - 优点：单一事实来源清晰，删除复杂双向同步；代价：拖动路径改动 + 需验证拖动实时高亮
+   - 收益主要为架构清晰（当前双源同步实际工作正常，拖动/闪烁实测无 bug），非修 bug
+
+   **涉及文件**：`winia/src/render.rs`、`winia/src/core/composer.rs`、`winia/src/core/materialize.rs`、`winia/src/layout/node.rs`
 
 ### Phase 4：窗口平台与 E2E
 

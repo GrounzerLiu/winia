@@ -35,7 +35,6 @@ pub(crate) struct DescNode {
     pub(crate) ime_callback: Option<Box<dyn Fn(&str, Option<(usize, usize)>) + Send>>,
     /// 外层 Option：None = 非 TextField 未设置；Some(r) = 渲染值（r 可为 None 清空）
     pub(crate) composing_range: Option<Option<std::ops::Range<usize>>>,
-    pub(crate) selection_range: Option<Option<std::ops::Range<usize>>>,
     /// 布局方向（组合期捕获——物化直接用，不读 CompositionLocal）
     pub(crate) direction: crate::layout::LayoutDirection,
     pub(crate) children: Vec<DescNode>,
@@ -81,7 +80,6 @@ fn clear_textfield_state(n: &mut crate::layout::node::LayoutNode) {
     *n.cursor_callback.borrow_mut() = None;
     *n.ime_callback.borrow_mut() = None;
     *n.composing_range.borrow_mut() = None;
-    *n.selection_range.borrow_mut() = None;
     *n.registrar.borrow_mut() = None;
     n.cursor_x.set(0.0);
     n.cursor_height.set(0.0);
@@ -100,7 +98,6 @@ fn clear_textfield_input_state(n: &mut crate::layout::node::LayoutNode) {
     *n.cursor_callback.borrow_mut() = None;
     *n.ime_callback.borrow_mut() = None;
     *n.composing_range.borrow_mut() = None;
-    *n.selection_range.borrow_mut() = None;
     n.cursor_x.set(0.0);
     n.cursor_height.set(0.0);
     n.cursor_index.set(0);
@@ -111,7 +108,7 @@ fn clear_textfield_input_state(n: &mut crate::layout::node::LayoutNode) {
 
 /// 物化单个 desc 节点（递归子节点）——Skip 恢复 / 节点复用 / 降级重建。
 pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: Option<usize>) -> Option<usize> {
-    let DescNode { key, skip, modifier, preserve_modifier, policy, on_remove, dirty, registrar, focus_color, cursor_index, cursor_visible, cursor_callback, display_focused, ime_callback, composing_range, selection_range, direction, children } = desc;
+    let DescNode { key, skip, modifier, preserve_modifier, policy, on_remove, dirty, registrar, focus_color, cursor_index, cursor_visible, cursor_callback, display_focused, ime_callback, composing_range, direction, children } = desc;
     let index = if skip {
         // Skip：恢复上帧节点（key 匹配——保留测量/内容；children 清空后
         // 按 slot 树结构重新挂接（子节点逐个从 prev_node_by_key 恢复——
@@ -326,12 +323,9 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
     if let Some(icb) = ime_callback {
         *composer.arena.nodes[index].ime_callback.borrow_mut() = Some(icb);
     }
-    // 组合/选区范围：Some(r) 即应用（r=None 清空；None = 非 TextField 不碰）
+    // 组合范围：Some(r) 即应用（r=None 清空；None = 非 TextField 不碰）
     if let Some(r) = composing_range {
         *composer.arena.nodes[index].composing_range.borrow_mut() = r;
-    }
-    if let Some(r) = selection_range {
-        *composer.arena.nodes[index].selection_range.borrow_mut() = r;
     }
     // Enter 路径且 desc 不提供 IME/cursor 回调时，若旧节点有残留 TextField 状态，
     // 清理之（语义角色切换：TextField 输入叶子→普通 Text）。Skip 路径保留旧值。

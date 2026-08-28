@@ -559,13 +559,6 @@ impl<'a> ComposeCtx<'a> {
         }
     }
 
-    /// 同步 selection_range 到当前节点（渲染高亮选区用）。desc 通道
-    pub fn sync_selection_range(&mut self, range: Option<std::ops::Range<usize>>) {
-        if let Some(desc) = &mut self.composer.slot_table.current_slot().desc {
-            desc.selection_range = Some(range);
-        }
-    }
-
     /// 获取选区注册表
     pub fn selection_registrar(&self) -> Option<crate::ui::selection_container::SelectionRegistrar> {
         self.composer.selection_registrar.clone()
@@ -681,8 +674,6 @@ struct NodeDesc {
     ime_callback: Option<Box<dyn Fn(&str, Option<(usize, usize)>) + Send>>,
     /// IME 组合范围（渲染画下划线用）——外层 Option 区分"未设置"与"清空"
     composing_range: Option<Option<std::ops::Range<usize>>>,
-    /// 选区范围（渲染高亮用）——同上
-    selection_range: Option<Option<std::ops::Range<usize>>>,
     /// 布局方向（组合期捕获——provides 作用域内读 CompositionLocal；
     /// 物化在组合回调后执行——届时 WiniaTheme::direction() 已退出作用域，
     /// 必须从 desc 携带，否则 RTL 下节点快照恒 Ltr → offset/padding 镜像失效）
@@ -965,7 +956,6 @@ impl SlotTable {
                     display_focused: desc.display_focused,
                     ime_callback: desc.ime_callback,
                     composing_range: desc.composing_range,
-                    selection_range: desc.selection_range,
                     direction: desc.direction,
                     children: Vec::new(),
                 };
@@ -997,7 +987,6 @@ impl SlotTable {
                     display_focused: None,
                     ime_callback: None,
                     composing_range: None,
-                    selection_range: None,
                     direction: slot.direction,
                     children: Vec::new(),
                 };
@@ -1847,7 +1836,6 @@ impl Composer {
             display_focused: None,
             ime_callback: None,
             composing_range: None,
-            selection_range: None,
             direction,
         }));
         // 统一依赖栈：节点 push（组件 build 期间 State 读取注册到最内层 Group——
@@ -1951,7 +1939,6 @@ impl Composer {
             display_focused: None,
             ime_callback: None,
                 composing_range: None,
-                selection_range: None,
                 direction,
             }));
         }
@@ -5421,7 +5408,6 @@ fn test_skip_recovery_sig_mismatch_direct() {
             display_focused: None,
             ime_callback: None,
         composing_range: None,
-        selection_range: None,
         direction: crate::layout::LayoutDirection::Ltr,
         children: vec![crate::core::materialize::DescNode {
             key: leaf0_key,
@@ -5439,7 +5425,6 @@ fn test_skip_recovery_sig_mismatch_direct() {
             display_focused: None,
             ime_callback: None,
             composing_range: None,
-            selection_range: None,
             direction: crate::layout::LayoutDirection::Ltr,
             children: vec![],
         }],
