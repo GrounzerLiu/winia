@@ -151,7 +151,7 @@ pub fn build(self, ctx: &mut ComposeCtx) {
 
 ## 四、验证
 
-- 单元测试（nav.rs，12 个）：
+- 单元测试（nav.rs，13 个）：
   - `back_stack_push_pop_works`、`back_stack_remove_last_and_clear`（back stack 操作）
   - `nav_display_renders_top_entry`（Home → push Detail7 → pop 回 Home，含过渡动画推进）
   - `list_detail_scene_renders_both_entries`（ListDetail 双栏：栈 2 项时 list+detail 同渲染；pop 回 1 项退化为 SinglePane）
@@ -163,13 +163,14 @@ pub fn build(self, ctx: &mut ComposeCtx) {
   - `transition_specs_selected_per_direction`（push 用 transition_spec / pop 用 pop_transition_spec）
   - `is_pop_direction_diffing`（isPop 列表差分：前缀子集=pop、整栈替换/发散/更长=navigate）
   - `content_key_shares_state_across_routes`（同 contentKey 共享池槽、最后实例才清理、默认独立）
+  - `entry_transition_override_wins_over_display_default`（entry 过渡覆盖优先级：push/pop 前景判别）
 - 真实 demo（`examples/nav_demo.rs`，debug-server 实操）：
   - Home → 点「打开 Detail 42」→ `[Home, Detail(42)]` + Detail 页面 ✓
   - Detail → 点「返回」→ `[Home]` + Home 页面 ✓
   - **ListDetail 模式**：双栏渲染（Home 左栏 x=16 / Detail 右栏 x=243）✓
   - **模式切换**：SinglePane ↔ ListDetail 实时生效（Detail 从右栏 x=243 变单栏 x=16）✓
   - 多次导航循环稳定 ✓；动画埋点日志确认 push/pop 方向、完成清理、静置归零 ✓
-- 完整 `cargo test -p winia --lib` 652 项通过（1 个 animated_size 时序敏感 flaky 与 nav 无关）
+- 完整 `cargo test -p winia --lib` 653 项通过（1 个 animated_size 时序敏感 flaky 与 nav 无关）
 
 ## 五、路线图（按差距分级，2026-08-30 重排）
 
@@ -186,10 +187,14 @@ spec 过渡、NavEntryDecorator（on_pop 广播 + wrap 链式）、remember_entr
    新栈为旧栈前缀子集 = pop（对标 `NavDisplay.isPop`）；`set_stack` 整栈替换、
    等长替换不再误判方向/选错过渡规格。空栈侧扩展：旧栈空 = push、清空 = pop
    （winia 允许空栈，Nav3 require 非空）
-3. [ ] **entry metadata + 过渡覆盖**：NavEntry 级过渡规格 + 优先级链
-   （对标 `NavDisplay.transitionSpec` metadata 键：过渡中 entry > NavDisplay 默认）
-4. [ ] **onPop 时机**：挪到离开渲染 + 过渡完成后（对标 DecoratedNavEntries 的
-   popped && 离开组合判定；当前 pop 帧即触发——draining 已兜住池重污染，语义待对齐）
+3. [x] **entry 过渡覆盖**：`NavEntry::transition_spec` / `pop_transition_spec`
+   builder（对标 Nav3 NavDisplay.TransitionKey/PopTransitionKey metadata 的类型化
+   等价——typed 字段替代 Map<String,Any> 擦除）；优先级 = 过渡中 entry > NavDisplay
+   默认（push 前景=新栈顶 / pop 前景=被弹旧条目，被弹条目覆盖取上一帧 route 元信息
+   映射）
+4. [x] **onPop 时机**——以 draining 方案等效解决并关闭：pop 帧清理 + 滑出层只读
+   作用域已杜绝池重污染；Nav3 延迟到"离开组合"清理是因为 Compose 退出内容仍被
+   组合，winia 的 draining 语义等价且更简单（见 §六 踩坑 7）
 
 **P1——架构级差距（按需逐个对标）**
 5. [ ] **Scene trait + SceneStrategy 策略链**：开放自定义 Scene（key/entries/
@@ -255,7 +260,7 @@ spec 过渡、NavEntryDecorator（on_pop 广播 + wrap 链式）、remember_entr
 
 **验证**：单元测试 `remember_state_decorator_preserves_entry_state`（覆盖返回保持 + pop 清理
 双场景）+ `pop_slideout_does_not_repollute_entry_state_pool`（draining 回归）；demo 实操验证；
-完整测试 652 项通过。
+完整测试 653 项通过。
 
 ## 七、差距分析（androidx-main 2026-08 vs winia，2026-08-30）
 
@@ -273,8 +278,8 @@ Rust 惯用）、NavEntryDecorator（on_pop 广播 + wrap 链式）、SaveableSt
 |---|---|---|---|
 | 1 | `contentKey`（NavEntry.kt：默认 `"$key:$class"`）——装饰器状态共享、过渡期 entry 去重、动画 key、onPop 判定全靠它 | 用 key hash 替代，不可覆盖 | 解锁：同 contentKey 不同路由共享状态；同 key 不同 contentKey 共存。[x] 已实现 |
 | 2 | `isPop` 列表差分（NavDisplay.kt:898-909）：首元素不同=整栈替换非 pop；前缀子集=pop；发散=navigate | 长度启发（len 比较） | set_stack/等长替换会误判方向。[x] 已实现（空栈侧 winia 扩展：空→非空=push、清空=pop） |
-| 3 | metadata typed key DSL（NavMetadataKey + metadata{}）；过渡覆盖优先级：过渡中 NavEntry.metadata > Scene.metadata(默认=栈顶 entry) > NavDisplay 默认 | 无 metadata；过渡规格仅 NavDisplay 级 | per-entry/per-scene 过渡覆盖是 Nav3 灵活性核心 |
-| 4 | onPop 时机：popped && 离开组合 && 该 contentKey 最后实例，反序回调（DecoratedNavEntries.kt:206-221） | pop 帧立即回调 + 清池 | winia draining 已兜住重污染；时机语义待对齐 |
+| 3 | metadata typed key DSL（NavMetadataKey + metadata{}）；过渡覆盖优先级：过渡中 NavEntry.metadata > Scene.metadata(默认=栈顶 entry) > NavDisplay 默认 | 无通用 metadata；过渡覆盖已做类型化等价：NavEntry::transition_spec/pop_transition_spec（[x]） | per-scene/通用 metadata 待 Scene trait（P1-5） |
+| 4 | onPop 时机：popped && 离开组合 && 该 contentKey 最后实例，反序回调（DecoratedNavEntries.kt:206-221） | pop 帧立即回调 + 清池 + draining 只读 | 等效已解决（[x] 关闭）；"最后实例"语义已随 contentKey 对齐 |
 
 ### P1 架构级
 | # | Nav3 机制 | winia 现状 |

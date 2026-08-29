@@ -268,13 +268,25 @@ impl<K: NavKey> Default for NavBackStack<K> {
 pub struct NavEntry<K: NavKey> {
     key: K,
     content_key: u64,
+    /// push 方向过渡覆盖（对标 Nav3 `NavDisplay.TransitionKey` metadata——
+    /// 本 entry 作为 push 前景时优先于 NavDisplay 默认）
+    transition_spec: Option<NavTransitionSpec>,
+    /// pop 方向过渡覆盖（对标 Nav3 `NavDisplay.PopTransitionKey` metadata——
+    /// 本 entry 被弹出作为 pop 前景时优先于 NavDisplay 默认）
+    pop_transition_spec: Option<NavTransitionSpec>,
     content: Box<dyn Fn(&mut ComposeCtx, &K) + 'static>,
 }
 
 impl<K: NavKey> NavEntry<K> {
     pub fn new(key: K, content: impl Fn(&mut ComposeCtx, &K) + 'static) -> Self {
         let content_key = key_hash(&key);
-        Self { key, content_key, content: Box::new(content) }
+        Self {
+            key,
+            content_key,
+            transition_spec: None,
+            pop_transition_spec: None,
+            content: Box::new(content),
+        }
     }
 
     /// 指定 contentKey 的构造（对标 Nav3 `NavEntry(key, contentKey, content)`）。
@@ -285,7 +297,13 @@ impl<K: NavKey> NavEntry<K> {
         content_key: u64,
         content: impl Fn(&mut ComposeCtx, &K) + 'static,
     ) -> Self {
-        Self { key, content_key, content: Box::new(content) }
+        Self {
+            key,
+            content_key,
+            transition_spec: None,
+            pop_transition_spec: None,
+            content: Box::new(content),
+        }
     }
 
     pub fn key(&self) -> &K {
@@ -295,6 +313,30 @@ impl<K: NavKey> NavEntry<K> {
     /// 稳定内容 id（对标 Nav3 contentKey）
     pub fn content_key(&self) -> u64 {
         self.content_key
+    }
+
+    /// 覆盖本 entry 作为 push 前景（新栈顶）时的过渡——对标 Nav3
+    /// `NavDisplay.transitionSpec(...)` entry metadata；优先级高于
+    /// `NavDisplay::transition_spec` 默认。
+    pub fn transition_spec(mut self, spec: NavTransitionSpec) -> Self {
+        self.transition_spec = Some(spec);
+        self
+    }
+
+    /// 覆盖本 entry 被弹出（pop 前景）时的过渡——对标 Nav3
+    /// `NavDisplay.popTransitionSpec(...)` entry metadata；优先级高于
+    /// `NavDisplay::pop_transition_spec` 默认。
+    pub fn pop_transition_spec(mut self, spec: NavTransitionSpec) -> Self {
+        self.pop_transition_spec = Some(spec);
+        self
+    }
+
+    fn transition_spec_override(&self) -> Option<NavTransitionSpec> {
+        self.transition_spec
+    }
+
+    fn pop_transition_spec_override(&self) -> Option<NavTransitionSpec> {
+        self.pop_transition_spec
     }
 
     /// 渲染内容（传入 key）
@@ -805,6 +847,15 @@ fn is_pop<K: NavKey>(old: &[K], new: &[K]) -> bool {
 // NavDisplay — 状态的投影（对标 Nav3 的 NavDisplay）
 // ═══════════════════════════════════════════════════════════
 
+/// route hash → entry 元信息（NavDisplay 跨帧 remember 映射的值）——被移除 key
+/// 不在当前帧 entries 里，on_pop 清理与 pop 方向过渡覆盖都取上一帧映射
+#[derive(Clone, Copy, PartialEq)]
+struct EntryRouteMeta {
+    content_key: u64,
+    transition_spec: Option<NavTransitionSpec>,
+    pop_transition_spec: Option<NavTransitionSpec>,
+}
+
 /// 导航显示——观察 back stack，用 entry_provider 生成内容，按 SceneStrategy 渲染。
 ///
 /// 对标 Nav3 `NavDisplay(backStack, entryProvider, sceneStrategy, ...)`：
@@ -905,13 +956,14 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
             ctx.remember(|| std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())));
         let entry_pool = entry_pool.get();
         // 为整栈构建 entries（对标 Nav3 rememberDecoratedNavEntries——全量构建，
-        // route→contentKey 映射需要非渲染位 entry 的 contentKey；导航栈短，代价可接受。
-        // ⚠ entry_provider 应为纯函数：同 key → 同 contentKey）
+        // route 元信息映射需要非渲染位 entry 的 contentKey/过渡覆盖；导航栈短，
+        // 代价可接受。⚠ entry_provider 应为纯函数：同 key → 同 contentKey/覆盖）
         let entries: Vec<NavEntry<K>> =
             stack.iter().map(|k| (self.entry_provider)(ctx, k)).collect();
-        // route hash → contentKey 映射（跨帧 remember——on_pop 清理时被移除 key
-        // 不在当前 entries 里，用上一帧映射解析其 contentKey；默认构造下两者同值）
-        let route_content_keys: State<HashMap<u64, u64>> = ctx.remember(|| HashMap::new());
+        // route hash → entry 元信息映射（跨帧 remember——被移除 key 不在当前
+        // entries 里：on_pop 的 contentKey、pop 方向的过渡覆盖均取上一帧映射）
+        let route_meta: State<HashMap<u64, EntryRouteMeta>> = ctx.remember(|| HashMap::new());
+        let old_meta: HashMap<u64, EntryRouteMeta> = route_meta.peek().clone();
         // on_pop：对比上一帧栈——被移除的 entry 触发装饰器回调 + 清理状态池
         // （对标 Nav3 onPop(contentKey)：pop 时 removeState 清理）
         let prev_stack: State<Vec<K>> = ctx.remember(|| Vec::new());
@@ -923,7 +975,7 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
                     // 不清理/不回调（对标 Nav3 onPop 触发条件"该 contentKey 的
                     // 最后一个实例被弹出"——共享 contentKey 的多实例状态保持）
                     let kh = key_hash(key);
-                    let ck = route_content_keys.peek().get(&kh).copied().unwrap_or(kh);
+                    let ck = old_meta.get(&kh).map(|m| m.content_key).unwrap_or(kh);
                     let still_shared = entries.iter().any(|e| e.content_key() == ck);
                     if !still_shared {
                         clear_entry_state(ck, &entry_pool);
@@ -935,9 +987,21 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
             }
             prev_stack.set(stack.clone());
         }
-        // 更新 route→contentKey 映射（仅 peek 读取——set_silent 免通知）
-        route_content_keys.set_silent(
-            entries.iter().map(|e| (key_hash(e.key()), e.content_key())).collect(),
+        // 更新 route→entry 元信息映射（仅 peek/clone 读取——set_silent 免通知）
+        route_meta.set_silent(
+            entries
+                .iter()
+                .map(|e| {
+                    (
+                        key_hash(e.key()),
+                        EntryRouteMeta {
+                            content_key: e.content_key(),
+                            transition_spec: e.transition_spec_override(),
+                            pop_transition_spec: e.pop_transition_spec_override(),
+                        },
+                    )
+                })
+                .collect(),
         );
         if stack.is_empty() {
             return; // 空栈：渲染空
@@ -951,10 +1015,22 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
                 let entry_pool = entry_pool.clone();
                 // 导航过渡状态机（跨帧 remember——current/previous/forward/progress）
                 let transition = NavTransition::init(ctx, Some(top.clone()));
-                // 方向：isPop 列表差分（对标 NavDisplay.isPop）；push/pop 各用
-                // transition_spec / pop_transition_spec（对标 Nav3 同名参数）
+                // 方向：isPop 列表差分（对标 NavDisplay.isPop）
                 let forward = !is_pop(&prev, &stack);
-                let spec = if forward { self.transition_spec } else { self.pop_transition_spec };
+                // 过渡规格：过渡中 entry 的覆盖 > NavDisplay 默认（对标 Nav3 优先级
+                // "transitioning NavEntry.metadata > NavDisplay defaults"——前景 =
+                // push 新栈顶 / pop 被弹出的旧条目；旧条目覆盖取上一帧映射）
+                let spec = if forward {
+                    entries
+                        .last()
+                        .and_then(|e| e.transition_spec_override())
+                        .unwrap_or(self.transition_spec)
+                } else {
+                    let popped = prev.last().and_then(|k| old_meta.get(&key_hash(k)));
+                    popped
+                        .and_then(|m| m.pop_transition_spec)
+                        .unwrap_or(self.pop_transition_spec)
+                };
                 // 检测导航变化并启动过渡
                 transition.detect(&Some(top.clone()), forward, &spec);
                 // 渲染双页过渡（Stack 层叠：旧页滑出 + 新页滑入）
@@ -1625,6 +1701,98 @@ mod tests {
         assert!(t.iter().any(|x| x.contains("SettingsScreen")), "none 应立即渲染新页");
         assert!(!t.iter().any(|x| x.contains("Detail7")), "none 不应有旧页残留");
         assert!(!t.iter().any(|x| x.contains("HomeScreen")), "none 不应渲染栈外页");
+    }
+
+    /// entry 级过渡覆盖（对标 Nav3 NavDisplay.TransitionKey/PopTransitionKey
+    /// metadata 优先级"过渡中 entry > NavDisplay 默认"）：push 前景 = 新栈顶、
+    /// pop 前景 = 被弹出的旧条目。覆盖 `none()` 生效的判别：单帧内无旧页层
+    /// （若覆盖失效回退默认 fade，旧页会保留一整个过渡期）
+    #[test]
+    fn entry_transition_override_wins_over_display_default() {
+        use crate::core::composer::Composer;
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let bs = NavBackStack::<TestRoute>::with_initial(TestRoute::Home);
+        let mut composer = Composer::new();
+
+        let mut build = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                NavDisplay::new(&bs, |ctx, key| match key {
+                    TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
+                        crate::ui::Text::new("HomeScreen").build(ctx);
+                    }),
+                    TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
+                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                    }),
+                    TestRoute::Detail(id) => {
+                        let id = *id;
+                        // Detail 覆盖双向为 none（瞬时）——Settings 不覆盖（对照组）
+                        NavEntry::new(key.clone(), move |ctx, _| {
+                            crate::ui::Text::new(format!("Detail{id}")).build(ctx);
+                        })
+                        .transition_spec(NavTransitionSpec::none())
+                        .pop_transition_spec(NavTransitionSpec::none())
+                    }
+                })
+                .build(ctx); // 默认 fade（display 级）
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        let texts = |composer: &mut Composer| -> Vec<String> {
+            let root = composer.layout_root_idx().unwrap();
+            let nodes = composer.arena_nodes();
+            let mut out = Vec::new();
+            collect_texts(nodes, root, &mut out);
+            out
+        };
+        let tick = |composer: &mut Composer| {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(60));
+        };
+
+        build(&mut composer);
+        // push Detail（覆盖 none）→ 单帧内旧页即移除
+        bs.push(TestRoute::Detail(7));
+        build(&mut composer);
+        let t = texts(&mut composer);
+        assert!(t.iter().any(|x| x.contains("Detail7")));
+        assert!(!t.iter().any(|x| x.contains("HomeScreen")),
+            "entry transition_spec 覆盖应生效（none 瞬时，无旧页层）");
+
+        // 对照：push Settings（无覆盖）→ 默认 fade → 中间帧双页
+        bs.push(TestRoute::Settings);
+        build(&mut composer);
+        tick(&mut composer);
+        build(&mut composer);
+        let t = texts(&mut composer);
+        assert!(t.iter().any(|x| x.contains("SettingsScreen")) && t.iter().any(|x| x.contains("Detail7")),
+            "无覆盖 entry 应回退 NavDisplay 默认 fade（中间帧双页）");
+        for _ in 0..12 {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            build(&mut composer);
+        }
+
+        // pop Settings（无 pop 覆盖）→ 默认 fade → 中间帧双页
+        bs.pop();
+        build(&mut composer);
+        tick(&mut composer);
+        build(&mut composer);
+        let t = texts(&mut composer);
+        assert!(t.iter().any(|x| x.contains("SettingsScreen")) && t.iter().any(|x| x.contains("Detail7")),
+            "无覆盖 entry 的 pop 应回退默认 fade");
+        for _ in 0..12 {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            build(&mut composer);
+        }
+
+        // pop Detail（覆盖 pop none）→ 单帧内旧页即移除
+        bs.pop();
+        build(&mut composer);
+        let t = texts(&mut composer);
+        assert!(t.iter().any(|x| x.contains("HomeScreen")));
+        assert!(!t.iter().any(|x| x.contains("Detail7")),
+            "entry pop_transition_spec 覆盖应生效（none 瞬时，无旧页层）");
     }
 
     /// shared_axis（M3 30px 反向小位移 + 淡入淡出）——覆盖 `SlideOffset::Px`
