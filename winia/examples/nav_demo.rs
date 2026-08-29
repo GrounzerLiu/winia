@@ -5,18 +5,19 @@
 //! - NavBackStack：push/pop（导航 = 改列表；Clone 共享内部 State）
 //! - NavDisplay：entry_provider 路由 → 内容（SinglePane——渲染栈顶）
 //! - SceneStrategy：SinglePane（默认）/ ListDetail（双栏）切换
-//! - Crossfade 过渡：导航切换时交叉淡化
+//! - NavTransition 滑动过渡：push 新页右入/旧页左出，pop 反向
 //!
 //! 运行：cargo run -p winia --example nav_demo --features debug-server
 
 use winia::prelude::*;
-use winia::nav::{ListDetailStrategy, NavBackStack, NavDisplay, NavEntry, NavKey, SceneStrategy, SinglePaneStrategy};
+use winia::nav::{remember_entry_state, ListDetailStrategy, NavBackStack, NavDisplay, NavEntry, NavKey, NavTransitionSpec, SceneStrategy, SinglePaneStrategy};
 
 /// 类型安全路由（对标 Nav3 的 NavKey + @Serializable——winia 无序列化要求）
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, Hash)]
 enum Route {
     Home,
     Detail(u64),
+    Settings,
 }
 
 #[composable]
@@ -25,6 +26,17 @@ fn nav_demo(ctx: &mut ComposeCtx) {
     let back_stack = ctx.remember(|| NavBackStack::<Route>::with_initial(Route::Home)).get();
     // 双栏模式开关（ListDetail 策略 vs SinglePane）
     let list_detail = ctx.remember(|| false);
+    // 过渡规格循环（0=Android 滑动 1=共享轴 2=淡化(Nav3 默认) 3=无——对标
+    // transitionSpec/popTransitionSpec 的常用取值）
+    let spec_idx = ctx.remember(|| 0usize);
+    let (slide_push, slide_pop) = NavTransitionSpec::horizontal_slide();
+    let (axis_push, axis_pop) = NavTransitionSpec::shared_axis();
+    let (push_spec, pop_spec) = match spec_idx.get() {
+        1 => (axis_push, axis_pop),
+        2 => (NavTransitionSpec::fade(), NavTransitionSpec::fade()),
+        3 => (NavTransitionSpec::none(), NavTransitionSpec::none()),
+        _ => (slide_push, slide_pop),
+    };
     // 按钮用 clone（push/pop/切换模式）
     let home_bs = back_stack.clone();
     let detail_bs = back_stack.clone();
@@ -45,6 +57,20 @@ fn nav_demo(ctx: &mut ComposeCtx) {
                 .on_click(move || ld.update(|v| *v = !*v))
                 .build(ctx, |ctx| {
                     Text::new(if list_detail.get() { "模式: ListDetail 双栏" } else { "模式: SinglePane" }).build(ctx)
+                });
+
+            // 过渡规格循环按钮（demo 体验用——Nav3 transitionSpec 的常用取值）
+            let si = spec_idx.clone();
+            Button::text()
+                .on_click(move || si.update(|v| *v = (*v + 1) % 4))
+                .build(ctx, |ctx| {
+                    Text::new(match spec_idx.get() {
+                        1 => "过渡: 共享轴 (M3)",
+                        2 => "过渡: 淡化 (Nav3 默认)",
+                        3 => "过渡: 无 (瞬时切换)",
+                        _ => "过渡: Android 滑动",
+                    })
+                    .build(ctx)
                 });
 
             let home_bs = home_bs.clone();
@@ -78,10 +104,40 @@ fn nav_demo(ctx: &mut ComposeCtx) {
                             .spacing(8.0)
                             .build(ctx, |ctx| {
                                 Text::new(format!("Detail 页面 (id={id})")).font_size(16.0).build(ctx);
+                                // 状态保持演示：remember_entry_state 计数——返回本页后应保持
+                                // （状态池跨导航存活——对标 Nav3 SaveableStateHolder）
+                                let detail_count = remember_entry_state(|| 0i32);
+                                Text::new(format!("本页状态计数: {}", detail_count.get()))
+                                    .font_size(12.0)
+                                    .color(Color::from_argb(255, 90, 120, 200))
+                                    .build(ctx);
+                                let dc = detail_count.clone();
+                                Button::text()
+                                    .on_click(move || dc.update(|v| *v += 1))
+                                    .build(ctx, |ctx| Text::new("计数 +1").build(ctx));
+                                let bs2 = bs.clone();
+                                Button::text()
+                                    .on_click(move || bs2.push(Route::Settings))
+                                    .build(ctx, |ctx| Text::new("打开 Settings").build(ctx));
+                                let bs3 = bs.clone();
+                                Button::text()
+                                    .on_click(move || { bs3.pop(); })
+                                    .build(ctx, |ctx| Text::new("返回").build(ctx));
+                            });
+                    })
+                }
+                Route::Settings => {
+                    let bs = detail_bs.clone();
+                    NavEntry::new(key.clone(), move |ctx, _| {
+                        Column::new()
+                            .modifier(Modifier::new().fill_max_width())
+                            .spacing(8.0)
+                            .build(ctx, |ctx| {
+                                Text::new("Settings 页面").font_size(16.0).build(ctx);
                                 let bs = bs.clone();
                                 Button::text()
                                     .on_click(move || { bs.pop(); })
-                                    .build(ctx, |ctx| Text::new("返回").build(ctx));
+                                    .build(ctx, |ctx| Text::new("返回 Detail").build(ctx));
                             });
                     })
                 }
@@ -92,6 +148,9 @@ fn nav_demo(ctx: &mut ComposeCtx) {
             } else {
                 Box::new(SinglePaneStrategy) as Box<dyn SceneStrategy<Route>>
             })
+            // 过渡规格（对标 Nav3 transitionSpec / popTransitionSpec——成对给出方向相反的规格）
+            .transition_spec(push_spec)
+            .pop_transition_spec(pop_spec)
             .build(ctx);
         });
 }
