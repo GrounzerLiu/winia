@@ -69,7 +69,9 @@ static ENTRY_STATE_SCOPE: std::sync::LazyLock<crate::core::composition_local::Co
 /// 在 entry 内容中记住状态——跨导航（pop/push）保持。
 ///
 /// 对标 Nav3 `rememberSaveable`（经 SaveableStateHolder 保存）：
-/// - 同一路由（key）的 entry 每次进入返回同一 State（值保持）
+/// - 同一 **contentKey** 的 entry 每次进入返回同一 State（值保持）——默认
+///   contentKey = key 的确定性 hash；`NavEntry::with_content_key` 可让不同路由
+///   共享同一份状态（Nav3 语义：同内容 = 同状态）
 /// - 状态池由 NavDisplay 持有（跨帧稳定，Arc<Mutex> 内部可变），不依赖组合槽
 /// - 同一 entry 内多次调用按调用顺序分配独立槽
 ///
@@ -78,11 +80,12 @@ static ENTRY_STATE_SCOPE: std::sync::LazyLock<crate::core::composition_local::Co
 /// let count = nav::remember_entry_state(|| 0i32);
 /// ```
 ///
-/// ⚠ 约束（槽按 (key, 调用序号, 类型) 分配）：
+/// ⚠ 约束（槽 key = (contentKey, 调用序号, 类型)）：
 /// - 调用位置/顺序须逐帧稳定——勿放进条件分支或循环内长度可变的路径
 ///   （条件翻转会导致序号整体移位、槽重映射，语义同 Compose remember 的位置制）；
-/// - 同一 back stack 内 key 应唯一——重复 key（如 `[Detail(7), Detail(7)]`）
-///   的两实例共享同一池槽（Nav3 同样要求 key 唯一）。
+/// - 同一 back stack 内 **contentKey 应唯一**——重复 contentKey 的实例共享同一
+///   池槽（可利用：`Detail(1)`/`Detail(2)` 用同一 contentKey 即共享状态）；
+///   同 key 不同 contentKey 则相互独立。
 ///
 /// 注意：只有本函数（外部状态池）保证跨 pop/push 保持；entry 内容里的普通
 /// `ctx.remember` 依赖组合槽位置，双层过渡的槽位按调用序分配，pop/push 边界
@@ -250,24 +253,48 @@ impl<K: NavKey> Default for NavBackStack<K> {
 // NavEntry — 路由 → 内容（对标 Nav3 的 NavEntry）
 // ═══════════════════════════════════════════════════════════
 
-/// 一个导航条目：key + 内容构建闭包。
+/// 一个导航条目：key + contentKey + 内容构建闭包。
 ///
 /// 对标 Nav3 `NavEntry(key, contentKey, metadata, content)`——winia 简化：
-/// 只保留 key + content（metadata/contentKey 后续按需加）。
+/// metadata 后续按需加（见 docs/navigation3.md §五 P0-3）。
 /// content 为 `'static`（闭包捕获 owned 数据，不借用外部——对标 Nav3 的
 /// @Composable content 无生命周期依赖）。
+///
+/// **contentKey**（对标 Nav3 `NavEntry.contentKey`）：稳定内容 id——状态池槽、
+/// 组合 key、on_pop 清理全部按它关联。默认 = key 的确定性 hash（key_hash）；
+/// 用 `NavEntry::with_content_key` 覆盖可表达"不同路由、同一内容"（Nav3 语义：
+/// 同内容 = 同状态，如 `Detail(id)` 各 id 共享一个编辑态）或"同 key、不同内容"
+/// （各自独立状态）。
 pub struct NavEntry<K: NavKey> {
     key: K,
+    content_key: u64,
     content: Box<dyn Fn(&mut ComposeCtx, &K) + 'static>,
 }
 
 impl<K: NavKey> NavEntry<K> {
     pub fn new(key: K, content: impl Fn(&mut ComposeCtx, &K) + 'static) -> Self {
-        Self { key, content: Box::new(content) }
+        let content_key = key_hash(&key);
+        Self { key, content_key, content: Box::new(content) }
+    }
+
+    /// 指定 contentKey 的构造（对标 Nav3 `NavEntry(key, contentKey, content)`）。
+    ///
+    /// ⚠ 应为 key 的**确定性纯函数**（同 key → 同 contentKey）——状态恢复依赖它。
+    pub fn with_content_key(
+        key: K,
+        content_key: u64,
+        content: impl Fn(&mut ComposeCtx, &K) + 'static,
+    ) -> Self {
+        Self { key, content_key, content: Box::new(content) }
     }
 
     pub fn key(&self) -> &K {
         &self.key
+    }
+
+    /// 稳定内容 id（对标 Nav3 contentKey）
+    pub fn content_key(&self) -> u64 {
+        self.content_key
     }
 
     /// 渲染内容（传入 key）
@@ -609,17 +636,18 @@ impl<K: NavKey> NavTransition<K> {
 ///
 /// 对标 Nav3 `NavEntryDecorator(onPop, decorate)`：
 /// - `on_pop`：entry 从 back stack 移除时回调（对标 Nav3 onPop——如状态清理）。
-///   广播语义：列表内全部装饰器依次收到回调。
+///   广播语义：列表内全部装饰器依次收到回调。参数为 **contentKey**（对标 Nav3
+///   onPop(contentKey)——按内容身份清理）。
 /// - `wrap`：包装 entry 内容（对标 Nav3 decorate）。**链式语义**：列表按顺序
 ///   依次包裹（首个装饰器最外层），内层是后续装饰器与 entry 内容的组合——
 ///   每个装饰器的 wrap 都会生效，而非只有最后一个。
 pub trait NavEntryDecorator<K: NavKey>: Send + Sync + 'static {
-    /// entry 从 back stack 移除时（对标 Nav3 onPop）
-    fn on_pop(&self, _key: &K) {}
+    /// entry 从 back stack 移除时（对标 Nav3 onPop(contentKey)）
+    fn on_pop(&self, _content_key: u64) {}
 
     /// 包装 entry 内容（对标 Nav3 decorate）——在自身作用域内调用 `inner`
     /// （inner 渲染后续装饰器包裹的 entry 内容）。默认原样渲染。
-    fn wrap(&self, ctx: &mut ComposeCtx, _key: &K, inner: &dyn Fn(&mut ComposeCtx)) {
+    fn wrap(&self, ctx: &mut ComposeCtx, _entry: &NavEntry<K>, inner: &dyn Fn(&mut ComposeCtx)) {
         inner(ctx);
     }
 }
@@ -627,13 +655,11 @@ pub trait NavEntryDecorator<K: NavKey>: Send + Sync + 'static {
 /// 按列表顺序链式应用装饰器的 wrap（首个最外层），末层渲染 entry 内容。
 fn wrap_entry<K: NavKey>(
     ctx: &mut ComposeCtx,
-    key: &K,
     entry: &NavEntry<K>,
     decorators: &[Box<dyn NavEntryDecorator<K>>],
 ) {
     fn rec<K: NavKey>(
         ctx: &mut ComposeCtx,
-        key: &K,
         entry: &NavEntry<K>,
         decorators: &[Box<dyn NavEntryDecorator<K>>],
         i: usize,
@@ -641,31 +667,32 @@ fn wrap_entry<K: NavKey>(
         match decorators.get(i) {
             None => entry.build(ctx),
             Some(d) => {
-                let inner = |ctx: &mut ComposeCtx| rec(ctx, key, entry, decorators, i + 1);
-                d.wrap(ctx, key, &inner);
+                let inner = |ctx: &mut ComposeCtx| rec(ctx, entry, decorators, i + 1);
+                d.wrap(ctx, entry, &inner);
             }
         }
     }
-    rec(ctx, key, entry, decorators, 0);
+    rec(ctx, entry, decorators, 0);
 }
 
 /// 状态保持装饰器——用**固定组合 key** 包裹 entry 内容。
 ///
 /// 对标 Nav3 `SaveableStateHolderNavEntryDecorator`（SaveableStateProvider(contentKey)）：
-/// 同一路由（key）的 entry 每次渲染都在相同组合 key 位置——`ctx.key(key)` 的
-/// hash 覆盖位置 key，配合 `remember_entry_state`（外部状态池）实现跨 pop/push
-/// 的状态保持。默认随 NavDisplay 启用（对标 Nav3 的默认
+/// 同一 contentKey 的 entry 每次渲染都在相同组合 key 位置——组合 key 与
+/// `remember_entry_state` 状态池槽都按 contentKey 关联，跨 pop/push 保持。
+/// 默认随 NavDisplay 启用（对标 Nav3 的默认
 /// rememberSaveableStateHolderNavEntryDecorator）。
 ///
 /// ⚠ 保持范围仅限 `remember_entry_state`：entry 内容里的普通 `ctx.remember`
 /// 存放在组合槽中，而槽位身份按**组合位置**分配（winia 槽表无 movableContent
-/// 级跨位置身份）——双层过渡渲染时两层内容共享调用序基，pop/push 边界会触发
-/// 槽 truncate 重建，普通 remember 不保证存活。
+/// 级跨位置身份——对标 Nav3 SceneSetupNavEntryDecorator）——双层过渡渲染时
+/// 两层内容共享调用序基，pop/push 边界会触发槽 truncate 重建，普通 remember
+/// 不保证存活。
 pub struct RememberStateDecorator;
 
 impl<K: NavKey> NavEntryDecorator<K> for RememberStateDecorator {
-    fn wrap(&self, ctx: &mut ComposeCtx, key: &K, inner: &dyn Fn(&mut ComposeCtx)) {
-        ctx.key(key.clone(), |ctx| inner(ctx));
+    fn wrap(&self, ctx: &mut ComposeCtx, entry: &NavEntry<K>, inner: &dyn Fn(&mut ComposeCtx)) {
+        ctx.key(entry.content_key(), |ctx| inner(ctx));
     }
 }
 
@@ -678,9 +705,10 @@ impl<K: NavKey> NavEntryDecorator<K> for RememberStateDecorator {
 pub struct BackStackAwareDecorator;
 
 impl<K: NavKey> NavEntryDecorator<K> for BackStackAwareDecorator {
-    fn on_pop(&self, _key: &K) {
-        // 占位：entry 移除时清理钩子（后续扩展：取消动画/释放资源）
-        debug_log!("[nav] entry popped: {:?}", _key);
+    fn on_pop(&self, _content_key: u64) {
+        // 占位：entry 移除时清理钩子（后续扩展：取消动画/释放资源；
+        // 对标 Nav3 BackStackAwareLifecycle——离栈 CREATED 封顶，见路线图 P1-8）
+        debug_log!("[nav] entry popped: content_key={}", _content_key);
     }
 }
 
@@ -739,6 +767,36 @@ impl<K: NavKey> SceneStrategy<K> for ListDetailStrategy {
             ScenePlan::ListDetail
         } else {
             ScenePlan::Single
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// 方向判定（对标 NavDisplay.isPop 列表差分）
+// ═══════════════════════════════════════════════════════════
+
+/// 新栈相对旧栈是否为 **pop**——对标 Nav3 `NavDisplay.isPop`（列表差分，
+/// 替代长度启发：`set_stack` 整栈替换、等长替换不再误判方向）：
+/// - 首元素不同 → 整栈替换，非 pop（navigate）
+/// - 新栈更长 → navigate，非 pop
+/// - 新栈是旧栈的**前缀子集**且更短 → pop
+/// - 长度相同但中途发散 → 替换，非 pop
+///
+/// 空栈侧为 winia 扩展（Nav3 require 非空栈）：旧栈空 = push；清空 = pop。
+fn is_pop<K: NavKey>(old: &[K], new: &[K]) -> bool {
+    match (old.first(), new.first()) {
+        (None, None) => false,
+        (None, Some(_)) => false,
+        (Some(_), None) => true,
+        (Some(o), Some(n)) => {
+            if o != n {
+                return false; // 整栈替换
+            }
+            if new.len() > old.len() {
+                return false; // navigate
+            }
+            let diverging = new.iter().zip(old.iter()).position(|(a, b)| a != b);
+            diverging.is_none() && new.len() != old.len() // 前缀子集 → pop
         }
     }
 }
@@ -846,23 +904,41 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
         let entry_pool: State<std::sync::Arc<std::sync::Mutex<HashMap<(u64, u32, std::any::TypeId), Box<dyn Any>>>>> =
             ctx.remember(|| std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())));
         let entry_pool = entry_pool.get();
+        // 为整栈构建 entries（对标 Nav3 rememberDecoratedNavEntries——全量构建，
+        // route→contentKey 映射需要非渲染位 entry 的 contentKey；导航栈短，代价可接受。
+        // ⚠ entry_provider 应为纯函数：同 key → 同 contentKey）
+        let entries: Vec<NavEntry<K>> =
+            stack.iter().map(|k| (self.entry_provider)(ctx, k)).collect();
+        // route hash → contentKey 映射（跨帧 remember——on_pop 清理时被移除 key
+        // 不在当前 entries 里，用上一帧映射解析其 contentKey；默认构造下两者同值）
+        let route_content_keys: State<HashMap<u64, u64>> = ctx.remember(|| HashMap::new());
         // on_pop：对比上一帧栈——被移除的 entry 触发装饰器回调 + 清理状态池
-        // （对标 Nav3 onPop：pop 时 removeState 清理）
+        // （对标 Nav3 onPop(contentKey)：pop 时 removeState 清理）
         let prev_stack: State<Vec<K>> = ctx.remember(|| Vec::new());
         let prev = prev_stack.get();
         if prev != stack {
             for key in prev.iter() {
                 if !stack.contains(key) {
-                    // 清理该 entry 的状态池槽（对标 Nav3 removeState）
+                    // 按上一帧映射解析 contentKey；同 contentKey 仍有栈内实例时
+                    // 不清理/不回调（对标 Nav3 onPop 触发条件"该 contentKey 的
+                    // 最后一个实例被弹出"——共享 contentKey 的多实例状态保持）
                     let kh = key_hash(key);
-                    clear_entry_state(kh, &entry_pool);
-                    for d in &self.entry_decorators {
-                        d.on_pop(key);
+                    let ck = route_content_keys.peek().get(&kh).copied().unwrap_or(kh);
+                    let still_shared = entries.iter().any(|e| e.content_key() == ck);
+                    if !still_shared {
+                        clear_entry_state(ck, &entry_pool);
+                        for d in &self.entry_decorators {
+                            d.on_pop(ck);
+                        }
                     }
                 }
             }
             prev_stack.set(stack.clone());
         }
+        // 更新 route→contentKey 映射（仅 peek 读取——set_silent 免通知）
+        route_content_keys.set_silent(
+            entries.iter().map(|e| (key_hash(e.key()), e.content_key())).collect(),
+        );
         if stack.is_empty() {
             return; // 空栈：渲染空
         }
@@ -875,29 +951,28 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
                 let entry_pool = entry_pool.clone();
                 // 导航过渡状态机（跨帧 remember——current/previous/forward/progress）
                 let transition = NavTransition::init(ctx, Some(top.clone()));
-                // 方向由栈长变化判断；push/pop 各用 transition_spec / pop_transition_spec
-                // （对标 Nav3 transitionSpec / popTransitionSpec）
-                let forward = stack.len() > prev.len();
+                // 方向：isPop 列表差分（对标 NavDisplay.isPop）；push/pop 各用
+                // transition_spec / pop_transition_spec（对标 Nav3 同名参数）
+                let forward = !is_pop(&prev, &stack);
                 let spec = if forward { self.transition_spec } else { self.pop_transition_spec };
                 // 检测导航变化并启动过渡
                 transition.detect(&Some(top.clone()), forward, &spec);
                 // 渲染双页过渡（Stack 层叠：旧页滑出 + 新页滑入）
                 // 状态作用域：过渡期两页都需要（previous 页的状态池槽也提供）
-                transition.render(ctx, provider, |ctx, key, entry, is_prev| {
-                    // 提供 entry 状态作用域（状态池 + 当前 key + 槽计数器）；
+                transition.render(ctx, provider, |ctx, _key, entry, is_prev| {
+                    // 提供 entry 状态作用域（状态池按 contentKey 关联 + 槽计数器）；
                     // 滑出层（is_prev）用只读作用域——miss 不入池，防止滑出期间
                     // 内容重跑把刚清理的槽重新插回
-                    let kh = key_hash(key);
                     let counter = ctx.remember(|| State::new(0u32)).get();
                     counter.set_silent(0); // 每帧重置——seq 按 entry 内调用顺序分配（槽 key 稳定）
                     let scope = EntryStateScope {
                         pool: entry_pool.clone(),
-                        key: kh,
+                        key: entry.content_key(),
                         counter,
                         draining: is_prev,
                     };
                     // CompositionLocal provides——PopGuard 自动弹栈（panic/嵌套安全）
-                    ENTRY_STATE_SCOPE.provides(scope, || wrap_entry(ctx, key, entry, decorators));
+                    ENTRY_STATE_SCOPE.provides(scope, || wrap_entry(ctx, entry, decorators));
                 }, &spec);
             }
             ScenePlan::ListDetail => {
@@ -915,33 +990,31 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
                         crate::ui::layout_components::Column::new()
                             .modifier(Modifier::new().fill_max_height().layout_weight(2.0))
                             .build(ctx, |ctx| {
-                                let kh = key_hash(list);
                                 let counter = ctx.remember(|| State::new(0u32)).get();
                                 counter.set_silent(0); // 每帧重置——seq 按 entry 内调用顺序分配（槽 key 稳定）
                                 let scope = EntryStateScope {
                                     pool: pool.clone(),
-                                    key: kh,
+                                    key: list_entry.content_key(),
                                     counter,
                                     draining: false,
                                 };
                                 ENTRY_STATE_SCOPE.provides(scope, || {
-                                    wrap_entry(ctx, list, &list_entry, decorators);
+                                    wrap_entry(ctx, &list_entry, decorators);
                                 });
                             });
                         crate::ui::layout_components::Column::new()
                             .modifier(Modifier::new().fill_max_height().layout_weight(3.0))
                             .build(ctx, |ctx| {
-                                let kh = key_hash(detail);
                                 let counter = ctx.remember(|| State::new(0u32)).get();
                                 counter.set_silent(0); // 每帧重置——seq 按 entry 内调用顺序分配（槽 key 稳定）
                                 let scope = EntryStateScope {
                                     pool: pool.clone(),
-                                    key: kh,
+                                    key: detail_entry.content_key(),
                                     counter,
                                     draining: false,
                                 };
                                 ENTRY_STATE_SCOPE.provides(scope, || {
-                                    wrap_entry(ctx, detail, &detail_entry, decorators);
+                                    wrap_entry(ctx, &detail_entry, decorators);
                                 });
                             });
                     });
@@ -977,6 +1050,33 @@ mod tests {
         for &c in &node.children {
             collect_texts(nodes, c, out);
         }
+    }
+
+    /// isPop 列表差分（对标 NavDisplay.isPop）：前缀子集=pop、整栈替换/发散/更长
+    /// =navigate；空栈侧 winia 扩展（空→非空=push、清空=pop）
+    #[test]
+    fn is_pop_direction_diffing() {
+        // push：更长 → 非 pop
+        assert!(!is_pop(&[TestRoute::Home], &[TestRoute::Home, TestRoute::Detail(1)]));
+        // pop：前缀子集且更短
+        assert!(is_pop(&[TestRoute::Home, TestRoute::Detail(1)], &[TestRoute::Home]));
+        // 整栈替换（首元素不同）→ 非 pop
+        assert!(!is_pop(&[TestRoute::Home, TestRoute::Detail(1)], &[TestRoute::Settings]));
+        // 等长但中途发散 → 非 pop（替换）
+        assert!(!is_pop(
+            &[TestRoute::Home, TestRoute::Detail(1)],
+            &[TestRoute::Home, TestRoute::Detail(2)]
+        ));
+        // 前缀相同但发散且不长于旧栈 → 非 pop（[A,B,C]→[A,X]）
+        assert!(!is_pop(
+            &[TestRoute::Home, TestRoute::Detail(1), TestRoute::Settings],
+            &[TestRoute::Home, TestRoute::Detail(2)]
+        ));
+        // 空栈侧（winia 扩展）
+        assert!(!is_pop::<TestRoute>(&[], &[TestRoute::Home]), "空栈 push → 非 pop");
+        assert!(is_pop(&[TestRoute::Home], &[]), "清空 → pop");
+        // 同栈无变化 → 非 pop
+        assert!(!is_pop(&[TestRoute::Home], &[TestRoute::Home]));
     }
 
     #[test]
@@ -1353,6 +1453,105 @@ mod tests {
             first, 1,
             "pop 完成后重进：池应为空（滑出层未重污染），首帧计数恰为 1——实际 {first}"
         );
+    }
+
+    /// contentKey（对标 NavEntry.contentKey）：同 contentKey 的不同路由共享状态池
+    /// 槽（Nav3 语义：同内容 = 同状态）；默认（key hash）不同路由相互独立；
+    /// 同 contentKey 多实例时弹出其一不清理（"最后一个实例"语义）
+    #[test]
+    fn content_key_shares_state_across_routes() {
+        use crate::core::composer::Composer;
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let bs = NavBackStack::<TestRoute>::with_initial(TestRoute::Home);
+        let mut composer = Composer::new();
+
+        let mut build = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                NavDisplay::new(&bs, |ctx, key| match key {
+                    TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
+                        crate::ui::Text::new("HomeScreen").build(ctx);
+                    }),
+                    TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
+                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                    }),
+                    TestRoute::Detail(id) => {
+                        let id = *id;
+                        let key = key.clone();
+                        // Detail(1)/Detail(2) 共享 contentKey=42（同内容语义）；
+                        // Detail(3) 用默认（key hash）——独立状态
+                        let entry = if id <= 2 {
+                            NavEntry::with_content_key(key, 42, move |ctx, _| {
+                                let counter = remember_entry_state(|| 0i32);
+                                counter.update(|v| *v += 1);
+                                crate::ui::Text::new(format!("Detail{id}-counter{}", counter.get())).build(ctx);
+                            })
+                        } else {
+                            NavEntry::new(key, move |ctx, _| {
+                                let counter = remember_entry_state(|| 0i32);
+                                counter.update(|v| *v += 1);
+                                crate::ui::Text::new(format!("Detail{id}-counter{}", counter.get())).build(ctx);
+                            })
+                        };
+                        entry
+                    }
+                })
+                .build(ctx);
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        let advance = |composer: &mut Composer| {
+            for _ in 0..12 {
+                crate::animation::update_animations();
+                std::thread::sleep(std::time::Duration::from_millis(60));
+                build(composer);
+            }
+        };
+        let counter_of = |composer: &mut Composer, id: u64| -> i32 {
+            let root = composer.layout_root_idx().unwrap();
+            let nodes = composer.arena_nodes();
+            let mut texts = Vec::new();
+            collect_texts(nodes, root, &mut texts);
+            texts.iter().find_map(|t| {
+                let p = format!("Detail{id}-counter");
+                t.find(&p).map(|i| t[i + p.len()..].parse::<i32>().unwrap_or(0))
+            }).unwrap_or_else(|| panic!("应渲染 Detail{id}-counterN"))
+        };
+
+        // Detail(1)（ck=42）计数累加
+        bs.push(TestRoute::Detail(1));
+        build(&mut composer);
+        advance(&mut composer);
+        let n1 = counter_of(&mut composer, 1);
+        assert!(n1 > 0, "Detail(1) 首轮应计数 >0");
+        // push Settings 覆盖 → pop → Detail(1) 计数保持（同 ck 槽未清理）
+        bs.push(TestRoute::Settings);
+        build(&mut composer);
+        advance(&mut composer);
+        bs.pop();
+        build(&mut composer);
+        advance(&mut composer);
+        let n1b = counter_of(&mut composer, 1);
+        assert!(n1b > n1, "覆盖返回保持：{} 应 > {n1}", n1b);
+        // push Detail(2)（同 ck=42）：共享同一池槽——计数从 Detail(1) 的值继续
+        bs.push(TestRoute::Detail(2));
+        build(&mut composer);
+        advance(&mut composer);
+        let n2 = counter_of(&mut composer, 2);
+        assert!(n2 > n1b, "同 contentKey 应共享池槽：Detail(2) 计数 {n2} 应 > Detail(1) 的 {n1b}");
+        // 弹出 Detail(2) 时 Detail(1)（同 ck）仍在栈——不清理（最后实例语义）
+        bs.pop();
+        build(&mut composer);
+        advance(&mut composer);
+        let n1c = counter_of(&mut composer, 1);
+        assert!(n1c >= n2, "同 ck 多实例弹出其一不清理：Detail(1) {n1c} 应 ≥ {n2}");
+        // 全部弹出（ck=42 槽清理）→ push Detail(3)（默认 ck）：全新状态
+        bs.pop();
+        build(&mut composer);
+        advance(&mut composer);
+        bs.push(TestRoute::Detail(3));
+        build(&mut composer);
+        let n3 = counter_of(&mut composer, 3);
+        assert_eq!(n3, 1, "默认 contentKey 独立状态：首帧计数应恰为 1——实际 {n3}");
     }
 
     /// 过渡规格：默认 fade（Nav3 NavDisplay 默认——fadeIn togetherWith fadeOut）
