@@ -402,6 +402,9 @@ pub(crate) enum ModifierElement {
     /// 强制尺寸（对标 Compose `Modifier.requiredSize`——忽略 incoming
     /// constraints 的收缩，允许溢出父约束）
     RequiredSize { width: Option<f32>, height: Option<f32> },
+    /// 尺寸上报（对标 Compose `Modifier.onSizeChanged`）——节点测量完成后
+    /// 以逻辑像素回调 (width, height)；元素内部去重，尺寸未变化不重复回调
+    OnSizeChanged { callback: std::sync::Arc<dyn Fn(f32, f32) + Send + Sync> },
     /// 测试标记（对标 Compose `Modifier.testTag`——UI 测试定位；
     /// 调试树 JSON 暴露 tag 字段）
     TestTag { tag: String },
@@ -1262,6 +1265,35 @@ pub fn draw_icon(self, spec: crate::ui::icon::IconSpec) -> Self {
         })
     }
 
+    /// `on_size_changed(f)`（对标 Compose `Modifier.onSizeChanged`）——节点
+    /// 测量完成后回调逻辑像素尺寸 `(width, height)`。**尺寸变化才回调**
+    /// （去重作用域 = 元素实例：modifier 链每次重组会重建元素并重置去重状态，
+    /// 跨帧防重由回调内 `State::set` 的 PartialEq 承担）。窗口 resize/内容变化
+    /// 触发重测时回调。回调内可写 State（如动画位移基准）——写相同值会被
+    /// 去重，不会引发重组循环。
+    pub fn on_size_changed(self, f: impl Fn(f32, f32) + Send + Sync + 'static) -> Self {
+        let last: std::sync::Arc<std::sync::Mutex<Option<(f32, f32)>>> = Default::default();
+        self.push(ModifierElement::OnSizeChanged {
+            callback: std::sync::Arc::new(move |w, h| {
+                let mut last = last.lock().unwrap();
+                if *last != Some((w, h)) {
+                    *last = Some((w, h));
+                    drop(last);
+                    f(w, h);
+                }
+            }),
+        })
+    }
+
+    /// 测量完成后调用链上全部 `on_size_changed` 回调（元素内各自去重）
+    pub(crate) fn report_measured_size(&self, width: f32, height: f32) {
+        for el in &self.elements {
+            if let ModifierElement::OnSizeChanged { callback } = el {
+                callback(width, height);
+            }
+        }
+    }
+
     /// `alpha(a)`（对标 Compose `Modifier.alpha`）——透明度便捷包装：
     /// `a != 1.0` 时应用 `graphicsLayer(alpha = a, clip = true)`（**alpha<1
     /// 隐式裁剪到 bounds**——Compose 语义）。已存在 GraphicsLayer 元素时
@@ -1873,6 +1905,7 @@ impl Debug for ModifierElement {
                 .field("width", width)
                 .field("height", height)
                 .finish(),
+            Self::OnSizeChanged { .. } => f.write_str("OnSizeChanged"),
             Self::TestTag { tag } => f.debug_struct("TestTag").field("tag", tag).finish(),
             Self::LayoutDirection(d) => f.debug_tuple("LayoutDirection").field(d).finish(),
             Self::TextFieldSlot { role } => f.debug_struct("TextFieldSlot").field("role", role).finish(),
@@ -2835,5 +2868,40 @@ mod param_eq_tests {
             .drop_shadow(Shape::Rectangle, ShadowParams::new(4.0, 0.0, 2.0, Color::BLACK, 0.2));
         let n = m.elements().iter().filter(|el| matches!(el, ModifierElement::Shadow { .. })).count();
         assert_eq!(n, 2, "多个 drop_shadow 叠加（Compose vararg 语义）");
+    }
+
+    /// on_size_changed（对标 Compose onSizeChanged）：测量后上报逻辑尺寸；
+    /// 尺寸未变化不重复回调，约束变化引发新尺寸时再次回调
+    #[test]
+    fn on_size_changed_reports_and_dedups() {
+        use crate::core::composer::Composer;
+        let reported: std::sync::Arc<std::sync::Mutex<Vec<(f32, f32)>>> = Default::default();
+        let mut composer = Composer::new();
+        {
+            let rep = reported.clone();
+            composer.compose(|ctx| {
+                crate::ui::layout_components::Column::new()
+                    .modifier(Modifier::new().fill_max_width().on_size_changed(move |w, h| {
+                        rep.lock().unwrap().push((w, h));
+                    }))
+                    .build(ctx, |ctx| {
+                        crate::ui::Text::new("hello").build(ctx);
+                    });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        }
+        {
+            let reps = reported.lock().unwrap();
+            assert_eq!(reps.len(), 1, "测量完成后应上报一次");
+            assert_eq!(reps[0].0, 400.0, "fill_max_width 宽度应等于约束 max");
+        }
+        // 同约束 re-layout：尺寸未变（clean-skip 折叠）——不得重复回调
+        composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        assert_eq!(reported.lock().unwrap().len(), 1, "尺寸未变化不应重复回调");
+        // 约束变化 → 宽度变化 → 再次回调
+        composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 400.0));
+        let reps = reported.lock().unwrap();
+        assert_eq!(reps.len(), 2, "宽度变化应再次回调");
+        assert_eq!(reps[1].0, 300.0, "第二次上报应反映新宽度");
     }
 }
