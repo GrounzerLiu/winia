@@ -151,7 +151,7 @@ pub fn build(self, ctx: &mut ComposeCtx) {
 
 ## 四、验证
 
-- 单元测试（nav.rs，13 个）：
+- 单元测试（nav.rs，16 个）：
   - `back_stack_push_pop_works`、`back_stack_remove_last_and_clear`（back stack 操作）
   - `nav_display_renders_top_entry`（Home → push Detail7 → pop 回 Home，含过渡动画推进）
   - `list_detail_scene_renders_both_entries`（ListDetail 双栏：栈 2 项时 list+detail 同渲染；pop 回 1 项退化为 SinglePane）
@@ -164,13 +164,16 @@ pub fn build(self, ctx: &mut ComposeCtx) {
   - `is_pop_direction_diffing`（isPop 列表差分：前缀子集=pop、整栈替换/发散/更长=navigate）
   - `content_key_shares_state_across_routes`（同 contentKey 共享池槽、最后实例才清理、默认独立）
   - `entry_transition_override_wins_over_display_default`（entry 过渡覆盖优先级：push/pop 前景判别）
+  - `scene_strategy_chain_priority_and_fallback`（自定义 Scene/策略链优先级 + SinglePane 兜底）
+  - `scene_strategy_switch_converges`（策略链切换：entries 未变 → 瞬时切（防 dup-key），可反复切换无冻结）
+- 完整 `cargo test -p winia --lib` 656 项通过（animated_size / lazy_column 等时序敏感 flaky 与 nav 无关）
 - 真实 demo（`examples/nav_demo.rs`，debug-server 实操）：
   - Home → 点「打开 Detail 42」→ `[Home, Detail(42)]` + Detail 页面 ✓
   - Detail → 点「返回」→ `[Home]` + Home 页面 ✓
   - **ListDetail 模式**：双栏渲染（Home 左栏 x=16 / Detail 右栏 x=243）✓
   - **模式切换**：SinglePane ↔ ListDetail 实时生效（Detail 从右栏 x=243 变单栏 x=16）✓
   - 多次导航循环稳定 ✓；动画埋点日志确认 push/pop 方向、完成清理、静置归零 ✓
-- 完整 `cargo test -p winia --lib` 653 项通过（1 个 animated_size 时序敏感 flaky 与 nav 无关）
+
 
 ## 五、路线图（按差距分级，2026-08-30 重排）
 
@@ -197,9 +200,17 @@ spec 过渡、NavEntryDecorator（on_pop 广播 + wrap 链式）、remember_entr
    组合，winia 的 draining 语义等价且更简单（见 §六 踩坑 7）
 
 **P1——架构级差距（按需逐个对标）**
-5. [ ] **Scene trait + SceneStrategy 策略链**：开放自定义 Scene（key/entries/
-   previousEntries/content/metadata）+ 策略列表依次尝试、SinglePane 兜底
-   （现 `ScenePlan` enum 为封闭简化——用户无法自定义 Scene 形态）
+5. [x] **Scene trait + SceneStrategy 策略链**：`Scene` trait（scene_key/entries/
+   content——自定义场景形态开放）+ 策略列表依次尝试、SinglePane 兜底（对标
+   calculateSceneWithSinglePaneFallback）；ListDetail 转为内置策略（<2 条返回
+   None 落空）；NavTransition 换 scene key 维度，旧场景由 entry keys 经策略链
+   确定性重建；scene key 须含实现类型区分（对标 AnimatedSceneKey(KClass, key)）。
+   **双栏动画（设计决断 2026-08-30）**：ListDetail 场景 key 含 list/detail 的
+   contentKey——detail 变化即场景变化，走场景级过渡（按设置的 transition_spec；
+   列表栏随场景参与过渡）。Compose 的 pane 级方案（sceneKey 恒定 + AnimatedPane，
+   material3-adaptive）依赖 movableContentOf 与 contentKey 去重渲染——winia 槽表
+   暂缺该基建（dup-key fail-fast / 非 composable 路径 remember 逐帧漂移，实测），
+   pane 级 deferred 至 P1-9 落地后重评
 6. [ ] **OverlayScene / DialogScene**：覆盖层导航（overlaidEntries 撑下层、onRemove
    suspend 退出动画、渲染于 AnimatedContent 之上、独立生命周期、`dialog()` metadata）
 7. [ ] **rememberNavBackStack 持久化**：进程死亡/配置变更恢复（对标
@@ -260,7 +271,7 @@ spec 过渡、NavEntryDecorator（on_pop 广播 + wrap 链式）、remember_entr
 
 **验证**：单元测试 `remember_state_decorator_preserves_entry_state`（覆盖返回保持 + pop 清理
 双场景）+ `pop_slideout_does_not_repollute_entry_state_pool`（draining 回归）；demo 实操验证；
-完整测试 653 项通过。
+完整测试 656 项通过。
 
 ## 七、差距分析（androidx-main 2026-08 vs winia，2026-08-30）
 
@@ -284,11 +295,11 @@ Rust 惯用）、NavEntryDecorator（on_pop 广播 + wrap 链式）、SaveableSt
 ### P1 架构级
 | # | Nav3 机制 | winia 现状 |
 |---|---|---|
-| 5 | Scene 为 trait（key/entries/previousEntries/content/metadata 默认=栈顶 entry）+ SceneStrategy 策略链（List 依次尝试，SinglePane 兜底）+ SceneDecoratorStrategy（scene 级装饰，overlay 豁免） | `ScenePlan` enum 封闭简化（Single/ListDetail/Empty）——用户无法自定义 Scene |
+| 5 | Scene 为 trait（key/entries/previousEntries/content/metadata 默认=栈顶 entry）+ SceneStrategy 策略链（List 依次尝试，SinglePane 兜底）+ SceneDecoratorStrategy（scene 级装饰，overlay 豁免） | Scene trait + 策略链已对齐（[x]：scene_key/entries/content，SinglePane 兜底）；双栏动画=场景级过渡（pane 级 deferred 至 P1-9）；SceneDecoratorStrategy 与 scene 级 metadata 未做 |
 | 6 | OverlayScene/DialogScene：覆盖层导航（overlaidEntries、onRemove suspend 退出动画、渲染于 AnimatedContent 之上、仅顶层 RESUMED、`dialog()` metadata 声明） | 无覆盖层导航 |
 | 7 | rememberNavBackStack：rememberSerializable + NavBackStackSerializer 开放多态，进程死亡恢复 | 内存态 |
 | 8 | Scene 生命周期：过渡期 STARTED/落定 RESUMED；离栈 entry 封顶 CREATED（BackStackAwareLifecycleNavEntryDecorator 真实现） | 无 Lifecycle 系统；同名 decorator 为占位 |
-| 9 | movableContentOf（SceneSetupNavEntryDecorator）：entry 包为可移动内容，跨组合位置状态不丢——**winia plain remember 限制的 Compose 解** | 槽表按组合位置分配身份，无跨位置移动 |
+| 9 | movableContentOf（SceneSetupNavEntryDecorator）：entry 包为可移动内容，跨组合位置状态不丢——**winia plain remember 限制的 Compose 解** | 槽表按组合位置分配身份，无跨位置移动。实测另有两个关联缺口：①非 #[composable] 路径（Scene::content 等 trait 方法）的 remember 槽 key 逐帧漂移（计数器不重置），需 remember_at_key 显式 key；②场景/语句组 params 比较对无 PartialEq 的参数（&dyn Scene 等）不可见变化，关键语句需 ctx.key(scene_key) 强制 Enter——双栏 pane 级动画实验（2026-08-30）因此三处受限回退为场景级过渡 |
 | 10 | 预测性返回：NavigationEvent + SeekableTransitionState.seekTo(progress) 手势跟手、取消/完成回放、predictivePopTransitionSpec(swipeEdge)（Android 默认 scaleOut(0.7)+spring fadeIn） | 无 |
 
 ### P2 外围
