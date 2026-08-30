@@ -10,7 +10,7 @@
 //! 运行：cargo run -p winia --example nav_demo --features debug-server
 
 use winia::prelude::*;
-use winia::nav::{remember_entry_state, ListDetailStrategy, NavBackStack, NavDisplay, NavEntry, NavKey, NavTransitionSpec, SceneStrategy, SinglePaneStrategy};
+use winia::nav::{remember_entry_state, ListDetailStrategy, NavBackStack, NavDisplay, NavEntry, NavKey, NavTransitionSpec, SceneStrategy};
 
 /// 类型安全路由（对标 Nav3 的 NavKey + @Serializable——winia 无序列化要求）
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
@@ -142,11 +142,11 @@ fn nav_demo(ctx: &mut ComposeCtx) {
                     })
                 }
             })
-            // Scene 策略：ListDetail 双栏（宽屏列表+详情）或 SinglePane
-            .scene_strategy(if list_detail.get() {
-                Box::new(ListDetailStrategy) as Box<dyn SceneStrategy<Route>>
+            // Scene 策略链：ListDetail 双栏（宽屏列表+详情）或空链（SinglePane 兜底）
+            .scene_strategies(if list_detail.get() {
+                vec![Box::new(ListDetailStrategy) as Box<dyn SceneStrategy<Route>>]
             } else {
-                Box::new(SinglePaneStrategy) as Box<dyn SceneStrategy<Route>>
+                Vec::new()
             })
             // 过渡规格（对标 Nav3 transitionSpec / popTransitionSpec——成对给出方向相反的规格）
             .transition_spec(push_spec)

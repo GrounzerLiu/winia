@@ -128,9 +128,12 @@ pub(crate) fn clear_entry_state(key: u64, pool: &std::sync::Arc<std::sync::Mutex
 /// ⚠ 不能用 DefaultHasher——其种子随机，同一值每次 hash 不同 → 槽 key 漂移
 /// → 状态池永不命中。用 FNV-1a（确定性，与 winia mix_key 同源）。
 fn key_hash<K: NavKey>(key: &K) -> u64 {
+    fnv_hash(key)
+}
+
+/// 确定性 FNV-1a（框架内部标识用——scene key 等场景无关 hash）
+fn fnv_hash(value: &impl std::hash::Hash) -> u64 {
     use std::hash::Hasher;
-    // 先经一个确定性 hasher 把 K 的 hash 值取出（K: Hash 的 hash() 是确定性的——
-    // 问题只在 DefaultHasher 的随机种子；这里用 write_u64 手动折叠）
     struct FnvHasher(u64);
     impl std::hash::Hasher for FnvHasher {
         fn finish(&self) -> u64 { self.0 }
@@ -142,7 +145,7 @@ fn key_hash<K: NavKey>(key: &K) -> u64 {
         }
     }
     let mut h = FnvHasher(0xcbf29ce484222325);
-    key.hash(&mut h);
+    value.hash(&mut h);
     h.finish()
 }
 
@@ -274,7 +277,27 @@ pub struct NavEntry<K: NavKey> {
     /// pop 方向过渡覆盖（对标 Nav3 `NavDisplay.PopTransitionKey` metadata——
     /// 本 entry 被弹出作为 pop 前景时优先于 NavDisplay 默认）
     pop_transition_spec: Option<NavTransitionSpec>,
-    content: Box<dyn Fn(&mut ComposeCtx, &K) + 'static>,
+    content: std::sync::Arc<dyn Fn(&mut ComposeCtx, &K) + 'static>,
+}
+
+impl<K: NavKey> Clone for NavEntry<K> {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            content_key: self.content_key,
+            transition_spec: self.transition_spec,
+            pop_transition_spec: self.pop_transition_spec,
+            content: self.content.clone(),
+        }
+    }
+}
+
+/// 相等性 = **内容身份**相等（key + contentKey；spec/内容闭包不参与）——
+/// 同 contentKey 即同内容（与状态池/组合 key 的关联语义一致）
+impl<K: NavKey> PartialEq for NavEntry<K> {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key && self.content_key == other.content_key
+    }
 }
 
 impl<K: NavKey> NavEntry<K> {
@@ -285,7 +308,7 @@ impl<K: NavKey> NavEntry<K> {
             content_key,
             transition_spec: None,
             pop_transition_spec: None,
-            content: Box::new(content),
+            content: std::sync::Arc::new(content),
         }
     }
 
@@ -302,7 +325,7 @@ impl<K: NavKey> NavEntry<K> {
             content_key,
             transition_spec: None,
             pop_transition_spec: None,
-            content: Box::new(content),
+            content: std::sync::Arc::new(content),
         }
     }
 
@@ -480,10 +503,11 @@ impl NavTransitionSpec {
 /// 参数的自定义时长/曲线后续接（见 docs/navigation3.md）。
 #[derive(Clone)]
 struct NavTransition<K: NavKey> {
-    /// 当前显示的 entry key
-    current: State<Option<K>>,
-    /// 过渡中的旧 entry key（动画完成后清空）
-    previous: State<Option<K>>,
+    /// 当前场景的场景 key（对标 Nav3 AnimatedSceneKey——过渡的驱动标识）
+    current_key: State<u64>,
+    /// 过渡中的旧场景（动画完成后清空；直接持有旧场景对象——渲染"上一帧
+    /// 画面"本身，策略链切换/栈外 entry 也能正确渲染，对标 Nav3 sceneMap）
+    previous: State<Option<SceneHolder<K>>>,
     /// push=true（新页右入旧页左出）/ pop=false（反向）
     forward: State<bool>,
     /// 过渡进度（1→0：1=旧页全显，0=新页全显/无过渡）
@@ -493,11 +517,25 @@ struct NavTransition<K: NavKey> {
     active_spec: State<Option<NavTransitionSpec>>,
 }
 
+/// 场景句柄（场景 key + 场景对象）。PartialEq 按 key（同 key = 同内容场景——
+/// scene key 已含场景类型与内容身份）。
+#[derive(Clone)]
+struct SceneHolder<K: NavKey> {
+    key: u64,
+    scene: std::sync::Arc<dyn Scene<K>>,
+}
+
+impl<K: NavKey> PartialEq for SceneHolder<K> {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+    }
+}
+
 impl<K: NavKey> NavTransition<K> {
-    /// 创建（首帧 current = 初始栈顶）
-    fn init(ctx: &mut ComposeCtx, initial: Option<K>) -> Self {
+    /// 创建（首帧 current = 初始场景）
+    fn init(ctx: &mut ComposeCtx, initial_key: u64) -> Self {
         Self {
-            current: ctx.remember(|| State::new(initial)).get(),
+            current_key: ctx.remember(move || State::new(initial_key)).get(),
             previous: ctx.remember(|| State::new(None)).get(),
             forward: ctx.remember(|| State::new(true)).get(),
             // 初值 0 = 无过渡（渲染层以此判定静置归位；导航时 detect 复位 1.0）
@@ -506,24 +544,51 @@ impl<K: NavKey> NavTransition<K> {
         }
     }
 
-    /// 检测导航变化并启动过渡（每帧调用——current 变化即 push/pop）。
+    /// 上一过渡的场景（None = 无进行中过渡）
+    fn previous_scene(&self) -> Option<SceneHolder<K>> {
+        self.previous.peek().clone()
+    }
+
+    /// 检测导航变化并启动过渡（每帧调用——scene key 变化即导航）。
+    /// `prev_frame` = 上一帧渲染的场景对象（退场层直接持有——策略链切换/栈外
+    /// entry 也能正确渲染，对标 Nav3 sceneMap 的场景缓存）；`None` = 首帧。
+    /// **entries 未变（仅场景形态/策略变）→ 瞬时切换**：双层同渲同 contentKey
+    /// 内容会在非宏节点键空间碰撞（dup-key），且形态切瞬切符合平台惯例。
     /// spec 在过渡启动时固化进快照（对标 Nav3 求值 transitionSpec 的时机）——
     /// 中途改配置不影响进行中的过渡。
-    fn detect(&self, target: &Option<K>, forward: bool, spec: &NavTransitionSpec) {
+    fn detect(
+        &self,
+        target: &SceneHolder<K>,
+        forward: bool,
+        spec: &NavTransitionSpec,
+        prev_frame: Option<SceneHolder<K>>,
+    ) {
         // 进度推进（动画驱动——每帧 update_animations）
         let _p = self.progress.get();
-        if target != &self.current.peek() {
-            if spec.is_instant() {
-                // 瞬时切换（None togetherWith None）：无动画、无旧页——清掉进行中
-                // 的过渡（防切回动画规格后渲染出栈外幽灵页）与孤儿动画
+        // entries 是否变化：未变（仅场景形态/策略变）→ 瞬时切换
+        let entries_changed = prev_frame
+            .as_ref()
+            .map(|p| !same_entry_ids(p.scene.entries(), target.scene.entries()))
+            .unwrap_or(false);
+        let instant = spec.is_instant() || !entries_changed;
+        if target.key != self.current_key.peek() {
+            if instant || prev_frame.is_none() {
+                // 瞬时切换（None togetherWith None / 形态切换 / 首帧）：无动画、
+                // 无旧页——清掉进行中的过渡（防切回动画规格后渲染出栈外幽灵页）
+                // 与孤儿动画
                 crate::animation::cancel_animation(&self.progress);
                 self.progress.set_silent(0.0);
                 self.active_spec.set_silent(None);
                 self.previous.set(None);
             } else {
-                // 旧页无条件进入过渡——exit==None 时旧页原样保留到过渡结束
-                // （对标 ExitTransition.None "keeps the content unchanged"）
-                self.previous.set(self.current.peek());
+                // 旧场景无条件进入过渡——exit==None 时旧场景原样保留到过渡结束
+                // （对标 ExitTransition.None "keeps the content unchanged"）。
+                // 直接快照上一帧的场景对象（Arc 持有——popped entry 也渲染真实
+                // 内容，对标 Nav3 sceneMap 的场景缓存）
+                self.previous.set(Some(SceneHolder {
+                    key: self.current_key.peek(),
+                    scene: std::sync::Arc::clone(&prev_frame.as_ref().unwrap().scene),
+                }));
                 self.forward.set(forward);
                 self.active_spec.set_silent(Some(*spec));
                 // 复位进度起点 1.0（旧页全显）——上次动画结束 progress 停在 0，
@@ -545,7 +610,7 @@ impl<K: NavKey> NavTransition<K> {
                     )),
                 );
             }
-            self.current.set(target.clone());
+            self.current_key.set(target.key);
         }
         // 完成检测：过渡结束 → 移除旧页、清规格快照
         if self.previous.peek().is_some() && self.progress.peek() < 0.001 {
@@ -554,30 +619,30 @@ impl<K: NavKey> NavTransition<K> {
         }
     }
 
-    /// 渲染双页过渡（按 spec 快照的 enter/exit 原语逐层计算——对标 Compose
-    /// AnimatedContent 的 ContentTransform：进入原语作用于新页、退出原语作用于
-    /// 旧页；`exit == None` 时旧页静止渲染到过渡结束）。
+    /// 渲染双场景过渡（按 spec 快照的 enter/exit 原语逐层计算——对标 Compose
+    /// AnimatedContent 的 ContentTransform：进入原语作用于新场景、退出原语作用
+    /// 于旧场景；`exit == None` 时旧场景静止渲染到过渡结束）。
     ///
     /// 层序对标 Nav3 的方向 z 序（"z-index increases during navigate and
-    /// decreases during pop"，androidx NavDisplay.android.kt）：push 新页在上、
-    /// pop 旧页在上。（Nav3 的 ContentTransform.targetContentZIndex 用户覆盖
+    /// decreases during pop"，androidx NavDisplay.android.kt）：push 新场景在上、
+    /// pop 旧场景在上。（Nav3 的 ContentTransform.targetContentZIndex 用户覆盖
     /// 当前被 androidx 忽略，winia 同样不支持——方向 z 序为唯一规则。）
     ///
     /// 过渡期间渲染全尺寸点击屏蔽层：winia 命中测试不计 graphics_layer 位移
-    /// （布局命中盒停在原位），滑动页的按钮过渡期可被误触（如连点返回清空栈）。
+    /// （布局命中盒停在原位），滑动场景的按钮过渡期可被误触（如连点返回清空栈）。
     /// 位移基准 = 容器宽度（`on_size_changed` 上报，对标 Compose onSizeChanged）。
-    fn render<'a>(
+    fn render(
         &self,
         ctx: &mut ComposeCtx,
-        provider: &'a (dyn Fn(&mut ComposeCtx, &K) -> NavEntry<K> + 'a),
-        render_entry: impl Fn(&mut ComposeCtx, &K, &NavEntry<K>, bool),
+        previous_scene: Option<&dyn Scene<K>>,
+        current_scene: &dyn Scene<K>,
+        render_entry: &dyn Fn(&mut ComposeCtx, &NavEntry<K>, bool),
         spec: &NavTransitionSpec,
     ) {
         // 过渡规格：优先用启动时固化的快照；无进行中过渡时用当前配置
         // （此时 previous 为 None，所有公式在 active 门下归位，取值无效果）
         let spec = self.active_spec.peek().unwrap_or(*spec);
         let prev = self.previous.peek();
-        let cur = self.current.peek();
         let forward = self.forward.peek();
         // 过渡进行中 = previous 非空——cur 层位移以此为门：静置（启动/无过渡）
         // 时 progress 不保证为 0（无过渡必须归位）
@@ -585,8 +650,7 @@ impl<K: NavKey> NavTransition<K> {
         // 容器宽度（fill_max_size 层的测量宽）——首帧测量先于渲染，peek 即得真值
         let width = ctx.remember(|| State::new(0.0f32)).get();
         // 渲染单个过渡层（graphics_layer 动画闭包——每帧 peek progress/width 零重组）
-        let render_layer = |ctx: &mut ComposeCtx, key: &K, is_prev: bool| {
-            let entry = (provider)(ctx, key);
+        let render_layer = |ctx: &mut ComposeCtx, scene: &dyn Scene<K>, is_prev: bool| {
             let progress = self.progress.clone();
             let width = width.clone();
             let m = Modifier::new().fill_max_size().graphics_layer(move || {
@@ -633,7 +697,20 @@ impl<K: NavKey> NavTransition<K> {
             });
             crate::ui::layout_components::Column::new()
                 .modifier(m)
-                .build(ctx, |ctx| render_entry(ctx, key, &entry, is_prev));
+                .build(ctx, |ctx| {
+                    // 场景 key 驱动槽身份（对标 Nav3 AnimatedSceneKey(KClass, key)
+                    // ——场景切换 = 组合身份切换）：策略链切换时 scene key 变化 →
+                    // 槽换新 → 退场/进场层各自新鲜渲染（否则内层组 params 未变会
+                    // Skip 重放旧子树）。场景内部的 pane 级 draining（如 detail
+                    // pane 退场层）与场景层的 is_prev（整层滑出）取或——任一为真
+                    // 即状态池只读
+                    ctx.key(scene.scene_key(), |ctx| {
+                        let layer_render = |ctx: &mut ComposeCtx, e: &NavEntry<K>, draining: bool| {
+                            render_entry(ctx, e, draining || is_prev);
+                        };
+                        scene.content(ctx, &layer_render);
+                    });
+                });
         };
         crate::ui::layout_components::Stack::new()
             .modifier(Modifier::new().fill_max_size().on_size_changed({
@@ -642,24 +719,20 @@ impl<K: NavKey> NavTransition<K> {
             }))
             .build(ctx, |ctx| {
                 if forward {
-                    // push：新页在上层（对标 Nav3 "z-index increases during navigate"）
-                    if let Some(pk) = prev {
-                        render_layer(ctx, &pk, true);
+                    // push：新场景在上层（对标 Nav3 "z-index increases during navigate"）
+                    if let Some(p) = previous_scene {
+                        render_layer(ctx, p, true);
                     }
-                    if let Some(ck) = cur {
-                        render_layer(ctx, &ck, false);
-                    }
+                    render_layer(ctx, current_scene, false);
                 } else {
-                    // pop：被弹出的旧页在上层（对标 Nav3 "decreases during pop"）
-                    if let Some(ck) = cur {
-                        render_layer(ctx, &ck, false);
-                    }
-                    if let Some(pk) = prev {
-                        render_layer(ctx, &pk, true);
+                    // pop：被弹出的旧场景在上层（对标 Nav3 "decreases during pop"）
+                    render_layer(ctx, current_scene, false);
+                    if let Some(p) = previous_scene {
+                        render_layer(ctx, p, true);
                     }
                 }
                 // 过渡期输入屏蔽层：命中测试不计 graphics_layer 位移（布局命中盒
-                // 停在原位）——滑动层的按钮在过渡期可被误触（如连点返回清空栈）。
+                // 停在原位）——滑动场景的按钮过渡期可被误触（如连点返回清空栈）。
                 // 全尺寸可点击层兜底吞掉过渡期全部点击（透明、无波纹）
                 if active {
                     crate::ui::layout_components::Column::new()
@@ -755,60 +828,168 @@ impl<K: NavKey> NavEntryDecorator<K> for BackStackAwareDecorator {
 }
 
 // ═══════════════════════════════════════════════════════════
-// Scene / SceneStrategy — 多 entry 渲染（对标 Nav3 的 Scene/SceneStrategy）
+// Scene / SceneStrategy — 多 entry 渲染（对标 Nav3 的 Scene/SceneStrategy，
+// androidx.navigation3.scene 包）
 // ═══════════════════════════════════════════════════════════
 
-/// Scene 布局计划——由 SceneStrategy 根据 back stack 计算。
+/// Scene——渲染一个或多个 NavEntry 的具体布局（对标 Nav3 `Scene` trait）。
 ///
-/// 对标 Nav3：`SceneStrategy.calculateScene(entries) -> Scene`——Scene 可渲染
-/// 一个或多个 entry（多栏/自适应布局）。winia 用 enum 表达（而非 trait object，
-/// 同 Modifier 的 enum 哲学——便于 match 分派与测试）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScenePlan {
-    /// 渲染单个 entry（栈顶）——对标 SinglePaneSceneStrategy
-    Single,
-    /// 双栏：list = 栈倒数第二，detail = 栈顶——对标 ListDetailSceneStrategy
-    /// （大屏列表 + 详情同时显示；无次栈顶时退化为 Single）
-    ListDetail,
-    /// 渲染空（空栈）
-    Empty,
+/// 场景实例由 [`SceneStrategy`] 从 entries 计算；同一 entry 可被不同 Scene 渲染，
+/// 过渡期间只会由最新的目标场景渲染（去重——对标 Nav3 contentKey 覆盖规则）。
+///
+/// **重要**：实现应为数据类语义（同 key = 同场景）——scene_key 驱动顶层过渡。
+pub trait Scene<K: NavKey>: 'static {
+    /// 场景标识。**须包含实现类型区分**（对标 Nav3 AnimatedSceneKey(KClass, key)：
+    /// 同类型同 key = 同场景；不同类型即便 key 相同也是不同场景）。
+    /// 内置场景用"类型 tag + entry contentKey"的确定性 hash。
+    fn scene_key(&self) -> u64;
+
+    /// 本场景可渲染的 entries（对标 Nav3 Scene.entries——过渡期间 entry 只由
+    /// 最新的目标场景渲染）
+    fn entries(&self) -> &[NavEntry<K>];
+
+    /// 渲染场景内容：自身装饰 + 逐个调用 `render_entry`（每个 entry 至多一次）。
+    /// `render_entry` 由 NavDisplay 提供（状态作用域 + 装饰器链包裹）；
+    /// `draining=true` 用于**同 contentKey 已在别处渲染**的退场内容——跳过
+    /// ctx.key（避免双实例 dup-key）且状态池只读（对标 Nav3 contentKey 去重
+    /// + movableContent 的组合语义在 winia 槽表上的等价实现）。
+    fn content(
+        &self,
+        ctx: &mut ComposeCtx,
+        render_entry: &dyn Fn(&mut ComposeCtx, &NavEntry<K>, bool),
+    );
 }
 
-/// Scene 策略——根据 back stack 决定布局（对标 Nav3 `SceneStrategy`）。
+const SINGLE_PANE_SCENE_TAG: &str = "winia/nav/SinglePaneScene";
+const LIST_DETAIL_SCENE_TAG: &str = "winia/nav/ListDetailScene";
+
+
+/// 单栏场景（对标 Nav3 `SinglePaneScene`）——渲染栈顶 entry
+struct SinglePaneScene<K: NavKey> {
+    entries: Vec<NavEntry<K>>,
+}
+
+impl<K: NavKey> Scene<K> for SinglePaneScene<K> {
+    fn scene_key(&self) -> u64 {
+        fnv_hash(&(SINGLE_PANE_SCENE_TAG, self.entries.last().map(|e| e.content_key())))
+    }
+
+    fn entries(&self) -> &[NavEntry<K>] {
+        &self.entries
+    }
+
+    fn content(
+        &self,
+        ctx: &mut ComposeCtx,
+        render_entry: &dyn Fn(&mut ComposeCtx, &NavEntry<K>, bool),
+    ) {
+        if let Some(e) = self.entries.last() {
+            render_entry(ctx, e, false);
+        }
+    }
+}
+
+/// 双栏场景（对标 Nav3 `ListDetailSceneStrategy` 的场景）——list = 倒数第二、
+/// detail = **栈顶**并排；entries = [list, detail]（构造时取末两位，见
+/// [`ListDetailStrategy`]）
+struct ListDetailScene<K: NavKey> {
+    entries: Vec<NavEntry<K>>,
+}
+
+impl<K: NavKey> Scene<K> for ListDetailScene<K> {
+    fn scene_key(&self) -> u64 {
+        // 场景 key 含 list/detail 的 contentKey——**detail 变化即场景变化**，
+        // 走 NavDisplay 场景级过渡（按 transition_spec/pop_transition_spec）。
+        // 注：Compose 的 ListDetail 场景 key 恒定、pane 内容零动画（pane 级
+        // 动画需 movableContent 级基建——winia 槽表暂缺，见路线图 P1-9）；
+        // winia 取整场景过渡（列表栏随场景淡入淡出）为当前基建下的最优观感
+        fnv_hash(&(
+            LIST_DETAIL_SCENE_TAG,
+            self.entries.first().map(|e| e.content_key()),
+            self.entries.last().map(|e| e.content_key()),
+        ))
+    }
+
+    fn entries(&self) -> &[NavEntry<K>] {
+        &self.entries
+    }
+
+    fn content(
+        &self,
+        ctx: &mut ComposeCtx,
+        render_entry: &dyn Fn(&mut ComposeCtx, &NavEntry<K>, bool),
+    ) {
+        let (Some(list), Some(detail)) = (self.entries.first(), self.entries.get(1)) else {
+            return;
+        };
+        crate::ui::layout_components::Row::new()
+            .modifier(Modifier::new().fill_max_size())
+            .build(ctx, |ctx| {
+                crate::ui::layout_components::Column::new()
+                    .modifier(Modifier::new().fill_max_height().layout_weight(2.0))
+                    .build(ctx, |ctx| render_entry(ctx, list, false));
+                crate::ui::layout_components::Column::new()
+                    .modifier(Modifier::new().fill_max_height().layout_weight(3.0))
+                    .build(ctx, |ctx| render_entry(ctx, detail, false));
+            });
+    }
+}
+
+/// 场景策略——从 entries 计算场景（对标 Nav3 `SceneStrategy` fun interface）。
 ///
-/// 用法：实现后传给 `NavDisplay::scene_strategy(...)`。
-/// 返回 `ScenePlan::Single`（默认语义）时渲染栈顶；`ListDetail` 时双栏。
+/// 返回 `None` 表示本策略不接手，尝试策略链中的下一个；全部 `None` 时
+/// SinglePane 兜底（对标 `calculateSceneWithSinglePaneFallback`）。
+///
+/// 用法：`NavDisplay::scene_strategies(vec![...])` / `add_scene_strategy(...)`。
 pub trait SceneStrategy<K: NavKey>: Send + Sync + 'static {
-    /// 根据当前栈计算布局计划（stack 非空时调用）
-    fn plan(&self, stack: &[K]) -> ScenePlan;
+    /// entries 非空时调用；接手则返回拥有这些 entries 的场景
+    fn calculate_scene(&self, entries: &[NavEntry<K>]) -> Option<Box<dyn Scene<K>>>;
 }
 
-/// 默认 SinglePane 策略——渲染栈顶（对标 Nav3 SinglePaneSceneStrategy）
+/// 策略链求值 + SinglePane 兜底（对标 Nav3 `calculateSceneWithSinglePaneFallback`）
+pub(crate) fn calculate_scene<K: NavKey>(
+    strategies: &[Box<dyn SceneStrategy<K>>],
+    entries: &[NavEntry<K>],
+) -> Box<dyn Scene<K>> {
+    for s in strategies {
+        if let Some(scene) = s.calculate_scene(entries) {
+            return scene;
+        }
+    }
+    Box::new(SinglePaneScene { entries: entries.to_vec() })
+}
+
+/// SinglePane 策略——渲染栈顶（对标 Nav3 `SinglePaneSceneStrategy`；
+/// 亦为策略链兜底语义的实现）
 pub struct SinglePaneStrategy;
 
 impl<K: NavKey> SceneStrategy<K> for SinglePaneStrategy {
-    fn plan(&self, _stack: &[K]) -> ScenePlan {
-        ScenePlan::Single
+    fn calculate_scene(&self, entries: &[NavEntry<K>]) -> Option<Box<dyn Scene<K>>> {
+        Some(Box::new(SinglePaneScene { entries: entries.to_vec() }))
     }
 }
 
 /// ListDetail 策略——宽屏双栏（列表 + 详情）。
 ///
 /// 对标 Nav3 的 ListDetailSceneStrategy（大屏 list-detail 布局）：
-/// - 栈 ≥2 项：list = 倒数第二，detail = 栈顶，双栏并排
-/// - 栈 1 项：Single（无列表可显示）
+/// - 栈 ≥2 项：接手，list = 倒数第二，detail = 栈顶，双栏并排
+/// - 栈 1 项：返回 None（不接手——策略链继续，最终 SinglePane 兜底）
 ///
 /// 与 Nav3 的差异：Nav3 靠 entry metadata 标注 list/detail 角色决定双栏归属；
-/// winia 用**位置启发**（倒数第二=列表、栈顶=详情）——key 需唯一，且重复路由
-/// 连续 push（如 `Detail(1)`、`Detail(2)`）时"列表栏"语义取位置而非角色标注。
+/// winia 用**位置启发**（倒数第二=列表、栈顶=详情）——重复路由连续 push
+/// （如 `Detail(1)`、`Detail(2)`）时"列表栏"语义取位置而非角色标注。
 pub struct ListDetailStrategy;
 
 impl<K: NavKey> SceneStrategy<K> for ListDetailStrategy {
-    fn plan(&self, stack: &[K]) -> ScenePlan {
-        if stack.len() >= 2 {
-            ScenePlan::ListDetail
+    fn calculate_scene(&self, entries: &[NavEntry<K>]) -> Option<Box<dyn Scene<K>>> {
+        if entries.len() >= 2 {
+            // list = 倒数第二、detail = 栈顶——**只取末两位**（栈更深时右栏跟随
+            // 栈顶变化；场景不持有的 entry 由下层场景渲染）
+            Some(Box::new(ListDetailScene {
+                entries: vec![entries[entries.len() - 2].clone(), entries[entries.len() - 1].clone()],
+            }))
         } else {
-            ScenePlan::Single
+            None
         }
     }
 }
@@ -841,6 +1022,13 @@ fn is_pop<K: NavKey>(old: &[K], new: &[K]) -> bool {
             diverging.is_none() && new.len() != old.len() // 前缀子集 → pop
         }
     }
+}
+
+/// 两组 entries 的内容身份是否相同（contentKey 序列一致）——场景形态/策略
+/// 切换（entries 未变）判定用
+fn same_entry_ids<K: NavKey>(a: &[NavEntry<K>], b: &[NavEntry<K>]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b.iter()).all(|(x, y)| x.content_key() == y.content_key())
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -876,13 +1064,13 @@ struct EntryRouteMeta {
 ///     Route::Home => NavEntry::new(key.clone(), |ctx, _| Text::new("Home").build(ctx)),
 ///     ...
 /// })
-/// .scene_strategy_of(ListDetailStrategy)
+/// .scene_strategies(vec![Box::new(ListDetailStrategy)])
 /// .build(ctx);
 /// ```
 pub struct NavDisplay<'a, K: NavKey> {
     back_stack: &'a NavBackStack<K>,
     entry_provider: Box<dyn Fn(&mut ComposeCtx, &K) -> NavEntry<K> + 'a>,
-    scene_strategy: Box<dyn SceneStrategy<K>>,
+    scene_strategies: Vec<Box<dyn SceneStrategy<K>>>,
     entry_decorators: Vec<Box<dyn NavEntryDecorator<K>>>,
     /// push 过渡（对标 Nav3 transitionSpec）——默认 fade（Nav3 本体默认）
     transition_spec: NavTransitionSpec,
@@ -898,7 +1086,9 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
         Self {
             back_stack,
             entry_provider: Box::new(entry_provider),
-            scene_strategy: Box::new(SinglePaneStrategy),
+            // 默认无自定义策略——策略链为空时 SinglePane 兜底（对标 Nav3 默认
+            // listOf(SinglePaneSceneStrategy()) 的兜底语义）
+            scene_strategies: Vec::new(),
             // 默认状态保持装饰器（对标 Nav3 默认 rememberSaveableStateHolderNavEntryDecorator）
             entry_decorators: vec![Box::new(RememberStateDecorator)],
             // 默认过渡 = fade（对标 Nav3 NavDisplay 默认——fadeIn togetherWith fadeOut；
@@ -923,16 +1113,17 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
         self
     }
 
-    /// 设置 Scene 策略（默认 SinglePane；ListDetailStrategy 双栏）。
-    /// 接收 `Box<dyn SceneStrategy<K>>`——支持运行时切换策略（如自适应布局）。
-    pub fn scene_strategy(mut self, strategy: Box<dyn SceneStrategy<K>>) -> Self {
-        self.scene_strategy = strategy;
+    /// 设置场景策略链（按顺序依次尝试，首个非 None 接手；全 None 时 SinglePane
+    /// 兜底——对标 Nav3 `sceneStrategies: List<SceneStrategy>`）。运行时可换
+    /// （如自适应布局）；进行中的过渡不受影响（spec 已快照）。
+    pub fn scene_strategies(mut self, strategies: Vec<Box<dyn SceneStrategy<K>>>) -> Self {
+        self.scene_strategies = strategies;
         self
     }
 
-    /// 便捷：具体类型策略自动装箱（`ListDetailStrategy`、`SinglePaneStrategy`）
-    pub fn scene_strategy_of<S: SceneStrategy<K>>(mut self, strategy: S) -> Self {
-        self.scene_strategy = Box::new(strategy);
+    /// 追加单个场景策略到链尾（便捷版 [`Self::scene_strategies`]）
+    pub fn add_scene_strategy(mut self, strategy: Box<dyn SceneStrategy<K>>) -> Self {
+        self.scene_strategies.push(strategy);
         self
     }
 
@@ -1004,99 +1195,81 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
                 .collect(),
         );
         if stack.is_empty() {
-            return; // 空栈：渲染空
+            return; // 空栈：渲染空（Nav3 require 非空——winia 允许，设计取舍）
         }
-        // SceneStrategy 决定布局
-        match self.scene_strategy.plan(&stack) {
-            ScenePlan::Single => {
-                let top = stack.last().unwrap();
-                let provider = &self.entry_provider;
-                let decorators = &self.entry_decorators;
-                let entry_pool = entry_pool.clone();
-                // 导航过渡状态机（跨帧 remember——current/previous/forward/progress）
-                let transition = NavTransition::init(ctx, Some(top.clone()));
-                // 方向：isPop 列表差分（对标 NavDisplay.isPop）
-                let forward = !is_pop(&prev, &stack);
-                // 过渡规格：过渡中 entry 的覆盖 > NavDisplay 默认（对标 Nav3 优先级
-                // "transitioning NavEntry.metadata > NavDisplay defaults"——前景 =
-                // push 新栈顶 / pop 被弹出的旧条目；旧条目覆盖取上一帧映射）
-                let spec = if forward {
-                    entries
-                        .last()
-                        .and_then(|e| e.transition_spec_override())
-                        .unwrap_or(self.transition_spec)
+        // 策略链计算当前场景（依次尝试，SinglePane 兜底——对标
+        // calculateSceneWithSinglePaneFallback）。持有于 Arc——过渡的退场层
+        // 直接引用上一帧的场景对象（对标 Nav3 sceneMap）
+        let scene: std::sync::Arc<dyn Scene<K>> = calculate_scene(&self.scene_strategies, &entries).into();
+        eprintln!("[build-dbg] strategies={} scene_ck_keys={:?} stack={:?}", self.scene_strategies.len(), scene.entries().iter().map(|e| e.content_key()).collect::<Vec<_>>(), stack);
+        // 导航过渡状态机（跨帧 remember——scene key 维度）
+        let transition = NavTransition::init(ctx, scene.scene_key());
+        // 方向：isPop 列表差分（对标 NavDisplay.isPop）
+        let forward = !is_pop(&prev, &stack);
+        // 过渡规格：过渡中 entry 的覆盖 > NavDisplay 默认（对标 Nav3 优先级
+        // "transitioning NavEntry.metadata > NavDisplay defaults"——前景 =
+        // push 新场景末位 entry / pop 被弹出的旧条目；旧条目覆盖取上一帧映射）
+        let spec = if forward {
+            scene
+                .entries()
+                .last()
+                .and_then(|e| e.transition_spec_override())
+                .unwrap_or(self.transition_spec)
+        } else {
+            let popped = prev.last().and_then(|k| old_meta.get(&key_hash(k)));
+            popped
+                .and_then(|m| m.pop_transition_spec)
+                .unwrap_or(self.pop_transition_spec)
+        };
+        // 上一帧渲染的场景对象（退场层来源）——读取须在 last_scene 更新前
+        let last_scene: State<Option<SceneHolder<K>>> = ctx.remember(|| State::new(None)).get();
+        let prev_frame = last_scene.peek().clone().unwrap_or_else(|| {
+            // 首帧无上一帧场景——用当前场景兜底（首帧 key 必相同，不会触发过渡）
+            SceneHolder { key: scene.scene_key(), scene: std::sync::Arc::clone(&scene) }
+        });
+        let scene_holder = SceneHolder { key: scene.scene_key(), scene: std::sync::Arc::clone(&scene) };
+        // 检测导航变化并启动过渡
+        transition.detect(&scene_holder, forward, &spec, Some(prev_frame));
+        // 渲染双场景过渡（Stack 层叠：旧场景退出 + 新场景进入）
+        // 状态作用域：过渡期两场景的 entries 都提供（滑出层只读——draining）
+        let decorators = &self.entry_decorators;
+        let entry_pool = entry_pool.clone();
+        let render_entry = |ctx: &mut ComposeCtx, entry: &NavEntry<K>, draining: bool| {
+            let counter = ctx.remember(|| State::new(0u32)).get();
+            counter.set_silent(0); // 每帧重置——seq 按 entry 内调用顺序分配（槽 key 稳定）
+            let scope = EntryStateScope {
+                pool: entry_pool.clone(),
+                key: entry.content_key(),
+                counter,
+                draining,
+            };
+            // CompositionLocal provides——PopGuard 自动弹栈（panic/嵌套安全）。
+            // draining 内容**裸渲染**：跳过 ctx.key（同 contentKey 已在别处渲染时
+            // 会 dup-key）且状态池只读（draining 作用域——remember_entry_state
+            // miss 不入池），对标 Nav3 contentKey 去重 + movableContent 语义
+            ENTRY_STATE_SCOPE.provides(scope, || {
+                if draining {
+                    entry.build(ctx);
                 } else {
-                    let popped = prev.last().and_then(|k| old_meta.get(&key_hash(k)));
-                    popped
-                        .and_then(|m| m.pop_transition_spec)
-                        .unwrap_or(self.pop_transition_spec)
-                };
-                // 检测导航变化并启动过渡
-                transition.detect(&Some(top.clone()), forward, &spec);
-                // 渲染双页过渡（Stack 层叠：旧页滑出 + 新页滑入）
-                // 状态作用域：过渡期两页都需要（previous 页的状态池槽也提供）
-                transition.render(ctx, provider, |ctx, _key, entry, is_prev| {
-                    // 提供 entry 状态作用域（状态池按 contentKey 关联 + 槽计数器）；
-                    // 滑出层（is_prev）用只读作用域——miss 不入池，防止滑出期间
-                    // 内容重跑把刚清理的槽重新插回
-                    let counter = ctx.remember(|| State::new(0u32)).get();
-                    counter.set_silent(0); // 每帧重置——seq 按 entry 内调用顺序分配（槽 key 稳定）
-                    let scope = EntryStateScope {
-                        pool: entry_pool.clone(),
-                        key: entry.content_key(),
-                        counter,
-                        draining: is_prev,
-                    };
-                    // CompositionLocal provides——PopGuard 自动弹栈（panic/嵌套安全）
-                    ENTRY_STATE_SCOPE.provides(scope, || wrap_entry(ctx, entry, decorators));
-                }, &spec);
-            }
-            ScenePlan::ListDetail => {
-                // 双栏：list = 倒数第二，detail = 栈顶（Row 并排）
-                let detail = stack.last().unwrap();
-                let list = &stack[stack.len() - 2];
-                let detail_entry = (self.entry_provider)(ctx, detail);
-                let list_entry = (self.entry_provider)(ctx, list);
-                let decorators = &self.entry_decorators;
-                let pool = entry_pool.clone();
-                crate::ui::layout_components::Row::new()
-                    .modifier(Modifier::new().fill_max_size())
-                    .build(ctx, |ctx| {
-                        // 左栏：list entry（weight 2）；右栏：detail entry（weight 3）
-                        crate::ui::layout_components::Column::new()
-                            .modifier(Modifier::new().fill_max_height().layout_weight(2.0))
-                            .build(ctx, |ctx| {
-                                let counter = ctx.remember(|| State::new(0u32)).get();
-                                counter.set_silent(0); // 每帧重置——seq 按 entry 内调用顺序分配（槽 key 稳定）
-                                let scope = EntryStateScope {
-                                    pool: pool.clone(),
-                                    key: list_entry.content_key(),
-                                    counter,
-                                    draining: false,
-                                };
-                                ENTRY_STATE_SCOPE.provides(scope, || {
-                                    wrap_entry(ctx, &list_entry, decorators);
-                                });
-                            });
-                        crate::ui::layout_components::Column::new()
-                            .modifier(Modifier::new().fill_max_height().layout_weight(3.0))
-                            .build(ctx, |ctx| {
-                                let counter = ctx.remember(|| State::new(0u32)).get();
-                                counter.set_silent(0); // 每帧重置——seq 按 entry 内调用顺序分配（槽 key 稳定）
-                                let scope = EntryStateScope {
-                                    pool: pool.clone(),
-                                    key: detail_entry.content_key(),
-                                    counter,
-                                    draining: false,
-                                };
-                                ENTRY_STATE_SCOPE.provides(scope, || {
-                                    wrap_entry(ctx, &detail_entry, decorators);
-                                });
-                            });
-                    });
-            }
-            ScenePlan::Empty => {}
-        }
+                    wrap_entry(ctx, entry, decorators);
+                }
+            });
+        };
+        // 场景 key 驱动渲染语句的组合身份（keyed_stmt）：策略/场景切换时
+        // scene key 变化 → 渲染语句组换新 → 强制 Enter（否则语句组 params
+        // 比较看不见策略变化 → Skip 重放旧子树）。内部 ctx.key(scene_key)
+        // 同理作用于场景内容子树
+        ctx.key(scene_holder.key, |ctx| {
+            transition.render(
+                ctx,
+                transition.previous_scene().as_ref().map(|h| h.scene.as_ref()),
+                &*scene,
+                &render_entry,
+                &spec,
+            );
+        });
+        // 记录本帧场景（下一帧的退场场景来源）
+        last_scene.set_silent(Some(scene_holder));
     }
 }
 
@@ -1272,7 +1445,7 @@ mod tests {
                         })
                     }
                 })
-                .scene_strategy_of(ListDetailStrategy)
+                .scene_strategies(vec![Box::new(ListDetailStrategy)])
                 .build(ctx);
             });
             composer.layout(crate::layout::Constraints::new(0.0, 800.0, 0.0, 400.0));
@@ -1285,24 +1458,58 @@ mod tests {
         collect_texts(nodes, root, &mut texts);
         assert!(texts.iter().any(|t| t.contains("HomeScreen")));
         assert!(!texts.iter().any(|t| t.contains("Detail")), "栈 1 项无双栏");
-        // push Detail(5)：栈 2 项 → ListDetail 双栏（Home 在左栏 + Detail5 在右栏）
+        // 推进动画帧（场景化后所有场景变化都走过渡——含 ListDetail↔Single）
+        let mut advance = |composer: &mut Composer| {
+            for _ in 0..12 {
+                crate::animation::update_animations();
+                std::thread::sleep(std::time::Duration::from_millis(60));
+                build(composer, &bs);
+            }
+        };
+        // push Detail(5)：栈 2 项 → ListDetail 场景（Home 在左栏 + Detail5 在右栏）
         bs.push(TestRoute::Detail(5));
         build(&mut composer, &bs);
+        advance(&mut composer);
         let root = composer.layout_root_idx().unwrap();
         let nodes = composer.arena_nodes();
         let mut texts = Vec::new();
         collect_texts(nodes, root, &mut texts);
         assert!(texts.iter().any(|t| t.contains("HomeScreen")), "双栏左栏渲染 list（Home）");
         assert!(texts.iter().any(|t| t.contains("Detail5")), "双栏右栏渲染 detail（Detail5）");
-        // pop 回 1 项 → SinglePane
+        // push Settings：栈 3 项 → 场景过渡（detail 变化即场景变化——按
+        // transition_spec 整屏过渡；场景只渲染末两位：list=Detail5、detail=Settings，
+        // Home 不在新场景内。回归覆盖 first()/get(1) 错位 bug）
+        bs.push(TestRoute::Settings);
+        build(&mut composer, &bs);
+        advance(&mut composer);
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let mut texts = Vec::new();
+        collect_texts(nodes, root, &mut texts);
+        assert!(texts.iter().any(|t| t.contains("Detail5")), "栈 3 项左栏应=倒数第二（Detail5）");
+        assert!(texts.iter().any(|t| t.contains("SettingsScreen")), "栈 3 项右栏应=栈顶（Settings）");
+        assert!(!texts.iter().any(|t| t.contains("HomeScreen")), "场景只渲染末两位，Home 不应出现");
+        // pop Settings：场景过渡反向，回 [H,D5] 双栏（Home 回到 list pane）
         bs.pop();
         build(&mut composer, &bs);
+        advance(&mut composer);
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let mut texts = Vec::new();
+        collect_texts(nodes, root, &mut texts);
+        assert!(texts.iter().any(|t| t.contains("HomeScreen")) && texts.iter().any(|t| t.contains("Detail5")),
+            "pop 后回 [H,D5] 双栏");
+        assert!(!texts.iter().any(|t| t.contains("SettingsScreen")), "Settings 应已移除");
+        // pop 回 1 项 → 场景边界（ListDetail→SinglePane）有过渡，完成后仅 Home
+        bs.pop();
+        build(&mut composer, &bs);
+        advance(&mut composer);
         let root = composer.layout_root_idx().unwrap();
         let nodes = composer.arena_nodes();
         let mut texts = Vec::new();
         collect_texts(nodes, root, &mut texts);
         assert!(texts.iter().any(|t| t.contains("HomeScreen")));
-        assert!(!texts.iter().any(|t| t.contains("Detail")), "pop 后无双栏");
+        assert!(!texts.iter().any(|t| t.contains("Detail")), "pop 过渡完成后无双栏");
     }
 
     /// RememberStateDecorator：entry 内 remember 状态跨 pop/push 保持
@@ -1701,6 +1908,199 @@ mod tests {
         assert!(t.iter().any(|x| x.contains("SettingsScreen")), "none 应立即渲染新页");
         assert!(!t.iter().any(|x| x.contains("Detail7")), "none 不应有旧页残留");
         assert!(!t.iter().any(|x| x.contains("HomeScreen")), "none 不应渲染栈外页");
+    }
+
+    /// 策略链切换（如自适应模式切换）：退场层 = 上一帧的**场景对象快照**——
+    /// 形态不随新策略链重建（SinglePane→ListDetail 切换时退场层仍是单栏画面，
+    /// 对标 Nav3 sceneMap 缓存场景实例）；每次切换的过渡收敛、可反复切换
+    /// （回归覆盖"退场场景按当前链重建形态突变"）
+    #[test]
+    /// 策略链切换（如自适应模式切换）：**entries 未变 → 瞬时切换**（形态切
+    /// 无过渡——双层同渲同 contentKey 内容会在非宏节点键空间 dup-key，且形态
+    /// 切瞬切符合平台惯例）；切换后单帧即稳态、可反复切换
+    #[test]
+    fn scene_strategy_switch_converges() {
+        use crate::core::composer::Composer;
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let bs = NavBackStack::<TestRoute>::with_initial(TestRoute::Home);
+        let mut composer = Composer::new();
+        let list_detail = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                NavDisplay::new(&bs, |ctx, key| match key {
+                    TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
+                        crate::ui::Text::new("HomeScreen").build(ctx);
+                    }),
+                    TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
+                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                    }),
+                    TestRoute::Detail(id) => {
+                        let id = *id;
+                        NavEntry::new(key.clone(), move |ctx, _| {
+                            crate::ui::Text::new(format!("Detail{id}")).build(ctx);
+                        })
+                    }
+                })
+                .scene_strategies(vec![Box::new(ListDetailStrategy)])
+                .build(ctx);
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 800.0, 0.0, 400.0));
+        };
+        let single = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                NavDisplay::new(&bs, |ctx, key| match key {
+                    TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
+                        crate::ui::Text::new("HomeScreen").build(ctx);
+                    }),
+                    TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
+                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                    }),
+                    TestRoute::Detail(id) => {
+                        let id = *id;
+                        NavEntry::new(key.clone(), move |ctx, _| {
+                            crate::ui::Text::new(format!("Detail{id}")).build(ctx);
+                        })
+                    }
+                })
+                .build(ctx); // 空链 → SinglePane 兜底
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 800.0, 0.0, 400.0));
+        };
+        let texts = |composer: &mut Composer| -> Vec<String> {
+            let root = composer.layout_root_idx().unwrap();
+            let nodes = composer.arena_nodes();
+            let mut out = Vec::new();
+            collect_texts(nodes, root, &mut out);
+            println!("DBG tree: {} nodes, texts={:?}", nodes.len(), out);
+            out
+        };
+
+        // 阶段 1（single）：push D5 → 场景过渡（fade）→ 收敛后单栏仅栈顶
+        single(&mut composer);
+        bs.push(TestRoute::Detail(5));
+        for _ in 0..12 {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            single(&mut composer);
+        }
+        let t = texts(&mut composer);
+        assert!(t.iter().any(|x| x.contains("Detail5")));
+        assert!(!t.iter().any(|x| x.contains("HomeScreen")), "SinglePane 收敛后只渲染栈顶");
+
+        // 阶段 2（切 ListDetail）：entries 未变 → 瞬时切换，单帧即双栏稳态
+        list_detail(&mut composer);
+        println!("DBG switch p2a: {:?}", texts(&mut composer));
+        list_detail(&mut composer);
+        println!("DBG switch p2b: {:?}", texts(&mut composer));
+        let t = texts(&mut composer);
+        assert!(t.iter().any(|x| x.contains("HomeScreen")) && t.iter().any(|x| x.contains("Detail5")),
+            "切双栏应瞬时稳态 H+D5");
+
+        // 阶段 3（切回 single）：瞬时回单栏（H 退场）
+        single(&mut composer);
+        let t = texts(&mut composer);
+        assert!(t.iter().any(|x| x.contains("Detail5")) && !t.iter().any(|x| x.contains("HomeScreen")),
+            "切回单栏瞬时仅栈顶");
+
+        // 阶段 4（再切双栏）：反复切换后仍稳态（无冻结/无残留）
+        list_detail(&mut composer);
+        let t = texts(&mut composer);
+        assert!(t.iter().any(|x| x.contains("HomeScreen")) && t.iter().any(|x| x.contains("Detail5")),
+            "二次切双栏仍稳态（无冻结）");
+    }
+
+    /// SceneStrategy 策略链（对标 Nav3 `List<SceneStrategy>` + SinglePane 兜底）：
+    /// 自定义策略优先接手（自定义 Scene 渲染全部 entries）、ListDetail 次之
+    /// （<2 条返回 None 落空）、SinglePane 兜底——验证链序与回退语义
+    #[test]
+    fn scene_strategy_chain_priority_and_fallback() {
+        use crate::core::composer::Composer;
+
+        /// 三栏场景：一列渲染全部 entries（自定义 Scene 形态）
+        struct TriPaneScene<K: NavKey> { entries: Vec<NavEntry<K>> }
+        impl<K: NavKey> Scene<K> for TriPaneScene<K> {
+            fn scene_key(&self) -> u64 {
+                fnv_hash(&("winia/test/TriPaneScene", self.entries.len()))
+            }
+            fn entries(&self) -> &[NavEntry<K>] { &self.entries }
+            fn content(
+                &self,
+                ctx: &mut ComposeCtx,
+                render_entry: &dyn Fn(&mut ComposeCtx, &NavEntry<K>, bool),
+            ) {
+                crate::ui::layout_components::Column::new().build(ctx, |ctx| {
+                    for e in &self.entries {
+                        render_entry(ctx, e, false);
+                    }
+                });
+            }
+        }
+        /// 栈 ≥3 时接手（三栏）
+        struct TriPaneStrategy;
+        impl<K: NavKey> SceneStrategy<K> for TriPaneStrategy {
+            fn calculate_scene(&self, entries: &[NavEntry<K>]) -> Option<Box<dyn Scene<K>>> {
+                (entries.len() >= 3).then(|| Box::new(TriPaneScene { entries: entries.to_vec() }) as Box<dyn Scene<K>>)
+            }
+        }
+
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let bs = NavBackStack::<TestRoute>::with_initial(TestRoute::Home);
+        let mut composer = Composer::new();
+
+        let mut build = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                NavDisplay::new(&bs, |ctx, key| match key {
+                    TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
+                        crate::ui::Text::new("HomeScreen").build(ctx);
+                    }),
+                    TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
+                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                    }),
+                    TestRoute::Detail(id) => {
+                        let id = *id;
+                        NavEntry::new(key.clone(), move |ctx, _| {
+                            crate::ui::Text::new(format!("Detail{id}")).build(ctx);
+                        })
+                    }
+                })
+                .scene_strategies(vec![
+                    Box::new(TriPaneStrategy),
+                    Box::new(ListDetailStrategy),
+                ])
+                .build(ctx);
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 800.0, 0.0, 400.0));
+        };
+        let texts = |composer: &mut Composer| -> Vec<String> {
+            let root = composer.layout_root_idx().unwrap();
+            let nodes = composer.arena_nodes();
+            let mut out = Vec::new();
+            collect_texts(nodes, root, &mut out);
+            out
+        };
+
+        // 栈 1 项：TriPane 落空、ListDetail 落空 → SinglePane 兜底
+        build(&mut composer);
+        let t = texts(&mut composer);
+        assert!(t.iter().any(|x| x.contains("HomeScreen")));
+        assert!(!t.iter().any(|x| x.contains("Detail")), "栈 1 项应 SinglePane 兜底");
+
+        // 栈 2 项：TriPane 落空 → ListDetail 接手（list+detail 双栏）
+        bs.push(TestRoute::Detail(5));
+        build(&mut composer);
+        let t = texts(&mut composer);
+        assert!(t.iter().any(|x| x.contains("HomeScreen")) && t.iter().any(|x| x.contains("Detail5")),
+            "栈 2 项应 ListDetail 接手");
+
+        // 栈 3 项：TriPane 接手（自定义场景渲染全部 entries）
+        bs.push(TestRoute::Settings);
+        build(&mut composer);
+        let t = texts(&mut composer);
+        assert!(
+            t.iter().any(|x| x.contains("HomeScreen"))
+                && t.iter().any(|x| x.contains("Detail5"))
+                && t.iter().any(|x| x.contains("SettingsScreen")),
+            "栈 3 项应自定义 TriPaneScene 接手（渲染全部 entries）"
+        );
     }
 
     /// entry 级过渡覆盖（对标 Nav3 NavDisplay.TransitionKey/PopTransitionKey
