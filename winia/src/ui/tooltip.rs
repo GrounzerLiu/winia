@@ -152,6 +152,8 @@ impl Tooltip {
                     let s = s.clone();
                     std::sync::Arc::new(move || s.set(false)) as std::sync::Arc<dyn Fn() + Send + Sync>
                 }),
+                enter_anim: None, // Tooltip 默认无进入动画
+                exit_anim: None, // Tooltip 默认无退出动画
                 content: Box::new(content),
             });
         }

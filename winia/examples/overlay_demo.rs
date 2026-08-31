@@ -3,7 +3,7 @@
 //! 运行：`cargo run -p winia --example overlay_demo --features debug-server`
 
 use winia::prelude::*;
-use winia::ui::{Dialog, DropdownMenu, DropdownMenuItem, Popup, PopupPosition};
+use winia::ui::{Dialog, DropdownMenu, DropdownMenuItem, OverlayAnimSpec, Popup, PopupPosition};
 use winia::core::composer::ComposeCtx;
 use winia::composable;
 
@@ -165,6 +165,13 @@ fn overlay_ui(ctx: &mut ComposeCtx) {
                 let dialog_open = dialog_open.clone();
                 let last = last_dialog.clone();
                 Dialog::new(dialog_open.get())
+                    // 进入动画（默认 scale 0.8→1 + fade 200ms EaseOutCubic——
+                    // 对齐 Compose material2 Dialog 打开效果）。可自定义：
+                    //   .enter_animation(None)                        // 关闭进入动画（瞬时出现）
+                    //   .exit_animation(None)                         // 关闭退出动画（瞬时消失）
+                    //   .enter_animation(Some(OverlayAnimSpec::scale_only(0.5, Duration::from_millis(400))))
+                    //   .exit_animation(Some(OverlayAnimSpec::fade_only(Duration::from_millis(150))))
+                    //   .enter_animation(Some(OverlayAnimSpec::default_enter().scale_from(0.6).duration(Duration::from_millis(300))))
                     .on_dismiss_request({
                         let dialog_open = dialog_open.clone();
                         move || dialog_open.set(false)

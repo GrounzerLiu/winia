@@ -23,6 +23,105 @@ pub enum PopupPosition {
     BottomRight,
 }
 
+/// 弹出层**进入动画**规格（对标 Compose 内容层 `AnimatedVisibility` 的
+/// `enter = scaleIn + fadeIn`——Compose Dialog 本身无内置动画，material2 的
+/// 固定 scale+fade 由内容层实现；winia 把动画下沉到 overlay 容器层，统一
+/// 帧驱动，不依赖内容层的动画组件）。
+///
+/// - `scale_from`：起始缩放（默认 0.8——Compose `scaleIn(initialScale=0.8f)`）
+/// - `fade`：是否淡入（默认 true——Compose `fadeIn()`）
+/// - `duration`：时长（默认 200ms）
+/// - `interpolator`：缓动曲线（默认 EaseOutCubic——Compose `easeOut`）
+///
+/// `None`（OverlayDesc.enter_anim / exit_anim = None）= 无对应动画（瞬时出现/
+/// 消失——菜单类默认）。
+#[derive(Clone)]
+pub struct OverlayAnimSpec {
+    pub(crate) scale_from: f32,
+    pub(crate) fade: bool,
+    pub(crate) duration: std::time::Duration,
+    pub(crate) interpolator: std::sync::Arc<dyn crate::animation::interpolator::Interpolator>,
+}
+
+impl OverlayAnimSpec {
+    /// 默认进入动画（scale 0.8→1 + fade，200ms EaseOutCubic——对齐 Compose
+    /// material2 Dialog 的经典打开效果）
+    pub fn default_enter() -> Self {
+        Self {
+            scale_from: 0.8,
+            fade: true,
+            duration: std::time::Duration::from_millis(200),
+            interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()),
+        }
+    }
+
+    /// 默认退出动画（scale 1→0.8 + fade out，200ms EaseInCubic——进入动画的
+    /// 反向；对齐 Compose `AnimatedVisibility(exit = scaleOut + fadeOut)`）
+    pub fn default_exit() -> Self {
+        Self {
+            scale_from: 0.8,
+            fade: true,
+            duration: std::time::Duration::from_millis(200),
+            interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseInCubic::new()),
+        }
+    }
+
+    /// 仅缩放（无淡入）
+    pub fn scale_only(from: f32, duration: std::time::Duration) -> Self {
+        Self { scale_from: from, fade: false, duration, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
+    }
+
+    /// 仅淡入
+    pub fn fade_only(duration: std::time::Duration) -> Self {
+        Self { scale_from: 1.0, fade: true, duration, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
+    }
+
+    /// 自定义缓动曲线
+    pub fn with_interpolator(mut self, interp: impl crate::animation::interpolator::Interpolator + 'static) -> Self {
+        self.interpolator = std::sync::Arc::new(interp);
+        self
+    }
+
+    /// 起始缩放（0 附近时对话框从中心放大出现；1.0 = 无缩放）
+    pub fn scale_from(mut self, v: f32) -> Self {
+        self.scale_from = v;
+        self
+    }
+
+    /// 淡入开关
+    pub fn fade(mut self, v: bool) -> Self {
+        self.fade = v;
+        self
+    }
+
+    /// 时长
+    pub fn duration(mut self, d: std::time::Duration) -> Self {
+        self.duration = d;
+        self
+    }
+
+    /// 动画进度（0..=1）→ (scale, alpha)——渲染期调用（每帧，无 State 依赖）
+    /// t=0 起点，t=1 终点（Compose 语义：t 是动画进度）
+    pub(crate) fn apply(&self, t: f32) -> (f32, f32) {
+        let e = self.interpolator.interpolate(t.clamp(0.0, 1.0));
+        let scale = self.scale_from + (1.0 - self.scale_from) * e;
+        let alpha = if self.fade { e } else { 1.0 };
+        (scale, alpha)
+    }
+
+    /// 退出动画进度（1→0 反向）→ (scale, alpha)——t=1 起点（完整显示），
+    /// t=0 终点（隐藏）：scale 1→scale_from（缩小）、alpha 1→0（淡出）。
+    /// 公式与 apply() 相同（t=1 → e=1 → scale=1 alpha=1；t=0 → e=0 →
+    /// scale=scale_from alpha=0）——progress 从 1 动画到 0 即自然反向。
+    pub(crate) fn apply_exit(&self, t: f32) -> (f32, f32) {
+        self.apply(t)
+    }
+}
+
+impl Default for OverlayAnimSpec {
+    fn default() -> Self { Self::default_enter() }
+}
+
 /// 弹出层描述——组合期注册（Popup::build 等内部调用 ctx.open_overlay）
 pub struct OverlayDesc {
     /// 稳定 id（组件内部 remember 生成——跨帧匹配复用独立 Composer）
@@ -42,6 +141,12 @@ pub struct OverlayDesc {
     pub(crate) click_passthrough: bool,
     /// 外部点击回调
     pub(crate) on_dismiss: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// 进入动画规格（None = 瞬时出现——Popup/DropdownMenu 默认；
+    /// Some = 容器层帧驱动动画——Dialog 默认）
+    pub(crate) enter_anim: Option<OverlayAnimSpec>,
+    /// 退出动画规格（None = 瞬时消失；Some = 关闭时反向播放——Dialog 默认
+    /// 与进入动画对称；对齐 Compose `AnimatedVisibility(exit = ...)`）
+    pub(crate) exit_anim: Option<OverlayAnimSpec>,
     /// 弹出内容（独立组合单元）
     pub(crate) content: Box<dyn Fn(&mut crate::core::composer::ComposeCtx)>,
 }
@@ -121,6 +226,8 @@ impl Popup {
             dismiss_on_outside: true,
             click_passthrough: false,
             on_dismiss: self.on_dismiss,
+            enter_anim: None, // Popup 默认无进入动画（瞬时出现——菜单类语义）
+            exit_anim: None, // Popup 默认无退出动画（瞬时消失）
             content: Box::new(content),
         });
     }
@@ -136,6 +243,8 @@ pub struct Dialog {
     visible: bool,
     on_dismiss: Option<Arc<dyn Fn() + Send + Sync>>,
     dismiss_on_outside: bool,
+    enter_anim: Option<OverlayAnimSpec>,
+    exit_anim: Option<OverlayAnimSpec>,
 }
 
 impl Dialog {
@@ -146,6 +255,10 @@ impl Dialog {
             visible,
             on_dismiss: None,
             dismiss_on_outside: true,
+            // 默认进入/退出动画（scale 0.8→1 + fade——Compose material2 Dialog
+            // 经典效果；关闭反向播放）
+            enter_anim: Some(OverlayAnimSpec::default_enter()),
+            exit_anim: Some(OverlayAnimSpec::default_exit()),
         }
     }
 
@@ -158,6 +271,28 @@ impl Dialog {
     pub fn dismiss_on_outside(mut self, v: bool) -> Self {
         self.dismiss_on_outside = v;
         self
+    }
+
+    /// 自定义**进入**动画（默认 scale 0.8→1 + fade 200ms EaseOutCubic）。
+    /// 传 `None` = 无进入动画（瞬时出现）。对标 Compose 内容层
+    /// `AnimatedVisibility(enter = scaleIn(...) + fadeIn(...))`——winia 把
+    /// 动画下沉到 overlay 容器层统一帧驱动。
+    pub fn enter_animation(mut self, anim: Option<OverlayAnimSpec>) -> Self {
+        self.enter_anim = anim;
+        self
+    }
+
+    /// 自定义**退出**动画（默认 = 进入动画反向：scale 1→0.8 + fade out，
+    /// 200ms EaseInCubic）。传 `None` = 无退出动画（瞬时消失）。对标 Compose
+    /// `AnimatedVisibility(exit = scaleOut(...) + fadeOut(...))`。
+    pub fn exit_animation(mut self, anim: Option<OverlayAnimSpec>) -> Self {
+        self.exit_anim = anim;
+        self
+    }
+
+    /// 关闭进入/退出动画（瞬时出现/消失）
+    pub fn no_animation(self) -> Self {
+        self.enter_animation(None).exit_animation(None)
     }
 
     /// #[composable]：内部 remember（overlay id）从 build 调用点取稳定 base。
@@ -178,6 +313,8 @@ impl Dialog {
             dismiss_on_outside: self.dismiss_on_outside,
             click_passthrough: false,
             on_dismiss: self.on_dismiss,
+            enter_anim: self.enter_anim,
+            exit_anim: self.exit_anim,
             content: Box::new(content),
         });
     }
@@ -253,6 +390,8 @@ impl DropdownMenu {
                 dismiss_on_outside: true,
                 click_passthrough: false,
                 on_dismiss: self.on_dismiss,
+                enter_anim: None, // DropdownMenu 默认无进入动画
+                exit_anim: None, // DropdownMenu 默认无退出动画
                 content: Box::new(menu),
             });
         }
