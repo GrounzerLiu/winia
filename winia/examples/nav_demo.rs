@@ -6,11 +6,14 @@
 //! - NavDisplay：entry_provider 路由 → 内容（SinglePane——渲染栈顶）
 //! - SceneStrategy：SinglePane（默认）/ ListDetail（双栏）切换
 //! - NavTransition 滑动过渡：push 新页右入/旧页左出，pop 反向
+//! - SceneDecoratorStrategy：scene 级装饰（顶部导航栏）
+//! - ResultEventBus：Settings 选择结果返回 Detail（send/take）
+//! - NavMetadata：entry 携带类型化元数据
 //!
 //! 运行：cargo run -p winia --example nav_demo --features debug-server
 
 use winia::prelude::*;
-use winia::nav::{remember_entry_state, ListDetailStrategy, NavBackStack, NavDisplay, NavEntry, NavKey, NavTransitionSpec, SceneStrategy};
+use winia::nav::{remember_entry_state, result_event_bus, ListDetailStrategy, NavBackStack, NavDisplay, NavEntry, NavKey, NavMetadata, NavTransitionSpec, SceneDecoratorStrategy, SceneStrategy};
 
 /// 类型安全路由（对标 Nav3 的 NavKey + @Serializable——winia 无序列化要求）
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
@@ -19,6 +22,55 @@ enum Route {
     Detail(u64),
     Settings,
     About,
+}
+
+/// Settings 页返回的结果（经 ResultEventBus send/take——对标 Nav3 result API）
+#[derive(Clone, Debug, PartialEq)]
+struct ThemeChoice {
+    name: &'static str,
+    color: Color,
+}
+
+/// entry 元数据（对标 Nav3 metadata {}——类型化附加信息）
+#[derive(Clone, Debug, PartialEq)]
+struct MetaInfo {
+    page_id: u64,
+    source: &'static str,
+}
+
+/// Scene 装饰器：顶部导航栏（对标 Nav3 SceneDecoratorStrategy——scene 级装饰）
+struct TopBarDecorator;
+impl SceneDecoratorStrategy<Route> for TopBarDecorator {
+    fn decorate_scene(&self, scene: Box<dyn winia::nav::Scene<Route>>) -> Box<dyn winia::nav::Scene<Route>> {
+        struct Decorated {
+            inner: Box<dyn winia::nav::Scene<Route>>,
+        }
+        impl winia::nav::Scene<Route> for Decorated {
+            fn scene_key(&self) -> u64 { self.inner.scene_key() }
+            fn entries(&self) -> &[winia::nav::NavEntry<Route>] { self.inner.entries() }
+            fn content(
+                &self,
+                ctx: &mut ComposeCtx,
+                render_entry: &dyn Fn(&mut ComposeCtx, &winia::nav::NavEntry<Route>, bool),
+            ) {
+                // 装饰：顶部导航栏（红条——场景级装饰的视觉证据）
+                Column::new()
+                    .modifier(Modifier::new().fill_max_width().background(
+                        Color::from_argb(255, 60, 60, 90),
+                        Shape::RoundedRect { corner_radius: 4.0 },
+                    ).padding_horizontal(8.0).padding_vertical(4.0))
+                    .build(ctx, |ctx| {
+                        Text::new("◤ Scene 装饰栏（SceneDecoratorStrategy）")
+                            .font_size(11.0)
+                            .color(Color::from_argb(255, 255, 255, 255))
+                            .build(ctx);
+                    });
+                // 原 scene 内容
+                self.inner.content(ctx, render_entry);
+            }
+        }
+        Box::new(Decorated { inner: scene })
+    }
 }
 
 #[composable]
@@ -112,6 +164,16 @@ fn nav_demo(ctx: &mut ComposeCtx) {
                                     .font_size(12.0)
                                     .color(Color::from_argb(255, 90, 120, 200))
                                     .build(ctx);
+                                // result API 演示：Settings 返回时读取结果（高级原语——
+                                // 对标 Nav3 ResultEffect：内部自动跳过退场帧 + 状态持久化，
+                                // 消费到的结果跨过渡稳定显示）
+                                let received = winia::nav::result_event_bus_consume::<ThemeChoice>("theme");
+                                if let Some(choice) = received.get() {
+                                    Text::new(format!("← 收到结果: 主题色 = {}", choice.name))
+                                        .font_size(12.0)
+                                        .color(choice.color)
+                                        .build(ctx);
+                                }
                                 let dc = detail_count.clone();
                                 Button::text()
                                     .on_click(move || dc.update(|v| *v += 1))
@@ -130,6 +192,8 @@ fn nav_demo(ctx: &mut ComposeCtx) {
                                     .build(ctx, |ctx| Text::new("返回").build(ctx));
                             });
                     })
+                    // metadata 演示（对标 Nav3 metadata {}——entry 携带类型化元数据）
+                    .metadata(NavMetadata::new().with(MetaInfo { page_id: id, source: "nav_demo" }))
                 }
                 Route::Settings => {
                     let bs = detail_bs.clone();
@@ -139,10 +203,36 @@ fn nav_demo(ctx: &mut ComposeCtx) {
                             .spacing(8.0)
                             .build(ctx, |ctx| {
                                 Text::new("Settings 页面").font_size(16.0).build(ctx);
+                                // result API 演示：选择主题色 → send 结果 + pop 返回
+                                // （对标 Nav3 ResultEventBus：B 返回时带结果给 A）
+                                // ⚠ result_event_bus() 是组合期 API（CompositionLocal
+                                // 作用域内）——按钮回调里不能调，须组合期捕获再 move 进闭包
+                                let bus = result_event_bus();
+                                Text::new("选择主题色（返回时带结果）：")
+                                    .font_size(12.0)
+                                    .color(Color::from_argb(255, 120, 120, 120))
+                                    .build(ctx);
+                                for (name, color) in [
+                                    ("蓝色", Color::from_argb(255, 66, 133, 244)),
+                                    ("绿色", Color::from_argb(255, 52, 168, 83)),
+                                    ("橙色", Color::from_argb(255, 255, 153, 0)),
+                                ] {
+                                    let bs = bs.clone();
+                                    let bus = bus.clone();
+                                    Button::text()
+                                        .on_click(move || {
+                                            // 发送结果（覆盖同 key 旧值）+ 返回
+                                            bus.send("theme", ThemeChoice { name, color });
+                                            bs.pop();
+                                        })
+                                        .build(ctx, |ctx| {
+                                            Text::new(format!("用 {name}")).build(ctx);
+                                        });
+                                }
                                 let bs = bs.clone();
                                 Button::text()
                                     .on_click(move || { bs.pop(); })
-                                    .build(ctx, |ctx| Text::new("返回 Detail").build(ctx));
+                                    .build(ctx, |ctx| Text::new("返回 Detail（不带结果）").build(ctx));
                             });
                     })
                 }
@@ -183,6 +273,8 @@ fn nav_demo(ctx: &mut ComposeCtx) {
             } else {
                 Vec::new()
             })
+            // Scene 装饰器（对标 Nav3 sceneDecoratorStrategies——顶部导航栏）
+            .scene_decorator_strategies(vec![Box::new(TopBarDecorator)])
             // 过渡规格（对标 Nav3 transitionSpec / popTransitionSpec——成对给出方向相反的规格）
             .transition_spec(push_spec)
             .pop_transition_spec(pop_spec)

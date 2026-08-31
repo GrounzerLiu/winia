@@ -232,6 +232,42 @@ spec 过渡、NavEntryDecorator（on_pop 广播 + wrap 链式）、remember_entr
 12. [x] 多 back stack——NavBackStack 为普通值天然多实例；entries 拼接显示按需再加
 13. [x] EntryProvider 类型化 DSL——winia 用 match 闭包（Rust 惯用，不追）
 
+**补充缺口（2026-09-02 源码复核新增）**——此前文档未列：
+14. [x] **result API**（Nav3 ResultEffect/ResultEventBus/ResultEventBusNavEntryDecorator）：
+    页面返回结果传递（A → B → 返回 → A 收 B 的结果）。winia 降级版（无协程）：
+    `ResultEventBus`（send/take 一次性消费 + peek——对标 conflateAsState 的
+    "最新结果"语义）+ NavDisplay remember + `RESULT_EVENT_BUS_SCOPE`
+    CompositionLocal 提供（entry 内容经 `result_event_bus()` 读取，含 dialog
+    覆盖层）。winia 组合模型下 entry 每次重组重跑——take 语义天然匹配
+    "返回后处理一次结果"，无需协程订阅
+15. [ ] **navigation event**（Nav3 rememberNavigationEventState/NavigationBackHandler）：
+    依赖独立 navigationevent 库 + Android 系统 back 手势——winia 桌面场景相关性低，
+    仅可借鉴 SceneInfo/previousScenes 建模。成本：高，建议暂缓
+16. [x] **通用 metadata**（Nav3 NavMetadataKey + metadata{} DSL）：`NavMetadata`
+    = `HashMap<TypeId, Box<dyn Any>>`（TypeId 键类型安全——Kotlin 字符串键 +
+    cast 的 Rust 等价）；NavEntry::metadata()/metadata_ref()、Scene::metadata()
+    （默认 = 栈顶 entry 的 metadata——Nav3 语义）
+17. [x] **SceneDecoratorStrategy**（Nav3 scene 级装饰，overlay 豁免）：给 scene 内容
+    追加装饰（如底部导航栏）。`SceneDecoratorStrategy` trait（decorate_scene 包装
+    返回新 scene）+ NavDisplay::scene_decorator_strategies/add_scene_decorator
+    （链式应用，后加入在外层；对话框场景不经过）
+18. [x] **Scene trait 补 previousEntries/metadata**：`Scene::previous_entries()`
+    （默认空——winia 退场场景由 NavTransition 持有，功能等价；供自定义场景
+    显式访问）+ `Scene::metadata()`（默认 = 栈顶 entry metadata）
+19. [x] **DialogProperties 参数化**（Nav3 dialog(dialogProperties)：dismissOnBackPress/
+    dismissOnClickOutside）：`NavDialogProperties`（桌面相关子集：
+    dismiss_on_click_outside）+ `NavEntry::as_dialog_with(props)`；dismiss
+    幂等防护不变
+
+**过渡扩展（2026-09-02）**：
+20. [x] **自定义时长/缓动**：`NavTransitionSpec::duration(Duration)` /
+    `easing(Arc<dyn Interpolator>)`——用动画系统内置 29 个插值器
+    （EaseIn/Out/InOut × Sine/Quad/Cubic/Quart/Quint/Expo/Circ/Back/Elastic/
+    Bounce + Linear），不再硬编码 300ms EaseInOutCubic；spec 快照语义保持
+21. [x] **Scale 原语**：`NavEnter::ScaleIn { initial_scale }` /
+    `NavExit::ScaleOut { target_scale }`（围绕中心缩放——对标 Compose
+    scaleIn/scaleOut）
+
 ## 六、状态保持实现（remember_entry_state 状态池）
 
 **问题**：winia 的 `remember` 状态绑定**组合槽生命周期**——entry 的槽随子树移除销毁，
