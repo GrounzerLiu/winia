@@ -1661,6 +1661,10 @@ pub(crate) fn measure_node(
     nodes[idx].dirty = false;
     nodes[idx].layout_dirty = false;
     nodes[idx].cached_constraints = Some(constraints);
+    // 尺寸上报（对标 Compose onSizeChanged）——最终尺寸定型后回调
+    // （常量折叠早退路径不经过这里——尺寸未变无需上报；元素内再去重）
+    let (rw, rh) = (nodes[idx].measured_size.width, nodes[idx].measured_size.height);
+    nodes[idx].modifier.report_measured_size(rw, rh);
     result
 }
 

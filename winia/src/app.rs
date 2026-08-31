@@ -149,6 +149,21 @@ struct OverlayWindow {
     content: Box<dyn Fn(&mut ComposeCtx)>,
     /// 渲染/命中用的屏幕位置（逻辑坐标——每帧布局后更新）
     screen_pos: (f32, f32),
+    /// 该 overlay 内当前 hover 的 hoverable slot 集合（独立于主树——
+    /// overlay 是独立 composer，slot 与主树可能重复）
+    hovered_slots: std::collections::HashSet<u64>,
+    /// 该 overlay 内当前按下 的 interaction source（Press 波纹——up/取消时释放）
+    pressed_interaction: Option<(u64, crate::ui::interaction::MutableInteractionSource)>,
+    /// 显示进度（1=完全显示，0=隐藏）——进入/退出动画统一驱动：
+    /// 打开 push_animatable(progress, 1.0)（0→1），关闭 push(progress, 0.0)
+    /// （1→0）；渲染期 peek 计算 scale/alpha。None=无动画（恒 1）
+    progress: Option<crate::core::state::State<f32>>,
+    /// 进入动画规格（None = 瞬时——Popup/DropdownMenu 默认）
+    enter_anim: Option<crate::ui::overlay::OverlayAnimSpec>,
+    /// 退出动画规格（None = 瞬时消失）
+    exit_anim: Option<crate::ui::overlay::OverlayAnimSpec>,
+    /// 关闭中（退出动画播放中——动画完成前保留渲染；期间不响应交互）
+    closing: bool,
 }
 
 /// Compose 风格的 click 检测中间状态
@@ -1140,8 +1155,18 @@ impl AppState {
             match evt {
                 debug::DebugEvent::Click { x, y } => {
                     // overlay 优先（对齐真实指针路径 handle_pointer_down）：
-                    // 命中 overlay → 消费（不进主树）；外部点击 → dismiss
+                    // 命中 overlay → 消费（不进主树）；外部点击 → dismiss。
+                    // ⚠ Click 是合成单事件（非 down/up 分离）——overlay 命中后
+                    // 必须立即执行点击（真实路径 down 记录 + up 触发；这里
+                    // down 记录后直接 exec，否则 overlay 按钮永远点不动）
                     if overlay_down(pw, (x, y)) {
+                        // 命中 overlay：立即执行点击（合成单事件——down 记录 +
+                        // 立即 up 触发；真实路径由 PointerUp 事件触发）
+                        exec_overlay_click(pw);
+                        // 释放 overlay 的 press（合成事件无真实 up——否则按下
+                        // 波纹/按压态卡死到 overlay 关闭）
+                        release_pressed_interaction(pw);
+                        if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                         handled = true;
                         continue;
                     }
@@ -1918,6 +1943,15 @@ impl OverlayWindow {
             on_dismiss: desc.on_dismiss,
             content: desc.content,
             screen_pos: (0.0, 0.0),
+            hovered_slots: std::collections::HashSet::new(),
+            pressed_interaction: None,
+            // 动画进度：enter **或** exit 有规格 → progress State 驱动（进入
+            // 0→1 / 退出 1→0）；两者皆无 → None（恒显示——瞬时出现/消失）
+            progress: (desc.enter_anim.is_some() || desc.exit_anim.is_some())
+                .then(|| crate::core::state::State::new(0.0)),
+            enter_anim: desc.enter_anim,
+            exit_anim: desc.exit_anim,
+            closing: false,
         }
     }
 
@@ -1930,6 +1964,25 @@ impl OverlayWindow {
         self.click_passthrough = desc.click_passthrough;
         self.on_dismiss = desc.on_dismiss;
         self.content = desc.content;
+        // 动画规格更新（复用 overlay 时动画参数变化生效）——规格 None↔Some
+        // 翻转时重建 progress（None→Some：新建驱动；Some→None：残留 State
+        // 弃用——render 落 `_` 分支恒显示，关闭 has_exit=false 立即移除）
+        let spec_flipped = desc.enter_anim.is_some() != self.enter_anim.is_some()
+            || desc.exit_anim.is_some() != self.exit_anim.is_some();
+        self.enter_anim = desc.enter_anim;
+        self.exit_anim = desc.exit_anim;
+        if spec_flipped {
+            self.progress = (self.enter_anim.is_some() || self.exit_anim.is_some())
+                .then(|| crate::core::state::State::new(0.0));
+            // 重建后保持显示（update 是复用路径——overlay 已显示中；progress=0
+            // 会让渲染落 apply(0) 隐藏）。若新规格有 enter 动画，由调用方
+            // push 进入动画；否则直接完整显示
+            if let Some(p) = self.progress.as_ref() {
+                if self.enter_anim.is_none() {
+                    p.set_silent(1.0);
+                }
+            }
+        }
     }
 }
 
@@ -1942,32 +1995,118 @@ fn sync_overlays(pw: &mut PerWindow, _recomposed: bool) {
     let descs = pw.composer.take_overlays();
     for desc in descs {
         if let Some(ov) = pw.overlays.iter_mut().find(|o| o.id == desc.id) {
+            // 复用：规格翻转（None↔Some）时 update 重建 progress——新规格有
+            // enter 动画则 push 0→1（否则 update 内已 set_silent(1.0) 保持显示）
+            let had_enter = ov.enter_anim.is_some();
             ov.update(desc);
+            let now_has_enter = ov.enter_anim.is_some();
+            if !had_enter && now_has_enter {
+                if let Some(p) = ov.progress.clone() {
+                    let spec = ov.enter_anim.as_ref().unwrap();
+                    crate::animation::push_animatable(
+                        p, 1.0,
+                        crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
+                            spec.duration, spec.interpolator.clone(),
+                        )),
+                    );
+                }
+            }
         } else {
+            // 新 overlay：创建 + 启动进入动画（progress 0→1；无 enter 规格 =
+            // 瞬时显示——但 exit 有规格时 progress 直接置 1.0，退出才能 1→0）
+            let enter_anim = desc.enter_anim.clone();
             pw.overlays.push(OverlayWindow::new(desc));
+            if let Some(p) = pw.overlays.last().and_then(|o| o.progress.clone()) {
+                if let Some(spec) = &enter_anim {
+                    crate::animation::push_animatable(
+                        p, 1.0,
+                        crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
+                            spec.duration, spec.interpolator.clone(),
+                        )),
+                    );
+                } else {
+                    // 无进入动画（但 exit 有）：直接完整显示（progress=1）
+                    p.set_silent(1.0);
+                }
+            }
         }
     }
-    // 组合期记录 active=false 的 overlay → 主动关闭 → 删除（先触发 on_dismiss
-    // 再 retain——删除后 find 不到）
+    // 组合期记录 active=false 的 overlay → 主动关闭 → 启动退出动画
+    // （先触发 on_dismiss；动画完成由 finish_closing_overlays 移除——不复位
+    // 则保留渲染播放退出动画）
     let to_close: Vec<u64> = pw.composer.overlay_active.iter()
         .filter(|(_, active)| !**active)
         .map(|(&id, _)| id)
         .collect();
-    if !to_close.is_empty() {
-        for id in &to_close {
-            if let Some(ov) = pw.overlays.iter_mut().find(|o| o.id == *id) {
-                if let Some(cb) = ov.on_dismiss.take() {
-                    (cb)();
-                }
-            }
+    for id in &to_close {
+        begin_overlay_close(pw, *id);
+    }
+    // 退出动画完成检测：closing 且 progress≈0（或无动画规格）→ 真正移除
+    finish_closing_overlays(pw);
+}
+
+/// 启动 overlay 关闭（退出动画）：标记 closing + 触发 on_dismiss + 驱动
+/// progress 1→0（有退出规格）——动画完成前保留渲染（对齐 Compose
+/// AnimatedVisibility exit 语义）。无退出规格 → 立即移除。
+fn begin_overlay_close(pw: &mut PerWindow, id: u64) {
+    let Some(idx) = pw.overlays.iter().position(|o| o.id == id) else { return };
+    // 已在关闭中（重复关闭请求）→ 跳过（防重入：动画重启/on_dismiss 重复）
+    if pw.overlays[idx].closing {
+        return;
+    }
+    pw.overlays[idx].closing = true;
+    if let Some(cb) = pw.overlays[idx].on_dismiss.take() {
+        (cb)();
+    }
+    cleanup_overlay_interactions(&mut pw.overlays[idx]);
+    // 启动退出动画（progress 1→0）；无退出规格 → 立即移除（不推无用动画——
+    // 否则对即将 drop 的孤儿 State 浪费 200ms 动画）
+    let has_exit = pw.overlays[idx].exit_anim.is_some();
+    if has_exit {
+        if let Some(p) = pw.overlays[idx].progress.clone() {
+            let spec = pw.overlays[idx].exit_anim.as_ref().unwrap();
+            crate::animation::push_animatable(
+                p, 0.0,
+                crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
+                    spec.duration, spec.interpolator.clone(),
+                )),
+            );
         }
-        pw.overlays.retain(|o| !to_close.contains(&o.id));
+    }
+    if !has_exit {
+        pw.overlays.remove(idx);
+    }
+}
+
+/// 退出动画完成检测：closing 且 progress≈0（动画已播完）→ 移除
+fn finish_closing_overlays(pw: &mut PerWindow) {
+    pw.overlays.retain(|ov| {
+        if !ov.closing { return true; }
+        // 无 progress（无动画）不应到这里（begin 已移除）；有则等动画完成
+        let done = ov.progress.as_ref().map(|p| p.peek() < 0.001).unwrap_or(true);
+        !done
+    });
+}
+
+/// overlay 移除前清理交互状态（hover 补 Exit + press 释放）——
+/// overlay 删除后其节点销毁，交互 source 悬空 → 必须在移除前发射
+fn cleanup_overlay_interactions(ov: &mut OverlayWindow) {
+    let olds: Vec<u64> = ov.hovered_slots.drain().collect();
+    for slot in olds {
+        overlay_exit_hover_at(ov, slot);
+    }
+    if let Some((_, src)) = ov.pressed_interaction.take() {
+        src.emit_release();
     }
 }
 
 /// overlay compose + layout（独立组合单元——约束为窗口尺寸），并计算屏幕定位
 fn layout_overlays(pw: &mut PerWindow) {
     for ov in &mut pw.overlays {
+        // 关闭中：不再 recompose（内容已不可交互——冻结最后帧渲染退出动画）
+        if ov.closing {
+            continue;
+        }
         ov.composer.recompose(|ctx| (ov.content)(ctx));
         ov.composer.layout(crate::layout::Constraints::new(0.0, pw.width, 0.0, pw.height));
     }
@@ -2027,6 +2166,10 @@ fn layout_overlays(pw: &mut PerWindow) {
 fn hit_overlay(pw: &PerWindow, scene_pos: (f32, f32)) -> Option<(usize, (f32, f32))> {
     for i in (0..pw.overlays.len()).rev() {
         let ov = &pw.overlays[i];
+        // 关闭中（退出动画播放）：不响应交互——命中视同穿透（下层/主树）
+        if ov.closing {
+            continue;
+        }
         let local = (scene_pos.0 - ov.screen_pos.0, scene_pos.1 - ov.screen_pos.1);
         if let Some(r) = ov.composer.layout_root_idx() {
             let nodes = ov.composer.arena_nodes();
@@ -2041,10 +2184,18 @@ fn hit_overlay(pw: &PerWindow, scene_pos: (f32, f32)) -> Option<(usize, (f32, f3
 /// overlay 渲染（主树之后——上层；模态先画遮罩）
 fn render_overlays(overlays: &[OverlayWindow], canvas: &skia_safe::Canvas, scale: f32, window: (f32, f32)) {
     for ov in overlays {
-        // 模态遮罩
+        // 显示进度 → (scale, alpha)：progress State 驱动（peek——渲染期零重组）。
+        // 打开：progress 0→1，apply() 正向（0=起点 scale_from/alpha0 → 1=完整）；
+        // 关闭（closing）：progress 1→0，apply_exit() 反向（1=完整 → 0=隐藏）
+        let (anim_scale, anim_alpha) = match (&ov.progress, ov.closing, &ov.enter_anim, &ov.exit_anim) {
+            (Some(p), false, Some(spec), _) => spec.apply(p.peek()),       // 进入
+            (Some(p), true, _, Some(spec)) => spec.apply_exit(p.peek()),   // 退出
+            _ => (1.0, 1.0),                                               // 无动画
+        };
+        // 模态遮罩（淡入淡出——跟随内容 alpha）
         if ov.modal {
             let mut mask = skia_safe::Paint::default();
-            mask.set_color(skia_safe::Color::from_argb(110, 0, 0, 0));
+            mask.set_color(skia_safe::Color::from_argb((110.0 * anim_alpha) as u8, 0, 0, 0));
             canvas.draw_rect(
                 skia_safe::Rect::from_xywh(0.0, 0.0, window.0 * scale, window.1 * scale),
                 &mask,
@@ -2054,10 +2205,28 @@ fn render_overlays(overlays: &[OverlayWindow], canvas: &skia_safe::Canvas, scale
         let nodes = ov.composer.arena_nodes();
         canvas.save();
         canvas.translate((ov.screen_pos.0 * scale, ov.screen_pos.1 * scale));
+        // 进入/退出动画：围绕 overlay 中心缩放 + 内容淡入淡出。
+        // ⚠ scale 在 translate 之后——先定位再缩放（缩放中心 = overlay 左上角 +
+        // 内容半尺寸，即内容中心）
+        if anim_scale != 1.0 {
+            let size = ov.composer.layout_root()
+                .map(|r| (r.measured_size.width, r.measured_size.height))
+                .unwrap_or((0.0, 0.0));
+            canvas.translate(((size.0 / 2.0) * scale, (size.1 / 2.0) * scale));
+            canvas.scale((anim_scale, anim_scale));
+            canvas.translate((-(size.0 / 2.0) * scale, -(size.1 / 2.0) * scale));
+        }
+        if anim_alpha < 1.0 {
+            // 内容淡入/淡出：整体 alpha 层（save_layer_alpha_f——Skia 层叠 alpha）
+            canvas.save_layer_alpha_f(None, anim_alpha);
+        }
         // overlay 内容与主树一致按 scale 绘制（坐标均为逻辑单位）——
         // 缺省会导致内容以 1x 绘制：可见位置/大小与命中测试（逻辑坐标）错位
         canvas.scale((scale, scale));
         render::render(nodes, r, canvas);
+        if anim_alpha < 1.0 {
+            canvas.restore();
+        }
         canvas.restore();
     }
 }
@@ -2066,6 +2235,11 @@ fn render_overlays(overlays: &[OverlayWindow], canvas: &skia_safe::Canvas, scale
 fn exec_overlay_click(pw: &mut PerWindow) -> bool {
     let Some((idx, local, _nid)) = pw.overlay_click.take() else { return false; };
     let Some(ov) = pw.overlays.get(idx) else { return false; };
+    // 关闭中（down 后外部 dismiss 等）→ 不 fire click（避免对已关闭的
+    // overlay 误触发——极窄边界但语义正确）
+    if ov.closing {
+        return false;
+    }
     let Some(r) = ov.composer.layout_root_idx() else { return false; };
     let nodes = ov.composer.arena_nodes();
     let path = hit_test(nodes, r, local.0, local.1);
@@ -2093,12 +2267,30 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
     }
     if let Some((i, local)) = hit_overlay(pw, scene_pos) {
         // 命中 overlay 内容——记录点击目标（v1：仅 clickable——up 时执行）
-        let ov = &pw.overlays[i];
         // ⚠ click_passthrough（Tooltip）：命中浮层但**放行主树**——浮层盖住
         // 锚点（锚点上方 tooltip 与锚点本身重叠）时点击锚点仍生效（否则
         // tooltip 挡住锚点按钮 → 外部 visible 控制关不了）
+        let ov = &mut pw.overlays[i];
         if ov.click_passthrough {
             return false;
+        }
+        // 发射 Press（按下波纹——对标 Compose PressInteraction.Press；
+        // ripple 渲染已支持 overlay，缺的只是事件触发）
+        {
+            let nodes = ov.composer.arena_nodes();
+            let Some(r) = ov.composer.layout_root_idx() else { return true };
+            let path = hit_test(nodes, r, local.0, local.1);
+            let Some(&idx) = path.iter().rev().find(|&&i| {
+                nodes[i].modifier.clickable_interaction().is_some()
+            }) else { return true };
+            let src = match nodes[idx].modifier.clickable_interaction() {
+                Some(s) => s.clone(),
+                None => return true,
+            };
+            // 波纹中心 = 节点本地坐标（overlay 内无滚动/变换——直接换算）
+            let local_press = crate::layout::node::scene_to_node_local(nodes, &path, idx, local.0, local.1);
+            src.emit_press_at(local_press);
+            ov.pressed_interaction = Some((nodes[idx].slot_key, src));
         }
         let nid = ov.composer.layout_root_idx().and_then(|r| {
             let nodes = ov.composer.arena_nodes();
@@ -2113,11 +2305,11 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
     for i in (0..pw.overlays.len()).rev() {
         if pw.overlays[i].modal || pw.overlays[i].dismiss_on_outside {
             let passthrough = pw.overlays[i].click_passthrough;
-            let cb = pw.overlays[i].on_dismiss.take();
-            pw.overlays.remove(i);
-            if let Some(cb) = cb {
-                (cb)();
-            }
+            let id = pw.overlays[i].id;
+            // 启动退出动画（不复位——动画完成后移除；passthrough Tooltip 的
+            // on_dismiss 同步置 visible=false → 组合期记录 active=false 走
+            // begin_overlay_close；这里先直接触发——两者幂等（closing 防重入））
+            begin_overlay_close(pw, id);
             // ⚠ Tooltip（passthrough）：dismiss 后**放行主树**——点击不消费
             // （否则点按钮第一次只关 tooltip、按钮收不到——需点两次）
             if passthrough {
@@ -2199,6 +2391,12 @@ fn release_pressed_interaction(pw: &mut PerWindow) {
     if let Some((_, src)) = pw.pressed_interaction.take() {
         src.emit_release();
     }
+    // overlay 的按下交互同步释放（overlay 独立 composer——独立 pressed 状态）
+    for ov in &mut pw.overlays {
+        if let Some((_, src)) = ov.pressed_interaction.take() {
+            src.emit_release();
+        }
+    }
 }
 
 /// 悬停更新：**路径上所有 hoverable** 节点进入/离开 → 发射 Hover Enter/Exit
@@ -2206,6 +2404,35 @@ fn release_pressed_interaction(pw: &mut PerWindow) {
 /// 发射最内层——嵌套 hoverable（如 Tooltip 锚点容器 + 内部 Button）外层
 /// 收不到 Enter → Tooltip 不显示）。节点移除时自动补 Exit。
 fn update_hover(pw: &mut PerWindow, scene_pos: (f32, f32)) {
+    // overlay 优先：指针在 overlay 内容上 → 只更新 overlay 的 hover，
+    // 同时主树 + **其他 overlay** 全部退出 hover（overlay 盖住下层——
+    // 对齐真实指针层叠；堆叠 overlay 时下层按钮 hover 不残留）
+    if let Some((i, local)) = hit_overlay(pw, scene_pos) {
+        let ov = &mut pw.overlays[i];
+        overlay_update_hover(ov, local);
+        // 主树 hover 全清（指针在 overlay 上——主树不可见）
+        let olds: Vec<u64> = pw.hovered_slots.drain().collect();
+        for slot in olds {
+            exit_hover_at(pw, slot);
+        }
+        // 其他 overlay（下层）hover 全清
+        for j in 0..pw.overlays.len() {
+            if j == i { continue; }
+            let olds: Vec<u64> = pw.overlays[j].hovered_slots.drain().collect();
+            for slot in olds {
+                overlay_exit_hover_at(&mut pw.overlays[j], slot);
+            }
+        }
+        return;
+    }
+    // 未命中任何 overlay：主树 hover 更新 + 所有 overlay hover 全清
+    // （指针离开 overlay——overlay 的 hover 状态清理）
+    for ov in &mut pw.overlays {
+        let olds: Vec<u64> = ov.hovered_slots.drain().collect();
+        for slot in olds {
+            overlay_exit_hover_at(ov, slot);
+        }
+    }
     // 当前路径上所有 hoverable 的 (slot, interaction)
     let hit: Vec<(u64, crate::ui::interaction::MutableInteractionSource)> = {
         let nodes = pw.composer.arena_nodes();
@@ -2229,6 +2456,43 @@ fn update_hover(pw: &mut PerWindow, scene_pos: (f32, f32)) {
     for slot in gone {
         pw.hovered_slots.remove(&slot);
         exit_hover_at(pw, slot);
+    }
+}
+
+/// overlay 内 hover 更新（overlay composer + 本地坐标）
+fn overlay_update_hover(ov: &mut OverlayWindow, local: (f32, f32)) {
+    let hit: Vec<(u64, crate::ui::interaction::MutableInteractionSource)> = {
+        let nodes = ov.composer.arena_nodes();
+        let Some(r) = ov.composer.layout_root_idx() else { return; };
+        let path = hit_test(nodes, r, local.0, local.1);
+        path.iter()
+            .filter(|&&i| nodes[i].modifier.has_hoverable())
+            .filter_map(|&i| nodes[i].modifier.hoverable_interaction().map(|s| (nodes[i].slot_key, s.clone())))
+            .collect()
+    };
+    let hit_slots: std::collections::HashSet<u64> = hit.iter().map(|(s, _)| *s).collect();
+    for (slot, src) in &hit {
+        if ov.hovered_slots.insert(*slot) {
+            src.emit_hover_enter();
+        }
+    }
+    let gone: Vec<u64> = ov.hovered_slots.iter().copied().filter(|s| !hit_slots.contains(s)).collect();
+    for slot in gone {
+        ov.hovered_slots.remove(&slot);
+        overlay_exit_hover_at(ov, slot);
+    }
+}
+
+/// 对 overlay 内指定 slot 的节点补发 Hover Exit
+fn overlay_exit_hover_at(ov: &mut OverlayWindow, slot: u64) {
+    let nodes = ov.composer.arena_nodes();
+    let Some(r) = ov.composer.layout_root_idx() else { return; };
+    if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot) {
+        if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, nid) {
+            if let Some(src) = nodes[idx].modifier.hoverable_interaction() {
+                src.emit_hover_exit();
+            }
+        }
     }
 }
 
@@ -2596,6 +2860,28 @@ fn handle_pointer_move(
     if pw.gesture_node.is_some() && gesture_move(pw, scene_pos) {
         handled = true;
     }
+    // overlay 点击 slop 取消：按下 overlay 后拖出 18px → 取消 click（对齐
+    // 主树 detect_click 的 slop 判定；down 位置 = overlay screen_pos + local）
+    if pw.overlay_click.is_some() {
+        let cancel = match pw.overlay_click {
+            Some((idx, local, _)) => {
+                match pw.overlays.get(idx) {
+                    Some(ov) => {
+                        let down_screen = (ov.screen_pos.0 + local.0, ov.screen_pos.1 + local.1);
+                        let dx = scene_pos.0 - down_screen.0;
+                        let dy = scene_pos.1 - down_screen.1;
+                        (dx * dx + dy * dy).sqrt() > 18.0
+                    }
+                    None => false,
+                }
+            }
+            None => false,
+        };
+        if cancel {
+            pw.overlay_click = None;
+            release_pressed_interaction(pw);
+        }
+    }
     // 拖拽滚动：内容跟随指针 + 记录速度样本（松手 fling 用）。放在手势/文本
     // 选择之前——但按下时已排除组件 drag 手势与文本选择，此处无冲突
     if pw.drag_scroll.is_some() {
@@ -2669,6 +2955,9 @@ fn handle_pointer_move(
         let dy = scene_pos.1 - down.position.1;
         if (dx * dx + dy * dy).sqrt() > 18.0 {
             release_pressed_interaction(pw);
+            // overlay 点击同步取消（对齐主树 detect_click 的 slop 判定——
+            // 拖出 slop 后 up 不应 fire overlay click）
+            pw.overlay_click = None;
         }
     }
     let nodes = pw.composer.arena_nodes();

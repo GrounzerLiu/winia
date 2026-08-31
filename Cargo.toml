@@ -7,6 +7,12 @@ members = [
     "material-shapes",
 ]
 
+[workspace.metadata.orphan-gc]
+enabled = true
+dry-run = false
+inner-wrapper = "sccache"
+pending-sweeps-per-compile = 4
+
 [workspace.dependencies]
 winit = "0.31.0-beta.2"
 skia-safe = "0.99.0"
