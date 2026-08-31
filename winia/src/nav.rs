@@ -166,11 +166,12 @@ fn fnv_hash(value: &impl std::hash::Hash) -> u64 {
 /// ```
 ///
 /// 对标 Nav3：`NavKey` 是标记接口（`@Serializable` 用于持久化）。winia 无
-/// 序列化要求，trait 仅作类型约束（`Clone + PartialEq + Eq + Hash + Debug + 'static`——
-/// Hash 用于状态保持装饰器的固定组合 key）。
-pub trait NavKey: Clone + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + 'static {}
+/// 序列化要求，trait 仅作类型约束（`Clone + PartialEq + Eq + Hash + Debug +
+/// Send + Sync + 'static`——Hash 用于状态保持装饰器的固定组合 key；Send+Sync
+/// 用于 dismiss 等跨线程回调）。
+pub trait NavKey: Clone + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + Send + Sync + 'static {}
 
-impl<T: Clone + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + 'static> NavKey for T {}
+impl<T: Clone + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + Send + Sync + 'static> NavKey for T {}
 
 // ═══════════════════════════════════════════════════════════
 // NavBackStack — 导航状态（对标 Nav3 的 NavBackStack）
@@ -277,6 +278,10 @@ pub struct NavEntry<K: NavKey> {
     /// pop 方向过渡覆盖（对标 Nav3 `NavDisplay.PopTransitionKey` metadata——
     /// 本 entry 被弹出作为 pop 前景时优先于 NavDisplay 默认）
     pop_transition_spec: Option<NavTransitionSpec>,
+    /// 对话框标记（对标 Nav3 `dialog()` metadata / DialogSceneStrategy）——
+    /// 栈顶连续的 dialog entry 渲染为模态覆盖层（主树不渲染其内容），
+    /// dismiss = 弹栈
+    dialog: bool,
     content: std::sync::Arc<dyn Fn(&mut ComposeCtx, &K) + 'static>,
 }
 
@@ -287,6 +292,7 @@ impl<K: NavKey> Clone for NavEntry<K> {
             content_key: self.content_key,
             transition_spec: self.transition_spec,
             pop_transition_spec: self.pop_transition_spec,
+            dialog: self.dialog,
             content: self.content.clone(),
         }
     }
@@ -308,6 +314,7 @@ impl<K: NavKey> NavEntry<K> {
             content_key,
             transition_spec: None,
             pop_transition_spec: None,
+            dialog: false,
             content: std::sync::Arc::new(content),
         }
     }
@@ -325,6 +332,7 @@ impl<K: NavKey> NavEntry<K> {
             content_key,
             transition_spec: None,
             pop_transition_spec: None,
+            dialog: false,
             content: std::sync::Arc::new(content),
         }
     }
@@ -336,6 +344,24 @@ impl<K: NavKey> NavEntry<K> {
     /// 稳定内容 id（对标 Nav3 contentKey）
     pub fn content_key(&self) -> u64 {
         self.content_key
+    }
+
+    /// 标记为**对话框 entry**（对标 Nav3 `dialog()` metadata / DialogSceneStrategy）：
+    /// 本 entry 位于栈顶时渲染为模态覆盖层（主树不渲染其内容），dismiss（点击
+    /// 外部/用户关闭）= 弹栈。
+    ///
+    /// ⚠ **仅栈顶连续 dialog 生效**（v1 overlay 单层限制）：从栈顶向下收集连续
+    /// dialog 标记——若 dialog 之上 push 了普通 entry（如 [Home, About(dialog),
+    /// Detail]），About 会作为普通 base 页面渲染（非模态覆盖层）。与 Nav3
+    /// DialogSceneStrategy（所有 dialog metadata entry 均弹窗）不同，为设计取舍。
+    pub fn as_dialog(mut self) -> Self {
+        self.dialog = true;
+        self
+    }
+
+    /// 是否为对话框 entry
+    pub fn is_dialog(&self) -> bool {
+        self.dialog
     }
 
     /// 覆盖本 entry 作为 push 前景（新栈顶）时的过渡——对标 Nav3
@@ -1194,14 +1220,32 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
                 })
                 .collect(),
         );
-        if stack.is_empty() {
-            return; // 空栈：渲染空（Nav3 require 非空——winia 允许，设计取舍）
-        }
-        // 策略链计算当前场景（依次尝试，SinglePane 兜底——对标
+        // ⚠ 空栈不提前 return：dialog 块（下方）必须无条件执行 Dialog::build
+        // （visible 参数化）——栈空时对话框是唯一 entry，程序化 pop 关闭依赖
+        // record_overlay_active(id,false) → sync 删除 overlay；提前 return 会让
+        // 关闭的对话框永久残留（泄漏）。base 场景渲染由 `scene: Option` 空跳过。
+        // 分离栈顶连续的 **dialog entry**（对标 Nav3 DialogSceneStrategy——从栈顶
+        // 向下收集连续 dialog 标记；更深处的 dialog entry 按普通 entry 渲染）：
+        // base 部分走场景/过渡主流，dialog 部分渲染为模态覆盖层（主树不渲染其内容）
+        let dialog_len = if stack.is_empty() {
+            0 // 空栈：无 dialog（仅需下方案件 build 记录 active=false）
+        } else {
+            stack
+                .iter()
+                .rev()
+                .zip(entries.iter().rev())
+                .take_while(|(_, e)| e.is_dialog())
+                .count()
+        };
+        let base_len = stack.len() - dialog_len;
+        let dialog_entries: Vec<NavEntry<K>> = entries[base_len..].to_vec();
+        // 策略链计算 base 场景（依次尝试，SinglePane 兜底——对标
         // calculateSceneWithSinglePaneFallback）。持有于 Arc——过渡的退场层
         // 直接引用上一帧的场景对象（对标 Nav3 sceneMap）
-        let scene: std::sync::Arc<dyn Scene<K>> = calculate_scene(&self.scene_strategies, &entries).into();
-        eprintln!("[build-dbg] strategies={} scene_ck_keys={:?} stack={:?}", self.scene_strategies.len(), scene.entries().iter().map(|e| e.content_key()).collect::<Vec<_>>(), stack);
+        let scene: Option<std::sync::Arc<dyn Scene<K>>> = (base_len > 0).then(|| {
+            calculate_scene(&self.scene_strategies, &entries[..base_len]).into()
+        });
+        if let Some(scene) = &scene {
         // 导航过渡状态机（跨帧 remember——scene key 维度）
         let transition = NavTransition::init(ctx, scene.scene_key());
         // 方向：isPop 列表差分（对标 NavDisplay.isPop）
@@ -1263,13 +1307,59 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
             transition.render(
                 ctx,
                 transition.previous_scene().as_ref().map(|h| h.scene.as_ref()),
-                &*scene,
+                scene.as_ref(),
                 &render_entry,
                 &spec,
             );
         });
         // 记录本帧场景（下一帧的退场场景来源）
         last_scene.set_silent(Some(scene_holder));
+        }
+        // dialog 覆盖层：栈顶 dialog entry 注册为模态覆盖层（渲染于主树之上，
+        // 主树不渲染其内容；dismiss = 弹栈）。winia overlay v1 单层限制 →
+        // 仅渲染栈顶一个；⚠ 覆盖层内容由独立 Composer 渲染——entry 内 plain
+        // ctx.remember 不跨帧持久（remember_entry_state 池化状态不受影响）。
+        // ⚠ build 必须**无条件调用**（visible 参数化）：overlay sync 依赖
+        // record_overlay_active(id, active)——pop 后 dialog_len=0 时记录
+        // active=false → sync 删除 overlay。条件 build（if dialog_len>0）会让
+        // 注册方 Skip → sync 视为"无记录保留" → 关闭的对话框残留。
+        // 但仅当栈顶 dialog 存在时有内容可渲染——visible=false 时 build 不渲染
+        let dialog_visible = dialog_len > 0;
+        let dialog_top = (dialog_len > 0).then(|| dialog_entries.last().cloned()).flatten();
+        let bs = self.back_stack.clone();
+        let pool = entry_pool.clone();
+        // 栈顶 dialog 的 key——dismiss 回调幂等防护用（直接 key 相等比较——
+        // K: PartialEq + Eq；不用 hash：避免 FNV 碰撞击穿防护误弹下层 entry）
+        let dialog_key = dialog_top.as_ref().map(|t| t.key.clone());
+        let dialog_content: Option<(u64, NavEntry<K>)> = dialog_top.map(|t| (t.content_key(), t));
+        crate::ui::overlay::Dialog::new(dialog_visible)
+            .on_dismiss_request(move || {
+                // dismiss 幂等防护：外部点击 / overlay 关闭 sync / 按钮显式 pop
+                // 都可能触发 on_dismiss——只在 dialog 顶仍在栈顶时 pop，
+                // 否则重复 pop 会误弹下层 entry（实测：按钮关闭后 sync 又触发
+                // on_dismiss → Detail 被连带弹掉）
+                let guard_bs = bs.clone();
+                let is_dialog_top = match (&dialog_key, guard_bs.top()) {
+                    (Some(dk), Some(tk)) => dk == &tk,
+                    _ => false,
+                };
+                if is_dialog_top {
+                    guard_bs.pop();
+                }
+            })
+            .build(ctx, move |ctx| {
+                if let Some((ck, entry)) = &dialog_content {
+                    let counter = ctx.remember(|| State::new(0u32)).get();
+                    counter.set_silent(0);
+                    let scope = EntryStateScope {
+                        pool: pool.clone(),
+                        key: *ck,
+                        counter,
+                        draining: false,
+                    };
+                    ENTRY_STATE_SCOPE.provides(scope, || entry.build(ctx));
+                }
+            });
     }
 }
 
@@ -1672,6 +1762,134 @@ mod tests {
         assert!(!t.iter().any(|x| x.contains("Detail7")), "pop 完成后旧页应移除");
     }
 
+    /// dialog 标记 entry（对标 Nav3 `dialog()` metadata / DialogSceneStrategy）：
+    /// 栈顶 dialog entry 渲染为模态覆盖层——**主树不渲染其内容**（测试 composer
+    /// 不物化 overlay）；base 场景不受对话框开/关影响；连续 dialog 栈仅栈顶
+    /// 渲染覆盖层；pop 即关闭、无残留
+    #[test]
+    fn dialog_entry_renders_as_overlay() {
+        #[derive(Clone, PartialEq, Eq, Debug, Hash)]
+        enum DialogRoute {
+            Home,
+            About,
+        }
+        use crate::core::composer::Composer;
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let bs = NavBackStack::<DialogRoute>::with_initial(DialogRoute::Home);
+        let mut composer = Composer::new();
+        let mut build = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                NavDisplay::new(&bs, |ctx, key| match key {
+                    DialogRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
+                        crate::ui::Text::new("HomeScreen").build(ctx);
+                    }),
+                    DialogRoute::About => NavEntry::new(key.clone(), |ctx, _| {
+                        crate::ui::Text::new("AboutScreen").build(ctx);
+                    })
+                    .as_dialog(),
+                })
+                .build(ctx);
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        let texts = |composer: &mut Composer| -> Vec<String> {
+            let root = composer.layout_root_idx().unwrap();
+            let nodes = composer.arena_nodes();
+            let mut out = Vec::new();
+            collect_texts(nodes, root, &mut out);
+            out
+        };
+
+        // 开对话框：主树只渲染 base（Home）——About 内容不进主树（覆盖层由
+        // app 层独立物化，测试 composer 不渲染）；base 场景不变（无过渡）
+        build(&mut composer);
+        bs.push(DialogRoute::About);
+        build(&mut composer);
+        let t = texts(&mut composer);
+        assert!(t.iter().any(|x| x.contains("HomeScreen")), "base 场景应正常渲染");
+        assert!(!t.iter().any(|x| x.contains("AboutScreen")), "dialog 内容不应进主树");
+        // 连续 dialog 栈：仅栈顶渲染覆盖层，base 仍为 Home
+        bs.push(DialogRoute::About);
+        build(&mut composer);
+        let t = texts(&mut composer);
+        assert!(t.iter().any(|x| x.contains("HomeScreen")));
+        assert!(!t.iter().any(|x| x.contains("AboutScreen")), "连续 dialog 仅覆盖层，主树无内容");
+        // pop 一个对话框：主树不变、无残留
+        bs.pop();
+        build(&mut composer);
+        let t = texts(&mut composer);
+        assert!(t.iter().any(|x| x.contains("HomeScreen")));
+        // pop 到底：回到纯 base
+        bs.pop();
+        build(&mut composer);
+        let t = texts(&mut composer);
+        assert!(t.iter().any(|x| x.contains("HomeScreen")));
+        assert!(!t.iter().any(|x| x.contains("AboutScreen")));
+    }
+
+    /// P1 回归：对话框弹到**空栈**后程序化 pop 关闭——Dialog::build 必须仍
+    /// 无条件执行（记录 active=false → app 层 sync 删除 overlay），不得泄漏。
+    /// 修复前 `if stack.is_empty() { return }` 提前返回 → 无 active=false 记录
+    /// → overlay 永久残留（可见、拦截点击）。
+    #[test]
+    fn dialog_on_empty_stack_close_records_inactive() {
+        #[derive(Clone, PartialEq, Eq, Debug, Hash)]
+        enum DialogRoute {
+            About,
+        }
+        use crate::core::composer::Composer;
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let bs = NavBackStack::<DialogRoute>::new(); // 空栈开始
+        let mut composer = Composer::new();
+        let mut build = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                NavDisplay::new(&bs, |ctx, key| match key {
+                    DialogRoute::About => NavEntry::new(key.clone(), |ctx, _| {
+                        crate::ui::Text::new("AboutScreen").build(ctx);
+                    })
+                    .as_dialog(),
+                })
+                .build(ctx);
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+
+        // 空栈：build 执行（无 scene、无 dialog）——Dialog::build(false) 应记录 active=false
+        build(&mut composer);
+        let inactive_ids: Vec<u64> = composer.overlay_active.iter()
+            .filter(|(_, a)| !**a)
+            .map(|(&id, _)| id)
+            .collect();
+        // 空栈首帧无 overlay 记录（从未注册）——只验证不 panic
+        build(&mut composer);
+
+        // 弹入对话框（栈 [About]——唯一 entry）
+        bs.push(DialogRoute::About);
+        build(&mut composer);
+        let active_ids: Vec<u64> = composer.overlay_active.iter()
+            .filter(|(_, a)| **a)
+            .map(|(&id, _)| id)
+            .collect();
+        assert_eq!(active_ids.len(), 1, "对话框应注册 active overlay");
+        let ov_id = active_ids[0];
+
+        // 程序化 pop 关闭（按钮路径——不经过 app 层 overlay_down）
+        bs.pop();
+        build(&mut composer);
+        // ⚠ P1 修复点：栈空后 Dialog::build 仍执行 → overlay_active 记录
+        // (ov_id, false) → app 层 sync_overlays 能删除该 overlay。
+        // 断言"记录存在且为 false"——`unwrap_or(false)` 会把"本帧无记录"
+        // （修复前：空栈 early-return → Dialog::build 不执行）与"记录为
+        // false"混为一谈，测试对 P1 不敏感。必须区分：
+        // 修复前 get=Some(true)（上帧残留）或 None（被 clear）→ 断言失败；
+        // 修复后 get=Some(&false) → 通过
+        assert_eq!(
+            composer.overlay_active.get(&ov_id),
+            Some(&false),
+            "对话框关闭后必须记录 active=false（ov_id={ov_id}）——否则 overlay 泄漏"
+        );
+    }
+
     /// pop 滑出期间旧页内容每帧重跑——不得把已 removeState 清理的池槽重新插回
     /// （回归测试：draining 只读作用域。组合期写入的内容最易触发重污染——
     /// 若无 draining，滑出 12 帧会把计数累加进重插的槽，重进首帧远大于 1）
@@ -1970,7 +2188,6 @@ mod tests {
             let nodes = composer.arena_nodes();
             let mut out = Vec::new();
             collect_texts(nodes, root, &mut out);
-            println!("DBG tree: {} nodes, texts={:?}", nodes.len(), out);
             out
         };
 
@@ -1988,9 +2205,6 @@ mod tests {
 
         // 阶段 2（切 ListDetail）：entries 未变 → 瞬时切换，单帧即双栏稳态
         list_detail(&mut composer);
-        println!("DBG switch p2a: {:?}", texts(&mut composer));
-        list_detail(&mut composer);
-        println!("DBG switch p2b: {:?}", texts(&mut composer));
         let t = texts(&mut composer);
         assert!(t.iter().any(|x| x.contains("HomeScreen")) && t.iter().any(|x| x.contains("Detail5")),
             "切双栏应瞬时稳态 H+D5");

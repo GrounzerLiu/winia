@@ -151,7 +151,7 @@ pub fn build(self, ctx: &mut ComposeCtx) {
 
 ## 四、验证
 
-- 单元测试（nav.rs，16 个）：
+- 单元测试（nav.rs，17 个）：
   - `back_stack_push_pop_works`、`back_stack_remove_last_and_clear`（back stack 操作）
   - `nav_display_renders_top_entry`（Home → push Detail7 → pop 回 Home，含过渡动画推进）
   - `list_detail_scene_renders_both_entries`（ListDetail 双栏：栈 2 项时 list+detail 同渲染；pop 回 1 项退化为 SinglePane）
@@ -166,7 +166,8 @@ pub fn build(self, ctx: &mut ComposeCtx) {
   - `entry_transition_override_wins_over_display_default`（entry 过渡覆盖优先级：push/pop 前景判别）
   - `scene_strategy_chain_priority_and_fallback`（自定义 Scene/策略链优先级 + SinglePane 兜底）
   - `scene_strategy_switch_converges`（策略链切换：entries 未变 → 瞬时切（防 dup-key），可反复切换无冻结）
-- 完整 `cargo test -p winia --lib` 656 项通过（animated_size / lazy_column 等时序敏感 flaky 与 nav 无关）
+  - `dialog_entry_renders_as_overlay`（as_dialog 标记：主树不渲染 dialog 内容、base 恒定、pop 生命周期）
+- 完整 `cargo test -p winia --lib` 657 项通过（animated_size / lazy_column 等时序敏感 flaky 与 nav 无关）
 - 真实 demo（`examples/nav_demo.rs`，debug-server 实操）：
   - Home → 点「打开 Detail 42」→ `[Home, Detail(42)]` + Detail 页面 ✓
   - Detail → 点「返回」→ `[Home]` + Home 页面 ✓
@@ -211,8 +212,12 @@ spec 过渡、NavEntryDecorator（on_pop 广播 + wrap 链式）、remember_entr
    material3-adaptive）依赖 movableContentOf 与 contentKey 去重渲染——winia 槽表
    暂缺该基建（dup-key fail-fast / 非 composable 路径 remember 逐帧漂移，实测），
    pane 级 deferred 至 P1-9 落地后重评
-6. [ ] **OverlayScene / DialogScene**：覆盖层导航（overlaidEntries 撑下层、onRemove
-   suspend 退出动画、渲染于 AnimatedContent 之上、独立生命周期、`dialog()` metadata）
+6. [x] **对话框导航**（对标 Nav3 OverlayScene/DialogScene 的 winia 形）：
+   `NavEntry::as_dialog()` 标记（类型化等价 `dialog()` metadata）——栈顶连续
+   dialog entry 经 winia 顶层 overlay 基建（`ui::overlay::Dialog`）渲染为模态
+   覆盖层（主树不渲染其内容、base 场景不变 → 对话框开/关无场景级过渡、
+   dismiss = 弹栈）；偏差：单层覆盖（winia overlay v1）、无退出动画、
+   覆盖层内容 plain remember 不跨帧持久（remember_entry_state 池化不受影响）
 7. [ ] **rememberNavBackStack 持久化**：进程死亡/配置变更恢复（对标
    rememberSerializable + NavBackStackSerializer 开放多态——需 winia 序列化基建）
 8. [ ] **Scene/entry 生命周期**：过渡期封顶 STARTED、落定 RESUMED、离栈 CREATED
@@ -271,7 +276,7 @@ spec 过渡、NavEntryDecorator（on_pop 广播 + wrap 链式）、remember_entr
 
 **验证**：单元测试 `remember_state_decorator_preserves_entry_state`（覆盖返回保持 + pop 清理
 双场景）+ `pop_slideout_does_not_repollute_entry_state_pool`（draining 回归）；demo 实操验证；
-完整测试 656 项通过。
+完整测试 657 项通过。
 
 ## 七、差距分析（androidx-main 2026-08 vs winia，2026-08-30）
 
@@ -296,7 +301,7 @@ Rust 惯用）、NavEntryDecorator（on_pop 广播 + wrap 链式）、SaveableSt
 | # | Nav3 机制 | winia 现状 |
 |---|---|---|
 | 5 | Scene 为 trait（key/entries/previousEntries/content/metadata 默认=栈顶 entry）+ SceneStrategy 策略链（List 依次尝试，SinglePane 兜底）+ SceneDecoratorStrategy（scene 级装饰，overlay 豁免） | Scene trait + 策略链已对齐（[x]：scene_key/entries/content，SinglePane 兜底）；双栏动画=场景级过渡（pane 级 deferred 至 P1-9）；SceneDecoratorStrategy 与 scene 级 metadata 未做 |
-| 6 | OverlayScene/DialogScene：覆盖层导航（overlaidEntries、onRemove suspend 退出动画、渲染于 AnimatedContent 之上、仅顶层 RESUMED、`dialog()` metadata 声明） | 无覆盖层导航 |
+| 6 | OverlayScene/DialogScene：覆盖层导航（overlaidEntries、onRemove suspend 退出动画、渲染于 AnimatedContent 之上、仅顶层 RESUMED、`dialog()` metadata 声明） | as_dialog 标记 + winia overlay 模态覆盖层（[x]：base 场景恒定、dismiss=弹栈、池化状态保持）；onRemove 退出动画/多层叠加未做 |
 | 7 | rememberNavBackStack：rememberSerializable + NavBackStackSerializer 开放多态，进程死亡恢复 | 内存态 |
 | 8 | Scene 生命周期：过渡期 STARTED/落定 RESUMED；离栈 entry 封顶 CREATED（BackStackAwareLifecycleNavEntryDecorator 真实现） | 无 Lifecycle 系统；同名 decorator 为占位 |
 | 9 | movableContentOf（SceneSetupNavEntryDecorator）：entry 包为可移动内容，跨组合位置状态不丢——**winia plain remember 限制的 Compose 解** | 槽表按组合位置分配身份，无跨位置移动。实测另有两个关联缺口：①非 #[composable] 路径（Scene::content 等 trait 方法）的 remember 槽 key 逐帧漂移（计数器不重置），需 remember_at_key 显式 key；②场景/语句组 params 比较对无 PartialEq 的参数（&dyn Scene 等）不可见变化，关键语句需 ctx.key(scene_key) 强制 Enter——双栏 pane 级动画实验（2026-08-30）因此三处受限回退为场景级过渡 |

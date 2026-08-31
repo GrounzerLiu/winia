@@ -18,6 +18,7 @@ enum Route {
     Home,
     Detail(u64),
     Settings,
+    About,
 }
 
 #[composable]
@@ -121,7 +122,11 @@ fn nav_demo(ctx: &mut ComposeCtx) {
                                     .build(ctx, |ctx| Text::new("打开 Settings").build(ctx));
                                 let bs3 = bs.clone();
                                 Button::text()
-                                    .on_click(move || { bs3.pop(); })
+                                    .on_click(move || { bs3.push(Route::About); })
+                                    .build(ctx, |ctx| Text::new("打开关于对话框").build(ctx));
+                                let bs4 = bs.clone();
+                                Button::text()
+                                    .on_click(move || { bs4.pop(); })
                                     .build(ctx, |ctx| Text::new("返回").build(ctx));
                             });
                     })
@@ -140,6 +145,36 @@ fn nav_demo(ctx: &mut ComposeCtx) {
                                     .build(ctx, |ctx| Text::new("返回 Detail").build(ctx));
                             });
                     })
+                }
+                // 对话框路由（对标 Nav3 dialog() metadata + DialogSceneStrategy）：
+                // 栈顶时渲染为模态覆盖层（主树不渲染其内容），dismiss = 弹栈
+                Route::About => {
+                    let bs = detail_bs.clone();
+                    NavEntry::new(key.clone(), move |ctx, _| {
+                        // 对话框内容 wrap-content + 卡片背景（圆角白底）——
+                        // overlay Center 定位按内容尺寸居中；fill_max_width 全宽
+                        // 会让"居中"失效。Compose Dialog 的典型样式
+                        Column::new()
+                            .modifier(Modifier::new()
+                                .padding(24.0)
+                                .background(
+                                    Color::from_argb(255, 240, 240, 245),
+                                    Shape::RoundedRect { corner_radius: 12.0 },
+                                ))
+                            .spacing(8.0)
+                            .build(ctx, |ctx| {
+                                Text::new("关于对话框").font_size(16.0).build(ctx);
+                                Text::new("winia Navigation3 风格导航 demo")
+                                    .font_size(12.0)
+                                    .color(Color::from_argb(255, 120, 120, 120))
+                                    .build(ctx);
+                                let bs = bs.clone();
+                                Button::text()
+                                    .on_click(move || { bs.pop(); })
+                                    .build(ctx, |ctx| Text::new("关闭").build(ctx));
+                            });
+                    })
+                    .as_dialog()
                 }
             })
             // Scene 策略链：ListDetail 双栏（宽屏列表+详情）或空链（SinglePane 兜底）
