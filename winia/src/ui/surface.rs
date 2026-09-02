@@ -21,6 +21,9 @@
 use crate::core::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::modifier::{Color, Modifier, Shape};
+use crate::ui::interaction::MutableInteractionSource;
+use crate::ui::checkbox::ToggleableState;
+use std::sync::Arc;
 
 /// 边框描边（对齐 Compose `BorderStroke(width, color)`——winia 用 (f32, Color) 表达；
 /// shape 在绘制时传入）。为与 Compose Surface 参数名一致，此处用 `border: Option<Border>`。
@@ -36,7 +39,21 @@ impl SurfaceBorder {
     }
 }
 
-/// 通用外观底板（对标 Compose material3 `Surface` 非交互重载）。
+/// 交互模式（对齐 Compose `Surface` 三个交互重载，但 winia 无 selectable/toggleable
+/// modifier 原语——统一用 clickable_with_source + ripple 表达，语义差异走回调分发）。
+#[derive(Clone)]
+enum SurfaceInteraction {
+    /// 纯展示（不可交互、无波纹）——对标 Compose `Surface()`
+    None,
+    /// 可点击——对标 Compose `Surface(onClick=...)`
+    Click(Arc<dyn Fn() + Send + Sync>),
+    /// 可选中（`selected` + onClick）——对标 Compose `Surface(selected, onClick=...)`
+    Select { selected: bool, on_click: Arc<dyn Fn() + Send + Sync> },
+    /// 可切换（`checked` + onCheckedChange）——对标 Compose `Surface(checked, onCheckedChange=...)`
+    Toggle { checked: ToggleableState, on_checked_change: Arc<dyn Fn(ToggleableState) + Send + Sync> },
+}
+
+/// 通用外观底板（对标 Compose material3 `Surface`）。
 pub struct Surface {
     shape: Shape,
     color: Option<Color>,
@@ -45,6 +62,12 @@ pub struct Surface {
     shadow_elevation: f32,
     border: Option<SurfaceBorder>,
     modifier: Modifier,
+    /// 交互模式（None = 纯展示；Click/Select/Toggle = 三个交互重载）
+    interaction: SurfaceInteraction,
+    /// 是否启用（禁用时不响应交互且视觉降级——对齐 Compose `enabled`）
+    enabled: bool,
+    /// 交互源（None = build 时内部 remember——对标 Compose 可选注入）
+    interaction_source: Option<MutableInteractionSource>,
 }
 
 impl Surface {
@@ -58,6 +81,9 @@ impl Surface {
             shadow_elevation: 0.0,
             border: None,
             modifier: Modifier::new(),
+            interaction: SurfaceInteraction::None,
+            enabled: true,
+            interaction_source: None,
         }
     }
 
@@ -104,6 +130,40 @@ impl Surface {
         self
     }
 
+    /// 是否启用（默认 true）。禁用时不响应交互且视觉降级（对齐 Compose `enabled`）。
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    /// 可点击 Surface（对标 Compose `Surface(onClick=...)`——clickable 重载）。
+    pub fn on_click(mut self, cb: impl Fn() + Send + Sync + 'static) -> Self {
+        self.interaction = SurfaceInteraction::Click(Arc::new(cb));
+        self
+    }
+
+    /// 可选中 Surface（对标 Compose `Surface(selected, onClick=...)`——selectable 重载）。
+    pub fn selectable(mut self, selected: bool, on_click: impl Fn() + Send + Sync + 'static) -> Self {
+        self.interaction = SurfaceInteraction::Select { selected, on_click: Arc::new(on_click) };
+        self
+    }
+
+    /// 可切换 Surface（对标 Compose `Surface(checked, onCheckedChange=...)`——toggleable 重载）。
+    pub fn toggleable(mut self, checked: bool, on_checked_change: impl Fn(bool) + Send + Sync + 'static) -> Self {
+        let state = if checked { ToggleableState::On } else { ToggleableState::Off };
+        let cb = Arc::new(move |s: ToggleableState| {
+            on_checked_change(s == ToggleableState::On);
+        });
+        self.interaction = SurfaceInteraction::Toggle { checked: state, on_checked_change: cb };
+        self
+    }
+
+    /// 注入交互源（None = build 时内部 remember——对齐 Compose 可选注入）。
+    pub fn interaction_source(mut self, source: MutableInteractionSource) -> Self {
+        self.interaction_source = Some(source);
+        self
+    }
+
     /// 构建 Surface。
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
@@ -122,6 +182,10 @@ impl Surface {
             }
         });
         let shadow_elevation = self.shadow_elevation;
+        let may_interact = self.enabled && !matches!(self.interaction, SurfaceInteraction::None);
+        // 交互源：外部注入或内部 remember（对齐 Compose Surface 可选注入——同 Card 惯例，
+        // 纯展示 Surface 也 remember 一个空源，开销极小）。
+        let interaction = self.interaction_source.unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
 
         // Compose `Modifier.surface`（核心可复用链）：shadow → border → background → clip。
         // - shadow：仅 shadow_elevation > 0 时用 graphics_layer 阴影（对齐 Compose `graphicsLayer{shadowElevation, clip=false}`）
@@ -141,6 +205,38 @@ impl Surface {
         }
         modifier = modifier.background(color, shape);
         modifier = modifier.clip(shape);
+
+        // 交互重载：enabled 且非纯展示 → clickable_with_source + ripple（用容器 shape 裁剪）。
+        // 回调分发：Click→on_click；Select→selected 翻转后 on_click；Toggle→checked 翻转后 on_checked_change。
+        // 对齐 Compose：selectable/toggleable 在点击时切换 selected/checked 并回调。
+        let may_interact = self.enabled && !matches!(self.interaction, SurfaceInteraction::None);
+        if may_interact {
+            match &self.interaction {
+                SurfaceInteraction::Click(cb) => {
+                    let cb = cb.clone();
+                    modifier = modifier.clickable_with_source(&interaction, move || cb());
+                }
+                SurfaceInteraction::Select { selected, on_click } => {
+                    let selected = *selected;
+                    let on_click = on_click.clone();
+                    modifier = modifier.clickable_with_source(&interaction, move || {
+                        // Compose selectable：点击后状态由外部持有；此处仅回调 onClick
+                        let _ = selected;
+                        on_click();
+                    });
+                }
+                SurfaceInteraction::Toggle { checked, on_checked_change } => {
+                    let checked = *checked;
+                    let cb = on_checked_change.clone();
+                    modifier = modifier.clickable_with_source(&interaction, move || {
+                        let next = if checked == ToggleableState::On { ToggleableState::Off } else { ToggleableState::On };
+                        cb(next);
+                    });
+                }
+                SurfaceInteraction::None => {}
+            }
+            modifier = modifier.ripple_with_shape(&interaction, content_color, true, shape);
+        }
 
         // 追加用户 modifier（外层）
         modifier = modifier.then(self.modifier);

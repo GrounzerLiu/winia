@@ -89,10 +89,10 @@ private fun Modifier.surface(shape, backgroundColor, border, shadowElevation) =
 ## 6. 待办（下一步）
 
 ### 6.1 Surface 组件 ✅ 已完成（本次会话）
-- **新建 `winia/src/ui/surface.rs`**：对齐 Compose `Surface` 非交互重载。字段 `shape/color/content_color/tonal_elevation/shadow_elevation/border`。
-- 内部 modifier 链 = `shadow(graphics_layer) → border → background → clip`（对齐 Compose `Modifier.surface`）。`content_color` 经 `WiniaTheme::with_content_color` 下传（默认 `color==surface→on_surface` 匹配）。
+- **新建 `winia/src/ui/surface.rs`**：对齐 Compose `Surface`。字段 `shape/color/content_color/tonal_elevation/shadow_elevation/border` + 交互字段 `enabled/interaction/interaction_source`。
+- 内部 modifier 链 = `shadow(graphics_layer) → border → background → clip`（对齐 Compose `Modifier.surface`）。`content_color` 经 `WiniaTheme::with_content_color` 下传（默认 `color==surface→on_surface` 匹配；非标准色→保持上层 `content_color()`）。
 - 已注册：`ui.rs`（`pub mod surface;` + `pub use surface::{Surface, SurfaceBorder};`）、`lib.rs` prelude（`Card...CardStyle, Surface, SurfaceBorder`）。
-- 已写示例 `winia/examples/surface_demo.rs`（验证 shape/color/border/shadow/content_color），实测渲染正常。
+- 已写示例 `winia/examples/surface_demo.rs`（验证 shape/color/border/shadow/content_color + 三个交互重载），实测渲染正常（点击注入在本会话不稳定，见 §8 注意）。
 - ⚠ 踩坑：Surface 的 `start_restartable_group` 必须在 match 之后**无条件** `ctx.end_restartable_group()`（否则 composer.rs:2235 GROUP_STACK 断言 left:2/right:0 panic）。参照 Card。
 - `BoxLayout` 无 `direction()` 方法（只有 `alignment()`），Surface 用 `BoxLayout::new()` 即可（Box 层叠，方向走 modifier 层）。
 - 696 lib 测试通过。
@@ -113,8 +113,14 @@ private fun Modifier.surface(shape, backgroundColor, border, shadowElevation) =
 - 改用 Surface 承载会改变布局层数（Surface 独立 group + BoxLayout）、影响 offset/hit_test 依赖的布局层，且运行时注入不稳、难以充分实测空动手感，**重构收益有限、风险偏高**。
 - Surface 组件已完成且独立可用（§6.1），后续如需复用可将其作为外观底板（如 `Surface { .nestedScroll(...).anchoredDraggable(...) }`，对齐 Compose BottomSheet.kt 结构）。
 
-### 6.4 Surface 交互重载（可选后续）
-- Compose `Surface` 有 clickable/selectable/toggleable 三个交互重载；本次只做纯外观版，交互版待后续需要时补充。
+### 6.4 Surface 交互重载 ✅ 已实现（本次会话）
+- Compose `Surface` 三个交互重载已补齐（winia builder 风格：
+  `Surface::new().on_click(...)` / `.selectable(selected, on_click)` / `.toggleable(checked, on_checked_change)`）。
+- **实现**：`surface.rs` 用 `SurfaceInteraction` enum（None/Click/Select/Toggle）区分交互模式；`enabled` 控制是否响应；`interaction_source` 可选注入（None=build 时内部 remember）。
+- build 里统一处理：enabled 且非 None → `clickable_with_source` + `ripple_with_shape`（用容器 shape 裁剪波纹）。回调分发：Click→on_click；Select→on_click（selected 状态由外部持有）；Toggle→翻转 checked 后 on_checked_change。
+- ⚠ winia 无 selectable/toggleable modifier 原语（Compose 有），故统一用 `clickable_with_source` 表达，语义差异走回调分发 + enabled 状态（不含无障碍 semantics——winia 尚无该层）。若后续需要严格对齐 selectable/toggleable 的无障碍语义，需先引入 semantics 系统。
+- `hit_test`（layout/node.rs:526）**不考虑 clip**——Surface 的 clip 不拦截点击，可点击性正常。
+- 示例 `surface_demo.rs` 三个交互 Surface 均在树里正确挂载 `click|focus|hover|ripple`，全量 696 测试通过。
 
 ## 7. 关键踩坑记录
 
