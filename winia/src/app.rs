@@ -115,6 +115,16 @@ pub(crate) struct PerWindow {
     overlays: Vec<OverlayWindow>,
     /// overlay 点击目标（down 命中 overlay 记录——up 执行 click；v1 仅 clickable）
     overlay_click: Option<(usize, (f32, f32), u64)>,
+    /// overlay 拖拽会话（down 命中 overlay 且有 on_drag 的节点时建立——
+    /// (overlay index, 节点 slot_key, 拖拽起点 scene)）。overlay 是独立
+    /// composer，拖拽走 overlay 内容节点的 on_drag/on_drag_end。
+    overlay_drag: Option<(usize, u64, (f32, f32))>,
+    /// overlay 拖拽是否已越过 slop 触发 DragStart
+    overlay_drag_started: bool,
+    /// overlay 拖拽上一次 move 位置（增量计算用）
+    overlay_drag_last: Option<(f32, f32)>,
+    /// overlay 内的可滚动容器（独立 Composer——嵌套滚动用，列表到顶下拉拖 Sheet）
+    overlay_drag_scroll: Option<DragScroll>,
     /// 延迟 tap 列表（节点注册 on_double_tap 时——Compose 语义：onTap 延迟到
     /// 双击窗口结束；窗口内第二次 down 同节点 → 取消；超时 → 补发；不同节点
     /// 的 pending 相互独立——快速连续点击多个手势节点时各自按 deadline 补发）
@@ -147,6 +157,9 @@ struct OverlayWindow {
     click_passthrough: bool,
     on_dismiss: Option<Arc<dyn Fn() + Send + Sync>>,
     content: Box<dyn Fn(&mut ComposeCtx)>,
+    /// 注册时（主树 provides 内）捕获的 CompositionLocal 快照——recompose
+    /// 时重放（overlay 独立 Composer 继承主树主题/方向/排版）
+    local_snapshot: crate::core::composition_local::LocalSnapshot,
     /// 渲染/命中用的屏幕位置（逻辑坐标——每帧布局后更新）
     screen_pos: (f32, f32),
     /// 该 overlay 内当前 hover 的 hoverable slot 集合（独立于主树——
@@ -179,7 +192,7 @@ struct PtrDownState {
 
 impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::ui::theme::ThemeColors) -> Self {
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, last_pointer_pos: None, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, drag_scroll: None, overlays: Vec::new(), overlay_click: None, pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, last_pointer_pos: None, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, drag_scroll: None, overlays: Vec::new(), overlay_click: None, overlay_drag: None, overlay_drag_started: false, overlay_drag_last: None, overlay_drag_scroll: None, pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -704,6 +717,10 @@ impl ApplicationHandler for AppState {
                     // overlay 点击执行（down 命中 overlay 时记录——up 触发；
                     // 主树 detect_click 因 down 短路未记录 pointer_down_state 而空转）
                     if exec_overlay_click(pw) {
+                        if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                    }
+                    // overlay 拖拽结束（up）
+                    if overlay_drag_up(pw) {
                         if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                     }
                     // 手势 up 判定（tap/double-tap/long-press/drag-end）
@@ -1284,6 +1301,10 @@ impl AppState {
                     }
                     // overlay 点击执行（与真实路径一致）
                     if exec_overlay_click(pw) {
+                        if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                    }
+                    // overlay 拖拽结束（与真实路径一致）
+                    if overlay_drag_up(pw) {
                         if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                     }
                     // 手势 up 判定（与真实路径一致）
@@ -1930,10 +1951,10 @@ fn gesture_up(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
 // ── 顶层弹出层（Popup/Dialog/DropdownMenu） ──
 
 impl OverlayWindow {
-    fn new(desc: crate::ui::overlay::OverlayDesc) -> Self {
+    fn new_with_composer(desc: crate::ui::overlay::OverlayDesc, composer: Composer) -> Self {
         Self {
             id: desc.id,
-            composer: Composer::new(),
+            composer,
             anchor_slot: desc.anchor_slot,
             position: desc.position,
             offset: desc.offset,
@@ -1942,6 +1963,7 @@ impl OverlayWindow {
             click_passthrough: desc.click_passthrough,
             on_dismiss: desc.on_dismiss,
             content: desc.content,
+            local_snapshot: desc.local_snapshot,
             screen_pos: (0.0, 0.0),
             hovered_slots: std::collections::HashSet::new(),
             pressed_interaction: None,
@@ -1964,6 +1986,7 @@ impl OverlayWindow {
         self.click_passthrough = desc.click_passthrough;
         self.on_dismiss = desc.on_dismiss;
         self.content = desc.content;
+        self.local_snapshot = desc.local_snapshot;
         // 动画规格更新（复用 overlay 时动画参数变化生效）——规格 None↔Some
         // 翻转时重建 progress（None→Some：新建驱动；Some→None：残留 State
         // 弃用——render 落 `_` 分支恒显示，关闭 has_exit=false 立即移除）
@@ -2014,8 +2037,11 @@ fn sync_overlays(pw: &mut PerWindow, _recomposed: bool) {
         } else {
             // 新 overlay：创建 + 启动进入动画（progress 0→1；无 enter 规格 =
             // 瞬时显示——但 exit 有规格时 progress 直接置 1.0，退出才能 1→0）
+            // 共享主窗 AdaptiveContext，确保 overlay 读 window_size/density 与主窗一致
+            let mut composer = Composer::new();
+            composer.adaptive = pw.composer.adaptive.clone();
             let enter_anim = desc.enter_anim.clone();
-            pw.overlays.push(OverlayWindow::new(desc));
+            pw.overlays.push(OverlayWindow::new_with_composer(desc, composer));
             if let Some(p) = pw.overlays.last().and_then(|o| o.progress.clone()) {
                 if let Some(spec) = &enter_anim {
                     crate::animation::push_animatable(
@@ -2103,11 +2129,19 @@ fn cleanup_overlay_interactions(ov: &mut OverlayWindow) {
 /// overlay compose + layout（独立组合单元——约束为窗口尺寸），并计算屏幕定位
 fn layout_overlays(pw: &mut PerWindow) {
     for ov in &mut pw.overlays {
-        // 关闭中：不再 recompose（内容已不可交互——冻结最后帧渲染退出动画）
+        // 关闭中：仍需 recompose/layout 以驱动 BottomSheet 的 slide（offset 动画）
+        // —— Dialog 等静态内容重组无副作用；冻结仅针对交互（hit_overlay 已跳过 closing）
+        // 之前 `if closing { continue; }` 导致 hide() 的 offset 动画不被布局，面板
+        // 卡在 401 仅 fade，视觉上“淡出而非下滑”。
         if ov.closing {
-            continue;
+            // 仍执行 recompose/layout，但不处理输入（hit_overlay 已过滤 closing）
         }
-        ov.composer.recompose(|ctx| (ov.content)(ctx));
+        // ⚠ 重放 CompositionLocal 快照（主树捕获时的主题/方向/排版）——
+        // overlay 独立 Composer 在 provides 弹栈后 recompose，需快照继承。
+        let snap = ov.local_snapshot.clone();
+        crate::core::composition_local::with_snapshot(&snap, || {
+            ov.composer.recompose(|ctx| (ov.content)(ctx));
+        });
         ov.composer.layout(crate::layout::Constraints::new(0.0, pw.width, 0.0, pw.height));
     }
     // 定位（需主树锚点位置——在 draw 前算）
@@ -2231,7 +2265,52 @@ fn render_overlays(overlays: &[OverlayWindow], canvas: &skia_safe::Canvas, scale
     }
 }
 
-/// overlay 点击执行（up 时——v1 仅 clickable）
+/// overlay 拖拽结束（含嵌套滚动 fling）。overlay 内可滚列表的 fling 走 overlay Composer。
+fn overlay_drag_up(pw: &mut PerWindow) -> bool {
+    let mut handled = false;
+    if let Some(ds) = pw.overlay_drag_scroll.take() {
+        // 复用主树 drag_scroll_up 逻辑：样本估速 → overlay 的 dispatch_nested_scroll_fling
+        //（此前为空壳——注释"由 overlay 内 NestedScrollConnection on_post_fling 兜底"未接通，
+        // 导致松手后列表不 fling、sheet 不 settle → "松手没有动画"）
+        let (vx, vy) = (ds.velocity_x(), ds.velocity_y());
+        // target 反查：ds.slot 是 down 时 overlay composer 的 scroll 节点 slot_key
+        let target: Option<usize> = (|| {
+            let ov_idx = pw.overlays.len().checked_sub(1).unwrap_or(0);
+            let ov = pw.overlays.get(ov_idx)?;
+            let r = ov.composer.layout_root_idx()?;
+            let nodes = ov.composer.arena_nodes();
+            let id = crate::layout::node::find_node_id_by_slot_key(nodes, r, ds.slot)?;
+            crate::layout::node::find_node_by_id(nodes, r, id)
+        })();
+        #[cfg(debug_assertions)]
+        if drag_trace_enabled() {
+            eprintln!("[overlay-drag-up] slot={:?} target={:?} v=({},{})", ds.slot, target, vx, vy);
+        }
+        let Some(idx) = target else { handled = true; return handled; };
+        let Some(ov) = pw.overlays.last_mut() else { handled = true; return handled; };
+        let Some(r) = ov.composer.layout_root_idx() else { handled = true; return handled; };
+        // 手指速度 → 滚动速度（内容速度 = -手指速度），走 nested scroll pre/post fling 链
+        let velocity = crate::nested_scroll::ScrollVelocity { x: -vx, y: -vy };
+        let _ = dispatch_nested_scroll_fling(ov.composer.arena_nodes_mut(), r, idx, velocity);
+        handled = true;
+    }
+    let Some((idx, slot, _down)) = pw.overlay_drag.take() else { return handled; };
+    let started = pw.overlay_drag_started;
+    pw.overlay_drag_started = false;
+    pw.overlay_drag_last = None;
+    if !started {
+        return handled;
+    }
+    if let Some(ov) = pw.overlays.get(idx) {
+        let nodes = ov.composer.arena_nodes();
+        if let Some(r) = ov.composer.layout_root_idx() {
+            fire_gesture_action(nodes, r, slot,
+                crate::input::gesture::GestureAction::DragEnd);
+        }
+    }
+    true
+}
+
 fn exec_overlay_click(pw: &mut PerWindow) -> bool {
     let Some((idx, local, _nid)) = pw.overlay_click.take() else { return false; };
     let Some(ov) = pw.overlays.get(idx) else { return false; };
@@ -2274,23 +2353,52 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
         if ov.click_passthrough {
             return false;
         }
+        // overlay：把手优先 drag，命中列表则 scroll，但把手是否可见不影响 hit，
+        // 故先按 hit 选考——把手 hit 则 drag，进入 move 阶段再由 nested 决定是否透给列表
+        {
+            let nodes = ov.composer.arena_nodes();
+            if let Some(r) = ov.composer.layout_root_idx() {
+                let path = hit_test(nodes, r, local.0, local.1);
+                let drag_hit = path.iter().rev().find(|&&n| nodes[n].modifier.has_drag_gesture()).copied();
+                let scroll_hit = path.iter().rev().find(|&&n| nodes[n].modifier.vertical_scroll_state().is_some() || nodes[n].modifier.horizontal_scroll_state().is_some()).copied();
+                if let Some(didx) = drag_hit {
+                    pw.overlay_drag = Some((i, nodes[didx].slot_key, scene_pos));
+                    pw.overlay_drag_started = false;
+                    pw.overlay_drag_last = None;
+                    pw.overlay_drag_scroll = None;
+                } else if let Some(t) = scroll_hit {
+                    pw.overlay_drag = None;
+                    pw.overlay_drag_started = false;
+                    pw.overlay_drag_last = None;
+                    pw.overlay_drag_scroll = Some(DragScroll { slot: nodes[t].slot_key, last_x: scene_pos.0, last_y: scene_pos.1, samples: vec![(std::time::Instant::now(), scene_pos.0, scene_pos.1)] });
+                } else {
+                    pw.overlay_drag = None;
+                    pw.overlay_drag_started = false;
+                    pw.overlay_drag_last = None;
+                    pw.overlay_drag_scroll = None;
+                }
+            }
+        }
         // 发射 Press（按下波纹——对标 Compose PressInteraction.Press；
         // ripple 渲染已支持 overlay，缺的只是事件触发）
         {
+            // ⚠ 找不到 clickable_interaction 时**跳过 Press 但不阻断**——
+            // 否则普通 clickable（无 interaction source，如 ModalBottomSheet
+            // Scrim 层）的点击永远到不了 overlay_click → 点击丢失。
             let nodes = ov.composer.arena_nodes();
-            let Some(r) = ov.composer.layout_root_idx() else { return true };
-            let path = hit_test(nodes, r, local.0, local.1);
-            let Some(&idx) = path.iter().rev().find(|&&i| {
-                nodes[i].modifier.clickable_interaction().is_some()
-            }) else { return true };
-            let src = match nodes[idx].modifier.clickable_interaction() {
-                Some(s) => s.clone(),
-                None => return true,
-            };
-            // 波纹中心 = 节点本地坐标（overlay 内无滚动/变换——直接换算）
-            let local_press = crate::layout::node::scene_to_node_local(nodes, &path, idx, local.0, local.1);
-            src.emit_press_at(local_press);
-            ov.pressed_interaction = Some((nodes[idx].slot_key, src));
+            if let Some(r) = ov.composer.layout_root_idx() {
+                let path = hit_test(nodes, r, local.0, local.1);
+                if let Some(&idx) = path.iter().rev().find(|&&i| {
+                    nodes[i].modifier.clickable_interaction().is_some()
+                }) {
+                    if let Some(src) = nodes[idx].modifier.clickable_interaction() {
+                        // 波纹中心 = 节点本地坐标（overlay 内无滚动/变换——直接换算）
+                        let local_press = crate::layout::node::scene_to_node_local(nodes, &path, idx, local.0, local.1);
+                        src.emit_press_at(local_press);
+                        ov.pressed_interaction = Some((nodes[idx].slot_key, src.clone()));
+                    }
+                }
+            }
         }
         let nid = ov.composer.layout_root_idx().and_then(|r| {
             let nodes = ov.composer.arena_nodes();
@@ -2880,6 +2988,91 @@ fn handle_pointer_move(
         if cancel {
             pw.overlay_click = None;
             release_pressed_interaction(pw);
+        }
+    }
+    if let Some((idx, slot, down_pos)) = pw.overlay_drag {
+        let (dx, dy) = (scene_pos.0 - down_pos.0, scene_pos.1 - down_pos.1);
+        if !pw.overlay_drag_started {
+            if dx * dx + dy * dy >= 8.0 * 8.0 {
+                pw.overlay_drag_started = true;
+                pw.overlay_drag_last = Some(scene_pos);
+                if let Some(ov) = pw.overlays.get(idx) {
+                    let nodes = ov.composer.arena_nodes();
+                    if let Some(r) = ov.composer.layout_root_idx() {
+                        fire_gesture_action(nodes, r, slot,
+                            crate::input::gesture::GestureAction::DragStart(scene_pos));
+                        fire_gesture_action(nodes, r, slot,
+                            crate::input::gesture::GestureAction::DragMove(scene_pos, (dx, dy)));
+                    }
+                }
+                handled = true;
+            }
+        } else {
+            let last = pw.overlay_drag_last.unwrap_or(down_pos);
+            let inc = (scene_pos.0 - last.0, scene_pos.1 - last.1);
+            pw.overlay_drag_last = Some(scene_pos);
+            if let Some(ov) = pw.overlays.get(idx) {
+                let nodes = ov.composer.arena_nodes();
+                if let Some(r) = ov.composer.layout_root_idx() {
+                    fire_gesture_action(nodes, r, slot,
+                        crate::input::gesture::GestureAction::DragMove(scene_pos, inc));
+                }
+            }
+            handled = true;
+        }
+    }
+    // overlay 内拖拽滚动（独立 Composer——BottomSheet 内 LazyColumn）
+    // 列表滚动走 overlay Composer 的 dispatch_nested_scroll_delta，Sheet 通过 panel 上的
+    // SheetNested（nested_scroll）吃剩余 available。此分支仅消费列表，能否拖 Sheet 取决于 nested。
+    if pw.overlay_drag_scroll.is_some() {
+        let target: Option<usize> = (|| {
+            let ov_idx = pw.overlays.len().checked_sub(1).unwrap_or(0);
+            let slot = pw.overlay_drag_scroll.as_ref().unwrap().slot;
+            let ov = pw.overlays.get(ov_idx)?;
+            let r = ov.composer.layout_root_idx()?;
+            let nodes = ov.composer.arena_nodes();
+            let id = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot)?;
+            crate::layout::node::find_node_by_id(nodes, r, id)
+        })();
+        let (dx, dy) = {
+            let ds = pw.overlay_drag_scroll.as_mut().unwrap();
+            let dx = scene_pos.0 - ds.last_x;
+            let dy = scene_pos.1 - ds.last_y;
+            ds.last_x = scene_pos.0;
+            ds.last_y = scene_pos.1;
+            let now = std::time::Instant::now();
+            ds.samples.push((now, scene_pos.0, scene_pos.1));
+            let cutoff = now - std::time::Duration::from_millis(200);
+            ds.samples.retain(|(t, _, _)| *t >= cutoff);
+            (dx, dy)
+        };
+        if let Some(idx) = target {
+            let (ax, ay) = {
+                let ov_idx = pw.overlays.len().checked_sub(1).unwrap_or(0);
+                let ov = &pw.overlays[ov_idx];
+                let nodes = ov.composer.arena_nodes();
+                if nodes[idx].modifier.vertical_scroll_state().is_some() { (0.0, dy) }
+                else if nodes[idx].modifier.horizontal_scroll_state().is_some() { (dx, 0.0) }
+                else { (0.0, 0.0) }
+            };
+            if ax != 0.0 || ay != 0.0 {
+                let ov_idx = pw.overlays.len().checked_sub(1).unwrap_or(0);
+                if let Some(ov) = pw.overlays.get_mut(ov_idx) {
+                    if let Some(root) = ov.composer.layout_root_idx() {
+                        let density = crate::unit::Density::from_density(pw.scale_factor as f32);
+                        let consumed = dispatch_nested_scroll_delta(ov.composer.arena_nodes_mut(), root, idx, crate::nested_scroll::ScrollDelta::new(ax, ay), crate::nested_scroll::NestedScrollSource::Drag, density);
+                        if consumed.x != 0.0 || consumed.y != 0.0 {
+                            handled = true;
+                        }
+                    }
+                }
+            }
+            let ov_idx = pw.overlays.len().checked_sub(1).unwrap_or(0);
+            if let Some(ov) = pw.overlays.get(ov_idx) {
+                let nodes = ov.composer.arena_nodes();
+                if let Some(ss) = nodes[idx].modifier.vertical_scroll_state() { ss.is_scroll_in_progress.set(true); }
+                else if let Some(ss) = nodes[idx].modifier.horizontal_scroll_state() { ss.is_scroll_in_progress.set(true); }
+            }
         }
     }
     // 拖拽滚动：内容跟随指针 + 记录速度样本（松手 fling 用）。放在手势/文本

@@ -40,6 +40,10 @@ pub mod list_item;
 pub mod top_app_bar;
 pub mod scaffold;
 pub mod snackbar;
+pub mod bottom_sheet;
+pub mod bottom_sheet_scaffold;
+pub mod anchored_draggable;
+pub mod sheet_state;
 pub mod navigation_bar;
 pub mod navigation_rail;
 pub mod navigation_suite;
@@ -124,6 +128,10 @@ pub use list_item::{ListItem, ListItemColors, ListItemDefaults, LIST_ITEM_ONE_LI
 pub use top_app_bar::{TopAppBar, TopAppBarColors, TopAppBarScrollBehavior, TopAppBarState, TopAppBarNestedConnection, TopAppBarScrollMode, TopAppBarVariant, TOP_APP_BAR_HEIGHT, TOP_APP_BAR_MEDIUM_HEIGHT, TOP_APP_BAR_LARGE_HEIGHT, TOP_APP_BAR_HORIZONTAL_PADDING};
 pub use scaffold::{Scaffold, ScaffoldContentPadding, ScaffoldFabPosition, SCAFFOLD_FAB_MARGIN};
 pub use snackbar::{Snackbar, SnackbarData, SnackbarDuration, SnackbarHost, SnackbarHostState};
+pub use bottom_sheet::ModalBottomSheet;
+pub use bottom_sheet_scaffold::{BottomSheetScaffold, SCAFFOLD_SHEET_PEEK_HEIGHT};
+pub use anchored_draggable::{AnchoredDraggableState, DraggableAnchors};
+pub use sheet_state::{SheetState, SheetValue};
 pub use navigation_bar::{
     NavigationBar, NavigationBarItem, NavigationBarColors, NavigationBarItemColors,
     NavigationItemIconPosition, NavigationBarDefaults, NAVIGATION_BAR_HEIGHT,

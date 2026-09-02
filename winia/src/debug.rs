@@ -513,6 +513,23 @@ pub fn start_stdin_channel() {
                     // （DEBUG_STATE 未填充时输出空——测试可区分 stdin 链路 vs 渲染时序）
                     println!("TREE:{}", all_trees_json());
                 }
+                "swipe" if parts.len() >= 5 => {
+                    // swipe x1 y1 x2 y2 [steps] [delay_ms] — stdin 同步版（无延迟，全部入队）
+                    let x1: f32 = parts[1].parse().unwrap_or(0.0);
+                    let y1: f32 = parts[2].parse().unwrap_or(0.0);
+                    let x2: f32 = parts[3].parse().unwrap_or(0.0);
+                    let y2: f32 = parts[4].parse().unwrap_or(0.0);
+                    let steps: usize = parts.get(5).and_then(|s| s.parse().ok()).unwrap_or(10);
+                    queue_event(DebugEvent::PointerDown { x: x1, y: y1 });
+                    for i in 1..=steps {
+                        let t = i as f32 / steps as f32;
+                        let x = x1 + (x2 - x1) * t;
+                        let y = y1 + (y2 - y1) * t;
+                        queue_event(DebugEvent::PointerMove { x, y });
+                    }
+                    queue_event(DebugEvent::PointerUp { x: x2, y: y2 });
+                    wake();
+                }
                 "q" => { force_shutdown(); break; }
                 _ => {}
             }
@@ -628,6 +645,31 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
                     }
                     None => { let _ = write.send(Message::text("no frame".to_string())).await; }
                 }
+            }
+            "swipe" if parts.len() >= 5 => {
+                // swipe x1 y1 x2 y2 [steps] [delay_ms] — 模拟拖拽（down → moves → up）
+                // 例：swipe 240 480 240 560 10 16
+                let x1: f32 = parts[1].parse().unwrap_or(0.0);
+                let y1: f32 = parts[2].parse().unwrap_or(0.0);
+                let x2: f32 = parts[3].parse().unwrap_or(0.0);
+                let y2: f32 = parts[4].parse().unwrap_or(0.0);
+                let steps: usize = parts.get(5).and_then(|s| s.parse().ok()).unwrap_or(10);
+                let delay: u64 = parts.get(6).and_then(|s| s.parse().ok()).unwrap_or(16);
+                queue_event(DebugEvent::PointerDown { x: x1, y: y1 });
+                let _ = write.send(Message::Text("ok swipe down".into())).await;
+                wake();
+                tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
+                for i in 1..=steps {
+                    let t = i as f32 / steps as f32;
+                    let x = x1 + (x2 - x1) * t;
+                    let y = y1 + (y2 - y1) * t;
+                    queue_event(DebugEvent::PointerMove { x, y });
+                    wake();
+                    tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
+                }
+                queue_event(DebugEvent::PointerUp { x: x2, y: y2 });
+                let _ = write.send(Message::Text("ok swipe up".into())).await;
+                wake();
             }
             _ => { let _ = write.send(Message::Text("?".into())).await; }
         }

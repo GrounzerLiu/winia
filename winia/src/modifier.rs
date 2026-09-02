@@ -160,6 +160,8 @@ impl From<crate::unit::Px> for Dimension {
 pub enum Shape {
     /// 矩形（可带圆角）
     RoundedRect { corner_radius: f32 },
+    /// 仅顶部圆角（对齐 M3 BottomSheet 顶部 28dp——底部直角贴屏）
+    TopRoundedRect { radius: f32 },
     /// 胶囊（圆角 = 短边一半——对标 Compose `CornerFull`，material3
     /// Button 默认形状；宽高变化时自动跟随）
     Pill,
@@ -172,6 +174,10 @@ pub enum Shape {
 impl Shape {
     pub fn rounded(corner_radius: f32) -> Self {
         Shape::RoundedRect { corner_radius }
+    }
+
+    pub fn top_rounded(radius: f32) -> Self {
+        Shape::TopRoundedRect { radius }
     }
 
     /// 胶囊形状（对标 Compose `RoundedCornerShape(50)`——短边一半圆角）

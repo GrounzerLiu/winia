@@ -265,6 +265,15 @@ fn draw_container(canvas: &skia_safe::Canvas, rect: skia_safe::Rect, color: Colo
         Shape::RoundedRect { corner_radius } => {
             canvas.draw_round_rect(rect, corner_radius, corner_radius, &paint);
         }
+        Shape::TopRoundedRect { radius } => {
+            let rr = skia_safe::RRect::new_rect_radii(rect, &[
+                skia_safe::Vector::new(radius, radius),
+                skia_safe::Vector::new(radius, radius),
+                skia_safe::Vector::new(0.0, 0.0),
+                skia_safe::Vector::new(0.0, 0.0),
+            ]);
+            canvas.draw_rrect(rr, &paint);
+        }
         Shape::Rectangle => {
             canvas.draw_rect(rect, &paint);
         }

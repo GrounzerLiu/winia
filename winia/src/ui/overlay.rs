@@ -149,6 +149,10 @@ pub struct OverlayDesc {
     pub(crate) exit_anim: Option<OverlayAnimSpec>,
     /// 弹出内容（独立组合单元）
     pub(crate) content: Box<dyn Fn(&mut crate::core::composer::ComposeCtx)>,
+    /// 注册时（主树 provides 内）捕获的 CompositionLocal 快照——overlay 独立
+    /// Composer recompose 时重放，`WiniaTheme::colors()` 等读主树主题。
+    /// 由 [`crate::core::composer::ComposeCtx::open_overlay`] 自动捕获填充。
+    pub(crate) local_snapshot: crate::core::composition_local::LocalSnapshot,
 }
 
 /// 顶层弹出 id 分配（组合期 remember 用——稳定跨帧）
@@ -229,6 +233,7 @@ impl Popup {
             enter_anim: None, // Popup 默认无进入动画（瞬时出现——菜单类语义）
             exit_anim: None, // Popup 默认无退出动画（瞬时消失）
             content: Box::new(content),
+            local_snapshot: Vec::new(),
         });
     }
 }
@@ -316,6 +321,7 @@ impl Dialog {
             enter_anim: self.enter_anim,
             exit_anim: self.exit_anim,
             content: Box::new(content),
+            local_snapshot: Vec::new(),
         });
     }
 }
@@ -393,6 +399,7 @@ impl DropdownMenu {
                 enter_anim: None, // DropdownMenu 默认无进入动画
                 exit_anim: None, // DropdownMenu 默认无退出动画
                 content: Box::new(menu),
+                local_snapshot: Vec::new(),
             });
         }
     }

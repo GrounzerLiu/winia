@@ -162,6 +162,15 @@ fn shadow_path(rect: Rect, shape: &crate::modifier::Shape) -> skia_safe::Path {
         crate::modifier::Shape::RoundedRect { corner_radius } => {
             skia_safe::Path::rrect(RRect::new_rect_xy(rect, *corner_radius, *corner_radius), None)
         }
+        crate::modifier::Shape::TopRoundedRect { radius } => {
+            let rr = RRect::new_rect_radii(rect, &[
+                skia_safe::Vector::new(*radius, *radius),
+                skia_safe::Vector::new(*radius, *radius),
+                skia_safe::Vector::new(0.0, 0.0),
+                skia_safe::Vector::new(0.0, 0.0),
+            ]);
+            skia_safe::Path::rrect(rr, None)
+        }
         crate::modifier::Shape::Pill => {
             let radius = rect.width().min(rect.height()) / 2.0;
             skia_safe::Path::rrect(RRect::new_rect_xy(rect, radius, radius), None)
@@ -219,6 +228,15 @@ fn draw_shadow_layer(
         crate::modifier::Shape::RoundedRect { corner_radius } => {
             sc.draw_rrect(RRect::new_rect_xy(local, *corner_radius, *corner_radius), &mask);
         }
+        crate::modifier::Shape::TopRoundedRect { radius } => {
+            let rr = RRect::new_rect_radii(local, &[
+                skia_safe::Vector::new(*radius, *radius),
+                skia_safe::Vector::new(*radius, *radius),
+                skia_safe::Vector::new(0.0, 0.0),
+                skia_safe::Vector::new(0.0, 0.0),
+            ]);
+            sc.draw_rrect(rr, &mask);
+        }
         crate::modifier::Shape::Pill => {
             let r = local.width().min(local.height()) / 2.0;
             sc.draw_rrect(RRect::new_rect_xy(local, r, r), &mask);
@@ -238,6 +256,15 @@ fn draw_shadow_layer(
             crate::modifier::Shape::Rectangle => { sc.draw_rect(local, &stroke); }
             crate::modifier::Shape::RoundedRect { corner_radius } => {
                 sc.draw_rrect(RRect::new_rect_xy(local, *corner_radius, *corner_radius), &stroke);
+            }
+            crate::modifier::Shape::TopRoundedRect { radius } => {
+                let rr = RRect::new_rect_radii(local, &[
+                    skia_safe::Vector::new(*radius, *radius),
+                    skia_safe::Vector::new(*radius, *radius),
+                    skia_safe::Vector::new(0.0, 0.0),
+                    skia_safe::Vector::new(0.0, 0.0),
+                ]);
+                sc.draw_rrect(rr, &stroke);
             }
             crate::modifier::Shape::Pill => {
                 let r = local.width().min(local.height()) / 2.0;
@@ -812,6 +839,15 @@ fn render_pass1(
             crate::modifier::Shape::RoundedRect { corner_radius } => {
                 canvas.clip_rrect(RRect::new_rect_xy(rect, *corner_radius, *corner_radius), None, Some(false));
             }
+            crate::modifier::Shape::TopRoundedRect { radius } => {
+                let rr = RRect::new_rect_radii(rect, &[
+                    skia_safe::Vector::new(*radius, *radius),
+                    skia_safe::Vector::new(*radius, *radius),
+                    skia_safe::Vector::new(0.0, 0.0),
+                    skia_safe::Vector::new(0.0, 0.0),
+                ]);
+                canvas.clip_rrect(rr, None, Some(false));
+            }
             crate::modifier::Shape::Pill => {
                 let r = rect.width().min(rect.height()) / 2.0;
                 canvas.clip_rrect(RRect::new_rect_xy(rect, r, r), None, Some(false));
@@ -1066,6 +1102,15 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
                         Some(false),
                     );
                 }
+                Some(crate::modifier::Shape::TopRoundedRect { radius }) => {
+                    let rr = skia_safe::RRect::new_rect_radii(rect, &[
+                        skia_safe::Vector::new(radius, radius),
+                        skia_safe::Vector::new(radius, radius),
+                        skia_safe::Vector::new(0.0, 0.0),
+                        skia_safe::Vector::new(0.0, 0.0),
+                    ]);
+                    canvas.clip_rrect(rr, None, Some(false));
+                }
                 Some(crate::modifier::Shape::Pill) => {
                     let r = rect.width().min(rect.height()) / 2.0;
                     canvas.clip_rrect(
@@ -1305,6 +1350,15 @@ fn draw_background(canvas: &Canvas, rect: Rect, color: &crate::modifier::Color, 
         crate::modifier::Shape::RoundedRect { corner_radius } => {
             canvas.draw_rrect(RRect::new_rect_xy(rect, *corner_radius, *corner_radius), &paint);
         }
+        crate::modifier::Shape::TopRoundedRect { radius } => {
+            let rr = RRect::new_rect_radii(rect, &[
+                skia_safe::Vector::new(*radius, *radius),
+                skia_safe::Vector::new(*radius, *radius),
+                skia_safe::Vector::new(0.0, 0.0),
+                skia_safe::Vector::new(0.0, 0.0),
+            ]);
+            canvas.draw_rrect(rr, &paint);
+        }
         crate::modifier::Shape::Pill => {
             let r = rect.width().min(rect.height()) / 2.0;
             canvas.draw_rrect(RRect::new_rect_xy(rect, r, r), &paint);
@@ -1453,6 +1507,16 @@ fn draw_border(canvas: &Canvas, x: f32, y: f32, w: f32, h: f32, width: f32, colo
         crate::modifier::Shape::RoundedRect { corner_radius } => {
             canvas.draw_rrect(RRect::new_rect_xy(sr, (*corner_radius - inset).max(0.0), (*corner_radius - inset).max(0.0)), &paint);
         }
+        crate::modifier::Shape::TopRoundedRect { radius } => {
+            let r = (*radius - inset).max(0.0);
+            let rr = RRect::new_rect_radii(sr, &[
+                skia_safe::Vector::new(r, r),
+                skia_safe::Vector::new(r, r),
+                skia_safe::Vector::new(0.0, 0.0),
+                skia_safe::Vector::new(0.0, 0.0),
+            ]);
+            canvas.draw_rrect(rr, &paint);
+        }
         crate::modifier::Shape::Pill => {
             // 路径圆角 = 节点 pill 半径 - inset（不要对 sr 再减一次——
             // 否则外缘在圆角处比背景内缩 1px，边框不像内边框）
@@ -1514,6 +1578,16 @@ pub(crate) fn draw_focus(
             // 外扩后圆角同步放大（保持与组件同心）
             let r = (*corner_radius + inset).max(0.0) * scale;
             canvas.draw_rrect(RRect::new_rect_xy(sr, r, r), &paint);
+        }
+        crate::modifier::Shape::TopRoundedRect { radius } => {
+            let r = (*radius + inset).max(0.0) * scale;
+            let rr = RRect::new_rect_radii(sr, &[
+                skia_safe::Vector::new(r, r),
+                skia_safe::Vector::new(r, r),
+                skia_safe::Vector::new(0.0, 0.0),
+                skia_safe::Vector::new(0.0, 0.0),
+            ]);
+            canvas.draw_rrect(rr, &paint);
         }
         crate::modifier::Shape::Pill => {
             let r = sr.width().min(sr.height()) / 2.0;

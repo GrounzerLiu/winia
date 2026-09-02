@@ -231,7 +231,11 @@ impl<'a> ComposeCtx<'a> {
 
     /// 注册顶层弹出层（Popup/Dialog/DropdownMenu 内部调用）——组合期收集，
     /// compose 后由 app.rs 取走并独立物化/渲染
-    pub fn open_overlay(&mut self, desc: crate::ui::overlay::OverlayDesc) {
+    pub fn open_overlay(&mut self, mut desc: crate::ui::overlay::OverlayDesc) {
+        // ⚠ 捕获 CompositionLocal 快照（主树 provides 内——Theme 等）——
+        // overlay 独立 Composer 在 provides 弹栈后 recompose，读不到主树
+        // 隐式上下文；快照重放让 overlay 继承主树主题/方向/排版。
+        desc.local_snapshot = crate::core::composition_local::capture();
         self.composer.overlays.push(desc);
     }
 
