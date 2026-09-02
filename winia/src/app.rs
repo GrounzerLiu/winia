@@ -2353,24 +2353,29 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
         if ov.click_passthrough {
             return false;
         }
-        // overlay：把手优先 drag，命中列表则 scroll，但把手是否可见不影响 hit，
-        // 故先按 hit 选考——把手 hit 则 drag，进入 move 阶段再由 nested 决定是否透给列表
+        // overlay：**滚动优先**（对齐 Compose nestedScroll「内容滚动优先、边界后面板接管」）——
+        // 命中路径上存在滚动节点 → 走 overlay_drag_scroll（列表先滚，到边后由
+        // SheetNested.on_post_scroll 折叠 sheet）；无滚动节点 → fallback 到可拖节点
+        //（面板背景/顶部文字 on_drag 拖 sheet，或 slider/switch 组件拖动）。
+        // ⚠ 旧行为是 drag_hit 优先（面板 on_drag 会抢列表滚动——列表无法滚）。
         {
             let nodes = ov.composer.arena_nodes();
             if let Some(r) = ov.composer.layout_root_idx() {
                 let path = hit_test(nodes, r, local.0, local.1);
-                let drag_hit = path.iter().rev().find(|&&n| nodes[n].modifier.has_drag_gesture()).copied();
                 let scroll_hit = path.iter().rev().find(|&&n| nodes[n].modifier.vertical_scroll_state().is_some() || nodes[n].modifier.horizontal_scroll_state().is_some()).copied();
-                if let Some(didx) = drag_hit {
-                    pw.overlay_drag = Some((i, nodes[didx].slot_key, scene_pos));
-                    pw.overlay_drag_started = false;
-                    pw.overlay_drag_last = None;
-                    pw.overlay_drag_scroll = None;
-                } else if let Some(t) = scroll_hit {
+                let drag_hit = path.iter().rev().find(|&&n| nodes[n].modifier.has_drag_gesture()).copied();
+                if let Some(t) = scroll_hit {
+                    // 列表区：内容滚动优先（Compose 语义）
                     pw.overlay_drag = None;
                     pw.overlay_drag_started = false;
                     pw.overlay_drag_last = None;
                     pw.overlay_drag_scroll = Some(DragScroll { slot: nodes[t].slot_key, last_x: scene_pos.0, last_y: scene_pos.1, samples: vec![(std::time::Instant::now(), scene_pos.0, scene_pos.1)] });
+                } else if let Some(didx) = drag_hit {
+                    // 非滚动区：fallback 到面板 on_drag（背景/文字拖 sheet）
+                    pw.overlay_drag = Some((i, nodes[didx].slot_key, scene_pos));
+                    pw.overlay_drag_started = false;
+                    pw.overlay_drag_last = None;
+                    pw.overlay_drag_scroll = None;
                 } else {
                     pw.overlay_drag = None;
                     pw.overlay_drag_started = false;

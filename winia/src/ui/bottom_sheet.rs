@@ -349,8 +349,18 @@ impl ModalBottomSheet {
                             panel_mod_with_nested = panel_mod_with_nested.nested_scroll(sheet_conn);
                         }
                         let panel_mod_with_gesture = panel_mod_with_nested;
+                        // 面板任意位置可拖（对齐 Compose anchoredDraggable——整个面板 Surface 可拖，
+                        // 不只把手）。背景/顶部文字/空白区拖拽也驱动 sheet；列表区由内层 scroll 优先
+                        //（overlay_down 命中滚动优先，见 app.rs），此处 on_drag 作为非滚动区 fallback。
+                        let pd = drag_st.clone();
+                        let pe = drag_st.clone();
+                        let panel_mod_with_panel_drag = panel_mod_with_gesture
+                            .on_drag(move |_pos, (_dx, dy)| pd.drag_delta(dy))
+                            .on_drag_end(move || {
+                                pe.settle_with_velocity(pe.last_velocity());
+                            });
                         crate::ui::layout_components::Column::new()
-                            .modifier(panel_mod_with_gesture)
+                            .modifier(panel_mod_with_panel_drag)
                             .build(ctx, |ctx| {
                                 if drag_handle {
                                     let d = drag_st.clone();

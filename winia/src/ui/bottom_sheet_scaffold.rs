@@ -244,8 +244,18 @@ impl BottomSheetScaffold {
                     let sheet_conn = SheetNested { st: sheet_state.clone() };
                     sheet_mod_with_nested = sheet_mod_with_nested.nested_scroll(sheet_conn);
                 }
+                // 面板任意位置可拖（对齐 Compose BottomSheetScaffold——整面板 Surface 可拖，
+                // 不只把手）。背景/文字/空白区拖拽也驱动 sheet；列表区由内层 scroll 优先
+                //（overlay_down 命中滚动优先，见 app.rs），此处 on_drag 作为非滚动区 fallback。
+                let s_d = sheet_state.clone();
+                let s_e = sheet_state.clone();
+                let sheet_mod_with_panel_drag = sheet_mod_with_nested
+                    .on_drag(move |_pos, (_dx, dy)| s_d.drag_delta(dy))
+                    .on_drag_end(move || {
+                        s_e.settle_with_velocity(s_e.last_velocity());
+                    });
                 crate::ui::layout_components::Column::new()
-                    .modifier(sheet_mod_with_nested)
+                    .modifier(sheet_mod_with_panel_drag)
                     .build(ctx, |ctx| {
                         if drag_handle {
                             crate::ui::layout_components::Row::new()
