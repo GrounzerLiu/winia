@@ -123,6 +123,17 @@ private fun Modifier.surface(shape, backgroundColor, border, shadowElevation) =
 - **面板 offset 布局 vs graphics_layer**：面板必须用**布局 offset**（`.offset(sheet_pad_x, st.offset_state())`）而非 graphics_layer translation——layout offset 参与 hit_test，命中正确；graphics_layer 位移不参与 hit_test → 面板外点不到 Scrim。
 - **锚点计算**（对齐 Compose）：Expanded = `fullHeight - sheetHeight`；PartiallyExpanded = `fullHeight - min(fullHeight/2, sheetHeight)`；Hidden = `fullHeight`。本次 demo 里 sheetH=535, fullH=560 → Expanded=25, Partial=280, Hidden=560。
 
+## 7.5 review 结论与会后修复（子代理审查 bae17a1）
+
+子代理（独立会话）审查 `bae17a1` 结论：**无 P0**（cargo check 通过、cargo test 690 过）；**需修改后再提交**（P1 + P2），均已修复并提交 `3458fc3`。
+
+- **P1（真实回归）**：`overlay_down`（app.rs:2367）先改为「无条件 scroll_hit 优先」，导致**可滚动容器内的 slider/switch 等拖拽组件**按下时走滚动、组件不拖（父提交面板无 on_drag，列表能滚、slider 能拖——是回归；且与主树 `child_drag` 最内层手势优先 app.rs:2922 相悖）。
+  - **修复**：按「drag 相对 scroll 深度」判定——`inner_component_drag = (Some(d),Some(s)) && d>s 或 (Some(d),None)`（d 更深=组件在 scroll 内部→拖优先）；否则 scroll 存在→滚动优先（面板 on_drag 让位）；否则 drag→面板拖 sheet。
+- **P2（静默 bug）**：`surface.rs` content_color else 分支返回**背景色 color**，而非「保持上层值」——`Surface::new().color(blue)` 不设 content_color 时，内部 Text/Icon 与背景同色不可见（demo 恰好显式传色未暴露）。
+  - **修复**：else 分支改 `WiniaTheme::content_color()`（保持上层内容色）。
+- **备注（非阻塞，已确认/记录）**：bottom_sheet 内联注释「面板用 Surface 承载」与实际不符（面板未用 Surface，§6.3 已记录决策）；Surface 未实现 Compose「触控穿透阻断」职责（待交互重载补）；「内容滚动优先」注释与 SheetNested expands-first 口径略异（后者正确）。
+- **已验证无误**：Surface modifier 链 shadow→border→background→clip（clip 最后）；start/end_restartable_group 配对正确（复刻 Card，不触发 GROUP_STACK 断言）；clip 不影响 hit_test；面板 on_drag 与列表滚动路由互斥；SheetNested 方向符号自洽、无双重消费。
+
 ## 8. 验证方法
 
 - demo：`cargo run -p winia --example bottom_sheet_demo --features debug-server`
