@@ -112,9 +112,14 @@ impl Surface {
         let shape = self.shape;
         // 默认背景 = theme.surface（Compose 默认 `colorScheme.surface`）
         let color = self.color.unwrap_or(theme.surface);
-        // 内容色：显式传入优先；否则按主题匹配（color==surface→on_surface，否则保持）
+        // 内容色：显式传入优先；否则按主题匹配——color==theme.surface→on_surface，
+        // 否则保持上层 content_color()（Compose 语义：非标准色时沿用父 Surface 内容色）
         let content_color = self.content_color.unwrap_or_else(|| {
-            if color == theme.surface { theme.on_surface } else { color }
+            if color == theme.surface {
+                theme.on_surface
+            } else {
+                crate::ui::theme::WiniaTheme::content_color()
+            }
         });
         let shadow_elevation = self.shadow_elevation;
 

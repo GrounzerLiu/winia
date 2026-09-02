@@ -2353,24 +2353,39 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
         if ov.click_passthrough {
             return false;
         }
-        // overlay：**滚动优先**（对齐 Compose nestedScroll「内容滚动优先、边界后面板接管」）——
-        // 命中路径上存在滚动节点 → 走 overlay_drag_scroll（列表先滚，到边后由
-        // SheetNested.on_post_scroll 折叠 sheet）；无滚动节点 → fallback 到可拖节点
-        //（面板背景/顶部文字 on_drag 拖 sheet，或 slider/switch 组件拖动）。
-        // ⚠ 旧行为是 drag_hit 优先（面板 on_drag 会抢列表滚动——列表无法滚）。
+        // overlay：按 drag 相对 scroll 的深度判定（对齐主树 child_drag「最内层手势优先」：
+        // app.rs:2922-2926）——内层可拖组件（slider/switch）优先于滚动；外层面板 on_drag 让位
+        // 于内层滚动（列表滚动优先，到边后由 SheetNested.on_post_scroll 折叠 sheet）。
+        // path 下标从根到叶递增；rev() 找到的第一个命中即最内层（下标最大）。
+        // - drag 更深（组件在 scroll 内部，didx_last > scroll_idx 且更内层）→ 拖拽组件优先
+        // - 否则若有 scroll → 滚动优先（列表滚；面板 on_drag 让位）
+        // - 否则若有 drag → 面板 on_drag 拖 sheet（背景/文字/空白）
         {
             let nodes = ov.composer.arena_nodes();
             if let Some(r) = ov.composer.layout_root_idx() {
                 let path = hit_test(nodes, r, local.0, local.1);
-                let scroll_hit = path.iter().rev().find(|&&n| nodes[n].modifier.vertical_scroll_state().is_some() || nodes[n].modifier.horizontal_scroll_state().is_some()).copied();
-                let drag_hit = path.iter().rev().find(|&&n| nodes[n].modifier.has_drag_gesture()).copied();
-                if let Some(t) = scroll_hit {
-                    // 列表区：内容滚动优先（Compose 语义）
+                let scroll_idx = path.iter().rev().find(|&&n| nodes[n].modifier.vertical_scroll_state().is_some() || nodes[n].modifier.horizontal_scroll_state().is_some()).copied();
+                let drag_idx = path.iter().rev().find(|&&n| nodes[n].modifier.has_drag_gesture()).copied();
+                // 内层拖拽组件优先于滚动（同一路径上，drag 比 scroll 更深）
+                let inner_component_drag = match (drag_idx, scroll_idx) {
+                    (Some(d), Some(s)) => d > s, // d 下标更大 = 更靠叶 = 组件在 scroll 内部
+                    (Some(_), None) => true,      // 无滚动容器：drag 即独立的拖拽组件（不降级）
+                    _ => false,
+                };
+                if inner_component_drag {
+                    if let Some(didx) = drag_idx {
+                        pw.overlay_drag = Some((i, nodes[didx].slot_key, scene_pos));
+                        pw.overlay_drag_started = false;
+                        pw.overlay_drag_last = None;
+                        pw.overlay_drag_scroll = None;
+                    }
+                } else if let Some(t) = scroll_idx {
+                    // 列表区（面板 on_drag 让位）：内容滚动优先
                     pw.overlay_drag = None;
                     pw.overlay_drag_started = false;
                     pw.overlay_drag_last = None;
                     pw.overlay_drag_scroll = Some(DragScroll { slot: nodes[t].slot_key, last_x: scene_pos.0, last_y: scene_pos.1, samples: vec![(std::time::Instant::now(), scene_pos.0, scene_pos.1)] });
-                } else if let Some(didx) = drag_hit {
+                } else if let Some(didx) = drag_idx {
                     // 非滚动区：fallback 到面板 on_drag（背景/文字拖 sheet）
                     pw.overlay_drag = Some((i, nodes[didx].slot_key, scene_pos));
                     pw.overlay_drag_started = false;
