@@ -1,15 +1,22 @@
 //! Material 3 TabRow / Tab 组件 — 对标 androidx-main TabRow.kt + Tab.kt
 //!
-//! 当前实现：Fixed TabRow（Primary/Secondary，等分）+ Tab 组件（text/icon 槽）。
+//! 当前实现：Fixed TabRow（Primary/Secondary，等分）+ ScrollableTabRow（自然宽可滚动、
+//! 选中居中）+ Tab 组件（text/icon 槽）。
 //! 指示条动画：双 State<f32>（offset/width）在 build 期创建，TabRowLayoutPolicy.measure 期
 //! 计算 target 后调 push_animatable，State::get() 注册 layout_deps（两段式依赖——动画帧只重测不重组）。
 //! 首次布局免动画：initialized 标记（AtomicBool）跳过首次 push_animatable。
 //!
+//! ScrollableTabRow 的选中居中滚动依赖 fling_limit（= 内容宽 - 视口宽）——但该值由
+//! measure_node 在 policy.measure **之后**才回写（node.rs:1535-1551），首帧读到恒 0 →
+//! 目标恒 0 不滚动。故首帧用 layout_seen 标记（set(true) notify → 下帧重测）延迟消费
+//! last_selected，第二帧 fling_limit 就绪后再触发居中滚动。
+//!
 //! 偏差记录（与 Compose 对照）：
 //! - 无 TabBaselineLayout 基线精确数学（text+icon 垂直居中，无 firstBaseline/lastBaseline 修正）
 //! - Tab 颜色过渡用静态颜色（无 animateColor 插值；后续可加 graphics_layer 交叉淡化）
-//! - TabRow 无 scrollable 变体（后续可加 PrimaryScrollableTabRow / SecondaryScrollableTabRow）
-//! - RTL 镜像：tab 布局镜像，indicator 偏移直接对齐 tab 物理 left（非逻辑 start 偏移）
+//! - ⚠ Fixed TabRow 有 RTL 镜像（tab 布局镜像，indicator 偏移直接对齐 tab 物理 left）；
+//!   **ScrollableTabRow 暂仅 LTR**——tabs 恒从左 edge_padding 起排列，无镜像/反向滚动
+//!   （实现 RTL 需同时镜像 tab 排列、滚动方向与指示条偏移）
 //! - contentWidth = max(tab 自然宽 - 32dp, 24dp)（无 maxIntrinsicWidth 调用，用 1st pass 测量近似）
 //! - 动画 spec = spring(damping_ratio=0.6, stiffness=700)（对齐 M3 Expressive DefaultSpatial）
 //! - 指示条高固定 3dp（ActiveIndicatorHeight）
@@ -880,8 +887,8 @@ impl ScrollableTabRow {
 
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
-        let direction = self.modifier.get_layout_direction().unwrap_or(WiniaTheme::direction());
-        ctx.changed(&direction);
+        // ⚠ ScrollableTabRow 暂仅 LTR（见模块头偏差记录）：direction 不参与布局，
+        // 无 RTL 镜像。若未来实现 RTL，需在此读取方向并传入 policy。
 
         let scroll_state = self.scroll_state.clone()
             .unwrap_or_else(|| ctx.remember(|| crate::modifier::ScrollState::new()).get());
@@ -907,6 +914,8 @@ impl ScrollableTabRow {
         let initialized = ctx.remember(|| std::sync::Arc::new(AtomicBool::new(false))).get();
         // ScrollableTabData：上次 selected（跨帧记住——动画触发依据）
         let last_selected = ctx.remember(|| std::sync::Arc::new(AtomicI32::new(-1))).get();
+        // 首帧标记：fling_limit 首帧未回写——延迟到第二帧再触发居中滚动
+        let layout_seen = ctx.remember(|| false);
 
         let content = self.content;
         let policy = ScrollableTabRowLayoutPolicy {
@@ -915,11 +924,11 @@ impl ScrollableTabRow {
             offset_state: offset_state.clone(),
             width_state: width_state.clone(),
             initialized: initialized.clone(),
-            direction,
             edge_padding: self.edge_padding,
             min_tab_width: self.min_tab_width,
             scroll_state: scroll_state.clone(),
             last_selected,
+            layout_seen: layout_seen.clone(),
             divider_color,
             indicator_color,
             indicator_shape,
@@ -969,12 +978,15 @@ struct ScrollableTabRowLayoutPolicy {
     offset_state: State<f32>,
     width_state: State<f32>,
     initialized: std::sync::Arc<AtomicBool>,
-    direction: LayoutDirection,
     edge_padding: f32,
     min_tab_width: f32,
     scroll_state: crate::modifier::ScrollState,
     /// 上次选中的 tab 索引（-1 = 首帧）——选中变化触发居中滚动
     last_selected: std::sync::Arc<AtomicI32>,
+    /// 首帧标记：policy.measure 内 fling_limit 尚未回写（滚动容器在 measure 后
+    /// 才写 fling_limit），首帧不应消费 last_selected。set(true) notify → 下帧
+    /// 重测 → fling_limit 就绪 → 正确居中滚动。
+    layout_seen: State<bool>,
     divider_color: Color,
     indicator_color: Color,
     indicator_shape: Shape,
@@ -1068,7 +1080,14 @@ impl MeasurePolicy for ScrollableTabRowLayoutPolicy {
 
         // ── ScrollableTabData：选中变化 → 居中滚动（对齐 Compose calculateTabOffset）──
         let sel = self.selected_tab_index as i32;
-        if self.last_selected.load(Ordering::Relaxed) != sel {
+        // ⚠ 首帧延迟：policy.measure 执行时滚动容器的 fling_limit 尚未回写
+        //（measure_node 在 policy.measure **之后** 才写 fling_limit，node.rs:1535-1551），
+        // 首帧 max_value=0 → available=0 → target 恒 0 → 不会居中。因此首帧只
+        // 标记 layout_seen（notify → 下帧重测）而不消费 last_selected，第二帧
+        // fling_limit 就绪后再触发居中滚动。
+        if !self.layout_seen.get() {
+            self.layout_seen.set(true);
+        } else if self.last_selected.load(Ordering::Relaxed) != sel {
             self.last_selected.store(sel, Ordering::Relaxed);
             if let Some(pos) = positions.get(self.selected_tab_index) {
                 // 可见宽 = 内容总宽 - 最大滚动量（fling_limit 由滚动容器布局回写）
@@ -1532,6 +1551,36 @@ mod tests {
         }
         assert!(moved, "选中变化应触发滚动动画（offset 单调增加）");
         // 内容总宽 = 2*52 + ΣtabW（10 个 ≥90）→ 远超视口 360，应滚到末尾附近
+        assert!(last > 200.0, "应滚到末尾附近（offset={last}）");
+    }
+
+    #[test]
+    fn scrollable_tab_row_centers_initial_selection() {
+        // 回归：一开始 selected=9（10 tabs）——首帧 fling_limit 未回写，
+        // 居中滚动应延迟到第二帧执行（此前首帧 target 恒 0 永不居中）
+        use std::time::{Duration, Instant};
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+
+        let (mut c, scroll_state) = scrollable_tab_row_layout(9, 10);
+        // 首帧布局：layout_seen=false → 不滚动（此时 fling_limit 尚为 0）
+        assert_eq!(scroll_state.offset.get(), 0.0, "首帧不应滚动");
+        // 第二帧：fling_limit 已回写 → 触发居中滚动
+        c.layout(Constraints::new(0.0, 360.0, 0.0, 640.0));
+
+        let deadline = Instant::now() + Duration::from_millis(3000);
+        let mut last = scroll_state.offset.get();
+        let mut moved = false;
+        while Instant::now() < deadline {
+            crate::animation::update_animations();
+            c.layout(Constraints::new(0.0, 360.0, 0.0, 640.0));
+            let cur = scroll_state.offset.get();
+            if cur > last + 0.5 { moved = true; }
+            if (cur - last).abs() < 0.5 && moved { break; }
+            last = cur;
+            std::thread::sleep(Duration::from_millis(8));
+        }
+        assert!(moved, "初始选中 9 应触发居中滚动（第二帧起）");
+        // 选中末尾 tab：内容总宽 > 视口 → offset 应滚到末尾附近（> 200）
         assert!(last > 200.0, "应滚到末尾附近（offset={last}）");
     }
 }

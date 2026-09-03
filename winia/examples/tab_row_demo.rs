@@ -8,6 +8,9 @@ fn tab_row_demo(ctx: &mut ComposeCtx) {
     let sel = ctx.remember(|| 0usize);
     let sel2 = ctx.remember(|| 1usize);
     let secondary = ctx.remember(|| false);
+    // ScrollableTabRow：独立滚动状态（remember 创建的 ScrollState）
+    let scroll_sel = ctx.remember(|| 6usize);
+    let scroll_state = ctx.remember(|| ScrollState::new()).get();
 
     WiniaTheme::with_theme_and_direction(ThemeColors::default_light(), LayoutDirection::Ltr, ctx, |ctx| {
         Column::new()
@@ -104,6 +107,33 @@ fn tab_row_demo(ctx: &mut ComposeCtx) {
                 })
                 .secondary()
                 .build(ctx);
+
+                Spacer::vertical(8.0);
+                Divider::horizontal().build(ctx);
+                Spacer::vertical(8.0);
+
+                // ── ScrollableTabRow：多 tab 撑出滚动区（选中居中滚动）──
+                Text::new("ScrollableTabRow (可滚动，选中自动居中)")
+                    .modifier(Modifier::new().padding(8.0))
+                    .build(ctx);
+
+                let ss = scroll_sel.clone();
+                let st = scroll_state.clone();
+                ScrollableTabRow::new(scroll_sel.get(), move |ctx| {
+                    for i in 0..12 {
+                        let label = format!("Tab {}", i + 1);
+                        let s = ss.clone();
+                        Tab::new(s.get() == i, move || s.set(i))
+                            .text(move |ctx| Text::new(&label).build(ctx))
+                            .build(ctx);
+                    }
+                })
+                .scroll_state(st)
+                .build(ctx);
+
+                Text::new("← 点击右侧 tab 观察自动滚动 →")
+                    .modifier(Modifier::new().padding(8.0))
+                    .build(ctx);
             });
     });
 }
