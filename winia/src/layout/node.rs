@@ -1412,6 +1412,17 @@ pub(crate) fn measure_node(
         if let Some(h) = sh { inner_constraints = inner_constraints.tighten_height(h); }
     }
 
+    // 开放布局节点 A 型（exp/modifier-node）：resolved_size 之后串行变换约束。
+    // 位置语义 = 链中 size 之后、min/required/padding 之前（后续 min/required
+    // 仍可覆盖 node 的变换，链序直觉保持）。动态值在 transform 内求值
+    // （measure 期 State::get 注册布局依赖——与 SizeValue::Dynamic 同机制）。
+    // Arc 克隆出链表避免借用冲突（nodes[idx] 不可变借用与后续可变写冲突）。
+    let layout_transforms: Vec<std::sync::Arc<dyn crate::modifier::LayoutNode>> =
+        nodes[idx].modifier.layout_nodes().cloned().collect();
+    for t in &layout_transforms {
+        inner_constraints = t.transform(inner_constraints);
+    }
+
     // 最小尺寸（MinWidth/MinHeight——对标 Compose widthIn/heightIn）：
     // 提升 incoming min，受 max 夹住（min 不得越过 max——tight size 下
     // 最小约束让位于固定尺寸，与 Compose constraints 合并语义一致）。

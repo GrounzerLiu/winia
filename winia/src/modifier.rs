@@ -442,6 +442,17 @@ pub trait KeyNode: std::fmt::Debug + Send + Sync {
     }
 }
 
+/// 布局节点 A 型：约束变换（对标 Compose LayoutModifier）。
+/// 输入 incoming 约束，输出给下一环节的约束。多个 A 型 node 按挂载序串行。
+/// 插入点 = resolved_size 之后、padding 之前（与现有链序同，见 measure_node）。
+/// 动态值在此求值（measure 期读 State 注册布局依赖——与 SizeValue::Dynamic 同）。
+pub trait LayoutNode: std::fmt::Debug + Send + Sync {
+    fn transform(&self, inner: crate::layout::Constraints) -> crate::layout::Constraints;
+    fn node_key(&self) -> String {
+        std::any::type_name::<Self>().to_string()
+    }
+}
+
 /// 开放节点容器（与 `ModifierElement` 并存的第二轨道）。
 #[derive(Debug, Clone)]
 pub enum ModifierNode {
@@ -449,6 +460,7 @@ pub enum ModifierNode {
     Click(std::sync::Arc<dyn ClickNode>),
     Pointer(std::sync::Arc<dyn PointerNode>),
     Key(std::sync::Arc<dyn KeyNode>),
+    Layout(std::sync::Arc<dyn LayoutNode>),
 }
 
 /// Modifier 链中的单个元素。
@@ -715,6 +727,11 @@ impl Modifier {
         self.push_node(ModifierNode::Key(std::sync::Arc::new(node)))
     }
 
+    /// 追加一个布局节点 A 型（约束变换——resolved_size 之后、padding 之前串行）。
+    pub fn layout_node(self, node: impl LayoutNode + 'static) -> Self {
+        self.push_node(ModifierNode::Layout(std::sync::Arc::new(node)))
+    }
+
     pub(crate) fn push_node(mut self, node: ModifierNode) -> Self {
         self.nodes.push(node);
         self
@@ -745,6 +762,14 @@ impl Modifier {
     pub(crate) fn key_nodes(&self) -> impl Iterator<Item = &std::sync::Arc<dyn KeyNode>> {
         self.nodes.iter().filter_map(|n| match n {
             ModifierNode::Key(k) => Some(k),
+            _ => None,
+        })
+    }
+
+    /// 开放布局节点迭代（测量管线用——resolved_size 之后串行变换约束）。
+    pub(crate) fn layout_nodes(&self) -> impl Iterator<Item = &std::sync::Arc<dyn LayoutNode>> {
+        self.nodes.iter().filter_map(|n| match n {
+            ModifierNode::Layout(l) => Some(l),
             _ => None,
         })
     }
@@ -2973,6 +2998,7 @@ pub(crate) fn node_key_of(n: &ModifierNode) -> String {
         ModifierNode::Click(c) => format!("click:{}", c.node_key()),
         ModifierNode::Pointer(p) => format!("pointer:{}", p.node_key()),
         ModifierNode::Key(k) => format!("key:{}", k.node_key()),
+        ModifierNode::Layout(l) => format!("layout:{}", l.node_key()),
     }
 }
 
@@ -3433,5 +3459,99 @@ mod node_track_tests {
         });
         assert!(!a.param_eq(&b), "key node_key 变化应 Enter");
         assert!(a.param_eq(&a.clone()), "同参 key node 应相等");
+    }
+
+    /// 试点布局节点 A 型：min-width 提升（MinWidth 枚举的 node 等价物）。
+    /// 第三方自定义约束（宽高比钳制/内容相关约束等）照此形状实现 LayoutNode。
+    #[derive(Debug)]
+    struct TestMinWidthNode {
+        min_w: f32,
+    }
+
+    impl LayoutNode for TestMinWidthNode {
+        fn transform(&self, mut inner: crate::layout::Constraints) -> crate::layout::Constraints {
+            inner.min_width = inner.min_width.max(self.min_w).min(inner.max_width);
+            inner
+        }
+        fn node_key(&self) -> String {
+            format!("testminw:{}", self.min_w)
+        }
+    }
+
+    #[test]
+    fn node_track_layout_transform_applies_and_folds() {
+        use crate::core::composer::Composer;
+        // 约束 max 400：node 提 min_w=200 → 叶子宽应为 200（tighten 生效）
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            let key = ctx.next_key();
+            ctx.start_leaf(
+                key,
+                Modifier::new().layout_node(TestMinWidthNode { min_w: 200.0 }),
+            );
+            ctx.end_node();
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.layout_root_idx().expect("root");
+        let w = composer.arena_nodes()[root].measured_size.width;
+        assert_eq!(w, 200.0, "LayoutNode transform 应提升 min_width 生效");
+
+        // 常量折叠：同约束 re-layout 不应重测（node 不破坏折叠语义）
+        #[cfg(test)]
+        let before = {
+            crate::layout::node::MEASURE_COUNT.with(|c| c.get())
+        };
+        composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        #[cfg(test)]
+        {
+            let after = crate::layout::node::MEASURE_COUNT.with(|c| c.get());
+            assert_eq!(after, before, "同约束同 node 应命中常量折叠");
+        }
+
+        // 指纹：min_w 变化 → param_eq 不等 → Enter
+        let a = Modifier::new().layout_node(TestMinWidthNode { min_w: 200.0 });
+        let b = Modifier::new().layout_node(TestMinWidthNode { min_w: 300.0 });
+        assert!(!a.param_eq(&b), "layout node_key 变化应 Enter");
+        assert!(a.param_eq(&a.clone()), "同参 layout node 应相等");
+    }
+
+    #[test]
+    fn node_track_layout_node_state_driven_remeasures() {
+        use crate::core::composer::Composer;
+        use crate::core::state::State;
+        // 动态值在 transform 内 get → 注册布局依赖 → set 后重测（与 SizeValue::Dynamic 同）
+        #[derive(Debug)]
+        struct DynMinNode {
+            s: State<f32>,
+        }
+        impl LayoutNode for DynMinNode {
+            fn transform(&self, mut inner: crate::layout::Constraints) -> crate::layout::Constraints {
+                let v = self.s.get();
+                inner.min_width = inner.min_width.max(v).min(inner.max_width);
+                inner
+            }
+            fn node_key(&self) -> String {
+                "dynmin".to_string() // 值走 State，不进 key（同 Dynamic 语义）
+            }
+        }
+        let s = State::new(100.0f32);
+        let mut composer = Composer::new();
+        let s2 = s.clone();
+        composer.compose(|ctx| {
+            let key = ctx.next_key();
+            ctx.start_leaf(key, Modifier::new().layout_node(DynMinNode { s: s2.clone() }));
+            ctx.end_node();
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.layout_root_idx().expect("root");
+        assert_eq!(composer.arena_nodes()[root].measured_size.width, 100.0);
+        // set 后：pending 走 layout 通道 → layout() 直接重测（无需 compose）
+        s.set(250.0);
+        assert!(composer.has_pending_states(), "set 后应有 pending");
+        composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        assert_eq!(
+            composer.arena_nodes()[root].measured_size.width, 250.0,
+            "State 变化应经布局依赖重测（无需重组）"
+        );
     }
 }
