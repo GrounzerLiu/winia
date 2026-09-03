@@ -126,6 +126,8 @@ impl TabRowDefaults {
     }
 
     /// 选中 Tab 内容色（Primary 选中 = Primary，Secondary 选中 = OnSurface）
+    /// ⚠ 当前 Tab::build 的选中色走 `self.selected_content_color.unwrap_or(content_color)`
+    ///（TabRow 注入的 contentColor），不经由此函数——保留供未来 scrollable/自定义使用。
     pub fn selected_content_color(theme: &crate::ui::theme::ThemeColors, is_primary: bool) -> Color {
         if is_primary { theme.primary } else { theme.on_surface }
     }
@@ -333,6 +335,13 @@ impl MeasurePolicy for TabRowLayoutPolicy {
         let row_width = constraints.max_width;
         let is_rtl = self.direction == LayoutDirection::Rtl;
 
+        // ⚠ 两段式依赖必须在 measure **最开头** get()（任何 measure_node 子调用
+        // 之前）——此刻 ACTIVE_SLOT_KEY 仍是本节点（TabRow），依赖注册到 TabRow
+        // 而非尾部的 divider/indicator 叶（对齐 navigation_bar.rs 注释：递归测量
+        // 子节点后 key 会被改写）。动画帧 → TabRow 重测 → 指示条位置更新。
+        self.offset_state.get();
+        self.width_state.get();
+
         // 指示条高
         let indicator_h = ACTIVE_INDICATOR_HEIGHT;
 
@@ -401,9 +410,10 @@ impl MeasurePolicy for TabRowLayoutPolicy {
             crate::animation::push_animatable(self.width_state.clone(), target_width, spec);
         }
 
-        // 读取动画值（注册 layout_deps——两段式依赖）
-        let current_off = self.offset_state.get();
-        let current_w = self.width_state.get();
+        // 读动画当前值用于 placement（peek 不注册依赖——依赖已在 measure 开头
+        // 通过 get() 注册到 TabRow 节点；peek 只读当前值，零注册开销）
+        let current_off = self.offset_state.peek();
+        let current_w = self.width_state.peek();
 
         placements.push(Placement {
             size: Size::new(current_w, indicator_h),
@@ -549,9 +559,10 @@ impl Tab {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     content(ctx);
-                    // ripple leaf
+                    // ripple leaf（fill_max_size 确保全尺寸覆盖——BoxLayout
+                    // Center 测子节点用 loosen 约束，无尺寸则塌缩 0×0）
                     let ripple_key = ctx.next_key();
-                    ctx.start_leaf(ripple_key, ripple_modifier);
+                    ctx.start_leaf(ripple_key, ripple_modifier.fill_max_size());
                     ctx.end_node();
                 }
             }
@@ -842,5 +853,162 @@ mod tests {
         let nodes = c.arena_nodes();
         // Tab should have at least text + ripple
         assert!(nodes[root].children.len() >= 2, "Tab should have text + ripple children");
+    }
+
+    #[test]
+    fn tab_content_version_ripple_covers_full_tab() {
+        // P0-1 回归：自定义 content 版 ripple 必须全尺寸覆盖 tab slot
+        // （BoxLayout(Center) 测子节点用 loosen——无尺寸则塌缩 0×0）
+        let mut c = Composer::new();
+        let colors = crate::ui::theme::ThemeColors::default_light();
+        c.compose(|ctx| {
+            WiniaTheme::with_theme_and_direction(colors, LayoutDirection::Ltr, ctx, |ctx| {
+                TabRow::new(0, |ctx| {
+                    Tab::new(true, || {})
+                        .content(|ctx| {
+                            let k = ctx.next_key();
+                            ctx.start_leaf(k, Modifier::new().size(40.0, 20.0));
+                            ctx.end_node();
+                        })
+                        .build(ctx);
+                })
+                .build(ctx);
+            });
+        });
+        c.layout(Constraints::new(0.0, 360.0, 0.0, 640.0));
+        let root = c.layout_root_idx().unwrap();
+        let nodes = c.arena_nodes();
+        let children = &nodes[root].children;
+        // children = [tab0, divider, indicator]
+        let tab = &nodes[children[0]];
+        let tab_children = &tab.children;
+        // tab children = [content, ripple]
+        assert_eq!(tab_children.len(), 2, "content 版应有 content + ripple");
+        let ripple = &nodes[tab_children[1]];
+        // content 版无 spec 高——tab 高度 = 内容高（20），宽度 = 整行（1 tab → 360）
+        assert_eq!(ripple.measured_size.width, 360.0, "ripple 应全宽覆盖 tab slot");
+        assert_eq!(ripple.measured_size.height, 20.0, "ripple 应全高覆盖 tab slot");
+    }
+
+    #[test]
+    fn tab_row_selected_out_of_range_falls_back_to_origin() {
+        // selected >= tab_count 时指示条归位 (0,0)，不 panic
+        let c = tab_row_layout(99, true, 2, LayoutDirection::Ltr);
+        let root = c.layout_root_idx().unwrap();
+        let nodes = c.arena_nodes();
+        let children = &nodes[root].children;
+        let ind = &nodes[children[3]]; // [tab0, tab1, divider, indicator]
+        assert_eq!(ind.position.x, 0.0, "越界 selected 指示条 x=0");
+        assert_eq!(ind.measured_size.width, 0.0, "越界 selected 指示条宽 0");
+    }
+
+    #[test]
+    fn tab_row_indicator_animates_on_selected_change() {
+        // 动画推进：selected 0→1 → 步进 update_animations → offset 单调变化并收敛到新 target
+        use crate::core::state::State;
+        use std::time::{Duration, Instant};
+        // 动画注册表全局共享——持串行锁防并行 clear/竞态（与 lazy_column/animated_size 同）
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+
+        fn make_scene(
+            selected: State<usize>,
+            colors: crate::ui::theme::ThemeColors,
+        ) -> impl FnOnce(&mut ComposeCtx) {
+            move |ctx: &mut ComposeCtx| {
+                WiniaTheme::with_theme_and_direction(colors, LayoutDirection::Ltr, ctx, |ctx| {
+                    let sel = selected.clone();
+                    TabRow::new(sel.get(), move |ctx| {
+                        for i in 0..3 {
+                            let label = format!("Tab {}", i);
+                            let sel2 = selected.clone();
+                            Tab::new(sel2.get() == i, move || {})
+                                .text(move |ctx| Text::new(&label).build(ctx))
+                                .build(ctx);
+                        }
+                    })
+                    .build(ctx);
+                });
+            }
+        }
+
+        let selected = State::new(0usize);
+        let colors = crate::ui::theme::ThemeColors::default_light();
+
+        let mut c = Composer::new();
+        c.compose(make_scene(selected.clone(), colors.clone()));
+        c.layout(Constraints::new(0.0, 360.0, 0.0, 640.0));
+
+        // 首帧：initialized=false → set_silent 直接到位（tab0，居中 ≈ 43.5）
+        {
+            let root = c.layout_root_idx().unwrap();
+            let nodes = c.arena_nodes();
+            let children = &nodes[root].children;
+            let ind = &nodes[children[4]]; // [tab0..2, divider, indicator]
+            let x0 = ind.position.x;
+            assert!(x0 > 0.0 && x0 < 120.0, "首帧指示条应在 tab0 内，x={x0}");
+        }
+
+        // 切到 tab1：recompose + layout → push_animatable 分支启动动画
+        selected.set(1);
+        assert!(c.recompose(make_scene(selected.clone(), colors)), "状态变化应触发重组");
+        c.layout(Constraints::new(0.0, 360.0, 0.0, 640.0));
+
+        let tab_width = 120.0;
+        let content_width = 33.0; // natural≈65-32
+        let target = tab_width + (tab_width - content_width) / 2.0; // ≈163.5
+
+        // 首帧动画刚启动——位置应开始离开 tab0 方向（不要求立即到位）
+        let deadline = Instant::now() + Duration::from_millis(2000);
+        let mut last_x = {
+            let root = c.layout_root_idx().unwrap();
+            let nodes = c.arena_nodes();
+            let children = &nodes[root].children;
+            nodes[children[4]].position.x
+        };
+        let mut converged = false;
+        while Instant::now() < deadline {
+            crate::animation::update_animations();
+            c.layout(Constraints::new(0.0, 360.0, 0.0, 640.0));
+            let root = c.layout_root_idx().unwrap();
+            let nodes = c.arena_nodes();
+            let children = &nodes[root].children;
+            let x = nodes[children[4]].position.x;
+            // 单调逼近 + 收敛到 target ±1
+            if (x - last_x).abs() < 0.5 && (x - target).abs() < 1.0 {
+                converged = true;
+                break;
+            }
+            last_x = x;
+            std::thread::sleep(Duration::from_millis(8));
+        }
+        assert!(converged, "指示条应动画收敛到 {target}，实际 {last_x}");
+        let root = c.layout_root_idx().unwrap();
+        let nodes = c.arena_nodes();
+        let children = &nodes[root].children;
+        let ind = &nodes[children[4]];
+        assert!(
+            (ind.position.x - target).abs() < 1.0,
+            "最终指示条 x={} 应≈{}",
+            ind.position.x,
+            target
+        );
+    }
+
+    #[test]
+    fn tab_row_rtl_indicator_mirrors() {
+        // RTL：selected=0 指示条应镜像到最右侧 tab（x=180，2 tabs）
+        let c = tab_row_layout(0, true, 2, LayoutDirection::Rtl);
+        let root = c.layout_root_idx().unwrap();
+        let nodes = c.arena_nodes();
+        let children = &nodes[root].children;
+        let ind = &nodes[children[3]]; // [tab0, tab1, divider, indicator]
+        // tab0 在 RTL 下 x=180；指示条居中于该 slot
+        let tab_width = 180.0;
+        // contentWidth ≈ 35（natural≈67-32），居中偏移 = 180 + (180-35)/2 = 252.5
+        assert!(
+            (ind.position.x - 252.5).abs() < 1.0,
+            "RTL 指示条 x={} 应≈252.5",
+            ind.position.x
+        );
     }
 }
