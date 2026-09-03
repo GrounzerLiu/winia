@@ -78,9 +78,17 @@ fn tab_row_demo(ctx: &mut ComposeCtx) {
                         })
                         .build(ctx);
 
-                    // Tab 3: text only (longer)
+                    // Tab 3: leading icon（icon 左 + 8dp + text 右，48dp 高）
                     let s = sel_clone.clone();
                     Tab::new(s.get() == 2, move || s.set(2))
+                        .leading_icon()
+                        .icon(|ctx| {
+                            Icon::new(IconSource::svg(
+                                r#"<svg xmlns="http://www.w3.org/2000/svg" height="24" viewBox="0 -960 960 960" width="24"><path d="m354-287 126-76 126 77-33-144 111-96-146-13-58-136-58 135-146 13 111 97-33 143ZM233-120l65-281L80-590l288-25 112-265 112 265 288 25-218 189 65 281-247-149-247 149Zm247-350Z"/></svg>"#,
+                            ))
+                            .size(24.0)
+                            .build(ctx);
+                        })
                         .text(|ctx| Text::new("Tab Three").build(ctx))
                         .build(ctx);
                 });

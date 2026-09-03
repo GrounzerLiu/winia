@@ -12,7 +12,9 @@
 //! last_selected，第二帧 fling_limit 就绪后再触发居中滚动。
 //!
 //! 偏差记录（与 Compose 对照）：
-//! - 无 TabBaselineLayout 基线精确数学（text+icon 垂直居中，无 firstBaseline/lastBaseline 修正）
+//! - 无 TabBaselineLayout 基线精确数学（text+icon 竖排垂直居中，无 firstBaseline/lastBaseline 修正）
+//! - LeadingIconTab 为 Tab builder 的 `.leading_icon()` 模式（icon 左 + 8dp + text 右，
+//!   SmallTabHeight）——非独立组合函数；无 icon-only 独立 API
 //! - Tab 颜色过渡用静态颜色（无 animateColor 插值；后续可加 graphics_layer 交叉淡化）
 //! - RTL：Fixed TabRow 与 ScrollableTabRow 均支持 RTL——tab 布局镜像（物理 left 对齐），
 //!   ScrollableTabRow 的滚动容器标记 scroll_reverse（render 平移镜像：offset 0 = 内容
@@ -49,6 +51,8 @@ pub const LARGE_TAB_HEIGHT: f32 = 72.0;
 pub const SMALL_TAB_HEIGHT: f32 = 48.0;
 /// 图标与文本间距（IconDistanceFromBaseline 近似 = 20dp）
 pub const ICON_TEXT_SPACING: f32 = 20.0;
+/// LeadingIconTab 图标与文本间距（TextDistanceFromLeadingIcon = 8dp）
+pub const LEADING_ICON_TEXT_SPACING: f32 = 8.0;
 /// 可滚动 TabRow 最小 tab 宽（ScrollableTabRowMinTabWidth = 90dp）
 pub const SCROLLABLE_TAB_ROW_MIN_TAB_WIDTH: f32 = 90.0;
 /// 可滚动 TabRow 起始边缘 padding（ScrollableTabRowEdgeStartPadding = 52dp）
@@ -471,6 +475,10 @@ pub struct Tab {
     enabled: bool,
     selected_content_color: Option<Color>,
     unselected_content_color: Option<Color>,
+    /// LeadingIconTab 模式：icon 左 + text 右（水平排列，SmallTabHeight）
+    leading: bool,
+    /// 外部交互源注入（缺省内部创建）
+    interaction_source: Option<crate::ui::interaction::MutableInteractionSource>,
     modifier: Modifier,
 }
 
@@ -485,8 +493,22 @@ impl Tab {
             enabled: true,
             selected_content_color: None,
             unselected_content_color: None,
+            leading: false,
+            interaction_source: None,
             modifier: Modifier::new(),
         }
+    }
+
+    /// 设为 LeadingIconTab 模式（icon 左 + text 右，水平排列 SmallTabHeight）。
+    pub fn leading_icon(mut self) -> Self {
+        self.leading = true;
+        self
+    }
+
+    /// 注入外部交互源（缺省内部创建），用于外部观察 pressed/hover/focus 状态。
+    pub fn interaction_source(mut self, source: crate::ui::interaction::MutableInteractionSource) -> Self {
+        self.interaction_source = Some(source);
+        self
     }
 
     pub fn text(mut self, content: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
@@ -554,9 +576,14 @@ impl Tab {
         let has_text = self.text.is_some();
         let has_icon = self.icon.is_some();
         let has_content = self.content.is_some();
+        let leading = self.leading;
 
-        // 点击交互
-        let interaction = ctx.remember(|| crate::ui::interaction::MutableInteractionSource::new()).get();
+        // 点击交互：优先用外部注入的交互源（须由调用方 remember 创建——
+        // 与 Compose interactionSource 参数语义一致），缺省内部创建
+        let interaction = match self.interaction_source.clone() {
+            Some(src) => src,
+            None => ctx.remember(|| crate::ui::interaction::MutableInteractionSource::new()).get(),
+        };
         let callback = self.on_click.clone();
 
         let mut item_modifier = Modifier::new();
@@ -611,7 +638,7 @@ impl Tab {
         });
 
         // 默认 text/icon 版：TabLayoutPolicy
-        let policy = TabLayoutPolicy { has_text, has_icon, color_anim: color_anim.clone() };
+        let policy = TabLayoutPolicy { has_text, has_icon, leading, color_anim: color_anim.clone() };
 
         match ctx.start_restartable_group(key, item_modifier, policy) {
             GroupStatus::Skip => {}
@@ -627,13 +654,16 @@ impl Tab {
                     }
                     ctx.end_restartable_group();
                 }
-                // 2) text (if present) — 水平填充 16dp；颜色由 tint 统一驱动
+                // 2) text (if present) — 非 leading 水平填充 16dp；leading 模式
+                // 不加（间距由 LEADING_ICON_TEXT_SPACING 精确控制——加了会把
+                // icon-text 间隙撑成 8+16）。颜色由 tint 统一驱动
                 if let Some(text) = self.text {
                     let text_key = ctx.next_key();
                     let style = TabRowDefaults::label_text_style();
-                    let text_modifier = Modifier::new()
-                        .padding_horizontal(HORIZONTAL_TEXT_PADDING)
-                        .then(text_tint_modifier);
+                    let mut text_modifier = Modifier::new().then(text_tint_modifier);
+                    if !leading {
+                        text_modifier = text_modifier.padding_horizontal(HORIZONTAL_TEXT_PADDING);
+                    }
                     match ctx.start_restartable_group(text_key, text_modifier, crate::layout::BoxLayout::new().alignment(crate::layout::Alignment::Center)) {
                         GroupStatus::Skip => {}
                         GroupStatus::Enter => {
@@ -665,6 +695,8 @@ impl Tab {
 struct TabLayoutPolicy {
     has_text: bool,
     has_icon: bool,
+    /// LeadingIconTab 模式：icon 左 + text 右
+    leading: bool,
     /// 颜色动画 State——measure 开头 get() 注册 layout_dep，动画帧重测
     /// Tab 节点 → 触发重绘 → graphics_layer color_filter peek 新色
     color_anim: State<crate::modifier::Color>,
@@ -687,6 +719,7 @@ impl MeasurePolicy for TabLayoutPolicy {
         let content_children = &children[..n - 1];
         let has_icon = self.has_icon;
         let has_text = self.has_text;
+        let leading = self.leading;
 
         // ⚠ 用 loose 约束测量内容：TabRow 传 tight（等分宽 × 行高），若直接
         // 用 tight 测 slot，icon/text slot 各自被撑到行高（如 72），content_height
@@ -700,10 +733,26 @@ impl MeasurePolicy for TabLayoutPolicy {
         }
 
         // 自然尺寸
-        let tab_width_natural = content_sizes.iter().map(|s| s.width).fold(0.0f32, f32::max);
-        let spec_height = if has_icon && has_text { LARGE_TAB_HEIGHT } else { SMALL_TAB_HEIGHT };
-        let content_height: f32 = content_sizes.iter().map(|s| s.height).sum();
-        let tab_height_natural = spec_height.max(content_height + ICON_TEXT_SPACING);
+        let tab_width_natural = if leading && content_sizes.len() >= 2 {
+            // LeadingIconTab：icon + 8dp + text 水平排列——自然宽 = 三者之和
+            content_sizes.iter().map(|s| s.width).sum::<f32>() + LEADING_ICON_TEXT_SPACING
+        } else {
+            content_sizes.iter().map(|s| s.width).fold(0.0f32, f32::max)
+        };
+        let spec_height = if leading {
+            SMALL_TAB_HEIGHT
+        } else if has_icon && has_text { LARGE_TAB_HEIGHT } else { SMALL_TAB_HEIGHT };
+        let content_height: f32 = if leading {
+            // leading 垂直取 max（水平排列不叠加高度）
+            content_sizes.iter().map(|s| s.height).fold(0.0f32, f32::max)
+        } else {
+            content_sizes.iter().map(|s| s.height).sum()
+        };
+        let tab_height_natural = if leading {
+            spec_height.max(content_height)
+        } else {
+            spec_height.max(content_height + ICON_TEXT_SPACING)
+        };
 
         // 钳制到 incoming 约束：TabRow 传 tight（tabWidth × rowHeight）——
         // tab 必须填满分配的 slot（ripple 覆盖整个 tab 区域，对齐 Compose
@@ -714,7 +763,23 @@ impl MeasurePolicy for TabLayoutPolicy {
         // 布局
         let mut placements = Vec::with_capacity(n);
 
-        if has_icon && has_text && content_sizes.len() >= 2 {
+        if leading && has_icon && has_text && content_sizes.len() >= 2 {
+            // LeadingIconTab：icon 左 + 8dp + text 右，整组水平居中、垂直居中
+            let icon_size = content_sizes[0];
+            let text_size = content_sizes[1];
+            let total_w = icon_size.width + LEADING_ICON_TEXT_SPACING + text_size.width;
+            let start_x = (tab_width - total_w) / 2.0;
+            let icon_y = (tab_height - icon_size.height) / 2.0;
+            let text_y = (tab_height - text_size.height) / 2.0;
+            placements.push(Placement {
+                size: icon_size,
+                position: Point::new(start_x, icon_y),
+            });
+            placements.push(Placement {
+                size: text_size,
+                position: Point::new(start_x + icon_size.width + LEADING_ICON_TEXT_SPACING, text_y),
+            });
+        } else if has_icon && has_text && content_sizes.len() >= 2 {
             // text+icon：icon 上、text 下，垂直居中排列，均水平居中
             let icon_size = content_sizes[0];
             let text_size = content_sizes[1];
@@ -1291,6 +1356,82 @@ mod tests {
         let nodes = c.arena_nodes();
         // Tab should have at least text + ripple
         assert!(nodes[root].children.len() >= 2, "Tab should have text + ripple children");
+    }
+
+    #[test]
+    fn tab_leading_icon_lays_out_horizontally() {
+        // LeadingIconTab：icon 左 + 8dp + text 右（水平排列），整体水平居中
+        use crate::ui::icon::{Icon, IconSource};
+        let mut c = Composer::new();
+        let colors = crate::ui::theme::ThemeColors::default_light();
+        c.compose(|ctx| {
+            WiniaTheme::with_theme_and_direction(colors, LayoutDirection::Ltr, ctx, |ctx| {
+                Tab::new(true, || {})
+                    .leading_icon()
+                    .modifier(Modifier::new().size(180.0, 48.0))
+                    .icon(|ctx| {
+                        Icon::new(IconSource::svg(
+                            r#"<svg xmlns="http://www.w3.org/2000/svg" height="24" viewBox="0 -960 960 960" width="24"><path d="m354-287 126-76 126 77-33-144 111-96-146-13-58-136-58 135-146 13 111 97-33 143ZM233-120l65-281L80-590l288-25 112-265 112 265 288 25-218 189 65 281-247-149-247 149Zm247-350Z"/></svg>"#,
+                        ))
+                        .size(24.0)
+                        .build(ctx);
+                    })
+                    .text(|ctx| Text::new("Favorites").build(ctx))
+                    .build(ctx);
+            });
+        });
+        c.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let root = c.layout_root_idx().unwrap();
+        let nodes = c.arena_nodes();
+        let children = &nodes[root].children;
+        // children = [icon, text, ripple]
+        assert_eq!(children.len(), 3, "leading tab = icon + text + ripple");
+        let icon = &nodes[children[0]];
+        let text = &nodes[children[1]];
+        let ripple = &nodes[children[2]];
+        // icon 在 text 左侧（非 leading 是 icon 上 text 下）
+        assert!(icon.position.x < text.position.x, "icon.x={} 应 < text.x={}", icon.position.x, text.position.x);
+        // 垂直方向对齐：各自在 slot 内垂直居中（icon 24px → y=12，text 20px →
+        // y=14——差异来自尺寸不同）。关键判据：text 顶不落于 icon 底之下
+        // （非 leading 竖排时 text.y 远大于 icon.y + icon.h）
+        assert!(text.position.y < icon.position.y + icon.measured_size.height + 2.0,
+            "leading icon/text 应同一水平带：icon.y={} h={} text.y={}",
+            icon.position.y, icon.measured_size.height, text.position.y);
+        // 间距 = LEADING_ICON_TEXT_SPACING（icon 右缘到 text 左缘）
+        let gap = text.position.x - (icon.position.x + icon.measured_size.width);
+        assert!((gap - LEADING_ICON_TEXT_SPACING).abs() < 1.0, "icon-text 间距应=8，实际 {gap}");
+        // 整组水平居中 + ripple 覆盖全 tab
+        assert!(icon.position.x > 0.0, "leading 内容应居中（icon.x={}）", icon.position.x);
+        assert_eq!(ripple.measured_size.width, nodes[root].measured_size.width);
+    }
+
+    #[test]
+    fn tab_accepts_injected_interaction_source() {
+        // interaction_source 注入：外部 remember 创建的源应被使用
+        //（不 panic，渲染结构同内部创建路径）
+        use crate::ui::interaction::MutableInteractionSource;
+        let mut c = Composer::new();
+        let colors = crate::ui::theme::ThemeColors::default_light();
+        let src: MutableInteractionSource = {
+            let mut out = None;
+            c.compose(|ctx| {
+                let s = ctx.remember(|| MutableInteractionSource::new()).get();
+                out = Some(s);
+                WiniaTheme::with_theme_and_direction(colors, LayoutDirection::Ltr, ctx, |ctx| {
+                    let s = out.clone().unwrap();
+                    Tab::new(true, || {})
+                        .interaction_source(s)
+                        .text(|ctx| Text::new("Tab").build(ctx))
+                        .build(ctx);
+                });
+            });
+            out.unwrap()
+        };
+        c.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let root = c.layout_root_idx().unwrap();
+        let nodes = c.arena_nodes();
+        assert!(nodes[root].children.len() >= 2, "injected-source tab should build");
+        let _ = src;
     }
 
     #[test]
