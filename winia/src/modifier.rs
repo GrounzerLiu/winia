@@ -366,6 +366,55 @@ impl Default for FilterQuality {
 
 // ── ModifierElement ──
 
+// ═══════════════════════════════════════════════════════════
+// Modifier Node（实验性开放扩展点，分支 exp/modifier-node）
+// ───────────────────────────────────────────────────────────
+// 目标：把 Modifier 从"封闭枚举"变成"开放节点"。枚举每加一种行为
+// 就要改 measure/render/hit/app 四处 match；node 化之后，第三方可以
+// 不改核心实现自定义行为。
+//
+// 设计（双轨，零破坏）：
+// - `Modifier` 内部新增 `nodes: Vec<ModifierNode>`，与 `elements` 并存。
+//   旧 builder（background/clickable/…）照旧 push 枚举；新扩展走 node。
+// - 每种行为是一个 `Arc<dyn XxxNode>`，核心管线（measure/render/input/
+//   debug）在走完枚举 match 后，再走一遍 node 链（同语义合并）。
+// - Node 要求 Debug + Send + Sync（与现有元素约束一致）；Click 参数相等
+//   走 `node_key()`（默认按 TypeId + 可选 id，保证 param_eq 可判定）。
+// - 试点：BackgroundNode（绘制）+ ClickableNode（输入）——验证"枚举
+//   不动、node 链并行生效"后，再逐个迁移。
+// ═══════════════════════════════════════════════════════════
+
+/// 绘制节点：渲染期以节点 rect 调用（对标 Compose DrawModifierNode）。
+/// 返回 `Option<TextParams>` 的旧 `render_modifier_element` 语义由核心保留；
+/// node 只做"画点什么"（背景/装饰），不参与文本提取。
+pub trait DrawNode: std::fmt::Debug + Send + Sync {
+    fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect);
+    /// Skip 判定用 key（默认 = TypeId 名；含参节点应覆盖，纳入参数指纹）。
+    fn node_key(&self) -> String {
+        std::any::type_name::<Self>().to_string()
+    }
+}
+
+/// 点击节点：输入期沿命中路径查询（对标 Compose 点击语义）。
+/// 与 `Clickable` 枚举同优先级——核心 `on_click()` 先查枚举、再查 node。
+pub trait ClickNode: std::fmt::Debug + Send + Sync {
+    fn on_click(&self);
+    /// 绑定的交互源（press 波纹用；无则 None）。
+    fn interaction(&self) -> Option<crate::ui::interaction::MutableInteractionSource> {
+        None
+    }
+    fn node_key(&self) -> String {
+        std::any::type_name::<Self>().to_string()
+    }
+}
+
+/// 开放节点容器（与 `ModifierElement` 并存的第二轨道）。
+#[derive(Debug, Clone)]
+pub enum ModifierNode {
+    Draw(std::sync::Arc<dyn DrawNode>),
+    Click(std::sync::Arc<dyn ClickNode>),
+}
+
 /// Modifier 链中的单个元素。
 ///
 /// 按类别分为 Layout / Draw / Input 三类。
@@ -568,6 +617,7 @@ pub(crate) enum ModifierElement {
 #[derive(Debug, Clone)]
 pub struct Modifier {
     elements: Vec<ModifierElement>,
+    nodes: Vec<ModifierNode>,
 }
 
 impl Modifier {
@@ -575,6 +625,7 @@ impl Modifier {
     pub fn new() -> Self {
         Modifier {
             elements: Vec::new(),
+            nodes: Vec::new(),
         }
     }
 
@@ -597,6 +648,7 @@ impl Modifier {
     /// ```
     pub fn then(mut self, other: Modifier) -> Self {
         self.elements.extend(other.elements);
+        self.nodes.extend(other.nodes);
         self
     }
 
@@ -604,6 +656,40 @@ impl Modifier {
     pub(crate) fn elements(&self) -> &[ModifierElement] {
         &self.elements
     }
+
+    // ── Node 轨道（实验性开放扩展点） ──
+
+    /// 追加一个绘制节点（与枚举元素同序参与渲染）。
+    pub fn draw_node(self, node: impl DrawNode + 'static) -> Self {
+        self.push_node(ModifierNode::Draw(std::sync::Arc::new(node)))
+    }
+
+    /// 追加一个点击节点（与 Clickable 枚举同优先级参与点击分发）。
+    pub fn click_node(self, node: impl ClickNode + 'static) -> Self {
+        self.push_node(ModifierNode::Click(std::sync::Arc::new(node)))
+    }
+
+    pub(crate) fn push_node(mut self, node: ModifierNode) -> Self {
+        self.nodes.push(node);
+        self
+    }
+
+    /// 返回所有开放节点的只读引用
+    pub(crate) fn modifier_nodes(&self) -> &[ModifierNode] {
+        &self.nodes
+    }
+
+    /// 开放绘制节点迭代（渲染管线用——与枚举链同序无关，统一在背景层绘制）。
+    pub(crate) fn draw_nodes(&self) -> impl Iterator<Item = &std::sync::Arc<dyn DrawNode>> {
+        self.nodes.iter().filter_map(|n| match n {
+            ModifierNode::Draw(d) => Some(d),
+            _ => None,
+        })
+    }
+
+    // ── 试点节点（exp/modifier-node）：Background/Clickable 的 node 等价物 ──
+    // 用法示例见本文件末尾测试 `node_track_*`。第三方自定义行为照此形状实现
+    // DrawNode/ClickNode trait 即可，无需改核心枚举与管线 match。
 }
 
 impl Default for Modifier {
@@ -1731,7 +1817,8 @@ impl Modifier {
         None
     }
 
-    /// 点击回调（如果有 Clickable modifier）
+    /// 点击回调（如果有 Clickable modifier；无枚举时回退到 ClickNode 首个）。
+    /// 优先级：枚举 Clickable > node Click（旧行为优先，保证双轨迁移期稳定）。
     pub fn on_click(&self) -> Option<&Arc<dyn Fn() + Send + Sync>> {
         for el in &self.elements {
             if let ModifierElement::Clickable { on_click, .. } = el {
@@ -1739,6 +1826,21 @@ impl Modifier {
             }
         }
         None
+    }
+
+    /// 开放节点点击回调（含回调体——node 是 trait object，返回 Arc 供分发调用）。
+    pub(crate) fn node_click(&self) -> Option<std::sync::Arc<dyn ClickNode>> {
+        for n in &self.nodes {
+            if let ModifierNode::Click(cb) = n {
+                return Some(cb.clone());
+            }
+        }
+        None
+    }
+
+    /// 开放节点点击绑定的交互源（press 波纹用）。
+    pub fn node_click_interaction(&self) -> Option<MutableInteractionSource> {
+        self.node_click().and_then(|n| n.interaction())
     }
 
     /// Clickable 绑定的交互源（无则 None）
@@ -2654,6 +2756,18 @@ impl Modifier {
         if self.elements.len() != other.elements.len() {
             return false;
         }
+        // Node 轨道：按 node_key 序列比较（参数变化 → key 变 → Enter）。
+        if self.nodes.len() != other.nodes.len() {
+            return false;
+        }
+        if self
+            .nodes
+            .iter()
+            .zip(&other.nodes)
+            .any(|(a, b)| node_key_of(a) != node_key_of(b))
+        {
+            return false;
+        }
         self.elements
             .iter()
             .zip(&other.elements)
@@ -2785,6 +2899,14 @@ fn size_value_eq(a: &SizeValue, b: &SizeValue) -> bool {
         // 动态尺寸（动画 State/闭包）视为相同——布局期 layout_dep 已覆盖
         (SizeValue::Dynamic(_), SizeValue::Dynamic(_)) => true,
         _ => false,
+    }
+}
+
+/// 开放节点的 Skip 指纹（含类型 + 参数）。
+pub(crate) fn node_key_of(n: &ModifierNode) -> String {
+    match n {
+        ModifierNode::Draw(d) => format!("draw:{}", d.node_key()),
+        ModifierNode::Click(c) => format!("click:{}", c.node_key()),
     }
 }
 
@@ -2992,5 +3114,143 @@ mod param_eq_tests {
         let reps = reported.lock().unwrap();
         assert_eq!(reps.len(), 2, "宽度变化应再次回调");
         assert_eq!(reps[1].0, 300.0, "第二次上报应反映新宽度");
+    }
+}
+
+// ── Node 双轨试点测试（exp/modifier-node） ──
+
+#[cfg(test)]
+mod node_track_tests {
+    use super::*;
+    use crate::core::composer::Composer;
+
+    /// 试点绘制节点：Background(color, shape) 的 node 等价物（第三方可照抄）。
+    #[derive(Debug)]
+    struct TestBgNode {
+        color: Color,
+        shape: Shape,
+    }
+
+    impl DrawNode for TestBgNode {
+        fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
+            crate::render::draw_background_for_node(canvas, rect, &self.color, &self.shape);
+        }
+        fn node_key(&self) -> String {
+            format!("testbg:{:?}:{:?}", self.color, self.shape)
+        }
+    }
+
+    /// 试点点击节点：Clickable 的 node 等价物。
+    #[derive(Debug)]
+    struct TestClickNode {
+        count: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    }
+
+    impl ClickNode for TestClickNode {
+        fn on_click(&self) {
+            self.count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        fn node_key(&self) -> String {
+            "testclick".to_string()
+        }
+    }
+
+    #[test]
+    fn node_track_draw_renders_background_pixels() {
+        use skia_safe::surfaces;
+        let theme_color = Color::from_argb(255, 200, 30, 30);
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            let key = ctx.next_key();
+            ctx.start_leaf(
+                key,
+                Modifier::new().size(60.0, 40.0).draw_node(TestBgNode {
+                    color: theme_color,
+                    shape: Shape::Rectangle,
+                }),
+            );
+            ctx.end_node();
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let mut surface = surfaces::raster_n32_premul((300, 300)).unwrap();
+        let canvas = surface.canvas();
+        canvas.clear(skia_safe::Color::WHITE);
+        let root = composer.layout_root_idx().expect("root");
+        let nodes = composer.arena_nodes();
+        crate::render::render(nodes, root, canvas);
+        // 中心像素应为节点背景色（node 链绘制生效）
+        let pm = surface.peek_pixels().expect("pixmap");
+        let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+        let w = pm.width() as usize;
+        let p = px[20 * w + 30]; // BGRA 内存序
+        assert!(
+            (p[2] as i16 - 200).abs() <= 6
+                && (p[1] as i16 - 30).abs() <= 6
+                && (p[0] as i16 - 30).abs() <= 6,
+            "node 绘制背景应生效，实际 BGRA={:?}",
+            p
+        );
+    }
+
+    #[test]
+    fn node_track_click_fires_without_enum() {
+        let count = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            let key = ctx.next_key();
+            ctx.start_leaf(
+                key,
+                Modifier::new()
+                    .size(60.0, 40.0)
+                    .click_node(TestClickNode { count: count.clone() }),
+            );
+            ctx.end_node();
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let root = composer.layout_root_idx().expect("root");
+        let nodes = composer.arena_nodes();
+        // 枚举 on_click 应为 None（试点未 push 枚举），node_click 应命中
+        assert!(nodes[root].modifier.on_click().is_none());
+        let cb = nodes[root]
+            .modifier
+            .node_click()
+            .expect("node_click 应命中");
+        cb.on_click();
+        cb.on_click();
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn node_track_param_eq_detects_key_change() {
+        let a = Modifier::new().draw_node(TestBgNode {
+            color: Color::RED,
+            shape: Shape::Rectangle,
+        });
+        let b = Modifier::new().draw_node(TestBgNode {
+            color: Color::RED,
+            shape: Shape::Rectangle,
+        });
+        let c = Modifier::new().draw_node(TestBgNode {
+            color: Color::BLUE,
+            shape: Shape::Rectangle,
+        });
+        assert!(a.param_eq(&b), "同参 node 应相等（Skip）");
+        assert!(!a.param_eq(&c), "颜色变化 node_key 应不等（Enter）");
+        // 枚举 vs node 数量不等 → 不等
+        let d = Modifier::new().background(Color::RED, Shape::Rectangle);
+        assert!(!a.param_eq(&d), "node 轨道与枚举轨道不等长应不等");
+    }
+
+    #[test]
+    fn node_track_then_merges_both_tracks() {
+        let m = Modifier::new()
+            .size(10.0, 10.0)
+            .draw_node(TestBgNode { color: Color::RED, shape: Shape::Rectangle })
+            .then(Modifier::new().click_node(TestClickNode {
+                count: Default::default(),
+            }));
+        assert_eq!(m.modifier_nodes().len(), 2, "then 应合并 node 轨道");
+        assert_eq!(m.elements().len(), 1, "枚举轨道不受影响");
     }
 }

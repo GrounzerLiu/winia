@@ -719,6 +719,11 @@ fn render_pass1(
     // 同节点链序中最后绘制的背景（颜色+形状）——边框色与形状都等于它时
     // 跳过描边（合并为纯填充），避免半透明同色双重混合
     let mut last_background: Option<(crate::modifier::Color, crate::modifier::Shape)> = None;
+    // 开放绘制节点（实验性双轨 exp/modifier-node）：枚举链走完后，再走 node 链。
+    // 位置 = 背景/边框之后、文本/图标之前（与 Background 同层语义——装饰性绘制）。
+    for draw_node in node.modifier.draw_nodes() {
+        draw_node.draw(canvas, rect);
+    }
     for el in node.modifier.elements() {
         match el {
             ModifierElement::Blur { radius } => {
@@ -1350,6 +1355,12 @@ impl From<&crate::modifier::Color> for Color4f {
             c.a as f32 / 255.0,
         )
     }
+}
+
+/// 开放绘制节点用的背景绘制入口（exp/modifier-node 试点：第三方 DrawNode
+/// 无需复刻背景绘制逻辑，直接调此函数；与枚举 Background 同实现）。
+pub fn draw_background_for_node(canvas: &Canvas, rect: Rect, color: &crate::modifier::Color, shape: &crate::modifier::Shape) {
+    draw_background(canvas, rect, color, shape);
 }
 
 fn draw_background(canvas: &Canvas, rect: Rect, color: &crate::modifier::Color, shape: &crate::modifier::Shape) {

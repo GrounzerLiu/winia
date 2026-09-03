@@ -423,7 +423,7 @@ fn build_node_json(nodes: &[LayoutNode], idx: usize, out: &mut String, depth: us
 }
 
 fn describe_modifier(modifier: &crate::modifier::Modifier) -> String {
-    modifier.elements().iter().filter_map(|el| match el {
+    let mut parts: Vec<String> = modifier.elements().iter().filter_map(|el| match el {
         ModifierElement::Size { width, height } => Some(format!("size({:?},{:?})", width, height)),
         ModifierElement::Background { color_fn, .. } => Some("bg(<dynamic>)".into()),
         ModifierElement::Clickable { .. } => Some("click".into()),
@@ -451,7 +451,12 @@ fn describe_modifier(modifier: &crate::modifier::Modifier) -> String {
             ))
         }
         _ => None,
-    }).collect::<Vec<_>>().join("|")
+    }).collect();
+    // 开放节点（exp/modifier-node）：node_key 进树，调试时可见第三方行为。
+    for n in modifier.modifier_nodes() {
+        parts.push(format!("node({})", crate::modifier::node_key_of(n)));
+    }
+    parts.join("|")
 }
 
 // ═══════════════════════════════════════════════════════════

@@ -1212,6 +1212,10 @@ impl AppState {
                                     on_click();
                                     handled = true;
                                     click_handled = true;
+                                } else if let Some(node_cb) = arena[i].modifier.node_click() {
+                                    node_cb.on_click();
+                                    handled = true;
+                                    click_handled = true;
                                 }
                             }
                             (fid, sk, path_len, click_handled)
@@ -2374,10 +2378,16 @@ fn exec_overlay_click(pw: &mut PerWindow) -> bool {
 
 /// 沿命中路径从内到外触发第一个 on_click——返回是否触发。
 /// 主树 click 与 overlay 点击共用（消除重复）
+/// 双轨（exp/modifier-node）：枚举 Clickable 优先（旧行为），无枚举时回退
+/// 开放 ClickNode（第三方自定义点击无需改核心）。
 fn fire_click_along_path(nodes: &[crate::layout::node::LayoutNode], path: &[usize]) -> bool {
     for &i in path.iter().rev() {
         if let Some(cb) = nodes[i].modifier.on_click() {
             (cb)();
+            return true;
+        }
+        if let Some(node_cb) = nodes[i].modifier.node_click() {
+            node_cb.on_click();
             return true;
         }
     }
@@ -2451,8 +2461,14 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
                 let path = hit_test(nodes, r, local.0, local.1);
                 if let Some(&idx) = path.iter().rev().find(|&&i| {
                     nodes[i].modifier.clickable_interaction().is_some()
+                        || nodes[i].modifier.node_click_interaction().is_some()
                 }) {
-                    if let Some(src) = nodes[idx].modifier.clickable_interaction() {
+                    if let Some(src) = nodes[idx]
+                        .modifier
+                        .clickable_interaction()
+                        .cloned()
+                        .or_else(|| nodes[idx].modifier.node_click_interaction())
+                    {
                         // 波纹中心 = 节点本地坐标（overlay 内无滚动/变换——直接换算）
                         let local_press = crate::layout::node::scene_to_node_local(nodes, &path, idx, local.0, local.1);
                         src.emit_press_at(local_press);
@@ -2497,11 +2513,17 @@ fn press_interaction_down(pw: &mut PerWindow, path: &[usize], scene_pos: (f32, f
         let nodes = pw.composer.arena_nodes();
         let Some(&idx) = path.iter().rev().find(|&&i| {
             nodes[i].modifier.clickable_interaction().is_some()
+                || nodes[i].modifier.node_click_interaction().is_some()
         }) else {
             return;
         };
-        let src = match nodes[idx].modifier.clickable_interaction() {
-            Some(s) => s.clone(),
+        let src = match nodes[idx]
+            .modifier
+            .clickable_interaction()
+            .cloned()
+            .or_else(|| nodes[idx].modifier.node_click_interaction())
+        {
+            Some(s) => s,
             None => return,
         };
         (nodes[idx].slot_key, idx, src)
@@ -2757,6 +2779,11 @@ fn dispatch_key_to_focus(pw: &PerWindow, ke: &crate::modifier::KbEvent) -> bool 
         if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, fid) {
             if let Some(on_click) = nodes[idx].modifier.on_click() {
                 on_click();
+                return true;
+            }
+            // 双轨：node 点击同样响应键盘激活
+            if let Some(node_cb) = nodes[idx].modifier.node_click() {
+                node_cb.on_click();
                 return true;
             }
         }
