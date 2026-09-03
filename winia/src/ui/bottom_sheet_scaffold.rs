@@ -29,6 +29,7 @@ pub struct BottomSheetScaffold {
     sheet_peek_height: Dp,
     sheet_shape_radius: f32,
     sheet_container_color: Option<Color>,
+    container_color: Option<Color>,
     sheet_swipe_enabled: bool,
     sheet_drag_handle: bool,
     sheet_max_width: Option<Dp>,
@@ -42,6 +43,7 @@ impl BottomSheetScaffold {
             sheet_peek_height: SCAFFOLD_SHEET_PEEK_HEIGHT,
             sheet_shape_radius: SCAFFOLD_SHEET_SHAPE_RADIUS,
             sheet_container_color: None,
+            container_color: None,
             sheet_swipe_enabled: true,
             sheet_drag_handle: true,
             sheet_max_width: Some(Dp(640.0)),
@@ -65,6 +67,12 @@ impl BottomSheetScaffold {
 
     pub fn sheet_container_color(mut self, c: Color) -> Self {
         self.sheet_container_color = Some(c);
+        self
+    }
+
+    /// 整体背景色（对齐 Compose `BottomSheetScaffold(containerColor)`——覆盖主内容底）。
+    pub fn container_color(mut self, c: Color) -> Self {
+        self.container_color = Some(c);
         self
     }
 
@@ -108,10 +116,16 @@ impl BottomSheetScaffold {
         let swipe = self.sheet_swipe_enabled;
         let drag_handle = self.sheet_drag_handle;
         let _sheet_max_width = self.sheet_max_width; // 保留 API，对齐 Compose 640.dp，手机 480 铺满
+        let container_color = self.container_color;
 
         // 外层 Stack：主内容底层，片上层
+        let mut root_mod = Modifier::new().fill_max_size();
+        if let Some(cc) = container_color {
+            // 整体背景（对齐 Compose BottomSheetScaffold containerColor）
+            root_mod = root_mod.background(cc, Shape::Rectangle);
+        }
         crate::ui::layout_components::Stack::new()
-            .modifier(Modifier::new().fill_max_size())
+            .modifier(root_mod)
             .build(ctx, |ctx| {
                 // 主内容（占满，片在上层覆盖）——底部留出 sheet peek 高度，
                 // 对齐 Compose BottomSheetScaffold 的 contentWindowPadding（sheet 折叠时内容不被遮挡）
