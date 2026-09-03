@@ -550,6 +550,8 @@ impl Tab {
 
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
+        let direction = self.modifier.get_layout_direction().unwrap_or(WiniaTheme::direction());
+        ctx.changed(&direction);
         let selected = self.selected;
         let enabled = self.enabled;
 
@@ -638,7 +640,7 @@ impl Tab {
         });
 
         // 默认 text/icon 版：TabLayoutPolicy
-        let policy = TabLayoutPolicy { has_text, has_icon, leading, color_anim: color_anim.clone() };
+        let policy = TabLayoutPolicy { has_text, has_icon, leading, direction, color_anim: color_anim.clone() };
 
         match ctx.start_restartable_group(key, item_modifier, policy) {
             GroupStatus::Skip => {}
@@ -697,6 +699,8 @@ struct TabLayoutPolicy {
     has_icon: bool,
     /// LeadingIconTab 模式：icon 左 + text 右
     leading: bool,
+    /// 布局方向（RTL 时镜像 leading 排列）
+    direction: LayoutDirection,
     /// 颜色动画 State——measure 开头 get() 注册 layout_dep，动画帧重测
     /// Tab 节点 → 触发重绘 → graphics_layer color_filter peek 新色
     color_anim: State<crate::modifier::Color>,
@@ -765,19 +769,32 @@ impl MeasurePolicy for TabLayoutPolicy {
 
         if leading && has_icon && has_text && content_sizes.len() >= 2 {
             // LeadingIconTab：icon 左 + 8dp + text 右，整组水平居中、垂直居中
+            // ⚠ RTL 镜像：icon 移右侧、text 移左侧（Compose Row 在 RTL 下
+            // 自动镜像子节点顺序——物理排列反转）
             let icon_size = content_sizes[0];
             let text_size = content_sizes[1];
             let total_w = icon_size.width + LEADING_ICON_TEXT_SPACING + text_size.width;
             let start_x = (tab_width - total_w) / 2.0;
             let icon_y = (tab_height - icon_size.height) / 2.0;
             let text_y = (tab_height - text_size.height) / 2.0;
+            let is_rtl = self.direction == LayoutDirection::Rtl;
+            let icon_x = if is_rtl {
+                start_x + text_size.width + LEADING_ICON_TEXT_SPACING
+            } else {
+                start_x
+            };
+            let text_x = if is_rtl {
+                start_x
+            } else {
+                start_x + icon_size.width + LEADING_ICON_TEXT_SPACING
+            };
             placements.push(Placement {
                 size: icon_size,
-                position: Point::new(start_x, icon_y),
+                position: Point::new(icon_x, icon_y),
             });
             placements.push(Placement {
                 size: text_size,
-                position: Point::new(start_x + icon_size.width + LEADING_ICON_TEXT_SPACING, text_y),
+                position: Point::new(text_x, text_y),
             });
         } else if has_icon && has_text && content_sizes.len() >= 2 {
             // text+icon：icon 上、text 下，垂直居中排列，均水平居中
@@ -1403,6 +1420,46 @@ mod tests {
         // 整组水平居中 + ripple 覆盖全 tab
         assert!(icon.position.x > 0.0, "leading 内容应居中（icon.x={}）", icon.position.x);
         assert_eq!(ripple.measured_size.width, nodes[root].measured_size.width);
+    }
+
+    #[test]
+    fn tab_leading_icon_rtl_mirrors_icon_to_right() {
+        // RTL 回归：LeadingIconTab 在 RTL 下 icon 应移右侧、text 移左侧
+        //（用户实测：Tab Three 切 RTL 后不镜像——Tab 内部布局此前不感知方向）
+        use crate::ui::icon::{Icon, IconSource};
+        let mut c = Composer::new();
+        let colors = crate::ui::theme::ThemeColors::default_light();
+        c.compose(|ctx| {
+            WiniaTheme::with_theme_and_direction(colors, LayoutDirection::Rtl, ctx, |ctx| {
+                Tab::new(true, || {})
+                    .leading_icon()
+                    .modifier(Modifier::new().size(180.0, 48.0))
+                    .icon(|ctx| {
+                        Icon::new(IconSource::svg(
+                            r#"<svg xmlns="http://www.w3.org/2000/svg" height="24" viewBox="0 -960 960 960" width="24"><path d="m354-287 126-76 126 77-33-144 111-96-146-13-58-136-58 135-146 13 111 97-33 143Z"/></svg>"#,
+                        ))
+                        .size(24.0)
+                        .build(ctx);
+                    })
+                    .text(|ctx| Text::new("Favorites").build(ctx))
+                    .build(ctx);
+            });
+        });
+        c.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let root = c.layout_root_idx().unwrap();
+        let nodes = c.arena_nodes();
+        let children = &nodes[root].children;
+        let icon = &nodes[children[0]];
+        let text = &nodes[children[1]];
+        // RTL：icon 在 text 右侧（LTR 是 icon 在左）
+        assert!(icon.position.x > text.position.x,
+            "RTL leading icon.x={} 应 > text.x={}（icon 移右）",
+            icon.position.x, text.position.x);
+        // 间距保持 8dp（text 右缘到 icon 左缘）
+        let gap = icon.position.x - (text.position.x + text.measured_size.width);
+        assert!((gap - LEADING_ICON_TEXT_SPACING).abs() < 1.0, "RTL icon-text 间距应=8，实际 {gap}");
+        // 同一水平带
+        assert!(text.position.y < icon.position.y + icon.measured_size.height + 2.0);
     }
 
     #[test]
