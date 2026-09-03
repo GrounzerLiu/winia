@@ -115,7 +115,12 @@ impl BottomSheetScaffold {
         let container_color = self.sheet_container_color;
         let swipe = self.sheet_swipe_enabled;
         let drag_handle = self.sheet_drag_handle;
-        let _sheet_max_width = self.sheet_max_width; // 保留 API，对齐 Compose 640.dp，手机 480 铺满
+        // sheet_max_width：对齐 Compose 640.dp 居中（与 Modal 同语义——手机 480 铺满、
+        // 平板按 max 宽居中）。Dp(f32::INFINITY) 表 Unspecified 铺满。
+        let window_w = crate::ui::window_size().0;
+        let max_w_px = self.sheet_max_width.map(|dp| dp.to_px(crate::unit::current_density()));
+        let sheet_w = max_w_px.map(|w| w.min(window_w)).unwrap_or(window_w);
+        let sheet_pad_x = (window_w - sheet_w) / 2.0;
         let container_color = self.container_color;
 
         // 外层 Stack：主内容底层，片上层
@@ -163,7 +168,8 @@ impl BottomSheetScaffold {
                 let cur_shape = Shape::TopRoundedRect { radius: cur_radius };
 
                 let mut sheet_mod = Modifier::new()
-                    .fill_max_width()
+                    .width(sheet_w)
+                    .offset_x(sheet_pad_x)
                     .offset_y(st_for_offset.offset_state())
                     .shadow(
                         1.0,
