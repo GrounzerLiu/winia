@@ -584,6 +584,11 @@ fn hit_test_recursive(
 ///
 /// ⚠ `node_abs_position`（app.rs）与 `hit_test` 也走同一坐标空间——修 scroll
 /// 时须同步（多行 TextField 点击定位依赖一致的"滚动画布坐标"）。
+/// scroll 容器的滚动偏移量（场景坐标 → 内容坐标转换用）。
+///
+/// ⚠ RTL（scroll_reverse）：render 平移是 `off = content_w - viewport_w - offset`
+///（render.rs:746-748 镜像），hit_test 的坐标转换必须用同一个 off——否则
+/// 点击检测位置错位（用户实测：RTL 下滚动 tab 点击触发位置不对）。
 pub(crate) fn scroll_offset_for_node(node: &LayoutNode) -> (f32, f32) {
     let mut dx = 0.0;
     let mut dy = 0.0;
@@ -591,7 +596,15 @@ pub(crate) fn scroll_offset_for_node(node: &LayoutNode) -> (f32, f32) {
         dy += state.offset.get();
     }
     if let Some(state) = node.modifier.horizontal_scroll_state() {
-        dx += state.offset.get();
+        dx += if node.scroll_reverse {
+            // RTL：offset 语义被镜像——内容平移量 = 总宽 - 视口 - offset
+            //（content_w 首帧可能未回写为 0，此时退化为 -offset→max(0)=0，
+            // 与 render 首帧行为一致）
+            let content_w = if node.scroll_content_width > 0.0 { node.scroll_content_width } else { 0.0 };
+            (content_w - node.scroll_viewport_width - state.offset.get()).max(0.0)
+        } else {
+            state.offset.get()
+        };
     }
     (dx, dy)
 }
@@ -666,6 +679,36 @@ mod tests {
 
         let path = hit_test(&nodes, 0, 150.0, 50.0);
         assert_eq!(path.len(), 0);
+    }
+
+    #[test]
+    fn test_scroll_offset_rtl_reverse_mirrors() {
+        // RTL（scroll_reverse）回归：hit_test 坐标转换必须用 render 的镜像
+        // 偏移量 off = content_w - viewport_w - offset，而非裸 offset——
+        // 否则 RTL 滚动 tab 的点击位置错位（用户实测 bug）
+        let state = crate::modifier::ScrollState::new();
+        let m = Modifier::new().horizontal_scroll(state.clone());
+        let mut node = LayoutNode::leaf(m);
+        node.scroll_reverse = true;
+        node.scroll_content_width = 1000.0;
+        node.scroll_viewport_width = 360.0;
+
+        // offset=0 → 镜像偏移 = 1000-360-0 = 640（render 显示内容末端）
+        state.offset.set(0.0);
+        let (dx, dy) = scroll_offset_for_node(&node);
+        assert!((dx - 640.0).abs() < 0.01, "RTL offset=0 应镜像为 640，实际 {dx}");
+        assert_eq!(dy, 0.0);
+
+        // offset=100 → 640-100 = 540
+        state.offset.set(100.0);
+        let (dx, _) = scroll_offset_for_node(&node);
+        assert!((dx - 540.0).abs() < 0.01, "RTL offset=100 应镜像为 540，实际 {dx}");
+
+        // LTR（非 reverse）对照：偏移 = 裸 offset
+        node.scroll_reverse = false;
+        state.offset.set(100.0);
+        let (dx, _) = scroll_offset_for_node(&node);
+        assert!((dx - 100.0).abs() < 0.01, "LTR 应裸 offset=100，实际 {dx}");
     }
 
     #[test]
