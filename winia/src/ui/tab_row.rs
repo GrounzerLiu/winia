@@ -14,9 +14,9 @@
 //! 偏差记录（与 Compose 对照）：
 //! - 无 TabBaselineLayout 基线精确数学（text+icon 垂直居中，无 firstBaseline/lastBaseline 修正）
 //! - Tab 颜色过渡用静态颜色（无 animateColor 插值；后续可加 graphics_layer 交叉淡化）
-//! - ⚠ Fixed TabRow 有 RTL 镜像（tab 布局镜像，indicator 偏移直接对齐 tab 物理 left）；
-//!   **ScrollableTabRow 暂仅 LTR**——tabs 恒从左 edge_padding 起排列，无镜像/反向滚动
-//!   （实现 RTL 需同时镜像 tab 排列、滚动方向与指示条偏移）
+//! - RTL：Fixed TabRow 与 ScrollableTabRow 均支持 RTL——tab 布局镜像（物理 left 对齐），
+//!   ScrollableTabRow 的滚动容器标记 scroll_reverse（render 平移镜像：offset 0 = 内容
+//!   末端），居中滚动 target 绕 available 镜像（offset_rtl = available - offset_ltr）
 //! - contentWidth = max(tab 自然宽 - 32dp, 24dp)（无 maxIntrinsicWidth 调用，用 1st pass 测量近似）
 //! - 动画 spec = spring(damping_ratio=0.6, stiffness=700)（对齐 M3 Expressive DefaultSpatial）
 //! - 指示条高固定 3dp（ActiveIndicatorHeight）
@@ -887,8 +887,9 @@ impl ScrollableTabRow {
 
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
-        // ⚠ ScrollableTabRow 暂仅 LTR（见模块头偏差记录）：direction 不参与布局，
-        // 无 RTL 镜像。若未来实现 RTL，需在此读取方向并传入 policy。
+        let direction = self.modifier.get_layout_direction().unwrap_or(WiniaTheme::direction());
+        ctx.changed(&direction);
+        let is_rtl = direction == LayoutDirection::Rtl;
 
         let scroll_state = self.scroll_state.clone()
             .unwrap_or_else(|| ctx.remember(|| crate::modifier::ScrollState::new()).get());
@@ -924,6 +925,7 @@ impl ScrollableTabRow {
             offset_state: offset_state.clone(),
             width_state: width_state.clone(),
             initialized: initialized.clone(),
+            direction,
             edge_padding: self.edge_padding,
             min_tab_width: self.min_tab_width,
             scroll_state: scroll_state.clone(),
@@ -935,10 +937,13 @@ impl ScrollableTabRow {
         };
 
         // 根 modifier：横向滚动容器 + 背景色（background 覆盖视口——滚动内容
-        // 在其上平移，对齐 Compose Surface 包 ScrollableTabRow 语义）
+        // 在其上平移，对齐 Compose Surface 包 ScrollableTabRow 语义）。
+        // ⚠ RTL：滚动容器标记 reverse（render 平移镜像——offset 0 显示内容
+        // 末端），tab 位置在 policy 内镜像（最右为第一个 tab）。
         let root_modifier = Modifier::new()
             .fill_max_width()
             .horizontal_scroll(scroll_state)
+            .horizontal_scroll_reverse(is_rtl)
             .background(container_color, Shape::Rectangle)
             .then(self.modifier);
 
@@ -978,6 +983,7 @@ struct ScrollableTabRowLayoutPolicy {
     offset_state: State<f32>,
     width_state: State<f32>,
     initialized: std::sync::Arc<AtomicBool>,
+    direction: LayoutDirection,
     edge_padding: f32,
     min_tab_width: f32,
     scroll_state: crate::modifier::ScrollState,
@@ -1026,20 +1032,35 @@ impl MeasurePolicy for ScrollableTabRowLayoutPolicy {
         }
 
         // 2nd pass：tight 高度（minHeight=maxHeight=layoutHeight）、自然宽 ≥ minTabWidth
-        let mut placements = Vec::with_capacity(n);
-        let mut positions = Vec::with_capacity(tab_count);
-        let mut left = self.edge_padding;
+        // 先测量所有 tab 收集宽度（RTL 需要总宽才能镜像放置）
+        let mut tab_measurements: Vec<(f32, Size, f32)> = Vec::with_capacity(tab_count);
         for i in 0..tab_count {
             let c = Constraints::new(self.min_tab_width, f32::MAX, layout_height, layout_height);
             let (size, _) = measure_node(nodes, policies, children[i], c);
             let width = size.width.max(self.min_tab_width);
             let content_width = (natural_widths[i].min(width) - HORIZONTAL_TEXT_PADDING * 2.0)
                 .max(MIN_INDICATOR_WIDTH);
+            tab_measurements.push((width, size, content_width));
+        }
+        let layout_width = 2.0 * self.edge_padding
+            + tab_measurements.iter().map(|(w, _, _)| w).sum::<f32>();
+
+        // 放置 tab：LTR 从左往右（edge_padding 起），RTL 从右往左（镜像）
+        let is_rtl = self.direction == LayoutDirection::Rtl;
+        let mut placements = Vec::with_capacity(n);
+        let mut positions = Vec::with_capacity(tab_count);
+        for i in 0..tab_count {
+            let (width, size, content_width) = tab_measurements[i];
+            let left = if is_rtl {
+                layout_width - self.edge_padding
+                    - tab_measurements[..=i].iter().map(|(w, _, _)| w).sum::<f32>()
+            } else {
+                self.edge_padding
+                    + tab_measurements[..i].iter().map(|(w, _, _)| w).sum::<f32>()
+            };
             positions.push(TabPosition::new(left, width, content_width));
             placements.push(Placement { size, position: Point::new(left, 0.0) });
-            left += width;
         }
-        let layout_width = left + self.edge_padding;
 
         // 分隔线（内容全宽）
         let (div_size, _) = measure_node(
@@ -1098,7 +1119,13 @@ impl MeasurePolicy for ScrollableTabRowLayoutPolicy {
                 let scroller_center = visible / 2.0;
                 let centered = pos.left - (scroller_center - pos.width / 2.0);
                 let available = (total_w - visible).max(0.0);
-                let target = centered.clamp(0.0, available);
+                // ⚠ RTL：容器标记 scroll_reverse——render 平移镜像（offset 0 = 内容末端），
+                // target 需绕 available 镜像：offset_rtl = available - offset_ltr
+                let target = if is_rtl {
+                    (available - centered).clamp(0.0, available)
+                } else {
+                    centered.clamp(0.0, available)
+                };
                 let spec = indicator_spring();
                 self.scroll_state.animate_scroll_to(target, max_value, spec);
             }
@@ -1421,12 +1448,20 @@ mod tests {
         selected: usize,
         count: usize,
     ) -> (Composer, crate::modifier::ScrollState) {
+        scrollable_tab_row_layout_dir(selected, count, LayoutDirection::Ltr)
+    }
+
+    fn scrollable_tab_row_layout_dir(
+        selected: usize,
+        count: usize,
+        direction: LayoutDirection,
+    ) -> (Composer, crate::modifier::ScrollState) {
         let mut c = Composer::new();
         let colors = crate::ui::theme::ThemeColors::default_light();
         let state = crate::modifier::ScrollState::new();
         let st = state.clone();
         c.compose(|ctx| {
-            WiniaTheme::with_theme_and_direction(colors, LayoutDirection::Ltr, ctx, |ctx| {
+            WiniaTheme::with_theme_and_direction(colors, direction, ctx, |ctx| {
                 let state_outer = st.clone();
                 let state_inner = st.clone();
                 ScrollableTabRow::new(selected, move |ctx| {
@@ -1582,5 +1617,120 @@ mod tests {
         assert!(moved, "初始选中 9 应触发居中滚动（第二帧起）");
         // 选中末尾 tab：内容总宽 > 视口 → offset 应滚到末尾附近（> 200）
         assert!(last > 200.0, "应滚到末尾附近（offset={last}）");
+    }
+
+    #[test]
+    fn scrollable_tab_row_rtl_mirrors_tab_positions() {
+        // RTL：tabs 从右往左排（tab0 在最右），滚动容器标记 scroll_reverse
+        let (c, _) = scrollable_tab_row_layout_dir(0, 3, LayoutDirection::Rtl);
+        let root = c.layout_root_idx().unwrap();
+        let nodes = c.arena_nodes();
+        // scroll_reverse 已由 node.rs 从 modifier 提取（render 平移镜像）
+        assert!(nodes[root].scroll_reverse, "RTL 滚动容器应标记 scroll_reverse");
+        let children = &nodes[root].children;
+        // children = [tab0, tab1, tab2, divider, indicator]
+        let tab0 = &nodes[children[0]];
+        let tab1 = &nodes[children[1]];
+        let tab2 = &nodes[children[2]];
+        // 内容总宽 = 2*52 + Σw；tab0 在最右（x 最大）
+        assert!(tab0.position.x > tab1.position.x, "tab0.x={} 应 > tab1.x={}（RTL 镜像）",
+            tab0.position.x, tab1.position.x);
+        assert!(tab1.position.x > tab2.position.x, "tab1.x={} 应 > tab2.x={}",
+            tab1.position.x, tab2.position.x);
+        // 右边缘 = 总宽 - edge_padding（tab0 右端对齐内容末端）
+        let total = tab0.position.x + tab0.measured_size.width;
+        assert!((total + SCROLLABLE_TAB_ROW_EDGE_START_PADDING - (c.arena_nodes()[children[3]].position.x + c.arena_nodes()[children[3]].measured_size.width)).abs() < 0.01,
+            "tab0 右端应贴内容末端（总宽={total}）");
+        // 左边缘 = edge_padding（tab2 左端对齐内容起点）
+        assert!((tab2.position.x - SCROLLABLE_TAB_ROW_EDGE_START_PADDING).abs() < 0.01,
+            "tab2.x={} 应 = edge_padding", tab2.position.x);
+    }
+
+    #[test]
+    fn scrollable_tab_row_rtl_indicator_centered_on_selected() {
+        // RTL：selected=1（中间 tab）→ 指示条居中于镜像后的 tab1 slot
+        let (c, _) = scrollable_tab_row_layout_dir(1, 4, LayoutDirection::Rtl);
+        let root = c.layout_root_idx().unwrap();
+        let nodes = c.arena_nodes();
+        let children = &nodes[root].children;
+        let ind = &nodes[children[5]]; // [tab0..3, divider, indicator]
+        let tab1 = &nodes[children[1]];
+        let expected = tab1.position.x + tab1.measured_size.width / 2.0;
+        let ind_center = ind.position.x + ind.measured_size.width / 2.0;
+        assert!(
+            (ind_center - expected).abs() < 1.0,
+            "RTL 指示条应居中于 tab1（中心 {} vs tab1 中心 {}）",
+            ind_center,
+            expected
+        );
+    }
+
+    #[test]
+    fn scrollable_tab_row_rtl_scrolls_selected_into_view() {
+        // RTL：选中变化 → 居中滚动（target 绕 available 镜像：
+        // offset_rtl = available - offset_ltr——首帧不滚、第二帧起动画推进）
+        use crate::core::state::State;
+        use std::time::{Duration, Instant};
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+
+        fn make_scene(
+            selected: State<usize>,
+            scroll_state: crate::modifier::ScrollState,
+            colors: crate::ui::theme::ThemeColors,
+        ) -> impl FnOnce(&mut ComposeCtx) {
+            move |ctx: &mut ComposeCtx| {
+                WiniaTheme::with_theme_and_direction(colors, LayoutDirection::Rtl, ctx, |ctx| {
+                    let sel = selected.clone();
+                    let st_outer = scroll_state.clone();
+                    let st_inner = scroll_state.clone();
+                    ScrollableTabRow::new(sel.get(), move |ctx| {
+                        let st3 = st_inner.clone();
+                        for i in 0..10 {
+                            let label = format!("Tab {}", i);
+                            let sel2 = selected.clone();
+                            let st4 = st3.clone();
+                            Tab::new(sel2.get() == i, move || { let _ = st4; })
+                                .text(move |ctx| Text::new(&label).build(ctx))
+                                .build(ctx);
+                        }
+                    })
+                    .scroll_state(st_outer)
+                    .build(ctx);
+                });
+            }
+        }
+
+        let selected = State::new(0usize);
+        let mut c = Composer::new();
+        let colors = crate::ui::theme::ThemeColors::default_light();
+        let scroll_state = crate::modifier::ScrollState::new();
+
+        c.compose(make_scene(selected.clone(), scroll_state.clone(), colors.clone()));
+        c.layout(Constraints::new(0.0, 360.0, 0.0, 640.0));
+        let off0 = scroll_state.offset.get();
+        assert_eq!(off0, 0.0, "首帧 offset 0");
+
+        // 切到最后一个 tab → RTL 镜像居中滚动（动画推进）
+        selected.set(9);
+        assert!(c.recompose(make_scene(selected.clone(), scroll_state.clone(), colors)));
+        c.layout(Constraints::new(0.0, 360.0, 0.0, 640.0));
+
+        let deadline = Instant::now() + Duration::from_millis(3000);
+        let mut last = scroll_state.offset.get();
+        let mut moved = false;
+        while Instant::now() < deadline {
+            crate::animation::update_animations();
+            c.layout(Constraints::new(0.0, 360.0, 0.0, 640.0));
+            let cur = scroll_state.offset.get();
+            if cur > last + 0.5 { moved = true; }
+            if (cur - last).abs() < 0.5 && moved { break; }
+            last = cur;
+            std::thread::sleep(Duration::from_millis(8));
+        }
+        assert!(moved, "RTL 选中变化应触发镜像居中滚动");
+        // 内容总宽 = 2*52 + ΣtabW（10 个 ≥90）→ 远超视口 360
+        // tab9 物理最左（x≈52）→ LTR centered = c - vw/2 < 0 → clamp 0；
+        // RTL target = available - centered ≈ available（滚到末尾附近）
+        assert!(last > 200.0, "RTL 应滚到末尾附近（offset={last}）");
     }
 }

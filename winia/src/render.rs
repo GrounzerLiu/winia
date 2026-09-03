@@ -741,7 +741,7 @@ fn render_pass1(
                 }
                 scroll_offset_v = Some(off);
             }
-            ModifierElement::HorizontalScroll { state } => {
+            ModifierElement::HorizontalScroll { state, .. } => {
                 let mut off = state.offset.get();
                 if node.scroll_reverse {
                     off = (node.scroll_content_width - node.scroll_viewport_width - off).max(0.0);
