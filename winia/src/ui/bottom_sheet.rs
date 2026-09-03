@@ -50,6 +50,8 @@ pub struct ModalBottomSheet {
     drag_handle: bool,
     /// 最大宽度（对标 `sheetMaxWidth = 640.dp`，`Dp::from(f32::INFINITY)` 表 `Unspecified` 铺满）
     sheet_max_width: Option<Dp>,
+    /// 是否跳过半展开锚点（对齐 Compose `sheetState: rememberModalBottomSheetState(skipPartiallyExpanded=...)`）
+    skip_partially_expanded: bool,
     /// 是否可见（true 时注册 overlay）
     visible: bool,
 }
@@ -64,6 +66,7 @@ impl ModalBottomSheet {
             container_color: None,
             drag_handle: true,
             sheet_max_width: Some(Dp(640.0)),
+            skip_partially_expanded: false,
             visible,
         }
     }
@@ -115,6 +118,13 @@ impl ModalBottomSheet {
         self
     }
 
+    /// 是否跳过半展开锚点（对齐 Compose `rememberModalBottomSheetState(skipPartiallyExpanded)`）。
+    /// true：面板只在 Expanded 与 Hidden 之间切换（无 Partial 中间态，下滑直接折到关闭）。
+    pub fn skip_partially_expanded(mut self, skip: bool) -> Self {
+        self.skip_partially_expanded = skip;
+        self
+    }
+
     /// #[composable]：`visible` 为 true 时注册 overlay（模态底部面板）。
     /// 面板外壳（底部对齐 + 圆角 + 把手 + offset 滑动 + 拖拽）由本组件
     /// 自动包装——用户只需提供面板主体内容。
@@ -140,6 +150,9 @@ impl ModalBottomSheet {
             Some(s) => s,
             None => holder.get(),
         };
+        // 应用 skipPartiallyExpanded（每次 build 刷新——方便外部在 show 前设置；
+        // SheetState.set_skip_partially_expanded 是在 update_anchors 时生效）
+        sheet_state.set_skip_partially_expanded(self.skip_partially_expanded);
         if should_show {
             sheet_state.show();
         }

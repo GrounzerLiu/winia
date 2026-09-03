@@ -24,6 +24,9 @@ fn sheet_demo(ctx: &mut ComposeCtx) {
     // 主树 visible 状态
     let visible = ctx.remember(|| false);
     let vis = visible.clone();
+    // skipPartiallyExpanded 演示：无半展开中间态，下滑直接关闭
+    let skip_visible = ctx.remember(|| false);
+    let skip_vis = skip_visible.clone();
 
     // 120 项长列表数据（LazyColumn 稳定 key 演示）
     let items = ctx
@@ -47,6 +50,9 @@ fn sheet_demo(ctx: &mut ComposeCtx) {
             Button::text()
                 .on_click(move || vis.set(true))
                 .build(ctx, |ctx| Text::new("打开底部面板").build(ctx));
+            Button::text()
+                .on_click(move || skip_vis.set(true))
+                .build(ctx, |ctx| Text::new("打开（跳过半展开）").build(ctx));
             Text::new("说明：底部弹出、可拖拽、三态（Hidden/半展开/展开）、点击遮罩关闭。内部已改为 LazyColumn（120 项，虚拟滚动）。")
                 .font_size(12.0)
                 .color(Color::from_argb(255, 120, 120, 120))
@@ -138,6 +144,18 @@ fn sheet_demo(ctx: &mut ComposeCtx) {
                             .build(ctx, |ctx| Text::new("跳到 90").build(ctx));
                     });
                 });
+        });
+
+    // 第二个 ModalBottomSheet：skipPartiallyExpanded（无半展开——下滑直接折到关闭）
+    let sk = skip_visible.clone();
+    ModalBottomSheet::new(skip_visible.get())
+        .skip_partially_expanded(true)
+        .on_dismiss_request(move || sk.set(false))
+        .build(ctx, move |ctx| {
+            Text::new("无半展开模式：Expanded ↔ Hidden，下滑直接关闭")
+                .font_size(13.0)
+                .modifier(Modifier::new().padding(24.0).fill_max_width())
+                .build(ctx);
         });
 }
 
