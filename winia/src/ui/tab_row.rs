@@ -385,7 +385,8 @@ impl MeasurePolicy for TabRowLayoutPolicy {
         let (target_offset, target_width) = if self.selected_tab_index < tab_count {
             let pos = &positions[self.selected_tab_index];
             let w = if self.follow_content_size { pos.content_width } else { pos.width };
-            (pos.left, w)
+            // 指示器居中于 tab slot（对齐 M3 规范——scrollable 版本也显式居中）
+            (pos.left + (pos.width - w) / 2.0, w)
         } else {
             (0.0, 0.0)
         };
@@ -628,43 +629,53 @@ impl MeasurePolicy for TabLayoutPolicy {
         let has_icon = self.has_icon;
         let has_text = self.has_text;
 
-        // 测量内容节点（icon 和 text slots）
+        // ⚠ 用 loose 约束测量内容：TabRow 传 tight（等分宽 × 行高），若直接
+        // 用 tight 测 slot，icon/text slot 各自被撑到行高（如 72），content_height
+        // 求和翻倍 → tab_height 溢出（72+72+20=164），ripple 覆盖多余区域且
+        // icon/text 间距失真。loose 约束拿到内容自然尺寸，再钳制回 incoming。
+        let loose = Constraints::new(0.0, constraints.max_width, 0.0, f32::MAX);
         let mut content_sizes = Vec::with_capacity(content_children.len());
         for &child in content_children {
-            let (size, _) = measure_node(nodes, policies, child, constraints);
+            let (size, _) = measure_node(nodes, policies, child, loose);
             content_sizes.push(size);
         }
 
-        // tabWidth = max(content 宽度)
-        let tab_width = content_sizes.iter().map(|s| s.width).fold(0.0f32, f32::max);
+        // 自然尺寸
+        let tab_width_natural = content_sizes.iter().map(|s| s.width).fold(0.0f32, f32::max);
         let spec_height = if has_icon && has_text { LARGE_TAB_HEIGHT } else { SMALL_TAB_HEIGHT };
         let content_height: f32 = content_sizes.iter().map(|s| s.height).sum();
-        let tab_height = spec_height.max(content_height + ICON_TEXT_SPACING);
+        let tab_height_natural = spec_height.max(content_height + ICON_TEXT_SPACING);
+
+        // 钳制到 incoming 约束：TabRow 传 tight（tabWidth × rowHeight）——
+        // tab 必须填满分配的 slot（ripple 覆盖整个 tab 区域，对齐 Compose
+        // selectable + fillMaxWidth）；父约束松时保持自然尺寸。
+        let tab_width = tab_width_natural.clamp(constraints.min_width, constraints.max_width);
+        let tab_height = tab_height_natural.clamp(constraints.min_height, constraints.max_height);
 
         // 布局
         let mut placements = Vec::with_capacity(n);
 
         if has_icon && has_text && content_sizes.len() >= 2 {
-            // text+icon：垂直居中，text 靠下
-            let icon_h = content_sizes[0].height;
-            let text_h = content_sizes[1].height;
-            let total_h = icon_h + text_h;
+            // text+icon：icon 上、text 下，垂直居中排列，均水平居中
+            let icon_size = content_sizes[0];
+            let text_size = content_sizes[1];
+            let total_h = icon_size.height + text_size.height;
             let start_y = (tab_height - total_h) / 2.0;
             placements.push(Placement {
-                size: content_sizes[0],
-                position: Point::new(0.0, start_y),
+                size: icon_size,
+                position: Point::new((tab_width - icon_size.width) / 2.0, start_y),
             });
             placements.push(Placement {
-                size: content_sizes[1],
-                position: Point::new(0.0, start_y + icon_h),
+                size: text_size,
+                position: Point::new((tab_width - text_size.width) / 2.0, start_y + icon_size.height),
             });
         } else if has_icon || has_text {
-            // 单元素垂直居中
+            // 单元素：水平 + 垂直居中
             for &size in content_sizes.iter() {
                 let y = (tab_height - size.height) / 2.0;
                 placements.push(Placement {
                     size,
-                    position: Point::new(0.0, y),
+                    position: Point::new((tab_width - size.width) / 2.0, y),
                 });
             }
         } else {
@@ -673,7 +684,7 @@ impl MeasurePolicy for TabLayoutPolicy {
             }
         }
 
-        // ripple leaf：全尺寸覆盖
+        // ripple leaf：全尺寸覆盖（填满整个 tab slot）
         placements.push(Placement {
             size: Size::new(tab_width, tab_height),
             position: Point::new(0.0, 0.0),
@@ -764,10 +775,12 @@ mod tests {
         let nodes = c.arena_nodes();
         let children = &nodes[root].children;
         let ind = &nodes[children[4]];
-        // selected=1, tabWidth=120.0, target_offset=120.0
-        // target_width = contentWidth = max(natural_width - 32, 24)
-        // natural_width of "Tab 1" text ≈ 65, so contentWidth ≈ 33
-        assert_eq!(ind.position.x, 120.0, "indicator offset for tab 1");
+        // selected=1, tabWidth=120.0, contentWidth≈33 (natural≈65-32)
+        // 居中后: offset = 120 + (120-33)/2 = 163.5
+        let tab_width = 120.0;
+        let content_width = 33.0; // natural width - 32, min 24
+        let expected_x = tab_width + (tab_width - content_width) / 2.0;
+        assert!((ind.position.x - expected_x).abs() < 1.0, "indicator x={} expected≈{}", ind.position.x, expected_x);
         assert!(ind.measured_size.width >= 24.0, "indicator content width min 24");
         assert!(ind.measured_size.width < 120.0, "indicator content width < full tab");
     }
