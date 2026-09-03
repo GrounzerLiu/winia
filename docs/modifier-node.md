@@ -171,19 +171,26 @@ fn measure(&self, children: &[usize], inner: Constraints) -> (Size, Vec<Placemen
   当前 policy 机制已够用（自定义布局走组件级 MeasurePolicy，如 BadgedBox），
   modifier 级布局的真实需求尚未被 demo 倒逼——不要为对称而做。
 
-### 决策：A 型试点（PaddingNode）纳入下一批，B 型搁置
+### 决策：A 型已验证（`6464439`），B 型搁置
+
+- A 型试点（MinWidthNode）：静态提升生效 + 常量折叠保持 + State 驱动免
+  compose 重测，三项全过。插入点 resolved_size 之后（`layout/node.rs`）。
+- B 型三冲突（policy 归属/place 职责/scroll 副作用）未解，且真实需求未被
+  倒逼——不为对称而做。
 
 ## 六、测试矩阵
 
 | 位置 | 用例 | 覆盖 |
 |---|---|---|
-| `modifier::node_track_tests` | draw 像素 / click 无枚举可达 / param_eq / then合并 / pointer装配+指纹 / key装配+指纹 | 6 项 |
+| `modifier::node_track_tests` | draw 像素 / click 无枚举可达 / param_eq / then合并 / pointer装配+指纹 / key装配+指纹 / layout静态+折叠 / layout State驱动 | 8 项 |
 | `app::pointer_dispatch_coord_tests` | 双轨顺序+坐标 / 枚举消费阻断 | 2 项 |
 | `app::key_node_dual_track_tests` | PerWindow 端到端隧道+冒泡 | 1 项 |
-| 全量 | `cargo test -p winia --lib` | 723 通过 |
+| 全量 | `cargo test -p winia --lib` | 724 通过（1 时间敏感 flaky 重跑过） |
 
 ## 七、提交历史（分支 `exp/modifier-node`）
 
 1. `88a3cdc` Draw+Click 双轨基线（含 debug 树 node 条目）
 2. `c013e03` PointerNode 双轨
 3. `555c057` KeyNode 双轨
+4. `b17cf8d` 设计文档 `modifier-node.md`
+5. `6464439` LayoutNode A 型约束变换试点
