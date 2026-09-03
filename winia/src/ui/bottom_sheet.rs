@@ -214,8 +214,10 @@ impl ModalBottomSheet {
                 let cur_shape = Shape::TopRoundedRect { radius: cur_radius };
                 // 拖拽/动画到 Hidden → 触发 on_dismiss_request（对齐 Compose
                 // `if (!state.isVisible) onDismissRequest()`）。用 remember + once 门闩
-                // 保证 cb 仅在 settled 到 Hidden 的首帧触发一次（之前每帧 settled==Hidden
-                // 都会 cb()，父 pop 两次）
+                // 保证 cb 仅在 settled 到 Hidden 且**动画完成**后触发一次（此前：
+                // settled 提前变 Hidden 就回调 → 父级 visible=false → overlay 立即消失，
+                // 下滑动画被截断看不到。加 is_animation_running 判定严格对齐 M3
+                // 「动画完成后再回调」）。
                 let shown: State<bool> = ctx.remember(|| false);
                 let fired: State<bool> = ctx.remember(|| false);
                 if sheet_state.settled_value() != SheetValue::Hidden {
@@ -224,6 +226,7 @@ impl ModalBottomSheet {
                 }
                 if shown.get()
                     && sheet_state.settled_value() == SheetValue::Hidden
+                    && !sheet_state.is_animation_running()
                     && !fired.get()
                 {
                     fired.set(true);
