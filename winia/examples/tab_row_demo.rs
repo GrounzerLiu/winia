@@ -41,15 +41,16 @@ fn tab_row_demo(ctx: &mut ComposeCtx) {
                         .text(|ctx| Text::new("Tab A").build(ctx))
                         .build(ctx);
 
-                    // Tab 2: text + icon
+                    // Tab 2: text + icon (使用真实 Material Symbols Outlined star)
                     let s = sel_clone.clone();
                     Tab::new(s.get() == 1, move || s.set(1))
                         .text(|ctx| Text::new("Tab B").build(ctx))
                         .icon(|ctx| {
-                            // Use a simple SVG path icon
-                            Icon::svg_path("M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5")
-                                .size(24.0)
-                                .build(ctx);
+                            Icon::new(IconSource::svg(
+                                r#"<svg xmlns="http://www.w3.org/2000/svg" height="24" viewBox="0 -960 960 960" width="24"><path d="m354-287 126-76 126 77-33-144 111-96-146-13-58-136-58 135-146 13 111 97-33 143ZM233-120l65-281L80-590l288-25 112-265 112 265 288 25-218 189 65 281-247-149-247 149Zm247-350Z"/></svg>"#,
+                            ))
+                            .size(24.0)
+                            .build(ctx);
                         })
                         .build(ctx);
 
