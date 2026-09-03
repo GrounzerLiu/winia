@@ -915,6 +915,14 @@ impl ScrollableTabRow {
         let initialized = ctx.remember(|| std::sync::Arc::new(AtomicBool::new(false))).get();
         // ScrollableTabData：上次 selected（跨帧记住——动画触发依据）
         let last_selected = ctx.remember(|| std::sync::Arc::new(AtomicI32::new(-1))).get();
+        // 上次 direction（0=LTR 1=RTL）——direction 变化时 offset 语义镜像翻转，
+        // 必须重置 last_selected 强制下帧重新居中（用户实测：切方向后选中不居中）
+        let last_dir = ctx.remember(|| std::sync::Arc::new(AtomicI32::new(-1))).get();
+        let dir_code = if is_rtl { 1 } else { 0 };
+        if last_dir.load(Ordering::Relaxed) != dir_code {
+            last_dir.store(dir_code, Ordering::Relaxed);
+            last_selected.store(-1, Ordering::Relaxed);
+        }
         // 首帧标记：fling_limit 首帧未回写——延迟到第二帧再触发居中滚动
         let layout_seen = ctx.remember(|| false);
 

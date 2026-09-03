@@ -30,14 +30,12 @@ fn tab_row_demo(ctx: &mut ComposeCtx) {
                         Text::new(if rtl.get() { "TabRow Demo（RTL）" } else { "TabRow Demo" })
                             .build(ctx);
 
-                        // RTL/LTR 切换
+                        // RTL/LTR 切换——方向变化由 ScrollableTabRow 内部检测
+                        //（last_dir 重置 last_selected → 下帧自动重新居中选中 tab）
                         let rtl_click = rtl.clone();
-                        let st_reset = scroll_state.clone();
                         Button::new()
                             .on_click(move || {
                                 rtl_click.update(|v| *v = !*v);
-                                // 方向切换后归零滚动——scroll_reverse 镜像下 offset 语义翻转
-                                st_reset.offset.set(0.0);
                             })
                             .build(ctx, |ctx| {
                                 Text::new(if rtl.get() { "LTR" } else { "RTL" }).font_size(12.0).build(ctx);

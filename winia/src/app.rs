@@ -1641,7 +1641,10 @@ fn dispatch_nested_scroll_fling(
         } else if let Some(ss) = node.modifier.horizontal_scroll_state() {
             if child_velocity.x.abs() >= 50.0 {
                 let post_connections = post_connections.clone();
-                ss.fling_with_boundary(child_velocity.x, move |remaining_velocity| {
+                // ⚠ reverse（RTL）滚动：fling 速度方向与手势 delta 同需镜像
+                //（apply_scroll_delta 已镜像 delta，此处镜像速度保持一致）
+                let fling_vx = if node.scroll_reverse { -child_velocity.x } else { child_velocity.x };
+                ss.fling_with_boundary(fling_vx, move |remaining_velocity| {
                     // child 实际消费 = 起始 − 边界剩余
                     let consumed_by_child = crate::nested_scroll::ScrollVelocity {
                         x: child_velocity.x - remaining_velocity,
@@ -1760,7 +1763,13 @@ fn apply_scroll_delta_inner(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f
                 node.measured_size.width
             };
             let max_offset = (content_w - visible_w).max(0.0);
-            let new = (current - dx).clamp(0.0, max_offset);
+            // ⚠ reverse（RTL）滚动：render 端 offset 语义被镜像（offset 0 = 内容末端），
+            // 手势 delta 方向也需镜像——否则拖动方向反（用户实测 bug）。垂直同理见上。
+            let new = if node.scroll_reverse {
+                (current + dx).clamp(0.0, max_offset)
+            } else {
+                (current - dx).clamp(0.0, max_offset)
+            };
             state.offset.set(new);
             consumed.x = current - new;
         }
