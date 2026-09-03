@@ -1382,15 +1382,22 @@ pub(crate) mod tests {
         };
         let mut saw_blue = false;
         let mut saw_red = false;
-        for _ in 0..30 {
+        // ⚠ 确定性相位推进（替代旧的 sleep 采样）：Reverse 周期 = 2×duration（100ms），
+        // 前半（phase<1）红→蓝、后半蓝→红。拨动 inf.start 到各相位并 update，直接采样
+        // 端点邻域——避免旧 sleep(10ms)×30 采样在负载下跳过仅几 ms 宽的端点窗口（flaky）。
+        let set_phase = |inf: &mut Infinite<Color>, phase_ms: u64| {
+            inf.start = std::time::Instant::now() - std::time::Duration::from_millis(phase_ms);
+        };
+        // 蓝端：phase≈25ms（t→1）；红端：phase≈0/50/75ms（t→0）
+        for phase_ms in [0u64, 24, 25, 26, 49, 50, 51, 74, 75, 76] {
+            set_phase(&mut inf, phase_ms);
             inf.update();
-            std::thread::sleep(Duration::from_millis(10));
             let c = state.get();
             if c.b > 200 && c.r < 50 { saw_blue = true; }
             if c.r > 200 && c.b < 50 { saw_red = true; }
         }
-        assert!(saw_blue, "should reach blue");
-        assert!(saw_red, "should return to red");
+        assert!(saw_blue, "should reach blue (phase 25ms: t→1)");
+        assert!(saw_red, "should return to red (phase 0/50/75ms: t→0)");
     }
 
     #[test]
