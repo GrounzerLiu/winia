@@ -719,11 +719,6 @@ fn render_pass1(
     // 同节点链序中最后绘制的背景（颜色+形状）——边框色与形状都等于它时
     // 跳过描边（合并为纯填充），避免半透明同色双重混合
     let mut last_background: Option<(crate::modifier::Color, crate::modifier::Shape)> = None;
-    // 开放绘制节点（实验性双轨 exp/modifier-node）：枚举链走完后，再走 node 链。
-    // 位置 = 背景/边框之后、文本/图标之前（与 Background 同层语义——装饰性绘制）。
-    for draw_node in node.modifier.draw_nodes() {
-        draw_node.draw(canvas, rect);
-    }
     for el in node.modifier.elements() {
         match el {
             ModifierElement::Blur { radius } => {
@@ -836,6 +831,14 @@ fn render_pass1(
                 }
             }
         }
+    }
+
+    // 开放绘制节点（exp/modifier-node）：枚举链走完后走 node 链（与文档一致，
+    // P1-1 修复：此前 node 在枚举前，混用 background+draw_node 即被枚举盖住）。
+    // ⚠ 链序未保留：node 统一在枚举全部绘制（含图标/图片）之后、文本之前——
+    // 与 Background 同层是近似语义；需精确链序等 DrawWrapNode（文档 §四.3）。
+    for draw_node in node.modifier.draw_nodes() {
+        draw_node.draw(canvas, rect);
     }
 
     // 内容模糊：saveLayer

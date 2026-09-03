@@ -281,8 +281,12 @@ impl MutableInteractionSource {
         self.focus_indicator_alpha.peek()
     }
 
-    /// 源身份（node_key 用——跨 clone 稳定，同 PartialEq 语义取 pressed State id）。
-    /// exp/modifier-node 引入：具名 node 的 node_key 需纳入源身份（换源重建）。
+    /// 源身份代理（node_key 用——以 pressed State id 为身份代理）。
+    /// 跨 clone 稳定（State::Clone 共享 Arc）。注意：与 `PartialEq` 不等价
+    /// （PartialEq 比 4 个 State id，此处仅取 pressed 作代理——字段私有、
+    /// `new()` 四 id 同生、`clone()` 四 Arc 同行，实践等价；P2-3 明确化）。
+    /// `State::id()` 为过渡保留 u32（满 2^32 回绕实践不可达），未来随
+    /// `state_id()` u64 迁移。
     pub fn source_id(&self) -> u32 {
         self.pressed.id()
     }
@@ -313,6 +317,25 @@ impl MutableInteractionSource {
 
     pub fn is_dragged(&self) -> bool {
         self.dragged.get()
+    }
+
+    // ── 渲染期读取（peek，不注册依赖——DrawNode::draw/渲染闭包用，P1-4）──
+    // 渲染不在依赖帧内，get 亦注册不上；用 peek 语义诚实、防未来渲染进帧后
+    // 误注册错依赖。build/measure 内仍用 get（需注册）。
+
+    /// 渲染期 focused 读取（peek）。
+    pub(crate) fn is_focused_value(&self) -> bool {
+        self.focused.peek()
+    }
+
+    /// 渲染期 pressed 读取（peek）。
+    pub(crate) fn is_pressed_value(&self) -> bool {
+        self.pressed.peek()
+    }
+
+    /// 渲染期 dragged 读取（peek）。
+    pub(crate) fn is_dragged_value(&self) -> bool {
+        self.dragged.peek()
     }
 
     /// 一次读取全部状态（与 material3 的 enabled/pressed/hovered/focused 组合一致）

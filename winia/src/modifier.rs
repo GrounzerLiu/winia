@@ -409,7 +409,11 @@ impl Default for FilterQuality {
 /// （现有 CustomDraw/背景/装饰全是单向绘制）。需要时再加 `DrawWrapNode`。
 pub trait DrawNode: std::fmt::Debug + Send + Sync {
     fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect);
-    /// Skip 判定用 key（默认 = TypeId 名；含参节点应覆盖，纳入参数指纹）。
+    /// Skip 指纹 MUST 规范（P1-3）：含参节点 MUST 覆盖，纳入**全部影响输出的
+    /// 静态参数**（颜色/形状/值/开关）；回写通道（State 回写）与瞬态动画值
+    /// （逐帧 progress/alpha）MUST NOT 进 key（走依赖/重绘通道，否则动画每帧
+    /// Enter）；回调字段视为相同（重建不触发 Enter）。默认 = TypeId 名（无参
+    /// 节点够用；含参忘覆盖则静默 Skip 误命中——旧值残留）。
     fn node_key(&self) -> String {
         std::any::type_name::<Self>().to_string()
     }
@@ -417,12 +421,19 @@ pub trait DrawNode: std::fmt::Debug + Send + Sync {
 
 /// 点击节点：输入期沿命中路径查询（对标 Compose 点击语义）。
 /// 与 `Clickable` 枚举同优先级——核心 `on_click()` 先查枚举、再查 node。
+///
+/// 单首语义（P1-2 结论）：每 Modifier 仅首个 ClickNode 生效（与枚举 `on_click()`
+/// 取首个 Clickable 一致）。多 push 两个 click_node 时第二个静默不触发——
+/// 如需多回调请合并进一个 node 的 `on_click`。`node_clicks()` 迭代器保留供
+/// 未来多播语义（暂未启用）。
 pub trait ClickNode: std::fmt::Debug + Send + Sync {
     fn on_click(&self);
     /// 绑定的交互源（press 波纹用；无则 None）。
     fn interaction(&self) -> Option<crate::ui::interaction::MutableInteractionSource> {
         None
     }
+    /// Skip 指纹 MUST 规范（同 DrawNode）：静态参数进 key；回写/瞬态动画值
+    /// 不进；回调视为相同。默认 = TypeId 名。
     fn node_key(&self) -> String {
         std::any::type_name::<Self>().to_string()
     }
@@ -431,6 +442,14 @@ pub trait ClickNode: std::fmt::Debug + Send + Sync {
 /// 指针节点：原始指针事件（对标 Compose PointerInputModifierNode）。
 /// 与 `PointerEvent` 枚举同语义（pre = 外→内隧道，on = 内→外冒泡），返回 true
 /// 即消费（停止冒泡）。第三方自定义手势/悬停/拖拽识别挂这里，无需改 app.rs。
+///
+/// ⚠ 手势路由隔离（P0-1 教训）：PointerNode **不参与** `has_gesture()` 手势目标
+/// 选择——手势竞技场（tap/drag 识别）只认 TapOn/DragOn 枚举。PointerNode 只收
+/// `dispatch_ptr_event` 的原始 down/move/up（hover 日志、自定义坐标换算等装饰性
+/// 用途）。需要手势回调的 node 应同时挂对应枚举（如 on_tap），或等手势竞技场
+/// 落地后的 GestureNode。把 PointerNode 纳入 has_gesture 会静默偷走外层 tap
+/// （内层装饰性 node 锁定 gesture 目标，fire_gesture_action 只查枚举 → 外层
+/// TapOnTap 永不触发）。
 pub trait PointerNode: std::fmt::Debug + Send + Sync {
     /// 隧道阶段（外→内）：对应 `on_pre_ptr`。
     fn on_pre(&self, _ev: &PointerEvent) -> bool {
@@ -440,6 +459,7 @@ pub trait PointerNode: std::fmt::Debug + Send + Sync {
     fn on_event(&self, _ev: &PointerEvent) -> bool {
         false
     }
+    /// Skip 指纹 MUST 规范（同 DrawNode）。默认 = TypeId 名。
     fn node_key(&self) -> String {
         std::any::type_name::<Self>().to_string()
     }
@@ -457,6 +477,7 @@ pub trait KeyNode: std::fmt::Debug + Send + Sync {
     fn on_event(&self, _ev: &KbEvent) -> bool {
         false
     }
+    /// Skip 指纹 MUST 规范（同 DrawNode）。默认 = TypeId 名。
     fn node_key(&self) -> String {
         std::any::type_name::<Self>().to_string()
     }
@@ -466,8 +487,13 @@ pub trait KeyNode: std::fmt::Debug + Send + Sync {
 /// 输入 incoming 约束，输出给下一环节的约束。多个 A 型 node 按挂载序串行。
 /// 插入点 = resolved_size 之后、padding 之前（与现有链序同，见 measure_node）。
 /// 动态值在此求值（measure 期读 State 注册布局依赖——与 SizeValue::Dynamic 同）。
+///
+/// 纯度 MUST（P1-6）：`transform` MUST 为“key 参数 + State::get”的纯函数——
+/// 禁止读外部可变（Atomic/时钟/RefCell/全局）。常量折叠按 incoming 缓存，
+/// 同 key 同约束直接返回旧尺寸；非纯读取即 stale（枚举侧无此口子，node 独有）。
 pub trait LayoutNode: std::fmt::Debug + Send + Sync {
     fn transform(&self, inner: crate::layout::Constraints) -> crate::layout::Constraints;
+    /// Skip 指纹 MUST 规范（同 DrawNode）。默认 = TypeId 名。
     fn node_key(&self) -> String {
         std::any::type_name::<Self>().to_string()
     }
@@ -792,6 +818,13 @@ impl Modifier {
             ModifierNode::Layout(l) => Some(l),
             _ => None,
         })
+    }
+
+    /// 是否含布局节点（measure 早退用——P2-2）。
+    pub(crate) fn has_layout_nodes(&self) -> bool {
+        self.nodes
+            .iter()
+            .any(|n| matches!(n, ModifierNode::Layout(_)))
     }
 
     // ── 试点节点（exp/modifier-node）：Background/Clickable 的 node 等价物 ──
@@ -1936,13 +1969,17 @@ impl Modifier {
     }
 
     /// 开放节点点击回调（含回调体——node 是 trait object，返回 Arc 供分发调用）。
+    /// 单首语义（见 ClickNode 文档）：仅首个 ClickNode 生效。
     pub(crate) fn node_click(&self) -> Option<std::sync::Arc<dyn ClickNode>> {
-        for n in &self.nodes {
-            if let ModifierNode::Click(cb) = n {
-                return Some(cb.clone());
-            }
-        }
-        None
+        self.node_clicks().next()
+    }
+
+    /// 全部 ClickNode（单首语义下仅首个生效；保留迭代器供未来多播/诊断）。
+    pub(crate) fn node_clicks(&self) -> impl Iterator<Item = std::sync::Arc<dyn ClickNode>> + '_ {
+        self.nodes.iter().filter_map(|n| match n {
+            ModifierNode::Click(cb) => Some(cb.clone()),
+            _ => None,
+        })
     }
 
     /// 开放节点点击绑定的交互源（press 波纹用）。
@@ -2000,9 +2037,9 @@ impl Modifier {
         self.elements.iter().any(|el| matches!(el, ModifierElement::Hoverable { .. }))
     }
 
-    /// 是否声明了任意手势回调（tap/drag 系列）——app.rs 手势路由判定用
-    /// 双轨（exp/modifier-node）：含 PointerNode 即视为手势参与者（第三方手势
-    /// 无需 TapOn/DragOn 枚举即可进入手势路由）。
+    /// 是否声明了任意手势回调（tap/drag 系列）——app.rs 手势路由判定用。
+    /// 只认 TapOn/DragOn 枚举（PointerNode 不参与——见 PointerNode 文档的
+    /// P0-1 教训：装饰性 PointerNode 纳入路由会静默偷走外层 tap）。
     pub fn has_gesture(&self) -> bool {
         self.elements.iter().any(|el| matches!(
             el,
@@ -2014,7 +2051,7 @@ impl Modifier {
                 | ModifierElement::DragOnMove { .. }
                 | ModifierElement::DragOnEnd { .. }
                 | ModifierElement::DragOnCancel { .. }
-        )) || self.nodes.iter().any(|n| matches!(n, ModifierNode::Pointer(_)))
+        ))
     }
 
     /// 是否声明了拖拽回调（决定 slop 后走 drag 还是取消 tap）
@@ -3305,6 +3342,44 @@ mod node_track_tests {
         );
     }
 
+    /// P1-1 回归：混用枚举 background + draw_node 时，node 在枚举之后绘制
+    /// （与文档“枚举链走完后走 node 链”一致）。此前顺序反了会被枚举盖住。
+    #[test]
+    fn node_track_draw_after_enum_background() {
+        use skia_safe::surfaces;
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            let key = ctx.next_key();
+            ctx.start_leaf(
+                key,
+                Modifier::new()
+                    .size(60.0, 40.0)
+                    .background(Color::from_argb(255, 200, 30, 30), Shape::Rectangle)
+                    .draw_node(TestBgNode {
+                        color: Color::from_argb(255, 30, 30, 200),
+                        shape: Shape::Rectangle,
+                    }),
+            );
+            ctx.end_node();
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let mut surface = surfaces::raster_n32_premul((300, 300)).unwrap();
+        let canvas = surface.canvas();
+        canvas.clear(skia_safe::Color::WHITE);
+        let root = composer.layout_root_idx().expect("root");
+        let nodes = composer.arena_nodes();
+        crate::render::render(nodes, root, canvas);
+        let pm = surface.peek_pixels().expect("pixmap");
+        let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+        let w = pm.width() as usize;
+        let p = px[20 * w + 30];
+        assert!(
+            (p[0] as i16 - 200).abs() <= 6,
+            "node 应盖住枚举 background（蓝色在上），实际 BGRA={:?}",
+            p
+        );
+    }
+
     #[test]
     fn node_track_click_fires_without_enum() {
         let count = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
@@ -3417,7 +3492,15 @@ mod node_track_tests {
         // 直接走 app.rs 的分发（同模块外不可见——此处测 Modifier 侧装配；
         // 分发语义由 app.rs pointer_dispatch_coord_tests 风格覆盖，见下）。
         assert_eq!(nodes[0].modifier.pointer_nodes().count(), 1);
-        assert!(nodes[0].modifier.has_gesture(), "含 PointerNode 即手势参与者");
+        // P0-1 回归：PointerNode 不参与 has_gesture（装饰性 node 不偷外层 tap）
+        assert!(
+            !nodes[0].modifier.has_gesture(),
+            "纯 PointerNode 不应进手势路由（P0-1：偷 tap）"
+        );
+        assert!(
+            !nodes[0].modifier.has_drag_gesture(),
+            "纯 PointerNode 不应被当拖拽手势"
+        );
         // node_key 指纹：consume 变化 → Enter
         let a = Modifier::new().pointer_node(TestPointerNode {
             pre_log: pre_log.clone(),

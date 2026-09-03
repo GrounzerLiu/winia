@@ -20,7 +20,7 @@
 use crate::core::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::layout::BoxLayout;
-use crate::modifier::{Color, KbEvent, KbEventType, Modifier, DrawNode};
+use crate::modifier::{Color, KbEvent, KbEventType, Modifier};
 use crate::ui::interaction::MutableInteractionSource;
 use crate::ui::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
@@ -429,35 +429,35 @@ pub(crate) fn handle_key(
     }
 }
 
-/// 绘制滑块——M3 轨道为**两段独立胶囊**（对齐 Compose `drawTrack`）：
-/// - active track：`[0, value_pos - end_gap]`（Primary，左端全圆 8dp/右端 2dp 小圆角）
-/// - inactive track：`[value_pos + end_gap, w]`（SecondaryContainer，左端 2dp/右端全圆 8dp）
-/// - `end_gap = thumb宽/2 + 6dp`（`ThumbTrackGapSize`）——thumb 与轨道保持 6dp 间隙
-/// - 有 steps 时 value_pos 与 tick 位置按 `corner + (w - 2×corner) × f` 内缩（Compose 同）
-///
 /// 轨道绘制节点（exp/modifier-node 首个真实迁移）：`Modifier::draw` 匿名闭包的
-/// 具名等价物。全部绘制参数进 `node_key`（值/颜色/开关变化 → Enter 重建 node；
-/// 闭包重建恒 Skip 的旧语义被精确化——这是迁移的核心收益）。
+/// 具名等价物。绘制几何见 [`draw_slider`]。`node_key` 纳入静态视觉参数
+/// （值/颜色/开关/源身份），回写通道与瞬态动画值排除（见 `node_key` 注释）。
 /// `track_width` 回写（像素↔值换算通道）保留在 node 内（set_silent，不触发重组）。
+///
+/// 可见性（P1-4）：`pub(crate)`——第三方照抄形状自定节点类型，不复用本节点
+/// （value 未 clamp、`min>max` 未归一——归一在 `build` 侧，不在 node 内）。
 #[derive(Debug)]
-pub struct SliderTrackNode {
+pub(crate) struct SliderTrackNode {
     /// 轨道宽度回写（tap/drag 像素↔值换算读此值）。
-    pub track_width: crate::core::state::State<f32>,
+    pub(crate) track_width: crate::core::state::State<f32>,
     /// 绘制用交互源（渲染期读焦点/波纹状态——peek，不注册依赖）。
-    pub interaction: MutableInteractionSource,
-    pub colors: SliderColors,
-    pub enabled: bool,
-    pub value: f32,
-    pub min: f32,
-    pub max: f32,
-    pub steps: i32,
-    pub thumb_active: bool,
+    pub(crate) interaction: MutableInteractionSource,
+    pub(crate) colors: SliderColors,
+    pub(crate) enabled: bool,
+    pub(crate) value: f32,
+    pub(crate) min: f32,
+    pub(crate) max: f32,
+    pub(crate) steps: i32,
+    pub(crate) thumb_active: bool,
 }
 
 impl crate::modifier::DrawNode for SliderTrackNode {
     fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
         self.track_width.set_silent(rect.width());
-        let focused = self.interaction.is_focused();
+        // 渲染期 peek（P1-4）：get 在渲染期注册不上依赖（已出依赖帧），用 peek
+        // 语义诚实；focused 经 thumb_active 间接进 key（build 期），focus_alpha
+        // 为瞬态动画值故意不进 key（见 node_key 注释）。
+        let focused = self.interaction.is_focused_value();
         let focus_alpha = self.interaction.focus_indicator_alpha_value();
         draw_slider(
             canvas, rect, &self.colors, self.enabled, self.value,
@@ -465,8 +465,13 @@ impl crate::modifier::DrawNode for SliderTrackNode {
         );
     }
     fn node_key(&self) -> String {
-        // 全部影响输出的参数（颜色 Copy+PartialEq 全纳入；interaction 源身份纳入——
-        // 换源需重建；track_width 是回写通道不纳入——值变化不触发 Enter）。
+        // 静态视觉参数进 key（颜色/开关/值域/步数/thumb 状态/源身份）；
+        // track_width 回写通道不进；瞬态动画值 focus_alpha 不进（逐帧 peek 直读，
+        // 进 key 则动画每帧 Enter——与 Background 色闭包/GraphicsLayer 同惯例）；
+        // focused 不直接进（经 thumb_active = pressed||focused||dragged 间接覆盖，
+        // build 期 interaction.state() 已注册依赖）。
+        // -0.0/0.0 key 不同但同画（保守多 Enter，无害）；NaN 下 changed 本就恒
+        // dirty（P2-3）。value 由 build 侧 clamp，min<=max 归一亦在 build 侧。
         format!(
             "slidertrack:{:?}:{}:{}:{}:{}:{}:{}:{}",
             self.colors,
@@ -481,6 +486,11 @@ impl crate::modifier::DrawNode for SliderTrackNode {
     }
 }
 
+/// 绘制滑块——M3 轨道为**两段独立胶囊**（对齐 Compose `drawTrack`）：
+/// - active track：`[0, value_pos - end_gap]`（Primary，左端全圆 8dp/右端 2dp 小圆角）
+/// - inactive track：`[value_pos + end_gap, w]`（SecondaryContainer，左端 2dp/右端全圆 8dp）
+/// - `end_gap = thumb宽/2 + 6dp`（`ThumbTrackGapSize`）——thumb 与轨道保持 6dp 间隙
+/// - 有 steps 时 value_pos 与 tick 位置按 `corner + (w - 2×corner) × f` 内缩（Compose 同）
 pub(crate) fn draw_slider(
     canvas: &skia_safe::Canvas,
     rect: skia_safe::Rect,
@@ -1074,28 +1084,44 @@ mod tests {
         use crate::modifier::DrawNode;
         let theme = ThemeColors::light_from_seed(0x6750A4);
         let colors = SliderDefaults::slider_colors(&theme);
+        let mut colors2 = colors;
+        colors2.thumb_color = Color::from_argb(255, 1, 2, 3);
         // 同一 interaction 源（换源单独测——每次 new 源 id 不同）
         let shared_src = MutableInteractionSource::new();
-        let mk = |value: f32, enabled: bool, thumb_active: bool| {
+        let shared_tw = State::new(300.0);
+        #[allow(clippy::too_many_arguments)]
+        let mk = |value: f32, enabled: bool, thumb_active: bool, colors: SliderColors,
+                  min: f32, max: f32, steps: i32| {
             SliderTrackNode {
-                track_width: State::new(300.0),
+                track_width: shared_tw.clone(),
                 interaction: shared_src.clone(),
                 colors,
                 enabled,
                 value,
-                min: 0.0,
-                max: 1.0,
-                steps: 0,
+                min,
+                max,
+                steps,
                 thumb_active,
             }
         };
-        let base = mk(0.5, true, false);
+        let base = mk(0.5, true, false, colors, 0.0, 1.0, 0);
         // 同参 → 相等（Skip）
-        assert_eq!(base.node_key(), mk(0.5, true, false).node_key());
+        assert_eq!(base.node_key(), mk(0.5, true, false, colors, 0.0, 1.0, 0).node_key());
         // 值/开关/状态任一变化 → 不等（Enter）
-        assert_ne!(base.node_key(), mk(0.6, true, false).node_key(), "value 应进 key");
-        assert_ne!(base.node_key(), mk(0.5, false, false).node_key(), "enabled 应进 key");
-        assert_ne!(base.node_key(), mk(0.5, true, true).node_key(), "thumb_active 应进 key");
+        assert_ne!(base.node_key(), mk(0.6, true, false, colors, 0.0, 1.0, 0).node_key(), "value 应进 key");
+        assert_ne!(base.node_key(), mk(0.5, false, false, colors, 0.0, 1.0, 0).node_key(), "enabled 应进 key");
+        assert_ne!(base.node_key(), mk(0.5, true, true, colors, 0.0, 1.0, 0).node_key(), "thumb_active 应进 key");
+        // P0-2 补：colors/min/max/steps 任一变化 → 不等
+        assert_ne!(base.node_key(), mk(0.5, true, false, colors2, 0.0, 1.0, 0).node_key(), "colors 应进 key");
+        assert_ne!(base.node_key(), mk(0.5, true, false, colors, 0.5, 1.0, 0).node_key(), "min 应进 key");
+        assert_ne!(base.node_key(), mk(0.5, true, false, colors, 0.0, 2.0, 0).node_key(), "max 应进 key");
+        assert_ne!(base.node_key(), mk(0.5, true, false, colors, 0.0, 1.0, 4).node_key(), "steps 应进 key");
+        // P0-2 补：track_width 回写通道不进 key（值变化 → key 相等，走依赖通道）
+        shared_tw.set_silent(999.0);
+        assert_eq!(
+            base.node_key(), mk(0.5, true, false, colors, 0.0, 1.0, 0).node_key(),
+            "track_width 回写值变化不应进 key"
+        );
         // 换源 → 不等（重建绑定）
         let other = SliderTrackNode {
             track_width: State::new(300.0),
@@ -1113,8 +1139,10 @@ mod tests {
 
     #[test]
     fn slider_track_node_renders_identical_to_enum_draw() {
-        // 同参数下 node 绘制与旧 .draw 闭包像素一致（迁移保真）。
-        // 旧闭包逻辑 = track_width.set_silent + draw_slider(…focus=false, alpha=0)。
+        // P0-1 真双路对照：同参一路 draw_node(SliderTrackNode)，一路旧
+        // `Modifier::draw` 匿名闭包（v2 语义逐行复刻），同 300×48 surface
+        // 逐字节 assert_eq。两路均用全新 unfocused 源（focused=false，
+        // focus_alpha=0），rect 一致——差异即迁移保真失败。
         use skia_safe::{Color as SkColor, surfaces};
         let theme = ThemeColors::light_from_seed(0x6750A4);
         let colors = SliderDefaults::slider_colors(&theme);
@@ -1138,11 +1166,13 @@ mod tests {
             let pm = surface.peek_pixels().expect("pixmap");
             pm.pixels::<[u8; 4]>().expect("pixels").to_vec()
         };
-        let tw = crate::core::state::State::new(0.0f32);
-        let src = MutableInteractionSource::new();
+        let tw_node = crate::core::state::State::new(0.0f32);
+        let tw_enum = crate::core::state::State::new(0.0f32);
+        let src_node = MutableInteractionSource::new();
+        let src_enum = MutableInteractionSource::new();
         let node_mod = Modifier::new().size(300.0, 48.0).draw_node(SliderTrackNode {
-            track_width: tw.clone(),
-            interaction: src.clone(),
+            track_width: tw_node.clone(),
+            interaction: src_node.clone(),
             colors,
             enabled: true,
             value: 0.5,
@@ -1151,10 +1181,26 @@ mod tests {
             steps: 4,
             thumb_active: false,
         });
-        // 旧语义等价：同参 draw_slider 直接画
+        // 旧闭包逐行复刻（v2 slider.rs build 侧 .draw 体）：回写宽度 +
+        // 读焦点/环透明度 + draw_slider 同参。注意 node 绘制顺序已移至枚举链
+        // 之后（P1-1）——本节点无 Background/Icon 同胞，顺序差无像素影响。
+        let enum_mod = Modifier::new().size(300.0, 48.0).draw(move |canvas, rect| {
+            tw_enum.set_silent(rect.width());
+            let focused = src_enum.is_focused_value();
+            let focus_alpha = src_enum.focus_indicator_alpha_value();
+            draw_slider(canvas, rect, &colors, true, 0.5, 0.0, 1.0, 4, false, focused, focus_alpha);
+        });
         let px_node = render_with(node_mod);
+        let px_enum = render_with(enum_mod);
         assert_eq!(px_node.len(), 300 * 48);
-        // thumb 中心像素应为 primary（value=0.5 → x=150）
+        assert_eq!(px_enum.len(), 300 * 48);
+        assert_eq!(
+            px_node, px_enum,
+            "node 路与旧 draw 闭包路必须逐字节一致（迁移保真）"
+        );
+        // 诊断性断言（diff 失败时快速定位）：thumb 中心应为 primary
+        // （value=0.5 → x = corner + (300-2*corner)*0.5 = 150，y=24）。
+        // 常量：SLIDER_TRACK_HEIGHT=16 → corner=8。
         let p = px_node[24 * 300 + 150];
         let (r, g, b) = (p[2] as i32, p[1] as i32, p[0] as i32);
         let prim = theme.primary;

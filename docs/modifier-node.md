@@ -22,16 +22,20 @@ Modifier { elements: Vec<ModifierElement>,   // 旧轨道：封闭枚举，内�
   则 node 不再收到。保证迁移期旧行为稳定。
 - `debug` 树：`describe_modifier` 追加 `node(<key>)` 条目，`t` 命令可见。
 
-## 二、四种节点
+## 二、五种节点（Draw/Click/Pointer/Key/Layout-A型）
 
 ### DrawNode（绘制）——对标 Compose DrawModifierNode
 
 ```rust
 pub trait DrawNode: Debug + Send + Sync {
     fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect);
-    fn node_key(&self) -> String;  // Skip 指纹，含参节点必须覆盖
+    fn node_key(&self) -> String { type_name::<Self>().into() }  // 默认；含参 MUST 覆盖
 }
 ```
+
+- 位置：`render_pass1` 枚举链走完后统一绘制（P1-1 修后与注释一致；此前 node
+  在前、枚举在后，混用即被盖——已修，回归测试 `node_track_draw_after_enum_background`）。
+  ⚠ 链序未保留：图标/图片等枚举内容绘制也在 node 之前（精确链序等 DrawWrapNode，§四.3）。
 
 - 位置：`render_pass1` 背景层（枚举链走完后统一绘制，与 Background 同层语义）。
 - 复用：`render::draw_background_for_node(canvas, rect, color, shape)` 公开，
@@ -44,9 +48,12 @@ pub trait DrawNode: Debug + Send + Sync {
 pub trait ClickNode: Debug + Send + Sync {
     fn on_click(&self);
     fn interaction(&self) -> Option<MutableInteractionSource> { None }
-    fn node_key(&self) -> String;
+    fn node_key(&self) -> String { type_name::<Self>().into() }  // 默认；含参 MUST 覆盖
 }
 ```
+
+- 单首语义（P1-2）：每 Modifier 仅首个 ClickNode 生效（与枚举 `on_click()`
+  取首个 Clickable 一致）；`node_clicks()` 迭代器保留供未来多播（暂未启用）。
 
 - 接线：`fire_click_along_path`（主树+overlay 共用）、press 波纹两处
   （`clickable_interaction().cloned().or(node_click_interaction())`）、
@@ -61,13 +68,15 @@ pub trait ClickNode: Debug + Send + Sync {
 pub trait PointerNode: Debug + Send + Sync {
     fn on_pre(&self, _ev: &PointerEvent) -> bool { false }    // 隧道 外→内
     fn on_event(&self, _ev: &PointerEvent) -> bool { false }  // 冒泡 内→外
-    fn node_key(&self) -> String;
+    fn node_key(&self) -> String { type_name::<Self>().into() }  // 默认；含参 MUST 覆盖
 }
 ```
 
 - 接线：`dispatch_ptr_event` 隧道/冒泡各加 3 行（枚举先行，消费即停，坐标同源）。
-- `has_gesture()` 含 PointerNode——第三方手势无需 TapOn/DragOn 枚举即可进路由。
-  这是未来手势竞技场的前置条件。
+- ⚠ 手势路由隔离（P0-1）：PointerNode **不参与** `has_gesture()`——手势目标选择
+  只认 TapOn/DragOn 枚举（装饰性 node 纳入即偷外层 tap，已修+回归测试
+  `pointer_node_does_not_steal_outer_tap_target`）。PointerNode 只收原始
+  down/move/up；要手势回调请同时挂对应枚举。
 - 坐标：node 拿到的 `ev.position` 与枚举 handler 同一本地坐标（含 scroll 扣除）。
 
 ### KeyNode（键盘）——对标 Compose KeyInputModifierNode
@@ -76,12 +85,32 @@ pub trait PointerNode: Debug + Send + Sync {
 pub trait KeyNode: Debug + Send + Sync {
     fn on_pre(&self, _ev: &KbEvent) -> bool { false }    // 隧道 root→focused
     fn on_event(&self, _ev: &KbEvent) -> bool { false }  // 冒泡 focused→root
-    fn node_key(&self) -> String;
+    fn node_key(&self) -> String { type_name::<Self>().into() }  // 默认；含参 MUST 覆盖
 }
 ```
 
 - 接线：`dispatch_key_to_focus` Preview/Bubble 各加 3 行。
 - 测试用真实 PerWindow + Composer 组树（端到端，非裸节点）。
+
+### LayoutNode-A型（约束变换）——对标 Compose LayoutModifier
+
+```rust
+pub trait LayoutNode: Debug + Send + Sync {
+    fn transform(&self, inner: Constraints) -> Constraints;
+    fn node_key(&self) -> String { type_name::<Self>().into() }  // 默认；含参 MUST 覆盖
+}
+```
+
+- 插入点：`measure_node` resolved_size 之后串行（min/required 可覆盖 node）。
+- 纯度 MUST（P1-6）：`transform` MUST 为“key 参数 + State::get”纯函数——
+  禁读外部可变；常量折叠按 incoming 缓存，非纯即 stale。动态值在内 `get`
+  注册布局依赖（免 compose 重测）。B 型完全接管搁置（见 §五）。
+
+### node_key MUST 规范（P1-3，各 trait rustdoc 同文）
+
+- 含参节点 MUST 覆盖，纳入**全部静态视觉参数**；回写通道（State 回写）与
+  瞬态动画值（逐帧 progress/alpha）MUST NOT 进 key；回调字段视为相同。
+- 默认实现返回 TypeId 名（无参节点够用；含参忘覆盖则静默 Skip 误命中）。
 
 ## 三、第三方用法（照抄形状）
 
@@ -104,9 +133,11 @@ impl DrawNode for MyBadge {
 Modifier::new().size(48.0, 48.0).draw_node(MyBadge { color })
 ```
 
-`node_key` 必须包含**全部影响输出的参数**（颜色/形状/开关），漏写即 Skip 误命中
-（旧值残留）。闭包/回调类字段与枚举同例——视为相同（回调重建不触发 Enter），
-如需回调变化刷新，把版本号/布尔开关纳入 key。
+`node_key` 必须包含**全部静态视觉参数**（颜色/形状/开关/值），漏写即 Skip
+误命中（旧值残留）。回写通道与瞬态动画值（逐帧 progress/alpha）必须排除——
+渲染期 `peek` 直读，进 key 则动画每帧 Enter（P1-2）。闭包/回调类字段与枚举
+同例——视为相同（回调重建不触发 Enter），如需回调变化刷新，把版本号/
+布尔开关纳入 key。完整 MUST 规范见 §二末。
 
 ## 四、已知限制（故意没做）
 
@@ -197,19 +228,34 @@ fn measure(&self, children: &[usize], inner: Constraints) -> (Size, Vec<Placemen
 ## 九、首个真实迁移：Slider 轨道（`SliderTrackNode`）
 
 迁移对象选择标准：① 匿名闭包（无名、无 key、无调试可见性）② 参数多
-（Slider 绘制参数 9 个，闭包重建恒 Skip 是精度损失）③ 有像素测试兜底。
+（Slider 绘制参数 9 个；旧闭包 `CustomDraw` 在 `param_eq` 无分支 → 落到
+`_ => false` → 恒 **Enter** 多余重跑，P1-1 更正：迁移收益是“消灭多余 Enter”
+而非“恒 Skip 精度损失”）③ 有像素测试兜底。
 Switch 符合①但枚举耦合深（14 处 match），Divider 太简单无代表性——Slider 居中。
 
 ### 迁移步骤（照抄清单）
 
-1. 定义具名 struct（全部绘制参数 + 回写 State + interaction 源），`#[derive(Debug)]`。
+1. 定义具名 struct（全部绘制参数 + 回写 State + interaction 源），`#[derive(Debug)]`，
+   可见性 `pub(crate)`（P1-4：第三方照抄形状自定类型，不复用本节点；未 clamp
+   值/`min>max` 未归一在 build 侧，node 内无校验）。
 2. `impl DrawNode`：`draw` 内复用原绘制函数（`draw_slider` 原样保留，
-   `pub(crate)` 不动）；`node_key` 纳入**全部视觉参数**（颜色/值/开关/源 id），
-   回写通道（`track_width`）不纳入。
+   `pub(crate)` 不动）；`node_key` 纳入**静态视觉参数**（颜色/值/开关/源 id），
+   回写通道（`track_width`）与瞬态动画值（`focus_alpha` 等逐帧值）不纳入——
+   后者渲染期 `peek` 直读（P1-2；`focused` 经 `thumb_active` 间接覆盖）。
+   `-0.0/0.0` key 不同但同画（保守多 Enter，无害，P2-3）。
 3. build 侧：`.draw(closure)` → `.draw_node(Struct { … })`，闭包捕获的变量
    变成 struct 字段（编译器强制完备——漏字段即编译错，这是具名化的隐藏收益）。
-4. 补三测试：key 全覆盖 / 像素保真 / 调试树可见。
-5. 原 `draw_slider` 函数保留（node 内复用，单测/他处可调）——迁移不是删除。
+4. 补三测试：key 全覆盖（含 colors/min/max/steps 变更 ne + 回写值变更 eq，
+   P0-2）/ 真双路像素对照（同参 node 路 vs 旧闭包路逐字节 eq，P0-1）/
+   调试树可见（`#[cfg(feature = "debug-server")]` 门控）。
+5. 原绘制函数保留（node 内复用，单测/他处可调）+ 同步组件文档
+   （`docs/slider.md` 架构段，P1-3）——迁移不是删除。
+6. 迁移前自问（P1-6：Slider 范式未覆盖的三问，迁 Switch/Divider 前必答）：
+   (a) 瞬态动画是否进 key？（进则每帧 Enter；不进需“排除 + peek 重绘”约定）
+   (b) 层位是否匹配？（draw_node 统一枚举后绘制，不保留链序；内容之上型
+   如 unbounded ripple 照搬即变 z-order）(c) 渲染期求值捕获了什么？
+   （build 期快照改 Dynamic 语义；存 Modifier 进 node 涉 Debug/key；
+   `to_bits` 遇 NaN 抖动）。
 
 ### 实测教训
 
@@ -247,3 +293,4 @@ Switch 符合①但枚举耦合深（14 处 match），Divider 太简单无代�
 4. `b17cf8d` 设计文档 `modifier-node.md`
 5. `6464439` LayoutNode A 型约束变换试点
 6. `0fdf563` 有状态节点约定+链序结论
+7. `6f6e749` Slider 轨道迁移 SliderTrackNode（首个真实迁移，§九）

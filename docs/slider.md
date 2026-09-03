@@ -54,13 +54,14 @@ Slider::new(value: f32)                       // 对标 Slider(value, ...)
 
 ## 3. 实现细节
 
-- **架构**：winia 首个使用 `Modifier::draw()`（自定义 Canvas 绘制闭包）的组件
-  ——track/thumb/tick 全部由绘制闭包完成（对齐 Compose `Canvas`）。
-  该能力是新增框架原语（`ModifierElement::CustomDraw`），后续进度条等
-  绘制型组件可复用。
-- **轨道宽度通道**：交互回调（tap/drag）需要像素↔值换算，但组件无尺寸
-  通知——draw 闭包渲染期把 `rect.width()` 写入 `set_silent` 的宽度 State
-  （无重组副作用），交互回调读取。
+- **架构**（exp/modifier-node 首个真实迁移）：轨道绘制经 `SliderTrackNode`
+  （具名 DrawNode）挂载——原 `Modifier::draw` 匿名闭包已替换（`draw_slider`
+  原函数保留复用）。具名化收益：调试树可见 `node(draw:slidertrack:…)`、
+  `node_key` 精确 Skip（旧闭包 `CustomDraw` 在 `param_eq` 无分支 → 恒 Enter
+  多余重跑，迁移后参数不变即 Skip）、绘制参数结构体化可单测。
+- **轨道宽度通道**：交互回调（tap/drag）需要像素↔值换算——node 的 `draw` 内
+  把 `rect.width()` 写入 `set_silent` 的宽度 State（无重组副作用），交互回调读取。
+  回写 State 不进 `node_key`（值变化不触发 Enter，走依赖通道）。
 - **点击/拖动**：**按下立即跳转**（`on_press` 即换算位置更新值——用户规范，
   不等 tap/drag）+ `on_tap`（finished）+ `on_drag_start`（拖动起点）+
   `on_drag`（绝对位置跟随，无累积误差）+ `on_drag_end`（finished）；

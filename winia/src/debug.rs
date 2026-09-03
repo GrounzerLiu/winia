@@ -453,8 +453,18 @@ fn describe_modifier(modifier: &crate::modifier::Modifier) -> String {
         _ => None,
     }).collect();
     // 开放节点（exp/modifier-node）：node_key 进树，调试时可见第三方行为。
+    // P1-5：key 同文本做 JSON 转义（第三方 key 含引号/反斜杠/换行即非法 JSON）。
     for n in modifier.modifier_nodes() {
-        parts.push(format!("node({})", crate::modifier::node_key_of(n)));
+        let raw = crate::modifier::node_key_of(n);
+        let esc = raw
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r")
+            .replace('\t', "\\t")
+            .replace('\u{8}', "\\b")
+            .replace('\u{c}', "\\f");
+        parts.push(format!("node({})", esc));
     }
     parts.join("|")
 }

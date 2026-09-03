@@ -1205,18 +1205,11 @@ impl AppState {
                                 (has_focusable || wants_ime).then_some((arena[i].id, arena[i].slot_key))
                             }).unwrap_or((0, 0));
                             let path_len = path.len();
-                            // Click 检测（消耗 path 前做）
-                            for &i in path.iter().rev() {
-                                if click_handled { break; }
-                                if let Some(on_click) = arena[i].modifier.on_click() {
-                                    on_click();
-                                    handled = true;
-                                    click_handled = true;
-                                } else if let Some(node_cb) = arena[i].modifier.node_click() {
-                                    node_cb.on_click();
-                                    handled = true;
-                                    click_handled = true;
-                                }
+                            // Click 检测（P2-1：复用 fire_click_along_path，
+                            // 与主树/overlay 同语义，防内联重复漂移）
+                            let click_handled = fire_click_along_path(arena, &path);
+                            if click_handled {
+                                handled = true;
                             }
                             (fid, sk, path_len, click_handled)
                         } else { (0, 0, 0, false) }
@@ -3714,6 +3707,47 @@ mod pointer_dispatch_coord_tests {
         nodes[0].measured_size = Size::new(100.0, 100.0);
         dispatch_ptr_event(&nodes, 0, &[0], &make_event(), (10.0, 10.0), None);
         assert!(ev_log.lock().unwrap().is_empty(), "枚举消费后同节点 node 不应收到");
+    }
+
+    /// P0-1 回归：内层装饰性 PointerNode 不偷外层 tap。
+    /// gesture 目标选择只认 TapOn/DragOn 枚举——内层纯 node 时外层 TapOnTap 命中。
+    #[test]
+    fn pointer_node_does_not_steal_outer_tap_target() {
+        use crate::layout::node::hit_test;
+        use crate::modifier::PointerNode;
+        use std::sync::{Arc, Mutex};
+        #[derive(Debug)]
+        struct Deco;
+        impl PointerNode for Deco {}
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let log2 = log.clone();
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new().size(200.0, 200.0).on_tap(move |_| {
+                log2.lock().unwrap().push("outer-tap".to_string());
+            })),
+            LayoutNode::leaf(
+                Modifier::new()
+                    .size(100.0, 100.0)
+                    .pointer_node(Deco), // 装饰性：恒返 false，不消费
+            ),
+        ];
+        nodes[0].measured_size = Size::new(200.0, 200.0);
+        nodes[1].measured_size = Size::new(100.0, 100.0);
+        nodes[1].position = Point::new(20.0, 20.0);
+        nodes[0].children.push(1);
+        // 点内层 (50,50)：命中路径 [0,1]
+        let path = hit_test(&nodes, 0, 50.0, 50.0);
+        assert_eq!(path, vec![0, 1]);
+        // gesture 目标选择（与 gesture_down 同逻辑）：最内层 has_gesture 者
+        let gid = path
+            .iter()
+            .rev()
+            .find(|&&i| nodes[i].modifier.has_gesture())
+            .copied();
+        assert_eq!(gid, Some(0), "内层纯 PointerNode 不进路由，外层 tap 命中");
+        // fire_gesture_action 语义：gid=0 的枚举 TapOnTap 可触发
+        assert!(nodes[0].modifier.has_gesture());
+        assert!(!nodes[1].modifier.has_gesture());
     }
 }
 

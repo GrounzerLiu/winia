@@ -1417,8 +1417,13 @@ pub(crate) fn measure_node(
     // 仍可覆盖 node 的变换，链序直觉保持）。动态值在 transform 内求值
     // （measure 期 State::get 注册布局依赖——与 SizeValue::Dynamic 同机制）。
     // Arc 克隆出链表避免借用冲突（nodes[idx] 不可变借用与后续可变写冲突）。
+    // P2-2：无 node 时早退（全树每节点每次 measure 省一次 collect 分配）。
     let layout_transforms: Vec<std::sync::Arc<dyn crate::modifier::LayoutNode>> =
-        nodes[idx].modifier.layout_nodes().cloned().collect();
+        if nodes[idx].modifier.has_layout_nodes() {
+            nodes[idx].modifier.layout_nodes().cloned().collect()
+        } else {
+            Vec::new()
+        };
     for t in &layout_transforms {
         inner_constraints = t.transform(inner_constraints);
     }
