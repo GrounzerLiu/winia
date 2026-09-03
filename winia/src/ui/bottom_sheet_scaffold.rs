@@ -113,9 +113,11 @@ impl BottomSheetScaffold {
         crate::ui::layout_components::Stack::new()
             .modifier(Modifier::new().fill_max_size())
             .build(ctx, |ctx| {
-                // 主内容（占满，片在上层覆盖）
+                // 主内容（占满，片在上层覆盖）——底部留出 sheet peek 高度，
+                // 对齐 Compose BottomSheetScaffold 的 contentWindowPadding（sheet 折叠时内容不被遮挡）
+                let peek_px_pre = peek.to_px(crate::unit::current_density());
                 crate::ui::layout_components::Stack::new()
-                    .modifier(Modifier::new().fill_max_size())
+                    .modifier(Modifier::new().fill_max_size().padding_bottom(peek_px_pre))
                     .build(ctx, |ctx| {
                         content(ctx);
                     });
