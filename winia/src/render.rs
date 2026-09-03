@@ -645,11 +645,22 @@ fn render_pass1(
         draw_backdrop_blur(canvas, x, y, w, h, radius);
     }
 
-    // 图形层：包住整个节点（background + text + children），应用 alpha/变换
+    // 图形层：包住整个节点（background + text + children），应用 alpha/变换/颜色滤镜
     let gl_params = node.modifier.graphics_layer_params();
     let gl_saved = if let Some(gl) = gl_params {
-        if gl.alpha < 1.0 {
-            canvas.save_layer_alpha_f(None, gl.alpha);
+        let has_filter = gl.color_filter.is_some();
+        let has_alpha = gl.alpha < 1.0;
+        if has_filter || has_alpha {
+            let mut paint = skia_safe::Paint::default();
+            if let Some(cf) = &gl.color_filter {
+                if let Some(filter) = to_skia_color_filter(cf) {
+                    paint.set_color_filter(filter);
+                }
+            }
+            if has_alpha {
+                paint.set_alpha_f(gl.alpha.clamp(0.0, 1.0));
+            }
+            canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default().paint(&paint));
         } else {
             canvas.save();
         }
@@ -1951,6 +1962,54 @@ mod tests {
         gl.rotation_x = 75.0; // 75° 仍可见（90° 侧立成线是正确行为）
         let (top, bottom, _) = render_rect_with_gl(&gl);
         assert!(bottom > top, "rotationX=75 默认相机应仍可见：top={top} bottom={bottom}");
+    }
+
+    #[test]
+    fn graphics_layer_color_filter_tints_content() {
+        // 完整渲染路径回归：graphics_layer color_filter(Tint SrcIn) 必须
+        // 经 saveLayer paint 染色层内内容（白背景 → 红）——render_pass1
+        // 的 save_layer + paint color_filter 分支。
+        use crate::core::composer::Composer;
+        use crate::layout::constraints::Constraints;
+        use crate::modifier::{BlendMode, ColorFilter, Modifier, Shape};
+        use skia_safe::{surfaces, Color as SkColor};
+
+        let mut c = Composer::new();
+        c.compose(|ctx| {
+            let k = ctx.next_key();
+            ctx.start_leaf(
+                k,
+                Modifier::new()
+                    .size(100.0, 100.0)
+                    .background(crate::modifier::Color::from_argb(255, 255, 255, 255), Shape::Rectangle)
+                    .graphics_layer(crate::modifier::GraphicsLayerParams {
+                        color_filter: Some(ColorFilter::Tint {
+                            color: crate::modifier::Color::from_argb(255, 255, 0, 0),
+                            blend_mode: BlendMode::SrcIn,
+                        }),
+                        ..crate::modifier::GraphicsLayerParams::default()
+                    }),
+            );
+            ctx.end_node();
+        });
+        c.layout(Constraints::new(0.0, 100.0, 0.0, 100.0));
+        let root = c.layout_root_idx().unwrap();
+
+        let mut surface = surfaces::raster_n32_premul((100, 100)).unwrap();
+        surface.canvas().clear(SkColor::BLACK);
+        crate::render::render(c.arena_nodes(), root, surface.canvas());
+
+        let mut px = [0u8; 4];
+        let info = skia_safe::ImageInfo::new(
+            (1, 1),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        surface.read_pixels(&info, &mut px, 4, (50, 50));
+        // 中心像素：白底被 Tint(SrcIn) 染成红（R 高、G/B 低）
+        assert!(px[0] > 200 && px[1] < 60 && px[2] < 60,
+            "中心像素应为红（染白→红），实际 {:?}", px);
     }
 
     #[test]

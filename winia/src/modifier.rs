@@ -2040,6 +2040,9 @@ pub struct GraphicsLayerParams {
     pub ambient_shadow_color: Color,
     /// 投射光阴影颜色（默认约 25% 黑，对标 Compose spotShadowColor）。
     pub spot_shadow_color: Color,
+    /// 颜色滤镜（对标 Compose graphicsLayer `colorFilter`——渲染期 saveLayer
+    /// paint 挂 color filter，层内所有内容被染色；Text/Icon 用 `Tint` 做动态颜色动画）
+    pub color_filter: Option<ColorFilter>,
 }
 
 impl Default for GraphicsLayerParams {
@@ -2055,6 +2058,7 @@ impl Default for GraphicsLayerParams {
             shadow_shape: None,
             ambient_shadow_color: DEFAULT_AMBIENT_SHADOW_COLOR,
             spot_shadow_color: DEFAULT_SPOT_SHADOW_COLOR,
+            color_filter: None,
         }
     }
 }
@@ -2732,6 +2736,9 @@ fn merge_graphics_params(current: &mut GraphicsLayerParams, next: GraphicsLayerP
     }
     if next.spot_shadow_color != DEFAULT_SPOT_SHADOW_COLOR {
         current.spot_shadow_color = next.spot_shadow_color;
+    }
+    if next.color_filter.is_some() {
+        current.color_filter = next.color_filter;
     }
 }
 

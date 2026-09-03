@@ -527,8 +527,18 @@ impl Tab {
             TabRowDefaults::unselected_content_color(&theme)
         });
 
-        // 使用静态颜色（无动画——后续可加 graphics_layer 交叉淡化）
-        let text_color = if selected { sel_color } else { unsel_color };
+        // 颜色过渡动画（对标 Compose TabTransition animateColor）：动画目标色
+        // State<Color> + graphics_layer(color_filter: Tint) 渲染期染色——
+        // 单层 text/icon 按插值色绘制，无需双文本交叉淡化。
+        let color_anim = ctx.animate_color_as_state(
+            if selected { sel_color } else { unsel_color },
+            crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec {
+                damping_ratio: 1.0,
+                stiffness: 300.0,
+                mass: 1.0,
+                threshold: 0.01,
+            }),
+        );
 
         let has_text = self.text.is_some();
         let has_icon = self.icon.is_some();
@@ -552,7 +562,7 @@ impl Tab {
         };
         let item_modifier = item_modifier.then(self.modifier);
 
-        // 自定义 content 版：直接包装点击+ripple
+        // 自定义 content 版：直接包装点击+ripple（颜色动画由用户 content 自理）
         if has_content {
             let content = self.content.unwrap();
             match ctx.start_restartable_group(key, item_modifier, crate::layout::BoxLayout::new().alignment(crate::layout::Alignment::Center)) {
@@ -570,29 +580,49 @@ impl Tab {
             return;
         }
 
+        // 动态颜色 tint（渲染期 peek 零重组；layout_deps 由 TabLayoutPolicy.measure
+        // 读 color_anim.get() 注册——动画帧重测 Tab 节点 → 重绘 → 新色生效）
+        let tint_for_icon = color_anim.clone();
+        let icon_tint_modifier = Modifier::new().graphics_layer(move || crate::modifier::GraphicsLayerParams {
+            color_filter: Some(crate::modifier::ColorFilter::Tint {
+                color: tint_for_icon.peek(),
+                blend_mode: crate::modifier::BlendMode::SrcIn,
+            }),
+            ..crate::modifier::GraphicsLayerParams::default()
+        });
+        let tint_for_text = color_anim.clone();
+        let text_tint_modifier = Modifier::new().graphics_layer(move || crate::modifier::GraphicsLayerParams {
+            color_filter: Some(crate::modifier::ColorFilter::Tint {
+                color: tint_for_text.peek(),
+                blend_mode: crate::modifier::BlendMode::SrcIn,
+            }),
+            ..crate::modifier::GraphicsLayerParams::default()
+        });
+
         // 默认 text/icon 版：TabLayoutPolicy
-        let policy = TabLayoutPolicy { has_text, has_icon };
+        let policy = TabLayoutPolicy { has_text, has_icon, color_anim: color_anim.clone() };
 
         match ctx.start_restartable_group(key, item_modifier, policy) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
-                // 1) icon (if present)
+                // 1) icon (if present)——Tint 染色后无需 with_content_color 再注入
                 if let Some(icon) = self.icon {
                     let icon_key = ctx.next_key();
-                    match ctx.start_restartable_group(icon_key, Modifier::new(), crate::layout::BoxLayout::new().alignment(crate::layout::Alignment::Center)) {
+                    match ctx.start_restartable_group(icon_key, icon_tint_modifier, crate::layout::BoxLayout::new().alignment(crate::layout::Alignment::Center)) {
                         GroupStatus::Skip => {}
                         GroupStatus::Enter => {
-                            WiniaTheme::with_content_color(text_color, ctx, icon);
+                            icon(ctx);
                         }
                     }
                     ctx.end_restartable_group();
                 }
-                // 2) text (if present) — 水平填充 16dp
+                // 2) text (if present) — 水平填充 16dp；颜色由 tint 统一驱动
                 if let Some(text) = self.text {
                     let text_key = ctx.next_key();
-                    let mut style = TabRowDefaults::label_text_style();
-                    style.color = Some(text_color);
-                    let text_modifier = Modifier::new().padding_horizontal(HORIZONTAL_TEXT_PADDING);
+                    let style = TabRowDefaults::label_text_style();
+                    let text_modifier = Modifier::new()
+                        .padding_horizontal(HORIZONTAL_TEXT_PADDING)
+                        .then(text_tint_modifier);
                     match ctx.start_restartable_group(text_key, text_modifier, crate::layout::BoxLayout::new().alignment(crate::layout::Alignment::Center)) {
                         GroupStatus::Skip => {}
                         GroupStatus::Enter => {
@@ -624,6 +654,9 @@ impl Tab {
 struct TabLayoutPolicy {
     has_text: bool,
     has_icon: bool,
+    /// 颜色动画 State——measure 开头 get() 注册 layout_dep，动画帧重测
+    /// Tab 节点 → 触发重绘 → graphics_layer color_filter peek 新色
+    color_anim: State<crate::modifier::Color>,
 }
 
 impl MeasurePolicy for TabLayoutPolicy {
@@ -634,6 +667,10 @@ impl MeasurePolicy for TabLayoutPolicy {
         children: &[usize],
         constraints: Constraints,
     ) -> (Size, Vec<Placement>) {
+        // ⚠ 必须最先读颜色动画 State——此刻 ACTIVE_SLOT_KEY 仍是本节点（Tab，
+        // measure_node 进入时设置）；递归测量子节点后 key 会被改写。注册
+        // layout_dep → 动画帧只重测本节点（不重组）→ 重绘 → tint peek 新色。
+        self.color_anim.get();
         let n = children.len();
         // 识别内容子节点：无 ripple（最后一个除外）
         let content_children = &children[..n - 1];
