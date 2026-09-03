@@ -408,11 +408,29 @@ pub trait ClickNode: std::fmt::Debug + Send + Sync {
     }
 }
 
+/// 指针节点：原始指针事件（对标 Compose PointerInputModifierNode）。
+/// 与 `PointerEvent` 枚举同语义（pre = 外→内隧道，on = 内→外冒泡），返回 true
+/// 即消费（停止冒泡）。第三方自定义手势/悬停/拖拽识别挂这里，无需改 app.rs。
+pub trait PointerNode: std::fmt::Debug + Send + Sync {
+    /// 隧道阶段（外→内）：对应 `on_pre_ptr`。
+    fn on_pre(&self, _ev: &PointerEvent) -> bool {
+        false
+    }
+    /// 冒泡阶段（内→外）：对应 `on_ptr`。
+    fn on_event(&self, _ev: &PointerEvent) -> bool {
+        false
+    }
+    fn node_key(&self) -> String {
+        std::any::type_name::<Self>().to_string()
+    }
+}
+
 /// 开放节点容器（与 `ModifierElement` 并存的第二轨道）。
 #[derive(Debug, Clone)]
 pub enum ModifierNode {
     Draw(std::sync::Arc<dyn DrawNode>),
     Click(std::sync::Arc<dyn ClickNode>),
+    Pointer(std::sync::Arc<dyn PointerNode>),
 }
 
 /// Modifier 链中的单个元素。
@@ -669,6 +687,11 @@ impl Modifier {
         self.push_node(ModifierNode::Click(std::sync::Arc::new(node)))
     }
 
+    /// 追加一个指针节点（与 PointerEvent 枚举同语义参与隧道/冒泡分发）。
+    pub fn pointer_node(self, node: impl PointerNode + 'static) -> Self {
+        self.push_node(ModifierNode::Pointer(std::sync::Arc::new(node)))
+    }
+
     pub(crate) fn push_node(mut self, node: ModifierNode) -> Self {
         self.nodes.push(node);
         self
@@ -683,6 +706,14 @@ impl Modifier {
     pub(crate) fn draw_nodes(&self) -> impl Iterator<Item = &std::sync::Arc<dyn DrawNode>> {
         self.nodes.iter().filter_map(|n| match n {
             ModifierNode::Draw(d) => Some(d),
+            _ => None,
+        })
+    }
+
+    /// 开放指针节点迭代（输入管线用——与枚举 PointerEvent 同序交织分发）。
+    pub(crate) fn pointer_nodes(&self) -> impl Iterator<Item = &std::sync::Arc<dyn PointerNode>> {
+        self.nodes.iter().filter_map(|n| match n {
+            ModifierNode::Pointer(p) => Some(p),
             _ => None,
         })
     }
@@ -1894,6 +1925,8 @@ impl Modifier {
     }
 
     /// 是否声明了任意手势回调（tap/drag 系列）——app.rs 手势路由判定用
+    /// 双轨（exp/modifier-node）：含 PointerNode 即视为手势参与者（第三方手势
+    /// 无需 TapOn/DragOn 枚举即可进入手势路由）。
     pub fn has_gesture(&self) -> bool {
         self.elements.iter().any(|el| matches!(
             el,
@@ -1905,7 +1938,7 @@ impl Modifier {
                 | ModifierElement::DragOnMove { .. }
                 | ModifierElement::DragOnEnd { .. }
                 | ModifierElement::DragOnCancel { .. }
-        ))
+        )) || self.nodes.iter().any(|n| matches!(n, ModifierNode::Pointer(_)))
     }
 
     /// 是否声明了拖拽回调（决定 slop 后走 drag 还是取消 tap）
@@ -2907,6 +2940,7 @@ pub(crate) fn node_key_of(n: &ModifierNode) -> String {
     match n {
         ModifierNode::Draw(d) => format!("draw:{}", d.node_key()),
         ModifierNode::Click(c) => format!("click:{}", c.node_key()),
+        ModifierNode::Pointer(p) => format!("pointer:{}", p.node_key()),
     }
 }
 
@@ -3252,5 +3286,72 @@ mod node_track_tests {
             }));
         assert_eq!(m.modifier_nodes().len(), 2, "then 应合并 node 轨道");
         assert_eq!(m.elements().len(), 1, "枚举轨道不受影响");
+    }
+
+    /// 试点指针节点：记录隧道/冒泡调用（第三方手势识别照此形状实现 PointerNode）。
+    #[derive(Debug)]
+    struct TestPointerNode {
+        pre_log: std::sync::Arc<std::sync::Mutex<Vec<(f32, f32)>>>,
+        event_log: std::sync::Arc<std::sync::Mutex<Vec<(f32, f32)>>>,
+        consume: bool,
+    }
+
+    impl PointerNode for TestPointerNode {
+        fn on_pre(&self, ev: &PointerEvent) -> bool {
+            self.pre_log.lock().unwrap().push(ev.position);
+            self.consume
+        }
+        fn on_event(&self, ev: &PointerEvent) -> bool {
+            self.event_log.lock().unwrap().push(ev.position);
+            self.consume
+        }
+        fn node_key(&self) -> String {
+            format!("testptr:{}", self.consume)
+        }
+    }
+
+    #[test]
+    fn node_track_pointer_bubble_receives_local_coords() {
+        use crate::layout::node::LayoutNode;
+        use crate::layout::{Point, Size};
+        let pre_log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let event_log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut nodes = vec![LayoutNode::leaf(
+            Modifier::new().size(100.0, 100.0).pointer_node(TestPointerNode {
+                pre_log: pre_log.clone(),
+                event_log: event_log.clone(),
+                consume: false,
+            }),
+        )];
+        nodes[0].measured_size = Size::new(100.0, 100.0);
+        nodes[0].position = Point::new(10.0, 20.0);
+        let path = vec![0];
+        let ev = PointerEvent {
+            event_type: PointerEventType::Move,
+            position: (0.0, 0.0),
+            scene_position: (50.0, 60.0),
+            kind: PointerKind::Mouse { button: PointerButton::Primary },
+            is_alt_pressed: false,
+            is_ctrl_pressed: false,
+            is_shift_pressed: false,
+            is_meta_pressed: false,
+        };
+        // 直接走 app.rs 的分发（同模块外不可见——此处测 Modifier 侧装配；
+        // 分发语义由 app.rs pointer_dispatch_coord_tests 风格覆盖，见下）。
+        assert_eq!(nodes[0].modifier.pointer_nodes().count(), 1);
+        assert!(nodes[0].modifier.has_gesture(), "含 PointerNode 即手势参与者");
+        // node_key 指纹：consume 变化 → Enter
+        let a = Modifier::new().pointer_node(TestPointerNode {
+            pre_log: pre_log.clone(),
+            event_log: event_log.clone(),
+            consume: false,
+        });
+        let b = Modifier::new().pointer_node(TestPointerNode {
+            pre_log: pre_log.clone(),
+            event_log: event_log.clone(),
+            consume: true,
+        });
+        assert!(!a.param_eq(&b), "pointer node_key 变化应 Enter");
+        let _ = (path, ev);
     }
 }

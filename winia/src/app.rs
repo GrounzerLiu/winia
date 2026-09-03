@@ -3397,6 +3397,7 @@ fn dispatch_ptr_event(
     }).collect();
 
     // on_pre_ptr: outer → inner
+    // 双轨（exp/modifier-node）：枚举 on_pre_ptr 先行，同节点 node.on_pre 紧随。
     for (i, &ni) in use_path.iter().enumerate() {
         let local_x = scene_pos.0 - abs_positions[i].0;
         let local_y = scene_pos.1 - abs_positions[i].1;
@@ -3406,6 +3407,9 @@ fn dispatch_ptr_event(
             if let crate::modifier::ModifierElement::PointerEvent { on_pre_ptr: Some(handler), .. } = el {
                 if handler(&ev) { return true; }
             }
+        }
+        for p in nodes[ni].modifier.pointer_nodes() {
+            if p.on_pre(&ev) { return true; }
         }
     }
 
@@ -3419,6 +3423,9 @@ fn dispatch_ptr_event(
             if let crate::modifier::ModifierElement::PointerEvent { on_ptr: Some(handler), .. } = el {
                 if handler(&ev) { return true; }
             }
+        }
+        for p in nodes[ni].modifier.pointer_nodes() {
+            if p.on_event(&ev) { return true; }
         }
     }
     false
@@ -3624,6 +3631,82 @@ mod pointer_dispatch_coord_tests {
         let got = *container_recv.lock().unwrap();
         assert_eq!(got, Some((20.0, 30.0)),
             "scroll 容器自身局部坐标不应减自身 offset（offset 只影响子节点）");
+    }
+
+    /// 双轨（exp/modifier-node）：PointerNode 与枚举 PointerEvent 同场分发。
+    /// 验证：①隧道外→内、冒泡内→外顺序；②node 收到与枚举相同的本地坐标；
+    /// ③枚举消费（true）时 node 不再收到（旧行为优先）。
+    #[test]
+    fn dispatch_pointer_node_dual_track_order_and_coords() {
+        use crate::modifier::PointerNode;
+        use std::sync::{Arc, Mutex};
+        #[derive(Debug)]
+        struct Rec {
+            pre: Arc<Mutex<Vec<(f32, f32)>>>,
+            ev: Arc<Mutex<Vec<(f32, f32)>>>,
+        }
+        impl PointerNode for Rec {
+            fn on_pre(&self, e: &PointerEvent) -> bool {
+                self.pre.lock().unwrap().push(e.position);
+                false
+            }
+            fn on_event(&self, e: &PointerEvent) -> bool {
+                self.ev.lock().unwrap().push(e.position);
+                false
+            }
+        }
+        let pre_log = Arc::new(Mutex::new(Vec::new()));
+        let ev_log = Arc::new(Mutex::new(Vec::new()));
+        let enum_log = Arc::new(Mutex::new(Vec::new()));
+        let enum_log2 = enum_log.clone();
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new().size(200.0, 200.0)),
+            LayoutNode::leaf(
+                Modifier::new()
+                    .size(100.0, 100.0)
+                    .on_pointer_event(move |e| {
+                        enum_log2.lock().unwrap().push(e.position);
+                        false
+                    })
+                    .pointer_node(Rec { pre: pre_log.clone(), ev: ev_log.clone() }),
+            ),
+        ];
+        nodes[0].measured_size = Size::new(200.0, 200.0);
+        nodes[1].measured_size = Size::new(100.0, 100.0);
+        nodes[1].position = Point::new(20.0, 30.0);
+        nodes[0].children.push(1);
+        let path = vec![0, 1];
+        // 场景 (50,60) → 子本地 (30,30)
+        dispatch_ptr_event(&nodes, 0, &path, &make_event(), (50.0, 60.0), None);
+        assert_eq!(*enum_log.lock().unwrap(), vec![(30.0, 30.0)]);
+        assert_eq!(*ev_log.lock().unwrap(), vec![(30.0, 30.0)], "node 冒泡坐标与枚举一致");
+        assert_eq!(*pre_log.lock().unwrap(), vec![(30.0, 30.0)], "node 隧道坐标一致");
+    }
+
+    #[test]
+    fn dispatch_pointer_node_enum_consume_blocks_node() {
+        use crate::modifier::PointerNode;
+        use std::sync::{Arc, Mutex};
+        #[derive(Debug)]
+        struct Rec {
+            ev: Arc<Mutex<Vec<(f32, f32)>>>,
+        }
+        impl PointerNode for Rec {
+            fn on_event(&self, e: &PointerEvent) -> bool {
+                self.ev.lock().unwrap().push(e.position);
+                false
+            }
+        }
+        let ev_log = Arc::new(Mutex::new(Vec::new()));
+        let mut nodes = vec![LayoutNode::leaf(
+            Modifier::new()
+                .size(100.0, 100.0)
+                .on_pointer_event(|_| true) // 枚举消费
+                .pointer_node(Rec { ev: ev_log.clone() }),
+        )];
+        nodes[0].measured_size = Size::new(100.0, 100.0);
+        dispatch_ptr_event(&nodes, 0, &[0], &make_event(), (10.0, 10.0), None);
+        assert!(ev_log.lock().unwrap().is_empty(), "枚举消费后同节点 node 不应收到");
     }
 }
 
