@@ -382,11 +382,31 @@ impl Default for FilterQuality {
 //   走 `node_key()`（默认按 TypeId + 可选 id，保证 param_eq 可判定）。
 // - 试点：BackgroundNode（绘制）+ ClickableNode（输入）——验证"枚举
 //   不动、node 链并行生效"后，再逐个迁移。
+//
+// 有状态节点（StatefulNode 约定）：node 本身不持有组合期 State（remember
+// 必须在 `#[composable] build` 内调用——宏语句 key 上下文要求）。约定：
+// 组件 build 内 `ctx.remember(...)` 建 State → clone 进 node（State 是 Arc
+// 包装，Clone 廉价）→ build 期 get 注册 compose/layout 依赖，绘制期 peek 求值。
+//
+// ⚠ 绘制期 get 不注册依赖（render 已出依赖帧，DEP_MODE=None——与枚举
+// Background color_fn 完全一致）。状态驱动重绘靠 build 期 get（值变化 →
+// 重组 → 新 node → 重绘）或动画 set_no_wake + request_redraw。node 无特殊
+// 通道，老实跟枚举一致（实测验证，见 node_track_stateful_draw_follows_state）。
+// 例：`let src = ctx.remember(|| MutableInteractionSource::new()).get();`
+//     `Modifier::new().click_node(MyClick { source: src.clone() })`。
+// 状态生命周期跟组合槽走（remember 语义），node 只是"行为 + 状态引用"
+// 的载体——节点移除时 State 随槽回收，无需 onAttach/onDetach。
 // ═══════════════════════════════════════════════════════════
 
 /// 绘制节点：渲染期以节点 rect 调用（对标 Compose DrawModifierNode）。
 /// 返回 `Option<TextParams>` 的旧 `render_modifier_element` 语义由核心保留；
 /// node 只做"画点什么"（背景/装饰），不参与文本提取。
+///
+/// 链序语义（实测结论）：node 统一在背景层绘制（枚举链走完后），不保留链序
+/// 交织。`drawWithContent` 式包裹（内容前后各画一笔、saveLayer 包内容）暂不
+/// 支持——原因：① render_pass1 是单函数流水线（背景→文本→子→波纹），包裹需
+/// 拆成 drawBefore/drawAfter 两阶段或闭包嵌套，重构面大；② 真实需求未被倒逼
+/// （现有 CustomDraw/背景/装饰全是单向绘制）。需要时再加 `DrawWrapNode`。
 pub trait DrawNode: std::fmt::Debug + Send + Sync {
     fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect);
     /// Skip 判定用 key（默认 = TypeId 名；含参节点应覆盖，纳入参数指纹）。
@@ -3553,5 +3573,102 @@ mod node_track_tests {
             composer.arena_nodes()[root].measured_size.width, 250.0,
             "State 变化应经布局依赖重测（无需重组）"
         );
+    }
+
+    /// 有状态节点约定验证：DrawNode 持有 remember 建的 State（Arc 克隆），
+    /// 绘制期 get 求值（与 Background color_fn 同语义——渲染期求值，值变化由
+    /// 外部 set_visual/notify 驱动重绘；依赖注册发生在 build 期闭包捕获时）。
+    ///
+    /// 教训（实测）：渲染期（render_pass1）已出依赖帧（take_deps 后 DEP_MODE=None），
+    /// 此处 get 不注册依赖——与枚举 Background color_fn 完全一致（它同样在渲染期
+    /// 求值、同样不注册）。状态驱动重绘靠：build 期闭包捕获 State（get 注册 compose
+    /// 依赖）或动画引擎 set_no_wake + request_redraw。node 无特殊通道，老实跟枚举一致。
+    #[derive(Debug)]
+    struct TestStatefulBgNode {
+        color_state: crate::core::state::State<Color>,
+    }
+
+    impl DrawNode for TestStatefulBgNode {
+        fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
+            // 渲染期求值（同 Background color_fn）——用 peek 避免误导（get 亦可，
+            // 但帧外无依赖帧，注册无效；peek 语义诚实）。
+            let c = self.color_state.peek();
+            crate::render::draw_background_for_node(canvas, rect, &c, &Shape::Rectangle);
+        }
+        fn node_key(&self) -> String {
+            // 值走 State，不进 key（同 SizeValue::Dynamic/Background color_fn 语义——
+            // 闭包重建不触发 Enter，值变化走依赖/重绘通道）
+            "teststatefulbg".to_string()
+        }
+    }
+
+    #[test]
+    fn node_track_stateful_draw_follows_state() {
+        use crate::core::state::State;
+        use skia_safe::surfaces;
+        let red = Color::from_argb(255, 200, 30, 30);
+        let blue = Color::from_argb(255, 30, 30, 200);
+        let color_state = State::new(red);
+        let mut composer = Composer::new();
+        let render_once = |composer: &mut Composer| -> [u8; 4] {
+            composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+            let mut surface = surfaces::raster_n32_premul((300, 300)).unwrap();
+            let canvas = surface.canvas();
+            canvas.clear(skia_safe::Color::WHITE);
+            let root = composer.layout_root_idx().expect("root");
+            let nodes = composer.arena_nodes();
+            crate::render::render(nodes, root, canvas);
+            let pm = surface.peek_pixels().expect("pixmap");
+            let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+            let w = pm.width() as usize;
+            px[20 * w + 30]
+        };
+        // 首帧：State::new 即 ownerless，clone 进 node——与
+        // ctx.remember(...).get() 同 Arc 语义（remember 只是跨帧持久化包装）。
+        let cs = color_state.clone();
+        composer.compose(|ctx| {
+            let key = ctx.next_key();
+            // build 期 get 注册 compose 依赖（同 Background 动画闭包在 build 期
+            // 捕获 State 的用法——值变化 → 重组 → 新闭包/node → 重绘）。
+            let _dep = cs.get();
+            ctx.start_leaf(
+                key,
+                Modifier::new()
+                    .size(60.0, 40.0)
+                    .draw_node(TestStatefulBgNode { color_state: cs.clone() }),
+            );
+            ctx.end_node();
+        });
+        let p1 = render_once(&mut composer);
+        assert!(
+            (p1[2] as i16 - 200).abs() <= 6,
+            "首帧应为红色，实际 BGRA={:?}",
+            p1
+        );
+        // set 后重组（build 期 get 已注册 compose 依赖）→ 新值渲染
+        color_state.set(blue);
+        assert!(composer.has_pending_states(), "build 期 get 应注册 compose 依赖");
+        let cs2 = color_state.clone();
+        composer.recompose(|ctx| {
+            let key = ctx.next_key();
+            let _dep = cs2.get();
+            ctx.start_leaf(
+                key,
+                Modifier::new()
+                    .size(60.0, 40.0)
+                    .draw_node(TestStatefulBgNode { color_state: cs2.clone() }),
+            );
+            ctx.end_node();
+        });
+        let p2 = render_once(&mut composer);
+        assert!(
+            (p2[0] as i16 - 200).abs() <= 6,
+            "set 后重组应为蓝色，实际 BGRA={:?}",
+            p2
+        );
+        // Skip 语义：node_key 与 State 值无关 → 同 key 跨帧 Skip 不误触发 Enter
+        let a = Modifier::new().draw_node(TestStatefulBgNode { color_state: color_state.clone() });
+        let b = Modifier::new().draw_node(TestStatefulBgNode { color_state: color_state.clone() });
+        assert!(a.param_eq(&b), "有状态 node 的 key 与值无关（值走依赖通道）");
     }
 }

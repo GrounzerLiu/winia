@@ -110,14 +110,20 @@ Modifier::new().size(48.0, 48.0).draw_node(MyBadge { color })
 
 ## 四、已知限制（故意没做）
 
-1. **无 LayoutNode**：`MeasurePolicy` 仍是组件级参数，未下沉到 modifier 级。
-   `modifier.layout_node(...)` 需动 `measure_node` 约束解析链，单独设计（见 §五）。
-2. **无 onAttach/onDetach**：node 是纯数据+行为，无状态。StatefulNode
-   （内部动画/订阅）需接 `remember`，挂载点待设计。
-3. **无顺序语义**：node 链统一在背景层/枚举后绘制，不保留链序交织。
-   需要链序精确控制（如 drawWithContent 包裹）暂不支持。
-4. **trait object 开销**：每节点多一次 vtable + Arc。热路径（measure）未用 node，
-   绘制/输入路径可接受；大规模列表待实测。
+1. ~~无 LayoutNode~~ → ✅ 已落地（A 型约束变换，见 §五）。
+2. ~~无 onAttach/onDetach~~ → ✅ 约定已定：**不需要**。node 不持有组合期 State，
+   状态由 build 内 `remember` 创建后 clone 进 node（State 是 Arc）。状态生命
+   周期跟槽走，节点移除随槽回收。绘制期 `get` 不注册依赖（render 已出依赖帧，
+   与枚举 Background color_fn 完全一致）——状态驱动靠 build 期 `get` 注册
+   compose/layout 依赖 + 绘制期 `peek` 求值（实测 `node_track_stateful_draw_follows_state`）。
+   想在 node 里 `get` 注册是误解，不要开这个口子。
+3. ~~无顺序语义~~ → ✅ 结论：**保持现状，不做包裹**。node 统一背景层绘制。
+   `drawWithContent` 式包裹需拆 render_pass1 流水线（背景→文本→子→波纹）为
+   两阶段或闭包嵌套，重构面大而真实需求未被倒逼（现有全是单向绘制）。
+   需要时再加 `DrawWrapNode`，现在加是过度设计。
+4. **trait object 开销**：每节点多一次 vtable + Arc。热路径（measure）A 型 node
+   仅多一次 transform 调用（MinWidth 级别，开销可忽略）；绘制/输入路径可接受；
+   大规模列表待实测（未测，不要断言）。
 
 ## 五、下一步：LayoutNode 预研结论
 
@@ -182,10 +188,22 @@ fn measure(&self, children: &[usize], inner: Constraints) -> (Size, Vec<Placemen
 
 | 位置 | 用例 | 覆盖 |
 |---|---|---|
-| `modifier::node_track_tests` | draw 像素 / click 无枚举可达 / param_eq / then合并 / pointer装配+指纹 / key装配+指纹 / layout静态+折叠 / layout State驱动 | 8 项 |
+| `modifier::node_track_tests` | draw 像素 / click 无枚举可达 / param_eq / then合并 / pointer装配+指纹 / key装配+指纹 / layout静态+折叠 / layout State驱动 / stateful绘制+依赖约定 | 9 项 |
 | `app::pointer_dispatch_coord_tests` | 双轨顺序+坐标 / 枚举消费阻断 | 2 项 |
 | `app::key_node_dual_track_tests` | PerWindow 端到端隧道+冒泡 | 1 项 |
-| 全量 | `cargo test -p winia --lib` | 724 通过（1 时间敏感 flaky 重跑过） |
+| 全量 | `cargo test -p winia --lib` | 725 通过（`animate_scroll_to_item` 时间敏感 flaky，见下） |
+
+## 八、附：`animate_scroll_to_item_animates_offset` flaky 根因（分支外，记录）
+
+- 现象：全量跑时偶发 `23980 vs 23966`（差 13px，阈值 5px），单跑必过。
+- 根因：`step_animations_until_done`（`lazy_column.rs:1630`）用
+  `sleep(20ms)` + `(v-last)<0.5 && frames>5` 判收敛——spring 尾段每帧位移
+  <0.5 即停，残余 13px 未收完就 assert。机器负载高时帧间隔抖动，
+  收敛判据提前触发。
+- 与本分支无关（改动面未碰 spring/滚动；干净树同现象已验证）。
+- 修法（未做，属主树事项）：判据加"距目标 <5px"合取，或 frames 上限后
+  追加 `snap_to(target)` 对齐 Compose 到达语义。修了要跑 10 遍全量验证，
+  别顺手改。
 
 ## 七、提交历史（分支 `exp/modifier-node`）
 
