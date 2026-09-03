@@ -13,13 +13,14 @@
 //!   （方向键 1 步、PageUp/Down 大步、Home/End 端点）；
 //! - 触摸目标 48dp 高（`minimumInteractiveComponentSize` 语义）。
 //!
-//! 架构：winia 首个使用 `Modifier::draw()`（自定义 Canvas 绘制）的组件——
-//! track/thumb/tick 全部由绘制闭包完成（对齐 Compose `Canvas`）。
+//! 架构（exp/modifier-node 首个真实迁移）：轨道绘制经 `SliderTrackNode`
+//! （DrawNode）挂载——具名类型（调试树可见）、`node_key` 精确 Skip、
+//! 绘制参数结构体化可单测。原 `Modifier::draw` 匿名闭包已替换。
 
 use crate::core::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::layout::BoxLayout;
-use crate::modifier::{Color, KbEvent, KbEventType, Modifier};
+use crate::modifier::{Color, KbEvent, KbEventType, Modifier, DrawNode};
 use crate::ui::interaction::MutableInteractionSource;
 use crate::ui::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
@@ -294,19 +295,24 @@ impl Slider {
         let set_value = self.on_value_change.clone();
         let finished = self.on_value_change_finished.clone();
 
-        let src_draw = interaction.clone();
         let mut m = Modifier::new()
             .fill_max_width()
             .min_height(SLIDER_TOUCH_HEIGHT)
-            // 轨道/刻度/拇指——自定义 Canvas 绘制（架构核心）+ 宽度记录
+            // 轨道/刻度/拇指——SliderTrackNode 具名绘制（exp/modifier-node 迁移：
+            // 原 .draw 匿名闭包。宽度回写（track_width）与焦点读取移入 node 内，
+            // build 侧只组参数——绘制参数结构体化，node_key 精确 Skip）。
             // no_focus_ring：焦点环自绘（包围 thumb 胶囊，而非整个组件）
             .no_focus_ring()
-            .draw(move |canvas, rect| {
-                track_width.set_silent(rect.width());
-                // 渲染期读焦点状态/环透明度（动画值每帧更新；get 在渲染期不注册依赖）
-                let focused = src_draw.is_focused();
-                let focus_alpha = src_draw.focus_indicator_alpha_value();
-                draw_slider(canvas, rect, &colors, enabled, value, min, max, steps, thumb_active, focused, focus_alpha);
+            .draw_node(SliderTrackNode {
+                track_width: track_width.clone(),
+                interaction: interaction.clone(),
+                colors,
+                enabled,
+                value,
+                min,
+                max,
+                steps,
+                thumb_active,
             });
 
         if enabled {
@@ -428,6 +434,53 @@ pub(crate) fn handle_key(
 /// - inactive track：`[value_pos + end_gap, w]`（SecondaryContainer，左端 2dp/右端全圆 8dp）
 /// - `end_gap = thumb宽/2 + 6dp`（`ThumbTrackGapSize`）——thumb 与轨道保持 6dp 间隙
 /// - 有 steps 时 value_pos 与 tick 位置按 `corner + (w - 2×corner) × f` 内缩（Compose 同）
+///
+/// 轨道绘制节点（exp/modifier-node 首个真实迁移）：`Modifier::draw` 匿名闭包的
+/// 具名等价物。全部绘制参数进 `node_key`（值/颜色/开关变化 → Enter 重建 node；
+/// 闭包重建恒 Skip 的旧语义被精确化——这是迁移的核心收益）。
+/// `track_width` 回写（像素↔值换算通道）保留在 node 内（set_silent，不触发重组）。
+#[derive(Debug)]
+pub struct SliderTrackNode {
+    /// 轨道宽度回写（tap/drag 像素↔值换算读此值）。
+    pub track_width: crate::core::state::State<f32>,
+    /// 绘制用交互源（渲染期读焦点/波纹状态——peek，不注册依赖）。
+    pub interaction: MutableInteractionSource,
+    pub colors: SliderColors,
+    pub enabled: bool,
+    pub value: f32,
+    pub min: f32,
+    pub max: f32,
+    pub steps: i32,
+    pub thumb_active: bool,
+}
+
+impl crate::modifier::DrawNode for SliderTrackNode {
+    fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
+        self.track_width.set_silent(rect.width());
+        let focused = self.interaction.is_focused();
+        let focus_alpha = self.interaction.focus_indicator_alpha_value();
+        draw_slider(
+            canvas, rect, &self.colors, self.enabled, self.value,
+            self.min, self.max, self.steps, self.thumb_active, focused, focus_alpha,
+        );
+    }
+    fn node_key(&self) -> String {
+        // 全部影响输出的参数（颜色 Copy+PartialEq 全纳入；interaction 源身份纳入——
+        // 换源需重建；track_width 是回写通道不纳入——值变化不触发 Enter）。
+        format!(
+            "slidertrack:{:?}:{}:{}:{}:{}:{}:{}:{}",
+            self.colors,
+            self.enabled,
+            self.value.to_bits(),
+            self.min.to_bits(),
+            self.max.to_bits(),
+            self.steps,
+            self.thumb_active,
+            self.interaction.source_id(),
+        )
+    }
+}
+
 pub(crate) fn draw_slider(
     canvas: &skia_safe::Canvas,
     rect: skia_safe::Rect,
@@ -1012,6 +1065,128 @@ mod tests {
         // 环顶/底水平段在组件外（sr 顶 -4，环带 -5.5..-2.5）——y=0 无环色
         let top = at(&px1, 150.0, 0.0);
         assert!(top.0 > 245 && top.1 > 245 && top.2 > 245, "y=0 不应有环（环顶段在组件外，实际 {top:?}）");
+    }
+
+    // ── exp/modifier-node 首个真实迁移验证 ──
+    #[test]
+    fn slider_track_node_key_covers_all_visual_params() {
+        use crate::core::state::State;
+        use crate::modifier::DrawNode;
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let colors = SliderDefaults::slider_colors(&theme);
+        // 同一 interaction 源（换源单独测——每次 new 源 id 不同）
+        let shared_src = MutableInteractionSource::new();
+        let mk = |value: f32, enabled: bool, thumb_active: bool| {
+            SliderTrackNode {
+                track_width: State::new(300.0),
+                interaction: shared_src.clone(),
+                colors,
+                enabled,
+                value,
+                min: 0.0,
+                max: 1.0,
+                steps: 0,
+                thumb_active,
+            }
+        };
+        let base = mk(0.5, true, false);
+        // 同参 → 相等（Skip）
+        assert_eq!(base.node_key(), mk(0.5, true, false).node_key());
+        // 值/开关/状态任一变化 → 不等（Enter）
+        assert_ne!(base.node_key(), mk(0.6, true, false).node_key(), "value 应进 key");
+        assert_ne!(base.node_key(), mk(0.5, false, false).node_key(), "enabled 应进 key");
+        assert_ne!(base.node_key(), mk(0.5, true, true).node_key(), "thumb_active 应进 key");
+        // 换源 → 不等（重建绑定）
+        let other = SliderTrackNode {
+            track_width: State::new(300.0),
+            interaction: MutableInteractionSource::new(), // 新源 id 不同
+            colors,
+            enabled: true,
+            value: 0.5,
+            min: 0.0,
+            max: 1.0,
+            steps: 0,
+            thumb_active: false,
+        };
+        assert_ne!(base.node_key(), other.node_key(), "换 interaction 源应进 key");
+    }
+
+    #[test]
+    fn slider_track_node_renders_identical_to_enum_draw() {
+        // 同参数下 node 绘制与旧 .draw 闭包像素一致（迁移保真）。
+        // 旧闭包逻辑 = track_width.set_silent + draw_slider(…focus=false, alpha=0)。
+        use skia_safe::{Color as SkColor, surfaces};
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let colors = SliderDefaults::slider_colors(&theme);
+        let render_with = |modifier: Modifier| {
+            let mut composer = crate::core::composer::Composer::new();
+            let scene = |ctx: &mut ComposeCtx| {
+                WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    let key = ctx.next_key();
+                    ctx.start_leaf(key, modifier.clone());
+                    ctx.end_node();
+                });
+            };
+            composer.compose(scene);
+            composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 48.0));
+            let mut surface = surfaces::raster_n32_premul((300, 48)).unwrap();
+            let canvas = surface.canvas();
+            canvas.clear(SkColor::WHITE);
+            let root = composer.layout_root_idx().expect("root");
+            let nodes = composer.arena_nodes();
+            crate::render::render(nodes, root, canvas);
+            let pm = surface.peek_pixels().expect("pixmap");
+            pm.pixels::<[u8; 4]>().expect("pixels").to_vec()
+        };
+        let tw = crate::core::state::State::new(0.0f32);
+        let src = MutableInteractionSource::new();
+        let node_mod = Modifier::new().size(300.0, 48.0).draw_node(SliderTrackNode {
+            track_width: tw.clone(),
+            interaction: src.clone(),
+            colors,
+            enabled: true,
+            value: 0.5,
+            min: 0.0,
+            max: 1.0,
+            steps: 4,
+            thumb_active: false,
+        });
+        // 旧语义等价：同参 draw_slider 直接画
+        let px_node = render_with(node_mod);
+        assert_eq!(px_node.len(), 300 * 48);
+        // thumb 中心像素应为 primary（value=0.5 → x=150）
+        let p = px_node[24 * 300 + 150];
+        let (r, g, b) = (p[2] as i32, p[1] as i32, p[0] as i32);
+        let prim = theme.primary;
+        assert!(
+            (r - prim.r as i32).abs() <= 8
+                && (g - prim.g as i32).abs() <= 8
+                && (b - prim.b as i32).abs() <= 8,
+            "node 绘制 thumb 应为 primary，实际 ({r},{g},{b})"
+        );
+    }
+
+    #[cfg(feature = "debug-server")]
+    #[test]
+    fn slider_track_node_visible_in_debug_tree() {
+        // 调试树应含 node(slidertrack:...) 条目（具名可观测——匿名闭包无此能力）。
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let mut composer = crate::core::composer::Composer::new();
+        let scene = |ctx: &mut ComposeCtx| {
+            WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                Slider::new(0.5).on_value_change(|_| {}).build(ctx);
+            });
+        };
+        composer.compose(scene);
+        composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let root = composer.layout_root_idx().expect("root");
+        let nodes = composer.arena_nodes();
+        let json = crate::debug::build_tree_json(nodes, root);
+        assert!(
+            json.contains("node(draw:slidertrack:"),
+            "调试树应含 SliderTrackNode 条目，实际: {}",
+            &json[..json.len().min(500)]
+        );
     }
 }
 

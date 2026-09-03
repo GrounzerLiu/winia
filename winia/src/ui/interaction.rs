@@ -281,6 +281,12 @@ impl MutableInteractionSource {
         self.focus_indicator_alpha.peek()
     }
 
+    /// 源身份（node_key 用——跨 clone 稳定，同 PartialEq 语义取 pressed State id）。
+    /// exp/modifier-node 引入：具名 node 的 node_key 需纳入源身份（换源重建）。
+    pub fn source_id(&self) -> u32 {
+        self.pressed.id()
+    }
+
     /// 拖拽开始（DragInteraction.Start 等价）
     pub fn emit_drag_start(&self) {
         self.dragged.set(true);

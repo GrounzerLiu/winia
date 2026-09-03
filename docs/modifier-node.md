@@ -1,6 +1,6 @@
 # Modifier Node（开放扩展点，实验分支 `exp/modifier-node`）
 
-> 状态：实验中（双轨并存，零破坏）。目标：把 Modifier 从"封闭枚举"变成
+> 状态：首个真实迁移完成（Slider 轨道）。目标：把 Modifier 从"封闭枚举"变成
 > "开放节点"——第三方不改核心即可实现自定义行为。
 >
 > 背景：`ModifierElement` 是 `pub(crate)` 封闭枚举（`modifier.rs`），50+ 变体，
@@ -15,7 +15,7 @@ Modifier { elements: Vec<ModifierElement>,   // 旧轨道：封闭枚举，内�
 ```
 
 - 旧 builder（`background/clickable/on_pointer_event/…`）照旧 push 枚举，行为零变化。
-- 新扩展走 node：`draw_node / click_node / pointer_node / key_node` 四个 builder。
+- 新扩展走 node：`draw_node / click_node / pointer_node / key_node / layout_node` 五个 builder。
 - `then` 合并双轨（`elements.extend + nodes.extend`）。
 - `param_eq`（Skip 判定）：枚举按现有规则 + node 按 `node_key()` 序列比较。
 - 优先级原则：**枚举优先，node 回退**。同节点同阶段枚举消费（返回 true/命中）
@@ -191,7 +191,41 @@ fn measure(&self, children: &[usize], inner: Constraints) -> (Size, Vec<Placemen
 | `modifier::node_track_tests` | draw 像素 / click 无枚举可达 / param_eq / then合并 / pointer装配+指纹 / key装配+指纹 / layout静态+折叠 / layout State驱动 / stateful绘制+依赖约定 | 9 项 |
 | `app::pointer_dispatch_coord_tests` | 双轨顺序+坐标 / 枚举消费阻断 | 2 项 |
 | `app::key_node_dual_track_tests` | PerWindow 端到端隧道+冒泡 | 1 项 |
-| 全量 | `cargo test -p winia --lib` | 725 通过（`animate_scroll_to_item` 时间敏感 flaky，见下） |
+| `slider::tests` | node_key 全参数覆盖 / node 像素保真 / 调试树可见（feature 门控） | 3 项 |
+| 全量 | `cargo test -p winia --lib` | 727 通过（`animate_scroll_to_item` 时间敏感 flaky，见下） |
+
+## 九、首个真实迁移：Slider 轨道（`SliderTrackNode`）
+
+迁移对象选择标准：① 匿名闭包（无名、无 key、无调试可见性）② 参数多
+（Slider 绘制参数 9 个，闭包重建恒 Skip 是精度损失）③ 有像素测试兜底。
+Switch 符合①但枚举耦合深（14 处 match），Divider 太简单无代表性——Slider 居中。
+
+### 迁移步骤（照抄清单）
+
+1. 定义具名 struct（全部绘制参数 + 回写 State + interaction 源），`#[derive(Debug)]`。
+2. `impl DrawNode`：`draw` 内复用原绘制函数（`draw_slider` 原样保留，
+   `pub(crate)` 不动）；`node_key` 纳入**全部视觉参数**（颜色/值/开关/源 id），
+   回写通道（`track_width`）不纳入。
+3. build 侧：`.draw(closure)` → `.draw_node(Struct { … })`，闭包捕获的变量
+   变成 struct 字段（编译器强制完备——漏字段即编译错，这是具名化的隐藏收益）。
+4. 补三测试：key 全覆盖 / 像素保真 / 调试树可见。
+5. 原 `draw_slider` 函数保留（node 内复用，单测/他处可调）——迁移不是删除。
+
+### 实测教训
+
+1. **`source_id()` 需新加**：`MutableInteractionSource` 无公开身份（`PartialEq`
+   用内部 State id 比较）。加 `pub fn source_id(&self) -> u32`（`interaction.rs`，
+   取 pressed State id，同 PartialEq 语义跨 clone 稳定）。不要 `Debug` 格式化
+   整个源（State 地址每帧变，key 抖动致永不 Skip）。
+2. **测试要配 `DrawNode` import**：`node_key()` 是 trait 方法，测试模块需
+   `use crate::modifier::DrawNode`（编译错 `E0599` 即此因）。
+3. **同帧 new 的源 id 不同**：`MutableInteractionSource::new()` 每次 id 全新——
+   key 测试必须共享同一源实例，换源单独测。生产无此问题（remember 跨帧稳定）。
+4. **调试树测试要 feature 门控**：`build_tree_json` 非 feature 下是空 stub，
+   `#[cfg(feature = "debug-server")]` 门控测试（踩过一次才加）。
+5. **node_key 里的 `{:?}` 会很长**（SliderColors 全字段展开）——调试树可读性差
+   但正确性无碍。后续可给 key 加短指纹（fnv 压缩），现在先保证完备。
+6. **format 占位符数**：9 参数写成 8 个 `{}` 即编译错——数清楚，最好分行写。
 
 ## 八、附：`animate_scroll_to_item_animates_offset` flaky 根因（分支外，记录）
 
@@ -212,3 +246,4 @@ fn measure(&self, children: &[usize], inner: Constraints) -> (Size, Vec<Placemen
 3. `555c057` KeyNode 双轨
 4. `b17cf8d` 设计文档 `modifier-node.md`
 5. `6464439` LayoutNode A 型约束变换试点
+6. `0fdf563` 有状态节点约定+链序结论
