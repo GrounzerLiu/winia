@@ -152,6 +152,13 @@ impl BottomSheetScaffold {
                 let st_for_offset = sheet_state.clone();
                 let st_for_anchors = sheet_state.clone();
                 let sheet_h: State<f32> = ctx.remember(|| 0.0);
+                // 首帧初始化锚点：offset 尚未设置（NaN）时用当前 peek/layout 立即 snap 到
+                // current_value（通常 PartiallyExpanded→peek 位），否则首帧布局 offset 用
+                // NaN→0 导致片贴顶（y=0）。sheet_h=0 时 Expanded 锚点为 NaN，后续
+                // on_size_changed 补全（offset 已初始化则保持）。
+                if st_for_offset.offset().is_nan() {
+                    st_for_offset.update_anchors_scaffold(layout_h, peek_px, sheet_h.get());
+                }
                 let is_full = sheet_h.get() >= layout_h - 1.0;
                 let from = if st_for_offset.has_partially_expanded_state() {
                     SheetValue::PartiallyExpanded
@@ -169,8 +176,10 @@ impl BottomSheetScaffold {
 
                 let mut sheet_mod = Modifier::new()
                     .width(sheet_w)
-                    .offset_x(sheet_pad_x)
-                    .offset_y(st_for_offset.offset_state())
+                    // ⚠ 必须用单元素 .offset(x, y)——offset_x/offset_y 连用会 push
+                    // 两个 Offset 元素，get_offset（modifier.rs:1845）只取第一个
+                    // → y 恒为 0（片贴顶 bug）。
+                    .offset(sheet_pad_x, st_for_offset.offset_state())
                     .shadow(
                         1.0,
                         cur_shape,

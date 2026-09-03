@@ -760,20 +760,41 @@ impl Modifier {
     }
 
     /// 位置偏移（不影响布局尺寸，仅移动绘制位置；RTL 下 x 镜像——
+    /// 合并式 offset：若链上已有 Offset 元素则更新其 x/y 分量，否则 push 新的。
+    /// 这样 `.offset_x(a).offset_y(b)` 得到一个 `Offset{a,b}`（而非两个 Offset——
+    /// get_offset 只取第一个，连用会静默丢分量）。对齐 `merge_graphics_layer` 模式。
+    fn merge_offset(mut self, x: Option<SizeValue>, y: Option<SizeValue>) -> Self {
+        let mut elements = std::mem::take(&mut self.elements);
+        if let Some(el) = elements.iter_mut().find(|e| matches!(e, ModifierElement::Offset { .. })) {
+            if let ModifierElement::Offset { x: ex, y: ey } = el {
+                if let Some(nx) = x { *ex = nx; }
+                if let Some(ny) = y { *ey = ny; }
+            }
+        } else {
+            elements.push(ModifierElement::Offset {
+                x: x.unwrap_or(SizeValue::Static(Dimension::Fixed(0.0))),
+                y: y.unwrap_or(SizeValue::Static(Dimension::Fixed(0.0))),
+            });
+        }
+        self.elements = elements;
+        self
+    }
+
     /// 对标 Compose `Modifier.offset`）。
     /// 值支持动态（`State`/`DerivedValue`/闭包——动画可作用于 offset）。
     pub fn offset(self, x: impl Into<SizeValue>, y: impl Into<SizeValue>) -> Self {
-        self.push(ModifierElement::Offset { x: x.into(), y: y.into() })
+        // 已有 Offset（如前面 offset_x）时合并分量，而非再 push 一个
+        self.merge_offset(Some(x.into()), Some(y.into()))
     }
 
-    /// 仅 x 方向偏移（RTL 下镜像）
+    /// 仅 x 方向偏移（RTL 下镜像）。与 `offset_y` 连用合并为单个 Offset 元素。
     pub fn offset_x(self, x: impl Into<SizeValue>) -> Self {
-        self.push(ModifierElement::Offset { x: x.into(), y: SizeValue::Static(Dimension::Fixed(0.0)) })
+        self.merge_offset(Some(x.into()), None)
     }
 
-    /// 仅 y 方向偏移（不受 RTL 影响——垂直方向）
+    /// 仅 y 方向偏移（不受 RTL 影响——垂直方向）。与 `offset_x` 连用合并为单个 Offset 元素。
     pub fn offset_y(self, y: impl Into<SizeValue>) -> Self {
-        self.push(ModifierElement::Offset { x: SizeValue::Static(Dimension::Fixed(0.0)), y: y.into() })
+        self.merge_offset(None, Some(y.into()))
     }
 
     /// 绝对偏移（RTL 下**不**镜像——对标 Compose `Modifier.absoluteOffset`）。
@@ -2420,6 +2441,24 @@ mod tests {
         assert_eq!(m.get_offset(), Some((0.0, 7.0)));
         // 无 offset → None
         assert_eq!(Modifier::new().get_offset(), None);
+    }
+
+    #[test]
+    fn test_offset_axis_chained_merges_into_single_element() {
+        // ⚠ 回归保护：offset_x/offset_y 连用必须**合并**为单元素——
+        // get_offset 只取第一个 Offset，若各自 push 会静默丢 y（y=0 bug，
+        // 曾致 BottomSheetScaffold 片贴顶）。
+        let m = Modifier::new().offset_x(5.0).offset_y(7.0);
+        assert_eq!(m.get_offset(), Some((5.0, 7.0)), "offset_x+offset_y 连用应得 (5,7)");
+        // 与全参 offset 连用：后者合并进已有 Offset
+        let m = Modifier::new().offset_y(7.0).offset(5.0, 8.0);
+        assert_eq!(m.get_offset(), Some((5.0, 8.0)), "offset 应覆盖 y 分量");
+        // 链上只应有一个 Offset 元素
+        assert_eq!(
+            m.elements.iter().filter(|e| matches!(e, ModifierElement::Offset { .. })).count(),
+            1,
+            "offset_x/offset_y/offset 连用后只应有一个 Offset 元素"
+        );
     }
 
     #[test]
