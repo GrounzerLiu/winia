@@ -140,6 +140,12 @@ private fun Modifier.surface(shape, backgroundColor, border, shadowElevation) =
 - **备注（非阻塞，已确认/记录）**：bottom_sheet 内联注释「面板用 Surface 承载」与实际不符（面板未用 Surface，§6.3 已记录决策）；Surface 未实现 Compose「触控穿透阻断」职责（待交互重载补）；「内容滚动优先」注释与 SheetNested expands-first 口径略异（后者正确）。
 - **已验证无误**：Surface modifier 链 shadow→border→background→clip（clip 最后）；start/end_restartable_group 配对正确（复刻 Card，不触发 GROUP_STACK 断言）；clip 不影响 hit_test；面板 on_drag 与列表滚动路由互斥；SheetNested 方向符号自洽、无双重消费。
 
+### 7.6 review：Surface 交互重载（子代理审查 1db91cd）
+结论：**可提交**（P0/P1 无；3 项 P2 卫生，已修并提交 678d5d7）。子代理验证 cargo build/example/test（689 过 1 flaky 与本次无关）。
+- **关键确认**：`has_gesture()` 不匹配 Clickable → 点击走真实路径 `detect_click`→`fire_click_along_path`（app.rs:2642/2332），三个重载实际可达；`enabled=false` 全链路断交互（无 clickable/hover/focus/ripple）且 param_eq 长度变化强制 Enter 无缓存污染；**Select 忽略 selected 只回调是正确语义**（对齐 material3/foundation selectable 状态 hoist）；**Toggle 翻转后回调无陈旧捕获**（closure 每次 Enter 替换）；交互源 remember/clickable+ripple 挂载与 Card/Button/Switch 一致；波纹在 clip+ripple_shape 双重裁剪内。
+- **P2（已修 678d5d7）**：surface.rs:185 重复未用 may_interact；surface_demo.rs 死代码（let row/let _ = row）；文档不一致（surface.rs 模块头「待补充」过时、enabled「视觉降级」文案不准确——Surface 无 disabled 容器色变体、demo 注释未提交互）。
+- **可选后续**：为 Surface 补一个「enabled=false 时无 Clickable 元素」单元测试（仿 checkbox.rs modifier 断言，非阻塞）。
+
 ## 8. 验证方法
 
 - demo：`cargo run -p winia --example bottom_sheet_demo --features debug-server`
