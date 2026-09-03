@@ -8,32 +8,55 @@ fn tab_row_demo(ctx: &mut ComposeCtx) {
     let sel = ctx.remember(|| 0usize);
     let sel2 = ctx.remember(|| 1usize);
     let secondary = ctx.remember(|| false);
+    // RTL/LTR 切换（对齐 icon_demo / scaffold_demo 模式）
+    let rtl = ctx.remember(|| false);
+    let direction = if rtl.get() { LayoutDirection::Rtl } else { LayoutDirection::Ltr };
     // ScrollableTabRow：独立滚动状态（remember 创建的 ScrollState）
     let scroll_sel = ctx.remember(|| 6usize);
     let scroll_state = ctx.remember(|| ScrollState::new()).get();
+    // 外层垂直滚动（内容较多——500px 窗口放不下全部组件）
+    let outer_scroll = ctx.remember(|| ScrollState::new()).get();
 
-    WiniaTheme::with_theme_and_direction(ThemeColors::default_light(), LayoutDirection::Ltr, ctx, |ctx| {
+    WiniaTheme::with_theme_and_direction(ThemeColors::default_light(), direction, ctx, |ctx| {
         Column::new()
-            .modifier(Modifier::new().fill_max_size())
+            .modifier(Modifier::new().fill_max_size().vertical_scroll(outer_scroll))
             .build(ctx, |ctx| {
-                // Title
-                Text::new("TabRow Demo")
+                // Title + RTL/Secondary 切换行
+                Row::new()
                     .modifier(Modifier::new().padding(16.0))
-                    .build(ctx);
-
-                // Toggle secondary button
-                let secondary_click = secondary.clone();
-                Button::new()
-                    .on_click(move || secondary_click.update(|v| *v = !*v))
+                    .spacing(12.0)
+                    .alignment(Alignment::Center)
                     .build(ctx, |ctx| {
-                        if secondary.get() {
-                            Text::new("Switch to Primary").build(ctx);
-                        } else {
-                            Text::new("Switch to Secondary").build(ctx);
-                        }
+                        Text::new(if rtl.get() { "TabRow Demo（RTL）" } else { "TabRow Demo" })
+                            .build(ctx);
+
+                        // RTL/LTR 切换
+                        let rtl_click = rtl.clone();
+                        let st_reset = scroll_state.clone();
+                        Button::new()
+                            .on_click(move || {
+                                rtl_click.update(|v| *v = !*v);
+                                // 方向切换后归零滚动——scroll_reverse 镜像下 offset 语义翻转
+                                st_reset.offset.set(0.0);
+                            })
+                            .build(ctx, |ctx| {
+                                Text::new(if rtl.get() { "LTR" } else { "RTL" }).font_size(12.0).build(ctx);
+                            });
+
+                        // Primary/Secondary 切换
+                        let secondary_click = secondary.clone();
+                        Button::new()
+                            .on_click(move || secondary_click.update(|v| *v = !*v))
+                            .build(ctx, |ctx| {
+                                if secondary.get() {
+                                    Text::new("Switch to Primary").font_size(12.0).build(ctx);
+                                } else {
+                                    Text::new("Switch to Secondary").font_size(12.0).build(ctx);
+                                }
+                            });
                     });
 
-                Spacer::vertical(16.0);
+                Spacer::vertical(8.0);
 
                 // ── TabRow (Primary or Secondary) ──
                 let sel_clone = sel.clone();
@@ -131,7 +154,7 @@ fn tab_row_demo(ctx: &mut ComposeCtx) {
                 .scroll_state(st)
                 .build(ctx);
 
-                Text::new("← 点击右侧 tab 观察自动滚动 →")
+                Text::new(if rtl.get() { "→ 点击左侧 tab 观察自动滚动 →" } else { "← 点击右侧 tab 观察自动滚动 →" })
                     .modifier(Modifier::new().padding(8.0))
                     .build(ctx);
             });
