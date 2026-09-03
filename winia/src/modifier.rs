@@ -2209,6 +2209,27 @@ impl ScrollState {
         self.offset.set(value.clamp(0.0, max_offset));
     }
 
+    /// 动画滚动到指定位置（对标 Compose `animateScrollTo`）——用 spring 平滑
+    /// 驱动 offset；目标 clamp 到 [0, max_offset]。滚动期间
+    /// `is_scroll_in_progress` 为 true，动画结束回 false。
+    pub fn animate_scroll_to(&self, value: f32, max_offset: f32, spec: crate::animation::AnimationSpec) {
+        let target = value.clamp(0.0, max_offset);
+        if (self.offset.peek() - target).abs() < 0.5 {
+            return;
+        }
+        self.is_scroll_in_progress.set(true);
+        let off = self.offset.clone();
+        let done_flag = self.is_scroll_in_progress.clone();
+        crate::animation::push_animatable_with_done(
+            off,
+            target,
+            spec,
+            move || {
+                let _ = done_flag.set(false);
+            },
+        );
+    }
+
     /// 惯性滚动（对标 Compose flingBehavior）：以 `velocity`(px/s) 启动指数衰减
     /// 滚动，撞到滚动极限立即停止（极限由布局期回写——LazyColumn 精确值、
     /// 普通容器由 measure_node 计算）。手动滚动（wheel/拖拽）自动取消进行中

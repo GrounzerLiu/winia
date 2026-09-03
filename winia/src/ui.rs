@@ -149,8 +149,10 @@ pub use navigation_suite::{
 };
 pub use tab_row::{
     Tab, TabRow, TabRowDefaults, TabPosition,
+    ScrollableTabRow, ScrollableTabRowDefaults,
     TAB_ROW_HEIGHT, ACTIVE_INDICATOR_HEIGHT, HORIZONTAL_TEXT_PADDING,
     MIN_INDICATOR_WIDTH, LARGE_TAB_HEIGHT, SMALL_TAB_HEIGHT,
+    SCROLLABLE_TAB_ROW_MIN_TAB_WIDTH, SCROLLABLE_TAB_ROW_EDGE_START_PADDING,
 };
 pub mod adaptive;
 pub use adaptive::{set_window_size, window_size, WidthSizeClass, HeightSizeClass};
