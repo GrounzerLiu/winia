@@ -2756,11 +2756,15 @@ fn dispatch_key_to_focus(pw: &PerWindow, ke: &crate::modifier::KbEvent) -> bool 
         path.reverse(); // path[0] == root, path[last] == focused
     }
     // Preview: root → focused（对齐 onPreviewKeyEvent）
+    // 双轨（exp/modifier-node）：枚举 on_pre_key 先行，同节点 key node 紧随。
     for &ni in &path {
         for el in nodes[ni].modifier.elements() {
             if let crate::modifier::ModifierElement::KbEvent { on_pre_key: Some(handler), .. } = el {
                 if handler(ke) { return true; }
             }
+        }
+        for k in nodes[ni].modifier.key_nodes() {
+            if k.on_pre(ke) { return true; }
         }
     }
     // Bubble: focused → root（对齐 onKeyEvent）
@@ -2769,6 +2773,9 @@ fn dispatch_key_to_focus(pw: &PerWindow, ke: &crate::modifier::KbEvent) -> bool 
             if let crate::modifier::ModifierElement::KbEvent { on_key: Some(handler), .. } = el {
                 if handler(ke) { return true; }
             }
+        }
+        for k in nodes[ni].modifier.key_nodes() {
+            if k.on_event(ke) { return true; }
         }
     }
     // 聚焦组件的键盘激活（对标 Compose clickable：聚焦时按 Enter/Space
@@ -3707,6 +3714,110 @@ mod pointer_dispatch_coord_tests {
         nodes[0].measured_size = Size::new(100.0, 100.0);
         dispatch_ptr_event(&nodes, 0, &[0], &make_event(), (10.0, 10.0), None);
         assert!(ev_log.lock().unwrap().is_empty(), "枚举消费后同节点 node 不应收到");
+    }
+}
+
+/// 双轨（exp/modifier-node）：KeyNode 与枚举 KbEvent 同场分发。
+/// dispatch_key_to_focus 需 PerWindow（ ancestors 查找走 arena），此处用真实
+/// PerWindow + Composer 组树验证端到端：枚举与 node 各收到一次，顺序为枚举先。
+#[cfg(test)]
+mod key_node_dual_track_tests {
+    use super::dispatch_key_to_focus;
+    use super::PerWindow;
+    use crate::layout::Constraints;
+    use crate::modifier::{KbEvent, KbEventType, KeyNode, Modifier};
+    use crate::ui::theme::ThemeColors;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Debug)]
+    struct Rec {
+        pre: Arc<Mutex<Vec<String>>>,
+        ev: Arc<Mutex<Vec<String>>>,
+    }
+    impl KeyNode for Rec {
+        fn on_pre(&self, _e: &KbEvent) -> bool {
+            self.pre.lock().unwrap().push("pre".into());
+            false
+        }
+        fn on_event(&self, _e: &KbEvent) -> bool {
+            self.ev.lock().unwrap().push("event".into());
+            false
+        }
+    }
+
+    fn make_key() -> KbEvent {
+        KbEvent {
+            key: winit::keyboard::Key::Character("a".into()),
+            event_type: KbEventType::KeyDown,
+            is_alt_pressed: false,
+            is_ctrl_pressed: false,
+            is_shift_pressed: false,
+            is_meta_pressed: false,
+            repeat: false,
+        }
+    }
+
+    #[test]
+    fn key_node_receives_preview_and_bubble() {
+        let pre_log = Arc::new(Mutex::new(Vec::new()));
+        let ev_log = Arc::new(Mutex::new(Vec::new()));
+        let enum_log = Arc::new(Mutex::new(Vec::new()));
+        let enum_log2 = enum_log.clone();
+        let theme = ThemeColors::default_light();
+        let mut pw = PerWindow::new(Box::new(|_| {}), 400.0, 300.0, theme);
+        let (pre_c, ev_c) = (pre_log.clone(), ev_log.clone());
+        pw.content = Box::new(move |ctx| {
+            let enum_log3 = enum_log2.clone();
+            crate::ui::Text::new("k")
+                .modifier(
+                    Modifier::new()
+                        .focusable()
+                        .on_key_event(move |_| {
+                            enum_log3.lock().unwrap().push("enum".to_string());
+                            false
+                        })
+                        .key_node(Rec { pre: pre_c.clone(), ev: ev_c.clone() }),
+                )
+                .build(ctx);
+        });
+        // 跑一帧组合+布局（借 recompose_layout_render 的组合部分逻辑）
+        let content = std::mem::replace(&mut pw.content, Box::new(|_| {}));
+        pw.composer.recompose(|ctx| content(ctx));
+        pw.content = content;
+        pw.composer.layout(Constraints::new(0.0, 400.0, 0.0, 300.0));
+        // 聚焦唯一节点
+        if let Some(r) = pw.composer.layout_root_idx() {
+            let nodes = pw.composer.arena_nodes_mut();
+            crate::layout::node::clear_focus(nodes, r);
+            // 首个 focusable 即 Text 节点（arena 序遍历）
+            let arena = pw.composer.arena_nodes();
+            let mut found = None;
+            let mut stack = vec![r];
+            while let Some(idx) = stack.pop() {
+                if found.is_none()
+                    && arena[idx].modifier.elements().iter().any(|el| {
+                        matches!(el, crate::modifier::ModifierElement::Focusable { .. })
+                    })
+                {
+                    found = Some(arena[idx].id);
+                }
+                for &c in arena[idx].children.iter().rev() {
+                    stack.push(c);
+                }
+            }
+            drop(arena);
+            if let Some(id) = found {
+                let nodes = pw.composer.arena_nodes_mut();
+                crate::layout::node::set_focus_by_id(nodes, r, id);
+                pw.focused_id = Some(id);
+            }
+        }
+        assert!(pw.focused_id.is_some(), "应聚焦到 Text 节点");
+        let handled = dispatch_key_to_focus(&pw, &make_key());
+        assert!(!handled, "都不消费应返回 false");
+        assert_eq!(pre_log.lock().unwrap().len(), 1, "隧道应到 node 一次");
+        assert_eq!(ev_log.lock().unwrap().len(), 1, "冒泡应到 node 一次");
+        assert_eq!(enum_log.lock().unwrap().len(), 1, "枚举应收到一次");
     }
 }
 

@@ -425,12 +425,30 @@ pub trait PointerNode: std::fmt::Debug + Send + Sync {
     }
 }
 
+/// 键盘节点：按键事件（对标 Compose KeyInputModifierNode）。
+/// 与 `KbEvent` 枚举同语义（pre = root→focused 隧道，on = focused→root 冒泡），
+/// 返回 true 即消费。第三方自定义快捷键/输入拦截挂这里，无需改 app.rs。
+pub trait KeyNode: std::fmt::Debug + Send + Sync {
+    /// 隧道阶段（root→focused）：对应 `on_pre_key`。
+    fn on_pre(&self, _ev: &KbEvent) -> bool {
+        false
+    }
+    /// 冒泡阶段（focused→root）：对应 `on_key`。
+    fn on_event(&self, _ev: &KbEvent) -> bool {
+        false
+    }
+    fn node_key(&self) -> String {
+        std::any::type_name::<Self>().to_string()
+    }
+}
+
 /// 开放节点容器（与 `ModifierElement` 并存的第二轨道）。
 #[derive(Debug, Clone)]
 pub enum ModifierNode {
     Draw(std::sync::Arc<dyn DrawNode>),
     Click(std::sync::Arc<dyn ClickNode>),
     Pointer(std::sync::Arc<dyn PointerNode>),
+    Key(std::sync::Arc<dyn KeyNode>),
 }
 
 /// Modifier 链中的单个元素。
@@ -692,6 +710,11 @@ impl Modifier {
         self.push_node(ModifierNode::Pointer(std::sync::Arc::new(node)))
     }
 
+    /// 追加一个键盘节点（与 KbEvent 枚举同语义参与隧道/冒泡分发）。
+    pub fn key_node(self, node: impl KeyNode + 'static) -> Self {
+        self.push_node(ModifierNode::Key(std::sync::Arc::new(node)))
+    }
+
     pub(crate) fn push_node(mut self, node: ModifierNode) -> Self {
         self.nodes.push(node);
         self
@@ -714,6 +737,14 @@ impl Modifier {
     pub(crate) fn pointer_nodes(&self) -> impl Iterator<Item = &std::sync::Arc<dyn PointerNode>> {
         self.nodes.iter().filter_map(|n| match n {
             ModifierNode::Pointer(p) => Some(p),
+            _ => None,
+        })
+    }
+
+    /// 开放键盘节点迭代（输入管线用——与枚举 KbEvent 同序交织分发）。
+    pub(crate) fn key_nodes(&self) -> impl Iterator<Item = &std::sync::Arc<dyn KeyNode>> {
+        self.nodes.iter().filter_map(|n| match n {
+            ModifierNode::Key(k) => Some(k),
             _ => None,
         })
     }
@@ -2941,6 +2972,7 @@ pub(crate) fn node_key_of(n: &ModifierNode) -> String {
         ModifierNode::Draw(d) => format!("draw:{}", d.node_key()),
         ModifierNode::Click(c) => format!("click:{}", c.node_key()),
         ModifierNode::Pointer(p) => format!("pointer:{}", p.node_key()),
+        ModifierNode::Key(k) => format!("key:{}", k.node_key()),
     }
 }
 
@@ -3353,5 +3385,53 @@ mod node_track_tests {
         });
         assert!(!a.param_eq(&b), "pointer node_key 变化应 Enter");
         let _ = (path, ev);
+    }
+
+    /// 试点键盘节点：记录隧道/冒泡调用（第三方快捷键/输入拦截照此形状实现 KeyNode）。
+    #[derive(Debug)]
+    struct TestKeyNode {
+        pre_log: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        event_log: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        consume: bool,
+    }
+
+    impl KeyNode for TestKeyNode {
+        fn on_pre(&self, ev: &KbEvent) -> bool {
+            self.pre_log.lock().unwrap().push(format!("{:?}", ev.key));
+            self.consume
+        }
+        fn on_event(&self, ev: &KbEvent) -> bool {
+            self.event_log.lock().unwrap().push(format!("{:?}", ev.key));
+            self.consume
+        }
+        fn node_key(&self) -> String {
+            format!("testkey:{}", self.consume)
+        }
+    }
+
+    #[test]
+    fn node_track_key_assembly_and_fingerprint() {
+        let pre_log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let event_log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let m = Modifier::new().key_node(TestKeyNode {
+            pre_log: pre_log.clone(),
+            event_log: event_log.clone(),
+            consume: false,
+        });
+        assert_eq!(m.key_nodes().count(), 1);
+        assert_eq!(m.modifier_nodes().len(), 1);
+        // node_key 指纹：consume 变化 → Enter
+        let a = Modifier::new().key_node(TestKeyNode {
+            pre_log: pre_log.clone(),
+            event_log: event_log.clone(),
+            consume: false,
+        });
+        let b = Modifier::new().key_node(TestKeyNode {
+            pre_log: pre_log.clone(),
+            event_log: event_log.clone(),
+            consume: true,
+        });
+        assert!(!a.param_eq(&b), "key node_key 变化应 Enter");
+        assert!(a.param_eq(&a.clone()), "同参 key node 应相等");
     }
 }
