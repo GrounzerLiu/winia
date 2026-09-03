@@ -1832,7 +1832,25 @@ fn gesture_down(pw: &mut PerWindow, scene_pos: (f32, f32)) {
         let nodes = pw.composer.arena_nodes();
         let Some(r) = pw.composer.layout_root_idx() else { return; };
         let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
-        let Some(gid) = path.iter().rev().find(|&&i| nodes[i].modifier.has_gesture()).copied() else {
+        // 跳过「是滚动容器祖先」的拖拽 fallback（如 BottomSheet 面板 on_drag）——
+        // 列表区按下时面板不应建 drag tracker，否则与滚动双系统并发（列表没到头
+        // sheet 就跟着动）。内层手势组件（slider/switch/按钮，drag 比 scroll 深）
+        // 仍命中并拦截滚动。对齐 Compose「内容滚动优先」。
+        let scroll_idx = path.iter().rev()
+            .find(|&&i| nodes[i].modifier.vertical_scroll_state().is_some()
+                || nodes[i].modifier.horizontal_scroll_state().is_some())
+            .copied();
+        let Some(gid) = path.iter().rev()
+            .find(|&&i| {
+                if !nodes[i].modifier.has_gesture() { return false; }
+                if !nodes[i].modifier.has_drag_gesture() { return true; } // 非拖拽手势（tap 等）不跳过
+                // 拖拽手势：是 scroll 祖先 → 跳过（滚动优先）；否则（内层组件）命中
+                match (i, scroll_idx) {
+                    (d, Some(s)) => d > s, // drag 比 scroll 更深 → 内层组件，命中
+                    _ => true,             // 无 scroll 容器 → 正常命中
+                }
+            })
+            .copied() else {
             return;
         };
         let n = &nodes[gid];
@@ -2934,10 +2952,24 @@ fn handle_pointer_down(
         let selecting = pw.pointer_down_state.as_ref()
             .map(|s| s.selection_anchor.is_some())
             .unwrap_or(false);
+        // 内层手势优先，但**滚动优先于外层面板拖拽**（对齐 Compose：BottomSheet 面板
+        // 整面板可拖，但列表区按下时内容滚动优先——面板 on_drag 是外层 fallback）。
+        // child_drag 仅在「drag 节点比 scroll 节点更深」（内层组件如 slider/switch）
+        // 时才成立；drag 是 scroll 祖先（面板）→ 滚动优先，不放行 child_drag。
+        let scroll_idx = path.iter().rev()
+            .find(|&&i| nodes[i].modifier.vertical_scroll_state().is_some()
+                || nodes[i].modifier.horizontal_scroll_state().is_some())
+            .copied();
         let child_drag = path.iter().rev()
             .find(|&&i| nodes[i].modifier.has_gesture())
             .map(|&i| nodes[i].modifier.has_drag_gesture())
-            .unwrap_or(false);
+            .unwrap_or(false)
+            && match (path.iter().rev().find(|&&i| nodes[i].modifier.has_drag_gesture()).copied(), scroll_idx) {
+                // drag 更深（组件在 scroll 内部）→ 组件拖拽优先；drag 是祖先 → 滚动优先
+                (Some(d), Some(s)) => d > s,
+                (Some(_), None) => true,
+                _ => false,
+            };
         if selecting || child_drag {
             None
         } else {

@@ -54,8 +54,9 @@ fn scaffold_demo(ctx: &mut ComposeCtx) {
                             let sc = st.clone();
                             let list = sheet_items.clone();
                             // 有限高度视口（Scaffold 下片高度由锚点拖拽决定，未展开时有限高；给列表定高以启用虚拟滚动）
+                            // height 620 使内容总高 ≈ 视口 720 → 展开时 is_full 触发 → 圆角 28→0 动画可见
                             Stack::new()
-                                .modifier(Modifier::new().fill_max_width().height(420.0).clip(Shape::RoundedRect { corner_radius: 12.0 }))
+                                .modifier(Modifier::new().fill_max_width().height(620.0).clip(Shape::RoundedRect { corner_radius: 12.0 }))
                                 .build(ctx, |ctx| {
                                     LazyColumn::new()
                                         .state(sc.clone())
