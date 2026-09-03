@@ -47,6 +47,7 @@ pub mod sheet_state;
 pub mod surface;
 pub mod navigation_bar;
 pub mod navigation_rail;
+pub mod tab_row;
 pub mod navigation_suite;
 pub mod short_navigation_bar;
 
@@ -145,6 +146,11 @@ pub use short_navigation_bar::{
 };
 pub use navigation_suite::{
     NavigationSuiteScaffold, NavigationSuiteType, NavigationSuiteItems,
+};
+pub use tab_row::{
+    Tab, TabRow, TabRowDefaults, TabPosition,
+    TAB_ROW_HEIGHT, ACTIVE_INDICATOR_HEIGHT, HORIZONTAL_TEXT_PADDING,
+    MIN_INDICATOR_WIDTH, LARGE_TAB_HEIGHT, SMALL_TAB_HEIGHT,
 };
 pub mod adaptive;
 pub use adaptive::{set_window_size, window_size, WidthSizeClass, HeightSizeClass};
