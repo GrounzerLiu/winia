@@ -1,4 +1,5 @@
 //! Surface 组件演示 — 验证外观底板（shape/color/border/shadow/content_color）
+//! + 三个交互重载（clickable 计数 / selectable 切换 / toggleable 开关）
 //!
 //! 运行：cargo run -p winia --example surface_demo
 
@@ -72,8 +73,6 @@ fn surface_demo(ctx: &mut ComposeCtx) {
 
             // ④ selectable：选中状态 + 点击切换（显示选中标记）
             let sel = selected.clone();
-            let row = Row::new();
-            let _ = row;
             Surface::new()
                 .shape(Shape::rounded(12.0))
                 .color(if selected.get() { Color::from_argb(255, 51, 92, 153) } else { Color::from_argb(255, 230, 230, 235) })

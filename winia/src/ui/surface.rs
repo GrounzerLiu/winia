@@ -1,4 +1,4 @@
-//! Surface 组件 — 对齐 Compose material3 `Surface`（非交互重载）
+//! Surface 组件 — 对齐 Compose material3 `Surface`
 //!
 //! 对标 Compose `Surface` 的职责（源码注释原文）：
 //! 1. **Clipping**——按 `shape` 裁剪子节点
@@ -10,13 +10,11 @@
 //!    按主题匹配（`color == theme.surface` → `on_surface`，否则保持上层值）
 //! 5. Blocking touch propagation behind the surface
 //!
-//! 与 Card 的区别：`Surface` 是**通用容器原语**（无 M3 Card 的状态化取色/
-//! 水波纹），只负责「外观底板」——shadow → border → background → clip。
+//! 与 Card 的区别：`Surface` 是**通用容器原语**（无 M3 Card 的状态化取色），
+//! 只负责「外观底板」——shadow → border → background → clip，外加三个可选交互重载：
+//! `on_click`（clickable）、`selectable(selected, on_click)`、`toggleable(checked, on_checked_change)`。
 //! 面板（BottomSheet）用 `Surface` 承载 anchoredDraggable + nestedScroll（对齐
 //! Compose：`Surface { .nestedScroll(...).anchoredDraggable(...) }`）。
-//!
-//! 仅实现纯外观重载（对标 Compose `Surface()`）。clickable/selectable/toggleable
-//! 三个交互重载待后续需要时补充。
 
 use crate::core::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
@@ -64,7 +62,8 @@ pub struct Surface {
     modifier: Modifier,
     /// 交互模式（None = 纯展示；Click/Select/Toggle = 三个交互重载）
     interaction: SurfaceInteraction,
-    /// 是否启用（禁用时不响应交互且视觉降级——对齐 Compose `enabled`）
+    /// 是否启用（对齐 Compose `enabled`——禁用时不响应交互；Surface 本身无
+    /// disabled 容器色变体，视觉由调用方处理）
     enabled: bool,
     /// 交互源（None = build 时内部 remember——对标 Compose 可选注入）
     interaction_source: Option<MutableInteractionSource>,
@@ -130,7 +129,8 @@ impl Surface {
         self
     }
 
-    /// 是否启用（默认 true）。禁用时不响应交互且视觉降级（对齐 Compose `enabled`）。
+    /// 是否启用（默认 true）。对齐 Compose `enabled`——禁用时不响应交互；
+    /// Surface 本身无 disabled 容器色变体（视觉由调用方处理）。
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
         self
@@ -182,7 +182,6 @@ impl Surface {
             }
         });
         let shadow_elevation = self.shadow_elevation;
-        let may_interact = self.enabled && !matches!(self.interaction, SurfaceInteraction::None);
         // 交互源：外部注入或内部 remember（对齐 Compose Surface 可选注入——同 Card 惯例，
         // 纯展示 Surface 也 remember 一个空源，开销极小）。
         let interaction = self.interaction_source.unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
