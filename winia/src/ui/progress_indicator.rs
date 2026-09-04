@@ -291,6 +291,7 @@ impl LinearProgressIndicator {
         ctx.changed(&self.track_color);
         ctx.changed(&self.stroke_cap);
         ctx.changed(&self.gap_size);
+        ctx.changed(&self.draw_stop_indicator);
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
         let color = self.color.unwrap_or_else(|| ProgressIndicatorDefaults::indicator_color(&theme));
@@ -1590,5 +1591,54 @@ mod tests {
         let px_enum = render_with(enum_mod);
         assert_eq!(px_node.len(), 100 * 100);
         assert_eq!(px_node, px_enum, "circular node 路与旧 draw 路必须逐字节一致");
+    }
+
+    #[test]
+    fn draw_stop_toggle_takes_effect_on_recompose() {
+        // draw_stop_indicator 切换的绘制正确性：State<bool> 持开关，首帧
+        // stop=true（右端有 primary 圆点），set(false) + recompose 后圆点消失。
+        // 注：本测试走 State 驱动（根 dirty 整树 Enter），测的是"false 确实不画"，
+        // 不覆盖 changed 缺失的窄场景（无 State 的纯 build 入参 + 父带动 Skip）。
+        // changed(&self.draw_stop_indicator) 已声明，与 node_key 语义对齐。
+        use skia_safe::{Color as SkColor, surfaces};
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let primary = ProgressIndicatorDefaults::indicator_color(&theme);
+        let stop: crate::core::state::State<bool> = crate::core::state::State::new(true);
+        let mut composer = Composer::new();
+        let make_scene = |stop: crate::core::state::State<bool>, theme: ThemeColors| {
+            move |ctx: &mut ComposeCtx| {
+                let s = stop.get();
+                WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    LinearProgressIndicator::new(0.5)
+                        .draw_stop_indicator(s)
+                        .build(ctx);
+                });
+            }
+        };
+        let mut render_now = |composer: &mut Composer| {
+            composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+            let mut surface = surfaces::raster_n32_premul((300, 300)).unwrap();
+            let canvas = surface.canvas();
+            canvas.clear(SkColor::WHITE);
+            let root = composer.layout_root_idx().expect("root");
+            let nodes = composer.arena_nodes();
+            crate::render::render(nodes, root, canvas);
+            let pm = surface.peek_pixels().expect("pixmap");
+            pm.pixels::<[u8; 4]>().expect("pixels").to_vec()
+        };
+        composer.compose(make_scene(stop.clone(), theme.clone()));
+        let buf1 = render_now(&mut composer);
+        let has_stop = |buf: &[[u8; 4]]| {
+            (230..250).any(|x| {
+                let p = buf[2 * 300 + x];
+                color_eq(primary, [p[2], p[1], p[0], p[3]], 8)
+            })
+        };
+        assert!(has_stop(&buf1), "stop=true 时右端应有 primary 圆点");
+        // 切换开关 → 增量重组 → 圆点消失
+        stop.set(false);
+        assert!(composer.recompose(make_scene(stop.clone(), theme.clone())), "开关变化应触发重组");
+        let buf2 = render_now(&mut composer);
+        assert!(!has_stop(&buf2), "stop=false 后右端圆点应消失");
     }
 }
