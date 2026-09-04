@@ -69,8 +69,10 @@ LoadingIndicator::new()
   首尾回环。每个周期用 Spring(bouncy 0.6 / stiffness 200) 将 progress 0→1，周期约 650ms。
 - **步进旋转**：每个 shape 切换后额外旋转目标 +90°（quarter rotation）。
 - **全局旋转**：360° / 4666ms 线性无限循环（`InfiniteRepeatableSpec::restart_tween`）。
-- 绘制：`Morph.to_path(progress)` → `progress_path` 缩放到 active indicator 尺寸并居中 →
-  绕容器中心旋转。
+- 绘制：`LoadingIndicatorNode` 具名绘制（exp/wavy-node 迁移，原 `.draw` 匿名闭包，
+  `pub(crate)`）：`Morph.to_path(progress)` → `progress_path` 缩放到 active indicator 尺寸并居中 →
+  绕容器中心旋转。4 个动画值（morph_progress/index/rotation_target/global_rotation）
+  peek 不进 key；静态参数（contained/shape/两色）全进 key。
 
 ## 4. 代码位置
 
@@ -88,3 +90,4 @@ cargo run -p winia --example loading_indicator_demo
 
 - 单元：默认 uncontained / Container 颜色解析、7 个 Morph、缩放因子、`progress_path` 居中。
 - 像素：uncontained 只画 Primary 不画容器；Container 同时画 SecondaryContainer 容器与 Primary indicator。
+- DrawNode 迁移：node_key 全覆盖（动画值不进 key）、双路像素对照（首帧确定值逐字节）。

@@ -198,43 +198,15 @@ impl LoadingIndicator {
 
         let m = Modifier::new()
             .size(LOADING_INDICATOR_SIZE, LOADING_INDICATOR_SIZE)
-            .draw({
-                let is_contained = self.is_contained;
-                let container_shape = self.container_shape;
-                let indicator_color = indicator_color;
-                let container_color = container_color;
-                let morph_progress = morph_progress.clone();
-                let morph_index = morph_index.clone();
-                let morph_rotation_target = morph_rotation_target.clone();
-                let global_rotation = global_rotation.clone();
-                move |canvas, rect| {
-                    if is_contained && container_color.a != 0 {
-                        draw_container(canvas, rect, container_color, container_shape);
-                    }
-
-                    let current_index = morph_index.peek();
-                    let progress = morph_progress.peek();
-                    let morph = &MORPH_SEQUENCE[current_index];
-                    let path = morph.to_path(progress, 0, None, None, None, None);
-                    let path =
-                        progress_path(path, (rect.width(), rect.height()), *SHAPE_SCALE_FACTOR);
-
-                    let mut paint = skia_safe::Paint::default();
-                    paint.set_anti_alias(true);
-                    paint.set_color(skia_color(indicator_color));
-                    paint.set_style(skia_safe::paint::Style::Fill);
-
-                    let morph_rotation_target = morph_rotation_target.peek();
-                    let global_rotation = global_rotation.peek();
-                    let total_rotation = progress * 90.0 + morph_rotation_target + global_rotation;
-
-                    canvas.save();
-                    canvas.translate((rect.left, rect.top));
-                    let center = skia_safe::Point::new(rect.width() / 2.0, rect.height() / 2.0);
-                    canvas.rotate(total_rotation, Some(center));
-                    canvas.draw_path(&path, &paint);
-                    canvas.restore();
-                }
+            .draw_node(LoadingIndicatorNode {
+                is_contained: self.is_contained,
+                container_shape: self.container_shape,
+                indicator_color,
+                container_color,
+                morph_progress: morph_progress.clone(),
+                morph_index: morph_index.clone(),
+                morph_rotation_target: morph_rotation_target.clone(),
+                global_rotation: global_rotation.clone(),
             });
 
         let m = m.then(self.modifier);
@@ -244,6 +216,61 @@ impl LoadingIndicator {
             GroupStatus::Enter => {}
         }
         ctx.end_restartable_group();
+    }
+}
+
+/// Loading 绘制节点（exp/wavy-node 迁移：原 `.draw` 匿名闭包）。
+/// 4 个动画值（morph_progress/index/rotation_target/global_rotation）peek，
+/// 不进 key；静态参数全进。
+#[derive(Debug)]
+pub(crate) struct LoadingIndicatorNode {
+    pub(crate) is_contained: bool,
+    pub(crate) container_shape: Shape,
+    pub(crate) indicator_color: Color,
+    pub(crate) container_color: Color,
+    pub(crate) morph_progress: State<f32>,
+    pub(crate) morph_index: State<usize>,
+    pub(crate) morph_rotation_target: State<f32>,
+    pub(crate) global_rotation: State<f32>,
+}
+
+impl crate::modifier::DrawNode for LoadingIndicatorNode {
+    fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
+        if self.is_contained && self.container_color.a != 0 {
+            draw_container(canvas, rect, self.container_color, self.container_shape);
+        }
+
+        let current_index = self.morph_index.peek();
+        let progress = self.morph_progress.peek();
+        let morph = &MORPH_SEQUENCE[current_index];
+        let path = morph.to_path(progress, 0, None, None, None, None);
+        let path =
+            progress_path(path, (rect.width(), rect.height()), *SHAPE_SCALE_FACTOR);
+
+        let mut paint = skia_safe::Paint::default();
+        paint.set_anti_alias(true);
+        paint.set_color(skia_color(self.indicator_color));
+        paint.set_style(skia_safe::paint::Style::Fill);
+
+        let morph_rotation_target = self.morph_rotation_target.peek();
+        let global_rotation = self.global_rotation.peek();
+        let total_rotation = progress * 90.0 + morph_rotation_target + global_rotation;
+
+        canvas.save();
+        canvas.translate((rect.left, rect.top));
+        let center = skia_safe::Point::new(rect.width() / 2.0, rect.height() / 2.0);
+        canvas.rotate(total_rotation, Some(center));
+        canvas.draw_path(&path, &paint);
+        canvas.restore();
+    }
+    fn node_key(&self) -> String {
+        format!(
+            "loading:{:?}:{:?}:{:?}:{:?}",
+            self.is_contained,
+            self.container_shape,
+            self.indicator_color,
+            self.container_color,
+        )
     }
 }
 
@@ -506,5 +533,96 @@ mod tests {
         }
         assert!(found_indicator, "contained 应绘制 indicator");
         assert!(found_container, "contained 应绘制 container");
+    }
+
+    // ── LoadingIndicatorNode 迁移（exp/wavy-node）──
+    #[test]
+    fn loading_node_key_covers_static_params() {
+        use crate::modifier::DrawNode;
+        let theme = ThemeColors::default_light();
+        let mk = |contained: bool| LoadingIndicatorNode {
+            is_contained: contained,
+            container_shape: crate::modifier::Shape::Circle,
+            indicator_color: theme.primary,
+            container_color: theme.secondary_container,
+            morph_progress: State::new(0.0),
+            morph_index: State::new(0usize),
+            morph_rotation_target: State::new(90.0),
+            global_rotation: State::new(10.0),
+        };
+        assert_eq!(mk(true).node_key(), mk(true).node_key());
+        assert_ne!(mk(true).node_key(), mk(false).node_key(), "is_contained 应进 key");
+        // 动画值变化 → 相等（不进 key）
+        let moved = LoadingIndicatorNode {
+            is_contained: true,
+            container_shape: crate::modifier::Shape::Circle,
+            indicator_color: theme.primary,
+            container_color: theme.secondary_container,
+            morph_progress: State::new(0.7),
+            morph_index: State::new(2usize),
+            morph_rotation_target: State::new(180.0),
+            global_rotation: State::new(300.0),
+        };
+        assert_eq!(mk(true).node_key(), moved.node_key(), "morph/旋转动画值不应进 key");
+    }
+
+    #[test]
+    fn loading_node_renders_identical_to_enum_draw() {
+        // 双路对照（首帧确定值：progress=0/index=0/rot=90/global=0）：node 路 vs
+        // 旧闭包复刻，裸 leaf 同尺寸 surface 逐字节。
+        let theme = ThemeColors::default_light();
+        let render_leaf = |modifier: crate::modifier::Modifier| {
+            let mut composer = Composer::new();
+            let scene = |ctx: &mut ComposeCtx| {
+                WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    let key = ctx.next_key();
+                    ctx.start_leaf(key, modifier.clone());
+                    ctx.end_node();
+                });
+            };
+            composer.compose(scene);
+            composer.layout(Constraints::new(0.0, 100.0, 0.0, 100.0));
+            let mut surface = skia_safe::surfaces::raster_n32_premul((100, 100)).unwrap();
+            let canvas = surface.canvas();
+            canvas.clear(skia_safe::Color::WHITE);
+            let root = composer.layout_root_idx().expect("root");
+            let nodes = composer.arena_nodes();
+            crate::render::render(nodes, root, canvas);
+            let pm = surface.peek_pixels().expect("pixmap");
+            pm.pixels::<[u8; 4]>().expect("pixels").to_vec()
+        };
+        let node_mod = crate::modifier::Modifier::new()
+            .size(40.0, 40.0)
+            .draw_node(LoadingIndicatorNode {
+                is_contained: false,
+                container_shape: crate::modifier::Shape::Circle,
+                indicator_color: theme.primary,
+                container_color: Color::TRANSPARENT,
+                morph_progress: State::new(0.0),
+                morph_index: State::new(0usize),
+                morph_rotation_target: State::new(90.0),
+                global_rotation: State::new(0.0),
+            });
+        let enum_mod = crate::modifier::Modifier::new()
+            .size(40.0, 40.0)
+            .draw(move |canvas, rect| {
+                let morph = &MORPH_SEQUENCE[0];
+                let path = morph.to_path(0.0, 0, None, None, None, None);
+                let path = progress_path(path, (rect.width(), rect.height()), *SHAPE_SCALE_FACTOR);
+                let mut paint = skia_safe::Paint::default();
+                paint.set_anti_alias(true);
+                paint.set_color(skia_color(theme.primary));
+                paint.set_style(skia_safe::paint::Style::Fill);
+                canvas.save();
+                canvas.translate((rect.left, rect.top));
+                let center = skia_safe::Point::new(rect.width() / 2.0, rect.height() / 2.0);
+                canvas.rotate(0.0 * 90.0 + 90.0 + 0.0, Some(center));
+                canvas.draw_path(&path, &paint);
+                canvas.restore();
+            });
+        let px_node = render_leaf(node_mod);
+        let px_enum = render_leaf(enum_mod);
+        assert_eq!(px_node.len(), 100 * 100);
+        assert_eq!(px_node, px_enum, "loading node 路与旧 draw 路必须逐字节一致");
     }
 }

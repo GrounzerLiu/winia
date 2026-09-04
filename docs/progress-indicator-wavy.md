@@ -353,6 +353,10 @@ pub struct LinearWavyProgressIndicator {
 - 像素测试：amplitude=0 时应与 flat 视觉一致（回归锚点）
 - Circular：numVertices = max(5, round(2πr/λ))；amplitude=0 → 纯圆（与 flat 对比）
 - 缓存失效：wavelength/size/振幅变化触发重建
+- DrawNode 迁移（exp/wavy-node）：4 具名节点（Linear/Circular × determinate/
+  indeterminate，`pub(crate)`）+ LoadingIndicatorNode；node_key 全静态参数
+  （无限动画值/amplitude_state peek 不进 key；amplitude_token 进 key；
+  路径缓存 Arc<Mutex> 不进 key，手写 Debug）；双路像素对照逐字节。
 
 ## 7. TODO（作者备注）
 
