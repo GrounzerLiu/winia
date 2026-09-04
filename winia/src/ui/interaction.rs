@@ -112,10 +112,11 @@ pub struct MutableInteractionSource {
 /// （与 State 的"id 或值相等"不同：两个不同源即使标志相同也不算相等）。
 impl PartialEq for MutableInteractionSource {
     fn eq(&self, other: &Self) -> bool {
-        self.pressed.id() == other.pressed.id()
-            && self.hovered.id() == other.hovered.id()
-            && self.focused.id() == other.focused.id()
-            && self.dragged.id() == other.dragged.id()
+        // 身份比较走 StateId（u64 ——与 public u32 id 同源唯一，State Phase4 统一）
+        self.pressed.state_id() == other.pressed.state_id()
+            && self.hovered.state_id() == other.hovered.state_id()
+            && self.focused.state_id() == other.focused.state_id()
+            && self.dragged.state_id() == other.dragged.state_id()
     }
 }
 

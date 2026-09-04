@@ -1667,8 +1667,10 @@ pub fn draw_icon(self, spec: crate::ui::icon::IconSpec) -> Self {
 
     /// 垂直滚动（绑定 ScrollState）
     pub fn vertical_scroll(self, state: ScrollState) -> Self {
-        // 读取 offset 以注册 State→Slot 依赖，确保滚动时触发增量重组
-        let _ = state.offset.get();
+        // 无 builder 期 get 副作用（State Phase4）：依赖由物化期
+        // register_modifier_deps_recursive 统一注册到实际 node slot
+        //（composer.rs compose 末尾，take_deps 之前）。builder 期 get 会把
+        // 依赖注册到调用 scope，与 slot 注册重复。
         self.push(ModifierElement::VerticalScroll { state })
     }
 
@@ -1700,7 +1702,7 @@ pub fn draw_icon(self, spec: crate::ui::icon::IconSpec) -> Self {
 
     /// 水平滚动（绑定 ScrollState——对齐 vertical_scroll）
     pub fn horizontal_scroll(self, state: ScrollState) -> Self {
-        let _ = state.offset.get();
+        // 无 builder 期 get 副作用（同 vertical_scroll，State Phase4）。
         self.push(ModifierElement::HorizontalScroll { state, reverse: false })
     }
 
@@ -2997,8 +2999,8 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (FocusRequesterId { id: ai }, FocusRequesterId { id: bi }) => ai == bi,
         (KbEvent { .. }, KbEvent { .. }) => true,
         (PointerEvent { .. }, PointerEvent { .. }) => true,
-        (VerticalScroll { state: as_ }, VerticalScroll { state: bs }) => as_.offset.id() == bs.offset.id(),
-        (HorizontalScroll { state: as_, reverse: ar }, HorizontalScroll { state: bs, reverse: br }) => as_.offset.id() == bs.offset.id() && ar == br,
+        (VerticalScroll { state: as_ }, VerticalScroll { state: bs }) => as_.offset.state_id() == bs.offset.state_id(),
+        (HorizontalScroll { state: as_, reverse: ar }, HorizontalScroll { state: bs, reverse: br }) => as_.offset.state_id() == bs.offset.state_id() && ar == br,
         (NestedScroll { .. }, NestedScroll { .. }) => true,
         // 图形层动态参数视为相同（渲染期求值——动画不触发 Enter）
         (GraphicsLayer { .. }, GraphicsLayer { .. }) => true,

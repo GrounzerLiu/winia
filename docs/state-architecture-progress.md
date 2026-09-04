@@ -86,10 +86,19 @@ State::set/update()
 
 ### Phase 4 - Modifier 与公共状态迁移
 
-- [ ] 移除 vertical_scroll/horizontal_scroll builder 的 State::get 副作用。
-- [ ] 将 modifier State 依赖绑定到实际 node slot。
+- [x] 移除 vertical_scroll/horizontal_scroll builder 的 State::get 副作用
+  （2026-09，`exp/modifier-dep`）：builder 期 `get`（注册到调用 scope）与物化期
+  `register_modifier_deps_recursive`（注册到 node slot，compose 末尾 take_deps
+  之前）双重注册；删 builder 期两处，留物化期。`test_modifier_scroll_dep_registered`
+  照过，全量 742 绿。`register_state_deps` 注释"组合期 arena 空"过时语义不变。
+- [x] 将 modifier State 依赖绑定到实际 node slot
+  ——上项即此（物化期 `set_active_slot_key` 逐节点已是 slot 绑定）。
 - [ ] 更新 remember、动画、overlay、effect 和 UI 状态注释。
-- [ ] 完成 animation API 从 legacy `u32` 迁移到 public `StateId`；当前已提供 `State::state_id()`，内部 u64 与 legacy public u32 已分离。
+- [x] animation API 从 legacy `u32` 迁移到 public `StateId`
+  （2026-09，`exp/modifier-dep`）：`animation.rs` 公开函数已全 `StateId`；
+  生产代码 `State::id()` 调用清零（`interaction PartialEq` + `modifier param_eq`
+  两处 `id()` → `state_id()` 等价替换，全量绿）。`public_id`/`id()`/`source_id()`
+  保留作兼容（删是 breaking change，另议）。
 
 ### Phase 5 - 验证与文档
 
