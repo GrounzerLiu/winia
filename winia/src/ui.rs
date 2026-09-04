@@ -30,6 +30,7 @@ pub mod tooltip;
 pub mod radio_button;
 pub mod badge;
 pub mod slider;
+pub mod scrollbar;
 pub mod progress_indicator;
 pub mod loading_indicator;
 pub mod wavy_progress_indicator;
@@ -96,6 +97,10 @@ pub use switch::{Switch, SwitchColors, SwitchDefaults};
 pub use radio_button::{RadioButton, RadioButtonColors, RadioButtonDefaults};
 pub use badge::{Badge, BadgedBox};
 pub use slider::{Slider, SliderColors, SliderDefaults};
+pub use scrollbar::{
+    VerticalScrollbar, HorizontalScrollbar,
+    SCROLLBAR_THICKNESS, SCROLLBAR_THUMB_MIN_LENGTH, SCROLLBAR_THUMB_MAX_FRACTION,
+};
 pub use progress_indicator::{
     LinearProgressIndicator, CircularProgressIndicator,
     ProgressIndicatorDefaults, ProgressIndicatorStrokeCap,
