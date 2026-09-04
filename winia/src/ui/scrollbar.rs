@@ -206,6 +206,229 @@ impl crate::modifier::DrawNode for ScrollbarNode {
     }
 }
 
+// ── 共享 build 逻辑（P2-7：垂直/水平两套 build 逐行重复，修 bug 漏改——
+// 横向 viewport peek→get 漏改首屏不显示即实测案例。故抽公共函数：
+// remember 顺序固定（调用序即槽位序）：hover_src → last_scroll → fade_state →
+// show/hide effect（单槽位 if/else 同语句位置）→ viewport_state——垂直/水平
+// 同序，无槽位漂移。轴差异由 ScrollbarAxis 参数化（4 处）：尺寸元素、
+// on_size_changed 轴、drag 本地坐标轴、ScrollbarNode.vertical。
+/// 滚动条轴（垂直/水平 build 差异的全部参数化）。
+#[derive(Clone, Copy)]
+enum ScrollbarAxis {
+    Vertical,
+    Horizontal,
+}
+
+/// 共享配置（两组件外观参数子集——changed 注册用；Copy 进闭包，无借用逃逸）。
+#[derive(Clone, Copy)]
+struct ScrollbarConfig {
+    thickness: f32,
+    thumb_color: Option<Color>,
+    track_color: Color,
+    thumb_min_length: f32,
+    always_show: bool,
+    inset: f32,
+}
+
+/// 共享 build：读三要素 → fade 脉冲/effect → viewport → 组装 Modifier → 返回。
+/// changed 注册仍在各 build 头部（参数归属各自 Self）。
+fn scrollbar_build_shared(
+    ctx: &mut ComposeCtx,
+    scroll_state_src: &crate::modifier::ScrollState,
+    cfg: ScrollbarConfig,
+    axis: ScrollbarAxis,
+) -> Modifier {
+    let vertical = matches!(axis, ScrollbarAxis::Vertical);
+    let theme = WiniaTheme::colors();
+    let thumb_color = cfg
+        .thumb_color
+        .unwrap_or_else(|| scrollbar_thumb_color(&theme));
+    // 三要素：offset（读，注册依赖）+ fling_limit（读，注册依赖）；
+    // viewport 由自身约束来（fill_max_height 下 = 父高，要求与滚动容器等高）。
+    // ⚠ 必须在 build 期 get（注册组合依赖），绘制期 peek 不注册。
+    let scroll = scroll_state_src.offset.get();
+    let limit = scroll_state_src.fling_limit.get();
+    let scrolling = scroll_state_src.is_scroll_in_progress.get();
+    // hover/拖拽中也显示（否则隐藏态无从下手拖）——interaction 源 remember 持有
+    let hover_src: MutableInteractionSource =
+        ctx.remember(|| MutableInteractionSource::new()).get();
+    let hovered = hover_src.is_hovered();
+    let dragged = hover_src.is_dragged();
+    // fade：目标 alpha（常显/滚动/hover/拖拽/滚动脉冲 → 1，否则 0），
+    // 经 tween 250ms 驱动（M3 ThumbFadeDurationMillis；delay 由 LaunchedEffect
+    // 400ms 实现）。绘制期 peek 求值（零重组）——fade_state 不进 node_key。
+    //
+    // ⚠ wheel/程序化滚动时 `scrolling` 恒 false（分发层 cancel+置 false，
+    // 拖拽路径才置 true）——故滚动检测不用它，而用"offset 变化"脉冲：
+    // `last_scroll` 记住上帧 offset，本帧不同即正在滚（set_silent 写回，
+    // 不触发重组——本帧 build 照常继续）。
+    // ⚠ 不能用 bool 门闩（滚过即 true 不清零→常显不藏，实测 bug）。
+    // ⚠ key 必须含 `scroll`：bool 条件会合并连续滚动——tween 250ms 播到 1
+    // 后 key 不变，而滚动仍在继续，随后的 400ms 睡眠会把条 fade 掉；
+    // scroll 每帧都变→每帧重启 effect→abort 睡眠→保持显示。
+    let last_scroll: State<f32> = ctx.remember(|| scroll);
+    let scroll_active = last_scroll.peek() != scroll;
+    if scroll_active {
+        last_scroll.set_silent(scroll);
+    }
+    let fade_target = if cfg.always_show || scrolling || hovered || dragged
+        || scroll_active
+    {
+        1.0f32
+    } else {
+        0.0f32
+    };
+    // 离开交互（hover 出 + 停滚）400ms 后 fade out（M3 ThumbFadeDelayMillis）：
+    // 单 LaunchedEffect 包办"显示→等→藏"：key 含全部输入——任何变化都
+    // abort 睡眠重启（持续滚动每帧重启→保持显示；停滚后无重组无重启，
+    // 最后一次滚动那帧的任务睡满 400ms→藏，正好是停滚后 400ms 隐藏）。
+    // 睡醒后只看静态保持条件（常显/滚动中/hover/拖拽）：
+    // - 成立则保持（hover 静置不能藏——藏了无重组再显示；后续变化重启再定）。
+    // - 否则播到 0 隐藏。
+    // ⚠ 静态条件快照进任务即最新：睡眠不被 abort 即证明 key 输入全未变
+    // （滚动脉冲除外——它若存活必带新 scroll abort 本任务，故睡醒时必衰减）。
+    // ⚠ 不能用"滚过"门闩（不清零→常显不藏）——脉冲 + 快照才是完整语义。
+    let fade_state: State<f32> = ctx.remember(|| fade_target);
+    let keep_visible = cfg.always_show || scrolling || hovered || dragged;
+    crate::effect::LaunchedEffect::new((fade_target, scrolling, hovered, dragged, scroll)).build(
+        ctx,
+        {
+            let fade_state = fade_state.clone();
+            move |scope| {
+                let fade_state = fade_state.clone();
+                async move {
+                    if fade_target > 0.5 {
+                        // 显示：tween 到 1（从当前值播，无闪烁）
+                        crate::animation::push_animatable(
+                            fade_state.clone(),
+                            1.0,
+                            crate::animation::AnimationSpec::Tween(
+                                crate::animation::TweenSpec::new(
+                                    std::time::Duration::from_millis(250),
+                                    crate::animation::interpolator::Linear::new(),
+                                ),
+                            ),
+                        );
+                    }
+                    // 停留 delay：期间滚动/hover/拖拽变化→key 变化→abort 睡眠→保持。
+                    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                    if !keep_visible {
+                        crate::animation::push_animatable(
+                            fade_state,
+                            0.0,
+                            crate::animation::AnimationSpec::Tween(
+                                crate::animation::TweenSpec::new(
+                                    std::time::Duration::from_millis(250),
+                                    crate::animation::interpolator::Linear::new(),
+                                ),
+                            ),
+                        );
+                    }
+                    drop(scope);
+                }
+            }
+        },
+    );
+    // viewport 未知（首帧约束未定）→ 用 remembered 上帧值兜底，首帧不画
+    let viewport_state: State<f32> = ctx.remember(|| 0.0f32);
+    // 注意：viewport 来自 measure 期，此处先读上帧值；measure 后写回由 policy？
+    // v1 简化：scrollbar 自身 fill_max_height，约束由父定——build 期拿不到约束。
+    // 改从 layout 拿：用 on_size_changed 回调写 viewport_state（对标 NavTransition
+    // 位移基准捕获）。首帧 0 → 不画，次帧回写后重组显示。
+    // ⚠ P0-2：必须 `get`（注册组合依赖）——`set` 的 notify 才能驱动重组；
+    // `peek` 无订阅者→回写后无重组→首屏/resize 后几何 stale（手动 double-build
+    // 的测试掩盖了此问题；横向曾漏改 peek→首屏不显示，实测 bug）。`set` 有
+    // PartialEq 去重 + on_size_changed 元素级去重，尺寸稳定即停，无循环。
+    let viewport = viewport_state.get();
+    let content = limit + viewport;
+
+    let (thumb_offset, thumb_len, has_thumb) = match scrollbar_geometry(
+        viewport,
+        content,
+        scroll,
+        cfg.thumb_min_length,
+        SCROLLBAR_THUMB_MAX_FRACTION,
+        cfg.inset,
+    ) {
+        Some((off, len)) => (off, len, true),
+        _ => (0.0, 0.0, false),
+    };
+
+    // 拖 thumb → 反推 offset（需 track/thumb/max——build 期值，闭包捕获）
+    let track = (viewport - 2.0 * cfg.inset).max(0.0);
+    let max_offset = (content - viewport).max(0.0);
+    let drag_thumb_len = thumb_len;
+    // P1-1 取舍记录：中心对齐绝对映射（thumb 中心瞬移到光标），大 thumb
+    // 下首帧有跳变；CMP 是抓取偏移保持（grab = 按下点 - thumb_offset）。
+    // v1 保持现状（简单可预测），后续按 P1-1 改 grab 保持。
+    let drag_cb = {
+        let scroll_state_src = scroll_state_src.clone();
+        move |pos: (f32, f32)| {
+            // pos 为 thumb 条本地坐标（含 inset 偏移）；减 inset 得 track 内位置
+            let pos_in_track = if vertical { pos.1 } else { pos.0 } - cfg.inset;
+            let target = pos_in_track - drag_thumb_len / 2.0;
+            let off = scrollbar_offset_for_thumb_pos(target, track, drag_thumb_len, max_offset);
+            scroll_state_src.offset.set(off);
+        }
+    };
+    let (hover_src_clone, scroll_state_clone) =
+        (hover_src.clone(), scroll_state_src.clone());
+    let (hover_src_clone2, scroll_state_clone2) =
+        (hover_src.clone(), scroll_state_src.clone());
+    // P1-2：drag cancel 与 end 完全相同的清理（窗口失焦/系统打断不走 end）——
+    // 否则 is_scroll_in_progress/dragged 残留置位→fade 常显不藏。
+    let m = if vertical {
+        Modifier::new()
+            .width(cfg.thickness)
+            .fill_max_height()
+    } else {
+        Modifier::new()
+            .height(cfg.thickness)
+            .fill_max_width()
+    }
+    .hoverable(&hover_src)
+    .on_size_changed(move |w, h| {
+        if vertical {
+            let _ = w;
+            viewport_state.set(h);
+        } else {
+            viewport_state.set(w);
+        }
+    })
+    .draw_node(ScrollbarNode {
+        vertical,
+        thumb_color,
+        track_color: cfg.track_color,
+        thickness: cfg.thickness,
+        inset: cfg.inset,
+        thumb_offset,
+        thumb_len,
+        has_thumb,
+        fade: fade_state.clone(),
+    })
+    .on_drag_start(move |_pos: (f32, f32)| {
+        hover_src_clone.emit_drag_start();
+        // 抢占：取消列表侧惯性 fling（否则 update_animations 下帧
+        // 把 offset 写回，thumb 拖不动）；标记滚动中（松手清）。
+        scroll_state_clone.cancel_fling();
+        scroll_state_clone.is_scroll_in_progress.set(true);
+    })
+    .on_drag_end(move || {
+        hover_src_clone2.emit_drag_end();
+        scroll_state_clone2.is_scroll_in_progress.set(false);
+    })
+    .on_drag_cancel({
+        let hover_src = hover_src.clone();
+        let scroll_state_src = scroll_state_src.clone();
+        move || {
+            hover_src.emit_drag_end();
+            scroll_state_src.is_scroll_in_progress.set(false);
+        }
+    })
+    .on_drag(move |pos, _delta| drag_cb(pos));
+    m
+}
+
 // ── VerticalScrollbar ──
 
 /// 垂直滚动条（对标 CMP `VerticalScrollbar`）。
@@ -260,186 +483,16 @@ impl VerticalScrollbar {
         // 订阅不失效、新 state 无订阅，条绑死旧状态）。
         ctx.changed(&self.scroll.offset.state_id());
         let key = ctx.next_key();
-        let theme = WiniaTheme::colors();
-        let thumb_color = self.thumb_color.unwrap_or_else(|| scrollbar_thumb_color(&theme));
-        let thickness = self.thickness;
-        let inset = 2.0f32;
-
-        // 三要素：offset（读，注册依赖）+ fling_limit（读，注册依赖）；
-        // viewport 由自身约束来（fill_max_height 下 = 父高，要求与滚动容器等高）。
-        // ⚠ 必须在 build 期 get（注册组合依赖），绘制期 peek 不注册。
-        let scroll = self.scroll.offset.get();
-        let limit = self.scroll.fling_limit.get();
-        let scrolling = self.scroll.is_scroll_in_progress.get();
-        // hover/拖拽中也显示（否则隐藏态无从下手拖）——interaction 源 remember 持有
-        let hover_src: MutableInteractionSource =
-            ctx.remember(|| MutableInteractionSource::new()).get();
-        let hovered = hover_src.is_hovered();
-        let dragged = hover_src.is_dragged();
-        // fade：目标 alpha（常显/滚动/hover/拖拽/滚动脉冲 → 1，否则 0），
-        // 经 tween 250ms 驱动（M3 ThumbFadeDurationMillis；delay 由 LaunchedEffect
-        // 400ms 实现）。绘制期 peek 求值（零重组）——fade_state 不进 node_key。
-        //
-        // ⚠ wheel/程序化滚动时 `scrolling` 恒 false（分发层 cancel+置 false，
-        // 拖拽路径才置 true）——故滚动检测不用它，而用"offset 变化"脉冲：
-        // `last_scroll` 记住上帧 offset，本帧不同即正在滚（set_silent 写回，
-        // 不触发重组——本帧 build 照常继续）。
-        // ⚠ 不能用 bool 门闩（滚过即 true 不清零→常显不藏，实测 bug）。
-        // ⚠ key 必须含 `scroll`：bool 条件会合并连续滚动——tween 250ms 播到 1
-        // 后 key 不变，而滚动仍在继续，随后的 400ms 睡眠会把条 fade 掉；
-        // scroll 每帧都变→每帧重启 effect→abort 睡眠→保持显示。
-        let last_scroll: State<f32> = ctx.remember(|| scroll);
-        let scroll_active = last_scroll.peek() != scroll;
-        if scroll_active {
-            last_scroll.set_silent(scroll);
-        }
-        let fade_target = if self.always_show || scrolling || hovered || dragged
-            || scroll_active
-        {
-            1.0f32
-        } else {
-            0.0f32
+        let cfg = ScrollbarConfig {
+            thickness: self.thickness,
+            thumb_color: self.thumb_color,
+            track_color: self.track_color,
+            thumb_min_length: self.thumb_min_length,
+            always_show: self.always_show,
+            inset: 2.0,
         };
-        // 离开交互（hover 出 + 停滚）400ms 后 fade out（M3 ThumbFadeDelayMillis）：
-        // 单 LaunchedEffect 包办"显示→等→藏"：key 含全部输入——任何变化都
-        // abort 睡眠重启（持续滚动每帧重启→保持显示；停滚后无重组无重启，
-        // 最后一次滚动那帧的任务睡满 400ms→藏，正好是停滚后 400ms 隐藏）。
-        // 睡醒后只看静态保持条件（常显/滚动中/hover/拖拽）：
-        // - 成立则保持（hover 静置不能藏——藏了无重组再显示；后续变化重启再定）。
-        // - 否则播到 0 隐藏。
-        // ⚠ 静态条件快照进任务即最新：睡眠不被 abort 即证明 key 输入全未变
-        // （滚动脉冲除外——它若存活必带新 scroll abort 本任务，故睡醒时必衰减）。
-        // ⚠ 不能用"滚过"门闩（不清零→常显不藏）——脉冲 + 快照才是完整语义。
-        let fade_state: State<f32> = ctx.remember(|| fade_target);
-        let keep_visible = self.always_show || scrolling || hovered || dragged;
-        crate::effect::LaunchedEffect::new((fade_target, scrolling, hovered, dragged, scroll)).build(
-            ctx,
-            {
-                let fade_state = fade_state.clone();
-                move |scope| {
-                    let fade_state = fade_state.clone();
-                    async move {
-                        if fade_target > 0.5 {
-                            // 显示：tween 到 1（从当前值播，无闪烁）
-                            crate::animation::push_animatable(
-                                fade_state.clone(),
-                                1.0,
-                                crate::animation::AnimationSpec::Tween(
-                                    crate::animation::TweenSpec::new(
-                                        std::time::Duration::from_millis(250),
-                                        crate::animation::interpolator::Linear::new(),
-                                    ),
-                                ),
-                            );
-                        }
-                        // 停留 delay：期间滚动/hover/拖拽变化→key 变化→abort 睡眠→保持。
-                        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-                        if !keep_visible {
-                            crate::animation::push_animatable(
-                                fade_state,
-                                0.0,
-                                crate::animation::AnimationSpec::Tween(
-                                    crate::animation::TweenSpec::new(
-                                        std::time::Duration::from_millis(250),
-                                        crate::animation::interpolator::Linear::new(),
-                                    ),
-                                ),
-                            );
-                        }
-                        drop(scope);
-                    }
-                }
-            },
-        );
-        // viewport 未知（首帧约束未定）→ 用 remembered 上帧值兜底，首帧不画
-        let viewport_state: State<f32> = ctx.remember(|| 0.0f32);
-        // 注意：viewport 来自 measure 期，此处先读上帧值；measure 后写回由 policy？
-        // v1 简化：scrollbar 自身 fill_max_height，约束由父定——build 期拿不到约束。
-        // 改从 layout 拿：用 on_size_changed 回调写 viewport_state（对标 NavTransition
-        // 位移基准捕获）。首帧 0 → 不画，次帧回写后重组显示。
-        // ⚠ P0-2：必须 `get`（注册组合依赖）——`set` 的 notify 才能驱动重组；
-        // `peek` 无订阅者→回写后无重组→首屏/resize 后几何 stale（手动 double-build
-        // 的测试掩盖了此问题）。`set` 有 PartialEq 去重 + on_size_changed 元素级
-        // 去重，尺寸稳定即停，无循环。
-        let viewport = viewport_state.get();
-        let content = limit + viewport;
-
-        let (thumb_offset, thumb_len, has_thumb) = match scrollbar_geometry(
-            viewport,
-            content,
-            scroll,
-            self.thumb_min_length,
-            SCROLLBAR_THUMB_MAX_FRACTION,
-            inset,
-        ) {
-            Some((off, len)) => (off, len, true),
-            _ => (0.0, 0.0, false),
-        };
-
-        // 拖 thumb → 反推 offset（需 track/thumb/max——build 期值，闭包捕获）
-        let track = (viewport - 2.0 * inset).max(0.0);
-        let max_offset = (content - viewport).max(0.0);
-        let scroll_state = self.scroll.clone();
-        let drag_thumb_len = thumb_len;
-        let m = Modifier::new()
-            .width(thickness)
-            .fill_max_height()
-            .hoverable(&hover_src)
-            .on_size_changed(move |w, h| {
-                let _ = w;
-                viewport_state.set(h);
-            })
-            .draw_node(ScrollbarNode {
-                vertical: true,
-                thumb_color,
-                track_color: self.track_color,
-                thickness,
-                inset,
-                thumb_offset,
-                thumb_len,
-                has_thumb,
-                fade: fade_state.clone(),
-            })
-            .on_drag_start({
-                let hover_src = hover_src.clone();
-                let scroll_state = scroll_state.clone();
-                move |_pos: (f32, f32)| {
-                    hover_src.emit_drag_start();
-                    // 抢占：取消列表侧惯性 fling（否则 update_animations 下帧
-                    // 把 offset 写回，thumb 拖不动）；标记滚动中（松手清）。
-                    scroll_state.cancel_fling();
-                    scroll_state.is_scroll_in_progress.set(true);
-                }
-            })
-            .on_drag_end({
-                let hover_src = hover_src.clone();
-                let scroll_state = scroll_state.clone();
-                move || {
-                    hover_src.emit_drag_end();
-                    scroll_state.is_scroll_in_progress.set(false);
-                }
-            })
-            // P1-2: drag cancel clears same state as end (focus loss / preempt).
-            .on_drag_cancel({
-                let hover_src = hover_src.clone();
-                let scroll_state = scroll_state.clone();
-                move || {
-                    hover_src.emit_drag_end();
-                    scroll_state.is_scroll_in_progress.set(false);
-                }
-            })
-            .on_drag(move |pos, _delta| {
-                // pos 为 thumb 条本地坐标（含 inset 偏移）；减 inset 得 track 内位置
-                let pos_in_track = pos.1 - inset;
-                // thumb 顶部对齐拖点：目标 thumb_offset = pos - thumb/2？
-                // CMP 语义：拖 thumb 本体跟随——用增量换算更稳：
-                // scroll += delta.scroll_units。简化：绝对位置映射（thumb 顶部 = 拖点 - thumb/2）
-                let target = pos_in_track - drag_thumb_len / 2.0;
-                let off = scrollbar_offset_for_thumb_pos(target, track, drag_thumb_len, max_offset);
-                scroll_state.offset.set(off);
-            });
-
-        let m = m.then(self.modifier);
+        let m = scrollbar_build_shared(ctx, &self.scroll, cfg, ScrollbarAxis::Vertical)
+            .then(self.modifier);
         match ctx.start_restartable_group(key, m, BoxLayout::new()) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {}
@@ -492,166 +545,16 @@ impl HorizontalScrollbar {
         // 订阅不失效、新 state 无订阅，条绑死旧状态）。
         ctx.changed(&self.scroll.offset.state_id());
         let key = ctx.next_key();
-        let theme = WiniaTheme::colors();
-        let thumb_color = self.thumb_color.unwrap_or_else(|| scrollbar_thumb_color(&theme));
-        let thickness = self.thickness;
-        let inset = 2.0f32;
-
-        let scroll = self.scroll.offset.get();
-        let limit = self.scroll.fling_limit.get();
-        let scrolling = self.scroll.is_scroll_in_progress.get();
-        let hover_src: MutableInteractionSource =
-            ctx.remember(|| MutableInteractionSource::new()).get();
-        let hovered = hover_src.is_hovered();
-        let dragged = hover_src.is_dragged();
-        // fade：目标 alpha（常显/滚动/hover/拖拽/滚动脉冲 → 1，否则 0），
-        // 经 tween 250ms 驱动（M3 ThumbFadeDurationMillis；delay 由 LaunchedEffect
-        // 400ms 实现）。绘制期 peek 求值（零重组）——fade_state 不进 node_key。
-        //
-        // ⚠ wheel/程序化滚动时 `scrolling` 恒 false（分发层 cancel+置 false，
-        // 拖拽路径才置 true）——故滚动检测不用它，而用"offset 变化"脉冲：
-        // `last_scroll` 记住上帧 offset，本帧不同即正在滚（set_silent 写回，
-        // 不触发重组——本帧 build 照常继续）。
-        // ⚠ 不能用 bool 门闩（滚过即 true 不清零→常显不藏，实测 bug）。
-        // ⚠ key 必须含 `scroll`：bool 条件会合并连续滚动——tween 250ms 播到 1
-        // 后 key 不变，而滚动仍在继续，随后的 400ms 睡眠会把条 fade 掉；
-        // scroll 每帧都变→每帧重启 effect→abort 睡眠→保持显示。
-        let last_scroll: State<f32> = ctx.remember(|| scroll);
-        let scroll_active = last_scroll.peek() != scroll;
-        if scroll_active {
-            last_scroll.set_silent(scroll);
-        }
-        let fade_target = if self.always_show || scrolling || hovered || dragged
-            || scroll_active
-        {
-            1.0f32
-        } else {
-            0.0f32
+        let cfg = ScrollbarConfig {
+            thickness: self.thickness,
+            thumb_color: self.thumb_color,
+            track_color: self.track_color,
+            thumb_min_length: self.thumb_min_length,
+            always_show: self.always_show,
+            inset: 2.0,
         };
-        // 离开交互（hover 出 + 停滚）400ms 后 fade out（M3 ThumbFadeDelayMillis）：
-        // 单 LaunchedEffect 包办"显示→等→藏"：key 含全部输入——任何变化都
-        // abort 睡眠重启（持续滚动每帧重启→保持显示；停滚后无重组无重启，
-        // 最后一次滚动那帧的任务睡满 400ms→藏，正好是停滚后 400ms 隐藏）。
-        // 睡醒后只看静态保持条件（常显/滚动中/hover/拖拽）：
-        // - 成立则保持（hover 静置不能藏——藏了无重组再显示；后续变化重启再定）。
-        // - 否则播到 0 隐藏。
-        // ⚠ 静态条件快照进任务即最新：睡眠不被 abort 即证明 key 输入全未变
-        // （滚动脉冲除外——它若存活必带新 scroll abort 本任务，故睡醒时必衰减）。
-        // ⚠ 不能用"滚过"门闩（不清零→常显不藏）——脉冲 + 快照才是完整语义。
-        let fade_state: State<f32> = ctx.remember(|| fade_target);
-        let keep_visible = self.always_show || scrolling || hovered || dragged;
-        crate::effect::LaunchedEffect::new((fade_target, scrolling, hovered, dragged, scroll)).build(
-            ctx,
-            {
-                let fade_state = fade_state.clone();
-                move |scope| {
-                    let fade_state = fade_state.clone();
-                    async move {
-                        if fade_target > 0.5 {
-                            // 显示：tween 到 1（从当前值播，无闪烁）
-                            crate::animation::push_animatable(
-                                fade_state.clone(),
-                                1.0,
-                                crate::animation::AnimationSpec::Tween(
-                                    crate::animation::TweenSpec::new(
-                                        std::time::Duration::from_millis(250),
-                                        crate::animation::interpolator::Linear::new(),
-                                    ),
-                                ),
-                            );
-                        }
-                        // 停留 delay：期间滚动/hover/拖拽变化→key 变化→abort 睡眠→保持。
-                        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-                        if !keep_visible {
-                            crate::animation::push_animatable(
-                                fade_state,
-                                0.0,
-                                crate::animation::AnimationSpec::Tween(
-                                    crate::animation::TweenSpec::new(
-                                        std::time::Duration::from_millis(250),
-                                        crate::animation::interpolator::Linear::new(),
-                                    ),
-                                ),
-                            );
-                        }
-                        drop(scope);
-                    }
-                }
-            },
-        );
-        let viewport_state: State<f32> = ctx.remember(|| 0.0f32);
-        // P0-2 同垂直分支：必须 get（注册组合依赖）——首屏/resize 后几何 stale。
-        let viewport = viewport_state.get();
-        let content = limit + viewport;
-
-        let (thumb_offset, thumb_len, has_thumb) = match scrollbar_geometry(
-            viewport,
-            content,
-            scroll,
-            self.thumb_min_length,
-            SCROLLBAR_THUMB_MAX_FRACTION,
-            inset,
-        ) {
-            Some((off, len)) => (off, len, true),
-            _ => (0.0, 0.0, false),
-        };
-
-        let track = (viewport - 2.0 * inset).max(0.0);
-        let max_offset = (content - viewport).max(0.0);
-        let scroll_state = self.scroll.clone();
-        let drag_thumb_len = thumb_len;
-        let m = Modifier::new()
-            .height(thickness)
-            .fill_max_width()
-            .hoverable(&hover_src)
-            .on_size_changed(move |w, _h| {
-                viewport_state.set(w);
-            })
-            .draw_node(ScrollbarNode {
-                vertical: false,
-                thumb_color,
-                track_color: self.track_color,
-                thickness,
-                inset,
-                thumb_offset,
-                thumb_len,
-                has_thumb,
-                fade: fade_state.clone(),
-            })
-            .on_drag_start({
-                let hover_src = hover_src.clone();
-                let scroll_state = scroll_state.clone();
-                move |_pos: (f32, f32)| {
-                    hover_src.emit_drag_start();
-                    scroll_state.cancel_fling();
-                    scroll_state.is_scroll_in_progress.set(true);
-                }
-            })
-            .on_drag_end({
-                let hover_src = hover_src.clone();
-                let scroll_state = scroll_state.clone();
-                move || {
-                    hover_src.emit_drag_end();
-                    scroll_state.is_scroll_in_progress.set(false);
-                }
-            })
-            // P1-2: drag cancel clears same state as end (focus loss / preempt).
-            .on_drag_cancel({
-                let hover_src = hover_src.clone();
-                let scroll_state = scroll_state.clone();
-                move || {
-                    hover_src.emit_drag_end();
-                    scroll_state.is_scroll_in_progress.set(false);
-                }
-            })
-            .on_drag(move |pos, _delta| {
-                let pos_in_track = pos.0 - inset;
-                let target = pos_in_track - drag_thumb_len / 2.0;
-                let off = scrollbar_offset_for_thumb_pos(target, track, drag_thumb_len, max_offset);
-                scroll_state.offset.set(off);
-            });
-
-        let m = m.then(self.modifier);
+        let m = scrollbar_build_shared(ctx, &self.scroll, cfg, ScrollbarAxis::Horizontal)
+            .then(self.modifier);
         match ctx.start_restartable_group(key, m, BoxLayout::new()) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {}
