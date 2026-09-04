@@ -580,7 +580,8 @@ impl HorizontalScrollbar {
             },
         );
         let viewport_state: State<f32> = ctx.remember(|| 0.0f32);
-        let viewport = viewport_state.peek();
+        // P0-2 同垂直分支：必须 get（注册组合依赖）——首屏/resize 后几何 stale。
+        let viewport = viewport_state.get();
         let content = limit + viewport;
 
         let (thumb_offset, thumb_len, has_thumb) = match scrollbar_geometry(
