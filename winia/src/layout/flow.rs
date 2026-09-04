@@ -1,5 +1,5 @@
 //! Flow 流式布局 — 对标 Compose foundation `FlowRow` / `FlowColumn`
- //!（`FlowLayout.kt` + `FlowLayoutBuildingBlocks.kt`，源码见 `tmp/flow-src/`）。
+ //!（`FlowLayout.kt` + `FlowLayoutBuildingBlocks.kt`；对标点见 `docs/flow-layout.md`）。
 //!
 //! 主轴填满即换行（`getWrapInfo` 断行语义）：行首不换、超 `max_items` 换、
 //! 主轴剩余放不下即换。行高 = 行内最高项；行内交叉轴按 alignment 对齐；
@@ -39,7 +39,9 @@ pub(crate) fn measure_flow<A: FlexAxis>(
     }
 
     let max_main = A::main_max(constraints);
-    // 无界主轴：永不换行（退化为 Row/Column 单行——Compose 同：约束无界即单行）
+    // 无界主轴：空间不足永不换行（退化为 Row/Column 单行——Compose 同）。
+    // 但 max_items 强制断行与空间正交，无界下仍生效（review P1：can_wrap
+    // 不得禁用超数分支）。
     let can_wrap = max_main.is_finite();
 
     // ── 逐项 loose 测量（无 weight——v1 直接测自然尺寸）──
@@ -60,9 +62,10 @@ pub(crate) fn measure_flow<A: FlexAxis>(
         let item_main = A::main_size(child_sizes[i]);
         let index_in_line = i - line_start;
         let need = if index_in_line == 0 { item_main } else { main_spacing + item_main };
-        let should_wrap = can_wrap
-            && (index_in_line >= max_items
-                || (index_in_line > 0 && line_main + need > max_main));
+        // P1 修：超数分支独立于 can_wrap（max_items 与空间是否充足正交）；
+        // 空间分支仍需 can_wrap（无界即无限空间，永不"放不下"）。
+        let should_wrap = index_in_line >= max_items
+            || (can_wrap && index_in_line > 0 && line_main + need > max_main);
         if should_wrap {
             lines.push((line_start, i));
             line_start = i;
@@ -91,8 +94,9 @@ pub(crate) fn measure_flow<A: FlexAxis>(
             main += A::main_size(sz);
             cross = cross.max(A::cross_size(sz));
         }
-        // 行主轴 clamp 进约束（单项超宽时行宽 = 约束宽，不溢出容器尺寸）
-        main = A::constrain_main(constraints, main);
+        // 行主轴 = 原始内容宽（不 clamp——fill 下 clamp 会用 min 把内容抬到
+        // 容器宽，remaining 恒 0，Center/End/Space* 退化 Start。容器尺寸另行
+        // clamp；单项超宽时行宽超约束、子视觉溢出，Compose 同）。
         line_infos.push(LineInfo { main, cross });
         content_cross += cross;
     }
@@ -461,5 +465,131 @@ mod tests {
         assert_eq!(size.height, 90.0, "wrap 下容器高 = 最高列 90");
         assert_eq!(size.width, 40.0, "两列 × 20 宽");
         assert_eq!(placements[3].position, Point::new(20.0, 0.0), "第 4 个换列");
+    }
+
+    // ── follow-up（独立 review P1/P2）──
+
+    #[test]
+    fn flow_row_max_items_applies_when_unbounded() {
+        // P1 回归：主轴无界时 max_items 仍强制断行（与空间正交）。
+        let policy = FlowRowLayout::new().max_items_in_row(2);
+        let mut nodes = vec![
+            make_leaf(30.0, 20.0),
+            make_leaf(30.0, 20.0),
+            make_leaf(30.0, 20.0),
+        ];
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let (size, placements) = policy.measure(&mut nodes, &[], &children, Constraints::UNBOUNDED);
+        assert_eq!(size.height, 40.0, "无界 + max2 → 两行");
+        assert_eq!(placements[2].position, Point::new(0.0, 20.0));
+    }
+
+    #[test]
+    fn flow_row_max_items_zero_means_one_per_line() {
+        // max_items=0 被钳为 1（每行 1 项，防御性语义）。
+        let policy = FlowRowLayout::new().max_items_in_row(0);
+        let mut nodes = vec![make_leaf(10.0, 20.0), make_leaf(10.0, 20.0)];
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let (size, placements) = policy.measure(
+            &mut nodes,
+            &[],
+            &children,
+            Constraints::new(0.0, 100.0, 0.0, f32::MAX),
+        );
+        assert_eq!(size.height, 40.0, "两行");
+        assert_eq!(placements[1].position, Point::new(0.0, 20.0));
+    }
+
+    #[test]
+    fn flow_row_single_oversized_item_clamps_line() {
+        // 单项超宽：行首不换，行宽 clamp 进约束，子项保留原始尺寸（视觉溢出）。
+        let policy = FlowRowLayout::new();
+        let mut nodes = vec![make_leaf(150.0, 20.0), make_leaf(30.0, 20.0)];
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let (size, placements) = policy.measure(
+            &mut nodes,
+            &[],
+            &children,
+            Constraints::new(0.0, 100.0, 0.0, f32::MAX),
+        );
+        assert_eq!(size.width, 100.0, "行宽钳到约束宽");
+        assert_eq!(placements[0].position, Point::new(0.0, 0.0), "超宽首项不换行");
+        assert_eq!(placements[1].position, Point::new(0.0, 20.0), "次项换行");
+    }
+
+    #[test]
+    fn flow_row_weight_is_ignored_measures_natural() {
+        // P2：weight v1 静默忽略——挂 weight 的子项按自然尺寸测量。
+        use crate::modifier::Modifier;
+        let mut node = LayoutNode::leaf(Modifier::new().size(30.0, 20.0).layout_weight(1.0));
+        let mut nodes = vec![node, make_leaf(30.0, 20.0)];
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let policy = FlowRowLayout::new();
+        let (size, placements) = policy.measure(
+            &mut nodes,
+            &[],
+            &children,
+            Constraints::new(0.0, 100.0, 0.0, f32::MAX),
+        );
+        assert_eq!(size.width, 60.0, "weight 忽略，自然尺寸 30+30");
+        assert_eq!(placements[1].position.x, 30.0);
+    }
+
+    #[test]
+    fn flow_row_align_self_overrides_container() {
+        // P2：per-child align_self 覆盖容器 alignment。
+        use crate::modifier::Modifier;
+        use crate::layout::Alignment;
+        let mut tall = LayoutNode::leaf(
+            Modifier::new().size(30.0, 30.0).align_self(Alignment::End),
+        );
+        let mut nodes = vec![make_leaf(30.0, 10.0), tall];
+        // 注意 make_leaf 先建，tall 后建——children 顺序 [小, 高]
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let policy = FlowRowLayout::new().alignment(Alignment::Start);
+        let (_, placements) = policy.measure(
+            &mut nodes,
+            &[],
+            &children,
+            Constraints::new(0.0, 100.0, 0.0, f32::MAX),
+        );
+        // 行高 30：小项 Start → y=0；高项 End → y=0（满高）；换个测法：
+        // 高项 End 在 30 高行里 y = 30-30 = 0，看不出。改小项 End：
+        let mut nodes2 = vec![
+            {
+                let mut n = LayoutNode::leaf(
+                    Modifier::new().size(30.0, 10.0).align_self(Alignment::End),
+                );
+                n
+            },
+            make_leaf(30.0, 30.0),
+        ];
+        let children2: Vec<usize> = (0..nodes2.len()).collect();
+        let (_, placements2) = policy.measure(
+            &mut nodes2,
+            &[],
+            &children2,
+            Constraints::new(0.0, 100.0, 0.0, f32::MAX),
+        );
+        assert_eq!(placements2[0].position.y, 20.0, "小项 End → 行底（30-10）");
+        assert_eq!(placements2[1].position.y, 0.0);
+    }
+
+    #[test]
+    fn flow_row_center_arrangement_in_fill() {
+        // P2：行内 arrangement 非 Start——fill 容器下 Center 居中。
+        use crate::layout::Arrangement;
+        let policy = FlowRowLayout::new().arrangement(Arrangement::Center);
+        let mut nodes = vec![make_leaf(30.0, 20.0), make_leaf(30.0, 20.0)];
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let (_, placements) = policy.measure(
+            &mut nodes,
+            &[],
+            &children,
+            Constraints::new(100.0, 100.0, 0.0, f32::MAX),
+        );
+        // 内容 60，容器 100，leading=20
+        assert_eq!(placements[0].position.x, 20.0);
+        assert_eq!(placements[1].position.x, 50.0);
     }
 }
