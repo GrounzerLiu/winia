@@ -1,6 +1,7 @@
-# Modifier Node（开放扩展点，实验分支 `exp/modifier-node`）
+# Modifier Node（开放扩展点，已合入 `v2`）
 
-> 状态：首个真实迁移完成（Slider 轨道）。目标：把 Modifier 从"封闭枚举"变成
+> 状态：已合入 `v2`（`4ca3aea`，fast-forward 自 `17962ee`，9 提交）。
+> 首个真实迁移完成（Slider 轨道）。目标：把 Modifier 从"封闭枚举"变成
 > "开放节点"——第三方不改核心即可实现自定义行为。
 >
 > 背景：`ModifierElement` 是 `pub(crate)` 封闭枚举（`modifier.rs`），50+ 变体，
