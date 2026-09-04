@@ -1,7 +1,10 @@
 # Modifier Node（开放扩展点，已合入 `v2`）
 
 > 状态：已合入 `v2`（`4ca3aea`，fast-forward 自 `17962ee`，9 提交）。
-> 首个真实迁移完成（Slider 轨道）。目标：把 Modifier 从"封闭枚举"变成
+> 真实迁移累计 11 节点（2026-09）：Slider 轨道（首个）→ ProgressIndicator ×4 →
+> Divider ×1 → wavy ×4 + loading ×1。生产代码 `.draw()` 匿名闭包已清零
+> （残留仅测试双路对照 + 非 Modifier 的 `sw.draw`/`paragraph.draw`）。
+> 目标：把 Modifier 从"封闭枚举"变成
 > "开放节点"——第三方不改核心即可实现自定义行为。
 >
 > 背景：`ModifierElement` 是 `pub(crate)` 封闭枚举（`modifier.rs`），50+ 变体，
@@ -289,7 +292,7 @@ Switch 符合①但枚举耦合深（14 处 match），Divider 太简单无代�
   尾段提前触发是必然的。验证：单跑 10/10 + `lazy_column` 模块 28/28 +
   全量 730/730（`--test-threads=1`）。
 
-## 七、提交历史（分支 `exp/modifier-node`）
+## 七、提交历史（分支 `exp/modifier-node`，已删，内容全合入 v2）
 
 1. `88a3cdc` Draw+Click 双轨基线（含 debug 树 node 条目）
 2. `c013e03` PointerNode 双轨
@@ -298,3 +301,15 @@ Switch 符合①但枚举耦合深（14 处 match），Divider 太简单无代�
 5. `6464439` LayoutNode A 型约束变换试点
 6. `0fdf563` 有状态节点约定+链序结论
 7. `6f6e749` Slider 轨道迁移 SliderTrackNode（首个真实迁移，§九）
+
+## 十、后续迁移（v2，2026-09，分支已合入并删除）
+
+| 批次 | 节点 | 提交 | 要点 |
+|---|---|---|---|
+| ProgressIndicator ×4 | LinearDeterminate/Indeterminate + CircularDeterminate/Indeterminate | `daba461` + review `66c3c88` | 无限动画 peek 不进 key（三问a探针）；review 补 `changed(draw_stop)` + 切换测试；5 新测试 |
+| Divider ×1 | DividerNode | `4cb7f0d` | padding 内缩解耦四 f32（动态 padding 快照语义）；Hairline NaN 双语义注记；2 新测试 |
+| wavy ×4 + loading ×1 | Linear/CircularWavy(In)determinate + LoadingIndicatorNode | `97e862d` | 路径缓存 `Arc<Mutex>` 不进 key（手写 Debug）；`amplitude_token` 进 key；4 新测试 |
+
+生产代码 `.draw()` 匿名闭包清零验证：`grep -rn "\.draw(" winia/src` 残留仅
+测试双路对照（7 处，故意保留）+ `sw.draw`（skiwin 后端）/ `paragraph.draw`
+（skia 调用，非 Modifier）。全量 742 绿。

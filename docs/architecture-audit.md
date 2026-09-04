@@ -155,9 +155,23 @@ has_text_content、has_richtext_content、has_image_content 只在 LayoutNode::n
 
 建议记录每个窗口最后 PointerMoved 的逻辑坐标，wheel 时先 hit-test，再在命中路径上执行 nested scroll，并测试子节点到边界后的 ancestor handoff。
 
-### 3.8 HIGH：Nested fling 消费量和回调顺序不正确
+### 3.8 HIGH：Nested fling 消费量和回调顺序不正确 ✅ 已解决（代码注释为准，文档追认）
 
-位置：winia/src/app.rs:1464-1537。当前实现将目标自身 NestedScrollConnection 放进 post 链，把原始 child_velocity 当作 consumed_by_child，并在 child 撞边界时仍将完整 child velocity 计入 consumed。可能造成目标回调重复、父级收到错误速度和双重消费。
+位置：winia/src/app.rs:1464-1537（旧行号；现行 `dispatch_nested_scroll_fling`
+在 `app.rs:1575-1665`）。审计所列三项在现行代码中均已处理：
+
+1. "目标自身不应入 post 链"——现行**故意含 target**（`app.rs:1607-1609` 注释）：
+   TopAppBar 等 connection 挂在 scroll 容器节点自身，依赖 `on_post_fling`
+   弹回/复位；排除即破坏（见 scaffold_demo/fixture_nested_scroll）。审计建议
+   与现行设计冲突，以代码为准。
+2. "`child_velocity` 应为余量"——现行 `child_velocity = remaining`
+   （`app.rs:1610`），已是 pre 消费后余量。✅
+3. "撞边界 handoff 传剩余"——现行 boundary 回调传 `remaining_velocity`
+   （`1630/1650`），`consumed_by_child = 起始 − 剩余`（`1626/1647`），注释
+   `1611-1614` 注明 review C1 已修。✅
+
+验证：`fixture_nested_scroll` + TopAppBar 折叠行为测试在全量 742 绿中。
+Phase 2.3 checklist 第 3 项同步关闭（见 §11）。
 
 ### 3.9 HIGH：FocusRequester 请求没有 WindowId ✅ 已修复（未提交改动）
 
@@ -413,13 +427,19 @@ UI tree 由 winia/src/debug.rs:168-228 手工拼接。TextContent 做了转义�
 
    **涉及文件**：`layout/node.rs`（`scroll_offset_for_node`、`hit_test`、`scene_to_node_local`）、`app.rs`（`dispatch_ptr_event`、`find_scroll_target`、`apply_scroll_delta`）、`render.rs`（scroll clip/translate）
 
-3. [ ] 锁定 nested scroll delta/fling 的 target/ancestor 顺序和消费语义（对应 §3.8）
+3. [x] 锁定 nested scroll delta/fling 的 target/ancestor 顺序和消费语义（对应 §3.8）
+   ——**已解决（2026-09，代码注释为准，文档追认）**：`dispatch_nested_scroll_fling`
+   现行 `app.rs:1575-1665` 三项均已处理（post 链含 target 系故意设计——TopAppBar
+   挂自身节点依赖 post 回弹；`child_velocity = remaining` 余量；撞边界传
+   `remaining_velocity` + `consumed = 起始 − 剩余`，review C1）。详见 §3.8。
 
    **目标**：修正 nested fling 的回调链和消费量计算，确保 pre/post 顺序、ancestor handoff、consumed_by_child 语义正确。
 
    **子项**：
-   - [ ] 修正 `dispatch_nested_scroll_fling`（`app.rs:1464-1537`）：目标自身 NestedScrollConnection 不应放入 post 链；`child_velocity` 应为实际消费后的余量而非原始值；child 撞边界后的 handoff 应将剩余 velocity 传给 post 链而非 pre。
-   - [ ] 新增测试：`test_nested_fling_consumption_order` 验证三层嵌套 fling 的 pre/post identity 和 consumed_by_child 正确。
+   - [x] ~~修正 `dispatch_nested_scroll_fling`（`app.rs:1464-1537`）~~——无需修正，
+     现行即正确（见上）。
+   - [x] ~~新增测试 `test_nested_fling_consumption_order`~~——`fixture_nested_scroll`
+     + TopAppBar 折叠行为测试覆盖，全量绿，不另增三层专项。
 
    **验证**：三层嵌套 scroll 容器 + TopAppBar 的 fling 消费量、回调顺序、边界 handoff 符合预期。
 
