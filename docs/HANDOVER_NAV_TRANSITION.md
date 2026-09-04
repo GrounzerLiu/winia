@@ -1,5 +1,11 @@
 # NavTransition 滑动过渡开发交接文档
 
+> **状态（2026-09）**：本交接已完成历史使命。`nav3-inspired` 分支内容已全合入
+> `v2`（6 项 API 差距 + 过渡规格可配置），分支已删。§11.5 "未做"项中自定义
+> 时长/曲线、per-entry 覆盖已由 `navigation3.md` §五-20/21 标 [x]（已实现）；
+> predictivePop、ListDetail 双栏过渡、movableContentOf 经评估不做（见
+> `navigation3.md` §五 open 项注记）。本文保留作过程档案，不再更新。
+
 > **交接人**：winia 架构审计会话（deepseek）
 > **接手人**：GLM（zcode 环境）
 > **日期**：2026-02（当前进行中）

@@ -220,15 +220,23 @@ spec 过渡、NavEntryDecorator（on_pop 广播 + wrap 链式）、remember_entr
    覆盖层内容 plain remember 不跨帧持久（remember_entry_state 池化不受影响）
 7. [ ] **rememberNavBackStack 持久化**：进程死亡/配置变更恢复（对标
    rememberSerializable + NavBackStackSerializer 开放多态——需 winia 序列化基建）
+   ——**已评估不做（2026-09）**：需 NavKey Serialize + 开放多态 serializer 全套
+   基建；桌面进程死亡恢复需求弱。待有真实需求再立项。
 8. [ ] **Scene/entry 生命周期**：过渡期封顶 STARTED、落定 RESUMED、离栈 CREATED
    （需 winia Lifecycle 等价物；`BackStackAwareDecorator` 占位转正）
+   ——**已评估不做（2026-09）**：为导航单引入 Lifecycle 系统不值；过渡期
+   draining 只读已覆盖核心语义（滑出层不污染状态池）。
 9. [ ] **movableContentOf 等价物**：槽表跨位置身份——entry 在组合树任意位置间移动
    状态不丢（plain remember 跨 pop/push 限制的根解，框架级工作）
+   ——**已评估不做（2026-09）**：槽表跨位置身份是架构级重构；`remember_entry_state`
+   池已覆盖"覆盖返回保持"主场景，无倒逼需求。
 10. [ ] **预测性返回**：手势 seek + 取消/完成回放 + predictivePopTransitionSpec
     （桌面相关性低；seekable 过渡思想可单独借鉴）
+    ——**已评估不做（2026-09）**：Android back 手势，桌面平台不对。
 
 **P2——外围**
 11. [ ] 共享元素过渡（SharedTransitionScope）/sizeTransform
+    ——**已评估不做（2026-09）**：P2 外围，无倒逼需求。
 12. [x] 多 back stack——NavBackStack 为普通值天然多实例；entries 拼接显示按需再加
 13. [x] EntryProvider 类型化 DSL——winia 用 match 闭包（Rust 惯用，不追）
 
@@ -243,6 +251,7 @@ spec 过渡、NavEntryDecorator（on_pop 广播 + wrap 链式）、remember_entr
 15. [ ] **navigation event**（Nav3 rememberNavigationEventState/NavigationBackHandler）：
     依赖独立 navigationevent 库 + Android 系统 back 手势——winia 桌面场景相关性低，
     仅可借鉴 SceneInfo/previousScenes 建模。成本：高，建议暂缓
+    ——**已评估不做（2026-09）**：同预测性返回，平台不对。
 16. [x] **通用 metadata**（Nav3 NavMetadataKey + metadata{} DSL）：`NavMetadata`
     = `HashMap<TypeId, Box<dyn Any>>`（TypeId 键类型安全——Kotlin 字符串键 +
     cast 的 Rust 等价）；NavEntry::metadata()/metadata_ref()、Scene::metadata()
