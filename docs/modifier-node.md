@@ -282,9 +282,12 @@ Switch 符合①但枚举耦合深（14 处 match），Divider 太简单无代�
   <0.5 即停，残余 13px 未收完就 assert。机器负载高时帧间隔抖动，
   收敛判据提前触发。
 - 与本分支无关（改动面未碰 spring/滚动；干净树同现象已验证）。
-- 修法（未做，属主树事项）：判据加"距目标 <5px"合取，或 frames 上限后
-  追加 `snap_to(target)` 对齐 Compose 到达语义。修了要跑 10 遍全量验证，
-  别顺手改。
+- ✅ 已修（v2，2026-09）：新增 `step_animations_until_target(state, target, max)`
+  helper——调用方持 TEST_SERIAL（串行下 `has_animation_for_state` 无空窗误判），
+  以"动画表排空 + 距目标 <5px"双条件收敛（与最终断言同阈）；`animate_scroll_to_item`
+  用例切到该 helper。判据间隙：引擎 done 阈 0.01 vs 旧位移判据 0.5（50 倍），
+  尾段提前触发是必然的。验证：单跑 10/10 + `lazy_column` 模块 28/28 +
+  全量 730/730（`--test-threads=1`）。
 
 ## 七、提交历史（分支 `exp/modifier-node`）
 

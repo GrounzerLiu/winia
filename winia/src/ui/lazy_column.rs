@@ -1625,8 +1625,10 @@ mod tests {
 
     // ── fling 惯性滚动：偏移推进 + 撞极限停止 ──
     /// 泵全局动画直到 offset 收敛（两次读数差 < 0.5）。
-    /// ⚠ 不用 `has_animation_for_state` 做循环条件：并行测试的 update_animations
-    /// 会整表取走动画（短暂空窗）→ 误判结束（实测并行下 fling 停在中途 836）。
+    /// ⚠ 不用 `has_animation_for_state` 做循环条件：未持串行锁时，并行测试的
+    /// update_animations 会整表取走动画（短暂空窗）→ 误判结束（实测并行下
+    /// fling 停在中途 836）。调用方若已持 TEST_SERIAL，可用下方的
+    /// `step_animations_until_target`（表空 + 距目标双条件，无空窗问题）。
     fn step_animations_until_done(state: &LazyListState, max_frames: usize) -> usize {
         use std::time::Duration;
         let mut frames = 0;
@@ -1641,6 +1643,35 @@ mod tests {
                 break;
             }
             last = v;
+        }
+        frames
+    }
+
+    /// 泵全局动画直到 offset 距目标 < 5.0 且动画表排空（精确目标场景专用——
+    /// 如 animate_scroll_to_item，目标由 scroll_to_item 同缓存推导，round-trip 精确）。
+    ///
+    /// 背景：spring 尾段每帧位移天然 < 0.5（threshold 0.01，50 倍间隙）——
+    /// `step_animations_until_done` 的位移判据会在引擎真正 done（写精确目标）
+    /// 之前提前触发，残余 ~13px 没收完（全量负载抖动时偶发超最终断言 5px 阈）。
+    /// 本函数要求调用方已持 TEST_SERIAL（串行下无跨测试取表/清表干扰，
+    /// `has_animation_for_state` 无空窗误判），以"表空 + 距目标"双条件收敛。
+    fn step_animations_until_target(
+        state: &LazyListState,
+        target: f32,
+        max_frames: usize,
+    ) -> usize {
+        use std::time::Duration;
+        let mut frames = 0;
+        loop {
+            crate::animation::update_animations();
+            std::thread::sleep(Duration::from_millis(20));
+            let v = state.offset();
+            frames += 1;
+            let sid = state.offset.state_id();
+            let drained = !crate::animation::has_animation_for_state(sid);
+            if (drained && (v - target).abs() < 5.0) || frames >= max_frames {
+                break;
+            }
         }
         frames
     }
@@ -2206,6 +2237,9 @@ mod tests {
     // ── animateScrollToItem（对齐 Compose animateScrollToItem——spring 动画）──
     #[test]
     fn animate_scroll_to_item_animates_offset() {
+        // 动画注册表全局共享——持串行锁（step_animations_until_target 的
+        // has_animation_for_state 无空窗误判依赖串行，见 helper 注释）
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let state = LazyListState::new();
         let items: Arc<Vec<u64>> = Arc::new((0..1000).collect());
         let (_px, _w) = render_lazy_state(&state, &items);
@@ -2225,8 +2259,10 @@ mod tests {
         state.animate_scroll_to_item(500, 0.0);
         let (_px, _w) = render_lazy_state(&state, &items);
         // 测量期消费：注册 spring 动画（push_animatable 立即 update 一帧——
-        // elapsed≈0 位移≈0，之后由 step 循环推进）
-        let frames = step_animations_until_done(&state, 400);
+        // elapsed≈0 位移≈0，之后由 step 循环推进）。目标由 scroll_to_item
+        // 同缓存推导、round-trip 精确——用表空+距目标双条件收敛（位移判据
+        // 会在引擎 done 前提前触发，残余 ~13px，见 helper 注释）。
+        let frames = step_animations_until_target(&state, target, 400);
         assert!(frames < 400, "spring 应收敛（{frames} 帧）");
         let end = state.offset();
         assert!(

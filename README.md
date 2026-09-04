@@ -49,7 +49,7 @@ fn main() {
 
 ```bash
 cargo run -p winia --example counter          # 计数器 + 滚动 + 多窗口示例
-cargo test -p winia --lib                     # 275 个单元/布局/渲染测试
+cargo test -p winia --lib                     # 730 个单元/布局/渲染测试
 cargo test --test ui_test --features debug-server  # UI 集成测试（真实窗口）
 ```
 
