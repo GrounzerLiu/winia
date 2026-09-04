@@ -36,9 +36,12 @@ HorizontalScrollbar::new(scroll.clone()).always_show(true).build(ctx);
 - **thumb 几何**（M3 同）：`thumb = clamp(track * viewport/content, min, track*0.9)`，
   `thumb_offset = (scroll/max) * (track - thumb)`；content <= viewport 时不画；
   track < min 时不画。`track = viewport - 2*inset`（inset 2dp）。
-- **拖 thumb**：`on_drag` 本地坐标 → `offset.set(pos/(track-thumb) * max)`。
-  拖拽开始抢占（`cancel_fling` + 置滚动中，松手清——否则列表侧惯性 fling
-  的 `update_animations` 写回 offset 导致拖不动）。
+- **拖 thumb**：`on_drag_start` 记 grab = 按下点(track 内) - 当时 thumb 顶部
+  （钳到 `[0, thumb]`，track 空白处按下则边缘跟到光标），`on_drag` 用
+  `target = 光标 - grab` 反推 offset（CMP 抓取偏移保持——thumb 跟手不跳；
+  旧中心对齐大 thumb 首帧跳变）。拖拽开始抢占（`cancel_fling` + 置滚动中，
+  松手/取消清——否则列表侧惯性 fling 的 `update_animations` 写回 offset
+  导致拖不动；cancel 防失焦残留置位）。
 - **显示**：`always_show` / 滚动中 / hover / 拖拽中 / offset 变化脉冲 + fade 动画。
   hover 显示（`hoverable` + interaction 源）解决隐藏态无从下手拖；
   拖拽中显示解决松手即消失（`emit_drag_start/end` 维持 `dragged`）；
@@ -69,7 +72,6 @@ HorizontalScrollbar::new(scroll.clone()).always_show(true).build(ctx);
 - 边界处滚轮不点亮（offset 无变化→脉冲检测不到；M3/CMP 会闪一下给"到底了"
   反馈——v1 取舍，待办）。
 - 横向条不镜像 `scroll_reverse`（RTL/反向列表条位置与内容反向——v1 取舍，待办）。
-- 拖 thumb 是中心对齐绝对映射（大 thumb 首帧跳变；CMP 是抓取偏移保持——v1 取舍，待办）。
 - 无 RTL 镜像（垂直条恒右侧，由调用方放；M3 按 layoutDirection 放 end edge）。
 - 需要 tokio runtime（fade 的 `LaunchedEffect` 驱动——与 TextField blink 同约定；
   demo main 需先建 `Runtime` + `enter`，见 `scrollbar_demo.rs`）。

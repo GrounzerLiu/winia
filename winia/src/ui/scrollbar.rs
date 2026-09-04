@@ -358,15 +358,20 @@ fn scrollbar_build_shared(
     let track = (viewport - 2.0 * cfg.inset).max(0.0);
     let max_offset = (content - viewport).max(0.0);
     let drag_thumb_len = thumb_len;
-    // P1-1 取舍记录：中心对齐绝对映射（thumb 中心瞬移到光标），大 thumb
-    // 下首帧有跳变；CMP 是抓取偏移保持（grab = 按下点 - thumb_offset）。
-    // v1 保持现状（简单可预测），后续按 P1-1 改 grab 保持。
+    // P1-1（CMP 语义）：抓取偏移保持——按下时记 grab = 按下点(track 内) -
+    // 当时 thumb 顶部，拖动时 target = 光标 - grab，thumb 跟手不跳。
+    // 旧中心对齐（target = 光标 - thumb/2）大 thumb 下首帧跳变，实测修。
+    // grab 是交互期临时值（remember 持有，不进 node_key、不注册依赖——
+    // set_silent 写，build 内 peek 读；拖动中 offset.set 驱动重组已足够）。
+    let grab_offset: State<f32> = ctx.remember(|| 0.0f32);
+    let drag_inset = cfg.inset;
     let drag_cb = {
         let scroll_state_src = scroll_state_src.clone();
+        let grab_offset = grab_offset.clone();
         move |pos: (f32, f32)| {
             // pos 为 thumb 条本地坐标（含 inset 偏移）；减 inset 得 track 内位置
-            let pos_in_track = if vertical { pos.1 } else { pos.0 } - cfg.inset;
-            let target = pos_in_track - drag_thumb_len / 2.0;
+            let pos_in_track = if vertical { pos.1 } else { pos.0 } - drag_inset;
+            let target = pos_in_track - grab_offset.peek();
             let off = scrollbar_offset_for_thumb_pos(target, track, drag_thumb_len, max_offset);
             scroll_state_src.offset.set(off);
         }
@@ -406,12 +411,22 @@ fn scrollbar_build_shared(
         has_thumb,
         fade: fade_state.clone(),
     })
-    .on_drag_start(move |_pos: (f32, f32)| {
-        hover_src_clone.emit_drag_start();
-        // 抢占：取消列表侧惯性 fling（否则 update_animations 下帧
-        // 把 offset 写回，thumb 拖不动）；标记滚动中（松手清）。
-        scroll_state_clone.cancel_fling();
-        scroll_state_clone.is_scroll_in_progress.set(true);
+    .on_drag_start({
+        let hover_src = hover_src_clone.clone();
+        let scroll_state = scroll_state_clone.clone();
+        let grab_offset = grab_offset.clone();
+        move |pos: (f32, f32)| {
+            hover_src.emit_drag_start();
+            // 抢占：取消列表侧惯性 fling（否则 update_animations 下帧
+            // 把 offset 写回，thumb 拖不动）；标记滚动中（松手清）。
+            scroll_state.cancel_fling();
+            scroll_state.is_scroll_in_progress.set(true);
+            // 抓取偏移 = 按下点(track 内) - 当时 thumb 顶部（build 期值捕获）。
+            // clamp 到 [0, thumb]：按下点若在 thumb 外（track 空白处按下），
+            // grab 钳到 thumb 边缘，避免首帧大跳（等价于"点哪 thumb 边缘跟到哪"）。
+            let pos_in_track = if vertical { pos.1 } else { pos.0 } - drag_inset;
+            grab_offset.set_silent((pos_in_track - thumb_offset).clamp(0.0, drag_thumb_len.max(0.0)));
+        }
     })
     .on_drag_end(move || {
         hover_src_clone2.emit_drag_end();
@@ -638,6 +653,35 @@ mod tests {
         assert!((mid - 700.0).abs() < 1.0, "mid={mid}");
         assert_eq!(scrollbar_offset_for_thumb_pos(-10.0, track, thumb, max), 0.0);
         assert_eq!(scrollbar_offset_for_thumb_pos(9999.0, track, thumb, max), max);
+    }
+
+    #[test]
+    fn drag_preserves_grab_offset() {
+        // P1-1 回归：grab 保持（非中心对齐）。thumb_offset=100、thumb=178.8，
+        // 按下点 pos=150（thumb 内，grab=50）后微移到 160：
+        // grab 语义 target=160-50=110；旧中心对齐 target=160-89.4=70.6。
+        // 断言走 grab 路径（差值应 <1px），锁定"跟手不跳"。
+        let track = 596.0;
+        let thumb = 178.8;
+        let max = 1400.0;
+        let thumb_offset = 100.0f32;
+        let inset = 2.0f32;
+        // 模拟 on_drag_start 的 grab 计算（含 clamp）：grab=(150-2-100)=48
+        let grab = ((150.0 - inset - thumb_offset).clamp(0.0, thumb));
+        assert!((grab - 48.0).abs() < 0.01, "grab={grab}");
+        // 模拟 on_drag：pos=160 → target=160-2-48=110
+        let target = (160.0 - inset) - grab;
+        let off_grab = scrollbar_offset_for_thumb_pos(target, track, thumb, max);
+        let off_center =
+            scrollbar_offset_for_thumb_pos((160.0 - inset) - thumb / 2.0, track, thumb, max);
+        assert!((off_grab - off_center).abs() > 50.0, "两语义应显著不同（grab={off_grab} center={off_center}）");
+        // grab 路径增量 = (160-150)/travel*max ≈ 10/417.2*1400 ≈ 33.5
+        let travel = track - thumb;
+        assert!((off_grab - scrollbar_offset_for_thumb_pos(150.0 - inset - grab, track, thumb, max) - 10.0 / travel * max).abs() < 1.0);
+        // 按下点在 thumb 外（track 空白处 pos=400）：grab 钳到 thumb（178.8），
+        //  thumb 边缘跟到光标，不大跳到中心。
+        let grab_clamped = ((400.0 - inset - thumb_offset).clamp(0.0, thumb));
+        assert!((grab_clamped - thumb).abs() < 0.01, "thumb 外按下应钳到边缘，grab={grab_clamped}");
     }
 
     #[test]
