@@ -4,7 +4,7 @@
 
 use crate::composable;
 use crate::core::composer::{ComposeCtx, GroupStatus};
-use crate::layout::{Arrangement, Alignment, ColumnLayout, RowLayout, BoxLayout, MeasurePolicy};
+use crate::layout::{Arrangement, Alignment, ColumnLayout, RowLayout, BoxLayout, FlowRowLayout, FlowColumnLayout, MeasurePolicy};
 use crate::modifier::Modifier;
 
 /// 容器 build 样板合并（P2-4）：Column/Row/Stack 共用——
@@ -156,6 +156,128 @@ impl Default for Stack {
     fn default() -> Self { Self::new() }
 }
 
+// ── FlowRow / FlowColumn（流式布局，对标 Compose foundation）──
+
+/// 流式行：主轴填满即换行（chip 组/标签云/工具栏换行）。
+///
+/// 对标 `FlowRow(horizontalArrangement/verticalArrangement/maxItemsInEachRow)`：
+/// `main_spacing` = 行内主轴间距，`cross_spacing` = 行间距，
+/// `max_items_in_row` = 每行上限（默认不限）。
+/// v1 无 weight/maxLines/overflow（见 `layout/flow.rs` 文档）。
+pub struct FlowRow {
+    modifier: Modifier,
+    arrangement: Arrangement,
+    alignment: Alignment,
+    main_spacing: f32,
+    cross_spacing: f32,
+    max_items_in_row: usize,
+}
+
+impl FlowRow {
+    pub fn new() -> Self {
+        FlowRow {
+            modifier: Modifier::new(),
+            arrangement: Arrangement::Start,
+            alignment: Alignment::Start,
+            main_spacing: 0.0,
+            cross_spacing: 0.0,
+            max_items_in_row: usize::MAX,
+        }
+    }
+
+    pub fn modifier(mut self, m: Modifier) -> Self { self.modifier = self.modifier.then(m); self }
+    pub fn arrangement(mut self, a: Arrangement) -> Self { self.arrangement = a; self }
+    pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
+    pub fn main_spacing(mut self, s: f32) -> Self { self.main_spacing = s; self }
+    pub fn cross_spacing(mut self, s: f32) -> Self { self.cross_spacing = s; self }
+    pub fn max_items_in_row(mut self, m: usize) -> Self { self.max_items_in_row = m; self }
+
+    /// ⚠ 不宏化（同 Row/Column：content 顶层 State.get() 需冒泡给父）。
+    pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
+        ctx.changed(&self.main_spacing);
+        ctx.changed(&self.cross_spacing);
+        ctx.changed(&self.arrangement);
+        ctx.changed(&self.alignment);
+        // max_items_in_row: usize 有 PartialEq，直接 changed
+        ctx.changed(&self.max_items_in_row);
+        let dir = self.modifier.get_layout_direction().unwrap_or(crate::ui::theme::WiniaTheme::direction());
+        ctx.changed(&dir);
+        build_container(
+            ctx,
+            self.modifier,
+            FlowRowLayout::new()
+                .arrangement(self.arrangement)
+                .alignment(self.alignment)
+                .main_spacing(self.main_spacing)
+                .cross_spacing(self.cross_spacing)
+                .max_items_in_row(self.max_items_in_row)
+                .direction(dir),
+            content,
+        );
+    }
+}
+
+impl Default for FlowRow {
+    fn default() -> Self { Self::new() }
+}
+
+/// 流式列：主轴（垂直）填满即换列。对标 `FlowColumn`，参数与 FlowRow 对称。
+pub struct FlowColumn {
+    modifier: Modifier,
+    arrangement: Arrangement,
+    alignment: Alignment,
+    main_spacing: f32,
+    cross_spacing: f32,
+    max_items_in_column: usize,
+}
+
+impl FlowColumn {
+    pub fn new() -> Self {
+        FlowColumn {
+            modifier: Modifier::new(),
+            arrangement: Arrangement::Start,
+            alignment: Alignment::Start,
+            main_spacing: 0.0,
+            cross_spacing: 0.0,
+            max_items_in_column: usize::MAX,
+        }
+    }
+
+    pub fn modifier(mut self, m: Modifier) -> Self { self.modifier = self.modifier.then(m); self }
+    pub fn arrangement(mut self, a: Arrangement) -> Self { self.arrangement = a; self }
+    pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
+    pub fn main_spacing(mut self, s: f32) -> Self { self.main_spacing = s; self }
+    pub fn cross_spacing(mut self, s: f32) -> Self { self.cross_spacing = s; self }
+    pub fn max_items_in_column(mut self, m: usize) -> Self { self.max_items_in_column = m; self }
+
+    /// ⚠ 不宏化（同 Row/Column）。
+    pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
+        ctx.changed(&self.main_spacing);
+        ctx.changed(&self.cross_spacing);
+        ctx.changed(&self.arrangement);
+        ctx.changed(&self.alignment);
+        ctx.changed(&self.max_items_in_column);
+        let dir = self.modifier.get_layout_direction().unwrap_or(crate::ui::theme::WiniaTheme::direction());
+        ctx.changed(&dir);
+        build_container(
+            ctx,
+            self.modifier,
+            FlowColumnLayout::new()
+                .arrangement(self.arrangement)
+                .alignment(self.alignment)
+                .main_spacing(self.main_spacing)
+                .cross_spacing(self.cross_spacing)
+                .max_items_in_column(self.max_items_in_column)
+                .direction(dir),
+            content,
+        );
+    }
+}
+
+impl Default for FlowColumn {
+    fn default() -> Self { Self::new() }
+}
+
 // ── Spacer ──
 
 /// 固定尺寸空白占位（对标 Compose `Spacer(modifier)`）。
@@ -186,5 +308,84 @@ impl Spacer {
     pub fn build(self, ctx: &mut ComposeCtx) {
         // 空容器：BoxLayout 无子节点 → 仅占位尺寸
         build_container(ctx, self.modifier, BoxLayout::new(), |_| {});
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::composer::Composer;
+    use crate::layout::Constraints;
+    use crate::ui::theme::{ThemeColors, WiniaTheme};
+
+    /// FlowRow 组合链路集成：content 闭包 4 个固定叶，容器宽 100 → 换行。
+    #[test]
+    fn flow_row_composes_and_wraps() {
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                FlowRow::new()
+                    .modifier(Modifier::new().fill_max_width())
+                    .build(ctx, |ctx| {
+                        for _ in 0..4 {
+                            let k = ctx.next_key();
+                            ctx.start_leaf(k, Modifier::new().size(30.0, 20.0));
+                            ctx.end_node();
+                        }
+                    });
+            });
+        });
+        composer.layout(Constraints::new(100.0, 100.0, 0.0, 600.0));
+        let root = composer.layout_root_idx().expect("root");
+        let nodes = composer.arena_nodes();
+        // 递归找 4 子节点（FlowRow 容器——WiniaTheme scope 无节点，不假设层级）
+        fn find_4(nodes: &[crate::layout::LayoutNode], idx: usize) -> Option<usize> {
+            if nodes[idx].children.len() == 4 { return Some(idx); }
+            for &c in &nodes[idx].children {
+                if let Some(f) = find_4(nodes, c) { return Some(f); }
+            }
+            None
+        }
+        let flow_idx = find_4(nodes, root).expect("应有 4 子 FlowRow 节点");
+        let ys: Vec<f32> = nodes[flow_idx].children.iter()
+            .map(|&c| nodes[c].position.y)
+            .collect();
+        assert_eq!(ys, vec![0.0, 0.0, 0.0, 20.0], "前 3 个首行，第 4 个换行，ys={ys:?}");
+    }
+
+    /// FlowColumn 组合链路集成：容器高 100 → 换列。
+    #[test]
+    fn flow_column_composes_and_wraps() {
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                FlowColumn::new()
+                    .modifier(Modifier::new().fill_max_height())
+                    .build(ctx, |ctx| {
+                        for _ in 0..4 {
+                            let k = ctx.next_key();
+                            ctx.start_leaf(k, Modifier::new().size(20.0, 30.0));
+                            ctx.end_node();
+                        }
+                    });
+            });
+        });
+        composer.layout(Constraints::new(0.0, 600.0, 100.0, 100.0));
+        let root = composer.layout_root_idx().expect("root");
+        let nodes = composer.arena_nodes();
+        fn find_4(nodes: &[crate::layout::LayoutNode], idx: usize) -> Option<usize> {
+            if nodes[idx].children.len() == 4 { return Some(idx); }
+            for &c in &nodes[idx].children {
+                if let Some(f) = find_4(nodes, c) { return Some(f); }
+            }
+            None
+        }
+        let flow_idx = find_4(nodes, root).expect("应有 4 子 FlowColumn 节点");
+        let xs: Vec<f32> = nodes[flow_idx].children.iter()
+            .map(|&c| nodes[c].position.x)
+            .collect();
+        assert_eq!(xs, vec![0.0, 0.0, 0.0, 20.0], "前 3 个首列，第 4 个换列，xs={xs:?}");
     }
 }

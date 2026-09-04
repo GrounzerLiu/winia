@@ -73,7 +73,7 @@ pub use button::ButtonSize;
 pub use button::ButtonStyle;
 pub use card::{Card, CardBorder, CardColors, CardDefaults, CardElevation, CardStyle};
 pub use surface::{Surface, SurfaceBorder};
-pub use layout_components::{Column, Row, Stack, Spacer};
+pub use layout_components::{Column, Row, Stack, Spacer, FlowRow, FlowColumn};
 pub use window::Window;
 pub use theme::WiniaTheme;
 pub use theme::ThemeColors;
