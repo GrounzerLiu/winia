@@ -156,6 +156,15 @@ Modifier::new().size(48.0, 48.0).draw_node(MyBadge { color })
    `drawWithContent` 式包裹需拆 render_pass1 流水线（背景→文本→子→波纹）为
    两阶段或闭包嵌套，重构面大而真实需求未被倒逼（现有全是单向绘制）。
    需要时再加 `DrawWrapNode`，现在加是过度设计。
+   - 首个候选场景：Ripple（2026-09-04 论证，结论**不迁**）。Ripple 是唯一的
+     "内容之上型"绘制（`render.rs:1067-1068`，子节点之后；DrawNode 统一画在
+     枚举背景层、子节点之前）——照搬即变 z-order。且 `draw_ripple` 从整条
+     Modifier 链反查 shape（`render.rs:1105-1114`，Background/Border 推断），
+     node 手里无链，迁则要求各调用点（Button/Card/Chip/ListItem/IconButton…）
+     自算 shape 传入，改动面铺开。迁移三问答案：(a) 动画值本就不进 param_eq，
+     好答；(b) 层位卡死，需 DrawWrapNode/层位开关先行；(c) shape 反查需搬家。
+     迁 Ripple = 先造层位机制，风险收益比不对；且无第三方自定义 indication
+     的真实需求。何时重议：DrawWrapNode 落地后，或有自定义 indication 需求时。
 4. **trait object 开销**：每节点多一次 vtable + Arc。热路径（measure）A 型 node
    仅多一次 transform 调用（MinWidth 级别，开销可忽略）；绘制/输入路径可接受；
    大规模列表待实测（未测，不要断言）。
