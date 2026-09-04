@@ -100,8 +100,15 @@ let animated = ctx.animate_float_as_state(target, ProgressIndicatorDefaults::pro
 
 ## 3. 架构说明
 
-- 与 Slider 相同架构：`Modifier::draw()`（CustomDraw）自定义 Canvas 绘制；
+- 绘制经 4 个具名 `DrawNode`（exp/progress-node 迁移，原 `.draw` 匿名闭包）：
+  `LinearDeterminateNode` / `LinearIndeterminateNode` /
+  `CircularDeterminateNode` / `CircularIndeterminateNode`
+  （`pub(crate)`——第三方照抄形状自定类型，不复用）；
   无交互/焦点（progress indicator 不可交互）。
+- `node_key` 规则：静态视觉参数全进（颜色/cap/gap/stroke/progress/draw_stop）；
+  无限动画值（linear fh/ft/sh/st、circular global/additional/progress_anim）
+  渲染期 `peek` 直读、不进 key——重绘由动画引擎每帧 `request_redraw` 驱动，
+  与 Skip 无关（`linear_indeterminate_node_skips_on_animation_frames` 回归）。
 - 动画：`ctx.remember_infinite_transition()` + `InfiniteRepeatableSpec::restart_keyframes(...)`
   ——本组件新增框架能力：无限动画支持 keyframes 曲线（含段间 easing），
   对标 Compose `infiniteRepeatable(keyframes{...})`；组合点移除自动 dispose。
@@ -124,4 +131,7 @@ cargo test -p winia --lib progress_indicator                # 单元 + 像素测
 
 测试覆盖：gap/stop 几何换算、动画规格数值（与 Compose keyframes 对齐）、
 默认色解析、Linear/Circular determinate 像素渲染、indeterminate 无 track、
-height>width 退化 Butt、无限动画注册/清理。
+height>width 退化 Butt、无限动画注册/清理；
+DrawNode 迁移：node_key 全覆盖（含 determinate progress 进 key /
+indeterminate 动画值不进 key）、双路像素对照（node vs 旧闭包逐字节）、
+无限动画帧 Skip+peek 探针。

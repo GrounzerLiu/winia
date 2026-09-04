@@ -291,6 +291,7 @@ impl LinearProgressIndicator {
         ctx.changed(&self.track_color);
         ctx.changed(&self.stroke_cap);
         ctx.changed(&self.gap_size);
+        ctx.changed(&self.draw_stop_indicator);
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
         let color = self.color.unwrap_or_else(|| ProgressIndicatorDefaults::indicator_color(&theme));
@@ -308,23 +309,17 @@ impl LinearProgressIndicator {
             let st = inf.animate_float(ctx, 0.0, 1.0, linear_second_line_tail_spec());
             Modifier::new()
                 .size(LINEAR_INDICATOR_WIDTH, LINEAR_INDICATOR_HEIGHT)
-                .draw(move |canvas, rect| {
-                    draw_linear_indeterminate(
-                        canvas, rect,
-                        color, track_color, cap, gap,
-                        fh.peek(), ft.peek(), sh.peek(), st.peek(),
-                    );
+                .draw_node(LinearIndeterminateNode {
+                    color, track_color, cap, gap,
+                    fh: fh.clone(), ft: ft.clone(), sh: sh.clone(), st: st.clone(),
                 })
         } else {
             let progress = self.progress;
             let draw_stop = self.draw_stop_indicator;
             Modifier::new()
                 .size(LINEAR_INDICATOR_WIDTH, LINEAR_INDICATOR_HEIGHT)
-                .draw(move |canvas, rect| {
-                    draw_linear_determinate(
-                        canvas, rect,
-                        color, track_color, cap, gap, progress, draw_stop,
-                    );
+                .draw_node(LinearDeterminateNode {
+                    color, track_color, cap, gap, progress, draw_stop,
                 })
         };
 
@@ -461,6 +456,76 @@ pub(crate) fn draw_linear_determinate(
     // stop：track 末端圆点
     if draw_stop {
         draw_stop_indicator(canvas, rect, LINEAR_STOP_SIZE, color, cap);
+    }
+}
+
+/// Linear indeterminate 绘制节点（exp/progress-node 迁移探针：原 `.draw` 匿名闭包）。
+///
+/// 照抄 `SliderTrackNode` 形状（`slider.rs`）：具名 struct + `DrawNode`，`draw` 内
+/// 复用原绘制函数，`node_key` 纳入全部静态视觉参数。4 个无限动画值
+/// （fh/ft/sh/st）是逐帧 peek 的瞬态值，MUST NOT 进 key（进则每帧 Enter；
+/// 重绘由动画引擎每帧 `request_redraw` 驱动，与 Skip 无关——本探针验证此约定）。
+#[derive(Debug)]
+pub(crate) struct LinearIndeterminateNode {
+    pub(crate) color: Color,
+    pub(crate) track_color: Color,
+    pub(crate) cap: ProgressIndicatorStrokeCap,
+    pub(crate) gap: f32,
+    /// 无限动画 4 条线进度（渲染期 peek，不进 key）
+    pub(crate) fh: crate::core::state::State<f32>,
+    pub(crate) ft: crate::core::state::State<f32>,
+    pub(crate) sh: crate::core::state::State<f32>,
+    pub(crate) st: crate::core::state::State<f32>,
+}
+
+impl crate::modifier::DrawNode for LinearIndeterminateNode {
+    fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
+        draw_linear_indeterminate(
+            canvas, rect,
+            self.color, self.track_color, self.cap, self.gap,
+            self.fh.peek(), self.ft.peek(), self.sh.peek(), self.st.peek(),
+        );
+    }
+    fn node_key(&self) -> String {
+        format!(
+            "linear-indeterminate:{:?}:{:?}:{}:{}",
+            self.color,
+            self.track_color,
+            self.cap as u8,
+            self.gap.to_bits(),
+        )
+    }
+}
+
+/// Linear determinate 绘制节点（静态 progress，无动画值——progress 进 key）。
+#[derive(Debug)]
+pub(crate) struct LinearDeterminateNode {
+    pub(crate) color: Color,
+    pub(crate) track_color: Color,
+    pub(crate) cap: ProgressIndicatorStrokeCap,
+    pub(crate) gap: f32,
+    pub(crate) progress: f32,
+    pub(crate) draw_stop: bool,
+}
+
+impl crate::modifier::DrawNode for LinearDeterminateNode {
+    fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
+        draw_linear_determinate(
+            canvas, rect,
+            self.color, self.track_color, self.cap, self.gap,
+            self.progress, self.draw_stop,
+        );
+    }
+    fn node_key(&self) -> String {
+        format!(
+            "linear-determinate:{:?}:{:?}:{}:{}:{}:{}",
+            self.color,
+            self.track_color,
+            self.cap as u8,
+            self.gap.to_bits(),
+            self.progress.to_bits(),
+            self.draw_stop,
+        )
     }
 }
 
@@ -645,23 +710,18 @@ impl CircularProgressIndicator {
             let progress_anim = inf.animate_float(ctx, 0.1, 0.87, circular_progress_spec());
             Modifier::new()
                 .size(CIRCULAR_INDICATOR_DIAMETER, CIRCULAR_INDICATOR_DIAMETER)
-                .draw(move |canvas, rect| {
-                    draw_circular_indeterminate(
-                        canvas, rect,
-                        color, cap, gap, stroke_width,
-                        global.peek(), additional.peek(), progress_anim.peek(),
-                    );
+                .draw_node(CircularIndeterminateNode {
+                    color, cap, stroke_width,
+                    global: global.clone(),
+                    additional: additional.clone(),
+                    progress_anim: progress_anim.clone(),
                 })
         } else {
             let progress = self.progress;
             Modifier::new()
                 .size(CIRCULAR_INDICATOR_DIAMETER, CIRCULAR_INDICATOR_DIAMETER)
-                .draw(move |canvas, rect| {
-                    draw_circular_determinate(
-                        canvas, rect,
-                        color, track_color, cap, gap, stroke_width,
-                        progress,
-                    );
+                .draw_node(CircularDeterminateNode {
+                    color, track_color, cap, gap, stroke_width, progress,
                 })
         };
 
@@ -791,6 +851,69 @@ pub(crate) fn draw_circular_indeterminate(
         cap,
     );
     canvas.restore();
+}
+
+/// Circular determinate 绘制节点（静态 progress，进 key）。
+#[derive(Debug)]
+pub(crate) struct CircularDeterminateNode {
+    pub(crate) color: Color,
+    pub(crate) track_color: Color,
+    pub(crate) cap: ProgressIndicatorStrokeCap,
+    pub(crate) gap: f32,
+    pub(crate) stroke_width: f32,
+    pub(crate) progress: f32,
+}
+
+impl crate::modifier::DrawNode for CircularDeterminateNode {
+    fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
+        draw_circular_determinate(
+            canvas, rect,
+            self.color, self.track_color, self.cap, self.gap,
+            self.stroke_width, self.progress,
+        );
+    }
+    fn node_key(&self) -> String {
+        format!(
+            "circular-determinate:{:?}:{:?}:{}:{}:{}:{}",
+            self.color,
+            self.track_color,
+            self.cap as u8,
+            self.gap.to_bits(),
+            self.stroke_width.to_bits(),
+            self.progress.to_bits(),
+        )
+    }
+}
+
+/// Circular indeterminate 绘制节点（3 个无限动画值 peek，不进 key；
+/// `_gap_size` 在原函数即无用（无 track），故不存）。
+#[derive(Debug)]
+pub(crate) struct CircularIndeterminateNode {
+    pub(crate) color: Color,
+    pub(crate) cap: ProgressIndicatorStrokeCap,
+    pub(crate) stroke_width: f32,
+    pub(crate) global: crate::core::state::State<f32>,
+    pub(crate) additional: crate::core::state::State<f32>,
+    pub(crate) progress_anim: crate::core::state::State<f32>,
+}
+
+impl crate::modifier::DrawNode for CircularIndeterminateNode {
+    fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
+        draw_circular_indeterminate(
+            canvas, rect,
+            self.color, self.cap, 0.0,
+            self.stroke_width,
+            self.global.peek(), self.additional.peek(), self.progress_anim.peek(),
+        );
+    }
+    fn node_key(&self) -> String {
+        format!(
+            "circular-indeterminate:{:?}:{}:{}",
+            self.color,
+            self.cap as u8,
+            self.stroke_width.to_bits(),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -1243,5 +1366,279 @@ mod tests {
         composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
         assert!(crate::animation::is_animating());
         crate::animation::clear_all_animations();
+    }
+
+    // ── LinearIndeterminateNode 迁移（exp/progress-node 探针）──
+    #[test]
+    fn linear_indeterminate_node_key_covers_all_static_params() {
+        use crate::modifier::DrawNode;
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let color = ProgressIndicatorDefaults::indicator_color(&theme);
+        let track = ProgressIndicatorDefaults::track_color(&theme);
+        let mk = |color: Color, track_color: Color, cap: ProgressIndicatorStrokeCap, gap: f32| {
+            LinearIndeterminateNode {
+                color, track_color, cap, gap,
+                fh: crate::core::state::State::new(0.1),
+                ft: crate::core::state::State::new(0.2),
+                sh: crate::core::state::State::new(0.3),
+                st: crate::core::state::State::new(0.4),
+            }
+        };
+        let base = mk(color, track, ProgressIndicatorStrokeCap::Round, 4.0);
+        // 同参 → 相等（Skip）
+        assert_eq!(base.node_key(), mk(color, track, ProgressIndicatorStrokeCap::Round, 4.0).node_key());
+        // 静态参数任一变化 → 不等（Enter）
+        let other_color = Color::from_argb(255, 1, 2, 3);
+        assert_ne!(base.node_key(), mk(other_color, track, ProgressIndicatorStrokeCap::Round, 4.0).node_key(), "color 应进 key");
+        assert_ne!(base.node_key(), mk(color, other_color, ProgressIndicatorStrokeCap::Round, 4.0).node_key(), "track_color 应进 key");
+        assert_ne!(base.node_key(), mk(color, track, ProgressIndicatorStrokeCap::Butt, 4.0).node_key(), "cap 应进 key");
+        assert_ne!(base.node_key(), mk(color, track, ProgressIndicatorStrokeCap::Round, 8.0).node_key(), "gap 应进 key");
+        // 瞬态动画值变化 → 相等（不进 key，渲染期 peek 直读）
+        let moved = mk(color, track, ProgressIndicatorStrokeCap::Round, 4.0);
+        moved.fh.set_silent(0.9);
+        moved.ft.set_silent(0.8);
+        moved.sh.set_silent(0.7);
+        moved.st.set_silent(0.6);
+        assert_eq!(base.node_key(), moved.node_key(), "无限动画 peek 值变化不应进 key");
+    }
+
+    #[test]
+    fn linear_indeterminate_node_renders_identical_to_enum_draw() {
+        // 真双路对照：同参一路 draw_node(LinearIndeterminateNode)，一路旧
+        // `Modifier::draw` 匿名闭包（迁移前 build 侧体逐行复刻），同 300×300
+        // surface 逐字节 assert_eq。
+        use crate::modifier::DrawNode;
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let color = ProgressIndicatorDefaults::indicator_color(&theme);
+        let track = ProgressIndicatorDefaults::track_color(&theme);
+        let render_with = |modifier: Modifier| {
+            let mut composer = Composer::new();
+            let scene = |ctx: &mut ComposeCtx| {
+                WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    let key = ctx.next_key();
+                    ctx.start_leaf(key, modifier.clone());
+                    ctx.end_node();
+                });
+            };
+            composer.compose(scene);
+            composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+            let mut surface = skia_safe::surfaces::raster_n32_premul((300, 300)).unwrap();
+            let canvas = surface.canvas();
+            canvas.clear(skia_safe::Color::WHITE);
+            let root = composer.layout_root_idx().expect("root");
+            let nodes = composer.arena_nodes();
+            crate::render::render(nodes, root, canvas);
+            let pm = surface.peek_pixels().expect("pixmap");
+            pm.pixels::<[u8; 4]>().expect("pixels").to_vec()
+        };
+        let node_mod = Modifier::new().size(240.0, 4.0).draw_node(LinearIndeterminateNode {
+            color, track_color: track, cap: ProgressIndicatorStrokeCap::Round, gap: 4.0,
+            fh: crate::core::state::State::new(0.6),
+            ft: crate::core::state::State::new(0.2),
+            sh: crate::core::state::State::new(0.9),
+            st: crate::core::state::State::new(0.5),
+        });
+        // 旧闭包逐行复刻（同参 draw_linear_indeterminate）
+        let enum_mod = Modifier::new().size(240.0, 4.0).draw(move |canvas, rect| {
+            draw_linear_indeterminate(canvas, rect, color, track, ProgressIndicatorStrokeCap::Round, 4.0, 0.6, 0.2, 0.9, 0.5);
+        });
+        let px_node = render_with(node_mod);
+        let px_enum = render_with(enum_mod);
+        assert_eq!(px_node.len(), 300 * 300);
+        assert_eq!(px_node, px_enum, "node 路与旧 draw 闭包路必须逐字节一致（迁移保真）");
+        // node_key 可调试观测（具名可观测——匿名闭包无此能力）
+        let probe = LinearIndeterminateNode {
+            color, track_color: track, cap: ProgressIndicatorStrokeCap::Round, gap: 4.0,
+            fh: crate::core::state::State::new(0.0),
+            ft: crate::core::state::State::new(0.0),
+            sh: crate::core::state::State::new(0.0),
+            st: crate::core::state::State::new(0.0),
+        };
+        assert!(probe.node_key().starts_with("linear-indeterminate:"), "key 应有具名前缀，实际 {}", probe.node_key());
+    }
+
+    #[test]
+    fn linear_indeterminate_node_skips_on_animation_frames() {
+        // 三问(a)探针：无限动画逐帧推进时，node_key 不变 → param_eq 通过 →
+        // 同 modifier 下 start_restartable_group 可 Skip；重绘由动画引擎每帧
+        // request_redraw 驱动（与 Skip 无关）。此处直接断言 param_eq 语义。
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let color = ProgressIndicatorDefaults::indicator_color(&theme);
+        let track = ProgressIndicatorDefaults::track_color(&theme);
+        let fh = crate::core::state::State::new(0.0f32);
+        let ft = crate::core::state::State::new(0.0f32);
+        let sh = crate::core::state::State::new(0.0f32);
+        let st = crate::core::state::State::new(0.0f32);
+        // 注册真实无限动画（与 build 侧同 spec），推进 5 帧
+        crate::animation::push_infinite(fh.clone(), 0.0, 1.0, linear_first_line_head_spec());
+        crate::animation::push_infinite(ft.clone(), 0.0, 1.0, linear_first_line_tail_spec());
+        for _ in 0..5 {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        // 动画值已推进（无限动画永动），但同参 modifier param_eq 仍通过
+        let mk = || {
+            Modifier::new().size(240.0, 4.0).draw_node(LinearIndeterminateNode {
+                color, track_color: track, cap: ProgressIndicatorStrokeCap::Round, gap: 4.0,
+                fh: fh.clone(), ft: ft.clone(), sh: sh.clone(), st: st.clone(),
+            })
+        };
+        assert!(fh.peek() != 0.0 || ft.peek() != 0.0, "无限动画应已推进（fh={}, ft={}）", fh.peek(), ft.peek());
+        assert!(mk().param_eq(&mk()), "动画值变化时 param_eq 应仍通过（Skip，不多余 Enter）");
+        crate::animation::clear_all_animations();
+    }
+
+    #[test]
+    fn determinate_nodes_key_covers_progress_and_static_params() {
+        use crate::modifier::DrawNode;
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let color = ProgressIndicatorDefaults::indicator_color(&theme);
+        let track = ProgressIndicatorDefaults::track_color(&theme);
+        // linear determinate：progress 进 key（静态值，变化即 Enter）
+        let base = LinearDeterminateNode {
+            color, track_color: track, cap: ProgressIndicatorStrokeCap::Round,
+            gap: 4.0, progress: 0.5, draw_stop: true,
+        };
+        let same = LinearDeterminateNode {
+            color, track_color: track, cap: ProgressIndicatorStrokeCap::Round,
+            gap: 4.0, progress: 0.5, draw_stop: true,
+        };
+        assert_eq!(base.node_key(), same.node_key());
+        let moved = LinearDeterminateNode {
+            color, track_color: track, cap: ProgressIndicatorStrokeCap::Round,
+            gap: 4.0, progress: 0.6, draw_stop: true,
+        };
+        assert_ne!(base.node_key(), moved.node_key(), "progress 应进 key");
+        let no_stop = LinearDeterminateNode {
+            color, track_color: track, cap: ProgressIndicatorStrokeCap::Round,
+            gap: 4.0, progress: 0.5, draw_stop: false,
+        };
+        assert_ne!(base.node_key(), no_stop.node_key(), "draw_stop 应进 key");
+        // circular determinate：stroke_width + progress 进 key
+        let cbase = CircularDeterminateNode {
+            color, track_color: track, cap: ProgressIndicatorStrokeCap::Round,
+            gap: 4.0, stroke_width: 4.0, progress: 0.5,
+        };
+        let csame = CircularDeterminateNode {
+            color, track_color: track, cap: ProgressIndicatorStrokeCap::Round,
+            gap: 4.0, stroke_width: 4.0, progress: 0.5,
+        };
+        assert_eq!(cbase.node_key(), csame.node_key());
+        let cmoved = CircularDeterminateNode {
+            color, track_color: track, cap: ProgressIndicatorStrokeCap::Round,
+            gap: 4.0, stroke_width: 4.0, progress: 0.7,
+        };
+        assert_ne!(cbase.node_key(), cmoved.node_key(), "circular progress 应进 key");
+        // circular indeterminate：静态三参进 key，动画三值不进
+        let ibase = CircularIndeterminateNode {
+            color, cap: ProgressIndicatorStrokeCap::Round, stroke_width: 4.0,
+            global: crate::core::state::State::new(10.0),
+            additional: crate::core::state::State::new(20.0),
+            progress_anim: crate::core::state::State::new(0.5),
+        };
+        let imoved = CircularIndeterminateNode {
+            color, cap: ProgressIndicatorStrokeCap::Round, stroke_width: 4.0,
+            global: crate::core::state::State::new(999.0),
+            additional: crate::core::state::State::new(888.0),
+            progress_anim: crate::core::state::State::new(0.1),
+        };
+        assert_eq!(ibase.node_key(), imoved.node_key(), "circular 无限动画值不应进 key");
+        let iother = CircularIndeterminateNode {
+            color, cap: ProgressIndicatorStrokeCap::Butt, stroke_width: 4.0,
+            global: crate::core::state::State::new(10.0),
+            additional: crate::core::state::State::new(20.0),
+            progress_anim: crate::core::state::State::new(0.5),
+        };
+        assert_ne!(ibase.node_key(), iother.node_key(), "circular cap 应进 key");
+    }
+
+    #[test]
+    fn circular_determinate_node_renders_identical_to_enum_draw() {
+        // circular 定值双路对照（不定值已由 linear 探针覆盖 peek 机制；
+        // circular 不定值多 canvas.save/rotate，旧闭包复刻同参即可比）。
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let color = ProgressIndicatorDefaults::indicator_color(&theme);
+        let track = ProgressIndicatorDefaults::track_color(&theme);
+        let render_with = |modifier: Modifier| {
+            let mut composer = Composer::new();
+            let scene = |ctx: &mut ComposeCtx| {
+                WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    let key = ctx.next_key();
+                    ctx.start_leaf(key, modifier.clone());
+                    ctx.end_node();
+                });
+            };
+            composer.compose(scene);
+            composer.layout(Constraints::new(0.0, 100.0, 0.0, 100.0));
+            let mut surface = skia_safe::surfaces::raster_n32_premul((100, 100)).unwrap();
+            let canvas = surface.canvas();
+            canvas.clear(skia_safe::Color::WHITE);
+            let root = composer.layout_root_idx().expect("root");
+            let nodes = composer.arena_nodes();
+            crate::render::render(nodes, root, canvas);
+            let pm = surface.peek_pixels().expect("pixmap");
+            pm.pixels::<[u8; 4]>().expect("pixels").to_vec()
+        };
+        let node_mod = Modifier::new().size(40.0, 40.0).draw_node(CircularDeterminateNode {
+            color, track_color: track, cap: ProgressIndicatorStrokeCap::Round,
+            gap: 4.0, stroke_width: 4.0, progress: 0.5,
+        });
+        let enum_mod = Modifier::new().size(40.0, 40.0).draw(move |canvas, rect| {
+            draw_circular_determinate(canvas, rect, color, track, ProgressIndicatorStrokeCap::Round, 4.0, 4.0, 0.5);
+        });
+        let px_node = render_with(node_mod);
+        let px_enum = render_with(enum_mod);
+        assert_eq!(px_node.len(), 100 * 100);
+        assert_eq!(px_node, px_enum, "circular node 路与旧 draw 路必须逐字节一致");
+    }
+
+    #[test]
+    fn draw_stop_toggle_takes_effect_on_recompose() {
+        // draw_stop_indicator 切换的绘制正确性：State<bool> 持开关，首帧
+        // stop=true（右端有 primary 圆点），set(false) + recompose 后圆点消失。
+        // 注：本测试走 State 驱动（根 dirty 整树 Enter），测的是"false 确实不画"，
+        // 不覆盖 changed 缺失的窄场景（无 State 的纯 build 入参 + 父带动 Skip）。
+        // changed(&self.draw_stop_indicator) 已声明，与 node_key 语义对齐。
+        use skia_safe::{Color as SkColor, surfaces};
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let primary = ProgressIndicatorDefaults::indicator_color(&theme);
+        let stop: crate::core::state::State<bool> = crate::core::state::State::new(true);
+        let mut composer = Composer::new();
+        let make_scene = |stop: crate::core::state::State<bool>, theme: ThemeColors| {
+            move |ctx: &mut ComposeCtx| {
+                let s = stop.get();
+                WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    LinearProgressIndicator::new(0.5)
+                        .draw_stop_indicator(s)
+                        .build(ctx);
+                });
+            }
+        };
+        let mut render_now = |composer: &mut Composer| {
+            composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+            let mut surface = surfaces::raster_n32_premul((300, 300)).unwrap();
+            let canvas = surface.canvas();
+            canvas.clear(SkColor::WHITE);
+            let root = composer.layout_root_idx().expect("root");
+            let nodes = composer.arena_nodes();
+            crate::render::render(nodes, root, canvas);
+            let pm = surface.peek_pixels().expect("pixmap");
+            pm.pixels::<[u8; 4]>().expect("pixels").to_vec()
+        };
+        composer.compose(make_scene(stop.clone(), theme.clone()));
+        let buf1 = render_now(&mut composer);
+        let has_stop = |buf: &[[u8; 4]]| {
+            (230..250).any(|x| {
+                let p = buf[2 * 300 + x];
+                color_eq(primary, [p[2], p[1], p[0], p[3]], 8)
+            })
+        };
+        assert!(has_stop(&buf1), "stop=true 时右端应有 primary 圆点");
+        // 切换开关 → 增量重组 → 圆点消失
+        stop.set(false);
+        assert!(composer.recompose(make_scene(stop.clone(), theme.clone())), "开关变化应触发重组");
+        let buf2 = render_now(&mut composer);
+        assert!(!has_stop(&buf2), "stop=false 后右端圆点应消失");
     }
 }
