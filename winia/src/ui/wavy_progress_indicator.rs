@@ -406,26 +406,12 @@ impl LinearWavyProgressIndicator {
             Modifier::new()
                 .size(WAVY_LINEAR_WIDTH, WAVY_LINEAR_HEIGHT)
                 .clip(Shape::Rectangle)
-                .draw(move |canvas, rect| {
-                    draw_linear_wavy_indeterminate(
-                        canvas,
-                        rect,
-                        color,
-                        track_color,
-                        stroke_width,
-                        track_stroke_width,
-                        cap,
-                        gap_size,
-                        amplitude,
-                        wavelength,
-                        enable_motion,
-                        fh.peek(),
-                        ft.peek(),
-                        sh.peek(),
-                        st.peek(),
-                        wave_offset.peek(),
-                        &cache,
-                    );
+                .draw_node(LinearWavyIndeterminateNode {
+                    color, track_color, stroke_width, track_stroke_width,
+                    cap, gap_size, amplitude, wavelength, enable_motion,
+                    fh: fh.clone(), ft: ft.clone(), sh: sh.clone(), st: st.clone(),
+                    wave_offset: wave_offset.clone(),
+                    cache,
                 })
         } else {
             let progress = self.progress;
@@ -474,27 +460,13 @@ impl LinearWavyProgressIndicator {
             Modifier::new()
                 .size(WAVY_LINEAR_WIDTH, WAVY_LINEAR_HEIGHT)
                 .clip(Shape::Rectangle)
-                .draw(move |canvas, rect| {
-                    let amplitude = amplitude_state.peek();
-                    let wave = wave_for_draw.peek();
-                    draw_linear_wavy_determinate(
-                        canvas,
-                        rect,
-                        color,
-                        track_color,
-                        stroke_width,
-                        track_stroke_width,
-                        cap,
-                        gap_size,
-                        stop_size,
-                        progress,
-                        amplitude,
-                        wavelength,
-                        wave,
-                        draw_stop,
-                        enable_motion,
-                        &cache,
-                    );
+                .draw_node(LinearWavyDeterminateNode {
+                    color, track_color, stroke_width, track_stroke_width,
+                    cap, gap_size, stop_size, progress, wavelength, enable_motion,
+                    amplitude_token,
+                    amplitude_state: amplitude_state.clone(),
+                    wave_offset: wave_for_draw.clone(),
+                    cache,
                 })
         };
 
@@ -504,6 +476,148 @@ impl LinearWavyProgressIndicator {
             GroupStatus::Enter => {}
         }
         ctx.end_restartable_group();
+    }
+}
+
+/// Wavy 绘制节点（exp/wavy-node 迁移：原 `.draw` 匿名闭包 ×4 + loading ×1）。
+///
+/// 照抄 `SliderTrackNode` 形状：具名 struct + `DrawNode`，`draw` 内复用原
+/// 绘制函数。静态视觉参数全进 `node_key`；无限动画值（fh/ft/sh/st/wave_offset/
+/// global/additional/progress_anim）与振幅过渡值（amplitude_state）渲染期
+/// `peek` 直读，不进 key（重绘由动画引擎每帧 `request_redraw` 驱动）。
+/// 路径缓存（`Arc<Mutex<ShapesCache>>`）为性能设施，不影响绘制语义，不进 key；
+/// cache 含 `skia_safe::Path` 不宜 Debug，故手写 `impl Debug`（只打静态参数）。
+/// `amplitude_token`（WavyAmplitude 身份，fn 指针/固定值）进 key——fn 换了即 Enter。
+pub(crate) struct LinearWavyIndeterminateNode {
+    pub(crate) color: Color,
+    pub(crate) track_color: Color,
+    pub(crate) stroke_width: f32,
+    pub(crate) track_stroke_width: f32,
+    pub(crate) cap: ProgressIndicatorStrokeCap,
+    pub(crate) gap_size: f32,
+    pub(crate) amplitude: f32,
+    pub(crate) wavelength: f32,
+    pub(crate) enable_motion: bool,
+    pub(crate) fh: State<f32>,
+    pub(crate) ft: State<f32>,
+    pub(crate) sh: State<f32>,
+    pub(crate) st: State<f32>,
+    pub(crate) wave_offset: State<f32>,
+    pub(crate) cache: Arc<Mutex<LinearShapesCache>>,
+}
+
+impl std::fmt::Debug for LinearWavyIndeterminateNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LinearWavyIndeterminateNode")
+            .field("color", &self.color)
+            .field("track_color", &self.track_color)
+            .field("stroke_width", &self.stroke_width)
+            .field("track_stroke_width", &self.track_stroke_width)
+            .field("cap", &self.cap)
+            .field("gap_size", &self.gap_size)
+            .field("amplitude", &self.amplitude)
+            .field("wavelength", &self.wavelength)
+            .field("enable_motion", &self.enable_motion)
+            .finish_non_exhaustive()
+    }
+}
+
+impl crate::modifier::DrawNode for LinearWavyIndeterminateNode {
+    fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
+        draw_linear_wavy_indeterminate(
+            canvas, rect,
+            self.color, self.track_color,
+            self.stroke_width, self.track_stroke_width,
+            self.cap, self.gap_size,
+            self.amplitude, self.wavelength, self.enable_motion,
+            self.fh.peek(), self.ft.peek(), self.sh.peek(), self.st.peek(),
+            self.wave_offset.peek(),
+            &self.cache,
+        );
+    }
+    fn node_key(&self) -> String {
+        format!(
+            "wavy-linear-indet:{:?}:{:?}:{}:{}:{}:{}:{}:{}:{}",
+            self.color,
+            self.track_color,
+            self.stroke_width.to_bits(),
+            self.track_stroke_width.to_bits(),
+            self.cap as u8,
+            self.gap_size.to_bits(),
+            self.amplitude.to_bits(),
+            self.wavelength.to_bits(),
+            self.enable_motion,
+        )
+    }
+}
+
+/// Linear determinate wavy 节点（振幅过渡值 peek，不进 key；fn 身份 token 进 key）。
+pub(crate) struct LinearWavyDeterminateNode {
+    pub(crate) color: Color,
+    pub(crate) track_color: Color,
+    pub(crate) stroke_width: f32,
+    pub(crate) track_stroke_width: f32,
+    pub(crate) cap: ProgressIndicatorStrokeCap,
+    pub(crate) gap_size: f32,
+    pub(crate) stop_size: f32,
+    pub(crate) progress: f32,
+    pub(crate) wavelength: f32,
+    pub(crate) enable_motion: bool,
+    pub(crate) amplitude_token: (u8, u64, usize),
+    pub(crate) amplitude_state: State<f32>,
+    pub(crate) wave_offset: State<f32>,
+    pub(crate) cache: Arc<Mutex<LinearShapesCache>>,
+}
+
+impl std::fmt::Debug for LinearWavyDeterminateNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LinearWavyDeterminateNode")
+            .field("color", &self.color)
+            .field("track_color", &self.track_color)
+            .field("stroke_width", &self.stroke_width)
+            .field("track_stroke_width", &self.track_stroke_width)
+            .field("cap", &self.cap)
+            .field("gap_size", &self.gap_size)
+            .field("stop_size", &self.stop_size)
+            .field("progress", &self.progress)
+            .field("wavelength", &self.wavelength)
+            .field("enable_motion", &self.enable_motion)
+            .field("amplitude_token", &self.amplitude_token)
+            .finish_non_exhaustive()
+    }
+}
+
+impl crate::modifier::DrawNode for LinearWavyDeterminateNode {
+    fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
+        draw_linear_wavy_determinate(
+            canvas, rect,
+            self.color, self.track_color,
+            self.stroke_width, self.track_stroke_width,
+            self.cap, self.gap_size, self.stop_size,
+            self.progress,
+            self.amplitude_state.peek(),
+            self.wavelength,
+            self.wave_offset.peek(),
+            true,
+            self.enable_motion,
+            &self.cache,
+        );
+    }
+    fn node_key(&self) -> String {
+        format!(
+            "wavy-linear-det:{:?}:{:?}:{}:{}:{}:{}:{}:{}:{}:{}:{:?}",
+            self.color,
+            self.track_color,
+            self.stroke_width.to_bits(),
+            self.track_stroke_width.to_bits(),
+            self.cap as u8,
+            self.gap_size.to_bits(),
+            self.stop_size.to_bits(),
+            self.progress.to_bits(),
+            self.wavelength.to_bits(),
+            self.enable_motion,
+            self.amplitude_token,
+        )
     }
 }
 
@@ -1070,28 +1184,14 @@ impl CircularWavyProgressIndicator {
                 inf.animate_float(ctx, 0.1, 0.87, progress_indicator::circular_progress_spec());
             Modifier::new()
                 .size(WAVY_CIRCULAR_SIZE, WAVY_CIRCULAR_SIZE)
-                .draw({
-                    let cache = shapes_cache.clone();
-                    move |canvas, rect| {
-                        draw_circular_wavy_indeterminate(
-                            canvas,
-                            rect,
-                            color,
-                            track_color,
-                            stroke_width,
-                            track_stroke_width,
-                            cap,
-                            gap_size,
-                            amplitude,
-                            wavelength,
-                            enable_motion,
-                            wave_offset.peek(),
-                            global.peek(),
-                            additional.peek(),
-                            progress_anim.peek(),
-                            &cache,
-                        );
-                    }
+                .draw_node(CircularWavyIndeterminateNode {
+                    color, track_color, stroke_width, track_stroke_width,
+                    cap, gap_size, amplitude, wavelength, enable_motion,
+                    wave_offset: wave_offset.clone(),
+                    global: global.clone(),
+                    additional: additional.clone(),
+                    progress_anim: progress_anim.clone(),
+                    cache: shapes_cache.clone(),
                 })
         } else {
             let progress = self.progress;
@@ -1137,28 +1237,13 @@ impl CircularWavyProgressIndicator {
 
             Modifier::new()
                 .size(WAVY_CIRCULAR_SIZE, WAVY_CIRCULAR_SIZE)
-                .draw({
-                    let cache = shapes_cache.clone();
-                    move |canvas, rect| {
-                        let amplitude = amplitude_state.peek();
-                        let wave = wave_for_draw.peek();
-                        draw_circular_wavy_determinate(
-                            canvas,
-                            rect,
-                            color,
-                            track_color,
-                            stroke_width,
-                            track_stroke_width,
-                            cap,
-                            gap_size,
-                            progress,
-                            amplitude,
-                            wavelength,
-                            enable_motion,
-                            wave,
-                            &cache,
-                        );
-                    }
+                .draw_node(CircularWavyDeterminateNode {
+                    color, track_color, stroke_width, track_stroke_width,
+                    cap, gap_size, progress, wavelength, enable_motion,
+                    amplitude_token,
+                    amplitude_state: amplitude_state.clone(),
+                    wave_offset: wave_for_draw.clone(),
+                    cache: shapes_cache.clone(),
                 })
         };
 
@@ -1251,6 +1336,133 @@ fn draw_circular_wavy_determinate(
 
 /// Circular indeterminate wavy 绘制。
 #[allow(clippy::too_many_arguments)]
+/// Circular indeterminate/determinate wavy 节点。
+pub(crate) struct CircularWavyIndeterminateNode {
+    pub(crate) color: Color,
+    pub(crate) track_color: Color,
+    pub(crate) stroke_width: f32,
+    pub(crate) track_stroke_width: f32,
+    pub(crate) cap: ProgressIndicatorStrokeCap,
+    pub(crate) gap_size: f32,
+    pub(crate) amplitude: f32,
+    pub(crate) wavelength: f32,
+    pub(crate) enable_motion: bool,
+    pub(crate) wave_offset: State<f32>,
+    pub(crate) global: State<f32>,
+    pub(crate) additional: State<f32>,
+    pub(crate) progress_anim: State<f32>,
+    pub(crate) cache: Arc<Mutex<CircularShapesCache>>,
+}
+
+impl std::fmt::Debug for CircularWavyIndeterminateNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CircularWavyIndeterminateNode")
+            .field("color", &self.color)
+            .field("track_color", &self.track_color)
+            .field("stroke_width", &self.stroke_width)
+            .field("track_stroke_width", &self.track_stroke_width)
+            .field("cap", &self.cap)
+            .field("gap_size", &self.gap_size)
+            .field("amplitude", &self.amplitude)
+            .field("wavelength", &self.wavelength)
+            .field("enable_motion", &self.enable_motion)
+            .finish_non_exhaustive()
+    }
+}
+
+impl crate::modifier::DrawNode for CircularWavyIndeterminateNode {
+    fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
+        draw_circular_wavy_indeterminate(
+            canvas, rect,
+            self.color, self.track_color,
+            self.stroke_width, self.track_stroke_width,
+            self.cap, self.gap_size,
+            self.amplitude, self.wavelength, self.enable_motion,
+            self.wave_offset.peek(),
+            self.global.peek(), self.additional.peek(), self.progress_anim.peek(),
+            &self.cache,
+        );
+    }
+    fn node_key(&self) -> String {
+        format!(
+            "wavy-circular-indet:{:?}:{:?}:{}:{}:{}:{}:{}:{}:{}",
+            self.color,
+            self.track_color,
+            self.stroke_width.to_bits(),
+            self.track_stroke_width.to_bits(),
+            self.cap as u8,
+            self.gap_size.to_bits(),
+            self.amplitude.to_bits(),
+            self.wavelength.to_bits(),
+            self.enable_motion,
+        )
+    }
+}
+
+pub(crate) struct CircularWavyDeterminateNode {
+    pub(crate) color: Color,
+    pub(crate) track_color: Color,
+    pub(crate) stroke_width: f32,
+    pub(crate) track_stroke_width: f32,
+    pub(crate) cap: ProgressIndicatorStrokeCap,
+    pub(crate) gap_size: f32,
+    pub(crate) progress: f32,
+    pub(crate) wavelength: f32,
+    pub(crate) enable_motion: bool,
+    pub(crate) amplitude_token: (u8, u64, usize),
+    pub(crate) amplitude_state: State<f32>,
+    pub(crate) wave_offset: State<f32>,
+    pub(crate) cache: Arc<Mutex<CircularShapesCache>>,
+}
+
+impl std::fmt::Debug for CircularWavyDeterminateNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CircularWavyDeterminateNode")
+            .field("color", &self.color)
+            .field("track_color", &self.track_color)
+            .field("stroke_width", &self.stroke_width)
+            .field("track_stroke_width", &self.track_stroke_width)
+            .field("cap", &self.cap)
+            .field("gap_size", &self.gap_size)
+            .field("progress", &self.progress)
+            .field("wavelength", &self.wavelength)
+            .field("enable_motion", &self.enable_motion)
+            .field("amplitude_token", &self.amplitude_token)
+            .finish_non_exhaustive()
+    }
+}
+
+impl crate::modifier::DrawNode for CircularWavyDeterminateNode {
+    fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
+        draw_circular_wavy_determinate(
+            canvas, rect,
+            self.color, self.track_color,
+            self.stroke_width, self.track_stroke_width,
+            self.cap, self.gap_size,
+            self.progress,
+            self.amplitude_state.peek(),
+            self.wavelength, self.enable_motion,
+            self.wave_offset.peek(),
+            &self.cache,
+        );
+    }
+    fn node_key(&self) -> String {
+        format!(
+            "wavy-circular-det:{:?}:{:?}:{}:{}:{}:{}:{}:{}:{}:{:?}",
+            self.color,
+            self.track_color,
+            self.stroke_width.to_bits(),
+            self.track_stroke_width.to_bits(),
+            self.cap as u8,
+            self.gap_size.to_bits(),
+            self.progress.to_bits(),
+            self.wavelength.to_bits(),
+            self.enable_motion,
+            self.amplitude_token,
+        )
+    }
+}
+
 fn draw_circular_wavy_indeterminate(
     canvas: &skia_safe::Canvas,
     rect: skia_safe::Rect,
@@ -1888,5 +2100,155 @@ mod tests {
             min_y >= 58,
             "Circular 绘制应随 rect.top 偏移，min_y={min_y}"
         );
+    }
+
+    // ── WavyNode 迁移（exp/wavy-node）──
+    #[test]
+    fn wavy_nodes_key_covers_static_params() {
+        use crate::modifier::DrawNode;
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let color = WavyProgressIndicatorDefaults::indicator_color(&theme);
+        let track = WavyProgressIndicatorDefaults::track_color(&theme);
+        let st = || crate::core::state::State::new(0.5f32);
+        // linear-indet：静态变 → 不等；动画值变 → 相等
+        let base = LinearWavyIndeterminateNode {
+            color, track_color: track, stroke_width: 4.0, track_stroke_width: 4.0,
+            cap: ProgressIndicatorStrokeCap::Round, gap_size: 4.0,
+            amplitude: 1.0, wavelength: 20.0, enable_motion: true,
+            fh: st(), ft: st(), sh: st(), st: st(), wave_offset: st(),
+            cache: Arc::new(Mutex::new(LinearShapesCache::default())),
+        };
+        let same = LinearWavyIndeterminateNode {
+            color, track_color: track, stroke_width: 4.0, track_stroke_width: 4.0,
+            cap: ProgressIndicatorStrokeCap::Round, gap_size: 4.0,
+            amplitude: 1.0, wavelength: 20.0, enable_motion: true,
+            fh: st(), ft: st(), sh: st(), st: st(), wave_offset: st(),
+            cache: Arc::new(Mutex::new(LinearShapesCache::default())),
+        };
+        assert_eq!(base.node_key(), same.node_key());
+        // cache 不同实例 → key 仍相等（性能设施不进 key）
+        let moved_anim = LinearWavyIndeterminateNode {
+            color, track_color: track, stroke_width: 4.0, track_stroke_width: 4.0,
+            cap: ProgressIndicatorStrokeCap::Round, gap_size: 4.0,
+            amplitude: 1.0, wavelength: 20.0, enable_motion: true,
+            fh: crate::core::state::State::new(0.9),
+            ft: st(), sh: st(), st: st(), wave_offset: st(),
+            cache: Arc::new(Mutex::new(LinearShapesCache::default())),
+        };
+        assert_eq!(base.node_key(), moved_anim.node_key(), "无限动画值不应进 key");
+        let other_wl = LinearWavyIndeterminateNode {
+            color, track_color: track, stroke_width: 4.0, track_stroke_width: 4.0,
+            cap: ProgressIndicatorStrokeCap::Round, gap_size: 4.0,
+            amplitude: 1.0, wavelength: 40.0, enable_motion: true,
+            fh: st(), ft: st(), sh: st(), st: st(), wave_offset: st(),
+            cache: Arc::new(Mutex::new(LinearShapesCache::default())),
+        };
+        assert_ne!(base.node_key(), other_wl.node_key(), "wavelength 应进 key");
+        // linear-det：progress/token 进 key，amplitude_state 不进
+        let dbase = LinearWavyDeterminateNode {
+            color, track_color: track, stroke_width: 4.0, track_stroke_width: 4.0,
+            cap: ProgressIndicatorStrokeCap::Round, gap_size: 4.0, stop_size: 4.0,
+            progress: 0.5, wavelength: 40.0, enable_motion: true,
+            amplitude_token: (0, 0, 0),
+            amplitude_state: st(), wave_offset: st(),
+            cache: Arc::new(Mutex::new(LinearShapesCache::default())),
+        };
+        let dsame = LinearWavyDeterminateNode {
+            color, track_color: track, stroke_width: 4.0, track_stroke_width: 4.0,
+            cap: ProgressIndicatorStrokeCap::Round, gap_size: 4.0, stop_size: 4.0,
+            progress: 0.5, wavelength: 40.0, enable_motion: true,
+            amplitude_token: (0, 0, 0),
+            amplitude_state: crate::core::state::State::new(0.1),
+            wave_offset: st(),
+            cache: Arc::new(Mutex::new(LinearShapesCache::default())),
+        };
+        assert_eq!(dbase.node_key(), dsame.node_key(), "振幅过渡值不应进 key");
+        let dprog = LinearWavyDeterminateNode {
+            color, track_color: track, stroke_width: 4.0, track_stroke_width: 4.0,
+            cap: ProgressIndicatorStrokeCap::Round, gap_size: 4.0, stop_size: 4.0,
+            progress: 0.7, wavelength: 40.0, enable_motion: true,
+            amplitude_token: (0, 0, 0),
+            amplitude_state: st(), wave_offset: st(),
+            cache: Arc::new(Mutex::new(LinearShapesCache::default())),
+        };
+        assert_ne!(dbase.node_key(), dprog.node_key(), "progress 应进 key");
+        let dtok = LinearWavyDeterminateNode {
+            color, track_color: track, stroke_width: 4.0, track_stroke_width: 4.0,
+            cap: ProgressIndicatorStrokeCap::Round, gap_size: 4.0, stop_size: 4.0,
+            progress: 0.5, wavelength: 40.0, enable_motion: true,
+            amplitude_token: (1, 0, 12345),
+            amplitude_state: st(), wave_offset: st(),
+            cache: Arc::new(Mutex::new(LinearShapesCache::default())),
+        };
+        assert_ne!(dbase.node_key(), dtok.node_key(), "amplitude_token 应进 key");
+    }
+
+    #[test]
+    fn wavy_linear_determinate_node_renders_identical_to_enum_draw() {
+        // 双路对照（determinate 首帧确定值：amplitude=1/wave=0）：node 路 vs
+        // 旧闭包复刻，裸 leaf 同 240×32 surface 逐字节。
+        use crate::modifier::DrawNode;
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let color = WavyProgressIndicatorDefaults::indicator_color(&theme);
+        let track = WavyProgressIndicatorDefaults::track_color(&theme);
+        let render_leaf = |modifier: crate::modifier::Modifier| {
+            let mut composer = Composer::new();
+            let scene = |ctx: &mut ComposeCtx| {
+                WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    let key = ctx.next_key();
+                    ctx.start_leaf(key, modifier.clone());
+                    ctx.end_node();
+                });
+            };
+            composer.compose(scene);
+            composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+            let mut surface = skia_safe::surfaces::raster_n32_premul((300, 32)).unwrap();
+            let canvas = surface.canvas();
+            canvas.clear(skia_safe::Color::WHITE);
+            let root = composer.layout_root_idx().expect("root");
+            let nodes = composer.arena_nodes();
+            crate::render::render(nodes, root, canvas);
+            let pm = surface.peek_pixels().expect("pixmap");
+            pm.pixels::<[u8; 4]>().expect("pixels").to_vec()
+        };
+        let cache_n = Arc::new(Mutex::new(LinearShapesCache::default()));
+        let cache_e = Arc::new(Mutex::new(LinearShapesCache::default()));
+        let node_mod = crate::modifier::Modifier::new()
+            .size(240.0, 32.0)
+            .draw_node(LinearWavyDeterminateNode {
+                color, track_color: track, stroke_width: 4.0, track_stroke_width: 4.0,
+                cap: ProgressIndicatorStrokeCap::Round, gap_size: 4.0, stop_size: 4.0,
+                progress: 0.5, wavelength: 40.0, enable_motion: true,
+                amplitude_token: (0, 0, 0),
+                amplitude_state: crate::core::state::State::new(1.0),
+                wave_offset: crate::core::state::State::new(0.0),
+                cache: cache_n,
+            });
+        let enum_mod = crate::modifier::Modifier::new()
+            .size(240.0, 32.0)
+            .draw(move |canvas, rect| {
+                draw_linear_wavy_determinate(
+                    canvas, rect, color, track, 4.0, 4.0,
+                    ProgressIndicatorStrokeCap::Round, 4.0, 4.0,
+                    0.5, 1.0, 40.0, 0.0, true, true, &cache_e,
+                );
+            });
+        let px_node = render_leaf(node_mod);
+        let px_enum = render_leaf(enum_mod);
+        assert_eq!(px_node.len(), 300 * 32);
+        assert_eq!(px_node, px_enum, "wavy node 路��旧 draw 路必须逐字���一致");
+        // node_key 具名前缀可观测
+        let probe = LinearWavyIndeterminateNode {
+            color, track_color: track, stroke_width: 4.0, track_stroke_width: 4.0,
+            cap: ProgressIndicatorStrokeCap::Round, gap_size: 4.0,
+            amplitude: 1.0, wavelength: 20.0, enable_motion: true,
+            fh: crate::core::state::State::new(0.0),
+            ft: crate::core::state::State::new(0.0),
+            sh: crate::core::state::State::new(0.0),
+            st: crate::core::state::State::new(0.0),
+            wave_offset: crate::core::state::State::new(0.0),
+            cache: Arc::new(Mutex::new(LinearShapesCache::default())),
+        };
+        assert!(probe.node_key().starts_with("wavy-linear-indet:"), "key 应有具名前缀，实际 {}", probe.node_key());
     }
 }
