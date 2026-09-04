@@ -52,6 +52,11 @@ pub(crate) fn scrollbar_geometry(
     thumb_max_fraction: f32,
     inset: f32,
 ) -> Option<(f32, f32)> {
+    // 非有限输入防腐（offset 是 pub State，用户可 set(NaN)；NaN 进 clamp/
+    // skia rect 均未定义行为）——直接不画。
+    if !viewport.is_finite() || !content.is_finite() || !scroll.is_finite() {
+        return None;
+    }
     if viewport <= 0.0 || content <= viewport {
         return None;
     }
@@ -60,6 +65,11 @@ pub(crate) fn scrollbar_geometry(
         return None;
     }
     let max_thumb = track * thumb_max_fraction;
+    // P0-1：max_thumb < thumb_min 时 clamp(min>max) 直接 panic（小 track/
+    // 大 thumb_min 时必现）——track 放不下最小 thumb 则不画（与上式语义一致）。
+    if max_thumb < thumb_min {
+        return None;
+    }
     let thumb = (track * viewport / content).clamp(thumb_min, max_thumb);
     let max_offset = content - viewport;
     let thumb_offset = if max_offset > 0.0 {
@@ -77,6 +87,9 @@ pub(crate) fn scrollbar_offset_for_thumb_pos(
     thumb: f32,
     max_offset: f32,
 ) -> f32 {
+    if !pos.is_finite() || !track.is_finite() || !thumb.is_finite() || !max_offset.is_finite() {
+        return 0.0;
+    }
     let travel = (track - thumb).max(1.0);
     (pos / travel * max_offset).clamp(0.0, max_offset.max(0.0))
 }
@@ -243,6 +256,9 @@ impl VerticalScrollbar {
         ctx.changed(&self.track_color);
         ctx.changed(&self.thumb_min_length);
         ctx.changed(&self.always_show);
+        // P2-4：ScrollState 句柄身份（换整个 state 必须重组——否则旧 offset
+        // 订阅不失效、新 state 无订阅，条绑死旧状态）。
+        ctx.changed(&self.scroll.offset.state_id());
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
         let thumb_color = self.thumb_color.unwrap_or_else(|| scrollbar_thumb_color(&theme));
@@ -341,7 +357,11 @@ impl VerticalScrollbar {
         // v1 简化：scrollbar 自身 fill_max_height，约束由父定——build 期拿不到约束。
         // 改从 layout 拿：用 on_size_changed 回调写 viewport_state（对标 NavTransition
         // 位移基准捕获）。首帧 0 → 不画，次帧回写后重组显示。
-        let viewport = viewport_state.peek();
+        // ⚠ P0-2：必须 `get`（注册组合依赖）——`set` 的 notify 才能驱动重组；
+        // `peek` 无订阅者→回写后无重组→首屏/resize 后几何 stale（手动 double-build
+        // 的测试掩盖了此问题）。`set` 有 PartialEq 去重 + on_size_changed 元素级
+        // 去重，尺寸稳定即停，无循环。
+        let viewport = viewport_state.get();
         let content = limit + viewport;
 
         let (thumb_offset, thumb_len, has_thumb) = match scrollbar_geometry(
@@ -392,6 +412,15 @@ impl VerticalScrollbar {
                 }
             })
             .on_drag_end({
+                let hover_src = hover_src.clone();
+                let scroll_state = scroll_state.clone();
+                move || {
+                    hover_src.emit_drag_end();
+                    scroll_state.is_scroll_in_progress.set(false);
+                }
+            })
+            // P1-2: drag cancel clears same state as end (focus loss / preempt).
+            .on_drag_cancel({
                 let hover_src = hover_src.clone();
                 let scroll_state = scroll_state.clone();
                 move || {
@@ -459,6 +488,9 @@ impl HorizontalScrollbar {
         ctx.changed(&self.track_color);
         ctx.changed(&self.thumb_min_length);
         ctx.changed(&self.always_show);
+        // P2-4：ScrollState 句柄身份（换整个 state 必须重组——否则旧 offset
+        // 订阅不失效、新 state 无订阅，条绑死旧状态）。
+        ctx.changed(&self.scroll.offset.state_id());
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
         let thumb_color = self.thumb_color.unwrap_or_else(|| scrollbar_thumb_color(&theme));
@@ -602,6 +634,15 @@ impl HorizontalScrollbar {
                     scroll_state.is_scroll_in_progress.set(false);
                 }
             })
+            // P1-2: drag cancel clears same state as end (focus loss / preempt).
+            .on_drag_cancel({
+                let hover_src = hover_src.clone();
+                let scroll_state = scroll_state.clone();
+                move || {
+                    hover_src.emit_drag_end();
+                    scroll_state.is_scroll_in_progress.set(false);
+                }
+            })
             .on_drag(move |pos, _delta| {
                 let pos_in_track = pos.0 - inset;
                 let target = pos_in_track - drag_thumb_len / 2.0;
@@ -656,6 +697,34 @@ mod tests {
     }
 
     #[test]
+    fn geometry_small_track_no_panic() {
+        // P0-1 回归：track=26 < max(24/0.9)=26.67 时 max_thumb(23.4) < thumb_min(24)，
+        // 旧 clamp(min>max) 直接 panic——现应返回 None（track 放不下最小 thumb 则不画）。
+        assert!(scrollbar_geometry(30.0, 1000.0, 0.0, 24.0, 0.9, 2.0).is_none());
+        // thumb_min > track 同样不画（已有 track < thumb_min 分支锁定）。
+        assert!(scrollbar_geometry(30.0, 1000.0, 0.0, 30.0, 0.9, 2.0).is_none());
+    }
+
+    #[test]
+    fn geometry_rejects_nonfinite() {
+        // P2-2：NaN/Inf 输入不 panic、不产出 NaN 几何。
+        assert!(scrollbar_geometry(f32::NAN, 1000.0, 0.0, 24.0, 0.9, 2.0).is_none());
+        assert!(scrollbar_geometry(600.0, f32::INFINITY, 0.0, 24.0, 0.9, 2.0).is_none());
+        assert!(scrollbar_geometry(600.0, 2000.0, f32::NAN, 24.0, 0.9, 2.0).is_none());
+        assert_eq!(scrollbar_offset_for_thumb_pos(f32::NAN, 596.0, 178.8, 1400.0), 0.0);
+        assert_eq!(scrollbar_offset_for_thumb_pos(100.0, f32::NAN, 178.8, 1400.0), 0.0);
+    }
+
+    #[test]
+    fn offset_for_thumb_pos_degenerate_travel() {
+        // travel<=0（track<=thumb）时不除零、不 NaN（.max(1.0) 保护锁定）。
+        let v = scrollbar_offset_for_thumb_pos(10.0, 100.0, 100.0, 500.0);
+        assert!(v.is_finite(), "v={v}");
+        let v2 = scrollbar_offset_for_thumb_pos(10.0, 50.0, 100.0, 500.0);
+        assert!(v2.is_finite(), "v2={v2}");
+    }
+
+    #[test]
     fn offset_for_thumb_pos_round_trip() {
         // thumb 拖到 track 中点 → scroll 中点
         let track = 596.0;
@@ -684,6 +753,12 @@ mod tests {
         assert_eq!(mk(0.0, 100.0).node_key(), mk(0.0, 100.0).node_key());
         assert_ne!(mk(0.0, 100.0).node_key(), mk(10.0, 100.0).node_key(), "offset 应进 key");
         assert_ne!(mk(0.0, 100.0).node_key(), mk(0.0, 120.0).node_key(), "len 应进 key");
+        // fade 值不同但 key 相同（fade 不进 key——逐帧动画值，进则每帧 Enter；
+        // 绘制由引擎 request_redraw 驱动，draw 期 peek 读最新值）。
+        let mut a = mk(0.0, 100.0);
+        a.fade = State::new(0.0);
+        let b = mk(0.0, 100.0);
+        assert_eq!(a.node_key(), b.node_key(), "fade 不应进 key");
     }
 
     /// 组件联动：Row 内滚动列 + scrollbar；offset.set 后 thumb key 跟随。
