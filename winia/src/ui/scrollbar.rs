@@ -11,12 +11,13 @@
 //! - 拖 thumb：`on_drag` → `offset.set(drag_pos / (track - thumb) * max)`。
 //!   拖拽开始抢占（取消列表侧惯性 fling + 置滚动中，松手清——否则惯性期
 //!   update_animations 写回 offset 导致拖不动；松手后 hover 仍在则保持显示）。
-//! - 显示：`always_show` / 滚动中 / hover / 拖拽中 / offset 变化脉冲 + fade
+//! - 显示：`always_show` / 滚动中 / hover / 拖拽中 / 滚动脉冲 + fade
 //!   动画（M3 默认 400ms delay + 250ms tween——`push_animatable(fade_state)`
 //!   驱动，绘制期 `peek` 叠加 alpha，`fade` 不进 key 零重组）。
 //!   wheel/程序化滚动不置 `is_scroll_in_progress`（分发层只 cancel+置 false），
-//!   故另用 offset 变化做 activity 脉冲：持续滚动时每次重组重启 effect
-//!   （abort 睡眠）→保持显示；停下 400ms 后 fade out。
+//!   故滚动检测直接看 offset 变化（脉冲）：每次 offset 变都重启 effect
+//!   （abort 睡眠）→持续滚动保持显示；停下 400ms 后 fade out。
+//!   ⚠ 不能用 bool 门闩（置 true 后不清零→常显不藏，实测 bug）。
 //!
 //! v1 范围：无 RTL 镜像（垂直条恒右侧，调用方放）、
 //! 无 LazyList 适配（LazyListState 另有 first_visible 锚点模型——后续加）。
@@ -259,23 +260,25 @@ impl VerticalScrollbar {
             ctx.remember(|| MutableInteractionSource::new()).get();
         let hovered = hover_src.is_hovered();
         let dragged = hover_src.is_dragged();
-        // fade：目标 alpha（常显/滚动/hover/拖拽/滚过 → 1，否则 0），
+        // fade：目标 alpha（常显/滚动/hover/拖拽/滚动脉冲 → 1，否则 0），
         // 经 tween 250ms 驱动（M3 ThumbFadeDurationMillis；delay 由 LaunchedEffect
         // 400ms 实现）。绘制期 peek 求值（零重组）——fade_state 不进 node_key。
         //
         // ⚠ wheel/程序化滚动时 `scrolling` 恒 false（分发层 cancel+置 false，
-        // 拖拽路径才置 true）——故滚动检测直接看 offset 本身：`scroll > 0`
-        // 即滚过（门闩，set_silent 不重组——本帧 build 照常继续；回顶后仍显示
-        // 一会儿再 fade out，M3 同行为）。
-        // ⚠ 显示分支 key 必须含 `scroll`：门闩是 bool 会合并连续滚动——
-        // tween 250ms 播到 1 后 key 不变，而滚动仍在继续，随后的 400ms 睡眠会
-        // 把条 fade 掉；scroll 每帧都变→每帧重启 effect→abort 睡眠→保持显示。
-        let scrolled = ctx.remember(|| false);
-        if scroll > 0.0 {
-            scrolled.set_silent(true);
+        // 拖拽路径才置 true）——故滚动检测不用它，而用"offset 变化"脉冲：
+        // `last_scroll` 记住上帧 offset，本帧不同即正在滚（set_silent 写回，
+        // 不触发重组——本帧 build 照常继续）。
+        // ⚠ 不能用 bool 门闩（滚过即 true 不清零→常显不藏，实测 bug）。
+        // ⚠ key 必须含 `scroll`：bool 条件会合并连续滚动——tween 250ms 播到 1
+        // 后 key 不变，而滚动仍在继续，随后的 400ms 睡眠会把条 fade 掉；
+        // scroll 每帧都变→每帧重启 effect→abort 睡眠→保持显示。
+        let last_scroll: State<f32> = ctx.remember(|| scroll);
+        let scroll_active = last_scroll.peek() != scroll;
+        if scroll_active {
+            last_scroll.set_silent(scroll);
         }
         let fade_target = if self.always_show || scrolling || hovered || dragged
-            || scrolled.get()
+            || scroll_active
         {
             1.0f32
         } else {
@@ -460,23 +463,25 @@ impl HorizontalScrollbar {
             ctx.remember(|| MutableInteractionSource::new()).get();
         let hovered = hover_src.is_hovered();
         let dragged = hover_src.is_dragged();
-        // fade：目标 alpha（常显/滚动/hover/拖拽/滚过 → 1，否则 0），
+        // fade：目标 alpha（常显/滚动/hover/拖拽/滚动脉冲 → 1，否则 0），
         // 经 tween 250ms 驱动（M3 ThumbFadeDurationMillis；delay 由 LaunchedEffect
         // 400ms 实现）。绘制期 peek 求值（零重组）——fade_state 不进 node_key。
         //
         // ⚠ wheel/程序化滚动时 `scrolling` 恒 false（分发层 cancel+置 false，
-        // 拖拽路径才置 true）——故滚动检测直接看 offset 本身：`scroll > 0`
-        // 即滚过（门闩，set_silent 不重组——本帧 build 照常继续；回顶后仍显示
-        // 一会儿再 fade out，M3 同行为）。
-        // ⚠ 显示分支 key 必须含 `scroll`：门闩是 bool 会合并连续滚动——
-        // tween 250ms 播到 1 后 key 不变，而滚动仍在继续，随后的 400ms 睡眠会
-        // 把条 fade 掉；scroll 每帧都变→每帧重启 effect→abort 睡眠→保持显示。
-        let scrolled = ctx.remember(|| false);
-        if scroll > 0.0 {
-            scrolled.set_silent(true);
+        // 拖拽路径才置 true）——故滚动检测不用它，而用"offset 变化"脉冲：
+        // `last_scroll` 记住上帧 offset，本帧不同即正在滚（set_silent 写回，
+        // 不触发重组——本帧 build 照常继续）。
+        // ⚠ 不能用 bool 门闩（滚过即 true 不清零→常显不藏，实测 bug）。
+        // ⚠ key 必须含 `scroll`：bool 条件会合并连续滚动——tween 250ms 播到 1
+        // 后 key 不变，而滚动仍在继续，随后的 400ms 睡眠会把条 fade 掉；
+        // scroll 每帧都变→每帧重启 effect→abort 睡眠→保持显示。
+        let last_scroll: State<f32> = ctx.remember(|| scroll);
+        let scroll_active = last_scroll.peek() != scroll;
+        if scroll_active {
+            last_scroll.set_silent(scroll);
         }
         let fade_target = if self.always_show || scrolling || hovered || dragged
-            || scrolled.get()
+            || scroll_active
         {
             1.0f32
         } else {
