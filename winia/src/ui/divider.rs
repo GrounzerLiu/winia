@@ -95,29 +95,30 @@ impl Divider {
 
         // Framework CustomDraw receives the NODE rect (padding not applied);
         // user modifier padding (M3 inset/middle-inset variants) shrinks the content
-        // area. Read padding here and inset the draw rect, matching DrawIcon semantics.
-        let pad_rect = self.modifier.clone();
+        // area. Snapshot padding here into plain f32 (build 期求值——Divider 的
+        // inset padding 为静态值；动态 padding（SizeValue::Dynamic）快照一次，
+        // 后续变化不更新绘制。静态值变化经 param_eq 精确比 → Enter 重建重算。
+        // 存 Modifier 进 node 涉 Debug/key，故解耦为四个 f32）。
+        let (pad_s, pad_t, pad_e, pad_b) = self.modifier.get_padding_sides();
         let m = if vertical {
             Modifier::new()
                 .fill_max_height()
                 .width(layout_thickness)
-                .draw(move |canvas, rect| {
-                    let (s, t, e, b) = pad_rect.get_padding_sides();
-                    let inner = skia_safe::Rect::new(
-                        rect.left + s, rect.top + t, rect.right - e, rect.bottom - b,
-                    );
-                    draw_divider_line(canvas, inner, true, thickness, color);
+                .draw_node(DividerNode {
+                    vertical: true,
+                    thickness,
+                    color,
+                    pad_s, pad_t, pad_e, pad_b,
                 })
         } else {
             Modifier::new()
                 .fill_max_width()
                 .height(layout_thickness)
-                .draw(move |canvas, rect| {
-                    let (s, t, e, b) = pad_rect.get_padding_sides();
-                    let inner = skia_safe::Rect::new(
-                        rect.left + s, rect.top + t, rect.right - e, rect.bottom - b,
-                    );
-                    draw_divider_line(canvas, inner, false, thickness, color);
+                .draw_node(DividerNode {
+                    vertical: false,
+                    thickness,
+                    color,
+                    pad_s, pad_t, pad_e, pad_b,
                 })
         };
 
@@ -127,6 +128,50 @@ impl Divider {
             GroupStatus::Enter => {}
         }
         ctx.end_restartable_group();
+    }
+}
+
+/// 分隔线绘制节点（exp/divider-node 迁移：原 `.draw` 匿名闭包 ×2）。
+///
+/// 照抄 `SliderTrackNode` 形状：具名 struct + `DrawNode`，`draw` 内复用
+/// `draw_divider_line`。padding 内缩解耦为四个静态 f32（build 期
+/// `get_padding_sides()` 快照——M3 inset 变体为静态值；动态 padding 快照一次，
+/// 存 Modifier 进 node 涉 Debug/key，故不存）。
+/// `thickness` 可为 `DIVIDER_HAIRLINE`（NaN）——`to_bits` 下 NaN==NaN 恒成立
+/// （`to_bits` 按位比，NaN payload 相同即相等；`changed` 的 `PartialEq` 下
+/// NaN != NaN 恒 dirty——两者语义不同，见注释）。
+#[derive(Debug)]
+pub(crate) struct DividerNode {
+    pub(crate) vertical: bool,
+    pub(crate) thickness: f32,
+    pub(crate) color: Color,
+    pub(crate) pad_s: f32,
+    pub(crate) pad_t: f32,
+    pub(crate) pad_e: f32,
+    pub(crate) pad_b: f32,
+}
+
+impl crate::modifier::DrawNode for DividerNode {
+    fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
+        let inner = skia_safe::Rect::new(
+            rect.left + self.pad_s,
+            rect.top + self.pad_t,
+            rect.right - self.pad_e,
+            rect.bottom - self.pad_b,
+        );
+        draw_divider_line(canvas, inner, self.vertical, self.thickness, self.color);
+    }
+    fn node_key(&self) -> String {
+        format!(
+            "divider:{}:{}:{:?}:{}:{}:{}:{}",
+            self.vertical,
+            self.thickness.to_bits(),
+            self.color,
+            self.pad_s.to_bits(),
+            self.pad_t.to_bits(),
+            self.pad_e.to_bits(),
+            self.pad_b.to_bits(),
+        )
     }
 }
 
@@ -300,5 +345,85 @@ mod tests {
             if color_eq(color, px_at(&buf, w, x, 0), 6) { later += 1; }
         }
         assert!(later > 0, "padding_start(20) 后线应从 x=20 开始");
+    }
+
+    // ── DividerNode 迁移（exp/divider-node）──
+    #[test]
+    fn divider_node_key_covers_all_static_params() {
+        use crate::modifier::DrawNode;
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let color = DividerDefaults::color(&theme);
+        let mk = |vertical: bool, thickness: f32, color: Color, pad_s: f32| {
+            DividerNode {
+                vertical, thickness, color,
+                pad_s, pad_t: 0.0, pad_e: 0.0, pad_b: 0.0,
+            }
+        };
+        let base = mk(false, 1.0, color, 0.0);
+        assert_eq!(base.node_key(), mk(false, 1.0, color, 0.0).node_key());
+        assert_ne!(base.node_key(), mk(true, 1.0, color, 0.0).node_key(), "vertical 应进 key");
+        assert_ne!(base.node_key(), mk(false, 2.0, color, 0.0).node_key(), "thickness 应进 key");
+        let other = Color::from_argb(255, 1, 2, 3);
+        assert_ne!(base.node_key(), mk(false, 1.0, other, 0.0).node_key(), "color 应进 key");
+        assert_ne!(base.node_key(), mk(false, 1.0, color, 20.0).node_key(), "pad_s 应进 key");
+        // Hairline（NaN）：同 payload NaN → to_bits 相等 → key 相等。
+        // 注：build 侧 changed 用 PartialEq（NaN != NaN 恒 dirty → 恒 Enter），
+        // 与 node_key（to_bits 按位比）语义不同——Hairline 下迁移无 Skip 收益，
+        // 但正确性无损（Enter 重跑结果正确）。
+        let h1 = mk(false, DIVIDER_HAIRLINE, color, 0.0);
+        let h2 = mk(false, DIVIDER_HAIRLINE, color, 0.0);
+        assert_eq!(h1.node_key(), h2.node_key(), "同 Hairline key 应相等（to_bits 按位比）");
+        assert_ne!(base.node_key(), h1.node_key(), "Hairline 与 1.0 key 应不等");
+    }
+
+    #[test]
+    fn divider_node_renders_identical_to_enum_draw() {
+        // 真双路对照：同参一路 draw_node(DividerNode)，一路旧 `.draw` 匿名闭包
+        // （迁移前 build 侧体逐行复刻，含 padding 内缩），同 300×300 surface
+        // 逐字节 assert_eq。
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let color = DividerDefaults::color(&theme);
+        let render_with = |modifier: Modifier| {
+            let mut composer = Composer::new();
+            let scene = |ctx: &mut ComposeCtx| {
+                WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    let key = ctx.next_key();
+                    ctx.start_leaf(key, modifier.clone());
+                    ctx.end_node();
+                });
+            };
+            composer.compose(scene);
+            composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+            let mut surface = skia_safe::surfaces::raster_n32_premul((300, 300)).unwrap();
+            let canvas = surface.canvas();
+            canvas.clear(skia_safe::Color::WHITE);
+            let root = composer.layout_root_idx().expect("root");
+            let nodes = composer.arena_nodes();
+            crate::render::render(nodes, root, canvas);
+            let pm = surface.peek_pixels().expect("pixmap");
+            pm.pixels::<[u8; 4]>().expect("pixels").to_vec()
+        };
+        // 横线 + padding_start(20) 内缩场景
+        let node_mod = Modifier::new().fill_max_width().height(1.0).draw_node(DividerNode {
+            vertical: false, thickness: 1.0, color,
+            pad_s: 20.0, pad_t: 0.0, pad_e: 0.0, pad_b: 0.0,
+        });
+        let enum_mod = Modifier::new().fill_max_width().height(1.0).draw(move |canvas, rect| {
+            let inner = skia_safe::Rect::new(rect.left + 20.0, rect.top, rect.right, rect.bottom);
+            draw_divider_line(canvas, inner, false, 1.0, color);
+        });
+        let px_node = render_with(node_mod);
+        let px_enum = render_with(enum_mod);
+        assert_eq!(px_node.len(), 300 * 300);
+        assert_eq!(px_node, px_enum, "node 路与旧 draw 路必须逐字节一致（含 padding 内缩）");
+        // 垂直线对照
+        let node_v = Modifier::new().fill_max_height().width(2.0).draw_node(DividerNode {
+            vertical: true, thickness: 2.0, color,
+            pad_s: 0.0, pad_t: 0.0, pad_e: 0.0, pad_b: 0.0,
+        });
+        let enum_v = Modifier::new().fill_max_height().width(2.0).draw(move |canvas, rect| {
+            draw_divider_line(canvas, rect, true, 2.0, color);
+        });
+        assert_eq!(render_with(node_v), render_with(enum_v), "垂直线双路必须一致");
     }
 }

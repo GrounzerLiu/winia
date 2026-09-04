@@ -57,6 +57,12 @@ DIVIDER_HAIRLINE: f32 = NAN;    // 哨兵值：1 物理像素（对标 Dp.Hairli
   避免亚像素偏移；
 - `DIVIDER_HAIRLINE`（NaN 哨兵）→ 绘制 1 物理像素线；布局厚度用 1.0 兜底
   （NaN 会破坏布局约束）；Compose 的 `Dp.Hairline` 语义：任何 DPI 下单像素。
+- `DividerNode` 具名绘制（exp/divider-node 迁移，原 `.draw` 匿名闭包 ×2，
+  `pub(crate)`）：`{vertical/thickness/color/pad_s/pad_t/pad_e/pad_b}`——
+  padding 内缩解耦为四个静态 f32（build 期 `get_padding_sides()` 快照；
+  inset 变体为静态值，动态 padding 快照一次，存 Modifier 进 node 涉 Debug/key）；
+  `node_key` 全参数 `to_bits`（同 payload NaN key 相等；注 build 侧 `changed`
+  用 `PartialEq`，NaN != NaN 恒 dirty → Hairline 无 Skip 收益，正确无损）。
 
 ## 3. 与 Compose 的差异
 
@@ -73,4 +79,6 @@ cargo test -p winia --lib ui::divider
 ```
 
 测试覆盖：默认值（1dp/OutlineVariant）、水平/垂直像素渲染、自定义颜色+厚度、
-Hairline 单像素。
+Hairline 单像素、padding 内缩；
+DrawNode 迁移：node_key 全覆盖（含 Hairline NaN 语义）、双路像素对照
+（横线 padding 内缩 + 垂直线逐字节）。
