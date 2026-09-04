@@ -284,28 +284,29 @@ impl VerticalScrollbar {
         } else {
             0.0f32
         };
-        // 离开交互（hover 出 + 未滚动）400ms 后 fade out（M3 ThumbFadeDelayMillis）：
-        // key 变化重启 LaunchedEffect；effect 内 sleep 后把 fade_state 置目标。
-        //
-        // 语义拆分（单 effect 无法同时满足）：
-        // - 显示（target=1）：tween 到 1，key 含 scroll——持续滚动每帧重启、
-        //   abort 掉上帧任务→保持显示（否则 tween 播完后 400ms 睡眠把条 fade 掉）。
-        // - 隐藏（target=0）：sleep 400ms 后播到 0，key 不含 scroll——停滚后
-        //   offset 不变→无重组→"最后一次滚动那帧"启动的旧任务（显示 key）继续
-        //   跑完它的睡眠→到期隐藏；若共用含 scroll 的 key，停滚后无新帧重启，
-        //   旧任务早被 abort，睡眠永远跑不完→常显不藏（实测 bug）。
+        // 离开交互（hover 出 + 停滚）400ms 后 fade out（M3 ThumbFadeDelayMillis）：
+        // 单 LaunchedEffect 包办"显示→等→藏"：key 含全部输入——任何变化都
+        // abort 睡眠重启（持续滚动每帧重启→保持显示；停滚后无重组无重启，
+        // 最后一次滚动那帧的任务睡满 400ms→藏，正好是停滚后 400ms 隐藏）。
+        // 睡醒后只看静态保持条件（常显/滚动中/hover/拖拽）：
+        // - 成立则保持（hover 静置不能藏——藏了无重组再显示；后续变化重启再定）。
+        // - 否则播到 0 隐藏。
+        // ⚠ 静态条件快照进任务即最新：睡眠不被 abort 即证明 key 输入全未变
+        // （滚动脉冲除外——它若存活必带新 scroll abort 本任务，故睡醒时必衰减）。
+        // ⚠ 不能用"滚过"门闩（不清零→常显不藏）——脉冲 + 快照才是完整语义。
         let fade_state: State<f32> = ctx.remember(|| fade_target);
-        if fade_target > 0.5 {
-            crate::effect::LaunchedEffect::new(("show", scrolling, hovered, dragged, scroll)).build(
-                ctx,
-                {
+        let keep_visible = self.always_show || scrolling || hovered || dragged;
+        crate::effect::LaunchedEffect::new((fade_target, scrolling, hovered, dragged, scroll)).build(
+            ctx,
+            {
+                let fade_state = fade_state.clone();
+                move |scope| {
                     let fade_state = fade_state.clone();
-                    move |scope| {
-                        let fade_state = fade_state.clone();
-                        async move {
+                    async move {
+                        if fade_target > 0.5 {
                             // 显示：tween 到 1（从当前值播，无闪烁）
                             crate::animation::push_animatable(
-                                fade_state,
+                                fade_state.clone(),
                                 1.0,
                                 crate::animation::AnimationSpec::Tween(
                                     crate::animation::TweenSpec::new(
@@ -314,24 +315,10 @@ impl VerticalScrollbar {
                                     ),
                                 ),
                             );
-                            drop(scope);
                         }
-                    }
-                },
-            );
-        } else {
-            crate::effect::LaunchedEffect::new(("hide", scrolling, hovered, dragged)).build(
-                ctx,
-                {
-                    let fade_state = fade_state.clone();
-                    move |scope| {
-                        let fade_state = fade_state.clone();
-                        async move {
-                            // 隐藏：delay 400ms 后播到 0（期间重入显示则显示
-                            // effect 以新 key 启动→abort 本任务——LaunchedEffect
-                            // 语义要求 key 不同；此处用 ("hide",…) vs ("show",…)
-                            // 前缀区分，防同元组 key 误复用）。
-                            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                        // 停留 delay：期间滚动/hover/拖拽变化→key 变化→abort 睡眠→保持。
+                        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                        if !keep_visible {
                             crate::animation::push_animatable(
                                 fade_state,
                                 0.0,
@@ -342,12 +329,12 @@ impl VerticalScrollbar {
                                     ),
                                 ),
                             );
-                            drop(scope);
                         }
+                        drop(scope);
                     }
-                },
-            );
-        }
+                }
+            },
+        );
         // viewport 未知（首帧约束未定）→ 用 remembered 上帧值兜底，首帧不画
         let viewport_state: State<f32> = ctx.remember(|| 0.0f32);
         // 注意：viewport 来自 measure 期，此处先读上帧值；measure 后写回由 policy？
@@ -509,28 +496,29 @@ impl HorizontalScrollbar {
         } else {
             0.0f32
         };
-        // 离开交互（hover 出 + 未滚动）400ms 后 fade out（M3 ThumbFadeDelayMillis）：
-        // key 变化重启 LaunchedEffect；effect 内 sleep 后把 fade_state 置目标。
-        //
-        // 语义拆分（单 effect 无法同时满足）：
-        // - 显示（target=1）：tween 到 1，key 含 scroll——持续滚动每帧重启、
-        //   abort 掉上帧任务→保持显示（否则 tween 播完后 400ms 睡眠把条 fade 掉）。
-        // - 隐藏（target=0）：sleep 400ms 后播到 0，key 不含 scroll——停滚后
-        //   offset 不变→无重组→"最后一次滚动那帧"启动的旧任务（显示 key）继续
-        //   跑完它的睡眠→到期隐藏；若共用含 scroll 的 key，停滚后无新帧重启，
-        //   旧任务早被 abort，睡眠永远跑不完→常显不藏（实测 bug）。
+        // 离开交互（hover 出 + 停滚）400ms 后 fade out（M3 ThumbFadeDelayMillis）：
+        // 单 LaunchedEffect 包办"显示→等→藏"：key 含全部输入——任何变化都
+        // abort 睡眠重启（持续滚动每帧重启→保持显示；停滚后无重组无重启，
+        // 最后一次滚动那帧的任务睡满 400ms→藏，正好是停滚后 400ms 隐藏）。
+        // 睡醒后只看静态保持条件（常显/滚动中/hover/拖拽）：
+        // - 成立则保持（hover 静置不能藏——藏了无重组再显示；后续变化重启再定）。
+        // - 否则播到 0 隐藏。
+        // ⚠ 静态条件快照进任务即最新：睡眠不被 abort 即证明 key 输入全未变
+        // （滚动脉冲除外——它若存活必带新 scroll abort 本任务，故睡醒时必衰减）。
+        // ⚠ 不能用"滚过"门闩（不清零→常显不藏）——脉冲 + 快照才是完整语义。
         let fade_state: State<f32> = ctx.remember(|| fade_target);
-        if fade_target > 0.5 {
-            crate::effect::LaunchedEffect::new(("show", scrolling, hovered, dragged, scroll)).build(
-                ctx,
-                {
+        let keep_visible = self.always_show || scrolling || hovered || dragged;
+        crate::effect::LaunchedEffect::new((fade_target, scrolling, hovered, dragged, scroll)).build(
+            ctx,
+            {
+                let fade_state = fade_state.clone();
+                move |scope| {
                     let fade_state = fade_state.clone();
-                    move |scope| {
-                        let fade_state = fade_state.clone();
-                        async move {
+                    async move {
+                        if fade_target > 0.5 {
                             // 显示：tween 到 1（从当前值播，无闪烁）
                             crate::animation::push_animatable(
-                                fade_state,
+                                fade_state.clone(),
                                 1.0,
                                 crate::animation::AnimationSpec::Tween(
                                     crate::animation::TweenSpec::new(
@@ -539,24 +527,10 @@ impl HorizontalScrollbar {
                                     ),
                                 ),
                             );
-                            drop(scope);
                         }
-                    }
-                },
-            );
-        } else {
-            crate::effect::LaunchedEffect::new(("hide", scrolling, hovered, dragged)).build(
-                ctx,
-                {
-                    let fade_state = fade_state.clone();
-                    move |scope| {
-                        let fade_state = fade_state.clone();
-                        async move {
-                            // 隐藏：delay 400ms 后播到 0（期间重入显示则显示
-                            // effect 以新 key 启动→abort 本任务——LaunchedEffect
-                            // 语义要求 key 不同；此处用 ("hide",…) vs ("show",…)
-                            // 前缀区分，防同元组 key 误复用）。
-                            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                        // 停留 delay：期间滚动/hover/拖拽变化→key 变化→abort 睡眠→保持。
+                        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                        if !keep_visible {
                             crate::animation::push_animatable(
                                 fade_state,
                                 0.0,
@@ -567,12 +541,12 @@ impl HorizontalScrollbar {
                                     ),
                                 ),
                             );
-                            drop(scope);
                         }
+                        drop(scope);
                     }
-                },
-            );
-        }
+                }
+            },
+        );
         let viewport_state: State<f32> = ctx.remember(|| 0.0f32);
         let viewport = viewport_state.peek();
         let content = limit + viewport;
