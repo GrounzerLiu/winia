@@ -79,7 +79,13 @@ pub(crate) fn scrollbar_offset_for_thumb_pos(
 
 // ── ScrollbarNode ──
 
-/// 滚动条绘制节点（thumb 圆角条 + 可选 track；alpha 叠加 fade）。
+/// 滚动条绘制节点（thumb 圆角条 + 可选 track）。
+///
+/// fade 语义（M3 默认 400ms delay + 250ms tween）：`fade: State` 存进节点，
+/// `draw` 内 `peek` 求值叠加 alpha（零重组——动画引擎每帧 `request_redraw`
+/// 驱动重绘，与 Slider `focus_alpha` 同惯例）。**不能**在 build 期快照为 f32
+/// （peek 不注册依赖 → fade 变化永不重组 → 节点残留旧值 → 常显不显、
+/// 松手即消失，实测 bug）。
 #[derive(Debug)]
 pub(crate) struct ScrollbarNode {
     pub(crate) vertical: bool,
@@ -87,22 +93,25 @@ pub(crate) struct ScrollbarNode {
     pub(crate) track_color: Color,
     pub(crate) thickness: f32,
     pub(crate) inset: f32,
-    /// 渲染期几何（build 期由 constraints + State 算好，draw 只画）：
-    /// (thumb_offset, thumb_len)，None = 不��。
+    /// 渲染期几何（build 期由 constraints + State 算好，draw 只画）。
     pub(crate) thumb_offset: f32,
     pub(crate) thumb_len: f32,
-    pub(crate) visible: bool,
-    /// fade alpha（0..1，绘制期叠加到 thumb/track 色上）。
-    pub(crate) fade_alpha: f32,
+    /// 几何有效（content > viewport 且 track 放得下）。fade 另由 `fade` 状态门控。
+    pub(crate) has_thumb: bool,
+    /// fade alpha 状态（draw 期 peek，不进 key）。
+    pub(crate) fade: State<f32>,
 }
 
 impl crate::modifier::DrawNode for ScrollbarNode {
     fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
-        if !self.visible || self.fade_alpha <= 0.01 {
+        // fade 状态 draw 期 peek（零重组——动画引擎每帧 request_redraw 驱动；
+        // build 期快照 f32 则 peek 不注册依赖，fade 变化永不重组，实测 bug）。
+        let fade = self.fade.peek();
+        if !self.has_thumb || fade <= 0.01 {
             return;
         }
-        // fade alpha 叠加（M3 fade 语义——绘制期 peek 值已由动画推进）
-        let mul = self.fade_alpha.clamp(0.0, 1.0);
+        // fade alpha 叠加（M3 fade 语义）
+        let mul = fade.clamp(0.0, 1.0);
         let thumb_a = ((self.thumb_color.a as f32) * mul) as u8;
         let track_a = ((self.track_color.a as f32) * mul) as u8;
         let mut paint = skia_safe::Paint::default();
@@ -164,7 +173,7 @@ impl crate::modifier::DrawNode for ScrollbarNode {
         }
     }
     fn node_key(&self) -> String {
-        // fade_alpha 不进 key（逐帧动画值，渲染期 peek；进则每帧 Enter。
+        // fade State 不进 key（逐帧动画值，draw 期 peek；进则每帧 Enter。
         // 回写通道类比 Slider focus_alpha——绘制由引擎 request_redraw 驱动）。
         format!(
             "scrollbar:{}:{:?}:{:?}:{}:{}:{}:{}:{}",
@@ -175,7 +184,7 @@ impl crate::modifier::DrawNode for ScrollbarNode {
             self.inset.to_bits(),
             self.thumb_offset.to_bits(),
             self.thumb_len.to_bits(),
-            self.visible,
+            self.has_thumb,
         )
     }
 }
@@ -297,9 +306,6 @@ impl VerticalScrollbar {
                 }
             },
         );
-        let fade_alpha = fade_state.peek();
-        let visible = fade_alpha > 0.01;
-
         // viewport 未知（首帧约束未定）→ 用 remembered 上帧值兜底，首帧不画
         let viewport_state: State<f32> = ctx.remember(|| 0.0f32);
         // 注意：viewport 来自 measure 期，此处先读上帧值；measure 后写回由 policy？
@@ -309,7 +315,7 @@ impl VerticalScrollbar {
         let viewport = viewport_state.peek();
         let content = limit + viewport;
 
-        let (thumb_offset, thumb_len, show) = match scrollbar_geometry(
+        let (thumb_offset, thumb_len, has_thumb) = match scrollbar_geometry(
             viewport,
             content,
             scroll,
@@ -317,7 +323,7 @@ impl VerticalScrollbar {
             SCROLLBAR_THUMB_MAX_FRACTION,
             inset,
         ) {
-            Some((off, len)) if visible => (off, len, true),
+            Some((off, len)) => (off, len, true),
             _ => (0.0, 0.0, false),
         };
 
@@ -342,8 +348,8 @@ impl VerticalScrollbar {
                 inset,
                 thumb_offset,
                 thumb_len,
-                visible: show,
-                fade_alpha,
+                has_thumb,
+                fade: fade_state.clone(),
             })
             .on_drag_start({
                 let hover_src = hover_src.clone();
@@ -479,14 +485,11 @@ impl HorizontalScrollbar {
                 }
             },
         );
-        let fade_alpha = fade_state.peek();
-        let visible = fade_alpha > 0.01;
-
         let viewport_state: State<f32> = ctx.remember(|| 0.0f32);
         let viewport = viewport_state.peek();
         let content = limit + viewport;
 
-        let (thumb_offset, thumb_len, show) = match scrollbar_geometry(
+        let (thumb_offset, thumb_len, has_thumb) = match scrollbar_geometry(
             viewport,
             content,
             scroll,
@@ -494,7 +497,7 @@ impl HorizontalScrollbar {
             SCROLLBAR_THUMB_MAX_FRACTION,
             inset,
         ) {
-            Some((off, len)) if visible => (off, len, true),
+            Some((off, len)) => (off, len, true),
             _ => (0.0, 0.0, false),
         };
 
@@ -517,8 +520,8 @@ impl HorizontalScrollbar {
                 inset,
                 thumb_offset,
                 thumb_len,
-                visible: show,
-                fade_alpha,
+                has_thumb,
+                fade: fade_state.clone(),
             })
             .on_drag_start({
                 let hover_src = hover_src.clone();
@@ -613,8 +616,8 @@ mod tests {
             inset: 2.0,
             thumb_offset: off,
             thumb_len: len,
-            visible: true,
-            fade_alpha: 1.0,
+            has_thumb: true,
+            fade: State::new(1.0),
         };
         assert_eq!(mk(0.0, 100.0).node_key(), mk(0.0, 100.0).node_key());
         assert_ne!(mk(0.0, 100.0).node_key(), mk(10.0, 100.0).node_key(), "offset 应进 key");
@@ -684,6 +687,6 @@ mod tests {
         build(&mut composer);
         let key2 = scrollbar_key(composer.arena_nodes(), root).expect("滚动后仍在");
         assert_ne!(key1, key2, "offset 变化后 thumb key 应跟随（key1={key1} key2={key2}）");
-        assert!(key2.ends_with(":true"), "常显模式 key 末尾 visible=true，key2={key2}");
+        assert!(key2.ends_with(":true"), "常显模式 key 末尾 has_thumb=true，key2={key2}");
     }
 }

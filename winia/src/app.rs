@@ -632,8 +632,12 @@ impl ApplicationHandler for AppState {
                         // 目标——两个并排滚动区域只滚鼠标悬停的那一个（旧实现
                         // find_scroll_target 按反向 child 顺序盲找，可能滚错）。
                         // 用最后 PointerMoved 位置（winit 0.31 MouseWheel 事件
-                        // 不携带 cursor position）。鼠标不在任何滚动节点上时
-                        // 回退旧逻辑（兜底）。
+                        // 不携带 cursor position）。
+                        // ⚠ 真实滚轮**没有**盲找兜底：鼠标不在任何滚动节点上时
+                        // 不滚动（否则鼠标在空白处滚轮也会带动列表/Shift+横滚，
+                        // 用户实测 bug）。`None`（启动后无移动/已离开窗口）也
+                        // 不滚——盲找只留给 DebugEvent::Scroll（测试注入无坐标，
+                        // 见 consume_debug_events）。
                         let target = pw.last_pointer_pos.and_then(|(px, py)| {
                             let path = crate::layout::node::hit_test(nodes, root_idx, px, py);
                             // 命中路径从根到叶——从内向外找第一个轴匹配的 scroll 节点
@@ -641,7 +645,7 @@ impl ApplicationHandler for AppState {
                                 (dy != 0.0 && nodes[idx].modifier.vertical_scroll_state().is_some())
                                     || (dx != 0.0 && nodes[idx].modifier.horizontal_scroll_state().is_some())
                             }).copied()
-                        }).or_else(|| find_scroll_target(nodes, root_idx, dx, dy));
+                        });
                         if let Some(target) = target {
                             let _ = dispatch_nested_scroll_delta(pw.composer.arena_nodes_mut(), root_idx, target, crate::nested_scroll::ScrollDelta::new(dx, dy), crate::nested_scroll::NestedScrollSource::Wheel, crate::unit::Density::from_density(pw.scale_factor as f32));
                         }
@@ -692,6 +696,9 @@ impl ApplicationHandler for AppState {
             WindowEvent::PointerButton { position, state, button, .. } => {
                 let lp = position.to_logical::<f32>(pw.scale_factor);
                 let scene_pos = (lp.x, lp.y);
+                // Down/Up 也刷新指针位置（点击后不移动直接滚轮时，
+                // last_pointer_pos 否则还是旧值——命中目标错位）
+                pw.last_pointer_pos = Some(scene_pos);
                 let event_type = if state.is_pressed() {
                     crate::modifier::PointerEventType::Down
                 } else {
@@ -795,12 +802,15 @@ impl ApplicationHandler for AppState {
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 }
             }
-            // 指针离开窗口：清所有 hover（对每个 hoverable 补发 Exit）
+            // 指针离开窗口：清所有 hover（对每个 hoverable 补发 Exit）+
+            // 清指针位置（否则离开窗口后滚轮仍用旧坐标命中滚动容器，
+            // 鼠标已不在上面却还能滚动——用户实测 bug）
             WindowEvent::PointerLeft { .. } => {
                 let olds: Vec<u64> = pw.hovered_slots.drain().collect();
                 for old in olds {
                     exit_hover_at(pw, old);
                 }
+                pw.last_pointer_pos = None;
             }
             WindowEvent::ModifiersChanged(m) => {
                 pw.modifiers = m.state();
@@ -1278,12 +1288,14 @@ impl AppState {
                 debug::DebugEvent::PointerDown { x, y } => {
                     // 模拟指针按下：与真实 PointerButton Down 共用核心
                     // （with_focus=false——调试路径不做光标/聚焦）
+                    pw.last_pointer_pos = Some((x, y));
                     let modifiers = pw.modifiers;
                     handle_pointer_down(pw, (x, y), pw.last_pointer_kind.clone(), &modifiers, false);
                     handled = true;
                 }
                 debug::DebugEvent::PointerMove { x, y } => {
                     // 模拟拖动选择：与真实 PointerMoved 共用核心（含 x_off 对齐偏移）
+                    pw.last_pointer_pos = Some((x, y));
                     let modifiers = pw.modifiers;
                     handle_pointer_move(pw, (x, y), pw.last_pointer_kind.clone(), &modifiers);
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
