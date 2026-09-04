@@ -44,6 +44,8 @@ FlowColumn::new()
 ## 3. 与 Compose 的差异（v1 范围）
 
 - 无 weight（Compose 按行内剩余二次分配，需两阶段重测——后续加）。
+  ⚠ 子项若挂 `layout_weight`，v1 按自然尺寸测量（weight 静默忽略）——
+  从 Row 迁移到 FlowRow 时需去掉 weight。
 - 无 maxLines/overflow（情境 API：expand/collapse indicator——后续加）。
 - 无 intrinsic（winia 无 intrinsic 体系）。
 - 行布局尺寸取 `max(内容, min约束)`：fill 父（min=max）→ 行宽=容器宽，
