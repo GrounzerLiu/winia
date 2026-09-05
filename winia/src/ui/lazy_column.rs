@@ -765,6 +765,10 @@ impl<A: LazyAxis> LazyList<A> {
             offset: state.offset.clone(),
             is_scroll_in_progress: is_scrolling.clone(),
             fling_limit: fling_limit.clone(),
+            // P1-3：pulse 通道——LazyListState 无 pulse 字段，分发层对 lazy 的
+            // pulse 自增会丢失（此处新建 ScrollState 无处可挂）；lazy 的边界
+            // 点亮待 LazyListState 加 pulse 字段后接通（v1 取舍，文档声明）。
+            scroll_pulse: crate::core::state::State::new(0),
         };
         // 注册顺序：普通项在前、sticky header 在后（子节点渲染顺序 = 注册顺序，
         // 后者画在最上层——钉住的 header 需盖住从它下面滑过的内容）。

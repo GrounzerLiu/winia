@@ -647,7 +647,24 @@ impl ApplicationHandler for AppState {
                             }).copied()
                         });
                         if let Some(target) = target {
-                            let _ = dispatch_nested_scroll_delta(pw.composer.arena_nodes_mut(), root_idx, target, crate::nested_scroll::ScrollDelta::new(dx, dy), crate::nested_scroll::NestedScrollSource::Wheel, crate::unit::Density::from_density(pw.scale_factor as f32));
+                            // P1-3：命中但消费为 0（顶/底继续滚）→ 触发目标的
+                            // scroll_pulse（scrollbar 侧以脉冲点亮 fade，给用户
+                            // "到底了"的反馈；M3/CMP 同行为）。offset 无变化时
+                            // 脉冲检测不到，故此处显式通知。
+                            let consumed = dispatch_nested_scroll_delta(pw.composer.arena_nodes_mut(), root_idx, target, crate::nested_scroll::ScrollDelta::new(dx, dy), crate::nested_scroll::NestedScrollSource::Wheel, crate::unit::Density::from_density(pw.scale_factor as f32));
+                            if consumed.x == 0.0 && consumed.y == 0.0 {
+                                let nodes = pw.composer.arena_nodes();
+                                if dy != 0.0 {
+                                    if let Some(ss) = nodes[target].modifier.vertical_scroll_state() {
+                                        ss.scroll_pulse.update(|v| *v = v.wrapping_add(1));
+                                    }
+                                }
+                                if dx != 0.0 {
+                                    if let Some(ss) = nodes[target].modifier.horizontal_scroll_state() {
+                                        ss.scroll_pulse.update(|v| *v = v.wrapping_add(1));
+                                    }
+                                }
+                            }
                         }
                     }
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
