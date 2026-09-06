@@ -42,6 +42,14 @@ Row::new().build(ctx, |ctx| {
         .always_show(false)
         .build(ctx);
 });
+
+// Lazy 横向：LazyRow 下叠 HorizontalLazyScrollbar（reverse 同 HorizontalScrollbar）
+LazyRow::new()
+    .state(row_state.clone())
+    .modifier(Modifier::new().fill_max_width())
+    .items_plain(30, content)
+    .build(ctx);
+HorizontalLazyScrollbar::new(row_state).always_show(true).build(ctx);
 ```
 
 ## 2. 语义（对标项）
@@ -82,8 +90,8 @@ Row::new().build(ctx, |ctx| {
 - 无 RTL 镜像（垂直条恒右侧，由调用方放；M3 按 layoutDirection 放 end edge）。
 - 无 LazyList 适配（已做：`LazyScrollbar` 吃 `LazyListState`——offset 同像素
   语义，fling_limit/pulse 测量期回写；scrolling 通道 lazy 侧无，fade 靠脉冲）。
-- `LazyRow`（水平懒列表）暂无适配（`HorizontalLazyScrollbar` 待做——字段
-  `pub(crate)` 外部无法手拼，唯一官方通道只支持垂直）。
+- `LazyRow` 适配（已做）：`HorizontalLazyScrollbar` 吃 `LazyListState`，
+  拼装语义与 `LazyScrollbar` 一致（轴为水平；`scroll_reverse` 同语义）。
 - thumb 几何进 key（滚动每帧 Enter——v1 简单语义；优化方向：绘制期 peek +
   layout 依赖，参考 TabRow indicator 模式）。
 - viewport 首帧 0（`on_size_changed` 次帧回写，1 帧延迟——Lazy viewport 同级；
@@ -117,4 +125,5 @@ cargo test -p winia --lib ui::scrollbar
 
 测试覆盖：几何隐藏/比例/min-max 钳/小 track 不 panic（P0-1）/非有限输入防腐/
 拖拽往返/退化 travel/抓取保持/镜像往返/node_key（含 fade 不进 key）/
-组件联动（offset.set 后 thumb key 跟随）/Lazy 联动/Lazy 反向镜像。
+组件联动（offset.set 后 thumb key 跟随）/Lazy 联动/Lazy 反向镜像/
+水平 Lazy 联动。

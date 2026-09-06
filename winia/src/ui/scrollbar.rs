@@ -576,6 +576,86 @@ impl LazyScrollbar {
     }
 }
 
+/// Lazy 横向列表滚动条（水平，对标 CMP `HorizontalScrollbar` + LazyListState
+/// 适配——`LazyRow` 用。拼装语义与 `LazyScrollbar` 完全一致，仅轴为水平；
+/// `scroll_reverse` 同语义（横向反向懒列表传 `Some(true)`）。
+/// 用法：
+/// ```ignore
+/// let list_state = ctx.remember(|| LazyListState::new()).get();
+/// LazyRow::new().state(list_state.clone()).build(ctx, content);
+/// HorizontalLazyScrollbar::new(list_state).build(ctx);
+/// ```
+pub struct HorizontalLazyScrollbar {
+    state: crate::ui::lazy_column::LazyListState,
+    modifier: Modifier,
+    thickness: f32,
+    thumb_color: Option<Color>,
+    track_color: Color,
+    thumb_min_length: f32,
+    always_show: bool,
+    scroll_reverse: Option<bool>,
+}
+
+impl HorizontalLazyScrollbar {
+    pub fn new(state: crate::ui::lazy_column::LazyListState) -> Self {
+        Self {
+            state,
+            modifier: Modifier::new(),
+            thickness: SCROLLBAR_THICKNESS,
+            thumb_color: None,
+            track_color: Color::TRANSPARENT,
+            thumb_min_length: SCROLLBAR_THUMB_MIN_LENGTH,
+            always_show: false,
+            scroll_reverse: None,
+        }
+    }
+
+    pub fn modifier(mut self, m: Modifier) -> Self { self.modifier = self.modifier.then(m); self }
+    pub fn thickness(mut self, t: f32) -> Self { self.thickness = t; self }
+    pub fn thumb_color(mut self, c: Color) -> Self { self.thumb_color = Some(c); self }
+    pub fn track_color(mut self, c: Color) -> Self { self.track_color = c; self }
+    pub fn thumb_min_length(mut self, l: f32) -> Self { self.thumb_min_length = l; self }
+    pub fn always_show(mut self, v: bool) -> Self { self.always_show = v; self }
+    /// 横向反向懒列表（与列表的 reverse 同值）。
+    pub fn scroll_reverse(mut self, v: Option<bool>) -> Self { self.scroll_reverse = v; self }
+
+    #[composable]
+    pub fn build(self, ctx: &mut ComposeCtx) {
+        ctx.changed(&self.thickness);
+        ctx.changed(&self.thumb_color);
+        ctx.changed(&self.track_color);
+        ctx.changed(&self.thumb_min_length);
+        ctx.changed(&self.always_show);
+        ctx.changed(&self.scroll_reverse);
+        ctx.changed(&self.state.offset.state_id());
+        let key = ctx.next_key();
+        let cfg = ScrollbarConfig {
+            thickness: self.thickness,
+            thumb_color: self.thumb_color,
+            track_color: self.track_color,
+            thumb_min_length: self.thumb_min_length,
+            always_show: self.always_show,
+            inset: 2.0,
+        };
+        // 拼装语义与 LazyScrollbar 一致（见上）：scrolling 用 remember false，
+        // fade 靠脉冲，拖拽置位落拼装 state 无残留。
+        let scrolling_state: State<bool> = ctx.remember(|| false);
+        let assembled = crate::modifier::ScrollState {
+            offset: self.state.offset.clone(),
+            is_scroll_in_progress: scrolling_state.clone(),
+            fling_limit: self.state.fling_limit.clone(),
+            scroll_pulse: self.state.scroll_pulse.clone(),
+        };
+        let m = scrollbar_build_shared(ctx, &assembled, cfg, ScrollbarAxis::Horizontal, self.scroll_reverse)
+            .then(self.modifier);
+        match ctx.start_restartable_group(key, m, BoxLayout::new()) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {}
+        }
+        ctx.end_restartable_group();
+    }
+}
+
 // ── VerticalScrollbar ──
 
 /// 垂直滚动条（对标 CMP `VerticalScrollbar`）。
@@ -1106,5 +1186,65 @@ mod tests {
         let root3 = composer3.layout_root_idx().expect("root");
         let key_nobar = scrollbar_key(composer3.arena_nodes(), root3).expect("条应存在");
         assert_ne!(key_nobar, key_rev0, "不传 reverse 应与镜像位不同（反向错误复现）");
+    }
+
+    /// 水平懒条联动：LazyRow + HorizontalLazyScrollbar 共享 LazyListState；
+    /// fling_limit 回写后 thumb 出现，offset.set 后 thumb key 跟随。
+    #[test]
+    fn horizontal_lazy_scrollbar_follows_lazy_list_state() {
+        use crate::core::composer::Composer;
+        use crate::layout::Constraints;
+        use crate::ui::lazy_column::LazyListState;
+        use crate::ui::theme::{ThemeColors, WiniaTheme};
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _guard = rt.enter();
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let list_state = LazyListState::new();
+        let mut composer = Composer::new();
+        let build = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    crate::ui::layout_components::Column::new().build(ctx, |ctx| {
+                        crate::ui::lazy_column::LazyRow::new()
+                            .state(list_state.clone())
+                            .modifier(Modifier::new().fill_max_width().layout_weight(1.0))
+                            .items_plain(20, |ctx, _i| {
+                                let k = ctx.next_key();
+                                ctx.start_leaf(k, Modifier::new().size(80.0, 60.0));
+                                ctx.end_node();
+                            })
+                            .build(ctx);
+                        HorizontalLazyScrollbar::new(list_state.clone())
+                            .always_show(true)
+                            .build(ctx);
+                    });
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 200.0));
+        };
+        fn scrollbar_key(nodes: &[crate::layout::LayoutNode], idx: usize) -> Option<String> {
+            let m = &nodes[idx].modifier;
+            for n in m.modifier_nodes() {
+                let key = crate::modifier::node_key_of(n);
+                if key.starts_with("draw:scrollbar:") {
+                    return Some(key);
+                }
+            }
+            for &c in &nodes[idx].children {
+                if let Some(k) = scrollbar_key(nodes, c) { return Some(k); }
+            }
+            None
+        }
+        build(&mut composer);
+        build(&mut composer); // 次帧：viewport 回写生效
+        let root = composer.layout_root_idx().expect("root");
+        let key1 = scrollbar_key(composer.arena_nodes(), root)
+            .expect("viewport 回写后应有水平懒条节点");
+        assert!(key1.contains(":false:"), "水平条 vertical=false，key1={key1}");
+        list_state.offset.set(300.0);
+        build(&mut composer);
+        let key2 = scrollbar_key(composer.arena_nodes(), root).expect("滚动后仍在");
+        assert_ne!(key1, key2, "offset 变化后 thumb key 应跟随（key1={key1} key2={key2}）");
+        assert!(key2.ends_with(":true"), "常显模式 key 末尾 has_thumb=true，key2={key2}");
     }
 }

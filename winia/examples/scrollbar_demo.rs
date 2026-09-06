@@ -9,6 +9,7 @@ fn scrollbar_demo_ui(ctx: &mut ComposeCtx) {
     let vscroll = ctx.remember(|| ScrollState::new()).get();
     let hscroll = ctx.remember(|| ScrollState::new()).get();
     let lazy_state = ctx.remember(|| LazyListState::new()).get();
+    let lazy_row_state = ctx.remember(|| LazyListState::new()).get();
     let always: State<bool> = ctx.remember(|| false);
 
     Column::new()
@@ -157,6 +158,46 @@ fn scrollbar_demo_ui(ctx: &mut ComposeCtx) {
                         .build(ctx);
                     LazyScrollbar::new(lazy_state.clone())
                         .always_show(always.get())
+                        .build(ctx);
+                });
+
+            Text::new("■ Horizontal Lazy Scrollbar (LazyRow + HorizontalLazyScrollbar)")
+                .font_size(16.0)
+                .build(ctx);
+
+            Column::new()
+                .modifier(
+                    Modifier::new()
+                        .fill_max_width()
+                        .background(
+                            Color::from_argb(20, 150, 100, 50),
+                            Shape::rounded(8.0),
+                        )
+                        .padding(8.0),
+                )
+                .build(ctx, |ctx| {
+                    LazyRow::new()
+                        .state(lazy_row_state.clone())
+                        .modifier(Modifier::new().fill_max_width())
+                        .items_plain(30, |ctx, n| {
+                            Stack::new()
+                                .modifier(
+                                    Modifier::new()
+                                        .size(80.0, 60.0)
+                                        .background(
+                                            Color::from_argb(255, 200, 140, 60),
+                                            Shape::rounded(8.0),
+                                        ),
+                                )
+                                .build(ctx, |ctx| {
+                                    Text::new(format!("{n}"))
+                                        .font_size(14.0)
+                                        .build(ctx);
+                                });
+                        })
+                        .build(ctx);
+                    HorizontalLazyScrollbar::new(lazy_row_state.clone())
+                        .always_show(true)
                         .build(ctx);
                 });
         });
