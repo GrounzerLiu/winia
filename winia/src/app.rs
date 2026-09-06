@@ -652,17 +652,18 @@ impl ApplicationHandler for AppState {
                             // "到底了"的反馈；M3/CMP 同行为）。offset 无变化时
                             // 脉冲检测不到，故此处显式通知。
                             let consumed = dispatch_nested_scroll_delta(pw.composer.arena_nodes_mut(), root_idx, target, crate::nested_scroll::ScrollDelta::new(dx, dy), crate::nested_scroll::NestedScrollSource::Wheel, crate::unit::Density::from_density(pw.scale_factor as f32));
-                            if consumed.x == 0.0 && consumed.y == 0.0 {
-                                let nodes = pw.composer.arena_nodes();
-                                if dy != 0.0 {
-                                    if let Some(ss) = nodes[target].modifier.vertical_scroll_state() {
-                                        ss.scroll_pulse.update(|v| *v = v.wrapping_add(1));
-                                    }
+                            // P2-1：按轴独立判定——顶边斜滚（垂直顶住、水平正常
+                            // 消费）时联合条件会丢垂直 pulse。分轴自增本就绪，
+                            // 门控同样分轴。
+                            let nodes = pw.composer.arena_nodes();
+                            if dy != 0.0 && consumed.y == 0.0 {
+                                if let Some(ss) = nodes[target].modifier.vertical_scroll_state() {
+                                    ss.scroll_pulse.update(|v| *v = v.wrapping_add(1));
                                 }
-                                if dx != 0.0 {
-                                    if let Some(ss) = nodes[target].modifier.horizontal_scroll_state() {
-                                        ss.scroll_pulse.update(|v| *v = v.wrapping_add(1));
-                                    }
+                            }
+                            if dx != 0.0 && consumed.x == 0.0 {
+                                if let Some(ss) = nodes[target].modifier.horizontal_scroll_state() {
+                                    ss.scroll_pulse.update(|v| *v = v.wrapping_add(1));
                                 }
                             }
                         }
