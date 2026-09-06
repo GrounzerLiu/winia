@@ -1888,6 +1888,17 @@ impl Modifier {
         None
     }
 
+    /// 水平滚动是否反向（None = 无横向滚动容器）——scrollbar 横向 reverse
+    /// 镜像用（P2-3：offset 语义镜像，条位置须跟内容走）。
+    pub fn is_horizontal_scroll_reversed(&self) -> Option<bool> {
+        for el in &self.elements {
+            if let ModifierElement::HorizontalScroll { reverse, .. } = el {
+                return Some(*reverse);
+            }
+        }
+        None
+    }
+
     /// 当前节点上的嵌套滚动连接。
     pub fn nested_scroll_connection(&self) -> Option<Arc<dyn crate::nested_scroll::NestedScrollConnection>> {
         self.elements.iter().find_map(|el| match el {
@@ -2459,6 +2470,10 @@ pub struct ScrollState {
     pub is_scroll_in_progress: crate::core::state::State<bool>,
     /// fling 滚动极限（布局期回写 = 内容高 - 视口高；0 = 未知 → fling 只拦下限）
     pub(crate) fling_limit: crate::core::state::State<f32>,
+    /// 滚动活动脉冲（P1-3：边界滚轮点亮用——offset 到界无变化时脉冲检测不到，
+    /// 故分发层在"命中但消费为 0"的 wheel 上自增本计数，scrollbar 侧以变化
+    /// 为脉冲点亮 fade。u64 单调，set 恒变→恒通知，无需 PartialEq 去重顾虑）。
+    pub(crate) scroll_pulse: crate::core::state::State<u64>,
 }
 
 impl ScrollState {
@@ -2467,6 +2482,7 @@ impl ScrollState {
             offset: crate::core::state::State::new(0.0),
             is_scroll_in_progress: crate::core::state::State::new(false),
             fling_limit: crate::core::state::State::new(0.0),
+            scroll_pulse: crate::core::state::State::new(0),
         }
     }
 

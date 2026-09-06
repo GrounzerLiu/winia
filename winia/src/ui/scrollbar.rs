@@ -232,11 +232,15 @@ struct ScrollbarConfig {
 
 /// 共享 build：读三要素 → fade 脉冲/effect → viewport → 组装 Modifier → 返回。
 /// changed 注册仍在各 build 头部（参数归属各自 Self）。
+/// `scroll_reverse`: 横向 reverse（RTL）时传入 Some（`is_horizontal_scroll_reverse`
+/// 的值）——offset 语义被 render 镜像（offset 0 = 内容末端），scrollbar 几何/
+/// 拖拽用同一镜像坐标 `visual = max - scroll`；垂直传 None。
 fn scrollbar_build_shared(
     ctx: &mut ComposeCtx,
     scroll_state_src: &crate::modifier::ScrollState,
     cfg: ScrollbarConfig,
     axis: ScrollbarAxis,
+    scroll_reverse: Option<bool>,
 ) -> Modifier {
     let vertical = matches!(axis, ScrollbarAxis::Vertical);
     let theme = WiniaTheme::colors();
@@ -246,9 +250,16 @@ fn scrollbar_build_shared(
     // 三要素：offset（读，注册依赖）+ fling_limit（读，注册依赖）；
     // viewport 由自身约束来（fill_max_height 下 = 父高，要求与滚动容器等高）。
     // ⚠ 必须在 build 期 get（注册组合依赖），绘制期 peek 不注册。
-    let scroll = scroll_state_src.offset.get();
+    let scroll_raw = scroll_state_src.offset.get();
     let limit = scroll_state_src.fling_limit.get();
     let scrolling = scroll_state_src.is_scroll_in_progress.get();
+    // P2-3：reverse 时 offset 语义镜像——scrollbar 用 visual 坐标
+    // （visual 0 = 内容末端 = 条在起点；visual = max - scroll）。
+    // 垂直无 reverse 概念，传 None 即直用。
+    let scroll = match scroll_reverse {
+        Some(true) => (limit - scroll_raw).clamp(0.0, limit.max(0.0)),
+        _ => scroll_raw,
+    };
     // hover/拖拽中也显示（否则隐藏态无从下手拖）——interaction 源 remember 持有
     let hover_src: MutableInteractionSource =
         ctx.remember(|| MutableInteractionSource::new()).get();
@@ -259,20 +270,29 @@ fn scrollbar_build_shared(
     // 400ms 实现）。绘制期 peek 求值（零重组）——fade_state 不进 node_key。
     //
     // ⚠ wheel/程序化滚动时 `scrolling` 恒 false（分发层 cancel+置 false，
-    // 拖拽路径才置 true）——故滚动检测不用它，而用"offset 变化"脉冲：
+    // 拖拽路径才置 true）——故滚动检测不用它，而用"offset/脉冲变化"：
     // `last_scroll` 记住上帧 offset，本帧不同即正在滚（set_silent 写回，
-    // 不触发重组——本帧 build 照常继续）。
+    // 不触发重组——本帧 build 照常继续）；`scroll_pulse` 是分发层在"命中
+    // 但消费为 0"（顶/底继续滚，offset 无变化）时自增的计数（P1-3）——
+    // 两者任一变化即点亮 fade，给"到底了"的反馈（M3/CMP 同行为）。
     // ⚠ 不能用 bool 门闩（滚过即 true 不清零→常显不藏，实测 bug）。
     // ⚠ key 必须含 `scroll`：bool 条件会合并连续滚动——tween 250ms 播到 1
     // 后 key 不变，而滚动仍在继续，随后的 400ms 睡眠会把条 fade 掉；
     // scroll 每帧都变→每帧重启 effect→abort 睡眠→保持显示。
+    // （pulse 只在边界触发一次，不进 key——单次脉冲若进 key 会与 scroll
+    // 同帧双重启，无谓 churn；pulse 的 get 注册依赖已足够驱动点亮帧。）
     let last_scroll: State<f32> = ctx.remember(|| scroll);
     let scroll_active = last_scroll.peek() != scroll;
     if scroll_active {
         last_scroll.set_silent(scroll);
     }
+    let last_pulse: State<u64> = ctx.remember(|| scroll_state_src.scroll_pulse.get());
+    let pulse_active = last_pulse.peek() != scroll_state_src.scroll_pulse.get();
+    if pulse_active {
+        last_pulse.set_silent(scroll_state_src.scroll_pulse.get());
+    }
     let fade_target = if cfg.always_show || scrolling || hovered || dragged
-        || scroll_active
+        || scroll_active || pulse_active
     {
         1.0f32
     } else {
@@ -368,11 +388,19 @@ fn scrollbar_build_shared(
     let drag_cb = {
         let scroll_state_src = scroll_state_src.clone();
         let grab_offset = grab_offset.clone();
+        // reverse 下 visual→raw 需镜像写回（visual = max - raw）。
+        let reverse_write = matches!(scroll_reverse, Some(true));
+        let write_max = max_offset;
         move |pos: (f32, f32)| {
             // pos 为 thumb 条本地坐标（含 inset 偏移）；减 inset 得 track 内位置
             let pos_in_track = if vertical { pos.1 } else { pos.0 } - drag_inset;
             let target = pos_in_track - grab_offset.peek();
-            let off = scrollbar_offset_for_thumb_pos(target, track, drag_thumb_len, max_offset);
+            let off_visual = scrollbar_offset_for_thumb_pos(target, track, drag_thumb_len, max_offset);
+            let off = if reverse_write {
+                (write_max - off_visual).clamp(0.0, write_max.max(0.0))
+            } else {
+                off_visual
+            };
             scroll_state_src.offset.set(off);
         }
     };
@@ -506,7 +534,7 @@ impl VerticalScrollbar {
             always_show: self.always_show,
             inset: 2.0,
         };
-        let m = scrollbar_build_shared(ctx, &self.scroll, cfg, ScrollbarAxis::Vertical)
+        let m = scrollbar_build_shared(ctx, &self.scroll, cfg, ScrollbarAxis::Vertical, None)
             .then(self.modifier);
         match ctx.start_restartable_group(key, m, BoxLayout::new()) {
             GroupStatus::Skip => {}
@@ -519,6 +547,10 @@ impl VerticalScrollbar {
 // ── HorizontalScrollbar ──
 
 /// 水平滚动条（对标 CMP `HorizontalScrollbar`）。语义与垂直对称。
+/// `scroll_reverse`: 横向 reverse（RTL，`horizontal_scroll_reverse(true)`）——
+/// render 侧 offset 语义镜像（offset 0 = 内容末端），scrollbar 几何/拖拽用
+/// 同一镜像坐标（`visual = max - scroll`），条位置与内容同向。
+/// 不传（None）= 正向。垂直条无 reverse 概念。
 pub struct HorizontalScrollbar {
     scroll: crate::modifier::ScrollState,
     modifier: Modifier,
@@ -527,6 +559,7 @@ pub struct HorizontalScrollbar {
     track_color: Color,
     thumb_min_length: f32,
     always_show: bool,
+    scroll_reverse: Option<bool>,
 }
 
 impl HorizontalScrollbar {
@@ -539,6 +572,7 @@ impl HorizontalScrollbar {
             track_color: Color::TRANSPARENT,
             thumb_min_length: SCROLLBAR_THUMB_MIN_LENGTH,
             always_show: false,
+            scroll_reverse: None,
         }
     }
 
@@ -548,6 +582,9 @@ impl HorizontalScrollbar {
     pub fn track_color(mut self, c: Color) -> Self { self.track_color = c; self }
     pub fn thumb_min_length(mut self, l: f32) -> Self { self.thumb_min_length = l; self }
     pub fn always_show(mut self, v: bool) -> Self { self.always_show = v; self }
+    /// 横向反向滚动（RTL——与滚动容器的 `horizontal_scroll_reverse` 同值；
+    /// `TabRow` 等 RTL 容器传 `Some(is_rtl)`）。
+    pub fn scroll_reverse(mut self, v: Option<bool>) -> Self { self.scroll_reverse = v; self }
 
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
@@ -556,6 +593,7 @@ impl HorizontalScrollbar {
         ctx.changed(&self.track_color);
         ctx.changed(&self.thumb_min_length);
         ctx.changed(&self.always_show);
+        ctx.changed(&self.scroll_reverse);
         // P2-4：ScrollState 句柄身份（换整个 state 必须重组——否则旧 offset
         // 订阅不失效、新 state 无订阅，条绑死旧状态）。
         ctx.changed(&self.scroll.offset.state_id());
@@ -568,7 +606,7 @@ impl HorizontalScrollbar {
             always_show: self.always_show,
             inset: 2.0,
         };
-        let m = scrollbar_build_shared(ctx, &self.scroll, cfg, ScrollbarAxis::Horizontal)
+        let m = scrollbar_build_shared(ctx, &self.scroll, cfg, ScrollbarAxis::Horizontal, self.scroll_reverse)
             .then(self.modifier);
         match ctx.start_restartable_group(key, m, BoxLayout::new()) {
             GroupStatus::Skip => {}
@@ -680,8 +718,25 @@ mod tests {
         assert!((off_grab - scrollbar_offset_for_thumb_pos(150.0 - inset - grab, track, thumb, max) - 10.0 / travel * max).abs() < 1.0);
         // 按下点在 thumb 外（track 空白处 pos=400）：grab 钳到 thumb（178.8），
         //  thumb 边缘跟到光标，不大跳到中心。
-        let grab_clamped = ((400.0 - inset - thumb_offset).clamp(0.0, thumb));
+        let grab_clamped = (400.0 - inset - thumb_offset).clamp(0.0, thumb);
         assert!((grab_clamped - thumb).abs() < 0.01, "thumb 外按下应钳到边缘，grab={grab_clamped}");
+    }
+
+    #[test]
+    fn reverse_visual_round_trip() {
+        // P2-3 回归：reverse 下 visual = max - raw，来回镜像精确还原。
+        // max=1400：raw=0 → visual=1400（条在起点，内容末端）；raw=1400 → visual=0。
+        let max = 1400.0f32;
+        let to_visual = |raw: f32| (max - raw).clamp(0.0, max.max(0.0));
+        assert_eq!(to_visual(0.0), 1400.0);
+        assert_eq!(to_visual(1400.0), 0.0);
+        assert_eq!(to_visual(300.0), 1100.0);
+        // 写回镜像：visual→raw 同公式（对合），拖拽往返不漂移。
+        let back = |visual: f32| (max - visual).clamp(0.0, max.max(0.0));
+        assert_eq!(back(to_visual(300.0)), 300.0);
+        // 超界钳：raw 越界时 visual 钳到 [0, max]。
+        assert_eq!(to_visual(-50.0), 1400.0);
+        assert_eq!(to_visual(9999.0), 0.0);
     }
 
     #[test]

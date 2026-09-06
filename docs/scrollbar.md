@@ -69,9 +69,15 @@ HorizontalScrollbar::new(scroll.clone()).always_show(true).build(ctx);
   layout 依赖，参考 TabRow indicator 模式）。
 - viewport 首帧 0（`on_size_changed` 次帧回写，1 帧延迟——Lazy viewport 同级；
   回写靠 `viewport_state.get()` 注册的组合依赖驱动重组，`peek` 则无订阅 stale）。
-- 边界处滚轮不点亮（offset 无变化→脉冲检测不到；M3/CMP 会闪一下给"到底了"
-  反馈——v1 取舍，待办）。
-- 横向条不镜像 `scroll_reverse`（RTL/反向列表条位置与内容反向——v1 取舍，待办）。
+- 边界滚轮点亮（P1-3，已做）：顶/底继续滚时 offset 无变化，offset 脉冲
+  检测不到，故 `ScrollState.scroll_pulse: u64` 单调计数——分发层在"命中但
+  消费为 0"的 wheel 上自增，scrollbar 侧以变化为脉冲点亮 fade（M3/CMP
+  "到底了"反馈同行为）。lazy 列表例外：`LazyListState` 无 pulse 字段，
+  pulse 自增挂到临时拼装的 `ScrollState` 上丢失——lazy 边界点亮待接通。
+- 横向 `scroll_reverse`（P2-3，已做）：`HorizontalScrollbar::scroll_reverse
+  (Option<bool>)`，与滚动容器的 `horizontal_scroll_reverse` 同值——render 侧
+  offset 语义镜像（offset 0 = 内容末端），scrollbar 几何/拖拽用同一镜像坐标
+  `visual = max - scroll`（读镜像、写回镜像，对合无漂移）。垂直条无 reverse。
 - 无 RTL 镜像（垂直条恒右侧，由调用方放；M3 按 layoutDirection 放 end edge）。
 - 需要 tokio runtime（fade 的 `LaunchedEffect` 驱动——与 TextField blink 同约定；
   demo main 需先建 `Runtime` + `enter`，见 `scrollbar_demo.rs`）。
