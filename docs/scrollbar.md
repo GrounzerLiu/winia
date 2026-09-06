@@ -1,6 +1,7 @@
 # Scrollbar 滚动条（桌面 CMP 对齐）
 
-> 状态：已实现（分支 `exp/scrollbar`，从 v2 分出）
+> 状态：已合入 `v2`（`5d589f8` 大合并 + grab `237a8ac` + followup `081de0d` +
+> lazy-pulse `3d7827c` + lazy-scrollbar `0061b81`）
 > 对标：Compose Multiplatform 桌面 `VerticalScrollbar` / `HorizontalScrollbar`
 > + M3 `Modifier.nonInteractiveScrollbar`（`Scrollbar.kt`，2026 androidx-main，
 > 浏览器取证；几何公式同社区 gist `drawScrollbar`）
@@ -56,7 +57,8 @@ Row::new().build(ctx, |ctx| {
   旧中心对齐大 thumb 首帧跳变）。拖拽开始抢占（`cancel_fling` + 置滚动中，
   松手/取消清——否则列表侧惯性 fling 的 `update_animations` 写回 offset
   导致拖不动；cancel 防失焦残留置位）。
-- **显示**：`always_show` / 滚动中 / hover / 拖拽中 / offset 变化脉冲 + fade 动画。
+- **显示**：`always_show` / 滚动中 / hover / 拖拽中 / offset 变化脉冲 /
+  边界 pulse（`scroll_pulse`）+ fade 动画。
   hover 显示（`hoverable` + interaction 源）解决隐藏态无从下手拖；
   拖拽中显示解决松手即消失（`emit_drag_start/end` 维持 `dragged`）；
   wheel/程序化滚动不置 `is_scroll_in_progress`（分发层只 cancel+置 false，
@@ -80,6 +82,8 @@ Row::new().build(ctx, |ctx| {
 - 无 RTL 镜像（垂直条恒右侧，由调用方放；M3 按 layoutDirection 放 end edge）。
 - 无 LazyList 适配（已做：`LazyScrollbar` 吃 `LazyListState`——offset 同像素
   语义，fling_limit/pulse 测量期回写；scrolling 通道 lazy 侧无，fade 靠脉冲）。
+- `LazyRow`（水平懒列表）暂无适配（`HorizontalLazyScrollbar` 待做——字段
+  `pub(crate)` 外部无法手拼，唯一官方通道只支持垂直）。
 - thumb 几何进 key（滚动每帧 Enter——v1 简单语义；优化方向：绘制期 peek +
   layout 依赖，参考 TabRow indicator 模式）。
 - viewport 首帧 0（`on_size_changed` 次帧回写，1 帧延迟——Lazy viewport 同级；
@@ -93,7 +97,14 @@ Row::new().build(ctx, |ctx| {
   (Option<bool>)`，与滚动容器的 `horizontal_scroll_reverse` 同值——render 侧
   offset 语义镜像（offset 0 = 内容末端），scrollbar 几何/拖拽用同一镜像坐标
   `visual = max - scroll`（读镜像、写回镜像，对合无漂移）。垂直条无 reverse。
-- 无 RTL 镜像（垂直条恒右侧，由调用方放；M3 按 layoutDirection 放 end edge）。
+  `LazyScrollbar::scroll_reverse` 同语义（反向懒列表 `reverse_layout(true)` 传
+  `Some(true)`）。`None` 与 `Some(false)` 等价（都直用；`Option` 造型为直透
+  `is_horizontal_scroll_reversed()` 返回值）。
+- 边界 pulse 按轴独立（P2-1）：顶边斜滚（垂直顶住、水平正常消费）时两轴
+  各判各，不丢单轴反馈。
+- 拖拽边界无点亮（P2-4 取舍）：pulse 仅 Wheel 源；拖拽顶住边界时 offset 无
+  变化、`scroll_active` 为假、`scroll_pulse` 不增——fade 不亮（拖拽中手未松
+  时 `dragged` 为真条本来就显示，影响仅松手瞬间）。
 - 需要 tokio runtime（fade 的 `LaunchedEffect` 驱动——与 TextField blink 同约定；
   demo main 需先建 `Runtime` + `enter`，见 `scrollbar_demo.rs`）。
 
@@ -105,5 +116,5 @@ cargo test -p winia --lib ui::scrollbar
 ```
 
 测试覆盖：几何隐藏/比例/min-max 钳/小 track 不 panic（P0-1）/非有限输入防腐/
-拖拽往返/退化 travel/node_key（含 fade 不进 key）/组件联动
-（offset.set 后 thumb key 跟随）。
+拖拽往返/退化 travel/抓取保持/镜像往返/node_key（含 fade 不进 key）/
+组件联动（offset.set 后 thumb key 跟随）/Lazy 联动/Lazy 反向镜像。
