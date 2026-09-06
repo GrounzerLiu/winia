@@ -98,7 +98,7 @@ pub use radio_button::{RadioButton, RadioButtonColors, RadioButtonDefaults};
 pub use badge::{Badge, BadgedBox};
 pub use slider::{Slider, SliderColors, SliderDefaults};
 pub use scrollbar::{
-    VerticalScrollbar, HorizontalScrollbar,
+    VerticalScrollbar, HorizontalScrollbar, LazyScrollbar,
     SCROLLBAR_THICKNESS, SCROLLBAR_THUMB_MIN_LENGTH, SCROLLBAR_THUMB_MAX_FRACTION,
 };
 pub use progress_indicator::{

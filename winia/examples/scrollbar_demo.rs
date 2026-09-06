@@ -8,6 +8,7 @@ use winia::prelude::*;
 fn scrollbar_demo_ui(ctx: &mut ComposeCtx) {
     let vscroll = ctx.remember(|| ScrollState::new()).get();
     let hscroll = ctx.remember(|| ScrollState::new()).get();
+    let lazy_state = ctx.remember(|| LazyListState::new()).get();
     let always: State<bool> = ctx.remember(|| false);
 
     Column::new()
@@ -117,6 +118,45 @@ fn scrollbar_demo_ui(ctx: &mut ComposeCtx) {
                         });
                     HorizontalScrollbar::new(hscroll.clone())
                         .always_show(true)
+                        .build(ctx);
+                });
+
+            Text::new("■ Lazy Scrollbar (LazyColumn + LazyScrollbar)")
+                .font_size(16.0)
+                .build(ctx);
+
+            Row::new()
+                .modifier(
+                    Modifier::new()
+                        .fill_max_width()
+                        .height(260.0)
+                        .background(
+                            Color::from_argb(20, 150, 50, 150),
+                            Shape::rounded(8.0),
+                        )
+                        .padding(8.0),
+                )
+                .build(ctx, |ctx| {
+                    LazyColumn::new()
+                        .state(lazy_state.clone())
+                        .modifier(
+                            Modifier::new()
+                                .fill_max_height()
+                                .layout_weight(1.0),
+                        )
+                        .items_plain(50, |ctx, n| {
+                            Text::new(format!("Lazy {n:02} — virtualized row"))
+                                .font_size(14.0)
+                                .modifier(
+                                    Modifier::new()
+                                        .fill_max_width()
+                                        .padding_vertical(6.0),
+                                )
+                                .build(ctx);
+                        })
+                        .build(ctx);
+                    LazyScrollbar::new(lazy_state.clone())
+                        .always_show(always.get())
                         .build(ctx);
                 });
         });

@@ -4,8 +4,8 @@
 > 对标：Compose Multiplatform 桌面 `VerticalScrollbar` / `HorizontalScrollbar`
 > + M3 `Modifier.nonInteractiveScrollbar`（`Scrollbar.kt`，2026 androidx-main，
 > 浏览器取证；几何公式同社区 gist `drawScrollbar`）
-> 实现：`winia/src/ui/scrollbar.rs`（`ScrollbarNode` + 双组件）；
-> demo：`winia/examples/scrollbar_demo.rs`（垂直拖 thumb + 常显开关 + 水平条）。
+> 实现：`winia/src/ui/scrollbar.rs`（`ScrollbarNode` + 三组件）；
+> demo：`winia/examples/scrollbar_demo.rs`（垂直拖 thumb + 常显开关 + 水平条 + Lazy 列）。
 
 ## 1. API
 
@@ -27,6 +27,20 @@ Row::new().build(ctx, |ctx| {
 
 // 水平：对称（fill_max_width + horizontal_scroll 容器上下叠）
 HorizontalScrollbar::new(scroll.clone()).always_show(true).build(ctx);
+
+// Lazy：与 LazyColumn/LazyRow 并排，LazyListState 共享（锚点模型的 offset
+// 与 ScrollState 同像素语义；fling_limit/pulse 由测量期回写；scrolling 通道
+// lazy 侧无——fade 靠 offset/脉冲，拖 thumb 显示正常）
+Row::new().build(ctx, |ctx| {
+    LazyColumn::new()
+        .state(list_state.clone())
+        .modifier(Modifier::new().fill_max_height().layout_weight(1.0))
+        .items_plain(50, content)
+        .build(ctx);
+    LazyScrollbar::new(list_state)
+        .always_show(false)
+        .build(ctx);
+});
 ```
 
 ## 2. 语义（对标项）
@@ -64,7 +78,8 @@ HorizontalScrollbar::new(scroll.clone()).always_show(true).build(ctx);
 ## 3. 与 Compose 的差异（v1 范围）
 
 - 无 RTL 镜像（垂直条恒右侧，由调用方放；M3 按 layoutDirection 放 end edge）。
-- 无 LazyList 适配（`LazyListState` 锚点模型另有 first_visible——后续加）。
+- 无 LazyList 适配（已做：`LazyScrollbar` 吃 `LazyListState`——offset 同像素
+  语义，fling_limit/pulse 测量期回写；scrolling 通道 lazy 侧无，fade 靠脉冲）。
 - thumb 几何进 key（滚动每帧 Enter——v1 简单语义；优化方向：绘制期 peek +
   layout 依赖，参考 TabRow indicator 模式）。
 - viewport 首帧 0（`on_size_changed` 次帧回写，1 帧延迟——Lazy viewport 同级；

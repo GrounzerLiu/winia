@@ -125,11 +125,14 @@ pub struct LazyListState {
     /// 测量从锚点开始组合；像素 offset 由测量期从缓存推导，不做反推）。
     /// 首次测量消费后清空。animate = 动画滚动（spring，对齐 animateScrollToItem）。
     pub(crate) jump_request: crate::core::state::State<Option<(usize, f32, bool)>>,
-    /// fling 滚动极限（测量期回写 = 内容高 - 视口高；0 = 未知 → 只拦下限）
+    /// fling 滚动极限（测量期回写 = 内容高 - 视口高；0 = 未知 → 只拦下限。
+    /// scrollbar 侧读（content = limit + viewport），故 pub(crate) 不够——
+    /// 同 crate 的 scrollbar.rs 可见）。
     pub(crate) fling_limit: crate::core::state::State<f32>,
     /// 滚动活动脉冲（P1-3：边界滚轮点亮用——与 ScrollState.scroll_pulse 同语义；
     /// lazy 的 ScrollState 是 build 期拼装（offset/is_scrolling/fling_limit 三
-    /// clone），pulse 必须挂在这里才跨帧稳定；拼装时 clone 进去）。
+    /// clone），pulse 必须挂在这里才跨帧稳定；拼装时 clone 进去；同 crate
+    /// 的 scrollbar.rs 可见）。
     pub(crate) scroll_pulse: crate::core::state::State<u64>,
     /// 派生：第一个可见项索引（每次 build 后更新）
     pub first_visible_index: crate::core::state::State<usize>,
