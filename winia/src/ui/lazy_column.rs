@@ -127,6 +127,10 @@ pub struct LazyListState {
     pub(crate) jump_request: crate::core::state::State<Option<(usize, f32, bool)>>,
     /// fling 滚动极限（测量期回写 = 内容高 - 视口高；0 = 未知 → 只拦下限）
     pub(crate) fling_limit: crate::core::state::State<f32>,
+    /// 滚动活动脉冲（P1-3：边界滚轮点亮用——与 ScrollState.scroll_pulse 同语义；
+    /// lazy 的 ScrollState 是 build 期拼装（offset/is_scrolling/fling_limit 三
+    /// clone），pulse 必须挂在这里才跨帧稳定；拼装时 clone 进去）。
+    pub(crate) scroll_pulse: crate::core::state::State<u64>,
     /// 派生：第一个可见项索引（每次 build 后更新）
     pub first_visible_index: crate::core::state::State<usize>,
     /// 派生：第一个可见项的偏移（正 = 该项向上滚出多少）
@@ -141,6 +145,7 @@ impl LazyListState {
             known_total: crate::core::state::State::new(usize::MAX),
             jump_request: crate::core::state::State::new(None),
             fling_limit: crate::core::state::State::new(0.0),
+            scroll_pulse: crate::core::state::State::new(0),
             first_visible_index: crate::core::state::State::new(0),
             first_visible_offset: crate::core::state::State::new(0.0),
         }
@@ -765,10 +770,10 @@ impl<A: LazyAxis> LazyList<A> {
             offset: state.offset.clone(),
             is_scroll_in_progress: is_scrolling.clone(),
             fling_limit: fling_limit.clone(),
-            // P1-3：pulse 通道——LazyListState 无 pulse 字段，分发层对 lazy 的
-            // pulse 自增会丢失（此处新建 ScrollState 无处可挂）；lazy 的边界
-            // 点亮待 LazyListState 加 pulse 字段后接通（v1 取舍，文档声明）。
-            scroll_pulse: crate::core::state::State::new(0),
+            // pulse 接通：LazyListState.scroll_pulse 跨帧稳定（与 offset 同
+            // 生命周期），拼装 clone 进去——分发层自增落在同一 State 上，
+            // scrollbar 侧 pulse 点亮对 lazy 同样生效。
+            scroll_pulse: state.scroll_pulse.clone(),
         };
         // 注册顺序：普通项在前、sticky header 在后（子节点渲染顺序 = 注册顺序，
         // 后者画在最上层——钉住的 header 需盖住从它下面滑过的内容）。

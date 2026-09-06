@@ -72,8 +72,8 @@ HorizontalScrollbar::new(scroll.clone()).always_show(true).build(ctx);
 - 边界滚轮点亮（P1-3，已做）：顶/底继续滚时 offset 无变化，offset 脉冲
   检测不到，故 `ScrollState.scroll_pulse: u64` 单调计数——分发层在"命中但
   消费为 0"的 wheel 上自增，scrollbar 侧以变化为脉冲点亮 fade（M3/CMP
-  "到底了"反馈同行为）。lazy 列表例外：`LazyListState` 无 pulse 字段，
-  pulse 自增挂到临时拼装的 `ScrollState` 上丢失——lazy 边界点亮待接通。
+  "到底了"反馈同行为）。lazy 列表同样接通：`LazyListState.scroll_pulse`
+  跨帧稳定，拼装 `ScrollState` 时 clone 进去（与 offset 同生命周期）。
 - 横向 `scroll_reverse`（P2-3，已做）：`HorizontalScrollbar::scroll_reverse
   (Option<bool>)`，与滚动容器的 `horizontal_scroll_reverse` 同值——render 侧
   offset 语义镜像（offset 0 = 内容末端），scrollbar 几何/拖拽用同一镜像坐标
