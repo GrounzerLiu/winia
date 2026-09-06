@@ -1,8 +1,9 @@
 # Modifier Node（开放扩展点，已合入 `v2`）
 
 > 状态：已合入 `v2`（`4ca3aea`，fast-forward 自 `17962ee`，9 提交）。
-> 真实迁移累计 11 节点（2026-09）：Slider 轨道（首个）→ ProgressIndicator ×4 →
-> Divider ×1 → wavy ×4 + loading ×1。生产代码 `.draw()` 匿名闭包已清零
+> 真实迁移累计 12 节点（2026-09）：Slider 轨道（首个）→ ProgressIndicator ×4 →
+> Divider ×1 → wavy ×4 + loading ×1 → Scrollbar ×1（`ScrollbarNode`，三组件
+> Vertical/Horizontal/Lazy 共用同一节点）。生产代码 `.draw()` 匿名闭包已清零
 > （残留仅测试双路对照 + 非 Modifier 的 `sw.draw`/`paragraph.draw`）。
 > 目标：把 Modifier 从"封闭枚举"变成
 > "开放节点"——第三方不改核心即可实现自定义行为。
@@ -318,6 +319,7 @@ Switch 符合①但枚举耦合深（14 处 match），Divider 太简单无代�
 | ProgressIndicator ×4 | LinearDeterminate/Indeterminate + CircularDeterminate/Indeterminate | `daba461` + review `66c3c88` | 无限动画 peek 不进 key（三问a探针）；review 补 `changed(draw_stop)` + 切换测试；5 新测试 |
 | Divider ×1 | DividerNode | `4cb7f0d` | padding 内缩解耦四 f32（动态 padding 快照语义）；Hairline NaN 双语义注记；2 新测试 |
 | wavy ×4 + loading ×1 | Linear/CircularWavy(In)determinate + LoadingIndicatorNode | `97e862d` | 路径缓存 `Arc<Mutex>` 不进 key（手写 Debug）；`amplitude_token` 进 key；4 新测试 |
+| Scrollbar ×1 | ScrollbarNode（Vertical/Horizontal/LazyScrollbar 三组件共用） | `12e179a` + 后续 `bac42eb`/`232d3e1`/`f494263`/`30da727`/`6cf0846`/`8916eb3`/`0885cce`/`6e47a19`/`da8a58b`/`465dbea`/`392011c` | fade:State 进节点 draw 期 peek（build 快照 bug）；滚轮去盲找；offset 脉冲 + 单 effect 睡醒快照；review P0 修（clamp panic/viewport get/drag_cancel）；抽 `scrollbar_build_shared`；grab 保持；边界 pulse + reverse 镜像；Lazy 适配 |
 
 生产代码 `.draw()` 匿名闭包清零验证：`grep -rn "\.draw(" winia/src` 残留仅
 测试双路对照（7 处，故意保留）+ `sw.draw`（skiwin 后端）/ `paragraph.draw`
