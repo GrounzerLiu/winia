@@ -209,10 +209,11 @@ impl crate::modifier::DrawNode for ScrollbarNode {
 // ── 共享 build 逻辑（P2-7：垂直/水平两套 build 逐行重复，修 bug 漏改——
 // 横向 viewport peek→get 漏改首屏不显示即实测案例。故抽公共函数：
 // remember 顺序固定（调用序即槽位序）：hover_src → last_scroll → last_pulse →
-// fade_state → effect（单槽位）→ viewport_state → grab_offset——三组件
-// （Vertical/Horizontal/Lazy）同调同一函数，同序无槽位漂移。
-// `LazyScrollbar::build` 在调共享函数前多一个 `scrolling_state` remember，
-// 但各组件 scope 不同（`#[composable]` 源码哈希隔离），槽位互不干扰。
+// fade_state → effect（单槽位）→ viewport_state → grab_offset——四组件
+// （Vertical/Horizontal/Lazy/HorizontalLazy）同调同一函数，同序无槽位漂移。
+// `LazyScrollbar`/`HorizontalLazyScrollbar::build` 在调共享函数前多一个
+// `scrolling_state` remember，但各组件 scope 不同（`#[composable]` 源码哈希
+// 隔离），槽位互不干扰。
 // 轴差异由 ScrollbarAxis 参数化（4 处）：尺寸元素、
 // on_size_changed 轴、drag 本地坐标轴、ScrollbarNode.vertical。
 /// 滚动条轴（垂直/水平 build 差异的全部参数化）。
@@ -495,7 +496,10 @@ fn scrollbar_build_shared(
 // 用法：
 // ```ignore
 // let list_state = ctx.remember(|| LazyListState::new()).get();
-// LazyColumn::new().state(list_state.clone()).build(ctx, content);
+// LazyColumn::new()
+//     .state(list_state.clone())
+//     .items_plain(50, content)
+//     .build(ctx);
 // LazyScrollbar::new(list_state).build(ctx);
 // ```
 /// Lazy 列表滚动条（垂直，对标 CMP `VerticalScrollbar` + LazyListState 适配）。
@@ -582,7 +586,10 @@ impl LazyScrollbar {
 /// 用法：
 /// ```ignore
 /// let list_state = ctx.remember(|| LazyListState::new()).get();
-/// LazyRow::new().state(list_state.clone()).build(ctx, content);
+/// LazyRow::new()
+///     .state(list_state.clone())
+///     .items_plain(30, content)
+///     .build(ctx);
 /// HorizontalLazyScrollbar::new(list_state).build(ctx);
 /// ```
 pub struct HorizontalLazyScrollbar {
@@ -663,8 +670,10 @@ impl HorizontalLazyScrollbar {
 /// 用法：与滚动容器并排等高（Row 内），`ScrollState` 共享。
 /// ```ignore
 /// Row::new().build(ctx, |ctx| {
-///     Column::new().modifier(Modifier::new().fill_max_height().weight(1.0)
-///         .vertical_scroll(scroll.clone())).build(ctx, content);
+///     Column::new().modifier(Modifier::new().fill_max_height().layout_weight(1.0)
+///         .vertical_scroll(scroll.clone()))
+///         .items_plain(30, content)
+///         .build(ctx);
 ///     VerticalScrollbar::new(scroll.clone()).build(ctx);
 /// });
 /// ```
@@ -1240,11 +1249,110 @@ mod tests {
         let root = composer.layout_root_idx().expect("root");
         let key1 = scrollbar_key(composer.arena_nodes(), root)
             .expect("viewport 回写后应有水平懒条节点");
-        assert!(key1.contains(":false:"), "水平条 vertical=false，key1={key1}");
+        assert!(key1.starts_with("draw:scrollbar:false:"), "水平条 vertical=false，key1={key1}");
         list_state.offset.set(300.0);
         build(&mut composer);
         let key2 = scrollbar_key(composer.arena_nodes(), root).expect("滚动后仍在");
         assert_ne!(key1, key2, "offset 变化后 thumb key 应跟随（key1={key1} key2={key2}）");
         assert!(key2.ends_with(":true"), "常显模式 key 末尾 has_thumb=true，key2={key2}");
+    }
+
+    /// P1-1（第三轮 review 锁定）：反向 LazyRow + HorizontalLazyScrollbar
+    /// (reverse=Some(true))，offset=0 时 thumb 应在末端（与正向 offset=max
+    /// 同 key）；不传 reverse 则反向。先验框架侧：`node.rs` 水平分支须认领
+    /// `is_lazy_scroll_reverse`（否则 render 无镜像，条与内容反走）。
+    #[test]
+    fn horizontal_lazy_reverse_mirror() {
+        use crate::core::composer::Composer;
+        use crate::layout::Constraints;
+        use crate::ui::lazy_column::LazyListState;
+        use crate::ui::theme::{ThemeColors, WiniaTheme};
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _guard = rt.enter();
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        #[allow(clippy::too_many_arguments)]
+        fn build_hlazy(
+            composer: &mut Composer,
+            theme: &ThemeColors,
+            list_state: &LazyListState,
+            reverse_list: bool,
+            reverse_bar: bool,
+        ) {
+            composer.compose(|ctx| {
+                WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    crate::ui::layout_components::Column::new().build(ctx, |ctx| {
+                        let mut row = crate::ui::lazy_column::LazyRow::new()
+                            .state(list_state.clone());
+                        if reverse_list {
+                            row = row.reverse_layout(true);
+                        }
+                        row.modifier(Modifier::new().fill_max_width().layout_weight(1.0))
+                            .items_plain(20, |ctx, _i| {
+                                let k = ctx.next_key();
+                                ctx.start_leaf(k, Modifier::new().size(80.0, 60.0));
+                                ctx.end_node();
+                            })
+                            .build(ctx);
+                        let bar = HorizontalLazyScrollbar::new(list_state.clone())
+                            .always_show(true);
+                        let bar = if reverse_bar {
+                            bar.scroll_reverse(Some(true))
+                        } else {
+                            bar
+                        };
+                        bar.build(ctx);
+                    });
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 200.0));
+        }
+        fn scrollbar_key(nodes: &[crate::layout::LayoutNode], idx: usize) -> Option<String> {
+            let m = &nodes[idx].modifier;
+            for n in m.modifier_nodes() {
+                let key = crate::modifier::node_key_of(n);
+                if key.starts_with("draw:scrollbar:") {
+                    return Some(key);
+                }
+            }
+            for &c in &nodes[idx].children {
+                if let Some(k) = scrollbar_key(nodes, c) { return Some(k); }
+            }
+            None
+        }
+        // 框架侧先验：反向 LazyRow 节点须标记 scroll_reverse（render 镜像前提）。
+        let probe_state = LazyListState::new();
+        let mut probe = Composer::new();
+        build_hlazy(&mut probe, &theme, &probe_state, true, true);
+        build_hlazy(&mut probe, &theme, &probe_state, true, true);
+        let probe_root = probe.layout_root_idx().expect("root");
+        let rev_flag = probe.arena_nodes().iter().any(|n| {
+            n.modifier.horizontal_scroll_state().is_some() && n.scroll_reverse
+        });
+        assert!(rev_flag, "反向 LazyRow 应标记 scroll_reverse（node.rs 水平分支）");
+        // reverse + 镜像：offset=0 → visual=max → thumb 在末端。
+        let list_state = LazyListState::new();
+        let mut composer = Composer::new();
+        build_hlazy(&mut composer, &theme, &list_state, true, true);
+        build_hlazy(&mut composer, &theme, &list_state, true, true);
+        let root = composer.layout_root_idx().expect("root");
+        let key_rev0 = scrollbar_key(composer.arena_nodes(), root).expect("reverse 条应存在");
+        // 正向 offset=max → thumb 在末端：与 reverse offset=0 同 key。
+        let list_state2 = LazyListState::new();
+        let mut composer2 = Composer::new();
+        build_hlazy(&mut composer2, &theme, &list_state2, false, false);
+        build_hlazy(&mut composer2, &theme, &list_state2, false, false);
+        list_state2.offset.set(list_state2.fling_limit.get());
+        build_hlazy(&mut composer2, &theme, &list_state2, false, false);
+        let root2 = composer2.layout_root_idx().expect("root");
+        let key_fwd_max = scrollbar_key(composer2.arena_nodes(), root2).expect("正向条应存在");
+        assert_eq!(key_rev0, key_fwd_max, "reverse offset=0 应与正向 offset=max 同几何");
+        // 不传 reverse：offset=0 → thumb 在顶（反向错误复现）。
+        let list_state3 = LazyListState::new();
+        let mut composer3 = Composer::new();
+        build_hlazy(&mut composer3, &theme, &list_state3, true, false);
+        build_hlazy(&mut composer3, &theme, &list_state3, true, false);
+        let root3 = composer3.layout_root_idx().expect("root");
+        let key_nobar = scrollbar_key(composer3.arena_nodes(), root3).expect("条应存在");
+        assert_ne!(key_nobar, key_rev0, "不传 reverse 应与镜像位不同（反向错误复现）");
     }
 }

@@ -169,6 +169,7 @@ fn scrollbar_demo_ui(ctx: &mut ComposeCtx) {
                 .modifier(
                     Modifier::new()
                         .fill_max_width()
+                        .height(76.0)
                         .background(
                             Color::from_argb(20, 150, 100, 50),
                             Shape::rounded(8.0),

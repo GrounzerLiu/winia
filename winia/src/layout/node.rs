@@ -1523,8 +1523,12 @@ pub(crate) fn measure_node(
         }
         // 保存 viewport 宽度供滚动 clamping 使用
         nodes[idx].scroll_viewport_width = viewport_width;
-        // 水平反向滚动（RTL：render 平移镜像——offset 0 显示内容末端，对齐垂直 reverseLayout）
-        nodes[idx].scroll_reverse = nodes[idx].modifier.is_horizontal_scroll_reverse();
+        // 水平反向滚动（RTL：render 平移镜像——offset 0 显示内容末端，对齐垂直 reverseLayout；
+        // LazyRow 的 reverse_layout 打 lazy_scroll_reverse 标记（与垂直同构），
+        // 此处同样认领——否则水平反向有 placement 镜像、无 render 镜像，
+        // offset 两端语义不一致。非懒水平容器无 LazyScroll 元素，|| 安全。
+        nodes[idx].scroll_reverse = nodes[idx].modifier.is_horizontal_scroll_reverse()
+            || nodes[idx].modifier.is_lazy_scroll_reverse();
         // lazy 横向列表：内容总宽 State → 节点字段（与垂直同语义）
         if let Some(cw) = nodes[idx].modifier.lazy_scroll_content_height() {
             nodes[idx].scroll_content_width = cw.get();

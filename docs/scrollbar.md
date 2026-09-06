@@ -1,12 +1,14 @@
 # Scrollbar 滚动条（桌面 CMP 对齐）
 
 > 状态：已合入 `v2`（`5d589f8` 大合并 + grab `237a8ac` + followup `081de0d` +
-> lazy-pulse `3d7827c` + lazy-scrollbar `0061b81`）
+> lazy-pulse `3d7827c` + lazy-scrollbar `0061b81` + review2 `91702bd`；
+> 本分支 `exp/horizontal-lazy-scrollbar` 待合入：`HorizontalLazyScrollbar` +
+> 水平反向链路修复 + review2 延后项）
 > 对标：Compose Multiplatform 桌面 `VerticalScrollbar` / `HorizontalScrollbar`
 > + M3 `Modifier.nonInteractiveScrollbar`（`Scrollbar.kt`，2026 androidx-main，
 > 浏览器取证；几何公式同社区 gist `drawScrollbar`）
-> 实现：`winia/src/ui/scrollbar.rs`（`ScrollbarNode` + 三组件）；
-> demo：`winia/examples/scrollbar_demo.rs`（垂直拖 thumb + 常显开关 + 水平条 + Lazy 列）。
+> 实现：`winia/src/ui/scrollbar.rs`（`ScrollbarNode` + 四组件）；
+> demo：`winia/examples/scrollbar_demo.rs`（垂直拖 thumb + 常显开关 + 水平条 + Lazy 列/行）。
 
 ## 1. API
 
