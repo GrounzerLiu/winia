@@ -160,7 +160,8 @@ Modifier::new().size(48.0, 48.0).draw_node(MyBadge { color })
    `draw_after` receives `&Modifier` so shape inference (nearest Background/Border,
    same logic as `draw_ripple`) works unchanged. Verified by 4 pixel tests
    (`wrap_before_paints_at_background_layer` / `wrap_after_covers_background_layer` /
-   `wrap_after_covers_child_text` / `wrap_node_key_drives_skip`).
+   `wrap_after_covers_child_text` / `wrap_after_covers_enum_ripple` incl. counter-proof
+   without wrap) + 1 Skip key test (`wrap_node_key_drives_skip`).
    - Ripple migration: **still deferred, deliberately**. The mechanism is proven, but
      Ripple runs fine as an enum and migration buys zero user-visible change for
      1–2 days of load-bearing-wall work. Revisit when Ripple needs new semantics

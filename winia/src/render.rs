@@ -842,7 +842,7 @@ fn render_pass1(
     }
     // Wrapping draw nodes, before half (exp/draw-wrap-node): same background-layer
     // slot as DrawNode. The after half runs after children + ripple (see below).
-    for wrap_node in node.modifier.wrap_nodes() {
+    for wrap_node in node.modifier.draw_wrap_nodes() {
         wrap_node.draw_before(canvas, rect, &node.modifier);
     }
 
@@ -1076,7 +1076,7 @@ fn render_pass1(
     // above ripple, inside the scroll translate (same stack as ripple — the node
     // follows scrolled content). This is the slot a future RippleNode migration
     // would use; the enum Ripple path stays untouched.
-    for wrap_node in node.modifier.wrap_nodes() {
+    for wrap_node in node.modifier.draw_wrap_nodes() {
         wrap_node.draw_after(canvas, rect, &node.modifier);
     }
 

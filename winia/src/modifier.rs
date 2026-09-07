@@ -843,7 +843,7 @@ impl Modifier {
 
     /// Open wrapping-draw-node iteration (render pipeline — before at the background
     /// layer, after above content).
-    pub(crate) fn wrap_nodes(&self) -> impl Iterator<Item = &std::sync::Arc<dyn DrawWrapNode>> {
+    pub(crate) fn draw_wrap_nodes(&self) -> impl Iterator<Item = &std::sync::Arc<dyn DrawWrapNode>> {
         self.nodes.iter().filter_map(|n| match n {
             ModifierNode::DrawWrap(w) => Some(w),
             _ => None,
@@ -3720,6 +3720,118 @@ mod node_track_tests {
             node_key_of(&Modifier::new().draw_wrap_node(TestWrapNode { before: red, after: blue }).modifier_nodes()[0]),
             format!("draw_wrap:testwrap:{:?}:{:?}", red, blue),
             "debug/tree key prefix"
+        );
+    }
+
+    #[test]
+    fn wrap_after_covers_enum_ripple() {
+        // Proves the after slot sits above the enum Ripple path (the exact position a
+        // future RippleNode migration needs): enum ripple pressed to mid-expand, after
+        // paints an opaque bar over the press point. The press pixel must show the bar
+        // color, not the ripple color.
+        use crate::core::composer::Composer;
+        use crate::ui::interaction::MutableInteractionSource;
+        use skia_safe::surfaces;
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let source = MutableInteractionSource::new();
+        let ripple_color = Color::from_argb(255, 200, 30, 30);
+        let bar_color = Color::from_argb(255, 30, 200, 30);
+        #[derive(Debug)]
+        struct AfterBar {
+            color: Color,
+        }
+        impl DrawWrapNode for AfterBar {
+            fn draw_after(
+                &self,
+                canvas: &skia_safe::Canvas,
+                rect: skia_safe::Rect,
+                _modifier: &Modifier,
+            ) {
+                // Opaque bar over the press point (30, 20).
+                let bar = skia_safe::Rect::new(20.0, 10.0, 40.0, 30.0);
+                let _ = rect;
+                crate::render::draw_background_for_node(canvas, bar, &self.color, &Shape::Rectangle);
+            }
+            fn node_key(&self) -> String {
+                format!("afterbar:{:?}", self.color)
+            }
+        }
+        let src = source.clone();
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            let key = ctx.next_key();
+            ctx.start_leaf(
+                key,
+                Modifier::new()
+                    .size(60.0, 40.0)
+                    .background(Color::WHITE, Shape::Rectangle)
+                    .ripple(&src, ripple_color, true)
+                    .draw_wrap_node(AfterBar { color: bar_color }),
+            );
+            ctx.end_node();
+        });
+        // Press at (30, 20), then force mid-expand so the ripple surely paints
+        // (fresh push_animatable only runs its first update — radius ~0).
+        source.emit_press_at((30.0, 20.0));
+        source.ripple_layers()[0].progress.set(0.5);
+        composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let mut surface = surfaces::raster_n32_premul((300, 300)).unwrap();
+        let canvas = surface.canvas();
+        canvas.clear(skia_safe::Color::WHITE);
+        let root = composer.layout_root_idx().expect("root");
+        let nodes = composer.arena_nodes();
+        crate::render::render(nodes, root, canvas);
+        crate::animation::clear_all_animations();
+        let pm = surface.peek_pixels().expect("pixmap");
+        let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+        let w = pm.width() as usize;
+        let p = px[20 * w + 30];
+        assert!(
+            (p[1] as i16 - 200).abs() <= 8
+                && (p[2] as i16 - 30).abs() <= 8
+                && (p[0] as i16 - 30).abs() <= 8,
+            "after bar must cover the enum ripple at press point (green), got BGRA={:?}",
+            p
+        );
+        // Counter-proof (no false positive): same tree without the wrap node must show
+        // the ripple color at the press point — i.e. the ripple really paints there,
+        // so the green above genuinely covers it rather than covering nothing.
+        crate::animation::clear_all_animations();
+        let source2 = MutableInteractionSource::new();
+        let src2 = source2.clone();
+        let mut composer2 = Composer::new();
+        composer2.compose(|ctx| {
+            let key = ctx.next_key();
+            ctx.start_leaf(
+                key,
+                Modifier::new()
+                    .size(60.0, 40.0)
+                    .background(Color::WHITE, Shape::Rectangle)
+                    .ripple(&src2, ripple_color, true),
+            );
+            ctx.end_node();
+        });
+        source2.emit_press_at((30.0, 20.0));
+        source2.ripple_layers()[0].progress.set(0.5);
+        composer2.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let mut surface2 = surfaces::raster_n32_premul((300, 300)).unwrap();
+        let canvas2 = surface2.canvas();
+        canvas2.clear(skia_safe::Color::WHITE);
+        let root2 = composer2.layout_root_idx().expect("root");
+        let nodes2 = composer2.arena_nodes();
+        crate::render::render(nodes2, root2, canvas2);
+        crate::animation::clear_all_animations();
+        let pm2 = surface2.peek_pixels().expect("pixmap");
+        let px2: &[[u8; 4]] = pm2.pixels::<[u8; 4]>().expect("pixels");
+        let q = px2[20 * w + 30];
+        // Ripple red (200,30,30) at 0.10 opacity over white: R ≈ 200*0.1+255*0.9 = 249,
+        // G/B ≈ 30*0.1+255*0.9 = 232. Assert reddish tint, distinct from both white
+        // and the green bar.
+        assert!(
+            q[2] > q[1] + 5 && q[2] > q[0] + 5,
+            "counter-proof: ripple must paint reddish at press point without wrap, got BGRA={:?}",
+            q
         );
     }
 
