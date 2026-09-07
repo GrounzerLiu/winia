@@ -153,19 +153,19 @@ Modifier::new().size(48.0, 48.0).draw_node(MyBadge { color })
    与枚举 Background color_fn 完全一致）——状态驱动靠 build 期 `get` 注册
    compose/layout 依赖 + 绘制期 `peek` 求值（实测 `node_track_stateful_draw_follows_state`）。
    想在 node 里 `get` 注册是误解，不要开这个口子。
-3. ~~无顺序语义~~ → ✅ 结论：**保持现状，不做包裹**。node 统一背景层绘制。
-   `drawWithContent` 式包裹需拆 render_pass1 流水线（背景→文本→子→波纹）为
-   两阶段或闭包嵌套，重构面大而真实需求未被倒逼（现有全是单向绘制）。
-   需要时再加 `DrawWrapNode`，现在加是过度设计。
-   - 首个候选场景：Ripple（2026-09-04 论证，结论**不迁**）。Ripple 是唯一的
-     "内容之上型"绘制（`render.rs:1067-1068`，子节点之后；DrawNode 统一画在
-     枚举背景层、子节点之前）——照搬即变 z-order。且 `draw_ripple` 从整条
-     Modifier 链反查 shape（`render.rs:1105-1114`，Background/Border 推断），
-     node 手里无链，迁则要求各调用点（Button/Card/Chip/ListItem/IconButton…）
-     自算 shape 传入，改动面铺开。迁移三问答案：(a) 动画值本就不进 param_eq，
-     好答；(b) 层位卡死，需 DrawWrapNode/层位开关先行；(c) shape 反查需搬家。
-     迁 Ripple = 先造层位机制，风险收益比不对；且无第三方自定义 indication
-     的真实需求。何时重议：DrawWrapNode 落地后，或有自定义 indication 需求时。
+3. ~~No ordering semantics~~ → ✅ Partially resolved: **DrawWrapNode landed**
+   (`exp/draw-wrap-node`, v2 2026-09). `DrawWrapNode` trait with `draw_before`
+   (background layer, same slot as DrawNode) + `draw_after` (above children and
+   above ripple, inside the scroll translate — same stack as ripple).
+   `draw_after` receives `&Modifier` so shape inference (nearest Background/Border,
+   same logic as `draw_ripple`) works unchanged. Verified by 4 pixel tests
+   (`wrap_before_paints_at_background_layer` / `wrap_after_covers_background_layer` /
+   `wrap_after_covers_child_text` / `wrap_node_key_drives_skip`).
+   - Ripple migration: **still deferred, deliberately**. The mechanism is proven, but
+     Ripple runs fine as an enum and migration buys zero user-visible change for
+     1–2 days of load-bearing-wall work. Revisit when Ripple needs new semantics
+     (e.g. new M3 ripple spec) or a real third-party indication demand appears —
+     same "build when forced" rule that shelved LayoutNode-B.
 4. **trait object 开销**：每节点多一次 vtable + Arc。热路径（measure）A 型 node
    仅多一次 transform 调用（MinWidth 级别，开销可忽略）；绘制/输入路径可接受；
    大规模列表待实测（未测，不要断言）。

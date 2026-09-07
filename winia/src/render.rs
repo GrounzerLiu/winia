@@ -833,12 +833,17 @@ fn render_pass1(
         }
     }
 
-    // 开放绘制节点（exp/modifier-node）：枚举链走完后走 node 链（与文档一致，
-    // P1-1 修复：此前 node 在枚举前，混用 background+draw_node 即被枚举盖住）。
-    // ⚠ 链序未保留：node 统一在枚举全部绘制（含图标/图片）之后、文本之前——
-    // 与 Background 同层是近似语义；需精确链序等 DrawWrapNode（文档 §四.3）。
+    // Open draw nodes (exp/modifier-node): node chain runs after the enum chain
+    // (P1-1 fix — nodes used to run before enums and were covered by them).
+    // NOTE: chain order is not preserved — nodes paint uniformly after all enum
+    // draws (incl. icon/image), before text. Background-layer approximation.
     for draw_node in node.modifier.draw_nodes() {
         draw_node.draw(canvas, rect);
+    }
+    // Wrapping draw nodes, before half (exp/draw-wrap-node): same background-layer
+    // slot as DrawNode. The after half runs after children + ripple (see below).
+    for wrap_node in node.modifier.wrap_nodes() {
+        wrap_node.draw_before(canvas, rect, &node.modifier);
     }
 
     // 内容模糊：saveLayer
@@ -1064,8 +1069,16 @@ fn render_pass1(
         render_pass1(nodes, root_idx, child, canvas, x, y);
     }
 
-    // 水波纹（indication ripple）——覆盖内容之上、受 shape/scroll 裁剪
+    // Ripple indication — above content, inside shape/scroll clipping
     draw_ripple(node, canvas, x, y, w, h);
+
+    // Wrapping draw nodes, after half (exp/draw-wrap-node): above children and
+    // above ripple, inside the scroll translate (same stack as ripple — the node
+    // follows scrolled content). This is the slot a future RippleNode migration
+    // would use; the enum Ripple path stays untouched.
+    for wrap_node in node.modifier.wrap_nodes() {
+        wrap_node.draw_after(canvas, rect, &node.modifier);
+    }
 
     if scrolled {
         canvas.restore();
