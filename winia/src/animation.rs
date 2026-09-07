@@ -940,6 +940,32 @@ impl<T: Clone + PartialEq + 'static> Transition<T> {
     ) -> State<crate::unit::Offset> {
         self.animate(ctx, target_fn, label)
     }
+
+    /// animateValue — generic value animation (cf. Compose `TransitionScope.animateValue`).
+    /// Same machinery as the typed variants above; any `AnimatableValue` works
+    /// (f32/i32/Color/Dp/Offset/Size; vector Spring auto-downgrades to Tween).
+    pub fn animate_value<U: crate::animation::AnimatableValue + Send + Sync + 'static>(
+        &mut self,
+        ctx: &mut ComposeCtx,
+        target_fn: impl Fn(&T) -> U,
+        label: &'static str,
+    ) -> State<U> {
+        self.animate(ctx, target_fn, label)
+    }
+
+    /// createChildTransition — derived transition following this one
+    /// (cf. Compose `Transition.createChildTransition(transformToChildState)`).
+    ///
+    /// The child maps the parent target to its own target type on every call, so it
+    /// follows parent changes with the same spec. Label is inherited (labels are
+    /// `&'static str` — no runtime string building; Compose synthesizes
+    /// "child of <parent>" labels, we keep the parent's).
+    pub fn create_child_transition<U: Clone + PartialEq + 'static>(
+        &self,
+        map: impl Fn(&T) -> U,
+    ) -> Transition<U> {
+        Transition { target: map(&self.target), spec: self.spec.clone(), label: self.label }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -2111,6 +2137,63 @@ mod repeated_tests {
             captured = Some(s);
         });
         assert_eq!(captured.unwrap().peek(), 6.0, "target_fn 映射应立即生效（同值跳过动画）");
+    }
+
+    #[test]
+    fn transition_animate_value_named_wrapper() {
+        // animate_value is the Compose-named twin of the generic animate<U>.
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let mut composer = crate::core::composer::Composer::new();
+        let mut captured = None;
+        composer.compose(|ctx| {
+            let mut t = ctx.update_transition(10i32, AnimationSpec::Tween(TweenSpec::default()), "t");
+            let s = t.animate_value(ctx, |v| *v + 5, "v");
+            captured = Some(s);
+        });
+        assert_eq!(captured.unwrap().peek(), 15, "animate_value maps target_fn immediately");
+        crate::animation::clear_all_animations();
+    }
+
+    #[test]
+    fn transition_child_follows_parent_target() {
+        // create_child_transition: child target derives from parent target on every
+        // call — flip the parent, the child re-maps and animates to the new value.
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let mut composer = crate::core::composer::Composer::new();
+        let parent = crate::core::state::State::new(1i32);
+        let child_val = std::cell::RefCell::new(None);
+        let build = |composer: &mut crate::core::composer::Composer,
+                     child_val: &std::cell::RefCell<
+            Option<crate::core::state::State<f32>>,
+        >| {
+            let p = parent.clone();
+            composer.compose(|ctx| {
+                let t = ctx.update_transition(p.get(), AnimationSpec::Tween(TweenSpec::default()), "p");
+                let child = t.create_child_transition(|v| *v * 100);
+                let mut child = child;
+                let s = child.animate_float(ctx, |v| *v as f32, "c");
+                *child_val.borrow_mut() = Some(s.clone());
+            });
+            composer.layout(crate::layout::constraints::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        build(&mut composer, &child_val);
+        assert_eq!(child_val.borrow().clone().unwrap().peek(), 100.0, "child maps parent 1 → 100");
+        // Flip parent 1 → 2: child target becomes 200 and animates there.
+        parent.set(2);
+        build(&mut composer, &child_val);
+        for _ in 0..10 {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            build(&mut composer, &child_val);
+        }
+        let v = child_val.borrow().clone().unwrap().peek();
+        assert!(
+            (v - 200.0).abs() < 5.0,
+            "child should converge 100 → 200 after parent flip, got {v}"
+        );
+        crate::animation::clear_all_animations();
     }
 }
 

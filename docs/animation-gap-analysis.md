@@ -142,8 +142,19 @@
 ## 三、实现/优化清单（按优先级）
 
 ### P0 — 常用体验（先做）
-1. **`AnimatedVisibility`**：enter/exit 过渡（fade/slide/expand/shrink + togetherWith 组合）——**布局层动画正路**（layout_deps 测量期读动画值，无 force_remeasure 旁路）；退出动画期间子树保留（exit 完成才移除）
-2. **`Transition` 补全**：`animate_color`/`animate_dp`/`animate_size`/`animate_offset`/`animate_value` + `label`
+1. **`AnimatedVisibility`** ✅ parameters aligned + horizontal expand
+   (`exp/animated-visibility`, v2 2026-09): SlideOffset Fixed(48 default)/Fraction
+   (Compose initialOffsetX), ExpandFrom Top/Bottom + ExpandFromH Start/End anchors
+   (no RTL mirroring, backlog), scale_from/transform_origin (Compose scaleIn),
+   expand_in_h/shrink_out_h; clip-to-bounds when expanding (unclipped overflow read
+   as flash), anchors latched at animation start, clip/expand follow active direction.
+2. **`Transition` 补全** ✅ `exp/transition-complete` (v2 2026-09):
+   `animate_float/color/dp/size/offset` + generic `animate<U>` + named
+   `animate_value<U>` wrapper + `create_child_transition(map)` (child target derived
+   from parent target each call, same spec, label inherited — labels are `&'static str`);
+   `label` was already present on `update_transition`/each animate. Tests:
+   `transition_animate_value_named_wrapper` / `transition_child_follows_parent_target`
+   (parent 1→2 flip, child converges 100→200).
 3. **`animate_int_as_state` / `animate_value_as_state`**（泛型 AnimatableValue——低成本，机制已有）✅ 本分支
    - `animate_int_as_state(ctx, target, spec) -> State<i32>`（对标 Compose animateIntAsState——remember 保存动画 State + 每次调用比较 target，变化即 push_animatable；i32 lerp 四舍五入逐级跳变）
    - `animate_value_as_state<T: AnimatableValue>(ctx, target, spec) -> State<T>`（泛型——f32/i32/Color 等；向量类型 Spring 自动降级）
