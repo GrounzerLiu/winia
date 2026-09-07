@@ -15,12 +15,17 @@
 //! - 无 suspend/协程——动画用 `push_animatable`（tween）/`push_fling_with_boundary`
 //!   （decay）驱动，非挂起
 //! - 拖拽结束无原生 velocity——`DragOnMove` 提供 delta，状态内部用
-//!   `(最近 delta, 时间戳)` 估算末速度
+//!   `(最近 delta, 时间戳)` 估算末速度；超 100ms 未动的样本过期为 0
+//!   （`last_velocity` hold-still expiry，对标 VelocityTracker 样本 horizon）
 //! - `confirm_value_change` 同步回调（无挂起确认）
 
 use std::collections::BTreeMap;
 use std::time::Instant;
 use crate::core::state::State;
+
+/// Velocity sample horizon (ms): drag deltas older than this are treated as
+/// hold-still (velocity 0) — cf. Compose VelocityTracker horizon (~100ms).
+const VELOCITY_EXPIRY_MS: u128 = 100;
 
 // ═══════════════ DraggableAnchors ═══════════════
 
@@ -431,9 +436,15 @@ impl<T: Clone + PartialEq + Eq + Ord + 'static> AnchoredDraggableState<T> {
         );
     }
 
-    /// 取末速度（px/s）
+    /// Last fling velocity (px/s) with hold-still expiry: returns 0 when the finger
+    /// has not moved for longer than [`VELOCITY_EXPIRY_MS`]. Without expiry a stale
+    /// velocity (e.g. drag halfway, hold 1s, release) would fling the sheet to a far
+    /// anchor on release — Compose's VelocityTracker drops old samples the same way.
     pub fn last_velocity(&self) -> f32 {
-        self.last_velocity.get()
+        match self.last_drag.peek() {
+            Some((t, _)) if t.elapsed().as_millis() > VELOCITY_EXPIRY_MS => 0.0,
+            _ => self.last_velocity.get(),
+        }
     }
 
     /// 是否动画进行中（offset 有动画）
@@ -570,5 +581,33 @@ mod tests {
         assert_eq!(t, V::B); // settle 计算的目标是 B
         assert_eq!(s.settled_value(), V::A); // 回滚到 A
         assert_eq!(s.current_value(), V::A);
+    }
+
+    #[test]
+    fn stale_drag_velocity_expires_to_zero() {
+        // Bug: drag halfway, hold still, release — the release must NOT fling on the
+        // stale velocity. last_velocity() expires samples older than 100ms.
+        let s = AnchoredDraggableState::new(V::A);
+        s.update_anchors(anchors());
+        s.drag_delta(60.0); // fast move → nonzero tracked velocity
+        assert!(s.last_velocity().abs() > 0.0, "fresh drag has velocity");
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        assert_eq!(
+            s.last_velocity(),
+            0.0,
+            "velocity must expire after hold-still past the horizon"
+        );
+    }
+
+    #[test]
+    fn settle_after_hold_still_uses_position() {
+        // End-to-end of the expiry: drag toward B, hold, release → positional settle
+        // (closest anchor), NOT a velocity fling along the stale direction.
+        let s = AnchoredDraggableState::new(V::A);
+        s.update_anchors(anchors());
+        s.drag_delta(40.0); // 40: closest A (dist 40 vs B dist 60)
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        let t = s.settle_with_velocity(s.last_velocity(), None);
+        assert_eq!(t, V::A, "expired velocity → positional settle to closest anchor");
     }
 }
