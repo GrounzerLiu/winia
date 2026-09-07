@@ -51,6 +51,7 @@ pub mod navigation_rail;
 pub mod tab_row;
 pub mod navigation_suite;
 pub mod short_navigation_bar;
+pub mod search_bar;
 
 pub use animated_visibility::{
     AnimatedVisibility, ExpandFrom, ExpandFromH, SlideDirection, SlideOffset, VisibilityTransition,
@@ -171,3 +172,4 @@ pub use navigation_rail::{
     WIDE_RAIL_EXPANDED_MIN_WIDTH,
 };
 pub use tooltip::Tooltip;
+pub use search_bar::{SearchBar, SearchBarColors, SearchBarDefaults, SearchBarState, DockedSearchBar, SEARCH_ICON_PATH, BACK_ICON_PATH, SEARCH_BAR_HEIGHT};

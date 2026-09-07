@@ -142,6 +142,9 @@ pub(crate) struct PerWindow {
     pressed_interaction: Option<(u64, crate::ui::interaction::MutableInteractionSource)>,
     /// 已发射 Focus 的节点 slot（focus 变化时对旧节点补发 Unfocus）
     focused_interaction_slot: Option<u64>,
+    /// Overlay focus interaction target (overlay id, slot) — overlay inputs
+    /// report is_focused() only after emit_focus in their own arena.
+    overlay_focused_interaction: Option<(u64, u64)>,
 }
 
 /// 顶层弹出层实例——独立 Composer 组合单元（State 跨帧保持），
@@ -175,8 +178,16 @@ struct OverlayWindow {
     enter_anim: Option<crate::ui::overlay::OverlayAnimSpec>,
     /// 退出动画规格（None = 瞬时消失）
     exit_anim: Option<crate::ui::overlay::OverlayAnimSpec>,
-    /// 关闭中（退出动画播放中——动画完成前保留渲染；期间不响应交互）
+    /// Closing in progress (exit animation playing — kept rendered until done;
+    /// no interaction meanwhile)
     closing: bool,
+    /// Focused node id inside this overlay's own arena (overlay keyboards route
+    /// here — the main-tree focus path can never reach overlay nodes).
+    /// None = no focus in this overlay.
+    focused_id: Option<u64>,
+    /// Slot key of the focused node (stable across recompositions — focus is
+    /// restored by slot_key after layout, mirroring the main tree).
+    focused_slot_key: Option<u64>,
 }
 
 /// Compose 风格的 click 检测中间状态
@@ -192,14 +203,13 @@ struct PtrDownState {
 
 impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::ui::theme::ThemeColors) -> Self {
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, last_pointer_pos: None, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, drag_scroll: None, overlays: Vec::new(), overlay_click: None, overlay_drag: None, overlay_drag_started: false, overlay_drag_last: None, overlay_drag_scroll: None, pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, last_pointer_pos: None, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, drag_scroll: None, overlays: Vec::new(), overlay_click: None, overlay_drag: None, overlay_drag_started: false, overlay_drag_last: None, overlay_drag_scroll: None, pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None, overlay_focused_interaction: None }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
     /// 焦点同步：focused_slot_key 变化时，对旧焦点节点补发 Unfocus、
     /// 新焦点节点补发 Focus（布局后调用——焦点标志已随重组刷新）。
-    fn sync_focus_interaction(&mut self) {
-        let new_slot = self.focused_slot_key;
+    fn sync_focus_interaction(&mut self) {        let new_slot = self.focused_slot_key;
         if new_slot == self.focused_interaction_slot {
             return;
         }
@@ -223,6 +233,52 @@ impl PerWindow {
                         if let Some(src) = nodes[idx].modifier.focusable_interaction() {
                             src.emit_focus();
                             self.focused_interaction_slot = Some(new);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Overlay focus interaction sync (mirrors sync_focus_interaction against the
+    /// overlay arenas): without it, overlay inputs never report is_focused() —
+    /// no cursor, no blink, no focused colors. Tracks (overlay id, slot); called
+    /// after layout_overlays (slot resolution needs overlay layout done).
+    fn sync_overlay_focus_interaction(&mut self) {
+        let cur: Option<(u64, u64)> = (0..self.overlays.len()).rev().find_map(|i| {
+            let ov = &self.overlays[i];
+            if ov.closing {
+                return None;
+            }
+            ov.focused_slot_key.map(|s| (ov.id, s))
+        });
+        if cur == self.overlay_focused_interaction {
+            return;
+        }
+        if let Some((old_id, old_slot)) = self.overlay_focused_interaction.take() {
+            if let Some(ov) = self.overlays.iter().find(|o| o.id == old_id) {
+                let nodes = ov.composer.arena_nodes();
+                if let Some(r) = ov.composer.layout_root_idx() {
+                    if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, old_slot) {
+                        if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, nid) {
+                            if let Some(src) = nodes[idx].modifier.focusable_interaction() {
+                                src.emit_unfocus();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if let Some((id, slot)) = cur {
+            if let Some(ov) = self.overlays.iter().find(|o| o.id == id) {
+                let nodes = ov.composer.arena_nodes();
+                if let Some(r) = ov.composer.layout_root_idx() {
+                    if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot) {
+                        if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, nid) {
+                            if let Some(src) = nodes[idx].modifier.focusable_interaction() {
+                                src.emit_focus();
+                                self.overlay_focused_interaction = Some((id, slot));
+                            }
                         }
                     }
                 }
@@ -417,6 +473,8 @@ impl PerWindow {
         // 导致 overlay 消失但状态残留 → 下次点击 toggle 错乱（"点两次才开"）
         sync_overlays(self, any_composed);
         layout_overlays(self);
+        // Overlay focus interaction sync (needs overlay layout for slot resolve).
+        self.sync_overlay_focus_interaction();
 
         let bg = self.theme.background;
 
@@ -850,7 +908,24 @@ impl ApplicationHandler for AppState {
                 };
                 let mut consumed = false;
                 if event.state.is_pressed() && matches!(&event.logical_key, Key::Named(NamedKey::Escape)) {
-                    if pw.focused_id.is_some() {
+                    // Topmost overlay first (Compose back/dismiss semantics): Esc closes
+                    // Dialog/Popup via exit anim + on_dismiss (e.g. SearchBar active=false).
+                    // Overlay key dispatch only walks the main-tree focus path, so overlays
+                    // can never see Esc themselves — this is their only close path.
+                    // User request: Esc must also clear focus (lose focus) even when closing
+                    // an overlay, so focus does not remain on the collapsed field.
+                    if let Some(top) = pw.overlays.iter().rposition(|o| !o.closing).map(|i| pw.overlays[i].id) {
+                        begin_overlay_close(pw, top);
+                        if pw.focused_id.is_some() {
+                            if let Some(r) = pw.composer.layout_root_idx() {
+                                crate::layout::node::clear_focus(pw.composer.arena_nodes_mut(), r);
+                            }
+                            pw.focused_id = None;
+                            pw.focused_slot_key = None;
+                            pw.apply_ime_for_focus(None);
+                        }
+                        consumed = true;
+                    } else if pw.focused_id.is_some() {
                         if let Some(r) = pw.composer.layout_root_idx() {
                             crate::layout::node::clear_focus(pw.composer.arena_nodes_mut(), r);
                         }
@@ -875,6 +950,9 @@ impl ApplicationHandler for AppState {
                     // Tab 聚焦文本组件时同步开启输入法（与方向键/点击路径一致）
                     pw.apply_ime_for_focus(new_id);
                     consumed = true;
+                }
+                if !consumed {
+                    consumed = dispatch_key_to_overlay(pw, &ke);
                 }
                 if !consumed {
                     consumed = dispatch_key_to_focus(pw, &ke);
@@ -904,11 +982,27 @@ impl ApplicationHandler for AppState {
                 use winit::event::Ime;
                 match ime {
                     Ime::Preedit(text, cursor) => {
-                        // 通过 focused node 的 ime_callback 通知 TextField。
+                        // Focused overlay first (independent composer — main-tree
+                        // lookup can never reach overlay nodes), then main tree.
                         // ⚠ TextField 容器化：焦点在容器、ime_callback 在输入 leaf——
                         // 只查焦点节点自身则 Preedit 永远到不了（预输入不显示）。
                         // 从焦点节点向下找第一个 ime_callback。
-                        if let Some(fid) = pw.focused_id {
+                        let overlay_target: Option<(usize, usize)> = (0..pw.overlays.len()).rev().find_map(|i| {
+                            let ov = &pw.overlays[i];
+                            if ov.closing { return None; }
+                            let fid = ov.focused_id?;
+                            let nodes = ov.composer.arena_nodes();
+                            let r = ov.composer.layout_root_idx()?;
+                            let idx = crate::layout::node::find_node_by_id(nodes, r, fid)?;
+                            let ime_idx = find_descendant_ime_callback(nodes, idx)?;
+                            Some((i, ime_idx))
+                        });
+                        if let Some((i, ime_idx)) = overlay_target {
+                            let nodes = pw.overlays[i].composer.arena_nodes();
+                            if let Some(cb) = nodes[ime_idx].ime_callback.borrow_mut().as_mut() {
+                                cb(&text, cursor);
+                            }
+                        } else if let Some(fid) = pw.focused_id {
                             let nodes = pw.composer.arena_nodes();
                             if let Some(r) = pw.composer.layout_root_idx() {
                                 if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, fid) {
@@ -923,8 +1017,57 @@ impl ApplicationHandler for AppState {
                         if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                     }
                     Ime::Commit(text) => {
-                        // IME 提交文本——派发给聚焦节点的 on_key_event 以 Character 形式
-                        if let Some(fid) = pw.focused_id {
+                        // IME 提交文本——派发给聚焦节点的 on_key_event 以 Character 形式.
+                        // Focused overlay first, then main tree (same routing rule).
+                        let overlay_target: Option<usize> = (0..pw.overlays.len()).rev().find(|&i| {
+                            let ov = &pw.overlays[i];
+                            if ov.closing { return false; }
+                            ov.focused_id.and_then(|fid| {
+                                ov.composer.layout_root_idx().and_then(|r| {
+                                    crate::layout::node::find_node_by_id(ov.composer.arena_nodes(), r, fid)
+                                })
+                            }).is_some()
+                        });
+                        if let Some(i) = overlay_target {
+                            // 逐字符发送 (overlay arena — bubble-only, mirroring main)
+                            for ch in text.chars() {
+                                let s = ch.to_string();
+                                let ke = crate::modifier::KbEvent {
+                                    key: winit::keyboard::Key::Character(s.clone().into()),
+                                    event_type: crate::modifier::KbEventType::KeyDown,
+                                    is_alt_pressed: false, is_ctrl_pressed: false,
+                                    is_shift_pressed: false, is_meta_pressed: false,
+                                    repeat: false,
+                                };
+                                let ov = &pw.overlays[i];
+                                if let Some(fid) = ov.focused_id {
+                                    let nodes = ov.composer.arena_nodes();
+                                    if let Some(r) = ov.composer.layout_root_idx() {
+                                        let mut path: Vec<usize> = Vec::new();
+                                        if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, fid) {
+                                            path.push(idx);
+                                            let mut pid = nodes[idx].parent_id;
+                                            while let Some(id) = pid {
+                                                if let Some(anc) = crate::layout::node::find_node_by_id(nodes, r, id) {
+                                                    path.push(anc); pid = nodes[anc].parent_id;
+                                                } else { break; }
+                                            }
+                                            path.reverse();
+                                        }
+                                        for &ni in path.iter().rev() {
+                                            let mut consumed = false;
+                                            for el in nodes[ni].modifier.elements().iter().rev() {
+                                                if let crate::modifier::ModifierElement::KbEvent { on_key: Some(handler), .. } = el {
+                                                    if handler(&ke) { consumed = true; break; }
+                                                }
+                                            }
+                                            if consumed { break; }
+                                        }
+                                    }
+                                }
+                            }
+                            if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                        } else if let Some(fid) = pw.focused_id {
                             let nodes = pw.composer.arena_nodes();
                             if let Some(r) = pw.composer.layout_root_idx() {
                                 // 逐字符发送
@@ -1009,10 +1152,79 @@ impl ApplicationHandler for AppState {
                 // 消费焦点请求（在 compose 前处理，避免丢失）
                 let _focus_window = pw.composer.focus_window(window_id.into_raw() as u64);
                 for id in pw.composer.take_focus_requests() {
+                    // Main tree first; on miss try overlays topmost-first (overlay
+                    // inputs request focus via on_press exactly like main-tree ones,
+                    // but the old code only resolved requests against the main arena,
+                    // silently dropping every overlay focus request).
+                    let mut main_hit = false;
                     if let Some(r) = pw.composer.layout_root_idx() {
                         let nodes = pw.composer.arena_nodes_mut();
                         if crate::layout::node::focus_by_id(nodes, r, id) {
                             pw.focused_id = crate::layout::node::get_focus_id(nodes, r);
+                            main_hit = true;
+                        }
+                    }
+                    if main_hit {
+                        // Single-focus invariant: main focus clears overlay foci.
+                        for ov in pw.overlays.iter_mut() {
+                            if ov.focused_id.is_some() {
+                                if let Some(r) = ov.composer.layout_root_idx() {
+                                    crate::layout::node::clear_focus(ov.composer.arena_nodes_mut(), r);
+                                }
+                                ov.focused_id = None;
+                                ov.focused_slot_key = None;
+                            }
+                        }
+                    } else {
+                        for i in (0..pw.overlays.len()).rev() {
+                            let hit = {
+                                let ov = &mut pw.overlays[i];
+                                if ov.closing {
+                                    false
+                                } else if let Some(r) = ov.composer.layout_root_idx() {
+                                    crate::layout::node::focus_by_id(ov.composer.arena_nodes_mut(), r, id)
+                                } else {
+                                    false
+                                }
+                            };
+                            if hit {
+                                let (fid, fslot, want) = {
+                                    let ov = &pw.overlays[i];
+                                    let nodes = ov.composer.arena_nodes();
+                                    let fid = ov.composer.layout_root_idx()
+                                        .and_then(|r| crate::layout::node::get_focus_id(nodes, r));
+                                    let (fslot, want) = fid.and_then(|f| {
+                                        crate::layout::node::find_node_by_id(nodes, ov.composer.layout_root_idx()?, f)
+                                    }).map(|found| {
+                                        (nodes[found].slot_key, node_or_descendant_wants_ime(nodes, found))
+                                    }).unwrap_or((0, false));
+                                    (fid, fslot, want)
+                                };
+                                pw.overlays[i].focused_id = fid;
+                                pw.overlays[i].focused_slot_key = fid.map(|_| fslot);
+                                // Single-focus invariant: overlay focus clears main
+                                // focus and sibling overlay foci.
+                                if pw.focused_id.is_some() {
+                                    if let Some(r) = pw.composer.layout_root_idx() {
+                                        crate::layout::node::clear_focus(pw.composer.arena_nodes_mut(), r);
+                                    }
+                                    pw.focused_id = None;
+                                    pw.focused_slot_key = None;
+                                }
+                                for (j, other) in pw.overlays.iter_mut().enumerate() {
+                                    if j != i && other.focused_id.is_some() {
+                                        if let Some(r) = other.composer.layout_root_idx() {
+                                            crate::layout::node::clear_focus(other.composer.arena_nodes_mut(), r);
+                                        }
+                                        other.focused_id = None;
+                                        other.focused_slot_key = None;
+                                    }
+                                }
+                                if let Some(ref sw) = pw.skia_window {
+                                    sw.set_ime_allowed(want);
+                                }
+                                break;
+                            }
                         }
                     }
                     // 单独查 slot_key（避免与 root 的 borrow 冲突）
@@ -1204,7 +1416,8 @@ impl AppState {
                     // ⚠ Click 是合成单事件（非 down/up 分离）——overlay 命中后
                     // 必须立即执行点击（真实路径 down 记录 + up 触发；这里
                     // down 记录后直接 exec，否则 overlay 按钮永远点不动）
-                    if overlay_down(pw, (x, y)) {
+                    let click_kind = pw.last_pointer_kind.clone();
+                    if overlay_down(pw, (x, y), click_kind) {
                         // 命中 overlay：立即执行点击（合成单事件——down 记录 +
                         // 立即 up 触发；真实路径由 PointerUp 事件触发）
                         exec_overlay_click(pw);
@@ -1256,7 +1469,30 @@ impl AppState {
                     debug_log!("[debug-click] handled={} pos=({:.0},{:.0})", click_handled, x, y);
                 }
                 debug::DebugEvent::Key { key } => {
-                    if key == "Tab" {
+                    if key == "Escape" {
+                        if let Some(top) = pw.overlays.iter().rposition(|o| !o.closing).map(|i| pw.overlays[i].id) {
+                            begin_overlay_close(pw, top);
+                            if pw.focused_id.is_some() {
+                                if let Some(r) = pw.composer.layout_root_idx() {
+                                    crate::layout::node::clear_focus(pw.composer.arena_nodes_mut(), r);
+                                }
+                                pw.focused_id = None;
+                                pw.focused_slot_key = None;
+                                pw.apply_ime_for_focus(None);
+                            }
+                            if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                            handled = true;
+                        } else if pw.focused_id.is_some() {
+                            if let Some(r) = pw.composer.layout_root_idx() {
+                                crate::layout::node::clear_focus(pw.composer.arena_nodes_mut(), r);
+                            }
+                            pw.focused_id = None;
+                            pw.focused_slot_key = None;
+                            pw.apply_ime_for_focus(None);
+                            if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                            handled = true;
+                        }
+                    } else if key == "Tab" {
                         if let Some(r) = pw.composer.layout_root_idx() {
                             let nodes = pw.composer.arena_nodes_mut();
                             focus_next(nodes, r);
@@ -1277,7 +1513,9 @@ impl AppState {
                             is_meta_pressed: pw.modifiers.meta_key(),
                             repeat: false,
                         };
-                        dispatch_key_to_focus(pw, &ke);
+                        if !dispatch_key_to_overlay(pw, &ke) {
+                            dispatch_key_to_focus(pw, &ke);
+                        }
                     }
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                     handled = true;
@@ -1300,6 +1538,59 @@ impl AppState {
                             pw.focused_slot_key = pw.focused_id.and_then(|fid| crate::layout::node::find_node_by_id(nodes, r, fid).map(|idx| nodes[idx].slot_key));
                             pw.apply_ime_for_focus(pw.focused_id);
                             handled = true;
+                        }
+                    }
+                    if !handled {
+                        // Main tree missed — try overlays topmost-first (same
+                        // single-focus clearing as the frame request path).
+                        for i in (0..pw.overlays.len()).rev() {
+                            let hit = {
+                                let ov = &mut pw.overlays[i];
+                                if ov.closing {
+                                    false
+                                } else if let Some(r) = ov.composer.layout_root_idx() {
+                                    crate::layout::node::focus_by_id(ov.composer.arena_nodes_mut(), r, id)
+                                } else {
+                                    false
+                                }
+                            };
+                            if hit {
+                                let (fid, fslot, want) = {
+                                    let ov = &pw.overlays[i];
+                                    let nodes = ov.composer.arena_nodes();
+                                    let r = ov.composer.layout_root_idx();
+                                    let fid = r.and_then(|r| crate::layout::node::get_focus_id(nodes, r));
+                                    let (fslot, want) = fid.and_then(|f| {
+                                        r.and_then(|r| crate::layout::node::find_node_by_id(nodes, r, f))
+                                    }).map(|found| {
+                                        (nodes[found].slot_key, node_or_descendant_wants_ime(nodes, found))
+                                    }).unwrap_or((0, false));
+                                    (fid, fslot, want)
+                                };
+                                pw.overlays[i].focused_id = fid;
+                                pw.overlays[i].focused_slot_key = fid.map(|_| fslot);
+                                if pw.focused_id.is_some() {
+                                    if let Some(r) = pw.composer.layout_root_idx() {
+                                        crate::layout::node::clear_focus(pw.composer.arena_nodes_mut(), r);
+                                    }
+                                    pw.focused_id = None;
+                                    pw.focused_slot_key = None;
+                                }
+                                for (j, other) in pw.overlays.iter_mut().enumerate() {
+                                    if j != i && other.focused_id.is_some() {
+                                        if let Some(r) = other.composer.layout_root_idx() {
+                                            crate::layout::node::clear_focus(other.composer.arena_nodes_mut(), r);
+                                        }
+                                        other.focused_id = None;
+                                        other.focused_slot_key = None;
+                                    }
+                                }
+                                if let Some(ref sw) = pw.skia_window {
+                                    sw.set_ime_allowed(want);
+                                }
+                                handled = true;
+                                break;
+                            }
                         }
                     }
                 }
@@ -2046,6 +2337,8 @@ impl OverlayWindow {
             enter_anim: desc.enter_anim,
             exit_anim: desc.exit_anim,
             closing: false,
+            focused_id: None,
+            focused_slot_key: None,
         }
     }
 
@@ -2155,6 +2448,13 @@ fn begin_overlay_close(pw: &mut PerWindow, id: u64) {
     pw.overlays[idx].closing = true;
     if let Some(cb) = pw.overlays[idx].on_dismiss.take() {
         (cb)();
+    }
+    // Closing surface loses focus (its nodes are about to be destroyed).
+    // IME follows: off when nothing else holds focus.
+    pw.overlays[idx].focused_id = None;
+    pw.overlays[idx].focused_slot_key = None;
+    if pw.focused_id.is_none() && !pw.overlays.iter().any(|o| !o.closing && o.focused_id.is_some()) {
+        if let Some(ref sw) = pw.skia_window { sw.set_ime_allowed(false); }
     }
     cleanup_overlay_interactions(&mut pw.overlays[idx]);
     // 启动退出动画（progress 1→0）；无退出规格 → 立即移除（不推无用动画——
@@ -2266,6 +2566,22 @@ fn layout_overlays(pw: &mut PerWindow) {
         } else { pos };
         ov.screen_pos = (pos.0 + ov.offset.0, pos.1 + ov.offset.1);
     }
+    // Overlay focus restore across recompositions (mirrors the main-tree
+    // focused_slot_key restore in recompose_layout_render): arena node ids are
+    // rebuilt, slot keys are stable.
+    for ov in &mut pw.overlays {
+        let Some(slot) = ov.focused_slot_key else { continue; };
+        let Some(r) = ov.composer.layout_root_idx() else { continue; };
+        let nodes = ov.composer.arena_nodes_mut();
+        if let Some(new_id) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot) {
+            crate::layout::node::clear_focus(nodes, r);
+            crate::layout::node::set_focus_by_id(nodes, r, new_id);
+            ov.focused_id = Some(new_id);
+        } else {
+            ov.focused_id = None;
+            ov.focused_slot_key = None;
+        }
+    }
 }
 
 /// overlay 命中测试——返回 (overlay 索引, 本地坐标)——从最上层（最后一个）往下
@@ -2290,13 +2606,14 @@ fn hit_overlay(pw: &PerWindow, scene_pos: (f32, f32)) -> Option<(usize, (f32, f3
 /// overlay 渲染（主树之后——上层；模态先画遮罩）
 fn render_overlays(overlays: &[OverlayWindow], canvas: &skia_safe::Canvas, scale: f32, window: (f32, f32)) {
     for ov in overlays {
-        // 显示进度 → (scale, alpha)：progress State 驱动（peek——渲染期零重组）。
+        // 显示进度 → (scale, alpha, dy)：progress State 驱动（peek——渲染期零重组）。
         // 打开：progress 0→1，apply() 正向（0=起点 scale_from/alpha0 → 1=完整）；
         // 关闭（closing）：progress 1→0，apply_exit() 反向（1=完整 → 0=隐藏）
-        let (anim_scale, anim_alpha) = match (&ov.progress, ov.closing, &ov.enter_anim, &ov.exit_anim) {
+        // dy = overlay 高度倍数的垂直位移（如下拉滑入——渲染端乘内容高度）
+        let (anim_scale, anim_alpha, anim_dy) = match (&ov.progress, ov.closing, &ov.enter_anim, &ov.exit_anim) {
             (Some(p), false, Some(spec), _) => spec.apply(p.peek()),       // 进入
             (Some(p), true, _, Some(spec)) => spec.apply_exit(p.peek()),   // 退出
-            _ => (1.0, 1.0),                                               // 无动画
+            _ => (1.0, 1.0, 0.0),                                          // 无动画
         };
         // 模态遮罩（淡入淡出——跟随内容 alpha）
         if ov.modal {
@@ -2311,16 +2628,31 @@ fn render_overlays(overlays: &[OverlayWindow], canvas: &skia_safe::Canvas, scale
         let nodes = ov.composer.arena_nodes();
         canvas.save();
         canvas.translate((ov.screen_pos.0 * scale, ov.screen_pos.1 * scale));
-        // 进入/退出动画：围绕 overlay 中心缩放 + 内容淡入淡出。
+        // 进入/退出动画：围绕 overlay 中心缩放 + 内容淡入淡出 + 垂直滑入。
         // ⚠ scale 在 translate 之后——先定位再缩放（缩放中心 = overlay 左上角 +
-        // 内容半尺寸，即内容中心）
+        // 内容半尺寸，即内容中心）；slide 在缩放之后、内容绘制之前（布局空间位移）
+        let size = ov.composer.layout_root()
+            .map(|r| (r.measured_size.width, r.measured_size.height))
+            .unwrap_or((0.0, 0.0));
+        // Slide 期间裁到内容框（对齐上游下拉 `.clip(dropdownShape)`）——
+        // 否则滑入起点（-半高）整个面板压住 bar。clip 在 settled  bounds 上，
+        // 内容在框内滑动；动画结束内容恰好落回框内 → 无跳变。阴影在动画期间
+        // 会被裁掉边缘（结束恢复——细微，可接受）。
+        if anim_dy != 0.0 {
+            // clip_rect 受当前矩阵影响——translate 之后调用，坐标用布局空间。
+            canvas.clip_rect(
+                skia_safe::Rect::from_xywh(0.0, 0.0, size.0, size.1),
+                None,
+                Some(false),
+            );
+        }
         if anim_scale != 1.0 {
-            let size = ov.composer.layout_root()
-                .map(|r| (r.measured_size.width, r.measured_size.height))
-                .unwrap_or((0.0, 0.0));
             canvas.translate(((size.0 / 2.0) * scale, (size.1 / 2.0) * scale));
             canvas.scale((anim_scale, anim_scale));
             canvas.translate((-(size.0 / 2.0) * scale, -(size.1 / 2.0) * scale));
+        }
+        if anim_dy != 0.0 {
+            canvas.translate((0.0, anim_dy * size.1 * scale));
         }
         if anim_alpha < 1.0 {
             // 内容淡入/淡出：整体 alpha 层（save_layer_alpha_f——Skia 层叠 alpha）
@@ -2418,7 +2750,7 @@ fn fire_click_along_path(nodes: &[crate::layout::node::LayoutNode], path: &[usiz
 }
 
 /// 指针按下：先测 overlay（最上层）——命中 → 记录点击目标；外部 → dismiss
-fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
+fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::modifier::PointerKind) -> bool {
     if pw.overlays.is_empty() {
         return false;
     }
@@ -2500,8 +2832,116 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
                 }
             }
         }
-        let nid = ov.composer.layout_root_idx().and_then(|r| {
-            let nodes = ov.composer.arena_nodes();
+        // Overlay focus + caret + pointer dispatch (mirrors handle_pointer_down):
+        // overlay content previously received only on_click — TextField focus
+        // (via on_press → request_focus) never fired inside overlays, so typing
+        // into overlay inputs (SearchBar expanded, Dialog forms) was impossible.
+        // - Dispatch pointer Down to the overlay arena (on_ptr handlers).
+        // - Focus the deepest focusable/wants_ime node on the hit path
+        //   (same rule as debug-click focus, main tree).
+        // - Place the text caret from the grapheme anchor (tap-to-place caret).
+        // Taps on non-focusable content leave focus untouched (typing continues
+        // after tapping result rows). Drag-select inside overlay inputs is v1-out.
+        {
+            let ptr_ev = crate::modifier::PointerEvent {
+                event_type: crate::modifier::PointerEventType::Down,
+                position: (0.0, 0.0),
+                scene_position: local,
+                kind: kind.clone(),
+                is_alt_pressed: pw.modifiers.alt_key(),
+                is_ctrl_pressed: pw.modifiers.control_key(),
+                is_shift_pressed: pw.modifiers.shift_key(),
+                is_meta_pressed: pw.modifiers.meta_key(),
+            };
+            // Read phase (immutable): hit path, focus target, caret anchor.
+            // (Root is guaranteed by hit_overlay above; the None arm only
+            // satisfies the compiler and still falls through to click recording.)
+            let (path, focus_target, caret): (Vec<usize>, Option<(u64, u64, bool)>, Option<(usize, usize)>) = match {
+                let ov = &pw.overlays[i];
+                let nodes = ov.composer.arena_nodes();
+                match ov.composer.layout_root_idx() {
+                    None => None,
+                    Some(r) => Some((nodes, r)),
+                }
+            } {
+                None => (Vec::new(), None, None),
+                Some((nodes, r)) => {
+                let path = hit_test(nodes, r, local.0, local.1);
+                let focus_target = path.iter().rev().find_map(|&idx| {
+                    let focusable = crate::layout::node::has_focusable_modifier(&nodes[idx]);
+                    let wants_ime = nodes[idx].ime_callback.borrow().is_some();
+                    (focusable || wants_ime).then(|| {
+                        let want = node_or_descendant_wants_ime(nodes, idx);
+                        (nodes[idx].id, nodes[idx].slot_key, want)
+                    })
+                });
+                let caret = (|| {
+                    let &innermost = path.last()?;
+                    let anchor_node = find_anchor_text_node(nodes, &path, innermost)?;
+                    let borrow = nodes[anchor_node].cached_paragraph.try_borrow().ok()?;
+                    let para = borrow.as_ref()?;
+                    let (ax, ay) = node_abs_position(nodes, r, nodes[anchor_node].id);
+                    let (pad_s, pad_t, pad_e, _) = nodes[anchor_node].modifier.get_padding_sides();
+                    let pad_x = if nodes[anchor_node].layout_direction == crate::layout::LayoutDirection::Rtl { pad_e } else { pad_s };
+                    let tl = crate::text::TextLayout::new(para, 0);
+                    let hit = tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(local.0 - ax - pad_x, local.1 - ay - pad_t));
+                    let edit = crate::ui::text_field::offset_mapping_for_node(nodes, r, anchor_node)
+                        .map(|m| m.transformed_to_original(hit))
+                        .unwrap_or(hit);
+                    Some((anchor_node, edit))
+                })();
+                (path, focus_target, caret)
+                }
+            };
+            // Pointer dispatch (immutable arena borrow, ends immediately).
+            if !path.is_empty() {
+                let ov = &pw.overlays[i];
+                if let Some(r) = ov.composer.layout_root_idx() {
+                    let nodes = ov.composer.arena_nodes();
+                    dispatch_ptr_event(nodes, r, &path, &ptr_ev, local, None);
+                }
+            }
+            // Mutation phase: focus flags + cached ids + caret + IME.
+            if let Some((fid, fslot, wants_ime)) = focus_target {
+                if let Some(r) = pw.overlays[i].composer.layout_root_idx() {
+                    let nodes = pw.overlays[i].composer.arena_nodes_mut();
+                    crate::layout::node::clear_focus(nodes, r);
+                    crate::layout::node::set_focus_by_id(nodes, r, fid);
+                }
+                pw.overlays[i].focused_id = Some(fid);
+                pw.overlays[i].focused_slot_key = Some(fslot);
+                // Single-focus invariant: overlay focus clears main + sibling foci.
+                if pw.focused_id.is_some() {
+                    if let Some(r) = pw.composer.layout_root_idx() {
+                        crate::layout::node::clear_focus(pw.composer.arena_nodes_mut(), r);
+                    }
+                    pw.focused_id = None;
+                    pw.focused_slot_key = None;
+                }
+                for (j, other) in pw.overlays.iter_mut().enumerate() {
+                    if j != i && other.focused_id.is_some() {
+                        if let Some(r) = other.composer.layout_root_idx() {
+                            crate::layout::node::clear_focus(other.composer.arena_nodes_mut(), r);
+                        }
+                        other.focused_id = None;
+                        other.focused_slot_key = None;
+                    }
+                }
+                if let Some(ref sw) = pw.skia_window { sw.set_ime_allowed(wants_ime); }
+            }
+            if let Some((aidx, aoff)) = caret {
+                let nodes = pw.overlays[i].composer.arena_nodes();
+                if let Some(n) = nodes.get(aidx) {
+                    n.cursor_index.set(aoff);
+                    if let Some(cb) = n.cursor_callback.borrow_mut().as_mut() {
+                        cb(aoff);
+                    }
+                }
+            }
+        }
+        // (ov borrow ended at the Press block above; re-index here.)
+        let nid = pw.overlays[i].composer.layout_root_idx().and_then(|r| {
+            let nodes = pw.overlays[i].composer.arena_nodes();
             hit_test(nodes, r, local.0, local.1).last().map(|&idx| nodes[idx].id)
         });
         pw.overlay_click = Some((i, local, nid.unwrap_or(0)));
@@ -2764,7 +3204,38 @@ fn detect_click(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
 fn dispatch_key_to_focus(pw: &PerWindow, ke: &crate::modifier::KbEvent) -> bool {
     let Some(fid) = pw.focused_id else { return false };
     let Some(r) = pw.composer.layout_root_idx() else { return false };
-    let nodes = pw.composer.arena_nodes();
+    dispatch_key_in_arena(pw.composer.arena_nodes(), r, fid, ke)
+}
+
+/// Dispatch a key event to the topmost focused overlay first (overlays own
+/// independent composers — the main-tree focus path can never reach them).
+/// Falls through (returns false) when no overlay has focus, so callers can
+/// continue with the main tree.
+fn dispatch_key_to_overlay(pw: &PerWindow, ke: &crate::modifier::KbEvent) -> bool {
+    for i in (0..pw.overlays.len()).rev() {
+        let ov = &pw.overlays[i];
+        if ov.closing { continue; }
+        let Some(fid) = ov.focused_id else { continue; };
+        let Some(r) = ov.composer.layout_root_idx() else { continue; };
+        if dispatch_key_in_arena(ov.composer.arena_nodes(), r, fid, ke) {
+            return true;
+        }
+        // Focused overlay did not consume — stop here (a focused surface owns
+        // the key stream; falling through to lower surfaces would double-handle).
+        return false;
+    }
+    false
+}
+
+/// Core key dispatch against one arena: focus path Preview (root→focused) +
+/// Bubble (focused→root) + focused-node activation (Enter/Space → onClick).
+/// Shared by the main tree and overlay composers (identical semantics).
+fn dispatch_key_in_arena(
+    nodes: &[crate::layout::node::LayoutNode],
+    r: usize,
+    fid: u64,
+    ke: &crate::modifier::KbEvent,
+) -> bool {
     // 收集焦点路径：root → ... → focused
     let mut path: Vec<usize> = Vec::new();
     if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, fid) {
@@ -2929,7 +3400,7 @@ fn handle_pointer_down(
 ) -> bool {
     // 顶层弹出层优先：命中 overlay → 记录点击目标（事件不进主树）；
     // 外部点击 → dismiss（模态/可关闭）
-    if overlay_down(pw, scene_pos) {
+    if overlay_down(pw, scene_pos, kind.clone()) {
         return true;
     }
     let nodes = pw.composer.arena_nodes();

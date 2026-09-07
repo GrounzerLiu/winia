@@ -30,6 +30,9 @@ pub enum PopupPosition {
 ///
 /// - `scale_from`：起始缩放（默认 0.8——Compose `scaleIn(initialScale=0.8f)`）
 /// - `fade`：是否淡入（默认 true——Compose `fadeIn()`）
+/// - `slide_from_y`：起始垂直位移（overlay 高度的倍数；负 = 从上方滑入——
+///   对标 docked 下拉 `slideIn(initialOffset = { IntOffset(0, -it.height / 2) })`；
+///   默认 0.0 = 无位移）
 /// - `duration`：时长（默认 200ms）
 /// - `interpolator`：缓动曲线（默认 EaseOutCubic——Compose `easeOut`）
 ///
@@ -39,6 +42,7 @@ pub enum PopupPosition {
 pub struct OverlayAnimSpec {
     pub(crate) scale_from: f32,
     pub(crate) fade: bool,
+    pub(crate) slide_from_y: f32,
     pub(crate) duration: std::time::Duration,
     pub(crate) interpolator: std::sync::Arc<dyn crate::animation::interpolator::Interpolator>,
 }
@@ -50,6 +54,7 @@ impl OverlayAnimSpec {
         Self {
             scale_from: 0.8,
             fade: true,
+            slide_from_y: 0.0,
             duration: std::time::Duration::from_millis(200),
             interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()),
         }
@@ -61,6 +66,7 @@ impl OverlayAnimSpec {
         Self {
             scale_from: 0.8,
             fade: true,
+            slide_from_y: 0.0,
             duration: std::time::Duration::from_millis(200),
             interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseInCubic::new()),
         }
@@ -68,12 +74,25 @@ impl OverlayAnimSpec {
 
     /// 仅缩放（无淡入）
     pub fn scale_only(from: f32, duration: std::time::Duration) -> Self {
-        Self { scale_from: from, fade: false, duration, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
+        Self { scale_from: from, fade: false, slide_from_y: 0.0, duration, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
     }
 
     /// 仅淡入
     pub fn fade_only(duration: std::time::Duration) -> Self {
-        Self { scale_from: 1.0, fade: true, duration, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
+        Self { scale_from: 1.0, fade: true, slide_from_y: 0.0, duration, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
+    }
+
+    /// 下拉进入（下滑 + 淡入——对标 docked 下拉 slideIn(-height/2) + fadeIn）
+    pub fn slide_down_fade(duration: std::time::Duration) -> Self {
+        Self { scale_from: 1.0, fade: true, slide_from_y: -0.5, duration, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
+    }
+
+    /// 下拉滑动（无淡入——对齐上游 docked 下拉 AnimatedVisibility：
+    /// 只有 slideIn/slideOut(initialOffset y=-height/2)，alpha 由内容进度
+    /// 驱动而非淡入补间；曲线用 EaseOutCubic 干脆收尾——M3 spatial 实为弹簧
+    /// （snap 感），emphasized bezier 长尾会有"末段慢吞吞"的拖沓感）
+    pub fn slide_down(duration: std::time::Duration) -> Self {
+        Self { scale_from: 1.0, fade: false, slide_from_y: -0.5, duration, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
     }
 
     /// 自定义缓动曲线
@@ -85,6 +104,12 @@ impl OverlayAnimSpec {
     /// 起始缩放（0 附近时对话框从中心放大出现；1.0 = 无缩放）
     pub fn scale_from(mut self, v: f32) -> Self {
         self.scale_from = v;
+        self
+    }
+
+    /// 起始垂直位移（overlay 高度倍数；-0.5 = 从半高上方滑入）
+    pub fn slide_from_y(mut self, v: f32) -> Self {
+        self.slide_from_y = v;
         self
     }
 
@@ -100,20 +125,23 @@ impl OverlayAnimSpec {
         self
     }
 
-    /// 动画进度（0..=1）→ (scale, alpha)——渲染期调用（每帧，无 State 依赖）
-    /// t=0 起点，t=1 终点（Compose 语义：t 是动画进度）
-    pub(crate) fn apply(&self, t: f32) -> (f32, f32) {
+    /// 动画进度（0..=1）→ (scale, alpha, dy)——渲染期调用（每帧，无 State 依赖）
+    /// t=0 起点，t=1 终点（Compose 语义：t 是动画进度）；dy 为 overlay 高度
+    /// 倍数（slide_from_y 插值结果——渲染端乘以内容高度换算像素）
+    pub(crate) fn apply(&self, t: f32) -> (f32, f32, f32) {
         let e = self.interpolator.interpolate(t.clamp(0.0, 1.0));
         let scale = self.scale_from + (1.0 - self.scale_from) * e;
         let alpha = if self.fade { e } else { 1.0 };
-        (scale, alpha)
+        let dy = self.slide_from_y * (1.0 - e);
+        (scale, alpha, dy)
     }
 
-    /// 退出动画进度（1→0 反向）→ (scale, alpha)——t=1 起点（完整显示），
-    /// t=0 终点（隐藏）：scale 1→scale_from（缩小）、alpha 1→0（淡出）。
-    /// 公式与 apply() 相同（t=1 → e=1 → scale=1 alpha=1；t=0 → e=0 →
-    /// scale=scale_from alpha=0）——progress 从 1 动画到 0 即自然反向。
-    pub(crate) fn apply_exit(&self, t: f32) -> (f32, f32) {
+    /// 退出动画进度（1→0 反向）→ (scale, alpha, dy)——t=1 起点（完整显示），
+    /// t=0 终点（隐藏）：scale 1→scale_from（缩小）、alpha 1→0（淡出）、
+    /// dy 0→slide_from_y（滑回）。
+    /// 公式与 apply() 相同（t=1 → e=1 → 完整；t=0 → e=0 → 起点态）——
+    /// progress 从 1 动画到 0 即自然反向。
+    pub(crate) fn apply_exit(&self, t: f32) -> (f32, f32, f32) {
         self.apply(t)
     }
 }
@@ -179,6 +207,9 @@ pub struct Popup {
     position: PopupPosition,
     offset: (f32, f32),
     on_dismiss: Option<Arc<dyn Fn() + Send + Sync>>,
+    anchor_slot: Option<u64>,
+    enter_anim: Option<OverlayAnimSpec>,
+    exit_anim: Option<OverlayAnimSpec>,
 }
 
 impl Popup {
@@ -192,6 +223,9 @@ impl Popup {
             position: PopupPosition::BottomLeft,
             offset: (0.0, 4.0),
             on_dismiss: None,
+            anchor_slot: None,
+            enter_anim: None,
+            exit_anim: None,
         }
     }
 
@@ -210,6 +244,33 @@ impl Popup {
         self
     }
 
+    /// 进入动画（默认 None = 瞬时出现，菜单类语义；下拉用 slide_down_fade）
+    pub fn enter_animation(mut self, anim: Option<OverlayAnimSpec>) -> Self {
+        self.enter_anim = anim;
+        self
+    }
+
+    /// 退出动画（默认 None = 瞬时消失）
+    pub fn exit_animation(mut self, anim: Option<OverlayAnimSpec>) -> Self {
+        self.exit_anim = anim;
+        self
+    }
+
+    /// Explicit anchor slot override. Needed because `#[composable]` pushes a
+    /// fresh scope at `build` entry, so the default `prev_sibling_slot_key()`
+    /// capture inside `build` always sees an empty scope (None) and the popup
+    /// falls back to window alignment. Callers that need anchoring must capture
+    /// `ctx.prev_sibling_slot_key()` in their own scope and pass it here:
+    /// ```ignore
+    /// Surface::new().build(ctx, |ctx| { /* anchor */ });
+    /// let anchor = ctx.prev_sibling_slot_key();
+    /// Popup::new(true).anchor_slot(anchor).build(ctx, |ctx| { /* ... */ });
+    /// ```
+    pub fn anchor_slot(mut self, slot: Option<u64>) -> Self {
+        self.anchor_slot = slot;
+        self
+    }
+
     /// #[composable]：内部 remember（overlay id）从 build 调用点取稳定 base。
     /// build 总执行（visible=false 也执行）——记录 active=false 供 sync 删除。
     #[composable]
@@ -219,19 +280,22 @@ impl Popup {
         if !self.visible {
             return; // 关闭：不注册 overlay——sync 按 active=false 删除
         }
+        // Explicit anchor wins; otherwise fall back to prev-sibling capture
+        // (None inside build scope — kept for non-composable callers).
+        let anchor = self.anchor_slot.or_else(|| ctx.prev_sibling_slot_key());
         ctx.open_overlay(crate::ui::overlay::OverlayDesc {
             id: id.get(),
-            // 锚点 = 当前作用域最后一个兄弟（紧跟其组合位置——Compose Popup 语义）；
-            // 无兄弟时 None → 窗口对齐
-            anchor_slot: ctx.prev_sibling_slot_key(),
+            // 锚点 = 调用方显式传入（见 anchor_slot）；默认当前作用域最后一个
+            // 兄弟——build 自有 scope 内恒为 None → 窗口对齐
+            anchor_slot: anchor,
             position: self.position,
             offset: self.offset,
             modal: false,
             dismiss_on_outside: true,
             click_passthrough: false,
             on_dismiss: self.on_dismiss,
-            enter_anim: None, // Popup 默认无进入动画（瞬时出现——菜单类语义）
-            exit_anim: None, // Popup 默认无退出动画（瞬时消失）
+            enter_anim: self.enter_anim,
+            exit_anim: self.exit_anim,
             content: Box::new(content),
             local_snapshot: Vec::new(),
         });
