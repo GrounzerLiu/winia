@@ -84,7 +84,10 @@ pub mod prelude {
     pub use crate::ui::bottom_sheet::ModalBottomSheet;
     pub use crate::ui::bottom_sheet_scaffold::{BottomSheetScaffold, SCAFFOLD_SHEET_PEEK_HEIGHT};
     pub use crate::ui::sheet_state::{SheetState, SheetValue};
-    pub use crate::ui::animated_visibility::{AnimatedVisibility, VisibilityTransition, SlideDirection};
+    pub use crate::ui::animated_visibility::{
+        AnimatedVisibility, ExpandFrom, ExpandFromH, SlideDirection, SlideOffset,
+        VisibilityTransition,
+    };
     pub use crate::ui::animated_size::AnimatedSize;
     pub use crate::ui::animated_content::AnimatedContent;
     pub use crate::ui::crossfade::Crossfade;

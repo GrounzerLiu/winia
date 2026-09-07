@@ -52,7 +52,9 @@ pub mod tab_row;
 pub mod navigation_suite;
 pub mod short_navigation_bar;
 
-pub use animated_visibility::{AnimatedVisibility, VisibilityTransition, SlideDirection};
+pub use animated_visibility::{
+    AnimatedVisibility, ExpandFrom, ExpandFromH, SlideDirection, SlideOffset, VisibilityTransition,
+};
 pub use animated_size::AnimatedSize;
 pub use animated_content::AnimatedContent;
 pub use crossfade::Crossfade;

@@ -1,11 +1,13 @@
-//! AnimatedVisibility demo — 内容出现/消失动画（对标 Compose AnimatedVisibility）
+//! AnimatedVisibility demo — content enter/exit animation (cf. Compose AnimatedVisibility)
 //!
-//! 运行：cargo run -p winia --example animated_visibility_demo
+//! Run: cargo run -p winia --example animated_visibility_demo
 //!
-//! 三个面板展示不同过渡组合：
-//! - A：fade_in + expand_in（淡入 + 垂直展开）
-//! - B：slide_in(Right) + scale_in（右滑 + 缩放）
-//! - C：fade_out + shrink_out（淡出 + 收缩——下方锚点跟随上移）
+//! Five panels showing different transition combos:
+//! - A: fade_in + expand_in (fade + vertical expand)
+//! - B: slide_in(Right) + scale_in (slide from right + scale)
+//! - C: fade_out + shrink_out (fade + shrink — followers move up)
+//! - D: expand_in_h (horizontal expand — fixed 300px bar grows rightward)
+//! - E: slide Fraction(1.0) (full-width slide-in — Compose initialOffsetX equivalent)
 
 use winia::prelude::*;
 use winia::animation::{SpringSpec, TweenSpec};
@@ -15,12 +17,14 @@ fn main() {
     let _guard = rt.enter();
     winia::run_app!(|ctx| {
         Window::new()
-            .size(420.0, 560.0)
+            .size(420.0, 900.0)
             .title("AnimatedVisibility Demo")
             .build(ctx, |ctx| {
                 panel_a(ctx);
                 panel_b(ctx);
                 panel_c(ctx);
+                panel_d(ctx);
+                panel_e(ctx);
             });
     });
 }
@@ -107,7 +111,84 @@ fn panel_c(ctx: &mut ComposeCtx) {
                         Text::new("（下方锚点——收缩时应跟随上移）").font_size(12.0).build(ctx);
                     });
                 });
-            // 面板外的锚点：始终显示——C 完全消失时此文本上移填位
-            Text::new("── 固定锚点（面板 C 收缩时上移） ──").font_size(12.0).build(ctx);
+            // Fixed anchor outside the panel: always visible — moves up when C collapses.
+            Text::new("── fixed anchor (moves up when panel C shrinks) ──").font_size(12.0).build(ctx);
+        });
+}
+
+/// Panel D: horizontal expand only (new transition).
+/// Enter: a fixed 300px purple bar grows rightward from the start edge.
+/// Exit: shrinks back toward the start edge. No slide — pure width animation.
+#[composable]
+fn panel_d(ctx: &mut ComposeCtx) {
+    let show = ctx.remember(|| false);
+    Column::new()
+        .modifier(Modifier::new().padding(16.0))
+        .build(ctx, |ctx| {
+            Button::new()
+                .on_click({
+                    let s = show.clone();
+                    move || s.update(|v| *v = !*v)
+                })
+                .build(ctx, |ctx| {
+                    Text::new("D: horizontal expand (toggle)").font_size(12.0).build(ctx);
+                });
+            AnimatedVisibility::new(show.clone())
+                .enter(VisibilityTransition::expand_in_h(TweenSpec::default()))
+                .exit(VisibilityTransition::shrink_out_h(TweenSpec::default()))
+                .build(ctx, |ctx| {
+                    Text::new("Panel D — watch me grow rightward")
+                        .font_size(14.0)
+                        .color(Color::WHITE)
+                        .modifier(
+                            Modifier::new()
+                                .size(300.0, 44.0)
+                                .background(Color::from_argb(255, 156, 39, 176), Shape::rounded(8.0)),
+                        )
+                        .build(ctx);
+                });
+        });
+}
+
+/// Panel E: full-width slide only (new SlideOffset::Fraction).
+/// Enter: content slides in from the right edge by its full width
+/// (Fraction(1.0) — the Compose `initialOffsetX = { fullWidth }` equivalent).
+/// No expand — pure translation + fade.
+#[composable]
+fn panel_e(ctx: &mut ComposeCtx) {
+    let show = ctx.remember(|| false);
+    Column::new()
+        .modifier(Modifier::new().padding(16.0))
+        .build(ctx, |ctx| {
+            Button::new()
+                .on_click({
+                    let s = show.clone();
+                    move || s.update(|v| *v = !*v)
+                })
+                .build(ctx, |ctx| {
+                    Text::new("E: full-width slide (toggle)").font_size(12.0).build(ctx);
+                });
+            AnimatedVisibility::new(show.clone())
+                .enter(
+                    VisibilityTransition::slide_in_offset(
+                        SlideDirection::Right,
+                        SlideOffset::Fraction(1.0),
+                        TweenSpec::default(),
+                    )
+                    .with_fade(),
+                )
+                .exit(
+                    VisibilityTransition::slide_out_offset(
+                        SlideDirection::Right,
+                        SlideOffset::Fraction(1.0),
+                        TweenSpec::default(),
+                    )
+                    .with_fade(),
+                )
+                .build(ctx, |ctx| {
+                    Text::new("Panel E — full-width slide-in")
+                        .modifier(Modifier::new().background(Color::from_argb(255, 0, 150, 136), Shape::rounded(8.0)))
+                        .build(ctx);
+                });
         });
 }
