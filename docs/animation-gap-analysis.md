@@ -108,34 +108,36 @@
 - `graphics_layer`（scale_x/y、alpha、translation_x/y、rotation_z——**绘制层，不重排**，对标 GraphicsLayerScope 子集）
 - **布局层动画**：P2-1 两段式依赖（`layout_deps`/`layout_dirty`）——布局属性动画写 `get()` 即生效，**无旁路**（这是 Compose 没有的直接对应物——Compose 靠 animateContentSize + Layout 动画）
 
-### 缺失 ❌ / 部分 ⚠️
+### Gaps vs Compose (synced v2 2026-09 — was stale; §三 is authoritative)
 
-| 类别 | 项 | 状态 |
+| Category | Item | Status |
 |------|-----|------|
-| 高层值动画 | `animate_int_as_state` / `animate_value_as_state` / `animate_rect_as_state` / `animate_bounds_as_state` | ❌ 缺（前两个低成本） |
-| 高层值动画 | `label` / `finished_listener` 参数 | ❌ 缺 |
-| 容器动画 | **`AnimatedVisibility`**（enter/exit 过渡全集） | ❌ 缺（主线无——旧实验在 animation-improve 已放弃，布局层正路可做） |
-| 容器动画 | `AnimatedContent` / `Crossfade` | ❌ 缺 |
-| 过渡 | `Transition.animate_color/dp/size/offset/value` + `create_child_transition` + `label` | ⚠️ 只有 animate_float |
-| 无限动画 | `animate_value`（泛型） | ❌ 缺（有 float/color） |
-| 规格 | `cubic_bezier`/`PathEasing` 自定义 easing | ❌ 缺（插值器表是静态的） |
-| 规格 | `spring` 常量（NoBouncy/MediumBouncy/Low/Medium/High） | ❌ 缺（直接数值） |
-| 低层 | `animate_decay` / `DecayAnimationSpec`（fling） | ❌ 缺 |
-| 低层 | `Animatable` 速度延续（打断后从当前速度继续） | ❌ 缺（Compose 语义） |
-| 低层 | `with_frame_nanos` 帧时钟 API | ❌ 缺（隐藏在内） |
-| 修饰符 | `animate_content_size` | ❌ 缺（布局层机制可做） |
-| 修饰符 | `animate_item`（列表增删移动） | ❌ 缺（无 LazyList） |
-| graphics_layer | shadow/clip/shape/blur | ✅ 基础能力已接入（Skia 原生 ShadowUtils；高级 Compose 对齐项仍待完善） |
-| 手势 | fling/settle 联动 | ❌ 缺 |
+| High-level value anim | `animate_int_as_state` / `animate_value_as_state` | ✅ done (P0-3) |
+| High-level value anim | `animate_rect_as_state` / `animate_bounds_as_state` | ⏸️ skipped by design (no `Rect` unit type exists; bounds animate via `Offset`+`Size`, both animatable — add when a consumer needs it) |
+| High-level value anim | `label` / `finished_listener` params | ⚠️ partial (`on_finish` + `push_animatable_with_done` done; `label` skipped — Transition already has it) |
+| Container anim | **`AnimatedVisibility`** enter/exit set | ✅ done (params aligned + horizontal expand, P0-1) |
+| Container anim | `AnimatedContent` / `Crossfade` | ✅ done (single content generation — engine limit, documented) |
+| Transition | `animate_color/dp/size/offset/value` + `create_child_transition` + `label` | ✅ done (P0-2) |
+| Infinite anim | `animate_value` (generic) | ❌ missing (float/color only) |
+| Spec | `cubic_bezier`/`PathEasing` custom easing | ✅ done (P2-11) |
+| Spec | `spring` constants (NoBouncy/MediumBouncy/Low/Medium/High) | ✅ done (P1-7) |
+| Low-level | `animate_decay` / DecayAnimationSpec | ✅ done (P2-8) |
+| Low-level | `Animatable` velocity continuation | ✅ done (P2-9) |
+| Low-level | `with_frame_nanos` frame clock | ✅ done (P3-12) |
+| Modifier | `animate_content_size` | ✅ done as `AnimatedSize` container (P1-5) |
+| Modifier | `animate_item` (list add/remove/move) | ❌ missing (attempted `exp/animate-item`, dropped — measure-lerp feel was wrong; needs lookahead or layer-shift approach) |
+| graphics_layer | shadow/clip/shape/blur | ✅ base wired (Skia ShadowUtils; advanced Compose parity open) |
+| Gestures | fling/settle linkage | ❌ missing |
 
-### 已知限制（文档 §八，待修）⚠️
-1. Color Spring 降级 Tween（supports_spring=false——`to_f32` 非单射，设计如此，需显式文档/警告）
-2. `dt` 超 166ms 截断（掉帧后弹簧丢时间）
-3. dedup 忽略 spec（同状态重复 push 时 spec 不更新）
-4. 无 60fps 节流（动画每帧全量推进）
-5. Repeatable 仅 Tween base（其他 spec 不能 repeat）
-6. Keyframes/Tween `duration=0` 除零 NaN（5s 兜底）
-7. 向量类型（Offset/Size）`to_f32` 返回范数（Spring 降级，非单射）
+### Known limitations (open ⚠️)
+1. Color Spring downgrades to Tween (supports_spring=false — `to_f32` non-injective, by design, documented + runtime warning).
+2. `dt` over 166ms truncated (spring drops time after frame loss).
+3. dedup ignores spec on same-state re-push (matches Compose: unchanged target never restarts) — kept.
+4. No 60fps throttle (every frame pushes all animations).
+5. Repeatable: Spring/Decay/nested-Repeatable rejected by assert (no cycle-length semantics).
+6. Vector types (Offset/Size) `to_f32` returns norm (Spring downgrades, non-injective).
+7. ExpandFromH Start/End never mirror for RTL (Compose parity backlog).
+8. Transition child label inherits parent's (labels are `&'static str`; Compose synthesizes "child of …").
 
 ---
 
