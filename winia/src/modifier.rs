@@ -398,22 +398,58 @@ impl Default for FilterQuality {
 // 的载体——节点移除时 State 随槽回收，无需 onAttach/onDetach。
 // ═══════════════════════════════════════════════════════════
 
-/// 绘制节点：渲染期以节点 rect 调用（对标 Compose DrawModifierNode）。
-/// 返回 `Option<TextParams>` 的旧 `render_modifier_element` 语义由核心保留；
-/// node 只做"画点什么"（背景/装饰），不参与文本提取。
+/// Draw node: invoked with the node rect at render time (cf. Compose DrawModifierNode).
+/// The legacy `render_modifier_element` returning `Option<TextParams>` stays in core;
+/// a node only paints (background/decoration) and never extracts text.
 ///
-/// 链序语义（实测结论）：node 统一在背景层绘制（枚举链走完后），不保留链序
-/// 交织。`drawWithContent` 式包裹（内容前后各画一笔、saveLayer 包内容）暂不
-/// 支持——原因：① render_pass1 是单函数流水线（背景→文本→子→波纹），包裹需
-/// 拆成 drawBefore/drawAfter 两阶段或闭包嵌套，重构面大；② 真实需求未被倒逼
-/// （现有 CustomDraw/背景/装饰全是单向绘制）。需要时再加 `DrawWrapNode`。
+/// Ordering (measured): nodes paint uniformly at the background layer (after the enum
+/// chain), with no chain-order interleaving. For above-content painting use
+/// [`DrawWrapNode::draw_after`].
 pub trait DrawNode: std::fmt::Debug + Send + Sync {
     fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect);
-    /// Skip 指纹 MUST 规范（P1-3）：含参节点 MUST 覆盖，纳入**全部影响输出的
-    /// 静态参数**（颜色/形状/值/开关）；回写通道（State 回写）与瞬态动画值
-    /// （逐帧 progress/alpha）MUST NOT 进 key（走依赖/重绘通道，否则动画每帧
-    /// Enter）；回调字段视为相同（重建不触发 Enter）。默认 = TypeId 名（无参
-    /// 节点够用；含参忘覆盖则静默 Skip 误命中——旧值残留）。
+    /// Skip fingerprint MUST rule (P1-3): nodes with params MUST override, covering
+    /// **all output-affecting static params** (color/shape/value/flags); write-back
+    /// channels (State write-back) and transient animation values (per-frame
+    /// progress/alpha) MUST NOT enter the key (they travel the dependency/repaint
+    /// channel, otherwise every animation frame Enters); callback fields count as
+    /// equal (rebuild does not Enter). Default = TypeId name (fine for paramless
+    /// nodes; forgetting the override on a param node silently mis-hits Skip and
+    /// leaves stale output).
+    fn node_key(&self) -> String {
+        std::any::type_name::<Self>().to_string()
+    }
+}
+
+/// Wrapping draw node (cf. Compose `DrawModifierNode` `drawWithContent`: paint before
+/// and after content; Compose `drawBehind` = before only, above-content decor = after only).
+///
+/// Position (`render_pass1`):
+/// - `draw_before`: same layer as [`DrawNode`] (after the enum chain, before text/children).
+/// - `draw_after`: after children and after `draw_ripple`, before scroll/clip restore —
+///   above content (covers text and children), inside the scroll translate (same stack
+///   as ripple).
+///
+/// `modifier` param: for reading chain enums when needed (e.g. inferring the shape from
+/// the nearest Background/Border — same logic as inside `draw_ripple`). The render side
+/// passes the owning node's `&Modifier`. Ignore it when unneeded.
+///
+/// `node_key` MUST rule is the same as [`DrawNode`] (all static visual params in;
+/// write-back/transient values out).
+pub trait DrawWrapNode: std::fmt::Debug + Send + Sync {
+    fn draw_before(
+        &self,
+        _canvas: &skia_safe::Canvas,
+        _rect: skia_safe::Rect,
+        _modifier: &Modifier,
+    ) {
+    }
+    fn draw_after(
+        &self,
+        _canvas: &skia_safe::Canvas,
+        _rect: skia_safe::Rect,
+        _modifier: &Modifier,
+    ) {
+    }
     fn node_key(&self) -> String {
         std::any::type_name::<Self>().to_string()
     }
@@ -499,10 +535,13 @@ pub trait LayoutNode: std::fmt::Debug + Send + Sync {
     }
 }
 
-/// 开放节点容器（与 `ModifierElement` 并存的第二轨道）。
+/// Open node container (second track alongside `ModifierElement`).
 #[derive(Debug, Clone)]
 pub enum ModifierNode {
     Draw(std::sync::Arc<dyn DrawNode>),
+    /// Wrapping draw node (before + after content). Renders at the same slots
+    /// as Draw for before, and after children/ripple for after.
+    DrawWrap(std::sync::Arc<dyn DrawWrapNode>),
     Click(std::sync::Arc<dyn ClickNode>),
     Pointer(std::sync::Arc<dyn PointerNode>),
     Key(std::sync::Arc<dyn KeyNode>),
@@ -753,9 +792,15 @@ impl Modifier {
 
     // ── Node 轨道（实验性开放扩展点） ──
 
-    /// 追加一个绘制节点（与枚举元素同序参与渲染）。
+    /// Append a draw node (renders at the background layer, after the enum chain).
     pub fn draw_node(self, node: impl DrawNode + 'static) -> Self {
         self.push_node(ModifierNode::Draw(std::sync::Arc::new(node)))
+    }
+
+    /// Append a wrapping draw node (before at the background layer, after above
+    /// content — after children and ripple, inside the scroll translate).
+    pub fn draw_wrap_node(self, node: impl DrawWrapNode + 'static) -> Self {
+        self.push_node(ModifierNode::DrawWrap(std::sync::Arc::new(node)))
     }
 
     /// 追加一个点击节点（与 Clickable 枚举同优先级参与点击分发）。
@@ -788,10 +833,19 @@ impl Modifier {
         &self.nodes
     }
 
-    /// 开放绘制节点迭代（渲染管线用——与枚举链同序无关，统一在背景层绘制）。
+    /// Open draw-node iteration (render pipeline — background layer, after the enum chain).
     pub(crate) fn draw_nodes(&self) -> impl Iterator<Item = &std::sync::Arc<dyn DrawNode>> {
         self.nodes.iter().filter_map(|n| match n {
             ModifierNode::Draw(d) => Some(d),
+            _ => None,
+        })
+    }
+
+    /// Open wrapping-draw-node iteration (render pipeline — before at the background
+    /// layer, after above content).
+    pub(crate) fn draw_wrap_nodes(&self) -> impl Iterator<Item = &std::sync::Arc<dyn DrawWrapNode>> {
+        self.nodes.iter().filter_map(|n| match n {
+            ModifierNode::DrawWrap(w) => Some(w),
             _ => None,
         })
     }
@@ -3066,10 +3120,11 @@ fn size_value_eq(a: &SizeValue, b: &SizeValue) -> bool {
     }
 }
 
-/// 开放节点的 Skip 指纹（含类型 + 参数）。
+/// Open-node Skip fingerprint (type + params).
 pub(crate) fn node_key_of(n: &ModifierNode) -> String {
     match n {
         ModifierNode::Draw(d) => format!("draw:{}", d.node_key()),
+        ModifierNode::DrawWrap(w) => format!("draw_wrap:{}", w.node_key()),
         ModifierNode::Click(c) => format!("click:{}", c.node_key()),
         ModifierNode::Pointer(p) => format!("pointer:{}", p.node_key()),
         ModifierNode::Key(k) => format!("key:{}", k.node_key()),
@@ -3307,6 +3362,59 @@ mod node_track_tests {
         }
     }
 
+    /// Test wrapping node: paints `before` color at the background layer and
+    /// `after` color above content (third parties copy this shape for content-
+    /// overlay decor such as selection highlight or debug overlay).
+    #[derive(Debug)]
+    struct TestWrapNode {
+        before: Color,
+        after: Color,
+    }
+
+    impl DrawWrapNode for TestWrapNode {
+        fn draw_before(
+            &self,
+            canvas: &skia_safe::Canvas,
+            rect: skia_safe::Rect,
+            _modifier: &Modifier,
+        ) {
+            crate::render::draw_background_for_node(canvas, rect, &self.before, &Shape::Rectangle);
+        }
+        fn draw_after(
+            &self,
+            canvas: &skia_safe::Canvas,
+            rect: skia_safe::Rect,
+            _modifier: &Modifier,
+        ) {
+            crate::render::draw_background_for_node(canvas, rect, &self.after, &Shape::Rectangle);
+        }
+        fn node_key(&self) -> String {
+            format!("testwrap:{:?}:{:?}", self.before, self.after)
+        }
+    }
+
+    /// Render a single leaf and read one pixel back. Returns BGRA bytes.
+    fn render_leaf_pixel(modifier: Modifier, x: usize, y: usize) -> [u8; 4] {
+        use skia_safe::surfaces;
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            let key = ctx.next_key();
+            ctx.start_leaf(key, modifier);
+            ctx.end_node();
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let mut surface = surfaces::raster_n32_premul((300, 300)).unwrap();
+        let canvas = surface.canvas();
+        canvas.clear(skia_safe::Color::WHITE);
+        let root = composer.layout_root_idx().expect("root");
+        let nodes = composer.arena_nodes();
+        crate::render::render(nodes, root, canvas);
+        let pm = surface.peek_pixels().expect("pixmap");
+        let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+        let w = pm.width() as usize;
+        px[y * w + x]
+    }
+
     /// 试点点击节点：Clickable 的 node 等价物。
     #[derive(Debug)]
     struct TestClickNode {
@@ -3445,6 +3553,286 @@ mod node_track_tests {
         // 枚举 vs node 数量不等 → 不等
         let d = Modifier::new().background(Color::RED, Shape::Rectangle);
         assert!(!a.param_eq(&d), "node 轨道与枚举轨道不等长应不等");
+    }
+
+    #[test]
+    fn wrap_before_paints_at_background_layer() {
+        // before half shares the DrawNode background-layer slot: enum blue bg first,
+        // then before paints red on top. Uses a before-only node so the after half
+        // (default no-op) does not cover it. Center pixel must be red.
+        #[derive(Debug)]
+        struct BeforeOnly {
+            color: Color,
+        }
+        impl DrawWrapNode for BeforeOnly {
+            fn draw_before(
+                &self,
+                canvas: &skia_safe::Canvas,
+                rect: skia_safe::Rect,
+                _modifier: &Modifier,
+            ) {
+                crate::render::draw_background_for_node(canvas, rect, &self.color, &Shape::Rectangle);
+            }
+            fn node_key(&self) -> String {
+                format!("beforeonly:{:?}", self.color)
+            }
+        }
+        let red = Color::from_argb(255, 200, 30, 30);
+        let blue = Color::from_argb(255, 30, 30, 200);
+        let p = render_leaf_pixel(
+            Modifier::new()
+                .size(60.0, 40.0)
+                .background(blue, Shape::Rectangle)
+                .draw_wrap_node(BeforeOnly { color: red }),
+            30,
+            20,
+        );
+        assert!(
+            (p[2] as i16 - 200).abs() <= 6 && (p[1] as i16 - 30).abs() <= 6,
+            "before should cover enum background (red on top), got BGRA={:?}",
+            p
+        );
+    }
+
+    #[test]
+    fn wrap_after_covers_background_layer() {
+        // after half runs above content: enum red bg first, before paints blue, then
+        // after paints opaque yellow on top. Center pixel must be yellow, proving the
+        // after slot sits above the background-layer paints.
+        let red = Color::from_argb(255, 200, 30, 30);
+        let blue = Color::from_argb(255, 30, 30, 200);
+        let yellow = Color::from_argb(255, 220, 200, 30);
+        let p = render_leaf_pixel(
+            Modifier::new()
+                .size(60.0, 40.0)
+                .background(red, Shape::Rectangle)
+                .draw_wrap_node(TestWrapNode { before: blue, after: yellow }),
+            30,
+            20,
+        );
+        assert!(
+            (p[2] as i16 - 220).abs() <= 8
+                && (p[1] as i16 - 200).abs() <= 8
+                && (p[0] as i16 - 30).abs() <= 8,
+            "after should cover everything below (yellow on top), got BGRA={:?}",
+            p
+        );
+    }
+
+    #[test]
+    fn wrap_after_covers_child_text() {
+        // Strictest proof of "above content": parent holds the wrap node, child leaf
+        // holds black text; parent after paints an opaque overlay rect. Sampled pixels
+        // inside the overlay must show the overlay color, not text-darkened pixels —
+        // i.e. after runs after the children recursion in render_pass1.
+        use crate::core::composer::Composer;
+        use skia_safe::surfaces;
+        let overlay = Color::from_argb(255, 30, 200, 30);
+        #[derive(Debug)]
+        struct AfterOnly {
+            color: Color,
+        }
+        impl DrawWrapNode for AfterOnly {
+            fn draw_after(
+                &self,
+                canvas: &skia_safe::Canvas,
+                rect: skia_safe::Rect,
+                _modifier: &Modifier,
+            ) {
+                // Cover the top text rows with an opaque bar.
+                let bar = skia_safe::Rect::new(
+                    rect.left,
+                    rect.top,
+                    rect.right,
+                    rect.top + 24.0,
+                );
+                crate::render::draw_background_for_node(canvas, bar, &self.color, &Shape::Rectangle);
+            }
+            fn node_key(&self) -> String {
+                format!("afteronly:{:?}", self.color)
+            }
+        }
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            let parent = ctx.next_key();
+            ctx.start_container(
+                parent,
+                Modifier::new()
+                    .size(200.0, 60.0)
+                    .background(Color::WHITE, Shape::Rectangle)
+                    .draw_wrap_node(AfterOnly { color: overlay }),
+                crate::layout::BoxLayout::new(),
+            );
+            let child = ctx.next_key();
+            ctx.start_leaf(
+                child,
+                Modifier::new().size(200.0, 60.0).text_content(
+                    "CoverMe".to_string(),
+                    14.0,
+                    Color::BLACK,
+                    crate::ui::text::FontWeight::NORMAL,
+                    crate::ui::text::FontSlant::Upright,
+                    usize::MAX,
+                    crate::ui::TextAlign::Left,
+                    crate::ui::TextOverflow::Clip,
+                    true,
+                ),
+            );
+            ctx.end_node();
+            ctx.end_node();
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let mut surface = surfaces::raster_n32_premul((300, 300)).unwrap();
+        let canvas = surface.canvas();
+        canvas.clear(skia_safe::Color::WHITE);
+        let root = composer.layout_root_idx().expect("root");
+        let nodes = composer.arena_nodes();
+        crate::render::render(nodes, root, canvas);
+        let pm = surface.peek_pixels().expect("pixmap");
+        let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+        let w = pm.width() as usize;
+        // Scan the overlay bar rows for any dark (text) pixel: none should survive.
+        let mut dark = 0;
+        for y in 2..22 {
+            for x in (2..198).step_by(2) {
+                let p = px[y * w + x];
+                if p[0] < 120 && p[1] < 120 && p[2] < 120 {
+                    dark += 1;
+                }
+            }
+        }
+        assert_eq!(dark, 0, "after overlay must cover child text (no dark pixels in bar)");
+    }
+
+    #[test]
+    fn wrap_node_key_drives_skip() {
+        // node_key covers both halves: same params Skip, either half changed Enters.
+        // The render pipeline keys DrawWrap via node_key_of "draw_wrap:" prefix.
+        let mk = |b: Color, a: Color| {
+            Modifier::new().draw_wrap_node(TestWrapNode { before: b, after: a })
+        };
+        let red = Color::from_argb(255, 200, 30, 30);
+        let blue = Color::from_argb(255, 30, 30, 200);
+        assert!(mk(red, blue).param_eq(&mk(red, blue)), "same wrap params Skip");
+        assert!(!mk(red, blue).param_eq(&mk(blue, blue)), "before change Enters");
+        assert!(!mk(red, blue).param_eq(&mk(red, red)), "after change Enters");
+        assert_eq!(
+            node_key_of(&Modifier::new().draw_wrap_node(TestWrapNode { before: red, after: blue }).modifier_nodes()[0]),
+            format!("draw_wrap:testwrap:{:?}:{:?}", red, blue),
+            "debug/tree key prefix"
+        );
+    }
+
+    #[test]
+    fn wrap_after_covers_enum_ripple() {
+        // Proves the after slot sits above the enum Ripple path (the exact position a
+        // future RippleNode migration needs): enum ripple pressed to mid-expand, after
+        // paints an opaque bar over the press point. The press pixel must show the bar
+        // color, not the ripple color.
+        use crate::core::composer::Composer;
+        use crate::ui::interaction::MutableInteractionSource;
+        use skia_safe::surfaces;
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let source = MutableInteractionSource::new();
+        let ripple_color = Color::from_argb(255, 200, 30, 30);
+        let bar_color = Color::from_argb(255, 30, 200, 30);
+        #[derive(Debug)]
+        struct AfterBar {
+            color: Color,
+        }
+        impl DrawWrapNode for AfterBar {
+            fn draw_after(
+                &self,
+                canvas: &skia_safe::Canvas,
+                rect: skia_safe::Rect,
+                _modifier: &Modifier,
+            ) {
+                // Opaque bar over the press point (30, 20).
+                let bar = skia_safe::Rect::new(20.0, 10.0, 40.0, 30.0);
+                let _ = rect;
+                crate::render::draw_background_for_node(canvas, bar, &self.color, &Shape::Rectangle);
+            }
+            fn node_key(&self) -> String {
+                format!("afterbar:{:?}", self.color)
+            }
+        }
+        let src = source.clone();
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            let key = ctx.next_key();
+            ctx.start_leaf(
+                key,
+                Modifier::new()
+                    .size(60.0, 40.0)
+                    .background(Color::WHITE, Shape::Rectangle)
+                    .ripple(&src, ripple_color, true)
+                    .draw_wrap_node(AfterBar { color: bar_color }),
+            );
+            ctx.end_node();
+        });
+        // Press at (30, 20), then force mid-expand so the ripple surely paints
+        // (fresh push_animatable only runs its first update — radius ~0).
+        source.emit_press_at((30.0, 20.0));
+        source.ripple_layers()[0].progress.set(0.5);
+        composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let mut surface = surfaces::raster_n32_premul((300, 300)).unwrap();
+        let canvas = surface.canvas();
+        canvas.clear(skia_safe::Color::WHITE);
+        let root = composer.layout_root_idx().expect("root");
+        let nodes = composer.arena_nodes();
+        crate::render::render(nodes, root, canvas);
+        crate::animation::clear_all_animations();
+        let pm = surface.peek_pixels().expect("pixmap");
+        let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+        let w = pm.width() as usize;
+        let p = px[20 * w + 30];
+        assert!(
+            (p[1] as i16 - 200).abs() <= 8
+                && (p[2] as i16 - 30).abs() <= 8
+                && (p[0] as i16 - 30).abs() <= 8,
+            "after bar must cover the enum ripple at press point (green), got BGRA={:?}",
+            p
+        );
+        // Counter-proof (no false positive): same tree without the wrap node must show
+        // the ripple color at the press point — i.e. the ripple really paints there,
+        // so the green above genuinely covers it rather than covering nothing.
+        crate::animation::clear_all_animations();
+        let source2 = MutableInteractionSource::new();
+        let src2 = source2.clone();
+        let mut composer2 = Composer::new();
+        composer2.compose(|ctx| {
+            let key = ctx.next_key();
+            ctx.start_leaf(
+                key,
+                Modifier::new()
+                    .size(60.0, 40.0)
+                    .background(Color::WHITE, Shape::Rectangle)
+                    .ripple(&src2, ripple_color, true),
+            );
+            ctx.end_node();
+        });
+        source2.emit_press_at((30.0, 20.0));
+        source2.ripple_layers()[0].progress.set(0.5);
+        composer2.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let mut surface2 = surfaces::raster_n32_premul((300, 300)).unwrap();
+        let canvas2 = surface2.canvas();
+        canvas2.clear(skia_safe::Color::WHITE);
+        let root2 = composer2.layout_root_idx().expect("root");
+        let nodes2 = composer2.arena_nodes();
+        crate::render::render(nodes2, root2, canvas2);
+        crate::animation::clear_all_animations();
+        let pm2 = surface2.peek_pixels().expect("pixmap");
+        let px2: &[[u8; 4]] = pm2.pixels::<[u8; 4]>().expect("pixels");
+        let q = px2[20 * w + 30];
+        // Ripple red (200,30,30) at 0.10 opacity over white: R ≈ 200*0.1+255*0.9 = 249,
+        // G/B ≈ 30*0.1+255*0.9 = 232. Assert reddish tint, distinct from both white
+        // and the green bar.
+        assert!(
+            q[2] > q[1] + 5 && q[2] > q[0] + 5,
+            "counter-proof: ripple must paint reddish at press point without wrap, got BGRA={:?}",
+            q
+        );
     }
 
     #[test]
