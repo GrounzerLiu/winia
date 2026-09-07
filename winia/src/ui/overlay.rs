@@ -33,6 +33,9 @@ pub enum PopupPosition {
 /// - `slide_from_y`：起始垂直位移（overlay 高度的倍数；负 = 从上方滑入——
 ///   对标 docked 下拉 `slideIn(initialOffset = { IntOffset(0, -it.height / 2) })`；
 ///   默认 0.0 = 无位移）
+/// - `reveal_top`：从顶部展开揭示（clip 高度 0→全高——近似全屏搜索的
+///   bounds 形变展开；真正的共享元素 morph 需要锚点几何，超出本机制范围；
+///   默认 false）
 /// - `duration`：时长（默认 200ms）
 /// - `interpolator`：缓动曲线（默认 EaseOutCubic——Compose `easeOut`）
 ///
@@ -43,6 +46,7 @@ pub struct OverlayAnimSpec {
     pub(crate) scale_from: f32,
     pub(crate) fade: bool,
     pub(crate) slide_from_y: f32,
+    pub(crate) reveal_top: bool,
     pub(crate) duration: std::time::Duration,
     pub(crate) interpolator: std::sync::Arc<dyn crate::animation::interpolator::Interpolator>,
 }
@@ -55,6 +59,7 @@ impl OverlayAnimSpec {
             scale_from: 0.8,
             fade: true,
             slide_from_y: 0.0,
+            reveal_top: false,
             duration: std::time::Duration::from_millis(200),
             interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()),
         }
@@ -67,6 +72,7 @@ impl OverlayAnimSpec {
             scale_from: 0.8,
             fade: true,
             slide_from_y: 0.0,
+            reveal_top: false,
             duration: std::time::Duration::from_millis(200),
             interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseInCubic::new()),
         }
@@ -74,17 +80,17 @@ impl OverlayAnimSpec {
 
     /// 仅缩放（无淡入）
     pub fn scale_only(from: f32, duration: std::time::Duration) -> Self {
-        Self { scale_from: from, fade: false, slide_from_y: 0.0, duration, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
+        Self { scale_from: from, fade: false, slide_from_y: 0.0, reveal_top: false, duration, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
     }
 
     /// 仅淡入
     pub fn fade_only(duration: std::time::Duration) -> Self {
-        Self { scale_from: 1.0, fade: true, slide_from_y: 0.0, duration, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
+        Self { scale_from: 1.0, fade: true, slide_from_y: 0.0, reveal_top: false, duration, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
     }
 
     /// 下拉进入（下滑 + 淡入——对标 docked 下拉 slideIn(-height/2) + fadeIn）
     pub fn slide_down_fade(duration: std::time::Duration) -> Self {
-        Self { scale_from: 1.0, fade: true, slide_from_y: -0.5, duration, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
+        Self { scale_from: 1.0, fade: true, slide_from_y: -0.5, reveal_top: false, duration, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
     }
 
     /// 下拉滑动（无淡入——对齐上游 docked 下拉 AnimatedVisibility：
@@ -92,7 +98,7 @@ impl OverlayAnimSpec {
     /// 驱动而非淡入补间；曲线用 EaseOutCubic 干脆收尾——M3 spatial 实为弹簧
     /// （snap 感），emphasized bezier 长尾会有"末段慢吞吞"的拖沓感）
     pub fn slide_down(duration: std::time::Duration) -> Self {
-        Self { scale_from: 1.0, fade: false, slide_from_y: -0.5, duration, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
+        Self { scale_from: 1.0, fade: false, slide_from_y: -0.5, reveal_top: false, duration, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
     }
 
     /// 自定义缓动曲线
@@ -113,6 +119,12 @@ impl OverlayAnimSpec {
         self
     }
 
+    /// 从顶部展开揭示开关（clip 高度 0→全高）
+    pub fn reveal_top(mut self, v: bool) -> Self {
+        self.reveal_top = v;
+        self
+    }
+
     /// 淡入开关
     pub fn fade(mut self, v: bool) -> Self {
         self.fade = v;
@@ -125,23 +137,31 @@ impl OverlayAnimSpec {
         self
     }
 
-    /// 动画进度（0..=1）→ (scale, alpha, dy)——渲染期调用（每帧，无 State 依赖）
-    /// t=0 起点，t=1 终点（Compose 语义：t 是动画进度）；dy 为 overlay 高度
-    /// 倍数（slide_from_y 插值结果——渲染端乘以内容高度换算像素）
-    pub(crate) fn apply(&self, t: f32) -> (f32, f32, f32) {
+    /// 展开揭示 + 淡入（近似全屏搜索的 bounds 形变展开——真正的共享元素
+    /// morph 需要锚点几何；300-400ms 配 EaseOutCubic 收尾干脆）
+    pub fn expand_fade(duration: std::time::Duration) -> Self {
+        Self { scale_from: 1.0, fade: true, slide_from_y: 0.0, reveal_top: true, duration, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
+    }
+
+    /// 动画进度（0..=1）→ (scale, alpha, dy, reveal)——渲染期调用（每帧，
+    /// 无 State 依赖）；t=0 起点，t=1 终点（Compose 语义：t 是动画进度）；
+    /// dy 为 overlay 高度倍数（slide_from_y 插值结果——渲染端乘以内容高度
+    /// 换算像素）；reveal 为揭示高度倍数（1.0 = 全高无裁剪）
+    pub(crate) fn apply(&self, t: f32) -> (f32, f32, f32, f32) {
         let e = self.interpolator.interpolate(t.clamp(0.0, 1.0));
         let scale = self.scale_from + (1.0 - self.scale_from) * e;
         let alpha = if self.fade { e } else { 1.0 };
         let dy = self.slide_from_y * (1.0 - e);
-        (scale, alpha, dy)
+        let reveal = if self.reveal_top { e } else { 1.0 };
+        (scale, alpha, dy, reveal)
     }
 
-    /// 退出动画进度（1→0 反向）→ (scale, alpha, dy)——t=1 起点（完整显示），
-    /// t=0 终点（隐藏）：scale 1→scale_from（缩小）、alpha 1→0（淡出）、
-    /// dy 0→slide_from_y（滑回）。
+    /// 退出动画进度（1→0 反向）→ (scale, alpha, dy, reveal)——t=1 起点
+    /// （完整显示），t=0 终点（隐藏）：scale 1→scale_from（缩小）、
+    /// alpha 1→0（淡出）、dy 0→slide_from_y（滑回）、reveal 1→0（向上收起）。
     /// 公式与 apply() 相同（t=1 → e=1 → 完整；t=0 → e=0 → 起点态）——
     /// progress 从 1 动画到 0 即自然反向。
-    pub(crate) fn apply_exit(&self, t: f32) -> (f32, f32, f32) {
+    pub(crate) fn apply_exit(&self, t: f32) -> (f32, f32, f32, f32) {
         self.apply(t)
     }
 }

@@ -362,13 +362,12 @@ impl SearchBar {
         let st_dismiss = state.clone();
         crate::ui::overlay::Dialog::new(true)
             .on_dismiss_request(move || st_dismiss.close())
-            // Fullscreen fades in/out (shared-bounds expand is out of scope —
-            // fade approximates the upstream expand/collapse transition, paced
-            // near the slow expand rather than a quick 200ms flash).
-            .enter_animation(Some(crate::ui::overlay::OverlayAnimSpec::fade_only(
+            // Fullscreen unfolds from the top + fades (approximates the upstream
+            // bounds-morph expand; true shared-element morph needs anchor geometry).
+            .enter_animation(Some(crate::ui::overlay::OverlayAnimSpec::expand_fade(
                 std::time::Duration::from_millis(400),
             )))
-            .exit_animation(Some(crate::ui::overlay::OverlayAnimSpec::fade_only(
+            .exit_animation(Some(crate::ui::overlay::OverlayAnimSpec::expand_fade(
                 std::time::Duration::from_millis(400),
             )))
             .build(ctx, move |ctx| {
@@ -585,12 +584,13 @@ impl DockedSearchBar {
             .position(crate::ui::overlay::PopupPosition::BottomLeft)
             .offset(0.0, SearchBarDefaults::docked_gap())
             .anchor_slot(Some(anchor_slot))
-            // No overlay-canvas animation: the panel bg appears instantly
-            // full-size and items slide inside (see content above). Exit fades
-            // briefly instead of vanishing mid-gesture.
-            .enter_animation(None)
-            .exit_animation(Some(crate::ui::overlay::OverlayAnimSpec::fade_only(
-                std::time::Duration::from_millis(150),
+            // Upstream parity: whole panel slides down from half-height above,
+            // clipped to its settled bounds (slide_in y=-height/2); exit mirrors.
+            .enter_animation(Some(crate::ui::overlay::OverlayAnimSpec::slide_down(
+                std::time::Duration::from_millis(350),
+            )))
+            .exit_animation(Some(crate::ui::overlay::OverlayAnimSpec::slide_down(
+                std::time::Duration::from_millis(350),
             )))
             .on_dismiss_request({
                 let st = state.clone();
@@ -603,30 +603,7 @@ impl DockedSearchBar {
                     .shadow_elevation(drop_shadow)
                     .modifier(Modifier::new().fill_max_width())
                     .build(ctx, |ctx| {
-                        // Items slide in on appear (bg stays put — upstream parity:
-                        // the dropdown box is laid out full-size immediately and
-                        // only the content slides within, clipped by the Surface
-                        // shape, so the bar is never covered and the height never
-                        // snaps). Overlay-canvas slide can't do this (bg travels
-                        // with content = growing-panel illusion).
-                        let shown = ctx.remember(|| State::new(false)).get();
-                        if !shown.get() {
-                            shown.set(true);
-                        }
-                        let dy = ctx.animate_float_as_state(
-                            if shown.get() { 0.0 } else { -64.0 },
-                            crate::animation::AnimationSpec::Tween(
-                                crate::animation::TweenSpec::new(
-                                    std::time::Duration::from_millis(300),
-                                    crate::animation::interpolator::EaseOutCubic::new(),
-                                ),
-                            ),
-                        );
-                        crate::ui::layout_components::Column::new()
-                            .modifier(Modifier::new().fill_max_width().offset_y(dy))
-                            .build(ctx, |ctx| {
-                                content(ctx);
-                            });
+                        content(ctx);
                     });
             });
     }

@@ -57,13 +57,16 @@ DockedSearchBar::new()
   via `begin_overlay_close` + `on_dismiss`, and clears focus) / outside tap
   (Dialog/Popup dismiss) / `on_search` (caller) / result-tap (caller).
 - **Animations** (verified against upstream `SearchBar.kt`):
-  - Fullscreen: fade 400ms (shared-bounds expand is out of scope).
-  - Docked dropdown: panel bg appears instantly full-size; items slide
-    64px → 0 in 300ms EaseOutCubic *inside* the panel, clipped by the
-    dropdown shape — exactly the upstream structure (box laid out full,
-    content `slideIn` within). A whole-canvas slide was tried first and
-    rejected: bg travels with content = growing-panel illusion + end snap.
-    Exit fades 150ms.
+  - Fullscreen: top-expand reveal + fade 400ms (approximates the bounds-morph
+    expand; true shared-element morph needs anchor geometry).
+  - Docked dropdown: whole panel slides down from half-height above, clipped
+    to its settled bounds (upstream `slideIn(y=-height/2)`), 350ms
+    EaseOutCubic; exit mirrors. Content is a plain `Column` (upstream parity —
+    all items composed upfront so the reveal is coherent).
+  - Framework note: `render_overlays` clip rects must use device px
+    (`size * scale` — the canvas isn't content-scaled yet at clip time, same
+    as the scrim rect). Using layout units clips only 1/scale of the height
+    and reads as a "small panel snapping to full" at animation end.
 
 ## 3. Framework fixes (in `app.rs` / `overlay.rs`, shared by all overlays)
 

@@ -2606,14 +2606,14 @@ fn hit_overlay(pw: &PerWindow, scene_pos: (f32, f32)) -> Option<(usize, (f32, f3
 /// overlay 渲染（主树之后——上层；模态先画遮罩）
 fn render_overlays(overlays: &[OverlayWindow], canvas: &skia_safe::Canvas, scale: f32, window: (f32, f32)) {
     for ov in overlays {
-        // 显示进度 → (scale, alpha, dy)：progress State 驱动（peek——渲染期零重组）。
-        // 打开：progress 0→1，apply() 正向（0=起点 scale_from/alpha0 → 1=完整）；
-        // 关闭（closing）：progress 1→0，apply_exit() 反向（1=完整 → 0=隐藏）
-        // dy = overlay 高度倍数的垂直位移（如下拉滑入——渲染端乘内容高度）
-        let (anim_scale, anim_alpha, anim_dy) = match (&ov.progress, ov.closing, &ov.enter_anim, &ov.exit_anim) {
+        // 显示进度 → (scale, alpha, dy, reveal)：progress State 驱动（peek——
+        // 渲染期零重组）。打开：progress 0→1，apply() 正向；关闭（closing）：
+        // progress 1→0，apply_exit() 反向。dy = 高度倍数位移；reveal = 揭示
+        // 高度倍数（顶部展开用）。
+        let (anim_scale, anim_alpha, anim_dy, anim_reveal) = match (&ov.progress, ov.closing, &ov.enter_anim, &ov.exit_anim) {
             (Some(p), false, Some(spec), _) => spec.apply(p.peek()),       // 进入
             (Some(p), true, _, Some(spec)) => spec.apply_exit(p.peek()),   // 退出
-            _ => (1.0, 1.0, 0.0),                                          // 无动画
+            _ => (1.0, 1.0, 0.0, 1.0),                                     // 无动画
         };
         // 模态遮罩（淡入淡出——跟随内容 alpha）
         if ov.modal {
@@ -2634,14 +2634,23 @@ fn render_overlays(overlays: &[OverlayWindow], canvas: &skia_safe::Canvas, scale
         let size = ov.composer.layout_root()
             .map(|r| (r.measured_size.width, r.measured_size.height))
             .unwrap_or((0.0, 0.0));
-        // Slide 期间裁到内容框（对齐上游下拉 `.clip(dropdownShape)`）——
-        // 否则滑入起点（-半高）整个面板压住 bar。clip 在 settled  bounds 上，
-        // 内容在框内滑动；动画结束内容恰好落回框内 → 无跳变。阴影在动画期间
-        // 会被裁掉边缘（结束恢复——细微，可接受）。
-        if anim_dy != 0.0 {
-            // clip_rect 受当前矩阵影响——translate 之后调用，坐标用布局空间。
+        // Slide/揭示期间裁到内容框（对齐上游下拉 `.clip(dropdownShape)` 与
+        // 展开揭示）——否则滑入起点整个面板压住 bar。clip 在 settled bounds 上；
+        // 动画结束内容恰好落回框内 → 无跳变。reveal<1 时按揭示高度裁。
+        // (anim_dy != 0.0) 或 (anim_reveal < 1.0) 时裁剪。
+        let clip_h = if anim_dy != 0.0 {
+            size.1
+        } else if anim_reveal < 1.0 {
+            (size.1 * anim_reveal).max(0.0)
+        } else {
+            -1.0 // no clip
+        };
+        if clip_h >= 0.0 {
+            // clip_rect is affected by the current matrix (screen_pos translate
+            // applied above, no content scale yet) — coordinates are device px,
+            // so multiply layout units by scale (same as the scrim rect above).
             canvas.clip_rect(
-                skia_safe::Rect::from_xywh(0.0, 0.0, size.0, size.1),
+                skia_safe::Rect::from_xywh(0.0, 0.0, size.0 * scale, clip_h * scale),
                 None,
                 Some(false),
             );
