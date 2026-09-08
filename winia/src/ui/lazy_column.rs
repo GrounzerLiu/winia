@@ -128,7 +128,7 @@ pub struct LazyListState {
     /// fling 滚动极限（测量期回写 = 内容高 - 视口高；0 = 未知 → 只拦下限。
     /// scrollbar 侧读（content = limit + viewport），故 pub(crate) 不够——
     /// 同 crate 的 scrollbar.rs 可见）。
-    pub(crate) fling_limit: crate::core::state::State<f32>,
+    pub(crate) fling_limit: crate::core::state::Backchannel<f32>,
     /// 滚动活动脉冲（P1-3：边界滚轮点亮用——与 ScrollState.scroll_pulse 同语义；
     /// lazy 的 ScrollState 是 build 期拼装（offset/is_scrolling/fling_limit 三
     /// clone），pulse 必须挂在这里才跨帧稳定；拼装时 clone 进去；同 crate
@@ -147,7 +147,7 @@ impl LazyListState {
             last_known_first_key: crate::core::state::State::new(None),
             known_total: crate::core::state::State::new(usize::MAX),
             jump_request: crate::core::state::State::new(None),
-            fling_limit: crate::core::state::State::new(0.0),
+            fling_limit: crate::core::state::Backchannel::new(0.0),
             scroll_pulse: crate::core::state::State::new(0),
             first_visible_index: crate::core::state::State::new(0),
             first_visible_offset: crate::core::state::State::new(0.0),
@@ -192,7 +192,7 @@ impl LazyListState {
             velocity,
             crate::animation::exponential_decay(4.2),
             move |o| {
-                let max = limit.get();
+                let max = limit.peek();
                 let max = if max > 0.0 { max } else { f32::MAX };
                 o.clamp(0.0, max)
             },
@@ -649,8 +649,8 @@ impl<A: LazyAxis> LazyList<A> {
         let cache = ctx.remember(|| crate::core::state::State::new(ItemHeightCache::default())).get();
         let viewport = ctx.remember(|| crate::core::state::State::new(600.0f32)).get();
         let is_scrolling = ctx.remember(|| crate::core::state::State::new(false)).get();
-        let content_height = ctx.remember(|| crate::core::state::State::new(0.0f32)).get();
-        let fling_limit = ctx.remember(|| crate::core::state::State::new(0.0f32)).get();
+        let content_height = ctx.remember(|| crate::core::state::Backchannel::new(0.0f32)).get();
+        let fling_limit = ctx.remember(|| crate::core::state::Backchannel::new(0.0f32)).get();
         // 数据 key 序列签名（方案 A：检测数据变化——total 变或同 total 重排/
         // 替换。签名变化 → 高度缓存按 item key 迁移到正确 index，避免 index
         // 平移导致旧高度错位）
@@ -669,7 +669,7 @@ impl<A: LazyAxis> LazyList<A> {
             data_sig.set(sig);
             let mut c = cache.get();
             c.rebase(&keys);
-            cache.set_silent(c);
+            cache.set(c);
         }
 
         // key 校正：数据前部增删后，用 last_known_first_key 找回原 first visible 项。
@@ -864,8 +864,8 @@ pub(crate) struct LazyListPolicy<A: LazyAxis> {
     pub axis: PhantomData<A>,
     pub cache: crate::core::state::State<ItemHeightCache>,
     pub viewport: crate::core::state::State<f32>,
-    pub content_height: crate::core::state::State<f32>,
-    pub fling_limit: crate::core::state::State<f32>,
+    pub content_height: crate::core::state::Backchannel<f32>,
+    pub fling_limit: crate::core::state::Backchannel<f32>,
     pub is_scroll_in_progress: crate::core::state::State<bool>,
     pub spacing: f32,
     pub total: usize,
@@ -949,7 +949,7 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         for g in 0..self.total {
             content_h += cache.height(g) + self.spacing;
         }
-        self.content_height.set_silent(content_h);
+        self.content_height.set(content_h);
 
         // 越界 clamp：scroll_to_item 无 total 信息，程序化滚动超出内容边界时
         // 在这里收回到末尾（对齐 Compose：scroll position 在 measure 期 clamp）
@@ -982,8 +982,8 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
             }
         }
         // fling 极限回写（输入路径 ScrollState::fling + 程序化 LazyListState::fling）
-        self.fling_limit.set_silent(max_off);
-        self.state.fling_limit.set_silent(max_off);
+        self.fling_limit.set(max_off);
+        self.state.fling_limit.set(max_off);
         let clamped = self.state.offset.get().clamp(0.0, max_off);
         if clamped != self.state.offset.get() {
             self.state.offset.set(clamped);
@@ -1050,7 +1050,7 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         }
 
         // 自身尺寸：交叉轴填满父，主轴 = 视口（滚动容器）；子项超出部分由 scroll clip
-        self.cache.set_silent(cache);
+        self.cache.set(cache);
         (A::size(A::cross_max(constraints), vh), placements)
     }
 

@@ -165,7 +165,7 @@ impl Window {
 
         if need_new {
                         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-            created_id.set_silent(id); // 静默：窗口创建标记不触发主窗口异常重组
+            created_id.as_raw().set_backchannel(id); // Backchannel: window-creation marker must not notify (would avalanche keys / collapse the tree mid-compose)
             CREATED.lock().unwrap().insert(id);
 
             let w = self.state.width;

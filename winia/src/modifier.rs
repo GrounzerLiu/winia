@@ -73,6 +73,19 @@ impl From<&crate::core::state::State<f32>> for SizeValue {
     }
 }
 
+impl From<crate::core::state::Animating<f32>> for SizeValue {
+    fn from(s: crate::core::state::Animating<f32>) -> Self {
+        SizeValue::Dynamic(Arc::new(move || s.get()))
+    }
+}
+
+impl From<&crate::core::state::Animating<f32>> for SizeValue {
+    fn from(s: &crate::core::state::Animating<f32>) -> Self {
+        let s = s.clone();
+        SizeValue::Dynamic(Arc::new(move || s.get()))
+    }
+}
+
 impl From<crate::core::state::DerivedValue<f32>> for SizeValue {
     fn from(d: crate::core::state::DerivedValue<f32>) -> Self {
         SizeValue::Dynamic(Arc::new(move || d.get()))
@@ -88,6 +101,13 @@ impl From<&crate::core::state::DerivedValue<f32>> for SizeValue {
 
 impl From<&crate::core::state::State<crate::unit::Dp>> for SizeValue {
     fn from(s: &crate::core::state::State<crate::unit::Dp>) -> Self {
+        let s = s.clone();
+        SizeValue::Dynamic(Arc::new(move || s.get().value()))
+    }
+}
+
+impl From<&crate::core::state::Animating<crate::unit::Dp>> for SizeValue {
+    fn from(s: &crate::core::state::Animating<crate::unit::Dp>) -> Self {
         let s = s.clone();
         SizeValue::Dynamic(Arc::new(move || s.get().value()))
     }
@@ -390,7 +410,7 @@ impl Default for FilterQuality {
 //
 // ⚠ 绘制期 get 不注册依赖（render 已出依赖帧，DEP_MODE=None——与枚举
 // Background color_fn 完全一致）。状态驱动重绘靠 build 期 get（值变化 →
-// 重组 → 新 node → 重绘）或动画 set_no_wake + request_redraw。node 无特殊
+// 重组 → 新 node → 重绘）或动画 Animating 写 + request_redraw。node 无特殊
 // 通道，老实跟枚举一致（实测验证，见 node_track_stateful_draw_follows_state）。
 // 例：`let src = ctx.remember(|| MutableInteractionSource::new()).get();`
 //     `Modifier::new().click_node(MyClick { source: src.clone() })`。
@@ -732,7 +752,7 @@ pub(crate) enum ModifierElement {
     VerticalScroll { state: ScrollState },
     /// Lazy 列表内容高度标记（LazyColumn 用——apply_scroll_delta 计算 max_offset；
     /// 节点自身高度是视口，内容总高由测量回写到此 State）
-    LazyScroll { content_height: crate::core::state::State<f32>, reverse: bool },
+    LazyScroll { content_height: crate::core::state::Backchannel<f32>, reverse: bool },
     /// 水平滚动
     HorizontalScroll { state: ScrollState, reverse: bool },
     /// 嵌套滚动连接（祖先可在 child 前后部分消费 delta/velocity）。
@@ -1222,7 +1242,7 @@ impl Modifier {
     ///
     /// **原则**：静态绘制属性传 `Color`；需要动画（颜色随帧变化）时传闭包，
     /// 闭包内用 `State::peek()` 读取动画值（不要用 `get()`——会注册依赖触发重组）。
-    /// 动画值由 `set_visual` 写入（不 notify），配合动画引擎每帧 `request_redraw` 实现零重组。
+    /// 动画值由 `Visual::set` 写入（不 notify），配合动画引擎每帧 `request_redraw` 实现零重组。
     pub fn background(self, color: impl Into<BackgroundColor>, shape: impl Into<Shape>) -> Self {
         let bg = color.into();
         self.push(ModifierElement::Background {
@@ -1564,7 +1584,7 @@ pub fn draw_icon(self, spec: crate::ui::icon::IconSpec) -> Self {
     /// ```
     ///
     /// **原则**：与 `background` 相同——静态传值，动画传闭包（`peek()` 读取，
-    /// 配合 `set_visual` 零重组）。仅影响绘制层，不触发布局。
+    /// 配合 `Visual::set` 零重组）。仅影响绘制层，不触发布局。
     pub fn graphics_layer(self, params: impl Into<GraphicsLayerSpec>) -> Self {
         let spec = params.into();
         self.push(ModifierElement::GraphicsLayer {
@@ -1730,7 +1750,7 @@ pub fn draw_icon(self, spec: crate::ui::icon::IconSpec) -> Self {
 
     /// 水平滚动
     /// 标记为 lazy 滚动容器（LazyColumn 内部使用——内容总高 State）
-    pub fn lazy_scroll(self, content_height: crate::core::state::State<f32>) -> Self {
+    pub fn lazy_scroll(self, content_height: crate::core::state::Backchannel<f32>) -> Self {
         self.push(ModifierElement::LazyScroll { content_height, reverse: false })
     }
 
@@ -1923,7 +1943,7 @@ impl Modifier {
     }
 
     /// lazy 列表内容高度 State（如果有 LazyScroll modifier）
-    pub fn lazy_scroll_content_height(&self) -> Option<&crate::core::state::State<f32>> {
+    pub fn lazy_scroll_content_height(&self) -> Option<&crate::core::state::Backchannel<f32>> {
         for el in &self.elements {
             if let ModifierElement::LazyScroll { content_height, .. } = el {
                 return Some(content_height);
@@ -2523,7 +2543,7 @@ pub struct ScrollState {
     /// 是否正在滚动
     pub is_scroll_in_progress: crate::core::state::State<bool>,
     /// fling 滚动极限（布局期回写 = 内容高 - 视口高；0 = 未知 → fling 只拦下限）
-    pub(crate) fling_limit: crate::core::state::State<f32>,
+    pub(crate) fling_limit: crate::core::state::Backchannel<f32>,
     /// 滚动活动脉冲（P1-3：边界滚轮点亮用——offset 到界无变化时脉冲检测不到，
     /// 故分发层在"命中但消费为 0"的 wheel 上自增本计数，scrollbar 侧以变化
     /// 为脉冲点亮 fade。u64 单调，set 恒变→恒通知，无需 PartialEq 去重顾虑）。
@@ -2535,7 +2555,7 @@ impl ScrollState {
         ScrollState {
             offset: crate::core::state::State::new(0.0),
             is_scroll_in_progress: crate::core::state::State::new(false),
-            fling_limit: crate::core::state::State::new(0.0),
+            fling_limit: crate::core::state::Backchannel::new(0.0),
             scroll_pulse: crate::core::state::State::new(0),
         }
     }
@@ -2589,7 +2609,7 @@ impl ScrollState {
             velocity,
             crate::animation::exponential_decay(4.2),
             move |o| {
-                let max = limit.get();
+                let max = limit.peek();
                 let max = if max > 0.0 { max } else { f32::MAX };
                 o.clamp(0.0, max)
             },
@@ -4066,12 +4086,12 @@ mod node_track_tests {
 
     /// 有状态节点约定验证：DrawNode 持有 remember 建的 State（Arc 克隆），
     /// 绘制期 get 求值（与 Background color_fn 同语义——渲染期求值，值变化由
-    /// 外部 set_visual/notify 驱动重绘；依赖注册发生在 build 期闭包捕获时）。
+    /// 外部 Visual 写/notify 驱动重绘；依赖注册发生在 build 期闭包捕获时）。
     ///
     /// 教训（实测）：渲染期（render_pass1）已出依赖帧（take_deps 后 DEP_MODE=None），
     /// 此处 get 不注册依赖——与枚举 Background color_fn 完全一致（它同样在渲染期
     /// 求值、同样不注册）。状态驱动重绘靠：build 期闭包捕获 State（get 注册 compose
-    /// 依赖）或动画引擎 set_no_wake + request_redraw。node 无特殊通道，老实跟枚举一致。
+    /// 依赖）或动画引擎 Animating 写 + request_redraw。node 无特殊通道，老实跟枚举一致。
     #[derive(Debug)]
     struct TestStatefulBgNode {
         color_state: crate::core::state::State<Color>,

@@ -229,6 +229,43 @@ impl<'a> ComposeCtx<'a> {
         self.composer.slot_table.remember(slot_key, || State::new(init()))
     }
 
+    /// Remember a write-back channel: same slot stability as `remember`, but
+    /// the stored value never notifies (Backchannel write). For measure/layout
+    /// write-back and cross-frame staging (see docs/state-handles.md).
+    pub fn remember_backchannel<T: Clone + 'static>(
+        &mut self,
+        init: impl FnOnce() -> T,
+    ) -> crate::core::state::Backchannel<T> {
+        let slot_key = self.next_remember_key();
+        self.composer.slot_table.remember_handle(slot_key, || {
+            crate::core::state::Backchannel::new(init())
+        })
+    }
+
+    /// Remember an animation-tick handle: recompose without waking the event
+    /// loop (see docs/state-handles.md).
+    pub fn remember_animating<T: Clone + PartialEq + 'static>(
+        &mut self,
+        init: impl FnOnce() -> T,
+    ) -> crate::core::state::Animating<T> {
+        let slot_key = self.next_remember_key();
+        self.composer.slot_table.remember_handle(slot_key, || {
+            crate::core::state::Animating::new(init())
+        })
+    }
+
+    /// Remember a draw-layer handle: writes land without recomposition
+    /// (see docs/state-handles.md).
+    pub fn remember_visual<T: Clone + 'static>(
+        &mut self,
+        init: impl FnOnce() -> T,
+    ) -> crate::core::state::Visual<T> {
+        let slot_key = self.next_remember_key();
+        self.composer.slot_table.remember_handle(slot_key, || {
+            crate::core::state::Visual::new(init())
+        })
+    }
+
     /// 注册顶层弹出层（Popup/Dialog/DropdownMenu 内部调用）——组合期收集，
     /// compose 后由 app.rs 取走并独立物化/渲染
     pub fn open_overlay(&mut self, mut desc: crate::ui::overlay::OverlayDesc) {
@@ -495,50 +532,42 @@ impl<'a> ComposeCtx<'a> {
 
     /// animateFloatAsState — 动画浮点值到目标值
     pub fn animate_float_as_state(&mut self, target: f32, spec: crate::animation::AnimationSpec) -> State<f32> {
-        let state = self.remember(|| target);
-        self.composer.animation_state_ids.insert(state.state_id());
-        crate::animation::push_animatable(state.clone(), target, spec);
-        state
+        self.animate_value_as_state(target, spec).into_state()
     }
 
     /// animateColorAsState — 动画颜色值到目标值（RGBA 插值，Tween 驱动）
     pub fn animate_color_as_state(&mut self, target: crate::modifier::Color, spec: crate::animation::AnimationSpec) -> State<crate::modifier::Color> {
-        let state = self.remember(|| target);
-        self.composer.animation_state_ids.insert(state.state_id());
-        crate::animation::push_animatable_color(state.clone(), target, spec);
-        state
+        let slot_key = self.next_remember_key();
+        let handle = self.composer.slot_table.remember_handle(slot_key, || {
+            crate::core::state::Animating::new(target)
+        });
+        self.composer.animation_state_ids.insert(handle.state_id());
+        crate::animation::push_animatable_color(
+            crate::core::state::State::from_raw(handle.as_raw().clone()),
+            target,
+            spec,
+        );
+        handle.into_state()
     }
 
     /// animateDpAsState — 动画 Dp 值（对标 Compose animateDpAsState）
     pub fn animate_dp_as_state(&mut self, target: crate::unit::Dp, spec: crate::animation::AnimationSpec) -> State<crate::unit::Dp> {
-        let state = self.remember(|| target);
-        self.composer.animation_state_ids.insert(state.state_id());
-        crate::animation::push_animatable(state.clone(), target, spec);
-        state
+        self.animate_value_as_state(target, spec).into_state()
     }
 
     /// animateOffsetAsState — 动画 Offset 值（对标 Compose animateOffsetAsState）
     pub fn animate_offset_as_state(&mut self, target: crate::unit::Offset, spec: crate::animation::AnimationSpec) -> State<crate::unit::Offset> {
-        let state = self.remember(|| target);
-        self.composer.animation_state_ids.insert(state.state_id());
-        crate::animation::push_animatable(state.clone(), target, spec);
-        state
+        self.animate_value_as_state(target, spec).into_state()
     }
 
     /// animateSizeAsState — 动画 Size 值（对标 Compose animateSizeAsState）
     pub fn animate_size_as_state(&mut self, target: crate::unit::Size, spec: crate::animation::AnimationSpec) -> State<crate::unit::Size> {
-        let state = self.remember(|| target);
-        self.composer.animation_state_ids.insert(state.state_id());
-        crate::animation::push_animatable(state.clone(), target, spec);
-        state
+        self.animate_value_as_state(target, spec).into_state()
     }
 
     /// animateIntAsState — 动画整数值（对标 Compose animateIntAsState）
     pub fn animate_int_as_state(&mut self, target: i32, spec: crate::animation::AnimationSpec) -> State<i32> {
-        let state = self.remember(|| target);
-        self.composer.animation_state_ids.insert(state.state_id());
-        crate::animation::push_animatable(state.clone(), target, spec);
-        state
+        self.animate_value_as_state(target, spec).into_state()
     }
 
     /// animateValueAsState — 泛型值动画（对标 Compose animateValueAsState——
@@ -547,11 +576,14 @@ impl<'a> ComposeCtx<'a> {
         &mut self,
         target: T,
         spec: crate::animation::AnimationSpec,
-    ) -> State<T> {
-        let state = self.remember(|| target.clone());
-        self.composer.animation_state_ids.insert(state.state_id());
-        crate::animation::push_animatable(state.clone(), target, spec);
-        state
+    ) -> crate::core::state::Animating<T> {
+        let slot_key = self.next_remember_key();
+        let handle = self.composer.slot_table.remember_handle(slot_key, || {
+            crate::core::state::Animating::new(target.clone())
+        });
+        self.composer.animation_state_ids.insert(handle.state_id());
+        crate::animation::push_animatable_handle(handle.clone(), target, spec);
+        handle
     }
 
     /// 设置当前节点的 IME 预输入回调
@@ -759,6 +791,21 @@ impl Slot {
         let state = init();
         self.remembered.insert(slot_key, Box::new(state.clone()));
         state
+    }
+
+    fn remember_handle<H: Clone + 'static>(
+        &mut self,
+        slot_key: u64,
+        init: impl FnOnce() -> H,
+    ) -> H {
+        if let Some(existing) = self.remembered.get(&slot_key) {
+            if let Some(handle) = existing.downcast_ref::<H>() {
+                return handle.clone();
+            }
+        }
+        let handle = init();
+        self.remembered.insert(slot_key, Box::new(handle.clone()));
+        handle
     }
 
 }
@@ -1097,6 +1144,14 @@ impl SlotTable {
         self.current_slot().remember(slot_key, init)
     }
 
+    fn remember_handle<H: Clone + 'static>(
+        &mut self,
+        slot_key: u64,
+        init: impl FnOnce() -> H,
+    ) -> H {
+        self.current_slot().remember_handle(slot_key, init)
+    }
+
     fn reset(&mut self) {
         self.path.clear();
         self.child_counters = vec![0];
@@ -1219,7 +1274,7 @@ struct LayoutTransactionSnapshot {
     free_nodes: Vec<usize>,
     free_policies: Vec<usize>,
     node_state: Vec<LayoutNodeTransactionState>,
-    scroll_limits: Vec<(State<f32>, f32)>,
+    scroll_limits: Vec<(crate::core::state::Backchannel<f32>, f32)>,
 }
 
 #[derive(Clone)]
@@ -1365,7 +1420,7 @@ impl LayoutTransaction {
             }
         }
         for (state, value) in snapshot.scroll_limits {
-            state.set_silent(value);
+            state.set(value);
         }
     }
 }
@@ -3585,12 +3640,12 @@ fn test_layout_slot_reads_remove_empty_remeasure() {
     use_dynamic.set(false);
     // The external mode switch itself is not reactive. Queue a layout-only
     // invalidation so the next layout pass really measures this slot.
-    holder.borrow().as_ref().unwrap().set_no_wake(11.0);
+    holder.borrow().as_ref().unwrap().as_raw().set_animating(11.0);
     build(&mut composer);
     assert!(!composer.layout_deps.contains_key(&state_id), "空读取重测应移除 reverse edge");
     assert!(composer.layout_slot_reads.values().all(|reads| !reads.contains(&state_id)));
 
-    holder.borrow().as_ref().unwrap().set_no_wake(300.0);
+    holder.borrow().as_ref().unwrap().as_raw().set_animating(300.0);
     assert!(!composer.has_pending_states(), "移除布局读取后 State 不应继续入队");
 }
 
@@ -3632,7 +3687,7 @@ fn test_layout_slot_reads_preserve_untouched_cached_slot() {
 
     // Only the first leaf is dirty. The second leaf hits the measure cache and
     // must keep its previous forward edge instead of being treated as empty.
-    first_holder.borrow().as_ref().unwrap().set_no_wake(300.0);
+    first_holder.borrow().as_ref().unwrap().as_raw().set_animating(300.0);
     build(&mut composer);
 
     assert_eq!(composer.layout_slot_reads.get(&second_key), Some(&second_reads));
@@ -3685,7 +3740,7 @@ fn test_layout_slot_reads_remove_removed_slot() {
 
     assert!(!composer.layout_slot_reads.contains_key(&removed_key));
     assert!(!composer.layout_deps.contains_key(&removed_id));
-    removed_holder.borrow().as_ref().unwrap().set_no_wake(300.0);
+    removed_holder.borrow().as_ref().unwrap().as_raw().set_animating(300.0);
     assert!(!composer.has_pending_states(), "removed layout signal must be unsubscribed");
     assert!(composer.layout_deps.contains_key(&first_holder.borrow().as_ref().unwrap().signal_id()) == false,
         "the branch removes both dynamic leaves");
@@ -3706,7 +3761,7 @@ fn test_layout_slot_reads_clear_when_root_removed() {
     assert!(!composer.layout_slot_reads.is_empty());
 
     composer.compose(|_ctx| {});
-    watched.set_no_wake(200.0);
+    watched.as_raw().set_animating(200.0);
     assert!(composer.has_pending_states(), "empty root test must start with a queued layout notification");
     composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
 
@@ -3750,7 +3805,7 @@ fn test_layout_dependency_panic_rolls_back_new_subscription() {
         }).height(10.0));
         ctx.end_node();
     });
-    stable.set_no_wake(11.0);
+    stable.as_raw().set_animating(11.0);
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| composer.layout(constraints)));
     assert!(result.is_err());
 
@@ -3762,7 +3817,7 @@ fn test_layout_dependency_panic_rolls_back_new_subscription() {
         "panic-only signal must not remain subscribed");
     assert!(composer.pending_states.pending_ids().contains(&stable_id),
         "the consumed layout invalidation must be retained for retry");
-    panic_state.set_no_wake(21.0);
+    panic_state.as_raw().set_animating(21.0);
     assert!(!composer.pending_states.pending_ids().contains(&panic_state.signal_id()),
         "rolled-back signal must not enqueue Composer");
 
@@ -3835,9 +3890,9 @@ fn test_layout_dep_remesures_without_recompose() {
     let leaf_idx = composer.arena_nodes()[root_idx].children[0];
     let size1 = composer.arena_nodes()[leaf_idx].measured_size.width;
 
-    // 布局动画值变化（set_no_wake——动画推进语义）
+    // 布局动画值变化（Animating 写——动画推进语义）
     let s = holder.borrow().clone().unwrap();
-    s.set_no_wake(300.0);
+    s.as_raw().set_animating(300.0);
     build(&mut composer);
     let root_idx = composer.layout_root_idx().unwrap();
     let leaf_idx = composer.arena_nodes()[root_idx].children[0];
@@ -3896,7 +3951,7 @@ fn test_layout_dep_survives_const_fold() {
 
     // 帧3：notify → 重测并维持依赖
     let s = holder.borrow().clone().unwrap();
-    s.set_no_wake(123.0);
+    s.as_raw().set_animating(123.0);
     build(&mut composer);
     let m3 = MEASURE_COUNT.with(|c| c.get());
     assert!(m3 > m2, "notify 后应重新 measure（布局失效生效）");
@@ -4101,7 +4156,7 @@ fn test_layout_only_pending_consumed_without_recompose() {
     let root = composer.layout_root_idx().unwrap();
     let before = composer.arena_nodes()[root].measured_size.width;
 
-    size.set_no_wake(300.0);
+    size.as_raw().set_animating(300.0);
     assert!(composer.has_pending_states());
     composer.layout(constraints);
     let root = composer.layout_root_idx().unwrap();
@@ -4128,7 +4183,7 @@ fn test_mixed_compose_layout_pending_reaches_recompose() {
     let root = composer.layout_root_idx().unwrap();
     let before = composer.arena_nodes()[root].measured_size.width;
 
-    size.set_no_wake(300.0);
+    size.as_raw().set_animating(300.0);
     assert!(composer.has_pending_states());
     assert!(composer.recompose(|ctx| {
         assert_eq!(size.get(), 300.0);
@@ -4197,7 +4252,7 @@ fn test_compose_late_cleanup_panic_restores_dependency_graph() {
             1,
             Modifier::new(),
             Box::new(move || {
-                committed_for_remove.set_no_wake(3);
+                committed_for_remove.as_raw().set_animating(3);
                 panic!("late compose cleanup panic");
             }),
         );
@@ -4221,10 +4276,10 @@ fn test_compose_late_cleanup_panic_restores_dependency_graph() {
     assert!(!composer.has_pending_states(),
         "failed-frame notifications must be removed during dependency rollback");
 
-    committed.set_no_wake(4);
+    committed.as_raw().set_animating(4);
     assert!(composer.has_pending_states(), "restored signal must remain subscribed");
     composer.pending_states.drain();
-    failed.set_no_wake(4);
+    failed.as_raw().set_animating(4);
     assert!(!composer.has_pending_states(), "failed signal must be unsubscribed after rollback");
 }
 
@@ -4304,7 +4359,7 @@ fn test_compose_notification_during_frame_is_next_batch() {
     composer.compose(|_ctx| {
         let _ = state.get();
         if notify_once.replace(false) {
-            state.set_no_wake(1);
+            state.as_raw().set_animating(1);
         }
     });
 
@@ -4326,7 +4381,7 @@ fn test_compose_pending_batch_restored_after_panic() {
     composer.compose(|_ctx| {
         let _ = state.get();
     });
-    state.set_no_wake(1);
+    state.as_raw().set_animating(1);
     let state_id = state.signal_id();
     assert!(composer.pending_states.pending_ids().contains(&state_id));
 
@@ -4362,8 +4417,8 @@ fn test_panic_restore_keeps_both_consumed_batch_and_in_frame_notification() {
     });
 
     // 进入下一帧前：激活两个 state
-    state_a.set_no_wake(1);
-    state_b.set_no_wake(1);
+    state_a.as_raw().set_animating(1);
+    state_b.as_raw().set_animating(1);
     let id_a = state_a.signal_id();
     let id_b = state_b.signal_id();
     let pending = composer.pending_states.pending_ids();
@@ -4378,7 +4433,7 @@ fn test_panic_restore_keeps_both_consumed_batch_and_in_frame_notification() {
             // 模拟帧内新通知：在 drain 后、panic 前 set state_b
             // （真实帧内 set 由用户回调触发，这里直接模拟）
             if std::cell::Cell::new(true).take() {
-                state_b.set_no_wake(2);
+                state_b.as_raw().set_animating(2);
             }
             panic!("compose panic after in-frame notification");
         });
@@ -4474,10 +4529,10 @@ fn test_removed_read_notification_during_compose_is_dropped() {
         let _ = trigger.get();
     });
 
-    trigger.set_no_wake(true);
+    trigger.as_raw().set_animating(true);
     composer.compose(|_ctx| {
         let _ = trigger.get();
-        watched.set_no_wake(1);
+        watched.as_raw().set_animating(1);
     });
 
     assert!(!composer.has_pending_states(), "removed read must not leave a stale pending ID");

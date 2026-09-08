@@ -98,7 +98,7 @@ impl InfiniteRepeatableSpec {
 
 /// 无限循环动画实例（永远运行，直到被移除）——泛型统一（f32/Color 共用）。
 struct Infinite<T: AnimatableValue> {
-    state: State<T>,
+    state: crate::core::state::Visual<T>,
     from: T,
     to: T,
     spec: InfiniteRepeatableSpec,
@@ -118,7 +118,7 @@ impl<T: AnimatableValue + Send + Sync + 'static> AnimationInstance for Infinite<
                     Some(AnimationSpec::Keyframes(kf)) => interpolate_keyframes(&kf.frames, t),
                     _ => t,
                 };
-                self.state.set_visual(self.from.lerp(&self.to, eased));
+                self.state.set(self.from.lerp(&self.to, eased));
                 if elapsed >= self.spec.duration { self.start = Instant::now(); }
             }
             RepeatMode::Reverse => {
@@ -126,7 +126,7 @@ impl<T: AnimatableValue + Send + Sync + 'static> AnimationInstance for Infinite<
                 let cycle_secs = self.spec.duration.as_secs_f32().max(0.001) * 2.0;
                 let phase = (elapsed.as_secs_f32() % cycle_secs) / self.spec.duration.as_secs_f32().max(0.001);
                 let t = if phase < 1.0 { phase } else { 2.0 - phase };
-                self.state.set_visual(self.from.lerp(&self.to, t));
+                self.state.set(self.from.lerp(&self.to, t));
             }
         }
         true // 永远运行
@@ -140,20 +140,34 @@ impl<T: AnimatableValue + Send + Sync + 'static> AnimationInstance for Infinite<
 pub fn push_infinite<T: AnimatableValue + Send + Sync + 'static>(
     state: State<T>, from: T, to: T, spec: InfiniteRepeatableSpec,
 ) {
-    let sid = state.state_id();
+    push_infinite_visual(state.into_visual(), from, to, spec);
+}
+
+/// `push_infinite` 的 Visual-handle 入口（InfiniteTransition 已持有 Visual
+/// 时避免 State round-trip）。
+pub fn push_infinite_visual<T: AnimatableValue + Send + Sync + 'static>(
+    visual: crate::core::state::Visual<T>, from: T, to: T, spec: InfiniteRepeatableSpec,
+) {
+    let sid = visual.state_id();
     if has_animation_for_state(sid) { return; } // 跨列表去重
-    let anim = Infinite { state, from, to, spec, start: Instant::now() };
+    let anim = Infinite { state: visual, from, to, spec, start: Instant::now() };
     ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
 }
 
 /// 注册一个动画到全局活跃列表
 /// 注册一个 Animatable<T> 到全局活跃列表（由 animate_*_as_state 调用）
 pub fn push_animatable<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(state: State<T>, target: T, spec: AnimationSpec) {
+    push_animatable_handle(state.into_animating(), target, spec);
+}
+
+/// `push_animatable` 的 Animating-handle 入口（调用方已持有 Animating
+/// 时避免 State round-trip；语义与 `push_animatable` 完全一致）。
+pub fn push_animatable_handle<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(state: crate::core::state::Animating<T>, target: T, spec: AnimationSpec) {
     let sid = state.state_id();
     if state.peek() == target {
         // 当前值已等于目标：仅当无进行中动画（或动画目标相同）时才可直接返回。
         // 若存在目标不同的旧动画，必须取消它——否则旧动画会继续把值拉向旧目标
-        // （快速切换 + set_silent 场景：peek 恰好等于新目标，旧弹簧 22→2 存活，
+        // （快速切换 + Backchannel 场景：peek 恰好等于新目标，旧弹簧 22→2 存活，
         // 最终把容器写回 2 而状态已是 true）。
         let conflicting = {
             let list = ACTIVE_ANIMATIONS.lock().unwrap();
@@ -164,7 +178,7 @@ pub fn push_animatable<T: Clone + PartialEq + AnimatableValue + Send + Sync + 's
         }
         // 取消旧动画后继续走注册路径：零位移动画会立即完成并精确写回 target，
         // 避免“取消后直接返回”在极端时序下残留中间值/1 帧回弹。
-        cancel_animation(&state);
+        cancel_animation_by_id(sid);
     }
     let mut inherited_velocity = 0.0f32;
     // 非标量类型（Offset/Size/Color 等）Spring 无单值物理，强制降级 Tween
@@ -187,7 +201,7 @@ pub fn push_animatable<T: Clone + PartialEq + AnimatableValue + Send + Sync + 's
             .map(|a| a.last_velocity()).unwrap_or(0.0);
         list.retain(|anim| anim.state_id() != sid);
     } // 锁释放，下面 anim.update() 不持锁执行用户代码
-    let mut anim = Animatable::new(state);
+    let mut anim = Animatable::from_animating(state);
     anim.start_with_velocity(target, spec, inherited_velocity);
     // 立即执行首次更新，避免等下一帧 flash
     anim.update();
@@ -494,7 +508,12 @@ pub fn has_animation_for_state(state_id: StateId) -> bool {
 /// update_animations 仍会把动画值写回。要"立即停下并设为目标值"请先
 /// `cancel_animation(&state)` 再 `state.set(v)`（或直接用 Snap push）。
 pub fn cancel_animation<T: 'static>(state: &State<T>) {
-    let sid = state.state_id();
+    cancel_animation_by_id(state.state_id());
+}
+
+/// Cancel by raw StateId (for `Animating`/`Visual` handles that share the
+/// same signal but are not `State<T>`).
+pub fn cancel_animation_by_id(sid: crate::core::state::StateId) {
     ACTIVE_ANIMATIONS.lock().unwrap().retain(|a| a.state_id() != sid);
     ACTIVE_COLOR_ANIMATIONS.lock().unwrap().retain(|a| a.state.state_id() != sid);
 }
@@ -511,7 +530,7 @@ pub fn is_animating() -> bool {
 
 /// 可动画化的单一值
 pub(crate) struct Animatable<T: Clone + 'static> {
-    state: State<T>,
+    state: crate::core::state::Animating<T>,
     anim_state: Option<AnimationState<T>>,
     /// 动画完成回调（done 帧触发一次，take 后释放）
     on_finish: Option<Box<dyn FnOnce() + Send>>,
@@ -537,6 +556,10 @@ struct AnimationState<T> {
 
 impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
     pub fn new(state: State<T>) -> Self {
+        Self::from_animating(state.into_animating())
+    }
+
+    pub fn from_animating(state: crate::core::state::Animating<T>) -> Self {
         Self { state, anim_state: None, on_finish: None, on_boundary: None, clamp: None }
     }
 
@@ -634,7 +657,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
                 _ => None,
             };
             if let Some(final_val) = overrun {
-                self.state.set_no_wake(final_val);
+                self.state.set(final_val);
                 self.anim_state = None;
                 if let Some(f) = self.on_finish.take() {
                     f();
@@ -780,7 +803,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
                 }
             }
         };
-        self.state.set_no_wake(value);
+        self.state.set(value);
         if let Some(velocity) = boundary_velocity {
             if let Some(f) = self.on_boundary.take() {
                 f(velocity);
@@ -798,7 +821,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
     /// 立即跳转到目标值（无动画）
     pub fn snap_to(&mut self, value: T) {
         self.anim_state = None;
-        self.state.set_no_wake(value);
+        self.state.set(value);
     }
 }
 
@@ -1016,11 +1039,12 @@ impl InfiniteTransition {
         from: f32,
         to: f32,
         spec: InfiniteRepeatableSpec,
-    ) -> State<f32> {
+    ) -> crate::core::state::Visual<f32> {
         let state: State<f32> = ctx.remember(|| from);
         self.push_id(state.state_id());
-        crate::animation::push_infinite(state.clone(), from, to, spec);
-        state
+        let visual = state.into_visual();
+        crate::animation::push_infinite_visual(visual.clone(), from, to, spec);
+        visual
     }
 
     /// 注册一个保留当前相位的无限浮点动画。
@@ -1034,13 +1058,14 @@ impl InfiniteTransition {
         default_from: f32,
         to: f32,
         spec: InfiniteRepeatableSpec,
-    ) -> State<f32> {
+    ) -> crate::core::state::Visual<f32> {
         let state: State<f32> = ctx.remember(|| default_from);
         let start = state.peek();
         let range = to - default_from;
         self.push_id(state.state_id());
-        crate::animation::push_infinite(state.clone(), start, start + range, spec);
-        state
+        let visual = state.into_visual();
+        crate::animation::push_infinite_visual(visual.clone(), start, start + range, spec);
+        visual
     }
 
     /// 注册一个 from→to 无限循环颜色动画（CAM16-UCS 插值）
@@ -1050,11 +1075,12 @@ impl InfiniteTransition {
         from: crate::modifier::Color,
         to: crate::modifier::Color,
         spec: InfiniteRepeatableSpec,
-    ) -> State<crate::modifier::Color> {
+    ) -> crate::core::state::Visual<crate::modifier::Color> {
         let state: State<crate::modifier::Color> = ctx.remember(|| from);
         self.push_id(state.state_id());
-        crate::animation::push_infinite(state.clone(), from, to, spec);
-        state
+        let visual = state.into_visual();
+        crate::animation::push_infinite_visual(visual.clone(), from, to, spec);
+        visual
     }
 
     /// 取消此作用域创建的所有动画（组件离开组合/不再需要时手动调用）
@@ -1332,7 +1358,7 @@ pub(crate) mod tests {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let state = State::new(0.0);
         let mut inf = Infinite {
-            state: state.clone(),
+            state: state.clone().into_visual(),
             from: 0.0, to: 10.0,
             spec: InfiniteRepeatableSpec::restart(Duration::from_millis(50)),
             start: Instant::now(),
@@ -1358,7 +1384,7 @@ pub(crate) mod tests {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let state = State::new(0.4);
         let mut inf = Infinite {
-            state: state.clone(),
+            state: state.clone().into_visual(),
             from: 0.4, to: 1.0,
             spec: InfiniteRepeatableSpec::reverse(Duration::from_millis(50)),
             start: Instant::now(),
@@ -1401,7 +1427,7 @@ pub(crate) mod tests {
         use crate::modifier::Color;
         let state = State::new(Color::RED);
         let mut inf = Infinite {
-            state: state.clone(),
+            state: state.clone().into_visual(),
             from: Color::RED, to: Color::BLUE,
             spec: InfiniteRepeatableSpec::reverse(Duration::from_millis(50)),
             start: Instant::now(),

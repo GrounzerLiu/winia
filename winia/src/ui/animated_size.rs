@@ -46,7 +46,7 @@ impl AnimatedSize {
 
     /// 构建尺寸动画容器。
     /// ⚠ 不宏化：尺寸动画靠 measure 期 `size.get()` 注册 layout_dep + 动画推进
-    /// set_no_wake 驱动每帧重测——宏化封闭 scope 后父容器 Skip，重测链路
+    /// Animating 写驱动每帧重测——宏化封闭 scope 后父容器 Skip，重测链路
     /// 可能被切断（同 animated_visibility/crossfade/animated_content 宏化回归）。
     /// 内部 remember 靠调用点语句 base（稳定）。
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
@@ -54,7 +54,7 @@ impl AnimatedSize {
         // target 不能放 policy 实例（每次 build 重建→Enter 时重置为 None→首帧
         // 逻辑重复→每次 Enter 都直接跳转无动画）
         let size: State<Size> = ctx.remember(|| Size::new(0.0, 0.0));
-        let target: State<Option<Size>> = ctx.remember(|| None);
+        let target = ctx.remember_backchannel(|| None);
         let policy = SizePolicy {
             size: size.clone(),
             target: target.clone(),
@@ -76,9 +76,9 @@ impl AnimatedSize {
 struct SizePolicy {
     /// 动画值（当前显示尺寸）
     size: State<Size>,
-    /// 上次目标尺寸（None = 首帧——直接跳转无动画）——State 而非 RefCell：
-    /// policy 实例每次 build 重建，State 跨重组保留
-    target: State<Option<Size>>,
+    /// 上次目标尺寸（None = 首帧——直接跳转无动画）——Backchannel 而非
+    /// RefCell：policy 实例每次 build 重建，跨重组保留且不触发通知
+    target: crate::core::state::Backchannel<Option<Size>>,
     spec: AnimationSpec,
 }
 
@@ -108,15 +108,15 @@ impl MeasurePolicy for SizePolicy {
         }
         // 目标变化 → 启动尺寸动画（首帧 Snap 直接跳转）
         let goal = Size::new(child_w, child_h);
-        let prev = self.target.get();
+        let prev = self.target.peek();
         if prev != Some(goal) {
             if prev.is_none() {
                 // 首帧：无动画直接跳转（Compose 语义）
-                self.size.set_no_wake(goal);
+                self.size.as_raw().set_animating(goal);
             } else {
                 push_animatable(self.size.clone(), goal, self.spec.clone());
             }
-            self.target.set_no_wake(Some(goal));
+            self.target.set(Some(goal));
         }
         // layout_dep：动画推进每帧重测本节点（get 注册——值变化才 notify）
         let cur = self.size.get();

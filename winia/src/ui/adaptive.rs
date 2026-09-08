@@ -8,7 +8,7 @@
 use std::cell::{Cell, RefCell};
 use std::sync::{Arc, Mutex};
 
-use crate::core::state::State;
+use crate::core::state::{Backchannel, State};
 
 /// Per-Composer adaptive window context. The public adaptive API resolves the
 /// context active during compose/layout, so interleaved windows do not share a
@@ -91,6 +91,13 @@ pub fn set_window_size_state(state: State<(f32, f32)>) {
     } else {
         FALLBACK_WINDOW_SIZE_STATE.with(|current| *current.borrow_mut() = Some(state));
     }
+}
+
+/// Per-frame sync of the window-size value without notify (Backchannel write).
+/// The `set()` on resize (app.rs SurfaceResized path) is the notifying write
+/// that drives recomposition; this keeps the stored value current in between.
+pub fn sync_window_size_state(state: &Backchannel<(f32, f32)>, size: (f32, f32)) {
+    state.set(size);
 }
 
 /// 当前窗口逻辑尺寸。挂载了 State 时走 `get()` 注册当前 Composer 依赖。

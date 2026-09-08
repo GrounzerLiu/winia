@@ -277,7 +277,7 @@ fn scrollbar_build_shared(
     //
     // ⚠ wheel/程序化滚动时 `scrolling` 恒 false（分发层 cancel+置 false，
     // 拖拽路径才置 true）——故滚动检测不用它，而用"offset/脉冲变化"：
-    // `last_scroll` 记住上帧 offset，本帧不同即正在滚（set_silent 写回，
+    // `last_scroll` 记住上帧 offset，本帧不同即正在滚（Backchannel 写回，
     // 不触发重组——本帧 build 照常继续）；`scroll_pulse` 是分发层在"命中
     // 但消费为 0"（顶/底继续滚，offset 无变化）时自增的计数（P1-3）——
     // 两者任一变化即点亮 fade，给"到底了"的反馈（M3/CMP 同行为）。
@@ -287,15 +287,15 @@ fn scrollbar_build_shared(
     // scroll 每帧都变→每帧重启 effect→abort 睡眠→保持显示。
     // （pulse 只在边界触发一次，不进 key——单次脉冲若进 key 会与 scroll
     // 同帧双重启，无谓 churn；pulse 的 get 注册依赖已足够驱动点亮帧。）
-    let last_scroll: State<f32> = ctx.remember(|| scroll);
+    let last_scroll = ctx.remember_backchannel(|| scroll);
     let scroll_active = last_scroll.peek() != scroll;
     if scroll_active {
-        last_scroll.set_silent(scroll);
+        last_scroll.set(scroll);
     }
-    let last_pulse: State<u64> = ctx.remember(|| scroll_state_src.scroll_pulse.get());
+    let last_pulse = ctx.remember_backchannel(|| scroll_state_src.scroll_pulse.get());
     let pulse_active = last_pulse.peek() != scroll_state_src.scroll_pulse.get();
     if pulse_active {
-        last_pulse.set_silent(scroll_state_src.scroll_pulse.get());
+        last_pulse.set(scroll_state_src.scroll_pulse.get());
     }
     let fade_target = if cfg.always_show || scrolling || hovered || dragged
         || scroll_active || pulse_active
@@ -388,8 +388,8 @@ fn scrollbar_build_shared(
     // 当时 thumb 顶部，拖动时 target = 光标 - grab，thumb 跟手不跳。
     // 旧中心对齐（target = 光标 - thumb/2）大 thumb 下首帧跳变，实测修。
     // grab 是交互期临时值（remember 持有，不进 node_key、不注册依赖——
-    // set_silent 写，build 内 peek 读；拖动中 offset.set 驱动重组已足够）。
-    let grab_offset: State<f32> = ctx.remember(|| 0.0f32);
+    // Backchannel 写，build 内 peek 读；拖动中 offset.set 驱动重组已足够）。
+    let grab_offset = ctx.remember_backchannel(|| 0.0f32);
     let drag_inset = cfg.inset;
     let drag_cb = {
         let scroll_state_src = scroll_state_src.clone();
@@ -459,7 +459,7 @@ fn scrollbar_build_shared(
             // clamp 到 [0, thumb]：按下点若在 thumb 外（track 空白处按下），
             // grab 钳到 thumb 边缘，避免首帧大跳（等价于"点哪 thumb 边缘跟到哪"）。
             let pos_in_track = if vertical { pos.1 } else { pos.0 } - drag_inset;
-            grab_offset.set_silent((pos_in_track - thumb_offset).clamp(0.0, drag_thumb_len.max(0.0)));
+            grab_offset.set((pos_in_track - thumb_offset).clamp(0.0, drag_thumb_len.max(0.0)));
         }
     })
     .on_drag_end(move || {

@@ -283,10 +283,11 @@ impl Slider {
         let st = interaction.state(enabled);
         let thumb_active = st.pressed || st.focused || st.dragged;
 
-        // 轨道宽度：渲染期由 draw 闭包写入（set_silent 不触发重组）——
-        // 交互回调（tap/drag）读此值做像素↔值换算（winia 无 onSizeChanged，
-        // draw 闭包是唯一拿到节点尺寸的组合侧通道）
-        let track_width = ctx.remember(|| 0.0f32);
+        // Track width: written back at render time by the draw closure
+        // (Backchannel — no recompose); gesture callbacks (tap/drag) read it
+        // for px<->value conversion (no onSizeChanged — the draw closure is
+        // the only composition-side channel that sees node size).
+        let track_width = ctx.remember_backchannel(|| 0.0f32);
         let tw_tap = track_width.clone();
         let tw_drag = track_width.clone();
         let tw_press = track_width.clone();
@@ -432,14 +433,14 @@ pub(crate) fn handle_key(
 /// 轨道绘制节点（exp/modifier-node 首个真实迁移）：`Modifier::draw` 匿名闭包的
 /// 具名等价物。绘制几何见 [`draw_slider`]。`node_key` 纳入静态视觉参数
 /// （值/颜色/开关/源身份），回写通道与瞬态动画值排除（见 `node_key` 注释）。
-/// `track_width` 回写（像素↔值换算通道）保留在 node 内（set_silent，不触发重组）。
+/// `track_width` 回写（像素↔值换算通道）保留在 node 内（Backchannel，不触发重组）。
 ///
 /// 可见性（P1-4）：`pub(crate)`——第三方照抄形状自定节点类型，不复用本节点
 /// （value 未 clamp、`min>max` 未归一——归一在 `build` 侧，不在 node 内）。
 #[derive(Debug)]
 pub(crate) struct SliderTrackNode {
     /// 轨道宽度回写（tap/drag 像素↔值换算读此值）。
-    pub(crate) track_width: crate::core::state::State<f32>,
+    pub(crate) track_width: crate::core::state::Backchannel<f32>,
     /// 绘制用交互源（渲染期读焦点/波纹状态——peek，不注册依赖）。
     pub(crate) interaction: MutableInteractionSource,
     pub(crate) colors: SliderColors,
@@ -453,7 +454,7 @@ pub(crate) struct SliderTrackNode {
 
 impl crate::modifier::DrawNode for SliderTrackNode {
     fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
-        self.track_width.set_silent(rect.width());
+        self.track_width.set(rect.width());
         // 渲染期 peek（P1-4）：get 在渲染期注册不上依赖（已出依赖帧），用 peek
         // 语义诚实；focused 经 thumb_active 间接进 key（build 期），focus_alpha
         // 为瞬态动画值故意不进 key（见 node_key 注释）。
@@ -1088,7 +1089,7 @@ mod tests {
         colors2.thumb_color = Color::from_argb(255, 1, 2, 3);
         // 同一 interaction 源（换源单独测——每次 new 源 id 不同）
         let shared_src = MutableInteractionSource::new();
-        let shared_tw = State::new(300.0);
+        let shared_tw = crate::core::state::Backchannel::new(300.0);
         #[allow(clippy::too_many_arguments)]
         let mk = |value: f32, enabled: bool, thumb_active: bool, colors: SliderColors,
                   min: f32, max: f32, steps: i32| {
@@ -1117,14 +1118,14 @@ mod tests {
         assert_ne!(base.node_key(), mk(0.5, true, false, colors, 0.0, 2.0, 0).node_key(), "max 应进 key");
         assert_ne!(base.node_key(), mk(0.5, true, false, colors, 0.0, 1.0, 4).node_key(), "steps 应进 key");
         // P0-2 补：track_width 回写通道不进 key（值变化 → key 相等，走依赖通道）
-        shared_tw.set_silent(999.0);
+        shared_tw.set(999.0);
         assert_eq!(
             base.node_key(), mk(0.5, true, false, colors, 0.0, 1.0, 0).node_key(),
             "track_width 回写值变化不应进 key"
         );
         // 换源 → 不等（重建绑定）
         let other = SliderTrackNode {
-            track_width: State::new(300.0),
+            track_width: crate::core::state::Backchannel::new(300.0),
             interaction: MutableInteractionSource::new(), // 新源 id 不同
             colors,
             enabled: true,
@@ -1166,8 +1167,8 @@ mod tests {
             let pm = surface.peek_pixels().expect("pixmap");
             pm.pixels::<[u8; 4]>().expect("pixels").to_vec()
         };
-        let tw_node = crate::core::state::State::new(0.0f32);
-        let tw_enum = crate::core::state::State::new(0.0f32);
+        let tw_node = crate::core::state::Backchannel::new(0.0f32);
+        let tw_enum = crate::core::state::Backchannel::new(0.0f32);
         let src_node = MutableInteractionSource::new();
         let src_enum = MutableInteractionSource::new();
         let node_mod = Modifier::new().size(300.0, 48.0).draw_node(SliderTrackNode {
@@ -1185,7 +1186,7 @@ mod tests {
         // 读焦点/环透明度 + draw_slider 同参。注意 node 绘制顺序已移至枚举链
         // 之后（P1-1）——本节点无 Background/Icon 同胞，顺序差无像素影响。
         let enum_mod = Modifier::new().size(300.0, 48.0).draw(move |canvas, rect| {
-            tw_enum.set_silent(rect.width());
+            tw_enum.set(rect.width());
             let focused = src_enum.is_focused_value();
             let focus_alpha = src_enum.focus_indicator_alpha_value();
             draw_slider(canvas, rect, &colors, true, 0.5, 0.0, 1.0, 4, false, focused, focus_alpha);
