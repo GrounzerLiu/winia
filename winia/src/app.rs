@@ -938,17 +938,48 @@ impl ApplicationHandler for AppState {
                 }
                 if event.state.is_pressed() && matches!(&event.logical_key, Key::Named(NamedKey::Tab)) {
                     let shift = pw.modifiers.shift_key();
-                    let (new_id, new_slot) = pw.composer.layout_root_idx().map(|r| {
-                        let nodes = pw.composer.arena_nodes_mut();
-                        if shift { focus_prev(nodes, r); } else { focus_next(nodes, r); }
-                        let id = crate::layout::node::get_focus_id(nodes, r);
-                        let slot = id.and_then(|fid| crate::layout::node::find_node_by_id(nodes, r, fid).map(|idx| nodes[idx].slot_key));
-                        (id, slot)
-                    }).unwrap_or((None, None));
-                    pw.focused_id = new_id;
-                    pw.focused_slot_key = new_slot;
-                    // Tab 聚焦文本组件时同步开启输入法（与方向键/点击路径一致）
-                    pw.apply_ime_for_focus(new_id);
+                    let has_overlay_focus = pw.overlays.iter().any(|o| !o.closing && o.focused_id.is_some());
+                    if has_overlay_focus {
+                        // Focus lives in an overlay — cycle within the topmost
+                        // focused overlay instead of the main tree (P1-2).
+                        for i in (0..pw.overlays.len()).rev() {
+                            if pw.overlays[i].closing || pw.overlays[i].focused_id.is_none() {
+                                continue;
+                            }
+                            let (new_id, new_slot, want_ime) = {
+                                let ov = &mut pw.overlays[i];
+                                let r = match ov.composer.layout_root_idx() {
+                                    Some(r) => r,
+                                    None => continue,
+                                };
+                                let nodes = ov.composer.arena_nodes_mut();
+                                if shift { focus_prev(nodes, r); } else { focus_next(nodes, r); }
+                                let fid = crate::layout::node::get_focus_id(nodes, r);
+                                let (slot, want) = fid
+                                    .and_then(|f| crate::layout::node::find_node_by_id(nodes, r, f))
+                                    .map(|idx| (nodes[idx].slot_key, node_or_descendant_wants_ime(nodes, idx)))
+                                    .unwrap_or((0, false));
+                                (fid, fid.map(|_| slot), want)
+                            };
+                            pw.overlays[i].focused_id = new_id;
+                            pw.overlays[i].focused_slot_key = new_slot;
+                            if let Some(ref sw) = pw.skia_window {
+                                sw.set_ime_allowed(want_ime);
+                            }
+                            break;
+                        }
+                    } else {
+                        let (new_id, new_slot) = pw.composer.layout_root_idx().map(|r| {
+                            let nodes = pw.composer.arena_nodes_mut();
+                            if shift { focus_prev(nodes, r); } else { focus_next(nodes, r); }
+                            let id = crate::layout::node::get_focus_id(nodes, r);
+                            let slot = id.and_then(|fid| crate::layout::node::find_node_by_id(nodes, r, fid).map(|idx| nodes[idx].slot_key));
+                            (id, slot)
+                        }).unwrap_or((None, None));
+                        pw.focused_id = new_id;
+                        pw.focused_slot_key = new_slot;
+                        pw.apply_ime_for_focus(new_id);
+                    }
                     consumed = true;
                 }
                 if !consumed {
@@ -1493,7 +1524,35 @@ impl AppState {
                             handled = true;
                         }
                     } else if key == "Tab" {
-                        if let Some(r) = pw.composer.layout_root_idx() {
+                        let has_overlay_focus = pw.overlays.iter().any(|o| !o.closing && o.focused_id.is_some());
+                        if has_overlay_focus {
+                            for i in (0..pw.overlays.len()).rev() {
+                                if pw.overlays[i].closing || pw.overlays[i].focused_id.is_none() {
+                                    continue;
+                                }
+                                let (new_id, new_slot, want_ime) = {
+                                    let ov = &mut pw.overlays[i];
+                                    let r = match ov.composer.layout_root_idx() {
+                                        Some(r) => r,
+                                        None => continue,
+                                    };
+                                    let nodes = ov.composer.arena_nodes_mut();
+                                    focus_next(nodes, r);
+                                    let fid = crate::layout::node::get_focus_id(nodes, r);
+                                    let (slot, want) = fid
+                                        .and_then(|f| crate::layout::node::find_node_by_id(nodes, r, f))
+                                        .map(|idx| (nodes[idx].slot_key, node_or_descendant_wants_ime(nodes, idx)))
+                                        .unwrap_or((0, false));
+                                    (fid, fid.map(|_| slot), want)
+                                };
+                                pw.overlays[i].focused_id = new_id;
+                                pw.overlays[i].focused_slot_key = new_slot;
+                                if let Some(ref sw) = pw.skia_window {
+                                    sw.set_ime_allowed(want_ime);
+                                }
+                                break;
+                            }
+                        } else if let Some(r) = pw.composer.layout_root_idx() {
                             let nodes = pw.composer.arena_nodes_mut();
                             focus_next(nodes, r);
                             pw.focused_id = crate::layout::node::get_focus_id(nodes, r);
@@ -2330,8 +2389,8 @@ impl OverlayWindow {
             screen_pos: (0.0, 0.0),
             hovered_slots: std::collections::HashSet::new(),
             pressed_interaction: None,
-            // 动画进度：enter **或** exit 有规格 → progress State 驱动（进入
-            // 0→1 / 退出 1→0）；两者皆无 → None（恒显示——瞬时出现/消失）
+            // progress is driven only when an enter or exit spec exists (0->1
+            // enter, 1->0 exit); otherwise None means always visible (instant).
             progress: (desc.enter_anim.is_some() || desc.exit_anim.is_some())
                 .then(|| crate::core::state::State::new(0.0)),
             enter_anim: desc.enter_anim,
@@ -2352,19 +2411,27 @@ impl OverlayWindow {
         self.on_dismiss = desc.on_dismiss;
         self.content = desc.content;
         self.local_snapshot = desc.local_snapshot;
-        // 动画规格更新（复用 overlay 时动画参数变化生效）——规格 None↔Some
-        // 翻转时重建 progress（None→Some：新建驱动；Some→None：残留 State
-        // 弃用——render 落 `_` 分支恒显示，关闭 has_exit=false 立即移除）
+        // Animation spec update (when a reused overlay's specs change) — rebuild
+        // progress on None<->Some flip (None->Some: new driver; Some->None:
+        // leftover State retired — render falls to the `_` branch, always visible,
+        // and close removes instantly with has_exit=false).
+        let old_progress = self.progress.clone();
         let spec_flipped = desc.enter_anim.is_some() != self.enter_anim.is_some()
             || desc.exit_anim.is_some() != self.exit_anim.is_some();
         self.enter_anim = desc.enter_anim;
         self.exit_anim = desc.exit_anim;
         if spec_flipped {
+            // Cancel any in-flight animation on the old progress State (otherwise
+            // it lingers as an orphan until timeout — P1-4).
+            if let Some(old) = old_progress {
+                crate::animation::cancel_animation(&old);
+            }
             self.progress = (self.enter_anim.is_some() || self.exit_anim.is_some())
                 .then(|| crate::core::state::State::new(0.0));
-            // 重建后保持显示（update 是复用路径——overlay 已显示中；progress=0
-            // 会让渲染落 apply(0) 隐藏）。若新规格有 enter 动画，由调用方
-            // push 进入动画；否则直接完整显示
+            // Update is the reuse path — overlay is already visible; progress=0
+            // would render as apply(0) hidden. If the new spec has no enter
+            // animation, keep it fully visible; otherwise the caller will push
+            // the 0->1 enter animation.
             if let Some(p) = self.progress.as_ref() {
                 if self.enter_anim.is_none() {
                     p.set_silent(1.0);

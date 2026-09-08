@@ -399,9 +399,7 @@ impl SearchBar {
                             .color(container)
                             .modifier(Modifier::new().fill_max_size())
                             .build(ctx, |ctx| {
-                                crate::ui::layout_components::Column::new()
-                                    .modifier(Modifier::new().fill_max_size())
-                                    .build(ctx, |ctx| {
+                                crate::ui::layout_components::Column::new().build(ctx, |ctx| {
                                         input_field(
                                             ctx,
                                             &state.query,
@@ -543,8 +541,25 @@ impl DockedSearchBar {
         // position. composer_slot_key() is wrong here — it yields the last
         // materialized *inner* node (the input text leaf at x=38), shifting the
         // whole dropdown right to the text position.
+        // ⚠ `read_only` is NOT registered via `ctx.changed()` (TextField never
+        // declares it — see TextField::build: no `ctx.changed(&self.read_only)`).
+        // Its only propagation path is the anchor group's Skip/Enter gate via
+        // the parent Surface's modifier (Surface::build has no `changed` calls
+        // either — so its modifier equality decides) plus the TextField key
+        // remap below. `read_only` must therefore alter the *modifier chain*,
+        // never just the builder field — otherwise the value flips silently
+        // inside a reused slot and the dropdown input stays read-only
+        // (typed keys swallowed, `filtered()` never re-runs → "no filtering").
+        // We encode it as `fill_max_width(bool_marker)`: collapsed carries a
+        // FillMaxWidth element, expanded does not (see overlay comment for the
+        // full modifier-equality chain).
         let anchor_key = ctx.next_key();
-        match ctx.start_restartable_group(anchor_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+        let anchor_modifier = if !active {
+            Modifier::new().fill_max_width()
+        } else {
+            Modifier::new()
+        };
+        match ctx.start_restartable_group(anchor_key, anchor_modifier, crate::layout::BoxLayout::new()) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
                 crate::ui::surface::Surface::new()
@@ -565,7 +580,7 @@ impl DockedSearchBar {
                             &oc,
                             &os,
                             en,
-                            true, // read-only: tap expands instead of editing
+                            !active, // collapsed: read-only to expand on tap; expanded: editable (single input — no duplicate in popup)
                             true, // fill pill height: content centered
                             &ph, &li, &ti, &ic, &None,
                         );
@@ -574,7 +589,11 @@ impl DockedSearchBar {
         }
         let anchor_slot = anchor_key;
         ctx.end_restartable_group();
-        // Dropdown under the bar: Popup anchored BottomLeft (= under anchor) + gap.
+        // Docked dropdown: Popup anchored BottomLeft (= under anchor) + gap.
+        // Input stays in the pill (which becomes editable after expand — pill
+        // is not hidden behind an overlay like fullscreen). Popup only carries
+        // the results, so we don't duplicate the input field (fixes the extra
+        // input that appeared inside the panel).
         // Popup::build ALWAYS executes (visible=active contract): on close it
         // records active=false so sync_overlays deletes the overlay. An early
         // `if !active return` would look like a Skip frame and leak a zombie.
@@ -584,8 +603,6 @@ impl DockedSearchBar {
             .position(crate::ui::overlay::PopupPosition::BottomLeft)
             .offset(0.0, SearchBarDefaults::docked_gap())
             .anchor_slot(Some(anchor_slot))
-            // Upstream parity: whole panel slides down from half-height above,
-            // clipped to its settled bounds (slide_in y=-height/2); exit mirrors.
             .enter_animation(Some(crate::ui::overlay::OverlayAnimSpec::slide_down(
                 std::time::Duration::from_millis(350),
             )))
@@ -593,8 +610,8 @@ impl DockedSearchBar {
                 std::time::Duration::from_millis(350),
             )))
             .on_dismiss_request({
-                let st = state.clone();
-                move || st.close()
+                let s = state.clone();
+                move || s.close()
             })
             .build(ctx, move |ctx| {
                 crate::ui::surface::Surface::new()

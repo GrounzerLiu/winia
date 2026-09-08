@@ -42,9 +42,9 @@ DockedSearchBar::new()
 - **Collapsed**: pill Surface + read-only InputField; tap anywhere opens.
   Expanded leading defaults to a back arrow (upstream fullscreen navigation
   icon); caller `leading_icon` overrides it.
-- **Expanded (SearchBar)**: fullscreen `Dialog` overlay (`no_animation`,
-  modal, outside-tap dismisses) + editable field + `Divider` + content.
-  Collapsed pill stays composed underneath (stable anchor slot).
+- **Expanded (SearchBar)**: fullscreen `Dialog` overlay (modal,
+  outside-tap dismisses, `expand_fade` 400ms) + editable field + `Divider` +
+  content. Collapsed pill stays composed underneath (stable anchor slot).
 - **Expanded (DockedSearchBar)**: `Popup` anchored `BottomLeft` under the bar
   + gap 2, rounded 12, same x/width as the bar (verified against upstream
   `DockedSearchBarLayout`: content `maxWidth = inputFieldWidth`, placed at
@@ -108,7 +108,78 @@ DockedSearchBar::new()
     screen-sized maxes);
   - new `on_search` callback (single-line Enter).
 
-## 4. Tests
+### Additional notes
+
+- `SearchBarState` is intentionally minimal (`query + active: bool`) — upstream
+  holds two `Animatable<Float>` (`progress` + `contentProgress`) plus
+  `expandsToFullScreen/collapsedCoords`. Winia drives animation at the overlay
+  container level (`OverlayAnimSpec`) instead of layout-level progress lerp.
+- `DockedSearchBar` reuses `SearchBar` internals via composition (`inner:
+  SearchBar`) rather than duplicating builder fields — keeps defaults in sync.
+
+## 5. Comparison with upstream `SearchBar.kt` (4233 LOC, sparse checkout `D:/any/androidx-ref/.../SearchBar.kt`)
+
+Upstream is no longer a single component — it ships **3 generations side by
+side** (new split API + classic boolean compat). Winia deliberately folds the
+new split API into the classic shape. Differences are therefore mostly **scope
+choices**, not correctness bugs.
+
+### 5.1 API shape
+
+| Dimension | Compose upstream | Winia `winia/src/ui/search_bar.rs:27` | Verdict |
+|---|---|---|---|
+| Collapsed | `SearchBar(state, inputField: @Composable()->Unit, shape/colors/tonal/shadow)` — `SearchBarImpl:312` is just `Surface(shape){ inputField }` + `onGloballyPositioned{ collapsedCoords }`. `inputField` is caller-supplied `SearchBarDefaults.InputField` | `SearchBar::new().state().placeholder().leading_icon().trailing_icon().input_colors()` — `inputField` is synthesized internally as `TextField::no_container().single_line(true)` where `state.query` IS the `TextFieldValue`; `on_query_change` is notification-only | **Intentional simplification.** Upstream decouples the field to reuse `TextFieldState / InputTransformation / KeyboardOptions`; Winia's desktop use is simpler — inlining is more ergonomic. Cost: less `RowScope`-level customization of the field. |
+| Expanded | 4 separate composables: `ExpandedFullScreenSearchBar:807 / ExpandedFullScreenContainedSearchBar:693` (Dialog fullscreen) + `ExpandedDockedSearchBar:1074 / ExpandedDockedSearchBarWithGap:964` (Popup dropdown, with/without gap) | `SearchBar` → fullscreen `Dialog`; `DockedSearchBar` → anchored `Popup` on the same `SearchBarState`; single `build(ctx, \|ctx\| content)` | **Folded.** Upstream lets callers pick per breakpoint (phone fullscreen vs tablet docked); Winia merges into two classic components (`docs/search-bar.md:5`). Sufficient for desktop; loses adaptive switching. |
+| AppBar | `TopSearchBar:381` (`@Deprecated → AppBarWithSearch:456`) / `AppBarWithSearchImpl:540` — `SearchBar` as `Scaffold.topBar` with `navigationIcon/actions/contentPadding/windowInsets/scrollBehavior` and `derivedStateOf(overlappedFraction)` → `animateColorAsState` | Not implemented | **Gap.** Needed only if the bar lives in `Scaffold.topBar` and should react to scroll. |
+| Compat | `SearchBar(inputField, expanded: Boolean, onExpandedChange, ...):1259` + `DockedSearchBar:1376` with `Animatable + PredictiveBackHandler + MutatorMutex` | No compat layer — `SearchBarState{ active: State<bool> }` directly | Upstream keeps it for binary compat; Winia does not need it. |
+
+### 5.2 State
+
+**Compose `SearchBarState:1429`** (`@Stable`):
+`animatable: Animatable<Float>` (progress 0→1) + `contentAnimatable` (contentProgress) + `animationSpecForExpand/Collapse` (`SlowSpatial/DefaultSpatial/FastSpatial`) + `animationSpecForContentFadeIn/Out` (`snap`/delayed fade) + `expandsToFullScreen/collapsedCoords/LayoutCoordinates` + `progress/contentProgress/isAnimating/targetValue/currentValue(0.02 tolerance)` + `animateToExpanded/Collapsed/snapTo` + `Saver(progress+contentProgress)` + factories `rememberSearchBarState / rememberContainedSearchBarState / rememberSearchBarWithGapState:1631`.
+
+**Winia `SearchBarState:29`**: `query: State<TextFieldValue> + active: State<bool>` + `open/close/query_text/set_query/is_active`. No `Animatable` — animation lives in `OverlayAnimSpec` at the overlay container.
+
+This is an **architectural fork**: Compose drives geometry via `progress` lerp in `FullScreenSearchBarLayout:3770` (`lerp(collapsedBounds, expandedBounds, progress)`) + `graphicsLayer(alpha=contentProgress)`; Winia uses `Dialog/Popup + expand_fade(400ms)/slide_down(350ms)` — `docs/search-bar.md:59` notes `true shared-element morph needs anchor geometry`.
+
+### 5.3 Layout & windowing
+
+- Compose: `SearchBarLayout:3460 / DockedSearchBarLayout:3617 / FullScreenSearchBarLayout:3770` are pure `Layout` measures with `DockedExpandedTableMaxHeightScreenRatio` and `visible = progress>threshold && target==Expanded` anti-flicker. `WindowInsets:1960` (`systemBarsForVisualComponents / safeDrawing / imePadding / consumeWindowInsets`), `BasicEdgeToEdgeDialog`, and `PopupPositionProvider:1166` (`if(hasScrim) Zero else collapsedBounds.topLeft`, scrim `drawRect(alpha=progress)`).
+- Winia: collapsed `Surface(Pill).fill_max_width().height(56)` + `TextField.no_container().height(56)` centered via measured-height centering (not constraint max); fullscreen `Dialog(modal).fill_max_size().Surface(Rectangle) + Column{ input(56) + Divider + content }`; docked explicit `anchor_key` Box wrapper → `Popup(BottomLeft+gap2)` + `Surface(Rounded12)`. `render_overlays` clip was fixed to `size*scale` device px (was 1/scale on HiDPI). No `WindowInsets` / `heightIn(min,max)` cap (demo caps docked to 5 rows).
+
+### 5.4 Animation
+
+| Upstream | Winia | Alignment |
+|---|---|---|
+| `MotionSchemeKeyTokens` spatial springs + `contentProgress` layered on `progress` (expand: content `snap` then fade-in; collapse: fade-out then container collapse) + `PredictiveBackHandler:1294` with `snapTo(1-transform(back.progress))` | Fullscreen `expand_fade 400ms` (reveal_top+fade), docked `slide_down 350ms EaseOutCubic y=-h/2` clipped to settled bounds (`fade:true` so enter/exit are symmetric) | **Approximate.** Spatial curves differ (`EaseOutCubic` vs M3 springs), but `d4c4cf1` moved docked from "content-level appear-slide" back to "overlay-canvas slide" — parity with `slideIn(y=-height/2)+fadeIn / slideOut+fadeOut`. |
+| `LaunchedEffect(expanded){ animateTo(0/1, AnimationEnter/ExitFloatSpec) }` on the classic compat path | `active` bool directly drives `Dialog/Popup` `enter/exit_animation` | Equivalent. |
+
+### 5.5 Scroll linkage — the largest gap
+
+Compose `SearchBarScrollState:1753 + SearchBarScrollBehavior:1840 + EnterAlways:1882`: `scrollOffset/contentOffset/scrollOffsetLimit` + `overlappedFraction():1869` + `nestedScrollConnection(onPreScroll/onPostScroll/onPostFling)` + `draggable + layout(placeWithLayer(offset)) + onSizeChanged(limit=-height)` + `settleSearchBar:1950` decay+snap + factory `enterAlwaysSearchBarScrollBehavior:2086` consumed by `AppBarWithSearchImpl:602 .then(scrollBehaviorModifier)`.
+
+Winia: `nested_scroll.rs` exists for `TopAppBar`, but `SearchBar` exposes no `SearchBarScrollState/scrollBehavior` and no `AppBarWithSearch` wrapper. Needed only if the bar is a scrolling top bar (`Scaffold.topBar`). Porting `SearchBar.kt:1869-1993` onto existing `NestedScrollConnection` is straightforward.
+
+### 5.6 Other deltas
+
+- **Colors**: Compose `SearchBarDefaults.colors(container=SearchBarTokens.ContainerColor, divider=SearchViewTokens.DividerColor, inputFieldColors)` + `containedColors(state)` switching on `isExpanded`; Winia `SearchBarColors{container,divider}` + `theme.surface_container_high/outline_variant`, `tonalElevation/shadowElevation` default `Level0` — parity.
+- **Shapes**: `ContainerShape / FullScreenContainerShape / DockedContainerShape / dockedDropdownShape(12dp)` vs Winia `Pill / Rectangle / Rounded12` (Winia reuses one shape for bar+drops; upstream allows `shape` vs `dropdownShape` to differ).
+- **Input**: `SearchBarDefaults.InputField` = `BasicTextField + TextFieldState + InputTransformation/OutputTransformation + KeyboardOptions(imeAction=Search) + TextSelectionColors` vs Winia `input_field:132` (`TextField::no_container().single_line + on_search`, `placeholder/leading/trailing` reused). Divider is configurable in both.
+- **Semantics**: Compose `isTraversalGroup/stateDescription/contentDescription + LocalTextSelectionColors + LocalFocusManager`; Winia only `test_tag`.
+- **Scrim**: Compose `ExpandedDockedSearchBarWithGap:972 ScrimTokens.ContainerColor@ContainerOpacity`; Winia `docs/search-bar.md:51 No scrim in v1`.
+- **Predictive back**: Compose `MutatorMutex + PredictiveBackHandler` gesture-follow (`animationProgress.snapTo(1-transform(back.progress))`); Winia uses `Esc` for desktop (`docs/search-bar.md:18`).
+
+### 5.7 What remains to be "like Compose" (priority order)
+
+1. **Scrim** for docked-with-gap — `Popup` + `Box(fillMaxSize.drawRect(scrim, alpha=progress).clickable(onDismiss))`.
+2. **Split API** for adaptive breakpoints — `ExpandedFullScreenSearchBar(state, inputField, content)` + `ExpandedDockedSearchBar(state, inputField, dropdownShape/gap, content)` so callers can switch by `WindowSizeClass`.
+3. **True morph** — `collapsedCoords` + `progress` lerp of bounds/shape in a `FullScreenSearchBarLayout` (requires layout-level animation).
+4. **`AppBarWithSearch + SearchBarScrollBehavior`** — if the bar lives in `Scaffold.topBar`.
+5. **`WindowInsets`** — desktop does not need `safeDrawing/systemBars/imePadding` today; could be a passthrough `Modifier.windowInsetsPadding`.
+
+> Summary: Winia chose "classic one-stop" — minimal API covering ~90% of desktop cases (fruit-filter demo validates the full flow). Framework fixes for overlay focus/keyboard/IME/anchoring/visible-contract are **generic** (all `Dialog/Popup` benefit) and the move from content-level to container-level slide is the **key parity fix**. Remaining gaps are optional Material completeness, not correctness defects.
+
+## 6. Tests
 
 | Test | Covers |
 |---|---|

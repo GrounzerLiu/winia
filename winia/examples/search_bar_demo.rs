@@ -82,8 +82,8 @@ fn docked_list(ctx: &mut ComposeCtx, items: Arc<Vec<String>>, picked: State<Stri
 fn search_bar_demo(ctx: &mut ComposeCtx) {
     let full_state = ctx.remember(SearchBarState::new).get();
     let docked_state = ctx.remember(SearchBarState::new).get();
-    let picked = ctx.remember(|| State::new("—".to_string())).get();
-    let close_full = ctx.remember(|| State::new(false)).get();
+    let picked = ctx.remember(|| "—".to_string());
+    let close_full = ctx.remember(|| false);
     // close_full consumed below → close fullscreen after pick
     if close_full.get() {
         full_state.close();
@@ -103,7 +103,7 @@ fn search_bar_demo(ctx: &mut ComposeCtx) {
     Column::new()
         .modifier(Modifier::new().fill_max_size())
         .build(ctx, |ctx| {
-            Text::new(format!("Picked: {}", picked.get()))
+            Text::new(format!("Picked: {}", picked.peek()))
                 .font_size(16.0)
                 .modifier(Modifier::new().padding(8.0))
                 .build(ctx);
@@ -147,10 +147,9 @@ fn search_bar_demo(ctx: &mut ComposeCtx) {
                         Column::new()
                             .modifier(Modifier::new().fill_max_width())
                             .build(ctx, |ctx| {
-                                // Tapping a result picks + closes the dropdown.
-                                // (remembered: a fresh State each build would drop
-                                // the close flag before it is consumed.)
-                                let close_docked = ctx.remember(|| State::new(false)).get();
+                                // Inner remembered close flag — isolated per
+                                // dropdown recomposition.
+                                let close_docked = ctx.remember(|| false);
                                 let ds2 = ds.clone();
                                 if close_docked.get() {
                                     ds2.close();
