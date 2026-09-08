@@ -2,6 +2,7 @@
 //!
 //! 对标 CMP 桌面 `VerticalScrollbar` / `HorizontalScrollbar` 用法。
 
+use letclone::clone;
 use winia::prelude::*;
 
 #[composable]
@@ -62,9 +63,8 @@ fn scrollbar_demo_ui(ctx: &mut ComposeCtx) {
             Row::new()
                 .spacing(8.0)
                 .build(ctx, |ctx| {
-                    let a = always.clone();
                     Button::new()
-                        .on_click(move || a.update(|v| *v = !*v))
+                        .on_click({ clone!(always); move || always.update(|v| *v = !*v) })
                         .build(ctx, |ctx| {
                             Text::new(if always.get() {
                                 "always_show: ON"
@@ -205,9 +205,6 @@ fn scrollbar_demo_ui(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    // tokio 运行时（供 Scrollbar fade 的 LaunchedEffect 使用）
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()

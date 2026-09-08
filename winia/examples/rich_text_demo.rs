@@ -1,11 +1,8 @@
 //! RichText 组件演示 — 全部属性展示
 
 use winia::prelude::*;
-use winia::app;
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()

@@ -1,15 +1,12 @@
 //! Effect API 演示 — LaunchedEffect / DisposableEffect / remember_coroutine_scope
 
+use letclone::clone;
 use winia::prelude::*;
 use winia::app;
 use winia::effect::{LaunchedEffect, DisposableEffect, remember_coroutine_scope};
 use std::time::Duration;
 
 fn main() {
-    // 启动 tokio 运行时（供 LaunchedEffect / CoroutineScope 使用）
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter(); // 进入 runtime 上下文，使 Handle::try_current() 可用
-
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
@@ -43,11 +40,13 @@ fn effect_demo_ui(ctx: &mut ComposeCtx) {
             // ═══════════════════════════════════════
             // LaunchedEffect: count 变化时启动异步任务
             // ═══════════════════════════════════════
-            let c1 = count.clone();
-            LaunchedEffect::new(count.get()).build(ctx, move |_scope| async move {
-                println!("[LaunchedEffect] count changed to: {}", c1.get());
-                tokio::time::sleep(Duration::from_secs(1)).await;
-                println!("[LaunchedEffect] async work done for count={}", c1.get());
+            LaunchedEffect::new(count.get()).build(ctx, {
+                clone!(count);
+                move |_scope| async move {
+                    println!("[LaunchedEffect] count changed to: {}", count.get());
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    println!("[LaunchedEffect] async work done for count={}", count.get());
+                }
             });
 
             Text::new(format!("Count: {}", count.get()))
@@ -57,7 +56,7 @@ fn effect_demo_ui(ctx: &mut ComposeCtx) {
             Row::new().spacing(8.0).build(ctx, |ctx| {
                 // 普通点击
                 Button::new()
-                    .on_click({ let c = count.clone(); move || c.update(|v| *v += 1) })
+                    .on_click({ clone!(count); move || count.update(|v| *v += 1) })
                     .modifier(Modifier::new().size(60.0, 36.0))
                     .build(ctx, |ctx| { Text::new("+1").build(ctx); });
 
@@ -65,13 +64,10 @@ fn effect_demo_ui(ctx: &mut ComposeCtx) {
                 let spawn_count = ctx.remember(|| 0i32);
                 Button::new()
                     .on_click({
-                        let c = count.clone();
-                        let s = scope.clone();
-                        let sc = spawn_count.clone();
+                        clone!(count, scope, spawn_count);
                         move || {
-                            let c2 = c.clone();
-                            let sc2 = sc.clone();
-                            s.spawn(async move {
+                            let (c2, sc2) = (count.clone(), spawn_count.clone());
+                            scope.spawn(async move {
                                 sc2.update(|v| *v += 1);
                                 tokio::time::sleep(Duration::from_millis(500)).await;
                                 c2.update(|v| *v += 10);
@@ -91,7 +87,7 @@ fn effect_demo_ui(ctx: &mut ComposeCtx) {
             // DisposableEffect: 条件渲染 + 清理
             // ═══════════════════════════════════════
             Button::new()
-                .on_click({ let s = show_counter.clone(); move || s.update(|v| *v = !*v) })
+                .on_click({ clone!(show_counter); move || show_counter.update(|v| *v = !*v) })
                 .style(ButtonStyle::Outlined)
                 .modifier(Modifier::new().size(200.0, 36.0))
                 .build(ctx, |ctx| {
@@ -134,13 +130,13 @@ fn sub_component(ctx: &mut ComposeCtx, parent_count: State<i32>) {
 
             Row::new().spacing(8.0).build(ctx, |ctx| {
                 Button::new()
-                    .on_click({ let c = local_count.clone(); move || c.update(|v| *v += 1) })
+                    .on_click({ clone!(local_count); move || local_count.update(|v| *v += 1) })
                     .style(ButtonStyle::Tonal)
                     .modifier(Modifier::new().size(80.0, 32.0))
                     .build(ctx, |ctx| { Text::new("Local +1").build(ctx); });
 
                 Button::new()
-                    .on_click({ let c = parent_count; move || c.update(|v| *v += 1) })
+                    .on_click({ clone!(parent_count); move || parent_count.update(|v| *v += 1) })
                     .style(ButtonStyle::Outlined)
                     .modifier(Modifier::new().size(80.0, 32.0))
                     .build(ctx, |ctx| { Text::new("Parent +1").build(ctx); });

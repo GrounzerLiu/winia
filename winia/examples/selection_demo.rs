@@ -1,5 +1,6 @@
 //! 文本选中演示 — SelectionContainer + on_selection_change + 跨 Text 合并选择
 
+use letclone::clone;
 use winia::prelude::*;
 use winia::ui::RichText;
 use winia::app;
@@ -25,16 +26,18 @@ fn selection_ui(ctx: &mut ComposeCtx) {
                 .build(ctx);
 
             // ── Container A ──
-            let sa = selected_a.clone();
             SelectionContainer::new()
                 .modifier(Modifier::new()
                     .fill_max_width()
                     .padding(10.0)
                     .background(Color::from_argb(30, 200, 200, 100), Shape::rounded(8.0)))
-                .on_selection_change(move |sel| {
-                    // 新 API：sel.text() 直接给选中文本（框架按注册段自动拼接——
-                    // 无需自维护平行字符串，无偏移错位/emoji 边界问题）
-                    sa.set(format!("A: {:?}", sel.text()));
+                .on_selection_change({
+                    clone!(selected_a);
+                    move |sel| {
+                        // 新 API：sel.text() 直接给选中文本（框架按注册段自动拼接——
+                        // 无需自维护平行字符串，无偏移错位/emoji 边界问题）
+                        selected_a.set(format!("A: {:?}", sel.text()));
+                    }
                 })
                 .build(ctx, |ctx| {
                     Column::new().build(ctx, |ctx| {
@@ -58,14 +61,16 @@ fn selection_ui(ctx: &mut ComposeCtx) {
                 .build(ctx);
 
             // ── Container B ──
-            let sb = selected_b.clone();
             SelectionContainer::new()
                 .modifier(Modifier::new()
                     .fill_max_width()
                     .padding(10.0)
                     .background(Color::from_argb(30, 200, 150, 200), Shape::rounded(8.0)))
-                .on_selection_change(move |sel| {
-                    sb.set(format!("B: {:?}", sel.text()));
+                .on_selection_change({
+                    clone!(selected_b);
+                    move |sel| {
+                        selected_b.set(format!("B: {:?}", sel.text()));
+                    }
                 })
                 .build(ctx, |ctx| {
                     Column::new().build(ctx, |ctx| {
@@ -83,8 +88,6 @@ fn selection_ui(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()

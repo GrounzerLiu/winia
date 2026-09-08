@@ -12,6 +12,7 @@
 //!
 //! 运行：cargo run -p winia --example nav_demo --features debug-server
 
+use letclone::clone;
 use winia::prelude::*;
 use winia::nav::{remember_entry_state, result_event_bus, ListDetailStrategy, NavBackStack, NavDisplay, NavEntry, NavKey, NavMetadata, NavTransitionSpec, SceneDecoratorStrategy, SceneStrategy};
 
@@ -90,7 +91,7 @@ fn nav_demo(ctx: &mut ComposeCtx) {
         3 => (NavTransitionSpec::none(), NavTransitionSpec::none()),
         _ => (slide_push, slide_pop),
     };
-    // 按钮用 clone（push/pop/切换模式）
+    // NavBackStack is Clone (shares the inner State) — clone into button closures for navigation.
     let home_bs = back_stack.clone();
     let detail_bs = back_stack.clone();
 
@@ -105,17 +106,15 @@ fn nav_demo(ctx: &mut ComposeCtx) {
                 .build(ctx);
 
             // 模式切换按钮
-            let ld = list_detail.clone();
             Button::text()
-                .on_click(move || ld.update(|v| *v = !*v))
+                .on_click({ clone!(list_detail); move || list_detail.update(|v| *v = !*v) })
                 .build(ctx, |ctx| {
                     Text::new(if list_detail.get() { "模式: ListDetail 双栏" } else { "模式: SinglePane" }).build(ctx)
                 });
 
             // 过渡规格循环按钮（demo 体验用——Nav3 transitionSpec 的常用取值）
-            let si = spec_idx.clone();
             Button::text()
-                .on_click(move || si.update(|v| *v = (*v + 1) % 4))
+                .on_click({ clone!(spec_idx); move || spec_idx.update(|v| *v = (*v + 1) % 4) })
                 .build(ctx, |ctx| {
                     Text::new(match spec_idx.get() {
                         1 => "过渡: 共享轴 (M3)",
@@ -126,12 +125,13 @@ fn nav_demo(ctx: &mut ComposeCtx) {
                     .build(ctx)
                 });
 
-            let home_bs = home_bs.clone();
-            let detail_bs = detail_bs.clone();
-            NavDisplay::new(&back_stack, move |ctx, key| match key {
+            NavDisplay::new(&back_stack, {
+                clone!(home_bs, detail_bs);
+                move |ctx, key| match key {
                 Route::Home => {
-                    let bs = home_bs.clone();
-                    NavEntry::new(key.clone(), move |ctx, _| {
+                    NavEntry::new(key.clone(), {
+                        clone!(home_bs);
+                        move |ctx, _| {
                         Column::new()
                             .modifier(Modifier::new().fill_max_width())
                             .spacing(8.0)
@@ -141,17 +141,18 @@ fn nav_demo(ctx: &mut ComposeCtx) {
                                     .font_size(12.0)
                                     .color(Color::from_argb(255, 120, 120, 120))
                                     .build(ctx);
-                                let bs = bs.clone();
                                 Button::text()
-                                    .on_click(move || bs.push(Route::Detail(42)))
+                                    .on_click({ clone!(home_bs); move || home_bs.push(Route::Detail(42)) })
                                     .build(ctx, |ctx| Text::new("打开 Detail 42").build(ctx));
                             });
+                        }
                     })
                 }
                 Route::Detail(id) => {
                     let id = *id;
-                    let bs = detail_bs.clone();
-                    NavEntry::new(key.clone(), move |ctx, _| {
+                    NavEntry::new(key.clone(), {
+                        clone!(detail_bs);
+                        move |ctx, _| {
                         Column::new()
                             .modifier(Modifier::new().fill_max_width())
                             .spacing(8.0)
@@ -174,30 +175,28 @@ fn nav_demo(ctx: &mut ComposeCtx) {
                                         .color(choice.color)
                                         .build(ctx);
                                 }
-                                let dc = detail_count.clone();
                                 Button::text()
-                                    .on_click(move || dc.update(|v| *v += 1))
+                                    .on_click({ clone!(detail_count); move || detail_count.update(|v| *v += 1) })
                                     .build(ctx, |ctx| Text::new("计数 +1").build(ctx));
-                                let bs2 = bs.clone();
                                 Button::text()
-                                    .on_click(move || bs2.push(Route::Settings))
+                                    .on_click({ clone!(detail_bs); move || detail_bs.push(Route::Settings) })
                                     .build(ctx, |ctx| Text::new("打开 Settings").build(ctx));
-                                let bs3 = bs.clone();
                                 Button::text()
-                                    .on_click(move || { bs3.push(Route::About); })
+                                    .on_click({ clone!(detail_bs); move || { detail_bs.push(Route::About); } })
                                     .build(ctx, |ctx| Text::new("打开关于对话框").build(ctx));
-                                let bs4 = bs.clone();
                                 Button::text()
-                                    .on_click(move || { bs4.pop(); })
+                                    .on_click({ clone!(detail_bs); move || { detail_bs.pop(); } })
                                     .build(ctx, |ctx| Text::new("返回").build(ctx));
                             });
+                        }
                     })
                     // metadata 演示（对标 Nav3 metadata {}——entry 携带类型化元数据）
                     .metadata(NavMetadata::new().with(MetaInfo { page_id: id, source: "nav_demo" }))
                 }
                 Route::Settings => {
-                    let bs = detail_bs.clone();
-                    NavEntry::new(key.clone(), move |ctx, _| {
+                    NavEntry::new(key.clone(), {
+                        clone!(detail_bs);
+                        move |ctx, _| {
                         Column::new()
                             .modifier(Modifier::new().fill_max_width())
                             .spacing(8.0)
@@ -217,30 +216,32 @@ fn nav_demo(ctx: &mut ComposeCtx) {
                                     ("绿色", Color::from_argb(255, 52, 168, 83)),
                                     ("橙色", Color::from_argb(255, 255, 153, 0)),
                                 ] {
-                                    let bs = bs.clone();
-                                    let bus = bus.clone();
                                     Button::text()
-                                        .on_click(move || {
-                                            // 发送结果（覆盖同 key 旧值）+ 返回
-                                            bus.send("theme", ThemeChoice { name, color });
-                                            bs.pop();
+                                        .on_click({
+                                            clone!(detail_bs, bus);
+                                            move || {
+                                                // 发送结果（覆盖同 key 旧值）+ 返回
+                                                bus.send("theme", ThemeChoice { name, color });
+                                                detail_bs.pop();
+                                            }
                                         })
                                         .build(ctx, |ctx| {
                                             Text::new(format!("用 {name}")).build(ctx);
                                         });
                                 }
-                                let bs = bs.clone();
                                 Button::text()
-                                    .on_click(move || { bs.pop(); })
+                                    .on_click({ clone!(detail_bs); move || { detail_bs.pop(); } })
                                     .build(ctx, |ctx| Text::new("返回 Detail（不带结果）").build(ctx));
                             });
+                        }
                     })
                 }
                 // 对话框路由（对标 Nav3 dialog() metadata + DialogSceneStrategy）：
                 // 栈顶时渲染为模态覆盖层（主树不渲染其内容），dismiss = 弹栈
                 Route::About => {
-                    let bs = detail_bs.clone();
-                    NavEntry::new(key.clone(), move |ctx, _| {
+                    NavEntry::new(key.clone(), {
+                        clone!(detail_bs);
+                        move |ctx, _| {
                         // 对话框内容 wrap-content + 卡片背景（圆角白底）——
                         // overlay Center 定位按内容尺寸居中；fill_max_width 全宽
                         // 会让"居中"失效。Compose Dialog 的典型样式
@@ -258,14 +259,15 @@ fn nav_demo(ctx: &mut ComposeCtx) {
                                     .font_size(12.0)
                                     .color(Color::from_argb(255, 120, 120, 120))
                                     .build(ctx);
-                                let bs = bs.clone();
                                 Button::text()
-                                    .on_click(move || { bs.pop(); })
+                                    .on_click({ clone!(detail_bs); move || { detail_bs.pop(); } })
                                     .build(ctx, |ctx| Text::new("关闭").build(ctx));
                             });
+                        }
                     })
                     .as_dialog()
                 }
+            }
             })
             // Scene 策略链：ListDetail 双栏（宽屏列表+详情）或空链（SinglePane 兜底）
             .scene_strategies(if list_detail.get() {
@@ -283,8 +285,6 @@ fn nav_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()

@@ -9,12 +9,11 @@
 //! - D: expand_in_h (horizontal expand — fixed 300px bar grows rightward)
 //! - E: slide Fraction(1.0) (full-width slide-in — Compose initialOffsetX equivalent)
 
+use letclone::clone;
 use winia::prelude::*;
 use winia::animation::{SpringSpec, TweenSpec};
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
     winia::run_app!(|ctx| {
         Window::new()
             .size(420.0, 900.0)
@@ -38,8 +37,8 @@ fn panel_a(ctx: &mut ComposeCtx) {
         .build(ctx, |ctx| {
             Button::new()
                 .on_click({
-                    let s = show.clone();
-                    move || s.update(|v| *v = !*v)
+                    clone!(show);
+                    move || show.update(|v| *v = !*v)
                 })
                 .build(ctx, |ctx| {
                     Text::new("A: fade + expand (toggle)").font_size(12.0).build(ctx);
@@ -64,8 +63,8 @@ fn panel_b(ctx: &mut ComposeCtx) {
         .build(ctx, |ctx| {
             Button::new()
                 .on_click({
-                    let s = show.clone();
-                    move || s.update(|v| *v = !*v)
+                    clone!(show);
+                    move || show.update(|v| *v = !*v)
                 })
                 .build(ctx, |ctx| {
                     Text::new("B: slide + scale (toggle)").font_size(12.0).build(ctx);
@@ -93,8 +92,8 @@ fn panel_c(ctx: &mut ComposeCtx) {
         .build(ctx, |ctx| {
             Button::new()
                 .on_click({
-                    let s = show.clone();
-                    move || s.update(|v| *v = !*v)
+                    clone!(show);
+                    move || show.update(|v| *v = !*v)
                 })
                 .build(ctx, |ctx| {
                     Text::new("C: fade + shrink (toggle)").font_size(12.0).build(ctx);
@@ -127,8 +126,8 @@ fn panel_d(ctx: &mut ComposeCtx) {
         .build(ctx, |ctx| {
             Button::new()
                 .on_click({
-                    let s = show.clone();
-                    move || s.update(|v| *v = !*v)
+                    clone!(show);
+                    move || show.update(|v| *v = !*v)
                 })
                 .build(ctx, |ctx| {
                     Text::new("D: horizontal expand (toggle)").font_size(12.0).build(ctx);
@@ -162,8 +161,8 @@ fn panel_e(ctx: &mut ComposeCtx) {
         .build(ctx, |ctx| {
             Button::new()
                 .on_click({
-                    let s = show.clone();
-                    move || s.update(|v| *v = !*v)
+                    clone!(show);
+                    move || show.update(|v| *v = !*v)
                 })
                 .build(ctx, |ctx| {
                     Text::new("E: full-width slide (toggle)").font_size(12.0).build(ctx);

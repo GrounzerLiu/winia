@@ -8,6 +8,7 @@
 //! 徽章：Search 挂圆点徽章、Favorites 挂计数徽章（点击 Favorites 自增，
 //! 对标 androidx NavigationBarItem 图标槽内 BadgedBox 用法）
 
+use letclone::clone;
 use winia::prelude::*;
 
 // Material 图标（24dp 视口经典路径）
@@ -29,15 +30,14 @@ const FAVORITES_INDEX: usize = 2;
 /// 一条 NavigationBar：selected 决定选中项；favorites 驱动计数徽章。
 #[composable]
 fn nav_bar(ctx: &mut ComposeCtx, selected: State<usize>, favorites: State<i32>, layout: NavigationItemIconPosition) {
-    let sel = selected.clone();
-    let fav = favorites.clone();
-    NavigationBar::new(move |ctx| {
+    NavigationBar::new({
+        clone!(selected, favorites);
+        move |ctx| {
         for index in 0..DESTINATIONS.len() {
             let (name, path) = DESTINATIONS[index];
-            let fav_for_icon = fav.clone();
-            let fav_for_click = fav.clone();
-            let sel_for_click = sel.clone();
-            NavigationBarItem::new(sel.get() == index, move |ctx| {
+            NavigationBarItem::new(selected.get() == index, {
+                clone!(selected, favorites);
+                move |ctx| {
                 // 图标槽内挂徽章（BadgedBox 测量尺寸 = 锚点尺寸——不影响胶囊推导）
                 if index == SEARCH_INDEX {
                     // 圆点徽章（无 content）
@@ -49,16 +49,19 @@ fn nav_bar(ctx: &mut ComposeCtx, selected: State<usize>, favorites: State<i32>, 
                     // 计数徽章——get() 必须在 content 闭包**内**：依赖注册到
                     // 徽章内容组（最内层 scope），状态变化才能穿透 Badge 内部组
                     // 的 Skip 重执行内容（读在组外会数字冻结，见 badge.rs 回归测试）
-                    BadgedBox::new(move |ctx| {
+                    BadgedBox::new({
+                        clone!(favorites);
+                        move |ctx| {
                         Badge::new()
                             .content({
-                                let fav = fav_for_icon.clone();
+                                clone!(favorites);
                                 move |ctx| {
-                                    let count = fav.get();
+                                    let count = favorites.get();
                                     Text::new(count.to_string()).build(ctx)
                                 }
                             })
                             .build(ctx);
+                    }
                     })
                     .build(ctx, |ctx| {
                         Icon::svg_path(path).size(NAVIGATION_BAR_ICON_SIZE).build(ctx);
@@ -66,17 +69,22 @@ fn nav_bar(ctx: &mut ComposeCtx, selected: State<usize>, favorites: State<i32>, 
                 } else {
                     Icon::svg_path(path).size(NAVIGATION_BAR_ICON_SIZE).build(ctx);
                 }
+            }
             })
             .label(move |ctx| Text::new(name).build(ctx))
             .icon_position(layout)
-            .on_click(move || {
-                sel_for_click.set(index);
-                if index == FAVORITES_INDEX {
-                    fav_for_click.update(|value| *value += 1);
+            .on_click({
+                clone!(selected, favorites);
+                move || {
+                    selected.set(index);
+                    if index == FAVORITES_INDEX {
+                        favorites.update(|value| *value += 1);
+                    }
                 }
             })
             .build(ctx);
         }
+    }
     })
     .build(ctx);
 }
@@ -116,8 +124,6 @@ fn navigation_bar_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
     winia::run_app!(|ctx| {
         Window::new().size(720.0, 420.0).title("Navigation Bar Demo").build(ctx, navigation_bar_demo);
     });

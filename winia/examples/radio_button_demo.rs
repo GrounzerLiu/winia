@@ -6,6 +6,7 @@
 //! - 自定义 colors
 //! - interactionSource hoist（实时显示 press/hover/focus 状态）
 
+use letclone::clone;
 use winia::prelude::*;
 
 fn section_title(ctx: &mut ComposeCtx, text: &str) {
@@ -37,7 +38,6 @@ fn radio_button_demo(ctx: &mut ComposeCtx) {
     let scroll_y = ctx.remember(|| ScrollState::new()).get();
     // 单选组状态：当前选中项（demo 顶层——变化触发重组）
     let selected = ctx.remember(|| "选项 A".to_string());
-    let sel = selected.clone();
 
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(16.0).vertical_scroll(scroll_y))
@@ -59,9 +59,8 @@ fn radio_button_demo(ctx: &mut ComposeCtx) {
                     Row::new()
                         .modifier(Modifier::new().padding_vertical(3.0))
                         .build(ctx, |ctx| {
-                            let s = sel.clone();
                             RadioButton::new(selected.get() == label)
-                                .on_click(move || s.update(|v| *v = label.to_string()))
+                                .on_click({ clone!(selected); move || selected.update(|v| *v = label.to_string()) })
                                 .build(ctx);
                             Text::new(label)
                                 .font_size(13.0)
@@ -104,10 +103,9 @@ fn radio_button_demo(ctx: &mut ComposeCtx) {
                         .font_size(13.0)
                         .modifier(Modifier::new().width(150.0).padding_top(10.0))
                         .build(ctx);
-                    let c = sel.clone();
                     RadioButton::new(selected.get() == "选项 A")
                         .interaction_source(src.clone())
-                        .on_click(move || c.update(|v| *v = "选项 A".to_string()))
+                        .on_click({ clone!(selected); move || selected.update(|v| *v = "选项 A".to_string()) })
                         .build(ctx);
                 });
             Text::new(format!(
@@ -127,9 +125,6 @@ fn radio_button_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
-
     winia::run_app!(|ctx| {
         WiniaTheme::light(ctx, |ctx| {
             Window::new()

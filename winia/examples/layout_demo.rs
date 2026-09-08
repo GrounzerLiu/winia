@@ -3,7 +3,6 @@
 //! 仅使用现有组件 API，不使用 ctx.start_leaf / ctx.end_node 低级模式。
 
 use winia::prelude::*;
-use winia::app;
 
 /// 布局演示主界面（#[composable] = 函数级组合 scope）
 #[composable]
@@ -241,9 +240,6 @@ fn layout_demo_ui(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
-
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()

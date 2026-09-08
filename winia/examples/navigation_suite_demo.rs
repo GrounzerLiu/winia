@@ -1,6 +1,7 @@
 //! NavigationSuiteScaffold 演示：一套 items，按窗口尺寸类自动切换导航形态
 //! （窄窗→底栏 / 中宽→收起轨 / 宽窗→展开轨；拖拽窗口边缘实时切换）
 
+use letclone::clone;
 use winia::prelude::*;
 
 const HOME_PATH: &str = "M10 20v-6h4v6h5v-9h3L12 3 2 11h3v9z";
@@ -19,35 +20,40 @@ const DESTINATIONS: [(&str, &str); 4] = [
 fn navigation_suite_demo(ctx: &mut ComposeCtx) {
     let selected = ctx.remember(|| 0usize);
     let (w, h) = window_size();
-    let sel_items = selected.clone();
     NavigationSuiteScaffold::new(
-        |items| {
-            for (index, (name, path)) in DESTINATIONS.iter().enumerate() {
-                let (name, path) = (*name, *path);
-                let sel = sel_items.clone();
-                items.item(
-                    sel.get() == index,
-                    move |ctx| Icon::svg_path(path).size(24.0).build(ctx),
-                    move |ctx| Text::new(name).build(ctx),
-                    move || sel.set(index),
-                );
+        {
+            clone!(selected);
+            move |items| {
+                for (index, (name, path)) in DESTINATIONS.iter().enumerate() {
+                    let (name, path) = (*name, *path);
+                    items.item(
+                        selected.get() == index,
+                        move |ctx| Icon::svg_path(path).size(24.0).build(ctx),
+                        move |ctx| Text::new(name).build(ctx),
+                        {
+                            clone!(selected);
+                            move || selected.set(index)
+                        },
+                    );
+                }
             }
         },
-        move |ctx| {
+        {
+            clone!(selected);
+            move |ctx| {
             Column::new()
                 .modifier(Modifier::new().fill_max_size().padding(24.0))
                 .build(ctx, |ctx| {
                     Text::new(format!("当前：{}", DESTINATIONS[selected.get()].0)).build(ctx);
                     Text::new(format!("窗口 {w}x{h}")).build(ctx);
                 });
+        }
         },
     )
     .build(ctx);
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
     winia::run_app!(|ctx| {
         Window::new().size(900.0, 480.0).title("Navigation Suite Demo").build(ctx, navigation_suite_demo);
     });

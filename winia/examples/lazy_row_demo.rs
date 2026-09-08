@@ -5,6 +5,7 @@
 //! - 稳定 key 迭代（items_from：key = 数据 id）
 //! - 横向拖拽滚动 + 松手惯性 fling（水平滚轮 Shift+滚轮 或 touchpad 横向滚动）
 
+use letclone::clone;
 use winia::prelude::*;
 use std::sync::Arc;
 
@@ -59,28 +60,24 @@ fn lazy_row_demo(ctx: &mut ComposeCtx) {
             Row::new()
                 .modifier(Modifier::new().padding(8.0))
                 .build(ctx, |ctx| {
-                    let s0 = state.clone();
                     Button::text()
-                        .on_click(move || s0.scroll_to_item(0, 0.0))
+                        .on_click({ clone!(state); move || state.scroll_to_item(0, 0.0) })
                         .build(ctx, |ctx| Text::new("最左").build(ctx));
-                    let s1 = state.clone();
                     Button::text()
-                        .on_click(move || s1.scroll_to_item(500, 0.0))
+                        .on_click({ clone!(state); move || state.scroll_to_item(500, 0.0) })
                         .build(ctx, |ctx| Text::new("跳转 500").build(ctx));
-                    let s2 = state.clone();
                     Button::text()
-                        .on_click(move || s2.scroll_to_item(999, 0.0))
+                        .on_click({ clone!(state); move || state.scroll_to_item(999, 0.0) })
                         .build(ctx, |ctx| Text::new("末尾").build(ctx));
                 });
 
             // LazyRow：稳定 key 迭代（与 LazyColumn 同一 LazyListState/机制）
-            let items_clone = items.clone();
             LazyRow::new()
                 .state(state.clone())
                 .spacing(8.0)
                 .modifier(Modifier::new().fill_max_width().fill_max_height())
                 .items_from(
-                    items_clone,
+                    items.clone(),
                     |it: &Item| it.id,          // 稳定 key = id
                     move |ctx, _i, it| chip(ctx, &it.name),
                 )
@@ -89,9 +86,6 @@ fn lazy_row_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
-
     winia::run_app!(|ctx| {
         WiniaTheme::light(ctx, |ctx| {
             Window::new()

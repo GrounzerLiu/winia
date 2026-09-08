@@ -7,6 +7,7 @@
 //! - 自定义 colors
 //! - interactionSource hoist（实时显示 press/hover/focus 状态）
 
+use letclone::clone;
 use winia::prelude::*;
 
 fn section_title(ctx: &mut ComposeCtx, text: &str) {
@@ -37,7 +38,6 @@ fn state_row(ctx: &mut ComposeCtx, label: &str, checked: bool, enabled: bool) {
 fn switch_demo(ctx: &mut ComposeCtx) {
     let scroll_y = ctx.remember(|| ScrollState::new()).get();
     let checked = ctx.remember(|| false);
-    let c = checked.clone();
 
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(16.0).vertical_scroll(scroll_y))
@@ -60,12 +60,11 @@ fn switch_demo(ctx: &mut ComposeCtx) {
                         .font_size(13.0)
                         .modifier(Modifier::new().width(150.0).padding_top(8.0))
                         .build(ctx);
-                    let c2 = c.clone();
-                    Switch::new(c.get())
-                        .on_checked_change(move |v| c2.update(|s| *s = v))
+                    Switch::new(checked.get())
+                        .on_checked_change({ clone!(checked); move |v| checked.update(|s| *s = v) })
                         .build(ctx, |_| {});
                 });
-            Text::new(if c.get() { "已开启" } else { "已关闭" })
+            Text::new(if checked.get() { "已开启" } else { "已关闭" })
                 .font_size(13.0)
                 .color(Color::from_argb(255, 100, 100, 100))
                 .modifier(Modifier::new().padding_top(4.0))
@@ -79,9 +78,8 @@ fn switch_demo(ctx: &mut ComposeCtx) {
                         .font_size(13.0)
                         .modifier(Modifier::new().width(150.0).padding_top(8.0))
                         .build(ctx);
-                    let c2 = c.clone();
-                    Switch::new(c.get())
-                        .on_checked_change(move |v| c2.update(|s| *s = v))
+                    Switch::new(checked.get())
+                        .on_checked_change({ clone!(checked); move |v| checked.update(|s| *s = v) })
                         .build(ctx, |ctx| {
                             // 拇指内 16dp 图标（tint Auto 跟随 icon_color）
                             Icon::svg_path("M12 2L22 12 12 22 2 12Z")
@@ -105,10 +103,9 @@ fn switch_demo(ctx: &mut ComposeCtx) {
                         .font_size(13.0)
                         .modifier(Modifier::new().width(150.0).padding_top(8.0))
                         .build(ctx);
-                    let c2 = c.clone();
-                    Switch::new(c.get())
+                    Switch::new(checked.get())
                         .colors(custom)
-                        .on_checked_change(move |v| c2.update(|s| *s = v))
+                        .on_checked_change({ clone!(checked); move |v| checked.update(|s| *s = v) })
                         .build(ctx, |_| {});
                 });
 
@@ -122,16 +119,15 @@ fn switch_demo(ctx: &mut ComposeCtx) {
                         .font_size(13.0)
                         .modifier(Modifier::new().width(150.0).padding_top(8.0))
                         .build(ctx);
-                    let c2 = c.clone();
-                    Switch::new(c.get())
+                    Switch::new(checked.get())
                         .interaction_source(src.clone())
-                        .on_checked_change(move |v| c2.update(|s| *s = v))
+                        .on_checked_change({ clone!(checked); move |v| checked.update(|s| *s = v) })
                         .build(ctx, |_| {});
                 });
             Text::new(format!(
                 "pressed={} hovered={} focused={} | 当前 {}",
                 st.pressed, st.hovered, st.focused,
-                if c.get() { "已开启" } else { "已关闭" },
+                if checked.get() { "已开启" } else { "已关闭" },
             ))
             .font_size(12.0)
             .color(Color::from_argb(255, 100, 100, 100))
@@ -145,9 +141,6 @@ fn switch_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
-
     winia::run_app!(|ctx| {
         WiniaTheme::light(ctx, |ctx| {
             Window::new()

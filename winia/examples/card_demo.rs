@@ -7,6 +7,7 @@
 //! - 自定义 shape / colors / border
 //! - Elevated 阴影（hover/按下升高、移出回落）
 
+use letclone::clone;
 use winia::prelude::*;
 
 fn section_title(ctx: &mut ComposeCtx, text: &str) {
@@ -50,9 +51,8 @@ fn card_demo(ctx: &mut ComposeCtx) {
 
             // ── 可点击（on_click + 波纹）──
             section_title(ctx, "可点击（hover/按下阴影升高 + 波纹）");
-            let c2 = clicks.clone();
             Card::elevated()
-                .on_click(move || c2.update(|v| *v += 1))
+                .on_click({ clone!(clicks); move || clicks.update(|v| *v += 1) })
                 .build(ctx, |ctx| {
                     Row::new()
                         .modifier(Modifier::new().padding(16.0))
@@ -68,10 +68,9 @@ fn card_demo(ctx: &mut ComposeCtx) {
 
             // ── 禁用状态 ──
             section_title(ctx, "禁用状态");
-            let c3 = clicks.clone();
             Card::outlined()
                 .enabled(false)
-                .on_click(move || c3.update(|v| *v += 1))
+                .on_click({ clone!(clicks); move || clicks.update(|v| *v += 1) })
                 .build(ctx, |ctx| {
                     Text::new("Disabled Card（内容 @38%，点击无响应）")
                         .modifier(Modifier::new().padding(16.0))
@@ -97,10 +96,9 @@ fn card_demo(ctx: &mut ComposeCtx) {
                                 .build(ctx);
                         });
                 });
-            let c4 = clicks.clone();
             Card::outlined()
                 .border(CardBorder::new(2.0, Color::from_argb(255, 103, 80, 164)))
-                .on_click(move || c4.update(|v| *v += 1))
+                .on_click({ clone!(clicks); move || clicks.update(|v| *v += 1) })
                 .build(ctx, |ctx| {
                     Text::new("自定义 2px 边框（点击可交互）")
                         .modifier(Modifier::new().padding(16.0))
@@ -110,9 +108,6 @@ fn card_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    // 启动 tokio 运行时（供 debug WS server / LaunchedEffect 使用）
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
     winia::run_app!(|ctx| {
         WiniaTheme::light(ctx, |ctx| {
             Window::new()
@@ -121,5 +116,4 @@ fn main() {
                 .build(ctx, |ctx| { card_demo(ctx); });
         });
     });
-    drop(rt);
 }

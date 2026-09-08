@@ -7,6 +7,7 @@
 //! - 自定义颜色
 //! - interactionSource hoist（拖动/聚焦时拇指宽度减半）
 
+use letclone::clone;
 use winia::prelude::*;
 
 fn section_title(ctx: &mut ComposeCtx, text: &str) {
@@ -23,9 +24,6 @@ fn slider_demo(ctx: &mut ComposeCtx) {
     let volume = ctx.remember(|| 0.5f32);
     let steps_v = ctx.remember(|| 0.0f32);
     let temp = ctx.remember(|| 50.0f32);
-    let vol = volume.clone();
-    let sv = steps_v.clone();
-    let tp = temp.clone();
 
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(16.0).vertical_scroll(scroll_y))
@@ -35,10 +33,9 @@ fn slider_demo(ctx: &mut ComposeCtx) {
                 .build(ctx);
 
             section_title(ctx, "连续滑块（音量）");
-            let v = vol.clone();
             Slider::new(volume.get())
                 .value_range(0.0, 1.0)
-                .on_value_change(move |nv| v.update(|s| *s = nv))
+                .on_value_change({ clone!(volume); move |nv| volume.update(|s| *s = nv) })
                 .build(ctx);
             Text::new(format!("音量：{:.0}%", volume.get() * 100.0))
                 .font_size(13.0)
@@ -46,11 +43,10 @@ fn slider_demo(ctx: &mut ComposeCtx) {
                 .build(ctx);
 
             section_title(ctx, "离散滑块（steps=4，温度）");
-            let v2 = sv.clone();
             Slider::new(steps_v.get())
                 .value_range(0.0, 100.0)
                 .steps(4)
-                .on_value_change(move |nv| v2.update(|s| *s = nv))
+                .on_value_change({ clone!(steps_v); move |nv| steps_v.update(|s| *s = nv) })
                 .build(ctx);
             Text::new(format!("温度：{:.0}°C（{} 档）", steps_v.get(), 6))
                 .font_size(13.0)
@@ -70,12 +66,11 @@ fn slider_demo(ctx: &mut ComposeCtx) {
             custom.thumb_color = Color::from_argb(255, 46, 125, 50);
             custom.inactive_track_color = Color::from_argb(255, 200, 230, 200);
             custom.inactive_tick_color = Color::from_argb(255, 46, 125, 50);
-            let v3 = tp.clone();
             Slider::new(temp.get())
                 .value_range(0.0, 100.0)
                 .steps(4)
                 .colors(custom)
-                .on_value_change(move |nv| v3.update(|s| *s = nv))
+                .on_value_change({ clone!(temp); move |nv| temp.update(|s| *s = nv) })
                 .build(ctx);
             Text::new(format!("自定义：{:.0}", temp.get()))
                 .font_size(13.0)
@@ -91,11 +86,10 @@ fn slider_demo(ctx: &mut ComposeCtx) {
             section_title(ctx, "interactionSource hoist");
             let src = ctx.remember(|| MutableInteractionSource::new()).get();
             let st = src.state(true);
-            let v4 = vol.clone();
             Slider::new(volume.get())
                 .value_range(0.0, 1.0)
                 .interaction_source(src.clone())
-                .on_value_change(move |nv| v4.update(|s| *s = nv))
+                .on_value_change({ clone!(volume); move |nv| volume.update(|s| *s = nv) })
                 .build(ctx);
             Text::new(format!(
                 "pressed={} hovered={} focused={} dragged={} | 拖动/聚焦时拇指宽度减半",
@@ -112,9 +106,6 @@ fn slider_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
-
     winia::run_app!(|ctx| {
         WiniaTheme::light(ctx, |ctx| {
             Window::new()

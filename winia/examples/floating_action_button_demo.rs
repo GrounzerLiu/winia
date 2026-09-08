@@ -1,6 +1,7 @@
 //! Floating Action Button demo：尺寸/颜色变体、Extended FAB（收展动画）、
 //! 滚动内容与布局方向（LTR/RTL）切换。
 
+use letclone::clone;
 use winia::prelude::*;
 
 const STAR_PATH: &str = "M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z";
@@ -45,7 +46,7 @@ fn floating_action_button_demo(ctx: &mut ComposeCtx) {
                         });
                         Spacer::horizontal(12.0).build(ctx);
                         Button::text()
-                            .on_click({ let r = rtl.clone(); move || r.update(|v| *v = !*v) })
+                            .on_click({ clone!(rtl); move || rtl.update(|v| *v = !*v) })
                             .build(ctx, |ctx| {
                                 Text::new(if rtl.get() { "LTR" } else { "RTL" }).build(ctx)
                             });
@@ -60,10 +61,9 @@ fn floating_action_button_demo(ctx: &mut ComposeCtx) {
                         FloatingActionButtonSize::Medium,
                         FloatingActionButtonSize::Large,
                     ] {
-                        let c = clicks.clone();
                         FloatingActionButton::new()
                             .size(size)
-                            .on_click(move || c.update(|v| *v += 1))
+                            .on_click({ clone!(clicks); move || clicks.update(|v| *v += 1) })
                             .build(ctx, |ctx| {
                                 Icon::svg_path(STAR_PATH)
                                     .size(size.icon_size())
@@ -75,15 +75,13 @@ fn floating_action_button_demo(ctx: &mut ComposeCtx) {
                 // ── 颜色映射 ──
                 section_title(ctx, "Primary / secondary / tertiary (+ disabled)");
                 Row::new().spacing(16.0).build(ctx, |ctx| {
-                    let c = clicks.clone();
                     FloatingActionButton::new()
                         .colors(FloatingActionButtonDefaults::primary_colors(&theme))
-                        .on_click(move || c.update(|v| *v += 1))
+                        .on_click({ clone!(clicks); move || clicks.update(|v| *v += 1) })
                         .build(ctx, |ctx| Icon::svg_path(STAR_PATH).build(ctx));
-                    let c = clicks.clone();
                     FloatingActionButton::new()
                         .colors(FloatingActionButtonDefaults::secondary_colors(&theme))
-                        .on_click(move || c.update(|v| *v += 1))
+                        .on_click({ clone!(clicks); move || clicks.update(|v| *v += 1) })
                         .build(ctx, |ctx| Icon::svg_path(STAR_PATH).build(ctx));
                     FloatingActionButton::new()
                         .colors(FloatingActionButtonDefaults::tertiary_colors(&theme))
@@ -115,11 +113,11 @@ fn floating_action_button_demo(ctx: &mut ComposeCtx) {
                         |ctx| Icon::svg_path(PLUS_PATH).size(24.0).build(ctx),
                         ext_expanded.clone(),
                     )
-                    .on_click({ let c = clicks.clone(); move || c.update(|v| *v += 1) })
+                    .on_click({ clone!(clicks); move || clicks.update(|v| *v += 1) })
                     .build(ctx);
 
                     Button::text()
-                        .on_click({ let e = ext_expanded.clone(); move || e.update(|v| *v = !*v) })
+                        .on_click({ clone!(ext_expanded); move || ext_expanded.update(|v| *v = !*v) })
                         .build(ctx, |ctx| {
                             Text::new(if ext_expanded.get() { "Collapse" } else { "Expand" })
                                 .build(ctx)
@@ -145,8 +143,6 @@ fn floating_action_button_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
     winia::run_app!(|ctx| {
         winia::ui::theme::WiniaTheme::light(ctx, |ctx| {
             Window::new()
@@ -155,5 +151,4 @@ fn main() {
                 .build(ctx, |ctx| floating_action_button_demo(ctx));
         });
     });
-    drop(rt);
 }

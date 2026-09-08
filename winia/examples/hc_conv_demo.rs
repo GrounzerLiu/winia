@@ -9,6 +9,7 @@
 //! 端口：WINIA_DEBUG_PORT（默认 9998）
 //! 操作：点「视口 400」/「视口 2500」切换，抓树/截图观察可见项覆盖。
 
+use letclone::clone;
 use winia::prelude::*;
 use std::sync::Arc;
 
@@ -43,13 +44,11 @@ fn conv_demo(ctx: &mut ComposeCtx) {
             Row::new()
                 .modifier(Modifier::new().padding(8.0))
                 .build(ctx, |ctx| {
-                    let v = viewport_h.clone();
                     Button::text()
-                        .on_click(move || v.set(400.0))
+                        .on_click({ clone!(viewport_h); move || viewport_h.set(400.0) })
                         .build(ctx, |ctx| Text::new("视口 400").build(ctx));
-                    let v = viewport_h.clone();
                     Button::text()
-                        .on_click(move || v.set(2500.0))
+                        .on_click({ clone!(viewport_h); move || viewport_h.set(2500.0) })
                         .build(ctx, |ctx| Text::new("视口 2500").build(ctx));
                 });
 
@@ -73,8 +72,6 @@ fn conv_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()

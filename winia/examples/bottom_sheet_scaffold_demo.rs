@@ -8,6 +8,7 @@
 //!
 //! 运行：cargo run -p winia --example bottom_sheet_scaffold_demo --features debug-server
 
+use letclone::clone;
 use winia::prelude::*;
 use std::sync::Arc;
 
@@ -21,8 +22,6 @@ struct ScaffoldItem {
 fn scaffold_demo(ctx: &mut ComposeCtx) {
     // 外部 SheetState 可用于程序化控制（按钮展开/收起）
     let scaffold_state = ctx.remember(|| SheetState::new(SheetValue::PartiallyExpanded)).get();
-    let s1 = scaffold_state.clone();
-    let s2 = scaffold_state.clone();
     let lazy_state = ctx.remember(|| LazyListState::new()).get();
     let items = ctx
         .remember(|| {
@@ -40,28 +39,25 @@ fn scaffold_demo(ctx: &mut ComposeCtx) {
         .build(
             ctx,
             {
-                let s1 = s1.clone();
-                let s2 = s2.clone();
-                let st = lazy_state.clone();
-                let sheet_items = items.clone();
+                clone!(scaffold_state, lazy_state, items);
                 move |ctx| {
-                    // 头部固定 + LazyColumn 列表（虚拟滚动，120 项）
+                    // Fixed header + LazyColumn list (virtualized, 120 items).
                     Column::new()
                         .modifier(Modifier::new().fill_max_width().padding(16.0))
                         .spacing(8.0)
                         .build(ctx, |ctx| {
                             Text::new("底部片内容（上拖展开，内部可单独滚动）").font_size(16.0).build(ctx);
-                            let sc = st.clone();
-                            let list = sheet_items.clone();
-                            // 有限高度视口（Scaffold 下片高度由锚点拖拽决定，未展开时有限高；给列表定高以启用虚拟滚动）
-                            // height 620 使内容总高 ≈ 视口 720 → 展开时 is_full 触发 → 圆角 28→0 动画可见
+                            // Fixed-height viewport (sheet height is anchor-driven;
+                            // give the list a fixed height to enable virtualization).
+                            // height 620 makes content ≈ viewport 720 → is_full fires
+                            // on expand → corner 28→0 animation visible.
                             Stack::new()
                                 .modifier(Modifier::new().fill_max_width().height(620.0).clip(Shape::RoundedRect { corner_radius: 12.0 }))
                                 .build(ctx, |ctx| {
                                     LazyColumn::new()
-                                        .state(sc.clone())
+                                        .state(lazy_state.clone())
                                         .modifier(Modifier::new().fill_max_width().fill_max_height())
-                                        .items_from(list.clone(), |it: &ScaffoldItem| it.id, move |ctx, _i, it| {
+                                        .items_from(items.clone(), |it: &ScaffoldItem| it.id, move |ctx, _i, it| {
                                             Text::new(it.title.clone())
                                                 .font_size(13.0)
                                                 .color(Color::from_argb(255, 90, 90, 90))
@@ -79,17 +75,14 @@ fn scaffold_demo(ctx: &mut ComposeCtx) {
                                         .build(ctx);
                                 });
                             Row::new().spacing(8.0).build(ctx, |ctx| {
-                                let s1c = s1.clone();
                                 Button::text()
-                                    .on_click(move || s1c.expand())
+                                    .on_click({ clone!(scaffold_state); move || scaffold_state.expand() })
                                     .build(ctx, |ctx| Text::new("展开").build(ctx));
-                                let s2c = s2.clone();
                                 Button::text()
-                                    .on_click(move || s2c.partial_expand())
+                                    .on_click({ clone!(scaffold_state); move || scaffold_state.partial_expand() })
                                     .build(ctx, |ctx| Text::new("收起").build(ctx));
-                                let sc2 = st.clone();
                                 Button::text()
-                                    .on_click(move || sc2.animate_scroll_to_item(80, 0.0))
+                                    .on_click({ clone!(lazy_state); move || lazy_state.animate_scroll_to_item(80, 0.0) })
                                     .build(ctx, |ctx| Text::new("跳 80").build(ctx));
                             });
                         });
@@ -115,8 +108,6 @@ fn scaffold_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()

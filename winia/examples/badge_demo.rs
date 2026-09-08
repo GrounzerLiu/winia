@@ -16,16 +16,6 @@ fn section_title(ctx: &mut ComposeCtx, text: &str) {
         .build(ctx);
 }
 
-/// 一个带徽章的图标（demo 内部小组件）
-#[composable]
-fn badged_icon(ctx: &mut ComposeCtx, badge: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) {
-    BadgedBox::new(badge)
-        .build(ctx, |ctx| {
-            // 锚点：24×24 灰色方块模拟图标
-            Text::new("📷").font_size(24.0).build(ctx);
-        });
-}
-
 #[composable]
 fn badge_demo(ctx: &mut ComposeCtx) {
     let scroll_y = ctx.remember(|| ScrollState::new()).get();
@@ -128,9 +118,6 @@ fn badge_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
-
     winia::run_app!(|ctx| {
         WiniaTheme::light(ctx, |ctx| {
             Window::new()

@@ -3,6 +3,7 @@
 //!
 //! 运行：cargo run -p winia --example surface_demo
 
+use letclone::clone;
 use winia::prelude::*;
 
 #[composable]
@@ -56,27 +57,28 @@ fn surface_demo(ctx: &mut ComposeCtx) {
             let checked = ctx.remember(|| false);
 
             // ③ clickable：可点击 + 波纹（点击计数）
-            let cc_show = click_count.clone();
             Surface::new()
                 .shape(Shape::rounded(12.0))
-                .on_click(move || click_count.update(|v| *v += 1))
+                .on_click({ clone!(click_count); move || click_count.update(|v| *v += 1) })
                 .modifier(Modifier::new().fill_max_width())
-                .build(ctx, move |ctx| {
+                .build(ctx, {
+                    clone!(click_count);
+                    move |ctx| {
                     Column::new()
                         .modifier(Modifier::new().fill_max_width().padding(16.0))
                         .build(ctx, |ctx| {
-                            Text::new(format!("Clickable Surface (点击 {} 次)", cc_show.get()))
+                            Text::new(format!("Clickable Surface (点击 {} 次)", click_count.get()))
                                 .font_size(14.0)
                                 .build(ctx);
                         });
+                }
                 });
 
             // ④ selectable：选中状态 + 点击切换（显示选中标记）
-            let sel = selected.clone();
             Surface::new()
                 .shape(Shape::rounded(12.0))
                 .color(if selected.get() { Color::from_argb(255, 51, 92, 153) } else { Color::from_argb(255, 230, 230, 235) })
-                .selectable(selected.get(), move || sel.update(|v| *v = !*v))
+                .selectable(selected.get(), { clone!(selected); move || selected.update(|v| *v = !*v) })
                 .modifier(Modifier::new().fill_max_width())
                 .build(ctx, |ctx| {
                     Column::new()
@@ -93,11 +95,10 @@ fn surface_demo(ctx: &mut ComposeCtx) {
                 });
 
             // ⑤ toggleable：开关状态 + 点击切换
-            let chk = checked.clone();
             Surface::new()
                 .shape(Shape::rounded(12.0))
                 .border(SurfaceBorder::new(2.0, if checked.get() { Color::from_argb(255, 51, 92, 153) } else { Color::from_argb(255, 180, 180, 185) }))
-                .toggleable(checked.get(), move |v| chk.set(v))
+                .toggleable(checked.get(), { clone!(checked); move |v| checked.set(v) })
                 .modifier(Modifier::new().fill_max_width())
                 .build(ctx, |ctx| {
                     Column::new()

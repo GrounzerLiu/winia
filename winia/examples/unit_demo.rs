@@ -6,7 +6,6 @@
 //! 3. Offset/Size 运算
 
 use winia::prelude::*;
-use winia::app;
 
 #[composable]
 fn unit_demo(ctx: &mut ComposeCtx) {

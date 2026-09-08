@@ -14,6 +14,7 @@
 //!        点「Indefinite（手动关闭）」→ 一直显示，点 ✕ 才关；
 //!        连续快速点多个 → 新的替换旧的。
 
+use letclone::clone;
 use winia::prelude::*;
 
 #[composable]
@@ -21,10 +22,10 @@ fn snackbar_demo(ctx: &mut ComposeCtx) {
     // host 状态挂在整个 app 顶层（remember 跨重组稳定）——
     // SnackbarHost 显示在窗口底部（Scaffold bottomBar），show() 可从任意按钮回调调用
     let host = ctx.remember(|| SnackbarHostState::new()).get();
-    let host_content = host.clone();
-    let host_bar = host.clone();
 
-    Scaffold::new(move |ctx, _pad| {
+    Scaffold::new({
+        clone!(host);
+        move |ctx, _pad| {
         Column::new()
             .modifier(Modifier::new().fill_max_size().padding(16.0))
             .spacing(12.0)
@@ -34,61 +35,67 @@ fn snackbar_demo(ctx: &mut ComposeCtx) {
                     .build(ctx);
 
                 // Short：4s 自动消失
-                let h1 = host_content.clone();
                 Button::text()
-                    .on_click(move || {
-                        h1.show(
-                            SnackbarData::new("文件已保存")
-                                .action("撤销", || {})
-                                .duration(SnackbarDuration::Short),
-                        );
+                    .on_click({
+                        clone!(host);
+                        move || {
+                            host.show(
+                                SnackbarData::new("文件已保存")
+                                    .action("撤销", || {})
+                                    .duration(SnackbarDuration::Short),
+                            );
+                        }
                     })
                     .build(ctx, |ctx| Text::new("显示 Snackbar（Short · 4s 自动消失）").build(ctx));
 
                 // Long + 手动关闭按钮：10s 自动消失 / ✕ 手动关
-                let h2 = host_content.clone();
                 Button::text()
-                    .on_click(move || {
-                        h2.show(
-                            SnackbarData::new("已复制到剪贴板")
-                                .with_dismiss_action()
-                                .duration(SnackbarDuration::Long),
-                        );
+                    .on_click({
+                        clone!(host);
+                        move || {
+                            host.show(
+                                SnackbarData::new("已复制到剪贴板")
+                                    .with_dismiss_action()
+                                    .duration(SnackbarDuration::Long),
+                            );
+                        }
                     })
                     .build(ctx, |ctx| Text::new("带关闭按钮（Long · 10s）").build(ctx));
 
                 // Indefinite：不自动消失，必须手动关
-                let h3 = host_content.clone();
                 Button::text()
-                    .on_click(move || {
-                        h3.show(
-                            SnackbarData::new("操作被锁定，请手动关闭")
-                                .with_dismiss_action()
-                                .duration(SnackbarDuration::Indefinite),
-                        );
+                    .on_click({
+                        clone!(host);
+                        move || {
+                            host.show(
+                                SnackbarData::new("操作被锁定，请手动关闭")
+                                    .with_dismiss_action()
+                                    .duration(SnackbarDuration::Indefinite),
+                            );
+                        }
                     })
                     .build(ctx, |ctx| Text::new("Indefinite（手动关闭）").build(ctx));
 
                 // 覆盖：连续点几下看替换 + 旧定时器不误关
-                let h4 = host_content.clone();
                 Button::text()
-                    .on_click(move || {
-                        for i in 0..3 {
-                            let h = h4.clone();
-                            // 依次弹 3 条，每条都带自动消失——最后一条应覆盖前两条
-                            let msg = format!("消息 #{i}");
-                            h.show(
-                                SnackbarData::new(msg)
-                                    .duration(SnackbarDuration::Custom(2000)),
-                            );
+                    .on_click({
+                        clone!(host);
+                        move || {
+                            for i in 0..3 {
+                                // 依次弹 3 条，每条都带自动消失——最后一条应覆盖前两条
+                                let msg = format!("消息 #{i}");
+                                host.show(
+                                    SnackbarData::new(msg)
+                                        .duration(SnackbarDuration::Custom(2000)),
+                                );
+                            }
                         }
                     })
                     .build(ctx, |ctx| Text::new("连续覆盖 3 条（2000ms）").build(ctx));
 
                 // 手动 dismiss 全部
-                let h5 = host_content.clone();
                 Button::text()
-                    .on_click(move || h5.dismiss())
+                    .on_click({ clone!(host); move || host.dismiss() })
                     .build(ctx, |ctx| Text::new("立即隐藏").build(ctx));
 
                 // 底部说明
@@ -97,17 +104,19 @@ fn snackbar_demo(ctx: &mut ComposeCtx) {
                     .color(Color::from_argb(255, 120, 120, 120))
                     .build(ctx);
             });
+    }
     })
     // SnackbarHost 挂 Scaffold bottomBar——窗口底部、只占条自身高度、不遮挡内容点击
-    .bottom_bar(move |ctx| {
-        SnackbarHost::new(host_bar).build(ctx);
+    .bottom_bar({
+        clone!(host);
+        move |ctx| {
+            SnackbarHost::new(host.clone()).build(ctx);
+        }
     })
     .build(ctx);
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()

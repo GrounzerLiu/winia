@@ -1,12 +1,11 @@
 //! observe_watch 演示 — watch channel → State → recompose
 
+use letclone::clone;
 use winia::prelude::*;
 use winia::app;
 use std::time::Duration;
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
@@ -27,11 +26,13 @@ fn stream_demo_ui(ctx: &mut ComposeCtx) {
     let count = winia::effect::observe_watch(ctx, rx, 0);
 
     // 后台每秒自增（LaunchedEffect 自动管理生命周期）
-    let tx2 = tx.clone();
-    LaunchedEffect::new(()).build(ctx, move |_| async move {
-        loop {
-            tokio::time::sleep(Duration::from_secs(1)).await;
-            tx2.send_modify(|v| { if *v < 20 { *v += 1; } });
+    LaunchedEffect::new(()).build(ctx, {
+        clone!(tx);
+        move |_| async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                tx.send_modify(|v| { if *v < 20 { *v += 1; } });
+            }
         }
     });
 
@@ -66,7 +67,7 @@ fn stream_demo_ui(ctx: &mut ComposeCtx) {
 
             // 复位
             Button::new()
-                .on_click(move || { let _ = tx.send(0); })
+                .on_click({ clone!(tx); move || { let _ = tx.send(0); } })
                 .modifier(Modifier::new().size(120.0, 36.0))
                 .build(ctx, |ctx| {
                     Text::new("Reset").color(theme.on_primary).build(ctx);

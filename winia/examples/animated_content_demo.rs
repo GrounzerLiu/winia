@@ -5,6 +5,7 @@
 //!
 //! 用法：`cargo run -p winia --example animated_content_demo`
 
+use letclone::clone;
 use winia::animation::{AnimationSpec, SpringSpec, TweenSpec};
 use winia::prelude::*;
 
@@ -24,10 +25,10 @@ fn animated_content_demo(ctx: &mut ComposeCtx) {
                 .modifier(Modifier::new().fill_max_width().padding_vertical(8.0))
                 .build(ctx, |ctx| {
                     Button::new()
-                        .on_click({ let p = page.clone(); move || { p.set(0); } })
+                        .on_click({ clone!(page); move || { page.set(0); } })
                         .build(ctx, |ctx| { Text::new("Page A (narrow)").build(ctx); });
                     Button::new()
-                        .on_click({ let p = page.clone(); move || { p.set(1); } })
+                        .on_click({ clone!(page); move || { page.set(1); } })
                         .build(ctx, |ctx| { Text::new("Page B (wide)").build(ctx); });
                 });
 
@@ -85,9 +86,6 @@ fn animated_content_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
-
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()

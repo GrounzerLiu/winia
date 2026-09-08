@@ -2,6 +2,7 @@
 //!
 //! 运行：`cargo run -p winia --example overlay_demo --features debug-server`
 
+use letclone::clone;
 use winia::prelude::*;
 use winia::ui::{Dialog, DropdownMenu, DropdownMenuItem, OverlayAnimSpec, Popup, PopupPosition};
 use winia::core::composer::ComposeCtx;
@@ -17,15 +18,12 @@ fn overlay_ui(ctx: &mut ComposeCtx) {
     Column::new()
         .spacing(16.0)
         .modifier(winia::modifier::Modifier::new().padding(24.0))
-        .build(ctx, move |ctx| {
-            // 外层 State 全部 clone 进闭包（avoid borrow——content 生命周期不受控）
-            let popup_open = popup_open.clone();
-            let menu_open = menu_open.clone();
-            let dialog_open = dialog_open.clone();
-            // last 需要 3 份（菜单 / Dialog 内容 / 显示）——每处 move 独立副本
-            let last_display = last.clone();
-            let last_menu = last.clone();
-            let last_dialog = last.clone();
+        .build(ctx, {
+            // Clone outer states into the closure (avoid borrow — content outlives the call).
+            // `last` needs 3 copies (menu / dialog content / display) — one per move site.
+            clone!(popup_open, menu_open, dialog_open, last);
+            let (last_display, last_menu, last_dialog) = (last.clone(), last.clone(), last.clone());
+            move |ctx| {
 
             Text::new("Overlay 组件演示")
                 .font_size(22.0)
@@ -40,7 +38,7 @@ fn overlay_ui(ctx: &mut ComposeCtx) {
             Button::new()
                 .modifier(winia::modifier::Modifier::new().width(220.0))
                 .on_click({
-                    let popup_open = popup_open.clone();
+                    clone!(popup_open);
                     move || {
                         let v = popup_open.get();
                         popup_open.set(!v);
@@ -53,12 +51,11 @@ fn overlay_ui(ctx: &mut ComposeCtx) {
             // visible=false → sync 删除 overlay；注册方 Skip → 保留。若用 if
             // 包裹（build 不执行），Skip 帧与主动关闭无法区分。
             {
-                let popup_open = popup_open.clone();
-                Popup::new(popup_open.get())
+                Popup::new(popup_open.clone().get())
                     .position(PopupPosition::BottomLeft)
                     .offset(0.0, 6.0)
-                    .on_dismiss_request(move || popup_open.set(false))
-                    .build(ctx, move |ctx| {
+                    .on_dismiss_request({ clone!(popup_open); move || popup_open.set(false) })
+                    .build(ctx, |ctx| {
                         Column::new()
                             .spacing(6.0)
                             .modifier(
@@ -92,7 +89,7 @@ fn overlay_ui(ctx: &mut ComposeCtx) {
             Button::new()
                 .modifier(winia::modifier::Modifier::new().width(220.0))
                 .on_click({
-                    let menu_open = menu_open.clone();
+                    clone!(menu_open);
                     move || {
                         let v = menu_open.get();
                         menu_open.set(!v);
@@ -103,7 +100,7 @@ fn overlay_ui(ctx: &mut ComposeCtx) {
                 });
             DropdownMenu::new(menu_open.clone())
                 .on_dismiss_request({
-                    let menu_open = menu_open.clone();
+                    clone!(menu_open);
                     move || menu_open.set(false)
                 })
                 .build(
@@ -112,38 +109,44 @@ fn overlay_ui(ctx: &mut ComposeCtx) {
                         // 锚点：占位（与按钮同位置——按钮上方）
                         Text::new("").font_size(1.0).build(ctx);
                     },
-                    move |ctx| {
+                    {
+                        clone!(menu_open, last_menu);
+                        move |ctx| {
                         {
-                            let menu_open = menu_open.clone();
-                            let last = last_menu.clone();
                             DropdownMenuItem::new("新建文件")
-                                .on_click(move || {
-                                    last.set(String::from("新建文件"));
-                                    menu_open.set(false);
+                                .on_click({
+                                    clone!(menu_open, last_menu);
+                                    move || {
+                                        last_menu.set(String::from("新建文件"));
+                                        menu_open.set(false);
+                                    }
                                 })
                                 .build(ctx);
                         }
                         {
-                            let menu_open = menu_open.clone();
-                            let last = last_menu.clone();
                             DropdownMenuItem::new("打开…")
-                                .on_click(move || {
-                                    last.set(String::from("打开…"));
-                                    menu_open.set(false);
+                                .on_click({
+                                    clone!(menu_open, last_menu);
+                                    move || {
+                                        last_menu.set(String::from("打开…"));
+                                        menu_open.set(false);
+                                    }
                                 })
                                 .build(ctx);
                         }
                         {
-                            let menu_open = menu_open.clone();
-                            let last = last_menu.clone();
                             DropdownMenuItem::new("退出")
                                 .enabled(false)
-                                .on_click(move || {
-                                    last.set(String::from("退出"));
-                                    menu_open.set(false);
+                                .on_click({
+                                    clone!(menu_open, last_menu);
+                                    move || {
+                                        last_menu.set(String::from("退出"));
+                                        menu_open.set(false);
+                                    }
                                 })
                                 .build(ctx);
                         }
+                    }
                     },
                 );
 
@@ -151,7 +154,7 @@ fn overlay_ui(ctx: &mut ComposeCtx) {
             Button::new()
                 .modifier(winia::modifier::Modifier::new().width(220.0))
                 .on_click({
-                    let dialog_open = dialog_open.clone();
+                    clone!(dialog_open);
                     move || {
                         let v = dialog_open.get();
                         dialog_open.set(!v);
@@ -162,9 +165,7 @@ fn overlay_ui(ctx: &mut ComposeCtx) {
                 });
             // ⚠ Dialog 参数化（visible）——同 Popup：build 总执行记录 active
             {
-                let dialog_open = dialog_open.clone();
-                let last = last_dialog.clone();
-                Dialog::new(dialog_open.get())
+                Dialog::new(dialog_open.clone().get())
                     // 进入动画（默认 scale 0.8→1 + fade 200ms EaseOutCubic——
                     // 对齐 Compose material2 Dialog 打开效果）。可自定义：
                     //   .enter_animation(None)                        // 关闭进入动画（瞬时出现）
@@ -173,10 +174,12 @@ fn overlay_ui(ctx: &mut ComposeCtx) {
                     //   .exit_animation(Some(OverlayAnimSpec::fade_only(Duration::from_millis(150))))
                     //   .enter_animation(Some(OverlayAnimSpec::default_enter().scale_from(0.6).duration(Duration::from_millis(300))))
                     .on_dismiss_request({
-                        let dialog_open = dialog_open.clone();
+                        clone!(dialog_open);
                         move || dialog_open.set(false)
                     })
-                    .build(ctx, move |ctx| {
+                    .build(ctx, {
+                        clone!(dialog_open, last_dialog);
+                        move |ctx| {
                         Column::new()
                             .spacing(10.0)
                             .modifier(
@@ -204,7 +207,7 @@ fn overlay_ui(ctx: &mut ComposeCtx) {
                                         Button::new()
                                             .modifier(winia::modifier::Modifier::new().size(90.0, 34.0))
                                             .on_click({
-                                                let dialog_open = dialog_open.clone();
+                                                clone!(dialog_open);
                                                 move || dialog_open.set(false)
                                             })
                                             .build(ctx, |ctx| {
@@ -213,10 +216,9 @@ fn overlay_ui(ctx: &mut ComposeCtx) {
                                         Button::new()
                                             .modifier(winia::modifier::Modifier::new().size(90.0, 34.0))
                                             .on_click({
-                                                let dialog_open = dialog_open.clone();
-                                                let last = last.clone();
+                                                clone!(dialog_open, last_dialog);
                                                 move || {
-                                                    last.set(String::from("对话框确定"));
+                                                    last_dialog.set(String::from("对话框确定"));
                                                     dialog_open.set(false);
                                                 }
                                             })
@@ -225,14 +227,14 @@ fn overlay_ui(ctx: &mut ComposeCtx) {
                                             });
                                     });
                             });
+                        }
                     });
+                }
             }
         });
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()

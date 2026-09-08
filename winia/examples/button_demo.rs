@@ -8,6 +8,7 @@
 //! - elevation（ElevatedButton 近似）与自定义 colors
 //! - interactionSource hoist（实时显示 press/hover/focus 状态）
 
+use letclone::clone;
 use winia::prelude::*;
 use winia::animation::{AnimationSpec, TweenSpec};
 
@@ -22,7 +23,6 @@ fn section_title(ctx: &mut ComposeCtx, text: &str) {
 #[composable]
 fn demo_row(ctx: &mut ComposeCtx, label: &str, build_btn: impl FnOnce(&State<i32>) -> Button) {
     let count = ctx.remember(|| 0i32);
-    let c = count.clone();
     Row::new()
         .modifier(Modifier::new().padding_vertical(3.0))
         .build(ctx, |ctx| {
@@ -31,7 +31,7 @@ fn demo_row(ctx: &mut ComposeCtx, label: &str, build_btn: impl FnOnce(&State<i32
                 .modifier(Modifier::new().width(150.0))
                 .build(ctx);
             build_btn(&count).build(ctx, |ctx| {
-                Text::new(format!("Click {}", c.get())).font_size(13.0).build(ctx);
+                Text::new(format!("Click {}", count.get())).font_size(13.0).build(ctx);
             });
         });
 }
@@ -40,7 +40,6 @@ fn demo_row(ctx: &mut ComposeCtx, label: &str, build_btn: impl FnOnce(&State<i32
 fn button_demo(ctx: &mut ComposeCtx) {
     let scroll_y = ctx.remember(|| ScrollState::new()).get();
     let clicks = ctx.remember(|| 0i32);
-    let c = clicks.clone();
 
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(16.0).vertical_scroll(scroll_y))
@@ -51,63 +50,63 @@ fn button_demo(ctx: &mut ComposeCtx) {
 
             section_title(ctx, "样式（ButtonStyle）");
             demo_row(ctx, "Button::filled()", |count| {
-                let count = count.clone();
+                clone!(count);
                 Button::filled().on_click(move || count.update(|v| *v += 1))
             });
             demo_row(ctx, "Button::elevated()", |count| {
-                let count = count.clone();
+                clone!(count);
                 Button::elevated().on_click(move || count.update(|v| *v += 1))
             });
             demo_row(ctx, "Button::filled_tonal()", |count| {
-                let count = count.clone();
+                clone!(count);
                 Button::filled_tonal().on_click(move || count.update(|v| *v += 1))
             });
             demo_row(ctx, "Button::outlined()", |count| {
-                let count = count.clone();
+                clone!(count);
                 Button::outlined().on_click(move || count.update(|v| *v += 1))
             });
             demo_row(ctx, "Button::text()", |count| {
-                let count = count.clone();
+                clone!(count);
                 Button::text().on_click(move || count.update(|v| *v += 1))
             });
 
             section_title(ctx, "状态");
             demo_row(ctx, "Enabled", |count| {
-                let count = count.clone();
+                clone!(count);
                 Button::new().on_click(move || count.update(|v| *v += 1))
             });
             demo_row(ctx, "Disabled", |count| {
-                let count = count.clone();
+                clone!(count);
                 Button::new().enabled(false).on_click(move || count.update(|v| *v += 1))
             });
 
             section_title(ctx, "形状（shape）");
             demo_row(ctx, "默认胶囊", |count| {
-                let count = count.clone();
+                clone!(count);
                 Button::new().on_click(move || count.update(|v| *v += 1))
             });
             demo_row(ctx, "rounded(4)", |count| {
-                let count = count.clone();
+                clone!(count);
                 Button::new().shape(Shape::rounded(4.0)).on_click(move || count.update(|v| *v += 1))
             });
             demo_row(ctx, "Rectangle", |count| {
-                let count = count.clone();
+                clone!(count);
                 Button::new().shape(Shape::Rectangle).on_click(move || count.update(|v| *v += 1))
             });
 
             section_title(ctx, "尺寸与内边距");
             demo_row(ctx, "紧凑 padding", |count| {
-                let count = count.clone();
+                clone!(count);
                 Button::new().content_padding((10.0, 4.0, 10.0, 4.0))
                     .on_click(move || count.update(|v| *v += 1))
             });
             demo_row(ctx, "min_size(0,0)", |count| {
-                let count = count.clone();
+                clone!(count);
                 Button::new().min_size(0.0, 0.0)
                     .on_click(move || count.update(|v| *v += 1))
             });
             demo_row(ctx, "min_size(120,48)", |count| {
-                let count = count.clone();
+                clone!(count);
                 Button::new().min_size(120.0, 48.0)
                     .on_click(move || count.update(|v| *v += 1))
             });
@@ -122,12 +121,12 @@ fn button_demo(ctx: &mut ComposeCtx) {
                 )),
             );
             demo_row(ctx, "动画 min_size", |_| {
-                let aw = min_w_anim.clone();
-                let aw_h = min_w_anim.clone();
-                let at = min_toggle.clone();
                 Button::new()
-                    .min_size(move || aw.get(), move || aw_h.get() * 0.4)
-                    .on_click(move || { at.update(|v| *v = !*v); })
+                    .min_size(min_w_anim.clone(), {
+                        clone!(min_w_anim);
+                        move || min_w_anim.get() * 0.4
+                    })
+                    .on_click({ clone!(min_toggle); move || { min_toggle.update(|v| *v = !*v); } })
             });
 
             section_title(ctx, "尺寸变体（XSmall ~ XLarge）");
@@ -190,12 +189,12 @@ fn button_demo(ctx: &mut ComposeCtx) {
 
             section_title(ctx, "阴影、颜色与边框");
             demo_row(ctx, "Elevated", |count| {
-                let count = count.clone();
+                clone!(count);
                 Button::new().elevation(ButtonElevation::elevated())
                     .on_click(move || count.update(|v| *v += 1))
             });
             demo_row(ctx, "自定义 colors", |count| {
-                let count = count.clone();
+                clone!(count);
                 Button::new()
                     .colors(ButtonColors::new(
                         Color::from_argb(255, 126, 87, 194),
@@ -206,7 +205,7 @@ fn button_demo(ctx: &mut ComposeCtx) {
                     .on_click(move || count.update(|v| *v += 1))
             });
             demo_row(ctx, "自定义 border", |count| {
-                let count = count.clone();
+                clone!(count);
                 Button::new()
                     .border(ButtonBorder::new(2.0, Color::from_argb(255, 33, 150, 243)))
                     .on_click(move || count.update(|v| *v += 1))
@@ -224,7 +223,7 @@ fn button_demo(ctx: &mut ComposeCtx) {
                         .build(ctx);
                     Button::new()
                         .interaction_source(src.clone())
-                        .on_click({ let c = c.clone(); move || c.update(|v| *v += 1) })
+                        .on_click({ clone!(clicks); move || clicks.update(|v| *v += 1) })
                         .build(ctx, |ctx| {
                             Text::new("Hover / Press / Focus").font_size(13.0).build(ctx);
                         });
@@ -245,9 +244,6 @@ fn button_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
-
     winia::run_app!(|ctx| {
         WiniaTheme::light(ctx, |ctx| {
             Window::new()

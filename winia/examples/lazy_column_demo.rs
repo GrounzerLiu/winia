@@ -5,6 +5,7 @@
 //! - 稳定 key 迭代（items_from：数据前部增删后滚动位置按 key 保持）
 //! - item / items / items_plain 混合
 
+use letclone::clone;
 use winia::prelude::*;
 use std::sync::Arc;
 
@@ -56,27 +57,23 @@ fn lazy_demo(ctx: &mut ComposeCtx) {
             Row::new()
                 .modifier(Modifier::new().padding(8.0))
                 .build(ctx, |ctx| {
-                    let s0 = state.clone();
                     Button::text()
-                        .on_click(move || s0.scroll_to_item(0, 0.0))
+                        .on_click({ clone!(state); move || state.scroll_to_item(0, 0.0) })
                         .build(ctx, |ctx| Text::new("顶部").build(ctx));
-                    let s1 = state.clone();
                     Button::text()
-                        .on_click(move || s1.scroll_to_item(500, 0.0))
+                        .on_click({ clone!(state); move || state.scroll_to_item(500, 0.0) })
                         .build(ctx, |ctx| Text::new("跳转 500").build(ctx));
-                    let s2 = state.clone();
                     Button::text()
-                        .on_click(move || s2.scroll_to_item(999, 0.0))
+                        .on_click({ clone!(state); move || state.scroll_to_item(999, 0.0) })
                         .build(ctx, |ctx| Text::new("末尾").build(ctx));
                 });
 
             // LazyColumn：稳定 key 迭代
-            let items_clone = items.clone();
             LazyColumn::new()
                 .state(state.clone())
                 .modifier(Modifier::new().fill_max_width().fill_max_height())
                 .items_from(
-                    items_clone,
+                    items.clone(),
                     |it: &Item| it.id,          // 稳定 key = id
                     move |ctx, i, it| item_row(ctx, &it.name, i),
                 )
@@ -85,9 +82,6 @@ fn lazy_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
-
     winia::run_app!(|ctx| {
         WiniaTheme::light(ctx, |ctx| {
             Window::new()

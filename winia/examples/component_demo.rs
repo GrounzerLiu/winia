@@ -7,15 +7,14 @@
 //! - TextField: enabled/readOnly/placeholder/singleLine/maxLines/minLines
 //! - Text: letterSpacing/lineHeight
 
+use letclone::clone;
 use winia::prelude::*;
 use winia::app;
 
 #[composable]
 fn component_demo(ctx: &mut ComposeCtx) {
     let clicked = ctx.remember(|| false);
-    let c = clicked.clone();
     let show = ctx.remember(|| false);
-    let s = show.clone();
     // 全局布局方向切换（RTL/LTR——顶部固定按钮，不跟随滚动）
     let rtl_state = ctx.remember(|| false);
     // ScrollState 必须 remember（跨重组保留 offset）
@@ -26,7 +25,7 @@ fn component_demo(ctx: &mut ComposeCtx) {
         .modifier(Modifier::new().padding(8.0))
         .build(ctx, |ctx| {
             Button::new()
-                .on_click({ let r = rtl_state.clone(); move || r.set(!r.get()) })
+                .on_click({ clone!(rtl_state); move || rtl_state.set(!rtl_state.get()) })
                 .modifier(Modifier::new().size(200.0, 36.0))
                 .build(ctx, |ctx| {
                     Text::new(if rtl_state.get() { "切换为 LTR（当前 RTL）" } else { "切换为 RTL（当前 LTR）" })
@@ -60,9 +59,9 @@ fn component_demo(ctx: &mut ComposeCtx) {
                 .modifier(Modifier::new()
                     .size(200.0, 80.0)
                     .background(Color::from_argb(255, 66, 133, 244), Shape::rounded(8.0))
-                    .alpha(if c.get() { 0.3 } else { 1.0 })
-                    .rotate(if c.get() { 15.0 } else { 0.0 })
-                    .scale(if c.get() { 1.2 } else { 1.0 }, if c.get() { 1.2 } else { 1.0 }))
+                    .alpha(if clicked.get() { 0.3 } else { 1.0 })
+                    .rotate(if clicked.get() { 15.0 } else { 0.0 })
+                    .scale(if clicked.get() { 1.2 } else { 1.0 }, if clicked.get() { 1.2 } else { 1.0 }))
                 .build(ctx, |ctx| {
                     Text::new("变换（点击切换）")
                         .color(Color::WHITE)
@@ -136,7 +135,7 @@ fn component_demo(ctx: &mut ComposeCtx) {
                 .build(ctx);
             Row::new().build(ctx, |ctx| {
                 Button::new()
-                    .on_click(move || c.set(!c.get()))
+                    .on_click({ clone!(clicked); move || clicked.set(!clicked.get()) })
                     .modifier(Modifier::new().size(120.0, 40.0))
                     .build(ctx, |ctx| {
                         Text::new("切换").color(Color::WHITE).build(ctx);
@@ -221,7 +220,7 @@ fn component_demo(ctx: &mut ComposeCtx) {
                 .modifier(Modifier::new().padding_vertical(8.0))
                 .build(ctx);
             Button::new()
-                .on_click(move || s.set(!s.get()))
+                .on_click({ clone!(show); move || show.set(!show.get()) })
                 .modifier(Modifier::new().size(140.0, 40.0).test_tag("toggle-btn"))
                 .build(ctx, |ctx| {
                     Text::new(if show.get() { "开" } else { "关" })
@@ -240,7 +239,7 @@ fn component_demo(ctx: &mut ComposeCtx) {
                 winia::animation::AnimationSpec::Spring(winia::animation::SpringSpec::bouncy()),
             );
             Button::new()
-                .on_click({ let c = clicked.clone(); move || c.set(!c.get()) })
+                .on_click({ clone!(clicked); move || clicked.set(!clicked.get()) })
                 .modifier(Modifier::new().size(160.0, 36.0))
                 .build(ctx, |ctx| {
                     Text::new(if clicked.get() { "padding 40（点击还原）" } else { "padding 4（点击动画）" })
@@ -314,7 +313,7 @@ fn component_demo(ctx: &mut ComposeCtx) {
                 winia::animation::AnimationSpec::Spring(winia::animation::SpringSpec::bouncy()),
             );
             Button::new()
-                .on_click({ let c = clicked.clone(); move || c.set(!c.get()) })
+                .on_click({ clone!(clicked); move || clicked.set(!clicked.get()) })
                 .modifier(Modifier::new().size(180.0, 36.0))
                 .build(ctx, |ctx| {
                     Text::new(if clicked.get() { "offset 60（点击还原）" } else { "offset 0（点击动画）" })
@@ -353,9 +352,6 @@ fn component_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
-
     winia::run_app!(|ctx| {
         // 亮色主题：暗色背景上看不清阴影
         WiniaTheme::light(ctx, |ctx| {

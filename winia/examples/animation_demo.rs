@@ -6,6 +6,7 @@
 //! 每节拆为独立 `#[composable]` 函数 = 函数级组合 scope——
 //! 动画 state 失效只重跑对应节函数（对标 Compose @Composable 的用户函数粒度）。
 
+use letclone::clone;
 use winia::prelude::*;
 use winia::animation::{AnimationSpec, SpringSpec, TweenSpec};
 use winia::app;
@@ -32,7 +33,7 @@ fn animation_demo(ctx: &mut ComposeCtx) {
                         .modifier(Modifier::new().layout_weight(1.0))
                         .build(ctx, |_| {});
                     Button::new()
-                        .on_click({ let c = clicked.clone(); move || { c.update(|v| *v = !*v); } })
+                        .on_click({ clone!(clicked); move || { clicked.update(|v| *v = !*v); } })
                         .build(ctx, |ctx| {
                             Text::new(if clicked.get() { "Reset" } else { "Animate!" })
                                 .font_size(16.0)
@@ -219,14 +220,14 @@ fn section5(ctx: &mut ComposeCtx) {
         .modifier(Modifier::new()
             .size(40.0, 40.0)
             .graphics_layer({
-                let pulse = pulse.clone();
+                clone!(pulse);
                 move || winia::modifier::GraphicsLayerParams {
                     alpha: pulse.peek(),
                     ..Default::default()
                 }
             })
             .background({
-                let pulse_color = pulse_color.clone();
+                clone!(pulse_color);
                 move || pulse_color.peek()
             }, Shape::Circle)
         )
@@ -326,7 +327,7 @@ fn section8(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
     // 切换按钮（+ Crossfade 无动画完成回调场景）
     Row::new().build(ctx, |ctx| {
         Button::new()
-            .on_click({ let p = page.clone(); move || { p.update(|v| *v = (*v + 1) % 3); } })
+            .on_click({ clone!(page); move || { page.update(|v| *v = (*v + 1) % 3); } })
             .build(ctx, |ctx| { Text::new("Next").build(ctx); });
     });
 
@@ -352,7 +353,7 @@ fn section8(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
         alpha_state.clone(),
         if clicked.get() { 0.2 } else { 1.0 },
         AnimationSpec::Spring(spring.clone()),
-        { let d = done_flag.clone(); move || { d.set(true); } },
+        { clone!(done_flag); move || { done_flag.set(true); } },
     );
     Column::new()
         .modifier(Modifier::new()
@@ -421,10 +422,6 @@ fn section9(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
 }
 
 fn main() {
-    // 启动 tokio 运行时（供 debug WS server 使用）
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
-
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()

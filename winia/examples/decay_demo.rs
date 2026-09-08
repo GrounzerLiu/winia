@@ -8,6 +8,7 @@
 //!
 //! 用法：`cargo run -p winia --example decay_demo`
 
+use letclone::clone;
 use winia::animation::{exponential_decay, push_decay};
 use winia::modifier::GraphicsLayerParams;
 use winia::prelude::*;
@@ -30,11 +31,11 @@ fn decay_demo(ctx: &mut ComposeCtx) {
                 .build(ctx, |ctx| {
                     Button::new()
                         .on_click({
-                            let xs = x.clone();
+                            clone!(x);
                             move || {
                                 // 从当前位置以 1344px/s 向右 fling（极限 = 1344/4.2 = 320px，
                                 // 方块右缘 320+40 = 360 精确贴轨道尽头）
-                                push_decay(xs.clone(), 1344.0, exponential_decay(4.2));
+                                push_decay(x.clone(), 1344.0, exponential_decay(4.2));
                             }
                         })
                         .build(ctx, |ctx| {
@@ -42,7 +43,7 @@ fn decay_demo(ctx: &mut ComposeCtx) {
                         });
                     Button::new()
                         .on_click({
-                            let x = x.clone();
+                            clone!(x);
                             move || {
                                 // 先取消进行中的 fling（否则 set 后下一帧被动画覆盖——reset 无效）
                                 winia::animation::cancel_animation(&x);
@@ -61,11 +62,13 @@ fn decay_demo(ctx: &mut ComposeCtx) {
                         .size(360.0, 40.0)
                         .background(Color::from_argb(60, 120, 120, 120), Shape::rounded(6.0)))
                     .build(ctx, |_| {});
-                let g = x.clone();
-                let gfx = move || {
-                    let mut p = GraphicsLayerParams::default();
-                    p.translation_x = g.peek();
-                    p
+                let gfx = {
+                    clone!(x);
+                    move || {
+                        let mut p = GraphicsLayerParams::default();
+                        p.translation_x = x.peek();
+                        p
+                    }
                 };
                 Column::new()
                     .modifier(Modifier::new()
@@ -83,9 +86,6 @@ fn decay_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
-
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
