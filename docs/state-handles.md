@@ -1,6 +1,7 @@
 # State Handles Refactor — `exp/state-handles`
 
-> Status: design approved, branch `exp/state-handles` cut from `v2@d2d1545`.
+> Status: steps 1–2 landed (`7f27486` framework, `cccf3a4` demos); step 3
+> (delete legacy) still open. Branch `exp/state-handles` cut from `v2@d2d1545`.
 > Goal: full refactor (no legacy leftovers) — move the four write semantics
 > from **function names** into **handle types** so misuse fails to compile.
 
@@ -170,3 +171,72 @@ re-key operators from `&State<f32>` to `&Reactive<f32>`.
 - No change to `changed()`/Skip semantics in this branch (tracked separately).
 - No public API stabilization promise yet — handles are the new public API
   surface; keep them `#[doc(hidden)]`-free but version-unpinned until v2 ships.
+
+## 7. Implementation progress (landed)
+
+### 7.1 Framework handles (`7f27486`)
+
+- `Reactive / Animating / Visual / Backchannel` added as `#[repr(transparent)]`
+  wrappers over the shared `RawState` storage (`winia/src/core/state.rs`),
+  with downgrade-only conversions (`Reactive -> Animating/Visual/Backchannel`).
+  `State<T>` stays as the ergonomic `Reactive` default.
+- `ComposeCtx` issues handles: `remember_backchannel` (`composer.rs:235`),
+  `remember_animating` (`composer.rs:247`), `remember_visual`
+  (`composer.rs:259`); animation engine works on handles
+  (`push_animatable_handle`, `push_infinite_visual`,
+  `cancel_animation_by_id`); overlay progress and nav write-back slots moved
+  off the legacy functions.
+- `update` gained dedup (clone-compare-swap, matching `set`); legacy
+  always-notify kept as `pub(crate) update_untracked` for pulse counters.
+- 21 `set_no_wake` sites in `composer.rs` tests migrated to
+  `as_raw().set_animating` (same-crate `pub(crate)` access, identical
+  dedup + notify + no-wake semantics); `state.rs` self-test rewritten to
+  `test_backchannel_write_lands_without_notify` using `Backchannel::set`.
+- Zero legacy callers remain in lib outside `state.rs` itself (the
+  `Visual::set` internal forward and the deprecated `State::set_visual` shim,
+  both removed in step 3). Stale old-name comments cleaned across lib.
+- Gate: `cargo test -p winia --lib` — 798 passed, 0 failed.
+
+### 7.2 `letclone` convention (`7f27486` + `cccf3a4`)
+
+- Workspace depends on `letclone 0.3.0` (root `Cargo.toml:24`,
+  `winia/Cargo.toml:26`) for closure captures.
+- Rule (enforced in review, not by the compiler): `clone!` is **only** for
+  closures — `{ clone!(x); move || ... }`. Direct value passing keeps
+  `.clone()` (`TextField::new(v.clone())`, `.state(s.clone())`), and
+  single-use intermediate clone variables are deleted instead of renamed
+  (`letclone` has no rename syntax).
+- Rationale: `{ clone!(x); x }` for value passing adds a macro for zero
+  benefit; `clone!` earns its place exactly where the capture list would
+  otherwise need a separate `let` per variable.
+
+### 7.3 `run_app` owns the tokio runtime (`7f27486` + `cccf3a4`)
+
+- `run_app` (`winia/src/app.rs:4810`) creates the tokio runtime itself:
+  reuse `Handle::try_current()` when the caller already entered one, else
+  `Runtime::new()`, holding the enter guard across the blocking event loop.
+  Effects (`LaunchedEffect`, `remember_coroutine_scope`) and the debug WS
+  server rely on `Handle::try_current()` during composition.
+- `#[tokio::main]` was rejected: it `block_on`s, which conflicts with the
+  blocking `EventLoop::run_app`. Nested `Runtime::new()` under an entered
+  guard is a silent shadow (spawns land on a never-driven runtime), so demos
+  must not create their own — the reuse branch exists only to keep the
+  migration midpoint panic-free.
+- All 62 files under `winia/examples/` migrated (`cccf3a4`): `clone!` for
+  closure captures per §7.2, `Runtime::new + enter` boilerplate deleted from
+  every `main`, dead code removed (`badge_demo` unused `badged_icon`),
+  unused imports dropped. Each demo verified with `cargo check` (zero new
+  warnings) and `cargo run` (exit 0). Zero `Runtime::new` and zero
+  value-style `{ clone!(x); x }` remain under `winia/examples/`.
+
+### 7.4 Remaining (step 3 + deferred)
+
+- Delete `State::set_silent / set_no_wake / set_visual`, `notify_version /
+  take_notify_version`, and the `State` alias; rename internals to
+  `RawState (pub(crate))`; narrow `PartialEq` to signal-id identity.
+- `Modifier` dynamic channels restricted to `Visual`-derived peek closures
+  (constructor signatures, not comments).
+- `DerivedValue`: extend `impl_derived_arith` to `Dp / Offset / Size` and
+  re-key operators from `&State<f32>` to `&Reactive<f32>`.
+- Deferred (separate item): the `changed`-allowlist gap for
+  `TextField::read_only`-class fields (docked-filter root cause from §1).
