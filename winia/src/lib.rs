@@ -88,6 +88,10 @@ pub mod prelude {
         AnimatedVisibility, ExpandFrom, ExpandFromH, SlideDirection, SlideOffset,
         VisibilityTransition,
     };
+    pub use crate::ui::search_bar::{
+        SearchBar, SearchBarColors, SearchBarDefaults, SearchBarState, DockedSearchBar,
+        SEARCH_ICON_PATH, BACK_ICON_PATH, SEARCH_BAR_HEIGHT,
+    };
     pub use crate::ui::animated_size::AnimatedSize;
     pub use crate::ui::animated_content::AnimatedContent;
     pub use crate::ui::crossfade::Crossfade;

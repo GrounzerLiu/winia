@@ -552,12 +552,31 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
                 input_size = s;
                 // prefix 与输入 2dp（PrefixSuffixTextPadding）
                 input_pos_x = left + prefix_w + AFFIX_GAP;
-                placements[i] = crate::layout::Placement { size: s, position: crate::layout::Point::new(input_pos_x, 0.0) };
+                // Bare no_container fields: container height == input height (see final
+                // size below), so input y=0 is already centered. (Variants: M3 lower
+                // text zone semantics, also y=0.)
+                let input_y = 0.0;
+                placements[i] = crate::layout::Placement { size: s, position: crate::layout::Point::new(input_pos_x, input_y) };
                 break;
             }
         }
         // 第三轮：label/placeholder 测量 + 全部定位
         let progress = self.label_progress.peek();
+        // Bare-field content height: measured children max (NOT the constraint max —
+        // loose parents hand down screen-sized maxes). Variants keep the
+        // constraint-derived center (usually tight, M3 zone semantics).
+        let bare_content_h = if self.variant.is_none() {
+            let mut m = input_size.height;
+            for p in placements.iter() {
+                m = m.max(p.size.height);
+            }
+            // Policy constraints are already padding-stripped (content-area space):
+            // do NOT subtract pad again (that double-counts and top-aligns).
+            // Collapsed pill: min 40 → center in 40; expanded loose: min 0 → wrap.
+            m.max(constraints.min_height.max(0.0))
+        } else {
+            0.0 // unused for variants
+        };
         for (i, &c) in children.iter().enumerate() {
             match roles[i] {
                 TextFieldSlotRole::Label => {
@@ -584,9 +603,26 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
                 }
                 TextFieldSlotRole::Placeholder => {
                     let (s, _) = measure_node(nodes, policies, c, text_c(constraints.max_width));
-                    placements[i] = crate::layout::Placement { size: s, position: crate::layout::Point::new(input_pos_x, 0.0) };
+                    // Bare fields: center in measured content height (see above).
+                    // Variants: content top (M3 zone semantics).
+                    let ph_y = if self.variant.is_none() {
+                        ((bare_content_h - s.height) / 2.0).max(0.0)
+                    } else {
+                        0.0
+                    };
+                    placements[i] = crate::layout::Placement { size: s, position: crate::layout::Point::new(input_pos_x, ph_y) };
                 }
                 TextFieldSlotRole::Leading => {
+                    // Bare fields: center in measured content height (constraint max is
+                    // screen-sized under loose parents).
+                    // Variants: center in container (constraint-derived, usually tight).
+                    if self.variant.is_none() {
+                        placements[i].position = crate::layout::Point::new(
+                            0.0,
+                            ((bare_content_h - placements[i].size.height) / 2.0).max(0.0),
+                        );
+                        continue;
+                    }
                     // 垂直居中于**容器**（M3 specs：Icon alignment = vertically
                     // centered——容器中心；输入文本区在容器下部（Filled 底 8 /
                     // Outlined 居中），居中于输入区会偏下）。容器中心（内容区
@@ -601,6 +637,14 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
                     );
                 }
                 TextFieldSlotRole::Trailing => {
+                    // Bare fields: same measured-height centering as Leading above.
+                    if self.variant.is_none() {
+                        placements[i].position = crate::layout::Point::new(
+                            (width - placements[i].size.width).max(0.0),
+                            ((bare_content_h - placements[i].size.height) / 2.0).max(0.0),
+                        );
+                        continue;
+                    }
                     let content_h = text_field_content_height(&constraints, self.pad_top, self.pad_bottom, self.supporting_h, input_size.height);
                     let container_center = (content_h + self.pad_bottom - self.pad_top) / 2.0;
                     placements[i].position = crate::layout::Point::new(
@@ -609,19 +653,34 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
                     );
                 }
                 TextFieldSlotRole::Prefix => {
-                    // 与输入文本同位（M3：calculateVerticalPosition——单行时
-                    // 与输入同垂直位置）
-                    placements[i].position = crate::layout::Point::new(left, (input_size.height - placements[i].size.height).max(0.0) / 2.0);
+                    // Bare: center in measured content (input itself centered).
+                    // Variants: with input text same vertical position.
+                    if self.variant.is_none() {
+                        placements[i].position = crate::layout::Point::new(left, ((bare_content_h - placements[i].size.height) / 2.0).max(0.0));
+                    } else {
+                        placements[i].position = crate::layout::Point::new(left, (input_size.height - placements[i].size.height).max(0.0) / 2.0);
+                    }
                 }
                 TextFieldSlotRole::Suffix => {
-                    // M3：suffix 右端 = trailing 左端（无间距）；与输入文本
-                    // 间距 2dp（PrefixSuffixTextPadding——由 input_w 预留）
-                    placements[i].position = crate::layout::Point::new(
-                        (width - right - placements[i].size.width).max(0.0),
-                        (input_size.height - placements[i].size.height).max(0.0) / 2.0,
-                    );
+                    if self.variant.is_none() {
+                        placements[i].position = crate::layout::Point::new(
+                            (width - right - placements[i].size.width).max(0.0),
+                            ((bare_content_h - placements[i].size.height) / 2.0).max(0.0),
+                        );
+                    } else {
+                        // M3：suffix 右端 = trailing 左端（无间距）；与输入文本
+                        // 间距 2dp（PrefixSuffixTextPadding——由 input_w 预留）
+                        placements[i].position = crate::layout::Point::new(
+                            (width - right - placements[i].size.width).max(0.0),
+                            (input_size.height - placements[i].size.height).max(0.0) / 2.0,
+                        );
+                    }
                 }
-                TextFieldSlotRole::Input => {}
+                TextFieldSlotRole::Input => {
+                    if self.variant.is_none() {
+                        placements[i].position = crate::layout::Point::new(input_pos_x, ((bare_content_h - placements[i].size.height) / 2.0).max(0.0));
+                    }
+                }
             }
         }
         let _ = progress;
@@ -706,6 +765,9 @@ pub(crate) fn text_field_visual_color(
 pub struct TextField {
     value: State<TextFieldValue>,
     on_value_change: Box<dyn Fn(TextFieldValue) + Send + Sync>,
+    /// Search action (cf. Compose IME `ImeAction.Search` → `onSearch`): fired when
+    /// Enter is pressed in single-line mode. None = Enter is swallowed (status quo).
+    on_search: Option<std::sync::Arc<dyn Fn(TextFieldValue) + Send + Sync>>,
     modifier: Modifier,
     font_size: Option<crate::unit::TextUnit>,
     /// 是否启用（禁用：不聚焦不响应键盘，视觉 50% alpha——对标 Compose enabled）
@@ -761,6 +823,7 @@ impl TextField {
         Self {
             value,
             on_value_change: Box::new(|_| {}),
+            on_search: None,
             modifier: Modifier::new(),
             font_size: None,
             enabled: true,
@@ -789,6 +852,14 @@ impl TextField {
     /// 参数为编辑后的新 TextFieldValue（text/selection）
     pub fn on_value_change(mut self, f: impl Fn(TextFieldValue) + Send + Sync + 'static) -> Self {
         self.on_value_change = Box::new(f);
+        self
+    }
+
+    /// Search action (cf. Compose `KeyboardActions(onSearch)` with forced
+    /// `ImeAction.Search`): fired with the current value when Enter is pressed in
+    /// single-line mode. Multi-line Enter still inserts newline.
+    pub fn on_search(mut self, f: impl Fn(TextFieldValue) + Send + Sync + 'static) -> Self {
+        self.on_search = Some(std::sync::Arc::new(f));
         self
     }
 
@@ -1102,6 +1173,7 @@ impl TextField {
         let kb_handler = {
             let v = value.clone();
             let cb = on_change.clone();
+            let on_search = self.on_search.clone();
             let undo = undo.clone();
             let registrar = registrar.clone();
             let mapping = offset_mapping.clone();
@@ -1366,6 +1438,11 @@ impl TextField {
                         winit::keyboard::NamedKey::Enter => {
                             // 单行模式：Enter 吞掉不换行（对标 Compose singleLine）
                             if single_line {
+                                // Search action (IME Search equivalent): fire on_search
+                                // with the current value instead of inserting anything.
+                                if let Some(search) = on_search.clone() {
+                                    search(v.get());
+                                }
                                 return true;
                             }
                             let change = TextChange::Inserted { index: val.selection.start, text: "\n".into() };
@@ -1705,8 +1782,10 @@ impl TextField {
                 ctx.end_restartable_group();
             });
         }
-        if has_visual {
-            if let Some(ph) = self.placeholder {
+        // Placeholder builds regardless of container variant (bare no_container fields
+        // need it too — e.g. SearchBar input). Previously gated on has_visual (v2
+        // containerization oversight); the block is self-contained (own key + alpha).
+        if let Some(ph) = self.placeholder {
                 // M3 placeholderAlpha：淡入**淡出**双向（150ms）——alpha 目标
                 // 随显示状态（显示 1 / 隐藏 0）；构建条件 = 显示中或淡出中
                 // （alpha > 0）——淡出动画期间仍构建（透明度渐低），alpha
@@ -1748,7 +1827,6 @@ impl TextField {
                     }
                 });
             }
-        }
         if let Some(prefix) = self.prefix {
             slot_wrap!(TextFieldSlotRole::Prefix, prefix);
         }
@@ -2161,12 +2239,69 @@ mod tests {
     }
 
     #[test]
-    fn placeholder_fallback_to_text_content_without_visual() {
-        // text-field-v2：placeholder 为闭包子节点（仅 has_visual 时构建）——
-        // 无容器视觉（no_container）时不构建（无 Placeholder 槽位）
+    fn placeholder_builds_without_visual() {
+        // Placeholder builds regardless of container variant — bare no_container
+        // fields (e.g. SearchBar input) need it. Previously gated on has_visual
+        // (v2 containerization oversight, fixed with SearchBar).
         let value = State::new(TextFieldValue::new(""));
         let m = find_slot_modifier(TextField::new(value.clone()).no_container().placeholder(|_ctx| { crate::ui::Text::new("请输入").build(_ctx); }), TextFieldSlotRole::Placeholder);
-        assert!(m.is_none(), "无视觉时 placeholder 不构建（子节点化）");
+        assert!(m.is_some(), "no_container placeholder must build its slot");
+    }
+
+    /// Drive the container KbEvent handler with a synthetic Enter (no app loop).
+    /// Returns true if some handler consumed it.
+    fn fire_enter(modifier: &Modifier) -> bool {
+        use winit::keyboard::{Key, NamedKey};
+        let ev = crate::modifier::KbEvent {
+            key: Key::Named(NamedKey::Enter),
+            event_type: crate::modifier::KbEventType::KeyDown,
+            is_alt_pressed: false,
+            is_ctrl_pressed: false,
+            is_shift_pressed: false,
+            is_meta_pressed: false,
+            repeat: false,
+        };
+        for el in modifier.elements() {
+            if let ModifierElement::KbEvent { on_key: Some(h), .. } = el {
+                if h(&ev) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn on_search_fires_on_single_line_enter() {
+        // Search action: single-line Enter fires on_search with current value.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = rt.enter();
+        let value = State::new(TextFieldValue::new("query"));
+        let fired = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let fired2 = fired.clone();
+        let field = TextField::new(value)
+            .single_line(true)
+            .on_search(move |v| fired2.lock().unwrap().push(v.text.clone()));
+        let m = build_field(field);
+        assert!(fire_enter(&m), "Enter must be consumed in single-line mode");
+        assert_eq!(*fired.lock().unwrap(), vec!["query".to_string()]);
+    }
+
+    #[test]
+    fn on_search_absent_keeps_swallow() {
+        // Without on_search, single-line Enter is still swallowed (status quo).
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = rt.enter();
+        let value = State::new(TextFieldValue::new("query"));
+        let field = TextField::new(value).single_line(true);
+        let m = build_field(field);
+        assert!(fire_enter(&m), "Enter still consumed without on_search");
     }
 
     #[test]
