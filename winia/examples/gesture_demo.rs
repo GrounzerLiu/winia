@@ -1,6 +1,7 @@
 //! 手势/指针事件测试示例
 //! 测试 Compose 风格 click 检测 + on_pointer_event 完整生命周期
 
+use letclone::clone;
 use winia::core::composer::ComposeCtx;
 use winia::composable;
 use winia::modifier::{Modifier, Color, Dimension, PointerEvent, PointerEventType};
@@ -24,11 +25,10 @@ fn gesture_ui(ctx: &mut ComposeCtx) {
             .build(ctx, |ctx| {
                 // 1. Button（Compose 风格 click —— Down→Up 配对 + slop）
                 Button::new().on_click({
-                    let c = count.clone();
-                    let l = last.clone();
+                    clone!(count, last);
                     move || {
-                        c.update(|v| *v -= 1);
-                        l.set(format!("click at #{}", c.get()));
+                        count.update(|v| *v -= 1);
+                        last.set(format!("click at #{}", count.get()));
                     }
                 })
                 .style(ButtonStyle::Filled)
@@ -44,12 +44,11 @@ fn gesture_ui(ctx: &mut ComposeCtx) {
                             .padding(8.0)
                             .background(Color::from_argb(40, 100, 149, 237), winia::modifier::Shape::rounded(4.0))
                             .on_pointer_event({
-                                let c = count.clone();
-                                let l = last.clone();
+                                clone!(count, last);
                                 move |e: &PointerEvent| {
                                     if matches!(e.event_type, PointerEventType::Up) {
-                                        c.update(|v| *v += 1);
-                                        l.set(format!("pointer Up at #{}", c.get()));
+                                        count.update(|v| *v += 1);
+                                        last.set(format!("pointer Up at #{}", count.get()));
                                         true
                                     } else { false }
                                 }
@@ -77,20 +76,19 @@ fn gesture_ui(ctx: &mut ComposeCtx) {
                             .size(200.0, Dimension::Auto)
                             .background(Color::from_argb(60, 200, 200, 80), winia::modifier::Shape::rounded(6.0))
                             .on_pointer_event({
-                                let l = last.clone();
-                                let d = drag.clone();
+                                clone!(last, drag);
                                 move |e: &PointerEvent| {
                                     match e.event_type {
                                         PointerEventType::Down => {
-                                            l.set(format!("Down at ({:.0},{:.0})", e.position.0, e.position.1));
+                                            last.set(format!("Down at ({:.0},{:.0})", e.position.0, e.position.1));
                                             true
                                         }
                                         PointerEventType::Move => {
-                                            d.set((e.position.0, e.position.1));
+                                            drag.set((e.position.0, e.position.1));
                                             true
                                         }
                                         PointerEventType::Up => {
-                                            l.set(format!("Up at ({:.0},{:.0})", e.position.0, e.position.1));
+                                            last.set(format!("Up at ({:.0},{:.0})", e.position.0, e.position.1));
                                             true
                                         }
                                         _ => false,
@@ -113,17 +111,17 @@ fn gesture_ui(ctx: &mut ComposeCtx) {
                             .padding(12.0)
                             .size(240.0, Dimension::Auto)
                             .background(Color::from_argb(80, 156, 39, 176), winia::modifier::Shape::rounded(6.0))
-                            .on_press({ let l = tap_info.clone(); move |p: (f32, f32)| {
-                                l.set(format!("press at ({:.0},{:.0})", p.0, p.1));
+                            .on_press({ clone!(tap_info); move |p: (f32, f32)| {
+                                tap_info.set(format!("press at ({:.0},{:.0})", p.0, p.1));
                             } })
-                            .on_tap({ let l = tap_info.clone(); move |p: (f32, f32)| {
-                                l.set(format!("tap at ({:.0},{:.0})", p.0, p.1));
+                            .on_tap({ clone!(tap_info); move |p: (f32, f32)| {
+                                tap_info.set(format!("tap at ({:.0},{:.0})", p.0, p.1));
                             } })
-                            .on_double_tap({ let l = tap_info.clone(); move |p: (f32, f32)| {
-                                l.set(format!("double-tap at ({:.0},{:.0})", p.0, p.1));
+                            .on_double_tap({ clone!(tap_info); move |p: (f32, f32)| {
+                                tap_info.set(format!("double-tap at ({:.0},{:.0})", p.0, p.1));
                             } })
-                            .on_long_press({ let l = tap_info.clone(); move |p: (f32, f32)| {
-                                l.set(format!("long-press at ({:.0},{:.0})", p.0, p.1));
+                            .on_long_press({ clone!(tap_info); move |p: (f32, f32)| {
+                                tap_info.set(format!("long-press at ({:.0},{:.0})", p.0, p.1));
                             } }),
                     )
                     .build(ctx);
@@ -145,22 +143,21 @@ fn gesture_ui(ctx: &mut ComposeCtx) {
                                     .size(70.0, 70.0)
                                     .offset(drag_x.clone(), drag_y.clone())
                                     .background(Color::from_argb(255, 255, 87, 34), winia::modifier::Shape::rounded(8.0))
-                                    .on_drag_start({ let s = drag_state.clone(); move |_p: (f32, f32)| {
-                                        s.set(String::from("拖拽开始"));
+                                    .on_drag_start({ clone!(drag_state); move |_p: (f32, f32)| {
+                                        drag_state.set(String::from("拖拽开始"));
                                     } })
                                     .on_drag({
-                                        let x = drag_x.clone();
-                                        let y = drag_y.clone();
+                                        clone!(drag_x, drag_y);
                                         move |_p: (f32, f32), delta: (f32, f32)| {
-                                            x.update(|v| *v += delta.0);
-                                            y.update(|v| *v += delta.1);
+                                            drag_x.update(|v| *v += delta.0);
+                                            drag_y.update(|v| *v += delta.1);
                                         }
                                     })
-                                    .on_drag_end({ let s = drag_state.clone(); move || {
-                                        s.set(String::from("拖拽结束"));
+                                    .on_drag_end({ clone!(drag_state); move || {
+                                        drag_state.set(String::from("拖拽结束"));
                                     } })
-                                    .on_drag_cancel({ let s = drag_state.clone(); move || {
-                                        s.set(String::from("拖拽取消"));
+                                    .on_drag_cancel({ clone!(drag_state); move || {
+                                        drag_state.set(String::from("拖拽取消"));
                                     } }),
                             )
                             .build(ctx, |ctx| {
@@ -178,8 +175,6 @@ fn gesture_ui(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()

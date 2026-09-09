@@ -193,13 +193,13 @@ impl NavigationSuiteScaffold {
         // 只在首次 Enter 消费——无需双世代
         let phase: State<SuitePhase> = ctx.remember(|| SuitePhase::Idle);
         let current: State<NavigationSuiteType> = ctx.remember(|| target_type);
-        let next: State<Option<NavigationSuiteType>> = ctx.remember(|| None);
+        let next = ctx.remember_backchannel(|| None);
 
         let cur = current.get();
         let ph = phase.get();
         if self.transition && form_kind(cur) != form_kind(target_type) {
             // 异形切换（bar↔rail）——morph 过渡
-            next.set_silent(Some(target_type));
+            next.set(Some(target_type));
             if ph == SuitePhase::Idle {
                 phase.set(SuitePhase::Collapsing);
             }
@@ -207,7 +207,7 @@ impl NavigationSuiteScaffold {
             // 同形切换（rail Expanded↔Collapsed）——容器宽度动画是组件内部的，
             // 静默换目标即可；过渡中目标变同形 = 取消收拢原地展开
             if cur != target_type {
-                current.set_silent(target_type);
+                current.as_raw().set_backchannel(target_type);
             }
             if ph == SuitePhase::Collapsing {
                 phase.set(SuitePhase::Idle);
@@ -228,10 +228,10 @@ impl NavigationSuiteScaffold {
 
         // 收拢完成：换形态 + 展开（set 通知 → 下帧以新形态渲染）
         if ph == SuitePhase::Collapsing && scale <= 0.01 {
-            if let Some(t) = next.get() {
+            if let Some(t) = next.peek() {
                 current.set(t);
             }
-            next.set_silent(None);
+            next.set(None);
             phase.set(SuitePhase::Idle);
         }
 

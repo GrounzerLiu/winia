@@ -7,6 +7,7 @@
 //! - Circular indeterminate（全局旋转 + 进度呼吸 + 波浪滚动）
 //! - 自定义振幅函数 / 波长 / 波速
 
+use letclone::clone;
 use winia::prelude::*;
 
 fn section_title(ctx: &mut ComposeCtx, text: &str) {
@@ -30,9 +31,8 @@ fn wavy_progress_indicator_demo(ctx: &mut ComposeCtx) {
                 .build(ctx);
 
             section_title(ctx, "Slider 控制进度（Linear + Circular determinate）");
-            let p = progress.clone();
             Slider::new(progress.get())
-                .on_value_change(move |nv| p.update(|s| *s = nv))
+                .on_value_change({ clone!(progress); move |nv| progress.update(|s| *s = nv) })
                 .build(ctx);
             Text::new(format!("progress = {:.2}", progress.get()))
                 .font_size(12.0)
@@ -77,9 +77,6 @@ fn wavy_progress_indicator_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
-
     winia::run_app!(|ctx| {
         WiniaTheme::light(ctx, |ctx| {
             Window::new()

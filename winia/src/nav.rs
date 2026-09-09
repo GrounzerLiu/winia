@@ -49,7 +49,7 @@ use std::collections::HashMap;
 pub(crate) struct EntryStateScope {
     pool: std::sync::Arc<std::sync::Mutex<HashMap<(u64, u32, std::any::TypeId), Box<dyn Any>>>>,
     key: u64,
-    counter: State<u32>,
+    counter: crate::core::state::Backchannel<u32>,
     /// 过渡滑出层（previous）用只读作用域：命中返回现存槽，miss **不入池**。
     /// 滑出期间旧页内容每帧重跑，若照常 miss→insert 会把刚被 removeState
     /// 清理的槽重新插回（下次 pop 才再清）——破坏 Nav3 removeState 语义。
@@ -99,7 +99,7 @@ pub fn remember_entry_state<T: Clone + PartialEq + 'static>(
     // 槽 key = (entry key, 调用序号, 类型)——类型参与 key：不同 T 不撞槽，
     // 命中即类型正确（无需 downcast 失败回退）
     let seq = scope.counter.peek();
-    scope.counter.set_silent(seq + 1);
+    scope.counter.set(seq + 1);
     let slot_key = (scope.key, seq, std::any::TypeId::of::<T>());
     let mut pool = scope.pool.lock().unwrap();
     if let Some(b) = pool.get(&slot_key) {
@@ -877,8 +877,9 @@ struct NavTransition<K: NavKey> {
     /// 过渡进度（1→0：1=旧页全显，0=新页全显/无过渡）
     progress: State<f32>,
     /// 过渡启动时固化的规格快照（对标 Nav3 在过渡启动时求值 transitionSpec——
-    /// 中途改配置不影响进行中的过渡；完成时清空）
-    active_spec: State<Option<NavTransitionSpec>>,
+    /// 中途改配置不影响进行中的过渡；完成时清空）。Backchannel：快照只在
+    /// 过渡启动/完成瞬间读写，无订阅者需要通知（progress 的动画通知已驱动帧）。
+    active_spec: crate::core::state::Backchannel<Option<NavTransitionSpec>>,
 }
 
 /// 场景句柄（场景 key + 场景对象）。PartialEq 按 key（同 key = 同内容场景——
@@ -904,7 +905,7 @@ impl<K: NavKey> NavTransition<K> {
             forward: ctx.remember(|| State::new(true)).get(),
             // 初值 0 = 无过渡（渲染层以此判定静置归位；导航时 detect 复位 1.0）
             progress: ctx.remember(|| State::new(0.0)).get(),
-            active_spec: ctx.remember(|| State::new(None)).get(),
+            active_spec: ctx.remember_backchannel(|| None),
         }
     }
 
@@ -941,8 +942,8 @@ impl<K: NavKey> NavTransition<K> {
                 // 无旧页——清掉进行中的过渡（防切回动画规格后渲染出栈外幽灵页）
                 // 与孤儿动画
                 crate::animation::cancel_animation(&self.progress);
-                self.progress.set_silent(0.0);
-                self.active_spec.set_silent(None);
+                self.progress.as_raw().set_backchannel(0.0);
+                self.active_spec.set(None);
                 self.previous.set(None);
             } else {
                 // 旧场景无条件进入过渡——exit==None 时旧场景原样保留到过渡结束
@@ -954,7 +955,7 @@ impl<K: NavKey> NavTransition<K> {
                     scene: std::sync::Arc::clone(&prev_frame.as_ref().unwrap().scene),
                 }));
                 self.forward.set(forward);
-                self.active_spec.set_silent(Some(spec.clone()));
+                self.active_spec.set(Some(spec.clone()));
                 // 复位进度起点 1.0（旧页全显）——上次动画结束 progress 停在 0，
                 // 不复位则 push_animatable 见 peek==target(0) 直接跳过、动画不启动。
                 // ⚠ 仅在无进行中动画时复位：过渡中途再次导航时，旧动画与新动画
@@ -962,7 +963,7 @@ impl<K: NavKey> NavTransition<K> {
                 // 此时若复位 1.0，本帧会渲染出 p=1 的满血旧页、下一帧 tick 又弹回
                 // 中途值（一帧闪跳）；跳过复位则从中途值平滑续走。
                 if !crate::animation::has_animation_for_state(self.progress.state_id()) {
-                    self.progress.set_silent(1.0);
+                    self.progress.as_raw().set_backchannel(1.0);
                 }
                 // 过渡动画：1→0（用 spec 的时长/缓动曲线——自定义 duration/easing）
                 push_animatable(
@@ -979,7 +980,7 @@ impl<K: NavKey> NavTransition<K> {
         // 完成检测：过渡结束 → 移除旧页、清规格快照
         if self.previous.peek().is_some() && self.progress.peek() < 0.001 {
             self.previous.set(None);
-            self.active_spec.set_silent(None);
+            self.active_spec.set(None);
         }
     }
 
@@ -1596,7 +1597,7 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
             stack.iter().map(|k| (self.entry_provider)(ctx, k)).collect();
         // route hash → entry 元信息映射（跨帧 remember——被移除 key 不在当前
         // entries 里：on_pop 的 contentKey、pop 方向的过渡覆盖均取上一帧映射）
-        let route_meta: State<HashMap<u64, EntryRouteMeta>> = ctx.remember(|| HashMap::new());
+        let route_meta = ctx.remember_backchannel(|| HashMap::new());
         let old_meta: HashMap<u64, EntryRouteMeta> = route_meta.peek().clone();
         // on_pop：对比上一帧栈——被移除的 entry 触发装饰器回调 + 清理状态池
         // （对标 Nav3 onPop(contentKey)：pop 时 removeState 清理）
@@ -1621,8 +1622,9 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
             }
             prev_stack.set(stack.clone());
         }
-        // 更新 route→entry 元信息映射（仅 peek/clone 读取——set_silent 免通知）
-        route_meta.set_silent(
+        // Update route->entry meta map (peek/clone reads only — Backchannel,
+        // no notify needed).
+        route_meta.set(
             entries
                 .iter()
                 .map(|e| {
@@ -1689,7 +1691,7 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
                 .unwrap_or(self.pop_transition_spec)
         };
         // 上一帧渲染的场景对象（退场层来源）——读取须在 last_scene 更新前
-        let last_scene: State<Option<SceneHolder<K>>> = ctx.remember(|| State::new(None)).get();
+        let last_scene = ctx.remember_backchannel(|| None);
         let prev_frame = last_scene.peek().clone().unwrap_or_else(|| {
             // 首帧无上一帧场景——用当前场景兜底（首帧 key 必相同，不会触发过渡）
             SceneHolder { key: scene.scene_key(), scene: std::sync::Arc::clone(&scene) }
@@ -1703,8 +1705,8 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
         let entry_pool = entry_pool.clone();
         let result_bus = result_bus.clone();
         let render_entry = |ctx: &mut ComposeCtx, entry: &NavEntry<K>, draining: bool| {
-            let counter = ctx.remember(|| State::new(0u32)).get();
-            counter.set_silent(0); // 每帧重置——seq 按 entry 内调用顺序分配（槽 key 稳定）
+            let counter = ctx.remember_backchannel(|| 0u32);
+            counter.set(0); // 每帧重置——seq 按 entry 内调用顺序分配（槽 key 稳定）
             let scope = EntryStateScope {
                 pool: entry_pool.clone(),
                 key: entry.content_key(),
@@ -1744,8 +1746,8 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
                 &spec,
             );
         });
-        // 记录本帧场景（下一帧的退场场景来源）
-        last_scene.set_silent(Some(scene_holder));
+        // Record this frame's scene (next frame's exit source).
+        last_scene.set(Some(scene_holder));
         }
         // dialog 覆盖层：栈顶 dialog entry 注册为模态覆盖层（渲染于主树之上，
         // 主树不渲染其内容；dismiss = 弹栈）。winia overlay v1 单层限制 →
@@ -1790,8 +1792,8 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
             })
             .build(ctx, move |ctx| {
                 if let Some((ck, entry)) = &dialog_content {
-                    let counter = ctx.remember(|| State::new(0u32)).get();
-                    counter.set_silent(0);
+                    let counter = ctx.remember_backchannel(|| 0u32);
+                    counter.set(0);
                     let scope = EntryStateScope {
                         pool: pool.clone(),
                         key: *ck,

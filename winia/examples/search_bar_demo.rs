@@ -6,6 +6,7 @@
 //!
 //! Run: cargo run -p winia --example search_bar_demo
 
+use letclone::clone;
 use winia::prelude::*;
 use std::sync::Arc;
 
@@ -34,31 +35,38 @@ fn search_icon(ctx: &mut ComposeCtx) {
 }
 
 fn result_item(ctx: &mut ComposeCtx, label: String, picked: State<String>, close: State<bool>) {
-    let s2 = label.clone();
-    ListItem::new(move |ctx| {
-        Text::new(label.clone()).build(ctx);
+    ListItem::new({
+        clone!(label);
+        move |ctx| {
+            Text::new(label.clone()).build(ctx);
+        }
     })
-        .on_click(move || {
-            picked.set(s2.clone());
-            close.set(true);
+        .on_click({
+            clone!(label, picked, close);
+            move || {
+                picked.set(label.clone());
+                close.set(true);
+            }
         })
         .build(ctx);
 }
 
 fn result_list(ctx: &mut ComposeCtx, items: Arc<Vec<String>>, picked: State<String>, close: State<bool>) {
-    let items_clone = items.clone();
     LazyColumn::new()
         .modifier(Modifier::new().fill_max_width().fill_max_height())
         .items_from(
-            items_clone,
+            items.clone(),
             |s: &String| {
                 let mut h = std::collections::hash_map::DefaultHasher::new();
                 use std::hash::{Hash, Hasher};
                 s.hash(&mut h);
                 h.finish()
             },
-            move |ctx, _i, s| {
-                result_item(ctx, s.clone(), picked.clone(), close.clone());
+            {
+                clone!(picked, close);
+                move |ctx, _i, s| {
+                    result_item(ctx, s.clone(), picked.clone(), close.clone());
+                }
             },
         )
         .build(ctx);
@@ -71,10 +79,13 @@ fn result_list(ctx: &mut ComposeCtx, items: Arc<Vec<String>>, picked: State<Stri
 fn docked_list(ctx: &mut ComposeCtx, items: Arc<Vec<String>>, picked: State<String>, close: State<bool>) {
     Column::new()
         .modifier(Modifier::new().fill_max_width())
-        .build(ctx, |ctx| {
+        .build(ctx, {
+            clone!(items, picked, close);
+            move |ctx| {
             for s in items.iter() {
                 result_item(ctx, s.clone(), picked.clone(), close.clone());
             }
+        }
         });
 }
 
@@ -98,8 +109,6 @@ fn search_bar_demo(ctx: &mut ComposeCtx) {
         Arc::new(filtered(&docked_query).into_iter().take(5).collect());
 
     // on_search closes (Compose convention: caller deactivates inside onSearch).
-    let fs = full_state.clone();
-    let ds = docked_state.clone();
     Column::new()
         .modifier(Modifier::new().fill_max_size())
         .build(ctx, |ctx| {
@@ -113,15 +122,13 @@ fn search_bar_demo(ctx: &mut ComposeCtx) {
                 .build(ctx);
             SearchBar::new()
                 .state(full_state.clone())
-                .on_search(move |_| fs.close())
+                .on_search({ clone!(full_state); move |_| full_state.close() })
                 .placeholder(|ctx| {
                     Text::new("Search fruits…").build(ctx);
                 })
                 .leading_icon(search_icon)
                 .build(ctx, {
-                    let full_items = full_items.clone();
-                    let picked = picked.clone();
-                    let close_full = close_full.clone();
+                    clone!(full_items, picked, close_full);
                     move |ctx| {
                         result_list(ctx, full_items.clone(), picked.clone(), close_full.clone());
                     }
@@ -133,15 +140,13 @@ fn search_bar_demo(ctx: &mut ComposeCtx) {
             DockedSearchBar::new()
                 .state(docked_state.clone())
                 .dropdown_shadow_elevation(4.0)
-                .on_search(move |_| ds.close())
+                .on_search({ clone!(docked_state); move |_| docked_state.close() })
                 .placeholder(|ctx| {
                     Text::new("Search fruits…").build(ctx);
                 })
                 .leading_icon(search_icon)
                 .build(ctx, {
-                    let docked_items = docked_items.clone();
-                    let picked = picked.clone();
-                    let ds = docked_state.clone();
+                    clone!(docked_items, picked, docked_state);
                     move |ctx| {
                         // Dropdown sizes to content (plain Column of ≤5 rows).
                         Column::new()
@@ -150,9 +155,8 @@ fn search_bar_demo(ctx: &mut ComposeCtx) {
                                 // Inner remembered close flag — isolated per
                                 // dropdown recomposition.
                                 let close_docked = ctx.remember(|| false);
-                                let ds2 = ds.clone();
                                 if close_docked.get() {
-                                    ds2.close();
+                                    docked_state.clone().close();
                                     close_docked.set(false);
                                 }
                                 docked_list(ctx, docked_items.clone(), picked.clone(), close_docked);
@@ -163,9 +167,6 @@ fn search_bar_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
-
     winia::run_app!(|ctx| {
         WiniaTheme::light(ctx, |ctx| {
             Window::new()

@@ -1,5 +1,6 @@
 //! Material 3 ListItem 演示：一行、二行、三行、slots 与交互。
 
+use letclone::clone;
 use winia::prelude::*;
 
 fn label(ctx: &mut ComposeCtx, value: &str) {
@@ -13,7 +14,6 @@ fn label(ctx: &mut ComposeCtx, value: &str) {
 #[composable]
 fn list_item_demo(ctx: &mut ComposeCtx) {
     let clicks = ctx.remember(|| 0i32);
-    let click_count = clicks.clone();
 
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(16.0).vertical_scroll(ctx.remember(|| ScrollState::new()).get()))
@@ -24,7 +24,7 @@ fn list_item_demo(ctx: &mut ComposeCtx) {
             ListItem::new(|ctx| Text::new("账户设置").build(ctx))
                 .leading_content(|ctx| Text::new("⚙").font_size(20.0).build(ctx))
                 .trailing_content(|ctx| Text::new("›").font_size(22.0).build(ctx))
-                .on_click({ let c = click_count.clone(); move || c.update(|v| *v += 1) })
+                .on_click({ clone!(clicks); move || clicks.update(|v| *v += 1) })
                 .build(ctx);
 
             label(ctx, "二行");
@@ -56,8 +56,6 @@ fn list_item_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
     winia::run_app!(|ctx| {
         WiniaTheme::light(ctx, |ctx| {
             Window::new().size(460.0, 720.0).title("ListItem Demo").build(ctx, list_item_demo);

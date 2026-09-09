@@ -2,6 +2,7 @@
 //!
 //! 对标 Compose `FlowRowSimpleUsageExample`（chip 过滤器 UI）。
 
+use letclone::clone;
 use winia::prelude::*;
 use winia::ui::Chip;
 
@@ -48,21 +49,28 @@ fn flow_demo_ui(ctx: &mut ComposeCtx) {
                 )
                 .build(ctx, |ctx| {
                     for (i, label) in FILTERS.iter().enumerate() {
-                        let sel = selected.clone();
                         let label = label.to_string();
-                        ctx.key(i, move |ctx| {
-                            let is_sel = sel.get()[i];
-                            let label2 = label.clone();
-                            Chip::filter(
-                                is_sel,
-                                move |ctx| {
-                                    Text::new(label2.clone()).font_size(13.0).build(ctx);
-                                },
-                                move || {
-                                    sel.update(|v| v[i] = !v[i]);
-                                },
-                            )
-                            .build(ctx);
+                        ctx.key(i, {
+                            clone!(selected);
+                            move |ctx| {
+                                let is_sel = selected.get()[i];
+                                Chip::filter(
+                                    is_sel,
+                                    {
+                                        clone!(label);
+                                        move |ctx| {
+                                            Text::new(label.clone()).font_size(13.0).build(ctx);
+                                        }
+                                    },
+                                    {
+                                        clone!(selected);
+                                        move || {
+                                            selected.update(|v| v[i] = !v[i]);
+                                        }
+                                    },
+                                )
+                                .build(ctx);
+                            }
                         });
                     }
                 });

@@ -148,10 +148,6 @@ fn image_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    // 启动 tokio 运行时（供 debug WS server / LaunchedEffect 使用）
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
-
     winia::run_app!(|ctx| {
         WiniaTheme::light(ctx, |ctx| {
             Window::new()

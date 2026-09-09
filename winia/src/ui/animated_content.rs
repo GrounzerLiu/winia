@@ -40,7 +40,7 @@ pub struct AnimatedContent<T> {
 #[derive(Debug)]
 struct ContentSizePolicy {
     prev_size: State<Option<(f32, f32)>>,
-    last_size: State<Option<(f32, f32)>>,
+    last_size: crate::core::state::Backchannel<Option<(f32, f32)>>,
     progress: State<f32>,
 }
 
@@ -58,10 +58,11 @@ impl MeasurePolicy for ContentSizePolicy {
         // 容器高度跟随内容切换动画；peek 不注册 → 高度卡首帧值不动）
         let p = self.progress.get();
         let child_size = (child_size.width, child_size.height);
-        // 记录上帧内容尺寸（切换瞬间锁定 prev_size 用）——set_silent：
-        // 值只被切换瞬间 peek 读，无订阅者——每帧 notify 只会白白触发
-        // 调用方重组合。
-        self.last_size.set_silent(Some(child_size));
+        // Record last frame's content size (locked into prev_size at switch
+        // moment) — Backchannel: value is only peek-read at switch time with
+        // no subscribers; notifying every frame would pointlessly recompose
+        // the caller.
+        self.last_size.set(Some(child_size));
         let (w, h) = match self.prev_size.peek() {
             Some((pw, ph)) => (
                 pw + (child_size.0 - pw) * p,
@@ -122,7 +123,7 @@ impl<T: Clone + PartialEq + 'static> AnimatedContent<T> {
         // 被忽略）→ size_spec（Spring）从未生效。
         let size_progress: State<f32> = ctx.remember(|| 1.0);
         let prev_size: State<Option<(f32, f32)>> = ctx.remember(|| None);
-        let last_size: State<Option<(f32, f32)>> = ctx.remember(|| None);
+        let last_size = ctx.remember_backchannel(|| None);
         // 动画推进 → 外层重组（淡出完成检测执行）
         let _p = progress.get();
         let cur = current.peek().clone();
@@ -133,7 +134,7 @@ impl<T: Clone + PartialEq + 'static> AnimatedContent<T> {
             current.set(target.clone());
             // size_progress 同步归零（起点准确）——否则淡出阶段共用 goal 后
             // size 未到 0 就切目标 → lerp 起点非 0 → 切换帧尺寸跳变
-            size_progress.set_silent(0.0);
+            size_progress.as_raw().set_animating(0.0);
         }
         // 动画目标用**切换后**的 current（切换帧 cur 是 set 前的旧值——用旧值
         // 算 goal 会得 0 → 淡入永不启动 → progress 卡 0 卡片透明）

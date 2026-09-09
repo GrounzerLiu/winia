@@ -2,6 +2,7 @@
 //!
 //! 运行：`cargo run -p winia --example chip_demo`
 
+use letclone::clone;
 use winia::prelude::*;
 use winia::ui::Chip;
 
@@ -46,14 +47,14 @@ fn chip_ui(ctx: &mut ComposeCtx) {
                 // 但 Row Skip（参数未变）→ content 不重跑 → chip 不重建
                 let sel1v = sel1.get();
                 Chip::filter(sel1v, |ctx| { Text::new("Breakfast").build(ctx); }, {
-                    let s = sel1.clone();
-                    move || s.update(|v| *v = !*v)
+                    clone!(sel1);
+                    move || sel1.update(|v| *v = !*v)
                 })
                 .build(ctx);
                 let sel2v = sel2.get();
                 Chip::filter(sel2v, |ctx| { Text::new("Lunch").build(ctx); }, {
-                    let s = sel2.clone();
-                    move || s.update(|v| *v = !*v)
+                    clone!(sel2);
+                    move || sel2.update(|v| *v = !*v)
                 })
                 .leading_icon({
                     let sel2v = sel2v;
@@ -79,8 +80,8 @@ fn chip_ui(ctx: &mut ComposeCtx) {
             Row::new().spacing(8.0).build(ctx, |ctx| {
                 let in1v = in1.get();
                 Chip::input(in1v, |ctx| { Text::new("Chris").build(ctx); }, {
-                    let s = in1.clone();
-                    move || s.update(|v| *v = !*v)
+                    clone!(in1);
+                    move || in1.update(|v| *v = !*v)
                 })
                 .trailing_icon(|ctx| {
                     Icon::new(IconSource::svg_path("M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"))
@@ -90,8 +91,8 @@ fn chip_ui(ctx: &mut ComposeCtx) {
                 .build(ctx);
                 let in2v = in2.get();
                 Chip::input(in2v, |ctx| { Text::new("Add a contact").build(ctx); }, {
-                    let s = in2.clone();
-                    move || s.update(|v| *v = !*v)
+                    clone!(in2);
+                    move || in2.update(|v| *v = !*v)
                 })
                 .leading_icon(|ctx| {
                     Icon::new(IconSource::svg_path("M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"))
@@ -118,8 +119,6 @@ fn chip_ui(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
     winia::run_app!(|ctx| {
         winia::ui::theme::WiniaTheme::auto(ctx, |ctx| {
             winia::ui::window::Window::new()

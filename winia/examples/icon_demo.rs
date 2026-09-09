@@ -1,5 +1,6 @@
 //! Icon 演示——SVG path / SVG 字符串 / 图片文件 / 可变字体（feature 启用时）/ RTL 镜像
 
+use letclone::clone;
 use winia::prelude::*;
 
 fn section_title(ctx: &mut ComposeCtx, text: &str) {
@@ -14,7 +15,6 @@ fn section_title(ctx: &mut ComposeCtx, text: &str) {
 fn icon_demo(ctx: &mut ComposeCtx) {
     let rtl = ctx.remember(|| false);
     let theme = WiniaTheme::colors();
-    let toggle = rtl.clone();
     let dir = if rtl.get() { LayoutDirection::Rtl } else { LayoutDirection::Ltr };
     WiniaTheme::with_theme_and_direction(theme.clone(), dir, ctx, |ctx| {
         let scroll_y = ctx.remember(|| ScrollState::new()).get();
@@ -29,7 +29,7 @@ fn icon_demo(ctx: &mut ComposeCtx) {
                         .font_size(20.0)
                         .build(ctx);
                     Button::new()
-                        .on_click(move || toggle.update(|v| *v = !*v))
+                        .on_click({ clone!(rtl); move || rtl.update(|v| *v = !*v) })
                         .build(ctx, |ctx| {
                             Text::new("切换 LTR/RTL").font_size(12.0).build(ctx);
                         });
@@ -83,23 +83,18 @@ fn icon_demo(ctx: &mut ComposeCtx) {
 
             section_title(ctx, "IconButton（标准 / Filled / Tonal / Outlined / Disabled）");
             let ib_clicks = ctx.remember(|| 0i32);
-            let ibc = ib_clicks.clone();
             Row::new().modifier(Modifier::new().padding_vertical(3.0)).build(ctx, |ctx| {
                 let star = "M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z";
-                let c0 = ibc.clone();
-                IconButton::new().on_click(move || c0.update(|v| *v += 1)).build(ctx, |ctx| {
+                IconButton::new().on_click({ clone!(ib_clicks); move || ib_clicks.update(|v| *v += 1) }).build(ctx, |ctx| {
                     Icon::svg_path(star).build(ctx);
                 });
-                let c1 = ibc.clone();
-                IconButton::filled().on_click(move || c1.update(|v| *v += 1)).build(ctx, |ctx| {
+                IconButton::filled().on_click({ clone!(ib_clicks); move || ib_clicks.update(|v| *v += 1) }).build(ctx, |ctx| {
                     Icon::svg_path(star).build(ctx);
                 });
-                let c2 = ibc.clone();
-                IconButton::filled_tonal().on_click(move || c2.update(|v| *v += 1)).build(ctx, |ctx| {
+                IconButton::filled_tonal().on_click({ clone!(ib_clicks); move || ib_clicks.update(|v| *v += 1) }).build(ctx, |ctx| {
                     Icon::svg_path(star).build(ctx);
                 });
-                let c3 = ibc.clone();
-                IconButton::outlined().on_click(move || c3.update(|v| *v += 1)).build(ctx, |ctx| {
+                IconButton::outlined().on_click({ clone!(ib_clicks); move || ib_clicks.update(|v| *v += 1) }).build(ctx, |ctx| {
                     Icon::svg_path(star).build(ctx);
                 });
                 IconButton::new().enabled(false).on_click(|| {}).build(ctx, |ctx| {
@@ -146,23 +141,19 @@ fn icon_demo(ctx: &mut ComposeCtx) {
                 .spacing(12.0)
                 .build(ctx, |ctx| {
                 let checked0 = t0.get();
-                let c0 = t0.clone();
-                IconToggleButton::new(checked0).on_checked_change(move |v| c0.update(|cur| *cur = v)).build(ctx, |ctx| {
+                IconToggleButton::new(checked0).on_checked_change({ clone!(t0); move |v| t0.update(|cur| *cur = v) }).build(ctx, |ctx| {
                     Icon::svg_path(if checked0 { check } else { star }).build(ctx);
                 });
                 let checked1 = t1.get();
-                let c1 = t1.clone();
-                IconToggleButton::filled(checked1).on_checked_change(move |v| c1.update(|cur| *cur = v)).build(ctx, |ctx| {
+                IconToggleButton::filled(checked1).on_checked_change({ clone!(t1); move |v| t1.update(|cur| *cur = v) }).build(ctx, |ctx| {
                     Icon::svg_path(if checked1 { check } else { star }).build(ctx);
                 });
                 let checked2 = t2.get();
-                let c2 = t2.clone();
-                IconToggleButton::filled_tonal(checked2).on_checked_change(move |v| c2.update(|cur| *cur = v)).build(ctx, |ctx| {
+                IconToggleButton::filled_tonal(checked2).on_checked_change({ clone!(t2); move |v| t2.update(|cur| *cur = v) }).build(ctx, |ctx| {
                     Icon::svg_path(if checked2 { check } else { star }).build(ctx);
                 });
                 let checked3 = t3.get();
-                let c3 = t3.clone();
-                IconToggleButton::outlined(checked3).on_checked_change(move |v| c3.update(|cur| *cur = v)).build(ctx, |ctx| {
+                IconToggleButton::outlined(checked3).on_checked_change({ clone!(t3); move |v| t3.update(|cur| *cur = v) }).build(ctx, |ctx| {
                     Icon::svg_path(if checked3 { check } else { star }).build(ctx);
                 });
                 // 禁用
@@ -233,7 +224,6 @@ fn icon_demo(ctx: &mut ComposeCtx) {
                         winia::animation::interpolator::EaseOutCubic::new(),
                     )),
                 );
-                let t = toggle.clone();
                 Row::new().modifier(Modifier::new().padding_vertical(3.0)).build(ctx, |ctx| {
                     Icon::symbol(winia::icon::Outlined::FAVORITE)
                         .fill(&fill)
@@ -247,7 +237,7 @@ fn icon_demo(ctx: &mut ComposeCtx) {
                         .tint(theme.primary)
                         .build(ctx);
                     Button::new()
-                        .on_click(move || t.update(|v| *v = !*v))
+                        .on_click({ clone!(toggle); move || toggle.update(|v| *v = !*v) })
                         .build(ctx, |ctx| {
                             Text::new("切换 FILL").font_size(12.0).build(ctx);
                         });
@@ -289,9 +279,6 @@ fn icon_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
-
     winia::run_app!(|ctx| {
         WiniaTheme::light(ctx, |ctx| {
             Window::new()

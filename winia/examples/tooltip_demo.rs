@@ -2,6 +2,7 @@
 //!
 //! 运行：`cargo run -p winia --example tooltip_demo`
 
+use letclone::clone;
 use winia::prelude::*;
 use winia::ui::Tooltip;
 
@@ -31,9 +32,10 @@ fn tooltip_ui(ctx: &mut ComposeCtx) {
                 .build(ctx);
             let show = ctx.remember(|| false);
             // content 闭包需 'static——move 捕获 State 克隆（Arc 共享）
-            let show_content = show.clone();
             Tooltip::new("")
-                .content(move |ctx: &mut ComposeCtx| {
+                .content({
+                    clone!(show);
+                    move |ctx: &mut ComposeCtx| {
                 // M3 rich tooltip：surface_container 容器 + on_surface_variant
                 Column::new()
                     .modifier(Modifier::new()
@@ -51,26 +53,25 @@ fn tooltip_ui(ctx: &mut ComposeCtx) {
                             .build(ctx);
                         Button::new()
                             .on_click({
-                                let s = show_content.clone();
-                                move || s.set(false)
+                                clone!(show);
+                                move || show.set(false)
                             })
                             .modifier(Modifier::new().padding_top(8.0))
                             .build(ctx, |ctx| { Text::new("Close").build(ctx); });
                     });
-            })
+                }
+                })
             .visible(show.clone())
             .no_hover()
             .build(ctx, |ctx| {
                 Button::new()
-                    .on_click(move || show.update(|v| *v = !*v))
+                    .on_click({ clone!(show); move || show.update(|v| *v = !*v) })
                     .build(ctx, |ctx| { Text::new("Toggle rich tooltip").build(ctx); });
             });
         });
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
     winia::run_app!(|ctx| {
         winia::ui::theme::WiniaTheme::auto(ctx, |ctx| {
             winia::ui::window::Window::new()

@@ -87,6 +87,19 @@ impl From<State<f32>> for AxisValue {
     }
 }
 
+impl From<&crate::core::state::Animating<f32>> for AxisValue {
+    fn from(s: &crate::core::state::Animating<f32>) -> Self {
+        let s = s.clone();
+        AxisValue::Dynamic(Arc::new(move || s.get()))
+    }
+}
+
+impl From<crate::core::state::Animating<f32>> for AxisValue {
+    fn from(s: crate::core::state::Animating<f32>) -> Self {
+        AxisValue::Dynamic(Arc::new(move || s.get()))
+    }
+}
+
 impl<F> From<F> for AxisValue
 where
     F: Fn() -> f32 + Send + Sync + 'static,

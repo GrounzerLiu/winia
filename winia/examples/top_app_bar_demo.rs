@@ -37,8 +37,6 @@ fn top_app_bar_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
     winia::run_app!(|ctx| {
         WiniaTheme::light(ctx, |ctx| {
             Window::new().size(520.0, 760.0).title("TopAppBar Demo").build(ctx, top_app_bar_demo);

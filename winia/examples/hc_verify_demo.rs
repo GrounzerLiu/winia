@@ -12,6 +12,7 @@
 //! 运行：cargo run -p winia --example hc_verify_demo --features debug-server
 //! 端口：WINIA_DEBUG_PORT（默认 9998）
 
+use letclone::clone;
 use winia::prelude::*;
 use std::sync::Arc;
 
@@ -59,39 +60,38 @@ fn hc_demo(ctx: &mut ComposeCtx) {
             Row::new()
                 .modifier(Modifier::new().padding(8.0))
                 .build(ctx, |ctx| {
-                    let s0 = state.clone();
                     Button::text()
-                        .on_click(move || s0.scroll_to_item(50, 0.0))
+                        .on_click({ clone!(state); move || state.scroll_to_item(50, 0.0) })
                         .build(ctx, |ctx| Text::new("滚动到 50").build(ctx));
-                    let s1 = state.clone();
-                    let items = items_state.clone();
-                    let nkb = new_key_base.clone();
                     Button::text()
-                        .on_click(move || {
-                            // 前部插入 10 项（key 递增保证唯一）——原项后移，key 不变
-                            let cur = items.get();
-                            let base = nkb.get();
-                            let mut v: Vec<Item> = Vec::with_capacity(cur.len() + 10);
-                            for k in 0..10 {
-                                let id = 1000 + base * 10 + k;
-                                v.push(Item { id, name: format!("NEW{}", id) });
+                        .on_click({
+                            clone!(state, items_state, new_key_base);
+                            move || {
+                                // 前部插入 10 项（key 递增保证唯一）——原项后移，key 不变
+                                let cur = items_state.get();
+                                let base = new_key_base.get();
+                                let mut v: Vec<Item> = Vec::with_capacity(cur.len() + 10);
+                                for k in 0..10 {
+                                    let id = 1000 + base * 10 + k;
+                                    v.push(Item { id, name: format!("NEW{}", id) });
+                                }
+                                for it in cur.iter() { v.push(it.clone()); }
+                                items_state.set(Arc::new(v));
+                                new_key_base.set(base + 1);
                             }
-                            for it in cur.iter() { v.push(it.clone()); }
-                            items.set(Arc::new(v));
-                            nkb.set(base + 1);
                         })
                         .build(ctx, |ctx| Text::new("前部插入 10 项").build(ctx));
-                    let s2 = state.clone();
-                    let items = items_state.clone();
-                    let nkb = new_key_base.clone();
                     Button::text()
-                        .on_click(move || {
-                            // 重置数据（回 100 项）——滚动回顶部便于重复验证
-                            let mut v: Vec<Item> = Vec::with_capacity(100);
-                            for i in 0..100 { v.push(Item { id: i as u64, name: format!("Item {}", i) }); }
-                            items.set(Arc::new(v));
-                            nkb.set(0);
-                            s2.scroll_to_item(0, 0.0);
+                        .on_click({
+                            clone!(state, items_state, new_key_base);
+                            move || {
+                                // 重置数据（回 100 项）——滚动回顶部便于重复验证
+                                let mut v: Vec<Item> = Vec::with_capacity(100);
+                                for i in 0..100 { v.push(Item { id: i as u64, name: format!("Item {}", i) }); }
+                                items_state.set(Arc::new(v));
+                                new_key_base.set(0);
+                                state.scroll_to_item(0, 0.0);
+                            }
                         })
                         .build(ctx, |ctx| Text::new("重置").build(ctx));
                 });
@@ -122,8 +122,6 @@ fn make_items(start: u64, count: u64) -> Vec<Item> {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()

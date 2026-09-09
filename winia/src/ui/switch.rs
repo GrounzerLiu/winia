@@ -350,8 +350,9 @@ impl Switch {
                         return;
                     }
                     let release = d_offset3.get();
-                    // 从释放位置开始动画归位（静默写入，避免先弹回旧目标）
-                    anim_offset3.set_silent(release);
+                    // 从释放位置开始动画归位（Animating 写：重组但不唤醒，
+                    // 避免先弹回旧目标；帧由 request_redraw 驱动）
+                    anim_offset3.as_raw().set_animating(release);
                     d_active3.set(false);
                     let target = release > SWITCH_DRAG_THRESHOLD;
                     if target != checked_end {
@@ -365,7 +366,7 @@ impl Switch {
                     if !d_active4.get() {
                         return;
                     }
-                    anim_offset4.set_silent(d_offset4.get());
+                    anim_offset4.as_raw().set_animating(d_offset4.get());
                     d_active4.set(false);
                 };
                 modifier = modifier

@@ -2,6 +2,7 @@
 //!
 //! 运行：`cargo run -p winia --example graphics_layer_demo --features debug-server`
 
+use letclone::clone;
 use winia::prelude::*;
 use winia::core::composer::ComposeCtx;
 use winia::composable;
@@ -42,8 +43,7 @@ fn graphics_layer_ui(ctx: &mut ComposeCtx) {
                 ] {
                     Button::new()
                         .on_click({
-                            let rx = rx.clone();
-                            let ry = ry.clone();
+                            clone!(rx, ry);
                             move || {
                                 rx.update(|v| *v = (*v + dx).clamp(-90.0, 90.0));
                                 ry.update(|v| *v = (*v + dy).clamp(-90.0, 90.0));
@@ -61,7 +61,7 @@ fn graphics_layer_ui(ctx: &mut ComposeCtx) {
                 for (label, v) in [("相机近(300)", 300.0f32), ("相机中(600)", 600.0), ("相机远(1200)", 1200.0)] {
                     Button::new()
                         .on_click({
-                            let cam = cam.clone();
+                            clone!(cam);
                             move || cam.set(v)
                         })
                         .build(ctx, |ctx| {
@@ -71,7 +71,7 @@ fn graphics_layer_ui(ctx: &mut ComposeCtx) {
                 for (label, v) in [("阴影0", 0.0f32), ("阴影4", 4.0), ("阴影8", 8.0)] {
                     Button::new()
                         .on_click({
-                            let elev = elev.clone();
+                            clone!(elev);
                             move || elev.set(v)
                         })
                         .build(ctx, |ctx| {
@@ -88,10 +88,7 @@ fn graphics_layer_ui(ctx: &mut ComposeCtx) {
                         .background(theme.primary_container, Shape::rounded(14.0))
                         .border(1.0, theme.outline_variant, Shape::rounded(14.0))
                         .graphics_layer({
-                            let rx = rx.clone();
-                            let ry = ry.clone();
-                            let cam = cam.clone();
-                            let elev = elev.clone();
+                            clone!(rx, ry, cam, elev);
                             move || GraphicsLayerParams {
                                 rotation_x: rx.get(),
                                 rotation_y: ry.get(),
@@ -116,8 +113,6 @@ fn graphics_layer_ui(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
     winia::run_app!(|ctx| {
         WiniaTheme::light(ctx, |ctx| {
             Window::new()

@@ -75,7 +75,7 @@ pub fn remember_coroutine_scope(ctx: &mut ComposeCtx) -> CoroutineScope {
     ctx.remember(|| {
         let rt = Handle::try_current().expect(
             "remember_coroutine_scope requires an active tokio runtime. \
-             Start one with `tokio::runtime::Runtime::new()` before calling `run_app`."
+             `run_app` creates one internally; tests driving `Composer` directly must enter a runtime first."
         );
         CoroutineScope { state: Arc::new(ScopeState { handles: Mutex::new(Vec::new()) }), rt }
     }).get()

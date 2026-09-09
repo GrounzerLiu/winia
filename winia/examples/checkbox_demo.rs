@@ -6,6 +6,7 @@
 //! - 自定义 colors
 //! - interactionSource hoist（实时显示 press/hover/focus 状态）
 
+use letclone::clone;
 use winia::prelude::*;
 
 fn section_title(ctx: &mut ComposeCtx, text: &str) {
@@ -36,7 +37,6 @@ fn state_row(ctx: &mut ComposeCtx, label: &str, checked: bool, enabled: bool) {
 fn checkbox_demo(ctx: &mut ComposeCtx) {
     let scroll_y = ctx.remember(|| ScrollState::new()).get();
     let checked = ctx.remember(|| false);
-    let c = checked.clone();
 
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(16.0).vertical_scroll(scroll_y))
@@ -86,13 +86,15 @@ fn checkbox_demo(ctx: &mut ComposeCtx) {
                         .font_size(13.0)
                         .modifier(Modifier::new().width(150.0).padding_top(10.0))
                         .build(ctx);
-                    let (p1, p2, p3) = (c1.clone(), c2.clone(), c3.clone());
                     TriStateCheckbox::new(parent_state)
-                        .on_click(move || {
-                            let target = !(p1.get() && p2.get() && p3.get());
-                            p1.update(|v| *v = target);
-                            p2.update(|v| *v = target);
-                            p3.update(|v| *v = target);
+                        .on_click({
+                            clone!(c1, c2, c3);
+                            move || {
+                                let target = !(c1.get() && c2.get() && c3.get());
+                                c1.update(|v| *v = target);
+                                c2.update(|v| *v = target);
+                                c3.update(|v| *v = target);
+                            }
                         })
                         .build(ctx);
                 });
@@ -112,9 +114,8 @@ fn checkbox_demo(ctx: &mut ComposeCtx) {
                                 .font_size(13.0)
                                 .modifier(Modifier::new().width(130.0).padding_top(10.0))
                                 .build(ctx);
-                            let cc = c.clone();
                             Checkbox::new(c.get())
-                                .on_checked_change(move |v| cc.update(|s| *s = v))
+                                .on_checked_change({ clone!(c); move |v| c.update(|s| *s = v) })
                                 .build(ctx);
                         });
                 });
@@ -128,12 +129,12 @@ fn checkbox_demo(ctx: &mut ComposeCtx) {
                         .font_size(13.0)
                         .modifier(Modifier::new().width(150.0).padding_top(10.0))
                         .build(ctx);
-                    let c2 = c.clone();
-                    Checkbox::new(c.get())
-                        .on_checked_change(move |v| c2.update(|s| *s = v))
+                    let c2 = checked.clone();
+                    Checkbox::new(checked.get())
+                        .on_checked_change({ clone!(c2); move |v| c2.update(|s| *s = v) })
                         .build(ctx);
                 });
-            Text::new(if c.get() { "已勾选" } else { "未勾选" })
+            Text::new(if checked.get() { "已勾选" } else { "未勾选" })
                 .font_size(13.0)
                 .color(Color::from_argb(255, 100, 100, 100))
                 .modifier(Modifier::new().padding_top(4.0))
@@ -153,10 +154,10 @@ fn checkbox_demo(ctx: &mut ComposeCtx) {
                         .font_size(13.0)
                         .modifier(Modifier::new().width(150.0).padding_top(10.0))
                         .build(ctx);
-                    let c2 = c.clone();
-                    Checkbox::new(c.get())
+                    let c2 = checked.clone();
+                    Checkbox::new(checked.get())
                         .colors(custom)
-                        .on_checked_change(move |v| c2.update(|s| *s = v))
+                        .on_checked_change({ clone!(c2); move |v| c2.update(|s| *s = v) })
                         .build(ctx);
                 });
 
@@ -170,16 +171,16 @@ fn checkbox_demo(ctx: &mut ComposeCtx) {
                         .font_size(13.0)
                         .modifier(Modifier::new().width(150.0).padding_top(10.0))
                         .build(ctx);
-                    let c2 = c.clone();
-                    Checkbox::new(c.get())
+                    let c2 = checked.clone();
+                    Checkbox::new(checked.get())
                         .interaction_source(src.clone())
-                        .on_checked_change(move |v| c2.update(|s| *s = v))
+                        .on_checked_change({ clone!(c2); move |v| c2.update(|s| *s = v) })
                         .build(ctx);
                 });
             Text::new(format!(
                 "pressed={} hovered={} focused={} | 当前 {}",
                 st.pressed, st.hovered, st.focused,
-                if c.get() { "已勾选" } else { "未勾选" },
+                if checked.get() { "已勾选" } else { "未勾选" },
             ))
             .font_size(12.0)
             .color(Color::from_argb(255, 100, 100, 100))
@@ -193,9 +194,6 @@ fn checkbox_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
-
     winia::run_app!(|ctx| {
         WiniaTheme::light(ctx, |ctx| {
             Window::new()

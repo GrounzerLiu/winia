@@ -3,13 +3,11 @@
 //! 使用 Tab 切换焦点，按键日志显示在屏幕上。
 //! 焦点通过 slot_key 跨重组稳定恢复，按任意键不会丢失焦点。
 
+use letclone::clone;
 use winia::prelude::*;
-use winia::app;
 use winit::keyboard::{Key, NamedKey};
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
@@ -41,7 +39,7 @@ fn keyboard_demo_ui(ctx: &mut ComposeCtx) {
                     .background(Color::from_argb(18, 0, 0, 0), Shape::rounded(6.0))
                     .focusable()
                     .on_key_event({
-                        let log = log.clone();
+                        clone!(log);
                         move |e| {
                             let prev = log.get();
                             let entry = format!("Node1: {:?} (C:{},S:{})\n", e.key, e.is_ctrl_pressed, e.is_shift_pressed);
@@ -61,7 +59,7 @@ fn keyboard_demo_ui(ctx: &mut ComposeCtx) {
                     .background(Color::from_argb(18, 0, 0, 0), Shape::rounded(6.0))
                     .focusable()
                     .on_key_event({
-                        let log = log.clone();
+                        clone!(log);
                         move |e| {
                             if e.key == Key::Named(NamedKey::Enter) {
                                 let prev = log.get();
@@ -81,7 +79,7 @@ fn keyboard_demo_ui(ctx: &mut ComposeCtx) {
                     .background(Color::from_argb(18, 0, 0, 0), Shape::rounded(6.0))
                     .focusable()
                     .on_pre_key_event({
-                        let log = log.clone();
+                        clone!(log);
                         move |e| {
                             if e.is_ctrl_pressed && e.key == Key::Character("s".into()) {
                                 let prev = log.get();

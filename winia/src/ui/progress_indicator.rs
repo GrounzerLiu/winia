@@ -472,10 +472,10 @@ pub(crate) struct LinearIndeterminateNode {
     pub(crate) cap: ProgressIndicatorStrokeCap,
     pub(crate) gap: f32,
     /// 无限动画 4 条线进度（渲染期 peek，不进 key）
-    pub(crate) fh: crate::core::state::State<f32>,
-    pub(crate) ft: crate::core::state::State<f32>,
-    pub(crate) sh: crate::core::state::State<f32>,
-    pub(crate) st: crate::core::state::State<f32>,
+    pub(crate) fh: crate::core::state::Visual<f32>,
+    pub(crate) ft: crate::core::state::Visual<f32>,
+    pub(crate) sh: crate::core::state::Visual<f32>,
+    pub(crate) st: crate::core::state::Visual<f32>,
 }
 
 impl crate::modifier::DrawNode for LinearIndeterminateNode {
@@ -892,9 +892,9 @@ pub(crate) struct CircularIndeterminateNode {
     pub(crate) color: Color,
     pub(crate) cap: ProgressIndicatorStrokeCap,
     pub(crate) stroke_width: f32,
-    pub(crate) global: crate::core::state::State<f32>,
-    pub(crate) additional: crate::core::state::State<f32>,
-    pub(crate) progress_anim: crate::core::state::State<f32>,
+    pub(crate) global: crate::core::state::Visual<f32>,
+    pub(crate) additional: crate::core::state::Visual<f32>,
+    pub(crate) progress_anim: crate::core::state::Visual<f32>,
 }
 
 impl crate::modifier::DrawNode for CircularIndeterminateNode {
@@ -1378,10 +1378,10 @@ mod tests {
         let mk = |color: Color, track_color: Color, cap: ProgressIndicatorStrokeCap, gap: f32| {
             LinearIndeterminateNode {
                 color, track_color, cap, gap,
-                fh: crate::core::state::State::new(0.1),
-                ft: crate::core::state::State::new(0.2),
-                sh: crate::core::state::State::new(0.3),
-                st: crate::core::state::State::new(0.4),
+                fh: crate::core::state::Visual::new(0.1),
+                ft: crate::core::state::Visual::new(0.2),
+                sh: crate::core::state::Visual::new(0.3),
+                st: crate::core::state::Visual::new(0.4),
             }
         };
         let base = mk(color, track, ProgressIndicatorStrokeCap::Round, 4.0);
@@ -1395,10 +1395,10 @@ mod tests {
         assert_ne!(base.node_key(), mk(color, track, ProgressIndicatorStrokeCap::Round, 8.0).node_key(), "gap 应进 key");
         // 瞬态动画值变化 → 相等（不进 key，渲染期 peek 直读）
         let moved = mk(color, track, ProgressIndicatorStrokeCap::Round, 4.0);
-        moved.fh.set_silent(0.9);
-        moved.ft.set_silent(0.8);
-        moved.sh.set_silent(0.7);
-        moved.st.set_silent(0.6);
+        moved.fh.set(0.9);
+        moved.ft.set(0.8);
+        moved.sh.set(0.7);
+        moved.st.set(0.6);
         assert_eq!(base.node_key(), moved.node_key(), "无限动画 peek 值变化不应进 key");
     }
 
@@ -1433,10 +1433,10 @@ mod tests {
         };
         let node_mod = Modifier::new().size(240.0, 4.0).draw_node(LinearIndeterminateNode {
             color, track_color: track, cap: ProgressIndicatorStrokeCap::Round, gap: 4.0,
-            fh: crate::core::state::State::new(0.6),
-            ft: crate::core::state::State::new(0.2),
-            sh: crate::core::state::State::new(0.9),
-            st: crate::core::state::State::new(0.5),
+            fh: crate::core::state::Visual::new(0.6),
+            ft: crate::core::state::Visual::new(0.2),
+            sh: crate::core::state::Visual::new(0.9),
+            st: crate::core::state::Visual::new(0.5),
         });
         // 旧闭包逐行复刻（同参 draw_linear_indeterminate）
         let enum_mod = Modifier::new().size(240.0, 4.0).draw(move |canvas, rect| {
@@ -1449,10 +1449,10 @@ mod tests {
         // node_key 可调试观测（具名可观测——匿名闭包无此能力）
         let probe = LinearIndeterminateNode {
             color, track_color: track, cap: ProgressIndicatorStrokeCap::Round, gap: 4.0,
-            fh: crate::core::state::State::new(0.0),
-            ft: crate::core::state::State::new(0.0),
-            sh: crate::core::state::State::new(0.0),
-            st: crate::core::state::State::new(0.0),
+            fh: crate::core::state::Visual::new(0.0),
+            ft: crate::core::state::Visual::new(0.0),
+            sh: crate::core::state::Visual::new(0.0),
+            st: crate::core::state::Visual::new(0.0),
         };
         assert!(probe.node_key().starts_with("linear-indeterminate:"), "key 应有具名前缀，实际 {}", probe.node_key());
     }
@@ -1466,13 +1466,13 @@ mod tests {
         let theme = ThemeColors::light_from_seed(0x6750A4);
         let color = ProgressIndicatorDefaults::indicator_color(&theme);
         let track = ProgressIndicatorDefaults::track_color(&theme);
-        let fh = crate::core::state::State::new(0.0f32);
-        let ft = crate::core::state::State::new(0.0f32);
-        let sh = crate::core::state::State::new(0.0f32);
-        let st = crate::core::state::State::new(0.0f32);
+        let fh = crate::core::state::Visual::new(0.0f32);
+        let ft = crate::core::state::Visual::new(0.0f32);
+        let sh = crate::core::state::Visual::new(0.0f32);
+        let st = crate::core::state::Visual::new(0.0f32);
         // 注册真实无限动画（与 build 侧同 spec），推进 5 帧
-        crate::animation::push_infinite(fh.clone(), 0.0, 1.0, linear_first_line_head_spec());
-        crate::animation::push_infinite(ft.clone(), 0.0, 1.0, linear_first_line_tail_spec());
+        crate::animation::push_infinite_visual(fh.clone(), 0.0, 1.0, linear_first_line_head_spec());
+        crate::animation::push_infinite_visual(ft.clone(), 0.0, 1.0, linear_first_line_tail_spec());
         for _ in 0..5 {
             crate::animation::update_animations();
             std::thread::sleep(std::time::Duration::from_millis(20));
@@ -1533,22 +1533,22 @@ mod tests {
         // circular indeterminate：静态三参进 key，动画三值不进
         let ibase = CircularIndeterminateNode {
             color, cap: ProgressIndicatorStrokeCap::Round, stroke_width: 4.0,
-            global: crate::core::state::State::new(10.0),
-            additional: crate::core::state::State::new(20.0),
-            progress_anim: crate::core::state::State::new(0.5),
+            global: crate::core::state::Visual::new(10.0),
+            additional: crate::core::state::Visual::new(20.0),
+            progress_anim: crate::core::state::Visual::new(0.5),
         };
         let imoved = CircularIndeterminateNode {
             color, cap: ProgressIndicatorStrokeCap::Round, stroke_width: 4.0,
-            global: crate::core::state::State::new(999.0),
-            additional: crate::core::state::State::new(888.0),
-            progress_anim: crate::core::state::State::new(0.1),
+            global: crate::core::state::Visual::new(999.0),
+            additional: crate::core::state::Visual::new(888.0),
+            progress_anim: crate::core::state::Visual::new(0.1),
         };
         assert_eq!(ibase.node_key(), imoved.node_key(), "circular 无限动画值不应进 key");
         let iother = CircularIndeterminateNode {
             color, cap: ProgressIndicatorStrokeCap::Butt, stroke_width: 4.0,
-            global: crate::core::state::State::new(10.0),
-            additional: crate::core::state::State::new(20.0),
-            progress_anim: crate::core::state::State::new(0.5),
+            global: crate::core::state::Visual::new(10.0),
+            additional: crate::core::state::Visual::new(20.0),
+            progress_anim: crate::core::state::Visual::new(0.5),
         };
         assert_ne!(ibase.node_key(), iother.node_key(), "circular cap 应进 key");
     }

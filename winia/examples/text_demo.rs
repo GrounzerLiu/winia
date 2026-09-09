@@ -2,13 +2,10 @@
 //!
 //! 展示 Text 组件的各种配置组合。
 
+use letclone::clone;
 use winia::prelude::*;
-use winia::app;
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
-
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
@@ -92,7 +89,7 @@ fn text_demo_ui(ctx: &mut ComposeCtx) {
                 .build(ctx);
 
             Button::new()
-                .on_click({ let c = justify_count.clone(); move || { c.update(|v| *v += 1); } })
+                .on_click({ clone!(justify_count); move || { justify_count.update(|v| *v += 1); } })
                 .modifier(Modifier::new().size(80.0, 24.0))
                 .build(ctx, |ctx| { Text::new("+ word").font_size(11.0).build(ctx); });
 

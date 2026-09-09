@@ -498,11 +498,11 @@ pub(crate) struct LinearWavyIndeterminateNode {
     pub(crate) amplitude: f32,
     pub(crate) wavelength: f32,
     pub(crate) enable_motion: bool,
-    pub(crate) fh: State<f32>,
-    pub(crate) ft: State<f32>,
-    pub(crate) sh: State<f32>,
-    pub(crate) st: State<f32>,
-    pub(crate) wave_offset: State<f32>,
+    pub(crate) fh: crate::core::state::Visual<f32>,
+    pub(crate) ft: crate::core::state::Visual<f32>,
+    pub(crate) sh: crate::core::state::Visual<f32>,
+    pub(crate) st: crate::core::state::Visual<f32>,
+    pub(crate) wave_offset: crate::core::state::Visual<f32>,
     pub(crate) cache: Arc<Mutex<LinearShapesCache>>,
 }
 
@@ -565,7 +565,7 @@ pub(crate) struct LinearWavyDeterminateNode {
     pub(crate) enable_motion: bool,
     pub(crate) amplitude_token: (u8, u64, usize),
     pub(crate) amplitude_state: State<f32>,
-    pub(crate) wave_offset: State<f32>,
+    pub(crate) wave_offset: crate::core::state::Visual<f32>,
     pub(crate) cache: Arc<Mutex<LinearShapesCache>>,
 }
 
@@ -1347,10 +1347,10 @@ pub(crate) struct CircularWavyIndeterminateNode {
     pub(crate) amplitude: f32,
     pub(crate) wavelength: f32,
     pub(crate) enable_motion: bool,
-    pub(crate) wave_offset: State<f32>,
-    pub(crate) global: State<f32>,
-    pub(crate) additional: State<f32>,
-    pub(crate) progress_anim: State<f32>,
+    pub(crate) wave_offset: crate::core::state::Visual<f32>,
+    pub(crate) global: crate::core::state::Visual<f32>,
+    pub(crate) additional: crate::core::state::Visual<f32>,
+    pub(crate) progress_anim: crate::core::state::Visual<f32>,
     pub(crate) cache: Arc<Mutex<CircularShapesCache>>,
 }
 
@@ -1411,7 +1411,7 @@ pub(crate) struct CircularWavyDeterminateNode {
     pub(crate) enable_motion: bool,
     pub(crate) amplitude_token: (u8, u64, usize),
     pub(crate) amplitude_state: State<f32>,
-    pub(crate) wave_offset: State<f32>,
+    pub(crate) wave_offset: crate::core::state::Visual<f32>,
     pub(crate) cache: Arc<Mutex<CircularShapesCache>>,
 }
 
@@ -2109,7 +2109,7 @@ mod tests {
         let theme = ThemeColors::light_from_seed(0x6750A4);
         let color = WavyProgressIndicatorDefaults::indicator_color(&theme);
         let track = WavyProgressIndicatorDefaults::track_color(&theme);
-        let st = || crate::core::state::State::new(0.5f32);
+        let st = || crate::core::state::Visual::new(0.5f32);
         // linear-indet：静态变 → 不等；动画值变 → 相等
         let base = LinearWavyIndeterminateNode {
             color, track_color: track, stroke_width: 4.0, track_stroke_width: 4.0,
@@ -2131,7 +2131,7 @@ mod tests {
             color, track_color: track, stroke_width: 4.0, track_stroke_width: 4.0,
             cap: ProgressIndicatorStrokeCap::Round, gap_size: 4.0,
             amplitude: 1.0, wavelength: 20.0, enable_motion: true,
-            fh: crate::core::state::State::new(0.9),
+            fh: crate::core::state::Visual::new(0.9),
             ft: st(), sh: st(), st: st(), wave_offset: st(),
             cache: Arc::new(Mutex::new(LinearShapesCache::default())),
         };
@@ -2150,7 +2150,8 @@ mod tests {
             cap: ProgressIndicatorStrokeCap::Round, gap_size: 4.0, stop_size: 4.0,
             progress: 0.5, wavelength: 40.0, enable_motion: true,
             amplitude_token: (0, 0, 0),
-            amplitude_state: st(), wave_offset: st(),
+            amplitude_state: crate::core::state::State::new(0.5),
+            wave_offset: st(),
             cache: Arc::new(Mutex::new(LinearShapesCache::default())),
         };
         let dsame = LinearWavyDeterminateNode {
@@ -2168,7 +2169,8 @@ mod tests {
             cap: ProgressIndicatorStrokeCap::Round, gap_size: 4.0, stop_size: 4.0,
             progress: 0.7, wavelength: 40.0, enable_motion: true,
             amplitude_token: (0, 0, 0),
-            amplitude_state: st(), wave_offset: st(),
+            amplitude_state: crate::core::state::State::new(0.5),
+            wave_offset: st(),
             cache: Arc::new(Mutex::new(LinearShapesCache::default())),
         };
         assert_ne!(dbase.node_key(), dprog.node_key(), "progress 应进 key");
@@ -2177,7 +2179,8 @@ mod tests {
             cap: ProgressIndicatorStrokeCap::Round, gap_size: 4.0, stop_size: 4.0,
             progress: 0.5, wavelength: 40.0, enable_motion: true,
             amplitude_token: (1, 0, 12345),
-            amplitude_state: st(), wave_offset: st(),
+            amplitude_state: crate::core::state::State::new(0.5),
+            wave_offset: st(),
             cache: Arc::new(Mutex::new(LinearShapesCache::default())),
         };
         assert_ne!(dbase.node_key(), dtok.node_key(), "amplitude_token 应进 key");
@@ -2221,7 +2224,7 @@ mod tests {
                 progress: 0.5, wavelength: 40.0, enable_motion: true,
                 amplitude_token: (0, 0, 0),
                 amplitude_state: crate::core::state::State::new(1.0),
-                wave_offset: crate::core::state::State::new(0.0),
+                wave_offset: crate::core::state::Visual::new(0.0),
                 cache: cache_n,
             });
         let enum_mod = crate::modifier::Modifier::new()
@@ -2242,11 +2245,11 @@ mod tests {
             color, track_color: track, stroke_width: 4.0, track_stroke_width: 4.0,
             cap: ProgressIndicatorStrokeCap::Round, gap_size: 4.0,
             amplitude: 1.0, wavelength: 20.0, enable_motion: true,
-            fh: crate::core::state::State::new(0.0),
-            ft: crate::core::state::State::new(0.0),
-            sh: crate::core::state::State::new(0.0),
-            st: crate::core::state::State::new(0.0),
-            wave_offset: crate::core::state::State::new(0.0),
+            fh: crate::core::state::Visual::new(0.0),
+            ft: crate::core::state::Visual::new(0.0),
+            sh: crate::core::state::Visual::new(0.0),
+            st: crate::core::state::Visual::new(0.0),
+            wave_offset: crate::core::state::Visual::new(0.0),
             cache: Arc::new(Mutex::new(LinearShapesCache::default())),
         };
         assert!(probe.node_key().starts_with("wavy-linear-indet:"), "key 应有具名前缀，实际 {}", probe.node_key());

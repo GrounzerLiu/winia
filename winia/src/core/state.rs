@@ -290,14 +290,393 @@ impl StateSignal {
     }
 }
 
-// ── State<T> ──
+// ── RawState<T> (crate-internal storage shared by all handles) ──
+//
+// Every public handle below is a #[repr(transparent)] wrapper over RawState.
+// Handles differ ONLY in which methods they expose; the data (Arc + signal +
+// value) is identical. Engine internals (animation ticks, write-back) operate
+// on RawState directly so user-facing clipping can never block a required
+// internal write.
+//
+// Scheduling semantics carried by each handle (see docs/state-handles.md):
+// - Reactive:    recompose + wake event loop (default composition state)
+// - Animating:   recompose, no wake (animation ticks; redraw already requested)
+// - Visual:      write only, no recompose (draw-layer props: alpha/scale)
+// - Backchannel: write only, no notify (measure/layout write-back, staging)
 
-/// 响应式状态容器。
+pub(crate) struct RawState<T> {
+    pub(crate) inner: Arc<StateInner<T>>,
+}
+
+impl<T> Clone for RawState<T> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
+impl<T> RawState<T> {
+    pub(crate) fn take_notify_version(&self) -> u32 {
+        self.inner.notify_version.swap(0, Ordering::AcqRel)
+    }
+
+    pub(crate) fn id(&self) -> u32 {
+        self.inner.public_id
+    }
+
+    pub(crate) fn state_id(&self) -> StateId {
+        self.inner.signal.id()
+    }
+
+    pub(crate) fn signal_id(&self) -> StateId {
+        self.state_id()
+    }
+
+    pub(crate) fn notify(&self, wake: bool) {
+        self.inner.notify_version.fetch_add(1, Ordering::Release);
+        self.inner.signal.notify(wake);
+    }
+}
+
+impl<T: 'static> RawState<T> {
+    pub(crate) fn new(value: T) -> Self {
+        let id = next_state_id();
+        let public_id = next_public_state_id();
+        let inner = Arc::new(StateInner {
+            signal: StateSignal::new(id),
+            public_id,
+            value: RwLock::new(value),
+            notify_version: Default::default(),
+        });
+        Self { inner }
+    }
+
+    pub(crate) fn get_tracked(&self) -> T
+    where
+        T: Clone,
+    {
+        let registration = register_dependency(self.inner.signal.clone());
+        let value = self.inner.value.read().clone();
+        if let Some((queue, observed_revision)) = registration {
+            self.inner
+                .signal
+                .enqueue_if_changed(&queue, observed_revision);
+        }
+        value
+    }
+
+    pub(crate) fn peek_untracked(&self) -> T
+    where
+        T: Clone,
+    {
+        self.inner.value.read().clone()
+    }
+
+    /// Reactive write: dedup + notify + wake (default composition state).
+    pub(crate) fn set_reactive(&self, value: T)
+    where
+        T: PartialEq,
+    {
+        let mut current = self.inner.value.write();
+        if *current == value {
+            return;
+        }
+        *current = value;
+        drop(current);
+        self.notify(true);
+    }
+
+    /// In-place mutation with dedup: clone-compare-swap so no-op updates
+    /// (e.g. `|v| *v += 0`) skip notification like `set` does.
+    pub(crate) fn update_reactive(&self, f: impl FnOnce(&mut T))
+    where
+        T: Clone + PartialEq,
+    {
+        // Fast path: mutate a clone, compare, swap only on change.
+        // Holds no lock while running user code.
+        let mut staged = self.inner.value.read().clone();
+        f(&mut staged);
+        let mut current = self.inner.value.write();
+        if *current == staged {
+            return;
+        }
+        *current = staged;
+        drop(current);
+        self.notify(true);
+    }
+
+    /// Animation-tick write: dedup + notify, skip WAKE_FN (redraw already
+    /// requested by the animation engine; waking would spin recomposition).
+    pub(crate) fn set_animating(&self, value: T)
+    where
+        T: PartialEq,
+    {
+        let mut current = self.inner.value.write();
+        if *current == value {
+            return;
+        }
+        *current = value;
+        drop(current);
+        self.notify(false);
+    }
+
+    /// Draw-layer write: no dedup, no notify, no wake. The animation engine
+    /// drives repaint via `request_redraw`; values are consumed via `peek`.
+    pub(crate) fn set_visual(&self, value: T) {
+        *self.inner.value.write() = value;
+    }
+
+    /// Write-back write: no dedup, no notify, no wake. For measure/layout
+    /// write-back and cross-frame staging; the next frame reads the value.
+    pub(crate) fn set_backchannel(&self, value: T) {
+        *self.inner.value.write() = value;
+    }
+
+}
+
+// ── Public handles ──
+//
+// Each handle is a zero-cost transparent wrapper over RawState exposing
+// exactly one scheduling semantic. Downgrade-only conversions
+// (Reactive -> Animating/Visual/Backchannel) are allowed; upgrade back
+// requires framework internals holding the RawState.
+
+/// Default composition state: reads subscribe (`get`), writes recompose +
+/// wake the event loop (`set` / `update`).
+#[repr(transparent)]
+pub struct Reactive<T>(RawState<T>);
+
+/// Animation-tick state: writes enqueue recomposition without waking the
+/// event loop (redraw is already requested by the animation engine).
+#[repr(transparent)]
+pub struct Animating<T>(RawState<T>);
+
+/// Draw-layer state: writes land without recomposition; consumed via `peek`
+/// at render time (alpha/scale and other purely visual props).
+#[repr(transparent)]
+pub struct Visual<T>(RawState<T>);
+
+/// Write-back channel: writes land without notify or wake; the next frame
+/// reads the value (measure/layout write-back, cross-frame staging).
+#[repr(transparent)]
+pub struct Backchannel<T>(RawState<T>);
+
+macro_rules! impl_handle_common {
+    ($H:ident) => {
+        impl<T> Clone for $H<T> {
+            fn clone(&self) -> Self {
+                Self(self.0.clone())
+            }
+        }
+
+        impl<T: Debug> Debug for $H<T> {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                f.debug_struct(stringify!($H))
+                    .field("id", &self.0.id())
+                    .field("value", &*self.0.inner.value.read())
+                    .finish()
+            }
+        }
+
+        impl<T> $H<T> {
+            pub fn id(&self) -> u32 {
+                self.0.id()
+            }
+
+            pub fn state_id(&self) -> StateId {
+                self.0.state_id()
+            }
+
+            pub(crate) fn signal_id(&self) -> StateId {
+                self.0.signal_id()
+            }
+
+            pub(crate) fn take_notify_version(&self) -> u32 {
+                self.0.take_notify_version()
+            }
+
+            pub(crate) fn from_raw(raw: RawState<T>) -> Self {
+                Self(raw)
+            }
+
+            pub(crate) fn as_raw(&self) -> &RawState<T> {
+                &self.0
+            }
+        }
+
+        impl<T: PartialEq> PartialEq for $H<T> {
+            fn eq(&self, other: &Self) -> bool {
+                // Identity semantics: same signal means same state, even if a
+                // concurrent write changed the value between the two reads.
+                self.0.state_id() == other.0.state_id()
+            }
+        }
+
+        impl<T> Eq for $H<T> where T: Eq {}
+    };
+}
+
+impl_handle_common!(Reactive);
+impl_handle_common!(Animating);
+impl_handle_common!(Visual);
+impl_handle_common!(Backchannel);
+
+impl<T: 'static> Reactive<T> {
+    pub fn new(value: T) -> Self {
+        Self(RawState::new(value))
+    }
+}
+
+impl<T: Clone + 'static> Reactive<T> {
+    pub fn get(&self) -> T {
+        self.0.get_tracked()
+    }
+
+    pub fn peek(&self) -> T {
+        self.0.peek_untracked()
+    }
+}
+
+impl<T: PartialEq + 'static> Reactive<T> {
+    pub fn set(&self, value: T) {
+        self.0.set_reactive(value);
+    }
+
+    pub fn update(&self, f: impl FnOnce(&mut T))
+    where
+        T: Clone,
+    {
+        self.0.update_reactive(f);
+    }
+}
+
+impl<T> Reactive<T> {
+    /// Downgrade to an animation-tick handle (recompose without wake).
+    pub fn into_animating(self) -> Animating<T> {
+        Animating(self.0)
+    }
+
+    /// Downgrade to a draw-layer handle (write without recompose).
+    pub fn into_visual(self) -> Visual<T> {
+        Visual(self.0)
+    }
+
+    /// Downgrade to a write-back channel (write without notify).
+    pub fn into_backchannel(self) -> Backchannel<T> {
+        Backchannel(self.0)
+    }
+
+    /// Downgrade by reference (keep the Reactive, share the new handle).
+    pub fn as_animating(&self) -> Animating<T> {
+        Animating(self.0.clone())
+    }
+
+    /// Downgrade by reference (keep the Reactive, share the new handle).
+    pub fn as_visual(&self) -> Visual<T> {
+        Visual(self.0.clone())
+    }
+
+    /// Downgrade by reference (keep the Reactive, share the new handle).
+    pub fn as_backchannel(&self) -> Backchannel<T> {
+        Backchannel(self.0.clone())
+    }
+}
+
+impl<T: 'static> Animating<T> {
+    pub fn new(value: T) -> Self {
+        Self(RawState::new(value))
+    }
+}
+
+impl<T: Clone + 'static> Animating<T> {
+    pub fn get(&self) -> T {
+        self.0.get_tracked()
+    }
+
+    pub fn peek(&self) -> T {
+        self.0.peek_untracked()
+    }
+}
+
+impl<T: PartialEq + 'static> Animating<T> {
+    pub fn set(&self, value: T) {
+        self.0.set_animating(value);
+    }
+}
+
+impl<T: 'static> Animating<T> {
+    /// Share the storage back as a legacy `State` handle (migration bridge
+    /// for `animate_*_as_state` callers still on `State`; same signal).
+    pub(crate) fn into_state(self) -> State<T> {
+        State::from_raw(self.0)
+    }
+}
+
+impl<T: 'static> Visual<T> {
+    pub fn new(value: T) -> Self {
+        Self(RawState::new(value))
+    }
+}
+
+impl<T: Clone + 'static> Visual<T> {
+    pub fn peek(&self) -> T {
+        self.0.peek_untracked()
+    }
+}
+
+impl<T: 'static> Visual<T> {
+    pub fn set(&self, value: T) {
+        self.0.set_visual(value);
+    }
+}
+
+impl<T: 'static> Backchannel<T> {
+    pub fn new(value: T) -> Self {
+        Self(RawState::new(value))
+    }
+}
+
+impl<T: Clone + 'static> Backchannel<T> {
+    pub fn peek(&self) -> T {
+        self.0.peek_untracked()
+    }
+
+    /// Measure-phase read: registers a **layout** dependency when called
+    /// during measurement (re-measure on change, no recompose), and a compose
+    /// dependency when called during composition. Identical tracking to
+    /// `Reactive::get` — the handle boundary only governs *writes*.
+    pub fn get(&self) -> T {
+        self.0.get_tracked()
+    }
+}
+
+impl<T: 'static> Backchannel<T> {
+    pub fn set(&self, value: T) {
+        self.0.set_backchannel(value);
+    }
+}
+
+impl<T: Display> Display for Reactive<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(&*self.0.inner.value.read(), f)
+    }
+}
+
+/// Default composition state handle.
 ///
-/// State 创建不绑定 Composer。只有在 compose/layout 上下文中执行 get()
-/// 才会订阅当前 Composer；这使复合 State 构造函数不需要隐式 owner TLS。
+/// `State` is the `Reactive` scheduling semantic: reads subscribe (`get`),
+/// writes recompose + wake the event loop (`set` / `update`). It is a
+/// `#[repr(transparent)]` wrapper over the shared `RawState` storage — see
+/// `Reactive` for the full contract. `State` exists as the ergonomic default;
+/// the other handles (`Animating`, `Visual`, `Backchannel`) cover narrower
+/// scheduling needs (see `docs/state-handles.md`).
+///
+/// State creation is ownerless: only `get()` inside a compose/layout context
+/// subscribes the current Composer, so composite constructors need no implicit
+/// owner TLS.
 pub struct State<T> {
-    inner: Arc<StateInner<T>>,
+    pub(crate) raw: RawState<T>,
 }
 
 struct StateInner<T> {
@@ -324,144 +703,157 @@ fn next_public_state_id() -> u32 {
 }
 
 impl<T: 'static> State<T> {
-    /// 创建新的、无 Composer 所有者的状态。
+    /// Create a new ownerless state value.
     pub fn new(value: T) -> Self {
-        let id = next_state_id();
-        let public_id = next_public_state_id();
-        let inner = Arc::new(StateInner {
-            signal: StateSignal::new(id),
-            public_id,
-            value: RwLock::new(value),
-            notify_version: Default::default(),
-        });
-        Self { inner }
+        Self {
+            raw: RawState::new(value),
+        }
     }
+
+    pub(crate) fn as_raw(&self) -> &RawState<T> {
+        &self.raw
+    }
+
+    pub(crate) fn from_raw(raw: RawState<T>) -> Self {
+        Self { raw }
+    }
+
+    pub(crate) fn into_reactive(self) -> Reactive<T> {
+        Reactive::from_raw(self.raw)
+    }
+
+    pub fn as_backchannel(&self) -> Backchannel<T>
+    where
+        T: Clone,
+    {
+        Backchannel::from_raw(self.raw.clone())
+    }
+
+    pub(crate) fn into_animating(self) -> Animating<T> {
+        Animating::from_raw(self.raw)
+    }
+
+    pub(crate) fn into_visual(self) -> Visual<T> {
+        Visual::from_raw(self.raw)
+    }
+
+    pub(crate) fn into_backchannel(self) -> Backchannel<T> {
+        Backchannel::from_raw(self.raw)
+    }
+
+
 }
 
 impl<T: Clone + 'static> State<T> {
-    /// 读取并重置通知版本号（供 compose 消费确认）
-    pub fn take_notify_version(&self) -> u32 {
-        self.inner.notify_version.swap(0, std::sync::atomic::Ordering::AcqRel)
+    pub(crate) fn take_notify_version(&self) -> u32 {
+        self.raw.take_notify_version()
     }
 
-    /// 读取当前值的快照。
+    /// Read a snapshot of the current value.
     ///
-    /// 如果在组合上下文中调用（即 Composer 正在执行 composable 函数），
-    /// 会自动注册依赖关系：当此 State 变化时，对应的 composable 会被标记为需要重组。
+    /// When called inside a composition context (a Composer executing a
+    /// composable), registers a dependency: when this State changes, the
+    /// corresponding composable is marked for recomposition.
     pub fn get(&self) -> T {
-        // Subscription and its revision snapshot are linearized by StateSignal.
-        // A write after that point is delivered by notify(); a write before it
-        // is already reflected in the value read below.
-        let registration = register_dependency(self.inner.signal.clone());
-        let value = self.inner.value.read().clone();
-        if let Some((queue, observed_revision)) = registration {
-            self.inner
-                .signal
-                .enqueue_if_changed(&queue, observed_revision);
-        }
-        value
+        self.raw.get_tracked()
     }
 
-    /// 读取但不注册依赖（动画引擎内部用——避免把依赖记到动画创建处）
+    /// Read without registering a dependency (render phase / animation engine
+    /// internals — avoids recording the dependency at the creation site).
     pub fn peek(&self) -> T {
-        self.inner.value.read().clone()
+        self.raw.peek_untracked()
     }
 }
 
 impl<T: PartialEq + 'static> State<T> {
-    /// 设置新值。若新值与当前值相等（通过 PartialEq），则跳过通知。
+    /// Set a new value. Equal values (via PartialEq) skip notification,
+    /// avoiding useless recomposition.
     pub fn set(&self, value: T) {
-        let mut current = self.inner.value.write();
-        if *current == value {
-            return; // 值未变化，避免无效重组
-        }
-        *current = value;
-        drop(current);
-        self.notify();
+        self.raw.set_reactive(value);
     }
 
-    /// 静默更新：改值但不触发 notify/重组。用于"内部标记"类 State——
-    /// 值变化不需要响应式（如 Window 的 created_id：窗口创建标记，下次
-    /// compose 自然读到新值；notify 会在 compose 中触发异常重组（pending
-    /// 消费于物化后 → key 雪崩/树塌缩））
+    /// Write-back without notify/recompose. For internal markers whose change
+    /// needs no reactivity (e.g. Window `created_id`: read naturally next
+    /// frame; notifying mid-compose would avalanche keys / collapse the tree).
+    ///
+    /// Deprecated: prefer an explicit `Backchannel` handle (see
+    /// `docs/state-handles.md`). Emits a compile warning on use.
+    #[deprecated(note = "use Backchannel::set; see docs/state-handles.md")]
     pub fn set_silent(&self, value: T) {
-        let mut current = self.inner.value.write();
-        *current = value;
-        drop(current);
+        self.raw.set_backchannel(value);
     }
 
-    /// 设置新值并通知（标记重组），但**不唤醒事件循环**（跳过 WAKE_FN）。
+    /// Set + notify (schedule recomposition) but **skip waking the event
+    /// loop** (bypass WAKE_FN).
     ///
-    /// 动画引擎专用：动画 tick 已由 `request_redraw` 驱动渲染帧，若每个动画
-    /// state 的 set 再 wake_up，会触发 wake 自旋（每显示帧多次 compose，
-    /// 重组风暴）。通知仍标记 pending → 下帧渲染时重组重测；
-    /// 仅省去不必要的立即唤醒。
+    /// Animation-engine only: ticks are already frame-driven by
+    /// `request_redraw`; waking per tick would spin recomposition.
+    ///
+    /// Deprecated: prefer an explicit `Animating` handle (see
+    /// `docs/state-handles.md`). Emits a compile warning on use.
+    #[deprecated(note = "use Animating::set; see docs/state-handles.md")]
     pub fn set_no_wake(&self, value: T) {
-        let mut current = self.inner.value.write();
-        if *current == value {
-            return;
-        }
-        *current = value;
-        drop(current);
-        self.notify_no_wake();
+        self.raw.set_animating(value);
     }
 
-    /// 设置新值但**不触发重组**。
+    /// Write without recomposition.
     ///
-    /// 绘制层动画专用：alpha/scale/颜色等视觉属性变化只触发重绘（由动画引擎
-    /// 每帧 `request_redraw` 驱动），不触发 `notify → mark_dirty → 重组`。
-    /// 与 Compose `graphicsLayer { }` 的"绘制层属性不触发重组"一致。
+    /// Draw-layer animation only: alpha/scale/color changes repaint via the
+    /// animation engine's per-frame `request_redraw` and never schedule
+    /// `notify -> mark_dirty -> recompose` (matches Compose `graphicsLayer`).
+    ///
+    /// Deprecated: prefer an explicit `Visual` handle (see
+    /// `docs/state-handles.md`). Emits a compile warning on use.
+    #[deprecated(note = "use Visual::set; see docs/state-handles.md")]
     pub fn set_visual(&self, value: T) {
-        let mut current = self.inner.value.write();
-        *current = value;
+        self.raw.set_visual(value);
+    }
+}
+
+impl<T: Clone + PartialEq + 'static> State<T> {
+    /// Mutate in place with dedup: no-op mutations skip notification like
+    /// `set` does (clone-compare-swap; no lock held while running `f`).
+    pub fn update(&self, f: impl FnOnce(&mut T)) {
+        self.raw.update_reactive(f);
+    }
+
+    /// Legacy always-notify in-place mutation (pre-handles behavior).
+    /// Prefer `update` (deduped). Kept for call sites that rely on the
+    /// unconditional notify (e.g. wrapping-add pulse counters).
+    pub(crate) fn update_untracked(&self, f: impl FnOnce(&mut T)) {
+        let mut current = self.raw.inner.value.write();
+        f(&mut *current);
+        drop(current);
+        self.raw.notify(true);
     }
 }
 
 impl<T: 'static> State<T> {
-    /// 原地更新值，始终触发通知。
-    pub fn update(&self, f: impl FnOnce(&mut T)) {
-        let mut current = self.inner.value.write();
-        f(&mut *current);
-        drop(current);
-        self.notify();
-    }
-
-    /// 返回此 State 的唯一 ID（保留 u32 API 兼容性）
+    /// Legacy u32 identity (animation/public compatibility).
     pub fn id(&self) -> u32 {
-        self.inner.public_id
+        self.raw.id()
     }
 
     /// Return the u64-backed identity used by StateSignal and dependency graphs.
     /// This is the migration API for callers that must not rely on the legacy u32 ID.
     pub fn state_id(&self) -> StateId {
-        self.inner.signal.id()
+        self.raw.state_id()
     }
 
     /// Internal alias used by Composer dependency maps.
     pub(crate) fn signal_id(&self) -> StateId {
-        self.state_id()
+        self.raw.signal_id()
     }
 
-    /// 通知所有订阅者（通常触发重组）
-    fn notify(&self) {
-        self.notify_inner(true);
-    }
-
-    /// 通知但不唤醒事件循环（动画引擎用）
-    fn notify_no_wake(&self) {
-        self.notify_inner(false);
-    }
-
-    fn notify_inner(&self, wake: bool) {
-        self.inner.notify_version.fetch_add(1, Ordering::Release);
-        self.inner.signal.notify(wake);
+    pub(crate) fn notify(&self, wake: bool) {
+        self.raw.notify(wake);
     }
 }
 
 impl<T> Clone for State<T> {
     fn clone(&self) -> Self {
         Self {
-            inner: Arc::clone(&self.inner),
+            raw: self.raw.clone(),
         }
     }
 }
@@ -469,22 +861,23 @@ impl<T> Clone for State<T> {
 impl<T: Debug> Debug for State<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("State")
-            .field("id", &self.inner.public_id)
-            .field("value", &*self.inner.value.read())
+            .field("id", &self.raw.id())
+            .field("value", &*self.raw.inner.value.read())
             .finish()
     }
 }
 
 impl<T: Display> Display for State<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        Display::fmt(&*self.inner.value.read(), f)
+        Display::fmt(&*self.raw.inner.value.read(), f)
     }
 }
 
 impl<T: PartialEq> PartialEq for State<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.inner.signal.id == other.inner.signal.id
-            || *self.inner.value.read() == *other.inner.value.read()
+        // Identity semantics: same signal means same state, even if a
+        // concurrent write changed the value between the two reads.
+        self.raw.state_id() == other.raw.state_id()
     }
 }
 
@@ -764,7 +1157,7 @@ mod tests {
         let other = State::new(8i32);
         let internal = state.signal_id();
         assert_eq!(state.state_id(), internal);
-        assert_eq!(state.inner.public_id, state.id());
+        assert_eq!(state.raw.inner.public_id, state.id());
         assert_ne!(state.id(), other.id(), "public compatibility IDs remain distinct");
         assert_ne!(internal, other.signal_id());
         assert_eq!(internal.raw(), state.state_id().raw());
@@ -773,19 +1166,18 @@ mod tests {
     }
 
     #[test]
-    fn test_set_silent_no_notify() {
+    fn test_backchannel_write_lands_without_notify() {
         let queue = ComposerSubscription::new();
-        let state = State::new(0i32);
+        let channel = Backchannel::new(0i32);
+        channel.get();
         let mut frame = begin_compose_deps_with_queue(Arc::downgrade(&queue));
-        state.get();
+        channel.get();
         take_deps();
         frame.commit();
 
-        state.set_silent(42);
-        assert_eq!(state.get(), 42);
-        assert!(queue.is_empty(), "set_silent 不应入队");
-        state.set(43);
-        assert_eq!(queue.drain(), vec![state.signal_id()], "set 应通知读取者");
+        channel.set(42);
+        assert_eq!(channel.get(), 42);
+        assert!(queue.is_empty(), "Backchannel::set must not enqueue");
     }
 
     #[test]
@@ -800,7 +1192,7 @@ mod tests {
     fn revision_handshake_catches_write_after_subscription() {
         let queue = ComposerSubscription::new();
         let state = State::new(0i32);
-        let signal = state.inner.signal.clone();
+        let signal = state.raw.inner.signal.clone();
         let observed = queue.subscribe_signal(&signal).unwrap();
 
         // Simulate a write in the gap between the subscription snapshot and
@@ -816,7 +1208,7 @@ mod tests {
     fn revision_handshake_does_not_requeue_after_unsubscribe() {
         let queue = ComposerSubscription::new();
         let state = State::new(0i32);
-        let signal = state.inner.signal.clone();
+        let signal = state.raw.inner.signal.clone();
         let observed = queue.subscribe_signal(&signal).unwrap();
 
         queue.unsubscribe_all();
@@ -830,7 +1222,7 @@ mod tests {
     fn closed_subscription_cannot_readd_signal() {
         let queue = ComposerSubscription::new();
         let state = State::new(0i32);
-        let signal = state.inner.signal.clone();
+        let signal = state.raw.inner.signal.clone();
         assert!(queue.subscribe_signal(&signal).is_some());
         queue.enqueue(state.signal_id());
 

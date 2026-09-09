@@ -1592,7 +1592,7 @@ pub(crate) fn measure_node(
                 nodes[idx].scroll_content_height = content_h;
                 let max_off = (content_h - nodes[idx].scroll_viewport_height).max(0.0);
                 if let Some(ss) = nodes[idx].modifier.vertical_scroll_state() {
-                    ss.fling_limit.set_silent(max_off);
+                    ss.fling_limit.set(max_off);
                 }
             }
         }
@@ -1610,7 +1610,7 @@ pub(crate) fn measure_node(
                 nodes[idx].scroll_content_width = content_w;
                 let max_off = (content_w - nodes[idx].scroll_viewport_width).max(0.0);
                 if let Some(ss) = nodes[idx].modifier.horizontal_scroll_state() {
-                    ss.fling_limit.set_silent(max_off);
+                    ss.fling_limit.set(max_off);
                 }
             }
         }

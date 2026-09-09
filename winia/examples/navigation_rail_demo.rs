@@ -1,5 +1,6 @@
 //! NavigationRail 演示：基础侧边栏（Collapsed）+ Expressive 宽轨（收起/展开变形）
 
+use letclone::clone;
 use winia::prelude::*;
 
 const HOME_PATH: &str = "M10 20v-6h4v6h5v-9h3L12 3 2 11h3v9z";
@@ -25,17 +26,19 @@ fn navigation_rail_demo(ctx: &mut ComposeCtx) {
         .modifier(Modifier::new().fill_max_size())
         .build(ctx, |ctx| {
             // ── 基础 NavigationRail ──
-            let sel_rail = selected.clone();
-            NavigationRail::new(move |ctx| {
+            NavigationRail::new({
+                clone!(selected);
+                move |ctx| {
                 for index in 0..DESTINATIONS.len() {
                     let (name, path) = DESTINATIONS[index];
-                    NavigationRailItem::new(sel_rail.get() == index, move |ctx| {
+                    NavigationRailItem::new(selected.get() == index, move |ctx| {
                         Icon::svg_path(path).size(NAVIGATION_RAIL_ICON_SIZE).build(ctx);
                     })
                     .label(move |ctx| Text::new(name).build(ctx))
-                    .on_click({ let s = sel_rail.clone(); move || s.set(index) })
+                    .on_click({ clone!(selected); move || selected.set(index) })
                     .build(ctx);
                 }
+            }
             })
                 .header(|ctx| {
                     FloatingActionButton::new().build(ctx, |ctx| {
@@ -58,41 +61,40 @@ fn navigation_rail_demo(ctx: &mut ComposeCtx) {
                 });
 
             // ── Expressive 宽轨（点击按钮收起/展开）──
-            let state_btn = wide_state.clone();
             Button::text()
-                .on_click(move || state_btn.toggle())
+                .on_click({ clone!(wide_state); move || wide_state.toggle() })
                 .build(ctx, |ctx| Text::new("Toggle").build(ctx));
-            let sel_wide = wide_sel.clone();
-            let state_wide = wide_state.clone();
             let progress = ctx.animate_float_as_state(
                 if wide_state.is_expanded() { 1.0 } else { 0.0 },
                 winia::animation::AnimationSpec::Spring(winia::animation::SpringSpec {
                     damping_ratio: 1.0, stiffness: 400.0, mass: 1.0, threshold: 0.01,
                 }),
             );
-            let _ = state_wide;
-            WideNavigationRail::new(wide_state.clone(), move |ctx| {
+            WideNavigationRail::new(wide_state.clone(), {
+                clone!(wide_sel);
+                move |ctx| {
                 for index in 0..DESTINATIONS.len() {
                     let (name, path) = DESTINATIONS[index];
                     WideNavigationRailItem::new(
-                        sel_wide.get() == index,
+                        wide_sel.get() == index,
                         move |ctx| {
                             Icon::svg_path(path).size(NAVIGATION_RAIL_ICON_SIZE).build(ctx);
                         },
                         move |ctx| Text::new(name).build(ctx),
                     )
                     .progress(progress.clone())
-                    .on_click({ let s = sel_wide.clone(); move || s.set(index) })
+                    .on_click({ clone!(wide_sel); move || wide_sel.set(index) })
                     .build(ctx);
                 }
+            }
             })
             // M3 模式：header 恒用 Extended FAB，expanded 绑定轨状态——
             // 收起时 56×56 仅图标（视觉同 FAB），展开时滑出 "Create" 文本（带动画）
-            .header({ let ws = wide_state.clone(); move |ctx| {
+            .header({ clone!(wide_state); move |ctx| {
                 ExtendedFloatingActionButton::new(
                     |ctx| Text::new("Create").build(ctx),
                     |ctx| Icon::svg_path(PLUS_PATH).size(24.0).build(ctx),
-                    ws.expanded_state(),
+                    wide_state.expanded_state(),
                 )
                 .on_click(|| {})
                 .build(ctx);
@@ -102,8 +104,6 @@ fn navigation_rail_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
     winia::run_app!(|ctx| {
         Window::new().size(900.0, 480.0).title("Navigation Rail Demo").build(ctx, navigation_rail_demo);
     });

@@ -3,6 +3,7 @@
 //! 运行：`cargo run -p winia --example interaction_demo --features debug-server`
 //! 交互：鼠标悬停/按下按钮观察颜色与阴影；Tab/点击聚焦 TextField 观察边框。
 
+use letclone::clone;
 use winia::prelude::*;
 use winia::core::composer::ComposeCtx;
 use winia::composable;
@@ -45,8 +46,8 @@ fn interaction_ui(ctx: &mut ComposeCtx) {
                 .interaction_source(src.clone())
                 .elevation(ButtonElevation::elevated())
                 .on_click({
-                    let c = clicks.clone();
-                    move || c.update(|v| *v += 1)
+                    clone!(clicks);
+                    move || clicks.update(|v| *v += 1)
                 })
                 .build(ctx, |ctx| {
                     Text::new(format!("点击 {} 次", clicks.get())).font_size(14.0).build(ctx);
@@ -55,8 +56,8 @@ fn interaction_ui(ctx: &mut ComposeCtx) {
             // ── 内部源按钮（hover/press 自动变色——不提升也能工作）──
             Button::new()
                 .on_click({
-                    let c = clicks.clone();
-                    move || c.update(|v| *v -= 1)
+                    clone!(clicks);
+                    move || clicks.update(|v| *v -= 1)
                 })
                 .build(ctx, |ctx| {
                     Text::new("内部源按钮 -1").font_size(14.0).build(ctx);
@@ -103,8 +104,6 @@ fn interaction_ui(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
     winia::run_app!(|ctx| {
         // 固定亮色（避免跟随系统暗色/检测失败——截图与演示效果一致）
         WiniaTheme::light(ctx, |ctx| {

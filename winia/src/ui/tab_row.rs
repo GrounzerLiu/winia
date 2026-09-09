@@ -416,8 +416,8 @@ impl MeasurePolicy for TabRowLayoutPolicy {
         };
 
         if !self.initialized.load(Ordering::Relaxed) {
-            self.offset_state.set_silent(target_offset);
-            self.width_state.set_silent(target_width);
+            self.offset_state.set(target_offset);
+            self.width_state.set(target_width);
             self.initialized.store(true, Ordering::Relaxed);
         } else {
             let spec = indicator_spring();
@@ -1172,8 +1172,8 @@ impl MeasurePolicy for ScrollableTabRowLayoutPolicy {
         };
 
         if !self.initialized.load(Ordering::Relaxed) {
-            self.offset_state.set_silent(target_offset);
-            self.width_state.set_silent(target_width);
+            self.offset_state.set(target_offset);
+            self.width_state.set(target_width);
             self.initialized.store(true, Ordering::Relaxed);
         } else {
             let spec = indicator_spring();
@@ -1574,7 +1574,7 @@ mod tests {
         c.compose(make_scene(selected.clone(), colors.clone()));
         c.layout(Constraints::new(0.0, 360.0, 0.0, 640.0));
 
-        // 首帧：initialized=false → set_silent 直接到位（tab0，居中 ≈ 43.5）
+        // 首帧：initialized=false → Reactive set 直接到位（tab0，居中 ≈ 43.5）
         {
             let root = c.layout_root_idx().unwrap();
             let nodes = c.arena_nodes();

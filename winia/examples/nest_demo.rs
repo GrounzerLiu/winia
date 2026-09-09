@@ -7,8 +7,8 @@
 //! 其他单参数名为 ctx 的闭包（如延迟执行的异步回调）会被误注入——避免在
 //! #[composable] 函数内使用"参数名为 ctx 的非 content 闭包"。
 
+use letclone::clone;
 use winia::prelude::*;
-use winia::app;
 use winia::ComposeCtx;
 use winia::core::state::State;
 
@@ -43,7 +43,7 @@ fn multi_if(ctx: &mut ComposeCtx, level: &State<i32>) {
 
     if level.get() == 1 {
         Text::new(format!("level 1 — clicks={n}")).font_size(12.0).build(ctx);
-        Button::new().on_click({ let c = clicks.clone(); move || { c.update(|v| *v += 1); () } })
+        Button::new().on_click({ clone!(clicks); move || { clicks.update(|v| *v += 1); () } })
             .modifier(Modifier::new().size(140.0, 28.0))
             .build(ctx, |ctx| { Text::new("click me").font_size(12.0).build(ctx); });
         if level.get() > 0 {
@@ -64,10 +64,10 @@ fn multi_if(ctx: &mut ComposeCtx, level: &State<i32>) {
             .build(ctx, |ctx| {
                 Text::new(format!("level 2 — clicks={n}")).font_size(12.0).build(ctx);
                 Row::new().build(ctx, |ctx| {
-                    Button::new().on_click({ let c = clicks.clone(); move || { c.update(|v| *v += 3); () } })
+                    Button::new().on_click({ clone!(clicks); move || { clicks.update(|v| *v += 3); () } })
                         .modifier(Modifier::new().size(100.0, 28.0))
                         .build(ctx, |ctx| { Text::new("+3").font_size(12.0).build(ctx); });
-                    Button::new().on_click({ let c = clicks.clone(); move || { c.update(|v| *v -= 1); () } })
+                    Button::new().on_click({ clone!(clicks); move || { clicks.update(|v| *v -= 1); () } })
                         .modifier(Modifier::new().size(100.0, 28.0))
                         .build(ctx, |ctx| { Text::new("-1").font_size(12.0).build(ctx); });
                 });
@@ -121,7 +121,7 @@ fn match_and_loops(ctx: &mut ComposeCtx, mode: &State<i32>) {
 /// 顶层结构切换（if 分支插入/移除——后续节点 key 不漂移）
 #[composable]
 fn toggler(ctx: &mut ComposeCtx, show_extra: &State<bool>) {
-    Button::new().on_click({ let s = show_extra.clone(); move || { s.update(|v| { *v = !*v; }); () } })
+    Button::new().on_click({ clone!(show_extra); move || { show_extra.update(|v| { *v = !*v; }); () } })
         .modifier(Modifier::new().size(200.0, 30.0).background(Color::from_argb(255, 150, 100, 180), Shape::rounded(4.0)))
         .build(ctx, |ctx| {
             Text::new(if show_extra.get() { "Hide extra" } else { "Show extra" }).font_size(12.0).color(Color::WHITE).build(ctx);
@@ -133,7 +133,7 @@ fn toggler(ctx: &mut ComposeCtx, show_extra: &State<bool>) {
     }
     // 稳定节点（结构变化后仍复用/状态保留）
     let stable = ctx.remember(|| 0i32);
-    Button::new().on_click({ let c = stable.clone(); move || { c.update(|v| { *v += 1; }); () } })
+    Button::new().on_click({ clone!(stable); move || { stable.update(|v| { *v += 1; }); () } })
         .modifier(Modifier::new().size(120.0, 28.0))
         .build(ctx, |ctx| {
             Text::new(format!("stable counter: {}", stable.get())).font_size(12.0).build(ctx);
@@ -156,13 +156,13 @@ fn nest_demo(ctx: &mut ComposeCtx) {
 
             // 控制区
             Row::new().build(ctx, |ctx| {
-                Button::new().on_click({ let s = level.clone(); move || { s.update(|v| { *v = (*v % 3) + 1; }); } })
+                Button::new().on_click({ clone!(level); move || { level.update(|v| { *v = (*v % 3) + 1; }); } })
                     .modifier(Modifier::new().size(110.0, 28.0))
                     .build(ctx, |ctx| { Text::new("switch if-level").font_size(12.0).build(ctx); });
-                Button::new().on_click({ let s = mode.clone(); move || { s.update(|v| { *v = (*v + 1) % 3; }); () } })
+                Button::new().on_click({ clone!(mode); move || { mode.update(|v| { *v = (*v + 1) % 3; }); () } })
                     .modifier(Modifier::new().size(110.0, 28.0))
                     .build(ctx, |ctx| { Text::new("switch mode").font_size(12.0).build(ctx); });
-                Button::new().on_click({ let s = show_extra.clone(); move || { s.update(|v| { *v = !*v; }); () } })
+                Button::new().on_click({ clone!(show_extra); move || { show_extra.update(|v| { *v = !*v; }); () } })
                     .modifier(Modifier::new().size(110.0, 28.0))
                     .build(ctx, |ctx| { Text::new("toggle extra").font_size(12.0).build(ctx); });
             });
@@ -182,10 +182,6 @@ fn main() {
         eprintln!("{}", msg);
         let _ = std::fs::write("D:/Projects/winia/crash.log", &msg);
     }));
-
-    // 启动 tokio 运行时（供 debug WS server 使用）
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
 
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {

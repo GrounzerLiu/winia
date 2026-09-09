@@ -8,6 +8,7 @@
 //! - 自定义颜色 / stroke cap / gap
 //! - 进度切换动画（ProgressIndicatorDefaults::progress_animation_spec 弹簧）
 
+use letclone::clone;
 use winia::prelude::*;
 
 fn section_title(ctx: &mut ComposeCtx, text: &str) {
@@ -23,7 +24,6 @@ fn progress_demo(ctx: &mut ComposeCtx) {
     let scroll_y = ctx.remember(|| ScrollState::new()).get();
     // 进度状态（0..1）
     let progress = ctx.remember(|| 0.5f32);
-    let _p = progress.clone();
 
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(16.0).vertical_scroll(scroll_y))
@@ -86,9 +86,8 @@ fn progress_demo(ctx: &mut ComposeCtx) {
                 ProgressIndicatorDefaults::progress_animation_spec(),
             );
             LinearProgressIndicator::new(animated.get()).build(ctx);
-            let p2 = progress.clone();
             Slider::new(progress.get())
-                .on_value_change(move |nv| p2.update(|s| *s = nv))
+                .on_value_change({ clone!(progress); move |nv| progress.update(|s| *s = nv) })
                 .build(ctx);
             Text::new(format!("拖动滑块：progress = {:.2}（弹簧过渡）", progress.get()))
                 .font_size(12.0)
@@ -107,9 +106,6 @@ fn progress_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
-
     winia::run_app!(|ctx| {
         WiniaTheme::light(ctx, |ctx| {
             Window::new()

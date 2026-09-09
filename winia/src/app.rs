@@ -64,9 +64,13 @@ pub(crate) struct PerWindow {
     pub(crate) scale_factor: f64,
     pub(crate) focused_id: Option<u64>,
     pub(crate) content: Box<dyn Fn(&mut ComposeCtx)>,
-    /// 窗口尺寸的响应式 State（首次组合时 ctx.remember 创建并挂载到
-    /// ui::adaptive——resize set() → 依赖方（套件脚手架）slot dirty）
+    /// Window-size state, split by scheduling semantic (see docs/state-handles.md):
+    /// - `window_size_state`: Reactive — resize path `set()` notifies, driving
+    ///   dependents (suite scaffolds reading `window_size()`) dirty for recompose.
+    /// - `window_size_backchannel`: per-frame sync without notify (replaces the
+    ///   old silent write on the shared State — same value, Backchannel write).
     window_size_state: std::cell::RefCell<Option<crate::core::state::State<(f32, f32)>>>,
+    window_size_backchannel: std::cell::RefCell<Option<crate::core::state::Backchannel<(f32, f32)>>>,
     pub(crate) on_close: Option<Box<dyn FnMut() + Send>>,
     pub(crate) created_id: Option<u64>,
     theme: crate::ui::theme::ThemeColors,
@@ -173,7 +177,7 @@ struct OverlayWindow {
     /// 显示进度（1=完全显示，0=隐藏）——进入/退出动画统一驱动：
     /// 打开 push_animatable(progress, 1.0)（0→1），关闭 push(progress, 0.0)
     /// （1→0）；渲染期 peek 计算 scale/alpha。None=无动画（恒 1）
-    progress: Option<crate::core::state::State<f32>>,
+    progress: Option<crate::core::state::Animating<f32>>,
     /// 进入动画规格（None = 瞬时——Popup/DropdownMenu 默认）
     enter_anim: Option<crate::ui::overlay::OverlayAnimSpec>,
     /// 退出动画规格（None = 瞬时消失）
@@ -203,7 +207,7 @@ struct PtrDownState {
 
 impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::ui::theme::ThemeColors) -> Self {
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, last_pointer_pos: None, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, drag_scroll: None, overlays: Vec::new(), overlay_click: None, overlay_drag: None, overlay_drag_started: false, overlay_drag_last: None, overlay_drag_scroll: None, pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None, overlay_focused_interaction: None }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), window_size_backchannel: std::cell::RefCell::new(None), on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, last_pointer_pos: None, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, drag_scroll: None, overlays: Vec::new(), overlay_click: None, overlay_drag: None, overlay_drag_started: false, overlay_drag_last: None, overlay_drag_scroll: None, pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None, overlay_focused_interaction: None }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -427,19 +431,23 @@ impl PerWindow {
         let mut any_composed = false;
         loop {
             let did_compose = self.composer.recompose(|ctx| {
-                // 窗口尺寸响应式 State：首帧 remember 创建（owner=本 Composer），
-                // 每帧挂载到 adaptive + set_silent 同步值；resize 时由事件路径 set() 通知
+                // Window-size states: Reactive (notifying, for dependents) +
+                // Backchannel (per-frame sync without notify). First frame
+                // creates both via remember under a stable ctx.key.
                 let slot = &self.window_size_state;
+                let bslot = &self.window_size_backchannel;
                 let existing = slot.borrow().clone();
                 let size_state = existing.unwrap_or_else(|| {
-                    // remember 需稳定 key 上下文——裸重组闭包无语句注入，用 ctx.key 包裹
                     ctx.key("winia_window_size_state", |ctx| {
                         let s = ctx.remember(|| (self.width, self.height));
                         *slot.borrow_mut() = Some(s.clone());
+                        *bslot.borrow_mut() = Some(s.as_backchannel());
                         s
                     })
                 });
-                size_state.set_silent((self.width, self.height));
+                if let Some(b) = bslot.borrow().as_ref() {
+                    crate::ui::adaptive::sync_window_size_state(b, (self.width, self.height));
+                }
                 crate::ui::adaptive::set_window_size_state(size_state);
                 (self.content)(ctx);
             });
@@ -1806,10 +1814,13 @@ impl AppState {
                 ctx.key("winia_window_size_state", |ctx| {
                     let s = ctx.remember(|| (w0, h0));
                     *slot.borrow_mut() = Some(s.clone());
+                    *pw.window_size_backchannel.borrow_mut() = Some(s.as_backchannel());
                     s
                 })
             });
-            size_state.set_silent((w0, h0));
+            if let Some(b) = pw.window_size_backchannel.borrow().as_ref() {
+                crate::ui::adaptive::sync_window_size_state(b, (w0, h0));
+            }
             crate::ui::adaptive::set_window_size_state(size_state);
             (pw.content)(ctx);
         });
@@ -2392,7 +2403,7 @@ impl OverlayWindow {
             // progress is driven only when an enter or exit spec exists (0->1
             // enter, 1->0 exit); otherwise None means always visible (instant).
             progress: (desc.enter_anim.is_some() || desc.exit_anim.is_some())
-                .then(|| crate::core::state::State::new(0.0)),
+                .then(|| crate::core::state::Animating::new(0.0)),
             enter_anim: desc.enter_anim,
             exit_anim: desc.exit_anim,
             closing: false,
@@ -2421,20 +2432,21 @@ impl OverlayWindow {
         self.enter_anim = desc.enter_anim;
         self.exit_anim = desc.exit_anim;
         if spec_flipped {
-            // Cancel any in-flight animation on the old progress State (otherwise
-            // it lingers as an orphan until timeout — P1-4).
+            // Cancel any in-flight animation on the old progress handle
+            // (otherwise it lingers as an orphan until timeout — P1-4).
             if let Some(old) = old_progress {
-                crate::animation::cancel_animation(&old);
+                crate::animation::cancel_animation_by_id(old.state_id());
             }
             self.progress = (self.enter_anim.is_some() || self.exit_anim.is_some())
-                .then(|| crate::core::state::State::new(0.0));
+                .then(|| crate::core::state::Animating::new(0.0));
             // Update is the reuse path — overlay is already visible; progress=0
             // would render as apply(0) hidden. If the new spec has no enter
-            // animation, keep it fully visible; otherwise the caller will push
-            // the 0->1 enter animation.
+            // animation, keep it fully visible (Backchannel-equivalent direct
+            // write on the Animating handle — same stored value); otherwise the
+            // caller will push the 0->1 enter animation.
             if let Some(p) = self.progress.as_ref() {
                 if self.enter_anim.is_none() {
-                    p.set_silent(1.0);
+                    p.as_raw().set_backchannel(1.0);
                 }
             }
         }
@@ -2451,14 +2463,14 @@ fn sync_overlays(pw: &mut PerWindow, _recomposed: bool) {
     for desc in descs {
         if let Some(ov) = pw.overlays.iter_mut().find(|o| o.id == desc.id) {
             // 复用：规格翻转（None↔Some）时 update 重建 progress——新规格有
-            // enter 动画则 push 0→1（否则 update 内已 set_silent(1.0) 保持显示）
+            // enter 动画则 push 0→1（否则 update 内已 Backchannel 写 1.0 保持显示）
             let had_enter = ov.enter_anim.is_some();
             ov.update(desc);
             let now_has_enter = ov.enter_anim.is_some();
             if !had_enter && now_has_enter {
                 if let Some(p) = ov.progress.clone() {
                     let spec = ov.enter_anim.as_ref().unwrap();
-                    crate::animation::push_animatable(
+                    crate::animation::push_animatable_handle(
                         p, 1.0,
                         crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
                             spec.duration, spec.interpolator.clone(),
@@ -2476,7 +2488,7 @@ fn sync_overlays(pw: &mut PerWindow, _recomposed: bool) {
             pw.overlays.push(OverlayWindow::new_with_composer(desc, composer));
             if let Some(p) = pw.overlays.last().and_then(|o| o.progress.clone()) {
                 if let Some(spec) = &enter_anim {
-                    crate::animation::push_animatable(
+                    crate::animation::push_animatable_handle(
                         p, 1.0,
                         crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
                             spec.duration, spec.interpolator.clone(),
@@ -2484,7 +2496,7 @@ fn sync_overlays(pw: &mut PerWindow, _recomposed: bool) {
                     );
                 } else {
                     // 无进入动画（但 exit 有）：直接完整显示（progress=1）
-                    p.set_silent(1.0);
+                    p.as_raw().set_backchannel(1.0);
                 }
             }
         }
@@ -2530,7 +2542,7 @@ fn begin_overlay_close(pw: &mut PerWindow, id: u64) {
     if has_exit {
         if let Some(p) = pw.overlays[idx].progress.clone() {
             let spec = pw.overlays[idx].exit_anim.as_ref().unwrap();
-            crate::animation::push_animatable(
+            crate::animation::push_animatable_handle(
                 p, 0.0,
                 crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
                     spec.duration, spec.interpolator.clone(),
@@ -4796,6 +4808,19 @@ mod drag_target_selection_tests {
 }
 
 pub fn run_app(app: impl FnOnce(&mut ComposeCtx) + 'static) {
+    // Own the tokio runtime: effects (LaunchedEffect, debug WS server) need
+    // `Handle::try_current()` during composition. Demos must NOT create their
+    // own runtime (nesting `Runtime::new()` under an entered guard is a no-op
+    // shadow — spawns would land on the orphaned runtime, never driven).
+    let owned = match tokio::runtime::Handle::try_current() {
+        Ok(_) => None,
+        Err(_) => Some(tokio::runtime::Runtime::new().expect("tokio runtime")),
+    };
+    // Hold the guard above all blocking calls (EventLoop::run_app never
+    // returns): `Runtime::new()` panics ("Cannot start a runtime from within
+    // a runtime") if called while entered; `Runtime::block_on` on a nested
+    // `Runtime::new()` hits the same panic.
+    let _guard = owned.as_ref().map(|rt| rt.enter());
     let event_loop = EventLoop::new().expect("event loop");
     debug::begin_session();
     let proxy = event_loop.create_proxy();

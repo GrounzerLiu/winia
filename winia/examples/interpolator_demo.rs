@@ -7,12 +7,12 @@
 //!
 //! 用法：`cargo run -p winia --example interpolator_demo`
 
+use letclone::clone;
 use std::sync::Arc;
 use winia::animation::interpolator::Interpolator;
 use winia::animation::{AnimationSpec, TweenSpec};
 use winia::modifier::GraphicsLayerParams;
 use winia::prelude::*;
-use winia::app;
 
 /// 全部 30 个插值器（Linear + 29 个表驱动）
 fn all_interpolators() -> Vec<(&'static str, Arc<dyn Interpolator>)> {
@@ -82,7 +82,7 @@ fn interpolator_demo(ctx: &mut ComposeCtx) {
                 .modifier(Modifier::new().fill_max_width().padding_vertical(8.0))
                 .build(ctx, |ctx| {
                     Button::new()
-                        .on_click({ let p = playing.clone(); move || { p.set(!p.peek()); } })
+                        .on_click({ clone!(playing); move || { playing.set(!playing.peek()); } })
                         .build(ctx, |ctx| {
                             Text::new(if playing.peek() { "Reset" } else { "Play all" }).build(ctx);
                         });
@@ -131,11 +131,13 @@ fn interpolator_demo(ctx: &mut ComposeCtx) {
                                             ))
                                         .build(ctx, |_| {});
                                     // 滑块（40px，translation_x = 动画值）
-                                    let g = v.clone();
-                                    let gfx = move || {
-                                        let mut p = GraphicsLayerParams::default();
-                                        p.translation_x = g.peek();
-                                        p
+                                    let gfx = {
+                                        clone!(v);
+                                        move || {
+                                            let mut p = GraphicsLayerParams::default();
+                                            p.translation_x = v.peek();
+                                            p
+                                        }
                                     };
                                     Column::new()
                                         .modifier(Modifier::new()
@@ -154,9 +156,6 @@ fn interpolator_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
-
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()

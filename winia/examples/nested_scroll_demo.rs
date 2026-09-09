@@ -22,6 +22,7 @@
 //! - **TopAppBar 折叠**：外层滚动时顶栏收缩（ExitUntilCollapsed）。
 //! - 每层 offset 显示在顶部状态行，便于观察消费分配。
 
+use letclone::clone;
 use winia::prelude::*;
 
 /// 把内层列表滚到底后的剩余 delta 转给外层 ScrollState 的 connection。
@@ -167,8 +168,6 @@ fn nested_scroll_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
     winia::run_app!(|ctx| {
         WiniaTheme::light(ctx, |ctx| {
             Window::new()

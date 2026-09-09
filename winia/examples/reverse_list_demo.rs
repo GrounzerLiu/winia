@@ -7,6 +7,7 @@
 //!
 //! 运行：cargo run -p winia --example reverse_list_demo
 
+use letclone::clone;
 use winia::prelude::*;
 use std::sync::Arc;
 
@@ -57,17 +58,14 @@ fn reverse_demo(ctx: &mut ComposeCtx) {
             Row::new()
                 .modifier(Modifier::new().padding(8.0))
                 .build(ctx, |ctx| {
-                    let s0 = state.clone();
                     Button::text()
-                        .on_click(move || s0.scroll_to_item(0, 0.0))
+                        .on_click({ clone!(state); move || state.scroll_to_item(0, 0.0) })
                         .build(ctx, |ctx| Text::new("最新（底部）").build(ctx));
-                    let s1 = state.clone();
                     Button::text()
-                        .on_click(move || s1.animate_scroll_to_item(50, 0.0))
+                        .on_click({ clone!(state); move || state.animate_scroll_to_item(50, 0.0) })
                         .build(ctx, |ctx| Text::new("动画到 #50").build(ctx));
-                    let s2 = state.clone();
                     Button::text()
-                        .on_click(move || s2.animate_scroll_to_item(MESSAGE_COUNT - 1, 0.0))
+                        .on_click({ clone!(state); move || state.animate_scroll_to_item(MESSAGE_COUNT - 1, 0.0) })
                         .build(ctx, |ctx| Text::new("动画到最旧").build(ctx));
                 });
 
@@ -75,7 +73,7 @@ fn reverse_demo(ctx: &mut ComposeCtx) {
                 .state(state.clone())
                 .reverse_layout(true)
                 .modifier(Modifier::new().fill_max_width().fill_max_height())
-                .items_from(messages, |m: &Message| m.id, |ctx, _i, m| {
+                .items_from(messages.clone(), |m: &Message| m.id, |ctx, _i, m| {
                     Row::new()
                         .modifier(Modifier::new().fill_max_width().padding(12.0))
                         .build(ctx, |ctx| {
@@ -94,9 +92,6 @@ fn reverse_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
-
     winia::run_app!(|ctx| {
         WiniaTheme::light(ctx, |ctx| {
             Window::new()

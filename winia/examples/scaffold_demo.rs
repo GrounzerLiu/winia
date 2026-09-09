@@ -1,5 +1,6 @@
 //! Scaffold demo with TopAppBar, NavigationBar bottom bar, scroll content, FAB and RTL toggle.
 
+use letclone::clone;
 use winia::prelude::*;
 
 const PLUS_PATH: &str = "M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z";
@@ -26,40 +27,40 @@ fn scaffold_demo(ctx: &mut ComposeCtx) {
     let nested_behavior = TopAppBarScrollBehavior::enter_always(app_bar_state, TOP_APP_BAR_HEIGHT);
     let connection = nested_behavior.nested_scroll_connection_with_scroll(scroll.clone()).expect("nested behavior connection");
 
-    let rtl_for_top_bar = rtl.clone();
-    let always_for_top = always_label.clone();
-    let count_for_fab = count.clone();
-    let behavior_for_top = behavior.clone();
-    let connection_for_content = connection.clone();
-    let scroll_for_content = scroll.clone();
-    let selected_for_bar = selected.clone();
-    let always_for_bar = always_label.clone();
-
     WiniaTheme::with_theme_and_direction(ThemeColors::default_light(), direction, ctx, |ctx| {
-        Scaffold::new(move |ctx, _padding| {
-            let scroll = scroll_for_content.clone();
-            let conn = connection_for_content.clone();
-            Column::new().modifier(Modifier::new().fill_max_size().vertical_scroll(scroll).nested_scroll(conn)).build(ctx, |ctx| {
+        Scaffold::new({
+            clone!(scroll, connection);
+            move |ctx, _padding| {
+            Column::new().modifier(Modifier::new().fill_max_size().vertical_scroll(scroll.clone()).nested_scroll(connection.clone())).build(ctx, |ctx| {
                 for index in 0..30 {
                     Text::new(format!("Content item {index}"))
                         .modifier(Modifier::new().padding(16.0).fill_max_width())
                         .build(ctx);
                 }
             });
+        }
         })
-        .top_bar(move |ctx| {
+        .top_bar({
+            clone!(rtl, always_label, behavior);
+            move |ctx| {
             TopAppBar::new(|ctx| Text::new("Scaffold demo").build(ctx))
-                .scroll_behavior(behavior_for_top.clone())
-                .actions(move |ctx| {
-                    Button::text().on_click({ let rtl = rtl_for_top_bar.clone(); move || rtl.update(|value| *value = !*value) }).build(ctx, |ctx| Text::new("RTL").build(ctx));
-                    Button::text().on_click({ let al = always_for_top.clone(); move || al.update(|value| *value = !*value) }).build(ctx, |ctx| Text::new("Label").build(ctx));
+                .scroll_behavior(behavior.clone())
+                .actions({
+                    clone!(rtl, always_label);
+                    move |ctx| {
+                    Button::text().on_click({ clone!(rtl); move || rtl.update(|value| *value = !*value) }).build(ctx, |ctx| Text::new("RTL").build(ctx));
+                    Button::text().on_click({ clone!(always_label); move || always_label.update(|value| *value = !*value) }).build(ctx, |ctx| Text::new("Label").build(ctx));
+                }
                 })
                 .build(ctx);
+        }
         })
-        .bottom_bar(move |ctx| {
-            let sel = selected_for_bar;
-            let always = always_for_bar.get();
-            NavigationBar::new(move |ctx| {
+        .bottom_bar({
+            clone!(selected, always_label);
+            move |ctx| {
+            NavigationBar::new({
+                clone!(selected, always_label);
+                move |ctx| {
                 let destinations = [
                     ("Home", HOME_PATH),
                     ("Search", SEARCH_PATH),
@@ -69,20 +70,26 @@ fn scaffold_demo(ctx: &mut ComposeCtx) {
                 for (index, (name, path)) in destinations.iter().enumerate() {
                     let name = *name;
                     let path = *path;
-                    let is_selected = sel.get() == index;
+                    let is_selected = selected.get() == index;
+                    let always = always_label.get();
                     NavigationBarItem::new(is_selected, move |ctx| {
                         Icon::svg_path(path).size(NAVIGATION_BAR_ICON_SIZE).build(ctx);
                     })
                     .label(move |ctx| Text::new(name).build(ctx))
                     .always_show_label(always)
-                    .on_click({ let sel = sel.clone(); move || sel.set(index) })
+                    .on_click({ clone!(selected); move || selected.set(index) })
                     .build(ctx);
                 }
+            }
             })
             .build(ctx);
+        }
         })
-        .floating_action_button(move |ctx| {
-            FloatingActionButton::new().on_click({ let count = count_for_fab.clone(); move || count.update(|value| *value += 1) }).build(ctx, |ctx| Icon::svg_path(PLUS_PATH).build(ctx));
+        .floating_action_button({
+            clone!(count);
+            move |ctx| {
+            FloatingActionButton::new().on_click({ clone!(count); move || count.update(|value| *value += 1) }).build(ctx, |ctx| Icon::svg_path(PLUS_PATH).build(ctx));
+        }
         })
         .build(ctx);
 
@@ -93,8 +100,6 @@ fn scaffold_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
     winia::run_app!(|ctx| {
         Window::new().size(360.0, 640.0).title("Scaffold Demo").build(ctx, scaffold_demo);
     });

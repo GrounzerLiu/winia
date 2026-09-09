@@ -14,7 +14,7 @@
 //! - **进度 State<f32>**：`visible=true` → 动画 0→1（enter）；`false` → 1→0（exit）；
 //!   同目标重复 push 被动画引擎 dedup
 //! - **布局层**：`VisibilityPolicy` 测量期 `progress.get()` 注册 layout_dep——expand/shrink
-//!   时容器高度 × 进度（下方内容平滑跟随），动画推进只重测不重组（`set_no_wake` 写值，
+//!   时容器高度 × 进度（下方内容平滑跟随），动画推进只重测不重组（`Animating` 写值，
 //!   组件闭包不因动画值重跑）
 //! - **绘制层**：`graphics_layer` 动态闭包——fade（alpha）/ slide（平移）/ scale（缩放），
 //!   渲染期 `peek()` 读值，不注册依赖
@@ -284,7 +284,7 @@ impl AnimatedVisibility {
             removed.set(false);
         }
         // exit 完成检测：不可见且进度≈0 → 标记移除（build 每帧跑——动画值
-        // set_no_wake 每帧 notify → pending → 下帧 compose）
+        // Animating 写每帧 notify → pending → 下帧 compose）
         if !vis && progress.peek() < 0.001 && !removed.peek() {
             removed.set(true);
         }
@@ -295,9 +295,9 @@ impl AnimatedVisibility {
         let target = if vis { 1.0 } else { 0.0 };
         let spec = if vis { enter.spec.clone() } else { exit.spec.clone() };
         push_animatable(progress.clone(), target, spec);
-        // Content size write-back for Fraction slide offsets (silent — no recompose;
-        // the gfx closure reads it via peek at render time).
-        let content_size: State<(f32, f32)> = ctx.remember(|| (0.0, 0.0));
+        // Content size write-back for Fraction slide offsets (Backchannel —
+        // no recompose; the gfx closure reads it via peek at render time).
+        let content_size = ctx.remember_backchannel(|| (0.0, 0.0));
         // Draw-layer params (render-time peek — no dependency, no recompose)
         let g = progress.clone();
         let e = enter.clone();
@@ -349,13 +349,13 @@ impl AnimatedVisibility {
         // toggle flips `vis` (hence `cfg`) — without latching the anchor would jump
         // (child shifts ~half content size at p=0.5). Re-latch only when settled at an
         // endpoint (fresh animation about to start) or when the config pair changes.
-        let anchor_v: State<ExpandFrom> = ctx.remember(|| cfg.expand_from);
-        let anchor_h: State<ExpandFromH> = ctx.remember(|| cfg.expand_from_h);
+        let anchor_v = ctx.remember_backchannel(|| cfg.expand_from);
+        let anchor_h = ctx.remember_backchannel(|| cfg.expand_from_h);
         let settled = progress.peek() <= 0.001 || progress.peek() >= 0.999;
         if settled && (anchor_v.peek() != cfg.expand_from || anchor_h.peek() != cfg.expand_from_h)
         {
-            anchor_v.set_silent(cfg.expand_from);
-            anchor_h.set_silent(cfg.expand_from_h);
+            anchor_v.set(cfg.expand_from);
+            anchor_h.set(cfg.expand_from_h);
         }
         // Clip to the animated bounds when expanding (cf. Compose expand's clipToBounds):
         // the policy reports a narrow container mid-animation but places the child at
@@ -399,9 +399,9 @@ struct VisibilityPolicy {
     expand_from: ExpandFrom,
     expand_h: bool,
     expand_from_h: ExpandFromH,
-    /// Measured content size write-back (for Fraction slide offsets — silent write,
-    /// render-time peek; zero recompose).
-    content_size: State<(f32, f32)>,
+    /// Measured content size write-back (for Fraction slide offsets —
+    /// Backchannel write, render-time peek; zero recompose).
+    content_size: crate::core::state::Backchannel<(f32, f32)>,
 }
 
 impl std::fmt::Debug for VisibilityPolicy {
@@ -438,7 +438,7 @@ impl MeasurePolicy for VisibilityPolicy {
             max_h = max_h.max(size.height);
             placements.push(Placement { size, position: Point::ZERO });
         }
-        self.content_size.set_silent((max_w, max_h));
+        self.content_size.set((max_w, max_h));
         let w = if self.expand_h { max_w * p } else { max_w };
         let h = if self.expand { max_h * p } else { max_h };
         // Anchors: Bottom keeps the bottom edge fixed (children shift up by the
@@ -664,7 +664,7 @@ mod tests {
             expand_from,
             expand_h,
             expand_from_h,
-            content_size: State::new((0.0, 0.0)),
+            content_size: crate::core::state::Backchannel::new((0.0, 0.0)),
         };
         let mut nodes = vec![LayoutNode::leaf(Modifier::new().size(120.0, 60.0))];
         let policies: Vec<Box<dyn MeasurePolicy>> = Vec::new();

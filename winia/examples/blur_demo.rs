@@ -7,6 +7,7 @@
 //!
 //! 运行：`cargo run -p winia --example blur_demo`
 
+use letclone::clone;
 use winia::prelude::*;
 
 const LANDSCAPE_JPG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/assets/landscape.jpg");
@@ -27,11 +28,14 @@ fn blur_demo(ctx: &mut ComposeCtx) {
             .size(260.0, 170.0)
             .backdrop_blur(12.0)
             .absolute_offset(pos.get().0, pos.get().1)
-            .on_drag(move |_, delta| {
-                let mut p = pos.get();
-                p.0 += delta.0;
-                p.1 += delta.1;
-                pos.set(p);
+            .on_drag({
+                clone!(pos);
+                move |_, delta| {
+                    let mut p = pos.get();
+                    p.0 += delta.0;
+                    p.1 += delta.1;
+                    pos.set(p);
+                }
             }))
         .build(ctx, |_ctx| {});
 
@@ -44,10 +48,6 @@ fn blur_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    // 启动 tokio 运行时（供 debug WS server / LaunchedEffect 使用）
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
-
     winia::run_app!(|ctx| {
         WiniaTheme::light(ctx, |ctx| {
             Window::new()

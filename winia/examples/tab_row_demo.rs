@@ -1,6 +1,7 @@
 //! TabRow 组件演示（固定等分，Primary/Secondary 风格）。
 //! 对标 M3 PrimaryTabRow / SecondaryTabRow。
 
+use letclone::clone;
 use winia::prelude::*;
 
 #[composable]
@@ -32,19 +33,15 @@ fn tab_row_demo(ctx: &mut ComposeCtx) {
 
                         // RTL/LTR 切换——方向变化由 ScrollableTabRow 内部检测
                         //（last_dir 重置 last_selected → 下帧自动重新居中选中 tab）
-                        let rtl_click = rtl.clone();
                         Button::new()
-                            .on_click(move || {
-                                rtl_click.update(|v| *v = !*v);
-                            })
+                            .on_click({ clone!(rtl); move || rtl.update(|v| *v = !*v) })
                             .build(ctx, |ctx| {
                                 Text::new(if rtl.get() { "LTR" } else { "RTL" }).font_size(12.0).build(ctx);
                             });
 
                         // Primary/Secondary 切换
-                        let secondary_click = secondary.clone();
                         Button::new()
-                            .on_click(move || secondary_click.update(|v| *v = !*v))
+                            .on_click({ clone!(secondary); move || secondary.update(|v| *v = !*v) })
                             .build(ctx, |ctx| {
                                 if secondary.get() {
                                     Text::new("Switch to Primary").font_size(12.0).build(ctx);
@@ -57,17 +54,16 @@ fn tab_row_demo(ctx: &mut ComposeCtx) {
                 Spacer::vertical(8.0);
 
                 // ── TabRow (Primary or Secondary) ──
-                let sel_clone = sel.clone();
-                let mut row = TabRow::new(sel.get(), move |ctx| {
+                let mut row = TabRow::new(sel.get(), {
+                    clone!(sel);
+                    move |ctx| {
                     // Tab 1: text only
-                    let s = sel_clone.clone();
-                    Tab::new(s.get() == 0, move || s.set(0))
+                    Tab::new({ clone!(sel); sel.get() == 0 }, { clone!(sel); move || sel.set(0) })
                         .text(|ctx| Text::new("Tab A").build(ctx))
                         .build(ctx);
 
                     // Tab 2: text + icon (使用真实 Material Symbols Outlined star)
-                    let s = sel_clone.clone();
-                    Tab::new(s.get() == 1, move || s.set(1))
+                    Tab::new({ clone!(sel); sel.get() == 1 }, { clone!(sel); move || sel.set(1) })
                         .text(|ctx| Text::new("Tab B").build(ctx))
                         .icon(|ctx| {
                             Icon::new(IconSource::svg(
@@ -79,8 +75,7 @@ fn tab_row_demo(ctx: &mut ComposeCtx) {
                         .build(ctx);
 
                     // Tab 3: leading icon（icon 左 + 8dp + text 右，48dp 高）
-                    let s = sel_clone.clone();
-                    Tab::new(s.get() == 2, move || s.set(2))
+                    Tab::new({ clone!(sel); sel.get() == 2 }, { clone!(sel); move || sel.set(2) })
                         .leading_icon()
                         .icon(|ctx| {
                             Icon::new(IconSource::svg(
@@ -91,6 +86,7 @@ fn tab_row_demo(ctx: &mut ComposeCtx) {
                         })
                         .text(|ctx| Text::new("Tab Three").build(ctx))
                         .build(ctx);
+                }
                 });
                 if secondary.get() {
                     row = row.secondary();
@@ -118,21 +114,21 @@ fn tab_row_demo(ctx: &mut ComposeCtx) {
                     .build(ctx);
 
                 let s2 = sel2.clone();
-                TabRow::new(sel2.get(), move |ctx| {
-                    let s = s2.clone();
-                    Tab::new(s.get() == 0, move || s.set(0))
+                TabRow::new(s2.get(), {
+                    clone!(s2);
+                    move |ctx| {
+                    Tab::new({ clone!(s2); s2.get() == 0 }, { clone!(s2); move || s2.set(0) })
                         .text(|ctx| Text::new("One").build(ctx))
                         .build(ctx);
 
-                    let s = s2.clone();
-                    Tab::new(s.get() == 1, move || s.set(1))
+                    Tab::new({ clone!(s2); s2.get() == 1 }, { clone!(s2); move || s2.set(1) })
                         .text(|ctx| Text::new("Two").build(ctx))
                         .build(ctx);
 
-                    let s = s2.clone();
-                    Tab::new(s.get() == 2, move || s.set(2))
+                    Tab::new({ clone!(s2); s2.get() == 2 }, { clone!(s2); move || s2.set(2) })
                         .text(|ctx| Text::new("Three").build(ctx))
                         .build(ctx);
+                }
                 })
                 .secondary()
                 .build(ctx);
@@ -146,18 +142,18 @@ fn tab_row_demo(ctx: &mut ComposeCtx) {
                     .modifier(Modifier::new().padding(8.0))
                     .build(ctx);
 
-                let ss = scroll_sel.clone();
-                let st = scroll_state.clone();
-                ScrollableTabRow::new(scroll_sel.get(), move |ctx| {
+                ScrollableTabRow::new(scroll_sel.get(), {
+                    clone!(scroll_sel);
+                    move |ctx| {
                     for i in 0..12 {
                         let label = format!("Tab {}", i + 1);
-                        let s = ss.clone();
-                        Tab::new(s.get() == i, move || s.set(i))
+                        Tab::new({ clone!(scroll_sel); scroll_sel.get() == i }, { clone!(scroll_sel); move || scroll_sel.set(i) })
                             .text(move |ctx| Text::new(&label).build(ctx))
                             .build(ctx);
                     }
+                }
                 })
-                .scroll_state(st)
+                .scroll_state(scroll_state.clone())
                 .build(ctx);
 
                 Text::new(if rtl.get() { "→ 点击左侧 tab 观察自动滚动 →" } else { "← 点击右侧 tab 观察自动滚动 →" })
@@ -168,8 +164,6 @@ fn tab_row_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
     winia::run_app!(|ctx| {
         Window::new().size(500.0, 500.0).title("TabRow Demo").build(ctx, tab_row_demo);
     });

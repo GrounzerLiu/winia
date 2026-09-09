@@ -21,3 +21,4 @@ material-shapes = { path = "material-shapes", features = ["shape_util"] }
 parking_lot = "0.12"
 log = "0.4"
 thiserror = "2"
+letclone = "0.3.0"
