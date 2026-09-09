@@ -16,21 +16,27 @@
 //! `SharedBounds` keeps `supports_spring() == false` (Tween-exact) and spring
 //! flights go through scalar progress (Phase 2 wiring).
 
-// Phase 1 skeleton: the `pub(crate)` registry/flight items below gain their
-// composer-side readers in Phase 2 (`docs/shared-element-transition.md` §9)
-// and are exercised by unit tests only until then — dead-code lints stay
-// silenced file-wide. Phase 2 must delete this line.
+// Phase 1–2 skeleton gate: `register` (cross-composer matching) and the
+// Tier 1/2 vocabulary gain their readers in Phase 4
+// (`docs/shared-element-transition.md` §9) and are exercised by unit tests
+// only until then — dead-code lints stay silenced file-wide. Phase 4 must
+// delete this line.
 #![allow(dead_code)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
 
 use parking_lot::Mutex;
 
-use crate::animation::{AnimatableValue, AnimationSpec, KeyframesSpec, SpringSpec, TweenSpec};
+use crate::animation::{
+    push_animatable, AnimatableValue, AnimationSpec, KeyframesSpec, SpringSpec, TweenSpec,
+};
+use crate::core::composer::Composer;
 use crate::core::composer::ComposeCtx;
 use crate::core::composition_local::CompositionLocal;
-use crate::modifier::{Modifier, ModifierElement};
+use crate::core::state::State;
+use crate::layout::node::{scroll_offset_for_node, LayoutNode};
+use crate::modifier::{Modifier, ModifierElement, Shape};
 
 // ═══════════════════════════════════════════════════════════
 // SharedBounds — exact animatable rect
@@ -707,5 +713,795 @@ mod tests {
         let removed = reg.unregister_slot(100);
         assert_eq!(removed.len(), 1, "truncate hook recovers the disappearing side");
         assert!(reg.endpoints_for(7, "hero").is_empty());
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Phase 2: flight visuals (render-side data)
+// ═══════════════════════════════════════════════════════════
+
+/// Which end of the flight a node renders.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TransitionRole {
+    /// Leaving content: frozen detached node, fades 1→0 while morphing S→T.
+    Source,
+    /// Entering content: live in-tree node, fades 0→1 while morphing S→T.
+    Target,
+}
+
+/// Per-frame render instruction, rewritten every frame by the coordinator
+/// (Phase 2) from flight start/end + scalar progress. All fields are plain
+/// data — render only `peek`s, never subscribes (zero-recomposition rule).
+#[derive(Debug, Clone)]
+pub(crate) struct TransitionVisual {
+    pub start: SharedBounds,
+    pub end: SharedBounds,
+    /// Scalar progress snapshot (0→1, possibly overshooting under spring).
+    pub progress: f32,
+    pub role: TransitionRole,
+    /// Normalized corner radii [TL, TR, BR, BL] at both ends (see
+    /// [`shared_shape_radii`]). Every `Shape` variant normalizes to this
+    /// quad, so cross-kind morphs (pill→rect) stay continuous.
+    pub radius_from: [f32; 4],
+    pub radius_to: [f32; 4],
+    /// Clip to the lerped bounds during flight (Bounds+clip only; Element
+    /// content scales exactly into bounds — clipping would cut shadows).
+    pub clip: bool,
+}
+
+impl TransitionVisual {
+    pub(crate) fn lerped(&self) -> SharedBounds {
+        self.start.lerp(&self.end, self.progress)
+    }
+
+    pub(crate) fn alpha(&self) -> f32 {
+        match self.role {
+            TransitionRole::Source => 1.0 - self.progress,
+            TransitionRole::Target => self.progress,
+        }
+        .clamp(0.0, 1.0)
+    }
+
+    pub(crate) fn radii(&self) -> [f32; 4] {
+        let t = self.progress.clamp(0.0, 1.0);
+        [0, 1, 2, 3].map(|i| self.radius_from[i] + (self.radius_to[i] - self.radius_from[i]) * t)
+    }
+
+    /// Screen-frame clip rect — call BEFORE the flight canvas transform
+    /// (clip is captured in the pre-transform space, like the GL clip rule).
+    pub(crate) fn screen_rrect(&self) -> skia_safe::RRect {
+        let l = self.lerped();
+        let r = self.radii();
+        skia_safe::RRect::new_rect_radii(
+            skia_safe::Rect::new(l.x, l.y, l.x + l.width, l.y + l.height),
+            &rrect_vectors([(r[0], r[0]), (r[1], r[1]), (r[2], r[2]), (r[3], r[3])]),
+        )
+    }
+
+    /// Layout-space radii pairs for bg/border/clip-element overrides (drawn
+    /// UNDER the flight transform — screen radii pre-divided by axis scales).
+    pub(crate) fn radii_pairs(&self, node_w: f32, node_h: f32) -> [(f32, f32); 4] {
+        let l = self.lerped();
+        let sx = if node_w > 0.0 { l.width / node_w } else { 1.0 }.max(1e-6);
+        let sy = if node_h > 0.0 { l.height / node_h } else { 1.0 }.max(1e-6);
+        let r = self.radii();
+        [
+            (r[0] / sx, r[0] / sy),
+            (r[1] / sx, r[1] / sy),
+            (r[2] / sx, r[2] / sy),
+            (r[3] / sx, r[3] / sy),
+        ]
+    }
+}
+
+pub(crate) fn rrect_vectors(pairs: [(f32, f32); 4]) -> [skia_safe::Vector; 4] {
+    [
+        skia_safe::Vector::new(pairs[0].0, pairs[0].1),
+        skia_safe::Vector::new(pairs[1].0, pairs[1].1),
+        skia_safe::Vector::new(pairs[2].0, pairs[2].1),
+        skia_safe::Vector::new(pairs[3].0, pairs[3].1),
+    ]
+}
+
+/// Corner radii quad [TL, TR, BR, BL] resolved from the nearest
+/// Background/Border/Clip shape — same precedence as the render focus ring.
+/// Pill/Circle resolve against the given (flight-start) size. No shape at
+/// all → plain rect.
+pub(crate) fn shared_shape_radii(modifier: &Modifier, w: f32, h: f32) -> [f32; 4] {
+    let shape = modifier.elements().iter().rev().find_map(|el| match el {
+        ModifierElement::Background { shape, .. }
+        | ModifierElement::Border { shape, .. }
+        | ModifierElement::BorderDynamic { shape, .. }
+        | ModifierElement::Clip { shape } => Some(shape),
+        _ => None,
+    });
+    match shape {
+        None => [0.0; 4],
+        Some(Shape::Rectangle) => [0.0; 4],
+        Some(Shape::RoundedRect { corner_radius }) => [*corner_radius; 4],
+        Some(Shape::TopRoundedRect { radius }) => [*radius, *radius, 0.0, 0.0],
+        Some(Shape::Pill) | Some(Shape::Circle) => {
+            let m = w.min(h) / 2.0;
+            [m; 4]
+        }
+    }
+}
+
+/// Cloned marker payload for coordinator use (built at most once per flight
+/// end — the per-frame render path reads [`TransitionVisual`] instead).
+#[derive(Debug, Clone)]
+pub(crate) struct SharedMarker {
+    pub scope_id: u64,
+    pub key: String,
+    pub kind: SharedKind,
+    pub transform: BoundsTransform,
+}
+
+pub(crate) fn find_shared_marker(modifier: &Modifier) -> Option<SharedMarker> {
+    modifier.elements().iter().find_map(|el| match el {
+        ModifierElement::SharedTransition { scope_id, key, kind, transform, .. } => {
+            Some(SharedMarker {
+                scope_id: *scope_id,
+                key: key.clone(),
+                kind: kind.clone(),
+                transform: transform.clone(),
+            })
+        }
+        _ => None,
+    })
+}
+
+// ═══════════════════════════════════════════════════════════
+// Phase 2: Tier-0 coordinator (compose/layout/app-loop hooks)
+// ═══════════════════════════════════════════════════════════
+
+/// Live flight: pure machine + engine handles. Non-terminal flights are polled
+/// every frame post-layout; render reads plain f32 snapshots (never subscribes).
+#[derive(Debug)]
+pub(crate) struct ActiveFlight {
+    pub flight: Flight,
+    /// Scalar progress (0→1) driven by `push_animatable` with the flight spec.
+    pub progress: State<f32>,
+    pub spec: AnimationSpec,
+    /// Detached retained source arena index (frozen content).
+    pub source_idx: Option<usize>,
+    /// Exact start bounds (retained-frame upward walk — positions untouched
+    /// since layout; no lookahead needed).
+    pub start: SharedBounds,
+    pub radius_from: [f32; 4],
+    pub radius_to: [f32; 4],
+    pub clip: bool,
+}
+
+/// Exact last-frame absolute rect via upward parent walk. Valid only at
+/// compose-tail time (pre-layout): every cached position is still the old one.
+/// `id_to_idx` must cover the whole arena (reused ancestors keep their objects).
+fn abs_rect_upward(
+    nodes: &[LayoutNode],
+    id_to_idx: &HashMap<u64, usize>,
+    idx: usize,
+) -> SharedBounds {
+    let n = &nodes[idx];
+    let (w, h) = (n.measured_size.width, n.measured_size.height);
+    let (mut ax, mut ay) = (n.position.x, n.position.y);
+    let mut cur = idx;
+    // Ascent mirrors the descent in `node_abs_position` (app.rs): each level
+    // adds its position minus its own scroll offset. Keep the two in sync.
+    while let Some(pid) = nodes[cur].parent_id {
+        let Some(&pidx) = id_to_idx.get(&pid) else { break };
+        let p = &nodes[pidx];
+        let (dx, dy) = scroll_offset_for_node(p);
+        ax += p.position.x - dx;
+        ay += p.position.y - dy;
+        cur = pidx;
+    }
+    SharedBounds::new(ax, ay, w, h)
+}
+
+fn find_idx_by_slot(nodes: &[LayoutNode], root: usize, slot: u64) -> Option<usize> {
+    let mut stack = vec![root];
+    while let Some(idx) = stack.pop() {
+        if nodes[idx].slot_key == slot {
+            return Some(idx);
+        }
+        stack.extend(nodes[idx].children.iter().copied());
+    }
+    None
+}
+
+fn is_terminal(phase: FlightPhase) -> bool {
+    matches!(phase, FlightPhase::Finishing | FlightPhase::Cancelled)
+}
+
+impl Composer {
+    /// (scope, key) → slot for marked nodes in the CURRENT tree
+    /// (post-materialize). First registration wins on duplicates (user error).
+    pub(crate) fn shared_live_map(&self) -> HashMap<(u64, String), u64> {
+        let mut out = HashMap::new();
+        if let Some(root) = self.arena.root {
+            let mut stack = vec![root];
+            while let Some(idx) = stack.pop() {
+                let node = &self.arena.nodes[idx];
+                if let Some(m) = find_shared_marker(&node.modifier) {
+                    if out.insert((m.scope_id, m.key.clone()), node.slot_key).is_some() {
+                        crate::debug_log!("[shared] duplicate live endpoint scope={} key={}", m.scope_id, m.key);
+                    }
+                }
+                stack.extend(node.children.iter().copied());
+            }
+        }
+        out
+    }
+
+    /// Detached retained source roots (absolute coords, rendered after main tree).
+    pub(crate) fn transition_roots(&self) -> &[usize] {
+        &self.transition_layer
+    }
+
+    /// Compose-tail hook (MUST run after materialize, before the prev drain):
+    /// detect switches, cancel dead/retargeted flights, retain+detach sources.
+    pub(crate) fn retain_shared_sources(&mut self) {
+        let live = self.shared_live_map();
+        if live.is_empty() && self.prev_shared_endpoints.is_empty() && self.shared_flights.is_empty() {
+            return; // fast path: no shared content anywhere
+        }
+        // Cancel flights whose key left the live tree with no counterpart
+        // (screen torn down around a flight).
+        let live_keys: HashSet<(u64, String)> = live.keys().cloned().collect();
+        let dead: Vec<FlightId> = self
+            .shared_flights
+            .iter()
+            .filter(|(_, a)| {
+                !is_terminal(a.flight.phase)
+                    && !live_keys.contains(&(a.flight.scope_id, a.flight.key.clone()))
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for id in dead {
+            self.cancel_flight(id);
+        }
+        // Switches (fresh + retarget-lite).
+        for c in detect_switch(&self.prev_shared_endpoints, &live) {
+            // Retarget-lite: same key already flying → cancel old (freeing its
+            // retained node), restart from the current visual rect.
+            let mut start_override: Option<(SharedBounds, [f32; 4])> = None;
+            if let Some(id) = self
+                .shared_flights
+                .iter()
+                .find(|(_, a)| {
+                    !is_terminal(a.flight.phase)
+                        && a.flight.scope_id == c.scope_id
+                        && a.flight.key == c.key
+                })
+                .map(|(id, _)| *id)
+            {
+                if let Some(a) = self.shared_flights.get(&id) {
+                    let p = a.progress.peek().clamp(0.0, 1.0);
+                    let end = a.flight.end.unwrap_or(a.start);
+                    let s = a.start.lerp(&end, p);
+                    let (rf, rt) = (a.radius_from, a.radius_to);
+                    start_override = Some((s, [0, 1, 2, 3].map(|i| rf[i] + (rt[i] - rf[i]) * p)));
+                }
+                self.cancel_flight(id);
+            }
+            self.begin_flight(c, start_override);
+        }
+        self.prev_shared_endpoints = live;
+    }
+
+    /// Detach the source node (freeze) and open an AwaitingBounds flight.
+    /// `start_override`: retarget visual continuity; otherwise the exact
+    /// upward-walk bounds (no lookahead needed).
+    fn begin_flight(&mut self, c: SwitchCandidate, start_override: Option<(SharedBounds, [f32; 4])>) {
+        let Some(src_idx) = self.prev_node_by_key.remove(&c.old_slot) else {
+            // Node object repurposed by the new tree (same-key reuse) — nothing to fly.
+            return;
+        };
+        // Unlink from any still-referencing old parent (objects alive pre-drain;
+        // reused ancestors already dropped the ref via children.clear()).
+        for pidx in self.prev_node_by_key.values() {
+            self.arena.nodes[*pidx].children.retain(|&x| x != src_idx);
+        }
+        // Belt-and-braces: the drain below must never reclaim it.
+        self.reused_nodes.insert(src_idx);
+        let (start, radius_from) = match start_override {
+            Some(v) => v,
+            None => {
+                let id_to_idx: HashMap<u64, usize> =
+                    self.arena.nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
+                let b = abs_rect_upward(&self.arena.nodes, &id_to_idx, src_idx);
+                let r = {
+                    let n = &self.arena.nodes[src_idx];
+                    shared_shape_radii(&n.modifier, n.measured_size.width, n.measured_size.height)
+                };
+                (b, r)
+            }
+        };
+        // Detach: absolute position, rootless, transition-layer owned.
+        {
+            let n = &mut self.arena.nodes[src_idx];
+            n.position = crate::layout::node::Point::new(start.x, start.y);
+            n.parent_id = None;
+        }
+        self.transition_layer.push(src_idx);
+        let id = self.next_flight_id;
+        self.next_flight_id += 1;
+        let mut flight = Flight::new(id, c.scope_id, c.key.clone());
+        let acts = flight.on_event(FlightEvent::CounterpartAppeared {
+            source_slot: c.old_slot,
+            target_slot: c.new_slot,
+        });
+        debug_assert_eq!(
+            acts,
+            vec![FlightAction::CollectBounds { source_slot: c.old_slot, target_slot: c.new_slot }]
+        );
+        self.shared_flights.insert(
+            id,
+            ActiveFlight {
+                flight,
+                // Placeholder until StartFlight wires the real driven progress.
+                progress: State::new(0.0f32),
+                spec: BoundsTransform::default().spec,
+                source_idx: Some(src_idx),
+                start,
+                radius_from,
+                radius_to: radius_from,
+                clip: false,
+            },
+        );
+    }
+
+    /// Free a retained source subtree + drop its slot (fires on_remove —
+    /// removal semantic) + clear the target's visuals if still present.
+    fn cancel_flight(&mut self, id: FlightId) {
+        let Some(a) = self.shared_flights.remove(&id) else {
+            return;
+        };
+        if let (Some(slot), Some(idx)) = (a.flight.source_slot, a.source_idx) {
+            self.free_retained_source(idx, slot);
+        }
+        if let Some(slot) = a.flight.target_slot {
+            self.clear_transition_for_slot(slot);
+        }
+    }
+
+    fn free_retained_source(&mut self, idx: usize, slot: u64) {
+        // Index + slot double-guarded: arena indices recycle, so the index
+        // alone proves nothing.
+        // NOTE: no slot-tree surgery here (see `cancel_flight`): keys are
+        // positional identities resurrected on navigate-back; key-based
+        // removal murders the live successor. Stale slots self-clean via
+        // truncate/Enter-prune.
+        if self.arena.nodes.get(idx).is_some_and(|n| n.slot_key == slot) {
+            let mut visited = HashSet::new();
+            self.arena.free_node_skip(idx, &HashSet::new(), &mut visited);
+        }
+        self.transition_layer.retain(|&x| x != idx);
+    }
+
+    fn clear_transition_for_slot(&mut self, slot: u64) {
+        if let Some(root) = self.arena.root {
+            if let Some(idx) = find_idx_by_slot(&self.arena.nodes, root, slot) {
+                self.arena.nodes[idx].transition = None;
+            }
+        }
+    }
+
+    /// Post-layout hook (app loop, every frame): fill ends, start flights,
+    /// rewrite per-frame visual snapshots, reap completed flights. Render
+    /// reads plain f32 snapshots — never subscribes (zero-recomposition).
+    pub(crate) fn poll_shared_flights(&mut self) {
+        if self.shared_flights.is_empty() {
+            return;
+        }
+        // Snapshot ids: actuators mutate the map.
+        let ids: Vec<FlightId> = self.shared_flights.keys().copied().collect();
+        for id in ids {
+            self.poll_one_flight(id);
+        }
+    }
+
+    fn poll_one_flight(&mut self, id: FlightId) {
+        let phase = match self.shared_flights.get(&id) {
+            Some(a) => a.flight.phase,
+            None => return,
+        };
+        match phase {
+            FlightPhase::AwaitingBounds => {
+                // Resolve target in the CURRENT tree (layout rebuilt the map).
+                let target_slot = self.shared_flights.get(&id).and_then(|a| a.flight.target_slot);
+                let root = match self.arena.root {
+                    Some(r) => r,
+                    None => {
+                        self.cancel_flight(id);
+                        return;
+                    }
+                };
+                let tidx = match target_slot.and_then(|s| find_idx_by_slot(&self.arena.nodes, root, s)) {
+                    Some(i) => i,
+                    None => {
+                        self.cancel_flight(id);
+                        return;
+                    }
+                };
+                let tid = self.arena.nodes[tidx].id;
+                let (tx, ty) = crate::app::node_abs_position(&self.arena.nodes, root, tid);
+                let (tw, th) = {
+                    let n = &self.arena.nodes[tidx];
+                    (n.measured_size.width, n.measured_size.height)
+                };
+                let end = SharedBounds::new(tx, ty, tw, th);
+                let marker = find_shared_marker(&self.arena.nodes[tidx].modifier);
+                let (spec, clip) = match marker {
+                    Some(m) => {
+                        let clip = matches!(
+                            m.kind,
+                            SharedKind::Bounds { resize: ResizeMode::ScaleToBounds { clip: true }, .. }
+                        );
+                        (m.transform.spec.clone(), clip)
+                    }
+                    None => (BoundsTransform::default().spec, false),
+                };
+                let radius_to = {
+                    let n = &self.arena.nodes[tidx];
+                    shared_shape_radii(&n.modifier, tw, th)
+                };
+                let progress = State::new(0.0f32);
+                push_animatable(progress.clone(), 1.0, spec.clone());
+                let (start, acts) = {
+                    let a = self.shared_flights.get_mut(&id).expect("polled flight exists");
+                    a.spec = spec;
+                    a.progress = progress;
+                    a.radius_to = radius_to;
+                    a.clip = clip;
+                    let start = a.start;
+                    let acts = a.flight.on_event(FlightEvent::BoundsReady { start, end });
+                    (start, acts)
+                };
+                debug_assert!(matches!(acts.as_slice(), [FlightAction::StartFlight { .. }]));
+                let _ = start;
+                self.write_flight_visuals(id);
+            }
+            FlightPhase::Flying => {
+                let p = self.shared_flights.get(&id).map(|a| a.progress.peek()).unwrap_or(1.0);
+                if let Some(a) = self.shared_flights.get_mut(&id) {
+                    a.flight.progress = p;
+                }
+                self.write_flight_visuals(id);
+                if p >= 0.999 {
+                    let acts = self
+                        .shared_flights
+                        .get_mut(&id)
+                        .map(|a| a.flight.on_event(FlightEvent::ProgressDone))
+                        .unwrap_or_default();
+                    debug_assert_eq!(acts.len(), 2);
+                    // Interpret [ReleaseRetained, FinishFlight].
+                    let (src_slot, src_idx) = self
+                        .shared_flights
+                        .get(&id)
+                        .map(|a| (a.flight.source_slot, a.source_idx))
+                        .unwrap_or((None, None));
+                    if let (Some(slot), Some(idx)) = (src_slot, src_idx) {
+                        self.free_retained_source(idx, slot);
+                    }
+                    if let Some(slot) = self.shared_flights.get(&id).and_then(|a| a.flight.target_slot) {
+                        self.clear_transition_for_slot(slot);
+                    }
+                    self.shared_flights.remove(&id);
+                }
+            }
+            // Terminal-transient: the coordinator drops on dispatch; belt-and-braces.
+            FlightPhase::Finishing | FlightPhase::Cancelled | FlightPhase::Idle => {
+                self.shared_flights.remove(&id);
+            }
+        }
+    }
+
+    /// Rewrite both ends' render snapshots from current scalar progress.
+    fn write_flight_visuals(&mut self, id: FlightId) {
+        let snapshot = self.shared_flights.get(&id).map(|a| {
+            (
+                a.start,
+                a.flight.end.unwrap_or(a.start),
+                a.flight.progress,
+                a.radius_from,
+                a.radius_to,
+                a.clip,
+                a.flight.source_slot,
+                a.flight.target_slot,
+                a.source_idx,
+            )
+        });
+        let (start, end, p, rf, rt, clip, sslot, tslot, sidx) = match snapshot {
+            Some(v) => v,
+            None => return,
+        };
+        if let (Some(slot), Some(idx)) = (sslot, sidx) {
+            if self.arena.nodes.get(idx).is_some_and(|n| n.slot_key == slot) {
+                self.arena.nodes[idx].transition = Some(TransitionVisual {
+                    start,
+                    end,
+                    progress: p,
+                    role: TransitionRole::Source,
+                    radius_from: rf,
+                    radius_to: rt,
+                    clip,
+                });
+            }
+        }
+        if let Some(slot) = tslot {
+            if let Some(root) = self.arena.root {
+                if let Some(tidx) = find_idx_by_slot(&self.arena.nodes, root, slot) {
+                    self.arena.nodes[tidx].transition = Some(TransitionVisual {
+                        start,
+                        end,
+                        progress: p,
+                        role: TransitionRole::Target,
+                        radius_from: rf,
+                        radius_to: rt,
+                        clip,
+                    });
+                }
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Phase 2: Tier-0 integration tests (composer-driven flights)
+// ═══════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod tier0_tests {
+    use super::*;
+    use crate::core::composer::ComposeCtx;
+    use crate::core::state::State;
+    use crate::layout::constraints::Constraints;
+    use crate::modifier::Color;
+    use crate::ui::Column;
+
+    /// Plain box leaf with a shared-element marker (no text — keeps the
+    /// mechanics test headless-simple; paint movement is asserted via raster).
+    fn hero_leaf(ctx: &mut ComposeCtx, w: f32, h: f32, color: Color, scope: &SharedTransitionScope) {
+        let key = ctx.next_key();
+        ctx.start_leaf(
+            key,
+            Modifier::new()
+                .size(w, h)
+                .background(color, Shape::rounded(8.0))
+                .shared_element(scope.shared_content_state("hero"), BoundsTransform::default()),
+        );
+        ctx.end_node();
+    }
+
+    /// Layout spacer (occupies space, paints nothing).
+    fn gap_leaf(ctx: &mut ComposeCtx, w: f32, h: f32) {
+        let key = ctx.next_key();
+        ctx.start_leaf(key, Modifier::new().size(w, h));
+        ctx.end_node();
+    }
+
+    // NOTE: screens are #[composable] like production code. Plain closures
+    // would collapse in cfg(test) key fallback (path-hash only, no statement
+    // ids): the detail gap (Column-child-0) would collide with the list hero
+    // (same position) and reuse its node, aborting the flight. Macro'd
+    // screens carry distinct source hashes — mirroring production.
+    #[crate::composable]
+    fn list_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
+        hero_leaf(ctx, 120.0, 80.0, Color::RED, scope);
+    }
+
+    #[crate::composable]
+    fn detail_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
+        gap_leaf(ctx, 400.0, 100.0);
+        hero_leaf(ctx, 300.0, 160.0, Color::BLUE, scope);
+    }
+
+    /// One app-loop step: compose → layout → post-layout flight poll.
+    /// One app-loop step: compose → layout → post-layout flight poll.
+    fn frame(composer: &mut Composer, show: &State<bool>) {
+        let s = show.clone();
+        composer.compose(|ctx| {
+            SharedTransitionLayout::new().build(ctx, |ctx, scope| {
+                Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+                    if s.get() {
+                        list_screen(ctx, &scope);
+                    } else {
+                        detail_screen(ctx, &scope);
+                    }
+                });
+            });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        composer.poll_shared_flights();
+    }
+
+    fn advance(composer: &mut Composer, show: &State<bool>) {
+        crate::animation::update_animations();
+        std::thread::sleep(std::time::Duration::from_millis(16));
+        frame(composer, show);
+    }
+
+    /// Marked node indices in the CURRENT tree.
+    fn marked_indices(composer: &Composer) -> Vec<usize> {
+        let mut out = Vec::new();
+        if let Some(root) = composer.layout_root_idx() {
+            let nodes = composer.arena_nodes();
+            let mut stack = vec![root];
+            while let Some(idx) = stack.pop() {
+                if find_shared_marker(&nodes[idx].modifier).is_some() {
+                    out.push(idx);
+                }
+                stack.extend(nodes[idx].children.iter().copied());
+            }
+        }
+        out
+    }
+
+    /// Mirror the app loop: main tree, then detached transition roots.
+    fn render_heads(composer: &Composer) -> skia_safe::Surface {
+        let mut surface =
+            skia_safe::surfaces::raster_n32_premul((400, 400)).expect("raster surface");
+        surface.canvas().clear(skia_safe::Color::WHITE);
+        let nodes = composer.arena_nodes();
+        if let Some(root) = composer.layout_root_idx() {
+            crate::render::render(nodes, root, surface.canvas());
+            for &t in composer.transition_roots() {
+                crate::render::render(nodes, t, surface.canvas());
+            }
+        }
+        surface
+    }
+
+    fn pixel_rgb(surface: &mut skia_safe::Surface, x: i32, y: i32) -> (u8, u8, u8) {
+        let mut px = [0u8; 4];
+        let info = skia_safe::ImageInfo::new(
+            (1, 1),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        surface.read_pixels(&info, &mut px, 4, (x, y));
+        (px[0], px[1], px[2])
+    }
+
+    fn close_enough(c: (u8, u8, u8), e: (u8, u8, u8), tol: u8) -> bool {
+        c.0.abs_diff(e.0) <= tol && c.1.abs_diff(e.1) <= tol && c.2.abs_diff(e.2) <= tol
+    }
+
+    fn node_center(composer: &Composer, idx: usize) -> (i32, i32) {
+        let n = &composer.arena_nodes()[idx];
+        ((n.position.x + n.measured_size.width / 2.0) as i32, (n.position.y + n.measured_size.height / 2.0) as i32)
+    }
+
+    fn lock_serial() -> std::sync::MutexGuard<'static, ()> {
+        crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[test]
+    fn tier0_flight_completes_end_to_end() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+
+        frame(&mut composer, &show);
+        assert!(composer.shared_flights.is_empty(), "no flight before any switch");
+        assert!(composer.transition_layer.is_empty());
+
+        // Switch list → detail.
+        show.set(false);
+        frame(&mut composer, &show);
+        assert_eq!(composer.shared_flights.len(), 1, "switch opens exactly one flight");
+        let fid = *composer.shared_flights.keys().next().unwrap();
+        assert_eq!(
+            composer.shared_flights[&fid].flight.phase,
+            FlightPhase::Flying,
+            "target resolved in the same post-layout poll"
+        );
+        assert_eq!(composer.transition_layer.len(), 1, "source retained + detached");
+        // Exactly one live marked node (the target); it carries Target visuals.
+        let marked = marked_indices(&composer);
+        assert_eq!(marked.len(), 1, "one live endpoint (target)");
+        let tvis = composer.arena_nodes()[marked[0]].transition.clone();
+        assert!(matches!(tvis, Some(ref v) if v.role == TransitionRole::Target));
+        // Retained source carries Source visuals at progress ~0.
+        let src_idx = composer.transition_layer[0];
+        let svis = composer.arena_nodes()[src_idx].transition.clone();
+        assert!(matches!(svis, Some(ref v) if v.role == TransitionRole::Source && v.progress < 0.5));
+
+        // p=0 frame paint: source opaque at its start center.
+        let (sx, sy) = node_center(&composer, src_idx);
+        let mut surf0 = render_heads(&composer);
+        assert!(
+            close_enough(pixel_rgb(&mut surf0, sx, sy), (255, 0, 0), 30),
+            "p=0 must match the pre-switch frame (source opaque)"
+        );
+
+        // Advance into a visible mid state (poll — timing-immune).
+        let mut mid_seen = false;
+        for _ in 0..40 {
+            if composer.shared_flights.is_empty() {
+                break;
+            }
+            let p = composer.shared_flights.values().next().map(|a| a.progress.peek()).unwrap_or(1.0);
+            if p > 0.2 && p < 0.95 {
+                mid_seen = true;
+                break;
+            }
+            advance(&mut composer, &show);
+        }
+        assert!(mid_seen, "flight must pass through a visible mid state");
+        // Mid-flight paint moved/faded at the start center.
+        let mut surf_mid = render_heads(&composer);
+        let c = pixel_rgb(&mut surf_mid, sx, sy);
+        assert!(!close_enough(c, (255, 0, 0), 30), "mid-flight paint moved/faded, got {c:?}");
+
+        // Run to completion.
+        for _ in 0..200 {
+            if composer.shared_flights.is_empty() {
+                break;
+            }
+            advance(&mut composer, &show);
+        }
+        assert!(composer.shared_flights.is_empty(), "flight completes");
+        assert!(composer.transition_layer.is_empty(), "retained source freed");
+        for idx in marked_indices(&composer) {
+            assert!(
+                composer.arena_nodes()[idx].transition.is_none(),
+                "target visuals cleared — natural render resumes"
+            );
+        }
+        // End-state paint: detail hero center BLUE.
+        let marked = marked_indices(&composer);
+        assert_eq!(marked.len(), 1);
+        let (ex, ey) = node_center(&composer, marked[0]);
+        let mut surf_end = render_heads(&composer);
+        assert!(
+            close_enough(pixel_rgb(&mut surf_end, ex, ey), (0, 0, 255), 30),
+            "end state shows the detail hero"
+        );
+        crate::animation::clear_all_animations();
+    }
+
+    #[test]
+    fn tier0_retarget_restarts_from_visual() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+
+        frame(&mut composer, &show);
+        show.set(false);
+        frame(&mut composer, &show);
+        for _ in 0..3 {
+            advance(&mut composer, &show);
+        }
+        assert_eq!(composer.shared_flights.len(), 1, "mid-flight");
+        // Navigate back mid-flight: old flight cancelled, exactly one fresh
+        // flight opens, exactly one node retained (no leak, no double).
+        show.set(true);
+        frame(&mut composer, &show);
+        assert_eq!(composer.shared_flights.len(), 1, "retarget replaces, never duplicates");
+        assert_eq!(composer.transition_layer.len(), 1, "old retained freed, new retained");
+
+        for _ in 0..200 {
+            if composer.shared_flights.is_empty() {
+                break;
+            }
+            advance(&mut composer, &show);
+        }
+        assert!(composer.shared_flights.is_empty(), "retargeted flight completes");
+        assert!(composer.transition_layer.is_empty());
+        // Back on the list: RED hero at its natural spot.
+        let marked = marked_indices(&composer);
+        assert_eq!(marked.len(), 1);
+        let (ex, ey) = node_center(&composer, marked[0]);
+        let mut surf = render_heads(&composer);
+        assert!(
+            close_enough(pixel_rgb(&mut surf, ex, ey), (255, 0, 0), 30),
+            "navigated back to the list hero"
+        );
+        crate::animation::clear_all_animations();
     }
 }

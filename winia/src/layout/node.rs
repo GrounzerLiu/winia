@@ -200,6 +200,11 @@ pub struct LayoutNode {
     /// IME 组合下划线颜色（组合期捕获主题 primary——渲染期不能读
     /// CompositionLocal（Phase 4.2）；未设置时回退默认色）
     pub(crate) composing_color: std::cell::Cell<crate::modifier::Color>,
+    /// 共享元素转场视觉（Phase 2）：`Some` 时渲染期按起止矩形做 morph
+    /// （位移/缩放/淡入淡出/圆角），命中测试跳过。逐帧由协调器重写；
+    /// 转场结束即清 `None`。刻意不进 `CachedNode`——飞行态是瞬态，
+    /// 缓存命中必须从干净状态重建（协调器按 slot 回填）。
+    pub(crate) transition: Option<crate::ui::shared_transition::TransitionVisual>,
 }
 
 // ── CachedNode：LayoutNode 的可缓存子集，用于增量重组时恢复节点 ──
@@ -306,6 +311,7 @@ impl LayoutNode {
             composing_range: std::cell::RefCell::new(None),
             focus_color: std::cell::Cell::new(crate::modifier::Color::from_argb(204, 77, 153, 255)),
             composing_color: std::cell::Cell::new(crate::modifier::Color::TRANSPARENT),
+            transition: None,
         }
     }
 
@@ -359,6 +365,7 @@ impl Default for LayoutNode {
             composing_range: std::cell::RefCell::new(None),
             focus_color: std::cell::Cell::new(crate::modifier::Color::from_argb(204, 77, 153, 255)),
             composing_color: std::cell::Cell::new(crate::modifier::Color::TRANSPARENT),
+            transition: None,
         }
     }
 }
@@ -565,6 +572,13 @@ fn hit_test_recursive(
     // 命中必须后画的优先（z-order 语义）；此前正序导致上层兄弟
     // （如全屏图片上的矩形）永远命中底层兄弟（Image 铺满遮挡）
     for &c in node.children.iter().rev() {
+        // Shared-element flight (Phase 2 v1): transitioning endpoints take no
+        // input mid-flight (documented; visual-rect hit routing lands in
+        // Phase 3). Detached retained sources are unreachable from the root
+        // walk, so only live targets need the explicit skip.
+        if nodes[c].transition.is_some() {
+            continue;
+        }
         if hit_test_recursive(nodes, c, x, y, child_px, child_py, path) {
             return true;
         }

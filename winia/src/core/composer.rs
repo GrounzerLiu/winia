@@ -10,6 +10,7 @@
 //! - Key 管理: 全局唯一 key 计数器
 
 use crate::core::state::{ComposerSubscription, State, StateId, StateSignal};
+use crate::ui::shared_transition::{ActiveFlight, FlightId};
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{LayoutNode, MeasurePolicy, CachedNode};
 use crate::modifier::Modifier;
@@ -1665,6 +1666,14 @@ pub struct Composer {
     pub(crate) compose_dirty_count: usize,
     /// 重组总次数（vsync 研究——单次渲染内多次 compose 的观测）
     pub(crate) compose_count: u64,
+    /// Shared-element flights (Phase 2): active flights by id (Tier-0
+    /// coordinator lives in ui::shared_transition as `impl Composer`).
+    pub(crate) shared_flights: HashMap<FlightId, ActiveFlight>,
+    pub(crate) next_flight_id: u64,
+    /// Last frame's (scope, key) → slot map for switch detection.
+    pub(crate) prev_shared_endpoints: HashMap<(u64, String), u64>,
+    /// Detached retained source roots (absolute coords, rendered after main tree).
+    pub(crate) transition_layer: Vec<usize>,
 }
 
 impl Composer {
@@ -1705,6 +1714,10 @@ impl Composer {
             lifecycle: crate::ui::window::LifecycleState::default(),
             adaptive: crate::ui::adaptive::AdaptiveContext::new(),
             animation_state_ids: HashSet::new(),
+            shared_flights: HashMap::new(),
+            next_flight_id: 1,
+            prev_shared_endpoints: HashMap::new(),
+            transition_layer: Vec::new(),
             #[cfg(test)]
             compose_clean_count: 0,
             #[cfg(test)]
@@ -2293,6 +2306,9 @@ impl Composer {
 
         // 完整分离：组合完成后物化布局树（测试/调用方可直接 layout_root_idx）
         self.materialize();
+        // Shared-element flights (Phase 2): detect switches + retain/detach
+        // sources BEFORE the prev drain below frees them.
+        self.retain_shared_sources();
         // 物化后：注册 modifier 中引用的 State 依赖（scroll 等——组合期 arena 空）。
         // 必须在 take_deps() 之前执行——其中 State::get() 依赖 DEP_MODE=Compose
         //（begin_compose_deps 后未复位）；先复位则 scroll 依赖被静默丢弃（滚动不刷新）

@@ -319,26 +319,47 @@ fn render_modifier_element<'a>(
     rect: Rect,
     x: f32, y: f32, w: f32, h: f32,
     last_background: &mut Option<(crate::modifier::Color, crate::modifier::Shape)>,
+    morph_radii: Option<[(f32, f32); 4]>,
 ) -> Option<TextParams<'a>> {
     match el {
         ModifierElement::Background { color_fn, shape } => {
             let color = (color_fn)();
             *last_background = Some((color, shape.clone()));
-            draw_background(canvas, rect, &color, shape);
+            match morph_radii {
+                Some(r) => {
+                    let mut paint = skia_safe::Paint::default();
+                    paint.set_anti_alias(true);
+                    paint.set_color4f(Color4f::from(&color), None);
+                    canvas.draw_rrect(
+                        skia_safe::RRect::new_rect_radii(
+                            rect,
+                            &crate::ui::shared_transition::rrect_vectors(r),
+                        ),
+                        &paint,
+                    );
+                }
+                None => draw_background(canvas, rect, &color, shape),
+            }
             None
         }
         ModifierElement::Border { width, color, shape } => {
             // 边框色与形状均等于容器时合并为纯填充（M3 drawBox 语义）：
             // 半透明色在填充上再叠一层 stroke 会双重混合，边框带明显深于内部
             if *last_background != Some((*color, shape.clone())) {
-                draw_border(canvas, x, y, w, h, *width, color, shape);
+                match morph_radii {
+                    Some(r) => draw_border_morphed(canvas, x, y, w, h, *width, color, r),
+                    None => draw_border(canvas, x, y, w, h, *width, color, shape),
+                }
             }
             None
         }
         ModifierElement::BorderDynamic { width, color_fn, shape } => {
             let color = (color_fn)();
             if *last_background != Some((color, shape.clone())) {
-                draw_border(canvas, x, y, w, h, *width, &color, shape);
+                match morph_radii {
+                    Some(r) => draw_border_morphed(canvas, x, y, w, h, *width, &color, r),
+                    None => draw_border(canvas, x, y, w, h, *width, &color, shape),
+                }
             }
             None
         }
@@ -637,6 +658,47 @@ fn render_pass1(
 
     let rect = Rect::new(x, y, x + w, y + h);
 
+    // Shared-element flight visuals (Tier 0): outermost morph — pure
+    // render-phase (translate/scale/alpha/clip), zero recomposition.
+    // Backdrop blur snapshots AFTER the transform (whatever lies beneath the
+    // visual position); backdrop-blur heroes are a documented limitation.
+    // bg/border/clip-element morphs consume `tf_radii` below (radii pairs in
+    // layout space — pre-divided by the flight axis scales).
+    let (tf_saved, tf_layered, tf_radii): (bool, bool, Option<[(f32, f32); 4]>) =
+        if let Some(t) = node.transition.as_ref() {
+            let p = t.progress.clamp(0.0, 1.0);
+            let l = t.start.lerp(&t.end, p);
+            let alpha = t.alpha();
+            if alpha <= 0.001 || l.width <= 0.0 || l.height <= 0.0 {
+                return;
+            }
+            canvas.save();
+            if t.clip {
+                canvas.clip_rrect(t.screen_rrect(), None, Some(true));
+            }
+            canvas.translate((l.x - x, l.y - y));
+            let (sx, sy) = (
+                if w > 0.0 { l.width / w } else { 1.0 },
+                if h > 0.0 { l.height / h } else { 1.0 },
+            );
+            canvas.scale((sx, sy));
+            let mut layered = false;
+            if alpha < 0.999 {
+                let mut paint = skia_safe::Paint::default();
+                paint.set_alpha_f(alpha);
+                canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default().paint(&paint));
+                layered = true;
+            }
+            (true, layered, Some(t.radii_pairs(w, h)))
+        } else {
+            (false, false, None)
+        };
+    // Layout-space morph rect for the Clip-element arm (lands exactly on the
+    // lerped bounds under the flight transform, by linearity).
+    let tf_clip_rr: Option<skia_safe::RRect> = tf_radii.map(|r| {
+        skia_safe::RRect::new_rect_radii(rect, &crate::ui::shared_transition::rrect_vectors(r))
+    });
+
     // 背景模糊：在节点**自身任何内容（背景/文本/子节点）绘制之前**处理——
     // snapshot 只含"位于其下"的已画内容（祖先 + 前面的兄弟），对齐 Compose
     // backdropBlur 语义。参考 v1 item.rs 实现：物理像素 snapshot + CropRect
@@ -826,6 +888,7 @@ fn render_pass1(
                     w,
                     h,
                     &mut last_background,
+                    tf_radii,
                 ) {
                     text = Some((tp.content, tp.font_size, tp.color, tp.max_lines, tp.align, tp.overflow, tp.font_weight, tp.font_style, tp.soft_wrap, tp.letter_spacing, tp.line_height));
                 }
@@ -855,8 +918,14 @@ fn render_pass1(
     }
 
     // Clip：在绘制内容前设置裁剪区域
+    // （转场 morph 优先：布局空间圆角在变换下精确落到插值矩形上——与
+    // transiton-block 的屏幕空间 clip 等价，由线性保证；仅取其一时行为一致）
     let mut clipped = false;
-    if let Some(ref shape) = clip_shape {
+    if let Some(rr) = tf_clip_rr {
+        canvas.save();
+        canvas.clip_rrect(rr, None, Some(false));
+        clipped = true;
+    } else if let Some(ref shape) = clip_shape {
         canvas.save();
         match shape {
             crate::modifier::Shape::Rectangle => { canvas.clip_rect(rect, None, Some(false)); }
@@ -1093,6 +1162,14 @@ fn render_pass1(
     }
 
     if gl_saved {
+        canvas.restore();
+    }
+
+    // Flight morph restores (LIFO: the outermost block restores last).
+    if tf_layered {
+        canvas.restore();
+    }
+    if tf_saved {
         canvas.restore();
     }
 }
@@ -1530,6 +1607,31 @@ fn draw_text_field_aux_text(
     // ⚠ 必须 layout 后才能 paint（skia Paragraph 未布局时绘制为空）
     para.layout(max_width);
     para.paint(canvas, pos.0, pos.1);
+}
+
+/// Border with flight-morphed radii (layout-space pairs — drawn under the
+/// flight transform; inset logic mirrors `draw_border`).
+fn draw_border_morphed(
+    canvas: &Canvas,
+    x: f32, y: f32, w: f32, h: f32,
+    width: f32,
+    color: &crate::modifier::Color,
+    r: [(f32, f32); 4],
+) {
+    let mut paint = Paint::default();
+    paint.set_color4f(Color4f::from(color), None);
+    paint.set_style(skia_safe::paint::Style::Stroke);
+    paint.set_stroke_width(width);
+    paint.set_anti_alias(true);
+    let inset = width / 2.0;
+    let sr = Rect::new(x + inset, y + inset, x + w - inset, y + h - inset);
+    let v = |i: usize| {
+        skia_safe::Vector::new((r[i].0 - inset).max(0.0), (r[i].1 - inset).max(0.0))
+    };
+    canvas.draw_rrect(
+        skia_safe::RRect::new_rect_radii(sr, &[v(0), v(1), v(2), v(3)]),
+        &paint,
+    );
 }
 
 fn draw_border(canvas: &Canvas, x: f32, y: f32, w: f32, h: f32, width: f32, color: &crate::modifier::Color, shape: &crate::modifier::Shape) {

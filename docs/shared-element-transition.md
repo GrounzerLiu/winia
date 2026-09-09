@@ -196,6 +196,18 @@ velocity" gives interruption physical continuity for free. Concurrent pairs
 are key-isolated; z-order defaults to launch order with explicit `z_index`
 override.
 
+### Slot identity rule (root-caused 2026-09, Phase 2)
+
+**Never remove a slot from the slot tree by key.** Keys are positional
+identities: navigating back resurrects the same key on a NEW slot object, so
+key-based removal murders the live successor (observed: switch-back collapse
+— Column recovered with `kids=[]`, self-perpetuating through Skip recovery).
+Stale slots need no manual teardown: `truncate` (same-position replacement)
+and Enter-group `retain(visited)` pruning already remove them, and key
+resurrection IS state restoration — it must be preserved. Flight teardown
+frees only arena nodes (index + slot double-guarded) and clears visuals;
+slot hygiene is left to the stock mechanisms.
+
 ## 7. Final API (frozen)
 
 ```rust

@@ -472,6 +472,10 @@ impl PerWindow {
             }
         }
         self.composer.layout(Constraints::new(0.0, self.width, 0.0, self.height));
+        // Shared-element flights (Phase 2): fill ends, start flights, rewrite
+        // per-frame visual snapshots, reap completed flights. Render reads
+        // plain f32 snapshots — never subscribes (zero-recomposition rule).
+        self.composer.poll_shared_flights();
         // 焦点交互同步（Focus/Unfocus 发射——focus 标志已随重组刷新）
         self.sync_focus_interaction();
 
@@ -500,6 +504,11 @@ impl PerWindow {
                     canvas.save();
                     canvas.scale((sf, sf));
                     render::render(nodes, root_idx, canvas);
+                    // Shared-element flights (Tier 0): detached retained sources
+                    // render in absolute coords after the main tree (under overlays).
+                    for &tidx in self.composer.transition_roots() {
+                        render::render(nodes, tidx, canvas);
+                    }
                     canvas.restore();
                     // overlay 渲染在主树之上（逻辑坐标——translate 已含 scale）
                     render_overlays(&self.overlays, canvas, sf, (self.width, self.height));
@@ -3923,7 +3932,7 @@ fn handle_pointer_move(
 /// 减过滚动量的"滚动画布坐标"）。此前纯累加 layout position，滚动容器内
 /// 节点绝对 y 被滚动量污染 → 段落局部坐标（scene - abs）偏负 → skia 最近
 /// glyph 恒为第一行——多行 TextField 点击/拖拽只能定位到第一行。
-fn node_abs_position(nodes: &[LayoutNode], root: usize, id: u64) -> (f32, f32) {
+pub(crate) fn node_abs_position(nodes: &[LayoutNode], root: usize, id: u64) -> (f32, f32) {
     fn walk(nodes: &[LayoutNode], idx: usize, target: u64, abs_x: f32, abs_y: f32) -> Option<(f32, f32)> {
         let node = &nodes[idx];
         let nx = abs_x + node.position.x;
