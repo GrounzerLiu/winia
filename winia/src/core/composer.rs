@@ -10,7 +10,7 @@
 //! - Key 管理: 全局唯一 key 计数器
 
 use crate::core::state::{ComposerSubscription, State, StateId, StateSignal};
-use crate::ui::shared_transition::{ActiveFlight, FlightId, SharedBounds};
+use crate::ui::shared_transition::{ActiveFlight, FlightId, PendingSource, SharedBounds};
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{LayoutNode, MeasurePolicy, CachedNode};
 use crate::modifier::Modifier;
@@ -66,6 +66,8 @@ pub(crate) struct RuntimeFrameGuard {
 }
 
 static NEXT_RUNTIME_FRAME_ID: AtomicU64 = AtomicU64::new(1);
+/// Stable Composer identities (Phase 4 cross-composer flight matching).
+static NEXT_COMPOSER_ID: AtomicU64 = AtomicU64::new(1);
 
 thread_local! {
     /// Saved outer runtime contexts, kept in strict LIFO order.
@@ -1677,6 +1679,20 @@ pub struct Composer {
     /// Last-frame absolute bounds per live marked slot (Phase 3 same-screen
     /// size-morph detection).
     pub(crate) shared_last_bounds: HashMap<u64, SharedBounds>,
+    /// Stable per-Composer identity for cross-composer flight matching
+    /// (Phase 4 Tier1: main tree ↔ overlays share (scope, key) but never slots).
+    pub(crate) composer_id: u64,
+    /// Retired-detached sources awaiting cross-composer counterparts (Phase 4
+    /// Tier1). Drained by cross-poll same frame — freed when unmatched.
+    pub(crate) pending_cross: Vec<PendingSource>,
+    /// Fresh (scope, key) → slot appearances THIS frame (Phase 4 Tier1 cross
+    /// matching reads these). Overwritten every retain — peer prev maps absorb
+    /// appearances before cross-poll runs, so this is the only freshness source.
+    pub(crate) fresh_shared: Vec<((u64, String), u64)>,
+    /// This composer's canvas-frame origin in window-logical units (Phase 4):
+    /// main tree renders untranslated (0,0); overlays render translated by
+    /// their screen_pos. Flight bounds are canonicalized to window coords.
+    pub(crate) screen_origin: (f32, f32),
 }
 
 impl Composer {
@@ -1722,6 +1738,10 @@ impl Composer {
             prev_shared_endpoints: HashMap::new(),
             transition_layer: Vec::new(),
             shared_last_bounds: HashMap::new(),
+            composer_id: NEXT_COMPOSER_ID.fetch_add(1, Ordering::Relaxed),
+            pending_cross: Vec::new(),
+            fresh_shared: Vec::new(),
+            screen_origin: (0.0, 0.0),
             #[cfg(test)]
             compose_clean_count: 0,
             #[cfg(test)]

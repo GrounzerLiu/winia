@@ -487,6 +487,17 @@ impl PerWindow {
         layout_overlays(self);
         // Overlay focus interaction sync (needs overlay layout for slot resolve).
         self.sync_overlay_focus_interaction();
+        // Cross-composer Tier1 flights (Phase 4): match stashed sources with
+        // overlay counterparts, drive active Tier1, free unmatched stashes.
+        // Main composer first by convention (Tier1 flights live in its map).
+        {
+            let mut all: Vec<&mut crate::core::composer::Composer> = Vec::with_capacity(1 + self.overlays.len());
+            all.push(&mut self.composer);
+            for ov in self.overlays.iter_mut() {
+                all.push(&mut ov.composer);
+            }
+            crate::core::composer::Composer::poll_cross_flights(&mut all);
+        }
 
         let bg = self.theme.background;
 
@@ -499,10 +510,17 @@ impl PerWindow {
                     request_capture();
                 }
                 sw.draw(|surface| {
+                    // Cross-composer Tier1 (Phase 4): the ghost must fly ABOVE
+                    // modal scrims/dialogs (Compose zIndexInOverlay) — render
+                    // overlays first only while a cross flight is active.
+                    let cross_active = self.composer.has_cross_flights();
                     let canvas = surface.canvas();
                     canvas.clear(skia_safe::Color::from_argb(bg.a, bg.r, bg.g, bg.b));
                     canvas.save();
                     canvas.scale((sf, sf));
+                    if cross_active {
+                        render_overlays(&self.overlays, canvas, sf, (self.width, self.height));
+                    }
                     render::render(nodes, root_idx, canvas);
                     // Shared-element flights (Tier 0): detached retained sources
                     // render in absolute coords after the main tree (under overlays).
@@ -511,7 +529,9 @@ impl PerWindow {
                     }
                     canvas.restore();
                     // overlay 渲染在主树之上（逻辑坐标——translate 已含 scale）
-                    render_overlays(&self.overlays, canvas, sf, (self.width, self.height));
+                    if !cross_active {
+                        render_overlays(&self.overlays, canvas, sf, (self.width, self.height));
+                    }
                     after_draw(nodes, root_idx, surface);
                 });
                 // 截图读回在 flush 之后（skiwin draw 内）——保证真实呈现帧
@@ -2653,6 +2673,15 @@ fn layout_overlays(pw: &mut PerWindow) {
             }
         } else { pos };
         ov.screen_pos = (pos.0 + ov.offset.0, pos.1 + ov.offset.1);
+        // Flight coordinate frame (Phase 4 Tier1): overlay canvas renders
+        // translated by screen_pos — visuals store window-minus-origin.
+        ov.composer.screen_origin = ov.screen_pos;
+    }
+    // Shared-element Tier0 polls (mirrors the main-tree post-layout poll —
+    // overlay composers drive their own flights; Tier1 spans composers and
+    // is driven by cross-poll in the main flow below).
+    for ov in &mut pw.overlays {
+        ov.composer.poll_shared_flights();
     }
     // Overlay focus restore across recompositions (mirrors the main-tree
     // focused_slot_key restore in recompose_layout_render): arena node ids are
@@ -2759,6 +2788,11 @@ fn render_overlays(overlays: &[OverlayWindow], canvas: &skia_safe::Canvas, scale
         // 缺省会导致内容以 1x 绘制：可见位置/大小与命中测试（逻辑坐标）错位
         canvas.scale((scale, scale));
         render::render(nodes, r, canvas);
+        // Tier1 reverse flights (Phase 4): overlay-retained sources render in
+        // overlay-local coords after the overlay tree.
+        for &tidx in ov.composer.transition_roots() {
+            render::render(nodes, tidx, canvas);
+        }
         if anim_alpha < 1.0 {
             canvas.restore();
         }

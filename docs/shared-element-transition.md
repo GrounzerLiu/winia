@@ -47,13 +47,14 @@ half right. The final architecture decouples three concerns so Tier 0 ships
 first and later tiers plug in with zero rework of matching or engine code:
 
 ```
-Matching layer      Who flies with whom? scope+key registry, content-location agnostic
+Matching layer      Who flies with whom? (scope, key) live maps per composer +
+                    same-frame pending stash; no shared registry needed
     ↓
 Flight engine       How does it fly? progress-driven kinematics: rect path +
                     opacity + shape + choreography. Pure function of progress.
     ↓
-Content providers   What pixels fly? Tier0 live same-tree / Tier1 transplanted
-                    desc / Tier2 bitmap fallback. Auto-selected by coordinator.
+Content providers   What pixels fly? Tier0 live same-tree / Tier1 retain-in-owner
+                    cross-composer (main ↔ overlays, same canvas). Auto-selected.
 ```
 
 ### 3.1 No-lookahead bounds discovery (key insight)
@@ -73,21 +74,14 @@ engine changes required for bounds discovery.
 
 ### 3.2 Content providers
 
-```rust
-enum ContentRef {
-    LiveInTree { composer_id: u64, slot_key: u64 },  // Tier 0: live nodes, same composer
-    Transplanted { desc_root: DescNode },            // Tier 1: desc subtree moved to overlay composer
-    Snapshot { image: skia_safe::Image },            // Tier 2: last-resort bitmap (§3.5)
-}
-```
-
-- The **target end is always Tier 0**: it is normally composed, fully live
+- The **target end is always live**: it is normally composed, fully live
   (a ticking counter keeps ticking mid-flight — impossible for bitmaps).
-- The **source end**: same composer → Tier 0 (detach + freeze; freezing is
-  semantically fine for leaving content); another composer (other
-  window/overlay) → Tier 1 transplant (`DescNode` is plain data — `Modifier:
-  Clone`, `policy: Box<dyn MeasurePolicy>` movable, `direction` snapshotted —
-  and all Winia composers run on the event-loop thread, so the move is legal).
+- The **source end**: same composer → Tier 0 (detach + freeze in the owner's
+  arena and transition layer; freezing is semantically fine for leaving
+  content); another composer (main tree ↔ overlay, same window/canvas) →
+  Tier 1 (identical retain-in-owner; only rendering and flight ownership
+  differ — see §3.4). No `DescNode` moves: all Winia composers render vector
+  content from their own arenas, so cross-composer needs no transplant.
 - Auto-selected by the coordinator; never user-visible.
 
 ### 3.3 Tier 0 dual-morph (v1 implementation)
@@ -110,24 +104,46 @@ pixel-for-pixel and the target is invisible; at p=1 the source is invisible
 render-phase `GraphicsLayer` + `peek`: **zero recomposition, zero remeasure
 during flight** (assertable in tests: compose count unchanged across a flight).
 
-### 3.4 Tier 1 transplant (later, same engine)
+### 3.4 Tier 1 cross-composer (main tree ↔ overlays, shipped)
 
-Move the retained `DescNode` subtree into the ghost overlay's Composer and
-materialize there (Skip-recovery path). State reads re-subscribe inside the
-overlay composer, so transplanted content stays live. Requires a
-`transplanted_keys` reclamation exemption (mirrors `reused_nodes`) and a
-per-policy audit: policies holding composer-local resources beyond
-`Backchannel` state must not appear in shared subtrees (documented + debug
-assert; `ContentSizePolicy`-style stateful containers are banned there).
+Same window, same canvas, different `Composer` (main tree vs Popup/Dialog
+composers, each with independent slot trees but a shared event-loop thread).
+No transplant — the source retains in the OWNER arena exactly like Tier 0;
+only three things differ:
 
-### 3.5 Tier 2 bitmap (last resort, ~30 lines)
+- **Matching**: per-composer live maps can't see each other, so the owner
+  retain hook stashes unmatched disappearances (`pending_cross`) and a
+  window-level cross-poll (after ALL composers laid out, before render) pairs
+  them with freshly-appeared counterparts elsewhere (`fresh_shared`
+  per-composer appearance records — peer prev maps absorb appearances before
+  cross-poll runs, so frame records are the only freshness source). Stable
+  duplicates (same hero shown in two places) never pair: freshness +
+  Tier0-busy guards. Unmatched stashes free same-frame (invisible).
+- **Ownership**: Tier1 flights live in the MAIN composer map (main outlives
+  overlays); each flight records both endpoint composer ids. Owner polls skip
+  Tier1; cross-poll drives progress, both-end visuals, completion and cancel.
+  Overlay composers run the standard post-layout poll (Tier 0 inside dialogs
+  works unchanged).
+- **Frames**: flight bounds are canonical window coords; each writer subtracts
+  its composer's `screen_origin` (main renders untranslated; overlays render
+  translated by `screen_pos`). While a cross flight is active the main
+  transition layer renders AFTER overlays (ghost above modal scrims).
 
-Honest scope: Tier 2 is **not** "regret medicine for lost content" (lost
-content has no pixels to snapshot — retention guarantees that never happens).
-It covers exactly two cases: (a) source window being destroyed (correct action
-is flight Cancel, §6 — bitmap is not even attempted); (b) pathological huge
-subtrees where one rasterization beats per-frame 2× overdraw. Reuses
-`capture.rs`. Documented as last resort; no main-flow design depends on it.
+Scope identity crosses composers for free: overlay content inherits the scope
+handle through the existing CompositionLocal snapshot replay, so no shared
+registry object is needed anywhere. Hit routing works across composers for
+dialog-region clicks (overlay hit paths hit-test the live target with the
+same remap); ghost clicks outside the overlay window pass through (documented
+v1 limitation).
+
+### 3.5 Tier 2 bitmap (deliberately unbuilt)
+
+Honest scope: Tier 2 has no trigger. Retention guarantees content is never
+lost (nothing to snapshot after the fact), and closing endpoints cancel
+flights with atomic teardown (nothing to snapshot during teardown). The two
+hypothetical cases from the original design both resolve without bitmaps, so
+no Tier 2 code ships; the snapshot machinery (`capture.rs`) remains available
+if a trigger ever materializes.
 
 ## 4. Flight engine: unified kinematics
 
@@ -164,24 +180,25 @@ enum PlaceHolderSize { JumpCut, ContentSize, AnimatedSize }
 - `AnimatedSize`: container size follows progress; reuse the proven
   `ContentSizePolicy` pattern from `AnimatedContent` (layout-dep remeasure).
 
-## 6. State machine and registry
+## 6. State machine and matching
 
-Endpoints may live in different composers, so matching state is shared
-out-of-band:
+Matching runs on per-composer live maps (`(scope, key) → slot`, rebuilt from
+marker walks — no shared registry object exists; scope identity crosses
+composers through the scope handle itself, which overlays inherit via the
+CompositionLocal snapshot):
 
-```rust
-struct SharedScopeData {
-    scope_id: u64,
-    registry: Arc<Mutex<HashMap<(u64 /*scope*/, String /*key*/), Endpoint>>>,
-}
-```
-
-Created by `SharedTransitionLayout`, distributed via `CompositionLocal`.
-Compose-time registers identity (scope, key, slot); each composer's
-post-layout fills bounds (existing per-composer compose→layout→render order
-point in `app.rs`). The coordinator starts a flight on "same key, both bounds
-known, one end just appeared/disappeared". A generation counter guards
-against stale-frame resurrection (the classic one-frame-delay race).
+- **Tier 0** (same composer): `detect_switch(prev, live)` pairs a vanished
+  slot with an appeared slot under one key; the source detaches immediately.
+- **Tier 1** (main ↔ overlays): the owner retain hook stashes unmatched
+  disappearances; a window-level cross-poll (after ALL composers laid out,
+  before render) pairs them with freshly-appeared counterparts elsewhere
+  (`fresh_shared` per-composer appearance records — peer prev maps absorb
+  appearances before cross-poll runs, so frame records are the only freshness
+  source). Stable duplicates never pair (freshness + Tier0-busy guards).
+  Unmatched stashes free same-frame.
+- A per-frame generation discipline (frame-fresh records overwritten every
+  retain; baselines keyed by live slots) guards against stale-frame
+  resurrection (the classic one-frame-delay race).
 
 ```
 Idle → AwaitingBounds → Flying → Finishing → Idle
@@ -230,32 +247,37 @@ ResizeMode::{ScaleToBounds(clip), RemeasureToBounds}
   rect with a root-anchored path for bubbling fidelity). Visual misses pass
   through. Remap is single-application per level (re-entering a transitioning
   node would invert the transform twice).
-- **Same-screen bounds change** (no slot disappearance): explicit
-  `scope.animateBounds(key)`; old bounds already in `prev_nodes`. Single-sided
-  morph, no opacity change, same engine.
+- **Same-screen bounds change** (no slot disappearance): automatic size-delta
+  detection per marked slot (scroll-immune: position-only moves never trigger).
 - **Nested scopes**: `CompositionLocal` stack, innermost wins; `scope_id`
   disambiguates keys.
 - **Text**: Scale tier vector-scales through the CTM (Skia stays crisp);
   Remeasure tier rebuilds paragraphs per frame — quantize sizes to 1px to
-  protect the paragraph cache (v2 optimization).
-- **Scroll during flight**: source frozen (correct — it left layout); target
-  end re-resolved every frame (one absolute-position walk, negligible).
-- **Multiple pairs** (image + title): registry-isolated by key.
+  protect the paragraph cache (future optimization).
+- **Scroll during flight**: source frozen (correct — it left layout); flight
+  ends are fixed at open (v1 — per-frame end tracking is future work).
+- **Multiple pairs** (image + title): key-isolated in matching and flights.
 
 ## 9. Build phases
 
-1. Registry + state-machine skeleton + `Bounds` animatable + frozen API
-   (Tier 1/2 as `unimplemented!` stubs). Zero behavior change.
-2. Tier 0 dual-morph + JumpCut + single spring → hero list→detail demo.
-3. Retarget + same-screen `animateBounds` + hit routing.
-4. Tier 1 transplant (cross-window) → Tier 2 stub → ContentSize/AnimatedSize.
+1. ~~Skeleton + state machine + Bounds animatable + frozen API~~ → shipped as
+   live-map matching + pure state machine (P1).
+2. ~~Tier 0 dual-morph~~ → shipped with spring progress + hero demo (P2).
+3. ~~Retarget + same-screen morph + hit routing~~ → shipped, retarget-lite +
+   automatic size morph + visual-rect routing (P3).
+4. Tier 1 cross-composer (main ↔ overlays, retain-in-owner, NO transplant) →
+   shipped (P4). Tier 2 deliberately unbuilt (no trigger exists — §3.5).
+   ContentSize/AnimatedSize placeholders deferred (JumpCut only for now).
 5. Snapshot (start/mid/end frames) + interruption + concurrency tests.
 
 ## 10. Risks and open questions
 
-1. Transplant policy audit (§3.4 ban list) — needed only at phase 4.
+1. ~~Transplant policy audit~~ — moot (no transplant design anymore).
 2. Paragraph-cache quantization for Remeasure text (phase 4 perf item).
 3. `RemeasureToBounds` + scrollable shared content: remeasure inside a
    scroll viewport needs viewport-clamp review.
-4. Cross-window flights need both windows' composers driven in the same frame
-   (true in `app.rs` today — multi-window iterates all `PerWindow`s).
+4. Cross-WINDOW flights (separate OS windows) remain out of scope — they need
+   OS-level overlay, not framework composition.
+5. Mid-flight reversal of a Tier1 flight snaps instead of flying back
+   (staleness-cancel + no reverse flight — same-frame Tier0 takes over when
+   the reversal is same-composer; cross-composer reversal is the gap).
