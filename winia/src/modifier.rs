@@ -759,6 +759,16 @@ pub(crate) enum ModifierElement {
     NestedScroll { connection: Arc<dyn crate::nested_scroll::NestedScrollConnection> },
     /// 图形层变换（scale/alpha/rotation/translation——只触发重绘，不触发布局）
     GraphicsLayer { params_fn: Arc<dyn Fn() -> GraphicsLayerParams + Send + Sync> },
+    /// 共享元素转场标记（ui::shared_transition——纯数据标记：配对身份 + 变形规格；
+    /// 组合期注册端点（Phase 2），渲染期忽略（`_ =>` 兜底）。bounds 不进
+    /// modifier——飞行是 render-phase 行为，bounds 变化永不强制 Enter）
+    SharedTransition {
+        scope_id: u64,
+        key: String,
+        kind: crate::ui::shared_transition::SharedKind,
+        transform: crate::ui::shared_transition::BoundsTransform,
+        path: crate::ui::shared_transition::PathMotion,
+    },
 }
 
 // ── Modifier ──
@@ -2345,6 +2355,14 @@ Self::DrawIcon { .. } => f.write_str("DrawIcon"),
             Self::BackdropBlur { radius } => f.debug_struct("BackdropBlur").field("radius", radius).finish(),
             Self::TextFieldVisual { variant, .. } => f.debug_struct("TextFieldVisual").field("variant", variant).finish(),
             Self::TextFieldOffsetMapping { .. } => f.write_str("TextFieldOffsetMapping"),
+            Self::SharedTransition { scope_id, key, kind, transform, path } => f
+                .debug_struct("SharedTransition")
+                .field("scope", scope_id)
+                .field("key", key)
+                .field("kind", kind)
+                .field("transform", transform)
+                .field("path", path)
+                .finish(),
         }
     }
 }
@@ -3042,6 +3060,12 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         }
         (TestTag { tag: at }, TestTag { tag: bt }) => at == bt,
         (LayoutDirection(ad), LayoutDirection(bd)) => ad == bd,
+        // 共享元素标记：同 scope + 同 key + 同 kind 才可 Skip（bounds/transform
+        // 变化走 flight 进度，不强制 Enter——见 ui::shared_transition）
+        (
+            SharedTransition { scope_id: a_id, key: a_key, kind: a_kind, .. },
+            SharedTransition { scope_id: b_id, key: b_key, kind: b_kind, .. },
+        ) => a_id == b_id && a_key == b_key && a_kind == b_kind,
         (Shadow { params: ap, shape: as_, clip: ac }, Shadow { params: bp, shape: bs, clip: bc }) => {
             ap == bp && as_ == bs && ac == bc
         }
