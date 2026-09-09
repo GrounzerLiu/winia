@@ -727,6 +727,9 @@ pub(crate) enum TransitionRole {
     Source,
     /// Entering content: live in-tree node, fades 0→1 while morphing S→T.
     Target,
+    /// Same-screen size morph (Phase 3 `animateBounds`): live in-tree node,
+    /// opacity untouched, rect morphs old→new.
+    Morph,
 }
 
 /// Per-frame render instruction, rewritten every frame by the coordinator
@@ -747,6 +750,10 @@ pub(crate) struct TransitionVisual {
     /// Clip to the lerped bounds during flight (Bounds+clip only; Element
     /// content scales exactly into bounds — clipping would cut shadows).
     pub clip: bool,
+    /// Hit-routing link (Phase 3): source visuals point at the target slot so
+    /// clicks on the flying ghost descend into the live target subtree.
+    /// Targets and morphs carry `None`.
+    pub link_slot: Option<u64>,
 }
 
 impl TransitionVisual {
@@ -758,6 +765,8 @@ impl TransitionVisual {
         match self.role {
             TransitionRole::Source => 1.0 - self.progress,
             TransitionRole::Target => self.progress,
+            // Same-screen morph never touches opacity.
+            TransitionRole::Morph => 1.0,
         }
         .clamp(0.0, 1.0)
     }
@@ -776,6 +785,33 @@ impl TransitionVisual {
             skia_safe::Rect::new(l.x, l.y, l.x + l.width, l.y + l.height),
             &rrect_vectors([(r[0], r[0]), (r[1], r[1]), (r[2], r[2]), (r[3], r[3])]),
         )
+    }
+
+    /// Hit-test remap (Phase 3): test the lerped visual rect; on hit, return
+    /// the point remapped into the node's layout space for child descent
+    /// (children keep layout positions — the flight transform is inverted
+    /// here). `None` = visual miss → pass through (v1 skip behavior).
+    /// `(nx, ny)` is the node's layout-space origin, `(w, h)` its layout size.
+    pub(crate) fn remap_hit(
+        &self,
+        x: f32,
+        y: f32,
+        nx: f32,
+        ny: f32,
+        w: f32,
+        h: f32,
+    ) -> Option<(f32, f32)> {
+        let l = self.lerped();
+        if x < l.x || x > l.x + l.width || y < l.y || y > l.y + l.height {
+            return None;
+        }
+        let sx = if w > 0.0 { l.width / w } else { 1.0 }.max(1e-6);
+        let sy = if h > 0.0 { l.height / h } else { 1.0 }.max(1e-6);
+        // Clamp into layout bounds (float-safe: a visual hit must route
+        // somewhere, never vanish at the edge).
+        let lx = (nx + (x - l.x) / sx).clamp(nx.min(nx + w), nx.max(nx + w));
+        let ly = (ny + (y - l.y) / sy).clamp(ny.min(ny + h), ny.max(ny + h));
+        Some((lx, ly))
     }
 
     /// Layout-space radii pairs for bg/border/clip-element overrides (drawn
@@ -876,7 +912,9 @@ pub(crate) struct ActiveFlight {
 /// Exact last-frame absolute rect via upward parent walk. Valid only at
 /// compose-tail time (pre-layout): every cached position is still the old one.
 /// `id_to_idx` must cover the whole arena (reused ancestors keep their objects).
-fn abs_rect_upward(
+/// Shared with hit-routing (node.rs) — keep the math identical to
+/// `node_abs_position` (app.rs descent).
+pub(crate) fn abs_rect_upward(
     nodes: &[LayoutNode],
     id_to_idx: &HashMap<u64, usize>,
     idx: usize,
@@ -898,7 +936,7 @@ fn abs_rect_upward(
     SharedBounds::new(ax, ay, w, h)
 }
 
-fn find_idx_by_slot(nodes: &[LayoutNode], root: usize, slot: u64) -> Option<usize> {
+pub(crate) fn find_idx_by_slot(nodes: &[LayoutNode], root: usize, slot: u64) -> Option<usize> {
     let mut stack = vec![root];
     while let Some(idx) = stack.pop() {
         if nodes[idx].slot_key == slot {
@@ -1090,15 +1128,22 @@ impl Composer {
     /// Post-layout hook (app loop, every frame): fill ends, start flights,
     /// rewrite per-frame visual snapshots, reap completed flights. Render
     /// reads plain f32 snapshots — never subscribes (zero-recomposition).
+    /// Post-layout hook (app loop, every frame): fill ends, start flights,
+    /// rewrite per-frame visual snapshots, reap completed flights, detect
+    /// same-screen size morphs. Render reads plain f32 snapshots — never
+    /// subscribes (zero-recomposition).
     pub(crate) fn poll_shared_flights(&mut self) {
-        if self.shared_flights.is_empty() {
-            return;
+        // Live marker map doubles for flight polling and morph detection —
+        // one arena walk per frame.
+        let live = self.shared_live_map();
+        if !self.shared_flights.is_empty() {
+            // Snapshot ids: actuators mutate the map.
+            let ids: Vec<FlightId> = self.shared_flights.keys().copied().collect();
+            for id in ids {
+                self.poll_one_flight(id);
+            }
         }
-        // Snapshot ids: actuators mutate the map.
-        let ids: Vec<FlightId> = self.shared_flights.keys().copied().collect();
-        for id in ids {
-            self.poll_one_flight(id);
-        }
+        self.poll_layout_morphs(&live);
     }
 
     fn poll_one_flight(&mut self, id: FlightId) {
@@ -1226,6 +1271,8 @@ impl Composer {
                     radius_from: rf,
                     radius_to: rt,
                     clip,
+                    // Clicking the ghost routes into the live target (Phase 3).
+                    link_slot: tslot,
                 });
             }
         }
@@ -1236,11 +1283,193 @@ impl Composer {
                         start,
                         end,
                         progress: p,
-                        role: TransitionRole::Target,
+                        role: if sslot == tslot {
+                            // Same-screen size morph: opacity untouched.
+                            TransitionRole::Morph
+                        } else {
+                            TransitionRole::Target
+                        },
                         radius_from: rf,
                         radius_to: rt,
                         clip,
+                        link_slot: None,
                     });
+                }
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Phase 3: same-screen size morph (animateBounds)
+// ═══════════════════════════════════════════════════════════
+
+/// Size-delta threshold for morph detection (layout pixels). Position-only
+/// moves (scroll, sibling shifts) never trigger — scroll immunity by
+/// construction, since scrolling never changes measured sizes.
+pub(crate) const MORPH_EPS: f32 = 0.5;
+
+fn size_delta(a: &SharedBounds, b: &SharedBounds) -> f32 {
+    (a.width - b.width).abs().max((a.height - b.height).abs())
+}
+
+impl Composer {
+    /// Active non-terminal flight for (scope, key), if any.
+    fn flight_for_key(&self, scope_id: u64, key: &str) -> Option<FlightId> {
+        self.shared_flights
+            .iter()
+            .find(|(_, a)| {
+                !is_terminal(a.flight.phase) && a.flight.scope_id == scope_id && a.flight.key == key
+            })
+            .map(|(id, _)| *id)
+    }
+
+    /// Open a same-screen morph flight (no detach — the node stays live, so
+    /// `source_idx` stays `None` and completion only clears visuals). The pure
+    /// machine runs CounterpartAppeared + BoundsReady back-to-back with both
+    /// slots identical; render picks [`TransitionRole::Morph`] from that.
+    /// `radius_from_override`: seamless reopen continuity (else resolved from
+    /// the modifier at the start size).
+    fn begin_morph(
+        &mut self,
+        scope_id: u64,
+        key: String,
+        slot: u64,
+        start: SharedBounds,
+        end: SharedBounds,
+        radius_from_override: Option<[f32; 4]>,
+    ) {
+        let root = match self.arena.root {
+            Some(r) => r,
+            None => return,
+        };
+        let tidx = match find_idx_by_slot(&self.arena.nodes, root, slot) {
+            Some(i) => i,
+            None => return,
+        };
+        let marker = find_shared_marker(&self.arena.nodes[tidx].modifier);
+        let (spec, clip) = match marker {
+            Some(m) => {
+                let clip = matches!(
+                    m.kind,
+                    SharedKind::Bounds { resize: ResizeMode::ScaleToBounds { clip: true }, .. }
+                );
+                (m.transform.spec.clone(), clip)
+            }
+            None => (BoundsTransform::default().spec, false),
+        };
+        let (tw, th, modifier) = {
+            let n = &self.arena.nodes[tidx];
+            (n.measured_size.width, n.measured_size.height, n.modifier.clone())
+        };
+        let radius_to = shared_shape_radii(&modifier, tw, th);
+        let radius_from =
+            radius_from_override.unwrap_or_else(|| shared_shape_radii(&modifier, start.width, start.height));
+        let progress = State::new(0.0f32);
+        push_animatable(progress.clone(), 1.0, spec.clone());
+        let id = self.next_flight_id;
+        self.next_flight_id += 1;
+        let mut flight = Flight::new(id, scope_id, key);
+        let acts = flight.on_event(FlightEvent::CounterpartAppeared { source_slot: slot, target_slot: slot });
+        debug_assert_eq!(
+            acts,
+            vec![FlightAction::CollectBounds { source_slot: slot, target_slot: slot }]
+        );
+        let acts = flight.on_event(FlightEvent::BoundsReady { start, end });
+        debug_assert!(matches!(acts.as_slice(), [FlightAction::StartFlight { .. }]));
+        self.shared_flights.insert(
+            id,
+            ActiveFlight {
+                flight,
+                progress,
+                spec,
+                source_idx: None,
+                start,
+                radius_from,
+                radius_to,
+                clip,
+            },
+        );
+        self.write_flight_visuals(id);
+    }
+
+    /// Same-screen morph detection (post-layout, every frame): live marked
+    /// slots whose SIZE changed beyond epsilon open (or seamlessly reopen) a
+    /// morph flight. Baselines refresh every frame, so settled frames stay
+    /// quiet; render-phase morphs never feed back into layout (no loops).
+    fn poll_layout_morphs(&mut self, live: &HashMap<(u64, String), u64>) {
+        let Some(root) = self.arena.root else {
+            self.shared_last_bounds.clear();
+            return;
+        };
+        enum Pending {
+            Fresh { scope_id: u64, key: String, slot: u64, start: SharedBounds, end: SharedBounds },
+            Reopen { id: FlightId, start: SharedBounds, radii: [f32; 4], end: SharedBounds },
+        }
+        let mut pending: Vec<Pending> = Vec::new();
+        for (k, slot) in live {
+            let Some(idx) = find_idx_by_slot(&self.arena.nodes, root, *slot) else {
+                continue;
+            };
+            let nid = self.arena.nodes[idx].id;
+            let (ax, ay) = crate::app::node_abs_position(&self.arena.nodes, root, nid);
+            let (w, h) = {
+                let n = &self.arena.nodes[idx];
+                (n.measured_size.width, n.measured_size.height)
+            };
+            let cur = SharedBounds::new(ax, ay, w, h);
+            if let Some(prev) = self.shared_last_bounds.get(slot) {
+                if size_delta(prev, &cur) > MORPH_EPS {
+                    match self.flight_for_key(k.0, &k.1) {
+                        Some(fid) => {
+                            // Active flight: only morphs reopen (switch flights
+                            // own their ends — documented v1).
+                            let morph = self.shared_flights.get(&fid).is_some_and(|a| {
+                                a.source_idx.is_none() && a.flight.source_slot == a.flight.target_slot
+                            });
+                            if morph {
+                                let a = &self.shared_flights[&fid];
+                                let p = a.progress.peek().clamp(0.0, 1.0);
+                                let end_prev = a.flight.end.unwrap_or(a.start);
+                                let s = a.start.lerp(&end_prev, p);
+                                let (rf, rt) = (a.radius_from, a.radius_to);
+                                pending.push(Pending::Reopen {
+                                    id: fid,
+                                    start: s,
+                                    radii: [0, 1, 2, 3].map(|i| rf[i] + (rt[i] - rf[i]) * p),
+                                    end: cur,
+                                });
+                            }
+                        }
+                        None => pending.push(Pending::Fresh {
+                            scope_id: k.0,
+                            key: k.1.clone(),
+                            slot: *slot,
+                            start: *prev,
+                            end: cur,
+                        }),
+                    }
+                }
+            }
+            self.shared_last_bounds.insert(*slot, cur);
+        }
+        // Drop baselines for vanished slots (bounded memory).
+        let live_slots: HashSet<u64> = live.values().copied().collect();
+        self.shared_last_bounds.retain(|slot, _| live_slots.contains(slot));
+        for p in pending {
+            match p {
+                Pending::Fresh { scope_id, key, slot, start, end } => {
+                    self.begin_morph(scope_id, key, slot, start, end, None);
+                }
+                Pending::Reopen { id, start, radii, end } => {
+                    let meta = self
+                        .shared_flights
+                        .get(&id)
+                        .map(|a| (a.flight.scope_id, a.flight.key.clone(), a.flight.target_slot));
+                    self.cancel_flight(id);
+                    if let Some((scope_id, key, Some(slot))) = meta.map(|(s, k, t)| (s, k, t)) {
+                        self.begin_morph(scope_id, key, slot, start, end, Some(radii));
+                    }
                 }
             }
         }
@@ -1502,6 +1731,286 @@ mod tier0_tests {
             close_enough(pixel_rgb(&mut surf, ex, ey), (255, 0, 0), 30),
             "navigated back to the list hero"
         );
+        crate::animation::clear_all_animations();
+    }
+
+    // ── Phase 3 tests ──
+
+    use crate::layout::node::{hit_test, hit_test_with_flights};
+
+    /// Marked box with layout-driven width (registers a LAYOUT dep only —
+    /// size changes remeasure without recomposition, mirroring the app loop).
+    fn morph_leaf(ctx: &mut ComposeCtx, w: &State<f32>, scope: &SharedTransitionScope) {
+        let key = ctx.next_key();
+        ctx.start_leaf(
+            key,
+            Modifier::new()
+                .size(w, 80.0)
+                .background(Color::GREEN, Shape::Rectangle)
+                .shared_element(scope.shared_content_state("morph"), BoundsTransform::default()),
+        );
+        ctx.end_node();
+    }
+
+    #[crate::composable]
+    fn morph_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope, w: &State<f32>) {
+        morph_leaf(ctx, w, scope);
+    }
+
+    fn morph_compose(composer: &mut Composer, w: &State<f32>) {
+        let ww = w.clone();
+        composer.compose(|ctx| {
+            SharedTransitionLayout::new().build(ctx, |ctx, scope| {
+                Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+                    morph_screen(ctx, &scope, &ww);
+                });
+            });
+        });
+    }
+
+    /// Layout-only advance (no compose — mirrors the app loop when no compose
+    /// deps fire; proves morphs need zero recomposition).
+    fn advance_layout_only(composer: &mut Composer) {
+        crate::animation::update_animations();
+        std::thread::sleep(std::time::Duration::from_millis(16));
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        composer.poll_shared_flights();
+    }
+
+    #[test]
+    fn morph_size_change_flies_without_slot_churn() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let w = State::new(120.0f32);
+
+        morph_compose(&mut composer, &w);
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        composer.poll_shared_flights();
+        assert!(composer.shared_flights.is_empty(), "steady size opens nothing");
+        let marked = marked_indices(&composer);
+        assert_eq!(marked.len(), 1);
+        let slot = composer.arena_nodes()[marked[0]].slot_key;
+
+        // Layout-only size change (no compose call at all).
+        w.set(300.0);
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        composer.poll_shared_flights();
+        assert_eq!(composer.shared_flights.len(), 1, "size delta opens a morph flight");
+        let fid = *composer.shared_flights.keys().next().unwrap();
+        {
+            let a = &composer.shared_flights[&fid];
+            assert!(a.source_idx.is_none(), "morph detaches nothing");
+            assert_eq!((a.flight.source_slot, a.flight.target_slot), (Some(slot), Some(slot)));
+            assert_eq!(a.flight.phase, FlightPhase::Flying);
+        }
+        // Same slot, Morph role, opacity untouched.
+        let marked = marked_indices(&composer);
+        assert_eq!(marked.len(), 1);
+        assert_eq!(composer.arena_nodes()[marked[0]].slot_key, slot, "no slot churn");
+        let vis = composer.arena_nodes()[marked[0]].transition.clone().expect("morph visuals");
+        assert_eq!(vis.role, TransitionRole::Morph);
+        assert_eq!(vis.alpha(), 1.0);
+
+        // Run to completion with layout-only advances (zero compose calls).
+        for _ in 0..200 {
+            if composer.shared_flights.is_empty() {
+                break;
+            }
+            advance_layout_only(&mut composer);
+        }
+        assert!(composer.shared_flights.is_empty(), "morph completes");
+        for idx in marked_indices(&composer) {
+            assert!(composer.arena_nodes()[idx].transition.is_none(), "visuals cleared");
+        }
+        // End paint: 300-wide GREEN covers x=290.
+        let mut surf = render_heads(&composer);
+        assert!(
+            close_enough(pixel_rgb(&mut surf, 290, 40), (0, 255, 0), 30),
+            "grown box paints at the new size"
+        );
+        crate::animation::clear_all_animations();
+    }
+
+    #[test]
+    fn remap_hit_identity_endpoints_miss_outside() {
+        let vis = TransitionVisual {
+            start: SharedBounds::new(0.0, 0.0, 100.0, 50.0),
+            end: SharedBounds::new(200.0, 0.0, 100.0, 50.0),
+            progress: 0.0,
+            role: TransitionRole::Target,
+            radius_from: [0.0; 4],
+            radius_to: [0.0; 4],
+            clip: false,
+            link_slot: None,
+        };
+        assert_eq!(
+            vis.remap_hit(10.0, 10.0, 0.0, 0.0, 100.0, 50.0),
+            Some((10.0, 10.0)),
+            "p=0 remaps identically"
+        );
+        assert_eq!(
+            vis.remap_hit(500.0, 500.0, 0.0, 0.0, 100.0, 50.0),
+            None,
+            "visual miss passes through"
+        );
+        let mut done = vis.clone();
+        done.progress = 1.0;
+        assert_eq!(
+            done.remap_hit(210.0, 10.0, 0.0, 0.0, 100.0, 50.0),
+            Some((10.0, 10.0)),
+            "p=1 maps the end rect back into layout space"
+        );
+    }
+
+    #[test]
+    fn hit_routing_reaches_target_mid_flight() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+
+        frame(&mut composer, &show);
+        show.set(false);
+        frame(&mut composer, &show);
+        advance(&mut composer, &show);
+        advance(&mut composer, &show);
+        assert_eq!(composer.shared_flights.len(), 1, "mid-flight");
+
+        // Click inside the lerped ghost but outside the target natural rect
+        // (early flight: ghost ≈ start (0,0,120,80), target at (0,100,…)).
+        let nodes = composer.arena_nodes();
+        let root = composer.layout_root_idx().unwrap();
+        let routed = hit_test_with_flights(nodes, root, &composer.transition_roots(), 60.0, 40.0);
+        let plain = hit_test(nodes, root, 60.0, 40.0);
+        // Target hero index for comparison.
+        let target = marked_indices(&composer);
+        assert_eq!(target.len(), 1);
+        let target_idx = target[0];
+        assert_eq!(
+            routed.last().copied(),
+            Some(target_idx),
+            "ghost/target-visual click routes into the live target subtree"
+        );
+        assert_ne!(
+            plain.last().copied(),
+            Some(target_idx),
+            "legacy hit test does not route (documents the behavior delta)"
+        );
+        crate::animation::clear_all_animations();
+    }
+
+    #[test]
+    fn tier0_double_retarget_settles() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+
+        frame(&mut composer, &show);
+        show.set(false);
+        frame(&mut composer, &show);
+        for _ in 0..2 {
+            advance(&mut composer, &show);
+        }
+        show.set(true);
+        frame(&mut composer, &show);
+        for _ in 0..2 {
+            advance(&mut composer, &show);
+        }
+        show.set(false);
+        frame(&mut composer, &show);
+        assert_eq!(composer.shared_flights.len(), 1, "exactly one flight after double retarget");
+        assert!(composer.transition_layer.len() <= 1, "never more than one retained node");
+
+        for _ in 0..300 {
+            if composer.shared_flights.is_empty() {
+                break;
+            }
+            advance(&mut composer, &show);
+        }
+        assert!(composer.shared_flights.is_empty(), "settles");
+        assert!(composer.transition_layer.is_empty(), "nothing retained");
+        let marked = marked_indices(&composer);
+        assert_eq!(marked.len(), 1);
+        let (ex, ey) = node_center(&composer, marked[0]);
+        let mut surf = render_heads(&composer);
+        assert!(
+            close_enough(pixel_rgb(&mut surf, ex, ey), (0, 0, 255), 30),
+            "ends on the detail hero"
+        );
+        crate::animation::clear_all_animations();
+    }
+
+    /// Morph box persistent across a screen switch + disappearing/appearing
+    /// hero pair: a morph flight and a switch flight coexist, then both
+    /// complete cleanly.
+    #[crate::composable]
+    fn mixed_list_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope, w: &State<f32>) {
+        morph_leaf(ctx, w, scope);
+        hero_leaf(ctx, 120.0, 80.0, Color::RED, scope);
+    }
+
+    #[crate::composable]
+    fn mixed_detail_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope, w: &State<f32>) {
+        morph_leaf(ctx, w, scope);
+        gap_leaf(ctx, 400.0, 100.0);
+        hero_leaf(ctx, 300.0, 160.0, Color::BLUE, scope);
+    }
+
+    #[test]
+    fn morph_and_switch_coexist() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+        let w = State::new(120.0f32);
+
+        let mixed_frame = |composer: &mut Composer| {
+            let (s, ww) = (show.clone(), w.clone());
+            composer.compose(|ctx| {
+                SharedTransitionLayout::new().build(ctx, |ctx, scope| {
+                    Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+                        if s.get() {
+                            mixed_list_screen(ctx, &scope, &ww);
+                        } else {
+                            mixed_detail_screen(ctx, &scope, &ww);
+                        }
+                    });
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+            composer.poll_shared_flights();
+        };
+        let mixed_advance = |composer: &mut Composer| {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(16));
+            mixed_frame(composer);
+        };
+
+        mixed_frame(&mut composer);
+        // Open a morph (layout-only size change, no compose).
+        w.set(300.0);
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        composer.poll_shared_flights();
+        assert_eq!(composer.shared_flights.len(), 1, "morph opens");
+        mixed_advance(&mut composer);
+        // Switch screens mid-morph: switch flight opens alongside.
+        show.set(false);
+        mixed_frame(&mut composer);
+        assert_eq!(composer.shared_flights.len(), 2, "morph + switch coexist");
+
+        for _ in 0..300 {
+            if composer.shared_flights.is_empty() {
+                break;
+            }
+            mixed_advance(&mut composer);
+        }
+        assert!(composer.shared_flights.is_empty(), "both complete");
+        assert!(composer.transition_layer.is_empty(), "nothing retained");
+        for idx in marked_indices(&composer) {
+            assert!(composer.arena_nodes()[idx].transition.is_none(), "all visuals cleared");
+        }
         crate::animation::clear_all_animations();
     }
 }

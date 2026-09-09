@@ -224,10 +224,12 @@ ResizeMode::{ScaleToBounds(clip), RemeasureToBounds}
 - **Non-shared choreography** (deep `animatedVisibilityScope`): map enter/exit
   onto progress windows (old screen fades 0→0.3, new screen 0.7→1 — the
   Compose stagger). No visibility-system rewrite.
-- **Hit testing**: perfect semantics = hit against the *current visual*
-  (lerped) rect, routed to the target. v1 disables input on both ends
-  mid-flight (documented); the routing upgrade path is reserved in `hit_test`
-  (test lerped rect on transition-flagged nodes).
+- **Hit testing**: clicks test the *current visual* (lerped) rect and route
+  into the live target subtree (in-tree endpoints remap into layout space for
+  child descent; detached source ghosts fraction-map into the target's natural
+  rect with a root-anchored path for bubbling fidelity). Visual misses pass
+  through. Remap is single-application per level (re-entering a transitioning
+  node would invert the transform twice).
 - **Same-screen bounds change** (no slot disappearance): explicit
   `scope.animateBounds(key)`; old bounds already in `prev_nodes`. Single-sided
   morph, no opacity change, same engine.

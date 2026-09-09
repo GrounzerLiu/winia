@@ -6,7 +6,7 @@ use crate::core::composer::{ComposeCtx, Composer};
 use crate::debug;
 use crate::layout::constraints::Constraints;
 use crate::debug_log;
-use crate::layout::node::{hit_test, focus_next, focus_prev, LayoutNode};
+use crate::layout::node::{hit_test, hit_test_with_flights, focus_next, focus_prev, LayoutNode};
 use crate::render;
 
 /// 拖拽/嵌套滚动调试 trace 开关（debug_assertions 下 + 环境变量 WINIA_DRAG_TRACE）。
@@ -714,7 +714,7 @@ impl ApplicationHandler for AppState {
                         // 不滚——盲找只留给 DebugEvent::Scroll（测试注入无坐标，
                         // 见 consume_debug_events）。
                         let target = pw.last_pointer_pos.and_then(|(px, py)| {
-                            let path = crate::layout::node::hit_test(nodes, root_idx, px, py);
+                            let path = crate::layout::node::hit_test_with_flights(nodes, root_idx, pw.composer.transition_roots(), px, py);
                             // 命中路径从根到叶——从内向外找第一个轴匹配的 scroll 节点
                             path.iter().rev().find(|&&idx| {
                                 (dy != 0.0 && nodes[idx].modifier.vertical_scroll_state().is_some())
@@ -835,7 +835,7 @@ impl ApplicationHandler for AppState {
                 // ── 指针事件分发（Up 时先分发后清除 capture）──
                 let nodes = pw.composer.arena_nodes();
                 if let Some(r) = pw.composer.layout_root_idx() {
-                    let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
+                    let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
                     let ptr_ev = crate::modifier::PointerEvent {
                         event_type,
                         position: (0.0, 0.0),
@@ -1481,7 +1481,7 @@ impl AppState {
                         let arena = pw.composer.arena_nodes();
                         let root_idx = pw.composer.layout_root_idx();
                         if let Some(r) = root_idx {
-                            let path = hit_test(arena, r, x, y);
+                            let path = hit_test_with_flights(arena, r, pw.composer.transition_roots(), x, y);
                             let mut click_handled = false;
                             // debug 点击聚焦：path 中最深的 focusable 节点
                             // （text-field-v2 容器化后焦点/交互在容器——空字段
@@ -2261,7 +2261,7 @@ fn gesture_down(pw: &mut PerWindow, scene_pos: (f32, f32)) {
     let hit = {
         let nodes = pw.composer.arena_nodes();
         let Some(r) = pw.composer.layout_root_idx() else { return; };
-        let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
+        let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
         // 跳过「是滚动容器祖先」的拖拽 fallback（如 BottomSheet 面板 on_drag）——
         // 列表区按下时面板不应建 drag tracker，否则与滚动双系统并发（列表没到头
         // sheet 就跟着动）。内层手势组件（slider/switch/按钮，drag 比 scroll 深）
@@ -2683,7 +2683,7 @@ fn hit_overlay(pw: &PerWindow, scene_pos: (f32, f32)) -> Option<(usize, (f32, f3
         let local = (scene_pos.0 - ov.screen_pos.0, scene_pos.1 - ov.screen_pos.1);
         if let Some(r) = ov.composer.layout_root_idx() {
             let nodes = ov.composer.arena_nodes();
-            if !hit_test(nodes, r, local.0, local.1).is_empty() {
+            if !hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1).is_empty() {
                 return Some((i, local));
             }
         }
@@ -2822,7 +2822,7 @@ fn exec_overlay_click(pw: &mut PerWindow) -> bool {
     }
     let Some(r) = ov.composer.layout_root_idx() else { return false; };
     let nodes = ov.composer.arena_nodes();
-    let path = hit_test(nodes, r, local.0, local.1);
+    let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1);
     // 沿路径找 clickable（最内层优先）
     let r = fire_click_along_path(nodes, &path);
     r
@@ -2870,7 +2870,7 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::modifier
         {
             let nodes = ov.composer.arena_nodes();
             if let Some(r) = ov.composer.layout_root_idx() {
-                let path = hit_test(nodes, r, local.0, local.1);
+                let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1);
                 let scroll_idx = path_scroll_idx(nodes, &path);
                 let drag_idx = path_drag_idx(nodes, &path);
                 // 内层拖拽组件优先于滚动（同一路径上，drag 比 scroll 更深）
@@ -2910,7 +2910,7 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::modifier
             // Scrim 层）的点击永远到不了 overlay_click → 点击丢失。
             let nodes = ov.composer.arena_nodes();
             if let Some(r) = ov.composer.layout_root_idx() {
-                let path = hit_test(nodes, r, local.0, local.1);
+                let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1);
                 if let Some(&idx) = path.iter().rev().find(|&&i| {
                     nodes[i].modifier.clickable_interaction().is_some()
                         || nodes[i].modifier.node_click_interaction().is_some()
@@ -2956,14 +2956,17 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::modifier
             let (path, focus_target, caret): (Vec<usize>, Option<(u64, u64, bool)>, Option<(usize, usize)>) = match {
                 let ov = &pw.overlays[i];
                 let nodes = ov.composer.arena_nodes();
+                // Owned roots: the scrutinee borrow ends here, but the arm
+                // below needs them (and `ov` there is the outer `&mut` binding).
+                let troots: Vec<usize> = ov.composer.transition_roots().to_vec();
                 match ov.composer.layout_root_idx() {
                     None => None,
-                    Some(r) => Some((nodes, r)),
+                    Some(r) => Some((nodes, r, troots)),
                 }
             } {
                 None => (Vec::new(), None, None),
-                Some((nodes, r)) => {
-                let path = hit_test(nodes, r, local.0, local.1);
+                Some((nodes, r, troots)) => {
+                let path = hit_test_with_flights(nodes, r, &troots, local.0, local.1);
                 let focus_target = path.iter().rev().find_map(|&idx| {
                     let focusable = crate::layout::node::has_focusable_modifier(&nodes[idx]);
                     let wants_ime = nodes[idx].ime_callback.borrow().is_some();
@@ -3039,7 +3042,7 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::modifier
         // (ov borrow ended at the Press block above; re-index here.)
         let nid = pw.overlays[i].composer.layout_root_idx().and_then(|r| {
             let nodes = pw.overlays[i].composer.arena_nodes();
-            hit_test(nodes, r, local.0, local.1).last().map(|&idx| nodes[idx].id)
+            hit_test_with_flights(nodes, r, pw.overlays[i].composer.transition_roots(), local.0, local.1).last().map(|&idx| nodes[idx].id)
         });
         pw.overlay_click = Some((i, local, nid.unwrap_or(0)));
         return true; // 事件消费——不进主树
@@ -3188,7 +3191,7 @@ fn update_hover(pw: &mut PerWindow, scene_pos: (f32, f32)) {
     let hit: Vec<(u64, crate::ui::interaction::MutableInteractionSource)> = {
         let nodes = pw.composer.arena_nodes();
         let Some(r) = pw.composer.layout_root_idx() else { return; };
-        let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
+        let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
         path.iter()
             .filter(|&&i| nodes[i].modifier.has_hoverable())
             .filter_map(|&i| nodes[i].modifier.hoverable_interaction().map(|s| (nodes[i].slot_key, s.clone())))
@@ -3215,7 +3218,7 @@ fn overlay_update_hover(ov: &mut OverlayWindow, local: (f32, f32)) {
     let hit: Vec<(u64, crate::ui::interaction::MutableInteractionSource)> = {
         let nodes = ov.composer.arena_nodes();
         let Some(r) = ov.composer.layout_root_idx() else { return; };
-        let path = hit_test(nodes, r, local.0, local.1);
+        let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1);
         path.iter()
             .filter(|&&i| nodes[i].modifier.has_hoverable())
             .filter_map(|&i| nodes[i].modifier.hoverable_interaction().map(|s| (nodes[i].slot_key, s.clone())))
@@ -3279,7 +3282,7 @@ fn detect_click(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
     if dist <= CLICK_SLOP && in_time {
         let nodes = pw.composer.arena_nodes();
         if let Some(r) = pw.composer.layout_root_idx() {
-            let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
+            let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
             let hit = down_slot
                 .map(|slot| path.iter().any(|&i| nodes[i].slot_key == slot))
                 .unwrap_or_else(|| path.iter().any(|&i| nodes[i].id == down.node_id));
@@ -3502,7 +3505,7 @@ fn handle_pointer_down(
     }
     let nodes = pw.composer.arena_nodes();
     let Some(r) = pw.composer.layout_root_idx() else { return false; };
-    let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
+    let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
     let Some(&innermost) = path.last() else { return false; };
 
     // 清除旧的选区（新点击开始）
@@ -3582,7 +3585,7 @@ fn handle_pointer_down(
     pw.drag_scroll = (|| {
         let nodes = pw.composer.arena_nodes();
         let Some(r) = pw.composer.layout_root_idx() else { return None };
-        let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
+        let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
         #[cfg(debug_assertions)]
         if drag_trace_enabled() {
             eprintln!("[drag-down] scene=({},{}) path_len={} path={:?}",
@@ -3842,7 +3845,7 @@ fn handle_pointer_move(
     }
     let nodes = pw.composer.arena_nodes();
     let Some(r) = pw.composer.layout_root_idx() else { return false; };
-    let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
+    let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
 
     // 拖拽选中文本
     if pw.pointer_down_state.is_some() {

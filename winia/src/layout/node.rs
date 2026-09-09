@@ -1,6 +1,7 @@
 //! 布局节点 — LayoutNode 及相关的尺寸/位置/排列/对齐类型
 
 use crate::modifier::{Modifier, ModifierElement, RichSpanStyle};
+use crate::ui::shared_transition::{abs_rect_upward, find_idx_by_slot, TransitionRole};
 use crate::ui::text::FontSlant;
 use skia_safe::FontStyle as SkFontStyle;
 use skia_safe::textlayout::TextStyle as SkTextStyle;
@@ -530,6 +531,107 @@ pub fn hit_test(nodes: &[LayoutNode], root: usize, x: f32, y: f32) -> Vec<usize>
     path
 }
 
+/// Flight-aware hit test (Phase 3): detached flying sources route into their
+/// linked live target (clicking the ghost == clicking the target,
+/// fraction-mapped into the target's natural rect with a root-anchored path
+/// for bubbling fidelity); otherwise identical to [`hit_test`]. Empty roots
+/// (idle) cost one length check — the hot path is untouched.
+pub fn hit_test_with_flights(
+    nodes: &[LayoutNode],
+    root: usize,
+    transition_roots: &[usize],
+    x: f32,
+    y: f32,
+) -> Vec<usize> {
+    if !transition_roots.is_empty() {
+        // Index for parent-chain walks (mid-flight clicks only).
+        let mut id_to_idx = std::collections::HashMap::new();
+        for (i, n) in nodes.iter().enumerate() {
+            id_to_idx.insert(n.id, i);
+        }
+        // Detached sources render above the main tree — test them first.
+        for &tidx in transition_roots {
+            let Some(node) = nodes.get(tidx) else { continue };
+            let Some(t) = node.transition.as_ref() else { continue };
+            if t.role != TransitionRole::Source {
+                continue;
+            }
+            let l = t.lerped();
+            if l.width <= 0.0 || l.height <= 0.0 {
+                continue;
+            }
+            if x < l.x || x > l.x + l.width || y < l.y || y > l.y + l.height {
+                continue;
+            }
+            let Some(target_slot) = t.link_slot else { continue };
+            let Some(target_idx) = find_idx_by_slot(nodes, root, target_slot) else {
+                continue;
+            };
+            // Fraction-map ghost → target natural rect, then descend the live
+            // target subtree directly: the target node itself is hit by
+            // construction (fractions clamped into its natural rect), and
+            // re-entering hit_test_recursive on it would invert the flight
+            // transform twice (remap is single-application per level).
+            let fx = ((x - l.x) / l.width).clamp(0.0, 1.0);
+            let fy = ((y - l.y) / l.height).clamp(0.0, 1.0);
+            let tb = abs_rect_upward(nodes, &id_to_idx, target_idx);
+            // Scrolled-container targets: mapped point outside the visible
+            // viewport misses (mirrors the viewport clamp in recursion).
+            {
+                let tn = &nodes[target_idx];
+                let vw = if tn.scroll_viewport_width > 0.0 {
+                    tn.scroll_viewport_width
+                } else {
+                    tn.measured_size.width
+                };
+                let vh = if tn.scroll_viewport_height > 0.0 {
+                    tn.scroll_viewport_height
+                } else {
+                    tn.measured_size.height
+                };
+                let tx0 = tb.x + fx * tb.width;
+                let ty0 = tb.y + fy * tb.height;
+                if tx0 < tb.x || tx0 > tb.x + vw || ty0 < tb.y || ty0 > tb.y + vh {
+                    continue;
+                }
+            }
+            let tx = tb.x + fx * tb.width;
+            let ty = tb.y + fy * tb.height;
+            // Ancestor prefix root→target (bubbling fidelity), target excluded
+            // (pushed below). Broken chains fall through to main hit test.
+            let mut prefix: Vec<usize> = Vec::new();
+            let mut cur = target_idx;
+            let mut ok = target_idx == root;
+            while let Some(pid) = nodes[cur].parent_id {
+                let Some(&pidx) = id_to_idx.get(&pid) else { break };
+                if pidx == root {
+                    prefix.push(root);
+                    ok = true;
+                    break;
+                }
+                prefix.push(pidx);
+                cur = pidx;
+            }
+            if !ok {
+                continue;
+            }
+            prefix.reverse();
+            let mut path = prefix;
+            path.push(target_idx);
+            // Child basis in layout space (scroll-corrected, like recursion).
+            let (sdx, sdy) = scroll_offset_for_node(&nodes[target_idx]);
+            let (cpx, cpy) = (tb.x - sdx, tb.y - sdy);
+            for &c in nodes[target_idx].children.iter().rev() {
+                if hit_test_recursive(nodes, c, tx, ty, cpx, cpy, &mut path) {
+                    break;
+                }
+            }
+            return path;
+        }
+    }
+    hit_test(nodes, root, x, y)
+}
+
 fn hit_test_recursive(
     nodes: &[LayoutNode],
     idx: usize,
@@ -552,6 +654,25 @@ fn hit_test_recursive(
     if node.scroll_viewport_width > 0.0 {
         nw = node.scroll_viewport_width;
     }
+
+    // Flight remap (Phase 3): transitioning endpoints test their lerped
+    // visual rect; hits descend in layout space (children keep layout
+    // positions — the flight transform is inverted here). Visual miss passes
+    // through (v1 skip behavior).
+    let (x, y) = match node.transition.as_ref() {
+        Some(t) => match t.remap_hit(
+            x,
+            y,
+            nx,
+            ny,
+            node.measured_size.width,
+            node.measured_size.height,
+        ) {
+            Some(p) => p,
+            None => return false,
+        },
+        None => (x, y),
+    };
 
     // 检查是否在节点范围内
     if x < nx || x > nx + nw || y < ny || y > ny + nh {

@@ -10,7 +10,7 @@
 //! - Key 管理: 全局唯一 key 计数器
 
 use crate::core::state::{ComposerSubscription, State, StateId, StateSignal};
-use crate::ui::shared_transition::{ActiveFlight, FlightId};
+use crate::ui::shared_transition::{ActiveFlight, FlightId, SharedBounds};
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{LayoutNode, MeasurePolicy, CachedNode};
 use crate::modifier::Modifier;
@@ -1674,6 +1674,9 @@ pub struct Composer {
     pub(crate) prev_shared_endpoints: HashMap<(u64, String), u64>,
     /// Detached retained source roots (absolute coords, rendered after main tree).
     pub(crate) transition_layer: Vec<usize>,
+    /// Last-frame absolute bounds per live marked slot (Phase 3 same-screen
+    /// size-morph detection).
+    pub(crate) shared_last_bounds: HashMap<u64, SharedBounds>,
 }
 
 impl Composer {
@@ -1718,6 +1721,7 @@ impl Composer {
             next_flight_id: 1,
             prev_shared_endpoints: HashMap::new(),
             transition_layer: Vec::new(),
+            shared_last_bounds: HashMap::new(),
             #[cfg(test)]
             compose_clean_count: 0,
             #[cfg(test)]
