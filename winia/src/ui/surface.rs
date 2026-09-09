@@ -167,6 +167,10 @@ impl Surface {
     /// 构建 Surface。
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
+        // `enabled` only switches the interaction branch (no numeric modifier
+        // change), so declare it — same closure-invisible class as
+        // TextField::read_only (see text_field.rs build).
+        ctx.changed(&self.enabled);
         let key = ctx.next_key();
         let theme = crate::ui::theme::WiniaTheme::colors();
         let shape = self.shape;

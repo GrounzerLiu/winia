@@ -541,24 +541,11 @@ impl DockedSearchBar {
         // position. composer_slot_key() is wrong here — it yields the last
         // materialized *inner* node (the input text leaf at x=38), shifting the
         // whole dropdown right to the text position.
-        // ⚠ `read_only` is NOT registered via `ctx.changed()` (TextField never
-        // declares it — see TextField::build: no `ctx.changed(&self.read_only)`).
-        // Its only propagation path is the anchor group's Skip/Enter gate via
-        // the parent Surface's modifier (Surface::build has no `changed` calls
-        // either — so its modifier equality decides) plus the TextField key
-        // remap below. `read_only` must therefore alter the *modifier chain*,
-        // never just the builder field — otherwise the value flips silently
-        // inside a reused slot and the dropdown input stays read-only
-        // (typed keys swallowed, `filtered()` never re-runs → "no filtering").
-        // We encode it as `fill_max_width(bool_marker)`: collapsed carries a
-        // FillMaxWidth element, expanded does not (see overlay comment for the
-        // full modifier-equality chain).
+        // `read_only` propagates via TextField::build's ctx.changed() declaration
+        // (closure-captured params force Enter on flip — see text_field.rs).
+        // The anchor modifier stays clean: no FillMaxWidth encoding needed.
         let anchor_key = ctx.next_key();
-        let anchor_modifier = if !active {
-            Modifier::new().fill_max_width()
-        } else {
-            Modifier::new()
-        };
+        let anchor_modifier = Modifier::new();
         match ctx.start_restartable_group(anchor_key, anchor_modifier, crate::layout::BoxLayout::new()) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {

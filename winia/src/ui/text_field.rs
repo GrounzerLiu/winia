@@ -1011,6 +1011,14 @@ impl TextField {
     /// （build 语句注入提供稳定 base）
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
+        // Closure/branch-only params (invisible to modifier param_eq, whose
+        // KbEvent arm always compares equal): declare them so a flip forces
+        // the container group to Enter and rebuild kb_handler instead of
+        // Skip-reusing the stale closure (docked-filter root cause).
+        ctx.changed(&self.read_only);
+        ctx.changed(&self.enabled);
+        ctx.changed(&self.single_line);
+        ctx.changed(&self.is_error);
         let key = ctx.next_key();
         let current = self.value.get();
         let content = current.text.clone();
