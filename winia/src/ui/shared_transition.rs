@@ -2365,17 +2365,6 @@ mod tier0_tests {
         Composer::poll_cross_flights(&mut all);
     }
 
-    fn cross_advance(
-        a: &mut Composer,
-        b: &mut Composer,
-        ca: impl FnOnce(&mut ComposeCtx),
-        cb: impl FnOnce(&mut ComposeCtx),
-    ) {
-        crate::animation::update_animations();
-        std::thread::sleep(std::time::Duration::from_millis(16));
-        cross_frame(a, b, ca, cb);
-    }
-
     /// List/detail pair across composers sharing one scope handle (production:
     /// the overlay inherits the scope via the CompositionLocal snapshot).
     fn xframe(
@@ -2661,6 +2650,256 @@ mod tier0_tests {
             vis.start.x,
             vis.start.y
         );
+        crate::animation::clear_all_animations();
+    }
+
+    /// Keyed hero leaf (multi-pair flights).
+    fn hero_keyed_leaf(
+        ctx: &mut ComposeCtx,
+        w: f32,
+        h: f32,
+        color: Color,
+        scope: &SharedTransitionScope,
+        key: &str,
+    ) {
+        let k = ctx.next_key();
+        ctx.start_leaf(
+            k,
+            Modifier::new()
+                .size(w, h)
+                .background(color, Shape::Rectangle)
+                .shared_element(scope.shared_content_state(key), BoundsTransform::default()),
+        );
+        ctx.end_node();
+    }
+
+    #[test]
+    fn two_keys_fly_together() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut a = Composer::new();
+        let mut b = Composer::new();
+        let scope = SharedTransitionScope::new(82);
+        let show_a = State::new(true);
+        let show_b = State::new(false);
+
+        let pair_frame = |a: &mut Composer, b: &mut Composer| {
+            let (sa, sb) = (show_a.clone(), show_b.clone());
+            let (sca, scb) = (scope.clone(), scope.clone());
+            cross_frame(
+                a,
+                b,
+                |ctx| shell(ctx, |ctx| {
+                    if sa.get() {
+                        hero_keyed_leaf(ctx, 100.0, 60.0, Color::RED, &sca, "k1");
+                        hero_keyed_leaf(ctx, 100.0, 60.0, Color::GREEN, &sca, "k2");
+                    }
+                }),
+                |ctx| shell(ctx, |ctx| {
+                    if sb.get() {
+                        hero_keyed_leaf(ctx, 200.0, 120.0, Color::BLUE, &scb, "k1");
+                        hero_keyed_leaf(ctx, 200.0, 120.0, Color::BLUE, &scb, "k2");
+                    }
+                }),
+            );
+        };
+        let pair_advance = |a: &mut Composer, b: &mut Composer| {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(16));
+            pair_frame(a, b);
+        };
+
+        pair_frame(&mut a, &mut b);
+        show_a.set(false);
+        show_b.set(true);
+        pair_frame(&mut a, &mut b);
+        assert_eq!(a.shared_flights.len(), 2, "one Tier1 flight per key");
+        assert_eq!(a.transition_layer.len(), 2, "both sources retained");
+
+        for _ in 0..200 {
+            if a.shared_flights.is_empty() {
+                break;
+            }
+            pair_advance(&mut a, &mut b);
+        }
+        assert!(a.shared_flights.is_empty(), "both complete");
+        assert!(a.transition_layer.is_empty(), "both freed");
+        for idx in marked_in(&b) {
+            assert!(b.arena_nodes()[idx].transition.is_none());
+        }
+        crate::animation::clear_all_animations();
+    }
+
+    #[crate::composable]
+    fn b_plain(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
+        hero_leaf(ctx, 300.0, 160.0, Color::BLUE, scope);
+    }
+
+    #[crate::composable]
+    fn b_shifted(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
+        gap_leaf(ctx, 400.0, 100.0);
+        hero_leaf(ctx, 300.0, 160.0, Color::BLUE, scope);
+    }
+
+    #[test]
+    fn tier1_superseded_by_overlay_tier0() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut a = Composer::new();
+        let mut b = Composer::new();
+        let scope = SharedTransitionScope::new(83);
+        let show_a = State::new(true);
+        let show_b = State::new(false);
+        let shift_b = State::new(false);
+
+        // B content with an optional gap above the hero (content switch).
+        let bframe = |a: &mut Composer, b: &mut Composer| {
+            let (sa, sb, sh) = (show_a.clone(), show_b.clone(), shift_b.clone());
+            let (sca, scb) = (scope.clone(), scope.clone());
+            cross_frame(
+                a,
+                b,
+                |ctx| shell(ctx, |ctx| {
+                    if sa.get() {
+                        hero_leaf(ctx, 120.0, 80.0, Color::RED, &sca);
+                    }
+                }),
+                |ctx| shell(ctx, |ctx| {
+                    // Macro'd screens (like list/detail): plain closures would
+                    // collide gap-over-hero at one position in test-fallback keys.
+                    if sb.get() {
+                        if sh.get() {
+                            b_shifted(ctx, &scb);
+                        } else {
+                            b_plain(ctx, &scb);
+                        }
+                    }
+                }),
+            );
+        };
+        let badvance = |a: &mut Composer, b: &mut Composer| {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(16));
+            bframe(a, b);
+        };
+
+        bframe(&mut a, &mut b);
+        show_a.set(false);
+        show_b.set(true);
+        bframe(&mut a, &mut b);
+        assert_eq!(a.shared_flights.len(), 1, "Tier1 main→overlay opens");
+        badvance(&mut a, &mut b);
+        badvance(&mut a, &mut b);
+        // Overlay switches its own content mid-Tier1: overlay Tier0 opens,
+        // Tier1 yields (staleness-cancel, no leak, no double ghost).
+        shift_b.set(true);
+        bframe(&mut a, &mut b);
+        assert!(a.shared_flights.is_empty(), "Tier1 yields to the newer Tier0");
+        assert_eq!(b.shared_flights.len(), 1, "overlay Tier0 owns the key now");
+        assert!(a.transition_layer.is_empty(), "Tier1 retained freed on yield");
+
+        for _ in 0..200 {
+            if b.shared_flights.is_empty() {
+                break;
+            }
+            badvance(&mut a, &mut b);
+        }
+        assert!(b.shared_flights.is_empty(), "Tier0 completes");
+        assert!(b.transition_layer.is_empty());
+        // End paint: shifted BLUE hero (gap pushed it to y=100).
+        let bt = marked_in(&b);
+        assert_eq!(bt.len(), 1);
+        let (ex, ey) = node_center(&b, bt[0]);
+        let mut surf = render_cross(&a, &b, (0.0, 0.0));
+        assert!(
+            close_enough(pixel_rgb(&mut surf, ex, ey), (0, 0, 255), 30),
+            "overlay Tier0 end state paints"
+        );
+        crate::animation::clear_all_animations();
+    }
+
+    #[test]
+    fn tier1_reverse_flies_back() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut a = Composer::new();
+        let mut b = Composer::new();
+        let scope = SharedTransitionScope::new(84);
+        let show_a = State::new(true);
+        let show_b = State::new(false);
+
+        xframe(&mut a, &mut b, &show_a, &show_b, &scope);
+        show_a.set(false);
+        show_b.set(true);
+        xframe(&mut a, &mut b, &show_a, &show_b, &scope);
+        assert_eq!(a.shared_flights.len(), 1);
+        xadvance(&mut a, &mut b, &show_a, &show_b, &scope);
+        // Reverse mid-flight: the old Tier1 cancels AND a reverse Tier1 opens
+        // in the same cross-pass (stashed B-source × fresh A-target) — no snap.
+        show_b.set(false);
+        show_a.set(true);
+        xframe(&mut a, &mut b, &show_a, &show_b, &scope);
+        assert_eq!(a.shared_flights.len(), 1, "reverse Tier1 replaces the cancelled one");
+        let fid = *a.shared_flights.keys().next().unwrap();
+        {
+            let f = &a.shared_flights[&fid];
+            assert_eq!((f.source_cid, f.target_cid), (b.composer_id, a.composer_id));
+            assert_eq!(f.flight.phase, FlightPhase::Flying);
+        }
+        assert_eq!(b.transition_layer.len(), 1, "B-side source retained");
+        for _ in 0..200 {
+            if a.shared_flights.is_empty() {
+                break;
+            }
+            xadvance(&mut a, &mut b, &show_a, &show_b, &scope);
+        }
+        assert!(a.shared_flights.is_empty() && b.shared_flights.is_empty());
+        assert!(a.transition_layer.is_empty() && b.transition_layer.is_empty());
+        // Ends RED in main.
+        let at = marked_in(&a);
+        assert_eq!(at.len(), 1);
+        assert!(a.arena_nodes()[at[0]].transition.is_none());
+        let (ex, ey) = node_center(&a, at[0]);
+        let mut surf = render_cross(&a, &b, (0.0, 0.0));
+        assert!(
+            close_enough(pixel_rgb(&mut surf, ex, ey), (255, 0, 0), 30),
+            "reversed back to the list hero"
+        );
+        crate::animation::clear_all_animations();
+    }
+
+    #[test]
+    fn tier1_midflight_progress_visible() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut a = Composer::new();
+        let mut b = Composer::new();
+        let scope = SharedTransitionScope::new(85);
+        let show_a = State::new(true);
+        let show_b = State::new(false);
+
+        xframe(&mut a, &mut b, &show_a, &show_b, &scope);
+        show_a.set(false);
+        show_b.set(true);
+        xframe(&mut a, &mut b, &show_a, &show_b, &scope);
+        let mut mid_seen = false;
+        for _ in 0..40 {
+            if a.shared_flights.is_empty() {
+                break;
+            }
+            let p = a.shared_flights.values().next().map(|f| f.progress.peek()).unwrap_or(1.0);
+            if p > 0.2 && p < 0.95 {
+                mid_seen = true;
+                // Both ends carry same-progress visuals across composers.
+                for idx in marked_in(&b) {
+                    let v = b.arena_nodes()[idx].transition.clone().expect("target visuals");
+                    assert!((v.progress - p).abs() < 0.001);
+                }
+                break;
+            }
+            xadvance(&mut a, &mut b, &show_a, &show_b, &scope);
+        }
+        assert!(mid_seen, "Tier1 passes through a visible mid state");
         crate::animation::clear_all_animations();
     }
 }

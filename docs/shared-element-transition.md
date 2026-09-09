@@ -278,6 +278,6 @@ ResizeMode::{ScaleToBounds(clip), RemeasureToBounds}
    scroll viewport needs viewport-clamp review.
 4. Cross-WINDOW flights (separate OS windows) remain out of scope — they need
    OS-level overlay, not framework composition.
-5. Mid-flight reversal of a Tier1 flight snaps instead of flying back
-   (staleness-cancel + no reverse flight — same-frame Tier0 takes over when
-   the reversal is same-composer; cross-composer reversal is the gap).
+5. Mid-flight reversal opens a reverse flight through the same match path
+   (stashed source × fresh counterpart — tested both directions); a reversal
+   with no counterpart anywhere cancels atomically with no replacement.
