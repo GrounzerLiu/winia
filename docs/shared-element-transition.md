@@ -404,28 +404,45 @@ the supported shape.
 ## 10. Risks and open questions
 
 1. ~~Transplant policy audit~~ — moot (no transplant design anymore).
-2. Paragraph-cache quantization for Remeasure text (phase 4 perf item).
-3. `RemeasureToBounds` + scrollable shared content: remeasure inside a
-   scroll viewport needs viewport-clamp review.
-4. Cross-WINDOW flights (separate OS windows) remain out of scope — they need
+2. Paragraph-cache quantization for Remeasure text: STILL OPEN and now live —
+   the layout contract re-measures text at arbitrary f32 sizes every frame with
+   no 1px bucket, so a mis-sized paragraph cache would thrash; Compose's own
+   advice is to keep `ScaleToBounds` for text, which is still the default.
+3. `RemeasureToBounds` + scrollable shared content: CLOSED — a re-measured
+   scroll container re-derives its viewport from the animated constraints
+   (`scroll_viewport_*`), so render's clip and the hit clamp follow the box.
+4. KNOWN LATENT (review R1-F3): the Tier-0 writers resolve their endpoint by the
+   FROZEN slot key with no identity re-check, so a recomposition that moves the
+   target's positional slot could hand the flight's visual + layout override to
+   an unrelated node until teardown (Tier 1 has that guard; Tier 0 does not).
+   Self-healing, no reproducer found; the fix is a marker scope+key check in
+   `write_flight_visuals` plus a slot-shift test.
+5. Corrected after review: the Tier-1 "peer frozen forever" leak did NOT
+   reproduce (dropping a marker rebuilds the node, which constructs a fresh
+   `flight_measure: None`), so routing both Tier-1 teardowns through
+   `clear_transition_for_slot` is a consistency fix, not the repair of an
+   observable freeze. The reachable stuck-override cause is narrower: a teardown
+   that skips that function while the node survives — pinned by
+   `mid_flight_cancel_restores_the_natural_size`.
+6. Cross-WINDOW flights (separate OS windows) remain out of scope — they need
    OS-level overlay, not framework composition.
-5. Mid-flight reversal opens a reverse flight through the same match path
+7. Mid-flight reversal opens a reverse flight through the same match path
    (stashed source × fresh counterpart — tested both directions); a reversal
    with no counterpart anywhere cancels atomically with no replacement.
-6. Tier1 ghosts paint but ignore taps (target lives in a peer arena the
+8. Tier1 ghosts paint but ignore taps (target lives in a peer arena the
    single-arena hit search cannot see); the live target stays directly
    hittable in its own composer.
-7. Overlay enter/exit animations are not folded into Tier1 visuals — the
+9. Overlay enter/exit animations are not folded into Tier1 visuals — the
    flight leads/lags the panel transform while it animates (~200ms).
-8. No shared markers on descendants of shared markers (nested flights would
+10. No shared markers on descendants of shared markers (nested flights would
    compound both transforms). This also gates `OverlayClip`, whose Compose
    default resolves through the parent `sharedBounds`.
-9. Elevated endpoints escape ancestor clips *by design* — an element that
+11. Elevated endpoints escape ancestor clips *by design* — an element that
    is intentionally clipped by a container (an image inside a rounded card)
    will now spill while it flies. That is Compose's semantics; the opt-out
    (`render_in_overlay = false`) is the escape hatch, and a real
    `OverlayClip` is the eventual fine-grained answer.
-10. Layer membership is written per frame by the visual writers and cleared
+12. Layer membership is written per frame by the visual writers and cleared
     in `poll_shared_flights`; a composer that stops being polled would keep
     a stale order. Every composer (main + overlays + headless tests) polls
     each frame, so this is a invariant to preserve rather than a bug today.
