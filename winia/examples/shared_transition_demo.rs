@@ -39,7 +39,10 @@ fn hero_demo(ctx: &mut ComposeCtx) {
                                         .background(Color::BLUE, Shape::Rectangle)
                                         .shared_element(
                                             scope.shared_content_state("hero"),
-                                            BoundsTransform::spring(SpringSpec::default()),
+                                            BoundsTransform::spring(SpringSpec {
+                                                stiffness: 120.0,
+                                                ..SpringSpec::default()
+                                            }),
                                             PlaceHolderSize::JumpCut,
                                             PathMotion::ArcBelow,
                                         ),
@@ -64,7 +67,10 @@ fn hero_demo(ctx: &mut ComposeCtx) {
                                 .background(Color::RED, Shape::Circle)
                                 .shared_element(
                                     scope.shared_content_state("hero"),
-                                    BoundsTransform::spring(SpringSpec::default()),
+                                    BoundsTransform::spring(SpringSpec {
+                                        stiffness: 120.0,
+                                        ..SpringSpec::default()
+                                    }),
                                     PlaceHolderSize::JumpCut,
                                     PathMotion::ArcBelow,
                                 ),

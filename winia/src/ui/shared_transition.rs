@@ -650,18 +650,18 @@ mod tests {
         };
         // Linear midpoint is exactly the component-wise lerp.
         assert_eq!(mk(PathMotion::Linear).lerped(), SharedBounds::new(100.0, 0.0, 100.0, 100.0));
-        // ArcBelow sags screen-down: center (150,75) → origin (100,25).
+        // ArcBelow sags screen-down: center (150,83.3) → origin (100,33.3).
         let below = mk(PathMotion::ArcBelow).lerped();
         assert!(
             (below.x - 100.0).abs() < 1e-3
-                && (below.y - 25.0).abs() < 1e-3
+                && (below.y - 100.0 / 3.0).abs() < 0.05
                 && (below.width - 100.0).abs() < 1e-3,
             "below-arc midpoint sags down, got {below:?}"
         );
         // ArcAbove mirrors across the straight line.
         let above = mk(PathMotion::ArcAbove).lerped();
         assert!(
-            (above.x - 100.0).abs() < 1e-3 && (above.y + 25.0).abs() < 1e-3,
+            (above.x - 100.0).abs() < 1e-3 && (above.y + 100.0 / 3.0).abs() < 0.05,
             "above-arc midpoint bulges up, got {above:?}"
         );
         // Arc endpoints are exact (bezier interpolates).
@@ -952,9 +952,10 @@ impl TransitionVisual {
 /// Quadratic-bezier center between two points, bulging perpendicular to the
 /// travel direction. `sign > 0` bulges screen-down (`ArcBelow`), `< 0`
 /// screen-up (`ArcAbove`); the normal is oriented so the sign reads in
-/// screen space regardless of travel direction. Sag is a quarter of the
-/// travel distance (Compose-style visible arc, endpoints exact).
-/// Degenerate (coincident centers) falls back to linear — no NaN.
+/// screen space regardless of travel direction. Sag is a third of the
+/// travel distance (peak deviation ≈ 1/6 of travel — clearly visible without
+/// looking loopy; endpoints exact). Degenerate (coincident centers) falls
+/// back to linear — no NaN.
 fn arc_center(sx: f32, sy: f32, ex: f32, ey: f32, t: f32, sign: f32) -> (f32, f32) {
     let (dx, dy) = (ex - sx, ey - sy);
     let len = (dx * dx + dy * dy).sqrt();
@@ -966,7 +967,7 @@ fn arc_center(sx: f32, sy: f32, ex: f32, ey: f32, t: f32, sign: f32) -> (f32, f3
         nx = -nx;
         ny = -ny;
     }
-    let sag = 0.25 * len * sign;
+    let sag = len / 3.0 * sign;
     let (cx, cy) = ((sx + ex) / 2.0 + nx * sag, (sy + ey) / 2.0 + ny * sag);
     let u = 1.0 - t;
     (
