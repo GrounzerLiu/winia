@@ -687,8 +687,12 @@ impl TransitionVisual {
     pub(crate) fn radii(&self) -> [f32; 4] {
         // Unclamped like lerped(): spring overshoot carries corner radii past
         // the end value for one consistent flight-t (alpha stays clamped).
+        // Floored at zero: shrinking radii would extrapolate negative under
+        // overshoot, which Skia RRects reject.
         let t = self.progress;
-        [0, 1, 2, 3].map(|i| self.radius_from[i] + (self.radius_to[i] - self.radius_from[i]) * t)
+        [0, 1, 2, 3].map(|i| {
+            (self.radius_from[i] + (self.radius_to[i] - self.radius_from[i]) * t).max(0.0)
+        })
     }
 
     /// Clip rect at an explicit canvas offset — call BEFORE the flight
@@ -937,14 +941,16 @@ pub(crate) fn ancestor_scroll_sum(
                     if p.scroll_reverse {
                         off = (p.scroll_content_height - p.scroll_viewport_height - off).max(0.0);
                     }
-                    sy = off;
+                    // Accumulate: scroll containers nest additively on the
+                    // canvas (each ancestor translates its children).
+                    sy += off;
                 }
                 ModifierElement::HorizontalScroll { state, .. } => {
                     let mut off = state.offset.get();
                     if p.scroll_reverse {
                         off = (p.scroll_content_width - p.scroll_viewport_width - off).max(0.0);
                     }
-                    sx = off;
+                    sx += off;
                 }
                 _ => {}
             }
@@ -976,6 +982,10 @@ fn is_terminal(phase: FlightPhase) -> bool {
 /// the state it has settled exactly at 1.0, so the threshold decides; the
 /// same threshold covers manually-driven progress with no engine entry
 /// (headless tests).
+///
+/// NOTE: flight specs must be finite (Tween/Spring/Keyframes settle and
+/// release). An infinite Repeatable spec would hold the flight open forever
+/// — the old engine-agnostic threshold completed those; the gate does not.
 fn flight_progress_done(a: &ActiveFlight, p: f32) -> bool {
     if crate::animation::has_animation_for_state(a.progress.state_id()) {
         return false;
@@ -2505,6 +2515,36 @@ mod tier0_tests {
             "settled end state shows the detail hero"
         );
         crate::animation::clear_all_animations();
+    }
+
+    #[test]
+    fn ancestor_scroll_sum_accumulates_nested_scrollers() {
+        use crate::layout::node::LayoutNode;
+        let outer_v = crate::modifier::ScrollState::new();
+        let inner_v = crate::modifier::ScrollState::new();
+        let inner_h = crate::modifier::ScrollState::new();
+        outer_v.offset.set(25.0);
+        inner_v.offset.set(15.0);
+        inner_h.offset.set(10.0);
+        let root = LayoutNode::leaf(Modifier::new());
+        let mut outer = LayoutNode::leaf(Modifier::new().vertical_scroll(outer_v));
+        let mut inner = LayoutNode::leaf(
+            Modifier::new().vertical_scroll(inner_v).horizontal_scroll(inner_h),
+        );
+        let mut leaf = LayoutNode::leaf(Modifier::new());
+        let (rid, oid, iid) = (root.id, outer.id, inner.id);
+        outer.parent_id = Some(rid);
+        inner.parent_id = Some(oid);
+        leaf.parent_id = Some(iid);
+        let nodes = vec![root, outer, inner, leaf];
+        let id_to_idx: HashMap<u64, usize> =
+            nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
+        // Canvas nests additively: 25 + 15 vertical, 10 horizontal.
+        assert_eq!(ancestor_scroll_sum(&nodes, &id_to_idx, 3), (10.0, 40.0));
+        // The node's own offset never counts (only strict ancestors).
+        assert_eq!(ancestor_scroll_sum(&nodes, &id_to_idx, 2), (0.0, 25.0));
+        // Rootless (detached) nodes sum to zero.
+        assert_eq!(ancestor_scroll_sum(&nodes, &id_to_idx, 0), (0.0, 0.0));
     }
 
     #[test]
