@@ -5799,6 +5799,108 @@ mod tier0_tests {
         crate::animation::clear_all_animations();
     }
 
+    /// Hero leaf whose shared marker can be dropped WITHOUT removing the node:
+    /// the modifier chain keeps its shape and the node keeps its slot, only the
+    /// live-map entry disappears — which is what makes the flight "stale".
+    fn hero_leaf_marked(
+        ctx: &mut ComposeCtx,
+        w: f32,
+        h: f32,
+        color: Color,
+        scope: &SharedTransitionScope,
+        marked: bool,
+    ) {
+        let key = ctx.next_key();
+        let mut m = Modifier::new()
+            .size(w, h)
+            .background(color, Shape::rounded(8.0));
+        if marked {
+            m = m.shared_element(
+                scope.shared_content_state("hero"),
+                BoundsTransform::default(),
+                PlaceHolderSize::AnimatedSize,
+                PathMotion::Linear,
+                0.0,
+                true,
+            );
+        }
+        ctx.start_leaf(key, m);
+        ctx.end_node();
+    }
+
+    /// The leak the review predicted, on the path that actually reproduces it:
+    /// when the peer's marker disappears mid-flight the node SURVIVES (same
+    /// slot, same modifier chain shape) and the flight is cancelled as stale —
+    /// so the teardown is the only thing that can drop the override. Clearing
+    /// just the visual leaves the node reporting its last animated size forever
+    /// (the layout fold then never re-measures it again).
+    #[test]
+    fn stale_cancel_drops_the_surviving_peers_layout_override() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let (mut a, mut b) = (Composer::new(), Composer::new());
+        let scope = SharedTransitionScope::new(81);
+        let show_a = State::new(true);
+        let show_b = State::new(false);
+        let peer_marked = State::new(true);
+        let frame = |a: &mut Composer, b: &mut Composer| {
+            let (sa, sb, sca, scb) = (show_a.clone(), show_b.clone(), scope.clone(), scope.clone());
+            let pm = peer_marked.clone();
+            cross_frame(
+                a,
+                b,
+                |ctx| {
+                    shell(ctx, |ctx| {
+                        if sa.get() {
+                            hero_leaf_marked(ctx, 120.0, 80.0, Color::RED, &sca, true);
+                        }
+                    })
+                },
+                |ctx| {
+                    shell(ctx, |ctx| {
+                        if sb.get() {
+                            hero_leaf_marked(ctx, 300.0, 160.0, Color::BLUE, &scb, pm.get());
+                        }
+                    })
+                },
+            );
+        };
+        frame(&mut a, &mut b);
+        show_a.set(false);
+        show_b.set(true);
+        frame(&mut a, &mut b);
+        assert_eq!(a.shared_flights.len(), 1, "Tier1 flight opens");
+        let tidx = marked_in(&b)[0];
+        // Let the override reach the peer's layout (the cross-poll runs after it).
+        crate::animation::update_animations();
+        frame(&mut a, &mut b);
+        assert!(
+            b.arena_nodes()[tidx].flight_measure.is_some(),
+            "the peer carries the override while the flight runs"
+        );
+
+        // The marker disappears, the NODE does not (same slot, same chain).
+        peer_marked.set(false);
+        crate::animation::update_animations();
+        frame(&mut a, &mut b);
+        assert!(a.shared_flights.is_empty(), "the stale flight is cancelled");
+        assert_eq!(
+            b.arena_nodes()[tidx].slot_key,
+            b.arena_nodes()[tidx].slot_key,
+            "the peer node is the same one"
+        );
+        assert!(
+            b.arena_nodes()[tidx].flight_measure.is_none(),
+            "the cancelled flight takes its layout override with it"
+        );
+        assert_eq!(
+            b.arena_nodes()[tidx].measured_size,
+            crate::layout::node::Size::new(300.0, 160.0),
+            "…and the surviving node re-measures at its natural size"
+        );
+        crate::animation::clear_all_animations();
+    }
+
     /// Bouncy hero leaf (spring overshoot must render past the end rect).
     fn spring_hero_leaf(
         ctx: &mut ComposeCtx,
