@@ -48,7 +48,7 @@ forever — completion waits for engine release (see §4).
 | `PlaceHolderSize` | `JumpCut` | Implemented (layout snaps to end state immediately; the flying pair covers the pop) |
 | `PlaceHolderSize` | `ContentSize` / `AnimatedSize` | **Deferred** |
 | `PathMotion` | `Linear` | Implemented |
-| `PathMotion` | `ArcBelow` / `ArcAbove` | Implemented — flight-level quadratic bezier on the rect center (quarter-travel sag, endpoints exact, size stays linear); resolved from the target marker. Differs from Compose's per-keyframe `using ArcMode` shape, same visual result |
+| `PathMotion` | `ArcBelow` / `ArcAbove` | Implemented — Compose `ArcSpline.Arc` math ported: quarter-ellipse center path, arc-length-uniform travel (101-entry table), endpoints exact, size stays linear; resolved from the target marker. Either-dimension travel falls back to linear (axis-aligned flights stay straight). API shape differs from Compose (flight-level path, not per-keyframe `using ArcMode`) |
 
 ## 2. Usage (three steps)
 

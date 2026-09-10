@@ -21,10 +21,12 @@
 
 ## P1 — small behavior additions
 
-- [x] `PathMotion::ArcBelow` / `ArcAbove` — flight-level quadratic bezier
-  on the rect center (quarter-travel sag, endpoints exact, size linear);
-  `path` parameter on both markers, resolved from the target marker.
-  (Intentionally not Compose's per-keyframe `using ArcMode` shape.)
+- [x] `PathMotion::ArcBelow` / `ArcAbove` — Compose `ArcSpline.Arc` math
+  ported (quarter ellipse, arc-length-uniform travel, either-dimension
+  degenerate rule); `path` parameter on both markers, resolved from the
+  target marker. API shape intentionally differs (flight-level path, not
+  per-keyframe `using ArcMode`). Deviation: overshoot pins the center at
+  the nearer endpoint (documented in code).
 - [ ] `zIndexInOverlay` — multiple pairs currently paint in arena order.
   Sort transition roots by z at render.
 - [ ] `enter` / `exit` on `shared_bounds()` — wire the existing

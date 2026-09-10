@@ -633,12 +633,13 @@ mod tests {
     }
 
     #[test]
-    fn arc_lerped_endpoints_midpoint_and_degenerate() {
-        // Start (0,0,100,100) → end (200,0,100,100): centers (50,50)→(250,50).
-        let mk = |path| TransitionVisual {
+    fn arc_lerped_endpoints_sides_and_degenerates() {
+        // 2D travel: start (0,0,100,100) → end (200,100,100,100),
+        // centers (50,50) → (250,150).
+        let mk = |path, progress| TransitionVisual {
             start: SharedBounds::new(0.0, 0.0, 100.0, 100.0),
-            end: SharedBounds::new(200.0, 0.0, 100.0, 100.0),
-            progress: 0.5,
+            end: SharedBounds::new(200.0, 100.0, 100.0, 100.0),
+            progress,
             role: TransitionRole::Target,
             radius_from: [0.0; 4],
             radius_to: [0.0; 4],
@@ -649,35 +650,69 @@ mod tests {
             path,
         };
         // Linear midpoint is exactly the component-wise lerp.
-        assert_eq!(mk(PathMotion::Linear).lerped(), SharedBounds::new(100.0, 0.0, 100.0, 100.0));
-        // ArcBelow sags screen-down: center (150,83.3) → origin (100,33.3).
-        let below = mk(PathMotion::ArcBelow).lerped();
-        assert!(
-            (below.x - 100.0).abs() < 1e-3
-                && (below.y - 100.0 / 3.0).abs() < 0.05
-                && (below.width - 100.0).abs() < 1e-3,
-            "below-arc midpoint sags down, got {below:?}"
+        assert_eq!(
+            mk(PathMotion::Linear, 0.5).lerped(),
+            SharedBounds::new(100.0, 50.0, 100.0, 100.0)
         );
-        // ArcAbove mirrors across the straight line.
-        let above = mk(PathMotion::ArcAbove).lerped();
-        assert!(
-            (above.x - 100.0).abs() < 1e-3 && (above.y + 100.0 / 3.0).abs() < 0.05,
-            "above-arc midpoint bulges up, got {above:?}"
-        );
-        // Arc endpoints are exact (bezier interpolates).
-        let mut b0 = mk(PathMotion::ArcBelow);
-        b0.progress = 0.0;
-        assert_eq!(b0.lerped(), SharedBounds::new(0.0, 0.0, 100.0, 100.0));
-        let mut b1 = mk(PathMotion::ArcAbove);
-        b1.progress = 1.0;
-        assert_eq!(b1.lerped(), SharedBounds::new(200.0, 0.0, 100.0, 100.0));
-        // Degenerate (coincident centers) falls back to linear — no NaN.
-        let still = TransitionVisual {
-            start: SharedBounds::new(50.0, 50.0, 100.0, 100.0),
-            end: SharedBounds::new(0.0, 0.0, 200.0, 200.0),
-            ..mk(PathMotion::ArcBelow)
+        // Arc midpoints bend off the straight center (150,100) to opposite
+        // sides (quarter ellipse, arc-length parameterized — assert side +
+        // magnitude, not LUT-exact digits).
+        let dev_of = |path| {
+            let l = mk(path, 0.5).lerped();
+            (l.x + 50.0 - 150.0, l.y + 50.0 - 100.0)
         };
-        assert_eq!(still.lerped(), SharedBounds::new(25.0, 25.0, 150.0, 150.0));
+        let (bx, by) = dev_of(PathMotion::ArcBelow);
+        let bmag = (bx * bx + by * by).sqrt();
+        assert!(bmag > 20.0, "below-arc bends substantially, got ({bx}, {by})");
+        let (ax, ay) = dev_of(PathMotion::ArcAbove);
+        let amag = (ax * ax + ay * ay).sqrt();
+        assert!(amag > 20.0, "above-arc bends substantially, got ({ax}, {ay})");
+        assert!(
+            bx * ax + by * ay < 0.0,
+            "arcs bulge to opposite sides: below ({bx}, {by}) vs above ({ax}, {ay})"
+        );
+        // Arc endpoints are exact up to f32 trig at the table ends
+        // (cos(π/2) ≈ -4e-8 — AOSP shares this; its tests use tolerance too).
+        let close_bounds = |a: SharedBounds, b: SharedBounds| {
+            (a.x - b.x).abs() < 1e-4
+                && (a.y - b.y).abs() < 1e-4
+                && (a.width - b.width).abs() < 1e-4
+                && (a.height - b.height).abs() < 1e-4
+        };
+        assert!(
+            close_bounds(
+                mk(PathMotion::ArcBelow, 0.0).lerped(),
+                SharedBounds::new(0.0, 0.0, 100.0, 100.0)
+            ),
+            "arc start endpoint"
+        );
+        assert!(
+            close_bounds(
+                mk(PathMotion::ArcBelow, 1.0).lerped(),
+                SharedBounds::new(200.0, 100.0, 100.0, 100.0)
+            ),
+            "arc end endpoint"
+        );
+        assert!(
+            close_bounds(
+                mk(PathMotion::ArcAbove, 1.0).lerped(),
+                SharedBounds::new(200.0, 100.0, 100.0, 100.0)
+            ),
+            "above-arc end endpoint"
+        );
+        // Compose degenerate rule: either-dimension travel falls back to
+        // linear (axis-aligned flights stay straight — no sideways bulge).
+        let flat = |sx: f32, sy: f32, ex: f32, ey: f32| {
+            let v = TransitionVisual {
+                start: SharedBounds::new(sx, sy, 100.0, 100.0),
+                end: SharedBounds::new(ex, ey, 100.0, 100.0),
+                ..mk(PathMotion::ArcBelow, 0.5)
+            };
+            v.lerped()
+        };
+        assert_eq!(flat(0.0, 0.0, 200.0, 0.0), SharedBounds::new(100.0, 0.0, 100.0, 100.0));
+        assert_eq!(flat(0.0, 0.0, 0.0, 200.0), SharedBounds::new(0.0, 100.0, 100.0, 100.0));
+        assert_eq!(flat(50.0, 50.0, 50.0, 50.0), SharedBounds::new(50.0, 50.0, 100.0, 100.0));
     }
 
     #[test]
@@ -931,31 +966,56 @@ impl TransitionVisual {
     }
 }
 
-/// Quadratic-bezier center between two points, bulging perpendicular to the
-/// travel direction. `sign > 0` bulges screen-down (`ArcBelow`), `< 0`
-/// screen-up (`ArcAbove`); the normal is oriented so the sign reads in
-/// screen space regardless of travel direction. Sag is a third of the
-/// travel distance (peak deviation ≈ 1/6 of travel — clearly visible without
-/// looking loopy; endpoints exact). Degenerate (coincident centers) falls
-/// back to linear — no NaN.
-fn arc_center(sx: f32, sy: f32, ex: f32, ey: f32, t: f32, sign: f32) -> (f32, f32) {
+/// Quarter-ellipse arc center (Compose `ArcSpline.Arc` math): `X = Cx +
+/// A·sin θ`, `Y = Cy + B·cos θ`, θ swept 0→π/2 through an arc-length table
+/// so travel is uniform along the curve. Orientation follows travel
+/// direction + Above/Below exactly like AOSP (vertical time runs backward;
+/// `Below→DownArc`, `Above→UpArc`). Either-dimension travel below epsilon
+/// falls back to linear (Compose rule — axis-aligned flights stay straight).
+/// Progress outside [0,1] (spring overshoot) pins the center at the nearer
+/// endpoint — a deliberate deviation from AOSP extrapolation: Winia
+/// overshoot rides scalar progress, and size/radii still overshoot visibly.
+fn arc_center(sx: f32, sy: f32, ex: f32, ey: f32, t: f32, below: bool) -> (f32, f32) {
+    const EPS: f32 = 0.001;
+    const LUT: usize = 101;
+    const HALF_PI: f32 = std::f32::consts::FRAC_PI_2;
     let (dx, dy) = (ex - sx, ey - sy);
-    let len = (dx * dx + dy * dy).sqrt();
-    if len < 1e-6 {
+    if dx.abs() < EPS || dy.abs() < EPS {
         return (sx + dx * t, sy + dy * t);
     }
-    let (mut nx, mut ny) = (-dy / len, dx / len);
-    if ny < 0.0 {
-        nx = -nx;
-        ny = -ny;
+    let is_vertical = if below { dy > 0.0 } else { dy < 0.0 };
+    let vertical = if is_vertical { -1.0 } else { 1.0 };
+    let (a, b) = (dx / vertical, dy / -vertical);
+    let (cx, cy) = (
+        if is_vertical { ex } else { sx },
+        if is_vertical { sy } else { ey },
+    );
+    // Arc-length table over θ ∈ [0, π/2] (stack, no alloc).
+    let mut lut = [0.0f32; LUT];
+    let (mut qx, mut qy) = (cx, cy + b);
+    for i in 1..LUT {
+        let th = HALF_PI * i as f32 / (LUT - 1) as f32;
+        let (rx, ry) = (cx + a * th.sin(), cy + b * th.cos());
+        lut[i] = lut[i - 1] + (rx - qx).hypot(ry - qy);
+        qx = rx;
+        qy = ry;
     }
-    let sag = len / 3.0 * sign;
-    let (cx, cy) = ((sx + ex) / 2.0 + nx * sag, (sy + ey) / 2.0 + ny * sag);
-    let u = 1.0 - t;
-    (
-        u * u * sx + 2.0 * u * t * cx + t * t * ex,
-        u * u * sy + 2.0 * u * t * cy + t * t * ey,
-    )
+    let total = lut[LUT - 1];
+    let percent = if is_vertical { 1.0 - t } else { t };
+    let target = percent.clamp(0.0, 1.0) * total;
+    // Invert: angle fraction whose cumulative length brackets the target.
+    let k = lut.partition_point(|&l| l < target);
+    let frac = if k == 0 {
+        0.0
+    } else if k >= LUT {
+        1.0
+    } else {
+        let (l0, l1) = (lut[k - 1], lut[k]);
+        let f = if l1 > l0 { (target - l0) / (l1 - l0) } else { 0.0 };
+        ((k - 1) as f32 + f) / (LUT - 1) as f32
+    };
+    let ang = HALF_PI * frac;
+    (cx + a * ang.sin(), cy + b * ang.cos())
 }
 
 /// Flight rect at scalar progress: size lerps linearly, the rect center
@@ -976,8 +1036,8 @@ pub(crate) fn lerp_flight_rect(
     let (ex, ey) = (end.x + end.width / 2.0, end.y + end.height / 2.0);
     let (cx, cy) = match path {
         PathMotion::Linear => (sx + (ex - sx) * t, sy + (ey - sy) * t),
-        PathMotion::ArcBelow => arc_center(sx, sy, ex, ey, t, 1.0),
-        PathMotion::ArcAbove => arc_center(sx, sy, ex, ey, t, -1.0),
+        PathMotion::ArcBelow => arc_center(sx, sy, ex, ey, t, true),
+        PathMotion::ArcAbove => arc_center(sx, sy, ex, ey, t, false),
     };
     SharedBounds::new(cx - w / 2.0, cy - h / 2.0, w, h)
 }
@@ -2818,17 +2878,23 @@ mod tier0_tests {
 
     #[crate::composable]
     fn arc_list_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
-        Row::new().build(ctx, |ctx| {
-            arc_hero_leaf(ctx, 40.0, 40.0, Color::RED, scope);
-            gap_leaf(ctx, 260.0, 40.0);
+        Column::new().build(ctx, |ctx| {
+            gap_leaf(ctx, 400.0, 40.0);
+            Row::new().build(ctx, |ctx| {
+                arc_hero_leaf(ctx, 40.0, 40.0, Color::RED, scope);
+                gap_leaf(ctx, 260.0, 40.0);
+            });
         });
     }
 
     #[crate::composable]
     fn arc_detail_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
-        Row::new().build(ctx, |ctx| {
-            gap_leaf(ctx, 260.0, 40.0);
-            arc_hero_leaf(ctx, 40.0, 40.0, Color::BLUE, scope);
+        Column::new().build(ctx, |ctx| {
+            gap_leaf(ctx, 400.0, 140.0);
+            Row::new().build(ctx, |ctx| {
+                gap_leaf(ctx, 260.0, 40.0);
+                arc_hero_leaf(ctx, 40.0, 40.0, Color::BLUE, scope);
+            });
         });
     }
 
@@ -2871,10 +2937,11 @@ mod tier0_tests {
             assert_eq!(a.path, PathMotion::ArcBelow, "path resolves from the target marker");
         }
 
-        // Horizontal 260px travel bends ~43px screen-down at mid. The hero is
-        // only 40px, so probes discriminate paint: the arc's outer edge is
-        // inside arc paint but outside straight paint (and vice versa). A
-        // render path silently painting straight fails both probes.
+        // Diagonal travel (260px + 100px centers) bends substantially at
+        // mid. The hero is only 40px, so probes discriminate paint: the
+        // arc's outer edge is inside arc paint but outside straight paint
+        // (and vice versa). A render path silently painting straight fails
+        // both probes.
         let mut bent = false;
         for _ in 0..200 {
             if composer.shared_flights.is_empty() {
@@ -2948,7 +3015,15 @@ mod tier0_tests {
         assert!(composer.shared_flights.is_empty(), "arc flight completes");
         let marked = marked_indices(&composer);
         assert_eq!(marked.len(), 1);
-        let (ex, ey) = node_center(&composer, marked[0]);
+        // Absolute center (node_center is layout-relative — the hero nests
+        // inside a Row here).
+        let root = composer.layout_root_idx().expect("root");
+        let nid = composer.arena_nodes()[marked[0]].id;
+        let (ax, ay) = crate::app::node_abs_position(composer.arena_nodes(), root, nid);
+        let (ex, ey) = (
+            (ax + composer.arena_nodes()[marked[0]].measured_size.width / 2.0) as i32,
+            (ay + composer.arena_nodes()[marked[0]].measured_size.height / 2.0) as i32,
+        );
         let mut surf = render_heads(&composer);
         assert!(
             close_enough(pixel_rgb(&mut surf, ex, ey), (0, 0, 255), 30),
