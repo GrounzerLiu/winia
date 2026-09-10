@@ -786,6 +786,15 @@ pub(crate) enum ModifierElement {
         /// element between passes.
         render_in_overlay: bool,
     },
+    /// 转场期间把**非共享**子树提升到 layer（Compose
+    /// `Modifier.renderInSharedTransitionScopeOverlay`）：固定 AppBar / FAB
+    /// 这类与空间关系绑定的内容，在共享元素飞过头顶时仍留在最上层，转场
+    /// 结束后自动回到普通树内顺序。`z_index` 是层内 z 序（Compose
+    /// `zIndexInOverlay`）——共享端点默认 0，栏通常给更大的值。
+    SharedScopeOverlay {
+        scope_id: u64,
+        z_index: f32,
+    },
 }
 
 // ── Modifier ──
@@ -2384,6 +2393,11 @@ Self::DrawIcon { .. } => f.write_str("DrawIcon"),
                 .field("has_exit", &exit.is_some())
                 .field("render_in_overlay", render_in_overlay)
                 .finish(),
+            Self::SharedScopeOverlay { scope_id, z_index } => f
+                .debug_struct("SharedScopeOverlay")
+                .field("scope", scope_id)
+                .field("z_index", z_index)
+                .finish(),
         }
     }
 }
@@ -3088,6 +3102,11 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
             SharedTransition { scope_id: a_id, key: a_key, kind: a_kind, .. },
             SharedTransition { scope_id: b_id, key: b_key, kind: b_kind, .. },
         ) => a_id == b_id && a_key == b_key && a_kind == b_kind,
+        // 层内提升标记：scope 或 z 变了必须重建（值在 poll 时从 arena 读）
+        (
+            SharedScopeOverlay { scope_id: a_id, z_index: a_z },
+            SharedScopeOverlay { scope_id: b_id, z_index: b_z },
+        ) => a_id == b_id && a_z == b_z,
         (Shadow { params: ap, shape: as_, clip: ac }, Shadow { params: bp, shape: bs, clip: bc }) => {
             ap == bp && as_ == bs && ac == bc
         }

@@ -60,11 +60,20 @@
   "no extra clip" — which is already what the layer does. `ScaleToBounds
   { clip: true }` keeps clipping the flying pair to the lerped rect.
   Revisit together with nested markers.
-- [ ] `renderInSharedTransitionScopeOverlay` (keep bottom bar / FAB on top
-  during transitions) — Tier 1 ghost-above-scrim covers the cross-composer
-  half, and elevated endpoints now paint above the tree; Tier 0 non-shared
-  subtrees (a bar that must stay ABOVE a flying hero) still need their own
-  elevation. The layer machinery is now in place to build it on.
+- [x] `renderInSharedTransitionScopeOverlay` (keep bottom bar / FAB on top
+  during transitions) — shipped as
+  `Modifier::render_in_shared_transition_scope_overlay(&scope, z_index)`.
+  While the scope has a non-terminal flight the marked **non-shared** subtree
+  is a layer root again (skipped in the tree walk, re-drawn untransformed at
+  the end of the layer), z-sorted by `zIndexInOverlay` against the shared
+  endpoints (which default to 0.0); outside a flight it is ordinary tree
+  content. This is the Compose-sanctioned answer for "content slides under
+  pinned chrome", and unlike the shared element's own
+  `render_in_overlay = false` it covers BOTH ends — the detached leaving ghost
+  included, which tree order can never cover. Membership is decided per poll,
+  so a scope whose flight starts in a peer composer this frame elevates one
+  frame late (first frame is at p≈0). Demo:
+  `cargo run -p winia --example shared_transition_pinned_bar_demo`.
 - [ ] `ResizeMode::RemeasureToBounds` — currently degrades to scale with
   one `debug_log!` per flight start. Needs per-frame remeasure at the
   lerped size; paragraph-cache quantization is the known risk

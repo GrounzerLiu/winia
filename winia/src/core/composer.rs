@@ -1687,6 +1687,11 @@ pub struct Composer {
     /// that end is elevated, and a Tier1 peer's flight lives in the MAIN
     /// composer's map, so the peer could not discover it by scanning its own.
     pub(crate) elevated_roots: Vec<usize>,
+    /// Non-shared subtrees elevated for the duration of a flight (Compose
+    /// `renderInSharedTransitionScopeOverlay`). Recomputed each poll by
+    /// `refresh_scope_overlay_roots`; also drives their `LayoutNode` flag so
+    /// the tree walk skips them and the layer re-draws them untransformed.
+    pub(crate) scope_overlay_roots: Vec<usize>,
     /// Last-frame absolute bounds per live marked endpoint (Phase 3
     /// same-screen size-morph detection). Keyed by endpoint identity
     /// (scope, key) — never by slot: slots are positional identities a new
@@ -1752,6 +1757,7 @@ impl Composer {
             transition_layer: Vec::new(),
             layer_order: Vec::new(),
             elevated_roots: Vec::new(),
+            scope_overlay_roots: Vec::new(),
             shared_last_bounds: HashMap::new(),
             composer_id: NEXT_COMPOSER_ID.fetch_add(1, Ordering::Relaxed),
             pending_cross: Vec::new(),

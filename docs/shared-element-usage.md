@@ -18,6 +18,7 @@
 | `current_shared_scope()` | `SharedTransitionScope` receiver | Returns `Option<SharedTransitionScope>`; `None` outside the layout |
 | `scope.shared_content_state(key)` | `rememberSharedContentState(key)` | Pairing handle; equality is (scope, key) — same key in different scopes never pairs |
 | `scope.is_transition_active()` | `SharedTransitionScope.isTransitionActive` | `State<bool>` — true while any flight in the scope is non-terminal (both tiers); subscribe for dimming/input-gating patterns |
+| `.render_in_shared_transition_scope_overlay(&scope, z_index)` | `Modifier.renderInSharedTransitionScopeOverlay(…, zIndexInOverlay)` | Keeps **non-shared** content (pinned app bars, FABs) above the flying pair for as long as the scope transitions; `z_index` orders it against the endpoints (they default to `0.0`). Outside a flight it is ordinary tree content |
 
 ### 1.2 Endpoint markers (`Modifier`)
 
@@ -191,11 +192,19 @@ SharedTransitionLayout::new().build(ctx, |ctx| {
     that looks broken — that is a usage error, not a rendering bug, and it is
     what the demo's toggle shows as its counter-example.
   Two demos, one per side of the rule:
-  `cargo run -p winia --example shared_transition_in_tree_demo` (pinned bar —
-  with the flag on the entering hero covers the bar and snaps back under it
-  when the flight ends, with the flag off it slides under like ordinary
-  content) and `shared_transition_demo` (clipping container — the flag must
-  stay on).
+  `cargo run -p winia --example shared_transition_demo` (clipping container —
+  the flag must stay on) and `shared_transition_pinned_bar_demo` (pinned bar —
+  the Compose answer there is the chrome modifier below, not this flag).
+- **Chrome that must stay on top** (pinned bars, FABs): mark it with
+  `render_in_shared_transition_scope_overlay(&scope, 1.0)` — Compose's
+  `renderInSharedTransitionScopeOverlay(zIndexInOverlay)`. The bar becomes a
+  layer root while the scope transitions and is drawn after the flying pair,
+  so **both** ends pass under it; outside a flight it returns to ordinary tree
+  order. Prefer this over turning the shared element's `render_in_overlay` off:
+  the flag only covers the entering end and exposes it to ancestor clips, while
+  the chrome modifier covers the detached leaving end too. Membership is
+  recomputed each poll, so a scope whose flight began in a peer composer this
+  frame elevates one frame late (p≈0, invisible).
   Two things that mislead when reading a screenshot of the opt-out state:
   - **The visible part reads as "parked at the destination".** What shows is
     the lerped rect ∩ the clip, and when the clip is the destination

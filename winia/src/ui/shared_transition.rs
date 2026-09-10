@@ -538,6 +538,24 @@ impl Modifier {
         })
     }
 
+    /// Compose `Modifier.renderInSharedTransitionScopeOverlay(zIndexInOverlay)`:
+    /// while this scope has a flight, render this **non-shared** subtree in the
+    /// transition layer instead of the tree walk, so it keeps its spatial
+    /// relationship with the flying shared elements (pinned app bars, FABs).
+    /// Outside a flight the subtree is just ordinary tree content again — the
+    /// elevation only lasts as long as the scope is transitioning.
+    ///
+    /// `z_index` is Compose's `zIndexInOverlay`: shared endpoints default to
+    /// `0.0`, so a bar that must stay on top passes something larger. At equal
+    /// z the chrome renders after the flights (i.e. above them).
+    pub fn render_in_shared_transition_scope_overlay(
+        self,
+        scope: &SharedTransitionScope,
+        z_index: f32,
+    ) -> Self {
+        self.push(ModifierElement::SharedScopeOverlay { scope_id: scope.scope_id, z_index })
+    }
+
     /// Mark shared bounds (different content — container morphs + crossfades).
     /// `path` selects the motion path, same as in [`shared_element`](Self::shared_element).
     /// `z_index` orders flying pairs back-to-front, same as above.
@@ -1228,6 +1246,16 @@ pub(crate) fn find_shared_marker(modifier: &Modifier) -> Option<SharedMarker> {
     })
 }
 
+/// Compose `Modifier.renderInSharedTransitionScopeOverlay` marker:
+/// `(scope_id, z_index)` of a non-shared subtree that elevates while its scope
+/// transitions.
+pub(crate) fn find_scope_overlay_marker(modifier: &Modifier) -> Option<(u64, f32)> {
+    modifier.elements().iter().find_map(|el| match el {
+        ModifierElement::SharedScopeOverlay { scope_id, z_index } => Some((*scope_id, *z_index)),
+        _ => None,
+    })
+}
+
 /// Clip flag from the marker kind. Render implements ScaleToBounds only —
 /// RemeasureToBounds degrades to scale (logged, once per flight start)
 /// until per-frame remeasure lands. Non-`JumpCut` placeholders likewise
@@ -1401,6 +1429,16 @@ fn is_terminal(phase: FlightPhase) -> bool {
     matches!(phase, FlightPhase::Finishing | FlightPhase::Cancelled)
 }
 
+/// Read a scope's activity flag without subscribing (coordinator-side).
+pub(crate) fn scope_active_flag(scope_id: u64) -> bool {
+    SCOPE_ACTIVE
+        .lock()
+        .unwrap()
+        .get(&scope_id)
+        .map(|s| s.peek())
+        .unwrap_or(false)
+}
+
 /// Sync per-scope activity flags from flight maps (both tiers — Tier 1
 /// flights live in the main map under the same `scope_id`). Called at the
 /// end of every coordinator poll so the flag tracks opens and teardowns
@@ -1471,9 +1509,63 @@ impl Composer {
         &self.layer_order
     }
 
+    /// Mark (or clear) the non-shared subtrees that must render above the
+    /// flights while their scope is transitioning — Compose
+    /// `Modifier.renderInSharedTransitionScopeOverlay`.
+    ///
+    /// Active means "this composer has a non-terminal flight in that scope"
+    /// (exact for the main composer, which owns Tier 1 flights too) or the
+    /// shared [`SCOPE_ACTIVE`] flag (the cross-composer union, synced at the
+    /// end of each poll — so a scope whose flight started in a PEER composer
+    /// this frame elevates one frame late; the first flight frame is at p≈0,
+    /// so nothing is visibly missing). Idle frames return before the walk.
+    fn refresh_scope_overlay_roots(&mut self) {
+        for &idx in &self.scope_overlay_roots {
+            if let Some(n) = self.arena.nodes.get_mut(idx) {
+                n.in_scope_overlay = false;
+            }
+        }
+        self.scope_overlay_roots.clear();
+        let own: HashSet<u64> = self
+            .shared_flights
+            .values()
+            .filter(|a| !is_terminal(a.flight.phase))
+            .map(|a| a.flight.scope_id)
+            .collect();
+        let any_global = SCOPE_ACTIVE
+            .lock()
+            .unwrap()
+            .values()
+            .any(|s| s.peek());
+        if own.is_empty() && !any_global {
+            return; // idle: zero-cost (no arena walk)
+        }
+        let Some(root) = self.arena.root else { return };
+        let mut marked: Vec<usize> = Vec::new();
+        {
+            let nodes = &self.arena.nodes;
+            let mut stack = vec![root];
+            while let Some(idx) = stack.pop() {
+                let node = &nodes[idx];
+                if let Some((sid, _)) = find_scope_overlay_marker(&node.modifier) {
+                    if own.contains(&sid) || scope_active_flag(sid) {
+                        marked.push(idx);
+                    }
+                }
+                stack.extend(node.children.iter().copied());
+            }
+        }
+        for &idx in &marked {
+            self.arena.nodes[idx].in_scope_overlay = true;
+        }
+        self.scope_overlay_roots = marked;
+    }
+
     /// Rebuild [`Self::transition_roots`] from live state: every detached
     /// source ([`Self::transition_layer`]) plus every elevated in-tree
-    /// endpoint written this frame ([`Self::elevated_roots`]). Stable z-sort
+    /// endpoint written this frame ([`Self::elevated_roots`]) plus the chrome
+    /// that opted into the scope overlay ([`Self::scope_overlay_roots`]).
+    /// Stable z-sort
     /// (`zIndexInOverlay`) — equal z keeps the old relative order (detached
     /// sources before elevated targets, i.e. the entering element sits UNDER
     /// the leaving ghost, exactly like the in-tree + ghost compositing the
@@ -1482,16 +1574,20 @@ impl Composer {
     pub(crate) fn rebuild_layer_order(&mut self) {
         let mut order: Vec<usize> = self.elevated_roots.clone();
         order.extend(self.transition_layer.iter().copied());
+        // Chrome last at equal z: a bar that opts into the overlay expects to
+        // sit on top of the flying pair unless it asks for less.
+        order.extend(self.scope_overlay_roots.iter().copied());
         // Dedup (a detached source can be reached from both lists) while
         // preserving first-seen order, then z-sort back-to-front.
         let mut seen = HashSet::new();
         order.retain(|idx| seen.insert(*idx));
         let z_of = |nodes: &[LayoutNode], idx: usize| -> f32 {
-            nodes
-                .get(idx)
-                .and_then(|n| find_shared_marker(&n.modifier))
-                .map(|m| m.z_index)
-                .unwrap_or(0.0)
+            let Some(n) = nodes.get(idx) else { return 0.0 };
+            if let Some(m) = find_shared_marker(&n.modifier) {
+                m.z_index
+            } else {
+                find_scope_overlay_marker(&n.modifier).map(|(_, z)| z).unwrap_or(0.0)
+            }
         };
         order.sort_by(|&a, &b| {
             z_of(&self.arena.nodes, a)
@@ -1516,7 +1612,8 @@ impl Composer {
         let id_to_idx: HashMap<u64, usize> =
             nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
         for &idx in &self.layer_order {
-            if nodes.get(idx).is_none_or(|n| n.transition.is_none()) {
+            let Some(n) = nodes.get(idx) else { continue };
+            if n.transition.is_none() && !n.in_scope_overlay {
                 continue;
             }
             let abs = abs_rect_upward(nodes, &id_to_idx, idx);
@@ -1783,6 +1880,9 @@ impl Composer {
         // Layer membership is rebuilt from this frame's writes (Tier0 writes
         // here, Tier1 writes land in the same frame's cross-poll below).
         self.elevated_roots.clear();
+        // Chrome elevation (Compose renderInSharedTransitionScopeOverlay) is a
+        // per-frame decision, so it is recomputed here as well.
+        self.refresh_scope_overlay_roots();
         // Live marker map doubles for flight polling and morph detection —
         // one arena walk per frame.
         let live = self.shared_live_map();
@@ -3848,15 +3948,15 @@ mod tier0_tests {
     /// hero ended up with the list gap's measurements) — the same trap the
     /// list/detail screens document.
     #[crate::composable]
-    fn under_bar_list(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
+    fn under_bar_list(ctx: &mut ComposeCtx, scope: &SharedTransitionScope, in_overlay: bool) {
         gap_leaf(ctx, 10.0, 300.0);
-        hero_leaf(ctx, 150.0, 150.0, Color::RED, scope, false);
+        hero_leaf(ctx, 150.0, 150.0, Color::RED, scope, in_overlay);
     }
 
     #[crate::composable]
-    fn under_bar_detail(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
+    fn under_bar_detail(ctx: &mut ComposeCtx, scope: &SharedTransitionScope, in_overlay: bool) {
         // Lands at the top of the window, so its upper band sits under the bar.
-        hero_leaf(ctx, 300.0, 160.0, Color::BLUE, scope, false);
+        hero_leaf(ctx, 300.0, 160.0, Color::BLUE, scope, in_overlay);
     }
 
     /// The correct use of `render_in_overlay = false` on the ENTERING side:
@@ -3888,9 +3988,9 @@ mod tier0_tests {
                             .modifier(Modifier::new().fill_max_size())
                             .build(ctx, |ctx| {
                                 if s.get() {
-                                    under_bar_list(ctx, &scope);
+                                    under_bar_list(ctx, &scope, false);
                                 } else {
-                                    under_bar_detail(ctx, &scope);
+                                    under_bar_detail(ctx, &scope, false);
                                 }
                             });
                         // Pinned chrome, painted last → above the whole screen.
@@ -3971,6 +4071,193 @@ mod tier0_tests {
             frame(&mut composer);
         }
         crate::animation::clear_all_animations();
+    }
+
+    /// Under-bar scenario with the bar opting into the scope overlay (Compose
+    /// `Modifier.renderInSharedTransitionScopeOverlay`).
+    fn chrome_frame(
+        composer: &mut Composer,
+        show: &State<bool>,
+        chrome_z: f32,
+        hero_in_overlay: bool,
+    ) {
+        let s = show.clone();
+        composer.compose(|ctx| {
+            SharedTransitionLayout::new().build(ctx, |ctx| {
+                let scope = current_shared_scope().expect("scope");
+                Stack::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+                    Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+                        if s.get() {
+                            under_bar_list(ctx, &scope, hero_in_overlay);
+                        } else {
+                            under_bar_detail(ctx, &scope, hero_in_overlay);
+                        }
+                    });
+                    Column::new()
+                        .modifier(
+                            Modifier::new()
+                                .size(400.0, 60.0)
+                                .background(Color::GREEN, Shape::Rectangle)
+                                .render_in_shared_transition_scope_overlay(&scope, chrome_z),
+                        )
+                        .build(ctx, |_| {});
+                });
+            });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        composer.poll_shared_flights();
+    }
+
+    fn chrome_bar_index(composer: &Composer) -> usize {
+        composer
+            .arena_nodes()
+            .iter()
+            .position(|n| find_scope_overlay_marker(&n.modifier).is_some())
+            .expect("chrome bar node")
+    }
+
+    /// Compose `Modifier.renderInSharedTransitionScopeOverlay`: chrome that
+    /// opts in keeps its spatial relationship while the flight runs, which is
+    /// the piece the shared-element flag cannot do — it covers BOTH ends,
+    /// including the detached leaving ghost.
+    #[test]
+    fn scope_overlay_chrome_covers_both_flight_ends() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+        // Heroes elevated: the A/B must isolate the CHROME elevation, so the
+        // flight has to be in the layer too (otherwise the bar covers it by
+        // plain tree order and the comparison proves nothing).
+        chrome_frame(&mut composer, &show, 1.0, true);
+        show.set(false);
+        chrome_frame(&mut composer, &show, 1.0, true);
+        assert_eq!(composer.shared_flights.len(), 1, "flight opened");
+        let bar = chrome_bar_index(&composer);
+
+        for _ in 0..200 {
+            match flight_probe(&composer) {
+                Some((p, _)) if p >= 0.9 => break,
+                None => break,
+                _ => {}
+            }
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(16));
+            chrome_frame(&mut composer, &show, 1.0, true);
+        }
+
+        // The claim first: chrome stays on top of the flight. Without the
+        // chrome elevation the flying pair (both ends are layer roots) paints
+        // over the bar instead — this is what fails pre-feature.
+        let (probe_x, probe_y) = (150.0, 40.0);
+        let mut covered = render_heads(&composer);
+        let c_cov = pixel_rgb(&mut covered, probe_x as i32, probe_y as i32);
+        assert!(
+            c_cov.1 > 180 && c_cov.0 < 80 && c_cov.2 < 80,
+            "chrome stays on top of both ends, got {c_cov:?}"
+        );
+
+        // Then the mechanism.
+        assert!(
+            composer.arena_nodes()[bar].in_scope_overlay,
+            "chrome elevates while the scope is transitioning"
+        );
+        assert!(
+            composer.transition_roots().contains(&bar),
+            "chrome joins the layer"
+        );
+
+        // Same frame, one thing removed: without the elevation the flight wins
+        // again.
+        composer.arena.nodes[bar].in_scope_overlay = false;
+        composer.scope_overlay_roots.clear();
+        composer.rebuild_layer_order();
+        let mut bare = render_heads(&composer);
+        let c_bare = pixel_rgb(&mut bare, probe_x as i32, probe_y as i32);
+        assert!(
+            c_bare.2 > 120,
+            "without the chrome elevation the flight covers the bar, got {c_bare:?}"
+        );
+
+        for _ in 0..200 {
+            if composer.shared_flights.is_empty() {
+                break;
+            }
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(16));
+            chrome_frame(&mut composer, &show, 1.0, true);
+        }
+        assert!(composer.shared_flights.is_empty(), "flight completes");
+        crate::animation::clear_all_animations();
+    }
+
+    /// The elevation lasts exactly as long as the scope is transitioning —
+    /// outside a flight the chrome is ordinary tree content again.
+    #[test]
+    fn scope_overlay_chrome_follows_the_transition_window() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+
+        chrome_frame(&mut composer, &show, 1.0, false);
+        let bar = chrome_bar_index(&composer);
+        assert!(!composer.arena_nodes()[bar].in_scope_overlay, "idle: in tree");
+        assert!(
+            !composer.transition_roots().contains(&bar),
+            "idle: not a layer root"
+        );
+        assert!(composer.transition_roots().is_empty(), "no layer when idle");
+
+        // ...and after the flight finishes it goes back to the tree.
+        show.set(false);
+        chrome_frame(&mut composer, &show, 1.0, false);
+        assert!(composer.arena_nodes()[bar].in_scope_overlay, "flying: elevated");
+        for _ in 0..300 {
+            if composer.shared_flights.is_empty() {
+                break;
+            }
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(16));
+            chrome_frame(&mut composer, &show, 1.0, false);
+        }
+        assert!(composer.shared_flights.is_empty(), "flight completes");
+        // Membership is decided by the poll, so the settled state is the NEXT
+        // frame's (the completing frame still draws the previous decision —
+        // same pixels, just a different pass).
+        chrome_frame(&mut composer, &show, 1.0, false);
+        let bar = chrome_bar_index(&composer);
+        assert!(
+            !composer.arena_nodes()[bar].in_scope_overlay,
+            "settled: back in tree order"
+        );
+        crate::animation::clear_all_animations();
+    }
+
+    /// `z_index` orders the chrome against the flights (Compose
+    /// `zIndexInOverlay`): shared endpoints default to 0, so a bar on top
+    /// passes a larger value and one that wants to stay under passes a
+    /// smaller one.
+    #[test]
+    fn scope_overlay_z_orders_chrome_against_flights() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        for (chrome_z, expect_bar_last) in [(-1.0f32, false), (1.0, true)] {
+            let mut composer = Composer::new();
+            let show = State::new(true);
+            chrome_frame(&mut composer, &show, chrome_z, false);
+            show.set(false);
+            chrome_frame(&mut composer, &show, chrome_z, false);
+            assert_eq!(composer.shared_flights.len(), 1, "flight opened");
+            let bar = chrome_bar_index(&composer);
+            let order = composer.transition_roots().to_vec();
+            assert_eq!(
+                order.last().copied() == Some(bar),
+                expect_bar_last,
+                "chrome z={chrome_z} in layer order {order:?}"
+            );
+            crate::animation::clear_all_animations();
+        }
     }
 
     /// Bouncy hero leaf (spring overshoot must render past the end rect).

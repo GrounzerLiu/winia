@@ -191,6 +191,18 @@ The overlay pass generalizes that pass instead of adding a second one:
   too. `OverlayClip` (a clip *inside* the overlay) is not built: its
   Compose default derives from the parent `sharedBounds`, which requires
   nested markers; absent those the default already means "no extra clip".
+- **Chrome opts back in** (`renderInSharedTransitionScopeOverlay`). The
+  escape above is a problem for pinned bars: a hero flying into a bar's strip
+  would paint over it. Compose's answer is a modifier on the bar, not on the
+  shared element, and it maps cleanly onto the same layer:
+  `Modifier::render_in_shared_transition_scope_overlay(&scope, z)` makes the
+  marked **non-shared** subtree a layer root for as long as the scope has a
+  non-terminal flight — skipped by the tree walk, re-drawn untransformed at
+  the end of the layer, z-sorted against the endpoints (which sit at 0.0).
+  Because the layer is drawn after the tree, this covers the detached leaving
+  ghost too, which tree order can never cover. Membership is decided per poll
+  (`refresh_scope_overlay_roots`), so a flight that starts in a peer composer
+  elevates its chrome one frame late — at p≈0, i.e. invisibly.
 
 ## 4. Flight engine: unified kinematics
 

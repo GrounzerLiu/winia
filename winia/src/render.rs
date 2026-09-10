@@ -689,8 +689,12 @@ fn render_pass1(
     // (after the whole tree), so the in-tree walk must not paint it again —
     // that is what lets it escape ancestor clips (a canvas clip can never be
     // un-set by a descendant) and land above non-shared siblings. Layout,
-    // state and hit testing are untouched; only paint moves.
-    if !layer_root && node.transition.as_ref().is_some_and(|t| t.elevated) {
+    // state and hit testing are untouched; only paint moves. Same switch for
+    // chrome that opted into the scope overlay (pinned bars): it is re-drawn
+    // untransformed at the end of the layer, above the flights.
+    if !layer_root
+        && (node.transition.as_ref().is_some_and(|t| t.elevated) || node.in_scope_overlay)
+    {
         return;
     }
     let x = parent_x + node.position.x;

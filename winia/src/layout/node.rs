@@ -206,6 +206,11 @@ pub struct LayoutNode {
     /// 转场结束即清 `None`。刻意不进 `CachedNode`——飞行态是瞬态，
     /// 缓存命中必须从干净状态重建（协调器按 slot 回填）。
     pub(crate) transition: Option<crate::ui::shared_transition::TransitionVisual>,
+    /// 转场期间提升到 layer 的**非共享**子树（Compose
+    /// `renderInSharedTransitionScopeOverlay`）：树内遍历跳过它，由协调器
+    /// 在 layer 末尾按原样重画（无变换），从而压在飞行端点之上。每帧由
+    /// `refresh_scope_overlay_roots` 重算——属于瞬态，不进缓存。
+    pub(crate) in_scope_overlay: bool,
 }
 
 // ── CachedNode：LayoutNode 的可缓存子集，用于增量重组时恢复节点 ──
@@ -313,6 +318,7 @@ impl LayoutNode {
             focus_color: std::cell::Cell::new(crate::modifier::Color::from_argb(204, 77, 153, 255)),
             composing_color: std::cell::Cell::new(crate::modifier::Color::TRANSPARENT),
             transition: None,
+            in_scope_overlay: false,
         }
     }
 
@@ -367,6 +373,7 @@ impl Default for LayoutNode {
             focus_color: std::cell::Cell::new(crate::modifier::Color::from_argb(204, 77, 153, 255)),
             composing_color: std::cell::Cell::new(crate::modifier::Color::TRANSPARENT),
             transition: None,
+            in_scope_overlay: false,
         }
     }
 }
