@@ -24,7 +24,7 @@
 | Method | Compose equivalent | Notes |
 |---|---|---|
 | `.shared_element(state, transform, placeholder, path, z_index)` | `Modifier.sharedElement(…)` | Same content on both ends — flies + crossfades; pass `PlaceHolderSize::JumpCut` (others degrade to it, logged, until implemented); `path` is `Linear` / `ArcBelow` / `ArcAbove`; `z_index` (default 0.0) orders retained ghosts back-to-front, in-tree targets keep tree order |
-| `.shared_bounds(state, enter, exit, transform, resize, placeholder, path, z_index)` | `Modifier.sharedBounds(…)` | Different content — container morphs; `enter` plays on the appearing end, `exit` on the disappearing end (fade channels claimed per-end reproduce the crossfade; slide/scale/expand compose on top at flight progress; Morph role skips both; expand ≈ scale-about-edge + clip) |
+| `.shared_bounds(state, enter, exit, transform, resize, placeholder, path, z_index)` | `Modifier.sharedBounds(…)` | Different content — container morphs; `enter` plays on the appearing end, `exit` on the disappearing end (fade channels claimed per-end reproduce the crossfade; slide/scale/expand switches and distances compose on top at flight progress — NOTE: the transitions' inner `AnimationSpec`s are ignored, channels always ride the flight clock; Morph role skips both; expand ≈ scale-about-edge + clip) |
 
 ### 1.3 Flight shaping (`BoundsTransform`)
 
@@ -80,6 +80,9 @@ SharedTransitionLayout::new().build(ctx, |ctx| {
                         .shared_element(
                             scope.shared_content_state("hero"), // same key → pair
                             BoundsTransform::spring(SpringSpec::bouncy()),
+                            PlaceHolderSize::JumpCut,
+                            PathMotion::ArcBelow,
+                            0.0,
                         ),
                 )
                 .build(ctx, |_| {});
@@ -110,15 +113,17 @@ SharedTransitionLayout::new().build(ctx, |ctx| {
 
 ## 4. Motion semantics
 
-- Progress is scalar 0→1; the rect is derived per frame via Popular
-  `lerp` — spring overshoot (`t > 1`) flies past the endpoint, then
+- Progress is scalar 0→1; the rect is derived per frame from it —
+  spring overshoot (`t > 1`) flies past the endpoint, then
   settles exactly onto it. One unclamped flight-t drives rect, radii,
   clip and hit together; only opacity stays clamped.
 - Completion waits for the animation engine to release the progress
   state (bouncy flights render their full overshoot), then tears down:
   retained source freed, target visuals cleared, natural render resumes.
 - Retarget-lite: switching again mid-flight cancels the old flight and
-  restarts seamlessly from the current visual rect.
+  restarts from the current visual rect (seamless for Element flights;
+  slide-bounds flights may snap by the live channel offset — documented
+  in code).
 
 ## 5. Shape and color
 
@@ -157,10 +162,11 @@ SharedTransitionLayout::new().build(ctx, |ctx| {
 
 ## 8. Tests
 
-- `cargo test -p winia --lib ui::shared_transition` (33 tests: unit,
+- `cargo test -p winia --lib ui::shared_transition` (43 tests: unit,
   headless Tier 0/Tier 1 raster probes, guard-checked regression tests
   for scroll add-back, morph hit routing, bouncy overshoot, baseline
-  identity).
+  identity, arc paint, z-order, enter/exit slide, expand wipe, active
+  flag).
 - Tests driving animations hold `TEST_SERIAL` + `clear_all_animations()`.
 - Behavior changes must ship a regression test that **fails pre-fix**
   (verify by temporarily reverting the fix, as done for all four).

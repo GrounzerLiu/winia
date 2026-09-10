@@ -139,8 +139,8 @@ impl SharedTransitionDefaults {
     }
 
     /// Default overlay z-order for flying pairs (forward-compat for the
-    /// `zIndexInOverlay` P1 item — the renderer currently paints
-    /// transition roots in arena order).
+    /// `zIndexInOverlay` P1 item — retained ghosts sort back-to-front by
+    /// marker z at detach; in-tree targets keep tree order).
     pub fn z_index_in_overlay() -> f32 {
         0.0
     }
@@ -1110,10 +1110,10 @@ fn arc_center(sx: f32, sy: f32, ex: f32, ey: f32, t: f32, below: bool) -> (f32, 
 }
 
 /// Flight rect at scalar progress: size lerps linearly, the rect center
-/// follows the motion path (linear or quadratic-bezier arc — Compose
-/// `ArcMode` bends the path only, deformation stays on the straight size
-/// ramp). Single home for paint, clip, hit and retarget continuity so an
-/// arc can never silently straighten on one consumer.
+/// follows the motion path (linear or Compose `ArcSpline.Arc`
+/// quarter-ellipse, arc-length uniform). Single home for paint, clip, hit
+/// and retarget continuity so an arc can never silently straighten on one
+/// consumer.
 pub(crate) fn lerp_flight_rect(
     start: &SharedBounds,
     end: &SharedBounds,
@@ -1373,6 +1373,10 @@ fn is_terminal(phase: FlightPhase) -> bool {
 /// end of every coordinator poll so the flag tracks opens and teardowns
 /// within one frame. Only scopes somebody has read (map entries) are
 /// touched — flights never create entries by themselves.
+/// NOTE: deliberately a full sync (not true-only) per composer — headless
+/// Tier 0 polls must clear flags alone, and the transient cross-poll flap
+/// (overlay poll clears, union poll re-sets) is invisible: no render runs
+/// between polls, and steady-state `set` dedups without notify.
 pub(crate) fn sync_scope_active_states(all: &[&Composer]) {
     let mut active: HashSet<u64> = HashSet::new();
     for c in all {
@@ -1487,7 +1491,11 @@ impl Composer {
                 if let Some(a) = self.shared_flights.get(&id) {
                     // Unclamped + path-aware: retarget continuity follows the
                     // true visual rect, including spring overshoot past the
-                    // old end and any arc bend.
+                    // old end and any arc bend. NOTE: enter/exit channel
+                    // offsets (slide/scale) restart from full — a mid-flight
+                    // redirect of a slide-bounds flight may snap by the live
+                    // offset ( folding scale pivots into a rect is
+                    // ill-defined; Element retargets stay seamless).
                     let p = a.progress.peek();
                     let end = a.flight.end.unwrap_or(a.start);
                     let s = lerp_flight_rect(&a.start, &end, p, a.path);
@@ -1738,27 +1746,44 @@ impl Composer {
                 let (ox, oy) = self.screen_origin;
                 let end = SharedBounds::new(tx + ox, ty + oy, tw, th);
                 let marker = find_shared_marker(&self.arena.nodes[tidx].modifier);
-                let (spec, clip, path, enter) = match marker {
+                let (spec, clip, path, enter, target_is_bounds) = match marker {
                     Some(m) => (
                         m.transform.spec.clone(),
                         shared_clip_for_kind(&m.kind),
                         m.path,
                         m.enter,
+                        matches!(m.kind, SharedKind::Bounds { .. }),
                     ),
-                    None => (BoundsTransform::default().spec, false, PathMotion::Linear, None),
+                    None => (BoundsTransform::default().spec, false, PathMotion::Linear, None, false),
                 };
                 // Enter from the target marker, exit from the retained source
                 // marker — each side declares its own (Compose rule). Only
                 // Bounds flights carry the pair (Element always crossfades);
                 // a missing source exit falls back to fade-out (today's look).
-                let bounds_fx = match enter {
-                    Some(enter) => {
-                        let exit = self
+                let source_marker = self
+                    .shared_flights
+                    .get(&id)
+                    .and_then(|a| a.source_idx)
+                    .and_then(|sidx| self.arena.nodes.get(sidx))
+                    .and_then(|n| find_shared_marker(&n.modifier));
+                // Mixed-kind pairing (Element one side, Bounds the other)
+                // resolves silently toward the target side — log it.
+                if let Some(ref sm) = source_marker {
+                    let source_is_bounds = matches!(sm.kind, SharedKind::Bounds { .. });
+                    if source_is_bounds != target_is_bounds {
+                        let (scope, key) = self
                             .shared_flights
                             .get(&id)
-                            .and_then(|a| a.source_idx)
-                            .and_then(|sidx| self.arena.nodes.get(sidx))
-                            .and_then(|n| find_shared_marker(&n.modifier))
+                            .map(|a| (a.flight.scope_id, a.flight.key.clone()))
+                            .unwrap_or((0, String::new()));
+                        crate::debug_log!(
+                            "[shared] mixed-kind pair scope={scope} key={key} — flight follows the target side"
+                        );
+                    }
+                }
+                let bounds_fx = match enter {
+                    Some(enter) => {
+                        let exit = source_marker
                             .and_then(|m| m.exit)
                             .unwrap_or_default();
                         Some((enter, exit))
@@ -2214,14 +2239,15 @@ impl Composer {
                         find_shared_marker(&n.modifier),
                     )
                 };
-                let (spec, clip, path, enter) = match marker {
+                let (spec, clip, path, enter, target_is_bounds) = match marker {
                     Some(m) => (
                         m.transform.spec.clone(),
                         shared_clip_for_kind(&m.kind),
                         m.path,
                         m.enter,
+                        matches!(m.kind, SharedKind::Bounds { .. }),
                     ),
-                    None => (BoundsTransform::default().spec, false, PathMotion::Linear, None),
+                    None => (BoundsTransform::default().spec, false, PathMotion::Linear, None, false),
                 };
                 let radius_to = {
                     let n = &peer.arena.nodes[tidx];
@@ -2238,13 +2264,24 @@ impl Composer {
                 let end_scroll = ancestor_scroll_sum(&peer.arena.nodes, &peer_id_to_idx, tidx);
                 // Exit from the owner-side retained source marker (fade-out
                 // fallback when absent — same rule as Tier 0).
+                let source_marker = all[owner_idx]
+                    .arena
+                    .nodes
+                    .get(p.src_idx)
+                    .and_then(|n| find_shared_marker(&n.modifier));
+                if let Some(ref sm) = source_marker {
+                    let source_is_bounds = matches!(sm.kind, SharedKind::Bounds { .. });
+                    if source_is_bounds != target_is_bounds {
+                        crate::debug_log!(
+                            "[shared] mixed-kind pair scope={} key={} — flight follows the target side",
+                            kk.0,
+                            kk.1
+                        );
+                    }
+                }
                 let bounds_fx = match enter {
                     Some(enter) => {
-                        let exit = all[owner_idx]
-                            .arena
-                            .nodes
-                            .get(p.src_idx)
-                            .and_then(|n| find_shared_marker(&n.modifier))
+                        let exit = source_marker
                             .and_then(|m| m.exit)
                             .unwrap_or_default();
                         Some((enter, exit))
@@ -3887,6 +3924,131 @@ mod tier0_tests {
         crate::animation::clear_all_animations();
     }
 
+    /// sharedBounds hero with expand enter/exit (wipe-in from the top
+    /// edge, wipe-out toward it — both faded).
+    fn expand_hero_leaf(
+        ctx: &mut ComposeCtx,
+        w: f32,
+        h: f32,
+        color: Color,
+        scope: &SharedTransitionScope,
+    ) {
+        let key = ctx.next_key();
+        ctx.start_leaf(
+            key,
+            Modifier::new()
+                .size(w, h)
+                .background(color, Shape::rounded(8.0))
+                .shared_bounds(
+                    scope.shared_content_state("hero"),
+                    VisibilityTransition::expand_in(TweenSpec::default()).with_fade(),
+                    VisibilityTransition::shrink_out(TweenSpec::default()).with_fade(),
+                    BoundsTransform::default(),
+                    ResizeMode::ScaleToBounds { clip: false },
+                    PlaceHolderSize::JumpCut,
+                    PathMotion::Linear,
+                    0.0,
+                ),
+        );
+        ctx.end_node();
+    }
+
+    #[crate::composable]
+    fn expand_list_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
+        expand_hero_leaf(ctx, 120.0, 80.0, Color::RED, scope);
+    }
+
+    #[crate::composable]
+    fn expand_detail_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
+        gap_leaf(ctx, 400.0, 100.0);
+        expand_hero_leaf(ctx, 300.0, 160.0, Color::BLUE, scope);
+    }
+
+    fn expand_frame(composer: &mut Composer, show: &State<bool>) {
+        let s = show.clone();
+        composer.compose(|ctx| {
+            SharedTransitionLayout::new().build(ctx, |ctx| {
+                let scope = current_shared_scope().expect("inside SharedTransitionLayout");
+                Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+                    if s.get() {
+                        expand_list_screen(ctx, &scope);
+                    } else {
+                        expand_detail_screen(ctx, &scope);
+                    }
+                });
+            });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        composer.poll_shared_flights();
+    }
+
+    fn expand_advance(composer: &mut Composer, show: &State<bool>) {
+        crate::animation::update_animations();
+        std::thread::sleep(std::time::Duration::from_millis(16));
+        expand_frame(composer, show);
+    }
+
+    #[test]
+    fn tier0_shared_bounds_expand_wipes_from_edge() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+
+        expand_frame(&mut composer, &show);
+        show.set(false);
+        expand_frame(&mut composer, &show);
+        assert_eq!(composer.shared_flights.len(), 1, "expand flight opened");
+
+        // Tween-linear flight at p≈0.5: the target covers the TOP half of
+        // the lerped rect (grown down from the top edge); the bottom half
+        // is background. Ghost mirrors from the same edge.
+        let mut wiped = false;
+        for _ in 0..200 {
+            if composer.shared_flights.is_empty() {
+                break;
+            }
+            let probe = composer.shared_flights.values().next().map(|a| {
+                let p = a.progress.peek();
+                let e = a.flight.end.expect("end resolved after first poll");
+                let l = a.start.lerp(&e, p);
+                (p, (l.x + l.width / 2.0) as i32, l.y as i32, l.height)
+            });
+            if let Some((p, cx, top, h)) = probe {
+                if p > 0.45 && p < 0.55 {
+                    // Just inside the top edge: grown paint — ghost red over
+                    // target blue (both wipe from the top edge, both faded).
+                    let mut surf = render_heads(&composer);
+                    let grown = pixel_rgb(&mut surf, cx, top + 10);
+                    assert!(
+                        grown.0 > 140 && grown.1 < 120 && grown.2 > 100,
+                        "top edge shows grown paint, got {grown:?} at p={p}"
+                    );
+                    // Just inside the bottom edge: not yet grown.
+                    let mut surf2 = render_heads(&composer);
+                    let pending = pixel_rgb(&mut surf2, cx, (top as f32 + h - 10.0) as i32);
+                    assert!(
+                        close_enough(pending, (255, 255, 255), 40),
+                        "bottom edge still background, got {pending:?} at p={p}"
+                    );
+                    wiped = true;
+                    break;
+                }
+            }
+            expand_advance(&mut composer, &show);
+        }
+        assert!(wiped, "flight must pass through the wipe window");
+
+        for _ in 0..200 {
+            if composer.shared_flights.is_empty() {
+                break;
+            }
+            expand_advance(&mut composer, &show);
+        }
+        assert!(composer.shared_flights.is_empty(), "expand flight completes");
+        crate::animation::clear_all_animations();
+    }
+
     #[test]
     fn remap_hit_identity_endpoints_miss_outside() {
         let vis = TransitionVisual {
@@ -4248,6 +4410,39 @@ mod tier0_tests {
             close_enough(pixel_rgb(&mut surf, ex, ey), (0, 0, 255), 30),
             "ends on the overlay hero"
         );
+        crate::animation::clear_all_animations();
+    }
+
+    #[test]
+    fn tier1_scope_flag_tracks_cross_flight() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        clear_scope_active_states();
+        let mut a = Composer::new();
+        let mut b = Composer::new();
+        let scope = SharedTransitionScope::new(90);
+        let show_a = State::new(true);
+        let show_b = State::new(false);
+
+        xframe(&mut a, &mut b, &show_a, &show_b, &scope);
+        show_a.set(false);
+        show_b.set(true);
+        xframe(&mut a, &mut b, &show_a, &show_b, &scope);
+        assert_eq!(a.shared_flights.len(), 1, "Tier1 opens in the main map");
+
+        // Same global entry the union sync writes (keyed by scope_id).
+        let active = scope.is_transition_active();
+        xadvance(&mut a, &mut b, &show_a, &show_b, &scope);
+        assert!(active.get(), "flag true while the cross flight is non-terminal");
+
+        for _ in 0..200 {
+            if a.shared_flights.is_empty() {
+                break;
+            }
+            xadvance(&mut a, &mut b, &show_a, &show_b, &scope);
+        }
+        assert!(a.shared_flights.is_empty(), "Tier1 completes");
+        assert!(!active.get(), "flag false after cross teardown");
         crate::animation::clear_all_animations();
     }
 

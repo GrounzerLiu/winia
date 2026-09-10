@@ -738,6 +738,9 @@ fn render_pass1(
                     // Scale pivot is RELATIVE to the lerped origin (this block
                     // sits before the flight scale — absolute device pivots
                     // would be scaled along; same trap as the slide above).
+                    // NOTE: expand takes over the scale pivot (single merged
+                    // k) — combining scale+expand on one endpoint is
+                    // discouraged (Compose layers them; v1 merges).
                     let mut kx = 1.0f32;
                     let mut ky = 1.0f32;
                     let mut px = l.width * cfg.transform_origin.0;

@@ -29,7 +29,9 @@
   the nearer endpoint (documented in code).
 - [x] `zIndexInOverlay` — `z_index` parameter on both markers (default
   0.0); retained ghosts sort back-to-front (stable — equal z keeps detach
-  order, i.e. old behavior). In-tree targets keep tree order (documented).
+  order, i.e. old behavior; Tier 0 detach order is deterministic, Tier 1
+  multi-key stash order follows map iteration). In-tree targets keep tree
+  order (documented).
 - [x] `enter` / `exit` on `shared_bounds()` — target plays enter, source
   plays exit (each side declares its own); fade channels claimed per-end
   (fade defaults reproduce the crossfade); slide/scale evaluated at flight
