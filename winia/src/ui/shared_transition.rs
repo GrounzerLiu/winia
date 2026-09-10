@@ -1138,12 +1138,15 @@ impl TransitionVisual {
         let l = self.lerped();
         let sx = if node_w > 0.0 { l.width / node_w } else { 1.0 }.max(1e-6);
         let sy = if node_h > 0.0 { l.height / node_h } else { 1.0 }.max(1e-6);
-        // Percent corners (Pill/Circle) follow the box they are evaluated on:
-        // Compose derives them from the animated bounds, and `min(w,h)/2` is NOT
-        // linear in t — lerping the two endpoint radii under-rounds mid-flight
-        // (40x120 -> 200x30 wanted 37.5 at t=.5, lerp gives 17.5).
+        // Percent corners (Pill/Circle) are evaluated on the box the flight
+        // PAINTS into — the lerped rect — because Compose derives them from the
+        // animated bounds and `min(w,h)/2` is NOT linear in t (lerping the two
+        // endpoint radii under-rounds mid-flight: 40x120 -> 200x30 wanted 37.5
+        // at t=.5, the lerp gives 17.5). Evaluating them on `node_w/node_h`
+        // instead would freeze the corner for any end whose layout box does not
+        // move — the leaving ghost always, and any `ScaleToBounds` target.
         let r = if self.radius_auto {
-            [node_w.min(node_h) / 2.0; 4]
+            [l.width.min(l.height) / 2.0; 4]
         } else {
             self.radii()
         };
@@ -5967,6 +5970,108 @@ mod tier0_tests {
             layer.last().copied(),
             Some(bands[3]),
             "the ghost maps the tap into the target's content box, got {layer:?}"
+        );
+        crate::animation::clear_all_animations();
+    }
+
+    /// Circle hero (percent corners) — the shape the demo uses.
+    #[crate::composable]
+    fn circle_hero_screen(
+        ctx: &mut ComposeCtx,
+        scope: &SharedTransitionScope,
+        w: f32,
+        h: f32,
+        color: Color,
+    ) {
+        Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+            Column::new()
+                .modifier(
+                    Modifier::new()
+                        .size(w, h)
+                        .background(color, Shape::Circle)
+                        .shared_bounds(
+                            scope.shared_content_state("hero"),
+                            VisibilityTransition::fade_in(TweenSpec::default()),
+                            VisibilityTransition::fade_out(TweenSpec::default()),
+                            BoundsTransform::default(),
+                            ResizeMode::ScaleToBounds { clip: false },
+                            PlaceHolderSize::JumpCut,
+                            PathMotion::Linear,
+                            0.0,
+                            true,
+                        ),
+                )
+                .build(ctx, |_| {});
+        });
+    }
+
+    #[crate::composable]
+    fn circle_list_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
+        circle_hero_screen(ctx, scope, 150.0, 150.0, Color::RED);
+    }
+
+    #[crate::composable]
+    fn circle_detail_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
+        circle_hero_screen(ctx, scope, 320.0, 170.0, Color::BLUE);
+    }
+
+    /// Percent corners (Circle/Pill) must track the box the flight PAINTS into.
+    /// They are evaluated on the lerped rect, so the leaving ghost — whose own
+    /// layout box never moves — would otherwise keep a frozen corner radius for
+    /// the whole flight (and any `ScaleToBounds` target with it).
+    #[test]
+    fn circle_radius_follows_the_lerped_rect_on_both_ends() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+        let frame = |composer: &mut Composer| {
+            let s = show.clone();
+            composer.compose(|ctx| {
+                SharedTransitionLayout::new().build(ctx, |ctx| {
+                    let scope = current_shared_scope().expect("scope");
+                    if s.get() {
+                        circle_list_screen(ctx, &scope);
+                    } else {
+                        circle_detail_screen(ctx, &scope);
+                    }
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+            composer.poll_shared_flights();
+        };
+        frame(&mut composer);
+        show.set(false);
+        frame(&mut composer);
+        let fid = *composer.shared_flights.keys().next().expect("flight id");
+        composer
+            .shared_flights
+            .get_mut(&fid)
+            .expect("flight")
+            .progress
+            .set(0.5);
+        frame(&mut composer);
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+
+        let (vis, box_w, box_h) = {
+            let n = &composer.arena_nodes()[marked_in(&composer)[0]];
+            let cb = n.content_box();
+            (n.transition.clone().expect("flight visual"), cb.width, cb.height)
+        };
+        let l = vis.lerped();
+        let want = l.width.min(l.height) / 2.0;
+        // `radii_pairs` returns values for use INSIDE the scaled canvas; the
+        // device radius is that value times the axis scale render applies.
+        let sx = if box_w > 0.0 { l.width / box_w } else { 1.0 };
+        let device = vis.radii_pairs(box_w, box_h)[0].0 * sx;
+        assert!(
+            (device - want).abs() <= 0.5,
+            "corner radius must follow the lerped rect: got {device}, want {want} ({l:?})"
+        );
+        // …and it really is mid-flight: neither endpoint's own radius (75/85).
+        assert!(
+            (device - 75.0).abs() > 1.0 && (device - 85.0).abs() > 1.0,
+            "the radius must sit between the two endpoint radii, got {device}"
         );
         crate::animation::clear_all_animations();
     }
