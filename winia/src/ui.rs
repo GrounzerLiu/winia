@@ -175,6 +175,7 @@ pub use navigation_rail::{
 pub use tooltip::Tooltip;
 pub use shared_transition::{
     BoundsTransform, PathMotion, PlaceHolderSize, ResizeMode, SharedBounds,
-    SharedContentState, SharedKind, SharedTransitionLayout, SharedTransitionScope,
+    SharedContentState, SharedKind, SharedTransitionDefaults,
+    SharedTransitionLayout, SharedTransitionScope,
 };
 pub use search_bar::{SearchBar, SearchBarColors, SearchBarDefaults, SearchBarState, DockedSearchBar, SEARCH_ICON_PATH, BACK_ICON_PATH, SEARCH_BAR_HEIGHT};

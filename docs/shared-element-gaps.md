@@ -11,12 +11,12 @@
 
 ## P0 — half-day alignment (API shape, no behavior risk)
 
-- [ ] `isTransitionActive` on the scope — true while any flight is
+- [x] `isTransitionActive` on the scope — true while any flight is
   non-terminal. Unlocks dimming/input-gating patterns during transitions.
   Trivial: derive from the flight maps.
-- [ ] `SharedTransitionDefaults` constants object (default
+- [x] `SharedTransitionDefaults` constants object (default
   `BoundsTransform`, overlay defaults). Trivial.
-- [ ] `placeHolderSize` parameter on `shared_element()` (default `JumpCut`,
+- [x] `placeHolderSize` parameter on `shared_element()` (default `JumpCut`,
   matching current behavior). Trivial.
 
 ## P1 — small behavior additions

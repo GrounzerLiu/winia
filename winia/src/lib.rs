@@ -101,8 +101,8 @@ pub mod prelude {
     pub use crate::ui::crossfade::Crossfade;
     pub use crate::ui::shared_transition::{
         BoundsTransform, PathMotion, PlaceHolderSize, ResizeMode, SharedBounds,
-        SharedContentState, SharedTransitionLayout, SharedTransitionScope,
-        current_shared_scope,
+        SharedContentState, SharedTransitionDefaults, SharedTransitionLayout,
+        SharedTransitionScope, current_shared_scope,
     };
     pub use crate::ui::theme::is_system_dark_theme;
     pub use crate::{app_root, compose, composable, composable_keyed, keyed_stmt, run_app};

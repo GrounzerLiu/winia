@@ -17,19 +17,20 @@
 | `SharedTransitionLayout::new().build(ctx, \|ctx\| { … })` | `SharedTransitionLayout { … }` | Wraps both screens; single-param closure, scope read inside via `current_shared_scope()` |
 | `current_shared_scope()` | `SharedTransitionScope` receiver | Returns `Option<SharedTransitionScope>`; `None` outside the layout |
 | `scope.shared_content_state(key)` | `rememberSharedContentState(key)` | Pairing handle; equality is (scope, key) — same key in different scopes never pairs |
+| `scope.is_transition_active()` | `SharedTransitionScope.isTransitionActive` | `State<bool>` — true while any flight in the scope is non-terminal (both tiers); subscribe for dimming/input-gating patterns |
 
 ### 1.2 Endpoint markers (`Modifier`)
 
 | Method | Compose equivalent | Notes |
 |---|---|---|
-| `.shared_element(state, transform)` | `Modifier.sharedElement(…)` | Same content on both ends — flies + crossfades |
+| `.shared_element(state, transform, placeholder)` | `Modifier.sharedElement(…)` | Same content on both ends — flies + crossfades; pass `PlaceHolderSize::JumpCut` (others degrade to it, logged, until implemented) |
 | `.shared_bounds(state, transform, resize, placeholder)` | `Modifier.sharedBounds(…)` | Different content — container morphs + crossfades |
 
 ### 1.3 Flight shaping (`BoundsTransform`)
 
 | Constructor | Default | Notes |
 |---|---|---|
-| `BoundsTransform::tween(TweenSpec)` | 300ms Linear (`TweenSpec::default()`) | Exact, no overshoot |
+| `BoundsTransform::tween(TweenSpec)` | 300ms Linear (`TweenSpec::default()`, same as `SharedTransitionDefaults::bounds_transform()`) | Exact, no overshoot |
 | `BoundsTransform::spring(SpringSpec)` | critically damped (`damping_ratio: 1.0`, stiffness 200) | `SpringSpec::bouncy()` (`damping_ratio: 0.6`) overshoots past the end rect — the Compose spring look |
 | `BoundsTransform::keyframes(KeyframesSpec)` | — | Arbitrary progress curves |
 
@@ -64,6 +65,7 @@ SharedTransitionLayout::new().build(ctx, |ctx| {
                         .shared_element(
                             scope.shared_content_state("hero"),
                             BoundsTransform::spring(SpringSpec::bouncy()),
+                            PlaceHolderSize::JumpCut,
                         ),
                 )
                 .build(ctx, |_| {});

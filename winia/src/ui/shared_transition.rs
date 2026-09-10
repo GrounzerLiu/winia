@@ -17,7 +17,7 @@
 //! flights go through scalar progress (Phase 2 wiring).
 
 use std::collections::{HashMap, HashSet};
-use std::sync::LazyLock;
+use std::sync::{LazyLock, Mutex};
 
 use crate::animation::{
     push_animatable, AnimatableValue, AnimationSpec, KeyframesSpec, SpringSpec, TweenSpec,
@@ -122,6 +122,34 @@ impl Default for BoundsTransform {
     }
 }
 
+/// Default values for the shared-transition API (Compose
+/// `SharedTransitionDefaults`). User-facing entry point for "no opinion"
+/// call sites — internal code keeps using the concrete defaults directly
+/// so behavior never depends on this object drifting.
+pub struct SharedTransitionDefaults;
+
+impl SharedTransitionDefaults {
+    /// Default flight shaping: 300ms linear tween (same as
+    /// [`BoundsTransform::default`]).
+    pub fn bounds_transform() -> BoundsTransform {
+        BoundsTransform::default()
+    }
+
+    /// Default overlay z-order for flying pairs (forward-compat for the
+    /// `zIndexInOverlay` P1 item — the renderer currently paints
+    /// transition roots in arena order).
+    pub fn z_index_in_overlay() -> f32 {
+        0.0
+    }
+
+    /// Whether flying pairs render above non-shared content by default
+    /// (forward-compat — Tier 1 ghosts already render above scrims while
+    /// cross-active; Tier 0 paints in-tree).
+    pub fn render_in_overlay() -> bool {
+        true
+    }
+}
+
 /// Content deformation during flight (Compose `ResizeMode`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResizeMode {
@@ -155,7 +183,7 @@ pub enum PathMotion {
 /// to register the endpoint; render ignores it via the `_ =>` fallback).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SharedKind {
-    Element,
+    Element { placeholder: PlaceHolderSize },
     Bounds { resize: ResizeMode, placeholder: PlaceHolderSize },
 }
 
@@ -237,6 +265,20 @@ impl SharedTransitionScope {
         SharedContentState { scope_id: self.scope_id, key: key.into() }
     }
 
+    /// Whether any flight in this scope is currently non-terminal (Compose
+    /// `SharedTransitionScope.isTransitionActive`). Subscribable — reading
+    /// it in composition re-runs on transitions (dimming, input gating,
+    /// overlay-elevation patterns). Both tiers feed it: Tier 1 flights live
+    /// in the main composer map under the same `scope_id`.
+    pub fn is_transition_active(&self) -> State<bool> {
+        SCOPE_ACTIVE
+            .lock()
+            .unwrap()
+            .entry(self.scope_id)
+            .or_insert_with(|| State::new(false))
+            .clone()
+    }
+
     pub fn scope_id(&self) -> u64 {
         self.scope_id
     }
@@ -244,6 +286,20 @@ impl SharedTransitionScope {
 
 static LOCAL_SHARED_SCOPE: LazyLock<CompositionLocal<Option<SharedTransitionScope>>> =
     LazyLock::new(|| CompositionLocal::new(|| None));
+
+/// Per-scope transition activity (Compose `isTransitionActive`), keyed by
+/// `scope_id` so main and overlay composers sharing a scope observe one
+/// flag. Entries are created on first read and synced by the coordinator
+/// polls — never removed (one small entry per scope call-site, bounded by
+/// app structure).
+static SCOPE_ACTIVE: LazyLock<Mutex<HashMap<u64, State<bool>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Test isolation for [`SCOPE_ACTIVE`] (global, like the animation tables).
+#[cfg(test)]
+pub(crate) fn clear_scope_active_states() {
+    SCOPE_ACTIVE.lock().unwrap().clear();
+}
 
 /// Innermost enclosing shared-transition scope, if any.
 pub fn current_shared_scope() -> Option<SharedTransitionScope> {
@@ -442,11 +498,18 @@ impl Modifier {
     /// Mark the shared element (same content on both ends — flies + crossfades).
     /// The transform rides scalar progress (see module docs); render ignores
     /// this marker until Phase 2 wires registration at `start_node`.
-    pub fn shared_element(self, state: SharedContentState, transform: BoundsTransform) -> Self {
+    /// `placeholder` selects the layout-space contract; only `JumpCut` is
+    /// implemented today (other values degrade to it with a log).
+    pub fn shared_element(
+        self,
+        state: SharedContentState,
+        transform: BoundsTransform,
+        placeholder: PlaceHolderSize,
+    ) -> Self {
         self.push(ModifierElement::SharedTransition {
             scope_id: state.scope_id,
             key: state.key,
-            kind: SharedKind::Element,
+            kind: SharedKind::Element { placeholder },
             transform,
             path: PathMotion::Linear,
         })
@@ -513,6 +576,52 @@ mod tests {
         assert!(matches!(t.spec, AnimationSpec::Spring(_)));
         let t = BoundsTransform::default();
         assert!(matches!(t.spec, AnimationSpec::Tween(_)));
+    }
+
+    #[test]
+    fn shared_transition_defaults_match_hardcoded_behavior() {
+        let t = SharedTransitionDefaults::bounds_transform();
+        match &t.spec {
+            AnimationSpec::Tween(spec) => assert_eq!(
+                spec.duration,
+                std::time::Duration::from_millis(300),
+                "default flight shaping is the 300ms tween"
+            ),
+            other => panic!("default bounds transform must be a tween, got {other:?}"),
+        }
+        assert_eq!(SharedTransitionDefaults::z_index_in_overlay(), 0.0);
+        assert!(SharedTransitionDefaults::render_in_overlay());
+    }
+
+    #[test]
+    fn shared_clip_for_kind_degrades_unimplemented_modes() {
+        // Marker round-trip: shared_element carries the placeholder.
+        let m = Modifier::new()
+            .shared_element(
+                SharedContentState { scope_id: 1, key: "k".to_string() },
+                BoundsTransform::default(),
+                PlaceHolderSize::AnimatedSize,
+            );
+        assert_eq!(
+            find_shared_marker(&m).map(|x| x.kind),
+            Some(SharedKind::Element { placeholder: PlaceHolderSize::AnimatedSize }),
+            "element marker preserves the placeholder"
+        );
+        // Clip extraction with graceful degradation (logs, no behavior change).
+        assert!(!shared_clip_for_kind(&SharedKind::Element {
+            placeholder: PlaceHolderSize::JumpCut
+        }));
+        assert!(!shared_clip_for_kind(&SharedKind::Element {
+            placeholder: PlaceHolderSize::AnimatedSize
+        }));
+        assert!(shared_clip_for_kind(&SharedKind::Bounds {
+            resize: ResizeMode::ScaleToBounds { clip: true },
+            placeholder: PlaceHolderSize::JumpCut,
+        }));
+        assert!(!shared_clip_for_kind(&SharedKind::Bounds {
+            resize: ResizeMode::RemeasureToBounds,
+            placeholder: PlaceHolderSize::ContentSize,
+        }));
     }
 
     #[test]
@@ -823,15 +932,22 @@ pub(crate) fn find_shared_marker(modifier: &Modifier) -> Option<SharedMarker> {
 
 /// Clip flag from the marker kind. Render implements ScaleToBounds only —
 /// RemeasureToBounds degrades to scale (logged, once per flight start)
-/// until per-frame remeasure lands.
+/// until per-frame remeasure lands. Non-`JumpCut` placeholders likewise
+/// degrade to `JumpCut` (logged) until the layout-space contract lands.
 pub(crate) fn shared_clip_for_kind(kind: &SharedKind) -> bool {
+    if matches!(kind, SharedKind::Bounds { resize: ResizeMode::RemeasureToBounds, .. }) {
+        crate::debug_log!("[shared] RemeasureToBounds unimplemented — degrading to scale");
+    }
+    let placeholder = match kind {
+        SharedKind::Element { placeholder } => *placeholder,
+        SharedKind::Bounds { placeholder, .. } => *placeholder,
+    };
+    if placeholder != PlaceHolderSize::JumpCut {
+        crate::debug_log!("[shared] non-JumpCut placeholder unimplemented — degrading to JumpCut");
+    }
     match kind {
         SharedKind::Bounds { resize: ResizeMode::ScaleToBounds { clip }, .. } => *clip,
-        SharedKind::Bounds { resize: ResizeMode::RemeasureToBounds, .. } => {
-            crate::debug_log!("[shared] RemeasureToBounds unimplemented — degrading to scale");
-            false
-        }
-        SharedKind::Element => false,
+        _ => false,
     }
 }
 
@@ -973,6 +1089,27 @@ pub(crate) fn find_idx_by_slot(nodes: &[LayoutNode], root: usize, slot: u64) -> 
 
 fn is_terminal(phase: FlightPhase) -> bool {
     matches!(phase, FlightPhase::Finishing | FlightPhase::Cancelled)
+}
+
+/// Sync per-scope activity flags from flight maps (both tiers — Tier 1
+/// flights live in the main map under the same `scope_id`). Called at the
+/// end of every coordinator poll so the flag tracks opens and teardowns
+/// within one frame. Only scopes somebody has read (map entries) are
+/// touched — flights never create entries by themselves.
+pub(crate) fn sync_scope_active_states(all: &[&Composer]) {
+    let mut active: HashSet<u64> = HashSet::new();
+    for c in all {
+        active.extend(
+            c.shared_flights
+                .values()
+                .filter(|a| !is_terminal(a.flight.phase))
+                .map(|a| a.flight.scope_id),
+        );
+    }
+    let map = SCOPE_ACTIVE.lock().unwrap();
+    for (id, state) in map.iter() {
+        state.set(active.contains(id));
+    }
 }
 
 /// Flight completion gate (MAJOR #2): while the animation engine still owns
@@ -1252,6 +1389,7 @@ impl Composer {
             }
         }
         self.poll_layout_morphs(&live);
+        sync_scope_active_states(&[self]);
     }
 
     fn poll_one_flight(&mut self, id: FlightId) {
@@ -1492,6 +1630,8 @@ impl Composer {
                 Self::match_pending_source(&mut *all, ci, p);
             }
         }
+        let refs: Vec<&Composer> = all.iter().map(|c| &**c).collect();
+        sync_scope_active_states(&refs);
     }
 
     /// Drive one Tier1 flight: staleness-cancel, progress, both-end visuals
@@ -2023,7 +2163,7 @@ mod tier0_tests {
             Modifier::new()
                 .size(w, h)
                 .background(color, Shape::rounded(8.0))
-                .shared_element(scope.shared_content_state("hero"), BoundsTransform::default()),
+                .shared_element(scope.shared_content_state("hero"), BoundsTransform::default(), PlaceHolderSize::JumpCut),
         );
         ctx.end_node();
     }
@@ -2416,6 +2556,7 @@ mod tier0_tests {
                 .shared_element(
                     scope.shared_content_state("hero"),
                     BoundsTransform::spring(SpringSpec::bouncy()),
+                    PlaceHolderSize::JumpCut,
                 ),
         );
         ctx.end_node();
@@ -2548,6 +2689,37 @@ mod tier0_tests {
     }
 
     #[test]
+    fn scope_is_transition_active_tracks_flight() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        clear_scope_active_states();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+
+        frame(&mut composer, &show);
+        show.set(false);
+        frame(&mut composer, &show);
+        assert_eq!(composer.shared_flights.len(), 1, "flight opened");
+        // Same global entry the coordinator syncs (keyed by scope_id).
+        // Created on first read (false) — the next poll flips it, which is
+        // exactly the subscription semantics users observe in composition.
+        let scope_id = composer.shared_flights.values().next().expect("flight").flight.scope_id;
+        let active = SharedTransitionScope::new(scope_id).is_transition_active();
+        advance(&mut composer, &show);
+        assert!(active.get(), "flag true while the flight is non-terminal");
+
+        for _ in 0..200 {
+            if composer.shared_flights.is_empty() {
+                break;
+            }
+            advance(&mut composer, &show);
+        }
+        assert!(composer.shared_flights.is_empty(), "flight completes");
+        assert!(!active.get(), "flag false after teardown");
+        crate::animation::clear_all_animations();
+    }
+
+    #[test]
     fn tier0_flight_pivot_alignment_mid_flight() {
         let _g = lock_serial();
         crate::animation::clear_all_animations();
@@ -2657,7 +2829,7 @@ mod tier0_tests {
             Modifier::new()
                 .size(w, 80.0)
                 .background(Color::GREEN, Shape::Rectangle)
-                .shared_element(scope.shared_content_state("morph"), BoundsTransform::default()),
+                .shared_element(scope.shared_content_state("morph"), BoundsTransform::default(), PlaceHolderSize::JumpCut),
         );
         ctx.end_node();
     }
@@ -2752,7 +2924,7 @@ mod tier0_tests {
                 Modifier::new()
                     .size(w, 80.0)
                     .background(Color::GREEN, Shape::Rectangle)
-                    .shared_element(scope.shared_content_state("box"), BoundsTransform::default()),
+                    .shared_element(scope.shared_content_state("box"), BoundsTransform::default(), PlaceHolderSize::JumpCut),
             )
             .build(ctx, |ctx| {
                 gap_leaf(ctx, 50.0, 50.0);
@@ -2827,7 +2999,7 @@ mod tier0_tests {
             Modifier::new()
                 .size(w, h)
                 .background(color, Shape::rounded(8.0))
-                .shared_element(scope.shared_content_state(key), BoundsTransform::default()),
+                .shared_element(scope.shared_content_state(key), BoundsTransform::default(), PlaceHolderSize::JumpCut),
         );
         ctx.end_node();
     }
@@ -3409,7 +3581,7 @@ mod tier0_tests {
             Modifier::new()
                 .size(w, h)
                 .background(color, Shape::Rectangle)
-                .shared_element(scope.shared_content_state(key), BoundsTransform::default()),
+                .shared_element(scope.shared_content_state(key), BoundsTransform::default(), PlaceHolderSize::JumpCut),
         );
         ctx.end_node();
     }
