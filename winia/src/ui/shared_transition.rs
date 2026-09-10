@@ -500,16 +500,18 @@ impl Modifier {
     /// this marker until Phase 2 wires registration at `start_node`.
     /// `placeholder` selects the layout-space contract; only `JumpCut` is
     /// implemented today (other values degrade to it with a log).
-    /// `path` selects the motion path; arcs bulge the rect center off the
-    /// straight line (Compose `ArcMode` equivalent — Winia applies it as a
-    /// flight-level quadratic bezier instead of Compose's per-keyframe
-    /// `using ArcMode`).
+    /// `path` selects the motion path (Compose `ArcMode` equivalent —
+    /// Winia applies a flight-level quarter-ellipse port instead of
+    /// Compose's per-keyframe `using ArcMode`).
+    /// `z_index` orders retained ghosts back-to-front (Compose
+    /// `zIndexInOverlay`, default 0); in-tree targets keep tree order.
     pub fn shared_element(
         self,
         state: SharedContentState,
         transform: BoundsTransform,
         placeholder: PlaceHolderSize,
         path: PathMotion,
+        z_index: f32,
     ) -> Self {
         self.push(ModifierElement::SharedTransition {
             scope_id: state.scope_id,
@@ -517,11 +519,13 @@ impl Modifier {
             kind: SharedKind::Element { placeholder },
             transform,
             path,
+            z_index,
         })
     }
 
     /// Mark shared bounds (different content — container morphs + crossfades).
     /// `path` selects the motion path, same as in [`shared_element`](Self::shared_element).
+    /// `z_index` orders retained ghosts back-to-front, same as above.
     pub fn shared_bounds(
         self,
         state: SharedContentState,
@@ -529,6 +533,7 @@ impl Modifier {
         resize: ResizeMode,
         placeholder: PlaceHolderSize,
         path: PathMotion,
+        z_index: f32,
     ) -> Self {
         self.push(ModifierElement::SharedTransition {
             scope_id: state.scope_id,
@@ -536,6 +541,7 @@ impl Modifier {
             kind: SharedKind::Bounds { resize, placeholder },
             transform,
             path,
+            z_index,
         })
     }
 }
@@ -609,6 +615,7 @@ mod tests {
                 BoundsTransform::default(),
                 PlaceHolderSize::AnimatedSize,
                 PathMotion::Linear,
+                0.0,
             );
         assert_eq!(
             find_shared_marker(&m).map(|x| x.kind),
@@ -1084,17 +1091,19 @@ pub(crate) struct SharedMarker {
     pub kind: SharedKind,
     pub transform: BoundsTransform,
     pub path: PathMotion,
+    pub z_index: f32,
 }
 
 pub(crate) fn find_shared_marker(modifier: &Modifier) -> Option<SharedMarker> {
     modifier.elements().iter().find_map(|el| match el {
-        ModifierElement::SharedTransition { scope_id, key, kind, transform, path } => {
+        ModifierElement::SharedTransition { scope_id, key, kind, transform, path, z_index } => {
             Some(SharedMarker {
                 scope_id: *scope_id,
                 key: key.clone(),
                 kind: kind.clone(),
                 transform: transform.clone(),
                 path: *path,
+                z_index: *z_index,
             })
         }
         _ => None,
@@ -1456,7 +1465,29 @@ impl Composer {
             n.parent_id = None;
         }
         self.transition_layer.push(src_idx);
+        self.sort_transition_layer_by_z();
         Some((src_idx, b, r))
+    }
+
+    /// Stable z-order for retained ghosts (Compose `zIndexInOverlay`):
+    /// transition roots render back-to-front, so ascending z paints
+    /// higher-z pairs on top. Stable — equal z keeps detach (push) order,
+    /// which is exactly today's behavior when nobody sets z. Read lazily
+    /// off each retained node's own marker (no flight plumbing needed);
+    /// in-tree targets keep tree order (documented Tier 0 limitation).
+    fn sort_transition_layer_by_z(&mut self) {
+        let z_of = |nodes: &[LayoutNode], idx: usize| -> f32 {
+            nodes
+                .get(idx)
+                .and_then(|n| find_shared_marker(&n.modifier))
+                .map(|m| m.z_index)
+                .unwrap_or(0.0)
+        };
+        self.transition_layer.sort_by(|&a, &b| {
+            z_of(&self.arena.nodes, a)
+                .partial_cmp(&z_of(&self.arena.nodes, b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
     }
 
     /// Detach the source node (freeze) and open an AwaitingBounds flight.
@@ -2355,7 +2386,7 @@ mod tier0_tests {
             Modifier::new()
                 .size(w, h)
                 .background(color, Shape::rounded(8.0))
-                .shared_element(scope.shared_content_state("hero"), BoundsTransform::default(), PlaceHolderSize::JumpCut, PathMotion::Linear),
+                .shared_element(scope.shared_content_state("hero"), BoundsTransform::default(), PlaceHolderSize::JumpCut, PathMotion::Linear, 0.0),
         );
         ctx.end_node();
     }
@@ -2757,6 +2788,7 @@ mod tier0_tests {
                     BoundsTransform::spring(SpringSpec::bouncy()),
                     PlaceHolderSize::JumpCut,
                     path,
+                    0.0,
                 ),
         );
         ctx.end_node();
@@ -2871,6 +2903,7 @@ mod tier0_tests {
                     BoundsTransform::spring(SpringSpec::bouncy()),
                     PlaceHolderSize::JumpCut,
                     PathMotion::ArcBelow,
+                    0.0,
                 ),
         );
         ctx.end_node();
@@ -3203,7 +3236,7 @@ mod tier0_tests {
             Modifier::new()
                 .size(w, 80.0)
                 .background(Color::GREEN, Shape::Rectangle)
-                .shared_element(scope.shared_content_state("morph"), BoundsTransform::default(), PlaceHolderSize::JumpCut, PathMotion::Linear),
+                .shared_element(scope.shared_content_state("morph"), BoundsTransform::default(), PlaceHolderSize::JumpCut, PathMotion::Linear, 0.0),
         );
         ctx.end_node();
     }
@@ -3298,7 +3331,7 @@ mod tier0_tests {
                 Modifier::new()
                     .size(w, 80.0)
                     .background(Color::GREEN, Shape::Rectangle)
-                    .shared_element(scope.shared_content_state("box"), BoundsTransform::default(), PlaceHolderSize::JumpCut, PathMotion::Linear),
+                    .shared_element(scope.shared_content_state("box"), BoundsTransform::default(), PlaceHolderSize::JumpCut, PathMotion::Linear, 0.0),
             )
             .build(ctx, |ctx| {
                 gap_leaf(ctx, 50.0, 50.0);
@@ -3373,7 +3406,7 @@ mod tier0_tests {
             Modifier::new()
                 .size(w, h)
                 .background(color, Shape::rounded(8.0))
-                .shared_element(scope.shared_content_state(key), BoundsTransform::default(), PlaceHolderSize::JumpCut, PathMotion::Linear),
+                .shared_element(scope.shared_content_state(key), BoundsTransform::default(), PlaceHolderSize::JumpCut, PathMotion::Linear, 0.0),
         );
         ctx.end_node();
     }
@@ -3433,6 +3466,108 @@ mod tier0_tests {
                 composer.arena_nodes()[idx].transition.is_none(),
                 "fresh key carries no morph visual"
             );
+        }
+        crate::animation::clear_all_animations();
+    }
+
+    /// z-ordered hero leaf (retained ghosts sort back-to-front by this).
+    fn z_hero_leaf(
+        ctx: &mut ComposeCtx,
+        key: &str,
+        w: f32,
+        h: f32,
+        color: Color,
+        scope: &SharedTransitionScope,
+        z: f32,
+    ) {
+        let slot = ctx.next_key();
+        ctx.start_leaf(
+            slot,
+            Modifier::new()
+                .size(w, h)
+                .background(color, Shape::rounded(8.0))
+                .shared_element(
+                    scope.shared_content_state(key),
+                    BoundsTransform::default(),
+                    PlaceHolderSize::JumpCut,
+                    PathMotion::Linear,
+                    z,
+                ),
+        );
+        ctx.end_node();
+    }
+
+    #[crate::composable]
+    fn z_list_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
+        // k1 carries the higher z but composes FIRST — detach order must
+        // not decide paint order.
+        z_hero_leaf(ctx, "k1", 120.0, 80.0, Color::RED, scope, 1.0);
+        z_hero_leaf(ctx, "k2", 120.0, 80.0, Color::GREEN, scope, 0.0);
+    }
+
+    #[crate::composable]
+    fn z_detail_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
+        z_hero_leaf(ctx, "k1", 300.0, 160.0, Color::BLUE, scope, 1.0);
+        z_hero_leaf(ctx, "k2", 300.0, 160.0, Color::BLUE, scope, 0.0);
+    }
+
+    fn z_frame(composer: &mut Composer, show: &State<bool>) {
+        let s = show.clone();
+        composer.compose(|ctx| {
+            SharedTransitionLayout::new().build(ctx, |ctx| {
+                let scope = current_shared_scope().expect("inside SharedTransitionLayout");
+                Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+                    if s.get() {
+                        z_list_screen(ctx, &scope);
+                    } else {
+                        z_detail_screen(ctx, &scope);
+                    }
+                });
+            });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        composer.poll_shared_flights();
+    }
+
+    #[test]
+    fn retained_ghosts_sort_back_to_front_by_z() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+
+        z_frame(&mut composer, &show);
+        z_frame(&mut composer, &show);
+        show.set(false);
+        z_frame(&mut composer, &show);
+        assert_eq!(composer.shared_flights.len(), 2, "one flight per key");
+        assert_eq!(composer.transition_layer.len(), 2, "both sources retained");
+
+        // Key per retained slot, from the flights (detach order is a
+        // HashMap iteration — assert order, not identity sequence).
+        let key_of: HashMap<u64, String> = composer
+            .shared_flights
+            .values()
+            .filter_map(|a| a.flight.source_slot.map(|s| (s, a.flight.key.clone())))
+            .collect();
+        let ordered: Vec<&str> = composer.transition_layer
+            .iter()
+            .map(|&idx| {
+                key_of
+                    .get(&composer.arena_nodes()[idx].slot_key)
+                    .map(|s| s.as_str())
+                    .unwrap_or("?")
+            })
+            .collect();
+        assert_eq!(ordered, vec!["k2", "k1"], "ascending z paints k1 on top, got {ordered:?}");
+
+        // The sort reads z lazily off the retained markers.
+        for &idx in &composer.transition_layer {
+            let z = find_shared_marker(&composer.arena_nodes()[idx].modifier)
+                .expect("retained marker")
+                .z_index;
+            let key = &key_of[&composer.arena_nodes()[idx].slot_key];
+            assert_eq!(z, if key == "k1" { 1.0 } else { 0.0 }, "z rides the retained node");
         }
         crate::animation::clear_all_animations();
     }
@@ -3956,7 +4091,7 @@ mod tier0_tests {
             Modifier::new()
                 .size(w, h)
                 .background(color, Shape::Rectangle)
-                .shared_element(scope.shared_content_state(key), BoundsTransform::default(), PlaceHolderSize::JumpCut, PathMotion::Linear),
+                .shared_element(scope.shared_content_state(key), BoundsTransform::default(), PlaceHolderSize::JumpCut, PathMotion::Linear, 0.0),
         );
         ctx.end_node();
     }

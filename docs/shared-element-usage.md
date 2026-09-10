@@ -23,8 +23,8 @@
 
 | Method | Compose equivalent | Notes |
 |---|---|---|
-| `.shared_element(state, transform, placeholder, path)` | `Modifier.sharedElement(…)` | Same content on both ends — flies + crossfades; pass `PlaceHolderSize::JumpCut` (others degrade to it, logged, until implemented); `path` is `Linear` / `ArcBelow` / `ArcAbove` |
-| `.shared_bounds(state, transform, resize, placeholder)` | `Modifier.sharedBounds(…)` | Different content — container morphs + crossfades (`enter`/`exit` not yet: P1) |
+| `.shared_element(state, transform, placeholder, path, z_index)` | `Modifier.sharedElement(…)` | Same content on both ends — flies + crossfades; pass `PlaceHolderSize::JumpCut` (others degrade to it, logged, until implemented); `path` is `Linear` / `ArcBelow` / `ArcAbove`; `z_index` (default 0.0) orders retained ghosts back-to-front, in-tree targets keep tree order |
+| `.shared_bounds(state, transform, resize, placeholder)` | `Modifier.sharedBounds(…)` | Different content — container morphs + crossfades (`enter`/`exit` not yet: P1). Takes the same trailing `path` / `z_index` as `shared_element` |
 
 ### 1.3 Flight shaping (`BoundsTransform`)
 
@@ -67,6 +67,7 @@ SharedTransitionLayout::new().build(ctx, |ctx| {
                             BoundsTransform::spring(SpringSpec::bouncy()),
                             PlaceHolderSize::JumpCut,
                             PathMotion::ArcBelow,
+                            0.0,
                         ),
                 )
                 .build(ctx, |_| {});

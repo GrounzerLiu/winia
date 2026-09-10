@@ -49,6 +49,7 @@ fn hero_demo(ctx: &mut ComposeCtx) {
                                             }),
                                             PlaceHolderSize::JumpCut,
                                             path,
+                                            0.0,
                                         ),
                                 )
                                 .build(ctx, |_| {});
@@ -77,6 +78,7 @@ fn hero_demo(ctx: &mut ComposeCtx) {
                                     }),
                                     PlaceHolderSize::JumpCut,
                                     path,
+                                    0.0,
                                 ),
                         )
                         .build(ctx, |_| {});

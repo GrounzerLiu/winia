@@ -768,6 +768,10 @@ pub(crate) enum ModifierElement {
         kind: crate::ui::shared_transition::SharedKind,
         transform: crate::ui::shared_transition::BoundsTransform,
         path: crate::ui::shared_transition::PathMotion,
+        /// Overlay z-order for the flying pair (Compose `zIndexInOverlay`,
+        /// default 0). Orders retained ghosts back-to-front; in-tree targets
+        /// keep tree order (documented Tier 0 limitation).
+        z_index: f32,
     },
 }
 
@@ -2355,13 +2359,14 @@ Self::DrawIcon { .. } => f.write_str("DrawIcon"),
             Self::BackdropBlur { radius } => f.debug_struct("BackdropBlur").field("radius", radius).finish(),
             Self::TextFieldVisual { variant, .. } => f.debug_struct("TextFieldVisual").field("variant", variant).finish(),
             Self::TextFieldOffsetMapping { .. } => f.write_str("TextFieldOffsetMapping"),
-            Self::SharedTransition { scope_id, key, kind, transform, path } => f
+            Self::SharedTransition { scope_id, key, kind, transform, path, z_index } => f
                 .debug_struct("SharedTransition")
                 .field("scope", scope_id)
                 .field("key", key)
                 .field("kind", kind)
                 .field("transform", transform)
                 .field("path", path)
+                .field("z_index", z_index)
                 .finish(),
         }
     }

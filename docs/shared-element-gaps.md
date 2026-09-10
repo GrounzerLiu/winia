@@ -27,8 +27,9 @@
   target marker. API shape intentionally differs (flight-level path, not
   per-keyframe `using ArcMode`). Deviation: overshoot pins the center at
   the nearer endpoint (documented in code).
-- [ ] `zIndexInOverlay` — multiple pairs currently paint in arena order.
-  Sort transition roots by z at render.
+- [x] `zIndexInOverlay` — `z_index` parameter on both markers (default
+  0.0); retained ghosts sort back-to-front (stable — equal z keeps detach
+  order, i.e. old behavior). In-tree targets keep tree order (documented).
 - [ ] `enter` / `exit` on `shared_bounds()` — wire the existing
   AnimatedVisibility system alongside the flight.
 
