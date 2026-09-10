@@ -5901,6 +5901,76 @@ mod tier0_tests {
         crate::animation::clear_all_animations();
     }
 
+    /// The GHOST route maps a tap from the leaving rect into the target's live
+    /// subtree (`link_slot`). That map must land on the target's CONTENT box:
+    /// with `RemeasureToBounds + ContentSize` the parent-visible size is the
+    /// target's, while the content box is the animated one — mapping through
+    /// the former scales the point and activates the wrong row.
+    #[test]
+    fn ghost_tap_maps_identity_into_a_remeasure_target() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+        let frame = |composer: &mut Composer| {
+            let s = show.clone();
+            composer.compose(|ctx| {
+                SharedTransitionLayout::new().build(ctx, |ctx| {
+                    let scope = current_shared_scope().expect("scope");
+                    if s.get() {
+                        stacked_list_screen(
+                            ctx,
+                            &scope,
+                            ResizeMode::RemeasureToBounds,
+                            PlaceHolderSize::ContentSize,
+                        );
+                    } else {
+                        stacked_detail_screen(
+                            ctx,
+                            &scope,
+                            ResizeMode::RemeasureToBounds,
+                            PlaceHolderSize::ContentSize,
+                        );
+                    }
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+            composer.poll_shared_flights();
+        };
+        frame(&mut composer);
+        show.set(false);
+        frame(&mut composer);
+        let fid = *composer.shared_flights.keys().next().expect("flight id");
+        composer
+            .shared_flights
+            .get_mut(&fid)
+            .expect("flight")
+            .progress
+            .set(0.5);
+        frame(&mut composer);
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+
+        let root = composer.layout_root_idx().expect("root");
+        let marked = marked_in(&composer)[0];
+        let bands = composer.arena_nodes()[marked].children.clone();
+        // The lerped rect is 210x130 (120x60 -> 300x200 at t=.5). y=65 is its
+        // middle: a 1:1 map keeps 65 (band 3), a map through the target size
+        // scales it to 100 (band 5).
+        let layer = hit_test_with_flights(
+            composer.arena_nodes(),
+            root,
+            composer.transition_roots(),
+            50.0,
+            65.0,
+        );
+        assert_eq!(
+            layer.last().copied(),
+            Some(bands[3]),
+            "the ghost maps the tap into the target's content box, got {layer:?}"
+        );
+        crate::animation::clear_all_animations();
+    }
+
     /// Bouncy hero leaf (spring overshoot must render past the end rect).
     fn spring_hero_leaf(
         ctx: &mut ComposeCtx,
