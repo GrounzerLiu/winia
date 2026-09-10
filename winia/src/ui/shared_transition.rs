@@ -838,25 +838,7 @@ pub(crate) struct TransitionVisual {
 
 impl TransitionVisual {
     pub(crate) fn lerped(&self) -> SharedBounds {
-        let t = self.progress;
-        // Size always lerps linearly (Compose `ArcMode` bends the motion
-        // path only — deformation stays on the straight size ramp).
-        let w = self.start.width + (self.end.width - self.start.width) * t;
-        let h = self.start.height + (self.end.height - self.start.height) * t;
-        let (sx, sy) = (
-            self.start.x + self.start.width / 2.0,
-            self.start.y + self.start.height / 2.0,
-        );
-        let (ex, ey) = (
-            self.end.x + self.end.width / 2.0,
-            self.end.y + self.end.height / 2.0,
-        );
-        let (cx, cy) = match self.path {
-            PathMotion::Linear => (sx + (ex - sx) * t, sy + (ey - sy) * t),
-            PathMotion::ArcBelow => arc_center(sx, sy, ex, ey, t, 1.0),
-            PathMotion::ArcAbove => arc_center(sx, sy, ex, ey, t, -1.0),
-        };
-        SharedBounds::new(cx - w / 2.0, cy - h / 2.0, w, h)
+        lerp_flight_rect(&self.start, &self.end, self.progress, self.path)
     }
 
     pub(crate) fn alpha(&self) -> f32 {
@@ -974,6 +956,30 @@ fn arc_center(sx: f32, sy: f32, ex: f32, ey: f32, t: f32, sign: f32) -> (f32, f3
         u * u * sx + 2.0 * u * t * cx + t * t * ex,
         u * u * sy + 2.0 * u * t * cy + t * t * ey,
     )
+}
+
+/// Flight rect at scalar progress: size lerps linearly, the rect center
+/// follows the motion path (linear or quadratic-bezier arc — Compose
+/// `ArcMode` bends the path only, deformation stays on the straight size
+/// ramp). Single home for paint, clip, hit and retarget continuity so an
+/// arc can never silently straighten on one consumer.
+pub(crate) fn lerp_flight_rect(
+    start: &SharedBounds,
+    end: &SharedBounds,
+    progress: f32,
+    path: PathMotion,
+) -> SharedBounds {
+    let t = progress;
+    let w = start.width + (end.width - start.width) * t;
+    let h = start.height + (end.height - start.height) * t;
+    let (sx, sy) = (start.x + start.width / 2.0, start.y + start.height / 2.0);
+    let (ex, ey) = (end.x + end.width / 2.0, end.y + end.height / 2.0);
+    let (cx, cy) = match path {
+        PathMotion::Linear => (sx + (ex - sx) * t, sy + (ey - sy) * t),
+        PathMotion::ArcBelow => arc_center(sx, sy, ex, ey, t, 1.0),
+        PathMotion::ArcAbove => arc_center(sx, sy, ex, ey, t, -1.0),
+    };
+    SharedBounds::new(cx - w / 2.0, cy - h / 2.0, w, h)
 }
 
 pub(crate) fn rrect_vectors(pairs: [(f32, f32); 4]) -> [skia_safe::Vector; 4] {
@@ -1316,11 +1322,12 @@ impl Composer {
                 .map(|(id, _)| *id)
             {
                 if let Some(a) = self.shared_flights.get(&id) {
-                    // Unclamped: retarget continuity follows the true visual
-                    // rect, including spring overshoot past the old end.
+                    // Unclamped + path-aware: retarget continuity follows the
+                    // true visual rect, including spring overshoot past the
+                    // old end and any arc bend.
                     let p = a.progress.peek();
                     let end = a.flight.end.unwrap_or(a.start);
-                    let s = a.start.lerp(&end, p);
+                    let s = lerp_flight_rect(&a.start, &end, p, a.path);
                     let (rf, rt) = (a.radius_from, a.radius_to);
                     start_override = Some((s, [0, 1, 2, 3].map(|i| rf[i] + (rt[i] - rf[i]) * p)));
                 }
@@ -2215,11 +2222,12 @@ impl Composer {
                             });
                             if morph {
                                 let a = &self.shared_flights[&fid];
-                                // Unclamped like the render path: reopen
-                                // continuity includes spring overshoot.
+                                // Unclamped + path-aware like the render path:
+                                // reopen continuity includes spring overshoot
+                                // and any arc bend.
                                 let p = a.progress.peek();
                                 let end_prev = a.flight.end.unwrap_or(a.start);
-                                let s = a.start.lerp(&end_prev, p);
+                                let s = lerp_flight_rect(&a.start, &end_prev, p, a.path);
                                 let (rf, rt) = (a.radius_from, a.radius_to);
                                 pending.push(Pending::Reopen {
                                     id: fid,
@@ -2276,6 +2284,7 @@ mod tier0_tests {
     use crate::layout::constraints::Constraints;
     use crate::modifier::Color;
     use crate::ui::Column;
+    use crate::ui::Row;
 
     /// Plain box leaf with a shared-element marker (no text — keeps the
     /// mechanics test headless-simple; paint movement is asserted via raster).
@@ -2788,6 +2797,64 @@ mod tier0_tests {
         crate::animation::clear_all_animations();
     }
 
+    /// Small arc hero (40px): the bend (≈43px) exceeds the half-size, so
+    /// edge probes discriminate arc paint from straight paint.
+    fn arc_hero_leaf(ctx: &mut ComposeCtx, w: f32, h: f32, color: Color, scope: &SharedTransitionScope) {
+        let key = ctx.next_key();
+        ctx.start_leaf(
+            key,
+            Modifier::new()
+                .size(w, h)
+                .background(color, Shape::rounded(8.0))
+                .shared_element(
+                    scope.shared_content_state("hero"),
+                    BoundsTransform::spring(SpringSpec::bouncy()),
+                    PlaceHolderSize::JumpCut,
+                    PathMotion::ArcBelow,
+                ),
+        );
+        ctx.end_node();
+    }
+
+    #[crate::composable]
+    fn arc_list_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
+        Row::new().build(ctx, |ctx| {
+            arc_hero_leaf(ctx, 40.0, 40.0, Color::RED, scope);
+            gap_leaf(ctx, 260.0, 40.0);
+        });
+    }
+
+    #[crate::composable]
+    fn arc_detail_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
+        Row::new().build(ctx, |ctx| {
+            gap_leaf(ctx, 260.0, 40.0);
+            arc_hero_leaf(ctx, 40.0, 40.0, Color::BLUE, scope);
+        });
+    }
+
+    fn arc_frame(composer: &mut Composer, show: &State<bool>) {
+        composer.compose(|ctx| {
+            SharedTransitionLayout::new().build(ctx, |ctx| {
+                let scope = current_shared_scope().expect("inside SharedTransitionLayout");
+                Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+                    if show.get() {
+                        arc_list_screen(ctx, &scope);
+                    } else {
+                        arc_detail_screen(ctx, &scope);
+                    }
+                });
+            });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        composer.poll_shared_flights();
+    }
+
+    fn arc_advance(composer: &mut Composer, show: &State<bool>) {
+        crate::animation::update_animations();
+        std::thread::sleep(std::time::Duration::from_millis(16));
+        arc_frame(composer, show);
+    }
+
     #[test]
     fn tier0_arc_flight_paints_off_the_straight_line() {
         let _g = lock_serial();
@@ -2795,17 +2862,19 @@ mod tier0_tests {
         let mut composer = Composer::new();
         let show = State::new(true);
 
-        spring_frame(&mut composer, &show, PathMotion::ArcBelow);
+        arc_frame(&mut composer, &show);
         show.set(false);
-        spring_frame(&mut composer, &show, PathMotion::ArcBelow);
+        arc_frame(&mut composer, &show);
         assert_eq!(composer.shared_flights.len(), 1, "arc flight opened");
         {
             let a = composer.shared_flights.values().next().expect("flight");
             assert_eq!(a.path, PathMotion::ArcBelow, "path resolves from the target marker");
         }
 
-        // Mid-flight: the arced rect must bend measurably off the straight
-        // lerp, and paint must follow it (not the straight rect).
+        // Horizontal 260px travel bends ~43px screen-down at mid. The hero is
+        // only 40px, so probes discriminate paint: the arc's outer edge is
+        // inside arc paint but outside straight paint (and vice versa). A
+        // render path silently painting straight fails both probes.
         let mut bent = false;
         for _ in 0..200 {
             if composer.shared_flights.is_empty() {
@@ -2823,25 +2892,50 @@ mod tier0_tests {
                 (p, straight, arced)
             });
             if let Some((p, straight, arced)) = probe {
-                if p > 0.3 && p < 0.7 {
-                    let dev = ((arced.x - straight.x).powi(2) + (arced.y - straight.y).powi(2)).sqrt();
+                if p > 0.4 && p < 0.6 {
+                    let (scx, scy) = (
+                        straight.x + straight.width / 2.0,
+                        straight.y + straight.height / 2.0,
+                    );
+                    let (acx, acy) = (
+                        arced.x + arced.width / 2.0,
+                        arced.y + arced.height / 2.0,
+                    );
+                    let (dx, dy) = (acx - scx, acy - scy);
+                    let dev = (dx * dx + dy * dy).sqrt();
                     assert!(
-                        dev > 10.0,
+                        dev > 20.0,
                         "arc bends off the straight line, deviation {dev} at p={p}"
                     );
+                    // Unit bend direction, 8px inside the paint edge (clear of
+                    // the 8px rounded corners at the edge middle).
+                    let (ux, uy) = (dx / dev, dy / dev);
+                    let m = arced.height / 2.0 - 8.0;
                     let mut surf = render_heads(&composer);
-                    let cx = (arced.x + arced.width / 2.0) as i32;
-                    let cy = (arced.y + arced.height / 2.0) as i32;
-                    let c = pixel_rgb(&mut surf, cx, cy);
+                    let outer = pixel_rgb(
+                        &mut surf,
+                        (acx + ux * m) as i32,
+                        (acy + uy * m) as i32,
+                    );
                     assert!(
-                        c.0 > 140 && c.2 > 50,
-                        "paint follows the arced rect, got {c:?} at p={p}"
+                        outer.0 > 140 && outer.1 < 150 && outer.2 > 50,
+                        "arc outer edge paints hero blend, got {outer:?} at p={p}"
+                    );
+                    let mut surf2 = render_heads(&composer);
+                    let inner = pixel_rgb(
+                        &mut surf2,
+                        (scx - ux * m) as i32,
+                        (scy - uy * m) as i32,
+                    );
+                    assert!(
+                        close_enough(inner, (255, 255, 255), 40),
+                        "straight-side mirror is background, got {inner:?} at p={p}"
                     );
                     bent = true;
                     break;
                 }
             }
-            spring_advance(&mut composer, &show, PathMotion::ArcBelow);
+            arc_advance(&mut composer, &show);
         }
         assert!(bent, "flight must pass through the bend window");
 
@@ -2849,7 +2943,7 @@ mod tier0_tests {
             if composer.shared_flights.is_empty() {
                 break;
             }
-            spring_advance(&mut composer, &show, PathMotion::ArcBelow);
+            arc_advance(&mut composer, &show);
         }
         assert!(composer.shared_flights.is_empty(), "arc flight completes");
         let marked = marked_indices(&composer);

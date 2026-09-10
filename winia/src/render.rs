@@ -673,8 +673,9 @@ fn render_pass1(
             // the endpoint — the Compose spring look. Every consumer
             // (lerp, radii, clip, hit) shares this single t; only opacity
             // stays clamped (alpha()) and degenerate rects stay invisible.
-            let p = t.progress;
-            let l = t.start.lerp(&t.end, p);
+            // Paint follows the SAME arc-aware lerped() as hit (a raw
+            // start.lerp here would silently straighten arc flights).
+            let l = t.lerped();
             let alpha = t.alpha();
             if alpha <= 0.001 || l.width <= 0.0 || l.height <= 0.0 {
                 return;
