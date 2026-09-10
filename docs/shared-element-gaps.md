@@ -95,7 +95,10 @@
   frame the end resolves. Deviation: the OUTGOING end's space is not preserved
   in a screen switch — its whole tree is gone, so there is no parent layout to
   hold open (Compose keeps it because the old screen stays composed); for the
-  same-screen morph the node stays and both policies are exact.
+  same-screen morph the node stays, but BOTH markers are ignored there: its size
+  change came from layout in the first place, so re-reporting a lerped size would
+  fight the layout driving it (`begin_morph` hardcodes the defaults; `AnimatedSize`
+  therefore behaves like `JumpCut` for a morph).
 - [ ] `skipToLookaheadSize` — no lookahead system exists; the equivalent
   ("measure at end size from frame one") needs the end bounds before
   layout.

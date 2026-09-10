@@ -20,7 +20,7 @@ use std::cell::RefCell;
 // ── 入口 ──
 
 pub fn render(nodes: &[LayoutNode], root_idx: usize, canvas: &Canvas) {
-    render_pass1(nodes, root_idx, root_idx, canvas, 0.0, 0.0, false);
+    render_pass1(nodes, root_idx, root_idx, canvas, 0.0, 0.0, false, false);
 }
 
 /// Draw one node as a **transition-layer root** at an explicit absolute
@@ -52,6 +52,9 @@ pub fn render_node_at(
         canvas,
         abs_x - node.position.x,
         abs_y - node.position.y,
+        true,
+        // Everything BELOW this entry is painted on a canvas that carries no
+        // ancestor translate, so descendants must not add a frozen scroll sum.
         true,
     );
 }
@@ -684,6 +687,11 @@ fn render_pass1(
     canvas: &Canvas,
     parent_x: f32, parent_y: f32,
     layer_root: bool,
+    // This subtree is painted on a ROOTLESS canvas (a layer entry above it):
+    // the ancestor translate is not on the canvas, so a transitioning node
+    // inside must not add its frozen scroll sum. `layer_root` cannot answer
+    // this — it is about the node itself, this is about the canvas.
+    rootless: bool,
 ) {
     let node = &nodes[idx];
     // Elevated endpoint: this subtree is painted by the transition layer
@@ -700,8 +708,12 @@ fn render_pass1(
     }
     let x = parent_x + node.position.x;
     let y = parent_y + node.position.y;
-    let w = node.measured_size.width;
-    let h = node.measured_size.height;
+    // Content box, NOT `measured_size`: while a flight reports a placeholder
+    // size (Compose `PlaceHolderSize`) the latter is what the PARENT was told,
+    // so painting, clipping and child placement must use this instead.
+    let content_box = node.content_box();
+    let w = content_box.width;
+    let h = content_box.height;
     if w <= 0.0 || h <= 0.0 { return; }
 
     let rect = Rect::new(x, y, x + w, y + h);
@@ -751,7 +763,10 @@ fn render_pass1(
             // the same bit that routed this node to the layer (skip in the
             // walk, paint here) decides the add-back too, so the two can never
             // disagree.
-            let scroll = if layer_root { (0.0, 0.0) } else { t.scroll };
+            // The canvas decides, not the node: a layer entry is painted with no
+            // ancestor translate, so neither it nor anything below it may add
+            // the frozen scroll sum back (that would double-count).
+            let scroll = if rootless { (0.0, 0.0) } else { t.scroll };
             canvas.translate((l.x + scroll.0, l.y + scroll.1));
             // sharedBounds enter/exit channels, evaluated at appearance
             // amount q (target appears with p, source disappears with 1-p).
@@ -825,18 +840,15 @@ fn render_pass1(
                     }
                 }
             }
-            // RemeasureToBounds: the content already carries the animated size
-            // (the measure pass re-laid it out), so scaling it again would
-            // double-apply the deformation. Everything else scales into the
-            // lerped rect.
-            let (sx, sy) = if t.remeasure {
-                (1.0, 1.0)
-            } else {
-                (
-                    if w > 0.0 { l.width / w } else { 1.0 },
-                    if h > 0.0 { l.height / h } else { 1.0 },
-                )
-            };
+            // Scale the content box into the lerped rect. With
+            // `RemeasureToBounds` the content box IS the animated rect, so this
+            // yields 1 and the re-laid-out content lands as-is; with
+            // `ScaleToBounds` it is the natural size, so the content scales
+            // even while the placeholder reports a different size to the parent.
+            let (sx, sy) = (
+                if w > 0.0 { l.width / w } else { 1.0 },
+                if h > 0.0 { l.height / h } else { 1.0 },
+            );
             canvas.scale((sx, sy));
             // Scale about the lerped origin (not the canvas origin): content
             // drawn at layout coords must land on the lerped rect, i.e.
@@ -850,10 +862,7 @@ fn render_pass1(
                 canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default().paint(&paint));
                 layered = true;
             }
-            (true, layered, Some(t.radii_pairs(
-                if t.remeasure { l.width } else { w },
-                if t.remeasure { l.height } else { h },
-            )))
+            (true, layered, Some(t.radii_pairs(w, h)))
         } else {
             (false, false, None)
         };
@@ -1299,7 +1308,7 @@ fn render_pass1(
 
     // 穿行子节点（backdrop 节点自身内容照常绘制在模糊层之上）
     for &child in &node.children {
-        render_pass1(nodes, root_idx, child, canvas, x, y, false);
+        render_pass1(nodes, root_idx, child, canvas, x, y, false, rootless);
     }
 
     // Ripple indication — above content, inside shape/scroll clipping

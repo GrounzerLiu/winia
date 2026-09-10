@@ -35,7 +35,7 @@ sharedBounds` does exactly four things:
 | Ghost content | None. `AnimatedContent` is single-generation (fade out → swap → fade in, never both ends coexisting) | Core design point (§3.3) |
 | Rect interpolation | `AnimatableValue` is exact only for `f32` (Spring) and `Color` (Tween); `Offset`/`Size` are norm placeholders, Spring degrades to Tween | Add an exact `Bounds` animatable |
 | Scale deformation | `GraphicsLayerParams` (scale/alpha/translation/clip/origin) + render-time `peek`, zero recomposition | `ScaleToBounds` works out of the box; Skia text scales crisply through the CTM |
-| Remeasure deformation | Two-phase deps: measure-time `get()` registers a layout dep → re-measure without recompose, per-frame capable | Mechanism exists, only needs driving |
+| Remeasure deformation | Two-phase deps: measure-time `get()` registers a layout dep → re-measure without recompose, per-frame capable | Shipped (§5) — plus a per-frame `layout_dirty_keys` re-seed, because `layout()` clears `layout_dirty` tree-wide every pass |
 | Absolute coordinates | `node_abs_position` (scroll-corrected) + post-layout `position`/`measured_size` | Bounds capture is free |
 | Bitmap snapshot | `image_snapshot_with_bounds` (already used by backdrop blur) | Backup ghost path, not primary |
 | Scope choreography | `AnimatedVisibility/Content/Size/Crossfade`, `nav.rs` all exist | v1: timing coordination only; deep integration in v2 |
@@ -255,27 +255,39 @@ every frame.
   naturally and scaled into the lerped rect.
 - `ResizeMode::RemeasureToBounds`: `content` carries the animated size, and the
   measure pass applies it as **fixed constraints** before the policy runs — the
-  subtree reflows (text rewraps, rows resize). Render then skips the scale, and
-  hit testing maps 1:1.
+  subtree reflows (text rewraps, rows resize). The resulting size IS the lerped
+  size, so the render scale is 1 and hit testing maps 1:1.
 - `PlaceHolderSize::AnimatedSize`: `reported` carries the animated size, so the
   PARENT reflows and siblings ride the flight.
 - `PlaceHolderSize::ContentSize` / `JumpCut`: `reported` keeps the target size
   (captured the frame the end resolves), so the surrounding layout holds still.
-  For the entering end the two are equivalent; `JumpCut` additionally names the
-  leaving end's behaviour (its space is released immediately — winia's old tree
-  is gone, so there is no parent layout to hold open).
+  `JumpCut` is winia-only and shares this code path; Compose names its default
+  `ContentSize`.
+- `SharedKind::Element` resolves to `RemeasureToBounds` with no way to opt out,
+  mirroring Compose's `sharedElement` ("will re-measure and relayout its child
+  layout using fixed constraints derived from its animated size").
+
+`measured_size` keeps ONE meaning — the box the node's own layout/paint
+occupies; `reported` leaves the measure as the RETURN value, which is what
+parents place by. That matters because parents write their placement size back
+into `measured_size` (`place()`), so the two have to be stored apart:
+`flight_content_size` carries the content box for the frames where the parent
+was told something else, and render, clip, radii, `abs_rect_upward` and hit
+testing all read that instead.
 
 Zero recomposition: reading the frame during measure registers a LAYOUT
 dependency, and the coordinator re-seeds the node's `layout_dirty_keys` entry
-every frame — necessary because `layout()` resets `layout_dirty` on the whole
-tree at the start of every pass, so a folded parent would never descend into
-the override. On teardown the override is dropped and one last invalidation is
-seeded, so the natural size returns in the next pass.
+every frame while an override is attached — necessary because `layout()` resets
+`layout_dirty` on the whole tree at the start of every pass, so a folded parent
+would never descend into the override. The seed is skipped while nothing is
+attached, so the default contract costs no layout at all. Every teardown that
+drops an override (Tier 0 completion/cancel, and both Tier 1 paths through
+`clear_transition_for_slot`) seeds once more, so the natural size returns in the
+next pass; the clear also matches the flight id, because a successor flight can
+own the same slot key by then.
 
-Timing: writers run after layout, so the layout trails the flight by ~1 frame
-(≈6% of the flight at 60 Hz). The same-frame path is used for the very first
-frame of a flight, where the target is measured naturally and its resting size
-is captured.
+Timing: writers run after layout, so the layout of frame N is driven by the
+frame written at the end of frame N−1 — one frame, ~6% of a 300 ms flight.
 
 ## 6. State machine and matching
 
@@ -381,7 +393,8 @@ the supported shape.
    automatic size morph + visual-rect routing (P3).
 4. Tier 1 cross-composer (main ↔ overlays, retain-in-owner, NO transplant) →
    shipped (P4). Tier 2 deliberately unbuilt (no trigger exists — §3.5).
-   ContentSize/AnimatedSize placeholders deferred (JumpCut only for now).
+   `ContentSize`/`AnimatedSize` placeholders and `RemeasureToBounds` shipped in
+   the layout contract (§5).
 5. ~~Snapshot (start/mid/end frames) + interruption + concurrency tests.~~
 6. ~~Overlay pass: `renderInOverlayDuringTransition` on both markers, layer
    elevation for both ends, layer-order hit routing, z ordering across ends~~

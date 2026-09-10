@@ -24,7 +24,7 @@
 
 | Method | Compose equivalent | Notes |
 |---|---|---|
-| `.shared_element(state, transform, placeholder, path, z_index, render_in_overlay)` | `Modifier.sharedElement(…)` | Same content on both ends — flies + crossfades; pass `PlaceHolderSize::JumpCut` (others degrade to it, logged, until implemented); `path` is `Linear` / `ArcBelow` / `ArcAbove`; `z_index` orders the flying pair in the layer and is re-read every frame (so it may be flipped mid-flight); `render_in_overlay` is Compose `renderInOverlayDuringTransition` — see §6. NOTE: `render_in_overlay` defaults to `true` in *behaviour*, but Rust has no default arguments: every call site must pass it (`SharedTransitionDefaults::render_in_overlay()` is the value the framework treats as the default). The parameter order also differs from Compose's (`…, path, z_index, render_in_overlay` vs Compose's `…, renderInOverlayDuringTransition, zIndexInOverlay, clipInOverlayDuringTransition`) — porting is a loud type error, not a silent swap |
+| `.shared_element(state, transform, placeholder, path, z_index, render_in_overlay)` | `Modifier.sharedElement(…)` | Same content on both ends — flies + crossfades; every `PlaceHolderSize` is honoured (`JumpCut` is just what the examples pass). Compose's `sharedElement` carries no resize parameter and always re-measures, so this marker resolves to `RemeasureToBounds` — see §4.1. `path` is `Linear` / `ArcBelow` / `ArcAbove`; `z_index` orders the flying pair in the layer and is re-read every frame (so it may be flipped mid-flight); `render_in_overlay` is Compose `renderInOverlayDuringTransition` — see §6. NOTE: `render_in_overlay` defaults to `true` in *behaviour*, but Rust has no default arguments: every call site must pass it (`SharedTransitionDefaults::render_in_overlay()` is the value the framework treats as the default). The parameter order also differs from Compose's (`…, path, z_index, render_in_overlay` vs Compose's `…, renderInOverlayDuringTransition, zIndexInOverlay, clipInOverlayDuringTransition`) — porting is a loud type error, not a silent swap |
 | `.shared_bounds(state, enter, exit, transform, resize, placeholder, path, z_index, render_in_overlay)` | `Modifier.sharedBounds(…)` | Different content — container morphs; `enter` plays on the appearing end, `exit` on the disappearing end (fade channels claimed per-end reproduce the crossfade; slide/scale/expand switches and distances compose on top at flight progress — NOTE: the transitions' inner `AnimationSpec`s are ignored, channels always ride the flight clock; Morph role skips both; expand ≈ scale-about-edge + clip); `render_in_overlay` same as above |
 
 ### 1.3 Flight shaping (`BoundsTransform`)
@@ -44,10 +44,12 @@ forever — completion waits for engine release (see §4).
 | Type | Variants | Status |
 |---|---|---|
 | `SharedKind` | `Element` / `Bounds { resize, placeholder }` | Both match and fly |
-| `ResizeMode` | `ScaleToBounds { clip }` | Fully implemented (render scales content into the lerped rect; `clip` clips to it). Compose's default for `sharedBounds`, and the one to keep for text |
+| `ResizeMode` | `ScaleToBounds { clip }` | Implemented (render scales content into the lerped rect; `clip` clips to it). The `clip` flag is a **winia addition**: Compose's `ResizeMode.scaleToBounds` takes `contentScale` + `alignment` and preserves the aspect ratio, while winia scales X and Y independently (see §7 gaps), so arcs turn elliptical mid-flight. `ScaleToBounds` is still Compose's default for `sharedBounds`, and the one to keep for text |
 | `ResizeMode` | `RemeasureToBounds` | Implemented — the entering end is measured with **fixed constraints of the animated bounds** every frame, so content re-lays-out/rewraps instead of being scaled (render then skips the scale, hit testing maps 1:1). See §4.1 |
-| `PlaceHolderSize` | `JumpCut` | Layout snaps to end state immediately (the flying pair covers the pop). For the entering end it reports the target size, like `ContentSize` |
-| `PlaceHolderSize` | `ContentSize` / `AnimatedSize` | Implemented — the size the PARENT observes: `AnimatedSize` reports the animated size (siblings reflow with the flight), `ContentSize` keeps the target size (surrounding layout holds still). See §4.1 |
+| `PlaceHolderSize` | `JumpCut` (**winia-only**) | Nothing like it exists in Compose, and the code path is identical to `ContentSize` — it just names the cheap "layout snapped to the end state" reading. For the entering end it reports the target size, like `ContentSize`; for a leaving end it means the space is released immediately |
+| `PlaceHolderSize` | `ContentSize` (Compose's default name) | Reports the target size, so the parent holds still |
+| `PlaceHolderSize` | `AnimatedSize` | Reports the animated size, so siblings reflow with the flight |
+| `SharedKind::Element` | (no resize parameter, like Compose) | Always `RemeasureToBounds`: Compose's `sharedElement` KDoc says it "will re-measure and relayout its child layout using fixed constraints derived from its animated size". There is deliberately no way to make an Element flight scale |
 | `PathMotion` | `Linear` | Implemented |
 | `PathMotion` | `ArcBelow` / `ArcAbove` | Implemented — Compose `ArcSpline.Arc` math ported: quarter-ellipse center path, arc-length-uniform travel (101-entry table), endpoints exact, size stays linear; resolved from the target marker. Either-dimension travel falls back to linear (axis-aligned flights stay straight). API shape differs from Compose (flight-level path, not per-keyframe `using ArcMode`) |
 
@@ -142,18 +144,24 @@ during the flight — Compose's `ResizeMode` and `PlaceholderSize`:
 
 Three properties worth knowing before you rely on it:
 
-- **Free when unused.** The default combination writes nothing into the layout,
-  so `ScaleToBounds` + `JumpCut`/`ContentSize` flights are byte-for-byte the old
-  behaviour (no re-measure, no extra layout pass).
-- **Zero recomposition.** The re-measure is driven by a layout dependency
-  (`State` read during measure), not by composition: a whole flight runs without
-  rebuilding a single composable — pinned by `flight_layout_contract_matrix`,
-  which asserts the scenario build count stays flat while the flight re-measures.
-- **The layout trails the flight by ~1 frame** (writers run after layout), which
-  is invisible at 60 Hz. Only the ENTERING end re-measures; the leaving ghost is
-  frozen content, and in a screen switch the outgoing element's space is not
-  held open (its tree is gone — Compose can hold it because the old screen stays
-  composed).
+- **Free when unused.** `ScaleToBounds` reports the target size and attaches no
+  override at all, so the endpoint's layout is untouched (the invalidation is
+  only re-seeded while an override is attached, or on the frame it is dropped).
+  Pinned by `default_contract_does_not_touch_the_layout`, which asserts a
+  mid-flight layout re-measures nothing.
+- **Zero recomposition.** The override is driven by a measure-time `State` read
+  (a LAYOUT dependency) and re-seeded per frame, never by composition: a whole
+  flight decomposes nothing — pinned by `flight_layout_contract_matrix`, which
+  asserts the scenario build count stays flat from the switch through teardown.
+- **The layout trails the flight by one frame** (writers run after layout, so
+  the layout of frame N uses the frame written at the end of frame N−1 — ~6% of
+  a 300 ms flight; the reference content and the reflowed siblings are that far
+  behind the painted rect, not the rect itself). Only the ENTERING end
+  re-measures; the leaving ghost is frozen content, and in a screen switch the
+  outgoing element's space is not held open (its tree is gone — Compose can hold
+  it because the old screen stays composed). A same-screen MORPH ignores both
+  markers: its size change came from layout in the first place, so re-reporting
+  a lerped size would fight the layout driving it.
 
 ## 5. Shape and color
 
@@ -274,6 +282,18 @@ Three properties worth knowing before you rely on it:
   divergence — out of scope.
 - Cross-OS-window flights are out of scope (need an OS-level overlay).
 - Tier 2 bitmap flights deliberately unbuilt (no trigger exists).
+- `ResizeMode::ScaleToBounds` does not implement Compose's shape: Compose takes
+  `contentScale` (`FillWidth` by default) + `alignment` and derives ONE scale, so
+  the content keeps its aspect ratio; winia scales X and Y independently, so a
+  mismatched-aspect flight stretches (documented symptom: arcs go elliptical).
+  `RemeasureToBounds` is the mode to reach for when the aspect must be real.
+- A same-screen MORPH ignores `resize`/`placeholder` (see §4.1).
+- `PlaceHolderSize` is a closed enum: Compose's `PlaceholderSize` is a policy
+  value (`calculateSize(contentSize, animatedSize)`), so a Compose user cannot
+  plug in a custom rule here.
+- Not pixel-pinned: the SCALED-versus-CROPPED distinction is asserted with one
+  raster probe (green band) plus the layout assertions; a hero whose content is
+  a single solid rounded rect looks the same either way.
 
 ## 8. Tests
 
@@ -315,7 +335,8 @@ Three properties worth knowing before you rely on it:
   Do not reintroduce a dependency on `is_transition_active()` (an
   app-facing state that only exists once somebody subscribes).
 - Marker values are sampled when a flight resolves (`render_in_overlay`,
-  `path`, `boundsTransform`), so the marker in the arena must be fresh. Read
+  `path`, `boundsTransform`, and now `resize`/`placeholder`), so the marker in
+  the arena must be fresh. Read
   such a flag **inside the composable that builds the marked node** — a read
   one slot higher leaves this subtree skipped (Skip keeps the cached
   modifier) and the runtime toggle silently does nothing until something else
@@ -325,5 +346,13 @@ Three properties worth knowing before you rely on it:
 - Never remove slots by key (keys are positional identities resurrected
   on navigate-back); teardown frees arena nodes index+slot double-guarded
   and tag-checks visuals by flight id.
+- The flight layout override is a per-frame contract, not a subscription:
+  the writers re-seed the endpoint's `layout_dirty_keys` entry EVERY frame
+  (because `layout()` clears `layout_dirty` on the whole tree at the start of
+  every pass, so a folded parent would never descend into it), and every
+  teardown that drops an override must seed once more. Both Tier 0 and Tier 1
+  route through `clear_transition_for_slot` for that reason — it is the single
+  place that also matches the flight id (a successor flight can own the same
+  slot key by then).
 - Keep `docs/shared-element-transition.md` (architecture) and this file
   (usage) in sync when behavior changes.

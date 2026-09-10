@@ -508,10 +508,9 @@ impl Flight {
 
 impl Modifier {
     /// Mark the shared element (same content on both ends — flies + crossfades).
-    /// The transform rides scalar progress (see module docs); render ignores
-    /// this marker until Phase 2 wires registration at `start_node`.
-    /// `placeholder` selects the layout-space contract; only `JumpCut` is
-    /// implemented today (other values degrade to it with a log).
+    /// Compose's `sharedElement` has no resize parameter and always re-measures,
+    /// so this marker resolves to `RemeasureToBounds`; `placeholder` selects
+    /// what the parent observes while the flight runs (`PlaceHolderSize`).
     /// `path` selects the motion path (Compose `ArcMode` equivalent —
     /// Winia applies a flight-level quarter-ellipse port instead of
     /// Compose's per-keyframe `using ArcMode`).
@@ -706,10 +705,19 @@ mod tests {
             }),
             PlaceHolderSize::AnimatedSize
         );
-        assert!(matches!(
-            shared_resize_for_kind(&SharedKind::Element { placeholder: PlaceHolderSize::JumpCut }),
-            ResizeMode::ScaleToBounds { .. }
-        ));
+        // Compose's `sharedElement` always re-measures (its KDoc: "will
+        // re-measure and relayout its child layout using fixed constraints
+        // derived from its animated size") — Element markers must therefore
+        // resolve to RemeasureToBounds, not to a scale.
+        assert!(
+            matches!(
+                shared_resize_for_kind(&SharedKind::Element {
+                    placeholder: PlaceHolderSize::JumpCut
+                }),
+                ResizeMode::RemeasureToBounds
+            ),
+            "sharedElement re-measures, like Compose"
+        );
     }
 
     #[test]
@@ -731,6 +739,7 @@ mod tests {
             bounds_fx: None,
             elevated: false,
             remeasure: false,
+            radius_auto: false,
         };
         // Linear midpoint is exactly the component-wise lerp.
         assert_eq!(
@@ -815,6 +824,7 @@ mod tests {
             bounds_fx: fx,
             elevated: false,
             remeasure: false,
+            radius_auto: false,
         };
         let fade_in = VisibilityTransition::fade_in(TweenSpec::default());
         let fade_out = VisibilityTransition::fade_out(TweenSpec::default());
@@ -1018,6 +1028,10 @@ pub(crate) struct TransitionVisual {
     /// `RemeasureToBounds`): the content already has the animated size, so
     /// render must NOT scale it again and hit testing maps 1:1.
     pub remeasure: bool,
+    /// Corners came from a percent shape (Pill/Circle): evaluate them on the
+    /// box being painted rather than lerping the endpoint radii (Compose does
+    /// the same — `min(w, h)/2` is not linear in t).
+    pub radius_auto: bool,
 }
 
 impl TransitionVisual {
@@ -1124,7 +1138,15 @@ impl TransitionVisual {
         let l = self.lerped();
         let sx = if node_w > 0.0 { l.width / node_w } else { 1.0 }.max(1e-6);
         let sy = if node_h > 0.0 { l.height / node_h } else { 1.0 }.max(1e-6);
-        let r = self.radii();
+        // Percent corners (Pill/Circle) follow the box they are evaluated on:
+        // Compose derives them from the animated bounds, and `min(w,h)/2` is NOT
+        // linear in t — lerping the two endpoint radii under-rounds mid-flight
+        // (40x120 -> 200x30 wanted 37.5 at t=.5, lerp gives 17.5).
+        let r = if self.radius_auto {
+            [node_w.min(node_h) / 2.0; 4]
+        } else {
+            self.radii()
+        };
         [
             (r[0] / sx, r[0] / sy),
             (r[1] / sx, r[1] / sy),
@@ -1223,6 +1245,24 @@ pub(crate) fn rrect_vectors(pairs: [(f32, f32); 4]) -> [skia_safe::Vector; 4] {
 /// Background/Border/Clip shape — same precedence as the render focus ring.
 /// Pill/Circle resolve against the given (flight-start) size. No shape at
 /// all → plain rect.
+/// True when the marker's nearest shape derives its corners from the box
+/// (`Pill`/`Circle`): those must be evaluated on the painted box instead of
+/// being lerped between the endpoint radii.
+pub(crate) fn shared_shape_radius_is_auto(modifier: &Modifier) -> bool {
+    modifier
+        .elements()
+        .iter()
+        .rev()
+        .find_map(|el| match el {
+            ModifierElement::Background { shape, .. }
+            | ModifierElement::Border { shape, .. }
+            | ModifierElement::BorderDynamic { shape, .. }
+            | ModifierElement::Clip { shape } => Some(shape),
+            _ => None,
+        })
+        .is_some_and(|s| matches!(s, Shape::Pill | Shape::Circle))
+}
+
 pub(crate) fn shared_shape_radii(modifier: &Modifier, w: f32, h: f32) -> [f32; 4] {
     let shape = modifier.elements().iter().rev().find_map(|el| match el {
         ModifierElement::Background { shape, .. }
@@ -1294,9 +1334,13 @@ pub(crate) fn find_scope_overlay_marker(modifier: &Modifier) -> Option<(u64, f32
 pub(crate) fn shared_resize_for_kind(kind: &SharedKind) -> ResizeMode {
     match kind {
         SharedKind::Bounds { resize, .. } => resize.clone(),
-        // Element content is identical on both ends and scales exactly into the
-        // bounds — no relayout of its own.
-        SharedKind::Element { .. } => ResizeMode::ScaleToBounds { clip: false },
+        // Compose's `sharedElement` has no resize parameter and always
+        // re-measures: "During the bounds transform, sharedElement will
+        // re-measure and relayout its child layout using fixed constraints
+        // derived from its animated size, similar to RemeasureToBounds"
+        // (SharedTransitionScope KDoc). Element content is identical on both
+        // ends, so reflowing it is what keeps text and rows correct.
+        SharedKind::Element { .. } => ResizeMode::RemeasureToBounds,
     }
 }
 
@@ -1345,10 +1389,10 @@ fn animated_size(
     crate::layout::node::Size::new(l.width, l.height)
 }
 
-/// Clip flag from the marker kind. Render implements ScaleToBounds only —
-/// RemeasureToBounds degrades to scale (logged, once per flight start)
-/// until per-frame remeasure lands. Non-`JumpCut` placeholders likewise
-/// degrade to `JumpCut` (logged) until the layout-space contract lands.
+/// Clip flag from the marker kind: only `ScaleToBounds` can clip (it scales
+/// stable content into the bounds, so `clip` bounds that deformation).
+/// `RemeasureToBounds` re-lays-out the content at the animated size, so there
+/// is nothing to clip — the node's own box already is the animated one.
 pub(crate) fn shared_clip_for_kind(kind: &SharedKind) -> bool {
     match kind {
         SharedKind::Bounds { resize: ResizeMode::ScaleToBounds { clip }, .. } => *clip,
@@ -1442,7 +1486,13 @@ pub(crate) fn abs_rect_upward(
     idx: usize,
 ) -> SharedBounds {
     let n = &nodes[idx];
-    let (w, h) = (n.measured_size.width, n.measured_size.height);
+    // Content box: a ghost's fraction map must land on the box the target
+    // actually paints (its content), not on the placeholder size the target's
+    // parent was told.
+    let (w, h) = {
+        let cb = n.content_box();
+        (cb.width, cb.height)
+    };
     let (mut ax, mut ay) = (n.position.x, n.position.y);
     let mut cur = idx;
     // Ascent mirrors the descent in `node_abs_position` (app.rs): each level
@@ -1939,21 +1989,30 @@ impl Composer {
     /// flicker one frame off the new visual (self-heals next poll, but
     /// avoidable for one tag comparison).
     fn clear_transition_for_slot(&mut self, slot: u64, id: FlightId) {
-        if let Some(root) = self.arena.root {
-            if let Some(idx) = find_idx_by_slot(&self.arena.nodes, root, slot) {
-                let owned = self.arena.nodes[idx].transition.as_ref().is_some_and(|t| t.flight == id);
-                if owned {
-                    self.arena.nodes[idx].transition = None;
-                }
-                // The layout override lives exactly as long as the flight: drop
-                // it and seed one last invalidation so the natural size comes
-                // back next pass (otherwise the fold keeps the last animated
-                // size forever).
-                if self.arena.nodes[idx].flight_measure.is_some() {
-                    let key = self.arena.nodes[idx].slot_key;
-                    self.arena.nodes[idx].flight_measure = None;
-                    self.layout_dirty_keys.insert(key);
-                }
+        // `arena.root` is None on an empty composition, but the nodes (and the
+        // key→index map) can outlive it, so a rootless tree must still be swept
+        // — otherwise an orphan override rides a key-reused node.
+        let found = match self.arena.root {
+            Some(root) => find_idx_by_slot(&self.arena.nodes, root, slot),
+            None => self.arena.nodes.iter().position(|n| n.slot_key == slot),
+        };
+        if let Some(idx) = found {
+            let owned = self.arena.nodes[idx].transition.as_ref().is_some_and(|t| t.flight == id);
+            if owned {
+                self.arena.nodes[idx].transition = None;
+            }
+            // The layout override lives exactly as long as the flight it belongs
+            // to: drop it (only when it is still THIS flight's) and seed one last
+            // invalidation so the natural size comes back next pass — otherwise
+            // the fold keeps the last animated size forever.
+            if self.arena.nodes[idx]
+                .flight_measure
+                .as_ref()
+                .is_some_and(|f| f.flight == id)
+            {
+                let key = self.arena.nodes[idx].slot_key;
+                self.arena.nodes[idx].flight_measure = None;
+                self.layout_dirty_keys.insert(key);
             }
         }
     }
@@ -2256,6 +2315,7 @@ impl Composer {
                     elevated: true,
                     // Frozen ghost: no live layout to re-measure.
                     remeasure: false,
+                    radius_auto: shared_shape_radius_is_auto(&self.arena.nodes[idx].modifier),
                 });
             }
         }
@@ -2286,17 +2346,21 @@ impl Composer {
                     );
                     measure_state.set(frame);
                     let key = self.arena.nodes[tidx].slot_key;
+                    let had_override = self.arena.nodes[tidx].flight_measure.is_some();
                     self.arena.nodes[tidx].flight_measure = if frame.is_idle() {
                         None
                     } else {
-                        Some(FlightMeasure { frame: measure_state })
+                        Some(FlightMeasure { frame: measure_state, flight: id })
                     };
                     // `layout()` resets `layout_dirty` on the whole tree at the
-                    // start of every pass, so the invalidation has to be
-                    // re-seeded EVERY frame — otherwise the folded parent never
-                    // descends into the override (and, on the last frame, the
-                    // natural size would never come back).
-                    self.layout_dirty_keys.insert(key);
+                    // start of every pass, so an override has to be re-seeded
+                    // EVERY frame — otherwise the folded parent never descends
+                    // into it. The seed is skipped when nothing changed: the
+                    // default contract (no override attached, none to drop)
+                    // must not force a re-measure of the ancestor chain.
+                    if !frame.is_idle() || had_override {
+                        self.layout_dirty_keys.insert(key);
+                    }
                     self.arena.nodes[tidx].transition = Some(TransitionVisual {
                         start,
                         end,
@@ -2315,6 +2379,7 @@ impl Composer {
                         bounds_fx: fx,
                         elevated,
                         remeasure,
+                        radius_auto: shared_shape_radius_is_auto(&self.arena.nodes[tidx].modifier),
                     });
                     if elevated {
                         self.elevated_roots.push(tidx);
@@ -2466,16 +2531,12 @@ impl Composer {
                 owner.transition_layer.retain(|&x| x != idx);
             }
             if let Some(slot) = tslot {
+                // Route through the shared teardown so the peer's layout
+                // override (Compose `ResizeMode`/`PlaceHolderSize`) is dropped
+                // and its natural size restored — clearing only the visual
+                // would freeze the peer at its last animated size forever.
                 let peer = &mut all[ti];
-                if let Some(root) = peer.arena.root {
-                    if let Some(tidx) = find_idx_by_slot(&peer.arena.nodes, root, slot) {
-                        let owned =
-                            peer.arena.nodes[tidx].transition.as_ref().is_some_and(|t| t.flight == id);
-                        if owned {
-                            peer.arena.nodes[tidx].transition = None;
-                        }
-                    }
-                }
+                peer.clear_transition_for_slot(slot, id);
             }
             all[0].shared_flights.remove(&id);
         }
@@ -2499,15 +2560,9 @@ impl Composer {
         }
         if let Some(slot) = a.flight.target_slot {
             if let Some(peer) = all.iter_mut().find(|c| c.composer_id == a.target_cid) {
-                if let Some(root) = peer.arena.root {
-                    if let Some(tidx) = find_idx_by_slot(&peer.arena.nodes, root, slot) {
-                        let owned =
-                            peer.arena.nodes[tidx].transition.as_ref().is_some_and(|t| t.flight == id);
-                        if owned {
-                            peer.arena.nodes[tidx].transition = None;
-                        }
-                    }
-                }
+                // Same as the completion path: the peer's layout override must
+                // go with the flight (see `clear_transition_for_slot`).
+                peer.clear_transition_for_slot(slot, id);
             }
         }
     }
@@ -2585,6 +2640,7 @@ impl Composer {
                     // Detached leaving end: the layer is its only home.
                     elevated: true,
                     remeasure: false,
+                    radius_auto: shared_shape_radius_is_auto(&owner.arena.nodes[idx].modifier),
                 });
             }
         }
@@ -2602,12 +2658,15 @@ impl Composer {
                     );
                     measure_state.set(frame);
                     let key = peer.arena.nodes[tidx].slot_key;
+                    let had_override = peer.arena.nodes[tidx].flight_measure.is_some();
                     peer.arena.nodes[tidx].flight_measure = if frame.is_idle() {
                         None
                     } else {
-                        Some(FlightMeasure { frame: measure_state })
+                        Some(FlightMeasure { frame: measure_state, flight: id })
                     };
-                    peer.layout_dirty_keys.insert(key);
+                    if !frame.is_idle() || had_override {
+                        peer.layout_dirty_keys.insert(key);
+                    }
                     peer.arena.nodes[tidx].transition = Some(TransitionVisual {
                         start: off_origin(start, to),
                         end: off_origin(end, to),
@@ -2624,6 +2683,7 @@ impl Composer {
                         bounds_fx: fx,
                         elevated: in_overlay,
                         remeasure,
+                        radius_auto: shared_shape_radius_is_auto(&peer.arena.nodes[tidx].modifier),
                     });
                     if in_overlay {
                         peer.elevated_roots.push(tidx);
@@ -4850,44 +4910,66 @@ mod tier0_tests {
         // What the coordinator does every frame: attach the frame and RE-SEED
         // the node's slot key, because `layout()` resets `layout_dirty` on the
         // whole tree at the start of every pass (a folded parent would never
-        // descend into the override otherwise).
+        // descend into the override otherwise). `content` and `reported` carry
+        // DIFFERENT sizes here on purpose: the content box drives layout/hit,
+        // the reported size is what the parent observes.
         let key = composer.arena_nodes()[marked].slot_key;
         composer.arena.nodes[marked].flight_measure = Some(FlightMeasure {
             frame: frame_state.clone(),
+            flight: 1,
         });
-        composer.layout_dirty_keys.insert(key);
-        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
-
-        // Tick the frame — no compose: the layout dependency alone must do it.
         frame_state.set(FlightMeasureFrame {
             content: Some(Size::new(200.0, 90.0)),
-            reported: Some(Size::new(200.0, 90.0)),
+            reported: Some(Size::new(140.0, 70.0)),
         });
         composer.layout_dirty_keys.insert(key);
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
 
         let nodes = composer.arena_nodes();
         assert_eq!(
-            nodes[marked].measured_size,
-            Size::new(200.0, 90.0),
-            "the reported size reaches the node"
-        );
-        assert_eq!(
-            nodes[sibling].position.y, 90.0,
-            "…and the parent re-places the sibling below it"
-        );
-        assert_eq!(
             nodes[child].measured_size.width, 200.0,
-            "RemeasureToBounds: content re-measures at the animated width"
+            "RemeasureToBounds: the content re-measures at the ANIMATED width"
+        );
+        assert_eq!(
+            nodes[sibling].position.y, 70.0,
+            "PlaceHolderSize: the parent places siblings by the REPORTED size"
+        );
+        assert_eq!(
+            nodes[marked].measured_size,
+            Size::new(140.0, 70.0),
+            "…and that is what `measured_size` holds"
+        );
+        assert_eq!(
+            nodes[marked].content_box(),
+            Size::new(200.0, 90.0),
+            "…while the content box keeps the measured size for paint/clip/hit"
         );
 
-        // Dropping the override restores the natural layout in one pass.
+        // One frame later: tick the state and lay out WITHOUT re-seeding. The
+        // measure-time read must have registered a LAYOUT dependency, which is
+        // what keeps the override reactive (no recomposition involved).
+        frame_state.set(FlightMeasureFrame {
+            content: Some(Size::new(160.0, 66.0)),
+            reported: Some(Size::new(120.0, 50.0)),
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let nodes = composer.arena_nodes();
+        assert_eq!(
+            nodes[child].measured_size.width, 160.0,
+            "a frame tick alone drives the re-measure (layout dependency)"
+        );
+        assert_eq!(nodes[sibling].position.y, 50.0, "…and the parent re-places");
+
+        // Dropping the override restores the natural layout in one pass (the
+        // teardown contract: clear + seed once).
         composer.arena.nodes[marked].flight_measure = None;
         composer.layout_dirty_keys.insert(key);
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
         let nodes = composer.arena_nodes();
         assert_eq!(nodes[marked].measured_size, Size::new(120.0, 60.0));
+        assert_eq!(nodes[marked].content_box(), Size::new(120.0, 60.0));
         assert_eq!(nodes[sibling].position.y, 60.0);
+        assert_eq!(nodes[child].measured_size.width, 120.0);
     }
 
     /// Counts real executions of the scenario composables: the flight must not
@@ -4925,9 +5007,18 @@ mod tier0_tests {
                     ),
             )
             .build(ctx, |ctx| {
-                // Follows whatever width the container was measured at.
+                // Follows whatever width the container was measured at, and
+                // carries a distinct colour so a raster test can tell SCALED
+                // content (band shrinks with the flight) from CROPPED content
+                // (band keeps its 60px height and runs out of the clip).
                 let key = ctx.next_key();
-                ctx.start_leaf(key, Modifier::new().fill_max_width().height(20.0));
+                ctx.start_leaf(
+                    key,
+                    Modifier::new()
+                        .fill_max_width()
+                        .height(60.0)
+                        .background(Color::GREEN, Shape::Rectangle),
+                );
                 ctx.end_node();
             });
     }
@@ -5007,84 +5098,78 @@ mod tier0_tests {
             frame(&mut composer);
             assert_eq!(composer.shared_flights.len(), 1, "flight opened ({resize:?}/{placeholder:?})");
             let builds_at_start = LAYOUT_SCENARIO_BUILDS.load(std::sync::atomic::Ordering::Relaxed);
+            assert!(builds_at_start > 0, "the counter must be live");
 
-            let mut sample: Option<(f32, f32, f32)> = None;
-            for _ in 0..200 {
-                match flight_probe(&composer) {
-                    Some((p, l)) if p >= 0.5 => {
-                        let nodes = composer.arena_nodes();
-                        let marked = marked_in(&composer)[0];
-                        let child = nodes[marked].children[0];
-                        let parent = nodes[marked].parent_id.expect("parent");
-                        let root = composer.layout_root_idx().expect("root");
-                        let pidx = crate::layout::node::find_node_by_id(nodes, root, parent)
-                            .expect("parent index");
-                        let sibling = nodes[pidx]
-                            .children
-                            .iter()
-                            .copied()
-                            .find(|&c| c != marked)
-                            .expect("sibling");
-                        sample = Some((
-                            l.width,
-                            nodes[child].measured_size.width,
-                            nodes[sibling].position.y,
-                        ));
-                        break;
-                    }
-                    None => break,
-                    _ => {}
-                }
-                crate::animation::update_animations();
-                std::thread::sleep(std::time::Duration::from_millis(16));
-                frame(&mut composer);
-            }
-            let (animated_w, child_w, sibling_y) = sample.expect("mid-flight sample");
-            assert!(animated_w < 290.0, "sample must be before the end");
-            // The layout is driven by the frame written in the PREVIOUS poll
-            // (writers run after layout), so it trails the probe by a frame or
-            // two — compare against the layout's own numbers first, then check
-            // that they track the flight within that slack.
-            let marked_h = {
+            // DETERMINISTIC sample: pin the flight's progress instead of
+            // sampling the wall clock. Writers run after layout, so the poll
+            // below writes the p=0.5 frame, and one compose-free `layout()`
+            // consumes the seeded key exactly like the real frame loop does.
+            let fid = *composer.shared_flights.keys().next().expect("flight id");
+            composer
+                .shared_flights
+                .get_mut(&fid)
+                .expect("flight")
+                .progress
+                .set(0.5);
+            frame(&mut composer);
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+
+            // 120x60 → 300x200 at t = .5 ⇒ animated 210x130, target 300x200.
+            let (marked, child, sibling) = {
                 let nodes = composer.arena_nodes();
-                nodes[marked_in(&composer)[0]].measured_size.height
+                let marked = marked_in(&composer)[0];
+                let parent = nodes[marked].parent_id.expect("parent");
+                let root = composer.layout_root_idx().expect("root");
+                let pidx =
+                    crate::layout::node::find_node_by_id(nodes, root, parent).expect("parent index");
+                let sibling = nodes[pidx]
+                    .children
+                    .iter()
+                    .copied()
+                    .find(|&c| c != marked)
+                    .expect("sibling");
+                (marked, nodes[marked].children[0], sibling)
             };
+            let nodes = composer.arena_nodes();
+            let (child_w, sibling_y, marked_size, content_box) = (
+                nodes[child].measured_size.width,
+                nodes[sibling].position.y,
+                nodes[marked].measured_size,
+                nodes[marked].content_box(),
+            );
+            let ctx = format!("{resize:?}/{placeholder:?}");
 
-            if content_follows {
-                assert!(
-                    (child_w - animated_w).abs() <= 24.0,
-                    "RemeasureToBounds: content follows the animated width \
-                     ({resize:?}/{placeholder:?}: child={child_w}, animated={animated_w})"
-                );
-            } else {
-                assert!(
-                    (child_w - 300.0).abs() <= 2.0,
-                    "ScaleToBounds: content keeps its target width \
-                     ({resize:?}/{placeholder:?}: child={child_w})"
-                );
-            }
-            if sibling_moves {
-                assert!(
-                    (marked_h - (60.0 + 140.0 * (animated_w - 120.0) / 180.0)).abs() <= 24.0,
-                    "AnimatedSize: the reported size tracks the animated height \
-                     ({resize:?}/{placeholder:?}: marked_h={marked_h})"
-                );
-                assert!(
-                    (sibling_y - marked_h).abs() <= 0.5,
-                    "…and the parent places the sibling right below it \
-                     ({resize:?}/{placeholder:?}: sibling={sibling_y}, marked_h={marked_h})"
-                );
-            } else {
-                assert!(
-                    (sibling_y - 200.0).abs() <= 2.0,
-                    "the placeholder keeps the target size for the parent \
-                     ({resize:?}/{placeholder:?}: sibling={sibling_y})"
-                );
-            }
+            // CONTENT: re-measured at the animated width, or kept at the target.
+            let want_child = if content_follows { 210.0 } else { 300.0 };
+            assert!(
+                (child_w - want_child).abs() <= 1.0,
+                "content width ({ctx}): got {child_w}, want {want_child}"
+            );
+            // CONTENT BOX: always the size the content was measured at — what
+            // render/clip/hit use, never the placeholder size.
+            let want_box = if content_follows { (210.0, 130.0) } else { (300.0, 200.0) };
+            assert!(
+                (content_box.width - want_box.0).abs() <= 1.0
+                    && (content_box.height - want_box.1).abs() <= 1.0,
+                "content box ({ctx}): got {content_box:?}, want {want_box:?}"
+            );
+            // PARENT: AnimatedSize reflows the sibling, ContentSize/JumpCut hold.
+            let want_sibling = if sibling_moves { 130.0 } else { 200.0 };
+            assert!(
+                (sibling_y - want_sibling).abs() <= 1.0,
+                "sibling y ({ctx}): got {sibling_y}, want {want_sibling}"
+            );
+            let want_reported = if sibling_moves { 130.0 } else { 200.0 };
+            assert!(
+                (marked_size.height - want_reported).abs() <= 1.0,
+                "reported height ({ctx}): got {}, want {want_reported}",
+                marked_size.height
+            );
+
             assert_eq!(
                 LAYOUT_SCENARIO_BUILDS.load(std::sync::atomic::Ordering::Relaxed),
                 builds_at_start,
-                "the layout contract must not recompose ({resize:?}/{placeholder:?})"
+                "the layout contract must not recompose ({ctx})"
             );
 
             for _ in 0..300 {
@@ -5108,6 +5193,356 @@ mod tier0_tests {
                 "the natural size comes back ({resize:?}/{placeholder:?}: {})",
                 nodes[marked].measured_size.width
             );
+            // …and the whole flight (teardown included) still recomposed nothing.
+            assert_eq!(
+                LAYOUT_SCENARIO_BUILDS.load(std::sync::atomic::Ordering::Relaxed),
+                builds_at_start,
+                "no recomposition through the end of the flight ({ctx})"
+            );
+        }
+        crate::animation::clear_all_animations();
+    }
+
+    /// Teardown contract: dropping the override must also SEED one layout
+    /// invalidation. `layout()` clears `layout_dirty` tree-wide every pass, so
+    /// without the seed the fold would keep the last animated size forever —
+    /// which is exactly what a mid-flight cancel leaves behind (the final
+    /// frame is NOT the natural size, unlike a completed flight).
+    #[test]
+    fn mid_flight_cancel_restores_the_natural_size() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+        let frame = |composer: &mut Composer| {
+            let s = show.clone();
+            composer.compose(|ctx| {
+                SharedTransitionLayout::new().build(ctx, |ctx| {
+                    let scope = current_shared_scope().expect("scope");
+                    if s.get() {
+                        list_layout_screen(
+                            ctx,
+                            &scope,
+                            ResizeMode::RemeasureToBounds,
+                            PlaceHolderSize::ContentSize,
+                        );
+                    } else {
+                        detail_layout_screen(
+                            ctx,
+                            &scope,
+                            ResizeMode::RemeasureToBounds,
+                            PlaceHolderSize::ContentSize,
+                        );
+                    }
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+            composer.poll_shared_flights();
+        };
+        frame(&mut composer);
+        show.set(false);
+        frame(&mut composer);
+        let fid = *composer.shared_flights.keys().next().expect("flight id");
+        composer
+            .shared_flights
+            .get_mut(&fid)
+            .expect("flight")
+            .progress
+            .set(0.5);
+        frame(&mut composer);
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let marked = marked_in(&composer)[0];
+        assert_eq!(
+            composer.arena_nodes()[marked].content_box(),
+            crate::layout::node::Size::new(210.0, 130.0),
+            "mid-flight the content box is the animated size"
+        );
+
+        composer.cancel_flight(fid);
+        assert!(composer.shared_flights.is_empty(), "cancelled");
+        // No compose: only the teardown seed can drive the re-measure.
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let nodes = composer.arena_nodes();
+        assert!(
+            nodes[marked].flight_measure.is_none(),
+            "the override is dropped"
+        );
+        assert_eq!(
+            nodes[marked].content_box(),
+            crate::layout::node::Size::new(300.0, 200.0),
+            "the natural size comes back on the next pass"
+        );
+        assert_eq!(
+            nodes[marked].measured_size,
+            crate::layout::node::Size::new(300.0, 200.0),
+            "…and the parent sees it too"
+        );
+        crate::animation::clear_all_animations();
+    }
+
+    /// `LayoutNode.flight_measure` must not exist on the default contract
+    /// (`ScaleToBounds` + `JumpCut`): the writers used to seed the layout
+    /// invalidation unconditionally, which re-measured the endpoint and its
+    /// whole ancestor chain every frame for nothing.
+    #[test]
+    fn default_contract_does_not_touch_the_layout() {
+        use crate::layout::node::MEASURE_COUNT;
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+        let frame = |composer: &mut Composer| {
+            let s = show.clone();
+            composer.compose(|ctx| {
+                SharedTransitionLayout::new().build(ctx, |ctx| {
+                    let scope = current_shared_scope().expect("scope");
+                    if s.get() {
+                        list_layout_screen(
+                            ctx,
+                            &scope,
+                            ResizeMode::ScaleToBounds { clip: false },
+                            PlaceHolderSize::JumpCut,
+                        );
+                    } else {
+                        detail_layout_screen(
+                            ctx,
+                            &scope,
+                            ResizeMode::ScaleToBounds { clip: false },
+                            PlaceHolderSize::JumpCut,
+                        );
+                    }
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+            composer.poll_shared_flights();
+        };
+        frame(&mut composer);
+        show.set(false);
+        frame(&mut composer);
+        assert_eq!(composer.shared_flights.len(), 1, "flight opened");
+        let marked = marked_in(&composer)[0];
+        assert!(
+            composer.arena_nodes()[marked].flight_measure.is_none(),
+            "the default contract attaches no override"
+        );
+
+        // A second layout with identical constraints must fold completely.
+        MEASURE_COUNT.with(|c| c.set(0));
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let measured = MEASURE_COUNT.with(|c| c.get());
+        assert_eq!(
+            measured, 0,
+            "the default path must not re-measure anything (got {measured})"
+        );
+        crate::animation::clear_all_animations();
+    }
+
+    /// `cargo run`-visible contract: `shared_element` re-measures like Compose's
+    /// (`ResizeMode` is not even a parameter there), and its placeholder still
+    /// decides what the parent observes.
+    #[test]
+    fn shared_element_re_measures_and_honours_animated_size() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+        let frame = |composer: &mut Composer| {
+            let s = show.clone();
+            composer.compose(|ctx| {
+                SharedTransitionLayout::new().build(ctx, |ctx| {
+                    let scope = current_shared_scope().expect("scope");
+                    if s.get() {
+                        element_list_screen(ctx, &scope, PlaceHolderSize::AnimatedSize);
+                    } else {
+                        element_detail_screen(ctx, &scope, PlaceHolderSize::AnimatedSize);
+                    }
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+            composer.poll_shared_flights();
+        };
+        frame(&mut composer);
+        show.set(false);
+        frame(&mut composer);
+        let fid = *composer.shared_flights.keys().next().expect("flight id");
+        composer
+            .shared_flights
+            .get_mut(&fid)
+            .expect("flight")
+            .progress
+            .set(0.5);
+        frame(&mut composer);
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+
+        let (marked, child, sibling) = {
+            let nodes = composer.arena_nodes();
+            let marked = marked_in(&composer)[0];
+            let parent = nodes[marked].parent_id.expect("parent");
+            let root = composer.layout_root_idx().expect("root");
+            let pidx =
+                crate::layout::node::find_node_by_id(nodes, root, parent).expect("parent index");
+            let sibling = nodes[pidx]
+                .children
+                .iter()
+                .copied()
+                .find(|&c| c != marked)
+                .expect("sibling");
+            (marked, nodes[marked].children[0], sibling)
+        };
+        let nodes = composer.arena_nodes();
+        assert!(
+            (nodes[child].measured_size.width - 210.0).abs() <= 1.0,
+            "sharedElement re-measures its content (got {})",
+            nodes[child].measured_size.width
+        );
+        assert!(
+            (nodes[sibling].position.y - 130.0).abs() <= 1.0,
+            "…and AnimatedSize still reflows the parent (got {})",
+            nodes[sibling].position.y
+        );
+        crate::animation::clear_all_animations();
+    }
+
+    /// `shared_element` variant of the marked block: Compose's Element marker
+    /// carries no resize parameter (it always re-measures), only a placeholder.
+    #[crate::composable]
+    fn marked_element_block(
+        ctx: &mut ComposeCtx,
+        scope: &SharedTransitionScope,
+        w: f32,
+        h: f32,
+        color: Color,
+        placeholder: PlaceHolderSize,
+    ) {
+        let _ = LAYOUT_SCENARIO_BUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Column::new()
+            .modifier(
+                Modifier::new()
+                    .size(w, h)
+                    .background(color, Shape::rounded(8.0))
+                    .shared_element(
+                        scope.shared_content_state("hero"),
+                        BoundsTransform::default(),
+                        placeholder,
+                        PathMotion::Linear,
+                        0.0,
+                        true,
+                    ),
+            )
+            .build(ctx, |ctx| {
+                let key = ctx.next_key();
+                ctx.start_leaf(key, Modifier::new().fill_max_width().height(20.0));
+                ctx.end_node();
+            });
+    }
+
+    #[crate::composable]
+    fn element_list_screen(
+        ctx: &mut ComposeCtx,
+        scope: &SharedTransitionScope,
+        placeholder: PlaceHolderSize,
+    ) {
+        Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+            marked_element_block(ctx, scope, 120.0, 60.0, Color::RED, placeholder);
+            block_sibling(ctx);
+        });
+    }
+
+    #[crate::composable]
+    fn element_detail_screen(
+        ctx: &mut ComposeCtx,
+        scope: &SharedTransitionScope,
+        placeholder: PlaceHolderSize,
+    ) {
+        Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+            marked_element_block(ctx, scope, 300.0, 200.0, Color::BLUE, placeholder);
+            block_sibling(ctx);
+        });
+    }
+
+    /// Pixel-level proof for the two `reported != content` combinations that
+    /// the layout-only assertions cannot see: the box the hero PAINTS is the
+    /// reel/content one, so nothing of it may appear outside the lerped rect.
+    /// (This is the blind spot that hid the scale/spill regression.)
+    #[test]
+    fn mid_flight_paint_stays_inside_the_lerped_rect() {
+        let _g = lock_serial();
+        for (resize, placeholder) in [
+            (ResizeMode::RemeasureToBounds, PlaceHolderSize::ContentSize),
+            (ResizeMode::ScaleToBounds { clip: false }, PlaceHolderSize::AnimatedSize),
+        ] {
+            crate::animation::clear_all_animations();
+            let mut composer = Composer::new();
+            let show = State::new(true);
+            let (r, ph) = (resize.clone(), placeholder);
+            let frame = |composer: &mut Composer| {
+                let (s, rr, pp) = (show.clone(), r.clone(), ph);
+                composer.compose(|ctx| {
+                    SharedTransitionLayout::new().build(ctx, |ctx| {
+                        let scope = current_shared_scope().expect("scope");
+                        if s.get() {
+                            list_layout_screen(ctx, &scope, rr.clone(), pp);
+                        } else {
+                            detail_layout_screen(ctx, &scope, rr, pp);
+                        }
+                    });
+                });
+                composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+                composer.poll_shared_flights();
+            };
+            frame(&mut composer);
+            show.set(false);
+            frame(&mut composer);
+            let fid = *composer.shared_flights.keys().next().expect("flight id");
+            composer
+                .shared_flights
+                .get_mut(&fid)
+                .expect("flight")
+                .progress
+                .set(0.5);
+            frame(&mut composer);
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+            let l = flight_probe(&composer).expect("mid-flight").1;
+            assert!(
+                (l.width - 210.0).abs() <= 1.0 && (l.height - 130.0).abs() <= 1.0,
+                "pinned to t=.5 ({l:?})"
+            );
+
+            // The green band is 60px of the content's height: SCALED into the
+            // 130px lerped rect it ends at ~39px, so y=50 must be hero colour;
+            // drawn 1:1 (the crop bug) it would still be band green there.
+            let mut surface = render_heads(&composer);
+            // SCALED vs CROPPED: the green band is 60px of the content's height,
+            // so scaled into the 130px lerped rect it ends at ~39px — y=50 is
+            // hero there. Drawn 1:1 (the crop bug) it still reaches 60.
+            if matches!(resize, ResizeMode::ScaleToBounds { .. }) {
+                let hero_ref = pixel_rgb(&mut surface, 100, 100);
+                let scaled_away = pixel_rgb(&mut surface, 100, 50);
+                assert!(
+                    close_enough(scaled_away, hero_ref, 24),
+                    "content must be SCALED into the lerped rect, not cropped \
+                     ({resize:?}/{placeholder:?}): y50={scaled_away:?} vs hero={hero_ref:?}"
+                );
+            }
+
+            // Inside the lerped rect: the flying pair is painted (a crossfade of
+            // red and blue, so just require "not background").
+            let inside = pixel_rgb(&mut surface, 40, 40);
+            assert!(
+                !close_enough(inside, (255, 255, 255), 12),
+                "the hero paints inside the lerped rect ({resize:?}/{placeholder:?}): {inside:?}"
+            );
+            // Outside it — but well inside the 300x200 target box — must be
+            // background: neither the re-measured content nor an unscaled copy
+            // may spill there.
+            for (x, y) in [(250, 100), (100, 160)] {
+                let out = pixel_rgb(&mut surface, x, y);
+                assert!(
+                    close_enough(out, (255, 255, 255), 12),
+                    "nothing of the hero may paint outside the lerped rect at \
+                     ({x},{y}) ({resize:?}/{placeholder:?}): {out:?}"
+                );
+            }
         }
         crate::animation::clear_all_animations();
     }
@@ -6220,6 +6655,7 @@ mod tier0_tests {
             bounds_fx: None,
             elevated: false,
             remeasure: false,
+            radius_auto: false,
         };
         assert_eq!(
             vis.remap_hit(10.0, 10.0, 0.0, 0.0, 100.0, 50.0),
