@@ -242,15 +242,40 @@ spec}`. Position, size, opacity and shape are all pure functions of progress:
 ## 5. Layout contract (placeholder policy)
 
 ```rust
+enum ResizeMode { ScaleToBounds { clip }, RemeasureToBounds }
 enum PlaceHolderSize { JumpCut, ContentSize, AnimatedSize }
 ```
 
-- `JumpCut` (v1): layout snaps to end state immediately; the flying pair
-  covers the pop. An explicitly named cheap option, not a "simplification".
-- `ContentSize`: source keeps old space (free under Tier 0 — the retained node
-  is already there).
-- `AnimatedSize`: container size follows progress; reuse the proven
-  `ContentSizePolicy` pattern from `AnimatedContent` (layout-dep remeasure).
+Both are frozen from the ENTERING end's marker when the flight resolves, and
+both act on the same per-frame structure: `LayoutNode.flight_measure` holding a
+`State<FlightMeasureFrame> { content, reported }` that the coordinator rewrites
+every frame.
+
+- `ResizeMode::ScaleToBounds` (default, Compose's too): the content is measured
+  naturally and scaled into the lerped rect.
+- `ResizeMode::RemeasureToBounds`: `content` carries the animated size, and the
+  measure pass applies it as **fixed constraints** before the policy runs — the
+  subtree reflows (text rewraps, rows resize). Render then skips the scale, and
+  hit testing maps 1:1.
+- `PlaceHolderSize::AnimatedSize`: `reported` carries the animated size, so the
+  PARENT reflows and siblings ride the flight.
+- `PlaceHolderSize::ContentSize` / `JumpCut`: `reported` keeps the target size
+  (captured the frame the end resolves), so the surrounding layout holds still.
+  For the entering end the two are equivalent; `JumpCut` additionally names the
+  leaving end's behaviour (its space is released immediately — winia's old tree
+  is gone, so there is no parent layout to hold open).
+
+Zero recomposition: reading the frame during measure registers a LAYOUT
+dependency, and the coordinator re-seeds the node's `layout_dirty_keys` entry
+every frame — necessary because `layout()` resets `layout_dirty` on the whole
+tree at the start of every pass, so a folded parent would never descend into
+the override. On teardown the override is dropped and one last invalidation is
+seeded, so the natural size returns in the next pass.
+
+Timing: writers run after layout, so the layout trails the flight by ~1 frame
+(≈6% of the flight at 60 Hz). The same-frame path is used for the very first
+frame of a flight, where the target is measured naturally and its resting size
+is captured.
 
 ## 6. State machine and matching
 

@@ -825,10 +825,18 @@ fn render_pass1(
                     }
                 }
             }
-            let (sx, sy) = (
-                if w > 0.0 { l.width / w } else { 1.0 },
-                if h > 0.0 { l.height / h } else { 1.0 },
-            );
+            // RemeasureToBounds: the content already carries the animated size
+            // (the measure pass re-laid it out), so scaling it again would
+            // double-apply the deformation. Everything else scales into the
+            // lerped rect.
+            let (sx, sy) = if t.remeasure {
+                (1.0, 1.0)
+            } else {
+                (
+                    if w > 0.0 { l.width / w } else { 1.0 },
+                    if h > 0.0 { l.height / h } else { 1.0 },
+                )
+            };
             canvas.scale((sx, sy));
             // Scale about the lerped origin (not the canvas origin): content
             // drawn at layout coords must land on the lerped rect, i.e.
@@ -842,7 +850,10 @@ fn render_pass1(
                 canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default().paint(&paint));
                 layered = true;
             }
-            (true, layered, Some(t.radii_pairs(w, h)))
+            (true, layered, Some(t.radii_pairs(
+                if t.remeasure { l.width } else { w },
+                if t.remeasure { l.height } else { h },
+            )))
         } else {
             (false, false, None)
         };

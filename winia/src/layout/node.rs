@@ -212,6 +212,10 @@ pub struct LayoutNode {
     /// of the layer, so it stays above the flying endpoints. Recomputed every
     /// frame by `refresh_scope_overlay_roots` — transient, never cached.
     pub(crate) in_scope_overlay: bool,
+    /// Flight layout override (Compose `ResizeMode` / `PlaceHolderSize`),
+    /// written per frame by the coordinator while a flight owns this node.
+    /// `None` = ordinary layout — the default path never touches it.
+    pub(crate) flight_measure: Option<FlightMeasure>,
 }
 
 // ── CachedNode：LayoutNode 的可缓存子集，用于增量重组时恢复节点 ──
@@ -320,6 +324,7 @@ impl LayoutNode {
             composing_color: std::cell::Cell::new(crate::modifier::Color::TRANSPARENT),
             transition: None,
             in_scope_overlay: false,
+            flight_measure: None,
         }
     }
 
@@ -375,6 +380,7 @@ impl Default for LayoutNode {
             composing_color: std::cell::Cell::new(crate::modifier::Color::TRANSPARENT),
             transition: None,
             in_scope_overlay: false,
+            flight_measure: None,
         }
     }
 }
@@ -805,17 +811,21 @@ fn hit_test_recursive(
     // positions — the flight transform is inverted here). Visual miss passes
     // through (v1 skip behavior).
     let (x, y) = match node.transition.as_ref() {
-        Some(t) => match t.remap_hit(
-            x,
-            y,
-            nx,
-            ny,
-            node.measured_size.width,
-            node.measured_size.height,
-        ) {
-            Some(p) => p,
-            None => return false,
-        },
+        Some(t) => {
+            // RemeasureToBounds: the content box IS the animated rect, so the
+            // inverse flight transform is the identity there — remapping with
+            // the reported placeholder size would misplace child descent.
+            let (mw, mh) = if t.remeasure {
+                let l = t.lerped();
+                (l.width, l.height)
+            } else {
+                (node.measured_size.width, node.measured_size.height)
+            };
+            match t.remap_hit(x, y, nx, ny, mw, mh) {
+                Some(p) => p,
+                None => return false,
+            }
+        }
         None => (x, y),
     };
 
@@ -1654,6 +1664,36 @@ pub(crate) fn apply_layout_dirty(nodes: &mut [LayoutNode], root_idx: usize, dirt
     walk(nodes, root_idx, dirty_keys, false);
 }
 
+/// Per-frame layout override for a shared-element flight (Compose `ResizeMode`
+/// / `PlaceHolderSize`). The coordinator rewrites the frame every frame and
+/// re-seeds the node's slot key into the layout invalidation set, so the layout
+/// actually descends into it (a folded parent never would); reading the frame
+/// during measure registers a LAYOUT dependency as well.
+#[derive(Clone)]
+pub(crate) struct FlightMeasure {
+    pub frame: crate::core::state::State<FlightMeasureFrame>,
+}
+
+/// One frame of that override; `None` on a field means "no override there".
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct FlightMeasureFrame {
+    /// Tight constraints the child content is measured at — Compose
+    /// `RemeasureToBounds`: the subtree re-lays-out at the animated size
+    /// instead of being scaled into it.
+    pub content: Option<Size>,
+    /// Size reported to the PARENT — Compose `PlaceHolderSize::AnimatedSize`
+    /// reports the animated size so siblings reflow; `ContentSize` keeps the
+    /// target size so the surrounding layout holds still.
+    pub reported: Option<Size>,
+}
+
+impl FlightMeasureFrame {
+    pub(crate) const IDLE: Self = Self { content: None, reported: None };
+    pub(crate) fn is_idle(&self) -> bool {
+        self.content.is_none() && self.reported.is_none()
+    }
+}
+
 /// 测量计数（测试用：验证常量折叠/布局失效路径确实跳过或执行 measure）。
 /// thread_local 隔离——cargo test 并行线程互不串扰（全局 Atomic 会跨测试计数破坏断言）。
 #[cfg(test)]
@@ -1666,6 +1706,32 @@ pub(crate) fn measure_node(
     policies: &[Box<dyn MeasurePolicy>],
     idx: usize,
     constraints: Constraints,
+) -> (Size, Vec<Placement>) {
+    // Flight override (Compose `ResizeMode` / `PlaceHolderSize`). The slot key
+    // is armed BEFORE the read so the dependency lands on THIS node.
+    let flight = if nodes[idx].flight_measure.is_some() {
+        crate::core::composer::set_active_slot_key(nodes[idx].slot_key);
+        nodes[idx].flight_measure.clone().map(|f| f.frame.get())
+    } else {
+        None
+    };
+    let (mut size, placements) = measure_node_inner(nodes, policies, idx, constraints, flight);
+    // What the parent sees (Compose `PlaceHolderSize`): `AnimatedSize` reports
+    // the animated size so siblings reflow with the flight, `ContentSize`
+    // keeps reporting the target size so the surrounding layout holds still.
+    if let Some(reported) = flight.and_then(|f| f.reported) {
+        nodes[idx].measured_size = reported;
+        size = reported;
+    }
+    (size, placements)
+}
+
+fn measure_node_inner(
+    nodes: &mut Vec<LayoutNode>,
+    policies: &[Box<dyn MeasurePolicy>],
+    idx: usize,
+    constraints: Constraints,
+    flight: Option<FlightMeasureFrame>,
 ) -> (Size, Vec<Placement>) {
     // 重放 stub：clean-skip 节点无 measure_policy，绝不能重新测量
     //（无 policy 走叶子分支会返回 0 并污染 prev_nodes 缓存，导致塌缩不可逆）。
@@ -1822,6 +1888,16 @@ pub(crate) fn measure_node(
     }
 
     // 实际测量
+    // RemeasureToBounds: the child layout is re-measured with FIXED constraints
+    // of the animated bounds, so content reflows (text rewraps, rows resize)
+    // instead of being graphically scaled. Applied last — Compose's "animated
+    // fixed constraints" override the incoming and modifier constraints alike.
+    if let Some(fm) = flight {
+        if let Some(c) = fm.content {
+            inner_constraints = Constraints::new(c.width, c.width, c.height, c.height);
+        }
+    }
+
     let mut result = if let Some(pidx) = nodes[idx].measure_policy {
         // 先拷贝子节点索引（policy.measure 会可变借用整个 nodes，不能持有 nodes[idx] 借用）
         let children = nodes[idx].children.clone();

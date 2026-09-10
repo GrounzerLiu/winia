@@ -1637,8 +1637,11 @@ pub struct Composer {
     layout_slot_reads: HashMap<u64, HashSet<StateId>>,
     /// 布局依赖反向表（state_id → slot_key；由 layout_slot_reads 重建）
     layout_deps: HashMap<StateId, HashSet<u64>>,
-    /// 本帧 pending 消费收集的布局失效 key（layout() 应用后清空）
-    layout_dirty_keys: HashSet<u64>,
+    /// 本帧 pending 消费收集的布局失效 key（layout() 应用后清空）。
+    /// 协调器（shared_transition 的 flight writer）每帧往这里播种飞行端点的
+    /// slot_key：`layout()` 每帧先清全树 layout_dirty 再按此集合重标祖先，
+    /// 不播种则折叠的父级永不下探（逐帧重测就无从发生）。
+    pub(crate) layout_dirty_keys: HashSet<u64>,
     /// 本帧确认移除的 slot_key（compose 末尾回收未复用节点时收集——layout_deps 死 key 清理用）
     removed_slot_keys: HashSet<u64>,
     /// 本 Composer 实例的 pending state 通知队列

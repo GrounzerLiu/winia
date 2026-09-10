@@ -44,10 +44,10 @@ forever — completion waits for engine release (see §4).
 | Type | Variants | Status |
 |---|---|---|
 | `SharedKind` | `Element` / `Bounds { resize, placeholder }` | Both match and fly |
-| `ResizeMode` | `ScaleToBounds { clip }` | Fully implemented (render scales content into the lerped rect; `clip` clips to it) |
-| `ResizeMode` | `RemeasureToBounds` | **Degrades to scale** (one `debug_log!` per flight start) until per-frame remeasure lands |
-| `PlaceHolderSize` | `JumpCut` | Implemented (layout snaps to end state immediately; the flying pair covers the pop) |
-| `PlaceHolderSize` | `ContentSize` / `AnimatedSize` | **Deferred** |
+| `ResizeMode` | `ScaleToBounds { clip }` | Fully implemented (render scales content into the lerped rect; `clip` clips to it). Compose's default for `sharedBounds`, and the one to keep for text |
+| `ResizeMode` | `RemeasureToBounds` | Implemented — the entering end is measured with **fixed constraints of the animated bounds** every frame, so content re-lays-out/rewraps instead of being scaled (render then skips the scale, hit testing maps 1:1). See §4.1 |
+| `PlaceHolderSize` | `JumpCut` | Layout snaps to end state immediately (the flying pair covers the pop). For the entering end it reports the target size, like `ContentSize` |
+| `PlaceHolderSize` | `ContentSize` / `AnimatedSize` | Implemented — the size the PARENT observes: `AnimatedSize` reports the animated size (siblings reflow with the flight), `ContentSize` keeps the target size (surrounding layout holds still). See §4.1 |
 | `PathMotion` | `Linear` | Implemented |
 | `PathMotion` | `ArcBelow` / `ArcAbove` | Implemented — Compose `ArcSpline.Arc` math ported: quarter-ellipse center path, arc-length-uniform travel (101-entry table), endpoints exact, size stays linear; resolved from the target marker. Either-dimension travel falls back to linear (axis-aligned flights stay straight). API shape differs from Compose (flight-level path, not per-keyframe `using ArcMode`) |
 
@@ -127,6 +127,33 @@ SharedTransitionLayout::new().build(ctx, |ctx| {
   restarts from the current visual rect (seamless for Element flights;
   slide-bounds flights may snap by the live channel offset — documented
   in code).
+
+### 4.1 Layout contract (`ResizeMode` + `PlaceHolderSize`)
+
+Both come from the **entering end's** marker and describe what the layout does
+during the flight — Compose's `ResizeMode` and `PlaceholderSize`:
+
+| Marker | Effect during the flight |
+|---|---|
+| `ScaleToBounds { clip }` (default) | Content measured once at its target size, then **scaled** into the lerped rect. Nothing re-lays-out: cheapest, and Compose's advice for text |
+| `RemeasureToBounds` | Content is re-measured every frame with fixed constraints = the animated size, so it reflows (text rewraps, rows resize) instead of stretching |
+| `PlaceHolderSize::ContentSize` / `JumpCut` | The parent keeps seeing the **target** size: siblings stay put until the flight ends |
+| `PlaceHolderSize::AnimatedSize` | The parent keeps seeing the **animated** size: siblings ride the flight (a card growing inside a column pushes the rest down smoothly) |
+
+Three properties worth knowing before you rely on it:
+
+- **Free when unused.** The default combination writes nothing into the layout,
+  so `ScaleToBounds` + `JumpCut`/`ContentSize` flights are byte-for-byte the old
+  behaviour (no re-measure, no extra layout pass).
+- **Zero recomposition.** The re-measure is driven by a layout dependency
+  (`State` read during measure), not by composition: a whole flight runs without
+  rebuilding a single composable — pinned by `flight_layout_contract_matrix`,
+  which asserts the scenario build count stays flat while the flight re-measures.
+- **The layout trails the flight by ~1 frame** (writers run after layout), which
+  is invisible at 60 Hz. Only the ENTERING end re-measures; the leaving ghost is
+  frozen content, and in a screen switch the outgoing element's space is not
+  held open (its tree is gone — Compose can hold it because the old screen stays
+  composed).
 
 ## 5. Shape and color
 
@@ -250,13 +277,15 @@ SharedTransitionLayout::new().build(ctx, |ctx| {
 
 ## 8. Tests
 
-- `cargo test -p winia --lib ui::shared_transition` (57 tests: unit,
+- `cargo test -p winia --lib ui::shared_transition` (59 tests: unit,
   headless Tier 0/Tier 1 raster probes, guard-checked regression tests
   for scroll add-back, morph hit routing, bouncy overshoot, baseline
   identity, arc paint, z-order, enter/exit slide, expand wipe, active
   flag, overlay escape + escape opt-out + cross-composer hit routing,
   chrome elevation (same-composer, peer-composer, equal-z, double-paint),
-  the directional artifact, marker freshness).
+  the directional artifact, marker freshness, and the layout contract
+  (`flight_measure_frame_reaches_the_parent_layout` for the channel itself,
+  `flight_layout_contract_matrix` for the 4-way resize/placeholder matrix).
 - Tests driving animations hold `TEST_SERIAL` + `clear_all_animations()`.
   Mid-flight windows come from a 300 ms tween sampled at ~16 ms, so the
   sampling loops capture their sample inside the loop and fail with an

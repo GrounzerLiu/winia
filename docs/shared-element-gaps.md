@@ -77,14 +77,25 @@
   always gates on "this scope has a non-terminal flight", which is Compose's
   default. Demo:
   `cargo run -p winia --example shared_transition_pinned_bar_demo`.
-- [ ] `ResizeMode::RemeasureToBounds` — currently degrades to scale with
-  one `debug_log!` per flight start. Needs per-frame remeasure at the
-  lerped size; paragraph-cache quantization is the known risk
-  (1px size quantization to protect the cache).
-- [ ] `PlaceHolderSize::ContentSize` / `AnimatedSize` — only `JumpCut`
-  today (layout snaps to end state, the flying pair covers the pop);
-  with elevation both ends are layer roots, which is compatible with
-  either placeholder contract when it lands.
+- [x] `ResizeMode::RemeasureToBounds` — shipped. The entering end is measured
+  with **fixed constraints of the animated bounds** every frame, so the content
+  re-lays-out instead of being scaled (`scale = 1` in the layer pass, and hit
+  testing maps 1:1). Driven by a per-frame `State<FlightMeasureFrame>` read
+  during measure plus a re-seeded `layout_dirty_keys` entry, so it re-measures
+  without recomposing (pinned by `flight_layout_contract_matrix`, which asserts
+  zero scenario rebuilds across a whole flight). Deviations: only the ENTERING
+  end re-measures (the leaving end is detached and frozen — its content has no
+  live layout), and because writers run after layout the layout trails the
+  flight by ~1 frame. Compose's guidance is preserved: `ScaleToBounds` stays
+  the default for `sharedBounds`, and text is still better off scaled.
+- [x] `PlaceHolderSize::ContentSize` / `AnimatedSize` — shipped as the reported
+  size the parent observes: `AnimatedSize` reports the animated size (siblings
+  reflow with the flight), `ContentSize` / `JumpCut` keep the target size so
+  the surrounding layout holds still. The target's natural size is captured the
+  frame the end resolves. Deviation: the OUTGOING end's space is not preserved
+  in a screen switch — its whole tree is gone, so there is no parent layout to
+  hold open (Compose keeps it because the old screen stays composed); for the
+  same-screen morph the node stays and both policies are exact.
 - [ ] `skipToLookaheadSize` — no lookahead system exists; the equivalent
   ("measure at end size from frame one") needs the end bounds before
   layout.
