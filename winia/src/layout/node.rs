@@ -531,11 +531,22 @@ pub fn hit_test(nodes: &[LayoutNode], root: usize, x: f32, y: f32) -> Vec<usize>
     path
 }
 
-/// Flight-aware hit test (Phase 3): detached flying sources route into their
-/// linked live target (clicking the ghost == clicking the target,
-/// fraction-mapped into the target's natural rect with a root-anchored path
-/// for bubbling fidelity); otherwise identical to [`hit_test`]. Empty roots
-/// (idle) cost one length check — the hot path is untouched.
+/// Flight-aware hit test (Phase 3; extended by the overlay pass in Phase 6).
+/// The transition layer paints above the main tree, so it is tested first,
+/// topmost entry first:
+///
+/// - **Source** (detached ghost): clicking the ghost == clicking the live
+///   target — fraction-mapped into the target's natural rect with a
+///   root-anchored path for bubbling fidelity.
+/// - **Target/Morph, elevated** (Compose `renderInOverlayDuringTransition`):
+///   the endpoint is *still in the tree*, so it routes through its own lerped
+///   visual rect with the flight transform inverted, exactly like an in-tree
+///   transitioning node — but WITHOUT the ancestor bounds/viewport rejection.
+///   That rejection is what makes an element flying outside its container
+///   untouchable, and escaping it is the whole point of the overlay pass.
+///
+/// Everything else falls through to [`hit_test`]. Empty roots (idle) cost one
+/// length check — the hot path is untouched.
 pub fn hit_test_with_flights(
     nodes: &[LayoutNode],
     root: usize,
@@ -549,91 +560,169 @@ pub fn hit_test_with_flights(
         for (i, n) in nodes.iter().enumerate() {
             id_to_idx.insert(n.id, i);
         }
-        // Detached sources render above the main tree — test them first.
-        for &tidx in transition_roots {
+        // Painted back-to-front, so the LAST entry is on top — test in reverse.
+        for &tidx in transition_roots.iter().rev() {
             let Some(node) = nodes.get(tidx) else { continue };
             let Some(t) = node.transition.as_ref() else { continue };
-            if t.role != TransitionRole::Source {
-                continue;
-            }
-            let l = t.lerped();
-            if l.width <= 0.0 || l.height <= 0.0 {
-                continue;
-            }
-            if x < l.x || x > l.x + l.width || y < l.y || y > l.y + l.height {
-                continue;
-            }
-            let Some(target_slot) = t.link_slot else { continue };
-            // NOTE (Tier1 limitation): the target may live in a PEER
-            // composer's arena (overlay) — invisible to this single-arena
-            // search, so cross-composer ghosts paint but ignore taps. The
-            // live target itself stays directly hittable in its own composer.
-            let Some(target_idx) = find_idx_by_slot(nodes, root, target_slot) else {
-                continue;
+            let hit = match t.role {
+                TransitionRole::Source => hit_through_ghost(nodes, root, &id_to_idx, tidx, x, y),
+                TransitionRole::Target | TransitionRole::Morph => {
+                    if !t.elevated {
+                        continue;
+                    }
+                    hit_through_elevated(nodes, root, &id_to_idx, tidx, x, y)
+                }
             };
-            // Fraction-map ghost → target natural rect, then descend the live
-            // target subtree directly: the target node itself is hit by
-            // construction (fractions clamped into its natural rect), and
-            // re-entering hit_test_recursive on it would invert the flight
-            // transform twice (remap is single-application per level).
-            let fx = ((x - l.x) / l.width).clamp(0.0, 1.0);
-            let fy = ((y - l.y) / l.height).clamp(0.0, 1.0);
-            let tb = abs_rect_upward(nodes, &id_to_idx, target_idx);
-            // Scrolled-container targets: mapped point outside the visible
-            // viewport misses (mirrors the viewport clamp in recursion).
-            {
-                let tn = &nodes[target_idx];
-                let vw = if tn.scroll_viewport_width > 0.0 {
-                    tn.scroll_viewport_width
-                } else {
-                    tn.measured_size.width
-                };
-                let vh = if tn.scroll_viewport_height > 0.0 {
-                    tn.scroll_viewport_height
-                } else {
-                    tn.measured_size.height
-                };
-                let tx0 = tb.x + fx * tb.width;
-                let ty0 = tb.y + fy * tb.height;
-                if tx0 < tb.x || tx0 > tb.x + vw || ty0 < tb.y || ty0 > tb.y + vh {
-                    continue;
-                }
+            if let Some(path) = hit {
+                return path;
             }
-            let tx = tb.x + fx * tb.width;
-            let ty = tb.y + fy * tb.height;
-            // Ancestor prefix root→target (bubbling fidelity), target excluded
-            // (pushed below). Broken chains fall through to main hit test.
-            let mut prefix: Vec<usize> = Vec::new();
-            let mut cur = target_idx;
-            let mut ok = target_idx == root;
-            while let Some(pid) = nodes[cur].parent_id {
-                let Some(&pidx) = id_to_idx.get(&pid) else { break };
-                if pidx == root {
-                    prefix.push(root);
-                    ok = true;
-                    break;
-                }
-                prefix.push(pidx);
-                cur = pidx;
-            }
-            if !ok {
-                continue;
-            }
-            prefix.reverse();
-            let mut path = prefix;
-            path.push(target_idx);
-            // Child basis in layout space (scroll-corrected, like recursion).
-            let (sdx, sdy) = scroll_offset_for_node(&nodes[target_idx]);
-            let (cpx, cpy) = (tb.x - sdx, tb.y - sdy);
-            for &c in nodes[target_idx].children.iter().rev() {
-                if hit_test_recursive(nodes, c, tx, ty, cpx, cpy, &mut path) {
-                    break;
-                }
-            }
-            return path;
         }
     }
     hit_test(nodes, root, x, y)
+}
+
+/// Root→`idx` ancestor chain including `root` (bubbling fidelity), or `None`
+/// when the chain is broken (stale arena). `idx` itself is NOT included.
+fn ancestor_prefix(
+    nodes: &[LayoutNode],
+    id_to_idx: &std::collections::HashMap<u64, usize>,
+    root: usize,
+    idx: usize,
+) -> Option<Vec<usize>> {
+    let mut prefix: Vec<usize> = Vec::new();
+    let mut cur = idx;
+    let mut ok = idx == root;
+    while let Some(pid) = nodes[cur].parent_id {
+        let Some(&pidx) = id_to_idx.get(&pid) else { break };
+        if pidx == root {
+            prefix.push(root);
+            ok = true;
+            break;
+        }
+        prefix.push(pidx);
+        cur = pidx;
+    }
+    if !ok {
+        return None;
+    }
+    prefix.reverse();
+    Some(prefix)
+}
+
+/// Detached source ghost → live target routing (Phase 3).
+fn hit_through_ghost(
+    nodes: &[LayoutNode],
+    root: usize,
+    id_to_idx: &std::collections::HashMap<u64, usize>,
+    tidx: usize,
+    x: f32,
+    y: f32,
+) -> Option<Vec<usize>> {
+    let t = nodes.get(tidx)?.transition.as_ref()?;
+    let l = t.lerped();
+    if l.width <= 0.0 || l.height <= 0.0 {
+        return None;
+    }
+    if x < l.x || x > l.x + l.width || y < l.y || y > l.y + l.height {
+        return None;
+    }
+    let target_slot = t.link_slot?;
+    // NOTE (Tier1 limitation): the target may live in a PEER composer's arena
+    // (overlay) — invisible to this single-arena search, so cross-composer
+    // ghosts paint but ignore taps. The live target itself stays directly
+    // hittable in its own composer.
+    let target_idx = find_idx_by_slot(nodes, root, target_slot)?;
+    // Fraction-map ghost → target natural rect, then descend the live target
+    // subtree directly: the target node itself is hit by construction
+    // (fractions clamped into its natural rect), and re-entering
+    // hit_test_recursive on it would invert the flight transform twice
+    // (remap is single-application per level).
+    let fx = ((x - l.x) / l.width).clamp(0.0, 1.0);
+    let fy = ((y - l.y) / l.height).clamp(0.0, 1.0);
+    let tb = abs_rect_upward(nodes, id_to_idx, target_idx);
+    // Scrolled-container targets: mapped point outside the visible viewport
+    // misses (mirrors the viewport clamp in recursion).
+    {
+        let tn = &nodes[target_idx];
+        let vw = if tn.scroll_viewport_width > 0.0 {
+            tn.scroll_viewport_width
+        } else {
+            tn.measured_size.width
+        };
+        let vh = if tn.scroll_viewport_height > 0.0 {
+            tn.scroll_viewport_height
+        } else {
+            tn.measured_size.height
+        };
+        let tx0 = tb.x + fx * tb.width;
+        let ty0 = tb.y + fy * tb.height;
+        if tx0 < tb.x || tx0 > tb.x + vw || ty0 < tb.y || ty0 > tb.y + vh {
+            return None;
+        }
+    }
+    let tx = tb.x + fx * tb.width;
+    let ty = tb.y + fy * tb.height;
+    // Ancestor prefix root→target, target excluded (pushed below). Broken
+    // chains fall through to the main hit test.
+    let mut path = ancestor_prefix(nodes, id_to_idx, root, target_idx)?;
+    path.push(target_idx);
+    // Child basis in layout space (scroll-corrected, like recursion).
+    let (sdx, sdy) = scroll_offset_for_node(&nodes[target_idx]);
+    let (cpx, cpy) = (tb.x - sdx, tb.y - sdy);
+    for &c in nodes[target_idx].children.iter().rev() {
+        if hit_test_recursive(nodes, c, tx, ty, cpx, cpy, &mut path) {
+            break;
+        }
+    }
+    Some(path)
+}
+
+/// Elevated live endpoint (Target/Morph painted by the transition layer):
+/// same remap contract as [`hit_test_recursive`], minus ancestor rejection.
+fn hit_through_elevated(
+    nodes: &[LayoutNode],
+    root: usize,
+    id_to_idx: &std::collections::HashMap<u64, usize>,
+    idx: usize,
+    x: f32,
+    y: f32,
+) -> Option<Vec<usize>> {
+    let node = &nodes[idx];
+    let t = node.transition.as_ref()?;
+    let l = t.lerped();
+    if l.width <= 0.0 || l.height <= 0.0 {
+        return None;
+    }
+    // Absolute position in the same frame the layer paints in.
+    let tb = abs_rect_upward(nodes, id_to_idx, idx);
+    let (w, h) = (node.measured_size.width, node.measured_size.height);
+    let (lx, ly) = t.remap_hit(x, y, tb.x, tb.y, w, h)?;
+    // The endpoint's OWN viewport clamp still applies — only ancestors are
+    // escaped (a scrollable hero must not take input outside its viewport).
+    let mut nw = w;
+    let mut nh = h;
+    if node.scroll_viewport_width > 0.0 {
+        nw = node.scroll_viewport_width;
+    }
+    if node.scroll_viewport_height > 0.0 {
+        nh = node.scroll_viewport_height;
+    }
+    if lx < tb.x || lx > tb.x + nw || ly < tb.y || ly > tb.y + nh {
+        return None;
+    }
+    let mut path = ancestor_prefix(nodes, id_to_idx, root, idx)?;
+    path.push(idx);
+    // Child basis: same convention as hit_test_recursive (parent minus its own
+    // scroll translate), so descendants resolve identically in-tree and in the
+    // layer.
+    let (sdx, sdy) = scroll_offset_for_node(node);
+    let (cpx, cpy) = (tb.x - sdx, tb.y - sdy);
+    for &c in node.children.iter().rev() {
+        if hit_test_recursive(nodes, c, lx, ly, cpx, cpy, &mut path) {
+            break;
+        }
+    }
+    Some(path)
 }
 
 fn hit_test_recursive(

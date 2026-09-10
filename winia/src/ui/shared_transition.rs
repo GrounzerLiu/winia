@@ -138,16 +138,18 @@ impl SharedTransitionDefaults {
         BoundsTransform::default()
     }
 
-    /// Default overlay z-order for flying pairs (forward-compat for the
-    /// `zIndexInOverlay` P1 item — retained ghosts sort back-to-front by
-    /// marker z at detach; in-tree targets keep tree order).
+    /// Default overlay z-order for flying pairs (Compose `zIndexInOverlay`).
+    /// The transition layer sorts back-to-front by each root's marker z, and
+    /// both ends of a flight are layer roots unless the end opted out.
     pub fn z_index_in_overlay() -> f32 {
         0.0
     }
 
-    /// Whether flying pairs render above non-shared content by default
-    /// (forward-compat — Tier 1 ghosts already render above scrims while
-    /// cross-active; Tier 0 paints in-tree).
+    /// Whether flying pairs render in the transition layer by default
+    /// (Compose `renderInOverlayDuringTransition`): an elevated end escapes
+    /// ancestor clips and ancestor layer transforms and paints above
+    /// non-shared content. The leaving end is always detached, so this governs
+    /// the entering end in practice.
     pub fn render_in_overlay() -> bool {
         true
     }
@@ -506,8 +508,14 @@ impl Modifier {
     /// `path` selects the motion path (Compose `ArcMode` equivalent —
     /// Winia applies a flight-level quarter-ellipse port instead of
     /// Compose's per-keyframe `using ArcMode`).
-    /// `z_index` orders retained ghosts back-to-front (Compose
-    /// `zIndexInOverlay`, default 0); in-tree targets keep tree order.
+    /// `z_index` orders flying pairs back-to-front in the transition layer
+    /// (Compose `zIndexInOverlay`, default 0).
+    /// `render_in_overlay` (Compose `renderInOverlayDuringTransition`,
+    /// default `true`) paints this endpoint in the transition layer while it
+    /// flies: it escapes ancestor clips and ancestor layer transforms (alpha,
+    /// scale) and renders above non-shared content. `false` keeps in-tree
+    /// painting, where ancestors still clip it. The leaving end is always
+    /// detached, so it always renders in the layer (documented no-op there).
     pub fn shared_element(
         self,
         state: SharedContentState,
@@ -515,6 +523,7 @@ impl Modifier {
         placeholder: PlaceHolderSize,
         path: PathMotion,
         z_index: f32,
+        render_in_overlay: bool,
     ) -> Self {
         self.push(ModifierElement::SharedTransition {
             scope_id: state.scope_id,
@@ -525,12 +534,15 @@ impl Modifier {
             z_index,
             enter: None,
             exit: None,
+            render_in_overlay,
         })
     }
 
     /// Mark shared bounds (different content — container morphs + crossfades).
     /// `path` selects the motion path, same as in [`shared_element`](Self::shared_element).
-    /// `z_index` orders retained ghosts back-to-front, same as above.
+    /// `z_index` orders flying pairs back-to-front, same as above.
+    /// `render_in_overlay` is Compose `renderInOverlayDuringTransition`,
+    /// same as above (default `true`).
     /// `enter` plays on the appearing end, `exit` on the disappearing end
     /// (Compose `enter`/`exit` — fade channels claimed by these replace the
     /// flight crossfade per-end; slide/scale/expand compose on top at flight
@@ -545,6 +557,7 @@ impl Modifier {
         placeholder: PlaceHolderSize,
         path: PathMotion,
         z_index: f32,
+        render_in_overlay: bool,
     ) -> Self {
         self.push(ModifierElement::SharedTransition {
             scope_id: state.scope_id,
@@ -555,6 +568,7 @@ impl Modifier {
             z_index,
             enter: Some(enter),
             exit: Some(exit),
+            render_in_overlay,
         })
     }
 }
@@ -629,6 +643,7 @@ mod tests {
                 PlaceHolderSize::AnimatedSize,
                 PathMotion::Linear,
                 0.0,
+                true,
             );
         assert_eq!(
             find_shared_marker(&m).map(|x| x.kind),
@@ -669,6 +684,7 @@ mod tests {
             flight: 0,
             path,
             bounds_fx: None,
+            elevated: false,
         };
         // Linear midpoint is exactly the component-wise lerp.
         assert_eq!(
@@ -751,6 +767,7 @@ mod tests {
             flight: 0,
             path: PathMotion::Linear,
             bounds_fx: fx,
+            elevated: false,
         };
         let fade_in = VisibilityTransition::fade_in(TweenSpec::default());
         let fade_out = VisibilityTransition::fade_out(TweenSpec::default());
@@ -941,6 +958,15 @@ pub(crate) struct TransitionVisual {
     pub path: PathMotion,
     /// sharedBounds enter/exit pair (`None` for Element flights).
     pub bounds_fx: Option<(VisibilityTransition, VisibilityTransition)>,
+    /// Paint in the transition layer instead of in-tree (Compose
+    /// `renderInOverlayDuringTransition`): `render_pass1` skips this subtree
+    /// in the main walk and the coordinator re-renders it rootless from
+    /// [`Composer::render_layer`], escaping ancestor clips and ancestor layer
+    /// transforms. Detached sources are always elevated; targets follow their
+    /// own marker. Elevated visuals freeze `scroll` at `(0,0)` — the layer
+    /// canvas carries no ancestor translate, so the bounds are already the
+    /// absolute ones.
+    pub elevated: bool,
 }
 
 impl TransitionVisual {
@@ -1179,12 +1205,14 @@ pub(crate) struct SharedMarker {
     /// sharedBounds enter/exit (`None` on sharedElement markers).
     pub enter: Option<VisibilityTransition>,
     pub exit: Option<VisibilityTransition>,
+    /// Compose `renderInOverlayDuringTransition` (default true).
+    pub render_in_overlay: bool,
 }
 
 pub(crate) fn find_shared_marker(modifier: &Modifier) -> Option<SharedMarker> {
     modifier.elements().iter().find_map(|el| match el {
         ModifierElement::SharedTransition {
-            scope_id, key, kind, transform, path, z_index, enter, exit,
+            scope_id, key, kind, transform, path, z_index, enter, exit, render_in_overlay,
         } => Some(SharedMarker {
             scope_id: *scope_id,
             key: key.clone(),
@@ -1194,6 +1222,7 @@ pub(crate) fn find_shared_marker(modifier: &Modifier) -> Option<SharedMarker> {
             z_index: *z_index,
             enter: enter.clone(),
             exit: exit.clone(),
+            render_in_overlay: *render_in_overlay,
         }),
         _ => None,
     })
@@ -1256,6 +1285,10 @@ pub(crate) struct ActiveFlight {
     pub radius_from: [f32; 4],
     pub radius_to: [f32; 4],
     pub clip: bool,
+    /// Target-end `renderInOverlayDuringTransition`, frozen when the end
+    /// resolves (from the target marker; `true` when the marker is gone).
+    /// The source end is always detached, so it is always in the layer.
+    pub target_in_overlay: bool,
     /// Endpoint owner composers (Phase 4 Tier1). Equal ⟺ Tier0, driven by the
     /// owner poll; differing ⟺ Tier1, driven by cross-poll. The flight lives
     /// in the MAIN composer map (main outlives overlays).
@@ -1431,9 +1464,64 @@ impl Composer {
         out
     }
 
-    /// Detached retained source roots (absolute coords, rendered after main tree).
+    /// Transition-layer render order (detached sources + elevated in-tree
+    /// endpoints, z-sorted back-to-front). Painted after the main tree, hit
+    /// tested before it — one list, so paint order and hit order cannot drift.
     pub(crate) fn transition_roots(&self) -> &[usize] {
-        &self.transition_layer
+        &self.layer_order
+    }
+
+    /// Rebuild [`Self::transition_roots`] from live state: every detached
+    /// source ([`Self::transition_layer`]) plus every elevated in-tree
+    /// endpoint written this frame ([`Self::elevated_roots`]). Stable z-sort
+    /// (`zIndexInOverlay`) — equal z keeps the old relative order (detached
+    /// sources before elevated targets, i.e. the entering element sits UNDER
+    /// the leaving ghost, exactly like the in-tree + ghost compositing the
+    /// overlay pass replaces), so flights that never touch `z_index` render
+    /// exactly as they did before that pass existed.
+    pub(crate) fn rebuild_layer_order(&mut self) {
+        let mut order: Vec<usize> = self.elevated_roots.clone();
+        order.extend(self.transition_layer.iter().copied());
+        // Dedup (a detached source can be reached from both lists) while
+        // preserving first-seen order, then z-sort back-to-front.
+        let mut seen = HashSet::new();
+        order.retain(|idx| seen.insert(*idx));
+        let z_of = |nodes: &[LayoutNode], idx: usize| -> f32 {
+            nodes
+                .get(idx)
+                .and_then(|n| find_shared_marker(&n.modifier))
+                .map(|m| m.z_index)
+                .unwrap_or(0.0)
+        };
+        order.sort_by(|&a, &b| {
+            z_of(&self.arena.nodes, a)
+                .partial_cmp(&z_of(&self.arena.nodes, b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        self.layer_order = order;
+    }
+
+    /// Draw the transition layer on `canvas` (the same canvas frame the main
+    /// tree was drawn in). Each root is re-rendered rootless at its absolute
+    /// position, so ancestor clips and ancestor layer transforms — which are
+    /// still on the real canvas for the tree — do not apply: the Compose
+    /// overlay elevation. Flight transforms themselves come from
+    /// `render_pass1`'s `TransitionVisual` block, unchanged.
+    pub(crate) fn render_layer(&self, canvas: &skia_safe::Canvas) {
+        if self.layer_order.is_empty() {
+            return;
+        }
+        let Some(root) = self.arena.root else { return };
+        let nodes = &self.arena.nodes;
+        let id_to_idx: HashMap<u64, usize> =
+            nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
+        for &idx in &self.layer_order {
+            if nodes.get(idx).is_none_or(|n| n.transition.is_none()) {
+                continue;
+            }
+            let abs = abs_rect_upward(nodes, &id_to_idx, idx);
+            crate::render::render_node_at(nodes, root, idx, canvas, abs.x, abs.y);
+        }
     }
 
     /// Compose-tail hook (MUST run after materialize, before the prev drain):
@@ -1632,6 +1720,8 @@ impl Composer {
                 radius_from,
                 radius_to: radius_from,
                 clip: false,
+                // Filled when the end resolves (AwaitingBounds poll).
+                target_in_overlay: true,
                 source_cid: self.composer_id,
                 target_cid: self.composer_id,
             },
@@ -1690,6 +1780,9 @@ impl Composer {
     /// same-screen size morphs. Render reads plain f32 snapshots — never
     /// subscribes (zero-recomposition).
     pub(crate) fn poll_shared_flights(&mut self) {
+        // Layer membership is rebuilt from this frame's writes (Tier0 writes
+        // here, Tier1 writes land in the same frame's cross-poll below).
+        self.elevated_roots.clear();
         // Live marker map doubles for flight polling and morph detection —
         // one arena walk per frame.
         let live = self.shared_live_map();
@@ -1701,6 +1794,8 @@ impl Composer {
             }
         }
         self.poll_layout_morphs(&live);
+        // Layer membership is derived from the visuals this poll just wrote.
+        self.rebuild_layer_order();
         sync_scope_active_states(&[self]);
     }
 
@@ -1746,15 +1841,23 @@ impl Composer {
                 let (ox, oy) = self.screen_origin;
                 let end = SharedBounds::new(tx + ox, ty + oy, tw, th);
                 let marker = find_shared_marker(&self.arena.nodes[tidx].modifier);
-                let (spec, clip, path, enter, target_is_bounds) = match marker {
+                let (spec, clip, path, enter, target_is_bounds, target_in_overlay) = match marker {
                     Some(m) => (
                         m.transform.spec.clone(),
                         shared_clip_for_kind(&m.kind),
                         m.path,
                         m.enter,
                         matches!(m.kind, SharedKind::Bounds { .. }),
+                        m.render_in_overlay,
                     ),
-                    None => (BoundsTransform::default().spec, false, PathMotion::Linear, None, false),
+                    None => (
+                        BoundsTransform::default().spec,
+                        false,
+                        PathMotion::Linear,
+                        None,
+                        false,
+                        true,
+                    ),
                 };
                 // Enter from the target marker, exit from the retained source
                 // marker — each side declares its own (Compose rule). Only
@@ -1817,6 +1920,7 @@ impl Composer {
                     a.clip = clip;
                     a.path = path;
                     a.bounds_fx = bounds_fx;
+                    a.target_in_overlay = target_in_overlay;
                     let start = a.start;
                     let acts = a.flight.on_event(FlightEvent::BoundsReady { start, end });
                     (start, acts)
@@ -1878,13 +1982,28 @@ impl Composer {
                 a.end_scroll,
                 a.path,
                 a.bounds_fx.clone(),
+                a.target_in_overlay,
             )
         });
-        let (mut start, mut end, p, rf, rt, clip, sslot, tslot, sidx, sscroll, escroll, path, fx) =
-            match snapshot {
-                Some(v) => v,
-                None => return,
-            };
+        let (
+            mut start,
+            mut end,
+            p,
+            rf,
+            rt,
+            clip,
+            sslot,
+            tslot,
+            sidx,
+            sscroll,
+            escroll,
+            path,
+            fx,
+            target_in_overlay,
+        ) = match snapshot {
+            Some(v) => v,
+            None => return,
+        };
         // Flight bounds are canonical window coords; visuals render in this
         // composer's canvas frame (main renders untranslated; overlays render
         // translated by screen_pos).
@@ -1909,31 +2028,46 @@ impl Composer {
                     flight: id,
                     path,
                     bounds_fx: fx.clone(),
+                    // The leaving end is detached (no longer in any tree), so
+                    // the layer is its only home — always elevated.
+                    elevated: true,
                 });
             }
         }
         if let Some(slot) = tslot {
             if let Some(root) = self.arena.root {
                 if let Some(tidx) = find_idx_by_slot(&self.arena.nodes, root, slot) {
+                    let role = if sslot == tslot {
+                        // Same-screen size morph: opacity untouched.
+                        TransitionRole::Morph
+                    } else {
+                        TransitionRole::Target
+                    };
+                    // Same-screen morphs are layout-driven resizes, not
+                    // cross-composable flights — they stay in-tree like
+                    // Compose's animateBounds (never escape their container).
+                    let elevated = target_in_overlay && role == TransitionRole::Target;
                     self.arena.nodes[tidx].transition = Some(TransitionVisual {
                         start,
                         end,
                         progress: p,
-                        role: if sslot == tslot {
-                            // Same-screen size morph: opacity untouched.
-                            TransitionRole::Morph
-                        } else {
-                            TransitionRole::Target
-                        },
+                        role,
                         radius_from: rf,
                         radius_to: rt,
                         clip,
                         link_slot: None,
-                        scroll: escroll,
+                        // Elevated targets render rootless in the layer, whose
+                        // canvas carries no ancestor translate — the frozen
+                        // ancestor sum must not be added back there.
+                        scroll: if elevated { (0.0, 0.0) } else { escroll },
                         flight: id,
                         path,
                         bounds_fx: fx,
+                        elevated,
                     });
+                    if elevated {
+                        self.elevated_roots.push(tidx);
+                    }
                 }
             }
         }
@@ -1993,6 +2127,11 @@ impl Composer {
         }
         let refs: Vec<&Composer> = all.iter().map(|c| &**c).collect();
         sync_scope_active_states(&refs);
+        // Cross-poll writes visuals into peer composers (Tier1 targets) after
+        // their own poll ran — refresh every participant's render order.
+        for c in all.iter_mut() {
+            c.rebuild_layer_order();
+        }
     }
 
     /// Drive one Tier1 flight: staleness-cancel, progress, both-end visuals
@@ -2134,9 +2273,10 @@ impl Composer {
                 a.end_scroll,
                 a.path,
                 a.bounds_fx.clone(),
+                a.target_in_overlay,
             )
         });
-        let (start, end, pr, rf, rt, clip, sslot, tslot, sidx, sscroll, escroll, path, fx) =
+        let (start, end, pr, rf, rt, clip, sslot, tslot, sidx, sscroll, escroll, path, fx, in_overlay) =
             match snapshot {
                 Some(v) => v,
                 None => return,
@@ -2158,6 +2298,8 @@ impl Composer {
                     flight: id,
                     path,
                     bounds_fx: fx.clone(),
+                    // Detached leaving end: the layer is its only home.
+                    elevated: true,
                 });
             }
         }
@@ -2174,11 +2316,16 @@ impl Composer {
                         radius_to: rt,
                         clip,
                         link_slot: None,
-                        scroll: escroll,
+                        // Rootless in the peer's layer — no ancestor translate.
+                        scroll: if in_overlay { (0.0, 0.0) } else { escroll },
                         flight: id,
                         path,
                         bounds_fx: fx,
+                        elevated: in_overlay,
                     });
+                    if in_overlay {
+                        peer.elevated_roots.push(tidx);
+                    }
                 }
             }
         }
@@ -2205,6 +2352,8 @@ impl Composer {
                 path: PathMotion,
                 bounds_fx: Option<(VisibilityTransition, VisibilityTransition)>,
                 peer_cid: u64,
+                /// Peer target's `renderInOverlayDuringTransition`.
+                target_in_overlay: bool,
             }
             let hit: Option<Hit> = (|| {
                 let peer = &all[peer_idx];
@@ -2239,15 +2388,23 @@ impl Composer {
                         find_shared_marker(&n.modifier),
                     )
                 };
-                let (spec, clip, path, enter, target_is_bounds) = match marker {
+                let (spec, clip, path, enter, target_is_bounds, target_in_overlay) = match marker {
                     Some(m) => (
                         m.transform.spec.clone(),
                         shared_clip_for_kind(&m.kind),
                         m.path,
                         m.enter,
                         matches!(m.kind, SharedKind::Bounds { .. }),
+                        m.render_in_overlay,
                     ),
-                    None => (BoundsTransform::default().spec, false, PathMotion::Linear, None, false),
+                    None => (
+                        BoundsTransform::default().spec,
+                        false,
+                        PathMotion::Linear,
+                        None,
+                        false,
+                        true,
+                    ),
                 };
                 let radius_to = {
                     let n = &peer.arena.nodes[tidx];
@@ -2298,6 +2455,7 @@ impl Composer {
                     path,
                     bounds_fx,
                     peer_cid: peer.composer_id,
+                    target_in_overlay,
                 })
             })();
             let Some(h) = hit else { continue };
@@ -2334,6 +2492,7 @@ impl Composer {
                     clip: h.clip,
                     path: h.path,
                     bounds_fx: h.bounds_fx,
+                    target_in_overlay: h.target_in_overlay,
                     source_cid: owner_cid,
                     target_cid: h.peer_cid,
                 },
@@ -2459,6 +2618,7 @@ impl Composer {
                 clip,
                 path,
                 bounds_fx,
+                target_in_overlay: true,
                 source_cid: self.composer_id,
                 target_cid: self.composer_id,
             },
@@ -2571,17 +2731,26 @@ mod tier0_tests {
     use crate::modifier::Color;
     use crate::ui::Column;
     use crate::ui::Row;
+    use crate::ui::Stack;
 
     /// Plain box leaf with a shared-element marker (no text — keeps the
     /// mechanics test headless-simple; paint movement is asserted via raster).
-    fn hero_leaf(ctx: &mut ComposeCtx, w: f32, h: f32, color: Color, scope: &SharedTransitionScope) {
+    /// `in_overlay` is Compose `renderInOverlayDuringTransition`.
+    fn hero_leaf(
+        ctx: &mut ComposeCtx,
+        w: f32,
+        h: f32,
+        color: Color,
+        scope: &SharedTransitionScope,
+        in_overlay: bool,
+    ) {
         let key = ctx.next_key();
         ctx.start_leaf(
             key,
             Modifier::new()
                 .size(w, h)
                 .background(color, Shape::rounded(8.0))
-                .shared_element(scope.shared_content_state("hero"), BoundsTransform::default(), PlaceHolderSize::JumpCut, PathMotion::Linear, 0.0),
+                .shared_element(scope.shared_content_state("hero"), BoundsTransform::default(), PlaceHolderSize::JumpCut, PathMotion::Linear, 0.0, in_overlay),
         );
         ctx.end_node();
     }
@@ -2600,13 +2769,13 @@ mod tier0_tests {
     // screens carry distinct source hashes — mirroring production.
     #[crate::composable]
     fn list_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
-        hero_leaf(ctx, 120.0, 80.0, Color::RED, scope);
+        hero_leaf(ctx, 120.0, 80.0, Color::RED, scope, true);
     }
 
     #[crate::composable]
     fn detail_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
         gap_leaf(ctx, 400.0, 100.0);
-        hero_leaf(ctx, 300.0, 160.0, Color::BLUE, scope);
+        hero_leaf(ctx, 300.0, 160.0, Color::BLUE, scope, true);
     }
 
     /// One app-loop step: compose → layout → post-layout flight poll.
@@ -2651,7 +2820,8 @@ mod tier0_tests {
         out
     }
 
-    /// Mirror the app loop: main tree, then detached transition roots.
+    /// Mirror the app loop: main tree, then the transition layer
+    /// (detached sources + elevated endpoints, absolute coords).
     fn render_heads(composer: &Composer) -> skia_safe::Surface {
         let mut surface =
             skia_safe::surfaces::raster_n32_premul((400, 400)).expect("raster surface");
@@ -2659,9 +2829,7 @@ mod tier0_tests {
         let nodes = composer.arena_nodes();
         if let Some(root) = composer.layout_root_idx() {
             crate::render::render(nodes, root, surface.canvas());
-            for &t in composer.transition_roots() {
-                crate::render::render(nodes, t, surface.canvas());
-            }
+            composer.render_layer(surface.canvas());
         }
         surface
     }
@@ -2788,7 +2956,7 @@ mod tier0_tests {
         Column::new()
             .modifier(Modifier::new().height(200.0).vertical_scroll(scroll.clone()))
             .build(ctx, |ctx| {
-                hero_leaf(ctx, 120.0, 80.0, Color::RED, scope);
+                hero_leaf(ctx, 120.0, 80.0, Color::RED, scope, true);
                 gap_leaf(ctx, 400.0, 400.0);
             });
     }
@@ -2803,7 +2971,7 @@ mod tier0_tests {
             .modifier(Modifier::new().height(200.0).vertical_scroll(scroll.clone()))
             .build(ctx, |ctx| {
                 gap_leaf(ctx, 400.0, 140.0);
-                hero_leaf(ctx, 300.0, 160.0, Color::BLUE, scope);
+                hero_leaf(ctx, 300.0, 160.0, Color::BLUE, scope, true);
             });
     }
 
@@ -2889,26 +3057,49 @@ mod tier0_tests {
                 e.y
             );
         }
-        // Visuals carry the per-end sums; clip agrees with paint by
-        // construction (same add-back).
+        // Visuals: the source is detached (rootless) and the target is
+        // elevated (renderInOverlay defaults to true), so BOTH ends render
+        // rootless from the layer and carry a zero add-back. The layer
+        // supplies each end's scroll-corrected absolute origin instead, and
+        // the paint still lands exactly on the lerped rect (pixel proof below).
         {
             let nodes = composer.arena_nodes();
             let a = composer.shared_flights.values().next().expect("flight");
             let sslot = a.flight.source_slot.expect("source slot");
             let sidx = a.source_idx.expect("retained source");
             assert!(nodes.get(sidx).is_some_and(|n| n.slot_key == sslot));
-            assert_eq!(nodes[sidx].transition.as_ref().expect("source visual").scroll, (0.0, 0.0));
+            let svis = nodes[sidx].transition.as_ref().expect("source visual");
+            assert!(svis.elevated, "detached sources always fly in the layer");
+            assert_eq!(svis.scroll, (0.0, 0.0));
             let tslot = a.flight.target_slot.expect("target slot");
             let root = composer.layout_root_idx().expect("root");
             let tidx = find_idx_by_slot(nodes, root, tslot).expect("target");
             let tvis = nodes[tidx].transition.as_ref().expect("target visual");
-            assert_eq!(tvis.scroll, (0.0, 40.0));
+            assert!(tvis.elevated, "renderInOverlay defaults to true");
+            assert_eq!(
+                tvis.scroll,
+                (0.0, 0.0),
+                "layer canvas carries no ancestor translate — no add-back"
+            );
+            // The layer paints this node at its scroll-corrected absolute
+            // origin, which differs from the pure layout accumulation by
+            // exactly the frozen ancestor sum the in-tree path adds back.
+            let id_to_idx: HashMap<u64, usize> =
+                nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
+            let abs = abs_rect_upward(nodes, &id_to_idx, tidx);
+            let pure = pure_accumulation(&composer, tidx);
+            assert!(
+                (abs.y - (pure.1 - a.end_scroll.1)).abs() < 1e-3,
+                "layer origin compensates the ancestor scroll exactly ({} vs {})",
+                abs.y,
+                pure.1 - a.end_scroll.1
+            );
             let l = tvis.lerped();
             let clip = tvis.canvas_rrect();
             assert!(
                 (clip.rect().left - (l.x + tvis.scroll.0)).abs() < 1e-3
                     && (clip.rect().top - (l.y + tvis.scroll.1)).abs() < 1e-3,
-                "canvas clip lands on the translated lerped rect"
+                "canvas clip lands on the lerped rect"
             );
             let dev = tvis.screen_rrect();
             assert!(
@@ -2917,8 +3108,10 @@ mod tier0_tests {
             );
         }
 
-        // Pixel proof (fails without the add-back: the in-tree target then
-        // paints a full scroll offset too high, into the probed strip).
+        // Pixel proof: the flight paints exactly on the lerped rect even though
+        // the hero's ancestor is scrolled (with elevation the layer supplies
+        // the absolute origin; the in-tree path supplies it as an add-back —
+        // same pixels either way).
         let mut painted = false;
         for _ in 0..200 {
             if composer.shared_flights.is_empty() {
@@ -2963,6 +3156,823 @@ mod tier0_tests {
         crate::animation::clear_all_animations();
     }
 
+    // ── Overlay escape (Compose `renderInOverlayDuringTransition`) ──
+    //
+    // The entering hero lives inside a scroll viewport that sits LOW in the
+    // window while the leaving hero sits at the very top, so mid-flight the
+    // lerped rect is ABOVE that viewport — outside the target's ancestor clip.
+    // In-tree painting is cut there (the ancestor clip is on the canvas and a
+    // descendant can never un-set it); the transition layer paints it anyway.
+
+    #[crate::composable]
+    fn escape_list_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope, in_overlay: bool) {
+        Column::new()
+            .modifier(Modifier::new().fill_max_size())
+            .build(ctx, |ctx| {
+                Column::new()
+                    .modifier(Modifier::new().size(60.0, 60.0))
+                    .build(ctx, |ctx| {
+                        hero_leaf(ctx, 60.0, 60.0, Color::RED, scope, in_overlay);
+                    });
+            });
+    }
+
+    #[crate::composable]
+    fn escape_detail_screen(
+        ctx: &mut ComposeCtx,
+        scope: &SharedTransitionScope,
+        scroll: &crate::modifier::ScrollState,
+        in_overlay: bool,
+    ) {
+        Column::new()
+            .modifier(Modifier::new().fill_max_size())
+            .build(ctx, |ctx| {
+                // Pushes the clipped viewport down to y ≈ 240.
+                gap_leaf(ctx, 10.0, 240.0);
+                Column::new()
+                    .modifier(Modifier::new().size(200.0, 160.0).vertical_scroll(scroll.clone()))
+                    .build(ctx, |ctx| {
+                        gap_leaf(ctx, 10.0, 30.0);
+                        hero_leaf(ctx, 140.0, 80.0, Color::BLUE, scope, in_overlay);
+                    });
+            });
+    }
+
+    fn escape_frame(
+        composer: &mut Composer,
+        show: &State<bool>,
+        scroll: &crate::modifier::ScrollState,
+        in_overlay: bool,
+    ) {
+        let s = show.clone();
+        let sc = scroll.clone();
+        composer.compose(|ctx| {
+            SharedTransitionLayout::new().build(ctx, |ctx| {
+                let scope = current_shared_scope().expect("inside SharedTransitionLayout");
+                Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+                    if s.get() {
+                        escape_list_screen(ctx, &scope, in_overlay);
+                    } else {
+                        escape_detail_screen(ctx, &scope, &sc, in_overlay);
+                    }
+                });
+            });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        composer.poll_shared_flights();
+    }
+
+    fn escape_advance(
+        composer: &mut Composer,
+        show: &State<bool>,
+        scroll: &crate::modifier::ScrollState,
+        in_overlay: bool,
+    ) {
+        crate::animation::update_animations();
+        std::thread::sleep(std::time::Duration::from_millis(16));
+        escape_frame(composer, show, scroll, in_overlay);
+    }
+
+    /// (progress, lerped rect) of the single active flight.
+    fn flight_probe(composer: &Composer) -> Option<(f32, SharedBounds)> {
+        composer.shared_flights.values().next().map(|a| {
+            let p = a.progress.peek();
+            let end = a.flight.end.unwrap_or(a.start);
+            (p, a.start.lerp(&end, p))
+        })
+    }
+
+    /// Absolute rect (canvas frame) of the nearest scrolled ancestor viewport.
+    fn nearest_viewport_abs(composer: &Composer, idx: usize) -> Option<(f32, f32, f32, f32)> {
+        let nodes = composer.arena_nodes();
+        let id_to_idx: HashMap<u64, usize> =
+            nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
+        let mut cur = idx;
+        while let Some(pid) = nodes[cur].parent_id {
+            let Some(&pidx) = id_to_idx.get(&pid) else { return None };
+            let n = &nodes[pidx];
+            if n.scroll_viewport_height > 0.0 {
+                let b = abs_rect_upward(nodes, &id_to_idx, pidx);
+                return Some((b.x, b.y, n.scroll_viewport_width, n.scroll_viewport_height));
+            }
+            cur = pidx;
+        }
+        None
+    }
+
+    /// Drive the escape scenario to mid-flight and return
+    /// (progress, lerped rect, target index, target ancestor viewport).
+    #[allow(clippy::type_complexity)]
+    fn escape_to_midflight(
+        composer: &mut Composer,
+        show: &State<bool>,
+        scroll: &crate::modifier::ScrollState,
+        in_overlay: bool,
+    ) -> (f32, SharedBounds, usize, (f32, f32, f32, f32)) {
+        escape_frame(composer, show, scroll, in_overlay);
+        show.set(false);
+        escape_frame(composer, show, scroll, in_overlay);
+        assert_eq!(composer.shared_flights.len(), 1, "flight opened");
+        for _ in 0..200 {
+            if let Some((p, l)) = flight_probe(composer) {
+                if (0.4..=0.6).contains(&p) {
+                    let tslot = composer
+                        .shared_flights
+                        .values()
+                        .next()
+                        .and_then(|a| a.flight.target_slot)
+                        .expect("target slot");
+                    let nodes = composer.arena_nodes();
+                    let root = composer.layout_root_idx().expect("root");
+                    let tidx = find_idx_by_slot(nodes, root, tslot).expect("target node");
+                    let vp = nearest_viewport_abs(composer, tidx).expect("clipped ancestor");
+                    return (p, l, tidx, vp);
+                }
+            }
+            if composer.shared_flights.is_empty() {
+                break;
+            }
+            escape_advance(composer, show, scroll, in_overlay);
+        }
+        panic!("flight must pass through the mid-flight window");
+    }
+
+    #[test]
+    fn tier0_overlay_escape_paints_outside_ancestor_clip() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+        let scroll = crate::modifier::ScrollState::new();
+
+        let (p, l, tidx, (_, vp_y, _, _)) = escape_to_midflight(&mut composer, &show, &scroll, true);
+        // The probe point is genuinely OUTSIDE the target's ancestor viewport —
+        // i.e. paint there can only come from the elevation pass.
+        let cy = l.y + l.height / 2.0;
+        assert!(
+            cy < vp_y,
+            "mid-flight rect center ({cy}) must be above the target viewport ({vp_y})"
+        );
+
+        // The claim first: paint lands OUTSIDE the ancestor clip. In-tree
+        // painting cannot do this — the ancestor clip is on the canvas and a
+        // descendant can never un-set it (this is what fails without the layer).
+        let mut surf = render_heads(&composer);
+        let c = pixel_rgb(&mut surf, (l.x + l.width / 2.0) as i32, cy as i32);
+        // Both ends paint (red ghost over blue target). Ghost-only would leave
+        // G ≈ 255·p ≈ 127; with the target underneath it drops to ≈ 255·p·(1−p).
+        assert!(
+            c.1 < 90,
+            "target escaped the ancestor clip and paints under the ghost at p={p}, got {c:?}"
+        );
+
+        // Then the mechanism that makes it possible.
+        let tvis = composer.arena_nodes()[tidx]
+            .transition
+            .as_ref()
+            .expect("target visual")
+            .clone();
+        assert!(tvis.elevated, "target flies in the layer by default");
+        assert!(
+            composer.transition_roots().contains(&tidx),
+            "elevated target is a layer root"
+        );
+
+        for _ in 0..200 {
+            if composer.shared_flights.is_empty() {
+                break;
+            }
+            escape_advance(&mut composer, &show, &scroll, true);
+        }
+        assert!(composer.shared_flights.is_empty(), "flight completes");
+        crate::animation::clear_all_animations();
+    }
+
+    #[test]
+    fn tier0_overlay_opt_out_paints_in_tree_and_stays_clipped() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+        let scroll = crate::modifier::ScrollState::new();
+
+        let (p, l, tidx, _) = escape_to_midflight(&mut composer, &show, &scroll, false);
+        let tvis = composer.arena_nodes()[tidx]
+            .transition
+            .as_ref()
+            .expect("target visual")
+            .clone();
+        assert!(!tvis.elevated, "renderInOverlay=false keeps the target in-tree");
+        // Both ends paint the SAME lerped rect — opting out changes only the
+        // clip, never the position. A mismatched-looking pair on screen is the
+        // ancestor clip edge over the flying shape, not a transform divergence:
+        // the entering end is cut, the detached leaving end cannot be.
+        let svis = composer.arena_nodes()[composer.transition_layer[0]]
+            .transition
+            .as_ref()
+            .expect("source visual")
+            .clone();
+        assert_eq!(
+            svis.lerped(),
+            tvis.lerped(),
+            "leaving ghost and entering target share one flight rect"
+        );
+        // In-tree means the frozen ancestor sum is added back by the flight
+        // transform (the layer path does not use it at all).
+        let a = composer.shared_flights.values().next().expect("flight");
+        assert_eq!(
+            tvis.scroll, a.end_scroll,
+            "opt-out target still carries its frozen ancestor scroll"
+        );
+        assert!(
+            !composer.transition_roots().contains(&tidx),
+            "opt-out target stays out of the layer"
+        );
+
+        // Ancestors still clip it: only the ghost shows through at the probe.
+        let mut surf = render_heads(&composer);
+        let c = pixel_rgb(
+            &mut surf,
+            (l.x + l.width / 2.0) as i32,
+            (l.y + l.height / 2.0) as i32,
+        );
+        assert!(
+            c.1 > 100 && c.0 > 200,
+            "ghost-only paint at p={p} (target clipped in-tree), got {c:?}"
+        );
+
+        // ...and the target is NOT parked at its own layout rect: the flying
+        // content only ever covers the LERPED rect, so a mid-flight probe over
+        // the target's resting place shows background. This is what separates
+        // "clipped while flying" from "stopped flying".
+        let nodes = composer.arena_nodes();
+        let id_to_idx: HashMap<u64, usize> =
+            nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
+        let rest = abs_rect_upward(nodes, &id_to_idx, tidx);
+        assert!(rest.y > l.y, "the target rests below the mid-flight rect");
+        let mut surf2 = render_heads(&composer);
+        let c2 = pixel_rgb(
+            &mut surf2,
+            (rest.x + rest.width / 2.0) as i32,
+            (rest.y + rest.height / 2.0) as i32,
+        );
+        assert!(
+            close_enough(c2, (255, 255, 255), 40),
+            "nothing paints at the target's resting rect mid-flight, got {c2:?}"
+        );
+
+        for _ in 0..200 {
+            if composer.shared_flights.is_empty() {
+                break;
+            }
+            escape_advance(&mut composer, &show, &scroll, false);
+        }
+        assert!(composer.shared_flights.is_empty(), "flight completes");
+        crate::animation::clear_all_animations();
+    }
+
+    /// Tier1 pair where the PEER (overlay) target sits inside a clipped
+    /// viewport low in the window — the same escape geometry, cross-composer.
+    fn escape_cross_frame(
+        a: &mut Composer,
+        b: &mut Composer,
+        show_a: &State<bool>,
+        show_b: &State<bool>,
+        scope: &SharedTransitionScope,
+        scroll: &crate::modifier::ScrollState,
+    ) {
+        let (sa, sb) = (show_a.clone(), show_b.clone());
+        let (sca, scb) = (scope.clone(), scope.clone());
+        let sc = scroll.clone();
+        cross_frame(
+            a,
+            b,
+            |ctx| shell(ctx, |ctx| {
+                if sa.get() {
+                    hero_leaf(ctx, 60.0, 60.0, Color::RED, &sca, true);
+                }
+            }),
+            |ctx| shell(ctx, |ctx| {
+                if sb.get() {
+                    gap_leaf(ctx, 10.0, 240.0);
+                    Column::new()
+                        .modifier(Modifier::new().size(200.0, 160.0).vertical_scroll(sc.clone()))
+                        .build(ctx, |ctx| {
+                            gap_leaf(ctx, 10.0, 30.0);
+                            hero_leaf(ctx, 140.0, 80.0, Color::BLUE, &scb, true);
+                        });
+                }
+            }),
+        );
+    }
+
+    /// Tier1 hit routing: the peer's own hit test must reach the flying target
+    /// at its animated rect even where the peer's ancestors reject the point.
+    /// This is the case the cross-composer ghost cannot cover — its live target
+    /// lives in an arena the single-arena ghost search cannot see — so before
+    /// the overlay pass the tap was simply lost (`hit_overlay` probes exactly
+    /// this call for the overlay's local point).
+    #[test]
+    fn tier1_elevated_target_hittable_outside_its_ancestors() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut a = Composer::new();
+        let mut b = Composer::new();
+        let scope = SharedTransitionScope::new(88);
+        let show_a = State::new(true);
+        let show_b = State::new(false);
+        let scroll = crate::modifier::ScrollState::new();
+
+        escape_cross_frame(&mut a, &mut b, &show_a, &show_b, &scope, &scroll);
+        show_a.set(false);
+        show_b.set(true);
+        escape_cross_frame(&mut a, &mut b, &show_a, &show_b, &scope, &scroll);
+        assert_eq!(a.shared_flights.len(), 1, "Tier1 opens in the main map");
+
+        let bt = marked_in(&b);
+        assert_eq!(bt.len(), 1, "one peer endpoint");
+        let tidx = bt[0];
+
+        let mut probed = None;
+        for _ in 0..200 {
+            if let Some(p) = a.shared_flights.values().next().map(|f| f.progress.peek()) {
+                if (0.4..=0.6).contains(&p) {
+                    let vis = b.arena_nodes()[tidx]
+                        .transition
+                        .clone()
+                        .expect("peer target visual");
+                    let vp = nearest_viewport_abs(&b, tidx).expect("clipped ancestor");
+                    probed = Some((p, vis.lerped(), vp, vis));
+                    break;
+                }
+            }
+            if a.shared_flights.is_empty() {
+                break;
+            }
+            xadvance(&mut a, &mut b, &show_a, &show_b, &scope);
+        }
+        let (p, l, (_, vp_y, _, _), vis) = probed.expect("flight passes mid-way");
+        let (cx, cy) = (l.x + l.width / 2.0, l.y + l.height / 2.0);
+        assert!(cy < vp_y, "probe is above the peer viewport ({cy} < {vp_y})");
+
+        let bn = b.arena_nodes();
+        let root = b.layout_root_idx().expect("peer root");
+        let plain = crate::layout::node::hit_test(bn, root, cx, cy);
+        assert!(
+            !plain.contains(&tidx),
+            "the plain walk cannot reach the clipped target (path={plain:?})"
+        );
+        // The claim: the layer-aware walk does reach it, at the animated rect.
+        let path = hit_test_with_flights(bn, root, b.transition_roots(), cx, cy);
+        assert!(
+            path.contains(&tidx),
+            "layer-aware hit test reaches the flying target at p={p} (path={path:?})"
+        );
+        // Then the mechanism that makes it possible.
+        assert!(vis.elevated, "peer target flies in its own layer");
+
+        for _ in 0..200 {
+            if a.shared_flights.is_empty() {
+                break;
+            }
+            xadvance(&mut a, &mut b, &show_a, &show_b, &scope);
+        }
+        assert!(a.shared_flights.is_empty(), "Tier1 completes");
+        crate::animation::clear_all_animations();
+    }
+
+    /// Marker flags (and specs) are sampled when a flight resolves, so the
+    /// arena's marker must be fresh. Freshness follows *where* the flag is
+    /// read: a state read in the slot that builds the marker recomposes that
+    /// slot and rewrites the node's modifier, while a read in an OUTER slot
+    /// leaves this subtree skipped and keeps the cached modifier — the runtime
+    /// toggle then silently does nothing until something else rebuilds the
+    /// screen. Build markers with their flags read in their own slot.
+    #[test]
+    fn marker_flag_refreshes_only_when_read_in_the_marker_slot() {
+        let _g = lock_serial();
+        let marker_flag = |composer: &Composer| -> Option<bool> {
+            composer
+                .arena_nodes()
+                .iter()
+                .find_map(|n| find_shared_marker(&n.modifier).map(|m| m.render_in_overlay))
+        };
+
+        // Read INSIDE the marker's slot → refreshed.
+        let flag = State::new(true);
+        let mut composer = Composer::new();
+        let build = |composer: &mut Composer| {
+            let f = flag.clone();
+            composer.compose(|ctx| {
+                SharedTransitionLayout::new().build(ctx, |ctx| {
+                    let scope = current_shared_scope().expect("scope");
+                    Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+                        let inner = f.get();
+                        hero_leaf(ctx, 120.0, 80.0, Color::RED, &scope, inner);
+                    });
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        build(&mut composer);
+        assert_eq!(marker_flag(&composer), Some(true), "initial flag");
+        flag.set(false);
+        build(&mut composer);
+        assert_eq!(
+            marker_flag(&composer),
+            Some(false),
+            "a flag read in the marker's own slot must reach the arena"
+        );
+
+        // Read in an OUTER slot → this is the trap, documented as such.
+        let flag = State::new(true);
+        let mut composer = Composer::new();
+        let build = |composer: &mut Composer| {
+            let f = flag.clone();
+            composer.compose(|ctx| {
+                let outer = f.get();
+                SharedTransitionLayout::new().build(ctx, |ctx| {
+                    let scope = current_shared_scope().expect("scope");
+                    Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+                        hero_leaf(ctx, 120.0, 80.0, Color::RED, &scope, outer);
+                    });
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        build(&mut composer);
+        flag.set(false);
+        build(&mut composer);
+        assert_eq!(
+            marker_flag(&composer),
+            Some(true),
+            "outer read leaves the subtree skipped — the marker keeps its cached flag \
+             (this is why the demo reads the toggle inside the screen slot)"
+        );
+
+        // Nested builders, exactly the demo's shape, with the flag read inside
+        // the composable that creates the marked node (the demo's `hero_box`
+        // helper). That is the pattern that keeps the arena marker fresh.
+        let flag = State::new(true);
+        let show = State::new(false);
+        let mut composer = Composer::new();
+        let build = |composer: &mut Composer| {
+            let (f, s) = (flag.clone(), show.clone());
+            composer.compose(|ctx| {
+                SharedTransitionLayout::new().build(ctx, |ctx| {
+                    let scope = current_shared_scope().expect("scope");
+                    Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+                        if s.get() {
+                            gap_leaf(ctx, 10.0, 60.0);
+                            flag_hero(ctx, &f, &scope, 60.0, 60.0, Color::RED);
+                        } else {
+                            Row::new()
+                                .modifier(Modifier::new().fill_max_width())
+                                .build(ctx, |ctx| {
+                                    gap_leaf(ctx, 40.0, 10.0);
+                                    Column::new()
+                                        .modifier(Modifier::new().clip(Shape::Rectangle))
+                                        .build(ctx, |ctx| {
+                                            flag_hero(ctx, &f, &scope, 120.0, 80.0, Color::BLUE);
+                                        });
+                                });
+                        }
+                    });
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        build(&mut composer);
+        assert_eq!(marker_flag(&composer), Some(true), "nested initial");
+        flag.set(false);
+        build(&mut composer);
+        assert_eq!(
+            marker_flag(&composer),
+            Some(false),
+            "a flag read inside the composable that builds the marker reaches it \
+             through any nesting depth"
+        );
+    }
+
+    /// Marker leaf whose flag is read in THIS composable's slot — the pattern
+    /// the demo's `hero_box` helper uses.
+    #[crate::composable]
+    fn flag_hero(
+        ctx: &mut ComposeCtx,
+        overlay: &State<bool>,
+        scope: &SharedTransitionScope,
+        w: f32,
+        h: f32,
+        color: Color,
+    ) {
+        let in_overlay = overlay.get();
+        hero_leaf(ctx, w, h, color, scope, in_overlay);
+    }
+
+    /// One shared hero composable, called from BOTH screen arms — the shape the
+    /// demo uses after switching to a `hero_box` helper. A key collision across
+    /// the arms would silently degrade the screen switch into a same-screen
+    /// morph, so the demo's structure is pinned here.
+    #[crate::composable]
+    fn shared_hero_box(
+        ctx: &mut ComposeCtx,
+        scope: &SharedTransitionScope,
+        w: f32,
+        h: f32,
+        color: Color,
+        in_overlay: bool,
+    ) {
+        let key = ctx.next_key();
+        ctx.start_leaf(
+            key,
+            Modifier::new()
+                .size(w, h)
+                .background(color, Shape::rounded(8.0))
+                .shared_element(scope.shared_content_state("hero"), BoundsTransform::default(), PlaceHolderSize::JumpCut, PathMotion::Linear, 0.0, in_overlay),
+        );
+        ctx.end_node();
+    }
+
+    #[test]
+    fn demo_shape_shared_hero_composable_still_opens_a_switch() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+        let build = |composer: &mut Composer| {
+            let s = show.clone();
+            composer.compose(|ctx| {
+                SharedTransitionLayout::new().build(ctx, |ctx| {
+                    let scope = current_shared_scope().expect("scope");
+                    Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+                        if s.get() {
+                            shared_hero_box(ctx, &scope, 60.0, 60.0, Color::RED, true);
+                        } else {
+                            // Nested like the demo's Row → clipped Column.
+                            Column::new()
+                                .modifier(Modifier::new().clip(Shape::Rectangle))
+                                .build(ctx, |ctx| {
+                                    shared_hero_box(ctx, &scope, 300.0, 160.0, Color::BLUE, true);
+                                });
+                        }
+                    });
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+            composer.poll_shared_flights();
+        };
+        build(&mut composer);
+        show.set(false);
+        build(&mut composer);
+        assert_eq!(composer.shared_flights.len(), 1, "a switch flight opens");
+        let f = composer.shared_flights.values().next().unwrap();
+        assert_ne!(
+            f.flight.source_slot, f.flight.target_slot,
+            "distinct slots ⇒ a real switch, not a same-screen morph"
+        );
+        assert_eq!(composer.transition_layer.len(), 1, "leaving hero retained");
+        crate::animation::clear_all_animations();
+    }
+
+    /// Pixel delta between two frames of the same size (channel threshold 2 to
+    /// ignore antialiasing noise). Backing helper for the same-frame overlay
+    /// A/B checks, where only one flag changes between the two renders.
+    fn surface_diff(a: &mut skia_safe::Surface, b: &mut skia_safe::Surface) -> (usize, u8) {
+        const W: usize = 400;
+        const H: usize = 400;
+        let info = skia_safe::ImageInfo::new(
+            (W as i32, H as i32),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut pa = vec![0u8; W * H * 4];
+        let mut pb = vec![0u8; W * H * 4];
+        a.read_pixels(&info, &mut pa, W * 4, (0, 0));
+        b.read_pixels(&info, &mut pb, W * 4, (0, 0));
+        let mut n = 0usize;
+        let mut maxd = 0u8;
+        for i in (0..pa.len()).step_by(4) {
+            let d = pa[i]
+                .abs_diff(pb[i])
+                .max(pa[i + 1].abs_diff(pb[i + 1]))
+                .max(pa[i + 2].abs_diff(pb[i + 2]));
+            if d > 2 {
+                n += 1;
+            }
+            maxd = maxd.max(d);
+        }
+        (n, maxd)
+    }
+
+    /// Same-frame A/B of the opt-out: render as-is, flip ONLY the target's
+    /// render pass, render again, report the delta. Everything else (progress,
+    /// rects, radii, scroll) is identical, so any difference is the pass.
+    fn opt_out_vs_elevated_delta(composer: &mut Composer) -> (usize, u8) {
+        let mut before = render_heads(composer);
+        let tslot = composer
+            .shared_flights
+            .values()
+            .next()
+            .and_then(|a| a.flight.target_slot);
+        if let Some(slot) = tslot {
+            let root = composer.layout_root_idx().expect("root");
+            let tidx = find_idx_by_slot(composer.arena_nodes(), root, slot).expect("target");
+            assert!(
+                !composer.arena.nodes[tidx].transition.as_ref().unwrap().elevated,
+                "A/B starts from the opt-out state"
+            );
+            composer.arena.nodes[tidx].transition.as_mut().unwrap().elevated = true;
+            composer.elevated_roots.push(tidx);
+            composer.rebuild_layer_order();
+        }
+        let mut after = render_heads(composer);
+        surface_diff(&mut before, &mut after)
+    }
+
+    /// Drive to mid-flight in the given direction and A/B the render pass.
+    fn opt_out_ab_at_midflight(reverse: bool) -> (f32, usize, u8) {
+        let mut composer = Composer::new();
+        let show = State::new(!reverse); // forward starts on the list screen
+        let scroll = crate::modifier::ScrollState::new();
+        escape_frame(&mut composer, &show, &scroll, false);
+        show.set(reverse);
+        escape_frame(&mut composer, &show, &scroll, false);
+        assert_eq!(composer.shared_flights.len(), 1, "flight opened");
+        let mut p = 0.0;
+        for _ in 0..200 {
+            match flight_probe(&composer) {
+                Some((prog, _)) if prog >= 0.5 => {
+                    p = prog;
+                    break;
+                }
+                None => break,
+                _ => {}
+            }
+            escape_advance(&mut composer, &show, &scroll, false);
+        }
+        let (n, maxd) = opt_out_vs_elevated_delta(&mut composer);
+        crate::animation::clear_all_animations();
+        (p, n, maxd)
+    }
+
+    /// The opt-out artifact is DIRECTIONAL, and that is not obvious from a
+    /// running window (it cost a long debugging round): only the leg whose
+    /// DESTINATION clips shows the step, because only the entering end can be
+    /// clipped at all. Into the clipped screen → the two passes disagree;
+    /// flying back OUT of it → they are pixel-identical.
+    #[test]
+    fn opt_out_artifact_is_directional() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+
+        // Forward: the destination screen clips its hero.
+        let (p, n, maxd) = opt_out_ab_at_midflight(false);
+        assert!(
+            n > 0,
+            "into a clipping destination the pass must matter (p={p}, n={n}, max_delta={maxd})"
+        );
+
+        // Back: the destination screen (list) has no clipping ancestor.
+        let (p, n, maxd) = opt_out_ab_at_midflight(true);
+        assert_eq!(
+            n, 0,
+            "back out of the container the flag must be a no-op (p={p}, n={n}, max_delta={maxd})"
+        );
+        crate::animation::clear_all_animations();
+    }
+
+    /// The two screens of the under-bar scenario. Macro'd composables on
+    /// purpose: the cfg(test) key fallback is path-hash based, so plain
+    /// branches let one screen's node take over the other's slot (the detail
+    /// hero ended up with the list gap's measurements) — the same trap the
+    /// list/detail screens document.
+    #[crate::composable]
+    fn under_bar_list(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
+        gap_leaf(ctx, 10.0, 300.0);
+        hero_leaf(ctx, 150.0, 150.0, Color::RED, scope, false);
+    }
+
+    #[crate::composable]
+    fn under_bar_detail(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
+        // Lands at the top of the window, so its upper band sits under the bar.
+        hero_leaf(ctx, 300.0, 160.0, Color::BLUE, scope, false);
+    }
+
+    /// The correct use of `render_in_overlay = false` on the ENTERING side:
+    /// keep the flight in tree order so chrome painted later still covers it
+    /// ("content sliding under a pinned bar"). With the flag on (Compose
+    /// default) the endpoint becomes a layer root and paints OVER that chrome
+    /// instead — which is the artifact this flag exists to avoid when the
+    /// element belongs under a bar.
+    ///
+    /// Tree: Stack { Column { screen }, bar } — the bar is the LAST child, so
+    /// it paints after the whole screen and tree order alone decides whether
+    /// the flying hero passes over it or under it.
+    #[test]
+    fn opt_out_keeps_the_entering_end_under_later_siblings() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+        // The switch is read INSIDE the slot that builds the branches: reading
+        // it a level up leaves this subtree skipped and the screen never
+        // changes (same trap as a marker flag read in the wrong slot).
+        let frame = |composer: &mut Composer| {
+            let s = show.clone();
+            composer.compose(|ctx| {
+                SharedTransitionLayout::new().build(ctx, |ctx| {
+                    let scope = current_shared_scope().expect("scope");
+                    Stack::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+                        Column::new()
+                            .modifier(Modifier::new().fill_max_size())
+                            .build(ctx, |ctx| {
+                                if s.get() {
+                                    under_bar_list(ctx, &scope);
+                                } else {
+                                    under_bar_detail(ctx, &scope);
+                                }
+                            });
+                        // Pinned chrome, painted last → above the whole screen.
+                        Column::new()
+                            .modifier(
+                                Modifier::new()
+                                    .size(400.0, 60.0)
+                                    .background(Color::GREEN, Shape::Rectangle),
+                            )
+                            .build(ctx, |_| {});
+                    });
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+            composer.poll_shared_flights();
+        };
+        frame(&mut composer);
+        show.set(false);
+        frame(&mut composer);
+        assert_eq!(composer.shared_flights.len(), 1, "flight opened");
+
+        // Late in the flight the hero's upper band reaches the bar's strip.
+        for _ in 0..200 {
+            match flight_probe(&composer) {
+                Some((p, _)) if p >= 0.9 => break,
+                None => break,
+                _ => {}
+            }
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(16));
+            frame(&mut composer);
+        }
+
+        // Same frame, one flag flipped: opt-out (as built) vs elevated.
+        let (probe_x, probe_y) = (150.0, 40.0);
+        let p_at_probe = flight_probe(&composer).map(|(p, _)| p).unwrap_or(1.0);
+        let mut in_tree = render_heads(&composer);
+        let c_tree = pixel_rgb(&mut in_tree, probe_x as i32, probe_y as i32);
+        assert!(
+            c_tree.1 > 180 && c_tree.2 < 80,
+            "opt-out: pinned bar still covers the hero, got {c_tree:?}"
+        );
+        // ...but the LEAVING ghost is detached, so the bar cannot cover it: the
+        // bar's strip keeps a red wash bounded by the ghost's alpha (1 − p).
+        // That is why the demo's geometry puts this crossing late in the
+        // flight — at p ≥ 0.9 the wash is ≤ 10% and reads as nothing.
+        let wash = 255.0 * (1.0 - p_at_probe);
+        assert!(
+            (c_tree.0 as f32 - wash).abs() < 30.0,
+            "ghost wash over the bar must track (1-p)={wash:.0}, got red={} at p={p_at_probe}",
+            c_tree.0
+        );
+
+        let tslot = composer
+            .shared_flights
+            .values()
+            .next()
+            .and_then(|a| a.flight.target_slot)
+            .expect("target slot");
+        let root = composer.layout_root_idx().expect("root");
+        let tidx = find_idx_by_slot(composer.arena_nodes(), root, tslot).expect("target");
+        composer.arena.nodes[tidx].transition.as_mut().unwrap().elevated = true;
+        composer.elevated_roots.push(tidx);
+        composer.rebuild_layer_order();
+        let mut elevated = render_heads(&composer);
+        let c_elev = pixel_rgb(&mut elevated, probe_x as i32, probe_y as i32);
+        assert!(
+            c_elev.2 > 150 && c_elev.1 < 120,
+            "elevated: hero paints over the pinned bar, got {c_elev:?}"
+        );
+
+        for _ in 0..200 {
+            if composer.shared_flights.is_empty() {
+                break;
+            }
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(16));
+            frame(&mut composer);
+        }
+        crate::animation::clear_all_animations();
+    }
+
     /// Bouncy hero leaf (spring overshoot must render past the end rect).
     fn spring_hero_leaf(
         ctx: &mut ComposeCtx,
@@ -2984,6 +3994,7 @@ mod tier0_tests {
                     PlaceHolderSize::JumpCut,
                     path,
                     0.0,
+                    true,
                 ),
         );
         ctx.end_node();
@@ -3099,6 +4110,7 @@ mod tier0_tests {
                     PlaceHolderSize::JumpCut,
                     PathMotion::ArcBelow,
                     0.0,
+                    true,
                 ),
         );
         ctx.end_node();
@@ -3431,7 +4443,7 @@ mod tier0_tests {
             Modifier::new()
                 .size(w, 80.0)
                 .background(Color::GREEN, Shape::Rectangle)
-                .shared_element(scope.shared_content_state("morph"), BoundsTransform::default(), PlaceHolderSize::JumpCut, PathMotion::Linear, 0.0),
+                .shared_element(scope.shared_content_state("morph"), BoundsTransform::default(), PlaceHolderSize::JumpCut, PathMotion::Linear, 0.0, true),
         );
         ctx.end_node();
     }
@@ -3526,7 +4538,7 @@ mod tier0_tests {
                 Modifier::new()
                     .size(w, 80.0)
                     .background(Color::GREEN, Shape::Rectangle)
-                    .shared_element(scope.shared_content_state("box"), BoundsTransform::default(), PlaceHolderSize::JumpCut, PathMotion::Linear, 0.0),
+                    .shared_element(scope.shared_content_state("box"), BoundsTransform::default(), PlaceHolderSize::JumpCut, PathMotion::Linear, 0.0, true),
             )
             .build(ctx, |ctx| {
                 gap_leaf(ctx, 50.0, 50.0);
@@ -3601,7 +4613,7 @@ mod tier0_tests {
             Modifier::new()
                 .size(w, h)
                 .background(color, Shape::rounded(8.0))
-                .shared_element(scope.shared_content_state(key), BoundsTransform::default(), PlaceHolderSize::JumpCut, PathMotion::Linear, 0.0),
+                .shared_element(scope.shared_content_state(key), BoundsTransform::default(), PlaceHolderSize::JumpCut, PathMotion::Linear, 0.0, true),
         );
         ctx.end_node();
     }
@@ -3687,6 +4699,7 @@ mod tier0_tests {
                     PlaceHolderSize::JumpCut,
                     PathMotion::Linear,
                     z,
+                    true,
                 ),
         );
         ctx.end_node();
@@ -3803,6 +4816,7 @@ mod tier0_tests {
                     PlaceHolderSize::JumpCut,
                     PathMotion::Linear,
                     0.0,
+                    true,
                 ),
         );
         ctx.end_node();
@@ -3948,6 +4962,7 @@ mod tier0_tests {
                     PlaceHolderSize::JumpCut,
                     PathMotion::Linear,
                     0.0,
+                    true,
                 ),
         );
         ctx.end_node();
@@ -4064,6 +5079,7 @@ mod tier0_tests {
             flight: 0,
             path: PathMotion::Linear,
             bounds_fx: None,
+            elevated: false,
         };
         assert_eq!(
             vis.remap_hit(10.0, 10.0, 0.0, 0.0, 100.0, 50.0),
@@ -4173,14 +5189,14 @@ mod tier0_tests {
     #[crate::composable]
     fn mixed_list_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope, w: &State<f32>) {
         morph_leaf(ctx, w, scope);
-        hero_leaf(ctx, 120.0, 80.0, Color::RED, scope);
+        hero_leaf(ctx, 120.0, 80.0, Color::RED, scope, true);
     }
 
     #[crate::composable]
     fn mixed_detail_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope, w: &State<f32>) {
         morph_leaf(ctx, w, scope);
         gap_leaf(ctx, 400.0, 100.0);
-        hero_leaf(ctx, 300.0, 160.0, Color::BLUE, scope);
+        hero_leaf(ctx, 300.0, 160.0, Color::BLUE, scope, true);
     }
 
     #[test]
@@ -4282,12 +5298,12 @@ mod tier0_tests {
             b,
             |ctx| shell(ctx, |ctx| {
                 if sa.get() {
-                    hero_leaf(ctx, 120.0, 80.0, Color::RED, &sca);
+                    hero_leaf(ctx, 120.0, 80.0, Color::RED, &sca, true);
                 }
             }),
             |ctx| shell(ctx, |ctx| {
                 if sb.get() {
-                    hero_leaf(ctx, 300.0, 160.0, Color::BLUE, &scb);
+                    hero_leaf(ctx, 300.0, 160.0, Color::BLUE, &scb, true);
                 }
             }),
         );
@@ -4313,18 +5329,14 @@ mod tier0_tests {
         let an = a.arena_nodes();
         if let Some(root) = a.layout_root_idx() {
             crate::render::render(an, root, surface.canvas());
-            for &t in a.transition_roots() {
-                crate::render::render(an, t, surface.canvas());
-            }
+            a.render_layer(surface.canvas());
         }
         let bn = b.arena_nodes();
         if let Some(root) = b.layout_root_idx() {
             surface.canvas().save();
             surface.canvas().translate((b_origin.0, b_origin.1));
             crate::render::render(bn, root, surface.canvas());
-            for &t in b.transition_roots() {
-                crate::render::render(bn, t, surface.canvas());
-            }
+            b.render_layer(surface.canvas());
             surface.canvas().restore();
         }
         surface
@@ -4602,7 +5614,7 @@ mod tier0_tests {
             Modifier::new()
                 .size(w, h)
                 .background(color, Shape::Rectangle)
-                .shared_element(scope.shared_content_state(key), BoundsTransform::default(), PlaceHolderSize::JumpCut, PathMotion::Linear, 0.0),
+                .shared_element(scope.shared_content_state(key), BoundsTransform::default(), PlaceHolderSize::JumpCut, PathMotion::Linear, 0.0, true),
         );
         ctx.end_node();
     }
@@ -4666,13 +5678,13 @@ mod tier0_tests {
 
     #[crate::composable]
     fn b_plain(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
-        hero_leaf(ctx, 300.0, 160.0, Color::BLUE, scope);
+        hero_leaf(ctx, 300.0, 160.0, Color::BLUE, scope, true);
     }
 
     #[crate::composable]
     fn b_shifted(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
         gap_leaf(ctx, 400.0, 100.0);
-        hero_leaf(ctx, 300.0, 160.0, Color::BLUE, scope);
+        hero_leaf(ctx, 300.0, 160.0, Color::BLUE, scope, true);
     }
 
     #[test]
@@ -4695,7 +5707,7 @@ mod tier0_tests {
                 b,
                 |ctx| shell(ctx, |ctx| {
                     if sa.get() {
-                        hero_leaf(ctx, 120.0, 80.0, Color::RED, &sca);
+                        hero_leaf(ctx, 120.0, 80.0, Color::RED, &sca, true);
                     }
                 }),
                 |ctx| shell(ctx, |ctx| {

@@ -23,8 +23,8 @@
 
 | Method | Compose equivalent | Notes |
 |---|---|---|
-| `.shared_element(state, transform, placeholder, path, z_index)` | `Modifier.sharedElement(…)` | Same content on both ends — flies + crossfades; pass `PlaceHolderSize::JumpCut` (others degrade to it, logged, until implemented); `path` is `Linear` / `ArcBelow` / `ArcAbove`; `z_index` (default 0.0) orders retained ghosts back-to-front, in-tree targets keep tree order |
-| `.shared_bounds(state, enter, exit, transform, resize, placeholder, path, z_index)` | `Modifier.sharedBounds(…)` | Different content — container morphs; `enter` plays on the appearing end, `exit` on the disappearing end (fade channels claimed per-end reproduce the crossfade; slide/scale/expand switches and distances compose on top at flight progress — NOTE: the transitions' inner `AnimationSpec`s are ignored, channels always ride the flight clock; Morph role skips both; expand ≈ scale-about-edge + clip) |
+| `.shared_element(state, transform, placeholder, path, z_index, render_in_overlay)` | `Modifier.sharedElement(…)` | Same content on both ends — flies + crossfades; pass `PlaceHolderSize::JumpCut` (others degrade to it, logged, until implemented); `path` is `Linear` / `ArcBelow` / `ArcAbove`; `z_index` (default 0.0) orders the flying pair in the layer; `render_in_overlay` (default **true**) is Compose `renderInOverlayDuringTransition` — see §6 |
+| `.shared_bounds(state, enter, exit, transform, resize, placeholder, path, z_index, render_in_overlay)` | `Modifier.sharedBounds(…)` | Different content — container morphs; `enter` plays on the appearing end, `exit` on the disappearing end (fade channels claimed per-end reproduce the crossfade; slide/scale/expand switches and distances compose on top at flight progress — NOTE: the transitions' inner `AnimationSpec`s are ignored, channels always ride the flight clock; Morph role skips both; expand ≈ scale-about-edge + clip); `render_in_overlay` same as above |
 
 ### 1.3 Flight shaping (`BoundsTransform`)
 
@@ -140,21 +140,96 @@ SharedTransitionLayout::new().build(ctx, |ctx| {
 ## 6. Scroll, hit testing, interaction
 
 - Scroll-exact: heroes inside scrolled containers paint exactly on the
-  lerped rect (each visual freezes its end's ancestor scroll sum).
+  lerped rect. Each end freezes its ancestor scroll sum when the flight
+  resolves; the elevated (default) ends carry a zero sum because the layer
+  canvas has no ancestor translate, and the layer supplies the
+  scroll-corrected absolute origin instead — same pixels either way.
+  Opt-out (`render_in_overlay = false`) ends keep the classic add-back.
   Scrolling *during* a flight keeps the visual rigid with its content.
-- Mid-flight taps test the lerped rect: ghost taps route into the live
-  target subtree; live Target/Morph endpoints (and their children) stay
-  hittable. Visual misses pass through.
+- **Overlay escape** (`renderInOverlayDuringTransition`, default true):
+  while it flies, an endpoint is re-rendered from the transition layer at
+  its absolute position, so it **escapes ancestor clips and ancestor layer
+  transforms** (alpha/scale) and paints **above non-shared content** — a
+  hero flying out of a scroll viewport is no longer cut at the viewport
+  edge, and it is no longer hidden behind a later sibling (top bar, FAB).
+  The element keeps its place in the tree: layout, state and hit testing
+  are untouched, only paint moves. `false` restores the in-tree painting
+  (ancestors clip it as before). The leaving end is always detached in
+  Winia, so the flag is a no-op there — and because it renders from the
+  layer it is not just un-clippable but also un-coverable: later siblings
+  (pinned chrome) cannot hide it either. It paints over them with its
+  opacity, i.e. a wash bounded by `1 − p` (measured: the bar strip reads
+  `255·(1−p)` in its red channel), which is why a flight that must slide
+  under a bar is usually arranged so the crossing happens late — at
+  `p ≥ 0.83` the wash is ≤ 17% and fades to nothing. `Morph` (same-screen
+  resize) never elevates.
+  **What opting out looks like** (and why the demo's off-state looks
+  lopsided): the entering end is clipped by its own ancestors, while the
+  leaving end is detached — its tree is gone, so it cannot be clipped by
+  anything and keeps painting the full lerped rect. Mid-flight the pair
+  therefore shows two different clip extents (a hard rectangular edge cutting
+  the entering content over the intact leaving ghost). The two are still on
+  the SAME lerped rect — it is a clip difference, never a position difference
+  (pinned by `tier0_overlay_opt_out_paints_in_tree_and_stays_clipped`). Compose
+  is asymmetric here too (each end is clipped by its own screen's ancestors);
+  the only approximation is that the leaving end uses no clip at all instead
+  of the old screen's.
+  **When to actually turn it off** (Compose's own framing: the flag is an
+  optimization, not a clipping feature — "in some rare use cases there may be
+  no clipping or layer transform that prevents shared elements from
+  transitioning... in such cases it could be specified to false"):
+  - Nothing on the path clips or applies a layer transform → on and off are
+    **pixel-identical** (measured: 0 differing pixels), so off just skips the
+    layer pass.
+  - You *want* the flying element to stay in-tree: sliding **under** a later
+    sibling (top bar, bottom bar, scrim) instead of over it, or staying inside
+    an ancestor's alpha/layer group.
+  - A `backdrop_blur` hero: the layer path snapshots post-transform content
+    (documented limitation), the in-tree path behaves like any other blurred
+    node.
+  - Turning it off *for a destination that clips* is the one configuration
+    that looks broken — that is a usage error, not a rendering bug, and it is
+    what the demo's toggle shows as its counter-example.
+  Two demos, one per side of the rule:
+  `cargo run -p winia --example shared_transition_in_tree_demo` (pinned bar —
+  with the flag on the entering hero covers the bar and snaps back under it
+  when the flight ends, with the flag off it slides under like ordinary
+  content) and `shared_transition_demo` (clipping container — the flag must
+  stay on).
+  Two things that mislead when reading a screenshot of the opt-out state:
+  - **The visible part reads as "parked at the destination".** What shows is
+    the lerped rect ∩ the clip, and when the clip is the destination
+    container that intersection's leading corner sits ON the container corner
+    and stays there for the whole flight (only the trailing edges follow the
+    flight). The paint transform is moving the whole time — measured from a
+    real demo frame, the visible corner stayed while the shape grew from a
+    sliver to the full container.
+  - **The artifact is directional.** It appears on the leg whose DESTINATION
+    clips. Flying back OUT of that container is clean: the leaving end is
+    detached, so the container's clip left with the old tree. With the
+    overlay on (default) both legs are clean, because both ends are layer
+    roots and simply coincide.
+- Mid-flight taps test the lerped rect: elevated endpoints route through
+  the flight transform inverse, ghost taps route into the live target
+  subtree, and both stay hittable **even where their ancestors reject the
+  point** (that is what the overlay pass changed). The endpoint's own
+  viewport clamp still applies. Visual misses pass through.
 - Tier 1 limitation: cross-composer ghosts paint but ignore taps (the
-  target lives in a peer arena); the live target stays directly hittable
-  in its own composer. Overlay enter/exit animations (~200ms) are not
-  folded into Tier 1 visuals.
+  target lives in a peer arena the single-arena search cannot see). The
+  live target is now reached in its own composer at its animated rect —
+  including outside that composer's ancestors — so overlay taps on a
+  flying element land where Compose would land them. Overlay enter/exit
+  animations (~200ms) are still not folded into Tier 1 visuals.
 
 ## 7. Gaps and hard rules (see also the architecture doc §10)
 
 - No shared markers on descendants of shared markers (nested flights
   compound both transforms).
 - No `backdrop_blur` heroes (blur snapshots post-transform content).
+- `OverlayClip` / `clipInOverlayDuringTransition` (custom clip paths in
+  the overlay) are not built: Compose's default derives from the parent
+  `sharedBounds`, which needs nested markers. `ScaleToBounds { clip: true }`
+  still clips the flying pair to the lerped rect.
 - `vertical_scroll(reverse)` shares the pre-existing hit/render mirror
   divergence — out of scope.
 - Cross-OS-window flights are out of scope (need an OS-level overlay).
@@ -162,20 +237,37 @@ SharedTransitionLayout::new().build(ctx, |ctx| {
 
 ## 8. Tests
 
-- `cargo test -p winia --lib ui::shared_transition` (43 tests: unit,
+- `cargo test -p winia --lib ui::shared_transition` (46 tests: unit,
   headless Tier 0/Tier 1 raster probes, guard-checked regression tests
   for scroll add-back, morph hit routing, bouncy overshoot, baseline
   identity, arc paint, z-order, enter/exit slide, expand wipe, active
-  flag).
+  flag, overlay escape + escape opt-out + cross-composer hit routing).
 - Tests driving animations hold `TEST_SERIAL` + `clear_all_animations()`.
 - Behavior changes must ship a regression test that **fails pre-fix**
-  (verify by temporarily reverting the fix, as done for all four).
+  (verify by temporarily reverting the fix, as done for all seven).
 
 ## 9. Maintenance conventions
 
 - Render only `peek`s flight state — never subscribe visuals (the
   zero-recomposition rule); per-frame writes go through
   `write_flight_visuals` / `write_cross_visuals`.
+- One add-back, never two: an elevated end renders rootless from the layer
+  at its scroll-corrected absolute origin and MUST carry a zero `scroll`;
+  an opt-out end renders in-tree and MUST carry its frozen ancestor sum.
+  Both are decided together in the writers.
+- Layer membership is written, not discovered: the visual writers push
+  elevated roots into `Composer::elevated_roots` (cleared every
+  `poll_shared_flights`), because a Tier 1 peer's flight lives in the MAIN
+  composer's map. `rebuild_layer_order` unions that with the detached
+  sources and z-sorts; render and hit testing both read `transition_roots()`
+  so paint order and hit order cannot drift.
+- Marker values (`render_in_overlay`, `path`, `boundsTransform`, `z_index`)
+  are sampled when a flight resolves, so the marker in the arena must be
+  fresh. Read such a flag **inside the composable that builds the marked
+  node** — a read one slot higher leaves this subtree skipped (Skip keeps the
+  cached modifier) and the runtime toggle silently does nothing until
+  something else rebuilds the screen. Pinned by
+  `marker_flag_refreshes_only_when_read_in_the_marker_slot`.
 - Never remove slots by key (keys are positional identities resurrected
   on navigate-back); teardown frees arena nodes index+slot double-guarded
   and tag-checks visuals by flight id.

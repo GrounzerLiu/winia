@@ -145,6 +145,53 @@ hypothetical cases from the original design both resolve without bitmaps, so
 no Tier 2 code ships; the snapshot machinery (`capture.rs`) remains available
 if a trigger ever materializes.
 
+### 3.6 Overlay pass (Compose `renderInOverlayDuringTransition`, shipped)
+
+Compose lifts a shared element into the scope's overlay for the duration of
+the flight so it "escapes the parent's bounds and its layer transformations
+(albeit alpha and scale)" and "renders on top of other non-shared UI
+elements". Winia has no overlay node to lift into — it has something
+equivalent and older: the **transition layer**, the rootless pass that
+already drew detached sources after the tree walk.
+
+The overlay pass generalizes that pass instead of adding a second one:
+
+- **Elevation is a render-phase decision.** `TransitionVisual.elevated`
+  (frozen when the end resolves, from that end's own marker) makes
+  `render_pass1` skip the subtree in the in-tree walk and makes the
+  coordinator re-render it as a layer root via `render::render_node_at`.
+  Layout, state, slots and hit testing are untouched; only paint moves.
+  A canvas clip can never be un-set by a descendant, which is exactly why
+  the escape has to be a separate root rather than a canvas trick.
+- **Origin frame.** The layer canvas carries no ancestor translate, so an
+  elevated end renders at its scroll-corrected absolute origin
+  (`abs_rect_upward`) and carries `scroll = (0,0)`; an opt-out end keeps
+  the in-tree path and its frozen ancestor add-back. The two are decided in
+  the same writer, so paint, clip and hit cannot disagree.
+- **Membership is written, not discovered.** The visual writers record
+  elevated roots in `Composer::elevated_roots` (cleared each poll) because a
+  Tier 1 peer's flight lives in the MAIN composer's map; a peer scanning its
+  own flights would never see it. `rebuild_layer_order` unions those with
+  the detached sources and z-sorts (`zIndexInOverlay`), with elevated
+  targets painted *under* their ghost — the compositing order the
+  tree-then-ghost passes used to produce. Render and hit testing both read
+  that one list, so paint order and hit order cannot drift.
+- **Hit routing follows paint.** `hit_test_with_flights` walks the layer
+  topmost-first: a source ghost routes into its live target (fraction
+  mapping, unchanged), an elevated target reverses its own flight transform
+  (`remap_hit`) and descends its live subtree — with ancestors *not*
+  rejecting the point, since the element is painted there. This is what
+  makes a Tier 1 tap land where Compose lands it: the overlay composer's
+  own hit test now finds the flying target even outside its ancestors'
+  bounds, while the cross-composer ghost still ignores taps.
+- **Deliberate exemptions.** The leaving end is always detached, so the
+  flag is a no-op there (the layer is its only home). `Morph` (same-screen
+  `animateBounds`) never elevates — it is a layout-driven resize, not a
+  cross-composable flight, and Compose's `animateBounds` stays in place
+  too. `OverlayClip` (a clip *inside* the overlay) is not built: its
+  Compose default derives from the parent `sharedBounds`, which requires
+  nested markers; absent those the default already means "no extra clip".
+
 ## 4. Flight engine: unified kinematics
 
 The engine knows one `Flight{id, start: Rect, end: Rect, progress: State<f32>,
@@ -280,7 +327,11 @@ ResizeMode::{ScaleToBounds(clip), RemeasureToBounds}
 4. Tier 1 cross-composer (main ↔ overlays, retain-in-owner, NO transplant) →
    shipped (P4). Tier 2 deliberately unbuilt (no trigger exists — §3.5).
    ContentSize/AnimatedSize placeholders deferred (JumpCut only for now).
-5. Snapshot (start/mid/end frames) + interruption + concurrency tests.
+5. ~~Snapshot (start/mid/end frames) + interruption + concurrency tests.~~
+6. ~~Overlay pass: `renderInOverlayDuringTransition` on both markers, layer
+   elevation for both ends, layer-order hit routing, z ordering across ends~~
+   → shipped (§3.6), default on, opt-out preserving the pre-overlay path.
+   `OverlayClip` deferred with nested markers.
 
 ## 10. Risks and open questions
 
@@ -299,4 +350,14 @@ ResizeMode::{ScaleToBounds(clip), RemeasureToBounds}
 7. Overlay enter/exit animations are not folded into Tier1 visuals — the
    flight leads/lags the panel transform while it animates (~200ms).
 8. No shared markers on descendants of shared markers (nested flights would
-   compound both transforms).
+   compound both transforms). This also gates `OverlayClip`, whose Compose
+   default resolves through the parent `sharedBounds`.
+9. Elevated endpoints escape ancestor clips *by design* — an element that
+   is intentionally clipped by a container (an image inside a rounded card)
+   will now spill while it flies. That is Compose's semantics; the opt-out
+   (`render_in_overlay = false`) is the escape hatch, and a real
+   `OverlayClip` is the eventual fine-grained answer.
+10. Layer membership is written per frame by the visual writers and cleared
+    in `poll_shared_flights`; a composer that stops being polled would keep
+    a stale order. Every composer (main + overlays + headless tests) polls
+    each frame, so this is a invariant to preserve rather than a bug today.

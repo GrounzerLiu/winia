@@ -20,7 +20,39 @@ use std::cell::RefCell;
 // ── 入口 ──
 
 pub fn render(nodes: &[LayoutNode], root_idx: usize, canvas: &Canvas) {
-    render_pass1(nodes, root_idx, root_idx, canvas, 0.0, 0.0);
+    render_pass1(nodes, root_idx, root_idx, canvas, 0.0, 0.0, false);
+}
+
+/// Draw one node as a **transition-layer root** at an explicit absolute
+/// position, on a canvas that carries no ancestor clips or layer transforms.
+///
+/// This is the Compose `renderInOverlayDuringTransition` elevation: the node
+/// keeps its place in the tree (layout, state and hit testing are untouched)
+/// and is merely re-drawn from the root of the canvas by
+/// [`Composer::render_layer`](../../winia/ui/shared_transition/struct.Composer.html).
+/// `root_idx` stays the REAL tree root — the text-field helpers inside
+/// `render_pass1` resolve colours and offset mappings by walking up to it, so
+/// passing the drawn node as the root would cut that walk short.
+pub fn render_node_at(
+    nodes: &[LayoutNode],
+    root_idx: usize,
+    idx: usize,
+    canvas: &Canvas,
+    abs_x: f32,
+    abs_y: f32,
+) {
+    let node = &nodes[idx];
+    // `render_pass1` adds `parent_*` to the node's own (parent-relative)
+    // position — invert that so the node lands exactly on the absolute point.
+    render_pass1(
+        nodes,
+        root_idx,
+        idx,
+        canvas,
+        abs_x - node.position.x,
+        abs_y - node.position.y,
+        true,
+    );
 }
 
 // ── 视觉 Modifier 渲染（Background / Border / TextContent）──
@@ -650,8 +682,17 @@ fn render_pass1(
     idx: usize,
     canvas: &Canvas,
     parent_x: f32, parent_y: f32,
+    layer_root: bool,
 ) {
     let node = &nodes[idx];
+    // Elevated endpoint: this subtree is painted by the transition layer
+    // (after the whole tree), so the in-tree walk must not paint it again —
+    // that is what lets it escape ancestor clips (a canvas clip can never be
+    // un-set by a descendant) and land above non-shared siblings. Layout,
+    // state and hit testing are untouched; only paint moves.
+    if !layer_root && node.transition.as_ref().is_some_and(|t| t.elevated) {
+        return;
+    }
     let x = parent_x + node.position.x;
     let y = parent_y + node.position.y;
     let w = node.measured_size.width;
@@ -1236,7 +1277,7 @@ fn render_pass1(
 
     // 穿行子节点（backdrop 节点自身内容照常绘制在模糊层之上）
     for &child in &node.children {
-        render_pass1(nodes, root_idx, child, canvas, x, y);
+        render_pass1(nodes, root_idx, child, canvas, x, y, false);
     }
 
     // Ripple indication — above content, inside shape/scroll clipping

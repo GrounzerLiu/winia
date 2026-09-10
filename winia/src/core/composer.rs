@@ -1676,6 +1676,17 @@ pub struct Composer {
     pub(crate) prev_shared_endpoints: HashMap<(u64, String), u64>,
     /// Detached retained source roots (absolute coords, rendered after main tree).
     pub(crate) transition_layer: Vec<usize>,
+    /// Per-frame render order for the transition layer: detached sources plus
+    /// every elevated (in-tree) flight endpoint, z-sorted back-to-front.
+    /// Rebuilt by `rebuild_layer_order` after each flight poll — render and
+    /// hit testing both read it, so paint order and hit order can never drift.
+    pub(crate) layer_order: Vec<usize>,
+    /// In-tree endpoints that fly in this composer's layer (elevated visuals),
+    /// recorded by the visual writers themselves. Rebuilt every poll: the
+    /// writers are the only place that knows both the arena index and whether
+    /// that end is elevated, and a Tier1 peer's flight lives in the MAIN
+    /// composer's map, so the peer could not discover it by scanning its own.
+    pub(crate) elevated_roots: Vec<usize>,
     /// Last-frame absolute bounds per live marked endpoint (Phase 3
     /// same-screen size-morph detection). Keyed by endpoint identity
     /// (scope, key) — never by slot: slots are positional identities a new
@@ -1739,6 +1750,8 @@ impl Composer {
             next_flight_id: 1,
             prev_shared_endpoints: HashMap::new(),
             transition_layer: Vec::new(),
+            layer_order: Vec::new(),
+            elevated_roots: Vec::new(),
             shared_last_bounds: HashMap::new(),
             composer_id: NEXT_COMPOSER_ID.fetch_add(1, Ordering::Relaxed),
             pending_cross: Vec::new(),

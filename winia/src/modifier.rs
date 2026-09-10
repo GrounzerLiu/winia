@@ -777,6 +777,14 @@ pub(crate) enum ModifierElement {
         /// have no such parameters and always crossfade).
         enter: Option<crate::ui::animated_visibility::VisibilityTransition>,
         exit: Option<crate::ui::animated_visibility::VisibilityTransition>,
+        /// Render this endpoint in the transition layer during the flight
+        /// (Compose `renderInOverlayDuringTransition`, default `true`): the
+        /// flying element escapes ancestor clips and ancestor layer
+        /// transforms and paints above non-shared content. `false` keeps the
+        /// pre-Phase-6 in-tree painting (ancestors keep clipping it). Frozen
+        /// at flight resolve — flipping it mid-flight must not move the
+        /// element between passes.
+        render_in_overlay: bool,
     },
 }
 
@@ -2364,7 +2372,7 @@ Self::DrawIcon { .. } => f.write_str("DrawIcon"),
             Self::BackdropBlur { radius } => f.debug_struct("BackdropBlur").field("radius", radius).finish(),
             Self::TextFieldVisual { variant, .. } => f.debug_struct("TextFieldVisual").field("variant", variant).finish(),
             Self::TextFieldOffsetMapping { .. } => f.write_str("TextFieldOffsetMapping"),
-            Self::SharedTransition { scope_id, key, kind, transform, path, z_index, enter, exit } => f
+            Self::SharedTransition { scope_id, key, kind, transform, path, z_index, enter, exit, render_in_overlay } => f
                 .debug_struct("SharedTransition")
                 .field("scope", scope_id)
                 .field("key", key)
@@ -2374,6 +2382,7 @@ Self::DrawIcon { .. } => f.write_str("DrawIcon"),
                 .field("z_index", z_index)
                 .field("has_enter", &enter.is_some())
                 .field("has_exit", &exit.is_some())
+                .field("render_in_overlay", render_in_overlay)
                 .finish(),
         }
     }
@@ -3072,8 +3081,9 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         }
         (TestTag { tag: at }, TestTag { tag: bt }) => at == bt,
         (LayoutDirection(ad), LayoutDirection(bd)) => ad == bd,
-        // 共享元素标记：同 scope + 同 key + 同 kind 才可 Skip（bounds/transform
-        // 变化走 flight 进度，不强制 Enter——见 ui::shared_transition）
+        // 共享元素标记：同 scope + 同 key + 同 kind 才可 Skip（bounds/transform/
+        // z_index/render_in_overlay 变化走 flight 进度或下次 resolve，不强制
+        // Enter——见 ui::shared_transition）
         (
             SharedTransition { scope_id: a_id, key: a_key, kind: a_kind, .. },
             SharedTransition { scope_id: b_id, key: b_key, kind: b_kind, .. },

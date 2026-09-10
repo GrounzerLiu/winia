@@ -522,11 +522,11 @@ impl PerWindow {
                         render_overlays(&self.overlays, canvas, sf, (self.width, self.height));
                     }
                     render::render(nodes, root_idx, canvas);
-                    // Shared-element flights (Tier 0): detached retained sources
-                    // render in absolute coords after the main tree (under overlays).
-                    for &tidx in self.composer.transition_roots() {
-                        render::render(nodes, tidx, canvas);
-                    }
+                    // Shared-element transition layer: detached sources AND
+                    // elevated (render_in_overlay) endpoints. Drawn rootless at
+                    // their absolute positions, so they escape every ancestor
+                    // clip / layer transform the tree walk is still under.
+                    self.composer.render_layer(canvas);
                     canvas.restore();
                     // overlay 渲染在主树之上（逻辑坐标——translate 已含 scale）
                     if !cross_active {
@@ -1861,7 +1861,7 @@ impl AppState {
                 let sf2 = sf as f32;
                 sw.draw(|surface| {
                     let canvas = surface.canvas(); canvas.clear(skia_safe::Color::from_argb(bg.a, bg.r, bg.g, bg.b));
-                    canvas.save(); canvas.scale((sf2, sf2)); render::render(nodes, root_idx, canvas); canvas.restore();
+                    canvas.save(); canvas.scale((sf2, sf2)); render::render(nodes, root_idx, canvas); pw.composer.render_layer(canvas); canvas.restore();
                 });
                 sw.set_visible(true);
             }
@@ -2788,11 +2788,8 @@ fn render_overlays(overlays: &[OverlayWindow], canvas: &skia_safe::Canvas, scale
         // 缺省会导致内容以 1x 绘制：可见位置/大小与命中测试（逻辑坐标）错位
         canvas.scale((scale, scale));
         render::render(nodes, r, canvas);
-        // Tier1 reverse flights (Phase 4): overlay-retained sources render in
-        // overlay-local coords after the overlay tree.
-        for &tidx in ov.composer.transition_roots() {
-            render::render(nodes, tidx, canvas);
-        }
+        // Transition layer (sources + elevated endpoints), overlay-local coords.
+        ov.composer.render_layer(canvas);
         if anim_alpha < 1.0 {
             canvas.restore();
         }
