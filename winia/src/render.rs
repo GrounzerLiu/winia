@@ -676,12 +676,17 @@ fn render_pass1(
             if t.clip {
                 canvas.clip_rrect(t.screen_rrect(), None, Some(true));
             }
-            canvas.translate((l.x - x, l.y - y));
+            canvas.translate((l.x, l.y));
             let (sx, sy) = (
                 if w > 0.0 { l.width / w } else { 1.0 },
                 if h > 0.0 { l.height / h } else { 1.0 },
             );
             canvas.scale((sx, sy));
+            // Scale about the lerped origin (not the canvas origin): content
+            // drawn at layout coords must land on the lerped rect, i.e.
+            // final(p) = l + s*(p - node_origin). Same pivot convention as
+            // apply_gl_transform and remap_hit.
+            canvas.translate((-x, -y));
             let mut layered = false;
             if alpha < 0.999 {
                 let mut paint = skia_safe::Paint::default();

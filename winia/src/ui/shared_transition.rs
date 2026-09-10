@@ -264,10 +264,18 @@ impl SharedTransitionLayout {
     /// Build the scoped subtree. `scope_id` is a stable per-call-site key, so
     /// the scope survives recomposition; `remember_at_key` additionally
     /// immunizes it against statement-order drift.
-    pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx, SharedTransitionScope)) {
+    ///
+    /// NOTE: the content closure takes ONLY `ctx` (single param) — this is
+    /// load-bearing, not style. The `#[composable]` macro only injects
+    /// statement ids into closures whose sole parameter is the compose
+    /// context; a `|ctx, scope|` closure is opaque to it, degrading every
+    /// nested key to positional fallback (sibling branches collide → no
+    /// switch flight, stale content). Read the scope inside via
+    /// [`current_shared_scope`].
+    pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         let scope_id = ctx.next_key();
         let scope = ctx.remember_at_key(scope_id, || SharedTransitionScope::new(scope_id)).get();
-        LOCAL_SHARED_SCOPE.provides(Some(scope.clone()), || content(ctx, scope));
+        LOCAL_SHARED_SCOPE.provides(Some(scope), || content(ctx));
     }
 }
 
@@ -1856,7 +1864,8 @@ mod tier0_tests {
     fn frame(composer: &mut Composer, show: &State<bool>) {
         let s = show.clone();
         composer.compose(|ctx| {
-            SharedTransitionLayout::new().build(ctx, |ctx, scope| {
+            SharedTransitionLayout::new().build(ctx, |ctx| {
+                let scope = current_shared_scope().expect("inside SharedTransitionLayout");
                 Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
                     if s.get() {
                         list_screen(ctx, &scope);
@@ -2019,6 +2028,62 @@ mod tier0_tests {
     }
 
     #[test]
+    fn tier0_flight_pivot_alignment_mid_flight() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+
+        frame(&mut composer, &show);
+        show.set(false);
+        frame(&mut composer, &show);
+        assert_eq!(composer.shared_flights.len(), 1, "flight opened");
+
+        // Drive into a mid-flight window where a pivot error is unambiguous:
+        // the lerped rect must leave a clear margin above it. The old
+        // translate-then-scale order scaled about the canvas origin, shifting
+        // paint by pos*(scale-1) — the target painted ~25px too high here.
+        let mut aligned = false;
+        for _ in 0..200 {
+            if composer.shared_flights.is_empty() {
+                break;
+            }
+            let probe = composer.shared_flights.values().next().map(|a| {
+                let p = a.progress.peek();
+                let e = a.flight.end.expect("end resolved after first poll");
+                (p, a.start.lerp(&e, p))
+            });
+            if let Some((p, l)) = probe {
+                if p > 0.3 && p < 0.7 && l.height < 128.0 && l.y > 24.0 {
+                    // Lerped center must show blended hero paint (both ends
+                    // coincide here by construction).
+                    let mut surf = render_heads(&composer);
+                    let cx = (l.x + l.width / 2.0) as i32;
+                    let cy = (l.y + l.height / 2.0) as i32;
+                    let c = pixel_rgb(&mut surf, cx, cy);
+                    assert!(
+                        c.0 > 140 && c.2 > 50,
+                        "lerped center shows blended flight paint, got {c:?}"
+                    );
+                    // Above the lerped top must be background: with the pivot
+                    // bug the target painted into this strip.
+                    let mut surf2 = render_heads(&composer);
+                    let above = pixel_rgb(&mut surf2, cx, (l.y - 12.0) as i32);
+                    assert!(
+                        close_enough(above, (255, 255, 255), 40),
+                        "no flight paint above the lerped rect, got {above:?}"
+                    );
+                    aligned = true;
+                    break;
+                }
+            }
+            advance(&mut composer, &show);
+        }
+        assert!(aligned, "flight must pass through the alignment window");
+        crate::animation::clear_all_animations();
+    }
+
+    #[test]
     fn tier0_retarget_restarts_from_visual() {
         let _g = lock_serial();
         crate::animation::clear_all_animations();
@@ -2085,7 +2150,8 @@ mod tier0_tests {
     fn morph_compose(composer: &mut Composer, w: &State<f32>) {
         let ww = w.clone();
         composer.compose(|ctx| {
-            SharedTransitionLayout::new().build(ctx, |ctx, scope| {
+            SharedTransitionLayout::new().build(ctx, |ctx| {
+                let scope = current_shared_scope().expect("inside SharedTransitionLayout");
                 Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
                     morph_screen(ctx, &scope, &ww);
                 });
@@ -2294,7 +2360,8 @@ mod tier0_tests {
         let mixed_frame = |composer: &mut Composer| {
             let (s, ww) = (show.clone(), w.clone());
             composer.compose(|ctx| {
-                SharedTransitionLayout::new().build(ctx, |ctx, scope| {
+                SharedTransitionLayout::new().build(ctx, |ctx| {
+                    let scope = current_shared_scope().expect("inside SharedTransitionLayout");
                     Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
                         if s.get() {
                             mixed_list_screen(ctx, &scope, &ww);

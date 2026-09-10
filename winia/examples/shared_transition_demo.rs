@@ -11,7 +11,8 @@ use winia::prelude::*;
 #[composable]
 fn hero_demo(ctx: &mut ComposeCtx) {
     let show_detail = ctx.remember(|| false);
-    SharedTransitionLayout::new().build(ctx, |ctx, scope| {
+    SharedTransitionLayout::new().build(ctx, |ctx| {
+        let scope = current_shared_scope().expect("inside SharedTransitionLayout");
         Column::new()
             .modifier(Modifier::new().fill_max_size().padding(16.0))
             .build(ctx, |ctx| {
