@@ -2536,6 +2536,11 @@ impl Composer {
                 // and its natural size restored — clearing only the visual
                 // would freeze the peer at its last animated size forever.
                 let peer = &mut all[ti];
+                // Route through the shared teardown so the peer's layout
+                // override (Compose `ResizeMode`/`PlaceHolderSize`) is dropped
+                // and its natural size restored — clearing only the visual
+                // would freeze the peer at its last animated size.
+                let peer = &mut all[ti];
                 peer.clear_transition_for_slot(slot, id);
             }
             all[0].shared_flights.remove(&id);
@@ -5686,6 +5691,110 @@ mod tier0_tests {
             layer.last().copied(),
             tree.last().copied(),
             "layer and tree walks must agree"
+        );
+        crate::animation::clear_all_animations();
+    }
+
+    /// Placeholder-taking hero leaf (the Tier-1 layout contract needs a marker
+    /// that does NOT resolve to the default idle frame).
+    fn hero_leaf_ph(
+        ctx: &mut ComposeCtx,
+        w: f32,
+        h: f32,
+        color: Color,
+        scope: &SharedTransitionScope,
+        placeholder: PlaceHolderSize,
+    ) {
+        let key = ctx.next_key();
+        ctx.start_leaf(
+            key,
+            Modifier::new()
+                .size(w, h)
+                .background(color, Shape::rounded(8.0))
+                .shared_element(
+                    scope.shared_content_state("hero"),
+                    BoundsTransform::default(),
+                    placeholder,
+                    PathMotion::Linear,
+                    0.0,
+                    true,
+                ),
+        );
+        ctx.end_node();
+    }
+
+    /// Tier-1 layout contract, end to end: the peer composer's node receives the
+    /// per-frame override while the flight runs, and BOTH teardown paths give it
+    /// back. The completion path used to clear only the visual, which left the
+    /// peer permanently frozen at its last animated size (the layout fold then
+    /// never re-measured again).
+    #[test]
+    fn tier1_peer_drops_the_layout_override_at_teardown() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let (mut a, mut b) = (Composer::new(), Composer::new());
+        let scope = SharedTransitionScope::new(88);
+        let (show_a, show_b) = (State::new(true), State::new(false));
+        let frame = |a: &mut Composer, b: &mut Composer, sa: &State<bool>, sb: &State<bool>| {
+            let (s1, s2, sc1, sc2) = (sa.clone(), sb.clone(), scope.clone(), scope.clone());
+            cross_frame(
+                a,
+                b,
+                |ctx| {
+                    shell(ctx, |ctx| {
+                        if s1.get() {
+                            hero_leaf_ph(ctx, 120.0, 80.0, Color::RED, &sc1, PlaceHolderSize::AnimatedSize);
+                        }
+                    })
+                },
+                |ctx| {
+                    shell(ctx, |ctx| {
+                        if s2.get() {
+                            hero_leaf_ph(ctx, 300.0, 160.0, Color::BLUE, &sc2, PlaceHolderSize::AnimatedSize);
+                        }
+                    })
+                },
+            );
+        };
+        frame(&mut a, &mut b, &show_a, &show_b);
+        show_a.set(false);
+        show_b.set(true);
+        frame(&mut a, &mut b, &show_a, &show_b);
+        assert_eq!(a.shared_flights.len(), 1, "Tier1 flight in the main map");
+
+        let peer = marked_in(&b);
+        assert_eq!(peer.len(), 1, "one peer endpoint");
+        let tidx = peer[0];
+        assert!(
+            b.arena_nodes()[tidx].flight_measure.is_some(),
+            "the peer node carries the per-frame override"
+        );
+        // The cross-poll runs after the peer's layout, so the override first
+        // applies on the peer's NEXT layout — advance one frame and check that
+        // the peer really reports the animated height, not the resting one.
+        xadvance(&mut a, &mut b, &show_a, &show_b, &scope);
+        assert!(
+            b.arena_nodes()[tidx].measured_size.height < 160.0,
+            "…and it reports the animated height, not the resting one (got {})",
+            b.arena_nodes()[tidx].measured_size.height
+        );
+
+        for _ in 0..300 {
+            if a.shared_flights.is_empty() {
+                break;
+            }
+            xadvance(&mut a, &mut b, &show_a, &show_b, &scope);
+        }
+        assert!(a.shared_flights.is_empty(), "flight completes");
+        frame(&mut a, &mut b, &show_a, &show_b);
+        assert!(
+            b.arena_nodes()[tidx].flight_measure.is_none(),
+            "the peer override is dropped at teardown"
+        );
+        assert_eq!(
+            b.arena_nodes()[tidx].measured_size,
+            crate::layout::node::Size::new(300.0, 160.0),
+            "…and the peer's resting size comes back"
         );
         crate::animation::clear_all_animations();
     }
