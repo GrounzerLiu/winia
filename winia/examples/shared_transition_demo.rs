@@ -4,7 +4,9 @@
 //! list hero is a red circle at top-left (150x150, radius 75), detail hero is
 //! a sharp blue rectangle lower-right (320x170, radius 0). Position, size,
 //! aspect ratio AND corner radii all morph with a spring, crossfading 1→0 /
-//! 0→1. Run: `cargo run -p winia --example shared_transition_demo`
+//! 0→1. Three launch buttons fly Linear / ArcBelow / ArcAbove for A/B
+//! comparison (Back returns to the list).
+//! Run: `cargo run -p winia --example shared_transition_demo`
 
 use letclone::clone;
 use winia::animation::SpringSpec;
@@ -13,8 +15,10 @@ use winia::prelude::*;
 #[composable]
 fn hero_demo(ctx: &mut ComposeCtx) {
     let show_detail = ctx.remember(|| false);
+    let fly_path = ctx.remember(|| PathMotion::ArcBelow);
     SharedTransitionLayout::new().build(ctx, |ctx| {
         let scope = current_shared_scope().expect("inside SharedTransitionLayout");
+        let path = fly_path.get();
         Column::new()
             .modifier(Modifier::new().fill_max_size().padding(16.0))
             .build(ctx, |ctx| {
@@ -44,7 +48,7 @@ fn hero_demo(ctx: &mut ComposeCtx) {
                                                 ..SpringSpec::default()
                                             }),
                                             PlaceHolderSize::JumpCut,
-                                            PathMotion::ArcBelow,
+                                            path,
                                         ),
                                 )
                                 .build(ctx, |_| {});
@@ -59,7 +63,7 @@ fn hero_demo(ctx: &mut ComposeCtx) {
                             Text::new("Back").build(ctx);
                         });
                 } else {
-                    Text::new("List (click Open)").font_size(24.0).build(ctx);
+                    Text::new("List (pick a flight path)").font_size(24.0).build(ctx);
                     Column::new()
                         .modifier(
                             Modifier::new()
@@ -72,18 +76,48 @@ fn hero_demo(ctx: &mut ComposeCtx) {
                                         ..SpringSpec::default()
                                     }),
                                     PlaceHolderSize::JumpCut,
-                                    PathMotion::ArcBelow,
+                                    path,
                                 ),
                         )
                         .build(ctx, |_| {});
                     Button::new()
                         .on_click({
                             clone!(show_detail);
-                            move || show_detail.set(true)
+                            clone!(fly_path);
+                            move || {
+                                fly_path.set(PathMotion::Linear);
+                                show_detail.set(true)
+                            }
                         })
                         .modifier(Modifier::new().size(200.0, 36.0))
                         .build(ctx, |ctx| {
-                            Text::new("Open").build(ctx);
+                            Text::new("Fly linear").build(ctx);
+                        });
+                    Button::new()
+                        .on_click({
+                            clone!(show_detail);
+                            clone!(fly_path);
+                            move || {
+                                fly_path.set(PathMotion::ArcBelow);
+                                show_detail.set(true)
+                            }
+                        })
+                        .modifier(Modifier::new().size(200.0, 36.0))
+                        .build(ctx, |ctx| {
+                            Text::new("Fly arc below").build(ctx);
+                        });
+                    Button::new()
+                        .on_click({
+                            clone!(show_detail);
+                            clone!(fly_path);
+                            move || {
+                                fly_path.set(PathMotion::ArcAbove);
+                                show_detail.set(true)
+                            }
+                        })
+                        .modifier(Modifier::new().size(200.0, 36.0))
+                        .build(ctx, |ctx| {
+                            Text::new("Fly arc above").build(ctx);
                         });
                 }
             });
