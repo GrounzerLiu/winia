@@ -510,27 +510,37 @@ impl PerWindow {
                     request_capture();
                 }
                 sw.draw(|surface| {
-                    // Cross-composer Tier1 (Phase 4): the ghost must fly ABOVE
-                    // modal scrims/dialogs (Compose zIndexInOverlay) — render
-                    // overlays first only while a cross flight is active.
+                    // Draw order: main tree → overlays → main transition layer.
+                    // Overlays always sit above the tree (an open dialog must
+                    // not be covered by the base screen, in either mode), and
+                    // while a cross-composer flight runs the main layer lands
+                    // above both so the ghost flies over modal scrims
+                    // (Compose zIndexInOverlay).
+                    // NOTE: `render_overlays` expects the DEVICE context — it
+                    // applies `scale` itself — so it must not run inside the
+                    // tree's `canvas.scale(sf)`, or a HiDPI window would draw
+                    // every overlay at sf² and at an sf²-offset origin.
                     let cross_active = self.composer.has_cross_flights();
                     let canvas = surface.canvas();
                     canvas.clear(skia_safe::Color::from_argb(bg.a, bg.r, bg.g, bg.b));
                     canvas.save();
                     canvas.scale((sf, sf));
-                    if cross_active {
-                        render_overlays(&self.overlays, canvas, sf, (self.width, self.height));
-                    }
                     render::render(nodes, root_idx, canvas);
-                    // Shared-element transition layer: detached sources AND
-                    // elevated (render_in_overlay) endpoints. Drawn rootless at
-                    // their absolute positions, so they escape every ancestor
-                    // clip / layer transform the tree walk is still under.
-                    self.composer.render_layer(canvas);
-                    canvas.restore();
-                    // overlay 渲染在主树之上（逻辑坐标——translate 已含 scale）
                     if !cross_active {
-                        render_overlays(&self.overlays, canvas, sf, (self.width, self.height));
+                        // Shared-element transition layer: detached sources AND
+                        // elevated (render_in_overlay) endpoints, drawn rootless
+                        // at their absolute positions, so they escape every
+                        // ancestor clip / layer transform the tree walk is
+                        // still under.
+                        self.composer.render_layer(canvas);
+                    }
+                    canvas.restore();
+                    render_overlays(&self.overlays, canvas, sf, (self.width, self.height));
+                    if cross_active {
+                        canvas.save();
+                        canvas.scale((sf, sf));
+                        self.composer.render_layer(canvas);
+                        canvas.restore();
                     }
                     after_draw(nodes, root_idx, surface);
                 });

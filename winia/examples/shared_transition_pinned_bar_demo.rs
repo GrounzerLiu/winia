@@ -1,10 +1,12 @@
 //! Keeping pinned chrome on top of a shared-element flight — the Compose way:
 //! `Modifier.renderInSharedTransitionScopeOverlay(zIndexInOverlay)`.
 //!
-//! The window is a Stack — the screen content first, then a **pinned app bar as
-//! the last child**. The detail hero lands with its upper band under that bar,
-//! and the flight climbs from the bottom of the window, so the band crosses
-//! into the bar's strip near the end of the flight.
+//! The window is a Stack — the screen content first, then the pinned app bar,
+//! then the controls (the bar is deliberately not the last child: it must be
+//! painted after the screen but the controls stay on top of both). The detail
+//! hero lands with its upper band under that bar, and the flight climbs from
+//! the bottom of the window, so the band crosses into the bar's strip near the
+//! end of the flight.
 //!
 //! - Bar opted in (switch ON, the default here): the bar joins the transition
 //!   layer for as long as the scope is transitioning, with `zIndexInOverlay`

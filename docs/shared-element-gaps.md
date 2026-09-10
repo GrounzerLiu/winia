@@ -70,9 +70,12 @@
   content. This is the Compose-sanctioned answer for "content slides under
   pinned chrome", and unlike the shared element's own
   `render_in_overlay = false` it covers BOTH ends — the detached leaving ghost
-  included, which tree order can never cover. Membership is decided per poll,
-  so a scope whose flight starts in a peer composer this frame elevates one
-  frame late (first frame is at p≈0). Demo:
+  included, which tree order can never cover. Membership is decided once per
+  frame (own poll + the cross-poll's window union), so a peer composer's
+  chrome elevates in the same frame. Deviation: Compose's second parameter,
+  the `renderInOverlay: () -> Boolean` gating lambda, is not exposed — winia
+  always gates on "this scope has a non-terminal flight", which is Compose's
+  default. Demo:
   `cargo run -p winia --example shared_transition_pinned_bar_demo`.
 - [ ] `ResizeMode::RemeasureToBounds` — currently degrades to scale with
   one `debug_log!` per flight start. Needs per-frame remeasure at the
@@ -102,9 +105,12 @@
 
 - [x] Tier 0 switch flights, same-screen morphs, Tier 1 cross-composer
   (main ↔ overlays), retarget-lite.
-- [x] Scroll-exact paint/clip/hit (frozen per-end ancestor sums) — kept
-  for opt-out targets; elevated ends carry a zero sum and the layer
-  supplies the scroll-corrected absolute origin instead (same pixels).
+- [x] Scroll-exact paint/clip/hit at resolve time (frozen per-end ancestor
+  sums) — kept for opt-out targets; layer ends carry no sum and the layer
+  supplies the scroll-corrected absolute origin instead (same pixels). NOT
+  covered: a scroll that happens *during* a flight — a layer end is pinned to
+  its frozen window rect while an opt-out end keeps following the content, so
+  the two ends can diverge. No test drives a mid-flight scroll.
 - [x] Single unclamped flight-t; engine-release-gated completion.
 - [x] Live-endpoint hit routing; flight-id tagged teardown.
 - [x] Identity-keyed morph baselines; bouncy spring overshoot renders.

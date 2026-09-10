@@ -206,10 +206,11 @@ pub struct LayoutNode {
     /// 转场结束即清 `None`。刻意不进 `CachedNode`——飞行态是瞬态，
     /// 缓存命中必须从干净状态重建（协调器按 slot 回填）。
     pub(crate) transition: Option<crate::ui::shared_transition::TransitionVisual>,
-    /// 转场期间提升到 layer 的**非共享**子树（Compose
-    /// `renderInSharedTransitionScopeOverlay`）：树内遍历跳过它，由协调器
-    /// 在 layer 末尾按原样重画（无变换），从而压在飞行端点之上。每帧由
-    /// `refresh_scope_overlay_roots` 重算——属于瞬态，不进缓存。
+    /// Non-shared subtree elevated into the layer for the duration of a
+    /// transition (Compose `renderInSharedTransitionScopeOverlay`): the tree
+    /// walk skips it and the coordinator re-draws it untransformed at the end
+    /// of the layer, so it stays above the flying endpoints. Recomputed every
+    /// frame by `refresh_scope_overlay_roots` — transient, never cached.
     pub(crate) in_scope_overlay: bool,
 }
 
@@ -570,6 +571,17 @@ pub fn hit_test_with_flights(
         // Painted back-to-front, so the LAST entry is on top — test in reverse.
         for &tidx in transition_roots.iter().rev() {
             let Some(node) = nodes.get(tidx) else { continue };
+            if node.in_scope_overlay && node.transition.is_none() {
+                // Chrome elevated for the flight: it paints above the flying
+                // pair, so it must also be HIT before them — otherwise a tap
+                // inside the overlap (a button on a pinned bar the hero slides
+                // under) would be routed to the hero. It has no flight
+                // transform, so the ordinary subtree walk applies.
+                if let Some(path) = hit_through_chrome(nodes, root, &id_to_idx, tidx, x, y) {
+                    return path;
+                }
+                continue;
+            }
             let Some(t) = node.transition.as_ref() else { continue };
             let hit = match t.role {
                 TransitionRole::Source => hit_through_ghost(nodes, root, &id_to_idx, tidx, x, y),
@@ -614,6 +626,39 @@ fn ancestor_prefix(
     }
     prefix.reverse();
     Some(prefix)
+}
+
+/// Elevated chrome (Compose `renderInSharedTransitionScopeOverlay`):
+/// an ordinary subtree that happens to paint from the layer, at its own
+/// position and with no transform — so the normal recursion applies, entered
+/// at the node's absolute origin with the root→node prefix for bubbling.
+fn hit_through_chrome(
+    nodes: &[LayoutNode],
+    root: usize,
+    id_to_idx: &std::collections::HashMap<u64, usize>,
+    idx: usize,
+    x: f32,
+    y: f32,
+) -> Option<Vec<usize>> {
+    let node = nodes.get(idx)?;
+    if !node.in_scope_overlay {
+        return None;
+    }
+    let tb = abs_rect_upward(nodes, id_to_idx, idx);
+    let mut path = ancestor_prefix(nodes, id_to_idx, root, idx)?;
+    if hit_test_recursive(
+        nodes,
+        idx,
+        x,
+        y,
+        tb.x - node.position.x,
+        tb.y - node.position.y,
+        &mut path,
+    ) {
+        Some(path)
+    } else {
+        None
+    }
 }
 
 /// Detached source ghost → live target routing (Phase 3).

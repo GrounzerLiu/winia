@@ -29,7 +29,8 @@ pub fn render(nodes: &[LayoutNode], root_idx: usize, canvas: &Canvas) {
 /// This is the Compose `renderInOverlayDuringTransition` elevation: the node
 /// keeps its place in the tree (layout, state and hit testing are untouched)
 /// and is merely re-drawn from the root of the canvas by
-/// [`Composer::render_layer`](../../winia/ui/shared_transition/struct.Composer.html).
+/// [`Composer::render_layer`], which is `pub(crate)` — see
+/// `docs/shared-element-transition.md` §3.6.
 /// `root_idx` stays the REAL tree root — the text-field helpers inside
 /// `render_pass1` resolve colours and offset mappings by walking up to it, so
 /// passing the drawn node as the root would cut that walk short.
@@ -745,7 +746,13 @@ fn render_pass1(
             // lerped rect (the frame hit test and ghost routing use).
             // Pivot stays the pure layout origin: content is drawn at layout
             // coords, so final(p) = l + S - S + s*(p - node_origin).
-            canvas.translate((l.x + t.scroll.0, l.y + t.scroll.1));
+            // A LAYER ROOT renders on a canvas with no ancestor translate and
+            // at a scroll-corrected origin, so it must not add the sum back —
+            // the same bit that routed this node to the layer (skip in the
+            // walk, paint here) decides the add-back too, so the two can never
+            // disagree.
+            let scroll = if layer_root { (0.0, 0.0) } else { t.scroll };
+            canvas.translate((l.x + scroll.0, l.y + scroll.1));
             // sharedBounds enter/exit channels, evaluated at appearance
             // amount q (target appears with p, source disappears with 1-p).
             // Slide offsets, scale k and expand (≈ scale-about-edge; layout

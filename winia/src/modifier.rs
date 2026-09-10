@@ -786,11 +786,12 @@ pub(crate) enum ModifierElement {
         /// element between passes.
         render_in_overlay: bool,
     },
-    /// 转场期间把**非共享**子树提升到 layer（Compose
-    /// `Modifier.renderInSharedTransitionScopeOverlay`）：固定 AppBar / FAB
-    /// 这类与空间关系绑定的内容，在共享元素飞过头顶时仍留在最上层，转场
-    /// 结束后自动回到普通树内顺序。`z_index` 是层内 z 序（Compose
-    /// `zIndexInOverlay`）——共享端点默认 0，栏通常给更大的值。
+    /// Elevate a **non-shared** subtree into the layer for the duration of a
+    /// transition (Compose `Modifier.renderInSharedTransitionScopeOverlay`):
+    /// pinned app bars / FABs keep their spatial relationship while shared
+    /// elements fly over them, and return to ordinary tree order when the
+    /// transition ends. `z_index` is Compose's `zIndexInOverlay` — shared
+    /// endpoints default to 0, so a bar that must stay on top passes more.
     SharedScopeOverlay {
         scope_id: u64,
         z_index: f32,
@@ -3095,14 +3096,16 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         }
         (TestTag { tag: at }, TestTag { tag: bt }) => at == bt,
         (LayoutDirection(ad), LayoutDirection(bd)) => ad == bd,
-        // 共享元素标记：同 scope + 同 key + 同 kind 才可 Skip（bounds/transform/
-        // z_index/render_in_overlay 变化走 flight 进度或下次 resolve，不强制
-        // Enter——见 ui::shared_transition）
+        // Shared-element marker: only scope + key + kind decide Skip. `z_index`
+        // is re-read from the arena marker every poll, and everything else
+        // (bounds/transform/render_in_overlay) either rides flight progress or
+        // is sampled at resolve — none of them forces Enter.
         (
             SharedTransition { scope_id: a_id, key: a_key, kind: a_kind, .. },
             SharedTransition { scope_id: b_id, key: b_key, kind: b_kind, .. },
         ) => a_id == b_id && a_key == b_key && a_kind == b_kind,
-        // 层内提升标记：scope 或 z 变了必须重建（值在 poll 时从 arena 读）
+        // Overlay marker: scope or z changing must rebuild the node, because the
+        // coordinator reads the value from this modifier in the arena.
         (
             SharedScopeOverlay { scope_id: a_id, z_index: a_z },
             SharedScopeOverlay { scope_id: b_id, z_index: b_z },

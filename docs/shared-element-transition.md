@@ -157,17 +157,21 @@ already drew detached sources after the tree walk.
 The overlay pass generalizes that pass instead of adding a second one:
 
 - **Elevation is a render-phase decision.** `TransitionVisual.elevated`
-  (frozen when the end resolves, from that end's own marker) makes
-  `render_pass1` skip the subtree in the in-tree walk and makes the
+  (sampled when the end resolves — for a target from that end's own marker,
+  `true` unconditionally for the detached source, forced `false` for `Morph`)
+  makes `render_pass1` skip the subtree in the in-tree walk and makes the
   coordinator re-render it as a layer root via `render::render_node_at`.
-  Layout, state, slots and hit testing are untouched; only paint moves.
+  Layout position, slots and state are untouched. Hit testing moves with the
+  paint (the layer is tested first, see below), which is what lets an
+  element flying outside its container still receive taps.
   A canvas clip can never be un-set by a descendant, which is exactly why
   the escape has to be a separate root rather than a canvas trick.
-- **Origin frame.** The layer canvas carries no ancestor translate, so an
-  elevated end renders at its scroll-corrected absolute origin
-  (`abs_rect_upward`) and carries `scroll = (0,0)`; an opt-out end keeps
-  the in-tree path and its frozen ancestor add-back. The two are decided in
-  the same writer, so paint, clip and hit cannot disagree.
+- **Origin frame.** The layer canvas carries no ancestor translate, so a
+  layer root renders at its scroll-corrected absolute origin
+  (`abs_rect_upward`) and must not apply the ancestor add-back; an opt-out
+  end keeps the in-tree path and its frozen ancestor sum. Both are decided
+  by the same `layer_root` bit that routes the node (`render_pass1`), so
+  paint, clip and hit cannot disagree.
 - **Membership is written, not discovered.** The visual writers record
   elevated roots in `Composer::elevated_roots` (cleared each poll) because a
   Tier 1 peer's flight lives in the MAIN composer's map; a peer scanning its
@@ -200,9 +204,14 @@ The overlay pass generalizes that pass instead of adding a second one:
   non-terminal flight — skipped by the tree walk, re-drawn untransformed at
   the end of the layer, z-sorted against the endpoints (which sit at 0.0).
   Because the layer is drawn after the tree, this covers the detached leaving
-  ghost too, which tree order can never cover. Membership is decided per poll
-  (`refresh_scope_overlay_roots`), so a flight that starts in a peer composer
-  elevates its chrome one frame late — at p≈0, i.e. invisibly.
+  ghost too, which tree order can never cover (its `1 − p` opacity is all that
+  shows through, fading to nothing). Membership is decided once per frame:
+  each composer's own poll passes its flight scopes and `poll_cross_flights`
+  re-runs it for every participant with the window union, so a peer composer's
+  chrome elevates in the same frame as the flight it does not own. Deviation
+  from Compose: the `renderInOverlay: () -> Boolean` gating lambda is not
+  exposed — the elevation window is always "this scope has a non-terminal
+  flight".
 
 ## 4. Flight engine: unified kinematics
 
@@ -223,8 +232,12 @@ spec}`. Position, size, opacity and shape are all pure functions of progress:
   + radii lerp; intermediates are always valid rounded rects, endpoints exact.
   Border width lerps alongside. No same-kind restriction, no mid-point snap
   patches.
-- **Clip always holds**: both ends clip to the current lerped rounded rect —
-  `sharedBounds` content overflow cannot occur by construction.
+- **Clip when the marker asks for it**: `sharedBounds { resize:
+  ScaleToBounds { clip: true } }` clips both ends to the current lerped
+  rounded rect, so container content cannot overflow. `sharedElement` (and
+  `ScaleToBounds { clip: false }`) deliberately does not clip — scaling into
+  the bounds is enough there, and clipping would cut shadows. The `expand`
+  enter/exit channel forces the clip on (see `shared_clip_for_kind`).
 
 ## 5. Layout contract (placeholder policy)
 
@@ -287,13 +300,18 @@ slot hygiene is left to the stock mechanisms.
 ## 7. Final API (frozen)
 
 ```rust
-SharedTransitionLayout::new().build(ctx, |ctx, scope| { /* ... */ })
+SharedTransitionLayout::new().build(ctx, |ctx| { /* scope via current_shared_scope() */ })
 scope.shared_content_state(key) -> SharedContentState
-Modifier::shared_element(state, bounds_transform, fade_mode?, z_index?, path_motion?...)
-Modifier::shared_bounds(state, enter, exit, resize_mode, placeholder_size, ...)
+scope.is_transition_active() -> State<bool>
+Modifier::shared_element(state, transform, placeholder, path, z_index, render_in_overlay)
+Modifier::shared_bounds(state, enter, exit, transform, resize, placeholder, path, z_index, render_in_overlay)
+Modifier::render_in_shared_transition_scope_overlay(&scope, z_index)
 BoundsTransform::{tween, spring, keyframes}
 ResizeMode::{ScaleToBounds(clip), RemeasureToBounds}
 ```
+Passing the scope to the layout closure is load-bearing-wrong (it degrades
+keys to positional); the single-param closure plus `current_shared_scope()` is
+the supported shape.
 
 ## 8. Remaining semantics and their homes
 
