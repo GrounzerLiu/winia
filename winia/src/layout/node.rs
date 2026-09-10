@@ -564,6 +564,10 @@ pub fn hit_test_with_flights(
                 continue;
             }
             let Some(target_slot) = t.link_slot else { continue };
+            // NOTE (Tier1 limitation): the target may live in a PEER
+            // composer's arena (overlay) — invisible to this single-arena
+            // search, so cross-composer ghosts paint but ignore taps. The
+            // live target itself stays directly hittable in its own composer.
             let Some(target_idx) = find_idx_by_slot(nodes, root, target_slot) else {
                 continue;
             };
@@ -693,11 +697,13 @@ fn hit_test_recursive(
     // 命中必须后画的优先（z-order 语义）；此前正序导致上层兄弟
     // （如全屏图片上的矩形）永远命中底层兄弟（Image 铺满遮挡）
     for &c in node.children.iter().rev() {
-        // Shared-element flight (Phase 2 v1): transitioning endpoints take no
-        // input mid-flight (documented; visual-rect hit routing lands in
-        // Phase 3). Detached retained sources are unreachable from the root
-        // walk, so only live targets need the explicit skip.
-        if nodes[c].transition.is_some() {
+        // Shared-element flight (Phase 3): live endpoints (Target/Morph)
+        // descend via remap_hit above, so their subtrees stay hittable
+        // mid-flight. Only Source-role visuals are skipped — detached
+        // retained sources are unreachable from the root walk anyway, and a
+        // Source visual must never take input (its ghost routes to the live
+        // target through the transition-roots prefix instead).
+        if nodes[c].transition.as_ref().is_some_and(|t| t.role == TransitionRole::Source) {
             continue;
         }
         if hit_test_recursive(nodes, c, x, y, child_px, child_py, path) {

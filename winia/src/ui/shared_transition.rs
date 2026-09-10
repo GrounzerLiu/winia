@@ -655,6 +655,18 @@ pub(crate) struct TransitionVisual {
     /// clicks on the flying ghost descend into the live target subtree.
     /// Targets and morphs carry `None`.
     pub link_slot: Option<u64>,
+    /// Ancestor scroll sum in this composer's canvas frame (frozen when the
+    /// flight's ends resolve). Render's canvas carries `translate(-S)` from
+    /// scrolled ancestors while `start`/`end` are scroll-corrected window
+    /// coords — the flight transform adds S back so in-tree endpoints paint
+    /// exactly on the lerped rect (hit test and clip already live in that
+    /// frame). Detached sources render rootless, so theirs is always (0,0).
+    pub scroll: (f32, f32),
+    /// Owning flight id. Teardown clears a slot's visual only when the tag
+    /// matches — slots are positional identities a successor flight can
+    /// resurrect, and unconditional clearing would flicker one frame off the
+    /// new flight's freshly written visual.
+    pub flight: FlightId,
 }
 
 impl TransitionVisual {
@@ -673,19 +685,36 @@ impl TransitionVisual {
     }
 
     pub(crate) fn radii(&self) -> [f32; 4] {
-        let t = self.progress.clamp(0.0, 1.0);
+        // Unclamped like lerped(): spring overshoot carries corner radii past
+        // the end value for one consistent flight-t (alpha stays clamped).
+        let t = self.progress;
         [0, 1, 2, 3].map(|i| self.radius_from[i] + (self.radius_to[i] - self.radius_from[i]) * t)
     }
 
-    /// Screen-frame clip rect — call BEFORE the flight canvas transform
-    /// (clip is captured in the pre-transform space, like the GL clip rule).
-    pub(crate) fn screen_rrect(&self) -> skia_safe::RRect {
+    /// Clip rect at an explicit canvas offset — call BEFORE the flight
+    /// canvas transform (clip is captured in the pre-transform space, like
+    /// the GL clip rule).
+    fn clip_rrect_at(&self, ox: f32, oy: f32) -> skia_safe::RRect {
         let l = self.lerped();
         let r = self.radii();
         skia_safe::RRect::new_rect_radii(
-            skia_safe::Rect::new(l.x, l.y, l.x + l.width, l.y + l.height),
+            skia_safe::Rect::new(l.x + ox, l.y + oy, l.x + ox + l.width, l.y + oy + l.height),
             &rrect_vectors([(r[0], r[0]), (r[1], r[1]), (r[2], r[2]), (r[3], r[3])]),
         )
+    }
+
+    /// Device-frame clip rect (zero offset — the frame hit test uses).
+    #[allow(dead_code)]
+    pub(crate) fn screen_rrect(&self) -> skia_safe::RRect {
+        self.clip_rrect_at(0.0, 0.0)
+    }
+
+    /// Canvas-frame clip rect: `screen_rrect` translated by the frozen
+    /// ancestor scroll sum. The clip call site sits INSIDE the ancestors'
+    /// `translate(-S)`, so canvas coords must add S back to land on the
+    /// lerped rect (same add-back as the flight translate below).
+    pub(crate) fn canvas_rrect(&self) -> skia_safe::RRect {
+        self.clip_rrect_at(self.scroll.0, self.scroll.1)
     }
 
     /// Hit-test remap (Phase 3): test the lerped visual rect; on hit, return
@@ -788,6 +817,20 @@ pub(crate) fn find_shared_marker(modifier: &Modifier) -> Option<SharedMarker> {
     })
 }
 
+/// Clip flag from the marker kind. Render implements ScaleToBounds only —
+/// RemeasureToBounds degrades to scale (logged, once per flight start)
+/// until per-frame remeasure lands.
+pub(crate) fn shared_clip_for_kind(kind: &SharedKind) -> bool {
+    match kind {
+        SharedKind::Bounds { resize: ResizeMode::ScaleToBounds { clip }, .. } => *clip,
+        SharedKind::Bounds { resize: ResizeMode::RemeasureToBounds, .. } => {
+            crate::debug_log!("[shared] RemeasureToBounds unimplemented — degrading to scale");
+            false
+        }
+        SharedKind::Element => false,
+    }
+}
+
 // ═══════════════════════════════════════════════════════════
 // Phase 2: Tier-0 coordinator (compose/layout/app-loop hooks)
 // ═══════════════════════════════════════════════════════════
@@ -805,6 +848,14 @@ pub(crate) struct ActiveFlight {
     /// Exact start bounds (WINDOW coords — canonical flight frame; writer
     /// composers subtract their `screen_origin` when emitting visuals).
     pub start: SharedBounds,
+    /// Frozen ancestor scroll sums (canvas frame) for each end, captured
+    /// when the ends resolve. Source ends are detached (rootless) so
+    /// `start_scroll` is always `(0,0)`; `end_scroll` is the live target's
+    /// ancestor sum at resolve time. Freezing (not per-frame refresh) keeps
+    /// the visual rigid under mid-flight scroll — it shifts exactly like
+    /// normal content instead of pinning to the window.
+    pub start_scroll: (f32, f32),
+    pub end_scroll: (f32, f32),
     pub radius_from: [f32; 4],
     pub radius_to: [f32; 4],
     pub clip: bool,
@@ -856,6 +907,53 @@ pub(crate) fn abs_rect_upward(
     SharedBounds::new(ax, ay, w, h)
 }
 
+/// Canvas scroll translation applied by a node's STRICT ancestors.
+///
+/// Mirrors the render scroll block (`render_pass1`): each scroll container
+/// translates its children by `-offset` (`reverseLayout` mirrored). The
+/// node's own offset is excluded (it only shifts descendants). Rootless
+/// (detached retained sources) sum to `(0,0)`.
+///
+/// NOTE: this deliberately follows the render convention, not
+/// `scroll_offset_for_node` (which leaves vertical-reverse unmirrored): the
+/// sum is added back onto the render canvas, so it must equal what the
+/// canvas carries. The pre-existing vertical-reverse hit/render divergence
+/// is out of scope.
+pub(crate) fn ancestor_scroll_sum(
+    nodes: &[LayoutNode],
+    id_to_idx: &HashMap<u64, usize>,
+    idx: usize,
+) -> (f32, f32) {
+    let mut sx = 0.0f32;
+    let mut sy = 0.0f32;
+    let mut cur = idx;
+    while let Some(pid) = nodes[cur].parent_id {
+        let Some(&pidx) = id_to_idx.get(&pid) else { break };
+        let p = &nodes[pidx];
+        for el in p.modifier.elements() {
+            match el {
+                ModifierElement::VerticalScroll { state } => {
+                    let mut off = state.offset.get();
+                    if p.scroll_reverse {
+                        off = (p.scroll_content_height - p.scroll_viewport_height - off).max(0.0);
+                    }
+                    sy = off;
+                }
+                ModifierElement::HorizontalScroll { state, .. } => {
+                    let mut off = state.offset.get();
+                    if p.scroll_reverse {
+                        off = (p.scroll_content_width - p.scroll_viewport_width - off).max(0.0);
+                    }
+                    sx = off;
+                }
+                _ => {}
+            }
+        }
+        cur = pidx;
+    }
+    (sx, sy)
+}
+
 pub(crate) fn find_idx_by_slot(nodes: &[LayoutNode], root: usize, slot: u64) -> Option<usize> {
     let mut stack = vec![root];
     while let Some(idx) = stack.pop() {
@@ -869,6 +967,20 @@ pub(crate) fn find_idx_by_slot(nodes: &[LayoutNode], root: usize, slot: u64) -> 
 
 fn is_terminal(phase: FlightPhase) -> bool {
     matches!(phase, FlightPhase::Finishing | FlightPhase::Cancelled)
+}
+
+/// Flight completion gate (MAJOR #2): while the animation engine still owns
+/// the progress state the flight stays alive — even past `p >= 0.999`, whose
+/// first passage precedes the overshoot peak under bouncy spring specs
+/// (snapping there would swallow the overshoot). Once the engine releases
+/// the state it has settled exactly at 1.0, so the threshold decides; the
+/// same threshold covers manually-driven progress with no engine entry
+/// (headless tests).
+fn flight_progress_done(a: &ActiveFlight, p: f32) -> bool {
+    if crate::animation::has_animation_for_state(a.progress.state_id()) {
+        return false;
+    }
+    p >= 0.999
 }
 
 impl Composer {
@@ -949,7 +1061,9 @@ impl Composer {
                 .map(|(id, _)| *id)
             {
                 if let Some(a) = self.shared_flights.get(&id) {
-                    let p = a.progress.peek().clamp(0.0, 1.0);
+                    // Unclamped: retarget continuity follows the true visual
+                    // rect, including spring overshoot past the old end.
+                    let p = a.progress.peek();
                     let end = a.flight.end.unwrap_or(a.start);
                     let s = a.start.lerp(&end, p);
                     let (rf, rt) = (a.radius_from, a.radius_to);
@@ -1052,6 +1166,10 @@ impl Composer {
                 spec: BoundsTransform::default().spec,
                 source_idx: Some(src_idx),
                 start,
+                // Detached sources render rootless — no ancestor scroll.
+                start_scroll: (0.0, 0.0),
+                // Filled when the end resolves (AwaitingBounds poll).
+                end_scroll: (0.0, 0.0),
                 radius_from,
                 radius_to: radius_from,
                 clip: false,
@@ -1071,7 +1189,7 @@ impl Composer {
             self.free_retained_source(idx, slot);
         }
         if let Some(slot) = a.flight.target_slot {
-            self.clear_transition_for_slot(slot);
+            self.clear_transition_for_slot(slot, id);
         }
     }
 
@@ -1089,10 +1207,18 @@ impl Composer {
         self.transition_layer.retain(|&x| x != idx);
     }
 
-    fn clear_transition_for_slot(&mut self, slot: u64) {
+    /// Clear a slot's visual only when it still belongs to `id`. Slots are
+    /// positional identities a successor flight can resurrect between this
+    /// flight's last write and its teardown — unconditional clearing would
+    /// flicker one frame off the new visual (self-heals next poll, but
+    /// avoidable for one tag comparison).
+    fn clear_transition_for_slot(&mut self, slot: u64, id: FlightId) {
         if let Some(root) = self.arena.root {
             if let Some(idx) = find_idx_by_slot(&self.arena.nodes, root, slot) {
-                self.arena.nodes[idx].transition = None;
+                let owned = self.arena.nodes[idx].transition.as_ref().is_some_and(|t| t.flight == id);
+                if owned {
+                    self.arena.nodes[idx].transition = None;
+                }
             }
         }
     }
@@ -1161,18 +1287,24 @@ impl Composer {
                 let end = SharedBounds::new(tx + ox, ty + oy, tw, th);
                 let marker = find_shared_marker(&self.arena.nodes[tidx].modifier);
                 let (spec, clip) = match marker {
-                    Some(m) => {
-                        let clip = matches!(
-                            m.kind,
-                            SharedKind::Bounds { resize: ResizeMode::ScaleToBounds { clip: true }, .. }
-                        );
-                        (m.transform.spec.clone(), clip)
-                    }
+                    Some(m) => (m.transform.spec.clone(), shared_clip_for_kind(&m.kind)),
                     None => (BoundsTransform::default().spec, false),
                 };
                 let radius_to = {
                     let n = &self.arena.nodes[tidx];
                     shared_shape_radii(&n.modifier, tw, th)
+                };
+                // Freeze the target's ancestor scroll sum (canvas frame) so
+                // the flight transform can add it back at render (BLOCKER #1).
+                let end_scroll = {
+                    let id_to_idx: HashMap<u64, usize> = self
+                        .arena
+                        .nodes
+                        .iter()
+                        .enumerate()
+                        .map(|(i, n)| (n.id, i))
+                        .collect();
+                    ancestor_scroll_sum(&self.arena.nodes, &id_to_idx, tidx)
                 };
                 let progress = State::new(0.0f32);
                 push_animatable(progress.clone(), 1.0, spec.clone());
@@ -1181,6 +1313,7 @@ impl Composer {
                     a.spec = spec;
                     a.progress = progress;
                     a.radius_to = radius_to;
+                    a.end_scroll = end_scroll;
                     a.clip = clip;
                     let start = a.start;
                     let acts = a.flight.on_event(FlightEvent::BoundsReady { start, end });
@@ -1196,7 +1329,8 @@ impl Composer {
                     a.flight.progress = p;
                 }
                 self.write_flight_visuals(id);
-                if p >= 0.999 {
+                let done = self.shared_flights.get(&id).is_some_and(|a| flight_progress_done(a, p));
+                if done {
                     let acts = self
                         .shared_flights
                         .get_mut(&id)
@@ -1213,7 +1347,7 @@ impl Composer {
                         self.free_retained_source(idx, slot);
                     }
                     if let Some(slot) = self.shared_flights.get(&id).and_then(|a| a.flight.target_slot) {
-                        self.clear_transition_for_slot(slot);
+                        self.clear_transition_for_slot(slot, id);
                     }
                     self.shared_flights.remove(&id);
                 }
@@ -1238,9 +1372,11 @@ impl Composer {
                 a.flight.source_slot,
                 a.flight.target_slot,
                 a.source_idx,
+                a.start_scroll,
+                a.end_scroll,
             )
         });
-        let (mut start, mut end, p, rf, rt, clip, sslot, tslot, sidx) = match snapshot {
+        let (mut start, mut end, p, rf, rt, clip, sslot, tslot, sidx, sscroll, escroll) = match snapshot {
             Some(v) => v,
             None => return,
         };
@@ -1264,6 +1400,8 @@ impl Composer {
                     clip,
                     // Clicking the ghost routes into the live target (Phase 3).
                     link_slot: tslot,
+                    scroll: sscroll,
+                    flight: id,
                 });
             }
         }
@@ -1284,6 +1422,8 @@ impl Composer {
                         radius_to: rt,
                         clip,
                         link_slot: None,
+                        scroll: escroll,
+                        flight: id,
                     });
                 }
             }
@@ -1391,7 +1531,8 @@ impl Composer {
             a.flight.progress = p;
         }
         Self::write_cross_visuals(&mut *all, si, ti, id);
-        if p >= 0.999 {
+        let done = all[0].shared_flights.get(&id).is_some_and(|a| flight_progress_done(a, p));
+        if done {
             let acts = all[0]
                 .shared_flights
                 .get_mut(&id)
@@ -1416,7 +1557,11 @@ impl Composer {
                 let peer = &mut all[ti];
                 if let Some(root) = peer.arena.root {
                     if let Some(tidx) = find_idx_by_slot(&peer.arena.nodes, root, slot) {
-                        peer.arena.nodes[tidx].transition = None;
+                        let owned =
+                            peer.arena.nodes[tidx].transition.as_ref().is_some_and(|t| t.flight == id);
+                        if owned {
+                            peer.arena.nodes[tidx].transition = None;
+                        }
                     }
                 }
             }
@@ -1444,7 +1589,11 @@ impl Composer {
             if let Some(peer) = all.iter_mut().find(|c| c.composer_id == a.target_cid) {
                 if let Some(root) = peer.arena.root {
                     if let Some(tidx) = find_idx_by_slot(&peer.arena.nodes, root, slot) {
-                        peer.arena.nodes[tidx].transition = None;
+                        let owned =
+                            peer.arena.nodes[tidx].transition.as_ref().is_some_and(|t| t.flight == id);
+                        if owned {
+                            peer.arena.nodes[tidx].transition = None;
+                        }
                     }
                 }
             }
@@ -1453,6 +1602,11 @@ impl Composer {
 
     /// Write both ends' visuals for a Tier1 flight, each in its writer's
     /// canvas frame (window coords minus writer origin).
+    ///
+    /// NOTE (Tier1 limitation): overlay enter/exit animations (scale/offset
+    /// around `screen_pos`) are NOT folded into the visuals — while the panel
+    /// animates (~200ms) the flight leads/lags the panel transform by that
+    /// delta. Fixing it means plumbing the overlay progress into cross-poll.
     fn write_cross_visuals(all: &mut [&mut Composer], owner_idx: usize, peer_idx: usize, id: FlightId) {
         let snapshot = all[0].shared_flights.get(&id).map(|a| {
             (
@@ -1465,9 +1619,11 @@ impl Composer {
                 a.flight.source_slot,
                 a.flight.target_slot,
                 a.source_idx,
+                a.start_scroll,
+                a.end_scroll,
             )
         });
-        let (start, end, pr, rf, rt, clip, sslot, tslot, sidx) = match snapshot {
+        let (start, end, pr, rf, rt, clip, sslot, tslot, sidx, sscroll, escroll) = match snapshot {
             Some(v) => v,
             None => return,
         };
@@ -1484,6 +1640,8 @@ impl Composer {
                     radius_to: rt,
                     clip,
                     link_slot: tslot,
+                    scroll: sscroll,
+                    flight: id,
                 });
             }
         }
@@ -1500,6 +1658,8 @@ impl Composer {
                         radius_to: rt,
                         clip,
                         link_slot: None,
+                        scroll: escroll,
+                        flight: id,
                     });
                 }
             }
@@ -1520,6 +1680,7 @@ impl Composer {
             struct Hit {
                 slot: u64,
                 end: SharedBounds,
+                end_scroll: (f32, f32),
                 radius_to: [f32; 4],
                 spec: AnimationSpec,
                 clip: bool,
@@ -1559,22 +1720,26 @@ impl Composer {
                     )
                 };
                 let (spec, clip) = match marker {
-                    Some(m) => {
-                        let clip = matches!(
-                            m.kind,
-                            SharedKind::Bounds { resize: ResizeMode::ScaleToBounds { clip: true }, .. }
-                        );
-                        (m.transform.spec.clone(), clip)
-                    }
+                    Some(m) => (m.transform.spec.clone(), shared_clip_for_kind(&m.kind)),
                     None => (BoundsTransform::default().spec, false),
                 };
                 let radius_to = {
                     let n = &peer.arena.nodes[tidx];
                     shared_shape_radii(&n.modifier, tw, th)
                 };
+                // Freeze the peer target's ancestor scroll sum (BLOCKER #1).
+                let peer_id_to_idx: HashMap<u64, usize> = peer
+                    .arena
+                    .nodes
+                    .iter()
+                    .enumerate()
+                    .map(|(i, n)| (n.id, i))
+                    .collect();
+                let end_scroll = ancestor_scroll_sum(&peer.arena.nodes, &peer_id_to_idx, tidx);
                 Some(Hit {
                     slot,
                     end: SharedBounds::new(lx + po_x, ly + po_y, tw, th),
+                    end_scroll,
                     radius_to,
                     spec,
                     clip,
@@ -1607,6 +1772,9 @@ impl Composer {
                     spec: h.spec,
                     source_idx: Some(p.src_idx),
                     start: p.start,
+                    // Detached sources render rootless — no ancestor scroll.
+                    start_scroll: (0.0, 0.0),
+                    end_scroll: h.end_scroll,
                     radius_from: p.radius_from,
                     radius_to: h.radius_to,
                     clip: h.clip,
@@ -1678,13 +1846,7 @@ impl Composer {
         };
         let marker = find_shared_marker(&self.arena.nodes[tidx].modifier);
         let (spec, clip) = match marker {
-            Some(m) => {
-                let clip = matches!(
-                    m.kind,
-                    SharedKind::Bounds { resize: ResizeMode::ScaleToBounds { clip: true }, .. }
-                );
-                (m.transform.spec.clone(), clip)
-            }
+            Some(m) => (m.transform.spec.clone(), shared_clip_for_kind(&m.kind)),
             None => (BoundsTransform::default().spec, false),
         };
         let (tw, th, modifier) = {
@@ -1694,6 +1856,18 @@ impl Composer {
         let radius_to = shared_shape_radii(&modifier, tw, th);
         let radius_from =
             radius_from_override.unwrap_or_else(|| shared_shape_radii(&modifier, start.width, start.height));
+        // Same node, same frame for both ends — one frozen scroll sum
+        // (BLOCKER #1); morphs stay rigid under mid-flight scroll.
+        let scroll = {
+            let id_to_idx: HashMap<u64, usize> = self
+                .arena
+                .nodes
+                .iter()
+                .enumerate()
+                .map(|(i, n)| (n.id, i))
+                .collect();
+            ancestor_scroll_sum(&self.arena.nodes, &id_to_idx, tidx)
+        };
         let progress = State::new(0.0f32);
         push_animatable(progress.clone(), 1.0, spec.clone());
         let id = self.next_flight_id;
@@ -1714,6 +1888,8 @@ impl Composer {
                 spec,
                 source_idx: None,
                 start,
+                start_scroll: scroll,
+                end_scroll: scroll,
                 radius_from,
                 radius_to,
                 clip,
@@ -1751,7 +1927,11 @@ impl Composer {
             // Canonicalize to window coords (overlay-local + screen origin).
             let (ox, oy) = self.screen_origin;
             let cur = SharedBounds::new(ax + ox, ay + oy, w, h);
-            if let Some(prev) = self.shared_last_bounds.get(slot) {
+            // Baselines key on endpoint identity (scope, key), not the slot:
+            // a conditional key-swap reusing one call-site slot must not
+            // inherit the previous key's rect as its morph start.
+            let bkey = (k.0, k.1.clone());
+            if let Some(prev) = self.shared_last_bounds.get(&bkey) {
                 if size_delta(prev, &cur) > MORPH_EPS {
                     match self.flight_for_key(k.0, &k.1) {
                         Some(fid) => {
@@ -1762,7 +1942,9 @@ impl Composer {
                             });
                             if morph {
                                 let a = &self.shared_flights[&fid];
-                                let p = a.progress.peek().clamp(0.0, 1.0);
+                                // Unclamped like the render path: reopen
+                                // continuity includes spring overshoot.
+                                let p = a.progress.peek();
                                 let end_prev = a.flight.end.unwrap_or(a.start);
                                 let s = a.start.lerp(&end_prev, p);
                                 let (rf, rt) = (a.radius_from, a.radius_to);
@@ -1784,11 +1966,11 @@ impl Composer {
                     }
                 }
             }
-            self.shared_last_bounds.insert(*slot, cur);
+            self.shared_last_bounds.insert(bkey, cur);
         }
-        // Drop baselines for vanished slots (bounded memory).
-        let live_slots: HashSet<u64> = live.values().copied().collect();
-        self.shared_last_bounds.retain(|slot, _| live_slots.contains(slot));
+        // Drop baselines for vanished endpoints (bounded memory).
+        let live_keys: HashSet<(u64, String)> = live.keys().cloned().collect();
+        self.shared_last_bounds.retain(|k, _| live_keys.contains(k));
         for p in pending {
             match p {
                 Pending::Fresh { scope_id, key, slot, start, end } => {
@@ -2027,6 +2209,304 @@ mod tier0_tests {
         crate::animation::clear_all_animations();
     }
 
+    /// Scrolled screens: the hero lives inside a vertically scrolled
+    /// container so both flight ends sit under an ancestor scroll offset.
+    #[crate::composable]
+    fn scrolled_list_screen(
+        ctx: &mut ComposeCtx,
+        scope: &SharedTransitionScope,
+        scroll: &crate::modifier::ScrollState,
+    ) {
+        Column::new()
+            .modifier(Modifier::new().height(200.0).vertical_scroll(scroll.clone()))
+            .build(ctx, |ctx| {
+                hero_leaf(ctx, 120.0, 80.0, Color::RED, scope);
+                gap_leaf(ctx, 400.0, 400.0);
+            });
+    }
+
+    #[crate::composable]
+    fn scrolled_detail_screen(
+        ctx: &mut ComposeCtx,
+        scope: &SharedTransitionScope,
+        scroll: &crate::modifier::ScrollState,
+    ) {
+        Column::new()
+            .modifier(Modifier::new().height(200.0).vertical_scroll(scroll.clone()))
+            .build(ctx, |ctx| {
+                gap_leaf(ctx, 400.0, 140.0);
+                hero_leaf(ctx, 300.0, 160.0, Color::BLUE, scope);
+            });
+    }
+
+    /// One app-loop step for the scrolled screens.
+    fn scroll_frame(composer: &mut Composer, show: &State<bool>, scroll: &crate::modifier::ScrollState) {
+        let s = show.clone();
+        let sc = scroll.clone();
+        composer.compose(|ctx| {
+            SharedTransitionLayout::new().build(ctx, |ctx| {
+                let scope = current_shared_scope().expect("inside SharedTransitionLayout");
+                Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+                    if s.get() {
+                        scrolled_list_screen(ctx, &scope, &sc);
+                    } else {
+                        scrolled_detail_screen(ctx, &scope, &sc);
+                    }
+                });
+            });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        composer.poll_shared_flights();
+    }
+
+    fn scroll_advance(composer: &mut Composer, show: &State<bool>, scroll: &crate::modifier::ScrollState) {
+        crate::animation::update_animations();
+        std::thread::sleep(std::time::Duration::from_millis(16));
+        scroll_frame(composer, show, scroll);
+    }
+
+    /// Pure position accumulation root → node (no scroll subtraction — the
+    /// frame render's `(x, y)` uses at the flight node).
+    fn pure_accumulation(composer: &Composer, idx: usize) -> (f32, f32) {
+        let nodes = composer.arena_nodes();
+        let id_to_idx: HashMap<u64, usize> =
+            nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
+        let (mut ax, mut ay) = (nodes[idx].position.x, nodes[idx].position.y);
+        let mut cur = idx;
+        while let Some(pid) = nodes[cur].parent_id {
+            let Some(&pidx) = id_to_idx.get(&pid) else { break };
+            ax += nodes[pidx].position.x;
+            ay += nodes[pidx].position.y;
+            cur = pidx;
+        }
+        (ax, ay)
+    }
+
+    #[test]
+    fn tier0_flight_scroll_addback_exact() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+        let scroll = crate::modifier::ScrollState::new();
+
+        scroll_frame(&mut composer, &show, &scroll);
+        // Scroll AFTER first layout so the offset does not disturb settling.
+        scroll.offset.set(40.0);
+        scroll_frame(&mut composer, &show, &scroll);
+
+        // Switch list → detail under a live (0, 40) ancestor scroll.
+        show.set(false);
+        scroll_frame(&mut composer, &show, &scroll);
+        assert_eq!(composer.shared_flights.len(), 1, "flight opened under scroll");
+
+        // Frozen scroll bookkeeping: detached source sums to zero, the live
+        // target freezes the (0, 40) ancestor sum.
+        {
+            let a = composer.shared_flights.values().next().expect("flight");
+            assert_eq!(a.start_scroll, (0.0, 0.0), "detached source is rootless");
+            assert_eq!(a.end_scroll, (0.0, 40.0), "target freezes the ancestor scroll");
+            let e = a.flight.end.expect("end resolved after first poll");
+            // Render invariant: lerped end + add-back == pure layout origin,
+            // i.e. the flight transform paints exactly on the lerped rect.
+            let tslot = a.flight.target_slot.expect("target slot");
+            let root = composer.layout_root_idx().expect("root");
+            let tidx = find_idx_by_slot(composer.arena_nodes(), root, tslot).expect("target");
+            let (px, py) = pure_accumulation(&composer, tidx);
+            assert!(
+                (e.x + a.end_scroll.0 - px).abs() < 1e-3
+                    && (e.y + a.end_scroll.1 - py).abs() < 1e-3,
+                "end + scroll == pure layout origin ({} + {} vs {px},{py})",
+                e.x,
+                e.y
+            );
+        }
+        // Visuals carry the per-end sums; clip agrees with paint by
+        // construction (same add-back).
+        {
+            let nodes = composer.arena_nodes();
+            let a = composer.shared_flights.values().next().expect("flight");
+            let sslot = a.flight.source_slot.expect("source slot");
+            let sidx = a.source_idx.expect("retained source");
+            assert!(nodes.get(sidx).is_some_and(|n| n.slot_key == sslot));
+            assert_eq!(nodes[sidx].transition.as_ref().expect("source visual").scroll, (0.0, 0.0));
+            let tslot = a.flight.target_slot.expect("target slot");
+            let root = composer.layout_root_idx().expect("root");
+            let tidx = find_idx_by_slot(nodes, root, tslot).expect("target");
+            let tvis = nodes[tidx].transition.as_ref().expect("target visual");
+            assert_eq!(tvis.scroll, (0.0, 40.0));
+            let l = tvis.lerped();
+            let clip = tvis.canvas_rrect();
+            assert!(
+                (clip.rect().left - (l.x + tvis.scroll.0)).abs() < 1e-3
+                    && (clip.rect().top - (l.y + tvis.scroll.1)).abs() < 1e-3,
+                "canvas clip lands on the translated lerped rect"
+            );
+            let dev = tvis.screen_rrect();
+            assert!(
+                (dev.rect().left - l.x).abs() < 1e-3 && (dev.rect().top - l.y).abs() < 1e-3,
+                "device clip lands on the lerped rect (hit-test frame)"
+            );
+        }
+
+        // Pixel proof (fails without the add-back: the in-tree target then
+        // paints a full scroll offset too high, into the probed strip).
+        let mut painted = false;
+        for _ in 0..200 {
+            if composer.shared_flights.is_empty() {
+                break;
+            }
+            let probe = composer.shared_flights.values().next().map(|a| {
+                let p = a.progress.peek();
+                let e = a.flight.end.expect("end resolved after first poll");
+                (p, a.start.lerp(&e, p))
+            });
+            if let Some((p, l)) = probe {
+                if p > 0.3 && p < 0.7 && l.y > 24.0 {
+                    let mut surf = render_heads(&composer);
+                    let cx = (l.x + l.width / 2.0) as i32;
+                    let cy = (l.y + l.height / 2.0) as i32;
+                    let c = pixel_rgb(&mut surf, cx, cy);
+                    assert!(
+                        c.0 > 140 && c.2 > 50,
+                        "lerped center shows blended flight paint, got {c:?}"
+                    );
+                    let mut surf2 = render_heads(&composer);
+                    let above = pixel_rgb(&mut surf2, cx, (l.y - 12.0) as i32);
+                    assert!(
+                        close_enough(above, (255, 255, 255), 40),
+                        "no flight paint above the lerped rect, got {above:?}"
+                    );
+                    painted = true;
+                    break;
+                }
+            }
+            scroll_advance(&mut composer, &show, &scroll);
+        }
+        assert!(painted, "flight must pass through the scroll-alignment window");
+
+        for _ in 0..200 {
+            if composer.shared_flights.is_empty() {
+                break;
+            }
+            scroll_advance(&mut composer, &show, &scroll);
+        }
+        assert!(composer.shared_flights.is_empty(), "scrolled flight completes");
+        crate::animation::clear_all_animations();
+    }
+
+    /// Bouncy hero leaf (spring overshoot must render past the end rect).
+    fn spring_hero_leaf(ctx: &mut ComposeCtx, w: f32, h: f32, color: Color, scope: &SharedTransitionScope) {
+        let key = ctx.next_key();
+        ctx.start_leaf(
+            key,
+            Modifier::new()
+                .size(w, h)
+                .background(color, Shape::rounded(8.0))
+                .shared_element(
+                    scope.shared_content_state("hero"),
+                    BoundsTransform::spring(SpringSpec::bouncy()),
+                ),
+        );
+        ctx.end_node();
+    }
+
+    #[crate::composable]
+    fn spring_list_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
+        spring_hero_leaf(ctx, 120.0, 80.0, Color::RED, scope);
+    }
+
+    #[crate::composable]
+    fn spring_detail_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
+        gap_leaf(ctx, 400.0, 100.0);
+        spring_hero_leaf(ctx, 300.0, 160.0, Color::BLUE, scope);
+    }
+
+    /// App-loop step for the bouncy screens.
+    fn spring_frame(composer: &mut Composer, show: &State<bool>) {
+        let s = show.clone();
+        composer.compose(|ctx| {
+            SharedTransitionLayout::new().build(ctx, |ctx| {
+                let scope = current_shared_scope().expect("inside SharedTransitionLayout");
+                Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+                    if s.get() {
+                        spring_list_screen(ctx, &scope);
+                    } else {
+                        spring_detail_screen(ctx, &scope);
+                    }
+                });
+            });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        composer.poll_shared_flights();
+    }
+
+    fn spring_advance(composer: &mut Composer, show: &State<bool>) {
+        crate::animation::update_animations();
+        std::thread::sleep(std::time::Duration::from_millis(16));
+        spring_frame(composer, show);
+    }
+
+    #[test]
+    fn tier0_bouncy_spring_overshoot_renders_then_settles() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+
+        spring_frame(&mut composer, &show);
+        show.set(false);
+        spring_frame(&mut composer, &show);
+        assert_eq!(composer.shared_flights.len(), 1, "flight opened");
+
+        // The old `p >= 0.999` gate reaped the flight on first passage —
+        // before the overshoot peak — so no live frame ever exceeded 1.0.
+        let mut max_p = 0.0f32;
+        let mut overshoot_painted = false;
+        for _ in 0..400 {
+            if composer.shared_flights.is_empty() {
+                break;
+            }
+            let probe = composer.shared_flights.values().next().map(|a| {
+                let p = a.progress.peek();
+                let e = a.flight.end.expect("end resolved after first poll");
+                (p, a.start.lerp(&e, p))
+            });
+            if let Some((p, l)) = probe {
+                max_p = max_p.max(p);
+                // First live frame past the end: the target (alpha clamped
+                // to 1, source gone) paints the overshot rect — its center
+                // must read BLUE, proving paint follows the overshoot.
+                if p > 1.0 && !overshoot_painted {
+                    let mut surf = render_heads(&composer);
+                    let cx = (l.x + l.width / 2.0) as i32;
+                    let cy = (l.y + l.height / 2.0) as i32;
+                    let c = pixel_rgb(&mut surf, cx, cy);
+                    assert!(
+                        c.2 > 150 && c.0 < 120,
+                        "overshot rect paints the arrived target, got {c:?} at p={p}"
+                    );
+                    overshoot_painted = true;
+                }
+            }
+            spring_advance(&mut composer, &show);
+        }
+        assert!(max_p > 1.0, "bouncy spring overshoots past 1.0 while alive, got {max_p}");
+        assert!(overshoot_painted, "overshoot frames must render before settle");
+        assert!(composer.shared_flights.is_empty(), "flight settles after overshoot");
+        assert!(composer.transition_layer.is_empty(), "retained source freed");
+        // Settle lands exactly on the detail hero.
+        let marked = marked_indices(&composer);
+        assert_eq!(marked.len(), 1);
+        let (ex, ey) = node_center(&composer, marked[0]);
+        let mut surf = render_heads(&composer);
+        assert!(
+            close_enough(pixel_rgb(&mut surf, ex, ey), (0, 0, 255), 30),
+            "settled end state shows the detail hero"
+        );
+        crate::animation::clear_all_animations();
+    }
+
     #[test]
     fn tier0_flight_pivot_alignment_mid_flight() {
         let _g = lock_serial();
@@ -2223,6 +2703,154 @@ mod tier0_tests {
         crate::animation::clear_all_animations();
     }
 
+    /// Marked container with a plain child (container morphs must keep
+    /// their subtree hittable mid-flight — MAJOR #3).
+    #[crate::composable]
+    fn morph_parent_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope, w: &State<f32>) {
+        Column::new()
+            .modifier(
+                Modifier::new()
+                    .size(w, 80.0)
+                    .background(Color::GREEN, Shape::Rectangle)
+                    .shared_element(scope.shared_content_state("box"), BoundsTransform::default()),
+            )
+            .build(ctx, |ctx| {
+                gap_leaf(ctx, 50.0, 50.0);
+            });
+    }
+
+    fn morph_parent_compose(composer: &mut Composer, w: &State<f32>) {
+        let ww = w.clone();
+        composer.compose(|ctx| {
+            SharedTransitionLayout::new().build(ctx, |ctx| {
+                let scope = current_shared_scope().expect("inside SharedTransitionLayout");
+                Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+                    morph_parent_screen(ctx, &scope, &ww);
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn morph_container_child_hittable_mid_flight() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let w = State::new(120.0f32);
+
+        morph_parent_compose(&mut composer, &w);
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        composer.poll_shared_flights();
+        assert!(composer.shared_flights.is_empty(), "steady size opens nothing");
+
+        // Layout-only size change (no compose call at all).
+        w.set(300.0);
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        composer.poll_shared_flights();
+        assert_eq!(composer.shared_flights.len(), 1, "size delta opens a morph flight");
+
+        // Tap the plain child through the flight transform: at progress ~0
+        // the 300-wide layout is scaled 0.4x into the 120-wide lerped rect,
+        // so visual (10, 25) maps to layout (25, 25) — the gap child's heart.
+        let nodes = composer.arena_nodes();
+        let marked = marked_indices(&composer);
+        assert_eq!(marked.len(), 1);
+        let container = marked[0];
+        assert_eq!(
+            nodes[container].transition.as_ref().map(|t| t.role),
+            Some(TransitionRole::Morph),
+            "container carries the morph visual"
+        );
+        let child = nodes[container].children[0];
+        let root = composer.layout_root_idx().expect("root");
+        let path = hit_test_with_flights(nodes, root, composer.transition_roots(), 10.0, 25.0);
+        assert_eq!(
+            path.last().copied(),
+            Some(child),
+            "tap descends into the morphing container's child, got {path:?}"
+        );
+        crate::animation::clear_all_animations();
+    }
+
+    /// Keyed hero leaf (morph baselines key on (scope, key) — MINOR #5).
+    fn keyed_hero_leaf(
+        ctx: &mut ComposeCtx,
+        key: &str,
+        w: f32,
+        h: f32,
+        color: Color,
+        scope: &SharedTransitionScope,
+    ) {
+        let slot = ctx.next_key();
+        ctx.start_leaf(
+            slot,
+            Modifier::new()
+                .size(w, h)
+                .background(color, Shape::rounded(8.0))
+                .shared_element(scope.shared_content_state(key), BoundsTransform::default()),
+        );
+        ctx.end_node();
+    }
+
+    /// Data-driven key at ONE statement (same slot, different marker key —
+    /// morph baselines must key on (scope, key), MINOR #5).
+    #[crate::composable]
+    fn keyed_item_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope, use_a: &State<bool>) {
+        let (k, w, h, c) = if use_a.get() {
+            ("ka", 120.0, 80.0, Color::RED)
+        } else {
+            ("kb", 300.0, 160.0, Color::BLUE)
+        };
+        keyed_hero_leaf(ctx, k, w, h, c, scope);
+    }
+
+    fn keyed_frame(composer: &mut Composer, show: &State<bool>) {
+        let s = show.clone();
+        composer.compose(|ctx| {
+            SharedTransitionLayout::new().build(ctx, |ctx| {
+                let scope = current_shared_scope().expect("inside SharedTransitionLayout");
+                Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+                    keyed_item_screen(ctx, &scope, &s);
+                });
+            });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        composer.poll_shared_flights();
+    }
+
+    #[test]
+    fn morph_baseline_keys_on_endpoint_identity() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+
+        // Settle key "ka" (writes its baseline).
+        keyed_frame(&mut composer, &show);
+        keyed_frame(&mut composer, &show);
+        assert!(composer.shared_flights.is_empty());
+        let slot_a = composer.arena_nodes()[marked_indices(&composer)[0]].slot_key;
+
+        // Swap to a DIFFERENT key at the same call-site slot with a
+        // different size. Slot-keyed baselines would seed a spurious morph
+        // from "ka"'s rect; identity-keyed baselines start clean.
+        show.set(false);
+        keyed_frame(&mut composer, &show);
+        let slot_b = composer.arena_nodes()[marked_indices(&composer)[0]].slot_key;
+        assert_eq!(slot_a, slot_b, "same call-site slot reused across the key swap (test premise)");
+        assert!(
+            composer.shared_flights.is_empty(),
+            "key swap opens no morph flight"
+        );
+        for idx in marked_indices(&composer) {
+            assert!(
+                composer.arena_nodes()[idx].transition.is_none(),
+                "fresh key carries no morph visual"
+            );
+        }
+        crate::animation::clear_all_animations();
+    }
+
     #[test]
     fn remap_hit_identity_endpoints_miss_outside() {
         let vis = TransitionVisual {
@@ -2234,6 +2862,8 @@ mod tier0_tests {
             radius_to: [0.0; 4],
             clip: false,
             link_slot: None,
+            scroll: (0.0, 0.0),
+            flight: 0,
         };
         assert_eq!(
             vis.remap_hit(10.0, 10.0, 0.0, 0.0, 100.0, 50.0),
@@ -2283,10 +2913,14 @@ mod tier0_tests {
             Some(target_idx),
             "ghost/target-visual click routes into the live target subtree"
         );
-        assert_ne!(
+        // MAJOR #3: the legacy walk reaches the live target through its own
+        // remap too — no input blackout on transitioning endpoints (the old
+        // v1 skip deliberately murdered this; the ghost prefix above only
+        // adds detached-source routing on top).
+        assert_eq!(
             plain.last().copied(),
             Some(target_idx),
-            "legacy hit test does not route (documents the behavior delta)"
+            "plain walk reaches the live target via its own visual remap"
         );
         crate::animation::clear_all_animations();
     }

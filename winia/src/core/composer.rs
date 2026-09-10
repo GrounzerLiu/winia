@@ -1676,9 +1676,11 @@ pub struct Composer {
     pub(crate) prev_shared_endpoints: HashMap<(u64, String), u64>,
     /// Detached retained source roots (absolute coords, rendered after main tree).
     pub(crate) transition_layer: Vec<usize>,
-    /// Last-frame absolute bounds per live marked slot (Phase 3 same-screen
-    /// size-morph detection).
-    pub(crate) shared_last_bounds: HashMap<u64, SharedBounds>,
+    /// Last-frame absolute bounds per live marked endpoint (Phase 3
+    /// same-screen size-morph detection). Keyed by endpoint identity
+    /// (scope, key) — never by slot: slots are positional identities a new
+    /// key can reuse, which would seed a spurious morph from stale rects.
+    pub(crate) shared_last_bounds: HashMap<(u64, String), SharedBounds>,
     /// Stable per-Composer identity for cross-composer flight matching
     /// (Phase 4 Tier1: main tree ↔ overlays share (scope, key) but never slots).
     pub(crate) composer_id: u64,

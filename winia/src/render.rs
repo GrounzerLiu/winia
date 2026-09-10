@@ -662,11 +662,18 @@ fn render_pass1(
     // render-phase (translate/scale/alpha/clip), zero recomposition.
     // Backdrop blur snapshots AFTER the transform (whatever lies beneath the
     // visual position); backdrop-blur heroes are a documented limitation.
+    // Nested limitation: a transitioning descendant of a transitioning node
+    // compounds both transforms (no ancestor-flight guard) — do not put
+    // shared markers on descendants of shared markers.
     // bg/border/clip-element morphs consume `tf_radii` below (radii pairs in
     // layout space — pre-divided by the flight axis scales).
     let (tf_saved, tf_layered, tf_radii): (bool, bool, Option<[(f32, f32); 4]>) =
         if let Some(t) = node.transition.as_ref() {
-            let p = t.progress.clamp(0.0, 1.0);
+            // Unclamped progress: spring overshoot (t > 1 / t < 0) flies past
+            // the endpoint — the Compose spring look. Every consumer
+            // (lerp, radii, clip, hit) shares this single t; only opacity
+            // stays clamped (alpha()) and degenerate rects stay invisible.
+            let p = t.progress;
             let l = t.start.lerp(&t.end, p);
             let alpha = t.alpha();
             if alpha <= 0.001 || l.width <= 0.0 || l.height <= 0.0 {
@@ -674,9 +681,15 @@ fn render_pass1(
             }
             canvas.save();
             if t.clip {
-                canvas.clip_rrect(t.screen_rrect(), None, Some(true));
+                canvas.clip_rrect(t.canvas_rrect(), None, Some(true));
             }
-            canvas.translate((l.x, l.y));
+            // Ancestor scroll add-back (BLOCKER #1): the canvas carries
+            // translate(-S) from scrolled ancestors while `l` is
+            // scroll-corrected — painting at `l + S` lands exactly on the
+            // lerped rect (the frame hit test and ghost routing use).
+            // Pivot stays the pure layout origin: content is drawn at layout
+            // coords, so final(p) = l + S - S + s*(p - node_origin).
+            canvas.translate((l.x + t.scroll.0, l.y + t.scroll.1));
             let (sx, sy) = (
                 if w > 0.0 { l.width / w } else { 1.0 },
                 if h > 0.0 { l.height / h } else { 1.0 },

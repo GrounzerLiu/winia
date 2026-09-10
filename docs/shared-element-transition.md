@@ -246,9 +246,12 @@ ResizeMode::{ScaleToBounds(clip), RemeasureToBounds}
   child descent; detached source ghosts fraction-map into the target's natural
   rect with a root-anchored path for bubbling fidelity). Visual misses pass
   through. Remap is single-application per level (re-entering a transitioning
-  node would invert the transform twice).
+  node would invert the transform twice). Live endpoints (Target/Morph)
+  stay hittable mid-flight through their own remap — only Source-role
+  visuals skip input (their ghost routes to the live target instead).
 - **Same-screen bounds change** (no slot disappearance): automatic size-delta
-  detection per marked slot (scroll-immune: position-only moves never trigger).
+  detection per marked endpoint (scroll-immune: position-only moves never
+  trigger). Baselines key on endpoint identity (scope, key), not the slot.
 - **Nested scopes**: `CompositionLocal` stack, innermost wins; `scope_id`
   disambiguates keys.
 - **Text**: Scale tier vector-scales through the CTM (Skia stays crisp);
@@ -256,6 +259,15 @@ ResizeMode::{ScaleToBounds(clip), RemeasureToBounds}
   protect the paragraph cache (future optimization).
 - **Scroll during flight**: source frozen (correct — it left layout); flight
   ends are fixed at open (v1 — per-frame end tracking is future work).
+  In-tree endpoints paint scroll-exact: bounds are scroll-corrected window
+  coords while the render canvas carries translate(-S) from scrolled
+  ancestors, so each visual freezes its end's ancestor scroll sum at resolve
+  time and the flight transform adds it back (paint, clip and hit agree in
+  the lerped frame).
+- **Spring overshoot**: one unclamped flight-t drives rect, radii, clip and
+  hit together (only opacity stays clamped); completion waits for the engine
+  to release the progress state, so bouncy springs render their full
+  overshoot before teardown.
 - **Multiple pairs** (image + title): key-isolated in matching and flights.
 
 ## 9. Build phases
@@ -281,3 +293,10 @@ ResizeMode::{ScaleToBounds(clip), RemeasureToBounds}
 5. Mid-flight reversal opens a reverse flight through the same match path
    (stashed source × fresh counterpart — tested both directions); a reversal
    with no counterpart anywhere cancels atomically with no replacement.
+6. Tier1 ghosts paint but ignore taps (target lives in a peer arena the
+   single-arena hit search cannot see); the live target stays directly
+   hittable in its own composer.
+7. Overlay enter/exit animations are not folded into Tier1 visuals — the
+   flight leads/lags the panel transform while it animates (~200ms).
+8. No shared markers on descendants of shared markers (nested flights would
+   compound both transforms).
