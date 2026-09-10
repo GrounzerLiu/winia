@@ -739,7 +739,8 @@ mod tests {
             bounds_fx: None,
             elevated: false,
             remeasure: false,
-            radius_auto: false,
+            radius_from_auto: false,
+            radius_to_auto: false,
         };
         // Linear midpoint is exactly the component-wise lerp.
         assert_eq!(
@@ -824,7 +825,8 @@ mod tests {
             bounds_fx: fx,
             elevated: false,
             remeasure: false,
-            radius_auto: false,
+            radius_from_auto: false,
+            radius_to_auto: false,
         };
         let fade_in = VisibilityTransition::fade_in(TweenSpec::default());
         let fade_out = VisibilityTransition::fade_out(TweenSpec::default());
@@ -1024,14 +1026,16 @@ pub(crate) struct TransitionVisual {
     /// canvas carries no ancestor translate, so the bounds are already the
     /// absolute ones.
     pub elevated: bool,
+    /// Each END's corner kind (Compose percent vs fixed), captured at resolve
+    /// from that end's own marker. Percent corners are resolved against the
+    /// lerped rect before the two ends are mixed, so a `Circle` -> `Rectangle`
+    /// flight still fades its corners out while staying aligned end to end.
+    pub radius_from_auto: bool,
+    pub radius_to_auto: bool,
     /// This end is being re-measured at the animated size (Compose
     /// `RemeasureToBounds`): the content already has the animated size, so
     /// render must NOT scale it again and hit testing maps 1:1.
     pub remeasure: bool,
-    /// Corners came from a percent shape (Pill/Circle): evaluate them on the
-    /// box being painted rather than lerping the endpoint radii (Compose does
-    /// the same — `min(w, h)/2` is not linear in t).
-    pub radius_auto: bool,
 }
 
 impl TransitionVisual {
@@ -1073,10 +1077,20 @@ impl TransitionVisual {
         // the end value for one consistent flight-t (alpha stays clamped).
         // Floored at zero: shrinking radii would extrapolate negative under
         // overshoot, which Skia RRects reject.
+        //
+        // Compose interpolates RESOLVED corner sizes: a percent corner
+        // (`Circle`/`Pill`) is resolved against the box being painted — the
+        // lerped rect — before the two ends are mixed. Resolving it against the
+        // endpoint's own (frozen) box would freeze it; keeping the resolved
+        // percent as the end's value instead of mixing it would also diverge
+        // from the other end (a `Circle` -> `Rectangle` flight must still fade
+        // its corners out).
         let t = self.progress;
-        [0, 1, 2, 3].map(|i| {
-            (self.radius_from[i] + (self.radius_to[i] - self.radius_from[i]) * t).max(0.0)
-        })
+        let l = self.lerped();
+        let percent = [l.width.min(l.height) / 2.0; 4];
+        let from = if self.radius_from_auto { percent } else { self.radius_from };
+        let to = if self.radius_to_auto { percent } else { self.radius_to };
+        [0, 1, 2, 3].map(|i| (from[i] + (to[i] - from[i]) * t).max(0.0))
     }
 
     /// Clip rect at an explicit canvas offset — call BEFORE the flight
@@ -1138,18 +1152,10 @@ impl TransitionVisual {
         let l = self.lerped();
         let sx = if node_w > 0.0 { l.width / node_w } else { 1.0 }.max(1e-6);
         let sy = if node_h > 0.0 { l.height / node_h } else { 1.0 }.max(1e-6);
-        // Percent corners (Pill/Circle) are evaluated on the box the flight
-        // PAINTS into — the lerped rect — because Compose derives them from the
-        // animated bounds and `min(w,h)/2` is NOT linear in t (lerping the two
-        // endpoint radii under-rounds mid-flight: 40x120 -> 200x30 wanted 37.5
-        // at t=.5, the lerp gives 17.5). Evaluating them on `node_w/node_h`
-        // instead would freeze the corner for any end whose layout box does not
-        // move — the leaving ghost always, and any `ScaleToBounds` target.
-        let r = if self.radius_auto {
-            [l.width.min(l.height) / 2.0; 4]
-        } else {
-            self.radii()
-        };
+        // Percent corners (Pill/Circle) are resolved inside `radii()` against
+        // the lerped rect — each end first, then mixed by progress — so a plain
+        // `radii()` is already correct here.
+        let r = self.radii();
         [
             (r[0] / sx, r[0] / sy),
             (r[1] / sx, r[1] / sy),
@@ -1441,6 +1447,10 @@ pub(crate) struct ActiveFlight {
     pub bounds_fx: Option<(VisibilityTransition, VisibilityTransition)>,
     pub radius_from: [f32; 4],
     pub radius_to: [f32; 4],
+    /// Corner KIND of each end (Compose percent vs fixed), frozen at resolve —
+    /// see `TransitionVisual::radii`.
+    pub radius_from_auto: bool,
+    pub radius_to_auto: bool,
     pub clip: bool,
     /// Target-end `renderInOverlayDuringTransition`, frozen when the end
     /// resolves (from the target marker; `true` when the marker is gone).
@@ -1476,6 +1486,8 @@ pub(crate) struct PendingSource {
     /// Start bounds + radii in WINDOW coords.
     pub start: SharedBounds,
     pub radius_from: [f32; 4],
+    /// Corner kind of the leaving end (Compose percent vs fixed).
+    pub radius_from_auto: bool,
 }
 
 /// Exact last-frame absolute rect via upward parent walk. Valid only at
@@ -1843,6 +1855,11 @@ impl Composer {
                     src_idx,
                     start,
                     radius_from,
+                    radius_from_auto: self
+                        .arena
+                        .nodes
+                        .get(src_idx)
+                        .is_some_and(|n| shared_shape_radius_is_auto(&n.modifier)),
                 });
             }
         }
@@ -1944,6 +1961,14 @@ impl Composer {
                 bounds_fx: None,
                 radius_from,
                 radius_to: radius_from,
+                // Source kind is known now; the target's is filled at resolve
+                // (same moment as clip/resize/placeholder).
+                radius_from_auto: self
+                    .arena
+                    .nodes
+                    .get(src_idx)
+                    .is_some_and(|n| shared_shape_radius_is_auto(&n.modifier)),
+                radius_to_auto: false,
                 clip: false,
                 // Filled when the end resolves (AwaitingBounds poll).
                 target_in_overlay: true,
@@ -2198,6 +2223,10 @@ impl Composer {
                     // (the flight had no bounds yet), so this IS its resting
                     // size — the baseline the placeholder policies compare to.
                     a.target_size = Some(self.arena.nodes[tidx].measured_size);
+                    // Corner KIND of the target end (percent vs fixed): the two
+                    // ends are resolved separately and then mixed by progress.
+                    a.radius_to_auto =
+                        shared_shape_radius_is_auto(&self.arena.nodes[tidx].modifier);
                     let start = a.start;
                     let acts = a.flight.on_event(FlightEvent::BoundsReady { start, end });
                     (start, acts)
@@ -2264,6 +2293,8 @@ impl Composer {
                 a.placeholder,
                 a.target_size,
                 a.measure.clone(),
+                a.radius_from_auto,
+                a.radius_to_auto,
             )
         });
         let (
@@ -2285,6 +2316,8 @@ impl Composer {
             placeholder,
             target_size,
             measure_state,
+            radius_from_auto,
+            radius_to_auto,
         ) = match snapshot {
             Some(v) => v,
             None => return,
@@ -2318,7 +2351,8 @@ impl Composer {
                     elevated: true,
                     // Frozen ghost: no live layout to re-measure.
                     remeasure: false,
-                    radius_auto: shared_shape_radius_is_auto(&self.arena.nodes[idx].modifier),
+                    radius_from_auto,
+                    radius_to_auto,
                 });
             }
         }
@@ -2382,7 +2416,8 @@ impl Composer {
                         bounds_fx: fx,
                         elevated,
                         remeasure,
-                        radius_auto: shared_shape_radius_is_auto(&self.arena.nodes[tidx].modifier),
+                        radius_from_auto,
+                        radius_to_auto,
                     });
                     if elevated {
                         self.elevated_roots.push(tidx);
@@ -2603,6 +2638,8 @@ impl Composer {
                 a.placeholder,
                 a.target_size,
                 a.measure.clone(),
+                a.radius_from_auto,
+                a.radius_to_auto,
             )
         });
         let (
@@ -2624,6 +2661,8 @@ impl Composer {
             placeholder,
             target_size,
             measure_state,
+            radius_from_auto,
+            radius_to_auto,
         ) = match snapshot {
             Some(v) => v,
             None => return,
@@ -2648,7 +2687,8 @@ impl Composer {
                     // Detached leaving end: the layer is its only home.
                     elevated: true,
                     remeasure: false,
-                    radius_auto: shared_shape_radius_is_auto(&owner.arena.nodes[idx].modifier),
+                    radius_from_auto,
+                    radius_to_auto,
                 });
             }
         }
@@ -2691,7 +2731,8 @@ impl Composer {
                         bounds_fx: fx,
                         elevated: in_overlay,
                         remeasure,
-                        radius_auto: shared_shape_radius_is_auto(&peer.arena.nodes[tidx].modifier),
+                        radius_from_auto,
+                        radius_to_auto,
                     });
                     if in_overlay {
                         peer.elevated_roots.push(tidx);
@@ -2729,6 +2770,8 @@ impl Composer {
                 resize: ResizeMode,
                 placeholder: PlaceHolderSize,
                 target_size: crate::layout::node::Size,
+                /// Peer target's corner kind (Compose percent vs fixed).
+                radius_to_auto: bool,
             }
             let hit: Option<Hit> = (|| {
                 let peer = &all[peer_idx];
@@ -2847,6 +2890,7 @@ impl Composer {
                     resize: resize.clone(),
                     placeholder,
                     target_size: peer.arena.nodes[tidx].measured_size,
+                    radius_to_auto: shared_shape_radius_is_auto(&peer.arena.nodes[tidx].modifier),
                 })
             })();
             let Some(h) = hit else { continue };
@@ -2880,6 +2924,10 @@ impl Composer {
                     end_scroll: h.end_scroll,
                     radius_from: p.radius_from,
                     radius_to: h.radius_to,
+                    // Source kind was captured at stash time; the target's
+                    // comes from the peer marker (see `Hit`).
+                    radius_from_auto: p.radius_from_auto,
+                    radius_to_auto: h.radius_to_auto,
                     clip: h.clip,
                     path: h.path,
                     bounds_fx: h.bounds_fx,
@@ -3011,6 +3059,9 @@ impl Composer {
                 end_scroll: scroll,
                 radius_from,
                 radius_to,
+                // A morph has ONE node, so both ends share its corner kind.
+                radius_from_auto: shared_shape_radius_is_auto(&modifier),
+                radius_to_auto: shared_shape_radius_is_auto(&modifier),
                 clip,
                 path,
                 bounds_fx,
@@ -6076,6 +6127,120 @@ mod tier0_tests {
         crate::animation::clear_all_animations();
     }
 
+
+    /// Hero screen with an arbitrary shape (the demo flies a Circle in the list
+    /// to a Rectangle inside the detail container).
+    #[crate::composable]
+    fn shape_hero_screen(
+        ctx: &mut ComposeCtx,
+        scope: &SharedTransitionScope,
+        w: f32,
+        h: f32,
+        color: Color,
+        shape: Shape,
+    ) {
+        Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+            Column::new()
+                .modifier(
+                    Modifier::new()
+                        .size(w, h)
+                        .background(color, shape)
+                        .shared_bounds(
+                            scope.shared_content_state("hero"),
+                            VisibilityTransition::fade_in(TweenSpec::default()),
+                            VisibilityTransition::fade_out(TweenSpec::default()),
+                            BoundsTransform::default(),
+                            ResizeMode::ScaleToBounds { clip: false },
+                            PlaceHolderSize::JumpCut,
+                            PathMotion::Linear,
+                            0.0,
+                            true,
+                        ),
+                )
+                .build(ctx, |_| {});
+        });
+    }
+
+    #[crate::composable]
+    fn circle_to_rect_list(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
+        shape_hero_screen(ctx, scope, 150.0, 150.0, Color::RED, Shape::Circle);
+    }
+
+    #[crate::composable]
+    fn circle_to_rect_detail(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
+        shape_hero_screen(ctx, scope, 320.0, 170.0, Color::BLUE, Shape::Rectangle);
+    }
+
+    /// THE DEMO'S SHAPE PAIR: a percent corner (Circle) flying to a fixed one
+    /// (Rectangle). Both ends must paint the SAME radius at every progress — the
+    /// percent end is resolved against the lerped rect and then MIXED with the
+    /// other end by progress. Resolving it and returning it as-is keeps the
+    /// ghost on a big round corner while the target fades to a square, which is
+    /// what a user sees as "the corners no longer line up".
+    #[test]
+    fn percent_to_fixed_corners_stay_aligned_end_to_end() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+        let frame = |composer: &mut Composer| {
+            let s = show.clone();
+            composer.compose(|ctx| {
+                SharedTransitionLayout::new().build(ctx, |ctx| {
+                    let scope = current_shared_scope().expect("scope");
+                    if s.get() {
+                        circle_to_rect_list(ctx, &scope);
+                    } else {
+                        circle_to_rect_detail(ctx, &scope);
+                    }
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+            composer.poll_shared_flights();
+        };
+        frame(&mut composer);
+        show.set(false);
+        frame(&mut composer);
+
+        for p in [0.25f32, 0.5, 0.75] {
+            let fid = *composer.shared_flights.keys().next().expect("flight id");
+            composer
+                .shared_flights
+                .get_mut(&fid)
+                .expect("flight")
+                .progress
+                .set(p);
+            frame(&mut composer);
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+
+            let nodes = composer.arena_nodes();
+            let src = nodes
+                .iter()
+                .filter_map(|n| n.transition.as_ref())
+                .find(|t| t.role == TransitionRole::Source)
+                .expect("source visual");
+            let tgt = nodes
+                .iter()
+                .filter_map(|n| n.transition.as_ref())
+                .find(|t| t.role == TransitionRole::Target)
+                .expect("target visual");
+            let l = src.lerped();
+            let (from_r, to_r) = (src.radii()[0], tgt.radii()[0]);
+            // Percent end resolved on the lerped rect (min(l)/2), mixed by
+            // progress toward the rectangle's 0.
+            let want = (l.width.min(l.height) / 2.0) * (1.0 - p);
+            assert!(
+                (from_r - to_r).abs() <= 0.5,
+                "p={p}: both ends must paint the same corner (from={from_r}, to={to_r})"
+            );
+            assert!(
+                (to_r - want).abs() <= 1.0,
+                "p={p}: percent resolved on the lerped rect then mixed (got {to_r}, want {want})"
+            );
+        }
+        crate::animation::clear_all_animations();
+    }
+
     /// Bouncy hero leaf (spring overshoot must render past the end rect).
     fn spring_hero_leaf(
         ctx: &mut ComposeCtx,
@@ -7184,7 +7349,8 @@ mod tier0_tests {
             bounds_fx: None,
             elevated: false,
             remeasure: false,
-            radius_auto: false,
+            radius_from_auto: false,
+            radius_to_auto: false,
         };
         assert_eq!(
             vis.remap_hit(10.0, 10.0, 0.0, 0.0, 100.0, 50.0),
