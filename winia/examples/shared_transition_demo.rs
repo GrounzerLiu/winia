@@ -41,6 +41,7 @@ fn hero_demo(ctx: &mut ComposeCtx) {
                                             scope.shared_content_state("hero"),
                                             BoundsTransform::spring(SpringSpec::default()),
                                             PlaceHolderSize::JumpCut,
+                                            PathMotion::ArcBelow,
                                         ),
                                 )
                                 .build(ctx, |_| {});
@@ -65,6 +66,7 @@ fn hero_demo(ctx: &mut ComposeCtx) {
                                     scope.shared_content_state("hero"),
                                     BoundsTransform::spring(SpringSpec::default()),
                                     PlaceHolderSize::JumpCut,
+                                    PathMotion::ArcBelow,
                                 ),
                         )
                         .build(ctx, |_| {});

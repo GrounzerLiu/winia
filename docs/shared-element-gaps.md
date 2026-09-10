@@ -21,9 +21,10 @@
 
 ## P1 — small behavior additions
 
-- [ ] `PathMotion::ArcBelow` / `ArcAbove` — enums and marker fields exist;
-  both push sites hardcode `Linear`. Quadratic-bezier center offset in the
-  flight transform, zero layout impact.
+- [x] `PathMotion::ArcBelow` / `ArcAbove` — flight-level quadratic bezier
+  on the rect center (quarter-travel sag, endpoints exact, size linear);
+  `path` parameter on both markers, resolved from the target marker.
+  (Intentionally not Compose's per-keyframe `using ArcMode` shape.)
 - [ ] `zIndexInOverlay` — multiple pairs currently paint in arena order.
   Sort transition roots by z at render.
 - [ ] `enter` / `exit` on `shared_bounds()` — wire the existing

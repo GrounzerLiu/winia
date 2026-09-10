@@ -23,8 +23,8 @@
 
 | Method | Compose equivalent | Notes |
 |---|---|---|
-| `.shared_element(state, transform, placeholder)` | `Modifier.sharedElement(…)` | Same content on both ends — flies + crossfades; pass `PlaceHolderSize::JumpCut` (others degrade to it, logged, until implemented) |
-| `.shared_bounds(state, transform, resize, placeholder)` | `Modifier.sharedBounds(…)` | Different content — container morphs + crossfades |
+| `.shared_element(state, transform, placeholder, path)` | `Modifier.sharedElement(…)` | Same content on both ends — flies + crossfades; pass `PlaceHolderSize::JumpCut` (others degrade to it, logged, until implemented); `path` is `Linear` / `ArcBelow` / `ArcAbove` |
+| `.shared_bounds(state, transform, resize, placeholder)` | `Modifier.sharedBounds(…)` | Different content — container morphs + crossfades (`enter`/`exit` not yet: P1) |
 
 ### 1.3 Flight shaping (`BoundsTransform`)
 
@@ -48,7 +48,7 @@ forever — completion waits for engine release (see §4).
 | `PlaceHolderSize` | `JumpCut` | Implemented (layout snaps to end state immediately; the flying pair covers the pop) |
 | `PlaceHolderSize` | `ContentSize` / `AnimatedSize` | **Deferred** |
 | `PathMotion` | `Linear` | Implemented |
-| `PathMotion` | `ArcBelow` / `ArcAbove` | **Not wired** (both push sites hardcode `Linear`) |
+| `PathMotion` | `ArcBelow` / `ArcAbove` | Implemented — flight-level quadratic bezier on the rect center (quarter-travel sag, endpoints exact, size stays linear); resolved from the target marker. Differs from Compose's per-keyframe `using ArcMode` shape, same visual result |
 
 ## 2. Usage (three steps)
 
@@ -66,6 +66,7 @@ SharedTransitionLayout::new().build(ctx, |ctx| {
                             scope.shared_content_state("hero"),
                             BoundsTransform::spring(SpringSpec::bouncy()),
                             PlaceHolderSize::JumpCut,
+                            PathMotion::ArcBelow,
                         ),
                 )
                 .build(ctx, |_| {});

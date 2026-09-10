@@ -500,35 +500,42 @@ impl Modifier {
     /// this marker until Phase 2 wires registration at `start_node`.
     /// `placeholder` selects the layout-space contract; only `JumpCut` is
     /// implemented today (other values degrade to it with a log).
+    /// `path` selects the motion path; arcs bulge the rect center off the
+    /// straight line (Compose `ArcMode` equivalent — Winia applies it as a
+    /// flight-level quadratic bezier instead of Compose's per-keyframe
+    /// `using ArcMode`).
     pub fn shared_element(
         self,
         state: SharedContentState,
         transform: BoundsTransform,
         placeholder: PlaceHolderSize,
+        path: PathMotion,
     ) -> Self {
         self.push(ModifierElement::SharedTransition {
             scope_id: state.scope_id,
             key: state.key,
             kind: SharedKind::Element { placeholder },
             transform,
-            path: PathMotion::Linear,
+            path,
         })
     }
 
     /// Mark shared bounds (different content — container morphs + crossfades).
+    /// `path` selects the motion path, same as in [`shared_element`](Self::shared_element).
     pub fn shared_bounds(
         self,
         state: SharedContentState,
         transform: BoundsTransform,
         resize: ResizeMode,
         placeholder: PlaceHolderSize,
+        path: PathMotion,
     ) -> Self {
         self.push(ModifierElement::SharedTransition {
             scope_id: state.scope_id,
             key: state.key,
             kind: SharedKind::Bounds { resize, placeholder },
             transform,
-            path: PathMotion::Linear,
+            path,
         })
     }
 }
@@ -601,6 +608,7 @@ mod tests {
                 SharedContentState { scope_id: 1, key: "k".to_string() },
                 BoundsTransform::default(),
                 PlaceHolderSize::AnimatedSize,
+                PathMotion::Linear,
             );
         assert_eq!(
             find_shared_marker(&m).map(|x| x.kind),
@@ -622,6 +630,54 @@ mod tests {
             resize: ResizeMode::RemeasureToBounds,
             placeholder: PlaceHolderSize::ContentSize,
         }));
+    }
+
+    #[test]
+    fn arc_lerped_endpoints_midpoint_and_degenerate() {
+        // Start (0,0,100,100) → end (200,0,100,100): centers (50,50)→(250,50).
+        let mk = |path| TransitionVisual {
+            start: SharedBounds::new(0.0, 0.0, 100.0, 100.0),
+            end: SharedBounds::new(200.0, 0.0, 100.0, 100.0),
+            progress: 0.5,
+            role: TransitionRole::Target,
+            radius_from: [0.0; 4],
+            radius_to: [0.0; 4],
+            clip: false,
+            link_slot: None,
+            scroll: (0.0, 0.0),
+            flight: 0,
+            path,
+        };
+        // Linear midpoint is exactly the component-wise lerp.
+        assert_eq!(mk(PathMotion::Linear).lerped(), SharedBounds::new(100.0, 0.0, 100.0, 100.0));
+        // ArcBelow sags screen-down: center (150,75) → origin (100,25).
+        let below = mk(PathMotion::ArcBelow).lerped();
+        assert!(
+            (below.x - 100.0).abs() < 1e-3
+                && (below.y - 25.0).abs() < 1e-3
+                && (below.width - 100.0).abs() < 1e-3,
+            "below-arc midpoint sags down, got {below:?}"
+        );
+        // ArcAbove mirrors across the straight line.
+        let above = mk(PathMotion::ArcAbove).lerped();
+        assert!(
+            (above.x - 100.0).abs() < 1e-3 && (above.y + 25.0).abs() < 1e-3,
+            "above-arc midpoint bulges up, got {above:?}"
+        );
+        // Arc endpoints are exact (bezier interpolates).
+        let mut b0 = mk(PathMotion::ArcBelow);
+        b0.progress = 0.0;
+        assert_eq!(b0.lerped(), SharedBounds::new(0.0, 0.0, 100.0, 100.0));
+        let mut b1 = mk(PathMotion::ArcAbove);
+        b1.progress = 1.0;
+        assert_eq!(b1.lerped(), SharedBounds::new(200.0, 0.0, 100.0, 100.0));
+        // Degenerate (coincident centers) falls back to linear — no NaN.
+        let still = TransitionVisual {
+            start: SharedBounds::new(50.0, 50.0, 100.0, 100.0),
+            end: SharedBounds::new(0.0, 0.0, 200.0, 200.0),
+            ..mk(PathMotion::ArcBelow)
+        };
+        assert_eq!(still.lerped(), SharedBounds::new(25.0, 25.0, 150.0, 150.0));
     }
 
     #[test]
@@ -776,11 +832,31 @@ pub(crate) struct TransitionVisual {
     /// resurrect, and unconditional clearing would flicker one frame off the
     /// new flight's freshly written visual.
     pub flight: FlightId,
+    /// Motion path (copied from the flight at write time).
+    pub path: PathMotion,
 }
 
 impl TransitionVisual {
     pub(crate) fn lerped(&self) -> SharedBounds {
-        self.start.lerp(&self.end, self.progress)
+        let t = self.progress;
+        // Size always lerps linearly (Compose `ArcMode` bends the motion
+        // path only — deformation stays on the straight size ramp).
+        let w = self.start.width + (self.end.width - self.start.width) * t;
+        let h = self.start.height + (self.end.height - self.start.height) * t;
+        let (sx, sy) = (
+            self.start.x + self.start.width / 2.0,
+            self.start.y + self.start.height / 2.0,
+        );
+        let (ex, ey) = (
+            self.end.x + self.end.width / 2.0,
+            self.end.y + self.end.height / 2.0,
+        );
+        let (cx, cy) = match self.path {
+            PathMotion::Linear => (sx + (ex - sx) * t, sy + (ey - sy) * t),
+            PathMotion::ArcBelow => arc_center(sx, sy, ex, ey, t, 1.0),
+            PathMotion::ArcAbove => arc_center(sx, sy, ex, ey, t, -1.0),
+        };
+        SharedBounds::new(cx - w / 2.0, cy - h / 2.0, w, h)
     }
 
     pub(crate) fn alpha(&self) -> f32 {
@@ -873,6 +949,32 @@ impl TransitionVisual {
     }
 }
 
+/// Quadratic-bezier center between two points, bulging perpendicular to the
+/// travel direction. `sign > 0` bulges screen-down (`ArcBelow`), `< 0`
+/// screen-up (`ArcAbove`); the normal is oriented so the sign reads in
+/// screen space regardless of travel direction. Sag is a quarter of the
+/// travel distance (Compose-style visible arc, endpoints exact).
+/// Degenerate (coincident centers) falls back to linear — no NaN.
+fn arc_center(sx: f32, sy: f32, ex: f32, ey: f32, t: f32, sign: f32) -> (f32, f32) {
+    let (dx, dy) = (ex - sx, ey - sy);
+    let len = (dx * dx + dy * dy).sqrt();
+    if len < 1e-6 {
+        return (sx + dx * t, sy + dy * t);
+    }
+    let (mut nx, mut ny) = (-dy / len, dx / len);
+    if ny < 0.0 {
+        nx = -nx;
+        ny = -ny;
+    }
+    let sag = 0.25 * len * sign;
+    let (cx, cy) = ((sx + ex) / 2.0 + nx * sag, (sy + ey) / 2.0 + ny * sag);
+    let u = 1.0 - t;
+    (
+        u * u * sx + 2.0 * u * t * cx + t * t * ex,
+        u * u * sy + 2.0 * u * t * cy + t * t * ey,
+    )
+}
+
 pub(crate) fn rrect_vectors(pairs: [(f32, f32); 4]) -> [skia_safe::Vector; 4] {
     [
         skia_safe::Vector::new(pairs[0].0, pairs[0].1),
@@ -914,16 +1016,18 @@ pub(crate) struct SharedMarker {
     pub key: String,
     pub kind: SharedKind,
     pub transform: BoundsTransform,
+    pub path: PathMotion,
 }
 
 pub(crate) fn find_shared_marker(modifier: &Modifier) -> Option<SharedMarker> {
     modifier.elements().iter().find_map(|el| match el {
-        ModifierElement::SharedTransition { scope_id, key, kind, transform, .. } => {
+        ModifierElement::SharedTransition { scope_id, key, kind, transform, path } => {
             Some(SharedMarker {
                 scope_id: *scope_id,
                 key: key.clone(),
                 kind: kind.clone(),
                 transform: transform.clone(),
+                path: *path,
             })
         }
         _ => None,
@@ -976,6 +1080,9 @@ pub(crate) struct ActiveFlight {
     /// normal content instead of pinning to the window.
     pub start_scroll: (f32, f32),
     pub end_scroll: (f32, f32),
+    /// Motion path, resolved from the target marker when the end resolves
+    /// (same rule as the animation spec — one flight, one path).
+    pub path: PathMotion,
     pub radius_from: [f32; 4],
     pub radius_to: [f32; 4],
     pub clip: bool,
@@ -1317,6 +1424,8 @@ impl Composer {
                 start_scroll: (0.0, 0.0),
                 // Filled when the end resolves (AwaitingBounds poll).
                 end_scroll: (0.0, 0.0),
+                // Ditto for the motion path (target marker wins).
+                path: PathMotion::Linear,
                 radius_from,
                 radius_to: radius_from,
                 clip: false,
@@ -1434,9 +1543,9 @@ impl Composer {
                 let (ox, oy) = self.screen_origin;
                 let end = SharedBounds::new(tx + ox, ty + oy, tw, th);
                 let marker = find_shared_marker(&self.arena.nodes[tidx].modifier);
-                let (spec, clip) = match marker {
-                    Some(m) => (m.transform.spec.clone(), shared_clip_for_kind(&m.kind)),
-                    None => (BoundsTransform::default().spec, false),
+                let (spec, clip, path) = match marker {
+                    Some(m) => (m.transform.spec.clone(), shared_clip_for_kind(&m.kind), m.path),
+                    None => (BoundsTransform::default().spec, false, PathMotion::Linear),
                 };
                 let radius_to = {
                     let n = &self.arena.nodes[tidx];
@@ -1463,6 +1572,7 @@ impl Composer {
                     a.radius_to = radius_to;
                     a.end_scroll = end_scroll;
                     a.clip = clip;
+                    a.path = path;
                     let start = a.start;
                     let acts = a.flight.on_event(FlightEvent::BoundsReady { start, end });
                     (start, acts)
@@ -1522,12 +1632,14 @@ impl Composer {
                 a.source_idx,
                 a.start_scroll,
                 a.end_scroll,
+                a.path,
             )
         });
-        let (mut start, mut end, p, rf, rt, clip, sslot, tslot, sidx, sscroll, escroll) = match snapshot {
-            Some(v) => v,
-            None => return,
-        };
+        let (mut start, mut end, p, rf, rt, clip, sslot, tslot, sidx, sscroll, escroll, path) =
+            match snapshot {
+                Some(v) => v,
+                None => return,
+            };
         // Flight bounds are canonical window coords; visuals render in this
         // composer's canvas frame (main renders untranslated; overlays render
         // translated by screen_pos).
@@ -1550,6 +1662,7 @@ impl Composer {
                     link_slot: tslot,
                     scroll: sscroll,
                     flight: id,
+                    path,
                 });
             }
         }
@@ -1572,6 +1685,7 @@ impl Composer {
                         link_slot: None,
                         scroll: escroll,
                         flight: id,
+                        path,
                     });
                 }
             }
@@ -1771,12 +1885,14 @@ impl Composer {
                 a.source_idx,
                 a.start_scroll,
                 a.end_scroll,
+                a.path,
             )
         });
-        let (start, end, pr, rf, rt, clip, sslot, tslot, sidx, sscroll, escroll) = match snapshot {
-            Some(v) => v,
-            None => return,
-        };
+        let (start, end, pr, rf, rt, clip, sslot, tslot, sidx, sscroll, escroll, path) =
+            match snapshot {
+                Some(v) => v,
+                None => return,
+            };
         let (so, to) = (all[owner_idx].screen_origin, all[peer_idx].screen_origin);
         if let (Some(slot), Some(idx)) = (sslot, sidx) {
             let owner = &mut all[owner_idx];
@@ -1792,6 +1908,7 @@ impl Composer {
                     link_slot: tslot,
                     scroll: sscroll,
                     flight: id,
+                    path,
                 });
             }
         }
@@ -1810,6 +1927,7 @@ impl Composer {
                         link_slot: None,
                         scroll: escroll,
                         flight: id,
+                        path,
                     });
                 }
             }
@@ -1834,6 +1952,7 @@ impl Composer {
                 radius_to: [f32; 4],
                 spec: AnimationSpec,
                 clip: bool,
+                path: PathMotion,
                 peer_cid: u64,
             }
             let hit: Option<Hit> = (|| {
@@ -1869,9 +1988,9 @@ impl Composer {
                         find_shared_marker(&n.modifier),
                     )
                 };
-                let (spec, clip) = match marker {
-                    Some(m) => (m.transform.spec.clone(), shared_clip_for_kind(&m.kind)),
-                    None => (BoundsTransform::default().spec, false),
+                let (spec, clip, path) = match marker {
+                    Some(m) => (m.transform.spec.clone(), shared_clip_for_kind(&m.kind), m.path),
+                    None => (BoundsTransform::default().spec, false, PathMotion::Linear),
                 };
                 let radius_to = {
                     let n = &peer.arena.nodes[tidx];
@@ -1893,6 +2012,7 @@ impl Composer {
                     radius_to,
                     spec,
                     clip,
+                    path,
                     peer_cid: peer.composer_id,
                 })
             })();
@@ -1928,6 +2048,7 @@ impl Composer {
                     radius_from: p.radius_from,
                     radius_to: h.radius_to,
                     clip: h.clip,
+                    path: h.path,
                     source_cid: owner_cid,
                     target_cid: h.peer_cid,
                 },
@@ -1995,9 +2116,9 @@ impl Composer {
             None => return,
         };
         let marker = find_shared_marker(&self.arena.nodes[tidx].modifier);
-        let (spec, clip) = match marker {
-            Some(m) => (m.transform.spec.clone(), shared_clip_for_kind(&m.kind)),
-            None => (BoundsTransform::default().spec, false),
+        let (spec, clip, path) = match marker {
+            Some(m) => (m.transform.spec.clone(), shared_clip_for_kind(&m.kind), m.path),
+            None => (BoundsTransform::default().spec, false, PathMotion::Linear),
         };
         let (tw, th, modifier) = {
             let n = &self.arena.nodes[tidx];
@@ -2043,6 +2164,7 @@ impl Composer {
                 radius_from,
                 radius_to,
                 clip,
+                path,
                 source_cid: self.composer_id,
                 target_cid: self.composer_id,
             },
@@ -2163,7 +2285,7 @@ mod tier0_tests {
             Modifier::new()
                 .size(w, h)
                 .background(color, Shape::rounded(8.0))
-                .shared_element(scope.shared_content_state("hero"), BoundsTransform::default(), PlaceHolderSize::JumpCut),
+                .shared_element(scope.shared_content_state("hero"), BoundsTransform::default(), PlaceHolderSize::JumpCut, PathMotion::Linear),
         );
         ctx.end_node();
     }
@@ -2546,7 +2668,14 @@ mod tier0_tests {
     }
 
     /// Bouncy hero leaf (spring overshoot must render past the end rect).
-    fn spring_hero_leaf(ctx: &mut ComposeCtx, w: f32, h: f32, color: Color, scope: &SharedTransitionScope) {
+    fn spring_hero_leaf(
+        ctx: &mut ComposeCtx,
+        w: f32,
+        h: f32,
+        color: Color,
+        scope: &SharedTransitionScope,
+        path: PathMotion,
+    ) {
         let key = ctx.next_key();
         ctx.start_leaf(
             key,
@@ -2557,33 +2686,33 @@ mod tier0_tests {
                     scope.shared_content_state("hero"),
                     BoundsTransform::spring(SpringSpec::bouncy()),
                     PlaceHolderSize::JumpCut,
+                    path,
                 ),
         );
         ctx.end_node();
     }
 
     #[crate::composable]
-    fn spring_list_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
-        spring_hero_leaf(ctx, 120.0, 80.0, Color::RED, scope);
+    fn spring_list_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope, path: PathMotion) {
+        spring_hero_leaf(ctx, 120.0, 80.0, Color::RED, scope, path);
     }
 
     #[crate::composable]
-    fn spring_detail_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
+    fn spring_detail_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope, path: PathMotion) {
         gap_leaf(ctx, 400.0, 100.0);
-        spring_hero_leaf(ctx, 300.0, 160.0, Color::BLUE, scope);
+        spring_hero_leaf(ctx, 300.0, 160.0, Color::BLUE, scope, path);
     }
 
     /// App-loop step for the bouncy screens.
-    fn spring_frame(composer: &mut Composer, show: &State<bool>) {
-        let s = show.clone();
+    fn spring_frame(composer: &mut Composer, show: &State<bool>, path: PathMotion) {
         composer.compose(|ctx| {
             SharedTransitionLayout::new().build(ctx, |ctx| {
                 let scope = current_shared_scope().expect("inside SharedTransitionLayout");
                 Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
-                    if s.get() {
-                        spring_list_screen(ctx, &scope);
+                    if show.get() {
+                        spring_list_screen(ctx, &scope, path);
                     } else {
-                        spring_detail_screen(ctx, &scope);
+                        spring_detail_screen(ctx, &scope, path);
                     }
                 });
             });
@@ -2592,10 +2721,10 @@ mod tier0_tests {
         composer.poll_shared_flights();
     }
 
-    fn spring_advance(composer: &mut Composer, show: &State<bool>) {
+    fn spring_advance(composer: &mut Composer, show: &State<bool>, path: PathMotion) {
         crate::animation::update_animations();
         std::thread::sleep(std::time::Duration::from_millis(16));
-        spring_frame(composer, show);
+        spring_frame(composer, show, path);
     }
 
     #[test]
@@ -2605,9 +2734,9 @@ mod tier0_tests {
         let mut composer = Composer::new();
         let show = State::new(true);
 
-        spring_frame(&mut composer, &show);
+        spring_frame(&mut composer, &show, PathMotion::Linear);
         show.set(false);
-        spring_frame(&mut composer, &show);
+        spring_frame(&mut composer, &show, PathMotion::Linear);
         assert_eq!(composer.shared_flights.len(), 1, "flight opened");
 
         // The old `p >= 0.999` gate reaped the flight on first passage —
@@ -2640,13 +2769,88 @@ mod tier0_tests {
                     overshoot_painted = true;
                 }
             }
-            spring_advance(&mut composer, &show);
+            spring_advance(&mut composer, &show, PathMotion::Linear);
         }
         assert!(max_p > 1.0, "bouncy spring overshoots past 1.0 while alive, got {max_p}");
         assert!(overshoot_painted, "overshoot frames must render before settle");
         assert!(composer.shared_flights.is_empty(), "flight settles after overshoot");
         assert!(composer.transition_layer.is_empty(), "retained source freed");
         // Settle lands exactly on the detail hero.
+        let marked = marked_indices(&composer);
+        assert_eq!(marked.len(), 1);
+        let (ex, ey) = node_center(&composer, marked[0]);
+        let mut surf = render_heads(&composer);
+        assert!(
+            close_enough(pixel_rgb(&mut surf, ex, ey), (0, 0, 255), 30),
+            "settled end state shows the detail hero"
+        );
+        crate::animation::clear_all_animations();
+    }
+
+    #[test]
+    fn tier0_arc_flight_paints_off_the_straight_line() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+
+        spring_frame(&mut composer, &show, PathMotion::ArcBelow);
+        show.set(false);
+        spring_frame(&mut composer, &show, PathMotion::ArcBelow);
+        assert_eq!(composer.shared_flights.len(), 1, "arc flight opened");
+        {
+            let a = composer.shared_flights.values().next().expect("flight");
+            assert_eq!(a.path, PathMotion::ArcBelow, "path resolves from the target marker");
+        }
+
+        // Mid-flight: the arced rect must bend measurably off the straight
+        // lerp, and paint must follow it (not the straight rect).
+        let mut bent = false;
+        for _ in 0..200 {
+            if composer.shared_flights.is_empty() {
+                break;
+            }
+            let probe = composer.shared_flights.values().next().map(|a| {
+                let p = a.progress.peek();
+                let e = a.flight.end.expect("end resolved after first poll");
+                let straight = a.start.lerp(&e, p);
+                let nodes = composer.arena_nodes();
+                let tslot = a.flight.target_slot.expect("target");
+                let root = composer.layout_root_idx().expect("root");
+                let tidx = find_idx_by_slot(nodes, root, tslot).expect("target");
+                let arced = nodes[tidx].transition.as_ref().expect("visual").lerped();
+                (p, straight, arced)
+            });
+            if let Some((p, straight, arced)) = probe {
+                if p > 0.3 && p < 0.7 {
+                    let dev = ((arced.x - straight.x).powi(2) + (arced.y - straight.y).powi(2)).sqrt();
+                    assert!(
+                        dev > 10.0,
+                        "arc bends off the straight line, deviation {dev} at p={p}"
+                    );
+                    let mut surf = render_heads(&composer);
+                    let cx = (arced.x + arced.width / 2.0) as i32;
+                    let cy = (arced.y + arced.height / 2.0) as i32;
+                    let c = pixel_rgb(&mut surf, cx, cy);
+                    assert!(
+                        c.0 > 140 && c.2 > 50,
+                        "paint follows the arced rect, got {c:?} at p={p}"
+                    );
+                    bent = true;
+                    break;
+                }
+            }
+            spring_advance(&mut composer, &show, PathMotion::ArcBelow);
+        }
+        assert!(bent, "flight must pass through the bend window");
+
+        for _ in 0..200 {
+            if composer.shared_flights.is_empty() {
+                break;
+            }
+            spring_advance(&mut composer, &show, PathMotion::ArcBelow);
+        }
+        assert!(composer.shared_flights.is_empty(), "arc flight completes");
         let marked = marked_indices(&composer);
         assert_eq!(marked.len(), 1);
         let (ex, ey) = node_center(&composer, marked[0]);
@@ -2829,7 +3033,7 @@ mod tier0_tests {
             Modifier::new()
                 .size(w, 80.0)
                 .background(Color::GREEN, Shape::Rectangle)
-                .shared_element(scope.shared_content_state("morph"), BoundsTransform::default(), PlaceHolderSize::JumpCut),
+                .shared_element(scope.shared_content_state("morph"), BoundsTransform::default(), PlaceHolderSize::JumpCut, PathMotion::Linear),
         );
         ctx.end_node();
     }
@@ -2924,7 +3128,7 @@ mod tier0_tests {
                 Modifier::new()
                     .size(w, 80.0)
                     .background(Color::GREEN, Shape::Rectangle)
-                    .shared_element(scope.shared_content_state("box"), BoundsTransform::default(), PlaceHolderSize::JumpCut),
+                    .shared_element(scope.shared_content_state("box"), BoundsTransform::default(), PlaceHolderSize::JumpCut, PathMotion::Linear),
             )
             .build(ctx, |ctx| {
                 gap_leaf(ctx, 50.0, 50.0);
@@ -2999,7 +3203,7 @@ mod tier0_tests {
             Modifier::new()
                 .size(w, h)
                 .background(color, Shape::rounded(8.0))
-                .shared_element(scope.shared_content_state(key), BoundsTransform::default(), PlaceHolderSize::JumpCut),
+                .shared_element(scope.shared_content_state(key), BoundsTransform::default(), PlaceHolderSize::JumpCut, PathMotion::Linear),
         );
         ctx.end_node();
     }
@@ -3076,6 +3280,7 @@ mod tier0_tests {
             link_slot: None,
             scroll: (0.0, 0.0),
             flight: 0,
+            path: PathMotion::Linear,
         };
         assert_eq!(
             vis.remap_hit(10.0, 10.0, 0.0, 0.0, 100.0, 50.0),
@@ -3581,7 +3786,7 @@ mod tier0_tests {
             Modifier::new()
                 .size(w, h)
                 .background(color, Shape::Rectangle)
-                .shared_element(scope.shared_content_state(key), BoundsTransform::default(), PlaceHolderSize::JumpCut),
+                .shared_element(scope.shared_content_state(key), BoundsTransform::default(), PlaceHolderSize::JumpCut, PathMotion::Linear),
         );
         ctx.end_node();
     }
