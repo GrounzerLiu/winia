@@ -772,6 +772,11 @@ pub(crate) enum ModifierElement {
         /// default 0). Orders retained ghosts back-to-front; in-tree targets
         /// keep tree order (documented Tier 0 limitation).
         z_index: f32,
+        /// sharedBounds enter/exit (Compose `enter`/`exit` — target plays
+        /// enter, source plays exit; `None` on sharedElement markers, which
+        /// have no such parameters and always crossfade).
+        enter: Option<crate::ui::animated_visibility::VisibilityTransition>,
+        exit: Option<crate::ui::animated_visibility::VisibilityTransition>,
     },
 }
 
@@ -2359,7 +2364,7 @@ Self::DrawIcon { .. } => f.write_str("DrawIcon"),
             Self::BackdropBlur { radius } => f.debug_struct("BackdropBlur").field("radius", radius).finish(),
             Self::TextFieldVisual { variant, .. } => f.debug_struct("TextFieldVisual").field("variant", variant).finish(),
             Self::TextFieldOffsetMapping { .. } => f.write_str("TextFieldOffsetMapping"),
-            Self::SharedTransition { scope_id, key, kind, transform, path, z_index } => f
+            Self::SharedTransition { scope_id, key, kind, transform, path, z_index, enter, exit } => f
                 .debug_struct("SharedTransition")
                 .field("scope", scope_id)
                 .field("key", key)
@@ -2367,6 +2372,8 @@ Self::DrawIcon { .. } => f.write_str("DrawIcon"),
                 .field("transform", transform)
                 .field("path", path)
                 .field("z_index", z_index)
+                .field("has_enter", &enter.is_some())
+                .field("has_exit", &exit.is_some())
                 .finish(),
         }
     }

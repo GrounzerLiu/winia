@@ -28,6 +28,9 @@ use crate::core::composition_local::CompositionLocal;
 use crate::core::state::State;
 use crate::layout::node::{scroll_offset_for_node, LayoutNode};
 use crate::modifier::{Modifier, ModifierElement, Shape};
+use crate::ui::animated_visibility::{
+    ExpandFrom, ExpandFromH, SlideDirection, SlideOffset, VisibilityTransition,
+};
 
 // ═══════════════════════════════════════════════════════════
 // SharedBounds — exact animatable rect
@@ -520,15 +523,23 @@ impl Modifier {
             transform,
             path,
             z_index,
+            enter: None,
+            exit: None,
         })
     }
 
     /// Mark shared bounds (different content — container morphs + crossfades).
     /// `path` selects the motion path, same as in [`shared_element`](Self::shared_element).
     /// `z_index` orders retained ghosts back-to-front, same as above.
+    /// `enter` plays on the appearing end, `exit` on the disappearing end
+    /// (Compose `enter`/`exit` — fade channels claimed by these replace the
+    /// flight crossfade per-end; slide/scale/expand compose on top at flight
+    /// progress; Morph role skips both).
     pub fn shared_bounds(
         self,
         state: SharedContentState,
+        enter: VisibilityTransition,
+        exit: VisibilityTransition,
         transform: BoundsTransform,
         resize: ResizeMode,
         placeholder: PlaceHolderSize,
@@ -542,6 +553,8 @@ impl Modifier {
             transform,
             path,
             z_index,
+            enter: Some(enter),
+            exit: Some(exit),
         })
     }
 }
@@ -655,6 +668,7 @@ mod tests {
             scroll: (0.0, 0.0),
             flight: 0,
             path,
+            bounds_fx: None,
         };
         // Linear midpoint is exactly the component-wise lerp.
         assert_eq!(
@@ -720,6 +734,55 @@ mod tests {
         assert_eq!(flat(0.0, 0.0, 200.0, 0.0), SharedBounds::new(100.0, 0.0, 100.0, 100.0));
         assert_eq!(flat(0.0, 0.0, 0.0, 200.0), SharedBounds::new(0.0, 100.0, 100.0, 100.0));
         assert_eq!(flat(50.0, 50.0, 50.0, 50.0), SharedBounds::new(50.0, 50.0, 100.0, 100.0));
+    }
+
+    #[test]
+    fn bounds_alpha_matrix_claims_fade_channels() {
+        let mk = |role, fx: Option<(VisibilityTransition, VisibilityTransition)>| TransitionVisual {
+            start: SharedBounds::new(0.0, 0.0, 100.0, 100.0),
+            end: SharedBounds::new(200.0, 0.0, 100.0, 100.0),
+            progress: 0.25,
+            role,
+            radius_from: [0.0; 4],
+            radius_to: [0.0; 4],
+            clip: false,
+            link_slot: None,
+            scroll: (0.0, 0.0),
+            flight: 0,
+            path: PathMotion::Linear,
+            bounds_fx: fx,
+        };
+        let fade_in = VisibilityTransition::fade_in(TweenSpec::default());
+        let fade_out = VisibilityTransition::fade_out(TweenSpec::default());
+        let empty = VisibilityTransition::empty();
+        // Element: classic crossfade, always.
+        assert_eq!(mk(TransitionRole::Target, None).alpha(), 0.25);
+        assert_eq!(mk(TransitionRole::Source, None).alpha(), 0.75);
+        // Bounds + fade enter/exit: identical numbers (fade defaults claim
+        // the crossfade they already produce).
+        assert_eq!(
+            mk(TransitionRole::Target, Some((fade_in.clone(), fade_out.clone()))).alpha(),
+            0.25
+        );
+        assert_eq!(
+            mk(TransitionRole::Source, Some((fade_in.clone(), fade_out.clone()))).alpha(),
+            0.75
+        );
+        // Bounds + fade-less customs ride opaque (Compose rule).
+        assert_eq!(
+            mk(TransitionRole::Target, Some((empty.clone(), fade_out.clone()))).alpha(),
+            1.0
+        );
+        assert_eq!(
+            mk(TransitionRole::Source, Some((fade_in.clone(), empty.clone()))).alpha(),
+            1.0
+        );
+        // Morphs never touch opacity, pair or not.
+        assert_eq!(mk(TransitionRole::Morph, None).alpha(), 1.0);
+        assert_eq!(
+            mk(TransitionRole::Morph, Some((fade_in.clone(), fade_out.clone()))).alpha(),
+            1.0
+        );
     }
 
     #[test]
@@ -876,6 +939,8 @@ pub(crate) struct TransitionVisual {
     pub flight: FlightId,
     /// Motion path (copied from the flight at write time).
     pub path: PathMotion,
+    /// sharedBounds enter/exit pair (`None` for Element flights).
+    pub bounds_fx: Option<(VisibilityTransition, VisibilityTransition)>,
 }
 
 impl TransitionVisual {
@@ -884,11 +949,30 @@ impl TransitionVisual {
     }
 
     pub(crate) fn alpha(&self) -> f32 {
-        match self.role {
-            TransitionRole::Source => 1.0 - self.progress,
-            TransitionRole::Target => self.progress,
-            // Same-screen morph never touches opacity.
-            TransitionRole::Morph => 1.0,
+        match (&self.role, &self.bounds_fx) {
+            // sharedBounds: fade channels claimed by enter/exit — fade
+            // defaults reproduce the crossfade exactly; fade-less customs
+            // ride opaque (Compose rule). Morphs never disappear.
+            (TransitionRole::Target, Some((enter, _))) => {
+                if enter.fade {
+                    self.progress
+                } else {
+                    1.0
+                }
+            }
+            (TransitionRole::Source, Some((_, exit))) => {
+                if exit.fade {
+                    1.0 - self.progress
+                } else {
+                    1.0
+                }
+            }
+            _ => match self.role {
+                TransitionRole::Source => 1.0 - self.progress,
+                TransitionRole::Target => self.progress,
+                // Same-screen morph never touches opacity.
+                TransitionRole::Morph => 1.0,
+            },
         }
         .clamp(0.0, 1.0)
     }
@@ -1092,20 +1176,25 @@ pub(crate) struct SharedMarker {
     pub transform: BoundsTransform,
     pub path: PathMotion,
     pub z_index: f32,
+    /// sharedBounds enter/exit (`None` on sharedElement markers).
+    pub enter: Option<VisibilityTransition>,
+    pub exit: Option<VisibilityTransition>,
 }
 
 pub(crate) fn find_shared_marker(modifier: &Modifier) -> Option<SharedMarker> {
     modifier.elements().iter().find_map(|el| match el {
-        ModifierElement::SharedTransition { scope_id, key, kind, transform, path, z_index } => {
-            Some(SharedMarker {
-                scope_id: *scope_id,
-                key: key.clone(),
-                kind: kind.clone(),
-                transform: transform.clone(),
-                path: *path,
-                z_index: *z_index,
-            })
-        }
+        ModifierElement::SharedTransition {
+            scope_id, key, kind, transform, path, z_index, enter, exit,
+        } => Some(SharedMarker {
+            scope_id: *scope_id,
+            key: key.clone(),
+            kind: kind.clone(),
+            transform: transform.clone(),
+            path: *path,
+            z_index: *z_index,
+            enter: enter.clone(),
+            exit: exit.clone(),
+        }),
         _ => None,
     })
 }
@@ -1159,6 +1248,11 @@ pub(crate) struct ActiveFlight {
     /// Motion path, resolved from the target marker when the end resolves
     /// (same rule as the animation spec — one flight, one path).
     pub path: PathMotion,
+    /// sharedBounds enter/exit pair, resolved at end-resolve time (`None`
+    /// for Element flights, which always crossfade). Enter comes from the
+    /// target marker, exit from the source marker — each side declares its
+    /// own, like Compose.
+    pub bounds_fx: Option<(VisibilityTransition, VisibilityTransition)>,
     pub radius_from: [f32; 4],
     pub radius_to: [f32; 4],
     pub clip: bool,
@@ -1525,6 +1619,8 @@ impl Composer {
                 end_scroll: (0.0, 0.0),
                 // Ditto for the motion path (target marker wins).
                 path: PathMotion::Linear,
+                // Ditto for enter/exit (resolved below for Bounds flights).
+                bounds_fx: None,
                 radius_from,
                 radius_to: radius_from,
                 clip: false,
@@ -1642,9 +1738,32 @@ impl Composer {
                 let (ox, oy) = self.screen_origin;
                 let end = SharedBounds::new(tx + ox, ty + oy, tw, th);
                 let marker = find_shared_marker(&self.arena.nodes[tidx].modifier);
-                let (spec, clip, path) = match marker {
-                    Some(m) => (m.transform.spec.clone(), shared_clip_for_kind(&m.kind), m.path),
-                    None => (BoundsTransform::default().spec, false, PathMotion::Linear),
+                let (spec, clip, path, enter) = match marker {
+                    Some(m) => (
+                        m.transform.spec.clone(),
+                        shared_clip_for_kind(&m.kind),
+                        m.path,
+                        m.enter,
+                    ),
+                    None => (BoundsTransform::default().spec, false, PathMotion::Linear, None),
+                };
+                // Enter from the target marker, exit from the retained source
+                // marker — each side declares its own (Compose rule). Only
+                // Bounds flights carry the pair (Element always crossfades);
+                // a missing source exit falls back to fade-out (today's look).
+                let bounds_fx = match enter {
+                    Some(enter) => {
+                        let exit = self
+                            .shared_flights
+                            .get(&id)
+                            .and_then(|a| a.source_idx)
+                            .and_then(|sidx| self.arena.nodes.get(sidx))
+                            .and_then(|n| find_shared_marker(&n.modifier))
+                            .and_then(|m| m.exit)
+                            .unwrap_or_default();
+                        Some((enter, exit))
+                    }
+                    None => None,
                 };
                 let radius_to = {
                     let n = &self.arena.nodes[tidx];
@@ -1672,6 +1791,7 @@ impl Composer {
                     a.end_scroll = end_scroll;
                     a.clip = clip;
                     a.path = path;
+                    a.bounds_fx = bounds_fx;
                     let start = a.start;
                     let acts = a.flight.on_event(FlightEvent::BoundsReady { start, end });
                     (start, acts)
@@ -1732,9 +1852,10 @@ impl Composer {
                 a.start_scroll,
                 a.end_scroll,
                 a.path,
+                a.bounds_fx.clone(),
             )
         });
-        let (mut start, mut end, p, rf, rt, clip, sslot, tslot, sidx, sscroll, escroll, path) =
+        let (mut start, mut end, p, rf, rt, clip, sslot, tslot, sidx, sscroll, escroll, path, fx) =
             match snapshot {
                 Some(v) => v,
                 None => return,
@@ -1762,6 +1883,7 @@ impl Composer {
                     scroll: sscroll,
                     flight: id,
                     path,
+                    bounds_fx: fx.clone(),
                 });
             }
         }
@@ -1785,6 +1907,7 @@ impl Composer {
                         scroll: escroll,
                         flight: id,
                         path,
+                        bounds_fx: fx,
                     });
                 }
             }
@@ -1985,9 +2108,10 @@ impl Composer {
                 a.start_scroll,
                 a.end_scroll,
                 a.path,
+                a.bounds_fx.clone(),
             )
         });
-        let (start, end, pr, rf, rt, clip, sslot, tslot, sidx, sscroll, escroll, path) =
+        let (start, end, pr, rf, rt, clip, sslot, tslot, sidx, sscroll, escroll, path, fx) =
             match snapshot {
                 Some(v) => v,
                 None => return,
@@ -2008,6 +2132,7 @@ impl Composer {
                     scroll: sscroll,
                     flight: id,
                     path,
+                    bounds_fx: fx.clone(),
                 });
             }
         }
@@ -2027,6 +2152,7 @@ impl Composer {
                         scroll: escroll,
                         flight: id,
                         path,
+                        bounds_fx: fx,
                     });
                 }
             }
@@ -2052,6 +2178,7 @@ impl Composer {
                 spec: AnimationSpec,
                 clip: bool,
                 path: PathMotion,
+                bounds_fx: Option<(VisibilityTransition, VisibilityTransition)>,
                 peer_cid: u64,
             }
             let hit: Option<Hit> = (|| {
@@ -2087,9 +2214,14 @@ impl Composer {
                         find_shared_marker(&n.modifier),
                     )
                 };
-                let (spec, clip, path) = match marker {
-                    Some(m) => (m.transform.spec.clone(), shared_clip_for_kind(&m.kind), m.path),
-                    None => (BoundsTransform::default().spec, false, PathMotion::Linear),
+                let (spec, clip, path, enter) = match marker {
+                    Some(m) => (
+                        m.transform.spec.clone(),
+                        shared_clip_for_kind(&m.kind),
+                        m.path,
+                        m.enter,
+                    ),
+                    None => (BoundsTransform::default().spec, false, PathMotion::Linear, None),
                 };
                 let radius_to = {
                     let n = &peer.arena.nodes[tidx];
@@ -2104,6 +2236,21 @@ impl Composer {
                     .map(|(i, n)| (n.id, i))
                     .collect();
                 let end_scroll = ancestor_scroll_sum(&peer.arena.nodes, &peer_id_to_idx, tidx);
+                // Exit from the owner-side retained source marker (fade-out
+                // fallback when absent — same rule as Tier 0).
+                let bounds_fx = match enter {
+                    Some(enter) => {
+                        let exit = all[owner_idx]
+                            .arena
+                            .nodes
+                            .get(p.src_idx)
+                            .and_then(|n| find_shared_marker(&n.modifier))
+                            .and_then(|m| m.exit)
+                            .unwrap_or_default();
+                        Some((enter, exit))
+                    }
+                    None => None,
+                };
                 Some(Hit {
                     slot,
                     end: SharedBounds::new(lx + po_x, ly + po_y, tw, th),
@@ -2112,6 +2259,7 @@ impl Composer {
                     spec,
                     clip,
                     path,
+                    bounds_fx,
                     peer_cid: peer.composer_id,
                 })
             })();
@@ -2148,6 +2296,7 @@ impl Composer {
                     radius_to: h.radius_to,
                     clip: h.clip,
                     path: h.path,
+                    bounds_fx: h.bounds_fx,
                     source_cid: owner_cid,
                     target_cid: h.peer_cid,
                 },
@@ -2215,9 +2364,17 @@ impl Composer {
             None => return,
         };
         let marker = find_shared_marker(&self.arena.nodes[tidx].modifier);
-        let (spec, clip, path) = match marker {
-            Some(m) => (m.transform.spec.clone(), shared_clip_for_kind(&m.kind), m.path),
-            None => (BoundsTransform::default().spec, false, PathMotion::Linear),
+        let (spec, clip, path, bounds_fx) = match marker {
+            Some(m) => {
+                // Same node both ends — render ignores channels for Morph
+                // role anyway; stored for uniformity.
+                let fx = m
+                    .enter
+                    .clone()
+                    .map(|enter| (enter, m.exit.clone().unwrap_or_default()));
+                (m.transform.spec.clone(), shared_clip_for_kind(&m.kind), m.path, fx)
+            }
+            None => (BoundsTransform::default().spec, false, PathMotion::Linear, None),
         };
         let (tw, th, modifier) = {
             let n = &self.arena.nodes[tidx];
@@ -2264,6 +2421,7 @@ impl Composer {
                 radius_to,
                 clip,
                 path,
+                bounds_fx,
                 source_cid: self.composer_id,
                 target_cid: self.composer_id,
             },
@@ -3572,6 +3730,163 @@ mod tier0_tests {
         crate::animation::clear_all_animations();
     }
 
+    /// sharedBounds hero (tween flight; enter slides from above, exit
+    /// slides downward — both faded, Compose container-transform shape).
+    /// Slide distance 160px: at p≈0.5 the ends sit ±80px off the lerped
+    /// center (onscreen, non-overlapping — decisive probes).
+    fn bounds_hero_leaf(
+        ctx: &mut ComposeCtx,
+        w: f32,
+        h: f32,
+        color: Color,
+        scope: &SharedTransitionScope,
+    ) {
+        let key = ctx.next_key();
+        ctx.start_leaf(
+            key,
+            Modifier::new()
+                .size(w, h)
+                .background(color, Shape::rounded(8.0))
+                .shared_bounds(
+                    scope.shared_content_state("hero"),
+                    VisibilityTransition::slide_in_offset(
+                        SlideDirection::Up,
+                        SlideOffset::Fixed(160.0),
+                        TweenSpec::default(),
+                    )
+                    .with_fade(),
+                    VisibilityTransition::slide_out_offset(
+                        SlideDirection::Down,
+                        SlideOffset::Fixed(160.0),
+                        TweenSpec::default(),
+                    )
+                    .with_fade(),
+                    BoundsTransform::default(),
+                    ResizeMode::ScaleToBounds { clip: false },
+                    PlaceHolderSize::JumpCut,
+                    PathMotion::Linear,
+                    0.0,
+                ),
+        );
+        ctx.end_node();
+    }
+
+    #[crate::composable]
+    fn bounds_list_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
+        bounds_hero_leaf(ctx, 120.0, 80.0, Color::RED, scope);
+    }
+
+    #[crate::composable]
+    fn bounds_detail_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
+        gap_leaf(ctx, 400.0, 100.0);
+        bounds_hero_leaf(ctx, 300.0, 160.0, Color::BLUE, scope);
+    }
+
+    fn bounds_frame(composer: &mut Composer, show: &State<bool>) {
+        let s = show.clone();
+        composer.compose(|ctx| {
+            SharedTransitionLayout::new().build(ctx, |ctx| {
+                let scope = current_shared_scope().expect("inside SharedTransitionLayout");
+                Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+                    if s.get() {
+                        bounds_list_screen(ctx, &scope);
+                    } else {
+                        bounds_detail_screen(ctx, &scope);
+                    }
+                });
+            });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        composer.poll_shared_flights();
+    }
+
+    fn bounds_advance(composer: &mut Composer, show: &State<bool>) {
+        crate::animation::update_animations();
+        std::thread::sleep(std::time::Duration::from_millis(16));
+        bounds_frame(composer, show);
+    }
+
+    #[test]
+    fn tier0_shared_bounds_enter_exit_slide_with_flight() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+
+        bounds_frame(&mut composer, &show);
+        show.set(false);
+        bounds_frame(&mut composer, &show);
+        assert_eq!(composer.shared_flights.len(), 1, "bounds flight opened");
+        {
+            let a = composer.shared_flights.values().next().expect("flight");
+            let (enter, exit) = a.bounds_fx.clone().expect("bounds pair carried");
+            assert!(enter.fade && exit.fade, "test pair is slide+fade");
+            assert!(enter.slide.is_some() && exit.slide.is_some());
+        }
+
+        // Tween-linear flight: at p≈0.5 the target sits 80px above the
+        // lerped center (slide-in from Up) and the ghost 80px below it
+        // (slide-out Down) — three decisive probes, no overlap.
+        let mut slid = false;
+        for _ in 0..200 {
+            if composer.shared_flights.is_empty() {
+                break;
+            }
+            let probe = composer.shared_flights.values().next().map(|a| {
+                let p = a.progress.peek();
+                let e = a.flight.end.expect("end resolved after first poll");
+                let l = a.start.lerp(&e, p);
+                ((l.x + l.width / 2.0) as i32, (l.y + l.height / 2.0) as i32, p)
+            });
+            if let Some((cx, cy, p)) = probe {
+                if p > 0.45 && p < 0.55 {
+                    // Target paint (faded blue) 80px above the lerped center.
+                    let mut surf = render_heads(&composer);
+                    let up = pixel_rgb(&mut surf, cx, cy - 80);
+                    assert!(
+                        up.2 > 150 && up.0 < 150,
+                        "enter slide lifts target paint above, got {up:?} at p={p}"
+                    );
+                    // Ghost paint (faded red) 80px below it.
+                    let mut surf2 = render_heads(&composer);
+                    let down = pixel_rgb(&mut surf2, cx, cy + 80);
+                    assert!(
+                        down.0 > 200 && down.2 < 200,
+                        "exit slide drops ghost paint below, got {down:?} at p={p}"
+                    );
+                    // The lerped center itself is background (both moved away).
+                    let mut surf3 = render_heads(&composer);
+                    let mid = pixel_rgb(&mut surf3, cx, cy);
+                    assert!(
+                        close_enough(mid, (255, 255, 255), 40),
+                        "lerped center vacated by both slides, got {mid:?} at p={p}"
+                    );
+                    slid = true;
+                    break;
+                }
+            }
+            bounds_advance(&mut composer, &show);
+        }
+        assert!(slid, "flight must pass through the slide window");
+
+        for _ in 0..200 {
+            if composer.shared_flights.is_empty() {
+                break;
+            }
+            bounds_advance(&mut composer, &show);
+        }
+        assert!(composer.shared_flights.is_empty(), "bounds flight completes");
+        let marked = marked_indices(&composer);
+        assert_eq!(marked.len(), 1);
+        let (ex, ey) = node_center(&composer, marked[0]);
+        let mut surf = render_heads(&composer);
+        assert!(
+            close_enough(pixel_rgb(&mut surf, ex, ey), (0, 0, 255), 30),
+            "settled end state shows the detail hero"
+        );
+        crate::animation::clear_all_animations();
+    }
+
     #[test]
     fn remap_hit_identity_endpoints_miss_outside() {
         let vis = TransitionVisual {
@@ -3586,6 +3901,7 @@ mod tier0_tests {
             scroll: (0.0, 0.0),
             flight: 0,
             path: PathMotion::Linear,
+            bounds_fx: None,
         };
         assert_eq!(
             vis.remap_hit(10.0, 10.0, 0.0, 0.0, 100.0, 50.0),

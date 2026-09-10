@@ -107,6 +107,23 @@ pub struct VisibilityTransition {
 }
 
 impl VisibilityTransition {
+    /// No-op transition (all channels off — slide/scale-only customs without
+    /// fade, or sharedBounds endpoints that ride the flight opaquely).
+    pub fn empty() -> Self {
+        Self {
+            fade: false,
+            slide: None,
+            expand: false,
+            expand_from: ExpandFrom::Top,
+            expand_h: false,
+            expand_from_h: ExpandFromH::Start,
+            scale: false,
+            scale_from: 0.8,
+            transform_origin: (0.5, 0.5),
+            spec: AnimationSpec::Tween(Default::default()),
+        }
+    }
+
     fn base(spec: AnimationSpec) -> Self {
         Self {
             fade: false,

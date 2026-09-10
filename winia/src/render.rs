@@ -8,7 +8,9 @@ use crate::debug_log;
 use crate::layout::LayoutDirection;
 use crate::layout::node::LayoutNode;
 use crate::modifier::ModifierElement;
+use crate::ui::animated_visibility::{ExpandFrom, ExpandFromH, SlideDirection, SlideOffset};
 use crate::ui::icon::{DecodedIcon, IconSource, IconSpec, decoded_icon};
+use crate::ui::shared_transition::TransitionRole;
 use skia_safe::{BlendMode, Canvas, Color4f, IRect, Paint, RRect, Rect, SamplingOptions};
 use skia_safe::sampling_options::{FilterMode, MipmapMode};
 use skia_safe::image_filters;
@@ -681,7 +683,15 @@ fn render_pass1(
                 return;
             }
             canvas.save();
-            if t.clip {
+            // Expand wipes in from the edge — force the lerped-bounds clip
+            // even when the marker asked for none (else content overflows).
+            // Morphs never run channels (same content, no appear/disappear).
+            let fx_clip = match (&t.role, t.bounds_fx.as_ref()) {
+                (TransitionRole::Morph, _) | (_, None) => false,
+                (TransitionRole::Target, Some((enter, _))) => enter.expand || enter.expand_h,
+                (TransitionRole::Source, Some((_, exit))) => exit.expand || exit.expand_h,
+            };
+            if t.clip || fx_clip {
                 canvas.clip_rrect(t.canvas_rrect(), None, Some(true));
             }
             // Ancestor scroll add-back (BLOCKER #1): the canvas carries
@@ -691,6 +701,75 @@ fn render_pass1(
             // Pivot stays the pure layout origin: content is drawn at layout
             // coords, so final(p) = l + S - S + s*(p - node_origin).
             canvas.translate((l.x + t.scroll.0, l.y + t.scroll.1));
+            // sharedBounds enter/exit channels, evaluated at appearance
+            // amount q (target appears with p, source disappears with 1-p).
+            // Slide offsets, scale k and expand (≈ scale-about-edge; layout
+            // followers already sit at end state under JumpCut, so expand
+            // reads as scale+clip). Element flights and morphs skip.
+            // ORDER: channels live in DEVICE space (right after the flight
+            // translate, before the flight scale) — appending them after
+            // scale would multiply offsets by the axis scales (which differ
+            // per end: the ghost grows while the target shrinks).
+            if let Some((enter, exit)) = t.bounds_fx.as_ref() {
+                let (cfg, q) = match t.role {
+                    TransitionRole::Target => (enter, t.progress),
+                    TransitionRole::Source => (exit, 1.0 - t.progress),
+                    TransitionRole::Morph => (enter, 1.0),
+                };
+                if !matches!(t.role, TransitionRole::Morph) {
+                    if let Some((dir, off)) = cfg.slide {
+                        let full = match dir {
+                            SlideDirection::Left | SlideDirection::Right => l.width,
+                            SlideDirection::Up | SlideDirection::Down => l.height,
+                        };
+                        let dist = match off {
+                            SlideOffset::Fixed(px) => px,
+                            SlideOffset::Fraction(f) => f * full,
+                        };
+                        let o = (1.0 - q) * dist;
+                        let (ox, oy) = match dir {
+                            SlideDirection::Left => (-o, 0.0),
+                            SlideDirection::Right => (o, 0.0),
+                            SlideDirection::Up => (0.0, -o),
+                            SlideDirection::Down => (0.0, o),
+                        };
+                        canvas.translate((ox, oy));
+                    }
+                    // Scale pivot is RELATIVE to the lerped origin (this block
+                    // sits before the flight scale — absolute device pivots
+                    // would be scaled along; same trap as the slide above).
+                    let mut kx = 1.0f32;
+                    let mut ky = 1.0f32;
+                    let mut px = l.width * cfg.transform_origin.0;
+                    let mut py = l.height * cfg.transform_origin.1;
+                    if cfg.scale {
+                        let k = cfg.scale_from + (1.0 - cfg.scale_from) * q;
+                        kx *= k;
+                        ky *= k;
+                    }
+                    if cfg.expand {
+                        ky *= q;
+                        px = l.width * 0.5;
+                        py = match cfg.expand_from {
+                            ExpandFrom::Top => 0.0,
+                            ExpandFrom::Bottom => l.height,
+                        };
+                    }
+                    if cfg.expand_h {
+                        kx *= q;
+                        px = match cfg.expand_from_h {
+                            ExpandFromH::Start => 0.0,
+                            ExpandFromH::End => l.width,
+                        };
+                        py = l.height * 0.5;
+                    }
+                    if (kx - 1.0).abs() > 1e-6 || (ky - 1.0).abs() > 1e-6 {
+                        canvas.translate((px, py));
+                        canvas.scale((kx, ky));
+                        canvas.translate((-px, -py));
+                    }
+                }
+            }
             let (sx, sy) = (
                 if w > 0.0 { l.width / w } else { 1.0 },
                 if h > 0.0 { l.height / h } else { 1.0 },
