@@ -1,10 +1,10 @@
 //! Shared element transition hero demo: list ↔ detail morph.
 //!
 //! Deliberately large deltas on every axis so the flight is unmistakable:
-//! list hero is narrow/tall at top-left (140x180 red, radius 8), detail hero
-//! is wide/flat lower-right (320x170 blue, radius 24). Position, size AND
-//! aspect ratio all morph with a spring, crossfading 1→0 / 0→1.
-//! Run: `cargo run -p winia --example shared_transition_demo`
+//! list hero is a red circle at top-left (150x150, radius 75), detail hero is
+//! a sharp blue rectangle lower-right (320x170, radius 0). Position, size,
+//! aspect ratio AND corner radii all morph with a spring, crossfading 1→0 /
+//! 0→1. Run: `cargo run -p winia --example shared_transition_demo`
 
 use letclone::clone;
 use winia::animation::SpringSpec;
@@ -36,7 +36,7 @@ fn hero_demo(ctx: &mut ComposeCtx) {
                                 .modifier(
                                     Modifier::new()
                                         .size(320.0, 170.0)
-                                        .background(Color::BLUE, Shape::rounded(24.0))
+                                        .background(Color::BLUE, Shape::Rectangle)
                                         .shared_element(
                                             scope.shared_content_state("hero"),
                                             BoundsTransform::spring(SpringSpec::default()),
@@ -58,8 +58,8 @@ fn hero_demo(ctx: &mut ComposeCtx) {
                     Column::new()
                         .modifier(
                             Modifier::new()
-                                .size(140.0, 180.0)
-                                .background(Color::RED, Shape::rounded(8.0))
+                                .size(150.0, 150.0)
+                                .background(Color::RED, Shape::Circle)
                                 .shared_element(
                                     scope.shared_content_state("hero"),
                                     BoundsTransform::spring(SpringSpec::default()),
