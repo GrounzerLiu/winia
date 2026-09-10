@@ -778,8 +778,15 @@ fn hit_through_elevated(
         // CONTENT box: the flight scales (or re-lays-out) the content into the
         // lerped rect, so the inverse mapping must use that box — the
         // placeholder size the parent was told lives in `measured_size`.
-        let cb = node.content_box();
-        (cb.width, cb.height)
+        // A RE-MEASURED end is painted 1:1 on the lerped rect (render skips the
+        // scale there, because the content box trails `lerped()` by one poll),
+        // so its inverse is the identity.
+        if t.remeasure {
+            (l.width, l.height)
+        } else {
+            let cb = node.content_box();
+            (cb.width, cb.height)
+        }
     };
     let (lx, ly) = t.remap_hit(x, y, tb.x, tb.y, w, h)?;
     // The endpoint's OWN viewport clamp still applies — only ancestors are
@@ -839,12 +846,19 @@ fn hit_test_recursive(
     // through (v1 skip behavior).
     let (x, y) = match node.transition.as_ref() {
         Some(t) => {
-            // The inverse flight transform maps through the CONTENT box — the
-            // box the flight scales or re-lays-out. Using the reported
-            // placeholder size would misplace child descent whenever the two
-            // differ (Compose `PlaceHolderSize`).
-            let cb = node.content_box();
-            match t.remap_hit(x, y, nx, ny, cb.width, cb.height) {
+            // The inverse flight transform maps through the box the flight
+            // PAINTED: a re-measured end is drawn 1:1 on the lerped rect (render
+            // skips the scale), everything else through its content box. Using
+            // the reported placeholder size would misplace child descent
+            // whenever the two differ (Compose `PlaceHolderSize`).
+            let (mw, mh) = if t.remeasure {
+                let l = t.lerped();
+                (l.width, l.height)
+            } else {
+                let cb = node.content_box();
+                (cb.width, cb.height)
+            };
+            match t.remap_hit(x, y, nx, ny, mw, mh) {
                 Some(p) => p,
                 None => return false,
             }

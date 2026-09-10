@@ -840,15 +840,14 @@ fn render_pass1(
                     }
                 }
             }
-            // Scale the content box into the lerped rect. With
-            // `RemeasureToBounds` the content box IS the animated rect, so this
-            // yields 1 and the re-laid-out content lands as-is; with
-            // `ScaleToBounds` it is the natural size, so the content scales
-            // even while the placeholder reports a different size to the parent.
-            let (sx, sy) = (
-                if w > 0.0 { l.width / w } else { 1.0 },
-                if h > 0.0 { l.height / h } else { 1.0 },
-            );
+            // Scale the content box into the lerped rect. `paint_scale` owns the
+            // rule (and is unit-tested): a RE-MEASURED end must not scale at all
+            // — its content was already laid out at the animated size, and the
+            // box trails `lerped()` by one poll (writers run after layout), so
+            // scaling by `l/box` would stretch the freshly re-flowed content by
+            // the frame delta (measured 1.22-1.29x in the real app loop).
+            // Everything else scales its content box into the lerped rect.
+            let (sx, sy) = t.paint_scale(w, h);
             canvas.scale((sx, sy));
             // Scale about the lerped origin (not the canvas origin): content
             // drawn at layout coords must land on the lerped rect, i.e.
@@ -862,7 +861,10 @@ fn render_pass1(
                 canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default().paint(&paint));
                 layered = true;
             }
-            (true, layered, Some(t.radii_pairs(w, h)))
+            (true, layered, Some(t.radii_pairs(
+                if t.remeasure { l.width } else { w },
+                if t.remeasure { l.height } else { h },
+            )))
         } else {
             (false, false, None)
         };

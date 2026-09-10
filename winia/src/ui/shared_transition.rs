@@ -1147,6 +1147,22 @@ impl TransitionVisual {
     }
 
     /// Layout-space radii pairs for bg/border/clip-element overrides (drawn
+    /// The scale the render applies to this end's content box. `RemeasureToBounds`
+    /// must NOT scale: the content was already laid out at the animated size, and
+    /// that box trails `lerped()` by one poll (writers run after layout), so
+    /// scaling by `l/box` stretches the freshly re-flowed content by the frame
+    /// delta instead of leaving it re-laid-out.
+    pub(crate) fn paint_scale(&self, box_w: f32, box_h: f32) -> (f32, f32) {
+        if self.remeasure {
+            return (1.0, 1.0);
+        }
+        let l = self.lerped();
+        (
+            if box_w > 0.0 { l.width / box_w } else { 1.0 },
+            if box_h > 0.0 { l.height / box_h } else { 1.0 },
+        )
+    }
+
     /// UNDER the flight transform — screen radii pre-divided by axis scales).
     pub(crate) fn radii_pairs(&self, node_w: f32, node_h: f32) -> [(f32, f32); 4] {
         let l = self.lerped();
@@ -6239,6 +6255,55 @@ mod tier0_tests {
             );
         }
         crate::animation::clear_all_animations();
+    }
+
+    /// A RE-MEASURED end must not be scaled by the flight. The layout override is
+    /// written after layout, so `content_box()` always trails `lerped()` by one
+    /// poll; scaling by `l/box` therefore stretches the freshly re-flowed content
+    /// by the frame delta (measured 1.22-1.29x in the real app loop) instead of
+    /// leaving it re-laid-out — the exact opposite of what `RemeasureToBounds`
+    /// promises. The scale rule lives in `paint_scale`, which render calls, so
+    /// this pins the real path.
+    #[test]
+    fn remeasure_end_is_never_scaled_by_the_frame_delta() {
+        use crate::ui::shared_transition::{SharedBounds, TransitionRole, TransitionVisual};
+        let mk = |remeasure: bool| TransitionVisual {
+            start: SharedBounds::new(0.0, 0.0, 150.0, 150.0),
+            end: SharedBounds::new(0.0, 0.0, 320.0, 170.0),
+            progress: 0.25,
+            role: TransitionRole::Target,
+            radius_from: [0.0; 4],
+            radius_to: [0.0; 4],
+            radius_from_auto: false,
+            radius_to_auto: false,
+            clip: false,
+            link_slot: None,
+            scroll: (0.0, 0.0),
+            flight: 1,
+            path: PathMotion::Linear,
+            bounds_fx: None,
+            elevated: false,
+            remeasure,
+        };
+        // The box the layout actually used is the PREVIOUS poll's animated size.
+        let (box_w, box_h) = (150.0, 150.0);
+        let remeasured = mk(true);
+        assert_eq!(
+            remeasured.paint_scale(box_w, box_h),
+            (1.0, 1.0),
+            "a re-measured end is drawn 1:1 on the lerped rect"
+        );
+        let lerped = remeasured.lerped();
+        assert!(
+            (lerped.width - box_w).abs() > 1.0,
+            "…and the box really does trail the lerped rect ({lerped:?} vs {box_w}x{box_h})"
+        );
+        // The scaled mode keeps scaling its (natural) box into the lerped rect.
+        let (sx, sy) = mk(false).paint_scale(300.0, 200.0);
+        assert!(
+            (sx - lerped.width / 300.0).abs() <= 1e-6 && (sy - lerped.height / 200.0).abs() <= 1e-6,
+            "ScaleToBounds still scales its content box (got {sx},{sy})"
+        );
     }
 
     /// Bouncy hero leaf (spring overshoot must render past the end rect).
