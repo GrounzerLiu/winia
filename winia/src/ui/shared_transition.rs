@@ -5547,6 +5547,149 @@ mod tier0_tests {
         crate::animation::clear_all_animations();
     }
 
+    /// Stacked marked block: ten 20px bands make the hit descent observable
+    /// (which band a tap lands on tells us the local mapping exactly).
+    #[crate::composable]
+    fn stacked_marked_block(
+        ctx: &mut ComposeCtx,
+        scope: &SharedTransitionScope,
+        w: f32,
+        h: f32,
+        resize: ResizeMode,
+        placeholder: PlaceHolderSize,
+    ) {
+        Column::new()
+            .modifier(
+                Modifier::new()
+                    .size(w, h)
+                    .background(Color::RED, Shape::Rectangle)
+                    .shared_bounds(
+                        scope.shared_content_state("hero"),
+                        VisibilityTransition::fade_in(TweenSpec::default()),
+                        VisibilityTransition::fade_out(TweenSpec::default()),
+                        BoundsTransform::default(),
+                        resize,
+                        placeholder,
+                        PathMotion::Linear,
+                        0.0,
+                        true, // render_in_overlay: hits go through the LAYER path
+                    ),
+            )
+            .build(ctx, |ctx| {
+                for _ in 0..10 {
+                    let key = ctx.next_key();
+                    ctx.start_leaf(key, Modifier::new().fill_max_width().height(20.0));
+                    ctx.end_node();
+                }
+            });
+    }
+
+    #[crate::composable]
+    fn stacked_list_screen(
+        ctx: &mut ComposeCtx,
+        scope: &SharedTransitionScope,
+        resize: ResizeMode,
+        placeholder: PlaceHolderSize,
+    ) {
+        Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+            stacked_marked_block(ctx, scope, 120.0, 60.0, resize, placeholder);
+        });
+    }
+
+    #[crate::composable]
+    fn stacked_detail_screen(
+        ctx: &mut ComposeCtx,
+        scope: &SharedTransitionScope,
+        resize: ResizeMode,
+        placeholder: PlaceHolderSize,
+    ) {
+        Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+            stacked_marked_block(ctx, scope, 300.0, 200.0, resize, placeholder);
+        });
+    }
+
+    /// The LAYER hit path must invert the same transform the paint applied.
+    /// With `RemeasureToBounds + ContentSize` the content box is the animated
+    /// size while the parent sees the target size; the elevated route used to
+    /// map through `measured_size`, scaling the local point by target/anim and
+    /// landing on the wrong child (the in-tree route was already correct).
+    #[test]
+    fn elevated_remeasure_hit_lands_on_the_same_child_as_the_tree_walk() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+        let frame = |composer: &mut Composer| {
+            let s = show.clone();
+            composer.compose(|ctx| {
+                SharedTransitionLayout::new().build(ctx, |ctx| {
+                    let scope = current_shared_scope().expect("scope");
+                    if s.get() {
+                        stacked_list_screen(
+                            ctx,
+                            &scope,
+                            ResizeMode::RemeasureToBounds,
+                            PlaceHolderSize::ContentSize,
+                        );
+                    } else {
+                        stacked_detail_screen(
+                            ctx,
+                            &scope,
+                            ResizeMode::RemeasureToBounds,
+                            PlaceHolderSize::ContentSize,
+                        );
+                    }
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+            composer.poll_shared_flights();
+        };
+        frame(&mut composer);
+        show.set(false);
+        frame(&mut composer);
+        let fid = *composer.shared_flights.keys().next().expect("flight id");
+        composer
+            .shared_flights
+            .get_mut(&fid)
+            .expect("flight")
+            .progress
+            .set(0.5);
+        frame(&mut composer);
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+
+        let root = composer.layout_root_idx().expect("root");
+        let marked = marked_in(&composer)[0];
+        let (bands, content_h) = {
+            let nodes = composer.arena_nodes();
+            (nodes[marked].children.clone(), nodes[marked].content_box().height)
+        };
+        assert!((content_h - 130.0).abs() <= 1.0, "content box is the animated height");
+        // Tap inside the lerped rect. y=80 must map to the 5th 20px band: a
+        // wrong mapping stays INSIDE the content box (so it is not rejected)
+        // but lands on a different band — that is what makes this load-bearing.
+        let (x, y) = (50.0, 80.0);
+        let layer = hit_test_with_flights(
+            composer.arena_nodes(),
+            root,
+            composer.transition_roots(),
+            x,
+            y,
+        );
+        let tree = hit_test(composer.arena_nodes(), root, x, y);
+        let want = bands[4];
+        assert_eq!(
+            layer.last().copied(),
+            Some(want),
+            "the elevated route maps the tap 1:1 into the content box, got {layer:?}"
+        );
+        assert_eq!(
+            layer.last().copied(),
+            tree.last().copied(),
+            "layer and tree walks must agree"
+        );
+        crate::animation::clear_all_animations();
+    }
+
     /// Bouncy hero leaf (spring overshoot must render past the end rect).
     fn spring_hero_leaf(
         ctx: &mut ComposeCtx,
