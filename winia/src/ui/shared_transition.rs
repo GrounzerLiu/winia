@@ -4878,6 +4878,19 @@ mod tier0_tests {
         // ~16ms gives only a few frames in the window, so a stalled machine can
         // step over it — that must fail with a clear message, never as a panic
         // on an empty flight map.
+        //
+        // MEASURED, AND STILL UNFIXED (review round 3 + a de-flaking attempt): the
+        // threshold below is NOT the window this test needs. From the flight's own numbers
+        // (start y=300 h=150 -> end y=0 h=160) the hero's top edge is `300*(1-p)`, so the
+        // probe at y=40 is only covered for p > 0.867 — yet the threshold admits
+        // [0.85, 0.867), where the assertion cannot hold. It passes because the first
+        // wall-clock sample overshoots to ~0.89. Pinning the progress instead does NOT
+        // work either: at p=0.89 the ghost's own opacity is low enough that the bar still
+        // dominates the probe ("got (28,226,0)"), i.e. the band reaching the probe and the
+        // hero out-shading the bar pull in OPPOSITE directions. Fixing this properly needs
+        // a sweep of the painted pixel against p to find the real window (and probably a
+        // different probe point); three attempts by reasoning were reverted rather than
+        // risk weakening a passing test.
         let mut sample: Option<(f32, u64, usize)> = None;
         for _ in 0..200 {
             match flight_probe(&composer) {
