@@ -5884,6 +5884,99 @@ mod tier0_tests {
         ctx.end_node();
     }
 
+    /// Bounds-marked hero leaf: the DEFAULT contract (ScaleToBounds + JumpCut), whose
+    /// frame is idle by construction — the Tier-1 equivalent of the Tier-0
+    /// "default costs no layout" test.
+    fn hero_leaf_bounds(
+        ctx: &mut ComposeCtx,
+        w: f32,
+        h: f32,
+        color: Color,
+        scope: &SharedTransitionScope,
+    ) {
+        let key = ctx.next_key();
+        ctx.start_leaf(
+            key,
+            Modifier::new()
+                .size(w, h)
+                .background(color, Shape::rounded(8.0))
+                .shared_bounds(
+                    scope.shared_content_state("hero"),
+                    VisibilityTransition::fade_in(TweenSpec::default()),
+                    VisibilityTransition::fade_out(TweenSpec::default()),
+                    BoundsTransform::default(),
+                    ResizeMode::ScaleToBounds { clip: false },
+                    PlaceHolderSize::JumpCut,
+                    PathMotion::Linear,
+                    0.0,
+                    true,
+                ),
+        );
+        ctx.end_node();
+    }
+
+    /// The default contract must cost Tier 1 no layout either: its frame is IDLE, so
+    /// the peer attaches no override and nothing is re-seeded — while the seeding
+    /// mechanism demonstrably CAN move the counter (control), so a counter stuck at
+    /// zero cannot pass this.
+    #[test]
+    fn tier1_default_contract_does_not_touch_the_peer_layout() {
+        use crate::layout::node::MEASURE_COUNT;
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let (mut a, mut b) = (Composer::new(), Composer::new());
+        let scope = SharedTransitionScope::new(82);
+        let (show_a, show_b) = (State::new(true), State::new(false));
+        let frame = |a: &mut Composer, b: &mut Composer| {
+            let (sa, sb, sca, scb) = (show_a.clone(), show_b.clone(), scope.clone(), scope.clone());
+            cross_frame(
+                a,
+                b,
+                |ctx| {
+                    shell(ctx, |ctx| {
+                        if sa.get() {
+                            hero_leaf_bounds(ctx, 120.0, 80.0, Color::RED, &sca);
+                        }
+                    })
+                },
+                |ctx| {
+                    shell(ctx, |ctx| {
+                        if sb.get() {
+                            hero_leaf_bounds(ctx, 300.0, 160.0, Color::BLUE, &scb);
+                        }
+                    })
+                },
+            );
+        };
+        frame(&mut a, &mut b);
+        show_a.set(false);
+        show_b.set(true);
+        frame(&mut a, &mut b);
+        assert_eq!(a.shared_flights.len(), 1, "Tier1 flight opens");
+        let tidx = marked_in(&b)[0];
+        assert!(
+            b.arena_nodes()[tidx].flight_measure.is_none(),
+            "the default contract attaches no override on the peer either"
+        );
+
+        // Control: the seeding path CAN move the counter in this composer.
+        MEASURE_COUNT.with(|c| c.set(0));
+        let key = b.arena_nodes()[tidx].slot_key;
+        b.layout_dirty_keys.insert(key);
+        b.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let control = MEASURE_COUNT.with(|c| c.get());
+        assert!(control > 0, "control: seeding must re-measure (got {control})");
+
+        MEASURE_COUNT.with(|c| c.set(0));
+        b.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let measured = MEASURE_COUNT.with(|c| c.get());
+        assert_eq!(
+            measured, 0,
+            "the default contract must not re-measure the peer (got {measured})"
+        );
+        crate::animation::clear_all_animations();
+    }
+
     /// Tier-1 layout contract, end to end: the peer composer's node receives the
     /// per-frame override while the flight runs, and BOTH teardown paths give it
     /// back. The completion path used to clear only the visual, which left the
