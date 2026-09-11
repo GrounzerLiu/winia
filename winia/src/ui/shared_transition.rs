@@ -1711,10 +1711,12 @@ pub(crate) struct ActiveFlight {
     /// Motion path, resolved from the target marker when the end resolves
     /// (same rule as the animation spec — one flight, one path).
     pub path: PathMotion,
-    /// sharedBounds enter/exit pair, resolved at end-resolve time (`None`
-    /// for Element flights, which always crossfade). Enter comes from the
-    /// target marker, exit from the source marker — each side declares its
-    /// own, like Compose.
+    /// sharedBounds enter/exit pair, resolved at end-resolve time (`None` for Element flights,
+    /// which always crossfade in winia). Enter comes from the target marker, exit from the source
+    /// marker — each side declares its own. DEVIATION from Compose: winia draws BOTH ends of an
+    /// Element flight and crossfades them, while Compose's `sharedElement` installs no enter/exit
+    /// and (per its KDoc) renders only the copy that is becoming visible — see the open deviation
+    /// entry in `docs/shared-element-gaps.md`.
     pub bounds_fx: Option<(VisibilityTransition, VisibilityTransition)>,
     pub radius_from: [f32; 4],
     pub radius_to: [f32; 4],
@@ -2487,8 +2489,9 @@ impl Composer {
                     ),
                 };
                 // Enter from the target marker, exit from the retained source
-                // marker — each side declares its own (Compose rule). Only
-                // Bounds flights carry the pair (Element always crossfades);
+                // marker — each side declares its own. Only Bounds flights carry
+                // the pair (an Element flight crossfades both ends in winia,
+                // which is a recorded deviation from Compose's sharedElement);
                 // a missing source exit falls back to fade-out (today's look).
                 let source_marker = self
                     .shared_flights

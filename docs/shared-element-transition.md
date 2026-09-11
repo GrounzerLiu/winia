@@ -86,12 +86,15 @@ engine changes required for bounds discovery.
 
 ### 3.3 Tier 0 dual-morph (v1 implementation)
 
-At the switch frame the source slot is *retained* instead of truncated
-(`retained_keys`, consulted by `collect_desc_tree` skip logic and the
-`free_node_skip` reclamation set — same pattern as `reused_nodes`). Its arena
-node is detached into a composer-level transition layer: excluded from all
-measure/place, rendered after the main tree via an extra `render_pass1` at its
-frozen absolute rect. Both ends then render the **same** lerped rect
+At the switch frame the vanishing source slot is *retained* instead of being freed:
+`detach_source` takes it out of `prev_node_by_key` (the map the prev drain walks), marks the
+node AND EVERY DESCENDANT in `reused_nodes` so neither the drain nor the arena pool may reclaim
+them, and unlinks the node from any parent still listing it. Its arena node is then detached
+into a composer-level transition layer: excluded from all measure/place, rendered after the main
+tree via an extra `render_pass1` at its frozen absolute rect. That shelter is what keeps the
+ghost's CONTENT: with only the root sheltered, the pool handed a descendant's index to a node of
+the new tree, so the ghost listed a fresh unmeasured node and painted an empty card — the
+"animation starts fully transparent" report. Both ends then render the **same** lerped rect
 `L(p) = lerp(S, T, p)` with transform origin top-left (simpler than Compose's
 center origin, self-consistent):
 

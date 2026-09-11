@@ -158,8 +158,10 @@ Three properties worth knowing before you rely on it:
   a 300 ms flight; the reference content and the reflowed siblings are that far
   behind the painted rect, not the rect itself). Only the ENTERING end
   re-measures; the leaving ghost is frozen content, and in a screen switch the
-  outgoing element's space is not held open (its tree is gone — Compose can hold
-  it because the old screen stays composed). A same-screen MORPH ignores both
+  outgoing element's space is not held open — its node is detached from the layout
+  tree (its SUBTREE is retained in the arena, sheltered from recycling, for as long
+  as the ghost is in the transition layer, but no parent lays it out) — Compose can
+  hold that space open because the old screen stays composed). A same-screen MORPH ignores both
   markers: its size change came from layout in the first place, so re-reporting
   a lerped size would fight the layout driving it.
 

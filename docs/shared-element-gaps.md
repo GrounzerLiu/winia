@@ -40,8 +40,21 @@
   plays exit (each side declares its own); fade channels claimed per-end
   (fade defaults reproduce the crossfade); slide/scale evaluated at flight
   progress in device space (before the flight scale); expand ≈
-  scale-about-edge + forced clip; Morph skips channels. `Element` endpoints
-  always crossfade (no enter/exit, like Compose).
+  scale-about-edge + forced clip; Morph skips channels.
+- [ ] **DEVIATION (open): `Element` endpoints crossfade in winia; Compose's `sharedElement`
+  does not.** winia paints BOTH ends — the source fades 1 → p → 0 and the target
+  p → 1 → 0 … i.e. a crossfade — and gives neither an enter/exit channel. Compose's
+  `sharedElement` installs no enter/exit either, but its KDoc states that "only the shared
+  element that is becoming visible will be rendered during the transition", so there the
+  outgoing copy is not drawn at all and no opacity animation happens (the visibility check in
+  `SharedElement.kt` decides this). Consequences of the deviation: when the same key renders
+  DIFFERENT content, Compose shows the new content at the old rect from frame one, while winia
+  shows the frozen old content fading into the new; and where the content is identical winia
+  draws it twice, once per end. Closing it needs an Element path that renders only the target
+  at full alpha (structural: the leaving end would stop being a painted ghost).
+  Provenance: the Compose behaviour here comes from reading `SharedTransitionScope.kt` /
+  `SharedElement.kt` in androidx during the review that raised this; it has NOT been
+  re-verified against a running Compose build locally.
 
 ## P2 — medium (layout/render coordination)
 
@@ -103,8 +116,10 @@
   reflow with the flight), `ContentSize` / `JumpCut` keep the target size so
   the surrounding layout holds still. The target's natural size is captured the
   frame the end resolves. Deviation: the OUTGOING end's space is not preserved
-  in a screen switch — its whole tree is gone, so there is no parent layout to
-  hold open (Compose keeps it because the old screen stays composed); for the
+  in a screen switch — its node is detached from the layout tree, so there is no
+  parent layout to hold open (Compose keeps it because the old screen stays
+  composed; winia keeps the ghost's SUBTREE alive in the arena — sheltered from
+  recycling while it sits in the transition layer — but nothing lays it out); for the
   same-screen morph the node stays, but BOTH markers are ignored there: its size
   change came from layout in the first place, so re-reporting a lerped size would
   fight the layout driving it (`begin_morph` hardcodes the defaults; `AnimatedSize`

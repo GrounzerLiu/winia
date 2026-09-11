@@ -200,6 +200,7 @@ pub(crate) fn try_stable_base(&self) -> Option<u64> {
 | 编译期（宏） | 语句注入 + `#[composable(c)]` 参数名校验 | 注入即稳定；参数名不匹配 → 编译 panic |
 | 运行期（composer） | `try_stable_base` | 有稳定源 = 继续；无 = **panic**（带修复选项） |
 | 物化期（defense） | `collect_node_keys` dup-key 检测 | 同 slot_key 两节点 = **panic**（带节点位置/尺寸） |
+| 组合尾（invariant repair，`compose()`） | `prune_stale_child_links`（`core/materialize.rs`） | **Slot identity rule**: a node must be reachable from `arena.root` or from `transition_layer` — exactly once. A detached flight ghost is a legitimate root, so the layer seeds the walk. Listings owned by an unreachable parent are stale and are cleared; a repeated child index inside a reachable parent collapses to one. It runs for EVERY composer on EVERY compose — the call sits in `compose()` right after `retain_shared_sources`, not inside a hook that can return early — and BEFORE the prev drain, so a stale listing's node is still reclaimed. `parent_id` is deliberately NOT consulted: a measured case had it naming a node that no longer existed. |
 
 ---
 
