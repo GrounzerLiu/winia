@@ -27,6 +27,15 @@ use winia::prelude::*;
 
 const LANDSCAPE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/assets/landscape.jpg");
 
+/// Flight shaping. A spring's speed follows `sqrt(stiffness / mass)`, so the slow-motion
+/// spring keeps the same motion character while stretching the flight — which is what makes
+/// the scale/clip differences watchable. Measured: stiffness 120 -> ~1.0s, 13 -> ~2.3s
+/// (same numbers as the other hero demo).
+fn flight_spec(slow: bool) -> BoundsTransform {
+    let stiffness = if slow { 13.0 } else { 120.0 };
+    BoundsTransform::spring(SpringSpec { stiffness, ..SpringSpec::default() })
+}
+
 /// One marked photo box. EVERY parameter a State feeds is read HERE, inside the composable
 /// that creates the marked node — a value read in an outer slot leaves this subtree skipped
 /// (Skip reuses the cached modifier) and the marker silently keeps its old settings until
@@ -40,6 +49,7 @@ fn photo_box(
     content_scale: &State<ContentScale>,
     remeasure: &State<bool>,
     spill: &State<bool>,
+    slow: &State<bool>,
 ) {
     let resize = if remeasure.get() {
         ResizeMode::RemeasureToBounds
@@ -47,6 +57,7 @@ fn photo_box(
         ResizeMode::scale_to_bounds_with(content_scale.get(), ImageAlignment::Center)
     };
     let clip = if spill.get() { OverlayClip::None } else { OverlayClip::Bounds };
+    let spec = flight_spec(slow.get());
     Image::file(LANDSCAPE)
         .modifier(
             Modifier::new()
@@ -56,7 +67,7 @@ fn photo_box(
                     scope.shared_content_state("photo"),
                     VisibilityTransition::fade_in(TweenSpec::default()),
                     VisibilityTransition::fade_out(TweenSpec::default()),
-                    BoundsTransform::spring(SpringSpec { stiffness: 120.0, ..SpringSpec::default() }),
+                    spec,
                     resize,
                     // AnimatedSize reports the animated size to the parent, so the rows
                     // around the photo move with the flight; JumpCut would hold the
@@ -80,6 +91,7 @@ fn controls(
     content_scale: &State<ContentScale>,
     remeasure: &State<bool>,
     spill: &State<bool>,
+    slow: &State<bool>,
     show_detail: &State<bool>,
 ) {
     Row::new().modifier(Modifier::new().fill_max_width()).spacing(8.0).build(ctx, |ctx| {
@@ -129,6 +141,18 @@ fn controls(
             .build(ctx, |ctx| {
                 Text::new(label).font_size(12.0).build(ctx);
             });
+        // Slow motion stays flippable DURING a flight, like the clip toggle: it applies to
+        // the next flight, so a running one is unaffected.
+        let slow_label = if slow.get() { "slow motion: ON" } else { "slow motion: off" };
+        Button::new()
+            .on_click({
+                clone!(slow);
+                move || slow.set(!slow.get())
+            })
+            .modifier(Modifier::new().height(34.0))
+            .build(ctx, |ctx| {
+                Text::new(slow_label).font_size(12.0).build(ctx);
+            });
     });
 }
 
@@ -138,6 +162,7 @@ fn image_flight_demo(ctx: &mut ComposeCtx) {
     let content_scale = ctx.remember(|| ContentScale::Crop);
     let remeasure = ctx.remember(|| false);
     let spill = ctx.remember(|| false);
+    let slow = ctx.remember(|| false);
 
     SharedTransitionLayout::new().build(ctx, |ctx| {
         let scope = current_shared_scope().expect("inside SharedTransitionLayout");
@@ -147,8 +172,8 @@ fn image_flight_demo(ctx: &mut ComposeCtx) {
             .build(ctx, |ctx| {
                 if show_detail.get() {
                     Text::new("Detail").font_size(22.0).build(ctx);
-                    photo_box(ctx, 344.0, 240.0, &scope, &content_scale, &remeasure, &spill);
-                    controls(ctx, &content_scale, &remeasure, &spill, &show_detail);
+                    photo_box(ctx, 344.0, 240.0, &scope, &content_scale, &remeasure, &spill, &slow);
+                    controls(ctx, &content_scale, &remeasure, &spill, &slow, &show_detail);
                     Button::new()
                         .on_click({
                             clone!(show_detail);
@@ -166,8 +191,8 @@ fn image_flight_demo(ctx: &mut ComposeCtx) {
                     )
                     .font_size(12.0)
                     .build(ctx);
-                    photo_box(ctx, 132.0, 92.0, &scope, &content_scale, &remeasure, &spill);
-                    controls(ctx, &content_scale, &remeasure, &spill, &show_detail);
+                    photo_box(ctx, 132.0, 92.0, &scope, &content_scale, &remeasure, &spill, &slow);
+                    controls(ctx, &content_scale, &remeasure, &spill, &slow, &show_detail);
                     Button::new()
                         .on_click({
                             clone!(show_detail);
