@@ -203,6 +203,11 @@ fn image_flight_demo(ctx: &mut ComposeCtx) {
                         .build(ctx, |ctx| {
                             Text::new("Back").build(ctx);
                         });
+                    // Same trailing child as the list branch: the two screens must have the
+                    // SAME child count and order, or the framework sees a structural change
+                    // whose node keys can collide across the branch flip (a Back crash with
+                    // "[dup-key] ... 388x34" in this demo came from exactly that asymmetry).
+                    Text::new("").font_size(12.0).build(ctx);
                 } else {
                     Text::new("List").font_size(22.0).build(ctx);
                     // A SQUARE box clipped to a circle, with the photo itself drawn Crop +
