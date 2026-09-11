@@ -529,3 +529,31 @@ the supported shape.
     use `shared_element` (the `Element` kind, hardwired to `RemeasureToBounds`), so
     `ScaleToBounds` is reachable only through `shared_bounds`; only `shared_bounds` users
     see the new default. `ContentScale::FillBounds` still reproduces the old look.
+18. FIXED, FROM ROUND 3 (ScaleToBounds reviewer): the `scaleToBounds` work above left
+    `radii_pairs` dividing corners by the plain axis ratios while the render scaled by
+    `paint_scale`. Under the new `FillWidth` default the two differ whenever the aspect
+    ratio changes, so background, border, clip and focus-ring corners painted ELLIPTICAL
+    (measured 8x24 device px for an intended 8x8 round corner; 8.7% vertical stretch in a
+    live width-preserving flight). `radii_pairs` now divides by `paint_scale`, the
+    test-only `scale_parts: None` fallback goes through `ContentScale::FillBounds` instead
+    of re-deriving the old formula, and `circle_radius_follows_the_lerped_rect_on_both_ends`
+    asserts BOTH axes. STILL OPEN from that reviewer: `radii_pairs` caps at
+    `min(lerped)/2`, not at the scaled content box, so `Crop`/`Fit` may over-shrink corners
+    (unproven, no raster case built); and no test can see a detached GHOST's radii
+    (`marked_in` walks the tree only), so the leaving half of the corner story is unpinned.
+19. FIXED, FROM ROUND 3 (layout reviewer): a cancelled Tier-1 flight whose SOURCE is the
+    peer (overlay -> main, the "hero returns" direction) never released the surviving MAIN
+    node's layout override — the writer stamped `all[0].composer_id` while
+    `cancel_cross_flight` cleared with `a.source_cid`, so the node stayed frozen at the
+    outgoing size and, because the morph guard keys on `flight_measure.is_some()`, its morph
+    detection stayed dead too. `peer_sourced_tier1_cancel_drops_the_mains_override` pins it.
+20. FROM ROUND 3 (test reviewer) — three claims this branch made were FALSE and are
+    corrected in code and comments: `mid_flight_paint_stays_inside_the_lerped_rect`'s
+    "the band probe still discriminates SCALED vs CROPPED" (it did not; the two spill
+    probes the previous round deleted are restored and catch the crop class), the two
+    default-contract tests whose added live-count control had DISARMED the assertion it was
+    meant to strengthen (the control's `layout()` flushed the seeded key; it runs after the
+    assertion now), and `demo_shape_shared_hero_composable_still_opens_a_switch`'s comment
+    naming an assertion that does not fail on the relevant revert. Lesson recorded: a
+    "repair" that deletes an assertion must PROVE the survivor still has teeth by mutating
+    the code it guards, which is exactly how all three were caught.
