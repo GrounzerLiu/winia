@@ -7769,6 +7769,24 @@ mod tier0_tests {
         );
     }
 
+    /// The assumption `radii_pairs`' cap rests on, measured instead of assumed (risk 18's
+    /// open item): Skia SILENTLY clamps a rounded-rect radius to half the shorter side, so
+    /// capping at `min(lerped)/2` matches the geometry of the rect the corner is drawn into
+    /// rather than over-shrinking it — which is what the review question was.
+    #[test]
+    fn skia_clamps_an_oversized_rrect_radius_to_half_the_shorter_side() {
+        let rect = skia_safe::Rect::new(0.0, 0.0, 300.0, 100.0);
+        let stored = |r: f32| {
+            skia_safe::RRect::new_rect_xy(rect, r, r)
+                .radii(skia_safe::rrect::Corner::UpperLeft)
+                .x
+        };
+        assert_eq!(stored(10.0), 10.0, "a radius that fits is stored as asked");
+        assert_eq!(stored(50.0), 50.0, "exactly half the shorter side is allowed");
+        assert_eq!(stored(51.0), 50.0, "one past it is clamped");
+        assert_eq!(stored(150.0), 50.0, "far past it is clamped too");
+    }
+
     /// Bouncy hero leaf (spring overshoot must render past the end rect).
     fn spring_hero_leaf(
         ctx: &mut ComposeCtx,

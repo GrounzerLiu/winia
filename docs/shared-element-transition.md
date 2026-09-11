@@ -537,10 +537,20 @@ the supported shape.
     live width-preserving flight). `radii_pairs` now divides by `paint_scale`, the
     test-only `scale_parts: None` fallback goes through `ContentScale::FillBounds` instead
     of re-deriving the old formula, and `circle_radius_follows_the_lerped_rect_on_both_ends`
-    asserts BOTH axes. STILL OPEN from that reviewer: `radii_pairs` caps at
-    `min(lerped)/2`, not at the scaled content box, so `Crop`/`Fit` may over-shrink corners
-    (unproven, no raster case built); and no test can see a detached GHOST's radii
-    (`marked_in` walks the tree only), so the leaving half of the corner story is unpinned.
+    asserts BOTH axes. Both follow-ups from that reviewer are now CLOSED:
+    - the cap question: measured (`skia_clamps_an_oversized_rrect_radius_to_half_the_shorter_side`,
+      probe first: r=51 and r=150 on a 300x100 rect both store 50) — Skia silently clamps to
+      half the shorter side, so capping at `min(lerped)/2` matches the geometry of the rect
+      the corner is drawn into instead of over-shrinking it. RESIDUAL, documented not fixed:
+      with `OverlayClip::None` the content may overflow the lerped rect, so the corner
+      belongs to the SCALED CONTENT box and the cap can then be tighter than that box allows
+      (an exotic combination — a percent shape, `Crop`/`Fit`, and an un-clipped overlay —
+      and no raster case was built for it);
+    - the ghost half: `circle_radius_follows_the_lerped_rect_on_both_ends` now scans the
+      arena for the `Source`-role visual and asserts the same invariant there. MEASURED
+      HONESTY NOTE: that half is an invariant guard, NOT a discriminator — with the defect
+      restored and the target assertion disabled it still passes, because a detached source
+      end's axis ratios coincide with its paint scale.
 19. FIXED, FROM ROUND 3 (layout reviewer): a cancelled Tier-1 flight whose SOURCE is the
     peer (overlay -> main, the "hero returns" direction) never released the surviving MAIN
     node's layout override — the writer stamped `all[0].composer_id` while
