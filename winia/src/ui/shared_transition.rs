@@ -874,7 +874,7 @@ mod tests {
             placeholder: PlaceHolderSize::AnimatedSize
         }));
         assert!(!shared_clip_for_kind(&SharedKind::Bounds {
-            resize: ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart },
+            resize: ResizeMode::scale_to_bounds(),
             placeholder: PlaceHolderSize::JumpCut,
         }));
         assert!(!shared_clip_for_kind(&SharedKind::Bounds {
@@ -2222,7 +2222,7 @@ impl Composer {
                 // Filled when the end resolves (AwaitingBounds poll).
                 target_in_overlay: true,
                 // Layout contract: frozen at resolve from the target marker.
-                resize: ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart },
+                resize: ResizeMode::scale_to_bounds(),
                 placeholder: PlaceHolderSize::JumpCut,
                 target_size: None,
                 measure: State::new(FlightMeasureFrame::IDLE),
@@ -2418,7 +2418,7 @@ impl Composer {
                         None,
                         false,
                         true,
-                        ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart },
+                        ResizeMode::scale_to_bounds(),
                         PlaceHolderSize::JumpCut,
                     ),
                 };
@@ -3152,7 +3152,7 @@ impl Composer {
                         None,
                         false,
                         true,
-                        ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart },
+                        ResizeMode::scale_to_bounds(),
                         PlaceHolderSize::JumpCut,
                     ),
                 };
@@ -3385,7 +3385,7 @@ impl Composer {
                 path,
                 bounds_fx,
                 target_in_overlay: true,
-                resize: ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart },
+                resize: ResizeMode::scale_to_bounds(),
                 placeholder: PlaceHolderSize::JumpCut,
                 target_size: None,
                 measure: State::new(FlightMeasureFrame::IDLE),
@@ -5520,8 +5520,8 @@ mod tier0_tests {
     fn flight_layout_contract_matrix() {
         let _g = lock_serial();
         for (resize, placeholder, sibling_moves, content_follows) in [
-            (ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart }, PlaceHolderSize::JumpCut, false, false),
-            (ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart }, PlaceHolderSize::AnimatedSize, true, false),
+            (ResizeMode::scale_to_bounds(), PlaceHolderSize::JumpCut, false, false),
+            (ResizeMode::scale_to_bounds(), PlaceHolderSize::AnimatedSize, true, false),
             (ResizeMode::RemeasureToBounds, PlaceHolderSize::ContentSize, false, true),
             (ResizeMode::RemeasureToBounds, PlaceHolderSize::AnimatedSize, true, true),
         ] {
@@ -5775,14 +5775,14 @@ mod tier0_tests {
                         list_layout_screen(
                             ctx,
                             &scope,
-                            ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart },
+                            ResizeMode::scale_to_bounds(),
                             PlaceHolderSize::JumpCut,
                         );
                     } else {
                         detail_layout_screen(
                             ctx,
                             &scope,
-                            ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart },
+                            ResizeMode::scale_to_bounds(),
                             PlaceHolderSize::JumpCut,
                         );
                     }
@@ -5957,7 +5957,7 @@ mod tier0_tests {
         let _g = lock_serial();
         for (resize, placeholder) in [
             (ResizeMode::RemeasureToBounds, PlaceHolderSize::ContentSize),
-            (ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart }, PlaceHolderSize::AnimatedSize),
+            (ResizeMode::scale_to_bounds(), PlaceHolderSize::AnimatedSize),
         ] {
             crate::animation::clear_all_animations();
             let mut composer = Composer::new();
@@ -6220,7 +6220,7 @@ mod tier0_tests {
                     VisibilityTransition::fade_in(TweenSpec::default()),
                     VisibilityTransition::fade_out(TweenSpec::default()),
                     BoundsTransform::default(),
-                    ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart },
+                    ResizeMode::scale_to_bounds(),
                     PlaceHolderSize::JumpCut,
                     PathMotion::Linear,
                     0.0,
@@ -6599,7 +6599,7 @@ mod tier0_tests {
                             VisibilityTransition::fade_in(TweenSpec::default()),
                             VisibilityTransition::fade_out(TweenSpec::default()),
                             BoundsTransform::default(),
-                            ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart },
+                            ResizeMode::scale_to_bounds(),
                             PlaceHolderSize::JumpCut,
                             PathMotion::Linear,
                             0.0,
@@ -6702,7 +6702,7 @@ mod tier0_tests {
                             VisibilityTransition::fade_in(TweenSpec::default()),
                             VisibilityTransition::fade_out(TweenSpec::default()),
                             BoundsTransform::default(),
-                            ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart },
+                            ResizeMode::scale_to_bounds(),
                             PlaceHolderSize::JumpCut,
                             PathMotion::Linear,
                             0.0,
@@ -6864,14 +6864,14 @@ mod tier0_tests {
                         list_layout_screen(
                             ctx,
                             &scope,
-                            ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart },
+                            ResizeMode::scale_to_bounds(),
                             PlaceHolderSize::JumpCut,
                         );
                     } else {
                         detail_layout_screen(
                             ctx,
                             &scope,
-                            ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart },
+                            ResizeMode::scale_to_bounds(),
                             PlaceHolderSize::JumpCut,
                         );
                     }
@@ -7255,7 +7255,7 @@ mod tier0_tests {
                 SharedTransitionLayout::new().build(ctx, |ctx| {
                     let scope = current_shared_scope().expect("scope");
                     if s.get() {
-                        list_layout_screen(ctx, &scope, ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart }, PlaceHolderSize::JumpCut);
+                        list_layout_screen(ctx, &scope, ResizeMode::scale_to_bounds(), PlaceHolderSize::JumpCut);
                     } else {
                         detail_layout_screen(ctx, &scope, ResizeMode::RemeasureToBounds, PlaceHolderSize::AnimatedSize);
                     }
@@ -8203,7 +8203,7 @@ mod tier0_tests {
                     )
                     .with_fade(),
                     BoundsTransform::default(),
-                    ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart },
+                    ResizeMode::scale_to_bounds(),
                     PlaceHolderSize::JumpCut,
                     PathMotion::Linear,
                     0.0,
@@ -8349,7 +8349,7 @@ mod tier0_tests {
                     VisibilityTransition::expand_in(TweenSpec::default()).with_fade(),
                     VisibilityTransition::shrink_out(TweenSpec::default()).with_fade(),
                     BoundsTransform::default(),
-                    ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart },
+                    ResizeMode::scale_to_bounds(),
                     PlaceHolderSize::JumpCut,
                     PathMotion::Linear,
                     0.0,
