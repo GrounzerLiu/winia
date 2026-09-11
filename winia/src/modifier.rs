@@ -185,7 +185,10 @@ pub enum Shape {
     /// 胶囊（圆角 = 短边一半——对标 Compose `CornerFull`，material3
     /// Button 默认形状；宽高变化时自动跟随）
     Pill,
-    /// 圆形
+    /// Percent-50 corner, i.e. Compose's `CircleShape` == `RoundedCornerShape(50)`: on a
+    /// square box that is a circle, and on a NON-square box a stadium that fills the whole
+    /// box (identical to `Pill`). A true inscribed circle was the old behaviour and was
+    /// wrong against Compose.
     Circle,
     /// 直角矩形
     Rectangle,

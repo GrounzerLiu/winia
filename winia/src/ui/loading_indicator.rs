@@ -282,11 +282,15 @@ fn draw_container(canvas: &skia_safe::Canvas, rect: skia_safe::Rect, color: Colo
     paint.set_style(skia_safe::paint::Style::Fill);
     match shape {
         Shape::Circle => {
-            let radius = rect.width().min(rect.height()) / 2.0;
-            canvas.draw_circle((rect.center_x(), rect.center_y()), radius, &paint);
+            // Circle == Pill == Compose `RoundedCornerShape(50)`: percent corners against
+            // the box being painted, so a non-square box is a stadium. A true circle left
+            // the sides unpainted and disagreed with every other Circle site (review
+            // round 3 found this as the last one).
+            let r = rect.width().min(rect.height()) / 2.0;
+            canvas.draw_round_rect(rect, r, r, &paint);
         }
         Shape::Pill => {
-            let r = rect.height() / 2.0;
+            let r = rect.width().min(rect.height()) / 2.0;
             canvas.draw_round_rect(rect, r, r, &paint);
         }
         Shape::RoundedRect { corner_radius } => {

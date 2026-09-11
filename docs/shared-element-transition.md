@@ -241,7 +241,8 @@ spec}`. Position, size, opacity and shape are all pure functions of progress:
 - **Origin**: top-left by default, center optional (matches Compose feel).
 - **Universal shape morph**: every `Shape` variant (Rectangle, RoundedRect,
   TopRoundedRect, Pill, Circle) normalizes to rect + four corner radii
-  (Pill = radii `min(w,h)/2`, Circle = equal sides + same). Morph = rect lerp
+  (Pill and Circle both = radii `min(w,h)/2` against the box — Circle is Compose's
+  percent-50 shape, so it is a circle only on a square box). Morph = rect lerp
   + radii lerp; intermediates are always valid rounded rects, endpoints exact.
   Border width lerps alongside. No same-kind restriction, no mid-point snap
   patches.

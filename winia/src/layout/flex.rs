@@ -202,7 +202,18 @@ pub(crate) fn measure_flex<A: FlexAxis>(
     for (i, &c) in children.iter().enumerate() {
         if let Some(w) = weights[i] {
             let allocated = if total_weight > 0.0 { remaining * w / total_weight } else { 0.0 };
-            allocated_main[i] = Some(allocated);
+            // The allocation only wins when the parent actually HAD space to allocate (a
+            // bounded main axis with a positive total weight). With an unbounded axis, or
+            // weight <= 0, `allocated` is 0 while the child's own measurement is not, and
+            // placing it in a 0-slot made it vanish — measured pre/post: a
+            // `weight(0) + size(100)` child beside a 50px sibling went from 100@0 / 50@100
+            // to 0@0 / 50@0 (overlapping, the row no longer containing its children).
+            // Compose rejects `weight <= 0`; we fall back to the child's measurement.
+            allocated_main[i] = if A::main_max(constraints).is_finite() && total_weight > 0.0 {
+                Some(allocated)
+            } else {
+                None
+            };
             let stretch_cross = alignment == Alignment::Stretch || aligns[i] == Alignment::Stretch;
             let cc = A::build_phase2(constraints, allocated, stretch_cross);
             let (size, _) = measure_node(nodes, policies, c, cc);

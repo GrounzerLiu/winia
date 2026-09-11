@@ -173,6 +173,12 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
                 // （policy 仍缺失时避免测量出 0 尺寸）
                 if let Some(cached) = composer.prev_nodes.get(&key) {
                     node.measured_size = cached.measured_size;
+                    // MUST travel with `measured_size`: after `place()` the latter is
+                    // the size the PARENT was told, so restoring it without the content
+                    // box resurrects a flight's placeholder as the node's own box
+                    // (review round 3: this third restore site was missed when
+                    // `CachedNode` gained the field).
+                    node.flight_content_size = cached.flight_content_size;
                     node.cached_constraints = cached.cached_constraints;
                     node.dirty = false;
                 } else {

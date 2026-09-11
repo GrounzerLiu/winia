@@ -1367,11 +1367,11 @@ impl TransitionVisual {
             Some((content_scale, _)) => {
                 content_scale.factors((box_w, box_h), (l.width, l.height))
             }
-            // No mode recorded (visuals built by hand): the historical mapping.
-            None => (
-                if box_w > 0.0 { l.width / box_w } else { 1.0 },
-                if box_h > 0.0 { l.height / box_h } else { 1.0 },
-            ),
+            // TEST-ONLY fallback: only the hand-built `TransitionVisual`s in the test
+            // module leave this unset, and they want the pre-`ScaleToBounds` geometry,
+            // i.e. `FillBounds`. Expressed through the same rule as everything else so
+            // there is exactly one place that turns a mode into scales.
+            None => ContentScale::FillBounds.factors((box_w, box_h), (l.width, l.height)),
         }
     }
 
@@ -1395,11 +1395,22 @@ impl TransitionVisual {
         )
     }
 
-    /// UNDER the flight transform — screen radii pre-divided by axis scales).
+    /// UNDER the flight transform — screen radii pre-divided by the PAINT scales).
     pub(crate) fn radii_pairs(&self, node_w: f32, node_h: f32) -> [(f32, f32); 4] {
         let l = self.lerped();
-        let sx = if node_w > 0.0 { l.width / node_w } else { 1.0 }.max(1e-6);
-        let sy = if node_h > 0.0 { l.height / node_h } else { 1.0 }.max(1e-6);
+        // MUST be `paint_scale`, not the plain axis ratios: the render draws these
+        // inside `canvas.scale(paint_scale)`, and under `ContentScale::FillWidth` the
+        // two axes scale by the SAME factor while `l.h/node_h` is a different number.
+        // Dividing by the axis ratios there painted an elliptical corner (measured
+        // 8x24 device px for an intended 8x8 round corner on a 100x100 -> 300x100
+        // flight, and an 8.7% vertical stretch in the live width-preserving case).
+        let (mut sx, mut sy) = self.paint_scale(node_w, node_h);
+        if sx.abs() < 1e-6 {
+            sx = 1e-6;
+        }
+        if sy.abs() < 1e-6 {
+            sy = 1e-6;
+        }
         // Percent corners (Pill/Circle) are resolved inside `radii()` against
         // the lerped rect — each end first, then mixed by progress — so a plain
         // `radii()` is already correct here.
@@ -2907,8 +2918,13 @@ impl Composer {
             // load-bearing: reverting both Tier-1 clears makes
             // `stale_cancel_drops_the_surviving_peers_layout_override` fail with
             // the override still attached. Owner = the composer that held the
-            // flight, i.e. the one whose map it was removed from.
-            let owner_key = FlightKey { cid: a.source_cid, id };
+            // flight, i.e. the one whose map it was removed from — `all[0]`, the
+            // same key the writer STAMPS. Using the source's cid here was wrong for a
+            // PEER-SOURCED flight (overlay -> main, the "hero returns" direction): it
+            // looked for a key nobody wrote, so the override was never cleared and the
+            // element stayed frozen at the outgoing size forever (review round 3,
+            // reproduced with a live override dump).
+            let owner_key = FlightKey { cid: all[0].composer_id, id };
             if let Some(peer) = all.iter_mut().find(|c| c.composer_id == a.target_cid) {
                 peer.clear_transition_for_slot(slot, owner_key);
             }
@@ -4535,10 +4551,16 @@ mod tier0_tests {
         assert!(composer.shared_flights.is_empty(), "the switch flight completes");
         // The morph BASELINE must have tracked the flight's own layout. Otherwise it is
         // the pre-flight rect, so landing compares the hero against where it took off
-        // from, opens a fresh same-screen morph, and the hero flies the whole path
-        // again — the replay reported from the demo. (The follow-up assertions below
-        // are the visible symptom; this one is the mechanism, and it is the one that
-        // fails if the guard stops updating the baseline.)
+        // from, opens a fresh same-screen morph, and the hero flies the whole path again
+        // — the replay reported from the demo.
+        //
+        // HONESTY (review round 3 measured this): neither this assertion nor the
+        // follow-up loops below fail when the pre-fix freeze is restored, because in
+        // THIS scenario the baseline is refreshed on the switch frame itself, before the
+        // target carries an override. They are in-range invariant guards; the assertions
+        // that actually pin the guard are in
+        // `morph_detector_skips_the_decision_but_updates_the_baseline` (both halves
+        // verified to fail on their respective reverts).
         let scope_id = *composer
             .shared_live_map()
             .keys()
@@ -5801,9 +5823,23 @@ mod tier0_tests {
             "the default contract attaches no override"
         );
 
+        // A second layout with identical constraints must fold completely. This runs
+        // BEFORE the live-count control: the control's extra `layout()` would flush a
+        // dirty key the (buggy) poll had seeded, and the assertion below would then see
+        // zero and pass. Review round 3 measured exactly that: with the control first,
+        // this test passed with the unconditional-seed regression restored. The control
+        // block moved to the end, where it still proves the counter can move.
+        MEASURE_COUNT.with(|c| c.set(0));
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let measured = MEASURE_COUNT.with(|c| c.get());
+        assert_eq!(
+            measured, 0,
+            "the default path must not re-measure anything (got {measured})"
+        );
+
         // LIVE-COUNT CONTROL (review R4): prove the counter can move in THIS
-        // configuration before asserting it does not — otherwise a counter stuck at
-        // zero by construction would pass the real assertion identically.
+        // configuration — otherwise a counter stuck at zero by construction would pass
+        // the assertion above identically.
         MEASURE_COUNT.with(|c| c.set(0));
         let marked_key = composer.arena_nodes()[marked].slot_key;
         composer.layout_dirty_keys.insert(marked_key);
@@ -5812,15 +5848,6 @@ mod tier0_tests {
         assert!(
             control > 0,
             "control: seeding the key must re-measure something (got {control})"
-        );
-
-        // A second layout with identical constraints must fold completely.
-        MEASURE_COUNT.with(|c| c.set(0));
-        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
-        let measured = MEASURE_COUNT.with(|c| c.get());
-        assert_eq!(
-            measured, 0,
-            "the default path must not re-measure anything (got {measured})"
         );
         crate::animation::clear_all_animations();
     }
@@ -6017,13 +6044,26 @@ mod tier0_tests {
                 !close_enough(inside, (255, 255, 255), 12),
                 "the hero paints inside the lerped rect ({resize:?}/{placeholder:?}): {inside:?}"
             );
-            // NOTE (review R4): the "nothing spills outside the lerped rect"
-            // probes that used to live here were VACUOUS — the flight's own clip
-            // hides the spill either way, so they passed with the bug present. The
-            // band probe above is the only raster assertion here with teeth; the
-            // box/scale contract is pinned by the layout assertions of
-            // `flight_layout_contract_matrix` and by
-            // `remeasure_end_is_never_scaled_by_the_frame_delta`.
+            // Outside the lerped rect — but well inside the 300x200 target box — must be
+            // background: neither a re-measured content nor a 1:1-drawn copy may spill
+            // there.
+            //
+            // REVIEW ROUND 3 CORRECTION: these were removed by the R4 pass as "vacuous",
+            // and that verdict was WRONG for the crop class — with `paint_scale` forced
+            // to (1,1) (i.e. the content drawn unscaled, exactly the crop bug the band
+            // probe's comment names) the whole test passed without them and FAILS with
+            // them ("nothing of the hero may paint outside the lerped rect at (250,100)
+            // … : (126, 126, 255)"). They are genuinely vacuous only for the frame-delta
+            // STRETCH bug, which the band probe catches. Both classes need a probe, so
+            // both are kept.
+            for (x, y) in [(250, 100), (100, 160)] {
+                let out = pixel_rgb(&mut surface, x, y);
+                assert!(
+                    close_enough(out, (255, 255, 255), 12),
+                    "nothing of the hero may paint outside the lerped rect at \
+                     ({x},{y}) ({resize:?}/{placeholder:?}): {out:?}"
+                );
+            }
         }
         crate::animation::clear_all_animations();
     }
@@ -6274,14 +6314,10 @@ mod tier0_tests {
             "the default contract attaches no override on the peer either"
         );
 
-        // Control: the seeding path CAN move the counter in this composer.
-        MEASURE_COUNT.with(|c| c.set(0));
-        let key = b.arena_nodes()[tidx].slot_key;
-        b.layout_dirty_keys.insert(key);
-        b.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
-        let control = MEASURE_COUNT.with(|c| c.get());
-        assert!(control > 0, "control: seeding must re-measure (got {control})");
-
+        // Order matters: the real assertion runs FIRST. The control's extra `layout()`
+        // would flush a dirty key the (buggy) poll had seeded, making the assertion
+        // below see zero — review round 3 measured this test passing with the
+        // unconditional-seed regression restored when the control came first.
         MEASURE_COUNT.with(|c| c.set(0));
         b.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
         let measured = MEASURE_COUNT.with(|c| c.get());
@@ -6289,6 +6325,14 @@ mod tier0_tests {
             measured, 0,
             "the default contract must not re-measure the peer (got {measured})"
         );
+
+        // Control: the seeding path CAN move the counter in this composer.
+        MEASURE_COUNT.with(|c| c.set(0));
+        let key = b.arena_nodes()[tidx].slot_key;
+        b.layout_dirty_keys.insert(key);
+        b.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let control = MEASURE_COUNT.with(|c| c.get());
+        assert!(control > 0, "control: seeding must re-measure (got {control})");
         crate::animation::clear_all_animations();
     }
 
@@ -6665,13 +6709,19 @@ mod tier0_tests {
         };
         let l = vis.lerped();
         let want = l.width.min(l.height) / 2.0;
-        // `radii_pairs` returns values for use INSIDE the scaled canvas; the
-        // device radius is that value times the axis scale render applies.
-        let sx = if box_w > 0.0 { l.width / box_w } else { 1.0 };
-        let device = vis.radii_pairs(box_w, box_h)[0].0 * sx;
+        // `radii_pairs` returns values for use INSIDE the scaled canvas, so the DEVICE
+        // radius is the pair times the scale the canvas actually applies — that is
+        // `paint_scale`, NOT the plain axis ratios. Both axes are asserted: they only
+        // coincide when the box and the lerped rect share an aspect ratio, and the
+        // second review round measured this test passing while `radii_pairs` divided by
+        // the axis ratios (the two factors cancelled, hiding an 8.7%-stretched corner).
+        let (sx, sy) = vis.paint_scale(box_w, box_h);
+        let dev_x = vis.radii_pairs(box_w, box_h)[0].0 * sx;
+        let dev_y = vis.radii_pairs(box_w, box_h)[0].1 * sy;
         assert!(
-            (device - want).abs() <= 0.5,
-            "corner radius must follow the lerped rect: got {device}, want {want} ({l:?})"
+            (dev_x - want).abs() <= 0.5 && (dev_y - want).abs() <= 0.5,
+            "the painted corner must be round on BOTH axes: got ({dev_x}, {dev_y}), \
+             want ({want}, {want}) for lerped {l:?} box ({box_w}, {box_h})"
         );
         // (Review R4: an extra "the radius sits between the two endpoint radii"
         // assertion used to live here — it was implied by the equality above, which
@@ -7360,6 +7410,87 @@ mod tier0_tests {
             (after.width - 300.0).abs() <= 1.0 && (after.height - 160.0).abs() <= 1.0,
             "…while the baseline must track the override-driven layout ({after:?}) — \
              freezing it makes the flight's own change look like a fresh morph at landing"
+        );
+        crate::animation::clear_all_animations();
+    }
+
+    /// A Tier-1 flight whose SOURCE is the peer (overlay -> main: the "hero returns"
+    /// direction) must take the surviving MAIN node's layout override with it when it is
+    /// cancelled. `write_cross_visuals` stamps the override with `all[0].composer_id`, so
+    /// the teardown has to clear with that same key: using `a.source_cid` looked for a key
+    /// nobody wrote, and the main node stayed frozen at the outgoing size forever — with
+    /// `flight_measure` attached, which also suppresses that node's morph detection for
+    /// good (review round 3, ported from the reviewer's reproducer, pre-fix verified).
+    #[test]
+    fn peer_sourced_tier1_cancel_drops_the_mains_override() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let (mut a, mut b) = (Composer::new(), Composer::new());
+        let scope = SharedTransitionScope::new(82);
+        let show_a = State::new(false); // main
+        let show_b = State::new(true); // overlay: the SOURCE side
+        let main_marked = State::new(true);
+        let frame = |a: &mut Composer, b: &mut Composer| {
+            let (sa, sb, sca, scb) = (show_a.clone(), show_b.clone(), scope.clone(), scope.clone());
+            let mm = main_marked.clone();
+            cross_frame(
+                a,
+                b,
+                |ctx| {
+                    shell(ctx, |ctx| {
+                        if sa.get() {
+                            hero_leaf_marked(ctx, 300.0, 160.0, Color::BLUE, &sca, mm.get());
+                        }
+                    })
+                },
+                |ctx| {
+                    shell(ctx, |ctx| {
+                        if sb.get() {
+                            hero_leaf_marked(ctx, 120.0, 80.0, Color::RED, &scb, true);
+                        }
+                    })
+                },
+            );
+        };
+        frame(&mut a, &mut b);
+        show_a.set(true);
+        show_b.set(false);
+        frame(&mut a, &mut b);
+        assert_eq!(a.shared_flights.len(), 1, "Tier1 flight opens");
+        let fid = *a.shared_flights.keys().next().expect("flight");
+        assert_eq!(
+            a.shared_flights[&fid].source_cid, b.composer_id,
+            "precondition: the source is the PEER composer"
+        );
+        assert_eq!(
+            a.shared_flights[&fid].target_cid, a.composer_id,
+            "precondition: the target is MAIN"
+        );
+        let tidx = marked_in(&a)[0];
+        crate::animation::update_animations();
+        frame(&mut a, &mut b);
+        assert!(
+            a.arena_nodes()[tidx].flight_measure.is_some(),
+            "main carries the override while the flight runs"
+        );
+
+        // Cancel it: the main marker disappears, so the flight goes stale.
+        let node_before = a.arena_nodes()[tidx].id;
+        main_marked.set(false);
+        crate::animation::update_animations();
+        frame(&mut a, &mut b);
+        assert!(a.shared_flights.is_empty(), "the stale flight is cancelled");
+        assert_eq!(
+            a.arena_nodes()[tidx].id, node_before,
+            "the main node survived the marker drop (so it is the SAME node that leaked)"
+        );
+        for _ in 0..3 {
+            crate::animation::update_animations();
+            frame(&mut a, &mut b);
+        }
+        assert!(
+            a.arena_nodes()[tidx].flight_measure.is_none(),
+            "the cancelled peer-sourced flight must take its layout override with it"
         );
         crate::animation::clear_all_animations();
     }

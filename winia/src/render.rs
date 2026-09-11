@@ -1913,9 +1913,12 @@ pub(crate) fn draw_focus(
     paint.set_anti_alias(true);
     if let Some(r) = flight_radii {
         // Same corners as the morph. The ring sits `inset` outside the box (and the
-        // fade-in `scale` grows it), so the radii grow with it; they are already
-        // pre-divided by the paint scale, so the canvas transform lands them on the
-        // lerped rect exactly as the background does.
+        // fade-in `scale` grows it), so the radii grow with it. These pairs come from
+        // `radii_pairs`, which pre-divides by `paint_scale` — the same factors this
+        // canvas applies — so the transform lands the ring on the lerped rect exactly
+        // as it lands the background. (A second review round measured this being false
+        // before the radii divided by the paint scale: the ring was elliptical by the
+        // same factor as the background, up to 8.7% on a width-preserving flight.)
         let grow = if rect.width() > 0.0 { sr.width() / rect.width() } else { 1.0 };
         let rr = RRect::new_rect_radii(
             sr,
