@@ -235,8 +235,11 @@ spec 过渡、NavEntryDecorator（on_pop 广播 + wrap 链式）、remember_entr
     ——**已评估不做（2026-09）**：Android back 手势，桌面平台不对。
 
 **P2——外围**
-11. [ ] 共享元素过渡（SharedTransitionScope）/sizeTransform
-    ——**已评估不做（2026-09）**：P2 外围，无倒逼需求。
+11. [~] 共享元素过渡（SharedTransitionScope）/sizeTransform
+    ——**2026-09 评估"不做"后，`exp/nav-shared-transition` 分支已实现第一部分**：nav 过渡层现在
+    发布"场景"(id + 可见度)，框架据此在两端都活着时判定 Source/Target（一次跳转恰好一次飞行，
+    实测 2→1），透明度归场景、矩形归飞行；并补了 `SharedEntryInSceneDecorator`。细节、Compose
+    对照与实测数字见 `docs/nav-shared-transition.md`。`sizeTransform` 仍未做。
 12. [x] 多 back stack——NavBackStack 为普通值天然多实例；entries 拼接显示按需再加
 13. [x] EntryProvider 类型化 DSL——winia 用 match 闭包（Rust 惯用，不追）
 
