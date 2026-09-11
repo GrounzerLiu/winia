@@ -160,6 +160,13 @@ pub(crate) fn measure_flex<A: FlexAxis>(
 
     // ── Phase 1: 无 weight 子节点 ──
     let mut child_sizes: Vec<Size> = vec![Size::ZERO; n];
+    // Main-axis size a WEIGHTED child is placed at. The parent allocates that share
+    // (Compose measures a weighted child with fixed main constraints and keeps the
+    // slot), so it must NOT come from the child's measured/returned size: a flight
+    // layout override replaces that return with the placeholder size the parent was
+    // told, which would otherwise let a weighted hero shrink to its natural width
+    // mid-flight while a trailing sibling slides over it.
+    let mut allocated_main: Vec<Option<f32>> = vec![None; n];
     let mut total_fixed_main: f32 = 0.0;
     let mut max_cross: f32 = 0.0;
     let mut total_weight: f32 = 0.0;
@@ -195,6 +202,7 @@ pub(crate) fn measure_flex<A: FlexAxis>(
     for (i, &c) in children.iter().enumerate() {
         if let Some(w) = weights[i] {
             let allocated = if total_weight > 0.0 { remaining * w / total_weight } else { 0.0 };
+            allocated_main[i] = Some(allocated);
             let stretch_cross = alignment == Alignment::Stretch || aligns[i] == Alignment::Stretch;
             let cc = A::build_phase2(constraints, allocated, stretch_cross);
             let (size, _) = measure_node(nodes, policies, c, cc);
@@ -204,8 +212,12 @@ pub(crate) fn measure_flex<A: FlexAxis>(
     }
 
     // ── Phase 3: 尺寸与布局 ──
-    let total_content_main: f32 =
-        child_sizes.iter().map(|s| A::main_size(*s)).sum::<f32>() + total_spacing;
+    let total_content_main: f32 = child_sizes
+        .iter()
+        .enumerate()
+        .map(|(i, s)| allocated_main[i].unwrap_or_else(|| A::main_size(*s)))
+        .sum::<f32>()
+        + total_spacing;
 
     let remaining_main = if A::main_max(constraints).is_finite() {
         (A::main_max(constraints) - total_content_main).max(0.0)
@@ -230,7 +242,8 @@ pub(crate) fn measure_flex<A: FlexAxis>(
     for (i, child_size) in child_sizes.iter().enumerate() {
         let align = aligns[i];
         let child_cross = if align == Alignment::Stretch { cross_size } else { A::cross_size(*child_size) };
-        let child_main = A::main_size(*child_size);
+        // A weighted child keeps its allocated slot (see `allocated_main`).
+        let child_main = allocated_main[i].unwrap_or_else(|| A::main_size(*child_size));
         let cross_offset = match align {
             Alignment::Start => 0.0,
             Alignment::End => cross_size - child_cross,

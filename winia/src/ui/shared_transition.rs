@@ -6554,6 +6554,122 @@ mod tier0_tests {
         );
     }
 
+    /// Weighted-hero screens: the hero is the only flexible child, so its
+    /// allocation is what decides where the trailing sibling sits.
+    #[crate::composable]
+    fn weighted_hero_row(
+        ctx: &mut ComposeCtx,
+        scope: &SharedTransitionScope,
+        hero_h: f32,
+        inner: f32,
+        hero_weight: f32,
+    ) {
+        Row::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+            let mut hero = Modifier::new()
+                .height(hero_h)
+                .background(Color::RED, Shape::rounded(8.0))
+                .shared_bounds(
+                    scope.shared_content_state("hero"),
+                    VisibilityTransition::fade_in(TweenSpec::default()),
+                    VisibilityTransition::fade_out(TweenSpec::default()),
+                    BoundsTransform::default(),
+                    ResizeMode::RemeasureToBounds,
+                    PlaceHolderSize::AnimatedSize,
+                    PathMotion::Linear,
+                    0.0,
+                    true,
+                );
+            // FIXED width on one end, weighted on the other: that is what makes the
+            // animated (reported) width differ from the weighted allocation.
+            hero = if hero_weight > 0.0 {
+                hero.layout_weight(hero_weight)
+            } else {
+                hero.width(120.0)
+            };
+            Column::new()
+                .modifier(hero)
+                .build(ctx, |ctx| {
+                    let key = ctx.next_key();
+                    ctx.start_leaf(key, Modifier::new().size(inner, 24.0));
+                    ctx.end_node();
+                });
+            let key = ctx.next_key();
+            ctx.start_leaf(key, Modifier::new().size(40.0, 80.0));
+            ctx.end_node();
+        });
+    }
+
+    #[crate::composable]
+    fn weighted_list_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
+        weighted_hero_row(ctx, scope, 80.0, 100.0, 0.0);
+    }
+
+    #[crate::composable]
+    fn weighted_detail_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
+        weighted_hero_row(ctx, scope, 160.0, 320.0, 1.0);
+    }
+
+    /// A `weight(1)` hero keeps its ALLOCATED slot while a flight reports a
+    /// placeholder size. The parent allocates the share; taking the placement from
+    /// the child's returned size let a weighted hero shrink to its natural width
+    /// mid-flight, so a trailing sibling slid over it and snapped back at the end.
+    #[test]
+    fn weighted_hero_keeps_its_allocation_while_flying() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+        let frame = |composer: &mut Composer| {
+            let s = show.clone();
+            composer.compose(|ctx| {
+                SharedTransitionLayout::new().build(ctx, |ctx| {
+                    let scope = current_shared_scope().expect("scope");
+                    if s.get() {
+                        weighted_list_screen(ctx, &scope);
+                    } else {
+                        weighted_detail_screen(ctx, &scope);
+                    }
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+            composer.poll_shared_flights();
+        };
+        frame(&mut composer);
+        show.set(false);
+        frame(&mut composer);
+        let fid = *composer.shared_flights.keys().next().expect("flight id");
+        composer
+            .shared_flights
+            .get_mut(&fid)
+            .expect("flight")
+            .progress
+            .set(0.5);
+        frame(&mut composer);
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+
+        let root = composer.layout_root_idx().expect("root");
+        let (hero, trailing) = {
+            let nodes = composer.arena_nodes();
+            // The composable builds the Row at the top level, so the layout root
+            // IS the row.
+            let kids = nodes[root].children.clone();
+            assert_eq!(kids.len(), 2, "the row keeps its two children");
+            (kids[0], kids[1])
+        };
+        let nodes = composer.arena_nodes();
+        assert!(
+            (nodes[hero].measured_size.width - 360.0).abs() <= 1.0,
+            "the weighted hero must keep its 360px allocation, got {}",
+            nodes[hero].measured_size.width
+        );
+        assert!(
+            (nodes[trailing].position.x - 360.0).abs() <= 1.0,
+            "…so the trailing sibling stays at the row's edge, got {}",
+            nodes[trailing].position.x
+        );
+        crate::animation::clear_all_animations();
+    }
+
     /// Bouncy hero leaf (spring overshoot must render past the end rect).
     fn spring_hero_leaf(
         ctx: &mut ComposeCtx,
