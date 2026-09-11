@@ -319,7 +319,7 @@ Three properties worth knowing before you rely on it:
 
 ## 8. Tests
 
-- `cargo test -p winia --lib ui::shared_transition` (72 tests: unit,
+- `cargo test -p winia --lib ui::shared_transition` (77 tests: unit,
   headless Tier 0/Tier 1 raster probes, guard-checked regression tests
   for scroll add-back, morph hit routing, bouncy overshoot, baseline
   identity, arc paint, z-order, enter/exit slide, expand wipe, active
@@ -329,14 +329,20 @@ Three properties worth knowing before you rely on it:
   `flight_measure_frame_reaches_the_parent_layout` (the channel itself),
   `flight_layout_contract_matrix` (the 4-way resize/placeholder matrix, pinned
   at t=.5 with exact values), `mid_flight_cancel_restores_the_natural_size`
-  (the teardown seed), `default_contract_does_not_touch_the_layout` (the
-  default costs no layout), `shared_element_re_measures_and_honours_animated_size`
+  (the teardown seed), `default_contract_does_not_touch_the_layout` /
+  `tier1_default_contract_does_not_touch_the_peer_layout` (the default costs no
+  layout, both tiers, each with a live-count control),
+  `shared_element_re_measures_and_honours_animated_size`
   (the Compose parity decision), `mid_flight_paint_stays_inside_the_lerped_rect`
   (SCALED vs CROPPED), `ghost_tap_maps_identity_into_a_remeasure_target`,
-  `remeasure_end_is_never_scaled_by_the_frame_delta`, `circle_radius_follows_the_lerped_rect_on_both_ends`,
+  `remeasure_end_is_never_scaled_by_the_frame_delta`,
+  `weighted_hero_keeps_its_allocation_while_flying`,
+  `restored_node_keeps_its_content_box`, `circle_radius_follows_the_lerped_rect_on_both_ends`,
   `percent_to_fixed_corners_stay_aligned_end_to_end`,
-  `writer_never_clobbers_another_flights_override` and
-  `teardown_reaches_a_slot_that_left_the_tree`).
+  `corner_endpoints_are_exact_for_every_shape_pair`,
+  `circle_shape_fills_a_non_square_box_like_pill`,
+  `writer_never_clobbers_another_flights_override` (both the write and the clear
+  direction) and `teardown_reaches_a_slot_that_left_the_tree`).
 - Tests driving animations hold `TEST_SERIAL` + `clear_all_animations()`.
   Newer tests PIN the flight progress (`progress.set(t)`) instead of sampling the
   wall clock, and drive at most one extra `layout()` to consume the writer's
