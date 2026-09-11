@@ -494,3 +494,14 @@ the supported shape.
     in `poll_shared_flights`; a composer that stops being polled would keep
     a stale order. Every composer (main + overlays + headless tests) polls
     each frame, so this is a invariant to preserve rather than a bug today.
+16. FIXED, PINNED BY MECHANISM ONLY: the landed hero used to replay the whole flight
+    (reported from the demo). Cause: the phantom-morph guard from the same review round
+    skipped the morph loop's BASELINE update along with the morph decision, so the
+    baseline stayed at the take-off rect and the landing compared the hero against where
+    it started — a fresh same-screen morph. The guard now skips the decision only.
+    `morph_detector_skips_the_decision_but_updates_the_baseline` pins both halves (an
+    early return fails the baseline half, dropping the guard fails the phantom-flight
+    half), but the END-TO-END replay still has no headless reproducer: it needs a flight
+    that resolves in the frame it opens with the flights polled before the morph poll, so
+    the override is attached before the first poll that sees the new rect. Until that
+    exists, the demo check is the only end-to-end evidence.

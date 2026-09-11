@@ -321,7 +321,7 @@ Three properties worth knowing before you rely on it:
 
 ## 8. Tests
 
-- `cargo test -p winia --lib ui::shared_transition` (78 tests: unit,
+- `cargo test -p winia --lib ui::shared_transition` (79 tests: unit,
   headless Tier 0/Tier 1 raster probes, guard-checked regression tests
   for scroll add-back, morph hit routing, bouncy overshoot, baseline
   identity, arc paint, z-order, enter/exit slide, expand wipe, active
@@ -344,7 +344,8 @@ Three properties worth knowing before you rely on it:
   `corner_endpoints_are_exact_for_every_shape_pair`,
   `circle_shape_fills_a_non_square_box_like_pill`,
   `writer_never_clobbers_another_flights_override` (both the write and the clear
-  direction), `tier0_writer_skips_a_node_that_is_not_the_shared_endpoint` and
+  direction), `tier0_writer_skips_a_node_that_is_not_the_shared_endpoint`,
+  `morph_detector_skips_the_decision_but_updates_the_baseline` and
   `teardown_reaches_a_slot_that_left_the_tree`).
 - Tests driving animations hold `TEST_SERIAL` + `clear_all_animations()`.
   Newer tests PIN the flight progress (`progress.set(t)`) instead of sampling the
