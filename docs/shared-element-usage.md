@@ -44,7 +44,7 @@ forever — completion waits for engine release (see §4).
 | Type | Variants | Status |
 |---|---|---|
 | `SharedKind` | `Element` / `Bounds { resize, placeholder }` | Both match and fly |
-| `ResizeMode` | `ScaleToBounds { clip }` | Implemented (render scales content into the lerped rect; `clip` clips to it). The `clip` flag is a **winia addition**: Compose's `ResizeMode.scaleToBounds` takes `contentScale` + `alignment` and preserves the aspect ratio, while winia scales X and Y independently (see §7 gaps), so arcs turn elliptical mid-flight. `ScaleToBounds` is still Compose's default for `sharedBounds`, and the one to keep for text |
+| `ResizeMode` | `scale_to_bounds()` / `scale_to_bounds_with(content_scale, alignment)` | Implemented, matching Compose: the content is scaled into the lerped rect without re-laying-out, fitted by `ContentScale` (`FillWidth` by default, so the aspect ratio is preserved) and placed by `ContentAlignment` (`Center` by default). `ContentScale::FillBounds` gives the old non-uniform stretch. The `clip` flag was measured as dead and deleted — the render always clips a transitioning node to the lerped rect. `ScaleToBounds` is Compose's default for `sharedBounds`, and the one to keep for text |
 | `ResizeMode` | `RemeasureToBounds` | Implemented — the entering end is measured with **fixed constraints of the animated bounds** every frame, so content re-lays-out/rewraps instead of being scaled (render then skips the scale, hit testing maps 1:1). See §4.1 |
 | `PlaceHolderSize` | `JumpCut` (**winia-only**) | Nothing like it exists in Compose, and the code path is identical to `ContentSize` — it just names the cheap "layout snapped to the end state" reading. For the entering end it reports the target size, like `ContentSize`; for a leaving end it means the space is released immediately |
 | `PlaceHolderSize` | `ContentSize` (Compose's default name) | Reports the target size, so the parent holds still |
@@ -303,11 +303,13 @@ Three properties worth knowing before you rely on it:
   divergence — out of scope.
 - Cross-OS-window flights are out of scope (need an OS-level overlay).
 - Tier 2 bitmap flights deliberately unbuilt (no trigger exists).
-- `ResizeMode::ScaleToBounds` does not implement Compose's shape: Compose takes
-  `contentScale` (`FillWidth` by default) + `alignment` and derives ONE scale, so
-  the content keeps its aspect ratio; winia scales X and Y independently, so a
-  mismatched-aspect flight stretches (documented symptom: arcs go elliptical).
-  `RemeasureToBounds` is the mode to reach for when the aspect must be real.
+- ~~`ResizeMode::ScaleToBounds` does not implement Compose's shape~~ **CLOSED**: it now
+  carries Compose's `contentScale` + `alignment`, and `scale_to_bounds()` reproduces
+  Compose's defaults exactly (`ContentScale.FillWidth` + `Alignment.Center`), so the
+  content keeps its aspect ratio and the leftover axis is centred. All seven
+  `ContentScale` members are implemented (`Fit`, `Crop`, `FillBounds` — the old
+  hard-coded behaviour, still available, `FillWidth`, `FillHeight`, `Inside`, `None`).
+  `RemeasureToBounds` remains the mode to reach for when the content itself must re-flow.
 - A same-screen MORPH ignores `resize`/`placeholder` (see §4.1).
 - `PlaceHolderSize` is a closed enum: Compose's `PlaceholderSize` is a policy
   value (`calculateSize(contentSize, animatedSize)`), so a Compose user cannot
