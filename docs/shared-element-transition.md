@@ -178,8 +178,11 @@ The overlay pass generalizes that pass instead of adding a second one:
   own flights would never see it. `rebuild_layer_order` unions those with
   the detached sources and z-sorts (`zIndexInOverlay`), with elevated
   targets painted *under* their ghost — the compositing order the
-  tree-then-ghost passes used to produce. Render and hit testing both read
-  that one list, so paint order and hit order cannot drift.
+  tree-then-ghost passes used to produce. That ordering holds at EQUAL
+  `z_index` only: the sort is stable and `elevated_roots` is pushed before
+  `transition_layer`, so an explicit `z_index` on the target reorders it (there is
+  no role tie-break, and no test covers ghost-vs-target at unequal z). Render and
+  hit testing both read that one list, so paint order and hit order cannot drift.
 - **Hit routing follows paint.** `hit_test_with_flights` walks the layer
   topmost-first: a source ghost routes into its live target (fraction
   mapping, unchanged), an elevated target reverses its own flight transform

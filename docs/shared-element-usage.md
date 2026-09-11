@@ -166,10 +166,29 @@ Three properties worth knowing before you rely on it:
 ## 5. Shape and color
 
 - Corner radii resolve automatically from the nearest
-  Background/Border/Clip shape (`Circle`/`Pill` → half min-size, same
-  precedence as the focus ring) and lerp `[TL,TR,BR,BL]` — circle →
-  rectangle is 75→0. Non-uniform scale turns arcs elliptical
-  (inherent, not a bug).
+  Background/Border/Clip shape (same precedence as the focus ring). The rule,
+  which nothing documented until now:
+  - Each end's corner KIND is captured when the flight resolves. A `Circle`/`Pill`
+    nearest shape is a **percent** corner (`min(w,h)/2`, i.e. Compose's
+    `RoundedCornerShape(50)` — on a non-square box that is a stadium, not a
+    circle); anything else is a **fixed** value, and `TopRoundedRect` keeps its
+    per-corner quad (only its top two corners are rounded).
+  - A percent corner is resolved **against the rect being painted — the lerped
+    rect** and only then mixed with the other end by progress. So a
+    percent -> fixed flight fades its corners out (a `Circle` -> `Rectangle` at
+    p=.25 paints `min(l)/2 * .75` on BOTH ends), a percent -> percent flight
+    evaluates on the animated box, and fixed `Shape::rounded(n)` corners are
+    unchanged (they lerp endpoint to endpoint, e.g. circle -> rectangle 75 -> 0).
+  - Deliberate deviation from Compose: Compose interpolates the deferred
+    `CornerSize` objects and resolves each end against ITS OWN box, so its two
+    ends can differ mid-flight; winia resolves both against the lerped rect, so
+    they always coincide. The visible difference on this repo's shape pairs is
+    under 3px; the alignment is what the demos are checked against.
+  - Under spring overshoot a resolved percent corner can exceed half the painted
+    box. Skia's `RRect` constructor silently reduces it (Compose scales corners
+    down proportionally instead), so the corner clamps while a fixed end keeps
+    overshooting.
+- Non-uniform scale turns arcs elliptical (inherent, not a bug).
 - Color is **alpha crossfade**, not color morph: red→blue passes through
   blended purple mid-flight. True solid-color lerp (linear/Oklab space,
   Background/Border only) is a scoped future item — default stays
@@ -291,9 +310,12 @@ Three properties worth knowing before you rely on it:
 - `PlaceHolderSize` is a closed enum: Compose's `PlaceholderSize` is a policy
   value (`calculateSize(contentSize, animatedSize)`), so a Compose user cannot
   plug in a custom rule here.
-- Not pixel-pinned: the SCALED-versus-CROPPED distinction is asserted with one
-  raster probe (green band) plus the layout assertions; a hero whose content is
-  a single solid rounded rect looks the same either way.
+- Not pixel-pinned: the SCALED-versus-CROPPED distinction rests on ONE raster
+  probe (a green band whose scaled height is ~39px of the lerped rect, vs 60px
+  when the content is drawn 1:1); the box/scale contract itself is pinned by the
+  layout assertions (the matrix's exact sizes,
+  `remeasure_end_is_never_scaled_by_the_frame_delta`), not by pixels. A hero whose
+  content is a single solid rounded rect looks the same either way.
 
 ## 8. Tests
 
