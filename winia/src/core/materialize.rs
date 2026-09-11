@@ -488,3 +488,57 @@ fn collect_node_keys_with_parent(
         collect_node_keys_with_parent(arena, c, Some(idx), map, depth + 1);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The listing rule the image demo's Back crash rests on, pinned at the rule level: a node
+    /// ends up with ONE listing, and listings owned by a parent that is not reachable from the
+    /// root go away — those parents are not part of this frame, and a second path to a live node
+    /// is what makes the walk in `collect_node_keys` visit it twice (`[dup-key]`, both printed
+    /// indices equal) or leaves it reachable only through a dead parent (present but never
+    /// measured, 0x0, drawing nothing).
+    ///
+    /// The arena is constructed here because the precondition cannot be produced through
+    /// composition instead: measured, six attempts at that all came back clean, since the
+    /// compose that follows rebuilds a parent's `children` before the key walk runs. This is
+    /// therefore a rule-level lock, NOT a reproduction of the demo's runtime path — the runtime
+    /// evidence is the debug-server run (`[dup-key]` 90 -> 0 over three round trips).
+    #[test]
+    fn prune_keeps_one_listing_and_drops_unreachable_parents() {
+        use crate::layout::node::LayoutNode;
+        let mut composer = Composer::new();
+        let root = composer.arena.alloc(LayoutNode::default());
+        let mid = composer.arena.alloc(LayoutNode::default());
+        let leaf = composer.arena.alloc(LayoutNode::default());
+        let orphan = composer.arena.alloc(LayoutNode::default());
+        composer.arena.root = Some(root);
+        composer.arena.add_child(root, mid);
+        composer.arena.add_child(mid, leaf);
+        // A stale listing under a parent that is NOT reachable from the root, plus a duplicate
+        // listing under the reachable one: both shapes seen in the demo.
+        composer.arena.nodes[orphan].children.push(leaf);
+        composer.arena.nodes[mid].children.push(leaf);
+
+        prune_stale_child_links(&mut composer);
+
+        assert_eq!(
+            composer.arena.nodes[mid]
+                .children
+                .iter()
+                .filter(|&&c| c == leaf)
+                .count(),
+            1,
+            "the reachable parent keeps exactly one listing"
+        );
+        assert!(
+            composer.arena.nodes[mid].children.contains(&leaf),
+            "…and it is the listing that survives"
+        );
+        assert!(
+            composer.arena.nodes[orphan].children.is_empty(),
+            "an unreachable parent keeps no listings"
+        );
+    }
+}
