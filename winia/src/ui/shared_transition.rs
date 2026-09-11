@@ -6118,13 +6118,14 @@ mod tier0_tests {
             b.arena_nodes()[tidx].flight_measure.is_some(),
             "the peer node carries the per-frame override"
         );
-        // The cross-poll runs after the peer's layout, so the override first
-        // applies on the peer's NEXT layout. Pin the progress first, then drive
-        // one frame + one compose-free layout: the peer must report the ANIMATED
-        // size (120x80 -> 300x160 at t=.5 = 210x120), not the resting one.
-        xadvance(&mut a, &mut b, &show_a, &show_b, &scope);
-        // `xadvance` lets the engine drive progress, so pin AFTER it — and use the
-        // frame helper (no update_animations) so the pin sticks.
+        // The cross-poll runs after the peer's layout, so the override first applies on
+        // the peer's NEXT layout. DETERMINISTIC (no `xadvance`): a wall-clock advance
+        // lets the engine drive the flight, so on a loaded machine the flight can
+        // already be over by the time we pin — that made this test fail only in the
+        // full parallel suite. Pin the progress, then drive one non-advancing frame +
+        // one compose-free layout: the peer must report the ANIMATED size
+        // (120x80 -> 300x160 at t=.5 = 210x120), not the resting one.
+        assert_eq!(a.shared_flights.len(), 1, "the flight is still in flight");
         let fid = *a.shared_flights.keys().next().expect("flight id");
         a.shared_flights
             .get_mut(&fid)
