@@ -2411,15 +2411,23 @@ impl Composer {
                     );
                     measure_state.set(frame);
                     let key = self.arena.nodes[tidx].slot_key;
-                    let had_override = self.arena.nodes[tidx].flight_measure.is_some();
-                    self.arena.nodes[tidx].flight_measure = if frame.is_idle() {
-                        None
-                    } else {
-                        Some(FlightMeasure {
-                            frame: measure_state,
-                            owner: FlightKey { cid: self.composer_id, id },
-                        })
-                    };
+                    let mine = FlightKey { cid: self.composer_id, id };
+                    // Never clobber (or clear) a DIFFERENT flight's override:
+                    // ids are per-composer, so another flight can legitimately
+                    // own this node's override while this one is being torn down.
+                    let foreign = self.arena.nodes[tidx]
+                        .flight_measure
+                        .as_ref()
+                        .is_some_and(|f| f.owner != mine);
+                    let had_override =
+                        !foreign && self.arena.nodes[tidx].flight_measure.is_some();
+                    if !foreign {
+                        self.arena.nodes[tidx].flight_measure = if frame.is_idle() {
+                            None
+                        } else {
+                            Some(FlightMeasure { frame: measure_state, owner: mine })
+                        };
+                    }
                     // `layout()` resets `layout_dirty` on the whole tree at the
                     // start of every pass, so an override has to be re-seeded
                     // EVERY frame — otherwise the folded parent never descends
@@ -2744,12 +2752,21 @@ impl Composer {
                     );
                     measure_state.set(frame);
                     let key = peer.arena.nodes[tidx].slot_key;
-                    let had_override = peer.arena.nodes[tidx].flight_measure.is_some();
-                    peer.arena.nodes[tidx].flight_measure = if frame.is_idle() {
-                        None
-                    } else {
-                        Some(FlightMeasure { frame: measure_state, owner: FlightKey { cid: owner_cid, id } })
-                    };
+                    let mine = FlightKey { cid: owner_cid, id };
+                    // Same guard as the Tier-0 writer: a different flight's
+                    // override on this node must survive (ids are per-composer).
+                    let foreign = peer.arena.nodes[tidx]
+                        .flight_measure
+                        .as_ref()
+                        .is_some_and(|f| f.owner != mine);
+                    let had_override = !foreign && peer.arena.nodes[tidx].flight_measure.is_some();
+                    if !foreign {
+                        peer.arena.nodes[tidx].flight_measure = if frame.is_idle() {
+                            None
+                        } else {
+                            Some(FlightMeasure { frame: measure_state, owner: mine })
+                        };
+                    }
                     if !frame.is_idle() || had_override {
                         peer.layout_dirty_keys.insert(key);
                     }
@@ -6367,6 +6384,68 @@ mod tier0_tests {
             (sx - lerped.width / 300.0).abs() <= 1e-6 && (sy - lerped.height / 200.0).abs() <= 1e-6,
             "ScaleToBounds still scales its content box (got {sx},{sy})"
         );
+    }
+
+    /// A writer must not clobber (or clear) an override that belongs to a
+    /// DIFFERENT flight. Flight ids are per-composer, so a peer flight with the
+    /// same number is normal, and R2's trace caught exactly that: a peer morph
+    /// with id 1 deleted the Tier-1 flight's override. The clear side is
+    /// namespaced by `FlightKey`; this pins the WRITE side.
+    #[test]
+    fn writer_never_clobbers_another_flights_override() {
+        use crate::layout::node::{FlightMeasure, FlightMeasureFrame};
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+        let frame = |composer: &mut Composer| {
+            let s = show.clone();
+            composer.compose(|ctx| {
+                SharedTransitionLayout::new().build(ctx, |ctx| {
+                    let scope = current_shared_scope().expect("scope");
+                    if s.get() {
+                        list_layout_screen(
+                            ctx,
+                            &scope,
+                            ResizeMode::ScaleToBounds { clip: false },
+                            PlaceHolderSize::JumpCut,
+                        );
+                    } else {
+                        detail_layout_screen(
+                            ctx,
+                            &scope,
+                            ResizeMode::ScaleToBounds { clip: false },
+                            PlaceHolderSize::JumpCut,
+                        );
+                    }
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+            composer.poll_shared_flights();
+        };
+        frame(&mut composer);
+        show.set(false);
+        frame(&mut composer);
+        let marked = marked_in(&composer)[0];
+
+        // A foreign flight owns this node's override (another composer's id).
+        let foreign_state = State::new(FlightMeasureFrame::IDLE);
+        let foreign = FlightMeasure {
+            frame: foreign_state.clone(),
+            owner: FlightKey { cid: composer.composer_id + 1000, id: 1 },
+        };
+        composer.arena.nodes[marked].flight_measure = Some(foreign);
+        // Run frames of the real flight that targets this node. The default
+        // contract writes an IDLE frame, which used to CLEAR the override.
+        for _ in 0..3 {
+            frame(&mut composer);
+        }
+        let kept = composer.arena_nodes()[marked].flight_measure.clone();
+        assert!(
+            kept.is_some_and(|f| f.owner.cid == composer.composer_id + 1000),
+            "a foreign flight's override must survive this flight's writes"
+        );
+        crate::animation::clear_all_animations();
     }
 
     /// Bouncy hero leaf (spring overshoot must render past the end rect).
