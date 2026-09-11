@@ -3732,6 +3732,150 @@ mod tier0_tests {
         crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// A shared container that paints NOTHING itself, wrapping a leaf that fills it with green.
+    /// The raster harness can then only see the leaving end if the ghost still has its child —
+    /// `tier0_flight_completes_end_to_end` puts the colour on the container's own background, so a
+    /// vanished child is invisible to it and it cannot catch this defect.
+    fn painted_child_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope, h: f32) {
+        Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+            Column::new()
+                .modifier(
+                    Modifier::new()
+                        .size(200.0, h)
+                        .shared_bounds(
+                            scope.shared_content_state("painted"),
+                            VisibilityTransition::fade_in(TweenSpec::default()),
+                            VisibilityTransition::fade_out(TweenSpec::default()),
+                            BoundsTransform::default(),
+                            ResizeMode::scale_to_bounds(),
+                            PlaceHolderSize::AnimatedSize,
+                            PathMotion::Linear,
+                            0.0,
+                            true,
+                        ),
+                )
+                .build(ctx, |ctx| {
+                    let key = ctx.next_key();
+                    ctx.start_leaf(
+                        key,
+                        Modifier::new()
+                            .fill_max_size()
+                            .background(Color::GREEN, Shape::Rectangle),
+                    );
+                    ctx.end_node();
+                });
+        });
+    }
+
+    /// The two screens, as `#[composable]` wrappers calling the shared helper — the same shape as
+    /// `switch_frame_list` / `switch_frame_detail`, which is what gets the marker registered at a
+    /// stable call site (calling the helper directly leaves no endpoint to detect a switch with).
+    #[crate::composable]
+    fn painted_list(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
+        painted_child_screen(ctx, scope, 80.0);
+    }
+
+    #[crate::composable]
+    fn painted_detail(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
+        painted_child_screen(ctx, scope, 240.0);
+    }
+
+    /// The headless raster probe for the "the animation starts fully transparent" report: on the
+    /// switch frame the leaving end must still paint its CHILD. Built with a container that has no
+    /// background of its own, which is the part earlier attempts missed — a card that paints its
+    /// own background cannot show a lost child.
+    ///
+    /// What it pins, measured (this test, and the review that supplied the scene):
+    /// - removing the descendant shelter in `detach_source` -> RED, the ghost's child becomes
+    ///   `size=(0.0, 0.0) key=0x0` and the sample is the canvas colour `(255, 255, 255)`;
+    /// - calling `prune_stale_child_links` from `materialize()` again (before the retention) ->
+    ///   RED, the ghost has `children=[]` and the same canvas colour.
+    ///
+    /// NOT pinned, so do not claim it: with the prune DISABLED ENTIRELY this stays GREEN (measured
+    /// by the reviewer). The prune removes a stale listing; it is not what paints the ghost. This
+    /// test locks the shelter and the prune's PLACEMENT, not its existence.
+    #[test]
+    fn a_ghost_keeps_painting_its_child_on_the_switch_frame() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+        let mut frame = |composer: &mut Composer, show: &State<bool>| {
+            let s = show.clone();
+            composer.compose(|ctx| {
+                SharedTransitionLayout::new().build(ctx, |ctx| {
+                    let scope = current_shared_scope().expect("inside SharedTransitionLayout");
+                    if s.get() {
+                        painted_list(ctx, &scope);
+                    } else {
+                        painted_detail(ctx, &scope);
+                    }
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+            composer.poll_shared_flights();
+        };
+
+        // Two frames: the shared scope and its marker are established on the first one.
+        frame(&mut composer, &show);
+        frame(&mut composer, &show);
+        // The hero paints green before any switch (the probe would be meaningless otherwise).
+        {
+            let marked = marked_indices(&composer);
+            if marked.is_empty() {
+                let dump: Vec<(usize, (f32, f32), usize, bool)> = composer
+                    .arena_nodes()
+                    .iter()
+                    .enumerate()
+                    .map(|(i, n)| {
+                        (
+                            i,
+                            (n.measured_size.width, n.measured_size.height),
+                            n.children.len(),
+                            find_shared_marker(&n.modifier).is_some(),
+                        )
+                    })
+                    .collect();
+                panic!("no marked node in the tree; arena (idx, size, kids, marked) = {dump:?}");
+            }
+            let hero = *marked.first().expect("the marked hero in the tree");
+            let (hx, hy) = node_center(&composer, hero);
+            let mut surf = render_heads(&composer);
+            let before = pixel_rgb(&mut surf, hx, hy);
+            assert!(
+                close_enough(before, (0, 255, 0), 40),
+                "the hero must paint its green child before the switch, got {before:?}"
+            );
+        }
+
+        show.set(false);
+        frame(&mut composer, &show);
+        let src_idx = *composer
+            .transition_layer
+            .first()
+            .expect("the leaving end is retained in the transition layer");
+        {
+            let vis = composer.arena_nodes()[src_idx]
+                .transition
+                .clone()
+                .expect("the detached source carries a visual");
+            assert_eq!(vis.role, TransitionRole::Source, "the ghost is the leaving end");
+            assert!(
+                vis.progress < 0.5,
+                "this is the frame the flight starts, so p is still ~0, got {}",
+                vis.progress
+            );
+        }
+        let (sx, sy) = node_center(&composer, src_idx);
+        let mut surf = render_heads(&composer);
+        let c = pixel_rgb(&mut surf, sx, sy);
+        assert!(
+            close_enough(c, (0, 255, 0), 40),
+            "the leaving end must still paint its child on the switch frame, got {c:?}"
+        );
+        crate::animation::clear_all_animations();
+    }
+
     #[test]
     fn tier0_flight_completes_end_to_end() {
         let _g = lock_serial();
@@ -7999,17 +8143,24 @@ mod tier0_tests {
         show.set(false);
         frame(&mut composer, true);
 
-        let hero = composer.arena_nodes()[composer.layout_root_idx().expect("root")]
-            .children
-            .first()
-            .copied()
-            .map(|_| composer.arena_nodes().iter().find(|n| {
-                (n.measured_size.width - 200.0).abs() < 1.0 && n.measured_size.height > 1.0
-            }))
-            .flatten();
+        // The hero must be reachable FROM THE ROOT (i.e. in the tree) and be the entering end with
+        // a non-zero size. An earlier version of this assertion searched the whole arena for a node
+        // that merely had the right width, and it matched the DETACHED leaving-end ghost (which is
+        // out of the tree by design and has `role = Source`) — so it stayed green even with the
+        // in-tree hero zero-sized and unmounted. Review measured that: `predicate matches = [1, 4]`.
+        let in_tree = marked_indices(&composer);
+        let hero = in_tree.iter().copied().find(|&i| {
+            let n = &composer.arena_nodes()[i];
+            matches!(
+                n.transition.as_ref().map(|t| t.role.clone()),
+                Some(TransitionRole::Target)
+            ) && n.measured_size.width > 1.0
+                && n.measured_size.height > 1.0
+        });
         assert!(
             hero.is_some(),
-            "the hero must be present and measured after a double-composed switch frame"
+            "the entering end must be in the tree and measured after a double-composed switch \
+             frame; arena nodes with a marker: {in_tree:?}"
         );
         crate::animation::clear_all_animations();
     }
