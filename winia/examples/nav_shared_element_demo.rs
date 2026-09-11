@@ -94,6 +94,10 @@ fn demo(ctx: &mut ComposeCtx) {
     // A separate clone for the display itself: the entry closures below move their own clones.
     let display_stack = back_stack.clone();
     let depth = back_stack.len();
+    // The entry-level bridge (winia's counterpart of Nav3's `sharedEntryInSceneNavEntryDecorator`):
+    // with it ON the ENTRY ITSELF is a shared element keyed by the entry, so a nav transition can fly
+    // a whole screen; OFF compares against the plain nav transition (only the hero marker flies).
+    let entry_flight = ctx.remember(|| true);
     SharedTransitionLayout::new().build(ctx, |ctx| {
         let scope = current_shared_scope().expect("inside SharedTransitionLayout");
         Column::new()
@@ -102,7 +106,21 @@ fn demo(ctx: &mut ComposeCtx) {
                 Text::new(format!("nav × shared elements — stack depth {depth}"))
                     .font_size(12.0)
                     .build(ctx);
-                NavDisplay::new(&display_stack, {
+                Button::text()
+                    .on_click({
+                        clone!(entry_flight);
+                        move || entry_flight.update(|v| *v = !*v)
+                    })
+                    .build(ctx, |ctx| {
+                        Text::new(if entry_flight.get() {
+                            "entry flight: ON"
+                        } else {
+                            "entry flight: OFF"
+                        })
+                        .font_size(12.0)
+                        .build(ctx)
+                    });
+                let display = NavDisplay::new(&display_stack, {
                     clone!(scope);
                     move |ctx, key| match key {
                         Route::List => NavEntry::new(key.clone(), {
@@ -116,8 +134,14 @@ fn demo(ctx: &mut ComposeCtx) {
                             move |ctx, _| detail_screen(ctx, &scope, &bs)
                         }),
                     }
-                })
-                .build(ctx);
+                });
+                if entry_flight.get() {
+                    display
+                        .add_decorator(winia::nav::SharedEntryInSceneDecorator)
+                        .build(ctx);
+                } else {
+                    display.build(ctx);
+                }
             });
     });
 }

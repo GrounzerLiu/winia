@@ -1219,6 +1219,55 @@ impl<K: NavKey> NavEntryDecorator<K> for RememberStateDecorator {
     }
 }
 
+/// Shared-element bridge for navigation — winia's counterpart of Nav3's
+/// `sharedEntryInSceneNavEntryDecorator`.
+///
+/// Compose wraps every entry's content in
+/// `Box(Modifier.sharedElement(rememberSharedContentState(entry.key), animatedVisibilityScope =
+/// LocalNavAnimatedContentScope.current))`: the ENTRY ITSELF becomes a shared element keyed by the
+/// entry, so a scene change can fly it, and its animation rides the nav's own transition clock.
+/// This does the same with winia's `shared_bounds`, keyed by the entry's stable content key.
+///
+/// Usage: put the `NavDisplay` inside a `SharedTransitionLayout` and add this to the display's entry
+/// decorators. Per-element markers inside a screen keep working — different key, same scope.
+///
+/// Differences from Compose, recorded rather than silent: Compose throws when the scope is missing
+/// (its composition local has no default); this degrades to rendering the entry unwrapped, so a
+/// display without a `SharedTransitionLayout` keeps working. Compose also hands the marker the
+/// nav's `AnimatedContentScope`; winia's equivalent is the scene visibility the nav publishes per
+/// transition layer (`with_nav_scene`), which is what the flight system pairs the two live ends by.
+pub struct SharedEntryInSceneDecorator;
+
+impl<K: NavKey> NavEntryDecorator<K> for SharedEntryInSceneDecorator {
+    fn wrap(&self, ctx: &mut ComposeCtx, entry: &NavEntry<K>, inner: &dyn Fn(&mut ComposeCtx)) {
+        let Some(scope) = crate::ui::shared_transition::current_shared_scope() else {
+            inner(ctx);
+            return;
+        };
+        let key = format!("entry:{}", entry.content_key());
+        crate::ui::layout_components::Column::new()
+            .modifier(
+                Modifier::new().fill_max_size().shared_bounds_with_overlay_clip(
+                    scope.shared_content_state(&key),
+                    crate::ui::animated_visibility::VisibilityTransition::fade_in(
+                        crate::animation::TweenSpec::default(),
+                    ),
+                    crate::ui::animated_visibility::VisibilityTransition::fade_out(
+                        crate::animation::TweenSpec::default(),
+                    ),
+                    crate::ui::shared_transition::BoundsTransform::default(),
+                    crate::ui::shared_transition::ResizeMode::scale_to_bounds(),
+                    crate::ui::shared_transition::PlaceHolderSize::AnimatedSize,
+                    crate::ui::shared_transition::PathMotion::Linear,
+                    0.0,
+                    true,
+                    crate::ui::shared_transition::OverlayClip::Bounds,
+                ),
+            )
+            .build(ctx, |ctx| inner(ctx));
+    }
+}
+
 /// 生命周期装饰器——entry 是否在 back stack 中决定渲染。
 ///
 /// 对标 Nav3 `BackStackAwareLifecycleNavEntryDecorator`（栈内 RESUMED / 栈外
