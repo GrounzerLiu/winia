@@ -1180,7 +1180,14 @@ impl TransitionVisual {
         // Percent corners (Pill/Circle) are resolved inside `radii()` against
         // the lerped rect — each end first, then mixed by progress — so a plain
         // `radii()` is already correct here.
-        let r = self.radii();
+        // A DEVICE radius must not exceed half the smaller side of the rect it is
+        // painted into, which a spring overshoot can drive past (a percent end
+        // resolved against the animated box, or a fixed end extrapolating). Compose
+        // scales such corners down proportionally in `createOutline`; Skia instead
+        // silently clamps at construction, so without this the corner would jump
+        // rather than follow the overshoot.
+        let cap = l.width.min(l.height) / 2.0;
+        let r = self.radii().map(|v| v.min(cap));
         [
             (r[0] / sx, r[0] / sy),
             (r[1] / sx, r[1] / sy),
