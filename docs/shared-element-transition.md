@@ -411,19 +411,28 @@ the supported shape.
 3. `RemeasureToBounds` + scrollable shared content: CLOSED — a re-measured
    scroll container re-derives its viewport from the animated constraints
    (`scroll_viewport_*`), so render's clip and the hit clamp follow the box.
-4. KNOWN LATENT (review R1-F3): the Tier-0 writers resolve their endpoint by the
-   FROZEN slot key with no identity re-check, so a recomposition that moves the
-   target's positional slot could hand the flight's visual + layout override to
-   an unrelated node until teardown (Tier 1 has that guard; Tier 0 does not).
-   Self-healing, no reproducer found; the fix is a marker scope+key check in
-   `write_flight_visuals` plus a slot-shift test.
-5. Corrected after review: the Tier-1 "peer frozen forever" leak did NOT
-   reproduce (dropping a marker rebuilds the node, which constructs a fresh
-   `flight_measure: None`), so routing both Tier-1 teardowns through
-   `clear_transition_for_slot` is a consistency fix, not the repair of an
-   observable freeze. The reachable stuck-override cause is narrower: a teardown
-   that skips that function while the node survives — pinned by
-   `mid_flight_cancel_restores_the_natural_size`.
+4. FIXED WITH A REPRODUCER (review 2, R2-F5): the Tier-0 writers resolve their
+   endpoint by the FROZEN slot key with no identity re-check, so a recomposition
+   that moves the target's positional slot hands the flight's visual + layout
+   override to an unrelated node for one pass — measured: an inserted 20x20 leaf
+   is laid out at the flight's reported size with the animated content
+   constraints. It self-heals (the same event that changes the element under the
+   key also retargets/cancels, clearing that slot and seeding it). Slot keys are
+   node-bound and duplicate-free, so an override can never migrate to another
+   node object — it rides its node to a different ELEMENT for one pass.
+5. CORRECTED TWICE (review 2, R2-F2): the Tier-1 teardown routing through
+   `clear_transition_for_slot` IS load-bearing. An earlier note here claimed the
+   "peer frozen forever" leak did not reproduce and blamed node rebuilds; both
+   halves were wrong. Measured: (a) dropping a marker reuses the SAME node object
+   (`materialize` only replaces the modifier), so a surviving node does keep its
+   override; (b) the revert experiment was green only because a Tier-1 peer with
+   `PlaceHolderSize::AnimatedSize` opened a PHANTOM same-screen morph every frame,
+   whose idle frame deleted the override (the cross-poll rewrote it, so it was a
+   per-frame drop/rewrite churn). That phantom is now guarded in
+   `poll_layout_morphs` (a node carrying an override is the flight's, not a
+   morph), and with the guard in place reverting BOTH Tier-1 clears makes
+   `stale_cancel_drops_the_surviving_peers_layout_override` fail with the
+   override still attached.
 6. Cross-WINDOW flights (separate OS windows) remain out of scope — they need
    OS-level overlay, not framework composition.
 7. Mid-flight reversal opens a reverse flight through the same match path

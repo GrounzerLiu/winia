@@ -2590,11 +2590,6 @@ impl Composer {
                 // and its natural size restored — clearing only the visual
                 // would freeze the peer at its last animated size forever.
                 let peer = &mut all[ti];
-                // Route through the shared teardown so the peer's layout
-                // override (Compose `ResizeMode`/`PlaceHolderSize`) is dropped
-                // and its natural size restored — clearing only the visual
-                // would freeze the peer at its last animated size.
-                let peer = &mut all[ti];
                 peer.clear_transition_for_slot(slot, id);
             }
             all[0].shared_flights.remove(&id);
@@ -2620,7 +2615,10 @@ impl Composer {
         if let Some(slot) = a.flight.target_slot {
             if let Some(peer) = all.iter_mut().find(|c| c.composer_id == a.target_cid) {
                 // Same as the completion path: the peer's layout override must
-                // go with the flight (see `clear_transition_for_slot`).
+                // go with the flight (see `clear_transition_for_slot`). Verified
+                // load-bearing: reverting both Tier-1 clears makes
+                // `stale_cancel_drops_the_surviving_peers_layout_override` fail
+                // with the override still attached.
                 peer.clear_transition_for_slot(slot, id);
             }
         }
@@ -3111,6 +3109,20 @@ impl Composer {
             let Some(idx) = find_idx_by_slot(&self.arena.nodes, root, *slot) else {
                 continue;
             };
+            // A flight ownS this node's reported size right now (Compose
+            // `PlaceHolderSize`), so a size delta here is the FLIGHT, not a
+            // layout morph. Opening one would be wrong twice over: a Tier-1
+            // flight lives in the MAIN composer's map, so this composer's
+            // `flight_for_key` cannot see it and would open a phantom T0 morph
+            // EVERY frame — and that morph's idle frame (morphs never attach an
+            // override) deletes the flight's override, which the cross-poll then
+            // rewrites, i.e. per-frame drop/rewrite churn, a phantom flight, and
+            // chrome that lingers while it settles. Skipping the baseline update
+            // as well keeps the RESTING size as the morph baseline, so nothing
+            // fires when the flight ends either.
+            if self.arena.nodes[idx].flight_measure.is_some() {
+                continue;
+            }
             let nid = self.arena.nodes[idx].id;
             let (ax, ay) = crate::app::node_abs_position(&self.arena.nodes, root, nid);
             let (w, h) = {
@@ -5849,6 +5861,30 @@ mod tier0_tests {
             b.arena_nodes()[tidx].measured_size.height
         );
 
+        // The peer must NOT open its own flight for a key a Tier-1 flight owns:
+        // its override-driven size change looks like a layout morph, but the
+        // flight lives in the MAIN map, so the peer cannot see it — and the
+        // phantom morph's idle frame would delete the override every frame.
+        let peer_flights_at_start = b.next_flight_id;
+        xadvance(&mut a, &mut b, &show_a, &show_b, &scope);
+        assert!(
+            b.shared_flights.is_empty(),
+            "the peer owns no flight for a Tier-1 key ({} found)",
+            b.shared_flights.len()
+        );
+        assert_eq!(
+            b.next_flight_id, peer_flights_at_start,
+            "no phantom morph is opened per frame"
+        );
+        assert_eq!(
+            b.arena_nodes()[tidx]
+                .transition
+                .as_ref()
+                .map(|t| t.role),
+            Some(TransitionRole::Target),
+            "the peer's visual is the Tier-1 target, not a morph"
+        );
+
         for _ in 0..300 {
             if a.shared_flights.is_empty() {
                 break;
@@ -5950,19 +5986,22 @@ mod tier0_tests {
         );
 
         // The marker disappears, the NODE does not (same slot, same chain).
+        let node_before = b.arena_nodes()[tidx].id;
         peer_marked.set(false);
         crate::animation::update_animations();
         frame(&mut a, &mut b);
         assert!(a.shared_flights.is_empty(), "the stale flight is cancelled");
         assert_eq!(
-            b.arena_nodes()[tidx].slot_key,
-            b.arena_nodes()[tidx].slot_key,
-            "the peer node is the same one"
+            b.arena_nodes()[tidx].id, node_before,
+            "the peer node survived the marker drop (materialize reuses it — it is not rebuilt)"
         );
         assert!(
             b.arena_nodes()[tidx].flight_measure.is_none(),
             "the cancelled flight takes its layout override with it"
         );
+        // The override is dropped in the poll, i.e. after layout, so the node is
+        // re-measured by the NEXT layout — the documented one-frame lag.
+        frame(&mut a, &mut b);
         assert_eq!(
             b.arena_nodes()[tidx].measured_size,
             crate::layout::node::Size::new(300.0, 160.0),
