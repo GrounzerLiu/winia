@@ -447,31 +447,39 @@ the supported shape.
    "the spill is visible without the flag" — cannot pass. Fixing it means deciding whether
    the unconditional clip IS the contract (then drop the flag and the doc claim) or the
    flag should gate it (then move the clip under it).
-7. KNOWN, DOCUMENTED NOT FIXED (review 2, R1): the keyboard focus ring is drawn from
+7. KNOWN, NOT FIXED (review 2, R3-F4): across composers, PAINT order and HIT order
+   disagree. During a cross flight the app draws the main transition layer AFTER
+   `render_overlays` (`app.rs`), i.e. over an open dialog/scrim, while the hit path asks
+   `hit_overlay` FIRST (`app.rs`) and only then the main tree — so a tap in the overlap
+   goes to the dialog that the ghost/chrome is painted over. Inside one composer the two
+   agree (verified). Fixing it means reordering input routing (main layer first, then
+   overlays, then the tree), which changes where every tap lands while a Tier-1 flight
+   runs — that needs UI-level coverage, so it is recorded rather than changed here.
+8. KNOWN, DOCUMENTED NOT FIXED (review 2, R1): the keyboard focus ring is drawn from
    the node's own nearest shape (`render.rs` `draw_focus`), not from the flight's
    morphed radii, so a focused hero mid-flight shows a ring whose corners do not match
    the background it surrounds. Fixing it means threading an optional radii override
    into `draw_focus`; the case needs focus AND a flight at once, which no demo or test
    exercises.
-8. Cross-WINDOW flights (separate OS windows) remain out of scope — they need
+9. Cross-WINDOW flights (separate OS windows) remain out of scope — they need
    OS-level overlay, not framework composition.
-9. Mid-flight reversal opens a reverse flight through the same match path
+10. Mid-flight reversal opens a reverse flight through the same match path
    (stashed source × fresh counterpart — tested both directions); a reversal
    with no counterpart anywhere cancels atomically with no replacement.
-10. Tier1 ghosts paint but ignore taps (target lives in a peer arena the
+11. Tier1 ghosts paint but ignore taps (target lives in a peer arena the
    single-arena hit search cannot see); the live target stays directly
    hittable in its own composer.
-11. Overlay enter/exit animations are not folded into Tier1 visuals — the
+12. Overlay enter/exit animations are not folded into Tier1 visuals — the
    flight leads/lags the panel transform while it animates (~200ms).
-12. No shared markers on descendants of shared markers (nested flights would
+13. No shared markers on descendants of shared markers (nested flights would
    compound both transforms). This also gates `OverlayClip`, whose Compose
    default resolves through the parent `sharedBounds`.
-13. Elevated endpoints escape ancestor clips *by design* — an element that
+14. Elevated endpoints escape ancestor clips *by design* — an element that
    is intentionally clipped by a container (an image inside a rounded card)
    will now spill while it flies. That is Compose's semantics; the opt-out
    (`render_in_overlay = false`) is the escape hatch, and a real
    `OverlayClip` is the eventual fine-grained answer.
-14. Layer membership is written per frame by the visual writers and cleared
+15. Layer membership is written per frame by the visual writers and cleared
     in `poll_shared_flights`; a composer that stops being polled would keep
     a stale order. Every composer (main + overlays + headless tests) polls
     each frame, so this is a invariant to preserve rather than a bug today.
