@@ -190,55 +190,59 @@ fn image_flight_demo(ctx: &mut ComposeCtx) {
             .modifier(Modifier::new().fill_max_size().padding(16.0))
             .spacing(12.0)
             .build(ctx, |ctx| {
+                // Each branch gets its OWN key. The two screens have different child counts
+                // and different nodes at the same call-site positions, and winia's slot keys
+                // are derived from that position: without a key at this structural change the
+                // branch flip can hand one node's key to another, and the framework panics
+                // with `[dup-key]` (reproduced here on Back: a 388px-wide node — a controls
+                // row or the hint — collided with itself at the same position). Compose keys
+                // conditional groups the same way; winia requires it explicitly, which its
+                // own panic message says.
                 if show_detail.get() {
-                    Text::new("Detail").font_size(22.0).build(ctx);
-                    photo_box(ctx, 344.0, 240.0, Shape::rounded(12.0), &scope, &content_scale, &remeasure, &spill, &slow);
-                    controls(ctx, &content_scale, &remeasure, &spill, &slow, &show_detail);
-                    Button::new()
-                        .on_click({
-                            clone!(show_detail);
-                            move || show_detail.set(false)
-                        })
-                        .modifier(Modifier::new().size(200.0, 36.0))
-                        .build(ctx, |ctx| {
-                            Text::new("Back").build(ctx);
-                        });
-                    // Same trailing child as the list branch: the two screens must have the
-                    // SAME child count and order, or the framework sees a structural change
-                    // whose node keys can collide across the branch flip (a Back crash with
-                    // "[dup-key] ... 388x34" in this demo came from exactly that asymmetry).
-                    Text::new("").font_size(12.0).build(ctx);
+                    ctx.key("detail", |ctx| {
+                        Text::new("Detail").font_size(22.0).build(ctx);
+                        photo_box(ctx, 344.0, 240.0, Shape::rounded(12.0), &scope, &content_scale, &remeasure, &spill, &slow);
+                        controls(ctx, &content_scale, &remeasure, &spill, &slow, &show_detail);
+                        Button::new()
+                            .on_click({
+                                clone!(show_detail);
+                                move || show_detail.set(false)
+                            })
+                            .modifier(Modifier::new().size(200.0, 36.0))
+                            .build(ctx, |ctx| {
+                                Text::new("Back").build(ctx);
+                            });
+                    });
                 } else {
-                    Text::new("List").font_size(22.0).build(ctx);
-                    // A SQUARE box clipped to a circle, with the photo itself drawn Crop +
-                    // Center inside it: that is a centre-cropped circle (Compose's
-                    // `Image(contentScale = Crop, alignment = Center)` inside a circular
-                    // clip), and the flight then morphs its 50%-radius into the detail's
-                    // rounded rectangle.
-                    photo_box(ctx, 96.0, 96.0, Shape::Circle, &scope, &content_scale, &remeasure, &spill, &slow);
-                    controls(ctx, &content_scale, &remeasure, &spill, &slow, &show_detail);
-                    Button::new()
-                        .on_click({
-                            clone!(show_detail);
-                            move || show_detail.set(true)
-                        })
-                        .modifier(Modifier::new().size(200.0, 36.0))
-                        .build(ctx, |ctx| {
-                            Text::new("Fly to detail").build(ctx);
-                        });
-                    // The hint goes LAST, below everything the flight moves: putting it above
-                    // the card would make the two screens differ in height above the hero, so
-                    // the rows below would shift the moment the switch happened — a jump the
-                    // reader would rightly blame on the transition. Anything a screen adds or
-                    // removes ABOVE a shared hero moves its neighbours, exactly as it would in
-                    // Compose.
-                    Text::new(
-                        "Pick a mode, then tap Fly to detail: the same photo flies with that \
-                         scale and you can compare runs. Re-measure re-lays the photo out at \
-                         the animated size every frame instead of scaling it.",
-                    )
-                    .font_size(12.0)
-                    .build(ctx);
+                    ctx.key("list", |ctx| {
+                        Text::new("List").font_size(22.0).build(ctx);
+                        // A SQUARE box clipped to a circle, with the photo itself drawn Crop +
+                        // Center inside it: that is a centre-cropped circle (Compose's
+                        // `Image(contentScale = Crop, alignment = Center)` inside a circular
+                        // clip), and the flight then morphs its 50%-radius into the detail's
+                        // rounded rectangle.
+                        photo_box(ctx, 96.0, 96.0, Shape::Circle, &scope, &content_scale, &remeasure, &spill, &slow);
+                        controls(ctx, &content_scale, &remeasure, &spill, &slow, &show_detail);
+                        Button::new()
+                            .on_click({
+                                clone!(show_detail);
+                                move || show_detail.set(true)
+                            })
+                            .modifier(Modifier::new().size(200.0, 36.0))
+                            .build(ctx, |ctx| {
+                                Text::new("Fly to detail").build(ctx);
+                            });
+                        // The hint goes LAST, below everything the flight moves: putting it
+                        // above the card would make the two screens differ in height above the
+                        // hero, so the rows below would shift the moment the switch happened.
+                        Text::new(
+                            "Pick a mode, then tap Fly to detail: the same photo flies with \
+                             that scale and you can compare runs. Re-measure re-lays the photo \
+                             out at the animated size every frame instead of scaling it.",
+                        )
+                        .font_size(12.0)
+                        .build(ctx);
+                    });
                 }
             });
     });
