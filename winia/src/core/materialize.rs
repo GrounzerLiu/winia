@@ -92,41 +92,48 @@ pub(crate) fn materialize(composer: &mut Composer) {
 fn prune_stale_child_links(composer: &mut Composer) {
     let nodes = &mut composer.arena.nodes;
     let len = nodes.len();
-    // How many parents list each child, and whether some parent matches its `parent_id`.
-    let mut listings: Vec<usize> = vec![0; len];
-    let mut owner_matches: Vec<bool> = vec![false; len];
-    for p in 0..len {
-        let pid = nodes[p].id;
-        for &c in nodes[p].children.iter() {
-            if c < len {
-                listings[c] += 1;
-                if nodes[c].parent_id == Some(pid) {
-                    owner_matches[c] = true;
-                }
-            }
+    let Some(root) = composer.arena.root else {
+        return;
+    };
+    // Which nodes are actually reachable from the root, following the listings as they are
+    // now? A listing owned by an UNREACHABLE parent is garbage — that parent is not in the
+    // tree this frame — and it is what made a node reachable twice (the panic) or reachable
+    // only through a dead parent (the 0x0 hero: it sat in the arena, never measured, and drew
+    // nothing). The visited set also makes the walk safe if the lists ever contain a cycle.
+    let mut reachable = vec![false; len];
+    let mut stack = vec![root];
+    while let Some(i) = stack.pop() {
+        if i >= len || reachable[i] {
+            continue;
+        }
+        reachable[i] = true;
+        for &c in nodes[i].children.iter() {
+            stack.push(c);
         }
     }
+    // Drop duplicate listings inside one parent, and every listing of a child under a parent
+    // that is not reachable. A child keeps at least one listing whenever it has one from a
+    // reachable parent, which is exactly the case that renders.
     for p in 0..len {
         if nodes[p].children.is_empty() {
             continue;
         }
-        let pid = nodes[p].id;
+        if !reachable[p] {
+            // Unreachable parents are not part of this frame's tree; their listings only create
+            // a second path to live nodes.
+            nodes[p].children.clear();
+            continue;
+        }
         let mut seen = std::collections::HashSet::new();
         let mut keep = Vec::with_capacity(nodes[p].children.len());
         for &c in nodes[p].children.iter() {
-            let first_time = c < len && seen.insert(c);
-            // Keep the child's only listing; among several, prefer the parent it claims.
-            let keep_it = first_time
-                && (listings[c] == 1 || nodes[c].parent_id == Some(pid) || !owner_matches[c]);
-            if keep_it {
+            if c < len && seen.insert(c) {
                 keep.push(c);
-            } else if first_time {
+            } else {
                 crate::debug_log!(
-                    "[prune] parent idx={p} id={pid} drops duplicate listing of child idx={c} \
-                     (child.parent_id={:?}, size={:?}, key={:#x})",
-                    nodes[c].parent_id,
-                    nodes[c].measured_size,
-                    nodes[c].slot_key
+                    "[prune] parent idx={p} drops duplicate child idx={c} (key={:#x}, size={:?})",
+                    nodes.get(c).map(|n| n.slot_key).unwrap_or(0),
+                    nodes.get(c).map(|n| n.measured_size)
                 );
             }
         }
