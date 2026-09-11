@@ -6516,6 +6516,44 @@ mod tier0_tests {
         crate::animation::clear_all_animations();
     }
 
+    /// Compose's `CircleShape` IS `RoundedCornerShape(50)`, i.e. `Pill`: on a
+    /// NON-square box it paints the WHOLE box with percent-50 corners (a stadium).
+    /// winia drew a true circle — most of a wide box stayed unpainted, the clip
+    /// used an ellipse, and a Circle hero therefore popped circle→stadium the
+    /// moment a flight started.
+    #[test]
+    fn circle_shape_fills_a_non_square_box_like_pill() {
+        let _g = lock_serial();
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+                let key = ctx.next_key();
+                ctx.start_leaf(
+                    key,
+                    Modifier::new()
+                        .size(320.0, 170.0)
+                        .background(Color::RED, Shape::Circle),
+                );
+                ctx.end_node();
+            });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let mut surface = render_heads(&composer);
+        // Near the left edge at mid height: a true circle (diameter 170, centred)
+        // leaves this empty; a stadium paints it.
+        let near_edge = pixel_rgb(&mut surface, 12, 85);
+        assert!(
+            !close_enough(near_edge, (255, 255, 255), 12),
+            "Circle must fill the box like Pill (percent-50 corners), got {near_edge:?}"
+        );
+        // …and the corner is rounded, so the very corner stays background.
+        let corner = pixel_rgb(&mut surface, 2, 2);
+        assert!(
+            close_enough(corner, (255, 255, 255), 12),
+            "…while the corner stays cut, got {corner:?}"
+        );
+    }
+
     /// Bouncy hero leaf (spring overshoot must render past the end rect).
     fn spring_hero_leaf(
         ctx: &mut ComposeCtx,

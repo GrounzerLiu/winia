@@ -213,11 +213,14 @@ fn shadow_path(rect: Rect, shape: &crate::modifier::Shape) -> skia_safe::Path {
             let radius = rect.width().min(rect.height()) / 2.0;
             skia_safe::Path::rrect(RRect::new_rect_xy(rect, radius, radius), None)
         }
-        crate::modifier::Shape::Circle => skia_safe::Path::circle(
-            (rect.center_x(), rect.center_y()),
-            rect.width().min(rect.height()) / 2.0,
-            None,
-        ),
+        crate::modifier::Shape::Circle => {
+            // Compose's `CircleShape` IS `RoundedCornerShape(50)`: a percent corner
+            // evaluated against the box, so a non-square box gives a stadium — not
+            // a true circle (which leaves the box mostly unpainted) and not an
+            // ellipse. Identical to `Pill`, as in Compose.
+            let radius = rect.width().min(rect.height()) / 2.0;
+            skia_safe::Path::rrect(RRect::new_rect_xy(rect, radius, radius), None)
+        }
     }
 }
 
@@ -280,7 +283,8 @@ fn draw_shadow_layer(
             sc.draw_rrect(RRect::new_rect_xy(local, r, r), &mask);
         }
         crate::modifier::Shape::Circle => {
-            sc.draw_circle((local.center_x(), local.center_y()), local.width().min(local.height()) / 2.0, &mask);
+            let r = local.width().min(local.height()) / 2.0;
+            sc.draw_rrect(RRect::new_rect_xy(local, r, r), &mask);
         }
     }
     // spread：外圈 stroke（Fill + Stroke 两遍——Compose createOuterShadowBitmap 同款）
@@ -309,7 +313,8 @@ fn draw_shadow_layer(
                 sc.draw_rrect(RRect::new_rect_xy(local, r, r), &stroke);
             }
             crate::modifier::Shape::Circle => {
-                sc.draw_circle((local.center_x(), local.center_y()), local.width().min(local.height()) / 2.0, &stroke);
+                let r = local.width().min(local.height()) / 2.0;
+                sc.draw_rrect(RRect::new_rect_xy(local, r, r), &stroke);
             }
         }
     }
@@ -1121,7 +1126,10 @@ fn render_pass1(
                 canvas.clip_rrect(RRect::new_rect_xy(rect, r, r), None, Some(false));
             }
             crate::modifier::Shape::Circle => {
-                canvas.clip_rrect(RRect::new_oval(rect), None, Some(false));
+                // Circle == Pill (see the fill path): percent-50 corners against
+                // the box, not an ellipse.
+                let r = rect.width().min(rect.height()) / 2.0;
+                canvas.clip_rrect(RRect::new_rect_xy(rect, r, r), None, Some(false));
             }
         }
         clipped = true;
@@ -1404,9 +1412,10 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
                     );
                 }
                 Some(crate::modifier::Shape::Circle) => {
-                    // 圆形裁剪（此前落入 _ => clip_rect 被裁成矩形——
-                    // IconButton 等圆形容器的波纹呈矩形）
-                    canvas.clip_rrect(skia_safe::RRect::new_oval(rect), None, Some(false));
+                    // Circle == Pill (see the fill path): percent-50 corners, so a
+                    // non-square box is a stadium, not an ellipse.
+                    let r = rect.width().min(rect.height()) / 2.0;
+                    canvas.clip_rrect(RRect::new_rect_xy(rect, r, r), None, Some(false));
                 }
                 _ => {
                     canvas.clip_rect(rect, None, Some(false));
@@ -1654,7 +1663,11 @@ fn draw_background(canvas: &Canvas, rect: Rect, color: &crate::modifier::Color, 
             canvas.draw_rrect(RRect::new_rect_xy(rect, r, r), &paint);
         }
         crate::modifier::Shape::Circle => {
-            canvas.draw_circle((rect.center_x(), rect.center_y()), rect.width().min(rect.height()) / 2.0, &paint);
+            // Circle == Pill == Compose `RoundedCornerShape(50)`: percent corners
+            // against the box, so a non-square box is a stadium. Drawing a true
+            // circle left most of a wide box unpainted.
+            let r = rect.width().min(rect.height()) / 2.0;
+            canvas.draw_rrect(RRect::new_rect_xy(rect, r, r), &paint);
         }
     }
 }
@@ -1839,7 +1852,8 @@ fn draw_border(canvas: &Canvas, x: f32, y: f32, w: f32, h: f32, width: f32, colo
             canvas.draw_rrect(RRect::new_rect_xy(sr, r, r), &paint);
         }
         crate::modifier::Shape::Circle => {
-            canvas.draw_circle((sr.center_x(), sr.center_y()), sr.width().min(sr.height()) / 2.0, &paint);
+            let r = sr.width().min(sr.height()) / 2.0;
+            canvas.draw_rrect(RRect::new_rect_xy(sr, r, r), &paint);
         }
     }
 }
@@ -1909,11 +1923,8 @@ pub(crate) fn draw_focus(
             canvas.draw_rrect(RRect::new_rect_xy(sr, r, r), &paint);
         }
         crate::modifier::Shape::Circle => {
-            canvas.draw_circle(
-                (sr.center_x(), sr.center_y()),
-                sr.width().min(sr.height()) / 2.0,
-                &paint,
-            );
+            let r = sr.width().min(sr.height()) / 2.0;
+            canvas.draw_rrect(RRect::new_rect_xy(sr, r, r), &paint);
         }
     }
 }
