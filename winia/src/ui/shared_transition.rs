@@ -1700,12 +1700,18 @@ pub(crate) fn find_shared_marker(modifier: &Modifier) -> Option<SharedMarker> {
 /// layer, so the flight keeps it opaque unless the scene host elevates it into the layer too.
 fn scene_alpha_for_end(nodes: &[LayoutNode], idx: usize, leaving_end: bool) -> Option<f32> {
     let marker = find_shared_marker(&nodes.get(idx)?.modifier)?;
-    let visibility = marker.scene.and_then(nav_scene_visibility)?;
-    Some(if leaving_end || marker.render_in_overlay {
-        visibility
+    marker.scene?;
+    if leaving_end || marker.render_in_overlay {
+        // The flight paints this end from the transition layer, and the scene's own layer fade does
+        // NOT apply there — so the flight has to fade it, and it must do so on the FLIGHT's clock so
+        // that rect and opacity stay in step. Measured before this: the detached ghost faded on the
+        // nav's 800 ms clock while its rect followed a 1.3 s spring, so the leaving end disappeared
+        // before it had finished growing and the flight read as "only the entering end animates".
+        None
     } else {
-        1.0
-    })
+        // Painted in tree: its scene already fades it, so the flight keeps it opaque.
+        Some(1.0)
+    }
 }
 
 /// Compose `Modifier.renderInSharedTransitionScopeOverlay` marker:
