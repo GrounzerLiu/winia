@@ -1269,7 +1269,7 @@ fn render_pass1(
             | ModifierElement::Clip { shape } => Some(*shape),
             _ => None,
         }).unwrap_or(crate::modifier::Shape::Rectangle);
-        draw_focus(canvas, rect, &focus_shape, node.focus_color.get(), focus_alpha, 2.0);
+        draw_focus(canvas, rect, &focus_shape, tf_radii, node.focus_color.get(), focus_alpha, 2.0);
     }
 
     // Scroll clip + translate
@@ -1864,6 +1864,12 @@ pub(crate) fn draw_focus(
     canvas: &Canvas,
     rect: Rect,
     shape: &crate::modifier::Shape,
+    // Device-space corner radii of the FLIGHT morph, when this node is flying: the ring
+    // must use the same corners as the background it surrounds. Resolving the node's own
+    // shape instead measures a percent corner (Circle/Pill) on the un-transformed content
+    // box, and the flight's `canvas.scale` then stretches it into an ellipse while the
+    // background paints `min(lerped)/2`.
+    flight_radii: Option<[(f32, f32); 4]>,
     color: crate::modifier::Color,
     alpha: f32,
     gap: f32,
@@ -1901,6 +1907,21 @@ pub(crate) fn draw_focus(
     paint.set_style(skia_safe::paint::Style::Stroke);
     paint.set_stroke_width(FOCUS_WIDTH);
     paint.set_anti_alias(true);
+    if let Some(r) = flight_radii {
+        // Same corners as the morph. The ring sits `inset` outside the box (and the
+        // fade-in `scale` grows it), so the radii grow with it; they are already
+        // pre-divided by the paint scale, so the canvas transform lands them on the
+        // lerped rect exactly as the background does.
+        let grow = if rect.width() > 0.0 { sr.width() / rect.width() } else { 1.0 };
+        let rr = RRect::new_rect_radii(
+            sr,
+            &crate::ui::shared_transition::rrect_vectors(
+                r.map(|(x, y)| ((x + inset).max(0.0) * grow, (y + inset).max(0.0) * grow)),
+            ),
+        );
+        canvas.draw_rrect(rr, &paint);
+        return;
+    }
     match shape {
         crate::modifier::Shape::Rectangle => { canvas.draw_rect(sr, &paint); }
         crate::modifier::Shape::RoundedRect { corner_radius } => {

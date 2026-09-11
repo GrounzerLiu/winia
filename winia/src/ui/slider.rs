@@ -613,7 +613,7 @@ pub(crate) fn draw_slider(
         // draw_focus 环带中心线距 rect 边缘 = gap + 环宽/2(1.5)。
         // 要中心线距 thumb 中心 8（track 端头）→ gap = 8 - thumb半宽(2) - 1.5 = 4.5
         let ring_gap = end_gap - SLIDER_THUMB_WIDTH / 2.0 - 1.5;
-        crate::render::draw_focus(canvas, ring_rect, &crate::modifier::Shape::Pill, thumb_c, focus_alpha, ring_gap);
+        crate::render::draw_focus(canvas, ring_rect, &crate::modifier::Shape::Pill, None, thumb_c, focus_alpha, ring_gap);
     }
 }
 
