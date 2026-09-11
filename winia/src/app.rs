@@ -1431,7 +1431,11 @@ impl ApplicationHandler for AppState {
                                             }
                                         };
                                         let align = nodes[pidx].modifier.align().unwrap_or(crate::ui::TextAlign::Left);
-                                        let node_w = nodes[pidx].measured_size.width;
+                                        // CONTENT box: the painter uses it, so the IME
+                                        // candidate window must too — under a flight layout
+                                        // override `measured_size` is the size the PARENT was
+                                        // told (review R3-F6).
+                                        let node_w = nodes[pidx].content_box().width;
                                         let intrinsic_w = p.max_intrinsic_width();
                                         // ⚠ 空文本：渲染端光标画在内容起点（左对齐，
                                         // 不随 align 偏移）——IME 区域须一致（否则
@@ -3904,8 +3908,9 @@ fn handle_pointer_move(
                 let (abs_x, abs_y) = node_abs_position(nodes, r, nodes[innermost].id);
                 if let Ok(borrow) = nodes[innermost].cached_paragraph.try_borrow() {
                     if let Some(para) = borrow.as_ref() {
-                        // 对齐偏移（匹配渲染侧 x_off）
-                        let node_w = nodes[innermost].measured_size.width;
+                        // 对齐偏移（匹配渲染侧 x_off）——绘制用内容盒，选区高亮须一致
+                        //（飞行中 measured_size 是父级被告知的尺寸，review R3-F6）
+                        let node_w = nodes[innermost].content_box().width;
                         let align = nodes[innermost].modifier.align().unwrap_or(crate::ui::TextAlign::Left);
                         let x_off = match align {
                             crate::ui::TextAlign::Center => abs_x + (node_w - para.max_intrinsic_width()).max(0.0) / 2.0,
