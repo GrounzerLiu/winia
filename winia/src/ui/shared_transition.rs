@@ -162,93 +162,10 @@ impl SharedTransitionDefaults {
     }
 }
 
-/// Compose `ContentScale`: how a `ScaleToBounds` end fits its STABLE content into the
-/// animated bounds. Compose's default for `scaleToBounds` is `FillWidth` — deliberately
-/// not `Image`'s `Fit` — and winia used to hard-code `FillBounds`, which distorts a
-/// non-matching aspect ratio visibly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ContentScale {
-    /// Uniform, the smaller ratio: the whole content is visible (letterboxed).
-    Fit,
-    /// Uniform, the larger ratio: the bounds are filled, overflow is clipped.
-    Crop,
-    /// NON-uniform: stretched to the bounds exactly (winia's old hard-coded behaviour).
-    FillBounds,
-    /// Uniform, scaled so the WIDTH matches. Compose's default for `scaleToBounds`.
-    #[default]
-    FillWidth,
-    /// Uniform, scaled so the HEIGHT matches.
-    FillHeight,
-    /// Uniform, but only scaled DOWN when the content is larger than the bounds.
-    Inside,
-    /// Not scaled at all.
-    None,
-}
-
-impl ContentScale {
-    /// The (sx, sy) the render applies, from the stable content size to the bounds.
-    pub(crate) fn factors(self, content: (f32, f32), bounds: (f32, f32)) -> (f32, f32) {
-        let ((cw, ch), (bw, bh)) = (content, bounds);
-        if cw <= 0.0 || ch <= 0.0 || bw <= 0.0 || bh <= 0.0 {
-            return (1.0, 1.0);
-        }
-        let (rx, ry) = (bw / cw, bh / ch);
-        match self {
-            ContentScale::FillBounds => (rx, ry),
-            ContentScale::FillWidth => (rx, rx),
-            ContentScale::FillHeight => (ry, ry),
-            ContentScale::Fit => (rx.min(ry), rx.min(ry)),
-            ContentScale::Crop => (rx.max(ry), rx.max(ry)),
-            ContentScale::Inside => {
-                let s = rx.min(ry).min(1.0);
-                (s, s)
-            }
-            ContentScale::None => (1.0, 1.0),
-        }
-    }
-}
-
-/// Compose `Alignment`: where the scaled content sits in the bounds when the scale does
-/// not fill both axes (Compose's default is `Center`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ContentAlignment {
-    TopStart,
-    TopCenter,
-    TopEnd,
-    CenterStart,
-    #[default]
-    Center,
-    CenterEnd,
-    BottomStart,
-    BottomCenter,
-    BottomEnd,
-}
-
-impl ContentAlignment {
-    /// Top-left offset of the scaled content inside the animated bounds.
-    pub(crate) fn offset(self, scaled: (f32, f32), bounds: (f32, f32)) -> (f32, f32) {
-        let ((sw, sh), (bw, bh)) = (scaled, bounds);
-        let x = match self {
-            ContentAlignment::TopStart
-            | ContentAlignment::CenterStart
-            | ContentAlignment::BottomStart => 0.0,
-            ContentAlignment::TopCenter
-            | ContentAlignment::Center
-            | ContentAlignment::BottomCenter => (bw - sw) / 2.0,
-            _ => bw - sw,
-        };
-        let y = match self {
-            ContentAlignment::TopStart
-            | ContentAlignment::TopCenter
-            | ContentAlignment::TopEnd => 0.0,
-            ContentAlignment::CenterStart
-            | ContentAlignment::Center
-            | ContentAlignment::CenterEnd => (bh - sh) / 2.0,
-            _ => bh - sh,
-        };
-        (x, y)
-    }
-}
+/// The scaling model a `ScaleToBounds` end uses is Compose's `ContentScale` —
+/// `androidx.compose.ui.layout.ContentScale`, the SAME type `Image` takes, not a parallel
+/// copy of it. `ImageAlignment` is Compose's 9-position `Alignment`.
+pub use crate::ui::image::{ContentScale, ImageAlignment};
 
 /// Content deformation during flight (Compose `ResizeMode`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -260,7 +177,7 @@ pub enum ResizeMode {
     /// used to carry a `clip` flag that measured as dead and was deleted).
     ScaleToBounds {
         content_scale: ContentScale,
-        alignment: ContentAlignment,
+        alignment: ImageAlignment,
     },
     /// Re-measure at the lerped size every frame (Phase 4).
     RemeasureToBounds,
@@ -272,21 +189,21 @@ impl ResizeMode {
     pub fn scale_to_bounds() -> Self {
         ResizeMode::ScaleToBounds {
             content_scale: ContentScale::FillWidth,
-            alignment: ContentAlignment::Center,
+            alignment: ImageAlignment::Center,
         }
     }
 
     /// Compose `scaleToBounds(contentScale, alignment)`.
     pub fn scale_to_bounds_with(
         content_scale: ContentScale,
-        alignment: ContentAlignment,
+        alignment: ImageAlignment,
     ) -> Self {
         ResizeMode::ScaleToBounds { content_scale, alignment }
     }
 
-    /// `ContentScale`/`ContentAlignment` of a scaling end; `None` for `RemeasureToBounds`
+    /// `ContentScale`/`ImageAlignment` of a scaling end; `None` for `RemeasureToBounds`
     /// (it never scales).
-    pub(crate) fn scale_to_bounds_parts(self) -> Option<(ContentScale, ContentAlignment)> {
+    pub(crate) fn scale_to_bounds_parts(self) -> Option<(ContentScale, ImageAlignment)> {
         match self {
             ResizeMode::ScaleToBounds { content_scale, alignment } => Some((content_scale, alignment)),
             ResizeMode::RemeasureToBounds => None,
@@ -832,7 +749,7 @@ mod tests {
         assert!(matches!(t.spec, AnimationSpec::Tween(_)));
     }
 
-    /// The `ContentScale`/`ContentAlignment` math, pinned against Compose's documented
+    /// The `ContentScale`/`ImageAlignment` math, pinned against Compose's documented
     /// semantics: `scaleToBounds()` defaults to `FillWidth` + `Center` (NOT `Image`'s
     /// `Fit`, and not `FillBounds` — which is what winia hard-coded before).
     #[test]
@@ -840,54 +757,46 @@ mod tests {
         let content = (150.0, 150.0);
         let bounds = (300.0, 150.0);
         assert_eq!(
-            ContentScale::FillWidth.factors(content, bounds),
+            ContentScale::FillWidth.scale_factors(content, bounds),
             (2.0, 2.0),
             "FillWidth is uniform and matches the WIDTH (Compose's default)"
         );
         assert_eq!(
-            ContentScale::FillHeight.factors(content, bounds),
+            ContentScale::FillHeight.scale_factors(content, bounds),
             (1.0, 1.0),
             "FillHeight is uniform and matches the HEIGHT"
         );
         assert_eq!(
-            ContentScale::FillBounds.factors(content, bounds),
+            ContentScale::FillBounds.scale_factors(content, bounds),
             (2.0, 1.0),
             "FillBounds is the non-uniform stretch winia used to hard-code"
         );
-        assert_eq!(ContentScale::Fit.factors(content, bounds), (1.0, 1.0));
-        assert_eq!(ContentScale::Crop.factors(content, bounds), (2.0, 2.0));
+        assert_eq!(ContentScale::Fit.scale_factors(content, bounds), (1.0, 1.0));
+        assert_eq!(ContentScale::Crop.scale_factors(content, bounds), (2.0, 2.0));
         assert_eq!(
-            ContentScale::Inside.factors((500.0, 500.0), bounds),
+            ContentScale::Inside.scale_factors((500.0, 500.0), bounds),
             (0.3, 0.3),
             "Inside is Fit — both axes are limited by the tighter ratio"
         );
         assert_eq!(
-            ContentScale::Inside.factors((100.0, 100.0), bounds),
+            ContentScale::Inside.scale_factors((100.0, 100.0), bounds),
             (1.0, 1.0),
             "Inside never scales UP"
         );
         assert_eq!(
-            ContentScale::None.factors(content, bounds),
+            ContentScale::None.scale_factors(content, bounds),
             (1.0, 1.0)
         );
         assert_eq!(
-            ContentScale::FillWidth.factors(content, (0.0, 150.0)),
+            ContentScale::FillWidth.scale_factors(content, (0.0, 150.0)),
             (1.0, 1.0),
             "degenerate bounds must not produce NaN/inf"
         );
         // A uniform FillWidth scale leaves the leftover axis to the alignment.
-        assert_eq!(
-            ContentAlignment::Center.offset((300.0, 150.0), (300.0, 250.0)),
-            (0.0, 50.0)
-        );
-        assert_eq!(
-            ContentAlignment::BottomCenter.offset((300.0, 150.0), (300.0, 250.0)),
-            (0.0, 100.0)
-        );
-        assert_eq!(
-            ContentAlignment::TopStart.offset((300.0, 150.0), (300.0, 250.0)),
-            (0.0, 0.0)
-        );
+        let off = |a: ImageAlignment| ContentScale::align_offset(a, (300.0, 150.0), (300.0, 250.0), false);
+        assert_eq!(off(ImageAlignment::Center), (0.0, 50.0));
+        assert_eq!(off(ImageAlignment::BottomCenter), (0.0, 100.0));
+        assert_eq!(off(ImageAlignment::TopStart), (0.0, 0.0));
     }
 
     #[test]
@@ -1096,7 +1005,7 @@ mod tests {
             bounds_fx: fx,
             elevated: false,
             remeasure: false,
-            scale_parts: Some((ContentScale::FillBounds, ContentAlignment::TopStart)),
+            scale_parts: Some((ContentScale::FillBounds, ImageAlignment::TopStart)),
             radius_from_auto: false,
             radius_to_auto: false,
         };
@@ -1311,7 +1220,7 @@ pub(crate) struct TransitionVisual {
     /// How a scaling end fits its STABLE content into the lerped rect and where the
     /// leftover axis sits (Compose `ContentScale` + `Alignment`). `None` for
     /// `RemeasureToBounds`, which never scales.
-    pub scale_parts: Option<(ContentScale, ContentAlignment)>,
+    pub scale_parts: Option<(ContentScale, ImageAlignment)>,
 }
 
 impl TransitionVisual {
@@ -1443,13 +1352,13 @@ impl TransitionVisual {
         let l = self.lerped();
         match self.scale_parts {
             Some((content_scale, _)) => {
-                content_scale.factors((box_w, box_h), (l.width, l.height))
+                content_scale.scale_factors((box_w, box_h), (l.width, l.height))
             }
             // TEST-ONLY fallback: only the hand-built `TransitionVisual`s in the test
             // module leave this unset, and they want the pre-`ScaleToBounds` geometry,
             // i.e. `FillBounds`. Expressed through the same rule as everything else so
             // there is exactly one place that turns a mode into scales.
-            None => ContentScale::FillBounds.factors((box_w, box_h), (l.width, l.height)),
+            None => ContentScale::FillBounds.scale_factors((box_w, box_h), (l.width, l.height)),
         }
     }
 
@@ -1466,7 +1375,14 @@ impl TransitionVisual {
         };
         let (sx, sy) = self.paint_scale(box_w, box_h);
         let l = self.lerped();
-        let (ox, oy) = alignment.offset((box_w * sx, box_h * sy), (l.width, l.height));
+        let (ox, oy) = ContentScale::align_offset(
+            alignment,
+            (box_w * sx, box_h * sy),
+            (l.width, l.height),
+            // The flight path does not carry a layout direction, so Start/End are
+            // interpreted LTR here (Compose mirrors them with the environment).
+            false,
+        );
         (
             if sx.abs() > f32::EPSILON { ox / sx } else { 0.0 },
             if sy.abs() > f32::EPSILON { oy / sy } else { 0.0 },
@@ -7413,7 +7329,7 @@ mod tier0_tests {
                 path: PathMotion::Linear,
                 bounds_fx: None,
                 elevated: false,
-            scale_parts: Some((ContentScale::FillBounds, ContentAlignment::TopStart)),
+            scale_parts: Some((ContentScale::FillBounds, ImageAlignment::TopStart)),
                 remeasure: false,
             };
             let at0 = mk(0.0).radii();
@@ -8893,7 +8809,7 @@ mod tier0_tests {
             flight: 0,
             path: PathMotion::Linear,
             bounds_fx: None,
-            scale_parts: Some((ContentScale::FillBounds, ContentAlignment::TopStart)),
+            scale_parts: Some((ContentScale::FillBounds, ImageAlignment::TopStart)),
             elevated: false,
             remeasure: false,
             radius_from_auto: false,

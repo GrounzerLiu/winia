@@ -18,7 +18,7 @@ use skia_safe::Rect;
 /// 内容缩放模式（对标 Compose `ContentScale`）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContentScale {
-    /// 拉伸填满 bounds（不保持宽高比——对标 ContentScale.None）
+    /// 原尺寸（不缩放——对标 ContentScale.None；超出 bounds 的部分由裁剪决定）
     None,
     /// 完整放入 bounds（保持比例——默认，对标 ContentScale.Fit）
     Fit,
@@ -30,10 +30,69 @@ pub enum ContentScale {
     FillWidth,
     /// 高填满 bounds，宽按比例（可超出——对标 ContentScale.FillHeight）
     FillHeight,
+    /// 两轴独立拉伸到 bounds（不保持比例——对标 ContentScale.FillBounds）。
+    /// NOTE: this is what winia's `None` used to be before it was aligned with Compose;
+    /// the shared-element flight path needs the explicit member, because FillBounds is the
+    /// behaviour it has to be able to reproduce.
+    FillBounds,
 }
 
 impl Default for ContentScale {
     fn default() -> Self { Self::Fit }
+}
+
+impl ContentScale {
+    /// The `(sx, sy)` this mode applies from a content size to a bounds size — the single
+    /// source of truth for the scaling maths. `content_scale_rect` (Image) and the
+    /// shared-element flight path both go through it.
+    pub(crate) fn scale_factors(self, content: (f32, f32), bounds: (f32, f32)) -> (f32, f32) {
+        let ((cw, ch), (bw, bh)) = (content, bounds);
+        if cw <= 0.0 || ch <= 0.0 || bw <= 0.0 || bh <= 0.0 {
+            return (1.0, 1.0);
+        }
+        let (rx, ry) = (bw / cw, bh / ch);
+        match self {
+            ContentScale::None => (1.0, 1.0),
+            ContentScale::FillBounds => (rx, ry),
+            ContentScale::FillWidth => (rx, rx),
+            ContentScale::FillHeight => (ry, ry),
+            ContentScale::Fit => (rx.min(ry), rx.min(ry)),
+            ContentScale::Crop => (rx.max(ry), rx.max(ry)),
+            ContentScale::Inside => {
+                let s = rx.min(ry).min(1.0);
+                (s, s)
+            }
+        }
+    }
+
+    /// Top-left offset of the scaled content inside the bounds, from the alignment.
+    pub(crate) fn align_offset(
+        alignment: ImageAlignment,
+        scaled: (f32, f32),
+        bounds: (f32, f32),
+        rtl: bool,
+    ) -> (f32, f32) {
+        let ((sw, sh), (bw, bh)) = (scaled, bounds);
+        let fx = match alignment {
+            ImageAlignment::TopStart
+            | ImageAlignment::CenterStart
+            | ImageAlignment::BottomStart => {
+                if rtl { 1.0 } else { 0.0 }
+            }
+            ImageAlignment::TopCenter
+            | ImageAlignment::Center
+            | ImageAlignment::BottomCenter => 0.5,
+            _ => {
+                if rtl { 0.0 } else { 1.0 }
+            }
+        };
+        let fy = match alignment {
+            ImageAlignment::TopStart | ImageAlignment::TopCenter | ImageAlignment::TopEnd => 0.0,
+            ImageAlignment::CenterStart | ImageAlignment::Center | ImageAlignment::CenterEnd => 0.5,
+            _ => 1.0,
+        };
+        ((bw - sw) * fx, (bh - sh) * fy)
+    }
 }
 
 /// 图片内容在 bounds 内的对齐（对标 Compose `Alignment` 9 值；
@@ -68,30 +127,9 @@ pub(crate) fn content_scale_rect(
     if iw <= 0.0 || ih <= 0.0 {
         return rect;
     }
-    // 缩放（保持比例时同一 scale 系数，None 拉伸两轴独立）
-    let (w, h) = match scale {
-        ContentScale::None => (rect.width(), rect.height()),
-        ContentScale::Fit => {
-            let s = (rect.width() / iw).min(rect.height() / ih);
-            (iw * s, ih * s)
-        }
-        ContentScale::Crop => {
-            let s = (rect.width() / iw).max(rect.height() / ih);
-            (iw * s, ih * s)
-        }
-        ContentScale::Inside => {
-            let s = (rect.width() / iw).min(rect.height() / ih).min(1.0);
-            (iw * s, ih * s)
-        }
-        ContentScale::FillWidth => {
-            let s = rect.width() / iw;
-            (iw * s, ih * s)
-        }
-        ContentScale::FillHeight => {
-            let s = rect.height() / ih;
-            (iw * s, ih * s)
-        }
-    };
+    // 缩放：走 `ContentScale::scale_factors` 这一处唯一事实来源（Image 与共享元素飞行共用）
+    let (fsx, fsy) = scale.scale_factors((iw, ih), (rect.width(), rect.height()));
+    let (w, h) = (iw * fsx, ih * fsy);
     // 对齐偏移（0.0/0.5/1.0；RTL 时 Start↔End 镜像）
     let sx = match alignment {
         ImageAlignment::TopStart | ImageAlignment::CenterStart | ImageAlignment::BottomStart => {
@@ -279,11 +317,20 @@ mod tests {
         assert_eq!((r2.width(), r2.height()), (160.0, 80.0));
     }
 
+    /// `None` follows Compose: the source is NOT scaled (its intrinsic size), which is what
+    /// `ContentScale.None` means there. winia used to stretch to the bounds under this name,
+    /// i.e. it implemented Compose's `FillBounds` instead — that behaviour now lives in the
+    /// explicit `FillBounds` member (it is what the shared-element flight path has to be
+    /// able to reproduce). Composer's alignment still positions the unscaled content.
     #[test]
-    fn test_content_scale_none_stretches() {
-        // None：拉伸填满（不保持比例）
+    fn test_content_scale_none_keeps_the_intrinsic_size() {
         let r = content_scale_rect(ContentScale::None, Rect::from_xywh(0.0, 0.0, 200.0, 100.0), 100.0, 50.0, ImageAlignment::TopStart, false);
-        assert_eq!((r.width(), r.height()), (200.0, 100.0));
+        assert_eq!((r.width(), r.height()), (100.0, 50.0), "None must not scale");
+        let c = content_scale_rect(ContentScale::None, Rect::from_xywh(0.0, 0.0, 200.0, 100.0), 100.0, 50.0, ImageAlignment::Center, false);
+        assert_eq!((c.left, c.top), (50.0, 25.0), "alignment still places it");
+        // The old winia behaviour is still reachable, under Compose's real name.
+        let f = content_scale_rect(ContentScale::FillBounds, Rect::from_xywh(0.0, 0.0, 200.0, 100.0), 100.0, 50.0, ImageAlignment::TopStart, false);
+        assert_eq!((f.width(), f.height()), (200.0, 100.0), "FillBounds stretches");
     }
 
     #[test]

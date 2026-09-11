@@ -71,9 +71,10 @@ fn image_demo(ctx: &mut ComposeCtx) {
             scale_demo_row(ctx, "Fit（默认）", ContentScale::Fit, ImageAlignment::Center);
             scale_demo_row(ctx, "Crop", ContentScale::Crop, ImageAlignment::Center);
             scale_demo_row(ctx, "Inside", ContentScale::Inside, ImageAlignment::Center);
-            scale_demo_row(ctx, "None（拉伸）", ContentScale::None, ImageAlignment::Center);
+            scale_demo_row(ctx, "None (intrinsic size)", ContentScale::None, ImageAlignment::Center);
             scale_demo_row(ctx, "FillWidth", ContentScale::FillWidth, ImageAlignment::Center);
             scale_demo_row(ctx, "FillHeight", ContentScale::FillHeight, ImageAlignment::Center);
+            scale_demo_row(ctx, "FillBounds (stretch)", ContentScale::FillBounds, ImageAlignment::Center);
 
             // ── 对齐 ──
             section_title(ctx, "对齐（Fit 内容在框内）");
