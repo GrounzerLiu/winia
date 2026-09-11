@@ -10,9 +10,9 @@
 //! then `c <x> <y>` on "Open detail" (list) and "Back" (detail).
 
 use letclone::clone;
-use winia::animation::TweenSpec;
+use winia::animation::{SpringSpec, TweenSpec};
 use winia::nav::{
-    ListDetailStrategy, NavBackStack, NavDisplay, NavEntry, NavKey, SceneStrategy,
+    ListDetailStrategy, NavBackStack, NavDisplay, NavEntry, NavTransitionSpec, SceneStrategy,
 };
 use winia::prelude::*;
 
@@ -26,8 +26,23 @@ enum Route {
 /// The hero card: a container that draws nothing itself and fills with a coloured child, so a
 /// lost child is visible as an empty hole (the shape that made the transparent-start bug
 /// reproducible in a raster probe — see the shared-transition test module).
+/// The hero's motion: a critically damped spring (`damping_ratio = 1.0` — it eases into place without
+/// overshooting) at a low stiffness, so a flight reads as a smooth glide over roughly half a second.
+///
+/// The framework default is `TweenSpec::default()` = a LINEAR 300 ms tween, which is why a flight
+/// started out looking mechanical and abrupt; `slow` lowers the stiffness further for a longer, softer
+/// settle so the two can be compared side by side.
+fn hero_motion(slow: bool) -> BoundsTransform {
+    BoundsTransform::spring(SpringSpec {
+        damping_ratio: 1.0,
+        stiffness: if slow { 55.0 } else { 120.0 },
+        mass: 1.0,
+        threshold: 0.001,
+    })
+}
+
 #[composable]
-fn hero(ctx: &mut ComposeCtx, scope: &SharedTransitionScope, w: f32, h: f32, shape: Shape) {
+fn hero(ctx: &mut ComposeCtx, scope: &SharedTransitionScope, w: f32, h: f32, shape: Shape, motion: BoundsTransform) {
     Column::new()
         .modifier(
             Modifier::new()
@@ -37,7 +52,7 @@ fn hero(ctx: &mut ComposeCtx, scope: &SharedTransitionScope, w: f32, h: f32, sha
                     scope.shared_content_state("hero"),
                     VisibilityTransition::fade_in(TweenSpec::default()),
                     VisibilityTransition::fade_out(TweenSpec::default()),
-                    BoundsTransform::default(),
+                    motion,
                     ResizeMode::scale_to_bounds(),
                     PlaceHolderSize::AnimatedSize,
                     PathMotion::Linear,
@@ -59,13 +74,18 @@ fn hero(ctx: &mut ComposeCtx, scope: &SharedTransitionScope, w: f32, h: f32, sha
 }
 
 #[composable]
-fn list_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope, back_stack: &NavBackStack<Route>) {
+fn list_screen(
+    ctx: &mut ComposeCtx,
+    scope: &SharedTransitionScope,
+    back_stack: &NavBackStack<Route>,
+    motion: BoundsTransform,
+) {
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(16.0))
         .spacing(12.0)
         .build(ctx, |ctx| {
             Text::new("List").font_size(22.0).build(ctx);
-            hero(ctx, scope, 96.0, 96.0, Shape::Circle);
+            hero(ctx, scope, 96.0, 96.0, Shape::Circle, motion);
             let bs = back_stack.clone();
             Button::text()
                 .on_click(move || bs.push(Route::Detail))
@@ -74,13 +94,18 @@ fn list_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope, back_stack: 
 }
 
 #[composable]
-fn detail_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope, back_stack: &NavBackStack<Route>) {
+fn detail_screen(
+    ctx: &mut ComposeCtx,
+    scope: &SharedTransitionScope,
+    back_stack: &NavBackStack<Route>,
+    motion: BoundsTransform,
+) {
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(16.0))
         .spacing(12.0)
         .build(ctx, |ctx| {
             Text::new("Detail").font_size(22.0).build(ctx);
-            hero(ctx, scope, 320.0, 220.0, Shape::rounded(12.0));
+            hero(ctx, scope, 320.0, 220.0, Shape::rounded(12.0), motion);
             let bs = back_stack.clone();
             Button::text()
                 .on_click(move || {
@@ -105,6 +130,9 @@ fn demo(ctx: &mut ComposeCtx) {
     // decorator exists for (a plain push holds two DIFFERENT entries, so nothing pairs and, measured,
     // no entry flight opens).
     let two_pane = ctx.remember(|| false);
+    // Motion preset: a smooth spring by default, a slower one with the toggle.
+    let slow_motion = ctx.remember(|| false);
+    let motion = hero_motion(slow_motion.get());
     SharedTransitionLayout::new().build(ctx, |ctx| {
         let scope = current_shared_scope().expect("inside SharedTransitionLayout");
         Column::new()
@@ -137,22 +165,35 @@ fn demo(ctx: &mut ComposeCtx) {
                             .font_size(12.0)
                             .build(ctx)
                     });
-                let display = NavDisplay::new(&display_stack, {
+                let mut display = NavDisplay::new(&display_stack, {
                     clone!(scope);
+                    let motion_for_list = motion.clone();
+                    let motion_for_detail = motion.clone();
                     move |ctx, key| match key {
                         Route::List => NavEntry::new(key.clone(), {
                             clone!(scope);
+                            let m = std::sync::Arc::new(motion_for_list.clone());
                             let bs = back_stack.clone();
-                            move |ctx, _| list_screen(ctx, &scope, &bs)
+                            move |ctx, _| list_screen(ctx, &scope, &bs, (*m).clone())
                         }),
                         Route::Detail => NavEntry::new(key.clone(), {
                             clone!(scope);
+                            let m = std::sync::Arc::new(motion_for_detail.clone());
                             let bs = back_stack.clone();
-                            move |ctx, _| detail_screen(ctx, &scope, &bs)
+                            move |ctx, _| detail_screen(ctx, &scope, &bs, (*m).clone())
                         }),
                     }
                 });
                 let mut display = display;
+                // Slow the SCENE transition to match the hero's glide: the nav's default is 300 ms,
+                // which reads as abrupt next to a ~600 ms flight.
+                display = display
+                    .transition_spec(
+                        NavTransitionSpec::fade().duration(std::time::Duration::from_millis(450)),
+                    )
+                    .pop_transition_spec(
+                        NavTransitionSpec::fade().duration(std::time::Duration::from_millis(450)),
+                    );
                 if two_pane.get() {
                     display = display.scene_strategies(vec![
                         Box::new(ListDetailStrategy) as Box<dyn SceneStrategy<Route>>
