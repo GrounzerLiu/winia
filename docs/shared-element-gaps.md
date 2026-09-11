@@ -3,8 +3,10 @@
 > Baseline: Compose `animation` module `SharedTransitionScope` API surface
 > (2025 — including `OverlayClip`, `renderInOverlayDuringTransition`,
 > `sharedElementWithCallerManagedVisibility`, `SharedTransitionDefaults`),
-> checked against Winia `exp/shared-transition` at `ac6e621`; the overlay
-> pass added after that commit is tracked below as P2.
+> checked against Winia `exp/shared-transition` at `ac6e621`; that is the original
+> audit point, and the rows below are kept current as the branch moves (last full
+> sweep: the second adversarial review round plus the Compose `scaleToBounds`
+> alignment).
 > Shipped behavior: `docs/shared-element-transition.md` (architecture),
 > usage: `docs/shared-element-usage.md`.
 > Convention: `- [x]` shipped, `- [ ]` open. Update a row when its status
@@ -55,8 +57,8 @@
   animateBounds which stays in place.
 - [ ] `OverlayClip` / `clipInOverlayDuringTransition` — the clip *inside*
   the overlay. Not built: Compose's default is the parent `sharedBounds`'
-  resolved clip path, and nested shared markers are still unsupported
-  (§10.8 of the architecture doc), so the Compose default resolves to
+  resolved clip path, and nested shared markers are still unsupported (risk 13 in
+  §10 of the architecture doc), so the Compose default resolves to
   "no extra clip" — which is already what the layer does. The pair is clipped
   to the lerped rect regardless (the render does it unconditionally; the old
   `ScaleToBounds { clip }` flag was measured as dead and deleted).
@@ -100,6 +102,18 @@
   change came from layout in the first place, so re-reporting a lerped size would
   fight the layout driving it (`begin_morph` hardcodes the defaults; `AnimatedSize`
   therefore behaves like `JumpCut` for a morph).
+- [x] `ResizeMode.scaleToBounds(contentScale, alignment)` — shipped.
+  `scale_to_bounds()` reproduces Compose's defaults exactly
+  (`ContentScale.FillWidth`: uniform scaling by width, so the aspect ratio is
+  preserved — deliberately not `Image`'s `Fit` — plus `Alignment.Center`), and
+  all seven `ContentScale` members are implemented; `ContentScale::FillBounds`
+  is the non-uniform stretch winia used to hard-code. `TransitionVisual` carries
+  the pair, `paint_scale` / `paint_offset` apply it inside the flight transform
+  and `remap_hit` mirrors both, so paint and hit agree. Pinned by
+  `content_scale_factors_match_compose`. NOTE: the demos do not exercise this
+  path at all — they use `shared_element`, i.e. the `Element` kind, which is
+  hardwired to `RemeasureToBounds`; `ScaleToBounds` is reachable only through
+  `shared_bounds`.
 - [ ] `skipToLookaheadSize` — no lookahead system exists; the equivalent
   ("measure at end size from frame one") needs the end bounds before
   layout.
@@ -128,7 +142,11 @@
   the two ends can diverge. No test drives a mid-flight scroll.
 - [x] Single unclamped flight-t; engine-release-gated completion.
 - [x] Live-endpoint hit routing; flight-id tagged teardown.
-- [x] Identity-keyed morph baselines; bouncy spring overshoot renders.
+- [x] Identity-keyed morph baselines; bouncy spring overshoot renders. The baseline
+  TRACKS a flight's layout override while one is attached — only the morph DECISION is
+  skipped for those nodes — because freezing it made the landing compare the hero against
+  where it took off from, opening a fresh morph that replayed the whole flight
+  (pinned by `morph_detector_skips_the_decision_but_updates_the_baseline`).
 - [x] Transition-layer elevation (`renderInOverlayDuringTransition`):
   in-tree paint skip + rootless layer re-render + layer-order hit routing,
   both tiers, `z_index` ordering across both ends.
