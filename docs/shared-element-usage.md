@@ -297,22 +297,36 @@ Three properties worth knowing before you rely on it:
 
 ## 8. Tests
 
-- `cargo test -p winia --lib ui::shared_transition` (59 tests: unit,
+- `cargo test -p winia --lib ui::shared_transition` (72 tests: unit,
   headless Tier 0/Tier 1 raster probes, guard-checked regression tests
   for scroll add-back, morph hit routing, bouncy overshoot, baseline
   identity, arc paint, z-order, enter/exit slide, expand wipe, active
   flag, overlay escape + escape opt-out + cross-composer hit routing,
   chrome elevation (same-composer, peer-composer, equal-z, double-paint),
-  the directional artifact, marker freshness, and the layout contract
-  (`flight_measure_frame_reaches_the_parent_layout` for the channel itself,
-  `flight_layout_contract_matrix` for the 4-way resize/placeholder matrix).
+  the directional artifact, marker freshness, and the layout contract —
+  `flight_measure_frame_reaches_the_parent_layout` (the channel itself),
+  `flight_layout_contract_matrix` (the 4-way resize/placeholder matrix, pinned
+  at t=.5 with exact values), `mid_flight_cancel_restores_the_natural_size`
+  (the teardown seed), `default_contract_does_not_touch_the_layout` (the
+  default costs no layout), `shared_element_re_measures_and_honours_animated_size`
+  (the Compose parity decision), `mid_flight_paint_stays_inside_the_lerped_rect`
+  (SCALED vs CROPPED), `ghost_tap_maps_identity_into_a_remeasure_target`,
+  `remeasure_end_is_never_scaled_by_the_frame_delta`, `circle_radius_follows_the_lerped_rect_on_both_ends`,
+  `percent_to_fixed_corners_stay_aligned_end_to_end`,
+  `writer_never_clobbers_another_flights_override` and
+  `teardown_reaches_a_slot_that_left_the_tree`).
 - Tests driving animations hold `TEST_SERIAL` + `clear_all_animations()`.
-  Mid-flight windows come from a 300 ms tween sampled at ~16 ms, so the
-  sampling loops capture their sample inside the loop and fail with an
-  explicit message if the window is stepped over.
-- Behavior changes must ship a regression test that **fails pre-fix**
-  (verify by temporarily reverting the fix, as done for every behavior
-  change on this branch).
+  Newer tests PIN the flight progress (`progress.set(t)`) instead of sampling the
+  wall clock, and drive at most one extra `layout()` to consume the writer's
+  seed; the remaining completion loops are wall-clock bounded, so they can only
+  fail by not finishing within the loop cap.
+- Behaviour changes must ship a regression test that **fails pre-fix** (verify by
+  temporarily reverting the fix). Where NO failure reproduces — the fix is a
+  consistency change, or the contract can only be pinned as an end state — say so
+  in the commit message instead of implying a reproducer exists; `a9eb990` and
+  `128b700` are the examples, and `128b700`'s premise was later MEASURED wrong
+  (the leak did reproduce; a phantom peer morph had been cleaning it up), which is
+  exactly why the claim has to be checked rather than asserted.
 
 ## 9. Maintenance conventions
 
