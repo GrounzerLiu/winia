@@ -7824,6 +7824,63 @@ mod tier0_tests {
         crate::animation::clear_all_animations();
     }
 
+    /// The path `collect_node_keys` exists for: a SECOND compose inside one frame, across a
+    /// branch flip. It used to be able to leave a node listed under a parent that is no longer
+    /// reachable from the root, which makes the node reachable twice (the `[dup-key]` panic) or
+    /// reachable only through the dead parent (hero present but never measured, 0x0, drawing
+    /// nothing — the "back is the image disappearing" report). The assertion here is the
+    /// end state: the hero is present AND measured.
+    /// HONESTY: this does NOT fail with the pruning reverted (measured) — five attempts at a
+    /// headless reproducer for that defect all came back green, so it is an end-state invariant
+    /// guard, not the regression test for it. The defect needs a stale listing from the
+    /// multi-path tree build, which the demo reproduces and a hand-written test has not; the
+    /// fix rests on the debug-server measurement (3 round trips, `[dup-key]` 90 -> 0).
+    #[test]
+    fn same_frame_double_compose_keeps_the_hero_measured() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+        let frame = |composer: &mut Composer, twice: bool| {
+            let s = show.clone();
+            let mut once = |composer: &mut Composer| {
+                composer.compose(|ctx| {
+                    SharedTransitionLayout::new().build(ctx, |ctx| {
+                        let scope = current_shared_scope().expect("scope");
+                        if s.get() {
+                            switch_frame_list(ctx, &scope);
+                        } else {
+                            switch_frame_detail(ctx, &scope);
+                        }
+                    });
+                });
+            };
+            once(composer);
+            if twice {
+                once(composer);
+            }
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+            composer.poll_shared_flights();
+        };
+        frame(&mut composer, false);
+        show.set(false);
+        frame(&mut composer, true);
+
+        let hero = composer.arena_nodes()[composer.layout_root_idx().expect("root")]
+            .children
+            .first()
+            .copied()
+            .map(|_| composer.arena_nodes().iter().find(|n| {
+                (n.measured_size.width - 200.0).abs() < 1.0 && n.measured_size.height > 1.0
+            }))
+            .flatten();
+        assert!(
+            hero.is_some(),
+            "the hero must be present and measured after a double-composed switch frame"
+        );
+        crate::animation::clear_all_animations();
+    }
+
     /// Bouncy hero leaf (spring overshoot must render past the end rect).
     fn spring_hero_leaf(
         ctx: &mut ComposeCtx,
