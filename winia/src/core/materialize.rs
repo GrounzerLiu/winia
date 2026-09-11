@@ -72,6 +72,68 @@ pub(crate) fn materialize(composer: &mut Composer) {
     for desc in descs {
         materialize_node(composer, desc, None);
     }
+    prune_stale_child_links(composer);
+}
+
+/// A node must be reachable from the root exactly ONCE. Materialize reaches the tree through
+/// several paths (fresh Enter, Skip reuse, re-parenting a reused node, the shared element
+/// detach), and a listing can survive in a parent that no longer owns the child; with two live
+/// paths to one node, the walk in `collect_node_keys` visits it twice and panics with
+/// `[dup-key]` — where BOTH printed indices are the same, which is the tell that this is a
+/// double listing rather than two nodes sharing a key. (Measured: clicking Back in
+/// `shared_transition_image_demo` produced 30 render panics in a row.)
+///
+/// IMPORTANT: this only drops DUPLICATES. `parent_id` is NOT a safe tie-breaker on its own —
+/// measured from the same demo, a 0x0 child listed under the live parent had
+/// `parent_id = Some(96)` pointing at a node that no longer existed, and pruning by that
+/// dropped the child's ONLY listing (the hero vanished from the tree on the return flight).
+/// So: keep the listing whose parent matches `parent_id` when there is one, otherwise keep the
+/// first, and never remove a node's last listing.
+fn prune_stale_child_links(composer: &mut Composer) {
+    let nodes = &mut composer.arena.nodes;
+    let len = nodes.len();
+    // How many parents list each child, and whether some parent matches its `parent_id`.
+    let mut listings: Vec<usize> = vec![0; len];
+    let mut owner_matches: Vec<bool> = vec![false; len];
+    for p in 0..len {
+        let pid = nodes[p].id;
+        for &c in nodes[p].children.iter() {
+            if c < len {
+                listings[c] += 1;
+                if nodes[c].parent_id == Some(pid) {
+                    owner_matches[c] = true;
+                }
+            }
+        }
+    }
+    for p in 0..len {
+        if nodes[p].children.is_empty() {
+            continue;
+        }
+        let pid = nodes[p].id;
+        let mut seen = std::collections::HashSet::new();
+        let mut keep = Vec::with_capacity(nodes[p].children.len());
+        for &c in nodes[p].children.iter() {
+            let first_time = c < len && seen.insert(c);
+            // Keep the child's only listing; among several, prefer the parent it claims.
+            let keep_it = first_time
+                && (listings[c] == 1 || nodes[c].parent_id == Some(pid) || !owner_matches[c]);
+            if keep_it {
+                keep.push(c);
+            } else if first_time {
+                crate::debug_log!(
+                    "[prune] parent idx={p} id={pid} drops duplicate listing of child idx={c} \
+                     (child.parent_id={:?}, size={:?}, key={:#x})",
+                    nodes[c].parent_id,
+                    nodes[c].measured_size,
+                    nodes[c].slot_key
+                );
+            }
+        }
+        if keep.len() != nodes[p].children.len() {
+            nodes[p].children = keep;
+        }
+    }
 }
 
 /// 清除 LayoutNode 上残留的 TextField 专用字段（内容类型切换时调用）。
