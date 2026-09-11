@@ -466,12 +466,16 @@ the supported shape.
    drawing the layer last keeps a Tier-1 ghost visible while it flies into a panel). The
    invariant is therefore scoped to one composer in §3.6 and in the usage guide, with the
    cross-composer behaviour documented instead of silently contradicting the claim.
-8. KNOWN, DOCUMENTED NOT FIXED (review 2, R1): the keyboard focus ring is drawn from
-   the node's own nearest shape (`render.rs` `draw_focus`), not from the flight's
-   morphed radii, so a focused hero mid-flight shows a ring whose corners do not match
-   the background it surrounds. Fixing it means threading an optional radii override
-   into `draw_focus`; the case needs focus AND a flight at once, which no demo or test
-   exercises.
+8. FIXED (review 2, R1): the keyboard focus ring used to be drawn from the node's own
+   nearest shape, so a focused hero mid-flight showed corners that did not match the
+   background it surrounds — for a percent shape (Circle/Pill) the radius was resolved on
+   the un-transformed content box and the flight's `canvas.scale` stretched it into an
+   ellipse while the background painted `min(lerped)/2`. `draw_focus` now takes an
+   optional device-space radii override and the render passes the flight's `radii_pairs`
+   when the node is flying (the ring's geometry was already right: it is drawn inside the
+   flight's canvas transform). NOT covered by a test — the ring needs focus AND a flight
+   at once, which the headless harness does not drive; the non-flying path is unchanged
+   and covered by the existing focus tests.
 9. Cross-WINDOW flights (separate OS windows) remain out of scope — they need
    OS-level overlay, not framework composition.
 10. Mid-flight reversal opens a reverse flight through the same match path
