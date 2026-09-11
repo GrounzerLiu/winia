@@ -6695,6 +6695,39 @@ mod tier0_tests {
         crate::animation::clear_all_animations();
     }
 
+    /// A cached/restored node must keep its CONTENT box. `place()` leaves
+    /// `measured_size` holding the placeholder size the parent was told, so a
+    /// rebuild that copies only that resurrects the placeholder as the node's own
+    /// box — the exact confusion the flight layout contract removed (review R3-F3).
+    #[test]
+    fn restored_node_keeps_its_content_box() {
+        let mut node = crate::layout::node::LayoutNode::default();
+        node.measured_size = crate::layout::node::Size::new(300.0, 200.0);
+        node.flight_content_size = Some(crate::layout::node::Size::new(210.0, 130.0));
+        assert_eq!(
+            node.content_box(),
+            crate::layout::node::Size::new(210.0, 130.0),
+            "precondition: the content box wins over the placeholder size"
+        );
+
+        let cached = node.to_cached();
+        let mut restored = crate::layout::node::LayoutNode::default();
+        restored.restore_from(&cached);
+        assert_eq!(
+            restored.content_box(),
+            crate::layout::node::Size::new(210.0, 130.0),
+            "the snapshot carries the content box"
+        );
+
+        let mut layout_restored = crate::layout::node::LayoutNode::default();
+        layout_restored.restore_layout(&cached);
+        assert_eq!(
+            layout_restored.content_box(),
+            crate::layout::node::Size::new(210.0, 130.0),
+            "…and so does the layout-only restore"
+        );
+    }
+
     /// Bouncy hero leaf (spring overshoot must render past the end rect).
     fn spring_hero_leaf(
         ctx: &mut ComposeCtx,

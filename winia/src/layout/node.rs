@@ -232,6 +232,11 @@ pub struct LayoutNode {
 pub(crate) struct CachedNode {
     pub modifier: Modifier,
     pub measured_size: Size,
+    /// Content box while a flight reports a placeholder size. It MUST travel with
+    /// `measured_size`: after `place()` the latter holds the size the PARENT was
+    /// told, so a rebuilt node without this would resurrect the placeholder as its
+    /// own content box — the exact confusion the flight layout contract removed.
+    pub flight_content_size: Option<Size>,
     pub position: Point,
     pub focused: bool,
     pub dirty: bool,
@@ -250,6 +255,7 @@ impl LayoutNode {
         CachedNode {
             modifier: self.modifier.clone(),
             measured_size: self.measured_size,
+            flight_content_size: self.flight_content_size,
             position: self.position,
             focused: self.focused,
             dirty: self.dirty,
@@ -264,6 +270,7 @@ impl LayoutNode {
     pub(crate) fn restore_from(&mut self, cached: &CachedNode) {
         self.modifier = cached.modifier.clone();
         self.measured_size = cached.measured_size;
+        self.flight_content_size = cached.flight_content_size;
         self.position = cached.position;
         self.focused = cached.focused;
         self.dirty = cached.dirty;
@@ -280,6 +287,7 @@ impl LayoutNode {
     /// 用于 start_node 的 clean leaf 恢复；Skip 的 stub 用完整 restore_from。
     pub(crate) fn restore_layout(&mut self, cached: &CachedNode) {
         self.measured_size = cached.measured_size;
+        self.flight_content_size = cached.flight_content_size;
         self.position = cached.position;
         self.focused = cached.focused;
         self.dirty = cached.dirty;
