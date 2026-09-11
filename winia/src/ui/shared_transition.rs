@@ -3172,20 +3172,6 @@ impl Composer {
             let Some(idx) = find_idx_by_slot(&self.arena.nodes, root, *slot) else {
                 continue;
             };
-            // A flight ownS this node's reported size right now (Compose
-            // `PlaceHolderSize`), so a size delta here is the FLIGHT, not a
-            // layout morph. Opening one would be wrong twice over: a Tier-1
-            // flight lives in the MAIN composer's map, so this composer's
-            // `flight_for_key` cannot see it and would open a phantom T0 morph
-            // EVERY frame — and that morph's idle frame (morphs never attach an
-            // override) deletes the flight's override, which the cross-poll then
-            // rewrites, i.e. per-frame drop/rewrite churn, a phantom flight, and
-            // chrome that lingers while it settles. Skipping the baseline update
-            // as well keeps the RESTING size as the morph baseline, so nothing
-            // fires when the flight ends either.
-            if self.arena.nodes[idx].flight_measure.is_some() {
-                continue;
-            }
             let nid = self.arena.nodes[idx].id;
             let (ax, ay) = crate::app::node_abs_position(&self.arena.nodes, root, nid);
             let (w, h) = {
@@ -3195,12 +3181,28 @@ impl Composer {
             // Canonicalize to window coords (overlay-local + screen origin).
             let (ox, oy) = self.screen_origin;
             let cur = SharedBounds::new(ax + ox, ay + oy, w, h);
-            // Baselines key on endpoint identity (scope, key), not the slot:
-            // a conditional key-swap reusing one call-site slot must not
-            // inherit the previous key's rect as its morph start.
+            // Baselines key on endpoint identity (scope, key), not the slot: a
+            // conditional key-swap reusing one call-site slot must not inherit the
+            // previous key's rect as its morph start.
             let bkey = (k.0, k.1.clone());
-            if let Some(prev) = self.shared_last_bounds.get(&bkey) {
-                if size_delta(prev, &cur) > MORPH_EPS {
+            // A flight OWNS this node's reported size right now (Compose
+            // `PlaceHolderSize`), so a size delta here is the FLIGHT, not a layout
+            // morph. Opening one would be wrong twice over: a Tier-1 flight lives in
+            // the MAIN composer's map, so this composer's `flight_for_key` cannot see
+            // it and would open a phantom T0 morph EVERY frame — and that morph's
+            // idle frame (morphs never attach an override) deletes the flight's
+            // override, which the cross-poll then rewrites, i.e. per-frame
+            // drop/rewrite churn plus a phantom flight.
+            //
+            // The BASELINE must still track the override-driven size, though: the
+            // baseline is the pre-flight rect, so freezing it here made the flight's
+            // own layout change look like a fresh morph the moment the override was
+            // dropped — the landed hero then replayed a whole animation. So this
+            // skips the morph DECISION only; the insert below still runs.
+            let overridden = self.arena.nodes[idx].flight_measure.is_some();
+            if !overridden {
+                if let Some(prev) = self.shared_last_bounds.get(&bkey) {
+                    if size_delta(prev, &cur) > MORPH_EPS {
                     match self.flight_for_key(k.0, &k.1) {
                         Some(fid) => {
                             // Active flight: only morphs reopen (switch flights
@@ -3233,6 +3235,7 @@ impl Composer {
                             end: cur,
                         }),
                     }
+                }
                 }
             }
             self.shared_last_bounds.insert(bkey, cur);
@@ -4273,6 +4276,29 @@ mod tier0_tests {
             "distinct slots ⇒ a real switch, not a same-screen morph"
         );
         assert_eq!(composer.transition_layer.len(), 1, "leaving hero retained");
+
+        // Run it out, then make sure the landed hero does NOT replay: the morph
+        // detector compares the endpoint's layout against its baseline a frame or two
+        // after the override is dropped, so a baseline frozen while the flight ran
+        // turns the flight's own size change into a fresh morph (the demo's visible
+        // "replay").
+        for _ in 0..300 {
+            if composer.shared_flights.is_empty() {
+                break;
+            }
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(16));
+            build(&mut composer);
+        }
+        assert!(composer.shared_flights.is_empty(), "the switch flight completes");
+        for _ in 0..5 {
+            build(&mut composer);
+            assert!(
+                composer.shared_flights.is_empty(),
+                "no follow-up flight may open after the switch lands: {} found",
+                composer.shared_flights.len()
+            );
+        }
         crate::animation::clear_all_animations();
     }
 
@@ -5341,6 +5367,19 @@ mod tier0_tests {
                 "the flight did not finish within the loop cap ({ctx}) — this is a \
                  wall-clock cap, not necessarily a logic failure"
             );
+            // The landed hero must NOT replay: with the override dropped in the
+            // poll, the morph detector compares the endpoint's layout against its
+            // baseline a frame or two later, and a frozen baseline turns the
+            // flight's own size change into a fresh morph (the demo's visible
+            // "replay").
+            for _ in 0..4 {
+                frame(&mut composer);
+                assert!(
+                    composer.shared_flights.is_empty(),
+                    "no follow-up flight may open after the flight lands ({ctx}): {} found",
+                    composer.shared_flights.len()
+                );
+            }
             frame(&mut composer);
             let marked = marked_in(&composer)[0];
             let nodes = composer.arena_nodes();
