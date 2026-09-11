@@ -55,14 +55,21 @@
   always detached in Winia, so the flag is a no-op there; `Morph`
   (same-screen `animateBounds`) never elevates, matching Compose's
   animateBounds which stays in place.
-- [ ] `OverlayClip` / `clipInOverlayDuringTransition` — the clip *inside*
-  the overlay. Not built: Compose's default is the parent `sharedBounds`'
-  resolved clip path, and nested shared markers are still unsupported (risk 13 in
-  §10 of the architecture doc), so the Compose default resolves to
-  "no extra clip" — which is already what the layer does. The pair is clipped
-  to the lerped rect regardless (the render does it unconditionally; the old
-  `ScaleToBounds { clip }` flag was measured as dead and deleted).
-  Revisit together with nested markers.
+- [x] `OverlayClip` — shipped as `shared_bounds_with_overlay_clip(..., overlay_clip)`.
+  `OverlayClip::Bounds` (the default) clips to the flight's own resolved corner quad on
+  the lerped rect, which is what the render always did; `Rectangle` and
+  `RoundedCorner(radius)` mirror Compose's members (the radius is device-space, resolved
+  against the lerped rect); `None` is a winia addition — Compose reaches "no clip" only
+  through a custom `OverlayClip` returning null — and it is the escape hatch for content
+  that must overflow the animated bounds. Read PER END from the node's own marker, like
+  Compose, and pinned by
+  `overlay_clip_none_lets_content_overflow_the_lerped_rect` (which asserts both
+  directions, since the probe is only meaningful if the spill is visible without a clip —
+  the deleted `ScaleToBounds { clip }` flag could never be observed at all because the
+  render's clip was unconditional).
+  Deviation: Compose derives its DEFAULT from the parent `sharedBounds`' resolved clip
+  path, which needs nested shared markers (still unsupported, risk 13 in §10); winia's
+  default is the drawn end's own corner quad.
 - [x] `renderInSharedTransitionScopeOverlay` (keep bottom bar / FAB on top
   during transitions) — shipped as
   `Modifier::render_in_shared_transition_scope_overlay(&scope, z_index)`.

@@ -293,12 +293,12 @@ Three properties worth knowing before you rely on it:
 - No shared markers on descendants of shared markers (nested flights
   compound both transforms).
 - No `backdrop_blur` heroes (blur snapshots post-transform content).
-- `OverlayClip` / `clipInOverlayDuringTransition` (custom clip paths in
-  the overlay) are not built: Compose's default derives from the parent
-  `sharedBounds`, which needs nested markers. Independent of that, the render
-  always clips a transitioning node to its morph-shaped lerped rect — a flight
-  pair cannot spill, and there is no marker flag to turn that off (the
-  `ScaleToBounds { clip }` flag measured as dead and was deleted).
+- `OverlayClip` is shipped as a marker parameter
+  (`shared_bounds_with_overlay_clip`): `Bounds` (default, the drawn end's own corner quad
+  on the lerped rect), `Rectangle`, `RoundedCorner(radius)`, and `None` — a winia addition
+  for content that must overflow the animated bounds. Compose's own default (the parent
+  `sharedBounds`' resolved clip path) still needs nested markers, so it stays out of
+  reach; the winia default is the equivalent for a single marker.
 - `vertical_scroll(reverse)` shares the pre-existing hit/render mirror
   divergence — out of scope.
 - Cross-OS-window flights are out of scope (need an OS-level overlay).
@@ -323,7 +323,7 @@ Three properties worth knowing before you rely on it:
 
 ## 8. Tests
 
-- `cargo test -p winia --lib ui::shared_transition` (81 tests: unit,
+- `cargo test -p winia --lib ui::shared_transition` (82 tests: unit,
   headless Tier 0/Tier 1 raster probes, guard-checked regression tests
   for scroll add-back, morph hit routing, bouncy overshoot, baseline
   identity, arc paint, z-order, enter/exit slide, expand wipe, active

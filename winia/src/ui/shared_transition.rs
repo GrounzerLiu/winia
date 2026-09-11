@@ -294,6 +294,27 @@ impl ResizeMode {
     }
 }
 
+/// Compose `OverlayClip`: how content rendered in the transition layer is clipped.
+/// Compose's default derives the clip from the parent `sharedBounds`, which winia
+/// expresses as `Bounds`; `Rectangle` and `RoundedCorner` mirror Compose's members, and
+/// `None` is a winia addition (Compose reaches "no clip" only through a custom
+/// `OverlayClip` returning null) — it is the escape hatch for content that must be allowed
+/// to overflow the animated bounds.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum OverlayClip {
+    /// Clip to the flight's own resolved corner quad on the lerped rect — the default,
+    /// and what winia did unconditionally before this parameter existed.
+    #[default]
+    Bounds,
+    /// Clip to the lerped rect with square corners (Compose `OverlayClip.Rectangle`).
+    Rectangle,
+    /// Clip to the lerped rect with this DEVICE-space corner radius, resolved against the
+    /// lerped rect (Compose `OverlayClip.RoundedCorner`).
+    RoundedCorner(f32),
+    /// No clip: the content may paint outside the lerped rect.
+    None,
+}
+
 /// Layout-space contract during flight (Compose `PlaceHolderSize` + explicit
 /// cheap option).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -316,10 +337,15 @@ pub enum PathMotion {
 
 /// Marker kind stored in the modifier chain (Phase 2 reads it at `start_node`
 /// to register the endpoint; render ignores it via the `_ =>` fallback).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SharedKind {
     Element { placeholder: PlaceHolderSize },
-    Bounds { resize: ResizeMode, placeholder: PlaceHolderSize },
+    Bounds {
+        resize: ResizeMode,
+        placeholder: PlaceHolderSize,
+        // Compose `overlayClip` is a marker parameter, so it travels with the kind.
+        overlay_clip: OverlayClip,
+    },
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -715,10 +741,42 @@ impl Modifier {
         z_index: f32,
         render_in_overlay: bool,
     ) -> Self {
+        // Compose's `overlayClip` defaults to the bounds' own resolved clip, which is this
+        // crate's long-standing behaviour — so the 9-argument form keeps its signature and
+        // the clip is opt-in through the sibling below.
+        self.shared_bounds_with_overlay_clip(
+            state,
+            enter,
+            exit,
+            transform,
+            resize,
+            placeholder,
+            path,
+            z_index,
+            render_in_overlay,
+            OverlayClip::Bounds,
+        )
+    }
+
+    /// [`shared_bounds`](Self::shared_bounds) with Compose's `overlayClip` slot.
+    #[allow(clippy::too_many_arguments)]
+    pub fn shared_bounds_with_overlay_clip(
+        self,
+        state: SharedContentState,
+        enter: VisibilityTransition,
+        exit: VisibilityTransition,
+        transform: BoundsTransform,
+        resize: ResizeMode,
+        placeholder: PlaceHolderSize,
+        path: PathMotion,
+        z_index: f32,
+        render_in_overlay: bool,
+        overlay_clip: OverlayClip,
+    ) -> Self {
         self.push(ModifierElement::SharedTransition {
             scope_id: state.scope_id,
             key: state.key,
-            kind: SharedKind::Bounds { resize, placeholder },
+            kind: SharedKind::Bounds { resize, placeholder, overlay_clip },
             transform,
             path,
             z_index,
@@ -876,17 +934,36 @@ mod tests {
         assert!(!shared_clip_for_kind(&SharedKind::Bounds {
             resize: ResizeMode::scale_to_bounds(),
             placeholder: PlaceHolderSize::JumpCut,
+            overlay_clip: OverlayClip::Bounds,
         }));
         assert!(!shared_clip_for_kind(&SharedKind::Bounds {
             resize: ResizeMode::RemeasureToBounds,
             placeholder: PlaceHolderSize::ContentSize,
+            overlay_clip: OverlayClip::Bounds,
         }));
+        // The marker's `overlayClip` reaches the render verbatim, and an Element end
+        // (which has no such parameter) keeps the morph-shaped default.
+        assert_eq!(
+            shared_overlay_clip_for_kind(&SharedKind::Bounds {
+                resize: ResizeMode::scale_to_bounds(),
+                placeholder: PlaceHolderSize::JumpCut,
+                overlay_clip: OverlayClip::None,
+            }),
+            OverlayClip::None
+        );
+        assert_eq!(
+            shared_overlay_clip_for_kind(&SharedKind::Element {
+                placeholder: PlaceHolderSize::JumpCut
+            }),
+            OverlayClip::Bounds
+        );
         // Layout contract: the marker's resize/placeholder reach the flight
         // verbatim (no degradation is left in the pipeline).
         assert!(matches!(
             shared_resize_for_kind(&SharedKind::Bounds {
                 resize: ResizeMode::RemeasureToBounds,
                 placeholder: PlaceHolderSize::AnimatedSize,
+                overlay_clip: OverlayClip::Bounds,
             }),
             ResizeMode::RemeasureToBounds
         ));
@@ -894,6 +971,7 @@ mod tests {
             shared_placeholder_for_kind(&SharedKind::Bounds {
                 resize: ResizeMode::RemeasureToBounds,
                 placeholder: PlaceHolderSize::AnimatedSize,
+                overlay_clip: OverlayClip::Bounds,
             }),
             PlaceHolderSize::AnimatedSize
         );
@@ -1670,6 +1748,23 @@ fn animated_size(
 /// used to feed this measured as having no effect and was deleted.
 pub(crate) fn shared_clip_for_kind(_kind: &SharedKind) -> bool {
     false
+}
+
+/// Compose `overlayClip` of a marker kind. `Element` ends have no clip parameter, so
+/// they keep the morph-shaped default.
+pub(crate) fn shared_overlay_clip_for_kind(kind: &SharedKind) -> OverlayClip {
+    match kind {
+        SharedKind::Bounds { overlay_clip, .. } => *overlay_clip,
+        SharedKind::Element { .. } => OverlayClip::Bounds,
+    }
+}
+
+/// The `overlayClip` a node's own marker declares (Compose reads it per end, and each
+/// end renders with its own). Falls back to the default when the node carries none.
+pub(crate) fn overlay_clip_of(modifier: &crate::modifier::Modifier) -> OverlayClip {
+    find_shared_marker(modifier)
+        .map(|m| shared_overlay_clip_for_kind(&m.kind))
+        .unwrap_or_default()
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -7493,6 +7588,119 @@ mod tier0_tests {
             "the cancelled peer-sourced flight must take its layout override with it"
         );
         crate::animation::clear_all_animations();
+    }
+
+    /// A bounds hero holding a child WIDER than its box, so the scaled content spills
+    /// past the lerped rect unless the marker's `overlayClip` clips it.
+    #[crate::composable]
+    fn spilling_hero_screen(
+        ctx: &mut ComposeCtx,
+        scope: &SharedTransitionScope,
+        w: f32,
+        h: f32,
+        clip: OverlayClip,
+    ) {
+        Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+            Column::new()
+                .modifier(
+                    Modifier::new()
+                        .size(w, h)
+                        .background(Color::RED, Shape::rounded(8.0))
+                        .shared_bounds_with_overlay_clip(
+                            scope.shared_content_state("hero"),
+                            VisibilityTransition::fade_in(TweenSpec::default()),
+                            VisibilityTransition::fade_out(TweenSpec::default()),
+                            BoundsTransform::default(),
+                            ResizeMode::scale_to_bounds(),
+                            PlaceHolderSize::JumpCut,
+                            PathMotion::Linear,
+                            0.0,
+                            true,
+                            clip,
+                        ),
+                )
+                .build(ctx, |ctx| {
+                    // 500 wide inside a 120-wide hero: spills by construction.
+                    let key = ctx.next_key();
+                    ctx.start_leaf(
+                        key,
+                        Modifier::new()
+                            .size(500.0, 30.0)
+                            .background(Color::GREEN, Shape::Rectangle),
+                    );
+                    ctx.end_node();
+                });
+        });
+    }
+
+    #[crate::composable]
+    fn spilling_list_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope, clip: OverlayClip) {
+        spilling_hero_screen(ctx, scope, 120.0, 60.0, clip);
+    }
+
+    #[crate::composable]
+    fn spilling_detail_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope, clip: OverlayClip) {
+        spilling_hero_screen(ctx, scope, 300.0, 200.0, clip);
+    }
+
+    /// Compose `overlayClip`: the default (`Bounds`) clips the overlay-rendered pair to
+    /// the flight's own corner quad, `None` is the escape hatch that lets content
+    /// overflow. Both directions are asserted, because the probe is only meaningful if
+    /// the spill really is visible without the clip — the same control that showed the
+    /// deleted `clip` flag was dead (the render clipped unconditionally then, so the
+    /// spill could never be seen at all).
+    #[test]
+    fn overlay_clip_none_lets_content_overflow_the_lerped_rect() {
+        let _g = lock_serial();
+        let sample = |clip: OverlayClip| {
+            crate::animation::clear_all_animations();
+            let mut composer = Composer::new();
+            let show = State::new(true);
+            let frame = |composer: &mut Composer| {
+                let s = show.clone();
+                composer.compose(|ctx| {
+                    SharedTransitionLayout::new().build(ctx, |ctx| {
+                        let scope = current_shared_scope().expect("scope");
+                        if s.get() {
+                            spilling_list_screen(ctx, &scope, clip);
+                        } else {
+                            spilling_detail_screen(ctx, &scope, clip);
+                        }
+                    });
+                });
+                composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+                composer.poll_shared_flights();
+            };
+            frame(&mut composer);
+            show.set(false);
+            frame(&mut composer);
+            let fid = *composer.shared_flights.keys().next().expect("flight id");
+            composer
+                .shared_flights
+                .get_mut(&fid)
+                .expect("flight")
+                .progress
+                .set(0.5);
+            frame(&mut composer);
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+            let mut surface = render_heads(&composer);
+            // The lerped rect is 210x130; the 500-wide band is scaled by 210/300 = 0.7, so
+            // it reaches x=350 at the TOP of the hero — well outside both the rect and the
+            // hero's own background.
+            let out = pixel_rgb(&mut surface, 260, 10);
+            crate::animation::clear_all_animations();
+            out
+        };
+        let unclipped = sample(OverlayClip::None);
+        let clipped = sample(OverlayClip::Bounds);
+        assert!(
+            !close_enough(unclipped, (255, 255, 255), 12),
+            "with `overlayClip: None` the spill must be visible at x=260 (got {unclipped:?})"
+        );
+        assert!(
+            close_enough(clipped, (255, 255, 255), 12),
+            "the default `overlayClip` must clip the pair to the lerped rect (got {clipped:?})"
+        );
     }
 
     /// Bouncy hero leaf (spring overshoot must render past the end rect).

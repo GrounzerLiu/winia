@@ -732,9 +732,15 @@ fn render_pass1(
     // shared markers on descendants of shared markers.
     // bg/border/clip-element morphs consume `tf_radii` below (radii pairs in
     // layout space — pre-divided by the flight axis scales).
-    let (tf_saved, tf_layered, tf_radii): (bool, bool, Option<[(f32, f32); 4]>) =
-        if let Some(t) = node.transition.as_ref() {
-            // Unclamped progress: spring overshoot (t > 1 / t < 0) flies past
+    let (tf_saved, tf_layered, tf_radii, tf_scale): (
+        bool,
+        bool,
+        Option<[(f32, f32); 4]>,
+        // The scale the flight transform applies; `RoundedCorner` needs it to turn its
+        // device-space radius into the pre-divided one the canvas expects.
+        Option<(f32, f32)>,
+    ) =
+        if let Some(t) = node.transition.as_ref() {            // Unclamped progress: spring overshoot (t > 1 / t < 0) flies past
             // the endpoint — the Compose spring look. Every consumer
             // (lerp, radii, clip, hit) shares this single t; only opacity
             // stays clamped (alpha()) and degenerate rects stay invisible.
@@ -873,15 +879,40 @@ fn render_pass1(
             (true, layered, Some(t.radii_pairs(
                 if t.remeasure { l.width } else { w },
                 if t.remeasure { l.height } else { h },
-            )))
+            )), Some((sx, sy)))
         } else {
-            (false, false, None)
+            (false, false, None, None)
         };
     // Layout-space morph rect for the Clip-element arm (lands exactly on the
-    // lerped bounds under the flight transform, by linearity).
-    let tf_clip_rr: Option<skia_safe::RRect> = tf_radii.map(|r| {
-        skia_safe::RRect::new_rect_radii(rect, &crate::ui::shared_transition::rrect_vectors(r))
-    });
+    // lerped bounds under the flight transform, by linearity) — shaped by Compose's
+    // `overlayClip` read from THIS node's marker (per-end, like Compose): the flight's own
+    // corner quad by default, square corners for `Rectangle`, a device-space radius for
+    // `RoundedCorner` (resolved on the lerped rect), and no clip at all for `None`.
+    let tf_clip_rr: Option<skia_safe::RRect> = match (tf_radii, tf_scale) {
+        (Some(r), Some((sx, sy))) => {
+            match crate::ui::shared_transition::overlay_clip_of(&node.modifier) {
+                crate::ui::shared_transition::OverlayClip::None => None,
+                crate::ui::shared_transition::OverlayClip::Rectangle => {
+                    Some(skia_safe::RRect::new_rect(rect))
+                }
+                crate::ui::shared_transition::OverlayClip::RoundedCorner(radius) => {
+                    // The radius is device-space, so pre-divide by the paint scale — the
+                    // same convention `radii_pairs` uses (the clip is drawn inside
+                    // `canvas.scale`).
+                    let rx = radius / sx.abs().max(1e-6);
+                    let ry = radius / sy.abs().max(1e-6);
+                    Some(skia_safe::RRect::new_rect_xy(rect, rx, ry))
+                }
+                crate::ui::shared_transition::OverlayClip::Bounds => {
+                    Some(skia_safe::RRect::new_rect_radii(
+                        rect,
+                        &crate::ui::shared_transition::rrect_vectors(r),
+                    ))
+                }
+            }
+        }
+        _ => None,
+    };
 
     // 背景模糊：在节点**自身任何内容（背景/文本/子节点）绘制之前**处理——
     // snapshot 只含"位于其下"的已画内容（祖先 + 前面的兄弟），对齐 Compose
