@@ -5,7 +5,10 @@
 //! `ContentScale` were unreachable from a running app until this demo. Here
 //! `assets/landscape.jpg` flies from a list card to a detail hero marked with
 //! `shared_bounds`, and the buttons pick the knobs, so every combination can be A/B'd by
-//! flying the same photo twice:
+//! flying the same photo twice. The list card is a **centre-cropped circle** (a square box
+//! clipped to `Shape::Circle`, with the photo drawn `Crop` + centre inside it) and the
+//! detail is a rounded rectangle, so the flight also morphs the corner radius from Compose's
+//! percent-50 down to a fixed 12px — the `CircleShape` semantics winia was aligned with.
 //!
 //! - `ContentScale`: Crop / Fit / FillWidth / FillBounds. With a photograph the difference
 //!   is unmistakable — Crop fills the animated rect uniformly and clips, Fit letterboxes,
@@ -45,6 +48,7 @@ fn photo_box(
     ctx: &mut ComposeCtx,
     w: f32,
     h: f32,
+    shape: Shape,
     scope: &SharedTransitionScope,
     content_scale: &State<ContentScale>,
     remeasure: &State<bool>,
@@ -62,7 +66,11 @@ fn photo_box(
         .modifier(
             Modifier::new()
                 .size(w, h)
-                .clip(Shape::rounded(12.0))
+                // The flight reads the corner kind from the nearest Clip/Background/Border
+                // shape: a `Circle` end resolves to Compose's percent-50 corner (min/2 against
+                // the box it is drawn in), so a square box is a circle and the flight lerps
+                // that radius into the target's fixed 12px on the same rect.
+                .clip(shape)
                 .shared_bounds_with_overlay_clip(
                     scope.shared_content_state("photo"),
                     VisibilityTransition::fade_in(TweenSpec::default()),
@@ -176,7 +184,7 @@ fn image_flight_demo(ctx: &mut ComposeCtx) {
             .build(ctx, |ctx| {
                 if show_detail.get() {
                     Text::new("Detail").font_size(22.0).build(ctx);
-                    photo_box(ctx, 344.0, 240.0, &scope, &content_scale, &remeasure, &spill, &slow);
+                    photo_box(ctx, 344.0, 240.0, Shape::rounded(12.0), &scope, &content_scale, &remeasure, &spill, &slow);
                     controls(ctx, &content_scale, &remeasure, &spill, &slow, &show_detail);
                     Button::new()
                         .on_click({
@@ -189,7 +197,12 @@ fn image_flight_demo(ctx: &mut ComposeCtx) {
                         });
                 } else {
                     Text::new("List").font_size(22.0).build(ctx);
-                    photo_box(ctx, 132.0, 92.0, &scope, &content_scale, &remeasure, &spill, &slow);
+                    // A SQUARE box clipped to a circle, with the photo itself drawn Crop +
+                    // Center inside it: that is a centre-cropped circle (Compose's
+                    // `Image(contentScale = Crop, alignment = Center)` inside a circular
+                    // clip), and the flight then morphs its 50%-radius into the detail's
+                    // rounded rectangle.
+                    photo_box(ctx, 96.0, 96.0, Shape::Circle, &scope, &content_scale, &remeasure, &spill, &slow);
                     controls(ctx, &content_scale, &remeasure, &spill, &slow, &show_detail);
                     Button::new()
                         .on_click({
