@@ -436,11 +436,17 @@ the supported shape.
    morph), and with the guard in place reverting BOTH Tier-1 clears makes
    `stale_cancel_drops_the_surviving_peers_layout_override` fail with the
    override still attached.
-6. UNVERIFIED CLAIM (review 2, R4): `ResizeMode::ScaleToBounds { clip: true }` is
-   read by the render (`render.rs`, the `t.clip || fx_clip` arm) but NO test in the
-   crate ever sets it to `true`, so the gaps tracker's "it still clips the flying pair
-   to the lerped rect" has never been demonstrated. Either it needs a raster test that
-   would spill without it, or the claim should be dropped.
+6. DEAD FLAG, MEASURED (review 2, R4 + this round): `ResizeMode::ScaleToBounds { clip }`'s
+   `clip` has no observable effect. The render clips EVERY transitioning node to its
+   morph-shaped lerped rect (`tf_clip_rr`), so a pair that would spill does not, whether
+   or not the marker asks for the clip — verified by building a hero with a 500px painted
+   band inside a 120px box and probing outside the lerped rect with `clip: false`: the
+   probe reads background. (The `t.clip` arm in the render is therefore redundant, and
+   the gaps tracker's "it still clips the flying pair" is vacuously true.) The throwaway
+   test that found this was removed rather than shipped, because its control assertion —
+   "the spill is visible without the flag" — cannot pass. Fixing it means deciding whether
+   the unconditional clip IS the contract (then drop the flag and the doc claim) or the
+   flag should gate it (then move the clip under it).
 7. KNOWN, DOCUMENTED NOT FIXED (review 2, R1): the keyboard focus ring is drawn from
    the node's own nearest shape (`render.rs` `draw_focus`), not from the flight's
    morphed radii, so a focused hero mid-flight shows a ring whose corners do not match
