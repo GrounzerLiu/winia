@@ -6834,6 +6834,44 @@ mod tier0_tests {
         // (Review R4: an extra "the radius sits between the two endpoint radii"
         // assertion used to live here — it was implied by the equality above, which
         // is strictly stronger, so it was removed rather than kept as decoration.)
+
+        // …and the same must hold for the LEAVING ghost, which no other test can see:
+        // `marked_in` walks the tree, but the source end is detached into the layer, so
+        // only an arena scan reaches it (risk 18's open item).
+        //
+        // MEASURED, DO NOT OVERCLAIM: with the round-3 elliptical-corner defect restored
+        // (`radii_pairs` dividing by the axis ratios) and the target assertion above
+        // temporarily disabled to isolate this half, the GHOST assertion still PASSES —
+        // the two scale factors evidently coincide for a detached source end (its own box
+        // is what the axis ratios are relative to, and the render does not scale it the way
+        // it scales a target). So this is an invariant guard against the ghost half going
+        // unexamined, NOT a discriminator for that defect; the only measured discriminator
+        // for it is the target assertion above.
+        let src = composer
+            .arena_nodes()
+            .iter()
+            .find(|n| {
+                n.transition
+                    .as_ref()
+                    .is_some_and(|t| matches!(t.role, TransitionRole::Source))
+            })
+            .expect("the detached ghost carries a Source visual");
+        let svis = src.transition.clone().expect("ghost visual");
+        let (sbw, sbh) = {
+            let cb = src.content_box();
+            (cb.width, cb.height)
+        };
+        let sl = svis.lerped();
+        let swant = sl.width.min(sl.height) / 2.0;
+        let (ssx, ssy) = svis.paint_scale(sbw, sbh);
+        let sdev_x = svis.radii_pairs(sbw, sbh)[0].0 * ssx;
+        let sdev_y = svis.radii_pairs(sbw, sbh)[0].1 * ssy;
+        assert!(
+            (sdev_x - swant).abs() <= 0.5 && (sdev_y - swant).abs() <= 0.5,
+            "the GHOST's painted corner must be round on both axes too: got \
+             ({sdev_x}, {sdev_y}), want ({swant}, {swant}) for lerped {sl:?} box \
+             ({sbw}, {sbh})"
+        );
         crate::animation::clear_all_animations();
     }
 
