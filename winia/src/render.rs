@@ -857,8 +857,12 @@ fn render_pass1(
             // Scale about the lerped origin (not the canvas origin): content
             // drawn at layout coords must land on the lerped rect, i.e.
             // final(p) = l + s*(p - node_origin). Same pivot convention as
-            // apply_gl_transform and remap_hit.
-            canvas.translate((-x, -y));
+            // apply_gl_transform and remap_hit. The offset places the content by
+            // Compose `Alignment` when the fit does not fill both axes (it is already
+            // in node coords, i.e. divided by the scale, because it is applied inside
+            // `canvas.scale`).
+            let (off_x, off_y) = t.paint_offset(w, h);
+            canvas.translate((-x + off_x, -y + off_y));
             let mut layered = false;
             if alpha < 0.999 {
                 let mut paint = skia_safe::Paint::default();

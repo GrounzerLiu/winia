@@ -253,15 +253,45 @@ impl ContentAlignment {
 /// Content deformation during flight (Compose `ResizeMode`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResizeMode {
-    /// Scale the whole content to the lerped bounds (Compose's default for
-    /// `sharedBounds`). Clipping is NOT optional: the render always clips a
-    /// transitioning node to its morph-shaped lerped rect, so the pair can never
-    /// spill. This variant used to carry a `clip` flag, which measurement showed had
-    /// no observable effect (see the risk register) — deleted rather than left as a
-    /// parameter that silently does nothing.
-    ScaleToBounds,
+    /// Scale the STABLE content into the animated bounds (Compose
+    /// `ResizeMode.scaleToBounds`), fitted by `content_scale` and placed by
+    /// `alignment`. Clipping is NOT optional: the render always clips a transitioning
+    /// node to its morph-shaped lerped rect, so the pair can never spill (this variant
+    /// used to carry a `clip` flag that measured as dead and was deleted).
+    ScaleToBounds {
+        content_scale: ContentScale,
+        alignment: ContentAlignment,
+    },
     /// Re-measure at the lerped size every frame (Phase 4).
     RemeasureToBounds,
+}
+
+impl ResizeMode {
+    /// Compose `scaleToBounds()`: `ContentScale.FillWidth` + `Alignment.Center` — the
+    /// uniform default, which is deliberately NOT `Image`'s `Fit`.
+    pub fn scale_to_bounds() -> Self {
+        ResizeMode::ScaleToBounds {
+            content_scale: ContentScale::FillWidth,
+            alignment: ContentAlignment::Center,
+        }
+    }
+
+    /// Compose `scaleToBounds(contentScale, alignment)`.
+    pub fn scale_to_bounds_with(
+        content_scale: ContentScale,
+        alignment: ContentAlignment,
+    ) -> Self {
+        ResizeMode::ScaleToBounds { content_scale, alignment }
+    }
+
+    /// `ContentScale`/`ContentAlignment` of a scaling end; `None` for `RemeasureToBounds`
+    /// (it never scales).
+    pub(crate) fn scale_to_bounds_parts(self) -> Option<(ContentScale, ContentAlignment)> {
+        match self {
+            ResizeMode::ScaleToBounds { content_scale, alignment } => Some((content_scale, alignment)),
+            ResizeMode::RemeasureToBounds => None,
+        }
+    }
 }
 
 /// Layout-space contract during flight (Compose `PlaceHolderSize` + explicit
@@ -844,7 +874,7 @@ mod tests {
             placeholder: PlaceHolderSize::AnimatedSize
         }));
         assert!(!shared_clip_for_kind(&SharedKind::Bounds {
-            resize: ResizeMode::ScaleToBounds,
+            resize: ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart },
             placeholder: PlaceHolderSize::JumpCut,
         }));
         assert!(!shared_clip_for_kind(&SharedKind::Bounds {
@@ -901,6 +931,7 @@ mod tests {
             bounds_fx: None,
             elevated: false,
             remeasure: false,
+            scale_parts: None,
             radius_from_auto: false,
             radius_to_auto: false,
         };
@@ -987,6 +1018,7 @@ mod tests {
             bounds_fx: fx,
             elevated: false,
             remeasure: false,
+            scale_parts: Some((ContentScale::FillBounds, ContentAlignment::TopStart)),
             radius_from_auto: false,
             radius_to_auto: false,
         };
@@ -1198,6 +1230,10 @@ pub(crate) struct TransitionVisual {
     /// `RemeasureToBounds`): the content already has the animated size, so
     /// render must NOT scale it again and hit testing maps 1:1.
     pub remeasure: bool,
+    /// How a scaling end fits its STABLE content into the lerped rect and where the
+    /// leftover axis sits (Compose `ContentScale` + `Alignment`). `None` for
+    /// `RemeasureToBounds`, which never scales.
+    pub scale_parts: Option<(ContentScale, ContentAlignment)>,
 }
 
 impl TransitionVisual {
@@ -1299,28 +1335,63 @@ impl TransitionVisual {
         if x < l.x || x > l.x + l.width || y < l.y || y > l.y + l.height {
             return None;
         }
-        let sx = if w > 0.0 { l.width / w } else { 1.0 }.max(1e-6);
-        let sy = if h > 0.0 { l.height / h } else { 1.0 }.max(1e-6);
+        let (mut sx, mut sy) = self.paint_scale(w, h);
+        if sx.abs() <= f32::EPSILON {
+            sx = 1e-6;
+        }
+        if sy.abs() <= f32::EPSILON {
+            sy = 1e-6;
+        }
+        // Mirrors the render transform exactly: scaled into the lerped rect from the
+        // node origin, then placed by `paint_offset`.
+        let (off_x, off_y) = self.paint_offset(w, h);
         // Clamp into layout bounds (float-safe: a visual hit must route
         // somewhere, never vanish at the edge).
-        let lx = (nx + (x - l.x) / sx).clamp(nx.min(nx + w), nx.max(nx + w));
-        let ly = (ny + (y - l.y) / sy).clamp(ny.min(ny + h), ny.max(ny + h));
+        let lx = (nx + (x - l.x) / sx - off_x).clamp(nx.min(nx + w), nx.max(nx + w));
+        let ly = (ny + (y - l.y) / sy - off_y).clamp(ny.min(ny + h), ny.max(ny + h));
         Some((lx, ly))
     }
 
     /// Layout-space radii pairs for bg/border/clip-element overrides (drawn
     /// The scale the render applies to this end's content box. `RemeasureToBounds`
-    /// must NOT scale: the content was already laid out at the animated size, and    /// that box trails `lerped()` by one poll (writers run after layout), so
-    /// scaling by `l/box` stretches the freshly re-flowed content by the frame
-    /// delta instead of leaving it re-laid-out.
+    /// must NOT scale: the content was already laid out at the animated size, and that
+    /// box trails `lerped()` by one poll (writers run after layout), so scaling by
+    /// `l/box` stretches the freshly re-flowed content by the frame delta instead of
+    /// leaving it re-laid-out.
     pub(crate) fn paint_scale(&self, box_w: f32, box_h: f32) -> (f32, f32) {
         if self.remeasure {
             return (1.0, 1.0);
         }
         let l = self.lerped();
+        match self.scale_parts {
+            Some((content_scale, _)) => {
+                content_scale.factors((box_w, box_h), (l.width, l.height))
+            }
+            // No mode recorded (visuals built by hand): the historical mapping.
+            None => (
+                if box_w > 0.0 { l.width / box_w } else { 1.0 },
+                if box_h > 0.0 { l.height / box_h } else { 1.0 },
+            ),
+        }
+    }
+
+    /// NODE-space offset the render adds so the scaled content is placed by Compose
+    /// `Alignment` (the render applies it inside `canvas.scale`, so it is the
+    /// device-space leftover divided by the scale). Zero for `RemeasureToBounds`, for
+    /// a mode that fills both axes, and for the historical top-left default.
+    pub(crate) fn paint_offset(&self, box_w: f32, box_h: f32) -> (f32, f32) {
+        if self.remeasure {
+            return (0.0, 0.0);
+        }
+        let Some((_, alignment)) = self.scale_parts else {
+            return (0.0, 0.0);
+        };
+        let (sx, sy) = self.paint_scale(box_w, box_h);
+        let l = self.lerped();
+        let (ox, oy) = alignment.offset((box_w * sx, box_h * sy), (l.width, l.height));
         (
-            if box_w > 0.0 { l.width / box_w } else { 1.0 },
-            if box_h > 0.0 { l.height / box_h } else { 1.0 },
+            if sx.abs() > f32::EPSILON { ox / sx } else { 0.0 },
+            if sy.abs() > f32::EPSILON { oy / sy } else { 0.0 },
         )
     }
 
@@ -2151,7 +2222,7 @@ impl Composer {
                 // Filled when the end resolves (AwaitingBounds poll).
                 target_in_overlay: true,
                 // Layout contract: frozen at resolve from the target marker.
-                resize: ResizeMode::ScaleToBounds,
+                resize: ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart },
                 placeholder: PlaceHolderSize::JumpCut,
                 target_size: None,
                 measure: State::new(FlightMeasureFrame::IDLE),
@@ -2347,7 +2418,7 @@ impl Composer {
                         None,
                         false,
                         true,
-                        ResizeMode::ScaleToBounds,
+                        ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart },
                         PlaceHolderSize::JumpCut,
                     ),
                 };
@@ -2554,6 +2625,7 @@ impl Composer {
                     elevated: true,
                     // Frozen ghost: no live layout to re-measure.
                     remeasure: false,
+                    scale_parts: None,
                     radius_from_auto,
                     radius_to_auto,
                 });
@@ -2644,6 +2716,7 @@ impl Composer {
                         bounds_fx: fx,
                         elevated,
                         remeasure,
+                        scale_parts: resize.scale_to_bounds_parts(),
                         radius_from_auto,
                         radius_to_auto,
                     });
@@ -2919,6 +2992,7 @@ impl Composer {
                     // Detached leaving end: the layer is its only home.
                     elevated: true,
                     remeasure: false,
+                    scale_parts: None,
                     radius_from_auto,
                     radius_to_auto,
                 });
@@ -2975,6 +3049,7 @@ impl Composer {
                         bounds_fx: fx,
                         elevated: in_overlay,
                         remeasure,
+                        scale_parts: resize.scale_to_bounds_parts(),
                         radius_from_auto,
                         radius_to_auto,
                     });
@@ -3077,7 +3152,7 @@ impl Composer {
                         None,
                         false,
                         true,
-                        ResizeMode::ScaleToBounds,
+                        ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart },
                         PlaceHolderSize::JumpCut,
                     ),
                 };
@@ -3310,7 +3385,7 @@ impl Composer {
                 path,
                 bounds_fx,
                 target_in_overlay: true,
-                resize: ResizeMode::ScaleToBounds,
+                resize: ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart },
                 placeholder: PlaceHolderSize::JumpCut,
                 target_size: None,
                 measure: State::new(FlightMeasureFrame::IDLE),
@@ -5445,8 +5520,8 @@ mod tier0_tests {
     fn flight_layout_contract_matrix() {
         let _g = lock_serial();
         for (resize, placeholder, sibling_moves, content_follows) in [
-            (ResizeMode::ScaleToBounds, PlaceHolderSize::JumpCut, false, false),
-            (ResizeMode::ScaleToBounds, PlaceHolderSize::AnimatedSize, true, false),
+            (ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart }, PlaceHolderSize::JumpCut, false, false),
+            (ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart }, PlaceHolderSize::AnimatedSize, true, false),
             (ResizeMode::RemeasureToBounds, PlaceHolderSize::ContentSize, false, true),
             (ResizeMode::RemeasureToBounds, PlaceHolderSize::AnimatedSize, true, true),
         ] {
@@ -5700,14 +5775,14 @@ mod tier0_tests {
                         list_layout_screen(
                             ctx,
                             &scope,
-                            ResizeMode::ScaleToBounds,
+                            ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart },
                             PlaceHolderSize::JumpCut,
                         );
                     } else {
                         detail_layout_screen(
                             ctx,
                             &scope,
-                            ResizeMode::ScaleToBounds,
+                            ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart },
                             PlaceHolderSize::JumpCut,
                         );
                     }
@@ -5882,7 +5957,7 @@ mod tier0_tests {
         let _g = lock_serial();
         for (resize, placeholder) in [
             (ResizeMode::RemeasureToBounds, PlaceHolderSize::ContentSize),
-            (ResizeMode::ScaleToBounds, PlaceHolderSize::AnimatedSize),
+            (ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart }, PlaceHolderSize::AnimatedSize),
         ] {
             crate::animation::clear_all_animations();
             let mut composer = Composer::new();
@@ -5925,7 +6000,7 @@ mod tier0_tests {
             // 130px lerped rect it ends at ~39px, so y=50 must be hero colour;
             // drawn 1:1 (the crop bug) it would still be band green there.
             let mut surface = render_heads(&composer);
-            if matches!(resize, ResizeMode::ScaleToBounds) {
+            if matches!(resize, ResizeMode::ScaleToBounds { .. }) {
                 let hero_ref = pixel_rgb(&mut surface, 100, 100);
                 let scaled_away = pixel_rgb(&mut surface, 100, 50);
                 assert!(
@@ -6145,7 +6220,7 @@ mod tier0_tests {
                     VisibilityTransition::fade_in(TweenSpec::default()),
                     VisibilityTransition::fade_out(TweenSpec::default()),
                     BoundsTransform::default(),
-                    ResizeMode::ScaleToBounds,
+                    ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart },
                     PlaceHolderSize::JumpCut,
                     PathMotion::Linear,
                     0.0,
@@ -6524,7 +6599,7 @@ mod tier0_tests {
                             VisibilityTransition::fade_in(TweenSpec::default()),
                             VisibilityTransition::fade_out(TweenSpec::default()),
                             BoundsTransform::default(),
-                            ResizeMode::ScaleToBounds,
+                            ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart },
                             PlaceHolderSize::JumpCut,
                             PathMotion::Linear,
                             0.0,
@@ -6627,7 +6702,7 @@ mod tier0_tests {
                             VisibilityTransition::fade_in(TweenSpec::default()),
                             VisibilityTransition::fade_out(TweenSpec::default()),
                             BoundsTransform::default(),
-                            ResizeMode::ScaleToBounds,
+                            ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart },
                             PlaceHolderSize::JumpCut,
                             PathMotion::Linear,
                             0.0,
@@ -6745,6 +6820,7 @@ mod tier0_tests {
             bounds_fx: None,
             elevated: false,
             remeasure,
+            scale_parts: None,
         };
         // The box the layout actually used is the PREVIOUS poll's animated size.
         let (box_w, box_h) = (150.0, 150.0);
@@ -6788,14 +6864,14 @@ mod tier0_tests {
                         list_layout_screen(
                             ctx,
                             &scope,
-                            ResizeMode::ScaleToBounds,
+                            ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart },
                             PlaceHolderSize::JumpCut,
                         );
                     } else {
                         detail_layout_screen(
                             ctx,
                             &scope,
-                            ResizeMode::ScaleToBounds,
+                            ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart },
                             PlaceHolderSize::JumpCut,
                         );
                     }
@@ -7126,6 +7202,7 @@ mod tier0_tests {
                 path: PathMotion::Linear,
                 bounds_fx: None,
                 elevated: false,
+            scale_parts: Some((ContentScale::FillBounds, ContentAlignment::TopStart)),
                 remeasure: false,
             };
             let at0 = mk(0.0).radii();
@@ -7178,7 +7255,7 @@ mod tier0_tests {
                 SharedTransitionLayout::new().build(ctx, |ctx| {
                     let scope = current_shared_scope().expect("scope");
                     if s.get() {
-                        list_layout_screen(ctx, &scope, ResizeMode::ScaleToBounds, PlaceHolderSize::JumpCut);
+                        list_layout_screen(ctx, &scope, ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart }, PlaceHolderSize::JumpCut);
                     } else {
                         detail_layout_screen(ctx, &scope, ResizeMode::RemeasureToBounds, PlaceHolderSize::AnimatedSize);
                     }
@@ -8126,7 +8203,7 @@ mod tier0_tests {
                     )
                     .with_fade(),
                     BoundsTransform::default(),
-                    ResizeMode::ScaleToBounds,
+                    ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart },
                     PlaceHolderSize::JumpCut,
                     PathMotion::Linear,
                     0.0,
@@ -8272,7 +8349,7 @@ mod tier0_tests {
                     VisibilityTransition::expand_in(TweenSpec::default()).with_fade(),
                     VisibilityTransition::shrink_out(TweenSpec::default()).with_fade(),
                     BoundsTransform::default(),
-                    ResizeMode::ScaleToBounds,
+                    ResizeMode::ScaleToBounds { content_scale: ContentScale::FillBounds, alignment: ContentAlignment::TopStart },
                     PlaceHolderSize::JumpCut,
                     PathMotion::Linear,
                     0.0,
@@ -8393,6 +8470,7 @@ mod tier0_tests {
             flight: 0,
             path: PathMotion::Linear,
             bounds_fx: None,
+            scale_parts: Some((ContentScale::FillBounds, ContentAlignment::TopStart)),
             elevated: false,
             remeasure: false,
             radius_from_auto: false,
