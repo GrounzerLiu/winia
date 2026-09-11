@@ -83,8 +83,18 @@ if out.insert((m.scope_id, m.key.clone()), node.slot_key).is_some() {
 ```
 
 During a nav transition BOTH scenes are composed at once (`nav.rs:1092-1119`), so the marked key is
-present in both layers: it never disappears, no flight is created, and the marker animates only
-through the nav's own layer params. That is the gap to close.
+present in both layers.
+
+**MEASURED, and it corrects the first guess:** flights ARE created on a nav transition — a single
+navigate produced TWO `begin_flight` calls for `key=hero` in the same transition
+(`old_slot=0xc561… new_slot=0x8c86… src_idx=7` then `old_slot=0x8c86… new_slot=0x1922… src_idx=16`),
+together with 143 `[shared] duplicate live endpoint` lines. So the bridge is not "missing the
+flight"; it is **ambiguous which end is which**: the live map keeps the last end, the two scenes
+alternate as "the last one", the winner's slot flips between them, and each flip reads as a fresh
+switch — so flights are started, cancelled and retargeted repeatedly while the nav's own layer
+params animate the same nodes. What a correct bridge needs is a stable pairing (the end whose scene
+is becoming visible is the Target, the other is the Source) plus one owner for the marked element's
+motion.
 
 ## 4. Plan
 
