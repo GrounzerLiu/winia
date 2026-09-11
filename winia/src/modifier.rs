@@ -788,6 +788,13 @@ pub(crate) enum ModifierElement {
         /// at flight resolve — flipping it mid-flight must not move the
         /// element between passes.
         render_in_overlay: bool,
+        /// Which SCENE this end belongs to, when it is composed inside a scene host that publishes
+        /// one (winia's nav: each transition layer provides its scene id, see
+        /// `ui::shared_transition::provide_nav_scene`). `None` outside such a host. The flight
+        /// system uses it to pair ends that are BOTH alive — during a nav transition the outgoing
+        /// and incoming scenes both carry the same shared key, and without a scene the winner is
+        /// whichever the tree walk happened to visit last, which reads as a new switch every frame.
+        scene: Option<u64>,
     },
     /// Elevate a **non-shared** subtree into the layer for the duration of a
     /// transition (Compose `Modifier.renderInSharedTransitionScopeOverlay`):
@@ -2385,7 +2392,7 @@ Self::DrawIcon { .. } => f.write_str("DrawIcon"),
             Self::BackdropBlur { radius } => f.debug_struct("BackdropBlur").field("radius", radius).finish(),
             Self::TextFieldVisual { variant, .. } => f.debug_struct("TextFieldVisual").field("variant", variant).finish(),
             Self::TextFieldOffsetMapping { .. } => f.write_str("TextFieldOffsetMapping"),
-            Self::SharedTransition { scope_id, key, kind, transform, path, z_index, enter, exit, render_in_overlay } => f
+            Self::SharedTransition { scope_id, key, kind, transform, path, z_index, enter, exit, render_in_overlay, scene: _ } => f
                 .debug_struct("SharedTransition")
                 .field("scope", scope_id)
                 .field("key", key)

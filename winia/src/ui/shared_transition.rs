@@ -365,6 +365,71 @@ impl SharedTransitionScope {
 static LOCAL_SHARED_SCOPE: LazyLock<CompositionLocal<Option<SharedTransitionScope>>> =
     LazyLock::new(|| CompositionLocal::new(|| None));
 
+/// One scene published by a scene host: an id that is stable for that scene across frames, plus a
+/// handle that reads its visibility whenever the flight system asks (1 = fully in the scene).
+///
+/// The visibility is a CLOSURE, not a snapshot: a scene host may drive its transition from the
+/// render path (winia's nav uses a `graphics_layer` closure), so its compose does not re-run every
+/// frame and anything captured at compose time would go stale exactly while the transition runs.
+#[derive(Clone)]
+pub struct NavSceneInfo {
+    pub id: u64,
+    pub visibility: std::sync::Arc<dyn Fn() -> f32>,
+}
+
+impl std::fmt::Debug for NavSceneInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NavSceneInfo")
+            .field("id", &self.id)
+            .field("visibility", &(self.visibility)())
+            .finish()
+    }
+}
+
+thread_local! {
+    /// Scene stack for the compose in progress: a scene host (winia's nav) pushes one entry around
+    /// the content it composes so the marker builders record WHICH SCENE an end belongs to.
+    static NAV_SCENE_STACK: std::cell::RefCell<Vec<NavSceneInfo>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    /// Latest handle per scene id, kept beyond the compose so the post-layout polls can resolve a
+    /// duplicated shared key by "which end is becoming visible".
+    static NAV_SCENE_VIS: std::cell::RefCell<HashMap<u64, NavSceneInfo>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+/// Publish `scene` for the duration of `f` (scene hosts call this around the content they compose).
+/// The nav uses it per transition layer, which is what lets two LIVE ends of one shared key be told
+/// apart: without a scene, the winner is whichever end the tree walk visited last, and during a nav
+/// transition that alternates between the outgoing and incoming scene every frame — so the flight
+/// system reads a fresh switch each frame, starting and retargeting flights instead of flying once.
+pub fn with_nav_scene<R>(scene: NavSceneInfo, f: impl FnOnce() -> R) -> R {
+    NAV_SCENE_STACK.with(|s| s.borrow_mut().push(scene.clone()));
+    NAV_SCENE_VIS.with(|v| {
+        v.borrow_mut().insert(scene.id, scene);
+    });
+    let out = f();
+    NAV_SCENE_STACK.with(|s| {
+        s.borrow_mut().pop();
+    });
+    out
+}
+
+/// The scene the caller is composing inside, if any (see [`with_nav_scene`]).
+pub fn current_nav_scene() -> Option<NavSceneInfo> {
+    NAV_SCENE_STACK.with(|s| s.borrow().last().cloned())
+}
+
+/// Visibility announced for a scene id, read NOW (the handle keeps tracking the host's progress).
+pub fn nav_scene_visibility(id: u64) -> Option<f32> {
+    NAV_SCENE_VIS.with(|v| v.borrow().get(&id).map(|i| (i.visibility)()))
+}
+
+#[cfg(test)]
+pub(crate) fn clear_nav_scenes() {
+    NAV_SCENE_STACK.with(|s| s.borrow_mut().clear());
+    NAV_SCENE_VIS.with(|v| v.borrow_mut().clear());
+}
+
 /// Per-scope transition activity (Compose `isTransitionActive`), keyed by
 /// `scope_id` so main and overlay composers sharing a scope observe one
 /// flag. Entries are created on first read and synced by the coordinator
@@ -616,6 +681,7 @@ impl Modifier {
             enter: None,
             exit: None,
             render_in_overlay,
+            scene: current_nav_scene().map(|s| s.id),
         })
     }
 
@@ -700,6 +766,7 @@ impl Modifier {
             enter: Some(enter),
             exit: Some(exit),
             render_in_overlay,
+            scene: current_nav_scene().map(|s| s.id),
         })
     }
 }
@@ -1567,12 +1634,16 @@ pub(crate) struct SharedMarker {
     pub exit: Option<VisibilityTransition>,
     /// Compose `renderInOverlayDuringTransition` (default true).
     pub render_in_overlay: bool,
+    /// Scene this end was composed inside, when a scene host published one (see
+    /// [`with_nav_scene`]). Used to pair two LIVE ends of one key by "which scene is becoming
+    /// visible" instead of by tree-walk order.
+    pub scene: Option<u64>,
 }
 
 pub(crate) fn find_shared_marker(modifier: &Modifier) -> Option<SharedMarker> {
     modifier.elements().iter().find_map(|el| match el {
         ModifierElement::SharedTransition {
-            scope_id, key, kind, transform, path, z_index, enter, exit, render_in_overlay,
+            scope_id, key, kind, transform, path, z_index, enter, exit, render_in_overlay, scene,
         } => Some(SharedMarker {
             scope_id: *scope_id,
             key: key.clone(),
@@ -1583,6 +1654,7 @@ pub(crate) fn find_shared_marker(modifier: &Modifier) -> Option<SharedMarker> {
             enter: enter.clone(),
             exit: exit.clone(),
             render_in_overlay: *render_in_overlay,
+            scene: *scene,
         }),
         _ => None,
     })
@@ -1907,20 +1979,55 @@ impl Composer {
     /// (scope, key) → slot for marked nodes in the CURRENT tree
     /// (post-materialize). First registration wins on duplicates (user error).
     pub(crate) fn shared_live_map(&self) -> HashMap<(u64, String), u64> {
-        let mut out = HashMap::new();
+        // Two LIVE ends of one key happen when a scene host keeps the outgoing and the incoming
+        // scene composed at once (winia's nav). Which of them is "the" live end decides the whole
+        // flight: the tree walk's order is not meaningful, and during a nav transition it alternates
+        // between the two scenes every frame, so the flight system reads a fresh switch each frame
+        // and starts/retargets flights instead of flying once (measured: 2 `begin_flight` calls per
+        // navigate, 131-143 duplicate warnings). A scene publishes its visibility per frame
+        // (`with_nav_scene`), so the end whose scene is BECOMING VISIBLE wins; without a scene, the
+        // last one wins as before.
+        let mut out: HashMap<(u64, String), (u64, Option<f32>)> = HashMap::new();
         if let Some(root) = self.arena.root {
             let mut stack = vec![root];
             while let Some(idx) = stack.pop() {
                 let node = &self.arena.nodes[idx];
                 if let Some(m) = find_shared_marker(&node.modifier) {
-                    if out.insert((m.scope_id, m.key.clone()), node.slot_key).is_some() {
-                        crate::debug_log!("[shared] duplicate live endpoint scope={} key={}", m.scope_id, m.key);
+                    let vis = m.scene.and_then(nav_scene_visibility);
+                    let key = (m.scope_id, m.key.clone());
+                    match out.get(&key) {
+                        Some(&(_, prev_vis)) => {
+                            let replace = match (prev_vis, vis) {
+                                (Some(p), Some(v)) => v > p,
+                                (_, Some(_)) => true,
+                                _ => true, // no scene info on either end: keep the last, as before
+                            };
+                            // Only the UNRESOLVED case is actionable: with scene visibility on both
+                            // ends the winner is deterministic (measured: one navigate on the nav
+                            // demo went from two `begin_flight` calls to one), so it is not logged —
+                            // otherwise a transition alone would print a line per frame.
+                            if prev_vis.is_none() || vis.is_none() {
+                                crate::debug_log!(
+                                    "[shared] duplicate live endpoint scope={} key={} with no scene \
+                                     visibility to resolve it (kept the {} end)",
+                                    m.scope_id,
+                                    m.key,
+                                    if replace { "later" } else { "earlier" }
+                                );
+                            }
+                            if replace {
+                                out.insert(key, (node.slot_key, vis));
+                            }
+                        }
+                        None => {
+                            out.insert(key, (node.slot_key, vis));
+                        }
                     }
                 }
                 stack.extend(node.children.iter().copied());
             }
         }
-        out
+        out.into_iter().map(|(k, (slot, _))| (k, slot)).collect()
     }
 
     /// Transition-layer render order (detached sources + elevated in-tree

@@ -1082,10 +1082,41 @@ impl<K: NavKey> NavTransition<K> {
                     // pane 退场层）与场景层的 is_prev（整层滑出）取或——任一为真
                     // 即状态池只读
                     ctx.key(scene.scene_key(), |ctx| {
-                        let layer_render = |ctx: &mut ComposeCtx, e: &NavEntry<K>, draining: bool| {
-                            render_entry(ctx, e, draining || is_prev);
-                        };
-                        scene.content(ctx, &layer_render);
+                        // Publish this layer as a SCENE for the shared-transition system: during a nav
+                        // transition the outgoing and incoming scenes are composed at once, so a
+                        // marked key exists on both sides and the flight system cannot tell which end
+                        // is which by tree order. Visibility is a closure, not a snapshot: this layer
+                        // animates through a render-time `graphics_layer`, so its compose does not
+                        // re-run every frame and a captured value would go stale mid-transition.
+                        let layer_scene_key = scene.scene_key();
+                        let layer_is_prev = is_prev;
+                        let layer_active = active;
+                        let layer_progress = self.progress.clone();
+                        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                        std::hash::Hash::hash(&layer_scene_key, &mut hasher);
+                        let scene_id = std::hash::Hasher::finish(&hasher);
+                        let visibility = std::sync::Arc::new(move || {
+                            let p = layer_progress.peek().clamp(0.0, 1.0);
+                            // p runs 1 (just started) → 0 (settled). The leaving layer fades with p,
+                            // the entering one with 1 - p; with no transition running the current
+                            // layer is fully visible.
+                            if layer_is_prev {
+                                if layer_active { p } else { 0.0 }
+                            } else if layer_active {
+                                1.0 - p
+                            } else {
+                                1.0
+                            }
+                        });
+                        crate::ui::shared_transition::with_nav_scene(
+                            crate::ui::shared_transition::NavSceneInfo { id: scene_id, visibility },
+                            || {
+                                let layer_render = |ctx: &mut ComposeCtx, e: &NavEntry<K>, draining: bool| {
+                                    render_entry(ctx, e, draining || is_prev);
+                                };
+                                scene.content(ctx, &layer_render);
+                            },
+                        );
                     });
                 });
         };
