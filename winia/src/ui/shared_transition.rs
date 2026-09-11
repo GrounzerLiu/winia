@@ -165,8 +165,13 @@ impl SharedTransitionDefaults {
 /// Content deformation during flight (Compose `ResizeMode`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResizeMode {
-    /// Scale the whole content to the lerped bounds (Phase 2 default).
-    ScaleToBounds { clip: bool },
+    /// Scale the whole content to the lerped bounds (Compose's default for
+    /// `sharedBounds`). Clipping is NOT optional: the render always clips a
+    /// transitioning node to its morph-shaped lerped rect, so the pair can never
+    /// spill. This variant used to carry a `clip` flag, which measurement showed had
+    /// no observable effect (see the risk register) — deleted rather than left as a
+    /// parameter that silently does nothing.
+    ScaleToBounds,
     /// Re-measure at the lerped size every frame (Phase 4).
     RemeasureToBounds,
 }
@@ -683,15 +688,17 @@ mod tests {
             Some(SharedKind::Element { placeholder: PlaceHolderSize::AnimatedSize }),
             "element marker preserves the placeholder"
         );
-        // Clip extraction: only ScaleToBounds can clip.
+        // Clip extraction: ALWAYS false now — the render clips every transitioning
+        // node unconditionally, so no marker can opt in or out (the `clip` flag that
+        // used to feed this measured as dead and was deleted).
         assert!(!shared_clip_for_kind(&SharedKind::Element {
             placeholder: PlaceHolderSize::JumpCut
         }));
         assert!(!shared_clip_for_kind(&SharedKind::Element {
             placeholder: PlaceHolderSize::AnimatedSize
         }));
-        assert!(shared_clip_for_kind(&SharedKind::Bounds {
-            resize: ResizeMode::ScaleToBounds { clip: true },
+        assert!(!shared_clip_for_kind(&SharedKind::Bounds {
+            resize: ResizeMode::ScaleToBounds,
             placeholder: PlaceHolderSize::JumpCut,
         }));
         assert!(!shared_clip_for_kind(&SharedKind::Bounds {
@@ -1430,18 +1437,12 @@ fn animated_size(
     crate::layout::node::Size::new(l.width, l.height)
 }
 
-/// Clip flag from the marker kind: only `ScaleToBounds` can clip (it scales
-/// stable content into the bounds, so `clip` bounds that deformation).
-/// `RemeasureToBounds` re-lays-out the content at the animated size, so there
-/// is nothing to clip — the node's own box already is the animated one.
-pub(crate) fn shared_clip_for_kind(kind: &SharedKind) -> bool {
-    match kind {
-        SharedKind::Bounds { resize: ResizeMode::ScaleToBounds { clip }, .. } => *clip,
-        // Element content scales exactly into the bounds (clipping would cut
-        // shadows); RemeasureToBounds re-lays-out instead of scaling, so there
-        // is nothing to clip.
-        _ => false,
-    }
+/// Clip flag for a flight end. Always `false` now: the render clips EVERY
+/// transitioning node to its morph-shaped lerped rect unconditionally, so a marker
+/// cannot opt into (or out of) clipping — the `ResizeMode::ScaleToBounds` flag that
+/// used to feed this measured as having no effect and was deleted.
+pub(crate) fn shared_clip_for_kind(_kind: &SharedKind) -> bool {
+    false
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -2005,7 +2006,7 @@ impl Composer {
                 // Filled when the end resolves (AwaitingBounds poll).
                 target_in_overlay: true,
                 // Layout contract: frozen at resolve from the target marker.
-                resize: ResizeMode::ScaleToBounds { clip: false },
+                resize: ResizeMode::ScaleToBounds,
                 placeholder: PlaceHolderSize::JumpCut,
                 target_size: None,
                 measure: State::new(FlightMeasureFrame::IDLE),
@@ -2201,7 +2202,7 @@ impl Composer {
                         None,
                         false,
                         true,
-                        ResizeMode::ScaleToBounds { clip: false },
+                        ResizeMode::ScaleToBounds,
                         PlaceHolderSize::JumpCut,
                     ),
                 };
@@ -2910,7 +2911,7 @@ impl Composer {
                         None,
                         false,
                         true,
-                        ResizeMode::ScaleToBounds { clip: false },
+                        ResizeMode::ScaleToBounds,
                         PlaceHolderSize::JumpCut,
                     ),
                 };
@@ -3143,7 +3144,7 @@ impl Composer {
                 path,
                 bounds_fx,
                 target_in_overlay: true,
-                resize: ResizeMode::ScaleToBounds { clip: false },
+                resize: ResizeMode::ScaleToBounds,
                 placeholder: PlaceHolderSize::JumpCut,
                 target_size: None,
                 measure: State::new(FlightMeasureFrame::IDLE),
@@ -5278,8 +5279,8 @@ mod tier0_tests {
     fn flight_layout_contract_matrix() {
         let _g = lock_serial();
         for (resize, placeholder, sibling_moves, content_follows) in [
-            (ResizeMode::ScaleToBounds { clip: false }, PlaceHolderSize::JumpCut, false, false),
-            (ResizeMode::ScaleToBounds { clip: false }, PlaceHolderSize::AnimatedSize, true, false),
+            (ResizeMode::ScaleToBounds, PlaceHolderSize::JumpCut, false, false),
+            (ResizeMode::ScaleToBounds, PlaceHolderSize::AnimatedSize, true, false),
             (ResizeMode::RemeasureToBounds, PlaceHolderSize::ContentSize, false, true),
             (ResizeMode::RemeasureToBounds, PlaceHolderSize::AnimatedSize, true, true),
         ] {
@@ -5533,14 +5534,14 @@ mod tier0_tests {
                         list_layout_screen(
                             ctx,
                             &scope,
-                            ResizeMode::ScaleToBounds { clip: false },
+                            ResizeMode::ScaleToBounds,
                             PlaceHolderSize::JumpCut,
                         );
                     } else {
                         detail_layout_screen(
                             ctx,
                             &scope,
-                            ResizeMode::ScaleToBounds { clip: false },
+                            ResizeMode::ScaleToBounds,
                             PlaceHolderSize::JumpCut,
                         );
                     }
@@ -5715,7 +5716,7 @@ mod tier0_tests {
         let _g = lock_serial();
         for (resize, placeholder) in [
             (ResizeMode::RemeasureToBounds, PlaceHolderSize::ContentSize),
-            (ResizeMode::ScaleToBounds { clip: false }, PlaceHolderSize::AnimatedSize),
+            (ResizeMode::ScaleToBounds, PlaceHolderSize::AnimatedSize),
         ] {
             crate::animation::clear_all_animations();
             let mut composer = Composer::new();
@@ -5758,7 +5759,7 @@ mod tier0_tests {
             // 130px lerped rect it ends at ~39px, so y=50 must be hero colour;
             // drawn 1:1 (the crop bug) it would still be band green there.
             let mut surface = render_heads(&composer);
-            if matches!(resize, ResizeMode::ScaleToBounds { .. }) {
+            if matches!(resize, ResizeMode::ScaleToBounds) {
                 let hero_ref = pixel_rgb(&mut surface, 100, 100);
                 let scaled_away = pixel_rgb(&mut surface, 100, 50);
                 assert!(
@@ -5978,7 +5979,7 @@ mod tier0_tests {
                     VisibilityTransition::fade_in(TweenSpec::default()),
                     VisibilityTransition::fade_out(TweenSpec::default()),
                     BoundsTransform::default(),
-                    ResizeMode::ScaleToBounds { clip: false },
+                    ResizeMode::ScaleToBounds,
                     PlaceHolderSize::JumpCut,
                     PathMotion::Linear,
                     0.0,
@@ -6356,7 +6357,7 @@ mod tier0_tests {
                             VisibilityTransition::fade_in(TweenSpec::default()),
                             VisibilityTransition::fade_out(TweenSpec::default()),
                             BoundsTransform::default(),
-                            ResizeMode::ScaleToBounds { clip: false },
+                            ResizeMode::ScaleToBounds,
                             PlaceHolderSize::JumpCut,
                             PathMotion::Linear,
                             0.0,
@@ -6459,7 +6460,7 @@ mod tier0_tests {
                             VisibilityTransition::fade_in(TweenSpec::default()),
                             VisibilityTransition::fade_out(TweenSpec::default()),
                             BoundsTransform::default(),
-                            ResizeMode::ScaleToBounds { clip: false },
+                            ResizeMode::ScaleToBounds,
                             PlaceHolderSize::JumpCut,
                             PathMotion::Linear,
                             0.0,
@@ -6620,14 +6621,14 @@ mod tier0_tests {
                         list_layout_screen(
                             ctx,
                             &scope,
-                            ResizeMode::ScaleToBounds { clip: false },
+                            ResizeMode::ScaleToBounds,
                             PlaceHolderSize::JumpCut,
                         );
                     } else {
                         detail_layout_screen(
                             ctx,
                             &scope,
-                            ResizeMode::ScaleToBounds { clip: false },
+                            ResizeMode::ScaleToBounds,
                             PlaceHolderSize::JumpCut,
                         );
                     }
@@ -7831,7 +7832,7 @@ mod tier0_tests {
                     )
                     .with_fade(),
                     BoundsTransform::default(),
-                    ResizeMode::ScaleToBounds { clip: false },
+                    ResizeMode::ScaleToBounds,
                     PlaceHolderSize::JumpCut,
                     PathMotion::Linear,
                     0.0,
@@ -7977,7 +7978,7 @@ mod tier0_tests {
                     VisibilityTransition::expand_in(TweenSpec::default()).with_fade(),
                     VisibilityTransition::shrink_out(TweenSpec::default()).with_fade(),
                     BoundsTransform::default(),
-                    ResizeMode::ScaleToBounds { clip: false },
+                    ResizeMode::ScaleToBounds,
                     PlaceHolderSize::JumpCut,
                     PathMotion::Linear,
                     0.0,

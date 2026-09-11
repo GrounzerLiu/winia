@@ -295,8 +295,10 @@ Three properties worth knowing before you rely on it:
 - No `backdrop_blur` heroes (blur snapshots post-transform content).
 - `OverlayClip` / `clipInOverlayDuringTransition` (custom clip paths in
   the overlay) are not built: Compose's default derives from the parent
-  `sharedBounds`, which needs nested markers. `ScaleToBounds { clip: true }`
-  still clips the flying pair to the lerped rect.
+  `sharedBounds`, which needs nested markers. Independent of that, the render
+  always clips a transitioning node to its morph-shaped lerped rect — a flight
+  pair cannot spill, and there is no marker flag to turn that off (the
+  `ScaleToBounds { clip }` flag measured as dead and was deleted).
 - `vertical_scroll(reverse)` shares the pre-existing hit/render mirror
   divergence — out of scope.
 - Cross-OS-window flights are out of scope (need an OS-level overlay).

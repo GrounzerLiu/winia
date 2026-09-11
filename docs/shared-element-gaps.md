@@ -57,8 +57,9 @@
   the overlay. Not built: Compose's default is the parent `sharedBounds`'
   resolved clip path, and nested shared markers are still unsupported
   (§10.8 of the architecture doc), so the Compose default resolves to
-  "no extra clip" — which is already what the layer does. `ScaleToBounds
-  { clip: true }` keeps clipping the flying pair to the lerped rect.
+  "no extra clip" — which is already what the layer does. The pair is clipped
+  to the lerped rect regardless (the render does it unconditionally; the old
+  `ScaleToBounds { clip }` flag was measured as dead and deleted).
   Revisit together with nested markers.
 - [x] `renderInSharedTransitionScopeOverlay` (keep bottom bar / FAB on top
   during transitions) — shipped as

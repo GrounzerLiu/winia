@@ -436,17 +436,14 @@ the supported shape.
    morph), and with the guard in place reverting BOTH Tier-1 clears makes
    `stale_cancel_drops_the_surviving_peers_layout_override` fail with the
    override still attached.
-6. DEAD FLAG, MEASURED (review 2, R4 + this round): `ResizeMode::ScaleToBounds { clip }`'s
-   `clip` has no observable effect. The render clips EVERY transitioning node to its
-   morph-shaped lerped rect (`tf_clip_rr`), so a pair that would spill does not, whether
-   or not the marker asks for the clip — verified by building a hero with a 500px painted
-   band inside a 120px box and probing outside the lerped rect with `clip: false`: the
-   probe reads background. (The `t.clip` arm in the render is therefore redundant, and
-   the gaps tracker's "it still clips the flying pair" is vacuously true.) The throwaway
-   test that found this was removed rather than shipped, because its control assertion —
-   "the spill is visible without the flag" — cannot pass. Fixing it means deciding whether
-   the unconditional clip IS the contract (then drop the flag and the doc claim) or the
-   flag should gate it (then move the clip under it).
+6. RESOLVED: the `clip` flag on `ResizeMode::ScaleToBounds` was dead. The render clips
+   EVERY transitioning node to its morph-shaped lerped rect (`tf_clip_rr`), so a pair that
+   would spill does not, whether or not the marker asked for the clip — verified by
+   building a hero with a 500px painted band inside a 120px box and probing outside the
+   lerped rect: the probe reads background either way. DECIDED (the unconditional clip is
+   the contract, and a parameter that silently does nothing is worse than none): the flag
+   and its `TransitionVisual` plumbing are DELETED, `shared_clip_for_kind` returns false,
+   and the docs no longer present clipping as an option.
 7. KNOWN, NOT FIXED (review 2, R3-F4): across composers, PAINT order and HIT order
    disagree. During a cross flight the app draws the main transition layer AFTER
    `render_overlays` (`app.rs`), i.e. over an open dialog/scrim, while the hit path asks
