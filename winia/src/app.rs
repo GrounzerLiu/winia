@@ -498,6 +498,22 @@ impl PerWindow {
             }
             crate::core::composer::Composer::poll_cross_flights(&mut all);
         }
+        // A flight that attached its layout override for the FIRST time this frame left the
+        // entering end's parent stale WITHIN the frame: the override can only be attached by
+        // the polls above — resolving a flight needs the target's measured rect — so the
+        // layout that ran before them reported the target's NATURAL size to the parent, and
+        // the rows below a starting hero dipped and snapped back on the next frame (seen in
+        // `shared_transition_image_demo`). One extra pass per composer, taken once, makes the
+        // frame coherent; this is winia's stand-in for Compose's lookahead pass, and it costs
+        // a second measurement only on flight-start frames (everything else folds).
+        if self.composer.take_layout_override_fresh() {
+            self.composer.layout(Constraints::new(0.0, self.width, 0.0, self.height));
+        }
+        for ov in self.overlays.iter_mut() {
+            if ov.composer.take_layout_override_fresh() {
+                ov.composer.layout(Constraints::new(0.0, self.width, 0.0, self.height));
+            }
+        }
 
         let bg = self.theme.background;
 

@@ -1642,6 +1642,14 @@ pub struct Composer {
     /// slot_key：`layout()` 每帧先清全树 layout_dirty 再按此集合重标祖先，
     /// 不播种则折叠的父级永不下探（逐帧重测就无从发生）。
     pub(crate) layout_dirty_keys: HashSet<u64>,
+    /// Set by the shared-element writers when a flight attaches its layout override for the
+    /// FIRST time (the node had none). The override can only be attached after layout —
+    /// resolving a flight needs the target's measured rect — so the pass that just ran told
+    /// the entering end's parent the target's NATURAL size; without this the frame renders
+    /// with the parent stale and the rows below the hero dip and snap back. The app loop
+    /// consumes it once per frame and re-lays-out, so at most one extra pass per composer per
+    /// frame happens, and only on frames where a flight starts.
+    pub(crate) layout_override_fresh: bool,
     /// 本帧确认移除的 slot_key（compose 末尾回收未复用节点时收集——layout_deps 死 key 清理用）
     removed_slot_keys: HashSet<u64>,
     /// 本 Composer 实例的 pending state 通知队列
@@ -1719,12 +1727,17 @@ pub struct Composer {
 impl Composer {
 /// 选区注册表（由 SelectionContainer 在 compose 时注入，供事件处理访问）
 
+    pub(crate) fn take_layout_override_fresh(&mut self) -> bool {
+        std::mem::take(&mut self.layout_override_fresh)
+    }
+
     pub fn new() -> Self {
         let pending_states = crate::core::state::ComposerSubscription::new();
         Self {
             slot_table: SlotTable::new(),
             current_group_key: 0,
             compose_transaction: None,
+            layout_override_fresh: false,
             path_counters: std::collections::HashMap::new(),
             remember_path_counters: std::collections::HashMap::new(),
             scope_source_stack: Vec::new(),

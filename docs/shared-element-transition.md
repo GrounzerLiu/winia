@@ -302,6 +302,16 @@ own the same slot key by then.
 
 Timing: writers run after layout, so the layout of frame N is driven by the
 frame written at the end of frame N−1 — one frame, ~6% of a 300 ms flight.
+EXCEPT on the frame a flight FIRST attaches its override: there the parent would
+have been laid out from the entering end's NATURAL size (nothing constrained it
+yet, and resolving the flight needs that frame's measurement), so the content
+below the hero dipped and snapped back — reported from
+`shared_transition_image_demo` with `PlaceHolderSize::AnimatedSize`. The app loop
+now consumes a per-composer "override freshly attached" flag and re-lays-out
+once, inside the same frame, which is winia's stand-in for Compose's lookahead
+pass: `switch_frame_layout_uses_the_animated_size` pins it (measured: without the
+extra pass the probe leaf lands at y=240, the detail hero's natural height; with
+it, under the animated 80px source hero).
 
 ## 6. State machine and matching
 

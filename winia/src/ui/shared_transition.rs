@@ -2720,6 +2720,16 @@ impl Composer {
                     if !frame.is_idle() || had_override {
                         self.layout_dirty_keys.insert(key);
                     }
+                    // FIRST attach (nothing was there before): the layout that just ran
+                    // reported the target's NATURAL size to its parent, because the override
+                    // can only be attached here — after layout — since resolving the flight
+                    // needs the target's measured rect. The parent is therefore stale WITHIN
+                    // this frame, which is what made the rows below a starting flight dip
+                    // and snap back. The app loop consumes this flag and re-lays out once, so
+                    // the frame renders coherent (see `take_layout_override_fresh`).
+                    if !frame.is_idle() && !had_override {
+                        self.layout_override_fresh = true;
+                    }
                     self.arena.nodes[tidx].transition = Some(TransitionVisual {
                         start,
                         end,
@@ -3059,6 +3069,12 @@ impl Composer {
                     }
                     if !frame.is_idle() || had_override {
                         peer.layout_dirty_keys.insert(key);
+                    }
+                    // Same first-attach signal as the Tier-0 writer, but on the PEER: the
+                    // peer's own parent is the one that saw the natural size this frame, so
+                    // the peer composer is the one that needs the extra pass.
+                    if !frame.is_idle() && !had_override {
+                        peer.layout_override_fresh = true;
                     }
                     peer.arena.nodes[tidx].transition = Some(TransitionVisual {
                         start: off_origin(start, to),
@@ -7701,6 +7717,111 @@ mod tier0_tests {
         assert_eq!(stored(50.0), 50.0, "exactly half the shorter side is allowed");
         assert_eq!(stored(51.0), 50.0, "one past it is clamped");
         assert_eq!(stored(150.0), 50.0, "far past it is clamped too");
+    }
+
+    /// Screens for the "parent must see the animated size on the SWITCH frame" test: a
+    /// marked hero with a probe leaf BELOW it, whose y position is the observable — the
+    /// parent's idea of the hero's height is whatever the leaf is placed after.
+    #[crate::composable]
+    fn switch_frame_screen(
+        ctx: &mut ComposeCtx,
+        scope: &SharedTransitionScope,
+        h: f32,
+    ) {
+        Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+            Column::new()
+                .modifier(
+                    Modifier::new()
+                        .size(200.0, h)
+                        .background(Color::RED, Shape::Rectangle)
+                        .shared_bounds(
+                            scope.shared_content_state("hero"),
+                            VisibilityTransition::fade_in(TweenSpec::default()),
+                            VisibilityTransition::fade_out(TweenSpec::default()),
+                            BoundsTransform::default(),
+                            ResizeMode::scale_to_bounds(),
+                            // The follow-the-flight policy: the parent is told the ANIMATED
+                            // size, which is what makes the stale-layout frame visible.
+                            PlaceHolderSize::AnimatedSize,
+                            PathMotion::Linear,
+                            0.0,
+                            true,
+                        ),
+                )
+                .build(ctx, |_| {});
+            let key = ctx.next_key();
+            ctx.start_leaf(key, Modifier::new().size(40.0, 20.0));
+            ctx.end_node();
+        });
+    }
+
+    #[crate::composable]
+    fn switch_frame_list(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
+        switch_frame_screen(ctx, scope, 80.0);
+    }
+
+    #[crate::composable]
+    fn switch_frame_detail(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
+        switch_frame_screen(ctx, scope, 240.0);
+    }
+
+    /// On the frame a flight FIRST attaches its layout override, the entering end's parent
+    /// must already see the ANIMATED size — not the target's natural one. The override can
+    /// only be attached by the post-layout poll (resolving needs the target's measured rect),
+    /// so without the app loop's extra pass the parent below the hero is placed for the
+    /// 240px detail hero for exactly one frame and then snaps up to the 80px source size:
+    /// the dip-then-snap reported from `shared_transition_image_demo`.
+    ///
+    /// The observable is the probe leaf's y: 80 (animated, source) vs 240 (natural, target).
+    #[test]
+    fn switch_frame_layout_uses_the_animated_size() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+        let frame = |composer: &mut Composer| {
+            let s = show.clone();
+            composer.compose(|ctx| {
+                SharedTransitionLayout::new().build(ctx, |ctx| {
+                    let scope = current_shared_scope().expect("scope");
+                    if s.get() {
+                        switch_frame_list(ctx, &scope);
+                    } else {
+                        switch_frame_detail(ctx, &scope);
+                    }
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+            composer.poll_shared_flights();
+            // The app loop's bounded extra pass (`app.rs`), taken once per frame.
+            if composer.take_layout_override_fresh() {
+                composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+            }
+        };
+        frame(&mut composer);
+        show.set(false);
+        frame(&mut composer);
+        assert_eq!(composer.shared_flights.len(), 1, "the switch opened a flight");
+
+        // The frame that just ran is the SWITCH frame: the probe must sit right under the
+        // animated (source) hero, not under the detail hero's natural height.
+        let probe_y = {
+            let nodes = composer.arena_nodes();
+            let probe = nodes
+                .iter()
+                .find(|n| {
+                    (n.measured_size.width - 40.0).abs() < 0.5
+                        && (n.measured_size.height - 20.0).abs() < 0.5
+                })
+                .expect("the probe leaf (40x20)");
+            probe.position.y
+        };
+        assert!(
+            probe_y < 120.0,
+            "the parent must be laid out at the ANIMATED size on the switch frame \
+             (probe y {probe_y}; the detail hero's natural 240 would put it well below 120)"
+        );
+        crate::animation::clear_all_animations();
     }
 
     /// Bouncy hero leaf (spring overshoot must render past the end rect).
