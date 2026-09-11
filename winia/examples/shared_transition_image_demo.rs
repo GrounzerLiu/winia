@@ -69,10 +69,16 @@ fn photo_box(
                     VisibilityTransition::fade_out(TweenSpec::default()),
                     spec,
                     resize,
-                    // AnimatedSize reports the animated size to the parent, so the rows
-                    // around the photo move with the flight; JumpCut would hold the
-                    // target size instead.
-                    PlaceHolderSize::AnimatedSize,
+                    // JumpCut: the parent keeps seeing the TARGET size for the whole flight,
+                    // so the rows below stay put. `AnimatedSize` would make them follow the
+                    // flight, but it also exposes a first-frame jump: on the switch frame the
+                    // hero is laid out UNCONSTRAINED (the layout override is attached by the
+                    // post-layout poll, which needs the target's measured rect to resolve),
+                    // so the parent briefly sees the full 240px target before the override
+                    // reports the animated size — the rows dip down, snap back up, then
+                    // follow the flight. That is the one-poll lag the architecture doc
+                    // records, seen from the parent's side.
+                    PlaceHolderSize::JumpCut,
                     PathMotion::ArcBelow,
                     0.0,
                     true,
