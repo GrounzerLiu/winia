@@ -4291,6 +4291,40 @@ mod tier0_tests {
             build(&mut composer);
         }
         assert!(composer.shared_flights.is_empty(), "the switch flight completes");
+        // The morph BASELINE must have tracked the flight's own layout. Otherwise it is
+        // the pre-flight rect, so landing compares the hero against where it took off
+        // from, opens a fresh same-screen morph, and the hero flies the whole path
+        // again — the replay reported from the demo. (The follow-up assertions below
+        // are the visible symptom; this one is the mechanism, and it is the one that
+        // fails if the guard stops updating the baseline.)
+        let scope_id = *composer
+            .shared_live_map()
+            .keys()
+            .next()
+            .map(|k| &k.0)
+            .expect("a live scope");
+        let base = composer
+            .shared_last_bounds
+            .get(&(scope_id, "hero".to_string()))
+            .copied()
+            .expect("baseline for the landed key");
+        let landed = {
+            let idx = marked_in(&composer)[0];
+            let root = composer.layout_root_idx().expect("root");
+            let nid = composer.arena_nodes()[idx].id;
+            let (ax, ay) = crate::app::node_abs_position(composer.arena_nodes(), root, nid);
+            let n = &composer.arena_nodes()[idx];
+            (ax, ay, n.measured_size.width, n.measured_size.height)
+        };
+        assert!(
+            (base.width - landed.2).abs() <= 1.0 && (base.height - landed.3).abs() <= 1.0,
+            "the baseline must be the landed rect ({:.0}x{:.0}), not the take-off rect \
+             ({:.0}x{:.0}) — otherwise the landing reads as a fresh morph",
+            landed.2,
+            landed.3,
+            base.width,
+            base.height
+        );
         for _ in 0..5 {
             build(&mut composer);
             assert!(
