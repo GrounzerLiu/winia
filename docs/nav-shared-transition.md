@@ -128,3 +128,27 @@ motion.
   can ride it.
 - `sizeTransform` (`docs/navigation3.md:238`) is a separate gap: it is the Compose knob for how a
   shared element's size animates; winia's equivalent is `ResizeMode` + `PlaceHolderSize`.
+
+## 6. Implemented so far (branch `exp/nav-shared-transition`)
+
+| Step | State |
+|---|---|
+| Reproducer demo (`examples/nav_shared_element_demo.rs`) | Done. Content must sit inside `Window::new().build(…)`; without it the tree is empty, with no panic and no fps lines (cost a bisect). |
+| Scene-aware pairing | Done. `ModifierElement::SharedTransition` carries `scene: Option<u64>`; `with_nav_scene(NavSceneInfo { id, visibility })` publishes a scene (visibility is a **closure**, because the nav animates its layers from the render path and a compose-time snapshot would go stale mid-transition); `nav.rs` publishes each transition layer with `p` for the leaving layer and `1 - p` for the entering one; `shared_live_map` resolves a duplicated key by "the end whose scene is becoming visible wins", and only logs the case it cannot resolve. |
+| Ownership rule | Done. `TransitionVisual::scene_alpha` makes the SCENE own opacity when an end carries one, so the flight stops crossfading the same element a second time; the rect stays the flight's. Detached sources carry their scene's fade (the scene's layer no longer applies to them), targets stay opaque unless the host elevates them too. Tier 1 (cross-composer) passes `None` — scene ids are published per composer. |
+
+Measured (debug server, `examples/nav_shared_element_demo`, one navigate):
+
+- `begin_flight` count **2 → 1** (temporary probe, reverted);
+- duplicate-endpoint lines with no scene visibility to resolve them: **0**;
+- `[dup-key]`: **0**; hero centre `(74,121,177)` → `(83,138,202)` → `(89,149,219)` across the
+  transition, at both the 96x96 list card and the 320x220 detail card.
+
+Test coverage: the alpha rule is pinned by a unit test (three roles × three visibilities, with and
+without an enter/exit pair). **NOT covered by a headless test:** the pairing rule itself. An attempt
+to build one composed two same-key ends in a single closure, which is NOT what a scene host does —
+the framework treats the pair as a switch and detaches one end, and the nav only survives that
+because its own layer keeps painting that end. A faithful headless scene host (two layers, both
+re-published every frame) is what such a test needs; until then the pairing rule rests on the
+debug-server measurement above.
+
