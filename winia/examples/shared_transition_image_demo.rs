@@ -122,19 +122,26 @@ fn controls(
             ("FillBounds", ContentScale::FillBounds),
         ];
         for (label, mode) in modes {
-            Button::new()
-                .on_click({
-                    clone!(content_scale);
-                    clone!(remeasure);
-                    move || {
-                        content_scale.set(mode);
-                        remeasure.set(false);
-                    }
-                })
-                .modifier(Modifier::new().height(34.0))
-                .build(ctx, |ctx| {
-                    Text::new(label).font_size(12.0).build(ctx);
-                });
+            // Loops that emit more than one node need a key per iteration: the slot table
+            // derives a call-site position from the loop body, and without `ctx.key` the
+            // framework can hand the same slot to two nodes when something else about the
+            // composition changes (here: flipping between the two screens) — which surfaced
+            // as a `[dup-key]` panic on Back. `flow_demo` keys its loops for the same reason.
+            ctx.key(label, |ctx| {
+                Button::new()
+                    .on_click({
+                        clone!(content_scale);
+                        clone!(remeasure);
+                        move || {
+                            content_scale.set(mode);
+                            remeasure.set(false);
+                        }
+                    })
+                    .modifier(Modifier::new().height(34.0))
+                    .build(ctx, |ctx| {
+                        Text::new(label).font_size(12.0).build(ctx);
+                    });
+            });
         }
         Button::new()
             .on_click({
