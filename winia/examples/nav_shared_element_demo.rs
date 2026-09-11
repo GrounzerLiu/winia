@@ -26,23 +26,44 @@ enum Route {
 /// The hero card: a container that draws nothing itself and fills with a coloured child, so a
 /// lost child is visible as an empty hole (the shape that made the transparent-start bug
 /// reproducible in a raster probe — see the shared-transition test module).
-/// The hero's motion: a critically damped spring (`damping_ratio = 1.0` — it eases into place without
-/// overshooting) at a low stiffness, so a flight reads as a smooth glide over roughly half a second.
+/// The hero's motion. Slower than the framework default on purpose — this demo exists to be WATCHED,
+/// and at the default (`TweenSpec::default()` = a LINEAR 300 ms tween) a flight is over before the eye
+/// catches which end is which. `slowness` is in the same spirit: 1 is the demo default (~1 s to
+/// settle), 2 is for observing a single flight closely (~1.7 s).
 ///
-/// The framework default is `TweenSpec::default()` = a LINEAR 300 ms tween, which is why a flight
-/// started out looking mechanical and abrupt; `slow` lowers the stiffness further for a longer, softer
-/// settle so the two can be compared side by side.
-fn hero_motion(slow: bool) -> BoundsTransform {
+/// Critically damped (`damping_ratio = 1.0`) so it eases into place without overshooting; a spring's
+/// settle time is about `4.75 / sqrt(stiffness)`, which is why the stiffness values look small.
+/// The two hero colours — different on purpose so a flight is easy to read: blue leaving the list,
+/// orange arriving in the detail (mid-flight you see the two blend).
+fn list_hero_color() -> Color {
+    Color::from_argb(255, 70, 140, 235)
+}
+
+fn detail_hero_color() -> Color {
+    Color::from_argb(255, 240, 150, 55)
+}
+
+fn hero_motion(slowness: u8) -> BoundsTransform {
     BoundsTransform::spring(SpringSpec {
         damping_ratio: 1.0,
-        stiffness: if slow { 55.0 } else { 120.0 },
+        stiffness: if slowness >= 2 { 8.0 } else { 25.0 },
         mass: 1.0,
         threshold: 0.001,
     })
 }
 
+/// Each end paints a DIFFERENT colour on purpose (list blue, detail orange), so during a flight you
+/// can see which end is being drawn — and, mid-flight, the crossfade between the two.
 #[composable]
-fn hero(ctx: &mut ComposeCtx, scope: &SharedTransitionScope, w: f32, h: f32, shape: Shape, motion: BoundsTransform) {
+fn hero(
+    ctx: &mut ComposeCtx,
+    scope: &SharedTransitionScope,
+    w: f32,
+    h: f32,
+    shape: Shape,
+    motion: BoundsTransform,
+    color: Color,
+) {
     Column::new()
         .modifier(
             Modifier::new()
@@ -67,7 +88,7 @@ fn hero(ctx: &mut ComposeCtx, scope: &SharedTransitionScope, w: f32, h: f32, sha
                 key,
                 Modifier::new()
                     .fill_max_size()
-                    .background(Color::from_argb(255, 90, 150, 220), Shape::Rectangle),
+                    .background(color, Shape::Rectangle),
             );
             ctx.end_node();
         });
@@ -85,7 +106,7 @@ fn list_screen(
         .spacing(12.0)
         .build(ctx, |ctx| {
             Text::new("List").font_size(22.0).build(ctx);
-            hero(ctx, scope, 96.0, 96.0, Shape::Circle, motion);
+            hero(ctx, scope, 96.0, 96.0, Shape::Circle, motion, list_hero_color());
             let bs = back_stack.clone();
             Button::text()
                 .on_click(move || bs.push(Route::Detail))
@@ -105,7 +126,7 @@ fn detail_screen(
         .spacing(12.0)
         .build(ctx, |ctx| {
             Text::new("Detail").font_size(22.0).build(ctx);
-            hero(ctx, scope, 320.0, 220.0, Shape::rounded(12.0), motion);
+            hero(ctx, scope, 320.0, 220.0, Shape::rounded(12.0), motion, detail_hero_color());
             let bs = back_stack.clone();
             Button::text()
                 .on_click(move || {
@@ -131,8 +152,9 @@ fn demo(ctx: &mut ComposeCtx) {
     // no entry flight opens).
     let two_pane = ctx.remember(|| false);
     // Motion preset: a smooth spring by default, a slower one with the toggle.
+    // 1 = the demo's own pace (~1 s), 2 = slow enough to watch one flight closely (~1.7 s).
     let slow_motion = ctx.remember(|| false);
-    let motion = hero_motion(slow_motion.get());
+    let motion = hero_motion(if slow_motion.get() { 2 } else { 1 });
     SharedTransitionLayout::new().build(ctx, |ctx| {
         let scope = current_shared_scope().expect("inside SharedTransitionLayout");
         Column::new()
@@ -189,10 +211,10 @@ fn demo(ctx: &mut ComposeCtx) {
                 // which reads as abrupt next to a ~600 ms flight.
                 display = display
                     .transition_spec(
-                        NavTransitionSpec::fade().duration(std::time::Duration::from_millis(450)),
+                        NavTransitionSpec::fade().duration(std::time::Duration::from_millis(800)),
                     )
                     .pop_transition_spec(
-                        NavTransitionSpec::fade().duration(std::time::Duration::from_millis(450)),
+                        NavTransitionSpec::fade().duration(std::time::Duration::from_millis(800)),
                     );
                 if two_pane.get() {
                     display = display.scene_strategies(vec![
