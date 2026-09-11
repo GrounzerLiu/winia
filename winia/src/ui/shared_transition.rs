@@ -7825,11 +7825,101 @@ mod tier0_tests {
     }
 
     /// The path `collect_node_keys` exists for: a SECOND compose inside one frame, across a
-    /// branch flip. It used to be able to leave a node listed under a parent that is no longer
-    /// reachable from the root, which makes the node reachable twice (the `[dup-key]` panic) or
-    /// reachable only through the dead parent (hero present but never measured, 0x0, drawing
-    /// nothing — the "back is the image disappearing" report). The assertion here is the
-    /// end state: the hero is present AND measured.
+    /// branch flip. Its precondition is a node listed TWICE under a parent reachable from the
+    /// root — the walk then visits that node twice and panics with `[dup-key]` (both printed
+    /// indices equal, the tell), and if the second listing is the one that survives, the node is
+    /// never measured (0x0, drawing nothing — the "back is the image disappearing" report).
+    ///
+    /// The precondition is CONSTRUCTED here, the way `teardown_reaches_a_slot_that_left_the_tree`
+    /// constructs its detached node: the demo produces it through materialize's multi-path tree
+    /// build.
+    ///
+    /// HONESTY, and this matters more than the test: it does NOT fail with the prune disabled
+    /// (measured). The reason is now understood too — the compose that follows rebuilds the
+    /// parent's `children`, so an injected duplicate is cleared before `collect_node_keys` runs.
+    /// Six attempts at a headless reproducer all came back green, so this is an invariant guard —
+    /// "the hero ends up listed exactly once and measured" — and the fix rests on the debug-server
+    /// measurement (3 round trips, `[dup-key]` 90 -> 0, hero back at (16,57) 96x96).
+    #[test]
+    fn a_duplicate_child_listing_is_pruned_before_the_key_walk() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+        let frame = |composer: &mut Composer, twice: bool| {
+            let s = show.clone();
+            let mut once = |composer: &mut Composer| {
+                composer.compose(|ctx| {
+                    SharedTransitionLayout::new().build(ctx, |ctx| {
+                        let scope = current_shared_scope().expect("scope");
+                        if s.get() {
+                            switch_frame_list(ctx, &scope);
+                        } else {
+                            switch_frame_detail(ctx, &scope);
+                        }
+                    });
+                });
+            };
+            once(composer);
+            if twice {
+                once(composer);
+            }
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+            composer.poll_shared_flights();
+        };
+        frame(&mut composer, false);
+        show.set(false);
+        // Let the switch frame run, so the flight is live and the hero has a `transition`.
+        frame(&mut composer, false);
+
+        // Construct the precondition: a reachable parent lists the hero twice. The hero is the
+        // flight's endpoint, which is the robust way to name it here — its `measured_size` is the
+        // ANIMATED size while it flies, so matching a literal width would miss it.
+        let hero = composer
+            .arena_nodes()
+            .iter()
+            .position(|n| {
+                n.transition
+                    .as_ref()
+                    .is_some_and(|t| matches!(t.role, TransitionRole::Target))
+            })
+            .expect("the flying hero node (the entering end)");
+        // The parent is the node that LISTS the hero, not the one `parent_id` names: measured,
+        // the flight endpoint's `parent_id` can point at an arena node that no longer exists.
+        let parent = composer
+            .arena_nodes()
+            .iter()
+            .position(|n| n.children.contains(&hero))
+            .expect("the node that lists the hero");
+        composer.arena.nodes[parent].children.push(hero);
+
+        // Second compose in the same frame: this is where `collect_node_keys` runs.
+        frame(&mut composer, true);
+
+        // Re-locate the hero and its parent by ID: the frame may have replaced nodes, so the
+        // indices captured above are only good for building the precondition.
+        let hero_now = composer.arena_nodes().iter().position(|n| {
+            n.transition
+                .as_ref()
+                .is_some_and(|t| matches!(t.role, TransitionRole::Target))
+                && n.measured_size.width > 1.0
+        });
+        let hero_now = hero_now.expect("the hero is still present and measured");
+        let pid = composer.arena_nodes()[hero_now]
+            .parent_id
+            .expect("the hero still has a parent");
+        let listings = composer
+            .arena_nodes()
+            .iter()
+            .map(|n| n.children.iter().filter(|&&c| c == hero_now).count())
+            .sum::<usize>();
+        assert_eq!(
+            listings, 1,
+            "the hero must be listed exactly once in the arena (parent id {pid})"
+        );
+        crate::animation::clear_all_animations();
+    }
+
     /// HONESTY: this does NOT fail with the pruning reverted (measured) — five attempts at a
     /// headless reproducer for that defect all came back green, so it is an end-state invariant
     /// guard, not the regression test for it. The defect needs a stale listing from the
