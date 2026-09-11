@@ -6735,6 +6735,84 @@ mod tier0_tests {
         );
     }
 
+    /// Endpoint exactness for the corner model across the shape pairs the review
+    /// named as untested: at p=0 the painted radius must equal the SOURCE's own
+    /// resolved radius, at p=1 the TARGET's, for percent->fixed, fixed->percent,
+    /// percent->percent and a per-corner shape (`TopRoundedRect`).
+    #[test]
+    fn corner_endpoints_are_exact_for_every_shape_pair() {
+        use crate::layout::node::Size;
+        use crate::modifier::Modifier;
+        use crate::ui::shared_transition::{SharedBounds, TransitionRole, TransitionVisual};
+
+        // (source shape, target shape) at 320x170 — non-square on purpose.
+        let cases: [(Shape, Shape); 5] = [
+            (Shape::Circle, Shape::Rectangle),
+            (Shape::Rectangle, Shape::Circle),
+            (Shape::Pill, Shape::RoundedRect { corner_radius: 24.0 }),
+            (Shape::Circle, Shape::RoundedRect { corner_radius: 24.0 }),
+            (Shape::TopRoundedRect { radius: 50.0 }, Shape::Circle),
+        ];
+        for (from_shape, to_shape) in cases {
+            let from = shared_shape_radii(
+                &Modifier::new().background(Color::RED, from_shape),
+                320.0,
+                170.0,
+            );
+            let to = shared_shape_radii(
+                &Modifier::new().background(Color::BLUE, to_shape),
+                320.0,
+                170.0,
+            );
+            let mk = |progress: f32| TransitionVisual {
+                start: SharedBounds::new(0.0, 0.0, 320.0, 170.0),
+                end: SharedBounds::new(0.0, 0.0, 320.0, 170.0),
+                progress,
+                role: TransitionRole::Target,
+                radius_from: from,
+                radius_to: to,
+                radius_from_auto: shared_shape_radius_is_auto(&Modifier::new().background(Color::RED, from_shape)),
+                radius_to_auto: shared_shape_radius_is_auto(&Modifier::new().background(Color::BLUE, to_shape)),
+                clip: false,
+                link_slot: None,
+                scroll: (0.0, 0.0),
+                flight: 1,
+                path: PathMotion::Linear,
+                bounds_fx: None,
+                elevated: false,
+                remeasure: false,
+            };
+            let at0 = mk(0.0).radii();
+            let at1 = mk(1.0).radii();
+            for i in 0..4 {
+                assert!(
+                    (at0[i] - from[i]).abs() <= 0.5,
+                    "p=0 must be the source's own radius ({from_shape:?}->{to_shape:?} corner {i}): got {} want {}",
+                    at0[i],
+                    from[i]
+                );
+                assert!(
+                    (at1[i] - to[i]).abs() <= 0.5,
+                    "p=1 must be the target's own radius ({from_shape:?}->{to_shape:?} corner {i}): got {} want {}",
+                    at1[i],
+                    to[i]
+                );
+            }
+        }
+        // A non-square Circle is a percent corner (min/2), which is what makes the
+        // endpoints above hold for it too.
+        assert_eq!(
+            shared_shape_radii(
+                &Modifier::new().background(Color::RED, Shape::Circle),
+                320.0,
+                170.0
+            ),
+            [85.0; 4],
+            "Circle resolves min(w,h)/2 against its own box, like Compose"
+        );
+        let _ = Size::new(1.0, 1.0);
+    }
+
     /// Bouncy hero leaf (spring overshoot must render past the end rect).
     fn spring_hero_leaf(
         ctx: &mut ComposeCtx,
