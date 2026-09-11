@@ -975,6 +975,7 @@ mod tests {
             end: SharedBounds::new(200.0, 100.0, 100.0, 100.0),
             progress,
             role: TransitionRole::Target,
+            scene_alpha: None,
             radius_from: [0.0; 4],
             radius_to: [0.0; 4],
             clip: false,
@@ -1062,6 +1063,7 @@ mod tests {
             end: SharedBounds::new(200.0, 0.0, 100.0, 100.0),
             progress: 0.25,
             role,
+            scene_alpha: None,
             radius_from: [0.0; 4],
             radius_to: [0.0; 4],
             clip: false,
@@ -1082,6 +1084,20 @@ mod tests {
         // Element: classic crossfade, always.
         assert_eq!(mk(TransitionRole::Target, None).alpha(), 0.25);
         assert_eq!(mk(TransitionRole::Source, None).alpha(), 0.75);
+        // A SCENE owns opacity when the end carries one: alpha() is the scene's visibility, NOT the
+        // flight's crossfade. Compose splits it the same way (the scene transition fades, the shared
+        // bounds animation moves), and fading an element twice would dim it twice as fast. Checked
+        // with a fade pair attached too, so the scene value wins over the channels.
+        for role in [TransitionRole::Source, TransitionRole::Target, TransitionRole::Morph] {
+            for (vis, want) in [(0.0, 0.0), (0.4, 0.4), (1.0, 1.0)] {
+                let mut v = mk(role.clone(), Some((fade_in.clone(), fade_out.clone())));
+                v.scene_alpha = Some(vis);
+                assert_eq!(v.alpha(), want, "scene visibility must own opacity for {role:?}");
+                let mut v = mk(role.clone(), None);
+                v.scene_alpha = Some(vis);
+                assert_eq!(v.alpha(), want, "…and with no enter/exit either");
+            }
+        }
         // Bounds + fade enter/exit: identical numbers (fade defaults claim
         // the crossfade they already produce).
         assert_eq!(
@@ -1237,6 +1253,10 @@ pub(crate) struct TransitionVisual {
     /// Scalar progress snapshot (0→1, possibly overshooting under spring).
     pub progress: f32,
     pub role: TransitionRole,
+    /// Opacity owned by a SCENE instead of by the flight (see [`Self::alpha`]): the visibility of the
+    /// scene this end belongs to, for flights whose ends carry a scene id. `None` = the flight's own
+    /// crossfade applies, which is right when no scene host is involved.
+    pub scene_alpha: Option<f32>,
     /// Normalized corner radii [TL, TR, BR, BL] at both ends (see
     /// [`shared_shape_radii`]). Every `Shape` variant normalizes to this
     /// quad, so cross-kind morphs (pill→rect) stay continuous.
@@ -1296,6 +1316,14 @@ impl TransitionVisual {
     }
 
     pub(crate) fn alpha(&self) -> f32 {
+        // A SCENE owns opacity when the end belongs to one. During a nav transition the scenes
+        // crossfade as layers, so the flight must not fade the same end a second time: its alpha is
+        // the visibility of the scene the end came from (Compose's split — the scene transition owns
+        // opacity, the shared bounds animation owns the rect). Only set for flights whose ends carry
+        // a scene id; everything else keeps the crossfade below.
+        if let Some(a) = self.scene_alpha {
+            return a.clamp(0.0, 1.0);
+        }
         match (&self.role, &self.bounds_fx) {
             // sharedBounds: fade channels claimed by enter/exit — fade
             // defaults reproduce the crossfade exactly; fade-less customs
@@ -1657,6 +1685,26 @@ pub(crate) fn find_shared_marker(modifier: &Modifier) -> Option<SharedMarker> {
             scene: *scene,
         }),
         _ => None,
+    })
+}
+
+/// Opacity a SCENE owns for a flight end, if that end belongs to one (see
+/// [`TransitionVisual::alpha`]): the visibility of the scene the end was composed in, read right
+/// now. During a nav transition the scenes crossfade as layers, so the flight must not fade the same
+/// element a second time — Compose splits it the same way (the scene transition owns opacity, the
+/// shared-bounds animation owns the rect).
+///
+/// `leaving_end` matters because the two ends are painted from different places: a detached source
+/// ghost is rendered from the transition layer, where the scene's own layer fade no longer applies,
+/// so the flight carries that fade; a target that stays in tree is already faded by its scene's
+/// layer, so the flight keeps it opaque unless the scene host elevates it into the layer too.
+fn scene_alpha_for_end(nodes: &[LayoutNode], idx: usize, leaving_end: bool) -> Option<f32> {
+    let marker = find_shared_marker(&nodes.get(idx)?.modifier)?;
+    let visibility = marker.scene.and_then(nav_scene_visibility)?;
+    Some(if leaving_end || marker.render_in_overlay {
+        visibility
+    } else {
+        1.0
     })
 }
 
@@ -2785,6 +2833,7 @@ impl Composer {
                     start,
                     end,
                     progress: p,
+                    scene_alpha: scene_alpha_for_end(&self.arena.nodes, idx, true),
                     role: TransitionRole::Source,
                     radius_from: rf,
                     radius_to: rt,
@@ -2887,6 +2936,7 @@ impl Composer {
                         start,
                         end,
                         progress: p,
+                        scene_alpha: scene_alpha_for_end(&self.arena.nodes, tidx, false),
                         role,
                         radius_from: rf,
                         radius_to: rt,
@@ -3170,6 +3220,10 @@ impl Composer {
                     start: off_origin(start, so),
                     end: off_origin(end, so),
                     progress: pr,
+                    // Tier 1 (cross-composer) ends carry no scene id yet: the scene host API is
+                    // published per composer, so a flight spanning main and an overlay has no shared
+                    // scene visibility to read here. Keep the flight's own crossfade.
+                    scene_alpha: None,
                     role: TransitionRole::Source,
                     radius_from: rf,
                     radius_to: rt,
@@ -3233,6 +3287,8 @@ impl Composer {
                         start: off_origin(start, to),
                         end: off_origin(end, to),
                         progress: pr,
+                        // See the Tier 1 source comment above: no scene id across composers yet.
+                        scene_alpha: None,
                         role: TransitionRole::Target,
                         radius_from: rf,
                         radius_to: rt,
@@ -7248,6 +7304,7 @@ mod tier0_tests {
             end: SharedBounds::new(0.0, 0.0, 320.0, 170.0),
             progress: 0.25,
             role: TransitionRole::Target,
+            scene_alpha: None,
             radius_from: [0.0; 4],
             radius_to: [0.0; 4],
             radius_from_auto: false,
@@ -7631,6 +7688,7 @@ mod tier0_tests {
                 end: SharedBounds::new(0.0, 0.0, 320.0, 170.0),
                 progress,
                 role: TransitionRole::Target,
+                scene_alpha: None,
                 radius_from: from,
                 radius_to: to,
                 radius_from_auto: shared_shape_radius_is_auto(&Modifier::new().background(Color::RED, from_shape)),
@@ -9373,6 +9431,7 @@ mod tier0_tests {
             end: SharedBounds::new(200.0, 0.0, 100.0, 50.0),
             progress: 0.0,
             role: TransitionRole::Target,
+            scene_alpha: None,
             radius_from: [0.0; 4],
             radius_to: [0.0; 4],
             clip: false,
