@@ -2071,6 +2071,21 @@ impl Composer {
                 self.layout_dirty_keys.insert(key);
             }
         }
+        // …AND an arena-wide sweep, because the tree walk above cannot reach a
+        // node that was DETACHED into the transition layer in the same frame
+        // (retarget/replace): the ghost would keep its dead flight's override.
+        // That is harmless today only because detached nodes are never measured —
+        // an accident, not an invariant.
+        let mut orphan_keys: Vec<u64> = Vec::new();
+        for n in self.arena.nodes.iter_mut() {
+            if n.flight_measure.as_ref().is_some_and(|f| f.owner == owner) {
+                n.flight_measure = None;
+                orphan_keys.push(n.slot_key);
+            }
+        }
+        for k in orphan_keys {
+            self.layout_dirty_keys.insert(k);
+        }
     }
 
     /// Post-layout hook (app loop, every frame): fill ends, start flights,
@@ -6444,6 +6459,59 @@ mod tier0_tests {
         assert!(
             kept.is_some_and(|f| f.owner.cid == composer.composer_id + 1000),
             "a foreign flight's override must survive this flight's writes"
+        );
+        crate::animation::clear_all_animations();
+    }
+
+    /// Teardown must reach a node that LEFT the tree in the same frame: the tree
+    /// walk cannot see a ghost detached into the transition layer, so its override
+    /// used to survive its flight (R2-F4 — benign only because detached nodes are
+    /// never measured).
+    #[test]
+    fn teardown_reaches_a_slot_that_left_the_tree() {
+        use crate::layout::node::{FlightMeasure, FlightMeasureFrame};
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+                Column::new()
+                    .modifier(Modifier::new().size(120.0, 60.0).background(Color::RED, Shape::rounded(8.0)))
+                    .build(ctx, |_| {});
+            });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.layout_root_idx().expect("root");
+        let (parent, marked) = {
+            let nodes = composer.arena_nodes();
+            (root, nodes[root].children[0])
+        };
+        let key = composer.arena_nodes()[marked].slot_key;
+        let owner = FlightKey { cid: composer.composer_id, id: 7 };
+        composer.arena.nodes[marked].flight_measure = Some(FlightMeasure {
+            frame: State::new(FlightMeasureFrame {
+                content: Some(crate::layout::node::Size::new(200.0, 90.0)),
+                reported: Some(crate::layout::node::Size::new(200.0, 90.0)),
+            }),
+            owner,
+        });
+        // Detach it from the tree the way a retarget does: the parent drops the
+        // child and the node loses its parent link.
+        composer.arena.nodes[parent].children.retain(|&c| c != marked);
+        composer.arena.nodes[marked].parent_id = None;
+        assert!(
+            find_idx_by_slot(composer.arena_nodes(), root, key).is_none(),
+            "the node is unreachable from the root now"
+        );
+
+        composer.clear_transition_for_slot(key, owner);
+        assert!(
+            composer.arena_nodes()[marked].flight_measure.is_none(),
+            "the arena sweep drops the dead flight's override on a detached ghost"
+        );
+        assert!(
+            composer.layout_dirty_keys.contains(&key),
+            "…and seeds its slot so a returning node re-measures naturally"
         );
         crate::animation::clear_all_animations();
     }
