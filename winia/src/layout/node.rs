@@ -1709,11 +1709,14 @@ pub(crate) fn apply_layout_dirty(nodes: &mut [LayoutNode], root_idx: usize, dirt
 #[derive(Clone)]
 pub(crate) struct FlightMeasure {
     pub frame: crate::core::state::State<FlightMeasureFrame>,
-    /// Flight that owns this override. Teardown must match it: slot keys are
-    /// positional identities a SUCCESSOR flight can resurrect, so clearing
-    /// blindly would destroy the newer flight's override (and, with it, one
-    /// frame of the correct layout).
-    pub flight: crate::ui::shared_transition::FlightId,
+    /// Identity of the flight that owns this override. Flight ids are
+    /// COMPOSER-local (every composer's counter starts at 1) while a Tier-1
+    /// override is written onto a PEER's node, so the composer id is part of the
+    /// key — otherwise an unrelated peer flight with the same number could clear
+    /// it. Teardown AND writes must match it: slot keys are positional identities
+    /// a SUCCESSOR flight can resurrect, so acting blindly would destroy the
+    /// newer flight's override.
+    pub owner: crate::ui::shared_transition::FlightKey,
 }
 
 /// One frame of that override; `None` on a field means "no override there".

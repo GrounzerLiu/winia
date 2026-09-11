@@ -353,6 +353,15 @@ impl SharedTransitionLayout {
 
 pub(crate) type FlightId = u64;
 
+/// Owner of a flight-layout override: flight ids are per-composer, and a Tier-1
+/// override lives on a PEER's node while its flight lives in the main map, so the
+/// composer id has to travel with the id.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct FlightKey {
+    pub cid: u64,
+    pub id: FlightId,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FlightPhase {
     Idle,
@@ -2009,7 +2018,7 @@ impl Composer {
             self.free_retained_source(idx, slot);
         }
         if let Some(slot) = a.flight.target_slot {
-            self.clear_transition_for_slot(slot, id);
+            self.clear_transition_for_slot(slot, FlightKey { cid: self.composer_id, id });
         }
     }
 
@@ -2032,7 +2041,7 @@ impl Composer {
     /// flight's last write and its teardown — unconditional clearing would
     /// flicker one frame off the new visual (self-heals next poll, but
     /// avoidable for one tag comparison).
-    fn clear_transition_for_slot(&mut self, slot: u64, id: FlightId) {
+    fn clear_transition_for_slot(&mut self, slot: u64, owner: FlightKey) {
         // `arena.root` is None on an empty composition, but the nodes (and the
         // key→index map) can outlive it, so a rootless tree must still be swept
         // — otherwise an orphan override rides a key-reused node.
@@ -2041,7 +2050,10 @@ impl Composer {
             None => self.arena.nodes.iter().position(|n| n.slot_key == slot),
         };
         if let Some(idx) = found {
-            let owned = self.arena.nodes[idx].transition.as_ref().is_some_and(|t| t.flight == id);
+            let owned = self.arena.nodes[idx]
+                .transition
+                .as_ref()
+                .is_some_and(|t| t.flight == owner.id);
             if owned {
                 self.arena.nodes[idx].transition = None;
             }
@@ -2052,7 +2064,7 @@ impl Composer {
             if self.arena.nodes[idx]
                 .flight_measure
                 .as_ref()
-                .is_some_and(|f| f.flight == id)
+                .is_some_and(|f| f.owner == owner)
             {
                 let key = self.arena.nodes[idx].slot_key;
                 self.arena.nodes[idx].flight_measure = None;
@@ -2275,7 +2287,7 @@ impl Composer {
                         self.free_retained_source(idx, slot);
                     }
                     if let Some(slot) = self.shared_flights.get(&id).and_then(|a| a.flight.target_slot) {
-                        self.clear_transition_for_slot(slot, id);
+                        self.clear_transition_for_slot(slot, FlightKey { cid: self.composer_id, id });
                     }
                     self.shared_flights.remove(&id);
                 }
@@ -2403,7 +2415,10 @@ impl Composer {
                     self.arena.nodes[tidx].flight_measure = if frame.is_idle() {
                         None
                     } else {
-                        Some(FlightMeasure { frame: measure_state, flight: id })
+                        Some(FlightMeasure {
+                            frame: measure_state,
+                            owner: FlightKey { cid: self.composer_id, id },
+                        })
                     };
                     // `layout()` resets `layout_dirty` on the whole tree at the
                     // start of every pass, so an override has to be re-seeded
@@ -2589,8 +2604,12 @@ impl Composer {
                 // override (Compose `ResizeMode`/`PlaceHolderSize`) is dropped
                 // and its natural size restored — clearing only the visual
                 // would freeze the peer at its last animated size forever.
+                // The override carries the OWNER's identity (the composer whose
+                // map holds the flight = main), not the peer's: that is what the
+                // cross-writer stamps on the node.
+                let owner_key = FlightKey { cid: all[0].composer_id, id };
                 let peer = &mut all[ti];
-                peer.clear_transition_for_slot(slot, id);
+                peer.clear_transition_for_slot(slot, owner_key);
             }
             all[0].shared_flights.remove(&id);
         }
@@ -2613,13 +2632,15 @@ impl Composer {
             }
         }
         if let Some(slot) = a.flight.target_slot {
+            // Same as the completion path: the peer's layout override must go
+            // with the flight (see `clear_transition_for_slot`). Verified
+            // load-bearing: reverting both Tier-1 clears makes
+            // `stale_cancel_drops_the_surviving_peers_layout_override` fail with
+            // the override still attached. Owner = the composer that held the
+            // flight, i.e. the one whose map it was removed from.
+            let owner_key = FlightKey { cid: a.source_cid, id };
             if let Some(peer) = all.iter_mut().find(|c| c.composer_id == a.target_cid) {
-                // Same as the completion path: the peer's layout override must
-                // go with the flight (see `clear_transition_for_slot`). Verified
-                // load-bearing: reverting both Tier-1 clears makes
-                // `stale_cancel_drops_the_surviving_peers_layout_override` fail
-                // with the override still attached.
-                peer.clear_transition_for_slot(slot, id);
+                peer.clear_transition_for_slot(slot, owner_key);
             }
         }
     }
@@ -2707,6 +2728,9 @@ impl Composer {
             }
         }
         if let Some(slot) = tslot {
+            // Ownership key BEFORE the mutable borrow: the flight lives in the
+            // MAIN map, so its composer id is what namespaces the override.
+            let owner_cid = all[0].composer_id;
             let peer = &mut all[peer_idx];
             if let Some(root) = peer.arena.root {
                 if let Some(tidx) = find_idx_by_slot(&peer.arena.nodes, root, slot) {
@@ -2724,7 +2748,7 @@ impl Composer {
                     peer.arena.nodes[tidx].flight_measure = if frame.is_idle() {
                         None
                     } else {
-                        Some(FlightMeasure { frame: measure_state, flight: id })
+                        Some(FlightMeasure { frame: measure_state, owner: FlightKey { cid: owner_cid, id } })
                     };
                     if !frame.is_idle() || had_override {
                         peer.layout_dirty_keys.insert(key);
@@ -5003,7 +5027,7 @@ mod tier0_tests {
         let key = composer.arena_nodes()[marked].slot_key;
         composer.arena.nodes[marked].flight_measure = Some(FlightMeasure {
             frame: frame_state.clone(),
-            flight: 1,
+            owner: FlightKey { cid: composer.composer_id, id: 1 },
         });
         frame_state.set(FlightMeasureFrame {
             content: Some(Size::new(200.0, 90.0)),
