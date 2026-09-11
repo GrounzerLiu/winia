@@ -10,6 +10,7 @@
 //! - Key 管理: 全局唯一 key 计数器
 
 use crate::core::state::{ComposerSubscription, State, StateId, StateSignal};
+use crate::ui::shared_transition::{ActiveFlight, FlightId, PendingSource, SharedBounds};
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{LayoutNode, MeasurePolicy, CachedNode};
 use crate::modifier::Modifier;
@@ -65,6 +66,8 @@ pub(crate) struct RuntimeFrameGuard {
 }
 
 static NEXT_RUNTIME_FRAME_ID: AtomicU64 = AtomicU64::new(1);
+/// Stable Composer identities (Phase 4 cross-composer flight matching).
+static NEXT_COMPOSER_ID: AtomicU64 = AtomicU64::new(1);
 
 thread_local! {
     /// Saved outer runtime contexts, kept in strict LIFO order.
@@ -1634,8 +1637,11 @@ pub struct Composer {
     layout_slot_reads: HashMap<u64, HashSet<StateId>>,
     /// 布局依赖反向表（state_id → slot_key；由 layout_slot_reads 重建）
     layout_deps: HashMap<StateId, HashSet<u64>>,
-    /// 本帧 pending 消费收集的布局失效 key（layout() 应用后清空）
-    layout_dirty_keys: HashSet<u64>,
+    /// 本帧 pending 消费收集的布局失效 key（layout() 应用后清空）。
+    /// 协调器（shared_transition 的 flight writer）每帧往这里播种飞行端点的
+    /// slot_key：`layout()` 每帧先清全树 layout_dirty 再按此集合重标祖先，
+    /// 不播种则折叠的父级永不下探（逐帧重测就无从发生）。
+    pub(crate) layout_dirty_keys: HashSet<u64>,
     /// 本帧确认移除的 slot_key（compose 末尾回收未复用节点时收集——layout_deps 死 key 清理用）
     removed_slot_keys: HashSet<u64>,
     /// 本 Composer 实例的 pending state 通知队列
@@ -1665,6 +1671,49 @@ pub struct Composer {
     pub(crate) compose_dirty_count: usize,
     /// 重组总次数（vsync 研究——单次渲染内多次 compose 的观测）
     pub(crate) compose_count: u64,
+    /// Shared-element flights (Phase 2): active flights by id (Tier-0
+    /// coordinator lives in ui::shared_transition as `impl Composer`).
+    pub(crate) shared_flights: HashMap<FlightId, ActiveFlight>,
+    pub(crate) next_flight_id: u64,
+    /// Last frame's (scope, key) → slot map for switch detection.
+    pub(crate) prev_shared_endpoints: HashMap<(u64, String), u64>,
+    /// Detached retained source roots (absolute coords, rendered after main tree).
+    pub(crate) transition_layer: Vec<usize>,
+    /// Per-frame render order for the transition layer: detached sources plus
+    /// every elevated (in-tree) flight endpoint, z-sorted back-to-front.
+    /// Rebuilt by `rebuild_layer_order` after each flight poll — render and
+    /// hit testing both read it, so paint order and hit order can never drift.
+    pub(crate) layer_order: Vec<usize>,
+    /// In-tree endpoints that fly in this composer's layer (elevated visuals),
+    /// recorded by the visual writers themselves. Rebuilt every poll: the
+    /// writers are the only place that knows both the arena index and whether
+    /// that end is elevated, and a Tier1 peer's flight lives in the MAIN
+    /// composer's map, so the peer could not discover it by scanning its own.
+    pub(crate) elevated_roots: Vec<usize>,
+    /// Non-shared subtrees elevated for the duration of a flight (Compose
+    /// `renderInSharedTransitionScopeOverlay`). Recomputed each poll by
+    /// `refresh_scope_overlay_roots`; also drives their `LayoutNode` flag so
+    /// the tree walk skips them and the layer re-draws them untransformed.
+    pub(crate) scope_overlay_roots: Vec<usize>,
+    /// Last-frame absolute bounds per live marked endpoint (Phase 3
+    /// same-screen size-morph detection). Keyed by endpoint identity
+    /// (scope, key) — never by slot: slots are positional identities a new
+    /// key can reuse, which would seed a spurious morph from stale rects.
+    pub(crate) shared_last_bounds: HashMap<(u64, String), SharedBounds>,
+    /// Stable per-Composer identity for cross-composer flight matching
+    /// (Phase 4 Tier1: main tree ↔ overlays share (scope, key) but never slots).
+    pub(crate) composer_id: u64,
+    /// Retired-detached sources awaiting cross-composer counterparts (Phase 4
+    /// Tier1). Drained by cross-poll same frame — freed when unmatched.
+    pub(crate) pending_cross: Vec<PendingSource>,
+    /// Fresh (scope, key) → slot appearances THIS frame (Phase 4 Tier1 cross
+    /// matching reads these). Overwritten every retain — peer prev maps absorb
+    /// appearances before cross-poll runs, so this is the only freshness source.
+    pub(crate) fresh_shared: Vec<((u64, String), u64)>,
+    /// This composer's canvas-frame origin in window-logical units (Phase 4):
+    /// main tree renders untranslated (0,0); overlays render translated by
+    /// their screen_pos. Flight bounds are canonicalized to window coords.
+    pub(crate) screen_origin: (f32, f32),
 }
 
 impl Composer {
@@ -1705,6 +1754,18 @@ impl Composer {
             lifecycle: crate::ui::window::LifecycleState::default(),
             adaptive: crate::ui::adaptive::AdaptiveContext::new(),
             animation_state_ids: HashSet::new(),
+            shared_flights: HashMap::new(),
+            next_flight_id: 1,
+            prev_shared_endpoints: HashMap::new(),
+            transition_layer: Vec::new(),
+            layer_order: Vec::new(),
+            elevated_roots: Vec::new(),
+            scope_overlay_roots: Vec::new(),
+            shared_last_bounds: HashMap::new(),
+            composer_id: NEXT_COMPOSER_ID.fetch_add(1, Ordering::Relaxed),
+            pending_cross: Vec::new(),
+            fresh_shared: Vec::new(),
+            screen_origin: (0.0, 0.0),
             #[cfg(test)]
             compose_clean_count: 0,
             #[cfg(test)]
@@ -2293,6 +2354,9 @@ impl Composer {
 
         // 完整分离：组合完成后物化布局树（测试/调用方可直接 layout_root_idx）
         self.materialize();
+        // Shared-element flights (Phase 2): detect switches + retain/detach
+        // sources BEFORE the prev drain below frees them.
+        self.retain_shared_sources();
         // 物化后：注册 modifier 中引用的 State 依赖（scroll 等——组合期 arena 空）。
         // 必须在 take_deps() 之前执行——其中 State::get() 依赖 DEP_MODE=Compose
         //（begin_compose_deps 后未复位）；先复位则 scroll 依赖被静默丢弃（滚动不刷新）

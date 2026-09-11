@@ -88,10 +88,10 @@ def walk(node, ox=0.0, oy=0.0, out=None):
 ```
 [0..4)   width  u32 LE（物理像素）
 [4..8)   height u32 LE
-[8..]    像素   skia N32 premul —— 内存序 BGRA
+[8..]    像素 RGBA（读回时按 RGBA8888 转换，与 surface 内存序 N32/BGRA 无关）
 ```
 
-Python 解码（PIL 按 RGBA 读入会 R/B 互换；亮度/alpha 分析不受影响，色彩分析需换序）：
+Python 解码（直接按 RGBA 读；不要做 R/B 互换）：
 
 ```python
 w, h = struct.unpack("<II", resp[:8])

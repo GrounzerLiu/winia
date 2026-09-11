@@ -27,6 +27,7 @@ pub mod checkbox;
 pub mod switch;
 pub mod chip;
 pub mod tooltip;
+pub mod shared_transition;
 pub mod radio_button;
 pub mod badge;
 pub mod slider;
@@ -172,4 +173,9 @@ pub use navigation_rail::{
     WIDE_RAIL_EXPANDED_MIN_WIDTH,
 };
 pub use tooltip::Tooltip;
+pub use shared_transition::{
+    BoundsTransform, PathMotion, PlaceHolderSize, ResizeMode, SharedBounds,
+    SharedContentState, SharedKind, SharedTransitionDefaults,
+    SharedTransitionLayout, SharedTransitionScope,
+};
 pub use search_bar::{SearchBar, SearchBarColors, SearchBarDefaults, SearchBarState, DockedSearchBar, SEARCH_ICON_PATH, BACK_ICON_PATH, SEARCH_BAR_HEIGHT};

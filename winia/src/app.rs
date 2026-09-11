@@ -6,7 +6,7 @@ use crate::core::composer::{ComposeCtx, Composer};
 use crate::debug;
 use crate::layout::constraints::Constraints;
 use crate::debug_log;
-use crate::layout::node::{hit_test, focus_next, focus_prev, LayoutNode};
+use crate::layout::node::{hit_test, hit_test_with_flights, focus_next, focus_prev, LayoutNode};
 use crate::render;
 
 /// 拖拽/嵌套滚动调试 trace 开关（debug_assertions 下 + 环境变量 WINIA_DRAG_TRACE）。
@@ -472,6 +472,10 @@ impl PerWindow {
             }
         }
         self.composer.layout(Constraints::new(0.0, self.width, 0.0, self.height));
+        // Shared-element flights (Phase 2): fill ends, start flights, rewrite
+        // per-frame visual snapshots, reap completed flights. Render reads
+        // plain f32 snapshots — never subscribes (zero-recomposition rule).
+        self.composer.poll_shared_flights();
         // 焦点交互同步（Focus/Unfocus 发射——focus 标志已随重组刷新）
         self.sync_focus_interaction();
 
@@ -483,6 +487,17 @@ impl PerWindow {
         layout_overlays(self);
         // Overlay focus interaction sync (needs overlay layout for slot resolve).
         self.sync_overlay_focus_interaction();
+        // Cross-composer Tier1 flights (Phase 4): match stashed sources with
+        // overlay counterparts, drive active Tier1, free unmatched stashes.
+        // Main composer first by convention (Tier1 flights live in its map).
+        {
+            let mut all: Vec<&mut crate::core::composer::Composer> = Vec::with_capacity(1 + self.overlays.len());
+            all.push(&mut self.composer);
+            for ov in self.overlays.iter_mut() {
+                all.push(&mut ov.composer);
+            }
+            crate::core::composer::Composer::poll_cross_flights(&mut all);
+        }
 
         let bg = self.theme.background;
 
@@ -495,14 +510,38 @@ impl PerWindow {
                     request_capture();
                 }
                 sw.draw(|surface| {
+                    // Draw order: main tree → overlays → main transition layer.
+                    // Overlays always sit above the tree (an open dialog must
+                    // not be covered by the base screen, in either mode), and
+                    // while a cross-composer flight runs the main layer lands
+                    // above both so the ghost flies over modal scrims
+                    // (Compose zIndexInOverlay).
+                    // NOTE: `render_overlays` expects the DEVICE context — it
+                    // applies `scale` itself — so it must not run inside the
+                    // tree's `canvas.scale(sf)`, or a HiDPI window would draw
+                    // every overlay at sf² and at an sf²-offset origin.
+                    let cross_active = self.composer.has_cross_flights();
                     let canvas = surface.canvas();
                     canvas.clear(skia_safe::Color::from_argb(bg.a, bg.r, bg.g, bg.b));
                     canvas.save();
                     canvas.scale((sf, sf));
                     render::render(nodes, root_idx, canvas);
+                    if !cross_active {
+                        // Shared-element transition layer: detached sources AND
+                        // elevated (render_in_overlay) endpoints, drawn rootless
+                        // at their absolute positions, so they escape every
+                        // ancestor clip / layer transform the tree walk is
+                        // still under.
+                        self.composer.render_layer(canvas);
+                    }
                     canvas.restore();
-                    // overlay 渲染在主树之上（逻辑坐标——translate 已含 scale）
                     render_overlays(&self.overlays, canvas, sf, (self.width, self.height));
+                    if cross_active {
+                        canvas.save();
+                        canvas.scale((sf, sf));
+                        self.composer.render_layer(canvas);
+                        canvas.restore();
+                    }
                     after_draw(nodes, root_idx, surface);
                 });
                 // 截图读回在 flush 之后（skiwin draw 内）——保证真实呈现帧
@@ -705,7 +744,7 @@ impl ApplicationHandler for AppState {
                         // 不滚——盲找只留给 DebugEvent::Scroll（测试注入无坐标，
                         // 见 consume_debug_events）。
                         let target = pw.last_pointer_pos.and_then(|(px, py)| {
-                            let path = crate::layout::node::hit_test(nodes, root_idx, px, py);
+                            let path = crate::layout::node::hit_test_with_flights(nodes, root_idx, pw.composer.transition_roots(), px, py);
                             // 命中路径从根到叶——从内向外找第一个轴匹配的 scroll 节点
                             path.iter().rev().find(|&&idx| {
                                 (dy != 0.0 && nodes[idx].modifier.vertical_scroll_state().is_some())
@@ -826,7 +865,7 @@ impl ApplicationHandler for AppState {
                 // ── 指针事件分发（Up 时先分发后清除 capture）──
                 let nodes = pw.composer.arena_nodes();
                 if let Some(r) = pw.composer.layout_root_idx() {
-                    let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
+                    let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
                     let ptr_ev = crate::modifier::PointerEvent {
                         event_type,
                         position: (0.0, 0.0),
@@ -1392,7 +1431,11 @@ impl ApplicationHandler for AppState {
                                             }
                                         };
                                         let align = nodes[pidx].modifier.align().unwrap_or(crate::ui::TextAlign::Left);
-                                        let node_w = nodes[pidx].measured_size.width;
+                                        // CONTENT box: the painter uses it, so the IME
+                                        // candidate window must too — under a flight layout
+                                        // override `measured_size` is the size the PARENT was
+                                        // told (review R3-F6).
+                                        let node_w = nodes[pidx].content_box().width;
                                         let intrinsic_w = p.max_intrinsic_width();
                                         // ⚠ 空文本：渲染端光标画在内容起点（左对齐，
                                         // 不随 align 偏移）——IME 区域须一致（否则
@@ -1472,7 +1515,7 @@ impl AppState {
                         let arena = pw.composer.arena_nodes();
                         let root_idx = pw.composer.layout_root_idx();
                         if let Some(r) = root_idx {
-                            let path = hit_test(arena, r, x, y);
+                            let path = hit_test_with_flights(arena, r, pw.composer.transition_roots(), x, y);
                             let mut click_handled = false;
                             // debug 点击聚焦：path 中最深的 focusable 节点
                             // （text-field-v2 容器化后焦点/交互在容器——空字段
@@ -1832,7 +1875,7 @@ impl AppState {
                 let sf2 = sf as f32;
                 sw.draw(|surface| {
                     let canvas = surface.canvas(); canvas.clear(skia_safe::Color::from_argb(bg.a, bg.r, bg.g, bg.b));
-                    canvas.save(); canvas.scale((sf2, sf2)); render::render(nodes, root_idx, canvas); canvas.restore();
+                    canvas.save(); canvas.scale((sf2, sf2)); render::render(nodes, root_idx, canvas); pw.composer.render_layer(canvas); canvas.restore();
                 });
                 sw.set_visible(true);
             }
@@ -2252,7 +2295,7 @@ fn gesture_down(pw: &mut PerWindow, scene_pos: (f32, f32)) {
     let hit = {
         let nodes = pw.composer.arena_nodes();
         let Some(r) = pw.composer.layout_root_idx() else { return; };
-        let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
+        let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
         // 跳过「是滚动容器祖先」的拖拽 fallback（如 BottomSheet 面板 on_drag）——
         // 列表区按下时面板不应建 drag tracker，否则与滚动双系统并发（列表没到头
         // sheet 就跟着动）。内层手势组件（slider/switch/按钮，drag 比 scroll 深）
@@ -2644,6 +2687,15 @@ fn layout_overlays(pw: &mut PerWindow) {
             }
         } else { pos };
         ov.screen_pos = (pos.0 + ov.offset.0, pos.1 + ov.offset.1);
+        // Flight coordinate frame (Phase 4 Tier1): overlay canvas renders
+        // translated by screen_pos — visuals store window-minus-origin.
+        ov.composer.screen_origin = ov.screen_pos;
+    }
+    // Shared-element Tier0 polls (mirrors the main-tree post-layout poll —
+    // overlay composers drive their own flights; Tier1 spans composers and
+    // is driven by cross-poll in the main flow below).
+    for ov in &mut pw.overlays {
+        ov.composer.poll_shared_flights();
     }
     // Overlay focus restore across recompositions (mirrors the main-tree
     // focused_slot_key restore in recompose_layout_render): arena node ids are
@@ -2674,7 +2726,7 @@ fn hit_overlay(pw: &PerWindow, scene_pos: (f32, f32)) -> Option<(usize, (f32, f3
         let local = (scene_pos.0 - ov.screen_pos.0, scene_pos.1 - ov.screen_pos.1);
         if let Some(r) = ov.composer.layout_root_idx() {
             let nodes = ov.composer.arena_nodes();
-            if !hit_test(nodes, r, local.0, local.1).is_empty() {
+            if !hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1).is_empty() {
                 return Some((i, local));
             }
         }
@@ -2750,6 +2802,8 @@ fn render_overlays(overlays: &[OverlayWindow], canvas: &skia_safe::Canvas, scale
         // 缺省会导致内容以 1x 绘制：可见位置/大小与命中测试（逻辑坐标）错位
         canvas.scale((scale, scale));
         render::render(nodes, r, canvas);
+        // Transition layer (sources + elevated endpoints), overlay-local coords.
+        ov.composer.render_layer(canvas);
         if anim_alpha < 1.0 {
             canvas.restore();
         }
@@ -2813,7 +2867,7 @@ fn exec_overlay_click(pw: &mut PerWindow) -> bool {
     }
     let Some(r) = ov.composer.layout_root_idx() else { return false; };
     let nodes = ov.composer.arena_nodes();
-    let path = hit_test(nodes, r, local.0, local.1);
+    let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1);
     // 沿路径找 clickable（最内层优先）
     let r = fire_click_along_path(nodes, &path);
     r
@@ -2861,7 +2915,7 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::modifier
         {
             let nodes = ov.composer.arena_nodes();
             if let Some(r) = ov.composer.layout_root_idx() {
-                let path = hit_test(nodes, r, local.0, local.1);
+                let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1);
                 let scroll_idx = path_scroll_idx(nodes, &path);
                 let drag_idx = path_drag_idx(nodes, &path);
                 // 内层拖拽组件优先于滚动（同一路径上，drag 比 scroll 更深）
@@ -2901,7 +2955,7 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::modifier
             // Scrim 层）的点击永远到不了 overlay_click → 点击丢失。
             let nodes = ov.composer.arena_nodes();
             if let Some(r) = ov.composer.layout_root_idx() {
-                let path = hit_test(nodes, r, local.0, local.1);
+                let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1);
                 if let Some(&idx) = path.iter().rev().find(|&&i| {
                     nodes[i].modifier.clickable_interaction().is_some()
                         || nodes[i].modifier.node_click_interaction().is_some()
@@ -2947,14 +3001,17 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::modifier
             let (path, focus_target, caret): (Vec<usize>, Option<(u64, u64, bool)>, Option<(usize, usize)>) = match {
                 let ov = &pw.overlays[i];
                 let nodes = ov.composer.arena_nodes();
+                // Owned roots: the scrutinee borrow ends here, but the arm
+                // below needs them (and `ov` there is the outer `&mut` binding).
+                let troots: Vec<usize> = ov.composer.transition_roots().to_vec();
                 match ov.composer.layout_root_idx() {
                     None => None,
-                    Some(r) => Some((nodes, r)),
+                    Some(r) => Some((nodes, r, troots)),
                 }
             } {
                 None => (Vec::new(), None, None),
-                Some((nodes, r)) => {
-                let path = hit_test(nodes, r, local.0, local.1);
+                Some((nodes, r, troots)) => {
+                let path = hit_test_with_flights(nodes, r, &troots, local.0, local.1);
                 let focus_target = path.iter().rev().find_map(|&idx| {
                     let focusable = crate::layout::node::has_focusable_modifier(&nodes[idx]);
                     let wants_ime = nodes[idx].ime_callback.borrow().is_some();
@@ -3030,7 +3087,7 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::modifier
         // (ov borrow ended at the Press block above; re-index here.)
         let nid = pw.overlays[i].composer.layout_root_idx().and_then(|r| {
             let nodes = pw.overlays[i].composer.arena_nodes();
-            hit_test(nodes, r, local.0, local.1).last().map(|&idx| nodes[idx].id)
+            hit_test_with_flights(nodes, r, pw.overlays[i].composer.transition_roots(), local.0, local.1).last().map(|&idx| nodes[idx].id)
         });
         pw.overlay_click = Some((i, local, nid.unwrap_or(0)));
         return true; // 事件消费——不进主树
@@ -3179,7 +3236,7 @@ fn update_hover(pw: &mut PerWindow, scene_pos: (f32, f32)) {
     let hit: Vec<(u64, crate::ui::interaction::MutableInteractionSource)> = {
         let nodes = pw.composer.arena_nodes();
         let Some(r) = pw.composer.layout_root_idx() else { return; };
-        let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
+        let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
         path.iter()
             .filter(|&&i| nodes[i].modifier.has_hoverable())
             .filter_map(|&i| nodes[i].modifier.hoverable_interaction().map(|s| (nodes[i].slot_key, s.clone())))
@@ -3206,7 +3263,7 @@ fn overlay_update_hover(ov: &mut OverlayWindow, local: (f32, f32)) {
     let hit: Vec<(u64, crate::ui::interaction::MutableInteractionSource)> = {
         let nodes = ov.composer.arena_nodes();
         let Some(r) = ov.composer.layout_root_idx() else { return; };
-        let path = hit_test(nodes, r, local.0, local.1);
+        let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1);
         path.iter()
             .filter(|&&i| nodes[i].modifier.has_hoverable())
             .filter_map(|&i| nodes[i].modifier.hoverable_interaction().map(|s| (nodes[i].slot_key, s.clone())))
@@ -3270,7 +3327,7 @@ fn detect_click(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
     if dist <= CLICK_SLOP && in_time {
         let nodes = pw.composer.arena_nodes();
         if let Some(r) = pw.composer.layout_root_idx() {
-            let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
+            let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
             let hit = down_slot
                 .map(|slot| path.iter().any(|&i| nodes[i].slot_key == slot))
                 .unwrap_or_else(|| path.iter().any(|&i| nodes[i].id == down.node_id));
@@ -3493,7 +3550,7 @@ fn handle_pointer_down(
     }
     let nodes = pw.composer.arena_nodes();
     let Some(r) = pw.composer.layout_root_idx() else { return false; };
-    let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
+    let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
     let Some(&innermost) = path.last() else { return false; };
 
     // 清除旧的选区（新点击开始）
@@ -3573,7 +3630,7 @@ fn handle_pointer_down(
     pw.drag_scroll = (|| {
         let nodes = pw.composer.arena_nodes();
         let Some(r) = pw.composer.layout_root_idx() else { return None };
-        let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
+        let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
         #[cfg(debug_assertions)]
         if drag_trace_enabled() {
             eprintln!("[drag-down] scene=({},{}) path_len={} path={:?}",
@@ -3833,7 +3890,7 @@ fn handle_pointer_move(
     }
     let nodes = pw.composer.arena_nodes();
     let Some(r) = pw.composer.layout_root_idx() else { return false; };
-    let path = hit_test(nodes, r, scene_pos.0, scene_pos.1);
+    let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
 
     // 拖拽选中文本
     if pw.pointer_down_state.is_some() {
@@ -3851,8 +3908,9 @@ fn handle_pointer_move(
                 let (abs_x, abs_y) = node_abs_position(nodes, r, nodes[innermost].id);
                 if let Ok(borrow) = nodes[innermost].cached_paragraph.try_borrow() {
                     if let Some(para) = borrow.as_ref() {
-                        // 对齐偏移（匹配渲染侧 x_off）
-                        let node_w = nodes[innermost].measured_size.width;
+                        // 对齐偏移（匹配渲染侧 x_off）——绘制用内容盒，选区高亮须一致
+                        //（飞行中 measured_size 是父级被告知的尺寸，review R3-F6）
+                        let node_w = nodes[innermost].content_box().width;
                         let align = nodes[innermost].modifier.align().unwrap_or(crate::ui::TextAlign::Left);
                         let x_off = match align {
                             crate::ui::TextAlign::Center => abs_x + (node_w - para.max_intrinsic_width()).max(0.0) / 2.0,
@@ -3923,7 +3981,7 @@ fn handle_pointer_move(
 /// 减过滚动量的"滚动画布坐标"）。此前纯累加 layout position，滚动容器内
 /// 节点绝对 y 被滚动量污染 → 段落局部坐标（scene - abs）偏负 → skia 最近
 /// glyph 恒为第一行——多行 TextField 点击/拖拽只能定位到第一行。
-fn node_abs_position(nodes: &[LayoutNode], root: usize, id: u64) -> (f32, f32) {
+pub(crate) fn node_abs_position(nodes: &[LayoutNode], root: usize, id: u64) -> (f32, f32) {
     fn walk(nodes: &[LayoutNode], idx: usize, target: u64, abs_x: f32, abs_y: f32) -> Option<(f32, f32)> {
         let node = &nodes[idx];
         let nx = abs_x + node.position.x;

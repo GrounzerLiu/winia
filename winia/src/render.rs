@@ -8,7 +8,9 @@ use crate::debug_log;
 use crate::layout::LayoutDirection;
 use crate::layout::node::LayoutNode;
 use crate::modifier::ModifierElement;
+use crate::ui::animated_visibility::{ExpandFrom, ExpandFromH, SlideDirection, SlideOffset};
 use crate::ui::icon::{DecodedIcon, IconSource, IconSpec, decoded_icon};
+use crate::ui::shared_transition::TransitionRole;
 use skia_safe::{BlendMode, Canvas, Color4f, IRect, Paint, RRect, Rect, SamplingOptions};
 use skia_safe::sampling_options::{FilterMode, MipmapMode};
 use skia_safe::image_filters;
@@ -18,7 +20,43 @@ use std::cell::RefCell;
 // ── 入口 ──
 
 pub fn render(nodes: &[LayoutNode], root_idx: usize, canvas: &Canvas) {
-    render_pass1(nodes, root_idx, root_idx, canvas, 0.0, 0.0);
+    render_pass1(nodes, root_idx, root_idx, canvas, 0.0, 0.0, false, false);
+}
+
+/// Draw one node as a **transition-layer root** at an explicit absolute
+/// position, on a canvas that carries no ancestor clips or layer transforms.
+///
+/// This is the Compose `renderInOverlayDuringTransition` elevation: the node
+/// keeps its place in the tree (layout, state and hit testing are untouched)
+/// and is merely re-drawn from the root of the canvas by
+/// [`Composer::render_layer`], which is `pub(crate)` — see
+/// `docs/shared-element-transition.md` §3.6.
+/// `root_idx` stays the REAL tree root — the text-field helpers inside
+/// `render_pass1` resolve colours and offset mappings by walking up to it, so
+/// passing the drawn node as the root would cut that walk short.
+pub fn render_node_at(
+    nodes: &[LayoutNode],
+    root_idx: usize,
+    idx: usize,
+    canvas: &Canvas,
+    abs_x: f32,
+    abs_y: f32,
+) {
+    let node = &nodes[idx];
+    // `render_pass1` adds `parent_*` to the node's own (parent-relative)
+    // position — invert that so the node lands exactly on the absolute point.
+    render_pass1(
+        nodes,
+        root_idx,
+        idx,
+        canvas,
+        abs_x - node.position.x,
+        abs_y - node.position.y,
+        true,
+        // Everything BELOW this entry is painted on a canvas that carries no
+        // ancestor translate, so descendants must not add a frozen scroll sum.
+        true,
+    );
 }
 
 // ── 视觉 Modifier 渲染（Background / Border / TextContent）──
@@ -175,11 +213,14 @@ fn shadow_path(rect: Rect, shape: &crate::modifier::Shape) -> skia_safe::Path {
             let radius = rect.width().min(rect.height()) / 2.0;
             skia_safe::Path::rrect(RRect::new_rect_xy(rect, radius, radius), None)
         }
-        crate::modifier::Shape::Circle => skia_safe::Path::circle(
-            (rect.center_x(), rect.center_y()),
-            rect.width().min(rect.height()) / 2.0,
-            None,
-        ),
+        crate::modifier::Shape::Circle => {
+            // Compose's `CircleShape` IS `RoundedCornerShape(50)`: a percent corner
+            // evaluated against the box, so a non-square box gives a stadium — not
+            // a true circle (which leaves the box mostly unpainted) and not an
+            // ellipse. Identical to `Pill`, as in Compose.
+            let radius = rect.width().min(rect.height()) / 2.0;
+            skia_safe::Path::rrect(RRect::new_rect_xy(rect, radius, radius), None)
+        }
     }
 }
 
@@ -242,7 +283,8 @@ fn draw_shadow_layer(
             sc.draw_rrect(RRect::new_rect_xy(local, r, r), &mask);
         }
         crate::modifier::Shape::Circle => {
-            sc.draw_circle((local.center_x(), local.center_y()), local.width().min(local.height()) / 2.0, &mask);
+            let r = local.width().min(local.height()) / 2.0;
+            sc.draw_rrect(RRect::new_rect_xy(local, r, r), &mask);
         }
     }
     // spread：外圈 stroke（Fill + Stroke 两遍——Compose createOuterShadowBitmap 同款）
@@ -271,7 +313,8 @@ fn draw_shadow_layer(
                 sc.draw_rrect(RRect::new_rect_xy(local, r, r), &stroke);
             }
             crate::modifier::Shape::Circle => {
-                sc.draw_circle((local.center_x(), local.center_y()), local.width().min(local.height()) / 2.0, &stroke);
+                let r = local.width().min(local.height()) / 2.0;
+                sc.draw_rrect(RRect::new_rect_xy(local, r, r), &stroke);
             }
         }
     }
@@ -319,26 +362,47 @@ fn render_modifier_element<'a>(
     rect: Rect,
     x: f32, y: f32, w: f32, h: f32,
     last_background: &mut Option<(crate::modifier::Color, crate::modifier::Shape)>,
+    morph_radii: Option<[(f32, f32); 4]>,
 ) -> Option<TextParams<'a>> {
     match el {
         ModifierElement::Background { color_fn, shape } => {
             let color = (color_fn)();
             *last_background = Some((color, shape.clone()));
-            draw_background(canvas, rect, &color, shape);
+            match morph_radii {
+                Some(r) => {
+                    let mut paint = skia_safe::Paint::default();
+                    paint.set_anti_alias(true);
+                    paint.set_color4f(Color4f::from(&color), None);
+                    canvas.draw_rrect(
+                        skia_safe::RRect::new_rect_radii(
+                            rect,
+                            &crate::ui::shared_transition::rrect_vectors(r),
+                        ),
+                        &paint,
+                    );
+                }
+                None => draw_background(canvas, rect, &color, shape),
+            }
             None
         }
         ModifierElement::Border { width, color, shape } => {
             // 边框色与形状均等于容器时合并为纯填充（M3 drawBox 语义）：
             // 半透明色在填充上再叠一层 stroke 会双重混合，边框带明显深于内部
             if *last_background != Some((*color, shape.clone())) {
-                draw_border(canvas, x, y, w, h, *width, color, shape);
+                match morph_radii {
+                    Some(r) => draw_border_morphed(canvas, x, y, w, h, *width, color, r),
+                    None => draw_border(canvas, x, y, w, h, *width, color, shape),
+                }
             }
             None
         }
         ModifierElement::BorderDynamic { width, color_fn, shape } => {
             let color = (color_fn)();
             if *last_background != Some((color, shape.clone())) {
-                draw_border(canvas, x, y, w, h, *width, &color, shape);
+                match morph_radii {
+                    Some(r) => draw_border_morphed(canvas, x, y, w, h, *width, &color, r),
+                    None => draw_border(canvas, x, y, w, h, *width, &color, shape),
+                }
             }
             None
         }
@@ -627,15 +691,193 @@ fn render_pass1(
     idx: usize,
     canvas: &Canvas,
     parent_x: f32, parent_y: f32,
+    layer_root: bool,
+    // This subtree is painted on a ROOTLESS canvas (a layer entry above it):
+    // the ancestor translate is not on the canvas, so a transitioning node
+    // inside must not add its frozen scroll sum. `layer_root` cannot answer
+    // this — it is about the node itself, this is about the canvas.
+    rootless: bool,
 ) {
     let node = &nodes[idx];
+    // Elevated endpoint: this subtree is painted by the transition layer
+    // (after the whole tree), so the in-tree walk must not paint it again —
+    // that is what lets it escape ancestor clips (a canvas clip can never be
+    // un-set by a descendant) and land above non-shared siblings. Layout,
+    // state and hit testing are untouched; only paint moves. Same switch for
+    // chrome that opted into the scope overlay (pinned bars): it is re-drawn
+    // untransformed at the end of the layer, above the flights.
+    if !layer_root
+        && (node.transition.as_ref().is_some_and(|t| t.elevated) || node.in_scope_overlay)
+    {
+        return;
+    }
     let x = parent_x + node.position.x;
     let y = parent_y + node.position.y;
-    let w = node.measured_size.width;
-    let h = node.measured_size.height;
+    // Content box, NOT `measured_size`: while a flight reports a placeholder
+    // size (Compose `PlaceHolderSize`) the latter is what the PARENT was told,
+    // so painting, clipping and child placement must use this instead.
+    let content_box = node.content_box();
+    let w = content_box.width;
+    let h = content_box.height;
     if w <= 0.0 || h <= 0.0 { return; }
 
     let rect = Rect::new(x, y, x + w, y + h);
+
+    // Shared-element flight visuals (Tier 0): outermost morph — pure
+    // render-phase (translate/scale/alpha/clip), zero recomposition.
+    // Backdrop blur snapshots AFTER the transform (whatever lies beneath the
+    // visual position); backdrop-blur heroes are a documented limitation.
+    // Nested limitation: a transitioning descendant of a transitioning node
+    // compounds both transforms (no ancestor-flight guard) — do not put
+    // shared markers on descendants of shared markers.
+    // bg/border/clip-element morphs consume `tf_radii` below (radii pairs in
+    // layout space — pre-divided by the flight axis scales).
+    let (tf_saved, tf_layered, tf_radii): (bool, bool, Option<[(f32, f32); 4]>) =
+        if let Some(t) = node.transition.as_ref() {
+            // Unclamped progress: spring overshoot (t > 1 / t < 0) flies past
+            // the endpoint — the Compose spring look. Every consumer
+            // (lerp, radii, clip, hit) shares this single t; only opacity
+            // stays clamped (alpha()) and degenerate rects stay invisible.
+            // Paint follows the SAME arc-aware lerped() as hit (a raw
+            // start.lerp here would silently straighten arc flights).
+            let l = t.lerped();
+            let alpha = t.alpha();
+            if alpha <= 0.001 || l.width <= 0.0 || l.height <= 0.0 {
+                return;
+            }
+            canvas.save();
+            // Expand wipes in from the edge — force the lerped-bounds clip
+            // even when the marker asked for none (else content overflows).
+            // Morphs never run channels (same content, no appear/disappear).
+            let fx_clip = match (&t.role, t.bounds_fx.as_ref()) {
+                (TransitionRole::Morph, _) | (_, None) => false,
+                (TransitionRole::Target, Some((enter, _))) => enter.expand || enter.expand_h,
+                (TransitionRole::Source, Some((_, exit))) => exit.expand || exit.expand_h,
+            };
+            if t.clip || fx_clip {
+                canvas.clip_rrect(t.canvas_rrect(), None, Some(true));
+            }
+            // Ancestor scroll add-back (BLOCKER #1): the canvas carries
+            // translate(-S) from scrolled ancestors while `l` is
+            // scroll-corrected — painting at `l + S` lands exactly on the
+            // lerped rect (the frame hit test and ghost routing use).
+            // Pivot stays the pure layout origin: content is drawn at layout
+            // coords, so final(p) = l + S - S + s*(p - node_origin).
+            // A LAYER ROOT renders on a canvas with no ancestor translate and
+            // at a scroll-corrected origin, so it must not add the sum back —
+            // the same bit that routed this node to the layer (skip in the
+            // walk, paint here) decides the add-back too, so the two can never
+            // disagree.
+            // The canvas decides, not the node: a layer entry is painted with no
+            // ancestor translate, so neither it nor anything below it may add
+            // the frozen scroll sum back (that would double-count).
+            let scroll = if rootless { (0.0, 0.0) } else { t.scroll };
+            canvas.translate((l.x + scroll.0, l.y + scroll.1));
+            // sharedBounds enter/exit channels, evaluated at appearance
+            // amount q (target appears with p, source disappears with 1-p).
+            // Slide offsets, scale k and expand (≈ scale-about-edge; layout
+            // followers already sit at end state under JumpCut, so expand
+            // reads as scale+clip). Element flights and morphs skip.
+            // ORDER: channels live in DEVICE space (right after the flight
+            // translate, before the flight scale) — appending them after
+            // scale would multiply offsets by the axis scales (which differ
+            // per end: the ghost grows while the target shrinks).
+            if let Some((enter, exit)) = t.bounds_fx.as_ref() {
+                let (cfg, q) = match t.role {
+                    TransitionRole::Target => (enter, t.progress),
+                    TransitionRole::Source => (exit, 1.0 - t.progress),
+                    TransitionRole::Morph => (enter, 1.0),
+                };
+                if !matches!(t.role, TransitionRole::Morph) {
+                    if let Some((dir, off)) = cfg.slide {
+                        let full = match dir {
+                            SlideDirection::Left | SlideDirection::Right => l.width,
+                            SlideDirection::Up | SlideDirection::Down => l.height,
+                        };
+                        let dist = match off {
+                            SlideOffset::Fixed(px) => px,
+                            SlideOffset::Fraction(f) => f * full,
+                        };
+                        let o = (1.0 - q) * dist;
+                        let (ox, oy) = match dir {
+                            SlideDirection::Left => (-o, 0.0),
+                            SlideDirection::Right => (o, 0.0),
+                            SlideDirection::Up => (0.0, -o),
+                            SlideDirection::Down => (0.0, o),
+                        };
+                        canvas.translate((ox, oy));
+                    }
+                    // Scale pivot is RELATIVE to the lerped origin (this block
+                    // sits before the flight scale — absolute device pivots
+                    // would be scaled along; same trap as the slide above).
+                    // NOTE: expand takes over the scale pivot (single merged
+                    // k) — combining scale+expand on one endpoint is
+                    // discouraged (Compose layers them; v1 merges).
+                    let mut kx = 1.0f32;
+                    let mut ky = 1.0f32;
+                    let mut px = l.width * cfg.transform_origin.0;
+                    let mut py = l.height * cfg.transform_origin.1;
+                    if cfg.scale {
+                        let k = cfg.scale_from + (1.0 - cfg.scale_from) * q;
+                        kx *= k;
+                        ky *= k;
+                    }
+                    if cfg.expand {
+                        ky *= q;
+                        px = l.width * 0.5;
+                        py = match cfg.expand_from {
+                            ExpandFrom::Top => 0.0,
+                            ExpandFrom::Bottom => l.height,
+                        };
+                    }
+                    if cfg.expand_h {
+                        kx *= q;
+                        px = match cfg.expand_from_h {
+                            ExpandFromH::Start => 0.0,
+                            ExpandFromH::End => l.width,
+                        };
+                        py = l.height * 0.5;
+                    }
+                    if (kx - 1.0).abs() > 1e-6 || (ky - 1.0).abs() > 1e-6 {
+                        canvas.translate((px, py));
+                        canvas.scale((kx, ky));
+                        canvas.translate((-px, -py));
+                    }
+                }
+            }
+            // Scale the content box into the lerped rect. `paint_scale` owns the
+            // rule (and is unit-tested): a RE-MEASURED end must not scale at all
+            // — its content was already laid out at the animated size, and the
+            // box trails `lerped()` by one poll (writers run after layout), so
+            // scaling by `l/box` would stretch the freshly re-flowed content by
+            // the frame delta (measured 1.22-1.29x in the real app loop).
+            // Everything else scales its content box into the lerped rect.
+            let (sx, sy) = t.paint_scale(w, h);
+            canvas.scale((sx, sy));
+            // Scale about the lerped origin (not the canvas origin): content
+            // drawn at layout coords must land on the lerped rect, i.e.
+            // final(p) = l + s*(p - node_origin). Same pivot convention as
+            // apply_gl_transform and remap_hit.
+            canvas.translate((-x, -y));
+            let mut layered = false;
+            if alpha < 0.999 {
+                let mut paint = skia_safe::Paint::default();
+                paint.set_alpha_f(alpha);
+                canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default().paint(&paint));
+                layered = true;
+            }
+            (true, layered, Some(t.radii_pairs(
+                if t.remeasure { l.width } else { w },
+                if t.remeasure { l.height } else { h },
+            )))
+        } else {
+            (false, false, None)
+        };
+    // Layout-space morph rect for the Clip-element arm (lands exactly on the
+    // lerped bounds under the flight transform, by linearity).
+    let tf_clip_rr: Option<skia_safe::RRect> = tf_radii.map(|r| {
+        skia_safe::RRect::new_rect_radii(rect, &crate::ui::shared_transition::rrect_vectors(r))
+    });
 
     // 背景模糊：在节点**自身任何内容（背景/文本/子节点）绘制之前**处理——
     // snapshot 只含"位于其下"的已画内容（祖先 + 前面的兄弟），对齐 Compose
@@ -826,6 +1068,7 @@ fn render_pass1(
                     w,
                     h,
                     &mut last_background,
+                    tf_radii,
                 ) {
                     text = Some((tp.content, tp.font_size, tp.color, tp.max_lines, tp.align, tp.overflow, tp.font_weight, tp.font_style, tp.soft_wrap, tp.letter_spacing, tp.line_height));
                 }
@@ -855,8 +1098,14 @@ fn render_pass1(
     }
 
     // Clip：在绘制内容前设置裁剪区域
+    // （转场 morph 优先：布局空间圆角在变换下精确落到插值矩形上——与
+    // transiton-block 的屏幕空间 clip 等价，由线性保证；仅取其一时行为一致）
     let mut clipped = false;
-    if let Some(ref shape) = clip_shape {
+    if let Some(rr) = tf_clip_rr {
+        canvas.save();
+        canvas.clip_rrect(rr, None, Some(false));
+        clipped = true;
+    } else if let Some(ref shape) = clip_shape {
         canvas.save();
         match shape {
             crate::modifier::Shape::Rectangle => { canvas.clip_rect(rect, None, Some(false)); }
@@ -877,7 +1126,10 @@ fn render_pass1(
                 canvas.clip_rrect(RRect::new_rect_xy(rect, r, r), None, Some(false));
             }
             crate::modifier::Shape::Circle => {
-                canvas.clip_rrect(RRect::new_oval(rect), None, Some(false));
+                // Circle == Pill (see the fill path): percent-50 corners against
+                // the box, not an ellipse.
+                let r = rect.width().min(rect.height()) / 2.0;
+                canvas.clip_rrect(RRect::new_rect_xy(rect, r, r), None, Some(false));
             }
         }
         clipped = true;
@@ -1066,7 +1318,7 @@ fn render_pass1(
 
     // 穿行子节点（backdrop 节点自身内容照常绘制在模糊层之上）
     for &child in &node.children {
-        render_pass1(nodes, root_idx, child, canvas, x, y);
+        render_pass1(nodes, root_idx, child, canvas, x, y, false, rootless);
     }
 
     // Ripple indication — above content, inside shape/scroll clipping
@@ -1093,6 +1345,14 @@ fn render_pass1(
     }
 
     if gl_saved {
+        canvas.restore();
+    }
+
+    // Flight morph restores (LIFO: the outermost block restores last).
+    if tf_layered {
+        canvas.restore();
+    }
+    if tf_saved {
         canvas.restore();
     }
 }
@@ -1152,9 +1412,10 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
                     );
                 }
                 Some(crate::modifier::Shape::Circle) => {
-                    // 圆形裁剪（此前落入 _ => clip_rect 被裁成矩形——
-                    // IconButton 等圆形容器的波纹呈矩形）
-                    canvas.clip_rrect(skia_safe::RRect::new_oval(rect), None, Some(false));
+                    // Circle == Pill (see the fill path): percent-50 corners, so a
+                    // non-square box is a stadium, not an ellipse.
+                    let r = rect.width().min(rect.height()) / 2.0;
+                    canvas.clip_rrect(RRect::new_rect_xy(rect, r, r), None, Some(false));
                 }
                 _ => {
                     canvas.clip_rect(rect, None, Some(false));
@@ -1402,7 +1663,11 @@ fn draw_background(canvas: &Canvas, rect: Rect, color: &crate::modifier::Color, 
             canvas.draw_rrect(RRect::new_rect_xy(rect, r, r), &paint);
         }
         crate::modifier::Shape::Circle => {
-            canvas.draw_circle((rect.center_x(), rect.center_y()), rect.width().min(rect.height()) / 2.0, &paint);
+            // Circle == Pill == Compose `RoundedCornerShape(50)`: percent corners
+            // against the box, so a non-square box is a stadium. Drawing a true
+            // circle left most of a wide box unpainted.
+            let r = rect.width().min(rect.height()) / 2.0;
+            canvas.draw_rrect(RRect::new_rect_xy(rect, r, r), &paint);
         }
     }
 }
@@ -1532,6 +1797,31 @@ fn draw_text_field_aux_text(
     para.paint(canvas, pos.0, pos.1);
 }
 
+/// Border with flight-morphed radii (layout-space pairs — drawn under the
+/// flight transform; inset logic mirrors `draw_border`).
+fn draw_border_morphed(
+    canvas: &Canvas,
+    x: f32, y: f32, w: f32, h: f32,
+    width: f32,
+    color: &crate::modifier::Color,
+    r: [(f32, f32); 4],
+) {
+    let mut paint = Paint::default();
+    paint.set_color4f(Color4f::from(color), None);
+    paint.set_style(skia_safe::paint::Style::Stroke);
+    paint.set_stroke_width(width);
+    paint.set_anti_alias(true);
+    let inset = width / 2.0;
+    let sr = Rect::new(x + inset, y + inset, x + w - inset, y + h - inset);
+    let v = |i: usize| {
+        skia_safe::Vector::new((r[i].0 - inset).max(0.0), (r[i].1 - inset).max(0.0))
+    };
+    canvas.draw_rrect(
+        skia_safe::RRect::new_rect_radii(sr, &[v(0), v(1), v(2), v(3)]),
+        &paint,
+    );
+}
+
 fn draw_border(canvas: &Canvas, x: f32, y: f32, w: f32, h: f32, width: f32, color: &crate::modifier::Color, shape: &crate::modifier::Shape) {
     let mut paint = Paint::default();
     paint.set_color4f(Color4f::from(color), None);
@@ -1562,7 +1852,8 @@ fn draw_border(canvas: &Canvas, x: f32, y: f32, w: f32, h: f32, width: f32, colo
             canvas.draw_rrect(RRect::new_rect_xy(sr, r, r), &paint);
         }
         crate::modifier::Shape::Circle => {
-            canvas.draw_circle((sr.center_x(), sr.center_y()), sr.width().min(sr.height()) / 2.0, &paint);
+            let r = sr.width().min(sr.height()) / 2.0;
+            canvas.draw_rrect(RRect::new_rect_xy(sr, r, r), &paint);
         }
     }
 }
@@ -1632,11 +1923,8 @@ pub(crate) fn draw_focus(
             canvas.draw_rrect(RRect::new_rect_xy(sr, r, r), &paint);
         }
         crate::modifier::Shape::Circle => {
-            canvas.draw_circle(
-                (sr.center_x(), sr.center_y()),
-                sr.width().min(sr.height()) / 2.0,
-                &paint,
-            );
+            let r = sr.width().min(sr.height()) / 2.0;
+            canvas.draw_rrect(RRect::new_rect_xy(sr, r, r), &paint);
         }
     }
 }

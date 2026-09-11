@@ -759,6 +759,43 @@ pub(crate) enum ModifierElement {
     NestedScroll { connection: Arc<dyn crate::nested_scroll::NestedScrollConnection> },
     /// 图形层变换（scale/alpha/rotation/translation——只触发重绘，不触发布局）
     GraphicsLayer { params_fn: Arc<dyn Fn() -> GraphicsLayerParams + Send + Sync> },
+    /// 共享元素转场标记（ui::shared_transition——纯数据标记：配对身份 + 变形规格；
+    /// 组合期注册端点（Phase 2），渲染期忽略（`_ =>` 兜底）。bounds 不进
+    /// modifier——飞行是 render-phase 行为，bounds 变化永不强制 Enter）
+    SharedTransition {
+        scope_id: u64,
+        key: String,
+        kind: crate::ui::shared_transition::SharedKind,
+        transform: crate::ui::shared_transition::BoundsTransform,
+        path: crate::ui::shared_transition::PathMotion,
+        /// Overlay z-order for the flying pair (Compose `zIndexInOverlay`,
+        /// default 0). Orders retained ghosts back-to-front; in-tree targets
+        /// keep tree order (documented Tier 0 limitation).
+        z_index: f32,
+        /// sharedBounds enter/exit (Compose `enter`/`exit` — target plays
+        /// enter, source plays exit; `None` on sharedElement markers, which
+        /// have no such parameters and always crossfade).
+        enter: Option<crate::ui::animated_visibility::VisibilityTransition>,
+        exit: Option<crate::ui::animated_visibility::VisibilityTransition>,
+        /// Render this endpoint in the transition layer during the flight
+        /// (Compose `renderInOverlayDuringTransition`, default `true`): the
+        /// flying element escapes ancestor clips and ancestor layer
+        /// transforms and paints above non-shared content. `false` keeps the
+        /// pre-Phase-6 in-tree painting (ancestors keep clipping it). Frozen
+        /// at flight resolve — flipping it mid-flight must not move the
+        /// element between passes.
+        render_in_overlay: bool,
+    },
+    /// Elevate a **non-shared** subtree into the layer for the duration of a
+    /// transition (Compose `Modifier.renderInSharedTransitionScopeOverlay`):
+    /// pinned app bars / FABs keep their spatial relationship while shared
+    /// elements fly over them, and return to ordinary tree order when the
+    /// transition ends. `z_index` is Compose's `zIndexInOverlay` — shared
+    /// endpoints default to 0, so a bar that must stay on top passes more.
+    SharedScopeOverlay {
+        scope_id: u64,
+        z_index: f32,
+    },
 }
 
 // ── Modifier ──
@@ -2345,6 +2382,23 @@ Self::DrawIcon { .. } => f.write_str("DrawIcon"),
             Self::BackdropBlur { radius } => f.debug_struct("BackdropBlur").field("radius", radius).finish(),
             Self::TextFieldVisual { variant, .. } => f.debug_struct("TextFieldVisual").field("variant", variant).finish(),
             Self::TextFieldOffsetMapping { .. } => f.write_str("TextFieldOffsetMapping"),
+            Self::SharedTransition { scope_id, key, kind, transform, path, z_index, enter, exit, render_in_overlay } => f
+                .debug_struct("SharedTransition")
+                .field("scope", scope_id)
+                .field("key", key)
+                .field("kind", kind)
+                .field("transform", transform)
+                .field("path", path)
+                .field("z_index", z_index)
+                .field("has_enter", &enter.is_some())
+                .field("has_exit", &exit.is_some())
+                .field("render_in_overlay", render_in_overlay)
+                .finish(),
+            Self::SharedScopeOverlay { scope_id, z_index } => f
+                .debug_struct("SharedScopeOverlay")
+                .field("scope", scope_id)
+                .field("z_index", z_index)
+                .finish(),
         }
     }
 }
@@ -3042,6 +3096,20 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         }
         (TestTag { tag: at }, TestTag { tag: bt }) => at == bt,
         (LayoutDirection(ad), LayoutDirection(bd)) => ad == bd,
+        // Shared-element marker: only scope + key + kind decide Skip. `z_index`
+        // is re-read from the arena marker every poll, and everything else
+        // (bounds/transform/render_in_overlay) either rides flight progress or
+        // is sampled at resolve — none of them forces Enter.
+        (
+            SharedTransition { scope_id: a_id, key: a_key, kind: a_kind, .. },
+            SharedTransition { scope_id: b_id, key: b_key, kind: b_kind, .. },
+        ) => a_id == b_id && a_key == b_key && a_kind == b_kind,
+        // Overlay marker: scope or z changing must rebuild the node, because the
+        // coordinator reads the value from this modifier in the arena.
+        (
+            SharedScopeOverlay { scope_id: a_id, z_index: a_z },
+            SharedScopeOverlay { scope_id: b_id, z_index: b_z },
+        ) => a_id == b_id && a_z == b_z,
         (Shadow { params: ap, shape: as_, clip: ac }, Shadow { params: bp, shape: bs, clip: bc }) => {
             ap == bp && as_ == bs && ac == bc
         }

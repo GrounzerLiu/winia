@@ -1,6 +1,7 @@
 //! 布局节点 — LayoutNode 及相关的尺寸/位置/排列/对齐类型
 
 use crate::modifier::{Modifier, ModifierElement, RichSpanStyle};
+use crate::ui::shared_transition::{abs_rect_upward, find_idx_by_slot, TransitionRole};
 use crate::ui::text::FontSlant;
 use skia_safe::FontStyle as SkFontStyle;
 use skia_safe::textlayout::TextStyle as SkTextStyle;
@@ -200,6 +201,27 @@ pub struct LayoutNode {
     /// IME 组合下划线颜色（组合期捕获主题 primary——渲染期不能读
     /// CompositionLocal（Phase 4.2）；未设置时回退默认色）
     pub(crate) composing_color: std::cell::Cell<crate::modifier::Color>,
+    /// 共享元素转场视觉（Phase 2）：`Some` 时渲染期按起止矩形做 morph
+    /// （位移/缩放/淡入淡出/圆角），命中测试跳过。逐帧由协调器重写；
+    /// 转场结束即清 `None`。刻意不进 `CachedNode`——飞行态是瞬态，
+    /// 缓存命中必须从干净状态重建（协调器按 slot 回填）。
+    pub(crate) transition: Option<crate::ui::shared_transition::TransitionVisual>,
+    /// Non-shared subtree elevated into the layer for the duration of a
+    /// transition (Compose `renderInSharedTransitionScopeOverlay`): the tree
+    /// walk skips it and the coordinator re-draws it untransformed at the end
+    /// of the layer, so it stays above the flying endpoints. Recomputed every
+    /// frame by `refresh_scope_overlay_roots` — transient, never cached.
+    pub(crate) in_scope_overlay: bool,
+    /// Flight layout override (Compose `ResizeMode` / `PlaceHolderSize`),
+    /// written per frame by the coordinator while a flight owns this node.
+    /// `None` = ordinary layout — the default path never touches it.
+    pub(crate) flight_measure: Option<FlightMeasure>,
+    /// The box the node's own layout/paint occupies while a flight reports a
+    /// placeholder size: render, clip and hit testing must use THIS, because
+    /// `measured_size` then carries the size the parent was told (Compose
+    /// `PlaceHolderSize`), and parents re-write it from their placements.
+    /// `None` = `measured_size` is the content box, as always.
+    pub(crate) flight_content_size: Option<Size>,
 }
 
 // ── CachedNode：LayoutNode 的可缓存子集，用于增量重组时恢复节点 ──
@@ -210,6 +232,11 @@ pub struct LayoutNode {
 pub(crate) struct CachedNode {
     pub modifier: Modifier,
     pub measured_size: Size,
+    /// Content box while a flight reports a placeholder size. It MUST travel with
+    /// `measured_size`: after `place()` the latter holds the size the PARENT was
+    /// told, so a rebuilt node without this would resurrect the placeholder as its
+    /// own content box — the exact confusion the flight layout contract removed.
+    pub flight_content_size: Option<Size>,
     pub position: Point,
     pub focused: bool,
     pub dirty: bool,
@@ -228,6 +255,7 @@ impl LayoutNode {
         CachedNode {
             modifier: self.modifier.clone(),
             measured_size: self.measured_size,
+            flight_content_size: self.flight_content_size,
             position: self.position,
             focused: self.focused,
             dirty: self.dirty,
@@ -242,6 +270,7 @@ impl LayoutNode {
     pub(crate) fn restore_from(&mut self, cached: &CachedNode) {
         self.modifier = cached.modifier.clone();
         self.measured_size = cached.measured_size;
+        self.flight_content_size = cached.flight_content_size;
         self.position = cached.position;
         self.focused = cached.focused;
         self.dirty = cached.dirty;
@@ -258,6 +287,7 @@ impl LayoutNode {
     /// 用于 start_node 的 clean leaf 恢复；Skip 的 stub 用完整 restore_from。
     pub(crate) fn restore_layout(&mut self, cached: &CachedNode) {
         self.measured_size = cached.measured_size;
+        self.flight_content_size = cached.flight_content_size;
         self.position = cached.position;
         self.focused = cached.focused;
         self.dirty = cached.dirty;
@@ -306,6 +336,10 @@ impl LayoutNode {
             composing_range: std::cell::RefCell::new(None),
             focus_color: std::cell::Cell::new(crate::modifier::Color::from_argb(204, 77, 153, 255)),
             composing_color: std::cell::Cell::new(crate::modifier::Color::TRANSPARENT),
+            transition: None,
+            in_scope_overlay: false,
+            flight_measure: None,
+            flight_content_size: None,
         }
     }
 
@@ -324,6 +358,17 @@ impl LayoutNode {
     /// 是否叶子节点
     pub fn is_leaf(&self) -> bool {
         self.children.is_empty() && self.measure_policy.is_none()
+    }
+}
+
+impl LayoutNode {
+    /// The box this node's own layout/paint occupies. While a flight reports a
+    /// placeholder size, `measured_size` carries the size the PARENT observes
+    /// (Compose `PlaceHolderSize`) and this returns the size the content was
+    /// really measured at instead — render, clip, radii and hit testing all
+    /// work in that frame. `None` (no flight) means the two are identical.
+    pub(crate) fn content_box(&self) -> Size {
+        self.flight_content_size.unwrap_or(self.measured_size)
     }
 }
 
@@ -359,6 +404,10 @@ impl Default for LayoutNode {
             composing_range: std::cell::RefCell::new(None),
             focus_color: std::cell::Cell::new(crate::modifier::Color::from_argb(204, 77, 153, 255)),
             composing_color: std::cell::Cell::new(crate::modifier::Color::TRANSPARENT),
+            transition: None,
+            in_scope_overlay: false,
+            flight_measure: None,
+            flight_content_size: None,
         }
     }
 }
@@ -523,6 +572,259 @@ pub fn hit_test(nodes: &[LayoutNode], root: usize, x: f32, y: f32) -> Vec<usize>
     path
 }
 
+/// Flight-aware hit test (Phase 3; extended by the overlay pass in Phase 6).
+/// The transition layer paints above the main tree, so it is tested first,
+/// topmost entry first:
+///
+/// - **Source** (detached ghost): clicking the ghost == clicking the live
+///   target — fraction-mapped into the target's natural rect with a
+///   root-anchored path for bubbling fidelity.
+/// - **Target/Morph, elevated** (Compose `renderInOverlayDuringTransition`):
+///   the endpoint is *still in the tree*, so it routes through its own lerped
+///   visual rect with the flight transform inverted, exactly like an in-tree
+///   transitioning node — but WITHOUT the ancestor bounds/viewport rejection.
+///   That rejection is what makes an element flying outside its container
+///   untouchable, and escaping it is the whole point of the overlay pass.
+///
+/// Everything else falls through to [`hit_test`]. Empty roots (idle) cost one
+/// length check — the hot path is untouched.
+pub fn hit_test_with_flights(
+    nodes: &[LayoutNode],
+    root: usize,
+    transition_roots: &[usize],
+    x: f32,
+    y: f32,
+) -> Vec<usize> {
+    if !transition_roots.is_empty() {
+        // Index for parent-chain walks (mid-flight clicks only).
+        let mut id_to_idx = std::collections::HashMap::new();
+        for (i, n) in nodes.iter().enumerate() {
+            id_to_idx.insert(n.id, i);
+        }
+        // Painted back-to-front, so the LAST entry is on top — test in reverse.
+        for &tidx in transition_roots.iter().rev() {
+            let Some(node) = nodes.get(tidx) else { continue };
+            if node.in_scope_overlay && node.transition.is_none() {
+                // Chrome elevated for the flight: it paints above the flying
+                // pair, so it must also be HIT before them — otherwise a tap
+                // inside the overlap (a button on a pinned bar the hero slides
+                // under) would be routed to the hero. It has no flight
+                // transform, so the ordinary subtree walk applies.
+                if let Some(path) = hit_through_chrome(nodes, root, &id_to_idx, tidx, x, y) {
+                    return path;
+                }
+                continue;
+            }
+            let Some(t) = node.transition.as_ref() else { continue };
+            let hit = match t.role {
+                TransitionRole::Source => hit_through_ghost(nodes, root, &id_to_idx, tidx, x, y),
+                TransitionRole::Target | TransitionRole::Morph => {
+                    if !t.elevated {
+                        continue;
+                    }
+                    hit_through_elevated(nodes, root, &id_to_idx, tidx, x, y)
+                }
+            };
+            if let Some(path) = hit {
+                return path;
+            }
+        }
+    }
+    hit_test(nodes, root, x, y)
+}
+
+/// Root→`idx` ancestor chain including `root` (bubbling fidelity), or `None`
+/// when the chain is broken (stale arena). `idx` itself is NOT included.
+fn ancestor_prefix(
+    nodes: &[LayoutNode],
+    id_to_idx: &std::collections::HashMap<u64, usize>,
+    root: usize,
+    idx: usize,
+) -> Option<Vec<usize>> {
+    let mut prefix: Vec<usize> = Vec::new();
+    let mut cur = idx;
+    let mut ok = idx == root;
+    while let Some(pid) = nodes[cur].parent_id {
+        let Some(&pidx) = id_to_idx.get(&pid) else { break };
+        if pidx == root {
+            prefix.push(root);
+            ok = true;
+            break;
+        }
+        prefix.push(pidx);
+        cur = pidx;
+    }
+    if !ok {
+        return None;
+    }
+    prefix.reverse();
+    Some(prefix)
+}
+
+/// Elevated chrome (Compose `renderInSharedTransitionScopeOverlay`):
+/// an ordinary subtree that happens to paint from the layer, at its own
+/// position and with no transform — so the normal recursion applies, entered
+/// at the node's absolute origin with the root→node prefix for bubbling.
+fn hit_through_chrome(
+    nodes: &[LayoutNode],
+    root: usize,
+    id_to_idx: &std::collections::HashMap<u64, usize>,
+    idx: usize,
+    x: f32,
+    y: f32,
+) -> Option<Vec<usize>> {
+    let node = nodes.get(idx)?;
+    if !node.in_scope_overlay {
+        return None;
+    }
+    let tb = abs_rect_upward(nodes, id_to_idx, idx);
+    let mut path = ancestor_prefix(nodes, id_to_idx, root, idx)?;
+    if hit_test_recursive(
+        nodes,
+        idx,
+        x,
+        y,
+        tb.x - node.position.x,
+        tb.y - node.position.y,
+        &mut path,
+    ) {
+        Some(path)
+    } else {
+        None
+    }
+}
+
+/// Detached source ghost → live target routing (Phase 3).
+fn hit_through_ghost(
+    nodes: &[LayoutNode],
+    root: usize,
+    id_to_idx: &std::collections::HashMap<u64, usize>,
+    tidx: usize,
+    x: f32,
+    y: f32,
+) -> Option<Vec<usize>> {
+    let t = nodes.get(tidx)?.transition.as_ref()?;
+    let l = t.lerped();
+    if l.width <= 0.0 || l.height <= 0.0 {
+        return None;
+    }
+    if x < l.x || x > l.x + l.width || y < l.y || y > l.y + l.height {
+        return None;
+    }
+    let target_slot = t.link_slot?;
+    // NOTE (Tier1 limitation): the target may live in a PEER composer's arena
+    // (overlay) — invisible to this single-arena search, so cross-composer
+    // ghosts paint but ignore taps. The live target itself stays directly
+    // hittable in its own composer.
+    let target_idx = find_idx_by_slot(nodes, root, target_slot)?;
+    // Fraction-map ghost → target natural rect, then descend the live target
+    // subtree directly: the target node itself is hit by construction
+    // (fractions clamped into its natural rect), and re-entering
+    // hit_test_recursive on it would invert the flight transform twice
+    // (remap is single-application per level).
+    let fx = ((x - l.x) / l.width).clamp(0.0, 1.0);
+    let fy = ((y - l.y) / l.height).clamp(0.0, 1.0);
+    let tb = abs_rect_upward(nodes, id_to_idx, target_idx);
+    // Scrolled-container targets: mapped point outside the visible viewport
+    // misses (mirrors the viewport clamp in recursion).
+    {
+        let tn = &nodes[target_idx];
+        // Content box when the target has no explicit scroll viewport.
+        let cb = tn.content_box();
+        let vw = if tn.scroll_viewport_width > 0.0 {
+            tn.scroll_viewport_width
+        } else {
+            cb.width
+        };
+        let vh = if tn.scroll_viewport_height > 0.0 {
+            tn.scroll_viewport_height
+        } else {
+            cb.height
+        };
+        let tx0 = tb.x + fx * tb.width;
+        let ty0 = tb.y + fy * tb.height;
+        if tx0 < tb.x || tx0 > tb.x + vw || ty0 < tb.y || ty0 > tb.y + vh {
+            return None;
+        }
+    }
+    let tx = tb.x + fx * tb.width;
+    let ty = tb.y + fy * tb.height;
+    // Ancestor prefix root→target, target excluded (pushed below). Broken
+    // chains fall through to the main hit test.
+    let mut path = ancestor_prefix(nodes, id_to_idx, root, target_idx)?;
+    path.push(target_idx);
+    // Child basis in layout space (scroll-corrected, like recursion).
+    let (sdx, sdy) = scroll_offset_for_node(&nodes[target_idx]);
+    let (cpx, cpy) = (tb.x - sdx, tb.y - sdy);
+    for &c in nodes[target_idx].children.iter().rev() {
+        if hit_test_recursive(nodes, c, tx, ty, cpx, cpy, &mut path) {
+            break;
+        }
+    }
+    Some(path)
+}
+
+/// Elevated live endpoint (Target/Morph painted by the transition layer):
+/// same remap contract as [`hit_test_recursive`], minus ancestor rejection.
+fn hit_through_elevated(
+    nodes: &[LayoutNode],
+    root: usize,
+    id_to_idx: &std::collections::HashMap<u64, usize>,
+    idx: usize,
+    x: f32,
+    y: f32,
+) -> Option<Vec<usize>> {
+    let node = &nodes[idx];
+    let t = node.transition.as_ref()?;
+    let l = t.lerped();
+    if l.width <= 0.0 || l.height <= 0.0 {
+        return None;
+    }
+    // Absolute position in the same frame the layer paints in.
+    let tb = abs_rect_upward(nodes, id_to_idx, idx);
+    let (w, h) = {
+        // CONTENT box: the flight scales (or re-lays-out) the content into the
+        // lerped rect, so the inverse mapping must use that box — the
+        // placeholder size the parent was told lives in `measured_size`.
+        // A RE-MEASURED end is painted 1:1 on the lerped rect (render skips the
+        // scale there, because the content box trails `lerped()` by one poll),
+        // so its inverse is the identity.
+        if t.remeasure {
+            (l.width, l.height)
+        } else {
+            let cb = node.content_box();
+            (cb.width, cb.height)
+        }
+    };
+    let (lx, ly) = t.remap_hit(x, y, tb.x, tb.y, w, h)?;
+    // The endpoint's OWN viewport clamp still applies — only ancestors are
+    // escaped (a scrollable hero must not take input outside its viewport).
+    let mut nw = w;
+    let mut nh = h;
+    if node.scroll_viewport_width > 0.0 {
+        nw = node.scroll_viewport_width;
+    }
+    if node.scroll_viewport_height > 0.0 {
+        nh = node.scroll_viewport_height;
+    }
+    if lx < tb.x || lx > tb.x + nw || ly < tb.y || ly > tb.y + nh {
+        return None;
+    }
+    let mut path = ancestor_prefix(nodes, id_to_idx, root, idx)?;
+    path.push(idx);
+    // Child basis: same convention as hit_test_recursive (parent minus its own
+    // scroll translate), so descendants resolve identically in-tree and in the
+    // layer.
+    let (sdx, sdy) = scroll_offset_for_node(node);
+    let (cpx, cpy) = (tb.x - sdx, tb.y - sdy);
+    for &c in node.children.iter().rev() {
+        if hit_test_recursive(nodes, c, lx, ly, cpx, cpy, &mut path) {
+            break;
+        }
+    }
+    Some(path)
+}
+
 fn hit_test_recursive(
     nodes: &[LayoutNode],
     idx: usize,
@@ -535,8 +837,8 @@ fn hit_test_recursive(
     let node = &nodes[idx];
     let nx = parent_x + node.position.x;
     let ny = parent_y + node.position.y;
-    let mut nw = node.measured_size.width;
-    let mut nh = node.measured_size.height;
+    let mut nw = node.content_box().width;
+    let mut nh = node.content_box().height;
     // scroll 容器：命中范围按可视 viewport 计——measured_size 是内容全高，
     // 否则滚动内容会在视口外拦截本应命中后续兄弟的点击/滚轮
     if node.scroll_viewport_height > 0.0 {
@@ -545,6 +847,32 @@ fn hit_test_recursive(
     if node.scroll_viewport_width > 0.0 {
         nw = node.scroll_viewport_width;
     }
+
+    // Flight remap (Phase 3): transitioning endpoints test their lerped
+    // visual rect; hits descend in layout space (children keep layout
+    // positions — the flight transform is inverted here). Visual miss passes
+    // through (v1 skip behavior).
+    let (x, y) = match node.transition.as_ref() {
+        Some(t) => {
+            // The inverse flight transform maps through the box the flight
+            // PAINTED: a re-measured end is drawn 1:1 on the lerped rect (render
+            // skips the scale), everything else through its content box. Using
+            // the reported placeholder size would misplace child descent
+            // whenever the two differ (Compose `PlaceHolderSize`).
+            let (mw, mh) = if t.remeasure {
+                let l = t.lerped();
+                (l.width, l.height)
+            } else {
+                let cb = node.content_box();
+                (cb.width, cb.height)
+            };
+            match t.remap_hit(x, y, nx, ny, mw, mh) {
+                Some(p) => p,
+                None => return false,
+            }
+        }
+        None => (x, y),
+    };
 
     // 检查是否在节点范围内
     if x < nx || x > nx + nw || y < ny || y > ny + nh {
@@ -565,6 +893,15 @@ fn hit_test_recursive(
     // 命中必须后画的优先（z-order 语义）；此前正序导致上层兄弟
     // （如全屏图片上的矩形）永远命中底层兄弟（Image 铺满遮挡）
     for &c in node.children.iter().rev() {
+        // Shared-element flight (Phase 3): live endpoints (Target/Morph)
+        // descend via remap_hit above, so their subtrees stay hittable
+        // mid-flight. Only Source-role visuals are skipped — detached
+        // retained sources are unreachable from the root walk anyway, and a
+        // Source visual must never take input (its ghost routes to the live
+        // target through the transition-roots prefix instead).
+        if nodes[c].transition.as_ref().is_some_and(|t| t.role == TransitionRole::Source) {
+            continue;
+        }
         if hit_test_recursive(nodes, c, x, y, child_px, child_py, path) {
             return true;
         }
@@ -1372,6 +1709,44 @@ pub(crate) fn apply_layout_dirty(nodes: &mut [LayoutNode], root_idx: usize, dirt
     walk(nodes, root_idx, dirty_keys, false);
 }
 
+/// Per-frame layout override for a shared-element flight (Compose `ResizeMode`
+/// / `PlaceHolderSize`). The coordinator rewrites the frame every frame and
+/// re-seeds the node's slot key into the layout invalidation set, so the layout
+/// actually descends into it (a folded parent never would); reading the frame
+/// during measure registers a LAYOUT dependency as well.
+#[derive(Clone)]
+pub(crate) struct FlightMeasure {
+    pub frame: crate::core::state::State<FlightMeasureFrame>,
+    /// Identity of the flight that owns this override. Flight ids are
+    /// COMPOSER-local (every composer's counter starts at 1) while a Tier-1
+    /// override is written onto a PEER's node, so the composer id is part of the
+    /// key — otherwise an unrelated peer flight with the same number could clear
+    /// it. Teardown AND writes must match it: slot keys are positional identities
+    /// a SUCCESSOR flight can resurrect, so acting blindly would destroy the
+    /// newer flight's override.
+    pub owner: crate::ui::shared_transition::FlightKey,
+}
+
+/// One frame of that override; `None` on a field means "no override there".
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct FlightMeasureFrame {
+    /// Tight constraints the child content is measured at — Compose
+    /// `RemeasureToBounds`: the subtree re-lays-out at the animated size
+    /// instead of being scaled into it.
+    pub content: Option<Size>,
+    /// Size reported to the PARENT — Compose `PlaceHolderSize::AnimatedSize`
+    /// reports the animated size so siblings reflow; `ContentSize` keeps the
+    /// target size so the surrounding layout holds still.
+    pub reported: Option<Size>,
+}
+
+impl FlightMeasureFrame {
+    pub(crate) const IDLE: Self = Self { content: None, reported: None };
+    pub(crate) fn is_idle(&self) -> bool {
+        self.content.is_none() && self.reported.is_none()
+    }
+}
+
 /// 测量计数（测试用：验证常量折叠/布局失效路径确实跳过或执行 measure）。
 /// thread_local 隔离——cargo test 并行线程互不串扰（全局 Atomic 会跨测试计数破坏断言）。
 #[cfg(test)]
@@ -1380,6 +1755,15 @@ thread_local! {
 }
 
 pub(crate) fn measure_node(
+    nodes: &mut Vec<LayoutNode>,
+    policies: &[Box<dyn MeasurePolicy>],
+    idx: usize,
+    constraints: Constraints,
+) -> (Size, Vec<Placement>) {
+    measure_node_inner(nodes, policies, idx, constraints)
+}
+
+fn measure_node_inner(
     nodes: &mut Vec<LayoutNode>,
     policies: &[Box<dyn MeasurePolicy>],
     idx: usize,
@@ -1398,9 +1782,19 @@ pub(crate) fn measure_node(
     #[cfg(test)]
     MEASURE_COUNT.with(|c| c.set(c.get() + 1));
 
-    // 设置 ACTIVE_SLOT_KEY = 本节点 slot——使 SizeDynamic 闭包内的 State::get()
-    // 把依赖注册到本节点（动画值变化 → 本节点 dirty → 重组重测）
+    // Set ACTIVE_SLOT_KEY = this node's slot so a State::get() inside a dynamic
+    // size closure registers its dependency on THIS node (value change → node
+    // dirty → recompose + re-measure).
     crate::core::composer::set_active_slot_key(nodes[idx].slot_key);
+
+    // Flight layout contract (Compose `ResizeMode` / `PlaceHolderSize`), read
+    // AFTER the fold check: a folded node must neither arm its slot key nor
+    // replace its recorded layout dependencies (the fold is what keeps other
+    // layout dependencies alive — see `test_layout_dep_survives_const_fold`).
+    // Reading here also registers the frame state as a layout dependency, so a
+    // tick re-measures this node and, through `apply_layout_dirty`, its
+    // ancestors — never a recomposition.
+    let flight = nodes[idx].flight_measure.clone().map(|f| f.frame.get());
 
     // 应用 modifier 中的 Layout 约束（使用查询方法）
     let mut inner_constraints = constraints;
@@ -1540,6 +1934,26 @@ pub(crate) fn measure_node(
     }
 
     // 实际测量
+    // RemeasureToBounds: the child layout is re-measured with FIXED constraints
+    // of the animated bounds, so content reflows (text rewraps, rows resize)
+    // instead of being graphically scaled. Applied last — Compose's "animated
+    // fixed constraints" override the incoming and modifier constraints alike.
+    if let Some(fm) = flight {
+        if let Some(c) = fm.content {
+            inner_constraints = Constraints::new(c.width, c.width, c.height, c.height);
+            // A scroll container reads its viewport from the constraints it was
+            // measured with, so a re-measured one must re-derive them — render
+            // clips and hit clamping both use these, and they would otherwise
+            // stay on the natural size while the box animates.
+            if nodes[idx].modifier.vertical_scroll_state().is_some() {
+                nodes[idx].scroll_viewport_height = c.height;
+            }
+            if nodes[idx].modifier.horizontal_scroll_state().is_some() {
+                nodes[idx].scroll_viewport_width = c.width;
+            }
+        }
+    }
+
     let mut result = if let Some(pidx) = nodes[idx].measure_policy {
         // 先拷贝子节点索引（policy.measure 会可变借用整个 nodes，不能持有 nodes[idx] 借用）
         let children = nodes[idx].children.clone();
@@ -1730,6 +2144,19 @@ pub(crate) fn measure_node(
     // （常量折叠早退路径不经过这里——尺寸未变无需上报；元素内再去重）
     let (rw, rh) = (nodes[idx].measured_size.width, nodes[idx].measured_size.height);
     nodes[idx].modifier.report_measured_size(rw, rh);
+
+    // Flight layout contract (Compose `PlaceHolderSize`): `reported` is the size
+    // the PARENT observes — `AnimatedSize` hands it the animated size so siblings
+    // reflow, `ContentSize`/`JumpCut` keep the natural size so the surrounding
+    // layout holds still. This node's OWN box (paint, clip, hit, text rects) must
+    // keep the size the content was really measured at, so it lives in
+    // `flight_content_size` instead: parents legitimately re-clobber
+    // `measured_size` with the size they placed us at (`place()`).
+    nodes[idx].flight_content_size = if flight.is_some() { Some(result.0) } else { None };
+    if let Some(reported) = flight.and_then(|f| f.reported) {
+        nodes[idx].measured_size = reported;
+        result.0 = reported;
+    }
     result
 }
 
