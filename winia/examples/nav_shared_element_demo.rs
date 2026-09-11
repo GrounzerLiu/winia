@@ -11,7 +11,9 @@
 
 use letclone::clone;
 use winia::animation::TweenSpec;
-use winia::nav::{NavBackStack, NavDisplay, NavEntry, NavKey};
+use winia::nav::{
+    ListDetailStrategy, NavBackStack, NavDisplay, NavEntry, NavKey, SceneStrategy,
+};
 use winia::prelude::*;
 
 /// Type-safe routes (compares to Nav3's `NavKey` with `@Serializable`; winia needs no serialization).
@@ -98,6 +100,11 @@ fn demo(ctx: &mut ComposeCtx) {
     // with it ON the ENTRY ITSELF is a shared element keyed by the entry, so a nav transition can fly
     // a whole screen; OFF compares against the plain nav transition (only the hero marker flies).
     let entry_flight = ctx.remember(|| true);
+    // Two-pane (ListDetail) mode: the LIST entry stays in its pane while the DETAIL entry is added,
+    // so the same entry is present in two scenes at once — which is the case the entry-level
+    // decorator exists for (a plain push holds two DIFFERENT entries, so nothing pairs and, measured,
+    // no entry flight opens).
+    let two_pane = ctx.remember(|| false);
     SharedTransitionLayout::new().build(ctx, |ctx| {
         let scope = current_shared_scope().expect("inside SharedTransitionLayout");
         Column::new()
@@ -120,6 +127,16 @@ fn demo(ctx: &mut ComposeCtx) {
                         .font_size(12.0)
                         .build(ctx)
                     });
+                Button::text()
+                    .on_click({
+                        clone!(two_pane);
+                        move || two_pane.update(|v| *v = !*v)
+                    })
+                    .build(ctx, |ctx| {
+                        Text::new(if two_pane.get() { "two-pane: ON" } else { "two-pane: OFF" })
+                            .font_size(12.0)
+                            .build(ctx)
+                    });
                 let display = NavDisplay::new(&display_stack, {
                     clone!(scope);
                     move |ctx, key| match key {
@@ -135,13 +152,16 @@ fn demo(ctx: &mut ComposeCtx) {
                         }),
                     }
                 });
-                if entry_flight.get() {
-                    display
-                        .add_decorator(winia::nav::SharedEntryInSceneDecorator)
-                        .build(ctx);
-                } else {
-                    display.build(ctx);
+                let mut display = display;
+                if two_pane.get() {
+                    display = display.scene_strategies(vec![
+                        Box::new(ListDetailStrategy) as Box<dyn SceneStrategy<Route>>
+                    ]);
                 }
+                if entry_flight.get() {
+                    display = display.add_decorator(winia::nav::SharedEntryInSceneDecorator);
+                }
+                display.build(ctx);
             });
     });
 }
