@@ -5315,6 +5315,12 @@ mod tier0_tests {
                 "the layout contract must not recompose ({ctx})"
             );
 
+            // Teardown is the ONE place that must run on real time: completion waits
+            // for the animation engine to release the progress state, and the engine
+            // owns that clock (pinning `progress` and pumping a few frames does NOT
+            // finish the flight — measured). The loop is capped, and the message
+            // says so, because a stalled machine fails here without any logic being
+            // wrong (review R4's determinism point).
             for _ in 0..300 {
                 if composer.shared_flights.is_empty() {
                     break;
@@ -5323,7 +5329,11 @@ mod tier0_tests {
                 std::thread::sleep(std::time::Duration::from_millis(16));
                 frame(&mut composer);
             }
-            assert!(composer.shared_flights.is_empty(), "flight completes");
+            assert!(
+                composer.shared_flights.is_empty(),
+                "the flight did not finish within the loop cap ({ctx}) — this is a \
+                 wall-clock cap, not necessarily a logic failure"
+            );
             frame(&mut composer);
             let marked = marked_in(&composer)[0];
             let nodes = composer.arena_nodes();
@@ -5467,6 +5477,19 @@ mod tier0_tests {
         assert!(
             composer.arena_nodes()[marked].flight_measure.is_none(),
             "the default contract attaches no override"
+        );
+
+        // LIVE-COUNT CONTROL (review R4): prove the counter can move in THIS
+        // configuration before asserting it does not — otherwise a counter stuck at
+        // zero by construction would pass the real assertion identically.
+        MEASURE_COUNT.with(|c| c.set(0));
+        let marked_key = composer.arena_nodes()[marked].slot_key;
+        composer.layout_dirty_keys.insert(marked_key);
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let control = MEASURE_COUNT.with(|c| c.get());
+        assert!(
+            control > 0,
+            "control: seeding the key must re-measure something (got {control})"
         );
 
         // A second layout with identical constraints must fold completely.
@@ -5655,9 +5678,6 @@ mod tier0_tests {
             // 130px lerped rect it ends at ~39px, so y=50 must be hero colour;
             // drawn 1:1 (the crop bug) it would still be band green there.
             let mut surface = render_heads(&composer);
-            // SCALED vs CROPPED: the green band is 60px of the content's height,
-            // so scaled into the 130px lerped rect it ends at ~39px — y=50 is
-            // hero there. Drawn 1:1 (the crop bug) it still reaches 60.
             if matches!(resize, ResizeMode::ScaleToBounds { .. }) {
                 let hero_ref = pixel_rgb(&mut surface, 100, 100);
                 let scaled_away = pixel_rgb(&mut surface, 100, 50);
@@ -5675,17 +5695,13 @@ mod tier0_tests {
                 !close_enough(inside, (255, 255, 255), 12),
                 "the hero paints inside the lerped rect ({resize:?}/{placeholder:?}): {inside:?}"
             );
-            // Outside it — but well inside the 300x200 target box — must be
-            // background: neither the re-measured content nor an unscaled copy
-            // may spill there.
-            for (x, y) in [(250, 100), (100, 160)] {
-                let out = pixel_rgb(&mut surface, x, y);
-                assert!(
-                    close_enough(out, (255, 255, 255), 12),
-                    "nothing of the hero may paint outside the lerped rect at \
-                     ({x},{y}) ({resize:?}/{placeholder:?}): {out:?}"
-                );
-            }
+            // NOTE (review R4): the "nothing spills outside the lerped rect"
+            // probes that used to live here were VACUOUS — the flight's own clip
+            // hides the spill either way, so they passed with the bug present. The
+            // band probe above is the only raster assertion here with teeth; the
+            // box/scale contract is pinned by the layout assertions of
+            // `flight_layout_contract_matrix` and by
+            // `remeasure_end_is_never_scaled_by_the_frame_delta`.
         }
         crate::animation::clear_all_animations();
     }
@@ -5908,13 +5924,24 @@ mod tier0_tests {
             "the peer node carries the per-frame override"
         );
         // The cross-poll runs after the peer's layout, so the override first
-        // applies on the peer's NEXT layout — advance one frame and check that
-        // the peer really reports the animated height, not the resting one.
+        // applies on the peer's NEXT layout. Pin the progress first, then drive
+        // one frame + one compose-free layout: the peer must report the ANIMATED
+        // size (120x80 -> 300x160 at t=.5 = 210x120), not the resting one.
         xadvance(&mut a, &mut b, &show_a, &show_b, &scope);
+        // `xadvance` lets the engine drive progress, so pin AFTER it — and use the
+        // frame helper (no update_animations) so the pin sticks.
+        let fid = *a.shared_flights.keys().next().expect("flight id");
+        a.shared_flights
+            .get_mut(&fid)
+            .expect("flight")
+            .progress
+            .set(0.5);
+        frame(&mut a, &mut b, &show_a, &show_b);
+        b.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let reported = b.arena_nodes()[tidx].measured_size;
         assert!(
-            b.arena_nodes()[tidx].measured_size.height < 160.0,
-            "…and it reports the animated height, not the resting one (got {})",
-            b.arena_nodes()[tidx].measured_size.height
+            (reported.width - 210.0).abs() <= 1.0 && (reported.height - 120.0).abs() <= 1.0,
+            "…and it reports the ANIMATED size, not the resting one (got {reported:?})"
         );
 
         // The peer must NOT open its own flight for a key a Tier-1 flight owns:
@@ -6230,11 +6257,9 @@ mod tier0_tests {
             (device - want).abs() <= 0.5,
             "corner radius must follow the lerped rect: got {device}, want {want} ({l:?})"
         );
-        // …and it really is mid-flight: neither endpoint's own radius (75/85).
-        assert!(
-            (device - 75.0).abs() > 1.0 && (device - 85.0).abs() > 1.0,
-            "the radius must sit between the two endpoint radii, got {device}"
-        );
+        // (Review R4: an extra "the radius sits between the two endpoint radii"
+        // assertion used to live here — it was implied by the equality above, which
+        // is strictly stronger, so it was removed rather than kept as decoration.)
         crate::animation::clear_all_animations();
     }
 
