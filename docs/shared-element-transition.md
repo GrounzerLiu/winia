@@ -182,7 +182,17 @@ The overlay pass generalizes that pass instead of adding a second one:
   `z_index` only: the sort is stable and `elevated_roots` is pushed before
   `transition_layer`, so an explicit `z_index` on the target reorders it (there is
   no role tie-break, and no test covers ghost-vs-target at unequal z). Render and
-  hit testing both read that one list, so paint order and hit order cannot drift.
+  hit testing both read that one list, so **within one composer** paint order and hit
+  order cannot drift.
+  Across composers they do, deliberately (review 2, R3-F4, resolved by analysis):
+  while a cross flight runs the app paints the main layer AFTER the overlays, so a
+  ghost or elevated chrome draws above an open dialog, while input is resolved
+  overlays-first — a tap in the overlap reaches the dialog. That matches Compose on
+  the INPUT side (Compose's shared-element overlay is draw-only; input goes through
+  the layout, and a Dialog is a separate window above it), and the paint order is a
+  winia-specific choice: our overlays are composers inside the same window, and
+  drawing the layer last is what keeps a Tier-1 ghost visible while it flies into a
+  panel.
 - **Hit routing follows paint.** `hit_test_with_flights` walks the layer
   topmost-first: a source ghost routes into its live target (fraction
   mapping, unchanged), an elevated target reverses its own flight transform
@@ -444,14 +454,18 @@ the supported shape.
    the contract, and a parameter that silently does nothing is worse than none): the flag
    and its `TransitionVisual` plumbing are DELETED, `shared_clip_for_kind` returns false,
    and the docs no longer present clipping as an option.
-7. KNOWN, NOT FIXED (review 2, R3-F4): across composers, PAINT order and HIT order
-   disagree. During a cross flight the app draws the main transition layer AFTER
-   `render_overlays` (`app.rs`), i.e. over an open dialog/scrim, while the hit path asks
-   `hit_overlay` FIRST (`app.rs`) and only then the main tree — so a tap in the overlap
-   goes to the dialog that the ghost/chrome is painted over. Inside one composer the two
-   agree (verified). Fixing it means reordering input routing (main layer first, then
-   overlays, then the tree), which changes where every tap lands while a Tier-1 flight
-   runs — that needs UI-level coverage, so it is recorded rather than changed here.
+7. RESOLVED BY ANALYSIS, NO CODE CHANGE (review 2, R3-F4): across composers, PAINT order
+   and HIT order disagree. During a cross flight the app draws the main transition layer
+   AFTER `render_overlays` (`app.rs`), i.e. over an open dialog/scrim, while the hit path
+   asks `hit_overlay` FIRST and only then the main tree — so a tap in the overlap reaches
+   the dialog that the ghost/chrome is painted over. Checked against Compose before
+   touching it: Compose's shared-element overlay is DRAW-ONLY for input (hits go through
+   the layout, whose node follows the animated position) and a Dialog is a separate
+   window above that screen's overlay — so overlays-first INPUT is correct, and it is the
+   PAINT order that is winia-specific (our overlays are composers in the same window, and
+   drawing the layer last keeps a Tier-1 ghost visible while it flies into a panel). The
+   invariant is therefore scoped to one composer in §3.6 and in the usage guide, with the
+   cross-composer behaviour documented instead of silently contradicting the claim.
 8. KNOWN, DOCUMENTED NOT FIXED (review 2, R1): the keyboard focus ring is drawn from
    the node's own nearest shape (`render.rs` `draw_focus`), not from the flight's
    morphed radii, so a focused hero mid-flight shows a ring whose corners do not match

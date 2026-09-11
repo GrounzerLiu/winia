@@ -371,8 +371,12 @@ Three properties worth knowing before you rely on it:
   `poll_shared_flights`), because a Tier 1 peer's flight lives in the MAIN
   composer's map. `rebuild_layer_order` unions that with the detached
   sources and the elevated chrome, then z-sorts; render AND hit testing both
-  read `transition_roots()`, so paint order and hit order cannot drift
-  (chrome entries are hit through their own subtree in the same walk).
+  read `transition_roots()`, so paint order and hit order cannot drift **within a
+  composer** (chrome entries are hit through their own subtree in the same walk).
+  Across composers the two orders differ on purpose: the main layer paints above an
+  open overlay (so a ghost stays visible flying into a panel) while input is resolved
+  overlay-first — which is what Compose does (its overlay is draw-only for input, and
+  a Dialog is a separate window above it). See the architecture doc §3.6.
 - Chrome elevation is a window-level decision: each composer's poll passes
   its own flight scopes, and `poll_cross_flights` re-runs it for every
   participant with the union — a peer cannot see a Tier1 flight otherwise.
