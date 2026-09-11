@@ -72,7 +72,13 @@ pub(crate) fn materialize(composer: &mut Composer) {
     for desc in descs {
         materialize_node(composer, desc, None);
     }
-    prune_stale_child_links(composer);
+    // The prune is NOT called here: at this point the shared-element retention has not run yet,
+    // so a node that is about to be detached for a flight (the leaving end of a shared marker)
+    // still looks unreachable, and clearing ITS children left the ghost flying empty — measured:
+    // the retained card had `children=0` while its rect, alpha and layer order were all correct,
+    // which is the reported "the animation starts fully transparent". The compose tail calls
+    // `prune_stale_child_links` after `retain_shared_sources`, when "unreachable" really means
+    // "not part of this frame's tree or its transition layer".
 }
 
 /// A node must be reachable from the root exactly ONCE. Materialize reaches the tree through
@@ -89,7 +95,7 @@ pub(crate) fn materialize(composer: &mut Composer) {
 /// dropped the child's ONLY listing (the hero vanished from the tree on the return flight).
 /// So: keep the listing whose parent matches `parent_id` when there is one, otherwise keep the
 /// first, and never remove a node's last listing.
-fn prune_stale_child_links(composer: &mut Composer) {
+pub(crate) fn prune_stale_child_links(composer: &mut Composer) {
     let nodes = &mut composer.arena.nodes;
     let len = nodes.len();
     let Some(root) = composer.arena.root else {
@@ -102,6 +108,14 @@ fn prune_stale_child_links(composer: &mut Composer) {
     // nothing). The visited set also makes the walk safe if the lists ever contain a cycle.
     let mut reachable = vec![false; len];
     let mut stack = vec![root];
+    // Detached flight ghosts are rootless BY DESIGN: the transition layer is their home (the
+    // source writer's own comment says so). Seeding only `arena.root` marked a ghost unreachable
+    // and cleared ITS children — the retained card kept its rect, its opaque alpha and its place
+    // in the layer, but drew nothing. That is the reported "the animation starts fully
+    // transparent" (measured: the hero region read the theme background on the frame right after
+    // the click, while the layer probe showed idx=3 drawn at (16,57) 96x96 with alpha 1.0). The
+    // layer's roots are roots.
+    stack.extend(composer.transition_layer.iter().copied());
     while let Some(i) = stack.pop() {
         if i >= len || reachable[i] {
             continue;

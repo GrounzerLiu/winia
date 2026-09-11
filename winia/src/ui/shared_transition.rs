@@ -2135,6 +2135,12 @@ impl Composer {
             }
         }
         self.prev_shared_endpoints = live;
+        // NOW the tree is settled for this frame: the detach above shelved the leaving ends in
+        // `transition_layer`, so the listing prune can tell "part of this frame" (the tree or the
+        // layer) from "stale listing". Running it earlier — inside `materialize` — cleared the
+        // children of a node that was still about to be detached, and the ghost then flew with
+        // nothing inside it, which is what "the animation starts fully transparent" was.
+        crate::core::materialize::prune_stale_child_links(self);
     }
 
     /// Detach a vanished marked node (freeze): unlink from old parents, pin to
@@ -2150,6 +2156,20 @@ impl Composer {
         }
         // Belt-and-braces: the drain below must never reclaim it.
         self.reused_nodes.insert(src_idx);
+        // …and neither may it reclaim any DESCENDANT. Sheltering only the root let the pool hand
+        // this subtree's indices to nodes of the new tree, so the frozen ghost listed a child
+        // that had been recycled into a fresh, not-yet-measured node: measured, the ghost's only
+        // child was `0x0` while the ghost's own rect, alpha and layer order were all correct — a
+        // card that flies with nothing inside it, i.e. the reported "the animation starts fully
+        // transparent". A frozen ghost owns its subtree for as long as it is in the layer.
+        {
+            let mut stack = self.arena.nodes[src_idx].children.clone();
+            while let Some(c) = stack.pop() {
+                if self.reused_nodes.insert(c) {
+                    stack.extend(self.arena.nodes[c].children.iter().copied());
+                }
+            }
+        }
         let id_to_idx: HashMap<u64, usize> =
             self.arena.nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
         let mut b = abs_rect_upward(&self.arena.nodes, &id_to_idx, src_idx);
@@ -2627,7 +2647,8 @@ impl Composer {
         end.x -= ox;
         end.y -= oy;
         if let (Some(slot), Some(idx)) = (sslot, sidx) {
-            if self.arena.nodes.get(idx).is_some_and(|n| n.slot_key == slot) {
+            let matched = self.arena.nodes.get(idx).is_some_and(|n| n.slot_key == slot);
+            if matched {
                 self.arena.nodes[idx].transition = Some(TransitionVisual {
                     start,
                     end,
