@@ -62,7 +62,10 @@ fn photo_box(
     };
     let clip = if spill.get() { OverlayClip::None } else { OverlayClip::Bounds };
     let spec = flight_spec(slow.get());
-    Image::file(LANDSCAPE)
+    // The CLIP and the marker live on a container, and the photo sits inside it. `Image` is a
+    // leaf with its own draw node, so a clip in ITS modifier chain does not wrap that draw —
+    // the container's does, which is the same structure the other hero demo uses.
+    Column::new()
         .modifier(
             Modifier::new()
                 .size(w, h)
@@ -91,10 +94,15 @@ fn photo_box(
                     clip,
                 ),
         )
-        // The photo fills its own box the way Compose's `Image` would; the flight then
-        // decides how THAT result is scaled into the animated bounds.
-        .content_scale(ContentScale::Crop)
-        .build(ctx);
+        .build(ctx, |ctx| {
+            // The photo fills its box the way Compose's `Image` would (Crop + centre, so a
+            // square box centre-crops); the flight then decides how THAT result is scaled into
+            // the animated bounds.
+            Image::file(LANDSCAPE)
+                .modifier(Modifier::new().fill_max_size())
+                .content_scale(ContentScale::Crop)
+                .build(ctx);
+        });
 }
 
 #[composable]
