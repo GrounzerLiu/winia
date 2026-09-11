@@ -509,3 +509,22 @@ the supported shape.
     that resolves in the frame it opens with the flights polled before the morph poll, so
     the override is attached before the first poll that sees the new rect. Until that
     exists, the demo check is the only end-to-end evidence.
+17. OPEN, VERIFIED AGAINST COMPOSE, PLANNED (review 2, R1): `ScaleToBounds` does not match
+    Compose's DEFAULT. Compose's signature is `scaleToBounds(contentScale: ContentScale =
+    ContentScale.FillWidth, alignment: Alignment = Center)` (API reference), i.e. uniform
+    scaling by WIDTH and centred placement — deliberately not `Image`'s `Fit`. winia
+    hard-codes `FillBounds` (non-uniform stretch) with top-left placement, so a hero whose
+    aspect ratio changes between ends is visibly DISTORTED where Compose would scale
+    uniformly and clip.
+    Step 1 is DONE: `ContentScale` (all seven members) + `ContentAlignment` (nine
+    positions) + `factors()`/`offset()`, unit-tested by
+    `content_scale_factors_match_compose`.
+    Remaining (one reviewable pass; do not split it, the tree must stay green):
+    (a) give `ResizeMode::ScaleToBounds` the two fields plus `scale_to_bounds()` /
+    `scale_to_bounds_with()` constructors; (b) carry them on `TransitionVisual` — it holds
+    only `remeasure` today, so this touches both visual writers, the cross writer, the two
+    teardown paths and the tests that build visuals directly; (c) feed `factors()` into
+    `paint_scale` and `offset()` into the flight transform (today it translates by
+    `(-x, -y)`, i.e. top-left) and mirror both in `remap_hit`; (d) update the raster tests
+    that encode the old non-uniform geometry and state the new default in §1.4/§7. The
+    demo's look changes on purpose (fill by width + clip instead of stretch).
