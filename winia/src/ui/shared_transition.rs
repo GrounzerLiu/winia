@@ -2135,12 +2135,9 @@ impl Composer {
             }
         }
         self.prev_shared_endpoints = live;
-        // NOW the tree is settled for this frame: the detach above shelved the leaving ends in
-        // `transition_layer`, so the listing prune can tell "part of this frame" (the tree or the
-        // layer) from "stale listing". Running it earlier — inside `materialize` — cleared the
-        // children of a node that was still about to be detached, and the ghost then flew with
-        // nothing inside it, which is what "the animation starts fully transparent" was.
-        crate::core::materialize::prune_stale_child_links(self);
+        // The listing prune used to be called here, which quietly tied an arena invariant to this
+        // hook's fast path (`return` above when nothing is shared). It now runs in `compose()`
+        // right after this call — same position in the frame, but for every composer.
     }
 
     /// Detach a vanished marked node (freeze): unlink from old parents, pin to
@@ -2156,6 +2153,31 @@ impl Composer {
         }
         // Belt-and-braces: the drain below must never reclaim it.
         self.reused_nodes.insert(src_idx);
+        // A ghost must not own what the NEW tree already took over. `reused_nodes` at this point
+        // holds exactly this frame's reuse decisions (materialize inserts them and the set is
+        // cleared at the end of each compose), so a child listed there has been re-parented into
+        // the frame's tree. Keeping it would make the ghost paint a LIVE node and then free it:
+        // teardown releases a ghost's subtree with an empty skip set (probe from review:
+        // `live_parent.children=[2] live_child.slot_key=0x0 pool=[2, 3]`). Compose never shares a
+        // node between the outgoing and incoming content, so dropping it is also the aligned
+        // behaviour; a true fix would freeze a copy of the subtree.
+        {
+            let taken: Vec<usize> = self.arena.nodes[src_idx]
+                .children
+                .iter()
+                .copied()
+                .filter(|c| self.reused_nodes.contains(c))
+                .collect();
+            if !taken.is_empty() {
+                crate::debug_log!(
+                    "[detach] ghost {src_idx} drops {} child(ren) the new tree reused: {taken:?}",
+                    taken.len()
+                );
+                self.arena.nodes[src_idx]
+                    .children
+                    .retain(|c| !taken.contains(c));
+            }
+        }
         // …and neither may it reclaim any DESCENDANT. Sheltering only the root let the pool hand
         // this subtree's indices to nodes of the new tree, so the frozen ghost listed a child
         // that had been recycled into a fresh, not-yet-measured node: measured, the ghost's only

@@ -89,25 +89,28 @@ pub(crate) fn materialize(composer: &mut Composer) {
 /// double listing rather than two nodes sharing a key. (Measured: clicking Back in
 /// `shared_transition_image_demo` produced 30 render panics in a row.)
 ///
-/// IMPORTANT: this only drops DUPLICATES. `parent_id` is NOT a safe tie-breaker on its own —
-/// measured from the same demo, a 0x0 child listed under the live parent had
-/// `parent_id = Some(96)` pointing at a node that no longer existed, and pruning by that
-/// dropped the child's ONLY listing (the hero vanished from the tree on the return flight).
-/// So: keep the listing whose parent matches `parent_id` when there is one, otherwise keep the
-/// first, and never remove a node's last listing.
+/// IMPORTANT: `parent_id` is NOT a tie-breaker, and must not become one — measured, a 0x0 child
+/// listed under the live parent carried `parent_id = Some(96)` naming a node that no longer
+/// existed, so pruning by that kept the DEAD listing and dropped the live one (the hero vanished
+/// from the tree on the return flight). What decides is reachability from `arena.root` or from
+/// `transition_layer`: a listing owned by a parent that is not reachable belongs to no tree in
+/// this frame and goes away; a listing under a reachable parent survives.
 pub(crate) fn prune_stale_child_links(composer: &mut Composer) {
     let nodes = &mut composer.arena.nodes;
     let len = nodes.len();
-    let Some(root) = composer.arena.root else {
+    // An empty arena has nothing to repair. Anything else is repaired even with no tree at all:
+    // with no tree every listing IS stale (nothing is reachable), and an early return on a
+    // missing `arena.root` would silently skip exactly the states this function exists to clean.
+    if len == 0 {
         return;
-    };
+    }
     // Which nodes are actually reachable from the root, following the listings as they are
     // now? A listing owned by an UNREACHABLE parent is garbage — that parent is not in the
     // tree this frame — and it is what made a node reachable twice (the panic) or reachable
     // only through a dead parent (the 0x0 hero: it sat in the arena, never measured, and drew
     // nothing). The visited set also makes the walk safe if the lists ever contain a cycle.
     let mut reachable = vec![false; len];
-    let mut stack = vec![root];
+    let mut stack: Vec<usize> = composer.arena.root.into_iter().collect();
     // Detached flight ghosts are rootless BY DESIGN: the transition layer is their home (the
     // source writer's own comment says so). Seeding only `arena.root` marked a ghost unreachable
     // and cleared ITS children — the retained card kept its rect, its opaque alpha and its place
@@ -506,6 +509,30 @@ fn collect_node_keys_with_parent(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The CALL SITE, not the rule: the repair has to happen on every compose. When it lived
+    /// inside `retain_shared_sources` — a hook that returns early for a composer with no shared
+    /// content — a stale listing survived and walked into the `[dup-key]` guard during layout
+    /// (measured in review: `mid.children after retain = [2, 2]` for a composer with no shared
+    /// content, versus `[2]` with one shared endpoint present). This fails if the prune stops
+    /// running on the default path, which no other test covers.
+    #[test]
+    fn a_composer_without_shared_content_still_prunes() {
+        use crate::layout::node::LayoutNode;
+        let mut composer = Composer::new();
+        let leaf = composer.arena.alloc(LayoutNode::default());
+        let orphan = composer.arena.alloc(LayoutNode::default());
+        // Not reachable from any tree, and listing the same child twice: the stale shape.
+        composer.arena.nodes[orphan].children.push(leaf);
+        composer.arena.nodes[orphan].children.push(leaf);
+
+        composer.compose(|_ctx| {});
+
+        assert!(
+            composer.arena.nodes[orphan].children.is_empty(),
+            "every compose must clear the listings of an unreachable parent, shared content or not"
+        );
+    }
 
     /// The listing rule the image demo's Back crash rests on, pinned at the rule level: a node
     /// ends up with ONE listing, and listings owned by a parent that is not reachable from the

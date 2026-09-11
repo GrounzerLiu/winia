@@ -2370,6 +2370,15 @@ impl Composer {
         // Shared-element flights (Phase 2): detect switches + retain/detach
         // sources BEFORE the prev drain below frees them.
         self.retain_shared_sources();
+        // Repair the arena listing invariant for EVERY compose — this must not live inside
+        // `retain_shared_sources`, which returns early when the composer has no shared content:
+        // that took the repair off the default path, and a stale listing then walked straight
+        // into the `[dup-key]` guard during layout (measured: a composer with no shared content
+        // kept `mid.children = [2, 2]` and panicked, while the same state with one shared
+        // endpoint present was pruned to `[2]`). Order is load-bearing: after the retention
+        // above (a flight ghost is a legitimate root and must keep its subtree) and before the
+        // prev drain below (a stale listing's node still has to be reclaimed by it).
+        crate::core::materialize::prune_stale_child_links(self);
         // 物化后：注册 modifier 中引用的 State 依赖（scroll 等——组合期 arena 空）。
         // 必须在 take_deps() 之前执行——其中 State::get() 依赖 DEP_MODE=Compose
         //（begin_compose_deps 后未复位）；先复位则 scroll 依赖被静默丢弃（滚动不刷新）
