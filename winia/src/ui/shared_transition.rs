@@ -4894,27 +4894,40 @@ mod tier0_tests {
         // legible) and then pin the progress, not to keep tuning p; three attempts by
         // reasoning were reverted rather than risk weakening a passing test.
         let mut sample: Option<(f32, u64, usize)> = None;
-        for _ in 0..200 {
-            match flight_probe(&composer) {
-                Some((p, _)) if p >= 0.85 => {
-                    let tslot = composer
-                        .shared_flights
-                        .values()
-                        .next()
-                        .and_then(|a| a.flight.target_slot)
-                        .expect("flight still alive in the window");
-                    let root = composer.layout_root_idx().expect("root");
-                    let tidx = find_idx_by_slot(composer.arena_nodes(), root, tslot)
-                        .expect("target node");
-                    sample = Some((p, tslot, tidx));
-                    break;
-                }
-                None => break,
-                _ => {}
+        // Let the flight RESOLVE and start painting before pinning: a pin applied while
+        // the flight is still `AwaitingBounds` leaves it with no visual, and the render
+        // then shows the pinned bar where the hero should be (measured: green-dominant
+        // (28,226,0) instead of the target's blue). Half-way through is past resolution.
+        for _ in 0..40 {
+            if flight_probe(&composer).is_some_and(|(p, _)| p >= 0.5) {
+                break;
             }
             crate::animation::update_animations();
-            std::thread::sleep(std::time::Duration::from_millis(16));
             frame(&mut composer);
+        }
+        // Now PIN the progress at the value the old wall-clock loop actually sampled
+        // (~0.89), where the measured geometry puts the hero's rect at (0, 33, 283, 159)
+        // and the probe at y=40 is covered by the target.
+        const P_AT_PROBE: f32 = 0.89;
+        let fid = *composer.shared_flights.keys().next().expect("flight alive");
+        composer
+            .shared_flights
+            .get_mut(&fid)
+            .expect("flight")
+            .progress
+            .set(P_AT_PROBE);
+        frame(&mut composer);
+        {
+            let tslot = composer
+                .shared_flights
+                .values()
+                .next()
+                .and_then(|a| a.flight.target_slot)
+                .expect("flight still alive in the window");
+            let root = composer.layout_root_idx().expect("root");
+            let tidx = find_idx_by_slot(composer.arena_nodes(), root, tslot)
+                .expect("target node");
+            sample = Some((P_AT_PROBE, tslot, tidx));
         }
         let (p_at_probe, _tslot, tidx) =
             sample.expect("flight must be sampled inside its late window (machine load?)");
