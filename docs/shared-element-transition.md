@@ -580,3 +580,37 @@ the supported shape.
     naming an assertion that does not fail on the relevant revert. Lesson recorded: a
     "repair" that deletes an assertion must PROVE the survivor still has teeth by mutating
     the code it guards, which is exactly how all three were caught.
+
+21. FROM THE REVIEW OF `d416e8d` (four independent reviewers, own worktrees) — the biggest
+    correction was to a CLAIM, not to code: `d416e8d` says a headless raster probe for the
+    transparent flight start is not achievable. That is false. The missing ingredient was the
+    SHAPE of the card: a container that paints no background of its own and fills itself with a
+    coloured CHILD. The pre-existing raster tests put the colour on the container itself, so a
+    lost child is invisible to them — which is why six earlier attempts at a scene came back
+    green. `a_ghost_keeps_painting_its_child_on_the_switch_frame` now closes that gap: it goes RED
+    with the descendant shelter removed (`got (255, 255, 255)` — the canvas colour, i.e. nothing
+    painted) and with the prune back inside `materialize()`. It stays GREEN with the prune
+    disabled entirely, so it pins the shelter and the prune's PLACEMENT, not the prune's
+    existence; the test's own doc comment says so instead of the stronger claim.
+
+22. FROM THE SAME REVIEW — a vacuous assertion, and it had shipped as an "end-state guard":
+    `same_frame_double_compose_keeps_the_hero_measured` searched the whole arena for any node
+    whose width matched the hero and matched the DETACHED leaving-end ghost (out of the tree by
+    design, `role = Source`). With the in-tree hero zero-sized and unmounted the assertion still
+    passed (reviewer's counter-experiment: `predicate matches = [1, 4]`). It now walks from the
+    root, requires the ENTERING end and a non-zero size, and its teeth were checked by flipping
+    the role to `Source` (RED, `arena nodes with a marker: [4]`). Lesson: an assertion that
+    searches for a node by a *visual* property can find the wrong node entirely.
+
+23. KNOWN NUANCES of the listing invariant (`prune_stale_child_links`), from the same review:
+    (a) COST — one full-arena walk plus DFS per composer per compose, measured at ~5.2 ms for a
+    12001-node arena (the same order as `collect_node_keys`), and it now runs even when a compose
+    produces no descriptions; it is the price of repairing the invariant on the default path
+    instead of inside a hook that can return early. (b) `on_remove` ORDER — clearing the listings
+    of a parent that the drain is about to free stops the drain's recursion from reaching its
+    children, so parent/child callbacks can fire in either order; no caller was found that depends
+    on it, and this is recorded rather than fixed. (c) A pre-fix combination that no longer exists
+    (descendant shelter absent AND the prune back inside `materialize`) rendered 672 frames /
+    compose#12 in the reviewer's harness, where every other variant stayed near 240 / compose#3;
+    the shipped code measures 243 / compose#3 (`pending=0`), so that anomaly belongs to a state
+    the fix removed, and it is recorded here rather than chased.
