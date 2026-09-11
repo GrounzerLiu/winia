@@ -7066,6 +7066,82 @@ mod tier0_tests {
         crate::animation::clear_all_animations();
     }
 
+    /// The morph detector must do BOTH things for a node whose size a flight owns:
+    /// skip the morph DECISION (otherwise a Tier-1 flight's own layout change opens a
+    /// phantom morph on the peer every frame) AND still keep the baseline current
+    /// (otherwise the landing compares the hero against where it took off from, opens
+    /// a fresh morph, and it flies the whole path again — the replay the reporter saw
+    /// in the demo).
+    ///
+    /// This constructs the freeze condition directly instead of re-creating the real
+    /// flight timing (a flight that resolves in the frame it opens, with the flights
+    /// polled before the morph poll): an endpoint node with the override attached and
+    /// a changed layout. Both halves are discriminating — an early `continue` fails the
+    /// baseline half, dropping the guard fails the no-phantom-flight half.
+    #[test]
+    fn morph_detector_skips_the_decision_but_updates_the_baseline() {
+        use crate::layout::node::{FlightMeasure, FlightMeasureFrame};
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let build = |composer: &mut Composer, w: f32, h: f32| {
+            composer.compose(|ctx| {
+                SharedTransitionLayout::new().build(ctx, |ctx| {
+                    let scope = current_shared_scope().expect("scope");
+                    Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+                        shape_hero_screen(ctx, &scope, w, h, Color::RED, Shape::rounded(8.0));
+                    });
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+            composer.poll_shared_flights();
+        };
+        build(&mut composer, 120.0, 80.0);
+        let idx = marked_in(&composer)[0];
+        let scope_id = *composer
+            .shared_live_map()
+            .keys()
+            .next()
+            .map(|k| &k.0)
+            .expect("a live scope");
+        let bkey = (scope_id, "hero".to_string());
+        let before = *composer.shared_last_bounds.get(&bkey).expect("baseline");
+        assert!((before.width - 120.0).abs() <= 1.0, "baseline starts at the hero ({before:?})");
+
+        // A flight now OWNS this node's size: override attached, layout changed. No
+        // compose, so the mutated tree is what the next poll sees.
+        let mut measure_state = State::new(FlightMeasureFrame {
+            content: Some(crate::layout::node::Size::new(300.0, 160.0)),
+            reported: Some(crate::layout::node::Size::new(300.0, 160.0)),
+        });
+        {
+            let n = &mut composer.arena.nodes[idx];
+            n.measured_size = crate::layout::node::Size::new(300.0, 160.0);
+            n.flight_measure = Some(FlightMeasure {
+                frame: measure_state.clone(),
+                owner: FlightKey { cid: composer.composer_id, id: 9 },
+            });
+        }
+        measure_state.set(FlightMeasureFrame {
+            content: Some(crate::layout::node::Size::new(300.0, 160.0)),
+            reported: Some(crate::layout::node::Size::new(300.0, 160.0)),
+        });
+        composer.poll_shared_flights();
+
+        assert!(
+            composer.shared_flights.is_empty(),
+            "the override-driven size change must NOT open a phantom flight ({} found)",
+            composer.shared_flights.len()
+        );
+        let after = *composer.shared_last_bounds.get(&bkey).expect("baseline");
+        assert!(
+            (after.width - 300.0).abs() <= 1.0 && (after.height - 160.0).abs() <= 1.0,
+            "…while the baseline must track the override-driven layout ({after:?}) — \
+             freezing it makes the flight's own change look like a fresh morph at landing"
+        );
+        crate::animation::clear_all_animations();
+    }
+
     /// Bouncy hero leaf (spring overshoot must render past the end rect).
     fn spring_hero_leaf(
         ctx: &mut ComposeCtx,
