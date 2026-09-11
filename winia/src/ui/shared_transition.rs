@@ -4879,18 +4879,20 @@ mod tier0_tests {
         // step over it — that must fail with a clear message, never as a panic
         // on an empty flight map.
         //
-        // MEASURED, AND STILL UNFIXED (review round 3 + a de-flaking attempt): the
-        // threshold below is NOT the window this test needs. From the flight's own numbers
-        // (start y=300 h=150 -> end y=0 h=160) the hero's top edge is `300*(1-p)`, so the
-        // probe at y=40 is only covered for p > 0.867 — yet the threshold admits
-        // [0.85, 0.867), where the assertion cannot hold. It passes because the first
-        // wall-clock sample overshoots to ~0.89. Pinning the progress instead does NOT
-        // work either: at p=0.89 the ghost's own opacity is low enough that the bar still
-        // dominates the probe ("got (28,226,0)"), i.e. the band reaching the probe and the
-        // hero out-shading the bar pull in OPPOSITE directions. Fixing this properly needs
-        // a sweep of the painted pixel against p to find the real window (and probably a
-        // different probe point); three attempts by reasoning were reverted rather than
-        // risk weakening a passing test.
+        // MEASURED, AND STILL UNFIXED (review round 3 + two de-flaking attempts): the
+        // threshold below is NOT the window this test needs. Measured p -> probe(150,40)
+        // curve over the flight: pure bar green (0,255,0) for p = 0.000..0.813, and
+        // (33,221,0) at p = 0.870 — i.e. the band only reaches the probe around 0.87, by
+        // which point the leaving ghost's opacity is already low. The two things this test
+        // wants ("the band covers the probe" and "the hero out-shades the pinned bar") pull
+        // in OPPOSITE directions at this probe point, which is why pinning the progress at
+        // 0.9, at 0.85, and at 0.85 with two frames all failed their assertions. It passes
+        // as written only because the wall-clock loop's first sample overshoots to ~0.89,
+        // and the dead band [0.85, 0.867) — where the assertion cannot hold — is exactly
+        // what made it fail once under full parallel load while passing in isolation.
+        // The fix is to move the PROBE POINT (so the band arrives while the ghost is still
+        // legible) and then pin the progress, not to keep tuning p; three attempts by
+        // reasoning were reverted rather than risk weakening a passing test.
         let mut sample: Option<(f32, u64, usize)> = None;
         for _ in 0..200 {
             match flight_probe(&composer) {
