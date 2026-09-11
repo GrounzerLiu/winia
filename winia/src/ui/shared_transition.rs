@@ -6585,6 +6585,18 @@ mod tier0_tests {
             kept.is_some_and(|f| f.owner.cid == composer.composer_id + 1000),
             "a foreign flight's override must survive this flight's writes"
         );
+
+        // …and the CLEAR side must be just as namespaced: tearing down THIS
+        // composer's flights must not drop a different flight's override.
+        let key = composer.arena_nodes()[marked].slot_key;
+        composer.clear_transition_for_slot(key, FlightKey { cid: composer.composer_id, id: 1 });
+        assert!(
+            composer.arena_nodes()[marked]
+                .flight_measure
+                .as_ref()
+                .is_some_and(|f| f.owner.cid == composer.composer_id + 1000),
+            "a teardown for another flight must leave the foreign override alone"
+        );
         crate::animation::clear_all_animations();
     }
 
