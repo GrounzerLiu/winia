@@ -2373,6 +2373,13 @@ impl Composer {
             Some(v) => v,
             None => return,
         };
+        // Identity of the endpoint this flight is chasing, for the target-slot
+        // re-check below (slots are positional; a shift can hand the key away).
+        let flight_key = self
+            .shared_flights
+            .get(&id)
+            .map(|a| (a.flight.scope_id, a.flight.key.clone()));
+        let Some(flight_key) = flight_key else { return };
         // Flight bounds are canonical window coords; visuals render in this
         // composer's canvas frame (main renders untranslated; overlays render
         // translated by screen_pos).
@@ -2410,6 +2417,20 @@ impl Composer {
         if let Some(slot) = tslot {
             if let Some(root) = self.arena.root {
                 if let Some(tidx) = find_idx_by_slot(&self.arena.nodes, root, slot) {
+                    // IDENTITY RE-CHECK (review 2, R2-F5): slots are positional, so a
+                    // recomposition that shifts the target's position can hand this
+                    // frozen key to an unrelated element — which would then take the
+                    // flight's visual AND its layout override (measured: an unrelated
+                    // 20x20 leaf laid out at the flight's reported size for one pass).
+                    // Tier 1 has the equivalent guard (its staleness check); Tier 0
+                    // re-checks the marker instead.
+                    let still_ours = find_shared_marker(&self.arena.nodes[tidx].modifier)
+                        .is_some_and(|m| {
+                            m.scope_id == flight_key.0 && m.key == flight_key.1
+                        });
+                    if !still_ours {
+                        return;
+                    }
                     let role = if sslot == tslot {
                         // Same-screen size morph: opacity untouched.
                         TransitionRole::Morph
@@ -6992,6 +7013,57 @@ mod tier0_tests {
         let _ = Size::new(1.0, 1.0);
     }
 
+
+    /// The Tier-0 writer must not hand a flight's visual (or its layout override) to
+    /// whatever node happens to sit at the frozen target slot. Slots are positional, so
+    /// a recomposition that shifts the target can leave an unrelated element there (R2
+    /// measured an unrelated 20x20 leaf laid out at the flight's reported size for one
+    /// pass). Here the slot's node loses its marker directly, which is the same
+    /// condition the writer must detect.
+    #[test]
+    fn tier0_writer_skips_a_node_that_is_not_the_shared_endpoint() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+        let frame = |composer: &mut Composer| {
+            let s = show.clone();
+            composer.compose(|ctx| {
+                SharedTransitionLayout::new().build(ctx, |ctx| {
+                    let scope = current_shared_scope().expect("scope");
+                    if s.get() {
+                        list_layout_screen(ctx, &scope, ResizeMode::ScaleToBounds, PlaceHolderSize::JumpCut);
+                    } else {
+                        detail_layout_screen(ctx, &scope, ResizeMode::RemeasureToBounds, PlaceHolderSize::AnimatedSize);
+                    }
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+            composer.poll_shared_flights();
+        };
+        frame(&mut composer);
+        show.set(false);
+        frame(&mut composer);
+        assert_eq!(composer.shared_flights.len(), 1, "flight opened");
+        let marked = marked_in(&composer)[0];
+
+        // The slot now holds something that is NOT this flight's endpoint: strip the
+        // marker (no compose, so the tree is left as mutated) and run the writer.
+        composer.arena.nodes[marked].modifier = Modifier::new();
+        composer.arena.nodes[marked].transition = None;
+        composer.arena.nodes[marked].flight_measure = None;
+        composer.poll_shared_flights();
+
+        assert!(
+            composer.arena_nodes()[marked].transition.is_none(),
+            "the writer must not paint a flight onto a node that is not its endpoint"
+        );
+        assert!(
+            composer.arena_nodes()[marked].flight_measure.is_none(),
+            "…nor attach its layout override there"
+        );
+        crate::animation::clear_all_animations();
+    }
 
     /// Bouncy hero leaf (spring overshoot must render past the end rect).
     fn spring_hero_leaf(
