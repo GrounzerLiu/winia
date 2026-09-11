@@ -189,12 +189,6 @@ fn image_flight_demo(ctx: &mut ComposeCtx) {
                         });
                 } else {
                     Text::new("List").font_size(22.0).build(ctx);
-                    Text::new(
-                        "Pick a mode, then tap the card: the same photo flies with that \
-                         scale and you can compare runs.",
-                    )
-                    .font_size(12.0)
-                    .build(ctx);
                     photo_box(ctx, 132.0, 92.0, &scope, &content_scale, &remeasure, &spill, &slow);
                     controls(ctx, &content_scale, &remeasure, &spill, &slow, &show_detail);
                     Button::new()
@@ -206,6 +200,19 @@ fn image_flight_demo(ctx: &mut ComposeCtx) {
                         .build(ctx, |ctx| {
                             Text::new("Fly to detail").build(ctx);
                         });
+                    // The hint goes LAST, below everything the flight moves: putting it above
+                    // the card would make the two screens differ in height above the hero, so
+                    // the rows below would shift the moment the switch happened — a jump the
+                    // reader would rightly blame on the transition. Anything a screen adds or
+                    // removes ABOVE a shared hero moves its neighbours, exactly as it would in
+                    // Compose.
+                    Text::new(
+                        "Pick a mode, then tap Fly to detail: the same photo flies with that \
+                         scale and you can compare runs. Re-measure re-lays the photo out at \
+                         the animated size every frame instead of scaling it.",
+                    )
+                    .font_size(12.0)
+                    .build(ctx);
                 }
             });
     });
