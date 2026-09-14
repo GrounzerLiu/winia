@@ -10,6 +10,7 @@
 
 pub mod core;
 pub mod unit;
+pub mod anim_trace;
 /// 调试日志宏：仅 `debug-server` feature 下打印（用户构建零噪音）。
 /// 用法：`debug_log!("[tag] {}", x);`——编译期折叠（非 feature 构建零开销）。
 #[macro_export]
