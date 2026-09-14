@@ -19,6 +19,8 @@
 //! Output: one JSON object per line (NDJSON), one line per subject per frame.
 
 use crate::ui::shared_transition::NavSceneInfo;
+// Only the feature-gated implementation keeps maps (the no-op variant has nothing to look up).
+#[cfg(feature = "anim-trace")]
 use std::collections::HashMap;
 
 /// A rectangle in logical pixels, in the canvas frame of the composer that drew it.

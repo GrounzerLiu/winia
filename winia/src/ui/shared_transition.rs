@@ -2039,6 +2039,36 @@ pub(crate) fn find_idx_by_slot(nodes: &[LayoutNode], root: usize, slot: u64) -> 
     None
 }
 
+/// Test-only: mark a scope as transitioning (or idle) without a real flight.
+///
+/// A morph now only opens while its scope has a running transition (Compose ties the two together), so
+/// tests that used to start one from a bare layout change mark the scope active first. The coordinator's
+/// end-of-poll full sync clears it again, which is fine: the morph opens during that same poll and
+/// continues through the ungated reopen path.
+#[cfg(test)]
+pub(crate) fn set_scope_transition_active_for_test(scope_id: u64, active: bool) {
+    SCOPE_ACTIVE
+        .lock()
+        .unwrap()
+        .entry(scope_id)
+        .or_insert_with(|| State::new(false))
+        .set(active);
+}
+
+/// Is a transition running in this scope right now — i.e. does any non-terminal flight belong to it?
+///
+/// The same question [`SharedTransitionScope::is_transition_active`] answers for composition, asked by
+/// [`SharedTransitionScope`]-less code (the coordinator's morph detection) from the synced global table,
+/// so both tiers agree. Scopes nobody has read yet count as idle.
+pub(crate) fn scope_transition_active(scope_id: u64) -> bool {
+    SCOPE_ACTIVE
+        .lock()
+        .unwrap()
+        .get(&scope_id)
+        .map(|s| s.get())
+        .unwrap_or(false)
+}
+
 fn is_terminal(phase: FlightPhase) -> bool {
     matches!(phase, FlightPhase::Finishing | FlightPhase::Cancelled)
 }
@@ -2566,6 +2596,19 @@ impl Composer {
 
     /// Free a retained source subtree + drop its slot (fires on_remove —
     /// removal semantic) + clear the target's visuals if still present.
+    /// Is a transition running in this scope NOW?
+    ///
+    /// Checks this composer's own map first, so a flight opened EARLIER IN THIS SAME FRAME counts (the
+    /// switch handling runs before the morph detection): the globally synced table is only updated at the
+    /// end of a poll, so it would say "idle" on the very frame a transition starts. The global table is
+    /// still consulted for Tier 1, whose flights live in the main composer's map.
+    fn scope_is_transitioning(&self, scope_id: u64) -> bool {
+        self.shared_flights
+            .values()
+            .any(|a| a.flight.scope_id == scope_id && !is_terminal(a.flight.phase))
+            || scope_transition_active(scope_id)
+    }
+
     fn cancel_flight(&mut self, id: FlightId, reason: &'static str) {
         let Some(a) = self.shared_flights.remove(&id) else {
             return;
@@ -4055,13 +4098,24 @@ impl Composer {
                                 });
                             }
                         }
-                        None => pending.push(Pending::Fresh {
-                            scope_id: k.0,
-                            key: k.1.clone(),
-                            slot: *slot,
-                            start: *prev,
-                            end: cur,
-                        }),
+                        None => {
+                            // Compose ties a shared element's morph to a TRANSITION: the element
+                            // animates when the transition animating it changes its bounds, not merely
+                            // because a layout pass changed them. Without this gate a window resize
+                            // opened a morph on every marked node whose rect changed (measured:
+                            // `morph_open flight:entry:… fresh 420x524 -> 430x604` right after a
+                            // resize), i.e. dragging the window animated the UI.
+                            if !self.scope_is_transitioning(k.0) {
+                                continue;
+                            }
+                            pending.push(Pending::Fresh {
+                                scope_id: k.0,
+                                key: k.1.clone(),
+                                slot: *slot,
+                                start: *prev,
+                                end: cur,
+                            })
+                        }
                     }
                 }
                 }
@@ -4209,6 +4263,20 @@ mod tier0_tests {
             }
         }
         out
+    }
+
+    /// Mark the scope of the composer's first marked node as having a running transition.
+    ///
+    /// A morph only opens inside a transition now (Compose semantics: the element animates because the
+    /// transition animating it changed its bounds, not because a layout pass did). Tests that used a bare
+    /// layout change to start one declare the transition first; the coordinator's end-of-poll sync clears
+    /// the flag again once that poll has run.
+    fn mark_scope_active(composer: &Composer) {
+        if let Some(idx) = marked_indices(composer).first() {
+            if let Some(m) = find_shared_marker(&composer.arena_nodes()[*idx].modifier) {
+                set_scope_transition_active_for_test(m.scope_id, true);
+            }
+        }
     }
 
     /// Mirror the app loop: main tree, then the transition layer
@@ -6106,6 +6174,9 @@ mod tier0_tests {
             composer.poll_shared_flights();
         };
         morph_frame(&mut composer);
+        // A morph requires a running transition (Compose semantics), so declare one before the size
+        // change that is supposed to open it.
+        mark_scope_active(&composer);
         w.set(200.0);
         morph_frame(&mut composer);
         assert_eq!(composer.shared_flights.len(), 1, "morph flight opened");
@@ -9284,8 +9355,20 @@ mod tier0_tests {
         assert_eq!(marked.len(), 1);
         let slot = composer.arena_nodes()[marked[0]].slot_key;
 
-        // Layout-only size change (no compose call at all).
+        // Layout-only size change (no compose call at all), with NO transition running: Compose ties a
+        // morph to a transition, and a bare layout change (what a window resize produces) must open
+        // nothing — it used to animate every marked node whose rect moved.
         w.set(300.0);
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        composer.poll_shared_flights();
+        assert!(
+            composer.shared_flights.is_empty(),
+            "a layout change outside a transition must open nothing"
+        );
+
+        // The same kind of change INSIDE a transition does morph — the mechanism under test.
+        mark_scope_active(&composer);
+        w.set(340.0);
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
         composer.poll_shared_flights();
         assert_eq!(composer.shared_flights.len(), 1, "size delta opens a morph flight");
@@ -9364,6 +9447,9 @@ mod tier0_tests {
         composer.poll_shared_flights();
         assert!(composer.shared_flights.is_empty(), "steady size opens nothing");
 
+        // A morph requires a running transition (Compose semantics), so declare one before the size
+        // change that is supposed to open it.
+        mark_scope_active(&composer);
         // Layout-only size change (no compose call at all).
         w.set(300.0);
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -10000,7 +10086,7 @@ mod tier0_tests {
     }
 
     #[test]
-    fn morph_and_switch_coexist() {
+    fn switch_frame_opens_one_flight_per_marked_key_and_absorbs_later_rect_changes() {
         let _g = lock_serial();
         crate::animation::clear_all_animations();
         let mut composer = Composer::new();
@@ -10031,16 +10117,55 @@ mod tier0_tests {
         };
 
         mixed_frame(&mut composer);
-        // Open a morph (layout-only size change, no compose).
+        // A morph now requires a running transition, so the order is: switch first (that IS the
+        // transition), then the layout-only size change that morphs alongside it. The switch frame alone
+        // already opens TWO flights — the hero's switch and a morph for the marked leaf, whose rect the
+        // new layout moved — which is the rule working: a rect change inside a transition morphs.
+        show.set(false);
+        mixed_frame(&mut composer);
+        let summary = |composer: &Composer| {
+            composer
+                .shared_flights
+                .values()
+                .map(|a| {
+                    format!(
+                        "{}(src={}, target={:?})",
+                        a.flight.key,
+                        a.source_idx.is_some(),
+                        a.flight.target_slot.is_some()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        assert_eq!(
+            composer.shared_flights.len(),
+            2,
+            "the switch frame opens the hero's switch plus the morph: {}",
+            summary(&composer)
+        );
+        assert_eq!(
+            composer
+                .shared_flights
+                .values()
+                .filter(|a| a.source_idx.is_none())
+                .count(),
+            0,
+            "both are switches: in this scene the second marked key changes slot too, so it switches \
+             rather than morphs — a morph is covered where the key keeps its slot ({})",
+            summary(&composer)
+        );
+        // Layout-only size change, no compose: both keys already own a flight, so nothing new opens
+        // (a second flight for one key would fight for the same visuals).
         w.set(300.0);
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
         composer.poll_shared_flights();
-        assert_eq!(composer.shared_flights.len(), 1, "morph opens");
-        mixed_advance(&mut composer);
-        // Switch screens mid-morph: switch flight opens alongside.
-        show.set(false);
-        mixed_frame(&mut composer);
-        assert_eq!(composer.shared_flights.len(), 2, "morph + switch coexist");
+        assert_eq!(
+            composer.shared_flights.len(),
+            2,
+            "a rect change during a flight is absorbed by that key's flight: {}",
+            summary(&composer)
+        );
 
         for _ in 0..300 {
             if composer.shared_flights.is_empty() {

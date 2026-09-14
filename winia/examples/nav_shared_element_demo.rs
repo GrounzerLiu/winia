@@ -277,11 +277,11 @@ fn demo(ctx: &mut ComposeCtx) {
                             .font_size(12.0)
                             .build(ctx)
                     });
-                let mut display = NavDisplay::new(&display_stack, {
+                let display = NavDisplay::new(&display_stack, {
                     clone!(scope);
                     let motion_for_list = motion.clone();
                     let motion_for_detail = motion.clone();
-                    move |ctx, key| match key {
+                    move |_ctx, key| match key {
                         Route::List => NavEntry::new(key.clone(), {
                             clone!(scope);
                             let m = std::sync::Arc::new(motion_for_list.clone());
