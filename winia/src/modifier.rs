@@ -3180,6 +3180,15 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (VerticalScroll { state: as_ }, VerticalScroll { state: bs }) => as_.offset.state_id() == bs.offset.state_id(),
         (HorizontalScroll { state: as_, reverse: ar }, HorizontalScroll { state: bs, reverse: br }) => as_.offset.state_id() == bs.offset.state_id() && ar == br,
         (NestedScroll { .. }, NestedScroll { .. }) => true,
+        // Scene tag: an equal id means the tag did not change. Without this arm the match falls through
+        // to `_ => false`, so any modifier chain carrying a `SceneTag` could NEVER Skip — measured
+        // consequence: the nav's transition-layer wrapper (which carries one) re-composed and re-measured
+        // both scenes' whole content on every visit instead of restoring the cached subtree.
+        //
+        // A scene host must therefore put everything its wrapper's content closes over into that
+        // wrapper's identity (the nav keys each layer by scene key + role + whether a transition is
+        // running): a Skip reuses the previous frame's closures, and the tag alone cannot see them.
+        (SceneTag { id: a }, SceneTag { id: b }) => a == b,
         // 图形层动态参数视为相同（渲染期求值——动画不触发 Enter）
         (GraphicsLayer { .. }, GraphicsLayer { .. }) => true,
         _ => false,

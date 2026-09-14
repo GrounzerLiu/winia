@@ -1147,23 +1147,49 @@ impl<K: NavKey> NavTransition<K> {
                 move |w, _| width.set(w)
             }))
             .build(ctx, |ctx| {
+                // Each layer's SLOT identity must cover everything its subtree closes over: the scene
+                // itself, the role it plays (leaving or entering) and whether a transition is running.
+                // The scene key alone is not enough — the two Stack children swap roles by direction, so
+                // the same scene can occupy the same child slot in a different role, and a Skip would
+                // then reuse the previous frame's `is_prev`/`active` closures (measured symptom: the
+                // flight paired the leaving end with itself). With the full identity a Skip is safe, which
+                // is what the `SceneTag` equality arm now allows.
+                let layer_key = |scene: &dyn Scene<K>, is_prev: bool| -> u64 {
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    std::hash::Hash::hash(&(scene.scene_key(), is_prev, active), &mut hasher);
+                    std::hash::Hasher::finish(&hasher)
+                };
                 if forward {
                     // push：新场景在上层（对标 Nav3 "z-index increases during navigate"）
                     if let Some(p) = previous_scene {
-                        render_layer(ctx, p, true);
+                        let k = layer_key(p, true);
+                        ctx.key(k, |ctx| render_layer(ctx, p, true));
                     }
-                    render_layer(ctx, current_scene, false);
+                    let k = layer_key(current_scene, false);
+                    ctx.key(k, |ctx| render_layer(ctx, current_scene, false));
                 } else {
                     // pop：被弹出的旧场景在上层（对标 Nav3 "decreases during pop"）
-                    render_layer(ctx, current_scene, false);
+                    let k = layer_key(current_scene, false);
+                    ctx.key(k, |ctx| render_layer(ctx, current_scene, false));
                     if let Some(p) = previous_scene {
-                        render_layer(ctx, p, true);
+                        let k = layer_key(p, true);
+                        ctx.key(k, |ctx| render_layer(ctx, p, true));
                     }
                 }
                 // 过渡期输入屏蔽层：命中测试不计 graphics_layer 位移（布局命中盒
                 // 停在原位）——滑动场景的按钮过渡期可被误触（如连点返回清空栈）。
-                // 全尺寸可点击层兜底吞掉过渡期全部点击（透明、无波纹）
-                if active {
+                // 只有当原语真的位移内容时才需要兜底：`fade`/`none` 不移动命中盒，
+                // 挡下来只会让整屏在过渡期间失去响应（实测 800ms fade 下进入页的
+                // Back 按钮约 800ms 内点不动），而 Compose 的 AnimatedContent/NavDisplay
+                // 从不安插这种层。
+                let displaces = matches!(
+                    self.active_spec.peek().as_ref().unwrap_or(&spec).exit,
+                    NavExit::SlideOut { .. } | NavExit::SlideAndFadeOut { .. } | NavExit::ScaleOut { .. }
+                ) || matches!(
+                    self.active_spec.peek().as_ref().unwrap_or(&spec).enter,
+                    NavEnter::SlideIn { .. } | NavEnter::SlideAndFadeIn { .. } | NavEnter::ScaleIn { .. }
+                );
+                if active && displaces {
                     crate::ui::layout_components::Column::new()
                         .modifier(Modifier::new().fill_max_size().clickable(|| {}))
                         .build(ctx, |_| {});

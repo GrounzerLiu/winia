@@ -419,8 +419,11 @@ impl PerWindow {
         self.frame_counter += 1;
         debug_log!("[fps] render#{} compose#{} pending={}", self.frame_counter, self.composer.compose_count(), self.composer.pending_state_count());
         // anim-trace frame barrier: stamps the frame number and a wall-clock timestamp, samples every
-        // scene published this frame, and flushes the previous frame's records. A no-op unless the
-        // `anim-trace` feature is on AND WINIA_ANIM_TRACE names an output file.
+        // scene published this frame, and flushes the previous frame's records.
+        //
+        // With `anim-trace` off this is a no-op. With it ON it always runs — the ring that serves the
+        // debug server's `tr` command is always fed — and only the FILE sink is gated on WINIA_ANIM_TRACE,
+        // so a build with the feature and no env var records into memory and writes nothing.
         crate::anim_trace::begin_frame(
             self.frame_counter,
             std::time::SystemTime::now()

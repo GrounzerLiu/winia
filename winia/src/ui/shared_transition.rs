@@ -1770,7 +1770,12 @@ pub(crate) fn find_shared_marker(modifier: &Modifier) -> Option<SharedMarker> {
 /// layer, so the flight keeps it opaque unless the scene host elevates it into the layer too.
 fn scene_alpha_for_end(nodes: &[LayoutNode], idx: usize, leaving_end: bool) -> Option<f32> {
     let marker = find_shared_marker(&nodes.get(idx)?.modifier)?;
-    marker.scene?;
+    // Scene membership from the ANCESTOR chain, like the pairing path: the marker's own `scene` field is
+    // captured when its modifier element is built and then reused across frames, so it freezes (measured:
+    // one end reported None while the other reported the LEAVING scene). Reading the frozen field here
+    // meant an in-tree end could double-fade (None while its scene also fades it) or never fade (a stale
+    // Some(1.0) after its scene stopped fading it).
+    scene_of_node(nodes, idx)?;
     if leaving_end || marker.render_in_overlay {
         // The flight paints this end from the transition layer, and the scene's own layer fade does
         // NOT apply there — so the flight has to fade it, and it must do so on the FLIGHT's clock so
@@ -2169,7 +2174,6 @@ impl Composer {
                     // crossfaded without ever growing while a same-screen morph supplied the growth).
                     let scene = scene_of_node_with(&self.arena.nodes, &id_to_idx, idx);
                     let is_prev = scene.and_then(nav_scene_is_prev);
-                    let vis = scene.and_then(nav_scene_visibility);
                     let key = (m.scope_id, m.key.clone());
                     match out.get(&key) {
                         Some(&(_, prev_is_prev)) => {
@@ -2188,7 +2192,6 @@ impl Composer {
                             out.insert(key, (node.slot_key, is_prev));
                         }
                     }
-                    let _ = vis;
                 }
                 stack.extend(node.children.iter().copied());
             }
@@ -2342,11 +2345,13 @@ impl Composer {
         }
         // Switches (fresh + retarget-lite).
         for c in detect_switch(&self.prev_shared_endpoints, &live) {
-            crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
-                format!("flight:{}", c.key),
-                "candidate",
-                format!("old={:#x} new={:#x}", c.old_slot, c.new_slot),
-            ));
+            if crate::anim_trace::enabled() {
+                crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
+                    format!("flight:{}", c.key),
+                    "candidate",
+                    format!("old={:#x} new={:#x}", c.old_slot, c.new_slot),
+                ));
+            }
             // Retarget-lite: same key already flying → cancel old (freeing its
             // retained node), restart from the current visual rect. Own-map
             // Tier0 only — Tier1 retargets resolve in cross-poll (which sees
@@ -2364,28 +2369,47 @@ impl Composer {
                 })
                 .map(|(id, _)| *id)
             {
-                // A scene host (winia's nav) composes the outgoing and incoming scene at once, so the
-                // SAME key is live twice and `detect_switch` sees its two slots alternate as the tree
-                // walk order changes between them. That is not a new switch — it is the flight's own
-                // two ends seen the other way round. Retargeting on it cancelled a running crossfade
-                // (measured with anim-trace: `cancel reason=retarget_same_key p=0.2024` at +0.20 s)
-                // and the follow-up `begin_flight` then bailed in `detach_source` (that slot was never
-                // a vanished endpoint), so nothing flew at all and a same-screen morph — which by
-                // design never touches opacity — took over. That is the reported "no crossfade, just an
-                // opaque hero growing". Skip such a candidate instead.
-                let own_pair_reversed = self.shared_flights.get(&id).is_some_and(|a| {
-                    match (a.flight.source_slot, a.flight.target_slot) {
-                        (Some(s), Some(t)) => c.old_slot == t && c.new_slot == s,
-                        _ => false,
+                // Two shapes of candidate for an ALREADY-FLYING key, and they need opposite handling:
+                //
+                // * The end that moved is this flight's target: the element is the same one (same scope,
+                //   same key) and it was merely re-slotted inside its scene while the flight runs — a
+                //   scene host re-arranges layers mid-transition and winia slots are positional. Compose's
+                //   identity here is the KEY (`rememberSharedContentState(key)`), not the position, and a
+                //   position change updates the node in place. Retargeting this case cancelled a running
+                //   crossfade and then bailed in `detach_source` (the old slot was already gone), so
+                //   nothing flew and a same-screen morph — opacity-immune by design — took over.
+                //   Rebind: keep the progress and the start rect, re-point the target slot, clear the
+                //   stale node's visuals.
+                // * The candidate's slots are this flight's own two ends REVERSED: that is a genuine
+                //   navigation back (measured: clicking Back while the push flight still runs produces
+                //   exactly `old=target new=source`), so it must go through retarget below.
+                let target_moved = self
+                    .shared_flights
+                    .get(&id)
+                    .is_some_and(|a| {
+                        a.flight.target_slot == Some(c.old_slot)
+                            && a.flight.source_slot != Some(c.new_slot)
+                            && a.source_idx.is_some()
+                    });
+                if target_moved {
+                    if let Some(a) = self.shared_flights.get_mut(&id) {
+                        a.flight.target_slot = Some(c.new_slot);
                     }
-                });
-                // NOTE: a candidate whose slots are this flight's own two ends reversed is a REAL
-                // navigation back (measured: clicking Back while the push flight still runs produces
-                // exactly `old=target new=source`), so it must be retargeted, not skipped. An earlier
-                // version skipped it to silence a spurious flip; that flip was really the winner
-                // selection comparing scene visibilities, which is fixed properly now (see
-                // `shared_live_map`: the winner is the end in the scene that is NOT leaving), and
-                // skipping here swallowed the return animation instead.
+                    let key = self
+                        .shared_flights
+                        .get(&id)
+                        .map(|a| a.flight.key.clone())
+                        .unwrap_or_default();
+                    self.clear_transition_for_slot(c.old_slot, FlightKey { cid: self.composer_id, id });
+                    if crate::anim_trace::enabled() {
+                        crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
+                            format!("flight:{key}"),
+                            "rebind",
+                            format!("target {:#x} -> {:#x}", c.old_slot, c.new_slot),
+                        ));
+                    }
+                    continue;
+                }
                 if let Some(a) = self.shared_flights.get(&id) {
                     // Unclamped + path-aware: retarget continuity follows the
                     // true visual rect, including spring overshoot past the
@@ -2638,18 +2662,21 @@ impl Composer {
         };
         // anim-trace: a cancelled flight is the usual reason a crossfade stops mid-way, and nothing
         // else in a trace says so — record the key, the progress it died at, and WHICH call site did
-        // it (five of them can, and they mean different bugs).
-        crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
-            format!("flight:{}", a.flight.key),
-            "cancel",
-            format!(
-                "reason={reason} id={id} has_source={} p={:.4} flight_slots=({:?},{:?})",
-                a.source_idx.is_some(),
-                a.progress.peek(),
-                a.flight.source_slot,
-                a.flight.target_slot
-            ),
-        ));
+        // it (five of them can, and they mean different bugs). Gated: with the feature off `record` is a
+        // no-op but its arguments would still be built.
+        if crate::anim_trace::enabled() {
+            crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
+                format!("flight:{}", a.flight.key),
+                "cancel",
+                format!(
+                    "reason={reason} id={id} has_source={} p={:.4} flight_slots=({:?},{:?})",
+                    a.source_idx.is_some(),
+                    a.progress.peek(),
+                    a.flight.source_slot,
+                    a.flight.target_slot
+                ),
+            ));
+        }
         if let (Some(slot), Some(idx)) = (a.flight.source_slot, a.source_idx) {
             self.free_retained_source(idx, slot);
         }
@@ -2926,25 +2953,31 @@ impl Composer {
                 };
                 // Canonicalize to window coords (overlay-local + screen origin).
                 let (ox, oy) = self.screen_origin;
-                crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
-                    format!(
-                        "flight:{}",
-                        find_shared_marker(&self.arena.nodes[tidx].modifier)
-                            .map(|m| m.key)
-                            .unwrap_or_default()
-                    ),
-                    "resolve",
-                    format!(
-                        "tidx={tidx} own_size={:?} measured={:?} content_box={:?} scene={:?} end=({tw:.0},{th:.0})",
-                        self.arena.nodes[tidx].modifier.elements().iter().find_map(|el| match el {
-                            ModifierElement::Size { .. } => Some(format!("{el:?}")),
-                            _ => None,
-                        }),
-                        self.arena.nodes[tidx].measured_size,
-                        self.arena.nodes[tidx].content_box(),
-                        scene_of_node(&self.arena.nodes, tidx),
-                    ),
-                ));
+                // Gated: with the feature off `record` is a no-op but its arguments (including a
+                // `scene_of_node` ancestry walk) would still be evaluated.
+                if crate::anim_trace::enabled() {
+                    crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
+                        format!(
+                            "flight:{}",
+                            find_shared_marker(&self.arena.nodes[tidx].modifier)
+                                .map(|m| m.key)
+                                .unwrap_or_default()
+                        ),
+                        "resolve",
+                        format!(
+                            // `id=` lets a report pair this announcement with the resolved end's records
+                            // (the event's subject carries only the key, not the role or the flight).
+                            "id={id} tidx={tidx} own_size={:?} measured={:?} content_box={:?} scene={:?} end=({tw:.0},{th:.0})",
+                            self.arena.nodes[tidx].modifier.elements().iter().find_map(|el| match el {
+                                ModifierElement::Size { .. } => Some(format!("{el:?}")),
+                                _ => None,
+                            }),
+                            self.arena.nodes[tidx].measured_size,
+                            self.arena.nodes[tidx].content_box(),
+                            scene_of_node(&self.arena.nodes, tidx),
+                        ),
+                    ));
+                }
                 let end = SharedBounds::new(tx + ox, ty + oy, tw, th);
                 let marker = find_shared_marker(&self.arena.nodes[tidx].modifier);
                 let (
@@ -4136,16 +4169,20 @@ impl Composer {
                             // opened a morph on every marked node whose rect changed (measured:
                             // `morph_open flight:entry:… fresh 420x524 -> 430x604` right after a
                             // resize), i.e. dragging the window animated the UI.
-                            if !self.scope_is_transitioning(k.0) {
-                                continue;
+                            //
+                            // The gate skips only the DECISION — the baseline insert below still runs, as
+                            // the older `overridden` guard does. `continue`-ing here left the baseline
+                            // stale, so an idle resize was replayed as a morph on the first transitioning
+                            // frame instead: the same artefact, one navigation later.
+                            if self.scope_is_transitioning(k.0) {
+                                pending.push(Pending::Fresh {
+                                    scope_id: k.0,
+                                    key: k.1.clone(),
+                                    slot: *slot,
+                                    start: *prev,
+                                    end: cur,
+                                });
                             }
-                            pending.push(Pending::Fresh {
-                                scope_id: k.0,
-                                key: k.1.clone(),
-                                slot: *slot,
-                                start: *prev,
-                                end: cur,
-                            })
                         }
                     }
                 }

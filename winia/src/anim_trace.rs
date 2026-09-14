@@ -38,9 +38,21 @@ impl TraceRect {
     }
 
     fn to_json(self) -> String {
+        // Non-finite components would produce `NaN`/`inf`, which JSON cannot express and which would make
+        // the whole line unparseable; null keeps the line valid and visible in a report.
+        fn f(v: f32) -> String {
+            if v.is_finite() {
+                format!("{v:.2}")
+            } else {
+                "null".to_string()
+            }
+        }
         format!(
-            "{{\"x\":{:.2},\"y\":{:.2},\"w\":{:.2},\"h\":{:.2}}}",
-            self.x, self.y, self.w, self.h
+            "{{\"x\":{},\"y\":{},\"w\":{},\"h\":{}}}",
+            f(self.x),
+            f(self.y),
+            f(self.w),
+            f(self.h)
         )
     }
 }
@@ -146,7 +158,12 @@ impl TraceRecord {
 
     fn to_json(&self, frame: u64, t_ms: u128) -> String {
         fn opt_f32(v: Option<f32>) -> String {
-            v.map(|v| format!("{v:.4}")).unwrap_or_else(|| "null".to_string())
+            // JSON has no NaN/Infinity: a non-finite value would make the line unparseable, and a report
+            // silently drops lines it cannot parse, so write null instead.
+            match v {
+                Some(v) if v.is_finite() => format!("{v:.4}"),
+                _ => "null".to_string(),
+            }
         }
         fn opt_rect(v: Option<TraceRect>) -> String {
             v.map(|v| v.to_json()).unwrap_or_else(|| "null".to_string())
@@ -161,16 +178,16 @@ impl TraceRecord {
             })
             .unwrap_or_else(|| "null".to_string());
         format!(
-            "{{\"frame\":{frame},\"t_ms\":{t_ms},\"kind\":\"{}\",\"subject\":{:?},\
+            "{{\"frame\":{frame},\"t_ms\":{t_ms},\"kind\":\"{}\",\"subject\":{},\
              \"scope\":{},\"key\":{},\"role\":{},\"flight\":{},\"scene\":{},\"phase\":{},\
              \"progress\":{},\"layout\":{},\"painted\":{},\"alpha\":{},\"effective_alpha\":{},\
              \"scene_visibility\":{},\"radii\":{radii},\"clip\":{},\"detail\":{}}}",
             self.kind.as_str(),
-            self.subject,
+            json_str(&self.subject),
             self.scope.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string()),
             self.key
                 .as_ref()
-                .map(|k| format!("{k:?}"))
+                .map(|k| json_str(k))
                 .unwrap_or_else(|| "null".to_string()),
             self.role
                 .map(|r| format!("{r:?}"))
@@ -191,10 +208,37 @@ impl TraceRecord {
                 .unwrap_or_else(|| "null".to_string()),
             self.detail
                 .as_ref()
-                .map(|d| format!("{d:?}"))
+                .map(|d| json_str(d))
                 .unwrap_or_else(|| "null".to_string()),
         )
     }
+}
+
+/// A JSON string literal valid for EVERY input.
+///
+/// `{:?}` (Rust's `escape_debug`) is not a JSON encoder: it writes `\0` for NUL and `\u{...}` for any
+/// control, whitespace-like, grapheme-extender, format-control or private-use codepoint (U+00A0, U+3000,
+/// ZWJ, VS16, PUA …), none of which JSON accepts. `serde_json::from_str` rejects such lines, and a report
+/// drops what it cannot parse, so the loss was silent. JSON needs only `"`, `\` and the C0 controls
+/// escaped; every other codepoint passes through as UTF-8, which JSON allows.
+fn json_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{8}' => out.push_str("\\b"),
+            '\u{c}' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 // ── Real implementation (feature on) ─────────────────────────────────────────────
