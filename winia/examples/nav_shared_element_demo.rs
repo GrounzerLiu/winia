@@ -74,9 +74,13 @@ fn hero(
                     VisibilityTransition::fade_in(TweenSpec::default()),
                     VisibilityTransition::fade_out(TweenSpec::default()),
                     motion,
-                    ResizeMode::scale_to_bounds(),
+                    // Re-lay-out at the lerped size every frame instead of scaling a stable snapshot
+                    // into it: the hero's own content is re-measured for the animated box.
+                    ResizeMode::RemeasureToBounds,
                     PlaceHolderSize::AnimatedSize,
-                    PathMotion::Linear,
+                    // Bend the path below the straight line between the two rects, so the flight is
+                    // visibly an arc rather than a slide.
+                    PathMotion::ArcBelow,
                     0.0,
                     true,
                     OverlayClip::Bounds,
