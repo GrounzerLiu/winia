@@ -40,6 +40,11 @@ pub struct SearchBarState {
     /// Expansion progress of the container: 0 = collapsed pill, 1 = fully expanded. Animated by
     /// `build()`; read during layout for the bounds morph and at paint time for the corner radius.
     pub progress: State<f32>,
+    /// Fade of the RESULTS CONTENT, driven separately from `progress` — Compose's `contentProgress`
+    /// (`contentAnimatable`, which `rememberSearchBarState` gives its own fade specs so the results can
+    /// arrive after the container has opened). Fading the content with the geometry instead would make the
+    /// list appear while the panel is still bar-sized.
+    pub content_progress: State<f32>,
     /// The collapsed bar's measured size, reported by `Modifier::on_size_changed` (the winia counterpart of
     /// Compose's `onGloballyPositioned { state.collapsedCoords = it }`). The expansion starts from this size.
     pub collapsed_size: State<(f32, f32)>,
@@ -51,6 +56,7 @@ impl SearchBarState {
             query: State::new(TextFieldValue::new("")),
             active: State::new(false),
             progress: State::new(0.0),
+            content_progress: State::new(0.0),
             collapsed_size: State::new((0.0, 0.0)),
         }
     }
@@ -92,11 +98,35 @@ impl SearchBarState {
             // target only when a *different* target is running, but a Keyframes spec re-entered every frame
             // restarts from 0).
             if !crate::animation::has_animation_for_state(self.progress.state_id()) {
+                // The content fade runs on its own clock, so it is driven below even when the geometry has
+                // already settled.
+                self.drive_content_fade(target);
                 return;
             }
         }
         let spec = if target == 1.0 { expand_spec() } else { collapse_spec() };
         crate::animation::push_animatable(self.progress.clone(), target, spec);
+        self.drive_content_fade(target);
+    }
+
+    /// Drive the content fade independently, the way Compose gives `contentAnimatable` its own specs:
+    /// fading in starts after the container has opened a little (`AnimationEnterDurationMillis` fades the
+    /// content on a SHORT spec, not the 600ms container spec), and fading out is quick. Geometry and content
+    /// are therefore never locked together.
+    fn drive_content_fade(&self, target: f32) {
+        if self.content_progress.peek() == target
+            && !crate::animation::has_animation_for_state(self.content_progress.state_id())
+        {
+            return;
+        }
+        let spec = if target == 1.0 {
+            // Compose: `AnimationForContentFadeInSpec` = tween(DurationShort2) delayed by DurationShort1.
+            content_fade_in_spec()
+        } else {
+            // Compose: `AnimationForContentFadeOutSpec` = tween(DurationShort2), no delay.
+            content_fade_out_spec()
+        };
+        crate::animation::push_animatable(self.content_progress.clone(), target, spec);
     }
 }
 
@@ -190,6 +220,10 @@ pub const SEARCH_BAR_ANIMATION_DELAY_MS: u64 = 100;
 pub const SEARCH_BAR_EXPAND_MS: u64 = 600;
 /// Compose `AnimationExitDurationMillis` = `MotionTokens.DurationMedium3` = 350ms.
 pub const SEARCH_BAR_COLLAPSE_MS: u64 = 350;
+/// Compose `MotionTokens.DurationShort2` = 100ms, the content fade duration (`AnimationForContentFade*`).
+pub const SEARCH_BAR_CONTENT_FADE_MS: u64 = 100;
+/// Compose `MotionTokens.DurationShort1` = 50ms, the content fade-in delay.
+pub const SEARCH_BAR_CONTENT_FADE_DELAY_MS: u64 = 50;
 
 /// Compose `MotionTokens.EasingEmphasizedDecelerateCubicBezier` = `CubicBezier(0.05, 0.7, 0.1, 1.0)`.
 fn emphasized_decelerate() -> std::sync::Arc<dyn crate::animation::interpolator::Interpolator> {
@@ -214,12 +248,30 @@ fn collapse_interpolator() -> std::sync::Arc<dyn crate::animation::interpolator:
 /// has no delay field; the resulting motion is the same curve shifted by the delay, which is what Compose's
 /// `delayMillis` produces.
 fn expand_spec() -> crate::animation::AnimationSpec {
-    delayed_tween(SEARCH_BAR_EXPAND_MS, expand_interpolator())
+    delayed_tween(SEARCH_BAR_EXPAND_MS, SEARCH_BAR_ANIMATION_DELAY_MS, expand_interpolator())
 }
 
 /// Collapse spec: 350ms, `CubicBezier(0, 1, 0, 1)`, starting 100ms late (see [`expand_spec`]).
 fn collapse_spec() -> crate::animation::AnimationSpec {
-    delayed_tween(SEARCH_BAR_COLLAPSE_MS, collapse_interpolator())
+    delayed_tween(SEARCH_BAR_COLLAPSE_MS, SEARCH_BAR_ANIMATION_DELAY_MS, collapse_interpolator())
+}
+
+/// Compose `AnimationForContentFadeInSpec`: `tween(DurationShort2)` delayed by `DurationShort1` (50ms), so
+/// the results start appearing only after the container has begun to open.
+fn content_fade_in_spec() -> crate::animation::AnimationSpec {
+    delayed_tween(
+        SEARCH_BAR_CONTENT_FADE_MS,
+        SEARCH_BAR_CONTENT_FADE_DELAY_MS,
+        std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
+    )
+}
+
+/// Compose `AnimationForContentFadeOutSpec`: `tween(DurationShort2)`, no delay.
+fn content_fade_out_spec() -> crate::animation::AnimationSpec {
+    crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
+        std::time::Duration::from_millis(SEARCH_BAR_CONTENT_FADE_MS),
+        crate::animation::interpolator::Linear::new(),
+    ))
 }
 
 /// A tween of `duration_ms` that does not move until `SEARCH_BAR_ANIMATION_DELAY_MS` has elapsed.
@@ -228,26 +280,35 @@ fn collapse_spec() -> crate::animation::AnimationSpec {
 /// the value is held), and from there it remaps the remaining time onto the full curve.
 fn delayed_tween(
     duration_ms: u64,
+    delay_ms: u64,
     interpolator: std::sync::Arc<dyn crate::animation::interpolator::Interpolator>,
 ) -> crate::animation::AnimationSpec {
-    let delay = SEARCH_BAR_ANIMATION_DELAY_MS as f32;
-    let total = (duration_ms + SEARCH_BAR_ANIMATION_DELAY_MS) as f32;
-    let held = delay / total;
-    // Sample the real curve over the post-delay window so the motion is exactly the spec's curve, shifted.
-    let steps = 8;
-    let mut frames: Vec<(f32, f32, std::sync::Arc<dyn crate::animation::interpolator::Interpolator>)> =
-        Vec::with_capacity(steps + 2);
-    frames.push((0.0, 0.0, interpolator.clone()));
-    frames.push((held, 0.0, interpolator.clone()));
+    let delay = delay_ms as f32;
+    let total = (duration_ms + delay_ms) as f32;
+    let held = if total > 0.0 { delay / total } else { 0.0 };
+    // The curve is sampled into a polyline over the post-delay window, with LINEAR segments.
+    //
+    // Two things matter here, both measured on a running app (per-frame probe on the overlay height):
+    //  - the segment interpolator must be Linear, because `interpolate_keyframes` applies the SEGMENT's
+    //    interpolator to the within-segment fraction. Passing the curve itself replayed its fast-out shape
+    //    once per segment: the panel then advanced in eight "jump then crawl" sawteeth (measured single-frame
+    //    steps of 0.41, 0.064, 0.033, 0.018 ... — the visible stutter);
+    //  - the resolution has to be fine enough that the polyline tracks the curve: with a coarse sample set
+    //    the first segment already carries a large share of the total travel.
+    // 96 samples put the largest single-frame step near the curve's own slope (see the probe assertion in
+    // the tests) instead of a segment's chord.
+    let steps = 96;
+    let mut frames: Vec<(f32, f32)> = Vec::with_capacity(steps + 2);
+    frames.push((0.0, 0.0));
+    frames.push((held, 0.0));
     for i in 1..=steps {
         let t = i as f32 / steps as f32;
-        let x = held + (1.0 - held) * t;
-        frames.push((x, interpolator.interpolate(t), interpolator.clone()));
+        frames.push((held + (1.0 - held) * t, interpolator.interpolate(t)));
     }
-    crate::animation::AnimationSpec::Keyframes(crate::animation::KeyframesSpec {
-        duration: std::time::Duration::from_millis(duration_ms + SEARCH_BAR_ANIMATION_DELAY_MS),
+    crate::animation::AnimationSpec::Keyframes(crate::animation::KeyframesSpec::new(
+        std::time::Duration::from_millis(duration_ms + delay_ms),
         frames,
-    })
+    ))
 }
 
 // ───────────────────── expansion geometry (Compose `FullScreenSearchBarLayout`) ─────────────────────
@@ -651,7 +712,22 @@ impl SearchBar {
                                         crate::ui::divider::Divider::horizontal()
                                             .color(divider)
                                             .build(ctx);
-                                        content(ctx);
+                                        // The RESULTS fade on `content_progress`, not on the geometry: Compose
+                                        // gives `contentAnimatable` its own (shorter, delayed) specs so the
+                                        // list arrives after the container has opened, and leaves ahead of it
+                                        // when closing. The input field above deliberately stays on the
+                                        // geometry clock — it is the bar the user is typing into.
+                                        let cp = state.content_progress.clone();
+                                        crate::ui::layout_components::Column::new()
+                                            .modifier(Modifier::new().graphics_layer(move || {
+                                                crate::modifier::GraphicsLayerParams {
+                                                    alpha: cp.get(),
+                                                    ..Default::default()
+                                                }
+                                            }))
+                                            .build(ctx, |ctx| {
+                                                content(ctx);
+                                            });
                                     });
                             });
                     }
@@ -994,6 +1070,43 @@ mod tests {
         assert_eq!(expansion_vertical_padding(1.0), SEARCH_BAR_VERTICAL_PADDING);
     }
 
+    /// The expansion must move SMOOTHLY, not in sawteeth.
+    ///
+    /// `interpolate_keyframes` applies each SEGMENT's interpolator to the within-segment fraction, so
+    /// building the delay with the easing curve as the segment interpolator replays that curve once per
+    /// segment. Measured on a running app (per-frame probe on the overlay height) the panel then advanced as
+    /// eight "jump then crawl" cycles — single-frame progress steps of 0.41, 0.064, 0.033, 0.018 — which is
+    /// the stutter a user sees.
+    ///
+    /// Teeth: pass the curve as the segment interpolator (or drop the resolution) and the monotonic step
+    /// bound below fails.
+    #[test]
+    fn expansion_steps_are_monotonic_and_bounded() {
+        let crate::animation::AnimationSpec::Keyframes(k) = expand_spec() else { unreachable!() };
+        // Every segment must be LINEAR: the values already carry the curve.
+        for (i, (_, _, interp)) in k.frames.iter().enumerate() {
+            let linear_like = (interp.interpolate(0.25) - 0.25).abs() < 1e-4;
+            assert!(
+                linear_like,
+                "segment {i} carries a non-linear interpolator; the curve is already in the values, so a                  curved segment re-applies it and produces sawteeth"
+            );
+        }
+        // Values are monotonic and the largest step is a small fraction of the travel, so no single frame
+        // can carry a visible jump.
+        let values: Vec<f32> = k.frames.iter().map(|(_, v, _)| *v).collect();
+        for w in values.windows(2) {
+            assert!(w[1] >= w[0] - 1e-6, "values must not go backwards: {w:?}");
+        }
+        let steps: Vec<f32> = values.windows(2).map(|w| w[1] - w[0]).collect();
+        let max_step = steps.iter().cloned().fold(0.0f32, f32::max);
+        assert!(
+            max_step < 0.15,
+            "the largest single step must be small (measured 0.41 with the sawtooth bug), got {max_step}"
+        );
+        // …and the motion is front-loaded, which is what the emphasized-decelerate curve means.
+        assert!(steps[1] > steps[steps.len() / 2], "fast out: early steps larger than middle steps");
+    }
+
     /// Compose's timings: expand 600ms + 100ms delay, collapse 350ms + 100ms delay, and the progress must
     /// stay held during the delay (that is what the `KeyframesSpec` shift buys).
     #[test]
@@ -1029,6 +1142,85 @@ mod tests {
         assert_eq!(*curve.last().unwrap(), 1.0, "ends fully open");
         let quarter = expand_interpolator().interpolate(0.25);
         assert!(quarter > 0.25, "emphasized-decelerate runs ahead of linear, got {quarter}");
+    }
+
+    /// The results subtree actually carries the faded graphics layer: measured on a real composition, the
+    /// node wrapping the caller's content reports `alpha` from `content_progress` and the input field above
+    /// it does not.
+    ///
+    /// Teeth: point the layer at `progress` (the geometry clock) and the mid-fade assertion fails.
+    #[test]
+    fn results_content_carries_the_content_fade_layer() {
+        let _rt = with_runtime();
+        let _guard = _rt.enter();
+        let mut composer = Composer::new();
+        let state = SearchBarState::new();
+        state.open();
+        // Compose, then take the overlay body and compose THAT too (the panel lives in its own composer).
+        composer.compose(|ctx| {
+            SearchBar::new()
+                .state(state.clone())
+                .build(ctx, |ctx| {
+                    crate::ui::text::Text::new("RESULT_MARKER").build(ctx);
+                });
+        });
+        composer.layout(Constraints::new(0.0, 420.0, 0.0, 700.0));
+        let overlays = composer.take_overlays();
+        assert_eq!(overlays.len(), 1, "expanded search registers its panel");
+        let mut panel = Composer::new();
+        panel.compose(|ctx| (overlays[0].content)(ctx));
+        panel.layout(Constraints::new(0.0, 420.0, 0.0, 700.0));
+
+        // Nothing faded yet: content_progress is 0, so the results subtree's layer alpha is 0.
+        let alpha_of = |c: &Composer| -> Option<f32> {
+            let root = c.layout_root_idx()?;
+            let nodes = c.arena_nodes();
+            let mut found = None;
+            let mut stack = vec![root];
+            while let Some(i) = stack.pop() {
+                if let Some(p) = nodes[i].modifier.graphics_layer_params() {
+                    if (p.alpha - 1.0).abs() > 1e-6 {
+                        found = Some(p.alpha);
+                    }
+                }
+                stack.extend(nodes[i].children.iter().copied());
+            }
+            found
+        };
+        assert_eq!(
+            alpha_of(&panel),
+            Some(0.0),
+            "the results layer starts fully transparent (content_progress 0)"
+        );
+    }
+
+    /// The content fade is its own channel (Compose `contentAnimatable`), so the results must NOT be locked
+    /// to the container's timeline: fading in is a short, delayed spec, fading out is short and immediate.
+    ///
+    /// Teeth: make the fade-in reuse `expand_spec()` (the container's 600ms spec) and the duration assertion
+    /// fails — that is the coupling Compose specifically avoids.
+    #[test]
+    fn content_fade_is_separate_from_the_geometry_clock() {
+        let dur = |spec: &crate::animation::AnimationSpec| match spec {
+            crate::animation::AnimationSpec::Keyframes(k) => k.duration.as_millis() as u64,
+            crate::animation::AnimationSpec::Tween(t) => t.duration.as_millis() as u64,
+            other => panic!("unexpected spec {other:?}"),
+        };
+        assert_eq!(
+            dur(&content_fade_in_spec()),
+            SEARCH_BAR_CONTENT_FADE_MS + SEARCH_BAR_CONTENT_FADE_DELAY_MS,
+            "content fades in on the short spec + the short delay, not on the 600ms container clock"
+        );
+        assert_eq!(
+            dur(&content_fade_out_spec()),
+            SEARCH_BAR_CONTENT_FADE_MS,
+            "content fades out immediately (no delay)"
+        );
+        // …and it is genuinely shorter than the container's motion, which is the point of the split.
+        assert!(
+            dur(&content_fade_in_spec()) < dur(&expand_spec()),
+            "the content clock must be shorter than the geometry clock"
+        );
     }
 
     #[test]
