@@ -3435,8 +3435,14 @@ impl Composer {
         // Fast path: no stashes anywhere and no Tier1 in main map.
         let busy = all.iter().any(|c| !c.pending_cross.is_empty()) || all[0].has_cross_flights();
         if !busy {
-            // Still reconcile Tier1 completions?? No — no Tier1 exists and no
-            // stash can open one. Cheap return (zero walks when idle).
+            // Still publish the scope-activity union for the WHOLE frame. Syncing per composer inside
+            // `poll_shared_flights` lets the last composer's poll overwrite the flags of every scope it
+            // does not own (the app polls the main composer first, overlays after), so
+            // `is_transition_active()` reported false during a Tier-0 transition whenever any overlay was
+            // present — and the morph gate's fallback read the same stale value. This call is the last
+            // poll of the frame, so its set is authoritative.
+            let refs: Vec<&Composer> = all.iter().map(|c| &**c).collect();
+            sync_scope_active_states(&refs);
             return;
         }
         // 0. Drive active Tier1 (staleness-cancel → progress → complete).
@@ -9264,6 +9270,68 @@ mod tier0_tests {
         }
         assert!(composer.shared_flights.is_empty(), "flight completes");
         assert!(!active.get(), "flag false after teardown");
+        crate::animation::clear_all_animations();
+    }
+
+    /// The per-frame scope-activity flags are a UNION over the frame's composers, not whoever polled last.
+    ///
+    /// Teeth: without the union sync on the cross poll's idle path this fails — the app polls the main
+    /// composer first and overlays after, and each per-composer sync published only its own set, so the
+    /// peer's poll cleared the main scope's flag and `is_transition_active()` (and the morph gate's
+    /// fallback) read "idle" during a Tier-0 transition whenever any overlay existed.
+    #[test]
+    fn scope_activity_is_a_union_over_the_frames_composers() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        clear_scope_active_states();
+        let mut a = Composer::new();
+        let mut b = Composer::new(); // a peer composer with no flights of its own
+        let show = State::new(true);
+        let w = State::new(120.0f32);
+
+        let a_frame = |a: &mut Composer, b: &mut Composer, show: &State<bool>, w: &State<f32>| {
+            let (s, ww) = (show.clone(), w.clone());
+            cross_frame(
+                a,
+                b,
+                move |ctx| {
+                    SharedTransitionLayout::new().build(ctx, |ctx| {
+                        let scope = current_shared_scope().expect("scope");
+                        Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+                            if s.get() {
+                                mixed_list_screen(ctx, &scope, &ww);
+                            } else {
+                                mixed_detail_screen(ctx, &scope, &ww);
+                            }
+                        });
+                    });
+                },
+                |ctx| {
+                    Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |_| {});
+                },
+            );
+        };
+
+        a_frame(&mut a, &mut b, &show, &w);
+        // Read the flag BEFORE the switch, the way composition does: the sync only updates scopes somebody
+        // has already read (map entries), so a read after the fact would find a freshly created entry.
+        let scope_id = a
+            .arena_nodes()
+            .iter()
+            .find_map(|n| find_shared_marker(&n.modifier).map(|m| m.scope_id))
+            .expect("a marked node carries the scope id");
+        let active = SharedTransitionScope::new(scope_id).is_transition_active();
+        assert!(!active.get(), "idle before the switch");
+        show.set(false);
+        a_frame(&mut a, &mut b, &show, &w);
+        assert!(
+            a.shared_flights.values().any(|f| !is_terminal(f.flight.phase)),
+            "the switch opened a flight in the main composer"
+        );
+        assert!(
+            active.get(),
+            "a main-composer scope must stay active when a peer composer polled after it"
+        );
         crate::animation::clear_all_animations();
     }
 
