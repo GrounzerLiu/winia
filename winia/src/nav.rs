@@ -132,8 +132,7 @@ fn key_hash<K: NavKey>(key: &K) -> u64 {
 }
 
 /// 确定性 FNV-1a（框架内部标识用——scene key 等场景无关 hash）
-fn fnv_hash(value: &impl std::hash::Hash) -> u64 {
-    use std::hash::Hasher;
+fn fnv_hash(value: &impl std::hash::Hash) -> u64 {    use std::hash::Hasher;
     struct FnvHasher(u64);
     impl std::hash::Hasher for FnvHasher {
         fn finish(&self) -> u64 { self.0 }
@@ -425,6 +424,25 @@ static DRAINING_SCOPE: std::sync::LazyLock<crate::core::composition_local::Compo
     std::sync::LazyLock::new(|| {
         crate::core::composition_local::CompositionLocal::new(|| false)
     });
+
+/// Identity for one `NavDisplay` instance, used to namespace the scenes it publishes.
+static NEXT_NAV_HOST_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn next_nav_host_id() -> u64 {
+    NEXT_NAV_HOST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The id a scene host publishes for ONE LAYER it composes: the host, the scene and the layer's role.
+///
+/// All three are needed. The registry the shared-transition system reads is process-global and keyed by id
+/// alone, so hashing the scene key would let two hosts rendering the same route — or one host pushing the
+/// same route twice, which puts the same scene key in both layers — publish the same id and overwrite each
+/// other; the surviving entry then classifies the other end with the wrong role, which is the "paired the
+/// leaving end with itself" failure this branch fixed.
+pub(crate) fn layer_scene_id(host_id: u64, scene_key: u64, is_prev: bool) -> u64 {
+    fnv_hash(&(host_id, scene_key, is_prev))
+}
+
 
 // ═══════════════════════════════════════════════════════════
 // NavBackStack — 导航状态（对标 Nav3 的 NavBackStack）
@@ -1012,6 +1030,10 @@ impl<K: NavKey> NavTransition<K> {
         render_entry: &dyn Fn(&mut ComposeCtx, &NavEntry<K>, bool),
         spec: &NavTransitionSpec,
     ) {
+        // This display's identity, for namespacing the scenes it publishes (see `layer_scene_id`): the
+        // registry behind scene tags is process-global and keyed by id alone, so two displays rendering the
+        // same route must not publish the same id.
+        let host_id: u64 = ctx.remember(next_nav_host_id).get();
         // 过渡规格：优先用启动时固化的快照；无进行中过渡时用当前配置
         // （此时 previous 为 None，所有公式在 active 门下归位，取值无效果）
         let spec = self.active_spec.peek().clone().unwrap_or_else(|| spec.clone());
@@ -1029,12 +1051,15 @@ impl<K: NavKey> NavTransition<K> {
             // Scene identity, computed here so the wrapper modifier can carry it as a tag: the shared
             // transition system reads a subtree's scene from a `SceneTag` in its ANCESTRY, because a
             // marker's own modifier element is built once and reused (a captured id freezes).
-            let layer_scene_key = scene.scene_key();
-            let layer_scene_id = {
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                std::hash::Hash::hash(&layer_scene_key, &mut hasher);
-                std::hash::Hasher::finish(&hasher)
-            };
+            //
+            // The id must identify THIS published layer, not just the scene: the registry behind it
+            // (`NAV_SCENE_VIS`) is process-global and keyed by id alone, so a plain hash of the scene key
+            // collides whenever two hosts render the same route (two NavDisplays on one screen) or one
+            // host pushes the same route twice (the two layers then share a scene key). The last publisher
+            // wins such a collision, and the other end is classified by the wrong `is_prev` — which is the
+            // "paired the leaving end with itself" failure. The host id is per NavDisplay instance, the
+            // role distinguishes the leaving layer from the entering one.
+            let layer_scene_id = layer_scene_id(host_id, scene.scene_key(), is_prev);
             let m = Modifier::new()
                 .fill_max_size()
                 .scene_tag(layer_scene_id)
@@ -1944,6 +1969,30 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A published scene id must name the LAYER, not just the scene: the registry behind scene tags is
+    /// process-global and keyed by id alone, so two hosts rendering the same route — or one host pushing the
+    /// same route twice, which puts one scene key in both layers — would otherwise collide, and the
+    /// surviving entry would classify the other end with the wrong role.
+    #[test]
+    fn layer_scene_ids_are_unique_per_host_and_role() {
+        let key = fnv_hash(&7u64);
+        assert_eq!(
+            layer_scene_id(1, key, false),
+            layer_scene_id(1, key, false),
+            "stable for one layer across frames"
+        );
+        assert_ne!(
+            layer_scene_id(1, key, false),
+            layer_scene_id(1, key, true),
+            "a host's two layers differ by role"
+        );
+        assert_ne!(
+            layer_scene_id(1, key, false),
+            layer_scene_id(2, key, false),
+            "two hosts rendering the same route differ"
+        );
+    }
 
     #[derive(Clone, PartialEq, Eq, Debug, Hash)]
     enum TestRoute {

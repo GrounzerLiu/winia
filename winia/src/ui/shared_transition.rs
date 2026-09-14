@@ -491,6 +491,23 @@ pub(crate) fn clear_nav_scenes() {
     NAV_SCENE_VIS.with(|v| v.borrow_mut().clear());
 }
 
+/// Drop scene entries whose scene no longer exists in the tree.
+///
+/// The registry is written when a scene host composes a layer, and a layer that Skips does not compose
+/// again — so without this a long-lived display keeps one entry (and one `Arc` visibility closure) per
+/// distinct scene it has ever visited. A scene is live exactly when its `SceneTag` is present in the arena,
+/// which is what a scene host puts on the wrapper it composes per layer.
+pub(crate) fn prune_nav_scenes(live: &HashSet<u64>) {
+    NAV_SCENE_VIS.with(|v| {
+        let mut vis = v.borrow_mut();
+        // Cheap guard: the registry is usually smaller than the set of tags, and `retain` is the only
+        // allocation-free way to walk it anyway.
+        if vis.len() > live.len() {
+            vis.retain(|id, _| live.contains(id));
+        }
+    });
+}
+
 /// Per-scope transition activity (Compose `isTransitionActive`), keyed by
 /// `scope_id` so main and overlay composers sharing a scope observe one
 /// flag. Entries are created on first read and synced by the coordinator
@@ -2825,6 +2842,20 @@ impl Composer {
                 PaintDisposition::InTree
             };
         }
+        // Scene registry hygiene, on the pass that already walks every node: a scene is live exactly when
+        // its `SceneTag` is in the arena, and entries for anything else are dropped so a long-lived app does
+        // not retain one Arc visibility closure per scene it has ever visited.
+        let live_scenes: HashSet<u64> = self
+            .arena
+            .nodes
+            .iter()
+            .flat_map(|n| n.modifier.elements().iter())
+            .filter_map(|el| match el {
+                ModifierElement::SceneTag { id } => Some(*id),
+                _ => None,
+            })
+            .collect();
+        prune_nav_scenes(&live_scenes);
     }
 
     /// anim-trace: record EVERY marked node this frame — not just the ends of a flight. "How many
@@ -9271,6 +9302,32 @@ mod tier0_tests {
         assert!(composer.shared_flights.is_empty(), "flight completes");
         assert!(!active.get(), "flag false after teardown");
         crate::animation::clear_all_animations();
+    }
+
+    /// The scene registry must not grow forever: entries whose scene is no longer tagged in the tree are
+    /// dropped, and a live one is kept. Without this, every scene a display has ever visited kept an entry
+    /// (and its `Arc` visibility closure) for the life of the process — `clear_nav_scenes` is test-only.
+    #[test]
+    fn scene_registry_drops_scenes_that_left_the_tree() {
+        let _g = lock_serial();
+        clear_nav_scenes();
+        let info = |id: u64, is_prev: bool| NavSceneInfo {
+            id,
+            visibility: std::sync::Arc::new(|| 1.0),
+            is_prev,
+        };
+        with_nav_scene(info(11, true), || {});
+        with_nav_scene(info(22, false), || {});
+        assert!(nav_scene_visibility(11).is_some() && nav_scene_visibility(22).is_some());
+
+        prune_nav_scenes(&HashSet::from([22]));
+        assert!(
+            nav_scene_visibility(11).is_none(),
+            "a scene whose tag left the tree is dropped"
+        );
+        assert!(nav_scene_visibility(22).is_some(), "a live scene is kept");
+        assert_eq!(nav_scene_is_prev(22), Some(false), "…with its role intact");
+        clear_nav_scenes();
     }
 
     /// The per-frame scope-activity flags are a UNION over the frame's composers, not whoever polled last.
