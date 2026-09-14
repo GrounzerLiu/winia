@@ -142,6 +142,7 @@ impl Tooltip {
                 anchor_slot: Some(anchor_slot),
                 position: self.position,
                 offset: self.offset,
+                align_to_anchor_top: None,
                 modal: false,
                 dismiss_on_outside: dismiss_outside,
                 // ⚠ Tooltip 浮层必须放行主树点击——浮层盖住锚点（锚点上方

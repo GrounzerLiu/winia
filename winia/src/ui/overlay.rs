@@ -183,6 +183,12 @@ pub struct OverlayDesc {
     pub(crate) position: PopupPosition,
     /// Offset after positioning (logical pixels).
     pub(crate) offset: (f32, f32),
+    /// Put the panel's TOP at `lerp(anchor.top, 0, progress())` — Compose's
+    /// `animatedOffsetY = lerp(collapsedBounds.top, offsetY, progress)` in `FullScreenSearchBarLayout` with
+    /// `offsetY = 0`. The anchor's coordinates are known only to the layout pass, so the alignment is
+    /// resolved there and the caller supplies just the progress reader (a closure over its own animation
+    /// state, read per frame with no recomposition cost).
+    pub(crate) align_to_anchor_top: Option<std::sync::Arc<dyn Fn() -> f32 + Send + Sync>>,
     /// Modal (Dialog): draws a scrim and captures outside clicks for dismiss.
     pub(crate) modal: bool,
     /// Whether an outside click triggers `on_dismiss_request` (non-modal Popup
@@ -325,6 +331,7 @@ impl Popup {
             anchor_slot: anchor,
             position: self.position,
             offset: self.offset,
+            align_to_anchor_top: None,
             modal: false,
             dismiss_on_outside: true,
             click_passthrough: false,
@@ -349,6 +356,15 @@ pub struct Dialog {
     dismiss_on_outside: bool,
     enter_anim: Option<OverlayAnimSpec>,
     exit_anim: Option<OverlayAnimSpec>,
+    /// Where the panel sits (`Center` by default — the classic modal Dialog). A component growing out of an
+    /// anchor passes `TopLeft` + `offset`, because `Center` positions the overlay's CURRENT size and would
+    /// put a small mid-animation panel in the middle of the window.
+    position: PopupPosition,
+    offset: (f32, f32),
+    /// Optional main-tree anchor node (see [`Self::anchor_slot`]).
+    anchor_slot: Option<u64>,
+    /// See [`OverlayDesc::align_to_anchor_top`].
+    align_to_anchor_top: Option<std::sync::Arc<dyn Fn() -> f32 + Send + Sync>>,
 }
 
 impl Dialog {
@@ -364,8 +380,45 @@ impl Dialog {
             // exit plays in reverse).
             enter_anim: Some(OverlayAnimSpec::default_enter()),
             exit_anim: Some(OverlayAnimSpec::default_exit()),
+            position: PopupPosition::Center,
+            offset: (0.0, 0.0),
+            anchor_slot: None,
+            align_to_anchor_top: None,
         }
     }
+
+    /// Where the panel sits (default `Center`, the classic modal Dialog). A component that grows out of an
+    /// anchor passes `TopLeft` plus [`Self::offset`] so the panel starts AT the anchor instead of the middle
+    /// of the window — `Center` positions the overlay's own current size, so a small panel mid-animation
+    /// lands in the middle of the screen.
+    pub fn position(mut self, p: PopupPosition) -> Self {
+        self.position = p;
+        self
+    }
+
+    /// Pixel offset applied after [`Self::position`].
+    pub fn offset(mut self, x: f32, y: f32) -> Self {
+        self.offset = (x, y);
+        self
+    }
+
+    /// Anchor the panel to a node of the MAIN tree (its measured position and size), like `Popup` does.
+    /// Together with `position(TopLeft)` this is how a panel starts AT a bar instead of at the window's
+    /// corner.
+    pub fn anchor_slot(mut self, slot: Option<u64>) -> Self {
+        self.anchor_slot = slot;
+        self
+    }
+    /// Start the panel's top at the anchor's top, sliding to the window's top as `progress` goes 0 -> 1
+    /// (see [`OverlayDesc::align_to_anchor_top`]).
+    pub fn align_to_anchor_top(
+        mut self,
+        progress: std::sync::Arc<dyn Fn() -> f32 + Send + Sync>,
+    ) -> Self {
+        self.align_to_anchor_top = Some(progress);
+        self
+    }
+
 
     pub fn on_dismiss_request(mut self, cb: impl Fn() + Send + Sync + 'static) -> Self {
         self.on_dismiss = Some(Arc::new(cb));
@@ -413,9 +466,10 @@ impl Dialog {
         }
         ctx.open_overlay(crate::ui::overlay::OverlayDesc {
             id: id.get(),
-            anchor_slot: None,
-            position: PopupPosition::Center,
-            offset: (0.0, 0.0),
+            anchor_slot: self.anchor_slot,
+            position: self.position,
+            offset: self.offset,
+            align_to_anchor_top: self.align_to_anchor_top,
             modal: true,
             dismiss_on_outside: self.dismiss_on_outside,
             click_passthrough: false,
@@ -496,6 +550,7 @@ impl DropdownMenu {
                 anchor_slot: Some(anchor_slot),
                 position: PopupPosition::BottomLeft,
                 offset: (0.0, 4.0),
+                align_to_anchor_top: None,
                 modal: false,
                 dismiss_on_outside: true,
                 click_passthrough: false,
