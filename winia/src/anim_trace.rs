@@ -220,6 +220,19 @@ mod imp {
         static FRAME: std::cell::Cell<(u64, u128)> = const { std::cell::Cell::new((0, 0)) };
     }
 
+    /// Rolling window of the most recent records, so the debug server can serve a live trace without a
+    /// file being configured: `tr [n]` answers with the last n records.
+    ///
+    /// Deliberately NOT thread-local like the rest of this module: records are produced on the UI
+    /// thread while the debug server's WebSocket task runs on a tokio thread, and a thread-local ring
+    /// answered `tr` with zero lines (measured). The lock is uncontended in practice — one push per
+    /// record per frame.
+    static RING: std::sync::LazyLock<std::sync::Mutex<std::collections::VecDeque<(u64, u128, TraceRecord)>>> =
+        std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::VecDeque::new()));
+
+    /// Records kept for the live channel (a few seconds of a busy transition).
+    const RING_CAP: usize = 4000;
+
     /// Frames a scene stays traced after the host last published it.
     const SCENE_GRACE_FRAMES: u64 = 30;
 
@@ -236,9 +249,13 @@ mod imp {
         }
     }
 
-    /// Is tracing active (feature on AND a sink configured)?
+    /// Is tracing active? True whenever the feature is compiled in: the ring that serves the debug
+    /// server's live `tr` command is always fed, and a FILE is only written when `WINIA_ANIM_TRACE`
+    /// names one. Emission sites gate on this, so with the feature on but no env var the framework
+    /// still records into memory (a few thousand small records, bounded by the ring) and nothing is
+    /// written to disk; with the feature off every call here compiles to a no-op.
     pub fn enabled() -> bool {
-        SINK.with(|s| !matches!(&*s.borrow(), Sink::Off))
+        true
     }
 
     /// Remember a scene host's handle (called by `with_nav_scene`), stamped with the current frame.
@@ -274,9 +291,16 @@ mod imp {
         flush();
     }
 
-    /// Append one record (written at the next [`begin_frame`] or [`flush`]).
+    /// Append one record (written at the next [`begin_frame`] or [`flush`]; also kept in the ring the
+    /// live channel reads).
     pub fn record(r: TraceRecord) {
         let (frame, t_ms) = FRAME.with(|f| f.get());
+        if let Ok(mut ring) = RING.lock() {
+            ring.push_back((frame, t_ms, r.clone()));
+            while ring.len() > RING_CAP {
+                ring.pop_front();
+            }
+        }
         SINK.with(|s| match &mut *s.borrow_mut() {
             Sink::Off => {}
             Sink::File(w) => {
@@ -284,6 +308,16 @@ mod imp {
             }
             Sink::Memory(v) => v.push((frame, t_ms, r)),
         });
+    }
+
+    /// The most recent `n` records as NDJSON lines, oldest first — what the debug server's `tr`
+    /// command returns. Works whether or not a file sink is configured, and from any thread.
+    pub fn recent_lines(n: usize) -> Vec<String> {
+        let Ok(ring) = RING.lock() else { return Vec::new() };
+        ring.iter()
+            .skip(ring.len().saturating_sub(n))
+            .map(|(frame, t_ms, r)| r.to_json(*frame, *t_ms))
+            .collect()
     }
 
     /// Flush buffered lines (called at frame end; safe to call any time).
@@ -326,6 +360,10 @@ mod imp {
     pub fn note_scene(_scene: NavSceneInfo) {}
     pub fn begin_frame(_frame: u64, _t_ms: u128) {}
     pub fn record(_r: TraceRecord) {}
+    /// Nothing is recorded with the feature off, so the live channel has nothing to serve.
+    pub fn recent_lines(_n: usize) -> Vec<String> {
+        Vec::new()
+    }
     pub fn flush() {}
     pub fn capture_start() {}
     pub fn capture_take() -> Vec<(u64, u128, TraceRecord)> {

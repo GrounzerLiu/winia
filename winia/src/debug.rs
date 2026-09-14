@@ -528,6 +528,12 @@ pub fn start_stdin_channel() {
                     // （DEBUG_STATE 未填充时输出空——测试可区分 stdin 链路 vs 渲染时序）
                     println!("TREE:{}", all_trees_json());
                 }
+                // tr [n]: the last n animation-trace records (NDJSON lines). Empty without the
+                // `anim-trace` feature.
+                "tr" => {
+                    let n: usize = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(200);
+                    println!("TRACE:{}", crate::anim_trace::recent_lines(n).join("\n"));
+                }
                 "swipe" if parts.len() >= 5 => {
                     // swipe x1 y1 x2 y2 [steps] [delay_ms] — stdin 同步版（无延迟，全部入队）
                     let x1: f32 = parts[1].parse().unwrap_or(0.0);
@@ -646,6 +652,18 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
             }
             "t" => {
                 let _ = write.send(Message::text(all_trees_json())).await;
+            }
+            // tr [n]: the last n animation-trace records, one JSON object per line — a live view of
+            // what an animation is doing, no WINIA_ANIM_TRACE file needed. Empty without `anim-trace`.
+            "tr" => {
+                let n: usize = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(200);
+                let lines = crate::anim_trace::recent_lines(n);
+                let _ = write
+                    .send(Message::text(format!(
+                        "{}",
+                        lines.join("\n")
+                    )))
+                    .await;
             }
             "p" => {
                 // 像素转储（调试截图分析）：二进制帧 = 8 字节 header(WxH u32 LE) + RGBA
