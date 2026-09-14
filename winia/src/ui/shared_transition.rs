@@ -2324,46 +2324,13 @@ impl Composer {
                         _ => false,
                     }
                 });
-                if own_pair_reversed {
-                    crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
-                        format!("flight:{}", c.key),
-                        "ignore",
-                        format!(
-                            "reason=own_pair_reversed old={:#x} new={:#x}",
-                            c.old_slot, c.new_slot
-                        ),
-                    ));
-                    continue;
-                }
-                // The END that moved is the target: the element is the same one (same scope, same key),
-                // it simply got re-slotted inside its scene while the flight runs — a scene host
-                // re-arranges layers mid-transition, and winia slots are positional. Compose's identity
-                // here is the key (`rememberSharedContentState(key)`), not the position, and a position
-                // change updates the node in place instead of restarting anything. Retargeting instead
-                // cancelled the crossfade and then bailed (the old slot was already gone), which is how
-                // the flight died at p≈0.20 and a same-screen morph — opacity-immune by design — took
-                // over. Rebind the target end, keep the progress and the start rect, and clear the
-                // stale node's visuals.
-                let target_moved = self
-                    .shared_flights
-                    .get(&id)
-                    .and_then(|a| a.flight.target_slot)
-                    == Some(c.old_slot);
-                if target_moved && self.shared_flights.get(&id).is_some_and(|a| a.source_idx.is_some()) {
-                    if let Some(a) = self.shared_flights.get_mut(&id) {
-                        a.flight.target_slot = Some(c.new_slot);
-                    }
-                    self.clear_transition_for_slot(
-                        c.old_slot,
-                        FlightKey { cid: self.composer_id, id },
-                    );
-                    crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
-                        format!("flight:{}", c.key),
-                        "rebind",
-                        format!("target {:#x} -> {:#x}", c.old_slot, c.new_slot),
-                    ));
-                    continue;
-                }
+                // NOTE: a candidate whose slots are this flight's own two ends reversed is a REAL
+                // navigation back (measured: clicking Back while the push flight still runs produces
+                // exactly `old=target new=source`), so it must be retargeted, not skipped. An earlier
+                // version skipped it to silence a spurious flip; that flip was really the winner
+                // selection comparing scene visibilities, which is fixed properly now (see
+                // `shared_live_map`: the winner is the end in the scene that is NOT leaving), and
+                // skipping here swallowed the return animation instead.
                 if let Some(a) = self.shared_flights.get(&id) {
                     // Unclamped + path-aware: retarget continuity follows the
                     // true visual rect, including spring overshoot past the
