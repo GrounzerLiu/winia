@@ -922,6 +922,14 @@ struct NavTransition<K: NavKey> {
     /// 中途改配置不影响进行中的过渡；完成时清空）。Backchannel：快照只在
     /// 过渡启动/完成瞬间读写，无订阅者需要通知（progress 的动画通知已驱动帧）。
     active_spec: crate::core::state::Backchannel<Option<NavTransitionSpec>>,
+    /// This display's identity, used to namespace the scenes it publishes (`layer_scene_id`).
+    ///
+    /// Remembered in `init`, which runs OUTSIDE the per-scene `ctx.key(scene_holder.key, …)` group: the
+    /// scene key is part of a remember slot's base, so allocating it inside `render` gave a NEW id per
+    /// navigation (one registry entry per navigation, and every published tag re-created). It is stable
+    /// across navigations here; it is still a composition-slot identity rather than a process-unique
+    /// instance id, which is all the registry needs (two displays at different slots differ).
+    host_id: u64,
 }
 
 /// 场景句柄（场景 key + 场景对象）。PartialEq 按 key（同 key = 同内容场景——
@@ -948,6 +956,7 @@ impl<K: NavKey> NavTransition<K> {
             // 初值 0 = 无过渡（渲染层以此判定静置归位；导航时 detect 复位 1.0）
             progress: ctx.remember(|| State::new(0.0)).get(),
             active_spec: ctx.remember_backchannel(|| None),
+            host_id: ctx.remember(next_nav_host_id).get(),
         }
     }
 
@@ -1060,9 +1069,10 @@ impl<K: NavKey> NavTransition<K> {
         spec: &NavTransitionSpec,
     ) {
         // This display's identity, for namespacing the scenes it publishes (see `layer_scene_id`): the
-        // registry behind scene tags is process-global and keyed by id alone, so two displays rendering the
-        // same route must not publish the same id.
-        let host_id: u64 = ctx.remember(next_nav_host_id).get();
+        // registry behind scene tags is shared and keyed by id alone, so two displays rendering the same
+        // route must not publish the same id. Allocated once in `init` (outside the scene-keyed group, which
+        // would otherwise hand out a new id on every navigation).
+        let host_id = self.host_id;
         // 过渡规格：优先用启动时固化的快照；无进行中过渡时用当前配置
         // （此时 previous 为 None，所有公式在 active 门下归位，取值无效果）
         let spec = self.active_spec.peek().clone().unwrap_or_else(|| spec.clone());

@@ -419,7 +419,35 @@ thread_local! {
 /// transition that alternates between the outgoing and incoming scene every frame — so the flight
 /// system reads a fresh switch each frame, starting and retargeting flights instead of flying once.
 pub fn with_nav_scene<R>(scene: NavSceneInfo, f: impl FnOnce() -> R) -> R {
+    // The guard exists BEFORE anything is published, so a panic during publication cannot leave the stack
+    // entry behind (markers composed after such a panic would be attributed to a scene that no longer
+    // exists — the stale attribution the ancestry lookup was written to avoid).
+    //
+    // On NORMAL completion it pops the stack but KEEPS the registry entry: the entry has to outlive this
+    // call so a layer that Skips composing still resolves its scene while a transition runs. Only during an
+    // unwind is the entry dropped too, because a panicking scene host publishes a scene that nobody is
+    // composing any more.
+    struct SceneGuard {
+        id: u64,
+        pushed: bool,
+    }
+    impl Drop for SceneGuard {
+        fn drop(&mut self) {
+            if self.pushed {
+                NAV_SCENE_STACK.with(|s| {
+                    s.borrow_mut().pop();
+                });
+            }
+            if std::thread::panicking() {
+                NAV_SCENE_VIS.with(|v| {
+                    v.borrow_mut().remove(&self.id);
+                });
+            }
+        }
+    }
+    let mut guard = SceneGuard { id: scene.id, pushed: false };
     NAV_SCENE_STACK.with(|s| s.borrow_mut().push(scene.clone()));
+    guard.pushed = true;
     NAV_SCENE_VIS.with(|v| {
         v.borrow_mut().insert(scene.id, scene.clone());
     });
@@ -427,18 +455,6 @@ pub fn with_nav_scene<R>(scene: NavSceneInfo, f: impl FnOnce() -> R) -> R {
     // (it is a closure over the host's progress, so it has to be sampled once per frame rather than
     // read here). No-op unless the tracing feature is on.
     crate::anim_trace::note_scene(scene);
-    // Pops on drop, so a panic inside the content cannot leave a stale entry on the stack: markers composed
-    // after such a panic would otherwise be attributed to a scene that no longer exists (the same
-    // stale-attribution failure the ancestry lookup was written to avoid).
-    struct PopOnDrop;
-    impl Drop for PopOnDrop {
-        fn drop(&mut self) {
-            NAV_SCENE_STACK.with(|s| {
-                s.borrow_mut().pop();
-            });
-        }
-    }
-    let _guard = PopOnDrop;
     f()
 }
 
@@ -6032,6 +6048,23 @@ mod tier0_tests {
         assert!(
             current_nav_scene().is_none(),
             "the scene stack must unwind with the panic"
+        );
+        assert!(
+            nav_scene_visibility(0x5CE7E).is_none(),
+            "the panicking scene's registry entry goes with the unwind (a scene nobody composes)"
+        );
+        // …and the next publish is attributed to ITS own scene, not to the dead one.
+        let next_scene = NavSceneInfo {
+            id: 0x5CE80,
+            scene_key: 0x5CE81,
+            visibility: std::sync::Arc::new(|| 1.0),
+            is_prev: false,
+        };
+        let seen = with_nav_scene(next_scene, || current_nav_scene().map(|s| s.id));
+        assert_eq!(seen, Some(0x5CE80), "a marker composed now belongs to the new scene");
+        assert!(
+            nav_scene_visibility(0x5CE80).is_some(),
+            "a normally completed publish keeps its entry (a layer that Skips still resolves it)"
         );
         clear_nav_scenes();
     }
