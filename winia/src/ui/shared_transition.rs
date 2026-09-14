@@ -375,12 +375,20 @@ static LOCAL_SHARED_SCOPE: LazyLock<CompositionLocal<Option<SharedTransitionScop
 pub struct NavSceneInfo {
     pub id: u64,
     pub visibility: std::sync::Arc<dyn Fn() -> f32>,
+    /// Is this the LEAVING scene of the host's transition? Two live ends of one shared key (a scene
+    /// host composes both scenes at once) are told apart by this, not by comparing visibilities: the
+    /// leaving scene starts at visibility 1 and the entering one at 0, so "the more visible end" picks
+    /// the LEAVING end at the switch frame — measured on the nav demo, where the flight then paired the
+    /// 96x96 list hero with itself and never grew (the detail hero's 320x220 was never its target).
+    /// Which scene is leaving is stable for the whole transition, so the pairing is too.
+    pub is_prev: bool,
 }
 
 impl std::fmt::Debug for NavSceneInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NavSceneInfo")
             .field("id", &self.id)
+            .field("is_prev", &self.is_prev)
             .field("visibility", &(self.visibility)())
             .finish()
     }
@@ -426,6 +434,40 @@ pub fn current_nav_scene() -> Option<NavSceneInfo> {
 /// Visibility announced for a scene id, read NOW (the handle keeps tracking the host's progress).
 pub fn nav_scene_visibility(id: u64) -> Option<f32> {
     NAV_SCENE_VIS.with(|v| v.borrow().get(&id).map(|i| (i.visibility)()))
+}
+
+/// Is this the LEAVING scene of its host's transition? `None` when the scene is unknown. The pairing
+/// rule for two live ends of one key uses this instead of comparing visibilities — see `NavSceneInfo`.
+pub fn nav_scene_is_prev(id: u64) -> Option<bool> {
+    NAV_SCENE_VIS.with(|v| v.borrow().get(&id).map(|i| i.is_prev))
+}
+
+/// Scene id of the subtree a node belongs to: the nearest ancestor (or the node itself) carrying a
+/// `SceneTag`, which scene hosts put on the wrapper they build for each scene.
+///
+/// Read from ancestry at query time on purpose. Storing the id on each shared marker does not work:
+/// the marker's modifier element is created once and then reused across frames, so the captured id
+/// freezes — measured on the nav demo, one end reported `scene=None` and the other reported the
+/// LEAVING scene, so the two live ends could not be told apart and the flight paired the leaving hero
+/// with itself (both 96x96, alpha-only crossfade, no growth).
+pub(crate) fn scene_of_node(nodes: &[crate::layout::node::LayoutNode], idx: usize) -> Option<u64> {
+    let id_to_idx: HashMap<u64, usize> =
+        nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
+    let mut cur = Some(idx);
+    // Bounded: a malformed parent chain must not hang a frame.
+    for _ in 0..512 {
+        let i = cur?;
+        if let Some(id) = nodes.get(i).and_then(|n| {
+            n.modifier.elements().iter().find_map(|el| match el {
+                ModifierElement::SceneTag { id } => Some(*id),
+                _ => None,
+            })
+        }) {
+            return Some(id);
+        }
+        cur = nodes.get(i)?.parent_id.and_then(|pid| id_to_idx.get(&pid).copied());
+    }
+    None
 }
 
 #[cfg(test)]
@@ -705,6 +747,15 @@ impl Modifier {
         z_index: f32,
     ) -> Self {
         self.push(ModifierElement::SharedScopeOverlay { scope_id: scope.scope_id, z_index })
+    }
+
+    /// Tag this subtree as the content composed for scene `id` (scene hosts call it on the wrapper
+    /// they build per scene, e.g. one nav transition layer). Shared-element pairing reads it from the
+    /// ANCESTOR chain at query time: which of two live ends of one key is leaving and which is
+    /// entering is decided by their scenes' visibilities, and a marker cannot carry that itself (its
+    /// modifier element is built once and reused, so a captured id freezes).
+    pub fn scene_tag(self, id: u64) -> Self {
+        self.push(ModifierElement::SceneTag { id })
     }
 
     /// Mark shared bounds (different content — container morphs + crossfades).
@@ -2045,42 +2096,44 @@ impl Composer {
         // navigate, 131-143 duplicate warnings). A scene publishes its visibility per frame
         // (`with_nav_scene`), so the end whose scene is BECOMING VISIBLE wins; without a scene, the
         // last one wins as before.
-        let mut out: HashMap<(u64, String), (u64, Option<f32>)> = HashMap::new();
+        let mut out: HashMap<(u64, String), (u64, Option<bool>)> = HashMap::new();
         if let Some(root) = self.arena.root {
             let mut stack = vec![root];
             while let Some(idx) = stack.pop() {
                 let node = &self.arena.nodes[idx];
                 if let Some(m) = find_shared_marker(&node.modifier) {
-                    let vis = m.scene.and_then(nav_scene_visibility);
+                    // Scene membership comes from the ANCESTOR chain, not from the marker: a marker's
+                    // modifier element is built once and reused, so an id stored there freezes its
+                    // first value (measured: one end `scene=None`, the other the LEAVING scene, which
+                    // made a nav flight pair the leaving hero with itself).
+                    //
+                    // The winner is the end in the scene that is NOT leaving — the surviving side. It is
+                    // deliberately not "the more visible end": a leaving scene starts at visibility 1
+                    // and the entering one at 0, so comparing visibilities picks the LEAVING end at the
+                    // switch frame (measured: the flight's target was the 96x96 list hero, so it
+                    // crossfaded without ever growing while a same-screen morph supplied the growth).
+                    let scene = scene_of_node(&self.arena.nodes, idx);
+                    let is_prev = scene.and_then(nav_scene_is_prev);
+                    let vis = scene.and_then(nav_scene_visibility);
                     let key = (m.scope_id, m.key.clone());
                     match out.get(&key) {
-                        Some(&(_, prev_vis)) => {
-                            let replace = match (prev_vis, vis) {
-                                (Some(p), Some(v)) => v > p,
-                                (_, Some(_)) => true,
-                                _ => true, // no scene info on either end: keep the last, as before
+                        Some(&(_, prev_is_prev)) => {
+                            let replace = match (prev_is_prev, is_prev) {
+                                // Prefer the surviving scene; if both are the same side (or a scene
+                                // host is not involved at all), keep the last one, as before.
+                                (Some(true), Some(false)) => true,
+                                (Some(false), Some(true)) => false,
+                                _ => true,
                             };
-                            // Only the UNRESOLVED case is actionable: with scene visibility on both
-                            // ends the winner is deterministic (measured: one navigate on the nav
-                            // demo went from two `begin_flight` calls to one), so it is not logged —
-                            // otherwise a transition alone would print a line per frame.
-                            if prev_vis.is_none() || vis.is_none() {
-                                crate::debug_log!(
-                                    "[shared] duplicate live endpoint scope={} key={} with no scene \
-                                     visibility to resolve it (kept the {} end)",
-                                    m.scope_id,
-                                    m.key,
-                                    if replace { "later" } else { "earlier" }
-                                );
-                            }
                             if replace {
-                                out.insert(key, (node.slot_key, vis));
+                                out.insert(key, (node.slot_key, is_prev));
                             }
                         }
                         None => {
-                            out.insert(key, (node.slot_key, vis));
+                            out.insert(key, (node.slot_key, is_prev));
                         }
                     }
+                    let _ = vis;
                 }
                 stack.extend(node.children.iter().copied());
             }
@@ -2483,10 +2536,23 @@ impl Composer {
             vec![FlightAction::CollectBounds { source_slot: c.old_slot, target_slot: c.new_slot }]
         );
         // anim-trace lifecycle event: which key opened a flight, and between which slots.
+        let scene_of = |slot: u64| {
+            self.arena
+                .root
+                .and_then(|r| find_idx_by_slot(&self.arena.nodes, r, slot))
+                .map(|i| scene_of_node(&self.arena.nodes, i))
+                .unwrap_or(None)
+        };
         crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
             format!("flight:{}", c.key),
             "start",
-            format!("id={id} old={:#x} new={:#x}", c.old_slot, c.new_slot),
+            format!(
+                "id={id} old={:#x}(scene={:?}) new={:#x}(scene={:?})",
+                c.old_slot,
+                scene_of(c.old_slot),
+                c.new_slot,
+                scene_of(c.new_slot)
+            ),
         ));
         self.shared_flights.insert(
             id,
@@ -2696,10 +2762,36 @@ impl Composer {
                 let (tx, ty) = crate::app::node_abs_position(&self.arena.nodes, root, tid);
                 let (tw, th) = {
                     let n = &self.arena.nodes[tidx];
-                    (n.measured_size.width, n.measured_size.height)
+                    // The target's own content box, NOT `measured_size`: while a flight reports a
+                    // placeholder size the parent sees the animated size, so reading `measured_size`
+                    // here can capture the flight's own current rect as the destination. Measured with
+                    // anim-trace on the nav demo: with `measured_size` both ends reported a painted
+                    // width of 96 for the whole flight, i.e. the crossfade faded without ever growing,
+                    // and a separate same-screen morph (opaque by design) supplied the visible growth.
+                    let cb = n.content_box();
+                    (cb.width, cb.height)
                 };
                 // Canonicalize to window coords (overlay-local + screen origin).
                 let (ox, oy) = self.screen_origin;
+                crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
+                    format!(
+                        "flight:{}",
+                        find_shared_marker(&self.arena.nodes[tidx].modifier)
+                            .map(|m| m.key)
+                            .unwrap_or_default()
+                    ),
+                    "resolve",
+                    format!(
+                        "tidx={tidx} own_size={:?} measured={:?} content_box={:?} scene={:?} end=({tw:.0},{th:.0})",
+                        self.arena.nodes[tidx].modifier.elements().iter().find_map(|el| match el {
+                            ModifierElement::Size { .. } => Some(format!("{el:?}")),
+                            _ => None,
+                        }),
+                        self.arena.nodes[tidx].measured_size,
+                        self.arena.nodes[tidx].content_box(),
+                        scene_of_node(&self.arena.nodes, tidx),
+                    ),
+                ));
                 let end = SharedBounds::new(tx + ox, ty + oy, tw, th);
                 let marker = find_shared_marker(&self.arena.nodes[tidx].modifier);
                 let (

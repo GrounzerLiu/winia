@@ -1026,7 +1026,19 @@ impl<K: NavKey> NavTransition<K> {
         let render_layer = |ctx: &mut ComposeCtx, scene: &dyn Scene<K>, is_prev: bool| {
             let progress = self.progress.clone();
             let width = width.clone();
-            let m = Modifier::new().fill_max_size().graphics_layer(move || {
+            // Scene identity, computed here so the wrapper modifier can carry it as a tag: the shared
+            // transition system reads a subtree's scene from a `SceneTag` in its ANCESTRY, because a
+            // marker's own modifier element is built once and reused (a captured id freezes).
+            let layer_scene_key = scene.scene_key();
+            let layer_scene_id = {
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                std::hash::Hash::hash(&layer_scene_key, &mut hasher);
+                std::hash::Hasher::finish(&hasher)
+            };
+            let m = Modifier::new()
+                .fill_max_size()
+                .scene_tag(layer_scene_id)
+                .graphics_layer(move || {
                 let p = progress.peek();
                 let w = width.peek().max(1.0);
                 let mut params = GraphicsLayerParams::default();
@@ -1096,13 +1108,10 @@ impl<K: NavKey> NavTransition<K> {
                         // is which by tree order. Visibility is a closure, not a snapshot: this layer
                         // animates through a render-time `graphics_layer`, so its compose does not
                         // re-run every frame and a captured value would go stale mid-transition.
-                        let layer_scene_key = scene.scene_key();
                         let layer_is_prev = is_prev;
                         let layer_active = active;
                         let layer_progress = self.progress.clone();
-                        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                        std::hash::Hash::hash(&layer_scene_key, &mut hasher);
-                        let scene_id = std::hash::Hasher::finish(&hasher);
+                        let scene_id = layer_scene_id;
                         let visibility = std::sync::Arc::new(move || {
                             let p = layer_progress.peek().clamp(0.0, 1.0);
                             // p runs 1 (just started) → 0 (settled). The leaving layer fades with p,
@@ -1117,7 +1126,11 @@ impl<K: NavKey> NavTransition<K> {
                             }
                         });
                         crate::ui::shared_transition::with_nav_scene(
-                            crate::ui::shared_transition::NavSceneInfo { id: scene_id, visibility },
+                            crate::ui::shared_transition::NavSceneInfo {
+                                id: scene_id,
+                                visibility,
+                                is_prev: layer_is_prev,
+                            },
                             || {
                                 let layer_render = |ctx: &mut ComposeCtx, e: &NavEntry<K>, draining: bool| {
                                     render_entry(ctx, e, draining || is_prev);

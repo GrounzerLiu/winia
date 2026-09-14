@@ -806,6 +806,15 @@ pub(crate) enum ModifierElement {
         scope_id: u64,
         z_index: f32,
     },
+    /// Marks the subtree a scene host composed for ONE scene (winia's nav layers): `id` is that
+    /// scene's stable id. Scene membership is read from ANCESTRY when it is needed instead of being
+    /// stored on each shared marker, because a marker's modifier element is built once and then reused
+    /// across frames, so a scene id captured there freezes its first value (measured: one end reported
+    /// `scene=None` while the other reported the LEAVING scene, so a nav flight paired the leaving hero
+    /// with itself and never grew geometrically).
+    SceneTag {
+        id: u64,
+    },
 }
 
 // ── Modifier ──
@@ -2409,6 +2418,7 @@ Self::DrawIcon { .. } => f.write_str("DrawIcon"),
                 .field("scope", scope_id)
                 .field("z_index", z_index)
                 .finish(),
+            Self::SceneTag { id } => f.debug_struct("SceneTag").field("id", id).finish(),
         }
     }
 }
