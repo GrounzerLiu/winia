@@ -132,7 +132,8 @@ fn key_hash<K: NavKey>(key: &K) -> u64 {
 }
 
 /// 确定性 FNV-1a（框架内部标识用——scene key 等场景无关 hash）
-fn fnv_hash(value: &impl std::hash::Hash) -> u64 {    use std::hash::Hasher;
+fn fnv_hash(value: &impl std::hash::Hash) -> u64 {
+    use std::hash::Hasher;
     struct FnvHasher(u64);
     impl std::hash::Hasher for FnvHasher {
         fn finish(&self) -> u64 { self.0 }

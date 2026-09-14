@@ -526,6 +526,45 @@ pub(crate) fn nav_scene_registry_len() -> usize {
 /// without this the registry would only ever shrink while something was animating.
 pub(crate) const NAV_SCENE_PRUNE_THRESHOLD: usize = 32;
 
+/// Prune the scene registry with the live set of the WHOLE WINDOW.
+///
+/// The registry is shared by every composer on the thread while an arena belongs to one of them, so the
+/// live set has to be the union: pruning from a single composer's walk (the first version) let a peer
+/// without scene tags delete the entries of the composer that has them — and the pairing then fell back to
+/// last-wins, which is the "paired the leaving end with itself / never grew" failure this branch exists to
+/// fix. Called once per frame from `Composer::poll_cross_flights`, which is the only place that has every
+/// composer.
+pub(crate) fn prune_scene_registry_window(all: &[&Composer]) {
+    let len = nav_scene_registry_len();
+    if len == 0 {
+        return;
+    }
+    // An idle frame with a small registry skips the scan: the registry only grows when a scene host
+    // composes, which is not an idle frame for that composer.
+    let busy = all.iter().any(|c| {
+        c.paint_dirty
+            || !c.scope_overlay_roots.is_empty()
+            || c.shared_flights.values().any(|a| !is_terminal(a.flight.phase))
+    });
+    if !busy && len <= NAV_SCENE_PRUNE_THRESHOLD {
+        return;
+    }
+    let mut live: HashSet<u64> = HashSet::new();
+    for c in all {
+        live.extend(
+            c.arena
+                .nodes
+                .iter()
+                .flat_map(|n| n.modifier.elements().iter())
+                .filter_map(|el| match el {
+                    ModifierElement::SceneTag { id } => Some(*id),
+                    _ => None,
+                }),
+        );
+    }
+    prune_nav_scenes(&live);
+}
+
 /// Per-scope transition activity (Compose `isTransitionActive`), keyed by
 /// `scope_id` so main and overlay composers sharing a scope observe one
 /// flag. Entries are created on first read and synced by the coordinator
@@ -2855,13 +2894,21 @@ impl Composer {
             .filter(|a| !is_terminal(a.flight.phase))
             .map(|a| (a.flight.scope_id, a.flight.key.clone()))
             .collect();
+        self.refresh_paint_dispositions_with(&flying);
+    }
+
+    /// The pass with a caller-provided flight set. The window-level caller passes the UNION of every
+    /// composer's non-terminal flights, because a Tier1 flight lives only in the main composer's map: a peer
+    /// that asked its own map would keep painting a second copy of a key that is flying.
+    fn refresh_paint_dispositions_with(&mut self, flying: &[(u64, String)]) {
         if flying.is_empty() && self.scope_overlay_roots.is_empty() && !self.paint_dirty {
-            // The scene-registry prune lives in this pass, so the early-out must not skip it forever: an
-            // idle app is exactly the state where a scene host that Skips composition keeps adding entries
-            // that nothing else removes. Pay for the arena scan only once the registry has actually grown.
-            if nav_scene_registry_len() > NAV_SCENE_PRUNE_THRESHOLD {
-                self.prune_scene_registry();
-            }
+            // NOTE: the scene-registry prune deliberately does NOT happen here. The registry is shared by
+            // every composer on the thread, so its live set has to be the union of their arenas; pruning from
+            // one composer's walk let a peer WITHOUT scene tags delete the entries of the composer that has
+            // them (a peer with its own flight runs this pass with an empty tag set), which degraded the
+            // pairing to last-wins for the rest of a transition. The window-scoped prune is
+            // `prune_scene_registry_window`, called from `Composer::poll_cross_flights` where every composer
+            // is at hand.
             return;
         }
         let chrome: HashSet<usize> = self.scope_overlay_roots.iter().copied().collect();
@@ -2883,29 +2930,9 @@ impl Composer {
             };
             dirty |= n.paint != PaintDisposition::InTree;
         }
-        // Scene registry hygiene, on the pass that already walks every node.
-        self.prune_scene_registry();
         self.paint_dirty = dirty;
     }
 
-    /// Drop scene-registry entries whose scene no longer has a `SceneTag` in the arena — a scene is live
-    /// exactly when its tag is in the tree, and entries for anything else hold an `Arc` visibility closure
-    /// for a scene that no longer exists. Called from the disposition pass, and (once the registry has grown
-    /// past a threshold) from its early-out path too, because an idle app is when a skipping scene host keeps
-    /// adding entries.
-    fn prune_scene_registry(&self) {
-        let live_scenes: HashSet<u64> = self
-            .arena
-            .nodes
-            .iter()
-            .flat_map(|n| n.modifier.elements().iter())
-            .filter_map(|el| match el {
-                ModifierElement::SceneTag { id } => Some(*id),
-                _ => None,
-            })
-            .collect();
-        prune_nav_scenes(&live_scenes);
-    }
 
     /// anim-trace: record EVERY marked node this frame — not just the ends of a flight. "How many
     /// copies of one key are painted, and where" is otherwise only answerable by looking at pixels, and
@@ -3523,6 +3550,7 @@ impl Composer {
             // poll of the frame, so its set is authoritative.
             let refs: Vec<&Composer> = all.iter().map(|c| &**c).collect();
             sync_scope_active_states(&refs);
+            prune_scene_registry_window(&refs);
             return;
         }
         // 0. Drive active Tier1 (staleness-cancel → progress → complete).
@@ -3556,15 +3584,25 @@ impl Composer {
             .filter(|a| !is_terminal(a.flight.phase))
             .map(|a| a.flight.scope_id)
             .collect();
+        // The union of the FLIGHTS, not just their scopes: `refresh_paint_dispositions` decides placeholders
+        // from the (scope, key) pairs, and a Tier1 flight lives only in the main composer's map, so a peer
+        // would otherwise keep painting a second copy of a key that is flying.
+        let flying_union: Vec<(u64, String)> = all
+            .iter()
+            .flat_map(|c| c.shared_flights.values())
+            .filter(|a| !is_terminal(a.flight.phase))
+            .map(|a| (a.flight.scope_id, a.flight.key.clone()))
+            .collect();
         for c in all.iter_mut() {
             c.refresh_scope_overlay_roots(&union);
             c.rebuild_layer_order();
-            // And recompute the dispositions, because both of the above just changed their inputs: a
-            // Tier1 flight that started or completed in this cross-poll would otherwise leave a duplicate
-            // copy painted (or a placeholder hidden) for exactly one frame, since each composer's own poll
-            // ran earlier in the frame.
-            c.refresh_paint_dispositions();
+            // Recompute the dispositions, because both of the above just changed their inputs: a Tier1
+            // flight that started or completed in this cross-poll would otherwise leave a duplicate copy
+            // painted (or a placeholder hidden) for one frame, since each composer's own poll ran earlier.
+            c.refresh_paint_dispositions_with(&flying_union);
         }
+        let refs: Vec<&Composer> = all.iter().map(|c| &**c).collect();
+        prune_scene_registry_window(&refs);
     }
 
     /// Drive one Tier1 flight: staleness-cancel, progress, both-end visuals
@@ -9485,43 +9523,116 @@ mod tier0_tests {
             nav_scene_visibility(11).is_none(),
             "a scene whose tag left the tree is dropped"
         );
-        assert!(nav_scene_visibility(22).is_some(), "a live scene is kept");
-        assert_eq!(nav_scene_is_prev(22), Some(false), "…with its role intact");
+        assert_eq!(
+            nav_scene_is_prev(22),
+            Some(false),
+            "a live scene is kept, with its role intact"
+        );
+        // Equal counts (one stale, one live) must still prune: the guard that skipped this case kept a
+        // stale entry alive.
+        let info2 = |id: u64| NavSceneInfo {
+            id,
+            visibility: std::sync::Arc::new(|| 1.0),
+            is_prev: true,
+        };
+        with_nav_scene(info2(33), || {});
+        assert_eq!(nav_scene_registry_len(), 2, "one live, one stale");
+        prune_nav_scenes(&HashSet::from([22]));
+        assert_eq!(nav_scene_registry_len(), 1, "the stale one goes even when the counts match");
         clear_nav_scenes();
     }
 
-    /// The prune must also run on IDLE frames: entries are added by scene hosts while they compose, and an
-    /// idle app is exactly the state in which a host whose layers Skip keeps adding them with nothing else to
-    /// remove them. Teeth: drop the threshold branch from the early-out and the registry stays grown.
+    /// The registry is SHARED by every composer on the thread, while an arena belongs to one of them, so
+    /// the prune must use the union of their live scene tags: a peer with no scene host must not delete the
+    /// entry of the composer that has one. Pruning from a single composer's own arena (the first version)
+    /// did exactly that, and the pairing then fell back to last-wins for the rest of the transition — the
+    /// "paired the leaving end with itself / never grew" failure this branch exists to fix.
+    ///
+    /// Teeth: give the peer its own flight (so its per-composer pass really runs) and prune from that
+    /// composer's arena — the live scene disappears and this fails.
     #[test]
-    fn an_idle_frame_prunes_the_scene_registry_once_it_has_grown() {
+    fn a_peer_composer_does_not_prune_another_composers_live_scene() {
         let _g = lock_serial();
         clear_nav_scenes();
-        for i in 0..(NAV_SCENE_PRUNE_THRESHOLD + 1) {
-            let info = NavSceneInfo {
-                id: 0x1000 + i as u64,
+        crate::animation::clear_all_animations();
+        let mut a = Composer::new();
+        let mut b = Composer::new();
+
+        // A hosts a scene: publish it AND leave its tag in A's arena.
+        let scene_id = 0x5CE7Eu64;
+        with_nav_scene(
+            NavSceneInfo {
+                id: scene_id,
                 visibility: std::sync::Arc::new(|| 1.0),
                 is_prev: false,
-            };
-            with_nav_scene(info, || {});
-        }
-        assert!(
-            nav_scene_registry_len() > NAV_SCENE_PRUNE_THRESHOLD,
-            "the registry is over the threshold to begin with"
+            },
+            || {},
         );
-        // An idle composer: no flights, no chrome, nothing dirty — the early-out path.
-        let mut composer = Composer::new();
-        composer.compose(|ctx| {
-            Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |_| {});
+        a.compose(|ctx| {
+            Column::new()
+                .modifier(Modifier::new().fill_max_size().scene_tag(scene_id))
+                .build(ctx, |_| {});
         });
-        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
-        composer.poll_shared_flights();
+        a.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        a.poll_shared_flights();
+
+        // B is a peer with NO scene host at all, but with a flight of its own, so its pass runs.
+        let show_b = State::new(true);
+        let w_b = State::new(120.0f32);
+        let b_frame = |b: &mut Composer, show: &State<bool>| {
+            let (s, ww) = (show.clone(), w_b.clone());
+            b.compose(|ctx| {
+                SharedTransitionLayout::new().build(ctx, |ctx| {
+                    let scope = current_shared_scope().expect("scope");
+                    Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+                        if s.get() {
+                            mixed_list_screen(ctx, &scope, &ww);
+                        } else {
+                            mixed_detail_screen(ctx, &scope, &ww);
+                        }
+                    });
+                });
+            });
+            b.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+            b.poll_shared_flights();
+        };
+        b_frame(&mut b, &show_b);
+        show_b.set(false);
+        b_frame(&mut b, &show_b);
+        assert!(
+            b.shared_flights.values().any(|f| !is_terminal(f.flight.phase)),
+            "the peer really has a flight running"
+        );
+
+        // …and the registry is over the threshold, so a scan happens at all.
+        for i in 0..(NAV_SCENE_PRUNE_THRESHOLD + 1) {
+            with_nav_scene(
+                NavSceneInfo {
+                    id: 0x1000 + i as u64,
+                    visibility: std::sync::Arc::new(|| 1.0),
+                    is_prev: true,
+                },
+                || {},
+            );
+        }
+
+        // App order: main poll, peer poll, then the window-level cross poll.
+        let mut all: Vec<&mut Composer> = vec![&mut a, &mut b];
+        Composer::poll_cross_flights(&mut all);
+
         assert_eq!(
-            nav_scene_registry_len(),
-            0,
-            "an idle frame prunes entries whose scene has no tag in the tree"
+            nav_scene_is_prev(scene_id),
+            Some(false),
+            "the live scene survives a frame in which a scene-less peer polled (registry len {})",
+            nav_scene_registry_len()
+        );
+        assert!(
+            nav_scene_registry_len() < NAV_SCENE_PRUNE_THRESHOLD,
+            "the stale entries are gone (len {})",
+            nav_scene_registry_len()
         );
         clear_nav_scenes();
+        crate::animation::clear_all_animations();
     }
 
     /// The per-frame scope-activity flags are a UNION over the frame's composers, not whoever polled last.
