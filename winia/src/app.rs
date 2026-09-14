@@ -418,6 +418,16 @@ impl PerWindow {
         // vsync 研究：渲染帧计数（每秒渲染次数——Fifo 下应 ~60）
         self.frame_counter += 1;
         debug_log!("[fps] render#{} compose#{} pending={}", self.frame_counter, self.composer.compose_count(), self.composer.pending_state_count());
+        // anim-trace frame barrier: stamps the frame number and a wall-clock timestamp, samples every
+        // scene published this frame, and flushes the previous frame's records. A no-op unless the
+        // `anim-trace` feature is on AND WINIA_ANIM_TRACE names an output file.
+        crate::anim_trace::begin_frame(
+            self.frame_counter,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0),
+        );
         // 临时：窗口节点数（诊断主窗口塌缩）
         // 提供当前窗口 Density（从 scale_factor）——覆盖 compose + layout + draw 全程，
         // 保证 Dimension::Px / TextUnit::Px 在布局/渲染期使用窗口 sf 而非 standard(1.0)

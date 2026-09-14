@@ -784,7 +784,15 @@ impl NavTransitionSpec {
             enter,
             exit,
             duration: std::time::Duration::from_millis(300),
-            interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseInOutCubic::new()),
+            // Fast-out easing, not ease-in-out. A scene swap is a CROSS-FADE: the entering layer's
+            // opacity is `1 - p` and the leaving layer's is `p`, so an ease-in-out curve spends the
+            // first third of the transition below ~10 % opacity and the swap reads as "nothing happens,
+            // then it rushes in". Measured with the anim-trace facility on `nav_shared_element_demo`
+            // (800 ms fade): entering visibility 0.0001 / 0.01 / 0.04 / 0.10 / 0.22 / 0.42 / 0.67 over
+            // the first 440 ms — which is why the incoming screen seemed absent while the shared hero
+            // was already half-way. EaseOutCubic is also closer to Compose, whose default tween easing
+            // is FastOutSlowIn.
+            interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()),
         }
     }
 

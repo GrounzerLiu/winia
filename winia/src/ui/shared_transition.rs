@@ -405,8 +405,12 @@ thread_local! {
 pub fn with_nav_scene<R>(scene: NavSceneInfo, f: impl FnOnce() -> R) -> R {
     NAV_SCENE_STACK.with(|s| s.borrow_mut().push(scene.clone()));
     NAV_SCENE_VIS.with(|v| {
-        v.borrow_mut().insert(scene.id, scene);
+        v.borrow_mut().insert(scene.id, scene.clone());
     });
+    // anim-trace: hand the handle to the trace so the frame barrier records this scene's visibility
+    // (it is a closure over the host's progress, so it has to be sampled once per frame rather than
+    // read here). No-op unless the tracing feature is on.
+    crate::anim_trace::note_scene(scene);
     let out = f();
     NAV_SCENE_STACK.with(|s| {
         s.borrow_mut().pop();
@@ -2965,6 +2969,79 @@ impl Composer {
                         self.elevated_roots.push(tidx);
                     }
                 }
+            }
+        }
+        // anim-trace: one record per end per frame — `layout` is the node's measured rect, `painted`
+        // is the flight's lerped rect (what the flight draws), and opacity is recorded in three parts
+        // (`alpha` = the end's own, `effective_alpha` = what the draw composes, `scene_visibility` =
+        // the scene host's value) so "who faded it" is answerable without guessing.
+        if crate::anim_trace::enabled() {
+            let (scope_id, key) = self
+                .shared_flights
+                .get(&id)
+                .map(|a| (a.flight.scope_id, a.flight.key.clone()))
+                .unwrap_or((0, String::new()));
+            let svis = self
+                .shared_flights
+                .get(&id)
+                .and_then(|a| a.source_idx)
+                .and_then(|i| self.arena.nodes.get(i))
+                .and_then(|n| find_shared_marker(&n.modifier))
+                .and_then(|m| m.scene)
+                .and_then(nav_scene_visibility);
+            for (idx, role) in self
+                .arena
+                .nodes
+                .iter()
+                .enumerate()
+                .filter_map(|(i, n)| {
+                    let t = n.transition.as_ref()?;
+                    if t.flight != id {
+                        return None;
+                    }
+                    Some((i, t.role.clone()))
+                })
+                .collect::<Vec<_>>()
+            {
+                let n = &self.arena.nodes[idx];
+                let t = match n.transition.as_ref() {
+                    Some(t) => t,
+                    None => continue,
+                };
+                let lerped = t.lerped();
+                let mut rec = crate::anim_trace::TraceRecord::flight(match role {
+                    TransitionRole::Source => format!("flight:{key}#Source"),
+                    TransitionRole::Target => format!("flight:{key}#Target"),
+                    TransitionRole::Morph => format!("flight:{key}#Morph"),
+                });
+                rec.scope = Some(scope_id);
+                rec.key = Some(key.clone());
+                rec.role = Some(match role {
+                    TransitionRole::Source => "Source",
+                    TransitionRole::Target => "Target",
+                    TransitionRole::Morph => "Morph",
+                });
+                rec.flight = Some(id);
+                rec.phase = Some(if t.progress >= 1.0 { "settled" } else { "flying" });
+                rec.progress = Some(t.progress);
+                rec.layout = Some(crate::anim_trace::TraceRect::new(
+                    n.position.x,
+                    n.position.y,
+                    n.measured_size.width,
+                    n.measured_size.height,
+                ));
+                rec.painted = Some(crate::anim_trace::TraceRect::new(
+                    lerped.x, lerped.y, lerped.width, lerped.height,
+                ));
+                rec.alpha = Some(t.alpha());
+                // A detached/elevated end is drawn from the transition layer, where the scene's own
+                // layer fade does not apply; an in-tree end of a scene is multiplied by it.
+                let scene_vis = if t.elevated { None } else { svis };
+                rec.scene_visibility = scene_vis;
+                rec.effective_alpha = Some(t.alpha() * scene_vis.unwrap_or(1.0));
+                rec.radii = Some(t.radii());
+                rec.clip = Some(t.clip);
+                crate::anim_trace::record(rec);
             }
         }
     }

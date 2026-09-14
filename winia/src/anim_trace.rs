@@ -190,12 +190,18 @@ mod imp {
 
     thread_local! {
         static SINK: std::cell::RefCell<Sink> = std::cell::RefCell::new(init());
-        /// Scene handles published by scene hosts this frame, sampled by the frame barrier so their
-        /// visibility is recorded even though it is a closure read at arbitrary times.
-        static SCENES: std::cell::RefCell<HashMap<u64, NavSceneInfo>> =
+        /// Scene handles published by scene hosts, with the last frame each was noted on. Kept ACROSS
+        /// frames on purpose: a scene host only reaches `with_nav_scene` when it composes, which during
+        /// an animation is not every frame, so clearing this per frame recorded a live scene once and
+        /// then lost it (measured: a scene that was on screen for the whole transition had exactly one
+        /// record). Stale entries are dropped instead, after a short grace period.
+        static SCENES: std::cell::RefCell<HashMap<u64, (NavSceneInfo, u64)>> =
             std::cell::RefCell::new(HashMap::new());
         static FRAME: std::cell::Cell<(u64, u128)> = const { std::cell::Cell::new((0, 0)) };
     }
+
+    /// Frames a scene stays traced after the host last published it.
+    const SCENE_GRACE_FRAMES: u64 = 30;
 
     fn init() -> Sink {
         match std::env::var("WINIA_ANIM_TRACE") {
@@ -215,26 +221,30 @@ mod imp {
         SINK.with(|s| !matches!(&*s.borrow(), Sink::Off))
     }
 
-    /// Remember a scene host's handle for this frame (called by `with_nav_scene`).
+    /// Remember a scene host's handle (called by `with_nav_scene`), stamped with the current frame.
     pub fn note_scene(scene: NavSceneInfo) {
         if !enabled() {
             return;
         }
+        let frame = FRAME.with(|f| f.get().0);
         SCENES.with(|s| {
-            s.borrow_mut().insert(scene.id, scene);
+            s.borrow_mut().insert(scene.id, (scene, frame));
         });
     }
 
-    /// Start a frame: remembers `frame`/`t_ms`, records every known scene, and flushes the previous
-    /// frame's lines. Called once per app-loop iteration.
+    /// Start a frame: remembers `frame`/`t_ms`, records every scene still inside its grace window, and
+    /// flushes the previous frame's lines. Called once per app-loop iteration.
     pub fn begin_frame(frame: u64, t_ms: u128) {
         if !enabled() {
             return;
         }
         FRAME.with(|f| f.set((frame, t_ms)));
-        let scenes: Vec<NavSceneInfo> = SCENES.with(|s| s.borrow().values().cloned().collect());
-        SCENES.with(|s| s.borrow_mut().clear());
-        for sc in scenes {
+        let live: Vec<NavSceneInfo> = SCENES.with(|s| {
+            let mut m = s.borrow_mut();
+            m.retain(|_, (_, last)| frame.saturating_sub(*last) <= SCENE_GRACE_FRAMES);
+            m.values().map(|(sc, _)| sc.clone()).collect()
+        });
+        for sc in live {
             let mut r = TraceRecord::scene(sc.id);
             let vis = (sc.visibility)();
             r.scene_visibility = Some(vis);
