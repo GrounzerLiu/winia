@@ -4264,6 +4264,83 @@ mod tier0_tests {
         crate::animation::clear_all_animations();
     }
 
+    /// The trace facility must record a headless flight: per frame, per end, with the geometry and the
+    /// opacity that a report can be built from. Gated on the feature — with `anim-trace` off there is
+    /// nothing to record by design, and the suite must still pass.
+    ///
+    /// Teeth: remove the emission in `write_flight_visuals` and this fails on the very first
+    /// assertion, because nothing is captured at all.
+    #[cfg(feature = "anim-trace")]
+    #[test]
+    fn anim_trace_records_a_headless_flight() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        crate::anim_trace::capture_start();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+        frame(&mut composer, &show);
+        show.set(false);
+        // The switch frame itself opens the flight; the loop below then runs it out.
+        frame(&mut composer, &show);
+        assert!(!composer.shared_flights.is_empty(), "the switch opens a flight");
+        for _ in 0..200 {
+            if composer.shared_flights.is_empty() {
+                break;
+            }
+            advance(&mut composer, &show);
+        }
+        let recs = crate::anim_trace::capture_take();
+        crate::anim_trace::capture_stop();
+
+        let of = |role: &str| -> Vec<crate::anim_trace::TraceRecord> {
+            recs.iter()
+                .map(|(_, _, r)| r.clone())
+                .filter(|r| r.kind == crate::anim_trace::TraceKind::Flight)
+                .filter(|r| r.role == Some(role))
+                .collect()
+        };
+        let source = of("Source");
+        let target = of("Target");
+        assert!(
+            !source.is_empty() && !target.is_empty(),
+            "a flight must be traced for both ends (source {}, target {})",
+            source.len(),
+            target.len()
+        );
+        let painted_w = |r: &crate::anim_trace::TraceRecord| r.painted.map(|p| p.w).unwrap_or(0.0);
+        // Both ends draw the SAME lerped rect, which starts at the source's size (this scene's list
+        // hero is 120x80) and finishes at the target's (the detail hero is 300x160).
+        assert!(
+            (painted_w(&target[0]) - painted_w(&source[0])).abs() < 1.0,
+            "both ends must draw the same rect at the start ({:.0} vs {:.0})",
+            painted_w(&target[0]),
+            painted_w(&source[0])
+        );
+        assert!(
+            painted_w(&source[0]) < 150.0,
+            "…which is the source's own size, got {:.0}",
+            painted_w(&source[0])
+        );
+        let last = target.last().expect("target records");
+        assert!(
+            painted_w(last) > 280.0,
+            "…and finish at the target rect, got {:.0}",
+            painted_w(last)
+        );
+        // Opacity crossfades: the leaving end starts opaque and ends invisible, the entering one the
+        // reverse. Both are recorded, in three parts.
+        let a = |r: &crate::anim_trace::TraceRecord| r.alpha.unwrap_or(-1.0);
+        assert!(a(&source[0]) > 0.9, "the leaving end starts opaque");
+        assert!(a(source.last().unwrap()) < 0.1, "…and ends invisible");
+        assert!(a(&target[0]) < 0.1, "the entering end starts invisible");
+        assert!(a(last) > 0.9, "…and ends opaque");
+        assert!(
+            source[0].effective_alpha.is_some() && source[0].layout.is_some(),
+            "each record also carries the composited alpha and the layout rect"
+        );
+        crate::animation::clear_all_animations();
+    }
+
     #[test]
     fn tier0_flight_completes_end_to_end() {
         let _g = lock_serial();
