@@ -2319,11 +2319,13 @@ impl Composer {
                 if let Some((sid, _)) = find_scope_overlay_marker(&node.modifier) {
                     if active.contains(&sid) {
                         marked.push(idx);
-                        // Do NOT descend: the layer re-draws this subtree untransformed, so a chrome marker
-                        // nested inside another one would be marked too, skipped by the tree walk and skipped
-                        // again by the layer (its descendants are drawn with `layer_root = false`) — it would
-                        // paint nowhere. Its ancestor's draw already covers it.
-                        continue;
+                        // Keep descending: a chrome marker nested inside another one gets its OWN layer entry
+                        // (`rebuild_layer_order` includes every entry of this list, and `render_layer` draws
+                        // each one with `layer_root = true`), which is what keeps its own `zIndexInOverlay`
+                        // in the sort and lets it escape its ancestor's clip. An earlier version skipped it
+                        // on the theory that it would be skipped twice and paint nowhere; that was wrong (it
+                        // was painted exactly once, as its own entry) and suppressing it silently downgraded
+                        // the nested bar to an ordinary child of its ancestor's draw.
                     }
                 }
                 stack.extend(node.children.iter().copied());
@@ -6034,12 +6036,16 @@ mod tier0_tests {
         clear_nav_scenes();
     }
 
-    /// Chrome that opts into the scope overlay must NOT be marked when it already sits inside another
-    /// marked subtree: the layer re-draws the outer subtree untransformed (its descendants are drawn with
-    /// `layer_root = false`), so the inner one would be skipped by the tree walk and skipped again by the
-    /// layer — it would paint nowhere. The outer subtree's draw already covers it.
+    /// Chrome nested inside chrome keeps its OWN layer entry: the layer draws every marked root with
+    /// `layer_root = true`, so the inner bar keeps its `zIndexInOverlay` in the sort and escapes its
+    /// ancestor's clip. An earlier version suppressed the inner marker to avoid "painting nowhere" — the
+    /// premise was wrong (it painted exactly once, as its own entry) and the suppression silently made it an
+    /// ordinary child of the ancestor's draw.
+    ///
+    /// Teeth: skip descending into a marked subtree (the suppressed behaviour) and the inner bar stops being
+    /// a layer root, which this asserts on.
     #[test]
-    fn chrome_nested_inside_chrome_is_not_marked_again() {
+    fn chrome_nested_inside_chrome_keeps_its_own_layer_entry() {
         let _g = lock_serial();
         crate::animation::clear_all_animations();
         let mut composer = Composer::new();
@@ -6098,20 +6104,20 @@ mod tier0_tests {
         assert_eq!(marked.len(), 2, "both chrome markers exist in the tree");
         assert_eq!(
             composer.scope_overlay_roots.len(),
-            1,
-            "only the OUTER chrome is a layer root (the inner one is covered by its ancestor's draw)"
+            2,
+            "both chrome markers are layer roots, so the inner keeps its own z and clip escape"
         );
-        let outer = composer.scope_overlay_roots[0];
-        let inner = marked.into_iter().find(|i| *i != outer).expect("inner chrome node");
-        assert_eq!(
-            composer.arena_nodes()[outer].paint,
-            PaintDisposition::InLayer,
-            "the outer chrome is painted by the layer"
-        );
-        assert_eq!(
-            composer.arena_nodes()[inner].paint,
-            PaintDisposition::InTree,
-            "the inner chrome is painted in tree (not skipped twice)"
+        for idx in &marked {
+            assert_eq!(
+                composer.arena_nodes()[*idx].paint,
+                PaintDisposition::InLayer,
+                "every chrome root is painted by the layer"
+            );
+        }
+        assert!(
+            composer.layer_order.iter().filter(|i| marked.contains(i)).count() == 2,
+            "…and both are in the layer's draw order (layer_order={:?})",
+            composer.layer_order
         );
         crate::animation::clear_all_animations();
     }
