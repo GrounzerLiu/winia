@@ -28,11 +28,14 @@ enum Route {
 /// reproducible in a raster probe — see the shared-transition test module).
 /// The hero's motion. Slower than the framework default on purpose — this demo exists to be WATCHED,
 /// and at the default (`TweenSpec::default()` = a LINEAR 300 ms tween) a flight is over before the eye
-/// catches which end is which. `slowness` is in the same spirit: 1 is the demo default (~1 s to
-/// settle), 2 is for observing a single flight closely (~1.7 s).
+/// catches which end is which. `slowness` is in the same spirit: 1 is the demo default, 2 is for
+/// observing a single flight closely.
 ///
-/// Critically damped (`damping_ratio = 1.0`) so it eases into place without overshooting; a spring's
-/// settle time is about `4.75 / sqrt(stiffness)`, which is why the stiffness values look small.
+/// Critically damped (`damping_ratio = 1.0`) so it eases into place without overshooting. Measured with
+/// `anim-trace`, the engine's own spring (it stops when displacement AND velocity are below
+/// `threshold = 0.001`, which is NOT the 2 % rule `4.75 / sqrt(stiffness)` describes):
+///   stiffness 25 (slowness 1): p=0.5 at 0.34 s, p=0.9 at 0.78 s, p=0.99 at 1.34 s
+///   stiffness  8 (slowness 2): p=0.5 at 0.60 s, p=0.9 at 1.38 s, p=0.99 at 2.36 s
 /// The two hero colours — different on purpose so a flight is easy to read: blue leaving the list,
 /// orange arriving in the detail (mid-flight you see the two blend).
 fn list_hero_color() -> Color {
@@ -205,10 +208,14 @@ fn detail_screen(
                 .build(ctx, |ctx| {
                     hero(ctx, scope, 320.0, 220.0, Shape::rounded(12.0), motion.clone(), detail_hero_color());
                 });
-            // Detail-only, NON-shared content: a description block and an action row.
+            // Detail-only, NON-shared content: a description block and an action row. It belongs to the
+            // scene, so it fades with the scene and never flies. It DOES move with the hero while the
+            // hero's animated placeholder size changes (`PlaceHolderSize::AnimatedSize`): only the hero
+            // is a shared element, everything below it is ordinary layout.
             Text::new(
                 "Detail-only block: not a shared element, so it belongs to the scene. It must fade \
-                 with the scene, never fly, and not be pushed around by the hero while it flies.",
+                 with the scene and never fly — but it sits below the hero, so it does move with the \
+                 hero's animated placeholder while the flight runs.",
             )
             .font_size(12.0)
             .color(Color::from_argb(255, 160, 170, 190))
@@ -233,8 +240,15 @@ fn demo(ctx: &mut ComposeCtx) {
     let display_stack = back_stack.clone();
     let depth = back_stack.len();
     // The entry-level bridge (winia's counterpart of Nav3's `sharedEntryInSceneNavEntryDecorator`):
-    // with it ON the ENTRY ITSELF is a shared element keyed by the entry, so a nav transition can fly
-    // a whole screen; OFF compares against the plain nav transition (only the hero marker flies).
+    // with it ON each ENTRY's content is itself a shared element keyed by the entry.
+    //
+    // Measured: it is INERT in every flow this demo can produce — a plain List→Detail push holds two
+    // DIFFERENT entries (so nothing pairs, and only the hero/badge markers fly), and switching
+    // single-pane ↔ two-pane opens no entry flight either, because an entry keeps its composition
+    // identity (`ctx.key(entry.content_key())`) while the scene arrangement changes, and a flight needs
+    // a slot change. OFF is therefore the honest comparison here: it shows the markers flying with the
+    // decorator simply not acting. Details and the case that WOULD make it act (a scene arrangement that
+    // re-slots one entry) are in docs/nav-shared-transition.md §6.
     let entry_flight = ctx.remember(|| true);
     // Two-pane (ListDetail) mode: the LIST entry stays in its pane while the DETAIL entry is added,
     // so the same entry is present in two scenes at once — which is the case the entry-level
@@ -242,7 +256,7 @@ fn demo(ctx: &mut ComposeCtx) {
     // no entry flight opens).
     let two_pane = ctx.remember(|| false);
     // Motion preset: a smooth spring by default, a slower one with the toggle.
-    // 1 = the demo's own pace (~1 s), 2 = slow enough to watch one flight closely (~1.7 s).
+    // 1 = the demo's own pace (p=0.99 at 1.34 s), 2 = slow enough to watch one flight closely (2.36 s).
     let slow_motion = ctx.remember(|| false);
     let motion = hero_motion(if slow_motion.get() { 2 } else { 1 });
     SharedTransitionLayout::new().build(ctx, |ctx| {
@@ -277,6 +291,22 @@ fn demo(ctx: &mut ComposeCtx) {
                             .font_size(12.0)
                             .build(ctx)
                     });
+                // Motion preset toggle. It was dead state for a while: the button had been dropped while
+                // the comments kept referring to it, which made `slowness 2` unreachable.
+                Button::text()
+                    .on_click({
+                        clone!(slow_motion);
+                        move || slow_motion.update(|v| *v = !*v)
+                    })
+                    .build(ctx, |ctx| {
+                        Text::new(if slow_motion.get() {
+                            "slow motion: ON"
+                        } else {
+                            "slow motion: OFF"
+                        })
+                        .font_size(12.0)
+                        .build(ctx)
+                    });
                 let display = NavDisplay::new(&display_stack, {
                     clone!(scope);
                     let motion_for_list = motion.clone();
@@ -297,8 +327,9 @@ fn demo(ctx: &mut ComposeCtx) {
                     }
                 });
                 let mut display = display;
-                // Slow the SCENE transition to match the hero's glide: the nav's default is 300 ms,
-                // which reads as abrupt next to a ~600 ms flight.
+                // Slow the SCENE transition to match the hero's glide: the nav's default is a 300 ms fade,
+                // which reads as abrupt next to a flight that takes 1.34 s to reach p=0.99 (measured with
+                // anim-trace at the default stiffness; 2.36 s with the slow-motion preset).
                 display = display
                     .transition_spec(
                         NavTransitionSpec::fade().duration(std::time::Duration::from_millis(800)),

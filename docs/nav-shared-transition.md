@@ -73,10 +73,11 @@ collects the keys of `prev_shared_endpoints` that are not in the new `live` map
 (`winia/src/ui/shared_transition.rs`, the `gone` loop), then `detach_source` freezes that node as
 the leaving end.
 
-The live map tolerates two ends with the same key but **keeps only the last one** and only logs:
+The live map tolerated two ends with the same key but **kept only the last one** and only logged (the
+code below no longer exists — it is the shape the diagnosis started from):
 
 ```rust
-// winia/src/ui/shared_transition.rs:1909-1924
+// winia/src/ui/shared_transition.rs — REMOVED; this is the pre-fix shape quoted for the diagnosis
 if out.insert((m.scope_id, m.key.clone()), node.slot_key).is_some() {
     crate::debug_log!("[shared] duplicate live endpoint scope={} key={}", …);
 }
@@ -134,22 +135,43 @@ motion.
 | Step | State |
 |---|---|
 | Reproducer demo (`examples/nav_shared_element_demo.rs`) | Done. Content must sit inside `Window::new().build(…)`; without it the tree is empty, with no panic and no fps lines (cost a bisect). |
-| Scene-aware pairing | Done. `ModifierElement::SharedTransition` carries `scene: Option<u64>`; `with_nav_scene(NavSceneInfo { id, visibility })` publishes a scene (visibility is a **closure**, because the nav animates its layers from the render path and a compose-time snapshot would go stale mid-transition); `nav.rs` publishes each transition layer with `p` for the leaving layer and `1 - p` for the entering one; `shared_live_map` resolves a duplicated key by "the end whose scene is becoming visible wins", and only logs the case it cannot resolve. |
+| Scene-aware pairing | Done. `ModifierElement::SharedTransition` carries a `scene` field, but scene membership is read from a `SceneTag` on the ANCESTOR chain (`scene_of_node`) — a marker's modifier element is built once and reused, so a captured id freezes (measured: one end `scene=None`, the other reported the LEAVING scene). `with_nav_scene(NavSceneInfo { id, visibility, is_prev })` publishes a scene per composed layer (visibility is a **closure**, because the nav animates its layers from the render path and a compose-time snapshot would go stale mid-transition; the id is namespaced by host and layer role, so two displays on one route cannot collide); `nav.rs` publishes `p` for the leaving layer and `1 - p` for the entering one. `shared_live_map` resolves a duplicated key by **the end whose scene is NOT leaving** — deliberately not "the more visible end", because a leaving scene STARTS at visibility 1 and the entering one at 0, so comparing visibilities picked the leaving end at the switch frame (measured: the flight's target was the 96x96 list hero and it never grew). |
 | Ownership rule | Done. `TransitionVisual::scene_alpha` makes the SCENE own opacity when an end carries one, so the flight stops crossfading the same element a second time; the rect stays the flight's. Detached sources carry their scene's fade (the scene's layer no longer applies to them), targets stay opaque unless the host elevates them too. Tier 1 (cross-composer) passes `None` — scene ids are published per composer. |
-| Entry-level decorator | Done: `nav::SharedEntryInSceneDecorator`, winia's counterpart of Nav3's `sharedEntryInSceneNavEntryDecorator` — it wraps each entry's content in a `shared_bounds` keyed by the entry's stable content key, and degrades to rendering unwrapped when no `SharedTransitionLayout` is around the display (Compose throws there). **Measured: it is INERT in this demo's flows** — a plain List→Detail push opens one flight (`hero`) and no entry flight, because the two scenes hold two different entries; switching single-pane ↔ two-pane also opens no entry flight, because an entry's slot stays put: the nav wraps entries in `ctx.key(entry.content_key())`, so the same entry keeps its composition identity while the scene arrangement changes, and a flight needs a slot change. Nothing is broken — it simply has no case to act on yet. It would act on a scene arrangement that RE-SLOTS one entry (the same entry rendered by two scenes at once, e.g. predictive-back previews or a two-pane strategy that re-parents a pane), which winia's nav does not do today; that is a nav-side feature, not a decorator bug. |
+| Entry-level decorator | Done: `nav::SharedEntryInSceneDecorator`, winia's counterpart of Nav3's `sharedEntryInSceneNavEntryDecorator` — it wraps each entry's content in a `shared_bounds` keyed by the entry's stable content key, and degrades to rendering unwrapped when no `SharedTransitionLayout` is around the display (Compose throws there). **Measured: it is INERT in this demo's flows** — a plain List→Detail push opens one flight per marked key (`hero`, and `badge` since the demo gained a second shared element) and NO entry flight, because the two scenes hold two different entries; switching single-pane ↔ two-pane also opens no entry flight, because an entry's slot stays put: the nav wraps entries in `ctx.key(entry.content_key())`, so the same entry keeps its composition identity while the scene arrangement changes, and a flight needs a slot change. Nothing is broken — it simply has no case to act on yet. It would act on a scene arrangement that RE-SLOTS one entry (the same entry rendered by two scenes at once, e.g. predictive-back previews or a two-pane strategy that re-parents a pane), which winia's nav does not do today; that is a nav-side feature, not a decorator bug. |
 
-Measured (debug server, `examples/nav_shared_element_demo`, one navigate):
+Measured (debug server + `anim-trace`, `examples/nav_shared_element_demo`):
 
-- `begin_flight` count **2 → 1** (temporary probe, reverted);
+- `begin_flight` per marked key: **2 → 1** (temporary probe, reverted; one navigate now opens one flight
+  per key — `hero` and `badge`);
 - duplicate-endpoint lines with no scene visibility to resolve them: **0**;
 - `[dup-key]`: **0**; hero centre `(74,121,177)` → `(83,138,202)` → `(89,149,219)` across the
-  transition, at both the 96x96 list card and the 320x220 detail card.
+  transition, at both the 96x96 list card and the 320x220 detail card;
+- the flight's own rect and the two ends' opacity, from a trace: `painted` 96x96 → 320x220 while
+  `y` runs 153 → 243, the leaving end's alpha 1.00 → 0.00 and the entering end's 0.00 → 1.00;
+- clicking Back **while the flight still runs** (at p=0.963) retargets instead of dying: the same two
+  ends continue from the rect they had reached (306x212 → 217x163 → 139x120 → 105x101);
+- a window resize opens **0** morph flights (the morph gate is transition-scoped; before it, a resize
+  opened one per marked node whose rect changed);
+- a leaving scene that re-composes a copy of a flying key is suppressed: the copy is recorded as
+  `phase=placeholder` (196 records for `hero` in one navigate) and neither painted nor hittable.
+
+## 7. What the branch also carries
+
+- **`anim-trace`** (`docs/anim-trace.md`): the facility behind every measurement above — per-frame
+  records of layout vs painted rect and three-part opacity, a file sink, a live `tr` command, a report
+  tool and a headless capture API. No application code is involved.
+- **`PaintDisposition`**: one enum per node (`InTree` / `InLayer` / `Placeholder`) decides where its
+  pixels come from during a transition; the render walk and the hit walk ask the same question.
+- **Scene ownership of opacity + flight ownership of the rect**, both measured above.
+- **Morphs are transition-scoped**: a bare layout change (a window resize) opens nothing; the same
+  change inside a running transition still morphs.
 
 Test coverage: the alpha rule is pinned by a unit test (three roles × three visibilities, with and
-without an enter/exit pair). **NOT covered by a headless test:** the pairing rule itself. An attempt
-to build one composed two same-key ends in a single closure, which is NOT what a scene host does —
-the framework treats the pair as a switch and detaches one end, and the nav only survives that
-because its own layer keeps painting that end. A faithful headless scene host (two layers, both
-re-published every frame) is what such a test needs; until then the pairing rule rests on the
-debug-server measurement above.
+without an enter/exit pair); scene ids, the scene registry's pruning, the placeholder's hit exclusion,
+the scope-activity union and the trace's trajectory are pinned by their own tests (see the commit
+bodies for each). **NOT covered by a headless test:** the pairing rule itself. An attempt to build one
+composed two same-key ends in a single closure, which is NOT what a scene host does — measured, the two
+copies collapse into one node, so the attempt does not even produce a duplicate. A faithful headless
+scene host (two layers, both re-published every frame) is what such a test needs; until then the pairing
+rule rests on the debug-server and trace measurements above.
 

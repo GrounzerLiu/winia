@@ -768,10 +768,24 @@ pub struct NavTransitionSpec {
     pub exit: NavExit,
     /// 过渡时长（默认 300ms——Nav3 默认 tween(700)，winia 取更快节奏）
     pub duration: std::time::Duration,
-    /// 缓动曲线（默认 EaseInOutCubic——用动画系统内置插值器；
+    /// Easing curve, default `EaseOutCubic` (fast out, slow in).
+    ///
+    /// It is deliberately NOT `EaseInOutCubic`: a scene swap is a CROSS-FADE (the entering layer's alpha
+    /// is `1 - p`, the leaving layer's `p`), and an ease-in-out curve spends the first third of the
+    /// transition below ~10 % opacity, so the swap reads as "nothing happens, then it rushes in". Measured
+    /// on the demo with an 800 ms fade: the entering scene's visibility was 0.0001 / 0.01 / 0.04 / 0.10 /
+    /// 0.22 over the first 440 ms — the incoming screen looked absent while its shared hero was already
+    /// half way. `EaseOutCubic` is also the same family as Compose's default tween easing (FastOutSlowIn).
+    ///
+    /// CAVEAT, recorded rather than hidden: the same curve drives POSITION for the Slide*/Scale*
+    /// primitives, where fast-out means the leaving layer covers ~49 % of its travel in the first 20 % of
+    /// the duration and then crawls. Compose splits these — `fadeIn`/`fadeOut` default to a tween,
+    /// `slideInHorizontally`/`scaleIn` default to a spring — and winia has one spec for all primitives.
+    /// Splitting them is open work, not a decision made here.
+    ///
     /// 可注入任意 `Interpolator`，见 `winia::animation::interpolator` 的
     /// 29 个内置曲线：EaseIn/Out/InOut × Sine/Quad/Cubic/Quart/Quint/Expo/
-    /// Circ/Back/Elastic/Bounce + Linear）
+    /// Circ/Back/Elastic/Bounce + Linear
     pub interpolator: std::sync::Arc<dyn crate::animation::interpolator::Interpolator>,
 }
 
@@ -889,8 +903,9 @@ impl NavTransitionSpec {
 ///   闭包 peek——不注册依赖）
 /// - 完成检测（progress≈0）→ previous 清空（旧页移除）
 ///
-/// 共享 tween（300ms EaseInOutCubic）当前硬编码——对标各原语 animationSpec
-/// 参数的自定义时长/曲线后续接（见 docs/navigation3.md）。
+/// Duration and easing are NOT hardcoded any more: `NavTransitionSpec { duration, interpolator }` carries
+/// them (default 300 ms + `EaseOutCubic`, see that field's doc), and the spec is snapshotted when a
+/// transition starts. See docs/navigation3.md for the Compose comparison.
 #[derive(Clone)]
 struct NavTransition<K: NavKey> {
     /// 当前场景的场景 key（对标 Nav3 AnimatedSceneKey——过渡的驱动标识）
@@ -1969,6 +1984,39 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The framework's default transition curve is part of its behaviour, not an implementation detail:
+    /// every preset and NavDisplay's default go through `NavTransitionSpec::new`. This pins the default
+    /// (300 ms, a fast-out curve) by sampling the interpolator, so changing it has to be deliberate.
+    ///
+    /// Teeth: revert the default to `EaseInOutCubic` and the sampled point at 0.25 fails — that curve is
+    /// symmetric (f(0.25) = 0.0625, measured 0.071), the fast-out one is well ahead of it.
+    #[test]
+    fn default_transition_spec_is_a_fast_out_300ms_fade() {
+        use crate::animation::interpolator::Interpolator;
+        let spec = NavTransitionSpec::fade();
+        assert_eq!(
+            spec.duration,
+            std::time::Duration::from_millis(300),
+            "the framework default duration"
+        );
+        let f = |p: f32| spec.interpolator.interpolate(p);
+        assert!((f(0.0) - 0.0).abs() < 1e-3 && (f(1.0) - 1.0).abs() < 1e-3, "endpoints");
+        assert!(
+            f(0.25) > 0.4,
+            "the default must be a FAST-OUT curve (an ease-in-out cubic is at ~0.07 here), got {:.3}",
+            f(0.25)
+        );
+        assert!(
+            f(0.75) > f(0.25),
+            "and it must still be monotonic, got {:.3} then {:.3}",
+            f(0.25),
+            f(0.75)
+        );
+        // The two layers of a cross-fade must stay complementary for the same curve, which is what the
+        // fast-out default is for: the incoming scene is already visible early in the transition.
+        assert!((1.0 - f(0.25)) < 0.6, "the leaving layer is already mostly gone at a quarter");
+    }
 
     /// A published scene id must name the LAYER, not just the scene: the registry behind scene tags is
     /// process-global and keyed by id alone, so two hosts rendering the same route — or one host pushing the

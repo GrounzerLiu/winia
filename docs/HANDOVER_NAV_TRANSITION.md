@@ -30,6 +30,11 @@ winia 是 Rust GUI 框架（对标 Jetpack Compose，winit + skia-safe）。当�
 - **pop**（backward）：反向——旧页向右滑出 (+100px)，新页从左滑入 (-100px)
 - 同时淡入淡出（旧页 alpha 1→0，新页保持 alpha=1）
 - 300ms EaseInOutCubic
+  > NOTE (later work, `exp/nav-shared-transition`): the default CURVE is now `EaseOutCubic` — a scene swap
+  > is a cross-fade, and an ease-in-out curve kept the entering scene below ~10 % visibility for the first
+  > third of the transition (measured over the first 440 ms of an 800 ms fade: 0.0001 / 0.01 / 0.04 / 0.10 /
+  > 0.22). The duration default is still 300 ms. Pinned by
+  > `nav::tests::default_transition_spec_is_a_fast_out_300ms_fade`; see docs/navigation3.md.
 - 双页 Stack 层叠（旧页下层滑出，新页上层滑入），动画完成后移除旧页
 
 > ⚠ 2026-08-29 规格更新（用户验收决定）：100px 小位移 + 新页恒不透明被判定为
@@ -68,7 +73,7 @@ struct NavTransition<K: NavKey> {
   2. `forward.set(stack_len > prev_len)`（方向）
   3. `current.set(target)`
   4. **`progress.set_silent(1.0)`**（复位起点——上次动画结束停在 0，不复位则 push_animatable 见 peek==target 直接跳过）
-  5. `push_animatable(progress, 0.0, 300ms EaseInOutCubic)`
+  5. `push_animatable(progress, 0.0, 300ms EaseInOutCubic)` (curve now `EaseOutCubic` — see the note above)
   - 完成检测：`previous.is_some() && progress < 0.001 → previous.set(None)`
 - `render()`：Stack 层叠两页。每页 `Modifier::new().fill_max_size().graphics_layer(move || ...)` 动画闭包 **peek progress 零重组**：
   - 旧页（下层）：`translation_x = if fwd { -(1.0-p) } else { 1.0-p } * 100.0`，`alpha = p`
@@ -263,7 +268,7 @@ nav 模块测试在 `winia/src/nav.rs` 底部 `#[cfg(test)] mod tests`（10 个�
    `pop_transition_spec`，各自 = `NavTransitionSpec { enter, exit }`（对标
    ContentTransform；`NavEnter`/`NavExit` 原语：None/Fade/Slide/Slide+Fade，
    位移 `SlideOffset::Fraction/Px` 对标 Compose `{ it }` 全宽闭包）。**默认 fade
-   （对标 Nav3 本体默认，androidx 为 tween(700)——winia 共享 300ms）**；
+   （对标 Nav3 本体默认，androidx 为 tween(700)——winia 300ms；曲线后来改为 fast-out 的 `EaseOutCubic`，见 §1 的 NOTE）**；
    Android 全幅滑动 = `horizontal_slide()` 便捷对（demo 默认选中）。关键语义：
    - spec 在过渡启动时**快照固化**（对标 Nav3 求值时机——中途改配置不影响进行中过渡）；
    - `NavExit::None` = 旧页原样保留到过渡结束（对标 ExitTransition.None，非瞬时消失；

@@ -43,7 +43,7 @@ One JSON object per line. `\"kind\"` is `flight`, `scene`, `event` or `node`.
 | `kind`, `subject` | what this is, and its identity (framework-derived) |
 | `scope`, `key`, `role`, `flight` | for a flight end: the shared scope id, the shared key, `Source`/`Target`/`Morph`, the flight id |
 | `scene` | scene id, for `kind: "scene"` |
-| `phase`, `detail` | for `kind: "event"`: `start` / `cancel` / `candidate` / `rebind` / `ignore` / `resolve`, plus a human-readable reason |
+| `phase`, `detail` | for `kind: "event"`: `start` / `cancel` / `candidate` / `rebind` / `resolve` / `morph_open`, plus a human-readable reason. For `kind: "node"`, `phase` is the paint disposition: `tree` / `layer` / `placeholder` |
 | `progress` | animation progress 0..=1 (a spring may overshoot) |
 | `layout` | the node's layout rect `{x,y,w,h}` |
 | `painted` | the rect actually drawn, after flight scale and clip — what the eye sees |
@@ -61,30 +61,51 @@ a node, which is when a report is interesting.
 
 ## Identity, without app code
 
-Subjects are named by the framework: `flight:<key>#<role>`, `scene:<id>`, and events carry the key and
-the slots involved. Scene membership is read from a `SceneTag` on the ancestor chain rather than stored
-on each marker — a marker's modifier element is built once and reused, so a captured id freezes its
-first value (measured: one end `scene=None`, the other the LEAVING scene).
+Subjects are named by the framework, in three schemes:
+
+- `flight:<key>#<role>` — one end of a flight, `role` being `Source` / `Target` / `Morph`;
+- `scene:<id>` — a scene published by a scene host; its `effective_alpha` is the visibility the host
+  announced;
+- `mark:<key>#<role|plain>` (`kind: "node"`) — EVERY marked node in the tree each frame, not just the
+  ends of a flight. This is what answers "how many copies of one key are painted, and where": a copy that
+  a flight already owns appears with `role: null` and `phase: placeholder` (measured: a leaving nav scene
+  re-composed its hero, three records for one key in one frame, the third at its own 96x96 rect, which is
+  how the second copy was found — and it is now suppressed).
+
+Event records carry the key and the slots involved. Scene membership is read from a `SceneTag` on the
+ancestor chain rather than stored on each marker — a marker's modifier element is built once and reused,
+so a captured id freezes its first value (measured: one end `scene=None`, the other the LEAVING scene).
 
 ## Report tool
 
 ```bash
-cargo run -p winia --example anim_trace_report -- trace.ndjson [--subject hero] [--stall-ms 120]
+cargo run -p winia --example anim_trace_report -- trace.ndjson [--subject hero] [--stall-ms 120] \
+    [--jump-px-per-s 4000]
 ```
 
-Prints each end's trajectory (painted size, alpha, progress) and checks the failure modes this project
-actually hit; it exits non-zero when any check fails, so a scripted run can gate on it:
+Prints each end's trajectory (painted rect, alpha, progress) and checks the failure modes this project
+actually hit. It exits 1 when any check fails and 2 when the input cannot be checked at all, so a
+scripted run can gate on it:
 
 - `STALL` — the painted rect stops changing while the animation is unfinished (the byte-identical
-  frames a screen capture had shown);
-- `JUMP` — the rect moves more than 40px between consecutive records;
-- `OPACITY EARLY` (leaving end) — alpha reaches zero long before the geometry settles;
-- `OPACITY MISSING` (entering end) — it never fades in at all (the morph case);
-- `TARGET MISMATCH` — the `end` rect the flight's own `resolve` event announced is not where it settles;
+  frames a screen capture had shown). A flight whose start and end rects are equal is exempt: an
+  opacity-only morph moves nothing on purpose.
+- `JUMP` — the rect moves faster than `--jump-px-per-s` (default 4000 px/s, computed from the record
+  timestamps, so one long frame is not a jump). It used to be a per-record threshold, which fired on
+  healthy animations during a hitch.
+- `OPACITY EARLY` (leaving end) — alpha reaches zero long before the geometry settles.
+- `OPACITY MISSING` (entering end) — it never fades in at all (the morph case).
+- `TARGET MISMATCH` — the `end` rect the flight's own `resolve` event announced is not where it settles.
+  The event is matched by key and flight id; the first version looked for a subject string the emitter
+  never writes, so the check could never fire.
 - `SETTLE MISMATCH` — the two ends of one flight settle more than 200 ms apart.
+- `INCOMPLETE` — a flight stops before progress 1 with no `cancel` event: a truncated trace used to be
+  reported as clean, which made the tool useless as a gate.
 
 Records are grouped by subject AND flight id: one subject is reused across navigations (the same hero
-flies out and back), and treating those as one trajectory invents anomalies.
+flies out and back), and treating those as one trajectory invents anomalies. Unparseable lines are
+counted and reported (and are fatal above a quarter of the file); `--subject` matching nothing, an
+unknown option, or a trace with no flight records exit 2 instead of silently passing.
 
 ## Tests
 
@@ -116,6 +137,9 @@ query, a post-run report, and a headless assertion, with no application code in 
 - The live ring keeps the most recent 4000 records (a few seconds of a busy transition); the file sink
   is unbounded until the process ends.
 - With the feature on, every emission point runs even when no file is configured (that is what makes
-  `tr` work); the cost is one record per animated subject per frame.
-- Only flights, scenes, node geometry and lifecycle events are emitted so far. Named `animate_*` values
-  (`nav` progress, `AnimatedVisibility`, `animate_*_as_state`) are not recorded yet.
+  `tr` work). The cost is per MARKED NODE per frame, not per flight: a node record is written for every
+  marked node, idle ones included — that is what makes a suppressed duplicate visible — plus one record
+  per scene per frame and the flight-end records. One navigate of the demo produced 3999 records, of
+  which 2134 were node records and 471 scene records.
+- Only flights, scenes, marked-node geometry and lifecycle events are emitted so far. Named `animate_*`
+  values (`nav` progress, `AnimatedVisibility`, `animate_*_as_state`) are not recorded yet.
