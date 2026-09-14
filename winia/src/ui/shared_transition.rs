@@ -9596,6 +9596,41 @@ mod tier0_tests {
         clear_nav_scenes();
     }
 
+    /// The idle early-out must still clear a stale disposition: `paint_dirty` is what guarantees one more
+    /// pass after the last non-`InTree` frame, and that pass is what returns the node to `InTree`.
+    ///
+    /// Teeth: make the early-out ignore `paint_dirty` and the stale placeholder survives the poll.
+    #[test]
+    fn the_idle_early_out_still_clears_a_stale_disposition() {
+        let _g = lock_serial();
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |_| {});
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        composer.poll_shared_flights();
+        let idx = composer.layout_root_idx().expect("root");
+
+        // Simulate the frame right after a flight ended: the node is still marked, nothing is flying.
+        composer.arena.nodes[idx].paint = PaintDisposition::Placeholder;
+        composer.paint_dirty = true;
+        composer.poll_shared_flights();
+        assert_eq!(
+            composer.arena.nodes[idx].paint,
+            PaintDisposition::InTree,
+            "the pass must run once more to clear the stale disposition"
+        );
+        assert!(
+            !composer.paint_dirty,
+            "…and then nothing is left to clear, so the next idle frame may early-out"
+        );
+
+        // A second idle frame now takes the early-out and leaves it alone.
+        composer.poll_shared_flights();
+        assert_eq!(composer.arena.nodes[idx].paint, PaintDisposition::InTree);
+        crate::animation::clear_all_animations();
+    }
+
     /// The registry is SHARED by every composer on the thread, while an arena belongs to one of them, so
     /// the prune must use the union of their live scene tags: a peer with no scene host must not delete the
     /// entry of the composer that has one. Pruning from a single composer's own arena (the first version)
@@ -9731,6 +9766,13 @@ mod tier0_tests {
         };
 
         a_frame(&mut a, &mut b, &show, &w);
+        // Pin the precondition this test exists for: with a cross flight or a stashed source the cross poll
+        // would take its BUSY path, which synced the union before this round and would make the test pass
+        // for the wrong reason.
+        assert!(
+            !a.has_cross_flights() && a.pending_cross.is_empty() && !b.has_cross_flights(),
+            "the frame must be cross-idle for the idle-path sync to be under test"
+        );
         // Read the flag BEFORE the switch, the way composition does: the sync only updates scopes somebody
         // has already read (map entries), so a read after the fact would find a freshly created entry.
         let scope_id = a
@@ -9739,7 +9781,6 @@ mod tier0_tests {
             .find_map(|n| find_shared_marker(&n.modifier).map(|m| m.scope_id))
             .expect("a marked node carries the scope id");
         let active = SharedTransitionScope::new(scope_id).is_transition_active();
-        assert!(!active.get(), "idle before the switch");
         show.set(false);
         a_frame(&mut a, &mut b, &show, &w);
         assert!(
@@ -9750,6 +9791,8 @@ mod tier0_tests {
             active.get(),
             "a main-composer scope must stay active when a peer composer polled after it"
         );
+        clear_scope_active_states();
+        clear_nav_scenes();
         crate::animation::clear_all_animations();
     }
 

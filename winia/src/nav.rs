@@ -2028,20 +2028,22 @@ mod tests {
         );
         let f = |p: f32| spec.interpolator.interpolate(p);
         assert!((f(0.0) - 0.0).abs() < 1e-3 && (f(1.0) - 1.0).abs() < 1e-3, "endpoints");
-        assert!(
-            f(0.25) > 0.4,
-            "the default must be a FAST-OUT curve (an ease-in-out cubic is at ~0.07 here), got {:.3}",
-            f(0.25)
-        );
-        assert!(
-            f(0.75) > f(0.25),
-            "and it must still be monotonic, got {:.3} then {:.3}",
-            f(0.25),
-            f(0.75)
-        );
-        // The two layers of a cross-fade must stay complementary for the same curve, which is what the
-        // fast-out default is for: the incoming scene is already visible early in the transition.
-        assert!((1.0 - f(0.25)) < 0.6, "the leaving layer is already mostly gone at a quarter");
+        // The exact curve, not just its family: a five-point fingerprint against a fresh `EaseOutCubic`
+        // (the same points `PartialEq for NavTransitionSpec` samples). The earlier `f(0.25) > 0.4` admitted
+        // EaseOutQuad (0.436), EaseOutBounce (0.473), EaseOutCirc (0.660), EaseOutQuart (0.689), EaseOutQuint
+        // (0.765), EaseOutBack (0.816), EaseOutExpo (0.826) and EaseOutElastic (0.912).
+        let reference = crate::animation::interpolator::EaseOutCubic::new();
+        for p in [0.0f32, 0.25, 0.5, 0.75, 1.0] {
+            assert!(
+                (f(p) - reference.interpolate(p)).abs() < 1e-4,
+                "the default curve must be EaseOutCubic exactly: f({p}) = {:.4}, expected {:.4}",
+                f(p),
+                reference.interpolate(p)
+            );
+        }
+        // …and the preset must actually be a cross-fade, not just a curve.
+        assert_eq!(spec.enter, NavEnter::FadeIn, "the default enters by fading in");
+        assert_eq!(spec.exit, NavExit::FadeOut, "…and leaves by fading out");
     }
 
     /// A published scene id must name the LAYER, not just the scene: the registry behind scene tags is
@@ -2065,6 +2067,13 @@ mod tests {
             layer_scene_id(1, key, false),
             layer_scene_id(2, key, false),
             "two hosts rendering the same route differ"
+        );
+        // …and the scene key must participate too: an id that ignored it would pass every assertion above
+        // (a function of host and role alone), which is what the first version of this test could not see.
+        assert_ne!(
+            layer_scene_id(1, key, false),
+            layer_scene_id(1, fnv_hash(&8u64), false),
+            "two different scenes of one host differ"
         );
     }
 
