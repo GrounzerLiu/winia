@@ -772,11 +772,12 @@ pub struct NavTransitionSpec {
     /// Easing curve, default `EaseOutCubic` (fast out, slow in).
     ///
     /// It is deliberately NOT `EaseInOutCubic`: a scene swap is a CROSS-FADE (the entering layer's alpha
-    /// is `1 - p`, the leaving layer's `p`), and an ease-in-out curve spends the first third of the
-    /// transition below ~10 % opacity, so the swap reads as "nothing happens, then it rushes in". Measured
-    /// on the demo with an 800 ms fade: the entering scene's visibility was 0.0001 / 0.01 / 0.04 / 0.10 /
-    /// 0.22 over the first 440 ms — the incoming screen looked absent while its shared hero was already
-    /// half way. `EaseOutCubic` is also the same family as Compose's default tween easing (FastOutSlowIn).
+    /// is `1 - p`, the leaving layer's `p`), and an ease-in-out curve keeps the entering layer nearly
+    /// invisible for the first part of the transition, so the swap reads as "nothing happens, then it
+    /// rushes in". Winia's own `EaseInOutCubic` table evaluated at those progress points gives
+    /// 0.0002 / 0.0102 / 0.0409 / 0.1038 / 0.2223 / 0.4321 / 0.6816 — below 10 % opacity for the first 29 %
+    /// of the duration — while the incoming screen's shared hero is already well into its flight.
+    /// `EaseOutCubic` is also the same family as Compose's default tween easing (FastOutSlowIn).
     ///
     /// CAVEAT, recorded rather than hidden: the same curve drives POSITION for the Slide*/Scale*
     /// primitives, where fast-out means the leaving layer covers ~49 % of its travel in the first 20 % of
@@ -818,13 +819,13 @@ impl NavTransitionSpec {
             exit,
             duration: std::time::Duration::from_millis(300),
             // Fast-out easing, not ease-in-out. A scene swap is a CROSS-FADE: the entering layer's
-            // opacity is `1 - p` and the leaving layer's is `p`, so an ease-in-out curve spends the
-            // first third of the transition below ~10 % opacity and the swap reads as "nothing happens,
-            // then it rushes in". Measured with the anim-trace facility on `nav_shared_element_demo`
-            // (800 ms fade): entering visibility 0.0001 / 0.01 / 0.04 / 0.10 / 0.22 / 0.42 / 0.67 over
-            // the first 440 ms — which is why the incoming screen seemed absent while the shared hero
-            // was already half-way. EaseOutCubic is also closer to Compose, whose default tween easing
-            // is FastOutSlowIn.
+            // opacity is `1 - p` and the leaving layer's is `p`, so an ease-in-out curve keeps the entering
+            // layer nearly invisible for the first part of the transition and the swap reads as "nothing
+            // happens, then it rushes in". Winia's own `EaseInOutCubic` table at those progress points:
+            // 0.0002 / 0.0102 / 0.0409 / 0.1038 / 0.2223 / 0.4321 / 0.6816 — below 10 % for the first 29 %
+            // of the duration — which is why the incoming screen looked absent while the shared hero was
+            // already well into its flight. EaseOutCubic is also closer to Compose, whose default tween
+            // easing is FastOutSlowIn.
             interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()),
         }
     }

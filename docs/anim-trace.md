@@ -139,7 +139,8 @@ query, a post-run report, and a headless assertion, with no application code in 
 - With the feature on, every emission point runs even when no file is configured (that is what makes
   `tr` work). The cost is per MARKED NODE per frame, not per flight: a node record is written for every
   marked node, idle ones included — that is what makes a suppressed duplicate visible — plus one record
-  per scene per frame and the flight-end records. One navigate of the demo produced 3999 records, of
-  which 2134 were node records and 471 scene records.
+  per scene per frame and the flight-end records. Reproducible from a captured file:
+  `tmp/a3.ndjson` (three navigations, frames 1..605) holds 6336 records — node 3412, flight 2416,
+  scene 502, event 6 — of which the `hero` marker contributes layer 1206 and placeholder 195.
 - Only flights, scenes, marked-node geometry and lifecycle events are emitted so far. Named `animate_*`
   values (`nav` progress, `AnimatedVisibility`, `animate_*_as_state`) are not recorded yet.

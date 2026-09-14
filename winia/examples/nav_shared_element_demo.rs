@@ -242,13 +242,15 @@ fn demo(ctx: &mut ComposeCtx) {
     // The entry-level bridge (winia's counterpart of Nav3's `sharedEntryInSceneNavEntryDecorator`):
     // with it ON each ENTRY's content is itself a shared element keyed by the entry.
     //
-    // Measured: it is INERT in every flow this demo can produce — a plain List→Detail push holds two
-    // DIFFERENT entries (so nothing pairs, and only the hero/badge markers fly), and switching
+    // Measured: it opens no entry FLIGHT in any flow this demo can produce — a plain List→Detail push
+    // holds two DIFFERENT entries (so nothing pairs, and only the hero/badge markers fly), and switching
     // single-pane ↔ two-pane opens no entry flight either, because an entry keeps its composition
-    // identity (`ctx.key(entry.content_key())`) while the scene arrangement changes, and a flight needs
-    // a slot change. OFF is therefore the honest comparison here: it shows the markers flying with the
-    // decorator simply not acting. Details and the case that WOULD make it act (a scene arrangement that
-    // re-slots one entry) are in docs/nav-shared-transition.md §6.
+    // identity (`ctx.key(entry.content_key())`) while the scene arrangement changes, and a flight needs a
+    // slot change. It DOES take part in the transition-scoped size morph: flipping two-pane while a
+    // transition runs opens one for the entry marker (`morph_open flight:entry:… fresh 252x484 -> 168x484`,
+    // measured on a running demo), which is a size animation rather than a flight. Details and the case
+    // that WOULD give it a flight (a scene arrangement that re-slots one entry) are in
+    // docs/nav-shared-transition.md §6.
     let entry_flight = ctx.remember(|| true);
     // Two-pane (ListDetail) mode: the LIST entry stays in its pane while the DETAIL entry is added,
     // so the same entry is present in two scenes at once — which is the case the entry-level

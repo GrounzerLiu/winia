@@ -31,9 +31,10 @@ winia 是 Rust GUI 框架（对标 Jetpack Compose，winit + skia-safe）。当�
 - 同时淡入淡出（旧页 alpha 1→0，新页保持 alpha=1）
 - 300ms EaseInOutCubic
   > NOTE (later work, `exp/nav-shared-transition`): the default CURVE is now `EaseOutCubic` — a scene swap
-  > is a cross-fade, and an ease-in-out curve kept the entering scene below ~10 % visibility for the first
-  > third of the transition (measured over the first 440 ms of an 800 ms fade: 0.0001 / 0.01 / 0.04 / 0.10 /
-  > 0.22). The duration default is still 300 ms. Pinned by
+  > is a cross-fade, and an ease-in-out curve keeps the entering scene nearly invisible for the first part
+  > of the transition (winia's own `EaseInOutCubic` table at those progress points:
+  > 0.0002 / 0.0102 / 0.0409 / 0.1038 / 0.2223 / 0.4321 / 0.6816 — below 10 % for the first 29 % of the
+  > duration). The duration default is still 300 ms. Pinned by
   > `nav::tests::default_transition_spec_is_a_fast_out_300ms_fade`; see docs/navigation3.md.
 - 双页 Stack 层叠（旧页下层滑出，新页上层滑入），动画完成后移除旧页
 

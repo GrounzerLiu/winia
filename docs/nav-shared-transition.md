@@ -1,8 +1,10 @@
 # Nav × shared elements — research and plan (branch `exp/nav-shared-transition`)
 
-Status: research complete, implementation not started. Everything below is either quoted from
-Compose's own sources/docs or verified against winia's code with a file:line; nothing here was
-measured by running a nav + shared-element app, because that is what this branch is going to build.
+Status: research complete and implemented on this branch. §2–§5 are the research as it was written before
+the code existed: the diagnosis path, not a description of the current state. §6 lists what the branch
+actually does and what is still open. Compose quotes come from its sources/docs; every number labelled
+measured comes from `anim-trace` (`docs/anim-trace.md`) or the debug server, and the file it came from is
+named where it matters.
 
 ## 1. What Compose does
 
@@ -60,11 +62,11 @@ together with a new `SceneDecoratorStrategy`. So Compose has both levels: a hero
 
 | Piece | State |
 |---|---|
-| Entry decorator hook | Present: `NavEntryDecorator` trait and the `wrap_entry(ctx, key, entry, decorators)` chain, `winia/src/nav.rs:1124-1167` — explicitly modelled on Nav3's decorator. |
-| Entry content composition | All destinations compose in ONE `ctx` under `ctx.key(scene.scene_key())`, `winia/src/nav.rs:1084-1090` (`scene.content(ctx, &layer_render)`). |
-| Nav transition | The nav renders previous + current scene as two layers with its own per-layer params (alpha / translation / scale) driven by a progress `p`, `winia/src/nav.rs:1040-1119`. |
+| Entry decorator hook | Present: `NavEntryDecorator` trait and the `wrap_entry(ctx, entry, decorators)` chain, `winia/src/nav.rs:1291` — explicitly modelled on Nav3's decorator. |
+| Entry content composition | All destinations compose in ONE `ctx` under `ctx.key(scene.scene_key())`, `winia/src/nav.rs:1168` (`scene.content(ctx, &layer_render)`). |
+| Nav transition | The nav renders previous + current scene as two layers with its own per-layer params (alpha / translation / scale) driven by a progress `p`, `winia/src/nav.rs:1087-1250` (the two-layer `Stack` is at `:1209`). |
 | Shared-transition scope | `SharedTransitionLayout` + `current_shared_scope()`, usable around any content; usage in `docs/shared-element-usage.md:17,59-60,99`. |
-| Nav ↔ shared bridge | MISSING. `docs/navigation3.md:238` lists `SharedTransitionScope` / `sizeTransform` as an open gap, and `:356` lists `sharedTransitionScope + SharedEntryInSceneNavEntryDecorator` among the things Compose has and winia does not. |
+| Nav ↔ shared bridge | Implemented on this branch (see §6): each transition layer publishes itself as a scene (`scene_tag` + `with_nav_scene`, ids namespaced per display and layer role), the pairing picks the end in the scene that is **not leaving**, and the scene owns opacity while the flight owns the rect. Still open: an entry-level FLIGHT needs a scene arrangement that re-slots one entry (winia's nav does not do that today — the decorator does take part in the transition-scoped size morph), and `sizeTransform` is a separate gap (`docs/navigation3.md:238`; `:361` lists the decorator among the things Compose has). |
 
 ## 3. The crux — why "just mark both screens" does not work
 
@@ -83,7 +85,7 @@ if out.insert((m.scope_id, m.key.clone()), node.slot_key).is_some() {
 }
 ```
 
-During a nav transition BOTH scenes are composed at once (`nav.rs:1092-1119`), so the marked key is
+During a nav transition BOTH scenes are composed at once (`nav.rs:1209-1250`), so the marked key is
 present in both layers.
 
 **MEASURED, and it corrects the first guess:** flights ARE created on a nav transition — a single
@@ -139,21 +141,28 @@ motion.
 | Ownership rule | Done. `TransitionVisual::scene_alpha` makes the SCENE own opacity when an end carries one, so the flight stops crossfading the same element a second time; the rect stays the flight's. Detached sources carry their scene's fade (the scene's layer no longer applies to them), targets stay opaque unless the host elevates them too. Tier 1 (cross-composer) passes `None` — scene ids are published per composer. |
 | Entry-level decorator | Done: `nav::SharedEntryInSceneDecorator`, winia's counterpart of Nav3's `sharedEntryInSceneNavEntryDecorator` — it wraps each entry's content in a `shared_bounds` keyed by the entry's stable content key, and degrades to rendering unwrapped when no `SharedTransitionLayout` is around the display (Compose throws there). **Measured: it opens no entry FLIGHT in this demo's flows** — a plain List→Detail push opens one flight per marked key (`hero`, and `badge` since the demo gained a second shared element) and none for the entry, because the two scenes hold two different entries; switching single-pane ↔ two-pane also opens no entry flight, because an entry's slot stays put: the nav wraps entries in `ctx.key(entry.content_key())`, so the same entry keeps its composition identity while the scene arrangement changes, and a flight needs a slot change. It DOES take part in a size morph, though: with the two-pane toggle flipped while a transition is running, the entry marker morphs its box (`morph_open flight:entry:… fresh 252x484 -> 168x484 at (0,136)`, measured on the running demo) — the decorator acting as a same-screen size animation, which is not a flight and therefore does not contradict the sentence above. A real entry flight would need a scene arrangement that RE-SLOTS one entry (the same entry rendered by two scenes at once, e.g. predictive-back previews or a two-pane strategy that re-parents a pane), which winia's nav does not do today; that is a nav-side feature, not a decorator bug. |
 
-Measured (debug server + `anim-trace`, `examples/nav_shared_element_demo`):
+Measured (debug server + `anim-trace`, `examples/nav_shared_element_demo`; the trace files are named where
+the number is not reproducible from the repository alone):
 
 - `begin_flight` per marked key: **2 → 1** (temporary probe, reverted; one navigate now opens one flight
   per key — `hero` and `badge`);
 - duplicate-endpoint lines with no scene visibility to resolve them: **0**;
 - `[dup-key]`: **0**; hero centre `(74,121,177)` → `(83,138,202)` → `(89,149,219)` across the
   transition, at both the 96x96 list card and the 320x220 detail card;
-- the flight's own rect and the two ends' opacity, from a trace: `painted` 96x96 → 320x220 while
-  `y` runs 153 → 243, the leaving end's alpha 1.00 → 0.00 and the entering end's 0.00 → 1.00;
-- clicking Back **while the flight still runs** (at p=0.963) retargets instead of dying: the same two
-  ends continue from the rect they had reached (306x212 → 217x163 → 139x120 → 105x101);
+- the flight's own rect and the two ends' opacity, from `tmp/trace6.ndjson`: `painted` (16,193) 96x96 →
+  (16,283) 320x220, the leaving end's alpha 1.00 → 0.00 and the entering end's 0.00 → 1.00. (The `y` values
+  moved when the demo gained its third toggle; the earlier 153 → 243 belongs to the two-toggle layout.)
+- clicking Back **while the flight still runs** retargets instead of dying, from the rect it had reached:
+  from `tmp/a1_post.ndjson`, at the cancel frame the hero is 202x155 and the new flight continues
+  202x155 → 201x154 → 192x149 → 155x129 → 96x96, with the cancel recorded at p=0.46 in that run (an earlier
+  run of the same click was at p=0.963 — the value depends on when the click lands);
 - a window resize opens **0** morph flights (the morph gate is transition-scoped; before it, a resize
   opened one per marked node whose rect changed);
 - a leaving scene that re-composes a copy of a flying key is suppressed: the copy is recorded as
-  `phase=placeholder` (196 records for `hero` in one navigate) and neither painted nor hittable.
+  `phase=placeholder` (195 records for `hero` in `tmp/a3.ndjson`) and neither painted nor hittable;
+- a scene's opacity is continuous when a transition is re-targeted mid-flight: re-targeting restarts the
+  nav progress at `1 - p` on a fresh clock, because the two layers swap their roles. Measured by stable
+  scene key on the demo (before: scene 466407 `0.770 → 0.216` in one frame; after: `0.781 → 0.761 → 0.749`).
 
 ## 7. What the branch also carries
 
