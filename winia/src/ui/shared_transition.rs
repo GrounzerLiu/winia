@@ -4074,6 +4074,16 @@ impl Composer {
         for p in pending {
             match p {
                 Pending::Fresh { scope_id, key, slot, start, end } => {
+                    // anim-trace: morph opens are otherwise invisible in a trace (no `start` event, only
+                    // per-frame records), which made "what did the resize animate?" hard to answer.
+                    crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
+                        format!("flight:{key}"),
+                        "morph_open",
+                        format!(
+                            "fresh {:.0}x{:.0} -> {:.0}x{:.0} at ({:.0},{:.0})",
+                            start.width, start.height, end.width, end.height, end.x, end.y
+                        ),
+                    ));
                     self.begin_morph(scope_id, key, slot, start, end, None);
                 }
                 Pending::Reopen { id, start, radii, end } => {
@@ -4083,6 +4093,14 @@ impl Composer {
                         .map(|a| (a.flight.scope_id, a.flight.key.clone(), a.flight.target_slot));
                     self.cancel_flight(id, "morph_reopen");
                     if let Some((scope_id, key, Some(slot))) = meta.map(|(s, k, t)| (s, k, t)) {
+                        crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
+                            format!("flight:{key}"),
+                            "morph_open",
+                            format!(
+                                "reopen {:.0}x{:.0} -> {:.0}x{:.0}",
+                                start.width, start.height, end.width, end.height
+                            ),
+                        ));
                         self.begin_morph(scope_id, key, slot, start, end, Some(radii));
                     }
                 }
