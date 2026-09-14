@@ -1703,6 +1703,11 @@ pub struct Composer {
     /// `refresh_scope_overlay_roots`; also drives their `LayoutNode` flag so
     /// the tree walk skips them and the layer re-draws them untransformed.
     pub(crate) scope_overlay_roots: Vec<usize>,
+    /// True while any node carries a paint disposition other than `InTree` (a placeholder, or chrome in
+    /// the layer). `refresh_paint_dispositions` can then skip its whole-arena walk on the frames where
+    /// nothing is shared and the previous frame left nothing to clear — and it MUST run once more after
+    /// the last non-`InTree` assignment, which is what this flag guarantees.
+    pub(crate) paint_dirty: bool,
     /// Last-frame absolute bounds per live marked endpoint (Phase 3
     /// same-screen size-morph detection). Keyed by endpoint identity
     /// (scope, key) — never by slot: slots are positional identities a new
@@ -1774,6 +1779,7 @@ impl Composer {
             layer_order: Vec::new(),
             elevated_roots: Vec::new(),
             scope_overlay_roots: Vec::new(),
+            paint_dirty: false,
             shared_last_bounds: HashMap::new(),
             composer_id: NEXT_COMPOSER_ID.fetch_add(1, Ordering::Relaxed),
             pending_cross: Vec::new(),

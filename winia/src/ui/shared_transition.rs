@@ -421,11 +421,19 @@ pub fn with_nav_scene<R>(scene: NavSceneInfo, f: impl FnOnce() -> R) -> R {
     // (it is a closure over the host's progress, so it has to be sampled once per frame rather than
     // read here). No-op unless the tracing feature is on.
     crate::anim_trace::note_scene(scene);
-    let out = f();
-    NAV_SCENE_STACK.with(|s| {
-        s.borrow_mut().pop();
-    });
-    out
+    // Pops on drop, so a panic inside the content cannot leave a stale entry on the stack: markers composed
+    // after such a panic would otherwise be attributed to a scene that no longer exists (the same
+    // stale-attribution failure the ancestry lookup was written to avoid).
+    struct PopOnDrop;
+    impl Drop for PopOnDrop {
+        fn drop(&mut self) {
+            NAV_SCENE_STACK.with(|s| {
+                s.borrow_mut().pop();
+            });
+        }
+    }
+    let _guard = PopOnDrop;
+    f()
 }
 
 /// The scene the caller is composing inside, if any (see [`with_nav_scene`]).
@@ -2256,6 +2264,11 @@ impl Composer {
                 if let Some((sid, _)) = find_scope_overlay_marker(&node.modifier) {
                     if active.contains(&sid) {
                         marked.push(idx);
+                        // Do NOT descend: the layer re-draws this subtree untransformed, so a chrome marker
+                        // nested inside another one would be marked too, skipped by the tree walk and skipped
+                        // again by the layer (its descendants are drawn with `layer_root = false`) — it would
+                        // paint nowhere. Its ancestor's draw already covers it.
+                        continue;
                     }
                 }
                 stack.extend(node.children.iter().copied());
@@ -2821,19 +2834,30 @@ impl Composer {
     ///
     /// Assigning unconditionally each frame is what keeps it transient: a node whose flight ended goes
     /// straight back to `InTree` without any per-flight cleanup.
+    ///
+    /// `paint_dirty` makes the idle case cheap: with no flights, no chrome and nothing left to clear, the
+    /// whole-arena walk is skipped. It is set whenever the pass assigns anything other than `InTree`, so the
+    /// pass always runs at least once more after the last non-`InTree` frame (that is what clears them).
     fn refresh_paint_dispositions(&mut self) {
-        let flying: HashSet<(u64, String)> = self
+        let flying: Vec<(u64, String)> = self
             .shared_flights
             .values()
             .filter(|a| !is_terminal(a.flight.phase))
             .map(|a| (a.flight.scope_id, a.flight.key.clone()))
             .collect();
+        if flying.is_empty() && self.scope_overlay_roots.is_empty() && !self.paint_dirty {
+            return;
+        }
         let chrome: HashSet<usize> = self.scope_overlay_roots.iter().copied().collect();
+        let mut dirty = false;
         for (idx, n) in self.arena.nodes.iter_mut().enumerate() {
+            // Compared against a small Vec rather than a HashSet of owned keys: probing the set needs an
+            // owned `(u64, String)` per marked node (an allocation per node per frame), and the flight list
+            // is a handful of entries at most.
             let placeholder = !chrome.contains(&idx)
                 && n.transition.is_none()
                 && find_shared_marker(&n.modifier)
-                    .is_some_and(|m| flying.contains(&(m.scope_id, m.key.clone())));
+                    .is_some_and(|m| flying.iter().any(|(s, k)| *s == m.scope_id && k == &m.key));
             n.paint = if chrome.contains(&idx) {
                 PaintDisposition::InLayer
             } else if placeholder {
@@ -2841,6 +2865,7 @@ impl Composer {
             } else {
                 PaintDisposition::InTree
             };
+            dirty |= n.paint != PaintDisposition::InTree;
         }
         // Scene registry hygiene, on the pass that already walks every node: a scene is live exactly when
         // its `SceneTag` is in the arena, and entries for anything else are dropped so a long-lived app does
@@ -2856,6 +2881,7 @@ impl Composer {
             })
             .collect();
         prune_nav_scenes(&live_scenes);
+        self.paint_dirty = dirty;
     }
 
     /// anim-trace: record EVERY marked node this frame — not just the ends of a flight. "How many
@@ -3510,6 +3536,11 @@ impl Composer {
         for c in all.iter_mut() {
             c.refresh_scope_overlay_roots(&union);
             c.rebuild_layer_order();
+            // And recompute the dispositions, because both of the above just changed their inputs: a
+            // Tier1 flight that started or completed in this cross-poll would otherwise leave a duplicate
+            // copy painted (or a placeholder hidden) for exactly one frame, since each composer's own poll
+            // ran earlier in the frame.
+            c.refresh_paint_dispositions();
         }
     }
 
@@ -5909,6 +5940,112 @@ mod tier0_tests {
             .iter()
             .position(|n| find_scope_overlay_marker(&n.modifier).is_some())
             .expect("chrome bar node")
+    }
+
+    /// A panicking scene must not leave its entry on the scene stack: markers composed afterwards would be
+    /// attributed to a scene that no longer exists, which is exactly the stale-attribution failure the
+    /// ancestry lookup exists to avoid. Teeth: remove the `PopOnDrop` guard in `with_nav_scene` and the
+    /// stack keeps the entry after the panic.
+    #[test]
+    fn a_panicking_scene_does_not_stay_on_the_scene_stack() {
+        let _g = lock_serial();
+        clear_nav_scenes();
+        let info = NavSceneInfo {
+            id: 0x5CE7E,
+            visibility: std::sync::Arc::new(|| 1.0),
+            is_prev: false,
+        };
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            with_nav_scene(info, || panic!("a scene host failed while composing"))
+        }));
+        assert!(caught.is_err(), "the panic must propagate out of the scene");
+        assert!(
+            current_nav_scene().is_none(),
+            "the scene stack must unwind with the panic"
+        );
+        clear_nav_scenes();
+    }
+
+    /// Chrome that opts into the scope overlay must NOT be marked when it already sits inside another
+    /// marked subtree: the layer re-draws the outer subtree untransformed (its descendants are drawn with
+    /// `layer_root = false`), so the inner one would be skipped by the tree walk and skipped again by the
+    /// layer — it would paint nowhere. The outer subtree's draw already covers it.
+    #[test]
+    fn chrome_nested_inside_chrome_is_not_marked_again() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+        let frame = |composer: &mut Composer, show: &State<bool>| {
+            let s = show.clone();
+            composer.compose(|ctx| {
+                SharedTransitionLayout::new().build(ctx, |ctx| {
+                    let scope = current_shared_scope().expect("scope");
+                    Stack::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+                        Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+                            if s.get() {
+                                under_bar_list(ctx, &scope, true);
+                            } else {
+                                under_bar_detail(ctx, &scope, true);
+                            }
+                        });
+                        // Outer chrome, with an INNER chrome marker inside it.
+                        Column::new()
+                            .modifier(
+                                Modifier::new()
+                                    .size(400.0, 60.0)
+                                    .background(Color::GREEN, Shape::Rectangle)
+                                    .render_in_shared_transition_scope_overlay(&scope, 0.0),
+                            )
+                            .build(ctx, |ctx| {
+                                Column::new()
+                                    .modifier(
+                                        Modifier::new()
+                                            .size(200.0, 30.0)
+                                            .render_in_shared_transition_scope_overlay(&scope, 0.0),
+                                    )
+                                    .build(ctx, |_| {});
+                            });
+                    });
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+            composer.poll_shared_flights();
+        };
+
+        frame(&mut composer, &show);
+        show.set(false);
+        frame(&mut composer, &show);
+        assert!(
+            composer.shared_flights.values().any(|f| !is_terminal(f.flight.phase)),
+            "a flight must be running for chrome to elevate"
+        );
+        let marked: Vec<usize> = composer
+            .arena_nodes()
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| find_scope_overlay_marker(&n.modifier).is_some())
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(marked.len(), 2, "both chrome markers exist in the tree");
+        assert_eq!(
+            composer.scope_overlay_roots.len(),
+            1,
+            "only the OUTER chrome is a layer root (the inner one is covered by its ancestor's draw)"
+        );
+        let outer = composer.scope_overlay_roots[0];
+        let inner = marked.into_iter().find(|i| *i != outer).expect("inner chrome node");
+        assert_eq!(
+            composer.arena_nodes()[outer].paint,
+            PaintDisposition::InLayer,
+            "the outer chrome is painted by the layer"
+        );
+        assert_eq!(
+            composer.arena_nodes()[inner].paint,
+            PaintDisposition::InTree,
+            "the inner chrome is painted in tree (not skipped twice)"
+        );
+        crate::animation::clear_all_animations();
     }
 
     /// Compose `Modifier.renderInSharedTransitionScopeOverlay`: chrome that
@@ -11023,4 +11160,3 @@ mod tier0_tests {
         crate::animation::clear_all_animations();
     }
 }
-
