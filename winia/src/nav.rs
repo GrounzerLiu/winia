@@ -1000,11 +1000,24 @@ impl<K: NavKey> NavTransition<K> {
                 self.active_spec.set(Some(spec.clone()));
                 // 复位进度起点 1.0（旧页全显）——上次动画结束 progress 停在 0，
                 // 不复位则 push_animatable 见 peek==target(0) 直接跳过、动画不启动。
-                // ⚠ 仅在无进行中动画时复位：过渡中途再次导航时，旧动画与新动画
-                // 同目标(0.0)、会被 push_animatable 去重保留并按原时间轴继续——
-                // 此时若复位 1.0，本帧会渲染出 p=1 的满血旧页、下一帧 tick 又弹回
-                // 中途值（一帧闪跳）；跳过复位则从中途值平滑续走。
-                if !crate::animation::has_animation_for_state(self.progress.state_id()) {
+                //
+                // 过渡中途再次导航（含反向重定向）时角色互换：本帧的 current（可见度 `1 - p`）变成
+                // previous（可见度 `p'`），两种做法都错——
+                //  - 保留 p：每个场景的可见度在一帧内跳 `|1 - 2p|`（实测 0.7732 → 0.2134、
+                //    0.2268 → 0.7866，p = 0.227 时跳 0.546）；
+                //  - 复位 1.0：本帧渲染出全显的旧页，下一帧运行中的时钟又把它拉回中途值，闪一帧。
+                // 正确起点是 `1 - p` 并**重启时钟**（旧时钟的相位属于上一次过渡），两层可见度都连续。
+                // 过渡中途再次导航（含反向重定向）时角色互换：本帧的 current（可见度 `1 - p`）变成
+                // previous（可见度 `p'`），两种做法都错——
+                //  - 保留 p：每个场景的可见度在一帧内跳 `|1 - 2p|`（实测按稳定 scene key：
+                //    0.770 → 0.216，跳 0.554）；
+                //  - 复位 1.0：本帧渲染出全显的旧页，下一帧运行中的时钟又把它拉回中途值，闪一帧。
+                // 正确起点是 `1 - p` 并**重启时钟**（旧时钟的相位属于上一次过渡），两层可见度都连续。
+                if crate::animation::has_animation_for_state(self.progress.state_id()) {
+                    let p = self.progress.peek().clamp(0.0, 1.0);
+                    crate::animation::cancel_animation(&self.progress);
+                    self.progress.as_raw().set_backchannel(1.0 - p);
+                } else {
                     self.progress.as_raw().set_backchannel(1.0);
                 }
                 // 过渡动画：1→0（用 spec 的时长/缓动曲线——自定义 duration/easing）
@@ -1169,6 +1182,7 @@ impl<K: NavKey> NavTransition<K> {
                         crate::ui::shared_transition::with_nav_scene(
                             crate::ui::shared_transition::NavSceneInfo {
                                 id: scene_id,
+                                scene_key: scene.scene_key(),
                                 visibility,
                                 is_prev: layer_is_prev,
                             },

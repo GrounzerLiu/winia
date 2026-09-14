@@ -375,7 +375,13 @@ static LOCAL_SHARED_SCOPE: LazyLock<CompositionLocal<Option<SharedTransitionScop
 /// frame and anything captured at compose time would go stale exactly while the transition runs.
 #[derive(Clone)]
 pub struct NavSceneInfo {
+    /// Per-LAYER id (`layer_scene_id(host, scene key, is_prev)`): it names this published layer, so it
+    /// changes when the layer's role flips.
     pub id: u64,
+    /// Stable id of the SCENE itself (the host's scene key), unchanged when the layer's role flips. The
+    /// layer id cannot answer "did THIS scene's opacity jump?", because a role flip renames the layer while
+    /// the two layers swap their visibilities: the observer needs an identity that does not move.
+    pub scene_key: u64,
     pub visibility: std::sync::Arc<dyn Fn() -> f32>,
     /// Is this the LEAVING scene of the host's transition? Two live ends of one shared key (a scene
     /// host composes both scenes at once) are told apart by this, not by comparing visibilities: the
@@ -6013,6 +6019,7 @@ mod tier0_tests {
         clear_nav_scenes();
         let info = NavSceneInfo {
             id: 0x5CE7E,
+            scene_key: 0x5CE7F,
             visibility: std::sync::Arc::new(|| 1.0),
             is_prev: false,
         };
@@ -9511,6 +9518,7 @@ mod tier0_tests {
         clear_nav_scenes();
         let info = |id: u64, is_prev: bool| NavSceneInfo {
             id,
+            scene_key: id,
             visibility: std::sync::Arc::new(|| 1.0),
             is_prev,
         };
@@ -9532,6 +9540,7 @@ mod tier0_tests {
         // stale entry alive.
         let info2 = |id: u64| NavSceneInfo {
             id,
+            scene_key: id,
             visibility: std::sync::Arc::new(|| 1.0),
             is_prev: true,
         };
@@ -9563,6 +9572,7 @@ mod tier0_tests {
         with_nav_scene(
             NavSceneInfo {
                 id: scene_id,
+                scene_key: 0x5CE7F,
                 visibility: std::sync::Arc::new(|| 1.0),
                 is_prev: false,
             },
@@ -9609,6 +9619,7 @@ mod tier0_tests {
             with_nav_scene(
                 NavSceneInfo {
                     id: 0x1000 + i as u64,
+                    scene_key: 0x2000 + i as u64,
                     visibility: std::sync::Arc::new(|| 1.0),
                     is_prev: true,
                 },

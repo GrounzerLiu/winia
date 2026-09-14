@@ -332,6 +332,13 @@ mod imp {
             let vis = (sc.visibility)();
             r.scene_visibility = Some(vis);
             r.effective_alpha = Some(vis);
+            // The layer's ROLE is part of "who faded it": a scene swap flips the two layers' roles, and
+            // without this a reader cannot tell which layer a visibility jump belongs to (the id changes
+            // with the role, and stale handles keep being sampled for the grace window).
+            r.phase = Some(if sc.is_prev { "leaving" } else { "entering" });
+            // The stable scene identity, alongside the layer id in `subject`: a role flip renames the layer
+            // and swaps the two visibilities, so only a stable key can show that one scene's opacity jumped.
+            r.key = Some(format!("{:x}", sc.scene_key));
             record(r);
         }
         flush();
