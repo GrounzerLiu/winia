@@ -113,6 +113,10 @@ pub struct TraceRecord {
     pub radii: Option<[f32; 4]>,
     /// Whether the draw was clipped to the bounds.
     pub clip: Option<bool>,
+    /// Which composer produced this record. Flight ids are per composer, so two composers' flights can share
+    /// (subject, flight) — without this a multi-composer trace merges them (measured: a healthy two-composer
+    /// trace reported 8 jumps because two heroes' records interleaved in one row).
+    pub composer: Option<u64>,
     /// Free-form explanation for [`TraceKind::Event`] records (e.g. a cancel reason).
     pub detail: Option<String>,
 }
@@ -136,6 +140,7 @@ impl TraceRecord {
             scene_visibility: None,
             radii: None,
             clip: None,
+            composer: None,
             detail: None,
         }
     }
@@ -181,7 +186,7 @@ impl TraceRecord {
             "{{\"frame\":{frame},\"t_ms\":{t_ms},\"kind\":\"{}\",\"subject\":{},\
              \"scope\":{},\"key\":{},\"role\":{},\"flight\":{},\"scene\":{},\"phase\":{},\
              \"progress\":{},\"layout\":{},\"painted\":{},\"alpha\":{},\"effective_alpha\":{},\
-             \"scene_visibility\":{},\"radii\":{radii},\"clip\":{},\"detail\":{}}}",
+             \"scene_visibility\":{},\"radii\":{radii},\"clip\":{},\"composer\":{},\"detail\":{}}}",
             self.kind.as_str(),
             json_str(&self.subject),
             self.scope.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string()),
@@ -206,6 +211,7 @@ impl TraceRecord {
             self.clip
                 .map(|c| c.to_string())
                 .unwrap_or_else(|| "null".to_string()),
+            self.composer.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string()),
             self.detail
                 .as_ref()
                 .map(|d| json_str(d))

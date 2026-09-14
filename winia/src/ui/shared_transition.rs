@@ -3530,6 +3530,7 @@ impl Composer {
                 rec.effective_alpha = Some(t.alpha() * scene_vis.unwrap_or(1.0));
                 rec.radii = Some(t.radii());
                 rec.clip = Some(t.clip);
+                rec.composer = Some(self.composer_id);
                 crate::anim_trace::record(rec);
             }
         }
