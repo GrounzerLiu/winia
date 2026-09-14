@@ -2230,10 +2230,15 @@ impl Composer {
             .map(|(id, _)| *id)
             .collect();
         for id in dead {
-            self.cancel_flight(id);
+            self.cancel_flight(id, "key_left_live_tree");
         }
         // Switches (fresh + retarget-lite).
         for c in detect_switch(&self.prev_shared_endpoints, &live) {
+            crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
+                format!("flight:{}", c.key),
+                "candidate",
+                format!("old={:#x} new={:#x}", c.old_slot, c.new_slot),
+            ));
             // Retarget-lite: same key already flying → cancel old (freeing its
             // retained node), restart from the current visual rect. Own-map
             // Tier0 only — Tier1 retargets resolve in cross-poll (which sees
@@ -2251,6 +2256,61 @@ impl Composer {
                 })
                 .map(|(id, _)| *id)
             {
+                // A scene host (winia's nav) composes the outgoing and incoming scene at once, so the
+                // SAME key is live twice and `detect_switch` sees its two slots alternate as the tree
+                // walk order changes between them. That is not a new switch — it is the flight's own
+                // two ends seen the other way round. Retargeting on it cancelled a running crossfade
+                // (measured with anim-trace: `cancel reason=retarget_same_key p=0.2024` at +0.20 s)
+                // and the follow-up `begin_flight` then bailed in `detach_source` (that slot was never
+                // a vanished endpoint), so nothing flew at all and a same-screen morph — which by
+                // design never touches opacity — took over. That is the reported "no crossfade, just an
+                // opaque hero growing". Skip such a candidate instead.
+                let own_pair_reversed = self.shared_flights.get(&id).is_some_and(|a| {
+                    match (a.flight.source_slot, a.flight.target_slot) {
+                        (Some(s), Some(t)) => c.old_slot == t && c.new_slot == s,
+                        _ => false,
+                    }
+                });
+                if own_pair_reversed {
+                    crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
+                        format!("flight:{}", c.key),
+                        "ignore",
+                        format!(
+                            "reason=own_pair_reversed old={:#x} new={:#x}",
+                            c.old_slot, c.new_slot
+                        ),
+                    ));
+                    continue;
+                }
+                // The END that moved is the target: the element is the same one (same scope, same key),
+                // it simply got re-slotted inside its scene while the flight runs — a scene host
+                // re-arranges layers mid-transition, and winia slots are positional. Compose's identity
+                // here is the key (`rememberSharedContentState(key)`), not the position, and a position
+                // change updates the node in place instead of restarting anything. Retargeting instead
+                // cancelled the crossfade and then bailed (the old slot was already gone), which is how
+                // the flight died at p≈0.20 and a same-screen morph — opacity-immune by design — took
+                // over. Rebind the target end, keep the progress and the start rect, and clear the
+                // stale node's visuals.
+                let target_moved = self
+                    .shared_flights
+                    .get(&id)
+                    .and_then(|a| a.flight.target_slot)
+                    == Some(c.old_slot);
+                if target_moved && self.shared_flights.get(&id).is_some_and(|a| a.source_idx.is_some()) {
+                    if let Some(a) = self.shared_flights.get_mut(&id) {
+                        a.flight.target_slot = Some(c.new_slot);
+                    }
+                    self.clear_transition_for_slot(
+                        c.old_slot,
+                        FlightKey { cid: self.composer_id, id },
+                    );
+                    crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
+                        format!("flight:{}", c.key),
+                        "rebind",
+                        format!("target {:#x} -> {:#x}", c.old_slot, c.new_slot),
+                    ));
+                    continue;
+                }
                 if let Some(a) = self.shared_flights.get(&id) {
                     // Unclamped + path-aware: retarget continuity follows the
                     // true visual rect, including spring overshoot past the
@@ -2265,7 +2325,7 @@ impl Composer {
                     let (rf, rt) = (a.radius_from, a.radius_to);
                     start_override = Some((s, [0, 1, 2, 3].map(|i| rf[i] + (rt[i] - rf[i]) * p)));
                 }
-                self.cancel_flight(id);
+                self.cancel_flight(id, "retarget_same_key");
             }
             self.begin_flight(c, start_override);
         }
@@ -2471,19 +2531,22 @@ impl Composer {
 
     /// Free a retained source subtree + drop its slot (fires on_remove —
     /// removal semantic) + clear the target's visuals if still present.
-    fn cancel_flight(&mut self, id: FlightId) {
+    fn cancel_flight(&mut self, id: FlightId, reason: &'static str) {
         let Some(a) = self.shared_flights.remove(&id) else {
             return;
         };
         // anim-trace: a cancelled flight is the usual reason a crossfade stops mid-way, and nothing
-        // else in a trace says so — record the key and the progress it died at.
+        // else in a trace says so — record the key, the progress it died at, and WHICH call site did
+        // it (five of them can, and they mean different bugs).
         crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
             format!("flight:{}", a.flight.key),
             "cancel",
             format!(
-                "id={id} role_ends=source:{:?} p={:.4}",
-                a.source_idx,
-                a.progress.peek()
+                "reason={reason} id={id} has_source={} p={:.4} flight_slots=({:?},{:?})",
+                a.source_idx.is_some(),
+                a.progress.peek(),
+                a.flight.source_slot,
+                a.flight.target_slot
             ),
         ));
         if let (Some(slot), Some(idx)) = (a.flight.source_slot, a.source_idx) {
@@ -2618,14 +2681,14 @@ impl Composer {
                 let root = match self.arena.root {
                     Some(r) => r,
                     None => {
-                        self.cancel_flight(id);
+                        self.cancel_flight(id, "awaiting_no_root");
                         return;
                     }
                 };
                 let tidx = match target_slot.and_then(|s| find_idx_by_slot(&self.arena.nodes, root, s)) {
                     Some(i) => i,
                     None => {
-                        self.cancel_flight(id);
+                        self.cancel_flight(id, "awaiting_target_not_found");
                         return;
                     }
                 };
@@ -3847,7 +3910,7 @@ impl Composer {
                         .shared_flights
                         .get(&id)
                         .map(|a| (a.flight.scope_id, a.flight.key.clone(), a.flight.target_slot));
-                    self.cancel_flight(id);
+                    self.cancel_flight(id, "morph_reopen");
                     if let Some((scope_id, key, Some(slot))) = meta.map(|(s, k, t)| (s, k, t)) {
                         self.begin_morph(scope_id, key, slot, start, end, Some(radii));
                     }
@@ -6263,7 +6326,7 @@ mod tier0_tests {
             "mid-flight the content box is the animated size"
         );
 
-        composer.cancel_flight(fid);
+        composer.cancel_flight(fid, "test_teardown");
         assert!(composer.shared_flights.is_empty(), "cancelled");
         // No compose: only the teardown seed can drive the re-measure.
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
