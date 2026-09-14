@@ -2422,6 +2422,12 @@ impl Composer {
             acts,
             vec![FlightAction::CollectBounds { source_slot: c.old_slot, target_slot: c.new_slot }]
         );
+        // anim-trace lifecycle event: which key opened a flight, and between which slots.
+        crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
+            format!("flight:{}", c.key),
+            "start",
+            format!("id={id} old={:#x} new={:#x}", c.old_slot, c.new_slot),
+        ));
         self.shared_flights.insert(
             id,
             ActiveFlight {
@@ -2469,6 +2475,17 @@ impl Composer {
         let Some(a) = self.shared_flights.remove(&id) else {
             return;
         };
+        // anim-trace: a cancelled flight is the usual reason a crossfade stops mid-way, and nothing
+        // else in a trace says so — record the key and the progress it died at.
+        crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
+            format!("flight:{}", a.flight.key),
+            "cancel",
+            format!(
+                "id={id} role_ends=source:{:?} p={:.4}",
+                a.source_idx,
+                a.progress.peek()
+            ),
+        ));
         if let (Some(slot), Some(idx)) = (a.flight.source_slot, a.source_idx) {
             self.free_retained_source(idx, slot);
         }

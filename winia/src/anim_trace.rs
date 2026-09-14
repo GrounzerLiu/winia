@@ -52,6 +52,9 @@ pub enum TraceKind {
     Scene,
     /// A plain layout node whose geometry is being watched.
     Node,
+    /// A lifecycle event: a flight started, was cancelled, finished, or a morph was opened. Geometry
+    /// records say WHAT moved; these say WHY it stopped, which is otherwise invisible in a trace.
+    Event,
 }
 
 impl TraceKind {
@@ -60,6 +63,7 @@ impl TraceKind {
             TraceKind::Flight => "flight",
             TraceKind::Scene => "scene",
             TraceKind::Node => "node",
+            TraceKind::Event => "event",
         }
     }
 }
@@ -95,6 +99,8 @@ pub struct TraceRecord {
     pub radii: Option<[f32; 4]>,
     /// Whether the draw was clipped to the bounds.
     pub clip: Option<bool>,
+    /// Free-form explanation for [`TraceKind::Event`] records (e.g. a cancel reason).
+    pub detail: Option<String>,
 }
 
 impl TraceRecord {
@@ -116,7 +122,17 @@ impl TraceRecord {
             scene_visibility: None,
             radii: None,
             clip: None,
+            detail: None,
         }
+    }
+
+    /// A lifecycle event: `name` says what happened (e.g. `cancel`), `detail` why.
+    pub fn event(subject: impl Into<String>, name: &'static str, detail: impl Into<String>) -> Self {
+        let mut r = Self::flight(subject);
+        r.kind = TraceKind::Event;
+        r.phase = Some(name);
+        r.detail = Some(detail.into());
+        r
     }
 
     pub fn scene(id: u64) -> Self {
@@ -146,7 +162,7 @@ impl TraceRecord {
             "{{\"frame\":{frame},\"t_ms\":{t_ms},\"kind\":\"{}\",\"subject\":{:?},\
              \"scope\":{},\"key\":{},\"role\":{},\"flight\":{},\"scene\":{},\"phase\":{},\
              \"progress\":{},\"layout\":{},\"painted\":{},\"alpha\":{},\"effective_alpha\":{},\
-             \"scene_visibility\":{},\"radii\":{radii},\"clip\":{}}}",
+             \"scene_visibility\":{},\"radii\":{radii},\"clip\":{},\"detail\":{}}}",
             self.kind.as_str(),
             self.subject,
             self.scope.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string()),
@@ -170,6 +186,10 @@ impl TraceRecord {
             opt_f32(self.scene_visibility),
             self.clip
                 .map(|c| c.to_string())
+                .unwrap_or_else(|| "null".to_string()),
+            self.detail
+                .as_ref()
+                .map(|d| format!("{d:?}"))
                 .unwrap_or_else(|| "null".to_string()),
         )
     }
