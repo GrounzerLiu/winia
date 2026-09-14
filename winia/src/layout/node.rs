@@ -866,6 +866,13 @@ fn hit_test_recursive(
     path: &mut Vec<usize>,
 ) -> bool {
     let node = &nodes[idx];
+    // A `Placeholder` is a marked copy of a key a flight already owns: it is NOT painted (the flight draws
+    // the animated rect), so it must not be hit either — otherwise an invisible duplicate elsewhere on the
+    // screen still receives taps and fires its handlers. The whole subtree goes with it; a shared element
+    // nested inside stays reachable through the flight's own hit pass, which tests the flying ends first.
+    if node.paint == PaintDisposition::Placeholder {
+        return false;
+    }
     let nx = parent_x + node.position.x;
     let ny = parent_y + node.position.y;
     let mut nw = node.content_box().width;

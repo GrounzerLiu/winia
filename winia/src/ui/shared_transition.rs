@@ -9335,6 +9335,62 @@ mod tier0_tests {
         crate::animation::clear_all_animations();
     }
 
+    /// A `Placeholder` — a marked copy of a key a running flight already owns, which is NOT painted —
+    /// must not be hit either. Otherwise the invisible duplicate that the demo measured (a second 96x96
+    /// hero at its own rect) keeps receiving taps and firing its handlers.
+    ///
+    /// This pins the hit walk's RULE, using the same transient state the coordinator writes each frame.
+    /// Producing a placeholder through a scene host is the nav flow (two composed scenes), which the demo
+    /// covers end to end; composing two same-key copies here does not reproduce it (measured: they collapse
+    /// into one node).
+    ///
+    /// Teeth: remove the `PaintDisposition::Placeholder` early return in `hit_test_recursive` and the tap
+    /// below reaches the placeholder again.
+    #[test]
+    fn placeholder_copies_are_not_hittable() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            SharedTransitionLayout::new().build(ctx, |ctx| {
+                let scope = current_shared_scope().expect("scope");
+                Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+                    hero_leaf(ctx, 120.0, 80.0, Color::RED, &scope, true);
+                });
+            });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        composer.poll_shared_flights();
+
+        let idx = marked_indices(&composer)[0];
+        let (cx, cy) = {
+            let nodes = composer.arena_nodes();
+            (nodes[idx].content_box().width / 2.0, nodes[idx].content_box().height / 2.0)
+        };
+        let root = composer.layout_root_idx().expect("root");
+
+        // Control: in the tree it is hittable, so the two assertions below mean something.
+        assert!(
+            hit_test(composer.arena_nodes(), root, cx, cy).contains(&idx),
+            "control: an in-tree marked node is hittable"
+        );
+
+        composer.arena.nodes[idx].paint = PaintDisposition::Placeholder;
+        let hit = hit_test(composer.arena_nodes(), root, cx, cy);
+        assert!(
+            !hit.contains(&idx),
+            "an unpainted placeholder must not be hit (path={hit:?})"
+        );
+
+        // …and the exclusion is the frame's transient state, not a permanent one.
+        composer.arena.nodes[idx].paint = PaintDisposition::InTree;
+        assert!(
+            hit_test(composer.arena_nodes(), root, cx, cy).contains(&idx),
+            "back in the tree it is hittable again"
+        );
+        crate::animation::clear_all_animations();
+    }
+
     #[test]
     fn tier0_flight_pivot_alignment_mid_flight() {
         let _g = lock_serial();
