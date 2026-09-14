@@ -33,7 +33,9 @@ use crate::core::composer::Composer;
 use crate::core::composer::ComposeCtx;
 use crate::core::composition_local::CompositionLocal;
 use crate::core::state::State;
-use crate::layout::node::{scroll_offset_for_node, FlightMeasure, FlightMeasureFrame, LayoutNode};
+use crate::layout::node::{
+    scroll_offset_for_node, FlightMeasure, FlightMeasureFrame, LayoutNode, PaintDisposition,
+};
 use crate::modifier::{Modifier, ModifierElement, Shape};
 use crate::ui::animated_visibility::{
     ExpandFrom, ExpandFromH, SlideDirection, SlideOffset, VisibilityTransition,
@@ -2164,7 +2166,7 @@ impl Composer {
     fn refresh_scope_overlay_roots(&mut self, active: &HashSet<u64>) {
         for &idx in &self.scope_overlay_roots {
             if let Some(n) = self.arena.nodes.get_mut(idx) {
-                n.in_scope_overlay = false;
+                n.paint = PaintDisposition::InTree;
             }
         }
         self.scope_overlay_roots.clear();
@@ -2187,7 +2189,7 @@ impl Composer {
             }
         }
         for &idx in &marked {
-            self.arena.nodes[idx].in_scope_overlay = true;
+            self.arena.nodes[idx].paint = PaintDisposition::InLayer;
         }
         self.scope_overlay_roots = marked;
     }
@@ -2244,7 +2246,7 @@ impl Composer {
             nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
         for &idx in &self.layer_order {
             let Some(n) = nodes.get(idx) else { continue };
-            if n.transition.is_none() && !n.in_scope_overlay {
+            if n.transition.is_none() && n.paint != PaintDisposition::InLayer {
                 continue;
             }
             let abs = abs_rect_upward(nodes, &id_to_idx, idx);
@@ -2690,7 +2692,117 @@ impl Composer {
         self.poll_layout_morphs(&live);
         // Layer membership is derived from the visuals this poll just wrote.
         self.rebuild_layer_order();
+        // Paint dispositions follow from both of the above, so they are the last thing computed each
+        // frame (including which marked copies are placeholders a flight already paints).
+        self.refresh_paint_dispositions();
+        self.trace_marked_nodes();
         sync_scope_active_states(&[self]);
+    }
+
+    /// Recompute [`crate::layout::node::PaintDisposition`] for every node, once per frame.
+    ///
+    /// One place decides where each node's pixels come from, instead of three independent booleans read
+    /// at the render site:
+    /// - an end the flight lifted into the transition layer → `InLayer`;
+    /// - chrome that opted into the scope overlay this frame → `InLayer`;
+    /// - a marked copy of a (scope, key) a running flight already owns, which is not itself an end →
+    ///   `Placeholder` (the flight paints the animated rect; a second static copy must not appear);
+    /// - everything else → `InTree`.
+    ///
+    /// Assigning unconditionally each frame is what keeps it transient: a node whose flight ended goes
+    /// straight back to `InTree` without any per-flight cleanup.
+    fn refresh_paint_dispositions(&mut self) {
+        let flying: HashSet<(u64, String)> = self
+            .shared_flights
+            .values()
+            .filter(|a| !is_terminal(a.flight.phase))
+            .map(|a| (a.flight.scope_id, a.flight.key.clone()))
+            .collect();
+        let chrome: HashSet<usize> = self.scope_overlay_roots.iter().copied().collect();
+        for (idx, n) in self.arena.nodes.iter_mut().enumerate() {
+            let placeholder = !chrome.contains(&idx)
+                && n.transition.is_none()
+                && find_shared_marker(&n.modifier)
+                    .is_some_and(|m| flying.contains(&(m.scope_id, m.key.clone())));
+            n.paint = if chrome.contains(&idx) {
+                PaintDisposition::InLayer
+            } else if placeholder {
+                PaintDisposition::Placeholder
+            } else {
+                PaintDisposition::InTree
+            };
+        }
+    }
+
+    /// anim-trace: record EVERY marked node this frame — not just the ends of a flight. "How many
+    /// copies of one key are painted, and where" is otherwise only answerable by looking at pixels, and
+    /// a duplicate (a scene host re-composing a copy of a key that a flight already owns) shows up here
+    /// as two records with the same `key`, different rects, one of them with `role: null`.
+    fn trace_marked_nodes(&self) {
+        if !crate::anim_trace::enabled() {
+            return;
+        }
+        for (idx, n) in self.arena.nodes.iter().enumerate() {
+            let Some(m) = find_shared_marker(&n.modifier) else {
+                continue;
+            };
+            let role = n.transition.as_ref().map(|t| match t.role {
+                TransitionRole::Source => "Source",
+                TransitionRole::Target => "Target",
+                TransitionRole::Morph => "Morph",
+            });
+            let mut rec = crate::anim_trace::TraceRecord::flight(format!(
+                "mark:{}#{}",
+                m.key,
+                role.unwrap_or("plain")
+            ));
+            rec.kind = crate::anim_trace::TraceKind::Node;
+            rec.scope = Some(m.scope_id);
+            rec.key = Some(m.key.clone());
+            rec.role = role;
+            rec.phase = Some(match n.paint_disposition() {
+                PaintDisposition::InLayer => "layer",
+                PaintDisposition::Placeholder => "placeholder",
+                PaintDisposition::InTree => "tree",
+            });
+            rec.scene = scene_of_node(&self.arena.nodes, idx);
+            // Absolute (canvas) coords: `node.position` is parent-relative, so reporting it raw made a
+            // copy look like it sat at (0,0) and could not be compared with a flight's lerped rect
+            // (measured, then fixed here).
+            let (ax, ay) = self
+                .arena
+                .root
+                .map(|r| crate::app::node_abs_position(&self.arena.nodes, r, n.id))
+                .unwrap_or((n.position.x, n.position.y));
+            rec.layout = Some(crate::anim_trace::TraceRect::new(
+                ax,
+                ay,
+                n.measured_size.width,
+                n.measured_size.height,
+            ));
+            // What this node paints by itself: the flight's lerped rect while it is an end, otherwise
+            // its own content box at its own layout origin.
+            let (rect, alpha) = match n.transition.as_ref() {
+                Some(t) => {
+                    let l = t.lerped();
+                    (
+                        crate::anim_trace::TraceRect::new(l.x, l.y, l.width, l.height),
+                        t.alpha(),
+                    )
+                }
+                None => {
+                    let cb = n.content_box();
+                    (
+                        crate::anim_trace::TraceRect::new(ax, ay, cb.width, cb.height),
+                        1.0,
+                    )
+                }
+            };
+            rec.painted = Some(rect);
+            rec.alpha = Some(alpha);
+            rec.effective_alpha = Some(alpha);
+            crate::anim_trace::record(rec);
+        }
     }
 
     fn poll_one_flight(&mut self, id: FlightId) {
@@ -5680,7 +5792,7 @@ mod tier0_tests {
 
         // Then the mechanism.
         assert!(
-            composer.arena_nodes()[bar].in_scope_overlay,
+            composer.arena_nodes()[bar].paint == crate::layout::node::PaintDisposition::InLayer,
             "chrome elevates while the scope is transitioning"
         );
         assert!(
@@ -5690,7 +5802,7 @@ mod tier0_tests {
 
         // Same frame, one thing removed: without the elevation the flight wins
         // again — on screen AND for input.
-        composer.arena.nodes[bar].in_scope_overlay = false;
+        composer.arena.nodes[bar].paint = crate::layout::node::PaintDisposition::InTree;
         composer.scope_overlay_roots.clear();
         composer.rebuild_layer_order();
         let mut bare = render_heads(&composer);
@@ -5738,7 +5850,10 @@ mod tier0_tests {
 
         chrome_frame(&mut composer, &show, 1.0, false);
         let bar = chrome_bar_index(&composer);
-        assert!(!composer.arena_nodes()[bar].in_scope_overlay, "idle: in tree");
+        assert!(
+            composer.arena_nodes()[bar].paint == PaintDisposition::InTree,
+            "idle: in tree"
+        );
         assert!(
             !composer.transition_roots().contains(&bar),
             "idle: not a layer root"
@@ -5748,7 +5863,10 @@ mod tier0_tests {
         // ...and after the flight finishes it goes back to the tree.
         show.set(false);
         chrome_frame(&mut composer, &show, 1.0, false);
-        assert!(composer.arena_nodes()[bar].in_scope_overlay, "flying: elevated");
+        assert!(
+            composer.arena_nodes()[bar].paint == crate::layout::node::PaintDisposition::InLayer,
+            "flying: elevated"
+        );
         for _ in 0..300 {
             if composer.shared_flights.is_empty() {
                 break;
@@ -5764,7 +5882,7 @@ mod tier0_tests {
         chrome_frame(&mut composer, &show, 1.0, false);
         let bar = chrome_bar_index(&composer);
         assert!(
-            !composer.arena_nodes()[bar].in_scope_overlay,
+            composer.arena_nodes()[bar].paint == PaintDisposition::InTree,
             "settled: back in tree order"
         );
         crate::animation::clear_all_animations();
@@ -5862,7 +5980,7 @@ mod tier0_tests {
             .position(|n| find_scope_overlay_marker(&n.modifier).is_some())
             .expect("peer chrome bar");
         assert!(
-            b.arena_nodes()[bar].in_scope_overlay,
+            b.arena_nodes()[bar].paint == PaintDisposition::InLayer,
             "peer chrome must elevate for a flight it does not own"
         );
         assert!(
@@ -5886,7 +6004,7 @@ mod tier0_tests {
             .position(|n| find_scope_overlay_marker(&n.modifier).is_some())
             .expect("peer chrome bar");
         assert!(
-            !b.arena_nodes()[bar].in_scope_overlay,
+            b.arena_nodes()[bar].paint == PaintDisposition::InTree,
             "peer chrome returns to tree order when the flight ends"
         );
         crate::animation::clear_all_animations();

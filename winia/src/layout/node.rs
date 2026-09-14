@@ -128,6 +128,24 @@ pub(crate) fn modifier_has_image(modifier: &Modifier) -> bool {
 
 // ── LayoutNode ──
 
+/// Where a node's pixels come from while a shared-element transition is running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum PaintDisposition {
+    /// Ordinary node: the tree walk paints it where it sits.
+    #[default]
+    InTree,
+    /// Painted by the transition layer instead of the tree walk, because the tree walk cannot escape an
+    /// ancestor clip: this covers both a flight end lifted above the tree (Compose's shared-element
+    /// overlay) and chrome that opted in (Compose `renderInSharedTransitionScopeOverlay`).
+    InLayer,
+    /// A marked node that a flight owns but is NOT an end of: the flight paints the animated copy, so
+    /// this one is a placeholder and must not paint (Compose renders only the becoming-visible copy).
+    /// Without it, a scene that re-composes a copy of a flying key painted a second, static, fully
+    /// opaque element — measured on the demo: three nodes for `hero` in one frame, the extra one at its
+    /// own 96x96 rect with `role: null`, `alpha: 1.00`.
+    Placeholder,
+}
+
 /// 布局树中的一个节点。
 ///
 /// 每个 LayoutNode 对应 UI 树中的一个可测量/可布局的单元。
@@ -206,12 +224,11 @@ pub struct LayoutNode {
     /// 转场结束即清 `None`。刻意不进 `CachedNode`——飞行态是瞬态，
     /// 缓存命中必须从干净状态重建（协调器按 slot 回填）。
     pub(crate) transition: Option<crate::ui::shared_transition::TransitionVisual>,
-    /// Non-shared subtree elevated into the layer for the duration of a
-    /// transition (Compose `renderInSharedTransitionScopeOverlay`): the tree
-    /// walk skips it and the coordinator re-draws it untransformed at the end
-    /// of the layer, so it stays above the flying endpoints. Recomputed every
-    /// frame by `refresh_scope_overlay_roots` — transient, never cached.
-    pub(crate) in_scope_overlay: bool,
+    /// Where this node's pixels come from while a shared-element transition runs. One enum instead of
+    /// several booleans: the three dispositions are mutually exclusive, the render walk becomes a
+    /// single comparison, and an illegal combination (a node that is both elevated chrome and a
+    /// placeholder) cannot be expressed at all. Recomputed every frame — transient, never cached.
+    pub(crate) paint: PaintDisposition,
     /// Flight layout override (Compose `ResizeMode` / `PlaceHolderSize`),
     /// written per frame by the coordinator while a flight owns this node.
     /// `None` = ordinary layout — the default path never touches it.
@@ -337,7 +354,7 @@ impl LayoutNode {
             focus_color: std::cell::Cell::new(crate::modifier::Color::from_argb(204, 77, 153, 255)),
             composing_color: std::cell::Cell::new(crate::modifier::Color::TRANSPARENT),
             transition: None,
-            in_scope_overlay: false,
+            paint: PaintDisposition::InTree,
             flight_measure: None,
             flight_content_size: None,
         }
@@ -362,6 +379,20 @@ impl LayoutNode {
 }
 
 impl LayoutNode {
+    /// Where this node's pixels come from on THIS frame — the single question the render walk asks.
+    ///
+    /// A flight end that has been lifted into the transition layer is folded in live rather than read
+    /// from the stored field: the writer sets `elevated` together with the frame's visuals, and a caller
+    /// that flips it and renders immediately (as the A/B render tests do) must see the effect on the very
+    /// next render, not after the next poll. Everything else (scope-overlay chrome, placeholder copies)
+    /// is decided once per frame by `refresh_paint_dispositions` and stored here.
+    pub(crate) fn paint_disposition(&self) -> PaintDisposition {
+        if self.transition.as_ref().is_some_and(|t| t.elevated) {
+            return PaintDisposition::InLayer;
+        }
+        self.paint
+    }
+
     /// The box this node's own layout/paint occupies. While a flight reports a
     /// placeholder size, `measured_size` carries the size the PARENT observes
     /// (Compose `PlaceHolderSize`) and this returns the size the content was
@@ -405,7 +436,7 @@ impl Default for LayoutNode {
             focus_color: std::cell::Cell::new(crate::modifier::Color::from_argb(204, 77, 153, 255)),
             composing_color: std::cell::Cell::new(crate::modifier::Color::TRANSPARENT),
             transition: None,
-            in_scope_overlay: false,
+            paint: PaintDisposition::InTree,
             flight_measure: None,
             flight_content_size: None,
         }
@@ -604,7 +635,7 @@ pub fn hit_test_with_flights(
         // Painted back-to-front, so the LAST entry is on top — test in reverse.
         for &tidx in transition_roots.iter().rev() {
             let Some(node) = nodes.get(tidx) else { continue };
-            if node.in_scope_overlay && node.transition.is_none() {
+            if node.paint == PaintDisposition::InLayer && node.transition.is_none() {
                 // Chrome elevated for the flight: it paints above the flying
                 // pair, so it must also be HIT before them — otherwise a tap
                 // inside the overlap (a button on a pinned bar the hero slides
@@ -674,7 +705,7 @@ fn hit_through_chrome(
     y: f32,
 ) -> Option<Vec<usize>> {
     let node = nodes.get(idx)?;
-    if !node.in_scope_overlay {
+    if node.paint != PaintDisposition::InLayer {
         return None;
     }
     let tb = abs_rect_upward(nodes, id_to_idx, idx);
