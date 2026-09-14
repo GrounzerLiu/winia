@@ -516,6 +516,16 @@ pub(crate) fn prune_nav_scenes(live: &HashSet<u64>) {
     });
 }
 
+/// Entries in the scene registry (a cheap length read for the prune threshold).
+pub(crate) fn nav_scene_registry_len() -> usize {
+    NAV_SCENE_VIS.with(|v| v.borrow().len())
+}
+
+/// How many entries the registry may hold before an IDLE frame pays for the arena scan that prunes it.
+/// Entries are added by scene hosts while they compose; a host whose layers Skip does not compose again, so
+/// without this the registry would only ever shrink while something was animating.
+pub(crate) const NAV_SCENE_PRUNE_THRESHOLD: usize = 32;
+
 /// Per-scope transition activity (Compose `isTransitionActive`), keyed by
 /// `scope_id` so main and overlay composers sharing a scope observe one
 /// flag. Entries are created on first read and synced by the coordinator
@@ -2846,6 +2856,12 @@ impl Composer {
             .map(|a| (a.flight.scope_id, a.flight.key.clone()))
             .collect();
         if flying.is_empty() && self.scope_overlay_roots.is_empty() && !self.paint_dirty {
+            // The scene-registry prune lives in this pass, so the early-out must not skip it forever: an
+            // idle app is exactly the state where a scene host that Skips composition keeps adding entries
+            // that nothing else removes. Pay for the arena scan only once the registry has actually grown.
+            if nav_scene_registry_len() > NAV_SCENE_PRUNE_THRESHOLD {
+                self.prune_scene_registry();
+            }
             return;
         }
         let chrome: HashSet<usize> = self.scope_overlay_roots.iter().copied().collect();
@@ -2867,9 +2883,17 @@ impl Composer {
             };
             dirty |= n.paint != PaintDisposition::InTree;
         }
-        // Scene registry hygiene, on the pass that already walks every node: a scene is live exactly when
-        // its `SceneTag` is in the arena, and entries for anything else are dropped so a long-lived app does
-        // not retain one Arc visibility closure per scene it has ever visited.
+        // Scene registry hygiene, on the pass that already walks every node.
+        self.prune_scene_registry();
+        self.paint_dirty = dirty;
+    }
+
+    /// Drop scene-registry entries whose scene no longer has a `SceneTag` in the arena — a scene is live
+    /// exactly when its tag is in the tree, and entries for anything else hold an `Arc` visibility closure
+    /// for a scene that no longer exists. Called from the disposition pass, and (once the registry has grown
+    /// past a threshold) from its early-out path too, because an idle app is when a skipping scene host keeps
+    /// adding entries.
+    fn prune_scene_registry(&self) {
         let live_scenes: HashSet<u64> = self
             .arena
             .nodes
@@ -2881,7 +2905,6 @@ impl Composer {
             })
             .collect();
         prune_nav_scenes(&live_scenes);
-        self.paint_dirty = dirty;
     }
 
     /// anim-trace: record EVERY marked node this frame — not just the ends of a flight. "How many
@@ -9464,6 +9487,40 @@ mod tier0_tests {
         );
         assert!(nav_scene_visibility(22).is_some(), "a live scene is kept");
         assert_eq!(nav_scene_is_prev(22), Some(false), "…with its role intact");
+        clear_nav_scenes();
+    }
+
+    /// The prune must also run on IDLE frames: entries are added by scene hosts while they compose, and an
+    /// idle app is exactly the state in which a host whose layers Skip keeps adding them with nothing else to
+    /// remove them. Teeth: drop the threshold branch from the early-out and the registry stays grown.
+    #[test]
+    fn an_idle_frame_prunes_the_scene_registry_once_it_has_grown() {
+        let _g = lock_serial();
+        clear_nav_scenes();
+        for i in 0..(NAV_SCENE_PRUNE_THRESHOLD + 1) {
+            let info = NavSceneInfo {
+                id: 0x1000 + i as u64,
+                visibility: std::sync::Arc::new(|| 1.0),
+                is_prev: false,
+            };
+            with_nav_scene(info, || {});
+        }
+        assert!(
+            nav_scene_registry_len() > NAV_SCENE_PRUNE_THRESHOLD,
+            "the registry is over the threshold to begin with"
+        );
+        // An idle composer: no flights, no chrome, nothing dirty — the early-out path.
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |_| {});
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        composer.poll_shared_flights();
+        assert_eq!(
+            nav_scene_registry_len(),
+            0,
+            "an idle frame prunes entries whose scene has no tag in the tree"
+        );
         clear_nav_scenes();
     }
 
