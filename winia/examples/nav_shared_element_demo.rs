@@ -94,6 +94,55 @@ fn hero(
         });
 }
 
+/// A SECOND shared element, keyed "badge", so a scene exercises two flights at once. It is much
+/// smaller than the hero and sits BESIDE it in the list but ABOVE it in the detail, so the surrounding
+/// non-shared content shifts while the flights run.
+#[composable]
+fn badge(ctx: &mut ComposeCtx, scope: &SharedTransitionScope, motion: BoundsTransform, label: &str) {
+    Column::new()
+        .modifier(
+            Modifier::new()
+                .clip(Shape::rounded(11.0))
+                .shared_bounds_with_overlay_clip(
+                    scope.shared_content_state("badge"),
+                    VisibilityTransition::fade_in(TweenSpec::default()),
+                    VisibilityTransition::fade_out(TweenSpec::default()),
+                    motion,
+                    ResizeMode::scale_to_bounds(),
+                    PlaceHolderSize::AnimatedSize,
+                    PathMotion::Linear,
+                    0.0,
+                    true,
+                    OverlayClip::Bounds,
+                ),
+        )
+        .build(ctx, |ctx| {
+            Text::new(label)
+                .font_size(12.0)
+                .modifier(Modifier::new().padding(6.0))
+                .color(Color::from_argb(255, 30, 30, 34))
+                .build(ctx);
+        });
+}
+
+/// A non-shared chip: it exists only on the list screen, so it must ride its scene, not fly.
+#[composable]
+fn chip(ctx: &mut ComposeCtx, label: &str) {
+    Column::new()
+        .modifier(
+            Modifier::new()
+                .clip(Shape::rounded(9.0))
+                .background(Color::from_argb(255, 44, 48, 58), Shape::rounded(9.0))
+                .padding(6.0),
+        )
+        .build(ctx, |ctx| {
+            Text::new(label)
+                .font_size(12.0)
+                .color(Color::from_argb(255, 170, 180, 200))
+                .build(ctx);
+        });
+}
+
 #[composable]
 fn list_screen(
     ctx: &mut ComposeCtx,
@@ -106,11 +155,25 @@ fn list_screen(
         .spacing(12.0)
         .build(ctx, |ctx| {
             Text::new("List").font_size(22.0).build(ctx);
-            hero(ctx, scope, 96.0, 96.0, Shape::Circle, motion, list_hero_color());
+            // Hero and badge side by side here…
+            Row::new().spacing(10.0).build(ctx, |ctx| {
+                hero(ctx, scope, 96.0, 96.0, Shape::Circle, motion.clone(), list_hero_color());
+                badge(ctx, scope, motion.clone(), "new");
+            });
+            // …with list-only, NON-shared chips below them.
+            Row::new().spacing(8.0).build(ctx, |ctx| {
+                chip(ctx, "Popular");
+                chip(ctx, "Nearby");
+                chip(ctx, "Saved");
+            });
             let bs = back_stack.clone();
             Button::text()
                 .on_click(move || bs.push(Route::Detail))
                 .build(ctx, |ctx| Text::new("Open detail").build(ctx));
+            Text::new("List-only footer: rows below the hero are pushed by its placeholder size.")
+                .font_size(11.0)
+                .color(Color::from_argb(255, 130, 140, 160))
+                .build(ctx);
         });
 }
 
@@ -125,8 +188,31 @@ fn detail_screen(
         .modifier(Modifier::new().fill_max_size().padding(16.0))
         .spacing(12.0)
         .build(ctx, |ctx| {
-            Text::new("Detail").font_size(22.0).build(ctx);
-            hero(ctx, scope, 320.0, 220.0, Shape::rounded(12.0), motion, detail_hero_color());
+            // Title and badge on one line, hero BELOW them — the opposite arrangement to the list, so
+            // both the badge and everything around the hero change position between the two screens.
+            Row::new().spacing(10.0).build(ctx, |ctx| {
+                Text::new("Detail").font_size(22.0).build(ctx);
+                badge(ctx, scope, motion.clone(), "detail");
+            });
+            // Push the hero DOWN so the flight has an obvious vertical move as well as a size change:
+            // on the list it sits high beside the badge, here it starts ~90px lower.
+            Column::new()
+                .modifier(Modifier::new().padding_top(90.0))
+                .build(ctx, |ctx| {
+                    hero(ctx, scope, 320.0, 220.0, Shape::rounded(12.0), motion.clone(), detail_hero_color());
+                });
+            // Detail-only, NON-shared content: a description block and an action row.
+            Text::new(
+                "Detail-only block: not a shared element, so it belongs to the scene. It must fade \
+                 with the scene, never fly, and not be pushed around by the hero while it flies.",
+            )
+            .font_size(12.0)
+            .color(Color::from_argb(255, 160, 170, 190))
+            .build(ctx);
+            Row::new().spacing(8.0).build(ctx, |ctx| {
+                Button::text().build(ctx, |ctx| Text::new("Share").font_size(12.0).build(ctx));
+                Button::text().build(ctx, |ctx| Text::new("Save").font_size(12.0).build(ctx));
+            });
             let bs = back_stack.clone();
             Button::text()
                 .on_click(move || {
