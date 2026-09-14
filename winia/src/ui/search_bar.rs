@@ -553,15 +553,18 @@ impl SearchBar {
         let divider = colors.divider;
         let content = Arc::new(content);
         let st_dismiss = state.clone();
+        // The panel's own enter/exit animation is only the CONTENT fade (Compose's `contentProgress`
+        // channel): the geometry morph is driven by `state.progress` inside the content, exactly as
+        // Compose's `FullScreenSearchBarLayout` drives its `lerp`s from `state.progress`. A container
+        // scale here would SCALE the morph a second time (measured at the probe stage: `expand_fade`
+        // shrinks the whole panel while the morph wants it to grow out of the bar).
         crate::ui::overlay::Dialog::new(true)
             .on_dismiss_request(move || st_dismiss.close())
-            // Fullscreen unfolds from the top + fades (approximates the upstream
-            // bounds-morph expand; true shared-element morph needs anchor geometry).
-            .enter_animation(Some(crate::ui::overlay::OverlayAnimSpec::expand_fade(
-                std::time::Duration::from_millis(400),
+            .enter_animation(Some(crate::ui::overlay::OverlayAnimSpec::fade_only(
+                std::time::Duration::from_millis(SEARCH_BAR_EXPAND_MS),
             )))
-            .exit_animation(Some(crate::ui::overlay::OverlayAnimSpec::expand_fade(
-                std::time::Duration::from_millis(400),
+            .exit_animation(Some(crate::ui::overlay::OverlayAnimSpec::fade_only(
+                std::time::Duration::from_millis(SEARCH_BAR_COLLAPSE_MS),
             )))
             .build(ctx, move |ctx| {
                 let key = ctx.next_key();
@@ -588,17 +591,41 @@ impl SearchBar {
                                 }
                             };
                         // The expanded container MORPHS out of the collapsed bar instead of scaling in:
-                        // its corner radius is `collapsed_corner_radius * (1 - progress)` and the input
-                        // field's row sits at the bar's own height, so the container reads as the pill
-                        // growing. Compose does the same in `FullScreenSearchBarLayout` (radius from
-                        // `1 - progress`, with a rect shortcut once the radius rounds to zero) and in the
-                        // classic `SearchBarImpl` (a `Column` whose first row IS the input field).
+                        // its SIZE interpolates from the bar's measured size to the window, its corner
+                        // radius is `collapsed_corner_radius * (1 - progress)` and its vertical padding grows
+                        // from zero. Compose does exactly this in `FullScreenSearchBarLayout`:
+                        //   width  = constrainWidth(lerp(collapsedWidth,  constraints.maxWidth,  progress))
+                        //   height = constrainHeight(lerp(collapsedHeight, constraints.maxHeight, progress))
+                        //   radius = SearchBarCornerRadius * (1 - progress)
+                        //   padding = lerp(0, SearchBarVerticalPadding, progress)
                         let prog = state.progress.clone();
-                        let container_shape = expansion_shape(prog.get());
+                        let collapsed = state.collapsed_size.clone();
+                        let shape_prog = prog.clone();
+                        let size_prog = prog.clone();
                         crate::ui::surface::Surface::new()
-                            .shape(container_shape)
+                            // Shape is rebuilt per frame from the live progress: `Shape` carries a plain
+                            // f32 radius, so the radius has to be sampled here rather than animated inside
+                            // the shape.
+                            .shape(expansion_shape(shape_prog.get()))
                             .color(container)
-                            .modifier(Modifier::new().fill_max_size())
+                            .modifier(Modifier::new().size(
+                                SizeValue::Dynamic(std::sync::Arc::new({
+                                    let p = size_prog.clone();
+                                    let c = collapsed.clone();
+                                    move || {
+                                        let full = crate::ui::adaptive::window_size();
+                                        expansion_size((c.get().0, c.get().1), full, p.get()).0
+                                    }
+                                })),
+                                SizeValue::Dynamic(std::sync::Arc::new({
+                                    let p = size_prog;
+                                    let c = collapsed;
+                                    move || {
+                                        let full = crate::ui::adaptive::window_size();
+                                        expansion_size((c.get().0, c.get().1), full, p.get()).1
+                                    }
+                                })),
+                            ))
                             .build(ctx, |ctx| {
                                 // Vertical padding grows with the expansion (Compose:
                                 // `lerp(0, SearchBarVerticalPadding, progress)`), so the input field starts
