@@ -169,7 +169,7 @@ impl ModalBottomSheet {
             anchor_slot: None,
             position: PopupPosition::Center, // 面板 fill_max_size 占满 overlay；内容 Stack(End) 贴底
             offset: (0.0, 0.0),
-            align_to_anchor_top: None,
+            anchor_slide: None,
             modal: true,
             dismiss_on_outside: true,
             click_passthrough: false,

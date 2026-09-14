@@ -159,9 +159,8 @@ struct OverlayWindow {
     anchor_slot: Option<u64>,
     position: crate::ui::overlay::PopupPosition,
     offset: (f32, f32),
-    /// Slide the panel's top from the anchor's top to the window's top as the returned progress goes 0 -> 1
-    /// (see `OverlayDesc::align_to_anchor_top`).
-    align_to_anchor_top: Option<std::sync::Arc<dyn Fn() -> f32 + Send + Sync>>,
+    /// Grow the panel out of its anchor along both axes (see `OverlayDesc::anchor_slide`).
+    anchor_slide: Option<crate::ui::overlay::AnchorSlide>,
     modal: bool,
     dismiss_on_outside: bool,
     click_passthrough: bool,
@@ -2466,7 +2465,7 @@ impl OverlayWindow {
             anchor_slot: desc.anchor_slot,
             position: desc.position,
             offset: desc.offset,
-            align_to_anchor_top: desc.align_to_anchor_top,
+            anchor_slide: desc.anchor_slide,
             modal: desc.modal,
             dismiss_on_outside: desc.dismiss_on_outside,
             click_passthrough: desc.click_passthrough,
@@ -2491,7 +2490,7 @@ impl OverlayWindow {
     fn update(&mut self, desc: crate::ui::overlay::OverlayDesc) {
         self.anchor_slot = desc.anchor_slot;
         self.position = desc.position;
-        self.align_to_anchor_top = desc.align_to_anchor_top;
+        self.anchor_slide = desc.anchor_slide;
         self.offset = desc.offset;
         self.modal = desc.modal;
         self.dismiss_on_outside = desc.dismiss_on_outside;
@@ -2720,12 +2719,16 @@ fn layout_overlays(pw: &mut PerWindow) {
                 P::Center => ((w - size.0) / 2.0, (h - size.1) / 2.0),
             }
         } else { pos };
-        // Anchor-top slide: the panel's TOP starts at the anchor's top and rises to 0 with the caller's
-        // progress — Compose `lerp(collapsedBounds.top, 0, progress)`. Only this pass knows the anchor's
-        // coordinates, so the mode is resolved here; the caller supplies the progress reader.
-        let pos = if let (Some(progress_of), true) = (&ov.align_to_anchor_top, anchored) {
-            let p = progress_of().clamp(0.0, 1.0);
-            (ax, ay * (1.0 - p))
+        // Anchor slide: the panel starts at the anchor's corner and ends at the window's, both axes moving
+        // together — Compose's `(lerp(collapsedBounds.left, offsetX, progress),
+        // lerp(collapsedBounds.top, offsetY, progress))` with both offsets 0. Only this pass knows the
+        // anchor's coordinates, so the interpolation happens here; the caller supplies the progress reader.
+        let pos = if let (Some(slide), true) = (&ov.anchor_slide, anchored) {
+            let p = slide.progress();
+            (
+                crate::ui::overlay::anchor_slide_lerp(ax, p),
+                crate::ui::overlay::anchor_slide_lerp(ay, p),
+            )
         } else {
             pos
         };

@@ -638,20 +638,22 @@ impl SearchBar {
         // window (the default `Center` positions the panel's CURRENT size, so a small mid-animation panel
         // lands centre-screen — the measured complaint).
         //
-        // `align_to_anchor_top` makes the panel's TOP go from the bar's top to the window's top as the
-        // expansion progresses: `panel_top = lerp(anchor.top, 0, progress)`, which is Compose's
-        // `animatedOffsetY = lerp(collapsedBounds.top, offsetY, progress)` with `offsetY = 0` in
-        // `FullScreenSearchBarLayout`. At progress 1 the top reaches 0, so the panel ends up full-screen.
-        // (An earlier version subtracted only the bar HEIGHT from a `BottomLeft` baseline, which left the
-        // bar's own top — 69px in the demo — as a permanent gap.)
+        // `anchor_slide` makes both axes go from the bar's corner to the window's corner as the expansion
+        // progresses: `panel = lerp(anchor, 0, progress)` per axis, which is Compose's
+        // `(lerp(collapsedBounds.left, offsetX, progress), lerp(collapsedBounds.top, offsetY, progress))`
+        // with both offsets 0 in `FullScreenSearchBarLayout`. At progress 1 the panel reaches the window's
+        // corner, so it ends up full-screen. (An earlier version slid only Y, leaving a permanent gap equal
+        // to the bar's own top.)
         //
-        // The anchor's own top is known only to the layout pass, so this mode is resolved there and the
+        // The anchor's coordinates are known only to the layout pass, so this mode is resolved there and the
         // caller supplies just the progress reader.
         let slide_progress = state.progress.clone();
         crate::ui::overlay::Dialog::new(true)
             .position(crate::ui::overlay::PopupPosition::TopLeft)
             .anchor_slot(Some(anchor_slot))
-            .align_to_anchor_top(std::sync::Arc::new(move || slide_progress.get()))
+            .anchor_slide(crate::ui::overlay::AnchorSlide::new(std::sync::Arc::new(move || {
+                slide_progress.get()
+            })))
             .on_dismiss_request(move || st_dismiss.close())
             .enter_animation(Some(crate::ui::overlay::OverlayAnimSpec::fade_only(
                 std::time::Duration::from_millis(SEARCH_BAR_EXPAND_MS),

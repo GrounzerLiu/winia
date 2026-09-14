@@ -14,7 +14,37 @@
 use std::sync::Arc;
 use crate::composable;
 
-/// Popup position (mirrors Compose `PopupPosition` — relative to anchor / window).
+/// Where a panel anchored to a node starts, and how it gets to its final place.
+///
+/// Compose's `FullScreenSearchBarLayout` places its container at
+/// `(lerp(collapsedBounds.left, offsetX, progress), lerp(collapsedBounds.top, offsetY, progress))`: the panel
+/// grows out of the anchor's corner and ends at the window's corner. Both axes move together, so this is one
+/// value rather than a flag per axis.
+///
+/// The anchor's coordinates are known only to the layout pass, so the caller supplies the progress reader
+/// and the layout pass does the interpolation.
+///
+/// The two endpoints are resolved by [`anchor_slide_origin`].
+#[derive(Clone)]
+pub struct AnchorSlide(pub std::sync::Arc<dyn Fn() -> f32 + Send + Sync>);
+
+impl AnchorSlide {
+    /// Create from a progress source (0 = at the anchor, 1 = at the window corner).
+    pub fn new(progress: std::sync::Arc<dyn Fn() -> f32 + Send + Sync>) -> Self {
+        Self(progress)
+    }
+
+    /// Progress, clamped to the animatable range.
+    pub fn progress(&self) -> f32 {
+        (self.0)().clamp(0.0, 1.0)
+    }
+}
+
+/// Interpolate from the anchor's corner to the window's corner for one axis — Compose's
+/// `lerp(collapsedBounds.<axis>, 0, progress)`.
+pub fn anchor_slide_lerp(anchor_axis: f32, progress: f32) -> f32 {
+    anchor_axis * (1.0 - progress.clamp(0.0, 1.0))
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PopupPosition {
     TopLeft,
@@ -183,12 +213,11 @@ pub struct OverlayDesc {
     pub(crate) position: PopupPosition,
     /// Offset after positioning (logical pixels).
     pub(crate) offset: (f32, f32),
-    /// Put the panel's TOP at `lerp(anchor.top, 0, progress())` — Compose's
-    /// `animatedOffsetY = lerp(collapsedBounds.top, offsetY, progress)` in `FullScreenSearchBarLayout` with
-    /// `offsetY = 0`. The anchor's coordinates are known only to the layout pass, so the alignment is
-    /// resolved there and the caller supplies just the progress reader (a closure over its own animation
-    /// state, read per frame with no recomposition cost).
-    pub(crate) align_to_anchor_top: Option<std::sync::Arc<dyn Fn() -> f32 + Send + Sync>>,
+    /// Grow the panel out of its anchor: both axes run `lerp(anchor.<axis>, 0, progress)`, so the panel
+    /// starts at the anchor's corner and ends at the window's (see [`AnchorSlide`]). The anchor's
+    /// coordinates are known only to the layout pass, so the interpolation happens there and the caller
+    /// supplies just the progress reader (read per frame with no recomposition cost).
+    pub(crate) anchor_slide: Option<AnchorSlide>,
     /// Modal (Dialog): draws a scrim and captures outside clicks for dismiss.
     pub(crate) modal: bool,
     /// Whether an outside click triggers `on_dismiss_request` (non-modal Popup
@@ -331,7 +360,7 @@ impl Popup {
             anchor_slot: anchor,
             position: self.position,
             offset: self.offset,
-            align_to_anchor_top: None,
+            anchor_slide: None,
             modal: false,
             dismiss_on_outside: true,
             click_passthrough: false,
@@ -363,8 +392,8 @@ pub struct Dialog {
     offset: (f32, f32),
     /// Optional main-tree anchor node (see [`Self::anchor_slot`]).
     anchor_slot: Option<u64>,
-    /// See [`OverlayDesc::align_to_anchor_top`].
-    align_to_anchor_top: Option<std::sync::Arc<dyn Fn() -> f32 + Send + Sync>>,
+    /// See [`OverlayDesc::anchor_slide`].
+    anchor_slide: Option<AnchorSlide>,
 }
 
 impl Dialog {
@@ -383,7 +412,7 @@ impl Dialog {
             position: PopupPosition::Center,
             offset: (0.0, 0.0),
             anchor_slot: None,
-            align_to_anchor_top: None,
+            anchor_slide: None,
         }
     }
 
@@ -409,16 +438,12 @@ impl Dialog {
         self.anchor_slot = slot;
         self
     }
-    /// Start the panel's top at the anchor's top, sliding to the window's top as `progress` goes 0 -> 1
-    /// (see [`OverlayDesc::align_to_anchor_top`]).
-    pub fn align_to_anchor_top(
-        mut self,
-        progress: std::sync::Arc<dyn Fn() -> f32 + Send + Sync>,
-    ) -> Self {
-        self.align_to_anchor_top = Some(progress);
+    /// Grow the panel out of its anchor: both axes run `lerp(anchor.<axis>, 0, progress)` as `progress`
+    /// goes 0 -> 1, so the panel starts at the anchor's corner and ends at the window's (see [`AnchorSlide`]).
+    pub fn anchor_slide(mut self, slide: AnchorSlide) -> Self {
+        self.anchor_slide = Some(slide);
         self
     }
-
 
     pub fn on_dismiss_request(mut self, cb: impl Fn() + Send + Sync + 'static) -> Self {
         self.on_dismiss = Some(Arc::new(cb));
@@ -469,7 +494,7 @@ impl Dialog {
             anchor_slot: self.anchor_slot,
             position: self.position,
             offset: self.offset,
-            align_to_anchor_top: self.align_to_anchor_top,
+            anchor_slide: self.anchor_slide,
             modal: true,
             dismiss_on_outside: self.dismiss_on_outside,
             click_passthrough: false,
@@ -550,7 +575,7 @@ impl DropdownMenu {
                 anchor_slot: Some(anchor_slot),
                 position: PopupPosition::BottomLeft,
                 offset: (0.0, 4.0),
-                align_to_anchor_top: None,
+                anchor_slide: None,
                 modal: false,
                 dismiss_on_outside: true,
                 click_passthrough: false,
@@ -625,5 +650,49 @@ impl DropdownMenuItem {
                     })
                     .build(ctx);
             });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A panel that grows out of an anchor runs `lerp(anchor, 0, progress)` on BOTH axes, so it starts at the
+    /// anchor's corner and reaches the window's corner exactly when the animation finishes.
+    ///
+    /// Teeth: dropping the second axis (the first version slid only Y) or using the wrong endpoint fails the
+    /// assertions below — the earlier Y-only version left a permanent gap equal to the anchor's own top.
+    #[test]
+    fn anchor_slide_interpolates_both_axes_from_the_anchor_to_the_window_corner() {
+        // An anchor 240 wide at x=40, and 56 tall at y=69 (the demo's bar).
+        let (ax, ay) = (40.0f32, 69.0f32);
+
+        // progress 0: exactly at the anchor.
+        assert_eq!(anchor_slide_lerp(ax, 0.0), ax, "starts at the anchor's x");
+        assert_eq!(anchor_slide_lerp(ay, 0.0), ay, "starts at the anchor's y");
+
+        // progress 1: at the window corner, on BOTH axes.
+        assert_eq!(anchor_slide_lerp(ax, 1.0), 0.0, "ends at the window's left edge");
+        assert_eq!(anchor_slide_lerp(ay, 1.0), 0.0, "ends at the window's top edge");
+
+        // Half way on each axis, and the Y axis really does move (the earlier Y-only version is what this
+        // catches: it must not stay at the anchor's top).
+        assert_eq!(anchor_slide_lerp(ax, 0.5), ax / 2.0, "half way in x");
+        assert_eq!(anchor_slide_lerp(ay, 0.5), ay / 2.0, "half way in y");
+
+        // Out-of-range progress is clamped, so a spring overshoot cannot push the panel past the window.
+        assert_eq!(anchor_slide_lerp(ay, 1.5), 0.0, "overshoot clamps to the window edge");
+        assert_eq!(anchor_slide_lerp(ay, -0.5), ay, "undershoot clamps to the anchor");
+    }
+
+    /// `AnchorSlide` exposes the clamped progress the layout pass interpolates with.
+    #[test]
+    fn anchor_slide_clamps_its_progress() {
+        let over = AnchorSlide::new(std::sync::Arc::new(|| 1.4));
+        assert_eq!(over.progress(), 1.0);
+        let under = AnchorSlide::new(std::sync::Arc::new(|| -0.2));
+        assert_eq!(under.progress(), 0.0);
+        let mid = AnchorSlide::new(std::sync::Arc::new(|| 0.25));
+        assert_eq!(mid.progress(), 0.25);
     }
 }
