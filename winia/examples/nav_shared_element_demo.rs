@@ -26,16 +26,15 @@ enum Route {
 /// The hero card: a container that draws nothing itself and fills with a coloured child, so a
 /// lost child is visible as an empty hole (the shape that made the transparent-start bug
 /// reproducible in a raster probe — see the shared-transition test module).
-/// The hero's motion. Slower than the framework default on purpose — this demo exists to be WATCHED,
-/// and at the default (`TweenSpec::default()` = a LINEAR 300 ms tween) a flight is over before the eye
-/// catches which end is which. `slowness` is in the same spirit: 1 is the demo default, 2 is for
-/// observing a single flight closely.
+/// The hero's motion: the FRAMEWORK DEFAULT unless the slow-motion toggle is on, so the demo shows the
+/// normal timing by default and a watchable one on request.
 ///
-/// Critically damped (`damping_ratio = 1.0`) so it eases into place without overshooting. Measured with
-/// `anim-trace`, the engine's own spring (it stops when displacement AND velocity are below
+/// `slowness 1` = no opinion at all (`BoundsTransform::default()`, i.e. `TweenSpec::default()`: a LINEAR
+/// 300 ms tween — measured earlier at p=0.5 / 0.9 / 0.99 = 153 / 276 / 298 ms). `slowness 2` = a
+/// critically damped spring that is slow enough to read which end is which while it flies; measured with
+/// `anim-trace` on the engine's own spring (it stops when displacement AND velocity are below
 /// `threshold = 0.001`, which is NOT the 2 % rule `4.75 / sqrt(stiffness)` describes):
-///   stiffness 25 (slowness 1): p=0.5 at 0.34 s, p=0.9 at 0.78 s, p=0.99 at 1.34 s
-///   stiffness  8 (slowness 2): p=0.5 at 0.60 s, p=0.9 at 1.38 s, p=0.99 at 2.36 s
+///   stiffness 8 (slowness 2): p=0.5 at 0.60 s, p=0.9 at 1.38 s, p=0.99 at 2.36 s
 /// The two hero colours — different on purpose so a flight is easy to read: blue leaving the list,
 /// orange arriving in the detail (mid-flight you see the two blend).
 fn list_hero_color() -> Color {
@@ -47,9 +46,13 @@ fn detail_hero_color() -> Color {
 }
 
 fn hero_motion(slowness: u8) -> BoundsTransform {
+    if slowness < 2 {
+        // The framework's own default: this is what an app gets with no opinion.
+        return BoundsTransform::default();
+    }
     BoundsTransform::spring(SpringSpec {
         damping_ratio: 1.0,
-        stiffness: if slowness >= 2 { 8.0 } else { 25.0 },
+        stiffness: 8.0,
         mass: 1.0,
         threshold: 0.001,
     })
@@ -257,8 +260,9 @@ fn demo(ctx: &mut ComposeCtx) {
     // decorator exists for (a plain push holds two DIFFERENT entries, so nothing pairs and, measured,
     // no entry flight opens).
     let two_pane = ctx.remember(|| false);
-    // Motion preset: a smooth spring by default, a slower one with the toggle.
-    // 1 = the demo's own pace (p=0.99 at 1.34 s), 2 = slow enough to watch one flight closely (2.36 s).
+    // Motion preset: the framework default unless the toggle asks for a slower, watchable one.
+    // 1 = no override at all (linear 300 ms tween, p=0.99 at ~0.30 s),
+    // 2 = a slow spring (p=0.99 at 2.36 s).
     let slow_motion = ctx.remember(|| false);
     let motion = hero_motion(if slow_motion.get() { 2 } else { 1 });
     SharedTransitionLayout::new().build(ctx, |ctx| {
@@ -329,16 +333,19 @@ fn demo(ctx: &mut ComposeCtx) {
                     }
                 });
                 let mut display = display;
-                // Slow the SCENE transition to match the hero's glide: the nav's default is a 300 ms fade,
-                // which reads as abrupt next to a flight that takes 1.34 s to reach p=0.99 (measured with
-                // anim-trace at the default stiffness; 2.36 s with the slow-motion preset).
-                display = display
-                    .transition_spec(
-                        NavTransitionSpec::fade().duration(std::time::Duration::from_millis(800)),
-                    )
-                    .pop_transition_spec(
-                        NavTransitionSpec::fade().duration(std::time::Duration::from_millis(800)),
-                    );
+                // Scene transition: the framework default (300 ms fade) unless slow motion is on, where an
+                // 800 ms fade matches the slow hero's glide (2.36 s to p=0.99; the default 300 ms tween
+                // would be over while a slow flight is still barely moving). With the toggle off the demo
+                // overrides NOTHING, so what it shows is what an app gets.
+                if slow_motion.get() {
+                    display = display
+                        .transition_spec(
+                            NavTransitionSpec::fade().duration(std::time::Duration::from_millis(800)),
+                        )
+                        .pop_transition_spec(
+                            NavTransitionSpec::fade().duration(std::time::Duration::from_millis(800)),
+                        );
+                }
                 if two_pane.get() {
                     display = display.scene_strategies(vec![
                         Box::new(ListDetailStrategy) as Box<dyn SceneStrategy<Route>>
