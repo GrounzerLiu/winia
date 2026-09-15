@@ -45,6 +45,26 @@ impl AnchorSlide {
 pub fn anchor_slide_lerp(anchor_axis: f32, progress: f32) -> f32 {
     anchor_axis * (1.0 - progress.clamp(0.0, 1.0))
 }
+
+/// The height an entering/closing overlay is clipped to, or `None` for "no clip".
+///
+/// Two render-time rules, both easy to get wrong:
+/// - a slide (`dy != 0`) clips to the FULL height, because the translation is what moves the panel;
+/// - a reveal clips to `height * reveal`, and once `reveal` reaches 1 there is NO clip at all.
+///
+/// "No clip" must stay distinguishable from "clip to zero height": the first is a settled overlay, the
+/// second is an invisible one. Reporting the sentinel as `0` made a fully open docked dropdown read as
+/// empty in the render trace (measured: `painted_h=0` while `layout_h=280`).
+pub fn overlay_reveal_clip_height(height: f32, dy: f32, reveal: f32) -> Option<f32> {
+    if dy != 0.0 {
+        Some(height)
+    } else if reveal < 1.0 {
+        Some((height * reveal).max(0.0))
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PopupPosition {
     TopLeft,
@@ -701,6 +721,33 @@ impl DropdownMenuItem {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The reveal clip height must keep "settled, no clip" distinct from "clipped to zero height".
+    ///
+    /// Teeth: returning `Some(0.0)` instead of `None` at `reveal == 1.0` (the mistake this function was
+    /// extracted from — a fully open docked dropdown reported `painted_h=0` in the render trace while its
+    /// layout height was 280) fails the settled case below.
+    #[test]
+    fn reveal_clip_height_distinguishes_no_clip_from_zero() {
+        // Settled: fully revealed and not sliding -> NO clip.
+        assert_eq!(
+            overlay_reveal_clip_height(280.0, 0.0, 1.0),
+            None,
+            "a settled overlay is not clipped at all (0 here would read as an invisible panel)"
+        );
+        // Revealing: proportional height.
+        assert_eq!(overlay_reveal_clip_height(280.0, 0.0, 0.5), Some(140.0));
+        // Just started: effectively zero height, but it is a real clip.
+        assert_eq!(overlay_reveal_clip_height(280.0, 0.0, 0.0), Some(0.0));
+        // Sliding: the translation moves the panel, so the clip is the FULL height regardless of reveal.
+        assert_eq!(
+            overlay_reveal_clip_height(280.0, -0.5, 0.2),
+            Some(280.0),
+            "a slide clips to its full height (the offset, not a reveal, is what animates)"
+        );
+        // Overshoot (a spring past 1.0) must not produce a clip taller than the panel.
+        assert_eq!(overlay_reveal_clip_height(280.0, 0.0, 1.2), None);
+    }
 
     /// A panel that grows out of an anchor runs `lerp(anchor, 0, progress)` on BOTH axes, so it starts at the
     /// anchor's corner and reaches the window's corner exactly when the animation finishes.

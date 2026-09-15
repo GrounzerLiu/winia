@@ -2809,13 +2809,34 @@ fn render_overlays(overlays: &[OverlayWindow], canvas: &skia_safe::Canvas, scale
         // 展开揭示）——否则滑入起点整个面板压住 bar。clip 在 settled bounds 上；
         // 动画结束内容恰好落回框内 → 无跳变。reveal<1 时按揭示高度裁。
         // (anim_dy != 0.0) 或 (anim_reveal < 1.0) 时裁剪。
-        let clip_h = if anim_dy != 0.0 {
-            size.1
-        } else if anim_reveal < 1.0 {
-            (size.1 * anim_reveal).max(0.0)
-        } else {
-            -1.0 // no clip
-        };
+        // The clip height comes from `overlay_reveal_clip_height`, which also keeps "no clip" (`None`)
+        // distinct from "clipped to zero" — the distinction the render trace needs.
+        let clip_h = crate::ui::overlay::overlay_reveal_clip_height(size.1, anim_dy, anim_reveal)
+            .unwrap_or(-1.0);
+        // Render-time trace: the overlay's reveal/alpha/offset exist only here, at paint time — the debug
+        // server's tree reports POST-LAYOUT sizes, so a reveal (a clip) was invisible to every other
+        // channel (`reveal` and `dy` are fractions; `clip_h` is what is actually applied).
+        if crate::anim_trace::enabled() {
+            let mut r = crate::anim_trace::TraceRecord::render(ov.id);
+            r.phase = Some(if ov.closing { "closing" } else { "opening" });
+            r.alpha = Some(anim_alpha);
+            r.clip = Some(clip_h >= 0.0);
+            // `painted.h` is the height actually drawn: `clip_h` when revealing, and the FULL height when
+            // the animation is settled (`clip_h == -1` means "no clip", not "zero height" — reporting 0
+            // there made a fully open panel look empty).
+            let painted_h = if clip_h >= 0.0 { clip_h } else { size.1 };
+            r.painted = Some(crate::anim_trace::TraceRect {
+                x: ov.screen_pos.0,
+                y: ov.screen_pos.1,
+                w: size.0,
+                h: painted_h,
+            });
+            r.detail = Some(format!(
+                "reveal={anim_reveal:.4} dy={anim_dy:.4} scale={anim_scale:.4} layout_h={:.1}",
+                size.1
+            ));
+            crate::anim_trace::record(r);
+        }
         if clip_h >= 0.0 {
             // clip_rect is affected by the current matrix (screen_pos translate
             // applied above, no content scale yet) — coordinates are device px,
