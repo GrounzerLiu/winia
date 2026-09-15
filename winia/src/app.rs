@@ -2548,9 +2548,7 @@ fn sync_overlays(pw: &mut PerWindow, _recomposed: bool) {
                     let spec = ov.enter_anim.as_ref().unwrap();
                     crate::animation::push_animatable_handle(
                         p, 1.0,
-                        crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
-                            spec.duration, spec.interpolator.clone(),
-                        )),
+                        spec.animation_spec(),
                     );
                 }
             }
@@ -2566,9 +2564,7 @@ fn sync_overlays(pw: &mut PerWindow, _recomposed: bool) {
                 if let Some(spec) = &enter_anim {
                     crate::animation::push_animatable_handle(
                         p, 1.0,
-                        crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
-                            spec.duration, spec.interpolator.clone(),
-                        )),
+                        spec.animation_spec(),
                     );
                 } else {
                     // 无进入动画（但 exit 有）：直接完整显示（progress=1）
@@ -2620,9 +2616,7 @@ fn begin_overlay_close(pw: &mut PerWindow, id: u64) {
             let spec = pw.overlays[idx].exit_anim.as_ref().unwrap();
             crate::animation::push_animatable_handle(
                 p, 0.0,
-                crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
-                    spec.duration, spec.interpolator.clone(),
-                )),
+                spec.animation_spec(),
             );
         }
     }

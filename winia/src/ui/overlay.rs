@@ -82,11 +82,47 @@ pub struct OverlayAnimSpec {
     pub(crate) fade: bool,
     pub(crate) slide_from_y: f32,
     pub(crate) reveal_top: bool,
+    /// Duration of the ANIMATED part (not counting `delay`).
     pub(crate) duration: std::time::Duration,
+    /// How long the overlay holds its start value before the animation begins (Compose's `delayMillis`).
+    ///
+    /// A plain `TweenSpec` has no delay, so this is honoured by folding the hold into the spec the overlay
+    /// layer runs (see `OverlayAnimSpec::animation_spec`) instead of being added to `duration` by callers —
+    /// adding it to the duration makes the overlay START MOVING during the delay, which is not what Compose
+    /// means by `delayMillis`.
+    pub(crate) delay: std::time::Duration,
     pub(crate) interpolator: std::sync::Arc<dyn crate::animation::interpolator::Interpolator>,
 }
 
 impl OverlayAnimSpec {
+    /// The spec the overlay layer runs for this animation, with `delay` expressed as a hold followed by the
+    /// real curve — the same construction the SearchBar panel uses (`delayed_tween`).
+    pub(crate) fn animation_spec(&self) -> crate::animation::AnimationSpec {
+        let delay_ms = self.delay.as_millis() as u64;
+        if delay_ms == 0 {
+            return crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
+                self.duration,
+                self.interpolator.clone(),
+            ));
+        }
+        let duration_ms = self.duration.as_millis() as u64;
+        let total = (duration_ms + delay_ms) as f32;
+        let held = delay_ms as f32 / total;
+        // Dense sampling with LINEAR segments: a curved segment interpolator replays the curve once per
+        // segment (the sawtooth measured on the SearchBar expansion).
+        let steps = 96usize;
+        let mut frames: Vec<(f32, f32)> = Vec::with_capacity(steps + 2);
+        frames.push((0.0, 0.0));
+        frames.push((held, 0.0));
+        for i in 1..=steps {
+            let t = i as f32 / steps as f32;
+            frames.push((held + (1.0 - held) * t, self.interpolator.interpolate(t)));
+        }
+        crate::animation::AnimationSpec::Keyframes(crate::animation::KeyframesSpec::new(
+            std::time::Duration::from_millis(duration_ms + delay_ms),
+            frames,
+        ))
+    }
     /// Default enter animation (scale 0.8 -> 1 + fade, 200ms EaseOutCubic — the
     /// classic material2 Dialog open effect).
     pub fn default_enter() -> Self {
@@ -96,6 +132,7 @@ impl OverlayAnimSpec {
             slide_from_y: 0.0,
             reveal_top: false,
             duration: std::time::Duration::from_millis(200),
+            delay: std::time::Duration::ZERO,
             interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()),
         }
     }
@@ -109,24 +146,33 @@ impl OverlayAnimSpec {
             slide_from_y: 0.0,
             reveal_top: false,
             duration: std::time::Duration::from_millis(200),
+            delay: std::time::Duration::ZERO,
             interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseInCubic::new()),
         }
     }
 
     /// Scale only (no fade).
     pub fn scale_only(from: f32, duration: std::time::Duration) -> Self {
-        Self { scale_from: from, fade: false, slide_from_y: 0.0, reveal_top: false, duration, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
+        Self { scale_from: from, fade: false, slide_from_y: 0.0, reveal_top: false, duration, delay: std::time::Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
     }
 
     /// Fade only.
     pub fn fade_only(duration: std::time::Duration) -> Self {
-        Self { scale_from: 1.0, fade: true, slide_from_y: 0.0, reveal_top: false, duration, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
+        Self { scale_from: 1.0, fade: true, slide_from_y: 0.0, reveal_top: false, duration, delay: std::time::Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
     }
 
     /// Dropdown slide + fade (slide_in y=-height/2 with fade — mirrors docked
     /// dropdown `slideIn(-height/2) + fadeIn`).
     pub fn slide_down(duration: std::time::Duration) -> Self {
-        Self { scale_from: 1.0, fade: true, slide_from_y: -0.5, reveal_top: false, duration, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
+        Self { scale_from: 1.0, fade: true, slide_from_y: -0.5, reveal_top: false, duration, delay: std::time::Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
+    }
+
+    /// Hold the start value for `delay` before the animation runs (Compose's `delayMillis`). See the field
+    /// doc: the overlay layer turns this into a hold-then-curve spec, so it must NOT be folded into
+    /// `duration` by the caller.
+    pub fn delay(mut self, d: std::time::Duration) -> Self {
+        self.delay = d;
+        self
     }
 
     /// Custom easing curve.
@@ -170,7 +216,7 @@ impl OverlayAnimSpec {
     /// expand — true shared-element morph needs anchor geometry; 300-400ms
     /// with EaseOutCubic lands crisply).
     pub fn expand_fade(duration: std::time::Duration) -> Self {
-        Self { scale_from: 1.0, fade: true, slide_from_y: 0.0, reveal_top: true, duration, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
+        Self { scale_from: 1.0, fade: true, slide_from_y: 0.0, reveal_top: true, duration, delay: std::time::Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
     }
 
     /// Animation progress (0..=1) -> (scale, alpha, dy, reveal) — called per
@@ -408,8 +454,7 @@ impl Dialog {
             // Default enter/exit (scale 0.8 -> 1 + fade — classic material2 Dialog;
             // exit plays in reverse).
             enter_anim: Some(OverlayAnimSpec::default_enter()),
-            exit_anim: Some(OverlayAnimSpec::default_exit()),
-            position: PopupPosition::Center,
+            exit_anim: Some(OverlayAnimSpec::default_exit()),            position: PopupPosition::Center,
             offset: (0.0, 0.0),
             anchor_slot: None,
             anchor_slide: None,

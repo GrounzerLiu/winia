@@ -2664,11 +2664,14 @@ impl Drop for Composer {
 mod tests {
     use super::*;
 
-    /// Does a `start_restartable_group` with NO declared parameters Skip on the next frame?
+    /// A group with NO declared parameters and NOTHING read inside its body Skips on the next frame.
     ///
-    /// This decides how a component whose body lives in a group must declare its inputs: if no declared
-    /// parameter still Skips, then any content derived from data the group cannot see would be frozen
-    /// (the SearchBar results list kept its first, unfiltered rows while the user typed).
+    /// That combination is what froze the SearchBar's results list: the panel body received an
+    /// already-built list (the query was read in the PARENT scope), so the body itself had no dependency
+    /// that could re-run it, and no declared parameter either. Either one is enough — the container's shape
+    /// needs no declaration precisely because it reads `progress` inside the body.
+    ///
+    /// This pins the "declares nothing and reads nothing" half; the SearchBar case states its fix in code.
     #[test]
     fn group_without_declared_params_reenters_or_skips() {
         let mut composer = Composer::new();

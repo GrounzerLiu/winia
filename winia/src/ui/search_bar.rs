@@ -278,23 +278,24 @@ fn content_fade_out_spec() -> crate::animation::AnimationSpec {
 /// AnimationEnterSizeSpec)`: fade in while growing vertically, 600ms with the emphasized-decelerate curve
 /// and a 100ms delay.
 ///
-/// The dropdown is anchored just under the bar, so the vertical reveal grows it downward from the bar — the
-/// same visual as `expandVertically` where the content is top-anchored. `scale_from = 1.0` keeps the scale
-/// out of it (Compose's docked transition has no scale).
+/// The delay is passed as `delay`, NOT folded into the duration: the overlay's animation must hold for
+/// 100ms and then run the 600ms curve, whereas a 700ms duration would start moving immediately.
 fn docked_enter_spec() -> crate::ui::overlay::OverlayAnimSpec {
     crate::ui::overlay::OverlayAnimSpec::expand_fade(std::time::Duration::from_millis(
-        SEARCH_BAR_EXPAND_MS + SEARCH_BAR_ANIMATION_DELAY_MS,
+        SEARCH_BAR_EXPAND_MS,
     ))
+    .delay(std::time::Duration::from_millis(SEARCH_BAR_ANIMATION_DELAY_MS))
     .with_interpolator(crate::animation::interpolator::CubicBezier::new(0.05, 0.7, 0.1, 1.0))
 }
 
 /// Compose `DockedExitTransition` = `fadeOut(AnimationExitFloatSpec) + shrinkVertically(
 /// AnimationExitSizeSpec)`: fade out while shrinking vertically, 350ms with `CubicBezier(0, 1, 0, 1)` and a
-/// 100ms delay.
+/// 100ms delay (see [`docked_enter_spec`] for why the delay is separate).
 fn docked_exit_spec() -> crate::ui::overlay::OverlayAnimSpec {
     crate::ui::overlay::OverlayAnimSpec::expand_fade(std::time::Duration::from_millis(
-        SEARCH_BAR_COLLAPSE_MS + SEARCH_BAR_ANIMATION_DELAY_MS,
+        SEARCH_BAR_COLLAPSE_MS,
     ))
+    .delay(std::time::Duration::from_millis(SEARCH_BAR_ANIMATION_DELAY_MS))
     .with_interpolator(crate::animation::interpolator::CubicBezier::new(0.0, 1.0, 0.0, 1.0))
 }
 
@@ -693,11 +694,16 @@ impl SearchBar {
                 std::time::Duration::from_millis(SEARCH_BAR_COLLAPSE_MS),
             )))
             .build(ctx, move |ctx| {
-                // Declare what the panel body depends on. A `start_restartable_group` with NO declared
-                // parameters always Skips (`pending_params` is empty, so `params_equal` is trivially true),
-                // and a skipped group never runs its content closure again — which is why the results list
-                // kept showing the unfiltered items as the user typed. The query is exactly the input the
-                // results are derived from, so it is the parameter that must break the skip.
+                // Declare the query, because nothing INSIDE this body reads it. A group re-runs when state
+                // it read while entering changes, or when the parameters declared here change; the results
+                // are derived in the PARENT scope (`state.query_text()` up in `build`), so a body that only
+                // receives the already-built list sees nothing to re-run for and keeps showing the first,
+                // unfiltered rows while the user types. Declaring the query is what breaks that skip.
+                //
+                // (Measured on the demo: without this line the list stayed at its initial rows; with it,
+                // typing "bl" leaves 3 of 34 rows. The container's own shape does not need this treatment —
+                // it reads `progress` inside the body, so the animation re-runs it by itself: 77 distinct
+                // radii, 28.00 -> 0.00 over the expansion.)
                 let query_now = state.query_text();
                 ctx.changed(&query_now);
                 let key = ctx.next_key();
@@ -738,7 +744,9 @@ impl SearchBar {
                         crate::ui::surface::Surface::new()
                             // Shape is rebuilt per frame from the live progress: `Shape` carries a plain
                             // f32 radius, so the radius has to be sampled here rather than animated inside
-                            // the shape.
+                            // the shape. Reading `progress` here also creates the dependency that re-runs
+                            // this body while the animation advances (measured on the demo: 77 distinct
+                            // radii over the expansion, 28.00 -> 0.00).
                             .shape(expansion_shape(shape_prog.get()))
                             .color(container)
                             .modifier(Modifier::new().size(
@@ -1329,14 +1337,119 @@ mod tests {
         }
         assert_eq!(
             docked_enter_spec().duration.as_millis() as u64,
-            SEARCH_BAR_EXPAND_MS + SEARCH_BAR_ANIMATION_DELAY_MS,
-            "docked expand = 600ms + the 100ms delay"
+            SEARCH_BAR_EXPAND_MS,
+            "docked expand = 600ms of motion"
+        );
+        assert_eq!(
+            docked_enter_spec().delay.as_millis() as u64,
+            SEARCH_BAR_ANIMATION_DELAY_MS,
+            "…starting after the 100ms delay (a separate hold, NOT folded into the duration: a 700ms \
+             duration would begin moving during the delay)"
         );
         assert_eq!(
             docked_exit_spec().duration.as_millis() as u64,
-            SEARCH_BAR_COLLAPSE_MS + SEARCH_BAR_ANIMATION_DELAY_MS,
-            "docked collapse = 350ms + the 100ms delay"
+            SEARCH_BAR_COLLAPSE_MS,
+            "docked collapse = 350ms of motion"
         );
+        assert_eq!(
+            docked_exit_spec().delay.as_millis() as u64,
+            SEARCH_BAR_ANIMATION_DELAY_MS,
+            "…also after the 100ms delay"
+        );
+        // The spec the overlay layer actually runs must encode the hold, not just carry the duration.
+        let crate::animation::AnimationSpec::Keyframes(k) = docked_enter_spec().animation_spec() else {
+            panic!("a delayed overlay spec must compile to a hold-then-curve keyframe spec");
+        };
+        assert_eq!(
+            k.duration.as_millis() as u64,
+            SEARCH_BAR_EXPAND_MS + SEARCH_BAR_ANIMATION_DELAY_MS,
+            "the runnable spec covers hold + motion"
+        );
+        let held = SEARCH_BAR_ANIMATION_DELAY_MS as f32 / k.duration.as_millis() as f32;
+        let at_delay = k.frames.iter().find(|(x, _, _)| (*x - held).abs() < 1e-6);
+        assert_eq!(
+            at_delay.map(|(_, v, _)| *v),
+            Some(0.0),
+            "the value is still at its start when the delay elapses"
+        );
+    }
+
+    /// The expanded container's SHAPE must follow `progress` during the animation, not only the size.
+    ///
+    /// The size is safe by construction — it is a `SizeValue::Dynamic` closure that the layout pass calls
+    /// every frame. The shape is not: `expansion_shape(progress.get())` reads the state during COMPOSITION,
+    /// and the panel body sits in a `start_restartable_group` that only re-enters when its declared
+    /// parameters change. If the body does not re-run while the animation advances, the radius stays at the
+    /// value from the last re-entry and the pill never squares off.
+    ///
+    /// Teeth: this fails if the shape is captured once (the group skips on a progress-only change).
+    #[test]
+    fn expanded_container_shape_tracks_progress() {
+        let _rt = with_runtime();
+        let _guard = _rt.enter();
+        let state = SearchBarState::new();
+        state.open();
+
+        let mut main = Composer::new();
+        let mut panel = Composer::new();
+        let mut radius = |main: &mut Composer, panel: &mut Composer, state: &SearchBarState| -> Option<f32> {
+            let s = state.clone();
+            main.compose(|ctx| {
+                SearchBar::new().state(s).build(ctx, |ctx| {
+                    crate::ui::text::Text::new("row").build(ctx);
+                });
+            });
+            main.layout(Constraints::new(0.0, 420.0, 0.0, 700.0));
+            let overlays = main.take_overlays();
+            panel.compose(|ctx| (overlays[0].content)(ctx));
+            panel.layout(Constraints::new(0.0, 420.0, 0.0, 700.0));
+            // The container is the node carrying a rounded clip whose radius is not the default 0.
+            let root = panel.layout_root_idx()?;
+            let nodes = panel.arena_nodes();
+            let mut found = None;
+            let mut stack = vec![root];
+            while let Some(i) = stack.pop() {
+                for el in nodes[i].modifier.elements() {
+                    let shape = match el {
+                        crate::modifier::ModifierElement::Clip { shape } => Some(shape),
+                        crate::modifier::ModifierElement::Background { shape, .. } => Some(shape),
+                        _ => None,
+                    };
+                    if let Some(crate::modifier::Shape::RoundedRect { corner_radius }) = shape {
+                        if *corner_radius > 0.5 {
+                            found = Some(*corner_radius);
+                        }
+                    }
+                }
+                stack.extend(nodes[i].children.iter().copied());
+            }
+            found
+        };
+
+        // Collapsed end of the animation: the container is a full pill.
+        state.progress.set(0.0);
+        let at_zero = radius(&mut main, &mut panel, &state);
+
+        // Half way: the radius must have halved (progress 0.5 -> radius * 0.5).
+        state.progress.set(0.5);
+        let at_half = radius(&mut main, &mut panel, &state);
+
+        // Fully open: square corners, so no rounded shape at all.
+        state.progress.set(1.0);
+        let at_one = radius(&mut main, &mut panel, &state);
+
+        assert!(
+            at_zero.is_some(),
+            "collapsed: a rounded container is expected (got {at_zero:?})"
+        );
+        let expected_half = at_zero.unwrap() * 0.5;
+        assert!(
+            matches!(at_half, Some(r) if (r - expected_half).abs() < 1.0),
+            "the radius must track progress: expected ~{expected_half} at p=0.5, got {at_half:?} \
+             (a shape captured at composition time would still read {:?})",
+            at_zero
+        );
+        assert_eq!(at_one, None, "fully expanded: square corners (no rounded clip left)");
     }
 
     /// The content fade is its own channel (Compose `contentAnimatable`), so the results must NOT be locked
