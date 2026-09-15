@@ -1278,6 +1278,12 @@ mod tests {
     /// Teeth: point the layer at `progress` (the geometry clock) and the mid-fade assertion fails.
     #[test]
     fn results_content_carries_the_content_fade_layer() {
+        // Same guard as `expanded_container_shape_tracks_progress`: composing a SearchBar drives the
+        // expansion animation onto the global `ACTIVE_ANIMATIONS` table.
+        let _serial = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
         let _rt = with_runtime();
         let _guard = _rt.enter();
         let mut composer = Composer::new();
@@ -1385,6 +1391,14 @@ mod tests {
     /// Teeth: this fails if the shape is captured once (the group skips on a progress-only change).
     #[test]
     fn expanded_container_shape_tracks_progress() {
+        // `SearchBar::build` drives the expansion animation, which pushes onto the GLOBAL
+        // `ACTIVE_ANIMATIONS` table. Without the serial lock a concurrent test can advance or clear it and
+        // overwrite the progress this test sets (measured: this test failed intermittently in a full run
+        // and passed when run alone). Same rule as every other test that pushes animations.
+        let _serial = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
         let _rt = with_runtime();
         let _guard = _rt.enter();
         let state = SearchBarState::new();
