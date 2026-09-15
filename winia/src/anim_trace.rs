@@ -69,6 +69,15 @@ pub enum TraceKind {
     /// A lifecycle event: a flight started, was cancelled, finished, or a morph was opened. Geometry
     /// records say WHAT moved; these say WHY it stopped, which is otherwise invisible in a trace.
     Event,
+    /// What the RENDERER actually applied to one node this frame.
+    ///
+    /// The other kinds describe what the layout engine and the flight system decided; this one describes
+    /// what the draw call was given. The two differ wherever a value is produced at paint time and never
+    /// stored anywhere: the overlay reveal fraction, a `graphics_layer` alpha, the rect a flight painted.
+    /// Those were unmeasurable before — a reveal could not be sampled at all (the debug server reports
+    /// POST-LAYOUT sizes while reveal is a render-time clip), and the only alternative was screenshot pixel
+    /// probing, which is slow and was unreliable here (it hung twice).
+    Render,
 }
 
 impl TraceKind {
@@ -78,6 +87,7 @@ impl TraceKind {
             TraceKind::Scene => "scene",
             TraceKind::Node => "node",
             TraceKind::Event => "event",
+            TraceKind::Render => "render",
         }
     }
 }
@@ -158,6 +168,16 @@ impl TraceRecord {
         let mut r = Self::flight(format!("scene:{id:#x}"));
         r.kind = TraceKind::Scene;
         r.scene = Some(id);
+        r
+    }
+
+    /// One node's RENDER-time state: what the draw call was actually given.
+    ///
+    /// `subject` is the node's slot key (`render:0x…`), which is stable across frames and is the same
+    /// identity the tree dump uses, so a render record can be lined up with the layout tree.
+    pub fn render(slot_key: u64) -> Self {
+        let mut r = Self::flight(format!("render:{slot_key:#x}"));
+        r.kind = TraceKind::Render;
         r
     }
 
