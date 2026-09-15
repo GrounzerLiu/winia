@@ -274,6 +274,30 @@ fn content_fade_out_spec() -> crate::animation::AnimationSpec {
     ))
 }
 
+/// Compose `DockedEnterTransition` = `fadeIn(AnimationEnterFloatSpec) + expandVertically(
+/// AnimationEnterSizeSpec)`: fade in while growing vertically, 600ms with the emphasized-decelerate curve
+/// and a 100ms delay.
+///
+/// The dropdown is anchored just under the bar, so the vertical reveal grows it downward from the bar — the
+/// same visual as `expandVertically` where the content is top-anchored. `scale_from = 1.0` keeps the scale
+/// out of it (Compose's docked transition has no scale).
+fn docked_enter_spec() -> crate::ui::overlay::OverlayAnimSpec {
+    crate::ui::overlay::OverlayAnimSpec::expand_fade(std::time::Duration::from_millis(
+        SEARCH_BAR_EXPAND_MS + SEARCH_BAR_ANIMATION_DELAY_MS,
+    ))
+    .with_interpolator(crate::animation::interpolator::CubicBezier::new(0.05, 0.7, 0.1, 1.0))
+}
+
+/// Compose `DockedExitTransition` = `fadeOut(AnimationExitFloatSpec) + shrinkVertically(
+/// AnimationExitSizeSpec)`: fade out while shrinking vertically, 350ms with `CubicBezier(0, 1, 0, 1)` and a
+/// 100ms delay.
+fn docked_exit_spec() -> crate::ui::overlay::OverlayAnimSpec {
+    crate::ui::overlay::OverlayAnimSpec::expand_fade(std::time::Duration::from_millis(
+        SEARCH_BAR_COLLAPSE_MS + SEARCH_BAR_ANIMATION_DELAY_MS,
+    ))
+    .with_interpolator(crate::animation::interpolator::CubicBezier::new(0.0, 1.0, 0.0, 1.0))
+}
+
 /// A tween of `duration_ms` that does not move until `SEARCH_BAR_ANIMATION_DELAY_MS` has elapsed.
 ///
 /// `progress` here is the spec's own time fraction: from 0 to `delay` it samples the curve's value at 0 (so
@@ -963,12 +987,15 @@ impl DockedSearchBar {
             .position(crate::ui::overlay::PopupPosition::BottomLeft)
             .offset(0.0, SearchBarDefaults::docked_gap())
             .anchor_slot(Some(anchor_slot))
-            .enter_animation(Some(crate::ui::overlay::OverlayAnimSpec::slide_down(
-                std::time::Duration::from_millis(350),
-            )))
-            .exit_animation(Some(crate::ui::overlay::OverlayAnimSpec::slide_down(
-                std::time::Duration::from_millis(350),
-            )))
+            // Compose's docked transition is `fadeIn(...) + expandVertically(...)` on the way in and
+            // `fadeOut(...) + shrinkVertically(...)` on the way out (both driven by `AnimationEnter`/
+            // `AnimationExitSpec`: 600ms / 350ms, 100ms delay, emphasized-decelerate in, `CubicBezier(0, 1,
+            // 0, 1)` out). `reveal_top` is the vertical reveal (`clip height = size * progress`), which is
+            // what `expandVertically`/`shrinkVertically` animate, so the existing spec fields express it
+            // without a new mechanism. The previous `slide_down` translated the dropdown instead, which is
+            // DropdownMenu's motion, not SearchBar's.
+            .enter_animation(Some(docked_enter_spec()))
+            .exit_animation(Some(docked_exit_spec()))
             .on_dismiss_request({
                 let s = state.clone();
                 move || s.close()
@@ -1283,6 +1310,32 @@ mod tests {
             alpha_of(&panel),
             Some(0.0),
             "the results layer starts fully transparent (content_progress 0)"
+        );
+    }
+
+    /// The docked dropdown uses Compose's `DockedEnter/ExitTransition`: fade + VERTICAL reveal (never a
+    /// translation), with the container durations (600ms in, 350ms out, 100ms delay on both).
+    ///
+    /// Teeth: switch either spec back to `slide_down` (the previous behaviour) and the "no translation"
+    /// assertion fails — the dropdown is anchored under the bar, so a slide moved it, which is what
+    /// DropdownMenu does and SearchBar does not.
+    #[test]
+    fn docked_transition_is_fade_plus_vertical_reveal() {
+        for (name, spec) in [("enter", docked_enter_spec()), ("exit", docked_exit_spec())] {
+            assert!(spec.fade, "{name}: Compose's docked transition fades");
+            assert!(spec.reveal_top, "{name}: …and grows/shrinks VERTICALLY (expandVertically)");
+            assert_eq!(spec.slide_from_y, 0.0, "{name}: no translation (that is DropdownMenu's motion)");
+            assert_eq!(spec.scale_from, 1.0, "{name}: no scale either");
+        }
+        assert_eq!(
+            docked_enter_spec().duration.as_millis() as u64,
+            SEARCH_BAR_EXPAND_MS + SEARCH_BAR_ANIMATION_DELAY_MS,
+            "docked expand = 600ms + the 100ms delay"
+        );
+        assert_eq!(
+            docked_exit_spec().duration.as_millis() as u64,
+            SEARCH_BAR_COLLAPSE_MS + SEARCH_BAR_ANIMATION_DELAY_MS,
+            "docked collapse = 350ms + the 100ms delay"
         );
     }
 
