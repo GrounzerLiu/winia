@@ -385,6 +385,7 @@ fn input_field(
     trailing_icon: &Option<Arc<dyn Fn(&mut ComposeCtx) + Send + Sync>>,
     colors: &Option<TextFieldColors>,
     interaction: &Option<crate::ui::interaction::MutableInteractionSource>,
+    focus: &Option<crate::modifier::FocusRequester>,
 ) {
     let oc = on_query_change.clone();
     // NOTE: typing already writes into `query` (it IS the TextField value State);
@@ -426,6 +427,9 @@ fn input_field(
         // Collapsed pill: fixed bar height (tighten, NOT fill — a loose Box parent
         // hands down inf max, so fill never raises min and content top-aligns).
         fm = fm.height(SEARCH_BAR_HEIGHT);
+    }
+    if let Some(fr) = focus {
+        fm = fm.focus_requester(fr.clone());
     }
     field = field.modifier(fm);
     field.build(ctx);
@@ -604,16 +608,19 @@ impl SearchBar {
                             en,
                             true, // read-only: tap expands instead of editing
                             true, // fill pill height: content centered
-                            &ph, &li, &ti, &ic, &None,
+                            &ph, &li, &ti, &ic, &None, &None,
                         );
                     });
             }
         }
         let anchor_slot = anchor_key;
         ctx.end_restartable_group();
-        if !active {
-            return;
-        }
+        // The panel's `build` must ALWAYS run (even when collapsed), exactly like `DockedSearchBar`'s popup:
+        // `Dialog::build` records `active=false` when it is told to be invisible, and that record is what lets
+        // `sync_overlays` delete the overlay. An early `if !active { return; }` here looked like a Skip frame
+        // and left the overlay (and its scrim) on screen for good — measured: after picking a result the
+        // overlay shrank to the bar's size and stayed there, one overlay still present 1.5s later.
+        //
         // Expanded: fullscreen Dialog overlay (NOT in-tree — in-tree expansion would
         // push siblings off screen). Esc closes via the app-level overlay dismiss
         // hook (app.rs: topmost overlay closes first); Esc inside the overlay tree
@@ -648,7 +655,7 @@ impl SearchBar {
         // The anchor's coordinates are known only to the layout pass, so this mode is resolved there and the
         // caller supplies just the progress reader.
         let slide_progress = state.progress.clone();
-        crate::ui::overlay::Dialog::new(true)
+        crate::ui::overlay::Dialog::new(active)
             .position(crate::ui::overlay::PopupPosition::TopLeft)
             .anchor_slot(Some(anchor_slot))
             .anchor_slide(crate::ui::overlay::AnchorSlide::new(std::sync::Arc::new(move || {
@@ -662,6 +669,13 @@ impl SearchBar {
                 std::time::Duration::from_millis(SEARCH_BAR_COLLAPSE_MS),
             )))
             .build(ctx, move |ctx| {
+                // Declare what the panel body depends on. A `start_restartable_group` with NO declared
+                // parameters always Skips (`pending_params` is empty, so `params_equal` is trivially true),
+                // and a skipped group never runs its content closure again — which is why the results list
+                // kept showing the unfiltered items as the user typed. The query is exactly the input the
+                // results are derived from, so it is the parameter that must break the skip.
+                let query_now = state.query_text();
+                ctx.changed(&query_now);
                 let key = ctx.next_key();
                 match ctx.start_restartable_group(key, Modifier::new(), crate::layout::BoxLayout::new()) {
                     GroupStatus::Skip => {}
@@ -733,6 +747,17 @@ impl SearchBar {
                                         })),
                                     ))
                                     .build(ctx, |ctx| {
+                                        // Focus the expanded field on the first expansion, the way Compose's
+                                        // `ExpandedFullScreenSearchBarImpl` does in
+                                        // `LaunchedEffect(Unit) { focusRequester.requestFocus() }`: without
+                                        // it the keyboard has no target and typing does nothing (measured:
+                                        // typing "ap" left the results at their unfiltered 18 rows).
+                                        let focus = ctx.remember(|| crate::modifier::FocusRequester::new()).get();
+                                        let asked = ctx.remember(|| false);
+                                        if !asked.get() {
+                                            asked.set(true);
+                                            focus.request_focus();
+                                        }
                                         input_field(
                                             ctx,
                                             &state.query,
@@ -741,7 +766,7 @@ impl SearchBar {
                                             en,
                                             false,
                                             true, // fixed bar height (56) like collapsed
-                                            &ph, &li, &ti, &ic, &None,
+                                            &ph, &li, &ti, &ic, &None, &Some(focus),
                                         );
                                         crate::ui::divider::Divider::horizontal()
                                             .color(divider)
@@ -917,7 +942,7 @@ impl DockedSearchBar {
                             en,
                             !active, // collapsed: read-only to expand on tap; expanded: editable (single input — no duplicate in popup)
                             true, // fill pill height: content centered
-                            &ph, &li, &ti, &ic, &None,
+                            &ph, &li, &ti, &ic, &None, &None,
                         );
                     });
             }
@@ -1176,6 +1201,39 @@ mod tests {
         assert_eq!(*curve.last().unwrap(), 1.0, "ends fully open");
         let quarter = expand_interpolator().interpolate(0.25);
         assert!(quarter > 0.25, "emphasized-decelerate runs ahead of linear, got {quarter}");
+    }
+
+    /// Why the panel body declares the query as a parameter — measured, and NOT covered by a test here.
+    ///
+    /// The body lives in a `start_restartable_group`, and a group only re-enters when its declared
+    /// parameters change: `pending_params` empty makes `params_equal` trivially true, so the group Skips and
+    /// its content closure never runs again. `core::composer::tests::group_without_declared_params_reenters_or_skips`
+    /// pins that mechanism directly.
+    ///
+    /// A SearchBar-level test of this was written and DELETED: composing the panel body through
+    /// `take_overlays` re-entered the group every frame, so removing `ctx.changed(&query_now)` still passed
+    /// it — a test that cannot fail is worse than none. The behaviour is verified against the running demo
+    /// instead: with the declaration, typing "bl" left 3 rows (Blackberry, Blueberry) out of 34, and without
+    /// it the list kept its first, unfiltered rows.
+    ///
+    /// First text content in the tree, for assertions about what a composed subtree shows.
+    fn first_text(composer: &Composer) -> String {
+        let Some(root) = composer.layout_root_idx() else { return String::new() };
+        let nodes = composer.arena_nodes();
+        let mut found = String::new();
+        let mut stack = vec![root];
+        while let Some(i) = stack.pop() {
+            for el in nodes[i].modifier.elements() {
+                if let crate::modifier::ModifierElement::TextContent { content, .. } = el {
+                    if !content.is_empty() {
+                        found = content.clone();
+                        return found;
+                    }
+                }
+            }
+            stack.extend(nodes[i].children.iter().copied());
+        }
+        found
     }
 
     /// The results subtree actually carries the faded graphics layer: measured on a real composition, the

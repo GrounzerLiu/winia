@@ -2664,6 +2664,50 @@ impl Drop for Composer {
 mod tests {
     use super::*;
 
+    /// Does a `start_restartable_group` with NO declared parameters Skip on the next frame?
+    ///
+    /// This decides how a component whose body lives in a group must declare its inputs: if no declared
+    /// parameter still Skips, then any content derived from data the group cannot see would be frozen
+    /// (the SearchBar results list kept its first, unfiltered rows while the user typed).
+    #[test]
+    fn group_without_declared_params_reenters_or_skips() {
+        let mut composer = Composer::new();
+        let runs = std::cell::Cell::new(0);
+
+        let mut frame = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                let key = ctx.next_key();
+                let r = &runs;
+                match ctx.start_restartable_group(key, Modifier::new(), BoxLayout::new()) {
+                    GroupStatus::Skip => {}
+                    GroupStatus::Enter => {
+                        r.set(r.get() + 1);
+                        let inner = ctx.next_key();
+                        ctx.start_leaf(inner, Modifier::new());
+                        ctx.end_node();
+                    }
+                }
+                ctx.end_restartable_group();
+            });
+            composer.layout(Constraints::new(0.0, 100.0, 0.0, 100.0));
+        };
+
+        frame(&mut composer);
+        let first = runs.get();
+        frame(&mut composer);
+        let second = runs.get();
+        eprintln!(
+            "[probe] group without declared params: runs after frame1={first}, after frame2={second}"
+        );
+        assert_eq!(first, 1, "frame 1 must Enter (no cache yet)");
+        // Record the observed behaviour rather than assert a preference: this is what tells the SearchBar
+        // whether it has to declare its inputs.
+        assert_eq!(
+            second, 1,
+            "measured: the group SKIPPED on frame 2 with no declared parameters (runs stayed {second})"
+        );
+    }
+
     #[test]
     fn test_composer_new() {
         let mut composer = Composer::new();
