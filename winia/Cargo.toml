@@ -9,6 +9,11 @@ default = ["vulkan"]
 vulkan = ["skiwin/vulkan"]
 gl = ["skiwin/gl"]
 debug-server = []
+# Per-frame animation trace (`anim_trace`): records every animated subject's layout vs painted
+# geometry plus its opacity so a run can be inspected afterwards. OFF by default — without it every
+# emission point is a no-op that compiles away. The output path comes from WINIA_ANIM_TRACE; no
+# application code is involved either way.
+anim-trace = []
 # Material Symbols 可变字体图标（默认不启用——Icon 默认不内置任何图标）。
 # 每个特性内嵌对应主题的字体文件（10~15MB）与 4200+ 码点常量表。
 material-symbols-outlined = []

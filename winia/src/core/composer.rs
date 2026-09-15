@@ -1703,6 +1703,11 @@ pub struct Composer {
     /// `refresh_scope_overlay_roots`; also drives their `LayoutNode` flag so
     /// the tree walk skips them and the layer re-draws them untransformed.
     pub(crate) scope_overlay_roots: Vec<usize>,
+    /// True while any node carries a paint disposition other than `InTree` (a placeholder, or chrome in
+    /// the layer). `refresh_paint_dispositions` can then skip its whole-arena walk on the frames where
+    /// nothing is shared and the previous frame left nothing to clear — and it MUST run once more after
+    /// the last non-`InTree` assignment, which is what this flag guarantees.
+    pub(crate) paint_dirty: bool,
     /// Last-frame absolute bounds per live marked endpoint (Phase 3
     /// same-screen size-morph detection). Keyed by endpoint identity
     /// (scope, key) — never by slot: slots are positional identities a new
@@ -1774,6 +1779,7 @@ impl Composer {
             layer_order: Vec::new(),
             elevated_roots: Vec::new(),
             scope_overlay_roots: Vec::new(),
+            paint_dirty: false,
             shared_last_bounds: HashMap::new(),
             composer_id: NEXT_COMPOSER_ID.fetch_add(1, Ordering::Relaxed),
             pending_cross: Vec::new(),
@@ -2657,6 +2663,53 @@ impl Drop for Composer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A group with NO declared parameters and NOTHING read inside its body Skips on the next frame.
+    ///
+    /// That combination is what froze the SearchBar's results list: the panel body received an
+    /// already-built list (the query was read in the PARENT scope), so the body itself had no dependency
+    /// that could re-run it, and no declared parameter either. Either one is enough — the container's shape
+    /// needs no declaration precisely because it reads `progress` inside the body.
+    ///
+    /// This pins the "declares nothing and reads nothing" half; the SearchBar case states its fix in code.
+    #[test]
+    fn group_without_declared_params_reenters_or_skips() {
+        let mut composer = Composer::new();
+        let runs = std::cell::Cell::new(0);
+
+        let mut frame = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                let key = ctx.next_key();
+                let r = &runs;
+                match ctx.start_restartable_group(key, Modifier::new(), BoxLayout::new()) {
+                    GroupStatus::Skip => {}
+                    GroupStatus::Enter => {
+                        r.set(r.get() + 1);
+                        let inner = ctx.next_key();
+                        ctx.start_leaf(inner, Modifier::new());
+                        ctx.end_node();
+                    }
+                }
+                ctx.end_restartable_group();
+            });
+            composer.layout(Constraints::new(0.0, 100.0, 0.0, 100.0));
+        };
+
+        frame(&mut composer);
+        let first = runs.get();
+        frame(&mut composer);
+        let second = runs.get();
+        eprintln!(
+            "[probe] group without declared params: runs after frame1={first}, after frame2={second}"
+        );
+        assert_eq!(first, 1, "frame 1 must Enter (no cache yet)");
+        // Record the observed behaviour rather than assert a preference: this is what tells the SearchBar
+        // whether it has to declare its inputs.
+        assert_eq!(
+            second, 1,
+            "measured: the group SKIPPED on frame 2 with no declared parameters (runs stayed {second})"
+        );
+    }
 
     #[test]
     fn test_composer_new() {

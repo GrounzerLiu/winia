@@ -426,6 +426,25 @@ static DRAINING_SCOPE: std::sync::LazyLock<crate::core::composition_local::Compo
         crate::core::composition_local::CompositionLocal::new(|| false)
     });
 
+/// Identity for one `NavDisplay` instance, used to namespace the scenes it publishes.
+static NEXT_NAV_HOST_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn next_nav_host_id() -> u64 {
+    NEXT_NAV_HOST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The id a scene host publishes for ONE LAYER it composes: the host, the scene and the layer's role.
+///
+/// All three are needed. The registry the shared-transition system reads is process-global and keyed by id
+/// alone, so hashing the scene key would let two hosts rendering the same route — or one host pushing the
+/// same route twice, which puts the same scene key in both layers — publish the same id and overwrite each
+/// other; the surviving entry then classifies the other end with the wrong role, which is the "paired the
+/// leaving end with itself" failure this branch fixed.
+pub(crate) fn layer_scene_id(host_id: u64, scene_key: u64, is_prev: bool) -> u64 {
+    fnv_hash(&(host_id, scene_key, is_prev))
+}
+
+
 // ═══════════════════════════════════════════════════════════
 // NavBackStack — 导航状态（对标 Nav3 的 NavBackStack）
 // ═══════════════════════════════════════════════════════════
@@ -750,10 +769,25 @@ pub struct NavTransitionSpec {
     pub exit: NavExit,
     /// 过渡时长（默认 300ms——Nav3 默认 tween(700)，winia 取更快节奏）
     pub duration: std::time::Duration,
-    /// 缓动曲线（默认 EaseInOutCubic——用动画系统内置插值器；
+    /// Easing curve, default `EaseOutCubic` (fast out, slow in).
+    ///
+    /// It is deliberately NOT `EaseInOutCubic`: a scene swap is a CROSS-FADE (the entering layer's alpha
+    /// is `1 - p`, the leaving layer's `p`), and an ease-in-out curve keeps the entering layer nearly
+    /// invisible for the first part of the transition, so the swap reads as "nothing happens, then it
+    /// rushes in". Winia's own `EaseInOutCubic` table evaluated at those progress points gives
+    /// 0.0002 / 0.0102 / 0.0409 / 0.1038 / 0.2223 / 0.4321 / 0.6816 — below 10 % opacity for the first 29 %
+    /// of the duration — while the incoming screen's shared hero is already well into its flight.
+    /// `EaseOutCubic` is also the same family as Compose's default tween easing (FastOutSlowIn).
+    ///
+    /// CAVEAT, recorded rather than hidden: the same curve drives POSITION for the Slide*/Scale*
+    /// primitives, where fast-out means the leaving layer covers ~49 % of its travel in the first 20 % of
+    /// the duration and then crawls. Compose splits these — `fadeIn`/`fadeOut` default to a tween,
+    /// `slideInHorizontally`/`scaleIn` default to a spring — and winia has one spec for all primitives.
+    /// Splitting them is open work, not a decision made here.
+    ///
     /// 可注入任意 `Interpolator`，见 `winia::animation::interpolator` 的
     /// 29 个内置曲线：EaseIn/Out/InOut × Sine/Quad/Cubic/Quart/Quint/Expo/
-    /// Circ/Back/Elastic/Bounce + Linear）
+    /// Circ/Back/Elastic/Bounce + Linear
     pub interpolator: std::sync::Arc<dyn crate::animation::interpolator::Interpolator>,
 }
 
@@ -784,7 +818,15 @@ impl NavTransitionSpec {
             enter,
             exit,
             duration: std::time::Duration::from_millis(300),
-            interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseInOutCubic::new()),
+            // Fast-out easing, not ease-in-out. A scene swap is a CROSS-FADE: the entering layer's
+            // opacity is `1 - p` and the leaving layer's is `p`, so an ease-in-out curve keeps the entering
+            // layer nearly invisible for the first part of the transition and the swap reads as "nothing
+            // happens, then it rushes in". Winia's own `EaseInOutCubic` table at those progress points:
+            // 0.0002 / 0.0102 / 0.0409 / 0.1038 / 0.2223 / 0.4321 / 0.6816 — below 10 % for the first 29 %
+            // of the duration — which is why the incoming screen looked absent while the shared hero was
+            // already well into its flight. EaseOutCubic is also closer to Compose, whose default tween
+            // easing is FastOutSlowIn.
+            interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()),
         }
     }
 
@@ -863,8 +905,9 @@ impl NavTransitionSpec {
 ///   闭包 peek——不注册依赖）
 /// - 完成检测（progress≈0）→ previous 清空（旧页移除）
 ///
-/// 共享 tween（300ms EaseInOutCubic）当前硬编码——对标各原语 animationSpec
-/// 参数的自定义时长/曲线后续接（见 docs/navigation3.md）。
+/// Duration and easing are NOT hardcoded any more: `NavTransitionSpec { duration, interpolator }` carries
+/// them (default 300 ms + `EaseOutCubic`, see that field's doc), and the spec is snapshotted when a
+/// transition starts. See docs/navigation3.md for the Compose comparison.
 #[derive(Clone)]
 struct NavTransition<K: NavKey> {
     /// 当前场景的场景 key（对标 Nav3 AnimatedSceneKey——过渡的驱动标识）
@@ -880,6 +923,14 @@ struct NavTransition<K: NavKey> {
     /// 中途改配置不影响进行中的过渡；完成时清空）。Backchannel：快照只在
     /// 过渡启动/完成瞬间读写，无订阅者需要通知（progress 的动画通知已驱动帧）。
     active_spec: crate::core::state::Backchannel<Option<NavTransitionSpec>>,
+    /// This display's identity, used to namespace the scenes it publishes (`layer_scene_id`).
+    ///
+    /// Remembered in `init`, which runs OUTSIDE the per-scene `ctx.key(scene_holder.key, …)` group: the
+    /// scene key is part of a remember slot's base, so allocating it inside `render` gave a NEW id per
+    /// navigation (one registry entry per navigation, and every published tag re-created). It is stable
+    /// across navigations here; it is still a composition-slot identity rather than a process-unique
+    /// instance id, which is all the registry needs (two displays at different slots differ).
+    host_id: u64,
 }
 
 /// 场景句柄（场景 key + 场景对象）。PartialEq 按 key（同 key = 同内容场景——
@@ -906,6 +957,7 @@ impl<K: NavKey> NavTransition<K> {
             // 初值 0 = 无过渡（渲染层以此判定静置归位；导航时 detect 复位 1.0）
             progress: ctx.remember(|| State::new(0.0)).get(),
             active_spec: ctx.remember_backchannel(|| None),
+            host_id: ctx.remember(next_nav_host_id).get(),
         }
     }
 
@@ -958,11 +1010,24 @@ impl<K: NavKey> NavTransition<K> {
                 self.active_spec.set(Some(spec.clone()));
                 // 复位进度起点 1.0（旧页全显）——上次动画结束 progress 停在 0，
                 // 不复位则 push_animatable 见 peek==target(0) 直接跳过、动画不启动。
-                // ⚠ 仅在无进行中动画时复位：过渡中途再次导航时，旧动画与新动画
-                // 同目标(0.0)、会被 push_animatable 去重保留并按原时间轴继续——
-                // 此时若复位 1.0，本帧会渲染出 p=1 的满血旧页、下一帧 tick 又弹回
-                // 中途值（一帧闪跳）；跳过复位则从中途值平滑续走。
-                if !crate::animation::has_animation_for_state(self.progress.state_id()) {
+                //
+                // 过渡中途再次导航（含反向重定向）时角色互换：本帧的 current（可见度 `1 - p`）变成
+                // previous（可见度 `p'`），两种做法都错——
+                //  - 保留 p：每个场景的可见度在一帧内跳 `|1 - 2p|`（实测 0.7732 → 0.2134、
+                //    0.2268 → 0.7866，p = 0.227 时跳 0.546）；
+                //  - 复位 1.0：本帧渲染出全显的旧页，下一帧运行中的时钟又把它拉回中途值，闪一帧。
+                // 正确起点是 `1 - p` 并**重启时钟**（旧时钟的相位属于上一次过渡），两层可见度都连续。
+                // 过渡中途再次导航（含反向重定向）时角色互换：本帧的 current（可见度 `1 - p`）变成
+                // previous（可见度 `p'`），两种做法都错——
+                //  - 保留 p：每个场景的可见度在一帧内跳 `|1 - 2p|`（实测按稳定 scene key：
+                //    0.770 → 0.216，跳 0.554）；
+                //  - 复位 1.0：本帧渲染出全显的旧页，下一帧运行中的时钟又把它拉回中途值，闪一帧。
+                // 正确起点是 `1 - p` 并**重启时钟**（旧时钟的相位属于上一次过渡），两层可见度都连续。
+                if crate::animation::has_animation_for_state(self.progress.state_id()) {
+                    let p = self.progress.peek().clamp(0.0, 1.0);
+                    crate::animation::cancel_animation(&self.progress);
+                    self.progress.as_raw().set_backchannel(1.0 - p);
+                } else {
                     self.progress.as_raw().set_backchannel(1.0);
                 }
                 // 过渡动画：1→0（用 spec 的时长/缓动曲线——自定义 duration/easing）
@@ -1004,6 +1069,11 @@ impl<K: NavKey> NavTransition<K> {
         render_entry: &dyn Fn(&mut ComposeCtx, &NavEntry<K>, bool),
         spec: &NavTransitionSpec,
     ) {
+        // This display's identity, for namespacing the scenes it publishes (see `layer_scene_id`): the
+        // registry behind scene tags is shared and keyed by id alone, so two displays rendering the same
+        // route must not publish the same id. Allocated once in `init` (outside the scene-keyed group, which
+        // would otherwise hand out a new id on every navigation).
+        let host_id = self.host_id;
         // 过渡规格：优先用启动时固化的快照；无进行中过渡时用当前配置
         // （此时 previous 为 None，所有公式在 active 门下归位，取值无效果）
         let spec = self.active_spec.peek().clone().unwrap_or_else(|| spec.clone());
@@ -1018,7 +1088,22 @@ impl<K: NavKey> NavTransition<K> {
         let render_layer = |ctx: &mut ComposeCtx, scene: &dyn Scene<K>, is_prev: bool| {
             let progress = self.progress.clone();
             let width = width.clone();
-            let m = Modifier::new().fill_max_size().graphics_layer(move || {
+            // Scene identity, computed here so the wrapper modifier can carry it as a tag: the shared
+            // transition system reads a subtree's scene from a `SceneTag` in its ANCESTRY, because a
+            // marker's own modifier element is built once and reused (a captured id freezes).
+            //
+            // The id must identify THIS published layer, not just the scene: the registry behind it
+            // (`NAV_SCENE_VIS`) is process-global and keyed by id alone, so a plain hash of the scene key
+            // collides whenever two hosts render the same route (two NavDisplays on one screen) or one
+            // host pushes the same route twice (the two layers then share a scene key). The last publisher
+            // wins such a collision, and the other end is classified by the wrong `is_prev` — which is the
+            // "paired the leaving end with itself" failure. The host id is per NavDisplay instance, the
+            // role distinguishes the leaving layer from the entering one.
+            let layer_scene_id = layer_scene_id(host_id, scene.scene_key(), is_prev);
+            let m = Modifier::new()
+                .fill_max_size()
+                .scene_tag(layer_scene_id)
+                .graphics_layer(move || {
                 let p = progress.peek();
                 let w = width.peek().max(1.0);
                 let mut params = GraphicsLayerParams::default();
@@ -1082,10 +1167,43 @@ impl<K: NavKey> NavTransition<K> {
                     // pane 退场层）与场景层的 is_prev（整层滑出）取或——任一为真
                     // 即状态池只读
                     ctx.key(scene.scene_key(), |ctx| {
-                        let layer_render = |ctx: &mut ComposeCtx, e: &NavEntry<K>, draining: bool| {
-                            render_entry(ctx, e, draining || is_prev);
-                        };
-                        scene.content(ctx, &layer_render);
+                        // Publish this layer as a SCENE for the shared-transition system: during a nav
+                        // transition the outgoing and incoming scenes are composed at once, so a
+                        // marked key exists on both sides and the flight system cannot tell which end
+                        // is which by tree order. Visibility is a closure, not a snapshot: this layer
+                        // animates through a render-time `graphics_layer`, so its compose does not
+                        // re-run every frame and a captured value would go stale mid-transition.
+                        let layer_is_prev = is_prev;
+                        let layer_active = active;
+                        let layer_progress = self.progress.clone();
+                        let scene_id = layer_scene_id;
+                        let visibility = std::sync::Arc::new(move || {
+                            let p = layer_progress.peek().clamp(0.0, 1.0);
+                            // p runs 1 (just started) → 0 (settled). The leaving layer fades with p,
+                            // the entering one with 1 - p; with no transition running the current
+                            // layer is fully visible.
+                            if layer_is_prev {
+                                if layer_active { p } else { 0.0 }
+                            } else if layer_active {
+                                1.0 - p
+                            } else {
+                                1.0
+                            }
+                        });
+                        crate::ui::shared_transition::with_nav_scene(
+                            crate::ui::shared_transition::NavSceneInfo {
+                                id: scene_id,
+                                scene_key: scene.scene_key(),
+                                visibility,
+                                is_prev: layer_is_prev,
+                            },
+                            || {
+                                let layer_render = |ctx: &mut ComposeCtx, e: &NavEntry<K>, draining: bool| {
+                                    render_entry(ctx, e, draining || is_prev);
+                                };
+                                scene.content(ctx, &layer_render);
+                            },
+                        );
                     });
                 });
         };
@@ -1095,23 +1213,49 @@ impl<K: NavKey> NavTransition<K> {
                 move |w, _| width.set(w)
             }))
             .build(ctx, |ctx| {
+                // Each layer's SLOT identity must cover everything its subtree closes over: the scene
+                // itself, the role it plays (leaving or entering) and whether a transition is running.
+                // The scene key alone is not enough — the two Stack children swap roles by direction, so
+                // the same scene can occupy the same child slot in a different role, and a Skip would
+                // then reuse the previous frame's `is_prev`/`active` closures (measured symptom: the
+                // flight paired the leaving end with itself). With the full identity a Skip is safe, which
+                // is what the `SceneTag` equality arm now allows.
+                let layer_key = |scene: &dyn Scene<K>, is_prev: bool| -> u64 {
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    std::hash::Hash::hash(&(scene.scene_key(), is_prev, active), &mut hasher);
+                    std::hash::Hasher::finish(&hasher)
+                };
                 if forward {
                     // push：新场景在上层（对标 Nav3 "z-index increases during navigate"）
                     if let Some(p) = previous_scene {
-                        render_layer(ctx, p, true);
+                        let k = layer_key(p, true);
+                        ctx.key(k, |ctx| render_layer(ctx, p, true));
                     }
-                    render_layer(ctx, current_scene, false);
+                    let k = layer_key(current_scene, false);
+                    ctx.key(k, |ctx| render_layer(ctx, current_scene, false));
                 } else {
                     // pop：被弹出的旧场景在上层（对标 Nav3 "decreases during pop"）
-                    render_layer(ctx, current_scene, false);
+                    let k = layer_key(current_scene, false);
+                    ctx.key(k, |ctx| render_layer(ctx, current_scene, false));
                     if let Some(p) = previous_scene {
-                        render_layer(ctx, p, true);
+                        let k = layer_key(p, true);
+                        ctx.key(k, |ctx| render_layer(ctx, p, true));
                     }
                 }
                 // 过渡期输入屏蔽层：命中测试不计 graphics_layer 位移（布局命中盒
                 // 停在原位）——滑动场景的按钮过渡期可被误触（如连点返回清空栈）。
-                // 全尺寸可点击层兜底吞掉过渡期全部点击（透明、无波纹）
-                if active {
+                // 只有当原语真的位移内容时才需要兜底：`fade`/`none` 不移动命中盒，
+                // 挡下来只会让整屏在过渡期间失去响应（实测 800ms fade 下进入页的
+                // Back 按钮约 800ms 内点不动），而 Compose 的 AnimatedContent/NavDisplay
+                // 从不安插这种层。
+                let displaces = matches!(
+                    self.active_spec.peek().as_ref().unwrap_or(&spec).exit,
+                    NavExit::SlideOut { .. } | NavExit::SlideAndFadeOut { .. } | NavExit::ScaleOut { .. }
+                ) || matches!(
+                    self.active_spec.peek().as_ref().unwrap_or(&spec).enter,
+                    NavEnter::SlideIn { .. } | NavEnter::SlideAndFadeIn { .. } | NavEnter::ScaleIn { .. }
+                );
+                if active && displaces {
                     crate::ui::layout_components::Column::new()
                         .modifier(Modifier::new().fill_max_size().clickable(|| {}))
                         .build(ctx, |_| {});
@@ -1185,6 +1329,55 @@ pub struct RememberStateDecorator;
 impl<K: NavKey> NavEntryDecorator<K> for RememberStateDecorator {
     fn wrap(&self, ctx: &mut ComposeCtx, entry: &NavEntry<K>, inner: &dyn Fn(&mut ComposeCtx)) {
         ctx.key(entry.content_key(), |ctx| inner(ctx));
+    }
+}
+
+/// Shared-element bridge for navigation — winia's counterpart of Nav3's
+/// `sharedEntryInSceneNavEntryDecorator`.
+///
+/// Compose wraps every entry's content in
+/// `Box(Modifier.sharedElement(rememberSharedContentState(entry.key), animatedVisibilityScope =
+/// LocalNavAnimatedContentScope.current))`: the ENTRY ITSELF becomes a shared element keyed by the
+/// entry, so a scene change can fly it, and its animation rides the nav's own transition clock.
+/// This does the same with winia's `shared_bounds`, keyed by the entry's stable content key.
+///
+/// Usage: put the `NavDisplay` inside a `SharedTransitionLayout` and add this to the display's entry
+/// decorators. Per-element markers inside a screen keep working — different key, same scope.
+///
+/// Differences from Compose, recorded rather than silent: Compose throws when the scope is missing
+/// (its composition local has no default); this degrades to rendering the entry unwrapped, so a
+/// display without a `SharedTransitionLayout` keeps working. Compose also hands the marker the
+/// nav's `AnimatedContentScope`; winia's equivalent is the scene visibility the nav publishes per
+/// transition layer (`with_nav_scene`), which is what the flight system pairs the two live ends by.
+pub struct SharedEntryInSceneDecorator;
+
+impl<K: NavKey> NavEntryDecorator<K> for SharedEntryInSceneDecorator {
+    fn wrap(&self, ctx: &mut ComposeCtx, entry: &NavEntry<K>, inner: &dyn Fn(&mut ComposeCtx)) {
+        let Some(scope) = crate::ui::shared_transition::current_shared_scope() else {
+            inner(ctx);
+            return;
+        };
+        let key = format!("entry:{}", entry.content_key());
+        crate::ui::layout_components::Column::new()
+            .modifier(
+                Modifier::new().fill_max_size().shared_bounds_with_overlay_clip(
+                    scope.shared_content_state(&key),
+                    crate::ui::animated_visibility::VisibilityTransition::fade_in(
+                        crate::animation::TweenSpec::default(),
+                    ),
+                    crate::ui::animated_visibility::VisibilityTransition::fade_out(
+                        crate::animation::TweenSpec::default(),
+                    ),
+                    crate::ui::shared_transition::BoundsTransform::default(),
+                    crate::ui::shared_transition::ResizeMode::scale_to_bounds(),
+                    crate::ui::shared_transition::PlaceHolderSize::AnimatedSize,
+                    crate::ui::shared_transition::PathMotion::Linear,
+                    0.0,
+                    true,
+                    crate::ui::shared_transition::OverlayClip::Bounds,
+                ),
+            )
+            .build(ctx, |ctx| inner(ctx));
     }
 }
 
@@ -1817,6 +2010,72 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The framework's default transition curve is part of its behaviour, not an implementation detail:
+    /// every preset and NavDisplay's default go through `NavTransitionSpec::new`. This pins the default
+    /// (300 ms, a fast-out curve) by sampling the interpolator, so changing it has to be deliberate.
+    ///
+    /// Teeth: revert the default to `EaseInOutCubic` and the sampled point at 0.25 fails — that curve is
+    /// symmetric (f(0.25) = 0.0625, measured 0.071), the fast-out one is well ahead of it.
+    #[test]
+    fn default_transition_spec_is_a_fast_out_300ms_fade() {
+        use crate::animation::interpolator::Interpolator;
+        let spec = NavTransitionSpec::fade();
+        assert_eq!(
+            spec.duration,
+            std::time::Duration::from_millis(300),
+            "the framework default duration"
+        );
+        let f = |p: f32| spec.interpolator.interpolate(p);
+        assert!((f(0.0) - 0.0).abs() < 1e-3 && (f(1.0) - 1.0).abs() < 1e-3, "endpoints");
+        // The exact curve, not just its family: a five-point fingerprint against a fresh `EaseOutCubic`
+        // (the same points `PartialEq for NavTransitionSpec` samples). The earlier `f(0.25) > 0.4` admitted
+        // EaseOutQuad (0.436), EaseOutBounce (0.473), EaseOutCirc (0.660), EaseOutQuart (0.689), EaseOutQuint
+        // (0.765), EaseOutBack (0.816), EaseOutExpo (0.826) and EaseOutElastic (0.912).
+        let reference = crate::animation::interpolator::EaseOutCubic::new();
+        for p in [0.0f32, 0.25, 0.5, 0.75, 1.0] {
+            assert!(
+                (f(p) - reference.interpolate(p)).abs() < 1e-4,
+                "the default curve must be EaseOutCubic exactly: f({p}) = {:.4}, expected {:.4}",
+                f(p),
+                reference.interpolate(p)
+            );
+        }
+        // …and the preset must actually be a cross-fade, not just a curve.
+        assert_eq!(spec.enter, NavEnter::FadeIn, "the default enters by fading in");
+        assert_eq!(spec.exit, NavExit::FadeOut, "…and leaves by fading out");
+    }
+
+    /// A published scene id must name the LAYER, not just the scene: the registry behind scene tags is
+    /// process-global and keyed by id alone, so two hosts rendering the same route — or one host pushing the
+    /// same route twice, which puts one scene key in both layers — would otherwise collide, and the
+    /// surviving entry would classify the other end with the wrong role.
+    #[test]
+    fn layer_scene_ids_are_unique_per_host_and_role() {
+        let key = fnv_hash(&7u64);
+        assert_eq!(
+            layer_scene_id(1, key, false),
+            layer_scene_id(1, key, false),
+            "stable for one layer across frames"
+        );
+        assert_ne!(
+            layer_scene_id(1, key, false),
+            layer_scene_id(1, key, true),
+            "a host's two layers differ by role"
+        );
+        assert_ne!(
+            layer_scene_id(1, key, false),
+            layer_scene_id(2, key, false),
+            "two hosts rendering the same route differ"
+        );
+        // …and the scene key must participate too: an id that ignored it would pass every assertion above
+        // (a function of host and role alone), which is what the first version of this test could not see.
+        assert_ne!(
+            layer_scene_id(1, key, false),
+            layer_scene_id(1, fnv_hash(&8u64), false),
+            "two different scenes of one host differ"
+        );
+    }
 
     #[derive(Clone, PartialEq, Eq, Debug, Hash)]
     enum TestRoute {

@@ -98,7 +98,7 @@ public class SinglePaneSceneStrategy<T : Any> : SceneStrategy<T> {
 | 条目 | `NavEntry(key, contentKey, metadata, content)` | `NavEntry<K>(key, content: Box<dyn Fn(&mut ComposeCtx, &K)>)` | 去 metadata/contentKey（按需加）；content 为 `'static` 闭包（捕获 owned 数据） |
 | 显示 | `NavDisplay(backStack, entryProvider, sceneStrategy, ...)` | `NavDisplay::new(&back_stack, entry_provider).build(ctx)` | `#[composable]` build；读 back_stack 注册依赖 → 变化自动重组 |
 | Scene | Scene 可渲染多 entry（多栏；角色由 entry metadata 标注） | SinglePane（默认渲染栈顶）/ ListDetail（双栏，位置启发：倒数第二=list、栈顶=detail） | SceneStrategy trait 对标；角色标注（metadata）后续接 |
-| 过渡动画 | AnimatedContent + transitionSpec/popTransitionSpec（ContentTransform = enter togetherWith exit；默认 fade） | `NavDisplay::transition_spec` / `pop_transition_spec` + NavTransitionSpec：`NavEnter`/`NavExit` 原语（None/Fade/Slide/Slide+Fade）成对组合，位移用 `SlideOffset::Fraction`(对标 `{ it }` 全宽闭包)/`Px` 表达；共享 300ms EaseInOutCubic；**spec 在过渡启动时快照固化**（对标 Nav3 求值时机）；层序对标 Nav3 方向 z 序（push 新页上/pop 旧页上，不支持用户 zIndex——androidx 亦忽略）；过渡期有输入屏蔽层（命中测试不计 graphics_layer 位移的兜底） | graphics_layer 渲染期 peek 零重组；自定义时长/曲线、per-entry metadata 覆盖、predictivePop 后续接 |
+| 过渡动画 | AnimatedContent + transitionSpec/popTransitionSpec（ContentTransform = enter togetherWith exit；默认 fade） | `NavDisplay::transition_spec` / `pop_transition_spec` + NavTransitionSpec：`NavEnter`/`NavExit` 原语（None/Fade/Slide/Slide+Fade）成对组合，位移用 `SlideOffset::Fraction`(对标 `{ it }` 全宽闭包)/`Px` 表达；默认 **300 ms + fast-out 曲线（`EaseOutCubic`）**——改成 fast-out 是因为一次场景切换就是交叉淡化（进入层 alpha 为 `1-p`、离场层为 `p`），ease-in-out 会让进入层在过渡开头几乎不可见（winia 自己的 `EaseInOutCubic` 查表在这些进度点上为 0.0002/0.0102/0.0409/0.1038/0.2223/0.4321/0.6816，即前 29% 时长里低于 10%），看起来像"先没反应再突然出现"；该默认由 `nav::tests::default_transition_spec_is_a_fast_out_300ms_fade` 钉住；**spec 在过渡启动时快照固化**（对标 Nav3 求值时机）；层序对标 Nav3 方向 z 序（push 新页上/pop 旧页上，不支持用户 zIndex——androidx 亦忽略）；输入屏蔽层只对**真正位移**的原语（Slide*/Scale*）生效（fade 不安插，否则过渡期整屏失去响应） | graphics_layer 渲染期 peek 零重组；自定义时长/曲线、per-entry metadata 覆盖、predictivePop 后续接。**记录的偏差**：winia 用同一个 spec 同时驱动淡化与位移，而 Compose 的 `slideInHorizontally`/`scaleIn` 默认是弹簧（`fadeIn`/`fadeOut` 才是 tween），所以 fast-out 曲线下离场层前 20% 走完约 49% 行程；拆分成两个 spec 是待办，此处只是记录 |
 
 ## 三、关键实现细节
 
@@ -235,8 +235,13 @@ spec 过渡、NavEntryDecorator（on_pop 广播 + wrap 链式）、remember_entr
     ——**已评估不做（2026-09）**：Android back 手势，桌面平台不对。
 
 **P2——外围**
-11. [ ] 共享元素过渡（SharedTransitionScope）/sizeTransform
-    ——**已评估不做（2026-09）**：P2 外围，无倒逼需求。
+11. [~] 共享元素过渡（SharedTransitionScope）/sizeTransform
+    ——**2026-09 评估"不做"后，`exp/nav-shared-transition` 分支已实现第一部分**：nav 过渡层现在
+    发布"场景"（每个层一个 id——按宿主与层角色命名空间化，避免同一路由的多个 display 撞 id——
+    外加一个可见度闭包与"是否离场"标记），框架据此在两端都活着时判定 Source/Target（**每个被标记的
+    key 一次跳转恰好一次飞行**：demo 里 hero 与 badge 各一次；修复前是每个 key 2 次），透明度归场景、
+    矩形归飞行；并补了 `SharedEntryInSceneDecorator`（实测在当前 demo 的所有流程里都是 inert，原因见
+    该文档 §6）。细节、Compose 对照与实测数字见 `docs/nav-shared-transition.md`。`sizeTransform` 仍未做。
 12. [x] 多 back stack——NavBackStack 为普通值天然多实例；entries 拼接显示按需再加
 13. [x] EntryProvider 类型化 DSL——winia 用 match 闭包（Rust 惯用，不追）
 

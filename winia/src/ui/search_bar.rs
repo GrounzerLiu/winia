@@ -20,17 +20,34 @@
 use crate::composable;
 use crate::core::composer::{ComposeCtx, GroupStatus};
 use crate::core::state::State;
-use crate::modifier::{Color, Modifier, Shape};
+use crate::modifier::{Color, Modifier, Shape, SizeValue};
 use crate::ui::text_field::{TextField, TextFieldColors, TextFieldValue};
 use std::sync::Arc;
 
-/// Search bar state: text query + active flag (cf. classic `query`/`active` params).
+/// Search bar state: text query + active flag + expansion progress.
+///
+/// `progress` is the single value that drives the whole expand/collapse animation, exactly as in Compose
+/// Material3 (`SearchBarState.animatable`): 0 = collapsed, 1 = expanded. Geometry (size, position, corner
+/// radius, insets) is derived from it during layout, and the content fades on top of it. Compose keeps a
+/// SECOND Animatable (`contentAnimatable`) so the content can be delayed independently of the geometry —
+/// winia has one `State<f32>` here plus a separate content fade channel, see `expand_animation`.
 #[derive(Clone)]
 pub struct SearchBarState {
     /// Current query text (controlled — callers read `query.get().text`).
     pub query: State<TextFieldValue>,
     /// Active (expanded) flag.
     pub active: State<bool>,
+    /// Expansion progress of the container: 0 = collapsed pill, 1 = fully expanded. Animated by
+    /// `build()`; read during layout for the bounds morph and at paint time for the corner radius.
+    pub progress: State<f32>,
+    /// Fade of the RESULTS CONTENT, driven separately from `progress` — Compose's `contentProgress`
+    /// (`contentAnimatable`, which `rememberSearchBarState` gives its own fade specs so the results can
+    /// arrive after the container has opened). Fading the content with the geometry instead would make the
+    /// list appear while the panel is still bar-sized.
+    pub content_progress: State<f32>,
+    /// The collapsed bar's measured size, reported by `Modifier::on_size_changed` (the winia counterpart of
+    /// Compose's `onGloballyPositioned { state.collapsedCoords = it }`). The expansion starts from this size.
+    pub collapsed_size: State<(f32, f32)>,
 }
 
 impl SearchBarState {
@@ -38,6 +55,9 @@ impl SearchBarState {
         Self {
             query: State::new(TextFieldValue::new("")),
             active: State::new(false),
+            progress: State::new(0.0),
+            content_progress: State::new(0.0),
+            collapsed_size: State::new((0.0, 0.0)),
         }
     }
 
@@ -64,6 +84,49 @@ impl SearchBarState {
 
     pub fn is_active(&self) -> bool {
         self.active.get()
+    }
+
+    /// Drive `progress` towards the active flag (Compose `SearchBarState.animateToExpanded()` /
+    /// `animateToCollapsed()`), using winia's existing animation API. Called once per frame from `build()`,
+    /// so the animation keeps running while the flag is unchanged — `push_animatable` is a no-op once the
+    /// value reaches the target.
+    pub fn drive_expansion(&self) {
+        let target = if self.active.get() { 1.0f32 } else { 0.0 };
+        if self.progress.peek() == target {
+            // Fast path: already there. Without this the spec would be re-pushed every frame and the
+            // animation would never settle (push_animatable restarts a finished animation on the same
+            // target only when a *different* target is running, but a Keyframes spec re-entered every frame
+            // restarts from 0).
+            if !crate::animation::has_animation_for_state(self.progress.state_id()) {
+                // The content fade runs on its own clock, so it is driven below even when the geometry has
+                // already settled.
+                self.drive_content_fade(target);
+                return;
+            }
+        }
+        let spec = if target == 1.0 { expand_spec() } else { collapse_spec() };
+        crate::animation::push_animatable(self.progress.clone(), target, spec);
+        self.drive_content_fade(target);
+    }
+
+    /// Drive the content fade independently, the way Compose gives `contentAnimatable` its own specs:
+    /// fading in starts after the container has opened a little (`AnimationEnterDurationMillis` fades the
+    /// content on a SHORT spec, not the 600ms container spec), and fading out is quick. Geometry and content
+    /// are therefore never locked together.
+    fn drive_content_fade(&self, target: f32) {
+        if self.content_progress.peek() == target
+            && !crate::animation::has_animation_for_state(self.content_progress.state_id())
+        {
+            return;
+        }
+        let spec = if target == 1.0 {
+            // Compose: `AnimationForContentFadeInSpec` = tween(DurationShort2) delayed by DurationShort1.
+            content_fade_in_spec()
+        } else {
+            // Compose: `AnimationForContentFadeOutSpec` = tween(DurationShort2), no delay.
+            content_fade_out_spec()
+        };
+        crate::animation::push_animatable(self.content_progress.clone(), target, spec);
     }
 }
 
@@ -105,6 +168,32 @@ impl SearchBarDefaults {
         2.0
     }
 
+    /// Corner radius of the collapsed pill, in logical pixels — the value the expansion interpolates from.
+    /// Compose uses `SearchBarCornerRadius` (28dp) multiplied by `(1 - progress)`; a pill's radius is half
+    /// its height, so the radius below is derived from the bar height instead, which is what the drawn Pill
+    /// shape actually uses (`shared_shape_radii`: `min(w, h) / 2`).
+    pub fn collapsed_corner_radius() -> f32 {
+        SEARCH_BAR_HEIGHT / 2.0
+    }
+
+    /// Expand animation (Compose `AnimationEnterDurationMillis` = `MotionTokens.DurationLong4` = 600ms with
+    /// `EasingEmphasizedDecelerateCubicBezier` = `CubicBezier(0.05, 0.7, 0.1, 1.0)`).
+    ///
+    /// Deviation from Compose, recorded: Compose also passes `delayMillis = 100`
+    /// (`MotionTokens.DurationShort2`). winia's `TweenSpec` has no delay field, so the delay is expressed as
+    /// a `KeyframesSpec` that holds the start value for the first 100ms of a 700ms spec — the same shape,
+    /// using only existing primitives instead of adding a field Compose would also accept.
+    pub fn expand_spec() -> crate::animation::AnimationSpec {
+        expand_spec()
+    }
+
+    /// Collapse animation (Compose `AnimationExitDurationMillis` = `MotionTokens.DurationMedium3` = 350ms
+    /// with `CubicBezierEasing(0.0f, 1.0f, 0.0f, 1.0f)`), plus the same 100ms delay handling as
+    /// [`Self::expand_spec`].
+    pub fn collapse_spec() -> crate::animation::AnimationSpec {
+        collapse_spec()
+    }
+
     /// Default colors from theme (container = surface-container-high-ish, divider = outline).
     pub fn colors(theme: &crate::ui::theme::ThemeColors) -> SearchBarColors {
         SearchBarColors {
@@ -124,6 +213,184 @@ pub const BACK_ICON_PATH: &str = "M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L
 
 /// Collapsed bar height (Compose `SearchBarTokens.ContainerHeight` = 56dp).
 pub const SEARCH_BAR_HEIGHT: f32 = 56.0;
+
+/// Compose `MotionTokens.DurationShort2` = 100ms, used as `AnimationDelayMillis` by both transitions.
+pub const SEARCH_BAR_ANIMATION_DELAY_MS: u64 = 100;
+/// Compose `AnimationEnterDurationMillis` = `MotionTokens.DurationLong4` = 600ms.
+pub const SEARCH_BAR_EXPAND_MS: u64 = 600;
+/// Compose `AnimationExitDurationMillis` = `MotionTokens.DurationMedium3` = 350ms.
+pub const SEARCH_BAR_COLLAPSE_MS: u64 = 350;
+/// Compose `MotionTokens.DurationShort2` = 100ms, the content fade duration (`AnimationForContentFade*`).
+pub const SEARCH_BAR_CONTENT_FADE_MS: u64 = 100;
+/// Compose `MotionTokens.DurationShort1` = 50ms, the content fade-in delay.
+pub const SEARCH_BAR_CONTENT_FADE_DELAY_MS: u64 = 50;
+
+/// Compose `MotionTokens.EasingEmphasizedDecelerateCubicBezier` = `CubicBezier(0.05, 0.7, 0.1, 1.0)`.
+fn emphasized_decelerate() -> std::sync::Arc<dyn crate::animation::interpolator::Interpolator> {
+    std::sync::Arc::new(crate::animation::interpolator::CubicBezier::new(0.05, 0.7, 0.1, 1.0))
+}
+
+/// Compose's expand easing comes from `MotionTokens`, not from a named `EasingFunctions` entry, so it is
+/// built from the cubic-bezier primitive winia already has (the same one the review confirmed reproduces
+/// `FastOutSlowInEasing` exactly).
+fn expand_interpolator() -> std::sync::Arc<dyn crate::animation::interpolator::Interpolator> {
+    emphasized_decelerate()
+}
+
+/// Compose `AnimationExitEasing = CubicBezierEasing(0.0f, 1.0f, 0.0f, 1.0f)`.
+fn collapse_interpolator() -> std::sync::Arc<dyn crate::animation::interpolator::Interpolator> {
+    std::sync::Arc::new(crate::animation::interpolator::CubicBezier::new(0.0, 1.0, 0.0, 1.0))
+}
+
+/// Expand spec: 600ms, emphasized-decelerate, starting 100ms late.
+///
+/// The delay is expressed with a `KeyframesSpec` (hold the value, then tween) because winia's `TweenSpec`
+/// has no delay field; the resulting motion is the same curve shifted by the delay, which is what Compose's
+/// `delayMillis` produces.
+fn expand_spec() -> crate::animation::AnimationSpec {
+    delayed_tween(SEARCH_BAR_EXPAND_MS, SEARCH_BAR_ANIMATION_DELAY_MS, expand_interpolator())
+}
+
+/// Collapse spec: 350ms, `CubicBezier(0, 1, 0, 1)`, starting 100ms late (see [`expand_spec`]).
+fn collapse_spec() -> crate::animation::AnimationSpec {
+    delayed_tween(SEARCH_BAR_COLLAPSE_MS, SEARCH_BAR_ANIMATION_DELAY_MS, collapse_interpolator())
+}
+
+/// Compose `AnimationForContentFadeInSpec`: `tween(DurationShort2)` delayed by `DurationShort1` (50ms), so
+/// the results start appearing only after the container has begun to open.
+fn content_fade_in_spec() -> crate::animation::AnimationSpec {
+    delayed_tween(
+        SEARCH_BAR_CONTENT_FADE_MS,
+        SEARCH_BAR_CONTENT_FADE_DELAY_MS,
+        std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
+    )
+}
+
+/// Compose `AnimationForContentFadeOutSpec`: `tween(DurationShort2)`, no delay.
+fn content_fade_out_spec() -> crate::animation::AnimationSpec {
+    crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
+        std::time::Duration::from_millis(SEARCH_BAR_CONTENT_FADE_MS),
+        crate::animation::interpolator::Linear::new(),
+    ))
+}
+
+/// Compose `DockedEnterTransition` = `fadeIn(AnimationEnterFloatSpec) + expandVertically(
+/// AnimationEnterSizeSpec)`: fade in while growing vertically, 600ms with the emphasized-decelerate curve
+/// and a 100ms delay.
+///
+/// The delay is passed as `delay`, NOT folded into the duration: the overlay's animation must hold for
+/// 100ms and then run the 600ms curve, whereas a 700ms duration would start moving immediately.
+fn docked_enter_spec() -> crate::ui::overlay::OverlayAnimSpec {
+    crate::ui::overlay::OverlayAnimSpec::expand_fade(std::time::Duration::from_millis(
+        SEARCH_BAR_EXPAND_MS,
+    ))
+    .delay(std::time::Duration::from_millis(SEARCH_BAR_ANIMATION_DELAY_MS))
+    .with_interpolator(crate::animation::interpolator::CubicBezier::new(0.05, 0.7, 0.1, 1.0))
+}
+
+/// Compose `DockedExitTransition` = `fadeOut(AnimationExitFloatSpec) + shrinkVertically(
+/// AnimationExitSizeSpec)`: fade out while shrinking vertically, 350ms with `CubicBezier(0, 1, 0, 1)` and a
+/// 100ms delay (see [`docked_enter_spec`] for why the delay is separate).
+fn docked_exit_spec() -> crate::ui::overlay::OverlayAnimSpec {
+    crate::ui::overlay::OverlayAnimSpec::expand_fade(std::time::Duration::from_millis(
+        SEARCH_BAR_COLLAPSE_MS,
+    ))
+    .delay(std::time::Duration::from_millis(SEARCH_BAR_ANIMATION_DELAY_MS))
+    .with_interpolator(crate::animation::interpolator::CubicBezier::new(0.0, 1.0, 0.0, 1.0))
+}
+
+/// A tween of `duration_ms` that does not move until `SEARCH_BAR_ANIMATION_DELAY_MS` has elapsed.
+///
+/// `progress` here is the spec's own time fraction: from 0 to `delay` it samples the curve's value at 0 (so
+/// the value is held), and from there it remaps the remaining time onto the full curve.
+fn delayed_tween(
+    duration_ms: u64,
+    delay_ms: u64,
+    interpolator: std::sync::Arc<dyn crate::animation::interpolator::Interpolator>,
+) -> crate::animation::AnimationSpec {
+    let delay = delay_ms as f32;
+    let total = (duration_ms + delay_ms) as f32;
+    let held = if total > 0.0 { delay / total } else { 0.0 };
+    // The curve is sampled into a polyline over the post-delay window, with LINEAR segments.
+    //
+    // Two things matter here, both measured on a running app (per-frame probe on the overlay height):
+    //  - the segment interpolator must be Linear, because `interpolate_keyframes` applies the SEGMENT's
+    //    interpolator to the within-segment fraction. Passing the curve itself replayed its fast-out shape
+    //    once per segment: the panel then advanced in eight "jump then crawl" sawteeth (measured single-frame
+    //    steps of 0.41, 0.064, 0.033, 0.018 ... — the visible stutter);
+    //  - the resolution has to be fine enough that the polyline tracks the curve: with a coarse sample set
+    //    the first segment already carries a large share of the total travel.
+    // 96 samples put the largest single-frame step near the curve's own slope (see the probe assertion in
+    // the tests) instead of a segment's chord.
+    let steps = 96;
+    let mut frames: Vec<(f32, f32)> = Vec::with_capacity(steps + 2);
+    frames.push((0.0, 0.0));
+    frames.push((held, 0.0));
+    for i in 1..=steps {
+        let t = i as f32 / steps as f32;
+        frames.push((held + (1.0 - held) * t, interpolator.interpolate(t)));
+    }
+    crate::animation::AnimationSpec::Keyframes(crate::animation::KeyframesSpec::new(
+        std::time::Duration::from_millis(duration_ms + delay_ms),
+        frames,
+    ))
+}
+
+// ───────────────────── expansion geometry (Compose `FullScreenSearchBarLayout`) ─────────────────────
+//
+// Compose derives every animated quantity from ONE progress value during layout:
+//   width  = constrainWidth(lerp(collapsedWidth,  constraints.maxWidth,  progress))
+//   height = constrainHeight(lerp(collapsedHeight, constraints.maxHeight, progress))
+//   radius = SearchBarCornerRadius * (1 - progress)          // rect once it rounds to zero
+//   top/bottom padding = lerp(0, SearchBarVerticalPadding, progress)
+// The helpers below mirror that shape so the arithmetic is testable without a window.
+
+/// Compose's layout lerp, in logical pixels: `from` at progress 0, `to` at progress 1.
+pub fn expansion_lerp(from: f32, to: f32, progress: f32) -> f32 {
+    from + (to - from) * progress.clamp(0.0, 1.0)
+}
+
+/// Container size at `progress`, growing from the collapsed bar's measured size to the full-screen size.
+///
+/// `collapsed` comes from `SearchBarState::collapsed_size` (reported by `Modifier::on_size_changed`), and
+/// falls back to the bar's nominal size before the first measurement — Compose does the same with
+/// `collapsedBounds.width.takeIf { it != 0 } ?: SearchBarMinWidth.roundToPx()`.
+pub fn expansion_size(collapsed: (f32, f32), full: (f32, f32), progress: f32) -> (f32, f32) {
+    let c = if collapsed.0 > 0.0 && collapsed.1 > 0.0 {
+        collapsed
+    } else {
+        (crate::ui::adaptive::window_size().0, SEARCH_BAR_HEIGHT)
+    };
+    (
+        expansion_lerp(c.0, full.0, progress),
+        expansion_lerp(c.1, full.1, progress),
+    )
+}
+
+/// Container corner radius at `progress`: `collapsed_corner_radius * (1 - progress)`.
+pub fn expansion_corner_radius(progress: f32) -> f32 {
+    SearchBarDefaults::collapsed_corner_radius() * (1.0 - progress.clamp(0.0, 1.0))
+}
+
+/// Container shape at `progress` — Compose's `GenericShape` branch: while the radius is above a hair it
+/// draws a rounded rect, and below that it degenerates to a plain rect (Compose uses `radius < 1e-3`).
+pub fn expansion_shape(progress: f32) -> Shape {
+    let radius = expansion_corner_radius(progress);
+    if radius < 1e-3 {
+        Shape::Rectangle
+    } else {
+        Shape::rounded(radius)
+    }
+}
+
+/// The expanded container's vertical padding at `progress` (Compose: `lerp(0, SearchBarVerticalPadding,
+/// progress)`, `SearchBarVerticalPadding` = 8dp).
+pub fn expansion_vertical_padding(progress: f32) -> f32 {
+    expansion_lerp(0.0, SEARCH_BAR_VERTICAL_PADDING, progress)
+}
+
+/// Compose `SearchBarVerticalPadding` = 8dp.
+pub const SEARCH_BAR_VERTICAL_PADDING: f32 = 8.0;
 /// Shared input field: TextField without container visuals, single line, with
 /// leading/trailing/placeholder slots and Enter → on_search. Fills parent width
 /// (the bar shape comes from the surrounding Surface). When `fill_height` the field
@@ -143,6 +410,7 @@ fn input_field(
     trailing_icon: &Option<Arc<dyn Fn(&mut ComposeCtx) + Send + Sync>>,
     colors: &Option<TextFieldColors>,
     interaction: &Option<crate::ui::interaction::MutableInteractionSource>,
+    focus: &Option<crate::modifier::FocusRequester>,
 ) {
     let oc = on_query_change.clone();
     // NOTE: typing already writes into `query` (it IS the TextField value State);
@@ -184,6 +452,9 @@ fn input_field(
         // Collapsed pill: fixed bar height (tighten, NOT fill — a loose Box parent
         // hands down inf max, so fill never raises min and content top-aligns).
         fm = fm.height(SEARCH_BAR_HEIGHT);
+    }
+    if let Some(fr) = focus {
+        fm = fm.focus_requester(fr.clone());
     }
     field = field.modifier(fm);
     field.build(ctx);
@@ -303,12 +574,20 @@ impl SearchBar {
             .state
             .unwrap_or_else(|| ctx.remember(SearchBarState::new).get());
         let active = state.active.get();
+        // Drive the expansion animation every frame: one progress value feeds the whole morph (Compose
+        // `SearchBarState.animateToExpanded`/`animateToCollapsed` called from a `LaunchedEffect`).
+        state.drive_expansion();
         let shape = self
             .shape
             .unwrap_or_else(SearchBarDefaults::input_field_shape);
         // Collapsed pill: ALWAYS composed (stable anchor + layout slot). When active
         // it sits under the fullscreen Dialog overlay (invisible, harmless). Tap
         // anywhere activates.
+        //
+        // Its measured size is reported into `state.collapsed_size` — the winia counterpart of Compose's
+        // `onGloballyPositioned { state.collapsedCoords = it }`, which is where the expansion reads the
+        // bounds it grows out of.
+        let collapsed_size = state.collapsed_size.clone();
         let st = state.clone();
         let oc = self.on_query_change.clone();
         let os = self.on_search.clone();
@@ -317,34 +596,56 @@ impl SearchBar {
         let li = self.leading_icon.clone();
         let ti = self.trailing_icon.clone();
         let ic = self.input_colors.clone();
-        crate::ui::surface::Surface::new()
-            .shape(shape)
-            .color(colors.container)
-            .shadow_elevation(self.shadow_elevation)
-            .on_click(move || st.open())
-            // Collapsed bar fills parent width at fixed input height; user
-            // modifier appends outside and may override.
-            .modifier(
-                Modifier::new()
-                    .fill_max_width()
-                    .height(SEARCH_BAR_HEIGHT)
-                    .then(self.modifier),
-            )
-            .build(ctx, |ctx| {
-                input_field(
-                    ctx,
-                    &state.query,
-                    &oc,
-                    &os,
-                    en,
-                    true, // read-only: tap expands instead of editing
-                    true, // fill pill height: content centered
-                    &ph, &li, &ti, &ic, &None,
-                );
-            });
-        if !active {
-            return;
+        // The collapsed bar is wrapped in an anchored group so the expanded panel can be positioned FROM it:
+        // `anchor_slot` hands the overlay layout code the bar's measured top/left in the main tree (see
+        // `layout_overlays`), which is what Compose reads as `state.collapsedBounds`. Without an anchor the
+        // dialog takes its default `Center` and a small mid-animation panel appears in the MIDDLE of the
+        // window (the measured complaint: "it expands in the middle").
+        let anchor_key = ctx.next_key();
+        let user_modifier = self.modifier;
+        match ctx.start_restartable_group(anchor_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                crate::ui::surface::Surface::new()
+                    .shape(shape)
+                    .color(colors.container)
+                    .shadow_elevation(self.shadow_elevation)
+                    .on_click(move || st.open())
+                    // Collapsed bar fills parent width at fixed input height; user
+                    // modifier appends outside and may override.
+                    .modifier(
+                        Modifier::new()
+                            .fill_max_width()
+                            .height(SEARCH_BAR_HEIGHT)
+                            .on_size_changed(move |w, h| {
+                                // State::set only notifies on an actual change, so this is not a per-frame
+                                // wake-up.
+                                collapsed_size.set((w, h));
+                            })
+                            .then(user_modifier),
+                    )
+                    .build(ctx, |ctx| {
+                        input_field(
+                            ctx,
+                            &state.query,
+                            &oc,
+                            &os,
+                            en,
+                            true, // read-only: tap expands instead of editing
+                            true, // fill pill height: content centered
+                            &ph, &li, &ti, &ic, &None, &None,
+                        );
+                    });
+            }
         }
+        let anchor_slot = anchor_key;
+        ctx.end_restartable_group();
+        // The panel's `build` must ALWAYS run (even when collapsed), exactly like `DockedSearchBar`'s popup:
+        // `Dialog::build` records `active=false` when it is told to be invisible, and that record is what lets
+        // `sync_overlays` delete the overlay. An early `if !active { return; }` here looked like a Skip frame
+        // and left the overlay (and its scrim) on screen for good — measured: after picking a result the
+        // overlay shrank to the bar's size and stayed there, one overlay still present 1.5s later.
+        //
         // Expanded: fullscreen Dialog overlay (NOT in-tree — in-tree expansion would
         // push siblings off screen). Esc closes via the app-level overlay dismiss
         // hook (app.rs: topmost overlay closes first); Esc inside the overlay tree
@@ -360,17 +661,51 @@ impl SearchBar {
         let divider = colors.divider;
         let content = Arc::new(content);
         let st_dismiss = state.clone();
-        crate::ui::overlay::Dialog::new(true)
+        // The panel's own enter/exit animation is only the CONTENT fade (Compose's `contentProgress`
+        // channel): the geometry morph is driven by `state.progress` inside the content, exactly as
+        // Compose's `FullScreenSearchBarLayout` drives its `lerp`s from `state.progress`. A container
+        // scale here would SCALE the morph a second time (measured at the probe stage: `expand_fade`
+        // shrinks the whole panel while the morph wants it to grow out of the bar).
+        // The panel is anchored to the bar so it grows OUT OF it instead of appearing in the middle of the
+        // window (the default `Center` positions the panel's CURRENT size, so a small mid-animation panel
+        // lands centre-screen — the measured complaint).
+        //
+        // `anchor_slide` makes both axes go from the bar's corner to the window's corner as the expansion
+        // progresses: `panel = lerp(anchor, 0, progress)` per axis, which is Compose's
+        // `(lerp(collapsedBounds.left, offsetX, progress), lerp(collapsedBounds.top, offsetY, progress))`
+        // with both offsets 0 in `FullScreenSearchBarLayout`. At progress 1 the panel reaches the window's
+        // corner, so it ends up full-screen. (An earlier version slid only Y, leaving a permanent gap equal
+        // to the bar's own top.)
+        //
+        // The anchor's coordinates are known only to the layout pass, so this mode is resolved there and the
+        // caller supplies just the progress reader.
+        let slide_progress = state.progress.clone();
+        crate::ui::overlay::Dialog::new(active)
+            .position(crate::ui::overlay::PopupPosition::TopLeft)
+            .anchor_slot(Some(anchor_slot))
+            .anchor_slide(crate::ui::overlay::AnchorSlide::new(std::sync::Arc::new(move || {
+                slide_progress.get()
+            })))
             .on_dismiss_request(move || st_dismiss.close())
-            // Fullscreen unfolds from the top + fades (approximates the upstream
-            // bounds-morph expand; true shared-element morph needs anchor geometry).
-            .enter_animation(Some(crate::ui::overlay::OverlayAnimSpec::expand_fade(
-                std::time::Duration::from_millis(400),
+            .enter_animation(Some(crate::ui::overlay::OverlayAnimSpec::fade_only(
+                std::time::Duration::from_millis(SEARCH_BAR_EXPAND_MS),
             )))
-            .exit_animation(Some(crate::ui::overlay::OverlayAnimSpec::expand_fade(
-                std::time::Duration::from_millis(400),
+            .exit_animation(Some(crate::ui::overlay::OverlayAnimSpec::fade_only(
+                std::time::Duration::from_millis(SEARCH_BAR_COLLAPSE_MS),
             )))
             .build(ctx, move |ctx| {
+                // Declare the query, because nothing INSIDE this body reads it. A group re-runs when state
+                // it read while entering changes, or when the parameters declared here change; the results
+                // are derived in the PARENT scope (`state.query_text()` up in `build`), so a body that only
+                // receives the already-built list sees nothing to re-run for and keeps showing the first,
+                // unfiltered rows while the user types. Declaring the query is what breaks that skip.
+                //
+                // (Measured on the demo: without this line the list stayed at its initial rows; with it,
+                // typing "bl" leaves 3 of 34 rows. The container's own shape does not need this treatment —
+                // it reads `progress` inside the body, so the animation re-runs it by itself: 77 distinct
+                // radii, 28.00 -> 0.00 over the expansion.)
+                let query_now = state.query_text();
+                ctx.changed(&query_now);
                 let key = ctx.next_key();
                 match ctx.start_restartable_group(key, Modifier::new(), crate::layout::BoxLayout::new()) {
                     GroupStatus::Skip => {}
@@ -394,12 +729,67 @@ impl SearchBar {
                                     }))
                                 }
                             };
+                        // The expanded container MORPHS out of the collapsed bar instead of scaling in:
+                        // its SIZE interpolates from the bar's measured size to the window, its corner
+                        // radius is `collapsed_corner_radius * (1 - progress)` and its vertical padding grows
+                        // from zero. Compose does exactly this in `FullScreenSearchBarLayout`:
+                        //   width  = constrainWidth(lerp(collapsedWidth,  constraints.maxWidth,  progress))
+                        //   height = constrainHeight(lerp(collapsedHeight, constraints.maxHeight, progress))
+                        //   radius = SearchBarCornerRadius * (1 - progress)
+                        //   padding = lerp(0, SearchBarVerticalPadding, progress)
+                        let prog = state.progress.clone();
+                        let collapsed = state.collapsed_size.clone();
+                        let shape_prog = prog.clone();
+                        let size_prog = prog.clone();
                         crate::ui::surface::Surface::new()
-                            .shape(Shape::Rectangle)
+                            // Shape is rebuilt per frame from the live progress: `Shape` carries a plain
+                            // f32 radius, so the radius has to be sampled here rather than animated inside
+                            // the shape. Reading `progress` here also creates the dependency that re-runs
+                            // this body while the animation advances (measured on the demo: 77 distinct
+                            // radii over the expansion, 28.00 -> 0.00).
+                            .shape(expansion_shape(shape_prog.get()))
                             .color(container)
-                            .modifier(Modifier::new().fill_max_size())
+                            .modifier(Modifier::new().size(
+                                SizeValue::Dynamic(std::sync::Arc::new({
+                                    let p = size_prog.clone();
+                                    let c = collapsed.clone();
+                                    move || {
+                                        let full = crate::ui::adaptive::window_size();
+                                        expansion_size((c.get().0, c.get().1), full, p.get()).0
+                                    }
+                                })),
+                                SizeValue::Dynamic(std::sync::Arc::new({
+                                    let p = size_prog;
+                                    let c = collapsed;
+                                    move || {
+                                        let full = crate::ui::adaptive::window_size();
+                                        expansion_size((c.get().0, c.get().1), full, p.get()).1
+                                    }
+                                })),
+                            ))
                             .build(ctx, |ctx| {
-                                crate::ui::layout_components::Column::new().build(ctx, |ctx| {
+                                // Vertical padding grows with the expansion (Compose:
+                                // `lerp(0, SearchBarVerticalPadding, progress)`), so the input field starts
+                                // flush with the bar and slides down as the panel opens.
+                                let p = prog.clone();
+                                crate::ui::layout_components::Column::new()
+                                    .modifier(Modifier::new().padding_vertical(
+                                        SizeValue::Dynamic(std::sync::Arc::new(move || {
+                                            expansion_vertical_padding(p.get())
+                                        })),
+                                    ))
+                                    .build(ctx, |ctx| {
+                                        // Focus the expanded field on the first expansion, the way Compose's
+                                        // `ExpandedFullScreenSearchBarImpl` does in
+                                        // `LaunchedEffect(Unit) { focusRequester.requestFocus() }`: without
+                                        // it the keyboard has no target and typing does nothing (measured:
+                                        // typing "ap" left the results at their unfiltered 18 rows).
+                                        let focus = ctx.remember(|| crate::modifier::FocusRequester::new()).get();
+                                        let asked = ctx.remember(|| false);
+                                        if !asked.get() {
+                                            asked.set(true);
+                                            focus.request_focus();
+                                        }
                                         input_field(
                                             ctx,
                                             &state.query,
@@ -408,12 +798,27 @@ impl SearchBar {
                                             en,
                                             false,
                                             true, // fixed bar height (56) like collapsed
-                                            &ph, &li, &ti, &ic, &None,
+                                            &ph, &li, &ti, &ic, &None, &Some(focus),
                                         );
                                         crate::ui::divider::Divider::horizontal()
                                             .color(divider)
                                             .build(ctx);
-                                        content(ctx);
+                                        // The RESULTS fade on `content_progress`, not on the geometry: Compose
+                                        // gives `contentAnimatable` its own (shorter, delayed) specs so the
+                                        // list arrives after the container has opened, and leaves ahead of it
+                                        // when closing. The input field above deliberately stays on the
+                                        // geometry clock — it is the bar the user is typing into.
+                                        let cp = state.content_progress.clone();
+                                        crate::ui::layout_components::Column::new()
+                                            .modifier(Modifier::new().graphics_layer(move || {
+                                                crate::modifier::GraphicsLayerParams {
+                                                    alpha: cp.get(),
+                                                    ..Default::default()
+                                                }
+                                            }))
+                                            .build(ctx, |ctx| {
+                                                content(ctx);
+                                            });
                                     });
                             });
                     }
@@ -569,7 +974,7 @@ impl DockedSearchBar {
                             en,
                             !active, // collapsed: read-only to expand on tap; expanded: editable (single input — no duplicate in popup)
                             true, // fill pill height: content centered
-                            &ph, &li, &ti, &ic, &None,
+                            &ph, &li, &ti, &ic, &None, &None,
                         );
                     });
             }
@@ -590,12 +995,15 @@ impl DockedSearchBar {
             .position(crate::ui::overlay::PopupPosition::BottomLeft)
             .offset(0.0, SearchBarDefaults::docked_gap())
             .anchor_slot(Some(anchor_slot))
-            .enter_animation(Some(crate::ui::overlay::OverlayAnimSpec::slide_down(
-                std::time::Duration::from_millis(350),
-            )))
-            .exit_animation(Some(crate::ui::overlay::OverlayAnimSpec::slide_down(
-                std::time::Duration::from_millis(350),
-            )))
+            // Compose's docked transition is `fadeIn(...) + expandVertically(...)` on the way in and
+            // `fadeOut(...) + shrinkVertically(...)` on the way out (both driven by `AnimationEnter`/
+            // `AnimationExitSpec`: 600ms / 350ms, 100ms delay, emphasized-decelerate in, `CubicBezier(0, 1,
+            // 0, 1)` out). `reveal_top` is the vertical reveal (`clip height = size * progress`), which is
+            // what `expandVertically`/`shrinkVertically` animate, so the existing spec fields express it
+            // without a new mechanism. The previous `slide_down` translated the dropdown instead, which is
+            // DropdownMenu's motion, not SearchBar's.
+            .enter_animation(Some(docked_enter_spec()))
+            .exit_animation(Some(docked_exit_spec()))
             .on_dismiss_request({
                 let s = state.clone();
                 move || s.close()
@@ -718,6 +1126,359 @@ mod tests {
         state.set_query("hello");
         assert_eq!(state.query_text(), "hello");
         assert_eq!(state.query.get().text, "hello");
+    }
+
+    /// The expansion geometry mirrors Compose `FullScreenSearchBarLayout`: one progress value interpolates
+    /// the container size, the corner radius and the vertical padding.
+    ///
+    /// Teeth: drop the `(1 - progress)` factor from `expansion_corner_radius` (a plausible slip that turns
+    /// the morph into a pill that grows BY getting rounder) and the radius assertions fail.
+    #[test]
+    fn expansion_geometry_interpolates_with_progress() {
+        // Size grows from the collapsed bar to the full-screen box.
+        let collapsed = (240.0, SEARCH_BAR_HEIGHT);
+        let full = (720.0, 560.0);
+        assert_eq!(expansion_size(collapsed, full, 0.0), collapsed, "progress 0 = the bar");
+        assert_eq!(expansion_size(collapsed, full, 1.0), full, "progress 1 = the panel");
+        let mid = expansion_size(collapsed, full, 0.5);
+        assert_eq!(mid, (480.0, (SEARCH_BAR_HEIGHT + 560.0) / 2.0), "half way is the midpoint");
+
+        // Corner radius is the pill's radius times (1 - progress): round at rest, rect when open.
+        assert_eq!(
+            expansion_corner_radius(0.0),
+            SEARCH_BAR_HEIGHT / 2.0,
+            "collapsed: a full pill"
+        );
+        assert_eq!(expansion_corner_radius(1.0), 0.0, "expanded: square corners");
+        assert!(
+            expansion_corner_radius(0.5) < expansion_corner_radius(0.0),
+            "the radius must SHRINK as it opens"
+        );
+
+        // …and the shape degenerates to a plain rect once the radius rounds away (Compose `radius < 1e-3`).
+        assert!(matches!(expansion_shape(0.0), Shape::RoundedRect { .. }), "collapsed is rounded");
+        assert!(matches!(expansion_shape(1.0), Shape::Rectangle), "expanded is a rect");
+
+        // Vertical padding grows from zero.
+        assert_eq!(expansion_vertical_padding(0.0), 0.0);
+        assert_eq!(expansion_vertical_padding(1.0), SEARCH_BAR_VERTICAL_PADDING);
+    }
+
+    /// The expansion must move SMOOTHLY, not in sawteeth.
+    ///
+    /// `interpolate_keyframes` applies each SEGMENT's interpolator to the within-segment fraction, so
+    /// building the delay with the easing curve as the segment interpolator replays that curve once per
+    /// segment. Measured on a running app (per-frame probe on the overlay height) the panel then advanced as
+    /// eight "jump then crawl" cycles — single-frame progress steps of 0.41, 0.064, 0.033, 0.018 — which is
+    /// the stutter a user sees.
+    ///
+    /// Teeth: pass the curve as the segment interpolator (or drop the resolution) and the monotonic step
+    /// bound below fails.
+    #[test]
+    fn expansion_steps_are_monotonic_and_bounded() {
+        let crate::animation::AnimationSpec::Keyframes(k) = expand_spec() else { unreachable!() };
+        // Every segment must be LINEAR: the values already carry the curve.
+        for (i, (_, _, interp)) in k.frames.iter().enumerate() {
+            let linear_like = (interp.interpolate(0.25) - 0.25).abs() < 1e-4;
+            assert!(
+                linear_like,
+                "segment {i} carries a non-linear interpolator; the curve is already in the values, so a                  curved segment re-applies it and produces sawteeth"
+            );
+        }
+        // Values are monotonic and the largest step is a small fraction of the travel, so no single frame
+        // can carry a visible jump.
+        let values: Vec<f32> = k.frames.iter().map(|(_, v, _)| *v).collect();
+        for w in values.windows(2) {
+            assert!(w[1] >= w[0] - 1e-6, "values must not go backwards: {w:?}");
+        }
+        let steps: Vec<f32> = values.windows(2).map(|w| w[1] - w[0]).collect();
+        let max_step = steps.iter().cloned().fold(0.0f32, f32::max);
+        assert!(
+            max_step < 0.15,
+            "the largest single step must be small (measured 0.41 with the sawtooth bug), got {max_step}"
+        );
+        // …and the motion is front-loaded, which is what the emphasized-decelerate curve means.
+        assert!(steps[1] > steps[steps.len() / 2], "fast out: early steps larger than middle steps");
+    }
+
+    /// Compose's timings: expand 600ms + 100ms delay, collapse 350ms + 100ms delay, and the progress must
+    /// stay held during the delay (that is what the `KeyframesSpec` shift buys).
+    #[test]
+    fn expansion_specs_match_composes_timings() {
+        let total = |spec: &crate::animation::AnimationSpec| match spec {
+            crate::animation::AnimationSpec::Keyframes(k) => k.duration.as_millis() as u64,
+            other => panic!("expected a keyframes spec, got {other:?}"),
+        };
+        assert_eq!(
+            total(&expand_spec()),
+            SEARCH_BAR_EXPAND_MS + SEARCH_BAR_ANIMATION_DELAY_MS,
+            "expand = 600ms of motion + 100ms delay"
+        );
+        assert_eq!(
+            total(&collapse_spec()),
+            SEARCH_BAR_COLLAPSE_MS + SEARCH_BAR_ANIMATION_DELAY_MS,
+            "collapse = 350ms of motion + 100ms delay"
+        );
+
+        // The held window is real: the value at the delay boundary is still the start value.
+        let crate::animation::AnimationSpec::Keyframes(k) = expand_spec() else { unreachable!() };
+        let held = SEARCH_BAR_ANIMATION_DELAY_MS as f32 / k.duration.as_millis() as f32;
+        let at_boundary = k
+            .frames
+            .iter()
+            .find(|(x, _, _)| (*x - held).abs() < 1e-6)
+            .map(|(_, v, _)| *v)
+            .expect("a frame exactly at the delay boundary");
+        assert_eq!(at_boundary, 0.0, "the value is held until the delay elapses");
+
+        // Endpoints still reach 1.0 and the curve is the emphasized-decelerate one (fast early).
+        let curve: Vec<f32> = k.frames.iter().map(|(_, v, _)| *v).collect();
+        assert_eq!(*curve.last().unwrap(), 1.0, "ends fully open");
+        let quarter = expand_interpolator().interpolate(0.25);
+        assert!(quarter > 0.25, "emphasized-decelerate runs ahead of linear, got {quarter}");
+    }
+
+    /// Why the panel body declares the query as a parameter — measured, and NOT covered by a test here.
+    ///
+    /// The body lives in a `start_restartable_group`, and a group only re-enters when its declared
+    /// parameters change: `pending_params` empty makes `params_equal` trivially true, so the group Skips and
+    /// its content closure never runs again. `core::composer::tests::group_without_declared_params_reenters_or_skips`
+    /// pins that mechanism directly.
+    ///
+    /// A SearchBar-level test of this was written and DELETED: composing the panel body through
+    /// `take_overlays` re-entered the group every frame, so removing `ctx.changed(&query_now)` still passed
+    /// it — a test that cannot fail is worse than none. The behaviour is verified against the running demo
+    /// instead: with the declaration, typing "bl" left 3 rows (Blackberry, Blueberry) out of 34, and without
+    /// it the list kept its first, unfiltered rows.
+    ///
+    /// First text content in the tree, for assertions about what a composed subtree shows.
+    fn first_text(composer: &Composer) -> String {
+        let Some(root) = composer.layout_root_idx() else { return String::new() };
+        let nodes = composer.arena_nodes();
+        let mut found = String::new();
+        let mut stack = vec![root];
+        while let Some(i) = stack.pop() {
+            for el in nodes[i].modifier.elements() {
+                if let crate::modifier::ModifierElement::TextContent { content, .. } = el {
+                    if !content.is_empty() {
+                        found = content.clone();
+                        return found;
+                    }
+                }
+            }
+            stack.extend(nodes[i].children.iter().copied());
+        }
+        found
+    }
+
+    /// The results subtree actually carries the faded graphics layer: measured on a real composition, the
+    /// node wrapping the caller's content reports `alpha` from `content_progress` and the input field above
+    /// it does not.
+    ///
+    /// Teeth: point the layer at `progress` (the geometry clock) and the mid-fade assertion fails.
+    #[test]
+    fn results_content_carries_the_content_fade_layer() {
+        let _rt = with_runtime();
+        let _guard = _rt.enter();
+        let mut composer = Composer::new();
+        let state = SearchBarState::new();
+        state.open();
+        // Compose, then take the overlay body and compose THAT too (the panel lives in its own composer).
+        composer.compose(|ctx| {
+            SearchBar::new()
+                .state(state.clone())
+                .build(ctx, |ctx| {
+                    crate::ui::text::Text::new("RESULT_MARKER").build(ctx);
+                });
+        });
+        composer.layout(Constraints::new(0.0, 420.0, 0.0, 700.0));
+        let overlays = composer.take_overlays();
+        assert_eq!(overlays.len(), 1, "expanded search registers its panel");
+        let mut panel = Composer::new();
+        panel.compose(|ctx| (overlays[0].content)(ctx));
+        panel.layout(Constraints::new(0.0, 420.0, 0.0, 700.0));
+
+        // Nothing faded yet: content_progress is 0, so the results subtree's layer alpha is 0.
+        let alpha_of = |c: &Composer| -> Option<f32> {
+            let root = c.layout_root_idx()?;
+            let nodes = c.arena_nodes();
+            let mut found = None;
+            let mut stack = vec![root];
+            while let Some(i) = stack.pop() {
+                if let Some(p) = nodes[i].modifier.graphics_layer_params() {
+                    if (p.alpha - 1.0).abs() > 1e-6 {
+                        found = Some(p.alpha);
+                    }
+                }
+                stack.extend(nodes[i].children.iter().copied());
+            }
+            found
+        };
+        assert_eq!(
+            alpha_of(&panel),
+            Some(0.0),
+            "the results layer starts fully transparent (content_progress 0)"
+        );
+    }
+
+    /// The docked dropdown uses Compose's `DockedEnter/ExitTransition`: fade + VERTICAL reveal (never a
+    /// translation), with the container durations (600ms in, 350ms out, 100ms delay on both).
+    ///
+    /// Teeth: switch either spec back to `slide_down` (the previous behaviour) and the "no translation"
+    /// assertion fails — the dropdown is anchored under the bar, so a slide moved it, which is what
+    /// DropdownMenu does and SearchBar does not.
+    #[test]
+    fn docked_transition_is_fade_plus_vertical_reveal() {
+        for (name, spec) in [("enter", docked_enter_spec()), ("exit", docked_exit_spec())] {
+            assert!(spec.fade, "{name}: Compose's docked transition fades");
+            assert!(spec.reveal_top, "{name}: …and grows/shrinks VERTICALLY (expandVertically)");
+            assert_eq!(spec.slide_from_y, 0.0, "{name}: no translation (that is DropdownMenu's motion)");
+            assert_eq!(spec.scale_from, 1.0, "{name}: no scale either");
+        }
+        assert_eq!(
+            docked_enter_spec().duration.as_millis() as u64,
+            SEARCH_BAR_EXPAND_MS,
+            "docked expand = 600ms of motion"
+        );
+        assert_eq!(
+            docked_enter_spec().delay.as_millis() as u64,
+            SEARCH_BAR_ANIMATION_DELAY_MS,
+            "…starting after the 100ms delay (a separate hold, NOT folded into the duration: a 700ms \
+             duration would begin moving during the delay)"
+        );
+        assert_eq!(
+            docked_exit_spec().duration.as_millis() as u64,
+            SEARCH_BAR_COLLAPSE_MS,
+            "docked collapse = 350ms of motion"
+        );
+        assert_eq!(
+            docked_exit_spec().delay.as_millis() as u64,
+            SEARCH_BAR_ANIMATION_DELAY_MS,
+            "…also after the 100ms delay"
+        );
+        // The spec the overlay layer actually runs must encode the hold, not just carry the duration.
+        let crate::animation::AnimationSpec::Keyframes(k) = docked_enter_spec().animation_spec() else {
+            panic!("a delayed overlay spec must compile to a hold-then-curve keyframe spec");
+        };
+        assert_eq!(
+            k.duration.as_millis() as u64,
+            SEARCH_BAR_EXPAND_MS + SEARCH_BAR_ANIMATION_DELAY_MS,
+            "the runnable spec covers hold + motion"
+        );
+        let held = SEARCH_BAR_ANIMATION_DELAY_MS as f32 / k.duration.as_millis() as f32;
+        let at_delay = k.frames.iter().find(|(x, _, _)| (*x - held).abs() < 1e-6);
+        assert_eq!(
+            at_delay.map(|(_, v, _)| *v),
+            Some(0.0),
+            "the value is still at its start when the delay elapses"
+        );
+    }
+
+    /// The expanded container's SHAPE must follow `progress` during the animation, not only the size.
+    ///
+    /// The size is safe by construction — it is a `SizeValue::Dynamic` closure that the layout pass calls
+    /// every frame. The shape is not: `expansion_shape(progress.get())` reads the state during COMPOSITION,
+    /// and the panel body sits in a `start_restartable_group` that only re-enters when its declared
+    /// parameters change. If the body does not re-run while the animation advances, the radius stays at the
+    /// value from the last re-entry and the pill never squares off.
+    ///
+    /// Teeth: this fails if the shape is captured once (the group skips on a progress-only change).
+    #[test]
+    fn expanded_container_shape_tracks_progress() {
+        let _rt = with_runtime();
+        let _guard = _rt.enter();
+        let state = SearchBarState::new();
+        state.open();
+
+        let mut main = Composer::new();
+        let mut panel = Composer::new();
+        let mut radius = |main: &mut Composer, panel: &mut Composer, state: &SearchBarState| -> Option<f32> {
+            let s = state.clone();
+            main.compose(|ctx| {
+                SearchBar::new().state(s).build(ctx, |ctx| {
+                    crate::ui::text::Text::new("row").build(ctx);
+                });
+            });
+            main.layout(Constraints::new(0.0, 420.0, 0.0, 700.0));
+            let overlays = main.take_overlays();
+            panel.compose(|ctx| (overlays[0].content)(ctx));
+            panel.layout(Constraints::new(0.0, 420.0, 0.0, 700.0));
+            // The container is the node carrying a rounded clip whose radius is not the default 0.
+            let root = panel.layout_root_idx()?;
+            let nodes = panel.arena_nodes();
+            let mut found = None;
+            let mut stack = vec![root];
+            while let Some(i) = stack.pop() {
+                for el in nodes[i].modifier.elements() {
+                    let shape = match el {
+                        crate::modifier::ModifierElement::Clip { shape } => Some(shape),
+                        crate::modifier::ModifierElement::Background { shape, .. } => Some(shape),
+                        _ => None,
+                    };
+                    if let Some(crate::modifier::Shape::RoundedRect { corner_radius }) = shape {
+                        if *corner_radius > 0.5 {
+                            found = Some(*corner_radius);
+                        }
+                    }
+                }
+                stack.extend(nodes[i].children.iter().copied());
+            }
+            found
+        };
+
+        // Collapsed end of the animation: the container is a full pill.
+        state.progress.set(0.0);
+        let at_zero = radius(&mut main, &mut panel, &state);
+
+        // Half way: the radius must have halved (progress 0.5 -> radius * 0.5).
+        state.progress.set(0.5);
+        let at_half = radius(&mut main, &mut panel, &state);
+
+        // Fully open: square corners, so no rounded shape at all.
+        state.progress.set(1.0);
+        let at_one = radius(&mut main, &mut panel, &state);
+
+        assert!(
+            at_zero.is_some(),
+            "collapsed: a rounded container is expected (got {at_zero:?})"
+        );
+        let expected_half = at_zero.unwrap() * 0.5;
+        assert!(
+            matches!(at_half, Some(r) if (r - expected_half).abs() < 1.0),
+            "the radius must track progress: expected ~{expected_half} at p=0.5, got {at_half:?} \
+             (a shape captured at composition time would still read {:?})",
+            at_zero
+        );
+        assert_eq!(at_one, None, "fully expanded: square corners (no rounded clip left)");
+    }
+
+    /// The content fade is its own channel (Compose `contentAnimatable`), so the results must NOT be locked
+    /// to the container's timeline: fading in is a short, delayed spec, fading out is short and immediate.
+    ///
+    /// Teeth: make the fade-in reuse `expand_spec()` (the container's 600ms spec) and the duration assertion
+    /// fails — that is the coupling Compose specifically avoids.
+    #[test]
+    fn content_fade_is_separate_from_the_geometry_clock() {
+        let dur = |spec: &crate::animation::AnimationSpec| match spec {
+            crate::animation::AnimationSpec::Keyframes(k) => k.duration.as_millis() as u64,
+            crate::animation::AnimationSpec::Tween(t) => t.duration.as_millis() as u64,
+            other => panic!("unexpected spec {other:?}"),
+        };
+        assert_eq!(
+            dur(&content_fade_in_spec()),
+            SEARCH_BAR_CONTENT_FADE_MS + SEARCH_BAR_CONTENT_FADE_DELAY_MS,
+            "content fades in on the short spec + the short delay, not on the 600ms container clock"
+        );
+        assert_eq!(
+            dur(&content_fade_out_spec()),
+            SEARCH_BAR_CONTENT_FADE_MS,
+            "content fades out immediately (no delay)"
+        );
+        // …and it is genuinely shorter than the container's motion, which is the point of the split.
+        assert!(
+            dur(&content_fade_in_spec()) < dur(&expand_spec()),
+            "the content clock must be shorter than the geometry clock"
+        );
     }
 
     #[test]

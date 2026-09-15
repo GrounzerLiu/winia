@@ -788,6 +788,13 @@ pub(crate) enum ModifierElement {
         /// at flight resolve — flipping it mid-flight must not move the
         /// element between passes.
         render_in_overlay: bool,
+        /// Which SCENE this end belongs to, when it is composed inside a scene host that publishes
+        /// one (winia's nav: each transition layer provides its scene id, see
+        /// `ui::shared_transition::provide_nav_scene`). `None` outside such a host. The flight
+        /// system uses it to pair ends that are BOTH alive — during a nav transition the outgoing
+        /// and incoming scenes both carry the same shared key, and without a scene the winner is
+        /// whichever the tree walk happened to visit last, which reads as a new switch every frame.
+        scene: Option<u64>,
     },
     /// Elevate a **non-shared** subtree into the layer for the duration of a
     /// transition (Compose `Modifier.renderInSharedTransitionScopeOverlay`):
@@ -798,6 +805,15 @@ pub(crate) enum ModifierElement {
     SharedScopeOverlay {
         scope_id: u64,
         z_index: f32,
+    },
+    /// Marks the subtree a scene host composed for ONE scene (winia's nav layers): `id` is that
+    /// scene's stable id. Scene membership is read from ANCESTRY when it is needed instead of being
+    /// stored on each shared marker, because a marker's modifier element is built once and then reused
+    /// across frames, so a scene id captured there freezes its first value (measured: one end reported
+    /// `scene=None` while the other reported the LEAVING scene, so a nav flight paired the leaving hero
+    /// with itself and never grew geometrically).
+    SceneTag {
+        id: u64,
     },
 }
 
@@ -2385,7 +2401,7 @@ Self::DrawIcon { .. } => f.write_str("DrawIcon"),
             Self::BackdropBlur { radius } => f.debug_struct("BackdropBlur").field("radius", radius).finish(),
             Self::TextFieldVisual { variant, .. } => f.debug_struct("TextFieldVisual").field("variant", variant).finish(),
             Self::TextFieldOffsetMapping { .. } => f.write_str("TextFieldOffsetMapping"),
-            Self::SharedTransition { scope_id, key, kind, transform, path, z_index, enter, exit, render_in_overlay } => f
+            Self::SharedTransition { scope_id, key, kind, transform, path, z_index, enter, exit, render_in_overlay, scene: _ } => f
                 .debug_struct("SharedTransition")
                 .field("scope", scope_id)
                 .field("key", key)
@@ -2402,6 +2418,7 @@ Self::DrawIcon { .. } => f.write_str("DrawIcon"),
                 .field("scope", scope_id)
                 .field("z_index", z_index)
                 .finish(),
+            Self::SceneTag { id } => f.debug_struct("SceneTag").field("id", id).finish(),
         }
     }
 }
@@ -3163,6 +3180,15 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (VerticalScroll { state: as_ }, VerticalScroll { state: bs }) => as_.offset.state_id() == bs.offset.state_id(),
         (HorizontalScroll { state: as_, reverse: ar }, HorizontalScroll { state: bs, reverse: br }) => as_.offset.state_id() == bs.offset.state_id() && ar == br,
         (NestedScroll { .. }, NestedScroll { .. }) => true,
+        // Scene tag: an equal id means the tag did not change. Without this arm the match falls through
+        // to `_ => false`, so any modifier chain carrying a `SceneTag` could NEVER Skip — measured
+        // consequence: the nav's transition-layer wrapper (which carries one) re-composed and re-measured
+        // both scenes' whole content on every visit instead of restoring the cached subtree.
+        //
+        // A scene host must therefore put everything its wrapper's content closes over into that
+        // wrapper's identity (the nav keys each layer by scene key + role + whether a transition is
+        // running): a Skip reuses the previous frame's closures, and the tag alone cannot see them.
+        (SceneTag { id: a }, SceneTag { id: b }) => a == b,
         // 图形层动态参数视为相同（渲染期求值——动画不触发 Enter）
         (GraphicsLayer { .. }, GraphicsLayer { .. }) => true,
         _ => false,

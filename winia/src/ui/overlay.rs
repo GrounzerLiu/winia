@@ -14,7 +14,37 @@
 use std::sync::Arc;
 use crate::composable;
 
-/// Popup position (mirrors Compose `PopupPosition` — relative to anchor / window).
+/// Where a panel anchored to a node starts, and how it gets to its final place.
+///
+/// Compose's `FullScreenSearchBarLayout` places its container at
+/// `(lerp(collapsedBounds.left, offsetX, progress), lerp(collapsedBounds.top, offsetY, progress))`: the panel
+/// grows out of the anchor's corner and ends at the window's corner. Both axes move together, so this is one
+/// value rather than a flag per axis.
+///
+/// The anchor's coordinates are known only to the layout pass, so the caller supplies the progress reader
+/// and the layout pass does the interpolation.
+///
+/// The two endpoints are resolved by [`anchor_slide_origin`].
+#[derive(Clone)]
+pub struct AnchorSlide(pub std::sync::Arc<dyn Fn() -> f32 + Send + Sync>);
+
+impl AnchorSlide {
+    /// Create from a progress source (0 = at the anchor, 1 = at the window corner).
+    pub fn new(progress: std::sync::Arc<dyn Fn() -> f32 + Send + Sync>) -> Self {
+        Self(progress)
+    }
+
+    /// Progress, clamped to the animatable range.
+    pub fn progress(&self) -> f32 {
+        (self.0)().clamp(0.0, 1.0)
+    }
+}
+
+/// Interpolate from the anchor's corner to the window's corner for one axis — Compose's
+/// `lerp(collapsedBounds.<axis>, 0, progress)`.
+pub fn anchor_slide_lerp(anchor_axis: f32, progress: f32) -> f32 {
+    anchor_axis * (1.0 - progress.clamp(0.0, 1.0))
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PopupPosition {
     TopLeft,
@@ -52,11 +82,47 @@ pub struct OverlayAnimSpec {
     pub(crate) fade: bool,
     pub(crate) slide_from_y: f32,
     pub(crate) reveal_top: bool,
+    /// Duration of the ANIMATED part (not counting `delay`).
     pub(crate) duration: std::time::Duration,
+    /// How long the overlay holds its start value before the animation begins (Compose's `delayMillis`).
+    ///
+    /// A plain `TweenSpec` has no delay, so this is honoured by folding the hold into the spec the overlay
+    /// layer runs (see `OverlayAnimSpec::animation_spec`) instead of being added to `duration` by callers —
+    /// adding it to the duration makes the overlay START MOVING during the delay, which is not what Compose
+    /// means by `delayMillis`.
+    pub(crate) delay: std::time::Duration,
     pub(crate) interpolator: std::sync::Arc<dyn crate::animation::interpolator::Interpolator>,
 }
 
 impl OverlayAnimSpec {
+    /// The spec the overlay layer runs for this animation, with `delay` expressed as a hold followed by the
+    /// real curve — the same construction the SearchBar panel uses (`delayed_tween`).
+    pub(crate) fn animation_spec(&self) -> crate::animation::AnimationSpec {
+        let delay_ms = self.delay.as_millis() as u64;
+        if delay_ms == 0 {
+            return crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
+                self.duration,
+                self.interpolator.clone(),
+            ));
+        }
+        let duration_ms = self.duration.as_millis() as u64;
+        let total = (duration_ms + delay_ms) as f32;
+        let held = delay_ms as f32 / total;
+        // Dense sampling with LINEAR segments: a curved segment interpolator replays the curve once per
+        // segment (the sawtooth measured on the SearchBar expansion).
+        let steps = 96usize;
+        let mut frames: Vec<(f32, f32)> = Vec::with_capacity(steps + 2);
+        frames.push((0.0, 0.0));
+        frames.push((held, 0.0));
+        for i in 1..=steps {
+            let t = i as f32 / steps as f32;
+            frames.push((held + (1.0 - held) * t, self.interpolator.interpolate(t)));
+        }
+        crate::animation::AnimationSpec::Keyframes(crate::animation::KeyframesSpec::new(
+            std::time::Duration::from_millis(duration_ms + delay_ms),
+            frames,
+        ))
+    }
     /// Default enter animation (scale 0.8 -> 1 + fade, 200ms EaseOutCubic — the
     /// classic material2 Dialog open effect).
     pub fn default_enter() -> Self {
@@ -66,6 +132,7 @@ impl OverlayAnimSpec {
             slide_from_y: 0.0,
             reveal_top: false,
             duration: std::time::Duration::from_millis(200),
+            delay: std::time::Duration::ZERO,
             interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()),
         }
     }
@@ -79,24 +146,33 @@ impl OverlayAnimSpec {
             slide_from_y: 0.0,
             reveal_top: false,
             duration: std::time::Duration::from_millis(200),
+            delay: std::time::Duration::ZERO,
             interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseInCubic::new()),
         }
     }
 
     /// Scale only (no fade).
     pub fn scale_only(from: f32, duration: std::time::Duration) -> Self {
-        Self { scale_from: from, fade: false, slide_from_y: 0.0, reveal_top: false, duration, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
+        Self { scale_from: from, fade: false, slide_from_y: 0.0, reveal_top: false, duration, delay: std::time::Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
     }
 
     /// Fade only.
     pub fn fade_only(duration: std::time::Duration) -> Self {
-        Self { scale_from: 1.0, fade: true, slide_from_y: 0.0, reveal_top: false, duration, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
+        Self { scale_from: 1.0, fade: true, slide_from_y: 0.0, reveal_top: false, duration, delay: std::time::Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
     }
 
     /// Dropdown slide + fade (slide_in y=-height/2 with fade — mirrors docked
     /// dropdown `slideIn(-height/2) + fadeIn`).
     pub fn slide_down(duration: std::time::Duration) -> Self {
-        Self { scale_from: 1.0, fade: true, slide_from_y: -0.5, reveal_top: false, duration, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
+        Self { scale_from: 1.0, fade: true, slide_from_y: -0.5, reveal_top: false, duration, delay: std::time::Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
+    }
+
+    /// Hold the start value for `delay` before the animation runs (Compose's `delayMillis`). See the field
+    /// doc: the overlay layer turns this into a hold-then-curve spec, so it must NOT be folded into
+    /// `duration` by the caller.
+    pub fn delay(mut self, d: std::time::Duration) -> Self {
+        self.delay = d;
+        self
     }
 
     /// Custom easing curve.
@@ -140,7 +216,7 @@ impl OverlayAnimSpec {
     /// expand — true shared-element morph needs anchor geometry; 300-400ms
     /// with EaseOutCubic lands crisply).
     pub fn expand_fade(duration: std::time::Duration) -> Self {
-        Self { scale_from: 1.0, fade: true, slide_from_y: 0.0, reveal_top: true, duration, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
+        Self { scale_from: 1.0, fade: true, slide_from_y: 0.0, reveal_top: true, duration, delay: std::time::Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
     }
 
     /// Animation progress (0..=1) -> (scale, alpha, dy, reveal) — called per
@@ -183,6 +259,11 @@ pub struct OverlayDesc {
     pub(crate) position: PopupPosition,
     /// Offset after positioning (logical pixels).
     pub(crate) offset: (f32, f32),
+    /// Grow the panel out of its anchor: both axes run `lerp(anchor.<axis>, 0, progress)`, so the panel
+    /// starts at the anchor's corner and ends at the window's (see [`AnchorSlide`]). The anchor's
+    /// coordinates are known only to the layout pass, so the interpolation happens there and the caller
+    /// supplies just the progress reader (read per frame with no recomposition cost).
+    pub(crate) anchor_slide: Option<AnchorSlide>,
     /// Modal (Dialog): draws a scrim and captures outside clicks for dismiss.
     pub(crate) modal: bool,
     /// Whether an outside click triggers `on_dismiss_request` (non-modal Popup
@@ -325,6 +406,7 @@ impl Popup {
             anchor_slot: anchor,
             position: self.position,
             offset: self.offset,
+            anchor_slide: None,
             modal: false,
             dismiss_on_outside: true,
             click_passthrough: false,
@@ -349,6 +431,15 @@ pub struct Dialog {
     dismiss_on_outside: bool,
     enter_anim: Option<OverlayAnimSpec>,
     exit_anim: Option<OverlayAnimSpec>,
+    /// Where the panel sits (`Center` by default — the classic modal Dialog). A component growing out of an
+    /// anchor passes `TopLeft` + `offset`, because `Center` positions the overlay's CURRENT size and would
+    /// put a small mid-animation panel in the middle of the window.
+    position: PopupPosition,
+    offset: (f32, f32),
+    /// Optional main-tree anchor node (see [`Self::anchor_slot`]).
+    anchor_slot: Option<u64>,
+    /// See [`OverlayDesc::anchor_slide`].
+    anchor_slide: Option<AnchorSlide>,
 }
 
 impl Dialog {
@@ -363,8 +454,40 @@ impl Dialog {
             // Default enter/exit (scale 0.8 -> 1 + fade — classic material2 Dialog;
             // exit plays in reverse).
             enter_anim: Some(OverlayAnimSpec::default_enter()),
-            exit_anim: Some(OverlayAnimSpec::default_exit()),
+            exit_anim: Some(OverlayAnimSpec::default_exit()),            position: PopupPosition::Center,
+            offset: (0.0, 0.0),
+            anchor_slot: None,
+            anchor_slide: None,
         }
+    }
+
+    /// Where the panel sits (default `Center`, the classic modal Dialog). A component that grows out of an
+    /// anchor passes `TopLeft` plus [`Self::offset`] so the panel starts AT the anchor instead of the middle
+    /// of the window — `Center` positions the overlay's own current size, so a small panel mid-animation
+    /// lands in the middle of the screen.
+    pub fn position(mut self, p: PopupPosition) -> Self {
+        self.position = p;
+        self
+    }
+
+    /// Pixel offset applied after [`Self::position`].
+    pub fn offset(mut self, x: f32, y: f32) -> Self {
+        self.offset = (x, y);
+        self
+    }
+
+    /// Anchor the panel to a node of the MAIN tree (its measured position and size), like `Popup` does.
+    /// Together with `position(TopLeft)` this is how a panel starts AT a bar instead of at the window's
+    /// corner.
+    pub fn anchor_slot(mut self, slot: Option<u64>) -> Self {
+        self.anchor_slot = slot;
+        self
+    }
+    /// Grow the panel out of its anchor: both axes run `lerp(anchor.<axis>, 0, progress)` as `progress`
+    /// goes 0 -> 1, so the panel starts at the anchor's corner and ends at the window's (see [`AnchorSlide`]).
+    pub fn anchor_slide(mut self, slide: AnchorSlide) -> Self {
+        self.anchor_slide = Some(slide);
+        self
     }
 
     pub fn on_dismiss_request(mut self, cb: impl Fn() + Send + Sync + 'static) -> Self {
@@ -413,9 +536,10 @@ impl Dialog {
         }
         ctx.open_overlay(crate::ui::overlay::OverlayDesc {
             id: id.get(),
-            anchor_slot: None,
-            position: PopupPosition::Center,
-            offset: (0.0, 0.0),
+            anchor_slot: self.anchor_slot,
+            position: self.position,
+            offset: self.offset,
+            anchor_slide: self.anchor_slide,
             modal: true,
             dismiss_on_outside: self.dismiss_on_outside,
             click_passthrough: false,
@@ -496,6 +620,7 @@ impl DropdownMenu {
                 anchor_slot: Some(anchor_slot),
                 position: PopupPosition::BottomLeft,
                 offset: (0.0, 4.0),
+                anchor_slide: None,
                 modal: false,
                 dismiss_on_outside: true,
                 click_passthrough: false,
@@ -570,5 +695,49 @@ impl DropdownMenuItem {
                     })
                     .build(ctx);
             });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A panel that grows out of an anchor runs `lerp(anchor, 0, progress)` on BOTH axes, so it starts at the
+    /// anchor's corner and reaches the window's corner exactly when the animation finishes.
+    ///
+    /// Teeth: dropping the second axis (the first version slid only Y) or using the wrong endpoint fails the
+    /// assertions below — the earlier Y-only version left a permanent gap equal to the anchor's own top.
+    #[test]
+    fn anchor_slide_interpolates_both_axes_from_the_anchor_to_the_window_corner() {
+        // An anchor 240 wide at x=40, and 56 tall at y=69 (the demo's bar).
+        let (ax, ay) = (40.0f32, 69.0f32);
+
+        // progress 0: exactly at the anchor.
+        assert_eq!(anchor_slide_lerp(ax, 0.0), ax, "starts at the anchor's x");
+        assert_eq!(anchor_slide_lerp(ay, 0.0), ay, "starts at the anchor's y");
+
+        // progress 1: at the window corner, on BOTH axes.
+        assert_eq!(anchor_slide_lerp(ax, 1.0), 0.0, "ends at the window's left edge");
+        assert_eq!(anchor_slide_lerp(ay, 1.0), 0.0, "ends at the window's top edge");
+
+        // Half way on each axis, and the Y axis really does move (the earlier Y-only version is what this
+        // catches: it must not stay at the anchor's top).
+        assert_eq!(anchor_slide_lerp(ax, 0.5), ax / 2.0, "half way in x");
+        assert_eq!(anchor_slide_lerp(ay, 0.5), ay / 2.0, "half way in y");
+
+        // Out-of-range progress is clamped, so a spring overshoot cannot push the panel past the window.
+        assert_eq!(anchor_slide_lerp(ay, 1.5), 0.0, "overshoot clamps to the window edge");
+        assert_eq!(anchor_slide_lerp(ay, -0.5), ay, "undershoot clamps to the anchor");
+    }
+
+    /// `AnchorSlide` exposes the clamped progress the layout pass interpolates with.
+    #[test]
+    fn anchor_slide_clamps_its_progress() {
+        let over = AnchorSlide::new(std::sync::Arc::new(|| 1.4));
+        assert_eq!(over.progress(), 1.0);
+        let under = AnchorSlide::new(std::sync::Arc::new(|| -0.2));
+        assert_eq!(under.progress(), 0.0);
+        let mid = AnchorSlide::new(std::sync::Arc::new(|| 0.25));
+        assert_eq!(mid.progress(), 0.25);
     }
 }

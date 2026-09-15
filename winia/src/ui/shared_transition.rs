@@ -33,7 +33,9 @@ use crate::core::composer::Composer;
 use crate::core::composer::ComposeCtx;
 use crate::core::composition_local::CompositionLocal;
 use crate::core::state::State;
-use crate::layout::node::{scroll_offset_for_node, FlightMeasure, FlightMeasureFrame, LayoutNode};
+use crate::layout::node::{
+    scroll_offset_for_node, FlightMeasure, FlightMeasureFrame, LayoutNode, PaintDisposition,
+};
 use crate::modifier::{Modifier, ModifierElement, Shape};
 use crate::ui::animated_visibility::{
     ExpandFrom, ExpandFromH, SlideDirection, SlideOffset, VisibilityTransition,
@@ -365,6 +367,226 @@ impl SharedTransitionScope {
 static LOCAL_SHARED_SCOPE: LazyLock<CompositionLocal<Option<SharedTransitionScope>>> =
     LazyLock::new(|| CompositionLocal::new(|| None));
 
+/// One scene published by a scene host: an id that is stable for that scene across frames, plus a
+/// handle that reads its visibility whenever the flight system asks (1 = fully in the scene).
+///
+/// The visibility is a CLOSURE, not a snapshot: a scene host may drive its transition from the
+/// render path (winia's nav uses a `graphics_layer` closure), so its compose does not re-run every
+/// frame and anything captured at compose time would go stale exactly while the transition runs.
+#[derive(Clone)]
+pub struct NavSceneInfo {
+    /// Per-LAYER id (`layer_scene_id(host, scene key, is_prev)`): it names this published layer, so it
+    /// changes when the layer's role flips.
+    pub id: u64,
+    /// Stable id of the SCENE itself (the host's scene key), unchanged when the layer's role flips. The
+    /// layer id cannot answer "did THIS scene's opacity jump?", because a role flip renames the layer while
+    /// the two layers swap their visibilities: the observer needs an identity that does not move.
+    pub scene_key: u64,
+    pub visibility: std::sync::Arc<dyn Fn() -> f32>,
+    /// Is this the LEAVING scene of the host's transition? Two live ends of one shared key (a scene
+    /// host composes both scenes at once) are told apart by this, not by comparing visibilities: the
+    /// leaving scene starts at visibility 1 and the entering one at 0, so "the more visible end" picks
+    /// the LEAVING end at the switch frame — measured on the nav demo, where the flight then paired the
+    /// 96x96 list hero with itself and never grew (the detail hero's 320x220 was never its target).
+    /// Which scene is leaving is stable for the whole transition, so the pairing is too.
+    pub is_prev: bool,
+}
+
+impl std::fmt::Debug for NavSceneInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NavSceneInfo")
+            .field("id", &self.id)
+            .field("is_prev", &self.is_prev)
+            .field("visibility", &(self.visibility)())
+            .finish()
+    }
+}
+
+thread_local! {
+    /// Scene stack for the compose in progress: a scene host (winia's nav) pushes one entry around
+    /// the content it composes so the marker builders record WHICH SCENE an end belongs to.
+    static NAV_SCENE_STACK: std::cell::RefCell<Vec<NavSceneInfo>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    /// Latest handle per scene id, kept beyond the compose so the post-layout polls can resolve a
+    /// duplicated shared key by "which end is becoming visible".
+    static NAV_SCENE_VIS: std::cell::RefCell<HashMap<u64, NavSceneInfo>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+/// Publish `scene` for the duration of `f` (scene hosts call this around the content they compose).
+/// The nav uses it per transition layer, which is what lets two LIVE ends of one shared key be told
+/// apart: without a scene, the winner is whichever end the tree walk visited last, and during a nav
+/// transition that alternates between the outgoing and incoming scene every frame — so the flight
+/// system reads a fresh switch each frame, starting and retargeting flights instead of flying once.
+pub fn with_nav_scene<R>(scene: NavSceneInfo, f: impl FnOnce() -> R) -> R {
+    // The guard exists BEFORE anything is published, so a panic during publication cannot leave the stack
+    // entry behind (markers composed after such a panic would be attributed to a scene that no longer
+    // exists — the stale attribution the ancestry lookup was written to avoid).
+    //
+    // On NORMAL completion it pops the stack but KEEPS the registry entry: the entry has to outlive this
+    // call so a layer that Skips composing still resolves its scene while a transition runs. Only during an
+    // unwind is the entry dropped too, because a panicking scene host publishes a scene that nobody is
+    // composing any more.
+    struct SceneGuard {
+        id: u64,
+        pushed: bool,
+    }
+    impl Drop for SceneGuard {
+        fn drop(&mut self) {
+            if self.pushed {
+                NAV_SCENE_STACK.with(|s| {
+                    s.borrow_mut().pop();
+                });
+            }
+            if std::thread::panicking() {
+                NAV_SCENE_VIS.with(|v| {
+                    v.borrow_mut().remove(&self.id);
+                });
+            }
+        }
+    }
+    let mut guard = SceneGuard { id: scene.id, pushed: false };
+    NAV_SCENE_STACK.with(|s| s.borrow_mut().push(scene.clone()));
+    guard.pushed = true;
+    NAV_SCENE_VIS.with(|v| {
+        v.borrow_mut().insert(scene.id, scene.clone());
+    });
+    // anim-trace: hand the handle to the trace so the frame barrier records this scene's visibility
+    // (it is a closure over the host's progress, so it has to be sampled once per frame rather than
+    // read here). No-op unless the tracing feature is on.
+    crate::anim_trace::note_scene(scene);
+    f()
+}
+
+/// The scene the caller is composing inside, if any (see [`with_nav_scene`]).
+pub fn current_nav_scene() -> Option<NavSceneInfo> {
+    NAV_SCENE_STACK.with(|s| s.borrow().last().cloned())
+}
+
+/// Visibility announced for a scene id, read NOW (the handle keeps tracking the host's progress).
+pub fn nav_scene_visibility(id: u64) -> Option<f32> {
+    NAV_SCENE_VIS.with(|v| v.borrow().get(&id).map(|i| (i.visibility)()))
+}
+
+/// Is this the LEAVING scene of its host's transition? `None` when the scene is unknown. The pairing
+/// rule for two live ends of one key uses this instead of comparing visibilities — see `NavSceneInfo`.
+pub fn nav_scene_is_prev(id: u64) -> Option<bool> {
+    NAV_SCENE_VIS.with(|v| v.borrow().get(&id).map(|i| i.is_prev))
+}
+
+/// Scene id of the subtree a node belongs to: the nearest ancestor (or the node itself) carrying a
+/// `SceneTag`, which scene hosts put on the wrapper they build for each scene.
+///
+/// Read from ancestry at query time on purpose. Storing the id on each shared marker does not work:
+/// the marker's modifier element is created once and then reused across frames, so the captured id
+/// freezes — measured on the nav demo, one end reported `scene=None` and the other reported the
+/// LEAVING scene, so the two live ends could not be told apart and the flight paired the leaving hero
+/// with itself (both 96x96, alpha-only crossfade, no growth).
+pub(crate) fn scene_of_node(nodes: &[crate::layout::node::LayoutNode], idx: usize) -> Option<u64> {
+    let id_to_idx: HashMap<u64, usize> =
+        nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
+    scene_of_node_with(nodes, &id_to_idx, idx)
+}
+
+/// [`scene_of_node`] with a caller-provided id→index map.
+///
+/// The map is the whole point: building it per call costs O(nodes) and the per-frame walk calls this
+/// once per marked node, which measured as 2.68 ms per call on a 12 000-node tree (50 marked nodes →
+/// ~134 ms per frame). Build the map once per pass and call this.
+pub(crate) fn scene_of_node_with(
+    nodes: &[crate::layout::node::LayoutNode],
+    id_to_idx: &HashMap<u64, usize>,
+    idx: usize,
+) -> Option<u64> {
+    let mut cur = Some(idx);
+    // Bounded: a malformed parent chain must not hang a frame.
+    for _ in 0..512 {
+        let i = cur?;
+        if let Some(id) = nodes.get(i).and_then(|n| {
+            n.modifier.elements().iter().find_map(|el| match el {
+                ModifierElement::SceneTag { id } => Some(*id),
+                _ => None,
+            })
+        }) {
+            return Some(id);
+        }
+        cur = nodes.get(i)?.parent_id.and_then(|pid| id_to_idx.get(&pid).copied());
+    }
+    None
+}
+
+#[cfg(test)]
+pub(crate) fn clear_nav_scenes() {
+    NAV_SCENE_STACK.with(|s| s.borrow_mut().clear());
+    NAV_SCENE_VIS.with(|v| v.borrow_mut().clear());
+}
+
+/// Drop scene entries whose scene no longer exists in the tree.
+///
+/// The registry is written when a scene host composes a layer, and a layer that Skips does not compose
+/// again — so without this a long-lived display keeps one entry (and one `Arc` visibility closure) per
+/// distinct scene it has ever visited. A scene is live exactly when its `SceneTag` is present in the arena,
+/// which is what a scene host puts on the wrapper it composes per layer.
+pub(crate) fn prune_nav_scenes(live: &HashSet<u64>) {
+    NAV_SCENE_VIS.with(|v| {
+        let mut vis = v.borrow_mut();
+        // Cheap guard: the registry is usually smaller than the set of tags, and `retain` is the only
+        // allocation-free way to walk it anyway.
+        if vis.len() > live.len() {
+            vis.retain(|id, _| live.contains(id));
+        }
+    });
+}
+
+/// Entries in the scene registry (a cheap length read for the prune threshold).
+pub(crate) fn nav_scene_registry_len() -> usize {
+    NAV_SCENE_VIS.with(|v| v.borrow().len())
+}
+
+/// How many entries the registry may hold before an IDLE frame pays for the arena scan that prunes it.
+/// Entries are added by scene hosts while they compose; a host whose layers Skip does not compose again, so
+/// without this the registry would only ever shrink while something was animating.
+pub(crate) const NAV_SCENE_PRUNE_THRESHOLD: usize = 32;
+
+/// Prune the scene registry with the live set of the WHOLE WINDOW.
+///
+/// The registry is shared by every composer on the thread while an arena belongs to one of them, so the
+/// live set has to be the union: pruning from a single composer's walk (the first version) let a peer
+/// without scene tags delete the entries of the composer that has them — and the pairing then fell back to
+/// last-wins, which is the "paired the leaving end with itself / never grew" failure this branch exists to
+/// fix. Called once per frame from `Composer::poll_cross_flights`, which is the only place that has every
+/// composer.
+pub(crate) fn prune_scene_registry_window(all: &[&Composer]) {
+    let len = nav_scene_registry_len();
+    if len == 0 {
+        return;
+    }
+    // An idle frame with a small registry skips the scan: the registry only grows when a scene host
+    // composes, which is not an idle frame for that composer.
+    let busy = all.iter().any(|c| {
+        c.paint_dirty
+            || !c.scope_overlay_roots.is_empty()
+            || c.shared_flights.values().any(|a| !is_terminal(a.flight.phase))
+    });
+    if !busy && len <= NAV_SCENE_PRUNE_THRESHOLD {
+        return;
+    }
+    let mut live: HashSet<u64> = HashSet::new();
+    for c in all {
+        live.extend(
+            c.arena
+                .nodes
+                .iter()
+                .flat_map(|n| n.modifier.elements().iter())
+                .filter_map(|el| match el {
+                    ModifierElement::SceneTag { id } => Some(*id),
+                    _ => None,
+                }),
+        );
+    }
+    prune_nav_scenes(&live);
+}
+
 /// Per-scope transition activity (Compose `isTransitionActive`), keyed by
 /// `scope_id` so main and overlay composers sharing a scope observe one
 /// flag. Entries are created on first read and synced by the coordinator
@@ -616,6 +838,7 @@ impl Modifier {
             enter: None,
             exit: None,
             render_in_overlay,
+            scene: current_nav_scene().map(|s| s.id),
         })
     }
 
@@ -635,6 +858,15 @@ impl Modifier {
         z_index: f32,
     ) -> Self {
         self.push(ModifierElement::SharedScopeOverlay { scope_id: scope.scope_id, z_index })
+    }
+
+    /// Tag this subtree as the content composed for scene `id` (scene hosts call it on the wrapper
+    /// they build per scene, e.g. one nav transition layer). Shared-element pairing reads it from the
+    /// ANCESTOR chain at query time: which of two live ends of one key is leaving and which is
+    /// entering is decided by their scenes' visibilities, and a marker cannot carry that itself (its
+    /// modifier element is built once and reused, so a captured id freezes).
+    pub fn scene_tag(self, id: u64) -> Self {
+        self.push(ModifierElement::SceneTag { id })
     }
 
     /// Mark shared bounds (different content — container morphs + crossfades).
@@ -700,6 +932,7 @@ impl Modifier {
             enter: Some(enter),
             exit: Some(exit),
             render_in_overlay,
+            scene: current_nav_scene().map(|s| s.id),
         })
     }
 }
@@ -908,6 +1141,7 @@ mod tests {
             end: SharedBounds::new(200.0, 100.0, 100.0, 100.0),
             progress,
             role: TransitionRole::Target,
+            scene_alpha: None,
             radius_from: [0.0; 4],
             radius_to: [0.0; 4],
             clip: false,
@@ -995,6 +1229,7 @@ mod tests {
             end: SharedBounds::new(200.0, 0.0, 100.0, 100.0),
             progress: 0.25,
             role,
+            scene_alpha: None,
             radius_from: [0.0; 4],
             radius_to: [0.0; 4],
             clip: false,
@@ -1015,6 +1250,20 @@ mod tests {
         // Element: classic crossfade, always.
         assert_eq!(mk(TransitionRole::Target, None).alpha(), 0.25);
         assert_eq!(mk(TransitionRole::Source, None).alpha(), 0.75);
+        // A SCENE owns opacity when the end carries one: alpha() is the scene's visibility, NOT the
+        // flight's crossfade. Compose splits it the same way (the scene transition fades, the shared
+        // bounds animation moves), and fading an element twice would dim it twice as fast. Checked
+        // with a fade pair attached too, so the scene value wins over the channels.
+        for role in [TransitionRole::Source, TransitionRole::Target, TransitionRole::Morph] {
+            for (vis, want) in [(0.0, 0.0), (0.4, 0.4), (1.0, 1.0)] {
+                let mut v = mk(role.clone(), Some((fade_in.clone(), fade_out.clone())));
+                v.scene_alpha = Some(vis);
+                assert_eq!(v.alpha(), want, "scene visibility must own opacity for {role:?}");
+                let mut v = mk(role.clone(), None);
+                v.scene_alpha = Some(vis);
+                assert_eq!(v.alpha(), want, "…and with no enter/exit either");
+            }
+        }
         // Bounds + fade enter/exit: identical numbers (fade defaults claim
         // the crossfade they already produce).
         assert_eq!(
@@ -1170,6 +1419,10 @@ pub(crate) struct TransitionVisual {
     /// Scalar progress snapshot (0→1, possibly overshooting under spring).
     pub progress: f32,
     pub role: TransitionRole,
+    /// Opacity owned by a SCENE instead of by the flight (see [`Self::alpha`]): the visibility of the
+    /// scene this end belongs to, for flights whose ends carry a scene id. `None` = the flight's own
+    /// crossfade applies, which is right when no scene host is involved.
+    pub scene_alpha: Option<f32>,
     /// Normalized corner radii [TL, TR, BR, BL] at both ends (see
     /// [`shared_shape_radii`]). Every `Shape` variant normalizes to this
     /// quad, so cross-kind morphs (pill→rect) stay continuous.
@@ -1229,6 +1482,14 @@ impl TransitionVisual {
     }
 
     pub(crate) fn alpha(&self) -> f32 {
+        // A SCENE owns opacity when the end belongs to one. During a nav transition the scenes
+        // crossfade as layers, so the flight must not fade the same end a second time: its alpha is
+        // the visibility of the scene the end came from (Compose's split — the scene transition owns
+        // opacity, the shared bounds animation owns the rect). Only set for flights whose ends carry
+        // a scene id; everything else keeps the crossfade below.
+        if let Some(a) = self.scene_alpha {
+            return a.clamp(0.0, 1.0);
+        }
         match (&self.role, &self.bounds_fx) {
             // sharedBounds: fade channels claimed by enter/exit — fade
             // defaults reproduce the crossfade exactly; fade-less customs
@@ -1567,12 +1828,16 @@ pub(crate) struct SharedMarker {
     pub exit: Option<VisibilityTransition>,
     /// Compose `renderInOverlayDuringTransition` (default true).
     pub render_in_overlay: bool,
+    /// Scene this end was composed inside, when a scene host published one (see
+    /// [`with_nav_scene`]). Used to pair two LIVE ends of one key by "which scene is becoming
+    /// visible" instead of by tree-walk order.
+    pub scene: Option<u64>,
 }
 
 pub(crate) fn find_shared_marker(modifier: &Modifier) -> Option<SharedMarker> {
     modifier.elements().iter().find_map(|el| match el {
         ModifierElement::SharedTransition {
-            scope_id, key, kind, transform, path, z_index, enter, exit, render_in_overlay,
+            scope_id, key, kind, transform, path, z_index, enter, exit, render_in_overlay, scene,
         } => Some(SharedMarker {
             scope_id: *scope_id,
             key: key.clone(),
@@ -1583,9 +1848,41 @@ pub(crate) fn find_shared_marker(modifier: &Modifier) -> Option<SharedMarker> {
             enter: enter.clone(),
             exit: exit.clone(),
             render_in_overlay: *render_in_overlay,
+            scene: *scene,
         }),
         _ => None,
     })
+}
+
+/// Opacity a SCENE owns for a flight end, if that end belongs to one (see
+/// [`TransitionVisual::alpha`]): the visibility of the scene the end was composed in, read right
+/// now. During a nav transition the scenes crossfade as layers, so the flight must not fade the same
+/// element a second time — Compose splits it the same way (the scene transition owns opacity, the
+/// shared-bounds animation owns the rect).
+///
+/// `leaving_end` matters because the two ends are painted from different places: a detached source
+/// ghost is rendered from the transition layer, where the scene's own layer fade no longer applies,
+/// so the flight carries that fade; a target that stays in tree is already faded by its scene's
+/// layer, so the flight keeps it opaque unless the scene host elevates it into the layer too.
+fn scene_alpha_for_end(nodes: &[LayoutNode], idx: usize, leaving_end: bool) -> Option<f32> {
+    let marker = find_shared_marker(&nodes.get(idx)?.modifier)?;
+    // Scene membership from the ANCESTOR chain, like the pairing path: the marker's own `scene` field is
+    // captured when its modifier element is built and then reused across frames, so it freezes (measured:
+    // one end reported None while the other reported the LEAVING scene). Reading the frozen field here
+    // meant an in-tree end could double-fade (None while its scene also fades it) or never fade (a stale
+    // Some(1.0) after its scene stopped fading it).
+    scene_of_node(nodes, idx)?;
+    if leaving_end || marker.render_in_overlay {
+        // The flight paints this end from the transition layer, and the scene's own layer fade does
+        // NOT apply there — so the flight has to fade it, and it must do so on the FLIGHT's clock so
+        // that rect and opacity stay in step. Measured before this: the detached ghost faded on the
+        // nav's 800 ms clock while its rect followed a 1.3 s spring, so the leaving end disappeared
+        // before it had finished growing and the flight read as "only the entering end animates".
+        None
+    } else {
+        // Painted in tree: its scene already fades it, so the flight keeps it opaque.
+        Some(1.0)
+    }
 }
 
 /// Compose `Modifier.renderInSharedTransitionScopeOverlay` marker:
@@ -1856,6 +2153,36 @@ pub(crate) fn find_idx_by_slot(nodes: &[LayoutNode], root: usize, slot: u64) -> 
     None
 }
 
+/// Test-only: mark a scope as transitioning (or idle) without a real flight.
+///
+/// A morph now only opens while its scope has a running transition (Compose ties the two together), so
+/// tests that used to start one from a bare layout change mark the scope active first. The coordinator's
+/// end-of-poll full sync clears it again, which is fine: the morph opens during that same poll and
+/// continues through the ungated reopen path.
+#[cfg(test)]
+pub(crate) fn set_scope_transition_active_for_test(scope_id: u64, active: bool) {
+    SCOPE_ACTIVE
+        .lock()
+        .unwrap()
+        .entry(scope_id)
+        .or_insert_with(|| State::new(false))
+        .set(active);
+}
+
+/// Is a transition running in this scope right now — i.e. does any non-terminal flight belong to it?
+///
+/// The same question [`SharedTransitionScope::is_transition_active`] answers for composition, asked by
+/// [`SharedTransitionScope`]-less code (the coordinator's morph detection) from the synced global table,
+/// so both tiers agree. Scopes nobody has read yet count as idle.
+pub(crate) fn scope_transition_active(scope_id: u64) -> bool {
+    SCOPE_ACTIVE
+        .lock()
+        .unwrap()
+        .get(&scope_id)
+        .map(|s| s.get())
+        .unwrap_or(false)
+}
+
 fn is_terminal(phase: FlightPhase) -> bool {
     matches!(phase, FlightPhase::Finishing | FlightPhase::Cancelled)
 }
@@ -1907,20 +2234,69 @@ impl Composer {
     /// (scope, key) → slot for marked nodes in the CURRENT tree
     /// (post-materialize). First registration wins on duplicates (user error).
     pub(crate) fn shared_live_map(&self) -> HashMap<(u64, String), u64> {
-        let mut out = HashMap::new();
+        // Two LIVE ends of one key happen when a scene host keeps the outgoing and the incoming
+        // scene composed at once (winia's nav). Which of them is "the" live end decides the whole
+        // flight: the tree walk's order is not meaningful, and during a nav transition it alternates
+        // between the two scenes every frame, so the flight system reads a fresh switch each frame
+        // and starts/retargets flights instead of flying once (measured: 2 `begin_flight` calls per
+        // navigate, 131-143 duplicate warnings).
+        //
+        // The winner is the end in the scene that is NOT leaving (`nav_scene_is_prev`), which is stable for
+        // the whole transition. It is deliberately NOT "the more visible end": a leaving scene starts at
+        // visibility 1 and the entering one at 0, so comparing visibilities picks the LEAVING end at the
+        // switch frame (measured: the flight's target was the 96x96 list hero and it never grew). With no
+        // scene information at all, the last one wins as before.
+        let mut out: HashMap<(u64, String), (u64, Option<bool>)> = HashMap::new();
         if let Some(root) = self.arena.root {
+            // Built ONCE for the whole walk: `scene_of_node` used to build this map per call, and this
+            // walk calls it once per marked node (measured: 2.68 ms per call on a 12 000-node tree, so
+            // 50 marked nodes cost ~134 ms per frame).
+            let id_to_idx: HashMap<u64, usize> = self
+                .arena
+                .nodes
+                .iter()
+                .enumerate()
+                .map(|(i, n)| (n.id, i))
+                .collect();
             let mut stack = vec![root];
             while let Some(idx) = stack.pop() {
                 let node = &self.arena.nodes[idx];
                 if let Some(m) = find_shared_marker(&node.modifier) {
-                    if out.insert((m.scope_id, m.key.clone()), node.slot_key).is_some() {
-                        crate::debug_log!("[shared] duplicate live endpoint scope={} key={}", m.scope_id, m.key);
+                    // Scene membership comes from the ANCESTOR chain, not from the marker: a marker's
+                    // modifier element is built once and reused, so an id stored there freezes its
+                    // first value (measured: one end `scene=None`, the other the LEAVING scene, which
+                    // made a nav flight pair the leaving hero with itself).
+                    //
+                    // The winner is the end in the scene that is NOT leaving — the surviving side. It is
+                    // deliberately not "the more visible end": a leaving scene starts at visibility 1
+                    // and the entering one at 0, so comparing visibilities picks the LEAVING end at the
+                    // switch frame (measured: the flight's target was the 96x96 list hero, so it
+                    // crossfaded without ever growing while a same-screen morph supplied the growth).
+                    let scene = scene_of_node_with(&self.arena.nodes, &id_to_idx, idx);
+                    let is_prev = scene.and_then(nav_scene_is_prev);
+                    let key = (m.scope_id, m.key.clone());
+                    match out.get(&key) {
+                        Some(&(_, prev_is_prev)) => {
+                            let replace = match (prev_is_prev, is_prev) {
+                                // Prefer the surviving scene; if both are the same side (or a scene
+                                // host is not involved at all), keep the last one, as before.
+                                (Some(true), Some(false)) => true,
+                                (Some(false), Some(true)) => false,
+                                _ => true,
+                            };
+                            if replace {
+                                out.insert(key, (node.slot_key, is_prev));
+                            }
+                        }
+                        None => {
+                            out.insert(key, (node.slot_key, is_prev));
+                        }
                     }
                 }
                 stack.extend(node.children.iter().copied());
             }
         }
-        out
+        out.into_iter().map(|(k, (slot, _))| (k, slot)).collect()
     }
 
     /// Transition-layer render order (detached sources + elevated in-tree
@@ -1946,7 +2322,7 @@ impl Composer {
     fn refresh_scope_overlay_roots(&mut self, active: &HashSet<u64>) {
         for &idx in &self.scope_overlay_roots {
             if let Some(n) = self.arena.nodes.get_mut(idx) {
-                n.in_scope_overlay = false;
+                n.paint = PaintDisposition::InTree;
             }
         }
         self.scope_overlay_roots.clear();
@@ -1963,13 +2339,20 @@ impl Composer {
                 if let Some((sid, _)) = find_scope_overlay_marker(&node.modifier) {
                     if active.contains(&sid) {
                         marked.push(idx);
+                        // Keep descending: a chrome marker nested inside another one gets its OWN layer entry
+                        // (`rebuild_layer_order` includes every entry of this list, and `render_layer` draws
+                        // each one with `layer_root = true`), which is what keeps its own `zIndexInOverlay`
+                        // in the sort and lets it escape its ancestor's clip. An earlier version skipped it
+                        // on the theory that it would be skipped twice and paint nowhere; that was wrong (it
+                        // was painted exactly once, as its own entry) and suppressing it silently downgraded
+                        // the nested bar to an ordinary child of its ancestor's draw.
                     }
                 }
                 stack.extend(node.children.iter().copied());
             }
         }
         for &idx in &marked {
-            self.arena.nodes[idx].in_scope_overlay = true;
+            self.arena.nodes[idx].paint = PaintDisposition::InLayer;
         }
         self.scope_overlay_roots = marked;
     }
@@ -2026,7 +2409,7 @@ impl Composer {
             nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
         for &idx in &self.layer_order {
             let Some(n) = nodes.get(idx) else { continue };
-            if n.transition.is_none() && !n.in_scope_overlay {
+            if n.transition.is_none() && n.paint != PaintDisposition::InLayer {
                 continue;
             }
             let abs = abs_rect_upward(nodes, &id_to_idx, idx);
@@ -2065,10 +2448,17 @@ impl Composer {
             .map(|(id, _)| *id)
             .collect();
         for id in dead {
-            self.cancel_flight(id);
+            self.cancel_flight(id, "key_left_live_tree");
         }
         // Switches (fresh + retarget-lite).
         for c in detect_switch(&self.prev_shared_endpoints, &live) {
+            if crate::anim_trace::enabled() {
+                crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
+                    format!("flight:{}", c.key),
+                    "candidate",
+                    format!("old={:#x} new={:#x}", c.old_slot, c.new_slot),
+                ));
+            }
             // Retarget-lite: same key already flying → cancel old (freeing its
             // retained node), restart from the current visual rect. Own-map
             // Tier0 only — Tier1 retargets resolve in cross-poll (which sees
@@ -2086,6 +2476,47 @@ impl Composer {
                 })
                 .map(|(id, _)| *id)
             {
+                // Two shapes of candidate for an ALREADY-FLYING key, and they need opposite handling:
+                //
+                // * The end that moved is this flight's target: the element is the same one (same scope,
+                //   same key) and it was merely re-slotted inside its scene while the flight runs — a
+                //   scene host re-arranges layers mid-transition and winia slots are positional. Compose's
+                //   identity here is the KEY (`rememberSharedContentState(key)`), not the position, and a
+                //   position change updates the node in place. Retargeting this case cancelled a running
+                //   crossfade and then bailed in `detach_source` (the old slot was already gone), so
+                //   nothing flew and a same-screen morph — opacity-immune by design — took over.
+                //   Rebind: keep the progress and the start rect, re-point the target slot, clear the
+                //   stale node's visuals.
+                // * The candidate's slots are this flight's own two ends REVERSED: that is a genuine
+                //   navigation back (measured: clicking Back while the push flight still runs produces
+                //   exactly `old=target new=source`), so it must go through retarget below.
+                let target_moved = self
+                    .shared_flights
+                    .get(&id)
+                    .is_some_and(|a| {
+                        a.flight.target_slot == Some(c.old_slot)
+                            && a.flight.source_slot != Some(c.new_slot)
+                            && a.source_idx.is_some()
+                    });
+                if target_moved {
+                    if let Some(a) = self.shared_flights.get_mut(&id) {
+                        a.flight.target_slot = Some(c.new_slot);
+                    }
+                    let key = self
+                        .shared_flights
+                        .get(&id)
+                        .map(|a| a.flight.key.clone())
+                        .unwrap_or_default();
+                    self.clear_transition_for_slot(c.old_slot, FlightKey { cid: self.composer_id, id });
+                    if crate::anim_trace::enabled() {
+                        crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
+                            format!("flight:{key}"),
+                            "rebind",
+                            format!("target {:#x} -> {:#x}", c.old_slot, c.new_slot),
+                        ));
+                    }
+                    continue;
+                }
                 if let Some(a) = self.shared_flights.get(&id) {
                     // Unclamped + path-aware: retarget continuity follows the
                     // true visual rect, including spring overshoot past the
@@ -2100,7 +2531,7 @@ impl Composer {
                     let (rf, rt) = (a.radius_from, a.radius_to);
                     start_override = Some((s, [0, 1, 2, 3].map(|i| rf[i] + (rt[i] - rf[i]) * p)));
                 }
-                self.cancel_flight(id);
+                self.cancel_flight(id, "retarget_same_key");
             }
             self.begin_flight(c, start_override);
         }
@@ -2257,6 +2688,25 @@ impl Composer {
             acts,
             vec![FlightAction::CollectBounds { source_slot: c.old_slot, target_slot: c.new_slot }]
         );
+        // anim-trace lifecycle event: which key opened a flight, and between which slots.
+        let scene_of = |slot: u64| {
+            self.arena
+                .root
+                .and_then(|r| find_idx_by_slot(&self.arena.nodes, r, slot))
+                .map(|i| scene_of_node(&self.arena.nodes, i))
+                .unwrap_or(None)
+        };
+        crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
+            format!("flight:{}", c.key),
+            "start",
+            format!(
+                "id={id} old={:#x}(scene={:?}) new={:#x}(scene={:?})",
+                c.old_slot,
+                scene_of(c.old_slot),
+                c.new_slot,
+                scene_of(c.new_slot)
+            ),
+        ));
         self.shared_flights.insert(
             id,
             ActiveFlight {
@@ -2300,10 +2750,40 @@ impl Composer {
 
     /// Free a retained source subtree + drop its slot (fires on_remove —
     /// removal semantic) + clear the target's visuals if still present.
-    fn cancel_flight(&mut self, id: FlightId) {
+    /// Is a transition running in this scope NOW?
+    ///
+    /// Checks this composer's own map first, so a flight opened EARLIER IN THIS SAME FRAME counts (the
+    /// switch handling runs before the morph detection): the globally synced table is only updated at the
+    /// end of a poll, so it would say "idle" on the very frame a transition starts. The global table is
+    /// still consulted for Tier 1, whose flights live in the main composer's map.
+    fn scope_is_transitioning(&self, scope_id: u64) -> bool {
+        self.shared_flights
+            .values()
+            .any(|a| a.flight.scope_id == scope_id && !is_terminal(a.flight.phase))
+            || scope_transition_active(scope_id)
+    }
+
+    fn cancel_flight(&mut self, id: FlightId, reason: &'static str) {
         let Some(a) = self.shared_flights.remove(&id) else {
             return;
         };
+        // anim-trace: a cancelled flight is the usual reason a crossfade stops mid-way, and nothing
+        // else in a trace says so — record the key, the progress it died at, and WHICH call site did
+        // it (five of them can, and they mean different bugs). Gated: with the feature off `record` is a
+        // no-op but its arguments would still be built.
+        if crate::anim_trace::enabled() {
+            crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
+                format!("flight:{}", a.flight.key),
+                "cancel",
+                format!(
+                    "reason={reason} id={id} has_source={} p={:.4} flight_slots=({:?},{:?})",
+                    a.source_idx.is_some(),
+                    a.progress.peek(),
+                    a.flight.source_slot,
+                    a.flight.target_slot
+                ),
+            ));
+        }
         if let (Some(slot), Some(idx)) = (a.flight.source_slot, a.source_idx) {
             self.free_retained_source(idx, slot);
         }
@@ -2412,7 +2892,153 @@ impl Composer {
         self.poll_layout_morphs(&live);
         // Layer membership is derived from the visuals this poll just wrote.
         self.rebuild_layer_order();
+        // Paint dispositions follow from both of the above, so they are the last thing computed each
+        // frame (including which marked copies are placeholders a flight already paints).
+        self.refresh_paint_dispositions();
+        self.trace_marked_nodes();
         sync_scope_active_states(&[self]);
+    }
+
+    /// Recompute [`crate::layout::node::PaintDisposition`] for every node, once per frame.
+    ///
+    /// One place decides where each node's pixels come from, instead of three independent booleans read
+    /// at the render site:
+    /// - an end the flight lifted into the transition layer → `InLayer`;
+    /// - chrome that opted into the scope overlay this frame → `InLayer`;
+    /// - a marked copy of a (scope, key) a running flight already owns, which is not itself an end →
+    ///   `Placeholder` (the flight paints the animated rect; a second static copy must not appear);
+    /// - everything else → `InTree`.
+    ///
+    /// Assigning unconditionally each frame is what keeps it transient: a node whose flight ended goes
+    /// straight back to `InTree` without any per-flight cleanup.
+    ///
+    /// `paint_dirty` makes the idle case cheap: with no flights, no chrome and nothing left to clear, the
+    /// whole-arena walk is skipped. It is set whenever the pass assigns anything other than `InTree`, so the
+    /// pass always runs at least once more after the last non-`InTree` frame (that is what clears them).
+    fn refresh_paint_dispositions(&mut self) {
+        let flying: Vec<(u64, String)> = self
+            .shared_flights
+            .values()
+            .filter(|a| !is_terminal(a.flight.phase))
+            .map(|a| (a.flight.scope_id, a.flight.key.clone()))
+            .collect();
+        self.refresh_paint_dispositions_with(&flying);
+    }
+
+    /// The pass with a caller-provided flight set. The window-level caller passes the UNION of every
+    /// composer's non-terminal flights, because a Tier1 flight lives only in the main composer's map: a peer
+    /// that asked its own map would keep painting a second copy of a key that is flying.
+    fn refresh_paint_dispositions_with(&mut self, flying: &[(u64, String)]) {
+        if flying.is_empty() && self.scope_overlay_roots.is_empty() && !self.paint_dirty {
+            // NOTE: the scene-registry prune deliberately does NOT happen here. The registry is shared by
+            // every composer on the thread, so its live set has to be the union of their arenas; pruning from
+            // one composer's walk let a peer WITHOUT scene tags delete the entries of the composer that has
+            // them (a peer with its own flight runs this pass with an empty tag set), which degraded the
+            // pairing to last-wins for the rest of a transition. The window-scoped prune is
+            // `prune_scene_registry_window`, called from `Composer::poll_cross_flights` where every composer
+            // is at hand.
+            return;
+        }
+        let chrome: HashSet<usize> = self.scope_overlay_roots.iter().copied().collect();
+        let mut dirty = false;
+        for (idx, n) in self.arena.nodes.iter_mut().enumerate() {
+            // Compared against a small Vec rather than a HashSet of owned keys: probing the set needs an
+            // owned `(u64, String)` per marked node (an allocation per node per frame), and the flight list
+            // is a handful of entries at most.
+            let placeholder = !chrome.contains(&idx)
+                && n.transition.is_none()
+                && find_shared_marker(&n.modifier)
+                    .is_some_and(|m| flying.iter().any(|(s, k)| *s == m.scope_id && k == &m.key));
+            n.paint = if chrome.contains(&idx) {
+                PaintDisposition::InLayer
+            } else if placeholder {
+                PaintDisposition::Placeholder
+            } else {
+                PaintDisposition::InTree
+            };
+            dirty |= n.paint != PaintDisposition::InTree;
+        }
+        self.paint_dirty = dirty;
+    }
+
+
+    /// anim-trace: record EVERY marked node this frame — not just the ends of a flight. "How many
+    /// copies of one key are painted, and where" is otherwise only answerable by looking at pixels, and
+    /// a duplicate (a scene host re-composing a copy of a key that a flight already owns) shows up here
+    /// as two records with the same `key`, different rects, one of them with `role: null`.
+    fn trace_marked_nodes(&self) {
+        if !crate::anim_trace::enabled() {
+            return;
+        }
+        // One id→index map for the whole pass (see `scene_of_node_with`).
+        let id_to_idx: HashMap<u64, usize> = self
+            .arena
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.id, i))
+            .collect();
+        for (idx, n) in self.arena.nodes.iter().enumerate() {
+            let Some(m) = find_shared_marker(&n.modifier) else {
+                continue;
+            };
+            let role = n.transition.as_ref().map(|t| match t.role {
+                TransitionRole::Source => "Source",
+                TransitionRole::Target => "Target",
+                TransitionRole::Morph => "Morph",
+            });
+            let mut rec = crate::anim_trace::TraceRecord::flight(format!(
+                "mark:{}#{}",
+                m.key,
+                role.unwrap_or("plain")
+            ));
+            rec.kind = crate::anim_trace::TraceKind::Node;
+            rec.scope = Some(m.scope_id);
+            rec.key = Some(m.key.clone());
+            rec.role = role;
+            rec.phase = Some(match n.paint_disposition() {
+                PaintDisposition::InLayer => "layer",
+                PaintDisposition::Placeholder => "placeholder",
+                PaintDisposition::InTree => "tree",
+            });
+            rec.scene = scene_of_node_with(&self.arena.nodes, &id_to_idx, idx);
+            // Absolute (canvas) coords: `node.position` is parent-relative, so reporting it raw made a
+            // copy look like it sat at (0,0) and could not be compared with a flight's lerped rect
+            // (measured, then fixed here).
+            let (ax, ay) = self
+                .arena
+                .root
+                .map(|r| crate::app::node_abs_position(&self.arena.nodes, r, n.id))
+                .unwrap_or((n.position.x, n.position.y));
+            rec.layout = Some(crate::anim_trace::TraceRect::new(
+                ax,
+                ay,
+                n.measured_size.width,
+                n.measured_size.height,
+            ));
+            // What this node paints by itself: the flight's lerped rect while it is an end, otherwise
+            // its own content box at its own layout origin.
+            let (rect, alpha) = match n.transition.as_ref() {
+                Some(t) => {
+                    let l = t.lerped();
+                    (
+                        crate::anim_trace::TraceRect::new(l.x, l.y, l.width, l.height),
+                        t.alpha(),
+                    )
+                }
+                None => {
+                    let cb = n.content_box();
+                    (
+                        crate::anim_trace::TraceRect::new(ax, ay, cb.width, cb.height),
+                        1.0,
+                    )
+                }
+            };
+            rec.painted = Some(rect);
+            rec.alpha = Some(alpha);
+            rec.effective_alpha = Some(alpha);
+            crate::anim_trace::record(rec);
+        }
     }
 
     fn poll_one_flight(&mut self, id: FlightId) {
@@ -2436,14 +3062,14 @@ impl Composer {
                 let root = match self.arena.root {
                     Some(r) => r,
                     None => {
-                        self.cancel_flight(id);
+                        self.cancel_flight(id, "awaiting_no_root");
                         return;
                     }
                 };
                 let tidx = match target_slot.and_then(|s| find_idx_by_slot(&self.arena.nodes, root, s)) {
                     Some(i) => i,
                     None => {
-                        self.cancel_flight(id);
+                        self.cancel_flight(id, "awaiting_target_not_found");
                         return;
                     }
                 };
@@ -2451,10 +3077,42 @@ impl Composer {
                 let (tx, ty) = crate::app::node_abs_position(&self.arena.nodes, root, tid);
                 let (tw, th) = {
                     let n = &self.arena.nodes[tidx];
-                    (n.measured_size.width, n.measured_size.height)
+                    // The target's own content box, NOT `measured_size`: while a flight reports a
+                    // placeholder size the parent sees the animated size, so reading `measured_size`
+                    // here can capture the flight's own current rect as the destination. Measured with
+                    // anim-trace on the nav demo: with `measured_size` both ends reported a painted
+                    // width of 96 for the whole flight, i.e. the crossfade faded without ever growing,
+                    // and a separate same-screen morph (opaque by design) supplied the visible growth.
+                    let cb = n.content_box();
+                    (cb.width, cb.height)
                 };
                 // Canonicalize to window coords (overlay-local + screen origin).
                 let (ox, oy) = self.screen_origin;
+                // Gated: with the feature off `record` is a no-op but its arguments (including a
+                // `scene_of_node` ancestry walk) would still be evaluated.
+                if crate::anim_trace::enabled() {
+                    crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
+                        format!(
+                            "flight:{}",
+                            find_shared_marker(&self.arena.nodes[tidx].modifier)
+                                .map(|m| m.key)
+                                .unwrap_or_default()
+                        ),
+                        "resolve",
+                        format!(
+                            // `id=` lets a report pair this announcement with the resolved end's records
+                            // (the event's subject carries only the key, not the role or the flight).
+                            "id={id} tidx={tidx} own_size={:?} measured={:?} content_box={:?} scene={:?} end=({tw:.0},{th:.0})",
+                            self.arena.nodes[tidx].modifier.elements().iter().find_map(|el| match el {
+                                ModifierElement::Size { .. } => Some(format!("{el:?}")),
+                                _ => None,
+                            }),
+                            self.arena.nodes[tidx].measured_size,
+                            self.arena.nodes[tidx].content_box(),
+                            scene_of_node(&self.arena.nodes, tidx),
+                        ),
+                    ));
+                }
                 let end = SharedBounds::new(tx + ox, ty + oy, tw, th);
                 let marker = find_shared_marker(&self.arena.nodes[tidx].modifier);
                 let (
@@ -2678,6 +3336,7 @@ impl Composer {
                     start,
                     end,
                     progress: p,
+                    scene_alpha: scene_alpha_for_end(&self.arena.nodes, idx, true),
                     role: TransitionRole::Source,
                     radius_from: rf,
                     radius_to: rt,
@@ -2780,6 +3439,7 @@ impl Composer {
                         start,
                         end,
                         progress: p,
+                        scene_alpha: scene_alpha_for_end(&self.arena.nodes, tidx, false),
                         role,
                         radius_from: rf,
                         radius_to: rt,
@@ -2802,6 +3462,80 @@ impl Composer {
                         self.elevated_roots.push(tidx);
                     }
                 }
+            }
+        }
+        // anim-trace: one record per end per frame — `layout` is the node's measured rect, `painted`
+        // is the flight's lerped rect (what the flight draws), and opacity is recorded in three parts
+        // (`alpha` = the end's own, `effective_alpha` = what the draw composes, `scene_visibility` =
+        // the scene host's value) so "who faded it" is answerable without guessing.
+        if crate::anim_trace::enabled() {
+            let (scope_id, key) = self
+                .shared_flights
+                .get(&id)
+                .map(|a| (a.flight.scope_id, a.flight.key.clone()))
+                .unwrap_or((0, String::new()));
+            let svis = self
+                .shared_flights
+                .get(&id)
+                .and_then(|a| a.source_idx)
+                .and_then(|i| self.arena.nodes.get(i))
+                .and_then(|n| find_shared_marker(&n.modifier))
+                .and_then(|m| m.scene)
+                .and_then(nav_scene_visibility);
+            for (idx, role) in self
+                .arena
+                .nodes
+                .iter()
+                .enumerate()
+                .filter_map(|(i, n)| {
+                    let t = n.transition.as_ref()?;
+                    if t.flight != id {
+                        return None;
+                    }
+                    Some((i, t.role.clone()))
+                })
+                .collect::<Vec<_>>()
+            {
+                let n = &self.arena.nodes[idx];
+                let t = match n.transition.as_ref() {
+                    Some(t) => t,
+                    None => continue,
+                };
+                let lerped = t.lerped();
+                let mut rec = crate::anim_trace::TraceRecord::flight(match role {
+                    TransitionRole::Source => format!("flight:{key}#Source"),
+                    TransitionRole::Target => format!("flight:{key}#Target"),
+                    TransitionRole::Morph => format!("flight:{key}#Morph"),
+                });
+                rec.scope = Some(scope_id);
+                rec.key = Some(key.clone());
+                rec.role = Some(match role {
+                    TransitionRole::Source => "Source",
+                    TransitionRole::Target => "Target",
+                    TransitionRole::Morph => "Morph",
+                });
+                rec.flight = Some(id);
+                rec.phase = Some(if t.progress >= 1.0 { "settled" } else { "flying" });
+                rec.progress = Some(t.progress);
+                rec.layout = Some(crate::anim_trace::TraceRect::new(
+                    n.position.x,
+                    n.position.y,
+                    n.measured_size.width,
+                    n.measured_size.height,
+                ));
+                rec.painted = Some(crate::anim_trace::TraceRect::new(
+                    lerped.x, lerped.y, lerped.width, lerped.height,
+                ));
+                rec.alpha = Some(t.alpha());
+                // A detached/elevated end is drawn from the transition layer, where the scene's own
+                // layer fade does not apply; an in-tree end of a scene is multiplied by it.
+                let scene_vis = if t.elevated { None } else { svis };
+                rec.scene_visibility = scene_vis;
+                rec.effective_alpha = Some(t.alpha() * scene_vis.unwrap_or(1.0));
+                rec.radii = Some(t.radii());
+                rec.clip = Some(t.clip);
+                rec.composer = Some(self.composer_id);
+                crate::anim_trace::record(rec);
             }
         }
     }
@@ -2837,8 +3571,15 @@ impl Composer {
         // Fast path: no stashes anywhere and no Tier1 in main map.
         let busy = all.iter().any(|c| !c.pending_cross.is_empty()) || all[0].has_cross_flights();
         if !busy {
-            // Still reconcile Tier1 completions?? No — no Tier1 exists and no
-            // stash can open one. Cheap return (zero walks when idle).
+            // Still publish the scope-activity union for the WHOLE frame. Syncing per composer inside
+            // `poll_shared_flights` lets the last composer's poll overwrite the flags of every scope it
+            // does not own (the app polls the main composer first, overlays after), so
+            // `is_transition_active()` reported false during a Tier-0 transition whenever any overlay was
+            // present — and the morph gate's fallback read the same stale value. This call is the last
+            // poll of the frame, so its set is authoritative.
+            let refs: Vec<&Composer> = all.iter().map(|c| &**c).collect();
+            sync_scope_active_states(&refs);
+            prune_scene_registry_window(&refs);
             return;
         }
         // 0. Drive active Tier1 (staleness-cancel → progress → complete).
@@ -2872,10 +3613,25 @@ impl Composer {
             .filter(|a| !is_terminal(a.flight.phase))
             .map(|a| a.flight.scope_id)
             .collect();
+        // The union of the FLIGHTS, not just their scopes: `refresh_paint_dispositions` decides placeholders
+        // from the (scope, key) pairs, and a Tier1 flight lives only in the main composer's map, so a peer
+        // would otherwise keep painting a second copy of a key that is flying.
+        let flying_union: Vec<(u64, String)> = all
+            .iter()
+            .flat_map(|c| c.shared_flights.values())
+            .filter(|a| !is_terminal(a.flight.phase))
+            .map(|a| (a.flight.scope_id, a.flight.key.clone()))
+            .collect();
         for c in all.iter_mut() {
             c.refresh_scope_overlay_roots(&union);
             c.rebuild_layer_order();
+            // Recompute the dispositions, because both of the above just changed their inputs: a Tier1
+            // flight that started or completed in this cross-poll would otherwise leave a duplicate copy
+            // painted (or a placeholder hidden) for one frame, since each composer's own poll ran earlier.
+            c.refresh_paint_dispositions_with(&flying_union);
         }
+        let refs: Vec<&Composer> = all.iter().map(|c| &**c).collect();
+        prune_scene_registry_window(&refs);
     }
 
     /// Drive one Tier1 flight: staleness-cancel, progress, both-end visuals
@@ -3063,6 +3819,10 @@ impl Composer {
                     start: off_origin(start, so),
                     end: off_origin(end, so),
                     progress: pr,
+                    // Tier 1 (cross-composer) ends carry no scene id yet: the scene host API is
+                    // published per composer, so a flight spanning main and an overlay has no shared
+                    // scene visibility to read here. Keep the flight's own crossfade.
+                    scene_alpha: None,
                     role: TransitionRole::Source,
                     radius_from: rf,
                     radius_to: rt,
@@ -3126,6 +3886,8 @@ impl Composer {
                         start: off_origin(start, to),
                         end: off_origin(end, to),
                         progress: pr,
+                        // See the Tier 1 source comment above: no scene id across composers yet.
+                        scene_alpha: None,
                         role: TransitionRole::Target,
                         radius_from: rf,
                         radius_to: rt,
@@ -3558,13 +4320,28 @@ impl Composer {
                                 });
                             }
                         }
-                        None => pending.push(Pending::Fresh {
-                            scope_id: k.0,
-                            key: k.1.clone(),
-                            slot: *slot,
-                            start: *prev,
-                            end: cur,
-                        }),
+                        None => {
+                            // Compose ties a shared element's morph to a TRANSITION: the element
+                            // animates when the transition animating it changes its bounds, not merely
+                            // because a layout pass changed them. Without this gate a window resize
+                            // opened a morph on every marked node whose rect changed (measured:
+                            // `morph_open flight:entry:… fresh 420x524 -> 430x604` right after a
+                            // resize), i.e. dragging the window animated the UI.
+                            //
+                            // The gate skips only the DECISION — the baseline insert below still runs, as
+                            // the older `overridden` guard does. `continue`-ing here left the baseline
+                            // stale, so an idle resize was replayed as a morph on the first transitioning
+                            // frame instead: the same artefact, one navigation later.
+                            if self.scope_is_transitioning(k.0) {
+                                pending.push(Pending::Fresh {
+                                    scope_id: k.0,
+                                    key: k.1.clone(),
+                                    slot: *slot,
+                                    start: *prev,
+                                    end: cur,
+                                });
+                            }
+                        }
                     }
                 }
                 }
@@ -3577,6 +4354,16 @@ impl Composer {
         for p in pending {
             match p {
                 Pending::Fresh { scope_id, key, slot, start, end } => {
+                    // anim-trace: morph opens are otherwise invisible in a trace (no `start` event, only
+                    // per-frame records), which made "what did the resize animate?" hard to answer.
+                    crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
+                        format!("flight:{key}"),
+                        "morph_open",
+                        format!(
+                            "fresh {:.0}x{:.0} -> {:.0}x{:.0} at ({:.0},{:.0})",
+                            start.width, start.height, end.width, end.height, end.x, end.y
+                        ),
+                    ));
                     self.begin_morph(scope_id, key, slot, start, end, None);
                 }
                 Pending::Reopen { id, start, radii, end } => {
@@ -3584,8 +4371,16 @@ impl Composer {
                         .shared_flights
                         .get(&id)
                         .map(|a| (a.flight.scope_id, a.flight.key.clone(), a.flight.target_slot));
-                    self.cancel_flight(id);
+                    self.cancel_flight(id, "morph_reopen");
                     if let Some((scope_id, key, Some(slot))) = meta.map(|(s, k, t)| (s, k, t)) {
+                        crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
+                            format!("flight:{key}"),
+                            "morph_open",
+                            format!(
+                                "reopen {:.0}x{:.0} -> {:.0}x{:.0}",
+                                start.width, start.height, end.width, end.height
+                            ),
+                        ));
                         self.begin_morph(scope_id, key, slot, start, end, Some(radii));
                     }
                 }
@@ -3605,6 +4400,7 @@ mod tier0_tests {
     use crate::core::state::State;
     use crate::layout::constraints::Constraints;
     use crate::modifier::Color;
+    use crate::nav::{NavBackStack, NavDisplay, NavEntry};
     use crate::ui::Column;
     use crate::ui::Row;
     use crate::ui::Stack;
@@ -3694,6 +4490,20 @@ mod tier0_tests {
             }
         }
         out
+    }
+
+    /// Mark the scope of the composer's first marked node as having a running transition.
+    ///
+    /// A morph only opens inside a transition now (Compose semantics: the element animates because the
+    /// transition animating it changed its bounds, not because a layout pass did). Tests that used a bare
+    /// layout change to start one declare the transition first; the coordinator's end-of-poll sync clears
+    /// the flag again once that poll has run.
+    fn mark_scope_active(composer: &Composer) {
+        if let Some(idx) = marked_indices(composer).first() {
+            if let Some(m) = find_shared_marker(&composer.arena_nodes()[*idx].modifier) {
+                set_scope_transition_active_for_test(m.scope_id, true);
+            }
+        }
     }
 
     /// Mirror the app loop: main tree, then the transition layer
@@ -3875,6 +4685,83 @@ mod tier0_tests {
         assert!(
             close_enough(c, (0, 255, 0), 40),
             "the leaving end must still paint its child on the switch frame, got {c:?}"
+        );
+        crate::animation::clear_all_animations();
+    }
+
+    /// The trace facility must record a headless flight: per frame, per end, with the geometry and the
+    /// opacity that a report can be built from. Gated on the feature — with `anim-trace` off there is
+    /// nothing to record by design, and the suite must still pass.
+    ///
+    /// Teeth: remove the emission in `write_flight_visuals` and this fails on the very first
+    /// assertion, because nothing is captured at all.
+    #[cfg(feature = "anim-trace")]
+    #[test]
+    fn anim_trace_records_a_headless_flight() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        crate::anim_trace::capture_start();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+        frame(&mut composer, &show);
+        show.set(false);
+        // The switch frame itself opens the flight; the loop below then runs it out.
+        frame(&mut composer, &show);
+        assert!(!composer.shared_flights.is_empty(), "the switch opens a flight");
+        for _ in 0..200 {
+            if composer.shared_flights.is_empty() {
+                break;
+            }
+            advance(&mut composer, &show);
+        }
+        let recs = crate::anim_trace::capture_take();
+        crate::anim_trace::capture_stop();
+
+        let of = |role: &str| -> Vec<crate::anim_trace::TraceRecord> {
+            recs.iter()
+                .map(|(_, _, r)| r.clone())
+                .filter(|r| r.kind == crate::anim_trace::TraceKind::Flight)
+                .filter(|r| r.role == Some(role))
+                .collect()
+        };
+        let source = of("Source");
+        let target = of("Target");
+        assert!(
+            !source.is_empty() && !target.is_empty(),
+            "a flight must be traced for both ends (source {}, target {})",
+            source.len(),
+            target.len()
+        );
+        let painted_w = |r: &crate::anim_trace::TraceRecord| r.painted.map(|p| p.w).unwrap_or(0.0);
+        // Both ends draw the SAME lerped rect, which starts at the source's size (this scene's list
+        // hero is 120x80) and finishes at the target's (the detail hero is 300x160).
+        assert!(
+            (painted_w(&target[0]) - painted_w(&source[0])).abs() < 1.0,
+            "both ends must draw the same rect at the start ({:.0} vs {:.0})",
+            painted_w(&target[0]),
+            painted_w(&source[0])
+        );
+        assert!(
+            painted_w(&source[0]) < 150.0,
+            "…which is the source's own size, got {:.0}",
+            painted_w(&source[0])
+        );
+        let last = target.last().expect("target records");
+        assert!(
+            painted_w(last) > 280.0,
+            "…and finish at the target rect, got {:.0}",
+            painted_w(last)
+        );
+        // Opacity crossfades: the leaving end starts opaque and ends invisible, the entering one the
+        // reverse. Both are recorded, in three parts.
+        let a = |r: &crate::anim_trace::TraceRecord| r.alpha.unwrap_or(-1.0);
+        assert!(a(&source[0]) > 0.9, "the leaving end starts opaque");
+        assert!(a(source.last().unwrap()) < 0.1, "…and ends invisible");
+        assert!(a(&target[0]) < 0.1, "the entering end starts invisible");
+        assert!(a(last) > 0.9, "…and ends opaque");
+        assert!(
+            source[0].effective_alpha.is_some() && source[0].layout.is_some(),
+            "each record also carries the composited alpha and the layout rect"
         );
         crate::animation::clear_all_animations();
     }
@@ -5146,6 +6033,134 @@ mod tier0_tests {
             .expect("chrome bar node")
     }
 
+    /// A panicking scene must not leave its entry on the scene stack: markers composed afterwards would be
+    /// attributed to a scene that no longer exists, which is exactly the stale-attribution failure the
+    /// ancestry lookup exists to avoid. Teeth: remove the `PopOnDrop` guard in `with_nav_scene` and the
+    /// stack keeps the entry after the panic.
+    #[test]
+    fn a_panicking_scene_does_not_stay_on_the_scene_stack() {
+        let _g = lock_serial();
+        clear_nav_scenes();
+        let info = NavSceneInfo {
+            id: 0x5CE7E,
+            scene_key: 0x5CE7F,
+            visibility: std::sync::Arc::new(|| 1.0),
+            is_prev: false,
+        };
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            with_nav_scene(info, || panic!("a scene host failed while composing"))
+        }));
+        assert!(caught.is_err(), "the panic must propagate out of the scene");
+        assert!(
+            current_nav_scene().is_none(),
+            "the scene stack must unwind with the panic"
+        );
+        assert!(
+            nav_scene_visibility(0x5CE7E).is_none(),
+            "the panicking scene's registry entry goes with the unwind (a scene nobody composes)"
+        );
+        // …and the next publish is attributed to ITS own scene, not to the dead one.
+        let next_scene = NavSceneInfo {
+            id: 0x5CE80,
+            scene_key: 0x5CE81,
+            visibility: std::sync::Arc::new(|| 1.0),
+            is_prev: false,
+        };
+        let seen = with_nav_scene(next_scene, || current_nav_scene().map(|s| s.id));
+        assert_eq!(seen, Some(0x5CE80), "a marker composed now belongs to the new scene");
+        assert!(
+            nav_scene_visibility(0x5CE80).is_some(),
+            "a normally completed publish keeps its entry (a layer that Skips still resolves it)"
+        );
+        clear_nav_scenes();
+    }
+
+    /// Chrome nested inside chrome keeps its OWN layer entry: the layer draws every marked root with
+    /// `layer_root = true`, so the inner bar keeps its `zIndexInOverlay` in the sort and escapes its
+    /// ancestor's clip. An earlier version suppressed the inner marker to avoid "painting nowhere" — the
+    /// premise was wrong (it painted exactly once, as its own entry) and the suppression silently made it an
+    /// ordinary child of the ancestor's draw.
+    ///
+    /// Teeth: skip descending into a marked subtree (the suppressed behaviour) and the inner bar stops being
+    /// a layer root, which this asserts on.
+    #[test]
+    fn chrome_nested_inside_chrome_keeps_its_own_layer_entry() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let show = State::new(true);
+        let frame = |composer: &mut Composer, show: &State<bool>| {
+            let s = show.clone();
+            composer.compose(|ctx| {
+                SharedTransitionLayout::new().build(ctx, |ctx| {
+                    let scope = current_shared_scope().expect("scope");
+                    Stack::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+                        Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+                            if s.get() {
+                                under_bar_list(ctx, &scope, true);
+                            } else {
+                                under_bar_detail(ctx, &scope, true);
+                            }
+                        });
+                        // Outer chrome, with an INNER chrome marker inside it.
+                        Column::new()
+                            .modifier(
+                                Modifier::new()
+                                    .size(400.0, 60.0)
+                                    .background(Color::GREEN, Shape::Rectangle)
+                                    .render_in_shared_transition_scope_overlay(&scope, 0.0),
+                            )
+                            .build(ctx, |ctx| {
+                                Column::new()
+                                    .modifier(
+                                        Modifier::new()
+                                            .size(200.0, 30.0)
+                                            .render_in_shared_transition_scope_overlay(&scope, 0.0),
+                                    )
+                                    .build(ctx, |_| {});
+                            });
+                    });
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+            composer.poll_shared_flights();
+        };
+
+        frame(&mut composer, &show);
+        show.set(false);
+        frame(&mut composer, &show);
+        assert!(
+            composer.shared_flights.values().any(|f| !is_terminal(f.flight.phase)),
+            "a flight must be running for chrome to elevate"
+        );
+        let marked: Vec<usize> = composer
+            .arena_nodes()
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| find_scope_overlay_marker(&n.modifier).is_some())
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(marked.len(), 2, "both chrome markers exist in the tree");
+        assert_eq!(
+            composer.scope_overlay_roots.len(),
+            2,
+            "both chrome markers are layer roots, so the inner keeps its own z and clip escape"
+        );
+        for idx in &marked {
+            assert_eq!(
+                composer.arena_nodes()[*idx].paint,
+                PaintDisposition::InLayer,
+                "every chrome root is painted by the layer"
+            );
+        }
+        assert!(
+            composer.layer_order.iter().filter(|i| marked.contains(i)).count() == 2,
+            "…and both are in the layer's draw order (layer_order={:?})",
+            composer.layer_order
+        );
+        crate::animation::clear_all_animations();
+    }
+
     /// Compose `Modifier.renderInSharedTransitionScopeOverlay`: chrome that
     /// opts in keeps its spatial relationship while the flight runs, which is
     /// the piece the shared-element flag cannot do — it covers BOTH ends,
@@ -5218,7 +6233,7 @@ mod tier0_tests {
 
         // Then the mechanism.
         assert!(
-            composer.arena_nodes()[bar].in_scope_overlay,
+            composer.arena_nodes()[bar].paint == crate::layout::node::PaintDisposition::InLayer,
             "chrome elevates while the scope is transitioning"
         );
         assert!(
@@ -5228,7 +6243,7 @@ mod tier0_tests {
 
         // Same frame, one thing removed: without the elevation the flight wins
         // again — on screen AND for input.
-        composer.arena.nodes[bar].in_scope_overlay = false;
+        composer.arena.nodes[bar].paint = crate::layout::node::PaintDisposition::InTree;
         composer.scope_overlay_roots.clear();
         composer.rebuild_layer_order();
         let mut bare = render_heads(&composer);
@@ -5276,7 +6291,10 @@ mod tier0_tests {
 
         chrome_frame(&mut composer, &show, 1.0, false);
         let bar = chrome_bar_index(&composer);
-        assert!(!composer.arena_nodes()[bar].in_scope_overlay, "idle: in tree");
+        assert!(
+            composer.arena_nodes()[bar].paint == PaintDisposition::InTree,
+            "idle: in tree"
+        );
         assert!(
             !composer.transition_roots().contains(&bar),
             "idle: not a layer root"
@@ -5286,7 +6304,10 @@ mod tier0_tests {
         // ...and after the flight finishes it goes back to the tree.
         show.set(false);
         chrome_frame(&mut composer, &show, 1.0, false);
-        assert!(composer.arena_nodes()[bar].in_scope_overlay, "flying: elevated");
+        assert!(
+            composer.arena_nodes()[bar].paint == crate::layout::node::PaintDisposition::InLayer,
+            "flying: elevated"
+        );
         for _ in 0..300 {
             if composer.shared_flights.is_empty() {
                 break;
@@ -5302,7 +6323,7 @@ mod tier0_tests {
         chrome_frame(&mut composer, &show, 1.0, false);
         let bar = chrome_bar_index(&composer);
         assert!(
-            !composer.arena_nodes()[bar].in_scope_overlay,
+            composer.arena_nodes()[bar].paint == PaintDisposition::InTree,
             "settled: back in tree order"
         );
         crate::animation::clear_all_animations();
@@ -5400,7 +6421,7 @@ mod tier0_tests {
             .position(|n| find_scope_overlay_marker(&n.modifier).is_some())
             .expect("peer chrome bar");
         assert!(
-            b.arena_nodes()[bar].in_scope_overlay,
+            b.arena_nodes()[bar].paint == PaintDisposition::InLayer,
             "peer chrome must elevate for a flight it does not own"
         );
         assert!(
@@ -5424,7 +6445,7 @@ mod tier0_tests {
             .position(|n| find_scope_overlay_marker(&n.modifier).is_some())
             .expect("peer chrome bar");
         assert!(
-            !b.arena_nodes()[bar].in_scope_overlay,
+            b.arena_nodes()[bar].paint == PaintDisposition::InTree,
             "peer chrome returns to tree order when the flight ends"
         );
         crate::animation::clear_all_animations();
@@ -5508,6 +6529,9 @@ mod tier0_tests {
             composer.poll_shared_flights();
         };
         morph_frame(&mut composer);
+        // A morph requires a running transition (Compose semantics), so declare one before the size
+        // change that is supposed to open it.
+        mark_scope_active(&composer);
         w.set(200.0);
         morph_frame(&mut composer);
         assert_eq!(composer.shared_flights.len(), 1, "morph flight opened");
@@ -6000,7 +7024,7 @@ mod tier0_tests {
             "mid-flight the content box is the animated size"
         );
 
-        composer.cancel_flight(fid);
+        composer.cancel_flight(fid, "test_teardown");
         assert!(composer.shared_flights.is_empty(), "cancelled");
         // No compose: only the teardown seed can drive the re-measure.
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -7141,6 +8165,7 @@ mod tier0_tests {
             end: SharedBounds::new(0.0, 0.0, 320.0, 170.0),
             progress: 0.25,
             role: TransitionRole::Target,
+            scene_alpha: None,
             radius_from: [0.0; 4],
             radius_to: [0.0; 4],
             radius_from_auto: false,
@@ -7524,6 +8549,7 @@ mod tier0_tests {
                 end: SharedBounds::new(0.0, 0.0, 320.0, 170.0),
                 progress,
                 role: TransitionRole::Target,
+                scene_alpha: None,
                 radius_from: from,
                 radius_to: to,
                 radius_from_auto: shared_shape_radius_is_auto(&Modifier::new().background(Color::RED, from_shape)),
@@ -8528,6 +9554,304 @@ mod tier0_tests {
         crate::animation::clear_all_animations();
     }
 
+    /// The scene registry must not grow forever: entries whose scene is no longer tagged in the tree are
+    /// dropped, and a live one is kept. Without this, every scene a display has ever visited kept an entry
+    /// (and its `Arc` visibility closure) for the life of the process — `clear_nav_scenes` is test-only.
+    #[test]
+    fn scene_registry_drops_scenes_that_left_the_tree() {
+        let _g = lock_serial();
+        clear_nav_scenes();
+        let info = |id: u64, is_prev: bool| NavSceneInfo {
+            id,
+            scene_key: id,
+            visibility: std::sync::Arc::new(|| 1.0),
+            is_prev,
+        };
+        with_nav_scene(info(11, true), || {});
+        with_nav_scene(info(22, false), || {});
+        assert!(nav_scene_visibility(11).is_some() && nav_scene_visibility(22).is_some());
+
+        prune_nav_scenes(&HashSet::from([22]));
+        assert!(
+            nav_scene_visibility(11).is_none(),
+            "a scene whose tag left the tree is dropped"
+        );
+        assert_eq!(
+            nav_scene_is_prev(22),
+            Some(false),
+            "a live scene is kept, with its role intact"
+        );
+        // Equal counts (one stale, one live) must still prune: the guard that skipped this case kept a
+        // stale entry alive.
+        let info2 = |id: u64| NavSceneInfo {
+            id,
+            scene_key: id,
+            visibility: std::sync::Arc::new(|| 1.0),
+            is_prev: true,
+        };
+        with_nav_scene(info2(33), || {});
+        assert_eq!(nav_scene_registry_len(), 2, "one live, one stale");
+        prune_nav_scenes(&HashSet::from([22]));
+        assert_eq!(nav_scene_registry_len(), 1, "the stale one goes even when the counts match");
+        clear_nav_scenes();
+    }
+
+    /// The idle early-out must still clear a stale disposition: `paint_dirty` is what guarantees one more
+    /// pass after the last non-`InTree` frame, and that pass is what returns the node to `InTree`.
+    ///
+    /// Teeth: make the early-out ignore `paint_dirty` and the stale placeholder survives the poll.
+    #[test]
+    fn the_idle_early_out_still_clears_a_stale_disposition() {
+        let _g = lock_serial();
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |_| {});
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        composer.poll_shared_flights();
+        let idx = composer.layout_root_idx().expect("root");
+
+        // Simulate the frame right after a flight ended: the node is still marked, nothing is flying.
+        composer.arena.nodes[idx].paint = PaintDisposition::Placeholder;
+        composer.paint_dirty = true;
+        composer.poll_shared_flights();
+        assert_eq!(
+            composer.arena.nodes[idx].paint,
+            PaintDisposition::InTree,
+            "the pass must run once more to clear the stale disposition"
+        );
+        assert!(
+            !composer.paint_dirty,
+            "…and then nothing is left to clear, so the next idle frame may early-out"
+        );
+
+        // A second idle frame now takes the early-out and leaves it alone.
+        composer.poll_shared_flights();
+        assert_eq!(composer.arena.nodes[idx].paint, PaintDisposition::InTree);
+        crate::animation::clear_all_animations();
+    }
+
+    /// The registry is SHARED by every composer on the thread, while an arena belongs to one of them, so
+    /// the prune must use the union of their live scene tags: a peer with no scene host must not delete the
+    /// entry of the composer that has one. Pruning from a single composer's own arena (the first version)
+    /// did exactly that, and the pairing then fell back to last-wins for the rest of the transition — the
+    /// "paired the leaving end with itself / never grew" failure this branch exists to fix.
+    ///
+    /// Teeth: give the peer its own flight (so its per-composer pass really runs) and prune from that
+    /// composer's arena — the live scene disappears and this fails.
+    #[test]
+    fn a_peer_composer_does_not_prune_another_composers_live_scene() {
+        let _g = lock_serial();
+        clear_nav_scenes();
+        crate::animation::clear_all_animations();
+        let mut a = Composer::new();
+        let mut b = Composer::new();
+
+        // A hosts a scene: publish it AND leave its tag in A's arena.
+        let scene_id = 0x5CE7Eu64;
+        with_nav_scene(
+            NavSceneInfo {
+                id: scene_id,
+                scene_key: 0x5CE7F,
+                visibility: std::sync::Arc::new(|| 1.0),
+                is_prev: false,
+            },
+            || {},
+        );
+        a.compose(|ctx| {
+            Column::new()
+                .modifier(Modifier::new().fill_max_size().scene_tag(scene_id))
+                .build(ctx, |_| {});
+        });
+        a.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        a.poll_shared_flights();
+
+        // B is a peer with NO scene host at all, but with a flight of its own, so its pass runs.
+        let show_b = State::new(true);
+        let w_b = State::new(120.0f32);
+        let b_frame = |b: &mut Composer, show: &State<bool>| {
+            let (s, ww) = (show.clone(), w_b.clone());
+            b.compose(|ctx| {
+                SharedTransitionLayout::new().build(ctx, |ctx| {
+                    let scope = current_shared_scope().expect("scope");
+                    Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+                        if s.get() {
+                            mixed_list_screen(ctx, &scope, &ww);
+                        } else {
+                            mixed_detail_screen(ctx, &scope, &ww);
+                        }
+                    });
+                });
+            });
+            b.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+            b.poll_shared_flights();
+        };
+        b_frame(&mut b, &show_b);
+        show_b.set(false);
+        b_frame(&mut b, &show_b);
+        assert!(
+            b.shared_flights.values().any(|f| !is_terminal(f.flight.phase)),
+            "the peer really has a flight running"
+        );
+
+        // …and the registry is over the threshold, so a scan happens at all.
+        for i in 0..(NAV_SCENE_PRUNE_THRESHOLD + 1) {
+            with_nav_scene(
+                NavSceneInfo {
+                    id: 0x1000 + i as u64,
+                    scene_key: 0x2000 + i as u64,
+                    visibility: std::sync::Arc::new(|| 1.0),
+                    is_prev: true,
+                },
+                || {},
+            );
+        }
+
+        // App order: main poll, peer poll, then the window-level cross poll.
+        let mut all: Vec<&mut Composer> = vec![&mut a, &mut b];
+        Composer::poll_cross_flights(&mut all);
+
+        assert_eq!(
+            nav_scene_is_prev(scene_id),
+            Some(false),
+            "the live scene survives a frame in which a scene-less peer polled (registry len {})",
+            nav_scene_registry_len()
+        );
+        assert!(
+            nav_scene_registry_len() < NAV_SCENE_PRUNE_THRESHOLD,
+            "the stale entries are gone (len {})",
+            nav_scene_registry_len()
+        );
+        clear_nav_scenes();
+        crate::animation::clear_all_animations();
+    }
+
+    /// The per-frame scope-activity flags are a UNION over the frame's composers, not whoever polled last.
+    ///
+    /// Teeth: without the union sync on the cross poll's idle path this fails — the app polls the main
+    /// composer first and overlays after, and each per-composer sync published only its own set, so the
+    /// peer's poll cleared the main scope's flag and `is_transition_active()` (and the morph gate's
+    /// fallback) read "idle" during a Tier-0 transition whenever any overlay existed.
+    #[test]
+    fn scope_activity_is_a_union_over_the_frames_composers() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        clear_scope_active_states();
+        let mut a = Composer::new();
+        let mut b = Composer::new(); // a peer composer with no flights of its own
+        let show = State::new(true);
+        let w = State::new(120.0f32);
+
+        let a_frame = |a: &mut Composer, b: &mut Composer, show: &State<bool>, w: &State<f32>| {
+            let (s, ww) = (show.clone(), w.clone());
+            cross_frame(
+                a,
+                b,
+                move |ctx| {
+                    SharedTransitionLayout::new().build(ctx, |ctx| {
+                        let scope = current_shared_scope().expect("scope");
+                        Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+                            if s.get() {
+                                mixed_list_screen(ctx, &scope, &ww);
+                            } else {
+                                mixed_detail_screen(ctx, &scope, &ww);
+                            }
+                        });
+                    });
+                },
+                |ctx| {
+                    Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |_| {});
+                },
+            );
+        };
+
+        a_frame(&mut a, &mut b, &show, &w);
+        // Pin the precondition this test exists for: with a cross flight or a stashed source the cross poll
+        // would take its BUSY path, which synced the union before this round and would make the test pass
+        // for the wrong reason.
+        assert!(
+            !a.has_cross_flights() && a.pending_cross.is_empty() && !b.has_cross_flights(),
+            "the frame must be cross-idle for the idle-path sync to be under test"
+        );
+        // Read the flag BEFORE the switch, the way composition does: the sync only updates scopes somebody
+        // has already read (map entries), so a read after the fact would find a freshly created entry.
+        let scope_id = a
+            .arena_nodes()
+            .iter()
+            .find_map(|n| find_shared_marker(&n.modifier).map(|m| m.scope_id))
+            .expect("a marked node carries the scope id");
+        let active = SharedTransitionScope::new(scope_id).is_transition_active();
+        show.set(false);
+        a_frame(&mut a, &mut b, &show, &w);
+        assert!(
+            a.shared_flights.values().any(|f| !is_terminal(f.flight.phase)),
+            "the switch opened a flight in the main composer"
+        );
+        assert!(
+            active.get(),
+            "a main-composer scope must stay active when a peer composer polled after it"
+        );
+        clear_scope_active_states();
+        clear_nav_scenes();
+        crate::animation::clear_all_animations();
+    }
+
+    /// A `Placeholder` — a marked copy of a key a running flight already owns, which is NOT painted —
+    /// must not be hit either. Otherwise the invisible duplicate that the demo measured (a second 96x96
+    /// hero at its own rect) keeps receiving taps and firing its handlers.
+    ///
+    /// This pins the hit walk's RULE, using the same transient state the coordinator writes each frame.
+    /// Producing a placeholder through a scene host is the nav flow (two composed scenes), which the demo
+    /// covers end to end; composing two same-key copies here does not reproduce it (measured: they collapse
+    /// into one node).
+    ///
+    /// Teeth: remove the `PaintDisposition::Placeholder` early return in `hit_test_recursive` and the tap
+    /// below reaches the placeholder again.
+    #[test]
+    fn placeholder_copies_are_not_hittable() {
+        let _g = lock_serial();
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            SharedTransitionLayout::new().build(ctx, |ctx| {
+                let scope = current_shared_scope().expect("scope");
+                Column::new().modifier(Modifier::new().fill_max_size()).build(ctx, |ctx| {
+                    hero_leaf(ctx, 120.0, 80.0, Color::RED, &scope, true);
+                });
+            });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        composer.poll_shared_flights();
+
+        let idx = marked_indices(&composer)[0];
+        let (cx, cy) = {
+            let nodes = composer.arena_nodes();
+            (nodes[idx].content_box().width / 2.0, nodes[idx].content_box().height / 2.0)
+        };
+        let root = composer.layout_root_idx().expect("root");
+
+        // Control: in the tree it is hittable, so the two assertions below mean something.
+        assert!(
+            hit_test(composer.arena_nodes(), root, cx, cy).contains(&idx),
+            "control: an in-tree marked node is hittable"
+        );
+
+        composer.arena.nodes[idx].paint = PaintDisposition::Placeholder;
+        let hit = hit_test(composer.arena_nodes(), root, cx, cy);
+        assert!(
+            !hit.contains(&idx),
+            "an unpainted placeholder must not be hit (path={hit:?})"
+        );
+
+        // …and the exclusion is the frame's transient state, not a permanent one.
+        composer.arena.nodes[idx].paint = PaintDisposition::InTree;
+        assert!(
+            hit_test(composer.arena_nodes(), root, cx, cy).contains(&idx),
+            "back in the tree it is hittable again"
+        );
+        crate::animation::clear_all_animations();
+    }
+
     #[test]
     fn tier0_flight_pivot_alignment_mid_flight() {
         let _g = lock_serial();
@@ -8684,8 +10008,20 @@ mod tier0_tests {
         assert_eq!(marked.len(), 1);
         let slot = composer.arena_nodes()[marked[0]].slot_key;
 
-        // Layout-only size change (no compose call at all).
+        // Layout-only size change (no compose call at all), with NO transition running: Compose ties a
+        // morph to a transition, and a bare layout change (what a window resize produces) must open
+        // nothing — it used to animate every marked node whose rect moved.
         w.set(300.0);
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        composer.poll_shared_flights();
+        assert!(
+            composer.shared_flights.is_empty(),
+            "a layout change outside a transition must open nothing"
+        );
+
+        // The same kind of change INSIDE a transition does morph — the mechanism under test.
+        mark_scope_active(&composer);
+        w.set(340.0);
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
         composer.poll_shared_flights();
         assert_eq!(composer.shared_flights.len(), 1, "size delta opens a morph flight");
@@ -8764,6 +10100,9 @@ mod tier0_tests {
         composer.poll_shared_flights();
         assert!(composer.shared_flights.is_empty(), "steady size opens nothing");
 
+        // A morph requires a running transition (Compose semantics), so declare one before the size
+        // change that is supposed to open it.
+        mark_scope_active(&composer);
         // Layout-only size change (no compose call at all).
         w.set(300.0);
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -9266,6 +10605,7 @@ mod tier0_tests {
             end: SharedBounds::new(200.0, 0.0, 100.0, 50.0),
             progress: 0.0,
             role: TransitionRole::Target,
+            scene_alpha: None,
             radius_from: [0.0; 4],
             radius_to: [0.0; 4],
             clip: false,
@@ -9399,7 +10739,7 @@ mod tier0_tests {
     }
 
     #[test]
-    fn morph_and_switch_coexist() {
+    fn switch_frame_opens_one_flight_per_marked_key_and_absorbs_later_rect_changes() {
         let _g = lock_serial();
         crate::animation::clear_all_animations();
         let mut composer = Composer::new();
@@ -9430,16 +10770,55 @@ mod tier0_tests {
         };
 
         mixed_frame(&mut composer);
-        // Open a morph (layout-only size change, no compose).
+        // A morph now requires a running transition, so the order is: switch first (that IS the
+        // transition), then the layout-only size change that morphs alongside it. The switch frame alone
+        // already opens TWO flights — the hero's switch and a morph for the marked leaf, whose rect the
+        // new layout moved — which is the rule working: a rect change inside a transition morphs.
+        show.set(false);
+        mixed_frame(&mut composer);
+        let summary = |composer: &Composer| {
+            composer
+                .shared_flights
+                .values()
+                .map(|a| {
+                    format!(
+                        "{}(src={}, target={:?})",
+                        a.flight.key,
+                        a.source_idx.is_some(),
+                        a.flight.target_slot.is_some()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        assert_eq!(
+            composer.shared_flights.len(),
+            2,
+            "the switch frame opens the hero's switch plus the morph: {}",
+            summary(&composer)
+        );
+        assert_eq!(
+            composer
+                .shared_flights
+                .values()
+                .filter(|a| a.source_idx.is_none())
+                .count(),
+            0,
+            "both are switches: in this scene the second marked key changes slot too, so it switches \
+             rather than morphs — a morph is covered where the key keeps its slot ({})",
+            summary(&composer)
+        );
+        // Layout-only size change, no compose: both keys already own a flight, so nothing new opens
+        // (a second flight for one key would fight for the same visuals).
         w.set(300.0);
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
         composer.poll_shared_flights();
-        assert_eq!(composer.shared_flights.len(), 1, "morph opens");
-        mixed_advance(&mut composer);
-        // Switch screens mid-morph: switch flight opens alongside.
-        show.set(false);
-        mixed_frame(&mut composer);
-        assert_eq!(composer.shared_flights.len(), 2, "morph + switch coexist");
+        assert_eq!(
+            composer.shared_flights.len(),
+            2,
+            "a rect change during a flight is absorbed by that key's flight: {}",
+            summary(&composer)
+        );
 
         for _ in 0..300 {
             if composer.shared_flights.is_empty() {
@@ -10045,6 +11424,389 @@ mod tier0_tests {
             xadvance(&mut a, &mut b, &show_a, &show_b, &scope);
         }
         assert!(mid_seen, "Tier1 passes through a visible mid state");
+        crate::animation::clear_all_animations();
+    }
+
+    // ── Nav scene host (scaffolding for the scene-host test below) ─────────────
+
+    /// Routes for the nav scene-host test.
+    #[derive(Clone, PartialEq, Eq, Debug, Hash)]
+    enum NavRoute {
+        List,
+        Detail,
+    }
+
+    /// The hero both nav scenes mark with the SAME key (see `hero_leaf`).
+    fn nav_hero_leaf(
+        ctx: &mut ComposeCtx,
+        w: f32,
+        h: f32,
+        color: Color,
+        scope: &SharedTransitionScope,
+    ) {
+        let key = ctx.next_key();
+        ctx.start_leaf(
+            key,
+            Modifier::new()
+                .size(w, h)
+                .background(color, Shape::rounded(8.0))
+                .shared_element(
+                    scope.shared_content_state("hero"),
+                    BoundsTransform::default(),
+                    PlaceHolderSize::JumpCut,
+                    PathMotion::Linear,
+                    0.0,
+                    true,
+                ),
+        );
+        ctx.end_node();
+    }
+
+    /// List: the hero is the only leaf, at the canvas origin (0,0)-(120,80).
+    #[crate::composable]
+    fn nav_list_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
+        Column::new()
+            .modifier(Modifier::new().fill_max_size())
+            .build(ctx, |ctx| {
+                nav_hero_leaf(ctx, 120.0, 80.0, Color::RED, scope);
+            });
+    }
+
+    /// Detail: the hero is pushed DOWN (240px of nothing above it) and is bigger, so a flight between
+    /// the two ends is a long diagonal move that leaves the list rect early.
+    #[crate::composable]
+    fn nav_detail_screen(ctx: &mut ComposeCtx, scope: &SharedTransitionScope) {
+        Column::new()
+            .modifier(Modifier::new().fill_max_size())
+            .build(ctx, |ctx| {
+                gap_leaf(ctx, 400.0, 240.0);
+                nav_hero_leaf(ctx, 300.0, 160.0, Color::BLUE, scope);
+            });
+    }
+
+    /// One app-loop step with REAL scene hosts: one `SharedTransitionLayout` (the scope) wrapping a
+    /// `Stack` that holds the `NavDisplay` under test and a PEER `NavDisplay` (see the test doc).
+    fn nav_frame(
+        composer: &mut Composer,
+        main: &NavBackStack<NavRoute>,
+        peer: &NavBackStack<NavRoute>,
+    ) {
+        composer.compose(|ctx| {
+            SharedTransitionLayout::new().build(ctx, |ctx| {
+                let scope = current_shared_scope().expect("inside SharedTransitionLayout");
+                Stack::new()
+                    .modifier(Modifier::new().fill_max_size())
+                    .build(ctx, |ctx| {
+                        // The scene host under test — the demo's shape: while a nav transition runs it
+                        // composes the outgoing AND the incoming scene at once.
+                        NavDisplay::new(main, move |_ctx, key: &NavRoute| {
+                            let scope = scope.clone();
+                            match key {
+                                NavRoute::List => NavEntry::new(key.clone(), move |ctx, _| {
+                                    nav_list_screen(ctx, &scope)
+                                }),
+                                NavRoute::Detail => NavEntry::new(key.clone(), move |ctx, _| {
+                                    nav_detail_screen(ctx, &scope)
+                                }),
+                            }
+                        })
+                        .build(ctx);
+                        // A second host on the same screen showing the SAME route, so its scene key
+                        // equals the display's LEAVING scene key while it plays the other role. It shares
+                        // nothing (it marks no key and paints nothing), so nothing but the scene ids can
+                        // observe it — which is exactly the point (see the test doc). Composed AFTER the
+                        // display above on purpose: its publication must be the later one.
+                        NavDisplay::new(peer, |_ctx, key: &NavRoute| {
+                            NavEntry::new(key.clone(), |_ctx, _| {})
+                        })
+                        .build(ctx);
+                    });
+            });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        composer.poll_shared_flights();
+    }
+
+    fn nav_advance(
+        composer: &mut Composer,
+        main: &NavBackStack<NavRoute>,
+        peer: &NavBackStack<NavRoute>,
+    ) {
+        crate::animation::update_animations();
+        std::thread::sleep(std::time::Duration::from_millis(16));
+        nav_frame(composer, main, peer);
+    }
+
+    /// Arena indices of the marked nodes playing `role` in a flight.
+    fn nav_ends(composer: &Composer, role: TransitionRole) -> Vec<usize> {
+        composer
+            .arena_nodes()
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| n.transition.as_ref().is_some_and(|t| t.role == role))
+            .map(|(idx, _)| idx)
+            .collect()
+    }
+
+    /// Arena indices of every node whose paint disposition is `Placeholder` — the copies a running
+    /// flight owns but is not an end of, which must not paint.
+    fn nav_placeholders(composer: &Composer) -> Vec<usize> {
+        composer
+            .arena_nodes()
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| n.paint_disposition() == PaintDisposition::Placeholder)
+            .map(|(idx, _)| idx)
+            .collect()
+    }
+
+    /// `(scene id, is the scene the LEAVING one)` for a node, read from the `SceneTag` in its ancestry.
+    fn nav_scene_of(composer: &Composer, idx: usize) -> (u64, Option<bool>) {
+        let id = scene_of_node(composer.arena_nodes(), idx)
+            .expect("a marked node inside a scene host carries a SceneTag");
+        (id, nav_scene_is_prev(id))
+    }
+
+    /// The pairing rule of `shared_live_map`, end to end through a real scene host.
+    ///
+    /// A faithful scene host composes BOTH scenes at once during a transition — the outgoing and the
+    /// incoming one — which is what `examples/nav_shared_element_demo.rs` does and what no other test
+    /// in this module did: every other test switches one screen inside one composer, so a key has
+    /// exactly one live end, and neither the pairing rule (which of the TWO live ends the flight
+    /// takes) nor [`PaintDisposition::Placeholder`] (the copy the flight does NOT own) is exercised.
+    ///
+    /// Scaffolding: `SharedTransitionLayout` wrapping a `NavDisplay` over a `NavBackStack` — the
+    /// demo's shape — with a list and a detail route that both mark a small leaf with the SAME key,
+    /// driven frame by frame (`compose` + `layout` + `poll_shared_flights`), then a List → Detail push.
+    ///
+    /// A SECOND `NavDisplay` rides along on the same screen publishing the SAME route, and it is not
+    /// decoration: a published scene id must name the LAYER, not the scene. Both hosts' List layers
+    /// carry the same scene key, so an id derived from the scene key alone collides, the later
+    /// publisher (the peer) wins, and the leaving end below is then classified with the peer's role —
+    /// `is_prev == false` instead of `true`. That is the only way this test can reach the collision:
+    /// within ONE host the two layers always carry different scene keys, because a scene-key change is
+    /// what starts the transition in the first place.
+    ///
+    /// What this covers:
+    /// (a) exactly ONE flight for the key (two live ends, one flight), starting at the leaving hero's
+    ///     rect and landing on the ENTERING hero — the surviving end, not the more visible one (the
+    ///     leaving scene starts at visibility 1, the entering one at 0);
+    /// (b) exactly one marked node is a `Placeholder`: the leaving scene's re-composed copy of the
+    ///     flying key, which is neither the flight's source nor its target;
+    /// (c) that placeholder paints nothing — its own rect keeps the cleared background in a raster
+    ///     probe, while the flight's lerped rect does paint (so the probe cannot pass trivially);
+    /// (d) the two ends publish DIFFERENT scene tags, each keeps its role, and both ids are stable
+    ///     across two consecutive frames.
+    ///
+    /// Teeth (each verified by temporarily breaking the production code, then restoring it):
+    /// - prefer the LEAVING end in `shared_live_map`: the flight lands on the 120x80 leaving copy
+    ///   instead of the detail hero and the placeholder becomes the ENTERING scene's copy (the
+    ///   "paired the leaving end with itself" failure this branch exists to fix);
+    /// - `let placeholder = false;` in `refresh_paint_dispositions`: no placeholder exists at all, and
+    ///   the raster probe reads the leaving copy's faded red (measured (255,163,163)) where the rect
+    ///   must stay background;
+    /// - derive the scene id from the scene key alone (`hash(scene_key)`): the peer host's
+    ///   publication overwrites the leaving layer's registry entry, the leaving end reports
+    ///   `is_prev == false`, and the pairing breaks exactly as in the first item.
+    ///
+    /// What it does NOT cover (see `docs/nav-shared-transition.md`): the pop direction, the two-pane
+    /// `ListDetailStrategy`, and the `SharedEntryInSceneDecorator`. The flight's own geometry is only
+    /// asserted at its two ends and via the raster probe, not frame by frame against wall-clock time.
+    #[test]
+    fn nav_scene_host_pairs_one_flight_and_suppresses_the_other_copy() {
+        let _g = lock_serial();
+        clear_nav_scenes();
+        clear_scope_active_states();
+        crate::animation::clear_all_animations();
+        let main = NavBackStack::<NavRoute>::with_initial(NavRoute::List);
+        let peer = NavBackStack::<NavRoute>::with_initial(NavRoute::List);
+        let mut composer = Composer::new();
+
+        // Frame 0: one scene, so the key has exactly one live end and there is nothing to pair.
+        nav_frame(&mut composer, &main, &peer);
+        assert!(composer.shared_flights.is_empty(), "no flight before the push");
+        assert_eq!(
+            marked_indices(&composer).len(),
+            1,
+            "one live end of the key before the push"
+        );
+
+        // The push: from this frame on the display composes the leaving (List) AND the entering
+        // (Detail) scene at once, so the key has two live ends at the same time.
+        main.push(NavRoute::Detail);
+        nav_frame(&mut composer, &main, &peer);
+
+        // ── (a) ONE flight for the key, pairing the two live ends across the two scenes ──
+        let flights: Vec<FlightId> = composer
+            .shared_flights
+            .iter()
+            .filter(|(_, a)| a.flight.key == "hero" && !is_terminal(a.flight.phase))
+            .map(|(id, _)| *id)
+            .collect();
+        assert_eq!(
+            flights.len(),
+            1,
+            "two live ends, ONE flight — a flight per live end would crossfade each scene against itself"
+        );
+        let fid = flights[0];
+        let sources = nav_ends(&composer, TransitionRole::Source);
+        let targets = nav_ends(&composer, TransitionRole::Target);
+        assert_eq!(sources.len(), 1, "exactly one leaving end is a flight end");
+        assert_eq!(targets.len(), 1, "exactly one entering end is a flight end");
+        {
+            let a = &composer.shared_flights[&fid];
+            assert_ne!(
+                a.flight.source_slot, a.flight.target_slot,
+                "the flight spans two different ends"
+            );
+            assert_eq!(
+                (a.start.x, a.start.y, a.start.width, a.start.height),
+                (0.0, 0.0, 120.0, 80.0),
+                "the flight starts at the LEAVING hero's rect"
+            );
+            assert_eq!(
+                a.flight.target_slot,
+                Some(composer.arena_nodes()[targets[0]].slot_key),
+                "the flight's target is the node wearing the Target role, not the placeholder"
+            );
+            assert_eq!(
+                a.source_idx,
+                Some(sources[0]),
+                "the source ghost is the detached leaving end"
+            );
+        }
+        {
+            let t = &composer.arena_nodes()[targets[0]];
+            assert_eq!(
+                (t.measured_size.width, t.measured_size.height),
+                (300.0, 160.0),
+                "the flight lands on the DETAIL hero — pairing the leaving end with itself would land on \
+                 the 120x80 copy"
+            );
+        }
+        let (target_scene, target_is_prev) = nav_scene_of(&composer, targets[0]);
+        assert_eq!(
+            target_is_prev,
+            Some(false),
+            "the flight's target is the ENTERING scene's end"
+        );
+
+        // ── (b) exactly one copy is a placeholder, and it is neither end of the flight ──
+        let placeholders = nav_placeholders(&composer);
+        assert_eq!(
+            placeholders.len(),
+            1,
+            "exactly one copy a running flight does not own, got {placeholders:?}"
+        );
+        let ph = placeholders[0];
+        assert!(
+            ph != sources[0] && ph != targets[0],
+            "the placeholder is a copy NEITHER end of the flight owns (node {ph})"
+        );
+        let (ph_scene, ph_is_prev) = nav_scene_of(&composer, ph);
+        assert_eq!(
+            ph_is_prev,
+            Some(true),
+            "the placeholder is the LEAVING scene re-composing its own copy of the flying key"
+        );
+
+        // ── (d) the two ends publish DIFFERENT scene tags, each keeping its role ──
+        assert_ne!(
+            ph_scene, target_scene,
+            "the two live ends are published under different scene tags"
+        );
+        assert_eq!(
+            nav_scene_is_prev(target_scene),
+            Some(false),
+            "the entering layer keeps its role (the peer host publishes the same route, and must not \
+             overwrite either id)"
+        );
+
+        // ── (c) the placeholder paints nothing, while the flight itself does ──
+        // Sample a mid-flight frame: at p ≈ 0 the flight still covers the placeholder's own rect (it
+        // starts exactly there), which would make "no colour here" ambiguous.
+        let mut sampled = None;
+        for _ in 0..40 {
+            match composer.shared_flights.get(&fid) {
+                Some(a) if !is_terminal(a.flight.phase) => {
+                    let p = a.progress.peek();
+                    if (0.25..=0.85).contains(&p) {
+                        sampled = Some(p);
+                        break;
+                    }
+                }
+                _ => break,
+            }
+            nav_advance(&mut composer, &main, &peer);
+        }
+        let p = sampled.expect("a mid-flight frame (p in 0.25..=0.85) the raster probe can read");
+
+        // Node indices are not stable across frames, so re-read the ends on the sampled frame — which
+        // doubles as the "stable id across two consecutive frames" half of (d).
+        let targets = nav_ends(&composer, TransitionRole::Target);
+        let placeholders = nav_placeholders(&composer);
+        assert_eq!(
+            (targets.len(), placeholders.len()),
+            (1, 1),
+            "still one flight end and one placeholder mid-flight (p = {p:.2})"
+        );
+        let (target_idx, ph_idx) = (targets[0], placeholders[0]);
+        assert_eq!(
+            nav_scene_of(&composer, ph_idx),
+            (ph_scene, Some(true)),
+            "the leaving scene keeps its id AND its role one frame later"
+        );
+        assert_eq!(
+            nav_scene_of(&composer, target_idx),
+            (target_scene, Some(false)),
+            "the entering scene keeps its id AND its role one frame later"
+        );
+
+        let mut surf = render_heads(&composer);
+        let (px, py) = node_center(&composer, ph_idx);
+        let ph_rgb = pixel_rgb(&mut surf, px, py);
+        assert!(
+            close_enough(ph_rgb, (255, 255, 255), 8),
+            "the placeholder is not painted: its own rect keeps the cleared background, got {ph_rgb:?} \
+             at ({px},{py}) (p = {p:.2})"
+        );
+        let lerped = composer.arena_nodes()[target_idx]
+            .transition
+            .as_ref()
+            .expect("the target still carries the flight's per-frame visuals")
+            .lerped();
+        let (lx, ly) = (
+            (lerped.x + lerped.width / 2.0) as i32,
+            (lerped.y + lerped.height / 2.0) as i32,
+        );
+        let flight_rgb = pixel_rgb(&mut surf, lx, ly);
+        assert!(
+            !close_enough(flight_rgb, (255, 255, 255), 8),
+            "the flight's own lerped rect DOES paint — without this the probe above proves nothing, \
+             got {flight_rgb:?} at ({lx},{ly})"
+        );
+
+        // The flight completes and the disposition goes back to ordinary tree content.
+        for _ in 0..200 {
+            if composer.shared_flights.is_empty() {
+                break;
+            }
+            nav_advance(&mut composer, &main, &peer);
+        }
+        assert!(composer.shared_flights.is_empty(), "the flight completes");
+        assert_eq!(
+            nav_placeholders(&composer).len(),
+            0,
+            "no placeholder survives its flight (the disposition is transient, never sticky)"
+        );
+        assert_eq!(
+            marked_indices(&composer).len(),
+            1,
+            "only the entering scene's copy is left in the tree"
+        );
+
+        clear_nav_scenes();
+        clear_scope_active_states();
         crate::animation::clear_all_animations();
     }
 }

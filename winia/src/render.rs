@@ -6,7 +6,7 @@
 
 use crate::debug_log;
 use crate::layout::LayoutDirection;
-use crate::layout::node::LayoutNode;
+use crate::layout::node::{LayoutNode, PaintDisposition};
 use crate::modifier::ModifierElement;
 use crate::ui::animated_visibility::{ExpandFrom, ExpandFromH, SlideDirection, SlideOffset};
 use crate::ui::icon::{DecodedIcon, IconSource, IconSpec, decoded_icon};
@@ -699,16 +699,13 @@ fn render_pass1(
     rootless: bool,
 ) {
     let node = &nodes[idx];
-    // Elevated endpoint: this subtree is painted by the transition layer
-    // (after the whole tree), so the in-tree walk must not paint it again —
-    // that is what lets it escape ancestor clips (a canvas clip can never be
-    // un-set by a descendant) and land above non-shared siblings. Layout,
-    // state and hit testing are untouched; only paint moves. Same switch for
-    // chrome that opted into the scope overlay (pinned bars): it is re-drawn
-    // untransformed at the end of the layer, above the flights.
-    if !layer_root
-        && (node.transition.as_ref().is_some_and(|t| t.elevated) || node.in_scope_overlay)
-    {
+    // Anything that is not painted in place is skipped here: a flight end lifted into the transition
+    // layer (a canvas clip can never be un-set by a descendant, so the layer paints it after the whole
+    // tree — that is what lets it land above non-shared siblings), chrome that opted into the scope
+    // overlay, and a PLACEHOLDER (a marked copy of a key a flight already owns: the flight paints the
+    // animated rect, so a second static copy must not appear). Layout, state and hit testing are
+    // untouched; only paint moves.
+    if !layer_root && node.paint_disposition() != PaintDisposition::InTree {
         return;
     }
     let x = parent_x + node.position.x;

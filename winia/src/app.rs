@@ -159,6 +159,8 @@ struct OverlayWindow {
     anchor_slot: Option<u64>,
     position: crate::ui::overlay::PopupPosition,
     offset: (f32, f32),
+    /// Grow the panel out of its anchor along both axes (see `OverlayDesc::anchor_slide`).
+    anchor_slide: Option<crate::ui::overlay::AnchorSlide>,
     modal: bool,
     dismiss_on_outside: bool,
     click_passthrough: bool,
@@ -418,6 +420,19 @@ impl PerWindow {
         // vsync 研究：渲染帧计数（每秒渲染次数——Fifo 下应 ~60）
         self.frame_counter += 1;
         debug_log!("[fps] render#{} compose#{} pending={}", self.frame_counter, self.composer.compose_count(), self.composer.pending_state_count());
+        // anim-trace frame barrier: stamps the frame number and a wall-clock timestamp, samples every
+        // scene published this frame, and flushes the previous frame's records.
+        //
+        // With `anim-trace` off this is a no-op. With it ON it always runs — the ring that serves the
+        // debug server's `tr` command is always fed — and only the FILE sink is gated on WINIA_ANIM_TRACE,
+        // so a build with the feature and no env var records into memory and writes nothing.
+        crate::anim_trace::begin_frame(
+            self.frame_counter,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0),
+        );
         // 临时：窗口节点数（诊断主窗口塌缩）
         // 提供当前窗口 Density（从 scale_factor）——覆盖 compose + layout + draw 全程，
         // 保证 Dimension::Px / TextUnit::Px 在布局/渲染期使用窗口 sf 而非 standard(1.0)
@@ -2450,6 +2465,7 @@ impl OverlayWindow {
             anchor_slot: desc.anchor_slot,
             position: desc.position,
             offset: desc.offset,
+            anchor_slide: desc.anchor_slide,
             modal: desc.modal,
             dismiss_on_outside: desc.dismiss_on_outside,
             click_passthrough: desc.click_passthrough,
@@ -2474,6 +2490,7 @@ impl OverlayWindow {
     fn update(&mut self, desc: crate::ui::overlay::OverlayDesc) {
         self.anchor_slot = desc.anchor_slot;
         self.position = desc.position;
+        self.anchor_slide = desc.anchor_slide;
         self.offset = desc.offset;
         self.modal = desc.modal;
         self.dismiss_on_outside = desc.dismiss_on_outside;
@@ -2531,9 +2548,7 @@ fn sync_overlays(pw: &mut PerWindow, _recomposed: bool) {
                     let spec = ov.enter_anim.as_ref().unwrap();
                     crate::animation::push_animatable_handle(
                         p, 1.0,
-                        crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
-                            spec.duration, spec.interpolator.clone(),
-                        )),
+                        spec.animation_spec(),
                     );
                 }
             }
@@ -2549,9 +2564,7 @@ fn sync_overlays(pw: &mut PerWindow, _recomposed: bool) {
                 if let Some(spec) = &enter_anim {
                     crate::animation::push_animatable_handle(
                         p, 1.0,
-                        crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
-                            spec.duration, spec.interpolator.clone(),
-                        )),
+                        spec.animation_spec(),
                     );
                 } else {
                     // 无进入动画（但 exit 有）：直接完整显示（progress=1）
@@ -2603,9 +2616,7 @@ fn begin_overlay_close(pw: &mut PerWindow, id: u64) {
             let spec = pw.overlays[idx].exit_anim.as_ref().unwrap();
             crate::animation::push_animatable_handle(
                 p, 0.0,
-                crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
-                    spec.duration, spec.interpolator.clone(),
-                )),
+                spec.animation_spec(),
             );
         }
     }
@@ -2702,6 +2713,19 @@ fn layout_overlays(pw: &mut PerWindow) {
                 P::Center => ((w - size.0) / 2.0, (h - size.1) / 2.0),
             }
         } else { pos };
+        // Anchor slide: the panel starts at the anchor's corner and ends at the window's, both axes moving
+        // together — Compose's `(lerp(collapsedBounds.left, offsetX, progress),
+        // lerp(collapsedBounds.top, offsetY, progress))` with both offsets 0. Only this pass knows the
+        // anchor's coordinates, so the interpolation happens here; the caller supplies the progress reader.
+        let pos = if let (Some(slide), true) = (&ov.anchor_slide, anchored) {
+            let p = slide.progress();
+            (
+                crate::ui::overlay::anchor_slide_lerp(ax, p),
+                crate::ui::overlay::anchor_slide_lerp(ay, p),
+            )
+        } else {
+            pos
+        };
         ov.screen_pos = (pos.0 + ov.offset.0, pos.1 + ov.offset.1);
         // Flight coordinate frame (Phase 4 Tier1): overlay canvas renders
         // translated by screen_pos — visuals store window-minus-origin.
