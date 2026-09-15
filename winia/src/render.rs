@@ -748,6 +748,26 @@ fn render_pass1(
             if alpha <= 0.001 || l.width <= 0.0 || l.height <= 0.0 {
                 return;
             }
+            // Render-time trace (node level): the flight's painted rect, radii, clip and alpha are all
+            // produced HERE and stored nowhere — the layout tree only knows the end's own layout box, and the
+            // flight records describe the flight's decision rather than the geometry this call was handed.
+            // Recorded before the early-return above would have skipped it, i.e. only what is really painted.
+            if crate::anim_trace::enabled() {
+                let mut r = crate::anim_trace::TraceRecord::render(node.slot_key);
+                r.role = Some(match t.role {
+                    TransitionRole::Source => "Source",
+                    TransitionRole::Target => "Target",
+                    TransitionRole::Morph => "Morph",
+                });
+                r.flight = Some(t.flight);
+                r.progress = Some(t.progress);
+                r.painted = Some(crate::anim_trace::TraceRect { x: l.x, y: l.y, w: l.width, h: l.height });
+                r.alpha = Some(alpha);
+                r.radii = Some(t.radii());
+                r.clip = Some(t.clip);
+                r.detail = Some(format!("node={:#x}", node.id));
+                crate::anim_trace::record(r);
+            }
             canvas.save();
             // Expand wipes in from the edge — force the lerped-bounds clip
             // even when the marker asked for none (else content overflows).
@@ -921,6 +941,27 @@ fn render_pass1(
 
     // 图形层：包住整个节点（background + text + children），应用 alpha/变换/颜色滤镜
     let gl_params = node.modifier.graphics_layer_params();
+    // Render-time trace (node level): the alpha a `graphics_layer` contributed exists only here — it is read
+    // from the modifier chain at paint time and never stored. A `Modifier::alpha` or an animated layer alpha
+    // (a fade) was therefore invisible to every other channel.
+    if crate::anim_trace::enabled() {
+        if let Some(gl) = gl_params.as_ref() {
+            if gl.alpha < 1.0 || gl.scale_x != 1.0 || gl.scale_y != 1.0
+                || gl.translation_x != 0.0 || gl.translation_y != 0.0
+                || gl.rotation_z != 0.0
+            {
+                let mut r = crate::anim_trace::TraceRecord::render(node.slot_key);
+                r.phase = Some("graphics_layer");
+                r.alpha = Some(gl.alpha);
+                r.layout = Some(crate::anim_trace::TraceRect { x, y, w, h });
+                r.detail = Some(format!(
+                    "scale=({:.4},{:.4}) translate=({:.2},{:.2}) rot_z={:.2} clip={}",
+                    gl.scale_x, gl.scale_y, gl.translation_x, gl.translation_y, gl.rotation_z, gl.clip
+                ));
+                crate::anim_trace::record(r);
+            }
+        }
+    }
     let gl_saved = if let Some(gl) = gl_params {
         let has_filter = gl.color_filter.is_some();
         let has_alpha = gl.alpha < 1.0;
