@@ -2333,6 +2333,32 @@ fn inner_component_drag(drag: Option<usize>, scroll: Option<usize>) -> bool {
     }
 }
 
+/// Press-gesture target on a hit path, as `(node_id, slot_key, has_drag)`: the innermost
+/// node that can receive a press.
+///
+/// A drag gesture that is an ANCESTOR of a scroll container is skipped, so the panel
+/// `on_drag` of a bottom sheet does not build a drag tracker when a press lands in the list
+/// inside it — the two systems would run at once and the sheet would follow the finger before
+/// the list had scrolled to its end. An inner gesture component (a slider or a switch inside
+/// the scroll) still wins, because drag deeper than scroll means the component. This is
+/// Compose's "content scrolling wins" rule, and the main tree (`gesture_down`) and the overlay
+/// path (`overlay_down`) share it here so a popup behaves like the rest of the app.
+fn press_gesture_target(
+    nodes: &[crate::layout::node::LayoutNode],
+    path: &[usize],
+) -> Option<(u64, u64, bool)> {
+    let scroll_idx = path_scroll_idx(nodes, path);
+    let gid = path.iter().rev()
+        .find(|&&i| {
+            if !nodes[i].modifier.has_gesture() { return false; }
+            if !nodes[i].modifier.has_drag_gesture() { return true; } // non-drag gestures (tap) are never skipped
+            inner_component_drag(Some(i), scroll_idx)
+        })
+        .copied()?;
+    let n = &nodes[gid];
+    Some((n.id, n.slot_key, n.modifier.has_drag_gesture()))
+}
+
 /// 指针按下手势入口：hit test 找最内层手势节点 → 创建 tracker（capture 语义——
 /// 后续 move/up 由 gesture_node 路由，指针移出组件仍接收）→ on_press 立即触发。
 fn gesture_down(pw: &mut PerWindow, scene_pos: (f32, f32)) {
@@ -2341,25 +2367,11 @@ fn gesture_down(pw: &mut PerWindow, scene_pos: (f32, f32)) {
         let nodes = pw.composer.arena_nodes();
         let Some(r) = pw.composer.layout_root_idx() else { return; };
         let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
-        // 跳过「是滚动容器祖先」的拖拽 fallback（如 BottomSheet 面板 on_drag）——
-        // 列表区按下时面板不应建 drag tracker，否则与滚动双系统并发（列表没到头
-        // sheet 就跟着动）。内层手势组件（slider/switch/按钮，drag 比 scroll 深）
-        // 仍命中并拦截滚动。对齐 Compose「内容滚动优先」。
-        let scroll_idx = path_scroll_idx(nodes, &path);
-        let Some(gid) = path.iter().rev()
-            .find(|&&i| {
-                if !nodes[i].modifier.has_gesture() { return false; }
-                if !nodes[i].modifier.has_drag_gesture() { return true; } // 非拖拽手势（tap 等）不跳过
-                // 拖拽手势：是 scroll 祖先 → 跳过（滚动优先）；否则（内层组件）命中
-                inner_component_drag(Some(i), scroll_idx)
-            })
-            .copied() else {
-            return;
-        };
-        let n = &nodes[gid];
-        (n.id, n.slot_key, n.modifier.has_drag_gesture())
+        press_gesture_target(nodes, &path)
     };
-    let (node_id, slot, has_drag) = hit;
+    let Some((node_id, slot, has_drag)) = hit else {
+        return;
+    };
 
     // 处理待补发的 tap（Compose 双击语义，规则见 pending_tap_on_down）：
     // - 超时 → 补发；同节点窗口内第二次按下 → 取消（等 up 判定双击）；
@@ -3049,16 +3061,34 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::modifier
                 }
             }
         }
-        // Overlay focus + caret + pointer dispatch (mirrors handle_pointer_down):
-        // overlay content previously received only on_click — TextField focus
-        // (via on_press → request_focus) never fired inside overlays, so typing
-        // into overlay inputs (SearchBar expanded, Dialog forms) was impossible.
-        // - Dispatch pointer Down to the overlay arena (on_ptr handlers).
-        // - Focus the deepest focusable/wants_ime node on the hit path
-        //   (same rule as debug-click focus, main tree).
-        // - Place the text caret from the grapheme anchor (tap-to-place caret).
-        // Taps on non-focusable content leave focus untouched (typing continues
-        // after tapping result rows). Drag-select inside overlay inputs is v1-out.
+        // Press gesture — the same dispatch the main tree does from `gesture_down`. The overlay
+        // path used to fire only `on_click` (on up, through `fire_click_along_path`), so a
+        // component whose reaction lives on `on_press` was dead inside a popup: a popup
+        // `TextField` focuses through `on_press → FocusRequester::request_focus`, which is why
+        // this handler used to need a focus rule of its own. With the gesture dispatched, popup
+        // content reacts like main-tree content and that rule is gone (the focus lands one frame
+        // later, through the ordinary focus-request queue — see `take_focus_requests`).
+        {
+            let nodes = ov.composer.arena_nodes();
+            if let Some(r) = ov.composer.layout_root_idx() {
+                let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1);
+                if let Some((_, slot, _)) = press_gesture_target(nodes, &path) {
+                    fire_gesture_action(nodes, r, slot, crate::input::gesture::GestureAction::Press(local));
+                }
+            }
+        }
+        // Overlay pointer dispatch + caret placement — the main-tree sequence from
+        // `handle_pointer_down`: Down goes to the overlay arena for its `on_ptr` handlers, and a
+        // tap places the text caret from the grapheme anchor (tap-to-place).
+        //
+        // Focus is deliberately NOT set here. A component that wants the keyboard asks for it,
+        // and the press gesture above just gave it that chance (the popup `TextField` container
+        // does `on_press → FocusRequester::request_focus`), so a tap on a popup button leaves the
+        // field beside it alone — the rule Compose's `Clickable` follows by never calling
+        // `requestFocus` for a click. This handler used to focus the deepest focusable node on the
+        // hit path (the debug-click rule, see `consume_debug_events`), which stole the keyboard
+        // from a field as soon as any button in the same popup was tapped. Drag-select inside
+        // overlay inputs is v1-out.
         {
             let ptr_ev = crate::modifier::PointerEvent {
                 event_type: crate::modifier::PointerEventType::Down,
@@ -3070,10 +3100,10 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::modifier
                 is_shift_pressed: pw.modifiers.shift_key(),
                 is_meta_pressed: pw.modifiers.meta_key(),
             };
-            // Read phase (immutable): hit path, focus target, caret anchor.
+            // Read phase (immutable): hit path + caret anchor.
             // (Root is guaranteed by hit_overlay above; the None arm only
             // satisfies the compiler and still falls through to click recording.)
-            let (path, focus_target, caret): (Vec<usize>, Option<(u64, u64, bool)>, Option<(usize, usize)>) = match {
+            let (path, caret): (Vec<usize>, Option<(usize, usize)>) = match {
                 let ov = &pw.overlays[i];
                 let nodes = ov.composer.arena_nodes();
                 // Owned roots: the scrutinee borrow ends here, but the arm
@@ -3084,34 +3114,9 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::modifier
                     Some(r) => Some((nodes, r, troots)),
                 }
             } {
-                None => (Vec::new(), None, None),
+                None => (Vec::new(), None),
                 Some((nodes, r, troots)) => {
                 let path = hit_test_with_flights(nodes, r, &troots, local.0, local.1);
-                // A tap takes focus only from a node that both IS the tappable field and HOLDS
-                // the input: focusable itself, with an IME-wanting node in its subtree.
-                //
-                // Being merely focusable is not enough: every component that builds its click
-                // through `clickable_with_source` (Buttons and the rest — plain
-                // `Modifier::clickable` is not focusable at all) carries a Focusable element,
-                // and Compose's `Clickable` behaves the same way — it delegates a
-                // `FocusableNode` so the node joins Tab navigation, and never calls
-                // `requestFocus`. The main tree here follows that rule: a tap focuses nothing,
-                // and a component that wants the keyboard asks for it itself. The old
-                // `focusable || wants_ime` was the DEBUG-CLICK rule (see `consume_debug_events`)
-                // and let a button in a dialog take the keyboard away from the field beside it.
-                //
-                // An IME-wanting descendant alone is too broad the other way — every ANCESTOR of
-                // a text field has one, so tapping that same button focused the dialog's content
-                // column — while the descendant half is still needed, because a container-based
-                // TextField keeps its IME callback on the input leaf, which is 0 wide while the
-                // field is empty and never on the hit path. Measured by
-                // `clicking_an_overlay_button_does_not_steal_focus`.
-                let focus_target = path.iter().rev().find_map(|&idx| {
-                    let focusable = crate::layout::node::has_focusable_modifier(&nodes[idx]);
-                    (focusable && node_or_descendant_wants_ime(nodes, idx)).then(|| {
-                        (nodes[idx].id, nodes[idx].slot_key, true)
-                    })
-                });
                 let caret = (|| {
                     let &innermost = path.last()?;
                     let anchor_node = find_anchor_text_node(nodes, &path, innermost)?;
@@ -3127,7 +3132,7 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::modifier
                         .unwrap_or(hit);
                     Some((anchor_node, edit))
                 })();
-                (path, focus_target, caret)
+                (path, caret)
                 }
             };
             // Pointer dispatch (immutable arena borrow, ends immediately).
@@ -3137,34 +3142,6 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::modifier
                     let nodes = ov.composer.arena_nodes();
                     dispatch_ptr_event(nodes, r, &path, &ptr_ev, local, None);
                 }
-            }
-            // Mutation phase: focus flags + cached ids + caret + IME.
-            if let Some((fid, fslot, wants_ime)) = focus_target {
-                if let Some(r) = pw.overlays[i].composer.layout_root_idx() {
-                    let nodes = pw.overlays[i].composer.arena_nodes_mut();
-                    crate::layout::node::clear_focus(nodes, r);
-                    crate::layout::node::set_focus_by_id(nodes, r, fid);
-                }
-                pw.overlays[i].focused_id = Some(fid);
-                pw.overlays[i].focused_slot_key = Some(fslot);
-                // Single-focus invariant: overlay focus clears main + sibling foci.
-                if pw.focused_id.is_some() {
-                    if let Some(r) = pw.composer.layout_root_idx() {
-                        crate::layout::node::clear_focus(pw.composer.arena_nodes_mut(), r);
-                    }
-                    pw.focused_id = None;
-                    pw.focused_slot_key = None;
-                }
-                for (j, other) in pw.overlays.iter_mut().enumerate() {
-                    if j != i && other.focused_id.is_some() {
-                        if let Some(r) = other.composer.layout_root_idx() {
-                            crate::layout::node::clear_focus(other.composer.arena_nodes_mut(), r);
-                        }
-                        other.focused_id = None;
-                        other.focused_slot_key = None;
-                    }
-                }
-                if let Some(ref sw) = pw.skia_window { sw.set_ime_allowed(wants_ime); }
             }
             if let Some((aidx, aoff)) = caret {
                 let nodes = pw.overlays[i].composer.arena_nodes();
@@ -3184,24 +3161,43 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::modifier
         pw.overlay_click = Some((i, local, nid.unwrap_or(0)));
         return true; // 事件消费——不进主树
     }
-    // 外部点击：模态或可关闭 → dismiss（消费事件）
+    // Outside press: an overlay that dismisses on an outside press closes; an overlay that does
+    // not still CONSUMES the press when it is modal (its scrim blocks what is behind it).
+    //
+    // ⚠ `dismiss_on_outside == false` has to be honoured for a modal overlay too: `modal` alone
+    // says "blocks the content behind", not "closes on any press". Compose's
+    // `DialogProperties(dismissOnClickOutside = false)` and `PopupProperties.dismissOnClickOutside`
+    // keep the overlay open, and callers pass the flag for exactly that — Nav3's
+    // `dialogProperties` (`nav.rs`) and `AlertDialog`'s own builder. Treating `modal` as
+    // "dismiss" made those flags silent no-ops.
     // ⚠ 同步移除（不等 recompose）——否则残留 overlay 会吞掉关闭后
     // 紧接着的点击（用户"点两次才打开"）且多渲染一帧（视觉闪烁）
     for i in (0..pw.overlays.len()).rev() {
-        if pw.overlays[i].modal || pw.overlays[i].dismiss_on_outside {
-            let passthrough = pw.overlays[i].click_passthrough;
-            let id = pw.overlays[i].id;
+        // A closing overlay is on its way out: it must not be dismissed again and must not swallow
+        // the press — `hit_overlay` treats it as transparent for the same reason. Without this a
+        // dialog that was just closed (Escape, a button, an outside press) eats the next press for
+        // the length of its exit animation, which is the "click twice to open" complaint.
+        if pw.overlays[i].closing {
+            continue;
+        }
+        let dismiss = pw.overlays[i].dismiss_on_outside;
+        if !dismiss && !pw.overlays[i].modal {
+            continue;
+        }
+        let passthrough = pw.overlays[i].click_passthrough;
+        let id = pw.overlays[i].id;
+        if dismiss {
             // 启动退出动画（不复位——动画完成后移除；passthrough Tooltip 的
             // on_dismiss 同步置 visible=false → 组合期记录 active=false 走
             // begin_overlay_close；这里先直接触发——两者幂等（closing 防重入））
             begin_overlay_close(pw, id);
-            // ⚠ Tooltip（passthrough）：dismiss 后**放行主树**——点击不消费
-            // （否则点按钮第一次只关 tooltip、按钮收不到——需点两次）
-            if passthrough {
-                continue;
-            }
-            return true;
         }
+        // ⚠ Tooltip（passthrough）：dismiss 后**放行主树**——点击不消费
+        // （否则点按钮第一次只关 tooltip、按钮收不到——需点两次）
+        if passthrough {
+            continue;
+        }
+        return true;
     }
     false
 }
@@ -3826,10 +3822,17 @@ fn handle_pointer_move(
                 if let Some(ov) = pw.overlays.get(idx) {
                     let nodes = ov.composer.arena_nodes();
                     if let Some(r) = ov.composer.layout_root_idx() {
+                        // ⚠ The overlay arena is LAYER-local, and a gesture callback receives
+                        // node-local coordinates (`fire_gesture_action` subtracts the node's
+                        // position inside the arena it was given). So the absolute position has to
+                        // be converted here — passing `scene_pos` shifted it by the popup's screen
+                        // origin, which is why dragging a Slider inside a popup landed on the wrong
+                        // value (deltas are unaffected: the layer offset cancels in a difference).
+                        let local = (scene_pos.0 - ov.screen_pos.0, scene_pos.1 - ov.screen_pos.1);
                         fire_gesture_action(nodes, r, slot,
-                            crate::input::gesture::GestureAction::DragStart(scene_pos));
+                            crate::input::gesture::GestureAction::DragStart(local));
                         fire_gesture_action(nodes, r, slot,
-                            crate::input::gesture::GestureAction::DragMove(scene_pos, (dx, dy)));
+                            crate::input::gesture::GestureAction::DragMove(local, (dx, dy)));
                     }
                 }
                 handled = true;
@@ -3841,8 +3844,9 @@ fn handle_pointer_move(
             if let Some(ov) = pw.overlays.get(idx) {
                 let nodes = ov.composer.arena_nodes();
                 if let Some(r) = ov.composer.layout_root_idx() {
+                    let local = (scene_pos.0 - ov.screen_pos.0, scene_pos.1 - ov.screen_pos.1);
                     fire_gesture_action(nodes, r, slot,
-                        crate::input::gesture::GestureAction::DragMove(scene_pos, inc));
+                        crate::input::gesture::GestureAction::DragMove(local, inc));
                 }
             }
             handled = true;

@@ -90,6 +90,19 @@ cargo test --features debug-server --test ui_test
 
 环境变量：`UI_TEST_STDERR=1` 转发 fixture stderr 到测试输出（诊断用）。
 
+⚠ Always pass `--features debug-server`. Without it the fixture bins are relinked *without* the
+debug server, and every UI test then fails in the worst possible way: the child process stays alive
+but is silent (no `TREE:` on stdout, no stderr), so `launch` times out with `TREE 响应数=0` and
+`stdout 已收: (空)` after 20s and looks like an environment/window problem.
+
+⚠ An overlay that dismisses on an outside press (`dismiss_on_outside` — every modal overlay, and a
+`Popup` by default) CONSUMES the press that closes it: it does not reach the main tree. So a ui test
+cannot drag main-tree content while such an overlay is open — the gesture's first press disappears
+and the drag looks like it "did not arrive" (measured while writing `fixture_popup_drag`). Either
+keep the gesture inside the overlay, or keep the overlay open with
+`Popup::dismiss_on_outside(false)` / `Dialog::dismiss_on_outside(false)`; `click_passthrough`
+tooltips are the one overlay that deliberately lets the press through.
+
 ## 新增场景测试（按测试用例设计原则）
 
 1. 在 `tests/ui_fixtures/` 写 fixture（**单一场景**——Given/When/Then 可读）：

@@ -9,7 +9,7 @@
 
 mod ui;
 use ui::UiTest;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 // ═══════════════════════════════════════════════════════════════
 // fixture_click：点击计数
@@ -538,4 +538,142 @@ fn clicking_an_overlay_button_does_not_steal_focus() {
     // And the keyboard must still reach the field.
     app.key("!");
     app.expect_text_timeout("dialog-field: hi!", Duration::from_secs(5));
+}
+
+/// A popup's pointer-down must dispatch the press gesture, so a component's own `on_press`
+/// runs inside a popup exactly as it does in the main tree.
+///
+/// The overlay path used to dispatch `on_click` only (on up), which is why `overlay_down`
+/// carried a focus heuristic at all: a popup `TextField` focuses through
+/// `on_press → FocusRequester::request_focus`, and that callback never fired. This asserts the
+/// gesture itself, on a zone that has no click of any kind — `on_press` is its only channel.
+#[test]
+fn an_overlay_press_zone_receives_the_press_gesture() {
+    let mut app = UiTest::launch("overlay_focus");
+    app.expect_text("dialog-open: no");
+
+    app.click_tag("open-dialog");
+    app.expect_text_timeout("dialog-open: yes", Duration::from_secs(5));
+    app.expect_text("presses: 0");
+
+    app.click_overlay_tag("dialog-press-zone");
+    app.expect_text_timeout("presses: 1", Duration::from_secs(5));
+}
+
+/// A drag inside a popup reaches the same value as the same drag in the main tree.
+///
+/// The overlay drag path used to pass WINDOW coordinates into callbacks whose contract is
+/// node-local (`fire_gesture_action` subtracts a position from the arena it was handed, and a
+/// popup's arena is layer-local), so a popup `on_drag` saw its `pos` shifted by the popup's screen
+/// origin. `Slider` reads `pos.0`, which is why a drag in a popup landed on the wrong value — 0.40
+/// for a drag to the 10% point of its own track, against 0.08 for the identical drag in the main
+/// tree, before the fix.
+#[test]
+fn a_drag_inside_a_popup_reaches_the_same_value_as_in_the_main_tree() {
+    let mut app = UiTest::launch("popup_drag");
+    app.expect_text("main: 0.00");
+    app.expect_text("popup: 0.00");
+
+    let (mx, my, mw, mh) = app.find_tag("main-slider").expect("no main-slider");
+    let (px, py, pw, ph) = app
+        .find_tag_in_overlay("popup-slider")
+        .expect("no popup-slider in the popup entries");
+    // The fixture offsets the popup horizontally on purpose: at screen origin (0, 0) a layer-vs-scene
+    // coordinate mistake is invisible, which is how the bug survived. (The fixture also passes
+    // `dismiss_on_outside(false)`, so the page drag below is not eaten by a dismissal.)
+    assert!(
+        px > 100.0,
+        "the fixture's popup must not sit at the window origin (popup slider x = {px})"
+    );
+
+    // One gesture per slider: from the middle of its track to 10% into it. The same gesture relative
+    // to the track must end on the same value in both arenas.
+    let drag = |app: &mut UiTest, x: f32, y: f32, w: f32, h: f32| {
+        let (from_x, to_x, mid_y) = (x + w / 2.0, x + w * 0.10, y + h / 2.0);
+        app.send(&format!("d {} {}", from_x as i32, mid_y as i32));
+        for i in 1..=8 {
+            let t = i as f32 / 8.0;
+            app.send(&format!("m {} {}", (from_x + (to_x - from_x) * t) as i32, mid_y as i32));
+        }
+        app.send(&format!("u {} {}", to_x as i32, mid_y as i32));
+        std::thread::sleep(Duration::from_millis(300));
+    };
+    drag(&mut app, mx, my, mw, mh);
+    drag(&mut app, px, py, pw, ph);
+
+    // `all_texts` yields the tree's `mod` strings (e.g. `text(main: 0.00)`), so pull the number out
+    // of the label and stop at the trailing bracket.
+    let read = |texts: &[String], label: &str| -> Option<f32> {
+        let t = texts.iter().find(|t| t.contains(label))?;
+        let rest = &t[t.find(label)? + label.len()..];
+        let num: String = rest.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+        num.parse().ok()
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let (main, popup) = loop {
+        app.refresh();
+        let texts = app.all_texts();
+        let main = read(&texts, "main: ");
+        let popup = read(&texts, "popup: ");
+        if let Some((m, p)) = main.zip(popup) {
+            if m > 0.0 && p > 0.0 {
+                break (m, p);
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "a drag did not move either slider (main = {main:?}, popup = {popup:?})"
+        );
+        std::thread::sleep(Duration::from_millis(120));
+    };
+    assert!(
+        (0.04..0.20).contains(&main) && (0.04..0.20).contains(&popup),
+        "both drags ended 10% into their own track, so both values must be near 0.10 — the popup one is the layer-offset 0.40 without the layer-local conversion (main = {main}, popup = {popup}, popup slider x = {px})"
+    );
+    assert!(
+        (main - popup).abs() < 0.06,
+        "the same drag must give the same value inside a popup and in the main tree (main = {main}, popup = {popup})"
+    );
+}
+
+/// `dismiss_on_outside` decides whether an outside press closes an overlay.
+///
+/// The outside-press tail used to close any overlay that was `modal || dismiss_on_outside`, so the
+/// flag was a silent no-op for every modal overlay — a dialog asked to stay open closed anyway, and
+/// a modal overlay still has to CONSUME that press (its scrim blocks what is behind it), which the
+/// page button's click count pins down.
+#[test]
+fn a_modal_dialog_with_dismiss_on_outside_false_stays_open() {
+    let mut app = UiTest::launch("dialog_dismiss");
+    app.expect_text("a: closed / b: closed");
+
+    // The page button must be able to increment its counter at all, or the two "the press was
+    // consumed" assertions below would hold vacuously (a `page-clicks: 0` that can never move).
+    app.click_tag("page-button");
+    app.expect_text_timeout("page-clicks: 1", Duration::from_secs(5));
+
+    // Phase A: the flag is off, so an outside press neither closes the dialog nor reaches the page.
+    app.click_tag("open-a");
+    app.expect_text_timeout("a: open", Duration::from_secs(5));
+    assert_eq!(app.overlay_count(), 1, "the dialog is open");
+
+    app.click_tag("page-button");
+    app.expect_text("page-clicks: 1");
+    app.expect_text("a: open");
+    assert_eq!(
+        app.overlay_count(),
+        1,
+        "a modal dialog with dismiss_on_outside(false) must not close on an outside press"
+    );
+
+    // Phase B: with the default flag the same press closes it.
+    app.key("Escape");
+    app.expect_text_timeout("a: closed", Duration::from_secs(5));
+    app.click_tag("open-b");
+    app.expect_text_timeout("b: open", Duration::from_secs(5));
+    app.click_tag("page-button");
+    app.expect_text_timeout("b: closed", Duration::from_secs(5));
+    // ... and that press was consumed by the dismissal, not delivered to the page.
+    app.expect_text("page-clicks: 1");
+    assert_eq!(app.overlay_count(), 0, "the default dialog closes");
 }
