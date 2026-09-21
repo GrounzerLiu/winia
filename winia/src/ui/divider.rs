@@ -202,52 +202,64 @@ pub(crate) fn draw_divider_line(
     thickness: f32,
     color: Color,
 ) {
-    let px = if thickness.is_nan() { 0.0 } else { thickness };
-    if px < 0.0 { return; }
+    // Anything at or below zero is the hairline (the sentinel is `f32::NAN`, and a negative
+    // thickness has no meaning as an extent); a real thickness is stroked at that width.
+    let px = if thickness.is_nan() || thickness <= 0.0 { 0.0 } else { thickness };
     let mut paint = skia_safe::Paint::default();
     paint.set_anti_alias(true);
     paint.set_style(skia_safe::PaintStyle::Stroke);
     paint.set_stroke_width(px);
     paint.set_color(skia_color(color));
-    // A device hairline covers half a pixel either side of the point it is centred on, so
-    // centring it on the node's edge — Compose's `thickness.toPx() / 2` with a zero thickness
-    // — splits it across two rows at 50 % each. Half a DEVICE pixel in local units puts it in
-    // the middle of one row instead, which is the crisp single pixel the docs promise. Thicker
-    // lines keep the plain half-thickness centre, which lands them inside their own box.
+    if px > 0.0 {
+        // A real thickness is centred on itself (`thickness / 2`), which keeps the stroke
+        // inside its own box; the box scales with the canvas, so nothing needs snapping.
+        if vertical {
+            let cx = rect.left + px / 2.0;
+            canvas.draw_line(
+                skia_safe::Point::new(cx, rect.top),
+                skia_safe::Point::new(cx, rect.bottom),
+                &paint,
+            );
+        } else {
+            let cy = rect.top + px / 2.0;
+            canvas.draw_line(
+                skia_safe::Point::new(rect.left, cy),
+                skia_safe::Point::new(rect.right, cy),
+                &paint,
+            );
+        }
+        return;
+    }
+    // The hairline. A device hairline covers half a pixel either side of the point it is
+    // centred on, so centring it on the node's edge — Compose's `thickness.toPx() / 2` with a
+    // zero thickness — splits it across two rows at 50 % each. Snap it to the middle of the
+    // device row its ideal centre falls in instead, and it is one fully covered pixel.
+    //
+    // The snap has to happen in DEVICE space: the local origin is not the device origin once
+    // the canvas is translated, and a fractional translation (an overlay placed at a
+    // fractional position, a graphics layer mid-slide) puts the line back off-grid. The
+    // residual is carried back into local units, so this is at most half a device pixel from
+    // the ideal position — and exactly the ideal position when the translation is integral.
+    //
+    // Below a scale of 0.5 the divider's one-logical-px box is itself sub-pixel and the snapped
+    // row falls outside it; no snap choice fixes that, and desktop scale factors are >= 1.
     let m = canvas.local_to_device_as_3x3();
-    let (sx, sy) = (
-        m.scale_x().abs().max(f32::EPSILON),
-        m.scale_y().abs().max(f32::EPSILON),
-    );
-    // A device pixel of layout may land anywhere within a device pixel of the screen — a
-    // divider at a fractional position, or inside a translated ancestor — and a hairline that
-    // straddles two rows is the smear this is meant to avoid. So the hairline is snapped to
-    // the middle of the device row its ideal centre falls in; the shift is at most half a
-    // device pixel. (Android's own hairline drawing snaps the same way.) Thicker lines keep
-    // the plain half-thickness centre.
-    let snap = |centre_local: f32, scale: f32| -> f32 {
-        ((centre_local * scale).floor() + 0.5) / scale
+    let snap = |centre_local: f32, scale: f32, translate_device: f32| -> f32 {
+        let scale = scale.abs().max(f32::EPSILON);
+        let device = centre_local * scale + translate_device;
+        centre_local + (device.floor() + 0.5 - device) / scale
     };
     if vertical {
-        // 垂直：x = 厚度/2（stroke 中心对齐中线），从顶到底
-        let half = if px == 0.0 { 0.5 / sx } else { px / 2.0 };
-        let cx = if px == 0.0 {
-            snap(rect.left + half, sx)
-        } else {
-            rect.left + half
-        };
+        let half = 0.5 / m.scale_x().abs().max(f32::EPSILON);
+        let cx = snap(rect.left + half, m.scale_x(), m.translate_x());
         canvas.draw_line(
             skia_safe::Point::new(cx, rect.top),
             skia_safe::Point::new(cx, rect.bottom),
             &paint,
         );
     } else {
-        let half = if px == 0.0 { 0.5 / sy } else { px / 2.0 };
-        let cy = if px == 0.0 {
-            snap(rect.top + half, sy)
-        } else {
-            rect.top + half
-        };
+        let half = 0.5 / m.scale_y().abs().max(f32::EPSILON);
+        let cy = snap(rect.top + half, m.scale_y(), m.translate_y());
         canvas.draw_line(
             skia_safe::Point::new(rect.left, cy),
             skia_safe::Point::new(rect.right, cy),
@@ -298,8 +310,13 @@ mod tests {
     }
 
     /// Render the divider through the tree with the canvas scaled the way the app scales it for
-    /// HiDPI (`canvas.scale(scale_factor)`), returning the surface and its pixel width.
-    fn render_divider_scaled(scale: f32, build: impl FnOnce(&mut ComposeCtx)) -> (Vec<[u8; 4]>, usize) {
+    /// HiDPI (`canvas.scale(scale_factor)`) and translated by `translate` DEVICE px, which is
+    /// what an overlay at a fractional position or a graphics layer mid-slide does.
+    fn render_divider_transformed(
+        scale: f32,
+        translate: (f32, f32),
+        build: impl FnOnce(&mut ComposeCtx),
+    ) -> (Vec<[u8; 4]>, usize) {
         use skia_safe::{Color as SkColor, surfaces};
         let theme = ThemeColors::light_from_seed(0x6750A4);
         let mut composer = Composer::new();
@@ -312,12 +329,20 @@ mod tests {
         let mut surface = surfaces::raster_n32_premul((side, side)).unwrap();
         let canvas = surface.canvas();
         canvas.clear(SkColor::WHITE);
+        // The order the app uses for an overlay: `render_overlays` runs on the DEVICE context
+        // (the tree's `canvas.scale` has been restored) and translates by device px itself
+        // before scaling the overlay's content up from logical units.
+        canvas.translate(translate);
         canvas.scale((scale, scale));
         let root = composer.layout_root_idx().expect("root");
         crate::render::render(composer.arena_nodes(), root, canvas);
         let pm = surface.peek_pixels().expect("pixmap");
         let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
         (px.to_vec(), pm.width() as usize)
+    }
+
+    fn render_divider_scaled(scale: f32, build: impl FnOnce(&mut ComposeCtx)) -> (Vec<[u8; 4]>, usize) {
+        render_divider_transformed(scale, (0.0, 0.0), build)
     }
 
     fn px_at(buf: &[[u8; 4]], w: usize, x: usize, y: usize) -> [u8; 4] {
@@ -496,6 +521,67 @@ mod tests {
         });
         assert_eq!(render_with(node_v), render_with(enum_v), "垂直线双路必须一致");
     }
+
+    #[test]
+    fn hairline_is_one_device_pixel_under_a_fractional_translation() {
+        // The snap has to happen in DEVICE space. An overlay at a fractional position, or a
+        // graphics layer mid-slide, translates the canvas by a fraction of a device pixel; a
+        // snap that assumed the local origin were the device origin would put the line back
+        // across two rows, which is the smear the hairline exists to avoid.
+        let custom = Color::from_argb(255, 0, 0, 255);
+        for translate in [0.0f32, 0.25, 0.4, 0.75] {
+            let (buf, w) = render_divider_transformed(1.5, (0.0, translate), |ctx| {
+                Divider::horizontal().thickness(DIVIDER_HAIRLINE).color(custom).build(ctx);
+            });
+            // The ideal centre in device px, and the row it falls in.
+            let ideal = (0.0 + 0.5 / 1.5) * 1.5 + translate;
+            let row = ideal.floor() as usize;
+            let x = 60usize;
+            let touched: Vec<usize> = (0..8).filter(|y| px_at(&buf, w, x, *y) != [255, 255, 255, 255]).collect();
+            assert_eq!(
+                touched,
+                vec![row],
+                "translate {translate}: one device row, at the row the line falls in"
+            );
+            assert!(
+                color_eq(custom, px_at(&buf, w, x, row), 2),
+                "translate {translate}: fully covered, not split across two rows"
+            );
+        }
+    }
+
+    #[test]
+    fn hairline_is_one_device_pixel_vertically() {
+        // The vertical branch is where an axis swap (`scale_y` for `scale_x`, `rect.top` for
+        // `rect.left`) would ship unnoticed: every other divider test uses a real thickness,
+        // where the snap is inactive.
+        let custom = Color::from_argb(255, 0, 0, 255);
+        for scale in [1.0f32, 1.5, 2.0] {
+            let (buf, w) = render_divider_scaled(scale, |ctx| {
+                Divider::vertical()
+                    .thickness(DIVIDER_HAIRLINE)
+                    .color(custom)
+                    .modifier(Modifier::new().padding_start(7.3))
+                    .build(ctx);
+            });
+            let ideal = (7.3 + 0.5 / scale) * scale;
+            let column = ideal.floor() as usize;
+            let y = (40.0 * scale) as usize;
+            let touched: Vec<usize> = (0..(12.0 * scale) as usize)
+                .filter(|x| px_at(&buf, w, *x, y) != [255, 255, 255, 255])
+                .collect();
+            assert_eq!(
+                touched,
+                vec![column],
+                "scale {scale}: one device COLUMN for a vertical hairline"
+            );
+            assert!(
+                color_eq(custom, px_at(&buf, w, column, y), 2),
+                "scale {scale}: fully covered"
+            );
+        }
+    }
+
     #[test]
     fn hairline_is_one_device_pixel_at_any_density_and_position() {
         // Compose's promise for `Dp.Hairline`: "a single pixel divider regardless of screen

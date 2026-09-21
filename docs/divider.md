@@ -60,7 +60,10 @@ DIVIDER_HAIRLINE: f32 = NAN;    // sentinel: one DEVICE pixel (Compose's Dp.Hair
   current `HorizontalDivider` strokes with `thickness.toPx()`, and `Dp.Hairline` is `Dp(0f)`.
   It is centred on a device ROW rather than on the node's edge, so it is fully covered instead
   of split across two rows at half alpha, and that centring is snapped to the row its ideal
-  position falls in, so a divider at a fractional offset stays crisp too.
+  position falls in — in DEVICE space, so a fractional canvas translation (an overlay at a
+  fractional position, a layer mid-slide) is accounted for. This makes winia's hairline
+  CRISPER than Compose's, which draws on the box's edge and does not snap; it is not parity and
+  is not claimed as such.
 - DEVIATION: a hairline occupies ONE LOGICAL px of layout. Compose asks for
   `height(Dp.Hairline)` — zero height — and paints anyway, because its `Canvas` is not gated on
   the element having size; winia's `render_pass1` returns early for `w <= 0.0 || h <= 0.0`, so a
@@ -77,7 +80,7 @@ DIVIDER_HAIRLINE: f32 = NAN;    // sentinel: one DEVICE pixel (Compose's Dp.Hair
 
 - Compose 旧 `Divider` 名已废弃改名 `HorizontalDivider`；winia 用
   `Divider::horizontal()/vertical()` 双构造（无历史包袱）。
-- `Dp.Hairline` 在 winia 用 `f32::NAN` 哨兵表达（winia 无 Dp 类型）。
+- `Dp.Hairline` is expressed in winia as the `f32::NAN` sentinel — `Divider::thickness` takes an `f32`, so the sentinel rides in the thickness rather than in a `Dp` (winia has one; it is in the prelude).
 - 无无障碍语义（winia 语义系统未覆盖，同其它组件）。
 
 ## 4. 运行与测试
