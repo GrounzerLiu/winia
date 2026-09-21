@@ -34,13 +34,17 @@ Neither path focuses anything on a tap. A component that wants the keyboard asks
 `on_press`:
 
 - `TextField`'s container: `.on_press(move |_| fr.request_focus())` (`text_field.rs:1698/1709`).
-- `Modifier::clickable` (Buttons and the rest): focusable for Tab navigation, but **never** calls
-  `request_focus` — the same rule as Compose's `Clickable`, which delegates a `FocusableNode` and
-  never requests focus for a click.
+- Buttons and the rest (`clickable_with_source`, `modifier.rs:1496`): focusable, so they join Tab
+  navigation, but they **never** call `request_focus` — the same rule as Compose's `Clickable`, which
+  delegates a `FocusableNode` and never requests focus for a click. (Bare `Modifier::clickable` is
+  not focusable at all; the `Focusable` element comes from the `_with_source` variant.)
 
 `FocusRequester::request_focus()` queues a request; it is applied on the next frame before compose
 (`app.rs:1272`), resolving against the main tree first and then the overlays topmost-first, keeping a
-single focus and setting the IME accordingly.
+single focus and setting the IME accordingly. The press itself does not schedule that frame, and the
+main tree does not either: a press that changes nothing (no state, no animation) can leave focus
+queued until whatever schedules the next frame. Tapping a field normally changes the caret or the
+selection, which wakes the app, so the focus lands on the following frame.
 
 History worth knowing: the popup path used to fire only `on_click` (on release), so a popup's
 `on_press` never ran and a popup `TextField` could not be focused by tapping. `overlay_down` carried
@@ -55,6 +59,13 @@ Popup content does not get the gesture *tracker*: `overlay_down` builds its own 
 (`pw.overlay_drag`, `pw.overlay_drag_scroll`) instead of `pw.gesture`, so `Modifier::on_tap`,
 `on_double_tap` and `on_long_press` never fire inside a popup — `on_click` does (on release), and
 `on_drag` does too (the overlay drag path fires `DragStart` / `DragMove` / `DragEnd` itself; see
-`app.rs:3806`). Closing the tap gap means routing popup gestures through the shared tracker, which
-needs arena-aware tracker state — today `gesture_slot` / `gesture_node` resolve against the main
-tree's arena only.
+`app.rs:3806`). Two caveats on the drag half:
+
+- Its `pos` argument is wrong inside a popup: those calls pass window coordinates (`scene_pos`) while
+  `fire_gesture_action` subtracts a position from the overlay's own arena, so a popup `on_drag` sees
+  `pos` shifted by the popup's screen origin (the `delta` argument is fine). `Slider` reads `pos.0`,
+  so dragging a slider inside a popup lands on a wrong value; its tap-to-set works, because the press
+  block passes `local`.
+- Closing the tap gap means routing popup gestures through the shared tracker, which needs
+  arena-aware tracker state — today `gesture_slot` / `gesture_node` resolve against the main tree's
+  arena only.
