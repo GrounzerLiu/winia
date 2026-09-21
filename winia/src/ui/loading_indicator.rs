@@ -305,6 +305,24 @@ fn draw_container(canvas: &skia_safe::Canvas, rect: skia_safe::Rect, color: Colo
             ]);
             canvas.draw_rrect(rr, &paint);
         }
+        Shape::RightRoundedRect { radius } => {
+            let rr = skia_safe::RRect::new_rect_radii(rect, &[
+                skia_safe::Vector::new(0.0, 0.0),
+                skia_safe::Vector::new(radius, radius),
+                skia_safe::Vector::new(radius, radius),
+                skia_safe::Vector::new(0.0, 0.0),
+            ]);
+            canvas.draw_rrect(rr, &paint);
+        }
+        Shape::LeftRoundedRect { radius } => {
+            let rr = skia_safe::RRect::new_rect_radii(rect, &[
+                skia_safe::Vector::new(radius, radius),
+                skia_safe::Vector::new(0.0, 0.0),
+                skia_safe::Vector::new(0.0, 0.0),
+                skia_safe::Vector::new(radius, radius),
+            ]);
+            canvas.draw_rrect(rr, &paint);
+        }
         Shape::Rectangle => {
             canvas.draw_rect(rect, &paint);
         }

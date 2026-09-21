@@ -27,6 +27,12 @@ use crate::core::state::State;
 /// hold-still (velocity 0) — cf. Compose VelocityTracker horizon (~100ms).
 const VELOCITY_EXPIRY_MS: u128 = 100;
 
+/// Default fling threshold in dp/s — Compose `AnchoredDraggableMinFlingVelocity`.
+/// A component with its own token overrides it via
+/// [`AnchoredDraggableState::set_velocity_threshold_dp`] (the navigation drawer
+/// uses `DrawerVelocityThreshold` = 400.dp).
+const DEFAULT_VELOCITY_THRESHOLD_DP: f32 = 125.0;
+
 // ═══════════════ DraggableAnchors ═══════════════
 
 /// 锚点集合：值 → 位置(px) 映射。位置按**值**存，查询按位置找最近值。
@@ -118,6 +124,29 @@ impl<T: Clone + PartialEq + Eq + Ord> Default for DraggableAnchors<T> {
     }
 }
 
+// ═══════════════ 进度计算 ═══════════════
+
+/// Shared `progress(from, to)` maths: where `offset` sits between the two anchor
+/// positions, clamped to 0..1. Uninitialized geometry reports 1.0 (matches the
+/// historical behaviour: callers gate on `previous.is_some()`-style conditions).
+fn progress_impl<T: Clone + PartialEq + Eq + Ord>(
+    anchors: &DraggableAnchors<T>,
+    off: f32,
+    from: &T,
+    to: &T,
+) -> f32 {
+    let from_pos = anchors.position_of(from);
+    let to_pos = anchors.position_of(to);
+    if off.is_nan() || from_pos.is_nan() || to_pos.is_nan() {
+        return 1.0;
+    }
+    let lo = from_pos.min(to_pos);
+    let hi = from_pos.max(to_pos);
+    let c = off.clamp(lo, hi);
+    let frac = (c - from_pos) / (to_pos - from_pos);
+    if frac < 1e-6 { 0.0 } else if frac > 1.0 - 1e-6 { 1.0 } else { frac.abs() }
+}
+
 // ═══════════════ AnchoredDraggableState ═══════════════
 
 /// 锚点拖拽状态机（对标 Compose `AnchoredDraggableState`）。
@@ -141,6 +170,10 @@ pub struct AnchoredDraggableState<T: Clone + PartialEq + Eq + Ord + 'static> {
     last_velocity: State<f32>,
     /// 最近一次 drag 的 (时间, delta)——velocity 估算（State 使 drag_delta 可 &self）
     last_drag: State<Option<(Instant, f32)>>,
+    /// Fling threshold in dp/s above which `settle_with_velocity` snaps along the fling
+    /// direction rather than by position. A plain field (not a `State`): it is a static
+    /// configuration read during settle, so no reactive plumbing is needed.
+    velocity_threshold_dp: f32,
 }
 
 impl<T: Clone + PartialEq + Eq + Ord + 'static> AnchoredDraggableState<T> {
@@ -154,6 +187,7 @@ impl<T: Clone + PartialEq + Eq + Ord + 'static> AnchoredDraggableState<T> {
             confirm_value_change: std::sync::Arc::new(|_: &T| true),
             last_velocity: State::new(0.0),
             last_drag: State::new(None),
+            velocity_threshold_dp: DEFAULT_VELOCITY_THRESHOLD_DP,
         }
     }
 
@@ -222,17 +256,22 @@ impl<T: Clone + PartialEq + Eq + Ord + 'static> AnchoredDraggableState<T> {
 
     /// 从 from 到 to 的动画进度（0..1）
     pub fn progress(&self, from: &T, to: &T) -> f32 {
-        let from_pos = self.anchors.get().position_of(from);
-        let to_pos = self.anchors.get().position_of(to);
         let off = self.offset.get();
-        if off.is_nan() || from_pos.is_nan() || to_pos.is_nan() {
-            return 1.0;
-        }
-        let lo = from_pos.min(to_pos);
-        let hi = from_pos.max(to_pos);
-        let c = off.clamp(lo, hi);
-        let frac = (c - from_pos) / (to_pos - from_pos);
-        if frac < 1e-6 { 0.0 } else if frac > 1.0 - 1e-6 { 1.0 } else { frac.abs() }
+        let anchors = self.anchors.get();
+        progress_impl(&anchors, off, from, to)
+    }
+
+    /// [`Self::progress`] without registering a dependency — for render-time reads
+    /// (a value that is *painted*, not composed, must not mark a slot dirty).
+    pub fn peek_progress(&self, from: &T, to: &T) -> f32 {
+        let off = self.offset.peek();
+        let anchors = self.anchors.peek();
+        progress_impl(&anchors, off, from, to)
+    }
+
+    /// Position of an anchor without registering a dependency (render-time reads).
+    pub fn peek_position_of(&self, value: &T) -> f32 {
+        self.anchors.peek().position_of(value)
     }
 
     /// 拖拽增量（on_drag 回调——当前位置增量 delta 的轴向分量）。
@@ -330,7 +369,7 @@ impl<T: Clone + PartialEq + Eq + Ord + 'static> AnchoredDraggableState<T> {
         }
         let is_moving = velocity.abs() > 0.0;
         let density = crate::unit::current_density().density;
-        let velocity_threshold = 125.0 * density; // 125 dp/s → px/s
+        let velocity_threshold = self.velocity_threshold_dp * density; // dp/s → px/s
         if !is_moving {
             return anchors.closest_anchor(current_offset).unwrap_or_else(|| self.current_value.get());
         }
@@ -456,6 +495,15 @@ impl<T: Clone + PartialEq + Eq + Ord + 'static> AnchoredDraggableState<T> {
     pub fn set_confirm_value_change(&mut self, f: impl Fn(&T) -> bool + Send + Sync + 'static) {
         self.confirm_value_change = std::sync::Arc::new(f);
     }
+
+    /// Fling threshold for [`Self::settle_with_velocity`], in dp/s (default 125 — Compose's
+    /// `AnchoredDraggableMinFlingVelocity`). Above it a release snaps along the fling
+    /// direction; below it the release snaps to the nearest anchor. Components with their
+    /// own token raise it: the navigation drawer uses 400.dp (`DrawerVelocityThreshold`),
+    /// so a lazy drag across half the drawer does not fling it open.
+    pub fn set_velocity_threshold_dp(&mut self, dp: f32) {
+        self.velocity_threshold_dp = dp;
+    }
 }
 
 impl<T: Clone + PartialEq + Eq + Ord + 'static> Clone for AnchoredDraggableState<T> {
@@ -469,6 +517,7 @@ impl<T: Clone + PartialEq + Eq + Ord + 'static> Clone for AnchoredDraggableState
             confirm_value_change: std::sync::Arc::clone(&self.confirm_value_change),
             last_velocity: self.last_velocity.clone(),
             last_drag: self.last_drag.clone(),
+            velocity_threshold_dp: self.velocity_threshold_dp,
         }
     }
 }

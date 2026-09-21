@@ -1806,6 +1806,9 @@ pub(crate) fn shared_shape_radii(modifier: &Modifier, w: f32, h: f32) -> [f32; 4
         Some(Shape::Rectangle) => [0.0; 4],
         Some(Shape::RoundedRect { corner_radius }) => [*corner_radius; 4],
         Some(Shape::TopRoundedRect { radius }) => [*radius, *radius, 0.0, 0.0],
+        // Corner order matches `RRect::new_rect_radii`: UL, UR, LR, LL.
+        Some(Shape::RightRoundedRect { radius }) => [0.0, *radius, *radius, 0.0],
+        Some(Shape::LeftRoundedRect { radius }) => [*radius, 0.0, 0.0, *radius],
         Some(Shape::Pill) | Some(Shape::Circle) => {
             let m = w.min(h) / 2.0;
             [m; 4]
