@@ -647,13 +647,18 @@ fn a_modal_dialog_with_dismiss_on_outside_false_stays_open() {
     let mut app = UiTest::launch("dialog_dismiss");
     app.expect_text("a: closed / b: closed");
 
+    // The page button must be able to increment its counter at all, or the two "the press was
+    // consumed" assertions below would hold vacuously (a `page-clicks: 0` that can never move).
+    app.click_tag("page-button");
+    app.expect_text_timeout("page-clicks: 1", Duration::from_secs(5));
+
     // Phase A: the flag is off, so an outside press neither closes the dialog nor reaches the page.
     app.click_tag("open-a");
     app.expect_text_timeout("a: open", Duration::from_secs(5));
     assert_eq!(app.overlay_count(), 1, "the dialog is open");
 
     app.click_tag("page-button");
-    app.expect_text("page-clicks: 0");
+    app.expect_text("page-clicks: 1");
     app.expect_text("a: open");
     assert_eq!(
         app.overlay_count(),
@@ -669,6 +674,6 @@ fn a_modal_dialog_with_dismiss_on_outside_false_stays_open() {
     app.click_tag("page-button");
     app.expect_text_timeout("b: closed", Duration::from_secs(5));
     // ... and that press was consumed by the dismissal, not delivered to the page.
-    app.expect_text("page-clicks: 0");
+    app.expect_text("page-clicks: 1");
     assert_eq!(app.overlay_count(), 0, "the default dialog closes");
 }

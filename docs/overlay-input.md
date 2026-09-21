@@ -34,11 +34,11 @@ A press that hits no overlay runs the tail of `overlay_down` (from the top overl
 
 | Overlay | Outside press |
 |---|---|
-| `dismiss_on_outside` (the default for `Popup`, `Dialog`, `AlertDialog`, `ModalBottomSheet`) | dismisses it (`begin_overlay_close`, synchronously — not waiting for a recompose) and is consumed |
+| `dismiss_on_outside` (the default for `Popup`, `Dialog`, `AlertDialog`, `ModalBottomSheet`, `DropdownMenu`, `Tooltip`) | dismisses it (`begin_overlay_close`, synchronously — not waiting for a recompose) and is consumed (unless `click_passthrough`, below) |
 | `modal` with `dismiss_on_outside(false)` | nothing closes, but the press is still consumed: a modal scrim blocks what is behind it |
 | neither | falls through to the main tree |
 | `click_passthrough` (tooltip) | the press always falls through, whether or not the overlay dismisses |
-| already `closing` | treated as transparent — no second dismissal, no consumption |
+| already `closing` | treated as transparent — no second dismissal, no consumption. So a press arriving during the exit animation (≈200 ms) reaches what is behind it, which is the point of the rule: the fading overlay is not blocking anything. Without it, a dialog closed a moment ago swallows the next press wherever it lands — the "click twice to open" complaint |
 
 `dismiss_on_outside(false)` is how a dialog or popup that must stay open while the rest of the
 window is used keeps working (Nav3's `dialogProperties`, `AlertDialog`'s builder); the flag has to
