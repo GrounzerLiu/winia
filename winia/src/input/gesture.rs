@@ -82,16 +82,20 @@ pub(crate) struct PendingTap {
     pub(crate) node_id: u64,
     /// 第一次 tap 的场景坐标（补发时换算组件本地坐标）
     pub(crate) pos: (f32, f32),
+    /// Arena the tap was recorded in: `None` = the main tree, `Some(overlay id)` = that popup's
+    /// layer. The tap has to be re-fired there, and `pos` is layer-local for a popup.
+    pub(crate) overlay_id: Option<u64>,
     /// 补发截止时刻（now + DOUBLE_TAP_TIMEOUT_MS）
     pub(crate) deadline: std::time::Instant,
 }
 
 impl PendingTap {
-    pub(crate) fn new(slot_key: u64, node_id: u64, pos: (f32, f32)) -> Self {
+    pub(crate) fn new(slot_key: u64, node_id: u64, pos: (f32, f32), overlay_id: Option<u64>) -> Self {
         Self {
             slot_key,
             node_id,
             pos,
+            overlay_id,
             deadline: std::time::Instant::now()
                 + std::time::Duration::from_millis(DOUBLE_TAP_TIMEOUT_MS as u64),
         }
@@ -285,10 +289,11 @@ mod tests {
 
     #[test]
     fn test_pending_tap_metadata() {
-        let t = PendingTap::new(42, 7, (3.0, 4.0));
+        let t = PendingTap::new(42, 7, (3.0, 4.0), None);
         assert_eq!(t.slot_key, 42);
         assert_eq!(t.node_id, 7);
         assert_eq!(t.pos, (3.0, 4.0));
+        assert_eq!(t.overlay_id, None, "a main-tree tap carries no overlay id");
         assert!(t.deadline > std::time::Instant::now(), "deadline 应在双击窗口之后");
     }
 
@@ -297,16 +302,16 @@ mod tests {
         use std::time::{Duration, Instant};
         let now = Instant::now();
         // 已超时 → 补发
-        let expired = PendingTap { slot_key: 1, node_id: 7, pos: (0.0, 0.0), deadline: now - Duration::from_millis(1) };
+        let expired = PendingTap { slot_key: 1, node_id: 7, pos: (0.0, 0.0), overlay_id: None, deadline: now - Duration::from_millis(1) };
         assert_eq!(pending_tap_on_down(&expired, now, 7), PendingTapAction::Fire);
         assert_eq!(pending_tap_on_down(&expired, now, 99), PendingTapAction::Fire, "超时与其他节点无关");
         // 窗口内同节点第二次按下 → 取消
-        let live = PendingTap { slot_key: 1, node_id: 7, pos: (0.0, 0.0), deadline: now + Duration::from_millis(100) };
+        let live = PendingTap { slot_key: 1, node_id: 7, pos: (0.0, 0.0), overlay_id: Some(3), deadline: now + Duration::from_millis(100) };
         assert_eq!(pending_tap_on_down(&live, now, 7), PendingTapAction::Cancel);
         // 窗口内其他节点按下 → 保留（不提前补发、不取消）
         assert_eq!(pending_tap_on_down(&live, now, 99), PendingTapAction::Keep);
         // 边界：deadline == now → 视为超时补发
-        let boundary = PendingTap { slot_key: 1, node_id: 7, pos: (0.0, 0.0), deadline: now };
+        let boundary = PendingTap { slot_key: 1, node_id: 7, pos: (0.0, 0.0), overlay_id: None, deadline: now };
         assert_eq!(pending_tap_on_down(&boundary, now, 7), PendingTapAction::Fire);
     }
 

@@ -95,6 +95,12 @@ debug server, and every UI test then fails in the worst possible way: the child 
 but is silent (no `TREE:` on stdout, no stderr), so `launch` times out with `TREE 响应数=0` and
 `stdout 已收: (空)` after 20s and looks like an environment/window problem.
 
+⚠ The synthetic `c x y` click (`DebugEvent::Click`) is NOT the gesture path. It fires `on_click` and
+focus, plus — in a popup — the full overlay sequence including the gesture up, but on the MAIN tree
+it never enters `gesture_down`, so `on_tap` / `on_double_tap` / `on_long_press` cannot be driven with
+it. Use explicit `d x y` / `u x y` for anything that lives on the gesture path (that is why every
+fixture taps clickable buttons with `click_tag` but drives sliders and tap zones with down/up).
+
 ⚠ An overlay that dismisses on an outside press (`dismiss_on_outside` — every modal overlay, and a
 `Popup` by default) CONSUMES the press that closes it: it does not reach the main tree. So a ui test
 cannot drag main-tree content while such an overlay is open — the gesture's first press disappears
@@ -141,6 +147,12 @@ tooltips are the one overlay that deliberately lets the press through.
 | text_field_error_readonly_and_disabled_states_are_enforced | fixture_text_field | error 解除、read-only/disabled 输入约束与焦点语义 |
 | top_app_bar_variants_collapse_and_restore_with_scroll | fixture_top_app_bar | Medium/Large 高度、共享滚动 offset 折叠与回滚恢复 |
 | scaffold_fab_clicks_and_rtl_mirrors_without_changing_content_inset | fixture_scaffold | FAB 点击、content inset 与 RTL BottomEnd 镜像 |
+| a_popup_tap_zone_fires_the_tap_family_like_the_main_tree | fixture_popup_tap | tap + long-press in both arenas, driven with down/up |
+| a_popup_double_tap_zone_fires_and_defers_its_single_tap | fixture_popup_tap | a popup's deferred single tap and double tap (`PendingTap` arena routing) |
+| a_drag_inside_a_popup_reaches_the_same_value_as_in_the_main_tree | fixture_popup_drag | popup drag callbacks receive layer-local coordinates |
+| a_modal_dialog_with_dismiss_on_outside_false_stays_open | fixture_dialog_dismiss | `dismiss_on_outside` honoured for a modal overlay, and the press still consumed |
+| an_overlay_press_zone_receives_the_press_gesture | fixture_overlay_focus | popup pointer-down dispatches the press gesture |
+| clicking_an_overlay_button_does_not_steal_focus | fixture_overlay_focus | a popup clickable does not take focus from the field beside it |
 
 ### 库行为快照（无窗口，直接驱动 Composer）
 

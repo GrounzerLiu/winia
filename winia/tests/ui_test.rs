@@ -677,3 +677,88 @@ fn a_modal_dialog_with_dismiss_on_outside_false_stays_open() {
     app.expect_text("page-clicks: 1");
     assert_eq!(app.overlay_count(), 0, "the default dialog closes");
 }
+
+/// The tap family (tap / long-press) fires inside popup content, like the main tree.
+///
+/// `overlay_down` created no gesture tracker, so a popup node's `on_tap` / `on_double_tap` /
+/// `on_long_press` never ran: only `on_press` (pointer-down) and `on_click` (on release) existed
+/// there. The two zones in this fixture are identical, one per arena, and must count the same
+/// gestures. Driven with explicit down/up (not the synthetic `c x y` click): `on_tap` lives on the
+/// gesture path, which a synthetic click never enters — that is also why every other fixture taps
+/// clickable buttons instead.
+#[test]
+fn a_popup_tap_zone_fires_the_tap_family_like_the_main_tree() {
+    let mut app = UiTest::launch("popup_tap");
+    app.expect_text("main-taps: 0");
+    app.expect_text("popup-taps: 0");
+
+    let zone_rect = |app: &mut UiTest, zone: &str| -> (f32, f32, f32, f32) {
+        if zone == "main-tap-zone" {
+            app.find_tag(zone).expect("no main-tap-zone")
+        } else {
+            app.find_tag_in_overlay(zone).expect("no popup-tap-zone")
+        }
+    };
+    let tap = |app: &mut UiTest, x: f32, y: f32| {
+        app.send(&format!("d {} {}", x as i32, y as i32));
+        std::thread::sleep(Duration::from_millis(60));
+        app.send(&format!("u {} {}", x as i32, y as i32));
+        std::thread::sleep(Duration::from_millis(200));
+    };
+
+    // A tap on the page zone: the main-tree path is the reference.
+    let (x, y, w, h) = zone_rect(&mut app, "main-tap-zone");
+    tap(&mut app, x + w / 2.0, y + h / 2.0);
+    app.expect_text_timeout("main-taps: 1", Duration::from_secs(5));
+
+    // The same tap inside the popup.
+    let (x, y, w, h) = zone_rect(&mut app, "popup-tap-zone");
+    tap(&mut app, x + w / 2.0, y + h / 2.0);
+    app.expect_text_timeout("popup-taps: 1", Duration::from_secs(5));
+
+    // And a hold long enough for the long-press threshold, in both arenas.
+    for (zone, counter) in [("main-tap-zone", "main-holds"), ("popup-tap-zone", "popup-holds")] {
+        let (x, y, w, h) = zone_rect(&mut app, zone);
+        let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+        app.send(&format!("d {} {}", cx as i32, cy as i32));
+        std::thread::sleep(Duration::from_millis(700));
+        app.send(&format!("u {} {}", cx as i32, cy as i32));
+        app.expect_text_timeout(&format!("{counter}: 1"), Duration::from_secs(5));
+    }
+}
+
+/// A popup's `on_double_tap` works, including the deferred single tap that precedes it.
+///
+/// A node with `on_double_tap` never gets its `on_tap` immediately: the tap waits out the double-tap
+/// window (`PendingTap`), and a fast second tap in that window turns the pair into a double tap. In a
+/// popup both halves have to be re-fired into the popup's own arena — the deferred tap carries it
+/// (`PendingTap::overlay_id`).
+#[test]
+fn a_popup_double_tap_zone_fires_and_defers_its_single_tap() {
+    let mut app = UiTest::launch("popup_tap");
+    app.expect_text("popup-singles: 0");
+    app.expect_text("popup-doubles: 0");
+    app.expect_text("popup-taps: 0");
+
+    let (x, y, w, h) = app
+        .find_tag_in_overlay("popup-double-zone")
+        .expect("no popup-double-zone");
+    let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+
+    // One tap: the single tap is deferred, then fired once the window closes (no double followed).
+    app.send(&format!("d {} {}", cx as i32, cy as i32));
+    std::thread::sleep(Duration::from_millis(60));
+    app.send(&format!("u {} {}", cx as i32, cy as i32));
+    app.expect_text_timeout("popup-singles: 1", Duration::from_secs(5));
+    app.expect_text("popup-doubles: 0");
+
+    // Two taps inside the window: one double tap, and no extra single.
+    for _ in 0..2 {
+        app.send(&format!("d {} {}", cx as i32, cy as i32));
+        std::thread::sleep(Duration::from_millis(60));
+        app.send(&format!("u {} {}", cx as i32, cy as i32));
+        std::thread::sleep(Duration::from_millis(60));
+    }
+    app.expect_text_timeout("popup-doubles: 1", Duration::from_secs(5));
+    app.expect_text("popup-singles: 1");
+}

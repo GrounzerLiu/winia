@@ -70,15 +70,28 @@ every tap on a popup button steal the keyboard from a field beside it. Dispatchi
 removed the need for the rule (see `clicking_an_overlay_button_does_not_steal_focus` and
 `an_overlay_press_zone_receives_the_press_gesture` in `tests/ui_test.rs`).
 
-## Known gap: popup tap / double-tap / long-press
+## Which gesture fires where
 
-Popup content does not get the gesture *tracker*: `overlay_down` builds its own drag and scroll state
-(`pw.overlay_drag`, `pw.overlay_drag_scroll`) instead of `pw.gesture`, so `Modifier::on_tap`,
-`on_double_tap` and `on_long_press` never fire inside a popup — `on_click` does (on release), and
-`on_drag` does too (the overlay drag path fires `DragStart` / `DragMove` / `DragEnd` itself; see
-`app.rs:3833`). Closing the tap gap means routing popup gestures through the shared tracker, which
-needs arena-aware tracker state — today `gesture_slot` / `gesture_node` resolve against the main
-tree's arena only.
+Popup content gets the same gesture set as the main tree, from the same two primitives, with one
+exception:
+
+| Callback | Main tree | Popup |
+|---|---|---|
+| `on_press` | `gesture_down` | `overlay_down`, both through `press_gesture_target` |
+| `on_tap` / `on_double_tap` / `on_long_press` | the shared `GestureTracker` | the same tracker, tagged with the popup's arena (`PerWindow::gesture_arena`) so `gesture_move` / `gesture_up` route the action back into the popup's composer |
+| `on_drag_start` / `on_drag` / `on_drag_end` | the tracker | the overlay drag machinery (`pw.overlay_drag`), which also drives nested scroll in a sheet |
+| `on_click` | `detect_click` on release | `exec_overlay_click` on release |
+
+A tap that is deferred to the double-tap window carries its arena in `PendingTap::overlay_id`, so it
+is re-fired into the popup it came from — and dropped if that popup is gone by then, like a gesture
+still in flight.
+
+The exception: a target with **drag** gestures (a `Slider`, a sheet panel) is owned by the overlay
+drag machinery, so `overlay_down` does not create a tracker for it and its `on_tap` /
+`on_double_tap` / `on_long_press` do not fire inside a popup. Its `on_press` and `on_drag_*` do, and
+a `Slider` sets its value from `on_press`, so tapping one works. Letting those nodes have the
+tracker too means suppressing the overlay drag machinery for exactly that node — worth doing if a
+component ever needs both.
 
 The drag half of that path has its own coordinate rule worth knowing: its calls pass
 **layer-local** positions, because the callback contract is node-local and
