@@ -98,7 +98,17 @@ fn navigation_drawer_demo(ctx: &mut ComposeCtx) {
                                 let mut item_builder =
                                     NavigationDrawerItem::text_label(item.title(), selected);
                                 if item == Page::Inbox {
-                                    // The badge slot sits after the label.
+                                    // The icon and badge slots. The icon is a filled circle so
+                                    // the demo needs no icon font, and both slots are separated
+                                    // from the label by DRAWER_ITEM_SLOT_GAP.
+                                    item_builder = item_builder.icon(|ctx| {
+                                        Stack::new()
+                                            .modifier(Modifier::new().size(24.0, 24.0).background(
+                                                Color::from_argb(200, 120, 160, 255),
+                                                Shape::Circle,
+                                            ))
+                                            .build(ctx, |_| {});
+                                    });
                                     item_builder =
                                         item_builder.badge(|ctx| {
                                         Badge::new()

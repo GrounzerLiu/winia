@@ -459,7 +459,10 @@ impl NavigationDrawerItem {
 
         let mut modifier = Modifier::new()
             .fill_max_width()
-            .height(DRAWER_ITEM_HEIGHT)
+            // androidx uses `heightIn(min = ActiveIndicatorHeight)`, not a fixed height:
+            // a single-line row is 56dp either way, but a two-line label or a large badge
+            // grows the row instead of being squeezed into it.
+            .min_height(DRAWER_ITEM_HEIGHT)
             .background(move || indicator.peek(), shape)
             .padding_sides(DRAWER_ITEM_START_PADDING, 0.0, DRAWER_ITEM_END_PADDING, 0.0)
             .then(self.modifier);
