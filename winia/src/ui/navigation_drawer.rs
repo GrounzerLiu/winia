@@ -50,7 +50,7 @@ use crate::ui::anchored_draggable::AnchoredDraggableState;
 use crate::ui::interaction::MutableInteractionSource;
 use crate::ui::layout_components::{Column, Row, Stack};
 use crate::ui::theme::WiniaTheme;
-use crate::unit::{current_density, Dp};
+use crate::unit::Dp;
 use std::sync::Arc;
 use std::time::Duration;
 

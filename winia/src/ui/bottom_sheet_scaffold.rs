@@ -1,11 +1,14 @@
-//! `BottomSheetScaffold`——可拖动显示更多内容的常驻底部面板（对标 Compose `BottomSheetScaffold`）
+//! `BottomSheetScaffold` — a persistent bottom panel that drags out to show more, mirroring
+//! Compose's `BottomSheetScaffold`.
 //!
-//! 与 `ModalBottomSheet` 的差异：
-//! - **非弹窗**：作为宿主布局的一部分（常驻），不走 `Overlay`，不带 `Scrim`，主内容常显
-//! - **peek 高度**：`sheetPeekHeight`（默认 56dp）决定折叠时露头高度，
-//!   `PartiallyExpanded at layoutH - peek`，`Expanded at layoutH - sheetH`
-//! - **三态与 Modal 共享**：`SheetState(Hidden/Partial/Expanded)` 复用，
-//!   Scaffold 初始 `Partial`（露头），Modal 初始 `Hidden`
+//! Differences from [`ModalBottomSheet`]:
+//! - **Not a popup**: part of the host's layout (always present), no `Overlay`, no scrim, and
+//!   the page stays visible.
+//! - **Peek height**: `sheetPeekHeight` (56dp by default) sets how much shows when collapsed —
+//!   `PartiallyExpanded at layoutH - peek`, `Expanded at layoutH - sheetH`.
+//! - **Shares its three states with the modal**: the same `SheetState`
+//!   (`Hidden`/`PartiallyExpanded`/`Expanded`); the scaffold starts `PartiallyExpanded`
+//!   (peeking), the modal starts `Hidden`.
 //!
 //! Layout (mirrors `BottomSheetScaffoldLayout`):
 //! - An outer `Stack.fill_max_size`; the page at the bottom of it, the sheet above it,
@@ -177,15 +180,15 @@ impl BottomSheetScaffold {
                 };
                 let cur_shape = Shape::TopRoundedRect { radius: cur_radius };
 
+                // The x/y pair must go through ONE element: `get_offset` and
+                // `get_absolute_offset` both return only the FIRST element of their kind, so
+                // chaining `offset_x(..).offset_y(..)` silently drops the y and pins the sheet
+                // to the top of the window. `absolute_offset` rather than `offset` because the
+                // x is a CENTRING inset, which is direction-independent, while a plain offset
+                // mirrors its x under RTL (`layout/node.rs` placement) — that put the sheet at
+                // -pad_x in RTL, with as much clipped off the left as left dead on the right.
                 let mut sheet_mod = Modifier::new()
                     .width(sheet_w)
-                    // ⚠ 必须用单元素 .offset(x, y)——offset_x/offset_y 连用会 push
-                    // 两个 Offset 元素，get_offset（modifier.rs:1845）只取第一个
-                    // → y 恒为 0（片贴顶 bug）。
-                    // `absolute_offset`, not `offset`: the x here is a CENTRING inset, which
-                    // is direction-independent, while a plain offset mirrors its x under RTL
-                    // (`layout/node.rs` placement) — which put the sheet at -pad_x in RTL, with
-                    // that much clipped off the left and as much dead space on the right.
                     .absolute_offset(sheet_pad_x, st_for_offset.offset_state())
                     .shadow(
                         1.0,
@@ -384,6 +387,7 @@ mod tests {
             "the content reserves exactly one peek at the bottom, in logical px"
         );
     }
+
     #[test]
     fn the_centred_sheet_is_not_mirrored_in_rtl() {
         // `Modifier::offset` mirrors its x under RTL, but a centring inset is
@@ -413,14 +417,18 @@ mod tests {
             );
         });
         c.layout(Constraints::new(0.0, 900.0, 0.0, 720.0));
-        let sheet = c
-            .arena_nodes()
-            .iter()
-            .find(|n| (n.measured_size.width - 640.0).abs() < 0.5)
-            .expect("the sheet is the 640-wide node in a 900-wide window");
+        // The sheet is the second child of the root — the page is the first. Found by
+        // position rather than by width: a width match is ambiguous (the page is just as
+        // wide) and stops matching when the window is narrower than the token.
+        let root = c.layout_root_idx().expect("laid out");
+        let sheet = c.arena_nodes()[root].children[1];
         assert_eq!(
-            sheet.position.x, 130.0,
-            "the sheet is centred from the left edge in RTL too, not mirrored to -130"
+            c.arena_nodes()[sheet].measured_size.width, 640.0,
+            "the sheet is 640 wide in a 900-wide window (the token, not the window)"
+        );
+        assert_eq!(
+            c.arena_nodes()[sheet].position.x, 130.0,
+            "and it is centred from the left edge in RTL too, not mirrored to -130"
         );
     }
 }
