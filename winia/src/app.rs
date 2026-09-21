@@ -2380,6 +2380,10 @@ fn press_gesture_target(
 
 /// Overlay index of a gesture arena — `None` for the main tree, and for a target whose overlay has
 /// since been removed (the gesture then has nowhere to land).
+///
+/// A `closing` overlay is deliberately still resolved: unlike a press (`hit_overlay` treats a fading
+/// overlay as transparent) the finger is already down and its nodes are still composed, so the
+/// gesture completes into the popup and dies with it when `finish_closing_overlays` removes it.
 fn gesture_arena_overlay(pw: &PerWindow, arena: Option<u64>) -> Option<usize> {
     let id = arena?;
     pw.overlays.iter().position(|o| o.id == id)
@@ -2389,6 +2393,11 @@ fn gesture_arena_overlay(pw: &PerWindow, arena: Option<u64>) -> Option<usize> {
 /// LAYER-LOCAL inside a popup — a gesture callback receives coordinates local to the arena it was
 /// resolved in (`fire_gesture_action` subtracts the node's position there), so the tracker has to
 /// measure and report in the same space. `None` once the target's overlay is gone.
+///
+/// The conversion uses the overlay's CURRENT `screen_pos`, so a popup that moves during a gesture
+/// (only an anchored, sliding one could) would inject its own motion into the measured position —
+/// no component does that today; a popup that moves while a finger is on it would want the anchor
+/// frozen at press time.
 fn gesture_arena_pos(pw: &PerWindow, scene_pos: (f32, f32)) -> Option<(f32, f32)> {
     match pw.gesture_arena {
         None => Some(scene_pos),
@@ -2403,25 +2412,29 @@ fn gesture_arena_pos(pw: &PerWindow, scene_pos: (f32, f32)) -> Option<(f32, f32)
 /// explicitly because the callers clear `pw.gesture_arena` (the gesture is over) before dispatching
 /// its last action. The main tree and each overlay have their own composer, so an action is routed
 /// together with the arena it was produced for — the same split `press_gesture_target` follows on
-/// the way in.
+/// the way in. `None` means the MAIN TREE; an arena that no longer resolves (the popup is gone) is
+/// NOT the main tree — the action is dropped instead, which is the whole point of carrying the arena.
 fn fire_in_gesture_arena(
     pw: &mut PerWindow,
     arena: Option<u64>,
     slot: u64,
     action: crate::input::gesture::GestureAction,
 ) -> bool {
-    match gesture_arena_overlay(pw, arena) {
-        Some(i) => {
-            let ov = &pw.overlays[i];
-            let nodes = ov.composer.arena_nodes();
-            let Some(r) = ov.composer.layout_root_idx() else { return false; };
-            fire_gesture_action(nodes, r, slot, action)
-        }
+    match arena {
         None => {
             let nodes = pw.composer.arena_nodes();
             let Some(r) = pw.composer.layout_root_idx() else { return false; };
             fire_gesture_action(nodes, r, slot, action)
         }
+        Some(id) => match pw.overlays.iter().position(|o| o.id == id) {
+            Some(i) => {
+                let ov = &pw.overlays[i];
+                let nodes = ov.composer.arena_nodes();
+                let Some(r) = ov.composer.layout_root_idx() else { return false; };
+                fire_gesture_action(nodes, r, slot, action)
+            }
+            None => false,
+        },
     }
 }
 
@@ -3191,7 +3204,13 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::modifier
                 }
             };
             if let Some((nid, slot, has_drag, ov_id)) = target {
-                if !has_drag {
+                if has_drag {
+                    // No tracker for a drag target — the overlay drag machinery above owns it (see
+                    // the note on this block). The PREVIOUS gesture must not survive into this one,
+                    // though: without this a press on a popup drag target would leave an older
+                    // tracker (and its arena) live, and the next move would drag the old node.
+                    end_gesture(pw);
+                } else {
                     // Same bookkeeping as the main tree: a deferred tap on this node is due, or this
                     // press is its double-tap candidate.
                     process_pending_taps_on_down(pw, nid);

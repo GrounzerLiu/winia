@@ -699,9 +699,12 @@ fn a_popup_tap_zone_fires_the_tap_family_like_the_main_tree() {
             app.find_tag_in_overlay(zone).expect("no popup-tap-zone")
         }
     };
+    // Down and up back-to-back: the tracker measures the hold with the wall clock, and a fixed sleep
+    // between them turns the tap into a LONG PRESS when the machine stalls (the threshold is 500 ms,
+    // see `LONG_PRESS_TIMEOUT_MS`). Sent as a burst, both events are processed in the same frame — or
+    // in adjacent frames a few ms apart — so the gesture is a tap whatever the machine is doing.
     let tap = |app: &mut UiTest, x: f32, y: f32| {
         app.send(&format!("d {} {}", x as i32, y as i32));
-        std::thread::sleep(Duration::from_millis(60));
         app.send(&format!("u {} {}", x as i32, y as i32));
         std::thread::sleep(Duration::from_millis(200));
     };
@@ -716,7 +719,9 @@ fn a_popup_tap_zone_fires_the_tap_family_like_the_main_tree() {
     tap(&mut app, x + w / 2.0, y + h / 2.0);
     app.expect_text_timeout("popup-taps: 1", Duration::from_secs(5));
 
-    // And a hold long enough for the long-press threshold, in both arenas.
+    // And a hold long enough for the long-press threshold, in both arenas. This sleep is the gesture
+    // (700 ms > the 500 ms threshold) and only ever grows when the machine stalls, so it is stable
+    // where a tap's gap is not.
     for (zone, counter) in [("main-tap-zone", "main-holds"), ("popup-tap-zone", "popup-holds")] {
         let (x, y, w, h) = zone_rect(&mut app, zone);
         let (cx, cy) = (x + w / 2.0, y + h / 2.0);
@@ -746,18 +751,18 @@ fn a_popup_double_tap_zone_fires_and_defers_its_single_tap() {
     let (cx, cy) = (x + w / 2.0, y + h / 2.0);
 
     // One tap: the single tap is deferred, then fired once the window closes (no double followed).
+    // Burst down/up — see the note in the tap-family test: a fixed gap is what turns a tap into a
+    // long press under load, and this tap must also stay inside the 300 ms double-tap window.
     app.send(&format!("d {} {}", cx as i32, cy as i32));
-    std::thread::sleep(Duration::from_millis(60));
     app.send(&format!("u {} {}", cx as i32, cy as i32));
     app.expect_text_timeout("popup-singles: 1", Duration::from_secs(5));
     app.expect_text("popup-doubles: 0");
 
-    // Two taps inside the window: one double tap, and no extra single.
+    // Two taps inside the window: one double tap, and no extra single. Bursts again — processed in
+    // the same frame they are milliseconds apart, which is what the window wants.
     for _ in 0..2 {
         app.send(&format!("d {} {}", cx as i32, cy as i32));
-        std::thread::sleep(Duration::from_millis(60));
         app.send(&format!("u {} {}", cx as i32, cy as i32));
-        std::thread::sleep(Duration::from_millis(60));
     }
     app.expect_text_timeout("popup-doubles: 1", Duration::from_secs(5));
     app.expect_text("popup-singles: 1");

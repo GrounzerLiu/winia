@@ -9,17 +9,17 @@ implementations in `app.rs`, so the differences are easy to trip over.
 Main tree (`handle_pointer_down` → `handle_pointer_up`):
 
 1. `press_interaction_down` — ripple `PressInteraction.Press` on the innermost clickable that has an
-   interaction source (`app.rs:3207`).
-2. `gesture_down` (`app.rs:2364`) — picks the press-gesture target and **fires
+   interaction source (`app.rs:3354`).
+2. `gesture_down` (`app.rs:2477`) — picks the press-gesture target and **fires
    `GestureAction::Press`** immediately; also creates the `GestureTracker` that routes move/up.
 3. ... on release: `gesture_up` fires `Tap` / `DoubleTap` / `LongPress` / `DragEnd`, then
    `fire_click_along_path` fires the first `on_click` on the path.
 
-Popup (overlay) — `overlay_down` (`app.rs:2982`) → `exec_overlay_click` (`app.rs:2947`):
+Popup (overlay) — `overlay_down` (`app.rs:3093`) → `exec_overlay_click` (`app.rs:3058`):
 
 1. Drag-vs-scroll arbitration, which stores `pw.overlay_drag` / `pw.overlay_drag_scroll`.
 2. The same ripple press as the main tree.
-3. **The same press gesture**: `press_gesture_target` (`app.rs:2346`) is shared with `gesture_down`,
+3. **The same press gesture**: `press_gesture_target` (`app.rs:2365`) is shared with `gesture_down`,
    so a popup's `on_press` runs on pointer-down exactly as it does in the main tree.
 4. Pointer `Down` dispatch (`dispatch_ptr_event`) and tap-to-place caret.
 5. ... on release: `fire_click_along_path` fires the first `on_click` on the path.
@@ -57,7 +57,7 @@ Neither path focuses anything on a tap. A component that wants the keyboard asks
   not focusable at all; the `Focusable` element comes from the `_with_source` variant.)
 
 `FocusRequester::request_focus()` queues a request; it is applied on the next frame before compose
-(`app.rs:1272`), resolving against the main tree first and then the overlays topmost-first, keeping a
+(`app.rs:1285`), resolving against the main tree first and then the overlays topmost-first, keeping a
 single focus and setting the IME accordingly. The press itself does not schedule that frame, and the
 main tree does not either: a press that changes nothing (no state, no animation) can leave focus
 queued until whatever schedules the next frame. Tapping a field normally changes the caret or the
@@ -89,9 +89,10 @@ still in flight.
 The exception: a target with **drag** gestures (a `Slider`, a sheet panel) is owned by the overlay
 drag machinery, so `overlay_down` does not create a tracker for it and its `on_tap` /
 `on_double_tap` / `on_long_press` do not fire inside a popup. Its `on_press` and `on_drag_*` do, and
-a `Slider` sets its value from `on_press`, so tapping one works. Letting those nodes have the
-tracker too means suppressing the overlay drag machinery for exactly that node — worth doing if a
-component ever needs both.
+a `Slider` sets its value from `on_press`, so tapping one works. The sharpest consequence: a node
+carrying BOTH `on_tap` and `on_drag` (a custom draggable card) taps in the main tree when it is not
+moved, but never taps in a popup. Letting those nodes have the tracker too means suppressing the
+overlay drag machinery for exactly that node — worth doing if a component ever needs both.
 
 The drag half of that path has its own coordinate rule worth knowing: its calls pass
 **layer-local** positions, because the callback contract is node-local and
