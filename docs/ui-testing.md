@@ -56,6 +56,11 @@ cargo test --features debug-server
 - `Drop`：发 `q` 优雅关闭 → 3s 限时等待 → 超时 kill（测试失败也保证无残留窗口）。
 - 查询：`tree()`（t 命令）、`find(label)`（找节点绝对坐标）、`all_texts()`（全部 mod 文本）。
 - 断言：`expect_text` / `expect_text_timeout`（轮询 5s——异步重组）、`expect_no_text`。
+- **Popup content** has its own three entry points, because the main-tree lookups deliberately
+  skip popup entries (`expect_no_text` and friends are about the main window):
+  `find_tag_in_overlay(tag)` — in WINDOW coordinates, since a popup's tree is in its own
+  coordinates and the debug tree therefore emits each popup entry's `screen` origin —
+  `click_overlay_tag(tag)` and `overlay_tag_is_focused(tag)`.
 - **`click_until(x, y, timeout, cond)`**：点击 + 轮询树直到条件满足；点击丢失自动重试
   （最多 3 次）——**debug 点击链路的已知可靠性问题**（见下）。
 

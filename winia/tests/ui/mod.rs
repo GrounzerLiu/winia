@@ -309,6 +309,28 @@ impl UiTest {
         node_tag_is_focused(&self.tree, tag)
     }
 
+    /// Find a tag inside the POPUP entries, in WINDOW coordinates. Main-tree lookups skip
+    /// popups on purpose, so popup content needs its own entry point; a popup node's tree
+    /// coordinates are layer-local, and this adds that layer's screen origin.
+    pub fn find_tag_in_overlay(&self, tag: &str) -> Option<(f32, f32, f32, f32)> {
+        find_node_tag_in_overlay(&self.tree, tag)
+    }
+
+    /// Click a tag inside the popup entries.
+    pub fn click_overlay_tag(&mut self, tag: &str) {
+        let (x, y, w, h) = self
+            .find_tag_in_overlay(tag)
+            .unwrap_or_else(|| panic!("no popup entry carries the tag `{tag}`"));
+        self.click(x + w / 2.0, y + h / 2.0);
+        std::thread::sleep(Duration::from_millis(120));
+    }
+
+    /// Whether the tag inside the popup entries is focused.
+    pub fn overlay_tag_is_focused(&mut self, tag: &str) -> bool {
+        self.refresh();
+        node_tag_is_focused_in_overlay(&self.tree, tag)
+    }
+
     /// 在树中查找第一个 mod 包含 `label` 的节点，返回 (abs_x, abs_y, width, height)。
     /// ⚠ 仅对主窗口可靠（debug 注入事件只作用于主窗口）——多窗口请用 `find_in_window`。
     pub fn find(&self, label: &str) -> Option<(f32, f32, f32, f32)> {
@@ -431,16 +453,35 @@ impl UiTest {
 /// 多窗口树格式：`[{"window":<id>,"root":{...}}, ...]`（debug.rs 按 window id 排序）。
 /// 遍历所有窗口的 root，对每个调用 `f(window_id, root)`。
 fn for_each_window(tree: &Value, mut f: impl FnMut(u64, &Value)) {
+    for_each_window_scoped(tree, false, |id, _, _, root| f(id, root));
+}
+
+/// Same iteration, but `overlay_only` selects the POPUP entries instead of skipping them:
+/// main-tree assertions deliberately ignore popup content (`expect_no_text` is about the main
+/// window), while a test OF popup content needs the other side of that split.
+fn for_each_window_scoped(
+    tree: &Value,
+    overlay_only: bool,
+    mut f: impl FnMut(u64, f32, f32, &Value),
+) {
     if let Some(arr) = tree.as_array() {
         for w in arr {
-            // 跳过弹出层条目（带 "overlay" 字段）——主树断言不应被浮层内容干扰
-            // （expect_no_text 等语义针对主窗口；弹层断言用 overlay_count）
-            if w.get("overlay").is_some() {
+            // Popup entries carry an "overlay" field; main-tree entries do not.
+            if w.get("overlay").is_some() != overlay_only {
                 continue;
             }
             if let Some(root) = w.get("root") {
                 let id = w.get("window").and_then(|v| v.as_u64()).unwrap_or(0);
-                f(id, root);
+                // A popup's node coordinates are layer-local (the layer is translated to
+                // `screen`); main-tree entries have no such field.
+                let (ox, oy) = match w.get("screen").and_then(|v| v.as_array()) {
+                    Some(v) if v.len() >= 2 => (
+                        v[0].as_f64().unwrap_or(0.0) as f32,
+                        v[1].as_f64().unwrap_or(0.0) as f32,
+                    ),
+                    _ => (0.0, 0.0),
+                };
+                f(id, ox, oy, root);
             }
         }
     }
@@ -500,6 +541,15 @@ fn collect_texts(tree: &Value, out: &mut Vec<String>) {
 
 /// 查找 tag 精确匹配的节点，并返回绝对位置和尺寸。
 fn find_node_tag(tree: &Value, tag: &str) -> Option<(f32, f32, f32, f32)> {
+    find_node_tag_scoped(tree, tag, false)
+}
+
+/// As above, but only within the POPUP entries (the entry point for popup content).
+fn find_node_tag_in_overlay(tree: &Value, tag: &str) -> Option<(f32, f32, f32, f32)> {
+    find_node_tag_scoped(tree, tag, true)
+}
+
+fn find_node_tag_scoped(tree: &Value, tag: &str, overlay_only: bool) -> Option<(f32, f32, f32, f32)> {
     fn walk(n: &Value, ax: f32, ay: f32, tag: &str) -> Option<(f32, f32, f32, f32)> {
         if let Some(arr) = n.as_array() {
             return arr.iter().find_map(|child| walk(child, ax, ay, tag));
@@ -529,15 +579,24 @@ fn find_node_tag(tree: &Value, tag: &str) -> Option<(f32, f32, f32, f32)> {
     }
 
     let mut found = None;
-    for_each_window(tree, |_, root| {
+    for_each_window_scoped(tree, overlay_only, |_, ox, oy, root| {
         if found.is_none() {
-            found = walk(root, 0.0, 0.0, tag);
+            found = walk(root, ox, oy, tag);
         }
     });
     found
 }
 
 fn node_tag_is_focused(tree: &Value, tag: &str) -> bool {
+    node_tag_is_focused_scoped(tree, tag, false)
+}
+
+/// As above, but only within the POPUP entries.
+fn node_tag_is_focused_in_overlay(tree: &Value, tag: &str) -> bool {
+    node_tag_is_focused_scoped(tree, tag, true)
+}
+
+fn node_tag_is_focused_scoped(tree: &Value, tag: &str, overlay_only: bool) -> bool {
     fn subtree_is_focused(n: &Value) -> bool {
         if let Some(arr) = n.as_array() {
             return arr.iter().any(subtree_is_focused);
@@ -561,7 +620,7 @@ fn node_tag_is_focused(tree: &Value, tag: &str) -> bool {
     }
 
     let mut found = None;
-    for_each_window(tree, |_, root| {
+    for_each_window_scoped(tree, overlay_only, |_, _, _, root| {
         if found.is_none() {
             found = walk(root, tag);
         }

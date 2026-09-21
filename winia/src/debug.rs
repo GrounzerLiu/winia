@@ -141,7 +141,7 @@ struct DebugData {
     /// 每个窗口的顶层弹出层树（overlay 独立 Composer 的 arena）——
     /// window_id → [(overlay_id, JSON)]，按 z 序（栈序）排列；
     /// 每帧整体替换（overlay 关闭后条目自动消失，无残留）
-    overlay_trees: std::collections::HashMap<u64, Vec<(u64, String)>>,
+    overlay_trees: std::collections::HashMap<u64, Vec<(u64, (f32, f32), String)>>,
 }
 
 pub fn update_pixels(window_id: u64, pixels: &[u8], width: u32, height: u32) {
@@ -263,8 +263,12 @@ pub fn update_tree(window_id: u64, json: &str) {
 }
 
 /// 整体替换指定窗口的弹出层树（每帧调用；空 vec = 无弹出层——清除残留）。
-/// trees 元素 = (overlay_id, 树 JSON)，按渲染 z 序排列。
-pub fn set_overlay_trees(window_id: u64, trees: Vec<(u64, String)>) {
+/// `trees` elements are `(overlay_id, logical screen origin, tree JSON)`, in render z order.
+///
+/// The origin matters because a popup's tree is in ITS OWN coordinates (it is rendered
+/// translated to `screen_pos`), so a consumer that wants to address a popup node — a test
+/// clicking it — has to add it. Emitted as `"screen":[x,y]`.
+pub fn set_overlay_trees(window_id: u64, trees: Vec<(u64, (f32, f32), String)>) {
     let mut data = DEBUG_STATE.lock().unwrap();
     if data.is_none() {
         if trees.is_empty() { return; }
@@ -296,7 +300,8 @@ pub fn remove_tree(window_id: u64) {
 /// ```
 ///
 /// - 主条目无 "overlay" 字段（既有解析兼容——零弹窗时输出与旧版完全一致）
-/// - 弹出层条目：`overlay` = z 序索引（0 最底）、`id` = OverlayDesc 稳定 id
+/// - Popup entries carry `overlay` = z index (0 is bottom-most), `id` = the OverlayDesc id and
+///   `screen` = that layer's logical screen origin (a layer's node coordinates are layer-local).
 /// - 按 window id 排序；弹层跟随其宿主窗口
 fn all_trees_json() -> String {
     let data = DEBUG_STATE.lock().unwrap();
@@ -310,9 +315,11 @@ fn all_trees_json() -> String {
         first = false;
         out.push_str(&format!(r#"{{"window":{id},"root":{json}}}"#));
         if let Some(ovs) = d.overlay_trees.get(&id) {
-            for (i, (oid, oj)) in ovs.iter().enumerate() {
+            for (i, (oid, (ox, oy), oj)) in ovs.iter().enumerate() {
                 out.push(',');
-                out.push_str(&format!(r#"{{"window":{id},"overlay":{i},"id":{oid},"root":{oj}}}"#));
+                out.push_str(&format!(
+                    r#"{{"window":{id},"overlay":{i},"id":{oid},"screen":[{ox:.0},{oy:.0}],"root":{oj}}}"#
+                ));
             }
         }
     }

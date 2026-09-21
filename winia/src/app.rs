@@ -1399,9 +1399,9 @@ impl ApplicationHandler for AppState {
                     // overlay 独立 Composer 的 arena 同样进调试树（modal/popup 可观测；
                     // 每帧整体替换——overlay 关闭后条目自动消失）。z 序 = pw.overlays
                     // 栈序，与 render_overlays 绘制顺序一致。
-                    let ov_trees: Vec<(u64, String)> = pw.overlays.iter().filter_map(|ov| {
+                    let ov_trees: Vec<(u64, (f32, f32), String)> = pw.overlays.iter().filter_map(|ov| {
                         ov.composer.layout_root_idx()
-                            .map(|r| (ov.id, debug::build_tree_json(ov.composer.arena_nodes(), r)))
+                            .map(|r| (ov.id, ov.screen_pos, debug::build_tree_json(ov.composer.arena_nodes(), r)))
                     }).collect();
                     debug::set_overlay_trees(wid, ov_trees);
                 }));
@@ -1561,6 +1561,11 @@ impl AppState {
                             // （text-field-v2 容器化后焦点/交互在容器——空字段
                             // 输入子节点 0 宽点不中；旧逻辑只看 ime_callback
                             // 已失效）；兼容声明 IME 的节点（旧 leaf 语义）
+                            // NOTE: deliberately BROADER than the real overlay path
+                            // (`overlay_down`, which focuses only a field that holds an input):
+                            // a synthesized click has to be able to put focus anywhere, because
+                            // that is how a following `k <char>` finds a target. Do not narrow
+                            // this to match — see `clicking_an_overlay_button_does_not_steal_focus`.
                             let (fid, sk) = path.iter().rev().find_map(|&i| {
                                 let has_focusable = arena[i].modifier.elements().iter()
                                     .any(|el| matches!(el, crate::modifier::ModifierElement::Focusable { .. }));
@@ -3082,12 +3087,29 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::modifier
                 None => (Vec::new(), None, None),
                 Some((nodes, r, troots)) => {
                 let path = hit_test_with_flights(nodes, r, &troots, local.0, local.1);
+                // A tap takes focus only from a node that both IS the tappable field and HOLDS
+                // the input: focusable itself, with an IME-wanting node in its subtree.
+                //
+                // Being merely focusable is not enough: every component that builds its click
+                // through `clickable_with_source` (Buttons and the rest — plain
+                // `Modifier::clickable` is not focusable at all) carries a Focusable element,
+                // and Compose's `Clickable` behaves the same way — it delegates a
+                // `FocusableNode` so the node joins Tab navigation, and never calls
+                // `requestFocus`. The main tree here follows that rule: a tap focuses nothing,
+                // and a component that wants the keyboard asks for it itself. The old
+                // `focusable || wants_ime` was the DEBUG-CLICK rule (see `consume_debug_events`)
+                // and let a button in a dialog take the keyboard away from the field beside it.
+                //
+                // An IME-wanting descendant alone is too broad the other way — every ANCESTOR of
+                // a text field has one, so tapping that same button focused the dialog's content
+                // column — while the descendant half is still needed, because a container-based
+                // TextField keeps its IME callback on the input leaf, which is 0 wide while the
+                // field is empty and never on the hit path. Measured by
+                // `clicking_an_overlay_button_does_not_steal_focus`.
                 let focus_target = path.iter().rev().find_map(|&idx| {
                     let focusable = crate::layout::node::has_focusable_modifier(&nodes[idx]);
-                    let wants_ime = nodes[idx].ime_callback.borrow().is_some();
-                    (focusable || wants_ime).then(|| {
-                        let want = node_or_descendant_wants_ime(nodes, idx);
-                        (nodes[idx].id, nodes[idx].slot_key, want)
+                    (focusable && node_or_descendant_wants_ime(nodes, idx)).then(|| {
+                        (nodes[idx].id, nodes[idx].slot_key, true)
                     })
                 });
                 let caret = (|| {

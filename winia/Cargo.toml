@@ -95,3 +95,7 @@ path = "tests/ui_fixtures/fixture_overlay.rs"
 [[bin]]
 name = "fixture_panic"
 path = "tests/ui_fixtures/fixture_panic.rs"
+
+[[bin]]
+name = "fixture_overlay_focus"
+path = "tests/ui_fixtures/fixture_overlay_focus.rs"

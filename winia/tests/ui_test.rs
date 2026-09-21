@@ -490,3 +490,52 @@ fn panic_in_build_is_caught_and_window_survives() {
     app.click(cx + cw / 2.0, cy + ch / 2.0);
     app.expect_text_timeout("count: 2", Duration::from_secs(5));
 }
+
+/// A tap on a button in a popup must not steal the keyboard from the field beside it.
+/// `clickable` does not request focus (Compose's `Clickable.kt` delegates a `FocusableNode` and
+/// never calls `requestFocus`), but `overlay_down` used to focus the deepest focusable node on
+/// the hit path — the DEBUG-CLICK rule — so a button in a popup took focus.
+#[test]
+fn clicking_an_overlay_button_does_not_steal_focus() {
+    let mut app = UiTest::launch("overlay_focus");
+    app.expect_text("dialog-open: no");
+
+    // Open the dialog (a popup).
+    app.click_tag("open-dialog");
+    app.expect_text_timeout("dialog-open: yes", Duration::from_secs(5));
+
+    // It opens with nothing focused, so whatever ends up focused below came from the tap.
+    assert!(
+        !app.overlay_tag_is_focused("dialog-field"),
+        "the tap is what focuses the field, not the dialog opening"
+    );
+
+    // Tap the popup's field: it takes focus and receives the keyboard (the popup input path).
+    app.click_overlay_tag("dialog-field");
+    for key in ["h", "i"] {
+        app.key(key);
+    }
+    app.expect_text_timeout("dialog-field: hi", Duration::from_secs(5));
+    assert!(
+        app.overlay_tag_is_focused("dialog-field"),
+        "a tap on a popup field focuses it (the popup input path)"
+    );
+
+    // Tap the action button in the same popup: the tap must LAND (otherwise the focus
+    // assertions below would pass on a click that missed), the button must not take focus, and
+    // the field must keep it.
+    app.click_overlay_tag("dialog-action");
+    app.expect_text_timeout("action-clicks: 1", Duration::from_secs(5));
+    assert!(
+        !app.overlay_tag_is_focused("dialog-action"),
+        "a clickable does not request focus (as in Compose): the button must not light up"
+    );
+    assert!(
+        app.overlay_tag_is_focused("dialog-field"),
+        "nor may it take the field's focus"
+    );
+
+    // And the keyboard must still reach the field.
+    app.key("!");
+    app.expect_text_timeout("dialog-field: hi!", Duration::from_secs(5));
+}
