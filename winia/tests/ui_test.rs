@@ -635,3 +635,40 @@ fn a_drag_inside_a_popup_reaches_the_same_value_as_in_the_main_tree() {
         "the same drag must give the same value inside a popup and in the main tree (main = {main}, popup = {popup})"
     );
 }
+
+/// `dismiss_on_outside` decides whether an outside press closes an overlay.
+///
+/// The outside-press tail used to close any overlay that was `modal || dismiss_on_outside`, so the
+/// flag was a silent no-op for every modal overlay — a dialog asked to stay open closed anyway, and
+/// a modal overlay still has to CONSUME that press (its scrim blocks what is behind it), which the
+/// page button's click count pins down.
+#[test]
+fn a_modal_dialog_with_dismiss_on_outside_false_stays_open() {
+    let mut app = UiTest::launch("dialog_dismiss");
+    app.expect_text("a: closed / b: closed");
+
+    // Phase A: the flag is off, so an outside press neither closes the dialog nor reaches the page.
+    app.click_tag("open-a");
+    app.expect_text_timeout("a: open", Duration::from_secs(5));
+    assert_eq!(app.overlay_count(), 1, "the dialog is open");
+
+    app.click_tag("page-button");
+    app.expect_text("page-clicks: 0");
+    app.expect_text("a: open");
+    assert_eq!(
+        app.overlay_count(),
+        1,
+        "a modal dialog with dismiss_on_outside(false) must not close on an outside press"
+    );
+
+    // Phase B: with the default flag the same press closes it.
+    app.key("Escape");
+    app.expect_text_timeout("a: closed", Duration::from_secs(5));
+    app.click_tag("open-b");
+    app.expect_text_timeout("b: open", Duration::from_secs(5));
+    app.click_tag("page-button");
+    app.expect_text_timeout("b: closed", Duration::from_secs(5));
+    // ... and that press was consumed by the dismissal, not delivered to the page.
+    app.expect_text("page-clicks: 0");
+    assert_eq!(app.overlay_count(), 0, "the default dialog closes");
+}

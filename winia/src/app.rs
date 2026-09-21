@@ -3161,24 +3161,43 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::modifier
         pw.overlay_click = Some((i, local, nid.unwrap_or(0)));
         return true; // 事件消费——不进主树
     }
-    // 外部点击：模态或可关闭 → dismiss（消费事件）
+    // Outside press: an overlay that dismisses on an outside press closes; an overlay that does
+    // not still CONSUMES the press when it is modal (its scrim blocks what is behind it).
+    //
+    // ⚠ `dismiss_on_outside == false` has to be honoured for a modal overlay too: `modal` alone
+    // says "blocks the content behind", not "closes on any press". Compose's
+    // `DialogProperties(dismissOnClickOutside = false)` and `PopupProperties.dismissOnClickOutside`
+    // keep the overlay open, and callers pass the flag for exactly that — Nav3's
+    // `dialogProperties` (`nav.rs`) and `AlertDialog`'s own builder. Treating `modal` as
+    // "dismiss" made those flags silent no-ops.
     // ⚠ 同步移除（不等 recompose）——否则残留 overlay 会吞掉关闭后
     // 紧接着的点击（用户"点两次才打开"）且多渲染一帧（视觉闪烁）
     for i in (0..pw.overlays.len()).rev() {
-        if pw.overlays[i].modal || pw.overlays[i].dismiss_on_outside {
-            let passthrough = pw.overlays[i].click_passthrough;
-            let id = pw.overlays[i].id;
+        // A closing overlay is on its way out: it must not be dismissed again and must not swallow
+        // the press — `hit_overlay` treats it as transparent for the same reason. Without this a
+        // dialog that was just closed (Escape, a button, an outside press) eats the next press for
+        // the length of its exit animation, which is the "click twice to open" complaint.
+        if pw.overlays[i].closing {
+            continue;
+        }
+        let dismiss = pw.overlays[i].dismiss_on_outside;
+        if !dismiss && !pw.overlays[i].modal {
+            continue;
+        }
+        let passthrough = pw.overlays[i].click_passthrough;
+        let id = pw.overlays[i].id;
+        if dismiss {
             // 启动退出动画（不复位——动画完成后移除；passthrough Tooltip 的
             // on_dismiss 同步置 visible=false → 组合期记录 active=false 走
             // begin_overlay_close；这里先直接触发——两者幂等（closing 防重入））
             begin_overlay_close(pw, id);
-            // ⚠ Tooltip（passthrough）：dismiss 后**放行主树**——点击不消费
-            // （否则点按钮第一次只关 tooltip、按钮收不到——需点两次）
-            if passthrough {
-                continue;
-            }
-            return true;
         }
+        // ⚠ Tooltip（passthrough）：dismiss 后**放行主树**——点击不消费
+        // （否则点按钮第一次只关 tooltip、按钮收不到——需点两次）
+        if passthrough {
+            continue;
+        }
+        return true;
     }
     false
 }

@@ -28,6 +28,23 @@ Popup (overlay) — `overlay_down` (`app.rs:2982`) → `exec_overlay_click` (`ap
 "content scrolling wins"), so a bottom sheet's panel `on_drag` does not engage while its inner list
 is being dragged; an inner gesture component still wins.
 
+## An outside press: dismiss, or consume, or fall through
+
+A press that hits no overlay runs the tail of `overlay_down` (from the top overlay down):
+
+| Overlay | Outside press |
+|---|---|
+| `dismiss_on_outside` (the default for `Popup`, `Dialog`, `AlertDialog`, `ModalBottomSheet`) | dismisses it (`begin_overlay_close`, synchronously — not waiting for a recompose) and is consumed |
+| `modal` with `dismiss_on_outside(false)` | nothing closes, but the press is still consumed: a modal scrim blocks what is behind it |
+| neither | falls through to the main tree |
+| `click_passthrough` (tooltip) | the press always falls through, whether or not the overlay dismisses |
+| already `closing` | treated as transparent — no second dismissal, no consumption |
+
+`dismiss_on_outside(false)` is how a dialog or popup that must stay open while the rest of the
+window is used keeps working (Nav3's `dialogProperties`, `AlertDialog`'s builder); the flag has to
+be honoured for a modal overlay too, since `modal` means "blocks what is behind", not "closes on any
+press".
+
 ## Focus: nobody sets it on a tap
 
 Neither path focuses anything on a tap. A component that wants the keyboard asks for it in its own
