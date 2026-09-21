@@ -9,7 +9,7 @@ implementations in `app.rs`, so the differences are easy to trip over.
 Main tree (`handle_pointer_down` → `handle_pointer_up`):
 
 1. `press_interaction_down` — ripple `PressInteraction.Press` on the innermost clickable that has an
-   interaction source (`app.rs:3188`).
+   interaction source (`app.rs:3207`).
 2. `gesture_down` (`app.rs:2364`) — picks the press-gesture target and **fires
    `GestureAction::Press`** immediately; also creates the `GestureTracker` that routes move/up.
 3. ... on release: `gesture_up` fires `Tap` / `DoubleTap` / `LongPress` / `DragEnd`, then
@@ -76,7 +76,7 @@ Popup content does not get the gesture *tracker*: `overlay_down` builds its own 
 (`pw.overlay_drag`, `pw.overlay_drag_scroll`) instead of `pw.gesture`, so `Modifier::on_tap`,
 `on_double_tap` and `on_long_press` never fire inside a popup — `on_click` does (on release), and
 `on_drag` does too (the overlay drag path fires `DragStart` / `DragMove` / `DragEnd` itself; see
-`app.rs:3806`). Closing the tap gap means routing popup gestures through the shared tracker, which
+`app.rs:3833`). Closing the tap gap means routing popup gestures through the shared tracker, which
 needs arena-aware tracker state — today `gesture_slot` / `gesture_node` resolve against the main
 tree's arena only.
 
