@@ -90,6 +90,11 @@ cargo test --features debug-server --test ui_test
 
 环境变量：`UI_TEST_STDERR=1` 转发 fixture stderr 到测试输出（诊断用）。
 
+⚠ Always pass `--features debug-server`. Without it the fixture bins are relinked *without* the
+debug server, and every UI test then fails in the worst possible way: the child process stays alive
+but is silent (no `TREE:` on stdout, no stderr), so `launch` times out with `TREE 响应数=0` and
+`stdout 已收: (空)` after 20s and looks like an environment/window problem.
+
 ## 新增场景测试（按测试用例设计原则）
 
 1. 在 `tests/ui_fixtures/` 写 fixture（**单一场景**——Given/When/Then 可读）：

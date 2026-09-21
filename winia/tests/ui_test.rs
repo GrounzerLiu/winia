@@ -539,3 +539,23 @@ fn clicking_an_overlay_button_does_not_steal_focus() {
     app.key("!");
     app.expect_text_timeout("dialog-field: hi!", Duration::from_secs(5));
 }
+
+/// A popup's pointer-down must dispatch the press gesture, so a component's own `on_press`
+/// runs inside a popup exactly as it does in the main tree.
+///
+/// The overlay path used to dispatch `on_click` only (on up), which is why `overlay_down`
+/// carried a focus heuristic at all: a popup `TextField` focuses through
+/// `on_press → FocusRequester::request_focus`, and that callback never fired. This asserts the
+/// gesture itself, on a zone that has no click of any kind — `on_press` is its only channel.
+#[test]
+fn an_overlay_press_zone_receives_the_press_gesture() {
+    let mut app = UiTest::launch("overlay_focus");
+    app.expect_text("dialog-open: no");
+
+    app.click_tag("open-dialog");
+    app.expect_text_timeout("dialog-open: yes", Duration::from_secs(5));
+    app.expect_text("presses: 0");
+
+    app.click_overlay_tag("dialog-press-zone");
+    app.expect_text_timeout("presses: 1", Duration::from_secs(5));
+}
