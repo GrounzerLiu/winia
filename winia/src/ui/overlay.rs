@@ -338,6 +338,9 @@ pub struct Popup {
     position: PopupPosition,
     offset: (f32, f32),
     on_dismiss: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Whether a press outside the popup dismisses it (default true, like Compose's
+    /// `PopupProperties.dismissOnClickOutside`). See [`Popup::dismiss_on_outside`].
+    dismiss_on_outside: bool,
     anchor_slot: Option<u64>,
     enter_anim: Option<OverlayAnimSpec>,
     exit_anim: Option<OverlayAnimSpec>,
@@ -356,6 +359,7 @@ impl Popup {
             position: PopupPosition::BottomLeft,
             offset: (0.0, 4.0),
             on_dismiss: None,
+            dismiss_on_outside: true,
             anchor_slot: None,
             enter_anim: None,
             exit_anim: None,
@@ -374,6 +378,17 @@ impl Popup {
 
     pub fn on_dismiss_request(mut self, cb: impl Fn() + Send + Sync + 'static) -> Self {
         self.on_dismiss = Some(Arc::new(cb));
+        self
+    }
+
+    /// Whether a press OUTSIDE the popup dismisses it — `true` by default, like Compose's
+    /// `PopupProperties.dismissOnClickOutside`.
+    ///
+    /// With `true` that press is consumed by the popup (it closes instead of reaching whatever it
+    /// landed on), so a popup that should stay open while the rest of the window is used — a
+    /// palette, a floating panel — passes `false` and the press falls through.
+    pub fn dismiss_on_outside(mut self, v: bool) -> Self {
+        self.dismiss_on_outside = v;
         self
     }
 
@@ -428,7 +443,7 @@ impl Popup {
             offset: self.offset,
             anchor_slide: None,
             modal: false,
-            dismiss_on_outside: true,
+            dismiss_on_outside: self.dismiss_on_outside,
             click_passthrough: false,
             on_dismiss: self.on_dismiss,
             enter_anim: self.enter_anim,

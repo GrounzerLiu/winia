@@ -1,15 +1,16 @@
-//! UI-test fixture: a drag inside popup content carries the same coordinates as a drag in the main
+//! UI-test fixture: a drag inside popup content reports the same coordinates as a drag in the main
 //! tree.
 //!
-//! Drives `ui_test.rs`'s `a_drag_inside_a_popup_reaches_the_same_value_as_in_the_main_tree`: a
-//! slider in a `Popup` is dragged to a known point of its own track, and the page prints the value
-//! so the test can check it against the dragged position — before the fix it read the position
-//! shifted by the popup's screen origin.
+//! Drives `ui_test.rs`'s `a_drag_inside_a_popup_reaches_the_same_value_as_in_the_main_tree`: two
+//! identical sliders — one on the page, one in a `Popup` — are dragged to the same point *relative
+//! to their own track*, and the page prints both values so the test can compare them.
 //!
-//! The popup is deliberately offset horizontally (a layer-vs-scene coordinate mistake is invisible
-//! at screen origin (0, 0), which is how the bug survived), and its slider is the only gesture in
-//! the scenario: a `Popup` dismisses on an outside press and CONSUMES that press, so a drag over
-//! page content could not run while this popup is open.
+//! Two deliberate properties of the scenario:
+//! - The popup is offset horizontally. At screen origin (0, 0) a layer-vs-scene coordinate mistake
+//!   is invisible, which is how the bug this guards against survived.
+//! - The popup is `dismiss_on_outside(false)`: a dismissing popup CONSUMES the press that closes it
+//!   (see docs/ui-testing.md), so the page-side drag of the same scenario would never reach its
+//!   slider — and a drag that re-registers the overlay mid-gesture can be cut short.
 
 use letclone::clone;
 use winia::prelude::*;
@@ -17,19 +18,30 @@ use winia::ui::{Popup, PopupPosition};
 
 #[composable]
 fn popup_drag_fixture(ctx: &mut ComposeCtx) {
-    let value = ctx.remember(|| 0.0f32);
+    let main_v = ctx.remember(|| 0.0f32);
+    let popup_v = ctx.remember(|| 0.0f32);
 
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(16.0))
         .spacing(12.0)
         .build(ctx, |ctx| {
-            Text::new(format!("popup: {:.2}", value.get())).build(ctx);
+            Text::new(format!("main: {:.2}", main_v.get())).build(ctx);
+            Slider::new(main_v.get())
+                .value_range(0.0, 1.0)
+                .on_value_change({
+                    clone!(main_v);
+                    move |nv| main_v.set(nv)
+                })
+                .modifier(Modifier::new().test_tag("main-slider"))
+                .build(ctx);
+            Text::new(format!("popup: {:.2}", popup_v.get())).build(ctx);
 
             Popup::new(true)
                 .position(PopupPosition::BottomLeft)
                 .offset(160.0, 6.0)
+                .dismiss_on_outside(false)
                 .build(ctx, {
-                    let v = value.clone();
+                    let v = popup_v.clone();
                     move |ctx| {
                         Column::new()
                             .modifier(Modifier::new().test_tag("popup-body").fill_max_width())

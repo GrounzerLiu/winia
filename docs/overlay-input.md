@@ -68,5 +68,5 @@ The drag half of that path has its own coordinate rule worth knowing: its calls 
 `fire_gesture_action` subtracts a position from the arena it was handed (a popup's arena is
 layer-local). Passing window coordinates there shifts a popup `on_drag`'s `pos` by the popup's
 screen origin — `Slider` reads `pos.0`, so a drag in a popup landed on the wrong value until
-`a_drag_inside_a_popup_lands_on_the_dragged_position` caught it. Deltas need no
+`a_drag_inside_a_popup_reaches_the_same_value_as_in_the_main_tree` caught it. Deltas need no
 conversion; the layer offset cancels in a difference.
