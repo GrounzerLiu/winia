@@ -182,6 +182,15 @@ pub enum Shape {
     RoundedRect { corner_radius: f32 },
     /// 仅顶部圆角（对齐 M3 BottomSheet 顶部 28dp——底部直角贴屏）
     TopRoundedRect { radius: f32 },
+    /// Rounded on the two RIGHT corners only (upper-right + lower-right), left edge
+    /// square. Geometric rather than direction-resolved: a modal navigation drawer
+    /// docks at the leading edge and rounds the side facing the content, so an LTR
+    /// drawer picks this one and its RTL counterpart picks [`Shape::LeftRoundedRect`].
+    /// (Compose reaches the same pair through a single `CornerLargeEnd` token whose
+    /// side follows the layout direction; a winia `Shape` carries no direction.)
+    RightRoundedRect { radius: f32 },
+    /// Mirror of [`Shape::RightRoundedRect`] — rounded on the two LEFT corners only.
+    LeftRoundedRect { radius: f32 },
     /// 胶囊（圆角 = 短边一半——对标 Compose `CornerFull`，material3
     /// Button 默认形状；宽高变化时自动跟随）
     Pill,
@@ -201,6 +210,16 @@ impl Shape {
 
     pub fn top_rounded(radius: f32) -> Self {
         Shape::TopRoundedRect { radius }
+    }
+
+    /// Rounded on the two right corners (see [`Shape::RightRoundedRect`]).
+    pub fn right_rounded(radius: f32) -> Self {
+        Shape::RightRoundedRect { radius }
+    }
+
+    /// Rounded on the two left corners (see [`Shape::LeftRoundedRect`]).
+    pub fn left_rounded(radius: f32) -> Self {
+        Shape::LeftRoundedRect { radius }
     }
 
     /// 胶囊形状（对标 Compose `RoundedCornerShape(50)`——短边一半圆角）

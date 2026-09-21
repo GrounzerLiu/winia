@@ -49,6 +49,7 @@ pub mod sheet_state;
 pub mod surface;
 pub mod navigation_bar;
 pub mod navigation_rail;
+pub mod navigation_drawer;
 pub mod tab_row;
 pub mod navigation_suite;
 pub mod short_navigation_bar;
@@ -173,6 +174,13 @@ pub use navigation_rail::{
     WIDE_RAIL_EXPANDED_MIN_WIDTH,
 };
 pub use tooltip::Tooltip;
+pub use navigation_drawer::{
+    DrawerDefaults, DrawerState, DrawerValue, ModalDrawerSheet, ModalNavigationDrawer,
+    NavigationDrawerItem, NavigationDrawerItemColors,
+    DRAWER_CORNER_RADIUS, DRAWER_ITEM_END_PADDING, DRAWER_ITEM_HEIGHT, DRAWER_ITEM_ICON_SIZE,
+    DRAWER_ITEM_SLOT_GAP, DRAWER_ITEM_START_PADDING, DRAWER_MAX_WIDTH, DRAWER_MIN_WIDTH,
+    DRAWER_SHEET_HORIZONTAL_PADDING,
+};
 pub use shared_transition::{
     BoundsTransform, OverlayClip, PathMotion, PlaceHolderSize,
     ResizeMode, SharedBounds, SharedContentState, SharedKind, SharedTransitionDefaults,
