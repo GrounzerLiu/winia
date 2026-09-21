@@ -113,6 +113,10 @@ pub(crate) struct PerWindow {
     gesture_tap_ctx: Option<(u64, std::time::Instant, (f32, f32))>,
     /// 手势节点的 slot_key（跨重组稳定——node_id 会变，find_node_by_id 会失败）
     gesture_slot: Option<u64>,
+    /// Arena of the node the current gesture belongs to: `None` = the main tree, `Some(overlay id)`
+    /// = that popup's layer. The id (not the index) is stored because an overlay can be removed
+    /// while a gesture — or a deferred tap — is still in flight.
+    gesture_arena: Option<u64>,
     /// 拖拽滚动会话（按下在滚动容器上：内容跟随指针，松手按速度 fling）
     drag_scroll: Option<DragScroll>,
     /// 顶层弹出层（独立组合单元——渲染在主树之上）
@@ -209,7 +213,7 @@ struct PtrDownState {
 
 impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::ui::theme::ThemeColors) -> Self {
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), window_size_backchannel: std::cell::RefCell::new(None), on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, last_pointer_pos: None, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, drag_scroll: None, overlays: Vec::new(), overlay_click: None, overlay_drag: None, overlay_drag_started: false, overlay_drag_last: None, overlay_drag_scroll: None, pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None, overlay_focused_interaction: None }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), window_size_backchannel: std::cell::RefCell::new(None), on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, last_pointer_pos: None, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, gesture_arena: None, drag_scroll: None, overlays: Vec::new(), overlay_click: None, overlay_drag: None, overlay_drag_started: false, overlay_drag_last: None, overlay_drag_scroll: None, pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None, overlay_focused_interaction: None }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -334,14 +338,23 @@ impl PerWindow {
     /// 补发延迟的 tap（Compose：onDoubleTap 存在时 onTap 延迟到双击窗口结束）。
     /// 超时或按下其他节点时调用——按当前布局树换算组件本地坐标。
     fn fire_pending_tap(&mut self, t: crate::input::gesture::PendingTap) {
-        let nodes = self.composer.arena_nodes();
-        let Some(r) = self.composer.layout_root_idx() else { return; };
-        fire_gesture_action(
-            nodes,
-            r,
-            t.slot_key,
-            crate::input::gesture::GestureAction::Tap(t.pos),
-        );
+        let action = crate::input::gesture::GestureAction::Tap(t.pos);
+        // A deferred tap belongs to the arena its node was pressed in (main tree or that popup's
+        // layer), and its `pos` is layer-local for a popup — the space the tracker recorded it in.
+        match t.overlay_id {
+            None => {
+                let nodes = self.composer.arena_nodes();
+                let Some(r) = self.composer.layout_root_idx() else { return; };
+                fire_gesture_action(nodes, r, t.slot_key, action);
+            }
+            Some(id) => {
+                let Some(i) = self.overlays.iter().position(|o| o.id == id) else { return; };
+                let ov = &self.overlays[i];
+                let nodes = ov.composer.arena_nodes();
+                let Some(r) = ov.composer.layout_root_idx() else { return; };
+                fire_gesture_action(nodes, r, t.slot_key, action);
+            }
+        }
         if let Some(ref sw) = self.skia_window { sw.request_redraw(); }
     }
 
@@ -1543,6 +1556,12 @@ impl AppState {
                         // 命中 overlay：立即执行点击（合成单事件——down 记录 +
                         // 立即 up 触发；真实路径由 PointerUp 事件触发）
                         exec_overlay_click(pw);
+                        // The synthetic click is down + up in one event, so it has to close the
+                        // gesture the down opened, exactly as the real up path does
+                        // (`exec_overlay_click` → `gesture_up`): otherwise a tap in a popup would
+                        // leave its tracker (and any deferred tap) behind, and `on_tap` would never
+                        // fire for a harness click.
+                        gesture_up(pw, (x, y));
                         // 释放 overlay 的 press（合成事件无真实 up——否则按下
                         // 波纹/按压态卡死到 overlay 关闭）
                         release_pressed_interaction(pw);
@@ -2359,6 +2378,110 @@ fn press_gesture_target(
     Some((n.id, n.slot_key, n.modifier.has_drag_gesture()))
 }
 
+/// Overlay index of a gesture arena — `None` for the main tree, and for a target whose overlay has
+/// since been removed (the gesture then has nowhere to land).
+///
+/// A `closing` overlay is deliberately still resolved: unlike a press (`hit_overlay` treats a fading
+/// overlay as transparent) the finger is already down and its nodes are still composed, so the
+/// gesture completes into the popup and dies with it when `finish_closing_overlays` removes it.
+fn gesture_arena_overlay(pw: &PerWindow, arena: Option<u64>) -> Option<usize> {
+    let id = arena?;
+    pw.overlays.iter().position(|o| o.id == id)
+}
+
+/// Convert a window position into the gesture target's arena space: unchanged for the main tree,
+/// LAYER-LOCAL inside a popup — a gesture callback receives coordinates local to the arena it was
+/// resolved in (`fire_gesture_action` subtracts the node's position there), so the tracker has to
+/// measure and report in the same space. `None` once the target's overlay is gone.
+///
+/// ⚠ The conversion uses the overlay's CURRENT `screen_pos`, so an overlay that MOVES during a
+/// gesture injects its own motion into the measured position — enough to cross the 8 px tap slop and
+/// cancel the tap family. The expanded `SearchBar` is exactly that: an anchored panel sliding to the
+/// window corner over `SEARCH_BAR_EXPAND_MS`, pressable while it moves (`anchor_slide`). Nothing
+/// shipped is visibly affected (its content is a `TextField` whose `on_press` already fired plus
+/// `clickable` rows that use `on_click`), but a component that wants a tap to survive its own
+/// overlay's motion would need the arena origin frozen at press time.
+fn gesture_arena_pos(pw: &PerWindow, scene_pos: (f32, f32)) -> Option<(f32, f32)> {
+    match pw.gesture_arena {
+        None => Some(scene_pos),
+        Some(id) => {
+            let ov = pw.overlays.iter().find(|o| o.id == id)?;
+            Some((scene_pos.0 - ov.screen_pos.0, scene_pos.1 - ov.screen_pos.1))
+        }
+    }
+}
+
+/// Fire a gesture action at `slot` inside `arena` — the arena the gesture target belongs to, passed
+/// explicitly because the callers clear `pw.gesture_arena` (the gesture is over) before dispatching
+/// its last action. The main tree and each overlay have their own composer, so an action is routed
+/// together with the arena it was produced for — the same split `press_gesture_target` follows on
+/// the way in. `None` means the MAIN TREE; an arena that no longer resolves (the popup is gone) is
+/// NOT the main tree — the action is dropped instead, which is the whole point of carrying the arena.
+fn fire_in_gesture_arena(
+    pw: &mut PerWindow,
+    arena: Option<u64>,
+    slot: u64,
+    action: crate::input::gesture::GestureAction,
+) -> bool {
+    match arena {
+        None => {
+            let nodes = pw.composer.arena_nodes();
+            let Some(r) = pw.composer.layout_root_idx() else { return false; };
+            fire_gesture_action(nodes, r, slot, action)
+        }
+        Some(id) => match pw.overlays.iter().position(|o| o.id == id) {
+            Some(i) => {
+                let ov = &pw.overlays[i];
+                let nodes = ov.composer.arena_nodes();
+                let Some(r) = ov.composer.layout_root_idx() else { return false; };
+                fire_gesture_action(nodes, r, slot, action)
+            }
+            None => false,
+        },
+    }
+}
+
+/// Is `on_double_tap` registered on `slot`, in `arena`? The answer decides whether a tap is deferred
+/// to the double-tap window (see `gesture_up`).
+///
+/// `None` means the main tree only, matching `fire_in_gesture_arena`: an arena that no longer
+/// resolves answers `false` rather than consulting the main tree (the caller's vanished-arena guard
+/// has already ended the gesture; the tap that follows is dropped on dispatch).
+fn slot_has_double_tap(pw: &PerWindow, arena: Option<u64>, slot: u64) -> bool {
+    let (nodes, r) = match arena {
+        None => (pw.composer.arena_nodes(), pw.composer.layout_root_idx()),
+        Some(id) => match pw.overlays.iter().position(|o| o.id == id) {
+            Some(i) => {
+                let ov = &pw.overlays[i];
+                (ov.composer.arena_nodes(), ov.composer.layout_root_idx())
+            }
+            None => return false,
+        },
+    };
+    let Some(r) = r else { return false; };
+    crate::layout::node::find_node_id_by_slot_key(nodes, r, slot)
+        .and_then(|nid| crate::layout::node::find_node_by_id(nodes, r, nid))
+        .map(|idx| nodes[idx].modifier.has_double_tap())
+        .unwrap_or(false)
+}
+
+/// Pending-tap bookkeeping for a new press on `node_id` (Compose double-tap semantics, rules in
+/// `pending_tap_on_down`): a due tap is fired into the arena it was recorded in, a window hit on the
+/// same node cancels it (the up decides double-tap), anything else keeps waiting for its deadline.
+fn process_pending_taps_on_down(pw: &mut PerWindow, node_id: u64) {
+    let now = std::time::Instant::now();
+    let mut kept = Vec::new();
+    for t in std::mem::take(&mut pw.pending_taps) {
+        use crate::input::gesture::PendingTapAction as A;
+        match crate::input::gesture::pending_tap_on_down(&t, now, node_id) {
+            A::Fire => pw.fire_pending_tap(t),
+            A::Cancel => {}
+            A::Keep => kept.push(t),
+        }
+    }
+    pw.pending_taps = kept;
+}
+
 /// 指针按下手势入口：hit test 找最内层手势节点 → 创建 tracker（capture 语义——
 /// 后续 move/up 由 gesture_node 路由，指针移出组件仍接收）→ on_press 立即触发。
 fn gesture_down(pw: &mut PerWindow, scene_pos: (f32, f32)) {
@@ -2373,20 +2496,7 @@ fn gesture_down(pw: &mut PerWindow, scene_pos: (f32, f32)) {
         return;
     };
 
-    // 处理待补发的 tap（Compose 双击语义，规则见 pending_tap_on_down）：
-    // - 超时 → 补发；同节点窗口内第二次按下 → 取消（等 up 判定双击）；
-    //   其他节点按下 → 保留到 deadline 补发（不提前也不取消）
-    let now = std::time::Instant::now();
-    let mut kept = Vec::new();
-    for t in std::mem::take(&mut pw.pending_taps) {
-        use crate::input::gesture::PendingTapAction as A;
-        match crate::input::gesture::pending_tap_on_down(&t, now, node_id) {
-            A::Fire => pw.fire_pending_tap(t),
-            A::Cancel => {}
-            A::Keep => kept.push(t),
-        }
-    }
-    pw.pending_taps = kept;
+    process_pending_taps_on_down(pw, node_id);
 
     // 双击上下文按节点隔离（Compose per-pointerInput 语义）——不同节点不共享
     let ctx = pw.gesture_tap_ctx.take()
@@ -2395,6 +2505,7 @@ fn gesture_down(pw: &mut PerWindow, scene_pos: (f32, f32)) {
     pw.gesture = Some(crate::input::gesture::GestureTracker::new(node_id, scene_pos, has_drag, ctx));
     pw.gesture_node = Some(node_id);
     pw.gesture_slot = Some(slot);
+    pw.gesture_arena = None; // the main tree
     // on_press 立即触发（本地坐标）
     let nodes = pw.composer.arena_nodes();
     let Some(r) = pw.composer.layout_root_idx() else { return; };
@@ -2404,16 +2515,27 @@ fn gesture_down(pw: &mut PerWindow, scene_pos: (f32, f32)) {
 /// 指针移动手势入口：tracker 存在即路由（capture——不依赖 hit test）。
 fn gesture_move(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
     let Some(slot) = pw.gesture_slot else { return false; };
+    let Some(local) = gesture_arena_pos(pw, scene_pos) else {
+        end_gesture(pw); // the target's overlay vanished mid-drag
+        return false;
+    };
     let action = {
         let Some(t) = pw.gesture.as_mut() else { return false; };
-        t.on_move(scene_pos)
+        t.on_move(local)
     };
     if action == crate::input::gesture::GestureAction::None {
         return false;
     }
-    let nodes = pw.composer.arena_nodes();
-    let Some(r) = pw.composer.layout_root_idx() else { return false; };
-    fire_gesture_action(nodes, r, slot, action)
+    let arena = pw.gesture_arena;
+    fire_in_gesture_arena(pw, arena, slot, action)
+}
+
+/// Drop the gesture state (tracker + target) without firing anything.
+fn end_gesture(pw: &mut PerWindow) {
+    pw.gesture = None;
+    pw.gesture_node = None;
+    pw.gesture_slot = None;
+    pw.gesture_arena = None;
 }
 
 /// 拖拽滚动结束：速度足够 → 惯性 fling（内容速度 = -手指速度——手指向上甩
@@ -2440,9 +2562,17 @@ fn drag_scroll_up(pw: &mut PerWindow) {
 }
 
 /// 指针释放手势入口：up 判定（tap/double-tap/long-press/drag-end）→ 销毁 tracker。
-fn gesture_up(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
+fn gesture_up(pw: &mut PerWindow, _scene_pos: (f32, f32)) -> bool {
     let Some(slot) = pw.gesture_slot else { return false; };
     let Some(gid) = pw.gesture_node else { return false; };
+    // The tracker recorded positions in the target's arena, so its action carries arena-local
+    // coordinates already; the arena itself decides where the action is dispatched — captured here
+    // because `end_gesture` clears it before the dispatch below.
+    let arena = pw.gesture_arena;
+    if arena.is_some() && gesture_arena_overlay(pw, arena).is_none() {
+        end_gesture(pw); // the target's overlay vanished mid-gesture
+        return false;
+    }
     let action = {
         let Some(mut t) = pw.gesture.take() else { return false; };
         // ⚠ 必须先 on_up（Tap 分支记录 last_tap）再取 tap_context——
@@ -2451,8 +2581,7 @@ fn gesture_up(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
         pw.gesture_tap_ctx = t.tap_context().map(|(t, p)| (gid, t, p));
         action
     };
-    pw.gesture_node = None;
-    pw.gesture_slot = None;
+    end_gesture(pw);
     if action == crate::input::gesture::GestureAction::None {
         return false;
     }
@@ -2460,25 +2589,17 @@ fn gesture_up(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
     // 到双击窗口结束——窗口内第二次 up 命中双击 → 只发 DoubleTap（第一次 tap
     // 已在第二次 down 时取消）；超时/按下其他节点 → 补发 Tap（fire_pending_tap）
     if let crate::input::gesture::GestureAction::Tap(pos) = action {
-        let nodes = pw.composer.arena_nodes();
-        let Some(r) = pw.composer.layout_root_idx() else { return false; };
-        let has_double_tap = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot)
-            .and_then(|nid| crate::layout::node::find_node_by_id(nodes, r, nid))
-            .map(|idx| nodes[idx].modifier.has_double_tap())
-            .unwrap_or(false);
-        if has_double_tap {
-            pw.pending_taps.push(crate::input::gesture::PendingTap::new(slot, gid, pos));
+        if slot_has_double_tap(pw, arena, slot) {
+            pw.pending_taps.push(crate::input::gesture::PendingTap::new(slot, gid, pos, arena));
             return false;
         }
-        return fire_gesture_action(nodes, r, slot, action);
+        return fire_in_gesture_arena(pw, arena, slot, action);
     }
     if matches!(action, crate::input::gesture::GestureAction::DoubleTap(_)) {
         // 双击命中：第一次 tap 的 pending 应已在第二次 down 时取消——防御性清理同节点残留
         pw.pending_taps.retain(|t| t.node_id != gid);
     }
-    let nodes = pw.composer.arena_nodes();
-    let Some(r) = pw.composer.layout_root_idx() else { return false; };
-    fire_gesture_action(nodes, r, slot, action)
+    fire_in_gesture_arena(pw, arena, slot, action)
 }
 
 // ── 顶层弹出层（Popup/Dialog/DropdownMenu） ──
@@ -3068,12 +3189,48 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::modifier
         // this handler used to need a focus rule of its own. With the gesture dispatched, popup
         // content reacts like main-tree content and that rule is gone (the focus lands one frame
         // later, through the ordinary focus-request queue — see `take_focus_requests`).
+        //
+        // The tracker goes with it, so the rest of the tap family (`on_tap` / `on_double_tap` /
+        // `on_long_press`) fires in a popup too; `gesture_move` / `gesture_up` route their actions
+        // back into this arena (`pw.gesture_arena`). It is created only for a target WITHOUT drag
+        // gestures: a drag target is owned by the overlay drag machinery above
+        // (`pw.overlay_drag`), whose `DragStart` / `DragMove` / `DragEnd` would otherwise be
+        // dispatched twice for one gesture.
         {
-            let nodes = ov.composer.arena_nodes();
-            if let Some(r) = ov.composer.layout_root_idx() {
-                let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1);
-                if let Some((_, slot, _)) = press_gesture_target(nodes, &path) {
-                    fire_gesture_action(nodes, r, slot, crate::input::gesture::GestureAction::Press(local));
+            // Immutable scope: resolve the target and fire the Press, then leave the overlay borrow
+            // before the tracker bookkeeping below needs `pw` mutably.
+            let target = {
+                let ov = &pw.overlays[i];
+                let nodes = ov.composer.arena_nodes();
+                match ov.composer.layout_root_idx() {
+                    None => None,
+                    Some(r) => {
+                        let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1);
+                        press_gesture_target(nodes, &path).map(|(nid, slot, has_drag)| {
+                            fire_gesture_action(nodes, r, slot, crate::input::gesture::GestureAction::Press(local));
+                            (nid, slot, has_drag, ov.id)
+                        })
+                    }
+                }
+            };
+            if let Some((nid, slot, has_drag, ov_id)) = target {
+                if has_drag {
+                    // No tracker for a drag target — the overlay drag machinery above owns it (see
+                    // the note on this block). The PREVIOUS gesture must not survive into this one,
+                    // though: without this a press on a popup drag target would leave an older
+                    // tracker (and its arena) live, and the next move would drag the old node.
+                    end_gesture(pw);
+                } else {
+                    // Same bookkeeping as the main tree: a deferred tap on this node is due, or this
+                    // press is its double-tap candidate.
+                    process_pending_taps_on_down(pw, nid);
+                    let ctx = pw.gesture_tap_ctx.take()
+                        .filter(|(n, _, _)| *n == nid)
+                        .map(|(_, t, p)| (t, p));
+                    pw.gesture = Some(crate::input::gesture::GestureTracker::new(nid, local, false, ctx));
+                    pw.gesture_node = Some(nid);
+                    pw.gesture_slot = Some(slot);
+                    pw.gesture_arena = Some(ov_id);
                 }
             }
         }
