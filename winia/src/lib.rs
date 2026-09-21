@@ -48,7 +48,7 @@ pub mod debug {
     pub fn set_wake_callback(_cb: impl Fn() + Send + Sync + 'static) {}
     pub fn set_event_loop_proxy(_proxy: winit::event_loop::EventLoopProxy) {}
     pub fn update_tree(_window_id: u64, _json: &str) {}
-    pub fn set_overlay_trees(_window_id: u64, _trees: Vec<(u64, String)>) {}
+    pub fn set_overlay_trees(_window_id: u64, _trees: Vec<(u64, (f32, f32), String)>) {}
     pub fn remove_tree(_window_id: u64) {}
     pub fn screenshot_requested(_window_id: u64) -> bool { false }
     pub fn screenshot_done(_window_id: u64) {}
