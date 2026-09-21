@@ -174,6 +174,11 @@ pub struct AnchoredDraggableState<T: Clone + PartialEq + Eq + Ord + 'static> {
     /// direction rather than by position. A plain field (not a `State`): it is a static
     /// configuration read during settle, so no reactive plumbing is needed.
     velocity_threshold_dp: f32,
+    /// True from the first `drag_delta` until the gesture settles or a programmatic target
+    /// takes over. A flag of its own rather than `drag_target.is_some()`: `animate_to` sets
+    /// that too (for `target_value`'s sake) and it stays set after the tween ends, so the
+    /// combination cannot tell a finger from a finished animation.
+    dragging: State<bool>,
 }
 
 impl<T: Clone + PartialEq + Eq + Ord + 'static> AnchoredDraggableState<T> {
@@ -188,6 +193,7 @@ impl<T: Clone + PartialEq + Eq + Ord + 'static> AnchoredDraggableState<T> {
             last_velocity: State::new(0.0),
             last_drag: State::new(None),
             velocity_threshold_dp: DEFAULT_VELOCITY_THRESHOLD_DP,
+            dragging: State::new(false),
         }
     }
 
@@ -280,6 +286,9 @@ impl<T: Clone + PartialEq + Eq + Ord + 'static> AnchoredDraggableState<T> {
         if self.anchors.get().is_empty() {
             return;
         }
+        // Silent: this flag is read by `is_dragging` for logic, never by a composable
+        // that should re-run for it.
+        self.dragging.set_silent(true);
         let off = self.offset.get();
         let base = if off.is_nan() { 0.0 } else { off };
         let min = self.anchors.get().min_position();
@@ -401,6 +410,7 @@ impl<T: Clone + PartialEq + Eq + Ord + 'static> AnchoredDraggableState<T> {
 
     /// 吸附到指定目标（动画 tween——Compose SnapAnimationSpec）
     fn settle_to(&self, target: &T) {
+        self.dragging.set_silent(false);
         let pos = self.anchors.get().position_of(target);
         if pos.is_nan() {
             return;
@@ -426,6 +436,7 @@ impl<T: Clone + PartialEq + Eq + Ord + 'static> AnchoredDraggableState<T> {
 
     /// 程序化吸附到目标（动画）
     pub fn animate_to(&self, target: T) {
+        self.dragging.set_silent(false);
         let pos = self.anchors.get().position_of(&target);
         if pos.is_nan() {
             // 无此锚点：仅更新值（Compose 语义）
@@ -445,6 +456,7 @@ impl<T: Clone + PartialEq + Eq + Ord + 'static> AnchoredDraggableState<T> {
 
     /// 程序化瞬移到目标（无动画）
     pub fn snap_to(&self, target: T) {
+        self.dragging.set_silent(false);
         let pos = self.anchors.get().position_of(&target);
         if pos.is_nan() {
             self.settled_value.set(target.clone());
@@ -491,6 +503,16 @@ impl<T: Clone + PartialEq + Eq + Ord + 'static> AnchoredDraggableState<T> {
         crate::animation::has_animation_for_state(self.offset.state_id())
     }
 
+    /// True while a gesture — not a tween — owns the offset: set by the first
+    /// [`Self::drag_delta`] after a down, cleared when the gesture settles
+    /// (`settle`/`settle_with_velocity`) or a programmatic target takes over
+    /// (`animate_to`/`snap_to`). Callers that re-align or clamp the offset need this:
+    /// a finger's position must not be overwritten by bookkeeping, and a settle that has
+    /// not finished is a tween (see [`Self::is_animation_running`]), not a drag.
+    pub fn is_dragging(&self) -> bool {
+        self.dragging.peek()
+    }
+
     /// 设置值变更确认回调（Arc 共享，Clone 后仍生效）
     pub fn set_confirm_value_change(&mut self, f: impl Fn(&T) -> bool + Send + Sync + 'static) {
         self.confirm_value_change = std::sync::Arc::new(f);
@@ -518,6 +540,7 @@ impl<T: Clone + PartialEq + Eq + Ord + 'static> Clone for AnchoredDraggableState
             last_velocity: self.last_velocity.clone(),
             last_drag: self.last_drag.clone(),
             velocity_threshold_dp: self.velocity_threshold_dp,
+            dragging: self.dragging.clone(),
         }
     }
 }

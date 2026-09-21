@@ -55,26 +55,32 @@ testing, so a closed drawer parked off the edge cannot be clicked and an open on
 where it is drawn. The offset is state-driven, so a frame of the slide re-lays-out without
 recomposing.
 
-`update_anchors` runs on every compose and is therefore **inert unless the closed anchor
-moved** (androidx guards the same way: `currentClosedAnchor != calculatedClosedAnchor`).
-This is load-bearing rather than tidy: a live drag moves the offset while the parked value
-stays put, so re-aligning the offset here would undo one drag frame per compose and the
-drawer would not drag at all. An in-flight *animation* is not the only case to exclude —
-that was the first version's guard, and the gesture silently did nothing. Pinned by
-`a_drag_survives_the_next_compose`.
+`update_anchors` runs on every compose, and it is written around **who owns the offset**:
+a settled drawer must sit exactly on its parked anchor (that is what keeps a closed drawer
+off-screen and an open one flush), but a finger or a running tween owns the offset while it
+lasts, so the re-align is skipped for both. Two earlier versions got this wrong in opposite
+directions — guarding only on "no animation" undid one drag frame per compose, so the drawer
+could not be dragged at all; guarding only on "the anchor moved" cut a drag short when a
+resize landed mid-gesture and left a mid-tween resize parked at the tween's stale target.
+`is_dragging()` on the anchored-draggable state is what makes the distinction possible
+(`drag_target` alone cannot: `animate_to` sets it too, and it stays set after the tween ends).
+Pinned by `a_drag_survives_the_next_compose`, `a_resize_mid_drag_does_not_cancel_the_gesture`
+and `a_resize_mid_settle_is_repaired_once_the_tween_finishes`.
 
 The sheet is `min(maximum_drawer_width, window)` wide — **logical** px. This framework's
 convention is `1dp == 1 logical px` (see `Dimension::Dp`), so the dp tokens are used as-is
 and `Dp::to_px` (a *physical* value) must not be applied when sizing against the window's
 logical width. Pinned by `the_sheet_width_is_logical_not_physical`, which caught exactly
-this at 1.5x density (the drawer filled the window).
+this at 1.5x density (the drawer filled the window). The *sheet* additionally floors its own
+width at `MinimumDrawerWidth` (androidx's `sizeIn(minWidth = …)`), so content that does not
+fill the drawer yields 240dp rather than collapsing to the sheet's padding.
 
 ## Tokens (`DrawerDefaults`, `NavigationDrawerTokens`)
 
 | token | value | used for |
 |---|---|---|
 | `ContainerWidth` / `MaximumDrawerWidth` | 360dp | sheet width |
-| `MinimumDrawerWidth` | 240dp | only reached when the maximum is configured below it |
+| `MinimumDrawerWidth` | 240dp | the sheet's own width floor (`sizeIn(minWidth)`), so narrow content does not collapse it |
 | `ContainerShape` (`CornerLargeEnd`) | 16dp | the two corners facing the content (`Shape::RightRoundedRect` in LTR, `LeftRoundedRect` in RTL) |
 | `ModalContainerColor` | `SurfaceContainerLow` | sheet surface |
 | `ModalDrawerElevation` | `Level0` | no shadow by default; `ModalDrawerSheet::elevation` adds one |
@@ -100,8 +106,9 @@ the page by the same amount; override per drawer with `scrim_color(...)`.
 The scrim's *presence* is structural, and getting it wrong is a whole-page input bug: a
 full-window click-catcher left in the tree while the drawer is parked closed would swallow
 every click on the page. It therefore lives in a restartable group of its own that reads
-the offset with `get()`: every offset write re-enters that group, and once the offset
-reaches the closed anchor the group composes nothing at all. (Precisely: the framework
+the offset with `get()`: every offset write re-enters that group (and its ancestors on
+the dirty path), and once the offset reaches the closed anchor the group composes nothing
+at all. It carries no drag of its own — see the gesture table. (Precisely: the framework
 marks the whole dirty *path* dirty, so the drawer's `build` and its ancestors on the path
 also re-run that frame and then Skip their inner groups by parameter comparison. What is
 kept out of it is the app-content subtree, which is a sibling.) Verified on a real window:
@@ -109,31 +116,31 @@ kept out of it is the app-content subtree, which is a sibling.) Verified on a re
 
 ## Gestures, precisely
 
-`gestures_enabled` (default true) wires the drag on the **host `Stack`** and on the
-**scrim**. Where a drag can actually start follows from winia's dispatch model, which
-captures ONE gesture node per pointer down (the innermost with a gesture) and routes every
-later move to it — Compose instead hands the moves to the outer `anchoredDraggable`
-whatever child is under the finger:
+`gestures_enabled` (default true) wires the drag on the **host `Stack`**, which is the only
+gesture node the drawer owns. Where a drag can start follows from winia's dispatch model:
+ONE gesture node is chosen per pointer down and every later move goes to it. Compose instead
+hands the moves to the outer `anchoredDraggable` whatever child is under the finger, which
+comes to the same thing more often than it sounds:
 
 | finger down on | what happens |
 |---|---|
 | the sheet's blank area | drags the drawer |
 | the scrim (drawer open) | drags the drawer; a tap instead closes it |
 | the page behind (drawer closed) | drags the drawer |
+| a `NavigationDrawerItem`, `Button`, anything merely `clickable` | drags the drawer — a click is not a gesture element, so the down falls through to the host, and the 18px slop then cancels the click. Same as Compose. |
+| a slider / switch / text field (a real gesture element) | the child keeps the gesture |
 | a scroll container | the container scrolls — `inner_component_drag` skips a drag node that is an ancestor of a scroll container |
-| a slider/switch | the widget drags (it is the inner component) |
-| a `NavigationDrawerItem`, `Button`, … | **the child captures the down, so a swipe from there does not move the drawer** — tap or drag, the child's tracker decides |
 
-That last row is the honest gap against Compose and the main thing to know before relying
-on the gesture: a swipe that starts on a drawer row just cancels the row's tap. Dragging
-from the sheet's own surface (its padding, its blank lower half) and from the scrim works.
+So the reachable area is the whole page except children that own a gesture, and the drawer
+does **not** need a drag of its own on the scrim to make a swipe there work (an earlier
+version wired one and claimed it was needed; measurement showed the down already reached the
+host, so it was removed). Edge-swipe-to-open from the window border is not a separate gesture
+in either implementation.
 
 ## Deviations from Compose (deliberate, all degradations)
 
-- **Gestures.** See the table above: the drag is wired on the host and the scrim, but a down
-  on a child with its own gesture (a drawer row, a button) is captured by that child, so a
-  swipe starting there does not move the drawer. Edge-swipe-to-open from the window border
-  is not a separate gesture in either implementation.
+- **Gestures.** See the table above. Edge-swipe-to-open from the window border is not a
+  separate gesture in either implementation.
 - **Escape does not close the drawer.** winia's Escape handling lives in the overlay path in
   `app.rs`, which only main-tree overlays reach; the drawer is in-tree and has no key focus of
   its own. Close it from the scrim, a gesture, or `DrawerState::close()` — e.g. from a
@@ -163,11 +170,16 @@ dragging in both directions, clamping, velocity-vs-position settle, the drawer's
 threshold (fails if `DrawerState::new` stops setting it), the `confirmStateChange` veto
 (compared against the same gesture without a veto), width resolution, resize behaviour,
 scrim presence, the sheet width at 1.5x density, and the placement end-to-end through a real
-compose + layout in both directions. `a_drag_survives_the_next_compose` is the one that
-covers the compose following a drag frame — the shape of bug a state-level test cannot see,
-and the one this component shipped with until an external review caught it. Tests that push
-animations hold `crate::animation::tests::TEST_SERIAL` and clear the registry on drop
-(AGENTS.md).
+compose + layout in both directions, the sheet's minimum width, and the two ways a resize
+can land mid-flight (during a drag, and during the settle tween).
+
+Two of them are the shape of bug a state-level test cannot see, both caught by an external
+review rather than by the suite: `a_drag_survives_the_next_compose` covers the compose that
+follows a drag frame, and `a_resize_mid_settle_is_repaired_once_the_tween_finishes` steps the
+animation engine with `animation::update_animations()` to reach the frame after a tween ends.
+Tests that push animations hold `crate::animation::tests::TEST_SERIAL` and clear the registry
+on drop (AGENTS.md). Nodes are found by `Modifier::test_tag`, not by width: a width match also
+hits the app content and stops matching once the window is narrower than the token.
 
 Verified on a real window over the debug server: the open/close cycle (38 nodes / 0
 click-catchers → 39 / 1 → 38 / 0), an item click selecting and closing, and both gestures —
