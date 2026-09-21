@@ -17,12 +17,13 @@
 //!
 //! Deviations from Compose (winia degradations), all deliberate:
 //! - **Gestures.** Compose hangs a horizontal `anchoredDraggable` on the whole
-//!   drawer box, so a swipe anywhere drags it. winia does the same (`on_drag` on
-//!   the host), and the main tree's "innermost gesture wins" rule (`app.rs`
-//!   `inner_component_drag`) keeps scrolling content and inner draggables in
-//!   charge of their own area — a down over a scroll container never starts the
-//!   drawer's drag. Edge-swipe-to-open from the window border is not a separate
-//!   gesture in either implementation.
+//!   drawer box, so the moves reach it whatever child is under the finger. winia
+//!   captures ONE gesture node per down (the innermost with a gesture), so the drag
+//!   is wired on the host stack and on the scrim — a swipe from the sheet's own
+//!   surface or from the scrim drags the drawer, but a swipe starting on a row or a
+//!   button is captured by that child and does not. Scroll containers and inner
+//!   draggables keep their own area (`app.rs` `inner_component_drag`). See
+//!   `docs/navigation-drawer.md` for the table.
 //! - **Escape does not close the drawer.** winia's Escape handling lives in the
 //!   overlay path (`app.rs`), which only main-tree overlays reach; the drawer is
 //!   in-tree with no key focus of its own. Close it from the scrim, a gesture, or
@@ -138,27 +139,42 @@ impl DrawerState {
     /// `Closed at +width` in RTL — the sign is what makes a drag-away-from-the-edge
     /// close the drawer in both directions, with no delta-sign bookkeeping at the
     /// call site.
+    ///
+    /// This runs on every compose, so it must be inert unless the geometry actually
+    /// changed. androidx guards the same thing on the closed anchor
+    /// (`NavigationDrawer.kt`: `currentClosedAnchor != calculatedClosedAnchor`), and the
+    /// guard is load-bearing: a live drag moves the offset while the parked value stays
+    /// put, so re-aligning the offset to the parked anchor here would undo one drag frame
+    /// per compose — i.e. the drawer would not drag at all. (An in-flight *animation* is
+    /// not the only case to exclude; it was the only one excluded at first, and the
+    /// gesture silently did nothing.)
     pub fn update_anchors(&self, width: f32, rtl: bool) {
         let closed = if rtl { width } else { -width };
         let anchors = crate::ui::anchored_draggable::DraggableAnchors::new([
             (DrawerValue::Open, 0.0),
             (DrawerValue::Closed, closed),
         ]);
-        // Keep the parked offset consistent with a width change (a resize while the
-        // drawer is open must not leave it half off the edge).
-        let was_uninit = self.anchored.offset().is_nan();
-        let parked = self.anchored.settled_value();
+        let before = self.anchored.peek_position_of(&DrawerValue::Closed);
         self.anchored.update_anchors(anchors);
-        if !was_uninit {
-            let pos = self.anchored.peek_position_of(&parked);
-            if !pos.is_nan() {
-                let off = self.anchored.offset();
-                // Only snap when the parked value is the one being displayed and its
-                // anchor actually moved (i.e. a width change, not an in-flight drag).
-                if !self.anchored.is_animation_running() && (off - pos).abs() > 0.5 {
-                    self.anchored.offset_state().set(pos);
-                }
-            }
+        let after = self.anchored.peek_position_of(&DrawerValue::Closed);
+        let geometry_changed = match (before.is_nan(), after.is_nan()) {
+            (true, false) | (false, true) => true,
+            (false, false) => (before - after).abs() > 0.5,
+            (true, true) => false,
+        };
+        if !geometry_changed {
+            return;
+        }
+        // The window or the direction changed: keep the parked value flush with its
+        // (new) anchor so an open drawer does not hang over the edge.
+        let parked = self.anchored.settled_value();
+        let pos = self.anchored.peek_position_of(&parked);
+        if pos.is_nan() {
+            return;
+        }
+        let off = self.anchored.offset();
+        if (off - pos).abs() > 0.5 {
+            self.anchored.offset_state().set(pos);
         }
     }
 
@@ -469,6 +485,10 @@ impl NavigationDrawerItem {
                 let has_badge = badge.is_some();
                 Row::new()
                     .alignment(Alignment::Center)
+                    // androidx inserts the gap explicitly before the label and before the
+                    // badge; with the label taking the slack, the row's spacing is what
+                    // keeps the icon from sitting flush against the text.
+                    .spacing(DRAWER_ITEM_SLOT_GAP)
                     .build(ctx, |ctx| {
                         if let Some(icon) = icon {
                             WiniaTheme::with_content_color(icon_color, ctx, |ctx| {
@@ -743,7 +763,7 @@ impl ModalNavigationDrawer {
             .alignment(if rtl { Alignment::End } else { Alignment::Start })
             .build(ctx, |ctx| {
                 content(ctx);
-                scrim(ctx, &state, scrim_color, sheet_w);
+                scrim(ctx, &state, scrim_color, sheet_w, gestures);
                 if let Some(drawer_content) = drawer_content {
                     let sheet_modifier = Modifier::new()
                         .width(sheet_w)
@@ -767,14 +787,20 @@ impl ModalNavigationDrawer {
 /// Its *presence* is structural — a full-window click-catcher must actually vanish
 /// once the drawer parks closed, or it would swallow every click on the page — and
 /// that cannot be decided by a render-time peek the way the fade can. The group
-/// reads the offset with `get()`, which makes it (and only it) re-enter while the
-/// drawer moves; the app content subtree beside it is untouched. The fade itself is
+/// reads the offset with `get()`, which re-enters this group (and its ancestors) while
+/// the drawer moves; the app content subtree beside it is untouched. The fade itself is
 /// a background closure peeking the progress, so nothing recomposes for the color.
+///
+/// The scrim carries the drag as well as the tap. winia's gesture dispatch captures ONE
+/// node per down (the innermost with a gesture), so a drag that starts on the scrim would
+/// otherwise be routed to the scrim's tap detector, cancel the tap and move nothing —
+/// where Compose's `anchoredDraggable` on the outer box would have dragged the drawer.
 fn scrim(
     ctx: &mut ComposeCtx,
     state: &DrawerState,
     color: Color,
     sheet_width: f32,
+    draggable: bool,
 ) {
     let key = ctx.next_key();
     ctx.changed(&color);
@@ -791,21 +817,27 @@ fn scrim(
             if !parked_closed {
                 let fade = state.clone();
                 let dismiss = state.clone();
+                let mut modifier = Modifier::new().fill_max_size().background(
+                    move || {
+                        let a = (fade.peek_progress() * color.a as f32)
+                            .round()
+                            .clamp(0.0, 255.0) as u8;
+                        Color::from_argb(a, color.r, color.g, color.b)
+                    },
+                    Shape::Rectangle,
+                );
+                if draggable {
+                    let drag = state.clone();
+                    let end = state.clone();
+                    modifier = modifier
+                        .on_drag(move |_pos, (dx, _dy)| drag.drag_delta(dx))
+                        .on_drag_end(move || {
+                            let v = end.last_velocity();
+                            end.settle_with_velocity(v);
+                        });
+                }
                 Stack::new()
-                    .modifier(
-                        Modifier::new()
-                            .fill_max_size()
-                            .background(
-                                move || {
-                                    let a = (fade.peek_progress() * color.a as f32)
-                                        .round()
-                                        .clamp(0.0, 255.0) as u8;
-                                    Color::from_argb(a, color.r, color.g, color.b)
-                                },
-                                Shape::Rectangle,
-                            )
-                            .clickable(move || dismiss.close()),
-                    )
+                    .modifier(modifier.clickable(move || dismiss.close()))
                     .build(ctx, |_| {});
             }
         }
@@ -820,6 +852,24 @@ mod tests {
 
     fn comp() -> Composer {
         Composer::new()
+    }
+
+    /// Holds the global animation lock and clears the registry on drop. AGENTS.md
+    /// requires it of any test that pushes animations, and `settle`/`open`/`close` all
+    /// do: the entries live in a process-wide table and would otherwise outlive the test
+    /// and keep an `Arc` to its state alive.
+    fn anim_guard() -> impl Drop {
+        struct Guard(Option<std::sync::MutexGuard<'static, ()>>);
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                crate::animation::clear_all_animations();
+                self.0.take(); // release the lock after clearing
+            }
+        }
+        let lock = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        Guard(Some(lock))
     }
 
     // ── anchors ──
@@ -848,6 +898,7 @@ mod tests {
 
     #[test]
     fn open_close_move_the_target_and_progress() {
+        let _anim = anim_guard();
         let s = DrawerState::new(DrawerValue::Closed);
         s.update_anchors(360.0, false);
         s.open();
@@ -884,6 +935,7 @@ mod tests {
 
     #[test]
     fn drag_toward_the_edge_closes_in_both_directions() {
+        let _anim = anim_guard();
         // LTR: the drawer lives at the left, so dragging LEFT closes it. The release
         // has no velocity, so the target is the nearest anchor — past the midpoint.
         let s = DrawerState::new(DrawerValue::Open);
@@ -911,6 +963,7 @@ mod tests {
 
     #[test]
     fn a_slow_drag_settles_by_position_and_a_fast_one_by_direction() {
+        let _anim = anim_guard();
         let density = current_density().density;
         // Slow release short of the midpoint → back to the anchor it came from.
         let s = DrawerState::new(DrawerValue::Open);
@@ -928,6 +981,7 @@ mod tests {
 
     #[test]
     fn the_drawer_threshold_is_higher_than_the_anchored_draggable_default() {
+        let _anim = anim_guard();
         let s = DrawerState::new(DrawerValue::Closed);
         s.update_anchors(360.0, false);
         s.snap_to(DrawerValue::Open);
@@ -942,6 +996,7 @@ mod tests {
 
     #[test]
     fn confirm_value_change_vetoes_a_gesture() {
+        let _anim = anim_guard();
         // The same gesture twice, once with a veto. Without it the drawer closes —
         // which is what makes the vetoed run's outcome meaningful.
         let run = |veto: bool| {
@@ -1120,6 +1175,43 @@ mod tests {
     }
 
     #[test]
+    fn a_drag_survives_the_next_compose() {
+        // Regression, and the one only an end-to-end frame can prove: `update_anchors`
+        // runs on every compose, and it used to re-align the offset to the parked anchor
+        // whenever no animation was running — and a live drag is not an animation — so
+        // every drag frame was undone by the next compose and the drawer could not be
+        // dragged at all. Every state-level test passed with that bug in place.
+        crate::ui::adaptive::set_window_size(800.0, 600.0);
+        let state = DrawerState::new(DrawerValue::Open);
+        let mut c = comp();
+        drive_drawer(&mut c, &state);
+        assert_eq!(sheet_x(&c), 0.0, "open");
+
+        state.drag_delta(-200.0);
+        assert_eq!(state.current_offset(), -200.0);
+        drive_drawer(&mut c, &state); // the compose + layout that follows the move
+        assert_eq!(
+            state.current_offset(),
+            -200.0,
+            "the drag must survive the compose, not snap back to its anchor"
+        );
+        assert_eq!(
+            sheet_x(&c),
+            -200.0,
+            "and the sheet is painted where the finger left it"
+        );
+
+        assert_eq!(state.settle_with_velocity(0.0), DrawerValue::Closed);
+        assert!(state.is_closed(), "released past the midpoint: parked at Closed");
+        drive_drawer(&mut c, &state);
+        assert!(
+            state.is_animation_running(),
+            "and the offset is tweening to the closed anchor (it does not teleport there)"
+        );
+        assert_eq!(state.target_value(), DrawerValue::Closed);
+    }
+
+    #[test]
     fn the_sheet_width_is_logical_not_physical() {
         // A HiDPI window is a trap: the width token is compared against the window's
         // LOGICAL width, so converting it with the density (physical px) would make a
@@ -1140,21 +1232,37 @@ mod tests {
             });
         });
         c.layout(crate::layout::Constraints::new(0.0, 520.0, 0.0, 620.0));
+        // Every width in the tree, unfiltered — the content and the host are legitimately
+        // 520 wide, so the check is "a sheet-sized node exists", which fails outright when
+        // the bug sizes the sheet to the window's full width.
         let widths: Vec<f32> = c
             .arena_nodes()
             .iter()
             .map(|n| n.measured_size.width)
-            .filter(|w| *w > 0.0 && *w < 519.0)
+            .filter(|w| *w > 0.0)
             .collect();
         assert!(
             widths.iter().any(|w| (*w - DRAWER_MAX_WIDTH).abs() < 0.5),
-            "the sheet must be {DRAWER_MAX_WIDTH} logical px wide at 1.5x density, \
-             not the full 520-px window; widths seen: {widths:?}"
+            "the sheet must be {DRAWER_MAX_WIDTH} logical px wide at 1.5x density; \
+             widths seen: {widths:?}"
         );
+        // Position as well as width: the sheet is parked at exactly the closed anchor, not
+        // at the window edge. That can be wrong on its own (a wrong anchor with a right
+        // width), so it is worth the separate assertion.
+        let parked: Vec<f32> = c
+            .arena_nodes()
+            .iter()
+            .filter(|n| (n.measured_size.width - DRAWER_MAX_WIDTH).abs() < 0.5)
+            .map(|n| n.position.x)
+            .collect();
         assert!(
-            !widths.iter().any(|w| (*w - 520.0).abs() < 0.5),
-            "and it must NOT have filled the window; widths seen: {widths:?}"
+            !parked.is_empty()
+                && parked
+                    .iter()
+                    .all(|x| (*x + DRAWER_MAX_WIDTH).abs() < 0.5),
+            "every sheet-sized node is parked at -{DRAWER_MAX_WIDTH}; x seen: {parked:?}"
         );
+        crate::ui::adaptive::reset_window_size_state();
     }
 
     #[test]
