@@ -1336,8 +1336,8 @@ mod tests {
 
     #[test]
     fn max_width_yields_to_a_larger_min() {
-        // Compose's `sizeIn` merge order: the max is coerced up to the min, so a minimum above
-        // the maximum wins (it is not clamped back down).
+        // A conflicting min and max resolve to the MIN here, which is a documented deviation
+        // from Compose's `widthIn` (it coerces the min down to the max) — see the measure block.
         let m = Modifier::new().max_width(200.0).min_width(300.0);
         let mut nodes = vec![LayoutNode::leaf(m)];
         let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 1000.0, 0.0, 100.0));
@@ -1368,8 +1368,9 @@ mod tests {
 
     #[test]
     fn max_width_dynamic_state() {
-        // A dynamic cap registers a layout dependency during measure, so an animation can
-        // drive it without recomposing.
+        // A dynamic cap is re-resolved on re-measure, like the min counterpart's. (The
+        // dependency registration happens in the same `SizeValue::Dynamic` path; this test pins
+        // the re-resolution, not the registration — it marks the nodes dirty itself.)
         use crate::core::state::State;
         let s = State::new(200.0);
         let mut nodes = vec![
@@ -1941,8 +1942,16 @@ fn measure_node_inner(
         inner_constraints.min_height = inner_constraints.min_height.max(h).min(inner_constraints.max_height);
     }
     // Maximum sizes (MaxWidth/MaxHeight — the other half of Compose's widthIn/heightIn):
-    // lower the incoming max, then keep it at or above the min, which is Compose's `sizeIn`
-    // merge order — a minimum above the maximum wins.
+    // lower the incoming max, then hold it at or above the min.
+    //
+    // When a min and a max CONFLICT the min wins here (`.min_width(300).max_width(200)` is 300),
+    // which is a documented DEVIATION from Compose: its `SizeNode` coerces the min down to the
+    // max instead, so one `widthIn(min = 300.dp, max = 200.dp)` yields 200 — and its two separate
+    // calls are even order-dependent (`.widthIn(max = 200).widthIn(min = 300)` -> 200 but the
+    // reverse -> 300). winia scans its elements chain-wide and position-independently, so it
+    // cannot express that order-dependence at all; min-wins is CSS's `min-width`/`max-width`
+    // precedence, and the clamp is what keeps `Constraints` consistent — `constrain_width`/
+    // `constrain_height` are `f32::clamp`, which PANICS when min > max.
     let (max_w, max_h) = nodes[idx].modifier.max_size_constraint();
     if let Some(w) = max_w {
         inner_constraints.max_width = inner_constraints.max_width.min(w);

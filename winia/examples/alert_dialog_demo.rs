@@ -211,7 +211,9 @@ fn main() {
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
-                .size(560.0, 620.0)
+                // Wider than the dialog's 560dp maximum, so the long-body case demonstrates
+                // the cap instead of matching the window by coincidence.
+                .size(700.0, 620.0)
                 .title("AlertDialog")
                 .build(ctx, |ctx| alert_dialog_demo(ctx));
         });

@@ -4,10 +4,11 @@
 //! `tokens/DialogTokens.kt`:
 //! - **Container**: `DialogTokens.ContainerShape` = `CornerExtraLarge` (28dp) and
 //!   `DialogTokens.ContainerColor` = `SurfaceContainerHigh`. `AlertDialogDefaults.TonalElevation`
-//!   is `0.dp` and `AlertDialogImpl` passes no shadow elevation, so the dialog is flat — the
-//!   `ContainerElevation` = `Level3` token belongs to the platform dialog WINDOW, not to the
-//!   content. winia has no tonal overlay at all (see `surface.rs`), which is why
-//!   `tonal_elevation` is not exposed rather than accepted and ignored.
+//!   is `0.dp` and `AlertDialogImpl` passes no shadow elevation, so the CONTENT is flat.
+//!   (`DialogTokens.ContainerElevation` = `Level3` is referenced nowhere in the alert-dialog
+//!   implementations, so what it belongs to is not demonstrable — nothing here claims it.)
+//!   winia has no tonal overlay at all (see `surface.rs`), which is why `tonal_elevation` is not
+//!   exposed rather than accepted and ignored.
 //! - **Width**: `DialogMinWidth` = 280dp .. `DialogMaxWidth` = 560dp, i.e. the content's own
 //!   width clamped into that range (Compose's `sizeIn`). This is what `Modifier::max_width`
 //!   was added for; `min_width` alone would let a long title grow the dialog to the window.
@@ -28,7 +29,6 @@
 
 use crate::composable;
 use crate::core::composer::ComposeCtx;
-use crate::core::state::State;
 use crate::layout::{Alignment, LayoutDirection};
 use crate::modifier::{Color, Modifier, Shape};
 use crate::ui::overlay::{next_overlay_id, OverlayAnimSpec, OverlayDesc, PopupPosition};
@@ -171,15 +171,14 @@ impl BasicAlertDialog {
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
         let theme = WiniaTheme::colors();
+        // The id is remembered before the early return so a hidden dialog keeps its slot (and
+        // re-showing it reuses the same overlay id). No rising-edge state is needed on top of
+        // that: the overlay's enter animation runs when the overlay is registered, and
+        // `sync_overlays` then composes this frame's content closure — the piece
+        // `ModalBottomSheet` needs an edge for is its own sheet slide, which the dialog has none
+        // of.
         let id = ctx.remember(|| next_overlay_id());
-        // Both remembers sit BEFORE the early return: with `visible = false` they still update,
-        // so the rising edge below is detected on the frame the dialog is shown (a `prev_visible`
-        // left stale at `true` would swallow it — the trap `ModalBottomSheet` documents).
-        let prev_visible: State<bool> = ctx.remember(|| false);
-        let should_show = self.visible && !prev_visible.peek();
-        let _ = should_show; // the overlay's own enter animation runs on registration
         ctx.record_overlay_active(id.get(), self.visible);
-        prev_visible.set(self.visible);
         if !self.visible {
             return;
         }
@@ -213,12 +212,18 @@ impl BasicAlertDialog {
                     .clip(shape)
                     // `AlertDialogDefaults.dialogPadding` — on the surface, so the background
                     // covers it and the slots lay out inside it.
-                    .padding(DIALOG_CONTAINER_PADDING)
-                    .then(user_modifier.clone());
-                crate::ui::layout_components::Column::new()
-                    .modifier(surface)
-                    .alignment(Alignment::Start)
-                    .build(ctx, |ctx| content(ctx));
+                    .padding(DIALOG_CONTAINER_PADDING);
+                // The caller's modifier is a WRAPPER, as in Compose's
+                // `Box(modifier.sizeIn(...))`: a caller's padding must sit outside the dialog's
+                // background, not eat into it.
+                crate::ui::layout_components::Stack::new()
+                    .modifier(user_modifier.clone())
+                    .build(ctx, |ctx| {
+                        crate::ui::layout_components::Column::new()
+                            .modifier(surface)
+                            .alignment(Alignment::Start)
+                            .build(ctx, |ctx| content(ctx));
+                    });
             }),
             local_snapshot: Vec::new(),
         });
@@ -712,5 +717,49 @@ mod tests {
             dialog_w - DIALOG_CONTAINER_PADDING,
             "the confirm action ends at the dialog's end padding"
         );
+    }
+    #[test]
+    fn a_wrapped_action_row_puts_the_confirm_above_the_dismiss() {
+        // The other half of the flipped-direction trick: once the row wraps, the confirm action
+        // (first in content order) is on the FIRST line, i.e. above the dismiss — Compose's
+        // `AlertDialogFlowRow` behaviour. 260 + 8 + 260 exceeds the 512-wide content box of a
+        // dialog already at its 560 cap — with two 150-wide buttons the dialog would simply have
+        // grown to 356 and kept them on one line.
+        let mut c = compose_dialog(
+            AlertDialog::new(true)
+                .title(fixed_slot("title", 300.0, 20.0))
+                .confirm_button(fixed_slot("confirm", 260.0, 40.0))
+                .dismiss_button(fixed_slot("dismiss", 260.0, 40.0)),
+        );
+        let inner = lay_out_overlay(&mut c);
+        let root = inner.layout_root_idx().unwrap();
+        let dialog_w = inner.arena_nodes()[root].measured_size.width;
+        let (confirm_x, confirm_y, confirm_w, _) = abs_rect(&inner, "confirm");
+        let (dismiss_x, dismiss_y, dismiss_w, _) = abs_rect(&inner, "dismiss");
+        assert!(
+            confirm_y + 40.0 <= dismiss_y,
+            "wrapped: confirm on top (confirm y={confirm_y}, dismiss y={dismiss_y})"
+        );
+        for (x, w, which) in [(confirm_x, confirm_w, "confirm"), (dismiss_x, dismiss_w, "dismiss")] {
+            assert_eq!(
+                x + w,
+                dialog_w - DIALOG_CONTAINER_PADDING,
+                "each wrapped line is end-aligned ({which})"
+            );
+        }
+    }
+
+    #[test]
+    fn a_slot_wider_than_the_dialog_overflows_and_is_positioned_at_the_padding() {
+        // winia's `size()` OVERRIDES the incoming constraints where Compose's coerces them (the
+        // override is Compose's `requiredSize`), so a slot that demands more than the dialog is
+        // measured at its request; the surface's `clip` is what keeps it inside the rounded
+        // container. Recorded here because a slot author has to know it, and pinned so the
+        // behaviour cannot change silently.
+        let mut c = compose_dialog(AlertDialog::new(true).title(fixed_slot("wide", 900.0, 20.0)));
+        let inner = lay_out_overlay(&mut c);
+        let (x, _, w, _) = abs_rect(&inner, "wide");
+        assert_eq!(x, DIALOG_CONTAINER_PADDING, "still laid out at the padding");
+        assert_eq!(w, 900.0, "and measured at its request, past the dialog's cap");
     }
 }

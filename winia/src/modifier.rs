@@ -606,9 +606,10 @@ pub(crate) enum ModifierElement {
     /// 最小高度（对标 Compose `Modifier.heightIn(min=...)`）
     MinHeight { value: SizeValue },
     /// Maximum width (Compose `Modifier.widthIn(max = ...)`) — lowers the incoming max
-    /// constraint, so content that would be wider is constrained to it. Clamped to the
-    /// incoming min (a `sizeIn` whose minimum exceeds its maximum keeps the minimum, as in
-    /// Compose's constraint merging). Supports a dynamic value.
+    /// constraint, so content that would be wider is constrained to it, and is then held at or
+    /// above the min. When a min and a max conflict the MIN wins, unlike Compose's `widthIn`
+    /// (which coerces the min down to the max); that deviation is deliberate — see the measure
+    /// block in `layout/node.rs`. Supports a dynamic value.
     MaxWidth { value: SizeValue },
     /// Maximum height (Compose `Modifier.heightIn(max = ...)`)
     MaxHeight { value: SizeValue },
@@ -1138,7 +1139,8 @@ impl Modifier {
         self.push(ModifierElement::MaxWidth { value: value.into() })
     }
 
-    /// Maximum height (Compose `Modifier.heightIn(max = ...)`)
+    /// Maximum height (Compose `Modifier.heightIn(max = ...)`; a conflicting min wins, see
+    /// [`Self::max_width`])
     pub fn max_height(self, value: impl Into<SizeValue>) -> Self {
         self.push(ModifierElement::MaxHeight { value: value.into() })
     }
