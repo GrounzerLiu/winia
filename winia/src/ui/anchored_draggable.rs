@@ -377,8 +377,13 @@ impl<T: Clone + PartialEq + Eq + Ord + 'static> AnchoredDraggableState<T> {
             return anchors.closest_anchor(current_offset).unwrap_or_else(|| self.current_value.get());
         }
         let is_moving = velocity.abs() > 0.0;
-        let density = crate::unit::current_density().density;
-        let velocity_threshold = self.velocity_threshold_dp * density; // dp/s → px/s
+        // The token is used as-is: velocities here are LOGICAL px/s — the drag deltas come
+        // from scene positions, which are `to_logical`-converted before they reach us — and
+        // one dp is one logical px. Multiplying by the density asked for a PHYSICAL px/s gate
+        // and made every fling threshold `density` times too strict on a HiDPI display (a
+        // flick that reads as fast to the user springs back instead). `app.rs`'s
+        // minimum-fling gate uses its 50 dp/s constant the same way.
+        let velocity_threshold = self.velocity_threshold_dp;
         if !is_moving {
             return anchors.closest_anchor(current_offset).unwrap_or_else(|| self.current_value.get());
         }

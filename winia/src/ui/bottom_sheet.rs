@@ -283,7 +283,9 @@ impl ModalBottomSheet {
                             sheet_panel_geometry(sheet_max_width, crate::ui::window_size().0);
                         let mut panel_mod = Modifier::new()
                             .width(sheet_w)
-                            .offset(sheet_pad_x, st.offset_state())
+                            // `absolute_offset`, not `offset` — see the scaffold: the x is a
+                            // centring inset, and a plain offset mirrors x under RTL.
+                            .absolute_offset(sheet_pad_x, st.offset_state())
                             .shadow(
                                 1.0,
                                 cur_shape,

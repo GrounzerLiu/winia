@@ -7,11 +7,13 @@
 //! - **三态与 Modal 共享**：`SheetState(Hidden/Partial/Expanded)` 复用，
 //!   Scaffold 初始 `Partial`（露头），Modal 初始 `Hidden`
 //!
-//! 布局（对标 `BottomSheetScaffoldLayout`）：
-//! - 外层 `Stack.fill_max_size`，底层主内容 `fill_max_size`，上层 sheet `offset_y` 贴底
-//! - 锚点计算在 `on_size_changed` 中：`layoutH` 取窗口高（`window_size().1`），
-//!   `peekPx = sheetPeekHeight.to_px(density)`，`sheetH` 实测
-//! - 拖拽：`on_drag/drag_end` 直连 `SheetState`
+//! Layout (mirrors `BottomSheetScaffoldLayout`):
+//! - An outer `Stack.fill_max_size`; the page at the bottom of it, the sheet above it,
+//!   pinned to the bottom edge by its `offset_y`.
+//! - The anchors are computed in `on_size_changed`: `layoutH` from the window height
+//!   (`window_size().1`), `peekPx` from `sheetPeekHeight` used as a LOGICAL length (one dp
+//!   is one logical px — see `Dp::to_logical`), and `sheetH` as measured.
+//! - Dragging: `on_drag`/`drag_end` feed `SheetState` directly.
 
 use crate::composable;
 use crate::core::composer::ComposeCtx;
@@ -112,7 +114,10 @@ impl BottomSheetScaffold {
         };
         let peek = self.sheet_peek_height;
         let radius = self.sheet_shape_radius;
-        let container_color = self.sheet_container_color;
+        // The sheet's own color, distinct from the scaffold's: this local used to be shadowed
+        // by the `container_color` below, which made `sheet_container_color()` a silent no-op
+        // and painted the sheet with the scaffold's color.
+        let sheet_container_color = self.sheet_container_color;
         let swipe = self.sheet_swipe_enabled;
         let drag_handle = self.sheet_drag_handle;
         // sheet_max_width：对齐 Compose 640.dp 居中（与 Modal 同语义——手机 480 铺满、
@@ -144,9 +149,7 @@ impl BottomSheetScaffold {
 
                 // 片：offset_y 驱动，高度由内容决定，锚点在 on_size_changed 中更新
                 // 用窗口高近似 layoutH（占满时正确），响应式订阅 window_size 以跟随 resize
-                let window_h = crate::ui::window_size().1;
-                let _ = window_h; // 注册依赖，resize 触发重组
-                let layout_h = window_h;
+                let layout_h = crate::ui::window_size().1;
                 let peek_px = peek.to_logical();
 
                 let st_for_offset = sheet_state.clone();
@@ -179,7 +182,11 @@ impl BottomSheetScaffold {
                     // ⚠ 必须用单元素 .offset(x, y)——offset_x/offset_y 连用会 push
                     // 两个 Offset 元素，get_offset（modifier.rs:1845）只取第一个
                     // → y 恒为 0（片贴顶 bug）。
-                    .offset(sheet_pad_x, st_for_offset.offset_state())
+                    // `absolute_offset`, not `offset`: the x here is a CENTRING inset, which
+                    // is direction-independent, while a plain offset mirrors its x under RTL
+                    // (`layout/node.rs` placement) — which put the sheet at -pad_x in RTL, with
+                    // that much clipped off the left and as much dead space on the right.
+                    .absolute_offset(sheet_pad_x, st_for_offset.offset_state())
                     .shadow(
                         1.0,
                         cur_shape,
@@ -187,7 +194,7 @@ impl BottomSheetScaffold {
                         Color::from_argb(40, 0, 0, 0),
                     )
                     .background(
-                        container_color.unwrap_or_else(|| {
+                        sheet_container_color.unwrap_or_else(|| {
                             crate::ui::theme::WiniaTheme::colors().surface_container_low
                         }),
                         cur_shape,
@@ -375,6 +382,45 @@ mod tests {
             c.arena_nodes()[content].modifier.get_padding_vertical().1,
             SCAFFOLD_SHEET_PEEK_HEIGHT.value(),
             "the content reserves exactly one peek at the bottom, in logical px"
+        );
+    }
+    #[test]
+    fn the_centred_sheet_is_not_mirrored_in_rtl() {
+        // `Modifier::offset` mirrors its x under RTL, but a centring inset is
+        // direction-independent: the panel must sit `pad_x` from the LEFT edge in both
+        // directions. The bug this pins put it at -pad_x in RTL (measured -130 for a 640-wide
+        // sheet in a 900-wide window, i.e. 130px clipped off the left and 130px of dead space
+        // at the right). It was unreachable before the `to_logical` fix only because a HiDPI
+        // window used to clamp the sheet to its full width, leaving pad_x at 0.
+        let state = SheetState::new(SheetValue::PartiallyExpanded);
+        let st = state.clone();
+        let mut c = Composer::new();
+        c.compose(move |ctx| {
+            crate::ui::adaptive::set_window_size(900.0, 720.0);
+            crate::ui::theme::WiniaTheme::with_theme_and_direction(
+                crate::ui::theme::WiniaTheme::colors(),
+                crate::layout::LayoutDirection::Rtl,
+                ctx,
+                |ctx| {
+                    BottomSheetScaffold::new()
+                        .sheet_state(st.clone())
+                        .build(
+                            ctx,
+                            |ctx| { crate::ui::Text::new("sheet").build(ctx); },
+                            |ctx| { crate::ui::Text::new("content").build(ctx); },
+                        );
+                },
+            );
+        });
+        c.layout(Constraints::new(0.0, 900.0, 0.0, 720.0));
+        let sheet = c
+            .arena_nodes()
+            .iter()
+            .find(|n| (n.measured_size.width - 640.0).abs() < 0.5)
+            .expect("the sheet is the 640-wide node in a 900-wide window");
+        assert_eq!(
+            sheet.position.x, 130.0,
+            "the sheet is centred from the left edge in RTL too, not mirrored to -130"
         );
     }
 }
