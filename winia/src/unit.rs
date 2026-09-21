@@ -25,6 +25,21 @@ impl Dp {
 
     /// 通过 Density 转换为物理像素
     pub fn to_px(&self, density: Density) -> f32 { self.0 * density.density }
+
+    /// This dp as a **layout coordinate**.
+    ///
+    /// Layout coordinates in this framework are LOGICAL pixels and one dp IS one logical
+    /// pixel — `Dimension::to_logical_px` returns `Dp::value()` unchanged, pinned by its own
+    /// test at density 2.0 — so this is simply the number.
+    ///
+    /// It exists because the wrong choice is the inviting one: `to_px` reads like "give me
+    /// the pixel value", but it returns a PHYSICAL value, which is wrong anywhere the result
+    /// is compared with, assigned to, or measured against layout geometry — window sizes,
+    /// constraint values, `Modifier::size`/`padding`/`offset`, anchor positions. Sizing a
+    /// 360dp drawer with `to_px` at 1.5x density asks for 540 *logical* px, which silently
+    /// fills a 520-wide window. Use this one in layout code; `to_px` is for a length that
+    /// leaves the layout system (the platform, a canvas in device space).
+    pub fn to_logical(&self) -> f32 { self.0 }
 }
 
 // ── Dp 算术 ──
@@ -370,6 +385,12 @@ mod tests {
         let d = Density::from_density(2.0);
         let dp = Dp(10.0);
         assert_eq!(dp.to_px(d), 20.0);
+        // The two are NOT interchangeable: `to_px` is a device-space length, `to_logical` is
+        // the layout coordinate (one dp is one logical px — see `Dimension::to_logical_px`).
+        // Reaching for `to_px` in layout code is what sized a 640dp sheet to the whole window
+        // on a HiDPI display.
+        assert_eq!(dp.to_logical(), 10.0);
+        assert_ne!(dp.to_logical(), dp.to_px(d));
     }
 
     #[test]

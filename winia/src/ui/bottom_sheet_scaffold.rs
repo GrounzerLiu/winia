@@ -117,10 +117,9 @@ impl BottomSheetScaffold {
         let drag_handle = self.sheet_drag_handle;
         // sheet_max_width：对齐 Compose 640.dp 居中（与 Modal 同语义——手机 480 铺满、
         // 平板按 max 宽居中）。Dp(f32::INFINITY) 表 Unspecified 铺满。
-        let window_w = crate::ui::window_size().0;
-        let max_w_px = self.sheet_max_width.map(|dp| dp.to_px(crate::unit::current_density()));
-        let sheet_w = max_w_px.map(|w| w.min(window_w)).unwrap_or(window_w);
-        let sheet_pad_x = (window_w - sheet_w) / 2.0;
+        // Same geometry as the modal sheet (and the same unit rule — see the helper).
+        let (sheet_w, sheet_pad_x) =
+            crate::ui::bottom_sheet::sheet_panel_geometry(self.sheet_max_width, crate::ui::window_size().0);
         let container_color = self.container_color;
 
         // 外层 Stack：主内容底层，片上层
@@ -134,7 +133,9 @@ impl BottomSheetScaffold {
             .build(ctx, |ctx| {
                 // 主内容（占满，片在上层覆盖）——底部留出 sheet peek 高度，
                 // 对齐 Compose BottomSheetScaffold 的 contentWindowPadding（sheet 折叠时内容不被遮挡）
-                let peek_px_pre = peek.to_px(crate::unit::current_density());
+                // Same unit rule: `padding_bottom` takes a layout length, so the dp value is
+                // the logical value (the sheet's own height is reported in logical px too).
+                let peek_px_pre = peek.to_logical();
                 crate::ui::layout_components::Stack::new()
                     .modifier(Modifier::new().fill_max_size().padding_bottom(peek_px_pre))
                     .build(ctx, |ctx| {
@@ -146,8 +147,7 @@ impl BottomSheetScaffold {
                 let window_h = crate::ui::window_size().1;
                 let _ = window_h; // 注册依赖，resize 触发重组
                 let layout_h = window_h;
-                let density = crate::unit::current_density();
-                let peek_px = peek.to_px(density);
+                let peek_px = peek.to_logical();
 
                 let st_for_offset = sheet_state.clone();
                 let st_for_anchors = sheet_state.clone();
@@ -198,8 +198,7 @@ impl BottomSheetScaffold {
                         move |_w, h| {
                             sheet_h_for_cb.set(h);
                             let layout = crate::ui::window_size().1;
-                            let d = crate::unit::current_density();
-                            let peek_now = peek.to_px(d);
+                            let peek_now = peek.to_logical();
                             let s = st_for_anchors.clone();
                             s.update_anchors_scaffold(layout, peek_now, h);
                         }
@@ -310,5 +309,72 @@ impl BottomSheetScaffold {
 impl Default for BottomSheetScaffold {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::composer::Composer;
+    use crate::layout::Constraints;
+    use crate::ui::sheet_state::SheetValue;
+    use crate::unit::Density;
+
+    #[test]
+    fn the_peek_anchor_is_the_token_in_logical_px() {
+        // `sheetPeekHeight` reaches the anchors as a height, so it must be a logical length.
+        // The bug this pins converted it with `Dp::to_px`, which at 1.5x asked for 84 logical
+        // px instead of 56 — the sheet peeked 1.5x too far and the content reserved 1.5x too
+        // much space for it.
+        let state = SheetState::new(SheetValue::PartiallyExpanded);
+        let st = state.clone();
+        let mut c = Composer::new();
+        // The density has to cover the LAYOUT as well as the compose: the sheet's
+        // `on_size_changed` callback runs during measure (as it does in the app, where
+        // `with_density` wraps both phases), and a compose-only wrapper left that callback
+        // reading density 1.0 — where `to_px` happens to equal the correct value, hiding a
+        // regression in exactly the site this test is meant to catch.
+        crate::unit::with_density(Density::from_density(1.5), || {
+            c.compose(move |ctx| {
+                crate::ui::adaptive::set_window_size(480.0, 720.0);
+                BottomSheetScaffold::new()
+                    .sheet_state(st.clone())
+                    .sheet_peek_height(SCAFFOLD_SHEET_PEEK_HEIGHT)
+                    .build(
+                        ctx,
+                        |ctx| { crate::ui::Text::new("sheet").build(ctx); },
+                        |ctx| { crate::ui::Text::new("content").build(ctx); },
+                    );
+            });
+            // Between compose and layout: what build()'s first-frame anchor initialisation
+            // produced. (Asserting this after the layout would read the callback's value
+            // instead, which is a different site.)
+            assert_eq!(
+                state.anchored_draggable().position_of(&SheetValue::PartiallyExpanded),
+                720.0 - SCAFFOLD_SHEET_PEEK_HEIGHT.value(),
+                "first-frame anchors use the peek as a logical length"
+            );
+            c.layout(Constraints::new(0.0, 480.0, 0.0, 720.0));
+        });
+        // The peek reaches the layout three ways, so all three are asserted: the first-frame
+        // anchors (before layout), the ones the sheet's own size callback re-computes, and the
+        // space the content reserves for the collapsed sheet. A single-site regression has to
+        // fail here — the first version of this test only checked the anchor, which the size
+        // callback overwrites, so re-introducing the bug at the initialisation site left it
+        // green.
+        let expected_anchor = 720.0 - SCAFFOLD_SHEET_PEEK_HEIGHT.value();
+        assert_eq!(
+            state.anchored_draggable().position_of(&SheetValue::PartiallyExpanded),
+            expected_anchor,
+            "the sheet's size callback (during measure) uses the peek as a logical length"
+        );
+
+        let root = c.layout_root_idx().expect("laid out");
+        let content = c.arena_nodes()[root].children[0];
+        assert_eq!(
+            c.arena_nodes()[content].modifier.get_padding_vertical().1,
+            SCAFFOLD_SHEET_PEEK_HEIGHT.value(),
+            "the content reserves exactly one peek at the bottom, in logical px"
+        );
     }
 }

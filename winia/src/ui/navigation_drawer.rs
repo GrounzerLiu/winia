@@ -1372,8 +1372,9 @@ mod tests {
                 .drawer_content(tagged_sheet())
                 .build(ctx);
             });
+            // The layout runs under the same density, as it does in the app.
+            c.layout(crate::layout::Constraints::new(0.0, 520.0, 0.0, 620.0));
         });
-        c.layout(crate::layout::Constraints::new(0.0, 520.0, 0.0, 620.0));
         // Identity-based, not a width filter: a width match also hits the app content
         // (just as wide) and stops matching once the window is narrower than the token.
         let (x, w) = sheet_x_and_width(&c);
