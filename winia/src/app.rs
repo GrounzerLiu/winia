@@ -3803,10 +3803,17 @@ fn handle_pointer_move(
                 if let Some(ov) = pw.overlays.get(idx) {
                     let nodes = ov.composer.arena_nodes();
                     if let Some(r) = ov.composer.layout_root_idx() {
+                        // ⚠ The overlay arena is LAYER-local, and a gesture callback receives
+                        // node-local coordinates (`fire_gesture_action` subtracts the node's
+                        // position inside the arena it was given). So the absolute position has to
+                        // be converted here — passing `scene_pos` shifted it by the popup's screen
+                        // origin, which is why dragging a Slider inside a popup landed on the wrong
+                        // value (deltas are unaffected: the layer offset cancels in a difference).
+                        let local = (scene_pos.0 - ov.screen_pos.0, scene_pos.1 - ov.screen_pos.1);
                         fire_gesture_action(nodes, r, slot,
-                            crate::input::gesture::GestureAction::DragStart(scene_pos));
+                            crate::input::gesture::GestureAction::DragStart(local));
                         fire_gesture_action(nodes, r, slot,
-                            crate::input::gesture::GestureAction::DragMove(scene_pos, (dx, dy)));
+                            crate::input::gesture::GestureAction::DragMove(local, (dx, dy)));
                     }
                 }
                 handled = true;
@@ -3818,8 +3825,9 @@ fn handle_pointer_move(
             if let Some(ov) = pw.overlays.get(idx) {
                 let nodes = ov.composer.arena_nodes();
                 if let Some(r) = ov.composer.layout_root_idx() {
+                    let local = (scene_pos.0 - ov.screen_pos.0, scene_pos.1 - ov.screen_pos.1);
                     fire_gesture_action(nodes, r, slot,
-                        crate::input::gesture::GestureAction::DragMove(scene_pos, inc));
+                        crate::input::gesture::GestureAction::DragMove(local, inc));
                 }
             }
             handled = true;

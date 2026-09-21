@@ -59,13 +59,14 @@ Popup content does not get the gesture *tracker*: `overlay_down` builds its own 
 (`pw.overlay_drag`, `pw.overlay_drag_scroll`) instead of `pw.gesture`, so `Modifier::on_tap`,
 `on_double_tap` and `on_long_press` never fire inside a popup — `on_click` does (on release), and
 `on_drag` does too (the overlay drag path fires `DragStart` / `DragMove` / `DragEnd` itself; see
-`app.rs:3806`). Two caveats on the drag half:
+`app.rs:3806`). Closing the tap gap means routing popup gestures through the shared tracker, which
+needs arena-aware tracker state — today `gesture_slot` / `gesture_node` resolve against the main
+tree's arena only.
 
-- Its `pos` argument is wrong inside a popup: those calls pass window coordinates (`scene_pos`) while
-  `fire_gesture_action` subtracts a position from the overlay's own arena, so a popup `on_drag` sees
-  `pos` shifted by the popup's screen origin (the `delta` argument is fine). `Slider` reads `pos.0`,
-  so dragging a slider inside a popup lands on a wrong value; its tap-to-set works, because the press
-  block passes `local`.
-- Closing the tap gap means routing popup gestures through the shared tracker, which needs
-  arena-aware tracker state — today `gesture_slot` / `gesture_node` resolve against the main tree's
-  arena only.
+The drag half of that path has its own coordinate rule worth knowing: its calls pass
+**layer-local** positions, because the callback contract is node-local and
+`fire_gesture_action` subtracts a position from the arena it was handed (a popup's arena is
+layer-local). Passing window coordinates there shifts a popup `on_drag`'s `pos` by the popup's
+screen origin — `Slider` reads `pos.0`, so a drag in a popup landed on the wrong value until
+`a_drag_inside_a_popup_lands_on_the_dragged_position` caught it. Deltas need no
+conversion; the layer offset cancels in a difference.

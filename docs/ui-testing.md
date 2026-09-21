@@ -95,6 +95,12 @@ debug server, and every UI test then fails in the worst possible way: the child 
 but is silent (no `TREE:` on stdout, no stderr), so `launch` times out with `TREE 响应数=0` and
 `stdout 已收: (空)` after 20s and looks like an environment/window problem.
 
+⚠ A `Popup` dismisses on an outside press (its `OverlayDesc` sets `dismiss_on_outside`) and that
+press is CONSUMED — it closes the popup instead of reaching the main tree. So a ui test cannot drag
+main-tree content while a popup is open: the page gesture's first press disappears and the drag looks
+like it "did not arrive" (measured while writing `fixture_popup_drag`). Keep the gesture inside the
+popup, or drive the page side in a phase without a live popup.
+
 ## 新增场景测试（按测试用例设计原则）
 
 1. 在 `tests/ui_fixtures/` 写 fixture（**单一场景**——Given/When/Then 可读）：

@@ -99,3 +99,7 @@ path = "tests/ui_fixtures/fixture_panic.rs"
 [[bin]]
 name = "fixture_overlay_focus"
 path = "tests/ui_fixtures/fixture_overlay_focus.rs"
+
+[[bin]]
+name = "fixture_popup_drag"
+path = "tests/ui_fixtures/fixture_popup_drag.rs"
