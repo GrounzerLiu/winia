@@ -25,6 +25,21 @@ impl Dp {
 
     /// 通过 Density 转换为物理像素
     pub fn to_px(&self, density: Density) -> f32 { self.0 * density.density }
+
+    /// This dp as a **layout coordinate**.
+    ///
+    /// Layout coordinates in this framework are LOGICAL pixels and one dp IS one logical
+    /// pixel — `Dimension::to_logical_px` returns `Dp::value()` unchanged, pinned by its own
+    /// test at density 2.0 — so this is simply the number.
+    ///
+    /// It exists because the wrong choice is the inviting one: `to_px` reads like "give me
+    /// the pixel value", but it returns a PHYSICAL value, which is wrong anywhere the result
+    /// is compared with, assigned to, or measured against layout geometry — window sizes,
+    /// constraint values, `Modifier::size`/`padding`/`offset`, anchor positions. Sizing a
+    /// 360dp drawer with `to_px` at 1.5x density asks for 540 *logical* px, which silently
+    /// fills a 520-wide window. Use this one in layout code; `to_px` is for a length that
+    /// leaves the layout system (the platform, a canvas in device space).
+    pub fn to_logical(&self) -> f32 { self.0 }
 }
 
 // ── Dp 算术 ──
@@ -370,6 +385,12 @@ mod tests {
         let d = Density::from_density(2.0);
         let dp = Dp(10.0);
         assert_eq!(dp.to_px(d), 20.0);
+        // The two are NOT interchangeable: `to_px` is a device-space length, `to_logical` is
+        // the layout coordinate (one dp is one logical px — see `Dimension::to_logical_px`).
+        // Reaching for `to_px` in layout code is what sized a 640dp sheet to the whole window
+        // on a HiDPI display.
+        assert_eq!(dp.to_logical(), 10.0);
+        assert_ne!(dp.to_logical(), dp.to_px(d));
     }
 
     #[test]
@@ -455,5 +476,57 @@ mod tests {
             assert_eq!(Dimension::Px(Px(20.0)).to_logical_px(), 10.0); // 20px / 2.0 = 10 逻辑
             assert_eq!(Dimension::Fixed(8.0).to_logical_px(), 8.0);
         });
+    }
+    /// Guard for the class of bug this module's doc comments describe.
+    ///
+    /// `to_px` reads like "the pixel value", but it returns a PHYSICAL length while every
+    /// length in layout code is LOGICAL (one dp is one logical px). It was wrong at six sites
+    /// across three rounds — the navigation drawer's width, both sheets' width and three peek
+    /// sites in the scaffold (all found one at a time, all with the tests green), and then the
+    /// fling velocity threshold, which only a codebase-wide sweep turned up. Every one of them
+    /// compiled and passed its tests, and shipped as a HiDPI rendering bug.
+    ///
+    /// There are no callers left outside this file, so this test keeps it that way. If you are
+    /// adding one deliberately — a length that LEAVES the layout system, for the platform or a
+    /// canvas in device space — extend this test and say why in the commit. Anything that is
+    /// compared with or assigned to layout geometry wants `to_logical()`.
+    #[test]
+    fn no_code_outside_this_module_converts_a_dp_to_physical_px() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut offenders = Vec::new();
+        scan_dir(&root, &mut offenders);
+        assert!(
+            offenders.is_empty(),
+            "`to_px` is for lengths leaving the layout system; layout lengths are logical              (`to_logical`). Callers found: {offenders:?}"
+        );
+    }
+
+    fn scan_dir(dir: &std::path::Path, offenders: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                scan_dir(&path, offenders);
+                continue;
+            }
+            let is_rust = path.extension().is_some_and(|e| e == "rs");
+            let is_this_file = path
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy() == "unit.rs");
+            if !is_rust || is_this_file {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            for (i, line) in text.lines().enumerate() {
+                // Comments are skipped: the doc comments that explain this trap quote the
+                // wrong call on purpose.
+                if line.trim_start().starts_with("//") {
+                    continue;
+                }
+                if line.contains(".to_px(") {
+                    offenders.push(format!("{}:{}", path.display(), i + 1));
+                }
+            }
+        }
     }
 }

@@ -50,7 +50,7 @@ use crate::ui::anchored_draggable::AnchoredDraggableState;
 use crate::ui::interaction::MutableInteractionSource;
 use crate::ui::layout_components::{Column, Row, Stack};
 use crate::ui::theme::WiniaTheme;
-use crate::unit::{current_density, Dp};
+use crate::unit::Dp;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -982,36 +982,41 @@ mod tests {
     #[test]
     fn a_slow_drag_settles_by_position_and_a_fast_one_by_direction() {
         let mut anim = anim_guard();
-        let density = current_density().density;
         // Slow release short of the midpoint → back to the anchor it came from.
         let s = DrawerState::new(DrawerValue::Open);
         anim.track(&s);
         s.update_anchors(360.0, false);
         s.drag_delta(-100.0); // 100 of 360 — nearer Open
         assert_eq!(s.settle_with_velocity(0.0), DrawerValue::Open);
-        // A deliberate flick (400dp/s token) past… actually short of the midpoint still
-        // closes: this is the whole point of the drawer's own velocity threshold.
-        let s = DrawerState::new(DrawerValue::Open);
-        s.update_anchors(360.0, false);
-        s.drag_delta(-40.0);
-        let flick = 500.0 * density;
-        assert_eq!(s.settle_with_velocity(-flick), DrawerValue::Closed);
+        // A deliberate flick short of the midpoint still closes: that is the whole point of a
+        // velocity rule. Read at 1.5x density with an UNSCALED logical velocity, so a
+        // threshold that converted the dp token to physical px/s (600 here instead of 400)
+        // would spring back and fail.
+        crate::unit::with_density(crate::unit::Density::from_density(1.5), || {
+            let s = DrawerState::new(DrawerValue::Open);
+            anim.track(&s);
+            s.update_anchors(360.0, false);
+            s.drag_delta(-40.0);
+            assert_eq!(s.settle_with_velocity(-500.0), DrawerValue::Closed);
+        });
     }
 
     #[test]
     fn the_drawer_threshold_is_higher_than_the_anchored_draggable_default() {
         let mut anim = anim_guard();
-        let s = DrawerState::new(DrawerValue::Closed);
-        anim.track(&s);
-        s.update_anchors(360.0, false);
-        s.snap_to(DrawerValue::Open);
-        let density = current_density().density;
-        // 200dp/s clears the 125dp/s default but NOT the drawer's 400dp/s token, so a
-        // lazy drag that stops just short of the midpoint springs back instead of
-        // flinging the drawer shut.
-        s.drag_delta(-170.0); // just short of the 180 midpoint
-        let lazy = 200.0 * density;
-        assert_eq!(s.settle_with_velocity(-lazy), DrawerValue::Open);
+        // 200 logical px/s clears the 125dp/s `AnchoredDraggable` default but NOT the drawer's
+        // own 400dp/s token, so a lazy drag that stops just short of the midpoint springs back
+        // instead of flinging the drawer shut. Read at 1.5x density with an unscaled velocity:
+        // the earlier version scaled the velocity by the density exactly as the buggy
+        // threshold did, so the two cancelled out and the test could not see the bug.
+        crate::unit::with_density(crate::unit::Density::from_density(1.5), || {
+            let s = DrawerState::new(DrawerValue::Closed);
+            anim.track(&s);
+            s.update_anchors(360.0, false);
+            s.snap_to(DrawerValue::Open);
+            s.drag_delta(-170.0); // just short of the 180 midpoint
+            assert_eq!(s.settle_with_velocity(-200.0), DrawerValue::Open);
+        });
     }
 
     #[test]
@@ -1372,8 +1377,9 @@ mod tests {
                 .drawer_content(tagged_sheet())
                 .build(ctx);
             });
+            // The layout runs under the same density, as it does in the app.
+            c.layout(crate::layout::Constraints::new(0.0, 520.0, 0.0, 620.0));
         });
-        c.layout(crate::layout::Constraints::new(0.0, 520.0, 0.0, 620.0));
         // Identity-based, not a width filter: a width match also hits the app content
         // (just as wide) and stops matching once the window is narrower than the token.
         let (x, w) = sheet_x_and_width(&c);

@@ -755,8 +755,17 @@ impl ApplicationHandler for AppState {
         match event {
             WindowEvent::MouseWheel { delta, .. } => {
                 let (dx, dy) = match delta {
+                    // LineDelta's 20 is logical px per line, matching the scroll offsets below.
                     winit::event::MouseScrollDelta::LineDelta(x, y) => (x * 20.0, y * 20.0),
-                    winit::event::MouseScrollDelta::PixelDelta(p) => (p.x as f32, p.y as f32),
+                    // `PixelDelta` is a PHYSICAL position (winit), and everything downstream is
+                    // logical, so it converts like the pointer positions do. Without this a
+                    // touchpad scroll moved `density` times too far on a HiDPI display. Only
+                    // platforms that emit PixelDelta (macOS/Linux touchpads) reached it — the
+                    // win32 backend sends LineDelta — so the conversion is unverified here.
+                    winit::event::MouseScrollDelta::PixelDelta(p) => {
+                        let lp = p.to_logical::<f32>(pw.scale_factor);
+                        (lp.x, lp.y)
+                    }
                 };
                 // Shift + 垂直滚轮 → 转为水平滚动（兼容 LazyRow 等横向容器；
                 // 多数系统不会自动把 Shift+wheel 翻译成 dx，这里显式处理）

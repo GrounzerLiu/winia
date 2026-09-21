@@ -36,6 +36,23 @@ use crate::unit::Dp;
 /// 默认 sheet 顶部圆角（M3 `BottomSheetDefaults.ExpandedShape` 28dp）
 pub const SHEET_TOP_CORNER_RADIUS: f32 = 28.0;
 
+/// The modal sheet's panel geometry in LOGICAL px: `(width, horizontal padding)` for a
+/// `max_width` token inside a `window_width` window.
+///
+/// The unit is the reason this is a function rather than two lines at each call site. One dp
+/// is one LOGICAL px in this framework, so the token is used as-is; `Dp::to_px` returns the
+/// PHYSICAL value and asked for `density` times the intended width, which the `min` then
+/// clipped to the whole window — a 640dp sheet filled an 800-wide window at 1.5x density
+/// instead of centring at 640 with 80px margins. Both modal sheets (this one and
+/// `BottomSheetScaffold`'s) go through here.
+pub(crate) fn sheet_panel_geometry(max_width: Option<Dp>, window_width: f32) -> (f32, f32) {
+    let sheet_w = max_width
+        .map(|dp| dp.to_logical())
+        .map(|w| w.min(window_width))
+        .unwrap_or(window_width);
+    (sheet_w, (window_width - sheet_w) / 2.0)
+}
+
 /// 底部模态面板（对标 Compose Material3 `ModalBottomSheet`）。
 pub struct ModalBottomSheet {
     on_dismiss_request: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -262,13 +279,13 @@ impl ModalBottomSheet {
                         // ⚠ graphics_layer 位移不参与 hit_test → 面板布局在顶部、
                         // 渲染在底部，点击命中错位（面板外点不到 Scrim）。
                         // sheetMaxWidth 640.dp 平板居中（Compose 语义），手机 480 铺满
-                        let window_w = crate::ui::window_size().0;
-                        let max_w_px = sheet_max_width.map(|dp| dp.to_px(crate::unit::current_density()));
-                        let sheet_w = max_w_px.map(|w| w.min(window_w)).unwrap_or(window_w);
-                        let sheet_pad_x = (window_w - sheet_w) / 2.0;
+                        let (sheet_w, sheet_pad_x) =
+                            sheet_panel_geometry(sheet_max_width, crate::ui::window_size().0);
                         let mut panel_mod = Modifier::new()
                             .width(sheet_w)
-                            .offset(sheet_pad_x, st.offset_state())
+                            // `absolute_offset`, not `offset` — see the scaffold: the x is a
+                            // centring inset, and a plain offset mirrors x under RTL.
+                            .absolute_offset(sheet_pad_x, st.offset_state())
                             .shadow(
                                 1.0,
                                 cur_shape,
@@ -413,4 +430,34 @@ impl ModalBottomSheet {
 
 impl Default for ModalBottomSheet {
     fn default() -> Self { Self::new(false) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::unit::Density;
+
+    #[test]
+    fn the_panel_is_the_token_wide_and_centred_in_logical_px() {
+        // At 1.5x density a 640dp sheet inside an 800-wide window is 640 logical px with 80px
+        // of margin. The bug this pins asked for `Dp::to_px` (960 PHYSICAL) and the `min`
+        // clipped it to the whole window, i.e. no margin and no maximum at all.
+        crate::unit::with_density(Density::from_density(1.5), || {
+            assert_eq!(
+                sheet_panel_geometry(Some(Dp(640.0)), 800.0),
+                (640.0, 80.0),
+                "the token is a logical length, not a physical one"
+            );
+        });
+        assert_eq!(
+            sheet_panel_geometry(Some(Dp(640.0)), 500.0),
+            (500.0, 0.0),
+            "narrower than the token: the sheet fills the window"
+        );
+        assert_eq!(
+            sheet_panel_geometry(None, 500.0),
+            (500.0, 0.0),
+            "Unspecified (no maximum) fills"
+        );
+    }
 }
