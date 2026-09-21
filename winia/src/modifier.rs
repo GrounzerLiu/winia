@@ -605,6 +605,13 @@ pub(crate) enum ModifierElement {
     MinWidth { value: SizeValue },
     /// 最小高度（对标 Compose `Modifier.heightIn(min=...)`）
     MinHeight { value: SizeValue },
+    /// Maximum width (Compose `Modifier.widthIn(max = ...)`) — lowers the incoming max
+    /// constraint, so content that would be wider is constrained to it. Clamped to the
+    /// incoming min (a `sizeIn` whose minimum exceeds its maximum keeps the minimum, as in
+    /// Compose's constraint merging). Supports a dynamic value.
+    MaxWidth { value: SizeValue },
+    /// Maximum height (Compose `Modifier.heightIn(max = ...)`)
+    MaxHeight { value: SizeValue },
     /// 四边 padding（每边独立，支持动态 SizeValue——动画可作用于 padding）
     PaddingSides {
         start: SizeValue,
@@ -1122,6 +1129,18 @@ impl Modifier {
     /// 最小高度（对标 Compose `Modifier.heightIn(min = ...)`）
     pub fn min_height(self, value: impl Into<SizeValue>) -> Self {
         self.push(ModifierElement::MinHeight { value: value.into() })
+    }
+
+    /// Maximum width (Compose `Modifier.widthIn(max = ...)`) — content that would be wider
+    /// is constrained to it. A minimum above it wins, as in Compose's `sizeIn`. Supports a
+    /// dynamic value, so an animation can drive the cap.
+    pub fn max_width(self, value: impl Into<SizeValue>) -> Self {
+        self.push(ModifierElement::MaxWidth { value: value.into() })
+    }
+
+    /// Maximum height (Compose `Modifier.heightIn(max = ...)`)
+    pub fn max_height(self, value: impl Into<SizeValue>) -> Self {
+        self.push(ModifierElement::MaxHeight { value: value.into() })
     }
 
     /// 高度填满可用空间
@@ -1993,6 +2012,34 @@ impl Modifier {
         out
     }
 
+    /// Resolve the MaxWidth/MaxHeight elements — `(max_width, max_height)`, `None` for an
+    /// axis with no cap. Dynamic values are evaluated during layout (a `State::get` registers
+    /// a layout dependency, so an animation can drive the cap without recomposing).
+    pub fn max_size_constraint(&self) -> (Option<f32>, Option<f32>) {
+        use crate::unit::{current_density, Dp, Px};
+        let resolve = |sv: &SizeValue| -> Option<f32> {
+            match sv {
+                SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(Dp(v))) => Some(*v),
+                SizeValue::Static(Dimension::Px(p)) => Some(p.to_logical(current_density())),
+                SizeValue::Static(Dimension::Auto) | SizeValue::Static(Dimension::Fill) => None,
+                SizeValue::Dynamic(f) => Some(f()),
+            }
+        };
+        let mut out = (None, None);
+        for el in &self.elements {
+            match el {
+                ModifierElement::MaxWidth { value } => {
+                    if let Some(v) = resolve(value) { out.0 = Some(v); }
+                }
+                ModifierElement::MaxHeight { value } => {
+                    if let Some(v) = resolve(value) { out.1 = Some(v); }
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
     /// 是否填满最大宽度
     pub fn is_fill_max_width(&self) -> bool {
         self.elements.iter().any(|el| matches!(el,
@@ -2338,6 +2385,8 @@ impl Debug for ModifierElement {
             Self::Size { width, height } => f.debug_struct("Size").field("width", width).field("height", height).finish(),
             Self::MinWidth { value } => f.debug_struct("MinWidth").field("value", value).finish(),
             Self::MinHeight { value } => f.debug_struct("MinHeight").field("value", value).finish(),
+            Self::MaxWidth { value } => f.debug_struct("MaxWidth").field("value", value).finish(),
+            Self::MaxHeight { value } => f.debug_struct("MaxHeight").field("value", value).finish(),
             Self::PaddingSides { start, top, end, bottom } => f
                 .debug_struct("PaddingSides")
                 .field("start", start)
@@ -3114,6 +3163,8 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         }
         (MinWidth { value: av }, MinWidth { value: bv }) => size_value_eq(av, bv),
         (MinHeight { value: av }, MinHeight { value: bv }) => size_value_eq(av, bv),
+        (MaxWidth { value: av }, MaxWidth { value: bv }) => size_value_eq(av, bv),
+        (MaxHeight { value: av }, MaxHeight { value: bv }) => size_value_eq(av, bv),
         (
             PaddingSides { start: as_, top: at, end: ae, bottom: ab },
             PaddingSides { start: bs, top: bt, end: be, bottom: bb },

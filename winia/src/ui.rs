@@ -18,6 +18,7 @@ pub mod animated_size;
 pub mod animated_content;
 pub mod crossfade;
 pub mod overlay;
+pub mod alert_dialog;
 pub mod interaction;
 pub mod icon;
 pub mod image;
@@ -174,6 +175,12 @@ pub use navigation_rail::{
     WIDE_RAIL_EXPANDED_MIN_WIDTH,
 };
 pub use tooltip::Tooltip;
+pub use alert_dialog::{
+    AlertDialog, AlertDialogDefaults, BasicAlertDialog,
+    DIALOG_BUTTON_SPACING, DIALOG_CONTAINER_PADDING, DIALOG_CORNER_RADIUS, DIALOG_ICON_PADDING_BOTTOM,
+    DIALOG_ICON_SIZE, DIALOG_MAX_WIDTH, DIALOG_MIN_WIDTH, DIALOG_TEXT_PADDING_BOTTOM,
+    DIALOG_TITLE_PADDING_BOTTOM,
+};
 pub use navigation_drawer::{
     DrawerDefaults, DrawerState, DrawerValue, ModalDrawerSheet, ModalNavigationDrawer,
     NavigationDrawerItem, NavigationDrawerItemColors,
