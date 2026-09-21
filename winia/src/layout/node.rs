@@ -1318,6 +1318,77 @@ mod tests {
         assert_eq!(size.width, 70.0, "动态 min 值变化后重测取新值");
     }
 
+    // ── maxWidth / maxHeight（Compose widthIn/heightIn 的另一半）──
+
+    #[test]
+    fn max_width_caps_a_wider_child() {
+        // The cap lowers the constraints the content sees, so a 400-wide child comes out 200.
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new().max_width(200.0), Some(0)),
+            LayoutNode::leaf(Modifier::new().size(400.0, 20.0)),
+        ];
+        nodes[0].children = vec![1];
+        let policies: Vec<Box<dyn crate::layout::node::MeasurePolicy>> =
+            vec![Box::new(crate::layout::box_layout::BoxLayout::new())];
+        let (size, _) = measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 1000.0, 0.0, 1000.0));
+        assert_eq!(size.width, 200.0, "max_width 限制内容宽度");
+    }
+
+    #[test]
+    fn max_width_yields_to_a_larger_min() {
+        // A conflicting min and max resolve to the MIN here, which is a documented deviation
+        // from Compose's `widthIn` (it coerces the min down to the max) — see the measure block.
+        let m = Modifier::new().max_width(200.0).min_width(300.0);
+        let mut nodes = vec![LayoutNode::leaf(m)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 1000.0, 0.0, 100.0));
+        assert_eq!(size.width, 300.0, "min 高于 max 时 min 胜出");
+    }
+
+    #[test]
+    fn max_width_yields_to_a_tight_size() {
+        // A tight size(30) raises the min to 30, so the max cannot pull it below that.
+        let m = Modifier::new().size(30.0, 20.0).max_width(10.0);
+        let mut nodes = vec![LayoutNode::leaf(m)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 100.0, 0.0, 100.0));
+        assert_eq!((size.width, size.height), (30.0, 20.0), "max 不得越过 tight min");
+    }
+
+    #[test]
+    fn max_height_caps_a_taller_child() {
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new().max_height(50.0), Some(0)),
+            LayoutNode::leaf(Modifier::new().size(20.0, 400.0)),
+        ];
+        nodes[0].children = vec![1];
+        let policies: Vec<Box<dyn crate::layout::node::MeasurePolicy>> =
+            vec![Box::new(crate::layout::box_layout::BoxLayout::new())];
+        let (size, _) = measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 1000.0, 0.0, 1000.0));
+        assert_eq!(size.height, 50.0, "max_height 限制内容高度");
+    }
+
+    #[test]
+    fn max_width_dynamic_state() {
+        // A dynamic cap is re-resolved on re-measure, like the min counterpart's. (The
+        // dependency registration happens in the same `SizeValue::Dynamic` path; this test pins
+        // the re-resolution, not the registration — it marks the nodes dirty itself.)
+        use crate::core::state::State;
+        let s = State::new(200.0);
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new().max_width(&s), Some(0)),
+            LayoutNode::leaf(Modifier::new().size(400.0, 20.0)),
+        ];
+        nodes[0].children = vec![1];
+        let policies: Vec<Box<dyn crate::layout::node::MeasurePolicy>> =
+            vec![Box::new(crate::layout::box_layout::BoxLayout::new())];
+        let (size, _) = measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 1000.0, 0.0, 1000.0));
+        assert_eq!(size.width, 200.0);
+        s.set(300.0);
+        nodes[0].layout_dirty = true;
+        nodes[1].layout_dirty = true;
+        let (size, _) = measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 1000.0, 0.0, 1000.0));
+        assert_eq!(size.width, 300.0, "动态 max 值变化后重测取新值");
+    }
+
     // ── test_tag ──
 
     #[test]
@@ -1869,6 +1940,26 @@ fn measure_node_inner(
     }
     if let Some(h) = min_h {
         inner_constraints.min_height = inner_constraints.min_height.max(h).min(inner_constraints.max_height);
+    }
+    // Maximum sizes (MaxWidth/MaxHeight — the other half of Compose's widthIn/heightIn):
+    // lower the incoming max, then hold it at or above the min.
+    //
+    // When a min and a max CONFLICT the min wins here (`.min_width(300).max_width(200)` is 300),
+    // which is a documented DEVIATION from Compose: its `SizeNode` coerces the min down to the
+    // max instead, so one `widthIn(min = 300.dp, max = 200.dp)` yields 200 — and its two separate
+    // calls are even order-dependent (`.widthIn(max = 200).widthIn(min = 300)` -> 200 but the
+    // reverse -> 300). winia scans its elements chain-wide and position-independently, so it
+    // cannot express that order-dependence at all; min-wins is CSS's `min-width`/`max-width`
+    // precedence, and the clamp is what keeps `Constraints` consistent — `constrain_width`/
+    // `constrain_height` are `f32::clamp`, which PANICS when min > max.
+    let (max_w, max_h) = nodes[idx].modifier.max_size_constraint();
+    if let Some(w) = max_w {
+        inner_constraints.max_width = inner_constraints.max_width.min(w);
+        inner_constraints.max_width = inner_constraints.max_width.max(inner_constraints.min_width);
+    }
+    if let Some(h) = max_h {
+        inner_constraints.max_height = inner_constraints.max_height.min(h);
+        inner_constraints.max_height = inner_constraints.max_height.max(inner_constraints.min_height);
     }
 
     // 强制尺寸（requiredSize——忽略 incoming 收缩，允许溢出：
