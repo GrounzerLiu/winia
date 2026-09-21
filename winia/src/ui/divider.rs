@@ -5,8 +5,9 @@
 //! - **两种形态**：水平（fillMaxWidth × thickness）与垂直（thickness × fillMaxHeight）；
 //!   旧 `Divider` 名在 Compose 已废弃改名 HorizontalDivider——winia 提供
 //!   `Divider::horizontal()` / `Divider::vertical()` 双构造（无 deprecated 历史包袱）；
-//! - **厚度**：默认 1dp（`DividerTokens.Thickness`）；`DIVIDER_HAIRLINE` 哨兵值
-//!   渲染为 1 物理像素（任何 DPI 下都是单像素线，对标 Compose `Dp.Hairline`）；
+//! - **Thickness**: 1dp by default (`DividerTokens.Thickness`); the `DIVIDER_HAIRLINE` sentinel
+//!   renders as one DEVICE pixel at any density (Compose's `Dp.Hairline` — see
+//!   `draw_divider_line` for the mechanism and the one deviation);
 //! - **颜色**：默认 OutlineVariant（`DividerTokens.Color = ColorSchemeKeyTokens.OutlineVariant`）；
 //! - **绘制**：Canvas 中 drawLine 居中于厚度（start/end y = thickness/2——stroke 中心
 //!   对齐容器中线，避免亚像素偏移）；
@@ -24,6 +25,9 @@ use crate::ui::theme::{ThemeColors, WiniaTheme};
 /// 默认厚度（`DividerTokens.Thickness = 1dp`）
 pub const DIVIDER_THICKNESS: f32 = 1.0;
 /// 哨兵值：渲染为 1 物理像素（对标 Compose `Dp.Hairline`）——任何 DPI 下都是单像素线
+/// Sentinel thickness: one DEVICE pixel at any density (Compose's `Dp.Hairline`, which is
+/// `Dp(0f)`). The layout still reserves one logical px — see `build` for why it cannot be
+/// zero here. An explicit `thickness(0.0)` means the same thing.
 pub const DIVIDER_HAIRLINE: f32 = f32::NAN;
 
 /// 默认值（对标 Compose `DividerDefaults`）
@@ -68,7 +72,7 @@ impl Divider {
         self
     }
 
-    /// 线宽（dp；`DIVIDER_HAIRLINE` = 1 物理像素，对标 `Dp.Hairline`）
+    /// Line thickness in logical px; `DIVIDER_HAIRLINE` (or 0) is a one-device-pixel hairline.
     pub fn thickness(mut self, thickness: f32) -> Self {
         self.thickness = thickness;
         self
@@ -90,8 +94,17 @@ impl Divider {
         let color = self.color.unwrap_or_else(|| DividerDefaults::color(&theme));
         let vertical = self.vertical;
         let thickness = self.thickness;
-        // 布局厚度：Hairline 时用 1.0 兜底（NaN 会崩布局；1dp@density1 ≈ 1 物理像素）
-        let layout_thickness = if thickness.is_nan() { 1.0 } else { thickness };
+        // Layout thickness for the hairline sentinel (and an explicit 0): one LOGICAL px.
+        //
+        // Compose's current `HorizontalDivider` asks for `height(Dp.Hairline)` — zero height,
+        // `Dp.Hairline` being `Dp(0f)` — and paints its line anyway, because its `Canvas` is
+        // not gated on the element having size. winia's renderer is: `render_pass1` returns
+        // early for `w <= 0.0 || h <= 0.0`, so a zero-height divider paints NOTHING at all
+        // (measured). Reserving one logical px is the smallest extent that still draws, and
+        // the line itself is one DEVICE px at any density (see `draw_divider_line`), so this
+        // is the only part that differs from Compose: a hairline occupies 1 logical px here
+        // where Compose gives it none.
+        let layout_thickness = if thickness.is_nan() || thickness <= 0.0 { 1.0 } else { thickness };
 
         // Framework CustomDraw receives the NODE rect (padding not applied);
         // user modifier padding (M3 inset/middle-inset variants) shrinks the content
@@ -175,7 +188,13 @@ impl crate::modifier::DrawNode for DividerNode {
     }
 }
 
-/// 画分隔线：厚度为 1 物理像素（Hairline）或 dp 值；线居中于厚度（Compose 同）
+/// Draw the line: `thickness` in logical px, or a DEVICE hairline for the sentinel / 0.
+///
+/// The hairline strokes with width 0, which Skia draws as one pixel whatever the canvas
+/// transform — the same mechanism as Compose's `HorizontalDivider`, which strokes with
+/// `thickness.toPx()` and whose `Dp.Hairline` is `Dp(0f)`. A logical 1px stroke instead (what
+/// this did) is `density` device px wide, so at 1.5x it covered one full row plus half of the
+/// next and the "one physical pixel at any DPI" claim in the docs was false.
 pub(crate) fn draw_divider_line(
     canvas: &skia_safe::Canvas,
     rect: skia_safe::Rect,
@@ -183,25 +202,52 @@ pub(crate) fn draw_divider_line(
     thickness: f32,
     color: Color,
 ) {
-    // Hairline：1 物理像素（Compose Dp.Hairline 语义——不随 DPI 缩放）
-    let px = if thickness.is_nan() { 1.0 } else { thickness };
-    if px <= 0.0 { return; }
+    let px = if thickness.is_nan() { 0.0 } else { thickness };
+    if px < 0.0 { return; }
     let mut paint = skia_safe::Paint::default();
     paint.set_anti_alias(true);
     paint.set_style(skia_safe::PaintStyle::Stroke);
     paint.set_stroke_width(px);
     paint.set_color(skia_color(color));
+    // A device hairline covers half a pixel either side of the point it is centred on, so
+    // centring it on the node's edge — Compose's `thickness.toPx() / 2` with a zero thickness
+    // — splits it across two rows at 50 % each. Half a DEVICE pixel in local units puts it in
+    // the middle of one row instead, which is the crisp single pixel the docs promise. Thicker
+    // lines keep the plain half-thickness centre, which lands them inside their own box.
+    let m = canvas.local_to_device_as_3x3();
+    let (sx, sy) = (
+        m.scale_x().abs().max(f32::EPSILON),
+        m.scale_y().abs().max(f32::EPSILON),
+    );
+    // A device pixel of layout may land anywhere within a device pixel of the screen — a
+    // divider at a fractional position, or inside a translated ancestor — and a hairline that
+    // straddles two rows is the smear this is meant to avoid. So the hairline is snapped to
+    // the middle of the device row its ideal centre falls in; the shift is at most half a
+    // device pixel. (Android's own hairline drawing snaps the same way.) Thicker lines keep
+    // the plain half-thickness centre.
+    let snap = |centre_local: f32, scale: f32| -> f32 {
+        ((centre_local * scale).floor() + 0.5) / scale
+    };
     if vertical {
         // 垂直：x = 厚度/2（stroke 中心对齐中线），从顶到底
-        let cx = rect.left + px / 2.0;
+        let half = if px == 0.0 { 0.5 / sx } else { px / 2.0 };
+        let cx = if px == 0.0 {
+            snap(rect.left + half, sx)
+        } else {
+            rect.left + half
+        };
         canvas.draw_line(
             skia_safe::Point::new(cx, rect.top),
             skia_safe::Point::new(cx, rect.bottom),
             &paint,
         );
     } else {
-        // 水平：y = 厚度/2
-        let cy = rect.top + px / 2.0;
+        let half = if px == 0.0 { 0.5 / sy } else { px / 2.0 };
+        let cy = if px == 0.0 {
+            snap(rect.top + half, sy)
+        } else {
+            rect.top + half
+        };
         canvas.draw_line(
             skia_safe::Point::new(rect.left, cy),
             skia_safe::Point::new(rect.right, cy),
@@ -246,6 +292,29 @@ mod tests {
         let root = composer.layout_root_idx().expect("root");
         let nodes = composer.arena_nodes();
         crate::render::render(nodes, root, canvas);
+        let pm = surface.peek_pixels().expect("pixmap");
+        let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+        (px.to_vec(), pm.width() as usize)
+    }
+
+    /// Render the divider through the tree with the canvas scaled the way the app scales it for
+    /// HiDPI (`canvas.scale(scale_factor)`), returning the surface and its pixel width.
+    fn render_divider_scaled(scale: f32, build: impl FnOnce(&mut ComposeCtx)) -> (Vec<[u8; 4]>, usize) {
+        use skia_safe::{Color as SkColor, surfaces};
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let mut composer = Composer::new();
+        let scene = |ctx: &mut ComposeCtx| {
+            WiniaTheme::with_theme(theme.clone(), ctx, |ctx| build(ctx));
+        };
+        composer.compose(scene);
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let side = (300.0 * scale) as i32;
+        let mut surface = surfaces::raster_n32_premul((side, side)).unwrap();
+        let canvas = surface.canvas();
+        canvas.clear(SkColor::WHITE);
+        canvas.scale((scale, scale));
+        let root = composer.layout_root_idx().expect("root");
+        crate::render::render(composer.arena_nodes(), root, canvas);
         let pm = surface.peek_pixels().expect("pixmap");
         let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
         (px.to_vec(), pm.width() as usize)
@@ -311,7 +380,8 @@ mod tests {
 
     #[test]
     fn hairline_renders_single_pixel() {
-        // DIVIDER_HAIRLINE：仅 1 行（1 物理像素）
+        // DIVIDER_HAIRLINE at density 1.0: the same single row as before the device-hairline
+        // change, and fully covered (see the multi-scale test for the HiDPI case).
         let custom = Color::from_argb(255, 0, 0, 255);
         let (buf, w) = render_divider(|ctx| {
             Divider::horizontal().thickness(DIVIDER_HAIRLINE).color(custom).build(ctx);
@@ -426,4 +496,47 @@ mod tests {
         });
         assert_eq!(render_with(node_v), render_with(enum_v), "垂直线双路必须一致");
     }
+    #[test]
+    fn hairline_is_one_device_pixel_at_any_density_and_position() {
+        // Compose's promise for `Dp.Hairline`: "a single pixel divider regardless of screen
+        // density". winia renders under `canvas.scale(scale_factor)`, and the old code stroked
+        // with a LOGICAL 1px width, so at 1.5x it covered a full device row plus half of the
+        // next (measured (0,0,255) then (127,127,255)) — one and a half pixels, and the claim
+        // in the docs was false. It is a Skia device hairline now (stroke width 0, which is one
+        // pixel whatever the transform), centred on a device row so it is fully covered.
+        //
+        // The fractional position is the part that needs the snap: a device pixel of layout
+        // lands anywhere inside a device pixel of the screen, and an un-snapped hairline
+        // straddles two rows at partial alpha again.
+        let custom = Color::from_argb(255, 0, 0, 255);
+        for scale in [1.0f32, 1.5, 2.0] {
+            for padding_top in [0.0f32, 7.3] {
+                let (buf, w) = render_divider_scaled(scale, |ctx| {
+                    Divider::horizontal()
+                        .thickness(DIVIDER_HAIRLINE)
+                        .color(custom)
+                        .modifier(Modifier::new().padding_top(padding_top))
+                        .build(ctx);
+                });
+                // The row the line's ideal centre falls in: half a device pixel into the row at
+                // the divider's own top edge (the stroke is centred there).
+                let ideal_device = (padding_top + 0.5 / scale) * scale;
+                let row = ideal_device.floor() as usize;
+                let x = (40.0 * scale) as usize;
+                let touched: Vec<usize> = (0..(12.0 * scale) as usize)
+                    .filter(|y| px_at(&buf, w, x, *y) != [255, 255, 255, 255])
+                    .collect();
+                assert_eq!(
+                    touched,
+                    vec![row],
+                    "scale {scale}, padding_top {padding_top}: exactly one device row, at the                      row the line falls in"
+                );
+                assert!(
+                    color_eq(custom, px_at(&buf, w, x, row), 2),
+                    "scale {scale}, padding_top {padding_top}: and that row is fully covered,                      not a half-alpha smear"
+                );
+            }
+        }
+    }
+
 }
