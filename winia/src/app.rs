@@ -2394,10 +2394,13 @@ fn gesture_arena_overlay(pw: &PerWindow, arena: Option<u64>) -> Option<usize> {
 /// resolved in (`fire_gesture_action` subtracts the node's position there), so the tracker has to
 /// measure and report in the same space. `None` once the target's overlay is gone.
 ///
-/// The conversion uses the overlay's CURRENT `screen_pos`, so a popup that moves during a gesture
-/// (only an anchored, sliding one could) would inject its own motion into the measured position —
-/// no component does that today; a popup that moves while a finger is on it would want the anchor
-/// frozen at press time.
+/// ⚠ The conversion uses the overlay's CURRENT `screen_pos`, so an overlay that MOVES during a
+/// gesture injects its own motion into the measured position — enough to cross the 8 px tap slop and
+/// cancel the tap family. The expanded `SearchBar` is exactly that: an anchored panel sliding to the
+/// window corner over `SEARCH_BAR_EXPAND_MS`, pressable while it moves (`anchor_slide`). Nothing
+/// shipped is visibly affected (its content is a `TextField` whose `on_press` already fired plus
+/// `clickable` rows that use `on_click`), but a component that wants a tap to survive its own
+/// overlay's motion would need the arena origin frozen at press time.
 fn gesture_arena_pos(pw: &PerWindow, scene_pos: (f32, f32)) -> Option<(f32, f32)> {
     match pw.gesture_arena {
         None => Some(scene_pos),
@@ -2440,13 +2443,20 @@ fn fire_in_gesture_arena(
 
 /// Is `on_double_tap` registered on `slot`, in `arena`? The answer decides whether a tap is deferred
 /// to the double-tap window (see `gesture_up`).
+///
+/// `None` means the main tree only, matching `fire_in_gesture_arena`: an arena that no longer
+/// resolves answers `false` rather than consulting the main tree (the caller's vanished-arena guard
+/// has already ended the gesture; the tap that follows is dropped on dispatch).
 fn slot_has_double_tap(pw: &PerWindow, arena: Option<u64>, slot: u64) -> bool {
-    let (nodes, r) = match gesture_arena_overlay(pw, arena) {
-        Some(i) => {
-            let ov = &pw.overlays[i];
-            (ov.composer.arena_nodes(), ov.composer.layout_root_idx())
-        }
+    let (nodes, r) = match arena {
         None => (pw.composer.arena_nodes(), pw.composer.layout_root_idx()),
+        Some(id) => match pw.overlays.iter().position(|o| o.id == id) {
+            Some(i) => {
+                let ov = &pw.overlays[i];
+                (ov.composer.arena_nodes(), ov.composer.layout_root_idx())
+            }
+            None => return false,
+        },
     };
     let Some(r) = r else { return false; };
     crate::layout::node::find_node_id_by_slot_key(nodes, r, slot)
