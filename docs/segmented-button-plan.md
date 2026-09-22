@@ -226,9 +226,12 @@ the comparison the composer uses for Skip) and `children_have_z_is_recorded_by_t
   estimated small part (store the mode, read it in `is_system_dark_theme`) was indeed small; the real work
   was that a window's per-frame content closure re-provided the palette sampled when the window was
   created, so nothing below it could ever change color — no amount of dirtying fixes that. A window now
-  carries a `ThemeSpec` (the intent) and re-resolves per frame. Covered by four unit tests, a real-window UI
-  test (the `px` pixel read is new infrastructure), and the demo's own Auto / Light / Dark row. Still open:
-  an OPEN popup keeps the palette it opened with, and a window re-provides default typography/direction.
+  carries a live theme cell (`ThemeSpec` intent + resolved palette) that its declaring tree publishes to
+  every frame, and each window compares the system epoch against its own applied state. Covered by six
+  unit tests (including the two-window case), two real-window UI tests (a theme switch, and a popup left
+  open across it — the `px` pixel read is new infrastructure), and the demo's own Auto / Light / Dark row.
+  An earlier reading of this bug ("the invalidation is one layer off") was wrong and is corrected in the
+  commit history. Still open: the window re-provides default typography/direction.
 - **Demo theme sweep**: 29 demos are still pinned to `WiniaTheme::light`, and some carry hard-coded
   grey labels that only read on a light page.
 - **Visual sweep of existing components**: render each component's edge states (min/max, disabled,

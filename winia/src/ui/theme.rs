@@ -21,7 +21,7 @@ use std::sync::LazyLock;
 // 完整 Material 3 色彩方案（49 色槽，对齐 material-colors Scheme）
 // ═══════════════════════════════════════════════════════════
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub struct ThemeColors {
     // ── Primary ──
     pub primary: Color,
@@ -185,28 +185,45 @@ static SYSTEM_THEME_MODE: std::sync::atomic::AtomicU8 = std::sync::atomic::Atomi
 /// `1` = dark. Consulted only while the mode follows the system; [`is_system_dark_theme`] falls back to
 /// detection, which is also the only source on platforms whose event never fires (X11, Wayland).
 static SYSTEM_THEME_DARK: std::sync::atomic::AtomicI8 = std::sync::atomic::AtomicI8::new(-1);
-/// The mode as a REACTIVE value, and the one the composition actually reads: a tracked read of it
-/// makes every scope that composed with `WiniaTheme::auto` a dependent, so a mode change invalidates
-/// exactly those scopes through the ordinary state-dependency machinery. The atomic above stays for the
-/// callers that ask outside a composition (`is_system_dark_theme` from the app loop).
+/// The mode as a REACTIVE value, and the one the composition actually reads: a tracked read of it is what
+/// makes a window's composer wake at all when the mode changes (each window composes in its own composer,
+/// and a composer with nothing pending is never asked to redraw). The atomic above stays for the callers
+/// that ask outside a composition (`is_system_dark_theme` from the app loop).
 static SYSTEM_THEME_STATE: std::sync::LazyLock<crate::core::state::Reactive<u8>> =
     std::sync::LazyLock::new(|| crate::core::state::Reactive::new(system_theme_mode()));
-/// Set when the resolved theme may have changed and the tree has not been told yet — the app loop drains
-/// it to run [`crate::app::apply_system_theme`], which refreshes the window's own theme snapshot and
-/// re-composes the tree.
-static SYSTEM_THEME_DIRTY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// How many times the SYSTEM theme may have changed. A window records the epoch it last resolved at and
+/// re-resolves when it moves — per WINDOW state, deliberately: a single process-wide "pending" flag is
+/// consumed by whichever window renders first, which left every other window on its old palette.
+static SYSTEM_THEME_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+/// Set when every window should be asked for a frame because the mode moved.
+///
+/// Windows that follow the system are woken by their own dependency on the mode, but not every window has
+/// one: a window whose content an application composed itself (through `app::open_window_with_title`) has
+/// nothing to wake it, and a mode change can come from a background thread that cannot reach the windows.
+/// The app loop drains this — it is the one place that knows them.
+static THEME_REDRAW_ALL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether every window should be asked for a frame (the app loop's check).
+pub(crate) fn take_theme_redraw_all() -> bool {
+    THEME_REDRAW_ALL.swap(false, std::sync::atomic::Ordering::Relaxed)
+}
 
 /// The pinned mode (`0` = follow the system, `1` = light, `2` = dark).
 fn system_theme_mode() -> u8 {
     SYSTEM_THEME_MODE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Bumped whenever the system theme may have changed ([`set_system_dark_mode`], [`note_platform_theme`]).
+/// Callers compare it against the epoch they last resolved at: equal means "nothing to look at".
+pub(crate) fn system_theme_epoch() -> u64 {
+    SYSTEM_THEME_EPOCH.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Pin the theme, or hand it back to the system with `None`.
 ///
-/// The change lands on the next frame: this only stores the value and raises the dirty flag the app
-/// loop watches (running a full recompose from arbitrary code would be a re-entrancy hazard, and the
-/// loop is where the composers live). `WiniaTheme::auto` reads the stored value, so the next
-/// composition picks it up.
+/// The change lands on the next frame: this only stores the value and bumps [`system_theme_epoch`]
+/// (running a full recompose from arbitrary code would be a re-entrancy hazard, and the loop is where the
+/// composers live). Each window resolves the stored mode when its next frame refreshes the theme.
 pub fn set_system_dark_mode(mode: Option<bool>) {
     use std::sync::atomic::Ordering;
     let value = match mode {
@@ -215,10 +232,13 @@ pub fn set_system_dark_mode(mode: Option<bool>) {
         Some(true) => 2,
     };
     if SYSTEM_THEME_MODE.swap(value, Ordering::Relaxed) != value {
-        // Wake every composition that read the mode (the tracked read in `WiniaTheme::auto`), and flag
-        // the app loop so it can refresh the window's own theme snapshot.
+        // Wake every window that follows the system (the tracked read in the content wrapper) and tell
+        // them there is something to re-resolve; ask the loop for a frame for the ones that cannot be woken
+        // that way.
         SYSTEM_THEME_STATE.set(value);
-        SYSTEM_THEME_DIRTY.store(true, Ordering::Relaxed);
+        SYSTEM_THEME_EPOCH.fetch_add(1, Ordering::Relaxed);
+        THEME_REDRAW_ALL.store(true, Ordering::Relaxed);
+        crate::core::state::wake_loop();
     }
 }
 
@@ -232,13 +252,8 @@ pub(crate) fn note_platform_theme(dark: bool) {
     use std::sync::atomic::Ordering;
     let value = if dark { 1i8 } else { 0i8 };
     if SYSTEM_THEME_DARK.swap(value, Ordering::Relaxed) != value && system_theme_mode() == 0 {
-        SYSTEM_THEME_DIRTY.store(true, Ordering::Relaxed);
+        SYSTEM_THEME_EPOCH.fetch_add(1, Ordering::Relaxed);
     }
-}
-
-/// Whether a theme change is waiting to be applied (the app loop's check).
-pub(crate) fn take_system_theme_dirty() -> bool {
-    SYSTEM_THEME_DIRTY.swap(false, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Detect whether the system is in dark mode — or answer with the mode an application pinned through
@@ -363,7 +378,7 @@ static LOCAL_CONTENT_COLOR: LazyLock<CompositionLocal<Color>> =
 /// surface behind it flipped to light, because the per-frame wrapper re-provided the palette sampled when
 /// the window was created. Recording the intent instead lets the wrapper resolve afresh each frame
 /// (`Auto`), or re-provide a palette the application chose (`Fixed`).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ThemeSpec {
     /// Follow the system — or the mode an application pinned through [`set_system_dark_mode`].
     Auto,
@@ -379,14 +394,91 @@ impl ThemeSpec {
             ThemeSpec::Fixed(colors) => colors.clone(),
         }
     }
+}
 
-    /// Provide this spec's palette for `content`, resolving it now — the per-frame wrapper a window's
-    /// content composes under.
-    pub(crate) fn provide(&self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
-        match self {
-            ThemeSpec::Auto => WiniaTheme::auto(ctx, content),
-            ThemeSpec::Fixed(colors) => WiniaTheme::with_theme(colors.clone(), ctx, content),
+/// A window's theme: the intent to resolve (`ThemeSpec`) and the palette it last resolved to, SHARED
+/// between the `Window` node that manages the window and the window itself.
+///
+/// The two sides live in different composers — the node runs in the tree that DECLARES the window and
+/// re-samples the intent every frame (an application may switch which theme node wraps it), while the
+/// content wrapper runs in the window's own composer and must see the same, current value. A palette
+/// captured as a value pinned the window to its startup colors; an intent sampled once and then frozen
+/// pinned it to its startup NODE (a sub-window whose declaring tree switched from `light` to `dark` stayed
+/// light forever). Hence a shared cell, written by whichever side knows more.
+#[derive(Clone)]
+pub struct WindowTheme(std::sync::Arc<std::sync::Mutex<ThemeCell>>);
+
+struct ThemeCell {
+    spec: ThemeSpec,
+    /// The palette `spec` resolved to at `resolved_epoch`.
+    colors: ThemeColors,
+    /// The system-theme epoch `colors` was resolved at.
+    resolved_epoch: u64,
+    /// The declaring tree published a different intent and nobody has resolved it yet.
+    spec_dirty: bool,
+}
+
+impl WindowTheme {
+    /// A theme for `spec`, resolved now — a window's first frame has no earlier resolution to reuse.
+    pub fn new(spec: ThemeSpec) -> Self {
+        let colors = spec.colors();
+        Self(std::sync::Arc::new(std::sync::Mutex::new(ThemeCell {
+            spec,
+            colors,
+            resolved_epoch: system_theme_epoch(),
+            spec_dirty: false,
+        })))
+    }
+
+    /// The intent in force.
+    pub fn spec(&self) -> ThemeSpec {
+        self.0.lock().unwrap().spec.clone()
+    }
+
+    /// The palette to compose with — the last resolved one, deliberately not a fresh resolve: a frame
+    /// that composes and still skips every group should not rebuild a Material color scheme.
+    pub(crate) fn colors(&self) -> ThemeColors {
+        self.0.lock().unwrap().colors.clone()
+    }
+
+    /// Publish the intent the declaring tree sampled this frame. Returns whether it moved — the window's
+    /// own frame has to be scheduled in that case, because the change happened in ANOTHER composer (which
+    /// leaves the window's composer with nothing pending).
+    pub(crate) fn publish(&self, spec: ThemeSpec) -> bool {
+        let mut cell = self.0.lock().unwrap();
+        if cell.spec == spec {
+            return false;
         }
+        cell.spec = spec;
+        cell.spec_dirty = true;
+        true
+    }
+
+    /// Bring the palette up to date — the system epoch moved, or the intent changed — and compare it with
+    /// what the window has already drawn. Returns whether what was drawn is now WRONG; a `Fixed` window
+    /// resolves the same palette again and answers `false`, so a system theme change costs it nothing.
+    pub(crate) fn refresh(&self, drawn: &mut ThemeColors) -> bool {
+        let epoch = system_theme_epoch();
+        let mut cell = self.0.lock().unwrap();
+        if !cell.spec_dirty && cell.resolved_epoch == epoch {
+            return false;
+        }
+        cell.spec_dirty = false;
+        cell.resolved_epoch = epoch;
+        let colors = cell.spec.colors();
+        let changed = colors != *drawn;
+        cell.colors = colors.clone();
+        *drawn = colors;
+        changed
+    }
+
+    /// Provide this window's palette for `content` — the wrapper its content composes under every frame.
+    pub(crate) fn provide(&self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
+        let (spec, colors) = {
+            let cell = self.0.lock().unwrap();
+            (cell.spec.clone(), cell.colors.clone())
+        };
+        WiniaTheme::provide_resolved(spec, colors, Typography::default(), LayoutDirection::Ltr, ctx, content);
     }
 }
 
@@ -475,6 +567,30 @@ impl WiniaTheme {
         content: impl FnOnce(&mut ComposeCtx),
     ) {
         let colors = spec.colors();
+        Self::provide_resolved(spec, colors, typography, direction, ctx, content);
+    }
+
+    /// Provide a palette that has ALREADY been resolved, keeping the intent it came from — the per-frame
+    /// wrapper a window's content composes under.
+    ///
+    /// Why not resolve here: a window recomposes for every interaction, and a Material scheme is not free
+    /// to build, so an idle frame must not rebuild one just to provide the same colors again. The intent
+    /// still travels (a `Window` node further down samples it), so a sub-window of a window that follows
+    /// the system follows the system too.
+    pub(crate) fn provide_resolved(
+        spec: ThemeSpec,
+        colors: ThemeColors,
+        typography: Typography,
+        direction: LayoutDirection,
+        ctx: &mut ComposeCtx,
+        content: impl FnOnce(&mut ComposeCtx),
+    ) {
+        // A TRACKED read while the theme follows the system: it is what makes THIS composer a dependent of
+        // the mode, and therefore what wakes the window at all when the mode changes — a composer with
+        // nothing pending is never asked to redraw, and a frame never runs for it.
+        if matches!(spec, ThemeSpec::Auto) {
+            let _ = SYSTEM_THEME_STATE.get();
+        }
         let on_surface = colors.on_surface;
         let _restore = SpecGuard(CURRENT_THEME_SPEC.with(|s| s.borrow_mut().replace(spec)));
         LOCAL_DIRECTION.provides(direction, || {
@@ -519,12 +635,19 @@ impl WiniaTheme {
     }
 }
 
+/// The theme mode is process-wide, so the tests that move it must not overlap — inside this module and
+/// outside it (the app's window-level test drives the same mode).
+#[cfg(test)]
+pub(crate) static THEME_TEST_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+pub(crate) fn theme_mode_test_lock() -> &'static std::sync::Mutex<()> {
+    &THEME_TEST_SERIAL
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The theme mode is process-wide, so the tests that move it must not overlap.
-    static THEME_TEST_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// A `surface`-filled 40×40 leaf under a param-less wrapper group — the smallest shape that shows both
     /// whether a theme reached the tree and whether an unmarked wrapper kept the colors it composed with.
@@ -566,7 +689,7 @@ mod tests {
     /// whole SUBTREE: `WiniaTheme::auto` resolved its colors when its group last composed, and a
     /// param-less wrapper between the theme and the content would otherwise be Skipped and keep them
     /// (the SearchBar filtering bug had that shape). This drives the same three steps
-    /// `app::apply_system_theme` does, and the middle one shows the dirtying is load-bearing.
+    /// `PerWindow::refresh_theme` does, and the middle one shows the dirtying is load-bearing.
     #[test]
     fn a_theme_change_needs_the_subtree_dirty() {
         let _serial = THEME_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -586,7 +709,7 @@ mod tests {
         composer.recompose(scene);
         assert_eq!(centre_pixel(&mut composer), light, "without the dirtying an idle subtree keeps its colors");
 
-        // The step `apply_system_theme` performs.
+        // The step `refresh_theme` performs.
         composer.mark_content_dirty();
         composer.recompose(scene);
         assert_ne!(centre_pixel(&mut composer), light, "the recomposition must pick the new theme up");
@@ -595,16 +718,16 @@ mod tests {
         set_system_dark_mode(None);
     }
 
-    /// The shape of a WINDOW: the application resolves its theme once, around the node that opens the
-    /// window, and whatever the window samples there is carried into the content closure the framework
-    /// re-runs every frame.
+    /// The shape of a WINDOW, end to end at the composer level: the declaring tree samples the intent and
+    /// PUBLISHES it into the window's cell, the window's own composer composes under the cell's palette,
+    /// and a change reaches the tree by two independent routes.
     ///
-    /// A palette captured as a VALUE pins the window to its startup colors — measured on the demo, an
-    /// `auto` window stayed dark while the surface behind the tree flipped to light, because the per-frame
-    /// wrapper re-provided the palette sampled at creation. The SPEC keeps resolving, so the tree follows
-    /// once it is told to run again.
+    /// Both routes are load-bearing. A palette captured as a value pinned the window to its startup colors
+    /// (measured on the demo: an `auto` window stayed dark while the surface behind it flipped to light),
+    /// and an intent sampled once pinned it to its startup NODE (a sub-window whose declaring tree switched
+    /// from light to dark kept its palette forever).
     #[test]
-    fn a_window_content_re_resolves_the_theme_it_sampled() {
+    fn a_window_content_follows_its_cell() {
         let _serial = THEME_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         use crate::core::composer::Composer;
 
@@ -614,25 +737,38 @@ mod tests {
         let mut init = Composer::new();
         init.compose(|ctx| {
             WiniaTheme::auto(ctx, |_| {
-                *sampled.borrow_mut() = Some(current_theme_spec());
+                *sampled.borrow_mut() = Some(WindowTheme::new(current_theme_spec()));
             })
         });
-        let spec = sampled.into_inner().expect("the window samples a theme spec");
-        assert!(matches!(spec, ThemeSpec::Auto), "a window inside `auto` must keep following the system");
+        let cell = sampled.into_inner().expect("the window samples a theme");
+        assert_eq!(cell.spec(), ThemeSpec::Auto, "a window inside `auto` must keep following the system");
+        let mut drawn = cell.colors();
 
-        // Each frame after that: the window's own composer runs the content under the sampled spec.
+        // Each frame after that: the window's own composer runs the content under the cell's palette.
         let mut composer = Composer::new();
         let mut frame = |composer: &mut Composer| {
-            composer.compose(|ctx| spec.provide(ctx, surface_scene));
+            composer.compose(|ctx| cell.provide(ctx, surface_scene));
         };
         frame(&mut composer);
         let light = centre_pixel(&mut composer);
 
-        // The application switches its own theme (the demo's Auto / Light / Dark row).
+        // (1) The system mode moves, and the loop refreshes this window's palette.
         set_system_dark_mode(Some(true));
+        assert!(cell.refresh(&mut drawn), "the system theme moved");
         composer.mark_content_dirty();
         frame(&mut composer);
-        assert_ne!(centre_pixel(&mut composer), light, "the window's tree must follow the theme it follows");
+        assert_ne!(centre_pixel(&mut composer), light, "the window's tree must follow the system");
+        let dark = centre_pixel(&mut composer);
+
+        // (2) The DECLARING tree publishes another intent (it switched its own theme node). The window
+        // composes in a different composer, so without the cell it would never hear about it.
+        assert!(cell.publish(ThemeSpec::Fixed(ThemeColors::default_light())), "the intent moved");
+        assert!(cell.refresh(&mut drawn), "the published palette is not what is drawn");
+        composer.mark_content_dirty();
+        frame(&mut composer);
+        let after = centre_pixel(&mut composer);
+        assert_ne!(after, dark, "a published intent has to reach the window too");
+        assert_eq!(after, light, "it is the light palette the tree published");
 
         set_system_dark_mode(None);
     }
@@ -666,14 +802,18 @@ mod tests {
         let after = std::cell::RefCell::new(None);
         composer.compose(|ctx| {
             WiniaTheme::auto(ctx, |ctx| {
-                WiniaTheme::light(ctx, |_| {
+                // `dark`, not `light`: outside every theme node the answer is already `Fixed(default_light)`,
+                // so a lighter inner theme could not tell "the inner provide was recorded" from "no
+                // thread-local was ever written at all".
+                WiniaTheme::dark(ctx, |_| {
                     *inside.borrow_mut() = Some(current_theme_spec());
                 });
                 *after.borrow_mut() = Some(current_theme_spec());
             });
         });
-        assert!(matches!(inside.into_inner(), Some(ThemeSpec::Fixed(_))));
-        assert!(matches!(after.into_inner(), Some(ThemeSpec::Auto)));
+        let inside = inside.into_inner().expect("the inner provide recorded its spec");
+        assert_eq!(inside, ThemeSpec::Fixed(ThemeColors::default_dark()), "the INNERMOST theme wins");
+        assert_eq!(after.into_inner(), Some(ThemeSpec::Auto), "and the enclosing one comes back");
     }
 
     use crate::ui::text::Text;

@@ -165,10 +165,13 @@ fn pixel_frame(window_id: u64) -> Option<(u32, u32, Vec<u8>)> {
 }
 
 /// One pixel of the last captured frame, as a line the stdin channel can carry: `WxH:x y r g b a`, or
-/// `none` when no frame has been captured, the point falls outside it, or the frame is malformed.
+/// `out`-of-frame / `none`.
 ///
-/// Coordinates are FRAME pixels (physical: a 460-wide window at 1.5 scale captures 690 of them), stated
-/// in the response's own `WxH` so a caller that only knows logical coordinates can scale.
+/// Coordinates are FRAME pixels (physical: a 460-wide window at 1.5 scale captures 690 of them), stated in
+/// the response's own `WxH` so a caller that only knows logical coordinates can scale. The four color
+/// bytes are what the capture holds — RGBA, premultiplied by alpha (an opaque window makes the two
+/// identical; a translucent one does not). `WxH:out-of-frame` answers both a point outside the frame and a
+/// frame whose byte buffer is shorter than its dimensions claim.
 fn pixel_line(x: u32, y: u32) -> String {
     let Some((w, h, pixels)) = legacy_target().and_then(pixel_frame) else {
         return "none".into();
@@ -204,8 +207,21 @@ fn reset_debug_runtime() {
 mod request_tests {
     use super::*;
 
+    /// These tests drive PROCESS-GLOBAL state (`LEGACY_TARGET`, `SCREENSHOT_TARGET`, the event queue, the
+    /// frame store) and `reset_debug_requests` clears it for everyone: running them concurrently made them
+    /// fail each other (measured: 5 mixed runs, 1-5 failures). They only compile with `--features
+    /// debug-server`, which is not the default lib configuration, which is why this stayed unnoticed.
+    static REQUEST_TEST_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Lock the module's serial section; a poisoned lock (an earlier test panicked) is still usable, the
+    /// state is reset by every test anyway.
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        REQUEST_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn debug_session_resets_shutdown_and_requests() {
+        let _serial = serial();
         reset_debug_requests();
         force_shutdown();
         assert!(is_shutdown());
@@ -218,6 +234,7 @@ mod request_tests {
 
     #[test]
     fn screenshot_target_is_consumed_only_by_matching_window() {
+        let _serial = serial();
         reset_debug_requests();
         request_screenshot(22);
         assert!(!screenshot_requested(11));
@@ -230,6 +247,7 @@ mod request_tests {
 
     #[test]
     fn debug_events_remain_queued_for_their_target_window() {
+        let _serial = serial();
         reset_debug_requests();
         queue_event_for_window(22, DebugEvent::FocusNext);
         queue_event_for_window(11, DebugEvent::Click { x: 1.0, y: 2.0 });
@@ -239,6 +257,7 @@ mod request_tests {
 
     #[test]
     fn legacy_target_zero_resolves_to_parent_window() {
+        let _serial = serial();
         reset_debug_requests();
         set_legacy_target(22);
         queue_event(DebugEvent::FocusNext);
@@ -251,6 +270,7 @@ mod request_tests {
 
     #[test]
     fn queued_event_targets_reports_matching_windows() {
+        let _serial = serial();
         reset_debug_requests();
         assert!(queued_event_targets().is_empty());
         set_legacy_target(22);
@@ -262,6 +282,7 @@ mod request_tests {
 
     #[test]
     fn pixel_frames_are_owned_by_window() {
+        let _serial = serial();
         reset_debug_requests();
         update_pixels(11, &[1, 2, 3, 4], 1, 1);
         update_pixels(22, &[5, 6, 7, 8], 2, 1);
@@ -270,18 +291,25 @@ mod request_tests {
     }
 
     /// The text pixel read (a UI test's only way to see what was drawn): the frame size comes back with
-    /// the RGBA so a caller holding logical coordinates can scale, and every miss says which kind it is.
+    /// the pixel so a caller holding logical coordinates can scale, and every miss says which kind it is.
     #[test]
     fn pixel_line_reports_the_frame_size_and_the_pixel() {
+        let _serial = serial();
         reset_debug_requests();
         set_legacy_target(11);
         assert_eq!(pixel_line(0, 0), "none", "no frame captured yet");
 
         update_pixels(11, &[1, 2, 3, 4, 5, 6, 7, 8], 2, 1);
-        // The frame stores its bytes in the order it captured them (RGBA), reported verbatim.
+        // x=1 of a 2-px-wide frame is bytes 4..8 — this is the (x, y) → byte-offset arithmetic, not an
+        // echo: the value has to be the SECOND pixel's four bytes.
         assert_eq!(pixel_line(1, 0), "2x1:1 0 5 6 7 8");
+        assert_eq!(pixel_line(0, 0), "2x1:0 0 1 2 3 4");
         assert_eq!(pixel_line(2, 0), "2x1:out-of-frame");
         assert_eq!(pixel_line(0, 1), "2x1:out-of-frame");
+
+        // A frame whose byte buffer is shorter than its dimensions claim is "out of frame", not a panic.
+        update_pixels(11, &[1, 2, 3, 4], 4, 4);
+        assert_eq!(pixel_line(3, 3), "4x4:out-of-frame");
     }
 }
 
