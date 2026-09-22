@@ -250,5 +250,15 @@ the comparison the composer uses for Skip) and `children_have_z_is_recorded_by_t
   empty, tiny, RTL, both schemes) to PNGs and look at them — the range slider's two appearance bugs
   were both found by looking, not by reasoning.
 - **Semantics layer** (model + OS bridge): the largest item here, deliberately not started.
-- **Known pre-existing bug**: in `bottom_sheet_demo` a drag inside the sheet's list dismisses the sheet
-  (identical on the v2 baseline; needs its own investigation).
+- **"A drag inside the bottom sheet's list dismisses the sheet"**: INVESTIGATED, and it is not a bug — it is
+  Compose M3's rule. `ConsumeSwipeWithinBottomSheetBoundsNestedScrollConnection` takes UPWARD deltas in
+  pre-scroll (expands-first, so the sheet expands before the list moves) and hands leftover DOWNWARD deltas
+  in post-scroll to the sheet, so dragging down with the list at its top collapses the sheet (Expanded →
+  PartiallyExpanded → Hidden, two steps) and out of it entirely. Measured on `bottom_sheet_demo` before and
+  after expanding (probe: at the top the panel follows the finger; with the list scrolled the list scrolls
+  back and the panel's handle stays put), and the androidx source is quoted in
+  `bottom_sheet_drag_routing_keeps_the_list_in_charge_of_its_own_scroll`, which now pins all five steps — the
+  arbitration is three-way (inner drag component > scroll > panel drag) and breaks silently. The demo's own
+  text was what misled (it promised "the list scrolls on its own" and never mentioned the collapse rule);
+  its row background was also light-only (`from_argb(255, 245, 245, 247)` in a demo that follows the system
+  theme) — both fixed.

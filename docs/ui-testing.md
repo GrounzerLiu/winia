@@ -14,7 +14,7 @@ case — isolation is unchanged, but the whole suite links skia once (see "addin
 cargo test --features debug-server
         │
         ├─ tests/ui/mod.rs       UiTest 封装（进程管理 + 管道协议 + 断言辅助）
-        ├─ tests/ui_test.rs      scenario assertions (33 cases) + the pixel-read parser tests
+        ├─ tests/ui_test.rs      scenario assertions (34 cases) + the pixel-read parser tests
         ├─ tests/ui_fixtures/    fixture sources + fixture_all.rs (the single dispatcher)
         └─ tests/{event_flow,layout_snapshot,render_snapshot}.rs  库行为快照测试
                 │
@@ -173,6 +173,7 @@ tooltips are the one overlay that deliberately lets the press through.
 | theme_follows_the_windows_own_switch | theme_follow | `px` reads the frame's centre pixel: pinning dark then light changes what was DRAWN, both ways |
 | an_open_popup_follows_the_theme | theme_follow | a popup left open across the switch changes too (it composes under a snapshot the declaring tree refreshes) |
 | the_window_content_composes_under_the_declared_typography_and_direction | theme_typography | a window declared under RTL + a 32 px type scale: the content mirrors and the headline follows the scale (the publish in `Window::build` is what carries it) |
+| bottom_sheet_drag_routing_keeps_the_list_in_charge_of_its_own_scroll | bottom_sheet | expands-first, then the list scrolls; a downward drag scrolls the list back while the sheet stays; at the top it collapses the sheet in two steps (Compose M3's nested-scroll rule, not a bug) |
 
 ### Reading pixels (`px`)
 
@@ -195,7 +196,7 @@ Every case drives a real window, so the suite inherits the machine's timing. Mea
 
 | Machine state | Result |
 |---|---|
-| idle (32 cores) | 35/35, ~77 s |
+| idle (32 cores) | 36/36, ~80 s |
 | 16 CPU burners (half the cores) | 25/25, ~78 s — that run had 25 cases |
 | 40 CPU burners (app 2.4-6x slower) | 23-24/25 — ditto; individual timing-sensitive cases fail |
 

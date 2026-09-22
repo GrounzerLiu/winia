@@ -1211,6 +1211,91 @@ fn the_window_content_composes_under_the_declared_typography_and_direction() {
 /// the node's height is whatever the text style resolved to.
 const DEFAULT_HEADLINE_HEIGHT: f32 = 30.0;
 
+/// The drag routing inside a `ModalBottomSheet`: the list owns its own scroll, the panel owns the rest.
+///
+/// Compose M3's rule, checked against `ConsumeSwipeWithinBottomSheetBoundsNestedScrollConnection` and
+/// pinned here because the arbitration is three-way (an inner drag component beats a scroll, a scroll beats
+/// the panel's `on_drag`) and breaks quietly: an upward delta goes to the sheet first (expands-first) and
+/// only the leftover to the list; a downward delta is the list's while it can scroll, and the sheet's once
+/// it cannot — so dragging down with the list at its top collapses the sheet, which IS the dismissal
+/// gesture rather than a bug (that is what this fixture's shape used to look like from the outside).
+#[test]
+fn bottom_sheet_drag_routing_keeps_the_list_in_charge_of_its_own_scroll() {
+    // `find_tag_in_overlay` reads the cached tree, and the sheet animates its settle, so every read is
+    // preceded by a refresh and every expectation is polled.
+    fn row_y(app: &mut UiTest, tag: &str) -> Option<f32> {
+        app.refresh();
+        app.find_tag_in_overlay(tag).map(|(_, y, _, _)| y)
+    }
+    fn wait_for(app: &mut UiTest, what: &str, mut cond: impl FnMut(&mut UiTest) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(4);
+        loop {
+            app.refresh();
+            if cond(app) {
+                return;
+            }
+            assert!(Instant::now() < deadline, "{what}");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    let mut app = UiTest::launch("bottom_sheet");
+    app.click_tag("bs-open");
+    app.expect_overlay_text("sheet header");
+    let row0 = app.find_tag_in_overlay("bs-row-0").expect("row 0 in the sheet");
+    let (x, y) = (row0.0 + 20.0, row0.1 + 20.0);
+
+    // (1) An upward drag while the sheet is half expanded: the sheet expands, the LIST does not scroll —
+    // row 0 is still the top row, just higher up on screen.
+    app.drag(x, y, x, y - 100.0);
+    wait_for(&mut app, "the sheet expands under an upward drag", |a| {
+        row_y(a, "bs-row-0").is_some_and(|y0| y0 < row0.1)
+    });
+
+    // (2) Now that it is expanded, the same gesture scrolls the LIST: row 0 leaves the viewport.
+    let start_y = row_y(&mut app, "bs-row-0").expect("row 0 after expanding") + 20.0;
+    app.drag(x, start_y, x, start_y - 140.0);
+    wait_for(&mut app, "an expanded sheet must let the list scroll (row 0 should leave)", |a| {
+        row_y(a, "bs-row-0").is_none()
+    });
+
+    // (3) A downward drag now belongs to the LIST: it scrolls back and the sheet stays open.
+    app.refresh();
+    let visible = app
+        .find_tag_in_overlay("bs-row-3")
+        .or_else(|| app.find_tag_in_overlay("bs-row-1"))
+        .expect("a visible row to drag down");
+    app.drag(visible.0 + 20.0, visible.1 + 15.0, visible.0 + 20.0, visible.1 + 150.0);
+    wait_for(&mut app, "a downward drag must scroll the list back, not close the sheet", |a| {
+        row_y(a, "bs-row-0").is_some()
+    });
+    assert_eq!(app.overlay_count(), 1, "the sheet is still open after a downward drag on the list");
+
+    // (4) A long downward drag with the list at its top goes to the SHEET — M3's dismissal gesture — and
+    // from Expanded that is PartiallyExpanded first, so the sheet is still there (its footer moves down
+    // with the panel).
+    let before = row_y(&mut app, "bs-footer").expect("the sheet footer");
+    let top = row_y(&mut app, "bs-row-0").expect("row 0 at the top again") + 15.0;
+    app.drag(x, top, x, top + 400.0);
+    wait_for(&mut app, "a downward drag at the top of the list must move the sheet", |a| {
+        row_y(a, "bs-footer").is_some_and(|y| y > before + 50.0)
+    });
+    assert_eq!(
+        app.overlay_count(),
+        1,
+        "Expanded → PartiallyExpanded is the first half of the dismissal"
+    );
+
+    // (5) …and the second long drag finishes it.
+    let partial = row_y(&mut app, "bs-footer").expect("the footer in the partial sheet");
+    let top = row_y(&mut app, "bs-row-0").expect("row 0 still in the partial sheet") + 15.0;
+    app.drag(x, top, x, top + 400.0);
+    wait_for(&mut app, "the sheet dismisses after the second downward drag", |a| {
+        let _ = partial;
+        a.overlay_count() == 0
+    });
+}
+
 /// A popup that is ALREADY OPEN follows the theme as well.
 ///
 /// Its content composes in a composer of its own, under a `CompositionLocal` snapshot captured when the
@@ -1218,8 +1303,7 @@ const DEFAULT_HEADLINE_HEIGHT: f32 = 30.0;
 /// re-runs on a theme change (that is what `refresh_theme` marks dirty) and hands the popup a FRESH
 /// snapshot; this test is what keeps that claim honest, since nothing about the snapshot looks live.
 #[test]
-fn an_open_popup_follows_the_theme() {
-    let mut app = UiTest::launch("theme_follow");
+fn an_open_popup_follows_the_theme() {    let mut app = UiTest::launch("theme_follow");
     app.click_tag("theme-dark");
     let dark = app.wait_centre_luma(Duration::from_secs(5), |l| l < 96.0);
     assert!(dark.is_some_and(|l| l < 96.0), "the window must be dark first, luma={dark:?}");
