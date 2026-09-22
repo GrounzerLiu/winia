@@ -77,8 +77,10 @@ fn slider_demo(ctx: &mut ComposeCtx) {
                 .color(Color::from_argb(255, 100, 100, 100))
                 .build(ctx);
 
-            section_title(ctx, "键盘操作（点击聚焦后方向键/PageUp/Home/End）");
-            Text::new("聚焦滑块后用 ←/→ 微调（1% 值域）、PageUp/PageDown 大步、Home/End 端点")
+            // A press does NOT focus a slider (clicking must not take the keyboard from wherever it
+            // is — see docs/range-slider.md §3); the keyboard is reached with Tab.
+            section_title(ctx, "Keyboard (Tab to focus, then the arrow keys / PageUp / Home / End)");
+            Text::new("Tab into the slider, then ←/→ nudges by 1% of the range, PageUp/PageDown takes a big step, Home/End jump to the ends")
                 .font_size(12.0)
                 .color(Color::from_argb(255, 120, 120, 120))
                 .build(ctx);

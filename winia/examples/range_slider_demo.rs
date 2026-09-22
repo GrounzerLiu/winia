@@ -103,7 +103,7 @@ fn range_slider_demo(ctx: &mut ComposeCtx) {
             .build(ctx);
 
             section_title(ctx, "Keyboard (one focus stop per thumb)");
-            Text::new("Press a thumb — it takes focus and the ring follows it — or Tab between the two thumbs. The arrow keys move the focused one: ←/→ one step, PageUp/PageDown ten, Home/End the ends.")
+            Text::new("Tab (or Shift+Tab) to a thumb — it takes focus and the ring follows it — then the arrow keys move it: ←/→ one step, PageUp/PageDown ten, Home/End the ends. Pressing a thumb with the mouse does NOT take focus, as in the plain Slider.")
                 .font_size(12.0)
                 .color(label_color())
                 .build(ctx);

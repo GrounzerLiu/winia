@@ -202,7 +202,7 @@ Cost: ~80–120 lines including tests. Depends on nothing; unblocks the componen
 - **A RangeSlider inside a popup is unverified at runtime**: the review confirmed by inspection that the
   focus hand-off resolves in an overlay arena (the queue is drained main-tree-first then overlays, and
   `focus_by_id` searches whichever arena it is given), but no test exercises it. A fixture with a range
-  slider in a `Popup` plus press → arrows → Tab would close it (the popup_drag fixture is the model).
+  slider in a `Popup` plus Tab → arrows → Tab would close it (the popup_drag fixture is the model).
 - **Runtime system-theme switching**: `WiniaTheme::auto` detects the mode once per composition and
   winia never handles `WindowEvent::ThemeChanged`, so switching the OS theme while the app runs does
   not update. ~30–40 lines (store the mode, request recomposition, read the stored mode in
