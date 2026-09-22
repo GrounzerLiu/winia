@@ -19,6 +19,9 @@ fn popup_tap_fixture(ctx: &mut ComposeCtx) {
     let popup_holds = ctx.remember(|| 0u32);
     let popup_singles = ctx.remember(|| 0u32);
     let popup_doubles = ctx.remember(|| 0u32);
+    let popup_drag_taps = ctx.remember(|| 0u32);
+    let popup_drag_starts = ctx.remember(|| 0u32);
+    let popup_drag_ends = ctx.remember(|| 0u32);
 
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(16.0))
@@ -50,6 +53,9 @@ fn popup_tap_fixture(ctx: &mut ComposeCtx) {
             Text::new(format!("popup-holds: {}", popup_holds.get())).build(ctx);
             Text::new(format!("popup-singles: {}", popup_singles.get())).build(ctx);
             Text::new(format!("popup-doubles: {}", popup_doubles.get())).build(ctx);
+            Text::new(format!("popup-drag-taps: {}", popup_drag_taps.get())).build(ctx);
+            Text::new(format!("popup-drag-starts: {}", popup_drag_starts.get())).build(ctx);
+            Text::new(format!("popup-drag-ends: {}", popup_drag_ends.get())).build(ctx);
 
             Popup::new(true)
                 .position(PopupPosition::BottomLeft)
@@ -60,6 +66,9 @@ fn popup_tap_fixture(ctx: &mut ComposeCtx) {
                     let holds = popup_holds.clone();
                     let singles = popup_singles.clone();
                     let doubles = popup_doubles.clone();
+                    let drag_taps = popup_drag_taps.clone();
+                    let drag_starts = popup_drag_starts.clone();
+                    let drag_ends = popup_drag_ends.clone();
                     move |ctx| {
                         Column::new()
                             .modifier(Modifier::new().test_tag("popup-body").fill_max_width())
@@ -111,6 +120,35 @@ fn popup_tap_fixture(ctx: &mut ComposeCtx) {
                                     )
                                     .build(ctx, |ctx| {
                                         Text::new("Popup double-tap zone").build(ctx);
+                                    });
+                                // A card that is BOTH tappable and draggable: until the tracker owns
+                                // drag targets too, its `on_tap` was unreachable inside a popup (the
+                                // overlay drag machinery owned the node and no tracker was created).
+                                Column::new()
+                                    .modifier(
+                                        Modifier::new()
+                                            .test_tag("popup-drag-zone")
+                                            .fill_max_width()
+                                            .height(40.0)
+                                            .background(
+                                                Color::from_argb(255, 220, 220, 200),
+                                                Shape::rounded(4.0),
+                                            )
+                                            .on_tap({
+                                                clone!(drag_taps);
+                                                move |_| drag_taps.update(|v| *v += 1)
+                                            })
+                                            .on_drag_start({
+                                                clone!(drag_starts);
+                                                move |_| drag_starts.update(|v| *v += 1)
+                                            })
+                                            .on_drag_end({
+                                                clone!(drag_ends);
+                                                move || drag_ends.update(|v| *v += 1)
+                                            }),
+                                    )
+                                    .build(ctx, |ctx| {
+                                        Text::new("Popup drag zone").build(ctx);
                                     });
                             });
                     }

@@ -3228,10 +3228,9 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::modifier
         //
         // The tracker goes with it, so the rest of the tap family (`on_tap` / `on_double_tap` /
         // `on_long_press`) fires in a popup too; `gesture_move` / `gesture_up` route their actions
-        // back into this arena (`pw.gesture_arena`). It is created only for a target WITHOUT drag
-        // gestures: a drag target is owned by the overlay drag machinery above
-        // (`pw.overlay_drag`), whose `DragStart` / `DragMove` / `DragEnd` would otherwise be
-        // dispatched twice for one gesture.
+        // back into this arena (`pw.gesture_arena`). A target WITH drag gestures is tracked as well:
+        // the overlay drag session for that same node is stood down below, because both dispatchers
+        // would otherwise fire its `on_drag_*` callbacks for one gesture.
         {
             // Immutable scope: resolve the target and fire the Press, then leave the overlay borrow
             // before the tracker bookkeeping below needs `pw` mutably.
@@ -3251,29 +3250,37 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::modifier
             };
             if let Some((nid, slot, has_drag, ov_id)) = target {
                 if has_drag {
-                    // No tracker for a drag target — the overlay drag machinery above owns it (see
-                    // the note on this block). The PREVIOUS gesture must not survive into this one,
-                    // though: without this a press on a popup drag target would leave an older
-                    // tracker (and its arena) live, and the next move would drag the old node.
-                    end_gesture(pw);
-                } else {
-                    // Same bookkeeping as the main tree: a deferred tap on this node is due, or this
-                    // press is its double-tap candidate.
-                    process_pending_taps_on_down(pw, nid);
-                    let ctx = pw.gesture_tap_ctx.take()
-                        .filter(|(n, _, _)| *n == nid)
-                        .map(|(_, t, p)| (t, p));
-                    pw.gesture = Some(crate::input::gesture::GestureTracker::new(nid, local, false, ctx));
-                    pw.gesture_node = Some(nid);
-                    pw.gesture_slot = Some(slot);
-                    pw.gesture_arena = Some(ov_id);
-                    pw.gesture_arena_origin = pw
-                        .overlays
-                        .iter()
-                        .find(|o| o.id == ov_id)
-                        .map(|o| o.screen_pos)
-                        .unwrap_or((0.0, 0.0));
+                    // The tracker owns this node's drag as well as its tap family: the arbitration
+                    // above gave the same node to `pw.overlay_drag`, and both dispatchers would fire
+                    // `on_drag_start` / `on_drag` / `on_drag_end` for one gesture. Stand the overlay
+                    // session down instead — the tracker routes the drag through
+                    // `fire_in_gesture_arena` into this same arena, so nothing is lost, and the node
+                    // gains its `on_tap` / `on_double_tap` / `on_long_press` (the tap family of a
+                    // popup drag target used to be unreachable, `Slider` included).
+                    if pw.overlay_drag.map(|(idx, key, _)| (idx == i && key == slot)).unwrap_or(false) {
+                        pw.overlay_drag = None;
+                        pw.overlay_drag_started = false;
+                        pw.overlay_drag_last = None;
+                    }
+                    // A scroll session belongs to a DIFFERENT node (the arbitration picks scroll when
+                    // the drag is its ancestor); leave it alone.
                 }
+                // Same bookkeeping as the main tree for both kinds of target: a deferred tap on this
+                // node is due, or this press is its double-tap candidate.
+                process_pending_taps_on_down(pw, nid);
+                let ctx = pw.gesture_tap_ctx.take()
+                    .filter(|(n, _, _)| *n == nid)
+                    .map(|(_, t, p)| (t, p));
+                pw.gesture = Some(crate::input::gesture::GestureTracker::new(nid, local, has_drag, ctx));
+                pw.gesture_node = Some(nid);
+                pw.gesture_slot = Some(slot);
+                pw.gesture_arena = Some(ov_id);
+                pw.gesture_arena_origin = pw
+                    .overlays
+                    .iter()
+                    .find(|o| o.id == ov_id)
+                    .map(|o| o.screen_pos)
+                    .unwrap_or((0.0, 0.0));
             }
         }
         // Overlay pointer dispatch + caret placement — the main-tree sequence from
