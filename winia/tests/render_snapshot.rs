@@ -280,3 +280,40 @@ fn smoke_render_counter_ui() {
         });
     }));
 }
+
+/// `Modifier::z_index` decides which sibling covers which: the raised child wins even when it is
+/// composed FIRST, and without any z the later child stays on top (tree order — the fast path the
+/// renderer keeps for every node that never sets a z). The hit-test side of the same rule is pinned in
+/// `layout::node`'s `test_hit_test_follows_z_index`.
+#[test]
+fn z_index_reorders_sibling_painting() {
+    use winia::prelude::*;
+
+    let paint_two_boxes = |raise_first: bool| -> (u8, u8, u8) {
+        let (mut surface, _) = render_ui(60.0, 60.0, winia::app_root!(move |ctx| {
+            Stack::new().build(ctx, |ctx| {
+                // Composed first, so it is the bottom one by tree order.
+                let mut first = Modifier::new().size(60.0, 60.0).background(Color::RED, Shape::Rectangle);
+                if raise_first {
+                    first = first.z_index(1.0);
+                }
+                Column::new().modifier(first).build(ctx, |_ctx| {});
+                // Composed second: on top unless the first one was raised.
+                Column::new()
+                    .modifier(Modifier::new().size(60.0, 60.0).background(Color::BLUE, Shape::Rectangle))
+                    .build(ctx, |_ctx| {});
+            });
+        }));
+        let p = pixel(&mut surface, 30, 30);
+        (p.0, p.1, p.2)
+    };
+
+    assert!(
+        color_close(paint_two_boxes(false), (0, 0, 255), 10),
+        "without z the later sibling paints on top"
+    );
+    assert!(
+        color_close(paint_two_boxes(true), (255, 0, 0), 10),
+        "with z_index the raised (earlier) sibling paints on top"
+    );
+}

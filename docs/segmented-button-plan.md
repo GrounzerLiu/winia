@@ -1,6 +1,7 @@
 # SegmentedButton — implementation plan (and how each Compose difference gets closed)
 
-> Status: **planned, not started**.
+> Status: **in progress** — the one framework addition (`z_index`, §4) is implemented on branch
+> `z-index`; the component itself is not started.
 > Sources read: `androidx-main` `compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/SegmentedButton.kt`
 > and `.../tokens/OutlinedSegmentedButtonTokens.kt` (the token values below are from the token file, not from memory).
 > Predecessors: the RangeSlider work (merged as `13053fe`) and the popup gesture work.
@@ -168,6 +169,23 @@ Plan (branch `z-index`):
    (the classic stale-paint trap for a new modifier element).
 
 Cost: ~80–120 lines including tests. Depends on nothing; unblocks the component's difference #2.
+
+**Implemented** (branch `z-index`), with two deviations from this sketch and why:
+
+- No per-node `z_index` field: the z is read from the modifier at paint/hit time (`get_z_index`), which
+  is the same per-frame scan the renderer already does for other elements. Only the parent-side
+  `children_have_z` flag is cached — set in the layout pass that already walks the children — and it is
+  what keeps every node that does not use the feature on the plain loop.
+- The ordering lives in one shared helper, `layout::node::paint_order`, called by the renderer (forward)
+  and the hit test (reversed) so the two can never disagree. It is `sort_by`, i.e. stable, and a NaN z
+  compares as equal instead of panicking (`paint_order_is_stable_and_total`).
+
+Tests, all passing: `z_index_reorders_sibling_painting` (`tests/render_snapshot.rs` — the raised box
+covers the later sibling, and without a z the later sibling stays on top),
+`test_hit_test_follows_z_index` + `test_hit_test_without_z_keeps_tree_order` + `paint_order_is_stable_and_total`
+(`layout/node.rs`), `z_index_reads_back_and_affects_equality` (the element participates in `param_eq`,
+the comparison the composer uses for Skip) and `children_have_z_is_recorded_by_the_layout_pass`
+(`modifier.rs`).
 
 ## 5. Order of work
 

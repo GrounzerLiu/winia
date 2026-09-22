@@ -1434,9 +1434,18 @@ fn render_pass1(
         scrolled = true;
     }
 
-    // 穿行子节点（backdrop 节点自身内容照常绘制在模糊层之上）
-    for &child in &node.children {
-        render_pass1(nodes, root_idx, child, canvas, x, y, false, rootless);
+    // 穿行子节点（backdrop 节点自身内容照常绘制在模糊层之上）。
+    // PAINT 顺序 = 树顺序，除非有子节点设了 `Modifier::z_index`——那时按 z 稳定排序
+    // （z 高的后画、盖住兄弟；命中按同一顺序倒序，见 `paint_order`）。未使用 z 的
+    // 节点走原路径，不做任何额外工作。
+    if node.children_have_z {
+        for child in crate::layout::node::paint_order(nodes, &node.children) {
+            render_pass1(nodes, root_idx, child, canvas, x, y, false, rootless);
+        }
+    } else {
+        for &child in &node.children {
+            render_pass1(nodes, root_idx, child, canvas, x, y, false, rootless);
+        }
     }
 
     // Ripple indication — above content, inside shape/scroll clipping
