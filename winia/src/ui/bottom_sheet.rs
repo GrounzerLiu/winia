@@ -216,20 +216,16 @@ impl ModalBottomSheet {
                 // 仅全屏（sheetH≈fullH）时 28→0 过渡，非全屏保持 28（M3 满屏变直角）
                 // progress 基准用 Partial→Expanded 才能半展开保持 28（Hidden→Expanded 会在 Partial 已掉角）
                 let full_h = crate::ui::window_size().1;
-                let is_full = sheet_h.get() >= full_h - 1.0;
-                let from = if st.has_partially_expanded_state() {
-                    SheetValue::PartiallyExpanded
-                } else {
-                    SheetValue::Hidden
+                // The clip and the shadow keep a build-time shape — a clip cannot be animated per frame
+                // here — so they follow the sheet's VALUE (a tracked read, one recompose per anchor
+                // crossing) while the panel's painted surface follows the drag every frame in
+                // `SheetPanelNode`. Reading the offset instead (what this used to do) tied the shape to
+                // whatever the last compose saw: the sheet expands by animating `offset`, which
+                // recomposes nothing, so the corners arrived square only after some unrelated compose.
+                let clipped_full = sheet_h.get() >= full_h - 1.0 && st.current_value() == SheetValue::Expanded;
+                let cur_shape = Shape::TopRoundedRect {
+                    radius: if clipped_full { 0.0 } else { radius },
                 };
-                let p = st.progress(from, SheetValue::Expanded);
-                let off = st.offset();
-                let cur_radius = if is_full {
-                    if off.is_nan() { radius } else { radius * (1.0 - p.clamp(0.0, 1.0)) }
-                } else {
-                    radius
-                };
-                let cur_shape = Shape::TopRoundedRect { radius: cur_radius };
                 // 拖拽/动画到 Hidden → 触发 on_dismiss_request（对齐 Compose
                 // `if (!state.isVisible) onDismissRequest()`）。用 remember + once 门闩
                 // 保证 cb 仅在 settled 到 Hidden 且**动画完成**后触发一次（此前：
@@ -292,7 +288,18 @@ impl ModalBottomSheet {
                                 false,
                                 Color::from_argb(40, 0, 0, 0),
                             )
-                            .background(bg, cur_shape)
+                            // The panel's own surface is PAINTED per frame by a draw node, not composed
+                            // into the modifier chain: M3's expanded sheet is square-cornered and the
+                            // radius follows the drag, and a build-time shape cannot do either — the sheet
+                            // expands by animating `offset`, which recomposes nothing (measured: the
+                            // corners stayed rounded until an unrelated compose — a list scroll — re-ran
+                            // the closure, and stayed square after collapsing for the same reason).
+                            .draw_node(SheetPanelNode {
+                                state: st.clone(),
+                                color: bg,
+                                radius,
+                                window_height: full_h,
+                            })
                             .clip(cur_shape);
                         // 高度上报 → 更新锚点（window_size 需在回调内重读，捕获值 resize 后 stale）
                         let up_st = anchors_st.clone();
@@ -430,6 +437,98 @@ impl ModalBottomSheet {
 
 impl Default for ModalBottomSheet {
     fn default() -> Self { Self::new(false) }
+}
+
+/// The sheet panel's own surface, painted every frame.
+///
+/// M3's sheet is square-cornered once it is expanded (`BottomSheetDefaults.ExpandedShape` is a
+/// rectangle) and its radius follows the drag on the way there. Neither can be done at build time:
+/// the sheet expands by animating its `offset`, which recomposes nothing, so a composed shape kept
+/// the radius it was built with until some unrelated compose re-ran the closure (measured on the
+/// demo: the corners went square only after a list scroll, and stayed square after collapsing).
+/// So the radius is read from the state at PAINT time — the same "painted, not composed" rule the
+/// slider's track node follows.
+#[derive(Clone)]
+pub(crate) struct SheetPanelNode {
+    pub(crate) state: SheetState,
+    pub(crate) color: Color,
+    /// The token radius (28 dp), used while the sheet is not full height.
+    pub(crate) radius: f32,
+    /// The window's client height as of the last COMPOSE. Passed in rather than read at paint time
+    /// because `ui::window_size()` answers from a compose-time `AdaptiveContext` and falls back to
+    /// `(800, 600)` outside one — in the draw phase that made a 560-tall panel look "not full" forever.
+    pub(crate) window_height: f32,
+}
+
+impl SheetPanelNode {
+    /// The radius this panel is painted with right now: `radius` until the expanded sheet fills the
+    /// window, then `radius * (1 - progress)` so it reaches square exactly when the sheet settles
+    /// expanded (and comes back on the way out).
+    fn current_radius(&self, panel_height: f32) -> f32 {
+        if panel_height < self.window_height - 1.0 {
+            return self.radius;
+        }
+        // Progress is measured from the state the sheet came from: a sheet WITH a partially expanded
+        // anchor keeps its radius while it sits there (the corners must not go square on the way
+        // through), one without it (skip_partially_expanded) starts from Hidden.
+        let from = if self.state.has_partially_expanded_state() {
+            SheetValue::PartiallyExpanded
+        } else {
+            SheetValue::Hidden
+        };
+        let p = self.state.anchored_draggable().peek_progress(&from, &SheetValue::Expanded);
+        if p.is_nan() { self.radius } else { self.radius * (1.0 - p.clamp(0.0, 1.0)) }
+    }
+}
+
+impl std::fmt::Debug for SheetPanelNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SheetPanelNode").field("radius", &self.radius).finish()
+    }
+}
+
+impl crate::modifier::DrawNode for SheetPanelNode {
+    fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
+        let r = self.current_radius(rect.height()).clamp(0.0, rect.height() / 2.0);
+        #[cfg(debug_assertions)]
+        if std::env::var("WINIA_BS_TRACE").is_ok() {
+            eprintln!(
+                "[sheet-panel] rect_h={:.1} win_h={:.1} radius={:.1}",
+                rect.height(),
+                self.window_height,
+                r
+            );
+        }
+        let rrect = skia_safe::RRect::new_rect_radii(
+            rect,
+            &[
+                skia_safe::Vector::new(r, r),
+                skia_safe::Vector::new(r, r),
+                skia_safe::Vector::new(0.0, 0.0),
+                skia_safe::Vector::new(0.0, 0.0),
+            ],
+        );
+        let mut paint = skia_safe::Paint::default();
+        paint.set_anti_alias(true);
+        paint.set_color(skia_safe::Color::from_argb(
+            self.color.a,
+            self.color.r,
+            self.color.g,
+            self.color.b,
+        ));
+        canvas.draw_rrect(&rrect, &paint);
+    }
+
+    /// Static visual parameters only: the colour and the token radius. The radius it is PAINTED with
+    /// is transient (read per frame) and must not enter the key, or every drag frame would re-run the
+    /// group.
+    fn node_key(&self) -> String {
+        let argb = ((self.color.a as u32) << 24)
+            | ((self.color.r as u32) << 16)
+            | ((self.color.g as u32) << 8)
+            | (self.color.b as u32);
+        format!("SheetPanelNode|{argb:08x}|{}|{}", self.radius, self.window_height)
+    }
 }
 
 #[cfg(test)]

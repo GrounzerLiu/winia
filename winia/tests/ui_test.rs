@@ -1296,6 +1296,63 @@ fn bottom_sheet_drag_routing_keeps_the_list_in_charge_of_its_own_scroll() {
     });
 }
 
+/// The sheet's own surface: M3's EXPANDED sheet is square-cornered, and the radius follows the drag on
+/// the way there — so the shape has to be painted per frame.
+///
+/// The sheet expands by animating its `offset`, which recomposes nothing: with a build-time shape the
+/// corners went square only after an unrelated compose (a list scroll) re-ran the closure, and stayed
+/// square after collapsing for the same reason. Reported from the demo exactly that way.
+#[test]
+fn the_bottom_sheet_panel_is_square_when_expanded_and_rounded_again_when_not() {
+    fn panel_top(app: &mut UiTest) -> f32 {
+        app.refresh();
+        let (_, y, _, _) = app.find_tag_in_overlay("bs-content").expect("the sheet content");
+        // The drag-handle row sits above it: padding_vertical(12) + a 4 px handle + 12.
+        y - 28.0
+    }
+    /// Wait until the panel's top-left corner is (or is not) painted like the surface just below it: a
+    /// rounded corner shows what is BEHIND the panel there, a square one shows the panel itself. Waiting
+    /// on the property rather than on a tree coordinate is the point — the sheet slides by animating an
+    /// offset, so the node positions in the debug tree do not follow the motion, and an early read sees
+    /// the sheet mid-flight.
+    fn settle_shape(app: &mut UiTest, square: bool, what: &str) -> ((u8, u8, u8, u8), (u8, u8, u8, u8)) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let top = panel_top(app);
+            // (2, top+2) is inside a 28 dp corner arc; (2, top+40) is clear of it.
+            let corner = app.pixel_at_logical(2.0, top + 2.0).expect("the corner pixel");
+            let inside = app.pixel_at_logical(2.0, top + 40.0).expect("a pixel on the panel");
+            if (corner == inside) == square {
+                return (corner, inside);
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{what}: corner={corner:?} panel={inside:?} (top={top})"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    let mut app = UiTest::launch("bottom_sheet");
+    app.click_tag("bs-open");
+    app.expect_overlay_text("sheet header");
+
+    // Half expanded: the corner is cut away, so the pixel there is the page (dimmed by the scrim).
+    settle_shape(&mut app, false, "a partially expanded sheet keeps its 28 dp top corners");
+
+    // Expand. M3 squares the corners only when the sheet reaches the full window height.
+    let row = app.find_tag_in_overlay("bs-row-2").expect("a list row");
+    app.drag(row.0 + 20.0, row.1 + 20.0, row.0 + 20.0, row.1 - 320.0);
+    settle_shape(&mut app, true, "an expanded sheet is square-cornered (M3 ExpandedShape)");
+
+    // Collapse again: the corners have to come back. The drag has to start on the HANDLE, not on a list
+    // row: the expand drag scrolled the list, so a downward drag there would go to the list (which is
+    // exactly the routing the other sheet test pins).
+    let top = panel_top(&mut app);
+    app.drag(240.0, top + 14.0, 240.0, top + 14.0 + 320.0);
+    settle_shape(&mut app, false, "collapsing brings the rounded corners back");
+}
+
 /// A popup that is ALREADY OPEN follows the theme as well.
 ///
 /// Its content composes in a composer of its own, under a `CompositionLocal` snapshot captured when the
@@ -1303,7 +1360,8 @@ fn bottom_sheet_drag_routing_keeps_the_list_in_charge_of_its_own_scroll() {
 /// re-runs on a theme change (that is what `refresh_theme` marks dirty) and hands the popup a FRESH
 /// snapshot; this test is what keeps that claim honest, since nothing about the snapshot looks live.
 #[test]
-fn an_open_popup_follows_the_theme() {    let mut app = UiTest::launch("theme_follow");
+fn an_open_popup_follows_the_theme() {
+    let mut app = UiTest::launch("theme_follow");
     app.click_tag("theme-dark");
     let dark = app.wait_centre_luma(Duration::from_secs(5), |l| l < 96.0);
     assert!(dark.is_some_and(|l| l < 96.0), "the window must be dark first, luma={dark:?}");
