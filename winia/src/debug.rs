@@ -164,6 +164,25 @@ fn pixel_frame(window_id: u64) -> Option<(u32, u32, Vec<u8>)> {
     Some((frame.width, frame.height, frame.pixels.clone()))
 }
 
+/// One pixel of the last captured frame, as a line the stdin channel can carry: `WxH:x y r g b a`, or
+/// `none` when no frame has been captured, the point falls outside it, or the frame is malformed.
+///
+/// Coordinates are FRAME pixels (physical: a 460-wide window at 1.5 scale captures 690 of them), stated
+/// in the response's own `WxH` so a caller that only knows logical coordinates can scale.
+fn pixel_line(x: u32, y: u32) -> String {
+    let Some((w, h, pixels)) = legacy_target().and_then(pixel_frame) else {
+        return "none".into();
+    };
+    if x >= w || y >= h {
+        return format!("{w}x{h}:out-of-frame");
+    }
+    let i = ((y as usize) * w as usize + x as usize) * 4;
+    match pixels.get(i..i + 4) {
+        Some(p) => format!("{w}x{h}:{x} {y} {} {} {} {}", p[0], p[1], p[2], p[3]),
+        None => format!("{w}x{h}:out-of-frame"),
+    }
+}
+
 #[cfg(test)]
 fn reset_debug_requests() {
     *LEGACY_TARGET.lock().unwrap() = None;
@@ -248,6 +267,21 @@ mod request_tests {
         update_pixels(22, &[5, 6, 7, 8], 2, 1);
         assert_eq!(pixel_frame(11), Some((1, 1, vec![1, 2, 3, 4])));
         assert_eq!(pixel_frame(22), Some((2, 1, vec![5, 6, 7, 8])));
+    }
+
+    /// The text pixel read (a UI test's only way to see what was drawn): the frame size comes back with
+    /// the RGBA so a caller holding logical coordinates can scale, and every miss says which kind it is.
+    #[test]
+    fn pixel_line_reports_the_frame_size_and_the_pixel() {
+        reset_debug_requests();
+        set_legacy_target(11);
+        assert_eq!(pixel_line(0, 0), "none", "no frame captured yet");
+
+        update_pixels(11, &[1, 2, 3, 4, 5, 6, 7, 8], 2, 1);
+        // The frame stores its bytes in the order it captured them (RGBA), reported verbatim.
+        assert_eq!(pixel_line(1, 0), "2x1:1 0 5 6 7 8");
+        assert_eq!(pixel_line(2, 0), "2x1:out-of-frame");
+        assert_eq!(pixel_line(0, 1), "2x1:out-of-frame");
     }
 }
 
@@ -535,6 +569,15 @@ pub fn start_stdin_channel() {
                     // （DEBUG_STATE 未填充时输出空——测试可区分 stdin 链路 vs 渲染时序）
                     println!("TREE:{}", all_trees_json());
                 }
+                // px <x> <y>: one pixel of the last captured frame, as TEXT. The binary `p` frame only
+                // travels over the WebSocket; this line form is what the UI-test harness (stdin/stdout)
+                // can read, so a test can assert on what was actually drawn — the only way to see a
+                // theme change, which no node in the layout tree names.
+                "px" if parts.len() >= 3 => {
+                    let x: u32 = parts[1].parse().unwrap_or(0);
+                    let y: u32 = parts[2].parse().unwrap_or(0);
+                    println!("PIXEL:{}", pixel_line(x, y));
+                }
                 // tr [n]: the last n animation-trace records (NDJSON lines). Empty without the
                 // `anim-trace` feature.
                 "tr" => {
@@ -685,6 +728,12 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
                     }
                     None => { let _ = write.send(Message::text("no frame".to_string())).await; }
                 }
+            }
+            // px <x> <y>: the text form of one pixel (`pixel_line`) — same response as the stdin channel.
+            "px" if parts.len() >= 3 => {
+                let x: u32 = parts[1].parse().unwrap_or(0);
+                let y: u32 = parts[2].parse().unwrap_or(0);
+                let _ = write.send(Message::text(pixel_line(x, y))).await;
             }
             "swipe" if parts.len() >= 5 => {
                 // swipe x1 y1 x2 y2 [steps] [delay_ms] — 模拟拖拽（down → moves → up）

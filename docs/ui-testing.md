@@ -168,6 +168,18 @@ tooltips are the one overlay that deliberately lets the press through.
 | range_slider_drags_the_thumb_the_press_resolved | range_slider | a real drag moves the nearer thumb only, and the value lands where the inset axis says |
 | range_slider_keyboard_moves_the_focused_thumb | range_slider | `k Tab` focuses a thumb, `k Arrow*` moves the focused one, another `k Tab` switches (no press involved) |
 | segmented_buttons_pick_and_toggle | segmented_button | a click moves a single-choice selection; a multi-choice item toggles on its own |
+| theme_follows_the_windows_own_switch | theme_follow | `px` reads the frame's centre pixel: pinning dark then light changes what was DRAWN, both ways |
+
+### Reading pixels (`px`)
+
+`t` cannot see everything: a theme-derived color is resolved when a node is built, so every `bg(...)` in
+the tree prints as `<dynamic>`. The debug server's `px <x> <y>` answers one pixel of the current frame as
+text (`PIXEL:<W>x<H>:<x> <y> <r> <g> <b> <a>`, or `PIXEL:<W>x<H>:out-of-frame` / `PIXEL:none`) — the text
+form of the binary `p` frame, which only travels over the WebSocket. Frame pixels are PHYSICAL (a 320-wide
+window at 1.5 scale captures 480), and the reply carries `WxH` so a caller that only knows logical
+coordinates can scale. The harness wraps it as `UiTest::pixel` / `centre_pixel` (the centre needs no scale
+arithmetic) / `wait_centre_luma` (re-reads until the frame moved, since a change lands on a later frame
+than the click that caused it). It asks for a fresh capture (`r`) on every read.
 
 ### Load sensitivity (what the suite tolerates)
 

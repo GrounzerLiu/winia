@@ -144,6 +144,20 @@ fn segmented_button_demo(ctx: &mut ComposeCtx) {
             Text::new("")
                 .modifier(Modifier::new().height(40.0))
                 .build(ctx);
+
+            // The app's OWN theme switch. It takes the same route the platform's `ThemeChanged` event
+            // does — `set_system_dark_mode` -> the pending flag -> `apply_system_theme` in the redraw
+            // loop — so this doubles as the manual check that a live theme change re-composes the tree.
+            section_title(ctx, "Theme (this window's own switch)");
+            Row::new().spacing(8.0).build(ctx, |ctx| {
+                for (label, mode) in [("Auto", None), ("Light", Some(false)), ("Dark", Some(true))] {
+                    Button::text()
+                        .on_click(move || winia::ui::set_system_dark_mode(mode))
+                        .build(ctx, |ctx| {
+                            Text::new(label).build(ctx);
+                        });
+                }
+            });
         });
 }
 
@@ -151,7 +165,7 @@ fn main() {
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
-                .size(460.0, 640.0)
+                .size(460.0, 760.0)
                 .title("Segmented Button Demo")
                 .build(ctx, segmented_button_demo);
         });

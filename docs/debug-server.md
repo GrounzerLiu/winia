@@ -34,6 +34,7 @@ WebSocket 文本命令（空格分隔参数）；stdin 同协议，响应走 std
 | `r` | 请求截图：置标志 + 唤醒循环，下一帧渲染后像素可取 | `screenshot <W>x<H>` |
 | `p` | 取最近一帧像素——**二进制帧** = 8 字节头（W、H 各 u32 LE）+ RGBA | binary / `no frame` |
 | `t` | 读全部窗口布局树 JSON | JSON 字符串 |
+| `px <x> <y>` | one pixel of the current frame as TEXT — `WxH:x y r g b a`, `WxH:out-of-frame` or `none`. The line form of `p`, usable over the stdin channel (a UI test) and easy for a script to parse; the frame must be captured first (`r`). Coordinates are FRAME (physical) pixels and `WxH` comes back with the answer, so a caller that only knows logical coordinates can scale. The layout tree cannot replace it: a theme-derived color is resolved at build time, so every `bg(...)` prints as `<dynamic>`. | `PIXEL:<W>x<H>:…` |
 | `q` | 强制退出应用（测试收尾兜底） | （进程退出） |
 
 ⚠ **坐标均为逻辑像素**（非物理像素；HiDPI 下物理 = 逻辑 × scale_factor，

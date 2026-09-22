@@ -1153,3 +1153,30 @@ fn segmented_buttons_pick_and_toggle() {
     app.expect_text_timeout("bold: false italic: true", Duration::from_secs(5));
 }
 
+/// A window follows a theme change the application makes itself: the switch pins light and dark, and what
+/// was DRAWN changes both ways.
+///
+/// This is the layer the theme regression lived at — the frame behind the tree flipped while every
+/// component kept the colors it started with, because the window's per-frame content wrapper re-provided
+/// the palette sampled when the window was created. Nothing in the layout tree shows it (a theme color is
+/// resolved when the node is built, and `bg(...)` prints as `<dynamic>`), so the assertion reads the
+/// frame: the centre of the window is the fixture's theme-painted surface.
+#[test]
+fn theme_follows_the_windows_own_switch() {
+    let mut app = UiTest::launch("theme_follow");
+
+    // The startup theme is whatever the machine says, so the test establishes both ends itself.
+    app.click_tag("theme-dark");
+    let dark = app.wait_centre_luma(Duration::from_secs(5), |l| l < 96.0);
+    assert!(dark < 96.0, "the dark theme must paint a dark surface, luma={dark}");
+
+    app.click_tag("theme-light");
+    let light = app.wait_centre_luma(Duration::from_secs(5), |l| l > 160.0);
+    assert!(light > 160.0, "the light theme must paint a light surface, luma={light}");
+
+    // And back: a second flip has to land as well (the first one must not have been the only one applied).
+    app.click_tag("theme-dark");
+    let dark_again = app.wait_centre_luma(Duration::from_secs(5), |l| l < 96.0);
+    assert!(dark_again < 96.0, "a second switch to dark must land too, luma={dark_again}");
+}
+

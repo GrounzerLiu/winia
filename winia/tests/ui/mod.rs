@@ -316,6 +316,83 @@ impl UiTest {
         }
     }
 
+    /// One pixel of the CURRENT frame — `(frame_w, frame_h, r, g, b, a)` — in FRAME (physical)
+    /// coordinates; `None` when no frame could be captured or the point is outside it.
+    ///
+    /// A frame is captured only on request (`r`), and the capture lands on the next rendered frame, so
+    /// this asks and waits rather than reading whatever the last capture happened to be. The binary `p`
+    /// frame only travels over the WebSocket; `px` is its text form, which is what this line-based
+    /// channel can carry — and the only way a UI test can see something the layout tree cannot name
+    /// (a theme-derived color is resolved at build time, and every `bg(...)` in the tree is `<dynamic>`).
+    pub fn pixel(&mut self, x: u32, y: u32) -> Option<(u32, u32, u8, u8, u8, u8)> {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            self.send("r");
+            std::thread::sleep(Duration::from_millis(120)); // let the next frame render and be captured
+            self.send(&format!("px {x} {y}"));
+            if let Some(line) = self.read_prefixed_line("PIXEL:", Duration::from_millis(800)) {
+                if let Some(px) = line.strip_prefix("PIXEL:").and_then(parse_pixel_line) {
+                    return Some(px);
+                }
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+        }
+    }
+
+    /// The pixel at the CENTRE of the last captured frame. The one point whose frame coordinates need no
+    /// scale-factor arithmetic: a frame pixel is physical, and a test's other coordinates are logical.
+    pub fn centre_pixel(&mut self) -> Option<(u8, u8, u8, u8)> {
+        let (w, h) = self.frame_size()?;
+        self.pixel(w / 2, h / 2).map(|(_, _, r, g, b, a)| (r, g, b, a))
+    }
+
+    /// Frame (physical) size of the last captured frame.
+    pub fn frame_size(&mut self) -> Option<(u32, u32)> {
+        self.pixel(0, 0).map(|(w, h, ..)| (w, h))
+    }
+
+    /// The centre pixel's luma (0 = black, 255 = white), re-read until it satisfies `pred` or `timeout`
+    /// expires — a theme change lands on a later frame than the click that caused it. Returns the last
+    /// luma seen, so a failing assertion can print what it saw instead of a bare timeout.
+    pub fn wait_centre_luma(&mut self, timeout: Duration, pred: impl Fn(f32) -> bool) -> f32 {
+        let deadline = Instant::now() + timeout;
+        let mut last = -1.0;
+        loop {
+            if let Some((r, g, b, _)) = self.centre_pixel() {
+                last = luma(r, g, b);
+                if pred(last) {
+                    return last;
+                }
+            }
+            if Instant::now() >= deadline {
+                return last;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// Read one line from the fixture's stdout, skipping lines that do not carry `prefix` (device logs
+    /// share the pipe) until `timeout`.
+    fn read_prefixed_line(&mut self, prefix: &str, timeout: Duration) -> Option<String> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return None;
+            }
+            match self.stdout_rx.recv_timeout(remaining) {
+                Ok(line) => {
+                    if line.starts_with(prefix) {
+                        return Some(line);
+                    }
+                }
+                Err(_) => return None,
+            }
+        }
+    }
+
     /// 深度遍历树，收集所有 mod 描述文本
     pub fn all_texts(&self) -> Vec<String> {
         let mut out = Vec::new();
@@ -749,8 +826,26 @@ fn node_tag_is_focused_scoped(tree: &Value, tag: &str, overlay_only: bool) -> bo
     found.unwrap_or(false)
 }
 
-fn count_nodes(tree: &Value) -> usize {
-    fn walk(n: &Value) -> usize {
+/// Perceived brightness of a frame pixel (Rec. 709) — enough for a test to tell a light surface from a
+/// dark one without knowing either palette.
+fn luma(r: u8, g: u8, b: u8) -> f32 {
+    0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32
+}
+
+/// `WxH:<x> <y> <r> <g> <b> <a>` (the debug server's `px` reply, prefix stripped) → `(W, H, r, g, b, a)`.
+/// `None` for its two miss forms, `none` and `WxH:out-of-frame`.
+fn parse_pixel_line(body: &str) -> Option<(u32, u32, u8, u8, u8, u8)> {
+    let (size, rest) = body.split_once(':')?;
+    let (w, h) = size.split_once('x')?;
+    let (w, h): (u32, u32) = (w.parse().ok()?, h.parse().ok()?);
+    let v: Vec<u8> = rest.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+    match v.as_slice() {
+        [_, _, r, g, b, a] => Some((w, h, *r, *g, *b, *a)),
+        _ => None,
+    }
+}
+
+fn count_nodes(tree: &Value) -> usize {    fn walk(n: &Value) -> usize {
         if let Some(arr) = n.as_array() {
             return arr.iter().map(walk).sum();
         }
