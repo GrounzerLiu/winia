@@ -19,8 +19,8 @@ fn section_title(ctx: &mut ComposeCtx, text: &str) {
 fn range_slider_demo(ctx: &mut ComposeCtx) {
     let scroll_y = ctx.remember(|| ScrollState::new()).get();
     let price = ctx.remember(|| RangeValue::new(0.25, 0.75));
-    let hours = ctx.remember(|| RangeValue::new(9.0, 17.0));
-    let custom = ctx.remember(|| RangeValue::new(0.3, 0.6));
+    let hours = ctx.remember(|| RangeValue::new(9.0, 18.0));
+    let custom = ctx.remember(|| RangeValue::new(0.4, 0.6));
 
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(16.0).vertical_scroll(scroll_y))
@@ -39,13 +39,13 @@ fn range_slider_demo(ctx: &mut ComposeCtx) {
                 .color(Color::from_argb(255, 100, 100, 100))
                 .build(ctx);
 
-            section_title(ctx, "Discrete (steps = 4, working hours)");
+            section_title(ctx, "Discrete (steps = 7, working hours)");
             RangeSlider::new(hours.get())
                 .value_range(0.0, 24.0)
-                .steps(4)
+                .steps(7)
                 .on_value_change({ clone!(hours); move |v: RangeValue| hours.set(v) })
                 .build(ctx);
-            Text::new(format!("{:.0}:00 – {:.0}:00 (6 ticks)", hours.get().start, hours.get().end))
+            Text::new(format!("{:.0}:00 – {:.0}:00 (9 stops, every 3 h)", hours.get().start, hours.get().end))
                 .font_size(13.0)
                 .color(Color::from_argb(255, 100, 100, 100))
                 .build(ctx);

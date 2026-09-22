@@ -124,8 +124,13 @@ Gestures:
    position to a value (`value_at_x`) exactly as `Slider` does. The visible difference is at a
    clamp: with winia the thumb follows the finger immediately when it turns around, with Compose the
    accumulated overshoot has to be given back first.
-5. **Snapping happens on gestures only.** A caller-supplied value is rendered as given; Compose's
-   `startValue` / `endValue` setters snap on every assignment.
+5. **Snapping mutates nothing.** The displayed value is snapped to the nearest tick whenever `steps`
+   is set — a caller-supplied range included, which is what Compose does in `RangeSliderState`'s
+   setters — but winia's build never calls `on_value_change`, so the caller's own copy of the value
+   stays as it was passed. A caller that renders its own text can therefore print the unsnapped
+   value next to a snapped thumb, exactly as it can in Compose (`state.startValue = value.start`
+   snaps the state, not the app's variable); the first gesture writes the snapped value back. The
+   single `Slider` follows the same rule.
 6. **Focus as a whole.** Compose puts a `focusable` on each thumb, so Tab moves between them and
    each thumb draws its own ring. winia has one focusable node and the ring wraps the resolved
    thumb.

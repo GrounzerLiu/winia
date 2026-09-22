@@ -275,8 +275,11 @@ impl Slider {
             .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
         let (min, max) = self.value_range;
         let (min, max) = if max > min { (min, max) } else { (min, min + 1.0) };
-        let value = self.value.clamp(min, max);
         let steps = self.steps;
+        // A discrete slider only ever SHOWS an on-tick value: Compose snaps in `SliderState`'s
+        // setter, so a caller-supplied value lands on the nearest tick as well, not just a dragged
+        // one. Without `steps` this is the plain clamp.
+        let value = snap_value(self.value.clamp(min, max), steps, min, max);
         let enabled = self.enabled;
 
         // 交互状态：拇指宽度减半（press/drag/focus——对齐 ThumbContent）
@@ -917,6 +920,24 @@ mod tests {
             Slider::new(1.0).value_range(0.0, 1.0).on_value_change(|_| {}).build(ctx);
         });
         assert!(close(at(&px_max, w_max, 299.0, 24.0), white), "at max there is no tail (got {:?})", at(&px_max, w_max, 299.0, 24.0));
+    }
+
+    /// A discrete slider only ever shows an on-tick value, INCLUDING one the caller passed in:
+    /// Compose snaps in `SliderState`'s setter. Value 0.3 with steps = 4 (ticks 0, .2, .4, .6, .8, 1)
+    /// must therefore draw at 0.4 — thumb centre 8 + 284 × 0.4 = 121.6 — and not between the ticks.
+    #[test]
+    fn discrete_slider_snaps_a_caller_supplied_value() {
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let (px, w) = render_slider_px(|ctx| {
+            Slider::new(0.3).value_range(0.0, 1.0).steps(4).on_value_change(|_| {}).build(ctx);
+        });
+        let prim = (theme.primary.r as i32, theme.primary.g as i32, theme.primary.b as i32);
+        let white = (255, 255, 255);
+        assert!(close(at(&px, w, 121.6, 24.0), prim), "the thumb sits on the 0.4 tick (got {:?})", at(&px, w, 121.6, 24.0));
+        // The active track reaches to one gap before the SNAPPED thumb (113.6): at 110 it is still
+        // active, whereas an unsnapped 0.3 would have ended its fill at 85.2 and left this clear.
+        assert!(close(at(&px, w, 110.0, 24.0), prim), "the fill follows the snapped value (got {:?})", at(&px, w, 110.0, 24.0));
+        assert!(close(at(&px, w, 125.0, 24.0), white), "the gap after the snapped thumb is clear (got {:?})", at(&px, w, 125.0, 24.0));
     }
 
     #[test]
