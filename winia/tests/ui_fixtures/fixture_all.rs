@@ -16,6 +16,8 @@
 
 #[path = "fixture_click.rs"]
 mod click;
+#[path = "fixture_bottom_sheet.rs"]
+mod bottom_sheet;
 #[path = "fixture_dialog_dismiss.rs"]
 mod dialog_dismiss;
 #[path = "fixture_nest.rs"]
@@ -71,6 +73,7 @@ mod top_app_bar;
 /// composing two scenarios in one process would alias their scope keys.
 const SCENARIOS: &[(&str, fn())] = &[
     ("click", click::main),
+    ("bottom_sheet", bottom_sheet::main),
     ("dialog_dismiss", dialog_dismiss::main),
     ("nest", nest::main),
     ("nested_scroll", nested_scroll::main),

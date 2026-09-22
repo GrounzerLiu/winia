@@ -72,10 +72,10 @@ fn sheet_demo(ctx: &mut ComposeCtx) {
                 .modifier(Modifier::new().fill_max_width().padding(16.0))
                 .spacing(8.0)
                 .build(ctx, |ctx| {
-                    Text::new("这是底部面板内容（上拖展开显示更多，在列表内可单独滚动）")
+                    Text::new("这是底部面板内容（上拖先展开面板，展开后列表才滚动；列表在顶部时下滑=关闭）")
                         .font_size(16.0)
                         .build(ctx);
-                    Text::new("拖拽面板：半展开 ↔ 全展开 ↔ 下滑关闭；点击遮罩关闭。列表已切 LazyColumn，支持虚拟滚动与嵌套滚动。")
+                    Text::new("拖拽面板：半展开 ↔ 全展开 ↔ 下滑关闭；点击遮罩关闭。列表 LazyColumn 虚拟滚动；列表已滚动时下滑先滚回列表，滚到顶后继续下滑才折叠面板（对齐 Compose M3 nestedScroll 语义）。")
                         .font_size(12.0)
                         .color(WiniaTheme::colors().on_surface_variant)
                         .build(ctx);
@@ -98,7 +98,7 @@ fn sheet_demo(ctx: &mut ComposeCtx) {
                                                     .fill_max_width()
                                                     .padding(12.0)
                                                     .background(
-                                                        Color::from_argb(255, 245, 245, 247),
+                                                        WiniaTheme::colors().surface_container_high,
                                                         Shape::RoundedRect { corner_radius: 10.0 },
                                                     ),
                                             )
