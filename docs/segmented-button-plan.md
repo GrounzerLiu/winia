@@ -1,7 +1,8 @@
 # SegmentedButton — implementation plan (and how each Compose difference gets closed)
 
-> Status: **in progress** — the one framework addition (`z_index`, §4) is implemented on branch
-> `z-index`; the component itself is not started.
+> Status: **step 2 implemented** — `z_index` (§4, merged) and the component itself (§2, branch
+> `segmented-button`) are done, with its unit, layout and pixel tests and one real-window UI test; its
+> page is `docs/segmented-button.md`. The demo and the `semantics-gap.md` note are still to come.
 > Sources read: `androidx-main` `compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/SegmentedButton.kt`
 > and `.../tokens/OutlinedSegmentedButtonTokens.kt` (the token values below are from the token file, not from memory).
 > Predecessors: the RangeSlider work (merged as `13053fe`) and the popup gesture work.

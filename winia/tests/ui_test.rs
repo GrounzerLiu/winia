@@ -1131,3 +1131,25 @@ fn range_slider_keyboard_moves_the_focused_thumb() {
     app.expect_text("range-start: 0.21");
 }
 
+/// A segmented row's selection follows the click, one item at a time, and a multi-choice row toggles
+/// its items independently — the two behaviours the row scopes differ by, in a real window.
+#[test]
+fn segmented_buttons_pick_and_toggle() {
+    let mut app = UiTest::launch("segmented_button");
+    app.expect_text("picked: 0");
+    // Third item, then back to the first: exactly one is selected either way.
+    app.click_tag("seg-2");
+    app.expect_text_timeout("picked: 2", Duration::from_secs(5));
+    app.click_tag("seg-0");
+    app.expect_text_timeout("picked: 0", Duration::from_secs(5));
+
+    // Multi-choice: each item toggles on its own.
+    app.expect_text("bold: false italic: false");
+    app.click_tag("mseg-0");
+    app.expect_text_timeout("bold: true italic: false", Duration::from_secs(5));
+    app.click_tag("mseg-1");
+    app.expect_text_timeout("bold: true italic: true", Duration::from_secs(5));
+    app.click_tag("mseg-0");
+    app.expect_text_timeout("bold: false italic: true", Duration::from_secs(5));
+}
+
