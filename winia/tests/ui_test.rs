@@ -1099,3 +1099,53 @@ fn range_slider_drags_the_thumb_the_press_resolved() {
     app.expect_text_timeout(&format!("range-end: {v_end:.2}"), Duration::from_secs(5));
     app.expect_text(&start_text);
 }
+
+/// The keyboard follows FOCUS, one thumb at a time — Compose's model for a two-thumb slider.
+///
+/// Each thumb is its own focusable node, so a press hands focus to the thumb it resolved and the
+/// arrow keys move THAT one; Tab moves focus to the other thumb, and the arrows then move it. Before
+/// this the component had a single focus stop plus a "last resolved thumb" state, so the keyboard
+/// target could not be chosen without touching the thumbs.
+///
+/// Non-vacuous by construction: the assertion after the press requires the press to have moved a
+/// thumb, and the arrows must then move the same one — with focus nowhere, the first `ArrowRight`
+/// would only have moved focus and no value would change.
+#[test]
+fn range_slider_keyboard_moves_the_focused_thumb() {
+    let mut app = UiTest::launch("range_slider");
+    app.expect_text("range-start: 0.20");
+    app.expect_text("range-end: 0.80");
+
+    let (x, y, w, h) = app.find_tag("range-slider").expect("no range-slider");
+    let cy = y + h / 2.0;
+    let thumb_x = |f: f32| x + 8.0 + (w - 16.0) * f;
+    let value_at = |px: f32| ((px - x - 8.0) / (w - 16.0)).clamp(0.0, 1.0);
+
+    // Press the START thumb (the gesture path, so `on_press` resolves it and takes focus for it).
+    let px_start = thumb_x(0.2).round();
+    let jumped = value_at(px_start);
+    app.send(&format!("d {} {}", px_start as i32, cy as i32));
+    app.send(&format!("u {} {}", px_start as i32, cy as i32));
+    app.expect_text_timeout(&format!("range-start: {jumped:.2}"), Duration::from_secs(5));
+
+    // The hand-off lands on a later frame than the value change, so wait for the focus to actually be
+    // on the slider's subtree before pressing a key — otherwise this is a race (it flaked once).
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !app.tag_is_focused("range-slider") {
+        assert!(
+            Instant::now() < deadline,
+            "the press should hand focus to the thumb it resolved"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    // One arrow step moves the focused (start) thumb by 1% of the range, and nothing else.
+    let stepped = jumped + 0.01;
+    app.key_until("ArrowRight", &format!("range-start: {stepped:.2}"), Duration::from_secs(5));
+    app.expect_text("range-end: 0.80");
+
+    // Tab hands focus to the END thumb; the arrows now move that one and leave the start alone.
+    app.send("k Tab");
+    app.key_until("ArrowLeft", &format!("range-end: {:.2}", 0.80 - 0.01), Duration::from_secs(5));
+    app.expect_text(&format!("range-start: {stepped:.2}"));
+}

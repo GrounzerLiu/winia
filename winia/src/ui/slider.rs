@@ -503,14 +503,16 @@ pub(crate) struct TrackThumb {
     pub focused: bool,
 }
 
-/// Draw a slider track with one thumb (a `Slider`) or two (a range slider).
+/// Draw the parts of a slider track that are NOT thumbs: the segments, the ticks and the stop
+/// indicators, for the span between `start_value` and `end_value`.
 ///
-/// Both components draw through here, so the range variant is the two-thumbed version of the same
-/// geometry instead of a second reading of the M3 spec. M3 models the track as **independent
-/// capsules** (Compose `drawTrack`):
+/// Split out of [`draw_track`] for the range slider, whose two thumbs are their own nodes (each
+/// focusable — see `crate::ui::range_slider`) so it needs exactly this part. M3 models the track as
+/// **independent capsules** (Compose `drawTrack`):
 /// - left segment `[track_left, start_pos - gap]` — the ACTIVE track when `single_sided` (a single
 ///   slider: everything left of its thumb is active), the inactive one for a range;
-/// - active segment, from `start_pos + gap`, or from `track_left` when the range reaches `min`;
+/// - active segment `[start_pos + gap, end_pos - gap]` — from `track_left` when a single slider's
+///   span starts there;
 /// - right segment `[end_pos + gap, track_right]` — inactive.
 /// - A segment takes the full-round corner (`= track height / 2`) of a track end it reaches and the
 ///   2 dp inside corner of one it faces, and a segment shorter than the round end it owns is not
@@ -520,29 +522,33 @@ pub(crate) struct TrackThumb {
 ///   exactly on its stop indicator — continuous and discrete alike.
 /// - With `steps`, the `steps + 2` ticks sit on that same inset axis; a tick is active inside the
 ///   active segment. A tick or stop a thumb would cover is not drawn, and an outer stop is skipped
-///   when its segment is too short to have left it visible (`overlap_thumb` covers the rest).
-pub(crate) fn draw_track(
+///   when its segment is too short to have left it visible.
+///
+/// `thumb_values` are the values whose thumbs the caller draws (this function draws none of them):
+/// they are what "a thumb would cover" is measured against.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn draw_track_body(
     canvas: &skia_safe::Canvas,
     rect: skia_safe::Rect,
     colors: &SliderColors,
     enabled: bool,
-    thumbs: &[TrackThumb],
+    start_value: f32,
+    end_value: f32,
     min: f32,
     max: f32,
     steps: i32,
     single_sided: bool,
-    focus_alpha: f32,
+    thumb_values: &[f32],
 ) {
     let w = rect.width();
     let h = rect.height();
-    if w <= 0.0 || h <= 0.0 || thumbs.is_empty() { return; }
+    if w <= 0.0 || h <= 0.0 || thumb_values.is_empty() { return; }
     let cy = rect.top + h / 2.0;
 
     let inactive = colors.track_color(enabled, false);
     let active = colors.track_color(enabled, true);
     let inactive_tick = colors.tick_color(enabled, false);
     let active_tick = colors.tick_color(enabled, true);
-    let thumb_c = colors.thumb_color(enabled);
 
     let corner = SLIDER_TRACK_HEIGHT / 2.0;
     let inside = SLIDER_TRACK_INSIDE_CORNER;
@@ -556,10 +562,8 @@ pub(crate) fn draw_track(
     };
     let has_ticks = steps > 0;
 
-    // Thumbs are passed sorted (start first) — the range is what the two of them span.
-    let start_pos = pos_of(thumbs[0].value);
-    let end_thumb = *thumbs.last().unwrap();
-    let end_pos = pos_of(end_thumb.value);
+    let start_pos = pos_of(start_value);
+    let end_pos = pos_of(end_value);
 
     // ── Left segment: [track_left, start_pos - gap] ──
     // Drawn (with its stop indicator) only when it is longer than the round end it owns. Compose's
@@ -595,8 +599,8 @@ pub(crate) fn draw_track(
 
     // ── Ticks (steps + 2 dots) on the inset axis, active inside the active segment ──
     // A tick under a thumb is not drawn (the thumb would sit on top of the stop dot).
-    let overlap_thumb = |x: f32| thumbs.iter().any(|t| {
-        (x - pos_of(t.value)).abs() < (SLIDER_THUMB_WIDTH + SLIDER_TICK_SIZE) / 2.0
+    let overlap_thumb = |x: f32| thumb_values.iter().any(|v| {
+        (x - pos_of(*v)).abs() < (SLIDER_THUMB_WIDTH + SLIDER_TICK_SIZE) / 2.0
     });
     if has_ticks {
         let radius = SLIDER_TICK_SIZE / 2.0;
@@ -631,41 +635,101 @@ pub(crate) fn draw_track(
         sp.set_color(skia_color(stop_end_c));
         canvas.draw_circle(skia_safe::Point::new(track_right - corner, cy), SLIDER_TICK_SIZE / 2.0, &sp);
     }
+}
 
-    // ── Thumbs (4 × 44 capsules; halved width while their gesture runs) ──
-    for t in thumbs {
-        // ⚠ value_pos is already absolute (track_left included) — never add rect.left again, or a
-        // non-root node (rect.left ≠ 0) draws its thumb offset to the right of the track.
-        let tx = pos_of(t.value);
-        let thumb_w = if t.active { SLIDER_ACTIVE_THUMB_WIDTH } else { SLIDER_THUMB_WIDTH };
-        let thumb_h = SLIDER_THUMB_HEIGHT;
-        let rrect = skia_safe::RRect::new_rect_xy(
-            skia_safe::Rect::from_xywh(tx - thumb_w / 2.0, cy - thumb_h / 2.0, thumb_w, thumb_h),
-            thumb_w / 2.0,
-            thumb_w / 2.0,
+/// Draw one thumb capsule centred on `(cx, cy)`, plus its focus ring.
+///
+/// Shared by the single slider (which draws its one thumb from [`draw_track`]) and the range slider
+/// (whose thumbs are their own nodes and call this with their node's centre).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn draw_thumb(
+    canvas: &skia_safe::Canvas,
+    cx: f32,
+    cy: f32,
+    colors: &SliderColors,
+    enabled: bool,
+    active: bool,
+    focused: bool,
+    focus_alpha: f32,
+) {
+    let thumb_c = colors.thumb_color(enabled);
+    // ⚠ `cx` is absolute — the callers add their own origin, and adding one twice is exactly the
+    // bug that drew a thumb right of its track (2026-08 debug-server measurement).
+    let thumb_w = if active { SLIDER_ACTIVE_THUMB_WIDTH } else { SLIDER_THUMB_WIDTH };
+    let thumb_h = SLIDER_THUMB_HEIGHT;
+    let rrect = skia_safe::RRect::new_rect_xy(
+        skia_safe::Rect::from_xywh(cx - thumb_w / 2.0, cy - thumb_h / 2.0, thumb_w, thumb_h),
+        thumb_w / 2.0,
+        thumb_w / 2.0,
+    );
+    let mut tp = skia_safe::Paint::default();
+    tp.set_anti_alias(true);
+    tp.set_color(skia_color(thumb_c));
+    canvas.draw_rrect(rrect, &tp);
+
+    // ── Focus ring around the thumb capsule (not the component rect) ──
+    // The band's centre line sits at the track end's position (end_gap = 8 from the thumb centre) →
+    // the band is 16 apart, the distance between the two track ends.
+    if focused || focus_alpha > 0.001 {
+        // ⚠ Measure from the resting thumb (4 × 44), not the narrowed `thumb_w`: with the active
+        // width the band's centre line lands ±7 instead of ±8 and misses the track ends.
+        let ring_rect = skia_safe::Rect::from_xywh(
+            cx - SLIDER_THUMB_WIDTH / 2.0,
+            cy - SLIDER_THUMB_HEIGHT / 2.0,
+            SLIDER_THUMB_WIDTH,
+            SLIDER_THUMB_HEIGHT,
         );
-        let mut tp = skia_safe::Paint::default();
-        tp.set_anti_alias(true);
-        tp.set_color(skia_color(thumb_c));
-        canvas.draw_rrect(rrect, &tp);
+        // draw_focus puts the band's centre line `gap + ring width / 2 (1.5)` outside the rect.
+        // For a centre line 8 from the thumb centre: gap = 8 - thumb half width (2) - 1.5 = 4.5.
+        let end_gap = SLIDER_THUMB_WIDTH / 2.0 + SLIDER_THUMB_GAP;
+        let ring_gap = end_gap - SLIDER_THUMB_WIDTH / 2.0 - 1.5;
+        crate::render::draw_focus(canvas, ring_rect, &crate::modifier::Shape::Pill, None, thumb_c, focus_alpha, ring_gap);
+    }
+}
 
-        // ── Focus ring around the thumb capsule (not the component rect) ──
-        // The band's centre line sits at the track end's position (end_gap = 8 from the thumb
-        // centre) → the band is 16 apart, the distance between the two track ends.
-        if t.focused || focus_alpha > 0.001 {
-            // ⚠ Measure from the resting thumb (4 × 44), not the narrowed `thumb_w`: with the
-            // active width the band's centre line lands ±7 instead of ±8 and misses the track ends.
-            let ring_rect = skia_safe::Rect::from_xywh(
-                tx - SLIDER_THUMB_WIDTH / 2.0,
-                cy - SLIDER_THUMB_HEIGHT / 2.0,
-                SLIDER_THUMB_WIDTH,
-                SLIDER_THUMB_HEIGHT,
-            );
-            // draw_focus puts the band's centre line `gap + ring width / 2 (1.5)` outside the rect.
-            // For a centre line 8 from the thumb centre: gap = 8 - thumb half width (2) - 1.5 = 4.5.
-            let ring_gap = end_gap - SLIDER_THUMB_WIDTH / 2.0 - 1.5;
-            crate::render::draw_focus(canvas, ring_rect, &crate::modifier::Shape::Pill, None, thumb_c, focus_alpha, ring_gap);
-        }
+/// Draw a slider track: [`draw_track_body`] for the segments, then one [`draw_thumb`] per thumb.
+///
+/// The single slider's entry point; the range slider draws the same body from its own track node and
+/// hosts its thumbs as nodes of their own.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn draw_track(
+    canvas: &skia_safe::Canvas,
+    rect: skia_safe::Rect,
+    colors: &SliderColors,
+    enabled: bool,
+    thumbs: &[TrackThumb],
+    min: f32,
+    max: f32,
+    steps: i32,
+    single_sided: bool,
+    focus_alpha: f32,
+) {
+    if thumbs.is_empty() { return; }
+    let h = rect.height();
+    let cy = rect.top + h / 2.0;
+    let corner = SLIDER_TRACK_HEIGHT / 2.0;
+    let track_w = rect.width();
+    let pos_of = |v: f32| {
+        rect.left + corner + (track_w - 2.0 * corner) * fraction_from_value(v, min, max)
+    };
+    // The span the body draws between: the thumbs are passed sorted, so the first and last are its
+    // ends (for the single slider they are the same thumb).
+    let values: Vec<f32> = thumbs.iter().map(|t| t.value).collect();
+    draw_track_body(
+        canvas,
+        rect,
+        colors,
+        enabled,
+        thumbs[0].value,
+        *values.last().unwrap(),
+        min,
+        max,
+        steps,
+        single_sided,
+        &values,
+    );
+    for t in thumbs {
+        draw_thumb(canvas, pos_of(t.value), cy, colors, enabled, t.active, t.focused, focus_alpha);
     }
 }
 
