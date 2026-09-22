@@ -7,8 +7,11 @@
 use letclone::clone;
 use winia::prelude::*;
 
-/// A plain dot, used as the inactive half of the crossfading pair below.
-const DOT_ICON_PATH: &str = "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z";
+/// The inactive half of the crossfading pair below: Material Icons "circle" (filled, 24 dp viewBox),
+/// from Google's own set — `fonts.google.com/icons?icon.set=materialicons&icon.name=circle`, whose
+/// `24px.svg` carries exactly this `d`. Not the page's own decorative geometry: icon paths are data,
+/// and data gets looked up.
+const CIRCLE_ICON_PATH: &str = "M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2z";
 
 /// Secondary label color, from the theme so it stays readable in both light and dark.
 fn label_color() -> Color {
@@ -95,7 +98,7 @@ fn segmented_button_demo(ctx: &mut ComposeCtx) {
                     })
                     .shape(SegmentedButtonDefaults::item_shape(i, 2))
                     .inactive_icon(|ctx| {
-                        Icon::svg_path(DOT_ICON_PATH)
+                        Icon::svg_path(CIRCLE_ICON_PATH)
                             .size(10.0)
                             .tint(Tint::Color(label_color()))
                             .build(ctx);

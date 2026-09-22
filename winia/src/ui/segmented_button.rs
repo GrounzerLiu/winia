@@ -35,8 +35,13 @@ use crate::ui::text::ProvideTextStyle;
 use crate::ui::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
 
-/// Material Icons "check" (24 dp viewBox, filled) — the icon an active segment shows by default.
-pub const CHECK_ICON_PATH: &str = "M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z";
+/// Material Icons "check" (filled, 24 dp viewBox) — the icon an active segment shows by default.
+///
+/// Taken from Google's own icon set, not from memory: `fonts.google.com/icons` with
+/// `?icon.set=materialicons&icon.name=check` serves exactly this `d` and a `0 0 24 24` viewBox, which is
+/// the coordinate space [`crate::ui::icon::IconSource::svg_path`] assumes. (The same page serves the
+/// Material SYMBOLS variant in a `0 -960 960 960` box — unusable here without rescaling.)
+pub const CHECK_ICON_PATH: &str = "M19.69,5.23L8.96,15.96l-4.23-4.23L2.96,13.5l6,6L21.46,7L19.69,5.23z";
 
 /// The colors of a segmented button, by state (material3 `SegmentedButtonColors`).
 #[derive(Debug, Clone, Copy, PartialEq)]
