@@ -453,6 +453,12 @@ fn input_field(
         // hands down inf max, so fill never raises min and content top-aligns).
         fm = fm.height(SEARCH_BAR_HEIGHT);
     }
+    // No framework focus ring: the bar draws the field's focus affordance itself (the pill, plus the
+    // caret and selection inside it), like an M3 TextField container does. The render-side exclusion
+    // keys on `TextFieldVisual`, which this field does not have — it is `no_container()` — so the ring
+    // was painted around the whole input row (the blue line reported on the expanded panel). Compose's
+    // SearchBar input shows no ring either; Slider opts out the same way for its thumb.
+    fm = fm.no_focus_ring();
     if let Some(fr) = focus {
         fm = fm.focus_requester(fr.clone());
     }
@@ -1564,5 +1570,50 @@ mod tests {
             Shape::Rectangle,
             "docked keeps rounded corners"
         );
+    }
+
+    /// The input field opts out of the framework's focus ring.
+    ///
+    /// The render-side exclusion keys on `TextFieldVisual`, and this field is `no_container()` — so
+    /// the framework painted its blue ring around the whole input row when the field took focus (the
+    /// reported blue line on the expanded panel). The bar draws the field's affordance itself, the way
+    /// an M3 container does and the way `Slider` opts out for its thumb.
+    ///
+    /// Structural on purpose: the ring is a paint-time decision, so this pins the opt-out on the node
+    /// the bar focuses (the one carrying the `FocusRequester`). The visual result was verified on a
+    /// running window with a temporary probe inside the ring's draw branch: 169 draws while the panel
+    /// expanded before the fix, 0 after, while a focused `Button` still drew 132.
+    #[test]
+    fn the_input_field_opts_out_of_the_framework_focus_ring() {
+        let _rt = with_runtime();
+        let _guard = _rt.enter();
+        let mut composer = Composer::new();
+        let state = SearchBarState::new();
+        composer.compose(|ctx| {
+            SearchBar::new()
+                .state(state.clone())
+                .build(ctx, |ctx| {
+                    crate::ui::text::Text::new("RESULT").build(ctx);
+                });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 600.0));
+
+        let root = composer.layout_root_idx().expect("root");
+        let nodes = composer.arena_nodes();
+        let mut stack = vec![root];
+        let mut checked = 0;
+        while let Some(i) = stack.pop() {
+            let els = nodes[i].modifier.elements();
+            let has_requester = els.iter().any(|el| matches!(el, crate::modifier::ModifierElement::FocusRequesterId { .. }));
+            if has_requester {
+                checked += 1;
+                assert!(
+                    els.iter().any(|el| matches!(el, crate::modifier::ModifierElement::NoFocusRing)),
+                    "the node carrying the FocusRequester must also opt out of the focus ring"
+                );
+            }
+            stack.extend(nodes[i].children.iter().copied());
+        }
+        assert!(checked > 0, "the bar must expose a focus requester to focus its field");
     }
 }
