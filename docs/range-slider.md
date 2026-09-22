@@ -61,9 +61,13 @@ the fill and the pixels past it stay clear, single slider and range alike, which
 `a_range_at_an_end_leaves_the_end_clear` pins.
 
 A segment shorter than the round end it owns is not drawn, and neither is its stop indicator (which
-is what the guard `left_seg_end > track_left + threshold` computes). The threshold follows the
-source: `gap + corner` when the track has ticks, `gap` alone otherwise — look at
-`slider::draw_track`'s `left_threshold` / `right_threshold`.
+is what the guard `left_seg_end > track_left + threshold` computes, with `threshold = corner`). The
+corner is required with AND without ticks: Compose's `Track` uses its default
+`enableCornerShrinking = false` for both sliders (the shrinking behaviour belongs to a non-default
+overload this component does not use), so `!enableCornerShrinking || tickFractions.isNotEmpty()` is
+true either way. An earlier revision of `slider::draw_track_body` dropped the corner when a track had
+no ticks and drew sub-corner slivers near the ends that the reference does not —
+`slider_tail_near_max_is_left_clear` now pins the correct behaviour for the single slider.
 
 Ticks (`steps + 2` dots) sit on the inset axis `corner + (w - 2 × corner) × fraction`, so an end
 value's thumb lands exactly on its stop; a tick a thumb would cover is skipped.
@@ -81,10 +85,18 @@ Gestures:
 
 Keyboard and focus — Compose's model, one focus stop per thumb:
 
-- The component is three nodes: the root carries the pointer gestures, and each thumb is its own
-  `focusable` node with its own `on_key_event`. Tab / Shift+Tab move between the two thumbs
-  (`focus_next` / `focus_prev` in tree order), and the arrow keys move the FOCUSED one — 1% of the
-  range without `steps`, one tick with them, PageUp/PageDown ten steps, Home/End the ends.
+- The nesting is: the component's root fills the line and carries the caller's modifier; its single
+  child is the TRACK, which carries the pointer gestures AND draws the body; the track's children are
+  the two thumbs. The gestures sit on the drawing node on purpose — a gesture callback's coordinates
+  are local to the node the gesture resolved, so a caller's `padding` cannot shift the pointer axis
+  away from the drawn one (two earlier arrangements got that wrong; `a_caller_padding_does_not_shift_the_pointer_axis`
+  pins it, and the padding band stays inert as it does in Compose).
+- Each thumb is its own `focusable` node with its own `on_key_event`. Tab / Shift+Tab move between the
+  two thumbs (`focus_next` / `focus_prev` in tree order), and the arrow keys move the FOCUSED one — 1%
+  of the range without `steps`, one tick with them, PageUp/PageDown `(actualSteps / 10).clamp(1, 10)` steps
+  — which is one tick when `steps` is small — and Home/End converge toward the OTHER thumb or the
+  range's end (`Home` on the end thumb collapses onto the start value, `End` on the start thumb onto
+  the end value).
 - A press (or drag start) hands focus to the thumb it resolved (`FocusRequester::request_focus`), so
   the keyboard follows the mouse. Compose leaves that to the platform; a superset, not a gap.
 - Each thumb draws its own focus ring around its own capsule; the track node draws segments, ticks
@@ -105,16 +117,21 @@ Keyboard and focus — Compose's model, one focus stop per thumb:
   change the draw node's key, `track_width` and `focus_alpha` must not) and
   `range_thumb_node_key_covers_all_visual_params` (a thumb's key covers its colors, the halved width
   and its own interaction source, which is what its ring comes from).
-- Layout: `both_thumbs_are_placed_on_the_value_axis` — the row is [track, start thumb, end thumb],
-  the track fills it and each thumb is centred on `thumb_center_x`, the axis both the drawing and the
-  hit test use.
+- Layout: `both_thumbs_are_placed_on_the_value_axis` — the root's single child is the track, the
+  track fills the line and its two children are centred on `thumb_center_x`, the axis both the
+  drawing and the hit test use.
+- The pointer axis under a caller's padding: `a_caller_padding_does_not_shift_the_pointer_axis` —
+  with `padding(16)` pressing the DRAWN thumb must not move it (this is the regression the structure
+  note in §3 describes).
 - Focus plumbing: `each_thumb_is_its_own_focus_target_with_its_own_keys` — both thumbs carry a
-  `focusable`, an `on_key_event` and a `FocusRequester`, and the root carries none (no third stop).
+  `focusable`, an `on_key_event` and a `FocusRequester`, and neither the root nor the track carries
+  one (no third focus stop).
 - Real window: `range_slider_drags_the_thumb_the_press_resolved` and
   `range_slider_keyboard_moves_the_focused_thumb` (`tests/ui_test.rs`, fixture
   `fixture_range_slider`). The drag test was falsified by making `nearest_thumb` always answer
-  `Start`; the keyboard test by removing the focus hand-off (then no thumb has focus and the first
-  arrow only moves focus, so the value assertion fails). The keyboard test waits for the focus to
+  `Start`; the keyboard test by removing the focus hand-off (then nothing has focus, so an arrow key
+  does nothing at all — winia does not move focus for a key no node consumed — and the value
+  assertion fails). The keyboard test waits for the focus to
   land (`tag_is_focused`) before sending a key — the hand-off arrives on a later frame than the value
   change, which made it flaky once — and retries the key itself via the harness's `key_until`.
 

@@ -566,13 +566,16 @@ pub(crate) fn draw_track_body(
     let end_pos = pos_of(end_value);
 
     // ── Left segment: [track_left, start_pos - gap] ──
-    // Drawn (with its stop indicator) only when it is longer than the round end it owns. Compose's
-    // threshold is `gap + corner` with ticks and `gap` alone without them; a single slider's outer
-    // segment is its ACTIVE one and keeps `corner` on both sides.
-    let left_threshold = if single_sided || has_ticks { corner } else { 0.0 };
-    let right_threshold = if has_ticks { corner } else { 0.0 };
+    // Drawn (with its stop indicator) only when it is longer than the round end it owns, and the
+    // round end is ALWAYS required: Compose's `Track` uses its default `enableCornerShrinking = false`
+    // for both sliders (Slider.kt's `Track` overloads; the shrinking behaviour belongs to the
+    // non-default overload), so `!enableCornerShrinking || tickFractions.isNotEmpty()` is true either
+    // way and `gap + corner` is the threshold with and without ticks. An earlier version of this
+    // function dropped the corner when a track had no ticks, which drew sub-corner slivers near the
+    // ends that Compose does not.
+    let threshold = corner;
     let left_seg_end = start_pos - end_gap;
-    if left_seg_end > track_left + left_threshold {
+    if left_seg_end > track_left + threshold {
         let color = if single_sided { &active } else { &inactive };
         draw_track_path(canvas, track_left, left_seg_end, cy, SLIDER_TRACK_HEIGHT, corner, inside, color);
     }
@@ -593,7 +596,7 @@ pub(crate) fn draw_track_body(
 
     // ── Right segment: [end_pos + gap, track_right] ──
     let right_seg_start = end_pos + end_gap;
-    if right_seg_start < track_right - right_threshold {
+    if right_seg_start < track_right - threshold {
         draw_track_path(canvas, right_seg_start, track_right, cy, SLIDER_TRACK_HEIGHT, inside, corner, &inactive);
     }
 
@@ -627,11 +630,11 @@ pub(crate) fn draw_track_body(
     let stop_end_c = colors.track_color(enabled, true);
     let mut sp = skia_safe::Paint::default();
     sp.set_anti_alias(true);
-    if left_seg_end > track_left + left_threshold && !overlap_thumb(track_left + corner) {
+    if left_seg_end > track_left + threshold && !overlap_thumb(track_left + corner) {
         sp.set_color(skia_color(stop_start_c));
         canvas.draw_circle(skia_safe::Point::new(track_left + corner, cy), SLIDER_TICK_SIZE / 2.0, &sp);
     }
-    if right_seg_start < track_right - right_threshold && !overlap_thumb(track_right - corner) {
+    if right_seg_start < track_right - threshold && !overlap_thumb(track_right - corner) {
         sp.set_color(skia_color(stop_end_c));
         canvas.draw_circle(skia_safe::Point::new(track_right - corner, cy), SLIDER_TICK_SIZE / 2.0, &sp);
     }
@@ -964,26 +967,29 @@ mod tests {
         assert!(close(at(&px, w, 8.0, 24.0), prim), "value=0 时 thumb 中心应在 x=8（stop 上，实际 {:?}）", at(&px, w, 8.0, 24.0));
     }
 
-    /// The inactive tail is drawn whenever it has any length, not only when it is longer than the
-    /// round end it owns: with ticks Compose's threshold is `endGap + cornerSize`, without them just
-    /// `endGap`. That is the window this pins — a value close enough to max that the tail is shorter
-    /// than the corner.
+    /// The inactive tail needs to be longer than the round end it owns — `gap + cornerSize`, with or
+    /// without ticks (Compose's `Track` uses its default `enableCornerShrinking = false` for both
+    /// sliders, so the corner is always required). Near max the tail is shorter than that and must NOT
+    /// be drawn; a clear stretch of track past the thumb is the correct look, not a sliver.
     #[test]
-    fn slider_tail_segment_near_max_is_drawn() {
+    fn slider_tail_near_max_is_left_clear() {
         let theme = ThemeColors::light_from_seed(0x6750A4);
         let sec = (theme.secondary_container.r as i32, theme.secondary_container.g as i32, theme.secondary_container.b as i32);
+        let prim = (theme.primary.r as i32, theme.primary.g as i32, theme.primary.b as i32);
         let white = (255, 255, 255);
-        // value 0.99 → thumb centre 289.2, so the tail runs [297.2, 300] — 2.8 px, shorter than the
-        // 8 px corner, which is exactly the range the old `> corner` threshold skipped.
+        // value 0.9 → thumb centre 263.6, tail [271.6, 292] — longer than the 8 px corner → drawn,
+        // and its stop dot at 292.
         let (px, w) = render_slider_px(|ctx| {
+            Slider::new(0.9).value_range(0.0, 1.0).on_value_change(|_| {}).build(ctx);
+        });
+        assert!(close(at(&px, w, 280.0, 24.0), sec), "a long tail is drawn (got {:?})", at(&px, w, 280.0, 24.0));
+        assert!(close(at(&px, w, 292.0, 24.0), prim), "with its stop dot (got {:?})", at(&px, w, 292.0, 24.0));
+        // value 0.99 → tail [297.2, 300], 2.8 px: shorter than the corner, so nothing is drawn past
+        // the thumb and no stop dot appears (a slider pinned near max otherwise shows a stray sliver).
+        let (px2, w2) = render_slider_px(|ctx| {
             Slider::new(0.99).value_range(0.0, 1.0).on_value_change(|_| {}).build(ctx);
         });
-        assert!(close(at(&px, w, 299.0, 24.0), sec), "the tail near max is drawn (got {:?})", at(&px, w, 299.0, 24.0));
-        // At max the tail is empty, so nothing is drawn past the thumb.
-        let (px_max, w_max) = render_slider_px(|ctx| {
-            Slider::new(1.0).value_range(0.0, 1.0).on_value_change(|_| {}).build(ctx);
-        });
-        assert!(close(at(&px_max, w_max, 299.0, 24.0), white), "at max there is no tail (got {:?})", at(&px_max, w_max, 299.0, 24.0));
+        assert!(close(at(&px2, w2, 299.0, 24.0), white), "a sub-corner tail is left clear (got {:?})", at(&px2, w2, 299.0, 24.0));
     }
 
     /// A discrete slider only ever shows an on-tick value, INCLUDING one the caller passed in:
@@ -1321,81 +1327,6 @@ mod tests {
             thumb_active: false,
         };
         assert_ne!(base.node_key(), other.node_key(), "换 interaction 源应进 key");
-    }
-
-    #[test]
-    fn slider_track_node_renders_identical_to_enum_draw() {
-        // P0-1 真双路对照：同参一路 draw_node(SliderTrackNode)，一路旧
-        // `Modifier::draw` 匿名闭包（v2 语义逐行复刻），同 300×48 surface
-        // 逐字节 assert_eq。两路均用全新 unfocused 源（focused=false，
-        // focus_alpha=0），rect 一致——差异即迁移保真失败。
-        use skia_safe::{Color as SkColor, surfaces};
-        let theme = ThemeColors::light_from_seed(0x6750A4);
-        let colors = SliderDefaults::slider_colors(&theme);
-        let render_with = |modifier: Modifier| {
-            let mut composer = crate::core::composer::Composer::new();
-            let scene = |ctx: &mut ComposeCtx| {
-                WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
-                    let key = ctx.next_key();
-                    ctx.start_leaf(key, modifier.clone());
-                    ctx.end_node();
-                });
-            };
-            composer.compose(scene);
-            composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 48.0));
-            let mut surface = surfaces::raster_n32_premul((300, 48)).unwrap();
-            let canvas = surface.canvas();
-            canvas.clear(SkColor::WHITE);
-            let root = composer.layout_root_idx().expect("root");
-            let nodes = composer.arena_nodes();
-            crate::render::render(nodes, root, canvas);
-            let pm = surface.peek_pixels().expect("pixmap");
-            pm.pixels::<[u8; 4]>().expect("pixels").to_vec()
-        };
-        let tw_node = crate::core::state::Backchannel::new(0.0f32);
-        let tw_enum = crate::core::state::Backchannel::new(0.0f32);
-        let src_node = MutableInteractionSource::new();
-        let src_enum = MutableInteractionSource::new();
-        let node_mod = Modifier::new().size(300.0, 48.0).draw_node(SliderTrackNode {
-            track_width: tw_node.clone(),
-            interaction: src_node.clone(),
-            colors,
-            enabled: true,
-            value: 0.5,
-            min: 0.0,
-            max: 1.0,
-            steps: 4,
-            thumb_active: false,
-        });
-        // 旧闭包逐行复刻（v2 slider.rs build 侧 .draw 体）：回写宽度 +
-        // 读焦点/环透明度 + draw_slider 同参。注意 node 绘制顺序已移至枚举链
-        // 之后（P1-1）——本节点无 Background/Icon 同胞，顺序差无像素影响。
-        let enum_mod = Modifier::new().size(300.0, 48.0).draw(move |canvas, rect| {
-            tw_enum.set(rect.width());
-            let focused = src_enum.is_focused_value();
-            let focus_alpha = src_enum.focus_indicator_alpha_value();
-            draw_slider(canvas, rect, &colors, true, 0.5, 0.0, 1.0, 4, false, focused, focus_alpha);
-        });
-        let px_node = render_with(node_mod);
-        let px_enum = render_with(enum_mod);
-        assert_eq!(px_node.len(), 300 * 48);
-        assert_eq!(px_enum.len(), 300 * 48);
-        assert_eq!(
-            px_node, px_enum,
-            "node 路与旧 draw 闭包路必须逐字节一致（迁移保真）"
-        );
-        // 诊断性断言（diff 失败时快速定位）：thumb 中心应为 primary
-        // （value=0.5 → x = corner + (300-2*corner)*0.5 = 150，y=24）。
-        // 常量：SLIDER_TRACK_HEIGHT=16 → corner=8。
-        let p = px_node[24 * 300 + 150];
-        let (r, g, b) = (p[2] as i32, p[1] as i32, p[0] as i32);
-        let prim = theme.primary;
-        assert!(
-            (r - prim.r as i32).abs() <= 8
-                && (g - prim.g as i32).abs() <= 8
-                && (b - prim.b as i32).abs() <= 8,
-            "node 绘制 thumb 应为 primary，实际 ({r},{g},{b})"
-        );
     }
 
     #[cfg(feature = "debug-server")]

@@ -25,6 +25,7 @@
 
 use crate::composable;
 use crate::core::composer::{ComposeCtx, GroupStatus};
+use crate::layout::BoxLayout;
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{LayoutNode, MeasurePolicy, Placement, Point, Size, measure_node};
 use crate::modifier::{FocusRequester, KbEvent, Modifier, Shape};
@@ -85,8 +86,8 @@ pub fn thumb_center_x(value: f32, width: f32, min: f32, max: f32) -> f32 {
 /// A port of Compose's `RangeSliderLogic.compareOffsets` plus the tie-break the press gesture
 /// applies to its result (`if (compare != 0) compare < 0 else state.rawOffsetStart > posX`): the
 /// nearer thumb wins, and on an exact tie the START thumb wins only if it sits to the RIGHT of the
-/// press — which for the two degenerate cases means the start thumb of a collapsed range pressed
-/// from its right, and otherwise the end thumb.
+/// press — i.e. when the press is to its left. For the two degenerate cases that means the start
+/// thumb of a collapsed range pressed from its left, and otherwise the end thumb.
 pub fn nearest_thumb(local_x: f32, width: f32, value: RangeValue, min: f32, max: f32) -> RangeThumb {
     let start_x = thumb_center_x(value.start, width, min, max);
     let end_x = thumb_center_x(value.end, width, min, max);
@@ -186,7 +187,10 @@ impl RangeSlider {
     }
 
     /// Per-thumb interaction sources (Compose's `startInteractionSource` / `endInteractionSource`).
-    /// The start one is also the component's focus source: the component focuses as a whole.
+    ///
+    /// Each thumb is its own focusable node, so the pair is what carries a thumb's pressed / dragged /
+    /// focused state. Passing the SAME source for both thumbs is allowed and means both thumbs share
+    /// that state: both halve in width and both rings light while it reports focus.
     pub fn interaction_sources(
         mut self,
         start: MutableInteractionSource,
@@ -253,10 +257,20 @@ impl RangeSlider {
         let set_value = self.on_value_change.clone();
         let finished = self.on_value_change_finished.clone();
 
-        // The root carries the pointer gestures only; the track and the two thumbs are the children
-        // the policy places.
-        let mut m = Modifier::new().fill_max_width();
+        // The gestures and the track's body share ONE node — a child of the component's own root, so
+        // that node's box is the content box (a caller's `padding` insets it) and the thumbs, placed by
+        // the policy inside it, share that very space. The gesture callback's coordinates are local to
+        // the node the gesture resolved (`fire_gesture_action` subtracts that node's position), so
+        // putting the gestures on the body's node makes the pointer axis and the drawn axis the same
+        // one. Two earlier arrangements got this wrong and shifted the pointer axis by the padding
+        // (measured: pressing a drawn thumb jumped it by 6.3% of the range with `padding(16)`): the
+        // body on the component root with the thumbs as children (children are inset by the padding,
+        // the root's own draw box is not), and once the body's node was the root with the gestures on
+        // an inner node. The padding band is inert here, as Compose's `modifier.padding(16)` leaves a
+        // Slider's own pointer input untouched.
+        let mut m = Modifier::new().fill_max_width().then(self.modifier);
 
+        let mut gestures = Modifier::new();
         if enabled {
             // Press: resolve the nearer thumb, remember it for the gesture, hand it focus (so the
             // arrow keys that follow move THIS thumb), jump it to the pressed position (the same
@@ -267,7 +281,7 @@ impl RangeSlider {
             let fr_e = end_fr.clone();
             let v_press = set_value.clone();
             let a_press = active.clone();
-            m = m.on_press(move |pos| {
+            gestures = gestures.on_press(move |pos| {
                 let thumb = nearest_thumb(pos.0, tw_press.get(), value, min, max);
                 a_press.set(thumb);
                 match thumb {
@@ -292,7 +306,7 @@ impl RangeSlider {
             let v_tap = set_value.clone();
             let f_tap = finished.clone();
             let a_tap = active.clone();
-            m = m.on_tap(move |pos| {
+            gestures = gestures.on_tap(move |pos| {
                 let thumb = nearest_thumb(pos.0, tw_tap.get(), value, min, max);
                 a_tap.set(thumb);
                 match thumb {
@@ -314,7 +328,7 @@ impl RangeSlider {
             let fr_e = end_fr.clone();
             let v_ds = set_value.clone();
             let a_ds = active.clone();
-            m = m.on_drag_start(move |pos| {
+            gestures = gestures.on_drag_start(move |pos| {
                 let thumb = nearest_thumb(pos.0, tw_drag_start.get(), value, min, max);
                 a_ds.set(thumb);
                 match thumb {
@@ -334,7 +348,7 @@ impl RangeSlider {
             });
             let v_dm = set_value.clone();
             let a_dm = active.clone();
-            m = m.on_drag(move |pos, _delta| {
+            gestures = gestures.on_drag(move |pos, _delta| {
                 if let Some(cb) = &v_dm {
                     let nv = value_at_x(pos.0, tw_drag.get(), min, max, steps);
                     cb(range_with_moved_thumb(value, a_dm.get(), nv, min, max));
@@ -344,7 +358,7 @@ impl RangeSlider {
             let src_e = end_source.clone();
             let f_de = finished.clone();
             let a_de = active.clone();
-            m = m.on_drag_end(move || {
+            gestures = gestures.on_drag_end(move || {
                 match a_de.get() {
                     RangeThumb::Start => src_s.emit_drag_end(),
                     RangeThumb::End => src_e.emit_drag_end(),
@@ -356,7 +370,7 @@ impl RangeSlider {
             let src_s = start_source.clone();
             let src_e = end_source.clone();
             let a_dc = active.clone();
-            m = m.on_drag_cancel(move || {
+            gestures = gestures.on_drag_cancel(move || {
                 match a_dc.get() {
                     RangeThumb::Start => src_s.emit_drag_end(),
                     RangeThumb::End => src_e.emit_drag_end(),
@@ -365,15 +379,13 @@ impl RangeSlider {
                 src_e.emit_release();
             });
         }
-        m = m.then(self.modifier);
-
-        match ctx.start_restartable_group(key, m, RangeSliderLayoutPolicy { value, min, max }) {
+        // The root only fills the line and carries the caller's modifier; the track is its single
+        // child (see the note on `m` above).
+        match ctx.start_restartable_group(key, m, BoxLayout::new()) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
-                // Child 0 — the track: the segments, ticks and stop indicators, plus the width
-                // write-back the gesture callbacks convert pixels through. It draws no thumb.
                 let track_key = ctx.next_key();
-                ctx.start_leaf(track_key, Modifier::new()
+                let track_mod = Modifier::new()
                     .fill_max_width()
                     .height(SLIDER_TOUCH_HEIGHT)
                     .draw_node(RangeSliderTrackNode {
@@ -384,49 +396,55 @@ impl RangeSlider {
                         min,
                         max,
                         steps,
-                    }));
-                ctx.end_node();
-
-                // Children 1 and 2 — the thumbs. Each is its own focusable node with its own key
-                // handling, so Tab moves between them and the arrow keys move the FOCUSED thumb;
-                // each draws its own capsule and focus ring.
-                for thumb in [RangeThumb::Start, RangeThumb::End] {
-                    let is_start = thumb == RangeThumb::Start;
-                    let source = if is_start { start_source.clone() } else { end_source.clone() };
-                    let requester = if is_start { start_fr.clone() } else { end_fr.clone() };
-                    let thumb_active = if is_start { start_active } else { end_active };
-                    let mut tm = Modifier::new()
-                        .size(SLIDER_THUMB_WIDTH, SLIDER_THUMB_HEIGHT)
-                        // The ring is self-drawn around the capsule: the framework's ring follows the
-                        // node's own background/border shape, which a bare capsule node has none of.
-                        .no_focus_ring()
-                        .draw_node(RangeThumbNode {
-                            interaction: source.clone(),
-                            colors,
-                            enabled,
-                            active: thumb_active,
-                        });
-                    if enabled {
-                        let v_key = set_value.clone();
-                        let f_key = finished.clone();
-                        tm = tm
-                            .focusable_with_source(&source)
-                            .focus_requester(&requester)
-                            .on_key_event(move |ke: &KbEvent| {
-                                let current = if is_start { value.start } else { value.end };
-                                let cb = v_key.as_ref().map(|cb| {
-                                    let cb = cb.clone();
-                                    Arc::new(move |nv: f32| {
-                                        cb(range_with_moved_thumb(value, thumb, nv, min, max))
-                                    }) as Arc<dyn Fn(f32) + Send + Sync>
+                    })
+                    .then(gestures);
+                match ctx.start_restartable_group(track_key, track_mod, RangeSliderLayoutPolicy { value, min, max }) {
+                    GroupStatus::Skip => {}
+                    GroupStatus::Enter => {
+                        // The two thumbs, children of the track: each is its own focusable node with
+                        // its own key handling, so Tab moves between them and the arrow keys move the
+                        // FOCUSED thumb; each draws its own capsule and focus ring above the body.
+                        for thumb in [RangeThumb::Start, RangeThumb::End] {
+                            let is_start = thumb == RangeThumb::Start;
+                            let source = if is_start { start_source.clone() } else { end_source.clone() };
+                            let requester = if is_start { start_fr.clone() } else { end_fr.clone() };
+                            let thumb_active = if is_start { start_active } else { end_active };
+                            let mut tm = Modifier::new()
+                                .size(SLIDER_THUMB_WIDTH, SLIDER_THUMB_HEIGHT)
+                                // The ring is self-drawn around the capsule: the framework's ring
+                                // follows the node's own background/border shape, which a bare
+                                // capsule node has none of.
+                                .no_focus_ring()
+                                .draw_node(RangeThumbNode {
+                                    interaction: source.clone(),
+                                    colors,
+                                    enabled,
+                                    active: thumb_active,
                                 });
-                                handle_key(ke, current, min, max, steps, &cb, &f_key)
-                            });
+                            if enabled {
+                                let v_key = set_value.clone();
+                                let f_key = finished.clone();
+                                tm = tm
+                                    .focusable_with_source(&source)
+                                    .focus_requester(&requester)
+                                    .on_key_event(move |ke: &KbEvent| {
+                                        let current = if is_start { value.start } else { value.end };
+                                        let cb = v_key.as_ref().map(|cb| {
+                                            let cb = cb.clone();
+                                            Arc::new(move |nv: f32| {
+                                                cb(range_with_moved_thumb(value, thumb, nv, min, max))
+                                            }) as Arc<dyn Fn(f32) + Send + Sync>
+                                        });
+                                        handle_key(ke, current, min, max, steps, &cb, &f_key)
+                                    });
+                            }
+                            let thumb_key = ctx.next_key();
+                            ctx.start_leaf(thumb_key, tm);
+                            ctx.end_node();
+                        }
                     }
-                    let thumb_key = ctx.next_key();
-                    ctx.start_leaf(thumb_key, tm);
-                    ctx.end_node();
                 }
+                ctx.end_restartable_group();
             }
         }
         ctx.end_restartable_group();
@@ -535,10 +553,11 @@ impl crate::modifier::DrawNode for RangeThumbNode {
     }
 }
 
-/// Places the track across the row and the two thumbs on their value positions.
+/// Places the two thumbs on their value positions inside the node that also draws the track body.
 ///
 /// The thumb x comes from [`thumb_center_x`] — the same axis the track draws and `nearest_thumb`
-/// hit-tests on — so drawing, placement and pointer resolution cannot drift apart.
+/// hit-tests on, in the SAME coordinate space (the gesture callback's `pos` is local to this node) —
+/// so drawing, placement and pointer resolution cannot drift apart, a caller's padding included.
 #[derive(Debug)]
 struct RangeSliderLayoutPolicy {
     value: RangeValue,
@@ -555,23 +574,14 @@ impl MeasurePolicy for RangeSliderLayoutPolicy {
         constraints: Constraints,
     ) -> (Size, Vec<Placement>) {
         let row_w = constraints.max_width;
-        // Children are composed in a fixed order: [track, start thumb, end thumb].
-        let (track_size, _) = measure_node(
-            nodes,
-            policies,
-            children[0],
-            Constraints::new(row_w, row_w, 0.0, f32::MAX),
-        );
-        let cy = track_size.height / 2.0;
-        let mut placements = vec![Placement {
-            size: track_size,
-            position: Point::new(0.0, 0.0),
-        }];
+        let height = SLIDER_TOUCH_HEIGHT.min(constraints.max_height);
+        let cy = height / 2.0;
+        let mut placements = Vec::with_capacity(children.len());
         for (i, v) in [self.value.start, self.value.end].iter().enumerate() {
             let (thumb_size, _) = measure_node(
                 nodes,
                 policies,
-                children[1 + i],
+                children[i],
                 Constraints::new(SLIDER_THUMB_WIDTH, SLIDER_THUMB_WIDTH, SLIDER_THUMB_HEIGHT, SLIDER_THUMB_HEIGHT),
             );
             let x = thumb_center_x(*v, row_w, self.min, self.max) - SLIDER_THUMB_WIDTH / 2.0;
@@ -580,7 +590,7 @@ impl MeasurePolicy for RangeSliderLayoutPolicy {
                 position: Point::new(x, cy - SLIDER_THUMB_HEIGHT / 2.0),
             });
         }
-        (Size::new(row_w, track_size.height), placements)
+        (Size::new(row_w, height), placements)
     }
 
     fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]) {
@@ -855,6 +865,7 @@ mod tests {
         press((60.0, 24.0));
         assert_eq!(got.load(Ordering::Relaxed), 183, "the nearer (start) thumb jumped, the end one stayed");
         let _ = drag;
+        let _ = crate::modifier::take_focus_requests();
     }
 
     #[test]
@@ -870,6 +881,10 @@ mod tests {
         drag((10.0, 24.0), (-270.0, 0.0));
         assert_eq!(got.load(Ordering::Relaxed), 250, "the end thumb clamped at the start thumb (0.25)");
         end();
+        // A press queues a focus request in a PROCESS-global queue (`FocusRequester` is
+        // window-agnostic in a windowless test), which would otherwise leak into the modifier
+        // module's own queue assertions and make them order-dependent.
+        let _ = crate::modifier::take_focus_requests();
     }
 
     #[test]
@@ -879,6 +894,7 @@ mod tests {
         // x = 240 is nearer the end thumb → the START thumb keeps 0.25 and the end thumb jumps.
         press((240.0, 24.0));
         assert_eq!(got.load(Ordering::Relaxed), 250, "the start thumb value is unchanged");
+        let _ = crate::modifier::take_focus_requests();
     }
 
     /// Both ends snap to ticks, a caller-supplied range included (see `Slider`'s note): with
@@ -964,8 +980,20 @@ mod tests {
         assert_ne!(base_key, recolored.node_key(), "colors");
     }
 
-    /// The three children are laid out as documented: the track across the row, each thumb centred
-    /// on [`thumb_center_x`] — the axis the drawing and the hit test both use.
+    /// The nesting the component builds: the root fills the line, its single child is the track (the
+    /// node with the gestures and the body), and the track's children are the two thumbs.
+    fn range_nodes(composer: &Composer) -> (usize, usize, [usize; 2]) {
+        let root = composer.layout_root_idx().expect("root");
+        let nodes = composer.arena_nodes();
+        assert_eq!(nodes[root].children.len(), 1, "the root's single child is the track");
+        let track = nodes[root].children[0];
+        let thumbs = nodes[track].children.clone();
+        assert_eq!(thumbs.len(), 2, "the track's children are the two thumbs");
+        (root, track, [thumbs[0], thumbs[1]])
+    }
+
+    /// Both thumbs sit on [`thumb_center_x`] — the axis the drawing and the hit test both use, in the
+    /// track's own space (which is also the space the gesture callbacks report).
     #[test]
     fn both_thumbs_are_placed_on_the_value_axis() {
         let v = RangeValue::new(0.25, 0.75);
@@ -977,17 +1005,13 @@ mod tests {
             });
         });
         composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
-        let root = composer.layout_root_idx().expect("root");
+        let (_root, track, thumbs) = range_nodes(&composer);
         let nodes = composer.arena_nodes();
-        let children = nodes[root].children.clone();
-        assert_eq!(children.len(), 3, "the row holds [track, start thumb, end thumb]");
-
-        let track = &nodes[children[0]];
-        assert_eq!(track.measured_size.width, 300.0, "the track fills the row");
-        assert_eq!(track.measured_size.height, SLIDER_TOUCH_HEIGHT);
+        assert_eq!(nodes[track].measured_size.width, 300.0, "the track fills the line");
+        assert_eq!(nodes[track].measured_size.height, SLIDER_TOUCH_HEIGHT);
 
         for (i, value) in [v.start, v.end].iter().enumerate() {
-            let t = &nodes[children[1 + i]];
+            let t = &nodes[thumbs[i]];
             assert_eq!(t.measured_size.width, SLIDER_THUMB_WIDTH, "thumb {} keeps its resting width", i);
             assert_eq!(t.measured_size.height, SLIDER_THUMB_HEIGHT);
             let expected = thumb_center_x(*value, 300.0, 0.0, 1.0) - SLIDER_THUMB_WIDTH / 2.0;
@@ -998,6 +1022,60 @@ mod tests {
             );
             assert!((t.position.y - (SLIDER_TOUCH_HEIGHT - SLIDER_THUMB_HEIGHT) / 2.0).abs() < 0.01);
         }
+    }
+
+    /// A caller's `padding` must NOT shift the pointer↔value axis.
+    ///
+    /// The track is a child of the component root, so a padding insets it while the gestures live on
+    /// the track itself: the pointer axis and the drawn axis are the same box, and the padding band is
+    /// inert — what Compose's `modifier.padding(16)` does to a Slider too. Two earlier arrangements
+    /// got this wrong (the body on the root with the thumbs as children; then the gestures on the root
+    /// while the body/thumbs were children) and this test measured the difference: pressing a drawn
+    /// thumb jumped it by the padding, 0.313 and then 0.278 where the thumb sat at 0.25.
+    #[test]
+    fn a_caller_padding_does_not_shift_the_pointer_axis() {
+        use skia_safe::surfaces;
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let got = Arc::new(AtomicI32::new(-1));
+        let mut composer = Composer::new();
+        let scene = |ctx: &mut ComposeCtx| {
+            let g = got.clone();
+            WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                RangeSlider::new(RangeValue::new(0.25, 0.75))
+                    .value_range(0.0, 1.0)
+                    .on_value_change(move |v: RangeValue| {
+                        g.store((v.start * 1000.0) as i32, Ordering::Relaxed);
+                    })
+                    .modifier(Modifier::new().padding(16.0))
+                    .build(ctx);
+            });
+        };
+        composer.compose(scene);
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let mut surface = surfaces::raster_n32_premul((300, 300)).unwrap();
+        let root = composer.layout_root_idx().expect("root");
+        crate::render::render(composer.arena_nodes(), root, surface.canvas());
+
+        // The drawn start thumb, in the space the gesture callback receives (the track's own box).
+        let (_root, track, thumbs) = range_nodes(&composer);
+        let nodes = composer.arena_nodes();
+        assert_eq!(nodes[track].measured_size.width, 268.0, "the padding insets the track");
+        let thumb_x = nodes[thumbs[0]].position.x + SLIDER_THUMB_WIDTH / 2.0;
+        let mut press: Option<PressCb> = None;
+        for n in composer.arena_nodes() {
+            for el in n.modifier.elements() {
+                if let ModifierElement::TapOnPress { cb } = el {
+                    press = Some(cb.clone());
+                }
+            }
+        }
+        press.expect("a range slider has a press callback")((thumb_x, 24.0));
+        assert_eq!(
+            got.load(Ordering::Relaxed),
+            250,
+            "pressing the drawn thumb (x={thumb_x}) must not move it — padding shifted the axis"
+        );
+        let _ = crate::modifier::take_focus_requests();
     }
 
     /// Each thumb carries its own focusable node and its own key handling: two focus stops, and a
@@ -1013,10 +1091,9 @@ mod tests {
             });
         });
         composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
-        let root = composer.layout_root_idx().expect("root");
+        let (root, track, thumbs) = range_nodes(&composer);
         let nodes = composer.arena_nodes();
-        let children = nodes[root].children.clone();
-        let focusable_thumbs = children[1..]
+        let focusable_thumbs = thumbs
             .iter()
             .filter(|&&c| {
                 let els = nodes[c].modifier.elements();
@@ -1026,11 +1103,13 @@ mod tests {
             })
             .count();
         assert_eq!(focusable_thumbs, 2, "both thumbs are focusable, carry keys and a focus requester");
-        let root_focusable = nodes[root]
-            .modifier
-            .elements()
-            .iter()
-            .any(|el| matches!(el, ModifierElement::Focusable { .. }));
-        assert!(!root_focusable, "the root holds the gestures, not a third focus stop");
+        for (name, idx) in [("root", root), ("track", track)] {
+            let focusable = nodes[idx]
+                .modifier
+                .elements()
+                .iter()
+                .any(|el| matches!(el, ModifierElement::Focusable { .. }));
+            assert!(!focusable, "the {name} holds the gestures and the body, not a third focus stop");
+        }
     }
 }
