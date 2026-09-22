@@ -217,7 +217,11 @@ the comparison the composer uses for Skip) and `children_have_z_is_recorded_by_t
 
 ## 7. Backlog (other things in flight)
 
-- **SwipeToDismissBox**: file downloaded (`/tmp/compose-ref/SwipeToDismissBox.kt`), not read yet.
+- **SwipeToDismissBox**: the androidx source is read (`/tmp/compose-ref/SwipeToDismissBox.kt`, 406 lines) and
+  the implementation plan is written — `docs/swipe-to-dismiss-plan.md` (API mapping, the 56 dp / 125 dp
+  tokens, the anchored-draggable base winia already has, five differences, the test plan, and the one real
+  risk: our drag routing is depth-based, not axis-aware, so a swipe row inside a vertical list would swallow
+  vertical drags).
 - **A RangeSlider inside a popup is unverified at runtime**: the review confirmed by inspection that the
   focus hand-off resolves in an overlay arena (the queue is drained main-tree-first then overlays, and
   `focus_by_id` searches whichever arena it is given), but no test exercises it. A fixture with a range
