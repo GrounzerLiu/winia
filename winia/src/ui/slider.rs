@@ -557,8 +557,6 @@ pub(crate) fn draw_track(
     let start_pos = pos_of(thumbs[0].value);
     let end_thumb = *thumbs.last().unwrap();
     let end_pos = pos_of(end_thumb.value);
-    let start_frac = fraction_from_value(thumbs[0].value, min, max);
-    let end_frac = fraction_from_value(end_thumb.value, min, max);
 
     // ── Left segment: [track_left, start_pos - gap] ──
     // Drawn (with its stop indicator) only when it is longer than the round end it owns. Compose's
@@ -573,11 +571,13 @@ pub(crate) fn draw_track(
     }
 
     // ── Active segment ──
-    // A RANGE that reaches an end fills to that end and takes its full-round corner (see
-    // `draw_range_slider`'s note); a single slider never does — its active track stops one thumb gap
-    // before the thumb, so at `max` the last `gap` pixels of the track stay clear.
-    let active_left = if single_sided || start_frac <= 0.0 { track_left } else { start_pos + end_gap };
-    let active_right = if !single_sided && end_frac >= 1.0 { track_right } else { end_pos - end_gap };
+    // A single slider's active track starts at the track's left end (Compose's `activeTrackStart =
+    // 0f`) and takes its full-round corner; everything else — the right end of a single slider and
+    // BOTH ends of a range — stops one thumb gap short of its thumb, so the thumb reads as the end
+    // of the fill and the last `gap` pixels stay clear. That is the whole rule; a range that reaches
+    // an end is not special-cased, which is what makes a range look like a single slider at its ends.
+    let active_left = if single_sided { track_left } else { start_pos + end_gap };
+    let active_right = end_pos - end_gap;
     let left_r = if active_left <= track_left { corner } else { inside };
     let right_r = if active_right >= track_right { corner } else { inside };
     if active_right - active_left > left_r.max(right_r) {
