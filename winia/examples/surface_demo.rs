@@ -26,7 +26,7 @@ fn surface_demo(ctx: &mut ComposeCtx) {
                             Text::new("默认 Surface").font_size(14.0).build(ctx);
                             Text::new("主题 surface 底 + on_surface 内容色")
                                 .font_size(11.0)
-                                .color(Color::from_argb(255, 120, 120, 120))
+                                .color(WiniaTheme::colors().on_surface_variant)
                                 .build(ctx);
                         });
                 });

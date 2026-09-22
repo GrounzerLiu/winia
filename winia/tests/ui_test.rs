@@ -1181,6 +1181,36 @@ fn theme_follows_the_windows_own_switch() {
     assert!(dark_again.is_some_and(|l| l < 96.0), "a second switch to dark must land too, luma={dark_again:?}");
 }
 
+/// The type scale and direction a window is DECLARED under reach the window's content.
+///
+/// The content is composed by the window's own composer, not by the declaring tree, so both values have to
+/// be published into the window's theme cell every frame. Dropping that publish changes nothing that
+/// errors: the content silently composes under the defaults (LTR, 14 px). Hence this case — an RTL row
+/// (which mirrors) and a `ListItem` whose height follows `Typography::body_large` (declared as 32 px, vs the
+/// Material default of 16).
+#[test]
+fn the_window_content_composes_under_the_declared_typography_and_direction() {
+    let mut app = UiTest::launch("theme_typography");
+
+    let first = app.find_tag("ttyp-first").expect("the first tagged box");
+    let second = app.find_tag("ttyp-second").expect("the second tagged box");
+    assert!(
+        first.0 > second.0,
+        "the declared RTL direction has to mirror the row: first={first:?}, second={second:?}"
+    );
+
+    let item = app.find_tag("ttyp-headline").expect("the styled headline text");
+    assert!(
+        item.3 > DEFAULT_HEADLINE_HEIGHT,
+        "the declared 32 px type scale has to reach the headline: headline={item:?}"
+    );
+}
+
+/// The same headline text measured under the DEFAULT type scale (`body_large` = 16 px / 24 line height):
+/// its node is 24 px tall, and the declared scale (32 px / 40) has to clear that. Measured, not derived —
+/// the node's height is whatever the text style resolved to.
+const DEFAULT_HEADLINE_HEIGHT: f32 = 30.0;
+
 /// A popup that is ALREADY OPEN follows the theme as well.
 ///
 /// Its content composes in a composer of its own, under a `CompositionLocal` snapshot captured when the

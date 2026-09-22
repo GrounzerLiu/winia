@@ -54,6 +54,8 @@ mod subwindow;
 mod text_field;
 #[path = "fixture_theme_follow.rs"]
 mod theme_follow;
+#[path = "fixture_theme_typography.rs"]
+mod theme_typography;
 #[path = "fixture_toggle.rs"]
 mod toggle;
 #[path = "fixture_top_app_bar.rs"]
@@ -88,6 +90,7 @@ const SCENARIOS: &[(&str, fn())] = &[
     ("subwindow", subwindow::main),
     ("text_field", text_field::main),
     ("theme_follow", theme_follow::main),
+    ("theme_typography", theme_typography::main),
     ("toggle", toggle::main),
     ("top_app_bar", top_app_bar::main),
 ];

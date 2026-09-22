@@ -101,7 +101,7 @@ fn snackbar_demo(ctx: &mut ComposeCtx) {
                 // 底部说明
                 Text::new("说明：Snackbar 显示在窗口底部（Scaffold bottomBar），从底部滑入，自动消失在 show() 内由动画完成回调驱动。")
                     .font_size(12.0)
-                    .color(Color::from_argb(255, 120, 120, 120))
+                    .color(WiniaTheme::colors().on_surface_variant)
                     .build(ctx);
             });
     }

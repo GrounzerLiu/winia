@@ -80,7 +80,7 @@ fn decay_demo(ctx: &mut ComposeCtx) {
 
             Text::new("方块位移由 Decay 驱动（渲染期 peek——动画推进不触发重组）")
                 .font_size(12.0)
-                .color(Color::from_argb(180, 140, 140, 140))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .build(ctx);
         });
 }

@@ -73,7 +73,6 @@ pub(crate) struct PerWindow {
     window_size_backchannel: std::cell::RefCell<Option<crate::core::state::Backchannel<(f32, f32)>>>,
     pub(crate) on_close: Option<Box<dyn FnMut() + Send>>,
     pub(crate) created_id: Option<u64>,
-    theme: crate::ui::theme::ThemeColors,
     /// 渲染帧计数（vsync 研究——Fifo 下应 ~60fps）
     pub(crate) frame_counter: u64,
     /// 上次 request_redraw 时刻（request 节流独立计时——避免与渲染节流共用
@@ -163,9 +162,12 @@ pub(crate) struct PerWindow {
     /// Overlay focus interaction target (overlay id, slot) — overlay inputs
     /// report is_focused() only after emit_focus in their own arena.
     overlay_focused_interaction: Option<(u64, u64)>,
-    /// How this window resolves its theme and the palette it last resolved to. Shared with the `Window`
-    /// node that manages the window (which re-samples the intent every frame) — see `ui::theme::WindowTheme`.
+    /// What this window draws with — the palette it clears the surface with, and the typography/direction
+    /// its tree resolved. Shared with the `Window` node that manages the window (which re-samples all of it
+    /// every frame) — see `ui::theme::WindowTheme`.
     theme_cell: crate::ui::theme::WindowTheme,
+    /// The values `theme_cell` last resolved to, i.e. what the tree has already drawn with.
+    theme_applied: crate::ui::theme::AppliedTheme,
 }
 
 /// 顶层弹出层实例——独立 Composer 组合单元（State 跨帧保持），
@@ -227,9 +229,10 @@ struct PtrDownState {
 impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::ui::theme::ThemeColors) -> Self {
         // A window built without a `Window` node: its palette is whatever the caller passed, so the intent
-        // is that palette (nothing to follow).
+        // is that palette (nothing to follow), and its type scale is the default.
         let theme_cell = crate::ui::theme::WindowTheme::new(crate::ui::theme::ThemeSpec::Fixed(theme));
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), window_size_backchannel: std::cell::RefCell::new(None), on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, last_pointer_pos: None, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, gesture_arena: None, gesture_arena_origin: (0.0, 0.0), drag_scroll: None, overlays: Vec::new(), overlay_click: None, overlay_drag: None, overlay_drag_origin: (0.0, 0.0), overlay_drag_started: false, overlay_drag_last: None, overlay_drag_scroll: None, pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None, overlay_focused_interaction: None, theme_cell }
+        let theme_applied = theme_cell.applied();
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), window_size_backchannel: std::cell::RefCell::new(None), on_close: None, created_id: None, theme_applied, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, last_pointer_pos: None, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, gesture_arena: None, gesture_arena_origin: (0.0, 0.0), drag_scroll: None, overlays: Vec::new(), overlay_click: None, overlay_drag: None, overlay_drag_origin: (0.0, 0.0), overlay_drag_started: false, overlay_drag_last: None, overlay_drag_scroll: None, pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None, overlay_focused_interaction: None, theme_cell }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -564,7 +567,7 @@ impl PerWindow {
             }
         }
 
-        let bg = self.theme.background;
+        let bg = self.theme_applied.colors.background;
 
         if let Some(root_idx) = self.composer.layout_root_idx() {
             let nodes = self.composer.arena_nodes();
@@ -1958,7 +1961,20 @@ impl AppState {
         let theme = pending
             .theme
             .unwrap_or_else(|| crate::ui::theme::WindowTheme::new(crate::ui::theme::ThemeSpec::Auto));
+        // The ONE place a window's content is wrapped in its theme: the declaring tree publishes the cell
+        // before the first frame, and every frame after that composes under it. (`Window::build` used to do
+        // this, which left windows opened through the public API unwrapped — their theme then only reached
+        // the surface clear colour.)
+        let content = {
+            let theme = theme.clone();
+            Box::new(move |ctx: &mut ComposeCtx| theme.provide(ctx, |ctx| content(ctx)))
+                as Box<dyn Fn(&mut ComposeCtx)>
+        };
         let mut pw = PerWindow::new(content, pending.width, pending.height, theme.colors());
+        // What the window has drawn is what the cell says right now — its first frame is about to compose
+        // with exactly this, and a default guess here would both re-run that frame for nothing and miss a
+        // publish that changed a custom type scale back to the default.
+        pw.theme_applied = theme.applied();
         pw.theme_cell = theme;
         pw.on_close = pending.on_close;
         pw.created_id = pending.created_id;
@@ -1992,7 +2008,7 @@ impl AppState {
             (pw.content)(ctx);
         });
         pw.composer.layout(Constraints::new(0.0, pending.width, 0.0, pending.height));
-        let bg = pw.theme.background;
+        let bg = pw.theme_applied.colors.background;
         if let Some(root_idx) = pw.composer.layout_root_idx() {
             let nodes = pw.composer.arena_nodes();
             if let Some(ref mut sw) = pw.skia_window {
@@ -3002,19 +3018,21 @@ fn layout_overlays(pw: &mut PerWindow) {
 }
 
 /// Apply a change of this window's theme: re-resolve it, and when what was drawn is now wrong, re-run the
-/// tree — no component looks at the theme by itself, they resolved their colors when they composed.
+/// tree — no component looks at the theme by itself, they resolved their colours, type scale and direction
+/// when they composed.
 ///
 /// Per WINDOW on purpose: the system theme is process-wide, but "already applied" is not (a single global
 /// pending flag is consumed by whichever window renders first, which left every other window — and every
-/// sub-window of a tree that switched its own theme node — on its old palette). A `Fixed` window resolves
-/// the same palette again and stops here, so a system theme change costs it nothing.
+/// sub-window of a tree that switched its own theme node — on its old palette). A `Fixed` window with the
+/// default type scale resolves the same values again and stops here, so a system theme change costs it
+/// nothing.
 impl PerWindow {
     fn refresh_theme(&mut self) -> bool {
-        if !self.theme_cell.refresh(&mut self.theme) {
+        if !self.theme_cell.refresh(&mut self.theme_applied) {
             return false;
         }
-        // The window's own snapshot (the surface clear color) is `self.theme`, refreshed above; the tree
-        // has to run again for the new palette to reach the components that resolved colors from it.
+        // The window's own snapshot (the surface clear color) is `theme_applied.colors`, refreshed above;
+        // the tree has to run again for the new values to reach the components that resolved them.
         self.composer.mark_content_dirty();
         for ov in &mut self.overlays {
             ov.composer.mark_content_dirty();
@@ -4511,21 +4529,33 @@ mod window_theme_tests {
         pinned.theme_cell = WindowTheme::new(ThemeSpec::Fixed(light));
         first.refresh_theme();
         second.refresh_theme();
-        assert_eq!(first.theme.background, light.background);
-        assert_eq!(second.theme.background, light.background);
+        assert_eq!(first.theme_applied.colors.background, light.background);
+        assert_eq!(second.theme_applied.colors.background, light.background);
 
         crate::ui::theme::set_system_dark_mode(Some(true));
         assert!(first.refresh_theme(), "the first window re-resolves");
         assert!(second.refresh_theme(), "so does the second — the state is per window");
-        assert_eq!(first.theme.background, dark.background);
-        assert_eq!(second.theme.background, dark.background, "the second window must not be left behind");
+        assert_eq!(first.theme_applied.colors.background, dark.background);
+        assert_eq!(
+            second.theme_applied.colors.background, dark.background,
+            "the second window must not be left behind"
+        );
 
         // A pinned window resolves the same palette again and has nothing to redraw.
         assert!(!pinned.refresh_theme(), "a pinned window has nothing to re-run");
-        assert_eq!(pinned.theme.background, light.background);
+        assert_eq!(pinned.theme_applied.colors.background, light.background);
 
         // An idle window does no work either.
         assert!(!first.refresh_theme(), "nothing changed since the last frame");
+
+        // A published TYPE SCALE is a reason to re-run too, with no color change at all: components
+        // resolved their type when they built.
+        crate::ui::theme::set_system_dark_mode(Some(false));
+        let big = crate::ui::theme::Typography { body_large: crate::ui::text::TextStyle::new().font_size(24.0), ..Default::default() };
+        assert!(first.theme_cell.publish(ThemeSpec::Auto, big, crate::layout::LayoutDirection::Ltr));
+        assert!(first.refresh_theme(), "a type-scale change has to reach the tree");
+        assert_eq!(first.theme_applied.typography.body_large.font_size, Some(crate::unit::TextUnit::Sp(crate::unit::Sp(24.0))));
+        assert!(!first.refresh_theme(), "and then it is idle again");
 
         crate::ui::theme::set_system_dark_mode(None);
     }

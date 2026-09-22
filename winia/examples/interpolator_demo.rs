@@ -116,7 +116,7 @@ fn interpolator_demo(ctx: &mut ComposeCtx) {
                                     .build(ctx, |ctx| {
                                         Text::new(*name)
                                             .font_size(12.0)
-                                            .color(Color::from_argb(200, 120, 120, 120))
+                                            .color(WiniaTheme::colors().on_surface_variant)
                                             .build(ctx);
                                     });
                                 // 轨道 + 滑块（Stack 叠放——滑块 graphics_layer 平移）

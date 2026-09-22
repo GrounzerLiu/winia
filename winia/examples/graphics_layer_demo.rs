@@ -6,7 +6,7 @@ use letclone::clone;
 use winia::prelude::*;
 use winia::core::composer::ComposeCtx;
 use winia::composable;
-use winia::modifier::{Color, GraphicsLayerParams, Modifier, Shape};
+use winia::modifier::{GraphicsLayerParams, Modifier, Shape};
 
 #[composable]
 fn graphics_layer_ui(ctx: &mut ComposeCtx) {
@@ -22,14 +22,14 @@ fn graphics_layer_ui(ctx: &mut ComposeCtx) {
         .build(ctx, |ctx| {
             Text::new("GraphicsLayer 3D 演示")
                 .font_size(22.0)
-                .color(Color::from_argb(255, 40, 40, 40))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .build(ctx);
             Text::new(format!(
                 "rotationX={:.0}° rotationY={:.0}° camera={:.0} shadow={:.0}",
                 rx.get(), ry.get(), cam.get(), elev.get()
             ))
             .font_size(14.0)
-            .color(Color::from_argb(255, 90, 90, 90))
+            .color(WiniaTheme::colors().on_surface_variant)
             .build(ctx);
 
             // ── 控制行 ──
@@ -114,7 +114,7 @@ fn graphics_layer_ui(ctx: &mut ComposeCtx) {
 
 fn main() {
     winia::run_app!(|ctx| {
-        WiniaTheme::light(ctx, |ctx| {
+        WiniaTheme::auto(ctx, |ctx| {
             Window::new()
                 .size(640.0, 520.0)
                 .title("GraphicsLayer 3D Demo")

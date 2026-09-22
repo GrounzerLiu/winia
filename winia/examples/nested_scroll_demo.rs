@@ -117,7 +117,7 @@ fn nested_scroll_demo(ctx: &mut ComposeCtx) {
                     Spacer::horizontal(20.0).build(ctx);
                     Text::new("滚轮：内层优先，到底后页面滚")
                         .font_size(11.0)
-                        .color(Color::from_argb(160, 120, 120, 120))
+                        .color(WiniaTheme::colors().on_surface_variant)
                         .build(ctx);
                 });
 
@@ -169,7 +169,7 @@ fn nested_scroll_demo(ctx: &mut ComposeCtx) {
 
 fn main() {
     winia::run_app!(|ctx| {
-        WiniaTheme::light(ctx, |ctx| {
+        WiniaTheme::auto(ctx, |ctx| {
             Window::new()
                 .size(420.0, 720.0)
                 .title("Nested Scroll Demo")

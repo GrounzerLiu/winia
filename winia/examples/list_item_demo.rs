@@ -57,7 +57,7 @@ fn list_item_demo(ctx: &mut ComposeCtx) {
 
 fn main() {
     winia::run_app!(|ctx| {
-        WiniaTheme::light(ctx, |ctx| {
+        WiniaTheme::auto(ctx, |ctx| {
             Window::new().size(460.0, 720.0).title("ListItem Demo").build(ctx, list_item_demo);
         });
     });

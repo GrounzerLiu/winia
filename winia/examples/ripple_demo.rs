@@ -15,7 +15,7 @@ use winia::prelude::*;
 fn section_title(ctx: &mut ComposeCtx, text: &str) {
     Text::new(text)
         .font_size(14.0)
-        .color(Color::from_argb(255, 90, 90, 90))
+        .color(WiniaTheme::colors().on_surface_variant)
         .modifier(Modifier::new().padding_top(14.0).padding_bottom(6.0))
         .build(ctx);
 }
@@ -71,12 +71,12 @@ fn ripple_demo(ctx: &mut ComposeCtx) {
                 .build(ctx);
             Text::new("悬停看背景层；点击看前景层（前景裁剪到背景的范围和形状）")
                 .font_size(13.0)
-                .color(Color::from_argb(255, 100, 100, 100))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .modifier(Modifier::new().padding_top(4.0))
                 .build(ctx);
             Text::new(format!("点击次数：{}", clicks.get()))
                 .font_size(13.0)
-                .color(Color::from_argb(255, 100, 100, 100))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .build(ctx);
 
             section_title(ctx, "bounded（背景裁剪到形状内）");
@@ -87,7 +87,7 @@ fn ripple_demo(ctx: &mut ComposeCtx) {
             section_title(ctx, "unbounded（背景圆直径 = 对角线）");
             Text::new("背景：节点中心、直径=对角线的圆；前景：半径=对角线的圆，裁剪到背景圆内")
                 .font_size(12.0)
-                .color(Color::from_argb(255, 100, 100, 100))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .modifier(Modifier::new().padding_bottom(4.0))
                 .build(ctx);
             ripple_row(ctx, "小圆 24（对角≈34，Switch 拇指场景）", 24.0, 24.0, Shape::Circle, false, &clicks);
@@ -103,7 +103,7 @@ fn ripple_demo(ctx: &mut ComposeCtx) {
 
 fn main() {
     winia::run_app!(|ctx| {
-        WiniaTheme::light(ctx, |ctx| {
+        WiniaTheme::auto(ctx, |ctx| {
             Window::new()
                 .size(560.0, 660.0)
                 .title("Ripple Demo")

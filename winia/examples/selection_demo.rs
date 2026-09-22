@@ -43,7 +43,7 @@ fn selection_ui(ctx: &mut ComposeCtx) {
                     Column::new().build(ctx, |ctx| {
                         Text::new("[A] ").font_size(12.0).color(Color::from_argb(200, 0, 100, 0)).build(ctx);
                         Text::new(t1).font_size(15.0).modifier(Modifier::new().padding(2.0)).build(ctx);
-                        Text::new(t2).font_size(13.0).color(Color::from_argb(200, 60, 60, 60)).modifier(Modifier::new().padding(2.0)).build(ctx);
+                        Text::new(t2).font_size(13.0).color(WiniaTheme::colors().on_surface_variant).modifier(Modifier::new().padding(2.0)).build(ctx);
                         RichText::new().build(ctx, |x| {
                             x.text("RichText: ");
                             x.bold(|x| { x.text("bold "); });
@@ -76,7 +76,7 @@ fn selection_ui(ctx: &mut ComposeCtx) {
                     Column::new().build(ctx, |ctx| {
                         Text::new("[B] ").font_size(12.0).color(Color::from_argb(200, 150, 0, 150)).build(ctx);
                         Text::new(a1).font_size(15.0).modifier(Modifier::new().padding(2.0)).build(ctx);
-                        Text::new(a2).font_size(14.0).color(Color::from_argb(200, 80, 80, 80)).modifier(Modifier::new().padding(2.0)).build(ctx);
+                        Text::new(a2).font_size(14.0).color(WiniaTheme::colors().on_surface_variant).modifier(Modifier::new().padding(2.0)).build(ctx);
                     });
                 });
 

@@ -161,15 +161,20 @@ impl Window {
         }));
 
         // The theme this window resolves against, REMEMBERED across frames: the declaring tree re-runs
-        // every frame and may switch which theme node wraps this window, and the window has to follow that
-        // (a sub-window whose tree flipped from light to dark used to keep the palette it started with).
-        // The cell is shared with the window's own composer — see `ui::theme::WindowTheme`.
+        // every frame and may switch which theme node wraps this window — palette, typography and direction
+        // alike — and the window has to follow that (a sub-window whose tree flipped from light to dark kept
+        // the palette it started with, and a custom type scale survived exactly one frame). The cell is
+        // shared with the window's own composer — see `ui::theme::WindowTheme`.
         let theme = ctx.remember_at_key(key.wrapping_add(1), || {
             crate::ui::theme::WindowTheme::new(crate::ui::theme::current_theme_spec())
         });
         let theme = theme.get();
-        if theme.publish(crate::ui::theme::current_theme_spec()) {
-            // The intent moved in THIS composer, which leaves the window's own composer with nothing
+        if theme.publish(
+            crate::ui::theme::current_theme_spec(),
+            crate::ui::theme::WiniaTheme::typography(),
+            crate::ui::theme::WiniaTheme::direction(),
+        ) {
+            // Something moved in THIS composer, which leaves the window's own composer with nothing
             // pending: ask the loop to schedule its frame.
             let id = created_id.get();
             if id != 0 {
@@ -193,14 +198,12 @@ impl Window {
                 CREATED.lock().unwrap().remove(&id_close);
                 if let Some(ref mut f) = on_close { f(); }
             }));
-            // The content closure runs every frame, so it carries the CELL (a live handle), not a palette:
-            // a captured palette pinned the window to its startup colors — the app's own theme switch
-            // flipped the surface behind the tree while every component kept composing with the old colors.
-            let theme_for_content = theme.clone();
+            // The content closure carries the CELL (a live handle), not a palette: a captured palette pinned
+            // the window to its startup colors — the app's own theme switch flipped the surface behind the
+            // tree while every component kept composing with the old colors. `app::open_window` wraps the
+            // content in it, so this stays a plain closure.
             app::open_window_with_title(w, h, self.state.title.clone(), Some(Box::new(move |ctx| {
-                theme_for_content.provide(ctx, |ctx| {
-                    sub_window_content(ctx, &content);
-                });
+                sub_window_content(ctx, &content);
             })), wrapped, Some(id), Some(theme));
         }
 

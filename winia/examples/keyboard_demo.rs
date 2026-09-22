@@ -7,6 +7,14 @@ use letclone::clone;
 use winia::prelude::*;
 use winit::keyboard::{Key, NamedKey};
 
+/// A neutral highlight over the page — `on_surface` at a low alpha. The black overlay this replaces marked
+/// the focused field on a light page and vanished on a dark one (this demo follows the system theme now),
+/// so the marks have to come from the palette.
+fn highlight(alpha: u8) -> Color {
+    let c = WiniaTheme::colors().on_surface;
+    Color::from_argb(alpha, c.r, c.g, c.b)
+}
+
 fn main() {
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
@@ -28,7 +36,7 @@ fn keyboard_demo_ui(ctx: &mut ComposeCtx) {
         .build(ctx, |ctx| {
 
             Text::new("■ Key Event Demo — Tab to switch focus, type keys")
-                .font_size(15.0).color(Color::from_argb(255, 100, 100, 100)).build(ctx);
+                .font_size(15.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
 
             // ═══ 第一个焦点节点（响应所有按键）═══
             Text::new("▶ Node 1: captures all keys")
@@ -36,7 +44,7 @@ fn keyboard_demo_ui(ctx: &mut ComposeCtx) {
                 .modifier(Modifier::new()
                     .fill_max_width()
                     .padding(10.0)
-                    .background(Color::from_argb(18, 0, 0, 0), Shape::rounded(6.0))
+                    .background(highlight(18), Shape::rounded(6.0))
                     .focusable()
                     .on_key_event({
                         clone!(log);
@@ -56,7 +64,7 @@ fn keyboard_demo_ui(ctx: &mut ComposeCtx) {
                 .modifier(Modifier::new()
                     .fill_max_width()
                     .padding(10.0)
-                    .background(Color::from_argb(18, 0, 0, 0), Shape::rounded(6.0))
+                    .background(highlight(18), Shape::rounded(6.0))
                     .focusable()
                     .on_key_event({
                         clone!(log);
@@ -76,7 +84,7 @@ fn keyboard_demo_ui(ctx: &mut ComposeCtx) {
                 .modifier(Modifier::new()
                     .fill_max_width()
                     .padding(10.0)
-                    .background(Color::from_argb(18, 0, 0, 0), Shape::rounded(6.0))
+                    .background(highlight(18), Shape::rounded(6.0))
                     .focusable()
                     .on_pre_key_event({
                         clone!(log);
@@ -92,11 +100,11 @@ fn keyboard_demo_ui(ctx: &mut ComposeCtx) {
 
             // ═══ 按键日志显示 ═══
             Text::new("■ Event Log (last 5)")
-                .font_size(15.0).color(Color::from_argb(255, 100, 100, 100)).build(ctx);
+                .font_size(15.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
 
             Text::new(log.get())
                 .font_size(12.0)
-                .color(Color::from_argb(255, 180, 180, 180))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .modifier(Modifier::new()
                     .fill_max_width()
                     .padding(8.0)
@@ -104,7 +112,7 @@ fn keyboard_demo_ui(ctx: &mut ComposeCtx) {
                 .build(ctx);
 
             Text::new("Tip: Tab to cycle focus, type keys, Ctrl+S to test preview. Focus is preserved after each keypress.")
-                .font_size(11.0).color(Color::from_argb(255, 120, 120, 120))
+                .font_size(11.0).color(WiniaTheme::colors().on_surface_variant)
                 .modifier(Modifier::new().padding(4.0))
                 .build(ctx);
         });

@@ -18,7 +18,7 @@ fn tab_row_demo(ctx: &mut ComposeCtx) {
     // 外层垂直滚动（内容较多——500px 窗口放不下全部组件）
     let outer_scroll = ctx.remember(|| ScrollState::new()).get();
 
-    WiniaTheme::with_theme_and_direction(ThemeColors::default_light(), direction, ctx, |ctx| {
+    WiniaTheme::with_theme_and_direction(WiniaTheme::colors(), direction, ctx, |ctx| {
         Column::new()
             .modifier(Modifier::new().fill_max_size().vertical_scroll(outer_scroll))
             .build(ctx, |ctx| {

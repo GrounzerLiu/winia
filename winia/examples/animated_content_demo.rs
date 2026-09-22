@@ -80,7 +80,7 @@ fn animated_content_demo(ctx: &mut ComposeCtx) {
 
             Text::new("fade 用 Tween；尺寸用 Spring（bouncy）——切换时卡片宽度平滑过渡")
                 .font_size(12.0)
-                .color(Color::from_argb(180, 140, 140, 140))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .build(ctx);
         });
 }

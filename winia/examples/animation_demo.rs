@@ -66,7 +66,7 @@ fn animation_demo(ctx: &mut ComposeCtx) {
 fn section1(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
     Text::new("1. Spring Bouncy — box width")
         .font_size(14.0)
-        .color(Color::from_argb(200, 100, 100, 100))
+        .color(WiniaTheme::colors().on_surface_variant)
         .build(ctx);
 
     let scale = ctx.animate_float_as_state(
@@ -92,7 +92,7 @@ fn section1(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
 fn section2(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
     Text::new("2. Tween 300ms — background color")
         .font_size(14.0)
-        .color(Color::from_argb(200, 100, 100, 100))
+        .color(WiniaTheme::colors().on_surface_variant)
         .modifier(Modifier::new().padding_vertical(8.0))
         .build(ctx);
 
@@ -123,7 +123,7 @@ fn section2(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
 fn section3(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
     Text::new("3. updateTransition — offset")
         .font_size(14.0)
-        .color(Color::from_argb(200, 100, 100, 100))
+        .color(WiniaTheme::colors().on_surface_variant)
         .modifier(Modifier::new().padding_vertical(8.0))
         .build(ctx);
 
@@ -163,7 +163,7 @@ fn section3(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
 fn section4(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
     Text::new("4. animate_color_as_state (Tween 500ms)")
         .font_size(14.0)
-        .color(Color::from_argb(200, 100, 100, 100))
+        .color(WiniaTheme::colors().on_surface_variant)
         .modifier(Modifier::new().padding_vertical(8.0))
         .build(ctx);
 
@@ -199,7 +199,7 @@ fn section4(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
 fn section5(ctx: &mut ComposeCtx) {
     Text::new("5. rememberInfiniteTransition (Reverse)")
         .font_size(14.0)
-        .color(Color::from_argb(200, 100, 100, 100))
+        .color(WiniaTheme::colors().on_surface_variant)
         .modifier(Modifier::new().padding_vertical(8.0))
         .build(ctx);
 
@@ -239,7 +239,7 @@ fn section5(ctx: &mut ComposeCtx) {
 fn section6(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
     Text::new("6. Keyframes (400ms, overshoot)")
         .font_size(14.0)
-        .color(Color::from_argb(200, 100, 100, 100))
+        .color(WiniaTheme::colors().on_surface_variant)
         .modifier(Modifier::new().padding_vertical(8.0))
         .build(ctx);
 
@@ -263,7 +263,7 @@ fn section6(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
 fn section7(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
     Text::new("7. animateDpAsState (Dp)")
         .font_size(14.0)
-        .color(Color::from_argb(200, 100, 100, 100))
+        .color(WiniaTheme::colors().on_surface_variant)
         .modifier(Modifier::new().padding_vertical(8.0))
         .build(ctx);
 
@@ -283,7 +283,7 @@ fn section8(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
     // 8a. AnimatedSize——尺寸变化自动动画（对标 animateContentSize）
     Text::new("8a. AnimatedSize (尺寸变化动画)")
         .font_size(14.0)
-        .color(Color::from_argb(200, 100, 100, 100))
+        .color(WiniaTheme::colors().on_surface_variant)
         .modifier(Modifier::new().padding_vertical(8.0))
         .build(ctx);
     AnimatedSize::new(TweenSpec::default())
@@ -302,7 +302,7 @@ fn section8(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
     // 8b. Crossfade——内容切换淡入淡出
     Text::new("8b. Crossfade (内容切换)")
         .font_size(14.0)
-        .color(Color::from_argb(200, 100, 100, 100))
+        .color(WiniaTheme::colors().on_surface_variant)
         .modifier(Modifier::new().padding_vertical(8.0))
         .build(ctx);
     let page: winia::core::state::State<u32> = ctx.remember(|| 0u32);
@@ -334,7 +334,7 @@ fn section8(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
     // 8c. Spring 常量 + on_finish 回调
     Text::new("8c. Spring 常量 + finishedListener")
         .font_size(14.0)
-        .color(Color::from_argb(200, 100, 100, 100))
+        .color(WiniaTheme::colors().on_surface_variant)
         .modifier(Modifier::new().padding_vertical(8.0))
         .build(ctx);
     let spring = SpringSpec {
@@ -365,7 +365,7 @@ fn section8(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
         .build(ctx, |_| {});
     Text::new(if done_flag.get() { " 完成回调触发 ✓" } else { " 动画未完成" })
         .font_size(12.0)
-        .color(Color::from_argb(200, 200, 200, 200))
+        .color(WiniaTheme::colors().on_surface_variant)
         .build(ctx);
 }
 
@@ -373,7 +373,7 @@ fn section9(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
     // 9a. animateIntAsState——target 变化自动动画（对标 Compose animateIntAsState）
     Text::new("9a. animateIntAsState (整数动画)")
         .font_size(14.0)
-        .color(Color::from_argb(200, 100, 100, 100))
+        .color(WiniaTheme::colors().on_surface_variant)
         .modifier(Modifier::new().padding_vertical(8.0))
         .build(ctx);
     let animated = winia::animation::animate_int_as_state(
@@ -399,7 +399,7 @@ fn section9(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
     // 9b. animateValueAsState（Color）——颜色自动动画（对标 animateValueAsState<Color>）
     Text::new("9b. animateValueAsState (颜色动画)")
         .font_size(14.0)
-        .color(Color::from_argb(200, 100, 100, 100))
+        .color(WiniaTheme::colors().on_surface_variant)
         .modifier(Modifier::new().padding_vertical(8.0))
         .build(ctx);
     let target_color = if clicked.get() {

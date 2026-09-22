@@ -6,7 +6,7 @@ use winia::prelude::*;
 fn section_title(ctx: &mut ComposeCtx, text: &str) {
     Text::new(text)
         .font_size(14.0)
-        .color(Color::from_argb(255, 90, 90, 90))
+        .color(WiniaTheme::colors().on_surface_variant)
         .modifier(Modifier::new().padding_top(14.0).padding_bottom(6.0))
         .build(ctx);
 }
@@ -103,7 +103,7 @@ fn icon_demo(ctx: &mut ComposeCtx) {
             });
             Text::new(format!("IconButton 总点击 {}", ib_clicks.get()))
                 .font_size(12.0)
-                .color(Color::from_argb(255, 100, 100, 100))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .build(ctx);
 
             section_title(ctx, "IconButton 尺寸变体（XSmall ~ XLarge）");
@@ -126,7 +126,7 @@ fn icon_demo(ctx: &mut ComposeCtx) {
                 });
             Text::new("XSmall 32 / Small 48 / Medium 56 / Large 96 / XLarge 136")
                 .font_size(12.0)
-                .color(Color::from_argb(255, 100, 100, 100))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .build(ctx);
 
             section_title(ctx, "IconToggleButton（点击切换 checked）");
@@ -169,7 +169,7 @@ fn icon_demo(ctx: &mut ComposeCtx) {
                 t3.get()
             ))
                 .font_size(12.0)
-                .color(Color::from_argb(255, 100, 100, 100))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .build(ctx);
 
             section_title(ctx, "Button 带图标（内容 = 居中 Row，对标 M3）");
@@ -247,7 +247,7 @@ fn icon_demo(ctx: &mut ComposeCtx) {
             {
                 Text::new("（构建时加 --features material-symbols-outlined 查看）")
                     .font_size(12.0)
-                    .color(Color::from_argb(255, 120, 120, 120))
+                    .color(WiniaTheme::colors().on_surface_variant)
                     .build(ctx);
             }
 
@@ -280,7 +280,7 @@ fn icon_demo(ctx: &mut ComposeCtx) {
 
 fn main() {
     winia::run_app!(|ctx| {
-        WiniaTheme::light(ctx, |ctx| {
+        WiniaTheme::auto(ctx, |ctx| {
             Window::new()
                 .size(480.0, 640.0)
                 .title("Icon Demo")

@@ -65,7 +65,7 @@ fn gesture_ui(ctx: &mut ComposeCtx) {
                 // 显示上次操作
                 Text::new(format!("Last: {}", last.get()))
                     .font_size(14.0)
-                    .color(Color::from_argb(200, 128, 128, 128))
+                    .color(WiniaTheme::colors().on_surface_variant)
                     .build(ctx);
 
                 // 3. on_pointer_event 完整 Down/Up/Move 测试
@@ -100,7 +100,7 @@ fn gesture_ui(ctx: &mut ComposeCtx) {
 
                 Text::new(format!("Drag pos: ({:.0},{:.0})", drag.get().0, drag.get().1))
                     .font_size(12.0)
-                    .color(Color::from_argb(180, 80, 80, 80))
+                    .color(WiniaTheme::colors().on_surface_variant)
                     .build(ctx);
 
                 // ── 4. 手势：tap / double-tap / long-press（对标 detectTapGestures） ──
@@ -127,7 +127,7 @@ fn gesture_ui(ctx: &mut ComposeCtx) {
                     .build(ctx);
                 Text::new(format!("手势: {}", tap_info.get()))
                     .font_size(12.0)
-                    .color(Color::from_argb(180, 80, 80, 80))
+                    .color(WiniaTheme::colors().on_surface_variant)
                     .build(ctx);
 
                 // ── 5. 手势：drag（方块跟随——对标 detectDragGestures） ──
@@ -169,7 +169,7 @@ fn gesture_ui(ctx: &mut ComposeCtx) {
                     });
                 Text::new(format!("drag: {} (pos {:.0},{:.0})", drag_state.get(), drag_x.get(), drag_y.get()))
                     .font_size(12.0)
-                    .color(Color::from_argb(180, 80, 80, 80))
+                    .color(WiniaTheme::colors().on_surface_variant)
                     .build(ctx);
             });
 }

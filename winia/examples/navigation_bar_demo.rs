@@ -95,7 +95,7 @@ fn navigation_bar_demo(ctx: &mut ComposeCtx) {
     let h_selected = ctx.remember(|| 0usize);
     let favorites = ctx.remember(|| 3i32);
 
-    WiniaTheme::with_theme_and_direction(ThemeColors::default_light(), LayoutDirection::Ltr, ctx, |ctx| {
+    WiniaTheme::with_theme_and_direction(WiniaTheme::colors(), LayoutDirection::Ltr, ctx, |ctx| {
         Column::new()
             .modifier(Modifier::new().fill_max_size())
             .build(ctx, |ctx| {

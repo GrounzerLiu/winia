@@ -28,7 +28,7 @@ fn sticky_header_demo(ctx: &mut ComposeCtx) {
                 .build(ctx);
             Text::new("拖拽/滚轮滚动：header 钉在顶、内容滑过、下一个 header 推走前一个")
                 .font_size(12.0)
-                .color(Color::from_argb(255, 120, 120, 120))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .modifier(Modifier::new().padding(8.0))
                 .build(ctx);
             Text::new(format!(
@@ -42,7 +42,7 @@ fn sticky_header_demo(ctx: &mut ComposeCtx) {
                 }
             ))
             .font_size(12.0)
-            .color(Color::from_argb(255, 120, 120, 120))
+            .color(WiniaTheme::colors().on_surface_variant)
             .modifier(Modifier::new().padding(8.0))
             .build(ctx);
 
@@ -92,7 +92,7 @@ fn sticky_header_demo(ctx: &mut ComposeCtx) {
 
 fn main() {
     winia::run_app!(|ctx| {
-        WiniaTheme::light(ctx, |ctx| {
+        WiniaTheme::auto(ctx, |ctx| {
             Window::new()
                 .size(520.0, 600.0)
                 .title("stickyHeader Demo")

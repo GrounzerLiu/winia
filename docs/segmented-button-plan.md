@@ -231,9 +231,21 @@ the comparison the composer uses for Skip) and `children_have_z_is_recorded_by_t
   unit tests (including the two-window case), two real-window UI tests (a theme switch, and a popup left
   open across it — the `px` pixel read is new infrastructure), and the demo's own Auto / Light / Dark row.
   An earlier reading of this bug ("the invalidation is one layer off") was wrong and is corrected in the
-  commit history. Still open: the window re-provides default typography/direction.
-- **Demo theme sweep**: 29 demos are still pinned to `WiniaTheme::light`, and some carry hard-coded
-  grey labels that only read on a light page.
+  commit history. The window also carries the typography and direction it was declared under (a custom
+  type scale used to survive exactly one frame).
+- **Demo theme sweep**: DONE. All 28 light-pinned demos now use `WiniaTheme::auto`, and the hard-coded grey
+  labels — every `.color(Color::from_argb(A, G, G, G))` with equal channels at most 200 (a white-on-colour
+  label is deliberate and was left alone), 144 sites across 42 examples — became
+  `WiniaTheme::colors().on_surface_variant`, the M3 token for exactly that. A review of the sweep also
+  caught three demos whose content was pinned to `ThemeColors::default_light()` (a dark page with light
+  content), three more with no theme node at all (pinned light by the fallback), and the black
+  `from_argb(A, 0, 0, 0)` overlay boxes that marked regions on a light page — those became a palette
+  highlight (`on_surface` at the same alpha), which is visible in both schemes. Spotted in a dark-scheme
+  screenshot pass (`component_demo`, `icon_demo`, `slider_demo`, `progress_indicator_demo`,
+  `list_item_demo`, `floating_action_button_demo`, `text_demo`); the rest is mechanical and the demos are
+  the surface the user verifies by eye. Still open: the bright illustration boxes in `layout_demo`
+  (`from_argb(180, 180, 180, 200)` and friends) carry the default content colour, so light text sits on a
+  light box in the dark scheme.
 - **Visual sweep of existing components**: render each component's edge states (min/max, disabled,
   empty, tiny, RTL, both schemes) to PNGs and look at them — the range slider's two appearance bugs
   were both found by looking, not by reasoning.

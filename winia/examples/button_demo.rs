@@ -15,7 +15,7 @@ use winia::animation::{AnimationSpec, TweenSpec};
 fn section_title(ctx: &mut ComposeCtx, text: &str) {
     Text::new(text)
         .font_size(14.0)
-        .color(Color::from_argb(255, 90, 90, 90))
+        .color(WiniaTheme::colors().on_surface_variant)
         .modifier(Modifier::new().padding_top(14.0).padding_bottom(6.0))
         .build(ctx);
 }
@@ -148,7 +148,7 @@ fn button_demo(ctx: &mut ComposeCtx) {
                 });
             Text::new("XSmall 32 / Small 40 / Medium 56 / Large 96 / XLarge 136")
                 .font_size(12.0)
-                .color(Color::from_argb(255, 100, 100, 100))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .build(ctx);
 
             section_title(ctx, "带图标（Icon + Text，内容 = 居中 Row）");
@@ -233,7 +233,7 @@ fn button_demo(ctx: &mut ComposeCtx) {
                 st.pressed, st.hovered, st.focused, clicks.get(),
             ))
                 .font_size(12.0)
-                .color(Color::from_argb(255, 100, 100, 100))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .modifier(Modifier::new().padding_top(4.0))
                 .build(ctx);
 
@@ -245,7 +245,7 @@ fn button_demo(ctx: &mut ComposeCtx) {
 
 fn main() {
     winia::run_app!(|ctx| {
-        WiniaTheme::light(ctx, |ctx| {
+        WiniaTheme::auto(ctx, |ctx| {
             Window::new()
                 .size(480.0, 760.0)
                 .title("Button Demo")

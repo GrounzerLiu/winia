@@ -114,7 +114,7 @@ fn draw_wrap_demo(ctx: &mut ComposeCtx) {
                 });
             Text::new("Expect: red card | blue card | white card with green bar hiding text tops")
                 .font_size(12.0)
-                .color(Color::from_argb(255, 120, 120, 120))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .modifier(Modifier::new().padding(8.0))
                 .build(ctx);
         });
@@ -122,7 +122,7 @@ fn draw_wrap_demo(ctx: &mut ComposeCtx) {
 
 fn main() {
     winia::run_app!(|ctx| {
-        WiniaTheme::light(ctx, |ctx| {
+        WiniaTheme::auto(ctx, |ctx| {
             Window::new()
                 .size(520.0, 300.0)
                 .title("DrawWrapNode Demo")

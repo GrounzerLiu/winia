@@ -24,7 +24,7 @@ fn floating_action_button_demo(ctx: &mut ComposeCtx) {
     let click_count = clicks.get();
     let theme = WiniaTheme::colors();
 
-    WiniaTheme::with_theme_and_direction(ThemeColors::default_light(), direction, ctx, |ctx| {
+    WiniaTheme::with_theme_and_direction(WiniaTheme::colors(), direction, ctx, |ctx| {
         Column::new()
             .modifier(Modifier::new().fill_max_size().vertical_scroll(scroll))
             .spacing(18.0)
@@ -127,7 +127,7 @@ fn floating_action_button_demo(ctx: &mut ComposeCtx) {
                     "Toggle 切换收起/展开：宽度、图标位置、文本透明度均按进度插值\n（收起态同普通 FAB 56×56 仅图标居中；展开 min 宽 80）",
                 )
                 .font_size(12.0)
-                .color(Color::from_argb(255, 90, 90, 90))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .build(ctx);
 
                 // ── 填充内容验证滚动 ──
@@ -135,7 +135,7 @@ fn floating_action_button_demo(ctx: &mut ComposeCtx) {
                 for i in 0..12 {
                     Text::new(format!("Filler row {i} - keep scrolling"))
                         .font_size(13.0)
-                        .color(Color::from_argb(255, 120, 120, 120))
+                        .color(WiniaTheme::colors().on_surface_variant)
                         .build(ctx);
                 }
             });
@@ -144,7 +144,7 @@ fn floating_action_button_demo(ctx: &mut ComposeCtx) {
 
 fn main() {
     winia::run_app!(|ctx| {
-        winia::ui::theme::WiniaTheme::light(ctx, |ctx| {
+        winia::ui::theme::WiniaTheme::auto(ctx, |ctx| {
             Window::new()
                 .size(720.0, 520.0)
                 .title("Floating Action Button Demo")

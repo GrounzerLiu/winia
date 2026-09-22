@@ -21,7 +21,7 @@ fn unit_demo(ctx: &mut ComposeCtx) {
 
             Text::new("Text sizes: 22.sp(), 14.sp(), 12.sp(), 10.sp()")
                 .font_size(14.sp())
-                .color(Color::from_argb(200, 100, 100, 100))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .build(ctx);
             // px 字体：20.px() 在 density=2 时逻辑 10
             Text::new("This line uses 20.px() font (density=2 → logical 10)")
@@ -32,17 +32,17 @@ fn unit_demo(ctx: &mut ComposeCtx) {
             // ── 1. Density 信息 ──
             Text::new(format!("Current density: {:.2} (scale_factor)", density.density))
                 .font_size(14.0)
-                .color(Color::from_argb(200, 100, 100, 100))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .build(ctx);
             Text::new(format!("  10.dp() = {:.0}px  20.px() = {:.0} 逻辑像素", 10.dp().to_px(density), 20.px().to_logical(density)))
                 .font_size(12.0)
-                .color(Color::from_argb(180, 120, 120, 120))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .build(ctx);
 
             // ── 2. .size(10.dp(), 20.px()) 混合单位 ──
             Text::new("2. .size(10.dp(), 20.px())")
                 .font_size(14.0)
-                .color(Color::from_argb(200, 100, 100, 100))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .modifier(Modifier::new().padding_vertical(8.0))
                 .build(ctx);
 
@@ -56,7 +56,7 @@ fn unit_demo(ctx: &mut ComposeCtx) {
             // ── 3. 三单位对比（density=2 时 dp 和 px 数量不同但视觉相等）──
             Text::new("3. Unit comparison (10dp vs 20px at density 2.0)")
                 .font_size(14.0)
-                .color(Color::from_argb(200, 100, 100, 100))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .modifier(Modifier::new().padding_vertical(8.0))
                 .build(ctx);
 
@@ -86,7 +86,7 @@ fn unit_demo(ctx: &mut ComposeCtx) {
             // ── 4. Offset/Size 运算 ──
             Text::new("4. Offset / Size arithmetic")
                 .font_size(14.0)
-                .color(Color::from_argb(200, 100, 100, 100))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .modifier(Modifier::new().padding_vertical(8.0))
                 .build(ctx);
 
@@ -97,13 +97,13 @@ fn unit_demo(ctx: &mut ComposeCtx) {
                 offset.x, offset.y, size.contains(Offset::new(50.0, 25.0))
             ))
                 .font_size(12.0)
-                .color(Color::from_argb(180, 120, 120, 120))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .build(ctx);
 
             // ── 5. AnimatableValue（Dp/Offset 可直接动画）──
             Text::new("5. AnimatableValue for Dp/Offset/Size")
                 .font_size(14.0)
-                .color(Color::from_argb(200, 100, 100, 100))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .modifier(Modifier::new().padding_vertical(8.0))
                 .build(ctx);
 
@@ -118,7 +118,7 @@ fn unit_demo(ctx: &mut ComposeCtx) {
                 mid_dp.value(), mid_off.x, mid_off.y
             ))
                 .font_size(12.0)
-                .color(Color::from_argb(180, 120, 120, 120))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .build(ctx);
 
             // ── 撑满空间，演示正常布局 ──

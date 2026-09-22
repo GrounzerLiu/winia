@@ -19,7 +19,7 @@ fn deep_nest(ctx: &mut ComposeCtx, tag: &str) {
         .modifier(Modifier::new().padding(8.0).background(Color::from_argb(40, 120, 200, 120), Shape::rounded(8.0)))
         .build(ctx, |ctx| {
             Text::new(format!("[{tag}] deep nest: Column > Row > Stack > Button > Text"))
-                .font_size(12.0).color(Color::from_argb(180, 60, 60, 60))
+                .font_size(12.0).color(WiniaTheme::colors().on_surface_variant)
                 .build(ctx);
             Row::new().modifier(Modifier::new().padding(4.0)).build(ctx, |ctx| {
                 Stack::new().modifier(Modifier::new().size(120.0, 36.0)).build(ctx, |ctx| {
@@ -152,7 +152,7 @@ fn nest_demo(ctx: &mut ComposeCtx) {
         .modifier(Modifier::new().padding(16.0).fill_max_size().vertical_scroll(ctx.remember(|| ScrollState::new()).get()))
         .build(ctx, |ctx| {
             Text::new("Nesting Demo — #[composable] statement key injection")
-                .font_size(16.0).color(Color::from_argb(220, 30, 30, 30)).build(ctx);
+                .font_size(16.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
 
             // 控制区
             Row::new().build(ctx, |ctx| {

@@ -54,7 +54,7 @@ fn sheet_demo(ctx: &mut ComposeCtx) {
                 .build(ctx, |ctx| Text::new("打开（跳过半展开）").build(ctx));
             Text::new("说明：底部弹出、可拖拽、三态（Hidden/半展开/展开）、点击遮罩关闭。内部已改为 LazyColumn（120 项，虚拟滚动）。")
                 .font_size(12.0)
-                .color(Color::from_argb(255, 120, 120, 120))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .build(ctx);
         });
 
@@ -77,7 +77,7 @@ fn sheet_demo(ctx: &mut ComposeCtx) {
                         .build(ctx);
                     Text::new("拖拽面板：半展开 ↔ 全展开 ↔ 下滑关闭；点击遮罩关闭。列表已切 LazyColumn，支持虚拟滚动与嵌套滚动。")
                         .font_size(12.0)
-                        .color(Color::from_argb(255, 120, 120, 120))
+                        .color(WiniaTheme::colors().on_surface_variant)
                         .build(ctx);
                     // ⚠ LazyColumn nested inside the draggable sheet offset container.
                     Stack::new()
@@ -107,7 +107,7 @@ fn sheet_demo(ctx: &mut ComposeCtx) {
                                                 Text::new(it.title.clone()).font_size(13.0).build(ctx);
                                                 Text::new(it.subtitle.clone())
                                                     .font_size(11.0)
-                                                    .color(Color::from_argb(255, 120, 120, 120))
+                                                    .color(WiniaTheme::colors().on_surface_variant)
                                                     .build(ctx);
                                             });
                                     },
