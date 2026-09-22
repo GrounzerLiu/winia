@@ -267,6 +267,40 @@ impl UiTest {
         out
     }
 
+    /// The `mod` strings of the POPUP entries only. `all_texts` covers the main tree, so popup content
+    /// (a dialog's message, an expanded panel's rows) needs its own accessor to be asserted on.
+    pub fn overlay_texts(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for_each_window_scoped(&self.tree, true, |_id, _ox, _oy, root| {
+            collect_texts_of(root, &mut out)
+        });
+        out
+    }
+
+    /// 断言 popup 条目中出现 `text`（带重试）
+    pub fn expect_overlay_text(&mut self, text: &str) {
+        self.expect_overlay_text_timeout(text, Duration::from_secs(5));
+    }
+
+    /// 断言 popup 条目中出现 `text`（带超时）——与 `expect_text_timeout` 同语义，但只看弹层。
+    pub fn expect_overlay_text_timeout(&mut self, text: &str, timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        loop {
+            self.refresh();
+            let all = self.overlay_texts();
+            if all.iter().any(|t| t.contains(text)) {
+                return;
+            }
+            if Instant::now() > deadline {
+                panic!(
+                    "popup entries never showed `{text}` ({timeout:?}). Popup texts: {}",
+                    all.join(" | ")
+                );
+            }
+            std::thread::sleep(Duration::from_millis(120));
+        }
+    }
+
     /// 提取树中所有 mod 文本（供 click_until 闭包使用）
     pub fn tree_texts(tree: &serde_json::Value) -> Vec<String> {
         let mut out = Vec::new();
@@ -518,6 +552,11 @@ fn tree_size(tree: &Value) -> (f32, f32) {
 }
 
 fn collect_texts(tree: &Value, out: &mut Vec<String>) {
+    for_each_window(tree, |_, root| collect_texts_of(root, out));
+}
+
+/// Collect the `mod` strings of one root node (a window's tree, or a popup entry's).
+fn collect_texts_of(root: &Value, out: &mut Vec<String>) {
     fn walk(n: &Value, out: &mut Vec<String>) {
         // root 可能是数组（根节点列表）
         if let Some(arr) = n.as_array() {
@@ -535,7 +574,7 @@ fn collect_texts(tree: &Value, out: &mut Vec<String>) {
             }
         }
     }
-    for_each_window(tree, |_, root| walk(root, out));
+    walk(root, out);
 }
 
 
