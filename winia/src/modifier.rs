@@ -652,6 +652,10 @@ pub(crate) enum ModifierElement {
     /// `WiniaTheme::with_theme_and_direction`——CompositionLocal 作用域；
     /// 全 demo 切换也走它）。此元素是节点级便捷覆盖。
     LayoutDirection(crate::layout::LayoutDirection),
+    /// Sibling paint order within this node (`Modifier::z_index`) — Compose's `Modifier.zIndex`.
+    /// A higher value paints later, i.e. on top, and the hit test walks the same order in reverse so
+    /// the topmost sibling receives a press first; equal values keep tree order.
+    ZIndex(f32),
     /// TextField 容器子节点角色标记（text-field-v2 容器化——自定义
     /// MeasurePolicy 按角色布局：leading/label/placeholder/prefix/
     /// input/suffix/trailing；仅标记，不参与测量/绘制）
@@ -1258,6 +1262,14 @@ impl Modifier {
     /// `WiniaTheme::with_theme_and_direction`（CompositionLocal 作用域）。
     pub fn layout_direction(self, d: crate::layout::LayoutDirection) -> Self {
         self.push(ModifierElement::LayoutDirection(d))
+    }
+
+    /// Sibling paint order (Compose's `Modifier.zIndex`): a node with a higher `z` paints above its
+    /// siblings, and a press that lands on several of them goes to the highest one. Read at paint and
+    /// hit-test time, so it needs no layout pass of its own; the layout pass does record whether any
+    /// child sets it (`LayoutNode::children_have_z`), which keeps the common case free.
+    pub fn z_index(self, z: f32) -> Self {
+        self.push(ModifierElement::ZIndex(z))
     }
 
     /// TextField 容器子节点角色标记（text-field-v2 容器化内部使用——
@@ -1908,6 +1920,15 @@ impl Modifier {
         })
     }
 
+    /// This node's sibling paint order (`Modifier::z_index`); `None` means "tree order", which is what
+    /// everything that does not set it gets.
+    pub fn get_z_index(&self) -> Option<f32> {
+        self.elements.iter().find_map(|el| match el {
+            ModifierElement::ZIndex(z) => Some(*z),
+            _ => None,
+        })
+    }
+
     pub fn get_padding_sides(&self) -> (f32, f32, f32, f32) {
         use crate::unit::{current_density, Dp, Px};
         let resolve = |sv: &SizeValue| -> f32 {
@@ -2412,6 +2433,7 @@ impl Debug for ModifierElement {
             Self::OnSizeChanged { .. } => f.write_str("OnSizeChanged"),
             Self::TestTag { tag } => f.debug_struct("TestTag").field("tag", tag).finish(),
             Self::LayoutDirection(d) => f.debug_tuple("LayoutDirection").field(d).finish(),
+            Self::ZIndex(z) => f.debug_tuple("ZIndex").field(z).finish(),
             Self::TextFieldSlot { role } => f.debug_struct("TextFieldSlot").field("role", role).finish(),
             Self::Shadow { params, .. } => f.debug_struct("Shadow").field("radius", &params.radius).field("spread", &params.spread).finish(),
             Self::Background { .. } => f.debug_struct("Background").finish(),
@@ -3188,6 +3210,7 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         }
         (TestTag { tag: at }, TestTag { tag: bt }) => at == bt,
         (LayoutDirection(ad), LayoutDirection(bd)) => ad == bd,
+        (ZIndex(az), ZIndex(bz)) => az == bz,
         // Shared-element marker: only scope + key + kind decide Skip. `z_index`
         // is re-read from the arena marker every poll, and everything else
         // (bounds/transform/render_in_overlay) either rides flight progress or
@@ -4348,5 +4371,57 @@ mod node_track_tests {
         let a = Modifier::new().draw_node(TestStatefulBgNode { color_state: color_state.clone() });
         let b = Modifier::new().draw_node(TestStatefulBgNode { color_state: color_state.clone() });
         assert!(a.param_eq(&b), "有状态 node 的 key 与值无关（值走依赖通道）");
+    }
+
+    /// `z_index` is an ordinary modifier element: it reads back, and it takes part in the equality the
+    /// composer uses to decide whether a group may be skipped — a changed z is a changed modifier.
+    #[test]
+    fn z_index_reads_back_and_affects_equality() {
+        let raised = Modifier::new().size(10.0, 10.0).z_index(1.0);
+        assert_eq!(raised.get_z_index(), Some(1.0));
+        assert_eq!(Modifier::new().get_z_index(), None, "no element means tree order");
+        // `param_eq` is the comparison the composer makes to decide Skip.
+        assert!(raised.param_eq(&Modifier::new().size(10.0, 10.0).z_index(1.0)));
+        assert!(!raised.param_eq(&Modifier::new().size(10.0, 10.0).z_index(0.0)), "a changed z is a changed modifier");
+        assert!(!raised.param_eq(&Modifier::new().size(10.0, 10.0)));
+        // The element survives the Debug path (the render trace prints modifiers).
+        assert!(format!("{raised:?}").contains("ZIndex"));
+    }
+
+    /// The layout pass records whether any child sets a z, so the renderer and the hit test can keep
+    /// their plain tree-order loops for every node that does not use the feature.
+    #[test]
+    fn children_have_z_is_recorded_by_the_layout_pass() {
+        use crate::core::composer::{Composer, GroupStatus};
+        use crate::layout::BoxLayout;
+        use crate::layout::constraints::Constraints;
+
+        let layout_root_flag = |raise: bool| {
+            let mut composer = Composer::new();
+            composer.compose(|ctx| {
+                let key = ctx.next_key();
+                match ctx.start_restartable_group(key, Modifier::new().size(100.0, 100.0), BoxLayout::new()) {
+                    GroupStatus::Skip => {}
+                    GroupStatus::Enter => {
+                        for i in 0..2 {
+                            let child_key = ctx.next_key();
+                            let mut m = Modifier::new().size(50.0, 50.0);
+                            if raise && i == 1 {
+                                m = m.z_index(1.0);
+                            }
+                            ctx.start_leaf(child_key, m);
+                            ctx.end_node();
+                        }
+                    }
+                }
+                ctx.end_restartable_group();
+            });
+            composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+            let root = composer.layout_root_idx().expect("root");
+            composer.arena_nodes()[root].children_have_z
+        };
+
+        assert!(!layout_root_flag(false), "no child sets a z → the fast path stays available");
+        assert!(layout_root_flag(true), "a child sets a z → the passes must order");
     }
 }

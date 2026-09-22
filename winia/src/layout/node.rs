@@ -181,6 +181,10 @@ pub struct LayoutNode {
     pub(crate) layout_direction: LayoutDirection,
     /// composable 调用对应的 slot key（用于 replay 时子节点查找）
     pub(crate) slot_key: u64,
+    /// Whether any of this node's children carries `Modifier::z_index`, recorded in the layout pass
+    /// that already walks them. `false` — every node that does not use z-index — lets the renderer and
+    /// the hit test skip the ordering work entirely.
+    pub(crate) children_have_z: bool,
     /// 测量阶段缓存的 Paragraph（避免渲染时重建）
     pub(crate) cached_paragraph: std::cell::RefCell<Option<crate::text::Paragraph>>,
     /// scroll 容器的 viewport 高度（由 measure_node 在布局阶段设值，供 apply_scroll_delta 使用）
@@ -339,6 +343,7 @@ impl LayoutNode {
             layout_dirty: false,
             cached_constraints: None,
             layout_direction: LayoutDirection::Ltr,
+            children_have_z: false,
             slot_key: 0,
             cached_paragraph: std::cell::RefCell::new(None),
             scroll_viewport_height: 0.0, scroll_viewport_width: 0.0, scroll_content_height: 0.0, scroll_content_width: 0.0, scroll_reverse: false, parent_id: None,
@@ -421,6 +426,7 @@ impl Default for LayoutNode {
             layout_dirty: false,
             cached_constraints: None,
             layout_direction: LayoutDirection::Ltr,
+            children_have_z: false,
             slot_key: 0,
             cached_paragraph: std::cell::RefCell::new(None),
             scroll_viewport_height: 0.0, scroll_viewport_width: 0.0, scroll_content_height: 0.0, scroll_content_width: 0.0, scroll_reverse: false, parent_id: None,
@@ -589,6 +595,23 @@ pub trait MeasurePolicy: std::fmt::Debug {
 }
 
 // ── 命中测试 ──
+
+/// Children in PAINT order: tree order, except that a child carrying `Modifier::z_index` moves after
+/// the ones with a lower z (stable, so equal z keeps tree order).
+///
+/// The renderer walks this order to paint and the hit test walks it in reverse, so the topmost sibling
+/// both covers and receives the press — Compose's `Modifier.zIndex` contract (it governs drawing order
+/// and pointer input order alike). Call it only when [`LayoutNode::children_have_z`] says a child
+/// actually sets a z: the common case then keeps iterating `node.children` directly.
+pub fn paint_order(nodes: &[LayoutNode], children: &[usize]) -> Vec<usize> {
+    let mut order = children.to_vec();
+    order.sort_by(|&a, &b| {
+        let za = nodes[a].modifier.get_z_index().unwrap_or(0.0);
+        let zb = nodes[b].modifier.get_z_index().unwrap_or(0.0);
+        za.partial_cmp(&zb).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    order
+}
 
 /// 命中测试：返回从根到叶的节点索引链（arena 版）
 ///
@@ -927,10 +950,20 @@ fn hit_test_recursive(
     let child_py = ny - scroll_dy;
 
     // 深度优先：先检查子节点（子节点在父节点上方）；
-    // ⚠ 兄弟节点**倒序**遍历——绘制按 children 正序（后画在上层），
+    // ⚠ 兄弟节点**倒序**遍历——绘制按 PAINT 顺序（后画在上层），
     // 命中必须后画的优先（z-order 语义）；此前正序导致上层兄弟
-    // （如全屏图片上的矩形）永远命中底层兄弟（Image 铺满遮挡）
-    for &c in node.children.iter().rev() {
+    // （如全屏图片上的矩形）永远命中底层兄弟（Image 铺满遮挡）。
+    // PAINT 顺序 = 树顺序，除非有子节点设了 `Modifier::z_index`
+    // （`paint_order`；z 高的画在后、命中也优先——Compose 同语义），
+    // 所以这里按 paint_order 倒序遍历，常见情形（无 z）与原来完全一致。
+    let ordered;
+    let order: &[usize] = if node.children_have_z {
+        ordered = paint_order(nodes, &node.children);
+        &ordered
+    } else {
+        &node.children
+    };
+    for &c in order.iter().rev() {
         // Shared-element flight (Phase 3): live endpoints (Target/Morph)
         // descend via remap_hit above, so their subtrees stay hittable
         // mid-flight. Only Source-role visuals are skipped — detached
@@ -1056,6 +1089,63 @@ mod tests {
         assert_eq!(path.len(), 0);
     }
 
+    /// `Modifier::z_index` reorders the paint order, and the hit test walks that order in reverse: a
+    /// child raised above its sibling receives the press even though it is composed FIRST.
+    #[test]
+    fn test_hit_test_follows_z_index() {
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new().size(200.0, 200.0)),
+            // Composed first (bottom by tree order), but raised above its sibling.
+            LayoutNode::leaf(Modifier::new().size(100.0, 100.0).z_index(1.0)),
+            LayoutNode::leaf(Modifier::new().size(100.0, 100.0)),
+        ];
+        nodes[0].measured_size = Size::new(200.0, 200.0);
+        nodes[1].measured_size = Size::new(100.0, 100.0);
+        nodes[2].measured_size = Size::new(100.0, 100.0);
+        nodes[1].position = Point::new(0.0, 0.0);
+        nodes[2].position = Point::new(0.0, 0.0);
+        nodes[0].children = vec![1, 2];
+        nodes[0].children_have_z = true;
+
+        // (40,40) is inside both; the raised sibling wins over the later-composed one.
+        assert_eq!(hit_test(&nodes, 0, 40.0, 40.0), vec![0, 1], "the raised sibling receives the press");
+        // ...and outside the raised sibling's own box the other one still gets it.
+        nodes[1].measured_size = Size::new(20.0, 20.0);
+        assert_eq!(hit_test(&nodes, 0, 40.0, 40.0), vec![0, 2], "outside the raised box, the sibling does");
+    }
+
+    /// Without any z the order is plain tree order (the fast path the renderer takes): the LATER child
+    /// is the topmost one, exactly as before this feature existed.
+    #[test]
+    fn test_hit_test_without_z_keeps_tree_order() {
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new().size(200.0, 200.0)),
+            LayoutNode::leaf(Modifier::new().size(100.0, 100.0)),
+            LayoutNode::leaf(Modifier::new().size(100.0, 100.0)),
+        ];
+        nodes[0].measured_size = Size::new(200.0, 200.0);
+        nodes[1].measured_size = Size::new(100.0, 100.0);
+        nodes[2].measured_size = Size::new(100.0, 100.0);
+        nodes[0].children = vec![1, 2];
+        assert!(!nodes[0].children_have_z, "nothing sets a z here");
+        assert_eq!(hit_test(&nodes, 0, 40.0, 40.0), vec![0, 2]);
+    }
+
+    /// `paint_order` is the shared ordering rule: stable (equal z keeps tree order) and total (a NaN z
+    /// compares as equal rather than panicking, so a broken value cannot take the frame down).
+    #[test]
+    fn paint_order_is_stable_and_total() {
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new()),
+            LayoutNode::leaf(Modifier::new().z_index(1.0)),
+            LayoutNode::leaf(Modifier::new()),
+            LayoutNode::leaf(Modifier::new().z_index(-1.0)),
+            LayoutNode::leaf(Modifier::new().z_index(f32::NAN)),
+        ];
+        assert_eq!(paint_order(&nodes, &[1, 2, 3, 4]), vec![3, 2, 1, 4], "z ascending, ties in tree order");
+        nodes[4].modifier = Modifier::new().z_index(1.0);
+        assert_eq!(paint_order(&nodes, &[1, 4]), vec![1, 4], "equal z keeps tree order");
+    }
     #[test]
     fn test_scroll_offset_rtl_reverse_mirrors() {
         // RTL（scroll_reverse）回归：hit_test 坐标转换必须用 render 的镜像
@@ -2097,6 +2187,12 @@ fn measure_node_inner(
         }
         // apply positions
         policies[pidx].place(nodes, &children, &placements);
+        // Record whether any child asks for a paint order of its own (`Modifier::z_index`). The
+        // renderer and the hit test consult this before doing any ordering work, so the common case
+        // (nobody sets a z) pays nothing for the feature existing.
+        nodes[idx].children_have_z = children
+            .iter()
+            .any(|&c| nodes[c].modifier.get_z_index().is_some());
         // apply padding offset（RTL：start 在右——子靠右偏移）
         let rtl = nodes[idx].layout_direction == LayoutDirection::Rtl;
         let left_offset = if rtl { pad_end } else { pad_start };
