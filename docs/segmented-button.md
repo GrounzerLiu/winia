@@ -65,10 +65,11 @@ Colors resolve from `enabled × active` (Compose's `containerColor` / `contentCo
 - **Check.** Both flavours show a check while active (Compose's `SegmentedButtonDefaults.Icon(active)`
   is the default in either row scope). It appears through a graphics layer whose scale and alpha ride
   one progress value about the BOTTOM-LEFT corner — `scaleIn(initialScale = 0f, transformOrigin =
-  TransformOrigin(0f, 1f))` plus `fadeIn` — and is simply not composed when the segment goes inactive,
-  which is the source's `exit = None`. `.inactive_icon(...)` crossfades the pair instead of sliding the
-  content. The spring parameters are ours: Compose publishes no tokens for this animation (the source
-  carries its own TODO).
+  TransformOrigin(0f, 1f))` plus `fadeIn` — and goes invisible the moment the segment is inactive, which
+  is the source's `exit = None` (no exit animation). The spring parameters are ours: Compose publishes
+  no tokens for this animation (the source carries its own TODO). `.inactive_icon(...)` switches to the
+  source's other branch: the slot holds an icon in both states and the two fade between each other
+  through the framework's `Crossfade` (see the difference below), so nothing slides.
 - **Stacking.** A checked item carries `z_index(5)` and a pressed or focused one `z_index(1)`
   (`Modifier::z_index`); an idle item carries none, so a row where everything is idle keeps the
   renderer's plain tree-order loop. Compose counts interactions instead of testing two booleans, which
@@ -87,9 +88,12 @@ Colors resolve from `enabled × active` (Compose's `containerColor` / `contentCo
    composable to `icon`/`label` and a `BorderStroke` per item; winia offers `.icon` / `.inactive_icon`,
    a label closure, `.content_padding` and `.border(width, color)` — enough for the shape of the API but
    not for, say, an icon plus a trailing badge inside one segment.
-4. **Crossfade, not Compose's `Crossfade`.** With `.inactive_icon(...)` the pair swaps through the icon
-   slot; Compose's `Crossfade` runs an `animateFloatAsState`-style fade between them. Both keep the
-   content still; the curve differs.
+4. **The crossfading pair uses this framework's `Crossfade`.** With `.inactive_icon(...)` the slot is
+   occupied in both states and the two icons fade between each other, as Compose's
+   `Crossfade(targetState = active)` does — but ours fades the outgoing one out, swaps, and fades the
+   incoming one in (sequential), where Compose's cross-dissolves the two at once. The visible
+   difference is a brief empty slot in the middle of the swap; the slot is occupied at rest either way,
+   which is what keeps the label still.
 5. **`z_index` is per item, not per interaction count.** Two simultaneous interactions (say a press on
    one item and focus on another) both sit at `+1` here, where Compose's counter would separate them.
 
