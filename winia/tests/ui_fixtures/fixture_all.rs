@@ -46,6 +46,8 @@ mod scaffold;
 mod scroll;
 #[path = "fixture_search_results.rs"]
 mod search_results;
+#[path = "fixture_segmented_button.rs"]
+mod segmented_button;
 #[path = "fixture_subwindow.rs"]
 mod subwindow;
 #[path = "fixture_text_field.rs"]
@@ -80,6 +82,7 @@ const SCENARIOS: &[(&str, fn())] = &[
     ("scaffold", scaffold::main),
     ("scroll", scroll::main),
     ("search_results", search_results::main),
+    ("segmented_button", segmented_button::main),
     ("subwindow", subwindow::main),
     ("text_field", text_field::main),
     ("toggle", toggle::main),

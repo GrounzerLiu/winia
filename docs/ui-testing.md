@@ -167,6 +167,7 @@ tooltips are the one overlay that deliberately lets the press through.
 | clicking_an_overlay_button_does_not_steal_focus | overlay_focus | a popup clickable does not take focus from the field beside it |
 | range_slider_drags_the_thumb_the_press_resolved | range_slider | a real drag moves the nearer thumb only, and the value lands where the inset axis says |
 | range_slider_keyboard_moves_the_focused_thumb | range_slider | `k Tab` focuses a thumb, `k Arrow*` moves the focused one, another `k Tab` switches (no press involved) |
+| segmented_buttons_pick_and_toggle | segmented_button | a click moves a single-choice selection; a multi-choice item toggles on its own |
 
 ### Load sensitivity (what the suite tolerates)
 
