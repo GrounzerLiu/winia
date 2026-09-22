@@ -487,11 +487,187 @@ impl crate::modifier::DrawNode for SliderTrackNode {
     }
 }
 
-/// 绘制滑块——M3 轨道为**两段独立胶囊**（对齐 Compose `drawTrack`）：
-/// - active track：`[0, value_pos - end_gap]`（Primary，左端全圆 8dp/右端 2dp 小圆角）
-/// - inactive track：`[value_pos + end_gap, w]`（SecondaryContainer，左端 2dp/右端全圆 8dp）
-/// - `end_gap = thumb宽/2 + 6dp`（`ThumbTrackGapSize`）——thumb 与轨道保持 6dp 间隙
-/// - 有 steps 时 value_pos 与 tick 位置按 `corner + (w - 2×corner) × f` 内缩（Compose 同）
+/// One thumb of a slider track: where it sits, plus the two transient facts about it.
+///
+/// `value` is in the slider's own range (the caller clamps and normalises it — the track does not
+/// re-do that), `active` halves the thumb's width while its own gesture runs (Compose's
+/// `ThumbContent`), and `focused` asks for the focus ring around THIS thumb — the ring wraps the
+/// thumb capsule, never the whole component rect.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TrackThumb {
+    pub value: f32,
+    pub active: bool,
+    pub focused: bool,
+}
+
+/// Draw a slider track with one thumb (a `Slider`) or two (a range slider).
+///
+/// Both components draw through here, so the range variant is the two-thumbed version of the same
+/// geometry instead of a second reading of the M3 spec. M3 models the track as **independent
+/// capsules** (Compose `drawTrack`):
+/// - left segment `[track_left, start_pos - gap]` — the ACTIVE track when `single_sided` (a single
+///   slider: everything left of its thumb is active), the inactive one for a range;
+/// - active segment, from `start_pos + gap`, or from `track_left` when the range reaches `min`;
+/// - right segment `[end_pos + gap, track_right]` — inactive.
+/// - A segment takes the full-round corner (`= track height / 2`) of a track end it reaches and the
+///   2 dp inside corner of one it faces, and a segment shorter than the round end it owns is not
+///   drawn at all. That one rule reproduces the single-slider look and keeps a thumb's gap clean.
+/// - `gap = thumb half width + 6 dp` (`ThumbTrackGapSize`).
+/// - Thumb centre `= corner + (w - 2 × corner) × fraction`, so a thumb at an end of the range stops
+///   exactly on its stop indicator — continuous and discrete alike.
+/// - With `steps`, the `steps + 2` ticks sit on that same inset axis; a tick is active inside the
+///   active segment. A tick or stop a thumb would cover is not drawn, and an outer stop is skipped
+///   when its segment is too short to have left it visible (`overlap_thumb` covers the rest).
+pub(crate) fn draw_track(
+    canvas: &skia_safe::Canvas,
+    rect: skia_safe::Rect,
+    colors: &SliderColors,
+    enabled: bool,
+    thumbs: &[TrackThumb],
+    min: f32,
+    max: f32,
+    steps: i32,
+    single_sided: bool,
+    focus_alpha: f32,
+) {
+    let w = rect.width();
+    let h = rect.height();
+    if w <= 0.0 || h <= 0.0 || thumbs.is_empty() { return; }
+    let cy = rect.top + h / 2.0;
+
+    let inactive = colors.track_color(enabled, false);
+    let active = colors.track_color(enabled, true);
+    let inactive_tick = colors.tick_color(enabled, false);
+    let active_tick = colors.tick_color(enabled, true);
+    let thumb_c = colors.thumb_color(enabled);
+
+    let corner = SLIDER_TRACK_HEIGHT / 2.0;
+    let inside = SLIDER_TRACK_INSIDE_CORNER;
+    let end_gap = SLIDER_THUMB_WIDTH / 2.0 + SLIDER_THUMB_GAP;
+    let track_left = rect.left;
+    let track_right = rect.right;
+    let track_w = w;
+    // Thumb centre = corner + (w - 2 × corner) × fraction (an end value lands on its stop).
+    let pos_of = |v: f32| {
+        track_left + corner + (track_w - 2.0 * corner) * fraction_from_value(v, min, max)
+    };
+    let has_ticks = steps > 0;
+
+    // Thumbs are passed sorted (start first) — the range is what the two of them span.
+    let start_pos = pos_of(thumbs[0].value);
+    let end_thumb = *thumbs.last().unwrap();
+    let end_pos = pos_of(end_thumb.value);
+    let start_frac = fraction_from_value(thumbs[0].value, min, max);
+    let end_frac = fraction_from_value(end_thumb.value, min, max);
+
+    // ── Left segment: [track_left, start_pos - gap] ──
+    // Drawn (with its stop indicator) only when it is longer than the round end it owns. Compose's
+    // threshold is `gap + corner` with ticks and `gap` alone without them; a single slider's outer
+    // segment is its ACTIVE one and keeps `corner` on both sides.
+    let left_threshold = if single_sided || has_ticks { corner } else { 0.0 };
+    let right_threshold = if has_ticks { corner } else { 0.0 };
+    let left_seg_end = start_pos - end_gap;
+    if left_seg_end > track_left + left_threshold {
+        let color = if single_sided { &active } else { &inactive };
+        draw_track_path(canvas, track_left, left_seg_end, cy, SLIDER_TRACK_HEIGHT, corner, inside, color);
+    }
+
+    // ── Active segment ──
+    // A RANGE that reaches an end fills to that end and takes its full-round corner (see
+    // `draw_range_slider`'s note); a single slider never does — its active track stops one thumb gap
+    // before the thumb, so at `max` the last `gap` pixels of the track stay clear.
+    let active_left = if single_sided || start_frac <= 0.0 { track_left } else { start_pos + end_gap };
+    let active_right = if !single_sided && end_frac >= 1.0 { track_right } else { end_pos - end_gap };
+    let left_r = if active_left <= track_left { corner } else { inside };
+    let right_r = if active_right >= track_right { corner } else { inside };
+    if active_right - active_left > left_r.max(right_r) {
+        draw_track_path(canvas, active_left, active_right, cy, SLIDER_TRACK_HEIGHT, left_r, right_r, &active);
+    }
+
+    // ── Right segment: [end_pos + gap, track_right] ──
+    let right_seg_start = end_pos + end_gap;
+    if right_seg_start < track_right - right_threshold {
+        draw_track_path(canvas, right_seg_start, track_right, cy, SLIDER_TRACK_HEIGHT, inside, corner, &inactive);
+    }
+
+    // ── Ticks (steps + 2 dots) on the inset axis, active inside the active segment ──
+    // A tick under a thumb is not drawn (the thumb would sit on top of the stop dot).
+    let overlap_thumb = |x: f32| thumbs.iter().any(|t| {
+        (x - pos_of(t.value)).abs() < (SLIDER_THUMB_WIDTH + SLIDER_TICK_SIZE) / 2.0
+    });
+    if has_ticks {
+        let radius = SLIDER_TICK_SIZE / 2.0;
+        let mut tp = skia_safe::Paint::default();
+        tp.set_anti_alias(true);
+        for f in tick_fractions(steps).iter() {
+            let x = track_left + corner + (track_w - 2.0 * corner) * f;
+            if overlap_thumb(x) { continue; }
+            let color = if x >= active_left && x <= active_right { active_tick } else { inactive_tick };
+            tp.set_color(skia_color(color));
+            canvas.draw_circle(skia_safe::Point::new(x, cy), radius, &tp);
+        }
+    }
+
+    // ── Stop indicators (4 dp dot at each track end's centre) ──
+    // Start end: the active-tick color when the track has ticks (so it matches its neighbours),
+    // the active track color otherwise. End end: the active track color — with ticks that IS the
+    // inactive tick color, so it still matches the ticks around it.
+    let stop_start_c = if has_ticks {
+        colors.tick_color(enabled, true)
+    } else {
+        colors.track_color(enabled, true)
+    };
+    let stop_end_c = colors.track_color(enabled, true);
+    let mut sp = skia_safe::Paint::default();
+    sp.set_anti_alias(true);
+    if left_seg_end > track_left + left_threshold && !overlap_thumb(track_left + corner) {
+        sp.set_color(skia_color(stop_start_c));
+        canvas.draw_circle(skia_safe::Point::new(track_left + corner, cy), SLIDER_TICK_SIZE / 2.0, &sp);
+    }
+    if right_seg_start < track_right - right_threshold && !overlap_thumb(track_right - corner) {
+        sp.set_color(skia_color(stop_end_c));
+        canvas.draw_circle(skia_safe::Point::new(track_right - corner, cy), SLIDER_TICK_SIZE / 2.0, &sp);
+    }
+
+    // ── Thumbs (4 × 44 capsules; halved width while their gesture runs) ──
+    for t in thumbs {
+        // ⚠ value_pos is already absolute (track_left included) — never add rect.left again, or a
+        // non-root node (rect.left ≠ 0) draws its thumb offset to the right of the track.
+        let tx = pos_of(t.value);
+        let thumb_w = if t.active { SLIDER_ACTIVE_THUMB_WIDTH } else { SLIDER_THUMB_WIDTH };
+        let thumb_h = SLIDER_THUMB_HEIGHT;
+        let rrect = skia_safe::RRect::new_rect_xy(
+            skia_safe::Rect::from_xywh(tx - thumb_w / 2.0, cy - thumb_h / 2.0, thumb_w, thumb_h),
+            thumb_w / 2.0,
+            thumb_w / 2.0,
+        );
+        let mut tp = skia_safe::Paint::default();
+        tp.set_anti_alias(true);
+        tp.set_color(skia_color(thumb_c));
+        canvas.draw_rrect(rrect, &tp);
+
+        // ── Focus ring around the thumb capsule (not the component rect) ──
+        // The band's centre line sits at the track end's position (end_gap = 8 from the thumb
+        // centre) → the band is 16 apart, the distance between the two track ends.
+        if t.focused || focus_alpha > 0.001 {
+            // ⚠ Measure from the resting thumb (4 × 44), not the narrowed `thumb_w`: with the
+            // active width the band's centre line lands ±7 instead of ±8 and misses the track ends.
+            let ring_rect = skia_safe::Rect::from_xywh(
+                tx - SLIDER_THUMB_WIDTH / 2.0,
+                cy - SLIDER_THUMB_HEIGHT / 2.0,
+                SLIDER_THUMB_WIDTH,
+                SLIDER_THUMB_HEIGHT,
+            );
+            // draw_focus puts the band's centre line `gap + ring width / 2 (1.5)` outside the rect.
+            // For a centre line 8 from the thumb centre: gap = 8 - thumb half width (2) - 1.5 = 4.5.
+            let ring_gap = end_gap - SLIDER_THUMB_WIDTH / 2.0 - 1.5;
+            crate::render::draw_focus(canvas, ring_rect, &crate::modifier::Shape::Pill, None, thumb_c, focus_alpha, ring_gap);
+        }
+    }
+}
+
+/// Single-thumb slider = [`draw_track`] with one thumb, kept as a named entry point for `Slider`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_slider(
     canvas: &skia_safe::Canvas,
     rect: skia_safe::Rect,
@@ -505,116 +681,18 @@ pub(crate) fn draw_slider(
     focused: bool,
     focus_alpha: f32,
 ) {
-    let w = rect.width();
-    let h = rect.height();
-    if w <= 0.0 || h <= 0.0 { return; }
-    let cy = rect.top + h / 2.0;
-    let fraction = fraction_from_value(value, min, max);
-
-    let inactive = colors.track_color(enabled, false);
-    let active = colors.track_color(enabled, true);
-    let inactive_tick = colors.tick_color(enabled, false);
-    let active_tick = colors.tick_color(enabled, true);
-    let thumb_c = colors.thumb_color(enabled);
-
-    // 几何（M3：轨道视觉占满组件宽度 [0, w]；stop 在轨道端头圆心
-    //（corner = 8dp，不贴边）；thumb 端点中心 = stop 中心——滑动范围
-    // [corner, w - corner] 不占满宽度。连续/离散统一按 corner 内缩）
-    let corner = SLIDER_TRACK_HEIGHT / 2.0;
-    let inside = SLIDER_TRACK_INSIDE_CORNER;
-    let end_gap = SLIDER_THUMB_WIDTH / 2.0 + SLIDER_THUMB_GAP;
-    let track_left = rect.left;
-    let track_right = rect.right;
-    let track_w = w;
-    // thumb 中心 = corner + (w - 2×corner) × fraction（端点正好停在 stop 上）
-    let value_pos = track_left + corner + (track_w - 2.0 * corner) * fraction;
-    let has_ticks = steps > 0;
-
-    // ── active track：[track_left, value_pos - end_gap]（左全圆、右小圆角）──
-    let active_end = value_pos - end_gap;
-    if active_end > track_left + corner {
-        draw_track_path(canvas, track_left, active_end, cy, SLIDER_TRACK_HEIGHT, corner, inside, &active);
-    }
-    // ── inactive track：[value_pos + end_gap, track_right]（左小圆角、右全圆）──
-    let inactive_start = value_pos + end_gap;
-    if inactive_start < track_right - corner {
-        draw_track_path(canvas, inactive_start, track_right, cy, SLIDER_TRACK_HEIGHT, inside, corner, &inactive);
-    }
-
-    // ── 刻度（steps 时：steps+2 个 4dp 圆点；位置沿轨道内缩 corner；
-    //    active track 范围内用 activeTickColor，范围外 inactiveTickColor）──
-    //    与 thumb 重合的 tick 不画（用户规范——避免 thumb 盖住 stop 的视觉冲突）
-    if has_ticks {
-        let radius = SLIDER_TICK_SIZE / 2.0;
-        let mut tp = skia_safe::Paint::default();
-        tp.set_anti_alias(true);
-        for f in tick_fractions(steps).iter() {
-            let x = track_left + corner + (track_w - 2.0 * corner) * f;
-            // 重合判定：tick 与 thumb（宽 4）中心距 < (4+4)/2 = 4
-            if (x - value_pos).abs() < (SLIDER_THUMB_WIDTH + SLIDER_TICK_SIZE) / 2.0 { continue; }
-            let color = if x <= active_end { active_tick } else { inactive_tick };
-            tp.set_color(skia_color(color));
-            canvas.draw_circle(skia_safe::Point::new(x, cy), radius, &tp);
-        }
-    }
-
-    // ── stop indicator（轨道外端头中心 4dp 圆点）──
-    //   开始端（active 段左端）：离散时与同区 tick 同色（与其它 stop 一致——
-    //   用户规范）；连续时与 active track 同色。
-    //   结束端（inactive 段右端）：与 active track 同色（离散时恰好 = inactive
-    //   tick 色，与 tick 一致）。
-    let stop_start_c = if has_ticks {
-        colors.tick_color(enabled, true)
-    } else {
-        colors.track_color(enabled, true)
-    };
-    let stop_end_c = colors.track_color(enabled, true);
-    // 与 thumb 重合的端头 stop 不画（value 在端点时 thumb 停在 stop 上）
-    let overlap_thumb = |x: f32| (x - value_pos).abs() < (SLIDER_THUMB_WIDTH + SLIDER_TICK_SIZE) / 2.0;
-    let mut sp = skia_safe::Paint::default();
-    sp.set_anti_alias(true);
-    if active_end > track_left + corner && !overlap_thumb(track_left + corner) {
-        sp.set_color(skia_color(stop_start_c));
-        canvas.draw_circle(skia_safe::Point::new(track_left + corner, cy), SLIDER_TICK_SIZE / 2.0, &sp);
-    }
-    if inactive_start < track_right - corner && !overlap_thumb(track_right - corner) {
-        sp.set_color(skia_color(stop_end_c));
-        canvas.draw_circle(skia_safe::Point::new(track_right - corner, cy), SLIDER_TICK_SIZE / 2.0, &sp);
-    }
-
-    // ── 拇指（4×44 胶囊；交互中宽减半）──
-    // ⚠ value_pos 已是绝对坐标（含 track_left）——不可再加 rect.left（否则
-    // 非根节点（rect.left≠0）时 thumb 相对轨道右偏——2026-08 debug server 实测）
-    let thumb_w = if thumb_active { SLIDER_ACTIVE_THUMB_WIDTH } else { SLIDER_THUMB_WIDTH };
-    let thumb_h = SLIDER_THUMB_HEIGHT;
-    let tx = value_pos;
-    let rrect = skia_safe::RRect::new_rect_xy(
-        skia_safe::Rect::from_xywh(tx - thumb_w / 2.0, cy - thumb_h / 2.0, thumb_w, thumb_h),
-        thumb_w / 2.0,
-        thumb_w / 2.0,
+    draw_track(
+        canvas,
+        rect,
+        colors,
+        enabled,
+        &[TrackThumb { value, active: thumb_active, focused }],
+        min,
+        max,
+        steps,
+        true,
+        focus_alpha,
     );
-    let mut tp = skia_safe::Paint::default();
-    tp.set_anti_alias(true);
-    tp.set_color(skia_color(thumb_c));
-    canvas.draw_rrect(rrect, &tp);
-
-    // ── 焦点环：包围 thumb 胶囊（用户规范——而非整个组件 rect）──
-    // 环带中心线 = track 端头位置（距 thumb 中心 end_gap=8）→ 环带间距 = 16 =
-    // 两个轨道端头的距离（active 终点 ↔ inactive 起点 = 2×end_gap）
-    if focused || focus_alpha > 0.001 {
-        // ⚠ 基准用静止 thumb 尺寸（4×44）——不能用交互变窄的 thumb_w（否则
-        // 聚焦时环带中心线偏移（±7 而非 ±8），与轨道端头错位（2026-08 实测）
-        let ring_rect = skia_safe::Rect::from_xywh(
-            value_pos - SLIDER_THUMB_WIDTH / 2.0,
-            cy - SLIDER_THUMB_HEIGHT / 2.0,
-            SLIDER_THUMB_WIDTH,
-            SLIDER_THUMB_HEIGHT,
-        );
-        // draw_focus 环带中心线距 rect 边缘 = gap + 环宽/2(1.5)。
-        // 要中心线距 thumb 中心 8（track 端头）→ gap = 8 - thumb半宽(2) - 1.5 = 4.5
-        let ring_gap = end_gap - SLIDER_THUMB_WIDTH / 2.0 - 1.5;
-        crate::render::draw_focus(canvas, ring_rect, &crate::modifier::Shape::Pill, None, thumb_c, focus_alpha, ring_gap);
-    }
 }
 
 /// 绘制轨道段——两端不同圆角的水平圆角矩形（对齐 Compose `drawTrackPath`）。
@@ -817,6 +895,28 @@ mod tests {
         // 端点几何：thumb 中心 = corner = 8（轨道端头圆心 = stop 位置）——
         // handle 端点正好停在 stop 上（stop 不贴边，thumb 左缘 6）
         assert!(close(at(&px, w, 8.0, 24.0), prim), "value=0 时 thumb 中心应在 x=8（stop 上，实际 {:?}）", at(&px, w, 8.0, 24.0));
+    }
+
+    /// The inactive tail is drawn whenever it has any length, not only when it is longer than the
+    /// round end it owns: with ticks Compose's threshold is `endGap + cornerSize`, without them just
+    /// `endGap`. That is the window this pins — a value close enough to max that the tail is shorter
+    /// than the corner.
+    #[test]
+    fn slider_tail_segment_near_max_is_drawn() {
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let sec = (theme.secondary_container.r as i32, theme.secondary_container.g as i32, theme.secondary_container.b as i32);
+        let white = (255, 255, 255);
+        // value 0.99 → thumb centre 289.2, so the tail runs [297.2, 300] — 2.8 px, shorter than the
+        // 8 px corner, which is exactly the range the old `> corner` threshold skipped.
+        let (px, w) = render_slider_px(|ctx| {
+            Slider::new(0.99).value_range(0.0, 1.0).on_value_change(|_| {}).build(ctx);
+        });
+        assert!(close(at(&px, w, 299.0, 24.0), sec), "the tail near max is drawn (got {:?})", at(&px, w, 299.0, 24.0));
+        // At max the tail is empty, so nothing is drawn past the thumb.
+        let (px_max, w_max) = render_slider_px(|ctx| {
+            Slider::new(1.0).value_range(0.0, 1.0).on_value_change(|_| {}).build(ctx);
+        });
+        assert!(close(at(&px_max, w_max, 299.0, 24.0), white), "at max there is no tail (got {:?})", at(&px_max, w_max, 299.0, 24.0));
     }
 
     #[test]

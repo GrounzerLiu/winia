@@ -36,6 +36,8 @@ mod popup_drag;
 mod popup_slide_tap;
 #[path = "fixture_popup_tap.rs"]
 mod popup_tap;
+#[path = "fixture_range_slider.rs"]
+mod range_slider;
 #[path = "fixture_resize.rs"]
 mod resize;
 #[path = "fixture_scaffold.rs"]
@@ -73,6 +75,7 @@ const SCENARIOS: &[(&str, fn())] = &[
     ("popup_drag", popup_drag::main),
     ("popup_slide_tap", popup_slide_tap::main),
     ("popup_tap", popup_tap::main),
+    ("range_slider", range_slider::main),
     ("resize", resize::main),
     ("scaffold", scaffold::main),
     ("scroll", scroll::main),
