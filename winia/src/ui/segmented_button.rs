@@ -550,7 +550,16 @@ impl SegmentedButton {
                 let icon_modifier = Modifier::new()
                     .size(SegmentedButtonDefaults::ICON_SIZE, SegmentedButtonDefaults::ICON_SIZE)
                     .graphics_layer(move || {
-                        let p = if shown { layer.get().clamp(0.0, 1.0) } else { 0.0 };
+                        // The crossfading pair fades through its OWN layer (`Crossfade` swaps two
+                        // contents), so this one must stay out of the way at alpha 1 — leaving it at 0
+                        // hid the whole slot and the fade never showed.
+                        let p = if crossfade {
+                            1.0
+                        } else if shown {
+                            layer.get().clamp(0.0, 1.0)
+                        } else {
+                            0.0
+                        };
                         GraphicsLayerParams {
                             scale_x: p,
                             scale_y: p,
@@ -564,16 +573,41 @@ impl SegmentedButton {
                     match ctx.start_restartable_group(icon_key, icon_modifier, crate::layout::BoxLayout::new()) {
                         GroupStatus::Skip => {}
                         GroupStatus::Enter => {
-                            let chosen = if active { icon } else { inactive_icon };
-                            let inner: Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync> = chosen
-                                .unwrap_or_else(|| {
-                                    Box::new(|ctx: &mut ComposeCtx| {
-                                        crate::ui::icon::Icon::svg_path(CHECK_ICON_PATH)
-                                            .size(SegmentedButtonDefaults::ICON_SIZE)
-                                            .build(ctx);
-                                    })
-                                });
-                            inner(ctx);
+                            if crossfade {
+                                // Compose's other branch when an inactive icon is given:
+                                // `Crossfade(targetState = active)` between the two, so the swap FADES
+                                // instead of popping — and there is no scale-in there, the pair only
+                                // changes opacity, which is also why the label does not slide.
+                                // `Crossfade` here is the framework's own widget: fade out, swap, fade in.
+                                let active_state = ctx.remember(|| active);
+                                active_state.set(active);
+                                let a_icon = icon;
+                                let i_icon = inactive_icon;
+                                crate::ui::crossfade::Crossfade::new(active_state)
+                                    .build(ctx, move |ctx, is_active| {
+                                        let chosen = if is_active { a_icon } else { i_icon };
+                                        let inner: Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync> =
+                                            chosen.unwrap_or_else(|| {
+                                                Box::new(|ctx: &mut ComposeCtx| {
+                                                    crate::ui::icon::Icon::svg_path(CHECK_ICON_PATH)
+                                                        .size(SegmentedButtonDefaults::ICON_SIZE)
+                                                        .build(ctx);
+                                                })
+                                            });
+                                        inner(ctx);
+                                    });
+                            } else {
+                                let chosen = icon;
+                                let inner: Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync> = chosen
+                                    .unwrap_or_else(|| {
+                                        Box::new(|ctx: &mut ComposeCtx| {
+                                            crate::ui::icon::Icon::svg_path(CHECK_ICON_PATH)
+                                                .size(SegmentedButtonDefaults::ICON_SIZE)
+                                                .build(ctx);
+                                        })
+                                    });
+                                inner(ctx);
+                            }
                         }
                     }
                     ctx.end_restartable_group();
@@ -932,6 +966,47 @@ mod tests {
             again < 0.5,
             "the second time a segment is picked its check must animate in too, got alpha {again}"
         );
+    }
+
+    /// With an `inactive_icon` the slot is occupied in BOTH states — that is what makes the pair
+    /// crossfade in place (Compose's `Crossfade` branch) and keeps the label where it is, where the
+    /// default single check leaves the slot empty, invisible and the label centred.
+    #[test]
+    fn an_inactive_icon_keeps_the_slot_and_the_label_where_they_are() {
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let mut composer = Composer::new();
+        let t = theme.clone();
+        composer.compose(|ctx| {
+            WiniaTheme::with_theme(t, ctx, |ctx| {
+                SingleChoiceSegmentedButtonRow::new().build(ctx, |ctx| {
+                    SegmentedButton::new(false, || {})
+                        .shape(SegmentedButtonDefaults::item_shape(0, 1))
+                        .inactive_icon(|ctx| {
+                            crate::ui::icon::Icon::svg_path(CHECK_ICON_PATH)
+                                .size(SegmentedButtonDefaults::ICON_SIZE)
+                                .build(ctx);
+                        })
+                        .build(ctx, |ctx| {
+                            Text::new("Only").build(ctx);
+                        });
+                });
+            });
+        });
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 100.0));
+        let root = composer.layout_root_idx().expect("root");
+        let nodes = composer.arena_nodes();
+        let item = nodes[root].children[0];
+        let icon = nodes[item].children[0];
+        assert_eq!(nodes[icon].children.len(), 1, "the icon slot holds a node even while the segment is inactive");
+        let alpha = nodes[icon]
+            .modifier
+            .graphics_layer_params()
+            .map(|p| p.alpha)
+            .expect("the slot carries the animation layer");
+        assert_eq!(alpha, 1.0, "an inactive icon of a crossfading pair is VISIBLE — the default single check is invisible (alpha 0) instead, so the pair keeps the slot occupied");
+        // ⚠ The label's x is not asserted here: its offset animates from the centred start toward the
+        // slot, and a headless test never ticks the animation, so it would still read the initial -13.
+        // What matters structurally is above — the slot is occupied and visible while inactive.
     }
 
     // ── Pixels ──
