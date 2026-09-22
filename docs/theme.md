@@ -32,14 +32,15 @@ Four pieces:
    X11/Wayland never do) and winia records that as an OBSERVATION — `note_platform_theme` — not as a pin:
    pinning from the event would freeze the app on the first report and ignore every later system change.
    Resolution order is pinned mode → platform report → `dark_light::detect()`.
-2. **The window's theme cell** (`WindowTheme`): the INTENT to resolve (`ThemeSpec`: `Auto` follows,
-   `Fixed(palette)` is an application's own choice) plus the palette it last resolved to, shared between
-   the `Window` node that manages the window and the window itself. The node samples
-   `current_theme_spec()` — the innermost theme node in scope — EVERY frame and publishes it, so an
-   application may switch which theme node wraps a window; the window's content wrapper composes under the
-   cell's already-resolved palette (a Material scheme is not free to build, so an idle frame must not
-   rebuild one), and a tracked read of the mode keeps the wrapper's composer awake enough to be woken at
-   all when the mode changes.
+2. **The window's theme cell** (`WindowTheme`): what the declaring tree provides — the INTENT to resolve
+   (`ThemeSpec`: `Auto` follows, `Fixed(palette)` is an application's own choice), the TYPOGRAPHY and the
+   DIRECTION — plus the palette the intent last resolved to, shared between the `Window` node that manages
+   the window and the window itself. The node samples all of it (`current_theme_spec()`,
+   `WiniaTheme::typography()`, `WiniaTheme::direction()`) EVERY frame and publishes it, so an application
+   may switch which theme node wraps a window; the window's content wrapper composes under the cell's
+   already-resolved palette (a Material scheme is not free to build, so an idle frame must not rebuild
+   one), and a tracked read of the mode keeps the wrapper's composer awake enough to be woken at all when
+   the mode changes.
 3. **The epoch** (`system_theme_epoch`): how many times the system theme may have changed. Per WINDOW
    state, deliberately: one process-wide "pending" flag is consumed by whichever window renders first,
    which left every other window — and every sub-window of a tree that switched its own theme node — on its
@@ -67,6 +68,10 @@ Both were measured, and both are pinned by tests:
   tree PUBLISHES to every frame (and `None` on `open_window_with_title` now means `Auto`, i.e. follow).
 - **One global pending flag.** It made only the first-rendering window follow. Hence the epoch, which each
   window compares against its own applied state.
+- **Typography and direction re-provided as defaults.** The wrapper pushed `Typography::default()` and LTR
+  on every frame, so a type scale (or an RTL direction) set around a `Window` node survived exactly one
+  frame — and nothing would have reported it, the window just looks default. The cell carries both now, and
+  a change in either reads as "what was drawn is wrong" even when the palette did not move.
 
 ## What follows and what does not
 
@@ -77,8 +82,8 @@ Both were measured, and both are pinned by tests:
 | A popup that is ALREADY OPEN | yes — the declaring tree re-runs and hands it a fresh `CompositionLocal` snapshot (its own composer is dirtied too). `an_open_popup_follows_the_theme` pins this. |
 | Other windows (multi-window apps) | yes — each window keeps its own epoch, so a window that has not re-resolved yet is not skipped |
 | Every window, when the platform event arrives | yes — the handler asks all of them for a frame |
+| Typography / direction set around the `Window` node | yes — the declaring tree publishes both every frame (`a_window_content_follows_published_typography_and_direction`) |
 | A `Fixed` window (an app that pinned a theme) | no, by design: it re-resolves the same palette and stops before dirtying anything |
-| Typography / direction overridden by `with_typography` / `with_theme_and_direction` | no — the window's per-frame wrapper re-provides the defaults for both (pre-existing, unrelated to the mode; the cell carries colors, not typography) |
 
 ## Tests
 
@@ -90,8 +95,11 @@ Both were measured, and both are pinned by tests:
   the composer is told (the middle step asserts exactly that).
 - `ui::theme::tests::a_window_content_follows_its_cell` — the window shape, end to end at the composer
   level, through BOTH routes: the system epoch and a published intent.
+- `ui::theme::tests::a_window_content_follows_published_typography_and_direction` — the type scale and
+  direction a window was declared under reach its content, and a published change reads as "re-run the
+  tree" with no color change at all.
 - `app::window_theme_tests::a_theme_change_reaches_every_window` — two windows, one epoch: both follow; a
-  pinned window does nothing and an idle one does no work.
+  pinned window does nothing and an idle one does no work (including a published type scale).
 - `ui_test.rs::theme_follows_the_windows_own_switch` — a real window, its own Light/Dark switch, pixels.
 - `ui_test.rs::an_open_popup_follows_the_theme` — a popup left open across the switch.
 - `ui::pixel_line_parsing` (in `tests/ui/mod.rs`) — the text pixel read: frame coordinates are physical

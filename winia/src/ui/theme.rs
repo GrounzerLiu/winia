@@ -396,34 +396,59 @@ impl ThemeSpec {
     }
 }
 
-/// A window's theme: the intent to resolve (`ThemeSpec`) and the palette it last resolved to, SHARED
-/// between the `Window` node that manages the window and the window itself.
+/// A window's theme: the intent to resolve (`ThemeSpec`), the typography and direction in force where the
+/// window was declared, and the palette the intent last resolved to — SHARED between the `Window` node that
+/// manages the window and the window itself.
 ///
 /// The two sides live in different composers — the node runs in the tree that DECLARES the window and
-/// re-samples the intent every frame (an application may switch which theme node wraps it), while the
-/// content wrapper runs in the window's own composer and must see the same, current value. A palette
+/// re-samples all of it every frame (an application may switch which theme node wraps it), while the
+/// content wrapper runs in the window's own composer and must see the same, current values. A palette
 /// captured as a value pinned the window to its startup colors; an intent sampled once and then frozen
 /// pinned it to its startup NODE (a sub-window whose declaring tree switched from `light` to `dark` stayed
-/// light forever). Hence a shared cell, written by whichever side knows more.
+/// light forever), and the same held for typography and direction, which the wrapper re-provided as the
+/// DEFAULTS every frame — so a custom type scale around a `Window` node survived exactly one frame. Hence a
+/// shared cell, written by whichever side knows more.
 #[derive(Clone)]
 pub struct WindowTheme(std::sync::Arc<std::sync::Mutex<ThemeCell>>);
 
+/// What a window has already drawn with. Compared with the cell's current values to decide whether the tree
+/// has to run again: a component resolved colors, type and direction when it built, so a change in ANY of
+/// them is only visible after a recomposition.
+#[derive(Clone, PartialEq)]
+pub(crate) struct AppliedTheme {
+    pub colors: ThemeColors,
+    pub typography: Typography,
+    pub direction: LayoutDirection,
+}
+
+impl AppliedTheme {
+    /// The defaults a window starts from — no theme node, no custom type scale, left-to-right.
+    pub(crate) fn plain(colors: ThemeColors) -> Self {
+        Self { colors, typography: Typography::default(), direction: LayoutDirection::Ltr }
+    }
+}
+
 struct ThemeCell {
     spec: ThemeSpec,
+    typography: Typography,
+    direction: LayoutDirection,
     /// The palette `spec` resolved to at `resolved_epoch`.
     colors: ThemeColors,
     /// The system-theme epoch `colors` was resolved at.
     resolved_epoch: u64,
-    /// The declaring tree published a different intent and nobody has resolved it yet.
+    /// The declaring tree published something different and nobody has resolved it yet.
     spec_dirty: bool,
 }
 
 impl WindowTheme {
-    /// A theme for `spec`, resolved now — a window's first frame has no earlier resolution to reuse.
+    /// A theme for `spec` with the default type scale and direction — a window's first frame has no earlier
+    /// resolution to reuse, and `Window::build` publishes what it sampled before that frame runs.
     pub fn new(spec: ThemeSpec) -> Self {
         let colors = spec.colors();
         Self(std::sync::Arc::new(std::sync::Mutex::new(ThemeCell {
             spec,
+            typography: Typography::default(),
+            direction: LayoutDirection::Ltr,
             colors,
             resolved_epoch: system_theme_epoch(),
             spec_dirty: false,
@@ -441,23 +466,26 @@ impl WindowTheme {
         self.0.lock().unwrap().colors.clone()
     }
 
-    /// Publish the intent the declaring tree sampled this frame. Returns whether it moved — the window's
+    /// Publish what the declaring tree sampled this frame. Returns whether anything moved — the window's
     /// own frame has to be scheduled in that case, because the change happened in ANOTHER composer (which
     /// leaves the window's composer with nothing pending).
-    pub(crate) fn publish(&self, spec: ThemeSpec) -> bool {
+    pub(crate) fn publish(&self, spec: ThemeSpec, typography: Typography, direction: LayoutDirection) -> bool {
         let mut cell = self.0.lock().unwrap();
-        if cell.spec == spec {
+        if cell.spec == spec && cell.typography == typography && cell.direction == direction {
             return false;
         }
         cell.spec = spec;
+        cell.typography = typography;
+        cell.direction = direction;
         cell.spec_dirty = true;
         true
     }
 
-    /// Bring the palette up to date — the system epoch moved, or the intent changed — and compare it with
-    /// what the window has already drawn. Returns whether what was drawn is now WRONG; a `Fixed` window
-    /// resolves the same palette again and answers `false`, so a system theme change costs it nothing.
-    pub(crate) fn refresh(&self, drawn: &mut ThemeColors) -> bool {
+    /// Bring the window's theme up to date — the system epoch moved, or the declaring tree published
+    /// something else — and compare it with what the window has already drawn. Returns whether what was
+    /// drawn is now WRONG; a `Fixed` window under a system change resolves the same palette and keeps the
+    /// same type, so it answers `false` and costs nothing.
+    pub(crate) fn refresh(&self, drawn: &mut AppliedTheme) -> bool {
         let epoch = system_theme_epoch();
         let mut cell = self.0.lock().unwrap();
         if !cell.spec_dirty && cell.resolved_epoch == epoch {
@@ -466,19 +494,23 @@ impl WindowTheme {
         cell.spec_dirty = false;
         cell.resolved_epoch = epoch;
         let colors = cell.spec.colors();
-        let changed = colors != *drawn;
-        cell.colors = colors.clone();
-        *drawn = colors;
-        changed
+        cell.colors = colors;
+        if colors == drawn.colors && cell.typography == drawn.typography && cell.direction == drawn.direction {
+            return false;
+        }
+        drawn.colors = colors;
+        drawn.typography = cell.typography.clone();
+        drawn.direction = cell.direction;
+        true
     }
 
-    /// Provide this window's palette for `content` — the wrapper its content composes under every frame.
+    /// Provide this window's theme for `content` — the wrapper its content composes under every frame.
     pub(crate) fn provide(&self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
-        let (spec, colors) = {
+        let (spec, colors, typography, direction) = {
             let cell = self.0.lock().unwrap();
-            (cell.spec.clone(), cell.colors.clone())
+            (cell.spec.clone(), cell.colors, cell.typography.clone(), cell.direction)
         };
-        WiniaTheme::provide_resolved(spec, colors, Typography::default(), LayoutDirection::Ltr, ctx, content);
+        WiniaTheme::provide_resolved(spec, colors, typography, direction, ctx, content);
     }
 }
 
@@ -742,7 +774,7 @@ mod tests {
         });
         let cell = sampled.into_inner().expect("the window samples a theme");
         assert_eq!(cell.spec(), ThemeSpec::Auto, "a window inside `auto` must keep following the system");
-        let mut drawn = cell.colors();
+        let mut drawn = AppliedTheme::plain(cell.colors());
 
         // Each frame after that: the window's own composer runs the content under the cell's palette.
         let mut composer = Composer::new();
@@ -762,7 +794,8 @@ mod tests {
 
         // (2) The DECLARING tree publishes another intent (it switched its own theme node). The window
         // composes in a different composer, so without the cell it would never hear about it.
-        assert!(cell.publish(ThemeSpec::Fixed(ThemeColors::default_light())), "the intent moved");
+        let plain = ThemeSpec::Fixed(ThemeColors::default_light());
+        assert!(cell.publish(plain, Typography::default(), LayoutDirection::Ltr), "the intent moved");
         assert!(cell.refresh(&mut drawn), "the published palette is not what is drawn");
         composer.mark_content_dirty();
         frame(&mut composer);
@@ -773,9 +806,64 @@ mod tests {
         set_system_dark_mode(None);
     }
 
-    /// `Auto` resolves on every call; `Fixed` answers with the palette it was built from, whatever the mode
-    /// says — an application that pinned a theme must not be dragged by the system.
+    /// A window carries the TYPOGRAPHY and DIRECTION in force where it was declared, not just the palette.
+    ///
+    /// The per-frame wrapper used to provide `Typography::default()` and LTR unconditionally, so an
+    /// application that set a type scale (or an RTL direction) around its `Window` node kept it for exactly
+    /// one frame — and nothing would have reported it: the window looks fine, just default.
     #[test]
+    fn a_window_content_follows_published_typography_and_direction() {
+        let _serial = THEME_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        use crate::core::composer::Composer;
+
+        let custom = Typography { body_large: TextStyle::new().font_size(23.0), ..Typography::default() };
+        // What `Window::build` samples, from inside the theme nodes that wrap it.
+        let sampled = std::cell::RefCell::new(None);
+        let mut init = Composer::new();
+        init.compose(|ctx| {
+            WiniaTheme::with_theme_and_direction(ThemeColors::default_light(), LayoutDirection::Rtl, ctx, |ctx| {
+                WiniaTheme::with_typography(custom.clone(), ctx, |ctx| {
+                    *sampled.borrow_mut() = Some(WindowTheme::new(current_theme_spec()));
+                    let cell = sampled.borrow();
+                    cell.as_ref()
+                        .unwrap()
+                        .publish(current_theme_spec(), WiniaTheme::typography(), WiniaTheme::direction());
+                })
+            })
+        });
+        let cell = sampled.into_inner().expect("the window samples a theme");
+        let mut drawn = AppliedTheme::plain(cell.colors());
+
+        // Each frame: the window's own composer composes under the cell's theme. What a component would read
+        // while building has to be the published type scale and direction.
+        let seen = std::cell::RefCell::new(Vec::new());
+        let mut composer = Composer::new();
+        let mut frame = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                cell.provide(ctx, |_| {
+                    seen.borrow_mut().push((WiniaTheme::typography(), WiniaTheme::direction()));
+                })
+            });
+        };
+        frame(&mut composer);
+        let (typography, direction) = seen.borrow()[0].clone();
+        assert_eq!(typography, custom, "the declared type scale has to reach the window's content");
+        assert_eq!(direction, LayoutDirection::Rtl, "and so does the direction");
+
+        // Published changes are what the frame step exists for: they have to read as "what was drawn is now
+        // wrong", even though the palette did not move.
+        let other = Typography { body_large: TextStyle::new().font_size(31.0), ..Typography::default() };
+        assert!(cell.publish(current_theme_spec(), other.clone(), LayoutDirection::Ltr), "the type scale moved");
+        assert!(cell.refresh(&mut drawn), "a type-scale change has to re-run the tree");
+        frame(&mut composer);
+        let (typography, direction) = seen.borrow()[1].clone();
+        assert_eq!(typography, other);
+        assert_eq!(direction, LayoutDirection::Ltr);
+        assert!(!cell.refresh(&mut drawn), "and then there is nothing left to do");
+    }
+
+    /// `Auto` resolves on every call; `Fixed` answers with the palette it was built from, whatever the mode
+    /// says — an application that pinned a theme must not be dragged by the system.    #[test]
     fn theme_spec_resolves_auto_per_call_and_fixed_never() {
         let _serial = THEME_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let fixed = ThemeSpec::Fixed(ThemeColors::default_light());
