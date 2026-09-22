@@ -17,18 +17,19 @@
 //!   matching Compose's strict comparison.
 //! - The thumbs cannot cross: the start thumb stops at the end thumb's value and the end thumb at
 //!   the start thumb's (Compose 1.3's `coerceAtMost` / `coerceAtLeast` rule).
-//! - The track and the two thumbs are three nodes: the root carries the pointer gestures, and each
-//!   thumb is its own focusable node with its own key handling. So Tab moves between the thumbs and
-//!   the arrow keys move the FOCUSED one — Compose's model (`rangeSliderPressDragModifier` on the
-//!   container, one `focusable` per thumb). A press moves focus to the thumb it resolved, which
-//!   Compose leaves to the platform.
+//! - Each thumb is its own focusable node with its own key handling, so Tab moves between the thumbs
+//!   and the arrow keys move the FOCUSED one — Compose's model (`rangeSliderPressDragModifier` on the
+//!   container, one `focusable` per thumb). A press does NOT move focus: a click must not take the
+//!   keyboard from wherever it was (the rule `clicking_an_overlay_button_does_not_steal_focus` states,
+//!   and what the plain [`crate::ui::slider::Slider`] does too), so the keyboard reaches a thumb
+//!   through Tab alone.
 
 use crate::composable;
 use crate::core::composer::{ComposeCtx, GroupStatus};
 use crate::layout::BoxLayout;
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{LayoutNode, MeasurePolicy, Placement, Point, Size, measure_node};
-use crate::modifier::{FocusRequester, KbEvent, Modifier, Shape};
+use crate::modifier::{KbEvent, Modifier, Shape};
 use crate::ui::interaction::MutableInteractionSource;
 use crate::ui::slider::{
     SLIDER_ACTIVE_THUMB_WIDTH, SLIDER_THUMB_GAP, SLIDER_THUMB_HEIGHT, SLIDER_THUMB_WIDTH,
@@ -243,9 +244,6 @@ impl RangeSlider {
         // The thumb the current (or last) gesture resolved to: set on press, then read by the drag
         // (the keyboard follows FOCUS instead — see the module note).
         let active = ctx.remember(|| RangeThumb::Start);
-        // One focus requester per thumb, so a press can hand focus to the thumb it resolved.
-        let start_fr = ctx.remember(|| FocusRequester::new()).get();
-        let end_fr = ctx.remember(|| FocusRequester::new()).get();
         // Width write-back from the draw node (Backchannel — no recomposition); the gesture
         // callbacks read it for pixel↔value conversion.
         let track_width = ctx.remember_backchannel(|| 0.0f32);
@@ -272,27 +270,21 @@ impl RangeSlider {
 
         let mut gestures = Modifier::new();
         if enabled {
-            // Press: resolve the nearer thumb, remember it for the gesture, hand it focus (so the
-            // arrow keys that follow move THIS thumb), jump it to the pressed position (the same
-            // immediate jump the single slider does) and emit the press on the thumb's source.
+            // Press: resolve the nearer thumb, remember it for the gesture, jump it to the pressed
+            // position (the same immediate jump the single slider does) and emit the press on the
+            // thumb's source. Focus is NOT touched: a click must not take the keyboard from wherever
+            // it was (the rule `clicking_an_overlay_button_does_not_steal_focus` states, and what the
+            // plain `Slider` does too) — the keyboard reaches a thumb through Tab.
             let src_s = start_source.clone();
             let src_e = end_source.clone();
-            let fr_s = start_fr.clone();
-            let fr_e = end_fr.clone();
             let v_press = set_value.clone();
             let a_press = active.clone();
             gestures = gestures.on_press(move |pos| {
                 let thumb = nearest_thumb(pos.0, tw_press.get(), value, min, max);
                 a_press.set(thumb);
                 match thumb {
-                    RangeThumb::Start => {
-                        src_s.emit_press_at(pos);
-                        fr_s.request_focus();
-                    }
-                    RangeThumb::End => {
-                        src_e.emit_press_at(pos);
-                        fr_e.request_focus();
-                    }
+                    RangeThumb::Start => src_s.emit_press_at(pos),
+                    RangeThumb::End => src_e.emit_press_at(pos),
                 }
                 if let Some(cb) = &v_press {
                     let nv = value_at_x(pos.0, tw_press.get(), min, max, steps);
@@ -321,25 +313,18 @@ impl RangeSlider {
             });
 
             // Drag: the thumb resolved at press follows the pointer in ABSOLUTE position (Compose
-            // `draggable` + `offsetToValue`), clamped by the other thumb.
+            // `draggable` + `offsetToValue`), clamped by the other thumb. Focus is left alone here
+            // too (see the press handler).
             let src_s = start_source.clone();
             let src_e = end_source.clone();
-            let fr_s = start_fr.clone();
-            let fr_e = end_fr.clone();
             let v_ds = set_value.clone();
             let a_ds = active.clone();
             gestures = gestures.on_drag_start(move |pos| {
                 let thumb = nearest_thumb(pos.0, tw_drag_start.get(), value, min, max);
                 a_ds.set(thumb);
                 match thumb {
-                    RangeThumb::Start => {
-                        src_s.emit_drag_start();
-                        fr_s.request_focus();
-                    }
-                    RangeThumb::End => {
-                        src_e.emit_drag_start();
-                        fr_e.request_focus();
-                    }
+                    RangeThumb::Start => src_s.emit_drag_start(),
+                    RangeThumb::End => src_e.emit_drag_start(),
                 }
                 if let Some(cb) = &v_ds {
                     let nv = value_at_x(pos.0, tw_drag_start.get(), min, max, steps);
@@ -407,7 +392,6 @@ impl RangeSlider {
                         for thumb in [RangeThumb::Start, RangeThumb::End] {
                             let is_start = thumb == RangeThumb::Start;
                             let source = if is_start { start_source.clone() } else { end_source.clone() };
-                            let requester = if is_start { start_fr.clone() } else { end_fr.clone() };
                             let thumb_active = if is_start { start_active } else { end_active };
                             let mut tm = Modifier::new()
                                 .size(SLIDER_THUMB_WIDTH, SLIDER_THUMB_HEIGHT)
@@ -426,7 +410,6 @@ impl RangeSlider {
                                 let f_key = finished.clone();
                                 tm = tm
                                     .focusable_with_source(&source)
-                                    .focus_requester(&requester)
                                     .on_key_event(move |ke: &KbEvent| {
                                         let current = if is_start { value.start } else { value.end };
                                         let cb = v_key.as_ref().map(|cb| {
@@ -865,7 +848,7 @@ mod tests {
         press((60.0, 24.0));
         assert_eq!(got.load(Ordering::Relaxed), 183, "the nearer (start) thumb jumped, the end one stayed");
         let _ = drag;
-        let _ = crate::modifier::take_focus_requests();
+
     }
 
     #[test]
@@ -881,10 +864,7 @@ mod tests {
         drag((10.0, 24.0), (-270.0, 0.0));
         assert_eq!(got.load(Ordering::Relaxed), 250, "the end thumb clamped at the start thumb (0.25)");
         end();
-        // A press queues a focus request in a PROCESS-global queue (`FocusRequester` is
-        // window-agnostic in a windowless test), which would otherwise leak into the modifier
-        // module's own queue assertions and make them order-dependent.
-        let _ = crate::modifier::take_focus_requests();
+
     }
 
     #[test]
@@ -894,7 +874,7 @@ mod tests {
         // x = 240 is nearer the end thumb → the START thumb keeps 0.25 and the end thumb jumps.
         press((240.0, 24.0));
         assert_eq!(got.load(Ordering::Relaxed), 250, "the start thumb value is unchanged");
-        let _ = crate::modifier::take_focus_requests();
+
     }
 
     /// Both ends snap to ticks, a caller-supplied range included (see `Slider`'s note): with
@@ -1075,7 +1055,7 @@ mod tests {
             250,
             "pressing the drawn thumb (x={thumb_x}) must not move it — padding shifted the axis"
         );
-        let _ = crate::modifier::take_focus_requests();
+
     }
 
     /// Each thumb carries its own focusable node and its own key handling: two focus stops, and a
@@ -1099,10 +1079,10 @@ mod tests {
                 let els = nodes[c].modifier.elements();
                 els.iter().any(|el| matches!(el, ModifierElement::Focusable { .. }))
                     && els.iter().any(|el| matches!(el, ModifierElement::KbEvent { on_key: Some(_), .. }))
-                    && els.iter().any(|el| matches!(el, ModifierElement::FocusRequesterId { .. }))
+
             })
             .count();
-        assert_eq!(focusable_thumbs, 2, "both thumbs are focusable, carry keys and a focus requester");
+        assert_eq!(focusable_thumbs, 2, "both thumbs are focusable and carry their own keys");
         for (name, idx) in [("root", root), ("track", track)] {
             let focusable = nodes[idx]
                 .modifier

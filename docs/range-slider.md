@@ -97,8 +97,10 @@ Keyboard and focus — Compose's model, one focus stop per thumb:
   — which is one tick when `steps` is small — and Home/End converge toward the OTHER thumb or the
   range's end (`Home` on the end thumb collapses onto the start value, `End` on the start thumb onto
   the end value).
-- A press (or drag start) hands focus to the thumb it resolved (`FocusRequester::request_focus`), so
-  the keyboard follows the mouse. Compose leaves that to the platform; a superset, not a gap.
+- A press does **not** move focus, and neither does a drag start: a click must not take the keyboard
+  from wherever it was — the rule `clicking_an_overlay_button_does_not_steal_focus` states, and what
+  the plain `Slider` does too. The keyboard reaches a thumb through Tab alone, which is also how
+  Compose behaves (its press/drag modifier requests no focus).
 - Each thumb draws its own focus ring around its own capsule; the track node draws segments, ticks
   and stop indicators only.
 
@@ -124,16 +126,15 @@ Keyboard and focus — Compose's model, one focus stop per thumb:
   with `padding(16)` pressing the DRAWN thumb must not move it (this is the regression the structure
   note in §3 describes).
 - Focus plumbing: `each_thumb_is_its_own_focus_target_with_its_own_keys` — both thumbs carry a
-  `focusable`, an `on_key_event` and a `FocusRequester`, and neither the root nor the track carries
-  one (no third focus stop).
+  `focusable` and their own `on_key_event`, and neither the root nor the track carries one (no third
+  focus stop).
 - Real window: `range_slider_drags_the_thumb_the_press_resolved` and
   `range_slider_keyboard_moves_the_focused_thumb` (`tests/ui_test.rs`, fixture
-  `fixture_range_slider`). The drag test was falsified by making `nearest_thumb` always answer
-  `Start`; the keyboard test by removing the focus hand-off (then nothing has focus, so an arrow key
-  does nothing at all — winia does not move focus for a key no node consumed — and the value
-  assertion fails). The keyboard test waits for the focus to
-  land (`tag_is_focused`) before sending a key — the hand-off arrives on a later frame than the value
-  change, which made it flaky once — and retries the key itself via the harness's `key_until`.
+  `fixture_range_slider`). The keyboard test never presses: it Tabs into the component (the start
+  thumb takes focus), steps with an arrow, Tabs again for the end thumb and steps that one. Falsified
+  by dropping the thumbs' `focusable` — Tab then focuses nothing, so the test fails at
+  `tag_is_focused`. The drag test was falsified by making `nearest_thumb` always answer `Start` (the
+  end-thumb drag then moves the start thumb).
 
 ## 5. Differences from Compose
 
@@ -167,13 +168,10 @@ Keyboard and focus — Compose's model, one focus stop per thumb:
    value next to a snapped thumb, exactly as it can in Compose (`state.startValue = value.start`
    snaps the state, not the app's variable); the first gesture writes the snapped value back. The
    single `Slider` follows the same rule.
-6. **A press focuses the thumb it resolves; Compose leaves focus to the platform.** Two focus stops
-   and per-thumb keys are now Compose's model (see §3). What Compose does not do is move focus on a
-   pointer press — a desktop click picks up whichever focusable node it landed on, which for a 4 px
-   thumb is not the point you pressed. winia takes focus for the resolved thumb, so the keyboard
-   always follows the mouse. The remaining focus gap is semantics: each Compose thumb is a semantics
-   node with its own `progressBarRangeInfo` and `setProgress` / `stepBy` actions, and winia has no
-   semantics layer.
+6. **Semantics, and only that.** Two focus stops, per-thumb keys and no focus change on a press are
+   all Compose's model (see §3), so the remaining gap is the accessibility tree: each Compose thumb is
+   a semantics node with its own `progressBarRangeInfo` and `setProgress` / `stepBy` actions, and
+   winia has no semantics layer at all.
 7. **Horizontal-only drag is not enforced.** Compose cancels the press when the gesture moves more
    vertically than horizontally (so an ancestor can scroll instead); winia's gesture tracker decides
    by distance alone. Shared with `Slider`.
