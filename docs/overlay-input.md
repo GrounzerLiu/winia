@@ -86,12 +86,13 @@ A tap that is deferred to the double-tap window carries its arena in `PendingTap
 is re-fired into the popup it came from — and dropped if that popup is gone by then, like a gesture
 still in flight.
 
-Hazard worth knowing: the arena conversion subtracts the overlay's CURRENT screen origin, so an
-overlay that MOVES during a gesture adds its own motion to the measured pointer displacement — past
-the 8 px tap slop, which cancels the tap family. The expanded `SearchBar` is such an overlay (an
-anchored panel sliding to the window corner for `SEARCH_BAR_EXPAND_MS`, pressable while it moves);
-its content is a `TextField` plus `clickable` rows, which is why nothing visibly breaks. A component
-that needs a tap to survive its own overlay's motion wants the origin frozen at press time.
+An overlay that MOVES during a gesture: the arena conversion has to use the origin captured at press
+time (`PerWindow::gesture_arena_origin`, and `overlay_drag_origin` for the drag session), not the live
+`screen_pos`. With the live origin the overlay's own motion lands in the measured displacement — a
+stationary finger then looks like a drag past the 8 px tap slop, and the tap family is cancelled
+(`a_tap_survives_its_own_popup_moving`, whose popup jumps 300 px on press). The expanded `SearchBar` is
+the real case: an anchored panel sliding to the window corner for `SEARCH_BAR_EXPAND_MS`, pressable
+while it moves. Deltas are unaffected either way — a difference cancels a constant origin.
 
 The exception: a target with **drag** gestures (a `Slider`, a sheet panel) is owned by the overlay
 drag machinery, so `overlay_down` does not create a tracker for it and its `on_tap` /
