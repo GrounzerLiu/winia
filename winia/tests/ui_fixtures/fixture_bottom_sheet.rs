@@ -40,7 +40,10 @@ fn bottom_sheet_fixture(ctx: &mut ComposeCtx) {
             let rows = rows.clone();
             move |ctx| {
                 Column::new()
-                    .modifier(Modifier::new().fill_max_width().padding(16.0))
+                    .modifier(Modifier::new()
+                        .fill_max_width()
+                        .padding(16.0)
+                        .test_tag("bs-content"))
                     .build(ctx, |ctx| {
                         Text::new("sheet header").build(ctx);
                         // Inside a bounded, clipped box: a LazyColumn given unbounded height from the sheet's
@@ -52,7 +55,9 @@ fn bottom_sheet_fixture(ctx: &mut ComposeCtx) {
                         Stack::new()
                             .modifier(Modifier::new()
                                 .fill_max_width()
-                                .height(360.0)
+                                // Taller than the window on purpose: the panel then reaches the window
+                                // height when expanded, which is when M3 squares its top corners.
+                                .height(520.0)
                                 .clip(Shape::RoundedRect { corner_radius: 12.0 }))
                             .build(ctx, |ctx| {
                                 LazyColumn::new()
