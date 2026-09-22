@@ -469,8 +469,19 @@ impl SegmentedButton {
         // Compose raises a checked item by 5 and each interaction by 1, so a pressed or focused segment
         // covers its neighbours; winia's pressed/focused are booleans, which is the same z for one
         // interaction.
-        let z = if active { SegmentedButtonDefaults::CHECKED_Z } else { 0.0 }
-            + if st.pressed || st.focused { SegmentedButtonDefaults::INTERACTING_Z } else { 0.0 };
+        // The item's z. Compose's `interactionZIndex` is `interactionCount + (checked ? 5 : 0)`, which
+        // puts an interacting UNCHECKED item (1) BELOW a checked neighbour (5) — fine there, because the
+        // M3 focus ring is drawn INSIDE the item's bounds. Ours is the framework's ring, drawn just
+        // outside the rect, so a checked neighbour would cut its shared edge away; an interacting item
+        // therefore sits above a checked one instead.
+        let interacting = st.pressed || st.focused;
+        let z = if interacting {
+            SegmentedButtonDefaults::CHECKED_Z + SegmentedButtonDefaults::INTERACTING_Z
+        } else if active {
+            SegmentedButtonDefaults::CHECKED_Z
+        } else {
+            0.0
+        };
 
         let mut m = Modifier::new().background(container, shape);
         // Only attach a z when it is actually raised: an item that is neither active nor interacting
@@ -626,6 +637,9 @@ impl SegmentedButton {
                 });
             }
         }
+        // The framework's own ring follows the theme's focus color; without this it is the default
+        // on-surface tone, which reads as a plain white box on a dark page (reported from the demo).
+        ctx.set_current_node_focus_color(theme.primary);
         ctx.end_restartable_group();
     }
 }
@@ -1007,6 +1021,59 @@ mod tests {
         // ⚠ The label's x is not asserted here: its offset animates from the centred start toward the
         // slot, and a headless test never ticks the animation, so it would still read the initial -13.
         // What matters structurally is above — the slot is occupied and visible while inactive.
+    }
+
+    /// The focus ring follows the THEME's color, and an interacting item sits above a checked
+    /// neighbour. The second half is a deviation on purpose: Compose's `interactionZIndex` leaves an
+    /// interacting unchecked item (1) below a checked one (5), because the M3 ring is drawn inside the
+    /// item's bounds — ours is the framework's ring just outside the rect, and the checked neighbour
+    /// covered its shared edge (reported from the demo).
+    #[test]
+    fn a_focused_item_uses_the_theme_focus_color_and_outranks_a_checked_neighbour() {
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let src = MutableInteractionSource::new();
+        let mut composer = Composer::new();
+        let (t, s) = (theme.clone(), src.clone());
+        let scene = move |ctx: &mut ComposeCtx| {
+            let (t, s) = (t.clone(), s.clone());
+            WiniaTheme::with_theme(t, ctx, |ctx| {
+                SingleChoiceSegmentedButtonRow::new().build(ctx, |ctx| {
+                    SegmentedButton::new(true, || {})
+                        .shape(SegmentedButtonDefaults::item_shape(0, 2))
+                        .build(ctx, |ctx| {
+                            Text::new("One").build(ctx);
+                        });
+                    SegmentedButton::new(false, || {})
+                        .shape(SegmentedButtonDefaults::item_shape(1, 2))
+                        .interaction_source(s)
+                        .build(ctx, |ctx| {
+                            Text::new("Two").build(ctx);
+                        });
+                });
+            });
+        };
+        composer.compose(scene.clone());
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 100.0));
+        let items = row_children(&composer);
+        assert_eq!(
+            composer.arena_nodes()[items[1]].focus_color.get(),
+            theme.primary,
+            "the ring takes the theme's focus color, not the framework default"
+        );
+        assert_eq!(
+            composer.arena_nodes()[items[0]].modifier.get_z_index(),
+            Some(SegmentedButtonDefaults::CHECKED_Z)
+        );
+
+        src.emit_focus();
+        composer.recompose(scene);
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 100.0));
+        let items = row_children(&composer);
+        assert_eq!(
+            composer.arena_nodes()[items[1]].modifier.get_z_index(),
+            Some(SegmentedButtonDefaults::CHECKED_Z + SegmentedButtonDefaults::INTERACTING_Z),
+            "a focused item outranks the checked neighbour so its ring is not cut off"
+        );
     }
 
     // ── Pixels ──
