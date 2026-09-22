@@ -505,12 +505,13 @@ impl SegmentedButton {
         let icon = self.icon;
         let inactive_icon = self.inactive_icon;
         let crossfade = inactive_icon.is_some();
-        let icon_on = active || (crossfade && !active);
+        // The slot is always composed (see the icon block below); the offset is what says whether the
+        // label sits centred (icon invisible) or after the slot.
         let target_offset = if active || crossfade { 0.0 } else { SegmentedButtonDefaults::LABEL_OFFSET_HIDDEN };
         let policy = SegmentedButtonContentPolicy {
             slot_offset: slot_offset.clone(),
             target_offset,
-            has_icon: icon_on,
+            has_icon: true,
             pad_h,
             pad_v,
         };
@@ -518,51 +519,65 @@ impl SegmentedButton {
         match ctx.start_restartable_group(key, m, policy) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
-                if icon_on {
-                    // The enter animation rides a graphics layer: scale and alpha from 0 about the
-                    // bottom-left corner, exactly Compose's `scaleIn(0f, TransformOrigin(0f, 1f))` +
-                    // `fadeIn`. When the segment goes inactive the icon is simply not composed, which
-                    // is the source's `exit = None` (no exit animation).
-                    let progress = ctx.remember(|| 0.0f32);
+                // The icon slot is ALWAYS composed, and its visibility is the animation. Composing it
+                // conditionally inserted (and removed) a sibling group in front of the label, which this
+                // framework's slot bookkeeping does not take kindly to: after the second activation the
+                // icon's node never made it into the arena and the check never appeared at all. A stable
+                // structure also means the label's slot and the icon's slot keep their positions.
+                //
+                // Enter: scale and alpha from 0 about the bottom-left corner, exactly Compose's
+                // `scaleIn(0f, TransformOrigin(0f, 1f))` + `fadeIn`. Exit: snapped to 0 with no
+                // animation, which is the source's `exit = None`.
+                let progress = ctx.remember(|| 0.0f32);
+                let was_active = ctx.remember(|| false);
+                if active != was_active.get() {
+                    // Arriving starts the enter animation over (the progress slot survives the segment's
+                    // inactive period, so without this reset it still holds the 1.0 it reached last time
+                    // and `push_animatable` sees the value already at its target — the check popped in
+                    // on every later pick, reported from the demo). Leaving snaps it away instantly.
+                    progress.set(0.0);
+                }
+                was_active.set(active);
+                if active {
                     crate::animation::push_animatable(
                         progress.clone(),
                         1.0,
                         crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::default()),
                     );
-                    let animated = active;
-                    let layer = progress.clone();
-                    let icon_modifier = Modifier::new()
-                        .size(SegmentedButtonDefaults::ICON_SIZE, SegmentedButtonDefaults::ICON_SIZE)
-                        .graphics_layer(move || {
-                            let p = if animated { layer.get().clamp(0.0, 1.0) } else { 1.0 };
-                            GraphicsLayerParams {
-                                scale_x: p,
-                                scale_y: p,
-                                alpha: p,
-                                transform_origin: TransformOrigin(0.0, 1.0),
-                                ..Default::default()
-                            }
-                        });
-                    let icon_key = ctx.next_key();
-                    WiniaTheme::with_content_color(content_color, ctx, |ctx| {
-                        match ctx.start_restartable_group(icon_key, icon_modifier, crate::layout::BoxLayout::new()) {
-                            GroupStatus::Skip => {}
-                            GroupStatus::Enter => {
-                                let chosen = if active { icon } else { inactive_icon };
-                                let inner: Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync> = chosen
-                                    .unwrap_or_else(|| {
-                                        Box::new(|ctx: &mut ComposeCtx| {
-                                            crate::ui::icon::Icon::svg_path(CHECK_ICON_PATH)
-                                                .size(SegmentedButtonDefaults::ICON_SIZE)
-                                                .build(ctx);
-                                        })
-                                    });
-                                inner(ctx);
-                            }
-                        }
-                        ctx.end_restartable_group();
-                    });
                 }
+                let shown = active || crossfade;
+                let layer = progress.clone();
+                let icon_modifier = Modifier::new()
+                    .size(SegmentedButtonDefaults::ICON_SIZE, SegmentedButtonDefaults::ICON_SIZE)
+                    .graphics_layer(move || {
+                        let p = if shown { layer.get().clamp(0.0, 1.0) } else { 0.0 };
+                        GraphicsLayerParams {
+                            scale_x: p,
+                            scale_y: p,
+                            alpha: p,
+                            transform_origin: TransformOrigin(0.0, 1.0),
+                            ..Default::default()
+                        }
+                    });
+                let icon_key = ctx.next_key();
+                WiniaTheme::with_content_color(content_color, ctx, |ctx| {
+                    match ctx.start_restartable_group(icon_key, icon_modifier, crate::layout::BoxLayout::new()) {
+                        GroupStatus::Skip => {}
+                        GroupStatus::Enter => {
+                            let chosen = if active { icon } else { inactive_icon };
+                            let inner: Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync> = chosen
+                                .unwrap_or_else(|| {
+                                    Box::new(|ctx: &mut ComposeCtx| {
+                                        crate::ui::icon::Icon::svg_path(CHECK_ICON_PATH)
+                                            .size(SegmentedButtonDefaults::ICON_SIZE)
+                                            .build(ctx);
+                                    })
+                                });
+                            inner(ctx);
+                        }
+                    }
+                    ctx.end_restartable_group();
+                });
                 let label_key = ctx.next_key();
                 WiniaTheme::with_content_color(content_color, ctx, |ctx| {
                     let mut text_style = WiniaTheme::typography().label_large;
@@ -850,6 +865,72 @@ mod tests {
             nodes[items[0]].modifier.get_z_index(),
             None,
             "an idle unchecked item carries no z, so the renderer keeps its plain loop"
+        );
+    }
+
+    /// The check's slot is always composed, invisible until the segment is active, and each arrival
+    /// starts from 0 — the state of the enter animation as the composition leaves it.
+    ///
+    /// ⚠ What this canNOT pin, and why: an animation only advances when the app ticks it, and a headless
+    /// test never does, so the progress never reaches 1.0 here and the reset on the active transition
+    /// (`progress.set(0.0)`, which is what makes a SECOND pick animate too — reported from the demo) is
+    /// not observable from here. That one was checked in the running demo instead.
+    #[test]
+    fn the_check_animates_in_every_time_the_selection_arrives() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let selected = Arc::new(AtomicBool::new(false));
+        let mut composer = Composer::new();
+        let sel = selected.clone();
+        let t = theme.clone();
+        let scene = move |ctx: &mut ComposeCtx| {
+            let on = sel.load(Ordering::Relaxed);
+            let s2 = sel.clone();
+            WiniaTheme::with_theme(t.clone(), ctx, |ctx| {
+                SingleChoiceSegmentedButtonRow::new().build(ctx, |ctx| {
+                    SegmentedButton::new(on, move || s2.store(!on, Ordering::Relaxed))
+                        .shape(SegmentedButtonDefaults::item_shape(0, 1))
+                        .build(ctx, |ctx| {
+                            Text::new("Only").build(ctx);
+                        });
+                });
+            });
+        };
+        // The icon's alpha, read from the node that carries the enter animation.
+        let icon_alpha = |composer: &Composer| -> Option<f32> {
+            composer
+                .arena_nodes()
+                .iter()
+                .find_map(|n| n.modifier.graphics_layer_params().map(|p| p.alpha))
+        };
+
+        composer.compose(scene.clone());
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 100.0));
+        assert_eq!(
+            icon_alpha(&composer),
+            Some(0.0),
+            "the icon slot is always composed, invisible until the segment is active"
+        );
+
+        // First arrival: the animation starts from 0 (it has not ticked yet).
+        selected.store(true, Ordering::Relaxed);
+        composer.recompose(scene.clone());
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 100.0));
+        let first = icon_alpha(&composer).expect("an active segment composes its check icon");
+        assert!(first < 0.5, "the check enters from 0, got alpha {first}");
+
+        // Leave and arrive again — the second arrival must animate as well.
+        selected.store(false, Ordering::Relaxed);
+        composer.recompose(scene.clone());
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 100.0));
+        selected.store(true, Ordering::Relaxed);
+        composer.recompose(scene);
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 100.0));
+        let again = icon_alpha(&composer).expect("the check is composed again");
+        assert!(
+            again < 0.5,
+            "the second time a segment is picked its check must animate in too, got alpha {again}"
         );
     }
 
