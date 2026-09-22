@@ -111,3 +111,11 @@ path = "tests/ui_fixtures/fixture_dialog_dismiss.rs"
 [[bin]]
 name = "fixture_popup_tap"
 path = "tests/ui_fixtures/fixture_popup_tap.rs"
+
+[[bin]]
+name = "fixture_popup_content"
+path = "tests/ui_fixtures/fixture_popup_content.rs"
+
+[[bin]]
+name = "fixture_search_results"
+path = "tests/ui_fixtures/fixture_search_results.rs"

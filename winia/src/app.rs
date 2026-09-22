@@ -2689,6 +2689,22 @@ fn sync_overlays(pw: &mut PerWindow, _recomposed: bool) {
             // enter 动画则 push 0→1（否则 update 内已 Backchannel 写 1.0 保持显示）
             let had_enter = ov.enter_anim.is_some();
             ov.update(desc);
+            // ⚠ The caller just recomposed and handed us a NEW content closure, so the overlay's whole
+            // content has to run again. An overlay is a separate composer: nothing inside it can see
+            // that its closure was replaced, and a group re-enters only for state it read or
+            // parameters it declared — so content built from values the caller captured (a filtered
+            // list, a formatted string) kept what the FIRST closure captured. Marking the root alone
+            // is not enough: the caller's lambda usually sits inside wrapper groups of its own (a
+            // `Column`, a `Surface`), which declare nothing and would skip. Measured on
+            // `search_bar_demo`: the fullscreen panel and the docked dropdown both stayed on their
+            // first rows while the input field updated.
+            //
+            // Cost is bounded by how often the caller's group runs, not by this call: a screen whose
+            // main tree composes every frame re-runs the overlay content every frame too, while one
+            // that idles skips both composers. Nothing leaks across frames (`Slot::dirty` is consumed
+            // by the pass that reads it), a `LazyColumn` keeps its scroll position, and a closing
+            // overlay is not re-registered at all.
+            ov.composer.mark_content_dirty();
             let now_has_enter = ov.enter_anim.is_some();
             if !had_enter && now_has_enter {
                 if let Some(p) = ov.progress.clone() {

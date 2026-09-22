@@ -791,3 +791,77 @@ fn a_popup_double_tap_zone_fires_and_defers_its_single_tap() {
     app.expect_text_timeout("popup-doubles: 1", Duration::from_secs(5));
     app.expect_text("popup-singles: 1");
 }
+
+/// A popup's content follows a CALLER-side value.
+///
+/// An overlay is a separate composer whose groups re-enter for state they read or parameters they
+/// declare — nothing inside it can see that the caller handed it a new content closure. So content
+/// built from a value the caller computed and captured (the ordinary shape: format it, then pass it
+/// in) used to keep the value of the FIRST closure forever: measured on a probe fixture, the page read
+/// `page-n: 3` while the popup still read `popup-n: 0`. `sync_overlays` now marks a reused overlay for
+/// recomposition, which is what re-runs its content.
+#[test]
+fn popup_content_follows_a_caller_side_value() {
+    let mut app = UiTest::launch("popup_content");
+    app.expect_text("page-n: 0");
+    // The popup's own text lives in the popup entries (`all_texts` covers the main tree).
+    app.expect_overlay_text("popup-n: 0");
+
+    app.click_tag("bump");
+    app.expect_text_timeout("page-n: 1", Duration::from_secs(5));
+    app.expect_overlay_text_timeout("popup-n: 1", Duration::from_secs(5));
+
+    // A second bump, so the check is not just "the first update happened to land".
+    app.click_tag("bump");
+    app.expect_text_timeout("page-n: 2", Duration::from_secs(5));
+    app.expect_overlay_text_timeout("popup-n: 2", Duration::from_secs(5));
+}
+
+/// The expanded SearchBar's results follow the query.
+///
+/// The caller filters in ITS scope (`SearchBarState::query_text()` in the parent, then the list is
+/// captured by the content lambda) — the shape the Compose sample uses. The panel's body declared the
+/// query for its own group, but the caller's lambda sits behind a nested group that declares nothing,
+/// so it never re-entered and the list kept the first, unfiltered rows while the input field updated.
+/// The items are addressed by tag inside the popup entries, so this asserts what the panel actually
+/// shows rather than what the page computed.
+#[test]
+fn search_results_follow_the_query() {
+    let mut app = UiTest::launch("search_results");
+    app.expect_text("query: ");
+
+    app.click_tag("open-search");
+    // The unfiltered list is what the panel shows first.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.find_tag_in_overlay("item-Banana").is_none() {
+        assert!(Instant::now() < deadline, "the panel never showed its results");
+        std::thread::sleep(Duration::from_millis(100));
+        app.refresh();
+    }
+    assert!(app.find_tag_in_overlay("item-Apple").is_some(), "unfiltered: Apple is there");
+
+    // Type "bl": the panel must narrow to the two berries, and the field must have taken the keys.
+    for key in ["b", "l"] {
+        app.key(key);
+    }
+    app.expect_text_timeout("query: bl", Duration::from_secs(5));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        app.refresh();
+        let has_berries = app.find_tag_in_overlay("item-Blackberry").is_some()
+            && app.find_tag_in_overlay("item-Blueberry").is_some();
+        let stale_gone = app.find_tag_in_overlay("item-Apple").is_none()
+            && app.find_tag_in_overlay("item-Banana").is_none()
+            && app.find_tag_in_overlay("item-Cherry").is_none();
+        if has_berries && stale_gone {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the results must follow the query: Blackberry/Blueberry present = {has_berries}, \
+             Apple/Banana/Cherry gone = {stale_gone} (the list is showing what the FIRST closure \
+             captured when this fails)"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}

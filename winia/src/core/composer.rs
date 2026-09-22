@@ -2547,6 +2547,25 @@ impl Composer {
         self.needs_recomposition = true;
     }
 
+    /// Re-run the WHOLE content on the next pass: the root scope and every group under it are marked
+    /// dirty, so nested groups enter regardless of their (unchanged) parameters.
+    ///
+    /// This is what a caller recomposing means for a subcomposition it owns — an overlay's composer is
+    /// a separate one, so nothing inside it can see that the caller produced a NEW content closure, and
+    /// a group re-enters only for state it read or parameters it declared. Without this, overlay content
+    /// built from a value the caller captured (a filtered list, a formatted string) keeps the first
+    /// closure's value — measured on `search_bar_demo`, whose docked dropdown and fullscreen panel both
+    /// stayed on their first rows while the input field updated. Marking only the root is not enough:
+    /// the caller's lambda usually sits inside wrapper groups of its own, which declare nothing.
+    ///
+    /// Cost: that pass re-runs the content subtree (remembered state survives, `LazyColumn` items are
+    /// recomposed by key), so a caller should re-register an overlay when its inputs changed rather
+    /// than unconditionally every frame.
+    pub fn mark_content_dirty(&mut self) {
+        self.needs_recomposition = true;
+        SlotTable::mark_dirty_subtree(&mut self.slot_table.root_slot);
+    }
+
     fn has_pending_compose_states(&self) -> bool {
         let compose_ids: HashSet<StateId> = self.slot_deps.keys().copied().collect();
         self.pending_states
