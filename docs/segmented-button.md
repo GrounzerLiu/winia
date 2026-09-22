@@ -94,8 +94,12 @@ Colors resolve from `enabled × active` (Compose's `containerColor` / `contentCo
    incoming one in (sequential), where Compose's cross-dissolves the two at once. The visible
    difference is a brief empty slot in the middle of the swap; the slot is occupied at rest either way,
    which is what keeps the label still.
-5. **`z_index` is per item, not per interaction count.** Two simultaneous interactions (say a press on
-   one item and focus on another) both sit at `+1` here, where Compose's counter would separate them.
+5. **An interacting item outranks a checked one.** Compose's `interactionZIndex` is
+   `interactionCount + (checked ? 5 : 0)`, which leaves a focused unchecked item (1) BELOW a checked
+   neighbour (5) — harmless there, because the M3 ring is drawn inside the item's bounds. winia uses the
+   framework's ring, drawn just outside the rect, so a checked neighbour cut the ring's shared edge
+   away; an interacting item therefore carries `CHECKED_Z + INTERACTING_Z` and paints above everything
+   in the row. Two simultaneous interactions still collapse to one z step (Compose counts them).
 
 ## 5. Tests
 
