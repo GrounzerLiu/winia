@@ -50,8 +50,15 @@ one it faces:
 | Segment | Span | Color |
 |---|---|---|
 | left | `[track_left, start_pos - gap]` | inactive (the active track for a single slider) |
-| active | `[start_pos + gap, end_pos - gap]`, or from `track_left` when the range reaches `min`, to `track_right` when it reaches `max` | primary |
+| active | `[start_pos + gap, end_pos - gap]` | primary |
 | right | `[end_pos + gap, track_right]` | inactive |
+
+The active segment never reaches a track end: it runs between the thumbs, one gap short of each, and
+takes the 2 dp inside corner at both ends. A single slider's active track is the one exception —
+everything left of its thumb is active, so it starts at `track_left` and takes the full-round corner
+there (`activeTrackStart = 0f` in Compose). The practical effect is that a thumb reads as the end of
+the fill and the pixels past it stay clear, single slider and range alike, which is what
+`a_range_at_an_end_leaves_the_end_clear` pins.
 
 A segment shorter than the round end it owns is not drawn, and neither is its stop indicator (which
 is what the guard `left_seg_end > track_left + threshold` computes). The threshold follows the
@@ -79,7 +86,7 @@ Gestures:
 - Pure rules: `nearest_thumb_picks_the_nearer_thumb` (including both tie cases),
   `a_thumb_cannot_cross_the_other`, `thumb_center_matches_the_drawing_axis`.
 - Pixels: `range_slider_renders_two_thumbs_and_the_active_middle` (both thumbs, the active middle,
-  and the two thumb gaps), `a_range_reaching_an_end_fills_to_the_track_end`,
+  and the two thumb gaps), `a_range_at_an_end_leaves_the_end_clear`,
   `range_steps_color_ticks_inside_the_range`, `disabled_range_uses_the_disabled_palette`.
 - Gestures through the tree: `pressing_jumps_only_the_nearer_thumb`,
   `a_press_on_the_far_side_moves_the_other_thumb`,
@@ -105,10 +112,13 @@ Gestures:
    the first/last step, where it goes back to the plain mapping. This is the single slider's
    pre-existing rule; the range variant inherits it for consistency, and the payoff is that both
    sliders share one drawing function.
-3. **A range that reaches an end fills to that end.** Compose starts the active track at
-   `start_pos + gap` even when the start thumb is at `min`, which leaves a blank strip between the
-   track's end and the thumb; winia draws the active track from the track's end and takes its
-   full-round corner there. Follows from (2): at `min` the winia thumb already sits `corner` in.
+3. **At an end, the fill stops at the thumb.** This is Compose's rule, not a deviation
+   (`activeTrackStart = sliderValueStart + startGap` for a range, `0f` for a single slider), and an
+   earlier version of this component got it wrong by filling to the track's end when a thumb sat on
+   it, which made the range stick out past its own thumbs. What differs from Compose is only where
+   the gutter falls, and that follows from (2): Compose's end thumb sits ON the track edge (half of
+   it hangs off), leaving one gap of clearance, while winia's end thumb sits `corner` in — 8 px at
+   the default height — so there is a sliver before the thumb as well as the gap after it.
 4. **Drag is absolute, not accumulated.** Compose keeps a raw pixel offset per thumb, adds deltas,
    re-syncs the other end from the value, and snaps after each step. winia maps the pointer's
    position to a value (`value_at_x`) exactly as `Slider` does. The visible difference is at a

@@ -590,21 +590,37 @@ mod tests {
         assert!(close(at(&px, w, 228.0, 24.0), white), "gap right of the end thumb is clear (got {:?})", at(&px, w, 228.0, 24.0));
     }
 
+    /// Thumbs at the ends of the range behave exactly like a single slider's thumb: the fill stops
+    /// one gap short of the thumb, so the thumb reads as the end of the track and the last pixels
+    /// stay clear. (An earlier version filled to the track's end for a range at an end, which stuck
+    /// out past the thumb — reported as wrong against the single slider's look.)
     #[test]
-    fn a_range_reaching_an_end_fills_to_the_track_end() {
+    fn a_range_at_an_end_leaves_the_end_clear() {
         let theme = ThemeColors::light_from_seed(0x6750A4);
+        let prim = rgb(theme.primary);
+        let white = (255, 255, 255);
         let (px, w) = render_range_px(|ctx| {
+            RangeSlider::new((0.0, 1.0)).value_range(0.0, 1.0).on_value_change(|_| {}).build(ctx);
+        });
+        // Thumbs at 8 and 292, the fill between 16 and 284: clear at both ends, no stop indicator
+        // behind a thumb that sits on the end.
+        assert!(close(at(&px, w, 3.0, 24.0), white), "nothing is drawn at the very left (got {:?})", at(&px, w, 3.0, 24.0));
+        assert!(close(at(&px, w, 8.0, 24.0), prim), "the start thumb sits corner px in (got {:?})", at(&px, w, 8.0, 24.0));
+        assert!(close(at(&px, w, 20.0, 24.0), prim), "the fill starts one gap past the thumb (got {:?})", at(&px, w, 20.0, 24.0));
+        assert!(close(at(&px, w, 150.0, 24.0), prim), "the whole span is active (got {:?})", at(&px, w, 150.0, 24.0));
+        assert!(close(at(&px, w, 280.0, 24.0), prim), "the fill ends one gap before the end thumb (got {:?})", at(&px, w, 280.0, 24.0));
+        assert!(close(at(&px, w, 292.0, 24.0), prim), "the end thumb (got {:?})", at(&px, w, 292.0, 24.0));
+        assert!(close(at(&px, w, 297.0, 24.0), white), "nothing is drawn at the very right (got {:?})", at(&px, w, 297.0, 24.0));
+
+        // The same at one end only: (0.0, 0.5) leaves the left clear and an inactive track right of
+        // the end thumb.
+        let sec = rgb(theme.secondary_container);
+        let (px2, w2) = render_range_px(|ctx| {
             RangeSlider::new((0.0, 0.5)).value_range(0.0, 1.0).on_value_change(|_| {}).build(ctx);
         });
-        let prim = rgb(theme.primary);
-        let sec = rgb(theme.secondary_container);
-        // Start at min: the active track reaches the left end of the track (no inactive segment and
-        // no stop indicator behind the thumb), and the corner there is the full-round one.
-        assert!(close(at(&px, w, 4.0, 24.0), prim), "the active track reaches the track's left end (got {:?})", at(&px, w, 4.0, 24.0));
-        assert!(close(at(&px, w, 20.0, 24.0), prim), "and stays active up to the end thumb (got {:?})", at(&px, w, 20.0, 24.0));
-        assert!(close(at(&px, w, 200.0, 24.0), sec), "right of the end thumb is inactive (got {:?})", at(&px, w, 200.0, 24.0));
-        // The end stop indicator is drawn on the inactive segment's end.
-        assert!(close(at(&px, w, 292.0, 24.0), prim), "the end stop is the active track color (got {:?})", at(&px, w, 292.0, 24.0));
+        assert!(close(at(&px2, w2, 3.0, 24.0), white), "clear left end (got {:?})", at(&px2, w2, 3.0, 24.0));
+        assert!(close(at(&px2, w2, 20.0, 24.0), prim), "active from one gap past the thumb (got {:?})", at(&px2, w2, 20.0, 24.0));
+        assert!(close(at(&px2, w2, 200.0, 24.0), sec), "inactive right of the end thumb (got {:?})", at(&px2, w2, 200.0, 24.0));
     }
 
     #[test]
