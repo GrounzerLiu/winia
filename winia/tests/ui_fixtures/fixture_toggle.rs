@@ -1,7 +1,8 @@
 //! UI 测试 fixture：条件结构切换（if/else 分支）。
 //! 场景：`Show Alt` 按钮点击 → 分支 A（Alternative）↔ 分支 B（Add 10）互斥切换。
 //!
-//! 由 `[[bin]]` 注册编译为独立 exe，测试通过 stdin/stdout 管道驱动。
+//! One scenario of the `fixture_all` binary (see `fixture_all.rs`): the harness spawns it with this
+//! scenario's name and drives it over the stdin/stdout pipe.
 
 use winia::prelude::*;
 
@@ -33,7 +34,9 @@ fn ui(ctx: &mut ComposeCtx) {
         });
 }
 
-fn main() {
+/// Scenario entry: `fixture_all` (the single fixture binary) calls this after selecting the scenario from
+/// `argv[1]`. It starts the event loop and never returns.
+pub fn main() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let _guard = rt.enter();
     winia::run_app!(|ctx| {

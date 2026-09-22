@@ -46,76 +46,12 @@ skia-safe = { workspace = true, features = ["vulkan", "textlayout", "svg", "gl",
 [dev-dependencies]
 serde_json = "1"
 
-# ── UI 测试 fixture（bin target——cargo test 不执行；路径固定 target/debug/fixture_*）──
-# 供 tests/ui_test.rs 通过 stdin/stdout 管道驱动（不依赖 examples——测试资产独立）
+# ── UI-test fixtures: ONE bin target (cargo test does not run it; path is target/debug/fixture_all.exe) ──
+# tests/ui_test.rs drives it over the stdin/stdout pipe (independent of examples — test assets).
+# Every scenario lives in this one binary and is selected by argv[1]. A scenario used to be its own
+# [[bin]], i.e. its own full skia link plus ~30 MB exe / ~125 MB PDB each (measured at 18 fixtures:
+# 538 MB of exes + 2.26 GB of PDBs, and every lib change relinked all of them — cargo links in
+# parallel, which is where the memory spike came from). Adding a scenario is a module + a SCENARIOS row.
 [[bin]]
-name = "fixture_click"
-path = "tests/ui_fixtures/fixture_click.rs"
-
-[[bin]]
-name = "fixture_toggle"
-path = "tests/ui_fixtures/fixture_toggle.rs"
-
-[[bin]]
-name = "fixture_subwindow"
-path = "tests/ui_fixtures/fixture_subwindow.rs"
-
-[[bin]]
-name = "fixture_scroll"
-path = "tests/ui_fixtures/fixture_scroll.rs"
-
-[[bin]]
-name = "fixture_nest"
-path = "tests/ui_fixtures/fixture_nest.rs"
-
-[[bin]]
-name = "fixture_text_field"
-path = "tests/ui_fixtures/fixture_text_field.rs"
-
-[[bin]]
-name = "fixture_top_app_bar"
-path = "tests/ui_fixtures/fixture_top_app_bar.rs"
-
-[[bin]]
-name = "fixture_scaffold"
-path = "tests/ui_fixtures/fixture_scaffold.rs"
-
-[[bin]]
-name = "fixture_nested_scroll"
-path = "tests/ui_fixtures/fixture_nested_scroll.rs"
-
-[[bin]]
-name = "fixture_resize"
-path = "tests/ui_fixtures/fixture_resize.rs"
-
-[[bin]]
-name = "fixture_overlay"
-path = "tests/ui_fixtures/fixture_overlay.rs"
-
-[[bin]]
-name = "fixture_panic"
-path = "tests/ui_fixtures/fixture_panic.rs"
-
-[[bin]]
-name = "fixture_overlay_focus"
-path = "tests/ui_fixtures/fixture_overlay_focus.rs"
-
-[[bin]]
-name = "fixture_popup_drag"
-path = "tests/ui_fixtures/fixture_popup_drag.rs"
-
-[[bin]]
-name = "fixture_dialog_dismiss"
-path = "tests/ui_fixtures/fixture_dialog_dismiss.rs"
-
-[[bin]]
-name = "fixture_popup_tap"
-path = "tests/ui_fixtures/fixture_popup_tap.rs"
-
-[[bin]]
-name = "fixture_popup_content"
-path = "tests/ui_fixtures/fixture_popup_content.rs"
-
-[[bin]]
-name = "fixture_search_results"
-path = "tests/ui_fixtures/fixture_search_results.rs"
+name = "fixture_all"
+path = "tests/ui_fixtures/fixture_all.rs"

@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 /// UI 测试串行锁——launch 时 taskkill 清理残留会误杀并行测试刚启动的进程，
-/// 且多个 demo 窗口同开干扰（焦点/输入）。串行执行（5 个测试 ~20s 可接受）。
+/// 且多个 demo 窗口同开干扰（焦点/输入）。串行执行（25 个测试 ~60s 可接受）。
 static TEST_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// 与 demo 进程的管道封装
@@ -61,9 +61,11 @@ impl Drop for UiTest {
 }
 
 impl UiTest {
-    /// 启动测试 fixture（`tests/ui_fixtures/` 下，`[[bin]]` 构建的独立 exe——
-    /// 不依赖 examples；cargo test 不执行 bin，仅构建）。exe 路径固定
-    /// `target/debug/fixture_<name>.exe`。
+    /// 启动测试 fixture（`tests/ui_fixtures/`，单一 `[[bin]]` 构建的 exe——不依赖
+    /// examples；cargo test 不执行 bin，仅构建）。exe 路径固定
+    /// `target/debug/fixture_all.exe`，场景名作为 argv[1]（`fixture_all.rs` 分发到
+    /// 对应模块——每个场景仍是独立进程，隔离性不变；但整个套件只链接一次 skia，
+    /// 不再是每场景一个 exe + 一份 PDB）。
     /// 注意：持有全局串行锁（防 taskkill 互杀 + 窗口干扰）——UiTest drop 释放。
     pub fn launch(fixture: &str) -> Self {
         let _serial = TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -71,18 +73,20 @@ impl UiTest {
         let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("crate 不在 workspace 根下一级");
-        let exe = workspace_root.join("target/debug").join(format!("fixture_{fixture}.exe"));
+        let exe = workspace_root.join("target/debug").join("fixture_all.exe");
         if !exe.exists() {
             panic!(
-                "fixture 未构建：请先 `cargo build --bins --features debug-server`（exe: {}）",
+                "fixture 未构建：请先 `cargo build --bin fixture_all --features debug-server`（exe: {}）",
                 exe.display()
             );
         }
-        let exe_name = format!("fixture_{fixture}.exe");
+        let exe_name = "fixture_all.exe".to_string();
 
-        // 清理同名残留进程（测试中断/上次失败可能留下孤儿 fixture——防窗口累积）。
+        // 清理残留进程（测试中断/上次失败可能留下孤儿 fixture——防窗口累积）。
         // 注意：仅在持有串行锁时执行（并行会互杀）；若残留进程占着 exe 文件锁，
-        // 等待其退出后再 spawn。
+        // 等待其退出后再 spawn。单 exe 下按镜像名清理：串行锁保证套件内同一时刻只有
+        // 一个 fixture 进程；代价是**手工启动**的 fixture_all（或另一个并发 cargo test
+        // 的 fixture）也会被这次清理杀掉。
         let _ = Command::new("taskkill")
             .args(["/f", "/im", &exe_name])
             .stdout(Stdio::null())
@@ -91,6 +95,7 @@ impl UiTest {
         std::thread::sleep(Duration::from_millis(500));
 
         let mut child = Command::new(&exe)
+            .arg(fixture)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped()) // 日志走 stderr——读线程消费（防阻塞）

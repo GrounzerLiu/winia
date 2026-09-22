@@ -4,8 +4,9 @@
 （点击/滚动/拖拽），从树 JSON 断言界面状态——验证**重组/布局/多窗口**等真实行为。
 
 **fixture 与 examples 分离**：examples 只做展示；UI 测试使用 `tests/ui_fixtures/` 下的
-独立场景（`[[test]] harness = false`——cargo 编译为独立 exe），每个用例单一职责
-（Given/When/Then 设计原则）。
+独立场景，每个用例单一职责（Given/When/Then 设计原则）。所有场景编译进**同一个**
+`fixture_all` 二进制（`argv[1]` 选场景），harness 每个用例 spawn 一个独立进程——
+隔离性不变，但整个套件只链接一次 skia（见「新增场景测试」一节）。
 
 ## 架构
 
@@ -13,14 +14,14 @@
 cargo test --features debug-server
         │
         ├─ tests/ui/mod.rs       UiTest 封装（进程管理 + 管道协议 + 断言辅助）
-        ├─ tests/ui_test.rs      场景断言（click/toggle/subwindow/scroll/nest 5 用例）
-        ├─ tests/ui_fixtures/    fixture 源码（harness=false 的 [[test]] → 独立 exe）
+        ├─ tests/ui_test.rs      场景断言（25 用例）
+        ├─ tests/ui_fixtures/    fixture 源码 + fixture_all.rs（单二进制分发器）
         └─ tests/{event_flow,layout_snapshot,render_snapshot}.rs  库行为快照测试
                 │
                 │ stdin 管道（命令）        stdout 管道（响应）
                 ▼                             ▲
         ┌───────────────────────────────────────────┐
-        │  fixture 进程（target/debug/deps/fixture_*）│
+        │  fixture 进程（target/debug/fixture_all.exe）│
         │  --features debug-server 编译（管道协议）    │
         └───────────────────────────────────────────┘
 ```
@@ -81,7 +82,7 @@ cargo test --features debug-server
 ```bash
 cd winia
 # 需要先构建带 debug-server 的 fixture exe（ui_test 直接 spawn exe，不触发 cargo 构建）
-cargo test --features debug-server --no-run
+cargo build --bin fixture_all --features debug-server
 # 跑全部测试（含 UI 测试——串行 ~25s）
 cargo test --features debug-server
 # 只跑 UI 测试
@@ -111,48 +112,56 @@ tooltips are the one overlay that deliberately lets the press through.
 
 ## 新增场景测试（按测试用例设计原则）
 
-1. 在 `tests/ui_fixtures/` 写 fixture（**单一场景**——Given/When/Then 可读）：
+1. Add a fixture file under `tests/ui_fixtures/` (**one scenario**, readable as Given/When/Then). It is
+   NOT its own binary: it is a module of `fixture_all`, and its `pub fn main()` is what the dispatcher
+   calls (it starts the event loop and never returns).
    ```rust
-   //! UI 测试 fixture：<场景描述>
+   //! UI-test fixture: <what the scenario is>
    use winia::prelude::*;
    #[composable]
-   fn ui(ctx: &mut ComposeCtx) { /* 最小场景 UI */ }
-   fn main() { /* tokio rt + winia::run_app!(Window::new()...) */ }
+   fn ui(ctx: &mut ComposeCtx) { /* the minimal scenario UI */ }
+   pub fn main() { /* tokio rt + winia::run_app!(Window::new()...) */ }
    ```
-2. `Cargo.toml` 注册为独立 fixture 二进制：
-   ```toml
-   [[bin]]
-   name = "fixture_<name>"
-   path = "tests/ui_fixtures/fixture_<name>.rs"
+2. Register it in `tests/ui_fixtures/fixture_all.rs`: a `#[path = "fixture_<name>.rs"] mod <name>;` line
+   and one row in the `SCENARIOS` table (`("<name>", <name>::main)`). That table is the registry — it
+   drives the dispatch and the usage message, so those two edits are all that is needed.
+   ⚠ Each scenario still runs in its OWN PROCESS (the harness spawns `fixture_all.exe <name>` per test),
+   so isolation is unchanged. What changed is the build: a scenario used to be its own `[[bin]]`, i.e.
+   its own full link against skia plus its own ~30 MB executable and ~125 MB PDB (measured at 18
+   fixtures: 538 MB of exes + 2.26 GB of PDBs, and every lib change relinked all of them — cargo links
+   in parallel, which is where the memory spike came from). Now one scenario costs a module and a table
+   row, and the whole suite links skia once.
+3. Add the case to `tests/ui_test.rs`: `UiTest::launch("<name>")` → `expect_text` for the first frame →
+   `find`/`find_tag` → `click_until` (retries a lost click) → assertions.
+4. Build and run:
+   ```bash
+   cargo build --bin fixture_all --features debug-server   # the only fixture target while iterating
+   cargo test -p winia --features debug-server --test ui_test <case name>
    ```
-   `UiTest::launch("<name>")` 会启动 `target/debug/fixture_<name>`；fixture 不是由
-   `cargo test` 直接执行的测试 target。
-3. `tests/ui_test.rs` 加用例：`launch("<name>")` → `expect_text` 等首帧 → `find` 定位 →
-   `click_until` 交互（点击丢失自动重试）→ 断言。
-4. 跑测试 + 检查残留进程（`Get-Process fixture_*` 应为 0）。
+5. Run the suite and check for leftovers (`Get-Process fixture_all` should be empty).
 
 ## 测试清单
 
 ### UI 集成（fixture 驱动）
 
-| 用例 | fixture | 覆盖（Given/When/Then） |
+| 用例 | launch 名（`UiTest::launch`） | 覆盖（Given/When/Then） |
 |------|---------|------------------------|
-| click_updates_state_and_keeps_structure | fixture_click | 点击 +1 三次 → Count 更新；静态行不塌缩 |
-| toggle_switches_conditional_branch_exclusively | fixture_toggle | 切换两次 → 分支 A ↔ B 互斥 |
-| subwindow_open_close_preserves_main_and_trees | fixture_subwindow | 多窗口开/关 → 两窗口树共存（window_count 1→2→1） |
-| scroll_container_keeps_content | fixture_scroll | 滚动 ± → 内容保持不崩溃 |
-| nest_structure_switch_cycles_stably | fixture_nest | 3 态循环 6 次 → 状态重复进入节点数一致 + 按钮不漂移 |
-| text_field_focus_input_and_backspace_update_state | fixture_text_field | 点击聚焦、逐字符输入、Backspace 与状态文本重组 |
-| text_field_password_and_multiline_states_update | fixture_text_field | 密码掩码状态、长度阈值、Enter 多行与 minLines 几何 |
-| text_field_error_readonly_and_disabled_states_are_enforced | fixture_text_field | error 解除、read-only/disabled 输入约束与焦点语义 |
-| top_app_bar_variants_collapse_and_restore_with_scroll | fixture_top_app_bar | Medium/Large 高度、共享滚动 offset 折叠与回滚恢复 |
-| scaffold_fab_clicks_and_rtl_mirrors_without_changing_content_inset | fixture_scaffold | FAB 点击、content inset 与 RTL BottomEnd 镜像 |
-| a_popup_tap_zone_fires_the_tap_family_like_the_main_tree | fixture_popup_tap | tap + long-press in both arenas, driven with down/up |
-| a_popup_double_tap_zone_fires_and_defers_its_single_tap | fixture_popup_tap | a popup's deferred single tap and double tap (`PendingTap` arena routing) |
-| a_drag_inside_a_popup_reaches_the_same_value_as_in_the_main_tree | fixture_popup_drag | popup drag callbacks receive layer-local coordinates |
-| a_modal_dialog_with_dismiss_on_outside_false_stays_open | fixture_dialog_dismiss | `dismiss_on_outside` honoured for a modal overlay, and the press still consumed |
-| an_overlay_press_zone_receives_the_press_gesture | fixture_overlay_focus | popup pointer-down dispatches the press gesture |
-| clicking_an_overlay_button_does_not_steal_focus | fixture_overlay_focus | a popup clickable does not take focus from the field beside it |
+| click_updates_state_and_keeps_structure | click | 点击 +1 三次 → Count 更新；静态行不塌缩 |
+| toggle_switches_conditional_branch_exclusively | toggle | 切换两次 → 分支 A ↔ B 互斥 |
+| subwindow_open_close_preserves_main_and_trees | subwindow | 多窗口开/关 → 两窗口树共存（window_count 1→2→1） |
+| scroll_container_keeps_content | scroll | 滚动 ± → 内容保持不崩溃 |
+| nest_structure_switch_cycles_stably | nest | 3 态循环 6 次 → 状态重复进入节点数一致 + 按钮不漂移 |
+| text_field_focus_input_and_backspace_update_state | text_field | 点击聚焦、逐字符输入、Backspace 与状态文本重组 |
+| text_field_password_and_multiline_states_update | text_field | 密码掩码状态、长度阈值、Enter 多行与 minLines 几何 |
+| text_field_error_readonly_and_disabled_states_are_enforced | text_field | error 解除、read-only/disabled 输入约束与焦点语义 |
+| top_app_bar_variants_collapse_and_restore_with_scroll | top_app_bar | Medium/Large 高度、共享滚动 offset 折叠与回滚恢复 |
+| scaffold_fab_clicks_and_rtl_mirrors_without_changing_content_inset | scaffold | FAB 点击、content inset 与 RTL BottomEnd 镜像 |
+| a_popup_tap_zone_fires_the_tap_family_like_the_main_tree | popup_tap | tap + long-press in both arenas, driven with down/up |
+| a_popup_double_tap_zone_fires_and_defers_its_single_tap | popup_tap | a popup's deferred single tap and double tap (`PendingTap` arena routing) |
+| a_drag_inside_a_popup_reaches_the_same_value_as_in_the_main_tree | popup_drag | popup drag callbacks receive layer-local coordinates |
+| a_modal_dialog_with_dismiss_on_outside_false_stays_open | dialog_dismiss | `dismiss_on_outside` honoured for a modal overlay, and the press still consumed |
+| an_overlay_press_zone_receives_the_press_gesture | overlay_focus | popup pointer-down dispatches the press gesture |
+| clicking_an_overlay_button_does_not_steal_focus | overlay_focus | a popup clickable does not take focus from the field beside it |
 
 ### 库行为快照（无窗口，直接驱动 Composer）
 
