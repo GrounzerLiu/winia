@@ -28,7 +28,7 @@ use crate::modifier::{KbEvent, Modifier};
 use crate::ui::interaction::MutableInteractionSource;
 use crate::ui::slider::{
     SLIDER_TOUCH_HEIGHT, SLIDER_TRACK_HEIGHT, SliderColors, SliderDefaults, TrackThumb, draw_track,
-    fraction_from_value, handle_key, value_at_x,
+    fraction_from_value, handle_key, snap_value, value_at_x,
 };
 use crate::ui::theme::WiniaTheme;
 use std::sync::Arc;
@@ -216,13 +216,14 @@ impl RangeSlider {
             .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
         let (min, max) = self.value_range;
         let (min, max) = if max > min { (min, max) } else { (min, min + 1.0) };
-        // Normalise here, not in the track: an inverted range is the caller's to fix, a rendering
-        // panic is not (the draw node only draws what it is given).
-        let value = RangeValue {
-            start: self.value.start.min(self.value.end).clamp(min, max),
-            end: self.value.start.max(self.value.end).clamp(min, max),
-        };
         let steps = self.steps;
+        // As in `Slider`: with `steps` the component only ever SHOWS on-tick values (Compose snaps in
+        // `RangeSliderState`'s setters), so a caller-supplied range is snapped as well — not just a
+        // dragged one. Snapping the two ends independently can invert the pair, so normalise once
+        // more afterwards; without `steps` this is the plain clamp.
+        let lo = snap_value(self.value.start.min(self.value.end).clamp(min, max), steps, min, max);
+        let hi = snap_value(self.value.start.max(self.value.end).clamp(min, max), steps, min, max);
+        let value = RangeValue { start: lo.min(hi), end: lo.max(hi) };
         let enabled = self.enabled;
 
         // Per-thumb interaction state: each thumb halves in width while its own gesture runs.
@@ -754,6 +755,34 @@ mod tests {
         // x = 240 is nearer the end thumb → the START thumb keeps 0.25 and the end thumb jumps.
         press((240.0, 24.0));
         assert_eq!(got.load(Ordering::Relaxed), 250, "the start thumb value is unchanged");
+    }
+
+    /// Both ends snap to ticks, a caller-supplied range included (see `Slider`'s note): with
+    /// steps = 4 over 0..1 the ticks are 0, .2, .4, .6, .8, 1, so (0.3, 0.31) collapses onto the 0.4
+    /// tick — thumb centres 8 + 284 × f — and (0.3, 0.7) becomes (0.4, 0.8).
+    #[test]
+    fn discrete_range_snaps_both_ends() {
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let prim = rgb(theme.primary);
+        let sec = rgb(theme.secondary_container);
+        let white = (255, 255, 255);
+
+        let (px, w) = render_range_px(|ctx| {
+            RangeSlider::new((0.3, 0.31)).value_range(0.0, 1.0).steps(4).on_value_change(|_| {}).build(ctx);
+        });
+        assert!(close(at(&px, w, 121.6, 24.0), prim), "the collapsed range sits on the 0.4 tick (got {:?})", at(&px, w, 121.6, 24.0));
+        // Left of it the track is inactive — an unsnapped (0.3, 0.31) would have put two thumbs here
+        // and left 110 in the clear.
+        assert!(close(at(&px, w, 110.0, 24.0), sec), "inactive left of the snapped thumb (got {:?})", at(&px, w, 110.0, 24.0));
+        assert!(close(at(&px, w, 150.0, 24.0), sec), "inactive right of the snapped thumb (got {:?})", at(&px, w, 150.0, 24.0));
+
+        let (px2, w2) = render_range_px(|ctx| {
+            RangeSlider::new((0.3, 0.7)).value_range(0.0, 1.0).steps(4).on_value_change(|_| {}).build(ctx);
+        });
+        assert!(close(at(&px2, w2, 121.6, 24.0), prim), "start snapped to 0.4 (got {:?})", at(&px2, w2, 121.6, 24.0));
+        assert!(close(at(&px2, w2, 235.2, 24.0), prim), "end snapped to 0.8 (got {:?})", at(&px2, w2, 235.2, 24.0));
+        assert!(close(at(&px2, w2, 150.0, 24.0), prim), "the snapped span is the active one (got {:?})", at(&px2, w2, 150.0, 24.0));
+        assert!(close(at(&px2, w2, 228.0, 24.0), white), "the gap before the snapped end thumb is clear (got {:?})", at(&px2, w2, 228.0, 24.0));
     }
 
     #[test]

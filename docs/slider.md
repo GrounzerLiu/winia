@@ -19,11 +19,16 @@ Slider::new(value: f32)                       // 对标 Slider(value, ...)
     .build(ctx);
 ```
 
-- **受控组件**：value 由调用方持有，`on_value_change` 更新（与 Checkbox 同模式）。
-- **steps 语义**（对齐 Compose）：steps=4 时值域 0..10 允许 2/4/6/8
-  （两端之间 4 个等距值）；拖动/点击自动吸附最近刻度。
-- **交互**：点击跳转（tap 位置即值）、拖动连续跟随（绝对位置换算）、
-  键盘（聚焦后 ←/→ 1 步 = 1% 值域或 1 档、PageUp/Down 大步、Home/End 端点）。
+- **Controlled component**: the caller owns `value` and `on_value_change` updates it (the same
+  pattern as `Checkbox`).
+- **`steps` semantics** (matching Compose): `steps` counts the values BETWEEN the ends, so
+  `steps = 4` over 0..10 allows 0, 2, 4, 6, 8, 10. With `steps` set, the component only ever SHOWS
+  an on-tick value — a dragged one, a tapped one or one the caller supplied is snapped to the
+  nearest tick (Compose snaps in `SliderState`'s setter). Build never calls `on_value_change`, so
+  the caller's own copy stays as passed until the first gesture; see `docs/range-slider.md` §5.
+- **Interaction**: a tap jumps to the pressed value, a drag follows the pointer in absolute
+  position, and the keyboard steps once focused (←/→ one step — 1% of the range without `steps` or
+  one tick with them — PageUp/PageDown ten, Home/End the ends).
 
 ## 2. 默认值（对标 `SliderTokens` v2_3_5 / M3 specs）
 
