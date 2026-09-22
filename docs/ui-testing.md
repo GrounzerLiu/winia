@@ -3,10 +3,10 @@
 通过真实运行**测试专用 fixture**（Vulkan 窗口 + 渲染循环），向 fixture 进程注入操作
 （点击/滚动/拖拽），从树 JSON 断言界面状态——验证**重组/布局/多窗口**等真实行为。
 
-**fixture 与 examples 分离**：examples 只做展示；UI 测试使用 `tests/ui_fixtures/` 下的
-独立场景，每个用例单一职责（Given/When/Then 设计原则）。所有场景编译进**同一个**
-`fixture_all` 二进制（`argv[1]` 选场景），harness 每个用例 spawn 一个独立进程——
-隔离性不变，但整个套件只链接一次 skia（见「新增场景测试」一节）。
+**Fixtures are separate from examples**: examples only demonstrate; the UI suite uses the scenarios
+under `tests/ui_fixtures/`, one responsibility per case (Given/When/Then). Every scenario compiles
+into the SAME `fixture_all` binary (selected by `argv[1]`) and the harness spawns one process per
+case — isolation is unchanged, but the whole suite links skia once (see "adding a scenario").
 
 ## 架构
 
@@ -14,15 +14,15 @@
 cargo test --features debug-server
         │
         ├─ tests/ui/mod.rs       UiTest 封装（进程管理 + 管道协议 + 断言辅助）
-        ├─ tests/ui_test.rs      场景断言（25 用例）
-        ├─ tests/ui_fixtures/    fixture 源码 + fixture_all.rs（单二进制分发器）
+        ├─ tests/ui_test.rs      scenario assertions (25 cases)
+        ├─ tests/ui_fixtures/    fixture sources + fixture_all.rs (the single dispatcher)
         └─ tests/{event_flow,layout_snapshot,render_snapshot}.rs  库行为快照测试
                 │
                 │ stdin 管道（命令）        stdout 管道（响应）
                 ▼                             ▲
         ┌───────────────────────────────────────────┐
-        │  fixture 进程（target/debug/fixture_all.exe）│
-        │  --features debug-server 编译（管道协议）    │
+        │  fixture process (target/debug/fixture_all.exe)│
+        │  built with --features debug-server (pipe)   │
         └───────────────────────────────────────────┘
 ```
 
@@ -83,7 +83,7 @@ cargo test --features debug-server
 cd winia
 # 需要先构建带 debug-server 的 fixture exe（ui_test 直接 spawn exe，不触发 cargo 构建）
 cargo build --bin fixture_all --features debug-server
-# 跑全部测试（含 UI 测试——串行 ~25s）
+# 跑全部测试（含 UI 测试——串行 ~60s，见下方 load sensitivity）
 cargo test --features debug-server
 # 只跑 UI 测试
 cargo test --features debug-server --test ui_test
@@ -91,10 +91,11 @@ cargo test --features debug-server --test ui_test
 
 环境变量：`UI_TEST_STDERR=1` 转发 fixture stderr 到测试输出（诊断用）。
 
-⚠ Always pass `--features debug-server`. Without it the fixture bins are relinked *without* the
+⚠ Always pass `--features debug-server`. Without it the fixture binary is relinked *without* the
 debug server, and every UI test then fails in the worst possible way: the child process stays alive
-but is silent (no `TREE:` on stdout, no stderr), so `launch` times out with `TREE 响应数=0` and
-`stdout 已收: (空)` after 20s and looks like an environment/window problem.
+but is silent (no `TREE:` on stdout, no stderr), so `launch` burns all its attempts and panics with
+`no first frame within 20s. alive=true, TREE responses=0, stdout so far: (empty)` — it looks like an
+environment/window problem, not a build-flag problem.
 
 ⚠ The synthetic `c x y` click (`DebugEvent::Click`) is NOT the gesture path. It fires `on_click` and
 focus, plus — in a popup — the full overlay sequence including the gesture up, but on the MAIN tree
@@ -144,7 +145,7 @@ tooltips are the one overlay that deliberately lets the press through.
 
 ### UI 集成（fixture 驱动）
 
-| 用例 | launch 名（`UiTest::launch`） | 覆盖（Given/When/Then） |
+| Case | launch name (`UiTest::launch`) | Coverage (Given/When/Then) |
 |------|---------|------------------------|
 | click_updates_state_and_keeps_structure | click | 点击 +1 三次 → Count 更新；静态行不塌缩 |
 | toggle_switches_conditional_branch_exclusively | toggle | 切换两次 → 分支 A ↔ B 互斥 |
@@ -162,6 +163,34 @@ tooltips are the one overlay that deliberately lets the press through.
 | a_modal_dialog_with_dismiss_on_outside_false_stays_open | dialog_dismiss | `dismiss_on_outside` honoured for a modal overlay, and the press still consumed |
 | an_overlay_press_zone_receives_the_press_gesture | overlay_focus | popup pointer-down dispatches the press gesture |
 | clicking_an_overlay_button_does_not_steal_focus | overlay_focus | a popup clickable does not take focus from the field beside it |
+
+### Load sensitivity (what the suite tolerates)
+
+Every case drives a real window, so the suite inherits the machine's timing. Measured:
+
+| Machine state | Result |
+|---|---|
+| idle (32 cores) | 25/25, ~63 s |
+| 16 CPU burners (half the cores) | 25/25, ~78 s |
+| 40 CPU burners (app 2.4-6x slower) | 23-24/25 — individual timing-sensitive cases fail |
+
+(The load runs behind these numbers are 40 *processes* on 32 cores; Python threads would not do —
+they share one GIL and barely load the machine.)
+
+What the harness does about it:
+
+- `launch` retries the whole spawn (`LAUNCH_ATTEMPTS = 3`, `FIRST_FRAME_TIMEOUT = 20 s` each) and warns
+  when a first frame took longer than 3 s, because a saturated machine is the usual explanation for a
+  red run. Every interaction retry in the suite uses the same count of 3 (it is a per-helper literal,
+  not a shared constant).
+- Interactions that the debug path can DROP are retried by the case that needs them: `click_until`,
+  `click_tag_and_type_until`, and the burst-driven gesture helpers (a fixed sleep between `d` and `u`
+  turns a tap into a long press under load — see the gesture tests).
+- The drag/fling cases retry the gesture and require both halves (the scroll moved AND the fling
+  advanced) in one attempt.
+- What is NOT protected: assertions that depend on a *rate* (fling velocity, animation progress) or on
+  a single interaction landing. Under a 40-burner load those can fail even with retries; each failure
+  names what did not happen, so a red run there means "the machine was saturated", not "a regression".
 
 ### 库行为快照（无窗口，直接驱动 Composer）
 
