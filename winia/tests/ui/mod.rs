@@ -331,8 +331,12 @@ impl UiTest {
             std::thread::sleep(Duration::from_millis(120)); // let the next frame render and be captured
             self.send(&format!("px {x} {y}"));
             if let Some(line) = self.read_prefixed_line("PIXEL:", Duration::from_millis(800)) {
-                if let Some(px) = line.strip_prefix("PIXEL:").and_then(parse_pixel_line) {
-                    return Some(px);
+                if let Some((w, h, rx, ry, rgba)) = line.strip_prefix("PIXEL:").and_then(parse_pixel_line) {
+                    // The reply names the point it answered; a read that timed out leaves its line in the
+                    // channel, and the next call would otherwise take that answer for its own.
+                    if (rx, ry) == (x, y) {
+                        return Some((w, h, rgba.0, rgba.1, rgba.2, rgba.3));
+                    }
                 }
             }
             if Instant::now() >= deadline {
@@ -341,28 +345,86 @@ impl UiTest {
         }
     }
 
-    /// The pixel at the CENTRE of the last captured frame. The one point whose frame coordinates need no
-    /// scale-factor arithmetic: a frame pixel is physical, and a test's other coordinates are logical.
+    /// The pixel at the CENTRE of the current frame — `(r, g, b, a)`. The one point whose frame
+    /// coordinates need no scale-factor arithmetic: a frame pixel is physical, and a test's other
+    /// coordinates are logical.
     pub fn centre_pixel(&mut self) -> Option<(u8, u8, u8, u8)> {
         let (w, h) = self.frame_size()?;
         self.pixel(w / 2, h / 2).map(|(_, _, r, g, b, a)| (r, g, b, a))
     }
 
-    /// Frame (physical) size of the last captured frame.
+    /// Frame (physical) size of the current frame. Asked for as an OUT-OF-FRAME point, whose reply carries
+    /// the size without a second request answering a different question than `centre_pixel` asked.
     pub fn frame_size(&mut self) -> Option<(u32, u32)> {
-        self.pixel(0, 0).map(|(w, h, ..)| (w, h))
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            self.send("r");
+            std::thread::sleep(Duration::from_millis(120));
+            self.send(&format!("px {OUT_OF_FRAME} {OUT_OF_FRAME}"));
+            if let Some(line) = self.read_prefixed_line("PIXEL:", Duration::from_millis(800)) {
+                if let Some(size) = line.strip_prefix("PIXEL:").and_then(parse_frame_size) {
+                    return Some(size);
+                }
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+        }
     }
 
     /// The centre pixel's luma (0 = black, 255 = white), re-read until it satisfies `pred` or `timeout`
-    /// expires — a theme change lands on a later frame than the click that caused it. Returns the last
-    /// luma seen, so a failing assertion can print what it saw instead of a bare timeout.
-    pub fn wait_centre_luma(&mut self, timeout: Duration, pred: impl Fn(f32) -> bool) -> f32 {
+    /// expires — a theme change lands on a later frame than the click that caused it.
+    ///
+    /// `None` means NO pixel could be read at all (an unreachable or broken capture path): a caller must
+    /// not read that as "the pixel is black", which is what a sentinel like `-1.0` invited. `Some` carries
+    /// the luma that satisfied `pred`, or the last one seen when it never did.
+    pub fn wait_centre_luma(&mut self, timeout: Duration, pred: impl Fn(f32) -> bool) -> Option<f32> {
         let deadline = Instant::now() + timeout;
-        let mut last = -1.0;
+        let mut last: Option<f32> = None;
         loop {
             if let Some((r, g, b, _)) = self.centre_pixel() {
-                last = luma(r, g, b);
-                if pred(last) {
+                let l = luma(r, g, b);
+                last = Some(l);
+                if pred(l) {
+                    return last;
+                }
+            }
+            if Instant::now() >= deadline {
+                return last;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// The pixel at a LOGICAL point — the coordinates the tree and the click helpers use. A frame pixel is
+    /// physical, so the point is scaled by the frame-to-window ratio (a popup's rect, for instance, only
+    /// exists in window coordinates).
+    pub fn pixel_at_logical(&mut self, x: f32, y: f32) -> Option<(u8, u8, u8, u8)> {
+        let (fw, fh) = self.frame_size()?;
+        if self.width <= 0.0 || self.height <= 0.0 {
+            return None;
+        }
+        let sx = fw as f32 / self.width;
+        let sy = fh as f32 / self.height;
+        self.pixel((x * sx) as u32, (y * sy) as u32).map(|(_, _, r, g, b, a)| (r, g, b, a))
+    }
+
+    /// Like [`UiTest::wait_centre_luma`], at a logical point: `None` means no pixel could be read at all,
+    /// `Some` carries the luma that satisfied `pred` or the last one seen.
+    pub fn wait_pixel_luma(
+        &mut self,
+        x: f32,
+        y: f32,
+        timeout: Duration,
+        pred: impl Fn(f32) -> bool,
+    ) -> Option<f32> {
+        let deadline = Instant::now() + timeout;
+        let mut last: Option<f32> = None;
+        loop {
+            if let Some((r, g, b, _)) = self.pixel_at_logical(x, y) {
+                let l = luma(r, g, b);
+                last = Some(l);
+                if pred(l) {
                     return last;
                 }
             }
@@ -374,7 +436,8 @@ impl UiTest {
     }
 
     /// Read one line from the fixture's stdout, skipping lines that do not carry `prefix` (device logs
-    /// share the pipe) until `timeout`.
+    /// share the pipe) until `timeout`. A line that arrives after the timeout is left for the next call,
+    /// which is why [`UiTest::pixel`] checks the point a reply names.
     fn read_prefixed_line(&mut self, prefix: &str, timeout: Duration) -> Option<String> {
         let deadline = Instant::now() + timeout;
         loop {
@@ -826,26 +889,48 @@ fn node_tag_is_focused_scoped(tree: &Value, tag: &str, overlay_only: bool) -> bo
     found.unwrap_or(false)
 }
 
+/// `OUT_OF_FRAME` — an x/y no frame can contain, so `px` answers with the frame size and no color.
+const OUT_OF_FRAME: u32 = u32::MAX;
+
 /// Perceived brightness of a frame pixel (Rec. 709) — enough for a test to tell a light surface from a
 /// dark one without knowing either palette.
 fn luma(r: u8, g: u8, b: u8) -> f32 {
     0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32
 }
 
-/// `WxH:<x> <y> <r> <g> <b> <a>` (the debug server's `px` reply, prefix stripped) → `(W, H, r, g, b, a)`.
-/// `None` for its two miss forms, `none` and `WxH:out-of-frame`.
-fn parse_pixel_line(body: &str) -> Option<(u32, u32, u8, u8, u8, u8)> {
-    let (size, rest) = body.split_once(':')?;
+/// `WxH:…` (the debug server's `px` reply, prefix stripped) → `(W, H)`. Works for every reply shape,
+/// including `WxH:out-of-frame`.
+fn parse_frame_size(body: &str) -> Option<(u32, u32)> {
+    let (size, _) = body.split_once(':')?;
     let (w, h) = size.split_once('x')?;
-    let (w, h): (u32, u32) = (w.parse().ok()?, h.parse().ok()?);
-    let v: Vec<u8> = rest.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+    Some((w.parse().ok()?, h.parse().ok()?))
+}
+
+/// `WxH:<x> <y> <r> <g> <b> <a>` (the `px` reply, prefix stripped) → the size, the point it answered, and
+/// the color. `None` for the two miss forms and for a malformed line.
+///
+/// The point is FRAME (physical) coordinates even though the r/g/b/a are bytes — parsing all six as `u8`
+/// silently rejected every frame whose point sat past 255, i.e. every window whose physical centre is
+/// beyond 255 on either axis (a 175% or 200% scaled display, a large window), which is exactly the case a
+/// pixel helper has to survive.
+fn parse_pixel_line(body: &str) -> Option<(u32, u32, u32, u32, (u8, u8, u8, u8))> {
+    let (w, h) = parse_frame_size(body)?;
+    let (_, rest) = body.split_once(':')?;
+    let v: Vec<&str> = rest.split_whitespace().collect();
     match v.as_slice() {
-        [_, _, r, g, b, a] => Some((w, h, *r, *g, *b, *a)),
+        [x, y, r, g, b, a] => Some((
+            w,
+            h,
+            x.parse().ok()?,
+            y.parse().ok()?,
+            (r.parse().ok()?, g.parse().ok()?, b.parse().ok()?, a.parse().ok()?),
+        )),
         _ => None,
     }
 }
 
-fn count_nodes(tree: &Value) -> usize {    fn walk(n: &Value) -> usize {
+fn count_nodes(tree: &Value) -> usize {
+    fn walk(n: &Value) -> usize {
         if let Some(arr) = n.as_array() {
             return arr.iter().map(walk).sum();
         }
@@ -960,4 +1045,35 @@ fn find_node_in_window(tree: &Value, window_id: u64, label: &str) -> Option<(f32
         }
     });
     found
+}
+
+#[cfg(test)]
+mod pixel_line_parsing {
+    use super::*;
+
+    /// The reply's point is in FRAME (physical) pixels, so it can be far past 255 — parsing it as a byte
+    /// rejected every frame whose centre sat beyond 255 on either axis (a 175%/200% scaled display, a large
+    /// window), which the centre-pixel helper then reported as "no pixel at all".
+    #[test]
+    fn frame_coordinates_are_not_bytes() {
+        assert_eq!(
+            parse_pixel_line("480x330:240 165 20 18 24 255"),
+            Some((480, 330, 240, 165, (20, 18, 24, 255)))
+        );
+        assert_eq!(
+            parse_pixel_line("1920x1080:960 540 253 247 255 255"),
+            Some((1920, 1080, 960, 540, (253, 247, 255, 255)))
+        );
+    }
+
+    /// Both miss forms are "no color"; the size is readable from either of them.
+    #[test]
+    fn misses_are_not_pixels_but_still_name_the_frame() {
+        assert_eq!(parse_pixel_line("none"), None);
+        assert_eq!(parse_pixel_line("480x330:out-of-frame"), None);
+        assert_eq!(parse_pixel_line("480x330:42"), None);
+        assert_eq!(parse_frame_size("480x330:out-of-frame"), Some((480, 330)));
+        assert_eq!(parse_frame_size("480x330:240 165 20 18 24 255"), Some((480, 330)));
+        assert_eq!(parse_frame_size("none"), None);
+    }
 }

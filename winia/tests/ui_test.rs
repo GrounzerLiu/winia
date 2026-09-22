@@ -1165,18 +1165,48 @@ fn segmented_buttons_pick_and_toggle() {
 fn theme_follows_the_windows_own_switch() {
     let mut app = UiTest::launch("theme_follow");
 
-    // The startup theme is whatever the machine says, so the test establishes both ends itself.
+    // The startup theme is whatever the machine says, so the test establishes both ends itself. `None`
+    // from the helper means no pixel could be read at all — that must fail, not read as "black".
     app.click_tag("theme-dark");
     let dark = app.wait_centre_luma(Duration::from_secs(5), |l| l < 96.0);
-    assert!(dark < 96.0, "the dark theme must paint a dark surface, luma={dark}");
+    assert!(dark.is_some_and(|l| l < 96.0), "the dark theme must paint a dark surface, luma={dark:?}");
 
     app.click_tag("theme-light");
     let light = app.wait_centre_luma(Duration::from_secs(5), |l| l > 160.0);
-    assert!(light > 160.0, "the light theme must paint a light surface, luma={light}");
+    assert!(light.is_some_and(|l| l > 160.0), "the light theme must paint a light surface, luma={light:?}");
 
     // And back: a second flip has to land as well (the first one must not have been the only one applied).
     app.click_tag("theme-dark");
     let dark_again = app.wait_centre_luma(Duration::from_secs(5), |l| l < 96.0);
-    assert!(dark_again < 96.0, "a second switch to dark must land too, luma={dark_again}");
+    assert!(dark_again.is_some_and(|l| l < 96.0), "a second switch to dark must land too, luma={dark_again:?}");
+}
+
+/// A popup that is ALREADY OPEN follows the theme as well.
+///
+/// Its content composes in a composer of its own, under a `CompositionLocal` snapshot captured when the
+/// popup was declared — a snapshot holding the palette as a value. It follows because the declaring tree
+/// re-runs on a theme change (that is what `refresh_theme` marks dirty) and hands the popup a FRESH
+/// snapshot; this test is what keeps that claim honest, since nothing about the snapshot looks live.
+#[test]
+fn an_open_popup_follows_the_theme() {
+    let mut app = UiTest::launch("theme_follow");
+    app.click_tag("theme-dark");
+    let dark = app.wait_centre_luma(Duration::from_secs(5), |l| l < 96.0);
+    assert!(dark.is_some_and(|l| l < 96.0), "the window must be dark first, luma={dark:?}");
+
+    app.click_tag("theme-popup");
+    app.expect_overlay_text("popup");
+    let (x, y, w, h) = app.find_tag_in_overlay("theme-popup-panel").expect("the popup panel");
+    let (px, py) = (x + w / 2.0, y + h / 2.0);
+    let opened = app.wait_pixel_luma(px, py, Duration::from_secs(5), |l| l < 96.0);
+    assert!(opened.is_some_and(|l| l < 96.0), "the popup opens on the current theme, luma={opened:?}");
+
+    // Switch the theme while it stays open.
+    app.click_tag("theme-light");
+    let after = app.wait_pixel_luma(px, py, Duration::from_secs(5), |l| l > 160.0);
+    assert!(after.is_some_and(|l| l > 160.0), "an OPEN popup must follow the theme, luma={after:?}");
+    // …and the window behind it did too.
+    let window = app.wait_centre_luma(Duration::from_secs(5), |l| l > 160.0);
+    assert!(window.is_some_and(|l| l > 160.0), "the window follows as well, luma={window:?}");
 }
 

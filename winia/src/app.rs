@@ -27,7 +27,7 @@ pub(crate) struct PendingWindow {
     pub content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>,
     pub on_close: Option<Box<dyn FnMut() + Send>>,
     pub created_id: Option<u64>,
-    pub theme: Option<crate::ui::theme::ThemeSpec>,
+    pub theme: Option<crate::ui::theme::WindowTheme>,
 }
 use skiwin::{SkiaWindowTrait, vulkan::VulkanSkiaWindow};
 use skiwin::vulkan::{request_capture, take_capture};
@@ -163,10 +163,9 @@ pub(crate) struct PerWindow {
     /// Overlay focus interaction target (overlay id, slot) — overlay inputs
     /// report is_focused() only after emit_focus in their own arena.
     overlay_focused_interaction: Option<(u64, u64)>,
-    /// How this window resolves its theme: the palette it clears the surface with, and how its content
-    /// re-resolves the theme on every frame (`Auto` follows the system, `Fixed` keeps the application's
-    /// own choice).
-    theme_spec: crate::ui::theme::ThemeSpec,
+    /// How this window resolves its theme and the palette it last resolved to. Shared with the `Window`
+    /// node that manages the window (which re-samples the intent every frame) — see `ui::theme::WindowTheme`.
+    theme_cell: crate::ui::theme::WindowTheme,
 }
 
 /// 顶层弹出层实例——独立 Composer 组合单元（State 跨帧保持），
@@ -227,8 +226,10 @@ struct PtrDownState {
 
 impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::ui::theme::ThemeColors) -> Self {
-        let theme_spec = crate::ui::theme::ThemeSpec::Fixed(theme.clone());
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), window_size_backchannel: std::cell::RefCell::new(None), on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, last_pointer_pos: None, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, gesture_arena: None, gesture_arena_origin: (0.0, 0.0), drag_scroll: None, overlays: Vec::new(), overlay_click: None, overlay_drag: None, overlay_drag_origin: (0.0, 0.0), overlay_drag_started: false, overlay_drag_last: None, overlay_drag_scroll: None, pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None, overlay_focused_interaction: None, theme_spec }
+        // A window built without a `Window` node: its palette is whatever the caller passed, so the intent
+        // is that palette (nothing to follow).
+        let theme_cell = crate::ui::theme::WindowTheme::new(crate::ui::theme::ThemeSpec::Fixed(theme));
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), window_size_backchannel: std::cell::RefCell::new(None), on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, last_pointer_pos: None, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, gesture_arena: None, gesture_arena_origin: (0.0, 0.0), drag_scroll: None, overlays: Vec::new(), overlay_click: None, overlay_drag: None, overlay_drag_origin: (0.0, 0.0), overlay_drag_started: false, overlay_drag_last: None, overlay_drag_scroll: None, pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None, overlay_focused_interaction: None, theme_cell }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -470,14 +471,11 @@ impl PerWindow {
         self.composer.set_adaptive_window_size(self.width, self.height);
         // 循环 compose 直到没有新的 pending state——处理并发 task 在 compose 期间
         // 完成的 case（第二个 notify 的 state 在第一次 compose 之后才入队）
-        // A pending theme change (the platform's `ThemeChanged`, or an application calling
-        // `set_system_dark_mode`) is applied HERE, immediately before the frame's recomposition: the
-        // marking it does is what makes the next `recompose` re-run the content closure, so it has to
-        // land in the same call as the compose. Doing it from the render handler instead consumed the
-        // flag on a frame whose compose had already happened, and the tree kept the old colors.
-        if crate::ui::theme::take_system_theme_dirty() {
-            apply_system_theme(self);
-        }
+        // The theme is brought up to date HERE, immediately before the frame's recomposition: the marking
+        // it does is what makes the next `recompose` re-run the content closure, so it has to land in the
+        // same call as the compose. Doing it from the render handler instead consumed the change on a
+        // frame whose compose had already happened, and the tree kept the old colors.
+        self.refresh_theme();
         // 循环 compose 直到没有新的 pending state
         let mut any_composed = false;
         loop {
@@ -751,8 +749,25 @@ impl ApplicationHandler for AppState {
         AppState::process_pending_windows(self, event_loop);
         // 消费 pending close（on_remove 推入，compose 末尾也消费一次）
         crate::ui::window::Window::process_detached(&mut self.windows, event_loop, &|| debug::force_shutdown());
-        // 调试工具有 pending 请求时唤醒窗口（截图/模拟事件需要 RedrawRequested）
+        // Redraw requests raised from OUTSIDE the window they concern: a `Window` node publishing a new
+        // theme intent runs in its DECLARING tree, which leaves the window's own composer with nothing
+        // pending — without this its frame would never be scheduled and the new theme would sit unseen.
+        for created_id in take_redraw_requests() {
+            for pw in self.windows.values() {
+                if pw.created_id == Some(created_id) {
+                    if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                }
+            }
+        }
+        // Debug 工具有 pending 请求时唤醒窗口（截图/模拟事件需要 RedrawRequested）
         if debug::has_pending() {
+            for pw in self.windows.values() {
+                if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+            }
+        }
+        // The mode moved (from an application or a background thread): every window has to look at it, and
+        // a window whose content an application composed itself has no dependency to be woken by.
+        if crate::ui::theme::take_theme_redraw_all() {
             for pw in self.windows.values() {
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
             }
@@ -786,6 +801,18 @@ impl ApplicationHandler for AppState {
     ) {
         let is_parent = self.parent_window_id.map(|p| p == window_id).unwrap_or(false);
         let closing_last = self.windows.len() == 1;
+        // winit reports the system theme per WINDOW (winit-win32 raises it from `WM_SETTINGCHANGE`), while
+        // the change itself is process-wide: record it, and schedule the frame of every window — a window
+        // that is not redrawn never notices (each one re-resolves against the epoch in its own frame).
+        if let WindowEvent::ThemeChanged(theme) = &event {
+            crate::ui::theme::note_platform_theme(matches!(theme, winit::window::Theme::Dark));
+            for pw in self.windows.values_mut() {
+                if let Some(ref sw) = pw.skia_window {
+                    sw.request_redraw();
+                }
+            }
+            return;
+        }
         let Some(pw) = self.windows.get_mut(&window_id) else { return };
 
         match event {
@@ -881,16 +908,9 @@ impl ApplicationHandler for AppState {
             WindowEvent::Moved { .. } => {
                 pw.refresh_frame_interval();
             }
-            WindowEvent::ThemeChanged(theme) => {
-                // winit only reports this while the window theme is not overridden by `set_theme`
-                // (which winia never calls), and only on Windows and macOS. It is an OBSERVATION of the
-                // system, recorded as such — pinning the mode here would freeze the app on the first
-                // report and ignore every later system change. The redraw loop applies it through
-                // `apply_system_theme`, the same route an application's own `set_system_dark_mode` takes.
-                crate::ui::theme::note_platform_theme(matches!(theme, winit::window::Theme::Dark));
-                if let Some(ref sw) = pw.skia_window {
-                    sw.request_redraw();
-                }
+            WindowEvent::ThemeChanged(_) => {
+                // Handled before the per-window lookup — see the top of this function: the report is
+                // process-wide, so one window's event has to schedule every window's frame.
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 pw.scale_factor = scale_factor;
@@ -1932,14 +1952,14 @@ impl AppState {
             .unwrap_or(std::time::Duration::from_millis(16));
         let skia_window = VulkanSkiaWindow::new(event_loop, w);
         let content = pending.content.unwrap_or_else(|| Box::new(|_| {}));
-        // How this window resolves its theme. `Auto` keeps re-resolving (the per-frame content wrapper),
-        // `Fixed` keeps re-providing the palette the application chose; the window's own snapshot below is
-        // this spec resolved once for the first frame.
-        let theme_spec = pending.theme.unwrap_or_else(|| {
-            crate::ui::theme::ThemeSpec::Fixed(crate::ui::theme::ThemeColors::default_light())
-        });
-        let mut pw = PerWindow::new(content, pending.width, pending.height, theme_spec.colors());
-        pw.theme_spec = theme_spec;
+        // How this window resolves its theme. A `Window` node passes the cell it shares with its declaring
+        // tree; a window opened directly follows the system (`Auto`), which is what an unspecified theme
+        // means everywhere else in the API.
+        let theme = pending
+            .theme
+            .unwrap_or_else(|| crate::ui::theme::WindowTheme::new(crate::ui::theme::ThemeSpec::Auto));
+        let mut pw = PerWindow::new(content, pending.width, pending.height, theme.colors());
+        pw.theme_cell = theme;
         pw.on_close = pending.on_close;
         pw.created_id = pending.created_id;
         pw.scale_factor = sf;
@@ -1999,8 +2019,23 @@ impl AppState {
 
 static GLOBAL_PENDING: std::sync::Mutex<Vec<PendingWindow>> = std::sync::Mutex::new(Vec::new());
 static APP_PROXY: Mutex<Option<winit::event_loop::EventLoopProxy>> = Mutex::new(None);
+/// Windows whose frame has been requested from code that cannot reach them (a `Window` node lives in its
+/// declaring tree, the window in another composer). `created_id`s, not `WindowId`s: the declarer knows the
+/// former, the app loop the latter.
+static PENDING_REDRAW: Mutex<Vec<u64>> = Mutex::new(Vec::new());
 
-pub fn open_window_with_title(width: f32, height: f32, title: String, content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>, on_close: Option<Box<dyn FnMut() + Send>>, created_id: Option<u64>, theme: Option<crate::ui::theme::ThemeSpec>) {
+/// Ask for `created_id`'s window to be redrawn — see [`PENDING_REDRAW`]. Wakes the loop, so it is safe
+/// from a background thread too.
+pub(crate) fn request_redraw_created(created_id: u64) {
+    PENDING_REDRAW.lock().unwrap().push(created_id);
+    wake_impl();
+}
+
+fn take_redraw_requests() -> Vec<u64> {
+    std::mem::take(&mut *PENDING_REDRAW.lock().unwrap())
+}
+
+pub fn open_window_with_title(width: f32, height: f32, title: String, content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>, on_close: Option<Box<dyn FnMut() + Send>>, created_id: Option<u64>, theme: Option<crate::ui::theme::WindowTheme>) {
     GLOBAL_PENDING.lock().unwrap().push(PendingWindow { width, height, title, content, on_close, created_id, theme });
     wake_impl();
 }
@@ -2966,26 +3001,28 @@ fn layout_overlays(pw: &mut PerWindow) {
     }
 }
 
-/// Apply a change of the system theme: the whole tree (and every popup) has to re-compose, because
-/// `WiniaTheme::auto` resolved its colors when it last composed and nothing else would make it look
-/// again.
+/// Apply a change of this window's theme: re-resolve it, and when what was drawn is now wrong, re-run the
+/// tree — no component looks at the theme by itself, they resolved their colors when they composed.
 ///
-/// Called only when the resolved theme actually moved (`take_system_theme_dirty`), so there is no
-/// repeated-value check here. The whole SUBTREE is dirtied (`mark_content_dirty`, not just the root): a
-/// theme change is exactly the case where a param-less wrapper group between the theme and its content
-/// would otherwise be Skipped and keep its old colors (the SearchBar filtering bug was that same shape).
-pub(crate) fn apply_system_theme(pw: &mut PerWindow) {
-    // The window's own snapshot: the renderer clears the surface and draws window-level pieces from it,
-    // so a tree that recomposed into the new colors would still sit on the old backdrop. Resolved from
-    // the window's SPEC, not from the mode: a window whose palette the application pinned keeps it (and a
-    // custom seed is not replaced by the default palette).
-    pw.theme = pw.theme_spec.colors();
-    pw.composer.mark_content_dirty();
-    for ov in &mut pw.overlays {
-        ov.composer.mark_content_dirty();
-    }
-    if let Some(ref sw) = pw.skia_window {
-        sw.request_redraw();
+/// Per WINDOW on purpose: the system theme is process-wide, but "already applied" is not (a single global
+/// pending flag is consumed by whichever window renders first, which left every other window — and every
+/// sub-window of a tree that switched its own theme node — on its old palette). A `Fixed` window resolves
+/// the same palette again and stops here, so a system theme change costs it nothing.
+impl PerWindow {
+    fn refresh_theme(&mut self) -> bool {
+        if !self.theme_cell.refresh(&mut self.theme) {
+            return false;
+        }
+        // The window's own snapshot (the surface clear color) is `self.theme`, refreshed above; the tree
+        // has to run again for the new palette to reach the components that resolved colors from it.
+        self.composer.mark_content_dirty();
+        for ov in &mut self.overlays {
+            ov.composer.mark_content_dirty();
+        }
+        if let Some(ref sw) = self.skia_window {
+            sw.request_redraw();
+        }
+        true
     }
 }
 
@@ -4445,6 +4482,53 @@ fn dispatch_ptr_event(
 /// 定时器唤醒时 now-last_render = I-ε < I 恒拦截 → 渲染频率减半（2I 间隔）。
 pub(crate) fn should_request_redraw(last_request: std::time::Instant, now: std::time::Instant, interval: std::time::Duration) -> bool {
     now.duration_since(last_request) >= interval
+}
+
+#[cfg(test)]
+mod window_theme_tests {
+    use super::PerWindow;
+    use crate::ui::theme::{ThemeColors, ThemeSpec, WindowTheme};
+
+    /// Every window follows a system theme change — each from its OWN applied state.
+    ///
+    /// The "already applied" bookkeeping used to be a single process-wide flag, and each window's frame
+    /// consumed it: whichever window rendered first flipped, and the rest kept the palette they had (on the
+    /// platform path they did not even run a frame). Measured on a two-window app in the fixtures.
+    #[test]
+    fn a_theme_change_reaches_every_window() {
+        let _serial = crate::ui::theme::theme_mode_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let light = ThemeColors::default_light();
+        let dark = ThemeColors::default_dark();
+
+        crate::ui::theme::set_system_dark_mode(Some(false));
+        let mut first = PerWindow::new(Box::new(|_| {}), 100.0, 100.0, light);
+        let mut second = PerWindow::new(Box::new(|_| {}), 100.0, 100.0, light);
+        let mut pinned = PerWindow::new(Box::new(|_| {}), 100.0, 100.0, light);
+        // What a `Window` node passes: a cell whose intent follows the system.
+        first.theme_cell = WindowTheme::new(ThemeSpec::Auto);
+        second.theme_cell = WindowTheme::new(ThemeSpec::Auto);
+        // A window whose application pinned a palette: its cell stays `Fixed`.
+        pinned.theme_cell = WindowTheme::new(ThemeSpec::Fixed(light));
+        first.refresh_theme();
+        second.refresh_theme();
+        assert_eq!(first.theme.background, light.background);
+        assert_eq!(second.theme.background, light.background);
+
+        crate::ui::theme::set_system_dark_mode(Some(true));
+        assert!(first.refresh_theme(), "the first window re-resolves");
+        assert!(second.refresh_theme(), "so does the second — the state is per window");
+        assert_eq!(first.theme.background, dark.background);
+        assert_eq!(second.theme.background, dark.background, "the second window must not be left behind");
+
+        // A pinned window resolves the same palette again and has nothing to redraw.
+        assert!(!pinned.refresh_theme(), "a pinned window has nothing to re-run");
+        assert_eq!(pinned.theme.background, light.background);
+
+        // An idle window does no work either.
+        assert!(!first.refresh_theme(), "nothing changed since the last frame");
+
+        crate::ui::theme::set_system_dark_mode(None);
+    }
 }
 
 #[cfg(test)]

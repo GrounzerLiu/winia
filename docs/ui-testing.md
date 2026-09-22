@@ -14,7 +14,7 @@ case — isolation is unchanged, but the whole suite links skia once (see "addin
 cargo test --features debug-server
         │
         ├─ tests/ui/mod.rs       UiTest 封装（进程管理 + 管道协议 + 断言辅助）
-        ├─ tests/ui_test.rs      scenario assertions (25 cases)
+        ├─ tests/ui_test.rs      scenario assertions (32 cases) + the pixel-read parser tests
         ├─ tests/ui_fixtures/    fixture sources + fixture_all.rs (the single dispatcher)
         └─ tests/{event_flow,layout_snapshot,render_snapshot}.rs  库行为快照测试
                 │
@@ -69,7 +69,9 @@ cargo test --features debug-server
 
 1. **点击偶发丢失 / 树刷新延迟**：debug 注入走 `queue_event`，在 winit `Wait` 模式下
    `RedrawRequested` 偶发不来（渲染断）→ 状态已变但树未刷新。**真实鼠标正常**（仅模拟链路）。
-   → 测试一律用 `click_until`（自动重试）；断言用轮询版（expect_text_timeout）。
+   → 会丢的交互用重试版：`click_until`、`click_tag_and_type_until`；断言用轮询版
+   （`expect_text_timeout`）。其余用例用 `click_tag`（一次性）——配合轮询断言足够，
+   且新的像素轮询（`wait_centre_luma` 每次重读都重新请求截帧）本身会唤醒渲染循环。
    已缓解：DebugEvent 在 `new_events` 兜底消费（多窗口后台主窗口也不卡队列）。
 2. **多窗口树**：一次 `t` 查询返回**所有窗口**（按 window id 排序）——测试可同时断言
    主/子窗口内容（`window_count()` 辅助）。`find` 返回第一个匹配窗口的坐标（点击只注入
@@ -169,17 +171,22 @@ tooltips are the one overlay that deliberately lets the press through.
 | range_slider_keyboard_moves_the_focused_thumb | range_slider | `k Tab` focuses a thumb, `k Arrow*` moves the focused one, another `k Tab` switches (no press involved) |
 | segmented_buttons_pick_and_toggle | segmented_button | a click moves a single-choice selection; a multi-choice item toggles on its own |
 | theme_follows_the_windows_own_switch | theme_follow | `px` reads the frame's centre pixel: pinning dark then light changes what was DRAWN, both ways |
+| an_open_popup_follows_the_theme | theme_follow | a popup left open across the switch changes too (it composes under a snapshot the declaring tree refreshes) |
 
 ### Reading pixels (`px`)
 
 `t` cannot see everything: a theme-derived color is resolved when a node is built, so every `bg(...)` in
 the tree prints as `<dynamic>`. The debug server's `px <x> <y>` answers one pixel of the current frame as
-text (`PIXEL:<W>x<H>:<x> <y> <r> <g> <b> <a>`, or `PIXEL:<W>x<H>:out-of-frame` / `PIXEL:none`) — the text
-form of the binary `p` frame, which only travels over the WebSocket. Frame pixels are PHYSICAL (a 320-wide
-window at 1.5 scale captures 480), and the reply carries `WxH` so a caller that only knows logical
-coordinates can scale. The harness wraps it as `UiTest::pixel` / `centre_pixel` (the centre needs no scale
-arithmetic) / `wait_centre_luma` (re-reads until the frame moved, since a change lands on a later frame
-than the click that caused it). It asks for a fresh capture (`r`) on every read.
+text — over the stdin channel `PIXEL:<W>x<H>:<x> <y> <r> <g> <b> <a>`, `…:out-of-frame` or `PIXEL:none`;
+over the WebSocket the same string without the `PIXEL:` prefix. It is the line form of the binary `p`
+frame, which only travels over the WebSocket. Frame pixels are PHYSICAL (a 320-wide window at 1.5 scale
+captures 480) and the color bytes are premultiplied by alpha, and the reply carries `WxH` so a caller that
+only knows logical coordinates can scale. The harness wraps it as `UiTest::pixel` / `centre_pixel` (the
+centre needs no scale arithmetic) / `wait_centre_luma` (re-reads until the frame moved, since a change
+lands on a later frame than the click that caused it). It asks for a fresh capture (`r`) on every read, and
+checks the point a reply names — a read that timed out leaves its line in the channel, and taking that for
+the next answer would silently read the wrong pixel. No pixel read at all is `None`, never a "black" that
+would satisfy a dark-theme assertion.
 
 ### Load sensitivity (what the suite tolerates)
 
@@ -187,9 +194,9 @@ Every case drives a real window, so the suite inherits the machine's timing. Mea
 
 | Machine state | Result |
 |---|---|
-| idle (32 cores) | 25/25, ~63 s |
-| 16 CPU burners (half the cores) | 25/25, ~78 s |
-| 40 CPU burners (app 2.4-6x slower) | 23-24/25 — individual timing-sensitive cases fail |
+| idle (32 cores) | 34/34, ~75 s |
+| 16 CPU burners (half the cores) | 25/25, ~78 s — that run had 25 cases |
+| 40 CPU burners (app 2.4-6x slower) | 23-24/25 — ditto; individual timing-sensitive cases fail |
 
 (The load runs behind these numbers are 40 *processes* on 32 cores; Python threads would not do —
 they share one GIL and barely load the machine.)
