@@ -30,7 +30,7 @@ fn text_demo_ui(ctx: &mut ComposeCtx) {
         .spacing(8.0)
         .build(ctx, |ctx| {
             // ── 1. 基础文字 + 字号 ──
-            Text::new("■ Font Size").font_size(16.0).color(Color::from_argb(255, 100, 100, 100)).build(ctx);
+            Text::new("■ Font Size").font_size(16.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
 
             Row::new().spacing(12.0).build(ctx, |ctx| {
                 Text::new("12px").font_size(12.0).build(ctx);
@@ -43,7 +43,7 @@ fn text_demo_ui(ctx: &mut ComposeCtx) {
             Column::new().modifier(Modifier::new().fill_max_width().height(1.0).background(Color::from_argb(40, 0, 0, 0), Shape::Rectangle)).build(ctx, |_| {});
 
             // ── 2. 文字颜色（内置 Color + Theme 颜色）──
-            Text::new("■ Colors").font_size(16.0).color(Color::from_argb(255, 100, 100, 100)).build(ctx);
+            Text::new("■ Colors").font_size(16.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
             Row::new().spacing(8.0).build(ctx, |ctx| {
                 Text::new("Red").color(Color::RED).font_size(16.0).build(ctx);
                 Text::new("Green").color(Color::GREEN).font_size(16.0).build(ctx);
@@ -57,7 +57,7 @@ fn text_demo_ui(ctx: &mut ComposeCtx) {
                 .build(ctx);
 
             // ── 3. 对齐方式（TextAlign）──
-            Text::new("■ Text Alignment").font_size(16.0).color(Color::from_argb(255, 100, 100, 100)).build(ctx);
+            Text::new("■ Text Alignment").font_size(16.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
 
             // Left
             Text::new("⬅ Left aligned (default)")
@@ -94,12 +94,12 @@ fn text_demo_ui(ctx: &mut ComposeCtx) {
                 .build(ctx, |ctx| { Text::new("+ word").font_size(11.0).build(ctx); });
 
             // ── 4. 溢出处理（max_lines + overflow）──
-            Text::new("■ Overflow: max_lines + Ellipsis").font_size(16.0).color(Color::from_argb(255, 100, 100, 100)).build(ctx);
+            Text::new("■ Overflow: max_lines + Ellipsis").font_size(16.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
 
             // Clip (default) — 截断
             Text::new("Clip (default):")
                 .font_size(12.0)
-                .color(Color::from_argb(255, 120, 120, 120))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .build(ctx);
 
             Text::new("This is a very long line that should be clipped because we only have one line available")
@@ -112,7 +112,7 @@ fn text_demo_ui(ctx: &mut ComposeCtx) {
             // Ellipsis — 省略号
             Text::new("Ellipsis:")
                 .font_size(12.0)
-                .color(Color::from_argb(255, 120, 120, 120))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .build(ctx);
 
             Text::new("This is a very long line that should end with an ellipsis character…")
@@ -125,7 +125,7 @@ fn text_demo_ui(ctx: &mut ComposeCtx) {
             // Multi-line with max_lines + ellipsis
             Text::new("Multi-line (max_lines=2, ellipsis):")
                 .font_size(12.0)
-                .color(Color::from_argb(255, 120, 120, 120))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .build(ctx);
 
             Text::new("This is a multi-line text that will be truncated after two lines with an ellipsis character at the end of the second line.")
@@ -136,7 +136,7 @@ fn text_demo_ui(ctx: &mut ComposeCtx) {
                 .build(ctx);
 
             // ── 5. 粗体与斜体（FontWeight / FontSlant）──
-            Text::new("■ Font Weight & Style").font_size(16.0).color(Color::from_argb(255, 100, 100, 100)).build(ctx);
+            Text::new("■ Font Weight & Style").font_size(16.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
 
             Row::new().spacing(12.0).build(ctx, |ctx| {
                 Text::new("Normal").font_size(14.0).build(ctx);
@@ -165,7 +165,7 @@ fn text_demo_ui(ctx: &mut ComposeCtx) {
             });
 
             // ── 6. soft_wrap — 不换行 ──
-            Text::new("■ soft_wrap = false (no wrap)").font_size(16.0).color(Color::from_argb(255, 100, 100, 100)).build(ctx);
+            Text::new("■ soft_wrap = false (no wrap)").font_size(16.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
 
             Text::new("This text does NOT wrap even if it exceeds the container width → ")
                 .font_size(12.0)
@@ -174,7 +174,7 @@ fn text_demo_ui(ctx: &mut ComposeCtx) {
                 .build(ctx);
 
             // ── 7. 样式层级（ProvideTextStyle → style → 单独参数）──
-            Text::new("■ Style Cascading").font_size(16.0).color(Color::from_argb(255, 100, 100, 100)).build(ctx);
+            Text::new("■ Style Cascading").font_size(16.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
 
             ProvideTextStyle(
                 TextStyle::new().color(Color::from_argb(255, 200, 100, 0)).font_size(18.0).align(TextAlign::Center),
@@ -200,7 +200,7 @@ fn text_demo_ui(ctx: &mut ComposeCtx) {
             );
 
             // ── 8. 综合示例 ──
-            Text::new("■ Combined Example").font_size(16.0).color(Color::from_argb(255, 100, 100, 100)).build(ctx);
+            Text::new("■ Combined Example").font_size(16.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
 
             Text::new(
                 "This is a longer paragraph that demonstrates multiple features at once: \

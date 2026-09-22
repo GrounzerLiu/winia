@@ -60,7 +60,7 @@ fn scaffold_demo(ctx: &mut ComposeCtx) {
                                         .items_from(items.clone(), |it: &ScaffoldItem| it.id, move |ctx, _i, it| {
                                             Text::new(it.title.clone())
                                                 .font_size(13.0)
-                                                .color(Color::from_argb(255, 90, 90, 90))
+                                                .color(WiniaTheme::colors().on_surface_variant)
                                                 .modifier(
                                                     Modifier::new()
                                                         .fill_max_width()
@@ -97,7 +97,7 @@ fn scaffold_demo(ctx: &mut ComposeCtx) {
                         Text::new("BottomSheetScaffold 演示").font_size(18.0).build(ctx);
                         Text::new("常驻底部片，peek 96dp，上拖显示更多内容（对标 Compose Standard BottomSheet）")
                             .font_size(12.0)
-                            .color(Color::from_argb(255, 120, 120, 120))
+                            .color(WiniaTheme::colors().on_surface_variant)
                             .build(ctx);
                         Text::new("主内容区域（可放地图/列表）")
                             .font_size(14.0)

@@ -52,7 +52,7 @@ fn component_demo(ctx: &mut ComposeCtx) {
             // ── 1. alpha/rotate/scale（绕中心变换）──
             Text::new("1. alpha / rotate / scale（绕中心——transformOrigin 默认 Center）")
                 .font_size(14.0)
-                .color(Color::from_argb(200, 100, 100, 100))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .modifier(Modifier::new().padding_vertical(8.0))
                 .build(ctx);
             Column::new()
@@ -72,7 +72,7 @@ fn component_demo(ctx: &mut ComposeCtx) {
             // ── 2. shadow ──
             Text::new("2. shadow（elevation 便捷版 / drop_shadow 自定义）")
                 .font_size(14.0)
-                .color(Color::from_argb(200, 100, 100, 100))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .modifier(Modifier::new().padding_vertical(8.0))
                 .build(ctx);
             Row::new().build(ctx, |ctx| {
@@ -97,7 +97,7 @@ fn component_demo(ctx: &mut ComposeCtx) {
             // ── 3. aspect_ratio + required_size ──
             Text::new("3. aspect_ratio(2) + required_size(溢出父约束)")
                 .font_size(14.0)
-                .color(Color::from_argb(200, 100, 100, 100))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .modifier(Modifier::new().padding_vertical(8.0))
                 .build(ctx);
             Row::new().build(ctx, |ctx| {
@@ -130,7 +130,7 @@ fn component_demo(ctx: &mut ComposeCtx) {
             // ── 4. Button enabled + colors ──
             Text::new("4. Button enabled + ButtonColors")
                 .font_size(14.0)
-                .color(Color::from_argb(200, 100, 100, 100))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .modifier(Modifier::new().padding_vertical(8.0))
                 .build(ctx);
             Row::new().build(ctx, |ctx| {
@@ -164,7 +164,7 @@ fn component_demo(ctx: &mut ComposeCtx) {
             // ── 5. TextField 状态 ──
             Text::new("5. TextField enabled / readOnly / placeholder / 多行")
                 .font_size(14.0)
-                .color(Color::from_argb(200, 100, 100, 100))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .modifier(Modifier::new().padding_vertical(8.0))
                 .build(ctx);
             // 单行 + placeholder
@@ -201,7 +201,7 @@ fn component_demo(ctx: &mut ComposeCtx) {
             // ── 6. Text letterSpacing / lineHeight ──
             Text::new("6. Text letterSpacing / lineHeight")
                 .font_size(14.0)
-                .color(Color::from_argb(200, 100, 100, 100))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .modifier(Modifier::new().padding_vertical(8.0))
                 .build(ctx);
             Text::new("字间距 3px")
@@ -216,7 +216,7 @@ fn component_demo(ctx: &mut ComposeCtx) {
             // ── 7. test_tag ──
             Text::new("7. test_tag（调试树 tag 字段定位）")
                 .font_size(14.0)
-                .color(Color::from_argb(200, 100, 100, 100))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .modifier(Modifier::new().padding_vertical(8.0))
                 .build(ctx);
             Button::new()
@@ -231,7 +231,7 @@ fn component_demo(ctx: &mut ComposeCtx) {
             // ── 8. padding（start/end/单边/动态动画） ──
             Text::new("8. padding start/end/单边 + 动态（动画作用于 padding）")
                 .font_size(14.0)
-                .color(Color::from_argb(200, 100, 100, 100))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .modifier(Modifier::new().padding_vertical(8.0))
                 .build(ctx);
             let pad_anim = ctx.animate_float_as_state(
@@ -270,7 +270,7 @@ fn component_demo(ctx: &mut ComposeCtx) {
             // ── 9. 布局方向（跟随顶部全局切换） ──
             Text::new("9. 布局方向（跟随全局切换：Row 镜像 / 文本右对齐 / padding start 在右）")
                 .font_size(14.0)
-                .color(Color::from_argb(200, 100, 100, 100))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .modifier(Modifier::new().padding_vertical(8.0))
                 .build(ctx);
             // Row：RTL 下子节点从右到左
@@ -305,7 +305,7 @@ fn component_demo(ctx: &mut ComposeCtx) {
             // ── 10. offset（动态动画 + RTL 镜像 / absolute_offset 豁免） ──
             Text::new("10. offset（点击动画；RTL 下普通 offset 镜像、absolute_offset 豁免）")
                 .font_size(14.0)
-                .color(Color::from_argb(200, 100, 100, 100))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .modifier(Modifier::new().padding_vertical(8.0))
                 .build(ctx);
             let off_anim = ctx.animate_float_as_state(
@@ -354,7 +354,7 @@ fn component_demo(ctx: &mut ComposeCtx) {
 fn main() {
     winia::run_app!(|ctx| {
         // 亮色主题：暗色背景上看不清阴影
-        WiniaTheme::light(ctx, |ctx| {
+        WiniaTheme::auto(ctx, |ctx| {
             Window::new()
                 .size(420.0, 720.0)
                 .title("Component Polish Demo")

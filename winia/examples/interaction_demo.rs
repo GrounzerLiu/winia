@@ -29,7 +29,7 @@ fn interaction_ui(ctx: &mut ComposeCtx) {
         .build(ctx, |ctx| {
             Text::new("InteractionSource 演示")
                 .font_size(22.0)
-                .color(Color::from_argb(255, 40, 40, 40))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .build(ctx);
 
             // ── 状态实时展示（读取 src 注册依赖——变化自动重组）──
@@ -38,7 +38,7 @@ fn interaction_ui(ctx: &mut ComposeCtx) {
                 state.enabled, state.pressed, state.hovered, state.focused, state.dragged
             ))
             .font_size(14.0)
-            .color(Color::from_argb(255, 90, 90, 90))
+            .color(WiniaTheme::colors().on_surface_variant)
             .build(ctx);
 
             // ── 提升源 + 阴影（ElevatedButton 近似：hover/press 抬高）──
@@ -74,7 +74,7 @@ fn interaction_ui(ctx: &mut ComposeCtx) {
             // ── TextField：focus 状态 + isError 驱动边框色 ──
             Text::new(format!("TextField focused={} error={}", tf_focused, has_error.get()))
                 .font_size(14.0)
-                .color(Color::from_argb(255, 90, 90, 90))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .build(ctx);
 
             let theme = WiniaTheme::colors();
@@ -106,7 +106,7 @@ fn interaction_ui(ctx: &mut ComposeCtx) {
 fn main() {
     winia::run_app!(|ctx| {
         // 固定亮色（避免跟随系统暗色/检测失败——截图与演示效果一致）
-        WiniaTheme::light(ctx, |ctx| {
+        WiniaTheme::auto(ctx, |ctx| {
             Window::new()
                 .size(520.0, 560.0)
                 .title("Interaction Demo")

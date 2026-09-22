@@ -49,7 +49,7 @@ fn blur_demo(ctx: &mut ComposeCtx) {
 
 fn main() {
     winia::run_app!(|ctx| {
-        WiniaTheme::light(ctx, |ctx| {
+        WiniaTheme::auto(ctx, |ctx| {
             Window::new()
                 .size(900.0, 640.0)
                 .title("Blur Demo")

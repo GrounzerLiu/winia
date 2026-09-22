@@ -38,7 +38,7 @@ fn top_app_bar_demo(ctx: &mut ComposeCtx) {
 
 fn main() {
     winia::run_app!(|ctx| {
-        WiniaTheme::light(ctx, |ctx| {
+        WiniaTheme::auto(ctx, |ctx| {
             Window::new().size(520.0, 760.0).title("TopAppBar Demo").build(ctx, top_app_bar_demo);
         });
     });

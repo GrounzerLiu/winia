@@ -272,7 +272,7 @@ fn rich_text_demo_ui(ctx: &mut ComposeCtx) {
                     x.bold(|x| { x.text("Update available"); });
                 });
                 Text::new("Version 2.5.0 is ready. Click to update.")
-                    .font_size(12.0).color(Color::from_argb(255, 100, 100, 100)).build(ctx);
+                    .font_size(12.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
             });
         });
 
@@ -301,7 +301,7 @@ fn rich_text_demo_ui(ctx: &mut ComposeCtx) {
 
 #[composable]
 fn sec(text: &str, ctx: &mut ComposeCtx) {
-    Text::new(text).font_size(15.0).color(Color::from_argb(255, 100, 100, 100)).build(ctx);
+    Text::new(text).font_size(15.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
 }
 
 #[composable]

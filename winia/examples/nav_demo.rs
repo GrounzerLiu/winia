@@ -102,7 +102,7 @@ fn nav_demo(ctx: &mut ComposeCtx) {
             Text::new("Navigation3 风格导航 demo").font_size(20.0).build(ctx);
             Text::new(format!("back-stack: {:?} ({} 项)", back_stack.stack(), back_stack.len()))
                 .font_size(12.0)
-                .color(Color::from_argb(255, 120, 120, 120))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .build(ctx);
 
             // 模式切换按钮
@@ -139,7 +139,7 @@ fn nav_demo(ctx: &mut ComposeCtx) {
                                 Text::new("Home 页面").font_size(16.0).build(ctx);
                                 Text::new("（列表栏——ListDetail 模式下显示在左侧）")
                                     .font_size(12.0)
-                                    .color(Color::from_argb(255, 120, 120, 120))
+                                    .color(WiniaTheme::colors().on_surface_variant)
                                     .build(ctx);
                                 Button::text()
                                     .on_click({ clone!(home_bs); move || home_bs.push(Route::Detail(42)) })
@@ -209,7 +209,7 @@ fn nav_demo(ctx: &mut ComposeCtx) {
                                 let bus = result_event_bus();
                                 Text::new("选择主题色（返回时带结果）：")
                                     .font_size(12.0)
-                                    .color(Color::from_argb(255, 120, 120, 120))
+                                    .color(WiniaTheme::colors().on_surface_variant)
                                     .build(ctx);
                                 for (name, color) in [
                                     ("蓝色", Color::from_argb(255, 66, 133, 244)),
@@ -257,7 +257,7 @@ fn nav_demo(ctx: &mut ComposeCtx) {
                                 Text::new("关于对话框").font_size(16.0).build(ctx);
                                 Text::new("winia Navigation3 风格导航 demo")
                                     .font_size(12.0)
-                                    .color(Color::from_argb(255, 120, 120, 120))
+                                    .color(WiniaTheme::colors().on_surface_variant)
                                     .build(ctx);
                                 Button::text()
                                     .on_click({ clone!(detail_bs); move || { detail_bs.pop(); } })

@@ -41,7 +41,7 @@ fn hc_demo(ctx: &mut ComposeCtx) {
                 .build(ctx);
             Text::new("步骤：滚动到 50 → 前部插入 10 项 → 观察 firstVisible 是否按 key 保持")
                 .font_size(12.0)
-                .color(Color::from_argb(255, 120, 120, 120))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .modifier(Modifier::new().padding(8.0))
                 .build(ctx);
             // 状态显示

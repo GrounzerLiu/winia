@@ -19,7 +19,7 @@ fn layout_demo_ui(ctx: &mut ComposeCtx) {
 
                             // ── 1. Column 基础 ──
                             Text::new("■ Column — vertical stack")
-                                .font_size(16.0).color(Color::from_argb(255, 100, 100, 100))
+                                .font_size(16.0).color(WiniaTheme::colors().on_surface_variant)
                                 .build(ctx);
 
                             Column::new()
@@ -36,7 +36,7 @@ fn layout_demo_ui(ctx: &mut ComposeCtx) {
 
                             // ── 2. Row 基础 ──
                             Text::new("■ Row — horizontal stack")
-                                .font_size(16.0).color(Color::from_argb(255, 100, 100, 100))
+                                .font_size(16.0).color(WiniaTheme::colors().on_surface_variant)
                                 .build(ctx);
 
                             Row::new()
@@ -53,14 +53,14 @@ fn layout_demo_ui(ctx: &mut ComposeCtx) {
 
                             // ── 3. Row Arrangement 对比 ──
                             Text::new("■ Row — Arrangement")
-                                .font_size(16.0).color(Color::from_argb(255, 100, 100, 100))
+                                .font_size(16.0).color(WiniaTheme::colors().on_surface_variant)
                                 .build(ctx);
 
                             let arr_bg = Color::from_argb(20, 50, 100, 200);
                             let arr_pad = Modifier::new().fill_max_width().height(30.0);
                             let item_bg = Color::from_argb(200, 180, 180, 200);
 
-                            Text::new("  Start").font_size(11.0).color(Color::from_argb(200, 120, 120, 120)).build(ctx);
+                            Text::new("  Start").font_size(11.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
                             Row::new()
                                 .arrangement(Arrangement::Start)
                                 .modifier(arr_pad.clone().background(arr_bg, Shape::rounded(4.0)).padding(4.0))
@@ -70,7 +70,7 @@ fn layout_demo_ui(ctx: &mut ComposeCtx) {
                                     Text::new("3").font_size(10.0).modifier(Modifier::new().size(40.0, 20.0).background(item_bg, Shape::rounded(3.0)).padding(4.0)).build(ctx);
                                 });
 
-                            Text::new("  Center").font_size(11.0).color(Color::from_argb(200, 120, 120, 120)).build(ctx);
+                            Text::new("  Center").font_size(11.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
                             Row::new()
                                 .arrangement(Arrangement::Center)
                                 .modifier(arr_pad.clone().background(arr_bg, Shape::rounded(4.0)).padding(4.0))
@@ -80,7 +80,7 @@ fn layout_demo_ui(ctx: &mut ComposeCtx) {
                                     Text::new("3").font_size(10.0).modifier(Modifier::new().size(40.0, 20.0).background(item_bg, Shape::rounded(3.0)).padding(4.0)).build(ctx);
                                 });
 
-                            Text::new("  End").font_size(11.0).color(Color::from_argb(200, 120, 120, 120)).build(ctx);
+                            Text::new("  End").font_size(11.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
                             Row::new()
                                 .arrangement(Arrangement::End)
                                 .modifier(arr_pad.clone().background(arr_bg, Shape::rounded(4.0)).padding(4.0))
@@ -90,7 +90,7 @@ fn layout_demo_ui(ctx: &mut ComposeCtx) {
                                     Text::new("3").font_size(10.0).modifier(Modifier::new().size(40.0, 20.0).background(item_bg, Shape::rounded(3.0)).padding(4.0)).build(ctx);
                                 });
 
-                            Text::new("  SpaceBetween").font_size(11.0).color(Color::from_argb(200, 120, 120, 120)).build(ctx);
+                            Text::new("  SpaceBetween").font_size(11.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
                             Row::new()
                                 .arrangement(Arrangement::SpaceBetween)
                                 .modifier(arr_pad.clone().background(arr_bg, Shape::rounded(4.0)).padding(4.0))
@@ -100,7 +100,7 @@ fn layout_demo_ui(ctx: &mut ComposeCtx) {
                                     Text::new("3").font_size(10.0).modifier(Modifier::new().size(40.0, 20.0).background(item_bg, Shape::rounded(3.0)).padding(4.0)).build(ctx);
                                 });
 
-                            Text::new("  SpaceAround").font_size(11.0).color(Color::from_argb(200, 120, 120, 120)).build(ctx);
+                            Text::new("  SpaceAround").font_size(11.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
                             Row::new()
                                 .arrangement(Arrangement::SpaceAround)
                                 .modifier(arr_pad.clone().background(arr_bg, Shape::rounded(4.0)).padding(4.0))
@@ -110,7 +110,7 @@ fn layout_demo_ui(ctx: &mut ComposeCtx) {
                                     Text::new("3").font_size(10.0).modifier(Modifier::new().size(40.0, 20.0).background(item_bg, Shape::rounded(3.0)).padding(4.0)).build(ctx);
                                 });
 
-                            Text::new("  SpaceEvenly").font_size(11.0).color(Color::from_argb(200, 120, 120, 120)).build(ctx);
+                            Text::new("  SpaceEvenly").font_size(11.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
                             Row::new()
                                 .arrangement(Arrangement::SpaceEvenly)
                                 .modifier(arr_pad.clone().background(arr_bg, Shape::rounded(4.0)).padding(4.0))
@@ -122,10 +122,10 @@ fn layout_demo_ui(ctx: &mut ComposeCtx) {
 
                             // ── 4. Column Alignment (交叉轴) ──
                             Text::new("■ Column — Alignment (cross-axis)")
-                                .font_size(16.0).color(Color::from_argb(255, 100, 100, 100))
+                                .font_size(16.0).color(WiniaTheme::colors().on_surface_variant)
                                 .build(ctx);
 
-                            Text::new("  Alignment::Start (default)").font_size(11.0).color(Color::from_argb(200, 120, 120, 120)).build(ctx);
+                            Text::new("  Alignment::Start (default)").font_size(11.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
                             Column::new()
                                 .alignment(Alignment::Start).spacing(4.0)
                                 .modifier(Modifier::new().fill_max_width().height(80.0).background(Color::from_argb(20, 200, 100, 50), Shape::rounded(4.0)).padding(6.0))
@@ -135,7 +135,7 @@ fn layout_demo_ui(ctx: &mut ComposeCtx) {
                                     Text::new("C").font_size(10.0).modifier(Modifier::new().size(40.0, 20.0).padding(4.0)).build(ctx);
                                 });
 
-                            Text::new("  Alignment::Center").font_size(11.0).color(Color::from_argb(200, 120, 120, 120)).build(ctx);
+                            Text::new("  Alignment::Center").font_size(11.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
                             Column::new()
                                 .alignment(Alignment::Center).spacing(4.0)
                                 .modifier(Modifier::new().fill_max_width().height(80.0).background(Color::from_argb(20, 200, 100, 50), Shape::rounded(4.0)).padding(6.0))
@@ -145,7 +145,7 @@ fn layout_demo_ui(ctx: &mut ComposeCtx) {
                                     Text::new("C").font_size(10.0).modifier(Modifier::new().size(40.0, 20.0).padding(4.0)).build(ctx);
                                 });
 
-                            Text::new("  Alignment::End").font_size(11.0).color(Color::from_argb(200, 120, 120, 120)).build(ctx);
+                            Text::new("  Alignment::End").font_size(11.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
                             Column::new()
                                 .alignment(Alignment::End).spacing(4.0)
                                 .modifier(Modifier::new().fill_max_width().height(80.0).background(Color::from_argb(20, 200, 100, 50), Shape::rounded(4.0)).padding(6.0))
@@ -157,7 +157,7 @@ fn layout_demo_ui(ctx: &mut ComposeCtx) {
 
                             // ── 5. align_self 子节点覆盖对齐 ──
                             Text::new("■ align_self — per-child override")
-                                .font_size(16.0).color(Color::from_argb(255, 100, 100, 100))
+                                .font_size(16.0).color(WiniaTheme::colors().on_surface_variant)
                                 .build(ctx);
 
                             Row::new()
@@ -172,10 +172,10 @@ fn layout_demo_ui(ctx: &mut ComposeCtx) {
 
                             // ── 6. layout_weight 按比例分配 ──
                             Text::new("■ layout_weight — proportional space")
-                                .font_size(16.0).color(Color::from_argb(255, 100, 100, 100))
+                                .font_size(16.0).color(WiniaTheme::colors().on_surface_variant)
                                 .build(ctx);
 
-                            Text::new("  Row with weights 1:2:1").font_size(11.0).color(Color::from_argb(200, 120, 120, 120)).build(ctx);
+                            Text::new("  Row with weights 1:2:1").font_size(11.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
                             Row::new()
                                 .spacing(6.0)
                                 .modifier(Modifier::new().fill_max_width().height(36.0).padding(4.0))
@@ -185,7 +185,7 @@ fn layout_demo_ui(ctx: &mut ComposeCtx) {
                                     Text::new("w1").font_size(12.0).align(TextAlign::Center).modifier(Modifier::new().fill_max_height().layout_weight(1.0).background(Color::from_argb(200, 100, 180, 220), Shape::rounded(4.0)).padding(4.0)).build(ctx);
                                 });
 
-                            Text::new("  Row with weights 3:1").font_size(11.0).color(Color::from_argb(200, 120, 120, 120)).build(ctx);
+                            Text::new("  Row with weights 3:1").font_size(11.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
                             Row::new()
                                 .spacing(6.0)
                                 .modifier(Modifier::new().fill_max_width().height(36.0).padding(4.0))
@@ -196,7 +196,7 @@ fn layout_demo_ui(ctx: &mut ComposeCtx) {
 
                             // ── 7. Row > Column 嵌套 + weight ──
                             Text::new("■ Nested: Row > Column")
-                                .font_size(16.0).color(Color::from_argb(255, 100, 100, 100))
+                                .font_size(16.0).color(WiniaTheme::colors().on_surface_variant)
                                 .build(ctx);
 
                             Row::new()
@@ -219,7 +219,7 @@ fn layout_demo_ui(ctx: &mut ComposeCtx) {
 
                             // ── 8. Stack 层叠 + Z-order ──
                             Text::new("■ Stack — z-order with offset")
-                                .font_size(16.0).color(Color::from_argb(255, 100, 100, 100))
+                                .font_size(16.0).color(WiniaTheme::colors().on_surface_variant)
                                 .build(ctx);
 
                             Stack::new()

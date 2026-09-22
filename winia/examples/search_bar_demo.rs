@@ -168,7 +168,7 @@ fn search_bar_demo(ctx: &mut ComposeCtx) {
 
 fn main() {
     winia::run_app!(|ctx| {
-        WiniaTheme::light(ctx, |ctx| {
+        WiniaTheme::auto(ctx, |ctx| {
             Window::new()
                 .size(420.0, 700.0)
                 .title("SearchBar Demo")

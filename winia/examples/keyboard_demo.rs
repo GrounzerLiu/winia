@@ -28,7 +28,7 @@ fn keyboard_demo_ui(ctx: &mut ComposeCtx) {
         .build(ctx, |ctx| {
 
             Text::new("■ Key Event Demo — Tab to switch focus, type keys")
-                .font_size(15.0).color(Color::from_argb(255, 100, 100, 100)).build(ctx);
+                .font_size(15.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
 
             // ═══ 第一个焦点节点（响应所有按键）═══
             Text::new("▶ Node 1: captures all keys")
@@ -92,11 +92,11 @@ fn keyboard_demo_ui(ctx: &mut ComposeCtx) {
 
             // ═══ 按键日志显示 ═══
             Text::new("■ Event Log (last 5)")
-                .font_size(15.0).color(Color::from_argb(255, 100, 100, 100)).build(ctx);
+                .font_size(15.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
 
             Text::new(log.get())
                 .font_size(12.0)
-                .color(Color::from_argb(255, 180, 180, 180))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .modifier(Modifier::new()
                     .fill_max_width()
                     .padding(8.0)
@@ -104,7 +104,7 @@ fn keyboard_demo_ui(ctx: &mut ComposeCtx) {
                 .build(ctx);
 
             Text::new("Tip: Tab to cycle focus, type keys, Ctrl+S to test preview. Focus is preserved after each keypress.")
-                .font_size(11.0).color(Color::from_argb(255, 120, 120, 120))
+                .font_size(11.0).color(WiniaTheme::colors().on_surface_variant)
                 .modifier(Modifier::new().padding(4.0))
                 .build(ctx);
         });

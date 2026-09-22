@@ -48,12 +48,12 @@ fn lazy_row_demo(ctx: &mut ComposeCtx) {
                 .build(ctx);
             Text::new("横向拖拽滚动 + 松手惯性 fling（touchpad 横向滚轮）")
                 .font_size(12.0)
-                .color(Color::from_argb(255, 120, 120, 120))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .modifier(Modifier::new().padding(8.0))
                 .build(ctx);
             Text::new(format!("firstVisible = {} (offset {:.0})", state.first_visible(), state.offset()))
                 .font_size(12.0)
-                .color(Color::from_argb(255, 120, 120, 120))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .modifier(Modifier::new().padding(8.0))
                 .build(ctx);
 
@@ -87,7 +87,7 @@ fn lazy_row_demo(ctx: &mut ComposeCtx) {
 
 fn main() {
     winia::run_app!(|ctx| {
-        WiniaTheme::light(ctx, |ctx| {
+        WiniaTheme::auto(ctx, |ctx| {
             Window::new()
                 .size(520.0, 360.0)
                 .title("LazyRow Demo")

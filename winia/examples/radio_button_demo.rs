@@ -12,7 +12,7 @@ use winia::prelude::*;
 fn section_title(ctx: &mut ComposeCtx, text: &str) {
     Text::new(text)
         .font_size(14.0)
-        .color(Color::from_argb(255, 90, 90, 90))
+        .color(WiniaTheme::colors().on_surface_variant)
         .modifier(Modifier::new().padding_top(14.0).padding_bottom(6.0))
         .build(ctx);
 }
@@ -71,7 +71,7 @@ fn radio_button_demo(ctx: &mut ComposeCtx) {
             }
             Text::new(format!("当前选中：{}", selected.get()))
                 .font_size(13.0)
-                .color(Color::from_argb(255, 100, 100, 100))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .modifier(Modifier::new().padding_top(4.0))
                 .build(ctx);
 
@@ -114,7 +114,7 @@ fn radio_button_demo(ctx: &mut ComposeCtx) {
                 selected.get(),
             ))
             .font_size(12.0)
-            .color(Color::from_argb(255, 100, 100, 100))
+            .color(WiniaTheme::colors().on_surface_variant)
             .modifier(Modifier::new().padding_top(4.0))
             .build(ctx);
 
@@ -126,7 +126,7 @@ fn radio_button_demo(ctx: &mut ComposeCtx) {
 
 fn main() {
     winia::run_app!(|ctx| {
-        WiniaTheme::light(ctx, |ctx| {
+        WiniaTheme::auto(ctx, |ctx| {
             Window::new()
                 .size(420.0, 600.0)
                 .title("RadioButton Demo")

@@ -42,7 +42,7 @@ fn reverse_demo(ctx: &mut ComposeCtx) {
                 .build(ctx);
             Text::new("滚轮/拖拽：向上滚看更旧的消息；滚动方向与正向一致")
                 .font_size(12.0)
-                .color(Color::from_argb(255, 120, 120, 120))
+                .color(WiniaTheme::colors().on_surface_variant)
                 .modifier(Modifier::new().padding(8.0))
                 .build(ctx);
             Text::new(format!(
@@ -51,7 +51,7 @@ fn reverse_demo(ctx: &mut ComposeCtx) {
                 state.offset()
             ))
             .font_size(12.0)
-            .color(Color::from_argb(255, 120, 120, 120))
+            .color(WiniaTheme::colors().on_surface_variant)
             .modifier(Modifier::new().padding(8.0))
             .build(ctx);
 
@@ -93,7 +93,7 @@ fn reverse_demo(ctx: &mut ComposeCtx) {
 
 fn main() {
     winia::run_app!(|ctx| {
-        WiniaTheme::light(ctx, |ctx| {
+        WiniaTheme::auto(ctx, |ctx| {
             Window::new()
                 .size(520.0, 600.0)
                 .title("reverseLayout Demo")
