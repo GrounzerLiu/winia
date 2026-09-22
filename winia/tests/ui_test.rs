@@ -1058,3 +1058,44 @@ fn a_popup_drag_target_also_taps_once() {
     app.expect_text_timeout("popup-drag-ends: 1", Duration::from_secs(5));
     app.expect_text("popup-drag-taps: 1");
 }
+
+/// A `RangeSlider` drag moves the thumb the PRESS resolved, and leaves the other one alone.
+///
+/// The press-resolution rule (the nearer thumb owns the gesture, so it never swaps mid-drag) is the
+/// part of a range slider a real gesture has to get right; the unit tests can only exercise it
+/// against a synthetic track width. The end is measured off the same inset axis the track draws its
+/// thumbs on (`8 + (w - 16) × f`), so a wrong pixel-to-value mapping fails the value assertion
+/// rather than passing on a coincidence.
+#[test]
+fn range_slider_drags_the_thumb_the_press_resolved() {
+    let mut app = UiTest::launch("range_slider");
+    app.expect_text("range-start: 0.20");
+    app.expect_text("range-end: 0.80");
+
+    let (x, y, w, h) = app.find_tag("range-slider").expect("no range-slider");
+    let cy = y + h / 2.0;
+    let thumb_x = |f: f32| x + 8.0 + (w - 16.0) * f;
+    // The component's own pixel → value mapping, for an LTR track with no steps.
+    let value_at = |px: f32| ((px - x - 8.0) / (w - 16.0)).clamp(0.0, 1.0);
+
+    // Drag the START thumb (at 0.2) right to about 0.42: the press lands far nearer it than the end
+    // thumb, so it — and only it — follows the finger.
+    let px_start = thumb_x(0.42).round();
+    let v_start = value_at(px_start);
+    assert!(
+        (0.40..0.45).contains(&v_start),
+        "the drag target should land near 0.42, got {v_start} — the fixture geometry moved"
+    );
+    app.drag(thumb_x(0.2), cy, px_start, cy);
+    let start_text = format!("range-start: {v_start:.2}");
+    app.expect_text_timeout(&start_text, Duration::from_secs(5));
+    app.expect_text("range-end: 0.80");
+
+    // Same for the END thumb (at 0.8), dragged left to about 0.55.
+    let px_end = thumb_x(0.55).round();
+    let v_end = value_at(px_end);
+    assert!((0.53..0.58).contains(&v_end), "the drag target should land near 0.55, got {v_end}");
+    app.drag(thumb_x(0.8), cy, px_end, cy);
+    app.expect_text_timeout(&format!("range-end: {v_end:.2}"), Duration::from_secs(5));
+    app.expect_text(&start_text);
+}

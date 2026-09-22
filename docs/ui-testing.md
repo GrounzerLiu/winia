@@ -165,6 +165,7 @@ tooltips are the one overlay that deliberately lets the press through.
 | a_modal_dialog_with_dismiss_on_outside_false_stays_open | dialog_dismiss | `dismiss_on_outside` honoured for a modal overlay, and the press still consumed |
 | an_overlay_press_zone_receives_the_press_gesture | overlay_focus | popup pointer-down dispatches the press gesture |
 | clicking_an_overlay_button_does_not_steal_focus | overlay_focus | a popup clickable does not take focus from the field beside it |
+| range_slider_drags_the_thumb_the_press_resolved | range_slider | a real drag moves the nearer thumb only, and the value lands where the inset axis says |
 
 ### Load sensitivity (what the suite tolerates)
 
