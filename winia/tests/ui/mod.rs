@@ -22,8 +22,14 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-/// UI 测试串行锁——launch 时 taskkill 清理残留会误杀并行测试刚启动的进程，
-/// 且多个 demo 窗口同开干扰（焦点/输入）。串行执行（25 个测试 ~60s 可接受）。
+/// First-frame deadline per launch attempt, and how many attempts a launch gets: a loaded machine can
+/// need far longer than a fresh one for its first frame, and a retry is much cheaper than a red suite.
+const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(20);
+const LAUNCH_ATTEMPTS: u32 = 3;
+
+/// Serial lock for the whole suite: `launch` clears leftover fixtures with `taskkill`, which would
+/// kill a fixture another test had just started, and several fixture windows at once interfere
+/// (focus, input). Serial execution is fine — 25 cases run in ~60 s.
 static TEST_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// 与 demo 进程的管道封装
@@ -82,46 +88,54 @@ impl UiTest {
         }
         let exe_name = "fixture_all.exe".to_string();
 
-        // 清理残留进程（测试中断/上次失败可能留下孤儿 fixture——防窗口累积）。
-        // 注意：仅在持有串行锁时执行（并行会互杀）；若残留进程占着 exe 文件锁，
-        // 等待其退出后再 spawn。单 exe 下按镜像名清理：串行锁保证套件内同一时刻只有
-        // 一个 fixture 进程；代价是**手工启动**的 fixture_all（或另一个并发 cargo test
-        // 的 fixture）也会被这次清理杀掉。
-        let _ = Command::new("taskkill")
-            .args(["/f", "/im", &exe_name])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        std::thread::sleep(Duration::from_millis(500));
+        // Launch, and RETRY the whole thing when the first frame does not arrive in time. A loaded
+        // machine can take far longer than a fresh one to produce the first frame (measured: the app
+        // ran 2.4-6x slower under 40 CPU-burning processes, and the first-frame deadline was the first
+        // thing to fail in a loaded suite run), and a retry costs one process spawn instead of a red
+        // suite.
+        let mut last_failure = String::new();
+        for attempt in 1..=LAUNCH_ATTEMPTS {
+            // Clear leftovers (an interrupted or failed run can leave an orphan fixture behind, and
+            // windows would pile up). Only safe while holding the serial lock — in parallel this would
+            // kill each other's fixtures — and a leftover holding the exe's file lock needs a moment
+            // to exit before the spawn. With one binary the kill is by image name: inside the suite the
+            // serial lock guarantees a single fixture process, at the cost that a HAND-STARTED
+            // `fixture_all` (or one from a second, concurrent `cargo test`) is killed too.
+            let _ = Command::new("taskkill")
+                .args(["/f", "/im", &exe_name])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            std::thread::sleep(Duration::from_millis(500));
 
-        let mut child = Command::new(&exe)
-            .arg(fixture)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped()) // 日志走 stderr——读线程消费（防阻塞）
-            .spawn()
-            .expect("spawn demo 失败");
+            let mut child = Command::new(&exe)
+                .arg(fixture)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped()) // 日志走 stderr——读线程消费（防阻塞）
+                .spawn()
+                .expect("spawn demo 失败");
 
-        // stdout 读线程（行 → mpsc）
-        let mut stdout = child.stdout.take().expect("stdout piped");
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            use std::io::BufRead;
-            let mut reader = std::io::BufReader::new(stdout);
-            let mut line = String::new();
-            loop {
-                line.clear();
-                match reader.read_line(&mut line) {
-                    Ok(0) => break,
-                    Ok(_) => {
-                        if tx.send(line.trim_end().to_string()).is_err() {
-                            break;
+            // stdout 读线程（行 → mpsc）
+            let mut stdout = child.stdout.take().expect("stdout piped");
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                use std::io::BufRead;
+                let mut reader = std::io::BufReader::new(stdout);
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) => break,
+                        Ok(_) => {
+                            if tx.send(line.trim_end().to_string()).is_err() {
+                                break;
+                            }
                         }
+                        Err(_) => break,
                     }
-                    Err(_) => break,
                 }
-            }
-        });
+            });
 
         // stderr 读线程（消费防阻塞——日志可选转发到测试 stdout）
         if let Some(mut stderr) = child.stderr.take() {
@@ -144,48 +158,85 @@ impl UiTest {
 
         let mut child_stdin = child.stdin.take().expect("stdin piped");
 
-        // 等待首帧树（demo 渲染第一帧后 t 才有内容）
-        let deadline = Instant::now() + Duration::from_secs(20);
-        let mut tree = Value::Null;
+            match Self::wait_for_first_frame(&mut child, &mut child_stdin, &rx, FIRST_FRAME_TIMEOUT) {
+                Ok(tree) => {
+                    // 解析窗口尺寸（根节点 size）
+                    let (width, height) = tree_size(&tree);
+                    return Self { child, child_stdin, stdout_rx: rx, _serial, tree, width, height };
+                }
+                Err(why) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    last_failure = why;
+                    if attempt < LAUNCH_ATTEMPTS {
+                        eprintln!(
+                            "[ui-test] fixture `{fixture}` attempt {attempt}/{LAUNCH_ATTEMPTS} failed: {last_failure} — retrying"
+                        );
+                    }
+                }
+            }
+        }
+        panic!(
+            "fixture `{fixture}` produced no first frame in {LAUNCH_ATTEMPTS} attempts: {last_failure}"
+        );
+    }
+
+    /// Wait for the first frame tree (`t` only answers once the fixture has rendered a frame).
+    ///
+    /// The failure reason comes back as `Err` so `launch` can retry: a loaded machine needs far longer
+    /// than a fresh one for its first frame (measured 2.4-6x slower under load), and one extra process
+    /// spawn is much cheaper than a red suite.
+    fn wait_for_first_frame(
+        child: &mut Child,
+        child_stdin: &mut std::process::ChildStdin,
+        rx: &Receiver<String>,
+        timeout: Duration,
+    ) -> Result<Value, String> {
+        let started = Instant::now();
+        let deadline = started + timeout;
         let mut tree_responses = 0u32;
         loop {
-            if child.try_wait().ok().flatten().is_some() {
-                panic!("demo 进程提前退出（检查 exe 构建/窗口环境）");
+            if let Some(status) = child.try_wait().ok().flatten() {
+                return Err(format!("process exited early ({status}) — check the fixture build/window env"));
             }
-            let (t, received) = query_tree(&mut child_stdin, &rx, Duration::from_millis(300));
+            let (t, received) = query_tree(child_stdin, rx, Duration::from_millis(300));
             if received {
                 tree_responses += 1;
             }
             if let Some(t) = t {
-                // 就绪 = 至少一个窗口的树（空数组 `[]` 是 DEBUG_STATE 未渲染——继续等）
+                // Ready = a tree with at least one window (an empty array `[]` means DEBUG_STATE has
+                // not rendered yet — keep waiting).
                 let has_window = t
                     .as_array()
                     .map(|arr| arr.iter().any(|w| w.get("root").is_some()))
                     .unwrap_or(false);
                 if has_window {
-                    tree = t;
-                    break;
+                    // A first frame this slow means the machine is saturated; the interaction-level
+                    // expectations in the suite (drags, typing, animations) may then fail on their own
+                    // timing even though `launch` retried. Say so, so a red suite is readable.
+                    let took = started.elapsed();
+                    if took > Duration::from_secs(3) {
+                        eprintln!(
+                            "[ui-test] warning: the first frame took {took:?} — this machine looks loaded, timing-sensitive cases may fail"
+                        );
+                    }
+                    return Ok(t);
                 }
             }
             if Instant::now() > deadline {
-                let _ = child.kill();
                 let mut buf = String::new();
                 while let Ok(line) = rx.try_recv() {
                     buf.push_str(&line);
                     buf.push('\n');
                 }
                 let alive = child.try_wait().ok().flatten().is_none();
-                panic!(
-                    "等待 demo 首帧树超时。进程存活={alive}。TREE 响应数={tree_responses}。stdout 已收: {}",
-                    if buf.is_empty() { "(空)" } else { &buf[..buf.len().min(300)] }
-                );
+                return Err(format!(
+                    "no first frame within {timeout:?}. alive={alive}, TREE responses={tree_responses}, stdout so far: {}",
+                    if buf.is_empty() { "(empty)" } else { &buf[..buf.len().min(300)] }
+                ));
             }
             std::thread::sleep(Duration::from_millis(100));
         }
-
-        // 解析窗口尺寸（根节点 size）
-        let (width, height) = tree_size(&tree);
-        Self { child, child_stdin, stdout_rx: rx, _serial, tree, width, height }
     }
 
     /// 发送一条命令（stdin 写——无响应；命令异步处理，断言靠 expect_* 轮询）
@@ -459,11 +510,11 @@ impl UiTest {
         rx: &Receiver<String>,
         timeout: Duration,
     ) -> (Option<Value>, bool) {
-        if let Err(e) = stdin.write_all(b"t\n") {
-            panic!("stdin 写入失败（demo 读端已关闭？）: {e}");
-        }
-        if let Err(e) = stdin.flush() {
-            panic!("stdin flush 失败: {e}");
+        if stdin.write_all(b"t\n").is_err() || stdin.flush().is_err() {
+            // A write fails when the child died between the caller's liveness probe and this write.
+            // Report "no response" instead of panicking: `wait_for_first_frame` then sees the exit on
+            // its next probe and hands the reason back to `launch`, which retries.
+            return (None, false);
         }
         let deadline = Instant::now() + timeout;
         loop {
