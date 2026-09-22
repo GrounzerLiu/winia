@@ -72,14 +72,13 @@ removed the need for the rule (see `clicking_an_overlay_button_does_not_steal_fo
 
 ## Which gesture fires where
 
-Popup content gets the same gesture set as the main tree, from the same two primitives, with one
-exception:
+Popup content gets the same gesture set as the main tree, from the same primitives:
 
 | Callback | Main tree | Popup |
 |---|---|---|
 | `on_press` | `gesture_down` | `overlay_down`, both through `press_gesture_target` |
 | `on_tap` / `on_double_tap` / `on_long_press` | the shared `GestureTracker` | the same tracker, tagged with the popup's arena (`PerWindow::gesture_arena`) so `gesture_move` / `gesture_up` route the action back into the popup's composer |
-| `on_drag_start` / `on_drag` / `on_drag_end` | the tracker | the overlay drag machinery (`pw.overlay_drag`), which also drives nested scroll in a sheet |
+| `on_drag_start` / `on_drag` / `on_drag_end` | the tracker | the same tracker; the overlay drag session (`pw.overlay_drag`) is stood down for a node the tracker owns, so one gesture never dispatches these twice. It still drives nested scroll in a sheet, which belongs to a different node (the scroll container the drag is an ancestor of) |
 | `on_click` | `detect_click` on release | `exec_overlay_click` on release |
 
 A tap that is deferred to the double-tap window carries its arena in `PendingTap::overlay_id`, so it
@@ -94,13 +93,18 @@ stationary finger then looks like a drag past the 8 px tap slop, and the tap fam
 the real case: an anchored panel sliding to the window corner for `SEARCH_BAR_EXPAND_MS`, pressable
 while it moves. Deltas are unaffected either way — a difference cancels a constant origin.
 
-The exception: a target with **drag** gestures (a `Slider`, a sheet panel) is owned by the overlay
-drag machinery, so `overlay_down` does not create a tracker for it and its `on_tap` /
-`on_double_tap` / `on_long_press` do not fire inside a popup. Its `on_press` and `on_drag_*` do, and
-a `Slider` sets its value from `on_press`, so tapping one works. The sharpest consequence: a node
-carrying BOTH `on_tap` and `on_drag` (a custom draggable card) taps in the main tree when it is not
-moved, but never taps in a popup. Letting those nodes have the tracker too means suppressing the
-overlay drag machinery for exactly that node — worth doing if a component ever needs both.
+A node that is BOTH tappable and draggable (a `Slider`, a custom draggable card) gets its whole
+gesture set in a popup as well: the tracker owns the node and the same-node overlay drag session is
+stood down, because both dispatchers would otherwise fire its `on_drag_*` for one gesture
+(`a_popup_drag_target_also_taps_once` pins one start, one end, and no tap from a moved gesture).
+
+Handing that node to the tracker changes one detail of its drag. The overlay session used to send
+`DragStart` and, in the same event, a `DragMove` carrying the whole displacement from the press — so
+a delta-accumulating component moved from the first over-slop event. The tracker starts the drag AT
+the slop crossing and measures the first delta from there, exactly as the main tree already did, so
+such a component (a sheet panel mounted with `on_drag`) moves from the crossing onward and lags by up
+to the 8 px slop. A `pos`-driven component (`Slider`) is unaffected either way, and the delta rule is
+now the same in both trees.
 
 The drag half of that path has its own coordinate rule worth knowing: its calls pass
 **layer-local** positions, because the callback contract is node-local and

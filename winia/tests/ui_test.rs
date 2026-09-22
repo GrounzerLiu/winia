@@ -1021,3 +1021,40 @@ fn a_tap_survives_its_own_popup_moving() {
         "the popup must have moved under the finger for this test to mean anything (moved {moved} px)"
     );
 }
+
+/// A popup node that is BOTH tappable and draggable gets both — and its drag fires once.
+///
+/// `overlay_down` created no tracker for a drag target (the overlay drag machinery owned it), so a
+/// custom draggable card inside a popup could not tap: only its `on_press` and `on_drag_*` worked. The
+/// tracker now owns such a node and the same-node overlay drag session is stood down, which is what
+/// this pins — a tap fires, a drag fires `on_drag_start` / `on_drag_end` exactly once each (double
+/// dispatch is the failure mode of letting both run), and the drag does not also produce a tap.
+#[test]
+fn a_popup_drag_target_also_taps_once() {
+    let mut app = UiTest::launch("popup_tap");
+    app.expect_text("popup-drag-taps: 0");
+    app.expect_text("popup-drag-starts: 0");
+
+    let (x, y, w, h) = app
+        .find_tag_in_overlay("popup-drag-zone")
+        .expect("no popup-drag-zone");
+    let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+
+    // A tap: the tap family must fire on a drag-capable node too.
+    app.send(&format!("d {} {}", cx as i32, cy as i32));
+    app.send(&format!("u {} {}", cx as i32, cy as i32));
+    app.expect_text_timeout("popup-drag-taps: 1", Duration::from_secs(5));
+    app.expect_text("popup-drag-starts: 0");
+
+    // A drag: one start and one end, no double dispatch, and no tap from the moved gesture.
+    app.send(&format!("d {} {}", cx as i32, cy as i32));
+    for i in 1..=8 {
+        let t = i as f32 / 8.0;
+        app.send(&format!("m {} {}", (cx + 60.0 * t) as i32, cy as i32));
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    app.send(&format!("u {} {}", cx + 60.0, cy as i32));
+    app.expect_text_timeout("popup-drag-starts: 1", Duration::from_secs(5));
+    app.expect_text_timeout("popup-drag-ends: 1", Duration::from_secs(5));
+    app.expect_text("popup-drag-taps: 1");
+}
