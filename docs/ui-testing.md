@@ -158,6 +158,7 @@ tooltips are the one overlay that deliberately lets the press through.
 | top_app_bar_variants_collapse_and_restore_with_scroll | top_app_bar | Medium/Large 高度、共享滚动 offset 折叠与回滚恢复 |
 | scaffold_fab_clicks_and_rtl_mirrors_without_changing_content_inset | scaffold | FAB 点击、content inset 与 RTL BottomEnd 镜像 |
 | a_popup_tap_zone_fires_the_tap_family_like_the_main_tree | popup_tap | tap + long-press in both arenas, driven with down/up |
+| a_tap_survives_its_own_popup_moving | popup_slide_tap | the popup jumps 300 px on press; the tap must still fire (frozen arena origin) |
 | a_popup_double_tap_zone_fires_and_defers_its_single_tap | popup_tap | a popup's deferred single tap and double tap (`PendingTap` arena routing) |
 | a_drag_inside_a_popup_reaches_the_same_value_as_in_the_main_tree | popup_drag | popup drag callbacks receive layer-local coordinates |
 | a_modal_dialog_with_dismiss_on_outside_false_stays_open | dialog_dismiss | `dismiss_on_outside` honoured for a modal overlay, and the press still consumed |

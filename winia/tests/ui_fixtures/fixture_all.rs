@@ -32,6 +32,8 @@ mod panic_fixture;
 mod popup_content;
 #[path = "fixture_popup_drag.rs"]
 mod popup_drag;
+#[path = "fixture_popup_slide_tap.rs"]
+mod popup_slide_tap;
 #[path = "fixture_popup_tap.rs"]
 mod popup_tap;
 #[path = "fixture_resize.rs"]
@@ -69,6 +71,7 @@ const SCENARIOS: &[(&str, fn())] = &[
     ("panic", panic_fixture::main),
     ("popup_content", popup_content::main),
     ("popup_drag", popup_drag::main),
+    ("popup_slide_tap", popup_slide_tap::main),
     ("popup_tap", popup_tap::main),
     ("resize", resize::main),
     ("scaffold", scaffold::main),

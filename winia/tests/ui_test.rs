@@ -970,3 +970,54 @@ fn search_results_follow_the_query() {
         std::thread::sleep(Duration::from_millis(100));
     }
 }
+
+/// A tap survives its own popup moving under the finger.
+///
+/// The gesture measures displacement against the overlay's arena origin. Using the LIVE origin adds the
+/// popup's own motion to that displacement, so a panel that moves while it is pressed (the expanded
+/// `SearchBar` slides for `SEARCH_BAR_EXPAND_MS`) can push a stationary finger past the tap slop and
+/// cancel the tap. Here the popup's tap zone moves the popup 300 px on PRESS, so the overlay travels
+/// between the press and the release while the pointer stays exactly where it was — the tap must fire.
+#[test]
+fn a_tap_survives_its_own_popup_moving() {
+    let mut app = UiTest::launch("popup_slide_tap");
+    app.expect_text("taps: 0");
+
+    // The main tree's first text does not prove the POPUP entry is in the same frame's dump, so wait
+    // for the zone itself (and keep the tree fresh: `find_tag_in_overlay` reads the cached one).
+    let zone = |app: &mut UiTest| -> Option<(f32, f32, f32, f32)> {
+        app.refresh();
+        app.find_tag_in_overlay("popup-tap-zone")
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while zone(&mut app).is_none() {
+        assert!(Instant::now() < deadline, "the popup never showed its tap zone");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let before = zone(&mut app).expect("zone").0;
+
+    // Press and release at the same point, back to back: the zone jumps the popup on the press, so the
+    // overlay is already elsewhere when the release arrives.
+    let (x, y, w, h) = zone(&mut app).expect("zone");
+    let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+    app.send(&format!("d {} {}", cx as i32, cy as i32));
+    // A frame must pass between the press and the release: the jump is a state change, so the popup is
+    // still at its old place in the frame the press lands in. 150 ms is 3x under the long-press
+    // threshold (500 ms), so the gesture stays a tap even on a loaded machine.
+    std::thread::sleep(Duration::from_millis(150));
+    // A move at the SAME screen point — what a stationary finger still produces once the window moves
+    // under it. This is the event that decides the tap: the tracker compares a move against the down
+    // position, so an overlay origin that is read live puts the popup's own 300 px into that
+    // comparison, crosses the 8 px slop and turns the tap into a cancelled drag. The release position
+    // never enters the decision, which is why the press/release pair alone proves nothing.
+    app.send(&format!("m {} {}", cx as i32, cy as i32));
+    app.send(&format!("u {} {}", cx as i32, cy as i32));
+
+    app.expect_text_timeout("taps: 1", Duration::from_secs(5));
+    // And the popup really did move under the finger, or this test would prove nothing.
+    let moved = zone(&mut app).expect("zone").0 - before;
+    assert!(
+        moved > 25.0,
+        "the popup must have moved under the finger for this test to mean anything (moved {moved} px)"
+    );
+}

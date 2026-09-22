@@ -117,6 +117,12 @@ pub(crate) struct PerWindow {
     /// = that popup's layer. The id (not the index) is stored because an overlay can be removed
     /// while a gesture — or a deferred tap — is still in flight.
     gesture_arena: Option<u64>,
+    /// The arena's screen origin, FROZEN when the gesture started. The gesture measures displacement
+    /// against it, so an overlay that MOVES under the finger must not add its own motion: the expanded
+    /// `SearchBar` slides for `SEARCH_BAR_EXPAND_MS` and is pressable while it moves, and reading the
+    /// live origin turned a stationary finger into a slop-exceeding drag that cancelled the tap
+    /// (`a_tap_survives_its_own_popup_moving`).
+    gesture_arena_origin: (f32, f32),
     /// 拖拽滚动会话（按下在滚动容器上：内容跟随指针，松手按速度 fling）
     drag_scroll: Option<DragScroll>,
     /// 顶层弹出层（独立组合单元——渲染在主树之上）
@@ -127,6 +133,10 @@ pub(crate) struct PerWindow {
     /// (overlay index, 节点 slot_key, 拖拽起点 scene)）。overlay 是独立
     /// composer，拖拽走 overlay 内容节点的 on_drag/on_drag_end。
     overlay_drag: Option<(usize, u64, (f32, f32))>,
+    /// The overlay's screen origin frozen when the drag started — the absolute `pos` handed to
+    /// `on_drag_start` / `on_drag` is arena-local, and an overlay that moves during the drag must not
+    /// inject its own motion into it (the deltas are scene-space and unaffected).
+    overlay_drag_origin: (f32, f32),
     /// overlay 拖拽是否已越过 slop 触发 DragStart
     overlay_drag_started: bool,
     /// overlay 拖拽上一次 move 位置（增量计算用）
@@ -213,7 +223,7 @@ struct PtrDownState {
 
 impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::ui::theme::ThemeColors) -> Self {
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), window_size_backchannel: std::cell::RefCell::new(None), on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, last_pointer_pos: None, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, gesture_arena: None, drag_scroll: None, overlays: Vec::new(), overlay_click: None, overlay_drag: None, overlay_drag_started: false, overlay_drag_last: None, overlay_drag_scroll: None, pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None, overlay_focused_interaction: None }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), window_size_backchannel: std::cell::RefCell::new(None), on_close: None, created_id: None, theme, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, last_pointer_pos: None, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, gesture_arena: None, gesture_arena_origin: (0.0, 0.0), drag_scroll: None, overlays: Vec::new(), overlay_click: None, overlay_drag: None, overlay_drag_origin: (0.0, 0.0), overlay_drag_started: false, overlay_drag_last: None, overlay_drag_scroll: None, pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None, overlay_focused_interaction: None }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -2405,8 +2415,14 @@ fn gesture_arena_pos(pw: &PerWindow, scene_pos: (f32, f32)) -> Option<(f32, f32)
     match pw.gesture_arena {
         None => Some(scene_pos),
         Some(id) => {
-            let ov = pw.overlays.iter().find(|o| o.id == id)?;
-            Some((scene_pos.0 - ov.screen_pos.0, scene_pos.1 - ov.screen_pos.1))
+            // The arena must still exist (its composer is where the action lands)...
+            pw.overlays.iter().find(|o| o.id == id)?;
+            // ...but the conversion uses the origin frozen at press time, not the live one: see
+            // `gesture_arena_origin`.
+            Some((
+                scene_pos.0 - pw.gesture_arena_origin.0,
+                scene_pos.1 - pw.gesture_arena_origin.1,
+            ))
         }
     }
 }
@@ -2506,6 +2522,7 @@ fn gesture_down(pw: &mut PerWindow, scene_pos: (f32, f32)) {
     pw.gesture_node = Some(node_id);
     pw.gesture_slot = Some(slot);
     pw.gesture_arena = None; // the main tree
+    pw.gesture_arena_origin = (0.0, 0.0);
     // on_press 立即触发（本地坐标）
     let nodes = pw.composer.arena_nodes();
     let Some(r) = pw.composer.layout_root_idx() else { return; };
@@ -2536,6 +2553,7 @@ fn end_gesture(pw: &mut PerWindow) {
     pw.gesture_node = None;
     pw.gesture_slot = None;
     pw.gesture_arena = None;
+    pw.gesture_arena_origin = (0.0, 0.0);
 }
 
 /// 拖拽滚动结束：速度足够 → 惯性 fling（内容速度 = -手指速度——手指向上甩
@@ -3147,6 +3165,7 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::modifier
                 if inner_comp_drag {
                     if let Some(didx) = drag_idx {
                         pw.overlay_drag = Some((i, nodes[didx].slot_key, scene_pos));
+                        pw.overlay_drag_origin = ov.screen_pos;
                         pw.overlay_drag_started = false;
                         pw.overlay_drag_last = None;
                         pw.overlay_drag_scroll = None;
@@ -3160,6 +3179,7 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::modifier
                 } else if let Some(didx) = drag_idx {
                     // 非滚动区：fallback 到面板 on_drag（背景/文字拖 sheet）
                     pw.overlay_drag = Some((i, nodes[didx].slot_key, scene_pos));
+                    pw.overlay_drag_origin = ov.screen_pos;
                     pw.overlay_drag_started = false;
                     pw.overlay_drag_last = None;
                     pw.overlay_drag_scroll = None;
@@ -3247,6 +3267,12 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::modifier
                     pw.gesture_node = Some(nid);
                     pw.gesture_slot = Some(slot);
                     pw.gesture_arena = Some(ov_id);
+                    pw.gesture_arena_origin = pw
+                        .overlays
+                        .iter()
+                        .find(|o| o.id == ov_id)
+                        .map(|o| o.screen_pos)
+                        .unwrap_or((0.0, 0.0));
                 }
             }
         }
@@ -4001,7 +4027,10 @@ fn handle_pointer_move(
                         // be converted here — passing `scene_pos` shifted it by the popup's screen
                         // origin, which is why dragging a Slider inside a popup landed on the wrong
                         // value (deltas are unaffected: the layer offset cancels in a difference).
-                        let local = (scene_pos.0 - ov.screen_pos.0, scene_pos.1 - ov.screen_pos.1);
+                        let local = (
+                            scene_pos.0 - pw.overlay_drag_origin.0,
+                            scene_pos.1 - pw.overlay_drag_origin.1,
+                        );
                         fire_gesture_action(nodes, r, slot,
                             crate::input::gesture::GestureAction::DragStart(local));
                         fire_gesture_action(nodes, r, slot,
@@ -4017,7 +4046,10 @@ fn handle_pointer_move(
             if let Some(ov) = pw.overlays.get(idx) {
                 let nodes = ov.composer.arena_nodes();
                 if let Some(r) = ov.composer.layout_root_idx() {
-                    let local = (scene_pos.0 - ov.screen_pos.0, scene_pos.1 - ov.screen_pos.1);
+                    let local = (
+                        scene_pos.0 - pw.overlay_drag_origin.0,
+                        scene_pos.1 - pw.overlay_drag_origin.1,
+                    );
                     fire_gesture_action(nodes, r, slot,
                         crate::input::gesture::GestureAction::DragMove(local, inc));
                 }
