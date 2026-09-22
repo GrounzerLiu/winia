@@ -176,13 +176,17 @@ impl Window {
                 CREATED.lock().unwrap().remove(&id_close);
                 if let Some(ref mut f) = on_close { f(); }
             }));
-            let theme_colors = crate::ui::theme::WiniaTheme::colors();
-            let theme_for_window = theme_colors.clone();
+            // The theme SPEC, not a palette: this content closure runs every frame, so a captured palette
+            // would pin the window to its startup colors (the app's own theme switch flipped the surface
+            // behind the tree while every component kept composing with the old colors). An `auto` spec
+            // re-resolves per frame; a fixed one re-provides what the application chose.
+            let theme_spec = crate::ui::theme::current_theme_spec();
+            let spec_for_content = theme_spec.clone();
             app::open_window_with_title(w, h, self.state.title.clone(), Some(Box::new(move |ctx| {
-                crate::ui::theme::WiniaTheme::with_theme(theme_colors.clone(), ctx, |ctx| {
+                spec_for_content.provide(ctx, |ctx| {
                     sub_window_content(ctx, &content);
                 });
-            })), wrapped, Some(id), Some(theme_for_window));
+            })), wrapped, Some(id), Some(theme_spec));
         }
 
         ctx.end_node();

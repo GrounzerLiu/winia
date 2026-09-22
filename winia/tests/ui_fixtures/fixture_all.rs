@@ -52,6 +52,8 @@ mod segmented_button;
 mod subwindow;
 #[path = "fixture_text_field.rs"]
 mod text_field;
+#[path = "fixture_theme_follow.rs"]
+mod theme_follow;
 #[path = "fixture_toggle.rs"]
 mod toggle;
 #[path = "fixture_top_app_bar.rs"]
@@ -85,6 +87,7 @@ const SCENARIOS: &[(&str, fn())] = &[
     ("segmented_button", segmented_button::main),
     ("subwindow", subwindow::main),
     ("text_field", text_field::main),
+    ("theme_follow", theme_follow::main),
     ("toggle", toggle::main),
     ("top_app_bar", top_app_bar::main),
 ];
