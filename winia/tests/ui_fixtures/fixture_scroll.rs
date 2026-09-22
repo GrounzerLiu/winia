@@ -3,7 +3,8 @@
 //! `offset:` / `hoffset:` 文本实时显示滚动偏移——滚动命令生效时变化
 //! （树 JSON 可断言——真实滚动行为验证）。
 //!
-//! 由 `[[bin]]` 注册编译为独立 exe，测试通过 stdin/stdout 管道驱动。
+//! One scenario of the `fixture_all` binary (see `fixture_all.rs`): the harness spawns it with this
+//! scenario's name and drives it over the stdin/stdout pipe.
 
 use winia::prelude::*;
 
@@ -49,7 +50,9 @@ fn ui(ctx: &mut ComposeCtx) {
         });
 }
 
-fn main() {
+/// Scenario entry: `fixture_all` (the single fixture binary) calls this after selecting the scenario from
+/// `argv[1]`. It starts the event loop and never returns.
+pub fn main() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let _guard = rt.enter();
     winia::run_app!(|ctx| {

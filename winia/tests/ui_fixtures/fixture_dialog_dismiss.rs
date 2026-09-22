@@ -82,7 +82,9 @@ fn dialog_dismiss_fixture(ctx: &mut ComposeCtx) {
         });
 }
 
-fn main() {
+/// Scenario entry: `fixture_all` (the single fixture binary) calls this after selecting the scenario from
+/// `argv[1]`. It starts the event loop and never returns.
+pub fn main() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let _guard = rt.enter();
     winia::run_app!(|ctx| {
