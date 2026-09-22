@@ -28,7 +28,8 @@ Slider::new(value: f32)                       // 对标 Slider(value, ...)
   the caller's own copy stays as passed until the first gesture; see `docs/range-slider.md` §5.
 - **Interaction**: a tap jumps to the pressed value, a drag follows the pointer in absolute
   position, and the keyboard steps once focused (←/→ one step — 1% of the range without `steps` or
-  one tick with them — PageUp/PageDown ten, Home/End the ends).
+  one tick with them — PageUp/PageDown `(actualSteps / 10).clamp(1, 10)` steps, so one tick when
+  `steps` is small; Home/End the ends).
 
 ## 2. 默认值（对标 `SliderTokens` v2_3_5 / M3 specs）
 
