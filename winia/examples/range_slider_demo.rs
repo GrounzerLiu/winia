@@ -3,14 +3,22 @@
 //! Shows: a continuous range with its values printed, a discrete range (`steps`), a disabled range,
 //! custom colors, and the two hoisted per-thumb interaction sources (a thumb halves in width while
 //! its own gesture runs).
+//!
+//! The window follows the system theme (`WiniaTheme::auto`), and every label takes its color from the
+//! theme, so the component can be inspected in dark and light alike.
 
 use letclone::clone;
 use winia::prelude::*;
 
+/// Secondary label color, from the theme so it stays readable in both light and dark.
+fn label_color() -> Color {
+    WiniaTheme::colors().on_surface_variant
+}
+
 fn section_title(ctx: &mut ComposeCtx, text: &str) {
     Text::new(text)
         .font_size(14.0)
-        .color(Color::from_argb(255, 90, 90, 90))
+        .color(label_color())
         .modifier(Modifier::new().padding_top(14.0).padding_bottom(6.0))
         .build(ctx);
 }
@@ -36,7 +44,7 @@ fn range_slider_demo(ctx: &mut ComposeCtx) {
                 .build(ctx);
             Text::new(format!("{:.0}% – {:.0}%", price.get().start * 100.0, price.get().end * 100.0))
                 .font_size(13.0)
-                .color(Color::from_argb(255, 100, 100, 100))
+                .color(label_color())
                 .build(ctx);
 
             section_title(ctx, "Discrete (steps = 7, working hours)");
@@ -47,7 +55,7 @@ fn range_slider_demo(ctx: &mut ComposeCtx) {
                 .build(ctx);
             Text::new(format!("{:.0}:00 – {:.0}:00 (9 stops, every 3 h)", hours.get().start, hours.get().end))
                 .font_size(13.0)
-                .color(Color::from_argb(255, 100, 100, 100))
+                .color(label_color())
                 .build(ctx);
 
             section_title(ctx, "Disabled");
@@ -72,7 +80,7 @@ fn range_slider_demo(ctx: &mut ComposeCtx) {
                 .build(ctx);
             Text::new(format!("{:.2} – {:.2}", custom.get().start, custom.get().end))
                 .font_size(13.0)
-                .color(Color::from_argb(255, 100, 100, 100))
+                .color(label_color())
                 .build(ctx);
 
             section_title(ctx, "Per-thumb interaction sources (hoisted)");
@@ -91,13 +99,13 @@ fn range_slider_demo(ctx: &mut ComposeCtx) {
                 end_st.pressed, end_st.hovered, end_st.focused, end_st.dragged,
             ))
             .font_size(12.0)
-            .color(Color::from_argb(255, 100, 100, 100))
+            .color(label_color())
             .build(ctx);
 
             section_title(ctx, "Keyboard (focus a thumb, then the arrow keys)");
             Text::new("The component focuses as a whole and the arrow keys move the thumb the last gesture picked: ←/→ one step, PageUp/PageDown ten, Home/End the ends.")
                 .font_size(12.0)
-                .color(Color::from_argb(255, 120, 120, 120))
+                .color(label_color())
                 .build(ctx);
 
             Text::new("")
@@ -108,7 +116,7 @@ fn range_slider_demo(ctx: &mut ComposeCtx) {
 
 fn main() {
     winia::run_app!(|ctx| {
-        WiniaTheme::light(ctx, |ctx| {
+        WiniaTheme::auto(ctx, |ctx| {
             Window::new()
                 .size(460.0, 720.0)
                 .title("Range Slider Demo")
