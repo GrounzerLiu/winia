@@ -7,7 +7,7 @@ use letclone::clone;
 use winia::prelude::*;
 use winia::core::composer::ComposeCtx;
 use winia::composable;
-use winia::modifier::{Color, Modifier, Shape};
+use winia::modifier::{Modifier, Shape};
 use winia::ui::interaction::MutableInteractionSource;
 
 #[composable]

@@ -27,7 +27,7 @@ fn scaffold_demo(ctx: &mut ComposeCtx) {
     let nested_behavior = TopAppBarScrollBehavior::enter_always(app_bar_state, TOP_APP_BAR_HEIGHT);
     let connection = nested_behavior.nested_scroll_connection_with_scroll(scroll.clone()).expect("nested behavior connection");
 
-    WiniaTheme::with_theme_and_direction(ThemeColors::default_light(), direction, ctx, |ctx| {
+    WiniaTheme::with_theme_and_direction(WiniaTheme::colors(), direction, ctx, |ctx| {
         Scaffold::new({
             clone!(scroll, connection);
             move |ctx, _padding| {

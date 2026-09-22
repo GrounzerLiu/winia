@@ -105,6 +105,9 @@ fn navigation_rail_demo(ctx: &mut ComposeCtx) {
 
 fn main() {
     winia::run_app!(|ctx| {
-        Window::new().size(900.0, 480.0).title("Navigation Rail Demo").build(ctx, navigation_rail_demo);
+        // Follow the system theme: without a theme node the window is pinned to the light default.
+        WiniaTheme::auto(ctx, |ctx| {
+            Window::new().size(900.0, 480.0).title("Navigation Rail Demo").build(ctx, navigation_rail_demo);
+        });
     });
 }

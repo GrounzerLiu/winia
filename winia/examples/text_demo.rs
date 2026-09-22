@@ -5,6 +5,14 @@
 use letclone::clone;
 use winia::prelude::*;
 
+/// A neutral highlight over the page — `on_surface` at a low alpha. The black overlay this replaces marked
+/// a text box on a light page and vanished on a dark one (this demo follows the system theme now), so the
+/// marks have to come from the palette.
+fn highlight(alpha: u8) -> Color {
+    let c = WiniaTheme::colors().on_surface;
+    Color::from_argb(alpha, c.r, c.g, c.b)
+}
+
 fn main() {
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
@@ -40,7 +48,7 @@ fn text_demo_ui(ctx: &mut ComposeCtx) {
                 Text::new("36px").font_size(36.0).build(ctx);
             });
 
-            Column::new().modifier(Modifier::new().fill_max_width().height(1.0).background(Color::from_argb(40, 0, 0, 0), Shape::Rectangle)).build(ctx, |_| {});
+            Column::new().modifier(Modifier::new().fill_max_width().height(1.0).background(highlight(40), Shape::Rectangle)).build(ctx, |_| {});
 
             // ── 2. 文字颜色（内置 Color + Theme 颜色）──
             Text::new("■ Colors").font_size(16.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
@@ -62,21 +70,21 @@ fn text_demo_ui(ctx: &mut ComposeCtx) {
             // Left
             Text::new("⬅ Left aligned (default)")
                 .font_size(14.0)
-                .modifier(Modifier::new().fill_max_width().height(20.0).background(Color::from_argb(20, 0, 0, 0), Shape::Rectangle))
+                .modifier(Modifier::new().fill_max_width().height(20.0).background(highlight(20), Shape::Rectangle))
                 .build(ctx);
 
             // Center
             Text::new("⬇ Center aligned")
                 .font_size(14.0)
                 .align(TextAlign::Center)
-                .modifier(Modifier::new().fill_max_width().height(20.0).background(Color::from_argb(20, 0, 0, 0), Shape::Rectangle))
+                .modifier(Modifier::new().fill_max_width().height(20.0).background(highlight(20), Shape::Rectangle))
                 .build(ctx);
 
             // Right
             Text::new("➡ Right aligned")
                 .font_size(14.0)
                 .align(TextAlign::Right)
-                .modifier(Modifier::new().fill_max_width().height(20.0).background(Color::from_argb(20, 0, 0, 0), Shape::Rectangle))
+                .modifier(Modifier::new().fill_max_width().height(20.0).background(highlight(20), Shape::Rectangle))
                 .build(ctx);
 
             // Justify
@@ -85,7 +93,7 @@ fn text_demo_ui(ctx: &mut ComposeCtx) {
             Text::new(&txt)
                 .font_size(12.0)
                 .align(TextAlign::Justify)
-                .modifier(Modifier::new().fill_max_width().height(60.0).background(Color::from_argb(20, 0, 0, 0), Shape::Rectangle))
+                .modifier(Modifier::new().fill_max_width().height(60.0).background(highlight(20), Shape::Rectangle))
                 .build(ctx);
 
             Button::new()
@@ -170,7 +178,7 @@ fn text_demo_ui(ctx: &mut ComposeCtx) {
             Text::new("This text does NOT wrap even if it exceeds the container width → ")
                 .font_size(12.0)
                 .soft_wrap(false)
-                .modifier(Modifier::new().fill_max_width().height(20.0).background(Color::from_argb(30, 0, 0, 0), Shape::Rectangle))
+                .modifier(Modifier::new().fill_max_width().height(20.0).background(highlight(30), Shape::Rectangle))
                 .build(ctx);
 
             // ── 7. 样式层级（ProvideTextStyle → style → 单独参数）──
@@ -181,13 +189,13 @@ fn text_demo_ui(ctx: &mut ComposeCtx) {
                 ctx,
                 |ctx| {
                     Text::new("Style: (orange, 18px, center) via ProvideTextStyle")
-                        .modifier(Modifier::new().fill_max_width().height(24.0).background(Color::from_argb(15, 0, 0, 0), Shape::Rectangle))
+                        .modifier(Modifier::new().fill_max_width().height(24.0).background(highlight(15), Shape::Rectangle))
                         .build(ctx);
 
                     // 单独参数覆盖 style 的部分字段
                     Text::new("Style: color overridden to green by .color()")
                         .color(Color::GREEN)
-                        .modifier(Modifier::new().fill_max_width().height(24.0).background(Color::from_argb(15, 0, 0, 0), Shape::Rectangle))
+                        .modifier(Modifier::new().fill_max_width().height(24.0).background(highlight(15), Shape::Rectangle))
                         .build(ctx);
 
                     // 完整覆盖
@@ -215,7 +223,7 @@ fn text_demo_ui(ctx: &mut ComposeCtx) {
                     .fill_max_width()
                     .height(60.0)
                     .padding(8.0)
-                    .background(Color::from_argb(12, 0, 0, 0), Shape::rounded(6.0)))
+                    .background(highlight(12), Shape::rounded(6.0)))
                 .build(ctx);
 
             // Title Card

@@ -55,6 +55,9 @@ fn navigation_suite_demo(ctx: &mut ComposeCtx) {
 
 fn main() {
     winia::run_app!(|ctx| {
-        Window::new().size(900.0, 480.0).title("Navigation Suite Demo").build(ctx, navigation_suite_demo);
+        // Follow the system theme: without a theme node the window is pinned to the light default.
+        WiniaTheme::auto(ctx, |ctx| {
+            Window::new().size(900.0, 480.0).title("Navigation Suite Demo").build(ctx, navigation_suite_demo);
+        });
     });
 }

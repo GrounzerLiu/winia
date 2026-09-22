@@ -198,14 +198,12 @@ impl Window {
                 CREATED.lock().unwrap().remove(&id_close);
                 if let Some(ref mut f) = on_close { f(); }
             }));
-            // The content closure runs every frame, so it carries the CELL (a live handle), not a palette:
-            // a captured palette pinned the window to its startup colors — the app's own theme switch
-            // flipped the surface behind the tree while every component kept composing with the old colors.
-            let theme_for_content = theme.clone();
+            // The content closure carries the CELL (a live handle), not a palette: a captured palette pinned
+            // the window to its startup colors — the app's own theme switch flipped the surface behind the
+            // tree while every component kept composing with the old colors. `app::open_window` wraps the
+            // content in it, so this stays a plain closure.
             app::open_window_with_title(w, h, self.state.title.clone(), Some(Box::new(move |ctx| {
-                theme_for_content.provide(ctx, |ctx| {
-                    sub_window_content(ctx, &content);
-                });
+                sub_window_content(ctx, &content);
             })), wrapped, Some(id), Some(theme));
         }
 

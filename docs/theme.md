@@ -46,13 +46,18 @@ Four pieces:
    which left every other window — and every sub-window of a tree that switched its own theme node — on its
    old palette.
 4. **The frame step** (`PerWindow::refresh_theme`): re-resolve if the epoch or the intent moved, and when
-   the palette is not what the window has drawn, set the window's own snapshot (the surface clear color),
-   dirty the window's composer and every popup's, and request a redraw. No component looks at the theme by
-   itself — they resolved their colors when they composed — so the tree has to run again.
+   what the window has drawn — palette, type scale, direction — is not what the cell now says, set the
+   window's own snapshot (the surface clear color), dirty the window's composer and every popup's, and
+   request a redraw. No component looks at the theme by itself: they resolved colours, type and direction
+   when they composed, so the tree has to run again (a direction-only change counts — a `Row` mirrors).
 
 Two events feed it: a platform `ThemeChanged` (recorded, then every window is asked for a frame) and an
 application's `set_system_dark_mode` (bumps the epoch and wakes every composer that follows the system,
 through the reactive mode value).
+
+Note where a custom type scale goes: EVERY theme entry point (`::light`, `::dark`, `::with_theme`,
+`::auto`) provides a typography of its own, so `WiniaTheme::with_typography` has to nest INSIDE the node
+that sets the palette for a `Window` — the fixture `fixture_theme_typography.rs` is the working shape.
 
 ## The bugs this shape exists to prevent
 
@@ -102,6 +107,11 @@ Both were measured, and both are pinned by tests:
   pinned window does nothing and an idle one does no work (including a published type scale).
 - `ui_test.rs::theme_follows_the_windows_own_switch` — a real window, its own Light/Dark switch, pixels.
 - `ui_test.rs::an_open_popup_follows_the_theme` — a popup left open across the switch.
+- `ui_test.rs::the_window_content_composes_under_the_declared_typography_and_direction` — the WIRING (the
+  publish in `Window::build`), which no unit test can reach: a fixture whose declaring tree sets an RTL
+  direction and a 32 px `body_large`, asserted through a mirrored `Row` and a `ListItem` headline height.
+  Both assertions were falsified by reverting the publish to the defaults (the row un-mirrors, the headline
+  goes 36 px → 24 px).
 - `ui::pixel_line_parsing` (in `tests/ui/mod.rs`) — the text pixel read: frame coordinates are physical
   pixels, not bytes (parsing them as bytes rejected every frame whose point sat past 255, i.e. a 175%/200%
   scaled display), and both miss forms are "no color" while still naming the frame.

@@ -24,7 +24,7 @@ fn floating_action_button_demo(ctx: &mut ComposeCtx) {
     let click_count = clicks.get();
     let theme = WiniaTheme::colors();
 
-    WiniaTheme::with_theme_and_direction(ThemeColors::default_light(), direction, ctx, |ctx| {
+    WiniaTheme::with_theme_and_direction(WiniaTheme::colors(), direction, ctx, |ctx| {
         Column::new()
             .modifier(Modifier::new().fill_max_size().vertical_scroll(scroll))
             .spacing(18.0)

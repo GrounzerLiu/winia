@@ -15,16 +15,19 @@ use winia::animation::{SpringSpec, TweenSpec};
 
 fn main() {
     winia::run_app!(|ctx| {
-        Window::new()
-            .size(420.0, 900.0)
-            .title("AnimatedVisibility Demo")
-            .build(ctx, |ctx| {
-                panel_a(ctx);
-                panel_b(ctx);
-                panel_c(ctx);
-                panel_d(ctx);
-                panel_e(ctx);
-            });
+        // Follow the system theme: with no theme node the window is pinned to the light default.
+        WiniaTheme::auto(ctx, |ctx| {
+            Window::new()
+                .size(420.0, 900.0)
+                .title("AnimatedVisibility Demo")
+                .build(ctx, |ctx| {
+                    panel_a(ctx);
+                    panel_b(ctx);
+                    panel_c(ctx);
+                    panel_d(ctx);
+                    panel_e(ctx);
+                });
+        });
     });
 }
 

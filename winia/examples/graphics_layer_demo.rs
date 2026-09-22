@@ -6,7 +6,7 @@ use letclone::clone;
 use winia::prelude::*;
 use winia::core::composer::ComposeCtx;
 use winia::composable;
-use winia::modifier::{Color, GraphicsLayerParams, Modifier, Shape};
+use winia::modifier::{GraphicsLayerParams, Modifier, Shape};
 
 #[composable]
 fn graphics_layer_ui(ctx: &mut ComposeCtx) {

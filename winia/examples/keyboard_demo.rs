@@ -7,6 +7,14 @@ use letclone::clone;
 use winia::prelude::*;
 use winit::keyboard::{Key, NamedKey};
 
+/// A neutral highlight over the page — `on_surface` at a low alpha. The black overlay this replaces marked
+/// the focused field on a light page and vanished on a dark one (this demo follows the system theme now),
+/// so the marks have to come from the palette.
+fn highlight(alpha: u8) -> Color {
+    let c = WiniaTheme::colors().on_surface;
+    Color::from_argb(alpha, c.r, c.g, c.b)
+}
+
 fn main() {
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
@@ -36,7 +44,7 @@ fn keyboard_demo_ui(ctx: &mut ComposeCtx) {
                 .modifier(Modifier::new()
                     .fill_max_width()
                     .padding(10.0)
-                    .background(Color::from_argb(18, 0, 0, 0), Shape::rounded(6.0))
+                    .background(highlight(18), Shape::rounded(6.0))
                     .focusable()
                     .on_key_event({
                         clone!(log);
@@ -56,7 +64,7 @@ fn keyboard_demo_ui(ctx: &mut ComposeCtx) {
                 .modifier(Modifier::new()
                     .fill_max_width()
                     .padding(10.0)
-                    .background(Color::from_argb(18, 0, 0, 0), Shape::rounded(6.0))
+                    .background(highlight(18), Shape::rounded(6.0))
                     .focusable()
                     .on_key_event({
                         clone!(log);
@@ -76,7 +84,7 @@ fn keyboard_demo_ui(ctx: &mut ComposeCtx) {
                 .modifier(Modifier::new()
                     .fill_max_width()
                     .padding(10.0)
-                    .background(Color::from_argb(18, 0, 0, 0), Shape::rounded(6.0))
+                    .background(highlight(18), Shape::rounded(6.0))
                     .focusable()
                     .on_pre_key_event({
                         clone!(log);

@@ -11,6 +11,14 @@ use letclone::clone;
 use winia::prelude::*;
 use winia::app;
 
+/// A neutral highlight over the page — `on_surface` at a low alpha. The black overlay this replaces marked
+/// the parent-constraint box on a light page and vanished on a dark one (this demo follows the system theme
+/// now), so the marks have to come from the palette.
+fn highlight(alpha: u8) -> Color {
+    let c = WiniaTheme::colors().on_surface;
+    Color::from_argb(alpha, c.r, c.g, c.b)
+}
+
 #[composable]
 fn component_demo(ctx: &mut ComposeCtx) {
     let clicked = ctx.remember(|| false);
@@ -116,7 +124,7 @@ fn component_demo(ctx: &mut ComposeCtx) {
                 .modifier(Modifier::new()
                     .size(300.0, 50.0)
                     .padding(4.0)
-                    .background(Color::from_argb(60, 0, 0, 0), Shape::rounded(4.0)))
+                    .background(highlight(60), Shape::rounded(4.0)))
                 .build(ctx, |ctx| {
                     Column::new()
                         .modifier(Modifier::new()
